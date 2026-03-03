@@ -85,27 +85,54 @@ These diagrams from Rong define the north star. Every work stream should move us
 
 **Goal:** Continuity. Keep shipping. Merge the tested branch to main.
 
-- [ ] Merge `feature/jetson-gpu-acceleration` to `main` after Sash validates on own Jetson hardware
+- [x] Merge `feature/jetson-gpu-acceleration` to `main` — squash merged 2026-03-03 (134 commits)
 - [x] Establish weekly shipping report cadence (GitHub-based)
 - [x] Set up public expenditure tracking portal
-- [ ] First monthly release (v1.1.0) — after Jetson validation
+- [x] First monthly release (v1.1.0) — released 2026-03-03
 - [x] Publish WCI ecosystem update article
 
-**Status (2026-03-02):**
-- WireGuard reconnect after reboot: confirmed working (EverlastingOS + Anders)
-- WireGuard macOS support: ✅ shipped — auto-install via `start-local.sh`, passwordless sudo, network change detection
-- Large file upload: confirmed working — was a display bug (total_size*2 removed), NOT actual truncation
-- WCI update article: published
-- Expenditure portal: live
-- One-command Jetson install: validated on 2 independent Jetsons (EverlastingOS + Anders/alm.ela.city)
-- One-command macOS install: ✅ shipped — `start-local.sh` auto-installs Homebrew + WireGuard
-- Weekly shipping reports: established on GitHub Discussions (#1, #2, #3)
-- v1.1.0 release: blocked on Sash's own Jetson hardware test
-- Anders' WalletConnect/Essentials issue: ✅ resolved — Anders was on an older wallet version
-- Anders' Ollama model download issue: ✅ resolved — tool fallback + SSE streaming fixed
-- Voice AI pipeline: ✅ shipped — Whisper STT + Piper TTS with Settings UI
-- Virtual desktops: ✅ shipped — workspaces, Mission Control, keyboard shortcuts
-- Ubuntu-style desktop UI: ✅ shipped — top bar, dock, window chrome, file explorer
+**Status (2026-03-03): COMPLETE**
+- v1.1.0 released: squash merged to main, tagged, GitHub Release published
+- Verified on Mac (localhost) and Jetson (zzz.ela.city) — both boot cleanly
+- Structured logging: ~295 console.log calls replaced with createLogger() module-based logging
+- Security: hardcoded credentials removed from docs, server passwords rotated
+- Four-tier transport cascade: WG > AWG > VLESS Reality > ActiveProxy — all tested
+- Desktop UI overhaul, virtual desktops, voice AI, macOS WireGuard — all shipped
+- One-command install validated on Mac and 2 independent Jetsons
+
+---
+
+### PRIORITY: Elacity dDRM & dApp Store (Immediate — Post v1.1.0)
+
+**Goal:** Build the V1 dApp Store and Media Market using the Elacity SDK. This is the first work stream after v1.1.0 release.
+
+**Branch:** `feature/elacity-ddrm-marketplace` (created from main after v1.1.0)
+**Detailed Plan:** `.cursor/plans/app_store_and_media_market_2489ec7b.plan.md`
+
+**Prerequisites:**
+- [ ] postMessage wallet bridge for iframe-sandboxed apps
+- [ ] COOP/COEP header testing for media player SharedArrayBuffer
+- [ ] Confirm SDK access with CTO (npm registry, test CIDs, API endpoints)
+
+**Backend Foundation:**
+- [ ] `installed_apps` SQLite table (name, cid, version, manifest, installed_at, size, status)
+- [ ] AppInstallService — fetch CID from IPFS, verify, store, register
+- [ ] Install/uninstall/list/update API endpoints (`/api/apps/*`)
+- [ ] App registry manifest format + supernode discovery endpoint
+- [ ] App build pipeline (Vite build → static bundle → IPFS pin → CID → registry)
+
+**Frontend Apps:**
+- [ ] Elacity Market app using `@elacity-js/api` + wallet bridge
+- [ ] Media player as installable app with per-app COOP/COEP headers
+- [ ] Purchase flow with `contracts-ua-executor` + Particle Auth via bridge
+- [ ] App Center UI rebuild against real backend APIs
+
+**Creator Tools:**
+- [ ] `media-packager` integration — cloud transcode (default) + local FFmpeg (future)
+- [ ] App Factory — local packaging pipeline (build → bundle → IPFS pin → publish)
+
+**Network:**
+- [ ] Auto-pin + DHT announce for purchased content (CDN effect)
 
 ---
 
