@@ -1,4 +1,4 @@
-# Session Handover — Feb 26, 2026
+# Session Handover — Mar 3, 2026
 
 > **Read this first when starting a new agent session.**
 
@@ -6,31 +6,65 @@
 
 ## Where We Are
 
-**Branch:** `feature/jetson-gpu-acceleration` — 60+ commits ahead of main
-**v1.1.0 release:** Blocked on Sash testing on own Jetson hardware (hasn't arrived yet)
+**Branch:** `feature/elacity-ddrm-marketplace` (created from `main` after v1.1.0 release)
+**Release:** v1.1.0 tagged and released on 2026-03-03 (134 commits squash-merged to main)
+**Launcher:** v1.1.1 released — version display, one-click updates, full networking install
+**DAO Proposal:** Live at https://elastos.com/proposals/69a24f49247f130078064edd
 
-### Validated
+### What Just Shipped (v1.1.0)
 
-- One-command Jetson install works end-to-end on 2 independent Jetsons
-- EverlastingOS (`elastos.ela.city`) — WireGuard, uploads, video streaming all working
-- Anders (`alm.ela.city`) — fresh install, WireGuard via wireguard-go, domain live
-- Upload bug was a display issue (progress bar doubling), files always uploaded correctly
-- Gateway under systemd on supernode — auto-restarts, self-healing deployed
-- Weekly shipping reports on GitHub Discussions (#1, #2, #3)
+- Four-tier stealth transport cascade (WG > AWG > VLESS Reality > ActiveProxy)
+- Desktop Launcher with version display, one-click updates, and full networking install
+- Desktop UI overhaul (full-width top bar, layout toggle, mobile-responsive)
+- Voice AI pipeline (Whisper + Ollama + Context API)
+- ARM installer hardened (Go auto-detection, AmneziaWG from source, sing-box 1.13.0 pinned, Jetson power mode)
+- Structured logging (no more console.log in production)
+- Security: credentials rotated, removed from docs
+- Upload verification against IPFS
+- WireGuard reconnection with exponential backoff (15s start)
 
-### Waiting On
+### Validated On
 
-1. **Sash's own Jetson** — hardware hasn't arrived. Once it does: run one-command install, validate, merge to main, tag v1.1.0
-2. **Anders — WalletConnect/Essentials** — connection failed when scanning QR with Essentials wallet. MetaMask works. Low priority.
-3. **Anders — Ollama model download** — "download complete immediately." Likely Ollama not installed/running. Told him to check `systemctl status ollama`
-4. **EverlastingOS — pull latest** — needs to pull the progress bar fix (total_size*2 removed)
+- macOS (localhost) — full transport cascade, launcher, updates
+- NVIDIA Jetson Orin Nano (zzz.ela.city) — WireGuard + AmneziaWG working, VLESS Reality pending supernode client-side config
+- Contabo VPS (38.242.211.112) — install script verified
 
-### DAO Proposal
+### Documentation Status
 
-- Keystone Fund proposal #356 live at https://elastos.com/suggestion/699c045de3bb57006e75463e
-- Community discussion ongoing. Phantze raised concerns (addressed). EverlastingOS supportive.
-- Council call upcoming — talking points prepared (see previous chat)
-- WCI v1 audit passed. Expenditure portal live.
+- `docs.ela.city` (document-portal) — fully updated: install guides, stealth transport, launcher features
+- `docs/deployment/STEALTH_MODE.md` — complete with install parity rule
+- `docs/deployment/TRANSPORT_ARCHITECTURE.md` — four-tier cascade architecture
+- `docs/core/ROADMAP.md` — updated with v1.1.0 completion, Elacity dDRM as first priority
+- `elastos-launcher/CONTRIBUTING.md` — install parity rule documented
+- `elastos-launcher/README.md` — updated with all current features
+- Weekly update report: `docs/reports/weekly-update-2026-03-03.html`
+
+---
+
+## What to Work On Next
+
+### Priority 1: Elacity dDRM & dApp Store
+
+**Branch:** `feature/elacity-ddrm-marketplace`
+**Detailed Plan:** `.cursor/plans/app_store_and_media_market_2489ec7b.plan.md`
+**SDK Source:** Cloned at `sdk/elacity-js-sdk` (gitignored)
+**SDK Docs:** https://elacity.gitbook.io/elacity-sdks/
+
+Implementation order:
+1. **postMessage wallet bridge** for iframe-sandboxed apps
+2. **COOP/COEP header testing** for media player SharedArrayBuffer
+3. **Confirm SDK access** with CTO (npm registry, test CIDs, API endpoints)
+4. **`installed_apps` SQLite table** + AppInstallService
+5. **App registry manifest format** + supernode discovery endpoint
+6. **Elacity Market app** using `@elacity-js/api` + wallet bridge
+7. **Media player** as installable app with dDRM playback
+8. **App Factory** — local packaging pipeline
+
+### Priority 2: UI Polish (can interleave)
+
+- Keyboard shortcuts (Alt+Tab, Alt+F4)
+- Explorer context menu (Copy path, Open terminal here)
+- Shortcuts overlay modal
 
 ---
 
@@ -39,67 +73,44 @@
 | Document | Path | What It's For |
 |----------|------|---------------|
 | **This file** | `docs/core/SESSION_HANDOVER.md` | Start here |
+| **Agent Handover** | `docs/core/AGENT_HANDOVER.md` | Coding patterns, infrastructure |
 | **Roadmap** | `docs/core/ROADMAP.md` | All milestones with checkboxes |
-| **Strategy** | `docs/core/ELASTOS_STRATEGY.md` | Non-technical 3-phase overview |
-| **Why It Matters** | `docs/core/WHY_ELASTOS_MATTERS.md` | Historical parallels, storytelling |
-| **Architecture** | `docs/core/ARCHITECTURE_CONVERGENCE.md` | PC2 v1 → capsule runtime v2 technical path |
-| **Network Hardening** | `docs/pc2-infrastructure/NETWORK_HARDENING.md` | Supernode scale-up requirements |
-| **Agent Handover** | `docs/core/AGENT_HANDOVER.md` | Coding patterns, infrastructure details |
-| **Weekly Report Template** | `docs/templates/WEEKLY_SHIPPING_REPORT.md` | How to generate weekly reports + HTML blog articles |
+| **Architecture** | `docs/core/ARCHITECTURE_CONVERGENCE.md` | PC2 v1 → capsule runtime v2 |
+| **Stealth Mode** | `docs/deployment/STEALTH_MODE.md` | Transport cascade docs |
+| **dDRM Plan** | `.cursor/plans/app_store_and_media_market_2489ec7b.plan.md` | Detailed implementation plan |
 
 ---
 
-## What to Work On Next
-
-From the roadmap (Milestone 2), items that don't need hardware:
-
-1. **Mobile-responsive UI** — test in browser, fix layout issues
-2. **WireGuard retry interval** — reduce from 60s to 15s with exponential backoff (quick code change in `ConnectivityService.ts`)
-3. **Basic supernode uptime monitoring** — `/health` endpoint with dashboard
-4. **Automated SSL renewal monitoring** on supernode
-5. **AV1 server-side remuxing** — auto-convert MKV→MP4 for Firefox users
-
----
-
-## Supernode Access
+## Infrastructure Access
 
 ```
-SSH: root@69.164.241.210
-Password: [ROTATED -- stored in password manager, not in git]
+Supernode (InterServer): root@69.164.241.210
+Secondary (Contabo):     root@38.242.211.112
+Passwords: ROTATED — stored in password manager, not in git
 ```
 
 - Gateway runs under systemd (`pc2-gateway.service`)
-- Registry: `/root/pc2/web-gateway/data/registry.json` (66 registered nodes)
-- WireGuard: `wg show wg0` (2 peers: EverlastingOS 10.100.0.2, Anders 10.100.0.3)
-- Restart gateway: `systemctl restart pc2-gateway.service`
-- Gateway logs: `/root/pc2/web-gateway/gateway.log`
+- sing-box 1.13.0 running on supernode for VLESS Reality
+- WireGuard: `wg show wg0` — 10+ active peers
+- AmneziaWG: interface up on supernode
 
 ---
 
 ## Important Boundaries
 
-- **"Elacity dDRM"** — always use this full name. It's Elacity Labs' commercial protocol, NOT an ELA demand mechanism. Elacity's fees belong to Elacity.
+- **"Elacity dDRM"** — always use this full name. It's Elacity Labs' commercial protocol, NOT an ELA demand mechanism.
 - **ELA value** comes from native mechanisms: Carrier staking, blockchain gas, routing fees, in-OS protocol fees
-- **ElastOS** = open infrastructure (community). **Elacity** = private company operating on it (own stakeholders)
+- **ElastOS** = open infrastructure (community). **Elacity** = private company operating on it.
 - Never reference Anders Alm by name in public docs — refer to "the V2 runtime" or "the capsule architecture"
+- **Install Parity Rule** — launcher, start-local.sh, and install-arm.sh must always install the same tools
 
 ---
 
-## Commands for Community Testers
+## Related Repositories
 
-**EverlastingOS (existing install, pull updates):**
-```
-cd ~/pc2.net && git pull origin feature/jetson-gpu-acceleration && cd pc2-node && npm run build && pm2 restart pc2 && pm2 save
-```
-
-**Anders / new Jetson installs:**
-```
-export PC2_BRANCH=feature/jetson-gpu-acceleration
-curl -sSL https://raw.githubusercontent.com/Elacity/pc2.net/feature/jetson-gpu-acceleration/scripts/install-arm.sh | bash
-```
-
----
-
-## When Asked "Give Me My Weekly Report"
-
-Follow `docs/templates/WEEKLY_SHIPPING_REPORT.md` — audit every commit, write GitHub report + blog HTML, post to GitHub Discussions automatically, include Yoast SEO block.
+| Repository | Branch | Status |
+|------------|--------|--------|
+| [pc2.net](https://github.com/Elacity/pc2.net) | `feature/elacity-ddrm-marketplace` | Active development |
+| [elastos-launcher](https://github.com/Elacity/elastos-launcher) | `main` | v1.1.1 released |
+| [document-portal](https://github.com/Elacity/document-portal) | `main` | Up to date |
+| [js-sdk](https://github.com/Elacity/js-sdk) | — | Elacity SDK (reference) |
