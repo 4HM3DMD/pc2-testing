@@ -577,17 +577,22 @@
   }
 
   function loadMyAssets() {
-    if (state.assetsLoading || !Wallet.getAddress()) return;
+    var addr = Wallet.getAddress();
+    if (state.assetsLoading || !addr) return;
     state.assetsLoading = true;
 
     dom.assetsLoading.classList.remove('hidden');
     dom.assetsEmpty.classList.add('hidden');
     dom.assetsGrid.innerHTML = '';
 
+    console.log('[Library] Loading assets for', addr, 'auth:', ElacityAPI.isAuthenticated(), 'signer:', ElacityAPI.getSignerAddress());
+
     ElacityAPI.fetchAccessibleAssets(0, PAGE_SIZE)
       .then(function (result) {
         state.assetsLoading = false;
         dom.assetsLoading.classList.add('hidden');
+
+        console.log('[Library] Got result:', result ? (result.data ? result.data.length + ' items' : 'no data') : 'null');
 
         if (!result || !result.data || result.data.length === 0) {
           dom.assetsEmpty.classList.remove('hidden');
@@ -603,6 +608,8 @@
       .catch(function (err) {
         state.assetsLoading = false;
         dom.assetsLoading.classList.add('hidden');
+        console.error('[Library] Error:', err);
+        dom.assetsEmpty.classList.remove('hidden');
         showToast('Failed to load library: ' + err.message, 'error');
       });
   }
@@ -1675,13 +1682,13 @@
       .then(function (receipt) {
         var success = receipt && (receipt.status === '0x1' || receipt.status === 1);
         if (success) {
-          setPurchaseStatus('success', 'Purchase successful! Downloading to your node...');
+          setPurchaseStatus('success', 'Purchase successful! Saving to your node...');
           dom.detailPriceSection.classList.add('hidden');
           dom.playBtn.classList.add('hidden');
           dom.detailOwned.classList.remove('hidden');
           dom.playOwnedBtn.classList.remove('hidden');
-          dom.downloadNodeBtn.classList.add('hidden');
-          showToast('Purchase complete!', 'success');
+          showToast('Purchase complete! Auto-downloading...', 'success');
+          state.detailIsOwned = true;
           pinAndRegisterMedia(nft);
         } else {
           setPurchaseStatus('error', 'Transaction failed. Please try again.');

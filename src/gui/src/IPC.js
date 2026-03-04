@@ -704,6 +704,61 @@ const ipc_listener = async (event, handled) => {
         });
     }
     //--------------------------------------------------------
+    // walletSendTransaction — app requests eth_sendTransaction via particle iframe (e.g. Elacity buy).
+    // We use only the particle-auth iframe (not main-window provider) so the smart account executes
+    // the buy and the EOA is only the signer; using main window would make the EOA the buyer.
+    //--------------------------------------------------------
+    else if ( event.data.msg === 'walletSendTransaction' && event.data.txParams ) {
+        console.log('[PC2 Wallet] walletSendTransaction received from app, forwarding to particle iframe');
+        walletService.sendTransactionViaParticleIframe(event.data.txParams)
+            .then((txHash) => {
+                target_iframe.contentWindow.postMessage({
+                    original_msg_id: msg_id,
+                    msg: 'walletSendTransactionResult',
+                    txHash,
+                }, '*');
+            })
+            .catch((err) => {
+                target_iframe.contentWindow.postMessage({
+                    original_msg_id: msg_id,
+                    msg: 'walletSendTransactionResult',
+                    error: err?.message || String(err),
+                }, '*');
+            });
+    }
+    //--------------------------------------------------------
+    // walletGetSmartAccountAddress — app asks for current smart account (e.g. for batch buy path)
+    //--------------------------------------------------------
+    else if ( event.data.msg === 'walletGetSmartAccountAddress' ) {
+        const sa = walletService.getSmartAccountAddress();
+        target_iframe.contentWindow.postMessage({
+            original_msg_id: msg_id,
+            msg: 'walletGetSmartAccountAddressResult',
+            smartAccountAddress: sa || null,
+        }, '*');
+    }
+    //--------------------------------------------------------
+    // walletExecuteSmartAccountBatch — app requests batched smart-account execution (approve + buy, one signature)
+    //--------------------------------------------------------
+    else if ( event.data.msg === 'walletExecuteSmartAccountBatch' && event.data.chainId && Array.isArray(event.data.transactions) ) {
+        walletService.sendSmartAccountBatch(event.data.chainId, event.data.transactions)
+            .then((result) => {
+                target_iframe.contentWindow.postMessage({
+                    original_msg_id: msg_id,
+                    msg: 'walletExecuteSmartAccountBatchResult',
+                    transactionId: result?.transactionId,
+                    transactionHash: result?.transactionHash,
+                }, '*');
+            })
+            .catch((err) => {
+                target_iframe.contentWindow.postMessage({
+                    original_msg_id: msg_id,
+                    msg: 'walletExecuteSmartAccountBatchResult',
+                    error: err?.message || String(err),
+                }, '*');
+            });
+    }
+    //--------------------------------------------------------
     // showDirectoryPicker
     //--------------------------------------------------------
     else if ( event.data.msg === 'showDirectoryPicker' ) {

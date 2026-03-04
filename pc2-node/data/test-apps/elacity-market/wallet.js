@@ -30,13 +30,98 @@ var Wallet = (function () {
   ];
 
   var connectedAddress = null;
-  var smartAccountAddress = null;
+  var smartAccountAddress = new URLSearchParams(window.location.search).get('puter.smart_account') || null;
   var currentChainId = null;
   var siwePromise = null;
+  var ipcMsgCounter = 0;
+  var appInstanceId = new URLSearchParams(window.location.search).get('puter.app_instance_id') || '';
 
   function getProvider() {
     if (!window.ethereum) throw new Error('No wallet provider available');
     return window.ethereum;
+  }
+
+  function parentSendTransaction(txParams) {
+    return new Promise(function (resolve, reject) {
+      var msgId = 'wallet-tx-' + (++ipcMsgCounter) + '-' + Date.now();
+
+      function handler(event) {
+        if (!event.data || event.data.original_msg_id !== msgId) return;
+        window.removeEventListener('message', handler);
+        if (event.data.error) {
+          reject(new Error(event.data.error));
+        } else {
+          resolve(event.data.txHash);
+        }
+      }
+
+      window.addEventListener('message', handler);
+      window.parent.postMessage({
+        $: 'puter-ipc',
+        msg: 'walletSendTransaction',
+        appInstanceID: appInstanceId,
+        env: 'app',
+        uuid: msgId,
+        txParams: txParams
+      }, '*');
+    });
+  }
+
+  function parentExecuteSmartAccountBatch(chainId, transactions) {
+    return new Promise(function (resolve, reject) {
+      var msgId = 'wallet-batch-' + (++ipcMsgCounter) + '-' + Date.now();
+
+      function handler(event) {
+        if (!event.data || event.data.original_msg_id !== msgId) return;
+        if (event.data.msg !== 'walletExecuteSmartAccountBatchResult') return;
+        window.removeEventListener('message', handler);
+        if (event.data.error) {
+          reject(new Error(event.data.error));
+        } else {
+          resolve({
+            transactionId: event.data.transactionId,
+            transactionHash: event.data.transactionHash
+          });
+        }
+      }
+
+      window.addEventListener('message', handler);
+      window.parent.postMessage({
+        $: 'puter-ipc',
+        msg: 'walletExecuteSmartAccountBatch',
+        appInstanceID: appInstanceId,
+        env: 'app',
+        uuid: msgId,
+        chainId: chainId,
+        transactions: transactions
+      }, '*');
+    });
+  }
+
+  function getSmartAccountFromParent() {
+    return new Promise(function (resolve) {
+      if (window.parent === window) { resolve(null); return; }
+      var msgId = 'wallet-sa-' + (++ipcMsgCounter) + '-' + Date.now();
+      var done = false;
+      function handler(event) {
+        if (!event.data || event.data.original_msg_id !== msgId) return;
+        if (event.data.msg !== 'walletGetSmartAccountAddressResult') return;
+        window.removeEventListener('message', handler);
+        if (!done) { done = true; resolve(event.data.smartAccountAddress || null); }
+      }
+      window.addEventListener('message', handler);
+      window.parent.postMessage({
+        $: 'puter-ipc',
+        msg: 'walletGetSmartAccountAddress',
+        appInstanceID: appInstanceId,
+        env: 'app',
+        uuid: msgId
+      }, '*');
+      setTimeout(function () {
+        window.removeEventListener('message', handler);
+        if (!done) { done = true; resolve(null); }
+      }, 3000);
+    });
   }
 
   // ── Connection ───────────────────────────────────────
@@ -134,7 +219,10 @@ var Wallet = (function () {
         var sa = smartAccountAddress || getProvider().smartAccountAddress || null;
         if (sa) smartAccountAddress = sa;
         siwePromise = null;
-        return ElacityAPI.login(connectedAddress, signature, sa);
+        return ElacityAPI.login(connectedAddress, signature, sa).then(function (auth) {
+          if (auth && auth.sa) smartAccountAddress = auth.sa;
+          return auth;
+        });
       })
       .catch(function (err) {
         siwePromise = null;
@@ -163,26 +251,64 @@ var Wallet = (function () {
           'buyAccess(address,address,uint256,uint256,uint256)',
           [seller, ledger, ethers.getBigInt(tokenId), ethers.getBigInt(quantity), ethers.getBigInt(priceWei)]
         );
-        return getProvider().request({
-          method: 'eth_sendTransaction',
-          params: [{ from: connectedAddress, to: authorityAddr, data: data, value: ethers.toQuantity(ethers.getBigInt(priceWei)) }]
-        });
+        return parentSendTransaction({ to: authorityAddr, data: data, value: ethers.toQuantity(ethers.getBigInt(priceWei)) });
       }
 
-      return getPaymentProcessor(operativeAddr)
-        .then(function (approvalTarget) {
-          return approveIfNeeded(payToken, priceWei, approvalTarget);
-        })
-        .then(function () {
-          var data = iface.encodeFunctionData(
-            'buyAccess(address,address,uint256,uint256,uint256,address)',
-            [seller, ledger, ethers.getBigInt(tokenId), ethers.getBigInt(quantity), ethers.getBigInt(priceWei), payToken]
-          );
-          return getProvider().request({
-            method: 'eth_sendTransaction',
-            params: [{ from: connectedAddress, to: authorityAddr, data: data }]
+      var buyData = iface.encodeFunctionData(
+        'buyAccess(address,address,uint256,uint256,uint256,address)',
+        [seller, ledger, ethers.getBigInt(tokenId), ethers.getBigInt(quantity), ethers.getBigInt(priceWei), payToken]
+      );
+      var buyTx = { to: authorityAddr, data: buyData, value: '0x0' };
+
+      function runUsdcPath(effectiveSa, useBatch) {
+        if (useBatch) {
+          var chainIdDecimal = currentChainId ? parseInt(currentChainId, 16) : 8453;
+          var ownerAddr = (effectiveSa || '').toLowerCase();
+          return getPaymentProcessor(operativeAddr).then(function (approvalTarget) {
+            var erc20Iface = new ethers.Interface(ERC20_ABI);
+            var allowanceData = erc20Iface.encodeFunctionData('allowance', [ownerAddr, approvalTarget]);
+            return getProvider().request({
+              method: 'eth_call',
+              params: [{ to: payToken, data: allowanceData }, 'latest']
+            }).then(function (allowanceResult) {
+              var currentAllowance = ethers.getBigInt(allowanceResult);
+              var needed = ethers.getBigInt(priceWei);
+              var transactions = [];
+              if (currentAllowance < needed) {
+                var approveData = erc20Iface.encodeFunctionData('approve', [approvalTarget, needed]);
+                transactions.push({ to: payToken, data: approveData, value: '0x0' });
+              }
+              transactions.push(buyTx);
+              return parentExecuteSmartAccountBatch(chainIdDecimal, transactions);
+            }).then(function (result) {
+              return result.transactionHash || result.transactionId;
+            });
           });
+        }
+        return getPaymentProcessor(operativeAddr)
+          .then(function (approvalTarget) {
+            return approveIfNeeded(payToken, priceWei, approvalTarget);
+          })
+          .then(function () {
+            return parentSendTransaction(buyTx);
+          });
+      }
+
+      var apiSigner = typeof ElacityAPI !== 'undefined' && ElacityAPI.getSignerAddress && ElacityAPI.getSignerAddress();
+      var effectiveSa = smartAccountAddress || apiSigner;
+      var useBatch = effectiveSa && (connectedAddress || '').toLowerCase() !== (effectiveSa || '').toLowerCase();
+
+      if (!useBatch && window.parent !== window) {
+        return getSmartAccountFromParent().then(function (sa) {
+          if (sa && (connectedAddress || '').toLowerCase() !== (sa || '').toLowerCase()) {
+            smartAccountAddress = sa;
+            effectiveSa = sa;
+            useBatch = true;
+          }
+          return runUsdcPath(effectiveSa, useBatch);
         });
+      }
+      return runUsdcPath(effectiveSa, useBatch);
     });
   }
 
@@ -204,9 +330,10 @@ var Wallet = (function () {
 
   function approveIfNeeded(tokenAddress, amountWei, spender) {
     var iface = new ethers.Interface(ERC20_ABI);
+    var ownerAddr = smartAccountAddress || connectedAddress;
 
     var allowanceData = iface.encodeFunctionData('allowance', [
-      connectedAddress,
+      ownerAddr,
       spender
     ]);
 
@@ -224,13 +351,9 @@ var Wallet = (function () {
         needed
       ]);
 
-      return getProvider().request({
-        method: 'eth_sendTransaction',
-        params: [{
-          from: connectedAddress,
-          to: tokenAddress,
-          data: approveData
-        }]
+      return parentSendTransaction({
+        to: tokenAddress,
+        data: approveData
       }).then(function (txHash) {
         return waitForReceipt(txHash);
       });

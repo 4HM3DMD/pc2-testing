@@ -486,7 +486,21 @@ export async function handleRead(req: AuthenticatedRequest, res: Response): Prom
     });
     
     // Check if file exists before trying to read
-    const fileMetadata = filesystem.getFileMetadata(resolvedPath, walletAddress);
+    let fileMetadata = filesystem.getFileMetadata(resolvedPath, walletAddress);
+
+    // Fallback: if not found and path embeds a different wallet address, try that
+    // (handles cases where files were saved under EOA but session uses smart wallet)
+    if (!fileMetadata) {
+      const pathParts = resolvedPath.split('/').filter(Boolean);
+      const pathWallet = pathParts[0];
+      if (pathWallet && /^0x[0-9a-fA-F]{40}$/.test(pathWallet) && pathWallet.toLowerCase() !== walletAddress?.toLowerCase()) {
+        fileMetadata = filesystem.getFileMetadata(resolvedPath, pathWallet);
+        if (fileMetadata) {
+          walletAddress = pathWallet;
+        }
+      }
+    }
+
     if (!fileMetadata) {
       logger.error('[Read] File metadata not found in database', { 
         resolvedPath, 

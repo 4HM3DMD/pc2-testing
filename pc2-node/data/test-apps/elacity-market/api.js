@@ -573,8 +573,10 @@ var ElacityAPI = (function () {
   }
 
   function login(address, signature, sa) {
+    console.log('[Auth] login called with address:', address, 'sa:', sa);
     return gql(USER_LOGIN_MUTATION, { address: address, signature: signature, sa: sa || null })
       .then(function (data) {
+        console.log('[Auth] login response:', data.auth ? 'token=' + (data.auth.token ? 'yes' : 'no') + ' sa=' + data.auth.sa : 'null');
         if (data.auth && data.auth.token) {
           authToken = data.auth.token;
           signerAddress = (data.auth.sa || address).toLowerCase();

@@ -442,6 +442,11 @@ const launch_app = async (options) => {
             iframe_url.searchParams.append('puter.api_origin', window.api_origin);
         }
 
+        // Pass smart account to app so My Library and auth use smart wallet (e.g. Elacity Market)
+        if ( window.user && window.user.smart_account_address ) {
+            iframe_url.searchParams.append('puter.smart_account', window.user.smart_account_address);
+        }
+
         // Add options.params to URL
         if ( options.params ) {
             for ( const property in options.params ) {

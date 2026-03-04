@@ -720,6 +720,14 @@ class WalletService {
                     logger.log('Received estimate-swap-result message:', payload);
                     this._handleGenericResult(payload, requestId);
                     break;
+                case 'particle-wallet.eth-send-transaction-result':
+                    logger.log('Received eth-send-transaction-result:', payload?.txHash);
+                    this._handleGenericResult(payload || {}, requestId);
+                    break;
+                case 'particle-wallet.execute-universal-batch-result':
+                    logger.log('Received execute-universal-batch-result:', payload?.transactionId);
+                    this._handleGenericResult(payload || {}, requestId);
+                    break;
                 case 'particle-wallet.swap-result':
                     logger.log('Received swap-result message:', payload);
                     this._handleSwapResult(payload, requestId);
@@ -955,6 +963,58 @@ class WalletService {
         this._notifyListeners();
     }
     
+    /** Hidden style for particle-auth iframe (default state) */
+    static get PARTICLE_IFRAME_HIDDEN_STYLE() {
+        return 'position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;border:none;visibility:hidden;';
+    }
+
+    /** Fullscreen visible style for particle-auth iframe during tx (so wallet popup can show) */
+    static get PARTICLE_IFRAME_VISIBLE_STYLE() {
+        return 'position:fixed;top:0;left:0;width:100%;height:100%;z-index:999999;visibility:visible;border:none;';
+    }
+
+    /**
+     * Send raw txParams to particle-auth iframe for eth_sendTransaction (e.g. Elacity buy).
+     * Uses only the Particle iframe so the transaction is executed by the smart account (EOA signs there).
+     * Iframe stays hidden so MetaMask popup is not covered.
+     * @param {Object} txParams - { to, data, value?, gas?, from? }
+     * @returns {Promise<string>} Transaction hash
+     */
+    async sendTransactionViaParticleIframe(txParams) {
+        console.log('[PC2 Wallet] sendTransactionViaParticleIframe called');
+        const iframe = this._getOrCreateIframe();
+        try {
+            console.log('[PC2 Wallet] sending eth-send-transaction to particle iframe');
+            const payload = await this._sendToIframe('particle-wallet.eth-send-transaction', { txParams });
+            if (payload && payload.txHash) {
+                console.log('[PC2 Wallet] tx success:', payload.txHash);
+                return payload.txHash;
+            }
+            console.log('[PC2 Wallet] tx failed:', payload?.error || payload?.message);
+            throw new Error(payload?.error || payload?.message || 'No txHash returned');
+        } catch (e) {
+            console.log('[PC2 Wallet] sendTransactionViaParticleIframe error:', e?.message);
+            throw e;
+        }
+    }
+
+    /**
+     * Execute a batch of contract calls from the smart account (one UserOp, one signature).
+     * @param {number} chainId - Chain ID (e.g. 8453 for Base)
+     * @param {Array<{ to: string, data: string, value?: string }>} transactions - Array of tx params
+     * @returns {Promise<{ transactionId?: string, transactionHash?: string }>}
+     */
+    async sendSmartAccountBatch(chainId, transactions) {
+        const payload = await this._sendToIframe('particle-wallet.execute-universal-batch', {
+            chainId,
+            transactions,
+        });
+        if (payload && (payload.transactionId || payload.transactionHash)) {
+            return payload;
+        }
+        throw new Error(payload?.error || payload?.message || 'Batch execution failed');
+    }
+
     /**
      * Handle generic result responses (like estimate-swap-result)
      */
@@ -1032,13 +1092,20 @@ class WalletService {
         });
         
         iframe.src = `/particle-auth?${params.toString()}`;
-        iframe.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;border:none;visibility:hidden;';
+        iframe.style.cssText = WalletService.PARTICLE_IFRAME_HIDDEN_STYLE;
         document.body.appendChild(iframe);
         
-        // Mark that we need to wait for iframe to load
+        // Prefer particle-wallet.ready; fallback: consider ready 8s after onload so we don't wait forever
+        // if the iframe never sends ready (e.g. connector not restored in wallet mode).
         this._iframeReady = false;
         iframe.onload = () => {
-            this._iframeReady = true;
+            logger.log('Particle iframe loaded, waiting for particle-wallet.ready (or 8s fallback)...');
+            setTimeout(() => {
+                if (!this._iframeReady) {
+                    logger.log('Particle iframe 8s fallback: marking ready');
+                    this._iframeReady = true;
+                }
+            }, 8000);
         };
         
         return iframe;
@@ -1056,17 +1123,23 @@ class WalletService {
             return Promise.reject(new Error('Wallet not connected'));
         }
         
+        const isTransactionType = type && (
+            String(type).includes('transaction') ||
+            String(type).includes('send') ||
+            String(type).includes('execute-universal-batch')
+        );
+        const timeoutMs = isTransactionType ? 120000 : 30000;
+        // Keep iframe hidden always — MetaMask/ConnectKit popup appears from extension; showing iframe caused a fullscreen grey screen
         return new Promise((resolve, reject) => {
-            // Set timeout for request
             const timeoutId = setTimeout(() => {
                 this.pendingRequests.delete(requestId);
                 reject(new Error('Request timeout'));
-            }, 30000);
+            }, timeoutMs);
             
             this.pendingRequests.set(requestId, {
-                resolve: (data) => {
+                resolve: (resolvedData) => {
                     clearTimeout(timeoutId);
-                    resolve(data);
+                    resolve(resolvedData);
                 },
                 reject: (error) => {
                     clearTimeout(timeoutId);
@@ -1074,10 +1147,12 @@ class WalletService {
                 },
             });
             
-            // Wait for iframe to be ready before sending message
             const sendMessage = () => {
                 if (iframe.contentWindow) {
                     logger.log('Sending message to iframe:', type);
+                    if (type === 'particle-wallet.eth-send-transaction') {
+                        console.log('[PC2 Wallet] posting eth-send-transaction to particle iframe now');
+                    }
                     iframe.contentWindow.postMessage({
                         type,
                         requestId,
@@ -1090,12 +1165,14 @@ class WalletService {
                 }
             };
             
-            // If iframe not ready, wait for ready signal or timeout
+            // If iframe not ready, wait for particle-wallet.ready (set by messageHandler) or timeout
             if (!this._iframeReady) {
-                logger.log('Waiting for iframe to be ready...');
-                // Poll for ready state
+                logger.log('Waiting for iframe to be ready (particle-wallet.ready)...');
+                if (type === 'particle-wallet.eth-send-transaction') {
+                    console.log('[PC2 Wallet] particle iframe not ready yet, waiting up to 30s...');
+                }
                 let attempts = 0;
-                const maxAttempts = 30; // 15 seconds max
+                const maxAttempts = 60; // 30 seconds — iframe needs time to init React + UniversalAccount
                 const checkReady = setInterval(() => {
                     attempts++;
                     if (this._iframeReady) {
