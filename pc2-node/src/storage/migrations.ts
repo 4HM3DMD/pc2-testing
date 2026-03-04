@@ -31,7 +31,7 @@ function findSchemaFile(): string {
   }
   throw new Error(`Schema file not found. Tried: ${SCHEMA_FILE} and ${sourceSchema}`);
 }
-const CURRENT_VERSION = 15;
+const CURRENT_VERSION = 16;
 
 interface Migration {
   version: number;
@@ -640,6 +640,42 @@ export function runMigrations(db: Database.Database): void {
       }
     }
     
+    // Migration 16: Installed apps table for dApp Store
+    if (currentVersion < 16) {
+      try {
+        log.info('📦 Running Migration 16: Installed apps table...');
+        
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS installed_apps (
+            app_name TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            version TEXT NOT NULL DEFAULT '1.0.0',
+            cid TEXT NOT NULL,
+            size INTEGER DEFAULT 0,
+            icon TEXT,
+            description TEXT,
+            author TEXT,
+            permissions_json TEXT DEFAULT '[]',
+            requirements_json TEXT DEFAULT '{}',
+            manifest_json TEXT NOT NULL DEFAULT '{}',
+            installed_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+          )
+        `);
+        
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_installed_apps_cid
+          ON installed_apps(cid)
+        `);
+        
+        log.info('✅ Migration 16 complete: Installed apps table created');
+        recordMigration(db, 16);
+      } catch (error: any) {
+        log.error(`❌ Migration 16 error: ${error.message}`);
+        throw error;
+      }
+    }
+
     log.info('✅ Migrations completed');
   } else if (currentVersion === CURRENT_VERSION) {
     // Even if migration version is current, check if FTS5 table exists

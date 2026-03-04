@@ -217,10 +217,65 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
   // Function declarations are hoisted, so we can register the route here even though the handler is defined below
   app.get('/apps/*', appsRouteHandler);
   app.get('/builtin/*', appsRouteHandler); // Also handle builtin apps (phoenix, terminal) that use BUILTIN_PREFIX
-  
-  // Wrap static middleware to skip /apps/* and /builtin/* paths
+
+  // Serve installed dApps from data/installed-apps/<name>/
+  app.get('/installed-apps/*', (req: Request, res: Response, next: NextFunction) => {
+    const dataDir = process.env.PC2_DATA_DIR || path.join(process.cwd(), 'data');
+    const installedAppsDir = path.resolve(dataDir, 'installed-apps');
+    const relativePath = req.path.replace('/installed-apps/', '');
+
+    // Extract app name (first path segment) and resolve full path
+    const appName = relativePath.split('/')[0];
+    if (!appName || !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(appName)) {
+      res.status(400).send('Invalid app name');
+      return;
+    }
+
+    const filePath = path.resolve(installedAppsDir, relativePath);
+    const appDir = path.resolve(installedAppsDir, appName);
+
+    // Security: resolved path must be strictly within this app's directory
+    if (!filePath.startsWith(appDir + path.sep) && filePath !== appDir) {
+      res.status(403).send('Forbidden');
+      return;
+    }
+
+    if (!existsSync(filePath)) {
+      return next();
+    }
+    const appInstallService = req.app?.locals?.appInstallService;
+    if (appInstallService) {
+      const installedApp = appInstallService.get(appName);
+      if (installedApp) {
+        try {
+          const requirements = JSON.parse(installedApp.requirements_json);
+          if (requirements?.headers?.includes('cross-origin-isolation')) {
+            res.setHeader('Cross-Origin-Embedder-Policy', 'credentialless');
+            res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+          }
+        } catch { /* ignore parse errors */ }
+      }
+    }
+
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+
+    // Inject wallet provider shim into HTML files
+    if (filePath.endsWith('.html')) {
+      const bosonService = req.app?.locals?.bosonService;
+      const baseUrl = getBaseUrl(req, bosonService);
+      let html = readFileSync(filePath, 'utf-8');
+      const walletShimTag = `<script src="${baseUrl}/pc2-wallet-provider.js"></script>`;
+      html = html.replace(/<head[^>]*>/i, (match: string) => `${match}\n    ${walletShimTag}`);
+      res.type('html').send(html);
+      return;
+    }
+
+    res.sendFile(filePath);
+  });
+
+  // Wrap static middleware to skip /apps/*, /builtin/*, and /installed-apps/* paths
   app.use((req: Request, res: Response, next: NextFunction) => {
-    if (req.path.startsWith('/apps/') || req.path.startsWith('/builtin/')) {
+    if (req.path.startsWith('/apps/') || req.path.startsWith('/builtin/') || req.path.startsWith('/installed-apps/')) {
       log.debug(`[static.ts] ⏭️  Skipping express.static() for ${req.path} - will be handled by route`);
       return next(); // Skip static file serving, continue to route handlers
     }
@@ -472,7 +527,10 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
       log.debug(`[static.ts] 🧮 Calculator detected! appPath: ${appPath}, calculatorRelativePath: ${calculatorRelativePath}`);
     }
     
+    const dataDir = process.env.PC2_DATA_DIR || path.join(process.cwd(), 'data');
     const possiblePaths = [
+      // Installed dApps (highest priority - user-installed / bundled apps)
+      path.join(dataDir, 'installed-apps', appPath),
       // Frontend apps path (for calculator and other new apps)
       path.join(projectRoot, 'frontend/apps', appPath),
       path.join(process.cwd(), 'frontend/apps', appPath),
@@ -522,6 +580,10 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
         if (mimeTypes[ext]) {
           res.setHeader('Content-Type', mimeTypes[ext]);
         }
+
+        if (!isProduction) {
+          res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        }
         
         // Special handling for app HTML files - inject correct SDK URL
         // This applies to all apps (terminal, phoenix, player, viewer, pdf, editor, etc.)
@@ -536,6 +598,29 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
           // This ensures apps work with PC2 node's local SDK
           htmlContent = htmlContent.replace(/https?:\/\/[^'"]*\/puter\.js\/v2/g, sdkUrl);
           log.debug(`[static.ts] ✅ SDK URL replaced in HTML`);
+          
+          // Inject PC2 wallet provider shim into app HTML
+          // This creates window.ethereum inside sandboxed iframes via postMessage bridge
+          const walletShimTag = `<script src="${baseUrl}/pc2-wallet-provider.js"></script>`;
+          htmlContent = htmlContent.replace(/<head[^>]*>/i, (match: string) => `${match}\n    ${walletShimTag}`);
+          
+          // Per-app COOP/COEP headers for apps that need cross-origin isolation
+          // (e.g. media player needs SharedArrayBuffer for DRM decryption)
+          const appNameForHeaders = appPath.split('/')[0];
+          const appInstallSvc = req.app?.locals?.appInstallService;
+          if (appInstallSvc) {
+            try {
+              const installedApp = appInstallSvc.get(appNameForHeaders);
+              if (installedApp) {
+                const reqs = JSON.parse(installedApp.requirements_json);
+                if (reqs?.headers?.includes('cross-origin-isolation')) {
+                  res.setHeader('Cross-Origin-Embedder-Policy', 'credentialless');
+                  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+                  log.info(`[static.ts] 🔒 COOP/COEP headers set for app: ${appNameForHeaders}`);
+                }
+              }
+            } catch { /* ignore parse errors */ }
+          }
           
           // For calculator app, add SDK initialization script to set API origin
           if (isCalculator) {

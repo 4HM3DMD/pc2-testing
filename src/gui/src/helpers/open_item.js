@@ -128,6 +128,44 @@ Please try recreating the link.`);
         }
     }
     //----------------------------------------------------------------
+    // Is this a .edrm file? (DRM-protected media from Elacity)
+    //----------------------------------------------------------------
+    else if ( $(el_item).attr('data-name').toLowerCase().endsWith('.edrm') ) {
+        try {
+            let descriptor = null;
+            try {
+                const content = await puter.fs.read({ path: item_path });
+                const text = content instanceof Blob ? await content.text() : String(content);
+                descriptor = JSON.parse(text);
+            } catch (e) {
+                console.error('Error reading .edrm descriptor:', e);
+            }
+
+            if ( descriptor && descriptor.contractAddress && descriptor.tokenId ) {
+                const channel = descriptor.contractAddress;
+                const tokenId = descriptor.tokenId;
+                const playerUrl = window.location.origin + '/apps/elacity-player/index.html?channel=' +
+                    encodeURIComponent(channel) + '&tokenId=' + encodeURIComponent(tokenId);
+
+                const w = Math.min(960, screen.availWidth - 100);
+                const h = Math.min(640, screen.availHeight - 100);
+                const left = Math.round((screen.availWidth - w) / 2);
+                const top = Math.round((screen.availHeight - h) / 2);
+                const popup = window.open(playerUrl, 'elacity-player',
+                    'width=' + w + ',height=' + h + ',left=' + left + ',top=' + top + ',toolbar=no,menubar=no,resizable=yes');
+
+                if ( !popup ) {
+                    UIAlert('Popup blocked — please allow popups to play DRM content.');
+                }
+            } else {
+                UIAlert('Could not read DRM media descriptor. The file may be corrupted.');
+            }
+        } catch ( error ) {
+            console.error('Error opening DRM media:', error);
+            UIAlert(`Error opening DRM media: ${ error.message}`);
+        }
+    }
+    //----------------------------------------------------------------
     // Is this a trashed file?
     //----------------------------------------------------------------
     else if ( item_path.startsWith(`${window.trash_path }/`) ) {

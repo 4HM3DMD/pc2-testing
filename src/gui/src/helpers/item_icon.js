@@ -230,6 +230,10 @@ const item_icon = async (fsentry) => {
     else if ( fsentry.name.toLowerCase().endsWith('.zip') ) {
         return { image: window.icons['file-zip.svg'], type: 'icon' };
     }
+    // *.edrm (DRM-protected media from Elacity)
+    else if ( fsentry.name.toLowerCase().endsWith('.edrm') ) {
+        return { image: window.icons['file-edrm.svg'], type: 'icon' };
+    }
     // --------------------------------------------------
     // Determine icon by set or derived mime type
     // --------------------------------------------------

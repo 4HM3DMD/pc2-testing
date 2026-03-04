@@ -549,6 +549,7 @@ async function main() {
     
     <div id="app"></div>
     <script src="/bundle.min.js"></script>
+    <script src="/pc2-wallet-bridge.js"></script>
     <!-- NOTE: gui.js is already bundled into bundle.min.js - do NOT include separately -->
     
     <!-- Initialize GUI -->

@@ -42,6 +42,11 @@ function Mime() {
       return 'application/x-weblink';
     }
     
+    // DRM-protected media descriptor
+    if (ext === 'edrm') {
+      return 'application/x-edrm';
+    }
+    
     return (hasDot || !hasPath) && this._types[ext] || null;
   };
   Mime.prototype.getExtension = function(type) {
@@ -50,6 +55,10 @@ function Mime() {
     // Special case for .weblink files
     if (type === 'application/x-weblink') {
       return 'weblink';
+    }
+    
+    if (type === 'application/x-edrm') {
+      return 'edrm';
     }
     
     return type && this._extensions[type.toLowerCase()] || null;

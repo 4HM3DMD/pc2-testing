@@ -162,10 +162,34 @@ export function handleGetApp(req: Request, res: Response): void {
   
   // Handle multiple app names separated by |
   const appNames = appName.split('|');
-  const results = appNames
-    .map(name => appMap[name.trim()])
-    .filter(app => app !== undefined);
-  
+  const results: any[] = [];
+  const appInstallService = req.app?.locals?.appInstallService;
+
+  for (const name of appNames) {
+    const trimmed = name.trim();
+    if (appMap[trimmed]) {
+      results.push(appMap[trimmed]);
+    } else if (appInstallService) {
+      const installed = appInstallService.get(trimmed);
+      if (installed) {
+        try {
+          const manifest = JSON.parse(installed.manifest_json);
+          results.push({
+            name: installed.app_name,
+            title: installed.title,
+            uuid: `app-${installed.app_name}`,
+            uid: `app-${installed.app_name}`,
+            icon: installed.icon || undefined,
+            index_url: `${baseUrl}/installed-apps/${installed.app_name}/${manifest.entry || 'index.html'}`,
+            installed: true,
+          });
+        } catch {
+          logger.warn(`[apps.ts] Corrupt manifest for installed app: ${trimmed}`);
+        }
+      }
+    }
+  }
+
   if (results.length === 0) {
     logger.warn(`[apps.ts] App not found: ${appName}`);
     res.status(404).json({ error: `App "${appName}" not found` });

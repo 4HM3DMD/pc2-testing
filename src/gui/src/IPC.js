@@ -129,6 +129,68 @@ const ipc_listener = async (event, handled) => {
     }
 
     // --------------------------------------------------------
+    // PC2 Wallet Bridge — forward EIP-1193 RPC from sandboxed iframes
+    // to the parent's Particle Auth provider (window.ethereum).
+    // Must be checked BEFORE the msg/appInstanceID validation below,
+    // because wallet bridge messages use { type } not { msg }.
+    // --------------------------------------------------------
+    if ( event.data?.type === 'pc2-wallet-rpc' ) {
+        const { id, method, params } = event.data;
+
+        (async () => {
+            try {
+                const provider = window.ethereum;
+                if (!provider || provider.isPC2WalletBridge) {
+                    throw { code: 4900, message: 'No wallet provider available' };
+                }
+
+                const result = await provider.request({ method, params });
+
+                event.source.postMessage({
+                    type: 'pc2-wallet-rpc-response',
+                    id,
+                    method,
+                    result,
+                }, event.origin === 'null' ? '*' : event.origin);
+            } catch (error) {
+                event.source.postMessage({
+                    type: 'pc2-wallet-rpc-response',
+                    id,
+                    method,
+                    error: {
+                        code: error.code || -32603,
+                        message: error.message || String(error),
+                    },
+                }, event.origin === 'null' ? '*' : event.origin);
+            }
+        })();
+
+        return handled.resolve(true);
+    }
+
+    if ( event.data?.type === 'pc2-wallet-ready' ) {
+        (async () => {
+            try {
+                const provider = window.ethereum;
+                if (!provider || provider.isPC2WalletBridge) return;
+
+                const accounts = await provider.request({ method: 'eth_accounts' }).catch(() => []);
+                const chainId = await provider.request({ method: 'eth_chainId' }).catch(() => null);
+
+                event.source.postMessage({
+                    type: 'pc2-wallet-init',
+                    accounts,
+                    chainId,
+                }, event.origin === 'null' ? '*' : event.origin);
+            } catch (_) {
+                // Silently ignore — provider may not be ready yet
+            }
+        })();
+
+        return handled.resolve(true);
+    }
+
+    // --------------------------------------------------------
     // Message from apps
     // --------------------------------------------------------
 
@@ -625,6 +687,21 @@ const ipc_listener = async (event, handled) => {
     else if ( event.data.msg === 'mouseClicked' ) {
         // close all popovers whose parent_id is parent_window_id
         $(`.popover[data-parent_id="${parent_window_id}"]`).remove();
+    }
+    //--------------------------------------------------------
+    // openFolder — opens a file-explorer window at the given path
+    //--------------------------------------------------------
+    else if ( event.data.msg === 'openFolder' && event.data.path ) {
+        const folder_path = event.data.path;
+        const folder_title = folder_path.split('/').filter(Boolean).pop() || 'Folder';
+        const icon = await item_icon({ is_dir: true, path: folder_path });
+        UIWindow({
+            path: folder_path,
+            title: folder_title,
+            icon: icon,
+            is_dir: true,
+            app: 'explorer',
+        });
     }
     //--------------------------------------------------------
     // showDirectoryPicker

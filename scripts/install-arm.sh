@@ -864,8 +864,22 @@ PARTICLE_EOF
 # Start PC2 with PM2
 # ─────────────────────────────────────────────────────────────────────────────
 
+configure_firewall() {
+    if command -v ufw &>/dev/null; then
+        local ufw_status=$(sudo ufw status 2>/dev/null | head -1)
+        if echo "$ufw_status" | grep -qi "active"; then
+            print_step "Firewall (UFW) is active — opening port ${PC2_PORT}..."
+            sudo ufw allow "${PC2_PORT}/tcp" >/dev/null 2>&1
+            sudo ufw allow 51820/udp >/dev/null 2>&1
+            print_ok "Firewall configured (ports ${PC2_PORT}/tcp, 51820/udp allowed)"
+        fi
+    fi
+}
+
 start_pc2() {
     echo ""
+    configure_firewall
+
     print_step "Starting PC2 with PM2..."
 
     cd "$PC2_DIR"
@@ -891,6 +905,18 @@ start_pc2() {
     fi
 
     print_ok "PC2 running with PM2"
+
+    print_step "Verifying PC2 is reachable..."
+    local retries=0
+    while [ $retries -lt 10 ]; do
+        if curl -sf -o /dev/null "http://localhost:${PC2_PORT}/" 2>/dev/null; then
+            print_ok "PC2 is responding on port ${PC2_PORT}"
+            return
+        fi
+        retries=$((retries + 1))
+        sleep 2
+    done
+    print_warn "PC2 started but not yet responding on port ${PC2_PORT} — check logs with: pc2 logs pc2"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────

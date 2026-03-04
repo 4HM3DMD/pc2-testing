@@ -94,7 +94,7 @@ export function handleGetLaunchApps(req: Request, res: Response): void {
   };
   
   // Define available apps (these match the apps in src/backend/apps/)
-  const apps = [
+  const apps: Record<string, any>[] = [
     {
       name: 'editor',
       title: 'Text Editor',
@@ -195,6 +195,29 @@ export function handleGetLaunchApps(req: Request, res: Response): void {
     }
   ];
   
+  // Merge installed apps from dApp Store
+  const appInstallService = req.app?.locals?.appInstallService;
+  if (appInstallService) {
+    try {
+      const installedApps = appInstallService.list();
+      for (const installed of installedApps) {
+        apps.push({
+          name: installed.app_name,
+          title: installed.title,
+          uuid: `app-${installed.app_name}`,
+          icon: installed.icon || undefined,
+          description: installed.description || '',
+          index_url: `${baseUrl}/apps/${installed.app_name}/${JSON.parse(installed.manifest_json).entry || 'index.html'}`,
+          installed: true,
+          version: installed.version,
+          author: installed.author || undefined,
+        });
+      }
+    } catch (err: any) {
+      logger.warn('[GetLaunchApps] Failed to load installed apps:', err.message);
+    }
+  }
+
   // Build map for quick app lookup by name
   const appMap: Record<string, any> = {};
   for (const app of apps) {

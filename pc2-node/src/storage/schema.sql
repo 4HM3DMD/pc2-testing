@@ -1,6 +1,6 @@
 -- PC2 Node Database Schema
 -- SQLite database for persistent storage
--- Version 15: Full schema with all migrations applied
+-- Version 16: Full schema with all migrations applied
 
 -- Users table: Wallet-based user accounts
 CREATE TABLE IF NOT EXISTS users (
@@ -159,6 +159,23 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   FOREIGN KEY (wallet_address) REFERENCES users(wallet_address) ON DELETE CASCADE
 );
 
+-- Installed apps table: User-installed dApps from IPFS
+CREATE TABLE IF NOT EXISTS installed_apps (
+  app_name TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  version TEXT NOT NULL DEFAULT '1.0.0',
+  cid TEXT NOT NULL,
+  size INTEGER DEFAULT 0,
+  icon TEXT,
+  description TEXT,
+  author TEXT,
+  permissions_json TEXT DEFAULT '[]',
+  requirements_json TEXT DEFAULT '{}',
+  manifest_json TEXT NOT NULL DEFAULT '{}',
+  installed_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
 -- Context events table: Awareness layer data (location, photos, voice, activity)
 CREATE TABLE IF NOT EXISTS context_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -198,6 +215,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at DESC)
 CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action);
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_wallet ON scheduled_tasks(wallet_address);
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_next_run ON scheduled_tasks(next_run_at);
+CREATE INDEX IF NOT EXISTS idx_installed_apps_cid ON installed_apps(cid);
 CREATE INDEX IF NOT EXISTS idx_context_wallet_time ON context_events(wallet, timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_context_type ON context_events(type);
 

@@ -44,6 +44,8 @@ import gatewayRouter from './gateway.js';
 import systemRouter from './system.js';
 import contextRouter from './context.js';
 import voiceRouter from './voice.js';
+import { createInstalledAppsRouter } from './installed-apps.js';
+import { AppInstallService } from '../services/AppInstallService.js';
 
 // Extend Express Request to include database, filesystem, config, and WebSocket
 declare global {
@@ -350,6 +352,37 @@ export function setupAPI(app: Express): void {
   app.use('/api/system', systemRouter);
   app.use('/api/context', contextRouter);
   app.use('/api/ai', voiceRouter);
+
+  // Installed Apps (dApp Store) — requires db for registration
+  if (db) {
+    const dataDir = process.env.PC2_DATA_DIR || path.join(process.cwd(), 'data');
+    const appInstallService = new AppInstallService(db, ipfs, dataDir);
+    app.locals.appInstallService = appInstallService;
+    app.use('/api/installed-apps', authenticate, createInstalledAppsRouter(appInstallService));
+    logger.info('[API] ✅ Installed Apps API enabled at /api/installed-apps');
+
+    // Sync bundled test apps on every startup (re-copies files if source changed)
+    const testAppsDir = path.join(dataDir, 'test-apps');
+    if (fs.existsSync(testAppsDir)) {
+      for (const appFolder of fs.readdirSync(testAppsDir, { withFileTypes: true })) {
+        if (!appFolder.isDirectory()) continue;
+        const appName = appFolder.name;
+
+        const manifestPath = path.join(testAppsDir, appName, 'app.json');
+        if (!fs.existsSync(manifestPath)) continue;
+
+        try {
+          const existing = appInstallService.get(appName);
+          if (existing) appInstallService.uninstall(appName);
+          const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+          appInstallService.installFromLocal(manifest, path.join(testAppsDir, appName));
+          logger.info(`[API] ✅ Synced bundled app: ${appName}`);
+        } catch (err: any) {
+          logger.warn(`[API] ⚠️  Failed to sync ${appName}: ${err.message}`);
+        }
+      }
+    }
+  }
   
   // Rate limit status endpoint
   app.get('/api/rate-limit/status', authenticate, (req: AuthenticatedRequest, res: Response) => {

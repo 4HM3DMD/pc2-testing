@@ -1,0 +1,11 @@
+{
+  "name": "elacity-market",
+  "title": "Elacity Market",
+  "version": "0.1.0",
+  "description": "Browse, purchase, and collect digital media NFTs from the Elacity marketplace on Base.",
+  "author": "Elacity Labs",
+  "icon": "/apps/elacity-market/assets/favicon.png",
+  "entry": "index.html",
+  "permissions": ["wallet", "network"],
+  "requirements": {}
+}

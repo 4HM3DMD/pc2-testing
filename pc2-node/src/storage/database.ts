@@ -79,6 +79,22 @@ export interface AIConversation {
   updated_at: number;
 }
 
+export interface InstalledApp {
+  app_name: string;
+  title: string;
+  version: string;
+  cid: string;
+  size: number;
+  icon: string | null;
+  description: string | null;
+  author: string | null;
+  permissions_json: string;
+  requirements_json: string;
+  manifest_json: string;
+  installed_at: number;
+  updated_at: number;
+}
+
 export class DatabaseManager {
   private db: Database.Database | null = null;
   private dbPath: string;
@@ -1559,5 +1575,38 @@ export class DatabaseManager {
       rejectedAt: row.rejected_at,
       executedAt: row.executed_at,
     };
+  }
+
+  // ── Installed Apps ────────────────────────────────────────
+
+  getInstalledApp(appName: string): InstalledApp | undefined {
+    const db = this.getDB();
+    return db.prepare('SELECT * FROM installed_apps WHERE app_name = ?').get(appName) as InstalledApp | undefined;
+  }
+
+  listInstalledApps(): InstalledApp[] {
+    const db = this.getDB();
+    return db.prepare('SELECT * FROM installed_apps ORDER BY installed_at DESC').all() as InstalledApp[];
+  }
+
+  registerInstalledApp(app: InstalledApp): void {
+    const db = this.getDB();
+    db.prepare(`
+      INSERT OR REPLACE INTO installed_apps
+        (app_name, title, version, cid, size, icon, description, author,
+         permissions_json, requirements_json, manifest_json, installed_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      app.app_name, app.title, app.version, app.cid, app.size,
+      app.icon, app.description, app.author,
+      app.permissions_json, app.requirements_json, app.manifest_json,
+      app.installed_at, app.updated_at
+    );
+  }
+
+  uninstallApp(appName: string): boolean {
+    const db = this.getDB();
+    const result = db.prepare('DELETE FROM installed_apps WHERE app_name = ?').run(appName);
+    return result.changes > 0;
   }
 }

@@ -433,5 +433,45 @@ router.get('/ipfs/network', authenticate, async (req: AuthenticatedRequest, res:
   }
 });
 
+/**
+ * POST /api/ipfs/pin
+ * Pin a remote CID to the local IPFS node (fetches content from the network/gateway).
+ * Used by the Elacity Market to download owned media to the user's node.
+ */
+router.post('/ipfs/pin', authenticate, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const ipfs = req.app.locals.ipfs;
+    if (!ipfs) {
+      return res.status(503).json({ error: 'IPFS not available' });
+    }
+
+    const { cid } = req.body;
+    if (!cid || typeof cid !== 'string') {
+      return res.status(400).json({ error: 'Missing or invalid CID' });
+    }
+
+    const cidClean = cid.replace(/^ipfs:\/\//, '').replace(/^\/ipfs\//, '').split('/')[0];
+
+    logger.info(`[Storage API] Pinning remote CID: ${cidClean}`);
+    const result = await ipfs.pinRemoteCID(cidClean, { timeoutMs: 180000 });
+
+    if (result.success) {
+      logger.info(`[Storage API] Successfully pinned CID: ${cidClean} (${result.size} bytes, ${result.type}, ${result.timeMs}ms)`);
+      res.json({
+        success: true,
+        cid: result.cid,
+        totalSize: result.size,
+        blockCount: result.blockCount || result.files || 1,
+        type: result.type,
+      });
+    } else {
+      res.status(500).json({ success: false, error: 'Failed to pin CID' });
+    }
+  } catch (error: any) {
+    logger.error('[Storage API]: Error pinning remote CID:', error);
+    res.status(500).json({ error: error.message || 'Failed to pin CID' });
+  }
+});
+
 export default router;
 

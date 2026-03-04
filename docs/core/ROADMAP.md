@@ -2,7 +2,7 @@
 
 > **Purpose:** Single source of truth for all strategic goals, technical work streams, and milestones — directly mapped to the Keystone Fund proposal and Rong Chen's original vision
 > **Created:** 2026-02-24
-> **Last Updated:** 2026-02-24
+> **Last Updated:** 2026-03-04
 > **Status:** Living document — update as work progresses
 
 ---
@@ -107,32 +107,36 @@ These diagrams from Rong define the north star. Every work stream should move us
 **Goal:** Build the V1 dApp Store and Media Market using the Elacity SDK. This is the first work stream after v1.1.0 release.
 
 **Branch:** `feature/elacity-ddrm-marketplace` (created from main after v1.1.0)
-**Detailed Plan:** `.cursor/plans/app_store_and_media_market_2489ec7b.plan.md`
+**Detailed Plan:** Cursor internal plan — "App Store and Media Market" (ID: `app_store_and_media_market_2489ec7b`)
 
 **Prerequisites:**
-- [ ] postMessage wallet bridge for iframe-sandboxed apps
-- [ ] COOP/COEP header testing for media player SharedArrayBuffer
-- [ ] Confirm SDK access with CTO (npm registry, test CIDs, API endpoints)
+- [x] postMessage wallet bridge for iframe-sandboxed apps *(completed Mar 3)*
+- [x] COOP/COEP header testing for media player SharedArrayBuffer *(completed Mar 3)*
+- [x] Confirm SDK access with CTO (npm registry, test CIDs, API endpoints) *(completed Mar 3)*
 
 **Backend Foundation:**
-- [ ] `installed_apps` SQLite table (name, cid, version, manifest, installed_at, size, status)
-- [ ] AppInstallService — fetch CID from IPFS, verify, store, register
-- [ ] Install/uninstall/list/update API endpoints (`/api/apps/*`)
+- [x] `installed_apps` SQLite table (name, cid, version, manifest, installed_at, size, status) *(completed Mar 3)*
+- [x] AppInstallService — fetch CID from IPFS, verify, store, register *(completed Mar 3)*
+- [x] Install/uninstall/list/update API endpoints (`/api/apps/*`) *(completed Mar 3)*
 - [ ] App registry manifest format + supernode discovery endpoint
 - [ ] App build pipeline (Vite build → static bundle → IPFS pin → CID → registry)
 
 **Frontend Apps:**
-- [ ] Elacity Market app using `@elacity-js/api` + wallet bridge
-- [ ] Media player as installable app with per-app COOP/COEP headers
-- [ ] Purchase flow with `contracts-ua-executor` + Particle Auth via bridge
+- [x] Elacity Market app using `@elacity-js/api` + wallet bridge *(completed Mar 3-4)*
+- [x] Media player as installable app with per-app COOP/COEP headers *(completed Mar 3)*
+- [ ] Purchase flow with `contracts-ua-executor` + Particle Auth via bridge *(EOA path works, UA path pending)*
 - [ ] App Center UI rebuild against real backend APIs
+
+**Download-to-Node / Content Seeding:**
+- [x] Save-to-Cloud with `.edrm` descriptor, progress UI, and "Open Videos folder" *(completed Mar 4)*
+- [x] `.edrm` file type support in GUI — icon, MIME, double-click opens player *(completed Mar 4)*
+- [x] IPFS CAR format support for directory CIDs (DASH segments) *(completed Mar 4)*
+- [ ] Auto-download on purchase (trigger pin automatically after buy)
+- [ ] Auto-pin + DHT announce for purchased content (CDN effect)
 
 **Creator Tools:**
 - [ ] `media-packager` integration — cloud transcode (default) + local FFmpeg (future)
 - [ ] App Factory — local packaging pipeline (build → bundle → IPFS pin → publish)
-
-**Network:**
-- [ ] Auto-pin + DHT announce for purchased content (CDN effect)
 
 ---
 

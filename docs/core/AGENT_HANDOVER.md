@@ -1,8 +1,8 @@
 # PC2 Agent Handover Document
 
 > **Purpose:** Complete contextual awareness for AI agents working on PC2
-> **Last Updated:** 2026-03-03
-> **Current Status:** v1.1.0 released and tagged on main. Active branch: `feature/elacity-ddrm-marketplace`
+> **Last Updated:** 2026-03-04
+> **Current Status:** v1.1.0 on main. Active branch: `feature/elacity-ddrm-marketplace` — Phase 1 foundation + Elacity Market dApp + Download-to-Node complete
 
 ---
 
@@ -291,7 +291,7 @@ pm2 restart pc2    # or: systemctl restart pc2-node (on older setups)
 
 ---
 
-## Current State (2026-03-03)
+## Current State (2026-03-04)
 
 ### Release: v1.1.0 (tagged 2026-03-03, 134 commits squash-merged to main)
 
@@ -323,20 +323,59 @@ pm2 restart pc2    # or: systemctl restart pc2-node (on older setups)
 ### Active Work — Elacity dDRM & dApp Store
 
 **Branch:** `feature/elacity-ddrm-marketplace`
-**Plan:** `.cursor/plans/app_store_and_media_market_2489ec7b.plan.md`
+**Plan:** Cursor internal plan — "App Store and Media Market" (ID: `app_store_and_media_market_2489ec7b`)
 **Priority:** First work stream after v1.1.0 release
 
-Key deliverables:
-- postMessage wallet bridge for iframe-sandboxed apps
-- `installed_apps` SQLite table + AppInstallService
-- App registry manifest format + IPFS-backed registry
-- Elacity Market app using `@elacity-js/api`
-- Media player with dDRM playback
-- App Factory for local packaging and publishing
+#### Completed (Mar 3-4, 2026)
 
-### Pending Tasks
+**Phase 1 Foundation:**
+- ✅ postMessage wallet bridge (`pc2-wallet-bridge.js` + `pc2-wallet-provider.js`) — shims `window.ethereum` for sandboxed iframe apps
+- ✅ COOP/COEP per-app headers for SharedArrayBuffer (media player)
+- ✅ `installed_apps` SQLite table + AppInstallService
+- ✅ Install/uninstall/list/update API endpoints (`/api/apps/*`)
+- ✅ `handleGetLaunchApps()` merges built-in + installed apps
+- ✅ iframe sandbox attributes on all installed apps
+- ✅ Static serving for installed apps with no-cache headers
 
-- [ ] Elacity dDRM & dApp Store (first priority — see plan above)
+**Elacity Market dApp:**
+- ✅ Full market UI (Feed, Channels, Library, Subscriptions, Watch Later)
+- ✅ Light/dark theme toggle
+- ✅ GraphQL API client for Elacity backend
+- ✅ Particle Smart Wallet + auto-SIWE authentication
+- ✅ Channel directory with grid/list views and category filters
+- ✅ On-chain subscription flow (plan selection, ERC-20 approval, subscribePlan)
+- ✅ On-chain purchase flow (buyAccess via AuthorityGateway)
+- ✅ Media preview inline player
+- ✅ Elacity logo integration (light/dark variants)
+
+**Download-to-Node / Seeding:**
+- ✅ "Save to Cloud" download with progress UI
+- ✅ `.edrm` descriptor format (JSON with CID, contract, token ID, gateway)
+- ✅ `openFolder` IPC handler — dApps can open file explorer at a path
+- ✅ `.edrm` file type in GUI — custom icon, MIME type, double-click opens player
+- ✅ IPFS CAR format support for directory CIDs
+- ✅ Authenticated backend calls via `pc2Fetch()` wrapper
+
+**Elacity Player:**
+- ✅ Bundled at `test-apps/elacity-player/` with DASH streaming + DRM
+
+#### In Progress
+
+- 🔨 Purchase flow — EOA direct buy works; UA executor path for smart wallet still pending
+- 🔨 End-to-end `.edrm` playback verification from file explorer
+
+#### Remaining (from plan)
+
+- [ ] App registry manifest format + supernode discovery endpoint
+- [ ] App build pipeline documentation
+- [ ] Smart Wallet (UA executor) purchase path
+- [ ] App Center UI rebuild against real backend APIs
+- [ ] Media packager integration (cloud transcode)
+- [ ] App Factory (local build/package/publish pipeline)
+- [ ] Auto-pin + DHT announce for CDN effect
+
+### Other Pending Tasks
+
 - [ ] Keyboard shortcuts (Alt+Tab, Alt+F4)
 - [ ] Explorer context menu (Copy path, Open terminal here)
 - [ ] AV1/Firefox — server-side remuxing for MKV→MP4

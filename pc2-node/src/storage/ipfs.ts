@@ -652,7 +652,7 @@ export class IPFSStorage {
       }
       
       // Last resort: try stat + cat with remaining timeout (for directories or special cases)
-      const statTimeoutMs = Math.min(timeoutMs - (Date.now() - startTime), 15000);
+      const statTimeoutMs = Math.min(timeoutMs - (Date.now() - startTime), 45000);
       let stats: any;
       
       try {
@@ -792,9 +792,10 @@ export class IPFSStorage {
     size: number;
     content?: Uint8Array;
     actualCid?: string;
+    blockCount?: number;
   }> {
-    // Extended list of public IPFS gateways (ordered by reliability)
     const GATEWAYS = [
+      'https://ipfs.ela.city/ipfs/',
       'https://ipfs.io/ipfs/',
       'https://dweb.link/ipfs/',
       'https://w3s.link/ipfs/',
@@ -804,64 +805,110 @@ export class IPFSStorage {
       'https://cloudflare-ipfs.com/ipfs/',
     ];
 
+    const helia = this.helia!;
     const fs = this.getUnixFS();
-    // Generous timeout for gateway fetches - large files need time
-    const timeoutMs = Math.max(remainingTimeoutMs, 60000); // At least 60s for gateway
+    const timeoutMs = Math.max(remainingTimeoutMs, 120000);
 
-    // Try each gateway with retries
-    for (let attempt = 0; attempt < 2; attempt++) {
-      if (attempt > 0) {
-        log.debug(`[IPFS] Gateway retry attempt ${attempt + 1}...`);
-        await new Promise(r => setTimeout(r, 2000)); // Wait 2s before retry
-      }
+    // Phase 1: Try CAR import from gateways that support ?format=car
+    // This handles both files AND directories in one request
+    for (const gateway of GATEWAYS) {
+      try {
+        const carUrl = `${gateway}${cidString}?format=car`;
+        log.debug(`[IPFS] Trying CAR import: ${carUrl}`);
 
-      for (const gateway of GATEWAYS) {
-        try {
-          log.debug(`[IPFS] Trying gateway: ${gateway}${cidString}`);
-          
-          const response = await fetch(`${gateway}${cidString}`, {
-            signal: AbortSignal.timeout(timeoutMs),
-            headers: {
-              'Accept': '*/*',
-            },
-          });
+        const response = await fetch(carUrl, {
+          signal: AbortSignal.timeout(timeoutMs),
+          headers: { 'Accept': 'application/vnd.ipld.car' },
+        });
 
-          if (!response.ok) {
-            log.debug(`[IPFS] Gateway ${gateway} returned ${response.status}`);
-            continue;
-          }
-
-          // Read content
-          const buffer = await response.arrayBuffer();
-          const content = new Uint8Array(buffer);
-          
-          log.debug(`[IPFS] ✅ Fetched ${content.length} bytes from gateway ${gateway}`);
-
-          // Add to local IPFS
-          const addedCid = await fs.addBytes(content);
-          log.debug(`[IPFS] ✅ Added to local IPFS: ${addedCid.toString()}`);
-
-          // CID version may differ (v0 vs v1), but content is the same
-          if (addedCid.toString() !== cidString) {
-            log.debug(`[IPFS] CID versions differ: requested ${cidString.substring(0, 12)}..., stored as ${addedCid.toString().substring(0, 12)}...`);
-          }
-
-          return {
-            success: true,
-            size: content.length,
-            content: content, // Return content so caller can save it directly
-            actualCid: addedCid.toString()
-          };
-        } catch (error: any) {
-          const errMsg = error.message || 'Unknown error';
-          // Only log brief error for cleaner output
-          if (errMsg.includes('timeout') || errMsg.includes('abort')) {
-            log.debug(`[IPFS] Gateway ${gateway} timed out`);
-          } else {
-            log.debug(`[IPFS] Gateway ${gateway} failed: ${errMsg.substring(0, 100)}`);
-          }
+        if (!response.ok) {
+          log.debug(`[IPFS] Gateway ${gateway} CAR returned ${response.status}`);
           continue;
         }
+
+        const contentType = response.headers.get('content-type') || '';
+        if (!contentType.includes('car') && !contentType.includes('octet-stream')) {
+          log.debug(`[IPFS] Gateway ${gateway} returned ${contentType}, not CAR`);
+          continue;
+        }
+
+        const carBytes = new Uint8Array(await response.arrayBuffer());
+        log.debug(`[IPFS] Downloaded CAR: ${carBytes.length} bytes from ${gateway}`);
+
+        const { CarReader } = await import('@ipld/car');
+        const reader = await CarReader.fromBytes(carBytes);
+
+        let blockCount = 0;
+        let totalSize = 0;
+        for await (const { cid, bytes } of reader.blocks()) {
+          await helia.blockstore.put(cid, bytes);
+          blockCount++;
+          totalSize += bytes.length;
+        }
+
+        log.info(`[IPFS] ✅ CAR imported: ${blockCount} blocks, ${totalSize} bytes for ${cidString}`);
+
+        return {
+          success: true,
+          size: totalSize,
+          actualCid: cidString,
+          blockCount,
+        };
+      } catch (error: any) {
+        const errMsg = error.message || 'Unknown error';
+        if (errMsg.includes('timeout') || errMsg.includes('abort')) {
+          log.debug(`[IPFS] Gateway ${gateway} CAR timed out`);
+        } else {
+          log.debug(`[IPFS] Gateway ${gateway} CAR failed: ${errMsg.substring(0, 100)}`);
+        }
+        continue;
+      }
+    }
+
+    // Phase 2: Try raw file fetch (only for non-directory CIDs)
+    for (const gateway of GATEWAYS) {
+      try {
+        log.debug(`[IPFS] Trying raw fetch: ${gateway}${cidString}`);
+
+        const response = await fetch(`${gateway}${cidString}`, {
+          signal: AbortSignal.timeout(timeoutMs),
+          redirect: 'follow',
+          headers: { 'Accept': 'application/octet-stream, */*' },
+        });
+
+        if (!response.ok) {
+          log.debug(`[IPFS] Gateway ${gateway} returned ${response.status}`);
+          continue;
+        }
+
+        const contentType = response.headers.get('content-type') || '';
+        if (contentType.includes('text/html')) {
+          log.debug(`[IPFS] Gateway ${gateway} returned HTML (likely directory listing), skipping`);
+          continue;
+        }
+
+        const buffer = await response.arrayBuffer();
+        const content = new Uint8Array(buffer);
+
+        log.debug(`[IPFS] ✅ Fetched ${content.length} bytes from gateway ${gateway}`);
+
+        const addedCid = await fs.addBytes(content);
+        log.debug(`[IPFS] ✅ Added to local IPFS: ${addedCid.toString()}`);
+
+        return {
+          success: true,
+          size: content.length,
+          content,
+          actualCid: addedCid.toString()
+        };
+      } catch (error: any) {
+        const errMsg = error.message || 'Unknown error';
+        if (errMsg.includes('timeout') || errMsg.includes('abort')) {
+          log.debug(`[IPFS] Gateway ${gateway} timed out`);
+        } else {
+          log.debug(`[IPFS] Gateway ${gateway} failed: ${errMsg.substring(0, 100)}`);
+        }
+        continue;
       }
     }
 

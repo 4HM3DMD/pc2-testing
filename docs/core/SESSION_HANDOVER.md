@@ -1,4 +1,4 @@
-# Session Handover — Mar 3, 2026
+# Session Handover — Mar 4, 2026
 
 > **Read this first when starting a new agent session.**
 
@@ -23,48 +23,52 @@
 - Upload verification against IPFS
 - WireGuard reconnection with exponential backoff (15s start)
 
-### Validated On
+### What's Been Built on This Branch (Elacity dDRM, Mar 3-4)
 
-- macOS (localhost) — full transport cascade, launcher, updates
-- NVIDIA Jetson Orin Nano (zzz.ela.city) — WireGuard + AmneziaWG working, VLESS Reality pending supernode client-side config
-- Contabo VPS (38.242.211.112) — install script verified
+#### Phase 1 Foundation — COMPLETE
+- **postMessage wallet bridge** (`pc2-wallet-bridge.js`, `pc2-wallet-provider.js`) — shims `window.ethereum` for iframe-sandboxed dApps, routes wallet calls to host Particle Auth
+- **COOP/COEP headers** tested for `SharedArrayBuffer` (media player needs it)
+- **`installed_apps` SQLite table** + `AppInstallService.ts` — app lifecycle management
+- **Install/uninstall/list/update API** endpoints (`/api/apps/*`)
+- **Static file serving** for installed apps with `Cache-Control: no-cache` to prevent stale bundles
 
-### Documentation Status
+#### Elacity Market dApp — FUNCTIONAL
+- **Full market UI** — Pipeline-style sidebar with Feed, Channels, My Library, Subscriptions, Watch Later
+- **Light/dark theme** with toggle
+- **GraphQL API client** (`api.js`) — `fetchAccessibleAssets`, `fetchChannels`, `retrieveChannel`, channel subscriptions, asset detail queries
+- **Wallet integration** (`wallet.js`) — Particle Smart Wallet, auto-SIWE authentication, deduplication of login prompts, `switchToBase()` for chain switching
+- **Channel directory** — grid/list views, category filters, channel detail pages with cover images and subscription tiers
+- **On-chain subscription flow** — plan selection modal, ERC-20 approval, `subscribePlan()` contract call via ethers.js
+- **On-chain purchase flow** — `buyAccess()` via `AuthorityGateway`, ERC-20 approval via `paymentProcessor()`
+- **Media preview** — inline player for content previews
+- **Creator avatars** — resolved from IPFS with proper fallback
 
-- `docs.ela.city` (document-portal) — fully updated: install guides, stealth transport, launcher features
-- `docs/deployment/STEALTH_MODE.md` — complete with install parity rule
-- `docs/deployment/TRANSPORT_ARCHITECTURE.md` — four-tier cascade architecture
-- `docs/core/ROADMAP.md` — updated with v1.1.0 completion, Elacity dDRM as first priority
-- `elastos-launcher/CONTRIBUTING.md` — install parity rule documented
-- `elastos-launcher/README.md` — updated with all current features
-- Weekly update report: `docs/reports/weekly-update-2026-03-03.html`
+#### Download-to-Node / Seeding — FUNCTIONAL
+- **"Save to Cloud" button** on owned assets — downloads content from Elacity IPFS gateway, saves `.edrm` descriptor to user's Videos folder
+- **`.edrm` descriptor format** — JSON file containing CID, contract address, token ID, gateway URL, media metadata
+- **Progress UI** — animated progress bar, status messages, "Open Videos folder" link on completion
+- **`openFolder` IPC handler** — new message type in `IPC.js` to open file explorer at a specific path from within dApps
+- **`.edrm` file type support in GUI** — custom icon (padlock + green tick), MIME type registration, double-click opens Elacity player popup
+- **IPFS CAR format support** — `fetchViaGateway` in `storage/ipfs.ts` handles directory CIDs via CAR import, Elacity gateway as primary
+- **Auth for backend calls** — `pc2Fetch()` wrapper extracts `puter.auth.token` from iframe URL, includes `Authorization: Bearer` header
 
----
+#### Elacity Player — BUNDLED
+- Pre-built player at `test-apps/elacity-player/` with DASH streaming, DRM decryption, EIP-712 license requests
 
-## What to Work On Next
+### What Needs Work Next
 
-### Priority 1: Elacity dDRM & dApp Store
+1. **`.edrm` double-click** — currently opens the player popup; needs verification that playback actually works end-to-end from the file explorer
+2. **Auto-download on purchase** — when a user buys content, it should automatically trigger `pinAndRegisterMedia` (currently only manual via button)
+3. **App registry manifest format** — `app.json` schema, supernode discovery endpoint for decentralized app distribution
+4. **App Factory** — local packaging pipeline (build → bundle → IPFS pin → publish)
+5. **Creator tools** — `media-packager` integration for uploading/transcoding content
+6. **Multi-chain deposits** — leverage Particle Universal Account for cross-chain USDC/ETH deposits without bridging
+7. **Auto-pin + DHT announce** — purchased content automatically announced on DHT for CDN seeding effect
+8. **Keyboard shortcuts** (Alt+Tab, Alt+F4) and Explorer context menu enhancements
 
-**Branch:** `feature/elacity-ddrm-marketplace`
-**Detailed Plan:** `.cursor/plans/app_store_and_media_market_2489ec7b.plan.md`
-**SDK Source:** Cloned at `sdk/elacity-js-sdk` (gitignored)
-**SDK Docs:** https://elacity.gitbook.io/elacity-sdks/
+### Previous Conversation Reference
 
-Implementation order:
-1. **postMessage wallet bridge** for iframe-sandboxed apps
-2. **COOP/COEP header testing** for media player SharedArrayBuffer
-3. **Confirm SDK access** with CTO (npm registry, test CIDs, API endpoints)
-4. **`installed_apps` SQLite table** + AppInstallService
-5. **App registry manifest format** + supernode discovery endpoint
-6. **Elacity Market app** using `@elacity-js/api` + wallet bridge
-7. **Media player** as installable app with dDRM playback
-8. **App Factory** — local packaging pipeline
-
-### Priority 2: UI Polish (can interleave)
-
-- Keyboard shortcuts (Alt+Tab, Alt+F4)
-- Explorer context menu (Copy path, Open terminal here)
-- Shortcuts overlay modal
+Full transcript: [Elacity Market Build](9e02ad6d-ab42-429d-8895-cd864df59823)
 
 ---
 
@@ -77,7 +81,43 @@ Implementation order:
 | **Roadmap** | `docs/core/ROADMAP.md` | All milestones with checkboxes |
 | **Architecture** | `docs/core/ARCHITECTURE_CONVERGENCE.md` | PC2 v1 → capsule runtime v2 |
 | **Stealth Mode** | `docs/deployment/STEALTH_MODE.md` | Transport cascade docs |
-| **dDRM Plan** | `.cursor/plans/app_store_and_media_market_2489ec7b.plan.md` | Detailed implementation plan |
+
+---
+
+## Key Files for Elacity dDRM Work
+
+### Elacity Market dApp (runs inside iframe)
+| File | Purpose |
+|------|---------|
+| `pc2-node/data/test-apps/elacity-market/app.js` | Main app logic — rendering, state, download, playback |
+| `pc2-node/data/test-apps/elacity-market/api.js` | GraphQL API client for Elacity backend |
+| `pc2-node/data/test-apps/elacity-market/wallet.js` | Wallet operations — connect, SIWE, buy, subscribe, chain switch |
+| `pc2-node/data/test-apps/elacity-market/index.html` | HTML structure |
+| `pc2-node/data/test-apps/elacity-market/styles.css` | All CSS including light/dark themes |
+
+### Backend APIs
+| File | Purpose |
+|------|---------|
+| `pc2-node/src/api/storage.ts` | `/api/storage/ipfs/pin` — IPFS pinning with CAR support |
+| `pc2-node/src/api/installed-apps.ts` | App install/uninstall/list endpoints |
+| `pc2-node/src/services/AppInstallService.ts` | App lifecycle management service |
+| `pc2-node/src/storage/ipfs.ts` | IPFS Helia node, `pinRemoteCID`, `fetchViaGateway` with CAR |
+| `pc2-node/src/static.ts` | Static serving for installed apps with wallet bridge injection |
+
+### GUI (file explorer, IPC)
+| File | Purpose |
+|------|---------|
+| `src/gui/src/helpers/open_item.js` | `.edrm` double-click → opens player popup |
+| `src/gui/src/IPC.js` | `openFolder` IPC handler for dApp→GUI communication |
+| `src/gui/src/helpers/item_icon.js` | `.edrm` custom icon |
+| `src/gui/src/lib/mime.js` | `.edrm` MIME type registration |
+| `src/gui/src/icons/file-edrm.svg` | Padlock + green tick icon for DRM files |
+
+### Wallet Bridge (injected into all dApp iframes)
+| File | Purpose |
+|------|---------|
+| `pc2-node/frontend/pc2-wallet-bridge.js` | Host-side bridge — listens for postMessage, routes to Particle |
+| `pc2-node/frontend/pc2-wallet-provider.js` | Guest-side shim — replaces `window.ethereum` inside iframe |
 
 ---
 
@@ -88,11 +128,6 @@ Supernode (InterServer): root@69.164.241.210
 Secondary (Contabo):     root@38.242.211.112
 Passwords: ROTATED — stored in password manager, not in git
 ```
-
-- Gateway runs under systemd (`pc2-gateway.service`)
-- sing-box 1.13.0 running on supernode for VLESS Reality
-- WireGuard: `wg show wg0` — 10+ active peers
-- AmneziaWG: interface up on supernode
 
 ---
 
@@ -114,3 +149,4 @@ Passwords: ROTATED — stored in password manager, not in git
 | [elastos-launcher](https://github.com/Elacity/elastos-launcher) | `main` | v1.1.1 released |
 | [document-portal](https://github.com/Elacity/document-portal) | `main` | Up to date |
 | [js-sdk](https://github.com/Elacity/js-sdk) | — | Elacity SDK (reference) |
+| [elacity-web](https://github.com/Elacity/elacity-web) | — | Elacity website (reference for patterns) |
