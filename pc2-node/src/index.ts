@@ -102,7 +102,8 @@ async function main() {
       mode: ipfsMode,
       enableDHT: ipfsConfig.enable_dht,
       enableBootstrap: ipfsConfig.enable_bootstrap,
-      customBootstrap: ipfsConfig.custom_bootstrap
+      customBootstrap: ipfsConfig.custom_bootstrap,
+      supernodeBootstrap: ipfsConfig.supernode_bootstrap,
     });
     await ipfs.initialize();
     
@@ -314,14 +315,14 @@ async function main() {
     }
     
     try {
-      const publicCIDs = db.getPublicCIDs();
-      if (publicCIDs.length === 0) {
-        logger.debug('[IPFS] No public CIDs to announce');
+      const allCIDs = db.getAllAnnouncableCIDs();
+      if (allCIDs.length === 0) {
+        logger.debug('[IPFS] No CIDs to announce');
         return;
       }
-      
-      logger.info(`[IPFS] Starting periodic re-announcement of ${publicCIDs.length} public CIDs...`);
-      const result = await ipfs.announceMultipleCIDs(publicCIDs);
+
+      logger.info(`[IPFS] Starting periodic re-announcement of ${allCIDs.length} CIDs (public + purchased)...`);
+      const result = await ipfs.announceMultipleCIDs(allCIDs);
       logger.info(`[IPFS] Periodic announcement complete: ${result.success} success, ${result.failed} failed`);
     } catch (error) {
       logger.error('[IPFS] Periodic announcement failed:', error);

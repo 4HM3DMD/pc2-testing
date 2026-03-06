@@ -19,6 +19,9 @@ import { kadDHT } from '@libp2p/kad-dht';
 import { identify } from '@libp2p/identify';
 import { ping } from '@libp2p/ping';
 import { bootstrap } from '@libp2p/bootstrap';
+import { circuitRelayTransport } from '@libp2p/circuit-relay-v2';
+import { dcutr } from '@libp2p/dcutr';
+import { autoNAT } from '@libp2p/autonat';
 import { FsBlockstore } from 'blockstore-fs';
 import { FsDatastore } from 'datastore-fs';
 import { existsSync, mkdirSync } from 'fs';
@@ -35,7 +38,17 @@ const log = createLogger('ipfs');
 export type IPFSNetworkMode = 'private' | 'public' | 'hybrid';
 
 /**
- * Public IPFS bootstrap nodes
+ * PC2 Supernode bootstrap addresses
+ * These dedicated relay+DHT-server nodes are contacted first for content
+ * discovery and NAT traversal. Add multiaddrs as supernodes are deployed.
+ */
+const PC2_SUPERNODE_BOOTSTRAP: string[] = [
+  // Supernodes will be added here as they come online, e.g.:
+  // '/dns4/relay1.pc2.net/tcp/4001/p2p/<peerId>'
+];
+
+/**
+ * Public IPFS bootstrap nodes (fallback after supernodes)
  */
 const PUBLIC_BOOTSTRAP_NODES = [
   '/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN',
@@ -51,6 +64,7 @@ export interface IPFSOptions {
   enableDHT?: boolean;              // Enable DHT (auto for public/hybrid)
   enableBootstrap?: boolean;        // Use public bootstrap nodes
   customBootstrap?: string[];       // Additional bootstrap nodes
+  supernodeBootstrap?: string[];    // PC2 supernode relay addresses (highest priority)
 }
 
 export class IPFSStorage {
@@ -125,7 +139,11 @@ export class IPFSStorage {
             '/ip4/0.0.0.0/tcp/4002/ws'
           ] : []
         },
-        transports: [
+        transports: enableNetwork ? [
+          tcp(),
+          webSockets(),
+          circuitRelayTransport()
+        ] : [
           tcp(),
           webSockets()
         ],
@@ -145,6 +163,7 @@ export class IPFSStorage {
       if (enableNetwork) {
         log.info(`   DHT: ${enableDHT ? 'enabled (client mode)' : 'disabled'}`);
         log.info(`   Bootstrap: ${enableBootstrap ? 'enabled' : 'disabled'}`);
+        log.info(`   NAT traversal: enabled (autoNAT + dcutr + circuit-relay-v2)`);
         log.info(`   Max connections: 50`);
 
         // Add identify service (required for DHT)
@@ -152,6 +171,11 @@ export class IPFSStorage {
         
         // Add ping service (required for DHT)
         (libp2pConfig.services as any).ping = ping();
+
+        // NAT traversal: autoNAT detects whether we're behind NAT,
+        // dcutr upgrades relay connections to direct peer-to-peer links
+        (libp2pConfig.services as any).autoNAT = autoNAT();
+        (libp2pConfig.services as any).dcutr = dcutr();
 
         // DHT in CLIENT mode: can query the network to find content,
         // but does NOT advertise/announce what this node has. This prevents
@@ -166,11 +190,20 @@ export class IPFSStorage {
         }
 
         // Add bootstrap nodes for initial peer discovery
+        // Priority: supernodes → custom → public IPFS nodes
         if (enableBootstrap) {
-          const bootstrapNodes = [
-            ...PUBLIC_BOOTSTRAP_NODES,
-            ...(this.options.customBootstrap || [])
+          const supernodes = [
+            ...PC2_SUPERNODE_BOOTSTRAP,
+            ...(this.options.supernodeBootstrap || [])
           ];
+          const bootstrapNodes = [
+            ...supernodes,
+            ...(this.options.customBootstrap || []),
+            ...PUBLIC_BOOTSTRAP_NODES,
+          ];
+          if (supernodes.length > 0) {
+            log.info(`   PC2 supernodes: ${supernodes.length} configured`);
+          }
           libp2pConfig.peerDiscovery = [
             bootstrap({ list: bootstrapNodes })
           ];
@@ -694,6 +727,19 @@ export class IPFSStorage {
         log.debug(`[IPFS] Root block not in blockstore for ${cidString}, skipping local fetch`);
       }
 
+      // Phase 2: Try Bitswap — ask DHT peers for the content before gateways
+      if (this.canAnnounce()) {
+        try {
+          const bitswapResult = await this.fetchViaBitswap(cid, cidString, fs, checkAbort);
+          if (bitswapResult) {
+            const timeMs = Date.now() - startTime;
+            return { ...bitswapResult, timeMs };
+          }
+        } catch (bitswapError: any) {
+          log.debug(`[IPFS] Bitswap fetch failed: ${bitswapError.message}`);
+        }
+      }
+
       // Fetch via gateway — CAR import preserves original CID block structure
       log.debug(`[IPFS] Fetching via gateway (CAR preferred) for ${cidString}...`);
       try {
@@ -977,6 +1023,101 @@ export class IPFSStorage {
     }
 
     throw new Error('All gateways failed after retries');
+  }
+
+  private static readonly BITSWAP_PEER_DISCOVERY_TIMEOUT_MS = 10_000;
+  private static readonly BITSWAP_FETCH_TIMEOUT_MS = 30_000;
+
+  /**
+   * Try to fetch content directly from peers via Bitswap (DHT findProviders + fs.cat).
+   * Returns null if no peers have the content or fetch fails within timeout.
+   * @private
+   */
+  private async fetchViaBitswap(
+    cid: any,
+    cidString: string,
+    fs: UnixFS,
+    checkAbort: () => void
+  ): Promise<{
+    success: boolean;
+    cid: string;
+    type: 'file';
+    size: number;
+    content: Uint8Array;
+    actualCid: string;
+  } | null> {
+    const dht = (this.helia!.libp2p.services as any).dht;
+    if (!dht) return null;
+
+    log.debug(`[IPFS] Bitswap: searching for providers of ${cidString}...`);
+
+    let providerCount = 0;
+    const discoveryTimeout = AbortSignal.timeout(IPFSStorage.BITSWAP_PEER_DISCOVERY_TIMEOUT_MS);
+
+    try {
+      for await (const event of dht.findProviders(cid, { signal: discoveryTimeout })) {
+        if (event.name === 'PROVIDER') {
+          providerCount += event.providers.length;
+          for (const provider of event.providers) {
+            log.debug(`[IPFS] Bitswap: found provider ${provider.id.toString()}`);
+          }
+        }
+        if (providerCount > 0) break;
+      }
+    } catch (e: any) {
+      if (!e.message?.includes('abort') && !e.message?.includes('timeout')) {
+        log.debug(`[IPFS] Bitswap: findProviders error: ${e.message}`);
+      }
+    }
+
+    if (providerCount === 0) {
+      log.debug(`[IPFS] Bitswap: no providers found for ${cidString}`);
+      return null;
+    }
+
+    log.debug(`[IPFS] Bitswap: ${providerCount} provider(s) found, fetching via fs.cat...`);
+
+    const chunks: Uint8Array[] = [];
+    let totalSize = 0;
+    const fetchTimeout = AbortSignal.timeout(IPFSStorage.BITSWAP_FETCH_TIMEOUT_MS);
+
+    const catPromise = (async () => {
+      for await (const chunk of fs.cat(cid, { signal: fetchTimeout })) {
+        chunks.push(chunk);
+        totalSize += chunk.length;
+        checkAbort();
+      }
+    })();
+
+    const timeoutPromise = new Promise<null>((resolve) =>
+      setTimeout(() => resolve(null), IPFSStorage.BITSWAP_FETCH_TIMEOUT_MS)
+    );
+
+    const result = await Promise.race([catPromise, timeoutPromise]);
+    if (result === null && chunks.length === 0) {
+      log.debug(`[IPFS] Bitswap: fetch timed out for ${cidString}`);
+      return null;
+    }
+
+    if (totalSize === 0) return null;
+
+    const combined = new Uint8Array(totalSize);
+    let offset = 0;
+    for (const chunk of chunks) {
+      combined.set(chunk, offset);
+      offset += chunk.length;
+    }
+
+    log.info(`[IPFS] ✅ Bitswap: fetched ${cidString} from peers (${totalSize} bytes)`);
+
+    return {
+      success: true,
+      cid: cidString,
+      type: 'file' as const,
+      size: totalSize,
+      content: combined,
+      actualCid: cidString,
+    };
   }
 
   /**

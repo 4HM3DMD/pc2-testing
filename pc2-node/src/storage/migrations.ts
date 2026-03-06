@@ -31,7 +31,7 @@ function findSchemaFile(): string {
   }
   throw new Error(`Schema file not found. Tried: ${SCHEMA_FILE} and ${sourceSchema}`);
 }
-const CURRENT_VERSION = 16;
+const CURRENT_VERSION = 17;
 
 interface Migration {
   version: number;
@@ -672,6 +672,31 @@ export function runMigrations(db: Database.Database): void {
         recordMigration(db, 16);
       } catch (error: any) {
         log.error(`❌ Migration 16 error: ${error.message}`);
+        throw error;
+      }
+    }
+
+    if (currentVersion < 17) {
+      try {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS pinned_cids (
+            cid TEXT NOT NULL,
+            wallet_address TEXT NOT NULL,
+            source TEXT NOT NULL DEFAULT 'marketplace',
+            size INTEGER NOT NULL DEFAULT 0,
+            pinned_at INTEGER NOT NULL,
+            last_announced_at INTEGER,
+            PRIMARY KEY (cid, wallet_address)
+          )
+        `);
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_pinned_cids_wallet
+          ON pinned_cids(wallet_address)
+        `);
+        log.info('✅ Migration 17 complete: Pinned CIDs table created');
+        recordMigration(db, 17);
+      } catch (error: any) {
+        log.error(`❌ Migration 17 error: ${error.message}`);
         throw error;
       }
     }

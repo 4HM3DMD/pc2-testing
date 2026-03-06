@@ -28,6 +28,35 @@ const publicRateLimit = rateLimit({
   validate: { trustProxy: false },
 });
 
+// In-memory CDN bandwidth tracking — accumulates bytes served without DB writes
+// on every request. Stats are reset on server restart (intentional: lightweight).
+interface CDNStats {
+  bytesServed: number;
+  requestCount: number;
+  startedAt: number;
+  bySource: Record<string, { bytes: number; requests: number }>;
+}
+const cdnStats: CDNStats = {
+  bytesServed: 0,
+  requestCount: 0,
+  startedAt: Date.now(),
+  bySource: {},
+};
+
+function trackCDNBandwidth(cid: string, bytes: number): void {
+  cdnStats.bytesServed += bytes;
+  cdnStats.requestCount += 1;
+  if (!cdnStats.bySource[cid]) {
+    cdnStats.bySource[cid] = { bytes: 0, requests: 0 };
+  }
+  cdnStats.bySource[cid].bytes += bytes;
+  cdnStats.bySource[cid].requests += 1;
+}
+
+export function getCDNStats(): CDNStats {
+  return cdnStats;
+}
+
 // Higher limit for content-serving routes -- video players make many Range
 // requests per second and would instantly hit the 100/min API limit.
 const contentRateLimit = rateLimit({
@@ -119,6 +148,9 @@ function streamToResponse(
       'Content-Length': fileSize.toString(),
     });
   }
+
+  const bytesToServe = length ?? fileSize;
+  trackCDNBandwidth(cid, bytesToServe);
 
   const ipfsStream = ipfs.getFileStream(cid, { offset, length });
   const readable = Readable.from(ipfsStream);
@@ -275,6 +307,9 @@ function streamDAGToResponse(
       'Content-Length': fileSize.toString(),
     });
   }
+
+  const bytesToServe = length ?? fileSize;
+  trackCDNBandwidth(rootCid, bytesToServe);
 
   const ipfsStream = ipfs.getDAGFileStream(rootCid, subPath, { offset, length });
   const readable = Readable.from(ipfsStream);
@@ -471,7 +506,7 @@ export function createPublicRouter(
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
       logger.error(`[Public Gateway] Error listing files for ${wallet}:`, { error: message });
-      res.status(500).json({ error: 'Failed to list files' });
+      res.status(500).json({ error: 'Failed to list public files' });
     }
   });
 
@@ -697,6 +732,16 @@ export function createPublicRouter(
         }
       }
       
+      // Track pinned CID and announce to DHT for CDN participation
+      if (walletAddress && db && result.success) {
+        db.trackPinnedCID(cid, walletAddress, result.size, 'marketplace');
+        if (ipfs.canAnnounce()) {
+          ipfs.announceCID(cid).catch((e: any) =>
+            logger.warn(`[Public Gateway] DHT announce failed for ${cid}: ${e.message}`)
+          );
+        }
+      }
+
       res.json({
         success: true,
         cid: result.cid,
@@ -779,6 +824,44 @@ export function createPublicRouter(
       logger.error(`[Public Gateway] Failed to unpin ${cid}:`, { error: message });
       res.status(500).json({ error: 'Failed to unpin content' });
     }
+  });
+
+  /**
+   * GET /api/cdn/stats
+   *
+   * Returns CDN bandwidth statistics for this node.
+   * Tracks bytes served, request count, and per-CID breakdown.
+   */
+  router.get('/api/cdn/stats', publicRateLimit, async (_req: Request, res: Response) => {
+    const stats = getCDNStats();
+    const uptimeMs = Date.now() - stats.startedAt;
+    const topCIDs = Object.entries(stats.bySource)
+      .sort(([, a], [, b]) => b.bytes - a.bytes)
+      .slice(0, 20)
+      .map(([cid, data]) => ({ cid, ...data }));
+
+    const pinnedCount = db.getPinnedCIDs().length;
+    const publicCount = db.getPublicCIDCount();
+
+    let ipfsStats: { peerId: string | null; connectedPeers: number; mode: string } | null = null;
+    if (ipfs && ipfs.isReady()) {
+      const network = await ipfs.getNetworkStats();
+      ipfsStats = {
+        peerId: network.peerId,
+        connectedPeers: network.connectedPeers,
+        mode: network.mode,
+      };
+    }
+
+    res.json({
+      bytesServed: stats.bytesServed,
+      requestCount: stats.requestCount,
+      uptimeMs,
+      pinnedCIDs: pinnedCount,
+      publicCIDs: publicCount,
+      topCIDs,
+      ipfs: ipfsStats,
+    });
   });
 
   return router;

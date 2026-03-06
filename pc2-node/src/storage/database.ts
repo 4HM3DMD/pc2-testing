@@ -518,6 +518,48 @@ export class DatabaseManager {
   }
 
   // ============================================================================
+  // Pinned CID Tracking (Marketplace Purchases & CDN)
+  // ============================================================================
+
+  trackPinnedCID(cid: string, walletAddress: string, size: number, source: string = 'marketplace'): void {
+    const db = this.getDB();
+    db.prepare(`
+      INSERT INTO pinned_cids (cid, wallet_address, source, size, pinned_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(cid, wallet_address) DO UPDATE SET
+        size = excluded.size,
+        source = excluded.source
+    `).run(cid, walletAddress, source, size, Date.now());
+  }
+
+  getPinnedCIDs(walletAddress?: string): string[] {
+    const db = this.getDB();
+    if (walletAddress) {
+      const rows = db.prepare(`SELECT cid FROM pinned_cids WHERE wallet_address = ?`).all(walletAddress) as { cid: string }[];
+      return rows.map(r => r.cid);
+    }
+    const rows = db.prepare(`SELECT DISTINCT cid FROM pinned_cids`).all() as { cid: string }[];
+    return rows.map(r => r.cid);
+  }
+
+  getAllAnnouncableCIDs(): string[] {
+    const db = this.getDB();
+    const rows = db.prepare(`
+      SELECT cid FROM pinned_cids
+      UNION
+      SELECT DISTINCT ipfs_hash as cid FROM files
+      WHERE ipfs_hash IS NOT NULL AND is_dir = 0
+        AND (is_public = 1 OR path LIKE '%/Public/%')
+    `).all() as { cid: string }[];
+    return rows.map(r => r.cid);
+  }
+
+  updatePinnedCIDAnnouncedAt(cid: string): void {
+    const db = this.getDB();
+    db.prepare(`UPDATE pinned_cids SET last_announced_at = ? WHERE cid = ?`).run(Date.now(), cid);
+  }
+
+  // ============================================================================
   // Settings Operations
   // ============================================================================
 

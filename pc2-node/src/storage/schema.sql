@@ -176,6 +176,17 @@ CREATE TABLE IF NOT EXISTS installed_apps (
   updated_at INTEGER NOT NULL
 );
 
+-- Pinned CIDs table: Tracks marketplace purchases and CDN-participating content
+CREATE TABLE IF NOT EXISTS pinned_cids (
+  cid TEXT NOT NULL,
+  wallet_address TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'marketplace',
+  size INTEGER NOT NULL DEFAULT 0,
+  pinned_at INTEGER NOT NULL,
+  last_announced_at INTEGER,
+  PRIMARY KEY (cid, wallet_address)
+);
+
 -- Context events table: Awareness layer data (location, photos, voice, activity)
 CREATE TABLE IF NOT EXISTS context_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -216,6 +227,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action);
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_wallet ON scheduled_tasks(wallet_address);
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_next_run ON scheduled_tasks(next_run_at);
 CREATE INDEX IF NOT EXISTS idx_installed_apps_cid ON installed_apps(cid);
+CREATE INDEX IF NOT EXISTS idx_pinned_cids_wallet ON pinned_cids(wallet_address);
 CREATE INDEX IF NOT EXISTS idx_context_wallet_time ON context_events(wallet, timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_context_type ON context_events(type);
 
