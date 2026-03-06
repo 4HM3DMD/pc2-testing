@@ -43,8 +43,8 @@ export type IPFSNetworkMode = 'private' | 'public' | 'hybrid';
  * discovery and NAT traversal. Add multiaddrs as supernodes are deployed.
  */
 const PC2_SUPERNODE_BOOTSTRAP: string[] = [
-  // Supernodes will be added here as they come online, e.g.:
-  // '/dns4/relay1.pc2.net/tcp/4001/p2p/<peerId>'
+  '/ip4/69.164.241.210/tcp/4003/p2p/12D3KooWMcuTWxkKg7xS3dxRaPDK9BEUHdAvKWf2b5Kdk4Kwxy9G',
+  '/ip4/69.164.241.210/tcp/4004/ws/p2p/12D3KooWMcuTWxkKg7xS3dxRaPDK9BEUHdAvKWf2b5Kdk4Kwxy9G',
 ];
 
 /**

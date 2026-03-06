@@ -2,7 +2,7 @@
 
 **Task ID**: CDN-EFFECT
 **Created**: 2026-03-06
-**Status**: InProgress
+**Status**: Done
 **Priority**: High
 
 ## Description
@@ -33,10 +33,17 @@ The content IS already pinned locally, but the player can't use it because:
 ## Implementation Plan
 
 - [x] Create task document
-- [ ] Add `resolveDAGPath()` method to `IPFSStorage` (ipfs.ts)
-- [ ] Add `/ipfs/:cid/*` wildcard route with DAG traversal (public.ts)
-- [ ] Update `.edrm` gateway to local node and player launch to prefer local gateway
-- [ ] Build and verify
+- [x] Add `resolveDAGPath()` method to `IPFSStorage` (ipfs.ts)
+- [x] Add `/ipfs/:cid/*` wildcard route with DAG traversal (public.ts)
+- [x] Update `.edrm` gateway to local node and player launch to prefer local gateway
+- [x] Build and verify
+- [x] NAT traversal (circuit-relay-v2, dcutr, autonat)
+- [x] Bitswap-first fetching with DHT provider discovery
+- [x] CID announcement + periodic re-announcement
+- [x] `pinned_cids` SQLite table (Migration 17)
+- [x] In-memory CDN bandwidth tracking + `/api/cdn/stats` endpoint
+- [x] Supernode IPFS Relay deployed (69.164.241.210:4003/4004)
+- [x] Bootstrap addresses configured in `PC2_SUPERNODE_BOOTSTRAP`
 
 ## Acceptance Criteria
 

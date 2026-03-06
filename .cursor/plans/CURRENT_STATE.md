@@ -1,8 +1,8 @@
 # PC2 / ElastOS — Current State
 
-**Last Updated:** March 2, 2026
-**Current Branch:** `feature/jetson-gpu-acceleration`
-**Main Branch:** `main` (v1.0.0 released)
+**Last Updated:** March 6, 2026
+**Current Branch:** `feature/elacity-ddrm-marketplace`
+**Main Branch:** `main` (v1.1.0 released)
 
 ---
 

@@ -40,6 +40,7 @@ pc2-node/test-fresh-install/data/*.sqlite3
 **/data/*.sqlite
 **/data/*.sqlite3
 **/data/encryption.key
+data/identity.json
 # PC2 Frontend Build Outputs (copied from src/backend/apps during build)
 pc2-node/frontend/apps/
 

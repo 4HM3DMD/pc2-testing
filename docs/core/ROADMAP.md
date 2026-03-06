@@ -205,12 +205,12 @@ These diagrams from Rong define the north star. Every work stream should move us
 - [ ] Memory capsules — IPFS CID + DID ownership for generated experiences (shareable, ownable)
 
 **Elacity dDRM Integration:**
-- [ ] Integrate Elacity dDRM SDK into ElastOS
+- [x] Integrate Elacity dDRM SDK into ElastOS *(completed Mar 3-4 — Market dApp, player, wallet bridge)*
 - [ ] Encrypted content upload + CID distribution
-- [ ] Access token architecture (buy rights → get decryption key)
-- [ ] Selective IPFS DHT announcement for dDRM content (`announce: true`)
-- [ ] Marketplace UI within ElastOS (browse, purchase, download)
-- [ ] Buyer node becomes seeder (CDN effect for encrypted content)
+- [x] Access token architecture (buy rights → get decryption key) *(completed Mar 4 — buyAccess + Lit Protocol DRM)*
+- [x] Selective IPFS DHT announcement for dDRM content (`announce: true`) *(completed Mar 5 — dht.provide + periodic re-announce)*
+- [x] Marketplace UI within ElastOS (browse, purchase, download) *(completed Mar 3-4 — Elacity Market dApp)*
+- [x] Buyer node becomes seeder (CDN effect for encrypted content) *(completed Mar 5-6 — Bitswap-first + NAT traversal + relay)*
 
 **Supernode Expansion:**
 - [ ] Second supernode operational with registry replication

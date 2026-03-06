@@ -1,4 +1,4 @@
-# Session Handover — Mar 4, 2026
+# Session Handover — Mar 6, 2026
 
 > **Read this first when starting a new agent session.**
 
@@ -10,8 +10,9 @@
 **Release:** v1.1.0 tagged and released on 2026-03-03 (134 commits squash-merged to main)
 **Launcher:** v1.1.1 released — version display, one-click updates, full networking install
 **DAO Proposal:** Live at https://elastos.com/proposals/69a24f49247f130078064edd
+**Last Commits:** `97574518` (NAT traversal deps), `f78abdeb` (CDN network feature)
 
-### What Just Shipped (v1.1.0)
+### What Just Shipped (v1.1.0 on main)
 
 - Four-tier stealth transport cascade (WG > AWG > VLESS Reality > ActiveProxy)
 - Desktop Launcher with version display, one-click updates, and full networking install
@@ -23,7 +24,7 @@
 - Upload verification against IPFS
 - WireGuard reconnection with exponential backoff (15s start)
 
-### What's Been Built on This Branch (Elacity dDRM, Mar 3-4)
+### What's Been Built on This Branch (Elacity dDRM, Mar 3-6)
 
 #### Phase 1 Foundation — COMPLETE
 - **postMessage wallet bridge** (`pc2-wallet-bridge.js`, `pc2-wallet-provider.js`) — shims `window.ethereum` for iframe-sandboxed dApps, routes wallet calls to host Particle Auth
@@ -39,9 +40,27 @@
 - **Wallet integration** (`wallet.js`) — Particle Smart Wallet, auto-SIWE authentication, deduplication of login prompts, `switchToBase()` for chain switching
 - **Channel directory** — grid/list views, category filters, channel detail pages with cover images and subscription tiers
 - **On-chain subscription flow** — plan selection modal, ERC-20 approval, `subscribePlan()` contract call via ethers.js
-- **On-chain purchase flow** — `buyAccess()` via `AuthorityGateway`, ERC-20 approval via `paymentProcessor()`
+- **On-chain purchase flow** — `buyAccess()` via `AuthorityGateway`, ERC-20 approval via `paymentProcessor()` — **verified working** (user purchased and played content)
 - **Media preview** — inline player for content previews
 - **Creator avatars** — resolved from IPFS with proper fallback
+
+#### DRM Playback — WORKING END-TO-END
+- **`.edrm` file double-click** → launches Elacity Player in a dedicated popup window (required for `SharedArrayBuffer`/COOP/COEP)
+- **Lit Protocol DRM** — license acquisition, signature verification, decryption all working; `@lit-protocol/*` pinned to v7.3.0 via npm overrides
+- **Local IPFS playback** — player loads content from local Helia node (`localhost:4200/ipfs/`) with fallback to Elacity CDN
+- **UnixFS DAG path resolution** — `/ipfs/:cid/*` wildcard route resolves nested paths within directory CIDs (DASH segments, manifests)
+- **Particle Universal Account** — SDK v1.0.24 integration fixed (removed `universalGas: true` for correct API shape)
+
+#### Decentralized CDN Network — COMPLETE (Mar 5-6)
+- **NAT Traversal** — `@libp2p/circuit-relay-v2`, `@libp2p/dcutr`, `@libp2p/autonat` wired into Helia node for peer reachability behind NATs
+- **Bitswap-first fetching** — `fetchViaBitswap()` method tries DHT `findProviders` + direct peer block exchange before falling back to HTTP gateways
+- **CID announcement** — purchased content is announced on the Kademlia DHT via `dht.provide()` so other nodes can discover it
+- **Periodic re-announcement** — background process re-announces all pinned CIDs (public files + marketplace purchases) every 4 hours
+- **`pinned_cids` SQLite table** — tracks marketplace purchases with wallet address, size, source, and last announcement time (Migration 17)
+- **In-memory CDN bandwidth tracking** — `trackCDNBandwidth()` records bytes served per CID, request counts, source breakdown (local/bitswap/gateway)
+- **`GET /api/cdn/stats` endpoint** — exposes CDN bandwidth stats, top CIDs, uptime, IPFS network info
+- **Supernode IPFS Relay** — standalone libp2p node deployed on 69.164.241.210:4003 (TCP) + 4004 (WS), provides circuit relay + DHT server for NAT traversal
+- **Bootstrap addresses** — `PC2_SUPERNODE_BOOTSTRAP` in `ipfs.ts` points all PC2 nodes to the relay
 
 #### Download-to-Node / Seeding — FUNCTIONAL
 - **"Save to Cloud" button** on owned assets — downloads content from Elacity IPFS gateway, saves `.edrm` descriptor to user's Videos folder
@@ -55,20 +74,31 @@
 #### Elacity Player — BUNDLED
 - Pre-built player at `test-apps/elacity-player/` with DASH streaming, DRM decryption, EIP-712 license requests
 
-### What Needs Work Next
+### What Needs Work Next (Priority Order)
 
-1. **`.edrm` double-click** — currently opens the player popup; needs verification that playback actually works end-to-end from the file explorer
-2. **Auto-download on purchase** — when a user buys content, it should automatically trigger `pinAndRegisterMedia` (currently only manual via button)
+1. **App Center UI rebuild** — rebuild the App Center against real backend APIs (currently shows hardcoded apps)
+2. **Auto-download on purchase** — when a user buys content, auto-trigger `pinAndRegisterMedia` (currently manual via button)
 3. **App registry manifest format** — `app.json` schema, supernode discovery endpoint for decentralized app distribution
 4. **App Factory** — local packaging pipeline (build → bundle → IPFS pin → publish)
 5. **Creator tools** — `media-packager` integration for uploading/transcoding content
 6. **Multi-chain deposits** — leverage Particle Universal Account for cross-chain USDC/ETH deposits without bridging
-7. **Auto-pin + DHT announce** — purchased content automatically announced on DHT for CDN seeding effect
+7. **CDN dashboard UI** — expose `/api/cdn/stats` in the PC2 settings or status bar so users can see their node's contribution
 8. **Keyboard shortcuts** (Alt+Tab, Alt+F4) and Explorer context menu enhancements
+
+### Supernode Infrastructure
+
+| Service | Location | Port | Status |
+|---------|----------|------|--------|
+| Boson DHT | 69.164.241.210 | 39001/UDP | Running |
+| Active Proxy | 69.164.241.210 | 8090/TCP | Running |
+| WireGuard | 69.164.241.210 | 51820/UDP | Running |
+| Web Gateway | 69.164.241.210 | 80/443 | Running |
+| **IPFS Relay** | 69.164.241.210 | 4003/TCP, 4004/WS | **Running (new)** — Peer ID: `12D3KooWMcuTWxkKg7xS3dxRaPDK9BEUHdAvKWf2b5Kdk4Kwxy9G` |
+| Elastos pg-oracle | 69.164.241.210 | 20672/TCP | Running (updated to v0.0.3.3) |
 
 ### Previous Conversation Reference
 
-Full transcript: [Elacity Market Build](9e02ad6d-ab42-429d-8895-cd864df59823)
+Full transcript: [Elacity dDRM Build](9e02ad6d-ab42-429d-8895-cd864df59823)
 
 ---
 
@@ -81,6 +111,7 @@ Full transcript: [Elacity Market Build](9e02ad6d-ab42-429d-8895-cd864df59823)
 | **Roadmap** | `docs/core/ROADMAP.md` | All milestones with checkboxes |
 | **Architecture** | `docs/core/ARCHITECTURE_CONVERGENCE.md` | PC2 v1 → capsule runtime v2 |
 | **Stealth Mode** | `docs/deployment/STEALTH_MODE.md` | Transport cascade docs |
+| **CDN Task** | `.cursor/tasks/CDN-EFFECT/CDN-EFFECT.md` | CDN network task details |
 
 ---
 
@@ -95,13 +126,22 @@ Full transcript: [Elacity Market Build](9e02ad6d-ab42-429d-8895-cd864df59823)
 | `pc2-node/data/test-apps/elacity-market/index.html` | HTML structure |
 | `pc2-node/data/test-apps/elacity-market/styles.css` | All CSS including light/dark themes |
 
+### CDN Network
+| File | Purpose |
+|------|---------|
+| `pc2-node/src/storage/ipfs.ts` | Helia node, NAT traversal, Bitswap, DHT announce, bootstrap |
+| `pc2-node/src/api/public.ts` | IPFS gateway, CDN bandwidth tracking, `/api/cdn/stats` |
+| `pc2-node/src/storage/database.ts` | `trackPinnedCID`, `getAllAnnouncableCIDs` |
+| `pc2-node/src/storage/migrations.ts` | Migration 17: `pinned_cids` table |
+| `pc2-node/src/index.ts` | Periodic DHT re-announcement loop |
+| `deploy/ipfs-relay/` | Standalone IPFS relay deployed on supernode |
+
 ### Backend APIs
 | File | Purpose |
 |------|---------|
 | `pc2-node/src/api/storage.ts` | `/api/storage/ipfs/pin` — IPFS pinning with CAR support |
 | `pc2-node/src/api/installed-apps.ts` | App install/uninstall/list endpoints |
 | `pc2-node/src/services/AppInstallService.ts` | App lifecycle management service |
-| `pc2-node/src/storage/ipfs.ts` | IPFS Helia node, `pinRemoteCID`, `fetchViaGateway` with CAR |
 | `pc2-node/src/static.ts` | Static serving for installed apps with wallet bridge injection |
 
 ### GUI (file explorer, IPC)
@@ -118,6 +158,14 @@ Full transcript: [Elacity Market Build](9e02ad6d-ab42-429d-8895-cd864df59823)
 |------|---------|
 | `pc2-node/frontend/pc2-wallet-bridge.js` | Host-side bridge — listens for postMessage, routes to Particle |
 | `pc2-node/frontend/pc2-wallet-provider.js` | Guest-side shim — replaces `window.ethereum` inside iframe |
+
+### Elacity Player (source + built)
+| File | Purpose |
+|------|---------|
+| `pc2-node/data/test-apps/elacity-player-src/` | Player source code (Vite + React + TypeScript) |
+| `pc2-node/data/test-apps/elacity-player/` | Built player bundle (deployed) |
+| `pc2-node/data/test-apps/elacity-player-src/src/PlayerView.tsx` | Gateway resolution logic (local-first + fallback) |
+| `pc2-node/data/test-apps/elacity-player-src/package.json` | `@lit-protocol/*` pinned to v7.3.0 via overrides |
 
 ---
 
@@ -138,6 +186,7 @@ Passwords: ROTATED — stored in password manager, not in git
 - **ElastOS** = open infrastructure (community). **Elacity** = private company operating on it.
 - Never reference Anders Alm by name in public docs — refer to "the V2 runtime" or "the capsule architecture"
 - **Install Parity Rule** — launcher, start-local.sh, and install-arm.sh must always install the same tools
+- **Never commit passwords or SSH credentials** — store in password manager only
 
 ---
 
