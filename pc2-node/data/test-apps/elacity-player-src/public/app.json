@@ -1,0 +1,13 @@
+{
+  "name": "elacity-player",
+  "title": "Elacity Player",
+  "version": "0.1.0",
+  "description": "DRM-protected media player for Elacity content on Base. Plays DASH-encrypted streams with Lit Protocol key management.",
+  "author": "Elacity Labs",
+  "icon": "https://ela.city/favicon.ico",
+  "entry": "index.html",
+  "permissions": ["wallet"],
+  "requirements": {
+    "headers": ["cross-origin-isolation"]
+  }
+}

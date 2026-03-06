@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Wallet Bridge Test</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      padding: 24px;
+      min-height: 100vh;
+    }
+    h1 { font-size: 20px; margin-bottom: 16px; color: #38bdf8; }
+    .card {
+      background: #1e293b;
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 12px;
+      border: 1px solid #334155;
+    }
+    .card h2 { font-size: 14px; color: #94a3b8; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .value { font-family: 'SF Mono', Monaco, monospace; font-size: 13px; word-break: break-all; color: #f1f5f9; }
+    .status { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; }
+    .status.ok { background: #065f46; color: #34d399; }
+    .status.err { background: #7f1d1d; color: #fca5a5; }
+    .status.wait { background: #78350f; color: #fbbf24; }
+    button {
+      display: inline-flex; align-items: center; justify-content: center;
+      padding: 8px 16px; font-size: 13px; line-height: 1;
+      font-family: inherit; background: #3b82f6; color: white;
+      border: none; border-radius: 6px; cursor: pointer; margin-right: 8px; margin-top: 8px;
+    }
+    button:hover { background: #2563eb; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    #log { 
+      background: #0f172a; border: 1px solid #334155; border-radius: 8px;
+      padding: 12px; font-family: monospace; font-size: 12px;
+      max-height: 200px; overflow-y: auto; margin-top: 12px; white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+  <h1>PC2 Wallet Bridge Test dApp</h1>
+
+  <div class="card">
+    <h2>Provider Status</h2>
+    <div id="provider-status"><span class="status wait">Checking...</span></div>
+  </div>
+
+  <div class="card">
+    <h2>Connected Account</h2>
+    <div class="value" id="account">—</div>
+  </div>
+
+  <div class="card">
+    <h2>Chain ID</h2>
+    <div class="value" id="chain">—</div>
+  </div>
+
+  <div class="card">
+    <h2>Balance (ETH)</h2>
+    <div class="value" id="balance">—</div>
+  </div>
+
+  <div class="card">
+    <h2>Actions</h2>
+    <button id="btn-connect" onclick="connectWallet()">Connect Wallet</button>
+    <button id="btn-chain" onclick="getChainId()">Get Chain</button>
+    <button id="btn-balance" onclick="getBalance()">Get Balance</button>
+    <button id="btn-sign" onclick="signMessage()">Sign Message</button>
+  </div>
+
+  <div class="card">
+    <h2>Log</h2>
+    <div id="log"></div>
+  </div>
+
+  <script>
+    function addLog(msg) {
+      const el = document.getElementById('log');
+      const ts = new Date().toLocaleTimeString();
+      el.textContent += `[${ts}] ${msg}\n`;
+      el.scrollTop = el.scrollHeight;
+    }
+
+    function checkProvider() {
+      const el = document.getElementById('provider-status');
+      if (window.ethereum) {
+        const bridge = window.ethereum.isPC2WalletBridge ? ' (PC2 Bridge)' : ' (Direct)';
+        el.innerHTML = `<span class="status ok">Available${bridge}</span>`;
+        addLog('window.ethereum detected' + bridge);
+      } else {
+        el.innerHTML = '<span class="status err">Not Available</span>';
+        addLog('window.ethereum NOT found');
+      }
+    }
+
+    async function connectWallet() {
+      try {
+        addLog('Requesting accounts...');
+        const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+        document.getElementById('account').textContent = accounts[0] || 'None';
+        addLog('Connected: ' + (accounts[0] || 'no accounts'));
+      } catch (e) {
+        addLog('ERROR: ' + e.message);
+        document.getElementById('account').textContent = 'Error: ' + e.message;
+      }
+    }
+
+    async function getChainId() {
+      try {
+        const chainId = await window.ethereum.request({ method: 'eth_chainId' });
+        document.getElementById('chain').textContent = chainId + ' (' + parseInt(chainId, 16) + ')';
+        addLog('Chain: ' + chainId);
+      } catch (e) {
+        addLog('ERROR: ' + e.message);
+      }
+    }
+
+    async function getBalance() {
+      try {
+        const accounts = await window.ethereum.request({ method: 'eth_accounts' });
+        if (!accounts[0]) { addLog('No account connected'); return; }
+        const balance = await window.ethereum.request({
+          method: 'eth_getBalance',
+          params: [accounts[0], 'latest']
+        });
+        const ethBalance = (parseInt(balance, 16) / 1e18).toFixed(6);
+        document.getElementById('balance').textContent = ethBalance;
+        addLog('Balance: ' + ethBalance + ' ETH');
+      } catch (e) {
+        addLog('ERROR: ' + e.message);
+      }
+    }
+
+    async function signMessage() {
+      try {
+        const accounts = await window.ethereum.request({ method: 'eth_accounts' });
+        if (!accounts[0]) { addLog('No account connected'); return; }
+        addLog('Requesting signature...');
+        const msg = '0x' + Array.from(new TextEncoder().encode('Hello from PC2 dApp Store test!')).map(b => b.toString(16).padStart(2, '0')).join('');
+        const sig = await window.ethereum.request({
+          method: 'personal_sign',
+          params: [msg, accounts[0]]
+        });
+        addLog('Signature: ' + sig.substring(0, 20) + '...');
+      } catch (e) {
+        addLog('ERROR: ' + e.message);
+      }
+    }
+
+    window.addEventListener('load', () => {
+      checkProvider();
+      if (window.ethereum) {
+        window.ethereum.on('accountsChanged', (accounts) => {
+          document.getElementById('account').textContent = accounts[0] || 'Disconnected';
+          addLog('Account changed: ' + (accounts[0] || 'disconnected'));
+        });
+        window.ethereum.on('chainChanged', (chainId) => {
+          document.getElementById('chain').textContent = chainId;
+          addLog('Chain changed: ' + chainId);
+        });
+      }
+    });
+  </script>
+</body>
+</html>

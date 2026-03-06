@@ -1,0 +1,10 @@
+{
+  "name": "wallet-test",
+  "title": "Wallet Bridge Test",
+  "version": "1.0.0",
+  "description": "Test dApp for verifying the PC2 wallet bridge postMessage system.",
+  "author": "PC2 Dev",
+  "entry": "index.html",
+  "permissions": ["wallet"],
+  "requirements": {}
+}
