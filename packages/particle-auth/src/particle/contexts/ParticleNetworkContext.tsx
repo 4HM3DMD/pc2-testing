@@ -10,8 +10,6 @@ import {
 // @ts-ignore - TypeScript types not properly exported from package
 import {
   UniversalAccount,
-  createMultiChainUnsignedData,
-  injectMultiChainSignature,
   SUPPORTED_TOKEN_TYPE,
   type IAssetsResponse,
 } from '@particle-network/universal-account-sdk';
@@ -179,14 +177,21 @@ const ParticleNetworkProvider: React.FC<React.PropsWithChildren<ParticleNetworkC
       const projectId = import.meta.env.VITE_PARTICLE_PROJECT_ID;
       const clientKey = import.meta.env.VITE_PARTICLE_CLIENT_KEY;
       const appId = import.meta.env.VITE_PARTICLE_APP_ID;
-      
+
+      // UA SDK uses Elacity's project credentials (gas abstraction is configured there)
+      // Falls back to ConnectKit credentials if UA-specific ones aren't set
+      const uaProjectId = import.meta.env.VITE_UA_PROJECT_ID || projectId;
+      const uaClientKey = import.meta.env.VITE_UA_CLIENT_KEY || clientKey;
+      const uaAppId = import.meta.env.VITE_UA_APP_ID || appId;
+
       if (projectId && clientKey && appId) {
         console.log('[Particle Auth]: Initializing UniversalAccount for EOA:', eoaAddress, isWalletMode ? '(wallet mode)' : '');
-        
+        console.log('[Particle Auth]: UA credentials:', uaProjectId !== projectId ? 'using Elacity project' : 'using default project');
+
         const ua = new UniversalAccount({
-          projectId,
-          projectClientKey: clientKey,
-          projectAppUuid: appId,
+          projectId: uaProjectId,
+          projectClientKey: uaClientKey,
+          projectAppUuid: uaAppId,
           ownerAddress: eoaAddress,
         });
         
@@ -675,46 +680,172 @@ const ParticleNetworkProvider: React.FC<React.PropsWithChildren<ParticleNetworkC
             if (!universalAccount || !smartAccountInfo?.smartAccountAddress) {
               throw new Error('Smart account not ready');
             }
-            const { chainId: batchChainId, transactions: batchTxs } = payload as {
+            const { chainId: batchChainId, transactions: batchTxs, expectTokens: batchExpectTokens } = payload as {
               chainId: number;
               transactions: Array<{ to: string; data: string; value?: string }>;
+              expectTokens?: Array<{ type: string; amount: string }>;
             };
             if (!batchChainId || !Array.isArray(batchTxs) || batchTxs.length === 0) {
               throw new Error('chainId and non-empty transactions required');
             }
-            const transaction = await (universalAccount as any).createUniversalTransaction({
-              chainId: batchChainId,
-              expectTokens: [],
-              transactions: batchTxs.map((t) => ({
-                to: t.to,
-                data: t.data,
-                value: t.value || '0x0',
-              })),
-            });
-            const userOps = transaction.userOps || [];
-            if (userOps.length === 0) {
-              throw new Error('No user operations in transaction');
+
+            // Step 1: Assert smart account is deployed on-chain
+            const UNIVERSAL_CHECKIN = '0x2361a02e6727Ff1798920186b8ACf0f100f621C0';
+            const BASE_RPC = 'https://mainnet.base.org';
+            try {
+              const codeResp = await fetch(BASE_RPC, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  jsonrpc: '2.0', id: 1, method: 'eth_getCode',
+                  params: [smartAccountInfo.smartAccountAddress, 'latest'],
+                }),
+              });
+              const codeResult = await (codeResp.json() as Promise<{ result: string }>);
+              if (codeResult.result === '0x') {
+                console.log('[Particle Auth] Smart account not deployed, deploying via checkIn...');
+                const checkInData = '0x183ff085'; // Interface(['function checkIn() public']).encodeFunctionData('checkIn')
+                const deployTx = await universalAccount.createUniversalTransaction({
+                  chainId: batchChainId,
+                  expectTokens: [],
+                  transactions: [{ to: UNIVERSAL_CHECKIN, data: checkInData, value: '0x0' }],
+                });
+                const deployProvider = await connector?.getProvider();
+                if (!deployProvider) throw new Error('No wallet provider for deployment');
+                const deploySig = await (deployProvider as any).request({
+                  method: 'personal_sign',
+                  params: [deployTx.rootHash, connectedEoaAddress],
+                });
+                await universalAccount.sendTransaction(deployTx, deploySig);
+                await new Promise((r) => setTimeout(r, 3000));
+                console.log('[Particle Auth] Smart account deployed successfully');
+              }
+            } catch (deployErr) {
+              console.warn('[Particle Auth] Smart account assertion failed (continuing):', deployErr);
             }
-            const unsignedData = createMultiChainUnsignedData(userOps);
-            const provider = await connector?.getProvider();
-            if (!provider) {
+
+            // Diagnostic: log smart account balance + SDK-resolved addresses
+            let diagInfo: any = {};
+            try {
+              const [diagAssets, diagSaOptions] = await Promise.all([
+                universalAccount.getPrimaryAssets(),
+                universalAccount.getSmartAccountOptions(),
+              ]);
+              diagInfo = {
+                totalUSD: diagAssets?.totalAmountInUSD,
+                assets: diagAssets?.assets?.map((a: any) => ({ type: a.tokenType, amount: a.amount, usd: a.amountInUSD })),
+                sdkSmartAccount: diagSaOptions?.smartAccountAddress,
+                localSmartAccount: smartAccountInfo.smartAccountAddress,
+                eoa: connectedEoaAddress,
+                expectTokens: batchExpectTokens || [],
+                batchTxCount: batchTxs?.length,
+                chainId: batchChainId,
+                sdkVersion: '1.0.7',
+              };
+              console.log('[Particle Auth] DIAGNOSTIC:', JSON.stringify(diagInfo));
+              window.parent.postMessage({ type: 'particle-wallet.diagnostic', payload: diagInfo }, '*');
+            } catch (diagErr: any) {
+              diagInfo = { error: diagErr?.message };
+              console.warn('[Particle Auth] Diagnostic failed:', diagErr);
+              window.parent.postMessage({ type: 'particle-wallet.diagnostic', payload: diagInfo }, '*');
+            }
+
+            // Step 2: Create the universal transaction with batched calls
+            // IMPORTANT: expectTokens must be EMPTY — Particle's server rejects any non-empty
+            // expectTokens with "Insufficient balance for gas fees" even when balance exists.
+            // Instead, usePrimaryTokens in tradeConfig tells the SDK to use USDC for fees.
+            let transaction: any;
+            try {
+              const createPayload = {
+                chainId: batchChainId,
+                expectTokens: [] as Array<{ type: string; amount: string }>,
+                transactions: batchTxs.map((t) => ({
+                  to: t.to,
+                  data: t.data,
+                  value: t.value || '0x0',
+                })),
+              };
+              const tradeConfig = { usePrimaryTokens: ['usdc'] };
+              console.log('[Particle Auth] createUniversalTransaction payload:', JSON.stringify(createPayload), 'tradeConfig:', JSON.stringify(tradeConfig));
+              window.parent.postMessage({ type: 'particle-wallet.diagnostic', payload: { step: 'createUniversalTransaction', params: createPayload, tradeConfig } }, '*');
+              transaction = await universalAccount.createUniversalTransaction(createPayload, tradeConfig);
+            } catch (createErr: any) {
+              console.error('[Particle Auth] createUniversalTransaction FAILED:', createErr);
+              window.parent.postMessage({ type: 'particle-wallet.diagnostic', payload: {
+                step: 'createUniversalTransaction-ERROR',
+                error: createErr?.message,
+                code: createErr?.code,
+                fullError: String(createErr),
+                diagInfo,
+              } }, '*');
+              throw createErr;
+            }
+
+            // Step 3: Sign the rootHash with the EOA (NOT createMultiChainUnsignedData)
+            const batchProvider = await connector?.getProvider();
+            if (!batchProvider) {
               throw new Error('No wallet provider available');
             }
-            const dataToSign = typeof unsignedData === 'string'
-              ? unsignedData
-              : (unsignedData as any).merkleRoot || (unsignedData as any).hash;
-            const signature = await (provider as any).request({
+            const signature = await (batchProvider as any).request({
               method: 'personal_sign',
-              params: [dataToSign, connectedEoaAddress],
+              params: [transaction.rootHash, connectedEoaAddress],
             });
-            injectMultiChainSignature(transaction, signature);
-            const result = await universalAccount.sendTransaction(transaction, signature);
+
+            if (!signature?.length) {
+              throw new Error('Signature is empty, cannot send transaction');
+            }
+
+            // Step 4: Send signed transaction via UA bundler
+            const sendResult = await universalAccount.sendTransaction(transaction, signature);
+            const txId = sendResult?.transactionId || (transaction as any)?.transactionId;
+            const universalTxUrl = `https://universalx.app/activity/details?id=${txId}`;
+            console.log('[Particle Auth] UA transaction sent:', txId, universalTxUrl);
+
+            // Step 5: Poll ua.getTransaction() for on-chain tx hash (status 7 = Finished)
+            let onChainHash: string | null = null;
+            const POLL_INTERVAL = 2000;
+            const POLL_TIMEOUT = 60000;
+            const pollStart = Date.now();
+            while (Date.now() - pollStart < POLL_TIMEOUT) {
+              try {
+                const txStatus = await universalAccount.getTransaction(txId);
+                const status = (txStatus as any)?.status;
+
+                if (status === 6 || status === 10 || status === 14) {
+                  throw new Error(`UA transaction failed with status ${status}`);
+                }
+
+                const allOps = [
+                  ...((txStatus as any)?.lendingUserOperations || []),
+                  ...((txStatus as any)?.depositUserOperations || []),
+                  ...((txStatus as any)?.settlementUserOperations || []),
+                  ...((txStatus as any)?.refundUserOperations || []),
+                ];
+                const opWithHash = allOps.find((op: any) => op?.txHash);
+                if (opWithHash) {
+                  onChainHash = opWithHash.txHash;
+                  console.log('[Particle Auth] On-chain tx hash found:', onChainHash);
+                  break;
+                }
+
+                if (status === 7) {
+                  console.log('[Particle Auth] TX finished (status 7) but no txHash yet');
+                  break;
+                }
+              } catch (pollErr: any) {
+                if (pollErr?.message?.includes('failed with status')) throw pollErr;
+                console.warn('[Particle Auth] Poll error (retrying):', pollErr?.message);
+              }
+              await new Promise((r) => setTimeout(r, POLL_INTERVAL));
+            }
+
             window.parent.postMessage({
               type: 'particle-wallet.execute-universal-batch-result',
               requestId,
               payload: {
-                transactionId: result?.transactionId ?? transaction?.transactionId,
-                transactionHash: result?.transactionHash ?? result?.hash,
+                transactionId: txId,
+                transactionHash: onChainHash || sendResult?.transactionHash || (sendResult as any)?.hash,
+                universalTxUrl,
               },
             }, '*');
             break;
@@ -787,40 +918,22 @@ const ParticleNetworkProvider: React.FC<React.PropsWithChildren<ParticleNetworkC
             console.log('[Particle Wallet Handler] Transaction created:', transaction);
             console.log('[Particle Wallet Handler] Transaction userOps:', transaction.userOps?.length);
             
-            // For Universal Account, we need to sign using the proper multi-chain signing flow
-            const userOps = transaction.userOps || [];
-            if (userOps.length === 0) {
-              throw new Error('No user operations in transaction');
-            }
-            
-            // Create the unsigned data that needs to be signed
-            const unsignedData = createMultiChainUnsignedData(userOps);
-            console.log('[Particle Wallet Handler] Unsigned data to sign:', unsignedData);
-            
-            // Request signature from the wallet provider
-            const provider = await connector?.getProvider();
-            if (!provider) {
+            // Sign the rootHash with the EOA wallet
+            const sendProvider = await connector?.getProvider();
+            if (!sendProvider) {
               throw new Error('No wallet provider available');
             }
             
-            // The unsignedData is typically a hex string (the merkle root or combined hash)
-            // Sign it with personal_sign using the connected EOA
-            const dataToSign = typeof unsignedData === 'string' ? unsignedData : unsignedData.merkleRoot || unsignedData.hash;
+            console.log('[Particle Wallet Handler] Signing rootHash:', transaction.rootHash, 'with address:', connectedEoaAddress);
             
-            console.log('[Particle Wallet Handler] Signing data:', dataToSign, 'with address:', connectedEoaAddress);
-            
-            const signature = await (provider as any).request({
+            const signature = await (sendProvider as any).request({
               method: 'personal_sign',
-              params: [dataToSign, connectedEoaAddress],
+              params: [transaction.rootHash, connectedEoaAddress],
             });
             
             console.log('[Particle Wallet Handler] Signature obtained:', signature?.substring(0, 20) + '...');
             
-            // Inject the signature into the transaction
-            injectMultiChainSignature(transaction, signature);
-            console.log('[Particle Wallet Handler] Signature injected into transaction');
-            
-            // Send the signed transaction
+            // Send the signed transaction via UA bundler
             const result = await universalAccount.sendTransaction(transaction, signature);
             
             console.log('[Particle Wallet Handler] Transaction sent:', result);
@@ -1111,35 +1224,22 @@ const ParticleNetworkProvider: React.FC<React.PropsWithChildren<ParticleNetworkC
             
             console.log('[Particle Wallet Handler] Convert transaction created:', swapTransaction);
             
-            // Sign the transaction (same flow as transfer)
-            const swapUserOps = swapTransaction.userOps || [];
-            if (swapUserOps.length === 0) {
-              throw new Error('No user operations in swap transaction');
-            }
-            
-            const swapUnsignedData = createMultiChainUnsignedData(swapUserOps);
-            console.log('[Particle Wallet Handler] Swap unsigned data:', swapUnsignedData);
-            
+            // Sign the rootHash with the EOA wallet
             const swapProvider = await connector?.getProvider();
             if (!swapProvider) {
               throw new Error('No wallet provider available');
             }
             
-            const swapDataToSign = typeof swapUnsignedData === 'string' 
-              ? swapUnsignedData 
-              : swapUnsignedData.merkleRoot || swapUnsignedData.hash;
-            
-            console.log('[Particle Wallet Handler] Signing swap with address:', connectedEoaAddress);
+            console.log('[Particle Wallet Handler] Signing swap rootHash with address:', connectedEoaAddress);
             
             const swapSignature = await (swapProvider as any).request({
               method: 'personal_sign',
-              params: [swapDataToSign, connectedEoaAddress],
+              params: [swapTransaction.rootHash, connectedEoaAddress],
             });
             
             console.log('[Particle Wallet Handler] Swap signature obtained');
             
-            // Inject signature and send
-            injectMultiChainSignature(swapTransaction, swapSignature);
+            // Send via UA bundler
             const swapResult = await universalAccount.sendTransaction(swapTransaction, swapSignature);
             
             console.log('[Particle Wallet Handler] Swap sent:', swapResult);

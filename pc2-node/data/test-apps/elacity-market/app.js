@@ -1675,9 +1675,12 @@
           nft.operative ? nft.operative.address : null
         );
       })
-      .then(function (txHash) {
+      .then(function (txHashOrReceipt) {
+        if (txHashOrReceipt && txHashOrReceipt._smartAccountConfirmed) {
+          return txHashOrReceipt;
+        }
         setPurchaseStatus('pending', 'Transaction submitted. Waiting for confirmation...');
-        return Wallet.waitForReceipt(txHash);
+        return Wallet.waitForReceipt(txHashOrReceipt);
       })
       .then(function (receipt) {
         var success = receipt && (receipt.status === '0x1' || receipt.status === 1);
@@ -1744,11 +1747,13 @@
     var walletAddr = Wallet.getAddress() || '';
     var savePath = '/' + walletAddr + '/Videos/' + safeName + '.edrm';
 
+    var localGateway = window.location.origin + '/ipfs/';
     var descriptor = {
       version: 1,
       title: title,
       cid: cid,
-      gateway: 'https://ipfs.ela.city/ipfs/',
+      gateway: localGateway,
+      fallbackGateway: 'https://ipfs.ela.city/ipfs/',
       contractAddress: nft.contractAddress || (nft.channel && nft.channel.address) || '',
       tokenId: tokenId,
       authority: props.authority || '',

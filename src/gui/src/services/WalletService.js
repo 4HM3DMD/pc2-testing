@@ -728,6 +728,9 @@ class WalletService {
                     logger.log('Received execute-universal-batch-result:', payload?.transactionId);
                     this._handleGenericResult(payload || {}, requestId);
                     break;
+                case 'particle-wallet.diagnostic':
+                    console.log('%c[UA DIAGNOSTIC]', 'color: #ff6600; font-weight: bold; font-size: 14px', payload);
+                    break;
                 case 'particle-wallet.swap-result':
                     logger.log('Received swap-result message:', payload);
                     this._handleSwapResult(payload, requestId);
@@ -1004,10 +1007,11 @@ class WalletService {
      * @param {Array<{ to: string, data: string, value?: string }>} transactions - Array of tx params
      * @returns {Promise<{ transactionId?: string, transactionHash?: string }>}
      */
-    async sendSmartAccountBatch(chainId, transactions) {
+    async sendSmartAccountBatch(chainId, transactions, expectTokens) {
         const payload = await this._sendToIframe('particle-wallet.execute-universal-batch', {
             chainId,
             transactions,
+            expectTokens: expectTokens || [],
         });
         if (payload && (payload.transactionId || payload.transactionHash)) {
             return payload;

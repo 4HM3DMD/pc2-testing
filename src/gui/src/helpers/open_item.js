@@ -134,8 +134,18 @@ Please try recreating the link.`);
         try {
             let descriptor = null;
             try {
-                const content = await puter.fs.read({ path: item_path });
-                const text = content instanceof Blob ? await content.text() : String(content);
+                const apiOrigin = window.api_origin || window.location.origin;
+                const token = window.auth_token || (typeof puter !== 'undefined' && puter.authToken) || '';
+                const readRes = await fetch(`${ apiOrigin}/read`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        ...(token ? { 'Authorization': `Bearer ${ token}` } : {}),
+                    },
+                    body: JSON.stringify({ path: item_path }),
+                });
+                if ( !readRes.ok ) throw new Error(`Read failed: ${ readRes.status}`);
+                const text = await readRes.text();
                 descriptor = JSON.parse(text);
             } catch (e) {
                 console.error('Error reading .edrm descriptor:', e);
@@ -144,8 +154,13 @@ Please try recreating the link.`);
             if ( descriptor && descriptor.contractAddress && descriptor.tokenId ) {
                 const channel = descriptor.contractAddress;
                 const tokenId = descriptor.tokenId;
+                const gateway = window.location.origin + '/ipfs/';
+                const fallbackGateway = descriptor.gateway || 'https://ipfs.ela.city/ipfs/';
                 const playerUrl = window.location.origin + '/apps/elacity-player/index.html?channel=' +
-                    encodeURIComponent(channel) + '&tokenId=' + encodeURIComponent(tokenId);
+                    encodeURIComponent(channel) + '&tokenId=' + encodeURIComponent(tokenId) +
+                    '&gateway=' + encodeURIComponent(gateway) +
+                    '&fallbackGateway=' + encodeURIComponent(fallbackGateway) +
+                    (descriptor.cid ? '&cid=' + encodeURIComponent(descriptor.cid) : '');
 
                 const w = Math.min(960, screen.availWidth - 100);
                 const h = Math.min(640, screen.availHeight - 100);

@@ -67,7 +67,7 @@ var Wallet = (function () {
     });
   }
 
-  function parentExecuteSmartAccountBatch(chainId, transactions) {
+  function parentExecuteSmartAccountBatch(chainId, transactions, expectTokens) {
     return new Promise(function (resolve, reject) {
       var msgId = 'wallet-batch-' + (++ipcMsgCounter) + '-' + Date.now();
 
@@ -93,7 +93,8 @@ var Wallet = (function () {
         env: 'app',
         uuid: msgId,
         chainId: chainId,
-        transactions: transactions
+        transactions: transactions,
+        expectTokens: expectTokens || []
       }, '*');
     });
   }
@@ -260,31 +261,73 @@ var Wallet = (function () {
       );
       var buyTx = { to: authorityAddr, data: buyData, value: '0x0' };
 
-      function runUsdcPath(effectiveSa, useBatch) {
-        if (useBatch) {
-          var chainIdDecimal = currentChainId ? parseInt(currentChainId, 16) : 8453;
-          var ownerAddr = (effectiveSa || '').toLowerCase();
-          return getPaymentProcessor(operativeAddr).then(function (approvalTarget) {
-            var erc20Iface = new ethers.Interface(ERC20_ABI);
-            var allowanceData = erc20Iface.encodeFunctionData('allowance', [ownerAddr, approvalTarget]);
-            return getProvider().request({
-              method: 'eth_call',
-              params: [{ to: payToken, data: allowanceData }, 'latest']
-            }).then(function (allowanceResult) {
-              var currentAllowance = ethers.getBigInt(allowanceResult);
-              var needed = ethers.getBigInt(priceWei);
-              var transactions = [];
-              if (currentAllowance < needed) {
-                var approveData = erc20Iface.encodeFunctionData('approve', [approvalTarget, needed]);
-                transactions.push({ to: payToken, data: approveData, value: '0x0' });
-              }
-              transactions.push(buyTx);
-              return parentExecuteSmartAccountBatch(chainIdDecimal, transactions);
-            }).then(function (result) {
-              return result.transactionHash || result.transactionId;
-            });
+      function runSmartAccountBatch(effectiveSa) {
+        console.log('[Wallet buyAccess] runSmartAccountBatch called, SA:', effectiveSa);
+        var chainIdDecimal = currentChainId ? parseInt(currentChainId, 16) : 8453;
+        var ownerAddr = (effectiveSa || '').toLowerCase();
+        return getPaymentProcessor(operativeAddr).then(function (approvalTarget) {
+          console.log('[Wallet buyAccess] approvalTarget:', approvalTarget);
+          var erc20Iface = new ethers.Interface(ERC20_ABI);
+          var allowanceData = erc20Iface.encodeFunctionData('allowance', [ownerAddr, approvalTarget]);
+          return getProvider().request({
+            method: 'eth_call',
+            params: [{ to: payToken, data: allowanceData }, 'latest']
+          }).then(function (allowanceResult) {
+            var currentAllowance = ethers.getBigInt(allowanceResult);
+            var needed = ethers.getBigInt(priceWei);
+            var transactions = [];
+            if (currentAllowance < needed) {
+              var approveData = erc20Iface.encodeFunctionData('approve', [approvalTarget, ethers.MaxUint256]);
+              transactions.push({ to: payToken, data: approveData, value: '0x0' });
+            }
+            transactions.push(buyTx);
+
+            // Convert priceWei to human-readable USDC amount (6 decimals) for expectTokens
+            var priceNum = Number(ethers.getBigInt(priceWei));
+            var usdcAmount = (priceNum / 1e6).toString();
+            var expectTokens = [{ type: 'usdc', amount: usdcAmount }];
+
+            return parentExecuteSmartAccountBatch(chainIdDecimal, transactions, expectTokens);
+          }).then(function (result) {
+            // Particle iframe already confirmed the tx on-chain, so return a
+            // receipt-like object to skip redundant eth_getTransactionReceipt polling
+            return {
+              status: '0x1',
+              transactionHash: result.transactionHash || result.transactionId,
+              _smartAccountConfirmed: true
+            };
+          });
+        });
+      }
+
+      function resolveSmartAccount() {
+        var apiSigner = typeof ElacityAPI !== 'undefined' && ElacityAPI.getSignerAddress && ElacityAPI.getSignerAddress();
+        var sa = smartAccountAddress || apiSigner;
+        console.log('[Wallet buyAccess] resolveSmartAccount:', { smartAccountAddress: smartAccountAddress, apiSigner: apiSigner, sa: sa, connectedAddress: connectedAddress });
+        if (sa && (connectedAddress || '').toLowerCase() !== (sa || '').toLowerCase()) {
+          console.log('[Wallet buyAccess] Using SA from local/API:', sa);
+          return Promise.resolve(sa);
+        }
+        if (window.parent !== window) {
+          console.log('[Wallet buyAccess] Asking parent for SA...');
+          return getSmartAccountFromParent().then(function (parentSa) {
+            console.log('[Wallet buyAccess] Parent returned SA:', parentSa);
+            if (parentSa) {
+              smartAccountAddress = parentSa;
+              return parentSa;
+            }
+            return null;
           });
         }
+        return Promise.resolve(null);
+      }
+
+      return resolveSmartAccount().then(function (effectiveSa) {
+        console.log('[Wallet buyAccess] RESOLVED SA:', effectiveSa, '| Will use batch:', !!effectiveSa);
+        if (effectiveSa) {
+          return runSmartAccountBatch(effectiveSa);
+        }
+        console.warn('[Wallet] No smart account available, falling back to EOA path');
         return getPaymentProcessor(operativeAddr)
           .then(function (approvalTarget) {
             return approveIfNeeded(payToken, priceWei, approvalTarget);
@@ -292,23 +335,7 @@ var Wallet = (function () {
           .then(function () {
             return parentSendTransaction(buyTx);
           });
-      }
-
-      var apiSigner = typeof ElacityAPI !== 'undefined' && ElacityAPI.getSignerAddress && ElacityAPI.getSignerAddress();
-      var effectiveSa = smartAccountAddress || apiSigner;
-      var useBatch = effectiveSa && (connectedAddress || '').toLowerCase() !== (effectiveSa || '').toLowerCase();
-
-      if (!useBatch && window.parent !== window) {
-        return getSmartAccountFromParent().then(function (sa) {
-          if (sa && (connectedAddress || '').toLowerCase() !== (sa || '').toLowerCase()) {
-            smartAccountAddress = sa;
-            effectiveSa = sa;
-            useBatch = true;
-          }
-          return runUsdcPath(effectiveSa, useBatch);
-        });
-      }
-      return runUsdcPath(effectiveSa, useBatch);
+      });
     });
   }
 

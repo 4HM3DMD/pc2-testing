@@ -130,6 +130,162 @@ function streamToResponse(
   });
 }
 
+const DAG_MIME_TYPES: Record<string, string> = {
+  '.mpd': 'application/dash+xml',
+  '.m4s': 'video/iso.segment',
+  '.mp4': 'video/mp4',
+  '.m4a': 'audio/mp4',
+  '.m3u8': 'application/vnd.apple.mpegurl',
+  '.ts': 'video/MP2T',
+  '.webm': 'video/webm',
+  '.xml': 'application/xml',
+  '.json': 'application/json',
+  '.txt': 'text/plain',
+};
+
+function mimeFromPath(filePath: string): string {
+  const ext = filePath.substring(filePath.lastIndexOf('.')).toLowerCase();
+  return DAG_MIME_TYPES[ext] || 'application/octet-stream';
+}
+
+/**
+ * Handler for /ipfs/:cid/* routes — resolves sub-paths within UnixFS DAG
+ * directories.  This is what makes DASH streaming work from local IPFS:
+ *   GET /ipfs/<rootCID>/stream.mpd
+ *   GET /ipfs/<rootCID>/video/seg-1.m4s
+ */
+function ipfsDAGPathHandler(ipfs: IPFSStorage | null) {
+  return async (req: Request, res: Response) => {
+    const { cid } = req.params;
+    const subPath = req.params[0];
+
+    if (!subPath) {
+      return res.status(400).json({ error: 'Sub-path required' });
+    }
+
+    if (!ipfs || !ipfs.isReady()) {
+      return res.status(503).json({ error: 'IPFS not available' });
+    }
+
+    try {
+      const resolved = await ipfs.resolveDAGPath(cid, subPath);
+      if (!resolved) {
+        return res.status(404).json({
+          error: 'Path not found in DAG',
+          rootCid: cid,
+          path: subPath,
+        });
+      }
+
+      if (resolved.type === 'directory') {
+        return res.status(400).json({
+          error: 'Path resolves to a directory, not a file',
+          rootCid: cid,
+          path: subPath,
+        });
+      }
+
+      const mimeType = mimeFromPath(subPath);
+      const filename = subPath.split('/').pop() || cid;
+      const fileSize = resolved.size;
+
+      streamDAGToResponse(ipfs, cid, subPath, req, res, {
+        fileSize,
+        mimeType,
+        filename,
+        resolvedCid: resolved.cid,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      if (message.includes('not found') || message.includes('Not found')) {
+        return res.status(404).json({
+          error: 'Content not found',
+          rootCid: cid,
+          path: subPath,
+          hint: 'This CID may not be pinned on this node',
+        });
+      }
+      logger.error(`[Public Gateway] Error serving DAG path ${cid}/${subPath}:`, { error: message });
+      res.status(500).json({ error: 'Failed to retrieve content' });
+    }
+  };
+}
+
+/**
+ * Stream DAG sub-path content to an HTTP response with Range support.
+ */
+function streamDAGToResponse(
+  ipfs: IPFSStorage,
+  rootCid: string,
+  subPath: string,
+  req: Request,
+  res: Response,
+  opts: {
+    fileSize: number;
+    mimeType: string;
+    filename: string;
+    resolvedCid: string;
+  }
+): void {
+  const { fileSize, mimeType, filename, resolvedCid } = opts;
+  const isStreamable = /^(video|audio)\//.test(mimeType) || mimeType === 'application/dash+xml';
+
+  const commonHeaders: Record<string, string> = {
+    'Content-Type': mimeType,
+    'X-IPFS-CID': resolvedCid,
+    'X-IPFS-Root': rootCid,
+    'X-IPFS-Path': `/ipfs/${rootCid}/${subPath}`,
+    'Cache-Control': 'public, max-age=31536000, immutable',
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Expose-Headers': 'X-IPFS-CID, X-IPFS-Root, X-IPFS-Path, Content-Range, Accept-Ranges, Content-Length',
+    'Content-Disposition': `inline; filename="${encodeURIComponent(filename)}"`,
+  };
+
+  if (isStreamable) {
+    commonHeaders['Accept-Ranges'] = 'bytes';
+  }
+
+  if (req.method === 'HEAD') {
+    res.set({ ...commonHeaders, 'Content-Length': fileSize.toString() });
+    res.status(200).end();
+    return;
+  }
+
+  const rangeHeader = req.headers.range;
+  let offset: number | undefined;
+  let length: number | undefined;
+
+  if (rangeHeader && isStreamable) {
+    const range = parseRange(rangeHeader, fileSize);
+    if (!range) {
+      res.status(416).set({ 'Content-Range': `bytes */${fileSize}` }).end();
+      return;
+    }
+    offset = range.start;
+    length = range.end - range.start + 1;
+
+    res.status(206).set({
+      ...commonHeaders,
+      'Content-Length': length.toString(),
+      'Content-Range': `bytes ${range.start}-${range.end}/${fileSize}`,
+    });
+  } else {
+    res.status(200).set({
+      ...commonHeaders,
+      'Content-Length': fileSize.toString(),
+    });
+  }
+
+  const ipfsStream = ipfs.getDAGFileStream(rootCid, subPath, { offset, length });
+  const readable = Readable.from(ipfsStream);
+
+  pipeline(readable, res, (err) => {
+    if (err && err.code !== 'ERR_STREAM_PREMATURE_CLOSE') {
+      logger.error(`[Public Gateway] DAG stream error for ${rootCid}/${subPath}:`, { error: err.message });
+    }
+  });
+}
+
 /**
  * Handler for /ipfs/:cid routes (GET and HEAD).
  */
@@ -251,6 +407,16 @@ export function createPublicRouter(
   // NOTE: Rate limiting is applied per-route below, not globally.
   // This prevents the rate limiter from affecting non-public routes
   // when this router is mounted at root level.
+
+  /**
+   * GET|HEAD /ipfs/:cid/<sub-path>
+   *
+   * Resolve a file within a UnixFS DAG directory.  This enables local DASH
+   * streaming: /ipfs/<rootCID>/stream.mpd, /ipfs/<rootCID>/video/seg-1.m4s
+   * Must be registered BEFORE the :filename? route so multi-segment paths match.
+   */
+  router.head('/ipfs/:cid/*', contentRateLimit, ipfsDAGPathHandler(ipfs));
+  router.get('/ipfs/:cid/*', contentRateLimit, ipfsDAGPathHandler(ipfs));
 
   /**
    * GET|HEAD /ipfs/:cid

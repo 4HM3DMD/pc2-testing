@@ -452,6 +452,67 @@ export class IPFSStorage {
   }
 
   /**
+   * Resolve a sub-path within a UnixFS DAG directory.
+   * e.g. resolveDAGPath("QmRoot", "video/seg-1.m4s") traverses the directory to
+   * find and return the file entry.  Returns null when the root CID is not a
+   * directory or the sub-path does not exist.
+   */
+  async resolveDAGPath(rootCid: string, subPath: string): Promise<{
+    cid: string;
+    size: number;
+    type: 'file' | 'raw' | 'directory';
+  } | null> {
+    if (!this.blockstore) {
+      throw new Error('Blockstore not initialized');
+    }
+
+    const { exporter } = await import('ipfs-unixfs-exporter');
+    const fullPath = `${rootCid}/${subPath}`;
+
+    try {
+      const entry = await exporter(fullPath, this.blockstore);
+      if (!entry) return null;
+
+      return {
+        cid: entry.cid.toString(),
+        size: Number(entry.size),
+        type: entry.type as 'file' | 'raw' | 'directory',
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Stream content from a sub-path within a UnixFS DAG directory.
+   * Uses the exporter's native path resolution to traverse the directory.
+   */
+  async *getDAGFileStream(rootCid: string, subPath: string, options?: {
+    offset?: number;
+    length?: number;
+  }): AsyncGenerator<Uint8Array> {
+    if (!this.blockstore) {
+      throw new Error('Blockstore not initialized');
+    }
+
+    const { exporter } = await import('ipfs-unixfs-exporter');
+    const fullPath = `${rootCid}/${subPath}`;
+
+    const entry = await exporter(fullPath, this.blockstore);
+    if (!entry) {
+      throw new Error(`Path not found: ${fullPath}`);
+    }
+    if (entry.type !== 'file' && entry.type !== 'raw') {
+      throw new Error(`Path ${fullPath} is not a file (type: ${entry.type})`);
+    }
+
+    yield* entry.content({
+      offset: options?.offset,
+      length: options?.length,
+    });
+  }
+
+  /**
    * Check if a CID exists in IPFS
    */
   async fileExists(cid: string): Promise<boolean> {
@@ -580,63 +641,66 @@ export class IPFSStorage {
         }
       };
 
-      // Try quick local fetch first (2s timeout) - skips DHT if content is cached
-      const quickLocalTimeoutMs = 2000;
-      let localContent: Uint8Array | null = null;
-      
-      try {
-        log.debug(`[IPFS] Trying quick local fetch for ${cidString}...`);
-        const chunks: Uint8Array[] = [];
-        let totalSize = 0;
-        
-        const catPromise = (async () => {
-          for await (const chunk of fs.cat(cid)) {
-            chunks.push(chunk);
-            totalSize += chunk.length;
-            checkAbort();
+      // Check if the original CID's root block exists in the local blockstore
+      const hasRootBlock = this.blockstore ? await this.blockstore.has(cid) : false;
+
+      if (hasRootBlock) {
+        // Root block exists — try quick local read (2s timeout)
+        const quickLocalTimeoutMs = 2000;
+        try {
+          log.debug(`[IPFS] Root block exists locally, trying quick fetch for ${cidString}...`);
+          const chunks: Uint8Array[] = [];
+          let totalSize = 0;
+
+          const catPromise = (async () => {
+            for await (const chunk of fs.cat(cid)) {
+              chunks.push(chunk);
+              totalSize += chunk.length;
+              checkAbort();
+            }
+            return chunks;
+          })();
+
+          const timeoutPromise = new Promise<null>((resolve) =>
+            setTimeout(() => resolve(null), quickLocalTimeoutMs)
+          );
+
+          const result = await Promise.race([catPromise, timeoutPromise]);
+
+          if (result && chunks.length > 0) {
+            const combined = new Uint8Array(totalSize);
+            let offset = 0;
+            for (const chunk of chunks) {
+              combined.set(chunk, offset);
+              offset += chunk.length;
+            }
+            log.debug(`[IPFS] ✅ Found locally: ${cidString} (${totalSize} bytes)`);
+
+            const timeMs = Date.now() - startTime;
+            return {
+              success: true,
+              cid: cidString,
+              type: 'file' as const,
+              size: totalSize,
+              timeMs,
+              content: combined,
+              actualCid: cidString
+            };
           }
-          return chunks;
-        })();
-        
-        const timeoutPromise = new Promise<null>((resolve) => 
-          setTimeout(() => resolve(null), quickLocalTimeoutMs)
-        );
-        
-        const result = await Promise.race([catPromise, timeoutPromise]);
-        
-        if (result && chunks.length > 0) {
-          // Content found locally!
-          const combined = new Uint8Array(totalSize);
-          let offset = 0;
-          for (const chunk of chunks) {
-            combined.set(chunk, offset);
-            offset += chunk.length;
-          }
-          localContent = combined;
-          log.debug(`[IPFS] ✅ Found locally: ${cidString} (${totalSize} bytes)`);
-          
-          const timeMs = Date.now() - startTime;
-          return {
-            success: true,
-            cid: cidString,
-            type: 'file' as const,
-            size: totalSize,
-            timeMs,
-            content: localContent,
-            actualCid: cidString
-          };
+        } catch (localError: any) {
+          log.debug(`[IPFS] Quick local fetch failed: ${localError.message}`);
         }
-      } catch (localError: any) {
-        log.debug(`[IPFS] Quick local fetch failed: ${localError.message}`);
+      } else {
+        log.debug(`[IPFS] Root block not in blockstore for ${cidString}, skipping local fetch`);
       }
-      
-      // Not found locally, try gateway directly (skip slow DHT stat)
-      log.debug(`[IPFS] Content not cached locally, trying gateways...`);
+
+      // Fetch via gateway — CAR import preserves original CID block structure
+      log.debug(`[IPFS] Fetching via gateway (CAR preferred) for ${cidString}...`);
       try {
         const gatewayResult = await this.fetchViaGateway(cidString, timeoutMs - (Date.now() - startTime));
         if (gatewayResult.success) {
           const timeMs = Date.now() - startTime;
-          log.debug(`[IPFS] ✅ Fetched via gateway: ${cidString} (${gatewayResult.size} bytes, ${timeMs}ms)`);
+          log.debug(`[IPFS] ✅ Fetched via gateway: ${cidString} (${gatewayResult.size} bytes, ${gatewayResult.blockCount || 1} blocks, ${timeMs}ms)`);
           return {
             success: true,
             cid: cidString,
@@ -648,7 +712,7 @@ export class IPFSStorage {
           };
         }
       } catch (gatewayError: any) {
-        log.debug(`[IPFS] Gateway fallback failed: ${gatewayError.message}`);
+        log.debug(`[IPFS] Gateway fetch failed: ${gatewayError.message}`);
       }
       
       // Last resort: try stat + cat with remaining timeout (for directories or special cases)

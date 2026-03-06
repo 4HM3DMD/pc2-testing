@@ -741,7 +741,7 @@ const ipc_listener = async (event, handled) => {
     // walletExecuteSmartAccountBatch — app requests batched smart-account execution (approve + buy, one signature)
     //--------------------------------------------------------
     else if ( event.data.msg === 'walletExecuteSmartAccountBatch' && event.data.chainId && Array.isArray(event.data.transactions) ) {
-        walletService.sendSmartAccountBatch(event.data.chainId, event.data.transactions)
+        walletService.sendSmartAccountBatch(event.data.chainId, event.data.transactions, event.data.expectTokens)
             .then((result) => {
                 target_iframe.contentWindow.postMessage({
                     original_msg_id: msg_id,
