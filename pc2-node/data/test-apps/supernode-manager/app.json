@@ -1,0 +1,38 @@
+{
+  "name": "supernode-manager",
+  "title": "Supernode Manager",
+  "version": "1.0.0",
+  "description": "Run and manage a full PC2 supernode from your node. Check system specs, deploy services, and monitor network health.",
+  "author": {
+    "name": "Elacity Labs",
+    "url": "https://ela.city"
+  },
+  "license": "proprietary",
+  "entry": "index.html",
+  "type": "web",
+
+  "capabilities": {
+    "network": true,
+    "ipc": ["launchApp"]
+  },
+
+  "requirements": {
+    "minVersion": "1.1.0"
+  },
+
+  "display": {
+    "maximize": false,
+    "resizable": true,
+    "titlebar": true,
+    "taskbar": true,
+    "width": 800,
+    "height": 650
+  },
+
+  "distribution": {
+    "channel": "stable"
+  },
+
+  "category": "System",
+  "system": true
+}

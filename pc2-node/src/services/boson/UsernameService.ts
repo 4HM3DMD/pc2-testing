@@ -18,6 +18,7 @@ process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 export interface UsernameConfig {
   dataDir: string;              // Directory to store username config
   gatewayUrl: string;           // Web Gateway URL (e.g., https://demo.ela.city)
+  secondaryGatewayUrls?: string[]; // Additional gateways for dual-write registration
   publicDomain?: string;        // Public domain for URLs (e.g., ela.city)
   nodeEndpoint?: string;        // This node's endpoint (for super node registration)
 }
@@ -118,6 +119,12 @@ export class UsernameService {
 
         const publicUrl = this.getPublicUrl(username);
         logger.info(`✅ Username registered: ${publicUrl}`);
+
+        this.dualWriteToSecondaries({
+          username: username.toLowerCase(),
+          nodeId: this.nodeId,
+          endpoint: this.config.nodeEndpoint || `http://127.0.0.1:4200`,
+        });
         
         return { success: true, publicUrl };
       } else {
@@ -159,6 +166,13 @@ export class UsernameService {
 
       if (response.ok && data.success) {
         logger.info(`✅ Endpoint updated for ${this.storage.username}`);
+
+        this.dualWriteToSecondaries({
+          username: this.storage.username,
+          nodeId: this.nodeId!,
+          endpoint,
+        });
+
         return { success: true };
       } else {
         return { success: false, error: data.error || 'Update failed' };
@@ -166,6 +180,34 @@ export class UsernameService {
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       return { success: false, error: errorMessage };
+    }
+  }
+
+  /**
+   * Fire-and-forget registration to all secondary gateways.
+   * Failures are logged but never block the caller.
+   */
+  private dualWriteToSecondaries(payload: { username: string; nodeId: string; endpoint: string }): void {
+    const urls = this.config.secondaryGatewayUrls;
+    if (!urls || urls.length === 0) return;
+
+    for (const baseUrl of urls) {
+      fetch(`${baseUrl}/api/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(10000),
+      })
+        .then((res) => {
+          if (res.ok) {
+            logger.info(`[DualWrite] Replicated ${payload.username} to ${baseUrl}`);
+          } else {
+            logger.warn(`[DualWrite] ${baseUrl} responded ${res.status}`);
+          }
+        })
+        .catch((err) => {
+          logger.warn(`[DualWrite] ${baseUrl} unreachable: ${err instanceof Error ? err.message : err}`);
+        });
     }
   }
 

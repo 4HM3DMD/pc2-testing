@@ -1,11 +1,44 @@
 {
   "name": "elacity-market",
   "title": "Elacity Market",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Browse, purchase, and collect digital media NFTs from the Elacity marketplace on Base.",
-  "author": "Elacity Labs",
-  "icon": "/apps/elacity-market/assets/favicon.png",
+  "author": {
+    "name": "Elacity Labs",
+    "url": "https://ela.city"
+  },
+  "license": "proprietary",
+  "icon": "assets/favicon.png",
   "entry": "index.html",
-  "permissions": ["wallet", "network"],
-  "requirements": {}
+  "type": "web",
+
+  "capabilities": {
+    "wallet": true,
+    "network": true,
+    "ipfs": { "pin": true, "fetch": true },
+    "ipc": ["launchApp", "openFolder"]
+  },
+
+  "requirements": {
+    "minVersion": "1.1.0"
+  },
+
+  "display": {
+    "maximize": true,
+    "resizable": true,
+    "titlebar": true,
+    "taskbar": true
+  },
+
+  "services": [
+    {
+      "name": "marketplace",
+      "protocol": "https",
+      "description": "Elacity decentralized media marketplace"
+    }
+  ],
+
+  "distribution": {
+    "channel": "stable"
+  }
 }

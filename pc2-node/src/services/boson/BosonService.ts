@@ -10,7 +10,7 @@
 
 import { IdentityService, IdentityConfig } from './IdentityService.js';
 import { UsernameService, UsernameConfig } from './UsernameService.js';
-import { ConnectivityService, ConnectivityConfig, ConnectionStatus } from './ConnectivityService.js';
+import { ConnectivityService, ConnectivityConfig, ConnectionStatus, initSupernodeCache } from './ConnectivityService.js';
 import { WireGuardService, type WireGuardStatus } from '../wireguard/WireGuardService.js';
 import { AmneziaWGService, type AmneziaWGStatus } from '../wireguard/AmneziaWGService.js';
 import { VLESSRealityService, type VLESSRealityStatus } from '../vless/VLESSRealityService.js';
@@ -69,12 +69,20 @@ export class BosonService {
       identityFile: 'identity.json',
     });
 
+    const primaryGateway = this.config.gatewayUrl!;
+    const superNodeGatewayUrls = (this.config.superNodes || [])
+      .map((sn) => sn.gatewayUrl)
+      .filter((url) => url && url !== primaryGateway);
+
     this.usernameService = new UsernameService({
       dataDir: config.dataDir,
-      gatewayUrl: this.config.gatewayUrl!,
+      gatewayUrl: primaryGateway,
+      secondaryGatewayUrls: superNodeGatewayUrls,
       publicDomain: this.config.publicDomain,
       nodeEndpoint: `http://127.0.0.1:${this.config.localPort}`,
     });
+
+    initSupernodeCache(config.dataDir);
 
     this.connectivityService = new ConnectivityService({
       superNodes: this.config.superNodes,
@@ -120,10 +128,17 @@ export class BosonService {
       this.connectivityService.setNodeKeys(keypair.publicKey, keypair.privateKey);
     }
 
+    // Derive secondary gateway URLs from superNodes list (excluding primary)
+    const primaryGateway = this.config.gatewayUrl!;
+    const secondaryGatewayUrls = (this.config.superNodes || [])
+      .map((sn) => sn.gatewayUrl)
+      .filter((url) => url && url !== primaryGateway);
+
     // 4. Initialize WireGuard (preferred NAT traversal over Boson relay)
     this.wireGuardService = new WireGuardService({
       dataDir: this.config.dataDir,
-      gatewayUrl: this.config.gatewayUrl!,
+      gatewayUrl: primaryGateway,
+      secondaryGatewayUrls,
       nodeId,
       localPort: this.config.localPort!,
     });
@@ -138,7 +153,8 @@ export class BosonService {
     // 4b. Initialize AmneziaWG (stealth fallback transport)
     this.amneziaWGService = new AmneziaWGService({
       dataDir: this.config.dataDir,
-      gatewayUrl: this.config.gatewayUrl!,
+      gatewayUrl: primaryGateway,
+      secondaryGatewayUrls,
       nodeId,
       localPort: this.config.localPort!,
     });
@@ -151,7 +167,8 @@ export class BosonService {
     // 4c. Initialize VLESS Reality (TCP stealth transport via sing-box)
     this.vlessRealityService = new VLESSRealityService({
       dataDir: this.config.dataDir,
-      gatewayUrl: this.config.gatewayUrl!,
+      gatewayUrl: primaryGateway,
+      secondaryGatewayUrls,
       nodeId,
       localPort: this.config.localPort!,
     });

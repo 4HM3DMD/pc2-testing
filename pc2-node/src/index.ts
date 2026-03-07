@@ -97,6 +97,9 @@ async function main() {
     const ipfsConfig = (config as any).ipfs || {};
     const ipfsMode = (ipfsConfig.mode || 'private') as IPFSNetworkMode;
     
+    const relayMode = db.getSetting('relay_mode') === 'true';
+    const relayMaxConnections = parseInt(db.getSetting('relay_max_connections') || '100', 10);
+
     ipfs = new IPFSStorage({
       repoPath: IPFS_REPO_PATH,
       mode: ipfsMode,
@@ -104,8 +107,13 @@ async function main() {
       enableBootstrap: ipfsConfig.enable_bootstrap,
       customBootstrap: ipfsConfig.custom_bootstrap,
       supernodeBootstrap: ipfsConfig.supernode_bootstrap,
+      relayMode,
+      relayMaxConnections,
     });
     await ipfs.initialize();
+
+    // Expose IPFS storage globally for API access (relay status, etc.)
+    (global as any).ipfsStorage = ipfs;
     
     // Create filesystem manager
     filesystem = new FilesystemManager(ipfs, db);

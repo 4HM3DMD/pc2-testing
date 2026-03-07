@@ -26,6 +26,7 @@ import { logger } from '../../utils/logger.js';
 export interface VLESSRealityConfig {
   dataDir: string;
   gatewayUrl: string;
+  secondaryGatewayUrls?: string[];
   nodeId: string;
   localPort: number;
 }
@@ -104,32 +105,56 @@ export class VLESSRealityService {
     }
 
     const username = await this.getUsername();
-    const gatewayUrl = this.config.gatewayUrl;
+    const gatewayUrls = [
+      this.config.gatewayUrl,
+      ...(this.config.secondaryGatewayUrls || []),
+    ];
 
-    logger.info(`[VLESSReality] Provisioning with ${gatewayUrl}/api/vless/register`);
+    let lastError: Error | null = null;
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), PROVISION_TIMEOUT_MS);
+    for (const gatewayUrl of gatewayUrls) {
+      const url = `${gatewayUrl}/api/vless/register`;
+      logger.info(`[VLESSReality] Provisioning with ${url}`);
 
-    try {
-      const response = await fetch(`${gatewayUrl}/api/vless/register`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, nodeId: this.config.nodeId }),
-        signal: controller.signal,
-      });
+      try {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, nodeId: this.config.nodeId }),
+          signal: AbortSignal.timeout(PROVISION_TIMEOUT_MS),
+        });
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Provision failed (${response.status}): ${errorText}`);
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`Provision failed (${response.status}): ${errorText}`);
+        }
+
+        const data = await response.json() as VLESSProvisionResponse;
+        writeFileSync(this.provisionPath, JSON.stringify(data, null, 2));
+        logger.info(`[VLESSReality] Provisioned: endpoint=${data.serverEndpoint}, serverName=${data.serverName}`);
+        return data;
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        logger.warn(`[VLESSReality] Provisioning failed via ${gatewayUrl}: ${lastError.message}`);
       }
+    }
 
-      const data = await response.json() as VLESSProvisionResponse;
-      writeFileSync(this.provisionPath, JSON.stringify(data, null, 2));
-      logger.info(`[VLESSReality] Provisioned: endpoint=${data.serverEndpoint}, serverName=${data.serverName}`);
-      return data;
-    } finally {
-      clearTimeout(timeout);
+    throw lastError || new Error('All VLESS Reality provisioning endpoints failed');
+  }
+
+  /**
+   * Clear cached provision data so the next provision() call re-registers
+   * with a supernode. Used during failover when the current supernode is down.
+   */
+  clearProvisionCache(): void {
+    try {
+      if (existsSync(this.provisionPath)) {
+        const { unlinkSync } = require('fs');
+        unlinkSync(this.provisionPath);
+        logger.info('[VLESSReality] Provision cache cleared for failover');
+      }
+    } catch {
+      // Non-critical
     }
   }
 

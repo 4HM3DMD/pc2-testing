@@ -46,6 +46,8 @@ import contextRouter from './context.js';
 import voiceRouter from './voice.js';
 import { createInstalledAppsRouter } from './installed-apps.js';
 import { AppInstallService } from '../services/AppInstallService.js';
+import registryRouter from './registry.js';
+import { createSupernodeRouter } from './supernode.js';
 
 // Extend Express Request to include database, filesystem, config, and WebSocket
 declare global {
@@ -352,6 +354,8 @@ export function setupAPI(app: Express): void {
   app.use('/api/system', systemRouter);
   app.use('/api/context', contextRouter);
   app.use('/api/ai', voiceRouter);
+  app.use('/api/registry', registryRouter);
+  app.use('/api/supernode', createSupernodeRouter());
 
   // Installed Apps (dApp Store) — requires db for registration
   if (db) {

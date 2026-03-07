@@ -19,7 +19,7 @@ import { kadDHT } from '@libp2p/kad-dht';
 import { identify } from '@libp2p/identify';
 import { ping } from '@libp2p/ping';
 import { bootstrap } from '@libp2p/bootstrap';
-import { circuitRelayTransport } from '@libp2p/circuit-relay-v2';
+import { circuitRelayTransport, circuitRelayServer } from '@libp2p/circuit-relay-v2';
 import { dcutr } from '@libp2p/dcutr';
 import { autoNAT } from '@libp2p/autonat';
 import { FsBlockstore } from 'blockstore-fs';
@@ -43,8 +43,12 @@ export type IPFSNetworkMode = 'private' | 'public' | 'hybrid';
  * discovery and NAT traversal. Add multiaddrs as supernodes are deployed.
  */
 const PC2_SUPERNODE_BOOTSTRAP: string[] = [
+  // InterServer (primary)
   '/ip4/69.164.241.210/tcp/4003/p2p/12D3KooWMcuTWxkKg7xS3dxRaPDK9BEUHdAvKWf2b5Kdk4Kwxy9G',
   '/ip4/69.164.241.210/tcp/4004/ws/p2p/12D3KooWMcuTWxkKg7xS3dxRaPDK9BEUHdAvKWf2b5Kdk4Kwxy9G',
+  // Contabo (secondary)
+  '/ip4/38.242.211.112/tcp/4003/p2p/12D3KooWAaFWUWN7GQVeNdbdPKUUTmyoQewBAPbwXKKrhxxsck5h',
+  '/ip4/38.242.211.112/tcp/4004/ws/p2p/12D3KooWAaFWUWN7GQVeNdbdPKUUTmyoQewBAPbwXKKrhxxsck5h',
 ];
 
 /**
@@ -65,6 +69,8 @@ export interface IPFSOptions {
   enableBootstrap?: boolean;        // Use public bootstrap nodes
   customBootstrap?: string[];       // Additional bootstrap nodes
   supernodeBootstrap?: string[];    // PC2 supernode relay addresses (highest priority)
+  relayMode?: boolean;              // Enable relay server mode (for nodes with public IP)
+  relayMaxConnections?: number;     // Max relay connections (default: 100)
 }
 
 export class IPFSStorage {
@@ -75,11 +81,17 @@ export class IPFSStorage {
   private isInitialized: boolean = false;
   private networkMode: IPFSNetworkMode;
   private options: IPFSOptions;
+  private relayEnabled: boolean = false;
 
   constructor(options: IPFSOptions) {
     this.repoPath = options.repoPath;
     this.networkMode = options.mode || 'private';
     this.options = options;
+    this.relayEnabled = options.relayMode ?? false;
+  }
+
+  isRelayMode(): boolean {
+    return this.relayEnabled;
   }
 
   /**
@@ -177,16 +189,25 @@ export class IPFSStorage {
         (libp2pConfig.services as any).autoNAT = autoNAT();
         (libp2pConfig.services as any).dcutr = dcutr();
 
-        // DHT in CLIENT mode: can query the network to find content,
-        // but does NOT advertise/announce what this node has. This prevents
-        // the IPFS swarm from pulling content directly and saturating the
-        // node's bandwidth. Content is served via our HTTP gateway instead.
-        // When dDRM marketplace launches, selected encrypted content will
-        // be announced via selective provide (announce: true).
-        if (enableDHT) {
-          (libp2pConfig.services as any).dht = kadDHT({
-            clientMode: true,
+        // Relay server: when relay mode is on, this node serves as a
+        // circuit-relay for NAT'd peers, strengthening the mesh
+        if (this.relayEnabled) {
+          (libp2pConfig.services as any).relay = circuitRelayServer({
+            reservations: {
+              maxReservations: this.options.relayMaxConnections ?? 100,
+            },
           });
+          log.info('   Relay server: ENABLED — serving as circuit relay for other peers');
+        }
+
+        // DHT: server mode when relay is enabled (full DHT participation),
+        // client mode otherwise (query only, no announcement by default)
+        if (enableDHT) {
+          const dhtClientMode = !this.relayEnabled;
+          (libp2pConfig.services as any).dht = kadDHT({
+            clientMode: dhtClientMode,
+          });
+          log.info(`   DHT mode: ${dhtClientMode ? 'client' : 'server (full participation)'}`);
         }
 
         // Add bootstrap nodes for initial peer discovery
@@ -277,6 +298,14 @@ export class IPFSStorage {
       
       throw error;
     }
+  }
+
+  /**
+   * Get Helia instance for external access (relay status, peer counts, etc.)
+   * Returns null if not initialized.
+   */
+  getHeliaInstance(): Helia | null {
+    return this.helia;
   }
 
   /**

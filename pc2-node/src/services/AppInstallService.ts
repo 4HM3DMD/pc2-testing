@@ -15,19 +15,84 @@ const log = createLogger('app-install');
 
 const MAX_APP_SIZE_BYTES = 100 * 1024 * 1024; // 100 MB hard cap per app
 
+function resolveAuthorName(author?: string | AppAuthor): string | null {
+  if (!author) return null;
+  if (typeof author === 'string') return author;
+  return author.name || null;
+}
+
+export interface AppAuthor {
+  name: string;
+  wallet?: string;
+  url?: string;
+}
+
+export interface AppCapabilities {
+  wallet?: boolean;
+  network?: boolean;
+  storage?: {
+    read?: string[];
+    write?: string[];
+  };
+  ipfs?: {
+    pin?: boolean;
+    fetch?: boolean;
+  };
+  ipc?: string[];
+}
+
+export interface AppDisplay {
+  maximize?: boolean;
+  width?: number;
+  height?: number;
+  resizable?: boolean;
+  titlebar?: boolean;
+  taskbar?: boolean;
+}
+
+export interface AppService {
+  name: string;
+  protocol?: string;
+  endpoint?: string;
+  description?: string;
+}
+
+export interface AppDistribution {
+  cid?: string | null;
+  signature?: string | null;
+  channel?: 'stable' | 'beta' | 'dev';
+  updateUrl?: string | null;
+  size?: number | null;
+}
+
 export interface AppManifest {
   name: string;
   title: string;
   version: string;
   description?: string;
-  author?: string;
+  author?: string | AppAuthor;
+  license?: string;
   icon?: string;
+  screenshots?: string[];
+  entry?: string;
+  type?: 'web' | 'wasm' | 'data';
+
+  capabilities?: AppCapabilities;
+
+  /** @deprecated Use `capabilities` instead. Kept for backward compat with existing app.json files. */
   permissions?: string[];
+
   requirements?: {
     headers?: string[];
     services?: string[];
+    popup?: boolean;
+    minVersion?: string;
   };
-  entry?: string; // e.g. "index.html"
+
+  display?: AppDisplay;
+  services?: AppService[];
+  distribution?: AppDistribution;
+  dependencies?: Record<string, string>;
 }
 
 export class AppInstallService {
@@ -108,8 +173,8 @@ export class AppInstallService {
       size: totalSize,
       icon: manifest.icon || null,
       description: manifest.description || null,
-      author: manifest.author || null,
-      permissions_json: JSON.stringify(manifest.permissions || []),
+      author: resolveAuthorName(manifest.author),
+      permissions_json: JSON.stringify(manifest.capabilities || manifest.permissions || []),
       requirements_json: JSON.stringify(manifest.requirements || {}),
       manifest_json: JSON.stringify(manifest),
       installed_at: now,
@@ -160,8 +225,8 @@ export class AppInstallService {
       size: totalSize,
       icon: manifest.icon || null,
       description: manifest.description || null,
-      author: manifest.author || null,
-      permissions_json: JSON.stringify(manifest.permissions || []),
+      author: resolveAuthorName(manifest.author),
+      permissions_json: JSON.stringify(manifest.capabilities || manifest.permissions || []),
       requirements_json: JSON.stringify(manifest.requirements || {}),
       manifest_json: JSON.stringify(manifest),
       installed_at: now,

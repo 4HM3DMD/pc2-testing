@@ -3,8 +3,29 @@
   "title": "Wallet Bridge Test",
   "version": "1.0.0",
   "description": "Test dApp for verifying the PC2 wallet bridge postMessage system.",
-  "author": "PC2 Dev",
+  "author": {
+    "name": "PC2 Dev"
+  },
+  "license": "MIT",
   "entry": "index.html",
-  "permissions": ["wallet"],
-  "requirements": {}
+  "type": "web",
+
+  "capabilities": {
+    "wallet": true
+  },
+
+  "requirements": {},
+
+  "display": {
+    "maximize": false,
+    "width": 800,
+    "height": 600,
+    "resizable": true,
+    "titlebar": true,
+    "taskbar": true
+  },
+
+  "distribution": {
+    "channel": "dev"
+  }
 }

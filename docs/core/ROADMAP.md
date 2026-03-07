@@ -2,7 +2,7 @@
 
 > **Purpose:** Single source of truth for all strategic goals, technical work streams, and milestones — directly mapped to the Keystone Fund proposal and Rong Chen's original vision
 > **Created:** 2026-02-24
-> **Last Updated:** 2026-03-04
+> **Last Updated:** 2026-03-08
 > **Status:** Living document — update as work progresses
 
 ---
@@ -15,6 +15,7 @@ Each **Milestone** from the DAO proposal is broken down into concrete **Work Str
 | Document | What It Covers |
 |----------|---------------|
 | [ARCHITECTURE_CONVERGENCE.md](./ARCHITECTURE_CONVERGENCE.md) | PC2 v1 → Capsule Runtime v2 technical path |
+| [SUPERNODE_ECONOMICS.md](./SUPERNODE_ECONOMICS.md) | dDRM Access Token model for supernode revenue |
 | [NETWORK_HARDENING.md](../pc2-infrastructure/NETWORK_HARDENING.md) | Supernode decentralization and self-healing |
 | [AGENT_HANDOVER.md](./AGENT_HANDOVER.md) | Current state, coding patterns, infrastructure |
 | [ARM_DEVICES.md](../deployment/ARM_DEVICES.md) | Jetson/Raspberry Pi deployment |
@@ -154,11 +155,13 @@ These diagrams from Rong define the north star. Every work stream should move us
 
 **DePIN Hardware Expansion:**
 - [x] Validate one-command installer on fresh Jetson Orin Nano — tested on 2 devices (EverlastingOS + Anders)
+- [ ] **WSL bulletproof install** — WSL-specific script, build verification, auto-start hook, systemd detection *(reported by Joel — 3 failed installs across 2 laptops)*
+- [ ] Windows hardware testing — WSL2 on Windows 10 + 11
 - [ ] Raspberry Pi 4/5 validation and optimization
 - [ ] Explore dedicated DePIN hardware partnerships (plug-and-play boxes)
 - [ ] Debian package (.deb) for ARM devices
 - [ ] macOS package (.dmg) for desktop users — needs Apple Developer cert ($99/year)
-- [ ] Windows installer (.exe) exploration
+- [ ] Windows native installer (.exe) — after WSL is solid
 
 **Carrier Overlay Network:**
 - [x] Gateway under systemd with auto-restart — deployed live, enabled for boot
@@ -168,6 +171,9 @@ These diagrams from Rong define the north star. Every work stream should move us
 - [x] Reduce WireGuard retry interval (15s with exponential backoff) — shipped commit 0ac683b1
 - [x] WireGuard macOS support — auto-install, passwordless sudo, network change detection
 - [x] WireGuard PATH detection under PM2/systemd restricted environments
+- [x] Community networking fix script (`scripts/fix-networking.sh`) — installs full transport stack for affected users *(completed Mar 8)*
+- [ ] **WireGuard bundling with PC2 app** — bundle `wg`, `wg-quick`, `wireguard-go`, `amneziawg-go`, `sing-box` binaries so no user falls back to broken ActiveProxy
+- [ ] **Gateway "node offline" page** — show clear HTML error instead of infinite "initializing" when proxy/tunnel fails
 
 **AI Integration:**
 - [ ] Integrate latest model providers as they emerge
@@ -212,14 +218,43 @@ These diagrams from Rong define the north star. Every work stream should move us
 - [x] Marketplace UI within ElastOS (browse, purchase, download) *(completed Mar 3-4 — Elacity Market dApp)*
 - [x] Buyer node becomes seeder (CDN effect for encrypted content) *(completed Mar 5-6 — Bitswap-first + NAT traversal + relay)*
 
-**Supernode Expansion:**
-- [ ] Second supernode operational with registry replication
-- [ ] Dual-endpoint registration (WireGuard + proxy at gateway level)
-- [ ] Node auto-migration between supernodes on failure
+**Supernode Decentralization:**
+- [x] Second supernode (Contabo 38.242.211.112) operational — deployed 2026-03-07
+- [x] Automated backup: InterServer → Contabo every 6 hours (SSH key auth, rsync)
+- [x] App registry mirror on Contabo with 5-minute sync from primary
+- [x] IPFS relay on Contabo (peer ID: 12D3KooWAaFWUWN7, 500+ peers)
+- [x] Boson DHT on Contabo (node ID: EbfCHQUfwawec8Pa, Active Proxy on :8090)
+- [x] PC2 client updated: multi-supernode failover for registry, IPFS bootstrap, Boson DHT
+- [x] Web gateway on Contabo (slim read-replica with subdomain routing) — deployed 2026-03-07
+- [x] Dual-write node registration (PC2 nodes register on all reachable supernodes) — deployed 2026-03-07
+- [x] Stealth transport decentralization: WireGuard (wg1, 10.102.0.0/16), AmneziaWG (awg0, 10.103.0.0/16), VLESS Reality on Contabo — deployed 2026-03-07
+- [x] Transport provisioning APIs on Contabo gateway (/api/wg/register, /api/awg/register, /api/vless/register)
+- [x] Client-side sequential failover: WireGuardService, AmneziaWGService, VLESSRealityService all try secondary supernodes on primary failure
+- [x] Supernode bootstrap script (`deploy/supernode-bootstrap.sh`) — one-command VPS setup *(completed Mar 7)*
+- [x] Dynamic supernode discovery — gossip protocol + parallel fetch + disk persistence *(completed Mar 7)*
+- [x] Registry mesh sync via gossip endpoints (all supernodes sync with all others) *(completed Mar 7)*
 - [ ] Per-domain rate limiting on gateway (NETWORK_HARDENING item #8)
-- [ ] Explore Carrier premium tier staking mechanisms (ELA lock → priority routing)
+
+**Three-Tier Network Architecture:**
+- [x] **Tier 1 — Full Supernodes:** Bootstrap script + gateway v2.0 with gossip/register/heartbeat *(completed Mar 7)*
+- [x] **Tier 2 — Relay Nodes:** Relay mode toggle in PC2 Settings + IPFS circuitRelayServer + DHT server mode *(completed Mar 7)*
+- [x] **Tier 3 — Leaf Nodes:** Standard PC2 nodes behind NAT (IPFS content seeding, local AI, personal cloud — this is today's default)
+- [x] Supernode dApp in dApp Center: spec-check, service status, network view *(completed Mar 7)*
+- [ ] Node auto-migration between supernodes on failure (provision cache clear + sequential failover already working)
+
+**Supernode Economics (dDRM Access Token Model):**
+- [ ] Design Access Token contract (ERC-1155 tiered: Free/Premium/Enterprise/Bundle)
+- [ ] Integrate token verification into supernode gateway (Lit Protocol)
+- [ ] List Access Tokens on Elacity Market alongside media content
+- [ ] Bandwidth metering and attestation for proportional revenue distribution
+- [ ] On-chain SupernodeOperatorRegistry for trustless operator management
+- [ ] See [SUPERNODE_ECONOMICS.md](./SUPERNODE_ECONOMICS.md) for full strategy
+
+**Network Infrastructure:**
 - [ ] Multi-domain support — DNS + SSL + gateway for `*.pc2.net` and `*.ela.net`
-- [ ] Relay nodes — PC2 nodes with public IP act as WireGuard relays for NAT'd peers
+- [ ] Relay nodes — PC2 nodes with public IP contribute IPFS relay + Boson DHT automatically
+- [ ] Censorship resistance: IP-based fallback, DHT discovery, IPFS addressing (no DNS dependency)
+- [ ] Encrypted registry replication across supernodes via IPFS
 
 ---
 
@@ -233,10 +268,14 @@ These diagrams from Rong define the north star. Every work stream should move us
 - [ ] Transaction fee on in-OS currency operations
 - [ ] Fee dashboard (transparent, on-chain tracking)
 
-**Node Operator Economics:**
-- [ ] Define routing fee model (nodes paid for relaying traffic)
-- [ ] Premium tier implementation (ELA staking unlocks features)
+**Node Operator Economics (dDRM Access Token Model):**
+- [ ] Deploy SupernodeAccessToken contract (ERC-1155, tiered)
+- [ ] Integrate Lit Protocol verification into gateway for tier-gated services
+- [ ] Bandwidth metering and attestation for revenue distribution
+- [ ] Operator registration and revenue claim via SupernodeOperatorRegistry.sol
+- [ ] Media + Network bundle tokens (streaming + premium access in one)
 - [ ] Compute/storage fee models for shared services
+- [ ] Revenue split enforcement: 80% operators, 15% protocol treasury, 5% ELA buyback
 
 **Year 1 Report:**
 - [ ] Comprehensive development output report (commits, releases, features)
@@ -314,7 +353,9 @@ These diagrams from Rong define the north star. Every work stream should move us
 **Carrier Network:**
 - [ ] Multi-supernode WireGuard with load balancing (NETWORK_HARDENING Phase 2)
 - [ ] Geographic supernode routing (connect to nearest)
-- [ ] 5+ operational supernodes
+- [ ] 5+ operational supernodes (independent operators in different jurisdictions)
+- [ ] Supernode services as capsule bundles (boson-dht, ipfs-relay, tunnel-wg, gateway, bandwidth-meter)
+- [ ] Mesh networking between supernodes (registry gossip, peer forwarding)
 
 ---
 
@@ -386,13 +427,21 @@ Phase 1 (M2-M3):
   Integrate dDRM SDK → encrypted content upload → access tokens
   → marketplace UI → buyer downloads → buyer becomes seeder
 
-Phase 2 (M4-M6):
+Phase 2 (M3-M4):
+  Supernode Access Tokens — dDRM SDK verifies network service access
+  → same Lit Protocol flow: "does wallet hold Access Token?" → unlock premium
+  → Access Tokens listed on Elacity Market alongside media content
+  → Media + Network bundles (streaming + premium access in one token)
+
+Phase 3 (M4-M6):
   Fee collection → ELA buy-pressure → royalty distribution
   → creator tools (AI-generated content with rights management)
+  → operator revenue distribution based on bandwidth attestations
 
-Phase 3 (M7+):
+Phase 4 (M7+):
   dDRM as a capsule → independent versioning → third-party DRM providers
   → cross-node content licensing → autonomous commerce
+  → supernode services as token-gated capsules in the runtime
 ```
 
 ### ERC-8004 Agent Registry Integration Path
@@ -426,19 +475,26 @@ Phase 3 (M7+) — Agent Economy:
 
 ### Network Hardening (from NETWORK_HARDENING.md)
 
-| Priority | Item | Target Milestone |
-|----------|------|-----------------|
-| Must-have | Gateway under systemd | M2 |
-| Must-have | SQLite registry | M2 |
-| Must-have | Uptime monitoring | M2 |
-| Must-have | SSL auto-renewal | M2 |
-| Should-have | Registry replication | M3 |
-| Should-have | Multi-supernode WireGuard | M3-M7 |
-| Should-have | Per-domain rate limiting | M3 |
-| Should-have | Node health dashboard | M4 |
-| Future | Distributed registry (on-chain) | M7+ |
-| Future | Mesh networking | M9+ |
-| Future | Geographic routing | M7+ |
+| Priority | Item | Target Milestone | Status |
+|----------|------|-----------------|--------|
+| Must-have | Gateway under systemd | M2 | Done (both supernodes) |
+| Must-have | Multi-supernode transport | M3 | Done (WG+AWG+VLESS on InterServer + Contabo) |
+| Must-have | Dual-write registration | M3 | Done (PC2 nodes register on all supernodes) |
+| Must-have | Uptime monitoring | M2 | Pending |
+| Must-have | SSL auto-renewal | M2 | Pending |
+| Should-have | Supernode bootstrap script | M3 | Done (Mar 7) |
+| Should-have | Dynamic supernode discovery | M3 | Done (Mar 7) |
+| Should-have | Relay node mode | M3-M4 | Done (Mar 7) |
+| Should-have | Supernode Manager dApp | M3 | Done (Mar 7) |
+| Should-have | Community networking fix | M2-M3 | Done (Mar 8 — fix-networking.sh) |
+| **Next** | **InterServer gateway v2.0 upgrade** | **M3** | **Waiting for go-ahead** |
+| **Next** | **WireGuard bundling with app** | **M2-M3** | **Planned — prevents broken ActiveProxy fallback** |
+| **Next** | **Gateway "node offline" page** | **M2** | **Planned — replaces infinite initializing** |
+| Should-have | Per-domain rate limiting | M3 | Pending |
+| Should-have | Node health dashboard | M4 | Pending |
+| Future | On-chain supernode registry | M4-M7 | Pending |
+| Future | Mesh networking | M7+ | Pending |
+| Future | Geographic routing | M7+ | Pending |
 
 ### ELA Value Capture Mechanics
 
@@ -446,14 +502,21 @@ Phase 3 (M7+) — Agent Economy:
 Usage → Fees → Buy ELA → Scarcity → Price Support
 
 Mechanisms:
-1. Marketplace fees (dDRM purchases)        → M3-M4
-2. Protocol fees (in-OS transactions)       → M4
-3. Carrier premium tiers (ELA staking)      → M3-M4
-4. Node operator routing fees               → M4-M7
-5. Compute/storage fees                     → M7+
-6. Agent-to-agent transaction fees          → M9+
+1. Marketplace fees (dDRM media purchases)              → M3-M4
+2. Protocol fees (in-OS transactions)                   → M4
+3. Supernode Access Token sales (dDRM access model)     → M3-M4
+4. Media + Network bundles (streaming + premium access) → M4-M7
+5. Compute/storage fees                                 → M7+
+6. Agent-to-agent transaction fees                      → M9+
+
+Revenue split (Access Tokens):
+  80% → supernode operators (proportional to bandwidth served)
+  15% → Elacity protocol treasury
+  5%  → ELA buyback pool
 
 All fees → pool → market-buy ELA from DEX LPs
+
+See docs/core/SUPERNODE_ECONOMICS.md for full strategy.
 ```
 
 ---

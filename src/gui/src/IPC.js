@@ -191,6 +191,34 @@ const ipc_listener = async (event, handled) => {
     }
 
     // --------------------------------------------------------
+    // PC2 internal IPC — trusted messages from built-in apps
+    // (App Center, etc.) that use raw postMessage without puter SDK.
+    // Checked BEFORE appInstanceID validation.
+    // --------------------------------------------------------
+    if ( event.data?.msg === 'launchApp' && event.data.appName ) {
+        const launch_app = (await import('./helpers/launch_app.js')).default;
+        const proc = await launch_app({ name: event.data.appName });
+        if (proc?.references?.el_win) {
+            $(proc.references.el_win).focusWindow();
+        }
+        return handled.resolve(true);
+    }
+
+    if ( event.data?.msg === 'openFolder' && event.data.path ) {
+        const folder_path = event.data.path;
+        const folder_title = folder_path.split('/').filter(Boolean).pop() || 'Folder';
+        const icon = await item_icon({ is_dir: true, path: folder_path });
+        UIWindow({
+            path: folder_path,
+            title: folder_title,
+            icon: icon,
+            is_dir: true,
+            app: 'explorer',
+        });
+        return handled.resolve(true);
+    }
+
+    // --------------------------------------------------------
     // Message from apps
     // --------------------------------------------------------
 
@@ -687,21 +715,6 @@ const ipc_listener = async (event, handled) => {
     else if ( event.data.msg === 'mouseClicked' ) {
         // close all popovers whose parent_id is parent_window_id
         $(`.popover[data-parent_id="${parent_window_id}"]`).remove();
-    }
-    //--------------------------------------------------------
-    // openFolder — opens a file-explorer window at the given path
-    //--------------------------------------------------------
-    else if ( event.data.msg === 'openFolder' && event.data.path ) {
-        const folder_path = event.data.path;
-        const folder_title = folder_path.split('/').filter(Boolean).pop() || 'Folder';
-        const icon = await item_icon({ is_dir: true, path: folder_path });
-        UIWindow({
-            path: folder_path,
-            title: folder_title,
-            icon: icon,
-            is_dir: true,
-            app: 'explorer',
-        });
     }
     //--------------------------------------------------------
     // walletSendTransaction — app requests eth_sendTransaction via particle iframe (e.g. Elacity buy).

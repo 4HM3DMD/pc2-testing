@@ -22,6 +22,7 @@ import { logger } from '../../utils/logger.js';
 export interface WireGuardConfig {
   dataDir: string;
   gatewayUrl: string;
+  secondaryGatewayUrls?: string[];
   nodeId: string;
   localPort: number;
 }
@@ -186,11 +187,11 @@ export class WireGuardService {
    * Returns connection parameters (assigned IP, server public key, endpoint).
    * 
    * Caches provisioning result to disk so a restart doesn't re-allocate IPs.
+   * Tries primary gateway first, then secondary gateways on failure (sequential failover).
    */
   async provision(): Promise<WGProvisionResponse> {
     const { publicKey } = this.ensureKeypair();
 
-    // Check cached provision (IP assignment is persistent)
     if (existsSync(this.provisionPath)) {
       try {
         const cached = JSON.parse(readFileSync(this.provisionPath, 'utf8')) as WGProvisionResponse;
@@ -203,8 +204,10 @@ export class WireGuardService {
       }
     }
 
-    const url = `${this.config.gatewayUrl}/api/wg/register`;
-    logger.info(`[WireGuard] Provisioning via ${url}...`);
+    const gatewayUrls = [
+      this.config.gatewayUrl,
+      ...(this.config.secondaryGatewayUrls || []),
+    ];
 
     const body = JSON.stringify({
       username: await this.getUsername(),
@@ -212,28 +215,56 @@ export class WireGuardService {
       publicKey,
     });
 
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body,
-      signal: AbortSignal.timeout(PROVISION_TIMEOUT_MS),
-    });
+    let lastError: Error | null = null;
 
-    if (!response.ok) {
-      const errBody = await response.text();
-      throw new Error(`Provisioning failed (${response.status}): ${errBody}`);
+    for (const gatewayUrl of gatewayUrls) {
+      const url = `${gatewayUrl}/api/wg/register`;
+      logger.info(`[WireGuard] Provisioning via ${url}...`);
+
+      try {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body,
+          signal: AbortSignal.timeout(PROVISION_TIMEOUT_MS),
+        });
+
+        if (!response.ok) {
+          const errBody = await response.text();
+          throw new Error(`Provisioning failed (${response.status}): ${errBody}`);
+        }
+
+        const data = await response.json() as WGProvisionResponse;
+        if (!data.assignedIP || !data.serverPublicKey || !data.serverEndpoint) {
+          throw new Error('Invalid provisioning response');
+        }
+
+        writeFileSync(this.provisionPath, JSON.stringify(data, null, 2));
+        logger.info(`[WireGuard] Provisioned: ${data.assignedIP} via ${data.serverEndpoint}`);
+        return data;
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        logger.warn(`[WireGuard] Provisioning failed via ${gatewayUrl}: ${lastError.message}`);
+      }
     }
 
-    const data = await response.json() as WGProvisionResponse;
-    if (!data.assignedIP || !data.serverPublicKey || !data.serverEndpoint) {
-      throw new Error('Invalid provisioning response');
+    throw lastError || new Error('All WireGuard provisioning endpoints failed');
+  }
+
+  /**
+   * Clear cached provision data so the next provision() call re-registers
+   * with a supernode. Used during failover when the current supernode is down.
+   */
+  clearProvisionCache(): void {
+    try {
+      if (existsSync(this.provisionPath)) {
+        const { unlinkSync } = require('fs');
+        unlinkSync(this.provisionPath);
+        logger.info('[WireGuard] Provision cache cleared for failover');
+      }
+    } catch {
+      // Non-critical
     }
-
-    // Cache for subsequent restarts
-    writeFileSync(this.provisionPath, JSON.stringify(data, null, 2));
-    logger.info(`[WireGuard] Provisioned: ${data.assignedIP} via ${data.serverEndpoint}`);
-
-    return data;
   }
 
   /**

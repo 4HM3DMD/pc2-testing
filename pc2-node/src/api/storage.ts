@@ -457,6 +457,31 @@ router.post('/ipfs/pin', authenticate, async (req: AuthenticatedRequest, res: Re
 
     if (result.success) {
       logger.info(`[Storage API] Successfully pinned CID: ${cidClean} (${result.size} bytes, ${result.type}, ${result.timeMs}ms)`);
+
+      // Track in pinned_cids for CDN stats and periodic DHT re-announcement
+      const db = req.app.locals.db;
+      const walletAddress = req.user?.wallet_address;
+      if (db && walletAddress) {
+        try {
+          db.trackPinnedCID(cidClean, walletAddress, result.size || 0, 'marketplace');
+          logger.info(`[Storage API] Tracked pinned CID for CDN: ${cidClean}`);
+        } catch (trackErr) {
+          logger.warn(`[Storage API] Failed to track pinned CID (non-fatal): ${cidClean}`, trackErr);
+        }
+      }
+
+      // Announce on DHT so other nodes can discover this content via Bitswap
+      if (ipfs.canAnnounce()) {
+        ipfs.announceCID(cidClean).then((announced: boolean) => {
+          if (announced) {
+            logger.info(`[Storage API] Announced pinned CID to DHT: ${cidClean}`);
+            db?.updatePinnedCIDAnnouncedAt(cidClean);
+          }
+        }).catch((err: any) => {
+          logger.warn(`[Storage API] DHT announcement failed (non-fatal): ${cidClean}`, err);
+        });
+      }
+
       res.json({
         success: true,
         cid: result.cid,

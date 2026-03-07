@@ -1,4 +1,4 @@
-# Session Handover — Mar 6, 2026
+# Session Handover — Mar 8, 2026
 
 > **Read this first when starting a new agent session.**
 
@@ -76,29 +76,90 @@
 
 ### What Needs Work Next (Priority Order)
 
-1. **App Center UI rebuild** — rebuild the App Center against real backend APIs (currently shows hardcoded apps)
-2. **Auto-download on purchase** — when a user buys content, auto-trigger `pinAndRegisterMedia` (currently manual via button)
-3. **App registry manifest format** — `app.json` schema, supernode discovery endpoint for decentralized app distribution
-4. **App Factory** — local packaging pipeline (build → bundle → IPFS pin → publish)
-5. **Creator tools** — `media-packager` integration for uploading/transcoding content
-6. **Multi-chain deposits** — leverage Particle Universal Account for cross-chain USDC/ETH deposits without bridging
-7. **CDN dashboard UI** — expose `/api/cdn/stats` in the PC2 settings or status bar so users can see their node's contribution
-8. **Keyboard shortcuts** (Alt+Tab, Alt+F4) and Explorer context menu enhancements
+#### Supernode Decentralization — Phase 1 (Completed Mar 7)
+- [x] Backup system (InterServer -> Contabo, 6h rsync)
+- [x] App Registry mirror + IPFS Relay + Boson DHT on Contabo
+- [x] Web gateway (slim read-replica) on Contabo
+- [x] WireGuard + AmneziaWG + VLESS Reality on Contabo
+- [x] Transport provisioning APIs on Contabo gateway
+- [x] Client-side sequential failover across supernodes
+- [x] Dual-write node registration
+
+#### Supernode Decentralization — Phase 2 (Completed Mar 7-8, NOT YET RELEASED)
+- [x] Gateway v2.0: Contabo added to `DEFAULT_SUPERNODES`, gossip/register/heartbeat endpoints
+- [x] Supernode bootstrap script (`deploy/supernode-bootstrap.sh`) — one-command VPS setup
+- [x] Dynamic supernode discovery — parallel fetch from all endpoints, disk persistence, merge with defaults
+- [x] Relay node mode — Settings toggle + `/api/supernode/relay/*` APIs + IPFS circuitRelayServer
+- [x] Supernode Manager dApp in dApp Center — spec check, service status, network view
+- [x] Networking fix script (`scripts/fix-networking.sh`) — standalone WG+AWG+VLESS installer for community
+
+**Deployed:** Gateway v2.0 on Contabo only. InterServer still on v1.0 (untouched).
+**Tested:** All gossip/register/heartbeat endpoints verified on Contabo. Local dev node verified.
+**Pending:** InterServer gateway upgrade (waiting for explicit go-ahead — purely additive, 2-3s restart).
+
+#### Known Community Issue (Mar 8) — "Keeps Initializing" on Remote Connect
+**Scope:** 21 broken users (proxy:// endpoints), 10 working (WireGuard). Verified on InterServer registry.
+**Root cause:** WireGuard tools not installed. Node falls back to ActiveProxy which registers `proxy://host:8090/session`. Gateway tries HTTP proxy to port 8090 (Boson binary protocol) → `Parse Error: Expected HTTP/` → page hangs on "initializing" forever.
+**Why it happened:** Users installed PC2 before the networking install was added to the scripts (pre-v1.1.0), used the wrong script for their platform (e.g. `start-local.sh` on Jetson — doesn't install `wireguard-go`), or installed manually without running any install script.
+**Fix commands (on `main`, no branch push needed):**
+- **Jetson/ARM:** `curl -sSL https://raw.githubusercontent.com/Elacity/pc2.net/main/scripts/install-arm.sh | bash`
+- **Ubuntu/Debian x86:** `cd ~/pc2.net && git pull && bash scripts/start-local.sh`
+- **Standalone (any Linux):** `bash scripts/fix-networking.sh` (on branch, not yet on main)
+**Permanent fix:** Bundle WireGuard/AWG/VLESS binaries with the app. See plan: `fix_wireguard_bundling_d5a881fa`.
+
+#### Community Fix Verification (In Progress — Mar 8)
+- **Werolo (Jetson):** Running `curl -sSL .../install-arm.sh | bash` to install WireGuard+AWG+VLESS. Awaiting confirmation.
+- **Chelsea (Ubuntu VM x86):** Will run `cd ~/pc2.net && git pull && bash scripts/start-local.sh` tomorrow (Mar 9).
+- **Other affected users (19+):** Same root cause. Post fix commands in community once Werolo/Chelsea confirm.
+
+#### Next Up (Priority Order)
+1. **Verify community fix** — confirm Werolo and Chelsea's domains work remotely after install
+2. **InterServer gateway upgrade to v2.0** — waiting for explicit go-ahead, purely additive, 2-3s restart
+3. **WireGuard bundling** — bundle `wg`, `wg-quick`, `wireguard-go`, `amneziawg-go`, `sing-box` binaries with the PC2 app so no user ever falls back to broken ActiveProxy. See plan: `fix_wireguard_bundling_d5a881fa`. Includes:
+   - Gateway "node offline" page (replaces infinite "initializing")
+   - Windows WireGuard support (`wireguard.exe /installtunnelservice`)
+   - Auto-sudoers setup on first use
+4. **Test bootstrap script on a fresh VPS** — validate one-command supernode deployment
+5. **App registry manifest format** — `app.json` schema for decentralized app distribution
+6. **App Factory** — local packaging pipeline (build -> bundle -> IPFS pin -> publish)
+7. **dDRM Access Token contract** — ERC-1155 tiered tokens for supernode economics (deferred to Milestone 3-4)
 
 ### Supernode Infrastructure
 
-| Service | Location | Port | Status |
-|---------|----------|------|--------|
-| Boson DHT | 69.164.241.210 | 39001/UDP | Running |
-| Active Proxy | 69.164.241.210 | 8090/TCP | Running |
-| WireGuard | 69.164.241.210 | 51820/UDP | Running |
-| Web Gateway | 69.164.241.210 | 80/443 | Running |
-| **IPFS Relay** | 69.164.241.210 | 4003/TCP, 4004/WS | **Running (new)** — Peer ID: `12D3KooWMcuTWxkKg7xS3dxRaPDK9BEUHdAvKWf2b5Kdk4Kwxy9G` |
-| Elastos pg-oracle | 69.164.241.210 | 20672/TCP | Running (updated to v0.0.3.3) |
+#### InterServer (Primary) — 69.164.241.210
+| Service | Port | Status |
+|---------|------|--------|
+| Boson DHT | 39001/UDP | Running |
+| Active Proxy | 8090/TCP | Running |
+| WireGuard (wg0) | 51820/UDP | Running (subnets 10.100/10.101) |
+| AmneziaWG | 51821/UDP | Running |
+| VLESS Reality | 8443/TCP | Running |
+| Web Gateway | 80/443 | Running |
+| IPFS Relay | 4003/TCP, 4004/WS | Running — Peer ID: `12D3KooWMcuTWxkKg7xS3dxRaPDK9BEUHdAvKWf2b5Kdk4Kwxy9G` |
+| Elastos pg-oracle | 20672/TCP | Running (v0.0.3.3) |
 
-### Previous Conversation Reference
+#### Contabo (Secondary) — 38.242.211.112
+| Service | Port | Status |
+|---------|------|--------|
+| Boson DHT | 39001/UDP | Running — Node ID: `EbfCHQUfwawec8Pyz9vdYTXRRoR1GpjNPgLc3vAhAoam` |
+| IPFS Relay | 4003/TCP | Running (500+ peers) |
+| App Registry (mirror) | 4500/TCP | Running (5-min sync from primary) |
+| WireGuard (wg1) | 51820/UDP | Running (subnet 10.102) |
+| AmneziaWG (awg0) | 51821/UDP | Running (subnet 10.103) |
+| VLESS Reality (sing-box) | 8443/TCP | Running |
+| Slim Web Gateway | 80/443 | Running (read-replica with transport provisioning APIs) |
+| Automated Backup | cron 6h | Running (rsync from InterServer) |
 
-Full transcript: [Elacity dDRM Build](9e02ad6d-ab42-429d-8895-cd864df59823)
+### Network Decentralization Status
+- **Two independent supernodes** with full transport stack
+- **Sequential failover** — PC2 clients try all supernodes on tunnel failure
+- **Dual-write registration** — new nodes register on all reachable supernodes
+- **Three-tier target** — Full Supernodes > Relay Nodes > Leaf Nodes (see SUPERNODE_ECONOMICS.md)
+
+### Previous Conversation References
+
+- [Elacity dDRM Build](9e02ad6d-ab42-429d-8895-cd864df59823) — dApp store, media market, CDN, wallet bridge
+- [Supernode Decentralization](f18dbf44-f5de-4238-8c62-499018cd4e50) — gateway v2.0, bootstrap script, dynamic discovery, relay mode, supernode dApp, community networking fix, docs update
 
 ---
 
@@ -109,7 +170,9 @@ Full transcript: [Elacity dDRM Build](9e02ad6d-ab42-429d-8895-cd864df59823)
 | **This file** | `docs/core/SESSION_HANDOVER.md` | Start here |
 | **Agent Handover** | `docs/core/AGENT_HANDOVER.md` | Coding patterns, infrastructure |
 | **Roadmap** | `docs/core/ROADMAP.md` | All milestones with checkboxes |
-| **Architecture** | `docs/core/ARCHITECTURE_CONVERGENCE.md` | PC2 v1 → capsule runtime v2 |
+| **Architecture** | `docs/core/ARCHITECTURE_CONVERGENCE.md` | PC2 v1 -> capsule runtime v2 |
+| **Supernode Economics** | `docs/core/SUPERNODE_ECONOMICS.md` | dDRM Access Token model, three-tier architecture |
+| **Network Hardening** | `docs/pc2-infrastructure/NETWORK_HARDENING.md` | Scale tiers, fragile points, supernode inventory |
 | **Stealth Mode** | `docs/deployment/STEALTH_MODE.md` | Transport cascade docs |
 | **CDN Task** | `.cursor/tasks/CDN-EFFECT/CDN-EFFECT.md` | CDN network task details |
 

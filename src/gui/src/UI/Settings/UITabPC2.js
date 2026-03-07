@@ -178,6 +178,41 @@ export default {
                     </div>
                 </div>
                 
+                <!-- Network Contribution Section -->
+                <div class="pc2-section" style="margin-top: 16px;">
+                    <div class="pc2-section-title">Network Contribution</div>
+                    <div class="pc2-group">
+                        <div class="pc2-group-row">
+                            <div class="pc2-card-row">
+                                <span class="pc2-card-label" style="display:flex; align-items:center; gap:4px;">Relay Mode<span class="pc2-tip" data-tip="When enabled, your node acts as an IPFS relay and DHT server, helping other PC2 nodes behind NAT connect to the network. Only effective when you have a public IP."><svg style="width:13px;height:13px;opacity:0.4;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg></span></span>
+                                <div style="display:flex; align-items:center; gap:8px;">
+                                    <span id="pc2-relay-label" style="font-size:12px; color:#888;">Off</span>
+                                    <label style="position:relative; display:inline-block; width:34px; height:18px; cursor:pointer;">
+                                        <input type="checkbox" id="pc2-relay-toggle" style="opacity:0; width:0; height:0;">
+                                        <span style="position:absolute; top:0; left:0; right:0; bottom:0; background:#ccc; border-radius:9px; transition:0.3s;"></span>
+                                        <span style="position:absolute; top:2px; left:2px; width:14px; height:14px; background:#fff; border-radius:50%; transition:0.3s;"></span>
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="pc2-group-row" id="pc2-relay-status-row" style="display:none;">
+                            <div class="pc2-card-row">
+                                <span class="pc2-card-label">Status</span>
+                                <span class="pc2-card-value" id="pc2-relay-status">-</span>
+                            </div>
+                            <div class="pc2-card-row" style="margin-top:4px;">
+                                <span class="pc2-card-label">Connected Peers</span>
+                                <span class="pc2-card-value" id="pc2-relay-peers">0</span>
+                            </div>
+                        </div>
+                        <div class="pc2-group-row" id="pc2-relay-restart-msg" style="display:none;">
+                            <div style="font-size:11px; color:#f59e0b; text-align:center; padding:4px 0;">
+                                Restart PC2 node for relay changes to take effect
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- System Resources Section -->
                 <div class="pc2-section" style="margin-top: 16px;">
                 <div class="pc2-section-title">${i18n('system')}</div>
@@ -953,6 +988,63 @@ export default {
             $(this).prop('disabled', false);
         });
         
+        // Relay mode toggle handler
+        const $relayToggle = $el_window.find('#pc2-relay-toggle');
+        const $relayLabel = $el_window.find('#pc2-relay-label');
+        const $relayTrack = $relayToggle.parent().find('span').eq(0);
+        const $relayKnob = $relayToggle.parent().find('span').eq(1);
+        const $relayStatusRow = $el_window.find('#pc2-relay-status-row');
+        const $relayRestartMsg = $el_window.find('#pc2-relay-restart-msg');
+
+        function updateRelayVisual(on) {
+            $relayTrack.css('background', on ? '#22c55e' : '#ccc');
+            $relayKnob.css('left', on ? '18px' : '2px');
+            $relayLabel.text(on ? 'On' : 'Off').css('color', on ? '#22c55e' : '#888');
+            $relayStatusRow.toggle(on);
+        }
+
+        async function loadRelayStatus() {
+            if (!isPC2Mode() || !window.api_origin) return;
+            try {
+                const authToken = getAuthToken();
+                const headers = {};
+                if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
+                const resp = await fetch(new URL('/api/supernode/relay/status', window.api_origin).toString(), { headers });
+                if (resp.ok) {
+                    const data = await resp.json();
+                    $relayToggle.prop('checked', data.enabled);
+                    updateRelayVisual(data.enabled);
+                    $el_window.find('#pc2-relay-status').text(data.active ? 'Active' : (data.enabled ? 'Pending restart' : 'Inactive'));
+                    $el_window.find('#pc2-relay-peers').text(data.connectedPeers || 0);
+                    $relayRestartMsg.toggle(data.needsRestart);
+                }
+            } catch {
+                // Non-critical
+            }
+        }
+
+        $relayToggle.on('change', async function() {
+            const enabled = this.checked;
+            updateRelayVisual(enabled);
+            try {
+                const authToken = getAuthToken();
+                const headers = { 'Content-Type': 'application/json' };
+                if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
+                const resp = await fetch(new URL('/api/supernode/relay/settings', window.api_origin).toString(), {
+                    method: 'POST',
+                    headers,
+                    body: JSON.stringify({ enabled }),
+                });
+                if (resp.ok) {
+                    $relayRestartMsg.show();
+                }
+            } catch (err) {
+                logger.warn('[PC2Tab] Failed to set relay mode:', err);
+            }
+        });
+
+        loadRelayStatus();
+
         // Real-time refresh interval
         let systemResourcesInterval = null;
         

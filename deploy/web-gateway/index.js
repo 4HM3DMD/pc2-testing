@@ -729,6 +729,17 @@ const DEFAULT_SUPERNODES = [
     addedAt: new Date().toISOString(),
   },
   {
+    id: 'EbfCHQUfwawec8Pyz9vdYTXJRoR1GpjNPgLc3vAhAoam',
+    address: '38.242.211.112',
+    port: 39001,
+    proxyPort: 8090,
+    gatewayUrl: 'https://38.242.211.112',
+    name: 'Elacity Contabo',
+    region: 'EU',
+    status: 'active',
+    addedAt: new Date().toISOString(),
+  },
+  {
     id: 'HZXXs9LTfNQjrDKvvexRhuMk8TTJhYCfrHwaj3jUzuhZ',
     address: '155.138.245.211',
     port: 39001,
@@ -808,10 +819,80 @@ async function checkSupernodeHealth(node) {
   }
 }
 
+// Shared secret for supernode-to-supernode operations (env or default for dev)
+const SUPERNODE_SECRET = process.env.SUPERNODE_SECRET || '';
+
+/**
+ * Validate a supernode registration payload.
+ * Returns null if valid, or an error string.
+ */
+function validateSupernodePayload(data) {
+  if (!data.id || typeof data.id !== 'string' || data.id.length < 20) return 'invalid id';
+  if (!data.address || typeof data.address !== 'string') return 'invalid address';
+  if (!data.port || typeof data.port !== 'number') return 'invalid port';
+  if (!data.gatewayUrl || typeof data.gatewayUrl !== 'string') return 'invalid gatewayUrl';
+  const ipPattern = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
+  if (!ipPattern.test(data.address)) return 'address must be an IP';
+  return null;
+}
+
+/**
+ * Register or update a supernode in the registry.
+ * Used by /api/supernodes/register, /api/supernodes/heartbeat, and gossip.
+ */
+function upsertSupernode(data, source) {
+  const existing = supernodeRegistry.get(data.id);
+  if (existing) {
+    existing.status = 'active';
+    existing.lastHeartbeat = new Date().toISOString();
+    if (data.name) existing.name = data.name;
+    if (data.region) existing.region = data.region;
+    if (data.gatewayUrl) existing.gatewayUrl = data.gatewayUrl;
+    if (data.address) existing.address = data.address;
+    if (data.proxyPort) existing.proxyPort = data.proxyPort;
+    console.log(`[Supernodes] Updated ${existing.name || data.id} via ${source}`);
+    return { action: 'updated', node: existing };
+  }
+
+  const newNode = {
+    id: data.id,
+    address: data.address,
+    port: data.port || 39001,
+    proxyPort: data.proxyPort || 8090,
+    gatewayUrl: data.gatewayUrl,
+    name: data.name || `Supernode-${data.address}`,
+    region: data.region || 'unknown',
+    status: 'active',
+    addedAt: new Date().toISOString(),
+    lastHeartbeat: new Date().toISOString(),
+    dynamic: true,
+  };
+  supernodeRegistry.set(data.id, newNode);
+  console.log(`[Supernodes] Registered new supernode ${newNode.name} (${newNode.address}) via ${source}`);
+  return { action: 'registered', node: newNode };
+}
+
+// Mark supernodes as unhealthy if no heartbeat for 10 minutes
+const HEARTBEAT_TTL_MS = 10 * 60 * 1000;
+
 // Periodic supernode health checks (every 5 minutes)
 setInterval(async () => {
   console.log('[Supernodes] Running health checks...');
+  const now = Date.now();
   for (const [id, node] of supernodeRegistry) {
+    // Dynamic nodes: check heartbeat TTL first
+    if (node.dynamic && node.lastHeartbeat) {
+      const age = now - new Date(node.lastHeartbeat).getTime();
+      if (age > HEARTBEAT_TTL_MS) {
+        if (node.status === 'active') {
+          node.status = 'unhealthy';
+          node.lastUnhealthy = new Date().toISOString();
+          console.log(`[Supernodes] ${node.name} (${node.address}) heartbeat expired — marking unhealthy`);
+        }
+        continue;
+      }
+    }
+
     const healthy = await checkSupernodeHealth(node);
     if (healthy && node.status !== 'active') {
       node.status = 'active';
@@ -824,6 +905,100 @@ setInterval(async () => {
     }
   }
 }, 5 * 60 * 1000);
+
+/**
+ * Gossip: share our supernode list with all known active supernodes.
+ * Each supernode merges the received list into its own registry.
+ */
+async function gossipSupernodes() {
+  const ourList = getActiveSuperNodes();
+  const myAddress = process.env.PUBLIC_IP || '';
+
+  for (const [id, node] of supernodeRegistry) {
+    if (node.status !== 'active') continue;
+    if (node.address === myAddress) continue;
+
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5000);
+      await fetch(`${node.gatewayUrl}/api/supernodes/gossip`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ supernodes: ourList, source: CONFIG.gatewayId }),
+        signal: controller.signal,
+      }).catch(() => {});
+      clearTimeout(timeout);
+    } catch {
+      // Gossip failures are non-critical
+    }
+  }
+}
+
+// Gossip every 5 minutes
+setInterval(gossipSupernodes, 5 * 60 * 1000);
+
+/**
+ * Registry sync consumer: pull user registry from other gateways periodically.
+ */
+async function syncRegistryFromPeers() {
+  const myAddress = process.env.PUBLIC_IP || '';
+
+  for (const [id, node] of supernodeRegistry) {
+    if (node.status !== 'active') continue;
+    if (node.address === myAddress) continue;
+
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10000);
+      const resp = await fetch(`${node.gatewayUrl}/api/registry/sync`, {
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+
+      if (!resp.ok) continue;
+
+      const data = await resp.json();
+      if (!data.entries || !Array.isArray(data.entries)) continue;
+
+      let merged = 0;
+      for (const entry of data.entries) {
+        if (!entry.username || !entry.nodeId || !entry.endpoint) continue;
+
+        const existing = registry.get(entry.username);
+        if (!existing) {
+          registry.set(entry.username, {
+            nodeId: entry.nodeId,
+            endpoint: entry.endpoint,
+            registeredAt: entry.registeredAt || new Date().toISOString(),
+            lastSeen: entry.lastSeen || new Date().toISOString(),
+          });
+          merged++;
+        } else {
+          const existingTime = new Date(existing.lastSeen || existing.registeredAt || 0).getTime();
+          const incomingTime = new Date(entry.lastSeen || entry.registeredAt || 0).getTime();
+          if (incomingTime > existingTime) {
+            existing.endpoint = entry.endpoint;
+            existing.lastSeen = entry.lastSeen || new Date().toISOString();
+            merged++;
+          }
+        }
+      }
+
+      if (merged > 0) {
+        saveRegistry();
+        console.log(`[RegistrySync] Merged ${merged} entries from ${node.name} (${node.address})`);
+      }
+    } catch {
+      // Sync failures are non-critical
+    }
+  }
+}
+
+// Registry sync every 60 seconds (if enabled or always for secondary gateways)
+if (CONFIG.registrySync.enabled || process.env.REGISTRY_SYNC_AUTO === 'true') {
+  setInterval(syncRegistryFromPeers, CONFIG.registrySync.syncIntervalMs || 30000);
+  console.log('[RegistrySync] Registry sync enabled — pulling from peers every 30s');
+}
 
 // ============================================================================
 // Phase 1: Active Proxy Connection Pool with Limits and Health Checks
@@ -1830,8 +2005,117 @@ async function handleApiRequest(req, res) {
     res.end(JSON.stringify({ 
       supernodes,
       updated: new Date().toISOString(),
-      version: "1.0"
+      version: "2.0"
     }));
+    return;
+  }
+
+  // Supernode self-registration: new supernodes announce themselves
+  if (url.pathname === "/api/supernodes/register" && req.method === "POST") {
+    let body = '';
+    req.on('data', (chunk) => (body += chunk));
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body);
+
+        if (SUPERNODE_SECRET && data.secret !== SUPERNODE_SECRET) {
+          res.writeHead(403, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "invalid secret" }));
+          return;
+        }
+
+        const err = validateSupernodePayload(data);
+        if (err) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: err }));
+          return;
+        }
+
+        const result = upsertSupernode(data, 'register');
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          success: true,
+          action: result.action,
+          supernodes: getActiveSuperNodes(),
+        }));
+      } catch {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "invalid JSON" }));
+      }
+    });
+    return;
+  }
+
+  // Supernode heartbeat: periodic keepalive from running supernodes
+  if (url.pathname === "/api/supernodes/heartbeat" && req.method === "POST") {
+    let body = '';
+    req.on('data', (chunk) => (body += chunk));
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body);
+
+        if (!data.id) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "id required" }));
+          return;
+        }
+
+        const existing = supernodeRegistry.get(data.id);
+        if (existing) {
+          existing.status = 'active';
+          existing.lastHeartbeat = new Date().toISOString();
+          if (data.stats) existing.stats = data.stats;
+        } else if (data.address && data.gatewayUrl) {
+          upsertSupernode(data, 'heartbeat');
+        }
+
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ success: true, ack: new Date().toISOString() }));
+      } catch {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "invalid JSON" }));
+      }
+    });
+    return;
+  }
+
+  // Supernode gossip: receive supernode lists from peers for mesh discovery
+  if (url.pathname === "/api/supernodes/gossip" && req.method === "POST") {
+    let body = '';
+    req.on('data', (chunk) => (body += chunk));
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body);
+
+        if (!data.supernodes || !Array.isArray(data.supernodes)) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "supernodes array required" }));
+          return;
+        }
+
+        let added = 0;
+        for (const sn of data.supernodes) {
+          if (!sn.id || !sn.address || !sn.gatewayUrl) continue;
+          if (supernodeRegistry.has(sn.id)) continue;
+
+          const err = validateSupernodePayload(sn);
+          if (err) continue;
+
+          upsertSupernode(sn, `gossip:${data.source || 'unknown'}`);
+          added++;
+        }
+
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          success: true,
+          added,
+          total: supernodeRegistry.size,
+        }));
+      } catch {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "invalid JSON" }));
+      }
+    });
     return;
   }
 

@@ -28,6 +28,7 @@ import { logger } from '../../utils/logger.js';
 export interface AmneziaWGConfig {
   dataDir: string;
   gatewayUrl: string;
+  secondaryGatewayUrls?: string[];
   nodeId: string;
   localPort: number;
 }
@@ -186,6 +187,7 @@ export class AmneziaWGService {
   /**
    * Register with the supernode's AmneziaWG provisioning API.
    * Returns connection parameters including obfuscation params.
+   * Tries primary gateway first, then secondary gateways on failure (sequential failover).
    */
   async provision(): Promise<AWGProvisionResponse> {
     const { publicKey } = this.ensureKeypair();
@@ -202,8 +204,10 @@ export class AmneziaWGService {
       }
     }
 
-    const url = `${this.config.gatewayUrl}/api/awg/register`;
-    logger.info(`[AmneziaWG] Provisioning via ${url}...`);
+    const gatewayUrls = [
+      this.config.gatewayUrl,
+      ...(this.config.secondaryGatewayUrls || []),
+    ];
 
     const body = JSON.stringify({
       username: await this.getUsername(),
@@ -211,27 +215,56 @@ export class AmneziaWGService {
       publicKey,
     });
 
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body,
-      signal: AbortSignal.timeout(PROVISION_TIMEOUT_MS),
-    });
+    let lastError: Error | null = null;
 
-    if (!response.ok) {
-      const errBody = await response.text();
-      throw new Error(`AWG provisioning failed (${response.status}): ${errBody}`);
+    for (const gatewayUrl of gatewayUrls) {
+      const url = `${gatewayUrl}/api/awg/register`;
+      logger.info(`[AmneziaWG] Provisioning via ${url}...`);
+
+      try {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body,
+          signal: AbortSignal.timeout(PROVISION_TIMEOUT_MS),
+        });
+
+        if (!response.ok) {
+          const errBody = await response.text();
+          throw new Error(`AWG provisioning failed (${response.status}): ${errBody}`);
+        }
+
+        const data = await response.json() as AWGProvisionResponse;
+        if (!data.assignedIP || !data.serverPublicKey || !data.serverEndpoint || !data.obfuscation) {
+          throw new Error('Invalid AWG provisioning response');
+        }
+
+        writeFileSync(this.provisionPath, JSON.stringify(data, null, 2));
+        logger.info(`[AmneziaWG] Provisioned: ${data.assignedIP} via ${data.serverEndpoint}`);
+        return data;
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        logger.warn(`[AmneziaWG] Provisioning failed via ${gatewayUrl}: ${lastError.message}`);
+      }
     }
 
-    const data = await response.json() as AWGProvisionResponse;
-    if (!data.assignedIP || !data.serverPublicKey || !data.serverEndpoint || !data.obfuscation) {
-      throw new Error('Invalid AWG provisioning response');
+    throw lastError || new Error('All AmneziaWG provisioning endpoints failed');
+  }
+
+  /**
+   * Clear cached provision data so the next provision() call re-registers
+   * with a supernode. Used during failover when the current supernode is down.
+   */
+  clearProvisionCache(): void {
+    try {
+      if (existsSync(this.provisionPath)) {
+        const { unlinkSync } = require('fs');
+        unlinkSync(this.provisionPath);
+        logger.info('[AmneziaWG] Provision cache cleared for failover');
+      }
+    } catch {
+      // Non-critical
     }
-
-    writeFileSync(this.provisionPath, JSON.stringify(data, null, 2));
-    logger.info(`[AmneziaWG] Provisioned: ${data.assignedIP} via ${data.serverEndpoint}`);
-
-    return data;
   }
 
   /**
