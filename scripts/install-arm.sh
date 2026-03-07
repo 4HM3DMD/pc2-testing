@@ -339,32 +339,68 @@ install_wireguard() {
             print_warn "WireGuard kernel module not available"
         fi
 
-        if command -v wireguard-go &>/dev/null; then
+        if command -v wireguard-go &>/dev/null || test -x /usr/local/bin/wireguard-go; then
             print_ok "wireguard-go (userspace) already installed"
             WG_MODE="userspace"
         else
             print_step "Installing wireguard-go (userspace WireGuard)..."
 
-            # Try apt first
+            # Try apt first (unlikely to work but cheap to try)
             if sudo apt-get install -y -qq wireguard-go 2>/dev/null && command -v wireguard-go &>/dev/null; then
                 print_ok "wireguard-go installed via apt"
                 WG_MODE="userspace"
             else
-                # Build from source -- requires Go
-                if ! command -v go &>/dev/null; then
-                    print_step "Installing Go compiler for wireguard-go build..."
-                    sudo apt-get install -y -qq golang-go 2>/dev/null || sudo apt-get install -y -qq golang 2>/dev/null || true
-                fi
+                # Build from source — ensure we have Go >= 1.20
+                # Distro Go packages are often too old (Ubuntu 20.04 ships Go 1.13)
+                # so we download the official binary directly from go.dev
+                GO_MIN_MAJOR=1
+                GO_MIN_MINOR=20
+                NEED_GO=true
 
                 if command -v go &>/dev/null; then
-                    GO_VERSION=$(go version 2>/dev/null | grep -oP 'go\K[0-9]+\.[0-9]+' || echo "0.0")
-                    print_step "Building wireguard-go from source (Go $GO_VERSION, takes 1-2 minutes)..."
+                    GO_CUR=$(go version 2>/dev/null | grep -oP 'go\K[0-9]+\.[0-9]+' || echo "0.0")
+                    GO_CUR_MAJOR=$(echo "$GO_CUR" | cut -d. -f1)
+                    GO_CUR_MINOR=$(echo "$GO_CUR" | cut -d. -f2)
+                    if [ "$GO_CUR_MAJOR" -ge "$GO_MIN_MAJOR" ] 2>/dev/null && [ "$GO_CUR_MINOR" -ge "$GO_MIN_MINOR" ] 2>/dev/null; then
+                        print_ok "Go $GO_CUR already installed (>= $GO_MIN_MAJOR.$GO_MIN_MINOR)"
+                        NEED_GO=false
+                    else
+                        print_warn "Go $GO_CUR is too old (need >= $GO_MIN_MAJOR.$GO_MIN_MINOR)"
+                    fi
+                fi
+
+                if [ "$NEED_GO" = true ]; then
+                    GO_VERSION="1.22.0"
+                    GO_ARCH="arm64"
+                    if [ "$(uname -m)" = "x86_64" ]; then GO_ARCH="amd64"; fi
+                    GO_TAR="go${GO_VERSION}.linux-${GO_ARCH}.tar.gz"
+                    GO_URL="https://go.dev/dl/${GO_TAR}"
+
+                    print_step "Downloading Go $GO_VERSION from go.dev..."
+                    if wget -q "$GO_URL" -O "/tmp/$GO_TAR" 2>/dev/null || curl -sSL "$GO_URL" -o "/tmp/$GO_TAR" 2>/dev/null; then
+                        sudo rm -rf /usr/local/go
+                        sudo tar -C /usr/local -xzf "/tmp/$GO_TAR"
+                        rm -f "/tmp/$GO_TAR"
+                        export PATH="/usr/local/go/bin:$PATH"
+                        if command -v go &>/dev/null; then
+                            print_ok "Go $(go version 2>/dev/null | grep -oP 'go\K[0-9]+\.[0-9]+\.[0-9]+' || echo "$GO_VERSION") installed"
+                        else
+                            print_error "Go installation failed"
+                        fi
+                    else
+                        print_error "Failed to download Go from $GO_URL"
+                    fi
+                fi
+
+                # Now build wireguard-go
+                if command -v go &>/dev/null; then
+                    GO_VER_DISPLAY=$(go version 2>/dev/null | grep -oP 'go\K[0-9]+\.[0-9]+\.[0-9]+' || echo "unknown")
+                    print_step "Building wireguard-go from source (Go $GO_VER_DISPLAY, takes 1-2 minutes)..."
                     TMPDIR_WG=$(mktemp -d)
                     WG_BUILT=false
 
                     if git clone --depth 1 https://git.zx2c4.com/wireguard-go "$TMPDIR_WG/wireguard-go" 2>/dev/null; then
                         cd "$TMPDIR_WG/wireguard-go"
-                        # Try make first (uses Makefile), fall back to direct go build
                         if make 2>&1; then
                             sudo cp wireguard-go /usr/local/bin/
                             sudo chmod +x /usr/local/bin/wireguard-go
@@ -374,30 +410,13 @@ install_wireguard() {
                             sudo chmod +x /usr/local/bin/wireguard-go
                             WG_BUILT=true
                         else
-                            print_warn "wireguard-go source build failed (Go version may be too old, need 1.20+)"
+                            print_error "wireguard-go build failed"
                         fi
                         cd "$HOME"
+                    else
+                        print_error "Failed to clone wireguard-go repository"
                     fi
                     rm -rf "$TMPDIR_WG"
-
-                    # If source build failed, try upgrading Go and retrying
-                    if [ "$WG_BUILT" = false ]; then
-                        print_step "Trying newer Go version via snap..."
-                        if sudo snap install go --classic 2>/dev/null; then
-                            export PATH="/snap/bin:$PATH"
-                            TMPDIR_WG2=$(mktemp -d)
-                            if git clone --depth 1 https://git.zx2c4.com/wireguard-go "$TMPDIR_WG2/wireguard-go" 2>/dev/null; then
-                                cd "$TMPDIR_WG2/wireguard-go"
-                                if make 2>&1 || go build -o wireguard-go 2>&1; then
-                                    sudo cp wireguard-go /usr/local/bin/
-                                    sudo chmod +x /usr/local/bin/wireguard-go
-                                    WG_BUILT=true
-                                fi
-                                cd "$HOME"
-                            fi
-                            rm -rf "$TMPDIR_WG2"
-                        fi
-                    fi
 
                     if [ "$WG_BUILT" = true ]; then
                         print_ok "wireguard-go built and installed"
@@ -407,25 +426,6 @@ install_wireguard() {
                     fi
                 else
                     print_warn "Go compiler not available, cannot build wireguard-go"
-                    print_step "Installing Go compiler..."
-                    sudo apt-get install -y -qq golang-go 2>/dev/null || sudo snap install go --classic 2>/dev/null || true
-                    if command -v go &>/dev/null; then
-                        print_step "Retrying wireguard-go build..."
-                        TMPDIR_WG=$(mktemp -d)
-                        if git clone --depth 1 https://git.zx2c4.com/wireguard-go "$TMPDIR_WG/wireguard-go" 2>/dev/null; then
-                            cd "$TMPDIR_WG/wireguard-go"
-                            if make 2>&1 || go build -o wireguard-go 2>&1; then
-                                sudo cp wireguard-go /usr/local/bin/
-                                sudo chmod +x /usr/local/bin/wireguard-go
-                                print_ok "wireguard-go built and installed"
-                                WG_MODE="userspace"
-                            else
-                                print_warn "wireguard-go build failed even with fresh Go"
-                            fi
-                            cd "$HOME"
-                        fi
-                        rm -rf "$TMPDIR_WG"
-                    fi
                 fi
             fi
         fi
