@@ -9,6 +9,7 @@
   "license": "MIT",
   "entry": "index.html",
   "type": "web",
+  "category": "tools",
 
   "capabilities": {
     "wallet": true

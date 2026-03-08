@@ -1717,6 +1717,60 @@ function saveRegistry() {
   }
 }
 
+/**
+ * Serve a user-friendly HTML page when a PC2 node is unreachable.
+ * Replaces the infinite "initializing" hang with clear feedback and auto-retry.
+ */
+function serveNodeOfflinePage(res, username, errorDetail) {
+  const safeUser = (username || 'unknown').replace(/[^a-z0-9-]/gi, '');
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${safeUser}.ela.city — Offline</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0a0a0a; color: #e5e5e5; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+    .card { background: #18181b; border: 1px solid #27272a; border-radius: 16px; padding: 48px; max-width: 480px; text-align: center; }
+    .icon { font-size: 48px; margin-bottom: 16px; }
+    h1 { font-size: 22px; font-weight: 600; margin-bottom: 8px; color: #fff; }
+    .domain { color: #a78bfa; font-weight: 500; }
+    .msg { color: #a1a1aa; font-size: 14px; line-height: 1.6; margin: 16px 0 24px; }
+    .retry { display: inline-flex; align-items: center; gap: 8px; background: #7c3aed; color: #fff; border: none; border-radius: 8px; padding: 10px 24px; font-size: 14px; cursor: pointer; text-decoration: none; }
+    .retry:hover { background: #6d28d9; }
+    .countdown { color: #71717a; font-size: 12px; margin-top: 16px; }
+    .hint { color: #52525b; font-size: 12px; margin-top: 24px; border-top: 1px solid #27272a; padding-top: 16px; line-height: 1.5; }
+    .hint a { color: #a78bfa; text-decoration: none; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">☁️</div>
+    <h1>Node Offline</h1>
+    <p class="msg">
+      <span class="domain">${safeUser}.ela.city</span> is not reachable right now.<br>
+      The node owner needs to have their PC2 running and connected for remote access to work.
+    </p>
+    <a class="retry" href="/" onclick="location.reload(); return false;">↻ Try Again</a>
+    <p class="countdown" id="cd">Auto-retry in <span id="sec">15</span>s</p>
+    <p class="hint">
+      Node owner? Make sure your PC2 app is running and check your connection in
+      <strong>Settings → PC2 Network</strong>.<br>
+      Need help? Visit <a href="https://t.me/nicktomlin" target="_blank">Telegram support</a>.
+    </p>
+  </div>
+  <script>
+    let s = 15;
+    const el = document.getElementById('sec');
+    const t = setInterval(() => { s--; el.textContent = s; if (s <= 0) { clearInterval(t); location.reload(); } }, 1000);
+  </script>
+</body>
+</html>`;
+  res.writeHead(502, { 'Content-Type': 'text/html; charset=utf-8' });
+  res.end(html);
+}
+
 // Create proxy server for direct HTTP endpoints (Boson relay + WebSocket upgrades)
 const proxy = createProxyServer({
   changeOrigin: true,
@@ -1768,7 +1822,9 @@ compressingProxy.on("proxyRes", (proxyRes, req, res) => {
 });
 
 compressingProxy.on("error", (err, req, res) => {
-  console.error("[Proxy] Compressing proxy error:", err.message);
+  const hostname = req.headers.host?.split(":")[0] || '';
+  const username = extractUsername(hostname);
+  console.error(`[Proxy] Compressing proxy error for ${username || hostname}: ${err.message}`);
 
   // On connection-level failures, destroy all free sockets for the target
   // so the agent stops reusing dead connections from rebooted peers.
@@ -1790,8 +1846,7 @@ compressingProxy.on("error", (err, req, res) => {
   }
 
   if (res.writeHead) {
-    res.writeHead(502, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ error: "Bad Gateway", message: err.message }));
+    serveNodeOfflinePage(res, username, err.message);
   }
 });
 
@@ -1810,12 +1865,14 @@ networkMapProxy.on("error", (err, req, res) => {
   }
 });
 
-// Handle proxy errors
+// Handle proxy errors — serve a user-friendly "node offline" page instead of
+// hanging on "initializing" or showing a raw JSON error.
 proxy.on("error", (err, req, res) => {
-  console.error("[Proxy] Error:", err.message);
+  const hostname = req.headers.host?.split(":")[0] || '';
+  const username = extractUsername(hostname);
+  console.error(`[Proxy] Error for ${username || hostname}: ${err.message}`);
   if (res.writeHead) {
-    res.writeHead(502, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ error: "Bad Gateway", message: err.message }));
+    serveNodeOfflinePage(res, username, err.message);
   }
 });
 

@@ -19,8 +19,9 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
-import { join } from 'path';
+import { join, dirname } from 'path';
 import { execSync, spawn, ChildProcess } from 'child_process';
+import { fileURLToPath } from 'url';
 import { logger } from '../../utils/logger.js';
 
 export interface VLESSRealityConfig {
@@ -74,19 +75,43 @@ export class VLESSRealityService {
   isAvailable(): boolean {
     if (this._available !== null) return this._available;
 
-    try {
-      execSync('which sing-box || test -x /usr/local/bin/sing-box', {
-        stdio: 'pipe',
-        timeout: 5000,
-      });
+    const found = this.findSingBoxSafe();
+    if (found) {
       this._available = true;
-      logger.info('[VLESSReality] sing-box binary detected');
-    } catch {
+      logger.info(`[VLESSReality] sing-box binary detected at ${found}`);
+    } else {
       this._available = false;
       logger.debug('[VLESSReality] sing-box not installed');
     }
 
     return this._available;
+  }
+
+  /**
+   * Attempt to locate sing-box without throwing.
+   * Checks bundled binaries first, then system paths.
+   */
+  private findSingBoxSafe(): string | null {
+    const bundledDir = join(
+      typeof __dirname !== 'undefined' ? __dirname : dirname(fileURLToPath(import.meta.url)),
+      '..', '..', '..', 'bin', `${process.platform}-${process.arch}`,
+    );
+    const bundled = join(bundledDir, process.platform === 'win32' ? 'sing-box.exe' : 'sing-box');
+    if (existsSync(bundled)) return bundled;
+
+    const systemPaths = ['/usr/local/bin/sing-box', '/opt/homebrew/bin/sing-box', '/usr/bin/sing-box'];
+    for (const p of systemPaths) {
+      if (existsSync(p)) return p;
+    }
+
+    if (process.platform !== 'win32') {
+      try {
+        const found = execSync('which sing-box 2>/dev/null', { stdio: 'pipe', timeout: 3000 }).toString().trim();
+        if (found && existsSync(found)) return found;
+      } catch { /* not on PATH */ }
+    }
+
+    return null;
   }
 
   private async provision(): Promise<VLESSProvisionResponse> {
@@ -333,15 +358,9 @@ export class VLESSRealityService {
   }
 
   private findSingBox(): string {
-    const paths = ['/usr/local/bin/sing-box', '/opt/homebrew/bin/sing-box', '/usr/bin/sing-box'];
-    for (const p of paths) {
-      if (existsSync(p)) return p;
-    }
-    try {
-      return execSync('which sing-box', { stdio: 'pipe' }).toString().trim();
-    } catch {
-      throw new Error('sing-box binary not found');
-    }
+    const found = this.findSingBoxSafe();
+    if (found) return found;
+    throw new Error('sing-box binary not found');
   }
 
   private async getUsername(): Promise<string> {

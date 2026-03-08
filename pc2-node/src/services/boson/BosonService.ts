@@ -15,6 +15,7 @@ import { WireGuardService, type WireGuardStatus } from '../wireguard/WireGuardSe
 import { AmneziaWGService, type AmneziaWGStatus } from '../wireguard/AmneziaWGService.js';
 import { VLESSRealityService, type VLESSRealityStatus } from '../vless/VLESSRealityService.js';
 import { logger } from '../../utils/logger.js';
+import { ensureTransportBinaries } from '../../utils/binary-manager.js';
 
 export interface BosonConfig {
   dataDir: string;
@@ -133,6 +134,9 @@ export class BosonService {
     const secondaryGatewayUrls = (this.config.superNodes || [])
       .map((sn) => sn.gatewayUrl)
       .filter((url) => url && url !== primaryGateway);
+
+    // 3b. Ensure transport binaries are available (auto-download if missing)
+    await ensureTransportBinaries();
 
     // 4. Initialize WireGuard (preferred NAT traversal over Boson relay)
     this.wireGuardService = new WireGuardService({

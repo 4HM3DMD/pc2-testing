@@ -11,11 +11,13 @@
   "icon": "favicon.ico",
   "entry": "index.html",
   "type": "web",
+  "category": "media",
 
   "capabilities": {
     "wallet": true,
     "network": true,
-    "ipfs": { "fetch": true }
+    "ipfs": { "fetch": true },
+    "drm": true
   },
 
   "requirements": {

@@ -21,8 +21,9 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
-import { join, resolve } from 'path';
+import { join, resolve, dirname } from 'path';
 import { execSync, exec } from 'child_process';
+import { fileURLToPath } from 'url';
 import { logger } from '../../utils/logger.js';
 
 export interface AmneziaWGConfig {
@@ -94,46 +95,78 @@ export class AmneziaWGService {
   }
 
   private static isMacOS = process.platform === 'darwin';
+  private static isWindows = process.platform === 'win32';
+
+  private awgGoBinPath: string | null = null;
+  private awgQuickBinPath: string | null = null;
+
+  /**
+   * Find a binary by checking bundled path first, then well-known system paths.
+   */
+  private findBinary(name: string, extraPaths: string[] = []): string | null {
+    const bundledDir = join(
+      typeof __dirname !== 'undefined' ? __dirname : dirname(fileURLToPath(import.meta.url)),
+      '..', '..', '..', 'bin', `${process.platform}-${process.arch}`,
+    );
+    const bundled = join(bundledDir, AmneziaWGService.isWindows ? `${name}.exe` : name);
+    if (existsSync(bundled)) return bundled;
+
+    for (const p of extraPaths) {
+      if (existsSync(p)) return p;
+    }
+
+    if (!AmneziaWGService.isWindows) {
+      try {
+        const found = execSync(`which ${name} 2>/dev/null`, { stdio: 'pipe', shell: '/bin/sh' }).toString().trim();
+        if (found && existsSync(found)) return found;
+      } catch { /* not on PATH */ }
+    }
+
+    return null;
+  }
 
   /**
    * Check if AmneziaWG tools are installed.
-   * Requires amneziawg-go (userspace daemon) and awg-quick (interface manager).
-   * Falls back to checking if awg tool is available for key generation.
+   * Checks bundled binaries first, then system paths.
+   * Not available on Windows (AmneziaWG is Linux/macOS only).
    */
   isAvailable(): boolean {
     if (this._available !== null) return this._available;
 
-    const awgGoPaths = 'which amneziawg-go || test -x /usr/local/bin/amneziawg-go';
-
-    try {
-      execSync(awgGoPaths, { stdio: 'pipe', shell: '/bin/sh' });
-    } catch {
+    if (AmneziaWGService.isWindows) {
       this._available = false;
       return false;
     }
 
-    // awg-quick may be installed as awg-quick or at /usr/local/bin/awg-quick
-    const awgQuickPaths = 'which awg-quick || test -x /usr/local/bin/awg-quick';
-    try {
-      execSync(awgQuickPaths, { stdio: 'pipe', shell: '/bin/sh' });
-    } catch {
+    this.awgGoBinPath = this.findBinary('amneziawg-go', [
+      '/usr/local/bin/amneziawg-go', '/opt/homebrew/bin/amneziawg-go',
+    ]);
+    if (!this.awgGoBinPath) {
+      this._available = false;
+      return false;
+    }
+
+    this.awgQuickBinPath = this.findBinary('awg-quick', [
+      '/usr/local/bin/awg-quick', '/opt/homebrew/bin/awg-quick',
+    ]);
+    if (!this.awgQuickBinPath) {
       this._available = false;
       return false;
     }
 
     this._available = true;
-    logger.info('[AmneziaWG] Stealth transport tools detected');
+    logger.info(`[AmneziaWG] Stealth transport tools detected (awg-go: ${this.awgGoBinPath}, awg-quick: ${this.awgQuickBinPath})`);
     return true;
   }
 
   /**
    * Build the awg-quick command string.
-   * Sets WG_QUICK_USERSPACE_IMPLEMENTATION to amneziawg-go so awg-quick
-   * uses the obfuscated userspace implementation instead of the kernel module.
+   * Uses resolved paths for both awg-quick and amneziawg-go binaries.
    */
   private awgQuickCmd(action: 'up' | 'down', confPath: string): string {
     const absConf = resolve(confPath);
-    return `sudo awg-quick ${action} ${absConf}`;
+    const awqPath = this.awgQuickBinPath || 'awg-quick';
+    return `sudo ${awqPath} ${action} ${absConf}`;
   }
 
   /**

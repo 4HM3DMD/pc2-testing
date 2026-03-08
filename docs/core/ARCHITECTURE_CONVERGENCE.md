@@ -1040,5 +1040,94 @@ Phase 3 (M7+) — Agent Economy:
 
 ---
 
-*Last updated: 2026-03-03*
+## Part 15: Elacity dDRM as Universal Access Layer
+
+> Added 2026-03-08. See [ELACITY_UNIVERSAL_ASSET_STRATEGY.md](./ELACITY_UNIVERSAL_ASSET_STRATEGY.md) for the full strategy.
+
+### The Insight
+
+Elacity's smart contracts (AuthorityGateway, TradeGateway, Channels, Operatives) are already asset-type agnostic. The `ACCESS_TOKEN` (ERC-1155) + Lit Protocol key delivery works for ANY encrypted digital asset. The only bottleneck is the SDK layer — `@elacity-js/media-player` is media-specific and contains the Lit Protocol integration.
+
+### The Fix: `@elacity-js/access`
+
+Extract the Lit Protocol key retrieval from `media-player` into a standalone universal access package:
+
+```
+@elacity-js/access (NEW)
+  ├── verify ACCESS_TOKEN ownership (AuthorityGateway.hasAccess())
+  ├── retrieve decryption key (Lit Protocol, any DRM system)
+  ├── decrypt-to-buffer (returns raw bytes for any content type)
+  ├── certificate caching
+  └── subscription verification (SubscriptionModule)
+
+Consumers:
+  @elacity-js/media-player  → DASH video streaming
+  AI model loader            → GGUF/ONNX into Ollama/WASM
+  Code installer             → npm package into sandbox
+  Dataset consumer           → CSV/Parquet into pipeline
+  Agent loader               → Agent capsule into runtime
+```
+
+### How dDRM Meets the Runtime
+
+```
+ACCESS_TOKEN (on-chain, Elacity)     Capability Token (off-chain, Runtime)
+┌──────────────────────────┐        ┌──────────────────────────┐
+│ holder: 0x416d...21b1    │        │ holder: "ai-model-capsule"│
+│ channel: 0xABC...        │  ──►   │ resource: "ipfs://QmXyz"  │
+│ tokenId: 42              │        │ action: "decrypt,execute"  │
+│ type: ACCESS_TOKEN (1)   │        │ expires: "2026-03-09T00" │
+│ chain: Base (8453)       │        │ signature: <ed25519>      │
+└──────────────────────────┘        └──────────────────────────┘
+
+1. User/Agent buys ACCESS_TOKEN on-chain (Elacity contracts)
+2. Capsule requests "drm:decrypt" capability from Runtime
+3. Runtime checks: does wallet hold ACCESS_TOKEN? (AuthorityGateway.hasAccess())
+4. Runtime issues scoped capability token
+5. Capsule uses capability token with @elacity-js/access to get Lit key
+6. Capsule decrypts and uses the asset
+7. Runtime audit log records everything
+```
+
+ACCESS_TOKENs are the authorization layer (who has the right). Capability tokens are the enforcement layer (what can actually happen). They're complementary.
+
+### Agent-to-Agent Commerce
+
+The most disruptive application: agents buying from agents with no human in the loop.
+
+```
+AI Coding Agent                     Elacity Marketplace
+  │                                     │
+  ├─ Discovers code library ◄──────────── MCP/A2A discovery (ERC-8004)
+  │                                     │
+  ├─ Checks price: 10 USDC ◄──────────── AuthorityGateway.listings()
+  │                                     │
+  ├─ Purchases ACCESS_TOKEN ───────────► AuthorityGateway.buyAccess()
+  │  (via Particle Smart Account)       │  (UniversalAccountExecutor)
+  │                                     │
+  ├─ Decrypts library ◄───────────────── @elacity-js/access.decrypt()
+  │  (Lit Protocol key retrieval)       │
+  │                                     │
+  └─ Loads into sandbox ────────────────► Executes, completes task
+```
+
+This is autonomous procurement at machine speed. The contracts already support it via `UniversalAccountTransactionExecutor`. The market is validated by bankr/BNKR ($100M+ market cap for autonomous on-chain agents).
+
+### Marketplace Verticals Unlocked
+
+| Vertical | TAM | Timeline | Key SDK Package |
+|----------|-----|----------|-----------------|
+| Media (video, music, photos) | $10-50M/yr | Now | `@elacity-js/media-player` |
+| AI models (LLM, vision, audio) | $50-200M/yr | M3-M4 | `@elacity-js/access` + Ollama |
+| Code (plugins, packages, themes) | $20-100M/yr | M3-M4 | `@elacity-js/access` + sandbox |
+| Datasets (training data, knowledge) | $10-50M/yr | M4-M5 | `@elacity-js/access` + pipeline |
+| Software licensing (B2B) | $50-200M/yr | M5+ | `@elacity-js/access` + enterprise |
+| Agent marketplace (hire agents) | $50-500M/yr | M7+ | `@elacity-js/access` + MCP/A2A |
+| White-label (third-party marketplaces) | $100M+/yr | M5+ | Protocol SDK |
+
+Every vertical uses the same on-chain contracts. Every vertical uses the same `@elacity-js/access` package for decryption. The only difference is the consumer (what happens after decryption).
+
+---
+
+*Last updated: 2026-03-08*
 *Author: AI Development Assistant for Sasha Mitchell*

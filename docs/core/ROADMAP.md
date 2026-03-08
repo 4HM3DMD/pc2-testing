@@ -14,6 +14,8 @@ Each **Milestone** from the DAO proposal is broken down into concrete **Work Str
 **Related Documents:**
 | Document | What It Covers |
 |----------|---------------|
+| [ELACITY_UNIVERSAL_ASSET_STRATEGY.md](./ELACITY_UNIVERSAL_ASSET_STRATEGY.md) | Unicorn strategy: universal digital asset protocol, marketplace types, SDK evolution |
+| [APP_MANIFEST_SPEC.md](./APP_MANIFEST_SPEC.md) | app.json schema with dDRM capabilities, forward-compatible with Runtime |
 | [ARCHITECTURE_CONVERGENCE.md](./ARCHITECTURE_CONVERGENCE.md) | PC2 v1 → Capsule Runtime v2 technical path |
 | [SUPERNODE_ECONOMICS.md](./SUPERNODE_ECONOMICS.md) | dDRM Access Token model for supernode revenue |
 | [NETWORK_HARDENING.md](../pc2-infrastructure/NETWORK_HARDENING.md) | Supernode decentralization and self-healing |
@@ -119,7 +121,7 @@ These diagrams from Rong define the north star. Every work stream should move us
 - [x] `installed_apps` SQLite table (name, cid, version, manifest, installed_at, size, status) *(completed Mar 3)*
 - [x] AppInstallService — fetch CID from IPFS, verify, store, register *(completed Mar 3)*
 - [x] Install/uninstall/list/update API endpoints (`/api/apps/*`) *(completed Mar 3)*
-- [ ] App registry manifest format + supernode discovery endpoint
+- [x] App registry manifest format — formal `app.json` spec v1.0 with validation, categories, dDRM, forward-compatibility *(completed Mar 8)*
 - [ ] App build pipeline (Vite build → static bundle → IPFS pin → CID → registry)
 
 **Frontend Apps:**
@@ -138,6 +140,13 @@ These diagrams from Rong define the north star. Every work stream should move us
 **Creator Tools:**
 - [ ] `media-packager` integration — cloud transcode (default) + local FFmpeg (future)
 - [ ] App Factory — local packaging pipeline (build → bundle → IPFS pin → publish)
+- [ ] Creator Dashboard dApp — upload any file, set price/royalties, encrypt via Lit Protocol, list on marketplace
+
+**SDK Evolution (Universal Asset Protocol):**
+- [ ] `@elacity-js/access` package — extract Lit Protocol key retrieval from `media-player` into standalone universal access layer (THE critical unlock for non-media marketplaces)
+- [ ] `@elacity-js/asset-packager` package — generic asset encryption + IPFS upload (non-media counterpart to `media-packager`)
+- [ ] Universal metadata schema — add `asset` field alongside `media` in Channel metadata (backward compatible)
+- [ ] `AssetService` in `@elacity-js/api` — generic asset queries for any content type alongside existing `NFTService`
 
 ---
 
@@ -218,6 +227,15 @@ These diagrams from Rong define the north star. Every work stream should move us
 - [x] Marketplace UI within ElastOS (browse, purchase, download) *(completed Mar 3-4 — Elacity Market dApp)*
 - [x] Buyer node becomes seeder (CDN effect for encrypted content) *(completed Mar 5-6 — Bitswap-first + NAT traversal + relay)*
 
+**Universal Asset Marketplace (dDRM beyond media):**
+- [ ] AI Model Marketplace alpha — encrypt GGUF/SafeTensors model → IPFS → ACCESS_TOKEN → decrypt on PC2 → load in Ollama
+- [ ] Code/Plugin Marketplace — dDRM-gated npm packages, themes, extensions
+- [ ] Dataset Marketplace — dDRM-gated training datasets, knowledge bases
+- [ ] Fiat onramp — Particle Smart Account + Stripe/Moonpay for one-click credit card ACCESS_TOKEN purchase
+
+**Mobile:**
+- [ ] Lightweight mobile companion app (React Native) — connect to PC2 node via WireGuard, browse marketplace, purchase, stream/download
+
 **Supernode Decentralization:**
 - [x] Second supernode (Contabo 38.242.211.112) operational — deployed 2026-03-07
 - [x] Automated backup: InterServer → Contabo every 6 hours (SSH key auth, rsync)
@@ -277,6 +295,13 @@ These diagrams from Rong define the north star. Every work stream should move us
 - [ ] Compute/storage fee models for shared services
 - [ ] Revenue split enforcement: 80% operators, 15% protocol treasury, 5% ELA buyback
 
+**Universal Marketplace Growth:**
+- [ ] AI Model Marketplace — full launch with categories (LLM, vision, audio, multimodal)
+- [ ] Composable assets — nested licensing with dependency declarations (model A depends on dataset B, royalties flow through)
+- [ ] Enterprise DRM-as-a-Service pilot — white-label Elacity contracts for B2B software licensing
+- [ ] Data Unions — collective licensing via MultiChannel (photographer collectives, research teams, music catalogs)
+- [ ] Agent buyer support — MCP/A2A endpoints for autonomous agent procurement of ACCESS_TOKENs
+
 **Year 1 Report:**
 - [ ] Comprehensive development output report (commits, releases, features)
 - [ ] Network statistics (active nodes, transactions, uptime)
@@ -302,6 +327,12 @@ These diagrams from Rong define the north star. Every work stream should move us
 - [ ] In-ElastOS marketplace UI (browse, install, rate)
 - [ ] Capsule packaging standard (manifest, permissions, dependencies)
 - [ ] Begin extracting core services behind standardized interfaces
+
+**White-Label Protocol (Elacity-as-Infrastructure):**
+- [ ] Protocol SDK — let external developers build their own marketplaces on Elacity contracts with 1-2% protocol fee
+- [ ] Marketplace factory — deploy custom `Channel` + `AuthorityGateway` instances for niche verticals
+- [ ] Documentation for third-party marketplace builders
+- [ ] Enterprise self-hosted option (private Elacity contracts for internal digital asset management)
 
 ---
 
@@ -420,28 +451,68 @@ These diagrams from Rong define the north star. Every work stream should move us
 | Full-duplex Voice | PersonaPlex-7B or equivalent on-device voice model | 📋 Phase 3+ |
 | Runtime manages ALL network traffic | Capability-gated networking in runtime | 📋 Phase 3 |
 
-### Elacity dDRM SDK Integration Path
+### Elacity dDRM SDK Integration Path — Universal Asset Protocol
+
+> **Vision:** Elacity as the "Amazon of digital assets" — not just media, but AI models, code, datasets,
+> templates, agent skills — all gated by dDRM ACCESS_TOKENs, tradeable by humans and agents.
+> See [ELACITY_UNIVERSAL_ASSET_STRATEGY.md](./ELACITY_UNIVERSAL_ASSET_STRATEGY.md) for full strategy.
 
 ```
-Phase 1 (M2-M3):
+Phase 1 — Media Foundation (M2-M3) ✅ LARGELY COMPLETE:
   Integrate dDRM SDK → encrypted content upload → access tokens
   → marketplace UI → buyer downloads → buyer becomes seeder
+  → app.json manifest spec with dDRM capability declaration
 
-Phase 2 (M3-M4):
+Phase 2 — Universal Access Layer (M3-M4):
+  Extract @elacity-js/access from media-player (Lit Protocol key retrieval)
+  → generic decrypt-to-buffer for ANY encrypted CID
+  → AI Model Marketplace alpha (GGUF → IPFS → ACCESS_TOKEN → Ollama)
+  → Code/Plugin Marketplace, Dataset Marketplace
+  → Fiat onramp (Particle + Stripe/Moonpay)
+  → Creator Dashboard dApp (upload any file → encrypt → list)
+
+Phase 3 — Supernode Economics + White-Label (M3-M5):
   Supernode Access Tokens — dDRM SDK verifies network service access
-  → same Lit Protocol flow: "does wallet hold Access Token?" → unlock premium
-  → Access Tokens listed on Elacity Market alongside media content
-  → Media + Network bundles (streaming + premium access in one token)
+  → Access Tokens listed on Elacity Market alongside all asset types
+  → Media + Network + AI bundles (content + compute + access in one token)
+  → White-label protocol SDK for third-party marketplace builders
+  → Enterprise DRM-as-a-Service pilot
+  → Fee collection → ELA buy-pressure → royalty distribution
 
-Phase 3 (M4-M6):
-  Fee collection → ELA buy-pressure → royalty distribution
-  → creator tools (AI-generated content with rights management)
-  → operator revenue distribution based on bandwidth attestations
-
-Phase 4 (M7+):
-  dDRM as a capsule → independent versioning → third-party DRM providers
-  → cross-node content licensing → autonomous commerce
+Phase 4 — Agent Economy + Runtime (M5-M7):
+  Agent-to-agent commerce — autonomous procurement via MCP/A2A
+  → composable assets (nested licensing, dependency royalty trees)
+  → dDRM as a capsule in the Runtime → independent versioning
+  → capability tokens bridge: ACCESS_TOKEN → runtime capability grant
+  → Data Unions (collective licensing via MultiChannel)
   → supernode services as token-gated capsules in the runtime
+
+Phase 5 — Platform Scale (M7+):
+  Elacity becomes protocol infrastructure (Stripe of digital assets)
+  → multiple vertical marketplaces built on Elacity contracts
+  → agent marketplaces (deploy, discover, hire autonomous agents)
+  → cross-chain expansion (Base, Arbitrum, Solana via bridges)
+  → self-sustaining revenue from protocol fees across all verticals
+```
+
+### SDK Package Evolution
+
+```
+TODAY:
+  @elacity-js/contracts     ← Already universal (AuthorityGateway, TradeGateway, Operatives)
+  @elacity-js/api           ← Media-coupled (NFTService, ChannelService)
+  @elacity-js/media-player  ← Media-only (DASH, CENC, MSE, SharedArrayBuffer)
+  @elacity-js/media-packager← Media-only (upload, transcode, encode)
+  @elacity-js/common        ← Already universal (auth types, pagination)
+
+TARGET (M3-M5):
+  @elacity-js/contracts     ← No change needed
+  @elacity-js/api           ← Add AssetService, MarketplaceService, LicenseService
+  @elacity-js/access  (NEW) ← Universal access layer: verify + decrypt ANY asset via Lit Protocol
+  @elacity-js/asset-packager (NEW) ← Generic encrypt + IPFS upload for non-media assets
+  @elacity-js/media-player  ← Stays, becomes consumer of @elacity-js/access
+  @elacity-js/media-packager← Stays for media-specific transcoding
+  @elacity-js/common        ← Add universal asset type interfaces
 ```
 
 ### ERC-8004 Agent Registry Integration Path
@@ -501,13 +572,16 @@ Phase 3 (M7+) — Agent Economy:
 ```
 Usage → Fees → Buy ELA → Scarcity → Price Support
 
-Mechanisms:
-1. Marketplace fees (dDRM media purchases)              → M3-M4
-2. Protocol fees (in-OS transactions)                   → M4
-3. Supernode Access Token sales (dDRM access model)     → M3-M4
-4. Media + Network bundles (streaming + premium access) → M4-M7
-5. Compute/storage fees                                 → M7+
-6. Agent-to-agent transaction fees                      → M9+
+Mechanisms (Universal Asset Protocol — all verticals contribute):
+1. Media marketplace fees (dDRM purchases)              → M3-M4   (TAM: $10-50M/yr)
+2. AI model marketplace fees                            → M3-M4   (TAM: $50-200M/yr)
+3. Code/plugin/dataset marketplace fees                 → M4-M5   (TAM: $20-100M/yr)
+4. Supernode Access Token sales (network services)      → M3-M4   (TAM: $5-20M/yr)
+5. Protocol fees (in-OS transactions)                   → M4
+6. White-label protocol fees (third-party marketplaces) → M5+     (TAM: $100M+/yr)
+7. Enterprise DRM-as-a-Service                          → M5+     (TAM: $50-200M/yr)
+8. Agent-to-agent transaction fees                      → M7+     (TAM: $50-500M/yr)
+9. Compute/storage fees                                 → M7+
 
 Revenue split (Access Tokens):
   80% → supernode operators (proportional to bandwidth served)
@@ -517,6 +591,7 @@ Revenue split (Access Tokens):
 All fees → pool → market-buy ELA from DEX LPs
 
 See docs/core/SUPERNODE_ECONOMICS.md for full strategy.
+See docs/core/ELACITY_UNIVERSAL_ASSET_STRATEGY.md for marketplace vision.
 ```
 
 ---
@@ -528,14 +603,14 @@ Starting Month 1 (March 2026):
 | Release | Target | Focus |
 |---------|--------|-------|
 | v1.1.0 | March 2026 | Merge Jetson branch, bug fixes, AV1 player |
-| v1.2.0 | April 2026 | Hardware expansion, installer improvements |
-| v1.3.0 | May 2026 | Voice interaction prototype (Whisper + Ollama + TTS), Context API endpoint |
-| v1.4.0 | June 2026 | P2P messaging foundation, dDRM SDK integration begins, memory store alpha |
-| v1.5.0 | July 2026 | dDRM marketplace alpha |
-| v1.6.0 | August 2026 | Supernode expansion, premium tiers |
-| v1.7.0 | September 2026 | Protocol fees alpha, node economics |
-| v1.8.0 | October 2026 | Developer SDK, extension system |
-| v1.9.0 | November 2026 | Capsule marketplace alpha |
+| v1.2.0 | April 2026 | Hardware expansion, installer improvements, WireGuard bundling |
+| v1.3.0 | May 2026 | `@elacity-js/access` package, Creator Dashboard dApp, fiat onramp |
+| v1.4.0 | June 2026 | AI Model Marketplace alpha, `@elacity-js/asset-packager`, P2P messaging |
+| v1.5.0 | July 2026 | Universal marketplace (code, datasets), mobile companion app alpha |
+| v1.6.0 | August 2026 | Supernode Access Tokens, premium tiers, bandwidth metering |
+| v1.7.0 | September 2026 | Protocol fees alpha, white-label SDK alpha, enterprise pilot |
+| v1.8.0 | October 2026 | Developer SDK, composable assets (nested licensing) |
+| v1.9.0 | November 2026 | Agent buyer support (MCP/A2A), capsule marketplace alpha |
 | v1.10.0 | December 2026 | Year 1 hardening + comprehensive review |
 
 *Releases beyond v1.10.0 defined based on Year 1 learnings.*

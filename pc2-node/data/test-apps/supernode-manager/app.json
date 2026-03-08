@@ -33,6 +33,6 @@
     "channel": "stable"
   },
 
-  "category": "System",
+  "category": "system",
   "system": true
 }

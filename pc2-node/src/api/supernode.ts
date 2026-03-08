@@ -167,6 +167,55 @@ router.post('/relay/settings', authenticate, (req: AuthenticatedRequest, res: Re
   });
 });
 
+/**
+ * GET /api/supernode/wireguard/status
+ * Check WireGuard binary availability and permission state.
+ */
+router.get('/wireguard/status', authenticate, (_req: AuthenticatedRequest, res: Response) => {
+  const wgService = (global as any).wireguardService;
+  if (!wgService) {
+    res.json({
+      available: false,
+      mode: 'none',
+      sudoConfigured: false,
+      binaries: {},
+      message: 'WireGuard service not initialized',
+    });
+    return;
+  }
+
+  res.json({
+    available: wgService.mode !== 'none',
+    mode: wgService.mode,
+    sudoConfigured: wgService.sudoConfigured,
+    binaries: {
+      wg: wgService.resolvedWgPath || null,
+      wgQuick: wgService.resolvedWgQuickPath || null,
+      wireguardGo: wgService.resolvedWgGoPath || null,
+    },
+    instructions: wgService.sudoConfigured ? null : wgService.getPermissionInstructions(),
+  });
+});
+
+/**
+ * POST /api/supernode/wireguard/setup-permissions
+ * Trigger OS-level permission setup for WireGuard (sudoers entry).
+ * On macOS, shows a native authentication dialog.
+ */
+router.post('/wireguard/setup-permissions', authenticate, async (_req: AuthenticatedRequest, res: Response) => {
+  const wgService = (global as any).wireguardService;
+  if (!wgService) {
+    res.status(500).json({ success: false, message: 'WireGuard service not initialized' });
+    return;
+  }
+  try {
+    const result = await wgService.setupPermissions();
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 export function createSupernodeRouter() {
   return router;
 }

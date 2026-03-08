@@ -15,9 +15,11 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
-import { join } from 'path';
+import { join, dirname } from 'path';
 import { execSync, exec } from 'child_process';
+import { fileURLToPath } from 'url';
 import { logger } from '../../utils/logger.js';
+import { checkWireGuardPermissions, setupWireGuardSudoers, getManualSetupInstructions } from './setupPermissions.js';
 
 export interface WireGuardConfig {
   dataDir: string;
@@ -76,26 +78,162 @@ export class WireGuardService {
   }
 
   private static isMacOS = process.platform === 'darwin';
+  private static isWindows = process.platform === 'win32';
+
+  private wgBinPath: string | null = null;
+  private wgQuickBinPath: string | null = null;
+  private wgGoBinPath: string | null = null;
+  private _sudoConfigured = false;
 
   /**
-   * Check if WireGuard tools (wg, wg-quick) are installed on this system.
-   * Also detects whether WireGuard runs in kernel mode or userspace.
-   * Checks additional paths for macOS (Homebrew on Apple Silicon + Intel).
+   * Resolve the bundled binaries directory for the current platform.
+   * Binaries ship at pc2-node/bin/{platform}-{arch}/ alongside the app.
+   */
+  private static getBundledBinDir(): string {
+    const thisFile = typeof __dirname !== 'undefined'
+      ? __dirname
+      : dirname(fileURLToPath(import.meta.url));
+    // From src/services/wireguard/ → ../../.. → pc2-node root
+    const appRoot = join(thisFile, '..', '..', '..');
+    return join(appRoot, 'bin', `${process.platform}-${process.arch}`);
+  }
+
+  /**
+   * Find a binary by checking bundled path first, then well-known system paths.
+   * On Windows, also checks Program Files and common install locations.
+   */
+  private findBinary(name: string, extraPaths: string[] = []): string | null {
+    const bundled = join(WireGuardService.getBundledBinDir(), WireGuardService.isWindows ? `${name}.exe` : name);
+    if (existsSync(bundled)) return bundled;
+
+    for (const p of extraPaths) {
+      if (existsSync(p)) return p;
+    }
+
+    if (!WireGuardService.isWindows) {
+      try {
+        const found = execSync(`which ${name} 2>/dev/null`, { stdio: 'pipe', shell: '/bin/sh' }).toString().trim();
+        if (found && existsSync(found)) return found;
+      } catch { /* not on PATH */ }
+    }
+
+    return null;
+  }
+
+  /**
+   * Check if WireGuard tools are available on this system.
+   *
+   * Search order:
+   *   1. Bundled binaries (pc2-node/bin/{platform}-{arch}/)
+   *   2. Platform-specific well-known paths (Program Files, Homebrew, /usr/bin)
+   *   3. System PATH via `which`
+   *
+   * On Windows, uses wireguard.exe /installtunnelservice instead of wg-quick.
    */
   isAvailable(): boolean {
-    const wgPaths = 'which wg || test -x /usr/bin/wg || test -x /opt/homebrew/bin/wg || test -x /usr/local/bin/wg';
-    const wgQuickPaths = 'which wg-quick || test -x /usr/bin/wg-quick || test -x /opt/homebrew/bin/wg-quick || test -x /usr/local/bin/wg-quick';
+    if (WireGuardService.isWindows) {
+      return this.detectWindowsWireGuard();
+    }
 
-    try {
-      execSync(wgPaths, { stdio: 'pipe', shell: '/bin/sh' });
-      execSync(wgQuickPaths, { stdio: 'pipe', shell: '/bin/sh' });
-    } catch {
+    const wgExtraPaths = [
+      '/usr/bin/wg', '/usr/local/bin/wg',
+      '/opt/homebrew/bin/wg', '/usr/sbin/wg',
+    ];
+    const wgQuickExtraPaths = [
+      '/usr/bin/wg-quick', '/usr/local/bin/wg-quick',
+      '/opt/homebrew/bin/wg-quick', '/usr/sbin/wg-quick',
+    ];
+
+    this.wgBinPath = this.findBinary('wg', wgExtraPaths);
+    this.wgQuickBinPath = this.findBinary('wg-quick', wgQuickExtraPaths);
+
+    if (!this.wgBinPath || !this.wgQuickBinPath) {
+      logger.info(`[WireGuard] Tools not found (wg: ${this.wgBinPath ? 'found' : 'missing'}, wg-quick: ${this.wgQuickBinPath ? 'found' : 'missing'})`);
       this._mode = 'none';
       return false;
     }
 
+    logger.info(`[WireGuard] Found wg: ${this.wgBinPath}`);
+    logger.info(`[WireGuard] Found wg-quick: ${this.wgQuickBinPath}`);
+
     this._mode = this.detectMode();
+
+    if (this._mode !== 'none') {
+      const perms = checkWireGuardPermissions(this.wgQuickBinPath!);
+      this._sudoConfigured = perms.sudoConfigured;
+      if (!perms.sudoConfigured) {
+        logger.warn(`[WireGuard] ${perms.message}`);
+      }
+    }
+
     return this._mode !== 'none';
+  }
+
+  get sudoConfigured(): boolean { return this._sudoConfigured; }
+  get mode(): WireGuardMode { return this._mode; }
+  get resolvedWgPath(): string | null { return this.wgBinPath; }
+  get resolvedWgQuickPath(): string | null { return this.wgQuickBinPath; }
+  get resolvedWgGoPath(): string | null { return this.wgGoBinPath; }
+
+  /**
+   * Attempt to install sudoers entries so wg-quick can run without a password prompt.
+   * On macOS this shows a native authorization dialog; on Linux it tries sudo tee.
+   */
+  async setupPermissions(): Promise<{ success: boolean; message: string }> {
+    if (WireGuardService.isWindows || this._sudoConfigured) {
+      return { success: true, message: 'Already configured' };
+    }
+    if (!this.wgQuickBinPath) {
+      return { success: false, message: 'wg-quick binary not found' };
+    }
+    const result = await setupWireGuardSudoers(this.wgQuickBinPath, this.wgGoBinPath || undefined);
+    if (result.success) this._sudoConfigured = true;
+    return result;
+  }
+
+  /**
+   * Get human-readable manual instructions for setting up sudo permissions.
+   */
+  getPermissionInstructions(): string {
+    return getManualSetupInstructions(
+      this.wgQuickBinPath || 'wg-quick',
+      this.wgGoBinPath || undefined,
+    );
+  }
+
+  /**
+   * Detect WireGuard on Windows. Checks:
+   *   - Bundled bin/win32-x64/wg.exe
+   *   - Standard install at C:\Program Files\WireGuard\wg.exe
+   *   - User-installed at %LOCALAPPDATA%\WireGuard\
+   */
+  private detectWindowsWireGuard(): boolean {
+    const programFiles = process.env.ProgramFiles || 'C:\\Program Files';
+    const localAppData = process.env.LOCALAPPDATA || '';
+
+    const winWgPaths = [
+      join(programFiles, 'WireGuard', 'wg.exe'),
+      ...(localAppData ? [join(localAppData, 'WireGuard', 'wg.exe')] : []),
+    ];
+
+    this.wgBinPath = this.findBinary('wg', winWgPaths);
+
+    if (!this.wgBinPath) {
+      logger.info('[WireGuard] Windows: wg.exe not found');
+      this._mode = 'none';
+      return false;
+    }
+
+    // On Windows, wireguard.exe (tunnel service manager) should be alongside wg.exe
+    const wgDir = dirname(this.wgBinPath);
+    const wireguardExe = join(wgDir, 'wireguard.exe');
+    if (existsSync(wireguardExe)) {
+      this.wgQuickBinPath = wireguardExe;
+    }
+
+    logger.info(`[WireGuard] Windows: found wg.exe at ${this.wgBinPath}`);
+    this._mode = 'userspace';
+    return true;
   }
 
   /**
@@ -128,28 +266,40 @@ export class WireGuardService {
       // Module not found -- expected on Jetson with NVIDIA custom kernel
     }
 
-    // Fall back to userspace if wireguard-go is installed
-    try {
-      execSync('which wireguard-go || test -x /usr/local/bin/wireguard-go', { stdio: 'pipe', shell: '/bin/sh' });
-      logger.info('[WireGuard] Kernel module unavailable, using wireguard-go (userspace)');
+    // Fall back to userspace if wireguard-go is installed (bundled or system)
+    this.wgGoBinPath = this.findBinary('wireguard-go', [
+      '/usr/local/bin/wireguard-go', '/usr/bin/wireguard-go',
+    ]);
+    if (this.wgGoBinPath) {
+      logger.info(`[WireGuard] Kernel module unavailable, using wireguard-go at ${this.wgGoBinPath}`);
       return 'userspace';
-    } catch {
-      logger.warn('[WireGuard] Neither kernel module nor wireguard-go available');
-      return 'none';
     }
+
+    logger.warn('[WireGuard] Neither kernel module nor wireguard-go available');
+    return 'none';
   }
 
   /**
-   * Build a sudo wg-quick command string.
-   * On Linux userspace mode, sets WG_QUICK_USERSPACE_IMPLEMENTATION via sudo -E
-   * so wg-quick knows to use wireguard-go instead of the kernel module.
-   * On macOS, wg-quick uses the built-in utun driver natively -- no env var needed.
+   * Build a command string to bring WireGuard interfaces up/down.
+   *
+   * - macOS: `sudo <wg-quick-path> up <conf>` (utun driver, no env var needed)
+   * - Linux kernel: `sudo <wg-quick-path> up <conf>`
+   * - Linux userspace: `WG_QUICK_USERSPACE_IMPLEMENTATION=<wireguard-go-path> sudo -E <wg-quick-path> up <conf>`
+   * - Windows: `<wireguard.exe> /installtunnelservice <conf>` (runs as SYSTEM, no sudo)
    */
   private wgQuickCmd(action: 'up' | 'down', confPath: string): string {
-    if (this._mode === 'userspace' && !WireGuardService.isMacOS) {
-      return `WG_QUICK_USERSPACE_IMPLEMENTATION=wireguard-go sudo -E wg-quick ${action} ${confPath}`;
+    const wqPath = this.wgQuickBinPath || 'wg-quick';
+
+    if (WireGuardService.isWindows) {
+      const winAction = action === 'up' ? '/installtunnelservice' : '/uninstalltunnelservice';
+      return `"${wqPath}" ${winAction} "${confPath}"`;
     }
-    return `sudo wg-quick ${action} ${confPath}`;
+
+    if (this._mode === 'userspace' && !WireGuardService.isMacOS) {
+      const wgGoPath = this.wgGoBinPath || 'wireguard-go';
+      return `WG_QUICK_USERSPACE_IMPLEMENTATION=${wgGoPath} sudo -E ${wqPath} ${action} ${confPath}`;
+    }
+    return `sudo ${wqPath} ${action} ${confPath}`;
   }
 
   /**
@@ -169,10 +319,12 @@ export class WireGuardService {
     }
 
     logger.info('[WireGuard] Generating new keypair...');
-    const privateKey = execSync('wg genkey', { stdio: 'pipe' }).toString().trim();
-    const publicKey = execSync(`echo "${privateKey}" | wg pubkey`, {
+    const wgBin = this.wgBinPath || 'wg';
+    const shellOpt = WireGuardService.isWindows ? 'cmd.exe' : '/bin/sh';
+    const privateKey = execSync(`"${wgBin}" genkey`, { stdio: 'pipe', shell: shellOpt }).toString().trim();
+    const publicKey = execSync(`echo "${privateKey}" | "${wgBin}" pubkey`, {
       stdio: 'pipe',
-      shell: '/bin/sh',
+      shell: shellOpt,
     }).toString().trim();
 
     writeFileSync(this.privateKeyPath, privateKey + '\n', { mode: 0o600 });

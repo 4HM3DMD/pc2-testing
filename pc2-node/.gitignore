@@ -4,6 +4,9 @@ node_modules/
 # Build output
 dist/
 
+# Bundled platform binaries (fetched via scripts/fetch-binaries.sh)
+bin/
+
 # Compiled TypeScript in src/ (source is .ts, compiled goes to dist/)
 src/**/*.js
 src/**/*.js.map

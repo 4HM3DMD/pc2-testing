@@ -93,9 +93,9 @@
 - [x] Supernode Manager dApp in dApp Center — spec check, service status, network view
 - [x] Networking fix script (`scripts/fix-networking.sh`) — standalone WG+AWG+VLESS installer for community
 
-**Deployed:** Gateway v2.0 on Contabo only. InterServer still on v1.0 (untouched).
-**Tested:** All gossip/register/heartbeat endpoints verified on Contabo. Local dev node verified.
-**Pending:** InterServer gateway upgrade (waiting for explicit go-ahead — purely additive, 2-3s restart).
+**Deployed:** Gateway v2.0 on both InterServer and Contabo (Mar 8).
+**Tested:** All gossip/register/heartbeat endpoints verified. 84 users, 16 WireGuard peers, 4 supernodes confirmed after InterServer upgrade.
+**InterServer upgrade:** Completed Mar 8 — backup at `/root/pc2/web-gateway/index.js.bak`.
 
 #### Known Community Issue (Mar 8) — "Keeps Initializing" on Remote Connect
 **Scope:** 21 broken users (proxy:// endpoints), 10 working (WireGuard). Verified on InterServer registry.
@@ -112,17 +112,82 @@
 - **Chelsea (Ubuntu VM x86):** Will run `cd ~/pc2.net && git pull && bash scripts/start-local.sh` tomorrow (Mar 9).
 - **Other affected users (19+):** Same root cause. Post fix commands in community once Werolo/Chelsea confirm.
 
+#### WireGuard Bundling — Phase 1 COMPLETE, Phase 2 IN PROGRESS (Mar 8)
+**Phase 1 (detection infrastructure) — COMPLETE:**
+- [x] Bundled binary detection — `WireGuardService`, `AmneziaWGService`, `VLESSRealityService` check `pc2-node/bin/{platform}-{arch}/` first
+- [x] Windows WireGuard support — `wireguard.exe /installtunnelservice` path
+- [x] `scripts/fetch-binaries.sh` — downloads/compiles `wg`, `wg-quick`, `wireguard-go`, `sing-box` for all platforms
+- [x] Permission setup module — `setupPermissions.ts` with macOS `osascript` auth dialog, Linux sudoers.d, manual instructions
+- [x] API endpoints — `GET /api/supernode/wireguard/status`, `POST /api/supernode/wireguard/setup-permissions`
+- [x] `.gitignore` updated — `bin/` excluded from git
+
+**Phase 2 (runtime auto-provisioning) — COMPLETE (Mar 8):**
+- [x] `BinaryManager` (`pc2-node/src/utils/binary-manager.ts`) — auto-downloads missing transport binaries on first startup
+- [x] `fetch-binaries.sh` enhanced — now also cross-compiles `amneziawg-go` and `awg-quick` for all platforms
+- [x] Integrated into `BosonService.initialize()` — runs before WG/AWG/VLESS service detection
+- [x] Safety net design — install scripts untouched, BinaryManager only downloads if binary genuinely missing
+- [x] Platform support: darwin-arm64, darwin-x64, linux-arm64, linux-x64, win32-x64
+
+**Pending:**
+- [ ] Create GitHub release `pc2-binaries-v1` with pre-compiled binaries for all platforms
+- [ ] Gateway "node offline" page — deferred; replaces infinite "initializing" with friendly HTML + auto-retry
+
+**Verified:** `wg`, `wg-quick`, `wireguard-go`, `sing-box` all detected from bundled paths in dev node logs (darwin-arm64).
+
+> **PRE-MERGE CHECKLIST — Do this BEFORE merging branch to main:**
+> 1. On your Mac, run: `bash pc2-node/scripts/fetch-binaries.sh all`
+>    - This cross-compiles wireguard-go, amneziawg-go, awg-quick, and downloads sing-box for all 5 platforms
+>    - Output lands in `pc2-node/bin/` (gitignored, not committed)
+> 2. Go to GitHub > Elacity/pc2.net > Releases > "Create a new release"
+>    - Tag: `pc2-binaries-v1`
+>    - Title: "PC2 Transport Binaries v1"
+>    - Upload ALL files from `pc2-node/bin/` as release assets, named as:
+>      - `wireguard-go-{platform}-{arch}` (e.g. `wireguard-go-linux-arm64`)
+>      - `amneziawg-go-{platform}-{arch}` (e.g. `amneziawg-go-darwin-arm64`)
+>      - `awg-quick-{platform}` (e.g. `awg-quick-linux`)
+>      - sing-box is downloaded directly from SagerNet releases, no upload needed
+>    - Publish the release
+> 3. Then merge branch to main
+>
+> **Why:** The BinaryManager in `pc2-node/src/utils/binary-manager.ts` downloads from these URLs
+> at startup when binaries are missing. Without the release, downloads return 404 (safe — just
+> logs a warning and continues, same behavior as today). With the release, any missing binary
+> is auto-downloaded on first PC2 startup.
+
+#### App Manifest Specification — COMPLETE (Mar 8)
+- [x] `docs/core/APP_MANIFEST_SPEC.md` — formal spec v1.0 with field reference, validation rules, examples
+- [x] Expanded `AppManifest` interface — added `category`, `system`, `capabilities.drm`, `distribution.signedBy`, expanded `type` to include `microvm`/`agent`
+- [x] Enhanced `validateManifest()` — semver enforcement, entry path safety (backslash check), length limits, capability type warnings
+- [x] All 5 test-app `app.json` files updated — categories, `drm: true` for Elacity apps
+- [x] Registry entries updated — `category` at app level, `drm: true` in capabilities
+- [x] Forward-compatible with: Elacity dDRM SDK, ElastOS Runtime (capsules + capability tokens), ERC-8004 Agent Registry
+- [x] Vision documented: Elacity as universal digital asset marketplace (media, AI models, code, datasets, agents) for humans and agents
+
+#### Universal Asset Strategy — DOCUMENTED (Mar 8)
+- [x] `docs/core/ELACITY_UNIVERSAL_ASSET_STRATEGY.md` — full strategy: Elacity as "Amazon of digital assets"
+- [x] SDK evolution plan: `@elacity-js/access` (universal decrypt), `@elacity-js/asset-packager` (generic encryption)
+- [x] Marketplace verticals mapped: media, AI models, code, datasets, software, agents (with TAMs)
+- [x] Revenue model: 7+ fee streams from media to white-label to enterprise DRM-as-a-Service
+- [x] Strategic blind spots documented: agent-to-agent commerce, composable assets, fiat onramp, mobile, enterprise B2B, creator tools, data unions
+- [x] ROADMAP.md updated with SDK evolution milestones, AI model marketplace, mobile app, fiat onramp, white-label protocol, universal marketplace scaling
+- [x] ARCHITECTURE_CONVERGENCE.md Part 15 added — dDRM as universal access layer, ACCESS_TOKEN-to-capability-token bridge, agent-to-agent commerce
+- [x] APP_MANIFEST_SPEC.md updated — universal asset metadata schema (`asset` field alongside `media`), 12 asset types defined
+
 #### Next Up (Priority Order)
 1. **Verify community fix** — confirm Werolo and Chelsea's domains work remotely after install
-2. **InterServer gateway upgrade to v2.0** — waiting for explicit go-ahead, purely additive, 2-3s restart
-3. **WireGuard bundling** — bundle `wg`, `wg-quick`, `wireguard-go`, `amneziawg-go`, `sing-box` binaries with the PC2 app so no user ever falls back to broken ActiveProxy. See plan: `fix_wireguard_bundling_d5a881fa`. Includes:
-   - Gateway "node offline" page (replaces infinite "initializing")
-   - Windows WireGuard support (`wireguard.exe /installtunnelservice`)
-   - Auto-sudoers setup on first use
-4. **Test bootstrap script on a fresh VPS** — validate one-command supernode deployment
-5. **App registry manifest format** — `app.json` schema for decentralized app distribution
-6. **App Factory** — local packaging pipeline (build -> bundle -> IPFS pin -> publish)
-7. **dDRM Access Token contract** — ERC-1155 tiered tokens for supernode economics (deferred to Milestone 3-4)
+2. ~~**InterServer gateway upgrade to v2.0**~~ — DONE (Mar 8, 08:08 UTC). Backup at `index.js.bak`.
+3. ~~**WireGuard binary bundling (BinaryManager)**~~ — DONE (Mar 8). Runtime auto-download of transport binaries.
+4. ~~**App registry manifest format**~~ — DONE (Mar 8). Formal spec at `docs/core/APP_MANIFEST_SPEC.md`.
+5. ~~**Universal asset strategy**~~ — DONE (Mar 8). Full strategy at `docs/core/ELACITY_UNIVERSAL_ASSET_STRATEGY.md`.
+6. **Create GitHub release `pc2-binaries-v1`** — run `fetch-binaries.sh all`, upload assets to release
+7. **`@elacity-js/access` package** — extract Lit Protocol from media-player into universal access layer (THE critical SDK unlock)
+8. **Creator Dashboard dApp** — upload any file, set price/royalties, encrypt, list on marketplace
+9. **AI Model Marketplace alpha** — encrypt GGUF model -> IPFS -> ACCESS_TOKEN -> decrypt -> Ollama
+10. **Fiat onramp** — Particle Smart Account + Stripe/Moonpay for one-click credit card purchases
+11. **Gateway "node offline" page** — deferred; replaces infinite "initializing" spinner with friendly error + retry
+12. **Test bootstrap script on a fresh VPS** — validate one-command supernode deployment
+13. **App Factory** — local packaging pipeline (build -> bundle -> IPFS pin -> publish)
+14. **dDRM Access Token contract** — ERC-1155 tiered tokens for supernode economics (deferred to Milestone 3-4)
 
 ### Supernode Infrastructure
 
@@ -171,6 +236,8 @@
 | **Agent Handover** | `docs/core/AGENT_HANDOVER.md` | Coding patterns, infrastructure |
 | **Roadmap** | `docs/core/ROADMAP.md` | All milestones with checkboxes |
 | **Architecture** | `docs/core/ARCHITECTURE_CONVERGENCE.md` | PC2 v1 -> capsule runtime v2 |
+| **Universal Asset Strategy** | `docs/core/ELACITY_UNIVERSAL_ASSET_STRATEGY.md` | Unicorn strategy, marketplace verticals, SDK evolution, revenue model |
+| **App Manifest Spec** | `docs/core/APP_MANIFEST_SPEC.md` | app.json schema, field reference, validation rules |
 | **Supernode Economics** | `docs/core/SUPERNODE_ECONOMICS.md` | dDRM Access Token model, three-tier architecture |
 | **Network Hardening** | `docs/pc2-infrastructure/NETWORK_HARDENING.md` | Scale tiers, fragile points, supernode inventory |
 | **Stealth Mode** | `docs/deployment/STEALTH_MODE.md` | Transport cascade docs |

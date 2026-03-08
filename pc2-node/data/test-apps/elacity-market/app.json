@@ -11,12 +11,14 @@
   "icon": "assets/favicon.png",
   "entry": "index.html",
   "type": "web",
+  "category": "marketplace",
 
   "capabilities": {
     "wallet": true,
     "network": true,
     "ipfs": { "pin": true, "fetch": true },
-    "ipc": ["launchApp", "openFolder"]
+    "ipc": ["launchApp", "openFolder"],
+    "drm": true
   },
 
   "requirements": {

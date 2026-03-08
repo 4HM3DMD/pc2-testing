@@ -27,6 +27,27 @@ export interface AppAuthor {
   url?: string;
 }
 
+export type AppType = 'web' | 'wasm' | 'data' | 'microvm' | 'agent';
+
+export type AppCategory =
+  | 'media'
+  | 'blockchain'
+  | 'tools'
+  | 'system'
+  | 'games'
+  | 'social'
+  | 'ai'
+  | 'marketplace'
+  | 'other';
+
+const VALID_APP_TYPES: readonly string[] = ['web', 'wasm', 'data', 'microvm', 'agent'];
+
+const VALID_CATEGORIES: readonly string[] = [
+  'media', 'blockchain', 'tools', 'system', 'games', 'social', 'ai', 'marketplace', 'other',
+];
+
+const SEMVER_REGEX = /^\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?(\+[a-zA-Z0-9.]+)?$/;
+
 export interface AppCapabilities {
   wallet?: boolean;
   network?: boolean;
@@ -39,6 +60,7 @@ export interface AppCapabilities {
     fetch?: boolean;
   };
   ipc?: string[];
+  drm?: boolean;
 }
 
 export interface AppDisplay {
@@ -60,6 +82,7 @@ export interface AppService {
 export interface AppDistribution {
   cid?: string | null;
   signature?: string | null;
+  signedBy?: string | null;
   channel?: 'stable' | 'beta' | 'dev';
   updateUrl?: string | null;
   size?: number | null;
@@ -75,7 +98,9 @@ export interface AppManifest {
   icon?: string;
   screenshots?: string[];
   entry?: string;
-  type?: 'web' | 'wasm' | 'data';
+  type?: AppType;
+  category?: AppCategory;
+  system?: boolean;
 
   capabilities?: AppCapabilities;
 
@@ -295,24 +320,70 @@ export class AppInstallService {
     if (!manifest.name || typeof manifest.name !== 'string') {
       throw new Error('Manifest missing required field: name');
     }
+    if (manifest.name.length > 64) {
+      throw new Error(`App name exceeds 64 character limit (${manifest.name.length})`);
+    }
     if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(manifest.name)) {
       throw new Error('App name must be lowercase alphanumeric with hyphens (e.g. "media-player")');
     }
+
     if (!manifest.title || typeof manifest.title !== 'string') {
       throw new Error('Manifest missing required field: title');
     }
+    if (manifest.title.length > 128) {
+      throw new Error(`App title exceeds 128 character limit (${manifest.title.length})`);
+    }
+
     if (!manifest.version || typeof manifest.version !== 'string') {
       throw new Error('Manifest missing required field: version');
     }
+    if (!SEMVER_REGEX.test(manifest.version)) {
+      throw new Error(`Invalid version "${manifest.version}" — must be semver (e.g. "1.0.0")`);
+    }
+
+    if (manifest.description && manifest.description.length > 500) {
+      throw new Error(`Description exceeds 500 character limit (${manifest.description.length})`);
+    }
+
     if (manifest.entry) {
       this.validateSafePath(manifest.entry);
+    }
+
+    if (manifest.type && !VALID_APP_TYPES.includes(manifest.type)) {
+      log.warn(`[validateManifest] Unknown type "${manifest.type}" for app "${manifest.name}"`);
+    }
+
+    if (manifest.category && !VALID_CATEGORIES.includes(manifest.category)) {
+      log.warn(`[validateManifest] Unknown category "${manifest.category}" for app "${manifest.name}"`);
+    }
+
+    if (manifest.capabilities) {
+      this.validateCapabilities(manifest.capabilities, manifest.name);
     }
   }
 
   private validateSafePath(entry: string): void {
     const normalized = normalize(entry);
-    if (normalized.startsWith('..') || normalized.startsWith('/') || normalized.includes('..')) {
+    if (normalized.startsWith('..') || normalized.startsWith('/') || normalized.includes('\\') || normalized.includes('..')) {
       throw new Error(`Unsafe entry path: "${entry}"`);
+    }
+  }
+
+  private validateCapabilities(caps: AppCapabilities, appName: string): void {
+    const booleanFields: (keyof AppCapabilities)[] = ['wallet', 'network', 'drm'];
+    for (const field of booleanFields) {
+      if (caps[field] !== undefined && typeof caps[field] !== 'boolean') {
+        log.warn(`[validateManifest] capabilities.${field} should be boolean in "${appName}"`);
+      }
+    }
+    if (caps.ipc !== undefined && !Array.isArray(caps.ipc)) {
+      log.warn(`[validateManifest] capabilities.ipc should be a string array in "${appName}"`);
+    }
+    if (caps.storage !== undefined && typeof caps.storage !== 'object') {
+      log.warn(`[validateManifest] capabilities.storage should be an object in "${appName}"`);
+    }
+    if (caps.ipfs !== undefined && typeof caps.ipfs !== 'object') {
+      log.warn(`[validateManifest] capabilities.ipfs should be an object in "${appName}"`);
     }
   }
 
