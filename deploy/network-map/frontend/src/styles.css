@@ -166,12 +166,13 @@ body {
 
 /* Network visualization container */
 .network-map {
-  background: var(--bg-secondary);
+  background: var(--bg-primary);
   border: 1px solid var(--border);
   border-radius: 16px;
   overflow: hidden;
-  height: 500px;
+  height: 620px;
   position: relative;
+  box-shadow: inset 0 0 80px rgba(0, 0, 0, 0.5);
 }
 
 .network-map-loading {
@@ -444,8 +445,8 @@ body {
 }
 
 .graph-section.fixed-height {
-  height: 500px;
-  min-height: 400px;
+  height: 620px;
+  min-height: 500px;
 }
 
 .graph-section.fixed-height .network-map {
@@ -666,9 +667,14 @@ body {
   animation: pulse 2s ease-in-out infinite;
 }
 
-.status-indicator.offline,
+.status-indicator.offline {
+  background: #f59e0b;
+  opacity: 0.7;
+}
+
 .status-indicator.stale {
-  background: #555;
+  background: #ef4444;
+  opacity: 0.5;
 }
 
 .col-id {
@@ -718,12 +724,20 @@ body {
   height: 12px;
 }
 
+@keyframes borderGlow {
+  0%, 100% { border-color: rgba(240, 185, 11, 0.2); }
+  33% { border-color: rgba(34, 197, 94, 0.2); }
+  66% { border-color: rgba(56, 189, 248, 0.15); }
+}
+
 .graph-section {
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
+  background: var(--bg-primary);
+  border: 1px solid rgba(240, 185, 11, 0.2);
   border-radius: 12px;
   overflow: hidden;
   position: relative;
+  animation: borderGlow 8s ease-in-out infinite;
+  box-shadow: 0 0 30px rgba(240, 185, 11, 0.03), 0 0 60px rgba(0, 0, 0, 0.4);
 }
 
 .graph-help {
@@ -777,8 +791,14 @@ body {
   box-shadow: 0 0 4px var(--success);
 }
 
+.legend-dot.peer {
+  background: #38bdf8;
+  box-shadow: 0 0 4px #38bdf8;
+}
+
 .legend-dot.offline {
-  background: #555;
+  background: #f59e0b;
+  opacity: 0.7;
 }
 
 .graph-section .network-map {
@@ -989,7 +1009,7 @@ body {
   }
   
   .network-map {
-    height: 300px;
+    height: 400px;
   }
   
   /* Fix overlapping elements on mobile */
@@ -1017,12 +1037,12 @@ body {
     display: flex;
     flex-direction: column;
     height: auto;
-    min-height: 350px;
+    min-height: 400px;
   }
   
   .graph-section .network-map {
     flex: 1;
-    min-height: 280px;
+    min-height: 360px;
   }
   
   .stats-bar {

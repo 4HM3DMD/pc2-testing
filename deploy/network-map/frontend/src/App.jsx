@@ -112,6 +112,7 @@ function App() {
               <div className="graph-legend">
                 <div className="legend-item"><span className="legend-dot supernode"></span>Supernode</div>
                 <div className="legend-item"><span className="legend-dot online"></span>Online</div>
+                <div className="legend-item"><span className="legend-dot peer"></span>Peer Link</div>
                 <div className="legend-item"><span className="legend-dot offline"></span>Offline</div>
               </div>
               <div className="privacy-badge">

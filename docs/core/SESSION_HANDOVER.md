@@ -173,6 +173,16 @@
 - [x] ARCHITECTURE_CONVERGENCE.md Part 15 added — dDRM as universal access layer, ACCESS_TOKEN-to-capability-token bridge, agent-to-agent commerce
 - [x] APP_MANIFEST_SPEC.md updated — universal asset metadata schema (`asset` field alongside `media`), 12 asset types defined
 
+#### Network Map Visual Upgrade — DEPLOYED (Mar 8)
+- [x] Decentralized topology: full supernode mesh, round-robin PC2 distribution, peer-to-peer links, offline faint links
+- [x] Core vs carrier supernodes: InterServer (`supernode_J1h7RHv5`) + Contabo (`supernode_EbfCHQUf`) are large hubs; Boson relay nodes are smaller
+- [x] Particle flow on all active links (gold backbone, green node-to-super, cyan peer)
+- [x] Animated node painting: pulsing supernode halos, breathing glow on online PC2 nodes
+- [x] Offline nodes are orange (sleeping laptops), stale nodes are dim red
+- [x] Background ambient effects: dot grid + radial glow zones behind each supernode
+- [x] Deployed to https://map.ela.city/ — frontend-only update, server/API untouched
+- [x] Backup at `/root/pc2/network-map/frontend/dist.bak`
+
 #### Next Up (Priority Order)
 1. **Verify community fix** — confirm Werolo and Chelsea's domains work remotely after install
 2. ~~**InterServer gateway upgrade to v2.0**~~ — DONE (Mar 8, 08:08 UTC). Backup at `index.js.bak`.
@@ -225,6 +235,7 @@
 
 - [Elacity dDRM Build](9e02ad6d-ab42-429d-8895-cd864df59823) — dApp store, media market, CDN, wallet bridge
 - [Supernode Decentralization](f18dbf44-f5de-4238-8c62-499018cd4e50) — gateway v2.0, bootstrap script, dynamic discovery, relay mode, supernode dApp, community networking fix, docs update
+- [Network Map + Strategy](d9445cb9-12bd-437e-8d4e-ebb35ef40d64) — network map visual upgrade, universal asset strategy, app manifest spec, binary manager, handover
 
 ---
 
