@@ -201,13 +201,20 @@ export function handleGetLaunchApps(req: Request, res: Response): void {
     try {
       const installedApps = appInstallService.list();
       for (const installed of installedApps) {
+        const manifest = JSON.parse(installed.manifest_json);
+        let iconUrl: string | undefined;
+        if (manifest.iconDataUrl) {
+          iconUrl = manifest.iconDataUrl;
+        } else if (installed.icon) {
+          iconUrl = `${baseUrl}/installed-apps/${installed.app_name}/${installed.icon}`;
+        }
         apps.push({
           name: installed.app_name,
           title: installed.title,
           uuid: `app-${installed.app_name}`,
-          icon: installed.icon || undefined,
+          icon: iconUrl,
           description: installed.description || '',
-          index_url: `${baseUrl}/apps/${installed.app_name}/${JSON.parse(installed.manifest_json).entry || 'index.html'}`,
+          index_url: `${baseUrl}/apps/${installed.app_name}/${manifest.entry || 'index.html'}`,
           installed: true,
           version: installed.version,
           author: installed.author || undefined,

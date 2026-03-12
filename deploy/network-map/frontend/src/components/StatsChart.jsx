@@ -16,27 +16,24 @@ function StatsChart({ stats }) {
   
   // Activity distribution data for pie chart
   const activityData = [
-    { name: 'Always On', value: stats?.activityDistribution?.alwaysOn || 0, color: '#22c55e' },
-    { name: 'Intermittent', value: stats?.activityDistribution?.intermittent || 0, color: '#F0B90B' },
-    { name: 'Occasional', value: stats?.activityDistribution?.occasional || 0, color: '#3b82f6' },
-    { name: 'Inactive', value: stats?.activityDistribution?.inactive || 0, color: '#888888' }
+    { name: 'Active', value: stats?.activityDistribution?.active || 0, color: '#22c55e' },
+    { name: 'Occasional', value: stats?.activityDistribution?.occasional || 0, color: '#F0B90B' },
+    { name: 'Idle', value: stats?.activityDistribution?.idle || 0, color: '#888888' }
   ].filter(d => d.value > 0);
   
   // Status data for pie chart
   const statusData = [
     { name: 'Online', value: stats?.onlineNow || 0, color: '#22c55e' },
-    { name: 'Offline', value: stats?.offlineNow || 0, color: '#888888' },
-    { name: 'Stale', value: stats?.staleNodes || 0, color: '#ef4444' }
+    { name: 'Offline', value: stats?.offlineNow || 0, color: '#888888' }
   ].filter(d => d.value > 0);
   
   return (
     <div style={{ display: 'grid', gap: '24px' }}>
       {/* Summary stats */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '16px' }}>
-        <StatCard label="Total Nodes" value={stats?.totalActivePC2 || 0} />
+        <StatCard label="Total Nodes" value={stats?.totalRegistered || 0} />
         <StatCard label="Online Now" value={stats?.onlineNow || 0} color="#22c55e" />
         <StatCard label="Offline" value={stats?.offlineNow || 0} color="#888888" />
-        <StatCard label="Stale" value={stats?.staleNodes || 0} color="#ef4444" />
       </div>
       
       {/* Charts row */}

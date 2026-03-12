@@ -1244,6 +1244,13 @@
             for (const inst of installedApps) {
                 if (!catalogApps.find(c => c.id === inst.name)) {
                     const meta = builtInMeta[inst.name] || {};
+                    let iconDataUrl = null;
+                    try {
+                        if (inst.manifest_json) {
+                            const m = JSON.parse(inst.manifest_json);
+                            if (m.iconDataUrl) iconDataUrl = m.iconDataUrl;
+                        }
+                    } catch { /* ignore */ }
                     allApps.push({
                         id: inst.name,
                         name: inst.title || inst.name,
@@ -1263,6 +1270,7 @@
                         isComingSoon: false,
                 isPopular: false,
                         isStaffPick: false,
+                        builtInIcon: iconDataUrl,
                         website: null, source: null,
                     });
                 }

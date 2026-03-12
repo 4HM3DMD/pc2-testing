@@ -174,12 +174,18 @@ export function handleGetApp(req: Request, res: Response): void {
       if (installed) {
         try {
           const manifest = JSON.parse(installed.manifest_json);
+          let iconUrl: string | undefined;
+          if (manifest.iconDataUrl) {
+            iconUrl = manifest.iconDataUrl;
+          } else if (installed.icon) {
+            iconUrl = `${baseUrl}/installed-apps/${installed.app_name}/${installed.icon}`;
+          }
           results.push({
             name: installed.app_name,
             title: installed.title,
             uuid: `app-${installed.app_name}`,
             uid: `app-${installed.app_name}`,
-            icon: installed.icon || undefined,
+            icon: iconUrl,
             index_url: `${baseUrl}/installed-apps/${installed.app_name}/${manifest.entry || 'index.html'}`,
             installed: true,
           });

@@ -3,8 +3,8 @@
 :root {
   /* Particle-style dark theme - matching login UI */
   --bg-primary: #0c0c0e;
-  --bg-secondary: #1c1d22;
-  --bg-card: #1c1d22;
+  --bg-secondary: #171717;
+  --bg-card: #171717;
   --text-primary: #ffffff;
   --text-secondary: #888888;
   --accent: #F0B90B;
@@ -19,6 +19,10 @@
   box-sizing: border-box;
   margin: 0;
   padding: 0;
+}
+
+html, body {
+  overflow-x: hidden;
 }
 
 body {
@@ -233,10 +237,6 @@ body {
   background: var(--text-secondary);
 }
 
-.status-dot.stale {
-  background: var(--error);
-  opacity: 0.5;
-}
 
 @keyframes pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
@@ -251,14 +251,19 @@ body {
   color: var(--text-secondary);
 }
 
-.activity-badge.always-on {
+.activity-badge.active {
   background: rgba(34, 197, 94, 0.2);
   color: var(--success);
 }
 
-.activity-badge.intermittent {
+.activity-badge.occasional {
   background: rgba(240, 185, 11, 0.2);
   color: var(--accent);
+}
+
+.activity-badge.idle {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-secondary);
 }
 
 /* Footer */
@@ -322,7 +327,52 @@ body {
 .header.compact h1 {
   font-size: 16px;
   font-weight: 600;
-  color: var(--accent);
+  color: var(--text-primary);
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.setup-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #0c0c0e;
+  text-decoration: none;
+  padding: 8px 18px;
+  border-radius: 9999px;
+  background: #ffffff;
+  border: none;
+  transition: background 0.2s, transform 0.15s;
+}
+
+.setup-link:hover {
+  background: #e5e5e5;
+  transform: translateY(-1px);
+}
+
+.setup-link svg {
+  opacity: 0.6;
+}
+
+.header-logo-link {
+  display: flex;
+  align-items: center;
+}
+
+.header-logo-link img {
+  height: 20px;
+  opacity: 0.7;
+  transition: opacity 0.2s;
+}
+
+.header-logo-link:hover img {
+  opacity: 1;
 }
 
 .header-stats {
@@ -453,12 +503,53 @@ body {
   height: 100%;
 }
 
+/* Side-by-side graph row: Orb + 2D */
+.graph-row {
+  display: flex;
+  gap: 16px;
+  height: 620px;
+  min-height: 500px;
+}
+
+.graph-panel {
+  flex: 1;
+  position: relative;
+  background: var(--bg-primary);
+  border: 1px solid rgba(240, 185, 11, 0.2);
+  border-radius: 12px;
+  overflow: hidden;
+  animation: borderGlow 8s ease-in-out infinite;
+  box-shadow: 0 0 30px rgba(240, 185, 11, 0.03), 0 0 60px rgba(0, 0, 0, 0.4);
+}
+
+.graph-panel .network-map {
+  height: 100%;
+  border: none;
+  border-radius: 0;
+}
+
+.panel-label {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 10;
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: rgba(12, 12, 14, 0.8);
+  padding: 4px 10px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  pointer-events: none;
+}
+
 /* Node List Section */
 .nodes-section {
   background: var(--bg-secondary);
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 20px;
+  overflow: hidden;
 }
 
 .section-title {
@@ -577,8 +668,7 @@ body {
   color: var(--success);
 }
 
-.node-card .node-status.offline,
-.node-card .node-status.stale {
+.node-card .node-status.offline {
   background: rgba(255, 255, 255, 0.1);
   color: var(--text-secondary);
 }
@@ -602,6 +692,8 @@ body {
 .node-list-table {
   display: flex;
   flex-direction: column;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .node-list-header {
@@ -672,14 +764,14 @@ body {
   opacity: 0.7;
 }
 
-.status-indicator.stale {
-  background: #ef4444;
-  opacity: 0.5;
-}
 
 .col-id {
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
   color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 
 .col-type {
@@ -954,6 +1046,7 @@ body {
   display: flex;
   gap: 8px;
   align-items: center;
+  white-space: nowrap;
 }
 
 .footer.compact a {
@@ -975,6 +1068,54 @@ body {
   opacity: 1;
 }
 
+/* SEO Content Section */
+.seo-section {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 24px;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.seo-section p {
+  margin-bottom: 12px;
+}
+
+.seo-section p:last-child {
+  margin-bottom: 0;
+}
+
+.seo-heading {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 16px;
+}
+
+.seo-subheading {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-top: 20px;
+  margin-bottom: 8px;
+}
+
+.seo-section a {
+  color: var(--accent);
+  text-decoration: none;
+  transition: color 0.2s;
+}
+
+.seo-section a:hover {
+  color: var(--accent-hover);
+}
+
+.seo-section strong {
+  color: var(--text-primary);
+}
+
 /* Responsive */
 @media (max-width: 900px) {
   .single-page-layout {
@@ -984,6 +1125,16 @@ body {
   
   .quick-stats {
     grid-template-columns: repeat(3, 1fr);
+  }
+
+  .graph-row {
+    flex-direction: column;
+    height: auto;
+  }
+
+  .graph-panel {
+    height: 420px;
+    min-height: 380px;
   }
 }
 
@@ -995,8 +1146,20 @@ body {
   }
   
   .header h1 {
-    font-size: 18px;
+    font-size: 14px;
     text-align: center;
+  }
+
+  .header-right {
+    gap: 10px;
+  }
+
+  .setup-link span {
+    display: none;
+  }
+
+  .header-logo-link img {
+    height: 22px;
   }
   
   .hero-count {
@@ -1012,27 +1175,6 @@ body {
     height: 400px;
   }
   
-  /* Fix overlapping elements on mobile */
-  .graph-help {
-    position: static;
-    text-align: center;
-    margin-bottom: 8px;
-    background: transparent;
-  }
-  
-  .privacy-badge {
-    position: static;
-    justify-content: center;
-    margin-bottom: 8px;
-    background: transparent;
-  }
-  
-  .graph-legend {
-    position: static;
-    justify-content: center;
-    margin-top: 8px;
-  }
-  
   .graph-section.fixed-height {
     display: flex;
     flex-direction: column;
@@ -1043,6 +1185,23 @@ body {
   .graph-section .network-map {
     flex: 1;
     min-height: 360px;
+  }
+
+  .graph-row .graph-help,
+  .graph-row .privacy-badge {
+    font-size: 9px;
+    padding: 3px 6px;
+  }
+
+  .graph-row .graph-legend {
+    font-size: 9px;
+    gap: 6px;
+    padding: 4px 8px;
+  }
+
+  .graph-row .panel-label {
+    font-size: 9px;
+    padding: 3px 8px;
   }
   
   .stats-bar {

@@ -17,7 +17,6 @@ const COLORS = {
   carrierNode: '#d4a50a',
   online: '#22c55e',
   offline: '#f59e0b',
-  stale: '#ef4444',
   peer: '#38bdf8',
   gridDot: 'rgba(255,255,255,0.025)',
 };
@@ -183,11 +182,7 @@ function NetworkGraph({ nodes }) {
       if (node.status !== 'online') return COLORS.supernodeDim;
       return node.isCore ? COLORS.supernodeCore : COLORS.carrierNode;
     }
-    switch (node.status) {
-      case 'online': return COLORS.online;
-      case 'stale': return COLORS.stale;
-      default: return COLORS.offline;
-    }
+    return node.status === 'online' ? COLORS.online : COLORS.offline;
   };
 
   const getNodeSize = (node) => {
@@ -195,7 +190,7 @@ function NetworkGraph({ nodes }) {
       return node.isCore ? 20 : 12;
     }
     if (node.nodeType === 'pc2' && node.status === 'online') {
-      return node.activityType === 'always-on' ? 8 : 6;
+      return node.activityType === 'active' ? 8 : 6;
     }
     if (node.status === 'online') return 5;
     return 3.5;
@@ -297,9 +292,8 @@ function NetworkGraph({ nodes }) {
       return;
     }
 
-    // Offline nodes: warm orange (sleeping/lid-closed). Stale: dim red.
-    const offColor = node.status === 'stale' ? 'rgba(239, 68, 68, 0.35)' : 'rgba(245, 158, 11, 0.5)';
-    const offBorder = node.status === 'stale' ? 'rgba(239, 68, 68, 0.12)' : 'rgba(245, 158, 11, 0.15)';
+    const offColor = 'rgba(245, 158, 11, 0.5)';
+    const offBorder = 'rgba(245, 158, 11, 0.15)';
 
     ctx.beginPath();
     ctx.arc(node.x, node.y, size, 0, 2 * Math.PI);

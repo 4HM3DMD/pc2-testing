@@ -232,28 +232,22 @@ export function getNetworkStats() {
   const stats = db.prepare(`
     SELECT 
       COUNT(*) as totalRegistered,
-      SUM(CASE WHEN is_pc2_node = 1 THEN 1 ELSE 0 END) as totalActivePC2,
-      SUM(CASE WHEN status = 'online' AND is_pc2_node = 1 THEN 1 ELSE 0 END) as onlineNow,
-      SUM(CASE WHEN status = 'offline' AND is_pc2_node = 1 THEN 1 ELSE 0 END) as offlineNow,
-      SUM(CASE WHEN status = 'stale' AND is_pc2_node = 1 THEN 1 ELSE 0 END) as staleNodes,
-      SUM(CASE WHEN activity_type = 'always-on' AND is_pc2_node = 1 THEN 1 ELSE 0 END) as alwaysOn,
-      SUM(CASE WHEN activity_type = 'intermittent' AND is_pc2_node = 1 THEN 1 ELSE 0 END) as intermittent,
-      SUM(CASE WHEN activity_type = 'occasional' AND is_pc2_node = 1 THEN 1 ELSE 0 END) as occasional,
-      SUM(CASE WHEN activity_type = 'inactive' AND is_pc2_node = 1 THEN 1 ELSE 0 END) as inactive
+      SUM(CASE WHEN status = 'online' THEN 1 ELSE 0 END) as onlineNow,
+      SUM(CASE WHEN status = 'offline' THEN 1 ELSE 0 END) as offlineNow,
+      SUM(CASE WHEN activity_type = 'active' THEN 1 ELSE 0 END) as active,
+      SUM(CASE WHEN activity_type = 'occasional' THEN 1 ELSE 0 END) as occasional,
+      SUM(CASE WHEN activity_type = 'idle' THEN 1 ELSE 0 END) as idle
     FROM nodes
   `).get();
   
   return {
     totalRegistered: stats.totalRegistered || 0,
-    totalActivePC2: stats.totalActivePC2 || 0,
     onlineNow: stats.onlineNow || 0,
     offlineNow: stats.offlineNow || 0,
-    staleNodes: stats.staleNodes || 0,
     activityDistribution: {
-      alwaysOn: stats.alwaysOn || 0,
-      intermittent: stats.intermittent || 0,
+      active: stats.active || 0,
       occasional: stats.occasional || 0,
-      inactive: stats.inactive || 0
+      idle: stats.idle || 0
     }
   };
 }
@@ -273,14 +267,14 @@ export function saveStatsSnapshot(stats) {
   return stmt.run(
     new Date().toISOString(),
     stats.totalRegistered,
-    stats.totalActivePC2,
+    stats.onlineNow,
     stats.onlineNow,
     stats.offlineNow,
-    stats.staleNodes,
-    stats.activityDistribution.alwaysOn,
-    stats.activityDistribution.intermittent,
+    0,
+    stats.activityDistribution.active,
+    0,
     stats.activityDistribution.occasional,
-    stats.activityDistribution.inactive
+    stats.activityDistribution.idle
   );
 }
 
