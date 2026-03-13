@@ -1,0 +1,66 @@
+{
+  "name": "@elacity-js/access",
+  "version": "0.1.0",
+  "description": "Universal access layer for Elacity dDRM — verify ownership, acquire decryption keys, encrypt/decrypt any digital asset via Lit Protocol",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run clean && npm run build"
+  },
+  "keywords": [
+    "elacity",
+    "ddrm",
+    "drm",
+    "lit-protocol",
+    "access-control",
+    "encryption",
+    "decryption",
+    "nft",
+    "erc1155",
+    "ipfs",
+    "digital-assets",
+    "elastos"
+  ],
+  "author": "Elacity Labs",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Elacity/pc2.net.git",
+    "directory": "packages/access"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@lit-protocol/auth-helpers": "7.3.0",
+    "@lit-protocol/constants": "7.3.0",
+    "@lit-protocol/crypto": "7.3.0",
+    "@lit-protocol/lit-node-client": "7.3.0",
+    "@lit-protocol/types": "7.3.0",
+    "@lit-protocol/access-control-conditions": "7.3.0",
+    "ethers": "^6.13.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  },
+  "peerDependencies": {
+    "ethers": "^6.0.0"
+  }
+}

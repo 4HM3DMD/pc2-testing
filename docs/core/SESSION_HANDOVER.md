@@ -232,14 +232,15 @@ Full technical spec at `docs/core/ACCESS_PACKAGE_SPEC.md`. Key decisions:
 
 #### Next Up — Engineering Priorities
 1. **Create GitHub release `pc2-binaries-v1`** — run `fetch-binaries.sh all`, upload assets to release (DEFERRED: waiting for Apple Developer license)
-2. **`@elacity-js/access` package** — clean-room build of universal access layer (see `docs/core/ACCESS_PACKAGE_SPEC.md`)
-3. **Creator Dashboard dApp** — upload any file, set price/royalties, encrypt via `@elacity-js/access`, IPFS pin, mint on Base
-4. **AI Model Marketplace alpha** — first non-media vertical: GGUF → encrypt → IPFS → ACCESS_TOKEN → decrypt on node → Ollama
-5. **Gateway "node offline" page** — replaces infinite "initializing" spinner with friendly error + retry
-6. **Fiat onramp** — Particle Smart Account + Stripe/Moonpay for one-click credit card purchases
-7. **Test bootstrap script on a fresh VPS** — validate one-command supernode deployment
-8. **App Factory** — local packaging pipeline (build → bundle → IPFS pin → publish)
-9. **dDRM Access Token contract** — ERC-1155 tiered tokens for supernode economics (deferred to Milestone 3-4)
+2. ~~**`@elacity-js/access` package**~~ — DONE (Mar 13) — 12 source files, 47 unit tests, clean build at `packages/access/`
+3. **Wire `@elacity-js/access` into Elacity Market dApp** — add Download+Decrypt for non-media assets
+4. **Creator Dashboard dApp** — upload any file, set price/royalties, encrypt via `@elacity-js/access`, IPFS pin, mint on Base
+5. **AI Model Marketplace alpha** — first non-media vertical: GGUF → encrypt → IPFS → ACCESS_TOKEN → decrypt on node → Ollama
+6. **Gateway "node offline" page** — replaces infinite "initializing" spinner with friendly error + retry
+7. **Fiat onramp** — Particle Smart Account + Stripe/Moonpay for one-click credit card purchases
+8. **Test bootstrap script on a fresh VPS** — validate one-command supernode deployment
+9. **App Factory** — local packaging pipeline (build → bundle → IPFS pin → publish)
+10. **dDRM Access Token contract** — ERC-1155 tiered tokens for supernode economics (deferred to Milestone 3-4)
 
 #### Backlog — Marketing & Docs (Lower Priority)
 - [ ] **PC2 marketing slides for elacitylabs.com** — audit and rewrite 7 slides (benefits, features, blind spots, full copywriting)
@@ -254,6 +255,7 @@ Full technical spec at `docs/core/ACCESS_PACKAGE_SPEC.md`. Key decisions:
 - ~~**Universal asset strategy**~~ — DONE (Mar 8)
 - ~~**Network map rebrand, 3D orb, SEO**~~ — DONE (Mar 12-13)
 - ~~**`@elacity-js/access` design + spec**~~ — DONE (Mar 13) — full spec, security model, marketplace tiers, runtime convergence
+- ~~**`@elacity-js/access` implementation**~~ — DONE (Mar 13) — 12 source files (`packages/access/`), Lit Protocol 7.3.0, 47 unit tests passing
 
 ### Supernode Infrastructure
 

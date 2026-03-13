@@ -143,13 +143,13 @@ These diagrams from Rong define the north star. Every work stream should move us
 - [ ] Creator Dashboard dApp — upload any file, set price/royalties, encrypt via Lit Protocol, list on marketplace
 
 **SDK Evolution (Universal Asset Protocol):**
-- [ ] `@elacity-js/access` package — clean-room build of universal access layer using Lit Protocol SDK directly (see `docs/core/ACCESS_PACKAGE_SPEC.md`)
-  - [ ] Lit Protocol session management + certificate caching
-  - [ ] `verifyAccess()` — on-chain ACCESS_TOKEN check via AuthorityGateway
-  - [ ] `acquireKey()` — Lit Protocol key retrieval with access conditions
-  - [ ] `encryptBuffer()` / `decryptBuffer()` — AES-GCM via WebCrypto (creator + consumer)
-  - [ ] `acquireLicense()` — CENC-compatible interface for media-player backward compat
-  - [ ] `fetchAndDecrypt()` — IPFS fetch + decrypt convenience method
+- [x] `@elacity-js/access` package — clean-room build of universal access layer using Lit Protocol SDK directly (see `docs/core/ACCESS_PACKAGE_SPEC.md`) *(implemented Mar 13 — 12 source files, 47 unit tests passing)*
+  - [x] Lit Protocol session management + certificate caching *(lit/session.ts)*
+  - [x] `verifyAccess()` — on-chain ACCESS_TOKEN check via AuthorityGateway *(verify/access-token.ts)*
+  - [x] `acquireKey()` — Lit Protocol key retrieval with access conditions *(lit/key-retrieval.ts)*
+  - [x] `encryptBuffer()` / `decryptBuffer()` — AES-GCM via WebCrypto (creator + consumer) *(crypto/encrypt.ts, crypto/decrypt.ts)*
+  - [x] `acquireLicense()` — CENC-compatible interface for media-player backward compat *(crypto/payload.ts + lit/key-retrieval.ts)*
+  - [x] `fetchAndDecrypt()` — IPFS fetch + decrypt convenience method *(fetch/ipfs.ts + client.ts)*
   - [ ] Node.js entry point (`@elacity-js/access/node`) for server-side decryption
   - [ ] Integration test against real Elacity content on Base
 - [ ] `@elacity-js/asset-packager` package — generic asset encryption + IPFS upload (non-media counterpart to `media-packager`)
