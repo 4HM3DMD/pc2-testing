@@ -78,10 +78,13 @@ export class ElacityAccess {
   }
 
   /**
-   * Acquire a decryption key from the Lit Network.
+   * Acquire a standalone decryption key from the Lit Network.
    *
-   * Requires the wallet to hold an ACCESS_TOKEN for the asset.
-   * Returns a DecryptionKey that can be used with decryptBuffer().
+   * Proves ACCESS_TOKEN ownership via SIWE-signed session to Lit nodes,
+   * then retrieves the symmetric key. The key can be used with
+   * decryptBuffer() for one or more decryption operations.
+   *
+   * Requires ciphertext and dataToEncryptHash from asset metadata.
    */
   async acquireKey(params: AcquireKeyParams): Promise<DecryptionKey> {
     return acquireKey(this.session, params, this.events);
@@ -90,9 +93,11 @@ export class ElacityAccess {
   /**
    * Acquire a CENC-compatible license for the media-player WASM module.
    *
-   * Accepts the exact payload/refs format from the WASM worker's
-   * __protocol__acquire_license postMessage. Returns a license blob
-   * for license_receiver_callback.
+   * NOT YET IMPLEMENTED — the existing WASM media player handles CENC
+   * license acquisition independently. This bridge point exists for
+   * a future where media-player delegates to @elacity-js/access.
+   *
+   * @throws Error — not yet implemented
    */
   async acquireLicense(params: AcquireLicenseParams): Promise<Uint8Array> {
     return acquireLicense(this.session, params, this.events);
@@ -125,37 +130,28 @@ export class ElacityAccess {
    * 1. fetchFromIpfs() — download encrypted bytes
    * 2. decryptWithLit() — prove access and decrypt via Lit Protocol
    *
-   * Requires the asset metadata to include ciphertext + dataToEncryptHash
-   * (set during creation via encryptBuffer).
+   * The CID points to raw Lit-encrypted bytes on IPFS.
+   * The dataToEncryptHash must be passed in (from the asset's metadata envelope).
    */
   async fetchAndDecrypt(params: FetchDecryptParams): Promise<Uint8Array> {
     const { cid, ledger, tokenId, gateway, fallbackGateway } = params;
 
     const encrypted = await fetchFromIpfs(cid, { gateway, fallbackGateway });
 
-    /**
-     * The encrypted content from IPFS includes:
-     * - Ciphertext (the encrypted asset data)
-     * - dataToEncryptHash (reference to the Lit encryption session)
-     *
-     * For the initial implementation, we expect the IPFS content to be
-     * a JSON envelope containing both. The exact format will be defined
-     * when the Creator Dashboard is built.
-     *
-     * For now, attempt to parse as JSON envelope, fall back to raw.
-     */
     let ciphertext: Uint8Array | string;
-    let dataToEncryptHash: string;
+    let dataToEncryptHash: string = params.dataToEncryptHash ?? '';
 
     try {
       const text = new TextDecoder().decode(encrypted);
       const envelope = JSON.parse(text);
-      ciphertext = envelope.ciphertext;
-      dataToEncryptHash = envelope.dataToEncryptHash;
+      if (envelope.ciphertext && envelope.dataToEncryptHash) {
+        ciphertext = envelope.ciphertext;
+        dataToEncryptHash = dataToEncryptHash || envelope.dataToEncryptHash;
+      } else {
+        ciphertext = encrypted;
+      }
     } catch {
-      // Raw encrypted content — need dataToEncryptHash from metadata
       ciphertext = encrypted;
-      dataToEncryptHash = '';
     }
 
     return decryptWithLit(

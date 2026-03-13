@@ -738,6 +738,16 @@ body {
 }
 .download-node-btn:hover { background: rgba(59,130,246,0.1); }
 .download-node-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.download-decrypt-btn {
+  margin-bottom: 12px;
+  gap: 6px;
+  font-weight: 500;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+}
+.download-decrypt-btn:hover { background: rgba(59,130,246,0.1); }
+.download-decrypt-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .download-status {
   font-size: 12px;
   padding: 6px 12px;

@@ -12,6 +12,7 @@
 
 import { buildAccessTokenCondition } from '../lit/conditions.js';
 import { AES_IV_LENGTH } from '../constants.js';
+import { getCryptoApi, base64ToUint8Array } from '../utils.js';
 import type { LitSession } from '../lit/session.js';
 import type { EncryptParams, EncryptResult } from '../types.js';
 
@@ -89,21 +90,3 @@ export async function encryptWithKey(
   };
 }
 
-function getCryptoApi(): Crypto {
-  if (typeof globalThis.crypto !== 'undefined') {
-    return globalThis.crypto;
-  }
-  throw new Error('WebCrypto API not available in this environment');
-}
-
-function base64ToUint8Array(base64: string): Uint8Array {
-  if (typeof Buffer !== 'undefined') {
-    return new Uint8Array(Buffer.from(base64, 'base64'));
-  }
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes;
-}

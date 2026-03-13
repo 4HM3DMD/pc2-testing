@@ -434,6 +434,144 @@ router.get('/ipfs/network', authenticate, async (req: AuthenticatedRequest, res:
 });
 
 /**
+ * POST /api/ipfs/add
+ * Add raw content to IPFS and return the CID.
+ * Accepts base64-encoded content in JSON body.
+ * Used by the Creator Dashboard to upload encrypted assets.
+ *
+ * Body: { content: string (base64), announce?: boolean }
+ * Response: { success: true, cid: string, size: number }
+ */
+router.post('/ipfs/add', authenticate, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const ipfs = req.app.locals.ipfs;
+    if (!ipfs) {
+      return res.status(503).json({ error: 'IPFS not available' });
+    }
+
+    const { content, announce } = req.body;
+    if (!content || typeof content !== 'string') {
+      return res.status(400).json({ error: 'Missing or invalid content (expected base64 string)' });
+    }
+
+    const MAX_SIZE = 100 * 1024 * 1024; // 100MB limit
+    const estimatedSize = Math.ceil(content.length * 0.75);
+    if (estimatedSize > MAX_SIZE) {
+      return res.status(413).json({ error: `Content too large (${Math.round(estimatedSize / 1024 / 1024)}MB). Max: 100MB` });
+    }
+
+    const data = Buffer.from(content, 'base64');
+    logger.info(`[Storage API] Adding ${data.length} bytes to IPFS`);
+
+    const cid = await ipfs.storeFile(data, { pin: true, announce: !!announce });
+
+    logger.info(`[Storage API] Added to IPFS: ${cid} (${data.length} bytes)`);
+
+    const db = req.app.locals.db;
+    const walletAddress = req.user?.wallet_address;
+    if (db && walletAddress) {
+      try {
+        db.trackPinnedCID(cid, walletAddress, data.length, 'creator');
+      } catch (trackErr) {
+        logger.warn(`[Storage API] Failed to track creator CID (non-fatal): ${cid}`, trackErr);
+      }
+    }
+
+    if (announce && ipfs.canAnnounce()) {
+      ipfs.announceCID(cid).then((announced: boolean) => {
+        if (announced) {
+          logger.info(`[Storage API] Announced creator CID to DHT: ${cid}`);
+          db?.updatePinnedCIDAnnouncedAt(cid);
+        }
+      }).catch((err: any) => {
+        logger.warn(`[Storage API] DHT announcement failed (non-fatal): ${cid}`, err);
+      });
+    }
+
+    res.json({ success: true, cid, size: data.length });
+  } catch (error: any) {
+    logger.error('[Storage API]: Error adding content to IPFS:', error);
+    res.status(500).json({ error: error.message || 'Failed to add content to IPFS' });
+  }
+});
+
+/**
+ * POST /api/ipfs/add-directory
+ * Create an IPFS directory containing one or more named files.
+ * Returns a directory CID where {dirCID}/{filename} resolves on IPFS gateways.
+ *
+ * Body: { files: Record<string, string (base64)>, announce?: boolean }
+ *   e.g. { files: { "metadata.json": "<base64>", "content.json": "<base64>" } }
+ * Response: { success: true, cid: string, fileCount: number }
+ */
+router.post('/ipfs/add-directory', authenticate, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const ipfs = req.app.locals.ipfs;
+    if (!ipfs) {
+      return res.status(503).json({ error: 'IPFS not available' });
+    }
+
+    const { files, announce } = req.body;
+    if (!files || typeof files !== 'object' || Array.isArray(files)) {
+      return res.status(400).json({ error: 'Missing or invalid files (expected { "filename": "base64content", ... })' });
+    }
+
+    const filenames = Object.keys(files);
+    if (filenames.length === 0) {
+      return res.status(400).json({ error: 'At least one file is required' });
+    }
+
+    const MAX_SIZE = 100 * 1024 * 1024;
+    const fileBuffers: Record<string, Buffer> = {};
+    let totalSize = 0;
+
+    for (const [name, content] of Object.entries(files)) {
+      if (typeof content !== 'string') {
+        return res.status(400).json({ error: `File "${name}" content must be a base64 string` });
+      }
+      const buf = Buffer.from(content as string, 'base64');
+      totalSize += buf.length;
+      if (totalSize > MAX_SIZE) {
+        return res.status(413).json({ error: `Total content too large. Max: 100MB` });
+      }
+      fileBuffers[name] = buf;
+    }
+
+    logger.info(`[Storage API] Creating IPFS directory with ${filenames.length} files (${totalSize} bytes total)`);
+
+    const cid = await ipfs.storeDirectory(fileBuffers, { pin: true });
+
+    logger.info(`[Storage API] IPFS directory created: ${cid} (${filenames.length} files, ${totalSize} bytes)`);
+
+    const db = req.app.locals.db;
+    const walletAddress = req.user?.wallet_address;
+    if (db && walletAddress) {
+      try {
+        db.trackPinnedCID(cid, walletAddress, totalSize, 'creator');
+      } catch (trackErr) {
+        logger.warn(`[Storage API] Failed to track creator directory CID (non-fatal): ${cid}`, trackErr);
+      }
+    }
+
+    if (announce && ipfs.canAnnounce()) {
+      ipfs.announceCID(cid).then((announced: boolean) => {
+        if (announced) {
+          logger.info(`[Storage API] Announced creator directory CID to DHT: ${cid}`);
+          db?.updatePinnedCIDAnnouncedAt(cid);
+        }
+      }).catch((err: any) => {
+        logger.warn(`[Storage API] DHT announcement failed (non-fatal): ${cid}`, err);
+      });
+    }
+
+    res.json({ success: true, cid, fileCount: filenames.length });
+  } catch (error: any) {
+    logger.error('[Storage API]: Error creating IPFS directory:', error);
+    res.status(500).json({ error: error.message || 'Failed to create IPFS directory' });
+  }
+});
+
+/**
  * POST /api/ipfs/pin
  * Pin a remote CID to the local IPFS node (fetches content from the network/gateway).
  * Used by the Elacity Market to download owned media to the user's node.

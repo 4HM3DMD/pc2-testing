@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Elacity Creator</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- Header -->
+    <header id="app-header">
+      <div class="header-left">
+        <h1>Elacity Creator</h1>
+        <span class="header-subtitle">Encrypt & publish digital assets</span>
+      </div>
+      <div class="header-right">
+        <button id="wallet-btn" class="wallet-btn">Connect Wallet</button>
+      </div>
+    </header>
+
+    <!-- Main content -->
+    <main id="main">
+      <!-- Step indicator -->
+      <div id="steps-bar">
+        <div class="step active" data-step="1"><span class="step-num">1</span> Select File</div>
+        <div class="step-line"></div>
+        <div class="step" data-step="2"><span class="step-num">2</span> Metadata</div>
+        <div class="step-line"></div>
+        <div class="step" data-step="3"><span class="step-num">3</span> Encrypt & Upload</div>
+        <div class="step-line"></div>
+        <div class="step" data-step="4"><span class="step-num">4</span> Result</div>
+      </div>
+
+      <!-- Step 1: File Selection -->
+      <section id="step-1" class="step-panel active">
+        <div class="drop-zone" id="drop-zone">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="17 8 12 3 7 8"/>
+            <line x1="12" y1="3" x2="12" y2="15"/>
+          </svg>
+          <p class="drop-text">Drag & drop your file here</p>
+          <p class="drop-hint">or click to browse</p>
+          <p class="drop-formats">PDF, images, audio, 3D models, AI models, datasets, code — any digital asset</p>
+          <input type="file" id="file-input" hidden />
+        </div>
+        <div id="file-preview" class="file-preview hidden">
+          <div class="file-info">
+            <div class="file-icon" id="file-icon">📄</div>
+            <div class="file-details">
+              <span class="file-name" id="file-name"></span>
+              <span class="file-meta" id="file-meta"></span>
+            </div>
+            <button class="file-remove" id="file-remove" title="Remove file">&times;</button>
+          </div>
+        </div>
+        <div class="step-actions">
+          <button class="btn btn-primary" id="btn-to-step-2" disabled>Continue</button>
+        </div>
+      </section>
+
+      <!-- Step 2: Metadata -->
+      <section id="step-2" class="step-panel">
+        <div class="form-grid">
+          <div class="form-group full-width">
+            <label for="asset-title">Title <span class="required">*</span></label>
+            <input type="text" id="asset-title" placeholder="e.g. Neural Style Transfer Model v2.1" maxlength="120" />
+          </div>
+
+          <div class="form-group full-width">
+            <label for="asset-description">Description</label>
+            <textarea id="asset-description" rows="3" placeholder="Describe your asset — what it is, how to use it, what's included..." maxlength="2000"></textarea>
+          </div>
+
+          <div class="form-group">
+            <label for="asset-category">Category <span class="required">*</span></label>
+            <select id="asset-category">
+              <option value="">Select category...</option>
+              <option value="ebook">E-book / PDF</option>
+              <option value="image">Image / Photography</option>
+              <option value="audio">Audio / Music</option>
+              <option value="video">Video</option>
+              <option value="3d-model">3D Model</option>
+              <option value="ai-model">AI Model</option>
+              <option value="dataset">Dataset</option>
+              <option value="code">Code / Software</option>
+              <option value="template">Template / Design</option>
+              <option value="font">Font</option>
+              <option value="document">Document</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="asset-price">Price (USDC) <span class="required">*</span></label>
+            <input type="number" id="asset-price" placeholder="4.99" min="0" max="1000000" step="0.01" value="4.99" />
+          </div>
+
+          <div class="form-group">
+            <label for="asset-access">Access Method</label>
+            <select id="asset-access">
+              <option value="buy_and_resell" selected>Buy & Resell (default)</option>
+              <option value="buy_once">Buy Once</option>
+              <option value="free">Free</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="asset-copies">Copies</label>
+            <input type="number" id="asset-copies" placeholder="10000" min="1" max="1000000" step="1" value="10000" />
+          </div>
+
+          <div class="form-group full-width">
+            <label for="asset-channel">Channel Address</label>
+            <div class="channel-row">
+              <input type="text" id="asset-channel" placeholder="0x... (public Elacity channel)" value="0x2fb53d4ab93112a6c0a1e54ffcd7199c6fd37412" />
+              <button type="button" class="btn btn-accent" id="btn-create-channel" title="Deploy your own channel on Base">+ Create Channel</button>
+            </div>
+            <span class="field-hint" id="channel-hint">Public Elacity Channel on Base (anyone can mint free content)</span>
+          </div>
+        </div>
+
+        <div class="step-actions">
+          <button class="btn btn-secondary" id="btn-back-to-1">Back</button>
+          <button class="btn btn-primary" id="btn-to-step-3" disabled>Encrypt & Upload</button>
+        </div>
+      </section>
+
+      <!-- Step 3: Encrypt & Upload -->
+      <section id="step-3" class="step-panel">
+        <div class="progress-container">
+          <div class="progress-step" id="prog-connect">
+            <div class="prog-icon">🔌</div>
+            <div class="prog-label">Connect to Lit Protocol</div>
+            <div class="prog-status" id="prog-connect-status">Waiting...</div>
+          </div>
+          <div class="progress-step" id="prog-encrypt">
+            <div class="prog-icon">🔐</div>
+            <div class="prog-label">Encrypt asset with ACCESS_TOKEN conditions</div>
+            <div class="prog-status" id="prog-encrypt-status">Waiting...</div>
+          </div>
+          <div class="progress-step" id="prog-upload-asset">
+            <div class="prog-icon">📦</div>
+            <div class="prog-label">Upload encrypted asset to IPFS</div>
+            <div class="prog-status" id="prog-upload-asset-status">Waiting...</div>
+          </div>
+          <div class="progress-step" id="prog-upload-meta">
+            <div class="prog-icon">📋</div>
+            <div class="prog-label">Upload metadata envelope to IPFS</div>
+            <div class="prog-status" id="prog-upload-meta-status">Waiting...</div>
+          </div>
+          <div class="progress-step" id="prog-mint">
+            <div class="prog-icon">⛓️</div>
+            <div class="prog-label">Mint on Channel contract</div>
+            <div class="prog-status" id="prog-mint-status">Waiting...</div>
+          </div>
+          <div class="progress-step" id="prog-approve">
+            <div class="prog-icon">✅</div>
+            <div class="prog-label">Set gateway approval</div>
+            <div class="prog-status" id="prog-approve-status">Waiting...</div>
+          </div>
+        </div>
+
+        <div id="progress-error" class="progress-error hidden"></div>
+
+        <div class="step-actions">
+          <button class="btn btn-secondary" id="btn-back-to-2" disabled>Back</button>
+        </div>
+      </section>
+
+      <!-- Step 4: Result -->
+      <section id="step-4" class="step-panel">
+        <div class="result-card">
+          <div class="result-icon">✅</div>
+          <h2 id="result-title">Asset Published</h2>
+          <p class="result-desc" id="result-desc">Your encrypted asset is stored on IPFS and listed on-chain.</p>
+
+          <div class="result-details">
+            <div class="result-row" id="result-row-token" style="display:none">
+              <span class="result-label">Token ID</span>
+              <code class="result-value" id="result-token-id"></code>
+              <button class="copy-btn" data-copy="result-token-id" title="Copy">📋</button>
+            </div>
+            <div class="result-row" id="result-row-channel" style="display:none">
+              <span class="result-label">Channel</span>
+              <code class="result-value" id="result-channel"></code>
+              <button class="copy-btn" data-copy="result-channel" title="Copy">📋</button>
+            </div>
+            <div class="result-row" id="result-row-operative" style="display:none">
+              <span class="result-label">Operative</span>
+              <code class="result-value" id="result-operative"></code>
+              <button class="copy-btn" data-copy="result-operative" title="Copy">📋</button>
+            </div>
+            <div class="result-row">
+              <span class="result-label">Asset CID</span>
+              <code class="result-value" id="result-asset-cid"></code>
+              <button class="copy-btn" data-copy="result-asset-cid" title="Copy">📋</button>
+            </div>
+            <div class="result-row">
+              <span class="result-label">Metadata CID</span>
+              <code class="result-value" id="result-meta-cid"></code>
+              <button class="copy-btn" data-copy="result-meta-cid" title="Copy">📋</button>
+            </div>
+            <div class="result-row">
+              <span class="result-label">Encryption Hash</span>
+              <code class="result-value" id="result-encrypt-hash"></code>
+              <button class="copy-btn" data-copy="result-encrypt-hash" title="Copy">📋</button>
+            </div>
+            <div class="result-row">
+              <span class="result-label">File Size</span>
+              <span class="result-value" id="result-size"></span>
+            </div>
+          </div>
+
+          <div class="result-note" id="result-note">
+          </div>
+        </div>
+
+        <div class="step-actions">
+          <button class="btn btn-primary" id="btn-new-asset">Create Another Asset</button>
+        </div>
+      </section>
+    </main>
+
+    <!-- Toast container -->
+    <div id="toast-container"></div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.0/ethers.umd.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

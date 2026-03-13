@@ -57,12 +57,34 @@ export class LitSession {
     }
 
     const litNetwork = this.resolveLitNetwork(this.litNetwork);
+    const connectTimeout = options?.connectTimeout ?? 60000;
+
     this.client = new LitNodeClient({
       litNetwork,
       debug: false,
+      connectTimeout,
     });
 
-    await this.client.connect();
+    const maxRetries = 2;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        await this.client.connect();
+        break;
+      } catch (err: unknown) {
+        const isTimeout = err instanceof Error && err.message.includes('handshake');
+        if (attempt < maxRetries && isTimeout) {
+          await this.client.disconnect().catch(() => {});
+          this.client = new LitNodeClient({
+            litNetwork,
+            debug: false,
+            connectTimeout: connectTimeout * (attempt + 2),
+          });
+          continue;
+        }
+        throw err;
+      }
+    }
+
     this.events.emit('connected');
   }
 
@@ -149,6 +171,6 @@ export class LitSession {
       'datil': LIT_NETWORK.Datil,
       'cayenne': LIT_NETWORK.DatilDev,
     };
-    return networkMap[network] ?? LIT_NETWORK.DatilDev;
+    return networkMap[network] ?? LIT_NETWORK.Datil;
   }
 }

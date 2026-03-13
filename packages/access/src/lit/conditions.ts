@@ -54,20 +54,34 @@ export function buildAccessTokenCondition(
 }
 
 /**
+ * Lit Protocol operator node for combining conditions with boolean logic.
+ * Must be inserted between conditions in the array.
+ */
+export interface ConditionOperator {
+  operator: 'and' | 'or';
+}
+
+export type AccessConditionArray = Array<UnifiedAccessControlCondition | ConditionOperator>;
+
+/**
  * Build a combined condition: ACCESS_TOKEN ownership OR specific wallet.
  * Useful for creators who need to decrypt their own content.
+ *
+ * Lit Protocol requires an explicit {"operator": "or"} element between
+ * conditions; without it, conditions default to AND (which would require
+ * the creator to ALSO hold an ACCESS_TOKEN -- defeating the bypass).
  */
 export function buildCreatorOrAccessCondition(
   ledger: string,
   tokenId: string,
   creatorAddress: string,
   chain?: string
-): UnifiedAccessControlCondition[] {
+): AccessConditionArray {
   const accessCondition = buildAccessTokenCondition(ledger, tokenId, chain);
 
-  // Wrap in a unified OR condition
   return [
     ...accessCondition,
+    { operator: 'or' },
     {
       conditionType: 'evmBasic',
       contractAddress: '',

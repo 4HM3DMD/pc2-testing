@@ -366,6 +366,53 @@ export class IPFSStorage {
   }
 
   /**
+   * Store multiple named files as an IPFS directory.
+   * Uses the UnixFS importer with wrapWithDirectory to build a proper DAG
+   * so that {dirCID}/{filename} resolves on any IPFS gateway.
+   *
+   * @param files - Map of filename → content (Buffer or string)
+   * @returns The directory CID string
+   */
+  async storeDirectory(
+    files: Record<string, Buffer | Uint8Array | string>,
+    options?: { pin?: boolean; timeoutMs?: number }
+  ): Promise<string> {
+    const fs = this.getUnixFS();
+
+    try {
+      const candidates = Object.entries(files).map(([filename, content]) => {
+        const data = typeof content === 'string'
+          ? new TextEncoder().encode(content)
+          : content instanceof Buffer
+          ? new Uint8Array(content)
+          : content;
+
+        return { path: filename, content: data };
+      });
+
+      let dirCid: string | null = null;
+
+      for await (const entry of fs.addAll(candidates, { wrapWithDirectory: true })) {
+        dirCid = entry.cid.toString();
+      }
+
+      if (!dirCid) {
+        throw new Error('No CID returned from addAll');
+      }
+
+      if (options?.pin !== false) {
+        await this.pinFile(dirCid);
+      }
+
+      log.info(`[IPFS] Stored directory with ${Object.keys(files).length} files: ${dirCid}`);
+      return dirCid;
+    } catch (error) {
+      log.error('Error storing directory in Helia IPFS:', error);
+      throw new Error(`Failed to store directory in IPFS: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  /**
    * Store a file from a readable stream without loading it entirely into memory.
    * Uses Helia's addByteStream for efficient chunked IPFS ingestion.
    */

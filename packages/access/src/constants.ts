@@ -16,9 +16,10 @@ export const DEFAULT_AUTHORITY_GATEWAY = '0x580C26DeFf267Ef40A72cf10a4A42050F064
 
 /**
  * Lit Protocol network configuration.
- * Using 'datil-dev' for development, 'datil' for production.
+ * datil-dev and datil-test testnets are currently offline (ports unreachable).
+ * Using 'datil' (production) which has 6 healthy nodes on standard port 443.
  */
-export const DEFAULT_LIT_NETWORK = 'datil-dev';
+export const DEFAULT_LIT_NETWORK = 'datil';
 
 /**
  * DRM system IDs matching the PSSH system IDs in the media-player WASM.

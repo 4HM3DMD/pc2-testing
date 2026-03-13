@@ -8,21 +8,20 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.cjs"
+      "import": "./dist/index.js"
     },
     "./node": {
       "types": "./dist/node/index.d.ts",
-      "import": "./dist/node/index.js",
-      "require": "./dist/node/index.cjs"
+      "import": "./dist/node/index.js"
     }
   },
   "files": [
-    "dist",
-    "README.md"
+    "dist"
   ],
   "scripts": {
     "build": "tsc",
+    "build:browser": "node build-browser.mjs",
+    "build:browser:apps": "npm run build:browser && node -e \"const fs=require('fs');const path=require('path');['elacity-market','elacity-creator'].forEach(app=>{const dst=path.join(__dirname,'../../pc2-node/data/test-apps',app,'vendor/access');fs.mkdirSync(dst,{recursive:true});fs.copyFileSync(path.join(__dirname,'dist/elacity-access.browser.js'),path.join(dst,'elacity-access.browser.js'));fs.copyFileSync(path.join(__dirname,'dist/elacity-access.browser.js.map'),path.join(dst,'elacity-access.browser.js.map'));});\"",
     "clean": "rm -rf dist",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -53,17 +52,23 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
+    "@lit-protocol/access-control-conditions": "7.3.0",
     "@lit-protocol/auth-helpers": "7.3.0",
     "@lit-protocol/constants": "7.3.0",
     "@lit-protocol/crypto": "7.3.0",
     "@lit-protocol/lit-node-client": "7.3.0",
-    "@lit-protocol/types": "7.3.0",
-    "@lit-protocol/access-control-conditions": "7.3.0",
-    "ethers": "^6.13.0"
+    "@lit-protocol/lit-node-client-nodejs": "7.3.0",
+    "@lit-protocol/types": "7.3.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
-    "typescript": "^5.0.0"
+    "buffer": "^6.0.3",
+    "crypto-browserify": "^3.12.1",
+    "esbuild": "^0.24.0",
+    "ethers": "^6.0.0",
+    "stream-browserify": "^3.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^4.0.0"
   },
   "peerDependencies": {
     "ethers": "^6.0.0"

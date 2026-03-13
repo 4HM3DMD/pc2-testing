@@ -140,7 +140,16 @@ These diagrams from Rong define the north star. Every work stream should move us
 **Creator Tools:**
 - [ ] `media-packager` integration — cloud transcode (default) + local FFmpeg (future)
 - [ ] App Factory — local packaging pipeline (build → bundle → IPFS pin → publish)
-- [ ] Creator Dashboard dApp — upload any file, set price/royalties, encrypt via Lit Protocol, list on marketplace
+- [x] Creator Dashboard dApp — upload any file, set price/royalties, encrypt via Lit Protocol, upload to IPFS *(implemented Mar 13 — pc2-node/data/test-apps/elacity-creator/)*
+  - [x] `POST /api/ipfs/add` endpoint — accepts raw bytes (base64), stores via Helia, returns CID
+  - [x] `POST /api/storage/ipfs/add-directory` — creates UnixFS directory CIDs (`{dirCID}/metadata.json` pattern)
+  - [x] Step-by-step wizard UI: file picker → metadata form → encrypt & upload → result with CIDs
+  - [x] Universal metadata envelope schema (`elacity-asset-envelope-v1`) with asset, pricing, creator fields
+  - [x] `@elacity-js/access` integration — `encryptBuffer()` with Lit Protocol ACCESS_TOKEN conditions
+  - [x] On-chain minting — `mint(string,uint16,bytes,bytes)` with full opRawData/sellRawData encoding, fee from CoreStorage, gateway from `authority()`. Paid mint (opType=2) verified on BaseScan with correct sub-tokens *(verified Mar 13)*
+  - [x] Channel creation — `createChannel()` on ChannelCore with metadata dir, royalty split, MINTER_ROLE auto-grant, backend GraphQL registration *(implemented Mar 13)*
+  - [x] Operative approval — `setApprovalForAll(gateway, true)` with ContractCreated event fallback for proxy-based channels *(implemented Mar 13)*
+  - [ ] End-to-end consumer flow testing (purchase → decrypt → download)
 
 **SDK Evolution (Universal Asset Protocol):**
 - [x] `@elacity-js/access` package — clean-room build of universal access layer using Lit Protocol SDK directly (see `docs/core/ACCESS_PACKAGE_SPEC.md`) *(implemented Mar 13 — 12 source files, 47 unit tests passing)*
@@ -152,8 +161,8 @@ These diagrams from Rong define the north star. Every work stream should move us
   - [x] `fetchAndDecrypt()` — IPFS fetch + decrypt convenience method *(fetch/ipfs.ts + client.ts)*
   - [x] Node.js entry point (`@elacity-js/access/node`) for server-side decryption *(node/session.ts, node/client.ts — LitNodeClientNodeJs + ethers.Wallet)*
   - [ ] Integration test against real Elacity content on Base
-- [ ] `@elacity-js/asset-packager` package — generic asset encryption + IPFS upload (non-media counterpart to `media-packager`)
-- [ ] Universal metadata schema — add `asset` field alongside `media` in Channel metadata (backward compatible)
+- [ ] `@elacity-js/asset-packager` package — generic asset encryption + IPFS upload (non-media counterpart to `media-packager`). Creator Dashboard uses inline pipeline for now; extract to package when patterns stabilize.
+- [x] Universal metadata schema — `elacity-asset-envelope-v1` with `asset` field (cid, mimeType, size, encrypted, algorithm, dataToEncryptHash, keyId), `pricing`, `creator` *(implemented Mar 13)*
 - [ ] `AssetService` in `@elacity-js/api` — generic asset queries for any content type alongside existing `NFTService`
 
 **Tiered Marketplace Rollout:**

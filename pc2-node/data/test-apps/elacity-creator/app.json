@@ -1,0 +1,46 @@
+{
+  "name": "elacity-creator",
+  "title": "Elacity Creator",
+  "version": "0.1.0",
+  "description": "Encrypt, upload, and list any digital asset on the Elacity marketplace. Supports PDFs, images, audio, 3D models, AI models, datasets, and more.",
+  "author": {
+    "name": "Elacity Labs",
+    "url": "https://ela.city"
+  },
+  "license": "proprietary",
+  "icon": "icon.png",
+  "entry": "index.html",
+  "type": "web",
+  "category": "creator",
+
+  "capabilities": {
+    "wallet": true,
+    "network": true,
+    "ipfs": { "pin": true, "fetch": true, "add": true },
+    "ipc": ["launchApp", "openFolder"],
+    "drm": true
+  },
+
+  "requirements": {
+    "minVersion": "1.1.0"
+  },
+
+  "display": {
+    "maximize": true,
+    "resizable": true,
+    "titlebar": true,
+    "taskbar": true
+  },
+
+  "services": [
+    {
+      "name": "creator",
+      "protocol": "https",
+      "description": "Elacity decentralized asset creation and listing"
+    }
+  ],
+
+  "distribution": {
+    "channel": "stable"
+  }
+}

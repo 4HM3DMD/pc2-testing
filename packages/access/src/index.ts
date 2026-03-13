@@ -42,7 +42,7 @@ export type {
 
 // Low-level modules for advanced usage
 export { verifyAccess } from './verify/access-token.js';
-export { buildAccessTokenCondition, buildCreatorOrAccessCondition } from './lit/conditions.js';
+export { buildAccessTokenCondition, buildCreatorOrAccessCondition, type ConditionOperator, type AccessConditionArray } from './lit/conditions.js';
 export { acquireKey, acquireLicense } from './lit/key-retrieval.js';
 export { encryptBuffer, encryptWithKey } from './crypto/encrypt.js';
 export { decryptWithLit, decryptWithKey } from './crypto/decrypt.js';
@@ -60,5 +60,27 @@ export {
   LOCAL_IPFS_GATEWAY,
 } from './constants.js';
 
+// Contract ABIs, addresses, and mint encoding helpers
+export {
+  DIGITAL_ASSET_ABI,
+  CORE_STORAGE_ABI,
+  CHANNEL_CORE_ABI,
+  OPERATIVE_BUYABLE_ABI,
+  BASE_CONTRACTS,
+  OP_TYPES,
+  ROLE_TYPES,
+  BASE_USDC,
+  PUBLIC_ELACITY_CHANNEL,
+  ELACITY_ROYALTY_ADDRESS,
+  ELACITY_ROYALTY_PERCENT,
+  encodeOpRawData,
+  encodeSellRawData,
+  hashToContentId,
+  type MintDataParams,
+} from './contracts/index.js';
+
 // Events
 export { AccessEventEmitter } from './events.js';
+
+// Utilities
+export { base64ToUint8Array, uint8ArrayToBase64 } from './utils.js';

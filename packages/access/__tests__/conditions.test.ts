@@ -60,41 +60,53 @@ describe('buildAccessTokenCondition', () => {
 });
 
 describe('buildCreatorOrAccessCondition', () => {
-  it('returns two conditions (ACCESS_TOKEN + creator wallet)', () => {
+  it('returns three elements: condition + OR operator + condition', () => {
     const conditions = buildCreatorOrAccessCondition(
       MOCK_LEDGER, MOCK_TOKEN_ID, MOCK_CREATOR
     );
-    expect(conditions).toHaveLength(2);
+    expect(conditions).toHaveLength(3);
   });
 
-  it('first condition is the standard ACCESS_TOKEN check', () => {
+  it('first element is the standard ACCESS_TOKEN check', () => {
     const conditions = buildCreatorOrAccessCondition(
       MOCK_LEDGER, MOCK_TOKEN_ID, MOCK_CREATOR
     );
-    expect(conditions[0].conditionType).toBe('evmContract');
-    expect(conditions[0].functionName).toBe('balanceOf');
+    const first = conditions[0] as ReturnType<typeof buildAccessTokenCondition>[0];
+    expect(first.conditionType).toBe('evmContract');
+    expect(first.functionName).toBe('balanceOf');
   });
 
-  it('second condition is an evmBasic wallet ownership check', () => {
+  it('second element is the OR operator (required by Lit Protocol)', () => {
     const conditions = buildCreatorOrAccessCondition(
       MOCK_LEDGER, MOCK_TOKEN_ID, MOCK_CREATOR
     );
-    expect(conditions[1].conditionType).toBe('evmBasic');
-    expect(conditions[1].returnValueTest.comparator).toBe('=');
+    expect(conditions[1]).toEqual({ operator: 'or' });
+  });
+
+  it('third element is an evmBasic wallet ownership check', () => {
+    const conditions = buildCreatorOrAccessCondition(
+      MOCK_LEDGER, MOCK_TOKEN_ID, MOCK_CREATOR
+    );
+    const third = conditions[2] as ReturnType<typeof buildAccessTokenCondition>[0];
+    expect(third.conditionType).toBe('evmBasic');
+    expect(third.returnValueTest.comparator).toBe('=');
   });
 
   it('lowercases the creator address for comparison', () => {
     const conditions = buildCreatorOrAccessCondition(
       MOCK_LEDGER, MOCK_TOKEN_ID, MOCK_CREATOR
     );
-    expect(conditions[1].returnValueTest.value).toBe(MOCK_CREATOR.toLowerCase());
+    const third = conditions[2] as ReturnType<typeof buildAccessTokenCondition>[0];
+    expect(third.returnValueTest.value).toBe(MOCK_CREATOR.toLowerCase());
   });
 
   it('propagates custom chain to both conditions', () => {
     const conditions = buildCreatorOrAccessCondition(
       MOCK_LEDGER, MOCK_TOKEN_ID, MOCK_CREATOR, 'polygon'
     );
-    expect(conditions[0].chain).toBe('polygon');
-    expect(conditions[1].chain).toBe('polygon');
+    const first = conditions[0] as ReturnType<typeof buildAccessTokenCondition>[0];
+    const third = conditions[2] as ReturnType<typeof buildAccessTokenCondition>[0];
+    expect(first.chain).toBe('polygon');
+    expect(third.chain).toBe('polygon');
   });
 });

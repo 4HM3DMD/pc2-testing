@@ -29,6 +29,8 @@ export interface ConnectOptions {
   drmSystems?: Partial<Record<DrmSystemType, DrmSystemConfig>>;
   smartAccount?: string;
   authorityGateway?: string;
+  /** Lit node handshake timeout in ms (default: 60000) */
+  connectTimeout?: number;
 }
 
 export interface AccessVerification {
@@ -54,6 +56,10 @@ export interface VerifyAccessParams {
 export interface AcquireKeyParams {
   ledger: string;
   tokenId: string;
+  /** Base64 ciphertext from Lit Protocol encrypt() */
+  ciphertext: string;
+  /** Hash of the original data, from encryptBuffer().dataToEncryptHash */
+  dataToEncryptHash: string;
   keyIds?: string[];
   drmSystem?: DrmSystemType;
 }
@@ -85,6 +91,8 @@ export interface FetchDecryptParams {
   cid: string;
   ledger: string;
   tokenId: string;
+  /** dataToEncryptHash from the asset's metadata envelope */
+  dataToEncryptHash?: string;
   gateway?: string;
   fallbackGateway?: string;
 }

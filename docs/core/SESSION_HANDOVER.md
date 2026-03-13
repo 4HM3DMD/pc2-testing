@@ -211,7 +211,7 @@
 - Dev node starts with `cd pc2-node && npm run dev` (NOT `npm start` from root, which launches base Puter)
 - Accessible at `http://localhost:4200/`
 
-#### `@elacity-js/access` — Universal Access Layer (DESIGNED, Mar 13)
+#### `@elacity-js/access` — Universal Access Layer (IMPLEMENTED, Mar 13)
 
 Full technical spec at `docs/core/ACCESS_PACKAGE_SPEC.md`. Key decisions:
 
@@ -222,6 +222,32 @@ Full technical spec at `docs/core/ACCESS_PACKAGE_SPEC.md`. Key decisions:
 - **Security model** — key transits JS (same as today's player, Widevine L3 equivalent). Non-media files are raw after decrypt (by design — matches Steam/Adobe model). Runtime v2 capsule sandbox closes this gap.
 - **No COOP/COEP needed** — non-media assets use WebCrypto (no WASM, no SharedArrayBuffer), can decrypt server-side on PC2 node. No popup windows.
 - **Creator + Consumer** — same package handles both encryption (creator side) and decryption (consumer side)
+- **Contract ABIs** — `packages/access/src/contracts/` contains DigitalAsset, CoreStorage, ChannelCore ABIs + Base contract addresses + opRawData/sellRawData encoding helpers
+- **On-chain minting — VERIFIED WORKING** — Creator Dashboard integrates full `mint(string,uint16,bytes,bytes)` on Channel contract with correct `opRawData`/`sellRawData` encoding. Paid mint (opType=2 buy_and_resell) verified on public Elacity channel with BaseScan confirmation: AccessToken (10k copies), RoyaltyShare (95% creator / 5% Elacity at `0xCE4639...`), DistributionRight sub-tokens all minted correctly. OperativeBuyableSellable contract deployed at tx `0x26d40e78...`.
+- **Operative approval** — `setApprovalForAll(gateway, true)` on the Operative contract. Event parsing uses `ContractCreated` event from factory as fallback (channel proxy emits non-standard event signatures).
+- **Channel creation — WORKING** — `createChannel()` on ChannelCore (`0x6a3f7780...`) with metadata IPFS directory, 95/5 royalty split, and auto-grant of `MINTER_ROLE` to creator. Backend registration via GraphQL mutation to `base.ela.city/api/2.0/graphql`.
+- **IPFS directory upload** — `POST /api/storage/ipfs/add-directory` creates proper UnixFS directory CIDs so `{dirCID}/metadata.json` resolves on any gateway. Matches Elacity's `X-Target-Flow: dir,ipfs` pattern.
+- **Consumer decryption** — `acquireKey()` with SIWE-signed Lit session + `decryptWithLit()` for full Lit decrypt; `decryptWithKey()` for local AES-GCM; `fetchAndDecrypt()` combining IPFS fetch + Lit decrypt
+
+**Two distinct pipelines (coexisting):**
+- **Media** (video/audio): Existing Elacity CENC DRM pipeline (backend transcode → DASH → license server). We do NOT touch this.
+- **Non-media** (documents, images, 3D models, code, datasets, apps): Client-side Lit Protocol encryption → IPFS → on-chain mint → Lit decrypt. This is what `@elacity-js/access` handles.
+
+**On-chain verification (Mar 13):**
+- Paid mint tx: `0x26d40e78ca060348f327c656cf683510ecd9b40e2bf5ad997e98fc2d0bf6b9c5` (Base block 43314793)
+- Channel: `0x2fb53d4ab93112a6c0a1e54ffcd7199c6fd37412` (public Elacity channel)
+- Operative: `0xf2359397f0e0794a7626d491d1c0157d8520e440` (OperativeBuyableSellable)
+- Sub-tokens: AccessToken (id=1, 10000 copies), RoyaltyShare (id=2, 950→creator + 50→Elacity), DistributionRight (id=3)
+- User-created channel: `0x13446a6a7CA190DcD124838156A852DbdaD14c94` (via ChannelCore.createChannel)
+
+**Key contract addresses (Base 8453):**
+- CoreStorage: `0xc8F50Bf1A6b765460621f861a64a5d333Bc7f575`
+- AuthorityGateway: `0x8fe6bf9877B78BF0126819ff2593235E54Ee1E29`
+- ChannelCore: `0x6a3f7780C54cb66291f8f1bE609047C2f664Dbf6`
+- Elacity royalty (assets): `0xCE4639Aa1E47E400683F49d95025475D5F50192d`
+- USDC on Base: `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` (6 decimals)
+- OperativeBuyable factory: `0x4A49A185c4bD77f037cE4f9fE788fc95ec8f3123`
+- OperativeBuyableSellable factory: `0x50002734a4546Ca153BF8b4cC703Fc53Ba90eb9f`
 
 **Tiered marketplace approach:**
 - **Tier 1 (days):** E-books, photos, audio, templates, fonts, 3D models — just encrypt/upload/download
@@ -230,17 +256,27 @@ Full technical spec at `docs/core/ACCESS_PACKAGE_SPEC.md`. Key decisions:
 
 **Implementation branch:** `dDRM-extended` (branched from `feature/elacity-ddrm-marketplace` on Mar 13)
 
+**Still testing / not yet complete:**
+- [ ] End-to-end consumer purchase and decrypt flow (buy AccessToken → decrypt → download)
+- [ ] setApprovalForAll post-mint (code implemented, needs user wallet confirmation)
+- [ ] Lit Protocol production connectivity (currently using local dev mode fallback)
+- [ ] Paid mint on user-created channels (royalty address fix applied, needs re-test)
+- [ ] Integration with Elacity Market dApp backend (asset visibility after mint)
+
 #### Next Up — Engineering Priorities
-1. **Create GitHub release `pc2-binaries-v1`** — run `fetch-binaries.sh all`, upload assets to release (DEFERRED: waiting for Apple Developer license)
-2. ~~**`@elacity-js/access` package**~~ — DONE (Mar 13) — 12 source files, 47 unit tests, clean build at `packages/access/`
-3. **Wire `@elacity-js/access` into Elacity Market dApp** — add Download+Decrypt for non-media assets
-4. **Creator Dashboard dApp** — upload any file, set price/royalties, encrypt via `@elacity-js/access`, IPFS pin, mint on Base
-5. **AI Model Marketplace alpha** — first non-media vertical: GGUF → encrypt → IPFS → ACCESS_TOKEN → decrypt on node → Ollama
-6. **Gateway "node offline" page** — replaces infinite "initializing" spinner with friendly error + retry
-7. **Fiat onramp** — Particle Smart Account + Stripe/Moonpay for one-click credit card purchases
-8. **Test bootstrap script on a fresh VPS** — validate one-command supernode deployment
-9. **App Factory** — local packaging pipeline (build → bundle → IPFS pin → publish)
-10. **dDRM Access Token contract** — ERC-1155 tiered tokens for supernode economics (deferred to Milestone 3-4)
+1. **Complete end-to-end testing** — verify consumer purchase flow (buy AccessToken → decrypt → download), paid mint on user channels, Lit Protocol production connectivity
+2. ~~**`@elacity-js/access` package**~~ — DONE (Mar 13) — 16 source files, 48 unit tests, audited and fixed
+3. ~~**Wire `@elacity-js/access` into Elacity Market dApp**~~ — DONE (Mar 13) — Download+Decrypt for non-media assets, local dev key support
+4. ~~**Creator Dashboard dApp**~~ — DONE (Mar 13) — encrypt, upload to IPFS, metadata envelope, on-chain mint() + setApprovalForAll()
+5. ~~**Contract ABIs + mint encoding**~~ — DONE (Mar 13) — DigitalAsset, CoreStorage, ChannelCore ABIs; opRawData/sellRawData encoding; Base addresses; paid mint verified on BaseScan
+6. ~~**Consumer decrypt flow**~~ — DONE (Mar 13) — acquireKey() with SIWE sessions, fetchAndDecrypt(), local dev mode fallback
+7. ~~**Channel creation**~~ — DONE (Mar 13) — createChannel() with metadata IPFS dir, royalty split, MINTER_ROLE, backend GraphQL registration
+8. **AI Model Marketplace alpha** — first non-media vertical: GGUF → encrypt → IPFS → ACCESS_TOKEN → decrypt on node → Ollama
+9. **Create GitHub release `pc2-binaries-v1`** — run `fetch-binaries.sh all`, upload assets to release (DEFERRED: waiting for Apple Developer license)
+10. **Gateway "node offline" page** — replaces infinite "initializing" spinner with friendly error + retry
+11. **Fiat onramp** — Particle Smart Account + Stripe/Moonpay for one-click credit card purchases
+12. **App Factory** — local packaging pipeline (build → bundle → IPFS pin → publish)
+13. **dDRM Access Token contract** — ERC-1155 tiered tokens for supernode economics (deferred to Milestone 3-4)
 
 #### Backlog — Marketing & Docs (Lower Priority)
 - [ ] **PC2 marketing slides for elacitylabs.com** — audit and rewrite 7 slides (benefits, features, blind spots, full copywriting)
@@ -295,7 +331,7 @@ Full technical spec at `docs/core/ACCESS_PACKAGE_SPEC.md`. Key decisions:
 - [Supernode Decentralization](f18dbf44-f5de-4238-8c62-499018cd4e50) — gateway v2.0, bootstrap script, dynamic discovery, relay mode, supernode dApp, community networking fix, docs update
 - [Network Map + Strategy](d9445cb9-12bd-437e-8d4e-ebb35ef40d64) — network map visual upgrade, universal asset strategy, app manifest spec, binary manager, handover
 - [3D Orb + SEO + Rebrand](6431d137-5dd9-4c8e-b042-5d8c54b908a5) — 3D orb integration, network map rebrand to "World Computer", full SEO overhaul, GA4, app icon fixes, mobile responsiveness
-- [Access Package Strategy](current) — @elacity-js/access design, security model, marketplace tiers, Creator Factory, runtime convergence
+- [Access Package Strategy](fd6755f0-d73c-4e41-8df3-0f57f15071a2) — @elacity-js/access audit, Creator Dashboard, on-chain minting (paid verified), channel creation, operative approval, contract encoding fixes
 
 ---
 
@@ -354,6 +390,25 @@ Full technical spec at `docs/core/ACCESS_PACKAGE_SPEC.md`. Key decisions:
 | `src/gui/src/helpers/item_icon.js` | `.edrm` custom icon |
 | `src/gui/src/lib/mime.js` | `.edrm` MIME type registration |
 | `src/gui/src/icons/file-edrm.svg` | Padlock + green tick icon for DRM files |
+
+### Creator Dashboard dApp (runs inside iframe)
+| File | Purpose |
+|------|---------|
+| `pc2-node/data/test-apps/elacity-creator/app.js` | Main app — file select, metadata, encrypt, IPFS upload, mint, setApprovalForAll |
+| `pc2-node/data/test-apps/elacity-creator/index.html` | HTML structure with 4-step wizard |
+| `pc2-node/data/test-apps/elacity-creator/styles.css` | All CSS |
+
+### `@elacity-js/access` SDK (Universal Access Layer)
+| File | Purpose |
+|------|---------|
+| `packages/access/src/client.ts` | Main entry point — connect, encrypt, decrypt, verify, fetchAndDecrypt |
+| `packages/access/src/contracts/abis.ts` | DigitalAsset, CoreStorage, ChannelCore, Operative ABIs + Base addresses |
+| `packages/access/src/contracts/encode.ts` | opRawData/sellRawData encoding for mint() |
+| `packages/access/src/lit/session.ts` | LitNodeClient lifecycle, session sigs, SIWE signing |
+| `packages/access/src/lit/key-retrieval.ts` | acquireKey() with getSessionSigs for consumer decryption |
+| `packages/access/src/crypto/encrypt.ts` | Lit Protocol encrypt (creator side) |
+| `packages/access/src/crypto/decrypt.ts` | decryptWithLit + decryptWithKey (consumer side) |
+| `packages/access/src/fetch/ipfs.ts` | IPFS gateway fetch helper |
 
 ### Wallet Bridge (injected into all dApp iframes)
 | File | Purpose |

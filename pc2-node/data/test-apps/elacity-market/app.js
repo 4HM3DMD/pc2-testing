@@ -156,6 +156,7 @@
     dom.likeCount = document.getElementById('like-count');
     dom.purchaseStatus = document.getElementById('purchase-status');
     dom.downloadNodeBtn = document.getElementById('download-node-btn');
+    dom.downloadDecryptBtn = document.getElementById('download-decrypt-btn');
     dom.downloadStatus = document.getElementById('download-status');
     dom.toastContainer = document.getElementById('toast-container');
     dom.themeToggle = document.getElementById('theme-toggle');
@@ -225,6 +226,17 @@
     }
     if (item.category) return item.category;
     return null;
+  }
+
+  function isNonMediaAsset(nft) {
+    var meta = nft.metadata || {};
+    if (meta.schema === 'elacity-asset-envelope-v1') return true;
+    var asset = meta.asset;
+    if (asset && asset.encrypted) return true;
+    if (asset && asset.assetType) return asset.assetType !== 'video';
+    var media = meta.media;
+    var ct = media && media.contentType ? media.contentType : '';
+    return ct.indexOf('video') === -1;
   }
 
   function resolveIpfsUrl(url) {
@@ -643,6 +655,7 @@
     dom.detailAttributes.innerHTML = '';
     dom.purchaseStatus.classList.add('hidden');
     dom.downloadNodeBtn.classList.add('hidden');
+    dom.downloadDecryptBtn.classList.add('hidden');
     dom.downloadStatus.classList.add('hidden');
     dom.saveBtn.classList.remove('saved');
     dom.saveLabel.textContent = 'Save';
@@ -740,8 +753,13 @@
     } else {
       dom.playOwnedBtn.classList.remove('hidden');
       dom.detailOwned.classList.remove('hidden');
-      if (media.uri) {
-        dom.downloadNodeBtn.classList.remove('hidden');
+      var cid = media.uri || (nft.metadata && nft.metadata.asset && (nft.metadata.asset.uri || nft.metadata.asset.cid));
+      if (cid) {
+        if (isNonMediaAsset(nft)) {
+          dom.downloadDecryptBtn.classList.remove('hidden');
+        } else {
+          dom.downloadNodeBtn.classList.remove('hidden');
+        }
       }
       if (hasListing && isOwned) {
         dom.detailPriceSection.classList.remove('hidden');
@@ -1856,6 +1874,150 @@
     pinAndRegisterMedia(nft);
   }
 
+  // ── Download & Decrypt (non-media assets via @elacity-js/access) ──
+
+  function handleDownloadAndDecrypt() {
+    var nft = state.detailItem;
+    if (!nft) return;
+
+    var media = (nft.metadata && nft.metadata.media) || {};
+    var asset = (nft.metadata && nft.metadata.asset) || {};
+    var cid = media.uri || asset.uri || asset.cid;
+    var meta = nft.metadata || {};
+    var props = meta.properties || {};
+    var ledger = props.ledger || nft.contractAddress || (nft.channel && nft.channel.address) || '';
+    var tokenId = (nft.tokenId && nft.tokenId.hexTokenID) || nft.tokenId || '0';
+    var dataToEncryptHash = asset.dataToEncryptHash || '';
+    var isLocalDevMode = asset._devMode === true;
+    var localKey = asset._localKey || '';
+
+    if (!cid || !ledger) {
+      showToast('No downloadable content for this asset', 'error');
+      return;
+    }
+
+    if (!Wallet.isConnected()) {
+      showToast('Connect your wallet first', 'error');
+      return;
+    }
+
+    dom.downloadDecryptBtn.disabled = true;
+    dom.downloadStatus.classList.remove('hidden');
+    dom.downloadStatus.className = 'download-status pending';
+
+    function saveDecryptedFile(decrypted) {
+      var title = meta.name || nft.name || 'Untitled';
+      var safeName = title.replace(/[^a-zA-Z0-9 _\-.]/g, '').substring(0, 80).trim() || 'asset';
+      var mimeToExt = { 'application/pdf': '.pdf', 'image/png': '.png', 'image/jpeg': '.jpg', 'audio/mpeg': '.mp3', 'audio/wav': '.wav' };
+      var mime = asset.mimeType || media.contentType || '';
+      var ext = mimeToExt[mime] || (mime && mime.split('/')[1] ? '.' + mime.split('/')[1].split('+')[0] : '');
+      var walletAddr = Wallet.getAddress() || '';
+      var savePath = '/' + walletAddr + '/Downloads/' + safeName + ext;
+
+      dom.downloadStatus.textContent = 'Saving to your Downloads folder...';
+
+      var bytes = new Uint8Array(decrypted);
+      var base64 = '';
+      var chunkSize = 32768;
+      for (var i = 0; i < bytes.length; i += chunkSize) {
+        base64 += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+      }
+      base64 = btoa(base64);
+      return pc2Fetch('/write', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          path: savePath,
+          content: base64,
+          encoding: 'base64',
+          mime_type: (asset.mimeType || media.contentType || 'application/octet-stream'),
+          overwrite: false,
+          dedupe_name: true
+        })
+      }).then(function (res) {
+        if (!res.ok) throw new Error('Save failed: ' + res.status);
+        return res.json();
+      }).then(function () {
+        dom.downloadStatus.className = 'download-status success';
+        dom.downloadStatus.innerHTML = 'Downloaded & decrypted! <a href="#" class="open-folder-link">Open Downloads folder</a>';
+        dom.downloadDecryptBtn.disabled = false;
+        showToast('Asset saved to your node!', 'success');
+
+        var folderLink = dom.downloadStatus.querySelector('.open-folder-link');
+        if (folderLink) {
+          folderLink.addEventListener('click', function (e) {
+            e.preventDefault();
+            var appInstanceId = new URLSearchParams(window.location.search).get('puter.app_instance_id') || '';
+            window.parent.postMessage({
+              $: 'puter-ipc',
+              msg: 'openFolder',
+              path: '/' + walletAddr + '/Downloads',
+              appInstanceID: appInstanceId,
+              env: 'app'
+            }, '*');
+          });
+        }
+      });
+    }
+
+    if (isLocalDevMode && localKey) {
+      dom.downloadStatus.textContent = 'Downloading (local dev mode)...';
+      var ipfsUrl = window.location.origin + '/ipfs/' + cid;
+      fetch(ipfsUrl).then(function (r) {
+        if (!r.ok) return fetch('https://ipfs.ela.city/ipfs/' + cid);
+        return r;
+      }).then(function (r) {
+        if (!r.ok) throw new Error('IPFS fetch failed: ' + r.status);
+        return r.arrayBuffer();
+      }).then(function (buf) {
+        dom.downloadStatus.textContent = 'Decrypting (local AES-GCM)...';
+        var encrypted = new Uint8Array(buf);
+        var iv = encrypted.slice(0, 12);
+        var ciphertext = encrypted.slice(12);
+        var keyBytes = Uint8Array.from(atob(localKey), function (c) { return c.charCodeAt(0); });
+        return crypto.subtle.importKey('raw', keyBytes, { name: 'AES-GCM', length: 256 }, false, ['decrypt'])
+          .then(function (key) {
+            return crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv }, key, ciphertext);
+          });
+      }).then(function (decryptedBuf) {
+        return saveDecryptedFile(new Uint8Array(decryptedBuf));
+      }).catch(function (err) {
+        dom.downloadDecryptBtn.disabled = false;
+        dom.downloadStatus.className = 'download-status error';
+        dom.downloadStatus.textContent = 'Failed: ' + (err.message || 'Unknown error');
+        showToast('Download failed: ' + (err.message || 'Unknown error'), 'error');
+      });
+      return;
+    }
+
+    dom.downloadStatus.textContent = 'Connecting to Lit Protocol...';
+    import('./vendor/access/elacity-access.browser.js')
+      .then(function (mod) {
+        var ElacityAccess = mod.ElacityAccess;
+        var access = new ElacityAccess();
+        dom.downloadStatus.textContent = 'Sign in to verify access...';
+        return access.connect(window.ethereum, { chainId: 8453 }).then(function () {
+          dom.downloadStatus.textContent = 'Downloading and decrypting...';
+          return access.fetchAndDecrypt({
+            cid: cid,
+            ledger: ledger,
+            tokenId: tokenId,
+            dataToEncryptHash: dataToEncryptHash,
+            gateway: window.location.origin + '/ipfs/',
+            fallbackGateway: 'https://ipfs.ela.city/ipfs/'
+          });
+        }).then(function (decrypted) {
+          return saveDecryptedFile(decrypted);
+        });
+      })
+      .catch(function (err) {
+        dom.downloadDecryptBtn.disabled = false;
+        dom.downloadStatus.className = 'download-status error';
+        dom.downloadStatus.textContent = 'Failed: ' + (err.message || 'Unknown error');
+        showToast('Download failed: ' + (err.message || 'Unknown error'), 'error');
+      });
+  }
+
   // ── Wallet UI ────────────────────────────────────────
 
   function updateWalletUI() {
@@ -1992,6 +2154,7 @@
 
     dom.buyBtn.addEventListener('click', handleBuy);
     dom.downloadNodeBtn.addEventListener('click', handleDownloadToNode);
+    dom.downloadDecryptBtn.addEventListener('click', handleDownloadAndDecrypt);
     dom.previewBtn.addEventListener('click', handlePreview);
     dom.playBtn.addEventListener('click', handlePlay);
     dom.playOwnedBtn.addEventListener('click', handlePlay);
