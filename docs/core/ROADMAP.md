@@ -150,7 +150,7 @@ These diagrams from Rong define the north star. Every work stream should move us
   - [x] `encryptBuffer()` / `decryptBuffer()` — AES-GCM via WebCrypto (creator + consumer) *(crypto/encrypt.ts, crypto/decrypt.ts)*
   - [x] `acquireLicense()` — CENC-compatible interface for media-player backward compat *(crypto/payload.ts + lit/key-retrieval.ts)*
   - [x] `fetchAndDecrypt()` — IPFS fetch + decrypt convenience method *(fetch/ipfs.ts + client.ts)*
-  - [ ] Node.js entry point (`@elacity-js/access/node`) for server-side decryption
+  - [x] Node.js entry point (`@elacity-js/access/node`) for server-side decryption *(node/session.ts, node/client.ts — LitNodeClientNodeJs + ethers.Wallet)*
   - [ ] Integration test against real Elacity content on Base
 - [ ] `@elacity-js/asset-packager` package — generic asset encryption + IPFS upload (non-media counterpart to `media-packager`)
 - [ ] Universal metadata schema — add `asset` field alongside `media` in Channel metadata (backward compatible)
