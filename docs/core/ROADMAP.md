@@ -2,7 +2,7 @@
 
 > **Purpose:** Single source of truth for all strategic goals, technical work streams, and milestones — directly mapped to the Keystone Fund proposal and Rong Chen's original vision
 > **Created:** 2026-02-24
-> **Last Updated:** 2026-03-08
+> **Last Updated:** 2026-03-13
 > **Status:** Living document — update as work progresses
 
 ---
@@ -143,10 +143,23 @@ These diagrams from Rong define the north star. Every work stream should move us
 - [ ] Creator Dashboard dApp — upload any file, set price/royalties, encrypt via Lit Protocol, list on marketplace
 
 **SDK Evolution (Universal Asset Protocol):**
-- [ ] `@elacity-js/access` package — extract Lit Protocol key retrieval from `media-player` into standalone universal access layer (THE critical unlock for non-media marketplaces)
+- [ ] `@elacity-js/access` package — clean-room build of universal access layer using Lit Protocol SDK directly (see `docs/core/ACCESS_PACKAGE_SPEC.md`)
+  - [ ] Lit Protocol session management + certificate caching
+  - [ ] `verifyAccess()` — on-chain ACCESS_TOKEN check via AuthorityGateway
+  - [ ] `acquireKey()` — Lit Protocol key retrieval with access conditions
+  - [ ] `encryptBuffer()` / `decryptBuffer()` — AES-GCM via WebCrypto (creator + consumer)
+  - [ ] `acquireLicense()` — CENC-compatible interface for media-player backward compat
+  - [ ] `fetchAndDecrypt()` — IPFS fetch + decrypt convenience method
+  - [ ] Node.js entry point (`@elacity-js/access/node`) for server-side decryption
+  - [ ] Integration test against real Elacity content on Base
 - [ ] `@elacity-js/asset-packager` package — generic asset encryption + IPFS upload (non-media counterpart to `media-packager`)
 - [ ] Universal metadata schema — add `asset` field alongside `media` in Channel metadata (backward compatible)
 - [ ] `AssetService` in `@elacity-js/api` — generic asset queries for any content type alongside existing `NFTService`
+
+**Tiered Marketplace Rollout:**
+- [ ] **Tier 1 — Quick Markets (file in, file out):** E-books/PDFs, stock photography, audio/music, design templates, fonts, 3D models. All use `access.fetchAndDecrypt()` → save/open. No special runtime needed.
+- [ ] **Tier 2 — Medium Markets (local runtime integration):** AI models (GGUF → Ollama), code packages (npm), datasets, PC2 dApps. Need PC2 backend endpoints for decrypt-and-load.
+- [ ] **Tier 3 — Complex Markets (new infrastructure):** Software licensing, API marketplace, agent marketplace. Need Runtime v2 capsule sandboxes.
 
 ---
 
@@ -183,6 +196,18 @@ These diagrams from Rong define the north star. Every work stream should move us
 - [x] Community networking fix script (`scripts/fix-networking.sh`) — installs full transport stack for affected users *(completed Mar 8)*
 - [ ] **WireGuard bundling with PC2 app** — bundle `wg`, `wg-quick`, `wireguard-go`, `amneziawg-go`, `sing-box` binaries so no user falls back to broken ActiveProxy
 - [ ] **Gateway "node offline" page** — show clear HTML error instead of infinite "initializing" when proxy/tunnel fails
+
+**Network Map & Public Presence (map.ela.city):**
+- [x] Network map visual upgrade — decentralized topology, particle flow, animated nodes, deployed Mar 8
+- [x] 3D orb visualization (World Computer) — Three.js force-shield, side-by-side with 2D graph *(completed Mar 12-13)*
+- [x] Rebrand to "ElastOS World Computer Network" with Elacity Labs branding *(completed Mar 12-13)*
+- [x] Simplified node statuses — merged stale→offline, activity types to active/occasional/idle *(completed Mar 12)*
+- [x] Full SEO overhaul — JSON-LD, OG/Twitter cards, sitemap, robots.txt, noscript fallback *(completed Mar 13)*
+- [x] GA4 analytics (G-QW5NN8K9DS) + Google Search Console verification *(completed Mar 13)*
+- [x] Public API with CORS — `/api/nodes`, `/api/stats/summary` available for external integration
+- [ ] PC2 marketing slides for elacitylabs.com — audit and rewrite product slides
+- [ ] QuickStart component for elacitylabs.com — installation instructions UI (including Jetson/ARM)
+- [ ] Backlinks from ela.city and docs.ela.city to map.ela.city
 
 **AI Integration:**
 - [ ] Integrate latest model providers as they emerge

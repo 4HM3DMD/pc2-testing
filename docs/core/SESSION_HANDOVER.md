@@ -1,4 +1,4 @@
-# Session Handover — Mar 8, 2026
+# Session Handover — Mar 13, 2026
 
 > **Read this first when starting a new agent session.**
 
@@ -10,7 +10,7 @@
 **Release:** v1.1.0 tagged and released on 2026-03-03 (134 commits squash-merged to main)
 **Launcher:** v1.1.1 released — version display, one-click updates, full networking install
 **DAO Proposal:** Live at https://elastos.com/proposals/69a24f49247f130078064edd
-**Last Commits:** `97574518` (NAT traversal deps), `f78abdeb` (CDN network feature)
+**Last Commit:** `55846301e` — feat: 3D orb visualization, network map rebrand, SEO overhaul
 
 ### What Just Shipped (v1.1.0 on main)
 
@@ -183,21 +183,77 @@
 - [x] Deployed to https://map.ela.city/ — frontend-only update, server/API untouched
 - [x] Backup at `/root/pc2/network-map/frontend/dist.bak`
 
-#### Next Up (Priority Order)
-1. **Verify community fix** — confirm Werolo and Chelsea's domains work remotely after install
-2. ~~**InterServer gateway upgrade to v2.0**~~ — DONE (Mar 8, 08:08 UTC). Backup at `index.js.bak`.
-3. ~~**WireGuard binary bundling (BinaryManager)**~~ — DONE (Mar 8). Runtime auto-download of transport binaries.
-4. ~~**App registry manifest format**~~ — DONE (Mar 8). Formal spec at `docs/core/APP_MANIFEST_SPEC.md`.
-5. ~~**Universal asset strategy**~~ — DONE (Mar 8). Full strategy at `docs/core/ELACITY_UNIVERSAL_ASSET_STRATEGY.md`.
-6. **Create GitHub release `pc2-binaries-v1`** — run `fetch-binaries.sh all`, upload assets to release
-7. **`@elacity-js/access` package** — extract Lit Protocol from media-player into universal access layer (THE critical SDK unlock)
-8. **Creator Dashboard dApp** — upload any file, set price/royalties, encrypt, list on marketplace
-9. **AI Model Marketplace alpha** — encrypt GGUF model -> IPFS -> ACCESS_TOKEN -> decrypt -> Ollama
-10. **Fiat onramp** — Particle Smart Account + Stripe/Moonpay for one-click credit card purchases
-11. **Gateway "node offline" page** — deferred; replaces infinite "initializing" spinner with friendly error + retry
-12. **Test bootstrap script on a fresh VPS** — validate one-command supernode deployment
-13. **App Factory** — local packaging pipeline (build -> bundle -> IPFS pin -> publish)
-14. **dDRM Access Token contract** — ERC-1155 tiered tokens for supernode economics (deferred to Milestone 3-4)
+#### Network Map Rebrand, 3D Orb, & SEO — DEPLOYED (Mar 12-13)
+- [x] **3D orb visualization (World Computer)** — Three.js force-shield with GLSL shaders, auto-rotating globe with pulsing nodes and animated arc connections, side-by-side with existing 2D graph
+- [x] **Converted orb from TypeScript/Tailwind to JSX/inline styles** — 8 files in `deploy/network-map/frontend/src/components/force-shield/`
+- [x] **Rebranded** header from "ElastOS Personal Cloud Compute (PC2) Network Map" to "ElastOS World Computer Network"
+- [x] **White pill CTA button** — "Set up your node →" matching elacitylabs.com brand
+- [x] **Simplified node statuses** — merged `stale` into `offline`; activity types simplified to `active`/`occasional`/`idle`
+- [x] **Background color `#171717`** for header, footer, nodes card (matching elacitylabs.com cards)
+- [x] **Elacity Labs logo** in header (links to elacitylabs.com) + footer
+- [x] **Favicons** generated from Elacity Labs logo with dark background
+- [x] **Full SEO overhaul:**
+  - Title: "ElastOS World Computer Network — Live Node Map | Elacity"
+  - Rich meta description, keywords, canonical URL
+  - Open Graph + Twitter `summary_large_image` with `og-map.png` social card
+  - 3x JSON-LD schemas: WebApplication, Organization, Dataset
+  - `<noscript>` fallback content for JS-disabled crawlers
+  - SEO text section below node table with dynamic stats
+  - `robots.txt` (allowing GPTBot/CCBot), `sitemap.xml` (hourly changefreq)
+  - GA4 analytics (`G-QW5NN8K9DS`) + Google Search Console verification
+  - Ecosystem footer links (Elacity Labs, Exchange, Docs, Run a Node)
+  - `aria-label` on canvas panels, `role="status"` on stats bar
+- [x] **Mobile fixes** — orb fills panel (absolute positioning), no horizontal page scroll, node ID truncation
+- [x] **App icon fixes** — regenerated base64 icons for Elacity Market and Player, removed desktop shortcuts
+- [x] **Deployed** to InterServer — frontend-only, no server/API/nginx changes
+
+#### PC2 Dev Node (Local)
+- Dev node starts with `cd pc2-node && npm run dev` (NOT `npm start` from root, which launches base Puter)
+- Accessible at `http://localhost:4200/`
+
+#### `@elacity-js/access` — Universal Access Layer (DESIGNED, Mar 13)
+
+Full technical spec at `docs/core/ACCESS_PACKAGE_SPEC.md`. Key decisions:
+
+- **Clean-room build** — built from scratch using Lit Protocol SDK directly, NOT extracted from media-player's 4.5MB minified bundle
+- **Two encryption paths** — CENC-compatible `acquireLicense()` for media-player backward compat + AES-GCM `encryptBuffer()`/`decryptBuffer()` for non-media assets
+- **Browser + Node.js** — dual entry points (`@elacity-js/access` for browser, `@elacity-js/access/node` for server-side)
+- **Capsule-ready** — stateless, no singletons, separated verify/acquire/decrypt operations, extensible types for Runtime capability tokens
+- **Security model** — key transits JS (same as today's player, Widevine L3 equivalent). Non-media files are raw after decrypt (by design — matches Steam/Adobe model). Runtime v2 capsule sandbox closes this gap.
+- **No COOP/COEP needed** — non-media assets use WebCrypto (no WASM, no SharedArrayBuffer), can decrypt server-side on PC2 node. No popup windows.
+- **Creator + Consumer** — same package handles both encryption (creator side) and decryption (consumer side)
+
+**Tiered marketplace approach:**
+- **Tier 1 (days):** E-books, photos, audio, templates, fonts, 3D models — just encrypt/upload/download
+- **Tier 2 (weeks):** AI models (GGUF → Ollama), code packages, datasets, PC2 dApps — need local runtime integration
+- **Tier 3 (months):** Software licensing, API marketplace, agent marketplace — need capsule sandboxes / Runtime v2
+
+**Implementation branch:** `dDRM-extended` (branched from `feature/elacity-ddrm-marketplace` on Mar 13)
+
+#### Next Up — Engineering Priorities
+1. **Create GitHub release `pc2-binaries-v1`** — run `fetch-binaries.sh all`, upload assets to release (DEFERRED: waiting for Apple Developer license)
+2. **`@elacity-js/access` package** — clean-room build of universal access layer (see `docs/core/ACCESS_PACKAGE_SPEC.md`)
+3. **Creator Dashboard dApp** — upload any file, set price/royalties, encrypt via `@elacity-js/access`, IPFS pin, mint on Base
+4. **AI Model Marketplace alpha** — first non-media vertical: GGUF → encrypt → IPFS → ACCESS_TOKEN → decrypt on node → Ollama
+5. **Gateway "node offline" page** — replaces infinite "initializing" spinner with friendly error + retry
+6. **Fiat onramp** — Particle Smart Account + Stripe/Moonpay for one-click credit card purchases
+7. **Test bootstrap script on a fresh VPS** — validate one-command supernode deployment
+8. **App Factory** — local packaging pipeline (build → bundle → IPFS pin → publish)
+9. **dDRM Access Token contract** — ERC-1155 tiered tokens for supernode economics (deferred to Milestone 3-4)
+
+#### Backlog — Marketing & Docs (Lower Priority)
+- [ ] **PC2 marketing slides for elacitylabs.com** — audit and rewrite 7 slides (benefits, features, blind spots, full copywriting)
+- [ ] **QuickStart component for elacitylabs.com** — installation instructions UI including Jetson Nano / ARM device entry
+- [ ] **Backlinks from ela.city and docs.ela.city to map.ela.city** — SEO cross-linking between Elacity properties
+
+#### Completed — Previously Next Up
+- ~~**Verify community fix**~~ — Werolo and Chelsea confirmed
+- ~~**InterServer gateway upgrade to v2.0**~~ — DONE (Mar 8)
+- ~~**WireGuard binary bundling (BinaryManager)**~~ — DONE (Mar 8)
+- ~~**App registry manifest format**~~ — DONE (Mar 8)
+- ~~**Universal asset strategy**~~ — DONE (Mar 8)
+- ~~**Network map rebrand, 3D orb, SEO**~~ — DONE (Mar 12-13)
+- ~~**`@elacity-js/access` design + spec**~~ — DONE (Mar 13) — full spec, security model, marketplace tiers, runtime convergence
 
 ### Supernode Infrastructure
 
@@ -236,6 +292,8 @@
 - [Elacity dDRM Build](9e02ad6d-ab42-429d-8895-cd864df59823) — dApp store, media market, CDN, wallet bridge
 - [Supernode Decentralization](f18dbf44-f5de-4238-8c62-499018cd4e50) — gateway v2.0, bootstrap script, dynamic discovery, relay mode, supernode dApp, community networking fix, docs update
 - [Network Map + Strategy](d9445cb9-12bd-437e-8d4e-ebb35ef40d64) — network map visual upgrade, universal asset strategy, app manifest spec, binary manager, handover
+- [3D Orb + SEO + Rebrand](6431d137-5dd9-4c8e-b042-5d8c54b908a5) — 3D orb integration, network map rebrand to "World Computer", full SEO overhaul, GA4, app icon fixes, mobile responsiveness
+- [Access Package Strategy](current) — @elacity-js/access design, security model, marketplace tiers, Creator Factory, runtime convergence
 
 ---
 
@@ -248,6 +306,7 @@
 | **Roadmap** | `docs/core/ROADMAP.md` | All milestones with checkboxes |
 | **Architecture** | `docs/core/ARCHITECTURE_CONVERGENCE.md` | PC2 v1 -> capsule runtime v2 |
 | **Universal Asset Strategy** | `docs/core/ELACITY_UNIVERSAL_ASSET_STRATEGY.md` | Unicorn strategy, marketplace verticals, SDK evolution, revenue model |
+| **Access Package Spec** | `docs/core/ACCESS_PACKAGE_SPEC.md` | @elacity-js/access technical spec, API, security model, marketplace tiers |
 | **App Manifest Spec** | `docs/core/APP_MANIFEST_SPEC.md` | app.json schema, field reference, validation rules |
 | **Supernode Economics** | `docs/core/SUPERNODE_ECONOMICS.md` | dDRM Access Token model, three-tier architecture |
 | **Network Hardening** | `docs/pc2-infrastructure/NETWORK_HARDENING.md` | Scale tiers, fragile points, supernode inventory |
@@ -300,6 +359,24 @@
 | `pc2-node/frontend/pc2-wallet-bridge.js` | Host-side bridge — listens for postMessage, routes to Particle |
 | `pc2-node/frontend/pc2-wallet-provider.js` | Guest-side shim — replaces `window.ethereum` inside iframe |
 
+### Network Map (map.ela.city) — Deployed on InterServer
+| File | Purpose |
+|------|---------|
+| `deploy/network-map/frontend/src/App.jsx` | Main frontend — header, side-by-side orb/graph, stats, SEO section, footer |
+| `deploy/network-map/frontend/src/components/force-shield/ShieldScene.jsx` | 3D orb entry point — Three.js canvas, stats overlay |
+| `deploy/network-map/frontend/src/components/force-shield/useNetworkNodes.js` | Fetches `/api/nodes` + WebSocket updates, hashes nodeId to lat/lng |
+| `deploy/network-map/frontend/src/components/force-shield/consts.js` | API base URLs (relative paths for same-origin) |
+| `deploy/network-map/frontend/src/components/NetworkGraph.jsx` | 2D force-directed graph |
+| `deploy/network-map/frontend/src/components/NodeList.jsx` | Node table with filters |
+| `deploy/network-map/frontend/src/components/StatsChart.jsx` | Stats cards and charts |
+| `deploy/network-map/frontend/src/styles.css` | All CSS (bg `#171717`, responsive, `.graph-row` side-by-side) |
+| `deploy/network-map/frontend/index.html` | SEO meta, JSON-LD schemas, GA4, favicons |
+| `deploy/network-map/frontend/public/` | Favicons, `og-map.png`, `robots.txt`, `sitemap.xml`, GSC verification |
+| `deploy/network-map/server/collector.js` | Backend — node status/activity classification |
+| `deploy/network-map/server/database.js` | SQLite queries (no more `stale` status) |
+| `deploy/network-map/server/api/stats.js` | Stats endpoints (`/api/stats/summary`) |
+| `deploy/network-map/server/api/nodes.js` | Nodes endpoint (`/api/nodes`) with CORS |
+
 ### Elacity Player (source + built)
 | File | Purpose |
 |------|---------|
@@ -335,7 +412,7 @@ Passwords: ROTATED — stored in password manager, not in git
 
 | Repository | Branch | Status |
 |------------|--------|--------|
-| [pc2.net](https://github.com/Elacity/pc2.net) | `feature/elacity-ddrm-marketplace` | Active development |
+| [pc2.net](https://github.com/Elacity/pc2.net) | `dDRM-extended` | Active development (branched from `feature/elacity-ddrm-marketplace`) |
 | [elastos-launcher](https://github.com/Elacity/elastos-launcher) | `main` | v1.1.1 released |
 | [document-portal](https://github.com/Elacity/document-portal) | `main` | Up to date |
 | [js-sdk](https://github.com/Elacity/js-sdk) | — | Elacity SDK (reference) |

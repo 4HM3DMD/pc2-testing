@@ -77,6 +77,27 @@ AFTER:
     └── WASM video decryption
 ```
 
+### Technical Spec
+
+Full `@elacity-js/access` specification: [`docs/core/ACCESS_PACKAGE_SPEC.md`](./ACCESS_PACKAGE_SPEC.md)
+
+Key design decisions:
+- **Clean-room build** using Lit Protocol SDK directly (not extracted from media-player's minified bundle)
+- **Two encryption paths:** CENC-compatible `acquireLicense()` for media + AES-GCM `encryptBuffer()`/`decryptBuffer()` for non-media
+- **Browser + Node.js** dual entry points for server-side decryption on PC2 node
+- **Capsule-ready** — stateless, no singletons, separated verify/acquire/decrypt, extensible types
+- **Creator + Consumer** — same package handles encryption (creator) and decryption (consumer)
+
+### Security Model
+
+**Media (streaming):** Key passes to WASM module — segment-by-segment decryption, never raw file on disk. Equivalent to Widevine L3 (same as Netflix in browsers). No change from today.
+
+**Non-media (files):** AES-GCM via WebCrypto — decrypted file is raw in memory. By design: matches Steam/Adobe/Kindle license model. DRM prevents unauthorized access, not redistribution by authorized purchasers. Royalties at purchase time, on-chain audit trail.
+
+**PC2 node advantage:** Non-media assets decrypt server-side on the PC2 Node.js backend. No browser, no COOP/COEP, no SharedArrayBuffer, no popup windows. AI models decrypt → load into Ollama. Everything inside the user's PC2 desktop.
+
+**Runtime v2 upgrade:** When the Rust Runtime arrives, `@elacity-js/access` becomes a WASM capsule. Key never leaves sandbox. Capability tokens scope access. Full audit trail. The package API stays the same — security comes from Runtime isolation.
+
 ### New Package: `@elacity-js/asset-packager`
 
 Generic counterpart to `media-packager` for non-media assets:
@@ -136,36 +157,41 @@ Extend the Channel metadata to support any asset type (backward compatible):
 
 ## Marketplace Verticals
 
-### Tier 1: Ready Now (Contracts Support Today)
+### Tier 1: Quick Markets (Days to Build — File In, File Out)
 
-| Marketplace | Asset Type | Revenue Model | Difficulty |
-|-------------|-----------|---------------|------------|
-| Media streaming | Video, music, podcasts | Buy/rent/subscribe | Done |
-| E-books / documents | PDF, ePub, text | Buy/rent | Easy |
-| Stock photography | Images | Buy, royalty-free | Easy |
-| Design templates | Figma, PSD, HTML | Buy | Easy |
-| Audio samples / SFX | WAV, MP3 packs | Buy | Easy |
-| 3D models | glTF, FBX | Buy/license | Medium |
-| Fonts | OTF, TTF, WOFF | License | Easy |
+Unlocked by `@elacity-js/access` + Creator Dashboard. All use the same flow: encrypt file → IPFS pin → mint on Base. Buyer purchases ACCESS_TOKEN → download → decrypt → open locally on PC2. No special runtime, no COOP/COEP, no popup windows.
 
-### Tier 2: Needs `@elacity-js/access` (M3-M4)
+| Marketplace | Asset Type | Revenue Model | Consumer Action on PC2 | Difficulty |
+|-------------|-----------|---------------|----------------------|------------|
+| Media streaming | Video, music, podcasts | Buy/rent/subscribe | Play in WASM player (existing) | Done |
+| E-books / documents | PDF, ePub, DOCX | Buy/rent | Decrypt → open in Puter viewer | Easy |
+| Stock photography | JPG, PNG, RAW, PSD | Buy, royalty-free | Decrypt → view/download | Easy |
+| Audio samples / SFX | MP3, WAV, FLAC | Buy | Decrypt → HTML5 `<audio>` | Easy |
+| Design templates | Figma, PSD, HTML/CSS | Buy | Decrypt → download | Easy |
+| Fonts | OTF, TTF, WOFF2 | License | Decrypt → install/download | Easy |
+| 3D models | glTF, FBX, OBJ | Buy/license | Decrypt → Three.js viewer | Easy |
 
-| Marketplace | Asset Type | Revenue Model | TAM |
-|-------------|-----------|---------------|-----|
-| **AI model marketplace** | ONNX, SafeTensors, GGUF | Buy/rent/compute-time | $50B+ by 2030 |
-| Code marketplace | npm packages, plugins, themes | License/subscribe | $15B+ |
-| Dataset marketplace | CSV, Parquet, JSON | Buy/subscribe/usage | $10B+ |
-| Software licensing | Executables, SaaS access | License keys, subscription | $200B+ |
-| API marketplace | Endpoint access | Usage-based, subscription | $30B+ |
-| Education marketplace | Courses, tutorials | Buy/subscribe | $40B+ |
+### Tier 2: Medium Markets (Weeks — Local Runtime Integration)
 
-### Tier 3: Needs Runtime (M5-M7)
+Need PC2 backend endpoints that handle "decrypt + load" in one step. Content decrypts server-side on the PC2 node (Node.js), no browser involved.
 
-| Marketplace | Asset Type | Revenue Model | TAM |
-|-------------|-----------|---------------|-----|
-| Agent marketplace | LLM agents, tools, skills | Hire/subscribe/revenue-share | Emerging |
-| Compute marketplace | GPU/CPU time | Usage-based | $100B+ |
-| MicroVM app marketplace | Full sandboxed apps | Buy/subscribe | Emerging |
+| Marketplace | Asset Type | Revenue Model | Consumer Action on PC2 | TAM |
+|-------------|-----------|---------------|----------------------|-----|
+| **AI model marketplace** | GGUF, SafeTensors, ONNX | Buy/rent/compute-time | Decrypt on node → `ollama create` → chat | $50B+ by 2030 |
+| Code marketplace | npm packages, plugins, themes | License/subscribe | Decrypt → install in sandbox | $15B+ |
+| Dataset marketplace | CSV, Parquet, JSON-L | Buy/subscribe/usage | Decrypt → import to SQLite/embeddings | $10B+ |
+| PC2 dApps | HTML/JS/CSS bundles | Buy/subscribe | Decrypt → install via AppInstallService | Emerging |
+| Education marketplace | Courses, tutorials | Buy/subscribe | Decrypt → local viewer | $40B+ |
+
+### Tier 3: Complex Markets (Months — Needs Runtime v2 / New Infrastructure)
+
+| Marketplace | Asset Type | Revenue Model | What's Needed | TAM |
+|-------------|-----------|---------------|--------------|-----|
+| Software licensing | Executables, SaaS access | License keys, subscription | Capsule sandboxes (Runtime v2) | $200B+ |
+| API marketplace | Endpoint access | Usage-based, subscription | Metering, rate limiting, gateway | $30B+ |
+| Agent marketplace | LLM agents, tools, skills | Hire/subscribe/revenue-share | ERC-8004, agent runtime, MCP/A2A | Emerging |
+| Compute marketplace | GPU/CPU time | Usage-based | Metering, attestation, TEE | $100B+ |
+| MicroVM app marketplace | Full sandboxed apps | Buy/subscribe | Firecracker, WASM isolation | Emerging |
 
 ---
 
