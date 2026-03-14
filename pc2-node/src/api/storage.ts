@@ -636,5 +636,205 @@ router.post('/ipfs/pin', authenticate, async (req: AuthenticatedRequest, res: Re
   }
 });
 
+/**
+ * POST /api/storage/lit/encrypt
+ * Server-side Lit Protocol encryption.
+ *
+ * The Lit SDK's multi-node handshake cannot run inside the PC2 iframe
+ * (CSP/CORS restrictions). This endpoint moves encryption to the backend
+ * where outbound HTTPS is unrestricted.
+ *
+ * encrypt() does not require a wallet or session sigs — it stores key
+ * shares on Lit nodes gated by the provided access conditions.
+ *
+ * Body: { data: string (base64), ledger: string, tokenId: string }
+ * Response: { success: true, ciphertext: string (base64), dataToEncryptHash: string }
+ */
+let litClientInstance: any = null;
+let litConnecting: Promise<void> | null = null;
+
+async function getLitClient() {
+  if (litClientInstance?.ready) {
+    return litClientInstance;
+  }
+
+  if (litConnecting) {
+    await litConnecting;
+    if (litClientInstance?.ready) return litClientInstance;
+  }
+
+  const { LitNodeClient } = await import('@lit-protocol/lit-node-client');
+  const { LIT_NETWORK } = await import('@lit-protocol/constants');
+
+  litClientInstance = new LitNodeClient({
+    litNetwork: LIT_NETWORK.Datil,
+    debug: false,
+    connectTimeout: 120000,
+  });
+
+  litConnecting = litClientInstance.connect().then(() => {
+    logger.info(`[Lit] Connected to Datil production (${litClientInstance.connectedNodes?.size || 0} nodes)`);
+    litConnecting = null;
+  }).catch((err: Error) => {
+    logger.error('[Lit] Connection failed:', err.message);
+    litClientInstance = null;
+    litConnecting = null;
+    throw err;
+  });
+
+  await litConnecting;
+  return litClientInstance;
+}
+
+router.post('/lit/encrypt', authenticate, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { data, ledger, tokenId } = req.body;
+
+    if (!data || !ledger || !tokenId) {
+      res.status(400).json({ error: 'Missing required fields: data (base64), ledger, tokenId' });
+      return;
+    }
+
+    const dataBytes = Buffer.from(data, 'base64');
+    if (dataBytes.length === 0) {
+      res.status(400).json({ error: 'Empty data' });
+      return;
+    }
+    if (dataBytes.length > 100 * 1024 * 1024) {
+      res.status(400).json({ error: 'Data exceeds 100MB limit' });
+      return;
+    }
+
+    logger.info(`[Lit] Encrypting ${dataBytes.length} bytes for ${ledger}:${tokenId}`);
+
+    const client = await getLitClient();
+
+    const conditions = [
+      {
+        conditionType: 'evmContract',
+        contractAddress: ledger,
+        chain: 'base',
+        functionName: 'balanceOf',
+        functionParams: [':userAddress', tokenId],
+        functionAbi: {
+          name: 'balanceOf',
+          inputs: [
+            { name: 'account', type: 'address' },
+            { name: 'id', type: 'uint256' },
+          ],
+          outputs: [
+            { name: 'balance', type: 'uint256' },
+          ],
+          stateMutability: 'view',
+          type: 'function',
+        },
+        returnValueTest: {
+          key: '',
+          comparator: '>',
+          value: '0',
+        },
+      },
+    ];
+
+    const encryptResult = await client.encrypt({
+      dataToEncrypt: new Uint8Array(dataBytes),
+      unifiedAccessControlConditions: conditions,
+    });
+
+    logger.info(`[Lit] Encryption complete. Hash: ${encryptResult.dataToEncryptHash?.substring(0, 20)}...`);
+
+    res.json({
+      success: true,
+      ciphertext: encryptResult.ciphertext,
+      dataToEncryptHash: encryptResult.dataToEncryptHash,
+      conditions,
+    });
+  } catch (error: any) {
+    logger.error('[Lit] Encryption error:', error);
+    res.status(500).json({ error: error.message || 'Lit encryption failed' });
+  }
+});
+
+/**
+ * POST /api/storage/ipfs/upload-elacity
+ * Upload content to Elacity's IPFS infrastructure for public reachability.
+ *
+ * Reads raw bytes from the request body (base64) or from a local CID,
+ * then uploads to Elacity's IPFS endpoint. Returns the CID that resolves
+ * on ipfs.ela.city — no third-party services, fully within the ecosystem.
+ *
+ * Body: { content: string (base64), filename?: string }
+ *   OR: { cid: string, filename?: string }   — reads from local IPFS first
+ * Response: { success: true, cid: string, size: number }
+ */
+router.post('/ipfs/upload-elacity', authenticate, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const ELACITY_UPLOAD = 'https://base.ela.city/api/2.0/files/upload';
+    const { content, cid, filename } = req.body;
+
+    let bytes: Buffer;
+
+    if (content) {
+      bytes = Buffer.from(content, 'base64');
+    } else if (cid) {
+      const ipfs = req.app.locals.ipfs;
+      if (!ipfs) {
+        res.status(503).json({ error: 'IPFS not available' });
+        return;
+      }
+      bytes = await ipfs.getFile(cid);
+    } else {
+      res.status(400).json({ error: 'Provide either content (base64) or cid' });
+      return;
+    }
+
+    if (!bytes || bytes.length === 0) {
+      res.status(400).json({ error: 'Empty content' });
+      return;
+    }
+
+    logger.info(`[IPFS-Elacity] Uploading ${bytes.length} bytes to Elacity IPFS...`);
+
+    const formData = new FormData();
+    formData.append('file', new Blob([new Uint8Array(bytes)]), filename || 'content');
+
+    const uploadResp = await fetch(ELACITY_UPLOAD, {
+      method: 'POST',
+      headers: { 'X-Target-Flow': 'ipfs' },
+      body: formData,
+    });
+
+    if (!uploadResp.ok) {
+      const errText = await uploadResp.text();
+      logger.error(`[IPFS-Elacity] Upload failed: ${uploadResp.status} ${errText}`);
+      res.status(502).json({ error: `Elacity IPFS upload failed: ${uploadResp.status}` });
+      return;
+    }
+
+    const uploadData = await uploadResp.json() as Array<{
+      path: string; storage: string; size: number; originalFileName: string;
+    }>;
+
+    if (!uploadData?.[0]?.path) {
+      res.status(502).json({ error: 'No CID returned from Elacity IPFS' });
+      return;
+    }
+
+    const remoteCid = uploadData[0].path;
+    const remoteSize = uploadData[0].size;
+
+    logger.info(`[IPFS-Elacity] Pinned: ${remoteCid} (${remoteSize} bytes)`);
+
+    res.json({
+      success: true,
+      cid: remoteCid,
+      size: remoteSize,
+    });
+  } catch (error: any) {
+    logger.error('[IPFS-Elacity] Upload error:', error);
+    res.status(500).json({ error: error.message || 'Elacity IPFS upload failed' });
+  }
+});
+
 export default router;
 

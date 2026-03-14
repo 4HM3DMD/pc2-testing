@@ -90,6 +90,7 @@
     dom.assetAccess = document.getElementById('asset-access');
     dom.assetCopies = document.getElementById('asset-copies');
     dom.assetChannel = document.getElementById('asset-channel');
+    dom.assetChannelCustom = document.getElementById('asset-channel-custom');
     dom.progressError = document.getElementById('progress-error');
     dom.resultAssetCid = document.getElementById('result-asset-cid');
     dom.resultMetaCid = document.getElementById('result-meta-cid');
@@ -135,6 +136,9 @@
           dom.walletBtn.textContent = accounts[0].substring(0, 6) + '...' + accounts[0].slice(-4);
           dom.walletBtn.classList.add('connected');
           showToast('Wallet connected', 'success');
+          if (state.currentStep >= 2 && !state.channelsLoaded) {
+            loadChannels(accounts[0]);
+          }
         }
       })
       .catch(function (err) {
@@ -159,6 +163,114 @@
       if (stepNum === n) s.classList.add('active');
       else if (stepNum < n) s.classList.add('done');
     });
+
+    if (n === 2 && state.walletAddress && !state.channelsLoaded) {
+      loadChannels(state.walletAddress);
+    }
+  }
+
+  // ── Channel fetching from Elacity backend ──────────────
+
+  async function fetchChannelsFromBackend(query) {
+    var resp = await fetch(ELACITY_BACKEND + '/2.0/graphql', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query: 'query FetchChannels($query: ChannelQueryInput, $filters: FilterPaginationInput) { result: fetchChannels(query: $query, filters: $filters) { total data { _id address name imageURL creator { address } } } }',
+        variables: { query: query, filters: { offset: 0, limit: 50 } },
+      }),
+    });
+    if (!resp.ok) return [];
+    var json = await resp.json();
+    return (json.data && json.data.result && json.data.result.data) || [];
+  }
+
+  async function loadChannels(walletAddress) {
+    var select = dom.assetChannel;
+    var hint = document.getElementById('channel-hint');
+    select.innerHTML = '<option value="">Loading channels...</option>';
+    select.disabled = true;
+
+    try {
+      var addr = walletAddress.toLowerCase();
+      var ownedChannels = await fetchChannelsFromBackend({ creator: addr });
+      var mintableChannels = await fetchChannelsFromBackend({ access: 'mint:' + addr });
+
+      var ownedAddrs = {};
+      ownedChannels.forEach(function (ch) { ownedAddrs[ch.address.toLowerCase()] = true; });
+      var publicChannels = mintableChannels.filter(function (ch) {
+        return !ownedAddrs[ch.address.toLowerCase()];
+      });
+
+      select.innerHTML = '';
+
+      if (ownedChannels.length === 0 && publicChannels.length === 0) {
+        select.innerHTML = '<option value="' + DEFAULT_CHANNEL + '">Public Elacity Channel</option>';
+        hint.textContent = 'No channels found. Using public Elacity channel (free content only).';
+        hint.className = 'field-hint';
+      } else {
+        if (ownedChannels.length > 0) {
+          var group1 = document.createElement('optgroup');
+          group1.label = 'Your Channels (' + ownedChannels.length + ')';
+          ownedChannels.forEach(function (ch) {
+            var opt = document.createElement('option');
+            opt.value = ch.address;
+            opt.textContent = ch.name + ' (' + ch.address.substring(0, 8) + '...)';
+            group1.appendChild(opt);
+          });
+          select.appendChild(group1);
+        }
+
+        if (publicChannels.length > 0) {
+          var group2 = document.createElement('optgroup');
+          group2.label = 'Public Channels (' + publicChannels.length + ')';
+          publicChannels.forEach(function (ch) {
+            var opt = document.createElement('option');
+            opt.value = ch.address;
+            opt.textContent = (ch.name || 'Unnamed') + ' (' + ch.address.substring(0, 8) + '...)';
+            group2.appendChild(opt);
+          });
+          select.appendChild(group2);
+        }
+
+        if (ownedChannels.length > 0) {
+          select.value = ownedChannels[0].address;
+          hint.textContent = 'Your channel selected — you have full minting rights.';
+          hint.className = 'field-hint success';
+        } else {
+          hint.textContent = 'Public channels available. Create your own for full minting rights.';
+          hint.className = 'field-hint';
+        }
+      }
+
+      var customOpt = document.createElement('option');
+      customOpt.value = '__custom__';
+      customOpt.textContent = '— Enter address manually —';
+      select.appendChild(customOpt);
+
+      state.channelsLoaded = true;
+    } catch (err) {
+      console.error('[Creator] Failed to fetch channels:', err);
+      select.innerHTML = '<option value="' + DEFAULT_CHANNEL + '">Public Elacity Channel (fallback)</option>';
+      var customFb = document.createElement('option');
+      customFb.value = '__custom__';
+      customFb.textContent = '— Enter address manually —';
+      select.appendChild(customFb);
+      hint.textContent = 'Could not load channels from Elacity backend. Using default.';
+      hint.className = 'field-hint';
+    }
+
+    select.disabled = false;
+  }
+
+  // ── Channel address resolution ───────────────────────
+
+  function getSelectedChannel() {
+    var val = dom.assetChannel.value;
+    if (val === '__custom__') {
+      return (dom.assetChannelCustom.value || '').trim();
+    }
+    return val.trim();
   }
 
   // ── File handling ─────────────────────────────────────
@@ -234,7 +346,9 @@
     var title = dom.assetTitle.value.trim();
     var category = dom.assetCategory.value;
     var price = parseFloat(dom.assetPrice.value);
-    var valid = title.length > 0 && category && !isNaN(price) && price >= 0;
+    var ch = getSelectedChannel();
+    var hasChannel = ch && ethers.isAddress(ch);
+    var valid = title.length > 0 && category && !isNaN(price) && price >= 0 && hasChannel;
     dom.btnToStep3.disabled = !valid;
   }
 
@@ -254,6 +368,15 @@
       binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
     }
     return btoa(binary);
+  }
+
+  function base64ToUint8(b64) {
+    var binary = atob(b64);
+    var bytes = new Uint8Array(binary.length);
+    for (var i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return bytes;
   }
 
   function buildMetadataEnvelope(params) {
@@ -328,7 +451,7 @@
 
   // ── Minting helpers ──────────────────────────────────
 
-  var PROGRESS_STEPS = ['prog-connect', 'prog-encrypt', 'prog-upload-asset', 'prog-upload-meta', 'prog-mint', 'prog-approve'];
+  var PROGRESS_STEPS = ['prog-connect', 'prog-encrypt', 'prog-upload-asset', 'prog-upload-meta', 'prog-pin', 'prog-mint', 'prog-approve'];
 
   function hashToContentId(hexHash) {
     var clean = hexHash.startsWith('0x') ? hexHash.slice(2) : hexHash;
@@ -597,6 +720,55 @@
     return { address: channelAddr, name: channelName, txHash: txHash };
   }
 
+  // ── Elacity backend auth (nonce-sign-login) ──────────
+
+  var elacityAuthCache = { token: null, address: null };
+
+  async function elacityGraphQL(query, variables) {
+    var resp = await fetch(ELACITY_BACKEND + '/2.0/graphql', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: query, variables: variables }),
+    });
+    if (!resp.ok) throw new Error('Elacity GraphQL ' + resp.status);
+    var json = await resp.json();
+    if (json.errors && json.errors.length > 0) throw new Error(json.errors[0].message);
+    return json.data;
+  }
+
+  async function getElacityAuthToken(walletAddress) {
+    var addr = walletAddress.toLowerCase();
+    if (elacityAuthCache.token && elacityAuthCache.address === addr) {
+      return elacityAuthCache.token;
+    }
+
+    var nonceData = await elacityGraphQL(
+      'query GetNonce($address: String!) { getNonce(address: $address) }',
+      { address: addr }
+    );
+    var nonce = nonceData.getNonce;
+    console.log('[Creator] Elacity nonce:', nonce);
+
+    var msg = 'Approve signature on https://ela.city with nonce ' + (nonce || 0);
+    var hexMsg = '0x' + Array.from(new TextEncoder().encode(msg))
+      .map(function (b) { return b.toString(16).padStart(2, '0'); })
+      .join('');
+    var signature = await window.ethereum.request({
+      method: 'personal_sign',
+      params: [hexMsg, addr],
+    });
+
+    var loginData = await elacityGraphQL(
+      'mutation UserLogin($address: String!, $signature: String!) { userLogin(address: $address, signature: $signature) { token address alias } }',
+      { address: addr, signature: signature }
+    );
+
+    var token = loginData.userLogin.token;
+    elacityAuthCache = { token: token, address: addr };
+    console.log('[Creator] Elacity auth token obtained');
+    return token;
+  }
+
   async function registerChannelWithBackend(params) {
     var mutation = [
       'mutation CreateChannel($input: ChannelInput) {',
@@ -610,19 +782,24 @@
       name: params.name,
       address: params.address,
       description: params.description || '',
-      creator: params.creator,
+      creator: params.creator.toLowerCase(),
       scope: '1',
       channelType: '1',
+      image: '',
+      coverImage: '',
       categories: [],
       plans: [],
       tokenAccess: [],
     };
+
+    var authToken = await getElacityAuthToken(params.creator);
 
     var resp = await fetch(ELACITY_BACKEND + '/2.0/graphql', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'X-Transaction-Id': params.txHash,
+        'Authorization': 'Bearer ' + authToken,
       },
       body: JSON.stringify({
         query: mutation,
@@ -706,8 +883,10 @@
     var price = parseFloat(dom.assetPrice.value);
     var accessMethod = dom.assetAccess.value;
     var copies = parseInt(dom.assetCopies.value) || 10000;
-    var channel = dom.assetChannel.value.trim();
+    var channel = getSelectedChannel();
     var usedLocalEncryption = false;
+
+    console.log('[Creator] Pipeline starting. Channel:', channel, '| Select value:', dom.assetChannel.value, '| Custom:', dom.assetChannelCustom.value);
 
     dom.progressError.classList.add('hidden');
     dom.btnBackTo2.disabled = true;
@@ -726,19 +905,36 @@
       var tokenId = '0';
 
       try {
-        var mod = await import('./vendor/access/elacity-access.browser.js');
-        var access = new mod.ElacityAccess();
-        await access.connect(window.ethereum, { chainId: BASE_CHAIN_ID });
-        setProgStep('prog-connect', 'Lit Connected (datil)', 'done');
+        setProgStep('prog-connect', 'Connecting to Lit (server-side)...', 'active');
+        console.log('[Creator] Encrypting via backend Lit endpoint...');
+
+        var fileBase64 = uint8ToBase64(state.fileBytes);
+        var litResp = await pc2Fetch('/api/storage/lit/encrypt', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ data: fileBase64, ledger: ledger, tokenId: tokenId }),
+        });
+
+        if (!litResp.ok) {
+          var litErrBody = await litResp.json().catch(function () { return {}; });
+          throw new Error(litErrBody.error || 'Lit encrypt returned ' + litResp.status);
+        }
+
+        var litData = await litResp.json();
+        console.log('[Creator] Lit encryption succeeded. Hash:', litData.dataToEncryptHash?.substring(0, 20) + '...');
+        setProgStep('prog-connect', 'Lit Connected (datil, server)', 'done');
 
         setProgStep('prog-encrypt', 'Encrypting (Lit)...', 'active');
-        encryptResult = await access.encryptBuffer(state.fileBytes, {
-          ledger: ledger,
-          tokenId: tokenId,
-        });
+        encryptResult = {
+          encrypted: base64ToUint8(litData.ciphertext),
+          dataToEncryptHash: litData.dataToEncryptHash,
+          keyId: ledger + ':' + tokenId,
+          conditions: litData.conditions,
+        };
       } catch (litErr) {
-        console.warn('[Creator] Lit Protocol unavailable, using local encryption:', litErr.message);
-        setProgStep('prog-connect', 'Local mode (Lit unreachable)', 'done');
+        console.error('[Creator] Lit Protocol error:', litErr);
+        console.warn('[Creator] Lit server unavailable, using local encryption:', litErr.message);
+        setProgStep('prog-connect', 'Local mode (Lit unavailable)', 'done');
 
         setProgStep('prog-encrypt', 'Encrypting (local AES-GCM)...', 'active');
         encryptResult = await localEncrypt(state.fileBytes);
@@ -747,27 +943,45 @@
       setProgStep('prog-encrypt', 'Encrypted', 'done');
 
       // ── Step 2: Upload encrypted asset to IPFS ────────
-      setProgStep('prog-upload-asset', 'Uploading...', 'active');
+      // Upload to local node AND Elacity's IPFS for public reachability
+      setProgStep('prog-upload-asset', 'Uploading to local node...', 'active');
       var assetBase64 = uint8ToBase64(encryptResult.encrypted);
-      var assetResp = await pc2Fetch('/api/storage/ipfs/add', {
+
+      var localAssetResp = await pc2Fetch('/api/storage/ipfs/add', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ content: assetBase64, announce: true }),
       });
-
-      if (!assetResp.ok) {
-        var errBody = await assetResp.json().catch(function () { return {}; });
-        throw new Error('IPFS upload failed: ' + (errBody.error || assetResp.status));
+      if (!localAssetResp.ok) {
+        var errBody = await localAssetResp.json().catch(function () { return {}; });
+        throw new Error('Local IPFS upload failed: ' + (errBody.error || localAssetResp.status));
       }
+      var localAssetData = await localAssetResp.json();
+      var localAssetCid = localAssetData.cid;
+      console.log('[Creator] Local asset CID:', localAssetCid);
 
-      var assetData = await assetResp.json();
-      var assetCid = assetData.cid;
+      setProgStep('prog-upload-asset', 'Pinning to Elacity IPFS...', 'active');
+      var assetCid = localAssetCid;
+      try {
+        var elacityAssetResp = await pc2Fetch('/api/storage/ipfs/upload-elacity', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: assetBase64, filename: 'encrypted-asset' }),
+        });
+        if (elacityAssetResp.ok) {
+          var elacityAssetData = await elacityAssetResp.json();
+          assetCid = elacityAssetData.cid;
+          console.log('[Creator] Elacity asset CID:', assetCid);
+        } else {
+          console.warn('[Creator] Elacity IPFS upload failed, using local CID');
+        }
+      } catch (e) {
+        console.warn('[Creator] Elacity IPFS upload error:', e.message);
+      }
       setProgStep('prog-upload-asset', 'CID: ' + assetCid.substring(0, 12) + '...', 'done');
 
-      // ── Step 3: Upload metadata as IPFS directory ─────
-      // Elacity expects {dirCID}/metadata.json — we upload a directory
-      // containing metadata.json so the URI resolves on any IPFS gateway.
-      setProgStep('prog-upload-meta', 'Uploading...', 'active');
+      // ── Step 3: Build & upload metadata ─────────────────
+      setProgStep('prog-upload-meta', 'Building metadata...', 'active');
       var envelope = buildMetadataEnvelope({
         title: title,
         description: description,
@@ -791,23 +1005,62 @@
 
       var metaJsonStr = JSON.stringify(envelope, null, 2);
       var metaBase64 = btoa(unescape(encodeURIComponent(metaJsonStr)));
-      var metaResp = await pc2Fetch('/api/storage/ipfs/add-directory', {
+
+      // Upload to local IPFS (directory format for local gateway)
+      var localMetaDirCid = null;
+      var localMetaResp = await pc2Fetch('/api/storage/ipfs/add-directory', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          files: { 'metadata.json': metaBase64 },
-          announce: true,
-        }),
+        body: JSON.stringify({ files: { 'metadata.json': metaBase64 }, announce: true }),
       });
-
-      if (!metaResp.ok) {
-        var metaErr = await metaResp.json().catch(function () { return {}; });
-        throw new Error('Metadata upload failed: ' + (metaErr.error || metaResp.status));
+      if (localMetaResp.ok) {
+        var localMetaData = await localMetaResp.json();
+        localMetaDirCid = localMetaData.cid;
+        console.log('[Creator] Local meta dir CID:', localMetaDirCid);
       }
 
-      var metaData = await metaResp.json();
-      var metaCid = metaData.cid;
+      // Upload metadata to Elacity's IPFS (raw file CID for public access)
+      setProgStep('prog-upload-meta', 'Pinning to Elacity IPFS...', 'active');
+      var metaCid = null;
+      try {
+        var elacityMetaResp = await pc2Fetch('/api/storage/ipfs/upload-elacity', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: metaBase64, filename: 'metadata.json' }),
+        });
+        if (elacityMetaResp.ok) {
+          var elacityMetaData = await elacityMetaResp.json();
+          metaCid = elacityMetaData.cid;
+          console.log('[Creator] Elacity meta CID:', metaCid);
+        }
+      } catch (e) {
+        console.warn('[Creator] Elacity meta upload error:', e.message);
+      }
+
+      if (!metaCid && localMetaDirCid) {
+        metaCid = localMetaDirCid + '/metadata.json';
+        console.warn('[Creator] Falling back to local directory CID:', metaCid);
+      }
+      if (!metaCid) {
+        throw new Error('Failed to upload metadata to IPFS');
+      }
       setProgStep('prog-upload-meta', 'CID: ' + metaCid.substring(0, 12) + '...', 'done');
+
+      // ── Step 3b: Verify on Elacity gateway ──────────────
+      setProgStep('prog-pin', 'Verifying...', 'active');
+      try {
+        var verifyResp = await fetch('https://ipfs.ela.city/ipfs/' + metaCid, {
+          method: 'HEAD',
+          signal: AbortSignal.timeout(10000),
+        });
+        if (verifyResp.ok) {
+          setProgStep('prog-pin', 'Verified on ipfs.ela.city', 'done');
+        } else {
+          setProgStep('prog-pin', 'Uploaded (gateway pending)', 'done');
+        }
+      } catch (e) {
+        setProgStep('prog-pin', 'Uploaded to Elacity IPFS', 'done');
+      }
 
       // ── Step 4: Mint on Channel contract ──────────────
       var mintedTokenId = null;
@@ -849,7 +1102,7 @@
           ? encodeSellRawData(copies, priceWei, USDC_BASE)
           : '0x';
 
-        var mintUri = metaCid + '/metadata.json';
+        var mintUri = metaCid;
         var iface = new ethers.Interface(ABI.DIGITAL_ASSET);
         var mintData = iface.encodeFunctionData('mint', [mintUri, opType, opRawData, sellRawData]);
 
@@ -979,7 +1232,7 @@
     dom.assetPrice.value = '4.99';
     dom.assetAccess.value = 'free';
     dom.assetCopies.value = '10000';
-    dom.assetChannel.value = DEFAULT_CHANNEL;
+    state.channelsLoaded = false;
     dom.progressError.classList.add('hidden');
     dom.btnBackTo2.disabled = false;
 
@@ -1054,18 +1307,51 @@
         channelHint.textContent = 'Confirm transaction in wallet...';
         var channelDesc = dom.assetDescription.value.trim() || 'Digital assets channel on PC2';
         var result = await doCreateChannel(channelName, channelDesc);
+        showToast('Channel created: ' + result.address.substring(0, 10) + '...', 'success');
+        state.channelsLoaded = false;
+        await loadChannels(state.walletAddress);
+
+        // Ensure the newly created channel is in the dropdown even if the
+        // backend query hasn't indexed it yet.
+        var found = false;
+        for (var i = 0; i < dom.assetChannel.options.length; i++) {
+          if (dom.assetChannel.options[i].value.toLowerCase() === result.address.toLowerCase()) {
+            found = true;
+            break;
+          }
+        }
+        if (!found) {
+          var newGroup = dom.assetChannel.querySelector('optgroup[label^="Your"]');
+          if (!newGroup) {
+            newGroup = document.createElement('optgroup');
+            newGroup.label = 'Your Channels (1)';
+            dom.assetChannel.insertBefore(newGroup, dom.assetChannel.firstChild);
+          }
+          var newOpt = document.createElement('option');
+          newOpt.value = result.address;
+          newOpt.textContent = result.name + ' (' + result.address.substring(0, 8) + '...)';
+          newGroup.appendChild(newOpt);
+        }
+
         dom.assetChannel.value = result.address;
+        dom.assetChannelCustom.classList.add('hidden');
         channelHint.textContent = 'Your channel: ' + result.address.substring(0, 10) + '... (you have full minting rights)';
         channelHint.className = 'field-hint success';
-        showToast('Channel created: ' + result.address.substring(0, 10) + '...', 'success');
       } catch (err) {
         channelHint.textContent = 'Channel creation failed: ' + (err.message || '').substring(0, 80);
         channelHint.className = 'field-hint';
         showToast('Channel creation failed: ' + (err.message || ''), 'error');
       } finally {
         btnCreateChannel.disabled = false;
-        btnCreateChannel.textContent = '+ Create Channel';
+        btnCreateChannel.textContent = '+ Create';
       }
+    });
+
+    // Channel dropdown: toggle custom address input
+    dom.assetChannel.addEventListener('change', function () {
+      var isCustom = dom.assetChannel.value === '__custom__';
+      dom.assetChannelCustom.classList.toggle('hidden', !isCustom);
+      if (isCustom) dom.assetChannelCustom.focus();
     });
 
     // Step 2 form validation
@@ -1074,6 +1360,8 @@
       dom.assetCategory.addEventListener(evt, validateStep2);
       dom.assetPrice.addEventListener(evt, validateStep2);
       dom.assetAccess.addEventListener(evt, validateStep2);
+      dom.assetChannel.addEventListener(evt, validateStep2);
+      dom.assetChannelCustom.addEventListener(evt, validateStep2);
     });
 
     // Step navigation
@@ -1086,6 +1374,15 @@
       }
       if (!state.fileBytes) {
         showToast('File not loaded yet — please wait', 'error');
+        return;
+      }
+      var ch = getSelectedChannel();
+      if (!ch || !ethers.isAddress(ch)) {
+        showToast('Please select a valid channel address before minting', 'error');
+        var hint = document.getElementById('channel-hint');
+        hint.textContent = 'A valid channel address is required. Select one from the list or enter manually.';
+        hint.className = 'field-hint error';
+        dom.assetChannel.focus();
         return;
       }
       goToStep(3);

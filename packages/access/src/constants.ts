@@ -22,6 +22,18 @@ export const DEFAULT_AUTHORITY_GATEWAY = '0x580C26DeFf267Ef40A72cf10a4A42050F064
 export const DEFAULT_LIT_NETWORK = 'datil';
 
 /**
+ * Lit Protocol capacity credit (RLI) token ID on Chronicle Yellowstone.
+ * Owned by the Elacity wallet (0x0917Aa...C52D).
+ * 100 req/kilosecond, expires April 13, 2026.
+ *
+ * Note: Elacity's production frontend does NOT use capacity delegation
+ * in the browser. If needed, capacity delegation must be handled
+ * server-side by the dApp owner wallet (createCapacityDelegationAuthSig
+ * requires the NFT owner's signature, not the end user's).
+ */
+export const CAPACITY_TOKEN_ID = '429689';
+
+/**
  * DRM system IDs matching the PSSH system IDs in the media-player WASM.
  * These are base64-encoded UUIDs identifying each DRM system variant.
  */

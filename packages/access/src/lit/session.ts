@@ -7,6 +7,11 @@
  *
  * Designed for single-use instantiation (capsule-compatible):
  * each LitSession owns its own client and session state.
+ *
+ * Note on capacity credits: Elacity's production frontend does NOT use
+ * capacity delegation — it calls getSessionSigs() directly without
+ * capabilityAuthSigs. Capacity credits (if needed) should be handled
+ * server-side by the dApp owner wallet, not in the browser.
  */
 
 import { LitNodeClient } from '@lit-protocol/lit-node-client';

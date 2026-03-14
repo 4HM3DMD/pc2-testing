@@ -530,6 +530,28 @@ export class IPFSStorage {
   }
 
   /**
+   * List entries in an IPFS directory.
+   * Returns array of { name, cid, size, type } for each entry.
+   */
+  async listDirectory(cidString: string): Promise<Array<{ name: string; cid: string; size: number; type: string }>> {
+    const fs = this.getUnixFS();
+    const { CID } = await import('multiformats/cid');
+    const cid = CID.parse(cidString);
+    const entries: Array<{ name: string; cid: string; size: number; type: string }> = [];
+
+    for await (const entry of fs.ls(cid)) {
+      entries.push({
+        name: entry.name,
+        cid: entry.cid.toString(),
+        size: Number(entry.size || 0),
+        type: entry.type,
+      });
+    }
+
+    return entries;
+  }
+
+  /**
    * Stream file content from IPFS with optional byte-range support.
    * Only reads the requested bytes from the blockstore -- memory usage is
    * proportional to the chunk size (~256 KB), not the file size.

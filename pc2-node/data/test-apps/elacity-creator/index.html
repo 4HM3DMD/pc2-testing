@@ -112,18 +112,21 @@
           </div>
 
           <div class="form-group full-width">
-            <label for="asset-channel">Channel Address</label>
+            <label for="asset-channel">Channel</label>
             <div class="channel-row">
-              <input type="text" id="asset-channel" placeholder="0x... (public Elacity channel)" value="0x2fb53d4ab93112a6c0a1e54ffcd7199c6fd37412" />
-              <button type="button" class="btn btn-accent" id="btn-create-channel" title="Deploy your own channel on Base">+ Create Channel</button>
+              <select id="asset-channel" style="flex:1; padding:10px; border:1px solid #d1d5db; border-radius:8px; font-size:14px; background:#fff;">
+                <option value="">Loading channels...</option>
+              </select>
+              <button type="button" class="btn btn-accent" id="btn-create-channel" title="Deploy your own channel on Base">+ Create</button>
             </div>
-            <span class="field-hint" id="channel-hint">Public Elacity Channel on Base (anyone can mint free content)</span>
+            <input type="text" id="asset-channel-custom" class="hidden" placeholder="0x... channel address" style="margin-top:6px; width:100%; padding:10px; border:1px solid #d1d5db; border-radius:8px; font-size:14px;" />
+            <span class="field-hint" id="channel-hint">Select a channel to mint into</span>
           </div>
         </div>
 
         <div class="step-actions">
           <button class="btn btn-secondary" id="btn-back-to-1">Back</button>
-          <button class="btn btn-primary" id="btn-to-step-3" disabled>Encrypt & Upload</button>
+          <button class="btn btn-primary" id="btn-to-step-3" disabled>Encrypt, Upload & Mint</button>
         </div>
       </section>
 
@@ -149,6 +152,11 @@
             <div class="prog-icon">📋</div>
             <div class="prog-label">Upload metadata envelope to IPFS</div>
             <div class="prog-status" id="prog-upload-meta-status">Waiting...</div>
+          </div>
+          <div class="progress-step" id="prog-pin">
+            <div class="prog-icon">📌</div>
+            <div class="prog-label">Verify on Elacity IPFS</div>
+            <div class="prog-status" id="prog-pin-status">Waiting...</div>
           </div>
           <div class="progress-step" id="prog-mint">
             <div class="prog-icon">⛓️</div>
