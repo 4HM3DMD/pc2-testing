@@ -1,4 +1,4 @@
-# Session Handover — Mar 13, 2026
+# Session Handover — Mar 14, 2026
 
 > **Read this first when starting a new agent session.**
 
@@ -6,11 +6,11 @@
 
 ## Where We Are
 
-**Branch:** `feature/elacity-ddrm-marketplace` (created from `main` after v1.1.0 release)
+**Branch:** `dDRM-extended` (branched from `feature/elacity-ddrm-marketplace` on Mar 13)
 **Release:** v1.1.0 tagged and released on 2026-03-03 (134 commits squash-merged to main)
 **Launcher:** v1.1.1 released — version display, one-click updates, full networking install
 **DAO Proposal:** Live at https://elastos.com/proposals/69a24f49247f130078064edd
-**Last Commit:** `55846301e` — feat: 3D orb visualization, network map rebrand, SEO overhaul
+**Last Commit:** `9111efd85` — fix: metadata format for Elacity compatibility — image, authority, thumbnail
 
 ### What Just Shipped (v1.1.0 on main)
 
@@ -231,14 +231,41 @@ Full technical spec at `docs/core/ACCESS_PACKAGE_SPEC.md`. Key decisions:
 
 **Two distinct pipelines (coexisting):**
 - **Media** (video/audio): Existing Elacity CENC DRM pipeline (backend transcode → DASH → license server). We do NOT touch this.
-- **Non-media** (documents, images, 3D models, code, datasets, apps): Client-side Lit Protocol encryption → IPFS → on-chain mint → Lit decrypt. This is what `@elacity-js/access` handles.
+- **Non-media** (documents, images, 3D models, code, datasets, apps): Server-side Lit Protocol encryption (via pc2-node) → Elacity IPFS → on-chain mint → Lit decrypt. This is what `@elacity-js/access` handles.
 
-**On-chain verification (Mar 13):**
-- Paid mint tx: `0x26d40e78ca060348f327c656cf683510ecd9b40e2bf5ad997e98fc2d0bf6b9c5` (Base block 43314793)
-- Channel: `0x2fb53d4ab93112a6c0a1e54ffcd7199c6fd37412` (public Elacity channel)
-- Operative: `0xf2359397f0e0794a7626d491d1c0157d8520e440` (OperativeBuyableSellable)
-- Sub-tokens: AccessToken (id=1, 10000 copies), RoyaltyShare (id=2, 950→creator + 50→Elacity), DistributionRight (id=3)
-- User-created channel: `0x13446a6a7CA190DcD124838156A852DbdaD14c94` (via ChannelCore.createChannel)
+**Server-side Lit Protocol (Mar 13-14):**
+- Lit operations moved to pc2-node backend due to iframe sandbox blocking outbound Lit node connections
+- `POST /api/lit/encrypt` — encrypts content with Lit Protocol using server-side LitNodeClientNodeJs
+- Capacity Credits: RLI Token #429689 (100 req/kilosecond, valid until Apr 13) on wallet `0x0917Aa...C52D`
+- Delegation: Owner-signed `createCapacityDelegationAuthSig` on backend (not end-user signed)
+
+**Elacity IPFS Pipeline (Mar 13-14) — KEY BREAKTHROUGH:**
+- Local IPFS (Helia) + Elacity IPFS (`POST /api/2.0/files/upload` with `X-Target-Flow: ipfs`) dual-upload
+- Uses raw file CIDs from Elacity (CIDv0/base58) for all public references (tokenURI, asset.cid)
+- `POST /api/storage/ipfs/upload-elacity` endpoint on pc2-node proxies uploads to Elacity's IPFS
+- Solved: CIDv0 vs CIDv1, directory wrapping, chunking differences between Helia and go-ipfs
+
+**Metadata format (fixed Mar 14):**
+- `image` field: auto-generated 400px JPEG thumbnail, uploaded to Elacity IPFS
+- `properties.authority`: resolved from channel's `authority()` function (AuthorityGateway address)
+- `properties.categories`: array matching asset category
+- Without these, Elacity's GraphQL strict schema rejects the asset (`LedgerTokenMetadata.image!`, `LedgerTokenProperties.authority!`)
+
+**On-chain verification:**
+- **First paid mint (Mar 13):** tx `0x26d40e78...` on public Elacity channel `0x2fb53d4a...`
+  - Operative: `0xf2359397...` (OperativeBuyableSellable)
+  - Sub-tokens: AccessToken (id=1, 10k), RoyaltyShare (id=2, 950→creator + 50→Elacity), DistributionRight (id=3)
+- **Marketplace-visible mint (Mar 14):** Channel `0xb4a1c563...` (user-created)
+  - Operative: `0x7D243806...`
+  - Asset CID: `QmSZuxhtcmXtWP465tYGqhs7Bu7bpRXCCaGhxFi63iPNUb`
+  - Metadata CID: `QmUsR7um7f8KvWMbdKGMxhiuwUceLXDLxzZhrNc7FjtkP1`
+  - **Visible on base.ela.city** — detail page loads with thumbnail, metadata, operative info
+- **First purchase (Mar 14):** tx `0xfbfe054a...` via Universal Smart Account
+  - Buyer `0x7efe9dd2...` received resale token (#1) + ACCESS_TOKEN (#3)
+  - 0.01 USDC paid: 0.0095→creator, 0.0005→Elacity
+  - 0.294864 USDC gas fee to Particle/UniversalX paymaster (`0xBeb44C79...`)
+  - Transaction succeeded on-chain despite UI `TypeError` in Elacity's `UAReceiptFetcher.enrichOperationsWithContracts`
+- User-created channels: `0x13446a6a...`, `0xb4a1c563...` (via ChannelCore.createChannel)
 
 **Key contract addresses (Base 8453):**
 - CoreStorage: `0xc8F50Bf1A6b765460621f861a64a5d333Bc7f575`
@@ -256,27 +283,35 @@ Full technical spec at `docs/core/ACCESS_PACKAGE_SPEC.md`. Key decisions:
 
 **Implementation branch:** `dDRM-extended` (branched from `feature/elacity-ddrm-marketplace` on Mar 13)
 
-**Still testing / not yet complete:**
-- [ ] End-to-end consumer purchase and decrypt flow (buy AccessToken → decrypt → download)
-- [ ] setApprovalForAll post-mint (code implemented, needs user wallet confirmation)
-- [ ] Lit Protocol production connectivity (currently using local dev mode fallback)
-- [ ] Paid mint on user-created channels (royalty address fix applied, needs re-test)
-- [ ] Integration with Elacity Market dApp backend (asset visibility after mint)
+**Testing status (updated Mar 14):**
+- [x] Lit Protocol production connectivity — **WORKING** via server-side pc2-node backend (capacity credits + delegation)
+- [x] Paid mint on user-created channels — **VERIFIED WORKING** (channel `0xb4a1c563...`, operative `0x7D243806...`)
+- [x] Integration with Elacity Market dApp backend (asset visibility after mint) — **VERIFIED** (visible on base.ela.city + channel page)
+- [x] On-chain purchase — **VERIFIED** (buyer received ACCESS_TOKEN + resale token, payment split correct)
+- [ ] **Consumer decrypt flow** — buyer has ACCESS_TOKEN, needs server-side Lit decrypt endpoint on pc2-node
+- [ ] setApprovalForAll post-mint — code implemented, needs user wallet confirmation
+- [ ] Purchase with standard wallet (MetaMask) — to isolate UA receipt parsing bug
+
+**Known issues:**
+- Elacity frontend UA receipt parsing: `UAReceiptFetcher.enrichOperationsWithContracts` throws `TypeError: Cannot read properties of undefined (reading 'map')` after successful on-chain purchase. Bug is in Elacity's `index-BOeceeBu.js`, not in our code. Transaction completes successfully.
+- MPD parser error for image assets: Elacity's media player tries to parse image metadata as DASH manifest. Expected for non-video content.
 
 #### Next Up — Engineering Priorities
-1. **Complete end-to-end testing** — verify consumer purchase flow (buy AccessToken → decrypt → download), paid mint on user channels, Lit Protocol production connectivity
-2. ~~**`@elacity-js/access` package**~~ — DONE (Mar 13) — 16 source files, 48 unit tests, audited and fixed
-3. ~~**Wire `@elacity-js/access` into Elacity Market dApp**~~ — DONE (Mar 13) — Download+Decrypt for non-media assets, local dev key support
-4. ~~**Creator Dashboard dApp**~~ — DONE (Mar 13) — encrypt, upload to IPFS, metadata envelope, on-chain mint() + setApprovalForAll()
-5. ~~**Contract ABIs + mint encoding**~~ — DONE (Mar 13) — DigitalAsset, CoreStorage, ChannelCore ABIs; opRawData/sellRawData encoding; Base addresses; paid mint verified on BaseScan
-6. ~~**Consumer decrypt flow**~~ — DONE (Mar 13) — acquireKey() with SIWE sessions, fetchAndDecrypt(), local dev mode fallback
-7. ~~**Channel creation**~~ — DONE (Mar 13) — createChannel() with metadata IPFS dir, royalty split, MINTER_ROLE, backend GraphQL registration
-8. **AI Model Marketplace alpha** — first non-media vertical: GGUF → encrypt → IPFS → ACCESS_TOKEN → decrypt on node → Ollama
-9. **Create GitHub release `pc2-binaries-v1`** — run `fetch-binaries.sh all`, upload assets to release (DEFERRED: waiting for Apple Developer license)
-10. **Gateway "node offline" page** — replaces infinite "initializing" spinner with friendly error + retry
-11. **Fiat onramp** — Particle Smart Account + Stripe/Moonpay for one-click credit card purchases
-12. **App Factory** — local packaging pipeline (build → bundle → IPFS pin → publish)
-13. **dDRM Access Token contract** — ERC-1155 tiered tokens for supernode economics (deferred to Milestone 3-4)
+1. **Consumer decrypt endpoint** — `POST /api/lit/decrypt` on pc2-node: verify ACCESS_TOKEN on-chain → Lit Protocol decrypt key → AES-GCM decrypt → return bytes. This is the critical missing piece.
+2. **Universal asset viewer** — render decrypted content by MIME type (images, PDFs, audio, 3D models). No WASM/SharedArrayBuffer needed.
+3. **AI Model Marketplace alpha** — first non-media vertical: GGUF → encrypt → IPFS → ACCESS_TOKEN → decrypt on node → Ollama
+4. ~~**`@elacity-js/access` package**~~ — DONE (Mar 13)
+5. ~~**Creator Dashboard dApp**~~ — DONE (Mar 13-14) — encrypt, IPFS upload (local + Elacity), metadata, mint, channel selection
+6. ~~**Contract ABIs + mint encoding**~~ — DONE (Mar 13)
+7. ~~**Channel creation**~~ — DONE (Mar 13)
+8. ~~**Elacity IPFS pipeline**~~ — DONE (Mar 14) — dual upload, CID resolution, marketplace visibility
+9. ~~**Marketplace metadata compatibility**~~ — DONE (Mar 14) — image, authority, categories
+10. ~~**On-chain purchase verification**~~ — DONE (Mar 14)
+11. **Create GitHub release `pc2-binaries-v1`** — run `fetch-binaries.sh all`, upload assets to release (DEFERRED)
+12. **Gateway "node offline" page** — replaces infinite "initializing" spinner
+13. **Fiat onramp** — Particle Smart Account + Stripe/Moonpay
+14. **App Factory** — local packaging pipeline
+15. **dDRM Access Token contract** — ERC-1155 tiered tokens for supernode economics (deferred to Milestone 3-4)
 
 #### Backlog — Marketing & Docs (Lower Priority)
 - [ ] **PC2 marketing slides for elacitylabs.com** — audit and rewrite 7 slides (benefits, features, blind spots, full copywriting)
@@ -331,7 +366,7 @@ Full technical spec at `docs/core/ACCESS_PACKAGE_SPEC.md`. Key decisions:
 - [Supernode Decentralization](f18dbf44-f5de-4238-8c62-499018cd4e50) — gateway v2.0, bootstrap script, dynamic discovery, relay mode, supernode dApp, community networking fix, docs update
 - [Network Map + Strategy](d9445cb9-12bd-437e-8d4e-ebb35ef40d64) — network map visual upgrade, universal asset strategy, app manifest spec, binary manager, handover
 - [3D Orb + SEO + Rebrand](6431d137-5dd9-4c8e-b042-5d8c54b908a5) — 3D orb integration, network map rebrand to "World Computer", full SEO overhaul, GA4, app icon fixes, mobile responsiveness
-- [Access Package Strategy](fd6755f0-d73c-4e41-8df3-0f57f15071a2) — @elacity-js/access audit, Creator Dashboard, on-chain minting (paid verified), channel creation, operative approval, contract encoding fixes
+- [dDRM Pipeline E2E](fd6755f0-d73c-4e41-8df3-0f57f15071a2) — @elacity-js/access audit, Creator Dashboard, server-side Lit, Elacity IPFS pipeline, marketplace visibility, on-chain purchase verified, metadata fixes, channel creation
 
 ---
 

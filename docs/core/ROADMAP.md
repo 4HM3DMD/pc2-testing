@@ -127,7 +127,7 @@ These diagrams from Rong define the north star. Every work stream should move us
 **Frontend Apps:**
 - [x] Elacity Market app using `@elacity-js/api` + wallet bridge *(completed Mar 3-4)*
 - [x] Media player as installable app with per-app COOP/COEP headers *(completed Mar 3)*
-- [ ] Purchase flow with `contracts-ua-executor` + Particle Auth via bridge *(EOA path works, UA path pending)*
+- [x] Purchase flow via AuthorityGateway *(verified Mar 14 — buyer received ACCESS_TOKEN + resale token, 0.01 USDC payment split correct; UA receipt parsing bug in Elacity frontend, transaction succeeds on-chain)*
 - [ ] App Center UI rebuild against real backend APIs
 
 **Download-to-Node / Content Seeding:**
@@ -149,7 +149,13 @@ These diagrams from Rong define the north star. Every work stream should move us
   - [x] On-chain minting — `mint(string,uint16,bytes,bytes)` with full opRawData/sellRawData encoding, fee from CoreStorage, gateway from `authority()`. Paid mint (opType=2) verified on BaseScan with correct sub-tokens *(verified Mar 13)*
   - [x] Channel creation — `createChannel()` on ChannelCore with metadata dir, royalty split, MINTER_ROLE auto-grant, backend GraphQL registration *(implemented Mar 13)*
   - [x] Operative approval — `setApprovalForAll(gateway, true)` with ContractCreated event fallback for proxy-based channels *(implemented Mar 13)*
-  - [ ] End-to-end consumer flow testing (purchase → decrypt → download)
+  - [x] Elacity IPFS pipeline — dual upload (local + Elacity), CIDv0 resolution, marketplace visibility confirmed *(completed Mar 14)*
+  - [x] Metadata format — image (auto-thumbnail), authority, categories fields for GraphQL compatibility *(completed Mar 14)*
+  - [x] Server-side Lit Protocol — encryption via pc2-node backend with capacity credits (RLI #429689) *(completed Mar 14)*
+  - [x] Channel selection UI — user's own channels + custom address input *(completed Mar 14)*
+  - [x] On-chain purchase verified — buyer received ACCESS_TOKEN, payment split correct *(verified Mar 14)*
+  - [ ] Consumer decrypt endpoint — `POST /api/lit/decrypt` on pc2-node (ACCESS_TOKEN verification → Lit decrypt → AES-GCM → return bytes)
+  - [ ] Universal asset viewer — render decrypted content by MIME type (no WASM needed for non-media)
 
 **SDK Evolution (Universal Asset Protocol):**
 - [x] `@elacity-js/access` package — clean-room build of universal access layer using Lit Protocol SDK directly (see `docs/core/ACCESS_PACKAGE_SPEC.md`) *(implemented Mar 13 — 12 source files, 47 unit tests passing)*
@@ -255,7 +261,7 @@ These diagrams from Rong define the north star. Every work stream should move us
 
 **Elacity dDRM Integration:**
 - [x] Integrate Elacity dDRM SDK into ElastOS *(completed Mar 3-4 — Market dApp, player, wallet bridge)*
-- [ ] Encrypted content upload + CID distribution
+- [x] Encrypted content upload + CID distribution *(completed Mar 14 — Elacity IPFS pipeline, dual upload)*
 - [x] Access token architecture (buy rights → get decryption key) *(completed Mar 4 — buyAccess + Lit Protocol DRM)*
 - [x] Selective IPFS DHT announcement for dDRM content (`announce: true`) *(completed Mar 5 — dht.provide + periodic re-announce)*
 - [x] Marketplace UI within ElastOS (browse, purchase, download) *(completed Mar 3-4 — Elacity Market dApp)*
