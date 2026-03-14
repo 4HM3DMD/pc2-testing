@@ -485,10 +485,11 @@
         }
 
         state.browseTotal = result.total;
-        state.browseItems = state.browseItems.concat(result.data);
-        state.browseOffset += result.data.length;
+        var validItems = (result.data || []).filter(function (item) { return item !== null; });
+        state.browseItems = state.browseItems.concat(validItems);
+        state.browseOffset += result.data ? result.data.length : 0;
 
-        result.data.forEach(function (item) {
+        validItems.forEach(function (item) {
           dom.nftGrid.appendChild(renderCard(item));
         });
 

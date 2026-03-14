@@ -39,7 +39,10 @@ var ElacityAPI = (function () {
       })
       .then(function (json) {
         if (json.errors && json.errors.length > 0) {
-          throw new Error(json.errors[0].message || 'GraphQL error');
+          if (!json.data || Object.values(json.data).every(function (v) { return v === null; })) {
+            throw new Error(json.errors[0].message || 'GraphQL error');
+          }
+          console.warn('[API] GraphQL partial errors:', json.errors.map(function (e) { return e.message; }));
         }
         return json.data;
       });

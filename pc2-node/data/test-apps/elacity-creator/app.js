@@ -384,6 +384,7 @@
       schema: 'elacity-asset-envelope-v1',
       name: params.title,
       description: params.description,
+      image: params.image || '',
       category: params.category,
       asset: {
         cid: params.assetCid,
@@ -403,9 +404,11 @@
       properties: {
         chainId: BASE_CHAIN_ID,
         ledger: params.channel || DEFAULT_CHANNEL,
+        authority: params.authority || CONTRACTS.AUTHORITY_GATEWAY,
         publisher: params.creatorAddress,
         distribution: params.accessMethod === 'buy_once' ? 'Buy Once'
           : params.accessMethod === 'free' ? 'Free' : 'Buy & Resell',
+        categories: [params.category],
       },
       creator: {
         address: params.creatorAddress,
@@ -982,6 +985,48 @@
 
       // ── Step 3: Build & upload metadata ─────────────────
       setProgStep('prog-upload-meta', 'Building metadata...', 'active');
+
+      // Resolve authority (gateway) and generate thumbnail for metadata
+      var authorityAddress = CONTRACTS.AUTHORITY_GATEWAY;
+      try {
+        authorityAddress = await getChannelAuthority(channel);
+      } catch (e) {
+        console.warn('[Creator] authority() lookup failed, using default:', e.message);
+      }
+
+      // Generate and upload a thumbnail for the image field
+      var imageUri = '';
+      try {
+        if (state.selectedFile && state.selectedFile.type.startsWith('image/')) {
+          var thumbCanvas = document.createElement('canvas');
+          var thumbCtx = thumbCanvas.getContext('2d');
+          var img = await createImageBitmap(state.selectedFile);
+          var maxDim = 400;
+          var scale = Math.min(maxDim / img.width, maxDim / img.height, 1);
+          thumbCanvas.width = Math.round(img.width * scale);
+          thumbCanvas.height = Math.round(img.height * scale);
+          thumbCtx.drawImage(img, 0, 0, thumbCanvas.width, thumbCanvas.height);
+          var thumbBlob = await new Promise(function (resolve) {
+            thumbCanvas.toBlob(resolve, 'image/jpeg', 0.8);
+          });
+          var thumbBytes = new Uint8Array(await thumbBlob.arrayBuffer());
+          var thumbBase64 = uint8ToBase64(thumbBytes);
+
+          var thumbResp = await pc2Fetch('/api/storage/ipfs/upload-elacity', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: thumbBase64, filename: 'thumbnail.jpg' }),
+          });
+          if (thumbResp.ok) {
+            var thumbData = await thumbResp.json();
+            imageUri = 'ipfs://' + thumbData.cid;
+            console.log('[Creator] Thumbnail uploaded:', imageUri);
+          }
+        }
+      } catch (thumbErr) {
+        console.warn('[Creator] Thumbnail generation failed (non-fatal):', thumbErr.message);
+      }
+
       var envelope = buildMetadataEnvelope({
         title: title,
         description: description,
@@ -996,6 +1041,8 @@
         copies: copies,
         creatorAddress: state.walletAddress,
         channel: channel,
+        authority: authorityAddress,
+        image: imageUri,
       });
 
       if (usedLocalEncryption) {
