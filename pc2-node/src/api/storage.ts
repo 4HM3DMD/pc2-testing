@@ -8,6 +8,9 @@ import { Router, Response } from 'express';
 import { authenticate, AuthenticatedRequest } from './middleware.js';
 import { logger } from '../utils/logger.js';
 import { getEffectiveStorageLimit } from './info.js';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 
 const router = Router();
 
@@ -636,20 +639,42 @@ router.post('/ipfs/pin', authenticate, async (req: AuthenticatedRequest, res: Re
   }
 });
 
-/**
- * POST /api/storage/lit/encrypt
- * Server-side Lit Protocol encryption.
- *
- * The Lit SDK's multi-node handshake cannot run inside the PC2 iframe
- * (CSP/CORS restrictions). This endpoint moves encryption to the backend
- * where outbound HTTPS is unrestricted.
- *
- * encrypt() does not require a wallet or session sigs — it stores key
- * shares on Lit nodes gated by the provided access conditions.
- *
- * Body: { data: string (base64), ledger: string, tokenId: string }
- * Response: { success: true, ciphertext: string (base64), dataToEncryptHash: string }
- */
+// ─── Lit Protocol: Server Key + Encrypt/Decrypt ──────────────────────────────
+//
+// Architecture: The pc2-node backend is the trusted decryption service.
+// - Encryption: Lit access conditions gate on the SERVER wallet (not the buyer)
+// - Decryption: Server verifies buyer's AccessToken on-chain, then uses its own
+//   Lit auth to decrypt. This mirrors Elacity's backend architecture.
+//
+// The server key is auto-generated on first use and stored in the data directory.
+
+const __litFilename = fileURLToPath(import.meta.url);
+const __litDirname = dirname(__litFilename);
+const LIT_KEY_PATH = join(__litDirname, '../../data/.lit-server-key');
+
+let cachedServerWallet: any = null;
+
+async function getServerWallet() {
+  if (cachedServerWallet) return cachedServerWallet;
+
+  const { ethers } = await import('ethers');
+
+  if (existsSync(LIT_KEY_PATH)) {
+    const key = readFileSync(LIT_KEY_PATH, 'utf8').trim();
+    cachedServerWallet = new ethers.Wallet(key);
+    logger.info(`[Lit] Server wallet loaded: ${cachedServerWallet.address}`);
+  } else {
+    const dataDir = dirname(LIT_KEY_PATH);
+    if (!existsSync(dataDir)) mkdirSync(dataDir, { recursive: true });
+
+    cachedServerWallet = ethers.Wallet.createRandom();
+    writeFileSync(LIT_KEY_PATH, cachedServerWallet.privateKey, { mode: 0o600 });
+    logger.info(`[Lit] Generated new server wallet: ${cachedServerWallet.address}`);
+  }
+
+  return cachedServerWallet;
+}
+
 let litClientInstance: any = null;
 let litConnecting: Promise<void> | null = null;
 
@@ -686,12 +711,52 @@ async function getLitClient() {
   return litClientInstance;
 }
 
+function buildServerWalletCondition(serverAddress: string) {
+  return [
+    {
+      conditionType: 'evmBasic' as const,
+      contractAddress: '' as const,
+      standardContractType: '' as const,
+      chain: 'ethereum' as const,
+      method: '' as const,
+      parameters: [':userAddress'],
+      returnValueTest: {
+        comparator: '=' as const,
+        value: serverAddress,
+      },
+    },
+  ];
+}
+
+async function createServerAuthSig(client: any, wallet: any) {
+  const { createSiweMessage, generateAuthSig } = await import('@lit-protocol/auth-helpers');
+
+  const nonce = await client.getLatestBlockhash();
+  const toSign = await createSiweMessage({
+    walletAddress: wallet.address,
+    nonce,
+    expiration: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+  });
+
+  return generateAuthSig({ signer: wallet, toSign });
+}
+
+/**
+ * POST /api/storage/lit/encrypt
+ * Server-side Lit Protocol encryption.
+ *
+ * Access condition: only the server wallet can decrypt (server verifies
+ * buyer AccessToken independently before calling Lit decrypt).
+ *
+ * Body: { data: string (base64) }
+ * Response: { ciphertext, dataToEncryptHash, serverAddress, conditions }
+ */
 router.post('/lit/encrypt', authenticate, async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { data, ledger, tokenId } = req.body;
+    const { data } = req.body;
 
-    if (!data || !ledger || !tokenId) {
-      res.status(400).json({ error: 'Missing required fields: data (base64), ledger, tokenId' });
+    if (!data) {
+      res.status(400).json({ error: 'Missing required field: data (base64)' });
       return;
     }
 
@@ -705,36 +770,11 @@ router.post('/lit/encrypt', authenticate, async (req: AuthenticatedRequest, res:
       return;
     }
 
-    logger.info(`[Lit] Encrypting ${dataBytes.length} bytes for ${ledger}:${tokenId}`);
+    const wallet = await getServerWallet();
+    logger.info(`[Lit] Encrypting ${dataBytes.length} bytes (server wallet: ${wallet.address})`);
 
     const client = await getLitClient();
-
-    const conditions = [
-      {
-        conditionType: 'evmContract',
-        contractAddress: ledger,
-        chain: 'base',
-        functionName: 'balanceOf',
-        functionParams: [':userAddress', tokenId],
-        functionAbi: {
-          name: 'balanceOf',
-          inputs: [
-            { name: 'account', type: 'address' },
-            { name: 'id', type: 'uint256' },
-          ],
-          outputs: [
-            { name: 'balance', type: 'uint256' },
-          ],
-          stateMutability: 'view',
-          type: 'function',
-        },
-        returnValueTest: {
-          key: '',
-          comparator: '>',
-          value: '0',
-        },
-      },
-    ];
+    const conditions = buildServerWalletCondition(wallet.address);
 
     const encryptResult = await client.encrypt({
       dataToEncrypt: new Uint8Array(dataBytes),
@@ -747,11 +787,100 @@ router.post('/lit/encrypt', authenticate, async (req: AuthenticatedRequest, res:
       success: true,
       ciphertext: encryptResult.ciphertext,
       dataToEncryptHash: encryptResult.dataToEncryptHash,
+      serverAddress: wallet.address,
       conditions,
     });
   } catch (error: any) {
     logger.error('[Lit] Encryption error:', error);
     res.status(500).json({ error: error.message || 'Lit encryption failed' });
+  }
+});
+
+/**
+ * POST /api/storage/lit/decrypt
+ * Server-side Lit Protocol decryption.
+ *
+ * Verifies the caller holds an AccessToken on the Operative contract,
+ * then uses the server wallet's Lit auth to decrypt.
+ *
+ * Body: {
+ *   ciphertext: string,
+ *   dataToEncryptHash: string,
+ *   operativeAddress: string,     -- ERC-1155 Operative contract
+ *   buyerAddress: string,         -- wallet claiming access
+ * }
+ * Response: { success: true, data: string (base64), mimeType?: string }
+ */
+router.post('/lit/decrypt', authenticate, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { ciphertext, dataToEncryptHash, operativeAddress, buyerAddress } = req.body;
+
+    if (!ciphertext || !dataToEncryptHash || !operativeAddress || !buyerAddress) {
+      res.status(400).json({
+        error: 'Missing required fields: ciphertext, dataToEncryptHash, operativeAddress, buyerAddress',
+      });
+      return;
+    }
+
+    const { ethers } = await import('ethers');
+    const provider = new ethers.JsonRpcProvider('https://mainnet.base.org');
+
+    const accessTokenSubId = 1;
+    const erc1155Abi = ['function balanceOf(address account, uint256 id) view returns (uint256)'];
+    const operative = new ethers.Contract(operativeAddress, erc1155Abi, provider);
+
+    const balance = await operative.balanceOf(buyerAddress, accessTokenSubId);
+    if (balance === 0n) {
+      logger.warn(`[Lit] Decrypt denied: ${buyerAddress} has no AccessToken on ${operativeAddress}`);
+      res.status(403).json({ error: 'No AccessToken — purchase required' });
+      return;
+    }
+
+    logger.info(`[Lit] AccessToken verified: ${buyerAddress} holds ${balance} on ${operativeAddress}`);
+
+    const wallet = await getServerWallet();
+    const client = await getLitClient();
+    const conditions = buildServerWalletCondition(wallet.address);
+
+    const authSig = await createServerAuthSig(client, wallet);
+
+    const decryptResult = await client.decrypt({
+      ciphertext,
+      dataToEncryptHash,
+      unifiedAccessControlConditions: conditions,
+      authSig,
+      chain: 'base',
+    });
+
+    const decryptedBytes = decryptResult.decryptedData;
+    if (!decryptedBytes || decryptedBytes.length === 0) {
+      res.status(500).json({ error: 'Decryption returned empty data' });
+      return;
+    }
+
+    logger.info(`[Lit] Decryption complete: ${decryptedBytes.length} bytes for ${buyerAddress}`);
+
+    res.json({
+      success: true,
+      data: Buffer.from(decryptedBytes).toString('base64'),
+      size: decryptedBytes.length,
+    });
+  } catch (error: any) {
+    logger.error('[Lit] Decryption error:', error);
+    res.status(500).json({ error: error.message || 'Lit decryption failed' });
+  }
+});
+
+/**
+ * GET /api/storage/lit/server-info
+ * Returns the server wallet address (public — just an address, no secrets).
+ */
+router.get('/lit/server-info', async (_req: any, res: Response) => {
+  try {
+    const wallet = await getServerWallet();
+    res.json({ address: wallet.address });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
   }
 });
 

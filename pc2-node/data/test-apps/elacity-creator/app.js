@@ -391,9 +391,9 @@
         mimeType: params.mimeType,
         size: params.size,
         encrypted: true,
-        algorithm: 'aes-gcm',
+        algorithm: 'lit-aes-v1',
+        protectionType: 'lit-aes-v1',
         dataToEncryptHash: params.dataToEncryptHash,
-        keyId: params.keyId,
       },
       pricing: {
         currency: 'USDC',
@@ -904,8 +904,6 @@
       setProgStep('prog-connect', 'Connecting...', 'active');
 
       var encryptResult;
-      var ledger = channel || '0x0000000000000000000000000000000000000000';
-      var tokenId = '0';
 
       try {
         setProgStep('prog-connect', 'Connecting to Lit (server-side)...', 'active');
@@ -915,7 +913,7 @@
         var litResp = await pc2Fetch('/api/storage/lit/encrypt', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ data: fileBase64, ledger: ledger, tokenId: tokenId }),
+          body: JSON.stringify({ data: fileBase64 }),
         });
 
         if (!litResp.ok) {
@@ -925,13 +923,14 @@
 
         var litData = await litResp.json();
         console.log('[Creator] Lit encryption succeeded. Hash:', litData.dataToEncryptHash?.substring(0, 20) + '...');
+        console.log('[Creator] Server wallet:', litData.serverAddress);
         setProgStep('prog-connect', 'Lit Connected (datil, server)', 'done');
 
         setProgStep('prog-encrypt', 'Encrypting (Lit)...', 'active');
         encryptResult = {
           encrypted: base64ToUint8(litData.ciphertext),
           dataToEncryptHash: litData.dataToEncryptHash,
-          keyId: ledger + ':' + tokenId,
+          serverAddress: litData.serverAddress,
           conditions: litData.conditions,
         };
       } catch (litErr) {
@@ -1035,7 +1034,6 @@
         mimeType: state.selectedFile.type || 'application/octet-stream',
         size: state.selectedFile.size,
         dataToEncryptHash: encryptResult.dataToEncryptHash,
-        keyId: encryptResult.keyId,
         price: price,
         accessMethod: accessMethod,
         copies: copies,
