@@ -591,7 +591,7 @@ var ElacityAPI = (function () {
   function fetchAccessibleAssets(offset, limit) {
     return gql(
       FETCH_ACCESSIBLE_ASSETS_QUERY,
-      { query: { contentTypes: ['audio', 'video', 'image'] }, filters: { offset: offset || 0, limit: limit || 20, sort: { createdAt: -1 } } },
+      { query: {}, filters: { offset: offset || 0, limit: limit || 20, sort: { createdAt: -1 } } },
       true
     ).then(function (data) { return data.assets; });
   }

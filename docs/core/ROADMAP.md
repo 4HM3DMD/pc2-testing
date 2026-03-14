@@ -19,6 +19,7 @@ Each **Milestone** from the DAO proposal is broken down into concrete **Work Str
 | [ARCHITECTURE_CONVERGENCE.md](./ARCHITECTURE_CONVERGENCE.md) | PC2 v1 → Capsule Runtime v2 technical path |
 | [SUPERNODE_ECONOMICS.md](./SUPERNODE_ECONOMICS.md) | dDRM Access Token model for supernode revenue |
 | [NETWORK_HARDENING.md](../pc2-infrastructure/NETWORK_HARDENING.md) | Supernode decentralization and self-healing |
+| [DECENTRALIZATION_STATUS.md](./DECENTRALIZATION_STATUS.md) | Decentralization scorecard, walk-away test roadmap |
 | [AGENT_HANDOVER.md](./AGENT_HANDOVER.md) | Current state, coding patterns, infrastructure |
 | [ARM_DEVICES.md](../deployment/ARM_DEVICES.md) | Jetson/Raspberry Pi deployment |
 
@@ -151,11 +152,17 @@ These diagrams from Rong define the north star. Every work stream should move us
   - [x] Operative approval — `setApprovalForAll(gateway, true)` with ContractCreated event fallback for proxy-based channels *(implemented Mar 13)*
   - [x] Elacity IPFS pipeline — dual upload (local + Elacity), CIDv0 resolution, marketplace visibility confirmed *(completed Mar 14)*
   - [x] Metadata format — image (auto-thumbnail), authority, categories fields for GraphQL compatibility *(completed Mar 14)*
-  - [x] Server-side Lit Protocol — encryption via pc2-node backend with capacity credits (RLI #429689) *(completed Mar 14)*
+  - [x] Server-side Lit Protocol — encryption via pc2-node backend with capacity credits *(completed Mar 14)*
   - [x] Channel selection UI — user's own channels + custom address input *(completed Mar 14)*
   - [x] On-chain purchase verified — buyer received ACCESS_TOKEN, payment split correct *(verified Mar 14)*
-  - [ ] Consumer decrypt endpoint — `POST /api/lit/decrypt` on pc2-node (ACCESS_TOKEN verification → Lit decrypt → AES-GCM → return bytes)
-  - [ ] Universal asset viewer — render decrypted content by MIME type (no WASM needed for non-media)
+  - [x] Consumer decrypt endpoint — `POST /api/storage/lit/decrypt` on pc2-node with Lit Action `executeJs()` *(implemented Mar 14)*
+  - [x] Lit Action trust model — custom `non-media-decrypt.js` with self-referential conditions + on-chain access check in action code *(implemented Mar 14)*
+  - [x] Smart Account awareness — passes SA address as `buyerAddress` for Universal Account buyers *(implemented Mar 14)*
+  - [x] Capacity credit auto-detection — queries Chronicle Yellowstone for latest valid RLI token, handles 15-day rotation *(implemented Mar 14)*
+  - [x] Inline image rendering — decrypted content rendered as blob URL in Market dApp *(implemented Mar 14)*
+  - [x] Gateway approval hardening — 5s delay, try-catch, "Fix Gateway Approval" tool *(implemented Mar 14)*
+  - [ ] End-to-end decrypt test with capacity credits — **BLOCKED on capacity key from Irzhy**
+  - [ ] Universal asset viewer — render decrypted content by MIME type (images working, PDFs/audio/3D TBD)
 
 **SDK Evolution (Universal Asset Protocol):**
 - [x] `@elacity-js/access` package — clean-room build of universal access layer using Lit Protocol SDK directly (see `docs/core/ACCESS_PACKAGE_SPEC.md`) *(implemented Mar 13 — 12 source files, 47 unit tests passing)*
@@ -268,6 +275,13 @@ These diagrams from Rong define the north star. Every work stream should move us
 - [x] Buyer node becomes seeder (CDN effect for encrypted content) *(completed Mar 5-6 — Bitswap-first + NAT traversal + relay)*
 
 **Universal Asset Marketplace (dDRM beyond media):**
+- [x] Lit Action trust model — custom `non-media-decrypt.js` with self-referential conditions, on-chain access check, Smart Account aware *(completed Mar 14)*
+- [x] Capacity credit auto-detection — queries Chronicle Yellowstone for latest valid RLI token, handles 15-day rotation *(completed Mar 14)*
+- [x] Server-side decrypt endpoint — `POST /api/storage/lit/decrypt` with Lit Action `executeJs()` *(completed Mar 14)*
+- [x] Inline image rendering — decrypted content rendered as blob URL in Market dApp *(completed Mar 14)*
+- [ ] **End-to-end decrypt test with capacity credits** — **BLOCKED on capacity key from Irzhy**
+- [ ] On-chain content indexer — replace Elacity GraphQL dependency with event scanner (The Graph / custom). See [DECENTRALIZATION_STATUS.md](./DECENTRALIZATION_STATUS.md) Tier 1.1
+- [ ] Self-provisioned RLI tokens — each PC2 node mints own capacity credits, removes Elacity wallet dependency. See Tier 1.3
 - [ ] AI Model Marketplace alpha — encrypt GGUF/SafeTensors model → IPFS → ACCESS_TOKEN → decrypt on PC2 → load in Ollama
 - [ ] Code/Plugin Marketplace — dDRM-gated npm packages, themes, extensions
 - [ ] Dataset Marketplace — dDRM-gated training datasets, knowledge bases

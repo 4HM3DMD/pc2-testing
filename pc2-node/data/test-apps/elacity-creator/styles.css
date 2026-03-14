@@ -323,6 +323,54 @@ code.result-value {
 
 @keyframes slideIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 
+/* ── Tool Panel (Fix Approval, etc.) ── */
+
+.tool-panel {
+  margin-top: 24px;
+}
+.tool-summary {
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-muted);
+  padding: 10px 0;
+  user-select: none;
+}
+.tool-summary:hover { color: var(--text); }
+.tool-body {
+  padding: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-top: 8px;
+}
+.tool-desc {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+}
+.tool-desc code {
+  background: rgba(255,255,255,0.06);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 12px;
+}
+.tool-status {
+  font-size: 13px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  margin-bottom: 12px;
+}
+.tool-status.checking { background: rgba(59,130,246,0.1); color: #93c5fd; }
+.tool-status.approved { background: rgba(34,197,94,0.1); color: #86efac; }
+.tool-status.not-approved { background: rgba(239,68,68,0.1); color: #fca5a5; }
+.tool-status.sending { background: rgba(234,179,8,0.1); color: #fde047; }
+.tool-status.error { background: rgba(239,68,68,0.1); color: #fca5a5; }
+.tool-actions {
+  display: flex;
+  gap: 8px;
+}
+
 /* ── Utility ── */
 .hidden { display: none !important; }
 

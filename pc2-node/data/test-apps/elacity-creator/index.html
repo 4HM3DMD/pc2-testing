@@ -229,6 +229,25 @@
           <button class="btn btn-primary" id="btn-new-asset">Create Another Asset</button>
         </div>
       </section>
+
+      <!-- Fix Gateway Approval Tool -->
+      <section id="tool-fix-approval" class="tool-panel">
+        <details id="fix-approval-details">
+          <summary class="tool-summary">🔧 Fix Gateway Approval</summary>
+          <div class="tool-body">
+            <p class="tool-desc">If minting completed but the gateway approval step failed or hung, use this to send the missing <code>setApprovalForAll</code> transaction.</p>
+            <div class="field-group">
+              <label for="fix-operative-addr">Operative Address</label>
+              <input type="text" id="fix-operative-addr" placeholder="0x..." class="text-input" />
+            </div>
+            <div id="fix-approval-status" class="tool-status hidden"></div>
+            <div class="tool-actions">
+              <button id="btn-check-approval" style="display: inline-flex; align-items: center; justify-content: center; padding: 8px 16px; font-size: 13px; line-height: 1; font-family: inherit; background: #f3f4f6; border: 1px solid #d1d5db; border-radius: 6px; cursor: pointer;">Check Status</button>
+              <button id="btn-fix-approval" style="display: inline-flex; align-items: center; justify-content: center; padding: 8px 16px; font-size: 13px; line-height: 1; font-family: inherit; background: #3b82f6; color: white; border: none; border-radius: 6px; cursor: pointer;" disabled>Send Approval Tx</button>
+            </div>
+          </div>
+        </details>
+      </section>
     </main>
 
     <!-- Toast container -->

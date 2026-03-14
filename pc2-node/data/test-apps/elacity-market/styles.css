@@ -742,11 +742,12 @@ body {
 .download-decrypt-btn {
   margin-bottom: 12px;
   gap: 6px;
-  font-weight: 500;
-  color: var(--accent);
-  border: 1px solid var(--accent);
+  font-weight: 600;
+  background: var(--success);
+  color: #fff;
+  border: 1px solid var(--success);
 }
-.download-decrypt-btn:hover { background: rgba(59,130,246,0.1); }
+.download-decrypt-btn:hover { background: #15803d; border-color: #15803d; color: #fff; }
 .download-decrypt-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .download-status {
   font-size: 12px;

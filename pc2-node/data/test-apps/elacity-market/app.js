@@ -557,6 +557,7 @@
 
   function renderMyAssetsView() {
     if (!Wallet.isConnected()) {
+      console.log('[Library] Wallet not connected, showing auth prompt');
       dom.authPrompt.classList.remove('hidden');
       dom.assetsGrid.classList.add('hidden');
       dom.assetsEmpty.classList.add('hidden');
@@ -564,6 +565,8 @@
     }
 
     if (!ElacityAPI.isAuthenticated()) {
+      console.log('[Library] Not authenticated, starting SIWE login...');
+      console.log('[Library] connectedAddress:', Wallet.getAddress(), 'smartAccount:', Wallet.getSignerAddress());
       dom.authPrompt.classList.add('hidden');
       dom.assetsGrid.classList.add('hidden');
       dom.assetsEmpty.classList.add('hidden');
@@ -571,12 +574,15 @@
 
       Wallet.siweLogin()
         .then(function () {
+          console.log('[Library] SIWE login succeeded, signer:', ElacityAPI.getSignerAddress());
           dom.assetsLoading.classList.add('hidden');
           renderMyAssetsView();
         })
-        .catch(function () {
+        .catch(function (err) {
+          console.error('[Library] SIWE login failed:', err);
           dom.assetsLoading.classList.add('hidden');
           dom.authPrompt.classList.remove('hidden');
+          showToast('Library login failed: ' + (err.message || 'signature rejected'), 'error');
         });
       return;
     }
@@ -589,8 +595,15 @@
     }
   }
 
+  function refreshLibrary() {
+    state.assetsItems = [];
+    state.assetsLoading = false;
+    loadMyAssets();
+  }
+
   function loadMyAssets() {
     var addr = Wallet.getAddress();
+    var signer = Wallet.getSignerAddress();
     if (state.assetsLoading || !addr) return;
     state.assetsLoading = true;
 
@@ -598,14 +611,15 @@
     dom.assetsEmpty.classList.add('hidden');
     dom.assetsGrid.innerHTML = '';
 
-    console.log('[Library] Loading assets for', addr, 'auth:', ElacityAPI.isAuthenticated(), 'signer:', ElacityAPI.getSignerAddress());
+    console.log('[Library] Loading assets for EOA:', addr, 'signer:', signer, 'auth:', ElacityAPI.isAuthenticated(), 'apiSigner:', ElacityAPI.getSignerAddress());
 
     ElacityAPI.fetchAccessibleAssets(0, PAGE_SIZE)
       .then(function (result) {
         state.assetsLoading = false;
         dom.assetsLoading.classList.add('hidden');
 
-        console.log('[Library] Got result:', result ? (result.data ? result.data.length + ' items' : 'no data') : 'null');
+        var count = result && result.data ? result.data.length : 0;
+        console.log('[Library] Got', count, 'items (total:', result ? result.total : 0, ')');
 
         if (!result || !result.data || result.data.length === 0) {
           dom.assetsEmpty.classList.remove('hidden');
@@ -672,7 +686,30 @@
         }
 
         state.detailItem = nft;
-        renderDetail(nft);
+
+        // For non-media assets, the Elacity GraphQL API doesn't expose our
+        // custom `asset` field. Fetch raw metadata from IPFS to get the
+        // encrypted content CID and dataToEncryptHash.
+        var tokenURI = nft.tokenURI || '';
+        var needsRawMeta = isNonMediaAsset(nft) && tokenURI;
+        if (needsRawMeta) {
+          var rawUrl = resolveIpfsUrl(tokenURI);
+          fetch(rawUrl).then(function (r) { return r.json(); })
+            .then(function (rawMeta) {
+              if (rawMeta && rawMeta.asset) {
+                nft._rawAsset = rawMeta.asset;
+                nft._rawMedia = rawMeta.media;
+                console.log('[Detail] Raw metadata loaded, asset CID:', rawMeta.asset.cid);
+              }
+            })
+            .catch(function (e) { console.warn('[Detail] Failed to fetch raw metadata:', e.message); })
+            .finally(function () {
+              renderDetail(nft);
+            });
+        } else {
+          renderDetail(nft);
+        }
+
         loadDetailInteractions(contractAddress, tokenId);
 
         var viewKey = contractAddress + ':' + tokenId;
@@ -752,15 +789,22 @@
       dom.detailOwned.classList.add('hidden');
       dom.downloadNodeBtn.classList.add('hidden');
     } else {
-      dom.playOwnedBtn.classList.remove('hidden');
       dom.detailOwned.classList.remove('hidden');
-      var cid = media.uri || (nft.metadata && nft.metadata.asset && (nft.metadata.asset.uri || nft.metadata.asset.cid));
-      if (cid) {
-        if (isNonMediaAsset(nft)) {
+      var rawAsset = nft._rawAsset || (nft.metadata && nft.metadata.asset) || {};
+      var cid = media.uri || rawAsset.uri || rawAsset.cid;
+      if (cid) cid = cid.replace('ipfs://', '');
+      var nonMedia = isNonMediaAsset(nft);
+      if (nonMedia) {
+        dom.playOwnedBtn.classList.add('hidden');
+        if (cid) {
           dom.downloadDecryptBtn.classList.remove('hidden');
+          console.log('[Detail] Non-media asset, CID:', cid, 'hash:', rawAsset.dataToEncryptHash);
         } else {
-          dom.downloadNodeBtn.classList.remove('hidden');
+          console.warn('[Detail] Non-media asset but no CID found');
         }
+      } else {
+        dom.playOwnedBtn.classList.remove('hidden');
+        if (cid) dom.downloadNodeBtn.classList.remove('hidden');
       }
       if (hasListing && isOwned) {
         dom.detailPriceSection.classList.remove('hidden');
@@ -1881,22 +1925,6 @@
     var nft = state.detailItem;
     if (!nft) return;
 
-    var media = (nft.metadata && nft.metadata.media) || {};
-    var asset = (nft.metadata && nft.metadata.asset) || {};
-    var cid = media.uri || asset.uri || asset.cid;
-    var meta = nft.metadata || {};
-    var props = meta.properties || {};
-    var ledger = props.ledger || nft.contractAddress || (nft.channel && nft.channel.address) || '';
-    var tokenId = (nft.tokenId && nft.tokenId.hexTokenID) || nft.tokenId || '0';
-    var dataToEncryptHash = asset.dataToEncryptHash || '';
-    var isLocalDevMode = asset._devMode === true;
-    var localKey = asset._localKey || '';
-
-    if (!cid || !ledger) {
-      showToast('No downloadable content for this asset', 'error');
-      return;
-    }
-
     if (!Wallet.isConnected()) {
       showToast('Connect your wallet first', 'error');
       return;
@@ -1905,6 +1933,64 @@
     dom.downloadDecryptBtn.disabled = true;
     dom.downloadStatus.classList.remove('hidden');
     dom.downloadStatus.className = 'download-status pending';
+    dom.downloadStatus.textContent = 'Loading asset metadata...';
+
+    ensureRawMetadata(nft).then(function () {
+      proceedWithDecrypt(nft);
+    }).catch(function (err) {
+      console.error('[Decrypt] Metadata load failed:', err);
+      proceedWithDecrypt(nft);
+    });
+  }
+
+  function ensureRawMetadata(nft) {
+    if (nft._rawAsset && nft._rawAsset.dataToEncryptHash) {
+      return Promise.resolve();
+    }
+    var tokenURI = nft.tokenURI || '';
+    if (!tokenURI) return Promise.resolve();
+
+    var rawUrl = resolveIpfsUrl(tokenURI);
+    if (!rawUrl) return Promise.resolve();
+
+    var localUrl = window.location.origin + '/ipfs/' + tokenURI.replace('ipfs://', '');
+    return fetch(localUrl).then(function (r) {
+      if (!r.ok) return fetch(rawUrl);
+      return r;
+    }).then(function (r) {
+      if (!r.ok) throw new Error('IPFS fetch failed: ' + r.status);
+      return r.json();
+    }).then(function (rawMeta) {
+      if (rawMeta && rawMeta.asset) {
+        nft._rawAsset = rawMeta.asset;
+        nft._rawMedia = rawMeta.media;
+        console.log('[Decrypt] Raw metadata loaded inline, asset CID:', rawMeta.asset.cid);
+      }
+    });
+  }
+
+  function proceedWithDecrypt(nft) {
+    var media = (nft.metadata && nft.metadata.media) || nft._rawMedia || {};
+    var asset = nft._rawAsset || (nft.metadata && nft.metadata.asset) || {};
+    var cid = asset.cid || asset.uri || media.uri;
+    if (cid) cid = cid.replace('ipfs://', '');
+    var meta = nft.metadata || {};
+    var props = meta.properties || {};
+    var ledger = props.ledger || nft.contractAddress || (nft.channel && nft.channel.address) || '';
+    var tokenId = (nft.tokenId && nft.tokenId.hexTokenID) || nft.tokenId || '0';
+    var dataToEncryptHash = asset.dataToEncryptHash || '';
+    var isLocalDevMode = asset._devMode === true;
+    var localKey = asset._localKey || '';
+
+    console.log('[Decrypt] CID:', cid, 'hash:', dataToEncryptHash, 'ledger:', ledger, 'protectionType:', asset.protectionType);
+
+    if (!cid || !ledger) {
+      dom.downloadDecryptBtn.disabled = false;
+      dom.downloadStatus.className = 'download-status error';
+      dom.downloadStatus.textContent = 'No downloadable content for this asset';
+      showToast('No downloadable content for this asset', 'error');
+      return;
+    }
 
     function saveDecryptedFile(decrypted) {
       var title = meta.name || nft.name || 'Untitled';
@@ -1996,12 +2082,22 @@
 
     if (protectionType === 'lit-aes-v1' || dataToEncryptHash) {
       dom.downloadStatus.textContent = 'Fetching encrypted asset from IPFS...';
-      var buyerAddr = Wallet.getAddress();
 
-      if (!operativeAddr) {
+      // Smart Account awareness: if the buyer used a Universal Account,
+      // the AccessToken is held by the Smart Account address, not the EOA.
+      // getSignerAddress() returns smartAccountAddress || connectedAddress.
+      var buyerAddr = Wallet.getSignerAddress();
+
+      var assetActionCid = asset.actionCid || '';
+      var assetAuthority = asset.authority || (meta.properties && meta.properties.authority) || '';
+      var assetKid = dataToEncryptHash;
+
+      console.log('[Decrypt] buyer:', buyerAddr, 'actionCid:', assetActionCid, 'authority:', assetAuthority, 'kid:', assetKid);
+
+      if (!assetKid) {
         dom.downloadDecryptBtn.disabled = false;
         dom.downloadStatus.className = 'download-status error';
-        dom.downloadStatus.textContent = 'Missing operative address — cannot verify access';
+        dom.downloadStatus.textContent = 'Missing content identifier (dataToEncryptHash)';
         return;
       }
 
@@ -2013,7 +2109,7 @@
         if (!r.ok) throw new Error('IPFS fetch failed: ' + r.status);
         return r.arrayBuffer();
       }).then(function (buf) {
-        dom.downloadStatus.textContent = 'Verifying access & decrypting via Lit Protocol...';
+        dom.downloadStatus.textContent = 'Verifying access & decrypting via Lit Action...';
         var encryptedBase64 = '';
         var bytes = new Uint8Array(buf);
         var chunkSize = 32768;
@@ -2022,15 +2118,19 @@
         }
         encryptedBase64 = btoa(encryptedBase64);
 
+        var decryptBody = {
+          ciphertext: encryptedBase64,
+          dataToEncryptHash: dataToEncryptHash,
+          kid: assetKid,
+          buyerAddress: buyerAddr,
+        };
+        if (assetActionCid) decryptBody.actionCid = assetActionCid;
+        if (assetAuthority) decryptBody.authority = assetAuthority;
+
         return pc2Fetch('/api/storage/lit/decrypt', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            ciphertext: encryptedBase64,
-            dataToEncryptHash: dataToEncryptHash,
-            operativeAddress: operativeAddr,
-            buyerAddress: buyerAddr,
-          }),
+          body: JSON.stringify(decryptBody),
         });
       }).then(function (resp) {
         if (!resp.ok) {
@@ -2206,6 +2306,13 @@
     });
 
     dom.authBtn.addEventListener('click', handleAuth);
+    document.getElementById('library-refresh-btn').addEventListener('click', function () {
+      if (!ElacityAPI.isAuthenticated()) {
+        renderMyAssetsView();
+      } else {
+        refreshLibrary();
+      }
+    });
     dom.detailBackBtn.addEventListener('click', goBack);
     dom.channelBackBtn.addEventListener('click', goBack);
     dom.subscribeBtn.addEventListener('click', handleSubscribe);

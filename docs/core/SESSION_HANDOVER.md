@@ -10,7 +10,7 @@
 **Release:** v1.1.0 tagged and released on 2026-03-03 (134 commits squash-merged to main)
 **Launcher:** v1.1.1 released — version display, one-click updates, full networking install
 **DAO Proposal:** Live at https://elastos.com/proposals/69a24f49247f130078064edd
-**Last Commit:** `9111efd85` — fix: metadata format for Elacity compatibility — image, authority, thumbnail
+**Last Commit:** `4527b9f1a` — feat: server-side decrypt + inline image rendering in Market dApp
 
 ### What Just Shipped (v1.1.0 on main)
 
@@ -235,9 +235,20 @@ Full technical spec at `docs/core/ACCESS_PACKAGE_SPEC.md`. Key decisions:
 
 **Server-side Lit Protocol (Mar 13-14):**
 - Lit operations moved to pc2-node backend due to iframe sandbox blocking outbound Lit node connections
-- `POST /api/lit/encrypt` — encrypts content with Lit Protocol using server-side LitNodeClientNodeJs
-- Capacity Credits: RLI Token #429689 (100 req/kilosecond, valid until Apr 13) on wallet `0x0917Aa...C52D`
+- `POST /api/storage/lit/encrypt` — encrypts content with Lit Protocol using server-side LitNodeClientNodeJs
+- `POST /api/storage/lit/decrypt` — decrypts via Lit Action `executeJs()` with on-chain access verification
+- Capacity Credits: Auto-detected from Chronicle Yellowstone — queries RLI contract for latest non-expired token owned by capacity wallet `0x581D4bca...`
 - Delegation: Owner-signed `createCapacityDelegationAuthSig` on backend (not end-user signed)
+- **Blocking:** Waiting for private key of capacity wallet `0x581D4bca99709c1E0cB6f07c9D05719818AA6e49` from Irzhy
+
+**Lit Action Trust Model (Mar 14) — KEY ARCHITECTURE:**
+- Custom Lit Action (`pc2-node/data/lit-actions/non-media-decrypt.js`) runs on 6+ Lit TEE nodes
+- **Self-referential-only conditions** at encrypt time (`:currentActionIpfsId === ourCID`)
+- Access check embedded in action code: `hasAccessByContentId(buyerAddress, kid)` via ethers.js on Lit nodes
+- `buyerAddress` passed as jsParam (not `:userAddress` which would resolve to server wallet)
+- Smart Account aware — passes SA address when buyer uses Universal Account
+- Server reads action code from disk, passes via `code` parameter (bypasses IPFS gateway fetches)
+- Capacity token ID auto-detected from Chronicle Yellowstone chain (handles 15-day rotation cycle)
 
 **Elacity IPFS Pipeline (Mar 13-14) — KEY BREAKTHROUGH:**
 - Local IPFS (Helia) + Elacity IPFS (`POST /api/2.0/files/upload` with `X-Target-Flow: ipfs`) dual-upload
@@ -288,30 +299,48 @@ Full technical spec at `docs/core/ACCESS_PACKAGE_SPEC.md`. Key decisions:
 - [x] Paid mint on user-created channels — **VERIFIED WORKING** (channel `0xb4a1c563...`, operative `0x7D243806...`)
 - [x] Integration with Elacity Market dApp backend (asset visibility after mint) — **VERIFIED** (visible on base.ela.city + channel page)
 - [x] On-chain purchase — **VERIFIED** (buyer received ACCESS_TOKEN + resale token, payment split correct)
-- [ ] **Consumer decrypt flow** — buyer has ACCESS_TOKEN, needs server-side Lit decrypt endpoint on pc2-node
-- [ ] setApprovalForAll post-mint — code implemented, needs user wallet confirmation
+- [x] Consumer decrypt endpoint — `POST /api/storage/lit/decrypt` on pc2-node with Lit Action `executeJs()`
+- [x] Lit Action trust model — self-referential conditions, access check in action code, Smart Account aware
+- [x] Capacity credit auto-detection — queries Chronicle Yellowstone for latest valid RLI token
+- [x] Inline image rendering — decrypted content rendered as blob URL in Market dApp
+- [x] Gateway approval retry — 5s delay after mint, try-catch wrapper, "Fix Gateway Approval" tool in Creator
+- [x] Decrypt race condition fix — `ensureRawMetadata()` fetches IPFS metadata synchronously before decrypt
+- [ ] **End-to-end decrypt test with capacity credits** — waiting on private key from Irzhy
+- [ ] Fix library not showing all purchased assets (Elacity test 4 missing)
 - [ ] Purchase with standard wallet (MetaMask) — to isolate UA receipt parsing bug
 
 **Known issues:**
-- Elacity frontend UA receipt parsing: `UAReceiptFetcher.enrichOperationsWithContracts` throws `TypeError: Cannot read properties of undefined (reading 'map')` after successful on-chain purchase. Bug is in Elacity's `index-BOeceeBu.js`, not in our code. Transaction completes successfully.
+- Elacity frontend UA receipt parsing: `UAReceiptFetcher.enrichOperationsWithContracts` throws `TypeError` after successful on-chain purchase. Bug is in Elacity's frontend, not our code.
 - MPD parser error for image assets: Elacity's media player tries to parse image metadata as DASH manifest. Expected for non-video content.
+- Lit rate limiting: without capacity credit private key, Datil network rate-limits `executeJs()` calls
 
 #### Next Up — Engineering Priorities
-1. **Consumer decrypt endpoint** — `POST /api/lit/decrypt` on pc2-node: verify ACCESS_TOKEN on-chain → Lit Protocol decrypt key → AES-GCM decrypt → return bytes. This is the critical missing piece.
-2. **Universal asset viewer** — render decrypted content by MIME type (images, PDFs, audio, 3D models). No WASM/SharedArrayBuffer needed.
-3. **AI Model Marketplace alpha** — first non-media vertical: GGUF → encrypt → IPFS → ACCESS_TOKEN → decrypt on node → Ollama
-4. ~~**`@elacity-js/access` package**~~ — DONE (Mar 13)
-5. ~~**Creator Dashboard dApp**~~ — DONE (Mar 13-14) — encrypt, IPFS upload (local + Elacity), metadata, mint, channel selection
-6. ~~**Contract ABIs + mint encoding**~~ — DONE (Mar 13)
-7. ~~**Channel creation**~~ — DONE (Mar 13)
-8. ~~**Elacity IPFS pipeline**~~ — DONE (Mar 14) — dual upload, CID resolution, marketplace visibility
-9. ~~**Marketplace metadata compatibility**~~ — DONE (Mar 14) — image, authority, categories
-10. ~~**On-chain purchase verification**~~ — DONE (Mar 14)
-11. **Create GitHub release `pc2-binaries-v1`** — run `fetch-binaries.sh all`, upload assets to release (DEFERRED)
-12. **Gateway "node offline" page** — replaces infinite "initializing" spinner
-13. **Fiat onramp** — Particle Smart Account + Stripe/Moonpay
-14. **App Factory** — local packaging pipeline
-15. **dDRM Access Token contract** — ERC-1155 tiered tokens for supernode economics (deferred to Milestone 3-4)
+1. **Get capacity credit private key from Irzhy** — BLOCKING. Needed for Lit Protocol production decrypt.
+2. **Test full E2E decrypt** — once key is configured, test encrypt → mint → buy → decrypt on PC2 node
+3. **Fix library showing all purchased assets** — Elacity test 4 not appearing in PC2 Market library
+4. **On-chain indexer prototype** — replace Elacity GraphQL dependency with event scanner (The Graph / custom)
+5. **Self-provisioned RLI tokens** — each node mints own capacity credits, removes Elacity wallet dependency
+6. **AI Model Marketplace alpha** — first non-media vertical: GGUF → encrypt → IPFS → ACCESS_TOKEN → decrypt → Ollama
+7. ~~**Consumer decrypt endpoint**~~ — DONE (Mar 14) — Lit Action `executeJs()` with on-chain access check
+8. ~~**Lit Action trust model**~~ — DONE (Mar 14) — self-ref conditions, access check in action code
+9. ~~**Capacity credit auto-detection**~~ — DONE (Mar 14) — Chronicle Yellowstone query, handles 15-day rotation
+10. ~~**Universal asset viewer (images)**~~ — DONE (Mar 14) — inline blob URL rendering in Market dApp
+11. ~~**`@elacity-js/access` package**~~ — DONE (Mar 13)
+12. ~~**Creator Dashboard dApp**~~ — DONE (Mar 13-14)
+13. ~~**Elacity IPFS pipeline**~~ — DONE (Mar 14)
+14. ~~**On-chain purchase verification**~~ — DONE (Mar 14)
+15. **Create GitHub release `pc2-binaries-v1`** — run `fetch-binaries.sh all`, upload assets to release (DEFERRED)
+16. **Gateway "node offline" page** — replaces infinite "initializing" spinner
+17. **Fiat onramp** — Particle Smart Account + Stripe/Moonpay
+18. **App Factory** — local packaging pipeline
+19. **dDRM Access Token contract** — ERC-1155 tiered tokens for supernode economics (deferred to Milestone 3-4)
+
+#### Decentralization Analysis — DOCUMENTED (Mar 14)
+- [x] `docs/core/DECENTRALIZATION_STATUS.md` — comprehensive team document covering architecture, scorecard, and walk-away test roadmap
+- Fully decentralized: smart contracts, access verification, purchase/sale, Lit Action, encryption/decryption, AccessToken ownership
+- Centralized (to be replaced): Elacity GraphQL API, IPFS gateway, IPFS upload, capacity wallet, auth nonce
+- Walk-away test requires: on-chain indexer (Tier 1), self-sufficient IPFS (mostly done), self-provisioned RLI tokens
+- Protocol fees already decentralized — enforced by smart contracts, not infrastructure
 
 #### Backlog — Marketing & Docs (Lower Priority)
 - [ ] **PC2 marketing slides for elacitylabs.com** — audit and rewrite 7 slides (benefits, features, blind spots, full copywriting)
@@ -366,7 +395,7 @@ Full technical spec at `docs/core/ACCESS_PACKAGE_SPEC.md`. Key decisions:
 - [Supernode Decentralization](f18dbf44-f5de-4238-8c62-499018cd4e50) — gateway v2.0, bootstrap script, dynamic discovery, relay mode, supernode dApp, community networking fix, docs update
 - [Network Map + Strategy](d9445cb9-12bd-437e-8d4e-ebb35ef40d64) — network map visual upgrade, universal asset strategy, app manifest spec, binary manager, handover
 - [3D Orb + SEO + Rebrand](6431d137-5dd9-4c8e-b042-5d8c54b908a5) — 3D orb integration, network map rebrand to "World Computer", full SEO overhaul, GA4, app icon fixes, mobile responsiveness
-- [dDRM Pipeline E2E](fd6755f0-d73c-4e41-8df3-0f57f15071a2) — @elacity-js/access audit, Creator Dashboard, server-side Lit, Elacity IPFS pipeline, marketplace visibility, on-chain purchase verified, metadata fixes, channel creation
+- [dDRM Pipeline E2E](fd6755f0-d73c-4e41-8df3-0f57f15071a2) — @elacity-js/access, Creator Dashboard, Lit Action trust model (Path A), capacity credit auto-detection, decrypt endpoint, decentralization analysis
 
 ---
 
@@ -379,6 +408,7 @@ Full technical spec at `docs/core/ACCESS_PACKAGE_SPEC.md`. Key decisions:
 | **Roadmap** | `docs/core/ROADMAP.md` | All milestones with checkboxes |
 | **Architecture** | `docs/core/ARCHITECTURE_CONVERGENCE.md` | PC2 v1 -> capsule runtime v2 |
 | **Universal Asset Strategy** | `docs/core/ELACITY_UNIVERSAL_ASSET_STRATEGY.md` | Unicorn strategy, marketplace verticals, SDK evolution, revenue model |
+| **Decentralization Status** | `docs/core/DECENTRALIZATION_STATUS.md` | Decentralization scorecard, walk-away test roadmap, team handover |
 | **Access Package Spec** | `docs/core/ACCESS_PACKAGE_SPEC.md` | @elacity-js/access technical spec, API, security model, marketplace tiers |
 | **App Manifest Spec** | `docs/core/APP_MANIFEST_SPEC.md` | app.json schema, field reference, validation rules |
 | **Supernode Economics** | `docs/core/SUPERNODE_ECONOMICS.md` | dDRM Access Token model, three-tier architecture |
@@ -409,10 +439,15 @@ Full technical spec at `docs/core/ACCESS_PACKAGE_SPEC.md`. Key decisions:
 | `pc2-node/src/index.ts` | Periodic DHT re-announcement loop |
 | `deploy/ipfs-relay/` | Standalone IPFS relay deployed on supernode |
 
+### Lit Action (runs on Lit TEE nodes)
+| File | Purpose |
+|------|---------|
+| `pc2-node/data/lit-actions/non-media-decrypt.js` | Trustless on-chain access check + threshold CEK decryption |
+
 ### Backend APIs
 | File | Purpose |
 |------|---------|
-| `pc2-node/src/api/storage.ts` | `/api/storage/ipfs/pin` — IPFS pinning with CAR support |
+| `pc2-node/src/api/storage.ts` | Lit encrypt/decrypt, IPFS upload/pin, capacity credit auto-detection |
 | `pc2-node/src/api/installed-apps.ts` | App install/uninstall/list endpoints |
 | `pc2-node/src/services/AppInstallService.ts` | App lifecycle management service |
 | `pc2-node/src/static.ts` | Static serving for installed apps with wallet bridge injection |

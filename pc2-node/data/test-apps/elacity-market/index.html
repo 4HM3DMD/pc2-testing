@@ -115,6 +115,7 @@
     <section id="view-library" class="view hidden">
       <div class="view-header">
         <h2 class="view-title">My Library</h2>
+        <button id="library-refresh-btn" style="display: inline-flex; align-items: center; justify-content: center; padding: 6px 12px; font-size: 12px; line-height: 1; font-family: inherit; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); border-radius: 6px; cursor: pointer; color: #ccc; margin-left: auto;" title="Refresh library">↻ Refresh</button>
       </div>
       <div id="auth-prompt" class="auth-prompt hidden">
         <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -293,9 +294,9 @@
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19.35 10.04A7.49 7.49 0 0 0 12 4C9.11 4 6.6 5.64 5.35 8.04A5.994 5.994 0 0 0 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96z"/><polyline points="8 13 12 17 16 13"/><line x1="12" y1="17" x2="12" y2="9"/></svg>
             <span>Save to Cloud</span>
           </button>
-          <button id="download-decrypt-btn" class="action-btn download-decrypt-btn hidden" title="Download and decrypt non-media asset">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-            <span>Download & Decrypt</span>
+          <button id="download-decrypt-btn" class="action-btn action-play download-decrypt-btn hidden" title="Decrypt and view this asset">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+            <span>Decrypt & View</span>
           </button>
           <div id="download-status" class="download-status hidden"></div>
           <div id="detail-attributes" class="detail-attributes"></div>

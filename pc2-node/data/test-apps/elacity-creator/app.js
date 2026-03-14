@@ -380,20 +380,33 @@
   }
 
   function buildMetadataEnvelope(params) {
+    var contentType = params.mimeType || 'application/octet-stream';
     return {
       schema: 'elacity-asset-envelope-v1',
       name: params.title,
       description: params.description,
       image: params.image || '',
       category: params.category,
+      media: {
+        uri: 'ipfs://' + params.assetCid,
+        contentType: contentType,
+        mimeType: contentType,
+        protectionType: 'lit-aes-v1',
+        size: params.size,
+      },
       asset: {
         cid: params.assetCid,
-        mimeType: params.mimeType,
+        mimeType: contentType,
         size: params.size,
         encrypted: true,
         algorithm: 'lit-aes-v1',
         protectionType: 'lit-aes-v1',
         dataToEncryptHash: params.dataToEncryptHash,
+        actionCid: params.actionCid || '',
+        authority: params.authority || CONTRACTS.AUTHORITY_GATEWAY,
+        chain: 'base',
+        chainId: BASE_CHAIN_ID,
+        rpc: 'https://mainnet.base.org',
       },
       pricing: {
         currency: 'USDC',
@@ -551,6 +564,17 @@
     var start = Date.now();
     maxWait = maxWait || 120000;
     while (Date.now() - start < maxWait) {
+      // Smart Account wallets (Particle/UniversalX) return UserOperation hashes
+      // that standard RPC won't recognize. Try the wallet provider first since it
+      // can resolve UserOp hashes to real receipts.
+      try {
+        var walletReceipt = await window.ethereum.request({
+          method: 'eth_getTransactionReceipt',
+          params: [txHash],
+        });
+        if (walletReceipt && walletReceipt.status) return walletReceipt;
+      } catch (_) { /* wallet provider doesn't support it, fall through */ }
+
       var resp = await fetch(BASE_RPC, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -565,7 +589,8 @@
       if (receipt && receipt.status) return receipt;
       await new Promise(function (r) { setTimeout(r, 3000); });
     }
-    throw new Error('Transaction confirmation timeout');
+    console.warn('[Creator] waitForReceipt timed out for', txHash);
+    return { status: 'timeout', transactionHash: txHash };
   }
 
   // ── Channel creation ─────────────────────────────────
@@ -923,14 +948,14 @@
 
         var litData = await litResp.json();
         console.log('[Creator] Lit encryption succeeded. Hash:', litData.dataToEncryptHash?.substring(0, 20) + '...');
-        console.log('[Creator] Server wallet:', litData.serverAddress);
-        setProgStep('prog-connect', 'Lit Connected (datil, server)', 'done');
+        console.log('[Creator] Action CID:', litData.actionCid);
+        setProgStep('prog-connect', 'Lit Connected (datil)', 'done');
 
-        setProgStep('prog-encrypt', 'Encrypting (Lit)...', 'active');
+        setProgStep('prog-encrypt', 'Encrypting (Lit Action)...', 'active');
         encryptResult = {
           encrypted: base64ToUint8(litData.ciphertext),
           dataToEncryptHash: litData.dataToEncryptHash,
-          serverAddress: litData.serverAddress,
+          actionCid: litData.actionCid,
           conditions: litData.conditions,
         };
       } catch (litErr) {
@@ -1034,6 +1059,7 @@
         mimeType: state.selectedFile.type || 'application/octet-stream',
         size: state.selectedFile.size,
         dataToEncryptHash: encryptResult.dataToEncryptHash,
+        actionCid: encryptResult.actionCid || '',
         price: price,
         accessMethod: accessMethod,
         copies: copies,
@@ -1185,17 +1211,31 @@
 
         // ── Step 5: Set approval on Operative ─────────
         if (mintedOpContract && mintedOpContract !== '0x0000000000000000000000000000000000000000') {
-          setProgStep('prog-approve', 'Approving gateway on ' + mintedOpContract.substring(0, 8) + '...', 'active');
+          try {
+            setProgStep('prog-approve', 'Waiting for chain to settle...', 'active');
+            await new Promise(function (r) { setTimeout(r, 5000); });
 
-          var opIface = new ethers.Interface(ABI.OPERATIVE);
-          var approveData = opIface.encodeFunctionData('setApprovalForAll', [gatewayAddress, true]);
+            setProgStep('prog-approve', 'Approving gateway on ' + mintedOpContract.substring(0, 8) + '...', 'active');
 
-          setProgStep('prog-approve', 'Confirm in wallet...', 'active');
-          var approveTxHash = await sendTx(mintedOpContract, approveData);
-          setProgStep('prog-approve', 'Confirming tx...', 'active');
-          await waitForReceipt(approveTxHash);
-          setProgStep('prog-approve', 'Gateway approved', 'done');
-          console.log('[Creator] setApprovalForAll done on', mintedOpContract, 'for gateway', gatewayAddress);
+            var opIface = new ethers.Interface(ABI.OPERATIVE);
+            var approveData = opIface.encodeFunctionData('setApprovalForAll', [gatewayAddress, true]);
+
+            setProgStep('prog-approve', 'Confirm in wallet...', 'active');
+            var approveTxHash = await sendTx(mintedOpContract, approveData);
+            setProgStep('prog-approve', 'Confirming tx...', 'active');
+            var approveReceipt = await waitForReceipt(approveTxHash);
+            if (approveReceipt.status === 'timeout') {
+              setProgStep('prog-approve', 'Tx sent — verify on BaseScan (' + approveTxHash.substring(0, 10) + '...)', 'done');
+              console.warn('[Creator] Approval receipt timed out. Tx may still confirm:', approveTxHash);
+            } else {
+              setProgStep('prog-approve', 'Gateway approved', 'done');
+            }
+            console.log('[Creator] setApprovalForAll on', mintedOpContract, 'for gateway', gatewayAddress);
+          } catch (approveErr) {
+            console.error('[Creator] Gateway approval failed:', approveErr);
+            setProgStep('prog-approve', '⚠️ Failed — use Fix tool below (' + (approveErr.message || '').substring(0, 60) + ')', 'error');
+            showToast('Gateway approval failed. Use the Fix Gateway Approval tool after results load.', 'error');
+          }
         } else if (opType === OP_TYPES.FREE) {
           setProgStep('prog-approve', 'Skipped (free content)', 'done');
         } else {
@@ -1435,6 +1475,113 @@
     });
     dom.btnBackTo2.addEventListener('click', function () { goToStep(2); });
     dom.btnNewAsset.addEventListener('click', resetAll);
+
+    // ── Fix Gateway Approval tool ──────────────────────
+    var fixOpInput = document.getElementById('fix-operative-addr');
+    var fixStatus = document.getElementById('fix-approval-status');
+    var btnCheck = document.getElementById('btn-check-approval');
+    var btnFix = document.getElementById('btn-fix-approval');
+
+    btnCheck.addEventListener('click', async function () {
+      var addr = fixOpInput.value.trim();
+      if (!ethers.isAddress(addr)) {
+        fixStatus.textContent = 'Enter a valid operative address';
+        fixStatus.className = 'tool-status error';
+        fixStatus.classList.remove('hidden');
+        return;
+      }
+      fixStatus.textContent = 'Checking approval status...';
+      fixStatus.className = 'tool-status checking';
+      fixStatus.classList.remove('hidden');
+      btnFix.disabled = true;
+
+      try {
+        var opIface = new ethers.Interface(ABI.OPERATIVE);
+        var checkData = opIface.encodeFunctionData('isApprovedForAll', [
+          state.walletAddress || '0x0000000000000000000000000000000000000000',
+          CONTRACTS.AUTHORITY_GATEWAY,
+        ]);
+        var result = await rpcCall(addr, checkData);
+        var decoded = opIface.decodeFunctionResult('isApprovedForAll', result);
+        var isApproved = decoded[0];
+
+        if (isApproved) {
+          fixStatus.textContent = '✅ Gateway is already approved on this operative.';
+          fixStatus.className = 'tool-status approved';
+          btnFix.disabled = true;
+        } else {
+          fixStatus.textContent = '❌ Gateway NOT approved. Click "Send Approval Tx" to fix.';
+          fixStatus.className = 'tool-status not-approved';
+          btnFix.disabled = false;
+        }
+      } catch (err) {
+        fixStatus.textContent = 'Check failed: ' + (err.message || '').substring(0, 80);
+        fixStatus.className = 'tool-status error';
+      }
+    });
+
+    btnFix.addEventListener('click', async function () {
+      var addr = fixOpInput.value.trim();
+      if (!ethers.isAddress(addr)) return;
+      if (!state.walletAddress) {
+        showToast('Connect your wallet first', 'error');
+        return;
+      }
+
+      fixStatus.textContent = 'Sending setApprovalForAll — confirm in wallet...';
+      fixStatus.className = 'tool-status sending';
+      btnFix.disabled = true;
+      btnCheck.disabled = true;
+
+      try {
+        var opIface = new ethers.Interface(ABI.OPERATIVE);
+        var txData = opIface.encodeFunctionData('setApprovalForAll', [CONTRACTS.AUTHORITY_GATEWAY, true]);
+        var txHash = await sendTx(addr, txData);
+        fixStatus.textContent = 'Tx sent (' + txHash.substring(0, 14) + '...) — waiting for confirmation...';
+        fixStatus.className = 'tool-status sending';
+
+        var receipt = await waitForReceipt(txHash);
+        if (receipt.status === 'timeout') {
+          fixStatus.textContent = '⏳ Tx sent but receipt timed out. Check BaseScan: ' + txHash.substring(0, 14) + '...';
+          fixStatus.className = 'tool-status checking';
+        } else if (receipt.status === '0x1' || receipt.status === 1) {
+          fixStatus.textContent = '✅ Gateway approval set! You can now purchase this asset on ela.city.';
+          fixStatus.className = 'tool-status approved';
+        } else {
+          fixStatus.textContent = '❌ Transaction reverted. Check BaseScan: ' + txHash;
+          fixStatus.className = 'tool-status error';
+        }
+        showToast('Approval transaction processed', 'success');
+      } catch (err) {
+        fixStatus.textContent = 'Failed: ' + (err.message || '').substring(0, 100);
+        fixStatus.className = 'tool-status error';
+        showToast('Approval failed: ' + (err.message || ''), 'error');
+      } finally {
+        btnCheck.disabled = false;
+      }
+    });
+
+    // Auto-populate operative from last result if available
+    if (state.result && state.result.opContract) {
+      fixOpInput.value = state.result.opContract;
+    }
+
+    // Watch for result changes to auto-populate and auto-open if approval failed
+    var origGoToStep = window._goToStep || goToStep;
+    var _origGoToStep4 = goToStep;
+    var approvalObserver = new MutationObserver(function () {
+      if (state.result && state.result.opContract && !fixOpInput.value) {
+        fixOpInput.value = state.result.opContract;
+      }
+      var approveStatus = document.getElementById('prog-approve-status');
+      if (approveStatus && approveStatus.textContent && approveStatus.textContent.indexOf('Failed') !== -1) {
+        document.getElementById('fix-approval-details').open = true;
+        if (state.result && state.result.opContract) {
+          fixOpInput.value = state.result.opContract;
+        }
+      }
+    });
+    approvalObserver.observe(document.getElementById('step-4') || document.body, { childList: true, subtree: true, characterData: true });
 
     // Auto-connect wallet if available
     if (window.ethereum) {
