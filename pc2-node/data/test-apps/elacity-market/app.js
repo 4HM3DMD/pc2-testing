@@ -1961,6 +1961,9 @@
       });
     }
 
+    var protectionType = asset.protectionType || asset.algorithm || '';
+    var operativeAddr = (nft.operative && nft.operative.address) || '';
+
     if (isLocalDevMode && localKey) {
       dom.downloadStatus.textContent = 'Downloading (local dev mode)...';
       var ipfsUrl = window.location.origin + '/ipfs/' + cid;
@@ -1987,6 +1990,78 @@
         dom.downloadStatus.className = 'download-status error';
         dom.downloadStatus.textContent = 'Failed: ' + (err.message || 'Unknown error');
         showToast('Download failed: ' + (err.message || 'Unknown error'), 'error');
+      });
+      return;
+    }
+
+    if (protectionType === 'lit-aes-v1' || dataToEncryptHash) {
+      dom.downloadStatus.textContent = 'Fetching encrypted asset from IPFS...';
+      var buyerAddr = Wallet.getAddress();
+
+      if (!operativeAddr) {
+        dom.downloadDecryptBtn.disabled = false;
+        dom.downloadStatus.className = 'download-status error';
+        dom.downloadStatus.textContent = 'Missing operative address — cannot verify access';
+        return;
+      }
+
+      var ipfsUrl = window.location.origin + '/ipfs/' + cid;
+      fetch(ipfsUrl).then(function (r) {
+        if (!r.ok) return fetch('https://ipfs.ela.city/ipfs/' + cid);
+        return r;
+      }).then(function (r) {
+        if (!r.ok) throw new Error('IPFS fetch failed: ' + r.status);
+        return r.arrayBuffer();
+      }).then(function (buf) {
+        dom.downloadStatus.textContent = 'Verifying access & decrypting via Lit Protocol...';
+        var encryptedBase64 = '';
+        var bytes = new Uint8Array(buf);
+        var chunkSize = 32768;
+        for (var i = 0; i < bytes.length; i += chunkSize) {
+          encryptedBase64 += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+        }
+        encryptedBase64 = btoa(encryptedBase64);
+
+        return pc2Fetch('/api/storage/lit/decrypt', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ciphertext: encryptedBase64,
+            dataToEncryptHash: dataToEncryptHash,
+            operativeAddress: operativeAddr,
+            buyerAddress: buyerAddr,
+          }),
+        });
+      }).then(function (resp) {
+        if (!resp.ok) {
+          return resp.json().then(function (err) {
+            throw new Error(err.error || 'Decrypt failed: ' + resp.status);
+          });
+        }
+        return resp.json();
+      }).then(function (result) {
+        var decryptedBytes = Uint8Array.from(atob(result.data), function (c) { return c.charCodeAt(0); });
+        dom.downloadStatus.textContent = 'Decrypted! Rendering...';
+
+        var mime = asset.mimeType || media.contentType || 'application/octet-stream';
+        if (mime.startsWith('image/')) {
+          var blob = new Blob([decryptedBytes], { type: mime });
+          var blobUrl = URL.createObjectURL(blob);
+          dom.detailImage.src = blobUrl;
+          dom.detailImage.style.display = '';
+          dom.downloadStatus.className = 'download-status success';
+          dom.downloadStatus.textContent = 'Decrypted and displayed!';
+          dom.downloadDecryptBtn.disabled = false;
+          showToast('Asset decrypted successfully!', 'success');
+        } else {
+          return saveDecryptedFile(decryptedBytes);
+        }
+      }).catch(function (err) {
+        console.error('[Decrypt] Failed:', err);
+        dom.downloadDecryptBtn.disabled = false;
+        dom.downloadStatus.className = 'download-status error';
+        dom.downloadStatus.textContent = 'Failed: ' + (err.message || 'Unknown error');
+        showToast('Decrypt failed: ' + (err.message || 'Unknown error'), 'error');
       });
       return;
     }
