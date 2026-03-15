@@ -1250,38 +1250,13 @@ async function decryptAssetTwoLayer(params: DecryptParams): Promise<Buffer> {
 
 /**
  * POST /api/storage/lit/decrypt
- * Two-layer decryption returning raw base64. Kept for backward compatibility.
- * For secure viewing (no plaintext exposure), use /api/storage/lit/secure-view instead.
- *
- * Response: { success: true, data: string (base64) }
+ * DEPRECATED — raw plaintext endpoint removed for security.
+ * Use /api/storage/lit/secure-view instead, which returns only rendered pixels.
  */
-router.post('/lit/decrypt', authenticate, async (req: AuthenticatedRequest, res: Response) => {
-  try {
-    const { litCiphertext, dataToEncryptHash, iv, encryptedDataCid, kid, buyerAddress } = req.body;
-
-    if (!litCiphertext || !dataToEncryptHash || !kid || !buyerAddress) {
-      res.status(400).json({ error: 'Missing required fields: litCiphertext, dataToEncryptHash, kid, buyerAddress' });
-      return;
-    }
-    if (!iv || !encryptedDataCid) {
-      res.status(400).json({ error: 'Missing required fields: iv, encryptedDataCid (two-layer encryption)' });
-      return;
-    }
-
-    const decryptedBytes = await decryptAssetTwoLayer(req.body);
-
-    res.json({
-      success: true,
-      data: decryptedBytes.toString('base64'),
-      size: decryptedBytes.length,
-    });
-
-    decryptedBytes.fill(0);
-  } catch (error: any) {
-    logger.error('[Lit] Decryption error:', error);
-    const status = error.message?.includes('Access denied') ? 403 : 500;
-    res.status(status).json({ error: error.message || 'Lit decryption failed' });
-  }
+router.post('/lit/decrypt', authenticate, async (_req: AuthenticatedRequest, res: Response) => {
+  res.status(410).json({
+    error: 'This endpoint has been removed for security. Use /api/storage/lit/secure-view instead.',
+  });
 });
 
 // ── WASM Renderer Integration ────────────────────────────────────────

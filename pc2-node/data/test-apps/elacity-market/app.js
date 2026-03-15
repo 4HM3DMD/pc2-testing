@@ -808,11 +808,9 @@
       if (nonMedia) {
         dom.playOwnedBtn.classList.add('hidden');
         if (cid) {
-          dom.downloadDecryptBtn.classList.remove('hidden');
           dom.openViewerBtn.classList.remove('hidden');
           dom.downloadNodeBtn.classList.remove('hidden');
           console.log('[Detail] Non-media asset, CID:', cid, 'hash:', rawAsset.dataToEncryptHash);
-          setTimeout(function () { handleDownloadAndDecrypt(); }, 300);
         } else {
           console.warn('[Detail] Non-media asset but no CID found');
         }
@@ -1892,7 +1890,10 @@
     var safeName = title.replace(/[^a-zA-Z0-9 _\-]/g, '').substring(0, 80).trim() || 'media';
     var walletAddr = Wallet.getAddress() || '';
     var nonMedia = isNonMediaAsset(nft);
-    var folder = nonMedia ? 'Documents' : 'Videos';
+    var assetMime = (asset.mimeType || media.contentType || '').toLowerCase();
+    var folder = nonMedia
+      ? (assetMime.startsWith('image/') ? 'Pictures' : 'Documents')
+      : 'Videos';
     var ext = nonMedia ? '.ddrm.json' : '.edrm';
     var savePath = '/' + walletAddr + '/' + folder + '/' + safeName + ext;
 
@@ -1939,7 +1940,7 @@
         clearInterval(progressTimer);
         progressVal = 90;
         progressFill.style.width = '90%';
-        progressText.textContent = 'Saving to your Videos folder...';
+        progressText.textContent = 'Saving to your ' + folder + ' folder...';
 
         descriptor.pinned = !!(pinResult && pinResult.success);
         descriptor.pinnedSize = (pinResult && pinResult.totalSize) || 0;
@@ -2006,198 +2007,7 @@
     pinAndRegisterMedia(nft);
   }
 
-  // ── Secure Viewer (server-side rendering, no raw file in browser) ──
-
-  var secureViewState = { currentPage: 1, totalPages: 0, body: null, mime: '' };
-
-  function showDecryptingOverlay() {
-    var mediaEl = document.getElementById('detail-media');
-    if (!mediaEl) return;
-    var overlay = document.getElementById('decrypt-overlay');
-    if (!overlay) {
-      overlay = document.createElement('div');
-      overlay.id = 'decrypt-overlay';
-      overlay.style.cssText = 'position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:rgba(0,0,0,0.7);z-index:10;border-radius:inherit;';
-      overlay.innerHTML =
-        '<div style="width:36px;height:36px;border:3px solid rgba(255,255,255,0.2);border-top-color:#4ade80;border-radius:50%;animation:spin 0.8s linear infinite;"></div>' +
-        '<div id="decrypt-overlay-text" style="color:#e0e0e0;font-size:13px;margin-top:12px;">Decrypting...</div>' +
-        '<style>@keyframes spin{to{transform:rotate(360deg)}}</style>';
-      mediaEl.style.position = 'relative';
-      mediaEl.appendChild(overlay);
-    }
-    overlay.style.display = 'flex';
-  }
-
-  function hideDecryptingOverlay() {
-    var overlay = document.getElementById('decrypt-overlay');
-    if (overlay) overlay.style.display = 'none';
-  }
-
-  function updateDecryptOverlayText(text) {
-    var el = document.getElementById('decrypt-overlay-text');
-    if (el) el.textContent = text;
-  }
-
-  function secureViewAsset(body, mime, page) {
-    var pg = page || 1;
-    body.page = pg;
-    secureViewState.body = body;
-    secureViewState.mime = mime;
-    secureViewState.currentPage = pg;
-
-    showDecryptingOverlay();
-    updateDecryptOverlayText('Verifying access & decrypting...');
-
-    return pc2Fetch('/api/storage/lit/secure-view', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    }).then(function (resp) {
-      if (!resp.ok) {
-        return resp.json().then(function (err) {
-          throw new Error(err.error || 'Secure view failed: ' + resp.status);
-        });
-      }
-
-      var totalPages = parseInt(resp.headers.get('X-Asset-Pages') || '0', 10);
-      if (totalPages > 0) {
-        secureViewState.totalPages = totalPages;
-      }
-
-      return resp.blob();
-    }).then(function (blob) {
-      hideDecryptingOverlay();
-      var blobUrl = URL.createObjectURL(blob);
-      var mediaEl = document.getElementById('detail-media');
-      var isMultiPage = secureViewState.totalPages > 1;
-      var isTextOrDoc = secureViewState.mime && (secureViewState.mime.startsWith('text/') || secureViewState.mime === 'application/pdf');
-      var needsScroll = isMultiPage || isTextOrDoc;
-
-      if (needsScroll && mediaEl) {
-        mediaEl.style.aspectRatio = 'auto';
-        mediaEl.style.maxHeight = '75vh';
-        mediaEl.style.overflowY = 'auto';
-      }
-
-      if (isMultiPage) {
-        dom.detailImage.style.display = 'none';
-
-        var pdfContainer = document.getElementById('pdf-pages-container');
-        if (!pdfContainer) {
-          pdfContainer = document.createElement('div');
-          pdfContainer.id = 'pdf-pages-container';
-          pdfContainer.style.cssText = 'display:flex;flex-direction:column;gap:4px;';
-          mediaEl.appendChild(pdfContainer);
-        }
-
-        var pageImg = document.createElement('img');
-        pageImg.id = 'pdf-page-1';
-        pageImg.style.cssText = 'width:100%;height:auto;display:block;user-select:none;-webkit-user-select:none;pointer-events:none;';
-        pageImg.setAttribute('draggable', 'false');
-        pageImg.oncontextmenu = function (e) { e.preventDefault(); return false; };
-        pageImg.onload = function () { URL.revokeObjectURL(blobUrl); };
-        pageImg.src = blobUrl;
-        pdfContainer.appendChild(pageImg);
-
-        dom.downloadDecryptBtn.disabled = false;
-        dom.downloadStatus.className = 'download-status success';
-        dom.downloadStatus.textContent = 'Page 1 loaded, fetching remaining ' + (secureViewState.totalPages - 1) + ' pages...';
-
-        if (secureViewState.totalPages > 1) {
-          fetchAllPdfPagesParallel(pdfContainer, secureViewState.totalPages);
-        }
-      } else {
-        dom.detailImage.src = blobUrl;
-        dom.detailImage.style.display = '';
-        dom.detailImage.style.objectFit = 'contain';
-        dom.detailImage.style.height = 'auto';
-        dom.detailImage.style.width = '100%';
-        dom.detailImage.onload = function () { URL.revokeObjectURL(blobUrl); };
-        dom.detailImage.oncontextmenu = function (e) { e.preventDefault(); return false; };
-        dom.detailImage.setAttribute('draggable', 'false');
-        dom.detailImage.style.userSelect = 'none';
-        dom.detailImage.style.webkitUserSelect = 'none';
-
-        dom.downloadDecryptBtn.disabled = false;
-        dom.downloadStatus.className = 'download-status success';
-        dom.downloadStatus.textContent = 'Secured view (watermarked, server-rendered)';
-      }
-
-      showToast('Asset decrypted securely!', 'success');
-    }).catch(function (err) {
-      hideDecryptingOverlay();
-      throw err;
-    });
-  }
-
-  function fetchAllPdfPagesParallel(pdfContainer, totalPages) {
-    var pagesLoaded = 1;
-
-    // Pre-create placeholder elements in order so pages appear correctly
-    for (var i = 2; i <= totalPages; i++) {
-      var placeholder = document.createElement('div');
-      placeholder.id = 'pdf-page-slot-' + i;
-      placeholder.style.cssText = 'width:100%;min-height:100px;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.05);border-radius:4px;color:#888;font-size:12px;';
-      placeholder.textContent = 'Loading page ' + i + '...';
-      pdfContainer.appendChild(placeholder);
-    }
-
-    // Fire all page requests in parallel
-    for (var p = 2; p <= totalPages; p++) {
-      (function (pageNum) {
-        var body = JSON.parse(JSON.stringify(secureViewState.body));
-        body.page = pageNum;
-
-        pc2Fetch('/api/storage/lit/secure-view', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        }).then(function (resp) {
-          if (!resp.ok) throw new Error('Page ' + pageNum + ' failed');
-          return resp.blob();
-        }).then(function (blob) {
-          var blobUrl = URL.createObjectURL(blob);
-          var slot = document.getElementById('pdf-page-slot-' + pageNum);
-          if (slot) {
-            var img = document.createElement('img');
-            img.id = 'pdf-page-' + pageNum;
-            img.style.cssText = 'width:100%;height:auto;display:block;user-select:none;-webkit-user-select:none;pointer-events:none;';
-            img.setAttribute('draggable', 'false');
-            img.oncontextmenu = function (e) { e.preventDefault(); return false; };
-            img.onload = function () { URL.revokeObjectURL(blobUrl); };
-            img.src = blobUrl;
-            slot.replaceWith(img);
-          }
-
-          pagesLoaded++;
-          dom.downloadStatus.textContent = pagesLoaded + ' of ' + totalPages + ' pages loaded...';
-          if (pagesLoaded === totalPages) {
-            dom.downloadStatus.textContent = 'All ' + totalPages + ' pages loaded (secured)';
-          }
-        }).catch(function (err) {
-          console.error('[PDF] Failed to load page ' + pageNum + ':', err);
-          var slot = document.getElementById('pdf-page-slot-' + pageNum);
-          if (slot) slot.textContent = 'Failed to load page ' + pageNum;
-        });
-      })(p);
-    }
-  }
-
-  function showPdfPageControls(show) {
-    var container = document.getElementById('pdf-page-controls');
-    if (container) container.style.display = show ? 'flex' : 'none';
-    if (container) {
-      container.style.display = show ? 'flex' : 'none';
-      if (show) {
-        var info = document.getElementById('pdf-page-info');
-        if (info) info.textContent = secureViewState.currentPage + ' / ' + secureViewState.totalPages;
-        document.getElementById('pdf-prev').disabled = secureViewState.currentPage <= 1;
-        document.getElementById('pdf-next').disabled = secureViewState.currentPage >= secureViewState.totalPages;
-      }
-    }
-  }
-
-  // ── Open in dDRM Viewer (dedicated popup window) ──
+  // ── Open in dDRM Viewer (secure runtime) ──
 
   function handleOpenInViewer() {
     var nft = state.detailItem;
@@ -2260,33 +2070,6 @@
     }, '*');
   }
 
-  // ── Download & Decrypt (non-media assets via @elacity-js/access) ──
-
-  function handleDownloadAndDecrypt() {
-    var nft = state.detailItem;
-    if (!nft) return;
-
-    if (!Wallet.isConnected()) {
-      showToast('Connect your wallet first', 'error');
-      return;
-    }
-
-    showDecryptingOverlay();
-    updateDecryptOverlayText('Preparing decryption...');
-
-    dom.downloadDecryptBtn.disabled = true;
-    dom.downloadStatus.classList.remove('hidden');
-    dom.downloadStatus.className = 'download-status pending';
-    dom.downloadStatus.textContent = 'Loading asset metadata...';
-
-    ensureRawMetadata(nft).then(function () {
-      proceedWithDecrypt(nft);
-    }).catch(function (err) {
-      console.error('[Decrypt] Metadata load failed:', err);
-      proceedWithDecrypt(nft);
-    });
-  }
-
   function ensureRawMetadata(nft) {
     if (nft._rawAsset && nft._rawAsset.dataToEncryptHash) {
       return Promise.resolve();
@@ -2311,233 +2094,6 @@
         console.log('[Decrypt] Raw metadata loaded inline, asset CID:', rawMeta.asset.cid);
       }
     });
-  }
-
-  function proceedWithDecrypt(nft) {
-    var media = (nft.metadata && nft.metadata.media) || nft._rawMedia || {};
-    var asset = nft._rawAsset || (nft.metadata && nft.metadata.asset) || {};
-    var cid = asset.cid || asset.uri || media.uri;
-    if (cid) cid = cid.replace('ipfs://', '');
-    var meta = nft.metadata || {};
-    var props = meta.properties || {};
-    var ledger = props.ledger || nft.contractAddress || (nft.channel && nft.channel.address) || '';
-    var tokenId = (nft.tokenId && nft.tokenId.hexTokenID) || nft.tokenId || '0';
-    var dataToEncryptHash = asset.dataToEncryptHash || '';
-    var isLocalDevMode = asset._devMode === true;
-    var localKey = asset._localKey || '';
-
-    console.log('[Decrypt] CID:', cid, 'hash:', dataToEncryptHash, 'ledger:', ledger, 'protectionType:', asset.protectionType);
-
-    if (!cid || !ledger) {
-      dom.downloadDecryptBtn.disabled = false;
-      dom.downloadStatus.className = 'download-status error';
-      dom.downloadStatus.textContent = 'No downloadable content for this asset';
-      showToast('No downloadable content for this asset', 'error');
-      return;
-    }
-
-    function saveDecryptedFile(decrypted) {
-      var title = meta.name || nft.name || 'Untitled';
-      var safeName = title.replace(/[^a-zA-Z0-9 _\-.]/g, '').substring(0, 80).trim() || 'asset';
-      var mimeToExt = { 'application/pdf': '.pdf', 'image/png': '.png', 'image/jpeg': '.jpg', 'audio/mpeg': '.mp3', 'audio/wav': '.wav' };
-      var mime = asset.mimeType || media.contentType || '';
-      var ext = mimeToExt[mime] || (mime && mime.split('/')[1] ? '.' + mime.split('/')[1].split('+')[0] : '');
-      var walletAddr = Wallet.getAddress() || '';
-      var savePath = '/' + walletAddr + '/Downloads/' + safeName + ext;
-
-      dom.downloadStatus.textContent = 'Saving to your Downloads folder...';
-
-      var bytes = new Uint8Array(decrypted);
-      var base64 = '';
-      var chunkSize = 32768;
-      for (var i = 0; i < bytes.length; i += chunkSize) {
-        base64 += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
-      }
-      base64 = btoa(base64);
-      return pc2Fetch('/write', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          path: savePath,
-          content: base64,
-          encoding: 'base64',
-          mime_type: (asset.mimeType || media.contentType || 'application/octet-stream'),
-          overwrite: false,
-          dedupe_name: true
-        })
-      }).then(function (res) {
-        if (!res.ok) throw new Error('Save failed: ' + res.status);
-        return res.json();
-      }).then(function () {
-        dom.downloadStatus.className = 'download-status success';
-        dom.downloadStatus.innerHTML = 'Downloaded & decrypted! <a href="#" class="open-folder-link">Open Downloads folder</a>';
-        dom.downloadDecryptBtn.disabled = false;
-        showToast('Asset saved to your node!', 'success');
-
-        var folderLink = dom.downloadStatus.querySelector('.open-folder-link');
-        if (folderLink) {
-          folderLink.addEventListener('click', function (e) {
-            e.preventDefault();
-            var appInstanceId = new URLSearchParams(window.location.search).get('puter.app_instance_id') || '';
-            window.parent.postMessage({
-              $: 'puter-ipc',
-              msg: 'openFolder',
-              path: '/' + walletAddr + '/Downloads',
-              appInstanceID: appInstanceId,
-              env: 'app'
-            }, '*');
-          });
-        }
-      });
-    }
-
-    var protectionType = asset.protectionType || asset.algorithm || '';
-    var operativeAddr = (nft.operative && nft.operative.address) || '';
-
-    if (isLocalDevMode && localKey) {
-      dom.downloadStatus.textContent = 'Downloading (local dev mode)...';
-      var ipfsUrl = window.location.origin + '/ipfs/' + cid;
-      fetch(ipfsUrl).then(function (r) {
-        if (!r.ok) return fetch('https://ipfs.ela.city/ipfs/' + cid);
-        return r;
-      }).then(function (r) {
-        if (!r.ok) throw new Error('IPFS fetch failed: ' + r.status);
-        return r.arrayBuffer();
-      }).then(function (buf) {
-        dom.downloadStatus.textContent = 'Decrypting (local AES-GCM)...';
-        var encrypted = new Uint8Array(buf);
-        var iv = encrypted.slice(0, 12);
-        var ciphertext = encrypted.slice(12);
-        var keyBytes = Uint8Array.from(atob(localKey), function (c) { return c.charCodeAt(0); });
-        return crypto.subtle.importKey('raw', keyBytes, { name: 'AES-GCM', length: 256 }, false, ['decrypt'])
-          .then(function (key) {
-            return crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv }, key, ciphertext);
-          });
-      }).then(function (decryptedBuf) {
-        return saveDecryptedFile(new Uint8Array(decryptedBuf));
-      }).catch(function (err) {
-        dom.downloadDecryptBtn.disabled = false;
-        dom.downloadStatus.className = 'download-status error';
-        dom.downloadStatus.textContent = 'Failed: ' + (err.message || 'Unknown error');
-        showToast('Download failed: ' + (err.message || 'Unknown error'), 'error');
-      });
-      return;
-    }
-
-    if (protectionType === 'lit-aes-v1' || dataToEncryptHash) {
-      dom.downloadStatus.textContent = 'Fetching encrypted asset from IPFS...';
-
-      // Smart Account awareness: if the buyer used a Universal Account,
-      // the AccessToken is held by the Smart Account address, not the EOA.
-      // getSignerAddress() returns smartAccountAddress || connectedAddress.
-      var buyerAddr = Wallet.getSignerAddress();
-
-      var assetActionCid = asset.actionCid || '';
-      var assetAuthority = asset.authority || (meta.properties && meta.properties.authority) || '';
-      var litCiphertext = asset.litCiphertext || '';
-      var assetIv = asset.iv || '';
-      // kid = bytes16 = first 16 bytes (32 hex chars) of the dataToEncryptHash
-      var cleanHash = dataToEncryptHash.startsWith('0x') ? dataToEncryptHash.slice(2) : dataToEncryptHash;
-      var assetKid = '0x' + cleanHash.slice(0, 32).padEnd(32, '0');
-
-      console.log('[Decrypt] buyer:', buyerAddr, 'actionCid:', assetActionCid, 'authority:', assetAuthority, 'kid:', assetKid);
-      console.log('[Decrypt] litCiphertext:', litCiphertext ? litCiphertext.substring(0, 30) + '...' : 'MISSING', 'iv:', assetIv || 'MISSING');
-
-      if (!assetKid) {
-        dom.downloadDecryptBtn.disabled = false;
-        dom.downloadStatus.className = 'download-status error';
-        dom.downloadStatus.textContent = 'Missing content identifier (dataToEncryptHash)';
-        return;
-      }
-
-      if (!litCiphertext || !assetIv) {
-        dom.downloadDecryptBtn.disabled = false;
-        dom.downloadStatus.className = 'download-status error';
-        dom.downloadStatus.textContent = 'Asset metadata missing litCiphertext/iv — may need re-encryption with latest creator';
-        return;
-      }
-
-      dom.downloadStatus.textContent = 'Verifying access & decrypting via Lit Action...';
-
-      var mime = asset.mimeType || media.contentType || 'application/octet-stream';
-      var isSecureViewable = mime.startsWith('image/') || mime === 'application/pdf' || mime.startsWith('text/');
-
-      var secureViewBody = {
-        litCiphertext: litCiphertext,
-        dataToEncryptHash: dataToEncryptHash,
-        encryptedDataCid: cid,
-        iv: assetIv,
-        kid: assetKid,
-        buyerAddress: buyerAddr,
-        mimeType: mime,
-        maxWidth: Math.min(window.innerWidth * (window.devicePixelRatio || 1), 1600),
-      };
-      if (assetActionCid) secureViewBody.actionCid = assetActionCid;
-      if (assetAuthority) secureViewBody.authority = assetAuthority;
-
-      if (isSecureViewable) {
-        // Secure path: server renders, browser receives only pixels (never raw file)
-        var secureViewPromise = secureViewAsset(secureViewBody, mime);
-        secureViewPromise.catch(function (err) {
-          console.error('[SecureView] Failed:', err);
-          dom.downloadDecryptBtn.disabled = false;
-          dom.downloadStatus.className = 'download-status error';
-          dom.downloadStatus.textContent = 'Failed: ' + (err.message || 'Unknown error');
-          showToast('Secure view failed: ' + (err.message || 'Unknown error'), 'error');
-        });
-      } else {
-        // Fallback: raw decrypt for unsupported types (audio, wasm, etc.)
-        var decryptPromise = pc2Fetch('/api/storage/lit/decrypt', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(secureViewBody),
-        }).then(function (resp) {
-          if (!resp.ok) {
-            return resp.json().then(function (err) {
-              throw new Error(err.error || 'Decrypt failed: ' + resp.status);
-            });
-          }
-          return resp.json();
-        }).then(function (result) {
-          var decryptedBytes = Uint8Array.from(atob(result.data), function (c) { return c.charCodeAt(0); });
-          return saveDecryptedFile(decryptedBytes);
-        }).catch(function (err) {
-          console.error('[Decrypt] Failed:', err);
-          dom.downloadDecryptBtn.disabled = false;
-          dom.downloadStatus.className = 'download-status error';
-          dom.downloadStatus.textContent = 'Failed: ' + (err.message || 'Unknown error');
-          showToast('Decrypt failed: ' + (err.message || 'Unknown error'), 'error');
-        });
-      }
-      return;
-    }
-
-    dom.downloadStatus.textContent = 'Connecting to Lit Protocol...';
-    import('./vendor/access/elacity-access.browser.js')
-      .then(function (mod) {
-        var ElacityAccess = mod.ElacityAccess;
-        var access = new ElacityAccess();
-        dom.downloadStatus.textContent = 'Sign in to verify access...';
-        return access.connect(window.ethereum, { chainId: 8453 }).then(function () {
-          dom.downloadStatus.textContent = 'Downloading and decrypting...';
-          return access.fetchAndDecrypt({
-            cid: cid,
-            ledger: ledger,
-            tokenId: tokenId,
-            dataToEncryptHash: dataToEncryptHash,
-            gateway: window.location.origin + '/ipfs/',
-            fallbackGateway: 'https://ipfs.ela.city/ipfs/'
-          });
-        }).then(function (decrypted) {
-          return saveDecryptedFile(decrypted);
-        });
-      })
-      .catch(function (err) {
-        dom.downloadDecryptBtn.disabled = false;
-        dom.downloadStatus.className = 'download-status error';
-        dom.downloadStatus.textContent = 'Failed: ' + (err.message || 'Unknown error');
-        showToast('Download failed: ' + (err.message || 'Unknown error'), 'error');
-      });
   }
 
   // ── Wallet UI ────────────────────────────────────────
@@ -2683,7 +2239,6 @@
 
     dom.buyBtn.addEventListener('click', handleBuy);
     dom.downloadNodeBtn.addEventListener('click', handleDownloadToNode);
-    dom.downloadDecryptBtn.addEventListener('click', handleDownloadAndDecrypt);
     dom.openViewerBtn.addEventListener('click', handleOpenInViewer);
     dom.previewBtn.addEventListener('click', handlePreview);
     dom.playBtn.addEventListener('click', handlePlay);
