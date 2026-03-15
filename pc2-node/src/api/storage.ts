@@ -1647,7 +1647,12 @@ router.post('/thumbnail', authenticate, async (req: AuthenticatedRequest, res: R
     const { generateThumbnail } = await import('../storage/thumbnail.js');
     const buf = Buffer.from(content, 'base64');
     const thumb = await generateThumbnail(buf, mimeType, filename || 'file');
-    res.json({ thumbnail: thumb });
+    // Strip data URI prefix if present — callers expect raw base64
+    let rawBase64 = thumb;
+    if (rawBase64 && rawBase64.includes(',')) {
+      rawBase64 = rawBase64.split(',')[1];
+    }
+    res.json({ thumbnail: rawBase64 });
   } catch (err: any) {
     logger.error('[Thumbnail API] Error:', err.message);
     res.status(500).json({ error: 'Thumbnail generation failed' });

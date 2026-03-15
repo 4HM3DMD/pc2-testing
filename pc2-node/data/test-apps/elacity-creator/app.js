@@ -63,6 +63,7 @@
     walletAddress: null,
     currentStep: 1,
     result: null,
+    customThumbnail: null,
   };
 
   // ── DOM refs ──────────────────────────────────────────
@@ -97,6 +98,11 @@
     dom.resultEncryptHash = document.getElementById('result-encrypt-hash');
     dom.resultSize = document.getElementById('result-size');
     dom.toastContainer = document.getElementById('toast-container');
+    dom.thumbDropZone = document.getElementById('thumb-drop-zone');
+    dom.thumbInput = document.getElementById('thumb-input');
+    dom.thumbPreview = document.getElementById('thumb-preview');
+    dom.thumbPreviewImg = document.getElementById('thumb-preview-img');
+    dom.thumbRemove = document.getElementById('thumb-remove');
   }
 
   // ── pc2Fetch (auth wrapper) ───────────────────────────
@@ -553,6 +559,21 @@
     if (value && BigInt(value) > 0n) {
       txParams.value = '0x' + BigInt(value).toString(16);
     }
+
+    // Pre-estimate gas so MetaMask skips its internal simulation.
+    // This avoids the "Estimated changes: Unavailable" red review screen.
+    try {
+      var gasEstimate = await window.ethereum.request({
+        method: 'eth_estimateGas',
+        params: [txParams],
+      });
+      // Add 20% buffer to estimated gas
+      var gasHex = '0x' + (Math.ceil(parseInt(gasEstimate, 16) * 1.2)).toString(16);
+      txParams.gas = gasHex;
+    } catch (estErr) {
+      console.warn('[Creator] Gas estimation failed, letting MetaMask estimate:', estErr.message);
+    }
+
     var txHash = await window.ethereum.request({
       method: 'eth_sendTransaction',
       params: [txParams],
@@ -1021,37 +1042,53 @@
         console.warn('[Creator] authority() lookup failed, using default:', e.message);
       }
 
-      // Generate and upload a thumbnail for the image field
+      // Resolve thumbnail: user-selected takes priority, auto-generate as fallback
       var imageUri = '';
       try {
         var thumbBase64 = null;
 
-        if (state.selectedFile && state.selectedFile.type.startsWith('image/')) {
+        if (state.customThumbnail) {
+          // User selected a custom thumbnail — resize to 1280px max and convert to JPEG
           var thumbCanvas = document.createElement('canvas');
           var thumbCtx = thumbCanvas.getContext('2d');
-          var img = await createImageBitmap(state.selectedFile);
-          var maxDim = 400;
+          var img = await createImageBitmap(state.customThumbnail);
+          var maxDim = 1280;
           var scale = Math.min(maxDim / img.width, maxDim / img.height, 1);
           thumbCanvas.width = Math.round(img.width * scale);
           thumbCanvas.height = Math.round(img.height * scale);
           thumbCtx.drawImage(img, 0, 0, thumbCanvas.width, thumbCanvas.height);
           var thumbBlob = await new Promise(function (resolve) {
-            thumbCanvas.toBlob(resolve, 'image/jpeg', 0.8);
+            thumbCanvas.toBlob(resolve, 'image/jpeg', 0.85);
           });
           thumbBase64 = uint8ToBase64(new Uint8Array(await thumbBlob.arrayBuffer()));
-        } else if (state.selectedFile && state.selectedFile.type === 'application/pdf') {
-          // Server-side PDF thumbnail generation
-          var pdfBytes = new Uint8Array(await state.selectedFile.arrayBuffer());
-          var pdfThumbResp = await pc2Fetch('/api/storage/thumbnail', {
+          console.log('[Creator] Using user-selected thumbnail');
+        } else if (state.selectedFile && state.selectedFile.type.startsWith('image/')) {
+          var autoCanvas = document.createElement('canvas');
+          var autoCtx = autoCanvas.getContext('2d');
+          var autoImg = await createImageBitmap(state.selectedFile);
+          var autoDim = 400;
+          var autoScale = Math.min(autoDim / autoImg.width, autoDim / autoImg.height, 1);
+          autoCanvas.width = Math.round(autoImg.width * autoScale);
+          autoCanvas.height = Math.round(autoImg.height * autoScale);
+          autoCtx.drawImage(autoImg, 0, 0, autoCanvas.width, autoCanvas.height);
+          var autoBlob = await new Promise(function (resolve) {
+            autoCanvas.toBlob(resolve, 'image/jpeg', 0.8);
+          });
+          thumbBase64 = uint8ToBase64(new Uint8Array(await autoBlob.arrayBuffer()));
+          console.log('[Creator] Auto-generated thumbnail from image');
+        } else if (state.selectedFile && (state.selectedFile.type === 'application/pdf' || state.selectedFile.type === 'text/plain' || state.selectedFile.type.startsWith('text/'))) {
+          // Server-side thumbnail generation for PDFs and text files
+          var fileBytes = new Uint8Array(await state.selectedFile.arrayBuffer());
+          var serverThumbResp = await pc2Fetch('/api/storage/thumbnail', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ content: uint8ToBase64(pdfBytes), mimeType: 'application/pdf', filename: state.selectedFile.name }),
+            body: JSON.stringify({ content: uint8ToBase64(fileBytes), mimeType: state.selectedFile.type, filename: state.selectedFile.name }),
           });
-          if (pdfThumbResp.ok) {
-            var pdfThumbData = await pdfThumbResp.json();
-            if (pdfThumbData.thumbnail) {
-              thumbBase64 = pdfThumbData.thumbnail;
-              console.log('[Creator] PDF thumbnail generated on server');
+          if (serverThumbResp.ok) {
+            var serverThumbData = await serverThumbResp.json();
+            if (serverThumbData.thumbnail) {
+              thumbBase64 = serverThumbData.thumbnail;
+              console.log('[Creator] Server-generated thumbnail for', state.selectedFile.type);
             }
           }
         }
@@ -1173,6 +1210,8 @@
             method: 'wallet_switchEthereumChain',
             params: [{ chainId: BASE_CHAIN_HEX }],
           });
+          // Allow MetaMask internal state to settle after chain switch
+          await new Promise(function (r) { setTimeout(r, 1500); });
         } catch (switchErr) {
           console.warn('[Creator] Chain switch failed (may already be on Base):', switchErr.message);
         }
@@ -1337,7 +1376,13 @@
     state.selectedFile = null;
     state.fileBytes = null;
     state.result = null;
+    state.customThumbnail = null;
     clearFile();
+    // Reset thumbnail picker UI
+    if (dom.thumbPreviewImg) dom.thumbPreviewImg.src = '';
+    if (dom.thumbPreview) dom.thumbPreview.classList.add('hidden');
+    if (dom.thumbDropZone) dom.thumbDropZone.classList.remove('hidden');
+    if (dom.thumbInput) dom.thumbInput.value = '';
     dom.assetTitle.value = '';
     dom.assetDescription.value = '';
     dom.assetCategory.value = '';
@@ -1399,6 +1444,56 @@
       e.preventDefault();
       dom.dropZone.classList.remove('drag-over');
       if (e.dataTransfer.files.length > 0) handleFileSelected(e.dataTransfer.files[0]);
+    });
+
+    // Thumbnail picker
+    var THUMB_MAX_BYTES = 2 * 1024 * 1024; // 2 MB
+    var THUMB_ACCEPT = ['image/png', 'image/jpeg', 'image/jpg', 'image/bmp', 'image/webp'];
+
+    function handleThumbSelected(file) {
+      if (!file) return;
+      if (THUMB_ACCEPT.indexOf(file.type) === -1 && !file.type.startsWith('image/')) {
+        showToast('Thumbnail must be an image (PNG, JPG, BMP, WebP)', 'error');
+        return;
+      }
+      if (file.size > THUMB_MAX_BYTES) {
+        showToast('Thumbnail must be under 2 MB', 'error');
+        return;
+      }
+      state.customThumbnail = file;
+      var reader = new FileReader();
+      reader.onload = function (ev) {
+        dom.thumbPreviewImg.src = ev.target.result;
+        dom.thumbPreview.classList.remove('hidden');
+        dom.thumbDropZone.classList.add('hidden');
+      };
+      reader.readAsDataURL(file);
+    }
+
+    function clearThumb() {
+      state.customThumbnail = null;
+      dom.thumbPreviewImg.src = '';
+      dom.thumbPreview.classList.add('hidden');
+      dom.thumbDropZone.classList.remove('hidden');
+      dom.thumbInput.value = '';
+    }
+
+    dom.thumbDropZone.addEventListener('click', function () { dom.thumbInput.click(); });
+    dom.thumbInput.addEventListener('change', function () {
+      if (dom.thumbInput.files.length > 0) handleThumbSelected(dom.thumbInput.files[0]);
+    });
+    dom.thumbRemove.addEventListener('click', clearThumb);
+    dom.thumbDropZone.addEventListener('dragover', function (e) {
+      e.preventDefault();
+      dom.thumbDropZone.classList.add('drag-over');
+    });
+    dom.thumbDropZone.addEventListener('dragleave', function () {
+      dom.thumbDropZone.classList.remove('drag-over');
+    });
+    dom.thumbDropZone.addEventListener('drop', function (e) {
+      e.preventDefault();
+      dom.thumbDropZone.classList.remove('drag-over');
+      if (e.dataTransfer.files.length > 0) handleThumbSelected(e.dataTransfer.files[0]);
     });
 
     // Create Channel button

@@ -318,8 +318,14 @@ Full technical spec at `docs/core/ACCESS_PACKAGE_SPEC.md`. Key decisions:
 - [x] Loading overlay — spinner shown in media area during decryption
 - [x] PDF thumbnail generation — POST /api/storage/thumbnail endpoint for Creator app
 - [x] Security: buffer zeroing, no-cache headers, right-click/drag disable, blob URL revocation, lossy JPEG conversion
-- [ ] Test with text files (.txt) — secure viewer text pipeline untested
+- [x] Text file (.txt) secure viewer — verified working with scrollable container (Mar 15)
+- [x] Optional thumbnail picker — user-selected thumbnail (max 2MB) with auto-generated fallback for images, PDFs, and text files (Mar 15)
+- [x] Text file auto-thumbnail — server-side 400x300 text preview via /api/storage/thumbnail (Mar 15)
+- [x] Bug fix: MetaMask "Estimated changes: Unavailable" — pre-estimate gas + chain switch settle delay (Mar 15)
+- [x] Bug fix: Library cache not refreshing after purchase — immediate + delayed cache invalidation (Mar 15)
+- [x] Thumbnail API fix — strip data URI prefix for clean base64 upload to Elacity IPFS (Mar 15)
 - [ ] Lit Chipotle migration — Datil network deprecated ~April 25, 2026, need to migrate to Chipotle REST API
+- [ ] WASM-wrapped universal renderer — Rust→WASM binary for decrypt+render in opaque WASM memory (CEK/plaintext never in Node.js)
 
 **Known issues:**
 - Elacity frontend UA receipt parsing: `UAReceiptFetcher.enrichOperationsWithContracts` throws `TypeError` after successful on-chain purchase. Bug is in Elacity's frontend, not our code.
@@ -327,8 +333,8 @@ Full technical spec at `docs/core/ACCESS_PACKAGE_SPEC.md`. Key decisions:
 - Lit Datil deprecation: Datil network being deprecated ~April 25, 2026 in favor of Chipotle (REST API, API key auth, TEE-based). Migration required.
 
 #### Next Up — Engineering Priorities
-1. **Lit Chipotle migration** — CRITICAL. Datil deprecated ~April 25, 2026. Replace v7 SDK with Chipotle REST API.
-2. **Test text file (.txt) flow** — secure viewer text pipeline implemented but untested
+1. **WASM-wrapped universal renderer** — Rust→WASM binary that handles decrypt+render for ALL asset types inside opaque WASM memory. CEK and plaintext never touch Node.js. Equivalent security to Elacity's WASM video player but universal (images, PDFs, text, audio, WASM apps).
+2. **Lit Chipotle migration** — CRITICAL. Datil deprecated ~April 25, 2026. Replace v7 SDK with Chipotle REST API.
 3. **On-chain indexer prototype** — replace Elacity GraphQL dependency with event scanner (The Graph / custom)
 4. **Self-provisioned RLI tokens** — each node mints own capacity credits, removes Elacity wallet dependency
 5. **AI Model Marketplace alpha** — first non-media vertical: GGUF → encrypt → IPFS → ACCESS_TOKEN → decrypt → Ollama

@@ -226,29 +226,23 @@ export async function generateThumbnail(
         // Convert buffer to text
         const textContent = buffer.toString('utf8');
         
-        // Limit text length for thumbnail (first 500 chars)
-        const previewText = textContent.substring(0, 500);
-        const lines = previewText.split('\n').slice(0, 10); // First 10 lines max
-        const displayText = lines.join('\n');
+        const previewText = textContent.substring(0, 2000);
+        const lines = previewText.split('\n').slice(0, 25);
         
-        // Create canvas for text preview
-        const canvasWidth = 128;
-        const canvasHeight = 128;
+        const canvasWidth = 400;
+        const canvasHeight = 300;
         const canvasInstance = createCanvas(canvasWidth, canvasHeight);
         const ctx = canvasInstance.getContext('2d');
         
-        // Background (light gray)
-        ctx.fillStyle = '#f5f5f5';
+        ctx.fillStyle = '#f8f9fa';
         ctx.fillRect(0, 0, canvasWidth, canvasHeight);
         
-        // Text styling
-        ctx.fillStyle = '#333333';
-        ctx.font = '10px monospace';
+        ctx.fillStyle = '#1e293b';
+        ctx.font = '13px monospace';
         ctx.textBaseline = 'top';
         
-        // Draw text with padding
-        const padding = 8;
-        const lineHeight = 12;
+        const padding = 16;
+        const lineHeight = 16;
         const maxWidth = canvasWidth - (padding * 2);
         
         let y = padding;
@@ -273,14 +267,12 @@ export async function generateThumbnail(
         // Convert canvas to PNG buffer
         const textImageBuffer = canvasInstance.toBuffer('image/png');
         
-        // Use sharp to ensure consistent format
         const thumbnailBuffer = await sharp(textImageBuffer)
-          .resize(128, 128)
-          .png()
+          .jpeg({ quality: 80 })
           .toBuffer();
         
         const base64 = thumbnailBuffer.toString('base64');
-        return `data:image/png;base64,${base64}`;
+        return `data:image/jpeg;base64,${base64}`;
       } catch (error: any) {
         logger.warn(`[Thumbnail] ⚠️  Text file thumbnail generation failed: ${error.message}`);
         return null;

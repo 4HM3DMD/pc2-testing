@@ -212,6 +212,44 @@ textarea { resize: vertical; }
 .field-hint { font-size: 11px; color: var(--text-muted); opacity: 0.7; }
 .field-hint.success { color: var(--success); opacity: 1; }
 
+.optional-tag { font-size: 11px; color: var(--text-muted); font-weight: 400; }
+
+/* ── Thumbnail picker ── */
+.thumb-drop-zone {
+  display: flex; align-items: center; justify-content: center;
+  height: 56px;
+  border: 1.5px dashed var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.thumb-drop-zone:hover, .thumb-drop-zone.drag-over {
+  border-color: var(--accent);
+  background: rgba(59, 130, 246, 0.05);
+}
+.thumb-drop-text { font-size: 13px; color: var(--text-muted); }
+
+.thumb-preview {
+  position: relative;
+  display: inline-block;
+  margin-top: 8px;
+}
+.thumb-preview img {
+  height: 80px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  object-fit: cover;
+}
+.thumb-remove {
+  position: absolute; top: -6px; right: -6px;
+  width: 22px; height: 22px;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--error); color: white;
+  border: none; border-radius: 50%;
+  font-size: 14px; line-height: 1;
+  cursor: pointer;
+}
+
 .channel-row { display: flex; gap: 8px; align-items: center; }
 .channel-row input { flex: 1; }
 

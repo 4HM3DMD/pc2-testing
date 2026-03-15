@@ -112,6 +112,19 @@
           </div>
 
           <div class="form-group full-width">
+            <label>Thumbnail <span class="optional-tag">(optional)</span></label>
+            <p class="field-hint" style="margin-bottom:6px;">Upload a custom thumbnail (max 2 MB, 1280×720 recommended). If left empty, one will be auto-generated from your asset.</p>
+            <div id="thumb-drop-zone" class="thumb-drop-zone">
+              <span class="thumb-drop-text">Click or drop an image</span>
+              <input type="file" id="thumb-input" hidden accept="image/png,image/jpeg,image/jpg,image/bmp,image/webp" />
+            </div>
+            <div id="thumb-preview" class="thumb-preview hidden">
+              <img id="thumb-preview-img" alt="Thumbnail preview" />
+              <button type="button" id="thumb-remove" class="thumb-remove" title="Remove thumbnail">&times;</button>
+            </div>
+          </div>
+
+          <div class="form-group full-width">
             <label for="asset-channel">Channel</label>
             <div class="channel-row">
               <select id="asset-channel" style="flex:1; padding:10px; border:1px solid #d1d5db; border-radius:8px; font-size:14px; background:#fff;">

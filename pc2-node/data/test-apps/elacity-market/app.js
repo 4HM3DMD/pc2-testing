@@ -1766,6 +1766,13 @@
           showToast('Purchase complete! Auto-downloading...', 'success');
           state.detailIsOwned = true;
           pinAndRegisterMedia(nft);
+
+          // Invalidate library cache so next visit re-fetches from backend.
+          // Retry after delays to account for Elacity GraphQL indexing lag.
+          state.assetsItems = [];
+          state.assetsLoading = false;
+          setTimeout(function () { state.assetsItems = []; }, 8000);
+          setTimeout(function () { state.assetsItems = []; }, 20000);
         } else {
           setPurchaseStatus('error', 'Transaction failed. Please try again.');
         }
@@ -1992,15 +1999,18 @@
       hideDecryptingOverlay();
       var blobUrl = URL.createObjectURL(blob);
       var mediaEl = document.getElementById('detail-media');
-      var isPdf = secureViewState.totalPages > 1;
+      var isMultiPage = secureViewState.totalPages > 1;
+      var isTextOrDoc = secureViewState.mime && (secureViewState.mime.startsWith('text/') || secureViewState.mime === 'application/pdf');
+      var needsScroll = isMultiPage || isTextOrDoc;
 
-      if (isPdf) {
+      if (needsScroll && mediaEl) {
+        mediaEl.style.aspectRatio = 'auto';
+        mediaEl.style.maxHeight = '75vh';
+        mediaEl.style.overflowY = 'auto';
+      }
+
+      if (isMultiPage) {
         dom.detailImage.style.display = 'none';
-        if (mediaEl) {
-          mediaEl.style.aspectRatio = 'auto';
-          mediaEl.style.maxHeight = '75vh';
-          mediaEl.style.overflowY = 'auto';
-        }
 
         var pdfContainer = document.getElementById('pdf-pages-container');
         if (!pdfContainer) {
@@ -2023,13 +2033,15 @@
         dom.downloadStatus.className = 'download-status success';
         dom.downloadStatus.textContent = 'Page 1 loaded, fetching remaining ' + (secureViewState.totalPages - 1) + ' pages...';
 
-        // Fetch all remaining pages in parallel
         if (secureViewState.totalPages > 1) {
           fetchAllPdfPagesParallel(pdfContainer, secureViewState.totalPages);
         }
       } else {
         dom.detailImage.src = blobUrl;
         dom.detailImage.style.display = '';
+        dom.detailImage.style.objectFit = 'contain';
+        dom.detailImage.style.height = 'auto';
+        dom.detailImage.style.width = '100%';
         dom.detailImage.onload = function () { URL.revokeObjectURL(blobUrl); };
         dom.detailImage.oncontextmenu = function (e) { e.preventDefault(); return false; };
         dom.detailImage.setAttribute('draggable', 'false');
