@@ -2,14 +2,14 @@
 
 > **Purpose:** Team-facing document covering what we've built, how decentralized it is, what's remaining, and the path to the walk-away test.
 > **Created:** 2026-03-14
-> **Last Updated:** 2026-03-14
+> **Last Updated:** 2026-03-15
 > **Branch:** `dDRM-extended`
 
 ---
 
 ## Executive Summary
 
-We have a working **encrypt → mint → buy → decrypt** pipeline for non-media digital assets (images, documents, etc.) on PC2 sovereign nodes, using the Elacity protocol's on-chain contracts and Lit Protocol for trustless decryption.
+We have a working **encrypt → mint → buy → decrypt → secure view** pipeline for non-media digital assets (images, PDFs, text) on PC2 sovereign nodes, using the Elacity protocol's on-chain contracts and Lit Protocol for trustless decryption. Decrypted assets are rendered server-side and streamed as watermarked images — plaintext never reaches the browser.
 
 **The trust model and economic layer are fully decentralized.** Smart contracts govern access, Lit Protocol nodes perform threshold decryption, and the Lit Action code is immutable on IPFS. No single party can forge access or tamper with the decryption logic.
 
@@ -23,13 +23,13 @@ We have a working **encrypt → mint → buy → decrypt** pipeline for non-medi
 
 | Step | Component | Status |
 |------|-----------|--------|
-| 1. Encrypt | AES-GCM via Lit Protocol on PC2 node backend | ✅ Working |
+| 1. Encrypt | Two-layer: AES-GCM file encryption + Lit CEK encryption | ✅ Working |
 | 2. Upload | Dual IPFS upload (local Helia + Elacity gateway) | ✅ Working |
 | 3. Mint | On-chain ERC-1155 mint on Base (Channel contract) | ✅ Verified |
 | 4. List | Asset visible on Elacity marketplace + PC2 Market dApp | ✅ Verified |
 | 5. Purchase | `buyAccess()` via AuthorityGateway, USDC payment | ✅ Verified |
-| 6. Decrypt | Lit Action `executeJs()` with on-chain access check | ✅ Working |
-| 7. Render | Inline image rendering in Market dApp | ✅ Working |
+| 6. Decrypt | Lit Action `executeJs()` via Pinata-backed IPFS CID with on-chain access check | ✅ Working |
+| 7. Render | Server-side secure viewer: images (Sharp), PDFs (PDF.js+Canvas), text (Canvas) — watermarked, no plaintext in browser | ✅ Working |
 
 ### Key Architecture Decisions
 
@@ -66,13 +66,18 @@ Decrypt Time:
 
 Buyers using Universal Accounts (ERC-4337) hold AccessTokens on their **Smart Account address**, not their EOA. The Market app detects this and passes the Smart Account address as `buyerAddress` to the decrypt endpoint, ensuring the on-chain access check succeeds.
 
-#### Capacity Credit Auto-Detection
+#### Capacity Credit Management (Lit Payment Delegation)
 
-Lit Protocol's Datil production network requires capacity credits (RLI tokens). Rather than hardcoding a token ID:
-- The server queries the Chronicle Yellowstone chain for RLI tokens owned by the capacity wallet
-- Selects the latest non-expired token automatically
-- Handles Elacity's 15-day rotation cycle (cronjob provisions new tokens, old ones expire within 30 days)
-- Supports manual override via env var or config file
+Lit Protocol's Datil production network requires capacity credits (RLI tokens). We use Elacity's **Lit Payment Delegation Database**:
+- PC2 node's auto-generated server wallet (`0xC5597Bf8A0a34AdE6b6f3b8e2F573439dF33113e`) is registered as a payee
+- Registration happens automatically on startup via Lit Relayer API (`https://datil-relayer.getlit.dev/add-users`)
+- Credentials stored in `data/.lit-relayer-config` (apiKey + payerSecretKey from Elacity)
+- Handles Elacity's 15-day RLI token rotation cycle automatically
+- **No private key storage needed** — delegation is done via the Relayer API
+
+**Lit Action hosting:** Pinned on Pinata (`QmVMgKMKFELHTZf8PmD58nYBhr4S5DHLpuwFTvyDKLPXgq`), accessible via `ipfs.litgateway.com`. Self-referential access conditions match this CID at both encrypt and decrypt time.
+
+**⚠️ CRITICAL: Datil network deprecated ~April 25, 2026.** Migration to Chipotle (REST API, API keys, TEE execution) required. See Roadmap.
 
 ---
 
@@ -361,12 +366,13 @@ Protocol fees are collected at the **smart contract level**, not the infrastruct
 | Component | Detail |
 |-----------|--------|
 | Network | Datil (production) |
-| Lit Action | `non-media-decrypt.js` — on-disk, read directly, no IPFS fetch needed |
+| Lit Action | `non-media-decrypt.js` — pinned on Pinata (QmVMgKMKFELHTZf8PmD58nYBhr4S5DHLpuwFTvyDKLPXgq), executed via ipfsId |
 | Access conditions | Self-referential only (`:currentActionIpfsId === CID`) |
 | Capacity credits | RLI tokens on Chronicle Yellowstone, auto-detected |
-| Capacity wallet | `0x581D4bca99709c1E0cB6f07c9D05719818AA6e49` (20 RLI tokens, rotated every 15 days) |
+| Capacity delegation | Via Lit Relayer API, PC2 server wallet auto-registered as payee |
 | Session duration | 15 minutes |
-| Server wallet | Auto-generated, stored at `data/.lit-server-key` |
+| Server wallet | `0xC5597Bf8A0a34AdE6b6f3b8e2F573439dF33113e` (auto-generated, stored at `data/.lit-server-key`) |
+| ⚠️ Deprecation | Datil network deprecated ~April 25, 2026 — migrate to Chipotle |
 
 ---
 
@@ -411,27 +417,32 @@ Protocol fees are collected at the **smart contract level**, not the infrastruct
 
 ---
 
-## Blocking Item
+## Upcoming Critical Work
 
-**Capacity credit delegation key.** The private key for wallet `0x581D4bca99709c1E0cB6f07c9D05719818AA6e49` (RLI token owner) is needed to delegate capacity credits for Lit Protocol operations. Without this, decrypt operations on the Datil production network are rate-limited.
+### Lit Protocol Chipotle Migration (CRITICAL — ~April 25, 2026 deadline)
 
-**Status:** Waiting on Irzhy to provide the private key. Once received:
+Lit Protocol is deprecating the Datil network in favor of **Chipotle** (v3):
+- New REST API (replaces SDK-based `executeJs()`)
+- API key authentication (replaces SIWE sessions + capacity credits)
+- TEE-based execution (replaces threshold MPC)
+- **Impact:** All of `storage.ts` Lit integration (~400 lines) needs replacing with ~50 lines of REST calls
+- **Risk:** If not migrated before deprecation, all encrypt/decrypt operations stop working
 
-```bash
-echo "THE_PRIVATE_KEY" > pc2-node/data/.lit-capacity-key
-chmod 600 pc2-node/data/.lit-capacity-key
-# Restart node — auto-detection finds the latest valid RLI token automatically
-```
+### Remaining Test Coverage
+
+- [ ] Text file (.txt) end-to-end test
+- [ ] JPEG image test (PNG verified)
+- [ ] Large PDF (10+ pages) stress test
 
 ---
 
 ## Next Steps (Priority Order)
 
-1. **Get capacity credit key** → enables production decrypt testing
-2. **Test full E2E flow** → encrypt → mint → buy → decrypt an image on PC2 node
-3. **Fix library showing all purchased assets** (GraphQL query may need adjustment)
+1. **Lit Chipotle migration research** → create account, verify REST API, test Lit Action execution
+2. **Replace Datil v7 SDK with Chipotle REST API** in storage.ts (~400 lines → ~50 lines)
+3. **Test text file (.txt) flow** → secure viewer text pipeline implemented but untested
 4. **On-chain indexer prototype** (Tier 1.1) → removes GraphQL dependency
-5. **Self-provisioned RLI tokens** (Tier 1.3) → removes capacity wallet dependency
+5. **Self-provisioned RLI tokens / API keys** (Tier 1.3) → removes Elacity capacity wallet dependency
 6. **AI Model Marketplace alpha** → first non-media vertical (GGUF → encrypt → buy → Ollama)
 
 ---

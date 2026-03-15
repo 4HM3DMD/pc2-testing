@@ -653,11 +653,68 @@ const __litDirname = dirname(__litFilename);
 const LIT_KEY_PATH = join(__litDirname, '../../data/.lit-server-key');
 const CAPACITY_KEY_PATH = join(__litDirname, '../../data/.lit-capacity-key');
 const CAPACITY_TOKEN_ID_PATH = join(__litDirname, '../../data/.lit-capacity-token-id');
+const LIT_RELAYER_CONFIG_PATH = join(__litDirname, '../../data/.lit-relayer-config');
+
+const LIT_RELAYER_URL = 'https://datil-relayer.getlit.dev';
 
 function getConfiguredCapacityTokenId(): string {
   if (process.env.LIT_CAPACITY_TOKEN_ID) return process.env.LIT_CAPACITY_TOKEN_ID;
   if (existsSync(CAPACITY_TOKEN_ID_PATH)) return readFileSync(CAPACITY_TOKEN_ID_PATH, 'utf8').trim();
   return '';
+}
+
+interface RelayerConfig {
+  apiKey: string;
+  payerSecretKey: string;
+}
+
+function getRelayerConfig(): RelayerConfig | null {
+  const apiKey = process.env.LIT_RELAYER_API_KEY;
+  const payerSecretKey = process.env.LIT_PAYER_SECRET_KEY;
+  if (apiKey && payerSecretKey) return { apiKey, payerSecretKey };
+
+  if (existsSync(LIT_RELAYER_CONFIG_PATH)) {
+    try {
+      const raw = readFileSync(LIT_RELAYER_CONFIG_PATH, 'utf8').trim();
+      const parsed = JSON.parse(raw);
+      if (parsed.apiKey && parsed.payerSecretKey) return parsed;
+    } catch { /* ignore parse errors */ }
+  }
+  return null;
+}
+
+let delegateeRegistered = false;
+
+async function ensureDelegateeRegistered(walletAddress: string): Promise<void> {
+  if (delegateeRegistered) return;
+
+  const config = getRelayerConfig();
+  if (!config) {
+    logger.info('[Lit] No relayer config — skipping auto-registration (may already be registered)');
+    delegateeRegistered = true;
+    return;
+  }
+
+  try {
+    const resp = await fetch(`${LIT_RELAYER_URL}/add-users`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'api-key': config.apiKey,
+        'payer-secret-key': config.payerSecretKey,
+      },
+      body: JSON.stringify([walletAddress]),
+    });
+    const result = await resp.json() as any;
+    if (result.success) {
+      logger.info(`[Lit] Registered as delegatee via Payment Delegation DB (tx: ${result.txHash || 'submitted'})`);
+    } else {
+      logger.warn(`[Lit] Delegatee registration response:`, result);
+    }
+  } catch (err: any) {
+    logger.warn(`[Lit] Delegatee auto-registration failed (may already be registered): ${err.message}`);
+  }
+  delegateeRegistered = true;
 }
 
 let cachedCapacityTokenId: string | null = null;
@@ -710,8 +767,8 @@ async function getCapacityWallet(): Promise<any | null> {
     return cachedCapacityWallet;
   }
 
-  logger.warn('[Lit] No capacity credit wallet found. Decrypt will use authSig fallback (may hit rate limits).');
-  logger.warn('[Lit] To fix: set LIT_CAPACITY_KEY env var or create data/.lit-capacity-key with the private key of the RLI token owner.');
+  logger.info('[Lit] No capacity credit wallet found (not required if registered in Payment Delegation DB).');
+  logger.info('[Lit] Optional: set LIT_CAPACITY_KEY env var for legacy delegation, or configure LIT_RELAYER_API_KEY + LIT_PAYER_SECRET_KEY for auto-registration.');
   cachedCapacityWallet = false;
   return null;
 }
@@ -844,6 +901,9 @@ const DEFAULT_RPC = 'https://mainnet.base.org';
  * passed via jsParams. This avoids the :userAddress problem where the server
  * wallet would be checked instead of the buyer.
  */
+// Self-referential condition: only the Lit Action with this exact CID can decrypt.
+// The action is pinned to Pinata (Lit's IPFS backend) so Lit nodes can fetch it.
+// The action code itself performs the on-chain hasAccessByContentId() check.
 function buildSelfRefConditions(outerActionCid: string, chain = 'base') {
   return [
     {
@@ -936,20 +996,32 @@ async function getExecuteSessionSigs(client: any, wallet: any) {
     },
   };
 
+  // Payment Delegation Database: ensure this wallet is registered as a delegatee.
+  // Once registered, Lit nodes check the on-chain delegation DB automatically —
+  // no capacityDelegationAuthSig needed.
+  await ensureDelegateeRegistered(wallet.address);
+
+  // Fallback: if a capacity wallet private key is configured (legacy approach),
+  // create an explicit delegation auth sig. This is optional — the delegation DB
+  // approach above is preferred.
   if (capacityWallet) {
     const tokenId = await detectCapacityTokenId(capacityWallet.address);
     if (tokenId) {
-      const { capacityDelegationAuthSig } = await client.createCapacityDelegationAuthSig({
-        dAppOwnerWallet: capacityWallet,
-        capacityTokenId: tokenId,
-        delegateeAddresses: [wallet.address],
-        uses: '10',
-        expiration: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
-      });
-      sessionOpts.capacityDelegationAuthSig = capacityDelegationAuthSig;
-      logger.info(`[Lit] Capacity delegation attached (token #${tokenId})`);
+      try {
+        const { capacityDelegationAuthSig } = await client.createCapacityDelegationAuthSig({
+          dAppOwnerWallet: capacityWallet,
+          capacityTokenId: tokenId,
+          delegateeAddresses: [wallet.address],
+          uses: '10',
+          expiration: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+        });
+        sessionOpts.capacityDelegationAuthSig = capacityDelegationAuthSig;
+        logger.info(`[Lit] Capacity delegation attached (token #${tokenId})`);
+      } catch (delegErr: any) {
+        logger.warn(`[Lit] Capacity delegation auth sig failed (delegation DB should cover): ${delegErr.message}`);
+      }
     } else {
-      logger.warn('[Lit] No valid capacity token found, proceeding without delegation');
+      logger.warn('[Lit] No valid capacity token found — relying on Payment Delegation DB');
     }
   }
 
@@ -960,17 +1032,15 @@ async function getExecuteSessionSigs(client: any, wallet: any) {
 
 /**
  * POST /api/storage/lit/encrypt
- * Server-side Lit Protocol encryption using Lit Action access conditions.
+ * Two-layer encryption: AES-GCM for the file, Lit Protocol for the CEK.
  *
- * Access is gated by a two-layer Lit Action system (same as Elacity's media DRM):
- *   1) Self-referential check: only the designated outer Lit Action can decrypt
- *   2) Inner Lit Action: checks AuthorityGateway.hasAccessByContentId() on-chain
- *
- * This means no private keys are needed for decryption — the Lit network
- * enforces access trustlessly via smart contracts.
+ * 1. Generate a random AES-256 key (CEK)
+ * 2. AES-GCM encrypt the file data with the CEK (no size limit)
+ * 3. Lit-encrypt only the CEK (32 bytes) with access conditions
  *
  * Body: { data: string (base64), actionCid?: string }
- * Response: { ciphertext, dataToEncryptHash, actionCid, conditions }
+ * Response: { ciphertext (Lit-encrypted CEK), dataToEncryptHash, actionCid,
+ *             conditions, encryptedData (AES-encrypted file, base64), iv (base64) }
  */
 router.post('/lit/encrypt', authenticate, async (req: AuthenticatedRequest, res: Response) => {
   try {
@@ -999,24 +1069,41 @@ router.post('/lit/encrypt', authenticate, async (req: AuthenticatedRequest, res:
       return;
     }
 
-    logger.info(`[Lit] Encrypting ${dataBytes.length} bytes (action: ${effectiveActionCid})`);
+    logger.info(`[Lit] Encrypting ${dataBytes.length} bytes (two-layer: AES + Lit CEK)`);
 
+    // Layer 1: Generate CEK and AES-GCM encrypt the file
+    const crypto = await import('crypto');
+    const cek = crypto.randomBytes(32);
+    const iv = crypto.randomBytes(12);
+    const cipher = crypto.createCipheriv('aes-256-gcm', cek, iv);
+    const encrypted = Buffer.concat([cipher.update(dataBytes), cipher.final()]);
+    const authTag = cipher.getAuthTag();
+    const encryptedWithTag = Buffer.concat([encrypted, authTag]);
+
+    logger.info(`[Lit] AES-GCM encrypted: ${dataBytes.length} → ${encryptedWithTag.length} bytes`);
+
+    // Layer 2: Lit-encrypt only the raw CEK (32 bytes — well under 4MB limit)
     const client = await getLitClient();
     const conditions = buildSelfRefConditions(effectiveActionCid);
 
+    // Lit's decryptAndCombine returns a string, so we base64-encode the CEK
+    // before Lit-encrypting. The decrypt side will base64-decode it back.
+    const cekBase64 = cek.toString('base64');
     const encryptResult = await client.encrypt({
-      dataToEncrypt: new Uint8Array(dataBytes),
-      unifiedAccessControlConditions: conditions,
+      dataToEncrypt: new TextEncoder().encode(cekBase64),
+      accessControlConditions: conditions,
     });
 
-    logger.info(`[Lit] Encryption complete. Hash: ${encryptResult.dataToEncryptHash?.substring(0, 20)}...`);
+    logger.info(`[Lit] CEK Lit-encrypted (${cek.length} bytes). Hash: ${encryptResult.dataToEncryptHash?.substring(0, 20)}...`);
 
     res.json({
       success: true,
-      ciphertext: encryptResult.ciphertext,
+      litCiphertext: encryptResult.ciphertext,
       dataToEncryptHash: encryptResult.dataToEncryptHash,
       actionCid: effectiveActionCid,
       conditions,
+      encryptedData: encryptedWithTag.toString('base64'),
+      iv: iv.toString('base64'),
     });
   } catch (error: any) {
     logger.error('[Lit] Encryption error:', error);
@@ -1025,122 +1112,433 @@ router.post('/lit/encrypt', authenticate, async (req: AuthenticatedRequest, res:
 });
 
 /**
+ * Shared two-layer decryption: Lit Action recovers CEK, then AES-GCM decrypts file.
+ * Returns raw decrypted Buffer. Caller is responsible for zeroing it after use.
+ */
+interface DecryptParams {
+  litCiphertext: string;
+  dataToEncryptHash: string;
+  iv: string;
+  encryptedDataCid: string;
+  kid: string;
+  actionCid?: string;
+  authority?: string;
+  chain?: string;
+  chainId?: number;
+  rpc?: string;
+  buyerAddress: string;
+}
+
+async function decryptAssetTwoLayer(params: DecryptParams): Promise<Buffer> {
+  const {
+    litCiphertext, dataToEncryptHash, iv, encryptedDataCid, kid,
+    actionCid, authority, chain, chainId, rpc, buyerAddress,
+  } = params;
+
+  const effectiveActionCid = actionCid || NON_MEDIA_ACTION_CID;
+  if (!effectiveActionCid) throw new Error('No Lit Action CID configured');
+
+  const effectiveAuthority = authority || DEFAULT_AUTHORITY;
+  const effectiveChain = chain || 'base';
+  const effectiveRpc = rpc || DEFAULT_RPC;
+
+  logger.info(`[Lit] Decrypt: kid=${kid}, buyer=${buyerAddress}, cid=${encryptedDataCid}`);
+
+  const wallet = await getServerWallet();
+  const client = await getLitClient();
+  const sessionSigs = await getExecuteSessionSigs(client, wallet);
+
+  const executeParams: any = {
+    sessionSigs,
+    jsParams: {
+      ciphertext: litCiphertext,
+      dataToEncryptHash,
+      kid: kid.startsWith('0x') ? kid : `0x${kid}`,
+      actionIpfsId: effectiveActionCid,
+      authority: effectiveAuthority,
+      chain: effectiveChain,
+      chainId: chainId || 8453,
+      rpc: effectiveRpc,
+      userAddress: buyerAddress,
+    },
+  };
+
+  executeParams.ipfsId = effectiveActionCid;
+  logger.info(`[Lit] Using ipfsId: ${effectiveActionCid} (Pinata-pinned)`);
+
+  const result = await client.executeJs(executeParams);
+
+  if (!result.response) throw new Error('Lit Action returned empty response');
+
+  let cekBase64: string;
+  try {
+    const parsed = JSON.parse(result.response);
+    if (parsed.error) throw new Error(parsed.error);
+    cekBase64 = parsed.data || result.response;
+  } catch (e: any) {
+    if (e.message?.includes('Access denied')) throw e;
+    cekBase64 = result.response;
+  }
+
+  logger.info(`[Lit] CEK recovered, fetching encrypted file from IPFS: ${encryptedDataCid}`);
+  const ipfsUrls = [
+    `http://localhost:4200/ipfs/${encryptedDataCid}`,
+    `https://ipfs.ela.city/ipfs/${encryptedDataCid}`,
+  ];
+
+  let encryptedBytes: Buffer | null = null;
+  for (const url of ipfsUrls) {
+    try {
+      const resp = await fetch(url);
+      if (resp.ok) {
+        encryptedBytes = Buffer.from(await resp.arrayBuffer());
+        logger.info(`[Lit] Fetched encrypted file: ${encryptedBytes.length} bytes from ${url.includes('localhost') ? 'local IPFS' : 'Elacity IPFS'}`);
+        break;
+      }
+    } catch { /* try next */ }
+  }
+
+  if (!encryptedBytes || encryptedBytes.length === 0) {
+    throw new Error(`Failed to fetch encrypted file from IPFS: ${encryptedDataCid}`);
+  }
+
+  const crypto = await import('crypto');
+  const cekBytes = Buffer.from(cekBase64, 'base64');
+  const ivBytes = Buffer.from(iv, 'base64');
+
+  if (cekBytes.length !== 32) {
+    logger.warn(`[Lit] CEK length unexpected: ${cekBytes.length} bytes (expected 32)`);
+  }
+
+  const authTagLength = 16;
+  const ciphertextOnly = encryptedBytes.subarray(0, encryptedBytes.length - authTagLength);
+  const authTag = encryptedBytes.subarray(encryptedBytes.length - authTagLength);
+
+  const decipher = crypto.createDecipheriv('aes-256-gcm', cekBytes, ivBytes);
+  decipher.setAuthTag(authTag);
+  const decryptedBytes = Buffer.concat([decipher.update(ciphertextOnly), decipher.final()]);
+
+  // Zero intermediate key material
+  cekBytes.fill(0);
+
+  if (decryptedBytes.length === 0) throw new Error('AES decryption returned empty data');
+
+  logger.info(`[Lit] Two-layer decrypt complete: ${decryptedBytes.length} bytes for ${buyerAddress}`);
+  return decryptedBytes;
+}
+
+/**
  * POST /api/storage/lit/decrypt
- * Server-side Lit Protocol decryption via executeJs (Lit Action pattern).
+ * Two-layer decryption returning raw base64. Kept for backward compatibility.
+ * For secure viewing (no plaintext exposure), use /api/storage/lit/secure-view instead.
  *
- * Uses the same two-layer architecture as Elacity's media DRM:
- *   - Outer Lit Action: our non-media decrypt action
- *   - Inner Lit Action: Elacity's on-chain access check (hasAccessByContentId)
- *
- * The Lit network verifies access trustlessly — the server only proxies
- * the request and passes the buyer's session context.
- *
- * Body: {
- *   ciphertext: string,
- *   dataToEncryptHash: string,
- *   kid: string,                   -- content identifier (bytes16)
- *   actionCid?: string,            -- outer Lit Action CID (defaults to env)
- *   authority?: string,            -- AuthorityGateway address
- *   chain?: string,                -- chain name (default: "base")
- *   chainId?: number,              -- chain ID (default: 8453)
- *   rpc?: string,                  -- RPC endpoint
- *   buyerAddress: string,          -- wallet claiming access
- *   accountOverride?: string,      -- Smart Account address (if using UA)
- * }
  * Response: { success: true, data: string (base64) }
  */
 router.post('/lit/decrypt', authenticate, async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const {
-      ciphertext, dataToEncryptHash, kid,
-      actionCid, authority, chain, chainId, rpc,
-      buyerAddress,
-    } = req.body;
+    const { litCiphertext, dataToEncryptHash, iv, encryptedDataCid, kid, buyerAddress } = req.body;
 
-    if (!ciphertext || !dataToEncryptHash || !kid || !buyerAddress) {
-      res.status(400).json({
-        error: 'Missing required fields: ciphertext, dataToEncryptHash, kid, buyerAddress',
-      });
+    if (!litCiphertext || !dataToEncryptHash || !kid || !buyerAddress) {
+      res.status(400).json({ error: 'Missing required fields: litCiphertext, dataToEncryptHash, kid, buyerAddress' });
+      return;
+    }
+    if (!iv || !encryptedDataCid) {
+      res.status(400).json({ error: 'Missing required fields: iv, encryptedDataCid (two-layer encryption)' });
       return;
     }
 
-    const effectiveActionCid = actionCid || NON_MEDIA_ACTION_CID;
-    if (!effectiveActionCid) {
-      res.status(400).json({ error: 'No Lit Action CID configured' });
-      return;
-    }
-
-    const effectiveAuthority = authority || DEFAULT_AUTHORITY;
-    const effectiveChain = chain || 'base';
-    const effectiveRpc = rpc || DEFAULT_RPC;
-
-    logger.info(`[Lit] Decrypt via executeJs: kid=${kid}, buyer=${buyerAddress}, action=${effectiveActionCid}`);
-
-    const actionSourcePath = join(__litDirname, '../../data/lit-actions/non-media-decrypt.js');
-    const litActionCode = existsSync(actionSourcePath) ? readFileSync(actionSourcePath, 'utf8') : '';
-
-    const wallet = await getServerWallet();
-    const client = await getLitClient();
-    const sessionSigs = await getExecuteSessionSigs(client, wallet);
-
-    const executeParams: any = {
-      sessionSigs,
-      jsParams: {
-        ciphertext,
-        dataToEncryptHash,
-        kid,
-        actionIpfsId: effectiveActionCid,
-        authority: effectiveAuthority,
-        chain: effectiveChain,
-        chainId: chainId || 8453,
-        rpc: effectiveRpc,
-        userAddress: buyerAddress,
-      },
-    };
-
-    if (litActionCode) {
-      executeParams.code = litActionCode;
-      logger.info('[Lit] Using inline code (avoids IPFS gateway fetch)');
-    } else {
-      executeParams.ipfsId = effectiveActionCid;
-      logger.info('[Lit] Using ipfsId (action source not on disk)');
-    }
-
-    const result = await client.executeJs(executeParams);
-
-    if (!result.response) {
-      res.status(500).json({ error: 'Lit Action returned empty response' });
-      return;
-    }
-
-    let responseData: string;
-    try {
-      const parsed = JSON.parse(result.response);
-      if (parsed.error) {
-        res.status(403).json({ error: parsed.error });
-        return;
-      }
-      responseData = parsed.data || result.response;
-    } catch {
-      responseData = result.response;
-    }
-
-    const decryptedBytes = Buffer.from(responseData, 'base64');
-    if (decryptedBytes.length === 0) {
-      res.status(500).json({ error: 'Decryption returned empty data' });
-      return;
-    }
-
-    logger.info(`[Lit] Decryption complete: ${decryptedBytes.length} bytes for ${buyerAddress}`);
+    const decryptedBytes = await decryptAssetTwoLayer(req.body);
 
     res.json({
       success: true,
       data: decryptedBytes.toString('base64'),
       size: decryptedBytes.length,
     });
+
+    decryptedBytes.fill(0);
   } catch (error: any) {
     logger.error('[Lit] Decryption error:', error);
-    res.status(500).json({ error: error.message || 'Lit decryption failed' });
+    const status = error.message?.includes('Access denied') ? 403 : 500;
+    res.status(status).json({ error: error.message || 'Lit decryption failed' });
+  }
+});
+
+/**
+ * POST /api/storage/lit/secure-view
+ * Secure viewer: decrypts asset server-side, renders to lossy image, streams binary.
+ * The raw file NEVER leaves server memory. Browser receives only rendered pixels.
+ *
+ * Body: same as /lit/decrypt, plus:
+ *   mimeType: string,   -- original asset MIME (image/png, application/pdf, etc.)
+ *   page?: number,       -- page number for PDFs (1-indexed, default 1)
+ *   maxWidth?: number,   -- max render width (default 1200)
+ *
+ * Response: binary image stream (image/jpeg or image/png)
+ *   Headers: X-Asset-Type, X-Asset-Pages (for PDFs), X-Watermark
+ */
+router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const {
+      litCiphertext, dataToEncryptHash, iv, encryptedDataCid, kid,
+      buyerAddress, mimeType,
+      page: pageNum,
+      maxWidth: reqMaxWidth,
+    } = req.body;
+
+    if (!litCiphertext || !dataToEncryptHash || !kid || !buyerAddress || !iv || !encryptedDataCid) {
+      res.status(400).json({ error: 'Missing required fields for secure view' });
+      return;
+    }
+
+    const mime = (mimeType || 'application/octet-stream').toLowerCase();
+    const maxWidth = Math.min(reqMaxWidth || 1200, 2400);
+
+    const decryptedBytes = await decryptAssetTwoLayer(req.body);
+
+    // Security headers: no caching, no sniffing, inline only
+    res.set({
+      'Cache-Control': 'no-store, no-cache, must-revalidate, private',
+      'Pragma': 'no-cache',
+      'X-Content-Type-Options': 'nosniff',
+      'Content-Disposition': 'inline',
+      'X-Asset-Type': mime,
+      'X-Watermark': buyerAddress,
+    });
+
+    // ── Image pipeline ───────────────────────────────────
+    if (mime.startsWith('image/')) {
+      let sharpMod: any;
+      try {
+        const mod = await import('sharp');
+        sharpMod = mod.default || mod;
+      } catch {
+        decryptedBytes.fill(0);
+        res.status(500).json({ error: 'Sharp not available for image rendering' });
+        return;
+      }
+
+      const watermarkText = `${buyerAddress.substring(0, 10)}...${buyerAddress.substring(buyerAddress.length - 6)}`;
+      const timestamp = new Date().toISOString().split('T')[0];
+
+      // Get image dimensions for watermark SVG sizing
+      const metadata = await sharpMod(decryptedBytes).metadata();
+      const imgW = Math.min(metadata.width || 800, maxWidth);
+      const imgH = metadata.height ? Math.round(metadata.height * (imgW / (metadata.width || 800))) : 600;
+
+      // Semi-transparent tiled watermark overlay
+      const watermarkSvg = Buffer.from(`<svg width="${imgW}" height="${imgH}" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <pattern id="wm" x="0" y="0" width="320" height="180" patternUnits="userSpaceOnUse" patternTransform="rotate(-25)">
+            <text x="10" y="30" font-family="monospace" font-size="13" fill="rgba(255,255,255,0.18)" stroke="rgba(0,0,0,0.08)" stroke-width="0.5">${watermarkText}</text>
+            <text x="10" y="52" font-family="monospace" font-size="10" fill="rgba(255,255,255,0.12)">${timestamp}</text>
+          </pattern>
+        </defs>
+        <rect width="100%" height="100%" fill="url(#wm)"/>
+      </svg>`);
+
+      const rendered = await sharpMod(decryptedBytes)
+        .resize({ width: maxWidth, withoutEnlargement: true })
+        .composite([{ input: watermarkSvg, gravity: 'centre' }])
+        .jpeg({ quality: 82 })
+        .toBuffer();
+
+      decryptedBytes.fill(0);
+
+      res.set('Content-Type', 'image/jpeg');
+      res.set('Content-Length', String(rendered.length));
+      res.send(rendered);
+
+      logger.info(`[SecureView] Image rendered: ${rendered.length} bytes (${imgW}x${imgH}) for ${buyerAddress}`);
+      return;
+    }
+
+    // ── PDF pipeline ─────────────────────────────────────
+    if (mime === 'application/pdf') {
+      let pdfjsMod: any;
+      let canvasMod: any;
+      let sharpMod: any;
+      try {
+        pdfjsMod = await import('pdfjs-dist/legacy/build/pdf.mjs');
+        canvasMod = await import('canvas');
+        const smod = await import('sharp');
+        sharpMod = smod.default || smod;
+      } catch {
+        decryptedBytes.fill(0);
+        res.status(500).json({ error: 'PDF.js/Canvas/Sharp not available for PDF rendering' });
+        return;
+      }
+
+      const createCanvas = canvasMod.createCanvas;
+      const registerFont = canvasMod.registerFont;
+      const uint8 = new Uint8Array(decryptedBytes);
+
+      const pdfjsResolved = fileURLToPath(import.meta.resolve('pdfjs-dist/legacy/build/pdf.mjs'));
+      const fontDir = join(dirname(pdfjsResolved), '..', '..', 'standard_fonts');
+
+      if (registerFont) {
+        const fonts = [
+          { file: 'LiberationSans-Regular.ttf', family: 'LiberationSans' },
+          { file: 'LiberationSans-Bold.ttf', family: 'LiberationSans', weight: 'bold' },
+          { file: 'LiberationSans-Italic.ttf', family: 'LiberationSans', style: 'italic' },
+          { file: 'LiberationSans-BoldItalic.ttf', family: 'LiberationSans', weight: 'bold', style: 'italic' },
+        ];
+        for (const f of fonts) {
+          try { registerFont(join(fontDir, f.file), { family: f.family, weight: f.weight, style: f.style }); } catch { /* already registered */ }
+        }
+      }
+
+      class NodeCanvasFactory {
+        create(w: number, h: number) { const c = createCanvas(w, h); return { canvas: c, context: c.getContext('2d') }; }
+        reset(cc: any, w: number, h: number) { cc.canvas.width = w; cc.canvas.height = h; }
+        destroy(cc: any) { cc.canvas.width = 0; cc.canvas.height = 0; }
+      }
+
+      const pdfDoc = await pdfjsMod.getDocument({
+        data: uint8,
+        canvasFactory: new NodeCanvasFactory(),
+        useSystemFonts: true,
+        disableFontFace: true,
+      }).promise;
+      const totalPages = pdfDoc.numPages;
+      const requestedPage = Math.max(1, Math.min(pageNum || 1, totalPages));
+
+      const pdfPage = await pdfDoc.getPage(requestedPage);
+      const viewport = pdfPage.getViewport({ scale: 1.0 });
+      const scale = Math.min(maxWidth / viewport.width, 2.0);
+      const scaledVp = pdfPage.getViewport({ scale });
+
+      const cvs = createCanvas(scaledVp.width, scaledVp.height);
+      const ctx = cvs.getContext('2d');
+
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, scaledVp.width, scaledVp.height);
+
+      await pdfPage.render({ canvasContext: ctx, viewport: scaledVp }).promise;
+
+      // Hybrid text overlay: PDF.js can't render font outlines in Node.js,
+      // so we extract text content and draw it on top of the rendered graphics
+      const textContent = await pdfPage.getTextContent();
+      ctx.fillStyle = '#000000';
+      for (const item of textContent.items as any[]) {
+        if (!item.str || !item.transform) continue;
+        const tx = item.transform;
+        const fontSize = Math.sqrt(tx[0] * tx[0] + tx[1] * tx[1]) * scale;
+        const x = tx[4] * scale;
+        const y = scaledVp.height - (tx[5] * scale);
+        ctx.font = `${fontSize}px LiberationSans, Helvetica, Arial, sans-serif`;
+        ctx.fillText(item.str, x, y);
+      }
+
+      // Watermark overlay
+      const wmText = `${buyerAddress.substring(0, 10)}...${buyerAddress.substring(buyerAddress.length - 6)}`;
+      ctx.save();
+      ctx.globalAlpha = 0.08;
+      ctx.font = '18px monospace';
+      ctx.fillStyle = '#888';
+      ctx.translate(scaledVp.width / 2, scaledVp.height / 2);
+      ctx.rotate(-Math.PI / 6);
+      for (let y = -scaledVp.height; y < scaledVp.height; y += 120) {
+        for (let x = -scaledVp.width; x < scaledVp.width; x += 280) {
+          ctx.fillText(wmText, x, y);
+        }
+      }
+      ctx.restore();
+
+      const pngBuf = cvs.toBuffer('image/png');
+      decryptedBytes.fill(0);
+
+      const rendered = await sharpMod(pngBuf).jpeg({ quality: 85 }).toBuffer();
+
+      res.set('Content-Type', 'image/jpeg');
+      res.set('Content-Length', String(rendered.length));
+      res.set('X-Asset-Pages', String(totalPages));
+      res.set('X-Asset-Page', String(requestedPage));
+      res.send(rendered);
+
+      logger.info(`[SecureView] PDF page ${requestedPage}/${totalPages} rendered: ${rendered.length} bytes for ${buyerAddress}`);
+      return;
+    }
+
+    // ── Text pipeline ────────────────────────────────────
+    if (mime.startsWith('text/')) {
+      let canvasMod: any;
+      let sharpMod: any;
+      try {
+        canvasMod = await import('canvas');
+        const smod = await import('sharp');
+        sharpMod = smod.default || smod;
+      } catch {
+        decryptedBytes.fill(0);
+        res.status(500).json({ error: 'Canvas/Sharp not available for text rendering' });
+        return;
+      }
+
+      const createCanvas = canvasMod.createCanvas;
+      const text = decryptedBytes.toString('utf8');
+      decryptedBytes.fill(0);
+
+      const lines = text.split('\n');
+      const fontSize = 14;
+      const lineHeight = 20;
+      const padding = 24;
+      const canvasW = Math.min(maxWidth, 900);
+      const visibleLines = lines.slice(0, 80);
+      const canvasH = Math.max(200, padding * 2 + visibleLines.length * lineHeight);
+
+      const cvs = createCanvas(canvasW, canvasH);
+      const ctx = cvs.getContext('2d');
+
+      ctx.fillStyle = '#1e1e1e';
+      ctx.fillRect(0, 0, canvasW, canvasH);
+
+      ctx.fillStyle = '#d4d4d4';
+      ctx.font = `${fontSize}px monospace`;
+      ctx.textBaseline = 'top';
+
+      let y = padding;
+      for (const line of visibleLines) {
+        if (y + lineHeight > canvasH - padding) break;
+        ctx.fillText(line.substring(0, 120), padding, y);
+        y += lineHeight;
+      }
+
+      // Watermark
+      const wmText = `${buyerAddress.substring(0, 10)}...${buyerAddress.substring(buyerAddress.length - 6)}`;
+      ctx.save();
+      ctx.globalAlpha = 0.06;
+      ctx.font = '16px monospace';
+      ctx.fillStyle = '#aaa';
+      ctx.translate(canvasW / 2, canvasH / 2);
+      ctx.rotate(-Math.PI / 6);
+      for (let wy = -canvasH; wy < canvasH; wy += 100) {
+        for (let wx = -canvasW; wx < canvasW; wx += 260) {
+          ctx.fillText(wmText, wx, wy);
+        }
+      }
+      ctx.restore();
+
+      const pngBuf = cvs.toBuffer('image/png');
+      const rendered = await sharpMod(pngBuf).png().toBuffer();
+
+      res.set('Content-Type', 'image/png');
+      res.set('Content-Length', String(rendered.length));
+      res.send(rendered);
+
+      logger.info(`[SecureView] Text rendered: ${rendered.length} bytes (${visibleLines.length} lines) for ${buyerAddress}`);
+      return;
+    }
+
+    // ── Unsupported type: return metadata only ───────────
+    decryptedBytes.fill(0);
+    res.status(415).json({
+      error: `Secure viewing not yet supported for ${mime}. Use /lit/decrypt for raw access.`,
+      mimeType: mime,
+    });
+
+  } catch (error: any) {
+    logger.error('[SecureView] Error:', error);
+    const status = error.message?.includes('Access denied') ? 403 : 500;
+    res.status(status).json({ error: error.message || 'Secure view failed' });
   }
 });
 
@@ -1238,6 +1636,24 @@ router.post('/lit/deploy-action', authenticate, async (req: AuthenticatedRequest
  *   OR: { cid: string, filename?: string }   — reads from local IPFS first
  * Response: { success: true, cid: string, size: number }
  */
+
+router.post('/thumbnail', authenticate, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { content, mimeType, filename } = req.body;
+    if (!content || !mimeType) {
+      res.status(400).json({ error: 'content and mimeType are required' });
+      return;
+    }
+    const { generateThumbnail } = await import('../storage/thumbnail.js');
+    const buf = Buffer.from(content, 'base64');
+    const thumb = await generateThumbnail(buf, mimeType, filename || 'file');
+    res.json({ thumbnail: thumb });
+  } catch (err: any) {
+    logger.error('[Thumbnail API] Error:', err.message);
+    res.status(500).json({ error: 'Thumbnail generation failed' });
+  }
+});
+
 router.post('/ipfs/upload-elacity', authenticate, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const ELACITY_UPLOAD = 'https://base.ela.city/api/2.0/files/upload';

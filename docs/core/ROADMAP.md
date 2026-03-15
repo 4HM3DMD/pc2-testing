@@ -2,7 +2,7 @@
 
 > **Purpose:** Single source of truth for all strategic goals, technical work streams, and milestones — directly mapped to the Keystone Fund proposal and Rong Chen's original vision
 > **Created:** 2026-02-24
-> **Last Updated:** 2026-03-13
+> **Last Updated:** 2026-03-15
 > **Status:** Living document — update as work progresses
 
 ---
@@ -161,8 +161,8 @@ These diagrams from Rong define the north star. Every work stream should move us
   - [x] Capacity credit auto-detection — queries Chronicle Yellowstone for latest valid RLI token, handles 15-day rotation *(implemented Mar 14)*
   - [x] Inline image rendering — decrypted content rendered as blob URL in Market dApp *(implemented Mar 14)*
   - [x] Gateway approval hardening — 5s delay, try-catch, "Fix Gateway Approval" tool *(implemented Mar 14)*
-  - [ ] End-to-end decrypt test with capacity credits — **BLOCKED on capacity key from Irzhy**
-  - [ ] Universal asset viewer — render decrypted content by MIME type (images working, PDFs/audio/3D TBD)
+  - [x] End-to-end decrypt test with capacity credits — **WORKING** (Lit Payment Delegation via Relayer API, Test 13 image + Test 14 PDF verified)
+  - [x] Universal asset viewer — **server-side secure viewer** for images (Sharp), PDFs (PDF.js+Canvas hybrid), text (Canvas) with watermarking, buffer zeroing, auto-decrypt, parallel PDF page loading *(completed Mar 15)*
 
 **SDK Evolution (Universal Asset Protocol):**
 - [x] `@elacity-js/access` package — clean-room build of universal access layer using Lit Protocol SDK directly (see `docs/core/ACCESS_PACKAGE_SPEC.md`) *(implemented Mar 13 — 12 source files, 47 unit tests passing)*
@@ -279,7 +279,11 @@ These diagrams from Rong define the north star. Every work stream should move us
 - [x] Capacity credit auto-detection — queries Chronicle Yellowstone for latest valid RLI token, handles 15-day rotation *(completed Mar 14)*
 - [x] Server-side decrypt endpoint — `POST /api/storage/lit/decrypt` with Lit Action `executeJs()` *(completed Mar 14)*
 - [x] Inline image rendering — decrypted content rendered as blob URL in Market dApp *(completed Mar 14)*
-- [ ] **End-to-end decrypt test with capacity credits** — **BLOCKED on capacity key from Irzhy**
+- [x] **End-to-end decrypt test with capacity credits** — **WORKING** (Lit Payment Delegation via Relayer API) *(completed Mar 15)*
+- [x] Two-layer encryption — AES-GCM + Lit CEK (bypasses 4MB message limit) *(completed Mar 15)*
+- [x] Server-side secure viewer — images/PDFs/text rendered server-side with watermark, no plaintext in browser *(completed Mar 15)*
+- [x] Auto-decrypt on asset open — owned assets automatically decrypt when viewed *(completed Mar 15)*
+- [ ] **Lit Chipotle migration** — Datil deprecated ~April 25, 2026. Replace v7 SDK with REST API. CRITICAL PATH.
 - [ ] On-chain content indexer — replace Elacity GraphQL dependency with event scanner (The Graph / custom). See [DECENTRALIZATION_STATUS.md](./DECENTRALIZATION_STATUS.md) Tier 1.1
 - [ ] Self-provisioned RLI tokens — each PC2 node mints own capacity credits, removes Elacity wallet dependency. See Tier 1.3
 - [ ] AI Model Marketplace alpha — encrypt GGUF/SafeTensors model → IPFS → ACCESS_TOKEN → decrypt on PC2 → load in Ollama

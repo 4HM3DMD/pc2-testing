@@ -1,4 +1,4 @@
-# Session Handover — Mar 14, 2026
+# Session Handover — Mar 15, 2026
 
 > **Read this first when starting a new agent session.**
 
@@ -10,7 +10,7 @@
 **Release:** v1.1.0 tagged and released on 2026-03-03 (134 commits squash-merged to main)
 **Launcher:** v1.1.1 released — version display, one-click updates, full networking install
 **DAO Proposal:** Live at https://elastos.com/proposals/69a24f49247f130078064edd
-**Last Commit:** `4527b9f1a` — feat: server-side decrypt + inline image rendering in Market dApp
+**Last Commit:** — feat: secure viewer pipeline, PDF hybrid rendering, auto-decrypt, parallel page loading
 
 ### What Just Shipped (v1.1.0 on main)
 
@@ -305,22 +305,33 @@ Full technical spec at `docs/core/ACCESS_PACKAGE_SPEC.md`. Key decisions:
 - [x] Inline image rendering — decrypted content rendered as blob URL in Market dApp
 - [x] Gateway approval retry — 5s delay after mint, try-catch wrapper, "Fix Gateway Approval" tool in Creator
 - [x] Decrypt race condition fix — `ensureRawMetadata()` fetches IPFS metadata synchronously before decrypt
-- [ ] **End-to-end decrypt test with capacity credits** — waiting on private key from Irzhy
-- [ ] Fix library not showing all purchased assets (Elacity test 4 missing)
+- [x] **End-to-end decrypt test with capacity credits** — **WORKING** (Test 13 image, Test 14 PDF — Lit Payment Delegation via Relayer API)
+- [x] Fix library showing purchased assets — **FIXED** (Smart Account address used for library query)
 - [ ] Purchase with standard wallet (MetaMask) — to isolate UA receipt parsing bug
+- [x] Two-layer encryption — AES-GCM file encryption + Lit CEK encryption (bypasses 4MB Lit message limit)
+- [x] Lit Payment Delegation — auto-registration of PC2 server wallet via Relayer API (.lit-relayer-config)
+- [x] Pinata-backed Lit Action — self-referential conditions with IPFS CID (QmVMgKMKFELHTZf8PmD58nYBhr4S5DHLpuwFTvyDKLPXgq)
+- [x] Secure viewer pipeline — server-side rendering for images (Sharp), PDFs (PDF.js + Canvas hybrid), text (Canvas)
+- [x] PDF hybrid text rendering — getTextContent() overlay for Node.js (PDF.js can't render font outlines in node-canvas)
+- [x] Auto-decrypt on open — owned assets automatically start decrypting when detail view opens
+- [x] Parallel PDF page loading — all pages fetched simultaneously with placeholder slots
+- [x] Loading overlay — spinner shown in media area during decryption
+- [x] PDF thumbnail generation — POST /api/storage/thumbnail endpoint for Creator app
+- [x] Security: buffer zeroing, no-cache headers, right-click/drag disable, blob URL revocation, lossy JPEG conversion
+- [ ] Test with text files (.txt) — secure viewer text pipeline untested
+- [ ] Lit Chipotle migration — Datil network deprecated ~April 25, 2026, need to migrate to Chipotle REST API
 
 **Known issues:**
 - Elacity frontend UA receipt parsing: `UAReceiptFetcher.enrichOperationsWithContracts` throws `TypeError` after successful on-chain purchase. Bug is in Elacity's frontend, not our code.
 - MPD parser error for image assets: Elacity's media player tries to parse image metadata as DASH manifest. Expected for non-video content.
-- Lit rate limiting: without capacity credit private key, Datil network rate-limits `executeJs()` calls
+- Lit Datil deprecation: Datil network being deprecated ~April 25, 2026 in favor of Chipotle (REST API, API key auth, TEE-based). Migration required.
 
 #### Next Up — Engineering Priorities
-1. **Get capacity credit private key from Irzhy** — BLOCKING. Needed for Lit Protocol production decrypt.
-2. **Test full E2E decrypt** — once key is configured, test encrypt → mint → buy → decrypt on PC2 node
-3. **Fix library showing all purchased assets** — Elacity test 4 not appearing in PC2 Market library
-4. **On-chain indexer prototype** — replace Elacity GraphQL dependency with event scanner (The Graph / custom)
-5. **Self-provisioned RLI tokens** — each node mints own capacity credits, removes Elacity wallet dependency
-6. **AI Model Marketplace alpha** — first non-media vertical: GGUF → encrypt → IPFS → ACCESS_TOKEN → decrypt → Ollama
+1. **Lit Chipotle migration** — CRITICAL. Datil deprecated ~April 25, 2026. Replace v7 SDK with Chipotle REST API.
+2. **Test text file (.txt) flow** — secure viewer text pipeline implemented but untested
+3. **On-chain indexer prototype** — replace Elacity GraphQL dependency with event scanner (The Graph / custom)
+4. **Self-provisioned RLI tokens** — each node mints own capacity credits, removes Elacity wallet dependency
+5. **AI Model Marketplace alpha** — first non-media vertical: GGUF → encrypt → IPFS → ACCESS_TOKEN → decrypt → Ollama
 7. ~~**Consumer decrypt endpoint**~~ — DONE (Mar 14) — Lit Action `executeJs()` with on-chain access check
 8. ~~**Lit Action trust model**~~ — DONE (Mar 14) — self-ref conditions, access check in action code
 9. ~~**Capacity credit auto-detection**~~ — DONE (Mar 14) — Chronicle Yellowstone query, handles 15-day rotation
@@ -396,6 +407,7 @@ Full technical spec at `docs/core/ACCESS_PACKAGE_SPEC.md`. Key decisions:
 - [Network Map + Strategy](d9445cb9-12bd-437e-8d4e-ebb35ef40d64) — network map visual upgrade, universal asset strategy, app manifest spec, binary manager, handover
 - [3D Orb + SEO + Rebrand](6431d137-5dd9-4c8e-b042-5d8c54b908a5) — 3D orb integration, network map rebrand to "World Computer", full SEO overhaul, GA4, app icon fixes, mobile responsiveness
 - [dDRM Pipeline E2E](fd6755f0-d73c-4e41-8df3-0f57f15071a2) — @elacity-js/access, Creator Dashboard, Lit Action trust model (Path A), capacity credit auto-detection, decrypt endpoint, decentralization analysis
+- [Secure Viewer & PDF](current-session) — secure viewer pipeline, PDF hybrid rendering, two-layer encryption fix, Lit Pinata/relayer integration, auto-decrypt, parallel pages
 
 ---
 
@@ -444,10 +456,17 @@ Full technical spec at `docs/core/ACCESS_PACKAGE_SPEC.md`. Key decisions:
 |------|---------|
 | `pc2-node/data/lit-actions/non-media-decrypt.js` | Trustless on-chain access check + threshold CEK decryption |
 
+#### Secure Viewer Pipeline (Mar 15)
+| File | Purpose |
+|------|---------|
+| `pc2-node/src/api/storage.ts` (`/lit/secure-view`) | Server-side asset rendering: Sharp (images), PDF.js+Canvas (PDFs), Canvas (text) |
+| `pc2-node/data/test-apps/elacity-market/app.js` | Auto-decrypt, parallel PDF page loading, loading overlay, scrollable PDF container |
+| `pc2-node/data/test-apps/elacity-creator/app.js` | PDF thumbnail generation via `/api/storage/thumbnail` |
+
 ### Backend APIs
 | File | Purpose |
 |------|---------|
-| `pc2-node/src/api/storage.ts` | Lit encrypt/decrypt, IPFS upload/pin, capacity credit auto-detection |
+| `pc2-node/src/api/storage.ts` | Lit encrypt/decrypt, IPFS upload, **secure viewer** (image/PDF/text), thumbnail generation, capacity credit auto-detection |
 | `pc2-node/src/api/installed-apps.ts` | App install/uninstall/list endpoints |
 | `pc2-node/src/services/AppInstallService.ts` | App lifecycle management service |
 | `pc2-node/src/static.ts` | Static serving for installed apps with wallet bridge injection |

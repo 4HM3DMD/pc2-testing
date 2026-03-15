@@ -656,7 +656,16 @@
     dom.previewPlayer.classList.add('hidden');
     dom.detailImage.style.display = '';
     dom.detailImage.src = '';
+    dom.detailImage.style.objectFit = '';
+    dom.detailImage.style.height = '';
     dom.previewBtn.classList.add('hidden');
+    var mediaEl = document.getElementById('detail-media');
+    if (mediaEl) { mediaEl.style.aspectRatio = ''; mediaEl.style.maxHeight = ''; mediaEl.style.overflowY = ''; }
+    var pdfContainer = document.getElementById('pdf-pages-container');
+    if (pdfContainer) pdfContainer.remove();
+    var decryptOverlay = document.getElementById('decrypt-overlay');
+    if (decryptOverlay) decryptOverlay.remove();
+    secureViewState = { currentPage: 1, totalPages: 0, body: null, mime: '' };
     dom.detailTitle.textContent = 'Loading...';
     dom.detailCreator.innerHTML = '';
     dom.detailDate.textContent = '';
@@ -799,6 +808,7 @@
         if (cid) {
           dom.downloadDecryptBtn.classList.remove('hidden');
           console.log('[Detail] Non-media asset, CID:', cid, 'hash:', rawAsset.dataToEncryptHash);
+          setTimeout(function () { handleDownloadAndDecrypt(); }, 300);
         } else {
           console.warn('[Detail] Non-media asset but no CID found');
         }
@@ -1919,6 +1929,192 @@
     pinAndRegisterMedia(nft);
   }
 
+  // ── Secure Viewer (server-side rendering, no raw file in browser) ──
+
+  var secureViewState = { currentPage: 1, totalPages: 0, body: null, mime: '' };
+
+  function showDecryptingOverlay() {
+    var mediaEl = document.getElementById('detail-media');
+    if (!mediaEl) return;
+    var overlay = document.getElementById('decrypt-overlay');
+    if (!overlay) {
+      overlay = document.createElement('div');
+      overlay.id = 'decrypt-overlay';
+      overlay.style.cssText = 'position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:rgba(0,0,0,0.7);z-index:10;border-radius:inherit;';
+      overlay.innerHTML =
+        '<div style="width:36px;height:36px;border:3px solid rgba(255,255,255,0.2);border-top-color:#4ade80;border-radius:50%;animation:spin 0.8s linear infinite;"></div>' +
+        '<div id="decrypt-overlay-text" style="color:#e0e0e0;font-size:13px;margin-top:12px;">Decrypting...</div>' +
+        '<style>@keyframes spin{to{transform:rotate(360deg)}}</style>';
+      mediaEl.style.position = 'relative';
+      mediaEl.appendChild(overlay);
+    }
+    overlay.style.display = 'flex';
+  }
+
+  function hideDecryptingOverlay() {
+    var overlay = document.getElementById('decrypt-overlay');
+    if (overlay) overlay.style.display = 'none';
+  }
+
+  function updateDecryptOverlayText(text) {
+    var el = document.getElementById('decrypt-overlay-text');
+    if (el) el.textContent = text;
+  }
+
+  function secureViewAsset(body, mime, page) {
+    var pg = page || 1;
+    body.page = pg;
+    secureViewState.body = body;
+    secureViewState.mime = mime;
+    secureViewState.currentPage = pg;
+
+    showDecryptingOverlay();
+    updateDecryptOverlayText('Verifying access & decrypting...');
+
+    return pc2Fetch('/api/storage/lit/secure-view', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(function (resp) {
+      if (!resp.ok) {
+        return resp.json().then(function (err) {
+          throw new Error(err.error || 'Secure view failed: ' + resp.status);
+        });
+      }
+
+      var totalPages = parseInt(resp.headers.get('X-Asset-Pages') || '0', 10);
+      if (totalPages > 0) {
+        secureViewState.totalPages = totalPages;
+      }
+
+      return resp.blob();
+    }).then(function (blob) {
+      hideDecryptingOverlay();
+      var blobUrl = URL.createObjectURL(blob);
+      var mediaEl = document.getElementById('detail-media');
+      var isPdf = secureViewState.totalPages > 1;
+
+      if (isPdf) {
+        dom.detailImage.style.display = 'none';
+        if (mediaEl) {
+          mediaEl.style.aspectRatio = 'auto';
+          mediaEl.style.maxHeight = '75vh';
+          mediaEl.style.overflowY = 'auto';
+        }
+
+        var pdfContainer = document.getElementById('pdf-pages-container');
+        if (!pdfContainer) {
+          pdfContainer = document.createElement('div');
+          pdfContainer.id = 'pdf-pages-container';
+          pdfContainer.style.cssText = 'display:flex;flex-direction:column;gap:4px;';
+          mediaEl.appendChild(pdfContainer);
+        }
+
+        var pageImg = document.createElement('img');
+        pageImg.id = 'pdf-page-1';
+        pageImg.style.cssText = 'width:100%;height:auto;display:block;user-select:none;-webkit-user-select:none;pointer-events:none;';
+        pageImg.setAttribute('draggable', 'false');
+        pageImg.oncontextmenu = function (e) { e.preventDefault(); return false; };
+        pageImg.onload = function () { URL.revokeObjectURL(blobUrl); };
+        pageImg.src = blobUrl;
+        pdfContainer.appendChild(pageImg);
+
+        dom.downloadDecryptBtn.disabled = false;
+        dom.downloadStatus.className = 'download-status success';
+        dom.downloadStatus.textContent = 'Page 1 loaded, fetching remaining ' + (secureViewState.totalPages - 1) + ' pages...';
+
+        // Fetch all remaining pages in parallel
+        if (secureViewState.totalPages > 1) {
+          fetchAllPdfPagesParallel(pdfContainer, secureViewState.totalPages);
+        }
+      } else {
+        dom.detailImage.src = blobUrl;
+        dom.detailImage.style.display = '';
+        dom.detailImage.onload = function () { URL.revokeObjectURL(blobUrl); };
+        dom.detailImage.oncontextmenu = function (e) { e.preventDefault(); return false; };
+        dom.detailImage.setAttribute('draggable', 'false');
+        dom.detailImage.style.userSelect = 'none';
+        dom.detailImage.style.webkitUserSelect = 'none';
+
+        dom.downloadDecryptBtn.disabled = false;
+        dom.downloadStatus.className = 'download-status success';
+        dom.downloadStatus.textContent = 'Secured view (watermarked, server-rendered)';
+      }
+
+      showToast('Asset decrypted securely!', 'success');
+    }).catch(function (err) {
+      hideDecryptingOverlay();
+      throw err;
+    });
+  }
+
+  function fetchAllPdfPagesParallel(pdfContainer, totalPages) {
+    var pagesLoaded = 1;
+
+    // Pre-create placeholder elements in order so pages appear correctly
+    for (var i = 2; i <= totalPages; i++) {
+      var placeholder = document.createElement('div');
+      placeholder.id = 'pdf-page-slot-' + i;
+      placeholder.style.cssText = 'width:100%;min-height:100px;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.05);border-radius:4px;color:#888;font-size:12px;';
+      placeholder.textContent = 'Loading page ' + i + '...';
+      pdfContainer.appendChild(placeholder);
+    }
+
+    // Fire all page requests in parallel
+    for (var p = 2; p <= totalPages; p++) {
+      (function (pageNum) {
+        var body = JSON.parse(JSON.stringify(secureViewState.body));
+        body.page = pageNum;
+
+        pc2Fetch('/api/storage/lit/secure-view', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        }).then(function (resp) {
+          if (!resp.ok) throw new Error('Page ' + pageNum + ' failed');
+          return resp.blob();
+        }).then(function (blob) {
+          var blobUrl = URL.createObjectURL(blob);
+          var slot = document.getElementById('pdf-page-slot-' + pageNum);
+          if (slot) {
+            var img = document.createElement('img');
+            img.id = 'pdf-page-' + pageNum;
+            img.style.cssText = 'width:100%;height:auto;display:block;user-select:none;-webkit-user-select:none;pointer-events:none;';
+            img.setAttribute('draggable', 'false');
+            img.oncontextmenu = function (e) { e.preventDefault(); return false; };
+            img.onload = function () { URL.revokeObjectURL(blobUrl); };
+            img.src = blobUrl;
+            slot.replaceWith(img);
+          }
+
+          pagesLoaded++;
+          dom.downloadStatus.textContent = pagesLoaded + ' of ' + totalPages + ' pages loaded...';
+          if (pagesLoaded === totalPages) {
+            dom.downloadStatus.textContent = 'All ' + totalPages + ' pages loaded (secured)';
+          }
+        }).catch(function (err) {
+          console.error('[PDF] Failed to load page ' + pageNum + ':', err);
+          var slot = document.getElementById('pdf-page-slot-' + pageNum);
+          if (slot) slot.textContent = 'Failed to load page ' + pageNum;
+        });
+      })(p);
+    }
+  }
+
+  function showPdfPageControls(show) {
+    var container = document.getElementById('pdf-page-controls');
+    if (container) container.style.display = show ? 'flex' : 'none';
+    if (container) {
+      container.style.display = show ? 'flex' : 'none';
+      if (show) {
+        var info = document.getElementById('pdf-page-info');
+        if (info) info.textContent = secureViewState.currentPage + ' / ' + secureViewState.totalPages;
+        document.getElementById('pdf-prev').disabled = secureViewState.currentPage <= 1;
+        document.getElementById('pdf-next').disabled = secureViewState.currentPage >= secureViewState.totalPages;
+      }
+    }
+  }
+
   // ── Download & Decrypt (non-media assets via @elacity-js/access) ──
 
   function handleDownloadAndDecrypt() {
@@ -1929,6 +2125,9 @@
       showToast('Connect your wallet first', 'error');
       return;
     }
+
+    showDecryptingOverlay();
+    updateDecryptOverlayText('Preparing decryption...');
 
     dom.downloadDecryptBtn.disabled = true;
     dom.downloadStatus.classList.remove('hidden');
@@ -2090,9 +2289,14 @@
 
       var assetActionCid = asset.actionCid || '';
       var assetAuthority = asset.authority || (meta.properties && meta.properties.authority) || '';
-      var assetKid = dataToEncryptHash;
+      var litCiphertext = asset.litCiphertext || '';
+      var assetIv = asset.iv || '';
+      // kid = bytes16 = first 16 bytes (32 hex chars) of the dataToEncryptHash
+      var cleanHash = dataToEncryptHash.startsWith('0x') ? dataToEncryptHash.slice(2) : dataToEncryptHash;
+      var assetKid = '0x' + cleanHash.slice(0, 32).padEnd(32, '0');
 
       console.log('[Decrypt] buyer:', buyerAddr, 'actionCid:', assetActionCid, 'authority:', assetAuthority, 'kid:', assetKid);
+      console.log('[Decrypt] litCiphertext:', litCiphertext ? litCiphertext.substring(0, 30) + '...' : 'MISSING', 'iv:', assetIv || 'MISSING');
 
       if (!assetKid) {
         dom.downloadDecryptBtn.disabled = false;
@@ -2101,68 +2305,65 @@
         return;
       }
 
-      var ipfsUrl = window.location.origin + '/ipfs/' + cid;
-      fetch(ipfsUrl).then(function (r) {
-        if (!r.ok) return fetch('https://ipfs.ela.city/ipfs/' + cid);
-        return r;
-      }).then(function (r) {
-        if (!r.ok) throw new Error('IPFS fetch failed: ' + r.status);
-        return r.arrayBuffer();
-      }).then(function (buf) {
-        dom.downloadStatus.textContent = 'Verifying access & decrypting via Lit Action...';
-        var encryptedBase64 = '';
-        var bytes = new Uint8Array(buf);
-        var chunkSize = 32768;
-        for (var i = 0; i < bytes.length; i += chunkSize) {
-          encryptedBase64 += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
-        }
-        encryptedBase64 = btoa(encryptedBase64);
-
-        var decryptBody = {
-          ciphertext: encryptedBase64,
-          dataToEncryptHash: dataToEncryptHash,
-          kid: assetKid,
-          buyerAddress: buyerAddr,
-        };
-        if (assetActionCid) decryptBody.actionCid = assetActionCid;
-        if (assetAuthority) decryptBody.authority = assetAuthority;
-
-        return pc2Fetch('/api/storage/lit/decrypt', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(decryptBody),
-        });
-      }).then(function (resp) {
-        if (!resp.ok) {
-          return resp.json().then(function (err) {
-            throw new Error(err.error || 'Decrypt failed: ' + resp.status);
-          });
-        }
-        return resp.json();
-      }).then(function (result) {
-        var decryptedBytes = Uint8Array.from(atob(result.data), function (c) { return c.charCodeAt(0); });
-        dom.downloadStatus.textContent = 'Decrypted! Rendering...';
-
-        var mime = asset.mimeType || media.contentType || 'application/octet-stream';
-        if (mime.startsWith('image/')) {
-          var blob = new Blob([decryptedBytes], { type: mime });
-          var blobUrl = URL.createObjectURL(blob);
-          dom.detailImage.src = blobUrl;
-          dom.detailImage.style.display = '';
-          dom.downloadStatus.className = 'download-status success';
-          dom.downloadStatus.textContent = 'Decrypted and displayed!';
-          dom.downloadDecryptBtn.disabled = false;
-          showToast('Asset decrypted successfully!', 'success');
-        } else {
-          return saveDecryptedFile(decryptedBytes);
-        }
-      }).catch(function (err) {
-        console.error('[Decrypt] Failed:', err);
+      if (!litCiphertext || !assetIv) {
         dom.downloadDecryptBtn.disabled = false;
         dom.downloadStatus.className = 'download-status error';
-        dom.downloadStatus.textContent = 'Failed: ' + (err.message || 'Unknown error');
-        showToast('Decrypt failed: ' + (err.message || 'Unknown error'), 'error');
-      });
+        dom.downloadStatus.textContent = 'Asset metadata missing litCiphertext/iv — may need re-encryption with latest creator';
+        return;
+      }
+
+      dom.downloadStatus.textContent = 'Verifying access & decrypting via Lit Action...';
+
+      var mime = asset.mimeType || media.contentType || 'application/octet-stream';
+      var isSecureViewable = mime.startsWith('image/') || mime === 'application/pdf' || mime.startsWith('text/');
+
+      var secureViewBody = {
+        litCiphertext: litCiphertext,
+        dataToEncryptHash: dataToEncryptHash,
+        encryptedDataCid: cid,
+        iv: assetIv,
+        kid: assetKid,
+        buyerAddress: buyerAddr,
+        mimeType: mime,
+        maxWidth: Math.min(window.innerWidth * (window.devicePixelRatio || 1), 1600),
+      };
+      if (assetActionCid) secureViewBody.actionCid = assetActionCid;
+      if (assetAuthority) secureViewBody.authority = assetAuthority;
+
+      if (isSecureViewable) {
+        // Secure path: server renders, browser receives only pixels (never raw file)
+        var secureViewPromise = secureViewAsset(secureViewBody, mime);
+        secureViewPromise.catch(function (err) {
+          console.error('[SecureView] Failed:', err);
+          dom.downloadDecryptBtn.disabled = false;
+          dom.downloadStatus.className = 'download-status error';
+          dom.downloadStatus.textContent = 'Failed: ' + (err.message || 'Unknown error');
+          showToast('Secure view failed: ' + (err.message || 'Unknown error'), 'error');
+        });
+      } else {
+        // Fallback: raw decrypt for unsupported types (audio, wasm, etc.)
+        var decryptPromise = pc2Fetch('/api/storage/lit/decrypt', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(secureViewBody),
+        }).then(function (resp) {
+          if (!resp.ok) {
+            return resp.json().then(function (err) {
+              throw new Error(err.error || 'Decrypt failed: ' + resp.status);
+            });
+          }
+          return resp.json();
+        }).then(function (result) {
+          var decryptedBytes = Uint8Array.from(atob(result.data), function (c) { return c.charCodeAt(0); });
+          return saveDecryptedFile(decryptedBytes);
+        }).catch(function (err) {
+          console.error('[Decrypt] Failed:', err);
+          dom.downloadDecryptBtn.disabled = false;
+          dom.downloadStatus.className = 'download-status error';
+          dom.downloadStatus.textContent = 'Failed: ' + (err.message || 'Unknown error');
+          showToast('Decrypt failed: ' + (err.message || 'Unknown error'), 'error');
+        });
+      }
       return;
     }
 

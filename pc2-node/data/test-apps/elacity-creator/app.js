@@ -391,7 +391,7 @@
         uri: 'ipfs://' + params.assetCid,
         contentType: contentType,
         mimeType: contentType,
-        protectionType: 'lit-aes-v1',
+        protectionType: 'lit-aes-gcm-v1',
         size: params.size,
       },
       asset: {
@@ -399,8 +399,8 @@
         mimeType: contentType,
         size: params.size,
         encrypted: true,
-        algorithm: 'lit-aes-v1',
-        protectionType: 'lit-aes-v1',
+        algorithm: 'aes-256-gcm',
+        protectionType: 'lit-aes-gcm-v1',
         dataToEncryptHash: params.dataToEncryptHash,
         actionCid: params.actionCid || '',
         authority: params.authority || CONTRACTS.AUTHORITY_GATEWAY,
@@ -947,16 +947,19 @@
         }
 
         var litData = await litResp.json();
-        console.log('[Creator] Lit encryption succeeded. Hash:', litData.dataToEncryptHash?.substring(0, 20) + '...');
+        console.log('[Creator] Two-layer encryption succeeded. Hash:', litData.dataToEncryptHash?.substring(0, 20) + '...');
         console.log('[Creator] Action CID:', litData.actionCid);
+        console.log('[Creator] AES-encrypted data:', litData.encryptedData?.length, 'chars, IV:', litData.iv);
         setProgStep('prog-connect', 'Lit Connected (datil)', 'done');
 
-        setProgStep('prog-encrypt', 'Encrypting (Lit Action)...', 'active');
+        setProgStep('prog-encrypt', 'Encrypting (AES + Lit CEK)...', 'active');
         encryptResult = {
-          encrypted: base64ToUint8(litData.ciphertext),
+          encrypted: base64ToUint8(litData.encryptedData),
           dataToEncryptHash: litData.dataToEncryptHash,
           actionCid: litData.actionCid,
           conditions: litData.conditions,
+          litCiphertext: litData.litCiphertext,
+          iv: litData.iv,
         };
       } catch (litErr) {
         console.error('[Creator] Lit Protocol error:', litErr);
@@ -1021,6 +1024,8 @@
       // Generate and upload a thumbnail for the image field
       var imageUri = '';
       try {
+        var thumbBase64 = null;
+
         if (state.selectedFile && state.selectedFile.type.startsWith('image/')) {
           var thumbCanvas = document.createElement('canvas');
           var thumbCtx = thumbCanvas.getContext('2d');
@@ -1033,9 +1038,25 @@
           var thumbBlob = await new Promise(function (resolve) {
             thumbCanvas.toBlob(resolve, 'image/jpeg', 0.8);
           });
-          var thumbBytes = new Uint8Array(await thumbBlob.arrayBuffer());
-          var thumbBase64 = uint8ToBase64(thumbBytes);
+          thumbBase64 = uint8ToBase64(new Uint8Array(await thumbBlob.arrayBuffer()));
+        } else if (state.selectedFile && state.selectedFile.type === 'application/pdf') {
+          // Server-side PDF thumbnail generation
+          var pdfBytes = new Uint8Array(await state.selectedFile.arrayBuffer());
+          var pdfThumbResp = await pc2Fetch('/api/storage/thumbnail', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: uint8ToBase64(pdfBytes), mimeType: 'application/pdf', filename: state.selectedFile.name }),
+          });
+          if (pdfThumbResp.ok) {
+            var pdfThumbData = await pdfThumbResp.json();
+            if (pdfThumbData.thumbnail) {
+              thumbBase64 = pdfThumbData.thumbnail;
+              console.log('[Creator] PDF thumbnail generated on server');
+            }
+          }
+        }
 
+        if (thumbBase64) {
           var thumbResp = await pc2Fetch('/api/storage/ipfs/upload-elacity', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1068,6 +1089,12 @@
         authority: authorityAddress,
         image: imageUri,
       });
+
+      // Two-layer encryption: store Lit-encrypted CEK and IV in metadata
+      if (encryptResult.litCiphertext) {
+        envelope.asset.litCiphertext = encryptResult.litCiphertext;
+        envelope.asset.iv = encryptResult.iv;
+      }
 
       if (usedLocalEncryption) {
         envelope.asset._devMode = true;
