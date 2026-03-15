@@ -1887,4 +1887,5 @@ setTimeout(async () => {
   }
 }, 2000);
 
+export { getServerWallet, getLitClient, getExecuteSessionSigs, ensureDelegateeRegistered, getCapacityWallet, detectCapacityTokenId };
 export default router;

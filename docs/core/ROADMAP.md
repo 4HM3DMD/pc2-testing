@@ -165,6 +165,7 @@ These diagrams from Rong define the north star. Every work stream should move us
   - [x] Universal asset viewer — **server-side secure viewer** for images (Sharp), PDFs (PDF.js+Canvas hybrid), text (Canvas) with watermarking, buffer zeroing, auto-decrypt, parallel PDF page loading *(completed Mar 15)*
   - [x] **WASM Renderer** — Rust crate compiled to `wasm32-wasip1` for text rendering inside isolated WASM linear memory + `WASMRuntime.ts` Node.js WASI host *(completed Mar 15)*
   - [x] **dDRM Viewer app** — dedicated PC2 app with two display modes (centered images, full-width scrollable documents), anti-piracy measures, renderer badges, puter.args IPC integration *(completed Mar 15)*
+  - [x] **PC2 Media Runtime** — complete server-side DASH/CENC decryption pipeline. Rust `cenc-decrypt` WASM crate (AES-128-CTR per-sample decryption), MSE player (no EME/CDM/SharedArrayBuffer), DRM signaling stripping (`encv→av01`, `sinf`/`senc` removal), 16-byte IV support from tenc, Smart Account PSSH selection, two-phase Lit auth. **First successful end-to-end playback of Elacity DRM video inside PC2** *(completed Mar 16)*
   - [x] **dDRM Viewer native windowing** — launches as UIWindow via IPC `postMessage` → `launch_app()` (not browser popup), integrated with taskbar *(completed Mar 15)*
   - [x] **.ddrm.json capsule format** — descriptor files for non-media assets with CID, Lit params, mimeType. MIME: `application/x-ddrm+json`. Saved to Documents *(completed Mar 15)*
   - [x] **GUI capsule integration** — custom shield icon, MIME registration, double-click opens dDRM Viewer, content_type_to_icon mapping *(completed Mar 15)*
@@ -292,6 +293,7 @@ These diagrams from Rong define the north star. Every work stream should move us
 - [x] **WASM Renderer** — Rust→WASM text rendering + WASMRuntime.ts WASI host *(completed Mar 15)*
 - [x] **dDRM Viewer** — dedicated secure viewer app with native PC2 windowing, scrollable document view, .ddrm.json capsule support *(completed Mar 15)*
 - [x] **GUI file type integration** — `.ddrm.json` icon, MIME, double-click → dDRM Viewer *(completed Mar 15)*
+- [x] **PC2 Media Runtime** — server-side DASH/CENC decryption: Rust WASM cenc-decrypt crate + MSE player + DRM stripping + Lit CEK recovery. End-to-end video playback verified *(completed Mar 16)*
 - [ ] **Lit Chipotle migration** — Datil deprecated ~April 25, 2026. Replace v7 SDK with REST API. CRITICAL PATH.
 - [ ] On-chain content indexer — replace Elacity GraphQL dependency with event scanner (The Graph / custom). See [DECENTRALIZATION_STATUS.md](./DECENTRALIZATION_STATUS.md) Tier 1.1
 - [ ] Self-provisioned RLI tokens — each PC2 node mints own capacity credits, removes Elacity wallet dependency. See Tier 1.3
@@ -525,7 +527,7 @@ These diagrams from Rong define the north star. Every work stream should move us
 > See [ELACITY_UNIVERSAL_ASSET_STRATEGY.md](./ELACITY_UNIVERSAL_ASSET_STRATEGY.md) for full strategy.
 
 ```
-Phase 1 — Media Foundation (M2-M3) ✅ LARGELY COMPLETE:
+Phase 1 — Media Foundation (M2-M3) ✅ COMPLETE:
   Integrate dDRM SDK → encrypted content upload → access tokens
   → marketplace UI → buyer downloads → buyer becomes seeder
   → app.json manifest spec with dDRM capability declaration

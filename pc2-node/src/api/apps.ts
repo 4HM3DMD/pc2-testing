@@ -157,6 +157,14 @@ export function handleGetApp(req: Request, res: Response): void {
       icon: hardcodedIcons['ddrm-viewer'], 
       index_url: `${baseUrl}/apps/ddrm-viewer/index.html` 
     },
+    'pc2-media-runtime': { 
+      name: 'pc2-media-runtime', 
+      title: 'PC2 Media Player', 
+      uuid: 'app-pc2-media-runtime', 
+      uid: 'app-pc2-media-runtime', 
+      icon: hardcodedIcons['pc2-media-runtime'], 
+      index_url: `${baseUrl}/apps/pc2-media-runtime/index.html` 
+    },
     'system-terminal': { 
       name: 'system-terminal', 
       title: 'System Terminal', 

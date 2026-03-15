@@ -427,6 +427,17 @@ var Wallet = (function () {
     });
   }
 
+  function signMessage(message) {
+    if (!connectedAddress) return Promise.reject(new Error('Wallet not connected'));
+    var hexMessage = '0x' + Array.from(new TextEncoder().encode(message))
+      .map(function (b) { return b.toString(16).padStart(2, '0'); })
+      .join('');
+    return getProvider().request({
+      method: 'personal_sign',
+      params: [hexMessage, connectedAddress]
+    });
+  }
+
   return {
     connect: connect,
     getAddress: getAddress,
@@ -436,6 +447,7 @@ var Wallet = (function () {
     isOnBase: isOnBase,
     switchToBase: switchToBase,
     siweLogin: siweLogin,
+    signMessage: signMessage,
     buyAccess: buyAccess,
     waitForReceipt: waitForReceipt,
     setupListeners: setupListeners,

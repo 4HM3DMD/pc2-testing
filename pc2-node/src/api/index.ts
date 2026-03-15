@@ -17,6 +17,7 @@ import { handleSign, handleVersion, handleOSUser, handleKV, handleRAO, handleCon
 import { handleAPIInfo, handleGetLaunchApps, handleDF, handleBatch, handleCacheTimestamp, handleStats } from './info.js';
 import { handleFile } from './file.js';
 import storageRouter from './storage.js';
+import { mediaRouter } from './media.js';
 import aiRouter from './ai.js';
 import wasmRouter from './wasm.js';
 import resourcesRouter from './resources.js';
@@ -337,6 +338,7 @@ export function setupAPI(app: Express): void {
   
   // Storage usage endpoint
   app.use('/api/storage', storageRouter);
+  app.use('/api/media', mediaRouter);
   app.use('/api/ai', aiRouter);
   app.use('/api/wasm', wasmRouter);
   app.use('/api/resources', resourcesRouter);

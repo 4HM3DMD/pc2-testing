@@ -53,3 +53,7 @@ pc2-node/test-*.js.map
 
 # Rust build artifacts
 **/target/
+
+# Runtime data (IPFS datastore, supernode cache)
+data/ipfs/
+data/supernodes.json

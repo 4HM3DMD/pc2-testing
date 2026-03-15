@@ -680,6 +680,83 @@ export class WASMRuntime {
     }
 
     /**
+     * Decrypt a CENC-encrypted fMP4 segment via the cenc-decrypt WASM module.
+     * MemFS paths match the crate's expectations:
+     *   /input/command.json, /input/segment.bin, /input/init.bin
+     *   /output/result.json, /output/segment.bin
+     */
+    async executeCENCDecrypt(
+        wasmBinary: ArrayBuffer | Uint8Array,
+        commandJson: string,
+        segmentBytes: Buffer,
+        initBytes?: Buffer | null,
+        options?: { timeoutMs?: number },
+    ): Promise<{ success: boolean; decryptedBytes: Buffer | null; error?: string; executionTimeMs: number }> {
+        const timeoutMs = options?.timeoutMs ?? this.defaultTimeoutMs;
+        const startTime = Date.now();
+
+        try {
+            await this.acquireExecutionSlot();
+        } catch (error: any) {
+            return { success: false, decryptedBytes: null, error: `Queue error: ${error.message}`, executionTimeMs: Date.now() - startTime };
+        }
+
+        try {
+            if (!this.initialized) await this.initialize();
+            this.clearMemFS();
+
+            this.writeToMemFS('/input/command.json', Buffer.from(commandJson, 'utf-8'));
+            this.writeToMemFS('/input/segment.bin', segmentBytes);
+            if (initBytes) this.writeToMemFS('/input/init.bin', initBytes);
+
+            const wasiResult = await this.executeWASIStart(wasmBinary, timeoutMs);
+            if (!wasiResult.success) {
+                return { success: false, decryptedBytes: null, error: wasiResult.error ?? 'WASI execution failed', executionTimeMs: Date.now() - startTime };
+            }
+
+            const outputFs = wasiResult.wasiFs;
+            let resultJson: string | null = null;
+            if (outputFs) {
+                const bytes = this.readFromSpecificMemFS(outputFs, '/output/result.json');
+                if (bytes) resultJson = new TextDecoder().decode(bytes);
+            }
+            if (!resultJson) {
+                const bytes = this.readFromMemFS('/output/result.json');
+                if (bytes) resultJson = new TextDecoder().decode(bytes);
+            }
+            if (!resultJson && wasiResult.stdout) resultJson = wasiResult.stdout;
+            if (!resultJson) {
+                return { success: false, decryptedBytes: null, error: 'CENC decrypt produced no output', executionTimeMs: Date.now() - startTime };
+            }
+
+            let result: any;
+            try { result = JSON.parse(resultJson); } catch { result = { success: false, error: 'Invalid result JSON' }; }
+
+            logger.info(`[WASMRuntime] CENC result: ${resultJson.substring(0, 200)}`);
+
+            let decryptedBytes: Buffer | null = null;
+            if (result.success) {
+                let raw: Uint8Array | null = null;
+                if (outputFs) raw = this.readFromSpecificMemFS(outputFs, '/output/segment.bin');
+                if (!raw) raw = this.readFromMemFS('/output/segment.bin');
+                if (raw) {
+                    decryptedBytes = Buffer.from(raw);
+                    logger.info(`[WASMRuntime] CENC output: ${raw.length} bytes`);
+                } else {
+                    logger.warn('[WASMRuntime] CENC: result.success=true but no /output/segment.bin found');
+                }
+            }
+
+            return { success: result.success, decryptedBytes, error: result.error, executionTimeMs: Date.now() - startTime };
+        } catch (error: any) {
+            return { success: false, decryptedBytes: null, error: error.message, executionTimeMs: Date.now() - startTime };
+        } finally {
+            this.clearMemFS();
+            this.releaseExecutionSlot();
+        }
+    }
+
+    /**
      * Read a file from a specific MemFS instance (used to read from WASI's MemFS).
      */
     private readFromSpecificMemFS(memFs: MemFS, wasiPath: string): Uint8Array | null {

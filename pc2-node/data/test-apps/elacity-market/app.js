@@ -230,13 +230,27 @@
 
   function isNonMediaAsset(nft) {
     var meta = nft.metadata || {};
+    var media = meta.media || {};
+    var asset = meta.asset || {};
+    var ct = (media.contentType || media.mimeType || '').toLowerCase();
+    var duration = media.duration || nft.duration || 0;
+
+    if (ct.indexOf('video') !== -1 || ct.indexOf('audio') !== -1) return false;
+    if (asset.assetType === 'video' || asset.assetType === 'audio') return false;
+    if (duration > 0 && !asset.encrypted) return false;
+
+    var attrs = meta.attributes || [];
+    for (var i = 0; i < attrs.length; i++) {
+      var t = (attrs[i].trait_type || '').toLowerCase();
+      var v = (String(attrs[i].value || '')).toLowerCase();
+      if (t === 'type' && (v === 'video' || v === 'audio')) return false;
+      if (t === 'content_type' && (v.indexOf('video') !== -1 || v.indexOf('audio') !== -1)) return false;
+    }
+
     if (meta.schema === 'elacity-asset-envelope-v1') return true;
-    var asset = meta.asset;
-    if (asset && asset.encrypted) return true;
-    if (asset && asset.assetType) return asset.assetType !== 'video';
-    var media = meta.media;
-    var ct = media && media.contentType ? media.contentType : '';
-    return ct.indexOf('video') === -1;
+    if (asset.encrypted) return true;
+
+    return ct.indexOf('video') === -1 && ct.indexOf('audio') === -1;
   }
 
   function resolveIpfsUrl(url) {
@@ -699,8 +713,7 @@
         var tokenURI = nft.tokenURI || '';
         var needsRawMeta = isNonMediaAsset(nft) && tokenURI;
         if (needsRawMeta) {
-          var rawUrl = resolveIpfsUrl(tokenURI);
-          fetch(rawUrl).then(function (r) { return r.json(); })
+          fetchRawMetadataLocalFirst(tokenURI)
             .then(function (rawMeta) {
               if (rawMeta && rawMeta.asset) {
                 nft._rawAsset = rawMeta.asset;
@@ -1682,19 +1695,71 @@
       return;
     }
 
-    var playerUrl = window.location.origin + '/apps/elacity-player/index.html?channel=' +
-      encodeURIComponent(channel) + '&tokenId=' + encodeURIComponent(tokenId);
+    var meta = nft.metadata || {};
+    var media = meta.media || {};
+    var props = meta.properties || {};
+    var title = meta.name || nft.name || 'Untitled';
+    var mediaUri = (media.uri || '').replace('ipfs://', '');
+    var tokenURI = (nft.tokenURI || '').replace('ipfs://', '');
+    var walletAddr = Wallet.getAddress() || '';
 
-    var w = Math.min(960, screen.availWidth - 100);
-    var h = Math.min(640, screen.availHeight - 100);
-    var left = Math.round((screen.availWidth - w) / 2);
-    var top = Math.round((screen.availHeight - h) / 2);
-    var popup = window.open(playerUrl, 'elacity-player',
-      'width=' + w + ',height=' + h + ',left=' + left + ',top=' + top + ',toolbar=no,menubar=no,resizable=yes');
-
-    if (!popup) {
-      showToast('Popup blocked — please allow popups for this site', 'error');
+    if (!walletAddr) {
+      showToast('Please connect your wallet first', 'error');
+      return;
     }
+
+    var checksumAddr = ethers.getAddress(walletAddr);
+    showToast('Preparing Lit authentication...', 'info');
+
+    // Phase 1: Ask the server to start a Lit session and return the SIWE message
+    prepareLitAuth(checksumAddr).then(function (prepareResult) {
+      showToast('Please sign the Lit authentication message...', 'info');
+
+      // Phase 2: Sign the SIWE message from the server (contains ReCap capabilities)
+      return Wallet.signMessage(prepareResult.siweMessage).then(function (sig) {
+        var authSig = {
+          sig: sig,
+          derivedVia: 'web3.eth.personal.sign',
+          signedMessage: prepareResult.siweMessage,
+          address: checksumAddr
+        };
+
+        window.parent.postMessage({
+          msg: 'launchApp',
+          appName: 'pc2-media-runtime',
+          windowTitle: title + ' — PC2 Media Player',
+          args: {
+            channel: channel,
+            tokenId: tokenId,
+            mediaUri: mediaUri,
+            tokenURI: tokenURI,
+            title: title,
+            authority: props.authority || '',
+            buyerAddress: checksumAddr,
+            requestId: prepareResult.requestId,
+            litAuthSig: authSig
+          }
+        }, '*');
+      });
+    }).catch(function (err) {
+      console.error('[Play] Auth flow failed:', err);
+      showToast('Playback auth failed: ' + (err.message || err), 'error');
+    });
+  }
+
+  function prepareLitAuth(buyerAddress) {
+    return pc2Fetch('/api/media/prepare-auth', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ buyerAddress: buyerAddress })
+    }).then(function (res) {
+      if (!res.ok) {
+        return res.json().then(function (err) {
+          throw new Error(err.error || 'prepare-auth failed');
+        });
+      }
+      return res.json();
+    });
   }
 
   // ── Purchase Flow ────────────────────────────────────
@@ -2025,21 +2090,37 @@
     var asset = nft._rawAsset || (nft.metadata && nft.metadata.asset) || {};
     var meta = nft.metadata || {};
     var props = meta.properties || {};
-    var cid = asset.cid || asset.uri || media.uri;
+    var enc = asset.encryption || media.encryption || meta.encryption || {};
+
+    var cid = asset.cid || asset.uri || media.uri || enc.encryptedDataCid;
     if (cid) cid = cid.replace('ipfs://', '');
-    var dataToEncryptHash = asset.dataToEncryptHash || '';
+
+    var dataToEncryptHash = asset.dataToEncryptHash || enc.dataToEncryptHash || enc.hash || '';
     var cleanHash = dataToEncryptHash.startsWith('0x') ? dataToEncryptHash.slice(2) : dataToEncryptHash;
-    var kid = '0x' + cleanHash.slice(0, 32).padEnd(32, '0');
-    var mime = asset.mimeType || media.contentType || 'application/octet-stream';
+    var kid = cleanHash ? ('0x' + cleanHash.slice(0, 32).padEnd(32, '0')) : '';
+
+    var mime = asset.mimeType || media.contentType || media.mimeType || 'application/octet-stream';
     var buyerAddr = Wallet.getAddress() || '';
-    var litCiphertext = asset.litCiphertext || '';
-    var iv = asset.iv || '';
-    var actionCid = asset.actionCid || '';
-    var authority = asset.authority || (props.authority) || '';
+
+    var litCiphertext = asset.litCiphertext || enc.litCiphertext || enc.ciphertext || '';
+    var iv = asset.iv || enc.iv || '';
+    var actionCid = asset.actionCid || enc.actionCid || enc.actionIpfsId || '';
+    var authority = asset.authority || enc.authority || props.authority || '';
     var title = meta.name || nft.name || 'Untitled';
 
     if (!cid || !kid || !litCiphertext) {
-      showToast('Missing asset metadata for viewer', 'error');
+      var missing = [];
+      if (!cid) missing.push('cid');
+      if (!kid) missing.push('kid (dataToEncryptHash)');
+      if (!litCiphertext) missing.push('litCiphertext');
+      console.error('[Viewer] Missing fields:', missing.join(', '), {
+        tokenURI: nft.tokenURI,
+        hasRawAsset: !!nft._rawAsset,
+        assetKeys: Object.keys(asset),
+        encKeys: Object.keys(enc),
+        mediaKeys: Object.keys(media),
+      });
+      showToast('Missing asset metadata for viewer (' + missing.join(', ') + '). Try refreshing the page.', 'error');
       return;
     }
 
@@ -2065,6 +2146,27 @@
     }, '*');
   }
 
+  function fetchRawMetadataLocalFirst(tokenURI) {
+    var cid = tokenURI.replace('ipfs://', '');
+    var localUrl = window.location.origin + '/ipfs/' + cid;
+    var publicUrl = resolveIpfsUrl(tokenURI);
+
+    return fetch(localUrl)
+      .then(function (r) {
+        if (r.ok) return r;
+        console.warn('[Meta] Local IPFS failed (' + r.status + '), trying public gateway');
+        return fetch(publicUrl);
+      })
+      .catch(function () {
+        console.warn('[Meta] Local IPFS unreachable, trying public gateway');
+        return fetch(publicUrl);
+      })
+      .then(function (r) {
+        if (!r.ok) throw new Error('IPFS fetch failed from both gateways: ' + r.status);
+        return r.json();
+      });
+  }
+
   function ensureRawMetadata(nft) {
     if (nft._rawAsset && nft._rawAsset.dataToEncryptHash) {
       return Promise.resolve();
@@ -2072,23 +2174,14 @@
     var tokenURI = nft.tokenURI || '';
     if (!tokenURI) return Promise.resolve();
 
-    var rawUrl = resolveIpfsUrl(tokenURI);
-    if (!rawUrl) return Promise.resolve();
-
-    var localUrl = window.location.origin + '/ipfs/' + tokenURI.replace('ipfs://', '');
-    return fetch(localUrl).then(function (r) {
-      if (!r.ok) return fetch(rawUrl);
-      return r;
-    }).then(function (r) {
-      if (!r.ok) throw new Error('IPFS fetch failed: ' + r.status);
-      return r.json();
-    }).then(function (rawMeta) {
-      if (rawMeta && rawMeta.asset) {
-        nft._rawAsset = rawMeta.asset;
-        nft._rawMedia = rawMeta.media;
-        console.log('[Decrypt] Raw metadata loaded inline, asset CID:', rawMeta.asset.cid);
-      }
-    });
+    return fetchRawMetadataLocalFirst(tokenURI)
+      .then(function (rawMeta) {
+        if (rawMeta && rawMeta.asset) {
+          nft._rawAsset = rawMeta.asset;
+          nft._rawMedia = rawMeta.media;
+          console.log('[Meta] Raw metadata loaded, asset CID:', rawMeta.asset.cid);
+        }
+      });
   }
 
   // ── Wallet UI ────────────────────────────────────────

@@ -1,0 +1,16 @@
+{
+  "name": "pc2-media-runtime",
+  "title": "PC2 Media Player",
+  "version": "0.1.0",
+  "description": "Secure DASH/CENC media player for PC2 — plays DRM-protected video and audio inside PC2 using WASM decryption",
+  "author": "Elacity",
+  "icon": null,
+  "entry": "index.html",
+  "requirements": {
+    "minVersion": "1.1.0"
+  },
+  "metadata": {
+    "window_size": { "width": "960", "height": "640" },
+    "hide_titlebar": false
+  }
+}

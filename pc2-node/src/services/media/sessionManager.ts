@@ -1,0 +1,104 @@
+/**
+ * Media Session Manager for PC2 Media Runtime.
+ *
+ * Stores active playback sessions with CEK + segment map in memory.
+ * Sessions have a TTL and are tied to the auth token that created them.
+ * CEK is held server-side only — never sent to the frontend.
+ */
+
+import * as crypto from 'crypto';
+import { type ParsedMPD } from './mpdParser.js';
+
+const SESSION_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
+const CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+
+export interface MediaSession {
+  id: string;
+  cekBase64: string;
+  mpd: ParsedMPD;
+  mpdBaseUrl: string;
+  channel: string;
+  tokenId: string;
+  createdAt: number;
+  lastAccessedAt: number;
+  authTokenHash: string;
+  initSegments: Map<number, Buffer>;
+}
+
+class MediaSessionManager {
+  private sessions = new Map<string, MediaSession>();
+  private cleanupTimer: ReturnType<typeof setInterval> | null = null;
+
+  constructor() {
+    this.cleanupTimer = setInterval(() => this.cleanup(), CLEANUP_INTERVAL_MS);
+  }
+
+  create(params: {
+    cekBase64: string;
+    mpd: ParsedMPD;
+    mpdBaseUrl: string;
+    channel: string;
+    tokenId: string;
+    authToken: string;
+  }): MediaSession {
+    const id = crypto.randomUUID();
+    const session: MediaSession = {
+      id,
+      cekBase64: params.cekBase64,
+      mpd: params.mpd,
+      mpdBaseUrl: params.mpdBaseUrl,
+      channel: params.channel,
+      tokenId: params.tokenId,
+      createdAt: Date.now(),
+      lastAccessedAt: Date.now(),
+      authTokenHash: this.hashToken(params.authToken),
+      initSegments: new Map(),
+    };
+    this.sessions.set(id, session);
+    return session;
+  }
+
+  get(sessionId: string, authToken: string): MediaSession | null {
+    const session = this.sessions.get(sessionId);
+    if (!session) return null;
+
+    if (Date.now() - session.createdAt > SESSION_TTL_MS) {
+      this.sessions.delete(sessionId);
+      return null;
+    }
+
+    if (session.authTokenHash !== this.hashToken(authToken)) {
+      return null;
+    }
+
+    session.lastAccessedAt = Date.now();
+    return session;
+  }
+
+  delete(sessionId: string): void {
+    this.sessions.delete(sessionId);
+  }
+
+  private cleanup(): void {
+    const now = Date.now();
+    const expired: string[] = [];
+    this.sessions.forEach((session, id) => {
+      if (now - session.createdAt > SESSION_TTL_MS) expired.push(id);
+    });
+    expired.forEach(id => this.sessions.delete(id));
+  }
+
+  private hashToken(token: string): string {
+    return crypto.createHash('sha256').update(token).digest('hex').substring(0, 16);
+  }
+
+  destroy(): void {
+    if (this.cleanupTimer) {
+      clearInterval(this.cleanupTimer);
+      this.cleanupTimer = null;
+    }
+    this.sessions.clear();
+  }
+}
+
+export const mediaSessionManager = new MediaSessionManager();

@@ -10,7 +10,7 @@
 **Release:** v1.1.0 tagged and released on 2026-03-03 (134 commits squash-merged to main)
 **Launcher:** v1.1.1 released — version display, one-click updates, full networking install
 **DAO Proposal:** Live at https://elastos.com/proposals/69a24f49247f130078064edd
-**Last Commit:** feat: dDRM Viewer app, .ddrm.json capsules, WASM renderer, full GUI integration
+**Last Commit:** feat: PC2 Media Runtime — server-side DASH/CENC decryption, Rust WASM cenc-decrypt, MSE player, end-to-end DRM video playback
 
 ### What Just Shipped (v1.1.0 on main)
 
@@ -44,12 +44,22 @@
 - **Media preview** — inline player for content previews
 - **Creator avatars** — resolved from IPFS with proper fallback
 
-#### DRM Playback — WORKING END-TO-END
+#### DRM Playback — WORKING END-TO-END (TWO PIPELINES)
+
+**Pipeline 1: Elacity Player (legacy, for `.edrm` files)**
 - **`.edrm` file double-click** → launches Elacity Player in a dedicated popup window (required for `SharedArrayBuffer`/COOP/COEP)
 - **Lit Protocol DRM** — license acquisition, signature verification, decryption all working; `@lit-protocol/*` pinned to v7.3.0 via npm overrides
-- **Local IPFS playback** — player loads content from local Helia node (`localhost:4200/ipfs/`) with fallback to Elacity CDN
-- **UnixFS DAG path resolution** — `/ipfs/:cid/*` wildcard route resolves nested paths within directory CIDs (DASH segments, manifests)
 - **Particle Universal Account** — SDK v1.0.24 integration fixed (removed `universalGas: true` for correct API shape)
+
+**Pipeline 2: PC2 Media Runtime (NEW, server-side DASH/CENC decryption)**
+- **Server-side decryption** — PC2 node fetches encrypted DASH segments from local IPFS, decrypts via Rust WASM (`cenc-decrypt` crate), strips all DRM signaling, streams clear fMP4 to browser
+- **Lightweight MSE player** — JavaScript-only player using MediaSource Extensions. No EME, no CDM, no SharedArrayBuffer, no COOP/COEP needed. Works inside PC2 iframe sandbox
+- **Rust WASM `cenc-decrypt`** — parses fMP4 boxes (moof/trun/senc/tenc), performs per-sample AES-128-CTR decryption with correct 16-byte IV support. CEK stays in WASM linear memory
+- **DRM stripping** — init segments: `encv→av01`, `enca→mp4a`, remove `sinf`/`pssh`, adjust all ancestor box sizes. Media segments: remove `senc`/`saiz`/`saio`, fix `trun.data_offset`
+- **Two-phase Lit auth** — server prepares SIWE + ReCap message, user signs in market dApp, signature relayed back to init endpoint for CEK recovery
+- **Smart Account aware** — detects Universal Account via Base factory contract, selects correct PSSH for SA address
+- **Local IPFS playback** — content loaded from local Helia node (`localhost:4200/ipfs/`) with fallback to Elacity CDN
+- **UnixFS DAG path resolution** — `/ipfs/:cid/*` wildcard route resolves nested paths within directory CIDs (DASH segments, manifests)
 
 #### Decentralized CDN Network — COMPLETE (Mar 5-6)
 - **NAT Traversal** — `@libp2p/circuit-relay-v2`, `@libp2p/dcutr`, `@libp2p/autonat` wired into Helia node for peer reachability behind NATs
@@ -334,12 +344,34 @@ Full technical spec at `docs/core/ACCESS_PACKAGE_SPEC.md`. Key decisions:
 - [x] **IPC.js args forwarding** — `launchApp` handler passes structured `args` and `windowTitle` to `launch_app()` (Mar 15)
 - [x] **PDF scrollable view** — all pages stacked vertically with scroll, replacing single-page arrow navigation (Mar 15)
 - [x] **Text full-width view** — rendered text image fills window width for readability (Mar 15)
+- [x] **PC2 Media Runtime** — Rust WASM `cenc-decrypt` crate (AES-128-CTR per-sample, 16-byte IVs), MSE player (no EME/CDM), DRM stripping (init+segment), two-phase Lit auth, SA-aware PSSH selection. **End-to-end DASH video playback verified** *(completed Mar 16)*
 - [ ] Lit Chipotle migration — Datil network deprecated ~April 25, 2026, need to migrate to Chipotle REST API
 
 **Known issues:**
 - Elacity frontend UA receipt parsing: `UAReceiptFetcher.enrichOperationsWithContracts` throws `TypeError` after successful on-chain purchase. Bug is in Elacity's frontend, not our code.
 - MPD parser error for image assets: Elacity's media player tries to parse image metadata as DASH manifest. Expected for non-video content.
 - Lit Datil deprecation: Datil network being deprecated ~April 25, 2026 in favor of Chipotle (REST API, API key auth, TEE-based). Migration required.
+
+#### PC2 Media Runtime — WORKING END-TO-END (Mar 15-16)
+
+Built a complete server-side DASH/CENC media decryption pipeline for PC2. Elacity's existing player relies on browser-native DRM (EME/CDM + SharedArrayBuffer) which can't work inside PC2's sandboxed iframes. The PC2 node now intercepts encrypted DASH streams, decrypts them server-side, strips all DRM signaling, and streams clear content to a lightweight MSE-based JavaScript player.
+
+**Two WASM runtimes (both running):**
+- **`ddrm-renderer`** — Non-media assets (images, PDFs, text). Decrypts and renders to pixels server-side.
+- **`cenc-decrypt`** (NEW) — Media (video/audio). Rust crate → `wasm32-wasip1`. Parses fMP4 box structure (moof/trun/senc), performs per-sample AES-128-CTR decryption per CENC standard. CEK never leaves WASM linear memory.
+
+**Key components built:**
+- `pc2-node/src/api/media.ts` — Three endpoints: `/api/media/prepare-auth` (Lit SIWE flow), `/api/media/init` (MPD parse + CEK recovery via Lit Protocol), `/api/media/segment` (fetch encrypted segment from IPFS → WASM decrypt → strip DRM → stream clear content)
+- `pc2-node/crates/cenc-decrypt/` — Rust CENC decryptor (mp4box parser, senc/trun/tenc extraction, AES-128-CTR per-sample decrypt with correct 16-byte IV support)
+- `pc2-node/data/test-apps/pc2-media-runtime/` + `data/installed-apps/pc2-media-runtime/` — Lightweight MSE player (no SharedArrayBuffer, no EME, no CDM)
+- `pc2-node/src/services/media/sessionManager.ts` — In-memory session store (CEK + MPD + init segments)
+- `pc2-node/src/services/media/mpdParser.ts` — DASH MPD XML parser
+- `stripEncryptionSignaling()` — Rewrites init segments: `encv→av01`, `enca→mp4a`, removes `sinf`/`pssh`, adjusts all ancestor box sizes
+- `stripSegmentEncryptionBoxes()` — Removes `senc`/`saiz`/`saio` from media segments, fixes `trun.data_offset`
+- Smart Account detection via Base factory contract for SA-aware PSSH selection
+- Two-phase Lit auth: server prepares SIWE + ReCap, user signs in market app, runtime relays to init
+
+**Verified:** First successful end-to-end playback of Elacity DRM-protected DASH video inside PC2 (AV1 codec, AAC audio, 33.8s duration, 16-byte CENC IVs).
 
 #### Next Up — Engineering Priorities
 1. **Lit Chipotle migration** — CRITICAL. Datil deprecated ~April 25, 2026. Replace v7 SDK with Chipotle REST API. Research at `docs/core/CHIPOTLE_MIGRATION_RESEARCH.md`.
@@ -426,6 +458,7 @@ Full technical spec at `docs/core/ACCESS_PACKAGE_SPEC.md`. Key decisions:
 - [3D Orb + SEO + Rebrand](6431d137-5dd9-4c8e-b042-5d8c54b908a5) — 3D orb integration, network map rebrand to "World Computer", full SEO overhaul, GA4, app icon fixes, mobile responsiveness
 - [dDRM Pipeline E2E](fd6755f0-d73c-4e41-8df3-0f57f15071a2) — @elacity-js/access, Creator Dashboard, Lit Action trust model (Path A), capacity credit auto-detection, decrypt endpoint, decentralization analysis
 - [Secure Viewer & PDF](fd6755f0-d73c-4e41-8df3-0f57f15071a2) — secure viewer pipeline, PDF hybrid rendering, two-layer encryption fix, Lit Pinata/relayer integration, auto-decrypt, parallel pages, dDRM Viewer app, .ddrm.json capsules, WASM renderer, GUI integration
+- [Media Runtime E2E](fd6755f0-d73c-4e41-8df3-0f57f15071a2) — server-side DASH/CENC decryption pipeline, Rust WASM cenc-decrypt crate, MSE player, DRM stripping (init+segment), 16-byte IV fix, Smart Account PSSH, two-phase Lit auth
 
 ---
 
@@ -489,6 +522,18 @@ Full technical spec at `docs/core/ACCESS_PACKAGE_SPEC.md`. Key decisions:
 | `pc2-node/data/test-apps/ddrm-viewer/viewer.css` | Dark theme, full-width document scroll, centered image, badges, scrollbar |
 | `pc2-node/data/test-apps/ddrm-viewer/app.json` | App manifest — capabilities (wallet, network, IPFS, DRM), display settings |
 | `pc2-node/src/api/apps.ts` | dDRM Viewer registration in app map with SVG icon |
+
+#### PC2 Media Runtime (Mar 15-16)
+| File | Purpose |
+|------|---------|
+| `pc2-node/src/api/media.ts` | Media API — prepare-auth, init (MPD+CEK), segment (decrypt+strip+stream) |
+| `pc2-node/crates/cenc-decrypt/src/lib.rs` | WASM entry — orchestrates CENC decryption with tenc-derived IV size |
+| `pc2-node/crates/cenc-decrypt/src/mp4box.rs` | fMP4 box parser — trun, senc, tenc extraction with correct format header skipping |
+| `pc2-node/crates/cenc-decrypt/src/cenc.rs` | AES-128-CTR per-sample decryption (full-sample + subsample support) |
+| `pc2-node/wasm-apps/cenc-decrypt/cenc-decrypt.wasm` | Compiled WASM binary (wasm32-wasip1) |
+| `pc2-node/data/installed-apps/pc2-media-runtime/` | MSE player app (player.js, index.html) — lightweight, no EME/CDM |
+| `pc2-node/src/services/media/sessionManager.ts` | In-memory session store (CEK, tracks, init segments per track) |
+| `pc2-node/src/services/media/mpdParser.ts` | DASH MPD XML parser (tracks, segments, duration, codecs) |
 
 #### WASM Renderer (Mar 15)
 | File | Purpose |

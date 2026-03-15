@@ -154,24 +154,27 @@ Please try recreating the link.`);
             if ( descriptor && descriptor.contractAddress && descriptor.tokenId ) {
                 const channel = descriptor.contractAddress;
                 const tokenId = descriptor.tokenId;
-                const gateway = window.location.origin + '/ipfs/';
-                const fallbackGateway = descriptor.gateway || 'https://ipfs.ela.city/ipfs/';
-                const playerUrl = window.location.origin + '/apps/elacity-player/index.html?channel=' +
-                    encodeURIComponent(channel) + '&tokenId=' + encodeURIComponent(tokenId) +
-                    '&gateway=' + encodeURIComponent(gateway) +
-                    '&fallbackGateway=' + encodeURIComponent(fallbackGateway) +
-                    (descriptor.cid ? '&cid=' + encodeURIComponent(descriptor.cid) : '');
 
-                const w = Math.min(960, screen.availWidth - 100);
-                const h = Math.min(640, screen.availHeight - 100);
-                const left = Math.round((screen.availWidth - w) / 2);
-                const top = Math.round((screen.availHeight - h) / 2);
-                const popup = window.open(playerUrl, 'elacity-player',
-                    'width=' + w + ',height=' + h + ',left=' + left + ',top=' + top + ',toolbar=no,menubar=no,resizable=yes');
-
-                if ( !popup ) {
-                    UIAlert('Popup blocked — please allow popups to play DRM content.');
-                }
+                // Launch PC2 media runtime as a native UIWindow
+                const launch_app = (await import('./launch_app.js')).default;
+                await launch_app({
+                    name: 'pc2-media-runtime',
+                    window_title: (descriptor.title || 'Untitled') + ' — PC2 Media Player',
+                    args: {
+                        channel:         channel,
+                        tokenId:         tokenId,
+                        mediaCid:        descriptor.cid || '',
+                        litCiphertext:   descriptor.litCiphertext || '',
+                        dataToEncryptHash: descriptor.dataToEncryptHash || '',
+                        kid:             descriptor.kid || '',
+                        actionCid:       descriptor.actionCid || '',
+                        authority:       descriptor.authority || '',
+                        chain:           descriptor.chain || 'base',
+                        chainId:         String(descriptor.chainId || 8453),
+                        rpc:             descriptor.rpc || '',
+                        buyerAddress:    descriptor.buyerAddress || '',
+                    },
+                });
             } else {
                 UIAlert('Could not read DRM media descriptor. The file may be corrupted.');
             }
