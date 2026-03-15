@@ -11,6 +11,7 @@ import { getEffectiveStorageLimit } from './info.js';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { getWASMRuntime, type RendererCommand } from '../services/wasm/WASMRuntime.js';
 
 const router = Router();
 
@@ -1129,9 +1130,20 @@ interface DecryptParams {
   buyerAddress: string;
 }
 
-async function decryptAssetTwoLayer(params: DecryptParams): Promise<Buffer> {
+/**
+ * Recover the CEK via Lit Protocol and fetch encrypted bytes from IPFS.
+ * Returns { cekBase64, encryptedBytes } — the CEK is base64-encoded, the
+ * encrypted bytes are raw. Neither the CEK nor plaintext is exposed here;
+ * callers choose whether to AES-decrypt in Node.js or delegate to WASM.
+ */
+interface CEKRecoveryResult {
+  cekBase64: string;
+  encryptedBytes: Buffer;
+}
+
+async function recoverCEKAndFetchData(params: DecryptParams): Promise<CEKRecoveryResult> {
   const {
-    litCiphertext, dataToEncryptHash, iv, encryptedDataCid, kid,
+    litCiphertext, dataToEncryptHash, encryptedDataCid, kid,
     actionCid, authority, chain, chainId, rpc, buyerAddress,
   } = params;
 
@@ -1142,7 +1154,7 @@ async function decryptAssetTwoLayer(params: DecryptParams): Promise<Buffer> {
   const effectiveChain = chain || 'base';
   const effectiveRpc = rpc || DEFAULT_RPC;
 
-  logger.info(`[Lit] Decrypt: kid=${kid}, buyer=${buyerAddress}, cid=${encryptedDataCid}`);
+  logger.info(`[Lit] Recover CEK: kid=${kid}, buyer=${buyerAddress}, cid=${encryptedDataCid}`);
 
   const wallet = await getServerWallet();
   const client = await getLitClient();
@@ -1202,9 +1214,19 @@ async function decryptAssetTwoLayer(params: DecryptParams): Promise<Buffer> {
     throw new Error(`Failed to fetch encrypted file from IPFS: ${encryptedDataCid}`);
   }
 
+  return { cekBase64, encryptedBytes };
+}
+
+/**
+ * Full two-layer decryption (Node.js path): Lit recovers CEK, AES-GCM decrypts file.
+ * Returns raw decrypted Buffer. Caller is responsible for zeroing it after use.
+ */
+async function decryptAssetTwoLayer(params: DecryptParams): Promise<Buffer> {
+  const { cekBase64, encryptedBytes } = await recoverCEKAndFetchData(params);
+
   const crypto = await import('crypto');
   const cekBytes = Buffer.from(cekBase64, 'base64');
-  const ivBytes = Buffer.from(iv, 'base64');
+  const ivBytes = Buffer.from(params.iv, 'base64');
 
   if (cekBytes.length !== 32) {
     logger.warn(`[Lit] CEK length unexpected: ${cekBytes.length} bytes (expected 32)`);
@@ -1218,12 +1240,11 @@ async function decryptAssetTwoLayer(params: DecryptParams): Promise<Buffer> {
   decipher.setAuthTag(authTag);
   const decryptedBytes = Buffer.concat([decipher.update(ciphertextOnly), decipher.final()]);
 
-  // Zero intermediate key material
   cekBytes.fill(0);
 
   if (decryptedBytes.length === 0) throw new Error('AES decryption returned empty data');
 
-  logger.info(`[Lit] Two-layer decrypt complete: ${decryptedBytes.length} bytes for ${buyerAddress}`);
+  logger.info(`[Lit] Two-layer decrypt complete: ${decryptedBytes.length} bytes for ${params.buyerAddress}`);
   return decryptedBytes;
 }
 
@@ -1263,10 +1284,86 @@ router.post('/lit/decrypt', authenticate, async (req: AuthenticatedRequest, res:
   }
 });
 
+// ── WASM Renderer Integration ────────────────────────────────────────
+//
+// The dDRM WASM renderer performs decryption + rendering inside WASM linear
+// memory, ensuring CEK and plaintext never touch Node.js memory.
+// Path: wasm-apps/ddrm-renderer/ddrm-renderer.wasm
+
+const DDRM_RENDERER_PATH = 'wasm-apps/ddrm-renderer/ddrm-renderer.wasm';
+let cachedRendererBinary: ArrayBuffer | null = null;
+
+async function loadRendererBinary(): Promise<ArrayBuffer> {
+  if (cachedRendererBinary) return cachedRendererBinary;
+  const runtime = getWASMRuntime();
+  cachedRendererBinary = await runtime.loadFromFile(DDRM_RENDERER_PATH);
+  logger.info(`[SecureView] dDRM renderer WASM loaded (${cachedRendererBinary.byteLength} bytes)`);
+  return cachedRendererBinary;
+}
+
+interface WASMRenderResult {
+  contentType: string;
+  rendered: Buffer;
+  totalPages?: number;
+  executionTimeMs: number;
+}
+
+/**
+ * Render an asset via the WASM universal renderer.
+ * Recovers CEK from Lit, fetches encrypted bytes from IPFS, then delegates
+ * decryption + rendering to the WASM sandbox. Returns null if WASM rendering
+ * is not available for the given MIME type.
+ */
+async function renderViaWASM(
+  params: DecryptParams,
+  mime: string,
+  maxWidth: number,
+  page?: number,
+): Promise<WASMRenderResult | null> {
+  const { cekBase64, encryptedBytes } = await recoverCEKAndFetchData(params);
+
+  const watermarkText = `${params.buyerAddress.substring(0, 10)}...${params.buyerAddress.substring(params.buyerAddress.length - 6)} ${new Date().toISOString().split('T')[0]}`;
+
+  const command: RendererCommand = {
+    cek_b64: cekBase64,
+    iv_b64: params.iv,
+    mime_type: mime,
+    watermark: watermarkText,
+    page: page ? page - 1 : undefined,
+    max_width: maxWidth,
+    max_height: Math.round(maxWidth * 1.5),
+    output_format: 'jpeg',
+  };
+
+  const wasmBinary = await loadRendererBinary();
+  const runtime = getWASMRuntime();
+  const output = await runtime.executeRenderer(wasmBinary, command, encryptedBytes, {
+    timeoutMs: 60000,
+  });
+
+  if (!output.result.success) {
+    throw new Error(`WASM renderer: ${output.result.error}`);
+  }
+
+  if (!output.renderedBytes) {
+    throw new Error('WASM renderer produced no output');
+  }
+
+  return {
+    contentType: output.result.content_type || 'image/jpeg',
+    rendered: output.renderedBytes,
+    totalPages: output.result.total_pages,
+    executionTimeMs: output.executionTimeMs,
+  };
+}
+
 /**
  * POST /api/storage/lit/secure-view
  * Secure viewer: decrypts asset server-side, renders to lossy image, streams binary.
  * The raw file NEVER leaves server memory. Browser receives only rendered pixels.
+ *
+ * Primary path: WASM renderer (CEK/plaintext confined to WASM linear memory)
+ * Fallback: Node.js Sharp/Canvas/PDF.js (for PDFs or when WASM unavailable)
  *
  * Body: same as /lit/decrypt, plus:
  *   mimeType: string,   -- original asset MIME (image/png, application/pdf, etc.)
@@ -1274,7 +1371,7 @@ router.post('/lit/decrypt', authenticate, async (req: AuthenticatedRequest, res:
  *   maxWidth?: number,   -- max render width (default 1200)
  *
  * Response: binary image stream (image/jpeg or image/png)
- *   Headers: X-Asset-Type, X-Asset-Pages (for PDFs), X-Watermark
+ *   Headers: X-Asset-Type, X-Asset-Pages (for PDFs), X-Watermark, X-Renderer
  */
 router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, res: Response) => {
   try {
@@ -1293,9 +1390,7 @@ router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, 
     const mime = (mimeType || 'application/octet-stream').toLowerCase();
     const maxWidth = Math.min(reqMaxWidth || 1200, 2400);
 
-    const decryptedBytes = await decryptAssetTwoLayer(req.body);
-
-    // Security headers: no caching, no sniffing, inline only
+    // Security headers
     res.set({
       'Cache-Control': 'no-store, no-cache, must-revalidate, private',
       'Pragma': 'no-cache',
@@ -1305,7 +1400,34 @@ router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, 
       'X-Watermark': buyerAddress,
     });
 
-    // ── Image pipeline ───────────────────────────────────
+    // ── WASM Renderer Path ──────────────────────────────
+    // For images and text: decrypt + render inside WASM linear memory.
+    // CEK and plaintext never touch Node.js memory.
+    const wasmSupportedTypes = mime.startsWith('image/') || mime.startsWith('text/');
+    if (wasmSupportedTypes) {
+      try {
+        const wasmResult = await renderViaWASM(req.body, mime, maxWidth, pageNum);
+        if (wasmResult) {
+          res.set('Content-Type', wasmResult.contentType);
+          res.set('Content-Length', String(wasmResult.rendered.length));
+          res.set('X-Renderer', 'wasm');
+          if (wasmResult.totalPages) {
+            res.set('X-Asset-Pages', String(wasmResult.totalPages));
+          }
+          res.send(wasmResult.rendered);
+          logger.info(`[SecureView] WASM rendered ${mime}: ${wasmResult.rendered.length} bytes (${wasmResult.executionTimeMs}ms) for ${buyerAddress}`);
+          return;
+        }
+      } catch (wasmErr: any) {
+        logger.warn(`[SecureView] WASM renderer failed, falling back to Node.js: ${wasmErr.message}`);
+      }
+    }
+
+    // ── Node.js Fallback Path ───────────────────────────
+    // Used for PDFs (WASM PDF not yet implemented) and when WASM fails.
+    const decryptedBytes = await decryptAssetTwoLayer(req.body);
+
+    // ── Image pipeline (fallback) ────────────────────────
     if (mime.startsWith('image/')) {
       let sharpMod: any;
       try {
@@ -1320,12 +1442,10 @@ router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, 
       const watermarkText = `${buyerAddress.substring(0, 10)}...${buyerAddress.substring(buyerAddress.length - 6)}`;
       const timestamp = new Date().toISOString().split('T')[0];
 
-      // Get image dimensions for watermark SVG sizing
       const metadata = await sharpMod(decryptedBytes).metadata();
       const imgW = Math.min(metadata.width || 800, maxWidth);
       const imgH = metadata.height ? Math.round(metadata.height * (imgW / (metadata.width || 800))) : 600;
 
-      // Semi-transparent tiled watermark overlay
       const watermarkSvg = Buffer.from(`<svg width="${imgW}" height="${imgH}" xmlns="http://www.w3.org/2000/svg">
         <defs>
           <pattern id="wm" x="0" y="0" width="320" height="180" patternUnits="userSpaceOnUse" patternTransform="rotate(-25)">
@@ -1346,9 +1466,10 @@ router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, 
 
       res.set('Content-Type', 'image/jpeg');
       res.set('Content-Length', String(rendered.length));
+      res.set('X-Renderer', 'nodejs-sharp');
       res.send(rendered);
 
-      logger.info(`[SecureView] Image rendered: ${rendered.length} bytes (${imgW}x${imgH}) for ${buyerAddress}`);
+      logger.info(`[SecureView] Image rendered (fallback): ${rendered.length} bytes (${imgW}x${imgH}) for ${buyerAddress}`);
       return;
     }
 
@@ -1415,8 +1536,6 @@ router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, 
 
       await pdfPage.render({ canvasContext: ctx, viewport: scaledVp }).promise;
 
-      // Hybrid text overlay: PDF.js can't render font outlines in Node.js,
-      // so we extract text content and draw it on top of the rendered graphics
       const textContent = await pdfPage.getTextContent();
       ctx.fillStyle = '#000000';
       for (const item of textContent.items as any[]) {
@@ -1429,7 +1548,6 @@ router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, 
         ctx.fillText(item.str, x, y);
       }
 
-      // Watermark overlay
       const wmText = `${buyerAddress.substring(0, 10)}...${buyerAddress.substring(buyerAddress.length - 6)}`;
       ctx.save();
       ctx.globalAlpha = 0.08;
@@ -1453,13 +1571,14 @@ router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, 
       res.set('Content-Length', String(rendered.length));
       res.set('X-Asset-Pages', String(totalPages));
       res.set('X-Asset-Page', String(requestedPage));
+      res.set('X-Renderer', 'nodejs-pdfjs');
       res.send(rendered);
 
       logger.info(`[SecureView] PDF page ${requestedPage}/${totalPages} rendered: ${rendered.length} bytes for ${buyerAddress}`);
       return;
     }
 
-    // ── Text pipeline ────────────────────────────────────
+    // ── Text pipeline (fallback) ─────────────────────────
     if (mime.startsWith('text/')) {
       let canvasMod: any;
       let sharpMod: any;
@@ -1502,7 +1621,6 @@ router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, 
         y += lineHeight;
       }
 
-      // Watermark
       const wmText = `${buyerAddress.substring(0, 10)}...${buyerAddress.substring(buyerAddress.length - 6)}`;
       ctx.save();
       ctx.globalAlpha = 0.06;
@@ -1522,13 +1640,14 @@ router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, 
 
       res.set('Content-Type', 'image/png');
       res.set('Content-Length', String(rendered.length));
+      res.set('X-Renderer', 'nodejs-canvas');
       res.send(rendered);
 
-      logger.info(`[SecureView] Text rendered: ${rendered.length} bytes (${visibleLines.length} lines) for ${buyerAddress}`);
+      logger.info(`[SecureView] Text rendered (fallback): ${rendered.length} bytes (${visibleLines.length} lines) for ${buyerAddress}`);
       return;
     }
 
-    // ── Unsupported type: return metadata only ───────────
+    // ── Unsupported type ─────────────────────────────────
     decryptedBytes.fill(0);
     res.status(415).json({
       error: `Secure viewing not yet supported for ${mime}. Use /lit/decrypt for raw access.`,

@@ -181,6 +181,56 @@ Please try recreating the link.`);
         }
     }
     //----------------------------------------------------------------
+    // Is this a .ddrm.json file? (dDRM capsule - protected non-media asset)
+    //----------------------------------------------------------------
+    else if ( $(el_item).attr('data-name').toLowerCase().endsWith('.ddrm.json') ) {
+        try {
+            let capsule = null;
+            try {
+                const apiOrigin = window.api_origin || window.location.origin;
+                const token = window.auth_token || (typeof puter !== 'undefined' && puter.authToken) || '';
+                const readRes = await fetch(`${ apiOrigin}/read`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        ...(token ? { 'Authorization': `Bearer ${ token}` } : {}),
+                    },
+                    body: JSON.stringify({ path: item_path }),
+                });
+                if ( !readRes.ok ) throw new Error(`Read failed: ${ readRes.status}`);
+                const text = await readRes.text();
+                capsule = JSON.parse(text);
+            } catch (e) {
+                console.error('Error reading .ddrm.json capsule:', e);
+            }
+
+            if ( capsule && capsule.encryptedDataCid && capsule.kid ) {
+                const launch_app = (await import('./launch_app.js')).default;
+                await launch_app({
+                    name: 'ddrm-viewer',
+                    window_title: (capsule.title || 'Untitled') + ' — dDRM Viewer',
+                    args: {
+                        litCiphertext:     capsule.litCiphertext || '',
+                        dataToEncryptHash: capsule.dataToEncryptHash || '',
+                        encryptedDataCid:  capsule.encryptedDataCid,
+                        iv:                capsule.iv || '',
+                        kid:               capsule.kid,
+                        buyerAddress:      capsule.acquiredBy || '',
+                        mimeType:          capsule.mimeType || 'application/octet-stream',
+                        title:             capsule.title || 'Untitled',
+                        actionCid:         capsule.actionCid || '',
+                        authority:         capsule.authority || '',
+                    },
+                });
+            } else {
+                UIAlert('Could not read dDRM capsule descriptor. The file may be corrupted or missing required fields.');
+            }
+        } catch ( error ) {
+            console.error('Error opening dDRM capsule:', error);
+            UIAlert(`Error opening dDRM capsule: ${ error.message}`);
+        }
+    }
+    //----------------------------------------------------------------
     // Is this a trashed file?
     //----------------------------------------------------------------
     else if ( item_path.startsWith(`${window.trash_path }/`) ) {

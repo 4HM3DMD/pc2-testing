@@ -6,11 +6,11 @@
 
 ## Where We Are
 
-**Branch:** `dDRM-extended` (branched from `feature/elacity-ddrm-marketplace` on Mar 13)
+**Branch:** `feature/ddrm-universal-access-layer` (branched from `feature/elacity-ddrm-marketplace`)
 **Release:** v1.1.0 tagged and released on 2026-03-03 (134 commits squash-merged to main)
 **Launcher:** v1.1.1 released — version display, one-click updates, full networking install
 **DAO Proposal:** Live at https://elastos.com/proposals/69a24f49247f130078064edd
-**Last Commit:** — feat: secure viewer pipeline, PDF hybrid rendering, auto-decrypt, parallel page loading
+**Last Commit:** feat: dDRM Viewer app, .ddrm.json capsules, WASM renderer, full GUI integration
 
 ### What Just Shipped (v1.1.0 on main)
 
@@ -292,7 +292,7 @@ Full technical spec at `docs/core/ACCESS_PACKAGE_SPEC.md`. Key decisions:
 - **Tier 2 (weeks):** AI models (GGUF → Ollama), code packages, datasets, PC2 dApps — need local runtime integration
 - **Tier 3 (months):** Software licensing, API marketplace, agent marketplace — need capsule sandboxes / Runtime v2
 
-**Implementation branch:** `dDRM-extended` (branched from `feature/elacity-ddrm-marketplace` on Mar 13)
+**Implementation branch:** `feature/ddrm-universal-access-layer` (branched from `feature/elacity-ddrm-marketplace`)
 
 **Testing status (updated Mar 14):**
 - [x] Lit Protocol production connectivity — **WORKING** via server-side pc2-node backend (capacity credits + delegation)
@@ -324,8 +324,17 @@ Full technical spec at `docs/core/ACCESS_PACKAGE_SPEC.md`. Key decisions:
 - [x] Bug fix: MetaMask "Estimated changes: Unavailable" — pre-estimate gas + chain switch settle delay (Mar 15)
 - [x] Bug fix: Library cache not refreshing after purchase — immediate + delayed cache invalidation (Mar 15)
 - [x] Thumbnail API fix — strip data URI prefix for clean base64 upload to Elacity IPFS (Mar 15)
+- [x] **WASM Renderer** — Rust crate (`wasm-renderer/`) compiled to `wasm32-wasip1`, renders text→image inside WASM linear memory (Mar 15)
+- [x] **WASMRuntime.ts** — Node.js WASI host (888 lines) using `@wasmer/wasi` + MemFS for file-based I/O with WASM module (Mar 15)
+- [x] **dDRM Viewer app** — dedicated PC2 app (`data/test-apps/ddrm-viewer/`) with dark UI, two display modes (image centered, document full-width scrollable), renderer/watermark badges, anti-piracy measures (Mar 15)
+- [x] **dDRM Viewer windowing** — launches as native PC2 UIWindow (iframe) via IPC `postMessage` → `launch_app()`, NOT browser popup (Mar 15)
+- [x] **.ddrm.json capsule format** — descriptor files for non-media assets containing encryptedDataCid, kid, litCiphertext, mimeType, etc. Saved to Documents folder (Mar 15)
+- [x] **GUI file type integration** — `.ddrm.json` icon (indigo shield), MIME registration (`application/x-ddrm+json`), double-click opens dDRM Viewer (Mar 15)
+- [x] **Market "Open" button** — launches dDRM Viewer from asset detail view via IPC (Mar 15)
+- [x] **IPC.js args forwarding** — `launchApp` handler passes structured `args` and `windowTitle` to `launch_app()` (Mar 15)
+- [x] **PDF scrollable view** — all pages stacked vertically with scroll, replacing single-page arrow navigation (Mar 15)
+- [x] **Text full-width view** — rendered text image fills window width for readability (Mar 15)
 - [ ] Lit Chipotle migration — Datil network deprecated ~April 25, 2026, need to migrate to Chipotle REST API
-- [ ] WASM-wrapped universal renderer — Rust→WASM binary for decrypt+render in opaque WASM memory (CEK/plaintext never in Node.js)
 
 **Known issues:**
 - Elacity frontend UA receipt parsing: `UAReceiptFetcher.enrichOperationsWithContracts` throws `TypeError` after successful on-chain purchase. Bug is in Elacity's frontend, not our code.
@@ -333,19 +342,22 @@ Full technical spec at `docs/core/ACCESS_PACKAGE_SPEC.md`. Key decisions:
 - Lit Datil deprecation: Datil network being deprecated ~April 25, 2026 in favor of Chipotle (REST API, API key auth, TEE-based). Migration required.
 
 #### Next Up — Engineering Priorities
-1. **WASM-wrapped universal renderer** — Rust→WASM binary that handles decrypt+render for ALL asset types inside opaque WASM memory. CEK and plaintext never touch Node.js. Equivalent security to Elacity's WASM video player but universal (images, PDFs, text, audio, WASM apps).
-2. **Lit Chipotle migration** — CRITICAL. Datil deprecated ~April 25, 2026. Replace v7 SDK with Chipotle REST API.
-3. **On-chain indexer prototype** — replace Elacity GraphQL dependency with event scanner (The Graph / custom)
-4. **Self-provisioned RLI tokens** — each node mints own capacity credits, removes Elacity wallet dependency
-5. **AI Model Marketplace alpha** — first non-media vertical: GGUF → encrypt → IPFS → ACCESS_TOKEN → decrypt → Ollama
-7. ~~**Consumer decrypt endpoint**~~ — DONE (Mar 14) — Lit Action `executeJs()` with on-chain access check
-8. ~~**Lit Action trust model**~~ — DONE (Mar 14) — self-ref conditions, access check in action code
-9. ~~**Capacity credit auto-detection**~~ — DONE (Mar 14) — Chronicle Yellowstone query, handles 15-day rotation
-10. ~~**Universal asset viewer (images)**~~ — DONE (Mar 14) — inline blob URL rendering in Market dApp
-11. ~~**`@elacity-js/access` package**~~ — DONE (Mar 13)
-12. ~~**Creator Dashboard dApp**~~ — DONE (Mar 13-14)
-13. ~~**Elacity IPFS pipeline**~~ — DONE (Mar 14)
-14. ~~**On-chain purchase verification**~~ — DONE (Mar 14)
+1. **Lit Chipotle migration** — CRITICAL. Datil deprecated ~April 25, 2026. Replace v7 SDK with Chipotle REST API. Research at `docs/core/CHIPOTLE_MIGRATION_RESEARCH.md`.
+2. **WASM renderer hardening** — Extend Rust→WASM binary to handle PDF and image rendering (currently text only). Goal: CEK and plaintext never touch Node.js for any asset type.
+3. **Viewer UX enhancements** — PDF zoom/search, image zoom/pan, audio player, code syntax highlighting. Build on the scrollable document foundation.
+4. **On-chain indexer prototype** — replace Elacity GraphQL dependency with event scanner (The Graph / custom)
+5. **Self-provisioned RLI tokens** — each node mints own capacity credits, removes Elacity wallet dependency
+6. **AI Model Marketplace alpha** — first non-media vertical: GGUF → encrypt → IPFS → ACCESS_TOKEN → decrypt → Ollama
+7. ~~**dDRM Viewer app**~~ — DONE (Mar 15) — dedicated PC2 app with image/document display modes, native windowing, .ddrm.json capsule integration
+8. ~~**WASM renderer (text)**~~ — DONE (Mar 15) — Rust→WASM text rendering via WASMRuntime.ts
+9. ~~**Consumer decrypt endpoint**~~ — DONE (Mar 14) — Lit Action `executeJs()` with on-chain access check
+10. ~~**Lit Action trust model**~~ — DONE (Mar 14) — self-ref conditions, access check in action code
+11. ~~**Capacity credit auto-detection**~~ — DONE (Mar 14) — Chronicle Yellowstone query, handles 15-day rotation
+12. ~~**Universal asset viewer (images)**~~ — DONE (Mar 14) — inline blob URL rendering in Market dApp
+13. ~~**`@elacity-js/access` package**~~ — DONE (Mar 13)
+14. ~~**Creator Dashboard dApp**~~ — DONE (Mar 13-14)
+15. ~~**Elacity IPFS pipeline**~~ — DONE (Mar 14)
+16. ~~**On-chain purchase verification**~~ — DONE (Mar 14)
 15. **Create GitHub release `pc2-binaries-v1`** — run `fetch-binaries.sh all`, upload assets to release (DEFERRED)
 16. **Gateway "node offline" page** — replaces infinite "initializing" spinner
 17. **Fiat onramp** — Particle Smart Account + Stripe/Moonpay
@@ -413,7 +425,7 @@ Full technical spec at `docs/core/ACCESS_PACKAGE_SPEC.md`. Key decisions:
 - [Network Map + Strategy](d9445cb9-12bd-437e-8d4e-ebb35ef40d64) — network map visual upgrade, universal asset strategy, app manifest spec, binary manager, handover
 - [3D Orb + SEO + Rebrand](6431d137-5dd9-4c8e-b042-5d8c54b908a5) — 3D orb integration, network map rebrand to "World Computer", full SEO overhaul, GA4, app icon fixes, mobile responsiveness
 - [dDRM Pipeline E2E](fd6755f0-d73c-4e41-8df3-0f57f15071a2) — @elacity-js/access, Creator Dashboard, Lit Action trust model (Path A), capacity credit auto-detection, decrypt endpoint, decentralization analysis
-- [Secure Viewer & PDF](current-session) — secure viewer pipeline, PDF hybrid rendering, two-layer encryption fix, Lit Pinata/relayer integration, auto-decrypt, parallel pages
+- [Secure Viewer & PDF](fd6755f0-d73c-4e41-8df3-0f57f15071a2) — secure viewer pipeline, PDF hybrid rendering, two-layer encryption fix, Lit Pinata/relayer integration, auto-decrypt, parallel pages, dDRM Viewer app, .ddrm.json capsules, WASM renderer, GUI integration
 
 ---
 
@@ -465,9 +477,25 @@ Full technical spec at `docs/core/ACCESS_PACKAGE_SPEC.md`. Key decisions:
 #### Secure Viewer Pipeline (Mar 15)
 | File | Purpose |
 |------|---------|
-| `pc2-node/src/api/storage.ts` (`/lit/secure-view`) | Server-side asset rendering: Sharp (images), PDF.js+Canvas (PDFs), Canvas (text) |
-| `pc2-node/data/test-apps/elacity-market/app.js` | Auto-decrypt, parallel PDF page loading, loading overlay, scrollable PDF container |
+| `pc2-node/src/api/storage.ts` (`/lit/secure-view`) | Server-side asset rendering: Sharp (images), PDF.js+Canvas (PDFs), Canvas (text), WASM fallback |
+| `pc2-node/data/test-apps/elacity-market/app.js` | Auto-decrypt, "Open" button for dDRM Viewer, .ddrm.json capsule save, IPC launch |
 | `pc2-node/data/test-apps/elacity-creator/app.js` | PDF thumbnail generation via `/api/storage/thumbnail` |
+
+#### dDRM Viewer App (Mar 15)
+| File | Purpose |
+|------|---------|
+| `pc2-node/data/test-apps/ddrm-viewer/index.html` | Viewer HTML — header, loading/error states, image + document containers, footer |
+| `pc2-node/data/test-apps/ddrm-viewer/viewer.js` | Client JS — param parsing (puter.args + URL), secure-view API calls, display modes, anti-piracy |
+| `pc2-node/data/test-apps/ddrm-viewer/viewer.css` | Dark theme, full-width document scroll, centered image, badges, scrollbar |
+| `pc2-node/data/test-apps/ddrm-viewer/app.json` | App manifest — capabilities (wallet, network, IPFS, DRM), display settings |
+| `pc2-node/src/api/apps.ts` | dDRM Viewer registration in app map with SVG icon |
+
+#### WASM Renderer (Mar 15)
+| File | Purpose |
+|------|---------|
+| `pc2-node/wasm-renderer/Cargo.toml` | Rust crate — AES-GCM decrypt + image rendering in WASM linear memory |
+| `pc2-node/wasm-apps/ddrm-renderer/ddrm-renderer.wasm` | Compiled WASM binary (wasm32-wasip1) |
+| `pc2-node/src/services/wasm/WASMRuntime.ts` | Node.js WASI host — @wasmer/wasi + MemFS orchestration (888 lines) |
 
 ### Backend APIs
 | File | Purpose |
@@ -480,11 +508,13 @@ Full technical spec at `docs/core/ACCESS_PACKAGE_SPEC.md`. Key decisions:
 ### GUI (file explorer, IPC)
 | File | Purpose |
 |------|---------|
-| `src/gui/src/helpers/open_item.js` | `.edrm` double-click → opens player popup |
-| `src/gui/src/IPC.js` | `openFolder` IPC handler for dApp→GUI communication |
-| `src/gui/src/helpers/item_icon.js` | `.edrm` custom icon |
-| `src/gui/src/lib/mime.js` | `.edrm` MIME type registration |
-| `src/gui/src/icons/file-edrm.svg` | Padlock + green tick icon for DRM files |
+| `src/gui/src/helpers/open_item.js` | `.edrm` → player popup; `.ddrm.json` → dDRM Viewer via `launch_app()` |
+| `src/gui/src/IPC.js` | `openFolder` handler + `launchApp` handler (forwards args/windowTitle to `launch_app`) |
+| `src/gui/src/helpers/item_icon.js` | `.edrm` and `.ddrm.json` custom icons |
+| `src/gui/src/helpers/content_type_to_icon.js` | `application/x-ddrm+json` → `file-ddrm.svg` mapping |
+| `src/gui/src/lib/mime.js` | `.edrm` and `.ddrm.json` MIME type registration |
+| `src/gui/src/icons/file-edrm.svg` | Padlock + green tick icon for media DRM files |
+| `src/gui/src/icons/file-ddrm.svg` | Indigo shield icon with "D" badge for dDRM capsule files |
 
 ### Creator Dashboard dApp (runs inside iframe)
 | File | Purpose |
@@ -564,7 +594,7 @@ Passwords: ROTATED — stored in password manager, not in git
 
 | Repository | Branch | Status |
 |------------|--------|--------|
-| [pc2.net](https://github.com/Elacity/pc2.net) | `dDRM-extended` | Active development (branched from `feature/elacity-ddrm-marketplace`) |
+| [pc2.net](https://github.com/Elacity/pc2.net) | `feature/ddrm-universal-access-layer` | Active development (branched from `feature/elacity-ddrm-marketplace`) |
 | [elastos-launcher](https://github.com/Elacity/elastos-launcher) | `main` | v1.1.1 released |
 | [document-portal](https://github.com/Elacity/document-portal) | `main` | Up to date |
 | [js-sdk](https://github.com/Elacity/js-sdk) | — | Elacity SDK (reference) |

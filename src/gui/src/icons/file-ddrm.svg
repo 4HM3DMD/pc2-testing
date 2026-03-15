@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" height="48" width="48" viewBox="0 0 48 48">
+    <title>file ddrm capsule</title>
+    <g class="nc-icon-wrapper">
+        <path fill="#5C6BC0"
+            d="M41,47H7c-1.105,0-2-0.895-2-2V3c0-1.105,0.895-2,2-2l24,0l12,12v32C43,46.105,42.105,47,41,47z"></path>
+        <path fill="#3949AB" d="M31,1v10c0,1.105,0.895,2,2,2h10L31,1z"></path>
+        <g transform="translate(14, 17)">
+            <path d="M10 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linejoin="round"/>
+            <circle cx="10" cy="11" r="2" fill="#FFFFFF"/>
+        </g>
+        <circle cx="38" cy="42" r="5" fill="#6366F1"/>
+        <text x="38" y="44.5" text-anchor="middle" fill="#FFFFFF" font-size="7" font-weight="bold" font-family="Arial, sans-serif">D</text>
+    </g>
+</svg>

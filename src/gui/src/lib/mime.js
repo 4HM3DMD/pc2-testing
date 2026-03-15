@@ -47,6 +47,11 @@ function Mime() {
       return 'application/x-edrm';
     }
     
+    // dDRM capsule (protected non-media asset)
+    if (ext === 'ddrm.json') {
+      return 'application/x-ddrm+json';
+    }
+    
     return (hasDot || !hasPath) && this._types[ext] || null;
   };
   Mime.prototype.getExtension = function(type) {
@@ -59,6 +64,10 @@ function Mime() {
     
     if (type === 'application/x-edrm') {
       return 'edrm';
+    }
+    
+    if (type === 'application/x-ddrm+json') {
+      return 'ddrm.json';
     }
     
     return type && this._extensions[type.toLowerCase()] || null;

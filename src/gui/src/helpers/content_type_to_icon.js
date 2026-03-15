@@ -109,6 +109,10 @@ const content_type_to_icon = (type) => {
     {
         icon = 'file-edrm.svg';
     }
+    else if ( type === 'application/x-ddrm+json' )
+    {
+        icon = 'file-ddrm.svg';
+    }
     else
     {
         icon = 'file.svg';

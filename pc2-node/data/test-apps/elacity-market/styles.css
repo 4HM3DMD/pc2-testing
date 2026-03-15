@@ -749,6 +749,17 @@ body {
 }
 .download-decrypt-btn:hover { background: #15803d; border-color: #15803d; color: #fff; }
 .download-decrypt-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.open-viewer-btn {
+  margin-bottom: 12px;
+  gap: 6px;
+  font-weight: 600;
+  background: var(--accent);
+  color: #fff;
+  border: 1px solid var(--accent);
+}
+.open-viewer-btn:hover { background: var(--accent-hover); border-color: var(--accent-hover); color: #fff; }
+.open-viewer-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .download-status {
   font-size: 12px;
   padding: 6px 12px;

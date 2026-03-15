@@ -23,6 +23,31 @@ export interface WASMExecutionResult {
     executionTimeMs?: number;
 }
 
+export interface RendererCommand {
+    cek_b64: string;
+    iv_b64: string;
+    mime_type: string;
+    watermark?: string;
+    page?: number;
+    max_width?: number;
+    max_height?: number;
+    output_format?: 'jpeg' | 'webp' | 'png';
+}
+
+export interface RendererResult {
+    success: boolean;
+    error?: string;
+    content_type?: string;
+    total_pages?: number;
+    output_size?: number;
+}
+
+export interface RendererOutput {
+    result: RendererResult;
+    renderedBytes: Buffer | null;
+    executionTimeMs: number;
+}
+
 export interface WASMExecutionOptions {
     timeoutMs?: number;      // Execution timeout (default: 30000ms)
     maxMemoryMb?: number;    // Max memory for this execution (default: 512MB)
@@ -483,6 +508,272 @@ export class WASMRuntime {
                 error: error.message || 'Unknown error',
             };
         }
+    }
+
+    /**
+     * Write raw bytes to MemFS (without reading from host filesystem).
+     */
+    private writeToMemFS(wasiPath: string, data: Uint8Array | Buffer): void {
+        if (!this.memFs) {
+            throw new Error('WASMRuntime not properly initialized');
+        }
+
+        const dir = path.dirname(wasiPath);
+        if (dir !== '/' && dir !== '.') {
+            try {
+                this.memFs.createDir(dir);
+            } catch {
+                // Directory might already exist
+            }
+        }
+
+        const file = this.memFs.open(wasiPath, { read: true, write: true, create: true });
+        file.write(new Uint8Array(data));
+        file.flush();
+    }
+
+    /**
+     * Read raw bytes from MemFS.
+     * Returns null if the file doesn't exist.
+     */
+    private readFromMemFS(wasiPath: string): Uint8Array | null {
+        if (!this.memFs) return null;
+        try {
+            const file = this.memFs.open(wasiPath, { read: true, write: false, create: false });
+            const content = file.read();
+            return content ?? null;
+        } catch {
+            return null;
+        }
+    }
+
+    /**
+     * Execute the dDRM universal renderer WASM binary.
+     *
+     * Orchestrates MemFS lifecycle:
+     *   1. Write /input/command.json (render parameters + CEK)
+     *   2. Write /input/encrypted.bin (raw encrypted content)
+     *   3. Run WASI _start
+     *   4. Read /output/result.json + /output/rendered.bin
+     *
+     * CEK and plaintext are confined to WASM linear memory.
+     */
+    async executeRenderer(
+        wasmBinary: ArrayBuffer | Uint8Array,
+        command: RendererCommand,
+        encryptedBytes: Buffer,
+        options?: { timeoutMs?: number }
+    ): Promise<RendererOutput> {
+        const timeoutMs = options?.timeoutMs ?? this.defaultTimeoutMs;
+        const startTime = Date.now();
+
+        try {
+            await this.acquireExecutionSlot();
+        } catch (error: any) {
+            return {
+                result: { success: false, error: `Queue error: ${error.message}` },
+                renderedBytes: null,
+                executionTimeMs: Date.now() - startTime,
+            };
+        }
+
+        try {
+            if (!this.initialized) {
+                await this.initialize();
+            }
+
+            // Fresh MemFS for isolation
+            this.clearMemFS();
+
+            // Write inputs to MemFS
+            const commandJson = JSON.stringify(command);
+            this.writeToMemFS('/input/command.json', Buffer.from(commandJson, 'utf-8'));
+            this.writeToMemFS('/input/encrypted.bin', encryptedBytes);
+
+            logger.info(`[WASMRuntime] Renderer input: command=${commandJson.length}B, encrypted=${encryptedBytes.length}B`);
+
+            // Run WASI _start with timeout
+            const wasiResult = await this.executeWASIStart(wasmBinary, timeoutMs);
+            if (!wasiResult.success) {
+                return {
+                    result: { success: false, error: wasiResult.error ?? 'WASI execution failed' },
+                    renderedBytes: null,
+                    executionTimeMs: Date.now() - startTime,
+                };
+            }
+
+            // Read result from three sources (in priority order):
+            // 1. WASI's own MemFS (wasi.fs) — most reliable after wasi.instantiate()
+            // 2. Our shared MemFS (this.memFs) — in case they share backing store
+            // 3. stdout — fallback written by the Rust binary
+            const outputFs = wasiResult.wasiFs;
+            let resultJson: string | null = null;
+
+            if (outputFs) {
+                const bytes = this.readFromSpecificMemFS(outputFs, '/output/result.json');
+                if (bytes) resultJson = new TextDecoder().decode(bytes);
+            }
+            if (!resultJson) {
+                const bytes = this.readFromMemFS('/output/result.json');
+                if (bytes) resultJson = new TextDecoder().decode(bytes);
+            }
+            if (!resultJson && wasiResult.stdout) {
+                resultJson = wasiResult.stdout;
+                logger.info(`[WASMRuntime] Using stdout fallback for result (${resultJson.length}B)`);
+            }
+
+            if (!resultJson) {
+                return {
+                    result: { success: false, error: 'Renderer produced no output (MemFS + stdout empty)' },
+                    renderedBytes: null,
+                    executionTimeMs: Date.now() - startTime,
+                };
+            }
+
+            let result: RendererResult;
+            try {
+                result = JSON.parse(resultJson);
+            } catch (e) {
+                return {
+                    result: { success: false, error: `Invalid result JSON: ${resultJson.slice(0, 200)}` },
+                    renderedBytes: null,
+                    executionTimeMs: Date.now() - startTime,
+                };
+            }
+
+            let renderedBytes: Buffer | null = null;
+            if (result.success) {
+                // Try reading rendered bytes from both MemFS sources
+                let rendered: Uint8Array | null = null;
+                if (outputFs) {
+                    rendered = this.readFromSpecificMemFS(outputFs, '/output/rendered.bin');
+                }
+                if (!rendered) {
+                    rendered = this.readFromMemFS('/output/rendered.bin');
+                }
+                if (rendered) {
+                    renderedBytes = Buffer.from(rendered);
+                }
+            }
+
+            logger.info(`[WASMRuntime] Renderer output: success=${result.success}, type=${result.content_type}, size=${renderedBytes?.length ?? 0}B`);
+
+            return {
+                result,
+                renderedBytes,
+                executionTimeMs: Date.now() - startTime,
+            };
+        } catch (error: any) {
+            logger.error('[WASMRuntime] Renderer execution failed:', error);
+            return {
+                result: { success: false, error: error.message || 'Unknown error' },
+                renderedBytes: null,
+                executionTimeMs: Date.now() - startTime,
+            };
+        } finally {
+            this.clearMemFS();
+            this.releaseExecutionSlot();
+        }
+    }
+
+    /**
+     * Read a file from a specific MemFS instance (used to read from WASI's MemFS).
+     */
+    private readFromSpecificMemFS(memFs: MemFS, wasiPath: string): Uint8Array | null {
+        try {
+            const file = memFs.open(wasiPath, { read: true, write: false, create: false });
+            const content = file.read();
+            return content ?? null;
+        } catch {
+            return null;
+        }
+    }
+
+    /**
+     * Run a WASI module's _start entry point with timeout.
+     *
+     * Uses wasi.instantiate() + wasi.start() which properly handles
+     * proc_exit(0) — the normal WASI exit that Rust main() triggers.
+     * Returns the WASI's own MemFS so the caller can read output files
+     * (wasi.instantiate may use an internal MemFS view).
+     */
+    private async executeWASIStart(
+        wasmBinary: ArrayBuffer | Uint8Array,
+        timeoutMs: number
+    ): Promise<{ success: boolean; error?: string; wasiFs?: MemFS; stdout?: string }> {
+        return new Promise(async (resolve) => {
+            let timeoutId: NodeJS.Timeout | null = null;
+            let completed = false;
+
+            timeoutId = setTimeout(() => {
+                if (!completed) {
+                    completed = true;
+                    logger.warn(`[WASMRuntime] Renderer timed out after ${timeoutMs}ms`);
+                    resolve({ success: false, error: `Renderer timed out after ${timeoutMs}ms` });
+                }
+            }, timeoutMs);
+
+            try {
+                let binaryBuffer: ArrayBuffer;
+                if (wasmBinary instanceof Uint8Array) {
+                    binaryBuffer = wasmBinary.buffer.slice(
+                        wasmBinary.byteOffset,
+                        wasmBinary.byteOffset + wasmBinary.byteLength
+                    ) as ArrayBuffer;
+                } else {
+                    binaryBuffer = wasmBinary;
+                }
+
+                const wasmModule = await WebAssembly.compile(binaryBuffer);
+
+                const wasi = new WASI({
+                    env: {},
+                    args: ['ddrm-renderer'],
+                    preopens: { '/': '/' },
+                    fs: this.memFs!,
+                });
+
+                wasi.instantiate(wasmModule);
+
+                let exitCode: number;
+                try {
+                    exitCode = wasi.start();
+                } catch (startErr: any) {
+                    // Safety net: check if output was written before the trap
+                    const outputExists = this.readFromSpecificMemFS(wasi.fs, '/output/result.json');
+                    const stdout = wasi.getStdoutString();
+                    if (outputExists || stdout) {
+                        logger.info(`[WASMRuntime] WASI start() threw but output exists — treating as clean exit: ${startErr.message}`);
+                        if (!completed) {
+                            completed = true;
+                            if (timeoutId) clearTimeout(timeoutId);
+                            resolve({ success: true, wasiFs: wasi.fs, stdout });
+                        }
+                        return;
+                    }
+                    throw startErr;
+                }
+
+                const stdout = wasi.getStdoutString();
+                logger.info(`[WASMRuntime] WASI module exited with code ${exitCode}`);
+
+                if (!completed) {
+                    completed = true;
+                    if (timeoutId) clearTimeout(timeoutId);
+                    if (exitCode === 0) {
+                        resolve({ success: true, wasiFs: wasi.fs, stdout });
+                    } else {
+                        resolve({ success: false, error: `WASI module exited with code ${exitCode}` });
+                    }
+                }
+            } catch (error: any) {
+                if (!completed) {
+                    completed = true;
+                    if (timeoutId) clearTimeout(timeoutId);
+                    resolve({ success: false, error: error.message || 'WASI execution error' });
+                }
+            }
+        });
     }
 
     /**

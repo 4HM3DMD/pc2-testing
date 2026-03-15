@@ -197,7 +197,11 @@ const ipc_listener = async (event, handled) => {
     // --------------------------------------------------------
     if ( event.data?.msg === 'launchApp' && event.data.appName ) {
         const launch_app = (await import('./helpers/launch_app.js')).default;
-        const proc = await launch_app({ name: event.data.appName });
+        const proc = await launch_app({
+            name: event.data.appName,
+            args: event.data.args,
+            window_title: event.data.windowTitle,
+        });
         if (proc?.references?.el_win) {
             $(proc.references.el_win).focusWindow();
         }

@@ -163,6 +163,12 @@ These diagrams from Rong define the north star. Every work stream should move us
   - [x] Gateway approval hardening — 5s delay, try-catch, "Fix Gateway Approval" tool *(implemented Mar 14)*
   - [x] End-to-end decrypt test with capacity credits — **WORKING** (Lit Payment Delegation via Relayer API, Test 13 image + Test 14 PDF verified)
   - [x] Universal asset viewer — **server-side secure viewer** for images (Sharp), PDFs (PDF.js+Canvas hybrid), text (Canvas) with watermarking, buffer zeroing, auto-decrypt, parallel PDF page loading *(completed Mar 15)*
+  - [x] **WASM Renderer** — Rust crate compiled to `wasm32-wasip1` for text rendering inside isolated WASM linear memory + `WASMRuntime.ts` Node.js WASI host *(completed Mar 15)*
+  - [x] **dDRM Viewer app** — dedicated PC2 app with two display modes (centered images, full-width scrollable documents), anti-piracy measures, renderer badges, puter.args IPC integration *(completed Mar 15)*
+  - [x] **dDRM Viewer native windowing** — launches as UIWindow via IPC `postMessage` → `launch_app()` (not browser popup), integrated with taskbar *(completed Mar 15)*
+  - [x] **.ddrm.json capsule format** — descriptor files for non-media assets with CID, Lit params, mimeType. MIME: `application/x-ddrm+json`. Saved to Documents *(completed Mar 15)*
+  - [x] **GUI capsule integration** — custom shield icon, MIME registration, double-click opens dDRM Viewer, content_type_to_icon mapping *(completed Mar 15)*
+  - [x] **Market "Open" button** — IPC-based launch of dDRM Viewer from asset detail view *(completed Mar 15)*
 
 **SDK Evolution (Universal Asset Protocol):**
 - [x] `@elacity-js/access` package — clean-room build of universal access layer using Lit Protocol SDK directly (see `docs/core/ACCESS_PACKAGE_SPEC.md`) *(implemented Mar 13 — 12 source files, 47 unit tests passing)*
@@ -283,6 +289,9 @@ These diagrams from Rong define the north star. Every work stream should move us
 - [x] Two-layer encryption — AES-GCM + Lit CEK (bypasses 4MB message limit) *(completed Mar 15)*
 - [x] Server-side secure viewer — images/PDFs/text rendered server-side with watermark, no plaintext in browser *(completed Mar 15)*
 - [x] Auto-decrypt on asset open — owned assets automatically decrypt when viewed *(completed Mar 15)*
+- [x] **WASM Renderer** — Rust→WASM text rendering + WASMRuntime.ts WASI host *(completed Mar 15)*
+- [x] **dDRM Viewer** — dedicated secure viewer app with native PC2 windowing, scrollable document view, .ddrm.json capsule support *(completed Mar 15)*
+- [x] **GUI file type integration** — `.ddrm.json` icon, MIME, double-click → dDRM Viewer *(completed Mar 15)*
 - [ ] **Lit Chipotle migration** — Datil deprecated ~April 25, 2026. Replace v7 SDK with REST API. CRITICAL PATH.
 - [ ] On-chain content indexer — replace Elacity GraphQL dependency with event scanner (The Graph / custom). See [DECENTRALIZATION_STATUS.md](./DECENTRALIZATION_STATUS.md) Tier 1.1
 - [ ] Self-provisioned RLI tokens — each PC2 node mints own capacity credits, removes Elacity wallet dependency. See Tier 1.3

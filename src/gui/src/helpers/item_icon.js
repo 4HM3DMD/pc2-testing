@@ -234,6 +234,10 @@ const item_icon = async (fsentry) => {
     else if ( fsentry.name.toLowerCase().endsWith('.edrm') ) {
         return { image: window.icons['file-edrm.svg'], type: 'icon' };
     }
+    // *.ddrm.json (dDRM capsule - protected non-media asset)
+    else if ( fsentry.name.toLowerCase().endsWith('.ddrm.json') ) {
+        return { image: window.icons['file-ddrm.svg'], type: 'icon' };
+    }
     // --------------------------------------------------
     // Determine icon by set or derived mime type
     // --------------------------------------------------

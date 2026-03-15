@@ -1,0 +1,37 @@
+{
+  "name": "ddrm-viewer",
+  "title": "dDRM Viewer",
+  "version": "0.1.0",
+  "description": "Secure viewer for dDRM-protected digital assets. Validates ownership rights and renders content within an isolated WASM sandbox.",
+  "author": {
+    "name": "Elacity Labs",
+    "url": "https://ela.city"
+  },
+  "license": "proprietary",
+  "entry": "index.html",
+  "type": "web",
+  "category": "media",
+
+  "capabilities": {
+    "wallet": true,
+    "network": true,
+    "ipfs": { "pin": false, "fetch": true },
+    "drm": true
+  },
+
+  "requirements": {
+    "minVersion": "1.1.0"
+  },
+
+  "display": {
+    "width": 900,
+    "height": 700,
+    "resizable": true,
+    "titlebar": true,
+    "taskbar": true
+  },
+
+  "distribution": {
+    "channel": "stable"
+  }
+}

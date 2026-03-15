@@ -157,6 +157,7 @@
     dom.purchaseStatus = document.getElementById('purchase-status');
     dom.downloadNodeBtn = document.getElementById('download-node-btn');
     dom.downloadDecryptBtn = document.getElementById('download-decrypt-btn');
+    dom.openViewerBtn = document.getElementById('open-viewer-btn');
     dom.downloadStatus = document.getElementById('download-status');
     dom.toastContainer = document.getElementById('toast-container');
     dom.themeToggle = document.getElementById('theme-toggle');
@@ -680,6 +681,7 @@
     dom.purchaseStatus.classList.add('hidden');
     dom.downloadNodeBtn.classList.add('hidden');
     dom.downloadDecryptBtn.classList.add('hidden');
+    dom.openViewerBtn.classList.add('hidden');
     dom.downloadStatus.classList.add('hidden');
     dom.saveBtn.classList.remove('saved');
     dom.saveLabel.textContent = 'Save';
@@ -807,6 +809,8 @@
         dom.playOwnedBtn.classList.add('hidden');
         if (cid) {
           dom.downloadDecryptBtn.classList.remove('hidden');
+          dom.openViewerBtn.classList.remove('hidden');
+          dom.downloadNodeBtn.classList.remove('hidden');
           console.log('[Detail] Non-media asset, CID:', cid, 'hash:', rawAsset.dataToEncryptHash);
           setTimeout(function () { handleDownloadAndDecrypt(); }, 300);
         } else {
@@ -1797,11 +1801,73 @@
     dom.purchaseStatus.classList.remove('hidden');
   }
 
-  // ── Auto Pin & Register as .edrm ─────────────────────
+  // ── Auto Pin & Register as .edrm / .ddrm.json ───────
+
+  function buildDdrmCapsule(nft) {
+    var meta = nft.metadata || {};
+    var props = meta.properties || {};
+    var media = meta.media || nft._rawMedia || {};
+    var asset = nft._rawAsset || meta.asset || {};
+    var tokenId = (nft.tokenId && nft.tokenId.hexTokenID) || nft.tokenId || '0';
+    var title = meta.name || nft.name || 'Untitled';
+    var cid = asset.cid || asset.uri || media.uri || '';
+    if (cid) cid = cid.replace('ipfs://', '');
+    var dataToEncryptHash = asset.dataToEncryptHash || '';
+    var cleanHash = dataToEncryptHash.startsWith('0x') ? dataToEncryptHash.slice(2) : dataToEncryptHash;
+    var kid = cleanHash ? '0x' + cleanHash.slice(0, 32).padEnd(32, '0') : '';
+    var mime = asset.mimeType || media.contentType || media.mimeType || 'application/octet-stream';
+
+    return {
+      version: 1,
+      schema: 'ddrm-capsule-v1',
+      title: title,
+      encryptedDataCid: cid,
+      mimeType: mime,
+      dataToEncryptHash: dataToEncryptHash,
+      kid: kid,
+      litCiphertext: asset.litCiphertext || '',
+      iv: asset.iv || '',
+      actionCid: asset.actionCid || '',
+      authority: asset.authority || props.authority || '',
+      contractAddress: nft.contractAddress || (nft.channel && nft.channel.address) || '',
+      ledger: props.ledger || nft.contractAddress || '',
+      tokenId: tokenId,
+      operative: (nft.operative && nft.operative.address) || '',
+      thumbnail: meta.image || (nft.channel && nft.channel.image) || '',
+      acquiredAt: new Date().toISOString(),
+      acquiredBy: Wallet.getAddress() || '',
+    };
+  }
+
+  function saveDdrmCapsule(nft, folderPath) {
+    var capsule = buildDdrmCapsule(nft);
+    if (!capsule.encryptedDataCid || !capsule.kid) return Promise.resolve();
+
+    var safeName = capsule.title.replace(/[^a-zA-Z0-9 _\-]/g, '').substring(0, 80).trim() || 'asset';
+    var capsulePath = folderPath + '/' + safeName + '.ddrm.json';
+
+    return pc2Fetch('/write', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        path: capsulePath,
+        content: JSON.stringify(capsule, null, 2),
+        mime_type: 'application/x-ddrm+json',
+        overwrite: false,
+        dedupe_name: true,
+      })
+    }).then(function (res) {
+      if (!res.ok) throw new Error('Capsule save failed: ' + res.status);
+      console.log('[dDRM] Capsule saved:', capsulePath);
+      return res.json();
+    });
+  }
 
   function pinAndRegisterMedia(nft) {
     var media = (nft.metadata && nft.metadata.media) || {};
-    var cid = media.uri;
+    var asset = nft._rawAsset || (nft.metadata && nft.metadata.asset) || {};
+    var cid = asset.cid || asset.uri || media.uri;
+    if (cid) cid = cid.replace('ipfs://', '');
 
     if (!cid) {
       dom.downloadStatus.className = 'download-status error';
@@ -1825,10 +1891,13 @@
     var title = meta.name || nft.name || 'Untitled';
     var safeName = title.replace(/[^a-zA-Z0-9 _\-]/g, '').substring(0, 80).trim() || 'media';
     var walletAddr = Wallet.getAddress() || '';
-    var savePath = '/' + walletAddr + '/Videos/' + safeName + '.edrm';
+    var nonMedia = isNonMediaAsset(nft);
+    var folder = nonMedia ? 'Documents' : 'Videos';
+    var ext = nonMedia ? '.ddrm.json' : '.edrm';
+    var savePath = '/' + walletAddr + '/' + folder + '/' + safeName + ext;
 
     var localGateway = window.location.origin + '/ipfs/';
-    var descriptor = {
+    var descriptor = nonMedia ? buildDdrmCapsule(nft) : {
       version: 1,
       title: title,
       cid: cid,
@@ -1876,13 +1945,14 @@
         descriptor.pinnedSize = (pinResult && pinResult.totalSize) || 0;
         descriptor.blockCount = (pinResult && pinResult.blockCount) || 0;
 
+        var descriptorMime = nonMedia ? 'application/x-ddrm+json' : 'application/x-edrm';
         return pc2Fetch('/write', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             path: savePath,
             content: JSON.stringify(descriptor, null, 2),
-            mime_type: 'application/x-edrm',
+            mime_type: descriptorMime,
             overwrite: false,
             dedupe_name: true
           })
@@ -1899,7 +1969,7 @@
         dom.downloadNodeBtn.querySelector('span').textContent = 'Saved';
         dom.downloadNodeBtn.disabled = true;
         dom.downloadStatus.className = 'download-status success';
-        dom.downloadStatus.innerHTML = 'Downloaded & saved — you\'re now a seeder! <a href="#" class="open-folder-link">Open Videos folder</a>';
+        dom.downloadStatus.innerHTML = 'Downloaded & saved — you\'re now a seeder! <a href="#" class="open-folder-link">Open ' + folder + ' folder</a>';
         showToast('Content downloaded to your node!', 'success');
 
         var folderLink = dom.downloadStatus.querySelector('.open-folder-link');
@@ -1910,7 +1980,7 @@
             window.parent.postMessage({
               $: 'puter-ipc',
               msg: 'openFolder',
-              path: '/' + walletAddr + '/Videos',
+              path: '/' + walletAddr + '/' + folder,
               appInstanceID: appInstanceId,
               env: 'app'
             }, '*');
@@ -2125,6 +2195,69 @@
         document.getElementById('pdf-next').disabled = secureViewState.currentPage >= secureViewState.totalPages;
       }
     }
+  }
+
+  // ── Open in dDRM Viewer (dedicated popup window) ──
+
+  function handleOpenInViewer() {
+    var nft = state.detailItem;
+    if (!nft) return;
+
+    if (!Wallet.isConnected()) {
+      showToast('Connect your wallet first', 'error');
+      return;
+    }
+
+    ensureRawMetadata(nft).then(function () {
+      launchViewerPopup(nft);
+    }).catch(function () {
+      launchViewerPopup(nft);
+    });
+  }
+
+  function launchViewerPopup(nft) {
+    var media = (nft.metadata && nft.metadata.media) || nft._rawMedia || {};
+    var asset = nft._rawAsset || (nft.metadata && nft.metadata.asset) || {};
+    var meta = nft.metadata || {};
+    var props = meta.properties || {};
+    var cid = asset.cid || asset.uri || media.uri;
+    if (cid) cid = cid.replace('ipfs://', '');
+    var dataToEncryptHash = asset.dataToEncryptHash || '';
+    var cleanHash = dataToEncryptHash.startsWith('0x') ? dataToEncryptHash.slice(2) : dataToEncryptHash;
+    var kid = '0x' + cleanHash.slice(0, 32).padEnd(32, '0');
+    var mime = asset.mimeType || media.contentType || 'application/octet-stream';
+    var buyerAddr = Wallet.getAddress() || '';
+    var litCiphertext = asset.litCiphertext || '';
+    var iv = asset.iv || '';
+    var actionCid = asset.actionCid || '';
+    var authority = asset.authority || (props.authority) || '';
+    var title = meta.name || nft.name || 'Untitled';
+
+    if (!cid || !kid || !litCiphertext) {
+      showToast('Missing asset metadata for viewer', 'error');
+      return;
+    }
+
+    var viewerArgs = {
+      litCiphertext: litCiphertext,
+      dataToEncryptHash: dataToEncryptHash,
+      encryptedDataCid: cid,
+      iv: iv,
+      kid: kid,
+      buyerAddress: buyerAddr,
+      mimeType: mime,
+      title: title,
+    };
+    if (actionCid) viewerArgs.actionCid = actionCid;
+    if (authority) viewerArgs.authority = authority;
+
+    window.parent.postMessage({
+      $: 'puter-ipc',
+      msg: 'launchApp',
+      appName: 'ddrm-viewer',
+      windowTitle: title + ' — dDRM Viewer',
+      args: viewerArgs,
+    }, '*');
   }
 
   // ── Download & Decrypt (non-media assets via @elacity-js/access) ──
@@ -2551,6 +2684,7 @@
     dom.buyBtn.addEventListener('click', handleBuy);
     dom.downloadNodeBtn.addEventListener('click', handleDownloadToNode);
     dom.downloadDecryptBtn.addEventListener('click', handleDownloadAndDecrypt);
+    dom.openViewerBtn.addEventListener('click', handleOpenInViewer);
     dom.previewBtn.addEventListener('click', handlePreview);
     dom.playBtn.addEventListener('click', handlePlay);
     dom.playOwnedBtn.addEventListener('click', handlePlay);

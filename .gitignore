@@ -50,3 +50,6 @@ sdk/
 # Compiled test files
 pc2-node/test-*.js
 pc2-node/test-*.js.map
+
+# Rust build artifacts
+**/target/

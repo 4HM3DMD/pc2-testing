@@ -1,0 +1,43 @@
+[package]
+name = "ddrm-renderer"
+version = "0.1.0"
+edition = "2021"
+description = "dDRM Universal Access Layer — decrypt and render protected assets inside WASM sandbox"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "ddrm-renderer"
+path = "src/main.rs"
+
+[features]
+default = ["image-render", "text-render"]
+image-render = ["dep:image"]
+text-render = ["dep:ab_glyph", "dep:imageproc"]
+pdf-render = ["dep:lopdf"]
+audio-stream = []
+video-stream = []
+
+[dependencies]
+aes-gcm = "0.10"
+base64 = "0.22"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Render mode: images
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif"], optional = true }
+
+# Render mode: text
+ab_glyph = { version = "0.2", optional = true }
+imageproc = { version = "0.25", default-features = false, optional = true }
+
+# Render mode: PDF
+lopdf = { version = "0.34", optional = true }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
