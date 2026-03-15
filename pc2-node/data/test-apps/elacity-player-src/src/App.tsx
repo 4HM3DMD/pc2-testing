@@ -22,7 +22,9 @@ export const App: React.FC = () => {
 
     let cancelled = false;
 
-    const urlSmartAccount = new URLSearchParams(window.location.search).get('smartAccount');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const puterArgs = (window as any).puter?.args;
+    const urlSmartAccount = puterArgs?.smartAccount || new URLSearchParams(window.location.search).get('smartAccount');
 
     const onAccountsChanged = (accounts: string[]) => {
       if (cancelled) return;

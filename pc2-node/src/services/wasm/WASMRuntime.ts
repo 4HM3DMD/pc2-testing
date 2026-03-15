@@ -76,6 +76,9 @@ export class WASMRuntime {
     private defaultMaxMemoryMb: number;
     private executionQueue: QueuedExecution[] = [];
 
+    // Compiled WASM module cache: compile once, instantiate per request
+    private compiledModuleCache = new Map<string, WebAssembly.Module>();
+
     constructor(config?: WASMRuntimeConfig) {
         this.maxConcurrent = config?.maxConcurrent ?? 4;
         this.defaultTimeoutMs = config?.defaultTimeoutMs ?? 30000;
@@ -724,7 +727,15 @@ export class WASMRuntime {
                     binaryBuffer = wasmBinary;
                 }
 
-                const wasmModule = await WebAssembly.compile(binaryBuffer);
+                const cacheKey = `wasm:${binaryBuffer.byteLength}`;
+                let wasmModule = this.compiledModuleCache.get(cacheKey);
+                if (!wasmModule) {
+                    wasmModule = await WebAssembly.compile(binaryBuffer);
+                    this.compiledModuleCache.set(cacheKey, wasmModule);
+                    logger.info(`[WASMRuntime] Compiled WASM module (${binaryBuffer.byteLength}B) — cached`);
+                } else {
+                    logger.info(`[WASMRuntime] Reusing cached compiled WASM module (${binaryBuffer.byteLength}B)`);
+                }
 
                 const wasi = new WASI({
                     env: {},

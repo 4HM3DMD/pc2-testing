@@ -939,96 +939,117 @@ async function createServerAuthSig(client: any, wallet: any) {
  * Generate session signatures for Lit Action execution.
  * Requires both AccessControlConditionDecryption and LitActionExecution abilities.
  */
+// Session sigs cache: avoids expensive Lit node handshake on every request.
+// Sigs are valid for 15 min; we cache for 10 min to leave safety margin.
+const SESSION_SIGS_TTL_MS = 10 * 60 * 1000;
+let cachedSessionSigs: { sigs: any; createdAt: number } | null = null;
+let sessionSigsPromise: Promise<any> | null = null;
+
 async function getExecuteSessionSigs(client: any, wallet: any) {
-  const {
-    LitAccessControlConditionResource,
-    LitActionResource,
-    RecapSessionCapabilityObject,
-  } = await import('@lit-protocol/auth-helpers');
-  const { LIT_ABILITY } = await import('@lit-protocol/constants');
-  const { SiweMessage } = await import('siwe');
-
-  const capacityWallet = await getCapacityWallet();
-  const expiration = new Date(Date.now() + 15 * 60 * 1000).toISOString();
-
-  const accResource = new LitAccessControlConditionResource('*');
-  const actionResource = new LitActionResource('*');
-
-  const resourceAbilityRequests = [
-    { resource: accResource, ability: LIT_ABILITY.AccessControlConditionDecryption },
-    { resource: actionResource, ability: LIT_ABILITY.LitActionExecution },
-  ];
-
-  const sessionCapabilityObject = new RecapSessionCapabilityObject({}, []);
-  sessionCapabilityObject.addCapabilityForResource(
-    accResource,
-    LIT_ABILITY.AccessControlConditionDecryption
-  );
-  sessionCapabilityObject.addCapabilityForResource(
-    actionResource,
-    LIT_ABILITY.LitActionExecution
-  );
-
-  const sessionOpts: any = {
-    chain: 'ethereum',
-    expiration,
-    resourceAbilityRequests,
-    sessionCapabilityObject,
-    authNeededCallback: async (params: any) => {
-      const siweMessage = new SiweMessage({
-        domain: params.domain || 'localhost',
-        address: wallet.address,
-        statement: params.statement || 'Lit Protocol session signature',
-        uri: params.uri || 'https://localhost/login',
-        version: '1',
-        chainId: 1,
-        nonce: params.nonce || await client.getLatestBlockhash(),
-        expirationTime: params.expiration || expiration,
-        resources: params.resources || [],
-      });
-      const messageToSign = siweMessage.prepareMessage();
-      const signature = await wallet.signMessage(messageToSign);
-      return {
-        sig: signature,
-        derivedVia: 'web3.eth.personal.sign',
-        signedMessage: messageToSign,
-        address: wallet.address,
-      };
-    },
-  };
-
-  // Payment Delegation Database: ensure this wallet is registered as a delegatee.
-  // Once registered, Lit nodes check the on-chain delegation DB automatically —
-  // no capacityDelegationAuthSig needed.
-  await ensureDelegateeRegistered(wallet.address);
-
-  // Fallback: if a capacity wallet private key is configured (legacy approach),
-  // create an explicit delegation auth sig. This is optional — the delegation DB
-  // approach above is preferred.
-  if (capacityWallet) {
-    const tokenId = await detectCapacityTokenId(capacityWallet.address);
-    if (tokenId) {
-      try {
-        const { capacityDelegationAuthSig } = await client.createCapacityDelegationAuthSig({
-          dAppOwnerWallet: capacityWallet,
-          capacityTokenId: tokenId,
-          delegateeAddresses: [wallet.address],
-          uses: '10',
-          expiration: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
-        });
-        sessionOpts.capacityDelegationAuthSig = capacityDelegationAuthSig;
-        logger.info(`[Lit] Capacity delegation attached (token #${tokenId})`);
-      } catch (delegErr: any) {
-        logger.warn(`[Lit] Capacity delegation auth sig failed (delegation DB should cover): ${delegErr.message}`);
-      }
-    } else {
-      logger.warn('[Lit] No valid capacity token found — relying on Payment Delegation DB');
-    }
+  if (cachedSessionSigs && (Date.now() - cachedSessionSigs.createdAt) < SESSION_SIGS_TTL_MS) {
+    logger.info(`[Lit] Reusing cached session sigs (age: ${Math.round((Date.now() - cachedSessionSigs.createdAt) / 1000)}s)`);
+    return cachedSessionSigs.sigs;
   }
 
-  const sessionSigs = await client.getSessionSigs(sessionOpts);
-  logger.info(`[Lit] Session sigs generated (${Object.keys(sessionSigs).length} nodes)`);
-  return sessionSigs;
+  // Coalesce concurrent requests: if another call is already generating sigs, wait for it
+  if (sessionSigsPromise) {
+    logger.info('[Lit] Session sigs generation in progress — waiting...');
+    return sessionSigsPromise;
+  }
+
+  sessionSigsPromise = (async () => {
+    try {
+      const {
+        LitAccessControlConditionResource,
+        LitActionResource,
+        RecapSessionCapabilityObject,
+      } = await import('@lit-protocol/auth-helpers');
+      const { LIT_ABILITY } = await import('@lit-protocol/constants');
+      const { SiweMessage } = await import('siwe');
+
+      const capacityWallet = await getCapacityWallet();
+      const expiration = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+
+      const accResource = new LitAccessControlConditionResource('*');
+      const actionResource = new LitActionResource('*');
+
+      const resourceAbilityRequests = [
+        { resource: accResource, ability: LIT_ABILITY.AccessControlConditionDecryption },
+        { resource: actionResource, ability: LIT_ABILITY.LitActionExecution },
+      ];
+
+      const sessionCapabilityObject = new RecapSessionCapabilityObject({}, []);
+      sessionCapabilityObject.addCapabilityForResource(
+        accResource,
+        LIT_ABILITY.AccessControlConditionDecryption
+      );
+      sessionCapabilityObject.addCapabilityForResource(
+        actionResource,
+        LIT_ABILITY.LitActionExecution
+      );
+
+      const sessionOpts: any = {
+        chain: 'ethereum',
+        expiration,
+        resourceAbilityRequests,
+        sessionCapabilityObject,
+        authNeededCallback: async (params: any) => {
+          const siweMessage = new SiweMessage({
+            domain: params.domain || 'localhost',
+            address: wallet.address,
+            statement: params.statement || 'Lit Protocol session signature',
+            uri: params.uri || 'https://localhost/login',
+            version: '1',
+            chainId: 1,
+            nonce: params.nonce || await client.getLatestBlockhash(),
+            expirationTime: params.expiration || expiration,
+            resources: params.resources || [],
+          });
+          const messageToSign = siweMessage.prepareMessage();
+          const signature = await wallet.signMessage(messageToSign);
+          return {
+            sig: signature,
+            derivedVia: 'web3.eth.personal.sign',
+            signedMessage: messageToSign,
+            address: wallet.address,
+          };
+        },
+      };
+
+      await ensureDelegateeRegistered(wallet.address);
+
+      if (capacityWallet) {
+        const tokenId = await detectCapacityTokenId(capacityWallet.address);
+        if (tokenId) {
+          try {
+            const { capacityDelegationAuthSig } = await client.createCapacityDelegationAuthSig({
+              dAppOwnerWallet: capacityWallet,
+              capacityTokenId: tokenId,
+              delegateeAddresses: [wallet.address],
+              uses: '10',
+              expiration: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+            });
+            sessionOpts.capacityDelegationAuthSig = capacityDelegationAuthSig;
+            logger.info(`[Lit] Capacity delegation attached (token #${tokenId})`);
+          } catch (delegErr: any) {
+            logger.warn(`[Lit] Capacity delegation auth sig failed (delegation DB should cover): ${delegErr.message}`);
+          }
+        } else {
+          logger.warn('[Lit] No valid capacity token found — relying on Payment Delegation DB');
+        }
+      }
+
+      const sessionSigs = await client.getSessionSigs(sessionOpts);
+      logger.info(`[Lit] Session sigs generated (${Object.keys(sessionSigs).length} nodes) — cached for ${SESSION_SIGS_TTL_MS / 60000} min`);
+
+      cachedSessionSigs = { sigs: sessionSigs, createdAt: Date.now() };
+      return sessionSigs;
+    } finally {
+      sessionSigsPromise = null;
+    }
+  })();
+
+  return sessionSigsPromise;
 }
 
 /**
@@ -1141,7 +1162,7 @@ interface CEKRecoveryResult {
   encryptedBytes: Buffer;
 }
 
-async function recoverCEKAndFetchData(params: DecryptParams): Promise<CEKRecoveryResult> {
+async function recoverCEKAndFetchData(params: DecryptParams, ipfsService?: any): Promise<CEKRecoveryResult> {
   const {
     litCiphertext, dataToEncryptHash, encryptedDataCid, kid,
     actionCid, authority, chain, chainId, rpc, buyerAddress,
@@ -1156,59 +1177,87 @@ async function recoverCEKAndFetchData(params: DecryptParams): Promise<CEKRecover
 
   logger.info(`[Lit] Recover CEK: kid=${kid}, buyer=${buyerAddress}, cid=${encryptedDataCid}`);
 
-  const wallet = await getServerWallet();
-  const client = await getLitClient();
-  const sessionSigs = await getExecuteSessionSigs(client, wallet);
+  // Kick off CEK recovery and IPFS fetch in parallel
+  const litStart = Date.now();
+  const cekPromise = (async () => {
+    const wallet = await getServerWallet();
+    const client = await getLitClient();
+    const sessionSigs = await getExecuteSessionSigs(client, wallet);
 
-  const executeParams: any = {
-    sessionSigs,
-    jsParams: {
-      ciphertext: litCiphertext,
-      dataToEncryptHash,
-      kid: kid.startsWith('0x') ? kid : `0x${kid}`,
-      actionIpfsId: effectiveActionCid,
-      authority: effectiveAuthority,
-      chain: effectiveChain,
-      chainId: chainId || 8453,
-      rpc: effectiveRpc,
-      userAddress: buyerAddress,
-    },
-  };
+    const executeParams: any = {
+      sessionSigs,
+      jsParams: {
+        ciphertext: litCiphertext,
+        dataToEncryptHash,
+        kid: kid.startsWith('0x') ? kid : `0x${kid}`,
+        actionIpfsId: effectiveActionCid,
+        authority: effectiveAuthority,
+        chain: effectiveChain,
+        chainId: chainId || 8453,
+        rpc: effectiveRpc,
+        userAddress: buyerAddress,
+      },
+    };
 
-  executeParams.ipfsId = effectiveActionCid;
-  logger.info(`[Lit] Using ipfsId: ${effectiveActionCid} (Pinata-pinned)`);
+    executeParams.ipfsId = effectiveActionCid;
+    logger.info(`[Lit] Using ipfsId: ${effectiveActionCid} (Pinata-pinned)`);
 
-  const result = await client.executeJs(executeParams);
+    const result = await client.executeJs(executeParams);
 
-  if (!result.response) throw new Error('Lit Action returned empty response');
+    if (!result.response) throw new Error('Lit Action returned empty response');
 
-  let cekBase64: string;
-  try {
-    const parsed = JSON.parse(result.response);
-    if (parsed.error) throw new Error(parsed.error);
-    cekBase64 = parsed.data || result.response;
-  } catch (e: any) {
-    if (e.message?.includes('Access denied')) throw e;
-    cekBase64 = result.response;
-  }
-
-  logger.info(`[Lit] CEK recovered, fetching encrypted file from IPFS: ${encryptedDataCid}`);
-  const ipfsUrls = [
-    `http://localhost:4200/ipfs/${encryptedDataCid}`,
-    `https://ipfs.ela.city/ipfs/${encryptedDataCid}`,
-  ];
-
-  let encryptedBytes: Buffer | null = null;
-  for (const url of ipfsUrls) {
+    let cekBase64: string;
     try {
-      const resp = await fetch(url);
-      if (resp.ok) {
-        encryptedBytes = Buffer.from(await resp.arrayBuffer());
-        logger.info(`[Lit] Fetched encrypted file: ${encryptedBytes.length} bytes from ${url.includes('localhost') ? 'local IPFS' : 'Elacity IPFS'}`);
-        break;
+      const parsed = JSON.parse(result.response);
+      if (parsed.error) throw new Error(parsed.error);
+      cekBase64 = parsed.data || result.response;
+    } catch (e: any) {
+      if (e.message?.includes('Access denied')) throw e;
+      cekBase64 = result.response;
+    }
+
+    logger.info(`[Lit] CEK recovered in ${Date.now() - litStart}ms`);
+    return cekBase64;
+  })();
+
+  // IPFS fetch: try local blockstore directly first, then HTTP fallback
+  const ipfsStart = Date.now();
+  const ipfsPromise = (async (): Promise<Buffer> => {
+    // Direct local blockstore read — avoids HTTP round-trip to self
+    if (ipfsService) {
+      try {
+        const bytes = await ipfsService.getFile(encryptedDataCid);
+        if (bytes && bytes.length > 0) {
+          logger.info(`[Lit] Fetched encrypted file: ${bytes.length} bytes from local blockstore (${Date.now() - ipfsStart}ms)`);
+          return bytes;
+        }
+      } catch {
+        logger.info(`[Lit] Local blockstore miss for ${encryptedDataCid}, trying HTTP...`);
       }
-    } catch { /* try next */ }
-  }
+    }
+
+    // HTTP fallback: localhost API then remote gateway
+    const ipfsUrls = [
+      `http://localhost:4200/ipfs/${encryptedDataCid}`,
+      `https://ipfs.ela.city/ipfs/${encryptedDataCid}`,
+    ];
+
+    for (const url of ipfsUrls) {
+      try {
+        const resp = await fetch(url);
+        if (resp.ok) {
+          const buf = Buffer.from(await resp.arrayBuffer());
+          logger.info(`[Lit] Fetched encrypted file: ${buf.length} bytes from ${url.includes('localhost') ? 'local IPFS' : 'Elacity IPFS'} (${Date.now() - ipfsStart}ms)`);
+          return buf;
+        }
+      } catch { /* try next */ }
+    }
+
+    throw new Error(`Failed to fetch encrypted file from IPFS: ${encryptedDataCid}`);
+  })();
+
+  // Wait for both in parallel — IPFS fetch often completes while Lit is still working
+  const [cekBase64, encryptedBytes] = await Promise.all([cekPromise, ipfsPromise]);
 
   if (!encryptedBytes || encryptedBytes.length === 0) {
     throw new Error(`Failed to fetch encrypted file from IPFS: ${encryptedDataCid}`);
@@ -1221,8 +1270,8 @@ async function recoverCEKAndFetchData(params: DecryptParams): Promise<CEKRecover
  * Full two-layer decryption (Node.js path): Lit recovers CEK, AES-GCM decrypts file.
  * Returns raw decrypted Buffer. Caller is responsible for zeroing it after use.
  */
-async function decryptAssetTwoLayer(params: DecryptParams): Promise<Buffer> {
-  const { cekBase64, encryptedBytes } = await recoverCEKAndFetchData(params);
+async function decryptAssetTwoLayer(params: DecryptParams, ipfsService?: any): Promise<Buffer> {
+  const { cekBase64, encryptedBytes } = await recoverCEKAndFetchData(params, ipfsService);
 
   const crypto = await import('crypto');
   const cekBytes = Buffer.from(cekBase64, 'base64');
@@ -1294,8 +1343,9 @@ async function renderViaWASM(
   mime: string,
   maxWidth: number,
   page?: number,
+  ipfsService?: any,
 ): Promise<WASMRenderResult | null> {
-  const { cekBase64, encryptedBytes } = await recoverCEKAndFetchData(params);
+  const { cekBase64, encryptedBytes } = await recoverCEKAndFetchData(params, ipfsService);
 
   const watermarkText = `${params.buyerAddress.substring(0, 10)}...${params.buyerAddress.substring(params.buyerAddress.length - 6)} ${new Date().toISOString().split('T')[0]}`;
 
@@ -1349,6 +1399,7 @@ async function renderViaWASM(
  *   Headers: X-Asset-Type, X-Asset-Pages (for PDFs), X-Watermark, X-Renderer
  */
 router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, res: Response) => {
+  const requestStart = Date.now();
   try {
     const {
       litCiphertext, dataToEncryptHash, iv, encryptedDataCid, kid,
@@ -1375,13 +1426,15 @@ router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, 
       'X-Watermark': buyerAddress,
     });
 
+    const ipfsService = req.app.locals.ipfs;
+
     // ── WASM Renderer Path ──────────────────────────────
     // For images and text: decrypt + render inside WASM linear memory.
     // CEK and plaintext never touch Node.js memory.
     const wasmSupportedTypes = mime.startsWith('image/') || mime.startsWith('text/');
     if (wasmSupportedTypes) {
       try {
-        const wasmResult = await renderViaWASM(req.body, mime, maxWidth, pageNum);
+        const wasmResult = await renderViaWASM(req.body, mime, maxWidth, pageNum, ipfsService);
         if (wasmResult) {
           res.set('Content-Type', wasmResult.contentType);
           res.set('Content-Length', String(wasmResult.rendered.length));
@@ -1390,7 +1443,7 @@ router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, 
             res.set('X-Asset-Pages', String(wasmResult.totalPages));
           }
           res.send(wasmResult.rendered);
-          logger.info(`[SecureView] WASM rendered ${mime}: ${wasmResult.rendered.length} bytes (${wasmResult.executionTimeMs}ms) for ${buyerAddress}`);
+          logger.info(`[SecureView] WASM rendered ${mime}: ${wasmResult.rendered.length} bytes (wasm: ${wasmResult.executionTimeMs}ms, total: ${Date.now() - requestStart}ms) for ${buyerAddress}`);
           return;
         }
       } catch (wasmErr: any) {
@@ -1400,7 +1453,7 @@ router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, 
 
     // ── Node.js Fallback Path ───────────────────────────
     // Used for PDFs (WASM PDF not yet implemented) and when WASM fails.
-    const decryptedBytes = await decryptAssetTwoLayer(req.body);
+    const decryptedBytes = await decryptAssetTwoLayer(req.body, ipfsService);
 
     // ── Image pipeline (fallback) ────────────────────────
     if (mime.startsWith('image/')) {
@@ -1444,7 +1497,7 @@ router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, 
       res.set('X-Renderer', 'nodejs-sharp');
       res.send(rendered);
 
-      logger.info(`[SecureView] Image rendered (fallback): ${rendered.length} bytes (${imgW}x${imgH}) for ${buyerAddress}`);
+      logger.info(`[SecureView] Image rendered (fallback): ${rendered.length} bytes (${imgW}x${imgH}, total: ${Date.now() - requestStart}ms) for ${buyerAddress}`);
       return;
     }
 
@@ -1549,7 +1602,7 @@ router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, 
       res.set('X-Renderer', 'nodejs-pdfjs');
       res.send(rendered);
 
-      logger.info(`[SecureView] PDF page ${requestedPage}/${totalPages} rendered: ${rendered.length} bytes for ${buyerAddress}`);
+      logger.info(`[SecureView] PDF page ${requestedPage}/${totalPages} rendered: ${rendered.length} bytes (total: ${Date.now() - requestStart}ms) for ${buyerAddress}`);
       return;
     }
 
@@ -1618,7 +1671,7 @@ router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, 
       res.set('X-Renderer', 'nodejs-canvas');
       res.send(rendered);
 
-      logger.info(`[SecureView] Text rendered (fallback): ${rendered.length} bytes (${visibleLines.length} lines) for ${buyerAddress}`);
+      logger.info(`[SecureView] Text rendered (fallback): ${rendered.length} bytes (${visibleLines.length} lines, total: ${Date.now() - requestStart}ms) for ${buyerAddress}`);
       return;
     }
 
@@ -1822,5 +1875,16 @@ router.post('/ipfs/upload-elacity', authenticate, async (req: AuthenticatedReque
   }
 });
 
-export default router;
+// Pre-warm Lit client + session sigs at module load so the first user request
+// doesn't pay the ~5s cold-connect + handshake penalty. Fire-and-forget.
+setTimeout(async () => {
+  try {
+    const [wallet, client] = await Promise.all([getServerWallet(), getLitClient()]);
+    await getExecuteSessionSigs(client, wallet);
+    logger.info('[Lit] Pre-warm complete: client connected + session sigs cached');
+  } catch (err: any) {
+    logger.warn(`[Lit] Pre-warm failed (will retry on first request): ${err.message}`);
+  }
+}, 2000);
 
+export default router;

@@ -3,14 +3,24 @@ import { ElacityClient } from '@elacity-js/api';
 import { usePlayerContext } from './PlayerProvider';
 import { MediaPlayer } from './MediaPlayer';
 
+declare global {
+  interface Window {
+    puter?: { args?: Record<string, string> };
+  }
+}
+
+function getParam(key: string): string | null {
+  const puterVal = window.puter?.args?.[key];
+  if (puterVal) return puterVal;
+  return new URLSearchParams(window.location.search).get(key);
+}
+
 function getGateway(): string {
-  const params = new URLSearchParams(window.location.search);
-  return params.get('gateway') || (window.location.origin + '/ipfs/');
+  return getParam('gateway') || (window.location.origin + '/ipfs/');
 }
 
 function getFallbackGateway(): string {
-  const params = new URLSearchParams(window.location.search);
-  return params.get('fallbackGateway') || 'https://ipfs.ela.city/ipfs/';
+  return getParam('fallbackGateway') || 'https://ipfs.ela.city/ipfs/';
 }
 
 function resolveIpfsUrl(url: string): string {
@@ -34,9 +44,8 @@ export const PlayerView: React.FC = () => {
   const [error, setError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const channel = params.get('channel');
-    const tokenId = params.get('tokenId');
+    const channel = getParam('channel');
+    const tokenId = getParam('tokenId');
 
     if (!channel || !tokenId) {
       setError('Missing channel or tokenId URL parameters');
