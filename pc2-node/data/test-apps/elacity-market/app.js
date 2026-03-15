@@ -156,7 +156,6 @@
     dom.likeCount = document.getElementById('like-count');
     dom.purchaseStatus = document.getElementById('purchase-status');
     dom.downloadNodeBtn = document.getElementById('download-node-btn');
-    dom.downloadDecryptBtn = document.getElementById('download-decrypt-btn');
     dom.openViewerBtn = document.getElementById('open-viewer-btn');
     dom.downloadStatus = document.getElementById('download-status');
     dom.toastContainer = document.getElementById('toast-container');
@@ -664,9 +663,6 @@
     if (mediaEl) { mediaEl.style.aspectRatio = ''; mediaEl.style.maxHeight = ''; mediaEl.style.overflowY = ''; }
     var pdfContainer = document.getElementById('pdf-pages-container');
     if (pdfContainer) pdfContainer.remove();
-    var decryptOverlay = document.getElementById('decrypt-overlay');
-    if (decryptOverlay) decryptOverlay.remove();
-    secureViewState = { currentPage: 1, totalPages: 0, body: null, mime: '' };
     dom.detailTitle.textContent = 'Loading...';
     dom.detailCreator.innerHTML = '';
     dom.detailDate.textContent = '';
@@ -680,7 +676,6 @@
     dom.detailAttributes.innerHTML = '';
     dom.purchaseStatus.classList.add('hidden');
     dom.downloadNodeBtn.classList.add('hidden');
-    dom.downloadDecryptBtn.classList.add('hidden');
     dom.openViewerBtn.classList.add('hidden');
     dom.downloadStatus.classList.add('hidden');
     dom.saveBtn.classList.remove('saved');
