@@ -68,7 +68,7 @@ pub fn render_text_raw(plaintext: &[u8], cmd: &RenderCommand) -> (RenderResult, 
     (result, Some(buf))
 }
 
-fn wrap_text(text: &str, max_chars: usize, max_lines: usize) -> Vec<String> {
+pub(crate) fn wrap_text(text: &str, max_chars: usize, max_lines: usize) -> Vec<String> {
     let mut lines = Vec::new();
 
     for raw_line in text.lines() {
@@ -118,7 +118,7 @@ fn wrap_text(text: &str, max_chars: usize, max_lines: usize) -> Vec<String> {
 }
 
 /// Draw a single character using a minimal 8x16 bitmap representation.
-fn draw_char(img: &mut RgbaImage, x: u32, y: u32, ch: char, color: Rgba<u8>) {
+pub(crate) fn draw_char(img: &mut RgbaImage, x: u32, y: u32, ch: char, color: Rgba<u8>) {
     let (w, h) = img.dimensions();
 
     if !ch.is_ascii_graphic() && ch != ' ' {

@@ -26,6 +26,7 @@ html, body {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  position: relative;
 }
 
 /* Header */
@@ -199,12 +200,12 @@ html, body {
   border-top: 2px solid var(--border);
 }
 
-/* Footer */
+/* Footer — extra bottom padding compensates for Puter UIWindow clipping (~3-4px) */
 #viewer-footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 16px;
+  padding: 6px 16px 14px;
   background: var(--surface);
   border-top: 1px solid var(--border);
   flex-shrink: 0;
@@ -220,6 +221,184 @@ html, body {
 .footer-info {
   font-size: 10px;
   color: var(--text-muted);
+}
+
+/* Zoomed image — allow scrolling when exceeds container */
+#image-container.zoomed {
+  align-items: flex-start;
+  justify-content: flex-start;
+  min-height: auto;
+  padding: 0;
+}
+
+#image-container.zoomed #rendered-image {
+  max-width: none;
+  max-height: none;
+  pointer-events: auto;
+}
+
+/* Grab cursor when zoomable */
+#content-area.zoomable { cursor: grab; }
+#content-area.zoomable.panning { cursor: grabbing; }
+
+/* Floating toolbar */
+#viewer-toolbar {
+  position: absolute;
+  bottom: 44px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 6px;
+  background: rgba(26, 29, 39, 0.92);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  z-index: 10;
+  transition: opacity 0.3s ease;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.35);
+}
+
+#viewer-toolbar.toolbar-fade { opacity: 0; pointer-events: none; }
+
+.tb-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 6px;
+  transition: background 0.15s, color 0.15s;
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1;
+  padding: 0;
+}
+
+.tb-btn:hover { background: rgba(255,255,255,0.08); color: var(--text); }
+.tb-btn:active { background: rgba(255,255,255,0.12); }
+.tb-btn:disabled { opacity: 0.3; cursor: default; }
+
+.tb-label {
+  width: auto;
+  min-width: 40px;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  padding: 0 4px;
+  white-space: nowrap;
+}
+
+.tb-sep {
+  width: 1px;
+  height: 18px;
+  background: var(--border);
+  margin: 0 4px;
+  flex-shrink: 0;
+}
+
+#toolbar-page-nav {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+#page-indicator {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  padding: 0 4px;
+  white-space: nowrap;
+}
+
+/* Audio player */
+.audio-player {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+  padding: 40px 24px;
+  max-width: 400px;
+  width: 100%;
+}
+
+.audio-icon { color: var(--accent); opacity: 0.7; }
+.audio-title { font-size: 16px; font-weight: 600; text-align: center; word-break: break-word; }
+
+.audio-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+}
+
+.audio-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  background: var(--accent);
+  border: none;
+  color: #fff;
+  cursor: pointer;
+  border-radius: 50%;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+.audio-btn:hover { background: var(--accent); filter: brightness(1.2); }
+
+.audio-time {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  min-width: 80px;
+  text-align: center;
+}
+
+.audio-seek {
+  flex: 1;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  background: var(--border);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+.audio-seek::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  background: var(--accent);
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.audio-volume {
+  width: 60px;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  background: var(--border);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+.audio-volume::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 10px;
+  height: 10px;
+  background: var(--text-muted);
+  border-radius: 50%;
+  cursor: pointer;
 }
 
 /* Disable right-click context menu hint */

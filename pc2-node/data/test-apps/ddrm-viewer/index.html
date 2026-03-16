@@ -56,11 +56,60 @@
 
       <!-- Scrollable document (for text / PDF — all pages stacked) -->
       <div id="document-container" class="document-scroll hidden"></div>
+
+      <!-- Audio player (for audio/* assets) -->
+      <div id="audio-container" class="content-display hidden">
+        <div class="audio-player">
+          <div class="audio-icon">
+            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M9 18V5l12-2v13"/>
+              <circle cx="6" cy="18" r="3"/>
+              <circle cx="18" cy="16" r="3"/>
+            </svg>
+          </div>
+          <div id="audio-title" class="audio-title"></div>
+          <audio id="audio-element" preload="auto"></audio>
+          <div class="audio-controls">
+            <button id="btn-audio-play" class="audio-btn" title="Play/Pause">
+              <svg id="audio-play-icon" width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              <svg id="audio-pause-icon" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" style="display:none;"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+            </button>
+            <span id="audio-time" class="audio-time">0:00 / 0:00</span>
+            <input id="audio-seek" type="range" min="0" max="100" value="0" class="audio-seek" />
+            <input id="audio-volume" type="range" min="0" max="100" value="80" class="audio-volume" title="Volume" />
+          </div>
+        </div>
+      </div>
     </main>
+
+    <!-- Floating toolbar -->
+    <div id="viewer-toolbar" class="hidden">
+      <button id="btn-zoom-out" class="tb-btn" title="Zoom out (-)">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      </button>
+      <button id="zoom-level" class="tb-btn tb-label" title="Reset zoom (0)">100%</button>
+      <button id="btn-zoom-in" class="tb-btn" title="Zoom in (+)">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      </button>
+      <div class="tb-sep"></div>
+      <div id="toolbar-page-nav" style="display:none;">
+        <button id="btn-page-prev" class="tb-btn" title="Previous page (PageUp)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <span id="page-indicator" class="tb-label">1 / 1</span>
+        <button id="btn-page-next" class="tb-btn" title="Next page (PageDown)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
+        <div class="tb-sep"></div>
+      </div>
+      <button id="btn-fullscreen" class="tb-btn" title="Fullscreen (F)">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+      </button>
+    </div>
 
     <!-- Footer -->
     <footer id="viewer-footer">
-      <span class="footer-label">Protected by dDRM</span>
+      <span class="footer-label">Protected by Elacity dDRM</span>
       <span id="asset-type" class="footer-info"></span>
     </footer>
   </div>

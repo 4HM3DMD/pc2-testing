@@ -1431,7 +1431,8 @@ router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, 
     // ── WASM Renderer Path ──────────────────────────────
     // For images and text: decrypt + render inside WASM linear memory.
     // CEK and plaintext never touch Node.js memory.
-    const wasmSupportedTypes = mime.startsWith('image/') || mime.startsWith('text/');
+    const wasmCodeTypes = ['application/javascript', 'application/json', 'application/xml', 'application/x-yaml', 'application/toml', 'application/x-sh'];
+    const wasmSupportedTypes = mime.startsWith('image/') || mime.startsWith('text/') || mime === 'application/pdf' || wasmCodeTypes.includes(mime);
     if (wasmSupportedTypes) {
       try {
         const wasmResult = await renderViaWASM(req.body, mime, maxWidth, pageNum, ipfsService);
@@ -1672,6 +1673,21 @@ router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, 
       res.send(rendered);
 
       logger.info(`[SecureView] Text rendered (fallback): ${rendered.length} bytes (${visibleLines.length} lines, total: ${Date.now() - requestStart}ms) for ${buyerAddress}`);
+      return;
+    }
+
+    // ── Audio passthrough ─────────────────────────────────
+    // Audio can't be rendered as an image — decrypt and pass through for playback.
+    // The viewer displays an HTML5 audio player with anti-piracy measures.
+    if (mime.startsWith('audio/')) {
+      const audioLen = decryptedBytes.length;
+      res.set('Content-Type', mime);
+      res.set('Content-Length', String(audioLen));
+      res.set('X-Renderer', 'passthrough');
+      res.set('X-Asset-Type', 'audio');
+      res.send(Buffer.from(decryptedBytes));
+      decryptedBytes.fill(0);
+      logger.info(`[SecureView] Audio passthrough: ${mime}, ${audioLen} bytes (total: ${Date.now() - requestStart}ms) for ${buyerAddress}`);
       return;
     }
 

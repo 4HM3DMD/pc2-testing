@@ -132,11 +132,57 @@ fn route_render_raw(cmd: &RenderCommand, plaintext: &[u8]) -> (RenderResult, Opt
         return render::pdf::render_pdf_raw(plaintext, cmd);
     }
 
+    #[cfg(feature = "code-render")]
+    if is_code_type(mime) {
+        return render::code::render_code_raw(plaintext, cmd);
+    }
+
     #[cfg(feature = "text-render")]
     if mime == "text/plain" || mime.starts_with("text/") {
         return render::text::render_text_raw(plaintext, cmd);
     }
 
     (RenderResult::error(format!("unsupported MIME type: {mime}")), None)
+}
+
+/// Check if a MIME type represents source code (as opposed to plain text).
+#[cfg(feature = "code-render")]
+fn is_code_type(mime: &str) -> bool {
+    matches!(
+        mime,
+        "application/javascript"
+            | "text/javascript"
+            | "application/json"
+            | "application/xml"
+            | "text/xml"
+            | "application/x-yaml"
+            | "text/yaml"
+            | "text/x-yaml"
+            | "application/toml"
+            | "text/x-toml"
+            | "application/x-sh"
+            | "text/x-shellscript"
+            | "text/x-python"
+            | "text/x-rust"
+            | "text/rust"
+            | "text/x-c"
+            | "text/x-csrc"
+            | "text/x-c++"
+            | "text/x-c++src"
+            | "text/x-java"
+            | "text/x-java-source"
+            | "text/x-go"
+            | "text/x-golang"
+            | "text/x-typescript"
+            | "text/css"
+            | "text/html"
+            | "text/x-ruby"
+            | "text/x-php"
+            | "text/x-swift"
+            | "text/x-kotlin"
+            | "text/x-sql"
+            | "text/markdown"
+            | "text/x-markdown"
+    )
 }
 

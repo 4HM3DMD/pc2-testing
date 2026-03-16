@@ -397,10 +397,34 @@ Comprehensive player hardening and UX polish:
 
 **Known gotcha:** Puter UIWindow clips bottom ~3-4px of iframe content. Fixed with asymmetric padding (`6px 16px 10px`). Documented in `docs/wiki/Technical/PUTER_WINDOW_GOTCHAS.md`.
 
+#### WASM Renderer Hardening + Viewer UX (Mar 16)
+
+**WASM renderer now handles ALL static content types inside WASM linear memory:**
+- [x] **PDF rendering in WASM** — `lopdf` crate for PDF parsing + text extraction per page, rendered to JPEG using bitmap font. Plaintext PDF content no longer touches Node.js. WASM binary: 1.2MB → 2.6MB.
+- [x] **Code syntax highlighting** — `syntect` crate (Sublime Text grammars) for 30+ language MIME types (`application/javascript`, `text/x-python`, `text/css`, etc.). Dark editor theme (base16-ocean.dark), line numbers, per-token coloring.
+- [x] Images: already in WASM (image crate). Text: already in WASM (bitmap font).
+- [x] `storage.ts` routing updated: `wasmCodeTypes` array for `application/*` code MIME types.
+
+**dDRM Viewer UX enhancements (all completed):**
+- [x] **Image zoom/pan** — CSS-based zoom (`+`/`-`/`0` keyboard, Ctrl+scroll wheel), drag-to-scroll panning when zoomed, center-stable zoom transitions.
+- [x] **Document zoom + page navigation** — zoom applies to stacked page images, prev/next buttons, page indicator (`1 / N`), scroll-position tracking, PageUp/Down/Home/End keyboard shortcuts.
+- [x] **Floating toolbar** — semi-transparent glassmorphism bar (zoom controls, page nav, fullscreen toggle), auto-hide after 3s idle, show on mousemove, stays visible on hover.
+- [x] **Audio player** — new audio display mode with play/pause, seek bar, volume control, time display. Server-side `secure-view` endpoint extended with audio passthrough (decrypt + pass through bytes with original MIME). HTML5 `<audio>` element with blob URL.
+- [x] **Fullscreen toggle** — `F` key or toolbar button.
+
+**Security status after hardening:**
+| Content Type | WASM (plaintext in sandbox) | Node.js fallback |
+|---|---|---|
+| Images | Primary path | Sharp (on WASM failure) |
+| Text | Primary path | Canvas (on WASM failure) |
+| PDF | Primary path (text extraction) | PDF.js + Canvas |
+| Code | Primary path (syntect highlighting) | Falls through to text |
+| Audio | N/A (passthrough) | Decrypt + pass through |
+
 #### Next Up — Engineering Priorities
 1. **Lit Chipotle migration** — CRITICAL. Datil deprecated ~April 25, 2026. Replace v7 SDK with Chipotle REST API. Research at `docs/core/CHIPOTLE_MIGRATION_RESEARCH.md`.
-2. **WASM renderer hardening** — Extend Rust→WASM binary to handle PDF and image rendering (currently text only). Goal: CEK and plaintext never touch Node.js for any asset type.
-3. **Viewer UX enhancements** — PDF zoom/search, image zoom/pan, audio player, code syntax highlighting. Build on the scrollable document foundation.
+2. ~~**WASM renderer hardening**~~ — DONE (Mar 16) — PDF, code, images, text all render inside WASM.
+3. ~~**Viewer UX enhancements**~~ — DONE (Mar 16) — zoom, pan, page nav, audio player, toolbar.
 4. **On-chain indexer prototype** — replace Elacity GraphQL dependency with event scanner (The Graph / custom)
 5. **Self-provisioned RLI tokens** — each node mints own capacity credits, removes Elacity wallet dependency
 6. **AI Model Marketplace alpha** — first non-media vertical: GGUF → encrypt → IPFS → ACCESS_TOKEN → decrypt → Ollama

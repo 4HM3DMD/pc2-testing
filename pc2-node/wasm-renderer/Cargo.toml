@@ -13,10 +13,11 @@ name = "ddrm-renderer"
 path = "src/main.rs"
 
 [features]
-default = ["image-render", "text-render"]
+default = ["image-render", "text-render", "pdf-render", "code-render"]
 image-render = ["dep:image"]
 text-render = ["dep:ab_glyph", "dep:imageproc"]
-pdf-render = ["dep:lopdf"]
+pdf-render = ["dep:lopdf", "image-render", "text-render"]
+code-render = ["dep:syntect", "image-render"]
 audio-stream = []
 video-stream = []
 
@@ -35,6 +36,9 @@ imageproc = { version = "0.25", default-features = false, optional = true }
 
 # Render mode: PDF
 lopdf = { version = "0.34", optional = true }
+
+# Render mode: Code (syntax highlighting)
+syntect = { version = "5", default-features = false, features = ["default-syntaxes", "default-themes", "regex-fancy"], optional = true }
 
 [profile.release]
 opt-level = "s"
