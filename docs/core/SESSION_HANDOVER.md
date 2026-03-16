@@ -400,10 +400,16 @@ Comprehensive player hardening and UX polish:
 #### WASM Renderer Hardening + Viewer UX (Mar 16)
 
 **WASM renderer now handles ALL static content types inside WASM linear memory:**
-- [x] **PDF rendering in WASM** — `lopdf` crate for PDF parsing + text extraction per page, rendered to JPEG using bitmap font. Plaintext PDF content no longer touches Node.js. WASM binary: 1.2MB → 2.6MB.
+- [x] **PDF rendering in WASM** — `hayro` pure-Rust PDF rasterizer (replaced `lopdf` which crashed in WASM). Full-fidelity rendering: layout, fonts, tables, images. WASM binary: 2.7MB → 5.8MB.
 - [x] **Code syntax highlighting** — `syntect` crate (Sublime Text grammars) for 30+ language MIME types (`application/javascript`, `text/x-python`, `text/css`, etc.). Dark editor theme (base16-ocean.dark), line numbers, per-token coloring.
 - [x] Images: already in WASM (image crate). Text: already in WASM (bitmap font).
 - [x] `storage.ts` routing updated: `wasmCodeTypes` array for `application/*` code MIME types.
+- [x] Fixed WASI compilation target — `wasm32-wasip1` (was `wasm32-unknown-unknown`, caused "WASI version could not be determined" error).
+- [x] Fixed Node.js canvas text fallback — proper word wrapping, 640px width, 2000 line limit.
+- [x] Added lowercase bitmap glyphs (a-z) to WASM text renderer.
+- [x] **"Mint on Elacity"** right-click context menu for non-dDRM files, launches `elacity-creator` with file pre-loaded.
+- [x] Restored `pc2-wallet-bridge.js` and `pc2-wallet-provider.js` (deleted in prior commit), fixed Particle smart wallet.
+- [x] Applied Elacity Market brand blue (`#3b82f6`) to dDRM Viewer accent elements.
 
 **dDRM Viewer UX enhancements (all completed):**
 - [x] **Image zoom/pan** — CSS-based zoom (`+`/`-`/`0` keyboard, Ctrl+scroll wheel), drag-to-scroll panning when zoomed, center-stable zoom transitions.
@@ -422,7 +428,8 @@ Comprehensive player hardening and UX polish:
 | Audio | N/A (passthrough) | Decrypt + pass through |
 
 #### Next Up — Engineering Priorities
-1. **Lit Chipotle migration** — CRITICAL. Datil deprecated ~April 25, 2026. Replace v7 SDK with Chipotle REST API. Research at `docs/core/CHIPOTLE_MIGRATION_RESEARCH.md`.
+1. **WASM crypto hardening** — P-256 ECDH unwrap, AES-GCM decrypt, fMP4 strip+decrypt, PDF text extraction. Task plan: `.cursor/tasks/WASM-CRYPTO-HARDENING/`. Branch: `feature/wasm-crypto-hardening` (from `feature/ddrm-universal-access-layer` at `e05f1468e`).
+2. **Lit Chipotle migration** — CRITICAL. Datil deprecated ~April 25, 2026. Replace v7 SDK with Chipotle REST API. Research at `docs/core/CHIPOTLE_MIGRATION_RESEARCH.md`.
 2. ~~**WASM renderer hardening**~~ — DONE (Mar 16) — PDF, code, images, text all render inside WASM.
 3. ~~**Viewer UX enhancements**~~ — DONE (Mar 16) — zoom, pan, page nav, audio player, toolbar.
 4. **On-chain indexer prototype** — replace Elacity GraphQL dependency with event scanner (The Graph / custom)
@@ -504,7 +511,7 @@ Comprehensive player hardening and UX polish:
 - [Supernode Decentralization](f18dbf44-f5de-4238-8c62-499018cd4e50) — gateway v2.0, bootstrap script, dynamic discovery, relay mode, supernode dApp, community networking fix, docs update
 - [Network Map + Strategy](d9445cb9-12bd-437e-8d4e-ebb35ef40d64) — network map visual upgrade, universal asset strategy, app manifest spec, binary manager, handover
 - [3D Orb + SEO + Rebrand](6431d137-5dd9-4c8e-b042-5d8c54b908a5) — 3D orb integration, network map rebrand to "World Computer", full SEO overhaul, GA4, app icon fixes, mobile responsiveness
-- [dDRM Pipeline E2E](fd6755f0-d73c-4e41-8df3-0f57f15071a2) — @elacity-js/access, Creator Dashboard, Lit Action trust model (Path A), capacity credit auto-detection, decrypt endpoint, decentralization analysis
+- [dDRM Pipeline E2E](fd6755f0-d73c-4e41-8df3-0f57f15071a2) — @elacity-js/access, Creator Dashboard, Lit Action trust model (Path A), capacity credit auto-detection, decrypt endpoint, decentralization analysis. Also: hayro PDF rendering, WASM text fixes, Mint context menu, wallet bridge restore, Elacity branding, WASM crypto hardening plan
 - [Secure Viewer & PDF](fd6755f0-d73c-4e41-8df3-0f57f15071a2) — secure viewer pipeline, PDF hybrid rendering, two-layer encryption fix, Lit Pinata/relayer integration, auto-decrypt, parallel pages, dDRM Viewer app, .ddrm.json capsules, WASM renderer, GUI integration
 - [Media Runtime E2E](fd6755f0-d73c-4e41-8df3-0f57f15071a2) — server-side DASH/CENC decryption pipeline, Rust WASM cenc-decrypt crate, MSE player, DRM stripping (init+segment), 16-byte IV fix, Smart Account PSSH, two-phase Lit auth
 
