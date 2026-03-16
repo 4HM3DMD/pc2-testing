@@ -373,6 +373,30 @@ Built a complete server-side DASH/CENC media decryption pipeline for PC2. Elacit
 
 **Verified:** First successful end-to-end playback of Elacity DRM-protected DASH video inside PC2 (AV1 codec, AAC audio, 33.8s duration, 16-byte CENC IVs).
 
+#### PC2 Media Runtime — Player Improvements (Mar 16)
+
+Comprehensive player hardening and UX polish:
+
+**Short-term runtime improvements (all completed):**
+- [x] **Session expiry handling** — server returns 410 on expired sessions, client transparently re-authenticates (wallet sign → re-init → retry segment). Idle timeout (2h inactivity) instead of absolute TTL. Concurrency guards + refresh limit.
+- [x] **Audio-only & video-only support** — music note placeholder UI for audio-only DASH content, graceful degradation when video track missing.
+- [x] **Seek into unbuffered regions** — server provides `segmentStarts` array per track. Client maps time→segment, flushes MSE buffers, re-appends init segments, fetches from new position. Works with both seek bar and keyboard shortcuts.
+- [x] **Adaptive bitrate switching (ABR)** — bandwidth measurement via segment fetch timing (harmonic mean), conservative quality selection algorithm (30% headroom for upgrade, 8s cooldown), seamless init-segment swap for quality transitions. Gear icon UI with auto/manual quality selection.
+
+**UI/UX improvements (all completed):**
+- [x] YouTube-style keyboard shortcuts (Space/K=play, J/L=±10s, arrows=±5s, F=fullscreen, M=mute, up/down=volume)
+- [x] Click-to-play on video area
+- [x] Buffering indicator overlay (spinner)
+- [x] Auto-hide controls with cursor hiding (3s idle)
+- [x] Buffer eviction (30s behind playback)
+- [x] Segment retry with exponential backoff (3 attempts)
+- [x] 20-second buffer-ahead window
+- [x] Enhanced error messages for MediaError codes
+- [x] Elacity brand colors (#3b82f6 accent, #262626 controls bg)
+- [x] Quality selector gear icon with dropdown menu (auto + manual quality options)
+
+**Known gotcha:** Puter UIWindow clips bottom ~3-4px of iframe content. Fixed with asymmetric padding (`6px 16px 10px`). Documented in `docs/wiki/Technical/PUTER_WINDOW_GOTCHAS.md`.
+
 #### Next Up — Engineering Priorities
 1. **Lit Chipotle migration** — CRITICAL. Datil deprecated ~April 25, 2026. Replace v7 SDK with Chipotle REST API. Research at `docs/core/CHIPOTLE_MIGRATION_RESEARCH.md`.
 2. **WASM renderer hardening** — Extend Rust→WASM binary to handle PDF and image rendering (currently text only). Goal: CEK and plaintext never touch Node.js for any asset type.

@@ -62,7 +62,8 @@ class MediaSessionManager {
     const session = this.sessions.get(sessionId);
     if (!session) return null;
 
-    if (Date.now() - session.createdAt > SESSION_TTL_MS) {
+    // Idle timeout: expire if no segment fetch for SESSION_TTL_MS
+    if (Date.now() - session.lastAccessedAt > SESSION_TTL_MS) {
       this.sessions.delete(sessionId);
       return null;
     }
@@ -83,7 +84,7 @@ class MediaSessionManager {
     const now = Date.now();
     const expired: string[] = [];
     this.sessions.forEach((session, id) => {
-      if (now - session.createdAt > SESSION_TTL_MS) expired.push(id);
+      if (now - session.lastAccessedAt > SESSION_TTL_MS) expired.push(id);
     });
     expired.forEach(id => this.sessions.delete(id));
   }

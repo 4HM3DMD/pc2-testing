@@ -329,6 +329,7 @@ router.post('/init', async (req: AuthenticatedRequest, res: Response) => {
       height: t.height,
       representationId: t.representationId,
       segmentCount: t.segments.length,
+      segmentStarts: t.segments.map(s => Math.round(s.startTime * 1000) / 1000),
     }));
 
     res.json({
@@ -361,7 +362,7 @@ router.post('/segment', async (req: AuthenticatedRequest, res: Response) => {
 
     const session = mediaSessionManager.get(sessionId, authToken);
     if (!session) {
-      res.status(404).json({ error: 'Session not found or expired' });
+      res.status(410).json({ error: 'Session expired', code: 'SESSION_EXPIRED' });
       return;
     }
 
