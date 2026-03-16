@@ -163,16 +163,10 @@ Please try recreating the link.`);
                     args: {
                         channel:         channel,
                         tokenId:         tokenId,
-                        mediaCid:        descriptor.cid || '',
-                        litCiphertext:   descriptor.litCiphertext || '',
-                        dataToEncryptHash: descriptor.dataToEncryptHash || '',
-                        kid:             descriptor.kid || '',
-                        actionCid:       descriptor.actionCid || '',
+                        mediaUri:        descriptor.cid || '',
+                        title:           descriptor.title || '',
                         authority:       descriptor.authority || '',
-                        chain:           descriptor.chain || 'base',
-                        chainId:         String(descriptor.chainId || 8453),
-                        rpc:             descriptor.rpc || '',
-                        buyerAddress:    descriptor.buyerAddress || '',
+                        standalone:      'true',
                     },
                 });
             } else {

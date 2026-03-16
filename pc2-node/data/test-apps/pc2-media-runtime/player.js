@@ -12,9 +12,10 @@ const MEDIA_URI = params.mediaUri || new URLSearchParams(window.location.search)
 const TOKEN_URI = params.tokenURI || new URLSearchParams(window.location.search).get('tokenURI') || '';
 const TITLE = params.title || new URLSearchParams(window.location.search).get('title') || '';
 const AUTHORITY = params.authority || new URLSearchParams(window.location.search).get('authority') || '';
-const BUYER_ADDRESS = params.buyerAddress || '';
-const REQUEST_ID = params.requestId || '';
-const LIT_AUTH_SIG = params.litAuthSig || null;
+let BUYER_ADDRESS = params.buyerAddress || '';
+let REQUEST_ID = params.requestId || '';
+let LIT_AUTH_SIG = params.litAuthSig || null;
+const STANDALONE = params.standalone === 'true' || params.standalone === true;
 
 // ─── DOM ─────────────────────────────────────────────────────────────
 const $loading = document.getElementById('loading-screen');
@@ -194,6 +195,52 @@ function getPlayingSegment(time, trackIndex) {
   return track.segments.length;
 }
 
+// ─── Standalone Lit Auth (for filesystem double-click launch) ────────
+async function performStandaloneLitAuth() {
+  if (!window.ethereum) {
+    throw new Error('Wallet not available. Please ensure your wallet is connected.');
+  }
+
+  $loadingText.textContent = 'Connecting wallet...';
+
+  const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+  if (!accounts || accounts.length === 0) {
+    throw new Error('No wallet accounts available. Please connect your wallet.');
+  }
+  const eoaAddress = accounts[0];
+  const sp = new URLSearchParams(window.location.search);
+  // BUYER_ADDRESS is the Smart Account (for on-chain access checks in /init)
+  // eoaAddress is the EOA (the actual signing key — SIWE + personal_sign must use this)
+  BUYER_ADDRESS = sp.get('puter.smart_account') || eoaAddress;
+
+  $loadingText.textContent = 'Preparing Lit authentication...';
+
+  // prepare-auth must use EOA (the signer), not Smart Account
+  const prepareRes = await apiFetch('/api/media/prepare-auth', { buyerAddress: eoaAddress });
+  if (!prepareRes.ok) {
+    const err = await prepareRes.json().catch(() => ({ error: prepareRes.statusText }));
+    throw new Error(err.error || 'Failed to prepare Lit authentication');
+  }
+  const { requestId, siweMessage } = await prepareRes.json();
+  REQUEST_ID = requestId;
+
+  $loadingText.textContent = 'Please sign the authentication message in your wallet...';
+
+  const msgHex = '0x' + Array.from(new TextEncoder().encode(siweMessage))
+    .map(b => b.toString(16).padStart(2, '0')).join('');
+  const sig = await window.ethereum.request({
+    method: 'personal_sign',
+    params: [msgHex, eoaAddress],
+  });
+
+  LIT_AUTH_SIG = {
+    sig: sig,
+    derivedVia: 'web3.eth.personal.sign',
+    signedMessage: siweMessage,
+    address: eoaAddress,
+  };
+}
+
 // ─── Init ────────────────────────────────────────────────────────────
 async function init() {
   if (!CHANNEL || !TOKEN_ID) {
@@ -201,9 +248,14 @@ async function init() {
     return;
   }
 
-  $loadingText.textContent = 'Resolving content and recovering decryption key...';
-
   try {
+    // Standalone mode: launched from filesystem without pre-signed Lit auth
+    if (STANDALONE && !LIT_AUTH_SIG) {
+      await performStandaloneLitAuth();
+    }
+
+    $loadingText.textContent = 'Resolving content and recovering decryption key...';
+
     const initBody = {
       channel: CHANNEL,
       tokenId: TOKEN_ID,

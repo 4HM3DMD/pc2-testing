@@ -109,6 +109,12 @@ router.post('/prepare-auth', async (req: AuthenticatedRequest, res: Response) =>
       },
     );
 
+    // Prevent unhandled rejection crash if auth flow is never completed
+    sessionSigsPromise.catch((err: any) => {
+      logger.warn(`[media/prepare-auth] Background session ${requestId} failed: ${err.message}`);
+      pendingAuthRequests.delete(requestId);
+    });
+
     // Store for /init to resolve
     pendingAuthRequests.set(requestId, {
       sessionSigsPromise,
