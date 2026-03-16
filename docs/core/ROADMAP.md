@@ -2,7 +2,7 @@
 
 > **Purpose:** Single source of truth for all strategic goals, technical work streams, and milestones — directly mapped to the Keystone Fund proposal and Rong Chen's original vision
 > **Created:** 2026-02-24
-> **Last Updated:** 2026-03-15
+> **Last Updated:** 2026-03-16
 > **Status:** Living document — update as work progresses
 
 ---
@@ -269,6 +269,7 @@ These diagrams from Rong define the north star. Every work stream should move us
 - [ ] Node discovery and directory (public listing with reputation)
 - [ ] Social features foundation (chat between node owners)
 - [ ] IoT device connectivity patterns (sensors → personal cloud)
+- [ ] dDRM CEK mesh caching — P2P key relay between nodes with shared ACCESS_TOKEN ownership. Signed attestation proves on-chain rights. Reduces Lit API calls and cost at network scale. Prerequisite: Chipotle migration complete
 
 **Awareness Layer (Context + Memory):**
 - [ ] Context ingestion pipeline — location, photos, voice, motion, activity events all flowing to node
@@ -286,6 +287,7 @@ These diagrams from Rong define the north star. Every work stream should move us
 - [x] Selective IPFS DHT announcement for dDRM content (`announce: true`) *(completed Mar 5 — dht.provide + periodic re-announce)*
 - [x] Marketplace UI within ElastOS (browse, purchase, download) *(completed Mar 3-4 — Elacity Market dApp)*
 - [x] Buyer node becomes seeder (CDN effect for encrypted content) *(completed Mar 5-6 — Bitswap-first + NAT traversal + relay)*
+- [ ] Incentivized encrypted content CDN — PC2 buyer nodes collectively serve encrypted segments via IPFS Bitswap. Bandwidth contribution tracking per node. Popular content auto-replicates across buyer network. Economic incentive via dDRM contribution credits
 
 **Universal Asset Marketplace (dDRM beyond media):**
 - [x] Lit Action trust model — custom `non-media-decrypt.js` with self-referential conditions, on-chain access check, Smart Account aware *(completed Mar 14)*
@@ -369,6 +371,7 @@ These diagrams from Rong define the north star. Every work stream should move us
 - [ ] Media + Network bundle tokens (streaming + premium access in one)
 - [ ] Compute/storage fee models for shared services
 - [ ] Revenue split enforcement: 80% operators, 15% protocol treasury, 5% ELA buyback
+- [ ] dDRM contribution credits — nodes earn Elacity credits by contributing IPFS bandwidth, CEK relay for mesh caching, and uptime. Credits offset Lit/key-management costs. Self-sustaining network economics replacing Elacity subsidy model
 
 **Universal Marketplace Growth:**
 - [ ] AI Model Marketplace — full launch with categories (LLM, vision, audio, multimodal)
@@ -376,6 +379,7 @@ These diagrams from Rong define the north star. Every work stream should move us
 - [ ] Enterprise DRM-as-a-Service pilot — white-label Elacity contracts for B2B software licensing
 - [ ] Data Unions — collective licensing via MultiChannel (photographer collectives, research teams, music catalogs)
 - [ ] Agent buyer support — MCP/A2A endpoints for autonomous agent procurement of ACCESS_TOKENs
+- [ ] Elacity dDRM API product — one API key for encrypt/decrypt/mint/upload/verify/stream. Pay-per-request + tiered subscription revenue model. Target markets: AI agents (MCP/A2A), third-party marketplaces, WordPress/Shopify plugins, white-label integrations. Foundation: Chipotle migration makes all Lit calls simple HTTP POSTs
 
 **Year 1 Report:**
 - [ ] Comprehensive development output report (commits, releases, features)
@@ -408,6 +412,7 @@ These diagrams from Rong define the north star. Every work stream should move us
 - [ ] Marketplace factory — deploy custom `Channel` + `AuthorityGateway` instances for niche verticals
 - [ ] Documentation for third-party marketplace builders
 - [ ] Enterprise self-hosted option (private Elacity contracts for internal digital asset management)
+- [ ] dDRM API gateway — REST API wrapping key management + IPFS + on-chain contracts. Developer dashboard with usage analytics, rate limiting, billing. Technical foundation: Chipotle migration + chipotle-client.ts abstraction layer
 
 ---
 
@@ -445,6 +450,11 @@ These diagrams from Rong define the north star. Every work stream should move us
 - [ ] MicroVM isolation where hardware supports it (Firecracker on x86)
 - [ ] DID integration with ESC/EID for `elastos://` WebSpace
 - [ ] DHT participation — PC2 nodes store/forward DHT entries (Level 2)
+- [ ] dDRM capsule — `@elacity-js/access` compiled to WASM, CEK never leaves capsule linear memory. ACCESS_TOKEN → capability token bridge: Runtime verifies on-chain ownership, issues scoped `{ action: "drm:decrypt", resource: CID }` token. Lit calls happen inside sandbox. Full audit trail via Runtime immutable log
+- [ ] Key custody primitive — `elastos-keycustody` crate providing Shamir Secret Sharing split/combine, encrypted share storage, quorum reconstruction protocol. Mechanism-only (no policy); dDRM capsule provides policy decisions. Analogous to `elastos-storage` for key material
+- [ ] Key custodian capsule — supernode-hosted capsule that stores key shares, verifies on-chain access (`hasAccessByContentId`), releases shares under proof of authorization. Content-addressed code (IPFS CID) for immutability — same trust model as Lit Actions but running on PC2 infrastructure
+- [ ] `KeyCustodyRegistry.sol` — on-chain mapping of contentId → custodian supernode set. Quorum parameters (N shares, K threshold). Geographic diversity requirements. Creators choose custodian set at encrypt time
+- [ ] PC2 threshold key management — creators encrypt CEK against K-of-N PC2 supernodes instead of Lit Protocol via Shamir Secret Sharing (`sharks`/`vsss-rs` Rust crates). Buyer's node collects K shares from custodian supernodes after each independently verifies on-chain access. No external dependency for key unlock. Lit becomes optional fallback for legacy content. Progression: Lit primary → Lit fallback → Lit optional → fully sovereign
 
 **Agent Economy:**
 - [ ] Agent-to-agent communication (capability-gated trust)
@@ -485,6 +495,8 @@ These diagrams from Rong define the north star. Every work stream should move us
 - Direct exchange of compute, storage, content between nodes
 - Sandboxed AI execution environments
 - Protocol fee revenue expansion
+- TEE-sealed local decrypt — on TEE-capable hardware (SGX, TrustZone, Secure Enclave), CEK decrypted inside local hardware enclave with no network round-trip. Ultimate sovereignty: user's own silicon is the trusted execution environment, blockchain is the access ledger. Fallback to PC2 threshold for non-TEE hardware
+- Key migration tooling — re-encrypt Lit-encrypted content CEKs against PC2 custodian supernode set while Lit is still available. Enables graceful transition away from any external key management dependency. Batch migration for existing content catalogs
 
 **Self-Sustaining Revenue (M10):**
 - Protocol fees covering operational costs
@@ -568,6 +580,12 @@ Phase 5 — Platform Scale (M7+):
   → agent marketplaces (deploy, discover, hire autonomous agents)
   → cross-chain expansion (Base, Arbitrum, Solana via bridges)
   → self-sustaining revenue from protocol fees across all verticals
+  → Elacity dDRM API: one key for all operations (encrypt, decrypt, mint, stream, verify)
+  → PC2 dDRM mesh: CEK caching, encrypted CDN, contribution economics
+  → sovereign key management: PC2 threshold network replaces Lit for new content
+  → TEE-sealed local decrypt for capable hardware (SGX, TrustZone, Secure Enclave)
+  → key migration: re-encrypt legacy Lit content to PC2 threshold custody
+  → full walk-away from external key management dependencies
 ```
 
 ### SDK Package Evolution
