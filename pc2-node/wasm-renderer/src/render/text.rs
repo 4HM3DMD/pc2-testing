@@ -12,7 +12,8 @@ const CANVAS_WIDTH: u32 = 640;
 const LINE_HEIGHT: u32 = 20;
 const CHAR_WIDTH: u32 = 8;
 const PADDING: u32 = 24;
-const MAX_LINES: usize = 4000;
+const JPEG_MAX_DIM: u32 = 16384; // Keep well below JPEG's 65535 and browser rendering limits
+const MAX_LINES: usize = ((JPEG_MAX_DIM - 48) / 20) as usize; // ~816 lines per page
 const BG_COLOR: Rgba<u8> = Rgba([250, 250, 248, 255]);
 const TEXT_COLOR: Rgba<u8> = Rgba([30, 30, 30, 255]);
 
@@ -30,7 +31,7 @@ pub fn render_text_raw(plaintext: &[u8], cmd: &RenderCommand) -> (RenderResult, 
 
     let wrapped_lines = wrap_text(text, chars_per_line, MAX_LINES);
     let num_lines = wrapped_lines.len() as u32;
-    let canvas_height = (num_lines * LINE_HEIGHT + PADDING * 2).max(100);
+    let canvas_height = (num_lines * LINE_HEIGHT + PADDING * 2).max(100).min(JPEG_MAX_DIM);
 
     let mut img = RgbaImage::from_pixel(max_w, canvas_height, BG_COLOR);
 

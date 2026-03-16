@@ -128,7 +128,11 @@ var Wallet = (function () {
   // ── Connection ───────────────────────────────────────
 
   function connect() {
-    return getProvider().request({ method: 'eth_requestAccounts' })
+    return getProvider().request({ method: 'eth_accounts' })
+      .then(function (accounts) {
+        if (accounts && accounts.length > 0) return accounts;
+        return getProvider().request({ method: 'eth_requestAccounts' });
+      })
       .then(function (accounts) {
         connectedAddress = accounts[0] || null;
         return getProvider().request({ method: 'eth_chainId' });

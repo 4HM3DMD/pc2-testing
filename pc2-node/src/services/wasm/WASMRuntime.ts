@@ -32,6 +32,7 @@ export interface RendererCommand {
     max_width?: number;
     max_height?: number;
     output_format?: 'jpeg' | 'webp' | 'png';
+    mode?: 'decrypt_only';
 }
 
 export interface RendererResult {
@@ -744,6 +745,94 @@ export class WASMRuntime {
                     logger.info(`[WASMRuntime] CENC output: ${raw.length} bytes`);
                 } else {
                     logger.warn('[WASMRuntime] CENC: result.success=true but no /output/segment.bin found');
+                }
+            }
+
+            return { success: result.success, decryptedBytes, error: result.error, executionTimeMs: Date.now() - startTime };
+        } catch (error: any) {
+            return { success: false, decryptedBytes: null, error: error.message, executionTimeMs: Date.now() - startTime };
+        } finally {
+            this.clearMemFS();
+            this.releaseExecutionSlot();
+        }
+    }
+
+    /**
+     * Decrypt-only mode: AES-GCM decryption inside WASM linear memory.
+     * Returns raw plaintext bytes — the CEK never touches Node.js memory.
+     *
+     * MemFS paths:
+     *   /input/command.json  (cek_b64, iv_b64, mime_type, mode: "decrypt_only")
+     *   /input/encrypted.bin (raw encrypted content)
+     *   /output/result.json  (success, content_type, output_size)
+     *   /output/decrypted.bin (raw plaintext)
+     */
+    async executeDecryptOnly(
+        wasmBinary: ArrayBuffer | Uint8Array,
+        cekBase64: string,
+        ivBase64: string,
+        mimeType: string,
+        encryptedBytes: Buffer,
+        options?: { timeoutMs?: number },
+    ): Promise<{ success: boolean; decryptedBytes: Buffer | null; error?: string; executionTimeMs: number }> {
+        const timeoutMs = options?.timeoutMs ?? this.defaultTimeoutMs;
+        const startTime = Date.now();
+
+        try {
+            await this.acquireExecutionSlot();
+        } catch (error: any) {
+            return { success: false, decryptedBytes: null, error: `Queue error: ${error.message}`, executionTimeMs: Date.now() - startTime };
+        }
+
+        try {
+            if (!this.initialized) await this.initialize();
+            this.clearMemFS();
+
+            const command: RendererCommand = {
+                cek_b64: cekBase64,
+                iv_b64: ivBase64,
+                mime_type: mimeType,
+                mode: 'decrypt_only',
+            };
+
+            this.writeToMemFS('/input/command.json', Buffer.from(JSON.stringify(command), 'utf-8'));
+            this.writeToMemFS('/input/encrypted.bin', encryptedBytes);
+
+            logger.info(`[WASMRuntime] DecryptOnly input: encrypted=${encryptedBytes.length}B`);
+
+            const wasiResult = await this.executeWASIStart(wasmBinary, timeoutMs);
+            if (!wasiResult.success) {
+                return { success: false, decryptedBytes: null, error: wasiResult.error ?? 'WASI execution failed', executionTimeMs: Date.now() - startTime };
+            }
+
+            const outputFs = wasiResult.wasiFs;
+            let resultJson: string | null = null;
+            if (outputFs) {
+                const bytes = this.readFromSpecificMemFS(outputFs, '/output/result.json');
+                if (bytes) resultJson = new TextDecoder().decode(bytes);
+            }
+            if (!resultJson) {
+                const bytes = this.readFromMemFS('/output/result.json');
+                if (bytes) resultJson = new TextDecoder().decode(bytes);
+            }
+            if (!resultJson && wasiResult.stdout) resultJson = wasiResult.stdout;
+            if (!resultJson) {
+                return { success: false, decryptedBytes: null, error: 'Decrypt-only produced no output', executionTimeMs: Date.now() - startTime };
+            }
+
+            let result: any;
+            try { result = JSON.parse(resultJson); } catch { result = { success: false, error: 'Invalid result JSON' }; }
+
+            let decryptedBytes: Buffer | null = null;
+            if (result.success) {
+                let raw: Uint8Array | null = null;
+                if (outputFs) raw = this.readFromSpecificMemFS(outputFs, '/output/decrypted.bin');
+                if (!raw) raw = this.readFromMemFS('/output/decrypted.bin');
+                if (raw) {
+                    decryptedBytes = Buffer.from(raw);
+                    logger.info(`[WASMRuntime] DecryptOnly output: ${raw.length} bytes`);
+                } else {
+                    logger.warn('[WASMRuntime] DecryptOnly: result.success=true but no /output/decrypted.bin found');
                 }
             }
 

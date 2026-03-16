@@ -1267,12 +1267,44 @@ async function recoverCEKAndFetchData(params: DecryptParams, ipfsService?: any):
 }
 
 /**
- * Full two-layer decryption (Node.js path): Lit recovers CEK, AES-GCM decrypts file.
+ * Full two-layer decryption: Lit recovers CEK, AES-GCM decrypts file.
+ * Primary path: WASM decrypt-only (CEK isolated in WASM linear memory).
+ * Fallback: Node.js crypto for very large files or WASM failures.
  * Returns raw decrypted Buffer. Caller is responsible for zeroing it after use.
  */
+const WASM_DECRYPT_MAX_BYTES = 50 * 1024 * 1024; // 50MB — above this, Node.js crypto is used
+
 async function decryptAssetTwoLayer(params: DecryptParams, ipfsService?: any): Promise<Buffer> {
   const { cekBase64, encryptedBytes } = await recoverCEKAndFetchData(params, ipfsService);
 
+  // WASM path: CEK stays in WASM linear memory
+  if (encryptedBytes.length <= WASM_DECRYPT_MAX_BYTES) {
+    try {
+      const wasmBinary = await loadRendererBinary();
+      const runtime = getWASMRuntime();
+      const result = await runtime.executeDecryptOnly(
+        wasmBinary,
+        cekBase64,
+        params.iv,
+        'application/octet-stream',
+        encryptedBytes,
+        { timeoutMs: 60000 },
+      );
+
+      if (result.success && result.decryptedBytes) {
+        logger.info(`[Lit] Two-layer decrypt (WASM): ${result.decryptedBytes.length} bytes in ${result.executionTimeMs}ms for ${params.buyerAddress}`);
+        return result.decryptedBytes;
+      }
+
+      logger.warn(`[Lit] WASM decrypt-only failed (${result.error}), falling back to Node.js`);
+    } catch (wasmErr: any) {
+      logger.warn(`[Lit] WASM decrypt-only error: ${wasmErr.message}, falling back to Node.js`);
+    }
+  } else {
+    logger.info(`[Lit] File too large for WASM decrypt (${encryptedBytes.length}B > ${WASM_DECRYPT_MAX_BYTES}B), using Node.js`);
+  }
+
+  // Node.js fallback
   const crypto = await import('crypto');
   const cekBytes = Buffer.from(cekBase64, 'base64');
   const ivBytes = Buffer.from(params.iv, 'base64');
@@ -1293,7 +1325,7 @@ async function decryptAssetTwoLayer(params: DecryptParams, ipfsService?: any): P
 
   if (decryptedBytes.length === 0) throw new Error('AES decryption returned empty data');
 
-  logger.info(`[Lit] Two-layer decrypt complete: ${decryptedBytes.length} bytes for ${params.buyerAddress}`);
+  logger.info(`[Lit] Two-layer decrypt (Node.js fallback): ${decryptedBytes.length} bytes for ${params.buyerAddress}`);
   return decryptedBytes;
 }
 

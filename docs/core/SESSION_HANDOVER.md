@@ -1,4 +1,4 @@
-# Session Handover — Mar 15, 2026
+# Session Handover — Mar 16, 2026
 
 > **Read this first when starting a new agent session.**
 
@@ -6,11 +6,12 @@
 
 ## Where We Are
 
-**Branch:** `feature/ddrm-universal-access-layer` (branched from `feature/elacity-ddrm-marketplace`)
+**Branch:** `feature/wasm-crypto-hardening` (branched from `feature/ddrm-universal-access-layer` at `e05f1468e`)
+**Parent Branch:** `feature/ddrm-universal-access-layer` (branched from `feature/elacity-ddrm-marketplace`)
 **Release:** v1.1.0 tagged and released on 2026-03-03 (134 commits squash-merged to main)
 **Launcher:** v1.1.1 released — version display, one-click updates, full networking install
 **DAO Proposal:** Live at https://elastos.com/proposals/69a24f49247f130078064edd
-**Last Commit:** feat: PC2 Media Runtime — server-side DASH/CENC decryption, Rust WASM cenc-decrypt, MSE player, end-to-end DRM video playback
+**Last Commit:** feat: WASM crypto hardening Phases A-C + bug fixes (double signatures, TXT dim cap, autoplay)
 
 ### What Just Shipped (v1.1.0 on main)
 
@@ -428,28 +429,69 @@ Comprehensive player hardening and UX polish:
 | Audio | N/A (passthrough) | Decrypt + pass through |
 
 #### Next Up — Engineering Priorities
-1. **WASM crypto hardening** — P-256 ECDH unwrap, AES-GCM decrypt, fMP4 strip+decrypt, PDF text extraction. Task plan: `.cursor/tasks/WASM-CRYPTO-HARDENING/`. Branch: `feature/wasm-crypto-hardening` (from `feature/ddrm-universal-access-layer` at `e05f1468e`).
-2. **Lit Chipotle migration** — CRITICAL. Datil deprecated ~April 25, 2026. Replace v7 SDK with Chipotle REST API. Research at `docs/core/CHIPOTLE_MIGRATION_RESEARCH.md`.
-2. ~~**WASM renderer hardening**~~ — DONE (Mar 16) — PDF, code, images, text all render inside WASM.
-3. ~~**Viewer UX enhancements**~~ — DONE (Mar 16) — zoom, pan, page nav, audio player, toolbar.
-4. **On-chain indexer prototype** — replace Elacity GraphQL dependency with event scanner (The Graph / custom)
-5. **Self-provisioned RLI tokens** — each node mints own capacity credits, removes Elacity wallet dependency
-6. **AI Model Marketplace alpha** — first non-media vertical: GGUF → encrypt → IPFS → ACCESS_TOKEN → decrypt → Ollama
-7. ~~**dDRM Viewer app**~~ — DONE (Mar 15) — dedicated PC2 app with image/document display modes, native windowing, .ddrm.json capsule integration
-8. ~~**WASM renderer (text)**~~ — DONE (Mar 15) — Rust→WASM text rendering via WASMRuntime.ts
-9. ~~**Consumer decrypt endpoint**~~ — DONE (Mar 14) — Lit Action `executeJs()` with on-chain access check
-10. ~~**Lit Action trust model**~~ — DONE (Mar 14) — self-ref conditions, access check in action code
-11. ~~**Capacity credit auto-detection**~~ — DONE (Mar 14) — Chronicle Yellowstone query, handles 15-day rotation
-12. ~~**Universal asset viewer (images)**~~ — DONE (Mar 14) — inline blob URL rendering in Market dApp
-13. ~~**`@elacity-js/access` package**~~ — DONE (Mar 13)
-14. ~~**Creator Dashboard dApp**~~ — DONE (Mar 13-14)
-15. ~~**Elacity IPFS pipeline**~~ — DONE (Mar 14)
-16. ~~**On-chain purchase verification**~~ — DONE (Mar 14)
-15. **Create GitHub release `pc2-binaries-v1`** — run `fetch-binaries.sh all`, upload assets to release (DEFERRED)
-16. **Gateway "node offline" page** — replaces infinite "initializing" spinner
-17. **Fiat onramp** — Particle Smart Account + Stripe/Moonpay
-18. **App Factory** — local packaging pipeline
-19. **dDRM Access Token contract** — ERC-1155 tiered tokens for supernode economics (deferred to Milestone 3-4)
+1. **Lit Chipotle migration** — CRITICAL. Datil deprecated ~April 25, 2026. Replace v7 SDK with Chipotle REST API. Research at `docs/core/CHIPOTLE_MIGRATION_RESEARCH.md`. **NEW BRANCH** from `feature/wasm-crypto-hardening`.
+2. **P-256 ECDH unwrap to WASM (Phase E)** — conditional on Chipotle envelope format. If Chipotle returns CEK directly, this phase is eliminated.
+3. ~~**WASM crypto hardening (Phases A-C)**~~ — DONE (Mar 16). AES-GCM decrypt in WASM, fMP4 strip+decrypt combined, build pipeline, PDF spike. Branch: `feature/wasm-crypto-hardening`.
+4. ~~**WASM renderer hardening**~~ — DONE (Mar 16) — PDF, code, images, text all render inside WASM.
+5. ~~**Viewer UX enhancements**~~ — DONE (Mar 16) — zoom, pan, page nav, audio player, toolbar.
+6. **On-chain indexer prototype** — replace Elacity GraphQL dependency with event scanner (The Graph / custom)
+7. **Self-provisioned RLI tokens** — each node mints own capacity credits, removes Elacity wallet dependency
+8. **AI Model Marketplace alpha** — first non-media vertical: GGUF → encrypt → IPFS → ACCESS_TOKEN → decrypt → Ollama
+
+#### WASM Crypto Hardening — COMPLETED Phases A-C (Mar 16)
+
+Branch: `feature/wasm-crypto-hardening` (from `feature/ddrm-universal-access-layer` at `e05f1468e`)
+Task plan: `.cursor/tasks/WASM-CRYPTO-HARDENING/WASM-CRYPTO-HARDENING.md`
+
+**Phase A: Build Infrastructure + AES-GCM Decrypt-Only — DONE**
+- `wasm32-wasip1` added to `rust-toolchain.toml`
+- `pc2-node/scripts/build-wasm.sh` — builds all WASM crates, copies to `wasm-apps/`
+- `decrypt_only` mode in `ddrm-renderer` WASM — AES-GCM decrypt inside WASM linear memory, CEK never in Node.js
+- `executeDecryptOnly()` in `WASMRuntime.ts` — new orchestration method
+- `decryptAssetTwoLayer()` in `storage.ts` refactored: WASM path for files ≤50MB, Node.js fallback for larger
+- Benchmarked: 50MB threshold set based on MemFS overhead
+
+**Phase B: fMP4 Strip + Decrypt Combined — DONE**
+- `strip.rs` — Rust port of `stripEncryptionSignaling` + `stripSegmentEncryptionBoxes` with 64-bit extended box support
+- `strip_init` mode in `cenc-decrypt` — strip only, no decrypt (for init segments)
+- `strip: true` flag in `cenc-decrypt` — combined decrypt+strip in single WASM call
+- `media.ts` refactored: `stripInitViaWASM()` + `decryptSegmentViaWASM()` with `strip: true`
+- JS strip functions commented out (kept for one release cycle as safety net)
+
+**Phase C: PDF Text Extraction Spike — DONE (no implementation)**
+- `hayro-syntax` can parse PDF content stream operators (Tj/TJ) but lacks font-to-Unicode CMap resolution
+- Text extraction not viable without significant work — keeping `pdfjs-dist` for indexing
+- Documented findings, phase closed
+
+**Phase D: Lit Chipotle Migration — NEXT (new branch)**
+**Phase E: P-256 ECDH to WASM — CONDITIONAL on Chipotle format**
+
+**Files changed (WASM hardening):**
+| File | Change |
+|------|--------|
+| `rust-toolchain.toml` | Added `wasm32-wasip1` target |
+| `pc2-node/scripts/build-wasm.sh` | NEW — automated WASM build script |
+| `pc2-node/wasm-renderer/src/lib.rs` | `decrypt_only` mode, `process_decrypt_only()` |
+| `pc2-node/wasm-renderer/src/main.rs` | `decrypt_only` output path (`/output/decrypted.bin`) |
+| `pc2-node/wasm-renderer/src/render/text.rs` | JPEG dim cap (16384px), MAX_LINES recalculated |
+| `pc2-node/src/services/wasm/WASMRuntime.ts` | `executeDecryptOnly()` method |
+| `pc2-node/src/api/storage.ts` | WASM decrypt path with 50MB threshold, Node.js fallback |
+| `pc2-node/crates/cenc-decrypt/src/strip.rs` | NEW — Rust fMP4 box stripping with 64-bit support |
+| `pc2-node/crates/cenc-decrypt/src/lib.rs` | `strip_init` mode, `strip: true` flag |
+| `pc2-node/src/api/media.ts` | `stripInitViaWASM()`, `loadCENCWasmBinary()`, `strip: true` |
+| `pc2-node/wasm-apps/ddrm-renderer/ddrm-renderer.wasm` | Rebuilt |
+| `pc2-node/wasm-apps/cenc-decrypt/cenc-decrypt.wasm` | Rebuilt |
+
+#### Bug Fixes — Mar 16
+
+| Bug | Root Cause | Fix |
+|-----|-----------|-----|
+| Double wallet signature (1 of 2) | `pc2-wallet-bridge.js` AND `IPC.js` both handled `pc2-wallet-rpc` messages | Removed `pc2-wallet-bridge.js` script tag from `index.html` — `IPC.js` already handles it |
+| Double `eth_sendTransaction` handler | Duplicate handler in `ParticleNetworkContext.tsx` useEffect + switch case | Removed the "early handler" useEffect, kept only switch-case handler |
+| WASM text renderer crash (65535px) | Text rendering produced image >65535px tall, exceeding JPEG limits | Capped `JPEG_MAX_DIM` to 16384, `MAX_LINES` recalculated |
+| `eth_requestAccounts` unnecessary prompt | Market + player always called `eth_requestAccounts` even when already connected | Use `eth_accounts` first, fall back to `eth_requestAccounts` only if empty |
+| Video doesn't autoplay after sign | No `play()` call after initial segments buffered | Added `$video.play()` after `startBufferLoop()` |
+| Server restart loses files | Stale `run-selfhosted.js` process held IPFS ports, IPFS init failed, filesystem undefined | Always kill all node processes before restart; verify IPFS + filesystem in logs |
 
 #### Decentralization Analysis — DOCUMENTED (Mar 14)
 - [x] `docs/core/DECENTRALIZATION_STATUS.md` — comprehensive team document covering architecture, scorecard, and walk-away test roadmap
@@ -511,7 +553,7 @@ Comprehensive player hardening and UX polish:
 - [Supernode Decentralization](f18dbf44-f5de-4238-8c62-499018cd4e50) — gateway v2.0, bootstrap script, dynamic discovery, relay mode, supernode dApp, community networking fix, docs update
 - [Network Map + Strategy](d9445cb9-12bd-437e-8d4e-ebb35ef40d64) — network map visual upgrade, universal asset strategy, app manifest spec, binary manager, handover
 - [3D Orb + SEO + Rebrand](6431d137-5dd9-4c8e-b042-5d8c54b908a5) — 3D orb integration, network map rebrand to "World Computer", full SEO overhaul, GA4, app icon fixes, mobile responsiveness
-- [dDRM Pipeline E2E](fd6755f0-d73c-4e41-8df3-0f57f15071a2) — @elacity-js/access, Creator Dashboard, Lit Action trust model (Path A), capacity credit auto-detection, decrypt endpoint, decentralization analysis. Also: hayro PDF rendering, WASM text fixes, Mint context menu, wallet bridge restore, Elacity branding, WASM crypto hardening plan
+- [dDRM Pipeline E2E](fd6755f0-d73c-4e41-8df3-0f57f15071a2) — @elacity-js/access, Creator Dashboard, Lit Action trust model (Path A), capacity credit auto-detection, decrypt endpoint, decentralization analysis. Also: hayro PDF rendering, WASM text fixes, Mint context menu, wallet bridge restore, Elacity branding, WASM crypto hardening Phases A-C, double-signature fix, TXT dimension cap, video autoplay, fMP4 strip+decrypt in Rust
 - [Secure Viewer & PDF](fd6755f0-d73c-4e41-8df3-0f57f15071a2) — secure viewer pipeline, PDF hybrid rendering, two-layer encryption fix, Lit Pinata/relayer integration, auto-decrypt, parallel pages, dDRM Viewer app, .ddrm.json capsules, WASM renderer, GUI integration
 - [Media Runtime E2E](fd6755f0-d73c-4e41-8df3-0f57f15071a2) — server-side DASH/CENC decryption pipeline, Rust WASM cenc-decrypt crate, MSE player, DRM stripping (init+segment), 16-byte IV fix, Smart Account PSSH, two-phase Lit auth
 
@@ -694,7 +736,7 @@ Passwords: ROTATED — stored in password manager, not in git
 
 | Repository | Branch | Status |
 |------------|--------|--------|
-| [pc2.net](https://github.com/Elacity/pc2.net) | `feature/ddrm-universal-access-layer` | Active development (branched from `feature/elacity-ddrm-marketplace`) |
+| [pc2.net](https://github.com/Elacity/pc2.net) | `feature/wasm-crypto-hardening` | Active development (branched from `feature/ddrm-universal-access-layer` at `e05f1468e`) |
 | [elastos-launcher](https://github.com/Elacity/elastos-launcher) | `main` | v1.1.1 released |
 | [document-portal](https://github.com/Elacity/document-portal) | `main` | Up to date |
 | [js-sdk](https://github.com/Elacity/js-sdk) | — | Elacity SDK (reference) |

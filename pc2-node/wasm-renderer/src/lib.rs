@@ -46,6 +46,8 @@ pub struct RenderCommand {
     pub max_height: Option<u32>,
     /// Output format preference.
     pub output_format: Option<OutputFormat>,
+    /// Operating mode. When "decrypt_only", skip rendering and output raw plaintext.
+    pub mode: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Copy, Default)]
@@ -104,6 +106,12 @@ fn process_files_inner(command_json: &str, encrypted_bytes: &[u8]) -> (RenderRes
         Err(e) => return (RenderResult::error(format!("invalid command: {e}")), None),
     };
 
+    // Decrypt-only mode: decrypt and return raw plaintext bytes (no rendering).
+    // Used by the Node.js fallback path to isolate AES-GCM from Node.js crypto.
+    if cmd.mode.as_deref() == Some("decrypt_only") {
+        return process_decrypt_only(&cmd, encrypted_bytes);
+    }
+
     // Step 1: Decrypt using CEK + IV from command, encrypted bytes from file
     let mut plaintext = match decrypt::aes_gcm_decrypt_raw(&cmd.cek_b64, &cmd.iv_b64, encrypted_bytes) {
         Ok(data) => data,
@@ -117,6 +125,27 @@ fn process_files_inner(command_json: &str, encrypted_bytes: &[u8]) -> (RenderRes
     plaintext.iter_mut().for_each(|b| *b = 0);
 
     (result, rendered)
+}
+
+/// Decrypt-only: AES-GCM decrypt inside WASM, return raw plaintext.
+/// The CEK is zeroed after use; plaintext is returned for the caller to handle.
+fn process_decrypt_only(cmd: &RenderCommand, encrypted_bytes: &[u8]) -> (RenderResult, Option<Vec<u8>>) {
+    let plaintext = match decrypt::aes_gcm_decrypt_raw(&cmd.cek_b64, &cmd.iv_b64, encrypted_bytes) {
+        Ok(data) => data,
+        Err(e) => return (RenderResult::error(format!("decrypt failed: {e}")), None),
+    };
+
+    let size = plaintext.len();
+    (
+        RenderResult {
+            success: true,
+            error: None,
+            content_type: Some(cmd.mime_type.clone()),
+            total_pages: None,
+            output_size: Some(size),
+        },
+        Some(plaintext),
+    )
 }
 
 fn route_render_raw(cmd: &RenderCommand, plaintext: &[u8]) -> (RenderResult, Option<Vec<u8>>) {

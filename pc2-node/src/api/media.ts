@@ -397,9 +397,9 @@ router.post('/segment', async (req: AuthenticatedRequest, res: Response) => {
       // Cache raw init segment for WASM decryption (tenc extraction)
       session.initSegments.set(trackIdx, segmentBytes);
 
-      // Strip CENC encryption signaling so the browser's MSE treats content as clear.
-      // encv → av01, enca → mp4a/Opus, remove sinf box, strip pssh boxes.
-      const cleanInit = stripEncryptionSignaling(segmentBytes);
+      // Strip CENC encryption signaling via WASM (encv → av01, enca → mp4a/Opus,
+      // remove sinf box, strip pssh boxes). Uses strip_init mode in cenc-decrypt.
+      const cleanInit = await stripInitViaWASM(segmentBytes);
       logger.info(`[media/segment] Init segment: raw=${segmentBytes.length}B → clean=${cleanInit.length}B (stripped ${segmentBytes.length - cleanInit.length}B of DRM signaling)`);
 
       res.setHeader('Content-Type', 'video/mp4');
@@ -411,16 +411,12 @@ router.post('/segment', async (req: AuthenticatedRequest, res: Response) => {
     // Get cached init segment for this track (provides tenc for IV size)
     const initSegForTrack = session.initSegments.get(trackIdx) || null;
 
-    // Decrypt via WASM
-    const decryptedBytes = await decryptSegmentViaWASM(
+    // Decrypt + strip via WASM (combined: decrypt samples then remove senc/saiz/saio boxes)
+    const cleanSegment = await decryptSegmentViaWASM(
       segmentBytes,
       session.cekBase64,
       initSegForTrack,
     );
-
-    // Strip encryption-related boxes (senc, saiz, saio) from the decrypted segment
-    // so MSE doesn't reject clear content with leftover DRM metadata.
-    const cleanSegment = stripSegmentEncryptionBoxes(decryptedBytes);
 
     res.setHeader('Content-Type', 'video/mp4');
     res.setHeader('Content-Length', String(cleanSegment.length));
@@ -609,295 +605,14 @@ function extractPSSHJson(initSegment: Buffer): Array<{ protectionType: string; d
   return results;
 }
 
-/**
- * Strip CENC encryption signaling from an fMP4 init segment so the browser's
- * MSE treats content as clear (unencrypted).
- *
- * Transformations:
- *   1. Replace sample entry box type 'encv' → original format from sinf/frma (e.g. 'av01')
- *      and 'enca' → original format (e.g. 'mp4a', 'Opus')
- *   2. Remove the 'sinf' box from within the sample entry
- *   3. Remove top-level 'pssh' boxes
- *   4. Adjust all ancestor box sizes accordingly
- */
-function stripEncryptionSignaling(init: Buffer): Buffer {
-  const buf = Buffer.from(init);
-
-  // --- Phase 1: Find and process sample entry within stsd ---
-  // Walk the box tree: moov → trak → mdia → minf → stbl → stsd → sample_entry
-  const stsdInfo = findBoxPath(buf, 0, buf.length, ['moov', 'trak', 'mdia', 'minf', 'stbl', 'stsd']);
-  if (!stsdInfo) {
-    logger.warn('[media/strip] Could not find stsd box — returning init as-is');
-    return buf;
-  }
-
-  // stsd content: version(4) + entry_count(4) + entries
-  const stsdContentStart = stsdInfo.contentStart;
-  const entryStart = stsdContentStart + 8; // skip version+flags(4) + entry_count(4)
-
-  // Read sample entry box header
-  if (entryStart + 8 > buf.length) return buf;
-  const entrySize = buf.readUInt32BE(entryStart);
-  const entryType = buf.toString('ascii', entryStart + 4, entryStart + 8);
-
-  if (entryType !== 'encv' && entryType !== 'enca') {
-    logger.info(`[media/strip] Sample entry is '${entryType}' (not encrypted) — no stripping needed`);
-    return buf;
-  }
-
-  // Find sinf box within the sample entry to get the original format
-  const entryContentEnd = entryStart + entrySize;
-  let sinfOffset = -1;
-  let sinfSize = 0;
-  let originalFormat = '';
-
-  // Scan for sinf within the sample entry
-  let scanPos = entryStart + 8; // skip box header (size + type)
-  // Skip: common SampleEntry (6 reserved + 2 data_ref_index = 8 bytes)
-  //        + format-specific header (VisualSampleEntry: 70 bytes, AudioSampleEntry: 20 bytes)
-  const formatHeaderSize = entryType === 'encv' ? 78 : 28;
-  scanPos += formatHeaderSize;
-
-  while (scanPos + 8 <= entryContentEnd) {
-    const childSize = buf.readUInt32BE(scanPos);
-    const childType = buf.toString('ascii', scanPos + 4, scanPos + 8);
-
-    if (childSize < 8 || scanPos + childSize > entryContentEnd) break;
-
-    if (childType === 'sinf') {
-      sinfOffset = scanPos;
-      sinfSize = childSize;
-
-      // Find frma within sinf to get original format
-      let sinfInner = scanPos + 8;
-      while (sinfInner + 8 <= scanPos + childSize) {
-        const innerSize = buf.readUInt32BE(sinfInner);
-        const innerType = buf.toString('ascii', sinfInner + 4, sinfInner + 8);
-        if (innerSize < 8) break;
-        if (innerType === 'frma' && sinfInner + 12 <= scanPos + childSize) {
-          originalFormat = buf.toString('ascii', sinfInner + 8, sinfInner + 12);
-        }
-        sinfInner += innerSize;
-      }
-      break;
-    }
-    scanPos += childSize;
-  }
-
-  if (!originalFormat || sinfOffset < 0) {
-    logger.warn('[media/strip] Could not find sinf/frma — returning init as-is');
-    return buf;
-  }
-
-  logger.info(`[media/strip] Found: ${entryType} → ${originalFormat}, sinf at offset ${sinfOffset} (${sinfSize}B)`);
-
-  // --- Phase 2: Build new buffer without sinf and with corrected sample entry type ---
-  // Also remove any top-level pssh boxes
-  const parts: Buffer[] = [];
-  let writePos = 0;
-
-  // Collect ranges to remove: sinf box and pssh boxes
-  const removals: Array<{ start: number; size: number }> = [];
-  removals.push({ start: sinfOffset, size: sinfSize });
-
-  // Find top-level pssh boxes
-  let topPos = 0;
-  while (topPos + 8 <= buf.length) {
-    const topSize = buf.readUInt32BE(topPos);
-    const topType = buf.toString('ascii', topPos + 4, topPos + 8);
-    if (topSize < 8 || topPos + topSize > buf.length) break;
-    if (topType === 'pssh') {
-      removals.push({ start: topPos, size: topSize });
-    }
-    topPos += topSize;
-  }
-
-  // Sort removals by offset descending (so we can build the buffer in order)
-  removals.sort((a, b) => a.start - b.start);
-
-  // Build output buffer, skipping removed ranges
-  let prevEnd = 0;
-  for (const rem of removals) {
-    if (rem.start > prevEnd) {
-      parts.push(buf.subarray(prevEnd, rem.start));
-    }
-    prevEnd = rem.start + rem.size;
-  }
-  if (prevEnd < buf.length) {
-    parts.push(buf.subarray(prevEnd, buf.length));
-  }
-
-  const output = Buffer.concat(parts);
-
-  // --- Phase 3: Fix sample entry type ---
-  // Find 'encv'/'enca' in the output and replace with originalFormat
-  const encTypeBytes = Buffer.from(entryType, 'ascii');
-  const origTypeBytes = Buffer.from(originalFormat, 'ascii');
-  for (let i = 0; i < output.length - 4; i++) {
-    if (output[i] === encTypeBytes[0] && output[i+1] === encTypeBytes[1] &&
-        output[i+2] === encTypeBytes[2] && output[i+3] === encTypeBytes[3]) {
-      origTypeBytes.copy(output, i);
-      break; // Only replace the first occurrence (sample entry type)
-    }
-  }
-
-  // --- Phase 4: Adjust box sizes in the output ---
-  // Record ancestor box positions from the ORIGINAL buffer (before removals)
-  // so we don't hit bounds-check issues in the truncated output.
-  const ancestors: Array<{ origPos: number; origSize: number }> = [];
-  let walkStart = 0, walkEnd = buf.length;
-  for (const boxType of ['moov', 'trak', 'mdia', 'minf', 'stbl', 'stsd']) {
-    const pos = findBoxStart(buf, walkStart, walkEnd, boxType);
-    if (pos < 0) break;
-    const size = buf.readUInt32BE(pos);
-    ancestors.push({ origPos: pos, origSize: size });
-    walkStart = pos + 8;
-    walkEnd = pos + size;
-  }
-  // Include the sample entry box itself
-  if (ancestors.length === 6) {
-    const stsd = ancestors[5];
-    const sePos = stsd.origPos + 8 + 8; // header(8) + version+flags+count(8)
-    if (sePos + 4 <= buf.length) {
-      ancestors.push({ origPos: sePos, origSize: buf.readUInt32BE(sePos) });
-    }
-  }
-
-  // Map original position → output position (accounting for bytes removed before it)
-  const mapToOutput = (origPos: number): number => {
-    let shift = 0;
-    for (const rem of removals) {
-      if (rem.start < origPos) shift += rem.size;
-    }
-    return origPos - shift;
-  };
-
-  // For each ancestor, reduce its size by the total bytes removed from within it
-  for (const anc of ancestors) {
-    const ancEnd = anc.origPos + anc.origSize;
-    let removedWithin = 0;
-    for (const rem of removals) {
-      if (rem.start >= anc.origPos && rem.start + rem.size <= ancEnd) {
-        removedWithin += rem.size;
-      }
-    }
-    if (removedWithin > 0) {
-      const outPos = mapToOutput(anc.origPos);
-      output.writeUInt32BE(anc.origSize - removedWithin, outPos);
-    }
-  }
-
-  return output;
-}
-
-/**
- * Strip encryption-related boxes (senc, saiz, saio) from a decrypted fMP4
- * media segment.  These boxes live inside moof → traf and must be removed
- * so the browser's MSE treats the segment as clear content.
- */
-function stripSegmentEncryptionBoxes(segment: Buffer): Buffer {
-  const buf = Buffer.from(segment);
-  const ENC_BOX_TYPES = new Set(['senc', 'saiz', 'saio', 'sbgp', 'sgpd']);
-
-  // Find moof box
-  const moofStart = findBoxStart(buf, 0, buf.length, 'moof');
-  if (moofStart < 0) return buf;
-  const moofSize = buf.readUInt32BE(moofStart);
-  const moofEnd = moofStart + moofSize;
-
-  // Find traf inside moof
-  const trafStart = findBoxStart(buf, moofStart + 8, moofEnd, 'traf');
-  if (trafStart < 0) return buf;
-  const trafSize = buf.readUInt32BE(trafStart);
-  const trafEnd = trafStart + trafSize;
-
-  // Collect encryption boxes to remove within traf
-  const removals: Array<{ start: number; size: number }> = [];
-  let scanPos = trafStart + 8;
-  while (scanPos + 8 <= trafEnd) {
-    const boxSize = buf.readUInt32BE(scanPos);
-    const boxType = buf.toString('ascii', scanPos + 4, scanPos + 8);
-    if (boxSize < 8 || scanPos + boxSize > trafEnd) break;
-    if (ENC_BOX_TYPES.has(boxType)) {
-      removals.push({ start: scanPos, size: boxSize });
-    }
-    scanPos += boxSize;
-  }
-
-  if (removals.length === 0) return buf;
-
-  const totalRemoved = removals.reduce((sum, r) => sum + r.size, 0);
-
-  // Build output buffer without the removed boxes
-  removals.sort((a, b) => a.start - b.start);
-  const parts: Buffer[] = [];
-  let prevEnd = 0;
-  for (const rem of removals) {
-    if (rem.start > prevEnd) parts.push(buf.subarray(prevEnd, rem.start));
-    prevEnd = rem.start + rem.size;
-  }
-  if (prevEnd < buf.length) parts.push(buf.subarray(prevEnd));
-  const output = Buffer.concat(parts);
-
-  // Adjust moof and traf sizes
-  const moofOutPos = moofStart; // moof is before all removals within it
-  output.writeUInt32BE(moofSize - totalRemoved, moofOutPos);
-  const trafOutPos = trafStart; // traf is also before removals
-  output.writeUInt32BE(trafSize - totalRemoved, trafOutPos);
-
-  // Fix trun.data_offset — it's an offset from the start of moof to the
-  // first byte of mdat data.  Since we shrank moof, the offset must decrease.
-  const trunStart = findBoxStart(output, trafOutPos + 8, trafOutPos + (trafSize - totalRemoved), 'trun');
-  if (trunStart >= 0) {
-    const trunFlags = (output[trunStart + 9] << 16) | (output[trunStart + 10] << 8) | output[trunStart + 11];
-    if (trunFlags & 0x1) {
-      // data_offset is at trun_start + 12 (header 8 + version 1 + flags 3) + 4 (sample_count) = +16
-      const doPos = trunStart + 16;
-      const oldOffset = output.readInt32BE(doPos);
-      output.writeInt32BE(oldOffset - totalRemoved, doPos);
-    }
-  }
-
-  return output;
-}
-
-/** Find the byte offset of a box with the given type at the current level. */
-function findBoxStart(buf: Buffer, start: number, end: number, boxType: string): number {
-  let pos = start;
-  while (pos + 8 <= end) {
-    const size = buf.readUInt32BE(pos);
-    if (size < 8 || pos + size > end) return -1;
-    const type = buf.toString('ascii', pos + 4, pos + 8);
-    if (type === boxType) return pos;
-    pos += size;
-  }
-  return -1;
-}
-
-/** Find a box by walking a path of nested box types. Returns content info. */
-function findBoxPath(
-  buf: Buffer, start: number, end: number, path: string[],
-): { boxStart: number; contentStart: number; boxEnd: number } | null {
-  if (path.length === 0) return null;
-
-  let pos = start;
-  while (pos + 8 <= end) {
-    const size = buf.readUInt32BE(pos);
-    if (size < 8 || pos + size > end) return null;
-    const type = buf.toString('ascii', pos + 4, pos + 8);
-
-    if (type === path[0]) {
-      const contentStart = pos + 8;
-      const boxEnd = pos + size;
-      if (path.length === 1) {
-        return { boxStart: pos, contentStart, boxEnd };
-      }
-      return findBoxPath(buf, contentStart, boxEnd, path.slice(1));
-    }
-    pos += size;
-  }
-  return null;
-}
+// ── JS strip functions — replaced by Rust/WASM in cenc-decrypt crate ──────────
+// Kept commented for one release cycle as a safety net. If WASM stripping works
+// correctly across all media types, these can be deleted.
+//
+// function stripEncryptionSignaling(init: Buffer): Buffer { ... }
+// function stripSegmentEncryptionBoxes(segment: Buffer): Buffer { ... }
+// function findBoxStart(buf: Buffer, start: number, end: number, boxType: string): number { ... }
+// function findBoxPath(buf: Buffer, start: number, end: number, path: string[]): { ... } | null { ... }
 
 const FALLBACK_IPFS_GATEWAY = 'https://ipfs.ela.city/ipfs/';
 
@@ -941,6 +656,45 @@ async function fetchSegmentBytes(url: string, ipfsService?: any): Promise<Buffer
 
 let cachedCENCWasmBinary: ArrayBuffer | null = null;
 
+async function loadCENCWasmBinary(): Promise<ArrayBuffer> {
+  if (cachedCENCWasmBinary) return cachedCENCWasmBinary;
+  const wasmPath = pathResolve(__dirname, '../../wasm-apps/cenc-decrypt/cenc-decrypt.wasm');
+  if (!existsSync(wasmPath)) {
+    throw new Error(`CENC decrypt WASM not found: ${wasmPath}`);
+  }
+  cachedCENCWasmBinary = readFileSync(wasmPath).buffer;
+  return cachedCENCWasmBinary;
+}
+
+/**
+ * Strip encryption signaling from an init segment via WASM.
+ * Uses the cenc-decrypt module's strip_init mode (encv→av01/enca→mp4a,
+ * remove sinf, remove pssh). 64-bit extended box sizes handled.
+ */
+async function stripInitViaWASM(initSegment: Buffer): Promise<Buffer> {
+  const wasmRuntime = getWASMRuntime();
+  const wasmBinary = await loadCENCWasmBinary();
+
+  const commandJson = JSON.stringify({
+    cek_b64: '',
+    mode: 'strip_init',
+  });
+
+  const result = await wasmRuntime.executeCENCDecrypt(
+    wasmBinary,
+    commandJson,
+    initSegment,
+    null,
+    { timeoutMs: 10000 },
+  );
+
+  if (!result.success || !result.decryptedBytes) {
+    throw new Error(`WASM strip_init failed: ${result.error || 'no output'}`);
+  }
+
+  return result.decryptedBytes;
+}
+
 async function decryptSegmentViaWASM(
   encryptedSegment: Buffer,
   cekBase64: string,
@@ -952,20 +706,15 @@ async function decryptSegmentViaWASM(
     cek_b64: cekBase64,
     iv_size: 8,
     is_init: false,
+    strip: true,
   });
 
-  if (!cachedCENCWasmBinary) {
-    const wasmPath = pathResolve(__dirname, '../../wasm-apps/cenc-decrypt/cenc-decrypt.wasm');
-    if (!existsSync(wasmPath)) {
-      throw new Error(`CENC decrypt WASM not found: ${wasmPath}`);
-    }
-    cachedCENCWasmBinary = readFileSync(wasmPath).buffer;
-  }
+  const wasmBinary = await loadCENCWasmBinary();
 
   logger.info(`[media/WASM] Decrypting segment: inputSize=${encryptedSegment.length}, hasInit=${!!initSegment}`);
 
   const result = await wasmRuntime.executeCENCDecrypt(
-    cachedCENCWasmBinary,
+    wasmBinary,
     commandJson,
     encryptedSegment,
     initSegment || null,

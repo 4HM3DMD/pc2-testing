@@ -17,7 +17,7 @@ fn main() {
         Ok(s) => s,
         Err(e) => {
             let err = format!("{{\"success\":false,\"error\":\"failed to read /input/command.json: {e}\"}}");
-            write_output(&err, None);
+            write_output(&err, None, None);
             return;
         }
     };
@@ -26,17 +26,26 @@ fn main() {
         Ok(b) => b,
         Err(e) => {
             let err = format!("{{\"success\":false,\"error\":\"failed to read /input/encrypted.bin: {e}\"}}");
-            write_output(&err, None);
+            write_output(&err, None, None);
             return;
         }
     };
 
+    let is_decrypt_only = command_json.contains("\"decrypt_only\"");
+
     let (result_json, rendered_bytes) = ddrm_renderer::process_from_files(&command_json, &encrypted_bytes);
-    write_output(&result_json, rendered_bytes.as_deref());
+
+    if is_decrypt_only {
+        write_output(&result_json, None, rendered_bytes.as_deref());
+    } else {
+        write_output(&result_json, rendered_bytes.as_deref(), None);
+    }
 }
 
 /// Write output to MemFS files. If MemFS writes fail, fall back to stdout.
-fn write_output(result_json: &str, rendered: Option<&[u8]>) {
+/// `rendered` goes to /output/rendered.bin (normal render mode).
+/// `decrypted` goes to /output/decrypted.bin (decrypt_only mode).
+fn write_output(result_json: &str, rendered: Option<&[u8]>, decrypted: Option<&[u8]>) {
     // Try MemFS first
     let dir_ok = fs::create_dir_all("/output").is_ok();
     let result_ok = if dir_ok {
@@ -48,6 +57,9 @@ fn write_output(result_json: &str, rendered: Option<&[u8]>) {
     if dir_ok && result_ok {
         if let Some(data) = rendered {
             let _ = fs::write("/output/rendered.bin", data);
+        }
+        if let Some(data) = decrypted {
+            let _ = fs::write("/output/decrypted.bin", data);
         }
     }
 

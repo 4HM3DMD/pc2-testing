@@ -143,7 +143,8 @@ async function refreshSession() {
 
       // Re-authenticate via wallet (works for both standalone and market-launched)
       if (window.ethereum) {
-        const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+  const accounts = await window.ethereum.request({ method: 'eth_accounts' })
+        .then(a => (a && a.length > 0) ? a : window.ethereum.request({ method: 'eth_requestAccounts' }));
         const eoaAddress = accounts[0];
         const sp = new URLSearchParams(window.location.search);
         BUYER_ADDRESS = sp.get('puter.smart_account') || eoaAddress;
@@ -409,10 +410,8 @@ async function performStandaloneLitAuth() {
 
   $loadingText.textContent = 'Connecting wallet...';
 
-  const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
-  if (!accounts || accounts.length === 0) {
-    throw new Error('No wallet accounts available. Please connect your wallet.');
-  }
+  const accounts = await window.ethereum.request({ method: 'eth_accounts' })
+    .then(a => (a && a.length > 0) ? a : window.ethereum.request({ method: 'eth_requestAccounts' }));
   const eoaAddress = accounts[0];
   const sp = new URLSearchParams(window.location.search);
   BUYER_ADDRESS = sp.get('puter.smart_account') || eoaAddress;
@@ -582,6 +581,8 @@ async function init() {
 
         startBufferLoop();
         buildQualityMenu();
+
+        $video.play().catch(() => {});
 
       } catch (e) {
         const msg = e.message || e.type || (typeof e === 'string' ? e : JSON.stringify(e));

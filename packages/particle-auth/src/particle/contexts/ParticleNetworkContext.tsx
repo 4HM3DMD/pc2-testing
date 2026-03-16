@@ -428,50 +428,14 @@ const ParticleNetworkProvider: React.FC<React.PropsWithChildren<ParticleNetworkC
     };
   }, [deactivate, active]);
 
-  // ==========================================
-  // Early eth_sendTransaction handler (no universalAccount required)
-  // So wallet-mode iframe can handle Buy before UniversalAccount is ready
-  // ==========================================
+  // Notify parent that particle-auth iframe is ready (used by WalletService readiness check)
   React.useEffect(() => {
     if (!connector || !connectedEoaAddress) return;
 
-    const handleEthSendTransaction = async (event: MessageEvent) => {
-      const { type, requestId, payload } = event.data || {};
-      if (type !== 'particle-wallet.eth-send-transaction' || !payload?.txParams) return;
-
-      try {
-        console.log('[Particle Auth] eth-send-transaction received (early handler), from:', connectedEoaAddress);
-        const provider = await connector.getProvider();
-        if (!provider) throw new Error('No wallet provider available');
-
-        const txParams = { ...payload.txParams, from: connectedEoaAddress };
-        const txHash = await (provider as any).request({
-          method: 'eth_sendTransaction',
-          params: [txParams],
-        });
-
-        window.parent.postMessage({
-          type: 'particle-wallet.eth-send-transaction-result',
-          requestId,
-          payload: { txHash },
-        }, '*');
-      } catch (err: any) {
-        console.error('[Particle Auth] eth-send-transaction error:', err);
-        window.parent.postMessage({
-          type: 'particle-wallet.error',
-          requestId,
-          payload: { message: err?.message || 'Transaction failed' },
-        }, '*');
-      }
-    };
-
-    window.addEventListener('message', handleEthSendTransaction);
     window.parent.postMessage({
       type: 'particle-wallet.ready',
       payload: { ready: true, address: connectedEoaAddress },
     }, '*');
-
-    return () => window.removeEventListener('message', handleEthSendTransaction);
   }, [connector, connectedEoaAddress]);
 
   // ==========================================

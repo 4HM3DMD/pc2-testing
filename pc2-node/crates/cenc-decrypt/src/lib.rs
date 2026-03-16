@@ -15,6 +15,7 @@
 
 pub mod mp4box;
 pub mod cenc;
+pub mod strip;
 
 use serde::{Deserialize, Serialize};
 use base64::Engine;
@@ -30,6 +31,11 @@ pub struct DecryptCommand {
     /// If true, the input is an init segment — extract tenc and pass through unchanged.
     #[serde(default)]
     pub is_init: bool,
+    /// If true, strip encryption signaling/metadata boxes from the output.
+    #[serde(default)]
+    pub strip: bool,
+    /// If "strip_init", only strip encryption signaling from init segment (no decrypt).
+    pub mode: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -51,6 +57,19 @@ pub fn process(command_json: &str, segment_data: &[u8], init_data: Option<&[u8]>
         Ok(c) => c,
         Err(e) => return (error_result(&format!("invalid command: {e}")), None),
     };
+
+    // strip_init mode: strip encryption signaling from init segment, no decrypt
+    if cmd.mode.as_deref() == Some("strip_init") {
+        let stripped = strip::strip_encryption_signaling(segment_data);
+        let result = DecryptResult {
+            success: true,
+            error: None,
+            sample_count: None,
+            iv_size: None,
+            is_protected: None,
+        };
+        return (serde_json::to_string(&result).unwrap(), Some(stripped));
+    }
 
     if cmd.is_init {
         return process_init(segment_data);
@@ -159,6 +178,13 @@ pub fn process(command_json: &str, segment_data: &[u8], init_data: Option<&[u8]>
         output.extend_from_slice(&segment_data[mdat_end..]);
     }
 
+    // Strip encryption metadata boxes if requested
+    let final_output = if cmd.strip {
+        strip::strip_segment_encryption_boxes(&output)
+    } else {
+        output
+    };
+
     let result = DecryptResult {
         success: true,
         error: None,
@@ -167,7 +193,7 @@ pub fn process(command_json: &str, segment_data: &[u8], init_data: Option<&[u8]>
         is_protected: Some(true),
     };
 
-    (serde_json::to_string(&result).unwrap(), Some(output))
+    (serde_json::to_string(&result).unwrap(), Some(final_output))
 }
 
 /// Process an init segment — extract tenc info and pass through unchanged.
