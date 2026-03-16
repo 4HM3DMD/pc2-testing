@@ -1429,7 +1429,7 @@ router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, 
     const ipfsService = req.app.locals.ipfs;
 
     // ── WASM Renderer Path ──────────────────────────────
-    // For images and text: decrypt + render inside WASM linear memory.
+    // For images, text, and PDFs: decrypt + render inside WASM linear memory.
     // CEK and plaintext never touch Node.js memory.
     const wasmCodeTypes = ['application/javascript', 'application/json', 'application/xml', 'application/x-yaml', 'application/toml', 'application/x-sh'];
     const wasmSupportedTypes = mime.startsWith('image/') || mime.startsWith('text/') || mime === 'application/pdf' || wasmCodeTypes.includes(mime);
@@ -1625,13 +1625,43 @@ router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, 
       const text = decryptedBytes.toString('utf8');
       decryptedBytes.fill(0);
 
-      const lines = text.split('\n');
       const fontSize = 14;
       const lineHeight = 20;
       const padding = 24;
-      const canvasW = Math.min(maxWidth, 900);
-      const visibleLines = lines.slice(0, 80);
-      const canvasH = Math.max(200, padding * 2 + visibleLines.length * lineHeight);
+      const canvasW = 640;
+      const maxCharsPerLine = Math.floor((canvasW - padding * 2) / (fontSize * 0.6));
+      const maxOutputLines = 2000;
+
+      // Word-wrap all lines
+      const wrappedLines: string[] = [];
+      for (const rawLine of text.split('\n')) {
+        if (wrappedLines.length >= maxOutputLines) break;
+        if (rawLine.trim() === '') {
+          wrappedLines.push('');
+          continue;
+        }
+        const words = rawLine.split(/\s+/);
+        let current = '';
+        for (const word of words) {
+          if (wrappedLines.length >= maxOutputLines) break;
+          if (current.length + word.length + 1 > maxCharsPerLine && current.length > 0) {
+            wrappedLines.push(current);
+            current = '';
+          }
+          if (word.length > maxCharsPerLine && current.length === 0) {
+            for (let s = 0; s < word.length && wrappedLines.length < maxOutputLines; s += maxCharsPerLine) {
+              wrappedLines.push(word.substring(s, s + maxCharsPerLine));
+            }
+            continue;
+          }
+          current = current.length > 0 ? current + ' ' + word : word;
+        }
+        if (current.length > 0 && wrappedLines.length < maxOutputLines) {
+          wrappedLines.push(current);
+        }
+      }
+
+      const canvasH = Math.max(200, padding * 2 + wrappedLines.length * lineHeight);
 
       const cvs = createCanvas(canvasW, canvasH);
       const ctx = cvs.getContext('2d');
@@ -1644,9 +1674,9 @@ router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, 
       ctx.textBaseline = 'top';
 
       let y = padding;
-      for (const line of visibleLines) {
+      for (const line of wrappedLines) {
         if (y + lineHeight > canvasH - padding) break;
-        ctx.fillText(line.substring(0, 120), padding, y);
+        ctx.fillText(line, padding, y);
         y += lineHeight;
       }
 
@@ -1665,14 +1695,14 @@ router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, 
       ctx.restore();
 
       const pngBuf = cvs.toBuffer('image/png');
-      const rendered = await sharpMod(pngBuf).png().toBuffer();
+      const rendered = await sharpMod(pngBuf).jpeg({ quality: 85 }).toBuffer();
 
-      res.set('Content-Type', 'image/png');
+      res.set('Content-Type', 'image/jpeg');
       res.set('Content-Length', String(rendered.length));
       res.set('X-Renderer', 'nodejs-canvas');
       res.send(rendered);
 
-      logger.info(`[SecureView] Text rendered (fallback): ${rendered.length} bytes (${visibleLines.length} lines, total: ${Date.now() - requestStart}ms) for ${buyerAddress}`);
+      logger.info(`[SecureView] Text rendered (fallback): ${rendered.length} bytes (${wrappedLines.length} lines, total: ${Date.now() - requestStart}ms) for ${buyerAddress}`);
       return;
     }
 

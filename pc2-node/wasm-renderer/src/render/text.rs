@@ -8,11 +8,11 @@ use image::{Rgba, RgbaImage};
 use crate::watermark::apply_watermark;
 use crate::{RenderCommand, RenderResult};
 
-const CANVAS_WIDTH: u32 = 800;
+const CANVAS_WIDTH: u32 = 640;
 const LINE_HEIGHT: u32 = 20;
 const CHAR_WIDTH: u32 = 8;
 const PADDING: u32 = 24;
-const MAX_LINES: usize = 100;
+const MAX_LINES: usize = 4000;
 const BG_COLOR: Rgba<u8> = Rgba([250, 250, 248, 255]);
 const TEXT_COLOR: Rgba<u8> = Rgba([30, 30, 30, 255]);
 
@@ -23,7 +23,9 @@ pub fn render_text_raw(plaintext: &[u8], cmd: &RenderCommand) -> (RenderResult, 
         Err(_) => return (RenderResult::error("text content is not valid UTF-8"), None),
     };
 
-    let max_w = cmd.max_width.unwrap_or(CANVAS_WIDTH);
+    // For text, cap width at CANVAS_WIDTH regardless of requested max_width.
+    // Text should read like a page, not stretch edge-to-edge.
+    let max_w = CANVAS_WIDTH;
     let chars_per_line = ((max_w - PADDING * 2) / CHAR_WIDTH) as usize;
 
     let wrapped_lines = wrap_text(text, chars_per_line, MAX_LINES);

@@ -1,84 +1,85 @@
-//! PDF renderer — parse PDF, extract text per page, and rasterize to image.
+//! PDF renderer — full-fidelity rasterisation via `hayro`.
 //!
-//! Uses `lopdf` for PDF parsing + text extraction, then renders the extracted
-//! text using the same bitmap font system as the text renderer. This keeps
-//! all plaintext content inside WASM linear memory.
+//! `hayro` is a pure-Rust, `#![forbid(unsafe_code)]` PDF rasteriser that
+//! compiles cleanly to `wasm32-wasip1`.  It handles fonts, vector graphics,
+//! images and text layout natively — no text-extraction fallback needed.
 //!
-//! Limitation: renders extracted text only — images, vector graphics, and
-//! complex layout within the PDF are not reproduced. Suitable for text-heavy
-//! documents (the majority of dDRM-protected PDFs).
+//! Flow:
+//!   PDF bytes ──► hayro-syntax (parse) ──► hayro (rasterise page)
+//!     ──► Pixmap (RGBA8) ──► watermark ──► JPEG encode ──► output
 
-use image::{Rgba, RgbaImage};
-use lopdf::Document;
+use std::sync::Arc;
 
-use crate::render::text::{draw_char, wrap_text};
+use hayro::hayro_syntax::Pdf;
+use hayro::vello_cpu::color::palette::css::WHITE;
+use hayro::RenderSettings;
+use hayro::hayro_interpret::InterpreterSettings;
+use image::{ImageBuffer, Rgba, RgbaImage};
+
 use crate::watermark::apply_watermark;
 use crate::{RenderCommand, RenderResult};
 
-const CANVAS_WIDTH: u32 = 800;
-const LINE_HEIGHT: u32 = 20;
-const CHAR_WIDTH: u32 = 8;
-const PADDING: u32 = 24;
-const MAX_LINES: usize = 80;
-const BG_COLOR: Rgba<u8> = Rgba([255, 255, 255, 255]);
-const TEXT_COLOR: Rgba<u8> = Rgba([30, 30, 30, 255]);
-
 pub fn render_pdf_raw(plaintext: &[u8], cmd: &RenderCommand) -> (RenderResult, Option<Vec<u8>>) {
-    let doc = match Document::load_mem(plaintext) {
-        Ok(d) => d,
-        Err(e) => return (RenderResult::error(format!("PDF parse: {e}")), None),
+    let data = Arc::new(plaintext.to_vec());
+    let pdf = match Pdf::new(data) {
+        Ok(p) => p,
+        Err(e) => return (RenderResult::error(format!("PDF parse: {e:?}")), None),
     };
 
-    let pages = doc.get_pages();
+    let pages = pdf.pages();
     let total_pages = pages.len() as u32;
 
     if total_pages == 0 {
         return (RenderResult::error("PDF has no pages"), None);
     }
 
-    // cmd.page is 0-indexed; lopdf uses 1-indexed page numbers
-    let page_idx = cmd.page.unwrap_or(0);
-    let page_num = page_idx + 1;
-    if page_num > total_pages {
+    let page_idx = cmd.page.unwrap_or(0) as usize;
+    if page_idx >= pages.len() {
         return (
             RenderResult::error(format!(
                 "page {} out of range (total: {})",
-                page_num, total_pages
+                page_idx + 1,
+                total_pages
             )),
             None,
         );
     }
 
-    let text = match doc.extract_text(&[page_num]) {
-        Ok(t) if !t.trim().is_empty() => t,
-        Ok(_) => format!("[Page {} — no extractable text content]", page_num),
-        Err(e) => format!("[Page {}: text extraction failed — {}]", page_num, e),
+    let page = &pages[page_idx];
+
+    let max_w = cmd.max_width.unwrap_or(800);
+    let (native_w, _native_h) = page.render_dimensions();
+    let scale = if native_w > 0.0 {
+        (max_w as f32 / native_w).min(3.0)
+    } else {
+        1.0
     };
 
-    let max_w = cmd.max_width.unwrap_or(CANVAS_WIDTH);
-    let chars_per_line = ((max_w.saturating_sub(PADDING * 2)) / CHAR_WIDTH).max(20) as usize;
-    let wrapped = wrap_text(&text, chars_per_line, MAX_LINES);
-    let num_lines = wrapped.len().max(1) as u32;
-    let canvas_height = (num_lines * LINE_HEIGHT + PADDING * 2).max(200);
+    let interpreter_settings = InterpreterSettings::default();
+    let render_settings = RenderSettings {
+        x_scale: scale,
+        y_scale: scale,
+        width: None,
+        height: None,
+        bg_color: WHITE,
+    };
 
-    let mut img = RgbaImage::from_pixel(max_w, canvas_height, BG_COLOR);
+    let pixmap = hayro::render(page, &interpreter_settings, &render_settings);
 
-    for (line_idx, line) in wrapped.iter().enumerate() {
-        let y_base = PADDING + line_idx as u32 * LINE_HEIGHT;
-        for (char_idx, ch) in line.chars().enumerate() {
-            let x_base = PADDING + char_idx as u32 * CHAR_WIDTH;
-            draw_char(&mut img, x_base, y_base, ch, TEXT_COLOR);
-        }
-    }
+    let w = pixmap.width() as u32;
+    let h = pixmap.height() as u32;
+    let rgba_bytes = pixmap.data_as_u8_slice();
+
+    let mut img: RgbaImage = ImageBuffer::from_raw(w, h, rgba_bytes.to_vec())
+        .unwrap_or_else(|| RgbaImage::from_pixel(w, h, Rgba([255, 255, 255, 255])));
 
     if let Some(ref wm) = cmd.watermark {
         apply_watermark(&mut img, wm);
     }
 
-    let dyn_img = image::DynamicImage::ImageRgba8(img);
-    let rgb = dyn_img.to_rgb8();
+    let rgb = image::DynamicImage::ImageRgba8(img).to_rgb8();
     let mut buf = Vec::new();
-    let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, 90);
+    let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, 85);
     if let Err(e) = encoder.encode(
         rgb.as_raw(),
         rgb.width(),

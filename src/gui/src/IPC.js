@@ -139,6 +139,16 @@ const ipc_listener = async (event, handled) => {
 
         (async () => {
             try {
+                // Intercept custom method — Particle's provider doesn't know this
+                if (method === 'pc2_getSmartAccountAddress') {
+                    const sa = window.user?.smart_account_address || null;
+                    event.source.postMessage({
+                        type: 'pc2-wallet-rpc-response',
+                        id, method, result: sa,
+                    }, event.origin === 'null' ? '*' : event.origin);
+                    return;
+                }
+
                 const provider = window.ethereum;
                 if (!provider || provider.isPC2WalletBridge) {
                     throw { code: 4900, message: 'No wallet provider available' };

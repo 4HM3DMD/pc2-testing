@@ -6,8 +6,8 @@
   --border: #2a2d3a;
   --text: #e4e4e7;
   --text-muted: #71717a;
-  --accent: #6366f1;
-  --accent-soft: rgba(99,102,241,0.15);
+  --accent: #3b82f6;
+  --accent-soft: rgba(59,130,246,0.15);
   --danger: #ef4444;
   --success: #22c55e;
 }
@@ -173,12 +173,14 @@ html, body {
 /* Document scroll view (for text & PDF — full width, stacked pages) */
 .document-scroll {
   width: 100%;
+  max-width: 100%;
   padding: 0;
 }
 
 .document-scroll .page-img {
   display: block;
   width: 100%;
+  max-width: 100%;
   height: auto;
   pointer-events: none;
   -webkit-user-drag: none;

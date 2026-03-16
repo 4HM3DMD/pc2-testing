@@ -153,6 +153,19 @@ async function main() {
       }
     }
 
+    // Copy wallet bridge files (provider shim for iframes, bridge handler for parent)
+    const WALLET_BRIDGE_DIR = join(__dirname, '..', 'src', 'wallet-bridge');
+    if (existsSync(WALLET_BRIDGE_DIR)) {
+      console.log('\n📦 Copying wallet bridge files...');
+      for (const name of ['pc2-wallet-provider.js', 'pc2-wallet-bridge.js']) {
+        const src = join(WALLET_BRIDGE_DIR, name);
+        if (existsSync(src)) {
+          cpSync(src, join(TARGET_DIR, name));
+          console.log(`   ✅ ${name}`);
+        }
+      }
+    }
+
     // Restore .gitkeep if it existed
     if (hasGitkeep) {
       writeFileSync(gitkeepPath, '');

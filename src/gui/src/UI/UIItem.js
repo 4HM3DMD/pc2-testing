@@ -1315,6 +1315,30 @@ function UIItem (options) {
                 });
             }
             // -------------------------------------------
+            // Mint on Elacity
+            // -------------------------------------------
+            if ( !is_trashed && !is_trash && !options.is_dir ) {
+                const item_name_lc = $(el_item).attr('data-name').toLowerCase();
+                const is_already_protected = item_name_lc.endsWith('.edrm') || item_name_lc.endsWith('.ddrm.json');
+                if ( !is_already_protected ) {
+                    menu_items.push({
+                        html: 'Mint on Elacity',
+                        onClick: async function () {
+                            launch_app({
+                                name: 'elacity-creator',
+                                window_title: 'Elacity Creator',
+                                args: {
+                                    filePath: options.path,
+                                    fileName: $(el_item).attr('data-name'),
+                                },
+                                file_path: options.path,
+                                file_uid: options.uid,
+                            });
+                        },
+                    });
+                }
+            }
+            // -------------------------------------------
             // Set as Wallpaper
             // -------------------------------------------
             const mime_type = mime.getType($(el_item).attr('data-name')) ??

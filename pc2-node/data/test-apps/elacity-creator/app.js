@@ -1717,6 +1717,39 @@
         })
         .catch(function () {});
     }
+
+    // Pre-load file when launched via right-click "Mint on Elacity"
+    (function () {
+      var puterArgs;
+      try {
+        var raw = new URLSearchParams(window.location.search).get('puter.args');
+        puterArgs = raw ? JSON.parse(raw) : {};
+      } catch (_) { puterArgs = {}; }
+
+      if (!puterArgs.filePath) return;
+
+      pc2Fetch('/read', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: puterArgs.filePath }),
+      })
+        .then(function (res) {
+          if (!res.ok) throw new Error('Read failed: ' + res.status);
+          var contentType = res.headers.get('Content-Type') || 'application/octet-stream';
+          return res.blob().then(function (blob) {
+            return { blob: blob, contentType: contentType };
+          });
+        })
+        .then(function (result) {
+          var fileName = puterArgs.fileName || puterArgs.filePath.split('/').pop() || 'file';
+          var file = new File([result.blob], fileName, { type: result.contentType });
+          handleFileSelected(file);
+        })
+        .catch(function (err) {
+          console.error('[Creator] Failed to pre-load file from puter.args:', err);
+          showToast('Could not pre-load file: ' + (err.message || ''), 'error');
+        });
+    })();
   }
 
   if (document.readyState === 'loading') {
