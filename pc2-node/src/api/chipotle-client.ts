@@ -32,18 +32,20 @@ const LIT_ACTION_CID_PATH = join(DATA_DIR, '.lit-action-cid');
 const DEFAULT_API_URL = 'https://api.dev.litprotocol.com';
 const PROD_API_URL = 'https://api.litprotocol.com';
 
-const DEFAULT_SHARED_KEY = '6TO6QjAQs7JLHbqpW5SuU9iBbwpR0/8oQzZzt1I7JAc=';
+const DEFAULT_SHARED_KEY = 'ZYLyJ8reL9OCGNKJUu5RV3ZK6koPVs52FtcfvNRcO0I=';
 
 const DEFAULT_AUTHORITY = '0x580c26DefF267EF40A72CF10A4A42050F0641b8B';
 const DEFAULT_RPC = 'https://mainnet.base.org';
 const DEFAULT_CHAIN = 'base';
 const DEFAULT_CHAIN_ID = 8453;
+const DEFAULT_PKP_ID = '0xa7a3b7344231df566f8b33bb846cfdf69bec2744';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
 export interface ChipotleConfig {
   apiUrl?: string;
   apiKey?: string;
+  pkpId?: string;
 }
 
 export interface LitActionParams {
@@ -127,6 +129,7 @@ function resolveApiUrl(): string {
 // ── Lit Action Code Loading ──────────────────────────────────────────────────
 
 let cachedNonMediaCode: string | null = null;
+let cachedChipotleNonMediaCode: string | null = null;
 
 function getNonMediaActionCode(): string {
   if (cachedNonMediaCode) return cachedNonMediaCode;
@@ -140,6 +143,19 @@ function getNonMediaActionCode(): string {
   }
   cachedNonMediaCode = readFileSync(actionPath, 'utf8');
   return cachedNonMediaCode;
+}
+
+function getChipotleNonMediaActionCode(): string {
+  if (cachedChipotleNonMediaCode) return cachedChipotleNonMediaCode;
+
+  const actionPath = join(DATA_DIR, 'lit-actions/non-media-decrypt-chipotle.js');
+  if (!existsSync(actionPath)) {
+    throw new Error(
+      `Chipotle non-media Lit Action not found at ${actionPath}.`,
+    );
+  }
+  cachedChipotleNonMediaCode = readFileSync(actionPath, 'utf8');
+  return cachedChipotleNonMediaCode;
 }
 
 function getActionCid(): string {
@@ -227,14 +243,14 @@ export async function recoverNonMediaCEK(
   params: NonMediaDecryptParams,
   config?: ChipotleConfig,
 ): Promise<string> {
-  const actionCid = params.actionCid || getActionCid();
-  const code = getNonMediaActionCode();
+  const code = getChipotleNonMediaActionCode();
+  const pkpId = config?.pkpId || DEFAULT_PKP_ID;
 
   const jsParams = {
     ciphertext: params.litCiphertext,
     dataToEncryptHash: params.dataToEncryptHash,
     kid: params.kid.startsWith('0x') ? params.kid : `0x${params.kid}`,
-    actionIpfsId: actionCid,
+    pkpId,
     authority: params.authority || DEFAULT_AUTHORITY,
     chain: params.chain || DEFAULT_CHAIN,
     chainId: params.chainId || DEFAULT_CHAIN_ID,
@@ -300,30 +316,67 @@ export async function recoverMediaCEKEnvelope(
 }
 
 /**
- * Encrypt data using Lit Protocol's access control.
+ * Encrypt data using Chipotle's PKP-AES encryption (Lit.Actions.Encrypt).
  *
- * On Chipotle, there is no client.encrypt() API. Instead, we use a
- * Lit Action that calls Lit.Actions.encrypt() server-side.
+ * This replaces Datil's client.encrypt() for new assets. The CEK is encrypted
+ * by the TEE using the master PKP's AES key, producing a ciphertext string
+ * that can only be decrypted by the same PKP via Lit.Actions.Decrypt.
  *
- * For backward compatibility with existing encrypted assets (which used
- * Datil's client.encrypt()), we keep the same accessControlConditions
- * format. New assets encrypted on Chipotle will use the same self-referential
- * conditions, so decryption via the non-media Lit Action works identically.
+ * Note: assets encrypted with this method are NOT compatible with Datil's
+ * decryptAndCombine. A litBackend metadata field tracks which scheme was used.
  */
 export async function encryptWithLitAction(
   params: EncryptParams,
   config?: ChipotleConfig,
 ): Promise<EncryptResult> {
-  // Chipotle TEE does not expose Lit.Actions.encrypt().
-  // Encryption requires the Lit SDK's client.encrypt() which coordinates
-  // with Lit nodes for threshold BLS encryption.
-  // This function is a placeholder — the storage.ts encrypt route must
-  // fall through to the Datil SDK path for encryption.
-  throw new Error(
-    'Chipotle does not support encryption via Lit Actions. ' +
-    'Use Datil SDK (client.encrypt) for encryption. ' +
-    'Set LIT_BACKEND=datil for encrypt operations, or use the dual-mode fallback in storage.ts.'
+  const pkpId = config?.pkpId || DEFAULT_PKP_ID;
+
+  // params.dataToEncrypt is the UTF-8 bytes of the base64 CEK string.
+  // Pass it directly as a string to the Lit Action so Decrypt returns
+  // the same string — no double-base64 encoding.
+  const plaintext = new TextDecoder().decode(params.dataToEncrypt);
+
+  const code = `(async () => {
+    try {
+      const encrypted = await Lit.Actions.Encrypt({
+        pkpId: pkpId,
+        message: plaintext,
+      });
+      Lit.Actions.setResponse({ response: JSON.stringify({ ciphertext: encrypted }) });
+    } catch (e) {
+      Lit.Actions.setResponse({ response: JSON.stringify({ error: e.message }) });
+    }
+  })();`;
+
+  const result = await executeLitAction(
+    { code, jsParams: { pkpId, plaintext } },
+    config,
   );
+
+  let parsed: { ciphertext?: string; error?: string };
+  try {
+    parsed = JSON.parse(result.response);
+  } catch {
+    throw new Error(`Chipotle encrypt returned unparseable response: ${result.response.substring(0, 200)}`);
+  }
+
+  if (parsed.error) {
+    throw new ChipotleError(`Chipotle encrypt failed: ${parsed.error}`, 500);
+  }
+
+  if (!parsed.ciphertext) {
+    throw new Error('Chipotle encrypt returned no ciphertext');
+  }
+
+  const crypto = await import('crypto');
+  const hash = crypto.createHash('sha256').update(plaintext).digest('hex');
+
+  logger.info(`[Chipotle] Encrypted ${params.dataToEncrypt.length} bytes via PKP-AES (pkpId: ${pkpId.substring(0, 10)}...)`);
+
+  return {
+    ciphertext: parsed.ciphertext,
+    dataToEncryptHash: hash,
+  };
 }
 
 // ── Utility: Build Self-Referential Conditions ───────────────────────────────
@@ -391,5 +444,7 @@ export {
   resolveApiUrl,
   getActionCid,
   getNonMediaActionCode,
+  getChipotleNonMediaActionCode,
   ChipotleError,
+  DEFAULT_PKP_ID,
 };

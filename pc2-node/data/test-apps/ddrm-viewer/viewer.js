@@ -153,6 +153,7 @@
     };
     if (assetParams.actionCid) body.actionCid = assetParams.actionCid;
     if (assetParams.authority) body.authority = assetParams.authority;
+    if (assetParams.litBackend) body.litBackend = assetParams.litBackend;
     return body;
   }
 

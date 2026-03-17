@@ -29,9 +29,10 @@ Thumbs.db
 .vscode/
 .idea/
 
-# Data (user data, databases, runtime state — but NOT test-apps source)
+# Data (user data, databases, runtime state — but NOT test-apps or lit-actions source)
 data/*
 !data/test-apps/
+!data/lit-actions/
 *.db
 *.db-shm
 *.db-wal

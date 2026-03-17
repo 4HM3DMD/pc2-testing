@@ -66,7 +66,7 @@ function getBaseUrl(req: Request, bosonService?: any): string {
 
 // ── Lit Backend Selection (mirrors storage.ts) ───────────────────
 type LitBackend = 'chipotle' | 'datil';
-const LIT_BACKEND: LitBackend = (process.env.LIT_BACKEND as LitBackend) || 'datil';
+const LIT_BACKEND: LitBackend = (process.env.LIT_BACKEND as LitBackend) || 'chipotle';
 
 // ─── POST /api/media/prepare-auth ────────────────────────────────────
 // Chipotle: Two-phase SIWE auth is no longer needed (API key replaces it).

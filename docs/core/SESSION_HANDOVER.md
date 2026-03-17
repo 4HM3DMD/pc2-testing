@@ -346,7 +346,7 @@ Full technical spec at `docs/core/ACCESS_PACKAGE_SPEC.md`. Key decisions:
 - [x] **PDF scrollable view** — all pages stacked vertically with scroll, replacing single-page arrow navigation (Mar 15)
 - [x] **Text full-width view** — rendered text image fills window width for readability (Mar 15)
 - [x] **PC2 Media Runtime** — Rust WASM `cenc-decrypt` crate (AES-128-CTR per-sample, 16-byte IVs), MSE player (no EME/CDM), DRM stripping (init+segment), two-phase Lit auth, SA-aware PSSH selection. **End-to-end DASH video playback verified** *(completed Mar 16)*
-- [x] Lit Chipotle migration — Phases 0-5 complete (Mar 13). `chipotle-client.ts` replaces Lit SDK. `LIT_BACKEND=chipotle|datil` feature flag.
+- [x] Lit Chipotle migration — Phases 0-5 complete (Mar 13-17). `chipotle-client.ts` replaces Lit SDK. `LIT_BACKEND=chipotle|datil` feature flag. **E2E round-trip verified** (Mar 17): encrypt + decrypt + plaintext match confirmed.
 
 **Known issues:**
 - Elacity frontend UA receipt parsing: `UAReceiptFetcher.enrichOperationsWithContracts` throws `TypeError` after successful on-chain purchase. Bug is in Elacity's frontend, not our code.
@@ -429,8 +429,8 @@ Comprehensive player hardening and UX polish:
 | Audio | N/A (passthrough) | Decrypt + pass through |
 
 #### Next Up — Engineering Priorities
-1. ~~**Lit Chipotle migration**~~ — **DONE (Mar 13)** — Phases 0-5 complete. `chipotle-client.ts` REST module, storage.ts + media.ts migrated, `LIT_BACKEND` feature flag, Phase 0 test script. Set `LIT_BACKEND=datil` to rollback.
-2. **End-to-end testing** — Start PC2 node with Chipotle backend, test non-media decrypt (image/PDF/txt), test media playback (DASH video), verify encrypt path.
+1. ~~**Lit Chipotle migration**~~ — **DONE (Mar 13-17)** — Phases 0-5 complete. `chipotle-client.ts` REST module, storage.ts + media.ts migrated, `LIT_BACKEND` feature flag. **E2E round-trip verified** (encrypt via PC2 node → Chipotle PKP-AES → decrypt → plaintext matches). Double-base64 encoding bug fixed. On-chain access check working in TEE.
+2. ~~**End-to-end testing**~~ — **DONE (Mar 17)** — PC2 node started with `LIT_BACKEND=chipotle`, non-media encrypt/decrypt verified end-to-end. CEK clean 32-byte round-trip confirmed. Secure-view path reaches Chipotle TEE and performs on-chain access check.
 3. **Deploy updated Lit Action to IPFS** — `non-media-decrypt.js` has ethers v5 address checksum fix. New CID needed for production Chipotle.
 4. **P-256 ECDH unwrap to WASM (Phase E)** — conditional on Chipotle envelope format. If Chipotle returns CEK directly, this phase is eliminated.
 5. ~~**WASM crypto hardening (Phases A-C)**~~ — DONE (Mar 16). Branch: `feature/wasm-crypto-hardening`.
@@ -500,9 +500,10 @@ Branch: `feature/lit-chipotle-migration` (from `feature/wasm-crypto-hardening`)
 - `/lit/server-info` reports active backend + tier info
 
 **Chipotle Dashboard Setup:**
-- Account key: `s118hHL8ruY0FyAnhsEmyjaGm1KgLAItdkspvrozpc8=`
-- Usage key (Tier 1): `6TO6QjAQs7JLHbqpW5SuU9iBbwpR0/8oQzZzt1I7JAc=`
+- Account key: `s118hHL8ruY0FyAnhsEmyjaGm1KgLAItdkspvrozpc8=` (dashboard management only)
+- Usage key (Tier 1): `ZYLyJ8reL9OCGNKJUu5RV3ZK6koPVs52FtcfvNRcO0I=` (key name: `pc2-ddrm-full`, scoped to `elacity-ddrm` group)
 - Group: `elacity-ddrm` with `non-media-decrypt` CID registered
+- PKP: `0xa7a3b7344231df566f8b33bb846cfdf69bec2744` (Account Master Wallet, added to group via REST API)
 
 **Remaining items:**
 - Deploy updated `non-media-decrypt.js` to IPFS (new CID due to ethers v5 fix)
@@ -511,19 +512,34 @@ Branch: `feature/lit-chipotle-migration` (from `feature/wasm-crypto-hardening`)
 - Settings UI for Tier 2 user-provided API key (Phase 5b)
 - LITKEY cost analysis for 100+ node network
 
-**CRITICAL FINDING (Mar 17 E2E test):**
+**CRITICAL FINDING (Mar 17 — RESOLVED):**
 Chipotle TEE uses a completely different cryptographic model than Datil:
 - **Datil**: `Lit.Actions.decryptAndCombine()` — threshold BLS decryption
 - **Chipotle**: `Lit.Actions.Decrypt({ pkpId, ciphertext })` — PKP-based AES
 
-Chipotle does NOT have `decryptAndCombine`. All existing Elacity assets encrypted
-with Datil's threshold BLS CANNOT be decrypted by Chipotle.
+Chipotle does NOT have `decryptAndCombine`. Existing Datil-encrypted assets
+require Datil backend. **New assets** encrypted with Chipotle use PKP-AES and
+are decryptable only via Chipotle. The `litBackend` metadata field tracks which
+scheme was used per asset.
 
-**Default reverted to `datil`** until either:
-a) Lit provides backward compatibility for threshold-encrypted data, or
-b) A re-encryption migration is built: decrypt with Datil -> re-encrypt with Chipotle PKP
+**E2E Round-Trip VERIFIED (Mar 17):**
+1. PC2 node encrypts file with AES-256-GCM (Layer 1)
+2. CEK encrypted via Chipotle `Lit.Actions.Encrypt({ pkpId, message })` (Layer 2)
+3. Chipotle TEE recovers CEK via `Lit.Actions.Decrypt({ pkpId, ciphertext })`
+4. AES-256-GCM decrypts file → original plaintext matches exactly
+5. CEK encoding: clean single-layer base64 (44 chars → 32 bytes)
+6. On-chain access check (`hasAccessByContentId`) confirmed working inside TEE
 
-Chipotle infrastructure remains intact for future activation (`LIT_BACKEND=chipotle`).
+**Dual-mode operation:**
+- `LIT_BACKEND=datil` — for existing assets (threshold BLS, Lit SDK)
+- `LIT_BACKEND=chipotle` — for new assets (PKP-AES, REST API, no SDK)
+- Production recommendation: use `datil` for existing, `chipotle` for new encryption
+- `/lit/encrypt` response includes `litBackend` field for per-asset tracking
+
+**Dashboard config (Chipotle):**
+- Usage API key: `pc2-ddrm-full` → `ZYLyJ8reL9OCGNKJUu5RV3ZK6koPVs52FtcfvNRcO0I=`
+- Group: `elacity-ddrm` with PKP `0xa7a3b7344231df566f8b33bb846cfdf69bec2744` permitted
+- Account key: `s118hHL8ruY0FyAnhsEmyjaGm1KgLAItdkspvrozpc8=` (dashboard management only)
 
 Chipotle TEE available `Lit.Actions` methods:
 `Decrypt`, `Encrypt`, `getPrivateKey`, `getLitActionPrivateKey`,
@@ -668,6 +684,7 @@ Chipotle TEE available `Lit.Actions` methods:
 | File | Purpose |
 |------|---------|
 | `pc2-node/data/lit-actions/non-media-decrypt.js` | Trustless on-chain access check + threshold CEK decryption (ethers v5/v6 compatible) |
+| `pc2-node/data/lit-actions/non-media-decrypt-chipotle.js` | **NEW** — Chipotle-specific: on-chain access check + PKP-AES CEK decryption |
 
 #### Chipotle Migration (Mar 13)
 | File | Purpose |

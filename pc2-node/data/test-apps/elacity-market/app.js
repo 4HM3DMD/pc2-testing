@@ -2136,6 +2136,9 @@
     };
     if (actionCid) viewerArgs.actionCid = actionCid;
     if (authority) viewerArgs.authority = authority;
+    var litBackend = asset.litBackend || enc.litBackend || '';
+    if (litBackend) viewerArgs.litBackend = litBackend;
+    if (authority) viewerArgs.authority = authority;
 
     window.parent.postMessage({
       $: 'puter-ipc',

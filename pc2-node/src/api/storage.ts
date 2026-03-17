@@ -884,12 +884,11 @@ let NON_MEDIA_ACTION_CID = process.env.LIT_ACTION_CID || '';
 // ── Lit Backend Selection ─────────────────────────────────────────
 // LIT_BACKEND=datil (default)    — use Datil SDK (WebSocket, SIWE, capacity credits)
 // LIT_BACKEND=chipotle           — use Chipotle REST API (stateless, API key auth)
-//   NOTE: Chipotle uses PKP-AES encryption (Lit.Actions.Encrypt/Decrypt), NOT
-//   Datil's threshold BLS (decryptAndCombine). Existing Datil-encrypted assets
-//   CANNOT be decrypted by Chipotle. Default stays on Datil until a migration
-//   path exists or all assets are re-encrypted.
+//   Chipotle uses PKP-AES (Lit.Actions.Encrypt/Decrypt) for new assets.
+//   Datil uses threshold BLS (client.encrypt/decryptAndCombine) for existing assets.
+//   The litBackend metadata field on each asset tracks which scheme was used.
 type LitBackend = 'chipotle' | 'datil';
-const LIT_BACKEND: LitBackend = (process.env.LIT_BACKEND as LitBackend) || 'datil';
+const LIT_BACKEND: LitBackend = (process.env.LIT_BACKEND as LitBackend) || 'chipotle';
 logger.info(`[Lit] Backend: ${LIT_BACKEND} (set LIT_BACKEND=chipotle for Chipotle REST API)`);
 
 if (!NON_MEDIA_ACTION_CID && existsSync(LIT_ACTION_CID_PATH)) {
@@ -1116,28 +1115,43 @@ router.post('/lit/encrypt', authenticate, async (req: AuthenticatedRequest, res:
     logger.info(`[Lit] AES-GCM encrypted: ${dataBytes.length} → ${encryptedWithTag.length} bytes`);
 
     // Layer 2: Lit-encrypt only the raw CEK (32 bytes — well under 4MB limit)
-    // Encryption ALWAYS uses Datil SDK — Chipotle TEE does not expose Lit.Actions.encrypt().
-    // This is fine because encryption is a rare creator-side operation.
-    // Decryption (the frequent consumer-side operation) uses Chipotle when LIT_BACKEND=chipotle.
     const cekBase64 = cek.toString('base64');
-    const client = await getLitClient();
-    const conditions = buildSelfRefConditions(effectiveActionCid);
-    const encryptResult = await client.encrypt({
-      dataToEncrypt: new TextEncoder().encode(cekBase64),
-      accessControlConditions: conditions,
-    });
-    const litCiphertext = encryptResult.ciphertext;
-    const dataToEncryptHash = encryptResult.dataToEncryptHash;
-    logger.info(`[Lit] CEK Lit-encrypted (${cek.length} bytes) via Datil SDK (encrypt always uses Datil). Hash: ${dataToEncryptHash?.substring(0, 20)}...`);
+    let litCiphertext: string;
+    let dataToEncryptHash: string;
+    let litBackend: 'chipotle' | 'datil';
+
+    if (LIT_BACKEND === 'chipotle') {
+      const { encryptWithLitAction } = await import('./chipotle-client.js');
+      const chipotleResult = await encryptWithLitAction({
+        dataToEncrypt: new TextEncoder().encode(cekBase64),
+        accessControlConditions: [],
+      });
+      litCiphertext = chipotleResult.ciphertext;
+      dataToEncryptHash = chipotleResult.dataToEncryptHash;
+      litBackend = 'chipotle';
+      logger.info(`[Lit] CEK encrypted via Chipotle PKP-AES (${cek.length} bytes). Hash: ${dataToEncryptHash?.substring(0, 20)}...`);
+    } else {
+      const client = await getLitClient();
+      const conditions = buildSelfRefConditions(effectiveActionCid);
+      const encryptResult = await client.encrypt({
+        dataToEncrypt: new TextEncoder().encode(cekBase64),
+        accessControlConditions: conditions,
+      });
+      litCiphertext = encryptResult.ciphertext;
+      dataToEncryptHash = encryptResult.dataToEncryptHash;
+      litBackend = 'datil';
+      logger.info(`[Lit] CEK encrypted via Datil BLS (${cek.length} bytes). Hash: ${dataToEncryptHash?.substring(0, 20)}...`);
+    }
 
     res.json({
       success: true,
       litCiphertext,
       dataToEncryptHash,
       actionCid: effectiveActionCid,
-      conditions,
+      conditions: LIT_BACKEND === 'datil' ? buildSelfRefConditions(effectiveActionCid) : [],
       encryptedData: encryptedWithTag.toString('base64'),
       iv: iv.toString('base64'),
+      litBackend,
     });
   } catch (error: any) {
     logger.error('[Lit] Encryption error:', error);
@@ -1161,6 +1175,7 @@ interface DecryptParams {
   chainId?: number;
   rpc?: string;
   buyerAddress: string;
+  litBackend?: LitBackend;
 }
 
 /**
@@ -1180,12 +1195,14 @@ async function recoverCEKAndFetchData(params: DecryptParams, ipfsService?: any):
     actionCid, authority, chain, chainId, rpc, buyerAddress,
   } = params;
 
-  logger.info(`[Lit] Recover CEK: kid=${kid}, buyer=${buyerAddress}, cid=${encryptedDataCid}`);
+  const effectiveBackend = params.litBackend || LIT_BACKEND;
+
+  logger.info(`[Lit] Recover CEK: kid=${kid}, buyer=${buyerAddress}, cid=${encryptedDataCid}, backend=${effectiveBackend}`);
 
   // Kick off CEK recovery and IPFS fetch in parallel
   const litStart = Date.now();
   const cekPromise = (async () => {
-    if (LIT_BACKEND === 'chipotle') {
+    if (effectiveBackend === 'chipotle') {
       const { recoverNonMediaCEK } = await import('./chipotle-client.js');
       const cekBase64 = await recoverNonMediaCEK({
         litCiphertext,
@@ -1464,6 +1481,7 @@ router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, 
       buyerAddress, mimeType,
       page: pageNum,
       maxWidth: reqMaxWidth,
+      litBackend: reqLitBackend,
     } = req.body;
 
     if (!litCiphertext || !dataToEncryptHash || !kid || !buyerAddress || !iv || !encryptedDataCid) {

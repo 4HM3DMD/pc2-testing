@@ -971,7 +971,7 @@
         console.log('[Creator] Two-layer encryption succeeded. Hash:', litData.dataToEncryptHash?.substring(0, 20) + '...');
         console.log('[Creator] Action CID:', litData.actionCid);
         console.log('[Creator] AES-encrypted data:', litData.encryptedData?.length, 'chars, IV:', litData.iv);
-        setProgStep('prog-connect', 'Lit Connected (datil)', 'done');
+        setProgStep('prog-connect', 'Lit Connected (' + (litData.litBackend || 'chipotle') + ')', 'done');
 
         setProgStep('prog-encrypt', 'Encrypting (AES + Lit CEK)...', 'active');
         encryptResult = {
@@ -981,6 +981,7 @@
           conditions: litData.conditions,
           litCiphertext: litData.litCiphertext,
           iv: litData.iv,
+          litBackend: litData.litBackend || 'chipotle',
         };
       } catch (litErr) {
         console.error('[Creator] Lit Protocol error:', litErr);
@@ -1089,7 +1090,11 @@
             if (serverThumbData.thumbnail) {
               thumbBase64 = serverThumbData.thumbnail;
               console.log('[Creator] Server-generated thumbnail for', state.selectedFile.type);
+            } else {
+              console.warn('[Creator] Server thumbnail response had no thumbnail field:', Object.keys(serverThumbData));
             }
+          } else {
+            console.warn('[Creator] Server thumbnail failed:', serverThumbResp.status, await serverThumbResp.text().catch(function() { return ''; }));
           }
         }
 
@@ -1107,6 +1112,10 @@
         }
       } catch (thumbErr) {
         console.warn('[Creator] Thumbnail generation failed (non-fatal):', thumbErr.message);
+      }
+
+      if (!imageUri) {
+        console.warn('[Creator] No thumbnail generated — asset will have no preview image in marketplace');
       }
 
       var envelope = buildMetadataEnvelope({
@@ -1131,6 +1140,7 @@
       if (encryptResult.litCiphertext) {
         envelope.asset.litCiphertext = encryptResult.litCiphertext;
         envelope.asset.iv = encryptResult.iv;
+        envelope.asset.litBackend = encryptResult.litBackend || 'chipotle';
       }
 
       if (usedLocalEncryption) {
