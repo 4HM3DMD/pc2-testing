@@ -1105,18 +1105,18 @@ router.post('/lit/encrypt', authenticate, async (req: AuthenticatedRequest, res:
     logger.info(`[Lit] AES-GCM encrypted: ${dataBytes.length} → ${encryptedWithTag.length} bytes`);
 
     // Layer 2: Lit-encrypt only the raw CEK (32 bytes — well under 4MB limit)
-    const client = await getLitClient();
-    const conditions = buildSelfRefConditions(effectiveActionCid);
+    const { encryptWithLitAction, buildSelfRefConditions: buildConditions } = await import('./chipotle-client.js');
+    const conditions = buildConditions(effectiveActionCid);
 
     // Lit's decryptAndCombine returns a string, so we base64-encode the CEK
     // before Lit-encrypting. The decrypt side will base64-decode it back.
     const cekBase64 = cek.toString('base64');
-    const encryptResult = await client.encrypt({
+    const encryptResult = await encryptWithLitAction({
       dataToEncrypt: new TextEncoder().encode(cekBase64),
       accessControlConditions: conditions,
     });
 
-    logger.info(`[Lit] CEK Lit-encrypted (${cek.length} bytes). Hash: ${encryptResult.dataToEncryptHash?.substring(0, 20)}...`);
+    logger.info(`[Lit] CEK Lit-encrypted (${cek.length} bytes) via Chipotle. Hash: ${encryptResult.dataToEncryptHash?.substring(0, 20)}...`);
 
     res.json({
       success: true,
@@ -1168,55 +1168,24 @@ async function recoverCEKAndFetchData(params: DecryptParams, ipfsService?: any):
     actionCid, authority, chain, chainId, rpc, buyerAddress,
   } = params;
 
-  const effectiveActionCid = actionCid || NON_MEDIA_ACTION_CID;
-  if (!effectiveActionCid) throw new Error('No Lit Action CID configured');
-
-  const effectiveAuthority = authority || DEFAULT_AUTHORITY;
-  const effectiveChain = chain || 'base';
-  const effectiveRpc = rpc || DEFAULT_RPC;
-
   logger.info(`[Lit] Recover CEK: kid=${kid}, buyer=${buyerAddress}, cid=${encryptedDataCid}`);
 
   // Kick off CEK recovery and IPFS fetch in parallel
   const litStart = Date.now();
   const cekPromise = (async () => {
-    const wallet = await getServerWallet();
-    const client = await getLitClient();
-    const sessionSigs = await getExecuteSessionSigs(client, wallet);
-
-    const executeParams: any = {
-      sessionSigs,
-      jsParams: {
-        ciphertext: litCiphertext,
-        dataToEncryptHash,
-        kid: kid.startsWith('0x') ? kid : `0x${kid}`,
-        actionIpfsId: effectiveActionCid,
-        authority: effectiveAuthority,
-        chain: effectiveChain,
-        chainId: chainId || 8453,
-        rpc: effectiveRpc,
-        userAddress: buyerAddress,
-      },
-    };
-
-    executeParams.ipfsId = effectiveActionCid;
-    logger.info(`[Lit] Using ipfsId: ${effectiveActionCid} (Pinata-pinned)`);
-
-    const result = await client.executeJs(executeParams);
-
-    if (!result.response) throw new Error('Lit Action returned empty response');
-
-    let cekBase64: string;
-    try {
-      const parsed = JSON.parse(result.response);
-      if (parsed.error) throw new Error(parsed.error);
-      cekBase64 = parsed.data || result.response;
-    } catch (e: any) {
-      if (e.message?.includes('Access denied')) throw e;
-      cekBase64 = result.response;
-    }
-
-    logger.info(`[Lit] CEK recovered in ${Date.now() - litStart}ms`);
+    const { recoverNonMediaCEK } = await import('./chipotle-client.js');
+    const cekBase64 = await recoverNonMediaCEK({
+      litCiphertext,
+      dataToEncryptHash,
+      kid,
+      buyerAddress,
+      actionCid: actionCid || NON_MEDIA_ACTION_CID || undefined,
+      authority,
+      chain,
+      chainId,
+      rpc,
+    });
+    logger.info(`[Lit] CEK recovered in ${Date.now() - litStart}ms (Chipotle REST)`);
     return cekBase64;
   })();
 
@@ -1953,17 +1922,8 @@ router.post('/ipfs/upload-elacity', authenticate, async (req: AuthenticatedReque
   }
 });
 
-// Pre-warm Lit client + session sigs at module load so the first user request
-// doesn't pay the ~5s cold-connect + handshake penalty. Fire-and-forget.
-setTimeout(async () => {
-  try {
-    const [wallet, client] = await Promise.all([getServerWallet(), getLitClient()]);
-    await getExecuteSessionSigs(client, wallet);
-    logger.info('[Lit] Pre-warm complete: client connected + session sigs cached');
-  } catch (err: any) {
-    logger.warn(`[Lit] Pre-warm failed (will retry on first request): ${err.message}`);
-  }
-}, 2000);
+// Chipotle REST client — no pre-warm needed (stateless HTTP, no WebSocket connection)
+logger.info('[Lit] Using Chipotle REST backend (no SDK pre-warm needed)');
 
 export { getServerWallet, getLitClient, getExecuteSessionSigs, ensureDelegateeRegistered, getCapacityWallet, detectCapacityTokenId };
 export default router;

@@ -25,26 +25,6 @@ const subtle = webcrypto.subtle;
 const logger = createLogger('media-api');
 const router = Router();
 
-// Pending auth requests: stores the Promise resolvers for the two-phase auth flow
-interface PendingAuth {
-  sessionSigsPromise: Promise<any>;
-  resolveAuthSig: (authSig: any) => void;
-  rejectAuthSig: (error: Error) => void;
-  createdAt: number;
-}
-const pendingAuthRequests = new Map<string, PendingAuth>();
-
-// Cleanup stale pending requests every 2 minutes
-setInterval(() => {
-  const now = Date.now();
-  pendingAuthRequests.forEach((val, key) => {
-    if (now - val.createdAt > 120_000) {
-      val.rejectAuthSig(new Error('Auth request expired'));
-      pendingAuthRequests.delete(key);
-    }
-  });
-}, 120_000);
-
 interface AuthenticatedRequest extends Request {
   user?: { uuid: string; username: string };
 }
@@ -66,9 +46,9 @@ function getBaseUrl(req: Request, bosonService?: any): string {
 }
 
 // ─── POST /api/media/prepare-auth ────────────────────────────────────
-// Phase 1 of the two-phase auth flow.
-// Starts Lit getSessionSigs in background; when the Lit SDK's authNeededCallback
-// fires, we capture the SIWE message and return it for the user to sign.
+// Chipotle: Two-phase SIWE auth is no longer needed (API key replaces it).
+// This endpoint returns a stub response for backward compatibility with
+// existing media players that still call prepare-auth before init.
 router.post('/prepare-auth', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { buyerAddress } = req.body;
@@ -77,62 +57,11 @@ router.post('/prepare-auth', async (req: AuthenticatedRequest, res: Response) =>
       return;
     }
 
+    // Return a no-op requestId. The /init endpoint now ignores requestId
+    // and goes straight to Chipotle REST CEK recovery.
     const requestId = crypto.randomUUID();
-    const { getLitClient, ensureDelegateeRegistered, getCapacityWallet, detectCapacityTokenId } = await import('./storage.js');
-    const client = await getLitClient();
-
-    // Register user as delegatee (for Payment Delegation)
-    await ensureDelegateeRegistered(buyerAddress);
-
-    // Promise pair: authNeededCallback will block on authSigPromise.
-    // When /init receives the signed auth, it resolves the promise.
-    let resolveAuthSig!: (authSig: any) => void;
-    let rejectAuthSig!: (error: Error) => void;
-    const authSigPromise = new Promise<any>((resolve, reject) => {
-      resolveAuthSig = resolve;
-      rejectAuthSig = reject;
-    });
-
-    // Promise pair: once authNeededCallback fires, we send SIWE message to frontend
-    let resolveSiweReady!: (msg: string) => void;
-    const siweReadyPromise = new Promise<string>((resolve) => {
-      resolveSiweReady = resolve;
-    });
-
-    // Start getSessionSigs in background
-    const sessionSigsPromise = startUserSessionSigs(
-      client,
-      buyerAddress,
-      async (siweMessage: string) => {
-        resolveSiweReady(siweMessage);
-        return authSigPromise;
-      },
-    );
-
-    // Prevent unhandled rejection crash if auth flow is never completed
-    sessionSigsPromise.catch((err: any) => {
-      logger.warn(`[media/prepare-auth] Background session ${requestId} failed: ${err.message}`);
-      pendingAuthRequests.delete(requestId);
-    });
-
-    // Store for /init to resolve
-    pendingAuthRequests.set(requestId, {
-      sessionSigsPromise,
-      resolveAuthSig,
-      rejectAuthSig,
-      createdAt: Date.now(),
-    });
-
-    // Wait for the callback to fire and give us the SIWE message (max 30s)
-    const siweMessage = await Promise.race([
-      siweReadyPromise,
-      new Promise<string>((_, reject) =>
-        setTimeout(() => reject(new Error('Timeout waiting for Lit auth callback')), 30_000),
-      ),
-    ]);
-
-    logger.info(`[media/prepare-auth] Request ${requestId}: SIWE message ready for ${buyerAddress}`);
-    res.json({ requestId, siweMessage });
+    logger.info(`[media/prepare-auth] Chipotle mode — skipping SIWE, returning stub for ${buyerAddress}`);
+    res.json({ requestId, siweMessage: null, chipotleMode: true });
   } catch (error: any) {
     logger.error(`[media/prepare-auth] Error: ${error.message}`, error);
     res.status(500).json({ error: error.message });
@@ -281,31 +210,10 @@ router.post('/init', async (req: AuthenticatedRequest, res: Response) => {
     const { getServerWallet } = await import('./storage.js');
     const wallet = await getServerWallet();
     const buyerAddress = req.body.buyerAddress || '';
-    const requestId = req.body.requestId || '';
-    const litAuthSig = req.body.litAuthSig || null;
 
-    // Two-phase auth: if requestId is provided, resolve the pending auth callback
-    // and use the resulting session sigs for CEK recovery.
-    let prebuiltSessionSigs: any = null;
-    if (requestId && litAuthSig?.sig) {
-      const pending = pendingAuthRequests.get(requestId);
-      if (!pending) {
-        res.status(400).json({ error: 'Auth session expired or invalid. Please try again.' });
-        return;
-      }
-      pending.resolveAuthSig(litAuthSig);
-      try {
-        prebuiltSessionSigs = await pending.sessionSigsPromise;
-        logger.info(`[media/init] Two-phase session sigs ready (${Object.keys(prebuiltSessionSigs).length} nodes)`);
-      } catch (sessErr: any) {
-        pendingAuthRequests.delete(requestId);
-        res.status(500).json({ error: `Lit session creation failed: ${sessErr.message}` });
-        return;
-      }
-      pendingAuthRequests.delete(requestId);
-    }
-
-    const cekBase64 = await recoverMediaCEK(litParams, wallet, prebuiltSessionSigs, buyerAddress);
+    // Chipotle: API key auth replaces two-phase SIWE. No session sigs needed.
+    // The requestId/litAuthSig params from older clients are gracefully ignored.
+    const cekBase64 = await recoverMediaCEK(litParams, wallet, undefined, buyerAddress);
     logger.info(`[media/init] CEK recovered in ${Date.now() - requestStart}ms`);
 
     // 4. Create session
@@ -841,6 +749,41 @@ async function startUserSessionSigs(
 }
 
 /**
+ * Fetch and cache Lit Action JavaScript code by IPFS CID.
+ * Media Lit Actions are stored on IPFS (not local like non-media-decrypt.js).
+ * Chipotle requires inline code — so we fetch the JS source by CID.
+ */
+const litActionCodeCache = new Map<string, string>();
+
+async function fetchLitActionCode(cid: string): Promise<string> {
+  const cached = litActionCodeCache.get(cid);
+  if (cached) return cached;
+
+  const gateways = [
+    `http://localhost:4200/ipfs/${cid}`,
+    `https://ipfs.ela.city/ipfs/${cid}`,
+    `https://gateway.pinata.cloud/ipfs/${cid}`,
+    `https://ipfs.io/ipfs/${cid}`,
+  ];
+
+  for (const url of gateways) {
+    try {
+      const resp = await fetch(url, { signal: AbortSignal.timeout(10000) });
+      if (resp.ok) {
+        const code = await resp.text();
+        if (code && code.length > 10) {
+          litActionCodeCache.set(cid, code);
+          logger.info(`[media/CEK] Fetched Lit Action code from ${url.includes('localhost') ? 'local' : 'remote'} IPFS (${code.length} chars)`);
+          return code;
+        }
+      }
+    } catch { /* try next gateway */ }
+  }
+
+  throw new Error(`Failed to fetch media Lit Action code from IPFS: ${cid}`);
+}
+
+/**
  * Recover the Content Encryption Key for media assets via Lit Protocol.
  *
  * Media Lit Actions use an ECDH envelope: the caller sends an ephemeral
@@ -863,19 +806,6 @@ async function recoverMediaCEK(
   prebuiltSessionSigs?: any,
   buyerAddress?: string,
 ): Promise<string> {
-  const { getLitClient, getExecuteSessionSigs } = await import('./storage.js');
-  const client = await getLitClient();
-
-  // Use pre-built session sigs from two-phase auth, or fall back to server wallet
-  let sessionSigs: any;
-  if (prebuiltSessionSigs && Object.keys(prebuiltSessionSigs).length > 0) {
-    logger.info(`[media/CEK] Using pre-built user session sigs (${Object.keys(prebuiltSessionSigs).length} nodes)`);
-    sessionSigs = prebuiltSessionSigs;
-  } else {
-    logger.info(`[media/CEK] No pre-built session sigs — falling back to server wallet session`);
-    sessionSigs = await getExecuteSessionSigs(client, wallet);
-  }
-
   // Generate ephemeral ECDH P-256 key pair for envelope unwrapping
   const keyAlg = { name: 'ECDH', namedCurve: 'P-256' } as const;
   const keyPair = await subtle.generateKey(keyAlg, true, ['deriveKey', 'deriveBits']);
@@ -885,30 +815,27 @@ async function recoverMediaCEK(
   const effectiveUserAddr = buyerAddress || wallet.address;
   logger.info(`[media/CEK] Calling Lit Action ${litParams.actionCid} with P-256 ECDH, kid=${litParams.kid}, user=${effectiveUserAddr}`);
 
-  const executeParams: any = {
-    sessionSigs,
-    jsParams: {
-      keyAlg: { name: 'ECDH', namedCurve: 'P-256' },
-      publicKey: publicKeyHex,
-      ciphertext: litParams.litCiphertext,
+  // Fetch the media Lit Action code by IPFS CID (it's not our local non-media-decrypt.js)
+  const mediaActionCode = await fetchLitActionCode(litParams.actionCid);
+
+  const { recoverMediaCEKEnvelope } = await import('./chipotle-client.js');
+  const envelope = await recoverMediaCEKEnvelope(
+    {
+      litCiphertext: litParams.litCiphertext,
       dataToEncryptHash: litParams.dataToEncryptHash,
-      kid: litParams.kid.startsWith('0x') ? litParams.kid : `0x${litParams.kid}`,
-      actionIpfsId: litParams.actionCid,
+      kid: litParams.kid,
+      buyerAddress: effectiveUserAddr,
+      actionCid: litParams.actionCid,
+      publicKeyHex,
       authority: litParams.authority,
       chain: litParams.chain,
       chainId: litParams.chainId,
       rpc: litParams.rpc,
-      userAddress: effectiveUserAddr,
     },
-    ipfsId: litParams.actionCid,
-  };
+    mediaActionCode,
+  );
 
-  const result = await client.executeJs(executeParams);
-  if (!result.response) throw new Error('Lit Action returned empty response');
-
-  // The response is a base64-encoded ECDH envelope
-  const envelope = Buffer.from(result.response, 'base64');
-  logger.info(`[media/CEK] Received envelope: ${envelope.length} bytes`);
+  logger.info(`[media/CEK] Received envelope: ${envelope.length} bytes (Chipotle REST)`);
 
   return unwrapECDHEnvelope(envelope, keyPair.privateKey, rawPubKey, keyAlg);
 }
