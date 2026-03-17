@@ -882,11 +882,15 @@ const LIT_ACTION_CID_PATH = join(__litDirname, '../../data/.lit-action-cid');
 let NON_MEDIA_ACTION_CID = process.env.LIT_ACTION_CID || '';
 
 // ── Lit Backend Selection ─────────────────────────────────────────
-// LIT_BACKEND=chipotle (default) — use Chipotle REST API (stateless, API key auth)
-// LIT_BACKEND=datil             — use Datil SDK (WebSocket, SIWE, capacity credits)
+// LIT_BACKEND=datil (default)    — use Datil SDK (WebSocket, SIWE, capacity credits)
+// LIT_BACKEND=chipotle           — use Chipotle REST API (stateless, API key auth)
+//   NOTE: Chipotle uses PKP-AES encryption (Lit.Actions.Encrypt/Decrypt), NOT
+//   Datil's threshold BLS (decryptAndCombine). Existing Datil-encrypted assets
+//   CANNOT be decrypted by Chipotle. Default stays on Datil until a migration
+//   path exists or all assets are re-encrypted.
 type LitBackend = 'chipotle' | 'datil';
-const LIT_BACKEND: LitBackend = (process.env.LIT_BACKEND as LitBackend) || 'chipotle';
-logger.info(`[Lit] Backend: ${LIT_BACKEND} (set LIT_BACKEND=datil to revert to Datil SDK)`);
+const LIT_BACKEND: LitBackend = (process.env.LIT_BACKEND as LitBackend) || 'datil';
+logger.info(`[Lit] Backend: ${LIT_BACKEND} (set LIT_BACKEND=chipotle for Chipotle REST API)`);
 
 if (!NON_MEDIA_ACTION_CID && existsSync(LIT_ACTION_CID_PATH)) {
   NON_MEDIA_ACTION_CID = readFileSync(LIT_ACTION_CID_PATH, 'utf8').trim();
