@@ -881,6 +881,13 @@ async function getLitClient() {
 const LIT_ACTION_CID_PATH = join(__litDirname, '../../data/.lit-action-cid');
 let NON_MEDIA_ACTION_CID = process.env.LIT_ACTION_CID || '';
 
+// ── Lit Backend Selection ─────────────────────────────────────────
+// LIT_BACKEND=chipotle (default) — use Chipotle REST API (stateless, API key auth)
+// LIT_BACKEND=datil             — use Datil SDK (WebSocket, SIWE, capacity credits)
+type LitBackend = 'chipotle' | 'datil';
+const LIT_BACKEND: LitBackend = (process.env.LIT_BACKEND as LitBackend) || 'chipotle';
+logger.info(`[Lit] Backend: ${LIT_BACKEND} (set LIT_BACKEND=datil to revert to Datil SDK)`);
+
 if (!NON_MEDIA_ACTION_CID && existsSync(LIT_ACTION_CID_PATH)) {
   NON_MEDIA_ACTION_CID = readFileSync(LIT_ACTION_CID_PATH, 'utf8').trim();
   if (NON_MEDIA_ACTION_CID) {
@@ -1105,23 +1112,38 @@ router.post('/lit/encrypt', authenticate, async (req: AuthenticatedRequest, res:
     logger.info(`[Lit] AES-GCM encrypted: ${dataBytes.length} → ${encryptedWithTag.length} bytes`);
 
     // Layer 2: Lit-encrypt only the raw CEK (32 bytes — well under 4MB limit)
-    const { encryptWithLitAction, buildSelfRefConditions: buildConditions } = await import('./chipotle-client.js');
-    const conditions = buildConditions(effectiveActionCid);
-
-    // Lit's decryptAndCombine returns a string, so we base64-encode the CEK
-    // before Lit-encrypting. The decrypt side will base64-decode it back.
     const cekBase64 = cek.toString('base64');
-    const encryptResult = await encryptWithLitAction({
-      dataToEncrypt: new TextEncoder().encode(cekBase64),
-      accessControlConditions: conditions,
-    });
+    let litCiphertext: string;
+    let dataToEncryptHash: string;
+    let conditions: any[];
 
-    logger.info(`[Lit] CEK Lit-encrypted (${cek.length} bytes) via Chipotle. Hash: ${encryptResult.dataToEncryptHash?.substring(0, 20)}...`);
+    if (LIT_BACKEND === 'chipotle') {
+      const { encryptWithLitAction, buildSelfRefConditions: buildConditions } = await import('./chipotle-client.js');
+      conditions = buildConditions(effectiveActionCid);
+      const encryptResult = await encryptWithLitAction({
+        dataToEncrypt: new TextEncoder().encode(cekBase64),
+        accessControlConditions: conditions,
+      });
+      litCiphertext = encryptResult.ciphertext;
+      dataToEncryptHash = encryptResult.dataToEncryptHash;
+      logger.info(`[Lit] CEK Lit-encrypted (${cek.length} bytes) via Chipotle. Hash: ${dataToEncryptHash?.substring(0, 20)}...`);
+    } else {
+      // Datil fallback
+      const client = await getLitClient();
+      conditions = buildSelfRefConditions(effectiveActionCid);
+      const encryptResult = await client.encrypt({
+        dataToEncrypt: new TextEncoder().encode(cekBase64),
+        accessControlConditions: conditions,
+      });
+      litCiphertext = encryptResult.ciphertext;
+      dataToEncryptHash = encryptResult.dataToEncryptHash;
+      logger.info(`[Lit] CEK Lit-encrypted (${cek.length} bytes) via Datil SDK. Hash: ${dataToEncryptHash?.substring(0, 20)}...`);
+    }
 
     res.json({
       success: true,
-      litCiphertext: encryptResult.ciphertext,
-      dataToEncryptHash: encryptResult.dataToEncryptHash,
+      litCiphertext,
+      dataToEncryptHash,
       actionCid: effectiveActionCid,
       conditions,
       encryptedData: encryptedWithTag.toString('base64'),
@@ -1173,19 +1195,64 @@ async function recoverCEKAndFetchData(params: DecryptParams, ipfsService?: any):
   // Kick off CEK recovery and IPFS fetch in parallel
   const litStart = Date.now();
   const cekPromise = (async () => {
-    const { recoverNonMediaCEK } = await import('./chipotle-client.js');
-    const cekBase64 = await recoverNonMediaCEK({
-      litCiphertext,
-      dataToEncryptHash,
-      kid,
-      buyerAddress,
-      actionCid: actionCid || NON_MEDIA_ACTION_CID || undefined,
-      authority,
-      chain,
-      chainId,
-      rpc,
-    });
-    logger.info(`[Lit] CEK recovered in ${Date.now() - litStart}ms (Chipotle REST)`);
+    if (LIT_BACKEND === 'chipotle') {
+      const { recoverNonMediaCEK } = await import('./chipotle-client.js');
+      const cekBase64 = await recoverNonMediaCEK({
+        litCiphertext,
+        dataToEncryptHash,
+        kid,
+        buyerAddress,
+        actionCid: actionCid || NON_MEDIA_ACTION_CID || undefined,
+        authority,
+        chain,
+        chainId,
+        rpc,
+      });
+      logger.info(`[Lit] CEK recovered in ${Date.now() - litStart}ms (Chipotle REST)`);
+      return cekBase64;
+    }
+
+    // Datil fallback (LIT_BACKEND=datil)
+    const wallet = await getServerWallet();
+    const client = await getLitClient();
+    const sessionSigs = await getExecuteSessionSigs(client, wallet);
+
+    const effectiveActionCid = actionCid || NON_MEDIA_ACTION_CID;
+    if (!effectiveActionCid) throw new Error('No Lit Action CID configured');
+    const effectiveAuthority = authority || DEFAULT_AUTHORITY;
+    const effectiveChain = chain || 'base';
+    const effectiveRpc = rpc || DEFAULT_RPC;
+
+    const executeParams: any = {
+      sessionSigs,
+      jsParams: {
+        ciphertext: litCiphertext,
+        dataToEncryptHash,
+        kid: kid.startsWith('0x') ? kid : `0x${kid}`,
+        actionIpfsId: effectiveActionCid,
+        authority: effectiveAuthority,
+        chain: effectiveChain,
+        chainId: chainId || 8453,
+        rpc: effectiveRpc,
+        userAddress: buyerAddress,
+      },
+      ipfsId: effectiveActionCid,
+    };
+
+    const result = await client.executeJs(executeParams);
+    if (!result.response) throw new Error('Lit Action returned empty response');
+
+    let cekBase64: string;
+    try {
+      const parsed = JSON.parse(result.response);
+      if (parsed.error) throw new Error(parsed.error);
+      cekBase64 = parsed.data || result.response;
+    } catch (e: any) {
+      if (e.message?.includes('Access denied')) throw e;
+      cekBase64 = result.response;
+    }
+
+    logger.info(`[Lit] CEK recovered in ${Date.now() - litStart}ms (Datil SDK)`);
     return cekBase64;
   })();
 
@@ -1743,11 +1810,20 @@ router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, 
 router.get('/lit/server-info', async (_req: any, res: Response) => {
   try {
     const wallet = await getServerWallet();
-    res.json({
+    const info: any = {
       address: wallet.address,
       actionCid: NON_MEDIA_ACTION_CID || null,
       authority: DEFAULT_AUTHORITY,
-    });
+      backend: LIT_BACKEND,
+    };
+
+    if (LIT_BACKEND === 'chipotle') {
+      const { getChipotleInfo } = await import('./chipotle-client.js');
+      const chipotleInfo = getChipotleInfo();
+      info.chipotle = chipotleInfo;
+    }
+
+    res.json(info);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -1922,8 +1998,21 @@ router.post('/ipfs/upload-elacity', authenticate, async (req: AuthenticatedReque
   }
 });
 
-// Chipotle REST client — no pre-warm needed (stateless HTTP, no WebSocket connection)
-logger.info('[Lit] Using Chipotle REST backend (no SDK pre-warm needed)');
+// Backend-specific initialization
+if (LIT_BACKEND === 'datil') {
+  // Pre-warm Lit SDK client + session sigs (Datil only — ~5s cold-connect)
+  setTimeout(async () => {
+    try {
+      const [wallet, client] = await Promise.all([getServerWallet(), getLitClient()]);
+      await getExecuteSessionSigs(client, wallet);
+      logger.info('[Lit] Pre-warm complete: Datil client connected + session sigs cached');
+    } catch (err: any) {
+      logger.warn(`[Lit] Pre-warm failed (will retry on first request): ${err.message}`);
+    }
+  }, 2000);
+} else {
+  logger.info('[Lit] Chipotle REST backend — no pre-warm needed (stateless HTTP)');
+}
 
 export { getServerWallet, getLitClient, getExecuteSessionSigs, ensureDelegateeRegistered, getCapacityWallet, detectCapacityTokenId };
 export default router;

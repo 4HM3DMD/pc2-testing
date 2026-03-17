@@ -25,6 +25,25 @@ const subtle = webcrypto.subtle;
 const logger = createLogger('media-api');
 const router = Router();
 
+// Pending auth requests for Datil two-phase SIWE flow (unused in Chipotle mode)
+interface PendingAuth {
+  sessionSigsPromise: Promise<any>;
+  resolveAuthSig: (authSig: any) => void;
+  rejectAuthSig: (error: Error) => void;
+  createdAt: number;
+}
+const pendingAuthRequests = new Map<string, PendingAuth>();
+
+setInterval(() => {
+  const now = Date.now();
+  pendingAuthRequests.forEach((val, key) => {
+    if (now - val.createdAt > 120_000) {
+      val.rejectAuthSig(new Error('Auth request expired'));
+      pendingAuthRequests.delete(key);
+    }
+  });
+}, 120_000);
+
 interface AuthenticatedRequest extends Request {
   user?: { uuid: string; username: string };
 }
@@ -45,10 +64,13 @@ function getBaseUrl(req: Request, bosonService?: any): string {
   return `${req.protocol}://${req.get('host')}`;
 }
 
+// ── Lit Backend Selection (mirrors storage.ts) ───────────────────
+type LitBackend = 'chipotle' | 'datil';
+const LIT_BACKEND: LitBackend = (process.env.LIT_BACKEND as LitBackend) || 'chipotle';
+
 // ─── POST /api/media/prepare-auth ────────────────────────────────────
 // Chipotle: Two-phase SIWE auth is no longer needed (API key replaces it).
-// This endpoint returns a stub response for backward compatibility with
-// existing media players that still call prepare-auth before init.
+// Datil: Full two-phase SIWE auth flow.
 router.post('/prepare-auth', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { buyerAddress } = req.body;
@@ -57,11 +79,54 @@ router.post('/prepare-auth', async (req: AuthenticatedRequest, res: Response) =>
       return;
     }
 
-    // Return a no-op requestId. The /init endpoint now ignores requestId
-    // and goes straight to Chipotle REST CEK recovery.
+    if (LIT_BACKEND === 'chipotle') {
+      const requestId = crypto.randomUUID();
+      logger.info(`[media/prepare-auth] Chipotle mode — skipping SIWE, returning stub for ${buyerAddress}`);
+      res.json({ requestId, siweMessage: null, chipotleMode: true });
+      return;
+    }
+
+    // Datil: full two-phase SIWE auth
     const requestId = crypto.randomUUID();
-    logger.info(`[media/prepare-auth] Chipotle mode — skipping SIWE, returning stub for ${buyerAddress}`);
-    res.json({ requestId, siweMessage: null, chipotleMode: true });
+    const { getLitClient, ensureDelegateeRegistered } = await import('./storage.js');
+    const client = await getLitClient();
+    await ensureDelegateeRegistered(buyerAddress);
+
+    let resolveAuthSig!: (authSig: any) => void;
+    let rejectAuthSig!: (error: Error) => void;
+    const authSigPromise = new Promise<any>((resolve, reject) => {
+      resolveAuthSig = resolve;
+      rejectAuthSig = reject;
+    });
+
+    let resolveSiweReady!: (msg: string) => void;
+    const siweReadyPromise = new Promise<string>((resolve) => {
+      resolveSiweReady = resolve;
+    });
+
+    const sessionSigsPromise = startUserSessionSigs(
+      client, buyerAddress,
+      async (siweMessage: string) => { resolveSiweReady(siweMessage); return authSigPromise; },
+    );
+
+    sessionSigsPromise.catch((err: any) => {
+      logger.warn(`[media/prepare-auth] Background session ${requestId} failed: ${err.message}`);
+      pendingAuthRequests.delete(requestId);
+    });
+
+    pendingAuthRequests.set(requestId, {
+      sessionSigsPromise, resolveAuthSig, rejectAuthSig, createdAt: Date.now(),
+    });
+
+    const siweMessage = await Promise.race([
+      siweReadyPromise,
+      new Promise<string>((_, reject) =>
+        setTimeout(() => reject(new Error('Timeout waiting for Lit auth callback')), 30_000),
+      ),
+    ]);
+
+    logger.info(`[media/prepare-auth] Request ${requestId}: SIWE message ready for ${buyerAddress}`);
+    res.json({ requestId, siweMessage });
   } catch (error: any) {
     logger.error(`[media/prepare-auth] Error: ${error.message}`, error);
     res.status(500).json({ error: error.message });
@@ -211,9 +276,32 @@ router.post('/init', async (req: AuthenticatedRequest, res: Response) => {
     const wallet = await getServerWallet();
     const buyerAddress = req.body.buyerAddress || '';
 
-    // Chipotle: API key auth replaces two-phase SIWE. No session sigs needed.
-    // The requestId/litAuthSig params from older clients are gracefully ignored.
-    const cekBase64 = await recoverMediaCEK(litParams, wallet, undefined, buyerAddress);
+    let prebuiltSessionSigs: any = null;
+
+    if (LIT_BACKEND === 'datil') {
+      // Datil: resolve two-phase auth if requestId provided
+      const requestId = req.body.requestId || '';
+      const litAuthSig = req.body.litAuthSig || null;
+      if (requestId && litAuthSig?.sig) {
+        const pending = pendingAuthRequests.get(requestId);
+        if (!pending) {
+          res.status(400).json({ error: 'Auth session expired or invalid. Please try again.' });
+          return;
+        }
+        pending.resolveAuthSig(litAuthSig);
+        try {
+          prebuiltSessionSigs = await pending.sessionSigsPromise;
+          logger.info(`[media/init] Two-phase session sigs ready (${Object.keys(prebuiltSessionSigs).length} nodes)`);
+        } catch (sessErr: any) {
+          pendingAuthRequests.delete(requestId);
+          res.status(500).json({ error: `Lit session creation failed: ${sessErr.message}` });
+          return;
+        }
+        pendingAuthRequests.delete(requestId);
+      }
+    }
+
+    const cekBase64 = await recoverMediaCEK(litParams, wallet, prebuiltSessionSigs, buyerAddress);
     logger.info(`[media/init] CEK recovered in ${Date.now() - requestStart}ms`);
 
     // 4. Create session
@@ -815,27 +903,62 @@ async function recoverMediaCEK(
   const effectiveUserAddr = buyerAddress || wallet.address;
   logger.info(`[media/CEK] Calling Lit Action ${litParams.actionCid} with P-256 ECDH, kid=${litParams.kid}, user=${effectiveUserAddr}`);
 
-  // Fetch the media Lit Action code by IPFS CID (it's not our local non-media-decrypt.js)
-  const mediaActionCode = await fetchLitActionCode(litParams.actionCid);
+  let envelope: Buffer;
 
-  const { recoverMediaCEKEnvelope } = await import('./chipotle-client.js');
-  const envelope = await recoverMediaCEKEnvelope(
-    {
-      litCiphertext: litParams.litCiphertext,
-      dataToEncryptHash: litParams.dataToEncryptHash,
-      kid: litParams.kid,
-      buyerAddress: effectiveUserAddr,
-      actionCid: litParams.actionCid,
-      publicKeyHex,
-      authority: litParams.authority,
-      chain: litParams.chain,
-      chainId: litParams.chainId,
-      rpc: litParams.rpc,
-    },
-    mediaActionCode,
-  );
+  if (LIT_BACKEND === 'chipotle') {
+    const mediaActionCode = await fetchLitActionCode(litParams.actionCid);
+    const { recoverMediaCEKEnvelope } = await import('./chipotle-client.js');
+    envelope = await recoverMediaCEKEnvelope(
+      {
+        litCiphertext: litParams.litCiphertext,
+        dataToEncryptHash: litParams.dataToEncryptHash,
+        kid: litParams.kid,
+        buyerAddress: effectiveUserAddr,
+        actionCid: litParams.actionCid,
+        publicKeyHex,
+        authority: litParams.authority,
+        chain: litParams.chain,
+        chainId: litParams.chainId,
+        rpc: litParams.rpc,
+      },
+      mediaActionCode,
+    );
+    logger.info(`[media/CEK] Received envelope: ${envelope.length} bytes (Chipotle REST)`);
+  } else {
+    // Datil fallback
+    const { getLitClient, getExecuteSessionSigs } = await import('./storage.js');
+    const client = await getLitClient();
 
-  logger.info(`[media/CEK] Received envelope: ${envelope.length} bytes (Chipotle REST)`);
+    let sessionSigs: any;
+    if (prebuiltSessionSigs && Object.keys(prebuiltSessionSigs).length > 0) {
+      sessionSigs = prebuiltSessionSigs;
+    } else {
+      sessionSigs = await getExecuteSessionSigs(client, wallet);
+    }
+
+    const executeParams: any = {
+      sessionSigs,
+      jsParams: {
+        keyAlg: { name: 'ECDH', namedCurve: 'P-256' },
+        publicKey: publicKeyHex,
+        ciphertext: litParams.litCiphertext,
+        dataToEncryptHash: litParams.dataToEncryptHash,
+        kid: litParams.kid.startsWith('0x') ? litParams.kid : `0x${litParams.kid}`,
+        actionIpfsId: litParams.actionCid,
+        authority: litParams.authority,
+        chain: litParams.chain,
+        chainId: litParams.chainId,
+        rpc: litParams.rpc,
+        userAddress: effectiveUserAddr,
+      },
+      ipfsId: litParams.actionCid,
+    };
+
+    const result = await client.executeJs(executeParams);
+    if (!result.response) throw new Error('Lit Action returned empty response');
+    envelope = Buffer.from(result.response, 'base64');
+    logger.info(`[media/CEK] Received envelope: ${envelope.length} bytes (Datil SDK)`);
+  }
 
   return unwrapECDHEnvelope(envelope, keyPair.privateKey, rawPubKey, keyAlg);
 }
