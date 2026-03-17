@@ -11,9 +11,9 @@
 
 | Credential | Value | Purpose |
 |-----------|-------|---------|
-| **Account Key** | `s118hHL8ruY0FyAnhsEmyjaGm1KgLAItdkspvrozpc8=` | Dashboard management — create/edit API keys, groups, PKPs. NOT for executing Lit Actions. |
-| **Usage API Key** | `ZYLyJ8reL9OCGNKJUu5RV3ZK6koPVs52FtcfvNRcO0I=` | Runtime key — all PC2 nodes use this to execute Lit Actions. Key name: `pc2-ddrm-full`. |
-| **PKP ID** | `0xa7a3b7344231df566f8b33bb846cfdf69bec2744` | Account Master Wallet. Used for `Lit.Actions.Encrypt/Decrypt`. |
+| **Account Key** | *(stored in `data/.chipotle-account-key`, never committed)* | Dashboard management — create/edit API keys, groups, PKPs. NOT for executing Lit Actions. |
+| **Usage API Key** | *(stored in `data/.chipotle-api-key`, never committed)* | Runtime key — all PC2 nodes use this to execute Lit Actions. Key name: `pc2-ddrm-full`. |
+| **PKP ID** | `0xa7a3b7344231df566f8b33bb846cfdf69bec2744` | Account Master Wallet. Used for `Lit.Actions.Encrypt/Decrypt`. (Public on-chain — safe to publish.) |
 | **Group** | `elacity-ddrm` (group_id: 1) | Scopes the usage key to permitted PKPs and actions. |
 
 **API Endpoints:**
@@ -106,9 +106,9 @@
 ### API Key Resolution Order (Tier system)
 1. **Tier 2**: `LIT_CHIPOTLE_USER_KEY` env → `data/.chipotle-user-key` file
 2. **Tier 1**: `LIT_CHIPOTLE_USAGE_KEY` env → `data/.chipotle-api-key` file
-3. **Fallback**: Hardcoded `DEFAULT_SHARED_KEY` in source
+3. **Fallback**: No hardcoded keys — node setup provisions the key file
 
-For a new node: no config needed. The hardcoded shared key works for all nodes.
+For a new node: the setup/bootstrap process writes the Tier 1 key into `data/.chipotle-api-key`. Keys are never committed to the repo.
 
 ---
 
@@ -144,9 +144,12 @@ Each asset's metadata contains `litBackend: 'chipotle' | 'datil'`. The decrypt r
 ### Adding a PKP to the Group
 If you need to add a new PKP wallet:
 ```bash
+# Read account key from local secrets file (never hardcode in scripts)
+ACCOUNT_KEY=$(cat data/.chipotle-account-key)
+
 curl -X POST https://api.dev.litprotocol.com/core/v1/add_pkp_to_group \
   -H "Content-Type: application/json" \
-  -H "X-Api-Key: s118hHL8ruY0FyAnhsEmyjaGm1KgLAItdkspvrozpc8=" \
+  -H "X-Api-Key: $ACCOUNT_KEY" \
   -d '{"group_id": 1, "pkp_id": "0xNEW_PKP_ADDRESS"}'
 ```
 

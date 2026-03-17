@@ -32,8 +32,6 @@ const LIT_ACTION_CID_PATH = join(DATA_DIR, '.lit-action-cid');
 const DEFAULT_API_URL = 'https://api.dev.litprotocol.com';
 const PROD_API_URL = 'https://api.litprotocol.com';
 
-const DEFAULT_SHARED_KEY = 'ZYLyJ8reL9OCGNKJUu5RV3ZK6koPVs52FtcfvNRcO0I=';
-
 const DEFAULT_AUTHORITY = '0x580c26DefF267EF40A72CF10A4A42050F0641b8B';
 const DEFAULT_RPC = 'https://mainnet.base.org';
 const DEFAULT_CHAIN = 'base';
@@ -118,8 +116,10 @@ function resolveApiKey(): string {
     if (key) return key;
   }
 
-  logger.info('[Chipotle] Using default shared key (Tier 1)');
-  return DEFAULT_SHARED_KEY;
+  throw new Error(
+    'No Chipotle API key configured. ' +
+    'Set LIT_CHIPOTLE_USAGE_KEY env var or place the key in data/.chipotle-api-key',
+  );
 }
 
 function resolveApiUrl(): string {

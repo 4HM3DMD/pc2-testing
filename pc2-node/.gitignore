@@ -29,6 +29,14 @@ Thumbs.db
 .vscode/
 .idea/
 
+# Secrets / API keys (never commit)
+data/.chipotle-api-key
+data/.chipotle-user-key
+data/.chipotle-account-key
+
+# Dev-only test scripts containing secrets
+scripts/test-chipotle-phase1.mjs
+
 # Data (user data, databases, runtime state — but NOT test-apps or lit-actions source)
 data/*
 !data/test-apps/

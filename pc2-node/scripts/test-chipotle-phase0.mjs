@@ -22,8 +22,8 @@
 
 const CONFIG = {
   apiUrl: process.env.LIT_CHIPOTLE_API_URL || 'https://api.dev.litprotocol.com',
-  accountKey: process.env.LIT_CHIPOTLE_ACCOUNT_KEY || 's118hHL8ruY0FyAnhsEmyjaGm1KgLAItdkspvrozpc8=',
-  usageKey: process.env.LIT_CHIPOTLE_USAGE_KEY || '6TO6QjAQs7JLHbqpW5SuU9iBbwpR0/8oQzZzt1I7JAc=',
+  accountKey: process.env.LIT_CHIPOTLE_ACCOUNT_KEY || '',
+  usageKey: process.env.LIT_CHIPOTLE_USAGE_KEY || '',
   actionCid: process.env.LIT_TEST_ACTION_CID || 'QmVMgKMKFELHTZf8PmD58nYBhr4S5DHLpuwFTvyDKLPXgq',
   authority: '0x580C26DeFf267Ef40A72cf10a4A42050F0641b8B',
   rpc: 'https://mainnet.base.org',
@@ -34,6 +34,11 @@ const CONFIG = {
   testKid: process.env.LIT_TEST_KID || '',
   testBuyer: process.env.LIT_TEST_BUYER || '',
 };
+
+if (!CONFIG.usageKey) {
+  console.error('ERROR: Set LIT_CHIPOTLE_USAGE_KEY env var before running tests.');
+  process.exit(1);
+}
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
 

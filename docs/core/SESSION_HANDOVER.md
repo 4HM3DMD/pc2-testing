@@ -500,8 +500,8 @@ Branch: `feature/lit-chipotle-migration` (from `feature/wasm-crypto-hardening`)
 - `/lit/server-info` reports active backend + tier info
 
 **Chipotle Dashboard Setup:**
-- Account key: `s118hHL8ruY0FyAnhsEmyjaGm1KgLAItdkspvrozpc8=` (dashboard management only)
-- Usage key (Tier 1): `ZYLyJ8reL9OCGNKJUu5RV3ZK6koPVs52FtcfvNRcO0I=` (key name: `pc2-ddrm-full`, scoped to `elacity-ddrm` group)
+- Account key: *(stored locally in `data/.chipotle-account-key`, never committed)*
+- Usage key (Tier 1): *(stored locally in `data/.chipotle-api-key`, never committed)* (key name: `pc2-ddrm-full`, scoped to `elacity-ddrm` group)
 - Group: `elacity-ddrm` with `non-media-decrypt` CID registered
 - PKP: `0xa7a3b7344231df566f8b33bb846cfdf69bec2744` (Account Master Wallet, added to group via REST API)
 
@@ -537,9 +537,9 @@ scheme was used per asset.
 - `/lit/encrypt` response includes `litBackend` field for per-asset tracking
 
 **Dashboard config (Chipotle):**
-- Usage API key: `pc2-ddrm-full` → `ZYLyJ8reL9OCGNKJUu5RV3ZK6koPVs52FtcfvNRcO0I=`
+- Usage API key: `pc2-ddrm-full` → *(stored in `data/.chipotle-api-key`)*
 - Group: `elacity-ddrm` with PKP `0xa7a3b7344231df566f8b33bb846cfdf69bec2744` permitted
-- Account key: `s118hHL8ruY0FyAnhsEmyjaGm1KgLAItdkspvrozpc8=` (dashboard management only)
+- Account key: *(stored in `data/.chipotle-account-key`, dashboard management only)*
 
 Chipotle TEE available `Lit.Actions` methods:
 `Decrypt`, `Encrypt`, `getPrivateKey`, `getLitActionPrivateKey`,
