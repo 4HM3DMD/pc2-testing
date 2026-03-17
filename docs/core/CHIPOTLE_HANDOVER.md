@@ -12,7 +12,7 @@
 | Credential | Value | Purpose |
 |-----------|-------|---------|
 | **Account Key** | *(stored in `data/.chipotle-account-key`, never committed)* | Dashboard management — create/edit API keys, groups, PKPs. NOT for executing Lit Actions. |
-| **Usage API Key** | *(stored in `data/.chipotle-api-key`, never committed)* | Runtime key — all PC2 nodes use this to execute Lit Actions. Key name: `pc2-ddrm-full`. |
+| **Usage API Key** | *(stored in `data/.chipotle-api-key`, never committed)* | Runtime key — all PC2 nodes use this to execute Lit Actions. Key name: `pc2-ddrm-v2`. |
 | **PKP ID** | `0xa7a3b7344231df566f8b33bb846cfdf69bec2744` | Account Master Wallet. Used for `Lit.Actions.Encrypt/Decrypt`. (Public on-chain — safe to publish.) |
 | **Group** | `elacity-ddrm` (group_id: 1) | Scopes the usage key to permitted PKPs and actions. |
 
@@ -98,7 +98,7 @@
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `LIT_BACKEND` | `chipotle` | `chipotle` or `datil`. Controls which Lit backend is used. |
-| `LIT_CHIPOTLE_USAGE_KEY` | hardcoded shared key | Override the Tier 1 shared API key |
+| `LIT_CHIPOTLE_USAGE_KEY` | *(from `data/.chipotle-api-key`)* | Override the Tier 1 shared API key |
 | `LIT_CHIPOTLE_USER_KEY` | none | Tier 2: self-sovereign key (takes priority) |
 | `LIT_CHIPOTLE_API_URL` | `https://api.dev.litprotocol.com` | Chipotle API endpoint |
 | `LIT_ACTION_CID` | `QmVMgKMKFELHTZf8PmD58nYBhr4S5DHLpuwFTvyDKLPXgq` | Override Lit Action IPFS CID |
@@ -261,4 +261,4 @@ Tests: API reachability, auth, ethers compatibility, RPC calls from TEE, code ex
 
 ---
 
-*Last updated: Mar 17, 2026 — E2E verified for PDF, image, and text files.*
+*Last updated: Mar 17, 2026 — E2E verified for PDF, image, and text files. API keys rotated and removed from source.*
