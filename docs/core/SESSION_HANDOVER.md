@@ -505,12 +505,29 @@ Branch: `feature/lit-chipotle-migration` (from `feature/wasm-crypto-hardening`)
 - Group: `elacity-ddrm` with `non-media-decrypt` CID registered
 
 **Remaining items:**
-- End-to-end test with running PC2 node (need real encrypted assets)
 - Deploy updated `non-media-decrypt.js` to IPFS (new CID due to ethers v5 fix)
 - Test media Lit Action on Chipotle TEE (ECDH envelope format)
 - `packages/access` Chipotle compatibility (Phase 4)
 - Settings UI for Tier 2 user-provided API key (Phase 5b)
 - LITKEY cost analysis for 100+ node network
+
+**CRITICAL FINDING (Mar 17 E2E test):**
+Chipotle TEE uses a completely different cryptographic model than Datil:
+- **Datil**: `Lit.Actions.decryptAndCombine()` — threshold BLS decryption
+- **Chipotle**: `Lit.Actions.Decrypt({ pkpId, ciphertext })` — PKP-based AES
+
+Chipotle does NOT have `decryptAndCombine`. All existing Elacity assets encrypted
+with Datil's threshold BLS CANNOT be decrypted by Chipotle.
+
+**Default reverted to `datil`** until either:
+a) Lit provides backward compatibility for threshold-encrypted data, or
+b) A re-encryption migration is built: decrypt with Datil -> re-encrypt with Chipotle PKP
+
+Chipotle infrastructure remains intact for future activation (`LIT_BACKEND=chipotle`).
+
+Chipotle TEE available `Lit.Actions` methods:
+`Decrypt`, `Encrypt`, `getPrivateKey`, `getLitActionPrivateKey`,
+`getLitActionPublicKey`, `getLitActionWalletAddress`, `setResponse`
 
 **Phase E: P-256 ECDH to WASM — CONDITIONAL on Chipotle format**
 
