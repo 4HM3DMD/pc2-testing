@@ -1112,33 +1112,19 @@ router.post('/lit/encrypt', authenticate, async (req: AuthenticatedRequest, res:
     logger.info(`[Lit] AES-GCM encrypted: ${dataBytes.length} → ${encryptedWithTag.length} bytes`);
 
     // Layer 2: Lit-encrypt only the raw CEK (32 bytes — well under 4MB limit)
+    // Encryption ALWAYS uses Datil SDK — Chipotle TEE does not expose Lit.Actions.encrypt().
+    // This is fine because encryption is a rare creator-side operation.
+    // Decryption (the frequent consumer-side operation) uses Chipotle when LIT_BACKEND=chipotle.
     const cekBase64 = cek.toString('base64');
-    let litCiphertext: string;
-    let dataToEncryptHash: string;
-    let conditions: any[];
-
-    if (LIT_BACKEND === 'chipotle') {
-      const { encryptWithLitAction, buildSelfRefConditions: buildConditions } = await import('./chipotle-client.js');
-      conditions = buildConditions(effectiveActionCid);
-      const encryptResult = await encryptWithLitAction({
-        dataToEncrypt: new TextEncoder().encode(cekBase64),
-        accessControlConditions: conditions,
-      });
-      litCiphertext = encryptResult.ciphertext;
-      dataToEncryptHash = encryptResult.dataToEncryptHash;
-      logger.info(`[Lit] CEK Lit-encrypted (${cek.length} bytes) via Chipotle. Hash: ${dataToEncryptHash?.substring(0, 20)}...`);
-    } else {
-      // Datil fallback
-      const client = await getLitClient();
-      conditions = buildSelfRefConditions(effectiveActionCid);
-      const encryptResult = await client.encrypt({
-        dataToEncrypt: new TextEncoder().encode(cekBase64),
-        accessControlConditions: conditions,
-      });
-      litCiphertext = encryptResult.ciphertext;
-      dataToEncryptHash = encryptResult.dataToEncryptHash;
-      logger.info(`[Lit] CEK Lit-encrypted (${cek.length} bytes) via Datil SDK. Hash: ${dataToEncryptHash?.substring(0, 20)}...`);
-    }
+    const client = await getLitClient();
+    const conditions = buildSelfRefConditions(effectiveActionCid);
+    const encryptResult = await client.encrypt({
+      dataToEncrypt: new TextEncoder().encode(cekBase64),
+      accessControlConditions: conditions,
+    });
+    const litCiphertext = encryptResult.ciphertext;
+    const dataToEncryptHash = encryptResult.dataToEncryptHash;
+    logger.info(`[Lit] CEK Lit-encrypted (${cek.length} bytes) via Datil SDK (encrypt always uses Datil). Hash: ${dataToEncryptHash?.substring(0, 20)}...`);
 
     res.json({
       success: true,
@@ -1999,8 +1985,10 @@ router.post('/ipfs/upload-elacity', authenticate, async (req: AuthenticatedReque
 });
 
 // Backend-specific initialization
+// Lit SDK (Datil) is ALWAYS needed for encryption (Chipotle doesn't support it).
+// Pre-warm the SDK lazily — it connects on first encrypt request.
 if (LIT_BACKEND === 'datil') {
-  // Pre-warm Lit SDK client + session sigs (Datil only — ~5s cold-connect)
+  // Full pre-warm: Datil used for both decrypt AND encrypt
   setTimeout(async () => {
     try {
       const [wallet, client] = await Promise.all([getServerWallet(), getLitClient()]);
@@ -2011,7 +1999,7 @@ if (LIT_BACKEND === 'datil') {
     }
   }, 2000);
 } else {
-  logger.info('[Lit] Chipotle REST backend — no pre-warm needed (stateless HTTP)');
+  logger.info('[Lit] Chipotle REST backend for decrypt. Datil SDK will lazy-connect on first encrypt request.');
 }
 
 export { getServerWallet, getLitClient, getExecuteSessionSigs, ensureDelegateeRegistered, getCapacityWallet, detectCapacityTokenId };

@@ -314,37 +314,16 @@ export async function encryptWithLitAction(
   params: EncryptParams,
   config?: ChipotleConfig,
 ): Promise<EncryptResult> {
-  // The encrypt Lit Action calls Lit.Actions.encrypt() inside the TEE
-  const code = `
-    const encrypted = await Lit.Actions.encrypt({
-      accessControlConditions,
-      to_encrypt: dataToEncrypt,
-    });
-    Lit.Actions.setResponse({
-      response: JSON.stringify({
-        ciphertext: encrypted.ciphertext,
-        dataToEncryptHash: encrypted.dataToEncryptHash,
-      }),
-    });
-  `;
-
-  const jsParams = {
-    accessControlConditions: params.accessControlConditions,
-    dataToEncrypt: Array.from(params.dataToEncrypt),
-  };
-
-  const result = await executeLitAction({ code, jsParams }, config);
-
-  const parsed = JSON.parse(result.response);
-  if (!parsed.ciphertext || !parsed.dataToEncryptHash) {
-    throw new Error(`Encrypt failed: ${result.response?.substring(0, 200)}`);
-  }
-
-  logger.info('[Chipotle] Data encrypted via Lit Action');
-  return {
-    ciphertext: parsed.ciphertext,
-    dataToEncryptHash: parsed.dataToEncryptHash,
-  };
+  // Chipotle TEE does not expose Lit.Actions.encrypt().
+  // Encryption requires the Lit SDK's client.encrypt() which coordinates
+  // with Lit nodes for threshold BLS encryption.
+  // This function is a placeholder — the storage.ts encrypt route must
+  // fall through to the Datil SDK path for encryption.
+  throw new Error(
+    'Chipotle does not support encryption via Lit Actions. ' +
+    'Use Datil SDK (client.encrypt) for encryption. ' +
+    'Set LIT_BACKEND=datil for encrypt operations, or use the dual-mode fallback in storage.ts.'
+  );
 }
 
 // ── Utility: Build Self-Referential Conditions ───────────────────────────────
