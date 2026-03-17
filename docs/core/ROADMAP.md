@@ -2,7 +2,7 @@
 
 > **Purpose:** Single source of truth for all strategic goals, technical work streams, and milestones — directly mapped to the Keystone Fund proposal and Rong Chen's original vision
 > **Created:** 2026-02-24
-> **Last Updated:** 2026-03-16
+> **Last Updated:** 2026-03-13
 > **Status:** Living document — update as work progresses
 
 ---
@@ -170,7 +170,7 @@ These diagrams from Rong define the north star. Every work stream should move us
   - [x] **WASM Renderer hardening** — PDF rendering via `lopdf` text extraction, code syntax highlighting via `syntect` (30+ languages), all static content types now render inside WASM linear memory *(completed Mar 16)*
   - [x] **dDRM Viewer UX** — image zoom/pan, document zoom + page navigation with toolbar, audio player mode, floating auto-hide toolbar, fullscreen toggle, keyboard shortcuts *(completed Mar 16)*
   - [x] **WASM-native PDF rendering** — Replaced `lopdf` (WASM crash) with `hayro` pure-Rust PDF rasterizer for full-fidelity rendering (layout, fonts, tables, images). Fixed WASI compilation target (`wasm32-wasip1`). Node.js canvas fallback text wrapping fixed. Elacity brand blue (`#3b82f6`) applied to viewer. "Mint on Elacity" right-click for non-dDRM files. Wallet bridge restored *(completed Mar 16)*
-  - [x] **WASM crypto hardening (Phases A-C)** — AES-GCM decrypt-only mode in WASM (CEK never in Node.js heap, 50MB threshold), fMP4 strip+decrypt combined in single WASM call (Rust port with 64-bit box support), `build-wasm.sh` pipeline, `wasm32-wasip1` toolchain. PDF text extraction spike confirmed `hayro-syntax` lacks CMap resolution — keeping `pdfjs-dist`. Branch: `feature/wasm-crypto-hardening`. Remaining: Phase D (Lit Chipotle) + Phase E (ECDH, conditional on Chipotle format)
+  - [x] **WASM crypto hardening (Phases A-C)** — AES-GCM decrypt-only mode in WASM (CEK never in Node.js heap, 50MB threshold), fMP4 strip+decrypt combined in single WASM call (Rust port with 64-bit box support), `build-wasm.sh` pipeline, `wasm32-wasip1` toolchain. PDF text extraction spike confirmed `hayro-syntax` lacks CMap resolution — keeping `pdfjs-dist`. Phase D (Lit Chipotle) COMPLETE. Phase E (ECDH to WASM) conditional on Chipotle envelope format.
   - [x] **Bug fixes (Mar 16)** — Fixed double-signature bug (duplicate `pc2-wallet-bridge.js` + `IPC.js` handlers), fixed WASM text renderer exceeding JPEG 65535px limit, fixed video autoplay after signing, fixed `eth_requestAccounts` prompting unnecessarily (use `eth_accounts` first). Removed duplicate `eth_sendTransaction` handler from ParticleNetworkContext
   - [x] **dDRM Viewer native windowing** — launches as UIWindow via IPC `postMessage` → `launch_app()` (not browser popup), integrated with taskbar *(completed Mar 15)*
   - [x] **.ddrm.json capsule format** — descriptor files for non-media assets with CID, Lit params, mimeType. MIME: `application/x-ddrm+json`. Saved to Documents *(completed Mar 15)*
@@ -302,7 +302,7 @@ These diagrams from Rong define the north star. Every work stream should move us
 - [x] **dDRM Viewer** — dedicated secure viewer app with native PC2 windowing, scrollable document view, .ddrm.json capsule support *(completed Mar 15)*
 - [x] **GUI file type integration** — `.ddrm.json` icon, MIME, double-click → dDRM Viewer *(completed Mar 15)*
 - [x] **PC2 Media Runtime** — server-side DASH/CENC decryption: Rust WASM cenc-decrypt crate + MSE player + DRM stripping + Lit CEK recovery. End-to-end video playback verified *(completed Mar 16)*
-- [ ] **Lit Chipotle migration** — Datil deprecated ~April 25, 2026. Replace v7 SDK with REST API. CRITICAL PATH.
+- [x] **Lit Chipotle migration** — Datil deprecated ~April 25, 2026. Replaced v7 SDK with REST API. `chipotle-client.ts` module, `LIT_BACKEND` feature flag, dual-mode rollback. *(completed Mar 13)*
 - [ ] On-chain content indexer — replace Elacity GraphQL dependency with event scanner (The Graph / custom). See [DECENTRALIZATION_STATUS.md](./DECENTRALIZATION_STATUS.md) Tier 1.1
 - [ ] Self-provisioned RLI tokens — each PC2 node mints own capacity credits, removes Elacity wallet dependency. See Tier 1.3
 - [ ] AI Model Marketplace alpha — encrypt GGUF/SafeTensors model → IPFS → ACCESS_TOKEN → decrypt on PC2 → load in Ollama

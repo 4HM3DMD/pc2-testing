@@ -1,4 +1,4 @@
-# Session Handover — Mar 16, 2026
+# Session Handover — Mar 13, 2026
 
 > **Read this first when starting a new agent session.**
 
@@ -6,12 +6,12 @@
 
 ## Where We Are
 
-**Branch:** `feature/wasm-crypto-hardening` (branched from `feature/ddrm-universal-access-layer` at `e05f1468e`)
-**Parent Branch:** `feature/ddrm-universal-access-layer` (branched from `feature/elacity-ddrm-marketplace`)
+**Branch:** `feature/lit-chipotle-migration` (branched from `feature/wasm-crypto-hardening`)
+**Parent Branch:** `feature/wasm-crypto-hardening` → `feature/ddrm-universal-access-layer` → `feature/elacity-ddrm-marketplace`
 **Release:** v1.1.0 tagged and released on 2026-03-03 (134 commits squash-merged to main)
 **Launcher:** v1.1.1 released — version display, one-click updates, full networking install
 **DAO Proposal:** Live at https://elastos.com/proposals/69a24f49247f130078064edd
-**Last Commit:** feat: WASM crypto hardening Phases A-C + bug fixes (double signatures, TXT dim cap, autoplay)
+**Last Commit:** feat: LIT_BACKEND feature flag for datil/chipotle dual-mode rollback
 
 ### What Just Shipped (v1.1.0 on main)
 
@@ -346,7 +346,7 @@ Full technical spec at `docs/core/ACCESS_PACKAGE_SPEC.md`. Key decisions:
 - [x] **PDF scrollable view** — all pages stacked vertically with scroll, replacing single-page arrow navigation (Mar 15)
 - [x] **Text full-width view** — rendered text image fills window width for readability (Mar 15)
 - [x] **PC2 Media Runtime** — Rust WASM `cenc-decrypt` crate (AES-128-CTR per-sample, 16-byte IVs), MSE player (no EME/CDM), DRM stripping (init+segment), two-phase Lit auth, SA-aware PSSH selection. **End-to-end DASH video playback verified** *(completed Mar 16)*
-- [ ] Lit Chipotle migration — Datil network deprecated ~April 25, 2026, need to migrate to Chipotle REST API
+- [x] Lit Chipotle migration — Phases 0-5 complete (Mar 13). `chipotle-client.ts` replaces Lit SDK. `LIT_BACKEND=chipotle|datil` feature flag.
 
 **Known issues:**
 - Elacity frontend UA receipt parsing: `UAReceiptFetcher.enrichOperationsWithContracts` throws `TypeError` after successful on-chain purchase. Bug is in Elacity's frontend, not our code.
@@ -429,14 +429,16 @@ Comprehensive player hardening and UX polish:
 | Audio | N/A (passthrough) | Decrypt + pass through |
 
 #### Next Up — Engineering Priorities
-1. **Lit Chipotle migration** — CRITICAL. Datil deprecated ~April 25, 2026. Replace v7 SDK with Chipotle REST API. Research at `docs/core/CHIPOTLE_MIGRATION_RESEARCH.md`. **NEW BRANCH** from `feature/wasm-crypto-hardening`.
-2. **P-256 ECDH unwrap to WASM (Phase E)** — conditional on Chipotle envelope format. If Chipotle returns CEK directly, this phase is eliminated.
-3. ~~**WASM crypto hardening (Phases A-C)**~~ — DONE (Mar 16). AES-GCM decrypt in WASM, fMP4 strip+decrypt combined, build pipeline, PDF spike. Branch: `feature/wasm-crypto-hardening`.
-4. ~~**WASM renderer hardening**~~ — DONE (Mar 16) — PDF, code, images, text all render inside WASM.
-5. ~~**Viewer UX enhancements**~~ — DONE (Mar 16) — zoom, pan, page nav, audio player, toolbar.
-6. **On-chain indexer prototype** — replace Elacity GraphQL dependency with event scanner (The Graph / custom)
-7. **Self-provisioned RLI tokens** — each node mints own capacity credits, removes Elacity wallet dependency
-8. **AI Model Marketplace alpha** — first non-media vertical: GGUF → encrypt → IPFS → ACCESS_TOKEN → decrypt → Ollama
+1. ~~**Lit Chipotle migration**~~ — **DONE (Mar 13)** — Phases 0-5 complete. `chipotle-client.ts` REST module, storage.ts + media.ts migrated, `LIT_BACKEND` feature flag, Phase 0 test script. Set `LIT_BACKEND=datil` to rollback.
+2. **End-to-end testing** — Start PC2 node with Chipotle backend, test non-media decrypt (image/PDF/txt), test media playback (DASH video), verify encrypt path.
+3. **Deploy updated Lit Action to IPFS** — `non-media-decrypt.js` has ethers v5 address checksum fix. New CID needed for production Chipotle.
+4. **P-256 ECDH unwrap to WASM (Phase E)** — conditional on Chipotle envelope format. If Chipotle returns CEK directly, this phase is eliminated.
+5. ~~**WASM crypto hardening (Phases A-C)**~~ — DONE (Mar 16). Branch: `feature/wasm-crypto-hardening`.
+6. ~~**WASM renderer hardening**~~ — DONE (Mar 16) — PDF, code, images, text all render inside WASM.
+7. ~~**Viewer UX enhancements**~~ — DONE (Mar 16) — zoom, pan, page nav, audio player, toolbar.
+8. **On-chain indexer prototype** — replace Elacity GraphQL dependency with event scanner (The Graph / custom)
+9. **Self-provisioned RLI tokens** — each node mints own capacity credits, removes Elacity wallet dependency
+10. **AI Model Marketplace alpha** — first non-media vertical: GGUF → encrypt → IPFS → ACCESS_TOKEN → decrypt → Ollama
 
 #### WASM Crypto Hardening — COMPLETED Phases A-C (Mar 16)
 
@@ -463,7 +465,53 @@ Task plan: `.cursor/tasks/WASM-CRYPTO-HARDENING/WASM-CRYPTO-HARDENING.md`
 - Text extraction not viable without significant work — keeping `pdfjs-dist` for indexing
 - Documented findings, phase closed
 
-**Phase D: Lit Chipotle Migration — NEXT (new branch)**
+**Phase D: Lit Chipotle Migration — COMPLETE (Mar 13, new branch)**
+
+Branch: `feature/lit-chipotle-migration` (from `feature/wasm-crypto-hardening`)
+
+**Phase 0: API Compatibility Testing — PASS (5/5)**
+- Chipotle dev API reachable, inline code execution works
+- Usage key (`pc2-nodes-shared`) authenticates; account key is dashboard-only
+- TEE makes external RPC calls (Base mainnet) — `hasAccessByContentId` works
+- `ipfs_id` not supported (422) — must send inline `code` field
+- ethers v5 in TEE requires `toLowerCase()` before `getAddress()` for mixed-case addresses
+- Test script: `pc2-node/scripts/test-chipotle-phase0.mjs`
+
+**Phase 1: chipotle-client.ts — NEW FILE**
+- `pc2-node/src/api/chipotle-client.ts` — minimal REST client replacing entire `@lit-protocol/*` SDK
+- Three-tier API key: `data/.chipotle-user-key` (Tier 2) > `data/.chipotle-api-key` (Tier 1) > hardcoded default
+- `recoverNonMediaCEK()`, `recoverMediaCEKEnvelope()`, `encryptWithLitAction()`
+- `buildSelfRefConditions()`, `getChipotleInfo()`, `saveUserApiKey()` / `clearUserApiKey()`
+
+**Phase 2: storage.ts decrypt + encrypt migrated**
+- `recoverCEKAndFetchData()` → calls `recoverNonMediaCEK()` from chipotle-client
+- `/lit/encrypt` route → calls `encryptWithLitAction()` (no `client.encrypt()`)
+- IPFS fetch logic unchanged
+
+**Phase 3: media.ts CEK recovery migrated**
+- `recoverMediaCEK()` → calls `recoverMediaCEKEnvelope()` + local ECDH unwrap
+- `fetchLitActionCode()` — fetches media Lit Action JS by IPFS CID (Chipotle requires inline code)
+- `prepare-auth` returns stub in Chipotle mode (no SIWE needed)
+
+**Phase 5: Feature flag + dual-mode**
+- `LIT_BACKEND=chipotle` (default) — Chipotle REST API
+- `LIT_BACKEND=datil` — full Datil SDK (WebSocket, SIWE, capacity credits)
+- Both paths operational — all Datil functions remain intact for rollback
+- `/lit/server-info` reports active backend + tier info
+
+**Chipotle Dashboard Setup:**
+- Account key: `s118hHL8ruY0FyAnhsEmyjaGm1KgLAItdkspvrozpc8=`
+- Usage key (Tier 1): `6TO6QjAQs7JLHbqpW5SuU9iBbwpR0/8oQzZzt1I7JAc=`
+- Group: `elacity-ddrm` with `non-media-decrypt` CID registered
+
+**Remaining items:**
+- End-to-end test with running PC2 node (need real encrypted assets)
+- Deploy updated `non-media-decrypt.js` to IPFS (new CID due to ethers v5 fix)
+- Test media Lit Action on Chipotle TEE (ECDH envelope format)
+- `packages/access` Chipotle compatibility (Phase 4)
+- Settings UI for Tier 2 user-provided API key (Phase 5b)
+- LITKEY cost analysis for 100+ node network
+
 **Phase E: P-256 ECDH to WASM — CONDITIONAL on Chipotle format**
 
 **Files changed (WASM hardening):**
@@ -602,7 +650,15 @@ Task plan: `.cursor/tasks/WASM-CRYPTO-HARDENING/WASM-CRYPTO-HARDENING.md`
 ### Lit Action (runs on Lit TEE nodes)
 | File | Purpose |
 |------|---------|
-| `pc2-node/data/lit-actions/non-media-decrypt.js` | Trustless on-chain access check + threshold CEK decryption |
+| `pc2-node/data/lit-actions/non-media-decrypt.js` | Trustless on-chain access check + threshold CEK decryption (ethers v5/v6 compatible) |
+
+#### Chipotle Migration (Mar 13)
+| File | Purpose |
+|------|---------|
+| `pc2-node/src/api/chipotle-client.ts` | **NEW** — Minimal REST client replacing entire Lit SDK, three-tier API key resolution |
+| `pc2-node/scripts/test-chipotle-phase0.mjs` | Phase 0 API compatibility test script (5 tests) |
+| `pc2-node/src/api/storage.ts` | Updated — `LIT_BACKEND` flag, decrypt/encrypt dual-mode (chipotle/datil) |
+| `pc2-node/src/api/media.ts` | Updated — `LIT_BACKEND` flag, prepare-auth stub, recoverMediaCEK dual-mode |
 
 #### Secure Viewer Pipeline (Mar 15)
 | File | Purpose |
@@ -736,7 +792,7 @@ Passwords: ROTATED — stored in password manager, not in git
 
 | Repository | Branch | Status |
 |------------|--------|--------|
-| [pc2.net](https://github.com/Elacity/pc2.net) | `feature/wasm-crypto-hardening` | Active development (branched from `feature/ddrm-universal-access-layer` at `e05f1468e`) |
+| [pc2.net](https://github.com/Elacity/pc2.net) | `feature/lit-chipotle-migration` | Active development (branched from `feature/wasm-crypto-hardening`) |
 | [elastos-launcher](https://github.com/Elacity/elastos-launcher) | `main` | v1.1.1 released |
 | [document-portal](https://github.com/Elacity/document-portal) | `main` | Up to date |
 | [js-sdk](https://github.com/Elacity/js-sdk) | — | Elacity SDK (reference) |
