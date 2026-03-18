@@ -174,6 +174,7 @@ These diagrams from Rong define the north star. Every work stream should move us
   - [x] **WASM crypto hardening (Phases A-C)** — AES-GCM decrypt-only mode in WASM (CEK never in Node.js heap, 50MB threshold), fMP4 strip+decrypt combined in single WASM call (Rust port with 64-bit box support), `build-wasm.sh` pipeline, `wasm32-wasip1` toolchain. PDF text extraction spike confirmed `hayro-syntax` lacks CMap resolution — keeping `pdfjs-dist`. Phase D (Lit Chipotle) COMPLETE. Phase E (ECDH to WASM) conditional on Chipotle envelope format.
   - [x] **Bug fixes (Mar 16)** — Fixed double-signature bug (duplicate `pc2-wallet-bridge.js` + `IPC.js` handlers), fixed WASM text renderer exceeding JPEG 65535px limit, fixed video autoplay after signing, fixed `eth_requestAccounts` prompting unnecessarily (use `eth_accounts` first). Removed duplicate `eth_sendTransaction` handler from ParticleNetworkContext
   - [x] **Bug fixes (Mar 18)** — Fixed duplicate wallet signatures (IPC.js + pc2-wallet-bridge.js dual handling), fixed "Network fee: Unavailable" (removed explicit gas estimation, let MetaMask handle), fixed duplicate chain switch popup (check current chain before switching), fixed duplicate SIWE login on account change, fixed media encode `dataToEncryptHash` propagation for correct minting contentId, fixed IPFS directory pinning for DASH packages (Helia `storeDirectory` + local directory detection in `pinRemoteCID`), fixed PSSH extraction (multi-pattern search), fixed PSSH ciphertext/hash/kid embedding, fixed authority address (`0x8fe6bf98...` AuthorityGateway on Base), fixed GUI IPC rebuild (bundle.min.js), **E2E verified: mint → buy → download → playback**
+  - [x] **AV1 playback fix (Mar 18)** — Three critical fixes for encrypted AV1 video playback: (1) Rust WASM `strip.rs` updated to remove PSSH boxes nested inside `moov` (not just top-level), (2) `splitInitForTrack()` in `media.ts` splits multi-track init segments into per-track inits for MSE SourceBuffer compatibility (Bento4 produces shared init segments), (3) `hdlr` handler_type offset corrected from +8 to +12. MetaMask mint gas estimation fix with `sendTxWithRetry()` retry/skip buttons. Player MSE debug logging added.
   - [x] **WASM & I/O optimization (Mar 18)** — 5 quick wins: `wasm-opt -Oz` build pass in `build-wasm.sh`, WASM binary preload at startup, WASM cache key collision fix (SHA-256 fingerprint), async video thumbnail generation (no more event-loop blocking `execSync`), async HTML injection in `static.ts`. Plus: AES-GCM encrypt moved to WASM (`encrypt_only` mode in ddrm-renderer) — non-media file encryption no longer uses Node.js `crypto.createCipheriv`, plaintext never touches Node.js memory.
   - [x] **dDRM Viewer native windowing** — launches as UIWindow via IPC `postMessage` → `launch_app()` (not browser popup), integrated with taskbar *(completed Mar 15)*
   - [x] **.ddrm.json capsule format** — descriptor files for non-media assets with CID, Lit params, mimeType. MIME: `application/x-ddrm+json`. Saved to Documents *(completed Mar 15)*
@@ -323,11 +324,11 @@ These diagrams from Rong define the north star. Every work stream should move us
 - [ ] Code/Plugin Marketplace — dDRM-gated npm packages, themes, extensions
 - [ ] Dataset Marketplace — dDRM-gated training datasets, knowledge bases
 - [ ] Fiat onramp — Particle Smart Account + Stripe/Moonpay for one-click credit card ACCESS_TOKEN purchase
-- [x] `cenc-encrypt` Rust WASM crate — symmetric AES-128-CTR encryption in WASM sandbox, with init segment transformation and binary PSSH generation. 8 tests pass. **BUILT (Mar 17), not yet integrated into pipeline** (requires mp4dash replacement)
-- [x] `pssh-gen` included in `cenc-encrypt/pssh.rs` — ISO 23001-7 PSSH box generator for Elacity dDRM metadata. Binary PSSH construction in WASM, replaces JSON-based approach in dashPackager.ts
+- [x] `cenc-encrypt` Rust WASM crate — symmetric AES-128-CTR encryption in WASM sandbox, with init segment transformation and binary PSSH generation. 8 tests pass. **BUILT + INTEGRATED (Mar 17-18)**
+- [x] `pssh-gen` included in `cenc-encrypt/pssh.rs` — ISO 23001-7 PSSH box generator for Elacity dDRM metadata. Binary PSSH construction in WASM, TypeScript PSSH injection for full JSON (ciphertext+hash+kid)
 - [x] AES-GCM encrypt in WASM — non-media file encryption (`encrypt_only` mode in ddrm-renderer). Plaintext never touches Node.js memory. **DONE (Mar 18)**
 - [x] WASM & I/O quick wins (5) — wasm-opt build pass, WASM preload, cache key fix, async thumbnail, async static I/O. **DONE (Mar 18)**
-- [ ] Integrate `cenc-encrypt` WASM into dashPackager (requires replacing mp4dash entirely with WASM encrypt + TypeScript MPD generator)
+- [x] **Phase 2: mp4dash replaced with WASM pipeline (Mar 18)** — `mp4split.ts` (fMP4 parser), `mpdGenerator.ts` (DASH MPD XML), `executeCENCEncrypt()` in WASMRuntime, `dashPackager.ts` rewritten. Zero Python/mp4encrypt dependency. Only mp4fragment binary retained.
 
 **dApp Store (Global Decentralized App Marketplace):**
 - [ ] dApp bundle format — encrypted app package with manifest (permissions, runtime, categories)
@@ -742,9 +743,9 @@ Starting Month 1 (March 2026):
 | Release | Target | Focus |
 |---------|--------|-------|
 | v1.1.0 | March 2026 | Merge Jetson branch, bug fixes, AV1 player |
-| v1.2.0 | April 2026 | **Lit Chipotle dDRM** (non-media DONE, media E2E DONE Mar 18), local media encoding (FFmpeg+Bento4+CENC+DASH — E2E verified), supernode provisioning deployment, hardware expansion, installer improvements, WireGuard bundling |
+| v1.2.0 | April 2026 | **Lit Chipotle dDRM** (non-media DONE, media E2E DONE Mar 18), local media encoding (FFmpeg+WASM CENC+DASH — E2E verified, Python-free), AV1 playback verified (init splitting + PSSH strip), supernode provisioning deployment, hardware expansion, installer improvements, WireGuard bundling |
 | v1.3.0 | May 2026 | AI Model Marketplace alpha (GGUF→Ollama), dApp bundles, datasets, `@elacity-js/asset-packager` |
-| v1.4.0 | June 2026 | WASM-native CENC encrypt + PSSH gen (replace Bento4 binaries), fiat onramp, Rust optimization sprint |
+| v1.4.0 | June 2026 | Multi-rendition encoding, fiat onramp, Rust optimization sprint (IPFS chunk assembly, Rust HTTP proxy) |
 | v1.5.0 | July 2026 | dApp Store v1 (categories, ratings, HTML5 games, 3D viewer), mobile companion alpha |
 | v1.6.0 | August 2026 | Signed capsule format (bridge to Runtime), Supernode Access Tokens, bandwidth metering |
 | v1.7.0 | September 2026 | Protocol fees alpha, white-label SDK alpha, enterprise pilot |

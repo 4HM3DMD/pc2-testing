@@ -759,6 +759,79 @@ export class WASMRuntime {
     }
 
     /**
+     * CENC encrypt a clear fMP4 segment or transform an init segment via WASM.
+     * Uses the cenc-encrypt WASM module (same MemFS pattern as cenc-decrypt).
+     *
+     * Modes: "encrypt_segment" | "transform_init" | "build_pssh"
+     */
+    async executeCENCEncrypt(
+        wasmBinary: ArrayBuffer | Uint8Array,
+        commandJson: string,
+        segmentBytes: Buffer,
+        options?: { timeoutMs?: number },
+    ): Promise<{ success: boolean; outputBytes: Buffer | null; resultJson: any; error?: string; executionTimeMs: number }> {
+        const timeoutMs = options?.timeoutMs ?? this.defaultTimeoutMs;
+        const startTime = Date.now();
+
+        try {
+            await this.acquireExecutionSlot();
+        } catch (error: any) {
+            return { success: false, outputBytes: null, resultJson: null, error: `Queue error: ${error.message}`, executionTimeMs: Date.now() - startTime };
+        }
+
+        try {
+            if (!this.initialized) await this.initialize();
+            this.clearMemFS();
+
+            this.writeToMemFS('/input/command.json', Buffer.from(commandJson, 'utf-8'));
+            if (segmentBytes.length > 0) {
+                this.writeToMemFS('/input/segment.bin', segmentBytes);
+            }
+            try { this.memFs!.createDir('/output'); } catch { /* may already exist */ }
+
+            const wasiResult = await this.executeWASIStart(wasmBinary, timeoutMs);
+            if (!wasiResult.success) {
+                return { success: false, outputBytes: null, resultJson: null, error: wasiResult.error ?? 'WASI execution failed', executionTimeMs: Date.now() - startTime };
+            }
+
+            const outputFs = wasiResult.wasiFs;
+            let resultStr: string | null = null;
+            if (outputFs) {
+                const bytes = this.readFromSpecificMemFS(outputFs, '/output/result.json');
+                if (bytes) resultStr = new TextDecoder().decode(bytes);
+            }
+            if (!resultStr) {
+                const bytes = this.readFromMemFS('/output/result.json');
+                if (bytes) resultStr = new TextDecoder().decode(bytes);
+            }
+            if (!resultStr && wasiResult.stdout) resultStr = wasiResult.stdout;
+            if (!resultStr) {
+                return { success: false, outputBytes: null, resultJson: null, error: 'CENC encrypt produced no output', executionTimeMs: Date.now() - startTime };
+            }
+
+            let result: any;
+            try { result = JSON.parse(resultStr); } catch { result = { success: false, error: 'Invalid result JSON' }; }
+
+            let outputBytes: Buffer | null = null;
+            if (result.success) {
+                let raw: Uint8Array | null = null;
+                if (outputFs) raw = this.readFromSpecificMemFS(outputFs, '/output/segment.bin');
+                if (!raw) raw = this.readFromMemFS('/output/segment.bin');
+                if (raw) {
+                    outputBytes = Buffer.from(raw);
+                }
+            }
+
+            return { success: result.success, outputBytes, resultJson: result, error: result.error, executionTimeMs: Date.now() - startTime };
+        } catch (error: any) {
+            return { success: false, outputBytes: null, resultJson: null, error: error.message, executionTimeMs: Date.now() - startTime };
+        } finally {
+            this.clearMemFS();
+            this.releaseExecutionSlot();
+        }
+    }
+
+    /**
      * Decrypt-only mode: AES-GCM decryption inside WASM linear memory.
      * Returns raw plaintext bytes — the CEK never touches Node.js memory.
      *

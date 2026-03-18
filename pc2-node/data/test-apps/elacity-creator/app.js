@@ -674,11 +674,101 @@
       txParams.value = '0x' + BigInt(value).toString(16);
     }
 
+    try {
+      var estResp = await fetch(BASE_RPC, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0', id: 1,
+          method: 'eth_estimateGas',
+          params: [txParams],
+        }),
+      });
+      var estJson = await estResp.json();
+      if (estJson.result) {
+        var estimated = BigInt(estJson.result);
+        txParams.gas = '0x' + (estimated * 15n / 10n).toString(16);
+        console.log('[Creator] Gas pre-estimated:', Number(estimated), '→ limit:', Number(estimated * 15n / 10n));
+      } else if (estJson.error) {
+        console.warn('[Creator] Gas estimation RPC error:', estJson.error.message || JSON.stringify(estJson.error));
+      }
+    } catch (e) {
+      console.warn('[Creator] Gas estimation failed, using fallback:', e.message);
+    }
+
+    if (!txParams.gas) {
+      txParams.gas = '0x' + BigInt(500000).toString(16);
+      console.log('[Creator] Using fallback gas limit: 500000');
+    }
+
     var txHash = await window.ethereum.request({
       method: 'eth_sendTransaction',
       params: [txParams],
     });
     return txHash;
+  }
+
+  /**
+   * Sends a transaction with retry UI — if the user cancels in the wallet or
+   * the tx fails to submit, a "Retry" button appears on the progress step so
+   * the user can re-attempt without restarting the whole pipeline.
+   *
+   * @param {string} stepId   - The progress step element id (e.g. 'prog-mint')
+   * @param {string} stepLabel - Human label for the step (e.g. 'Mint on Channel contract')
+   * @param {string} to       - Contract address
+   * @param {string} data     - Encoded calldata
+   * @param {string|undefined} value - Optional ETH value in wei
+   * @returns {Promise<string>} Transaction hash
+   */
+  async function sendTxWithRetry(stepId, stepLabel, to, data, value) {
+    while (true) {
+      try {
+        setProgStep(stepId, 'Confirm in wallet...', 'active');
+        var txHash = await sendTx(to, data, value);
+        return txHash;
+      } catch (txErr) {
+        var code = txErr.code || (txErr.data && txErr.data.code);
+        var msg = txErr.message || '';
+        var isUserReject = code === 4001 || code === 'ACTION_REJECTED'
+          || msg.includes('User denied') || msg.includes('user rejected')
+          || msg.includes('User rejected');
+
+        console.warn('[Creator] Transaction failed:', msg, '(code:', code, ')');
+
+        var retryPromise = new Promise(function (resolve) {
+          setProgStep(stepId, (isUserReject ? 'Cancelled' : 'Failed') + ' — ', 'error');
+          var stepEl = document.getElementById(stepId);
+          if (!stepEl) { resolve(false); return; }
+          var statusEl = document.getElementById(stepId + '-status') || stepEl.querySelector('.prog-status') || stepEl.querySelector('span:last-child');
+          if (!statusEl) { resolve(false); return; }
+
+          var retryBtn = document.createElement('button');
+          retryBtn.textContent = 'Retry';
+          retryBtn.style.cssText = 'display:inline-flex;align-items:center;justify-content:center;padding:4px 12px;font-size:12px;line-height:1;font-family:inherit;background:#3b82f6;color:white;border:none;border-radius:4px;cursor:pointer;margin-left:8px;';
+          retryBtn.addEventListener('click', function () {
+            retryBtn.remove();
+            resolve(true);
+          });
+
+          var cancelBtn = document.createElement('button');
+          cancelBtn.textContent = 'Skip';
+          cancelBtn.style.cssText = 'display:inline-flex;align-items:center;justify-content:center;padding:4px 12px;font-size:12px;line-height:1;font-family:inherit;background:#6b7280;color:white;border:none;border-radius:4px;cursor:pointer;margin-left:4px;';
+          cancelBtn.addEventListener('click', function () {
+            retryBtn.remove();
+            cancelBtn.remove();
+            resolve(false);
+          });
+
+          statusEl.appendChild(retryBtn);
+          statusEl.appendChild(cancelBtn);
+        });
+
+        var shouldRetry = await retryPromise;
+        if (!shouldRetry) {
+          throw new Error(stepLabel + ' skipped by user');
+        }
+      }
+    }
   }
 
   async function waitForReceipt(txHash, maxWait) {
@@ -1503,8 +1593,8 @@
         var iface = new ethers.Interface(ABI.DIGITAL_ASSET);
         var mintData = iface.encodeFunctionData('mint', [mintUri, opType, opRawData, sellRawData]);
 
-        setProgStep('prog-mint', 'Confirm in wallet...', 'active');
-        mintTxHash = await sendTx(channel, mintData, feeInfo.fee);
+        setProgStep('prog-mint', 'Preparing...', 'active');
+        mintTxHash = await sendTxWithRetry('prog-mint', 'Mint on Channel contract', channel, mintData, feeInfo.fee);
 
         setProgStep('prog-mint', 'Confirming tx...', 'active');
         var mintReceipt = await waitForReceipt(mintTxHash);
@@ -1546,8 +1636,7 @@
             var opIface = new ethers.Interface(ABI.OPERATIVE);
             var approveData = opIface.encodeFunctionData('setApprovalForAll', [gatewayAddress, true]);
 
-            setProgStep('prog-approve', 'Confirm in wallet...', 'active');
-            var approveTxHash = await sendTx(mintedOpContract, approveData);
+            var approveTxHash = await sendTxWithRetry('prog-approve', 'Set gateway approval', mintedOpContract, approveData);
             setProgStep('prog-approve', 'Confirming tx...', 'active');
             var approveReceipt = await waitForReceipt(approveTxHash);
             if (approveReceipt.status === 'timeout') {

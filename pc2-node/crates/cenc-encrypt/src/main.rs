@@ -20,6 +20,8 @@ fn main() {
 
     let (result_json, output_data) = cenc_encrypt::process(&command_json, &segment_data);
 
+    let _ = fs::create_dir_all("/output");
+
     if let Err(e) = fs::write("/output/result.json", &result_json) {
         eprintln!("failed to write /output/result.json: {e}");
         process::exit(1);

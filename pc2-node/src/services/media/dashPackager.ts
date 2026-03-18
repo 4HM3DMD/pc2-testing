@@ -1,22 +1,29 @@
 /**
- * DASH Packager for PC2 Node.
+ * DASH Packager for PC2 Node — WASM-native pipeline (Phase 2).
  *
- * Handles CENC encryption and MPEG-DASH packaging:
- *   CEK generation -> Chipotle CEK escrow -> PSSH construction -> mp4dash -> IPFS upload
+ * Replaces the previous mp4dash Python pipeline with:
+ *   mp4split (TypeScript fMP4 parser) → cenc-encrypt (Rust WASM) → mpdGenerator (TypeScript)
  *
- * Uses the Elacity custom PSSH system ID and dDRM metadata format.
+ * Pipeline: CEK generation → Chipotle CEK escrow → Split fMP4 → WASM encrypt segments →
+ *           WASM transform init → Generate MPD → Write DASH dir → IPFS upload
+ *
+ * Zero Python dependency. Zero mp4encrypt dependency.
  */
 
 import * as crypto from 'crypto';
-import { execFile } from 'child_process';
-import { promisify } from 'util';
-import { writeFileSync, existsSync, readdirSync, readFileSync } from 'fs';
-import { join } from 'path';
+import { existsSync, readdirSync, readFileSync, mkdirSync, writeFileSync } from 'fs';
+import { writeFile } from 'fs/promises';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import { logger } from '../../utils/logger.js';
 import { encryptWithLitAction, buildSelfRefConditions, type EncryptResult } from '../../api/chipotle-client.js';
-import { type Bento4Paths } from './bento4.js';
+import { splitFragmentedMP4 } from './mp4split.js';
+import { generateMPD, buildMPDTracks } from './mpdGenerator.js';
+import { getWASMRuntime } from '../wasm/WASMRuntime.js';
+import { resolve as pathResolve } from 'path';
 
-const execFileAsync = promisify(execFile);
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 const ELACITY_SYSTEM_ID = 'bf8ef85d2c54475d8c1ee27db60332a2';
 
@@ -55,6 +62,25 @@ interface PSSHProtectionData {
     kid: string;
   };
 }
+
+// ─── WASM Binary Loading ────────────────────────────────────────────────────
+
+let cachedCENCEncryptWasm: ArrayBuffer | null = null;
+
+async function loadCENCEncryptWasm(): Promise<ArrayBuffer> {
+  if (cachedCENCEncryptWasm) return cachedCENCEncryptWasm;
+  const wasmPath = pathResolve(__dirname, '../../../wasm-apps/cenc-encrypt/cenc-encrypt.wasm');
+  if (!existsSync(wasmPath)) {
+    throw new Error(`cenc-encrypt WASM not found: ${wasmPath} — run scripts/build-wasm.sh`);
+  }
+  cachedCENCEncryptWasm = readFileSync(wasmPath).buffer;
+  logger.info(`[DASHPackager] Loaded cenc-encrypt WASM (${(cachedCENCEncryptWasm.byteLength / 1024).toFixed(0)} KB)`);
+  return cachedCENCEncryptWasm;
+}
+
+loadCENCEncryptWasm().catch((err) =>
+  logger.warn(`[DASHPackager] WASM preload skipped: ${err.message}`)
+);
 
 // ─── CEK Generation ─────────────────────────────────────────────────────────
 
@@ -104,8 +130,6 @@ export async function encryptMediaCEK(cek: Buffer): Promise<EncryptResult> {
 // ─── PSSH Construction ──────────────────────────────────────────────────────
 
 export function buildPSSHJson(outputDir: string, encryptResult: { ciphertext: string; dataToEncryptHash: string }): string {
-  // Derive the on-chain content ID (bytes16) from the encryption hash.
-  // Must match hashToContentId() in the creator app: first 16 bytes, 0x-prefixed.
   const cleanHash = encryptResult.dataToEncryptHash.startsWith('0x')
     ? encryptResult.dataToEncryptHash.slice(2)
     : encryptResult.dataToEncryptHash;
@@ -133,49 +157,214 @@ export function buildPSSHJson(outputDir: string, encryptResult: { ciphertext: st
   return psshPath;
 }
 
-// ─── DASH Packaging with CENC Encryption ────────────────────────────────────
+// ─── PSSH Box Injection ─────────────────────────────────────────────────────
+
+const ELACITY_SYSTEM_ID_BYTES = Buffer.from([
+  0xbf, 0x8e, 0xf8, 0x5d, 0x2c, 0x54, 0x47, 0x5d,
+  0x8c, 0x1e, 0xe2, 0x7d, 0xb6, 0x03, 0x32, 0xa2,
+]);
+
+function buildBinaryPSSHBox(kidHex: string, jsonPayload: string): Buffer {
+  const kidBytes = Buffer.from(kidHex, 'hex');
+  const dataBytes = Buffer.from(jsonPayload, 'utf-8');
+
+  const contentSize = 16 + 4 + 16 + 4 + dataBytes.length;
+  const boxSize = 12 + contentSize;
+  const buf = Buffer.alloc(boxSize);
+  let off = 0;
+
+  buf.writeUInt32BE(boxSize, off); off += 4;
+  buf.write('pssh', off, 4, 'ascii'); off += 4;
+  buf.writeUInt8(1, off); off += 1;
+  buf.writeUInt8(0, off); off += 1;
+  buf.writeUInt16BE(0, off); off += 2;
+
+  ELACITY_SYSTEM_ID_BYTES.copy(buf, off); off += 16;
+
+  buf.writeUInt32BE(1, off); off += 4;
+  kidBytes.copy(buf, off, 0, 16); off += 16;
+
+  buf.writeUInt32BE(dataBytes.length, off); off += 4;
+  dataBytes.copy(buf, off); off += dataBytes.length;
+
+  return buf;
+}
+
+function injectPSSHBox(
+  initData: Buffer,
+  contractKidHex: string,
+  encryptResult: { ciphertext: string; dataToEncryptHash: string },
+): Buffer {
+  const psshJson = JSON.stringify({
+    protocolVersion: '2.0',
+    protectionType: 'cenc:web3-drm-v1',
+    variant: 'eth.web3.clearkey',
+    ciphersuite: 'e8582013',
+    data: {
+      authority: DEFAULT_AUTHORITY,
+      chainId: DEFAULT_CHAIN_ID,
+      rpc: DEFAULT_RPC,
+      actionIpfsId: MEDIA_DECRYPT_ACTION_CID,
+      litBackend: 'chipotle',
+      ciphertext: encryptResult.ciphertext,
+      hash: encryptResult.dataToEncryptHash,
+      kid: '0x' + contractKidHex,
+    },
+  });
+
+  const psshBox = buildBinaryPSSHBox(contractKidHex, psshJson);
+
+  let moovOffset = -1;
+  let moovSize = 0;
+  let pos = 0;
+  while (pos + 8 <= initData.length) {
+    const size = initData.readUInt32BE(pos);
+    const type = initData.toString('ascii', pos + 4, pos + 8);
+    if (size < 8) break;
+    if (type === 'moov') {
+      moovOffset = pos;
+      moovSize = size;
+      break;
+    }
+    pos += size;
+  }
+
+  if (moovOffset === -1) {
+    return Buffer.concat([initData, psshBox]);
+  }
+
+  const moovEnd = moovOffset + moovSize;
+  const result = Buffer.alloc(initData.length + psshBox.length);
+  initData.copy(result, 0, 0, moovEnd);
+  psshBox.copy(result, moovEnd);
+  if (moovEnd < initData.length) {
+    initData.copy(result, moovEnd + psshBox.length, moovEnd);
+  }
+
+  const newMoovSize = moovSize + psshBox.length;
+  result.writeUInt32BE(newMoovSize, moovOffset);
+
+  return result;
+}
+
+// ─── WASM-based DASH Packaging ──────────────────────────────────────────────
 
 export async function packageDASH(
   fragmentedFiles: string[],
   outputDir: string,
   cekHex: string,
   kid: string,
-  bento4: Bento4Paths,
   encryptResult: { ciphertext: string; dataToEncryptHash: string },
 ): Promise<string> {
-  const psshPath = buildPSSHJson(outputDir, encryptResult);
+  const wasmBinary = await loadCENCEncryptWasm();
+  const wasmRuntime = getWASMRuntime();
   const dashDir = join(outputDir, 'dash');
 
-  const encryptionArgs = `--global-option mpeg-cenc.eme-pssh:true --pssh ${ELACITY_SYSTEM_ID}:${psshPath}`;
+  const cekB64 = Buffer.from(cekHex, 'hex').toString('base64');
 
-  const args = [
-    bento4.mp4dash,
-    '--use-segment-timeline',
-    `--encryption-key=${kid}:${cekHex}:random`,
-    '--encryption-cenc-scheme=cenc',
-    `--encryption-args=${encryptionArgs}`,
-    `--output-dir=${dashDir}`,
-    '--force',
-    ...fragmentedFiles,
-  ];
+  const cleanHash = encryptResult.dataToEncryptHash.startsWith('0x')
+    ? encryptResult.dataToEncryptHash.slice(2)
+    : encryptResult.dataToEncryptHash;
+  const contractKidHex = cleanHash.slice(0, 32).padEnd(32, '0');
 
-  logger.info(`[DASHPackager] Running mp4dash with ${fragmentedFiles.length} input(s)...`);
+  logger.info(`[DASHPackager] Splitting fragmented MP4(s)...`);
+  const splitResult = await splitFragmentedMP4(fragmentedFiles[0]);
 
-  const { stdout, stderr } = await execFileAsync(bento4.python3, args, {
-    timeout: 600000,
-    maxBuffer: 10 * 1024 * 1024,
-    env: {
-      ...process.env,
-      PATH: `${join(bento4.mp4encrypt, '..')}:${process.env.PATH}`,
-    },
+  const { tracks, initSegment, segments, totalDuration } = splitResult;
+  if (tracks.length === 0) throw new Error('No tracks found in fragmented MP4');
+
+  logger.info(`[DASHPackager] Encrypting init segment via WASM (transform_init)...`);
+  const initCommand = JSON.stringify({
+    cek_b64: cekB64,
+    kid_hex: contractKidHex,
+    mode: 'transform_init',
   });
 
-  const mpdPath = join(dashDir, 'stream.mpd');
-  if (!existsSync(mpdPath)) {
-    throw new Error(`mp4dash failed to produce MPD. stderr: ${stderr}`);
+  const initResult = await wasmRuntime.executeCENCEncrypt(
+    wasmBinary, initCommand, initSegment, { timeoutMs: 30000 }
+  );
+  if (!initResult.success || !initResult.outputBytes) {
+    throw new Error(`WASM init transform failed: ${initResult.error}`);
   }
 
-  logger.info(`[DASHPackager] DASH package created at ${dashDir}`);
+  const transformedInit = injectPSSHBox(initResult.outputBytes, contractKidHex, encryptResult);
+  logger.info(`[DASHPackager] Init segment transformed: ${initSegment.length} → ${transformedInit.length} bytes (${initResult.executionTimeMs}ms)`);
+
+  const encryptedSegments: Map<number, Buffer[]> = new Map();
+  let totalEncryptTimeMs = 0;
+  let segIdx = 0;
+
+  for (const seg of segments) {
+    segIdx++;
+    const ivSeedBytes = Buffer.alloc(8);
+    ivSeedBytes.writeUInt32BE(segIdx, 4);
+
+    const segCommand = JSON.stringify({
+      cek_b64: cekB64,
+      kid_hex: contractKidHex,
+      mode: 'encrypt_segment',
+      iv_seed_b64: ivSeedBytes.toString('base64'),
+    });
+
+    const segResult = await wasmRuntime.executeCENCEncrypt(
+      wasmBinary, segCommand, seg.data, { timeoutMs: 60000 }
+    );
+    if (!segResult.success || !segResult.outputBytes) {
+      throw new Error(`WASM encrypt failed for segment ${segIdx}: ${segResult.error}`);
+    }
+
+    totalEncryptTimeMs += segResult.executionTimeMs;
+
+    if (!encryptedSegments.has(seg.trackId)) {
+      encryptedSegments.set(seg.trackId, []);
+    }
+    encryptedSegments.get(seg.trackId)!.push(segResult.outputBytes);
+
+    if (segIdx % 10 === 0) {
+      logger.info(`[DASHPackager] Encrypted ${segIdx}/${segments.length} segments...`);
+    }
+  }
+
+  logger.info(`[DASHPackager] All ${segments.length} segments encrypted in ${totalEncryptTimeMs}ms (avg ${Math.round(totalEncryptTimeMs / segments.length)}ms/seg)`);
+
+  logger.info(`[DASHPackager] Writing DASH directory structure...`);
+  const mpdTracks = buildMPDTracks(tracks, segments);
+
+  for (const track of mpdTracks) {
+    const dirType = track.info.type === 'video' ? 'video' : 'audio';
+    const trackDir = join(dashDir, dirType, String(track.info.trackId));
+    mkdirSync(trackDir, { recursive: true });
+
+    await writeFile(join(trackDir, 'init.mp4'), transformedInit);
+
+    const trackEncSegs = encryptedSegments.get(track.info.trackId) || [];
+    for (let i = 0; i < trackEncSegs.length; i++) {
+      await writeFile(join(trackDir, `seg-${i + 1}.m4s`), trackEncSegs[i]);
+    }
+  }
+
+  const mpdXml = generateMPD(mpdTracks, totalDuration);
+  await writeFile(join(dashDir, 'stream.mpd'), mpdXml, 'utf-8');
+
+  const psshJson = JSON.stringify({
+    protocolVersion: '2.0',
+    protectionType: 'cenc:web3-drm-v1',
+    variant: 'eth.web3.clearkey',
+    ciphersuite: 'e8582013',
+    data: {
+      authority: DEFAULT_AUTHORITY,
+      chainId: DEFAULT_CHAIN_ID,
+      rpc: DEFAULT_RPC,
+      actionIpfsId: MEDIA_DECRYPT_ACTION_CID,
+      litBackend: 'chipotle',
+      ciphertext: encryptResult.ciphertext,
+      hash: encryptResult.dataToEncryptHash,
+      kid: '0x' + contractKidHex,
+    },
+  });
+  await writeFile(join(dashDir, `pssh-${ELACITY_SYSTEM_ID}.json`), psshJson, 'utf-8');
+
+  logger.info(`[DASHPackager] DASH package created at ${dashDir} (${mpdTracks.length} tracks)`);
   return dashDir;
 }
 
@@ -211,7 +400,10 @@ export async function uploadDashToIPFS(
     return { cid, size: totalSize };
   }
 
-  // Fallback: ipfs CLI (requires go-ipfs)
+  const { execFile: execFileCb } = await import('child_process');
+  const { promisify: pfy } = await import('util');
+  const execFileAsync = pfy(execFileCb);
+
   const { stdout } = await execFileAsync('ipfs', [
     'add', '-r', '-Q', '--cid-version', '0', dashDir,
   ], { timeout: 600000 });
@@ -226,10 +418,9 @@ export async function uploadDashToIPFS(
 export async function createEncryptedDASH(
   fragmentedFiles: string[],
   outputDir: string,
-  bento4: Bento4Paths,
+  _bento4: any,
   ipfs: any,
 ): Promise<DashPackageResult> {
-  // Generate and encrypt CEK
   const { cek, kid } = generateCEK();
   const cekHex = cek.toString('hex');
 
@@ -240,10 +431,8 @@ export async function createEncryptedDASH(
     cek.fill(0);
   }
 
-  // Package DASH with CENC encryption
-  const dashDir = await packageDASH(fragmentedFiles, outputDir, cekHex, kid, bento4, encryptResult);
+  const dashDir = await packageDASH(fragmentedFiles, outputDir, cekHex, kid, encryptResult);
 
-  // Upload to IPFS
   const { cid, size } = await uploadDashToIPFS(dashDir, ipfs);
 
   return {

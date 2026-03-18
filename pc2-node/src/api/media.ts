@@ -396,8 +396,12 @@ router.post('/segment', async (req: AuthenticatedRequest, res: Response) => {
 
       // Strip CENC encryption signaling via WASM (encv → av01, enca → mp4a/Opus,
       // remove sinf box, strip pssh boxes). Uses strip_init mode in cenc-decrypt.
-      const cleanInit = await stripInitViaWASM(segmentBytes);
+      let cleanInit = await stripInitViaWASM(segmentBytes);
       logger.info(`[media/segment] Init segment: raw=${segmentBytes.length}B → clean=${cleanInit.length}B (stripped ${segmentBytes.length - cleanInit.length}B of DRM signaling)`);
+
+      // Split multi-track init to single-track for MSE compatibility.
+      // MSE requires each SourceBuffer to receive only its own track.
+      cleanInit = splitInitForTrack(cleanInit, track.type);
 
       res.setHeader('Content-Type', 'video/mp4');
       res.setHeader('Content-Length', String(cleanInit.length));
@@ -621,23 +625,142 @@ function extractPSSHJson(initSegment: Buffer): Array<{ protectionType: string; d
 
 const FALLBACK_IPFS_GATEWAY = 'https://ipfs.ela.city/ipfs/';
 
+/**
+ * Split a multi-track fMP4 init segment into a single-track init segment.
+ *
+ * MSE requires each SourceBuffer to receive an init segment containing only
+ * its own track. When Bento4's mp4fragment produces a shared init segment
+ * (both video and audio trak boxes inside the same moov), we must rebuild
+ * moov to contain only the requested track.
+ *
+ * @param initSegment  The full multi-track init segment (ftyp + moov).
+ * @param trackType    'video' or 'audio' — determines which trak to keep.
+ * @returns            A new init segment with only the requested track.
+ */
+function splitInitForTrack(initSegment: Buffer, trackType: 'video' | 'audio'): Buffer {
+  const readU32 = (buf: Buffer, off: number) => buf.readUInt32BE(off);
+  const boxType = (buf: Buffer, off: number) => buf.toString('ascii', off + 4, off + 8);
+
+  const findChildren = (buf: Buffer, start: number, end: number): Array<{ pos: number; size: number; type: string }> => {
+    const children: Array<{ pos: number; size: number; type: string }> = [];
+    let pos = start;
+    while (pos + 8 <= end) {
+      const size = readU32(buf, pos);
+      if (size < 8 || pos + size > end) break;
+      children.push({ pos, size, type: boxType(buf, pos) });
+      pos += size;
+    }
+    return children;
+  };
+
+  // Find ftyp and moov
+  const topBoxes = findChildren(initSegment, 0, initSegment.length);
+  const ftyp = topBoxes.find(b => b.type === 'ftyp');
+  const moov = topBoxes.find(b => b.type === 'moov');
+  if (!ftyp || !moov) {
+    logger.warn('[media/split] No ftyp or moov found, returning original init');
+    return initSegment;
+  }
+
+  const moovChildren = findChildren(initSegment, moov.pos + 8, moov.pos + moov.size);
+  const traks = moovChildren.filter(b => b.type === 'trak');
+
+  if (traks.length <= 1) {
+    return initSegment;
+  }
+
+  // Determine handler type for each trak to identify video vs audio
+  const targetHandler = trackType === 'video' ? 'vide' : 'soun';
+  let targetTrak: { pos: number; size: number; type: string } | null = null;
+  let targetTrackId = 0;
+
+  for (const trak of traks) {
+    const trakData = initSegment.subarray(trak.pos, trak.pos + trak.size);
+    const hdlrIdx = trakData.indexOf(Buffer.from('hdlr'));
+    if (hdlrIdx > 0) {
+      // hdlr box: indexOf finds 'hdlr' at +4 from box start.
+      // Layout after 'hdlr': version/flags(4) + pre_defined(4) + handler_type(4)
+      // So handler_type is at hdlrIdx + 12
+      const ht = trakData.toString('ascii', hdlrIdx + 12, hdlrIdx + 16);
+      if (ht === targetHandler) {
+        targetTrak = trak;
+        // Extract track_id from tkhd (first child of trak, track_id at offset +12 for v0, +20 for v1)
+        const tkhdIdx = trakData.indexOf(Buffer.from('tkhd'));
+        if (tkhdIdx > 0) {
+          const tkhdVersion = trakData[tkhdIdx + 4];
+          targetTrackId = tkhdVersion === 1
+            ? trakData.readUInt32BE(tkhdIdx + 4 + 4 + 8 + 8)  // version(1) + flags(3) + creation(8) + modification(8) + track_id(4)
+            : trakData.readUInt32BE(tkhdIdx + 4 + 4 + 4 + 4);  // version(1) + flags(3) + creation(4) + modification(4) + track_id(4)
+        }
+        break;
+      }
+    }
+  }
+
+  if (!targetTrak) {
+    logger.warn(`[media/split] No ${trackType} trak found, returning original init`);
+    return initSegment;
+  }
+
+  // Rebuild moov: mvhd + target trak + mvex (with only target trex) + udta
+  const pieces: Buffer[] = [];
+
+  // ftyp
+  pieces.push(initSegment.subarray(ftyp.pos, ftyp.pos + ftyp.size));
+
+  // Build moov contents
+  const moovParts: Buffer[] = [];
+
+  for (const child of moovChildren) {
+    if (child.type === 'mvhd' || child.type === 'udta') {
+      moovParts.push(initSegment.subarray(child.pos, child.pos + child.size));
+    } else if (child.type === 'trak' && child.pos === targetTrak.pos) {
+      moovParts.push(initSegment.subarray(child.pos, child.pos + child.size));
+    } else if (child.type === 'mvex') {
+      // Rebuild mvex keeping only the trex for our target track + any mehd
+      const mvexChildren = findChildren(initSegment, child.pos + 8, child.pos + child.size);
+      const mvexParts: Buffer[] = [];
+      for (const mc of mvexChildren) {
+        if (mc.type === 'mehd') {
+          mvexParts.push(initSegment.subarray(mc.pos, mc.pos + mc.size));
+        } else if (mc.type === 'trex' && targetTrackId > 0) {
+          // trex: header(8) + version/flags(4) + track_id(4)
+          const trexTrackId = initSegment.readUInt32BE(mc.pos + 12);
+          if (trexTrackId === targetTrackId) {
+            mvexParts.push(initSegment.subarray(mc.pos, mc.pos + mc.size));
+          }
+        } else if (mc.type === 'trex' && targetTrackId === 0) {
+          mvexParts.push(initSegment.subarray(mc.pos, mc.pos + mc.size));
+        }
+      }
+      // Rebuild mvex box
+      const mvexContent = Buffer.concat(mvexParts);
+      const mvexBox = Buffer.alloc(8 + mvexContent.length);
+      mvexBox.writeUInt32BE(8 + mvexContent.length, 0);
+      mvexBox.write('mvex', 4);
+      mvexContent.copy(mvexBox, 8);
+      moovParts.push(mvexBox);
+    }
+  }
+
+  // Rebuild moov box
+  const moovContent = Buffer.concat(moovParts);
+  const moovBox = Buffer.alloc(8 + moovContent.length);
+  moovBox.writeUInt32BE(8 + moovContent.length, 0);
+  moovBox.write('moov', 4);
+  moovContent.copy(moovBox, 8);
+  pieces.push(moovBox);
+
+  const result = Buffer.concat(pieces);
+  logger.info(`[media/split] Split init for ${trackType}: ${initSegment.length}B → ${result.length}B (removed ${traks.length - 1} other track(s))`);
+  return result;
+}
+
 async function fetchSegmentBytes(url: string, ipfsService?: any): Promise<Buffer> {
-  // Try extracting CID path from URL for direct local access and fallback
   const ipfsMatch = url.match(/\/ipfs\/(.+)/);
   const ipfsPath = ipfsMatch ? ipfsMatch[1] : '';
 
-  if (ipfsService && ipfsPath) {
-    const rootCid = ipfsPath.split('/')[0];
-    try {
-      const bytes = await ipfsService.getFile(rootCid);
-      if (bytes && bytes.length > 0) {
-        logger.info(`[media/segment] Got ${bytes.length} bytes from local blockstore`);
-        return Buffer.from(bytes);
-      }
-    } catch { /* fall through to HTTP */ }
-  }
-
-  // Try the original URL (local gateway)
+  // Try the local gateway URL first (handles CID+subpath correctly)
   const response = await fetch(url);
   if (response.ok) {
     const arrayBuf = await response.arrayBuffer();

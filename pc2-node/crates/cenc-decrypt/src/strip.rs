@@ -90,9 +90,10 @@ pub fn strip_encryption_signaling(init: &[u8]) -> Vec<u8> {
         _ => return buf.to_vec(),
     };
 
-    // Collect removal ranges: sinf + top-level pssh boxes
+    // Collect removal ranges: sinf + top-level pssh boxes + pssh inside moov
     let mut removals: Vec<Removal> = vec![Removal { start: sinf_off, size: sinf_size }];
 
+    // Scan top-level boxes for pssh
     let mut top_pos = 0;
     while top_pos + 8 <= buf.len() {
         let h = match read_box_header(buf, top_pos) {
@@ -104,6 +105,23 @@ pub fn strip_encryption_signaling(init: &[u8]) -> Vec<u8> {
             removals.push(Removal { start: top_pos, size: h.size as usize });
         }
         top_pos += h.size as usize;
+    }
+
+    // Also scan inside moov for pssh (our DASH packager injects pssh into moov)
+    if let Some(moov_info) = find_box_path(buf, 0, buf.len(), &[b"moov"]) {
+        let moov_end = moov_info.box_end;
+        let mut pos = moov_info.content_start;
+        while pos + 8 <= moov_end {
+            let h = match read_box_header(buf, pos) {
+                Some(h) => h,
+                None => break,
+            };
+            if h.size < 8 || pos + h.size as usize > moov_end { break; }
+            if &h.box_type == b"pssh" {
+                removals.push(Removal { start: pos, size: h.size as usize });
+            }
+            pos += h.size as usize;
+        }
     }
 
     removals.sort_by_key(|r| r.start);
@@ -280,10 +298,8 @@ fn find_box_start(buf: &[u8], start: usize, end: usize, box_type: &[u8; 4]) -> O
 }
 
 struct BoxInfo {
-    #[allow(dead_code)]
     box_start: usize,
     content_start: usize,
-    #[allow(dead_code)]
     box_end: usize,
 }
 

@@ -11,7 +11,31 @@
 **Release:** v1.1.0 tagged and released on 2026-03-03 (134 commits squash-merged to main)
 **Launcher:** v1.1.1 released — version display, one-click updates, full networking install
 **DAO Proposal:** Live at https://elastos.com/proposals/69a24f49247f130078064edd
-**Last Commit:** perf: WASM & I/O quick wins + feat: AES-GCM encrypt inside WASM
+**Last Commit:** feat: Phase 2 — replace mp4dash with WASM CENC encrypt + TypeScript DASH pipeline
+
+#### AV1 Playback Fix & Init Segment Splitting (Mar 18)
+
+Critical playback bug resolved — encrypted AV1 video now plays end-to-end inside PC2:
+
+**Root cause chain (3 issues, all fixed):**
+1. **Nested PSSH removal** — `cenc-decrypt` Rust WASM's `strip_encryption_signaling()` only scanned top-level PSSH boxes. The new DASH packager nests PSSH inside `moov`, so they survived stripping. MSE rejected the init segment. **Fix:** Updated `strip.rs` to scan and remove PSSH boxes inside `moov` children.
+2. **Multi-track init segment** — Bento4's `mp4fragment` produces a shared init segment containing both video and audio tracks (`video/1/init.mp4` and `audio/2/init.mp4` are identical files). Chromium's MSE rejects a multi-track init fed to a single-track SourceBuffer (`audio object type 0x40 does not match what is specified in the mimetype`). **Fix:** Added `splitInitForTrack()` in `media.ts` — rebuilds `moov` with only the requested track's `trak` and `trex` entry. Video init: 1288B → 833B. Audio init: 1288B → 728B.
+3. **hdlr offset error** — `splitInitForTrack()` initially read `pre_defined` (all zeros) instead of `handler_type` (`vide`/`soun`) because the offset was +8 instead of +12 from the `hdlr` box type field. **Fix:** Corrected to `hdlrIdx + 12`.
+
+**Player debugging enhancements added:**
+- `appendToSourceBuffer()` now has try/catch around `sb.appendBuffer()` with labeled logging (video/audio)
+- `sourceended`, `sourceclose`, and `<video> error` event listeners log to console
+- Init segment first 16 bytes logged for binary verification
+- MediaSource readyState and SourceBuffer updating state logged before each append
+
+**Files changed:**
+| File | Change |
+|------|--------|
+| `pc2-node/crates/cenc-decrypt/src/strip.rs` | Scan for and remove PSSH inside `moov` children |
+| `pc2-node/src/api/media.ts` | `splitInitForTrack()` + integration after WASM strip |
+| `pc2-node/data/test-apps/pc2-media-runtime/player.js` | Debug logging for MSE append pipeline |
+| `pc2-node/data/test-apps/elacity-creator/app.js` | Gas pre-estimation + `sendTxWithRetry()` for minting |
+| `pc2-node/wasm-apps/cenc-decrypt/cenc-decrypt.wasm` | Rebuilt with PSSH fix |
 
 ### What Just Shipped (v1.1.0 on main)
 
@@ -354,8 +378,10 @@ Built a complete local media encoding pipeline for the Creator Dashboard. Video/
 
 **Key components built:**
 - `pc2-node/src/services/media/encoder.ts` — FFprobe analysis, transcode plan builder, FFmpeg execution. Adapts to hardware: NVIDIA GPU (av1_nvenc), SVT-AV1 (libsvtav1), x264 fallback. Audio-only path. Concurrency guard.
-- `pc2-node/src/services/media/bento4.ts` — Bento4 SDK management: discovers local installs or auto-downloads per-platform (linux-x64, darwin-x64, darwin-arm64). Manages `mp4fragment`, `mp4encrypt`, `mp4dash` binaries. Requires Python 3.
-- `pc2-node/src/services/media/dashPackager.ts` — Orchestrates DASH packaging: CEK generation (16-byte random), CEK encryption via Chipotle Lit Action, PSSH construction (Elacity custom system ID + dDRM metadata), mp4dash execution, IPFS upload via Helia `storeDirectory()`. Includes 5-attempt retry with exponential backoff for Lit API transient failures.
+- `pc2-node/src/services/media/bento4.ts` — Bento4 SDK management: discovers local installs or auto-downloads per-platform (linux-x64, darwin-x64, darwin-arm64). Only manages `mp4fragment` binary (mp4encrypt and mp4dash removed in Phase 2).
+- `pc2-node/src/services/media/dashPackager.ts` — Orchestrates DASH packaging: CEK generation (16-byte random), CEK encryption via Chipotle Lit Action, PSSH construction (Elacity custom system ID + dDRM metadata), WASM-based CENC encryption + init transform, TypeScript MPD generation, IPFS upload via Helia `storeDirectory()`. Includes 5-attempt retry with exponential backoff for Lit API transient failures. Phase 2: replaced mp4dash Python pipeline with mp4split + cenc-encrypt WASM + mpdGenerator.
+- `pc2-node/src/services/media/mp4split.ts` — (NEW Phase 2) TypeScript fMP4 parser: splits fragmented MP4 into per-track init segment + media segments. Extracts codec strings, bandwidth, timescale, resolution metadata.
+- `pc2-node/src/services/media/mpdGenerator.ts` — (NEW Phase 2) TypeScript DASH MPD XML generator using SegmentTemplate + SegmentTimeline format.
 - `pc2-node/src/api/media.ts` — Extended with `POST /api/media/encode` (multipart upload via Multer disk storage) and `GET /api/media/encode/status/:jobId` (polling). `runEncodePipeline` orchestrates encoder→bento4→dashPackager. Best-effort replication to Elacity IPFS for multi-node discoverability.
 - `pc2-node/src/api/rate-limit.ts` — Added `media_encode` scope (5 jobs/hour/wallet)
 - `pc2-node/src/api/audit.ts` — Added `media_encode` action to audit trail
@@ -412,8 +438,10 @@ Built a complete local media encoding pipeline for the Creator Dashboard. Video/
 - MPD parser error for image assets: Elacity's media player tries to parse image metadata as DASH manifest. Expected for non-video content.
 - Lit Datil deprecation: Datil network being deprecated ~April 25, 2026 in favor of Chipotle (REST API, API key auth, TEE-based). Migration required.
 - Authority address is hardcoded to Base AuthorityGateway `0x8fe6bf98...`. Works for all Base channels (shared gateway). Long-term: creator app should pass resolved authority into encode endpoint for per-channel support.
+- ~~MetaMask "This transaction is likely to fail" during minting~~ — **FIXED (Mar 18)** — Custom gas estimation with 1.5x buffer + 500k fallback + `sendTxWithRetry()` with Retry/Skip buttons
+- ~~"Media format not supported" on AV1 video playback~~ — **FIXED (Mar 18)** — Three-part fix: nested PSSH stripping in Rust WASM, multi-track init splitting in TypeScript, hdlr offset correction
 
-#### WASM & Rust Optimization Audit — IN PROGRESS (Mar 18-current)
+#### WASM & Rust Optimization Audit — COMPLETE (Mar 18)
 
 Comprehensive audit of the PC2 node system to identify Rust/WASM optimization opportunities and alignment with ElastOS Runtime capsule convergence.
 
@@ -432,11 +460,14 @@ Comprehensive audit of the PC2 node system to identify Rust/WASM optimization op
 - `storage.ts`: Non-media file encryption (`POST /api/storage/lit/encrypt`) now uses WASM instead of Node.js `crypto.createCipheriv` — **plaintext never touches Node.js memory**
 - WASM binary rebuilt (5.8MB → includes encrypt capability)
 
-**Phase 2 — Deferred (requires mp4dash replacement):**
-- `cenc-encrypt` WASM integration into dashPackager (AES-128-CTR segment encryption)
-- Binary PSSH generation from `cenc-encrypt/pssh.rs`
-- DASH manifest generation in TypeScript/Rust (eliminates Python mp4dash dependency)
-- These three are coupled: mp4dash handles encryption + manifest + PSSH in one step. Replacing encryption requires replacing all three.
+**Phase 2 — COMPLETE: mp4dash replaced with WASM pipeline (Mar 18):**
+- `mp4split.ts` (NEW) — TypeScript fMP4 parser that splits fragmented MP4 into init segment + media segments per track, extracts codec strings, bandwidth, timescale, and resolution metadata
+- `mpdGenerator.ts` (NEW) — TypeScript DASH MPD XML generator using SegmentTemplate + SegmentTimeline format (compatible with existing `mpdParser.ts`)
+- `WASMRuntime.ts`: New `executeCENCEncrypt()` method orchestrates calls to `cenc-encrypt` WASM module
+- `dashPackager.ts` REWRITTEN — replaces `mp4dash` Python script pipeline with: mp4split → WASM `transform_init` (sinf/tenc injection) → TypeScript PSSH injection (full JSON with ciphertext+hash+kid) → WASM `encrypt_segment` (per-segment AES-128-CTR) → TypeScript MPD generation → IPFS upload
+- `bento4.ts` SIMPLIFIED — removed Python 3 check, `mp4encrypt`, `mp4dash` references. Only `mp4fragment` binary remains
+- **Zero Python dependency** for media encoding. Zero `mp4encrypt` dependency. Only Bento4 `mp4fragment` binary retained (pure C, no script dependencies)
+- 8 Rust cenc-encrypt tests pass, TypeScript compiles clean
 
 **Audit findings documented in plan:** 18 optimization opportunities across 4 tiers (quick wins → high-impact → medium-impact → strategic). Key areas: WASM precompilation, IPFS chunk assembly in Rust, Rust HTTP proxy, sovereign key management. All aligned with Runtime capsule convergence path.
 
@@ -521,7 +552,7 @@ Comprehensive player hardening and UX polish:
 3. **Deploy supernode provisioning** — `/api/ddrm/provision` endpoint coded but NOT deployed to supernodes. See `docs/core/LIT_PRODUCTION_CHECKLIST.md` for deployment steps. **This is a v1.2.0 release blocker.**
 4. ~~**Media pipeline on Chipotle**~~ — **DONE (Mar 18)** — Full encoding pipeline E2E verified: transcode → fragment → CENC encrypt → DASH package → IPFS upload → mint → buy → download → playback. PSSH includes ciphertext, hash, contract-compatible kid, correct authority. Lit Chipotle API recovered.
 5. **P-256 ECDH unwrap to WASM (Phase E)** — conditional on Chipotle envelope format. If Chipotle returns CEK directly, this phase is eliminated.
-6. ~~**`cenc-encrypt` Rust WASM crate**~~ — **BUILT (Mar 17)** — AES-128-CTR encryption, init segment transformation, binary PSSH generation. 8 tests pass. Not yet integrated into pipeline (requires mp4dash replacement).
+6. ~~**`cenc-encrypt` Rust WASM crate**~~ — **BUILT + INTEGRATED (Mar 17-18)** — AES-128-CTR per-sample encryption, init segment transformation (sinf/tenc injection), binary PSSH generation. 8 tests pass. Now fully wired into the encoding pipeline via `executeCENCEncrypt()` in WASMRuntime, replacing mp4dash + mp4encrypt.
 7. ~~**`pssh-gen` Rust WASM crate**~~ — **INCLUDED in `cenc-encrypt`** — `pssh.rs` module generates binary PSSH boxes with Elacity system ID and dDRM metadata.
 8. ~~**WASM crypto hardening (Phases A-C)**~~ — DONE (Mar 16). Branch: `feature/wasm-crypto-hardening`.
 9. ~~**WASM renderer hardening**~~ — DONE (Mar 16) — PDF, code, images, text all render inside WASM.
@@ -736,7 +767,7 @@ Chipotle TEE available `Lit.Actions` methods:
 - [dDRM Pipeline E2E](fd6755f0-d73c-4e41-8df3-0f57f15071a2) — @elacity-js/access, Creator Dashboard, Lit Action trust model (Path A), capacity credit auto-detection, decrypt endpoint, decentralization analysis. Also: hayro PDF rendering, WASM text fixes, Mint context menu, wallet bridge restore, Elacity branding, WASM crypto hardening Phases A-C, double-signature fix, TXT dimension cap, video autoplay, fMP4 strip+decrypt in Rust
 - [Secure Viewer & PDF](fd6755f0-d73c-4e41-8df3-0f57f15071a2) — secure viewer pipeline, PDF hybrid rendering, two-layer encryption fix, Lit Pinata/relayer integration, auto-decrypt, parallel pages, dDRM Viewer app, .ddrm.json capsules, WASM renderer, GUI integration
 - [Media Runtime E2E](fd6755f0-d73c-4e41-8df3-0f57f15071a2) — server-side DASH/CENC decryption pipeline, Rust WASM cenc-decrypt crate, MSE player, DRM stripping (init+segment), 16-byte IV fix, Smart Account PSSH, two-phase Lit auth
-- [Media Encoding Pipeline](current) — Local media encoding pipeline (FFmpeg→Bento4→CENC→DASH→IPFS), Chipotle CEK encryption, Creator Dashboard media UI, IPC duplicate wallet fix, MetaMask gas estimation fix, PSSH extraction/authority/kid fixes, IPFS pin hang fix, GUI rebuild, **E2E playback + download verified**
+- [Media Encoding Pipeline](current) — Local media encoding pipeline (FFmpeg→Bento4→CENC→DASH→IPFS), Chipotle CEK encryption, Creator Dashboard media UI, IPC duplicate wallet fix, MetaMask gas estimation fix, PSSH extraction/authority/kid fixes, IPFS pin hang fix, GUI rebuild, **E2E playback + download verified**. AV1 playback fix: nested PSSH stripping in Rust WASM, multi-track init segment splitting, MSE-compatible per-track init delivery. MetaMask mint retry button.
 
 ---
 
@@ -835,7 +866,7 @@ Chipotle TEE available `Lit.Actions` methods:
 |------|---------|
 | `pc2-node/src/services/media/encoder.ts` | FFprobe analysis, transcode plans, FFmpeg execution (GPU/CPU adaptive) |
 | `pc2-node/src/services/media/bento4.ts` | Bento4 SDK management — auto-download, platform detection, Python 3 check |
-| `pc2-node/src/services/media/dashPackager.ts` | CEK generation, Chipotle encryption, PSSH construction, mp4dash, IPFS upload |
+| `pc2-node/src/services/media/dashPackager.ts` | CEK generation, Chipotle encryption, PSSH construction, WASM CENC encrypt, TypeScript MPD gen, IPFS upload |
 | `pc2-node/src/api/media.ts` | Media encode/status endpoints, `runEncodePipeline` orchestrator, Chipotle CEK recovery |
 | `pc2-node/data/lit-actions/media-encrypt-chipotle.js` | Lit Action for CEK encryption via PKP-AES |
 | `pc2-node/data/lit-actions/media-decrypt-chipotle.js` | Lit Action for CEK decryption with on-chain access check |

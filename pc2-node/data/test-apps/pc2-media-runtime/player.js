@@ -260,7 +260,10 @@ async function fetchSegmentWithRetry(trackIndex, segmentNumber, init) {
 
 function appendToSourceBuffer(sb, data, queue, setAppending) {
   return new Promise((resolve, reject) => {
+    const label = (sb === videoSB) ? 'video' : 'audio';
+    console.log('[player] appendToSourceBuffer(' + label + '): ' + data.byteLength + 'B, updating=' + sb.updating);
     if (sb.updating) {
+      console.log('[player] SB(' + label + ') busy, queuing');
       queue.push({ data, resolve, reject });
       return;
     }
@@ -269,6 +272,7 @@ function appendToSourceBuffer(sb, data, queue, setAppending) {
       sb.removeEventListener('updateend', onUpdate);
       sb.removeEventListener('error', onError);
       setAppending(false);
+      console.log('[player] SB(' + label + ') append OK, buffered ranges:', sb.buffered.length);
       processQueue(sb, queue, setAppending);
       resolve();
     };
@@ -276,11 +280,20 @@ function appendToSourceBuffer(sb, data, queue, setAppending) {
       sb.removeEventListener('updateend', onUpdate);
       sb.removeEventListener('error', onError);
       setAppending(false);
+      console.error('[player] SB(' + label + ') append error:', e);
       reject(e);
     };
-    sb.addEventListener('updateend', onUpdate);
-    sb.addEventListener('error', onError);
-    sb.appendBuffer(data);
+    try {
+      sb.addEventListener('updateend', onUpdate);
+      sb.addEventListener('error', onError);
+      sb.appendBuffer(data);
+    } catch (syncErr) {
+      sb.removeEventListener('updateend', onUpdate);
+      sb.removeEventListener('error', onError);
+      setAppending(false);
+      console.error('[player] SB(' + label + ') appendBuffer threw:', syncErr.name, syncErr.message);
+      reject(syncErr);
+    }
   });
 }
 
@@ -530,29 +543,62 @@ async function init() {
 
     mediaSource = new MediaSource();
     const msUrl = URL.createObjectURL(mediaSource);
+    console.log('[player] MediaSource state:', mediaSource.readyState, 'URL:', msUrl);
     $video.src = msUrl;
 
+    mediaSource.addEventListener('sourceended', () => {
+      console.log('[player] sourceended fired, readyState:', mediaSource.readyState);
+    });
+    mediaSource.addEventListener('sourceclose', () => {
+      console.warn('[player] sourceclose fired — MediaSource was detached from video element');
+    });
+
+    $video.addEventListener('error', () => {
+      const e = $video.error;
+      console.error('[player] <video> error event: code=' + (e && e.code) + ' message=' + (e && e.message));
+    });
+
     mediaSource.addEventListener('sourceopen', async () => {
+      console.log('[player] sourceopen fired, readyState:', mediaSource.readyState);
       URL.revokeObjectURL(msUrl);
       try {
         if (videoTrackIdx !== -1) {
           const vTrack = tracks[videoTrackIdx];
           const vCodec = `${vTrack.mimeType}; codecs="${vTrack.codec}"`;
+          console.log('[player] Video codec:', vCodec, 'isTypeSupported:', MediaSource.isTypeSupported(vCodec));
+          if (!MediaSource.isTypeSupported(vCodec)) {
+            showError(`Video codec "${vTrack.codec}" is not supported by this browser. Please update your browser or contact the creator.`);
+            return;
+          }
           videoSB = mediaSource.addSourceBuffer(vCodec);
+          console.log('[player] Video SourceBuffer created');
         }
         if (audioTrackIdx !== -1) {
           const aTrack = tracks[audioTrackIdx];
           const aCodec = `${aTrack.mimeType}; codecs="${aTrack.codec}"`;
+          console.log('[player] Audio codec:', aCodec, 'isTypeSupported:', MediaSource.isTypeSupported(aCodec));
+          if (!MediaSource.isTypeSupported(aCodec)) {
+            showError(`Audio codec "${aTrack.codec}" is not supported by this browser.`);
+            return;
+          }
           audioSB = mediaSource.addSourceBuffer(aCodec);
+          console.log('[player] Audio SourceBuffer created');
         }
 
         if (videoSB) {
           const initData = await fetchSegmentWithRetry(videoTrackIdx, 0, true);
+          console.log('[player] Video init data received:', initData.byteLength, 'bytes');
+          console.log('[player] Video init first 16 bytes:', Array.from(new Uint8Array(initData.slice(0, 16))).map(b => b.toString(16).padStart(2, '0')).join(' '));
+          console.log('[player] Video SB readyState before append:', mediaSource.readyState, 'videoSB.updating:', videoSB.updating);
           await appendToSourceBuffer(videoSB, initData, videoSegmentQueue, v => isAppendingVideo = v);
+          console.log('[player] Video init appended OK');
         }
         if (audioSB) {
           const initData = await fetchSegmentWithRetry(audioTrackIdx, 0, true);
+          console.log('[player] Audio init data received:', initData.byteLength, 'bytes');
+          console.log('[player] Audio SB readyState before append:', mediaSource.readyState, 'audioSB.updating:', audioSB.updating);
           await appendToSourceBuffer(audioSB, initData, audioSegmentQueue, v => isAppendingAudio = v);
+          console.log('[player] Audio init appended OK');
         }
 
         videoNextSeg = 0;

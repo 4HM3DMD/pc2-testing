@@ -1,10 +1,9 @@
 /**
  * Bento4 Binary Manager for PC2 Node.
  *
- * Handles discovery, download, and execution of Bento4 tools:
- *   - mp4fragment (compiled binary)
- *   - mp4encrypt (compiled binary)
- *   - mp4dash (Python 3 script that wraps mp4encrypt)
+ * Handles discovery, download, and execution of Bento4 mp4fragment tool.
+ * Phase 2: mp4encrypt and mp4dash are no longer needed — encryption is handled
+ * by the cenc-encrypt WASM module and DASH packaging by mpdGenerator.ts.
  *
  * Binaries are cached in pc2-node/bin/bento4/<platform>/
  * and downloaded from GitHub releases on first use.
@@ -12,8 +11,8 @@
 
 import { execFile, execSync } from 'child_process';
 import { promisify } from 'util';
-import { existsSync, mkdirSync, chmodSync, writeFileSync, createWriteStream, readdirSync, unlinkSync } from 'fs';
-import { join, dirname } from 'path';
+import { existsSync, mkdirSync, chmodSync, createWriteStream, readdirSync, unlinkSync } from 'fs';
+import { join } from 'path';
 import * as https from 'https';
 import * as http from 'http';
 import { logger } from '../../utils/logger.js';
@@ -38,62 +37,29 @@ function getBento4Dir(): string {
   return join(dataDir, 'bin', 'bento4');
 }
 
-// ─── Python 3 Check ─────────────────────────────────────────────────────────
+// ─── Types ──────────────────────────────────────────────────────────────────
 
-let python3Path: string | null = null;
-
-export async function checkPython3(): Promise<string> {
-  if (python3Path) return python3Path;
-
-  for (const cmd of ['python3', 'python']) {
-    try {
-      const { stdout } = await execFileAsync(cmd, ['--version'], { timeout: 5000 });
-      if (stdout.includes('Python 3') || stdout.includes('python 3')) {
-        python3Path = cmd;
-        return cmd;
-      }
-    } catch { /* try next */ }
-  }
-
-  throw new Error(
-    'Python 3 is required for media encoding (mp4dash). ' +
-    'Install it: https://www.python.org/downloads/'
-  );
+export interface Bento4Paths {
+  mp4fragment: string;
 }
 
 // ─── Binary Resolution ──────────────────────────────────────────────────────
 
-export interface Bento4Paths {
-  mp4fragment: string;
-  mp4encrypt: string;
-  mp4dash: string;
-  python3: string;
-}
-
 export async function ensureBento4(): Promise<Bento4Paths> {
-  const python3 = await checkPython3();
   const bento4Dir = getBento4Dir();
   const platform = getPlatformKey();
   const binDir = join(bento4Dir, platform, 'bin');
-  const mp4dashPath = join(bento4Dir, platform, 'utils', 'mp4-dash.py');
-
   const mp4fragmentPath = join(binDir, 'mp4fragment');
-  const mp4encryptPath = join(binDir, 'mp4encrypt');
 
-  if (existsSync(mp4fragmentPath) && existsSync(mp4encryptPath) && existsSync(mp4dashPath)) {
-    return { mp4fragment: mp4fragmentPath, mp4encrypt: mp4encryptPath, mp4dash: mp4dashPath, python3 };
+  if (existsSync(mp4fragmentPath)) {
+    return { mp4fragment: mp4fragmentPath };
   }
 
-  // Check if binaries are on PATH first
   try {
     await execFileAsync('mp4fragment', ['--version'], { timeout: 5000 });
-    await execFileAsync('mp4encrypt', ['--version'], { timeout: 5000 });
-    // mp4dash is a Python script; check with python3
-    const { stdout: dashCheck } = await execFileAsync(python3, ['-c', 'import mp4utils'], { timeout: 5000 });
-    return { mp4fragment: 'mp4fragment', mp4encrypt: 'mp4encrypt', mp4dash: 'mp4dash', python3 };
+    return { mp4fragment: 'mp4fragment' };
   } catch { /* not on PATH, need to download */ }
 
-  // Download Bento4 SDK
   const url = BENTO4_URLS[platform];
   if (!url) {
     throw new Error(
@@ -113,7 +79,6 @@ export async function ensureBento4(): Promise<Bento4Paths> {
   logger.info('[Bento4] Extracting...');
   execSync(`unzip -o -q "${zipPath}" -d "${platformDir}"`, { timeout: 60000 });
 
-  // Bento4 SDK extracts to a versioned subdirectory; move contents up
   const extractedDirs = readdirSync(platformDir)
     .filter((f: string) => f.startsWith('Bento4'));
   if (extractedDirs.length > 0) {
@@ -122,26 +87,16 @@ export async function ensureBento4(): Promise<Bento4Paths> {
     execSync(`rm -rf "${extractedDir}"`, { timeout: 10000 });
   }
 
-  // Make binaries executable
   if (existsSync(join(binDir, 'mp4fragment'))) {
     chmodSync(join(binDir, 'mp4fragment'), 0o755);
-    chmodSync(join(binDir, 'mp4encrypt'), 0o755);
   }
 
-  // Clean up zip
   try { unlinkSync(zipPath); } catch { /* ignore */ }
 
-  const resolvedMp4dash = existsSync(mp4dashPath)
-    ? mp4dashPath
-    : join(bento4Dir, platform, 'utils', 'mp4dash');
-
-  logger.info('[Bento4] SDK installed successfully');
+  logger.info('[Bento4] SDK installed successfully (mp4fragment only)');
 
   return {
     mp4fragment: existsSync(mp4fragmentPath) ? mp4fragmentPath : 'mp4fragment',
-    mp4encrypt: existsSync(mp4encryptPath) ? mp4encryptPath : 'mp4encrypt',
-    mp4dash: resolvedMp4dash,
-    python3,
   };
 }
 
