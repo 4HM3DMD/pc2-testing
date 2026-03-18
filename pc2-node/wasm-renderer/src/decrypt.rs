@@ -7,6 +7,8 @@ use aes_gcm::{
     aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
 };
+use aes_gcm::aead::OsRng;
+use aes_gcm::AeadCore;
 use base64::Engine;
 
 const AUTH_TAG_LEN: usize = 16;
@@ -92,12 +94,35 @@ pub fn aes_gcm_decrypt_raw(cek_b64: &str, iv_b64: &str, encrypted: &[u8]) -> Res
     Ok(plaintext)
 }
 
+/// Encrypt plaintext using AES-256-GCM.
+///
+/// Generates a random 32-byte CEK and 12-byte IV, encrypts the data,
+/// and returns `(cek_b64, iv_b64, ciphertext_with_tag)`.
+///
+/// Output format matches PC2 convention: `[ciphertext || 16-byte auth tag]`.
+pub fn aes_gcm_encrypt_raw(plaintext: &[u8]) -> Result<(String, String, Vec<u8>), String> {
+    let b64 = base64::engine::general_purpose::STANDARD;
+
+    let key = Aes256Gcm::generate_key(OsRng);
+    let cipher = Aes256Gcm::new(&key);
+    let nonce = Aes256Gcm::generate_nonce(OsRng);
+
+    let ciphertext = cipher
+        .encrypt(&nonce, plaintext)
+        .map_err(|_| "AES-GCM encryption failed".to_string())?;
+
+    let cek_b64 = b64.encode(&key);
+    let iv_b64 = b64.encode(&nonce);
+
+    // Zero the in-memory key
+    // (key is owned by GenericArray, dropped here)
+
+    Ok((cek_b64, iv_b64, ciphertext))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aes_gcm::aead::OsRng;
-    use aes_gcm::AeadCore;
-    use base64::Engine;
 
     #[test]
     fn round_trip() {
@@ -128,5 +153,25 @@ mod tests {
 
         let result = aes_gcm_decrypt(&cek_b64, &iv_b64, &enc_b64);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn encrypt_then_decrypt_round_trip() {
+        let plaintext = b"Sovereign encryption inside WASM!";
+
+        let (cek_b64, iv_b64, ciphertext) = aes_gcm_encrypt_raw(plaintext).unwrap();
+
+        let decrypted = aes_gcm_decrypt_raw(&cek_b64, &iv_b64, &ciphertext).unwrap();
+        assert_eq!(&decrypted, plaintext);
+    }
+
+    #[test]
+    fn encrypt_produces_different_output_each_call() {
+        let plaintext = b"same input twice";
+
+        let (_, _, ct1) = aes_gcm_encrypt_raw(plaintext).unwrap();
+        let (_, _, ct2) = aes_gcm_encrypt_raw(plaintext).unwrap();
+
+        assert_ne!(ct1, ct2, "two encryptions of the same plaintext must differ");
     }
 }

@@ -1103,19 +1103,22 @@ router.post('/lit/encrypt', authenticate, async (req: AuthenticatedRequest, res:
 
     logger.info(`[Lit] Encrypting ${dataBytes.length} bytes (two-layer: AES + Lit CEK)`);
 
-    // Layer 1: Generate CEK and AES-GCM encrypt the file
-    const crypto = await import('crypto');
-    const cek = crypto.randomBytes(32);
-    const iv = crypto.randomBytes(12);
-    const cipher = crypto.createCipheriv('aes-256-gcm', cek, iv);
-    const encrypted = Buffer.concat([cipher.update(dataBytes), cipher.final()]);
-    const authTag = cipher.getAuthTag();
-    const encryptedWithTag = Buffer.concat([encrypted, authTag]);
+    // Layer 1: AES-256-GCM encrypt inside WASM — plaintext never touches Node.js memory
+    const wasmBinary = await loadRendererBinary();
+    const wasmRuntime = getWASMRuntime();
+    const wasmEncryptResult = await wasmRuntime.executeEncrypt(wasmBinary, dataBytes, { timeoutMs: 60000 });
 
-    logger.info(`[Lit] AES-GCM encrypted: ${dataBytes.length} → ${encryptedWithTag.length} bytes`);
+    if (!wasmEncryptResult.success || !wasmEncryptResult.encryptedBytes || !wasmEncryptResult.cekBase64 || !wasmEncryptResult.ivBase64) {
+      throw new Error(`WASM encrypt failed: ${wasmEncryptResult.error || 'no output'}`);
+    }
+
+    const encryptedWithTag = wasmEncryptResult.encryptedBytes;
+    const cekBase64 = wasmEncryptResult.cekBase64;
+    const ivBase64 = wasmEncryptResult.ivBase64;
+
+    logger.info(`[Lit] AES-GCM encrypted via WASM: ${dataBytes.length} → ${encryptedWithTag.length} bytes (${wasmEncryptResult.executionTimeMs}ms)`);
 
     // Layer 2: Lit-encrypt only the raw CEK (32 bytes — well under 4MB limit)
-    const cekBase64 = cek.toString('base64');
     let litCiphertext: string;
     let dataToEncryptHash: string;
     let litBackend: 'chipotle' | 'datil';
@@ -1129,7 +1132,7 @@ router.post('/lit/encrypt', authenticate, async (req: AuthenticatedRequest, res:
       litCiphertext = chipotleResult.ciphertext;
       dataToEncryptHash = chipotleResult.dataToEncryptHash;
       litBackend = 'chipotle';
-      logger.info(`[Lit] CEK encrypted via Chipotle PKP-AES (${cek.length} bytes). Hash: ${dataToEncryptHash?.substring(0, 20)}...`);
+      logger.info(`[Lit] CEK encrypted via Chipotle PKP-AES. Hash: ${dataToEncryptHash?.substring(0, 20)}...`);
     } else {
       const client = await getLitClient();
       const conditions = buildSelfRefConditions(effectiveActionCid);
@@ -1140,7 +1143,7 @@ router.post('/lit/encrypt', authenticate, async (req: AuthenticatedRequest, res:
       litCiphertext = encryptResult.ciphertext;
       dataToEncryptHash = encryptResult.dataToEncryptHash;
       litBackend = 'datil';
-      logger.info(`[Lit] CEK encrypted via Datil BLS (${cek.length} bytes). Hash: ${dataToEncryptHash?.substring(0, 20)}...`);
+      logger.info(`[Lit] CEK encrypted via Datil BLS. Hash: ${dataToEncryptHash?.substring(0, 20)}...`);
     }
 
     res.json({
@@ -1150,7 +1153,7 @@ router.post('/lit/encrypt', authenticate, async (req: AuthenticatedRequest, res:
       actionCid: effectiveActionCid,
       conditions: LIT_BACKEND === 'datil' ? buildSelfRefConditions(effectiveActionCid) : [],
       encryptedData: encryptedWithTag.toString('base64'),
-      iv: iv.toString('base64'),
+      iv: ivBase64,
       litBackend,
     });
   } catch (error: any) {

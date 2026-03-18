@@ -5,18 +5,22 @@
 //!
 //! ## Operating modes
 //!
-//! | Mode        | Assets                  | Output            |
-//! |-------------|-------------------------|-------------------|
-//! | render      | image, text, pdf        | JPEG/WebP pixels  |
-//! | stream      | audio, video            | chunked segments  |
-//! | interactive | games, dApps, wasm-apps | frames via bridge |
+//! | Mode          | Assets                  | Output            |
+//! |---------------|-------------------------|-------------------|
+//! | render        | image, text, pdf        | JPEG/WebP pixels  |
+//! | decrypt_only  | any                     | raw plaintext     |
+//! | encrypt_only  | any                     | CEK+IV+ciphertext |
+//! | stream        | audio, video            | chunked segments  |
+//! | interactive   | games, dApps, wasm-apps | frames via bridge |
 //!
 //! ## MemFS interface (used by WASMRuntime.ts)
 //!
 //! Input:  /input/command.json  (render parameters including CEK)
 //!         /input/encrypted.bin (raw encrypted content bytes)
+//!         /input/plaintext.bin (raw plaintext bytes — encrypt_only mode)
 //! Output: /output/result.json  (success, content_type, total_pages, error)
 //!         /output/rendered.bin (raw rendered pixel bytes — JPEG/WebP/PNG)
+//!         /output/encrypted.bin (raw ciphertext — encrypt_only mode)
 
 mod decrypt;
 #[cfg(feature = "image-render")]
@@ -106,8 +110,14 @@ fn process_files_inner(command_json: &str, encrypted_bytes: &[u8]) -> (RenderRes
         Err(e) => return (RenderResult::error(format!("invalid command: {e}")), None),
     };
 
+    // Encrypt-only mode: generate CEK+IV, encrypt the input bytes, return ciphertext.
+    // The input is read from /input/plaintext.bin (passed as `encrypted_bytes` by MemFS convention)
+    // but interpreted as plaintext in this mode.
+    if cmd.mode.as_deref() == Some("encrypt_only") {
+        return process_encrypt_only(encrypted_bytes);
+    }
+
     // Decrypt-only mode: decrypt and return raw plaintext bytes (no rendering).
-    // Used by the Node.js fallback path to isolate AES-GCM from Node.js crypto.
     if cmd.mode.as_deref() == Some("decrypt_only") {
         return process_decrypt_only(&cmd, encrypted_bytes);
     }
@@ -146,6 +156,27 @@ fn process_decrypt_only(cmd: &RenderCommand, encrypted_bytes: &[u8]) -> (RenderR
         },
         Some(plaintext),
     )
+}
+
+/// Encrypt-only: generate random CEK + IV, AES-GCM encrypt inside WASM.
+///
+/// Returns result JSON containing cek_b64 and iv_b64, plus the ciphertext bytes.
+/// The CEK never leaves WASM memory — the caller reads it from result.json.
+fn process_encrypt_only(plaintext_bytes: &[u8]) -> (RenderResult, Option<Vec<u8>>) {
+    let (cek_b64, iv_b64, ciphertext) = match decrypt::aes_gcm_encrypt_raw(plaintext_bytes) {
+        Ok(t) => t,
+        Err(e) => return (RenderResult::error(format!("encrypt failed: {e}")), None),
+    };
+
+    let size = ciphertext.len();
+    let result = RenderResult {
+        success: true,
+        error: None,
+        content_type: Some(format!("cek_b64={cek_b64};iv_b64={iv_b64}")),
+        total_pages: None,
+        output_size: Some(size),
+    };
+    (result, Some(ciphertext))
 }
 
 fn route_render_raw(cmd: &RenderCommand, plaintext: &[u8]) -> (RenderResult, Option<Vec<u8>>) {

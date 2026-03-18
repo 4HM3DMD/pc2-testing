@@ -847,6 +847,100 @@ export class WASMRuntime {
     }
 
     /**
+     * AES-256-GCM encrypt inside WASM. Generates random CEK+IV,
+     * encrypts plaintext, returns ciphertext + CEK + IV.
+     * The plaintext never leaves WASM linear memory.
+     */
+    async executeEncrypt(
+        wasmBinary: ArrayBuffer | Uint8Array,
+        plaintextBytes: Buffer,
+        options?: { timeoutMs?: number },
+    ): Promise<{ success: boolean; encryptedBytes: Buffer | null; cekBase64: string | null; ivBase64: string | null; error?: string; executionTimeMs: number }> {
+        const timeoutMs = options?.timeoutMs ?? this.defaultTimeoutMs;
+        const startTime = Date.now();
+
+        try {
+            await this.acquireExecutionSlot();
+        } catch (error: any) {
+            return { success: false, encryptedBytes: null, cekBase64: null, ivBase64: null, error: `Queue error: ${error.message}`, executionTimeMs: Date.now() - startTime };
+        }
+
+        try {
+            if (!this.initialized) await this.initialize();
+            this.clearMemFS();
+
+            const command = {
+                cek_b64: '',
+                iv_b64: '',
+                mime_type: 'application/octet-stream',
+                mode: 'encrypt_only',
+            };
+
+            this.writeToMemFS('/input/command.json', Buffer.from(JSON.stringify(command), 'utf-8'));
+            this.writeToMemFS('/input/plaintext.bin', plaintextBytes);
+
+            logger.info(`[WASMRuntime] Encrypt input: plaintext=${plaintextBytes.length}B`);
+
+            const wasiResult = await this.executeWASIStart(wasmBinary, timeoutMs);
+            if (!wasiResult.success) {
+                return { success: false, encryptedBytes: null, cekBase64: null, ivBase64: null, error: wasiResult.error ?? 'WASI execution failed', executionTimeMs: Date.now() - startTime };
+            }
+
+            const outputFs = wasiResult.wasiFs;
+            let resultJson: string | null = null;
+            if (outputFs) {
+                const bytes = this.readFromSpecificMemFS(outputFs, '/output/result.json');
+                if (bytes) resultJson = new TextDecoder().decode(bytes);
+            }
+            if (!resultJson) {
+                const bytes = this.readFromMemFS('/output/result.json');
+                if (bytes) resultJson = new TextDecoder().decode(bytes);
+            }
+            if (!resultJson && wasiResult.stdout) resultJson = wasiResult.stdout;
+            if (!resultJson) {
+                return { success: false, encryptedBytes: null, cekBase64: null, ivBase64: null, error: 'Encrypt produced no output', executionTimeMs: Date.now() - startTime };
+            }
+
+            let result: any;
+            try { result = JSON.parse(resultJson); } catch { result = { success: false, error: 'Invalid result JSON' }; }
+
+            if (!result.success) {
+                return { success: false, encryptedBytes: null, cekBase64: null, ivBase64: null, error: result.error, executionTimeMs: Date.now() - startTime };
+            }
+
+            // Parse CEK and IV from content_type field (format: "cek_b64=...;iv_b64=...")
+            let cekBase64: string | null = null;
+            let ivBase64: string | null = null;
+            if (result.content_type) {
+                const parts = (result.content_type as string).split(';');
+                for (const part of parts) {
+                    const [key, val] = part.split('=');
+                    if (key === 'cek_b64') cekBase64 = val;
+                    if (key === 'iv_b64') ivBase64 = val;
+                }
+            }
+
+            let encryptedBytes: Buffer | null = null;
+            let raw: Uint8Array | null = null;
+            if (outputFs) raw = this.readFromSpecificMemFS(outputFs, '/output/encrypted.bin');
+            if (!raw) raw = this.readFromMemFS('/output/encrypted.bin');
+            if (raw) {
+                encryptedBytes = Buffer.from(raw);
+                logger.info(`[WASMRuntime] Encrypt output: ${raw.length} bytes`);
+            } else {
+                logger.warn('[WASMRuntime] Encrypt: result.success=true but no /output/encrypted.bin found');
+            }
+
+            return { success: true, encryptedBytes, cekBase64, ivBase64, executionTimeMs: Date.now() - startTime };
+        } catch (error: any) {
+            return { success: false, encryptedBytes: null, cekBase64: null, ivBase64: null, error: error.message, executionTimeMs: Date.now() - startTime };
+        } finally {
+            this.clearMemFS();
+            this.releaseExecutionSlot();
+        }
+    }
+
+    /**
      * Read a file from a specific MemFS instance (used to read from WASI's MemFS).
      */
     private readFromSpecificMemFS(memFs: MemFS, wasiPath: string): Uint8Array | null {
