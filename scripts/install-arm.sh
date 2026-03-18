@@ -236,7 +236,7 @@ install_prerequisites() {
 
     sudo apt-get update -qq
 
-    sudo apt-get install -y -qq git curl build-essential python3 \
+    sudo apt-get install -y -qq git curl build-essential python3 ffmpeg \
         libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev \
         pkg-config
 
@@ -249,6 +249,17 @@ install_prerequisites() {
     # Also set via systemd for PM2-managed processes
     if ! grep -q "DefaultLimitNOFILE=65536" /etc/systemd/system.conf 2>/dev/null; then
         sudo sh -c 'echo "DefaultLimitNOFILE=65536" >> /etc/systemd/system.conf'
+    fi
+
+    # Report FFmpeg codec support
+    if command -v ffmpeg &>/dev/null; then
+        if ffmpeg -encoders 2>&1 | grep -q libsvtav1; then
+            print_ok "FFmpeg installed (AV1 + H.264 encoding available)"
+        else
+            print_ok "FFmpeg installed (H.264 encoding available)"
+        fi
+    else
+        print_warn "FFmpeg not available — media encoding will not work"
     fi
 
     print_ok "Prerequisites installed"
@@ -643,17 +654,12 @@ install_voice_tools() {
     echo ""
     print_step "Installing voice AI tools (Whisper STT + Piper TTS)..."
 
-    # ffmpeg (required for audio format conversion)
+    # ffmpeg (already installed in prerequisites, verify it's available)
     if command -v ffmpeg &>/dev/null; then
         print_ok "ffmpeg already installed"
     else
-        sudo apt-get install -y -qq ffmpeg
-        if command -v ffmpeg &>/dev/null; then
-            print_ok "ffmpeg installed"
-        else
-            print_warn "ffmpeg install failed — voice pipeline will not work"
-            return
-        fi
+        print_warn "ffmpeg not found — voice pipeline will not work"
+        return
     fi
 
     # ── Whisper.cpp (STT) ──

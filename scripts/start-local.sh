@@ -172,11 +172,12 @@ install_build_deps() {
         SUDO=""
     fi
     
-    # Install build-essential, python3, and native module dependencies
+    # Install build-essential, python3, ffmpeg, and native module dependencies
     $SUDO apt-get update -qq
     $SUDO apt-get install -y -qq \
         build-essential \
         python3 \
+        ffmpeg \
         libcairo2-dev \
         libpango1.0-dev \
         libjpeg-dev \
@@ -200,6 +201,23 @@ main() {
     # Install build dependencies for native modules (Debian/Ubuntu only)
     # This must happen BEFORE npm install to ensure native modules compile correctly
     install_build_deps
+    
+    # Install FFmpeg (needed for media encoding pipeline — AV1/H.264 transcoding)
+    if ! command -v ffmpeg &> /dev/null; then
+        echo -e "${CYAN}Installing FFmpeg (media encoding)...${NC}"
+        if [[ "$OS" == "macos" ]]; then
+            if command -v brew &> /dev/null; then
+                brew install ffmpeg 2>&1 || true
+            else
+                echo -e "${YELLOW}FFmpeg not found. Install via: brew install ffmpeg${NC}"
+            fi
+        elif command -v apt-get &> /dev/null; then
+            echo -e "${CYAN}FFmpeg will be installed with build dependencies${NC}"
+        fi
+    fi
+    if command -v ffmpeg &> /dev/null; then
+        echo -e "${GREEN}✓ FFmpeg available$(ffmpeg -encoders 2>&1 | grep -q libsvtav1 && echo ' (AV1 + H.264)' || echo ' (H.264)')${NC}"
+    fi
     
     # Check and install Node.js
     if ! check_node; then
