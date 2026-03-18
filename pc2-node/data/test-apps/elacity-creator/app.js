@@ -326,6 +326,17 @@
     dom.filePreview.classList.remove('hidden');
     dom.btnToStep2.disabled = false;
 
+    // Show media encoding badge for video/audio files
+    var existingBadge = document.getElementById('media-encode-badge');
+    if (existingBadge) existingBadge.remove();
+    if (isMedia) {
+      var badge = document.createElement('div');
+      badge.id = 'media-encode-badge';
+      badge.style.cssText = 'margin-top: 8px; padding: 6px 12px; background: linear-gradient(135deg, #6366f1, #8b5cf6); color: white; border-radius: 6px; font-size: 12px; display: flex; align-items: center; gap: 6px;';
+      badge.innerHTML = '<span style="font-size: 14px;">&#9881;</span> Media Encoding Pipeline — will transcode, DASH package, CENC encrypt & upload to IPFS';
+      dom.filePreview.appendChild(badge);
+    }
+
     // For media files, don't read into memory — the backend handles the file directly
     if (!isMedia) {
       var reader = new FileReader();
@@ -333,8 +344,10 @@
         state.fileBytes = new Uint8Array(reader.result);
       };
       reader.readAsArrayBuffer(file);
+      state.isMediaFile = false;
     } else {
       state.fileBytes = null;
+      state.isMediaFile = true;
     }
 
     if (!dom.assetTitle.value) {
@@ -346,10 +359,13 @@
   function clearFile() {
     state.selectedFile = null;
     state.fileBytes = null;
+    state.isMediaFile = false;
     dom.dropZone.classList.remove('hidden');
     dom.filePreview.classList.add('hidden');
     dom.btnToStep2.disabled = true;
     dom.fileInput.value = '';
+    var existingBadge = document.getElementById('media-encode-badge');
+    if (existingBadge) existingBadge.remove();
   }
 
   // ── Form validation ───────────────────────────────────
@@ -369,8 +385,100 @@
   function setProgStep(id, status, cls) {
     var el = document.getElementById(id);
     var statusEl = document.getElementById(id + '-status');
+    if (!el || !statusEl) return;
     el.className = 'progress-step ' + (cls || '');
     statusEl.textContent = status;
+  }
+
+  function swapProgressStepsForMedia() {
+    var mediaSteps = [
+      { id: 'prog-connect', icon: '🎬', label: 'Upload to encoder' },
+      { id: 'prog-encrypt', icon: '⚙️', label: 'Encode, encrypt & package' },
+      { id: 'prog-upload-asset', icon: '🌐', label: 'Finalize IPFS' },
+    ];
+    mediaSteps.forEach(function (step) {
+      var el = document.getElementById(step.id);
+      if (!el) return;
+      var iconEl = el.querySelector('.prog-icon');
+      var labelEl = el.querySelector('.prog-label');
+      if (iconEl) iconEl.textContent = step.icon;
+      if (labelEl) labelEl.textContent = step.label;
+    });
+    var detail = document.getElementById('media-pipeline-detail');
+    if (detail) detail.style.display = 'block';
+  }
+
+  function restoreProgressStepsDefault() {
+    var defaultSteps = [
+      { id: 'prog-connect', icon: '🔌', label: 'Connect to Lit Protocol' },
+      { id: 'prog-encrypt', icon: '🔐', label: 'Encrypt asset with ACCESS_TOKEN conditions' },
+      { id: 'prog-upload-asset', icon: '📦', label: 'Upload encrypted asset to IPFS' },
+    ];
+    defaultSteps.forEach(function (step) {
+      var el = document.getElementById(step.id);
+      if (!el) return;
+      var iconEl = el.querySelector('.prog-icon');
+      var labelEl = el.querySelector('.prog-label');
+      if (iconEl) iconEl.textContent = step.icon;
+      if (labelEl) labelEl.textContent = step.label;
+    });
+    var detail = document.getElementById('media-pipeline-detail');
+    if (detail) detail.style.display = 'none';
+    resetMediaSubSteps();
+  }
+
+  var MEDIA_SUB_STEPS = ['analyze', 'transcode', 'fragment', 'encrypt', 'upload'];
+  var STAGE_TO_SUB = {
+    analyzing: 'analyze',
+    transcoding: 'transcode',
+    fragmenting: 'fragment',
+    packaging: 'encrypt',
+    uploading: 'upload',
+  };
+  var STAGE_PROGRESS = { analyzing: 5, transcoding: 60, fragmenting: 75, packaging: 90, uploading: 95, complete: 100 };
+
+  function setMediaSubStep(subId, state, info) {
+    var iconEl = document.getElementById('media-sub-' + subId + '-icon');
+    var infoEl = document.getElementById('media-sub-' + subId + '-info');
+    var rowEl = document.getElementById('media-sub-' + subId);
+    var barEl = document.getElementById('media-sub-' + subId + '-bar');
+    if (!iconEl) return;
+    if (state === 'done') {
+      iconEl.textContent = '✓'; iconEl.style.color = '#22c55e';
+      if (rowEl) rowEl.style.color = '#e2e8f0';
+      if (barEl) { barEl.style.width = '100%'; barEl.style.background = '#22c55e'; }
+    } else if (state === 'active') {
+      iconEl.textContent = '◉'; iconEl.style.color = '#8b5cf6';
+      if (rowEl) rowEl.style.color = '#e2e8f0';
+      if (barEl) { barEl.style.width = '30%'; barEl.style.background = '#6366f1'; }
+    } else if (state === 'error') {
+      iconEl.textContent = '✗'; iconEl.style.color = '#ef4444';
+      if (rowEl) rowEl.style.color = '#fca5a5';
+      if (barEl) { barEl.style.width = '100%'; barEl.style.background = '#ef4444'; }
+    } else {
+      iconEl.textContent = '○'; iconEl.style.color = '#64748b';
+      if (rowEl) rowEl.style.color = '#94a3b8';
+      if (barEl) { barEl.style.width = '0%'; barEl.style.background = '#6366f1'; }
+    }
+    if (infoEl) infoEl.textContent = info || '';
+  }
+
+  function setMediaProgress(pct, elapsed) {
+    var bar = document.getElementById('media-progress-bar');
+    var pctEl = document.getElementById('media-progress-pct');
+    var elapsedEl = document.getElementById('media-elapsed');
+    if (bar) bar.style.width = Math.min(pct, 100) + '%';
+    if (pctEl) pctEl.textContent = Math.round(pct) + '%';
+    if (elapsedEl && elapsed > 0) {
+      var mins = Math.floor(elapsed / 60);
+      var secs = elapsed % 60;
+      elapsedEl.textContent = 'Elapsed: ' + (mins > 0 ? mins + 'm ' : '') + secs + 's';
+    }
+  }
+
+  function resetMediaSubSteps() {
+    MEDIA_SUB_STEPS.forEach(function (id) { setMediaSubStep(id, 'pending', ''); });
+    setMediaProgress(0, 0);
   }
 
   function uint8ToBase64(bytes) {
@@ -564,20 +672,6 @@
     };
     if (value && BigInt(value) > 0n) {
       txParams.value = '0x' + BigInt(value).toString(16);
-    }
-
-    // Pre-estimate gas so MetaMask skips its internal simulation.
-    // This avoids the "Estimated changes: Unavailable" red review screen.
-    try {
-      var gasEstimate = await window.ethereum.request({
-        method: 'eth_estimateGas',
-        params: [txParams],
-      });
-      // Add 20% buffer to estimated gas
-      var gasHex = '0x' + (Math.ceil(parseInt(gasEstimate, 16) * 1.2)).toString(16);
-      txParams.gas = gasHex;
-    } catch (estErr) {
-      console.warn('[Creator] Gas estimation failed, letting MetaMask estimate:', estErr.message);
     }
 
     var txHash = await window.ethereum.request({
@@ -961,7 +1055,9 @@
 
       if (isMediaFile) {
         // ── Media Path: Encode + CENC encrypt via backend pipeline ──
-        setProgStep('prog-connect', 'Preparing media encoder...', 'active');
+        swapProgressStepsForMedia();
+
+        setProgStep('prog-connect', 'Uploading file to encoder...', 'active');
         console.log('[Creator] Media file detected (' + state.selectedFile.type + '), routing through /api/media/encode');
 
         var formData = new FormData();
@@ -978,13 +1074,15 @@
         var encodeData = await encodeResp.json();
         var jobId = encodeData.jobId;
         console.log('[Creator] Encode job started:', jobId);
-        setProgStep('prog-connect', 'Encoding started', 'done');
-        setProgStep('prog-encrypt', 'Encoding & encrypting media...', 'active');
+        setProgStep('prog-connect', 'Uploaded — job ' + jobId.substring(0, 8) + '...', 'done');
+        setProgStep('prog-encrypt', 'Starting...', 'active');
+        setMediaSubStep('analyze', 'active', '');
 
-        // Poll for completion
-        var pollInterval = 2000;
-        var maxPollTime = 4 * 60 * 60 * 1000; // 4 hours
+        // Poll for completion with detailed sub-step display
+        var pollInterval = 1500;
+        var maxPollTime = 4 * 60 * 60 * 1000;
         var pollStart = Date.now();
+        var lastStage = '';
 
         while (true) {
           await new Promise(function (r) { setTimeout(r, pollInterval); });
@@ -993,35 +1091,89 @@
           var statusData = await statusResp.json();
 
           if (statusData.status === 'error') {
+            var failedSub = STAGE_TO_SUB[lastStage] || 'analyze';
+            setMediaSubStep(failedSub, 'error', statusData.error || 'failed');
             throw new Error('Media encoding failed: ' + (statusData.error || 'unknown error'));
           }
           if (statusData.status === 'complete') {
             mediaEncodeResult = statusData.result;
+            // Mark all remaining as done
+            MEDIA_SUB_STEPS.forEach(function (id) { setMediaSubStep(id, 'done', ''); });
+            setMediaProgress(100, Math.round((Date.now() - pollStart) / 1000));
+            setProgStep('prog-encrypt', 'Complete', 'done');
             console.log('[Creator] Media encoding complete:', mediaEncodeResult);
             break;
           }
 
-          // Update progress display
+          // Track stage transitions
           var stage = statusData.progress?.stage || statusData.status;
-          var speed = statusData.progress?.speed || '';
-          var timeStr = statusData.progress?.time || '';
-          setProgStep('prog-encrypt', 'Encoding: ' + stage + (speed ? ' (' + speed + ')' : '') + (timeStr ? ' [' + timeStr + ']' : ''), 'active');
+          var elapsed = Math.round((Date.now() - pollStart) / 1000);
+          var pct = STAGE_PROGRESS[stage] || 0;
+
+          // If stage changed, mark ALL prior sub-steps as done (not just the
+          // immediate predecessor) to handle fast transitions between polls.
+          if (stage !== lastStage) {
+            var curSubIdx = MEDIA_SUB_STEPS.indexOf(STAGE_TO_SUB[stage]);
+            if (curSubIdx > 0) {
+              for (var si = 0; si < curSubIdx; si++) {
+                setMediaSubStep(MEDIA_SUB_STEPS[si], 'done', '');
+              }
+            }
+          }
+          var curSub = STAGE_TO_SUB[stage];
+          if (curSub) {
+            var speed = statusData.progress?.speed || '';
+            var fps = statusData.progress?.fps || 0;
+            var timeStr = statusData.progress?.time || '';
+            var subBarPct = 50;
+
+            var subInfo = '';
+            if (stage === 'transcoding') {
+              var parts = [];
+              if (speed && speed !== '0x') parts.push(speed);
+              if (fps > 0) parts.push(Math.round(fps) + ' fps');
+              if (timeStr && timeStr !== '00:00:00.00') parts.push(timeStr);
+              subInfo = parts.join(' · ');
+
+              if (timeStr && timeStr !== '00:00:00.00') {
+                var tParts = timeStr.split(':');
+                var tSec = parseInt(tParts[0]) * 3600 + parseInt(tParts[1]) * 60 + parseFloat(tParts[2]);
+                var estPct = Math.min(5 + (tSec / 120) * 55, 58);
+                pct = Math.max(pct, estPct);
+                subBarPct = Math.min(Math.round((tSec / 120) * 100), 95);
+              }
+            }
+
+            setMediaSubStep(curSub, 'active', subInfo);
+            var subBarEl = document.getElementById('media-sub-' + curSub + '-bar');
+            if (subBarEl) subBarEl.style.width = subBarPct + '%';
+          }
+
+          lastStage = stage;
+          setMediaProgress(pct, elapsed);
+
+          // Header status
+          var headerLabel = stage === 'transcoding' ? 'Transcoding...' :
+                           stage === 'analyzing' ? 'Analyzing...' :
+                           stage === 'fragmenting' ? 'Fragmenting...' :
+                           stage === 'packaging' ? 'Encrypting & packaging...' :
+                           stage === 'uploading' ? 'Uploading to IPFS...' : 'Processing...';
+          setProgStep('prog-encrypt', headerLabel, 'active');
 
           if (Date.now() - pollStart > maxPollTime) {
             throw new Error('Media encoding timed out after ' + (maxPollTime / 3600000) + ' hours');
           }
 
-          // Back off slowly
-          if (pollInterval < 10000) pollInterval = Math.min(pollInterval + 500, 10000);
+          if (pollInterval < 3000) pollInterval = Math.min(pollInterval + 300, 3000);
         }
 
         // Media pipeline produces its own CID, CEK, etc.
         encryptResult = {
           encrypted: null,
-          dataToEncryptHash: '',
+          dataToEncryptHash: mediaEncodeResult.dataToEncryptHash || '',
           actionCid: '',
           conditions: null,
-          litCiphertext: '',
+          litCiphertext: mediaEncodeResult.ciphertext || '',
           iv: '',
           litBackend: 'chipotle',
         };
@@ -1310,13 +1462,16 @@
       if (channel && ethers.isAddress(channel)) {
         setProgStep('prog-mint', 'Preparing...', 'active');
 
+        // Only switch chain if not already on Base (avoids MetaMask popup)
         try {
-          await window.ethereum.request({
-            method: 'wallet_switchEthereumChain',
-            params: [{ chainId: BASE_CHAIN_HEX }],
-          });
-          // Allow MetaMask internal state to settle after chain switch
-          await new Promise(function (r) { setTimeout(r, 1500); });
+          var currentChainId = await window.ethereum.request({ method: 'eth_chainId' });
+          if (currentChainId !== BASE_CHAIN_HEX) {
+            await window.ethereum.request({
+              method: 'wallet_switchEthereumChain',
+              params: [{ chainId: BASE_CHAIN_HEX }],
+            });
+            await new Promise(function (r) { setTimeout(r, 1500); });
+          }
         } catch (switchErr) {
           console.warn('[Creator] Chain switch failed (may already be on Base):', switchErr.message);
         }
@@ -1501,6 +1656,8 @@
     PROGRESS_STEPS.forEach(function (id) {
       setProgStep(id, 'Waiting...', '');
     });
+    restoreProgressStepsDefault();
+    resetMediaSubSteps();
 
     goToStep(1);
   }
@@ -1677,14 +1834,22 @@
     });
 
     // Step navigation
-    dom.btnToStep2.addEventListener('click', function () { goToStep(2); });
+    dom.btnToStep2.addEventListener('click', function () {
+      goToStep(2);
+      var btn = document.getElementById('btn-to-step-3');
+      if (btn && state.isMediaFile) {
+        btn.textContent = 'Encode, Upload & Mint';
+      } else if (btn) {
+        btn.textContent = 'Encrypt, Upload & Mint';
+      }
+    });
     dom.btnBackTo1.addEventListener('click', function () { goToStep(1); });
     dom.btnToStep3.addEventListener('click', function () {
       if (!state.walletAddress) {
         showToast('Connect your wallet first', 'error');
         return;
       }
-      if (!state.fileBytes) {
+      if (!state.fileBytes && !state.isMediaFile) {
         showToast('File not loaded yet — please wait', 'error');
         return;
       }

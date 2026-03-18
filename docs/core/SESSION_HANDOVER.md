@@ -11,7 +11,7 @@
 **Release:** v1.1.0 tagged and released on 2026-03-03 (134 commits squash-merged to main)
 **Launcher:** v1.1.1 released — version display, one-click updates, full networking install
 **DAO Proposal:** Live at https://elastos.com/proposals/69a24f49247f130078064edd
-**Last Commit:** feat: LIT_BACKEND feature flag for datil/chipotle dual-mode rollback
+**Last Commit:** feat: media encoding pipeline (transcode→fragment→CENC→DASH→IPFS), IPC duplicate fix
 
 ### What Just Shipped (v1.1.0 on main)
 
@@ -348,6 +348,56 @@ Full technical spec at `docs/core/ACCESS_PACKAGE_SPEC.md`. Key decisions:
 - [x] **PC2 Media Runtime** — Rust WASM `cenc-decrypt` crate (AES-128-CTR per-sample, 16-byte IVs), MSE player (no EME/CDM), DRM stripping (init+segment), two-phase Lit auth, SA-aware PSSH selection. **End-to-end DASH video playback verified** *(completed Mar 16)*
 - [x] Lit Chipotle migration — Phases 0-5 complete (Mar 13-17). `chipotle-client.ts` replaces Lit SDK. `LIT_BACKEND=chipotle|datil` feature flag. **E2E round-trip verified** (Mar 17): encrypt + decrypt + plaintext match confirmed.
 
+#### Media Encoding Pipeline — WORKING (Pending Lit API Recovery) (Mar 17-18)
+
+Built a complete local media encoding pipeline for the Creator Dashboard. Video/audio files uploaded by creators are transcoded, fragmented, CENC-encrypted, and packaged as DASH streams — all on the local PC2 node, no cloud dependency.
+
+**Key components built:**
+- `pc2-node/src/services/media/encoder.ts` — FFprobe analysis, transcode plan builder, FFmpeg execution. Adapts to hardware: NVIDIA GPU (av1_nvenc), SVT-AV1 (libsvtav1), x264 fallback. Audio-only path. Concurrency guard.
+- `pc2-node/src/services/media/bento4.ts` — Bento4 SDK management: discovers local installs or auto-downloads per-platform (linux-x64, darwin-x64, darwin-arm64). Manages `mp4fragment`, `mp4encrypt`, `mp4dash` binaries. Requires Python 3.
+- `pc2-node/src/services/media/dashPackager.ts` — Orchestrates DASH packaging: CEK generation (16-byte random), CEK encryption via Chipotle Lit Action, PSSH construction (Elacity custom system ID + dDRM metadata), mp4dash execution, IPFS upload via Helia `storeDirectory()`. Includes 5-attempt retry with exponential backoff for Lit API transient failures.
+- `pc2-node/src/api/media.ts` — Extended with `POST /api/media/encode` (multipart upload via Multer disk storage) and `GET /api/media/encode/status/:jobId` (polling). `runEncodePipeline` orchestrates encoder→bento4→dashPackager. Best-effort replication to Elacity IPFS for multi-node discoverability.
+- `pc2-node/src/api/rate-limit.ts` — Added `media_encode` scope (5 jobs/hour/wallet)
+- `pc2-node/src/api/audit.ts` — Added `media_encode` action to audit trail
+
+**Creator Dashboard UI (media-specific):**
+- File type detection (`video/*`, `audio/*`) with `isMediaFile` flag
+- 4 GB max file size for media (vs standard limit for other assets)
+- Large files skip FileReader (no browser memory loading)
+- Purple gradient "Media Encoding Pipeline" badge on file selection
+- Dynamic button text: "Encode, Upload & Mint" for media
+- Detailed sub-step progress panel: Analyze → Transcode → Fragment → CENC Encrypt → IPFS Upload
+- Each sub-step has inline progress bar (green when done, purple when active, red on error)
+- Live transcoding stats: speed multiplier, FPS, elapsed time
+- Weighted progress calculation across pipeline stages
+- Fast-transition handling: marks all prior sub-steps as done when new stage detected between polls
+
+**Chipotle media encryption:**
+- `pc2-node/data/lit-actions/media-encrypt-chipotle.js` — Lit Action for encrypting 16-byte CENC CEK via PKP-AES
+- `pc2-node/data/lit-actions/media-decrypt-chipotle.js` — Lit Action for decrypting CEK with on-chain access check
+- `recoverMediaCEK()` in media.ts updated for `litBackend: 'chipotle'` — direct CEK recovery (no ECDH envelope)
+- PSSH includes `litBackend` field for per-asset backend tracking
+
+**IPFS integration:**
+- `uploadDashToIPFS()` uses Helia `storeDirectory()` for correct UnixFS directory CIDs
+- `pinRemoteCID()` enhanced: local `fs.stat()` check for directories, instant recursive fetch for already-local content
+- Best-effort replication of individual DASH files to Elacity IPFS gateway for multi-node reachability
+
+**Critical bug fix — Duplicate wallet signatures (IPC):**
+- Root cause: Both `src/gui/src/IPC.js` and `pc2-node/src/wallet-bridge/pc2-wallet-bridge.js` independently listened for `pc2-wallet-rpc` messages and forwarded them to `window.ethereum`
+- Every wallet interaction (SIWE login, mint, approval, chain switch, play signatures) was sent to MetaMask TWICE ("1 of 2" popups)
+- Fix: `IPC.js` now explicitly ignores `pc2-wallet-rpc` and `pc2-wallet-ready` messages, deferring solely to `pc2-wallet-bridge.js`
+- Documentation warning added to `pc2-wallet-bridge.js` header
+
+**Other fixes:**
+- Removed explicit gas estimation from Creator `sendTx()` — MetaMask handles internally (fixed "Network fee: Unavailable" and "likely to fail")
+- Chain switch check before `wallet_switchEthereumChain` — prevents unnecessary MetaMask popup if already on Base
+- Market `handlePlay` skips `Wallet.signMessage` when `siweMessage` is null (Chipotle mode)
+- Market `onAccountChange` deduplication — prevents double SIWE login
+- `EncodeJob` interface returns `dataToEncryptHash` and `ciphertext` for correct minting `contentId`
+
+**Current status:** Pipeline works end-to-end through transcoding, fragmenting, and IPFS upload. CENC encryption step blocked by Lit Chipotle API outage (Phala TEE backend TLS failure). Retry mechanism in place — will recover automatically when Lit infrastructure comes back.
+
 **Known issues:**
 - Elacity frontend UA receipt parsing: `UAReceiptFetcher.enrichOperationsWithContracts` throws `TypeError` after successful on-chain purchase. Bug is in Elacity's frontend, not our code.
 - MPD parser error for image assets: Elacity's media player tries to parse image metadata as DASH manifest. Expected for non-video content.
@@ -429,16 +479,21 @@ Comprehensive player hardening and UX polish:
 | Audio | N/A (passthrough) | Decrypt + pass through |
 
 #### Next Up — Engineering Priorities
-1. ~~**Lit Chipotle migration**~~ — **DONE (Mar 13-17)** — Phases 0-5 complete. `chipotle-client.ts` REST module, storage.ts + media.ts migrated, `LIT_BACKEND` feature flag. **E2E round-trip verified** (encrypt via PC2 node → Chipotle PKP-AES → decrypt → plaintext matches). Double-base64 encoding bug fixed. On-chain access check working in TEE.
-2. ~~**End-to-end testing**~~ — **DONE (Mar 17)** — PC2 node started with `LIT_BACKEND=chipotle`, non-media encrypt/decrypt verified end-to-end. CEK clean 32-byte round-trip confirmed. Secure-view path reaches Chipotle TEE and performs on-chain access check.
-3. **Deploy updated Lit Action to IPFS** — `non-media-decrypt.js` has ethers v5 address checksum fix. New CID needed for production Chipotle.
-4. **P-256 ECDH unwrap to WASM (Phase E)** — conditional on Chipotle envelope format. If Chipotle returns CEK directly, this phase is eliminated.
-5. ~~**WASM crypto hardening (Phases A-C)**~~ — DONE (Mar 16). Branch: `feature/wasm-crypto-hardening`.
-6. ~~**WASM renderer hardening**~~ — DONE (Mar 16) — PDF, code, images, text all render inside WASM.
-7. ~~**Viewer UX enhancements**~~ — DONE (Mar 16) — zoom, pan, page nav, audio player, toolbar.
-8. **On-chain indexer prototype** — replace Elacity GraphQL dependency with event scanner (The Graph / custom)
-9. **Self-provisioned RLI tokens** — each node mints own capacity credits, removes Elacity wallet dependency
-10. **AI Model Marketplace alpha** — first non-media vertical: GGUF → encrypt → IPFS → ACCESS_TOKEN → decrypt → Ollama
+1. ~~**Lit Chipotle migration**~~ — **DONE (Mar 13-18)** — Phases 0-5 complete. Migrated to new `chipotle-dev` network. All Lit Action CIDs registered. Pinned encrypt action (`non-media-encrypt-chipotle.js`). Auto-provisioning from supernodes built. **E2E verified** (PDF, image, text — all decrypt via Chipotle on new platform).
+2. ~~**End-to-end testing**~~ — **DONE (Mar 18)** — Full Creator mint → buy → dDRM Viewer decrypt verified on new Lit dev network. WASM rendering, watermarks, on-chain access check all confirmed working.
+3. **Deploy supernode provisioning** — `/api/ddrm/provision` endpoint coded but NOT deployed to supernodes. See `docs/core/LIT_PRODUCTION_CHECKLIST.md` for deployment steps. **This is a v1.2.0 release blocker.**
+4. **Media pipeline on Chipotle** — Full encoding pipeline built and tested (transcode, fragment, IPFS upload all working). CENC encryption blocked by Lit Chipotle API outage (Phala TEE backend). Retry mechanism in place (5 attempts, exponential backoff). Will complete E2E once Lit recovers. See media encoding pipeline section above.
+5. **P-256 ECDH unwrap to WASM (Phase E)** — conditional on Chipotle envelope format. If Chipotle returns CEK directly, this phase is eliminated.
+6. **`cenc-encrypt` Rust WASM crate** — Symmetric counterpart to `cenc-decrypt`. AES-128-CTR encryption in WASM, replaces `mp4encrypt` Bento4 binary. Uses identical crypto primitives from `cenc-decrypt/cenc.rs`. Target: `wasm32-wasip1`.
+7. **`pssh-gen` Rust WASM crate** — PSSH box generator per ISO 23001-7. Produces binary PSSH boxes from Elacity dDRM metadata. Replaces JSON-based approach in `dashPackager.ts`.
+8. ~~**WASM crypto hardening (Phases A-C)**~~ — DONE (Mar 16). Branch: `feature/wasm-crypto-hardening`.
+9. ~~**WASM renderer hardening**~~ — DONE (Mar 16) — PDF, code, images, text all render inside WASM.
+10. ~~**Viewer UX enhancements**~~ — DONE (Mar 16) — zoom, pan, page nav, audio player, toolbar.
+11. **On-chain indexer prototype** — replace Elacity GraphQL dependency with event scanner (The Graph / custom)
+12. **Self-provisioned RLI tokens** — each node mints own capacity credits, removes Elacity wallet dependency
+13. **AI Model Marketplace alpha** — first non-media vertical: GGUF → encrypt → IPFS → ACCESS_TOKEN → decrypt → Ollama
+14. **dApp Store** — global decentralized app marketplace. DeFi protocols (Uniswap, Aave), games, productivity tools packaged as encrypted dApps. Purchase → decrypt → run locally on PC2 node. See `docs/core/ELACITY_UNIVERSAL_ASSET_STRATEGY.md`.
+15. **ElastOS Runtime convergence** — CTO's Runtime at RC4 (0.19.0-rc4). WASM + microVM capsule execution verified. dDRM WASM crates (`aes-gcm-decrypt`, `cenc-decrypt`) target same `wasm32-wasip1` as Runtime's Wasmtime. Convergence path: our renderers become capsules, dDRM becomes a Provider Capsule. See `docs/core/ARCHITECTURE_CONVERGENCE.md`.
 
 #### WASM Crypto Hardening — COMPLETED Phases A-C (Mar 16)
 
@@ -499,11 +554,15 @@ Branch: `feature/lit-chipotle-migration` (from `feature/wasm-crypto-hardening`)
 - Both paths operational — all Datil functions remain intact for rollback
 - `/lit/server-info` reports active backend + tier info
 
-**Chipotle Dashboard Setup:**
+**Chipotle Dashboard Setup (updated Mar 18 — new dev network):**
+- Dashboard: `https://dashboard.dev.litprotocol.com/`
 - Account key: *(stored locally in `data/.chipotle-account-key`, never committed)*
-- Usage key (Tier 1): *(stored locally in `data/.chipotle-api-key`, never committed)* (key name: `pc2-ddrm-full`, scoped to `elacity-ddrm` group)
-- Group: `elacity-ddrm` with `non-media-decrypt` CID registered
-- PKP: `0xa7a3b7344231df566f8b33bb846cfdf69bec2744` (Account Master Wallet, added to group via REST API)
+- Usage key (Tier 1): *(stored locally in `data/.chipotle-api-key`, never committed)* (key name: `pc2-ddrm-v3`, scoped to `elacity-ddrm` group)
+- Group: `elacity-ddrm` (group_id: 1) with encrypt + decrypt CIDs registered
+- PKP: `0x09bdfc8f8ec5a3bd2970497b930bd94839f22227` (Account Master Wallet, added to group via REST API)
+- IPFS Actions registered: `QmUdZUxe6BVoXiZcw4hE86YCHsgQVGEmgbN6sr7MhnL8pp` (encrypt), `QmfWksjQkuLxVGEZdHrbFKxUb2sL4K34bLYbD3mAKv2CZA` (decrypt)
+- Auto-provisioning: coded in `chipotle-client.ts`, gateway endpoint in `deploy/web-gateway/index.js` (**NOT deployed yet**)
+- Full details: `docs/core/CHIPOTLE_HANDOVER.md`
 
 **Remaining items:**
 - Deploy updated `non-media-decrypt.js` to IPFS (new CID due to ethers v5 fix)
@@ -536,9 +595,10 @@ scheme was used per asset.
 - Production recommendation: use `datil` for existing, `chipotle` for new encryption
 - `/lit/encrypt` response includes `litBackend` field for per-asset tracking
 
-**Dashboard config (Chipotle):**
-- Usage API key: `pc2-ddrm-full` → *(stored in `data/.chipotle-api-key`)*
-- Group: `elacity-ddrm` with PKP `0xa7a3b7344231df566f8b33bb846cfdf69bec2744` permitted
+**Dashboard config (Chipotle — see CHIPOTLE_HANDOVER.md for full details):**
+- Dashboard: `https://dashboard.dev.litprotocol.com/`
+- Usage API key: `pc2-ddrm-v3` → *(stored in `data/.chipotle-api-key`)*
+- Group: `elacity-ddrm` (group_id: 1) with PKP `0x09bdfc8f8ec5a3bd2970497b930bd94839f22227` permitted
 - Account key: *(stored in `data/.chipotle-account-key`, dashboard management only)*
 
 Chipotle TEE available `Lit.Actions` methods:
@@ -637,6 +697,7 @@ Chipotle TEE available `Lit.Actions` methods:
 - [dDRM Pipeline E2E](fd6755f0-d73c-4e41-8df3-0f57f15071a2) — @elacity-js/access, Creator Dashboard, Lit Action trust model (Path A), capacity credit auto-detection, decrypt endpoint, decentralization analysis. Also: hayro PDF rendering, WASM text fixes, Mint context menu, wallet bridge restore, Elacity branding, WASM crypto hardening Phases A-C, double-signature fix, TXT dimension cap, video autoplay, fMP4 strip+decrypt in Rust
 - [Secure Viewer & PDF](fd6755f0-d73c-4e41-8df3-0f57f15071a2) — secure viewer pipeline, PDF hybrid rendering, two-layer encryption fix, Lit Pinata/relayer integration, auto-decrypt, parallel pages, dDRM Viewer app, .ddrm.json capsules, WASM renderer, GUI integration
 - [Media Runtime E2E](fd6755f0-d73c-4e41-8df3-0f57f15071a2) — server-side DASH/CENC decryption pipeline, Rust WASM cenc-decrypt crate, MSE player, DRM stripping (init+segment), 16-byte IV fix, Smart Account PSSH, two-phase Lit auth
+- [Media Encoding Pipeline](current) — Local media encoding pipeline (FFmpeg→Bento4→CENC→DASH→IPFS), Chipotle CEK encryption, Creator Dashboard media UI, IPC duplicate wallet fix, MetaMask gas estimation fix
 
 ---
 
@@ -728,6 +789,18 @@ Chipotle TEE available `Lit.Actions` methods:
 | `pc2-node/wasm-renderer/Cargo.toml` | Rust crate — AES-GCM decrypt + image rendering in WASM linear memory |
 | `pc2-node/wasm-apps/ddrm-renderer/ddrm-renderer.wasm` | Compiled WASM binary (wasm32-wasip1) |
 | `pc2-node/src/services/wasm/WASMRuntime.ts` | Node.js WASI host — @wasmer/wasi + MemFS orchestration (888 lines) |
+
+#### Media Encoding Pipeline (Mar 17-18)
+| File | Purpose |
+|------|---------|
+| `pc2-node/src/services/media/encoder.ts` | FFprobe analysis, transcode plans, FFmpeg execution (GPU/CPU adaptive) |
+| `pc2-node/src/services/media/bento4.ts` | Bento4 SDK management — auto-download, platform detection, Python 3 check |
+| `pc2-node/src/services/media/dashPackager.ts` | CEK generation, Chipotle encryption, PSSH construction, mp4dash, IPFS upload |
+| `pc2-node/src/api/media.ts` | Media encode/status endpoints, `runEncodePipeline` orchestrator, Chipotle CEK recovery |
+| `pc2-node/data/lit-actions/media-encrypt-chipotle.js` | Lit Action for CEK encryption via PKP-AES |
+| `pc2-node/data/lit-actions/media-decrypt-chipotle.js` | Lit Action for CEK decryption with on-chain access check |
+| `pc2-node/data/test-apps/elacity-creator/app.js` | Creator Dashboard with media pipeline UI, progress tracking, sub-step bars |
+| `pc2-node/data/test-apps/elacity-creator/index.html` | HTML structure with media pipeline detail panel |
 
 ### Backend APIs
 | File | Purpose |

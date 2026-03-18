@@ -10,7 +10,7 @@
 import * as crypto from 'crypto';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { writeFileSync, existsSync, readdirSync, statSync, readFileSync } from 'fs';
+import { writeFileSync, existsSync, readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { logger } from '../../utils/logger.js';
 import { encryptWithLitAction, buildSelfRefConditions, type EncryptResult } from '../../api/chipotle-client.js';
@@ -66,16 +66,36 @@ export function generateCEK(): { cek: Buffer; kid: string } {
 export async function encryptMediaCEK(cek: Buffer): Promise<EncryptResult> {
   const cekBase64 = cek.toString('base64');
   const dataToEncrypt = new TextEncoder().encode(cekBase64);
-
   const conditions = buildSelfRefConditions(MEDIA_ENCRYPT_ACTION_CID);
 
-  const result = await encryptWithLitAction({
-    dataToEncrypt,
-    accessControlConditions: conditions,
-  });
-
-  logger.info(`[DASHPackager] CEK encrypted via Chipotle (hash: ${result.dataToEncryptHash.substring(0, 12)}...)`);
-  return result;
+  const MAX_RETRIES = 5;
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const result = await encryptWithLitAction({
+        dataToEncrypt,
+        accessControlConditions: conditions,
+      });
+      logger.info(`[DASHPackager] CEK encrypted via Chipotle (hash: ${result.dataToEncryptHash.substring(0, 12)}...)`);
+      return result;
+    } catch (err: any) {
+      const msg = err.message || '';
+      const isRetryable = msg.includes('fetch failed') ||
+        msg.includes('ECONNRESET') ||
+        msg.includes('TLS') ||
+        msg.includes('SSL') ||
+        msg.includes('socket disconnected') ||
+        msg.includes('ETIMEDOUT') ||
+        msg.includes('ECONNREFUSED');
+      if (isRetryable && attempt < MAX_RETRIES) {
+        const delayMs = Math.min(attempt * 3000, 15000);
+        logger.warn(`[DASHPackager] CEK encrypt attempt ${attempt}/${MAX_RETRIES} failed (${msg}), retrying in ${delayMs / 1000}s...`);
+        await new Promise(r => setTimeout(r, delayMs));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error('encryptMediaCEK: unreachable');
 }
 
 // ─── PSSH Construction ──────────────────────────────────────────────────────
@@ -153,33 +173,37 @@ export async function uploadDashToIPFS(
 ): Promise<{ cid: string; size: number }> {
   logger.info(`[DASHPackager] Uploading DASH directory to IPFS...`);
 
+  const files: Record<string, Buffer> = {};
   let totalSize = 0;
-  const walkDir = (dir: string): void => {
+
+  const walkDir = (dir: string, basePath: string): void => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const fullPath = join(dir, entry.name);
+      const relPath = basePath ? `${basePath}/${entry.name}` : entry.name;
       if (entry.isDirectory()) {
-        walkDir(fullPath);
+        walkDir(fullPath, relPath);
       } else {
-        totalSize += statSync(fullPath).size;
+        const content = readFileSync(fullPath);
+        files[relPath] = content;
+        totalSize += content.length;
       }
     }
   };
-  walkDir(dashDir);
+  walkDir(dashDir, '');
 
-  // Use the IPFS instance's addDirectory if available, otherwise use CLI
-  if (ipfs?.addDirectory) {
-    const result = await ipfs.addDirectory(dashDir);
-    logger.info(`[DASHPackager] Uploaded to IPFS: ${result.cid} (${(totalSize / 1024 / 1024).toFixed(1)} MB)`);
-    return { cid: result.cid.toString(), size: totalSize };
+  if (ipfs?.storeDirectory) {
+    const cid = await ipfs.storeDirectory(files, { pin: true });
+    logger.info(`[DASHPackager] Uploaded to IPFS via Helia: ${cid} (${(totalSize / 1024 / 1024).toFixed(1)} MB, ${Object.keys(files).length} files)`);
+    return { cid, size: totalSize };
   }
 
-  // Fallback: use ipfs CLI
+  // Fallback: ipfs CLI (requires go-ipfs)
   const { stdout } = await execFileAsync('ipfs', [
     'add', '-r', '-Q', '--cid-version', '0', dashDir,
   ], { timeout: 600000 });
 
   const cid = stdout.trim();
-  logger.info(`[DASHPackager] Uploaded to IPFS: ${cid} (${(totalSize / 1024 / 1024).toFixed(1)} MB)`);
+  logger.info(`[DASHPackager] Uploaded to IPFS via CLI: ${cid} (${(totalSize / 1024 / 1024).toFixed(1)} MB)`);
   return { cid, size: totalSize };
 }
 

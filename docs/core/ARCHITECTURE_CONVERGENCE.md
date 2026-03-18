@@ -679,29 +679,43 @@ Based on this analysis and Anders' own explanations, these are the conversations
 
 Even if the Rust runtime isn't ready, agreeing on what a `StorageProvider` capsule looks like lets PC2 start building toward it. The interface is the contract. Anders said capsules are like DLLs -- what does the "function signature" of a capsule look like? What's the standardized interface format?
 
-### 2. "Phase 10 (networking) should use our WireGuard + Boson code"
+### 2. ~~"Phase 10 (networking) should use our WireGuard + Boson code"~~ — ANSWERED
 
-We've spent weeks making NAT traversal work reliably. The gateway supernode, WireGuard provisioning, Boson fallback -- this shouldn't be reinvented. Ask how to wrap it as a capsule. Given that each capsule has its own CID, how does the networking capsule get the runtime's host-level access it needs (kernel WireGuard, port binding)?
+Anders' Carrier now uses Iroh (QUIC, DHT, relay) for transport. Cross-network P2P is verified (seed server to Jetson via DHT). Our WireGuard + Boson code serves a different purpose (NAT traversal for web gateway access). Both can coexist: Carrier for capsule-to-capsule P2P, WireGuard for web `*.ela.city` access.
 
-### 3. "What about Firecracker on Jetson/ARM?"
+### 3. ~~"What about Firecracker on Jetson/ARM?"~~ — ANSWERED
 
-Firecracker needs KVM. Jetson has ARM64 Linux with KVM support, but has anyone tested Firecracker on Jetson Orin Nano? This is a potential blocker for v2 on edge devices.
+Rootless microVM (crosvm/KVM) is verified working on Jetson and WSL without sudo. This was a key concern and it's resolved.
 
 ### 4. "What about macOS development?"
 
-Firecracker doesn't run on macOS (no KVM). How do developers test locally? WASM-only mode? This affects the development experience.
+Firecracker doesn't run on macOS (no KVM). How do developers test locally? WASM-only mode? This affects the development experience. *Still an open question.*
 
 ### 5. "Timeline for Phase 10-11?"
 
-Networking and wallet auth are what make PC2 useful. If Phase 10-11 are 6+ months away, PC2 v1.x needs to keep evolving independently. If they're 2-3 months away, we should start the bridge work now.
+Networking (Carrier) is working with Iroh. Wallet auth = blockchain integration, which is listed as "Next." The practical question is: when can the Runtime accept an EVM wallet signature (MetaMask/Particle) alongside `did:key`? This is the bridge that connects PC2's user base to the Runtime.
 
 ### 6. "What does the capsule dev experience look like?"
 
-Anders argues that distributed repos (one per capsule) are better than a monolith. Practically: how does a capsule developer test their capsule locally? Is there a local runtime emulator? Can capsules be hot-reloaded during development? What's the `npm publish` equivalent for shipping a new capsule CID?
+Anders argues that distributed repos (one per capsule) are better than a monolith. Practically: how does a capsule developer test their capsule locally? Is there a local runtime emulator? Can capsules be hot-reloaded during development? What's the `npm publish` equivalent for shipping a new capsule CID? *The signed release pipeline (Ed25519 publish/install/update) is proven — this answers part of the question.*
 
 ### 7. "What's the window model: iframe or pixel?"
 
-Anders mentioned capsules can render as either an iframe or "pure pixel output." What decides which mode is used? Does the capsule declare its rendering preference? How does the shell composite pixel-rendered capsule windows?
+Anders confirmed: WASM capsules get WASI stdio, microVMs get a full TUI. For the web desktop (PC2/Puter), capsules would render via the Shell capsule's web interface. The Shell is the UI orchestrator.
+
+### 8. NEW: "How do we package our WASM crates as capsules?"
+
+Our Rust crates (`aes-gcm-decrypt`, `cenc-decrypt`, `text-renderer`, `pdf-renderer`) already compile to `wasm32-wasip1` — the same target the Runtime uses. What's the packaging format? What `elastos-guest` SDK calls do they need? Can we start creating capsule manifests for our existing WASM modules?
+
+### 9. NEW: "dDRM Provider Capsule — capability contract?"
+
+We need to define the capability contracts for dDRM operations:
+- `drm:decrypt` — decrypt CEK via Lit Chipotle
+- `drm:encrypt` — encrypt file + escrow CEK
+- `drm:verify-access` — check ACCESS_TOKEN on-chain
+- `render:*` — render decrypted content (PDF, text, image)
+
+What does the `elastos-guest` interface look like for these? How does a viewer capsule request decrypted content from the dDRM provider capsule?
 
 ---
 
@@ -710,31 +724,36 @@ Anders mentioned capsules can render as either an iframe or "pure pixel output."
 ```
 ╔═════════════════════════════════════════════════════════════════╗
 ║                                                                 ║
-║  PC2 v1 (NOW)              ElastOS Runtime (BUILDING)           ║
-║  ───────────               ──────────────────────               ║
-║  Node.js/TypeScript        Pure Rust                            ║
-║  Monolith repo             Minimal runtime + capsules           ║
-║  No sandboxing             WASM + Firecracker                   ║
-║  Session tokens            Capability tokens                    ║
-║  MetaMask auth             WebAuthn + planned SIWE              ║
-║  Working networking        No networking yet                    ║
-║  Live on Jetsons           Demo/test stage                      ║
+║  PC2 v1 (SHIPPING)             ElastOS Runtime (RC4)            ║
+║  ───────────────               ─────────────────────            ║
+║  Node.js/TypeScript            Pure Rust (10 crates)            ║
+║  Monolith repo                 Minimal runtime + capsules       ║
+║  iframe sandbox + CSP          WASM (Wasmtime) + microVM (KVM)  ║
+║  Session tokens                Capability tokens (12 checks)    ║
+║  MetaMask/Particle auth        did:key (Ed25519) + planned SIWE ║
+║  Working networking (4-tier)   Carrier P2P (Iroh/QUIC/DHT)     ║
+║  Live on 84+ nodes + Jetsons   Verified on x86_64 + aarch64    ║
+║  dDRM on Chipotle (verified)   Data capsules (signed+viewer)   ║
+║  WASM renderers (Rust→WASI)    WASM execution (same target!)   ║
 ║                                                                 ║
-║  PC2 = "functional interactive mockup" (Anders' words)          ║
-║  Runtime = long-term secure architecture for the same product   ║
-║                                                                 ║
-║  SHARED: IPFS, Puter, Supernode concept, *.ela.city domains    ║
+║  SHARED DNA:                                                    ║
+║  - IPFS content addressing                                      ║
+║  - Puter desktop shell                                          ║
+║  - Supernode gateway concept                                    ║
+║  - WASM target: wasm32-wasip1 (both systems!)                  ║
+║  - *.ela.city domains                                           ║
+║  - dDRM = data capsules (encrypted content + viewer)           ║
 ║                                                                 ║
 ║  CONVERGENCE PATH:                                              ║
-║  v1.x  = Ship PC2, prove the product, grow community           ║
-║  v1.5  = Modularize PC2 toward capsule interfaces              ║
-║  v2.0  = Anders' Runtime hosts PC2's functionality as capsules  ║
+║  v1.2-1.5 = Ship PC2 + dDRM + dApp Store (no Runtime needed)  ║
+║  v1.6     = Signed capsule format (bridge to Runtime)          ║
+║  v2.0     = Runtime hosts PC2 as Shell capsule                 ║
+║             dDRM as Provider Capsule                            ║
+║             dApps as sandboxed App Capsules                    ║
 ║                                                                 ║
-║  KEY INSIGHT: The runtime IS the platform, capsules ARE the     ║
-║  ecosystem. Runtime = boring/stable. Innovation = capsules.     ║
-║                                                                 ║
-║  RISK: Two systems growing apart. MITIGATION: Define capsule   ║
-║  interfaces NOW and build toward them from both sides.          ║
+║  KEY INSIGHT: Our Rust WASM crates (AES-GCM, CENC, PDF,       ║
+║  text renderers) target wasm32-wasip1 — the SAME target        ║
+║  the Runtime uses. Repackaging as capsules is straightforward. ║
 ║                                                                 ║
 ╚═════════════════════════════════════════════════════════════════╝
 ```
@@ -842,7 +861,18 @@ Three default WebSpaces:
 2. `localhost://` — the PC2 home server environment
 3. `elastos://` — bootstrapping and discovering peer WebSpace providers
 
-### Current Implementation Status (Feb 28, 2026)
+### Current Implementation Status (Mar 18, 2026)
+
+**Runtime RC4 (0.19.0-rc4) — verified and working:**
+- 10 Rust crates, dozens of capsules, hundreds of tests. Pure Rust, no C dependencies, no OpenSSL.
+- **Fresh install to chat:** `curl | bash` on x86_64 and Jetson — signatures verified, running
+- **3-mode chat:** Native, WASM, and microVM capsules all on one runtime with one Carrier node
+- **Cross-network P2P:** Seed server to Jetson via DHT, no manual tickets needed
+- **Rootless microVM:** App capsules run without sudo on Jetson and WSL
+- **Data capsules:** Signed content + viewer capsules (markdown viewer, GBA emulator)
+- **AI provider:** LLM routing via `elastos://ai/`
+- **Content sharing:** `elastos share` bundles files → publishes to IPFS → browser link
+- **Signed releases:** Ed25519-signed publish/install/update pipeline on both platforms
 
 **Working P2P chat** built from scratch across 5 capsules:
 - `localhost-provider` — encrypted file I/O
@@ -1129,5 +1159,139 @@ Every vertical uses the same on-chain contracts. Every vertical uses the same `@
 
 ---
 
-*Last updated: 2026-03-08*
+*Last updated: 2026-03-18*
 *Author: AI Development Assistant for Sasha Mitchell*
+
+---
+
+## Part 16: ElastOS Runtime Status Update (Mar 18, 2026)
+
+> Based on CTO (Anders) update — RC4 (0.19.0-rc4)
+
+### What's Verified and Working
+
+The Runtime is further along than the convergence roadmap in Part 7 anticipated. Key milestones:
+
+**Proven through 0.19.0-rc4:**
+- **Fresh install to chat:** `curl | bash` on x86_64 and Jetson → signatures verified → running
+- **3-mode chat, one runtime:** Native, WASM, and microVM capsules all on one shared runtime with one Carrier node
+- **Cross-network P2P:** Seed server to Jetson via DHT, no manual tickets needed
+- **Rootless microVM:** App capsules run without sudo on Jetson and WSL
+- **Data capsules:** Signed content + viewer capsules (markdown viewer, GBA emulator)
+
+**Crate inventory (10 Rust crates):**
+
+| Crate | Layer | Purpose |
+|-------|-------|---------|
+| `elastos-server` | Carrier | Binary, HTTP API, CLI entry point |
+| `elastos-runtime` | Carrier | Capabilities, tokens, handlers, messaging |
+| `elastos-common` | Carrier | Shared types (CapsuleManifest, CapsuleId) |
+| `elastos-namespace` | Carrier | Content addressing, CID → path resolution |
+| `elastos-identity` | Carrier | WebAuthn, credential store, `did:key` |
+| `elastos-tls` | Carrier | Self-signed CA + certificates (rustls, zero OpenSSL) |
+| `elastos-storage` | Carrier | Storage backends (local, IPFS, cache) |
+| `elastos-compute` | Bridge | WASM sandbox (Wasmtime) |
+| `elastos-firecracker` | Bridge | MicroVM sandbox (Firecracker/KVM) |
+| `elastos-guest` | AppCapsule | SDK capsules use; the "syscall interface" |
+
+**Capsule types verified:**
+
+| Type | Substrate | UI | Example |
+|------|-----------|-------|---------|
+| Executable capsule | WASM (Wasmtime) | WASI stdio | Chat, providers |
+| Executable capsule | microVM (crosvm/KVM) | Full TUI | Shell, apps |
+| Data capsule | Content + declared viewer | Viewer renders | Markdown viewer, GBA emulator |
+| Agent capsule | LLM + memory + tools | `elastos://ai/` | AI provider |
+
+### What's Next for Runtime
+
+| Component | Status | Dependency for PC2 |
+|-----------|--------|--------------------|
+| Blockchain integration | **Next** | Needed for ACCESS_TOKEN → capability token bridge |
+| DID sidechain bridge | **Planned** | Connects `did:key` to Elastos DID |
+| Payment-aware flows | **Planned** | On-chain purchase triggers capsule access |
+| macOS support | **Planned** | KVM not available; WASM-only mode needed |
+| Source publication | **Underway** | Cleanup and audit before GitHub open-source |
+
+### How dDRM Maps to Runtime (Concrete Path)
+
+Our existing Rust/WASM crates compile to `wasm32-wasip1` — the exact same WASI target the Runtime uses via Wasmtime. This is not a rewrite; it's a repackaging:
+
+```
+OUR EXISTING CODE                        RUNTIME CAPSULE
+────────────────────────                 ────────────────────────
+wasm/aes-gcm-decrypt/                →  dDRM Provider Capsule
+  src/lib.rs (AES-256-GCM)               Capability: "drm:decrypt"
+  Cargo.toml (wasm32-wasip1)              Signed, content-addressed
+
+wasm/cenc-decrypt/                   →  Media DRM Capsule
+  src/lib.rs (AES-128-CTR per-sample)     Capability: "drm:decrypt-media"
+  Cargo.toml (wasm32-wasip1)              Signed, content-addressed
+
+wasm/text-renderer/                  →  Viewer Capsule (text)
+  src/lib.rs (syntect highlighting)       Capability: "render:text"
+
+wasm/pdf-renderer/                   →  Viewer Capsule (PDF)
+  src/lib.rs (hayro rasterizer)           Capability: "render:pdf"
+
+pc2-node/data/test-apps/ddrm-viewer/ →  Data Capsule viewer
+  (HTML/JS dDRM Viewer app)               Declared as viewer for .ddrm.json
+
+.ddrm.json descriptors               →  Data Capsule manifest
+  (CID + Lit params + mimeType)           Content + declared viewer capsule
+```
+
+### dApp Store → Capsule Store Evolution
+
+```
+TODAY (PC2 v1.x):
+  dApp = HTML/JS/CSS → encrypt → IPFS → ACCESS_TOKEN → decrypt → iframe
+  Security: CSP + postMessage bridge
+  Trust model: iframe same-origin policy
+
+v1.5.0 (Bridge):
+  dApp = signed bundle → encrypt → IPFS → ACCESS_TOKEN → decrypt → iframe + signature verify
+  Security: CSP + postMessage + Ed25519 signature verification
+  Trust model: signed code can't be tampered with
+
+v2.0.0 (Runtime):
+  dApp = signed Digital Capsule → encrypt → IPFS → ACCESS_TOKEN → decrypt → Wasmtime/microVM
+  Security: zero ambient authority + capability tokens + audit trail
+  Trust model: cryptographic proof at every boundary
+
+  Uniswap DEX capsule:
+    Granted:    { "network:rpc": ["https://mainnet.base.org"] }
+    Denied:     file access, other capsules, arbitrary network
+    Audited:    every RPC call logged with Ed25519 receipt
+```
+
+### The Shell Evolution and dDRM
+
+Anders describes the shell capsule evolution from "rubber stamp → intelligent agent." This directly affects dDRM:
+
+```
+TODAY:   Shell auto-grants everything
+BRIDGE:  Shell asks user: "Media Player wants to decrypt video.mp4. Allow?"
+FUTURE:  Shell AI agent: "This app is requesting decrypt access to a paid asset.
+         You own the ACCESS_TOKEN. Granting 1-hour capability. Logged."
+```
+
+The AI shell becomes the policy brain that bridges on-chain ownership (ACCESS_TOKEN) with off-chain enforcement (capability token). The dDRM Provider Capsule is the mechanism; the shell is the policy.
+
+### Actor Equality for Agents
+
+Anders' "actor equality" principle is critical for the agent marketplace:
+
+```
+Human buying a dApp:
+  1. Browse store → purchase → shell prompts → capability issued → dApp runs
+
+AI Agent buying a code library:
+  1. Discover via MCP → purchase via Smart Account → shell auto-approves (policy) →
+     capability issued → library loaded into sandbox
+
+SAME tokens, SAME sandbox, SAME audit trail.
+No shortcuts for agents. No second-class treatment either.
+```
+
+This is what makes Elacity's agent marketplace viable: agents are first-class citizens in the Runtime with the same cryptographic trust model as humans.

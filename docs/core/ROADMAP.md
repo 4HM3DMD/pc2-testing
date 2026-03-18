@@ -2,7 +2,7 @@
 
 > **Purpose:** Single source of truth for all strategic goals, technical work streams, and milestones — directly mapped to the Keystone Fund proposal and Rong Chen's original vision
 > **Created:** 2026-02-24
-> **Last Updated:** 2026-03-13
+> **Last Updated:** 2026-03-18
 > **Status:** Living document — update as work progresses
 
 ---
@@ -139,7 +139,8 @@ These diagrams from Rong define the north star. Every work stream should move us
 - [ ] Auto-pin + DHT announce for purchased content (CDN effect)
 
 **Creator Tools:**
-- [ ] `media-packager` integration — cloud transcode (default) + local FFmpeg (future)
+- [x] Local media encoding pipeline — FFmpeg transcode + Bento4 fragment/package + CENC-AES-128-CTR encrypt + DASH packaging + IPFS upload. Adaptive codec selection (NVIDIA GPU / SVT-AV1 / x264). Creator Dashboard integration with detailed sub-step progress UI. Chipotle Lit Action CEK encryption. *(implemented Mar 17-18 — pending Lit API recovery for E2E completion)*
+  - [x] Media encoding progress UX — real-time sub-step tracking (Analyze → Transcode → Fragment → CENC Encrypt → IPFS Upload), per-step inline progress bars, live FFmpeg stats (speed, FPS, elapsed time), weighted overall progress *(implemented Mar 18)*
 - [ ] App Factory — local packaging pipeline (build → bundle → IPFS pin → publish)
 - [x] Creator Dashboard dApp — upload any file, set price/royalties, encrypt via Lit Protocol, upload to IPFS *(implemented Mar 13 — pc2-node/data/test-apps/elacity-creator/)*
   - [x] `POST /api/ipfs/add` endpoint — accepts raw bytes (base64), stores via Helia, returns CID
@@ -172,6 +173,7 @@ These diagrams from Rong define the north star. Every work stream should move us
   - [x] **WASM-native PDF rendering** — Replaced `lopdf` (WASM crash) with `hayro` pure-Rust PDF rasterizer for full-fidelity rendering (layout, fonts, tables, images). Fixed WASI compilation target (`wasm32-wasip1`). Node.js canvas fallback text wrapping fixed. Elacity brand blue (`#3b82f6`) applied to viewer. "Mint on Elacity" right-click for non-dDRM files. Wallet bridge restored *(completed Mar 16)*
   - [x] **WASM crypto hardening (Phases A-C)** — AES-GCM decrypt-only mode in WASM (CEK never in Node.js heap, 50MB threshold), fMP4 strip+decrypt combined in single WASM call (Rust port with 64-bit box support), `build-wasm.sh` pipeline, `wasm32-wasip1` toolchain. PDF text extraction spike confirmed `hayro-syntax` lacks CMap resolution — keeping `pdfjs-dist`. Phase D (Lit Chipotle) COMPLETE. Phase E (ECDH to WASM) conditional on Chipotle envelope format.
   - [x] **Bug fixes (Mar 16)** — Fixed double-signature bug (duplicate `pc2-wallet-bridge.js` + `IPC.js` handlers), fixed WASM text renderer exceeding JPEG 65535px limit, fixed video autoplay after signing, fixed `eth_requestAccounts` prompting unnecessarily (use `eth_accounts` first). Removed duplicate `eth_sendTransaction` handler from ParticleNetworkContext
+  - [x] **Bug fixes (Mar 18)** — Fixed duplicate wallet signatures (IPC.js + pc2-wallet-bridge.js dual handling), fixed "Network fee: Unavailable" (removed explicit gas estimation, let MetaMask handle), fixed duplicate chain switch popup (check current chain before switching), fixed duplicate SIWE login on account change, fixed media encode `dataToEncryptHash` propagation for correct minting contentId, fixed IPFS directory pinning for DASH packages (Helia `storeDirectory` + local directory detection in `pinRemoteCID`)
   - [x] **dDRM Viewer native windowing** — launches as UIWindow via IPC `postMessage` → `launch_app()` (not browser popup), integrated with taskbar *(completed Mar 15)*
   - [x] **.ddrm.json capsule format** — descriptor files for non-media assets with CID, Lit params, mimeType. MIME: `application/x-ddrm+json`. Saved to Documents *(completed Mar 15)*
   - [x] **GUI capsule integration** — custom shield icon, MIME registration, double-click opens dDRM Viewer, content_type_to_icon mapping *(completed Mar 15)*
@@ -192,9 +194,20 @@ These diagrams from Rong define the north star. Every work stream should move us
 - [ ] `AssetService` in `@elacity-js/api` — generic asset queries for any content type alongside existing `NFTService`
 
 **Tiered Marketplace Rollout:**
-- [ ] **Tier 1 — Quick Markets (file in, file out):** E-books/PDFs, stock photography, audio/music, design templates, fonts, 3D models. All use `access.fetchAndDecrypt()` → save/open. No special runtime needed.
-- [ ] **Tier 2 — Medium Markets (local runtime integration):** AI models (GGUF → Ollama), code packages (npm), datasets, PC2 dApps. Need PC2 backend endpoints for decrypt-and-load.
-- [ ] **Tier 3 — Complex Markets (new infrastructure):** Software licensing, API marketplace, agent marketplace. Need Runtime v2 capsule sandboxes.
+- [x] **Tier 1 — Quick Markets (file in, file out):** E-books/PDFs, stock photography, audio/music, design templates, fonts, 3D models, spreadsheets/data. *(Status: ALL working today via Chipotle dDRM — same pipeline, different renderers)*
+- [ ] **Tier 2 — Medium Markets (local runtime integration):** dApp Store, AI models (GGUF → Ollama), code packages (npm), datasets, HTML5 games. Need PC2 backend endpoints for decrypt-and-load.
+- [ ] **Tier 3 — Complex Markets (ElastOS Runtime v2):** Native software/games, API marketplace, agent marketplace. Need Runtime capsule sandboxes (WASM/Firecracker).
+
+**dApp Store (Global Decentralized App Marketplace):**
+- [ ] **dApp packaging format** — define bundle structure (HTML/JS/WASM/CSS + manifest) for encrypted dApps
+- [ ] **Creator Dashboard: dApp mode** — detect app bundles, add manifest metadata (permissions, runtime requirements, categories)
+- [ ] **dApp install flow** — purchase ACCESS_TOKEN → decrypt → verify signature → `AppInstallService` auto-install
+- [ ] **dApp Store UI** — categories, search, ratings, "Verified" badges, auto-update notifications
+- [ ] **dApp sandboxing v1** — CSP + iframe sandbox with postMessage bridge (PC2 v1.x)
+- [ ] **dApp sandboxing v2** — signed capsules with capability tokens (Runtime convergence)
+- [ ] **Use case: DeFi frontends** — Uniswap, Aave, Curve etc. packaged as local dApps (no hosted frontend to attack)
+- [ ] **Use case: Productivity tools** — note-taking, spreadsheet, code editor as owned software
+- [ ] **Use case: HTML5 games** — game bundles sold with royalties on resale
 
 ---
 
@@ -302,13 +315,27 @@ These diagrams from Rong define the north star. Every work stream should move us
 - [x] **dDRM Viewer** — dedicated secure viewer app with native PC2 windowing, scrollable document view, .ddrm.json capsule support *(completed Mar 15)*
 - [x] **GUI file type integration** — `.ddrm.json` icon, MIME, double-click → dDRM Viewer *(completed Mar 15)*
 - [x] **PC2 Media Runtime** — server-side DASH/CENC decryption: Rust WASM cenc-decrypt crate + MSE player + DRM stripping + Lit CEK recovery. End-to-end video playback verified *(completed Mar 16)*
-- [x] **Lit Chipotle migration** — Datil deprecated ~April 25, 2026. Replaced v7 SDK with REST API. `chipotle-client.ts` module, `LIT_BACKEND` feature flag, dual-mode rollback. *(completed Mar 13)*
+- [x] **Lit Chipotle migration** — Datil deprecated ~April 25, 2026. Replaced v7 SDK with REST API. `chipotle-client.ts` module, `LIT_BACKEND` feature flag, dual-mode rollback. Non-media encrypt/decrypt E2E verified on new dev network. Auto-provisioning coded. **RELEASE BLOCKER: supernode deployment pending.** See `docs/core/LIT_PRODUCTION_CHECKLIST.md` *(completed Mar 13-18)*
 - [ ] On-chain content indexer — replace Elacity GraphQL dependency with event scanner (The Graph / custom). See [DECENTRALIZATION_STATUS.md](./DECENTRALIZATION_STATUS.md) Tier 1.1
 - [ ] Self-provisioned RLI tokens — each PC2 node mints own capacity credits, removes Elacity wallet dependency. See Tier 1.3
 - [ ] AI Model Marketplace alpha — encrypt GGUF/SafeTensors model → IPFS → ACCESS_TOKEN → decrypt on PC2 → load in Ollama
 - [ ] Code/Plugin Marketplace — dDRM-gated npm packages, themes, extensions
 - [ ] Dataset Marketplace — dDRM-gated training datasets, knowledge bases
 - [ ] Fiat onramp — Particle Smart Account + Stripe/Moonpay for one-click credit card ACCESS_TOKEN purchase
+- [ ] `cenc-encrypt` Rust WASM crate — symmetric AES-128-CTR encryption in WASM sandbox, replaces `mp4encrypt` Bento4 binary dependency. CEK never leaves WASM linear memory. Target: `wasm32-wasip1`
+- [ ] `pssh-gen` Rust WASM crate — ISO 23001-7 PSSH box generator for Elacity dDRM metadata. Binary PSSH construction in WASM, replaces JSON-based approach in dashPackager.ts
+
+**dApp Store (Global Decentralized App Marketplace):**
+- [ ] dApp bundle format — encrypted app package with manifest (permissions, runtime, categories)
+- [ ] Creator Dashboard: dApp mode — detect app bundles, add dApp-specific metadata
+- [ ] Purchase → decrypt → auto-install flow via `AppInstallService`
+- [ ] dApp Store UI with categories (DeFi, Games, Productivity, AI, Social), search, ratings
+- [ ] dApp sandboxing v1 — CSP + iframe + postMessage bridge (PC2 v1.x)
+- [ ] HTML5 game support — game bundles running in sandboxed iframe
+- [ ] 3D model viewer — Three.js based viewer in dDRM Viewer
+- [ ] Auto-update mechanism — new version CID → signed update notification
+- [ ] "Verified" badges for established teams (Uniswap, Aave, etc.)
+- [ ] dApp sandboxing v2 — signed capsules with capability tokens (requires Runtime convergence)
 
 **Mobile:**
 - [ ] Lightweight mobile companion app (React Native) — connect to PC2 node via WireGuard, browse marketplace, purchase, stream/download
@@ -443,18 +470,33 @@ These diagrams from Rong define the north star. Every work stream should move us
 
 **Goal:** Anders' Rust runtime begins integrating. Agent economy emerges.
 
-**Runtime Integration:**
-- [ ] WASM sandboxed execution for capsules
-- [ ] Capability token model (capsules request permissions, users grant)
-- [ ] Capsule isolation (each capsule runs in its own sandbox)
-- [ ] MicroVM isolation where hardware supports it (Firecracker on x86)
+**ElastOS Runtime Status (as of Mar 18, 2026 — RC4 / 0.19.0-rc4):**
+> 10 Rust crates, dozens of capsules, hundreds of tests. Pure Rust, no C dependencies, no OpenSSL.
+> Verified on x86_64 and aarch64 (Jetson, Raspberry Pi). Fresh install to chat: `curl | bash`.
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| Runtime core (capabilities, signatures, audit) | **Verified** | 12 checks per invocation |
+| WASM execution (Wasmtime) | **Verified** | `wasm32-wasip1` — same target as our WASM crates |
+| microVM execution (crosvm/KVM) | **Verified** | Rootless on Jetson and WSL |
+| Carrier P2P (DID, DHT, gossip, relay) | **Verified** | Cross-network Iroh/QUIC |
+| Data capsules (signed content + viewer) | **Working** | Maps directly to `.ddrm.json` + dDRM Viewer |
+| Signed release pipeline | **Proven** | Ed25519 publish/install/update |
+| AI provider (`elastos://ai/`) | **Working** | LLM routing |
+| Blockchain integration | **Next** | DID sidechain bridge, payment flows |
+
+**Runtime Integration (v2.0.0 convergence):**
+- [ ] PC2 desktop as Shell capsule — Puter runs inside Runtime as the orchestrator
+- [ ] WASM sandboxed execution for app capsules
+- [ ] Capability token model (capsules request permissions, shell grants/denies)
+- [ ] MicroVM isolation where hardware supports it (Firecracker on x86, crosvm on ARM)
 - [ ] DID integration with ESC/EID for `elastos://` WebSpace
-- [ ] DHT participation — PC2 nodes store/forward DHT entries (Level 2)
-- [ ] dDRM capsule — `@elacity-js/access` compiled to WASM, CEK never leaves capsule linear memory. ACCESS_TOKEN → capability token bridge: Runtime verifies on-chain ownership, issues scoped `{ action: "drm:decrypt", resource: CID }` token. Lit calls happen inside sandbox. Full audit trail via Runtime immutable log
-- [ ] Key custody primitive — `elastos-keycustody` crate providing Shamir Secret Sharing split/combine, encrypted share storage, quorum reconstruction protocol. Mechanism-only (no policy); dDRM capsule provides policy decisions. Analogous to `elastos-storage` for key material
+- [ ] **dDRM Provider Capsule** — our existing Rust WASM crates (`aes-gcm-decrypt`, `cenc-decrypt`) repackaged as signed capsules. `chipotle-client` ported to Rust. CEK never leaves capsule linear memory. ACCESS_TOKEN → capability token bridge: Runtime verifies on-chain ownership, issues scoped `{ action: "drm:decrypt", resource: CID }` token. Lit calls happen inside sandbox. Full audit trail via Runtime immutable log
+- [ ] **dApp Store on Runtime** — purchased dApps run as signed capsules with zero ambient authority. DeFi frontends (Uniswap, Aave) sandboxed — can only access approved RPC endpoints. Games in microVM. Capability tokens replace iframe CSP.
+- [ ] Key custody primitive — `elastos-keycustody` crate providing Shamir Secret Sharing split/combine, encrypted share storage, quorum reconstruction protocol. Mechanism-only (no policy); dDRM capsule provides policy decisions
 - [ ] Key custodian capsule — supernode-hosted capsule that stores key shares, verifies on-chain access (`hasAccessByContentId`), releases shares under proof of authorization. Content-addressed code (IPFS CID) for immutability — same trust model as Lit Actions but running on PC2 infrastructure
-- [ ] `KeyCustodyRegistry.sol` — on-chain mapping of contentId → custodian supernode set. Quorum parameters (N shares, K threshold). Geographic diversity requirements. Creators choose custodian set at encrypt time
-- [ ] PC2 threshold key management — creators encrypt CEK against K-of-N PC2 supernodes instead of Lit Protocol via Shamir Secret Sharing (`sharks`/`vsss-rs` Rust crates). Buyer's node collects K shares from custodian supernodes after each independently verifies on-chain access. No external dependency for key unlock. Lit becomes optional fallback for legacy content. Progression: Lit primary → Lit fallback → Lit optional → fully sovereign
+- [ ] `KeyCustodyRegistry.sol` — on-chain mapping of contentId → custodian supernode set. Quorum parameters (N shares, K threshold). Geographic diversity requirements
+- [ ] PC2 threshold key management — creators encrypt CEK against K-of-N PC2 supernodes instead of Lit Protocol via Shamir Secret Sharing. Progression: Lit primary → Lit fallback → Lit optional → fully sovereign
 
 **Agent Economy:**
 - [ ] Agent-to-agent communication (capability-gated trust)
@@ -696,15 +738,16 @@ Starting Month 1 (March 2026):
 | Release | Target | Focus |
 |---------|--------|-------|
 | v1.1.0 | March 2026 | Merge Jetson branch, bug fixes, AV1 player |
-| v1.2.0 | April 2026 | Hardware expansion, installer improvements, WireGuard bundling |
-| v1.3.0 | May 2026 | `@elacity-js/access` package, Creator Dashboard dApp, fiat onramp |
-| v1.4.0 | June 2026 | AI Model Marketplace alpha, `@elacity-js/asset-packager`, P2P messaging |
-| v1.5.0 | July 2026 | Universal marketplace (code, datasets), mobile companion app alpha |
-| v1.6.0 | August 2026 | Supernode Access Tokens, premium tiers, bandwidth metering |
+| v1.2.0 | April 2026 | **Lit Chipotle dDRM** (non-media DONE, media encoding pipeline BUILT — pending Lit API recovery), local media encoding (FFmpeg+Bento4+CENC+DASH), supernode provisioning, hardware expansion, installer improvements, WireGuard bundling |
+| v1.3.0 | May 2026 | AI Model Marketplace alpha (GGUF→Ollama), dApp bundles, datasets, `@elacity-js/asset-packager` |
+| v1.4.0 | June 2026 | WASM-native CENC encrypt + PSSH gen (replace Bento4 binaries), fiat onramp, Rust optimization sprint |
+| v1.5.0 | July 2026 | dApp Store v1 (categories, ratings, HTML5 games, 3D viewer), mobile companion alpha |
+| v1.6.0 | August 2026 | Signed capsule format (bridge to Runtime), Supernode Access Tokens, bandwidth metering |
 | v1.7.0 | September 2026 | Protocol fees alpha, white-label SDK alpha, enterprise pilot |
 | v1.8.0 | October 2026 | Developer SDK, composable assets (nested licensing) |
 | v1.9.0 | November 2026 | Agent buyer support (MCP/A2A), capsule marketplace alpha |
 | v1.10.0 | December 2026 | Year 1 hardening + comprehensive review |
+| v2.0.0 | Q1 2027 | **Runtime convergence** — PC2 desktop as Shell capsule, dDRM as Provider Capsule, full capability tokens |
 
 *Releases beyond v1.10.0 defined based on Year 1 learnings.*
 

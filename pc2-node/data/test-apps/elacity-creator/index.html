@@ -156,6 +156,46 @@
             <div class="prog-label">Encrypt asset with ACCESS_TOKEN conditions</div>
             <div class="prog-status" id="prog-encrypt-status">Waiting...</div>
           </div>
+          <!-- Media encoding detail panel (hidden for non-media) -->
+          <div id="media-pipeline-detail" style="display: none; margin: 0 0 8px 36px; border-left: 2px solid #6366f1; padding-left: 14px;">
+            <div style="margin-bottom: 8px;">
+              <div style="background: #1e1e2e; border-radius: 6px; height: 6px; overflow: hidden;">
+                <div id="media-progress-bar" style="height: 100%; width: 0%; background: linear-gradient(90deg, #6366f1, #8b5cf6); transition: width 0.5s ease; border-radius: 6px;"></div>
+              </div>
+              <div id="media-progress-pct" style="font-size: 11px; color: #94a3b8; margin-top: 3px; text-align: right;">0%</div>
+            </div>
+            <div id="media-sub-analyze" class="media-sub-step" style="display: flex; align-items: center; gap: 8px; padding: 5px 0; font-size: 12px; color: #94a3b8;">
+              <span id="media-sub-analyze-icon" style="width: 16px; text-align: center; font-size: 13px; flex-shrink: 0;">○</span>
+              <span style="white-space: nowrap;">Analyze media</span>
+              <div style="flex: 1; height: 3px; background: #1e1e2e; border-radius: 3px; overflow: hidden; margin: 0 4px;"><div id="media-sub-analyze-bar" style="height: 100%; width: 0%; background: #6366f1; transition: width 0.4s ease; border-radius: 3px;"></div></div>
+              <span id="media-sub-analyze-info" style="font-size: 11px; color: #64748b; white-space: nowrap; min-width: 50px; text-align: right;"></span>
+            </div>
+            <div id="media-sub-transcode" class="media-sub-step" style="display: flex; align-items: center; gap: 8px; padding: 5px 0; font-size: 12px; color: #94a3b8;">
+              <span id="media-sub-transcode-icon" style="width: 16px; text-align: center; font-size: 13px; flex-shrink: 0;">○</span>
+              <span style="white-space: nowrap;">Transcode</span>
+              <div style="flex: 1; height: 3px; background: #1e1e2e; border-radius: 3px; overflow: hidden; margin: 0 4px;"><div id="media-sub-transcode-bar" style="height: 100%; width: 0%; background: #6366f1; transition: width 0.4s ease; border-radius: 3px;"></div></div>
+              <span id="media-sub-transcode-info" style="font-size: 11px; color: #64748b; white-space: nowrap; min-width: 50px; text-align: right;"></span>
+            </div>
+            <div id="media-sub-fragment" class="media-sub-step" style="display: flex; align-items: center; gap: 8px; padding: 5px 0; font-size: 12px; color: #94a3b8;">
+              <span id="media-sub-fragment-icon" style="width: 16px; text-align: center; font-size: 13px; flex-shrink: 0;">○</span>
+              <span style="white-space: nowrap;">Fragment</span>
+              <div style="flex: 1; height: 3px; background: #1e1e2e; border-radius: 3px; overflow: hidden; margin: 0 4px;"><div id="media-sub-fragment-bar" style="height: 100%; width: 0%; background: #6366f1; transition: width 0.4s ease; border-radius: 3px;"></div></div>
+              <span id="media-sub-fragment-info" style="font-size: 11px; color: #64748b; white-space: nowrap; min-width: 50px; text-align: right;"></span>
+            </div>
+            <div id="media-sub-encrypt" class="media-sub-step" style="display: flex; align-items: center; gap: 8px; padding: 5px 0; font-size: 12px; color: #94a3b8;">
+              <span id="media-sub-encrypt-icon" style="width: 16px; text-align: center; font-size: 13px; flex-shrink: 0;">○</span>
+              <span style="white-space: nowrap;">CENC encrypt</span>
+              <div style="flex: 1; height: 3px; background: #1e1e2e; border-radius: 3px; overflow: hidden; margin: 0 4px;"><div id="media-sub-encrypt-bar" style="height: 100%; width: 0%; background: #6366f1; transition: width 0.4s ease; border-radius: 3px;"></div></div>
+              <span id="media-sub-encrypt-info" style="font-size: 11px; color: #64748b; white-space: nowrap; min-width: 50px; text-align: right;"></span>
+            </div>
+            <div id="media-sub-upload" class="media-sub-step" style="display: flex; align-items: center; gap: 8px; padding: 5px 0; font-size: 12px; color: #94a3b8;">
+              <span id="media-sub-upload-icon" style="width: 16px; text-align: center; font-size: 13px; flex-shrink: 0;">○</span>
+              <span style="white-space: nowrap;">IPFS upload</span>
+              <div style="flex: 1; height: 3px; background: #1e1e2e; border-radius: 3px; overflow: hidden; margin: 0 4px;"><div id="media-sub-upload-bar" style="height: 100%; width: 0%; background: #6366f1; transition: width 0.4s ease; border-radius: 3px;"></div></div>
+              <span id="media-sub-upload-info" style="font-size: 11px; color: #64748b; white-space: nowrap; min-width: 50px; text-align: right;"></span>
+            </div>
+            <div id="media-elapsed" style="font-size: 11px; color: #64748b; margin-top: 6px; text-align: right;"></div>
+          </div>
           <div class="progress-step" id="prog-upload-asset">
             <div class="prog-icon">📦</div>
             <div class="prog-label">Upload encrypted asset to IPFS</div>

@@ -7,13 +7,13 @@
 
 ## 1. Dashboard Access
 
-**Lit Express Dashboard:** https://express.litprotocol.com
+**Lit Express Dashboard:** https://dashboard.dev.litprotocol.com/ *(dev network — will change for production)*
 
 | Credential | Value | Purpose |
 |-----------|-------|---------|
 | **Account Key** | *(stored in `data/.chipotle-account-key`, never committed)* | Dashboard management — create/edit API keys, groups, PKPs. NOT for executing Lit Actions. |
-| **Usage API Key** | *(stored in `data/.chipotle-api-key`, never committed)* | Runtime key — all PC2 nodes use this to execute Lit Actions. Key name: `pc2-ddrm-v2`. |
-| **PKP ID** | `0xa7a3b7344231df566f8b33bb846cfdf69bec2744` | Account Master Wallet. Used for `Lit.Actions.Encrypt/Decrypt`. (Public on-chain — safe to publish.) |
+| **Usage API Key** | *(stored in `data/.chipotle-api-key`, never committed)* | Runtime key — all PC2 nodes use this to execute Lit Actions. Key name: `pc2-ddrm-v3`. |
+| **PKP ID** | `0x09bdfc8f8ec5a3bd2970497b930bd94839f22227` | Account Master Wallet (new dev network). Used for `Lit.Actions.Encrypt/Decrypt`. (Public on-chain — safe to publish.) |
 | **Group** | `elacity-ddrm` (group_id: 1) | Scopes the usage key to permitted PKPs and actions. |
 
 **API Endpoints:**
@@ -74,6 +74,7 @@
 ### Lit Actions (run inside TEE)
 | File | IPFS CID | Purpose |
 |------|----------|---------|
+| `pc2-node/data/lit-actions/non-media-encrypt-chipotle.js` | `QmUdZUxe6BVoXiZcw4hE86YCHsgQVGEmgbN6sr7MhnL8pp` | Chipotle: PKP-AES encrypt CEK |
 | `pc2-node/data/lit-actions/non-media-decrypt-chipotle.js` | `QmfWksjQkuLxVGEZdHrbFKxUb2sL4K34bLYbD3mAKv2CZA` | Chipotle: on-chain access check + PKP-AES decrypt |
 | `pc2-node/data/lit-actions/non-media-decrypt.js` | `QmQbJDg5nXVdbZhzd4BJAAsMfi8J6jwawfm2JFKjAvN62z` | Datil (legacy): on-chain access check + threshold BLS decrypt |
 
@@ -106,9 +107,33 @@
 ### API Key Resolution Order (Tier system)
 1. **Tier 2**: `LIT_CHIPOTLE_USER_KEY` env → `data/.chipotle-user-key` file
 2. **Tier 1**: `LIT_CHIPOTLE_USAGE_KEY` env → `data/.chipotle-api-key` file
-3. **Fallback**: No hardcoded keys — node setup provisions the key file
+3. **Auto-provision**: Cached `data/.chipotle-provision.json` (from prior supernode fetch)
+4. **Supernode fetch**: `GET https://<supernode>/api/ddrm/provision` → saves key + config locally
 
-For a new node: the setup/bootstrap process writes the Tier 1 key into `data/.chipotle-api-key`. Keys are never committed to the repo.
+For a fresh node: the first encrypt/decrypt operation triggers auto-provisioning from an Elacity supernode. The supernode serves the shared usage key + PKP ID + API URL. The key is cached locally so subsequent operations don't require network access.
+
+### Auto-Provisioning Architecture
+```
+Fresh PC2 Node → first dDRM operation → no key found locally
+  → tries GET https://69.164.241.210/api/ddrm/provision
+  → tries GET https://38.242.211.112/api/ddrm/provision
+  → receives { usageKey, pkpId, apiUrl, network, actions }
+  → writes data/.chipotle-api-key + data/.chipotle-provision.json
+  → all subsequent operations use cached key
+```
+
+### Supernode Setup (for operators)
+Each supernode must have the usage key file deployed:
+```bash
+# On supernode server
+mkdir -p /etc/pc2
+echo "YOUR_USAGE_API_KEY_HERE" > /etc/pc2/ddrm-api-key
+echo "0x09bdfc8f8ec5a3bd2970497b930bd94839f22227" > /etc/pc2/ddrm-pkp-id
+chmod 600 /etc/pc2/ddrm-api-key /etc/pc2/ddrm-pkp-id
+```
+
+### Pre-Production Checklist
+See `docs/core/LIT_PRODUCTION_CHECKLIST.md` for the complete list of changes needed when Lit Protocol moves to production.
 
 ---
 
@@ -133,7 +158,7 @@ Each asset's metadata contains `litBackend: 'chipotle' | 'datil'`. The decrypt r
 ## 6. Lit Dashboard — How to Manage
 
 ### Creating a New Usage API Key
-1. Go to https://express.litprotocol.com
+1. Go to https://dashboard.dev.litprotocol.com/ *(will change for production)*
 2. Log in with the Account Key
 3. Navigate to "Usage API Keys"
 4. Click "Create Usage API Key"
@@ -251,14 +276,57 @@ Tests: API reachability, auth, ethers compatibility, RPC calls from TEE, code ex
 
 ---
 
-## 11. Future Work
+## 11. Release Status — v1.2.0 Readiness
+
+### DONE (code complete, tested)
+- [x] `chipotle-client.ts` REST module — encrypt/decrypt via Lit Chipotle REST API
+- [x] `non-media-encrypt-chipotle.js` — pinned Lit Action for encryption (CID registered)
+- [x] `non-media-decrypt-chipotle.js` — pinned Lit Action for decryption with on-chain access check (CID registered)
+- [x] `LIT_BACKEND` feature flag — defaults to `chipotle`, falls back to `datil` for old assets
+- [x] Per-asset `litBackend` metadata — each asset records which backend was used for its CEK
+- [x] Auto-provisioning client code — fresh nodes automatically fetch API key from supernodes
+- [x] Gateway `/api/ddrm/provision` endpoint — coded in `deploy/web-gateway/index.js`
+- [x] E2E verified: PDF, image, text — all encrypt/decrypt on Chipotle dev network
+- [x] Lit Dashboard setup: group `elacity-ddrm`, PKP authorized, IPFS Actions registered
+- [x] Production checklist documented (`LIT_PRODUCTION_CHECKLIST.md`)
+
+### NOT DONE (v1.2.0 release blockers)
+- [ ] **Deploy updated gateway to supernodes** — The `/api/ddrm/provision` endpoint is in the codebase but NOT deployed. Both supernodes (InterServer `69.164.241.210`, Contabo `38.242.211.112`) need the updated `web-gateway/index.js`.
+- [ ] **Write usage key to supernodes** — `/etc/pc2/ddrm-api-key` and `/etc/pc2/ddrm-pkp-id` must be provisioned on each supernode.
+- [ ] **E2E verification from clean node** — Spin up a fresh PC2 node with no local key, confirm auto-provisioning works.
+- [ ] **Git commit all changes** — Gateway code, client code, Lit Action files, and docs must be committed and pushed.
+
+### NOT DONE (ship in v1.2.1 or later)
+- [ ] Media pipeline on Chipotle (video/audio DASH/CENC) — waiting for encoder code
+- [ ] Lit production network migration — when Lit ships production, rotate keys/CIDs per `LIT_PRODUCTION_CHECKLIST.md`
+- [ ] Self-sovereign API key settings UI for Tier 2 operators
+- [ ] Cost analysis for 100+ node network
+
+---
+
+## 12. Future Work
 
 1. **Media playback on Chipotle** — ECDH envelope path wired but untested
 2. **Datil deprecation (~Apr 25, 2026)** — All existing assets need re-encryption or Lit must provide backward compatibility
 3. **Self-sovereign API keys** — Settings UI for node operators to bring their own Lit key (Tier 2)
 4. **Cost analysis** — Per-call pricing for 100+ node network
-5. **Production API** — Switch from `api.dev.litprotocol.com` to `api.litprotocol.com`
+5. **Production migration** — Switch to production Lit network when announced. See `LIT_PRODUCTION_CHECKLIST.md`
+6. **Deploy provisioning to supernodes** — Write usage key to `/etc/pc2/ddrm-api-key` on both InterServer and Contabo
+
+### IPFS Actions Registered on Dashboard
+
+All Lit Actions must be registered as IPFS Actions on the Lit dashboard. The new dev network requires explicit CID registration even for inline code.
+
+| Name | CID | Registered |
+|------|-----|-----------|
+| `non-media-encrypt-chipotle` | `QmUdZUxe6BVoXiZcw4hE86YCHsgQVGEmgbN6sr7MhnL8pp` | Yes |
+| `non-media-decrypt-chipotle` | `QmfWksjQkuLxVGEZdHrbFKxUb2sL4K34bLYbD3mAKv2CZA` | Yes |
+| `ddrm` (test action) | (dashboard-only) | Yes |
+| `Encrypt` (legacy inline) | (dashboard-only) | Yes |
+| `test-decrypt` | `QmUm5dDNufxLWfchfwRe9SxtJ7YNRyd3zC8Mt9huHebnNy` | Yes |
+
+> **Important:** If you modify any Lit Action `.js` file, the CID changes. You must re-compute the CID (`ipfs add --only-hash --cid-version 0 <file>`) and register the new CID on the dashboard + update the supernode provision config.
 
 ---
 
-*Last updated: Mar 17, 2026 — E2E verified for PDF, image, and text files. API keys rotated and removed from source.*
+*Last updated: Mar 18, 2026 — v1.2.0 release status section added. Supernode deployment identified as the critical missing piece. All code is complete and tested; only deployment and git commit remain. See section 11 for full checklist.*

@@ -129,74 +129,14 @@ const ipc_listener = async (event, handled) => {
     }
 
     // --------------------------------------------------------
-    // PC2 Wallet Bridge — forward EIP-1193 RPC from sandboxed iframes
-    // to the parent's Particle Auth provider (window.ethereum).
-    // Must be checked BEFORE the msg/appInstanceID validation below,
-    // because wallet bridge messages use { type } not { msg }.
+    // PC2 Wallet Bridge — handled by pc2-wallet-bridge.js (parent-side).
+    // Do NOT process here to avoid duplicate MetaMask requests.
     // --------------------------------------------------------
     if ( event.data?.type === 'pc2-wallet-rpc' ) {
-        const { id, method, params } = event.data;
-
-        (async () => {
-            try {
-                // Intercept custom method — Particle's provider doesn't know this
-                if (method === 'pc2_getSmartAccountAddress') {
-                    const sa = window.user?.smart_account_address || null;
-                    event.source.postMessage({
-                        type: 'pc2-wallet-rpc-response',
-                        id, method, result: sa,
-                    }, event.origin === 'null' ? '*' : event.origin);
-                    return;
-                }
-
-                const provider = window.ethereum;
-                if (!provider || provider.isPC2WalletBridge) {
-                    throw { code: 4900, message: 'No wallet provider available' };
-                }
-
-                const result = await provider.request({ method, params });
-
-                event.source.postMessage({
-                    type: 'pc2-wallet-rpc-response',
-                    id,
-                    method,
-                    result,
-                }, event.origin === 'null' ? '*' : event.origin);
-            } catch (error) {
-                event.source.postMessage({
-                    type: 'pc2-wallet-rpc-response',
-                    id,
-                    method,
-                    error: {
-                        code: error.code || -32603,
-                        message: error.message || String(error),
-                    },
-                }, event.origin === 'null' ? '*' : event.origin);
-            }
-        })();
-
         return handled.resolve(true);
     }
 
     if ( event.data?.type === 'pc2-wallet-ready' ) {
-        (async () => {
-            try {
-                const provider = window.ethereum;
-                if (!provider || provider.isPC2WalletBridge) return;
-
-                const accounts = await provider.request({ method: 'eth_accounts' }).catch(() => []);
-                const chainId = await provider.request({ method: 'eth_chainId' }).catch(() => null);
-
-                event.source.postMessage({
-                    type: 'pc2-wallet-init',
-                    accounts,
-                    chainId,
-                }, event.origin === 'null' ? '*' : event.origin);
-            } catch (_) {
-                // Silently ignore — provider may not be ready yet
-            }
-        })();
-
         return handled.resolve(true);
     }
 
