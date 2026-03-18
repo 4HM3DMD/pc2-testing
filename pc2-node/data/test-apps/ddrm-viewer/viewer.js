@@ -108,6 +108,7 @@
   var viewerState = {
     totalPages: 1,
     pagesLoaded: 0,
+    blobUrls: [],
   };
 
   var zoom = { level: 1, min: 0.25, max: 5, step: 0.25 };
@@ -194,6 +195,7 @@
     })
     .then(function (result) {
       var blobUrl = URL.createObjectURL(result.blob);
+      viewerState.blobUrls.push(blobUrl);
 
       if (isAudioType) {
         showAudioPlayer(blobUrl);
@@ -228,6 +230,7 @@
         })
         .then(function (blob) {
           var blobUrl = URL.createObjectURL(blob);
+          viewerState.blobUrls.push(blobUrl);
           var placeholder = document.getElementById('page-slot-' + pageNum);
           if (placeholder) {
             var img = document.createElement('img');
@@ -588,6 +591,11 @@
       document.exitFullscreen().catch(function () {});
     }
   }
+
+  // ── Cleanup: revoke blob URLs on unload ──────────────
+  window.addEventListener('beforeunload', function () {
+    viewerState.blobUrls.forEach(function (url) { URL.revokeObjectURL(url); });
+  });
 
   // ── Go ────────────────────────────────────────────────
 

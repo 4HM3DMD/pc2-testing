@@ -1049,9 +1049,8 @@ async function unwrapECDHEnvelope(
   // Verify structure: read keyCount at bodyOffset
   const keyCount = (decrypted[bodyOffset] << 24) | (decrypted[bodyOffset + 1] << 16) |
                    (decrypted[bodyOffset + 2] << 8) | decrypted[bodyOffset + 3];
-  logger.info(`[media/CEK] Unwrapped license: metaSize=${metaSize}, keyCount=${keyCount}, cekStart=${cekStart}, totalDecrypted=${decrypted.length}`);
-  logger.info(`[media/CEK] CEK (hex): ${Buffer.from(cekBytes).toString('hex')}`);
-  logger.info(`[media/CEK] Full decrypted payload (hex): ${Buffer.from(decrypted).toString('hex')}`);
+  const cekHash = crypto.createHash('sha256').update(cekBytes).digest('hex').slice(0, 12);
+  logger.info(`[media/CEK] Unwrapped license: metaSize=${metaSize}, keyCount=${keyCount}, cekLen=${cekBytes.length}, cekSha=${cekHash}`);
   return Buffer.from(cekBytes).toString('base64');
 }
 

@@ -336,6 +336,10 @@ export function setupAPI(app: Express): void {
     }
   });
   
+  // Apply rate limiting and audit middleware before routers so dDRM endpoints are covered
+  app.use(rateLimitMiddleware());
+  app.use(auditMiddleware);
+
   // Storage usage endpoint
   app.use('/api/storage', storageRouter);
   app.use('/api/media', mediaRouter);
@@ -407,10 +411,6 @@ export function setupAPI(app: Express): void {
     });
   });
   
-  // Apply rate limiting and audit middleware to all routes (after authentication)
-  app.use(rateLimitMiddleware());
-  app.use(auditMiddleware);
-
   // Search endpoint (require auth)
   app.post('/search', authenticate, handleSearch);
 

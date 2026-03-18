@@ -444,13 +444,24 @@ export function corsMiddleware(
   res: Response,
   next: NextFunction
 ): void {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  const origin = req.headers.origin || '';
+  const allowed =
+    !origin ||
+    origin.startsWith('http://localhost') ||
+    origin.startsWith('https://localhost') ||
+    origin.includes('.puter.localhost') ||
+    origin.includes('.puter.me') ||
+    origin.includes('.puter.site');
+
+  if (allowed) {
+    res.setHeader('Access-Control-Allow-Origin', origin || '*');
+  }
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Range');
   res.setHeader('Access-Control-Expose-Headers', 'Content-Range, Accept-Ranges, Content-Length');
 
   if (req.method === 'OPTIONS') {
-    res.status(200).end();
+    res.status(allowed ? 200 : 403).end();
     return;
   }
 

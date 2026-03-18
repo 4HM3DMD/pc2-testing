@@ -28,6 +28,10 @@ const AUDITED_ENDPOINTS = [
   '/api/ai/chat',
   // Key-value operations
   '/kv/',
+  // dDRM decrypt operations
+  '/api/storage/lit/secure-view',
+  '/api/storage/lit/decrypt',
+  '/api/media/init',
 ];
 
 /**
@@ -63,6 +67,9 @@ function extractAction(method: string, endpoint: string): string {
     'POST /api/backups/create': 'backup_create',
     'POST /api/backups/restore': 'backup_restore',
     'POST /api/ai/chat': 'ai_chat',
+    'POST /api/storage/lit/secure-view': 'ddrm_secure_view',
+    'POST /api/storage/lit/decrypt': 'ddrm_decrypt',
+    'POST /api/media/init': 'media_session_init',
   };
 
   const key = `${method} ${path}`;

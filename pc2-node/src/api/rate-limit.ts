@@ -40,6 +40,16 @@ const DEFAULT_LIMITS: Record<string, RateLimitConfig> = {
     windowMs: 60 * 1000,     // 1 minute
     maxRequests: 10,         // 10 requests per minute
   },
+  // dDRM decrypt operations — prevent bulk content extraction
+  ddrm: {
+    windowMs: 60 * 1000,     // 1 minute
+    maxRequests: 30,         // 30 decrypts per minute per wallet
+  },
+  // Media segment fetches — higher limit for smooth HD playback
+  media_segment: {
+    windowMs: 60 * 1000,     // 1 minute
+    maxRequests: 300,        // 300 segments per minute per wallet
+  },
   // Default for unscoped requests
   default: {
     windowMs: 60 * 1000,     // 1 minute
@@ -101,7 +111,16 @@ function getEndpointScope(method: string, path: string): string {
     '/kv/',
   ];
 
-  // Check each category
+  // Check each category — dDRM endpoints first (most specific)
+  const ddrmEndpoints = [
+    '/api/storage/lit/secure-view', '/api/storage/lit/decrypt',
+    '/api/media/init',
+  ];
+  for (const endpoint of ddrmEndpoints) {
+    if (path.startsWith(endpoint)) return 'ddrm';
+  }
+  if (path.startsWith('/api/media/segment')) return 'media_segment';
+
   for (const endpoint of adminEndpoints) {
     if (path.startsWith(endpoint)) return 'admin';
   }
