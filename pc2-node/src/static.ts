@@ -1,8 +1,9 @@
 import express, { Express, Request, Response, NextFunction } from 'express';
 import cookieParser from 'cookie-parser';
 import path from 'path';
-import { existsSync, readFileSync, statSync } from 'fs';
+import { existsSync, statSync } from 'fs';
 import fs from 'fs';
+import { readFile as readFileAsync } from 'fs/promises';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import https from 'https';
@@ -219,7 +220,7 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
   app.get('/builtin/*', appsRouteHandler); // Also handle builtin apps (phoenix, terminal) that use BUILTIN_PREFIX
 
   // Serve installed dApps from data/installed-apps/<name>/
-  app.get('/installed-apps/*', (req: Request, res: Response, next: NextFunction) => {
+  app.get('/installed-apps/*', async (req: Request, res: Response, next: NextFunction) => {
     const dataDir = process.env.PC2_DATA_DIR || path.join(process.cwd(), 'data');
     const installedAppsDir = path.resolve(dataDir, 'installed-apps');
     const relativePath = req.path.replace('/installed-apps/', '');
@@ -263,7 +264,7 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
     if (filePath.endsWith('.html')) {
       const bosonService = req.app?.locals?.bosonService;
       const baseUrl = getBaseUrl(req, bosonService);
-      let html = readFileSync(filePath, 'utf-8');
+      let html = await readFileAsync(filePath, 'utf-8');
       const walletShimTag = `<script src="${baseUrl}/pc2-wallet-provider.js"></script>`;
       html = html.replace(/<head[^>]*>/i, (match: string) => `${match}\n    ${walletShimTag}`);
       res.type('html').send(html);
@@ -340,7 +341,7 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
   });
 
   // Particle Auth route - must come BEFORE SPA fallback
-  app.get('/particle-auth', (req: Request, res: Response, next: NextFunction) => {
+  app.get('/particle-auth', async (req: Request, res: Response, next: NextFunction) => {
     try {
       // Try multiple possible locations for particle-auth
       // __dirname in compiled code will be dist/, so go up to project root
@@ -376,7 +377,7 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
       
       let html: string;
       try {
-        html = readFileSync(particleAuthPath, 'utf8');
+        html = await readFileAsync(particleAuthPath, 'utf8');
       } catch (readError) {
         log.error(`[Particle Auth]: ❌ Error reading file:`, readError);
         return res.status(500).json({ 
@@ -494,7 +495,7 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
   // Express checks app.get() routes before app.use() middleware, so this will be checked first
   // The route registration was moved to before the static middleware wrapper to ensure proper order
   // We use a function declaration (not const) so it can be hoisted and registered before it's defined
-  function appsRouteHandler(req: Request, res: Response, next: NextFunction) {
+  async function appsRouteHandler(req: Request, res: Response, next: NextFunction) {
     // Handle both /apps/* and /builtin/* paths
     const isBuiltin = req.path.startsWith('/builtin/');
     const isApps = req.path.startsWith('/apps/');
@@ -593,7 +594,7 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
           const bosonService = req.app?.locals?.bosonService;
           const baseUrl = getBaseUrl(req, bosonService);
           const sdkUrl = `${baseUrl}/puter.js/v2`;
-          let htmlContent = readFileSync(normalizedPath, 'utf8');
+          let htmlContent = await readFileAsync(normalizedPath, 'utf8');
           // Replace any hardcoded SDK URL with the local server's SDK URL
           // This ensures apps work with PC2 node's local SDK
           htmlContent = htmlContent.replace(/https?:\/\/[^'"]*\/puter\.js\/v2/g, sdkUrl);
@@ -965,7 +966,7 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
           const bosonService = req.app?.locals?.bosonService;
           const baseUrl = getBaseUrl(req, bosonService);
           const sdkUrl = `${baseUrl}/puter.js/v2`;
-          let htmlContent = readFileSync(normalizedPath, 'utf8');
+          let htmlContent = await readFileAsync(normalizedPath, 'utf8');
           // Replace any hardcoded SDK URL with the local server's SDK URL
           htmlContent = htmlContent.replace(/https?:\/\/[^'"]*\/puter\.js\/v2/g, sdkUrl);
           

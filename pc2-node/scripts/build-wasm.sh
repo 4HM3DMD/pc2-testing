@@ -54,10 +54,22 @@ build_crate() {
   local size_before
   size_before=$(wc -c < "$wasm_path" | tr -d ' ')
   cp "$wasm_path" "$output_dir/$name.wasm"
-  local size_after
-  size_after=$(wc -c < "$output_dir/$name.wasm" | tr -d ' ')
 
-  echo "  Binary: $size_after bytes -> $output_dir/$name.wasm"
+  # wasm-opt pass: shrink binary + speed up instantiation
+  if command -v wasm-opt &>/dev/null; then
+    echo "  Running wasm-opt -Oz..."
+    wasm-opt -Oz "$output_dir/$name.wasm" -o "$output_dir/$name.wasm"
+    local size_opt
+    size_opt=$(wc -c < "$output_dir/$name.wasm" | tr -d ' ')
+    echo "  wasm-opt: $size_before -> $size_opt bytes ($(( (size_before - size_opt) * 100 / size_before ))% smaller)"
+  else
+    echo "  wasm-opt not found — install via: npm i -g binaryen (or brew install binaryen)"
+    echo "  Skipping optimization (binary will still work, just larger)"
+  fi
+
+  local size_final
+  size_final=$(wc -c < "$output_dir/$name.wasm" | tr -d ' ')
+  echo "  Binary: $size_final bytes -> $output_dir/$name.wasm"
   echo "  Done."
 }
 

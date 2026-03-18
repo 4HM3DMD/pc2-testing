@@ -6,10 +6,14 @@
  */
 
 import { logger } from '../utils/logger.js';
-import { execSync } from 'child_process';
-import { writeFileSync, unlinkSync, existsSync } from 'fs';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
+import { writeFile as writeFileAsync, unlink as unlinkAsync } from 'fs/promises';
+import { existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+
+const execFileAsync = promisify(execFile);
 
 let sharp: any = null;
 let canvas: any = null;
@@ -105,42 +109,40 @@ export async function generateThumbnail(
       return `data:image/png;base64,${base64}`;
       
     } else if (mimeType.startsWith('video/')) {
-      // For videos, use ffmpeg to extract a frame
+      // For videos, use ffmpeg to extract a frame (fully async, no event-loop blocking)
       try {
         const tempVideoPath = join(tmpdir(), `pc2-video-${fileUuid}.tmp`);
         const tempFramePath = join(tmpdir(), `pc2-video-frame-${fileUuid}.jpg`);
         
-        // Write video buffer to temp file
-        writeFileSync(tempVideoPath, buffer);
+        await writeFileAsync(tempVideoPath, buffer);
         
-        // Extract first frame using ffmpeg
-        execSync(
-          `ffmpeg -i "${tempVideoPath}" -ss 0 -vframes 1 -vf "scale=128:128:force_original_aspect_ratio=decrease" -q:v 2 "${tempFramePath}"`,
-          {
-            stdio: 'ignore',
-            timeout: 30000
-          }
-        );
+        await execFileAsync('ffmpeg', [
+          '-i', tempVideoPath,
+          '-ss', '0',
+          '-vframes', '1',
+          '-vf', 'scale=128:128:force_original_aspect_ratio=decrease',
+          '-q:v', '2',
+          tempFramePath,
+        ], { timeout: 30000 });
         
-        // Read the extracted frame
         if (existsSync(tempFramePath)) {
-          const { readFileSync } = await import('fs');
-          const frameBuffer = readFileSync(tempFramePath);
+          const { readFile } = await import('fs/promises');
+          const frameBuffer = await readFile(tempFramePath);
           const thumbnailBuffer = await sharp(frameBuffer)
             .resize(128)
             .png()
             .toBuffer();
           
-          // Clean up temp files
-          try { unlinkSync(tempVideoPath); } catch (e) {}
-          try { unlinkSync(tempFramePath); } catch (e) {}
+          await Promise.allSettled([
+            unlinkAsync(tempVideoPath),
+            unlinkAsync(tempFramePath),
+          ]);
           
           const base64 = thumbnailBuffer.toString('base64');
           return `data:image/png;base64,${base64}`;
         }
         
-        // Clean up on failure
-        try { unlinkSync(tempVideoPath); } catch (e) {}
+        await unlinkAsync(tempVideoPath).catch(() => {});
         return null;
       } catch (error: any) {
         logger.warn(`[Thumbnail] ⚠️  Video thumbnail generation failed (ffmpeg may not be installed): ${error.message}`);

@@ -671,6 +671,12 @@ async function loadCENCWasmBinary(): Promise<ArrayBuffer> {
   return cachedCENCWasmBinary;
 }
 
+// Eagerly preload WASM binary at import time so the first playback request
+// doesn't incur a disk read penalty.
+loadCENCWasmBinary().catch((err) =>
+  logger.warn(`[media] WASM preload skipped: ${err.message}`)
+);
+
 /**
  * Strip encryption signaling from an init segment via WASM.
  * Uses the cenc-decrypt module's strip_init mode (encv→av01/enca→mp4a,

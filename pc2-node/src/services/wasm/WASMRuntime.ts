@@ -15,6 +15,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
+import { createHash } from 'crypto';
 
 export interface WASMExecutionResult {
     success: boolean;
@@ -893,7 +894,11 @@ export class WASMRuntime {
                     binaryBuffer = wasmBinary;
                 }
 
-                const cacheKey = `wasm:${binaryBuffer.byteLength}`;
+                const fingerprint = createHash('sha256')
+                    .update(new Uint8Array(binaryBuffer))
+                    .digest('hex')
+                    .slice(0, 16);
+                const cacheKey = `wasm:${fingerprint}:${binaryBuffer.byteLength}`;
                 let wasmModule = this.compiledModuleCache.get(cacheKey);
                 if (!wasmModule) {
                     wasmModule = await WebAssembly.compile(binaryBuffer);
