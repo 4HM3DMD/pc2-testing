@@ -776,50 +776,100 @@ export class IPFSStorage {
       const hasRootBlock = this.blockstore ? await this.blockstore.has(cid) : false;
 
       if (hasRootBlock) {
-        // Root block exists — try quick local read (2s timeout)
-        const quickLocalTimeoutMs = 2000;
+        // Root block exists locally. For content uploaded by our own encoder,
+        // all blocks are already in the blockstore — skip expensive traversal.
+        const quickLocalTimeoutMs = 10000;
         try {
-          log.debug(`[IPFS] Root block exists locally, trying quick fetch for ${cidString}...`);
-          const chunks: Uint8Array[] = [];
-          let totalSize = 0;
+          log.info(`[IPFS] Root block exists locally for ${cidString}, trying local resolve...`);
 
-          const catPromise = (async () => {
-            for await (const chunk of fs.cat(cid)) {
-              chunks.push(chunk);
-              totalSize += chunk.length;
-              checkAbort();
-            }
-            return chunks;
-          })();
-
-          const timeoutPromise = new Promise<null>((resolve) =>
+          // Try to detect content type via exporter (fast, reads only root node)
+          const { exporter } = await import('ipfs-unixfs-exporter');
+          const entryPromise = exporter(cid, this.blockstore!);
+          const entryTimeout = new Promise<null>((resolve) =>
             setTimeout(() => resolve(null), quickLocalTimeoutMs)
           );
+          const entry = await Promise.race([entryPromise, entryTimeout]);
 
-          const result = await Promise.race([catPromise, timeoutPromise]);
+          if (entry) {
+            if (entry.type === 'directory') {
+              // Directory is fully local — count files from listing
+              let dirFileCount = 0;
+              let dirTotalSize = 0;
+              try {
+                for await (const child of entry.content()) {
+                  // directory content() yields child entries
+                  dirFileCount++;
+                  dirTotalSize += Number((child as any).size || 0);
+                }
+              } catch {
+                // content() may not work for directories; use ls instead with short timeout
+                try {
+                  const lsTimeout = new Promise<void>((resolve) => setTimeout(resolve, quickLocalTimeoutMs));
+                  const lsWork = (async () => {
+                    const fs = this.getUnixFS();
+                    for await (const child of fs.ls(cid)) {
+                      dirFileCount++;
+                      dirTotalSize += Number(child.size || 0);
+                    }
+                  })();
+                  await Promise.race([lsWork, lsTimeout]);
+                } catch {
+                  // If ls also fails, just report what we know
+                }
+              }
 
-          if (result && chunks.length > 0) {
-            const combined = new Uint8Array(totalSize);
-            let offset = 0;
-            for (const chunk of chunks) {
-              combined.set(chunk, offset);
-              offset += chunk.length;
+              const timeMs = Date.now() - startTime;
+              log.info(`[IPFS] ✅ Local directory confirmed: ${cidString} (${dirTotalSize} bytes, ${dirFileCount} files, ${timeMs}ms)`);
+              return {
+                success: true,
+                cid: cidString,
+                type: 'directory' as const,
+                size: dirTotalSize,
+                files: dirFileCount || 1,
+                timeMs,
+              };
             }
-            log.debug(`[IPFS] ✅ Found locally: ${cidString} (${totalSize} bytes)`);
 
-            const timeMs = Date.now() - startTime;
-            return {
-              success: true,
-              cid: cidString,
-              type: 'file' as const,
-              size: totalSize,
-              timeMs,
-              content: combined,
-              actualCid: cidString
-            };
+            // File or raw: read content
+            if (entry.type === 'file' || entry.type === 'raw') {
+              const chunks: Uint8Array[] = [];
+              let totalSize = 0;
+              const catPromise = (async () => {
+                for await (const chunk of entry.content()) {
+                  chunks.push(chunk);
+                  totalSize += chunk.length;
+                  checkAbort();
+                }
+                return chunks;
+              })();
+              const catTimeout = new Promise<null>((resolve) =>
+                setTimeout(() => resolve(null), quickLocalTimeoutMs)
+              );
+              const result = await Promise.race([catPromise, catTimeout]);
+
+              if (result && chunks.length > 0) {
+                const combined = new Uint8Array(totalSize);
+                let offset = 0;
+                for (const chunk of chunks) {
+                  combined.set(chunk, offset);
+                  offset += chunk.length;
+                }
+                log.info(`[IPFS] ✅ Found locally: ${cidString} (${totalSize} bytes)`);
+                const timeMs = Date.now() - startTime;
+                return {
+                  success: true,
+                  cid: cidString,
+                  type: 'file' as const,
+                  size: totalSize,
+                  timeMs,
+                  content: combined,
+                  actualCid: cidString
+                };
+              }
+            }
           }
         } catch (localError: any) {
-          log.debug(`[IPFS] Quick local fetch failed: ${localError.message}`);
+          log.info(`[IPFS] Quick local fetch failed for ${cidString}: ${localError.message}`);
         }
       } else {
         log.debug(`[IPFS] Root block not in blockstore for ${cidString}, skipping local fetch`);
@@ -1234,15 +1284,11 @@ export class IPFSStorage {
     let fileCount = 0;
     let truncated = false;
 
-    // Check for abort before starting
     if (signal.aborted) {
       throw Object.assign(new Error('Aborted'), { name: 'AbortError' });
     }
 
-    // Note: Not passing signal to ls() due to Helia async iterator compatibility issues
-    // Instead, we check signal.aborted manually between operations
     for await (const entry of fs.ls(cid)) {
-      // Check for abort between files
       if (signal.aborted) {
         throw Object.assign(new Error('Aborted'), { name: 'AbortError' });
       }
@@ -1253,7 +1299,6 @@ export class IPFSStorage {
       }
 
       if (entry.type === 'directory') {
-        // Recurse into subdirectory
         const subResult = await this.fetchDirectoryRecursive(
           fs,
           entry.cid,
@@ -1265,12 +1310,17 @@ export class IPFSStorage {
         fileCount += subResult.files;
         truncated = truncated || subResult.truncated;
       } else {
-        // Fetch file content (no signal to avoid iterator issues)
-        for await (const chunk of fs.cat(entry.cid)) {
-          totalSize += chunk.length;
-          // Check for abort during large file fetch
-          if (signal.aborted) {
-            throw Object.assign(new Error('Aborted'), { name: 'AbortError' });
+        // Use size from directory metadata when available (avoids reading all bytes)
+        const entrySize = Number(entry.size || 0);
+        if (entrySize > 0) {
+          totalSize += entrySize;
+        } else {
+          // Fallback: read content to determine size (remote fetch case)
+          for await (const chunk of fs.cat(entry.cid)) {
+            totalSize += chunk.length;
+            if (signal.aborted) {
+              throw Object.assign(new Error('Aborted'), { name: 'AbortError' });
+            }
           }
         }
         fileCount++;

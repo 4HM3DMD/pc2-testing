@@ -8,7 +8,7 @@
  * Single rendition for v1 (matching cloud behavior).
  */
 
-import { execFile, spawn, type ChildProcess } from 'child_process';
+import { execFile, spawn, execSync, type ChildProcess } from 'child_process';
 import { promisify } from 'util';
 import { stat as fsStat, existsSync } from 'fs';
 import { join } from 'path';
@@ -243,7 +243,6 @@ export async function validateMediaInput(filePath: string, info: MediaInfo): Pro
 
 function getFreeDiskSpace(path: string): number {
   try {
-    const { execSync } = require('child_process');
     if (process.platform === 'darwin' || process.platform === 'linux') {
       const output = execSync(`df -k "${path}" | tail -1`, { encoding: 'utf-8' });
       const parts = output.trim().split(/\s+/);

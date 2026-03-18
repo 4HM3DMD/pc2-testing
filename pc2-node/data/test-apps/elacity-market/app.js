@@ -1713,17 +1713,29 @@
 
     // Phase 1: Ask the server to start a Lit session and return the SIWE message
     prepareLitAuth(checksumAddr).then(function (prepareResult) {
-      showToast('Please sign the Lit authentication message...', 'info');
 
-      // Phase 2: Sign the SIWE message from the server (contains ReCap capabilities)
-      return Wallet.signMessage(prepareResult.siweMessage).then(function (sig) {
-        var authSig = {
-          sig: sig,
-          derivedVia: 'web3.eth.personal.sign',
-          signedMessage: prepareResult.siweMessage,
+      // Chipotle mode: server returns siweMessage=null, no signing needed
+      var authSigPromise;
+      if (prepareResult.chipotleMode || !prepareResult.siweMessage) {
+        authSigPromise = Promise.resolve({
+          sig: '0x',
+          derivedVia: 'chipotle-api-key',
+          signedMessage: '',
           address: checksumAddr
-        };
+        });
+      } else {
+        showToast('Please sign the Lit authentication message...', 'info');
+        authSigPromise = Wallet.signMessage(prepareResult.siweMessage).then(function (sig) {
+          return {
+            sig: sig,
+            derivedVia: 'web3.eth.personal.sign',
+            signedMessage: prepareResult.siweMessage,
+            address: checksumAddr
+          };
+        });
+      }
 
+      return authSigPromise.then(function (authSig) {
         window.parent.postMessage({
           msg: 'launchApp',
           appName: 'pc2-media-runtime',
@@ -2341,8 +2353,10 @@
       onAccountChange: function () {
         updateWalletUI();
         if (state.initializing) return;
+        if (state._lastSignedAddress === Wallet.getAddress()) return;
         ElacityAPI.clearAuth();
         state.assetsItems = [];
+        state._lastSignedAddress = Wallet.getAddress();
         Wallet.siweLogin()
           .then(function () {
             updateWalletUI();
@@ -2371,6 +2385,7 @@
       })
       .then(function () {
         state.initializing = false;
+        state._lastSignedAddress = Wallet.getAddress();
         updateWalletUI();
         syncSubscriptionsFromAPI();
         if (state.activeView === 'library') renderMyAssetsView();

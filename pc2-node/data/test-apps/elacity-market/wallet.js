@@ -173,6 +173,7 @@ var Wallet = (function () {
   // ── Chain Switching ──────────────────────────────────
 
   function switchToBase() {
+    if (currentChainId === BASE_CHAIN_ID) return Promise.resolve();
     return getProvider().request({
       method: 'wallet_switchEthereumChain',
       params: [{ chainId: BASE_CHAIN_ID }]

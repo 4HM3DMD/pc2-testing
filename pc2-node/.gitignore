@@ -33,6 +33,7 @@ Thumbs.db
 data/.chipotle-api-key
 data/.chipotle-user-key
 data/.chipotle-account-key
+data/.chipotle-provision.json
 
 # Dev-only test scripts containing secrets
 scripts/test-chipotle-phase1.mjs

@@ -8,7 +8,7 @@
 
 import { Router, type Request, type Response } from 'express';
 import { resolve as pathResolve, dirname, join } from 'path';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, readFileSync, mkdirSync as fsMkdirSync, rmSync as fsRmSync } from 'fs';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -556,46 +556,54 @@ async function fetchBytesFromIPFS(pathOrUrl: string, localGateway: string, publi
 /**
  * Extract PSSH JSON payloads from an fMP4 init segment.
  * PSSH boxes contain JSON-encoded Lit Protocol DRM parameters.
- * The JSON is embedded as raw bytes in PSSH box data fields.
+ * The JSON is embedded as raw bytes in the PSSH box data field.
+ *
+ * The Elacity PSSH JSON has the form:
+ *   {"protocolVersion":"...","protectionType":"...","data":{"actionIpfsId":"...",...}}
+ * We search for `{"protocolVersion"` or `{"data":{` to find the JSON start,
+ * then use brace counting to extract the complete object.
  */
 function extractPSSHJson(initSegment: Buffer): Array<{ protectionType: string; data: any }> {
   const results: Array<{ protectionType: string; data: any }> = [];
-  // Convert to string; binary is ASCII-safe for the JSON portions
   const text = initSegment.toString('binary');
 
-  // Strategy: find JSON objects starting with {"data": that contain actionIpfsId.
-  // These can be large (nested access conditions), so we use brace counting.
-  let searchStart = 0;
-  while (true) {
-    const marker = text.indexOf('{"data":{', searchStart);
-    if (marker === -1) break;
+  const markers = ['{"protocolVersion":', '{"data":{', '{"protectionType":'];
+  const visited = new Set<number>();
 
-    // Walk forward counting braces to find the end of this JSON object
-    let depth = 0;
-    let end = -1;
-    for (let i = marker; i < text.length && i < marker + 8192; i++) {
-      if (text[i] === '{') depth++;
-      else if (text[i] === '}') {
-        depth--;
-        if (depth === 0) { end = i + 1; break; }
+  for (const marker of markers) {
+    let searchStart = 0;
+    while (true) {
+      const pos = text.indexOf(marker, searchStart);
+      if (pos === -1) break;
+      if (visited.has(pos)) { searchStart = pos + 1; continue; }
+      visited.add(pos);
+
+      let depth = 0;
+      let end = -1;
+      for (let i = pos; i < text.length && i < pos + 16384; i++) {
+        if (text[i] === '{') depth++;
+        else if (text[i] === '}') {
+          depth--;
+          if (depth === 0) { end = i + 1; break; }
+        }
       }
-    }
 
-    if (end === -1) { searchStart = marker + 1; continue; }
+      if (end === -1) { searchStart = pos + 1; continue; }
 
-    const jsonStr = text.substring(marker, end);
-    try {
-      const parsed = JSON.parse(jsonStr);
-      if (parsed.data?.actionIpfsId) {
-        results.push({
-          protectionType: parsed.protectionType || 'unknown',
-          data: parsed.data,
-        });
+      const jsonStr = text.substring(pos, end);
+      try {
+        const parsed = JSON.parse(jsonStr);
+        if (parsed.data?.actionIpfsId) {
+          results.push({
+            protectionType: parsed.protectionType || 'unknown',
+            data: parsed.data,
+          });
+        }
+      } catch (e) {
+        logger.warn(`[media] Failed to parse PSSH JSON at offset ${pos}: ${(e as Error).message}`);
       }
-    } catch (e) {
-      logger.warn(`[media] Failed to parse PSSH JSON at offset ${marker}: ${(e as Error).message}`);
+      searchStart = end;
     }
-    searchStart = end;
   }
 
   logger.info(`[media] Extracted ${results.length} PSSH entries from init segment (${initSegment.length} bytes)`);
@@ -1144,7 +1152,7 @@ interface EncodeJob {
   id: string;
   status: 'queued' | 'analyzing' | 'transcoding' | 'fragmenting' | 'packaging' | 'uploading' | 'complete' | 'error';
   progress: { percent: number; fps: number; speed: string; time: string; stage: string };
-  result?: { cid: string; mpdUri: string; kid: string; size: number };
+  result?: { cid: string; mpdUri: string; kid: string; size: number; dataToEncryptHash: string; ciphertext: string };
   error?: string;
   startedAt: number;
 }
@@ -1160,8 +1168,7 @@ const uploadTmpDir = join(
 const mediaUpload = multer({
   storage: multer.diskStorage({
     destination: (_req, _file, cb) => {
-      const { mkdirSync, existsSync: dirExists } = require('fs');
-      if (!dirExists(uploadTmpDir)) mkdirSync(uploadTmpDir, { recursive: true });
+      if (!existsSync(uploadTmpDir)) fsMkdirSync(uploadTmpDir, { recursive: true });
       cb(null, uploadTmpDir);
     },
     filename: (_req, file, cb) => {
@@ -1173,7 +1180,6 @@ const mediaUpload = multer({
 });
 
 router.post('/encode', mediaUpload.single('file'), async (req: AuthenticatedRequest, res: Response) => {
-  const { mkdirSync, rmSync } = await import('fs');
   const jobId = crypto.randomUUID();
 
   try {
@@ -1239,9 +1245,8 @@ async function runEncodePipeline(
   inputPath: string,
   appLocals: any,
 ): Promise<void> {
-  const { mkdirSync, rmSync } = await import('fs');
   const workDir = join(uploadTmpDir, `job-${job.id}`);
-  mkdirSync(workDir, { recursive: true });
+  fsMkdirSync(workDir, { recursive: true });
 
   try {
     // 1. Analyze
@@ -1277,6 +1282,44 @@ async function runEncodePipeline(
     const dashResult = await createEncryptedDASH([fragmentedPath], workDir, bento4, ipfs);
     logger.info(`[media/encode] Job ${job.id}: DASH package created, CID=${dashResult.cid}`);
 
+    // 4b. Replicate to Elacity IPFS for multi-node reachability
+    job.status = 'uploading';
+    job.progress.stage = 'uploading';
+    try {
+      const ELACITY_UPLOAD = 'https://base.ela.city/api/2.0/files/upload';
+      const dashDir = join(workDir, 'dash');
+      const { readdirSync: rdSync, readFileSync: rfSync, statSync: stSync } = await import('fs');
+      const walkFiles = (dir: string, base: string): Array<{ path: string; relPath: string }> => {
+        const results: Array<{ path: string; relPath: string }> = [];
+        for (const entry of rdSync(dir, { withFileTypes: true })) {
+          const full = join(dir, entry.name);
+          const rel = base ? `${base}/${entry.name}` : entry.name;
+          if (entry.isDirectory()) results.push(...walkFiles(full, rel));
+          else results.push({ path: full, relPath: rel });
+        }
+        return results;
+      };
+
+      if (existsSync(dashDir)) {
+        const files = walkFiles(dashDir, '');
+        for (const f of files) {
+          try {
+            const bytes = rfSync(f.path);
+            const formData = new FormData();
+            formData.append('file', new Blob([new Uint8Array(bytes)]), f.relPath);
+            await fetch(ELACITY_UPLOAD, {
+              method: 'POST',
+              headers: { 'X-Target-Flow': 'ipfs' },
+              body: formData,
+            });
+          } catch { /* best-effort — local pin still works */ }
+        }
+        logger.info(`[media/encode] Job ${job.id}: replicated ${files.length} files to Elacity IPFS`);
+      }
+    } catch (replicateErr: any) {
+      logger.warn(`[media/encode] Job ${job.id}: Elacity replication failed (non-fatal): ${replicateErr.message}`);
+    }
+
     // 5. Complete
     job.status = 'complete';
     job.progress = { percent: 100, fps: 0, speed: '0x', time: '00:00:00.00', stage: 'complete' };
@@ -1285,14 +1328,16 @@ async function runEncodePipeline(
       mpdUri: dashResult.mpdUri,
       kid: dashResult.kid,
       size: dashResult.size,
+      dataToEncryptHash: dashResult.dataToEncryptHash,
+      ciphertext: dashResult.ciphertext,
     };
 
     logger.info(`[media/encode] Job ${job.id}: COMPLETE in ${Date.now() - job.startedAt}ms — CID=${dashResult.cid}`);
 
   } finally {
     // Cleanup temp files
-    try { rmSync(workDir, { recursive: true, force: true }); } catch { /* ignore */ }
-    try { rmSync(inputPath, { force: true }); } catch { /* ignore */ }
+    try { fsRmSync(workDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    try { fsRmSync(inputPath, { force: true }); } catch { /* ignore */ }
   }
 }
 

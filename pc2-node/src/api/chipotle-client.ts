@@ -8,11 +8,15 @@
  *   Tier 1: Elacity-provided shared key (default for all PC2 nodes)
  *   Tier 2: User-provided key (self-sovereign, set in Settings UI)
  *   Tier 3: Future — Elacity dDRM API product key
+ *
+ * Auto-provisioning: If no key is found locally, the client fetches
+ * the shared config from an Elacity supernode on first use.
  */
 
 import { readFileSync, existsSync, writeFileSync, mkdirSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
+import https from 'https';
 import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('chipotle');
@@ -26,6 +30,7 @@ const DATA_DIR = join(__dirname, '../../data');
 const CHIPOTLE_KEY_PATH = join(DATA_DIR, '.chipotle-api-key');
 const USER_KEY_PATH = join(DATA_DIR, '.chipotle-user-key');
 const LIT_ACTION_CID_PATH = join(DATA_DIR, '.lit-action-cid');
+const PROVISION_CACHE_PATH = join(DATA_DIR, '.chipotle-provision.json');
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -36,7 +41,12 @@ const DEFAULT_AUTHORITY = '0x580c26DefF267EF40A72CF10A4A42050F0641b8B';
 const DEFAULT_RPC = 'https://mainnet.base.org';
 const DEFAULT_CHAIN = 'base';
 const DEFAULT_CHAIN_ID = 8453;
-const DEFAULT_PKP_ID = '0xa7a3b7344231df566f8b33bb846cfdf69bec2744';
+const DEFAULT_PKP_ID = '0x09bdfc8f8ec5a3bd2970497b930bd94839f22227';
+
+const SUPERNODE_PROVISION_URLS = [
+  'https://69.164.241.210/api/ddrm/provision',
+  'https://38.242.211.112/api/ddrm/provision',
+];
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -92,6 +102,101 @@ export interface EncryptResult {
   dataToEncryptHash: string;
 }
 
+// ── Auto-Provisioning from Supernode ─────────────────────────────────────────
+
+interface ProvisionConfig {
+  version: number;
+  network: string;
+  apiUrl: string;
+  usageKey: string;
+  pkpId: string;
+  authority: string;
+  chain: string;
+  chainId: number;
+  rpc: string;
+  actions: {
+    nonMediaEncrypt: string;
+    nonMediaDecrypt: string;
+    mediaDecrypt?: string;
+  };
+}
+
+let cachedProvision: ProvisionConfig | null = null;
+
+function loadCachedProvision(): ProvisionConfig | null {
+  if (cachedProvision) return cachedProvision;
+
+  if (existsSync(PROVISION_CACHE_PATH)) {
+    try {
+      const raw = readFileSync(PROVISION_CACHE_PATH, 'utf8').trim();
+      if (raw) {
+        cachedProvision = JSON.parse(raw);
+        return cachedProvision;
+      }
+    } catch {
+      // Corrupted cache — will re-provision
+    }
+  }
+  return null;
+}
+
+function httpsGet(url: string, timeoutMs = 5000): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const req = https.get(url, { rejectUnauthorized: false, timeout: timeoutMs }, (res) => {
+      if (!res.statusCode || res.statusCode >= 400) {
+        reject(new Error(`HTTP ${res.statusCode}`));
+        res.resume();
+        return;
+      }
+      let body = '';
+      res.on('data', (chunk: Buffer) => { body += chunk.toString(); });
+      res.on('end', () => resolve(body));
+    });
+    req.on('error', reject);
+    req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
+  });
+}
+
+async function fetchProvisionFromSupernode(): Promise<ProvisionConfig | null> {
+  for (const url of SUPERNODE_PROVISION_URLS) {
+    try {
+      logger.info(`[Chipotle] Fetching dDRM config from ${url}...`);
+      const body = await httpsGet(url);
+      const config: ProvisionConfig = JSON.parse(body);
+
+      if (!config.usageKey || config.usageKey === 'REPLACE_WITH_USAGE_API_KEY') {
+        logger.warn(`[Chipotle] Supernode ${url} has unprovisioned dDRM config, skipping`);
+        continue;
+      }
+
+      if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
+      writeFileSync(PROVISION_CACHE_PATH, JSON.stringify(config, null, 2), { mode: 0o600 });
+      writeFileSync(CHIPOTLE_KEY_PATH, config.usageKey, { mode: 0o600 });
+
+      cachedProvision = config;
+      logger.info(`[Chipotle] Auto-provisioned from supernode (network: ${config.network}, pkpId: ${config.pkpId.substring(0, 10)}...)`);
+      return config;
+    } catch (err: any) {
+      logger.warn(`[Chipotle] Failed to fetch from ${url}: ${err.message}`);
+    }
+  }
+  return null;
+}
+
+let provisionPromise: Promise<ProvisionConfig | null> | null = null;
+
+async function ensureProvisioned(): Promise<ProvisionConfig | null> {
+  const cached = loadCachedProvision();
+  if (cached) return cached;
+
+  if (!provisionPromise) {
+    provisionPromise = fetchProvisionFromSupernode().finally(() => {
+      provisionPromise = null;
+    });
+  }
+  return provisionPromise;
+}
+
 // ── API Key Resolution ───────────────────────────────────────────────────────
 
 function resolveApiKey(): string {
@@ -116,10 +221,22 @@ function resolveApiKey(): string {
     if (key) return key;
   }
 
+  // Tier 0: Check cached provision (from supernode auto-fetch)
+  const provision = loadCachedProvision();
+  if (provision?.usageKey) return provision.usageKey;
+
   throw new Error(
     'No Chipotle API key configured. ' +
-    'Set LIT_CHIPOTLE_USAGE_KEY env var or place the key in data/.chipotle-api-key',
+    'The node will auto-provision from a supernode on the next dDRM operation, ' +
+    'or set LIT_CHIPOTLE_USAGE_KEY env var, or place the key in data/.chipotle-api-key',
   );
+}
+
+function resolvePkpId(config?: ChipotleConfig): string {
+  if (config?.pkpId) return config.pkpId;
+  const provision = loadCachedProvision();
+  if (provision?.pkpId) return provision.pkpId;
+  return DEFAULT_PKP_ID;
 }
 
 function resolveApiUrl(): string {
@@ -130,6 +247,7 @@ function resolveApiUrl(): string {
 
 let cachedNonMediaCode: string | null = null;
 let cachedChipotleNonMediaCode: string | null = null;
+let cachedChipotleEncryptCode: string | null = null;
 
 function getNonMediaActionCode(): string {
   if (cachedNonMediaCode) return cachedNonMediaCode;
@@ -158,6 +276,19 @@ function getChipotleNonMediaActionCode(): string {
   return cachedChipotleNonMediaCode;
 }
 
+function getChipotleEncryptCode(): string {
+  if (cachedChipotleEncryptCode) return cachedChipotleEncryptCode;
+
+  const actionPath = join(DATA_DIR, 'lit-actions/non-media-encrypt-chipotle.js');
+  if (!existsSync(actionPath)) {
+    throw new Error(
+      `Chipotle encrypt Lit Action not found at ${actionPath}.`,
+    );
+  }
+  cachedChipotleEncryptCode = readFileSync(actionPath, 'utf8');
+  return cachedChipotleEncryptCode;
+}
+
 function getActionCid(): string {
   const envCid = process.env.LIT_ACTION_CID;
   if (envCid) return envCid;
@@ -184,8 +315,27 @@ class ChipotleError extends Error {
 }
 
 async function executeLitAction(params: LitActionParams, config?: ChipotleConfig): Promise<LitActionResult> {
-  const apiUrl = config?.apiUrl || resolveApiUrl();
-  const apiKey = config?.apiKey || resolveApiKey();
+  let apiKey = config?.apiKey;
+  let apiUrl = config?.apiUrl;
+
+  if (!apiKey) {
+    try {
+      apiKey = resolveApiKey();
+    } catch {
+      const provision = await ensureProvisioned();
+      if (provision?.usageKey) {
+        apiKey = provision.usageKey;
+        if (!apiUrl) apiUrl = provision.apiUrl;
+      } else {
+        throw new Error(
+          'No Chipotle API key configured and auto-provisioning from supernodes failed. ' +
+          'Set LIT_CHIPOTLE_USAGE_KEY env var or place the key in data/.chipotle-api-key',
+        );
+      }
+    }
+  }
+
+  apiUrl = apiUrl || resolveApiUrl();
   const url = `${apiUrl}/core/v1/lit_action`;
 
   logger.debug(`[Chipotle] POST ${url} (code: ${params.code.length} chars, params: ${Object.keys(params.jsParams).join(',')})`);
@@ -244,7 +394,7 @@ export async function recoverNonMediaCEK(
   config?: ChipotleConfig,
 ): Promise<string> {
   const code = getChipotleNonMediaActionCode();
-  const pkpId = config?.pkpId || DEFAULT_PKP_ID;
+  const pkpId = resolvePkpId(config);
 
   const jsParams = {
     ciphertext: params.litCiphertext,
@@ -329,24 +479,14 @@ export async function encryptWithLitAction(
   params: EncryptParams,
   config?: ChipotleConfig,
 ): Promise<EncryptResult> {
-  const pkpId = config?.pkpId || DEFAULT_PKP_ID;
+  const pkpId = resolvePkpId(config);
 
   // params.dataToEncrypt is the UTF-8 bytes of the base64 CEK string.
   // Pass it directly as a string to the Lit Action so Decrypt returns
   // the same string — no double-base64 encoding.
   const plaintext = new TextDecoder().decode(params.dataToEncrypt);
 
-  const code = `(async () => {
-    try {
-      const encrypted = await Lit.Actions.Encrypt({
-        pkpId: pkpId,
-        message: plaintext,
-      });
-      Lit.Actions.setResponse({ response: JSON.stringify({ ciphertext: encrypted }) });
-    } catch (e) {
-      Lit.Actions.setResponse({ response: JSON.stringify({ error: e.message }) });
-    }
-  })();`;
+  const code = getChipotleEncryptCode();
 
   const result = await executeLitAction(
     { code, jsParams: { pkpId, plaintext } },
@@ -445,6 +585,7 @@ export {
   getActionCid,
   getNonMediaActionCode,
   getChipotleNonMediaActionCode,
+  getChipotleEncryptCode,
   ChipotleError,
   DEFAULT_PKP_ID,
 };

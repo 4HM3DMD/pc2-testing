@@ -6,6 +6,12 @@
  *   2. BroadcastChannel (popup windows with COOP that severs opener)
  *
  * Forwards requests to the real wallet provider (Particle Auth / window.ethereum).
+ *
+ * ⚠️  CRITICAL: This is the SOLE handler for pc2-wallet-rpc messages.
+ *    IPC.js must NOT also handle these messages, or every wallet call
+ *    (signatures, transactions, chain switches) will be sent to MetaMask
+ *    TWICE, causing duplicate confirmation popups ("1 of 2").
+ *    See IPC.js lines ~131-141 where these messages are explicitly ignored.
  */
 (function () {
   'use strict';

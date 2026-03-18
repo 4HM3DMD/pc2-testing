@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "network": "chipotle-dev",
+  "apiUrl": "https://api.dev.litprotocol.com",
+  "usageKey": "REPLACE_WITH_USAGE_API_KEY",
+  "pkpId": "0x09bdfc8f8ec5a3bd2970497b930bd94839f22227",
+  "authority": "0x8fe6bf9877B78BF0126819ff2593235E54Ee1E29",
+  "chain": "base",
+  "chainId": 8453,
+  "rpc": "https://mainnet.base.org",
+  "actions": {
+    "nonMediaEncrypt": "QmUdZUxe6BVoXiZcw4hE86YCHsgQVGEmgbN6sr7MhnL8pp",
+    "nonMediaDecrypt": "QmfWksjQkuLxVGEZdHrbFKxUb2sL4K34bLYbD3mAKv2CZA"
+  },
+  "notes": "This file is deployed on each supernode. PC2 nodes fetch it on first startup. NEVER commit the real usageKey to git — provision it manually on each supernode after deployment."
+}

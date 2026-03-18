@@ -11,7 +11,7 @@
 **Release:** v1.1.0 tagged and released on 2026-03-03 (134 commits squash-merged to main)
 **Launcher:** v1.1.1 released — version display, one-click updates, full networking install
 **DAO Proposal:** Live at https://elastos.com/proposals/69a24f49247f130078064edd
-**Last Commit:** feat: media encoding pipeline (transcode→fragment→CENC→DASH→IPFS), IPC duplicate fix
+**Last Commit:** feat: media pipeline E2E — PSSH extraction fix, authority address fix, IPFS pin fix, GUI IPC rebuild, end-to-end video playback + download verified
 
 ### What Just Shipped (v1.1.0 on main)
 
@@ -348,7 +348,7 @@ Full technical spec at `docs/core/ACCESS_PACKAGE_SPEC.md`. Key decisions:
 - [x] **PC2 Media Runtime** — Rust WASM `cenc-decrypt` crate (AES-128-CTR per-sample, 16-byte IVs), MSE player (no EME/CDM), DRM stripping (init+segment), two-phase Lit auth, SA-aware PSSH selection. **End-to-end DASH video playback verified** *(completed Mar 16)*
 - [x] Lit Chipotle migration — Phases 0-5 complete (Mar 13-17). `chipotle-client.ts` replaces Lit SDK. `LIT_BACKEND=chipotle|datil` feature flag. **E2E round-trip verified** (Mar 17): encrypt + decrypt + plaintext match confirmed.
 
-#### Media Encoding Pipeline — WORKING (Pending Lit API Recovery) (Mar 17-18)
+#### Media Encoding Pipeline — WORKING END-TO-END (Mar 17-18)
 
 Built a complete local media encoding pipeline for the Creator Dashboard. Video/audio files uploaded by creators are transcoded, fragmented, CENC-encrypted, and packaged as DASH streams — all on the local PC2 node, no cloud dependency.
 
@@ -380,8 +380,9 @@ Built a complete local media encoding pipeline for the Creator Dashboard. Video/
 
 **IPFS integration:**
 - `uploadDashToIPFS()` uses Helia `storeDirectory()` for correct UnixFS directory CIDs
-- `pinRemoteCID()` enhanced: local `fs.stat()` check for directories, instant recursive fetch for already-local content
+- `pinRemoteCID()` enhanced: uses `ipfs-unixfs-exporter` for robust local directory detection, bypasses Helia `fs.stat()`/`fs.ls()` hangs on large DAGs, `fetchDirectoryRecursive()` uses `entry.size` metadata instead of reading all bytes
 - Best-effort replication of individual DASH files to Elacity IPFS gateway for multi-node reachability
+- Downloaded content stored in PC2 virtual filesystem (IPFS blockstore) with `.edrm` descriptor in user's Videos folder — NOT in native OS Finder
 
 **Critical bug fix — Duplicate wallet signatures (IPC):**
 - Root cause: Both `src/gui/src/IPC.js` and `pc2-node/src/wallet-bridge/pc2-wallet-bridge.js` independently listened for `pc2-wallet-rpc` messages and forwarded them to `window.ethereum`
@@ -396,12 +397,21 @@ Built a complete local media encoding pipeline for the Creator Dashboard. Video/
 - Market `onAccountChange` deduplication — prevents double SIWE login
 - `EncodeJob` interface returns `dataToEncryptHash` and `ciphertext` for correct minting `contentId`
 
-**Current status:** Pipeline works end-to-end through transcoding, fragmenting, and IPFS upload. CENC encryption step blocked by Lit Chipotle API outage (Phala TEE backend TLS failure). Retry mechanism in place — will recover automatically when Lit infrastructure comes back.
+**Current status:** Pipeline works end-to-end. **Video playback verified** — Creator mint → buy → download → PC2 Media Player plays DASH/CENC-encrypted video. Download saves `.edrm` descriptor to user's Videos folder in PC2 virtual filesystem.
+
+**Critical fixes applied (Mar 18 — E2E session):**
+- **PSSH extraction pattern** — `extractPSSHJson()` searched for `{"data":{` but Bento4 PSSH JSON starts with `{"protocolVersion":`. Fixed to search multiple patterns.
+- **PSSH missing ciphertext/hash** — `buildPSSHJson()` was called before CEK encryption, so PSSH lacked `ciphertext` and `dataToEncryptHash`. Restructured flow: encrypt CEK first, then build PSSH with result.
+- **PSSH wrong authority address** — `DEFAULT_AUTHORITY` was `0x580c26De...` (incorrect contract). Changed to `0x8fe6bf98...` (the real AuthorityGateway on Base that implements `hasAccessByContentId`). Long-term: authority should be passed dynamically per-channel from creator app.
+- **PSSH kid mismatch** — `kid` was a random UUID from `generateCEK()`, but contract registers `hashToContentId(dataToEncryptHash)`. Fixed: `buildPSSHJson` now derives kid from encryption hash using same formula as creator app.
+- **IPFS pin hanging** — `pinRemoteCID` called `fs.stat()` and `fs.ls()` which both hang on large UnixFS directory DAGs in Helia. Rewrote local detection to use `ipfs-unixfs-exporter` directly against blockstore (fast, bypasses Helia's blocking layers).
+- **GUI IPC not rebuilt** — `src/gui/src/IPC.js` had the duplicate wallet fix in source but GUI bundle was never rebuilt. Ran `npm run build:only` in `src/gui/` to compile fix into `dist/bundle.min.js`.
 
 **Known issues:**
 - Elacity frontend UA receipt parsing: `UAReceiptFetcher.enrichOperationsWithContracts` throws `TypeError` after successful on-chain purchase. Bug is in Elacity's frontend, not our code.
 - MPD parser error for image assets: Elacity's media player tries to parse image metadata as DASH manifest. Expected for non-video content.
 - Lit Datil deprecation: Datil network being deprecated ~April 25, 2026 in favor of Chipotle (REST API, API key auth, TEE-based). Migration required.
+- Authority address is hardcoded to Base AuthorityGateway `0x8fe6bf98...`. Works for all Base channels (shared gateway). Long-term: creator app should pass resolved authority into encode endpoint for per-channel support.
 
 #### PC2 Media Runtime — WORKING END-TO-END (Mar 15-16)
 
@@ -482,7 +492,7 @@ Comprehensive player hardening and UX polish:
 1. ~~**Lit Chipotle migration**~~ — **DONE (Mar 13-18)** — Phases 0-5 complete. Migrated to new `chipotle-dev` network. All Lit Action CIDs registered. Pinned encrypt action (`non-media-encrypt-chipotle.js`). Auto-provisioning from supernodes built. **E2E verified** (PDF, image, text — all decrypt via Chipotle on new platform).
 2. ~~**End-to-end testing**~~ — **DONE (Mar 18)** — Full Creator mint → buy → dDRM Viewer decrypt verified on new Lit dev network. WASM rendering, watermarks, on-chain access check all confirmed working.
 3. **Deploy supernode provisioning** — `/api/ddrm/provision` endpoint coded but NOT deployed to supernodes. See `docs/core/LIT_PRODUCTION_CHECKLIST.md` for deployment steps. **This is a v1.2.0 release blocker.**
-4. **Media pipeline on Chipotle** — Full encoding pipeline built and tested (transcode, fragment, IPFS upload all working). CENC encryption blocked by Lit Chipotle API outage (Phala TEE backend). Retry mechanism in place (5 attempts, exponential backoff). Will complete E2E once Lit recovers. See media encoding pipeline section above.
+4. ~~**Media pipeline on Chipotle**~~ — **DONE (Mar 18)** — Full encoding pipeline E2E verified: transcode → fragment → CENC encrypt → DASH package → IPFS upload → mint → buy → download → playback. PSSH includes ciphertext, hash, contract-compatible kid, correct authority. Lit Chipotle API recovered.
 5. **P-256 ECDH unwrap to WASM (Phase E)** — conditional on Chipotle envelope format. If Chipotle returns CEK directly, this phase is eliminated.
 6. **`cenc-encrypt` Rust WASM crate** — Symmetric counterpart to `cenc-decrypt`. AES-128-CTR encryption in WASM, replaces `mp4encrypt` Bento4 binary. Uses identical crypto primitives from `cenc-decrypt/cenc.rs`. Target: `wasm32-wasip1`.
 7. **`pssh-gen` Rust WASM crate** — PSSH box generator per ISO 23001-7. Produces binary PSSH boxes from Elacity dDRM metadata. Replaces JSON-based approach in `dashPackager.ts`.
@@ -697,7 +707,7 @@ Chipotle TEE available `Lit.Actions` methods:
 - [dDRM Pipeline E2E](fd6755f0-d73c-4e41-8df3-0f57f15071a2) — @elacity-js/access, Creator Dashboard, Lit Action trust model (Path A), capacity credit auto-detection, decrypt endpoint, decentralization analysis. Also: hayro PDF rendering, WASM text fixes, Mint context menu, wallet bridge restore, Elacity branding, WASM crypto hardening Phases A-C, double-signature fix, TXT dimension cap, video autoplay, fMP4 strip+decrypt in Rust
 - [Secure Viewer & PDF](fd6755f0-d73c-4e41-8df3-0f57f15071a2) — secure viewer pipeline, PDF hybrid rendering, two-layer encryption fix, Lit Pinata/relayer integration, auto-decrypt, parallel pages, dDRM Viewer app, .ddrm.json capsules, WASM renderer, GUI integration
 - [Media Runtime E2E](fd6755f0-d73c-4e41-8df3-0f57f15071a2) — server-side DASH/CENC decryption pipeline, Rust WASM cenc-decrypt crate, MSE player, DRM stripping (init+segment), 16-byte IV fix, Smart Account PSSH, two-phase Lit auth
-- [Media Encoding Pipeline](current) — Local media encoding pipeline (FFmpeg→Bento4→CENC→DASH→IPFS), Chipotle CEK encryption, Creator Dashboard media UI, IPC duplicate wallet fix, MetaMask gas estimation fix
+- [Media Encoding Pipeline](current) — Local media encoding pipeline (FFmpeg→Bento4→CENC→DASH→IPFS), Chipotle CEK encryption, Creator Dashboard media UI, IPC duplicate wallet fix, MetaMask gas estimation fix, PSSH extraction/authority/kid fixes, IPFS pin hang fix, GUI rebuild, **E2E playback + download verified**
 
 ---
 

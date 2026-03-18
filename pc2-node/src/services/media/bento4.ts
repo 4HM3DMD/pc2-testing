@@ -12,7 +12,7 @@
 
 import { execFile, execSync } from 'child_process';
 import { promisify } from 'util';
-import { existsSync, mkdirSync, chmodSync, writeFileSync, createWriteStream } from 'fs';
+import { existsSync, mkdirSync, chmodSync, writeFileSync, createWriteStream, readdirSync, unlinkSync } from 'fs';
 import { join, dirname } from 'path';
 import * as https from 'https';
 import * as http from 'http';
@@ -20,13 +20,13 @@ import { logger } from '../../utils/logger.js';
 
 const execFileAsync = promisify(execFile);
 
-const BENTO4_VERSION = '1.6.0-641';
+const BENTO4_VERSION = '1-6-0-641';
 
 const BENTO4_URLS: Record<string, string> = {
   'linux-x64':    `https://www.bok.net/Bento4/binaries/Bento4-SDK-${BENTO4_VERSION}.x86_64-unknown-linux.zip`,
   'linux-arm64':  `https://www.bok.net/Bento4/binaries/Bento4-SDK-${BENTO4_VERSION}.aarch64-unknown-linux.zip`,
   'darwin-x64':   `https://www.bok.net/Bento4/binaries/Bento4-SDK-${BENTO4_VERSION}.universal-apple-macosx.zip`,
-  'darwin-arm64':  `https://www.bok.net/Bento4/binaries/Bento4-SDK-${BENTO4_VERSION}.universal-apple-macosx.zip`,
+  'darwin-arm64': `https://www.bok.net/Bento4/binaries/Bento4-SDK-${BENTO4_VERSION}.universal-apple-macosx.zip`,
 };
 
 function getPlatformKey(): string {
@@ -114,7 +114,7 @@ export async function ensureBento4(): Promise<Bento4Paths> {
   execSync(`unzip -o -q "${zipPath}" -d "${platformDir}"`, { timeout: 60000 });
 
   // Bento4 SDK extracts to a versioned subdirectory; move contents up
-  const extractedDirs = require('fs').readdirSync(platformDir)
+  const extractedDirs = readdirSync(platformDir)
     .filter((f: string) => f.startsWith('Bento4'));
   if (extractedDirs.length > 0) {
     const extractedDir = join(platformDir, extractedDirs[0]);
@@ -129,7 +129,7 @@ export async function ensureBento4(): Promise<Bento4Paths> {
   }
 
   // Clean up zip
-  try { require('fs').unlinkSync(zipPath); } catch { /* ignore */ }
+  try { unlinkSync(zipPath); } catch { /* ignore */ }
 
   const resolvedMp4dash = existsSync(mp4dashPath)
     ? mp4dashPath

@@ -23,7 +23,7 @@ const ELACITY_SYSTEM_ID = 'bf8ef85d2c54475d8c1ee27db60332a2';
 const MEDIA_DECRYPT_ACTION_CID = 'QmcNdiSuT2c2zKwhGozTgvT12uP26gAWMw2D49GvcLj2Go';
 const MEDIA_ENCRYPT_ACTION_CID = 'QmdwzJvfgCRvNh9pQ63zroFozR9CfJdiweqTCkVMubD47U';
 
-const DEFAULT_AUTHORITY = process.env.DDRM_AUTHORITY || '0x580c26DefF267EF40A72CF10A4A42050F0641b8B';
+const DEFAULT_AUTHORITY = process.env.DDRM_AUTHORITY || '0x8fe6bf9877B78BF0126819ff2593235E54Ee1E29';
 const DEFAULT_CHAIN_ID = parseInt(process.env.DDRM_CHAIN_ID || '8453', 10);
 const DEFAULT_RPC = process.env.DDRM_RPC || 'https://mainnet.base.org';
 
@@ -50,6 +50,9 @@ interface PSSHProtectionData {
     rpc: string;
     actionIpfsId: string;
     litBackend: string;
+    ciphertext: string;
+    hash: string;
+    kid: string;
   };
 }
 
@@ -100,7 +103,14 @@ export async function encryptMediaCEK(cek: Buffer): Promise<EncryptResult> {
 
 // ─── PSSH Construction ──────────────────────────────────────────────────────
 
-export function buildPSSHJson(outputDir: string): string {
+export function buildPSSHJson(outputDir: string, encryptResult: { ciphertext: string; dataToEncryptHash: string }): string {
+  // Derive the on-chain content ID (bytes16) from the encryption hash.
+  // Must match hashToContentId() in the creator app: first 16 bytes, 0x-prefixed.
+  const cleanHash = encryptResult.dataToEncryptHash.startsWith('0x')
+    ? encryptResult.dataToEncryptHash.slice(2)
+    : encryptResult.dataToEncryptHash;
+  const contractKid = '0x' + cleanHash.slice(0, 32).padEnd(32, '0');
+
   const protectionData: PSSHProtectionData = {
     protocolVersion: '2.0',
     protectionType: 'cenc:web3-drm-v1',
@@ -112,6 +122,9 @@ export function buildPSSHJson(outputDir: string): string {
       rpc: DEFAULT_RPC,
       actionIpfsId: MEDIA_DECRYPT_ACTION_CID,
       litBackend: 'chipotle',
+      ciphertext: encryptResult.ciphertext,
+      hash: encryptResult.dataToEncryptHash,
+      kid: contractKid,
     },
   };
 
@@ -128,8 +141,9 @@ export async function packageDASH(
   cekHex: string,
   kid: string,
   bento4: Bento4Paths,
+  encryptResult: { ciphertext: string; dataToEncryptHash: string },
 ): Promise<string> {
-  const psshPath = buildPSSHJson(outputDir);
+  const psshPath = buildPSSHJson(outputDir, encryptResult);
   const dashDir = join(outputDir, 'dash');
 
   const encryptionArgs = `--global-option mpeg-cenc.eme-pssh:true --pssh ${ELACITY_SYSTEM_ID}:${psshPath}`;
@@ -227,7 +241,7 @@ export async function createEncryptedDASH(
   }
 
   // Package DASH with CENC encryption
-  const dashDir = await packageDASH(fragmentedFiles, outputDir, cekHex, kid, bento4);
+  const dashDir = await packageDASH(fragmentedFiles, outputDir, cekHex, kid, bento4, encryptResult);
 
   // Upload to IPFS
   const { cid, size } = await uploadDashToIPFS(dashDir, ipfs);
