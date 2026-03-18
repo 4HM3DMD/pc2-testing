@@ -50,6 +50,11 @@ const DEFAULT_LIMITS: Record<string, RateLimitConfig> = {
     windowMs: 60 * 1000,     // 1 minute
     maxRequests: 300,        // 300 segments per minute per wallet
   },
+  // Media encoding — very resource-heavy, tight limit
+  media_encode: {
+    windowMs: 60 * 60 * 1000, // 1 hour
+    maxRequests: 5,            // 5 encode jobs per hour per wallet
+  },
   // Default for unscoped requests
   default: {
     windowMs: 60 * 1000,     // 1 minute
@@ -120,6 +125,7 @@ function getEndpointScope(method: string, path: string): string {
     if (path.startsWith(endpoint)) return 'ddrm';
   }
   if (path.startsWith('/api/media/segment')) return 'media_segment';
+  if (path.startsWith('/api/media/encode')) return 'media_encode';
 
   for (const endpoint of adminEndpoints) {
     if (path.startsWith(endpoint)) return 'admin';

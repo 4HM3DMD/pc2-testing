@@ -32,6 +32,7 @@ const AUDITED_ENDPOINTS = [
   '/api/storage/lit/secure-view',
   '/api/storage/lit/decrypt',
   '/api/media/init',
+  '/api/media/encode',
 ];
 
 /**
@@ -70,6 +71,7 @@ function extractAction(method: string, endpoint: string): string {
     'POST /api/storage/lit/secure-view': 'ddrm_secure_view',
     'POST /api/storage/lit/decrypt': 'ddrm_decrypt',
     'POST /api/media/init': 'media_session_init',
+    'POST /api/media/encode': 'media_encode',
   };
 
   const key = `${method} ${path}`;

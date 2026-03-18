@@ -7,7 +7,7 @@
  */
 
 import { Router, type Request, type Response } from 'express';
-import { resolve as pathResolve, dirname } from 'path';
+import { resolve as pathResolve, dirname, join } from 'path';
 import { existsSync, readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 
@@ -265,6 +265,7 @@ router.post('/init', async (req: AuthenticatedRequest, res: Response) => {
       chain: encData.chain || 'base',
       chainId: encData.chainId || 8453,
       rpc: encData.rpc || '',
+      litBackend: (encData.litBackend as string) || LIT_BACKEND || 'datil',
     };
 
     if (!litParams.litCiphertext || !litParams.dataToEncryptHash || !litParams.actionCid) {
@@ -889,76 +890,79 @@ async function recoverMediaCEK(
     chain: string;
     chainId: number;
     rpc: string;
+    litBackend: string;
   },
   wallet: any,
   prebuiltSessionSigs?: any,
   buyerAddress?: string,
 ): Promise<string> {
-  // Generate ephemeral ECDH P-256 key pair for envelope unwrapping
+  const effectiveUserAddr = buyerAddress || wallet.address;
+  const backend = litParams.litBackend || LIT_BACKEND || 'datil';
+
+  // Chipotle with direct CEK recovery (new media-decrypt-chipotle.js action)
+  if (backend === 'chipotle') {
+    logger.info(`[media/CEK] Chipotle direct CEK recovery via ${litParams.actionCid}, kid=${litParams.kid}, user=${effectiveUserAddr}`);
+    const { recoverNonMediaCEK } = await import('./chipotle-client.js');
+    const decryptedCek = await recoverNonMediaCEK({
+      litCiphertext: litParams.litCiphertext,
+      dataToEncryptHash: litParams.dataToEncryptHash,
+      kid: litParams.kid,
+      buyerAddress: effectiveUserAddr,
+      actionCid: litParams.actionCid,
+      authority: litParams.authority,
+      chain: litParams.chain,
+      chainId: litParams.chainId,
+      rpc: litParams.rpc,
+    });
+
+    const crypto = await import('crypto');
+    const cekHash = crypto.createHash('sha256').update(decryptedCek).digest('hex').slice(0, 12);
+    logger.info(`[media/CEK] Chipotle direct recovery complete, cekSha=${cekHash}`);
+    return decryptedCek;
+  }
+
+  // Datil path — ECDH envelope unwrapping
   const keyAlg = { name: 'ECDH', namedCurve: 'P-256' } as const;
   const keyPair = await subtle.generateKey(keyAlg, true, ['deriveKey', 'deriveBits']);
   const rawPubKey = new Uint8Array(await subtle.exportKey('raw', keyPair.publicKey));
   const publicKeyHex = Buffer.from(rawPubKey).toString('hex');
 
-  const effectiveUserAddr = buyerAddress || wallet.address;
-  logger.info(`[media/CEK] Calling Lit Action ${litParams.actionCid} with P-256 ECDH, kid=${litParams.kid}, user=${effectiveUserAddr}`);
+  logger.info(`[media/CEK] Datil ECDH envelope recovery via ${litParams.actionCid}, kid=${litParams.kid}, user=${effectiveUserAddr}`);
 
   let envelope: Buffer;
 
-  if (LIT_BACKEND === 'chipotle') {
-    const mediaActionCode = await fetchLitActionCode(litParams.actionCid);
-    const { recoverMediaCEKEnvelope } = await import('./chipotle-client.js');
-    envelope = await recoverMediaCEKEnvelope(
-      {
-        litCiphertext: litParams.litCiphertext,
-        dataToEncryptHash: litParams.dataToEncryptHash,
-        kid: litParams.kid,
-        buyerAddress: effectiveUserAddr,
-        actionCid: litParams.actionCid,
-        publicKeyHex,
-        authority: litParams.authority,
-        chain: litParams.chain,
-        chainId: litParams.chainId,
-        rpc: litParams.rpc,
-      },
-      mediaActionCode,
-    );
-    logger.info(`[media/CEK] Received envelope: ${envelope.length} bytes (Chipotle REST)`);
+  const { getLitClient, getExecuteSessionSigs } = await import('./storage.js');
+  const client = await getLitClient();
+
+  let sessionSigs: any;
+  if (prebuiltSessionSigs && Object.keys(prebuiltSessionSigs).length > 0) {
+    sessionSigs = prebuiltSessionSigs;
   } else {
-    // Datil fallback
-    const { getLitClient, getExecuteSessionSigs } = await import('./storage.js');
-    const client = await getLitClient();
-
-    let sessionSigs: any;
-    if (prebuiltSessionSigs && Object.keys(prebuiltSessionSigs).length > 0) {
-      sessionSigs = prebuiltSessionSigs;
-    } else {
-      sessionSigs = await getExecuteSessionSigs(client, wallet);
-    }
-
-    const executeParams: any = {
-      sessionSigs,
-      jsParams: {
-        keyAlg: { name: 'ECDH', namedCurve: 'P-256' },
-        publicKey: publicKeyHex,
-        ciphertext: litParams.litCiphertext,
-        dataToEncryptHash: litParams.dataToEncryptHash,
-        kid: litParams.kid.startsWith('0x') ? litParams.kid : `0x${litParams.kid}`,
-        actionIpfsId: litParams.actionCid,
-        authority: litParams.authority,
-        chain: litParams.chain,
-        chainId: litParams.chainId,
-        rpc: litParams.rpc,
-        userAddress: effectiveUserAddr,
-      },
-      ipfsId: litParams.actionCid,
-    };
-
-    const result = await client.executeJs(executeParams);
-    if (!result.response) throw new Error('Lit Action returned empty response');
-    envelope = Buffer.from(result.response, 'base64');
-    logger.info(`[media/CEK] Received envelope: ${envelope.length} bytes (Datil SDK)`);
+    sessionSigs = await getExecuteSessionSigs(client, wallet);
   }
+
+  const executeParams: any = {
+    sessionSigs,
+    jsParams: {
+      keyAlg: { name: 'ECDH', namedCurve: 'P-256' },
+      publicKey: publicKeyHex,
+      ciphertext: litParams.litCiphertext,
+      dataToEncryptHash: litParams.dataToEncryptHash,
+      kid: litParams.kid.startsWith('0x') ? litParams.kid : `0x${litParams.kid}`,
+      actionIpfsId: litParams.actionCid,
+      authority: litParams.authority,
+      chain: litParams.chain,
+      chainId: litParams.chainId,
+      rpc: litParams.rpc,
+      userAddress: effectiveUserAddr,
+    },
+    ipfsId: litParams.actionCid,
+  };
+
+  const result = await client.executeJs(executeParams);
+  if (!result.response) throw new Error('Lit Action returned empty response');
+  envelope = Buffer.from(result.response, 'base64');
+  logger.info(`[media/CEK] Received envelope: ${envelope.length} bytes (Datil SDK)`);
 
   return unwrapECDHEnvelope(envelope, keyPair.privateKey, rawPubKey, keyAlg);
 }
@@ -1114,10 +1118,182 @@ function modPow(base: bigint, exp: bigint, mod: bigint): bigint {
   return result;
 }
 
-/** Tonelli–Shanks modular square root for P-256 (p ≡ 3 mod 4 → simple formula). */
+/** Tonelli-Shanks modular square root for P-256 (p === 3 mod 4 -> simple formula). */
 function modSqrt(a: bigint, p: bigint): bigint {
-  // For P-256, p ≡ 3 (mod 4), so sqrt(a) = a^((p+1)/4) mod p
+  // For P-256, p === 3 (mod 4), so sqrt(a) = a^((p+1)/4) mod p
   return modPow(a, (p + 1n) / 4n, p);
+}
+
+// ── Media Encoding Pipeline ──────────────────────────────────────────────────
+
+import multer from 'multer';
+import { tmpdir } from 'os';
+import {
+  analyzeMedia,
+  validateMediaInput,
+  buildTranscodePlan,
+  transcodeRendition,
+  fragmentMedia,
+  detectAvailableCodec,
+  checkFFmpegAvailable,
+} from '../services/media/encoder.js';
+import { ensureBento4 } from '../services/media/bento4.js';
+import { createEncryptedDASH } from '../services/media/dashPackager.js';
+
+interface EncodeJob {
+  id: string;
+  status: 'queued' | 'analyzing' | 'transcoding' | 'fragmenting' | 'packaging' | 'uploading' | 'complete' | 'error';
+  progress: { percent: number; fps: number; speed: string; time: string; stage: string };
+  result?: { cid: string; mpdUri: string; kid: string; size: number };
+  error?: string;
+  startedAt: number;
+}
+
+const encodeJobs = new Map<string, EncodeJob>();
+
+const uploadTmpDir = join(
+  process.env.PC2_DATA_DIR || process.cwd(),
+  'tmp',
+  'media-encode',
+);
+
+const mediaUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => {
+      const { mkdirSync, existsSync: dirExists } = require('fs');
+      if (!dirExists(uploadTmpDir)) mkdirSync(uploadTmpDir, { recursive: true });
+      cb(null, uploadTmpDir);
+    },
+    filename: (_req, file, cb) => {
+      const unique = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      cb(null, `${unique}-${file.originalname}`);
+    },
+  }),
+  limits: { fileSize: 4 * 1024 * 1024 * 1024 },
+});
+
+router.post('/encode', mediaUpload.single('file'), async (req: AuthenticatedRequest, res: Response) => {
+  const { mkdirSync, rmSync } = await import('fs');
+  const jobId = crypto.randomUUID();
+
+  try {
+    const file = (req as any).file;
+    if (!file) {
+      res.status(400).json({ error: 'No file uploaded. Use multipart/form-data with field name "file".' });
+      return;
+    }
+
+    if (!await checkFFmpegAvailable()) {
+      res.status(503).json({ error: 'FFmpeg not found. Install FFmpeg to enable media encoding.' });
+      return;
+    }
+
+    const job: EncodeJob = {
+      id: jobId,
+      status: 'analyzing',
+      progress: { percent: 0, fps: 0, speed: '0x', time: '00:00:00.00', stage: 'analyzing' },
+      startedAt: Date.now(),
+    };
+    encodeJobs.set(jobId, job);
+
+    // Return job ID immediately so the frontend can poll progress
+    res.json({ jobId, status: 'started' });
+
+    // Run pipeline in background
+    runEncodePipeline(job, file.path, req.app.locals).catch((err: any) => {
+      logger.error(`[media/encode] Pipeline error for job ${jobId}:`, err);
+      job.status = 'error';
+      job.error = err.message;
+    });
+
+  } catch (err: any) {
+    logger.error('[media/encode] Upload error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/encode/status/:jobId', async (req: AuthenticatedRequest, res: Response) => {
+  const job = encodeJobs.get(req.params.jobId);
+  if (!job) {
+    res.status(404).json({ error: 'Job not found' });
+    return;
+  }
+
+  res.json({
+    jobId: job.id,
+    status: job.status,
+    progress: job.progress,
+    result: job.result,
+    error: job.error,
+    elapsedMs: Date.now() - job.startedAt,
+  });
+
+  // Clean up completed/errored jobs after 5 minutes
+  if ((job.status === 'complete' || job.status === 'error') && (Date.now() - job.startedAt > 300000)) {
+    encodeJobs.delete(job.id);
+  }
+});
+
+async function runEncodePipeline(
+  job: EncodeJob,
+  inputPath: string,
+  appLocals: any,
+): Promise<void> {
+  const { mkdirSync, rmSync } = await import('fs');
+  const workDir = join(uploadTmpDir, `job-${job.id}`);
+  mkdirSync(workDir, { recursive: true });
+
+  try {
+    // 1. Analyze
+    job.status = 'analyzing';
+    job.progress.stage = 'analyzing';
+    const info = await analyzeMedia(inputPath);
+    await validateMediaInput(inputPath, info);
+    logger.info(`[media/encode] Job ${job.id}: analysis complete — ${info.format.format_name}, ${info.format.duration}s`);
+
+    // 2. Transcode
+    job.status = 'transcoding';
+    job.progress.stage = 'transcoding';
+    const codec = await detectAvailableCodec();
+    const plan = buildTranscodePlan(info, inputPath, workDir, codec);
+
+    const result = await transcodeRendition(plan, (progress) => {
+      job.progress = { ...progress, stage: 'transcoding' };
+    });
+    logger.info(`[media/encode] Job ${job.id}: transcode complete — ${result.resolution} via ${result.codec}`);
+
+    // 3. Fragment
+    job.status = 'fragmenting';
+    job.progress.stage = 'fragmenting';
+    const bento4 = await ensureBento4();
+    const fragmentedPath = join(workDir, `fragmented_${plan.isAudioOnly ? 'audio' : plan.resolution}.mp4`);
+    await fragmentMedia(result.outputPath, fragmentedPath, bento4.mp4fragment);
+    logger.info(`[media/encode] Job ${job.id}: fragmented`);
+
+    // 4. DASH package with CENC encryption + IPFS upload
+    job.status = 'packaging';
+    job.progress.stage = 'packaging';
+    const ipfs = appLocals.ipfs;
+    const dashResult = await createEncryptedDASH([fragmentedPath], workDir, bento4, ipfs);
+    logger.info(`[media/encode] Job ${job.id}: DASH package created, CID=${dashResult.cid}`);
+
+    // 5. Complete
+    job.status = 'complete';
+    job.progress = { percent: 100, fps: 0, speed: '0x', time: '00:00:00.00', stage: 'complete' };
+    job.result = {
+      cid: dashResult.cid,
+      mpdUri: dashResult.mpdUri,
+      kid: dashResult.kid,
+      size: dashResult.size,
+    };
+
+    logger.info(`[media/encode] Job ${job.id}: COMPLETE in ${Date.now() - job.startedAt}ms — CID=${dashResult.cid}`);
+
+  } finally {
+    // Cleanup temp files
+    try { rmSync(workDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    try { rmSync(inputPath, { force: true }); } catch { /* ignore */ }
+  }
 }
 
 export default router;

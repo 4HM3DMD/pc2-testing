@@ -2038,6 +2038,29 @@ async function handleApiRequest(req, res) {
     return;
   }
 
+  // dDRM Provisioning: PC2 nodes fetch Chipotle config on first startup.
+  // Returns the shared usage API key, PKP ID, API URL, and registered action CIDs.
+  // The usage key is scoped to specific Lit Actions + a single PKP — it cannot
+  // be used for anything outside the elacity-ddrm group.
+  if (url.pathname === "/api/ddrm/provision" && req.method === "GET") {
+    const configPath = path.join(process.cwd(), "ddrm-config.json");
+    try {
+      if (!fs.existsSync(configPath)) {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "dDRM config not provisioned on this supernode" }));
+        return;
+      }
+      const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(config));
+    } catch (err) {
+      console.error("[dDRM] Provision error:", err.message);
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Failed to read dDRM config" }));
+    }
+    return;
+  }
+
   // Phase 3: Registry sync endpoint (for multi-gateway deployment)
   // Other gateways can fetch the full registry for synchronization
   if (url.pathname === "/api/registry/sync" && req.method === "GET") {
@@ -2708,6 +2731,65 @@ async function handleApiRequest(req, res) {
         serverName: "www.microsoft.com",
       },
     }));
+    return;
+  }
+
+  // ==========================================
+  // dDRM Key Provisioning API
+  // Distributes the shared Chipotle usage key + PKP ID to PC2 nodes.
+  // The usage key is scoped to the elacity-ddrm group and can only execute
+  // pre-registered Lit Actions with the registered PKP — it grants no
+  // admin access. The on-chain access check in the Lit Action is the real
+  // security gate, not this key.
+  // ==========================================
+
+  if (url.pathname === "/api/ddrm/provision" && req.method === "GET") {
+    if (!checkRateLimit('register', clientIP)) {
+      res.writeHead(429, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Rate limit exceeded", retryAfter: 60 }));
+      return;
+    }
+
+    const keyFile = '/etc/pc2/ddrm-api-key';
+    const pkpFile = '/etc/pc2/ddrm-pkp-id';
+
+    try {
+      if (!fs.existsSync(keyFile)) {
+        res.writeHead(503, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "dDRM provisioning not configured on this supernode" }));
+        return;
+      }
+
+      const apiKey = fs.readFileSync(keyFile, 'utf8').trim();
+      const pkpId = fs.existsSync(pkpFile)
+        ? fs.readFileSync(pkpFile, 'utf8').trim()
+        : '0x09bdfc8f8ec5a3bd2970497b930bd94839f22227';
+
+      console.log(`[dDRM] Provisioned API key to ${clientIP}`);
+
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({
+        version: 1,
+        network: 'chipotle-dev',
+        apiUrl: 'https://api.dev.litprotocol.com',
+        usageKey: apiKey,
+        pkpId,
+        authority: '0x580c26DefF267EF40A72CF10A4A42050F0641b8B',
+        chain: 'base',
+        chainId: 8453,
+        rpc: 'https://mainnet.base.org',
+        actions: {
+          nonMediaEncrypt: 'QmUdZUxe6BVoXiZcw4hE86YCHsgQVGEmgbN6sr7MhnL8pp',
+          nonMediaDecrypt: 'QmfWksjQkuLxVGEZdHrbFKxUb2sL4K34bLYbD3mAKv2CZA',
+          mediaEncrypt: 'QmdwzJvfgCRvNh9pQ63zroFozR9CfJdiweqTCkVMubD47U',
+          mediaDecrypt: 'QmcNdiSuT2c2zKwhGozTgvT12uP26gAWMw2D49GvcLj2Go',
+        },
+      }));
+    } catch (err) {
+      console.error('[dDRM] Provision error:', err);
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Failed to read dDRM configuration" }));
+    }
     return;
   }
 
