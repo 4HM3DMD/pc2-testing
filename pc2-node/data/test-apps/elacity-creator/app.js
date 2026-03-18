@@ -310,9 +310,10 @@
   function handleFileSelected(file) {
     if (!file) return;
 
-    var MAX_FILE_SIZE = 100 * 1024 * 1024;
+    var isMedia = file.type.startsWith('video/') || file.type.startsWith('audio/');
+    var MAX_FILE_SIZE = isMedia ? 4 * 1024 * 1024 * 1024 : 100 * 1024 * 1024;
     if (file.size > MAX_FILE_SIZE) {
-      showToast('File too large. Maximum size: 100 MB', 'error');
+      showToast('File too large. Maximum size: ' + (isMedia ? '4 GB' : '100 MB'), 'error');
       return;
     }
 
@@ -325,11 +326,16 @@
     dom.filePreview.classList.remove('hidden');
     dom.btnToStep2.disabled = false;
 
-    var reader = new FileReader();
-    reader.onload = function () {
-      state.fileBytes = new Uint8Array(reader.result);
-    };
-    reader.readAsArrayBuffer(file);
+    // For media files, don't read into memory — the backend handles the file directly
+    if (!isMedia) {
+      var reader = new FileReader();
+      reader.onload = function () {
+        state.fileBytes = new Uint8Array(reader.result);
+      };
+      reader.readAsArrayBuffer(file);
+    } else {
+      state.fileBytes = null;
+    }
 
     if (!dom.assetTitle.value) {
       var nameNoExt = file.name.replace(/\.[^.]+$/, '');
@@ -949,8 +955,78 @@
       // ── Step 1: Encrypt ───────────────────────────────
       setProgStep('prog-connect', 'Connecting...', 'active');
 
+      var isMediaFile = state.selectedFile.type.startsWith('video/') || state.selectedFile.type.startsWith('audio/');
       var encryptResult;
+      var mediaEncodeResult = null;
 
+      if (isMediaFile) {
+        // ── Media Path: Encode + CENC encrypt via backend pipeline ──
+        setProgStep('prog-connect', 'Preparing media encoder...', 'active');
+        console.log('[Creator] Media file detected (' + state.selectedFile.type + '), routing through /api/media/encode');
+
+        var formData = new FormData();
+        formData.append('file', state.selectedFile);
+
+        var encodeResp = await pc2Fetch('/api/media/encode', {
+          method: 'POST',
+          body: formData,
+        });
+        if (!encodeResp.ok) {
+          var encErrBody = await encodeResp.json().catch(function () { return {}; });
+          throw new Error(encErrBody.error || 'Media encode failed: ' + encodeResp.status);
+        }
+        var encodeData = await encodeResp.json();
+        var jobId = encodeData.jobId;
+        console.log('[Creator] Encode job started:', jobId);
+        setProgStep('prog-connect', 'Encoding started', 'done');
+        setProgStep('prog-encrypt', 'Encoding & encrypting media...', 'active');
+
+        // Poll for completion
+        var pollInterval = 2000;
+        var maxPollTime = 4 * 60 * 60 * 1000; // 4 hours
+        var pollStart = Date.now();
+
+        while (true) {
+          await new Promise(function (r) { setTimeout(r, pollInterval); });
+          var statusResp = await pc2Fetch('/api/media/encode/status/' + jobId);
+          if (!statusResp.ok) throw new Error('Failed to check encode status');
+          var statusData = await statusResp.json();
+
+          if (statusData.status === 'error') {
+            throw new Error('Media encoding failed: ' + (statusData.error || 'unknown error'));
+          }
+          if (statusData.status === 'complete') {
+            mediaEncodeResult = statusData.result;
+            console.log('[Creator] Media encoding complete:', mediaEncodeResult);
+            break;
+          }
+
+          // Update progress display
+          var stage = statusData.progress?.stage || statusData.status;
+          var speed = statusData.progress?.speed || '';
+          var timeStr = statusData.progress?.time || '';
+          setProgStep('prog-encrypt', 'Encoding: ' + stage + (speed ? ' (' + speed + ')' : '') + (timeStr ? ' [' + timeStr + ']' : ''), 'active');
+
+          if (Date.now() - pollStart > maxPollTime) {
+            throw new Error('Media encoding timed out after ' + (maxPollTime / 3600000) + ' hours');
+          }
+
+          // Back off slowly
+          if (pollInterval < 10000) pollInterval = Math.min(pollInterval + 500, 10000);
+        }
+
+        // Media pipeline produces its own CID, CEK, etc.
+        encryptResult = {
+          encrypted: null,
+          dataToEncryptHash: '',
+          actionCid: '',
+          conditions: null,
+          litCiphertext: '',
+          iv: '',
+          litBackend: 'chipotle',
+        };
+
+      } else {
       try {
         setProgStep('prog-connect', 'Connecting to Lit (server-side)...', 'active');
         console.log('[Creator] Encrypting via backend Lit endpoint...');
@@ -993,9 +1069,18 @@
         usedLocalEncryption = true;
       }
       setProgStep('prog-encrypt', 'Encrypted', 'done');
+      } // end else (non-media path)
 
       // ── Step 2: Upload encrypted asset to IPFS ────────
-      // Upload to local node AND Elacity's IPFS for public reachability
+      var assetCid;
+
+      if (isMediaFile && mediaEncodeResult) {
+        // Media pipeline already handled CENC encryption + IPFS upload
+        assetCid = mediaEncodeResult.cid;
+        setProgStep('prog-upload-asset', 'CID: ' + assetCid.substring(0, 12) + '... (from encoder)', 'done');
+        console.log('[Creator] Media asset CID from encoder:', assetCid);
+      } else {
+      // Non-media: Upload to local node AND Elacity's IPFS for public reachability
       setProgStep('prog-upload-asset', 'Uploading to local node...', 'active');
       var assetBase64 = uint8ToBase64(encryptResult.encrypted);
 
@@ -1031,6 +1116,7 @@
         console.warn('[Creator] Elacity IPFS upload error:', e.message);
       }
       setProgStep('prog-upload-asset', 'CID: ' + assetCid.substring(0, 12) + '...', 'done');
+      } // end else (non-media IPFS upload)
 
       // ── Step 3: Build & upload metadata ─────────────────
       setProgStep('prog-upload-meta', 'Building metadata...', 'active');
@@ -1141,6 +1227,15 @@
         envelope.asset.litCiphertext = encryptResult.litCiphertext;
         envelope.asset.iv = encryptResult.iv;
         envelope.asset.litBackend = encryptResult.litBackend || 'chipotle';
+      }
+
+      // Media-specific metadata: DASH/CENC fields from encoder pipeline
+      if (isMediaFile && mediaEncodeResult) {
+        envelope.asset.protectionType = 'cenc:web3-drm-v1';
+        envelope.asset.mpdUri = mediaEncodeResult.mpdUri;
+        envelope.asset.kid = mediaEncodeResult.kid;
+        envelope.asset.litBackend = 'chipotle';
+        envelope.asset.mediaType = state.selectedFile.type.startsWith('video/') ? 'video' : 'audio';
       }
 
       if (usedLocalEncryption) {
