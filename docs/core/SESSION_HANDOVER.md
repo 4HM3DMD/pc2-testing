@@ -11,7 +11,7 @@
 **Release:** v1.1.0 tagged and released on 2026-03-03 (134 commits squash-merged to main)
 **Launcher:** v1.1.1 released — version display, one-click updates, full networking install
 **DAO Proposal:** Live at https://elastos.com/proposals/69a24f49247f130078064edd
-**Last Commit:** feat: media pipeline E2E — PSSH extraction fix, authority address fix, IPFS pin fix, GUI IPC rebuild, end-to-end video playback + download verified
+**Last Commit:** perf: WASM & I/O quick wins + feat: AES-GCM encrypt inside WASM
 
 ### What Just Shipped (v1.1.0 on main)
 
@@ -413,6 +413,33 @@ Built a complete local media encoding pipeline for the Creator Dashboard. Video/
 - Lit Datil deprecation: Datil network being deprecated ~April 25, 2026 in favor of Chipotle (REST API, API key auth, TEE-based). Migration required.
 - Authority address is hardcoded to Base AuthorityGateway `0x8fe6bf98...`. Works for all Base channels (shared gateway). Long-term: creator app should pass resolved authority into encode endpoint for per-channel support.
 
+#### WASM & Rust Optimization Audit — IN PROGRESS (Mar 18-current)
+
+Comprehensive audit of the PC2 node system to identify Rust/WASM optimization opportunities and alignment with ElastOS Runtime capsule convergence.
+
+**Quick Wins Completed (5/5):**
+- `build-wasm.sh`: `wasm-opt -Oz` post-build pass added — shrinks binaries ~10-20% on next build (graceful skip if binaryen not installed)
+- `media.ts`: Eager WASM preload at module import — eliminates cold-start disk read on first playback request
+- `WASMRuntime.ts`: Fixed WASM module cache key collision — uses SHA-256 fingerprint instead of `byteLength` (two different modules of same size would wrongly share cache)
+- `thumbnail.ts`: Replaced `execSync(ffmpeg)` with async `execFile` — no longer blocks event loop during video thumbnail generation
+- `static.ts`: Replaced all 4 `readFileSync` calls with async `readFile` for HTML injection paths — unblocks event loop during request handling
+
+**AES-GCM Encrypt in WASM — COMPLETE:**
+- Added `aes_gcm_encrypt_raw()` to `ddrm-renderer/src/decrypt.rs` (random CEK+IV generation inside WASM)
+- Added `encrypt_only` mode to `lib.rs` + `main.rs` — plaintext enters WASM, CEK+IV+ciphertext exits
+- 4 Rust tests pass (2 new: encrypt round-trip, nonce uniqueness)
+- `WASMRuntime.ts`: New `executeEncrypt()` method orchestrates WASM encrypt
+- `storage.ts`: Non-media file encryption (`POST /api/storage/lit/encrypt`) now uses WASM instead of Node.js `crypto.createCipheriv` — **plaintext never touches Node.js memory**
+- WASM binary rebuilt (5.8MB → includes encrypt capability)
+
+**Phase 2 — Deferred (requires mp4dash replacement):**
+- `cenc-encrypt` WASM integration into dashPackager (AES-128-CTR segment encryption)
+- Binary PSSH generation from `cenc-encrypt/pssh.rs`
+- DASH manifest generation in TypeScript/Rust (eliminates Python mp4dash dependency)
+- These three are coupled: mp4dash handles encryption + manifest + PSSH in one step. Replacing encryption requires replacing all three.
+
+**Audit findings documented in plan:** 18 optimization opportunities across 4 tiers (quick wins → high-impact → medium-impact → strategic). Key areas: WASM precompilation, IPFS chunk assembly in Rust, Rust HTTP proxy, sovereign key management. All aligned with Runtime capsule convergence path.
+
 #### PC2 Media Runtime — WORKING END-TO-END (Mar 15-16)
 
 Built a complete server-side DASH/CENC media decryption pipeline for PC2. Elacity's existing player relies on browser-native DRM (EME/CDM + SharedArrayBuffer) which can't work inside PC2's sandboxed iframes. The PC2 node now intercepts encrypted DASH streams, decrypts them server-side, strips all DRM signaling, and streams clear content to a lightweight MSE-based JavaScript player.
@@ -494,12 +521,14 @@ Comprehensive player hardening and UX polish:
 3. **Deploy supernode provisioning** — `/api/ddrm/provision` endpoint coded but NOT deployed to supernodes. See `docs/core/LIT_PRODUCTION_CHECKLIST.md` for deployment steps. **This is a v1.2.0 release blocker.**
 4. ~~**Media pipeline on Chipotle**~~ — **DONE (Mar 18)** — Full encoding pipeline E2E verified: transcode → fragment → CENC encrypt → DASH package → IPFS upload → mint → buy → download → playback. PSSH includes ciphertext, hash, contract-compatible kid, correct authority. Lit Chipotle API recovered.
 5. **P-256 ECDH unwrap to WASM (Phase E)** — conditional on Chipotle envelope format. If Chipotle returns CEK directly, this phase is eliminated.
-6. **`cenc-encrypt` Rust WASM crate** — Symmetric counterpart to `cenc-decrypt`. AES-128-CTR encryption in WASM, replaces `mp4encrypt` Bento4 binary. Uses identical crypto primitives from `cenc-decrypt/cenc.rs`. Target: `wasm32-wasip1`.
-7. **`pssh-gen` Rust WASM crate** — PSSH box generator per ISO 23001-7. Produces binary PSSH boxes from Elacity dDRM metadata. Replaces JSON-based approach in `dashPackager.ts`.
+6. ~~**`cenc-encrypt` Rust WASM crate**~~ — **BUILT (Mar 17)** — AES-128-CTR encryption, init segment transformation, binary PSSH generation. 8 tests pass. Not yet integrated into pipeline (requires mp4dash replacement).
+7. ~~**`pssh-gen` Rust WASM crate**~~ — **INCLUDED in `cenc-encrypt`** — `pssh.rs` module generates binary PSSH boxes with Elacity system ID and dDRM metadata.
 8. ~~**WASM crypto hardening (Phases A-C)**~~ — DONE (Mar 16). Branch: `feature/wasm-crypto-hardening`.
 9. ~~**WASM renderer hardening**~~ — DONE (Mar 16) — PDF, code, images, text all render inside WASM.
 10. ~~**Viewer UX enhancements**~~ — DONE (Mar 16) — zoom, pan, page nav, audio player, toolbar.
-11. **On-chain indexer prototype** — replace Elacity GraphQL dependency with event scanner (The Graph / custom)
+11. ~~**AES-GCM encrypt in WASM**~~ — **DONE (Mar 18)** — Non-media encryption now uses WASM `encrypt_only` mode. Plaintext never touches Node.js memory.
+12. ~~**Quick wins (5)**~~ — **DONE (Mar 18)** — wasm-opt build, WASM preload, cache key fix, async thumbnail, async static I/O.
+13. **On-chain indexer prototype** — replace Elacity GraphQL dependency with event scanner (The Graph / custom)
 12. **Self-provisioned RLI tokens** — each node mints own capacity credits, removes Elacity wallet dependency
 13. **AI Model Marketplace alpha** — first non-media vertical: GGUF → encrypt → IPFS → ACCESS_TOKEN → decrypt → Ollama
 14. **dApp Store** — global decentralized app marketplace. DeFi protocols (Uniswap, Aave), games, productivity tools packaged as encrypted dApps. Purchase → decrypt → run locally on PC2 node. See `docs/core/ELACITY_UNIVERSAL_ASSET_STRATEGY.md`.
@@ -793,12 +822,13 @@ Chipotle TEE available `Lit.Actions` methods:
 | `pc2-node/src/services/media/sessionManager.ts` | In-memory session store (CEK, tracks, init segments per track) |
 | `pc2-node/src/services/media/mpdParser.ts` | DASH MPD XML parser (tracks, segments, duration, codecs) |
 
-#### WASM Renderer (Mar 15)
+#### WASM Renderer (Mar 15, extended Mar 18)
 | File | Purpose |
 |------|---------|
-| `pc2-node/wasm-renderer/Cargo.toml` | Rust crate — AES-GCM decrypt + image rendering in WASM linear memory |
+| `pc2-node/wasm-renderer/Cargo.toml` | Rust crate — AES-GCM decrypt + encrypt + image rendering in WASM linear memory |
+| `pc2-node/wasm-renderer/src/decrypt.rs` | AES-256-GCM decrypt + encrypt (random CEK/IV generation) |
 | `pc2-node/wasm-apps/ddrm-renderer/ddrm-renderer.wasm` | Compiled WASM binary (wasm32-wasip1) |
-| `pc2-node/src/services/wasm/WASMRuntime.ts` | Node.js WASI host — @wasmer/wasi + MemFS orchestration (888 lines) |
+| `pc2-node/src/services/wasm/WASMRuntime.ts` | Node.js WASI host — @wasmer/wasi + MemFS, executeRenderer/executeDecryptOnly/executeEncrypt/executeCENCDecrypt |
 
 #### Media Encoding Pipeline (Mar 17-18)
 | File | Purpose |
