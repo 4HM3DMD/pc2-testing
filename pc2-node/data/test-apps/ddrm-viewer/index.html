@@ -80,6 +80,35 @@
           </div>
         </div>
       </div>
+
+      <!-- 3D model viewer -->
+      <div id="model-container" class="hidden">
+        <canvas id="model-canvas"></canvas>
+        <div id="model-watermark" class="model-watermark"></div>
+        <div id="model-info" class="model-info hidden">
+          <div id="model-info-content"></div>
+        </div>
+      </div>
+
+      <!-- Dataset table viewer -->
+      <div id="data-container" class="hidden">
+        <div class="data-toolbar">
+          <input id="data-search" type="text" placeholder="Search..." class="data-search" />
+          <span id="data-stats" class="data-stats"></span>
+        </div>
+        <div id="data-table-wrap" class="data-table-wrap"></div>
+        <div id="data-pager" class="data-pager hidden"></div>
+      </div>
+
+      <!-- Font preview viewer -->
+      <div id="font-container" class="hidden">
+        <div id="font-specimen" class="font-specimen"></div>
+      </div>
+
+      <!-- Archive viewer -->
+      <div id="archive-container" class="hidden">
+        <div id="archive-tree" class="archive-tree"></div>
+      </div>
     </main>
 
     <!-- Floating toolbar -->
@@ -114,6 +143,17 @@
     </footer>
   </div>
 
+  <!-- Three.js for 3D model viewing (loaded only when needed via importmap) -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+    }
+  }
+  </script>
+  <!-- JSZip for archive viewing -->
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js" defer></script>
   <script src="viewer.js"></script>
 </body>
 </html>

@@ -91,6 +91,13 @@
   var isDocumentType = assetParams.mimeType === 'application/pdf'
     || assetParams.mimeType.indexOf('text/') === 0;
   var isAudioType = assetParams.mimeType.indexOf('audio/') === 0;
+  var is3DType = assetParams.mimeType.indexOf('model/') === 0;
+  var isCSVType = assetParams.mimeType === 'text/csv' || assetParams.mimeType === 'text/tab-separated-values';
+  var isFontType = assetParams.mimeType.indexOf('font/') === 0 || assetParams.mimeType === 'application/vnd.ms-fontobject';
+  var isArchiveType = assetParams.mimeType === 'application/zip' || assetParams.mimeType === 'application/gzip' || assetParams.mimeType === 'application/x-tar';
+  var isInteractivePassthrough = is3DType || isCSVType || isFontType || isArchiveType;
+
+  if (isCSVType) isDocumentType = false;
 
   // Audio DOM refs
   var $audioContainer = document.getElementById('audio-container');
@@ -199,6 +206,14 @@
 
       if (isAudioType) {
         showAudioPlayer(blobUrl);
+      } else if (is3DType) {
+        show3DModel(result.blob);
+      } else if (isCSVType) {
+        showDataTable(result.blob);
+      } else if (isFontType) {
+        showFontPreview(blobUrl);
+      } else if (isArchiveType) {
+        showArchive(result.blob);
       } else if (isDocumentType) {
         showDocument(blobUrl);
       } else {
@@ -356,6 +371,15 @@
         case 'End':
           if (isDocumentType) { e.preventDefault(); $content.scrollTop = $content.scrollHeight; }
           break;
+        case 'w': case 'W':
+          if (is3DType && !e.ctrlKey && !e.metaKey) { e.preventDefault(); toggleWireframe(); }
+          break;
+        case 'g': case 'G':
+          if (is3DType && !e.ctrlKey && !e.metaKey) { e.preventDefault(); toggleGrid(); }
+          break;
+        case 'a': case 'A':
+          if (is3DType && !e.ctrlKey && !e.metaKey) { e.preventDefault(); toggleAutoRotate(); }
+          break;
       }
     });
   }
@@ -372,8 +396,23 @@
       'application/pdf': 'PDF Document',
       'text/plain': 'Text Document',
       'text/html': 'HTML Document',
+      'text/csv': 'CSV Dataset',
+      'text/tab-separated-values': 'TSV Dataset',
       'audio/mpeg': 'MP3 Audio',
       'video/mp4': 'MP4 Video',
+      'model/gltf-binary': 'GLB 3D Model',
+      'model/gltf+json': 'glTF 3D Model',
+      'model/obj': 'OBJ 3D Model',
+      'model/stl': 'STL 3D Model',
+      'model/vnd.autodesk.fbx': 'FBX 3D Model',
+      'font/ttf': 'TrueType Font',
+      'font/otf': 'OpenType Font',
+      'font/woff': 'WOFF Font',
+      'font/woff2': 'WOFF2 Font',
+      'application/vnd.ms-fontobject': 'Embedded OpenType Font',
+      'application/zip': 'ZIP Archive',
+      'application/gzip': 'GZIP Archive',
+      'application/x-tar': 'TAR Archive',
     };
     return map[mime] || mime.split('/').pop().toUpperCase();
   }
@@ -427,6 +466,487 @@
     var m = Math.floor(s / 60);
     var sec = Math.floor(s % 60);
     return m + ':' + (sec < 10 ? '0' : '') + sec;
+  }
+
+  // ── 3D Model Viewer (Three.js) ──────────────────────
+  var threeScene = null;
+
+  function show3DModel(blob) {
+    $loading.classList.add('hidden');
+    $error.classList.add('hidden');
+    $content.classList.remove('hidden');
+    $imgContainer.classList.add('hidden');
+    $docContainer.classList.add('hidden');
+    var $modelContainer = document.getElementById('model-container');
+    $modelContainer.classList.remove('hidden');
+
+    $rendererBdg.textContent = 'Three.js';
+    $rendererBdg.classList.remove('hidden');
+
+    var blobUrl = URL.createObjectURL(blob);
+    viewerState.blobUrls.push(blobUrl);
+
+    import('three').then(function (THREE) {
+      return Promise.all([
+        import('three/addons/controls/OrbitControls.js'),
+        import('three/addons/loaders/GLTFLoader.js'),
+        import('three/addons/loaders/OBJLoader.js'),
+        import('three/addons/loaders/STLLoader.js'),
+        import('three/addons/loaders/FBXLoader.js'),
+      ]).then(function (modules) {
+        return { THREE: THREE, OrbitControls: modules[0].OrbitControls, GLTFLoader: modules[1].GLTFLoader, OBJLoader: modules[2].OBJLoader, STLLoader: modules[3].STLLoader, FBXLoader: modules[4].FBXLoader };
+      });
+    }).then(function (deps) {
+      init3DScene(deps, blobUrl, blob);
+    }).catch(function (err) {
+      console.error('[dDRM Viewer] 3D load failed:', err);
+      showError('3D Viewer Error', 'Failed to load Three.js: ' + err.message);
+    });
+  }
+
+  function init3DScene(deps, blobUrl, blob) {
+    var THREE = deps.THREE;
+    var canvas = document.getElementById('model-canvas');
+    var container = document.getElementById('model-container');
+
+    var scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x1a1d27);
+
+    var camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.01, 1000);
+    camera.position.set(3, 2, 3);
+
+    var renderer3d = new THREE.WebGLRenderer({ canvas: canvas, antialias: true });
+    renderer3d.setSize(container.clientWidth, container.clientHeight);
+    renderer3d.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer3d.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer3d.toneMappingExposure = 1.2;
+    renderer3d.outputColorSpace = THREE.SRGBColorSpace;
+
+    var ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+    scene.add(ambientLight);
+    var dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
+    dirLight.position.set(5, 10, 7);
+    dirLight.castShadow = true;
+    scene.add(dirLight);
+    var fillLight = new THREE.DirectionalLight(0x8888ff, 0.3);
+    fillLight.position.set(-3, 0, -5);
+    scene.add(fillLight);
+
+    var gridHelper = new THREE.GridHelper(10, 20, 0x2a2d3a, 0x1f2230);
+    scene.add(gridHelper);
+
+    var controls = new deps.OrbitControls(camera, canvas);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.08;
+    controls.autoRotate = false;
+
+    threeScene = { scene: scene, camera: camera, renderer: renderer3d, controls: controls, mixer: null, clock: new THREE.Clock(), gridHelper: gridHelper, THREE: THREE };
+
+    var mime = assetParams.mimeType;
+    var loader;
+    if (mime === 'model/gltf-binary' || mime === 'model/gltf+json') {
+      loader = new deps.GLTFLoader();
+      loader.load(blobUrl, function (gltf) {
+        scene.add(gltf.scene);
+        if (gltf.animations && gltf.animations.length > 0) {
+          threeScene.mixer = new THREE.AnimationMixer(gltf.scene);
+          gltf.animations.forEach(function (clip) { threeScene.mixer.clipAction(clip).play(); });
+        }
+        frameObject(gltf.scene, deps.THREE, camera, controls);
+        URL.revokeObjectURL(blobUrl);
+        showModelInfo(gltf.scene, deps.THREE);
+        setupModelToolbar();
+      }, undefined, function (err) { showError('3D Load Error', String(err)); });
+    } else if (mime === 'model/stl') {
+      loader = new deps.STLLoader();
+      loader.load(blobUrl, function (geometry) {
+        var mat = new THREE.MeshStandardMaterial({ color: 0x8888cc, metalness: 0.3, roughness: 0.6 });
+        var mesh = new THREE.Mesh(geometry, mat);
+        scene.add(mesh);
+        frameObject(mesh, deps.THREE, camera, controls);
+        URL.revokeObjectURL(blobUrl);
+        showModelInfo(mesh, deps.THREE);
+        setupModelToolbar();
+      }, undefined, function (err) { showError('STL Load Error', String(err)); });
+    } else if (mime === 'model/obj') {
+      loader = new deps.OBJLoader();
+      loader.load(blobUrl, function (group) {
+        scene.add(group);
+        frameObject(group, deps.THREE, camera, controls);
+        URL.revokeObjectURL(blobUrl);
+        showModelInfo(group, deps.THREE);
+        setupModelToolbar();
+      }, undefined, function (err) { showError('OBJ Load Error', String(err)); });
+    } else if (mime === 'model/vnd.autodesk.fbx') {
+      loader = new deps.FBXLoader();
+      loader.load(blobUrl, function (group) {
+        scene.add(group);
+        if (group.animations && group.animations.length > 0) {
+          threeScene.mixer = new THREE.AnimationMixer(group);
+          group.animations.forEach(function (clip) { threeScene.mixer.clipAction(clip).play(); });
+        }
+        frameObject(group, deps.THREE, camera, controls);
+        URL.revokeObjectURL(blobUrl);
+        showModelInfo(group, deps.THREE);
+        setupModelToolbar();
+      }, undefined, function (err) { showError('FBX Load Error', String(err)); });
+    } else {
+      showError('Unsupported 3D Format', 'MIME type ' + mime + ' is not supported for 3D viewing.');
+      return;
+    }
+
+    var watermarkEl = document.getElementById('model-watermark');
+    watermarkEl.textContent = (assetParams.buyerAddress || '').substring(0, 10) + '...' + ' \u2022 dDRM Protected';
+
+    function animate() {
+      requestAnimationFrame(animate);
+      controls.update();
+      if (threeScene.mixer) threeScene.mixer.update(threeScene.clock.getDelta());
+      renderer3d.render(scene, camera);
+    }
+    animate();
+
+    window.addEventListener('resize', function () {
+      camera.aspect = container.clientWidth / container.clientHeight;
+      camera.updateProjectionMatrix();
+      renderer3d.setSize(container.clientWidth, container.clientHeight);
+    });
+  }
+
+  function frameObject(object, THREE, camera, controls) {
+    var box = new THREE.Box3().setFromObject(object);
+    var center = box.getCenter(new THREE.Vector3());
+    var size = box.getSize(new THREE.Vector3());
+    var maxDim = Math.max(size.x, size.y, size.z);
+    var distance = maxDim * 2;
+
+    camera.position.set(center.x + distance * 0.6, center.y + distance * 0.4, center.z + distance * 0.6);
+    controls.target.copy(center);
+    controls.update();
+  }
+
+  function showModelInfo(object, THREE) {
+    var box = new THREE.Box3().setFromObject(object);
+    var size = box.getSize(new THREE.Vector3());
+    var polyCount = 0;
+    var materialCount = new Set();
+
+    object.traverse(function (child) {
+      if (child.isMesh) {
+        var geom = child.geometry;
+        if (geom.index) polyCount += geom.index.count / 3;
+        else if (geom.attributes.position) polyCount += geom.attributes.position.count / 3;
+        if (child.material) {
+          if (Array.isArray(child.material)) child.material.forEach(function (m) { materialCount.add(m.uuid); });
+          else materialCount.add(child.material.uuid);
+        }
+      }
+    });
+
+    var $infoPanel = document.getElementById('model-info');
+    var $infoContent = document.getElementById('model-info-content');
+    $infoContent.innerHTML =
+      '<div class="info-row"><span>Polygons</span><span>' + Math.round(polyCount).toLocaleString() + '</span></div>' +
+      '<div class="info-row"><span>Materials</span><span>' + materialCount.size + '</span></div>' +
+      '<div class="info-row"><span>Size</span><span>' + size.x.toFixed(2) + ' × ' + size.y.toFixed(2) + ' × ' + size.z.toFixed(2) + '</span></div>';
+    $infoPanel.classList.remove('hidden');
+  }
+
+  function setupModelToolbar() {
+    $toolbar.classList.remove('hidden');
+    $toolbar.innerHTML = '';
+
+    var buttons = [
+      { label: 'W', title: 'Wireframe', action: toggleWireframe },
+      { label: 'G', title: 'Grid', action: toggleGrid },
+      { label: 'A', title: 'Auto-rotate', action: toggleAutoRotate },
+    ];
+
+    buttons.forEach(function (b) {
+      var btn = document.createElement('button');
+      btn.className = 'tb-btn';
+      btn.textContent = b.label;
+      btn.title = b.title;
+      btn.style.fontFamily = 'inherit';
+      btn.style.fontSize = '11px';
+      btn.style.fontWeight = '600';
+      btn.style.lineHeight = '1';
+      btn.addEventListener('click', b.action);
+      $toolbar.appendChild(btn);
+    });
+
+    showToolbarBriefly();
+  }
+
+  function toggleWireframe() {
+    if (!threeScene) return;
+    threeScene.scene.traverse(function (child) {
+      if (child.isMesh && child.material) {
+        var mats = Array.isArray(child.material) ? child.material : [child.material];
+        mats.forEach(function (m) { m.wireframe = !m.wireframe; });
+      }
+    });
+  }
+
+  function toggleGrid() {
+    if (!threeScene) return;
+    threeScene.gridHelper.visible = !threeScene.gridHelper.visible;
+  }
+
+  function toggleAutoRotate() {
+    if (!threeScene) return;
+    threeScene.controls.autoRotate = !threeScene.controls.autoRotate;
+  }
+
+  // ── CSV / Dataset Viewer ────────────────────────────
+
+  function showDataTable(blob) {
+    $loading.classList.add('hidden');
+    $error.classList.add('hidden');
+    $content.classList.remove('hidden');
+    $imgContainer.classList.add('hidden');
+    $docContainer.classList.add('hidden');
+    var $dataContainer = document.getElementById('data-container');
+    $dataContainer.classList.remove('hidden');
+
+    $rendererBdg.textContent = 'Table';
+    $rendererBdg.classList.remove('hidden');
+
+    blob.text().then(function (text) {
+      var sep = assetParams.mimeType === 'text/tab-separated-values' ? '\t' : ',';
+      var rows = parseCSV(text, sep);
+      if (rows.length === 0) { showError('Empty Dataset', 'The file contains no data.'); return; }
+
+      var headers = rows[0];
+      var data = rows.slice(1);
+      var PAGE_SIZE = 100;
+      var currentDataPage = 0;
+      var filteredData = data;
+
+      var $search = document.getElementById('data-search');
+      var $stats = document.getElementById('data-stats');
+      var $tableWrap = document.getElementById('data-table-wrap');
+      var $pager = document.getElementById('data-pager');
+
+      $stats.textContent = data.length + ' rows × ' + headers.length + ' columns';
+
+      function renderPage() {
+        var start = currentDataPage * PAGE_SIZE;
+        var pageData = filteredData.slice(start, start + PAGE_SIZE);
+
+        var html = '<table class="data-table"><thead><tr>';
+        html += '<th class="row-num">#</th>';
+        headers.forEach(function (h) { html += '<th>' + escapeHtml(h) + '</th>'; });
+        html += '</tr></thead><tbody>';
+        pageData.forEach(function (row, i) {
+          html += '<tr><td class="row-num">' + (start + i + 1) + '</td>';
+          headers.forEach(function (_, ci) {
+            html += '<td>' + escapeHtml(row[ci] || '') + '</td>';
+          });
+          html += '</tr>';
+        });
+        html += '</tbody></table>';
+        $tableWrap.innerHTML = html;
+
+        var totalPages = Math.max(1, Math.ceil(filteredData.length / PAGE_SIZE));
+        if (totalPages > 1) {
+          $pager.classList.remove('hidden');
+          $pager.innerHTML =
+            '<button class="pager-btn" data-dir="-1" ' + (currentDataPage === 0 ? 'disabled' : '') + '>&laquo; Prev</button>' +
+            '<span class="pager-info">' + (currentDataPage + 1) + ' / ' + totalPages + '</span>' +
+            '<button class="pager-btn" data-dir="1" ' + (currentDataPage >= totalPages - 1 ? 'disabled' : '') + '>Next &raquo;</button>';
+          $pager.querySelectorAll('.pager-btn').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+              var dir = parseInt(btn.getAttribute('data-dir'), 10);
+              currentDataPage = Math.max(0, Math.min(currentDataPage + dir, totalPages - 1));
+              renderPage();
+            });
+          });
+        } else {
+          $pager.classList.add('hidden');
+        }
+      }
+
+      $search.addEventListener('input', function () {
+        var query = $search.value.toLowerCase();
+        currentDataPage = 0;
+        if (!query) { filteredData = data; }
+        else {
+          filteredData = data.filter(function (row) {
+            return row.some(function (cell) { return (cell || '').toLowerCase().indexOf(query) !== -1; });
+          });
+        }
+        $stats.textContent = filteredData.length + ' of ' + data.length + ' rows';
+        renderPage();
+      });
+
+      renderPage();
+    }).catch(function (err) {
+      showError('Parse Error', 'Failed to parse dataset: ' + err.message);
+    });
+  }
+
+  function parseCSV(text, sep) {
+    var rows = [];
+    var row = [];
+    var field = '';
+    var inQuotes = false;
+
+    for (var i = 0; i < text.length; i++) {
+      var c = text[i];
+      if (inQuotes) {
+        if (c === '"' && text[i + 1] === '"') { field += '"'; i++; }
+        else if (c === '"') { inQuotes = false; }
+        else { field += c; }
+      } else {
+        if (c === '"') { inQuotes = true; }
+        else if (c === sep) { row.push(field); field = ''; }
+        else if (c === '\n' || (c === '\r' && text[i + 1] === '\n')) {
+          row.push(field); field = '';
+          if (row.length > 1 || row[0] !== '') rows.push(row);
+          row = [];
+          if (c === '\r') i++;
+        } else { field += c; }
+      }
+    }
+    if (field || row.length > 0) { row.push(field); rows.push(row); }
+    return rows;
+  }
+
+  function escapeHtml(s) {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  // ── Font Preview Viewer ─────────────────────────────
+
+  function showFontPreview(blobUrl) {
+    $loading.classList.add('hidden');
+    $error.classList.add('hidden');
+    $content.classList.remove('hidden');
+    $imgContainer.classList.add('hidden');
+    $docContainer.classList.add('hidden');
+    var $fontContainer = document.getElementById('font-container');
+    $fontContainer.classList.remove('hidden');
+
+    $rendererBdg.textContent = 'Font';
+    $rendererBdg.classList.remove('hidden');
+
+    var fontName = 'ddrm-preview-font-' + Date.now();
+    var fontFace = new FontFace(fontName, 'url(' + blobUrl + ')');
+
+    fontFace.load().then(function (loaded) {
+      document.fonts.add(loaded);
+
+      var $specimen = document.getElementById('font-specimen');
+      var title = assetParams.title || 'Font Preview';
+
+      var sizes = [72, 48, 36, 24, 18, 14];
+      var html = '<h2 class="font-title">' + escapeHtml(title) + '</h2>';
+
+      html += '<div class="font-section"><div class="font-label">Alphabet</div>';
+      html += '<div class="font-sample" style="font-family:\'' + fontName + '\';font-size:36px;">ABCDEFGHIJKLMNOPQRSTUVWXYZ</div>';
+      html += '<div class="font-sample" style="font-family:\'' + fontName + '\';font-size:36px;">abcdefghijklmnopqrstuvwxyz</div>';
+      html += '<div class="font-sample" style="font-family:\'' + fontName + '\';font-size:36px;">0123456789</div></div>';
+
+      html += '<div class="font-section"><div class="font-label">Pangram</div>';
+      html += '<div class="font-sample" style="font-family:\'' + fontName + '\';font-size:28px;">The quick brown fox jumps over the lazy dog</div></div>';
+
+      html += '<div class="font-section"><div class="font-label">Sizes</div>';
+      sizes.forEach(function (sz) {
+        html += '<div class="font-size-row"><span class="font-size-label">' + sz + 'px</span><span class="font-sample" style="font-family:\'' + fontName + '\';font-size:' + sz + 'px;">Sphinx of black quartz, judge my vow.</span></div>';
+      });
+      html += '</div>';
+
+      html += '<div class="font-section"><div class="font-label">Custom Text</div>';
+      html += '<input id="font-custom-input" type="text" class="font-custom-input" placeholder="Type to preview..." value="Hello, World!" />';
+      html += '<div id="font-custom-preview" class="font-sample" style="font-family:\'' + fontName + '\';font-size:48px;">Hello, World!</div></div>';
+
+      $specimen.innerHTML = html;
+
+      var $customInput = document.getElementById('font-custom-input');
+      var $customPreview = document.getElementById('font-custom-preview');
+      $customInput.addEventListener('input', function () {
+        $customPreview.textContent = $customInput.value || 'Type to preview...';
+      });
+
+    }).catch(function (err) {
+      showError('Font Load Error', 'Failed to load font: ' + err.message);
+    });
+  }
+
+  // ── Archive Viewer ──────────────────────────────────
+
+  function showArchive(blob) {
+    $loading.classList.add('hidden');
+    $error.classList.add('hidden');
+    $content.classList.remove('hidden');
+    $imgContainer.classList.add('hidden');
+    $docContainer.classList.add('hidden');
+    var $archiveContainer = document.getElementById('archive-container');
+    $archiveContainer.classList.remove('hidden');
+
+    $rendererBdg.textContent = 'Archive';
+    $rendererBdg.classList.remove('hidden');
+
+    if (typeof JSZip === 'undefined') {
+      showError('Archive Error', 'JSZip library not loaded. Cannot view archive contents.');
+      return;
+    }
+
+    JSZip.loadAsync(blob).then(function (zip) {
+      var entries = [];
+      zip.forEach(function (relativePath, zipEntry) {
+        entries.push({
+          path: relativePath,
+          dir: zipEntry.dir,
+          size: zipEntry._data ? (zipEntry._data.uncompressedSize || 0) : 0,
+          date: zipEntry.date,
+        });
+      });
+
+      entries.sort(function (a, b) {
+        if (a.dir !== b.dir) return a.dir ? -1 : 1;
+        return a.path.localeCompare(b.path);
+      });
+
+      var $tree = document.getElementById('archive-tree');
+      var totalSize = 0;
+      var html = '<div class="archive-header">';
+      html += '<span class="archive-icon">\uD83D\uDCC1</span> ';
+      html += '<span class="archive-name">' + escapeHtml(assetParams.title || 'Archive') + '</span>';
+      html += '<span class="archive-count">' + entries.length + ' items</span></div>';
+      html += '<div class="archive-list">';
+
+      entries.forEach(function (entry) {
+        totalSize += entry.size;
+        var icon = entry.dir ? '\uD83D\uDCC1' : fileIcon(entry.path);
+        var sizeStr = entry.dir ? '' : formatBytes(entry.size);
+        html += '<div class="archive-entry">';
+        html += '<span class="entry-icon">' + icon + '</span>';
+        html += '<span class="entry-path">' + escapeHtml(entry.path) + '</span>';
+        if (sizeStr) html += '<span class="entry-size">' + sizeStr + '</span>';
+        html += '</div>';
+      });
+
+      html += '</div>';
+      html += '<div class="archive-footer">Total uncompressed: ' + formatBytes(totalSize) + '</div>';
+      $tree.innerHTML = html;
+    }).catch(function (err) {
+      showError('Archive Error', 'Failed to read archive: ' + err.message);
+    });
+  }
+
+  function fileIcon(path) {
+    var ext = path.split('.').pop().toLowerCase();
+    var icons = { js: '\uD83D\uDCDC', ts: '\uD83D\uDCDC', py: '\uD83D\uDC0D', html: '\uD83C\uDF10', css: '\uD83C\uDFA8', json: '{}', md: '\uD83D\uDCD6', txt: '\uD83D\uDCC4', png: '\uD83D\uDDBC', jpg: '\uD83D\uDDBC', jpeg: '\uD83D\uDDBC', gif: '\uD83D\uDDBC', mp3: '\uD83C\uDFB5', mp4: '\uD83C\uDFAC', zip: '\uD83D\uDCE6', pdf: '\uD83D\uDCC4' };
+    return icons[ext] || '\uD83D\uDCC4';
+  }
+
+  function formatBytes(bytes) {
+    if (bytes === 0) return '0 B';
+    var units = ['B', 'KB', 'MB', 'GB'];
+    var i = Math.floor(Math.log(bytes) / Math.log(1024));
+    return (bytes / Math.pow(1024, i)).toFixed(i > 0 ? 1 : 0) + ' ' + units[i];
   }
 
   // ── Zoom & Pan ────────────────────────────────────────

@@ -11,7 +11,7 @@
 **Release:** v1.1.0 tagged and released on 2026-03-03 (134 commits squash-merged to main)
 **Launcher:** v1.1.1 released — version display, one-click updates, full networking install
 **DAO Proposal:** Live at https://elastos.com/proposals/69a24f49247f130078064edd
-**Last Commit:** feat: WASM Tier B — mp4-split Rust WASM crate, decrypt limit 200MB, player access-denied UX
+**Last Commit:** feat: Wave 1 universal asset viewers — 3D models (Three.js), CSV datasets, fonts, archives + backend passthrough
 
 #### AV1 Playback Fix & Init Segment Splitting (Mar 18)
 
@@ -561,7 +561,8 @@ Comprehensive player hardening and UX polish:
 5b. ~~**ISO BMFF (MP4) parser in Rust/WASM**~~ — **DONE (Mar 19)** — New `mp4-split` Rust WASM crate (91KB). `splitFragmentedMP4WASM()` wraps WASM binary for DASH encoding pipeline. Full ISO BMFF parsing (ftyp/moov/moof/mdat, track metadata, codec strings). 800MB size guard with JS `splitFragmentedMP4FromBuffer()` fallback. Video encoding noticeably faster.
 5c. ~~**WASM decrypt max size raised to 200MB**~~ — **DONE (Mar 19)** — `WASM_DECRYPT_MAX_BYTES` in `storage.ts` raised from 50MB to 200MB. Non-media dDRM files (images, PDFs, text, code, AI models) up to 200MB now decrypt inside WASM sandbox — CEK never enters V8 memory. Media playback confirmed no per-segment size limit.
 5d. ~~**Player access-denied UX**~~ — **DONE (Mar 19)** — `showError()` in `player.js` detects Lit/access denial keywords and shows "Access Required — purchase to watch" instead of raw technical errors.
-6. **On-chain content indexer** — Replace Elacity GraphQL dependency with event scanner (The Graph / custom). Removes single biggest centralization point. Becomes `elastos://market/*` provider capsule at convergence.
+5e. ~~**Wave 1 Universal Asset Viewers**~~ — **DONE (Mar 19)** — 3D model viewer (Three.js, GLTFLoader/OBJLoader/STLLoader/FBXLoader, PBR lighting, OrbitControls, wireframe/grid/auto-rotate toolbar, model info panel, watermark + blob revocation), CSV/dataset viewer (paginated table, sort, search), font viewer (@font-face specimen, custom text), archive viewer (JSZip file tree). Backend passthrough in `storage.ts`. `humanMime` map extended with 15 new MIME types.
+6. **Audio routing fix** — Remove audio passthrough from dDRM Viewer; route all audio through Media Runtime encoding pipeline (DASH segments, per-segment WASM decrypt) for security parity with video. — Replace Elacity GraphQL dependency with event scanner (The Graph / custom). Removes single biggest centralization point. Becomes `elastos://market/*` provider capsule at convergence.
 7. **AI Model Marketplace alpha** — First non-media vertical: GGUF → encrypt → IPFS → ACCESS_TOKEN → decrypt → Ollama. Proves "Amazon of digital assets" story beyond video.
 8. **P-256 ECDH unwrap to WASM (Phase E)** — conditional on Chipotle envelope format. If Chipotle returns CEK directly, this phase is eliminated.
 9. ~~**`cenc-encrypt` Rust WASM crate**~~ — **BUILT + INTEGRATED (Mar 17-18)** — AES-128-CTR per-sample encryption, init segment transformation (sinf/tenc injection), binary PSSH generation. 8 tests pass. Now fully wired into the encoding pipeline via `executeCENCEncrypt()` in WASMRuntime, replacing mp4dash + mp4encrypt.
@@ -720,6 +721,69 @@ Chipotle TEE available `Lit.Actions` methods:
 | `pc2-node/data/test-apps/pc2-media-runtime/index.html` | Added `id="error-title"` to error screen `<h2>` |
 | `pc2-node/data/test-apps/pc2-media-runtime/player.js` | User-friendly access denial messages (keyword detection) |
 
+#### Wave 1 — Universal Asset Viewers (Mar 19)
+
+Expanded the dDRM Viewer to support four new interactive content types beyond the existing image/PDF/text/code/audio viewers. All content is WASM-decrypted server-side, then passed to the client for interactive rendering (passthrough model — same security as existing audio, with blob URL revocation). VFX industry use case: 3D model monetization with timed access and resale royalties.
+
+**Backend changes:**
+- `storage.ts`: New passthrough block before the 415 response for `model/*`, `font/*`, `text/csv`, `text/tab-separated-values`, `application/zip`, `application/gzip`, `application/x-tar`, `application/vnd.ms-fontobject`. Sets `X-Renderer: passthrough` header. Zeroes decrypted buffer after sending.
+
+**3D Model Viewer (Three.js):**
+- Three.js v0.170.0 via ES Module importmap (CDN, loaded only when needed)
+- Five loaders: GLTFLoader (GLB/glTF), OBJLoader, STLLoader, FBXLoader — auto-detected by MIME type
+- PBR lighting: ambient (0.4) + directional (1.0) with shadows + fill light (0.3)
+- ACES Filmic tone mapping, sRGB color space, 2x pixel ratio cap
+- OrbitControls with damping, auto-framing (bounding box → camera position)
+- Animation mixer for GLTF/FBX animated models
+- Grid helper (toggleable)
+- Model info panel: polygon count, material count, bounding box dimensions
+- Toolbar: Wireframe (W), Grid (G), Auto-rotate (A) — both buttons and keyboard shortcuts
+- Anti-piracy: watermark overlay (buyer address + "dDRM Protected"), blob URL revoked after GPU load
+- Dark theme background (#1a1d27), responsive resize handling
+
+**CSV/Dataset Viewer:**
+- Client-side CSV parser with quoted field support (handles embedded commas/newlines)
+- TSV support via MIME type detection
+- Paginated table (100 rows per page) with page navigation
+- Full-text search across all columns
+- Row count and column count stats
+- Dark theme table styling with hover highlight
+- HTML-escaped cell content
+
+**Font Viewer:**
+- `@font-face` loading via `FontFace` API with blob URL
+- Type specimen display: uppercase alphabet, lowercase alphabet, digits
+- Pangram ("The quick brown fox...")
+- Size samples: 72, 48, 36, 24, 18, 14px
+- Custom text input with live preview (48px)
+- Dark theme with subtle section separators
+
+**Archive Viewer:**
+- JSZip v3.10.1 (CDN, deferred load)
+- File tree listing with icons (per extension), sizes, item count
+- Directories sorted first, then alphabetical
+- Total uncompressed size in footer
+- No extraction to disk — read-only listing only
+
+**HTML/CSS additions:**
+- `index.html`: 4 new containers (model-container, data-container, font-container, archive-container), Three.js importmap, JSZip CDN script
+- `viewer.css`: 288 lines of new CSS for all four viewer modes (model canvas, table styling, font specimen, archive tree)
+- `viewer.js`: `humanMime` map extended with 15 new MIME types (model/*, font/*, text/csv, application/zip, etc.)
+
+**Files changed (Wave 1 viewers, Mar 19):**
+| File | Change |
+|------|--------|
+| `pc2-node/data/test-apps/ddrm-viewer/viewer.js` | 4 new viewer modes (3D/CSV/font/archive), 15 MIME types, toolbar, keyboard shortcuts |
+| `pc2-node/data/test-apps/ddrm-viewer/index.html` | 4 new containers, Three.js importmap, JSZip CDN |
+| `pc2-node/data/test-apps/ddrm-viewer/viewer.css` | 288 lines of styling for all new viewer modes |
+| `pc2-node/src/api/storage.ts` | Passthrough block for model/font/CSV/archive MIME types |
+| `docs/core/ROADMAP.md` | Wave 1 items added to Tier 1, v1.2.0 release notes updated |
+
+**Remaining Wave 1 items:**
+- [ ] **Audio routing fix** — remove audio passthrough from dDRM Viewer, ensure all audio goes through Media Runtime encoding pipeline (DASH segments, per-segment WASM decrypt). Currently audio plays via passthrough (weaker security model — full decrypted blob in browser memory). Critical for security parity with video.
+- [ ] **Creator Dashboard MIME hints** — update category-to-MIME hints in `elacity-creator` for 3D models, fonts, archives
+- [ ] **E2E test** — mint one GLB + CSV + font + ZIP, purchase each, open in viewer, verify rendering and anti-piracy
+
 #### Bug Fixes — Mar 16
 
 | Bug | Root Cause | Fix |
@@ -794,7 +858,7 @@ Chipotle TEE available `Lit.Actions` methods:
 - [dDRM Pipeline E2E](fd6755f0-d73c-4e41-8df3-0f57f15071a2) — @elacity-js/access, Creator Dashboard, Lit Action trust model (Path A), capacity credit auto-detection, decrypt endpoint, decentralization analysis. Also: hayro PDF rendering, WASM text fixes, Mint context menu, wallet bridge restore, Elacity branding, WASM crypto hardening Phases A-C, double-signature fix, TXT dimension cap, video autoplay, fMP4 strip+decrypt in Rust
 - [Secure Viewer & PDF](fd6755f0-d73c-4e41-8df3-0f57f15071a2) — secure viewer pipeline, PDF hybrid rendering, two-layer encryption fix, Lit Pinata/relayer integration, auto-decrypt, parallel pages, dDRM Viewer app, .ddrm.json capsules, WASM renderer, GUI integration
 - [Media Runtime E2E](fd6755f0-d73c-4e41-8df3-0f57f15071a2) — server-side DASH/CENC decryption pipeline, Rust WASM cenc-decrypt crate, MSE player, DRM stripping (init+segment), 16-byte IV fix, Smart Account PSSH, two-phase Lit auth
-- [Media Encoding Pipeline](current) — Local media encoding pipeline (FFmpeg→Bento4→CENC→DASH→IPFS), Chipotle CEK encryption, Creator Dashboard media UI, IPC duplicate wallet fix, MetaMask gas estimation fix, PSSH extraction/authority/kid fixes, IPFS pin hang fix, GUI rebuild, **E2E playback + download verified**. AV1 playback fix: nested PSSH stripping in Rust WASM, multi-track init segment splitting, MSE-compatible per-track init delivery. MetaMask mint retry button. WASM optimization Tier B audit: `mp4-split` Rust WASM crate (ISO BMFF parser), WASM decrypt limit raised to 200MB, player access-denied UX, init-split/NaCl/API-key-encrypt audited and deferred.
+- [Media Encoding Pipeline](current) — Local media encoding pipeline (FFmpeg→Bento4→CENC→DASH→IPFS), Chipotle CEK encryption, Creator Dashboard media UI, IPC duplicate wallet fix, MetaMask gas estimation fix, PSSH extraction/authority/kid fixes, IPFS pin hang fix, GUI rebuild, **E2E playback + download verified**. AV1 playback fix: nested PSSH stripping in Rust WASM, multi-track init segment splitting, MSE-compatible per-track init delivery. MetaMask mint retry button. WASM optimization Tier B audit: `mp4-split` Rust WASM crate (ISO BMFF parser), WASM decrypt limit raised to 200MB, player access-denied UX, init-split/NaCl/API-key-encrypt audited and deferred. **Wave 1 Universal Asset Viewers**: 3D model viewer (Three.js, 5 loaders, PBR lighting, OrbitControls, wireframe/grid/auto-rotate toolbar, model info panel, watermark + blob revocation), CSV/dataset viewer (paginated table, sort, search, column stats), font viewer (@font-face blob, specimen, custom text), archive viewer (JSZip file tree), backend passthrough in `storage.ts`.
 
 ---
 

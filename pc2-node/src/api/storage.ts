@@ -1800,6 +1800,30 @@ router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, 
       return;
     }
 
+    // ── Interactive content passthrough ───────────────────
+    // 3D models, datasets, fonts, and archives are decrypted via WASM (CEK
+    // stays in WASM linear memory) then passed to the client for interactive
+    // rendering (Three.js, table, @font-face, JSZip). Blob URLs are revoked
+    // after the client loads the content.
+    const passthroughPrefixes = ['model/', 'font/'];
+    const passthroughExact = [
+      'text/csv', 'text/tab-separated-values',
+      'application/zip', 'application/gzip', 'application/x-tar',
+      'application/vnd.ms-fontobject',
+    ];
+    const isPassthrough = passthroughPrefixes.some(p => mime.startsWith(p)) || passthroughExact.includes(mime);
+    if (isPassthrough) {
+      const len = decryptedBytes.length;
+      res.set('Content-Type', mime);
+      res.set('Content-Length', String(len));
+      res.set('X-Renderer', 'passthrough');
+      res.set('X-Asset-Type', mime.split('/')[0]);
+      res.send(Buffer.from(decryptedBytes));
+      decryptedBytes.fill(0);
+      logger.info(`[SecureView] Passthrough: ${mime}, ${len} bytes (total: ${Date.now() - requestStart}ms) for ${buyerAddress}`);
+      return;
+    }
+
     // ── Unsupported type ─────────────────────────────────
     decryptedBytes.fill(0);
     res.status(415).json({

@@ -196,9 +196,19 @@ These diagrams from Rong define the north star. Every work stream should move us
 - [ ] `AssetService` in `@elacity-js/api` — generic asset queries for any content type alongside existing `NFTService`
 
 **Tiered Marketplace Rollout:**
-- [x] **Tier 1 — Quick Markets (file in, file out):** E-books/PDFs, stock photography, audio/music, design templates, fonts, 3D models, spreadsheets/data. *(Status: ALL working today via Chipotle dDRM — same pipeline, different renderers)*
+- [x] **Tier 1 — Quick Markets (file in, file out):** E-books/PDFs, stock photography, audio/music, design templates, fonts, 3D models, spreadsheets/data. *(Status: Encryption + minting working for ALL types via Chipotle dDRM. Viewer support: images, PDFs, text, code, audio, video COMPLETE. 3D models, datasets, fonts, archives: viewer expansion in progress)*
+  - [x] Images (JPEG, PNG, WebP, GIF) — WASM render + watermark *(completed Mar 15)*
+  - [x] PDFs — WASM render (hayro rasterizer) *(completed Mar 16)*
+  - [x] Text/Code (30+ languages) — WASM syntax highlight *(completed Mar 16)*
+  - [x] Audio (MP3, WAV, FLAC, AAC) — Media Runtime DASH playback *(completed Mar 16)*
+  - [x] Video (all FFmpeg codecs) — Media Runtime DASH/CENC playback *(completed Mar 16-18)*
+  - [ ] **3D Models** (GLB, glTF, OBJ, STL, FBX) — Three.js interactive viewer with VFX-grade features (wireframe, normals, animation, material inspector, poly count). WASM decrypt + passthrough to WebGL. Anti-piracy: blob URL revocation after GPU load, canvas watermark, screenshot intercept. **VFX industry use case: sell/license 3D assets with resale royalties**
+  - [ ] **Datasets** (CSV, TSV) — Paginated table viewer with sort, search, column type detection
+  - [ ] **Fonts** (TTF, OTF, WOFF2) — Type specimen preview (@font-face blob, alphabet, pangram, custom text input)
+  - [ ] **Archives** (ZIP) — File tree listing with sizes/types (JSZip, no extraction to disk)
+  - [ ] **Audio routing fix** — Remove audio passthrough from dDRM Viewer; ensure all audio routes through Media Runtime encoding pipeline (DASH segments, per-segment WASM decrypt) for consistent security model
 - [ ] **Tier 2 — Medium Markets (local runtime integration):** dApp Store, AI models (GGUF → Ollama), code packages (npm), datasets, HTML5 games. Need PC2 backend endpoints for decrypt-and-load.
-- [ ] **Tier 3 — Complex Markets (ElastOS Runtime v2):** Native software/games, API marketplace, agent marketplace. Need Runtime capsule sandboxes (WASM/Firecracker).
+- [ ] **Tier 3 — Complex Markets (ElastOS Runtime v2):** Native software/games, API marketplace, agent marketplace. Need Runtime capsule sandboxes (WASM/Firecracker). Runtime v2 capsule model provides isolated execution for all interactive content types (3D, games, dApps) — capability tokens replace blob URLs.
 
 **dApp Store (Global Decentralized App Marketplace):**
 - [ ] **dApp packaging format** — define bundle structure (HTML/JS/WASM/CSS + manifest) for encrypted dApps
@@ -749,10 +759,10 @@ Starting Month 1 (March 2026):
 | Release | Target | Focus |
 |---------|--------|-------|
 | v1.1.0 | March 2026 | Merge Jetson branch, bug fixes, AV1 player |
-| v1.2.0 | April 2026 | **Lit Chipotle dDRM** (non-media DONE, media E2E DONE Mar 18), local media encoding (FFmpeg+WASM CENC+DASH — E2E verified, Python-free), AV1 playback verified (init splitting + PSSH strip), WASM optimization (mp4-split Rust crate, IPFS chunk assembly, decrypt limit 200MB, player UX), supernode provisioning ready (deploy when Lit Chipotle production network goes live), hardware expansion, installer improvements, WireGuard bundling |
+| v1.2.0 | April 2026 | **Lit Chipotle dDRM** (non-media DONE, media E2E DONE Mar 18), local media encoding (FFmpeg+WASM CENC+DASH — E2E verified, Python-free), AV1 playback verified (init splitting + PSSH strip), WASM optimization (mp4-split Rust crate, IPFS chunk assembly, decrypt limit 200MB, player UX), **Universal Asset Viewers** (3D models with VFX features, CSV datasets, fonts, archives — Tier 1 completion), audio routing fix (all audio through Media Runtime DASH), supernode provisioning ready (deploy when Lit Chipotle production network goes live), hardware expansion, installer improvements, WireGuard bundling |
 | v1.3.0 | May 2026 | IPFS streaming chunk assembly (production reliability — OOM fix for large files on Jetson), AI Model Marketplace alpha (GGUF→Ollama), on-chain content indexer, dApp bundles, `@elacity-js/asset-packager` |
 | v1.4.0 | June 2026 | Multi-rendition encoding, fiat onramp, AI serialization optimization (MessagePack), signed capsule format (bridge to Runtime) |
-| v1.5.0 | July 2026 | dApp Store v1 (categories, ratings, HTML5 games, 3D viewer), mobile companion alpha |
+| v1.5.0 | July 2026 | dApp Store v1 (categories, ratings, HTML5 games), mobile companion alpha |
 | v1.6.0 | August 2026 | Signed capsule format (bridge to Runtime), Supernode Access Tokens, bandwidth metering |
 | v1.7.0 | September 2026 | Protocol fees alpha, white-label SDK alpha, enterprise pilot |
 | v1.8.0 | October 2026 | Developer SDK, composable assets (nested licensing) |
