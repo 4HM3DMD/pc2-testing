@@ -1323,6 +1323,10 @@ const WASM_DECRYPT_MAX_BYTES = 200 * 1024 * 1024; // 200MB — above this, Node.
 async function decryptAssetTwoLayer(params: DecryptParams, ipfsService?: any): Promise<Buffer> {
   const { cekBase64, encryptedBytes } = await recoverCEKAndFetchData(params, ipfsService);
 
+  // Chipotle REST API may return base64 without padding — the Rust WASM
+  // decrypt-only code path requires standard padded base64.
+  const paddedCek = cekBase64.length % 4 === 0 ? cekBase64 : cekBase64 + '='.repeat(4 - (cekBase64.length % 4));
+
   // WASM path: CEK stays in WASM linear memory
   if (encryptedBytes.length <= WASM_DECRYPT_MAX_BYTES) {
     try {
@@ -1330,7 +1334,7 @@ async function decryptAssetTwoLayer(params: DecryptParams, ipfsService?: any): P
       const runtime = getWASMRuntime();
       const result = await runtime.executeDecryptOnly(
         wasmBinary,
-        cekBase64,
+        paddedCek,
         params.iv,
         'application/octet-stream',
         encryptedBytes,
@@ -1425,10 +1429,12 @@ async function renderViaWASM(
 ): Promise<WASMRenderResult | null> {
   const { cekBase64, encryptedBytes } = await recoverCEKAndFetchData(params, ipfsService);
 
+  const paddedCek = cekBase64.length % 4 === 0 ? cekBase64 : cekBase64 + '='.repeat(4 - (cekBase64.length % 4));
+
   const watermarkText = `${params.buyerAddress.substring(0, 10)}...${params.buyerAddress.substring(params.buyerAddress.length - 6)} ${new Date().toISOString().split('T')[0]}`;
 
   const command: RendererCommand = {
-    cek_b64: cekBase64,
+    cek_b64: paddedCek,
     iv_b64: params.iv,
     mime_type: mime,
     watermark: watermarkText,

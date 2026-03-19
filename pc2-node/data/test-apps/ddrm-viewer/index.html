@@ -143,17 +143,16 @@
     </footer>
   </div>
 
-  <!-- Three.js for 3D model viewing (loaded only when needed via importmap) -->
-  <script type="importmap">
-  {
-    "imports": {
-      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js",
-      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
-    }
-  }
-  </script>
-  <!-- JSZip for archive viewing -->
-  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js" defer></script>
-  <script src="viewer.js"></script>
+  <!-- Three.js r128 + addons (local, bypasses iframe fetch interceptor) -->
+  <script src="lib/three.min.js" defer></script>
+  <script src="lib/OrbitControls.js" defer></script>
+  <script src="lib/GLTFLoader.js" defer></script>
+  <script src="lib/OBJLoader.js" defer></script>
+  <script src="lib/STLLoader.js" defer></script>
+  <script src="lib/fflate.min.js" defer></script>
+  <script src="lib/FBXLoader.js" defer></script>
+  <script src="lib/VertexNormalsHelper.js" defer></script>
+  <script src="lib/jszip.min.js" defer></script>
+  <script src="viewer.js" defer></script>
 </body>
 </html>

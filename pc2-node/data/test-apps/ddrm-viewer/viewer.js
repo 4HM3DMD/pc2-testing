@@ -176,8 +176,10 @@
     })
     .then(function (resp) {
       if (!resp.ok) {
-        return resp.json().then(function (err) {
-          throw new Error(err.error || 'Secure view failed (' + resp.status + ')');
+        return resp.text().then(function (body) {
+          var errMsg;
+          try { errMsg = JSON.parse(body).error; } catch (_) { errMsg = 'Secure view failed (' + resp.status + ')'; }
+          throw new Error(errMsg);
         });
       }
 
@@ -386,6 +388,9 @@
         case 's': case 'S':
           if (is3DType && !e.ctrlKey && !e.metaKey) { e.preventDefault(); takeScreenshot(); }
           break;
+        case '?':
+          if (is3DType) { e.preventDefault(); toggleHelpOverlay(); }
+          break;
       }
     });
   }
@@ -492,27 +497,15 @@
     var blobUrl = URL.createObjectURL(blob);
     viewerState.blobUrls.push(blobUrl);
 
-    import('three').then(function (THREE) {
-      return Promise.all([
-        import('three/addons/controls/OrbitControls.js'),
-        import('three/addons/loaders/GLTFLoader.js'),
-        import('three/addons/loaders/OBJLoader.js'),
-        import('three/addons/loaders/STLLoader.js'),
-        import('three/addons/loaders/FBXLoader.js'),
-        import('three/addons/helpers/VertexNormalsHelper.js'),
-      ]).then(function (modules) {
-        return { THREE: THREE, OrbitControls: modules[0].OrbitControls, GLTFLoader: modules[1].GLTFLoader, OBJLoader: modules[2].OBJLoader, STLLoader: modules[3].STLLoader, FBXLoader: modules[4].FBXLoader, VertexNormalsHelper: modules[5].VertexNormalsHelper };
-      });
-    }).then(function (deps) {
-      init3DScene(deps, blobUrl, blob);
-    }).catch(function (err) {
-      console.error('[dDRM Viewer] 3D load failed:', err);
-      showError('3D Viewer Error', 'Failed to load Three.js: ' + err.message);
-    });
+    if (typeof THREE === 'undefined') {
+      showError('3D Viewer Error', 'Three.js library not loaded.');
+      return;
+    }
+
+    init3DScene(blobUrl, blob);
   }
 
-  function init3DScene(deps, blobUrl, blob) {
-    var THREE = deps.THREE;
+  function init3DScene(blobUrl, blob) {
     var canvas = document.getElementById('model-canvas');
     var container = document.getElementById('model-container');
 
@@ -527,7 +520,6 @@
     renderer3d.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer3d.toneMapping = THREE.ACESFilmicToneMapping;
     renderer3d.toneMappingExposure = 1.2;
-    renderer3d.outputColorSpace = THREE.SRGBColorSpace;
 
     var ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
     scene.add(ambientLight);
@@ -542,76 +534,87 @@
     var gridHelper = new THREE.GridHelper(10, 20, 0x2a2d3a, 0x1f2230);
     scene.add(gridHelper);
 
-    var controls = new deps.OrbitControls(camera, canvas);
+    var controls = new THREE.OrbitControls(camera, canvas);
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
     controls.autoRotate = false;
 
-    threeScene = { scene: scene, camera: camera, renderer: renderer3d, controls: controls, mixer: null, clock: new THREE.Clock(), gridHelper: gridHelper, THREE: THREE, VertexNormalsHelper: deps.VertexNormalsHelper, normalHelpers: [] };
+    var VertexNormalsHelper = (typeof THREE.VertexNormalsHelper !== 'undefined') ? THREE.VertexNormalsHelper : null;
+    threeScene = { scene: scene, camera: camera, renderer: renderer3d, controls: controls, mixer: null, clock: new THREE.Clock(), gridHelper: gridHelper, THREE: THREE, VertexNormalsHelper: VertexNormalsHelper, normalHelpers: [] };
 
     var mime = assetParams.mimeType;
     var loader;
-    if (mime === 'model/gltf-binary' || mime === 'model/gltf+json') {
-      loader = new deps.GLTFLoader();
-      loader.load(blobUrl, function (gltf) {
-        scene.add(gltf.scene);
-        if (gltf.animations && gltf.animations.length > 0) {
-          threeScene.mixer = new THREE.AnimationMixer(gltf.scene);
-          gltf.animations.forEach(function (clip) { threeScene.mixer.clipAction(clip).play(); });
-        }
-        frameObject(gltf.scene, deps.THREE, camera, controls);
-        URL.revokeObjectURL(blobUrl);
-        showModelInfo(gltf.scene, deps.THREE);
-        setupModelToolbar();
-      }, undefined, function (err) { showError('3D Load Error', String(err)); });
-    } else if (mime === 'model/stl') {
-      loader = new deps.STLLoader();
-      loader.load(blobUrl, function (geometry) {
-        var mat = new THREE.MeshStandardMaterial({ color: 0x8888cc, metalness: 0.3, roughness: 0.6 });
-        var mesh = new THREE.Mesh(geometry, mat);
-        scene.add(mesh);
-        frameObject(mesh, deps.THREE, camera, controls);
-        URL.revokeObjectURL(blobUrl);
-        showModelInfo(mesh, deps.THREE);
-        setupModelToolbar();
-      }, undefined, function (err) { showError('STL Load Error', String(err)); });
-    } else if (mime === 'model/obj') {
-      loader = new deps.OBJLoader();
-      loader.load(blobUrl, function (group) {
-        scene.add(group);
-        frameObject(group, deps.THREE, camera, controls);
-        URL.revokeObjectURL(blobUrl);
-        showModelInfo(group, deps.THREE);
-        setupModelToolbar();
-      }, undefined, function (err) { showError('OBJ Load Error', String(err)); });
-    } else if (mime === 'model/vnd.autodesk.fbx') {
-      loader = new deps.FBXLoader();
-      loader.load(blobUrl, function (group) {
-        scene.add(group);
-        if (group.animations && group.animations.length > 0) {
-          threeScene.mixer = new THREE.AnimationMixer(group);
-          group.animations.forEach(function (clip) { threeScene.mixer.clipAction(clip).play(); });
-        }
-        frameObject(group, deps.THREE, camera, controls);
-        URL.revokeObjectURL(blobUrl);
-        showModelInfo(group, deps.THREE);
-        setupModelToolbar();
-      }, undefined, function (err) { showError('FBX Load Error', String(err)); });
-    } else {
-      showError('Unsupported 3D Format', 'MIME type ' + mime + ' is not supported for 3D viewing.');
-      return;
-    }
 
-    var watermarkEl = document.getElementById('model-watermark');
-    watermarkEl.textContent = (assetParams.buyerAddress || '').substring(0, 10) + '...' + ' \u2022 dDRM Protected';
+    // Parse from ArrayBuffer directly — avoids the Puter iframe fetch
+    // interceptor rewriting blob: URLs to HTML 404 pages.
+    blob.arrayBuffer().then(function (arrayBuf) {
+      try {
+        if (mime === 'model/gltf-binary' || mime === 'model/gltf+json') {
+          loader = new THREE.GLTFLoader();
+          loader.parse(arrayBuf, '', function (gltf) {
+            scene.add(gltf.scene);
+            if (gltf.animations && gltf.animations.length > 0) {
+              threeScene.mixer = new THREE.AnimationMixer(gltf.scene);
+              gltf.animations.forEach(function (clip) { threeScene.mixer.clipAction(clip).play(); });
+            }
+            frameObject(gltf.scene, THREE, camera, controls);
+            URL.revokeObjectURL(blobUrl);
+            showModelInfo(gltf.scene, THREE);
+            setupModelToolbar();
+          }, function (err) { showError('3D Load Error', String(err)); });
+        } else if (mime === 'model/stl') {
+          loader = new THREE.STLLoader();
+          var geometry = loader.parse(arrayBuf);
+          var mat = new THREE.MeshStandardMaterial({ color: 0x8888cc, metalness: 0.3, roughness: 0.6 });
+          var mesh = new THREE.Mesh(geometry, mat);
+          scene.add(mesh);
+          frameObject(mesh, THREE, camera, controls);
+          URL.revokeObjectURL(blobUrl);
+          showModelInfo(mesh, THREE);
+          setupModelToolbar();
+        } else if (mime === 'model/obj') {
+          loader = new THREE.OBJLoader();
+          var text = new TextDecoder().decode(arrayBuf);
+          var group = loader.parse(text);
+          scene.add(group);
+          frameObject(group, THREE, camera, controls);
+          URL.revokeObjectURL(blobUrl);
+          showModelInfo(group, THREE);
+          setupModelToolbar();
+        } else if (mime === 'model/vnd.autodesk.fbx') {
+          loader = new THREE.FBXLoader();
+          var fbxGroup = loader.parse(arrayBuf, '');
+          scene.add(fbxGroup);
+          if (fbxGroup.animations && fbxGroup.animations.length > 0) {
+            threeScene.mixer = new THREE.AnimationMixer(fbxGroup);
+            fbxGroup.animations.forEach(function (clip) { threeScene.mixer.clipAction(clip).play(); });
+          }
+          frameObject(fbxGroup, THREE, camera, controls);
+          URL.revokeObjectURL(blobUrl);
+          showModelInfo(fbxGroup, THREE);
+          setupModelToolbar();
+        } else {
+          showError('Unsupported 3D Format', 'MIME type ' + mime + ' is not supported for 3D viewing.');
+          return;
+        }
+      } catch (parseErr) {
+        showError('3D Parse Error', String(parseErr));
+        return;
+      }
 
-    function animate() {
-      requestAnimationFrame(animate);
-      controls.update();
-      if (threeScene.mixer) threeScene.mixer.update(threeScene.clock.getDelta());
-      renderer3d.render(scene, camera);
-    }
-    animate();
+      var watermarkEl = document.getElementById('model-watermark');
+      watermarkEl.textContent = (assetParams.buyerAddress || '').substring(0, 10) + '...' + ' \u2022 dDRM Protected';
+
+      function animate() {
+        requestAnimationFrame(animate);
+        controls.update();
+        if (threeScene.mixer) threeScene.mixer.update(threeScene.clock.getDelta());
+        renderer3d.render(scene, camera);
+      }
+      animate();
+    }).catch(function (err) {
+      showError('3D Load Error', String(err));
+    });
 
     window.addEventListener('resize', function () {
       camera.aspect = container.clientWidth / container.clientHeight;
@@ -664,11 +667,12 @@
     $toolbar.innerHTML = '';
 
     var buttons = [
-      { label: 'W', title: 'Wireframe', action: toggleWireframe },
-      { label: 'N', title: 'Normals', action: toggleNormals },
-      { label: 'G', title: 'Grid', action: toggleGrid },
-      { label: 'A', title: 'Auto-rotate', action: toggleAutoRotate },
-      { label: 'S', title: 'Screenshot', action: takeScreenshot },
+      { label: 'W', title: 'Wireframe (W)', action: toggleWireframe },
+      { label: 'N', title: 'Normals (N)', action: toggleNormals },
+      { label: 'G', title: 'Grid (G)', action: toggleGrid },
+      { label: 'A', title: 'Auto-rotate (A)', action: toggleAutoRotate },
+      { label: 'S', title: 'Screenshot (S)', action: takeScreenshot },
+      { label: '?', title: 'Keyboard shortcuts (?)', action: toggleHelpOverlay },
     ];
 
     buttons.forEach(function (b) {
@@ -731,6 +735,44 @@
     link.download = (assetParams.title || '3d-model') + '-screenshot.png';
     link.href = dataUrl;
     link.click();
+  }
+
+  function toggleHelpOverlay() {
+    var existing = document.getElementById('help-overlay');
+    if (existing) {
+      existing.remove();
+      return;
+    }
+
+    var shortcuts = [
+      { key: 'Drag', desc: 'Orbit camera' },
+      { key: 'Scroll', desc: 'Zoom in / out' },
+      { key: 'Right-drag', desc: 'Pan camera' },
+      { key: 'W', desc: 'Toggle wireframe' },
+      { key: 'N', desc: 'Toggle vertex normals' },
+      { key: 'G', desc: 'Toggle grid' },
+      { key: 'A', desc: 'Toggle auto-rotate' },
+      { key: 'S', desc: 'Save screenshot' },
+      { key: 'F', desc: 'Toggle fullscreen' },
+      { key: '?', desc: 'Show / hide this help' },
+    ];
+
+    var overlay = document.createElement('div');
+    overlay.id = 'help-overlay';
+    overlay.innerHTML =
+      '<div class="help-card">' +
+      '<div class="help-title">Keyboard Shortcuts</div>' +
+      shortcuts.map(function (s) {
+        return '<div class="help-row"><kbd>' + s.key + '</kbd><span>' + s.desc + '</span></div>';
+      }).join('') +
+      '<div class="help-hint">Press <kbd>?</kbd> to dismiss</div>' +
+      '</div>';
+
+    overlay.addEventListener('click', function (e) {
+      if (e.target === overlay) overlay.remove();
+    });
+
+    document.getElementById('viewer-container').appendChild(overlay);
   }
 
   // ── CSV / Dataset Viewer ────────────────────────────

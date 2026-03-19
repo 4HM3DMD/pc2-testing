@@ -196,16 +196,17 @@ These diagrams from Rong define the north star. Every work stream should move us
 - [ ] `AssetService` in `@elacity-js/api` — generic asset queries for any content type alongside existing `NFTService`
 
 **Tiered Marketplace Rollout:**
-- [x] **Tier 1 — Quick Markets (file in, file out):** E-books/PDFs, stock photography, audio/music, design templates, fonts, 3D models, spreadsheets/data. *(Status: Encryption + minting working for ALL types via Chipotle dDRM. Viewer support: images, PDFs, text, code, audio, video COMPLETE. 3D models, datasets, fonts, archives: viewer expansion in progress)*
+- [x] **Tier 1 — Quick Markets (file in, file out):** E-books/PDFs, stock photography, audio/music, design templates, fonts, 3D models, spreadsheets/data. *(Status: Encryption + minting working for ALL types via Chipotle dDRM. Viewer support COMPLETE for ALL Tier 1 types. WASM decrypt-only fixed for passthrough types. Audio routing fix pending.)*
   - [x] Images (JPEG, PNG, WebP, GIF) — WASM render + watermark *(completed Mar 15)*
   - [x] PDFs — WASM render (hayro rasterizer) *(completed Mar 16)*
   - [x] Text/Code (30+ languages) — WASM syntax highlight *(completed Mar 16)*
   - [x] Audio (MP3, WAV, FLAC, AAC) — Media Runtime DASH playback *(completed Mar 16)*
   - [x] Video (all FFmpeg codecs) — Media Runtime DASH/CENC playback *(completed Mar 16-18)*
-  - [ ] **3D Models** (GLB, glTF, OBJ, STL, FBX) — Three.js interactive viewer with VFX-grade features (wireframe, normals, animation, material inspector, poly count). WASM decrypt + passthrough to WebGL. Anti-piracy: blob URL revocation after GPU load, canvas watermark, screenshot intercept. **VFX industry use case: sell/license 3D assets with resale royalties**
-  - [ ] **Datasets** (CSV, TSV) — Paginated table viewer with sort, search, column type detection
-  - [ ] **Fonts** (TTF, OTF, WOFF2) — Type specimen preview (@font-face blob, alphabet, pangram, custom text input)
-  - [ ] **Archives** (ZIP) — File tree listing with sizes/types (JSZip, no extraction to disk)
+  - [x] **3D Models** (GLB, glTF, OBJ, STL, FBX) — Three.js interactive viewer with VFX-grade features (wireframe W, normals N, grid G, auto-rotate A, screenshot S, keyboard shortcuts help ?). OrbitControls + model info panel (poly count, materials, bounding box). WASM decrypt + passthrough to WebGL via ArrayBuffer (bypasses iframe fetch interceptor). Local Three.js r128 libs (CDN blocked by Puter SES). Anti-piracy: blob URL revocation after GPU load, canvas watermark, screenshot intercept. Creator Dashboard MIME detection for .glb/.obj/.stl/.fbx/.gltf. **VFX industry use case: sell/license 3D assets with resale royalties** *(completed Mar 19)*
+  - [x] **Datasets** (CSV, TSV) — Paginated table viewer with search, column stats, row numbers. WASM decrypt + passthrough *(completed Mar 19)*
+  - [x] **Fonts** (TTF, OTF, WOFF2) — Type specimen preview (@font-face blob, alphabet, pangram, size samples, custom text input). WASM decrypt + passthrough *(completed Mar 19)*
+  - [x] **Archives** (ZIP) — File tree listing with sizes/types (JSZip, no extraction to disk). WASM decrypt + passthrough *(completed Mar 19)*
+  - [x] **WASM CEK base64 padding fix** — Chipotle REST API returns unpadded base64 CEK (43 chars for 32-byte key), Rust WASM decrypt-only mode requires standard padding. Added padding normalization in storage.ts. WASM decrypt-only now succeeds for all passthrough types (3D, fonts, datasets, archives) — CEK never touches Node.js memory *(fixed Mar 19)*
   - [ ] **Audio routing fix** — Remove audio passthrough from dDRM Viewer; ensure all audio routes through Media Runtime encoding pipeline (DASH segments, per-segment WASM decrypt) for consistent security model
 - [ ] **Tier 2 — Medium Markets (local runtime integration):** dApp Store, AI models (GGUF → Ollama), code packages (npm), datasets, HTML5 games. Need PC2 backend endpoints for decrypt-and-load.
 - [ ] **Tier 3 — Complex Markets (ElastOS Runtime v2):** Native software/games, API marketplace, agent marketplace. Need Runtime capsule sandboxes (WASM/Firecracker). Runtime v2 capsule model provides isolated execution for all interactive content types (3D, games, dApps) — capability tokens replace blob URLs.

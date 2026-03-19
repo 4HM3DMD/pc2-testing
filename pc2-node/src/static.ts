@@ -145,7 +145,7 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
       if (!isProduction) {
         res.setHeader('Content-Security-Policy', 
           "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: ws: wss: https:; " +
-          "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https://js.puter.com https://cdn.jsdelivr.net https://challenges.cloudflare.com; " +
+          "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https://js.puter.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://unpkg.com https://challenges.cloudflare.com; " +
           "style-src 'self' 'unsafe-inline' https:; " +
           "img-src 'self' data: blob: https:; " +
           "font-src 'self' data: https: moz-extension: chrome-extension:; " +
@@ -443,7 +443,7 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
       if (!isProduction) {
         res.setHeader('Content-Security-Policy', 
           "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: ws: wss: https:; " +
-          "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https://js.puter.com https://cdn.jsdelivr.net https://challenges.cloudflare.com; " +
+          "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https://js.puter.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://unpkg.com https://challenges.cloudflare.com; " +
           "style-src 'self' 'unsafe-inline' https:; " +
           "img-src 'self' data: blob: https:; " +
           "font-src 'self' data: https: moz-extension: chrome-extension:; " +
@@ -1256,7 +1256,7 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
     if (!isProduction) {
       res.setHeader('Content-Security-Policy', 
         "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: ws: wss: https:; " +
-        "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https://js.puter.com https://cdn.jsdelivr.net https://challenges.cloudflare.com; " +
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https://js.puter.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://unpkg.com https://challenges.cloudflare.com; " +
         "style-src 'self' 'unsafe-inline' https:; " +
         "img-src 'self' data: blob: https:; " +
         "font-src 'self' data: https: moz-extension: chrome-extension:; " +

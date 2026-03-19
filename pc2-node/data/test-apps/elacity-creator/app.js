@@ -307,21 +307,57 @@
     return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
   }
 
+  // Browser File API doesn't know MIME types for many asset formats.
+  // Override from file extension so the backend receives correct types.
+  var EXT_MIME_MAP = {
+    '.glb': 'model/gltf-binary',
+    '.gltf': 'model/gltf+json',
+    '.obj': 'model/obj',
+    '.stl': 'model/stl',
+    '.fbx': 'model/vnd.autodesk.fbx',
+    '.woff': 'font/woff',
+    '.woff2': 'font/woff2',
+    '.ttf': 'font/ttf',
+    '.otf': 'font/otf',
+    '.csv': 'text/csv',
+    '.tsv': 'text/tab-separated-values',
+    '.gz': 'application/gzip',
+    '.tar': 'application/x-tar',
+    '.onnx': 'application/x-onnx',
+    '.safetensors': 'application/x-safetensors',
+    '.gguf': 'application/x-gguf',
+  };
+
+  function resolveFileMime(file) {
+    if (file.type && file.type !== 'application/octet-stream') return file.type;
+    var name = (file.name || '').toLowerCase();
+    var dotIdx = name.lastIndexOf('.');
+    if (dotIdx !== -1) {
+      var ext = name.substring(dotIdx);
+      if (EXT_MIME_MAP[ext]) return EXT_MIME_MAP[ext];
+    }
+    return file.type || 'application/octet-stream';
+  }
+
   function handleFileSelected(file) {
     if (!file) return;
 
-    var isMedia = file.type.startsWith('video/') || file.type.startsWith('audio/');
+    var resolvedMime = resolveFileMime(file);
+
+    var isMedia = resolvedMime.startsWith('video/') || resolvedMime.startsWith('audio/');
     var MAX_FILE_SIZE = isMedia ? 4 * 1024 * 1024 * 1024 : 100 * 1024 * 1024;
     if (file.size > MAX_FILE_SIZE) {
       showToast('File too large. Maximum size: ' + (isMedia ? '4 GB' : '100 MB'), 'error');
       return;
     }
 
+    // Wrap file with resolved MIME for downstream use
     state.selectedFile = file;
+    state.resolvedMime = resolvedMime;
 
-    dom.fileIcon.textContent = getFileIcon(file.type);
+    dom.fileIcon.textContent = getFileIcon(resolvedMime);
     dom.fileName.textContent = file.name;
-    dom.fileMeta.textContent = formatSize(file.size) + ' — ' + (file.type || 'unknown type');
+    dom.fileMeta.textContent = formatSize(file.size) + ' — ' + (resolvedMime || 'unknown type');
     dom.dropZone.classList.add('hidden');
     dom.filePreview.classList.remove('hidden');
     dom.btnToStep2.disabled = false;
@@ -672,33 +708,6 @@
     };
     if (value && BigInt(value) > 0n) {
       txParams.value = '0x' + BigInt(value).toString(16);
-    }
-
-    try {
-      var estResp = await fetch(BASE_RPC, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          jsonrpc: '2.0', id: 1,
-          method: 'eth_estimateGas',
-          params: [txParams],
-        }),
-      });
-      var estJson = await estResp.json();
-      if (estJson.result) {
-        var estimated = BigInt(estJson.result);
-        txParams.gas = '0x' + (estimated * 15n / 10n).toString(16);
-        console.log('[Creator] Gas pre-estimated:', Number(estimated), '→ limit:', Number(estimated * 15n / 10n));
-      } else if (estJson.error) {
-        console.warn('[Creator] Gas estimation RPC error:', estJson.error.message || JSON.stringify(estJson.error));
-      }
-    } catch (e) {
-      console.warn('[Creator] Gas estimation failed, using fallback:', e.message);
-    }
-
-    if (!txParams.gas) {
-      txParams.gas = '0x' + BigInt(500000).toString(16);
-      console.log('[Creator] Using fallback gas limit: 500000');
     }
 
     var txHash = await window.ethereum.request({
@@ -1139,7 +1148,7 @@
       // ── Step 1: Encrypt ───────────────────────────────
       setProgStep('prog-connect', 'Connecting...', 'active');
 
-      var isMediaFile = state.selectedFile.type.startsWith('video/') || state.selectedFile.type.startsWith('audio/');
+      var isMediaFile = state.resolvedMime.startsWith('video/') || state.resolvedMime.startsWith('audio/');
       var encryptResult;
       var mediaEncodeResult = null;
 
@@ -1148,7 +1157,7 @@
         swapProgressStepsForMedia();
 
         setProgStep('prog-connect', 'Uploading file to encoder...', 'active');
-        console.log('[Creator] Media file detected (' + state.selectedFile.type + '), routing through /api/media/encode');
+        console.log('[Creator] Media file detected (' + state.resolvedMime + '), routing through /api/media/encode');
 
         var formData = new FormData();
         formData.append('file', state.selectedFile);
@@ -1391,7 +1400,7 @@
           });
           thumbBase64 = uint8ToBase64(new Uint8Array(await thumbBlob.arrayBuffer()));
           console.log('[Creator] Using user-selected thumbnail');
-        } else if (state.selectedFile && state.selectedFile.type.startsWith('image/')) {
+        } else if (state.selectedFile && state.resolvedMime.startsWith('image/')) {
           var autoCanvas = document.createElement('canvas');
           var autoCtx = autoCanvas.getContext('2d');
           var autoImg = await createImageBitmap(state.selectedFile);
@@ -1405,19 +1414,19 @@
           });
           thumbBase64 = uint8ToBase64(new Uint8Array(await autoBlob.arrayBuffer()));
           console.log('[Creator] Auto-generated thumbnail from image');
-        } else if (state.selectedFile && (state.selectedFile.type === 'application/pdf' || state.selectedFile.type === 'text/plain' || state.selectedFile.type.startsWith('text/'))) {
+        } else if (state.selectedFile && (state.resolvedMime === 'application/pdf' || state.resolvedMime === 'text/plain' || state.resolvedMime.startsWith('text/'))) {
           // Server-side thumbnail generation for PDFs and text files
           var fileBytes = new Uint8Array(await state.selectedFile.arrayBuffer());
           var serverThumbResp = await pc2Fetch('/api/storage/thumbnail', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ content: uint8ToBase64(fileBytes), mimeType: state.selectedFile.type, filename: state.selectedFile.name }),
+            body: JSON.stringify({ content: uint8ToBase64(fileBytes), mimeType: state.resolvedMime, filename: state.selectedFile.name }),
           });
           if (serverThumbResp.ok) {
             var serverThumbData = await serverThumbResp.json();
             if (serverThumbData.thumbnail) {
               thumbBase64 = serverThumbData.thumbnail;
-              console.log('[Creator] Server-generated thumbnail for', state.selectedFile.type);
+              console.log('[Creator] Server-generated thumbnail for', state.resolvedMime);
             } else {
               console.warn('[Creator] Server thumbnail response had no thumbnail field:', Object.keys(serverThumbData));
             }
@@ -1451,7 +1460,7 @@
         description: description,
         category: category,
         assetCid: assetCid,
-        mimeType: state.selectedFile.type || 'application/octet-stream',
+        mimeType: state.resolvedMime || 'application/octet-stream',
         size: state.selectedFile.size,
         dataToEncryptHash: encryptResult.dataToEncryptHash,
         actionCid: encryptResult.actionCid || '',
@@ -1477,7 +1486,7 @@
         envelope.asset.mpdUri = mediaEncodeResult.mpdUri;
         envelope.asset.kid = mediaEncodeResult.kid;
         envelope.asset.litBackend = 'chipotle';
-        envelope.asset.mediaType = state.selectedFile.type.startsWith('video/') ? 'video' : 'audio';
+        envelope.asset.mediaType = state.resolvedMime.startsWith('video/') ? 'video' : 'audio';
       }
 
       if (usedLocalEncryption) {

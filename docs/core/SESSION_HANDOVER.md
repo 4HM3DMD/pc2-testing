@@ -11,7 +11,7 @@
 **Release:** v1.1.0 tagged and released on 2026-03-03 (134 commits squash-merged to main)
 **Launcher:** v1.1.1 released — version display, one-click updates, full networking install
 **DAO Proposal:** Live at https://elastos.com/proposals/69a24f49247f130078064edd
-**Last Commit:** feat: Wave 1 universal asset viewers — 3D models (Three.js), CSV datasets, fonts, archives + backend passthrough
+**Last Commit:** fix: WASM CEK base64 padding + local Three.js libs + help overlay + Creator MIME detection
 
 #### AV1 Playback Fix & Init Segment Splitting (Mar 18)
 
@@ -781,8 +781,25 @@ Expanded the dDRM Viewer to support four new interactive content types beyond th
 
 **Remaining Wave 1 items:**
 - [ ] **Audio routing fix** — remove audio passthrough from dDRM Viewer, ensure all audio goes through Media Runtime encoding pipeline (DASH segments, per-segment WASM decrypt). Currently audio plays via passthrough (weaker security model — full decrypted blob in browser memory). Critical for security parity with video.
-- [ ] **Creator Dashboard MIME hints** — update category-to-MIME hints in `elacity-creator` for 3D models, fonts, archives
-- [ ] **E2E test** — mint one GLB + CSV + font + ZIP, purchase each, open in viewer, verify rendering and anti-piracy
+- [x] **Creator Dashboard MIME hints** — `resolveFileMime()` added to `elacity-creator/app.js` with EXT_MIME_MAP for .glb, .gltf, .obj, .stl, .fbx, .woff, .woff2, .ttf, .otf, .csv, .tsv, .gz, .tar, .onnx, .safetensors, .gguf. All downstream references use `state.resolvedMime` *(completed Mar 19)*
+- [ ] **E2E test** — mint one GLB + CSV + font + ZIP, purchase each, open in viewer, verify rendering and anti-piracy. GLB verified ✅. Others pending.
+
+**Wave 1 fixes (Mar 19 — debugging session):**
+- **WASM CEK base64 padding** — Chipotle REST API returns unpadded base64 CEK (43 chars for 32-byte key). `ddrm-renderer` WASM `decrypt_only` mode requires standard padded base64. Added padding normalization in `storage.ts` for both `decryptAssetTwoLayer` and `renderViaWASM`. WASM decrypt-only now succeeds (54ms) — CEK never touches Node.js V8 heap.
+- **Local Three.js libraries** — Puter iframe fetch interceptor rewrites all external URLs (CDN script tags → localhost HTML 404). Downloaded Three.js r128 core + 6 addons + fflate + JSZip to `ddrm-viewer/lib/`. Removed CDN references. Updated CSP in `static.ts` (CDN allowlist no longer needed but kept for forward compatibility).
+- **ArrayBuffer parsing** — GLTFLoader.load(blobUrl) also triggers the fetch interceptor on blob: URLs. Switched all 4 loaders (GLTF/STL/OBJ/FBX) from `loader.load(url)` to `loader.parse(arrayBuffer)`, bypassing fetch entirely.
+- **Error handler hardening** — `loadFirstPage()` error path used `resp.json()` which crashed on HTML error pages. Changed to `resp.text()` + try/catch JSON parse.
+- **Keyboard shortcuts help overlay** — `?` key or `?` toolbar button shows/hides a help card with all shortcuts (Drag, Scroll, Right-drag, W, N, G, A, S, F, ?). Click-outside-to-dismiss.
+
+**Files changed (Wave 1 fixes, Mar 19):**
+| File | Change |
+|------|--------|
+| `pc2-node/data/test-apps/ddrm-viewer/lib/` | NEW — Local Three.js r128 core + OrbitControls + 5 loaders + fflate + JSZip + VertexNormalsHelper (1MB total) |
+| `pc2-node/data/test-apps/ddrm-viewer/index.html` | CDN scripts → local `lib/` paths, added VertexNormalsHelper |
+| `pc2-node/data/test-apps/ddrm-viewer/viewer.js` | ArrayBuffer parsing (all 4 loaders), help overlay, error handler hardening, toolbar ? button |
+| `pc2-node/data/test-apps/ddrm-viewer/viewer.css` | Help overlay styles (card, kbd, fade-in animation) |
+| `pc2-node/data/test-apps/elacity-creator/app.js` | `resolveFileMime()` + EXT_MIME_MAP for 3D/font/data/AI MIME types, `state.resolvedMime` throughout |
+| `pc2-node/src/api/storage.ts` | CEK base64 padding normalization in `decryptAssetTwoLayer` and `renderViaWASM` |
 
 #### Bug Fixes — Mar 16
 
