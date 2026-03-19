@@ -380,6 +380,12 @@
         case 'a': case 'A':
           if (is3DType && !e.ctrlKey && !e.metaKey) { e.preventDefault(); toggleAutoRotate(); }
           break;
+        case 'n': case 'N':
+          if (is3DType && !e.ctrlKey && !e.metaKey) { e.preventDefault(); toggleNormals(); }
+          break;
+        case 's': case 'S':
+          if (is3DType && !e.ctrlKey && !e.metaKey) { e.preventDefault(); takeScreenshot(); }
+          break;
       }
     });
   }
@@ -493,8 +499,9 @@
         import('three/addons/loaders/OBJLoader.js'),
         import('three/addons/loaders/STLLoader.js'),
         import('three/addons/loaders/FBXLoader.js'),
+        import('three/addons/helpers/VertexNormalsHelper.js'),
       ]).then(function (modules) {
-        return { THREE: THREE, OrbitControls: modules[0].OrbitControls, GLTFLoader: modules[1].GLTFLoader, OBJLoader: modules[2].OBJLoader, STLLoader: modules[3].STLLoader, FBXLoader: modules[4].FBXLoader };
+        return { THREE: THREE, OrbitControls: modules[0].OrbitControls, GLTFLoader: modules[1].GLTFLoader, OBJLoader: modules[2].OBJLoader, STLLoader: modules[3].STLLoader, FBXLoader: modules[4].FBXLoader, VertexNormalsHelper: modules[5].VertexNormalsHelper };
       });
     }).then(function (deps) {
       init3DScene(deps, blobUrl, blob);
@@ -515,7 +522,7 @@
     var camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.01, 1000);
     camera.position.set(3, 2, 3);
 
-    var renderer3d = new THREE.WebGLRenderer({ canvas: canvas, antialias: true });
+    var renderer3d = new THREE.WebGLRenderer({ canvas: canvas, antialias: true, preserveDrawingBuffer: true });
     renderer3d.setSize(container.clientWidth, container.clientHeight);
     renderer3d.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer3d.toneMapping = THREE.ACESFilmicToneMapping;
@@ -540,7 +547,7 @@
     controls.dampingFactor = 0.08;
     controls.autoRotate = false;
 
-    threeScene = { scene: scene, camera: camera, renderer: renderer3d, controls: controls, mixer: null, clock: new THREE.Clock(), gridHelper: gridHelper, THREE: THREE };
+    threeScene = { scene: scene, camera: camera, renderer: renderer3d, controls: controls, mixer: null, clock: new THREE.Clock(), gridHelper: gridHelper, THREE: THREE, VertexNormalsHelper: deps.VertexNormalsHelper, normalHelpers: [] };
 
     var mime = assetParams.mimeType;
     var loader;
@@ -658,8 +665,10 @@
 
     var buttons = [
       { label: 'W', title: 'Wireframe', action: toggleWireframe },
+      { label: 'N', title: 'Normals', action: toggleNormals },
       { label: 'G', title: 'Grid', action: toggleGrid },
       { label: 'A', title: 'Auto-rotate', action: toggleAutoRotate },
+      { label: 'S', title: 'Screenshot', action: takeScreenshot },
     ];
 
     buttons.forEach(function (b) {
@@ -696,6 +705,32 @@
   function toggleAutoRotate() {
     if (!threeScene) return;
     threeScene.controls.autoRotate = !threeScene.controls.autoRotate;
+  }
+
+  function toggleNormals() {
+    if (!threeScene) return;
+    if (threeScene.normalHelpers.length > 0) {
+      threeScene.normalHelpers.forEach(function (h) { threeScene.scene.remove(h); h.dispose(); });
+      threeScene.normalHelpers = [];
+      return;
+    }
+    threeScene.scene.traverse(function (child) {
+      if (child.isMesh && child.geometry) {
+        var helper = new threeScene.VertexNormalsHelper(child, 0.1, 0x00ff88);
+        threeScene.scene.add(helper);
+        threeScene.normalHelpers.push(helper);
+      }
+    });
+  }
+
+  function takeScreenshot() {
+    if (!threeScene) return;
+    threeScene.renderer.render(threeScene.scene, threeScene.camera);
+    var dataUrl = threeScene.renderer.domElement.toDataURL('image/png');
+    var link = document.createElement('a');
+    link.download = (assetParams.title || '3d-model') + '-screenshot.png';
+    link.href = dataUrl;
+    link.click();
   }
 
   // ── CSV / Dataset Viewer ────────────────────────────
