@@ -17,7 +17,7 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { logger } from '../../utils/logger.js';
 import { encryptWithLitAction, buildSelfRefConditions, type EncryptResult } from '../../api/chipotle-client.js';
-import { splitFragmentedMP4 } from './mp4split.js';
+import { splitFragmentedMP4WASM } from './mp4split.js';
 import { generateMPD, buildMPDTracks } from './mpdGenerator.js';
 import { getWASMRuntime } from '../wasm/WASMRuntime.js';
 import { resolve as pathResolve } from 'path';
@@ -267,8 +267,8 @@ export async function packageDASH(
     : encryptResult.dataToEncryptHash;
   const contractKidHex = cleanHash.slice(0, 32).padEnd(32, '0');
 
-  logger.info(`[DASHPackager] Splitting fragmented MP4(s)...`);
-  const splitResult = await splitFragmentedMP4(fragmentedFiles[0]);
+  logger.info(`[DASHPackager] Splitting fragmented MP4(s) via WASM...`);
+  const splitResult = await splitFragmentedMP4WASM(fragmentedFiles[0]);
 
   const { tracks, initSegment, segments, totalDuration } = splitResult;
   if (tracks.length === 0) throw new Error('No tracks found in fragmented MP4');

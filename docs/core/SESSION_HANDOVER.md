@@ -11,7 +11,7 @@
 **Release:** v1.1.0 tagged and released on 2026-03-03 (134 commits squash-merged to main)
 **Launcher:** v1.1.1 released — version display, one-click updates, full networking install
 **DAO Proposal:** Live at https://elastos.com/proposals/69a24f49247f130078064edd
-**Last Commit:** feat: Phase 2 — replace mp4dash with WASM CENC encrypt + TypeScript DASH pipeline
+**Last Commit:** feat: WASM Tier B — mp4-split Rust WASM crate, decrypt limit 200MB, player access-denied UX
 
 #### AV1 Playback Fix & Init Segment Splitting (Mar 18)
 
@@ -380,7 +380,7 @@ Built a complete local media encoding pipeline for the Creator Dashboard. Video/
 - `pc2-node/src/services/media/encoder.ts` — FFprobe analysis, transcode plan builder, FFmpeg execution. Adapts to hardware: NVIDIA GPU (av1_nvenc), SVT-AV1 (libsvtav1), x264 fallback. Audio-only path. Concurrency guard.
 - `pc2-node/src/services/media/bento4.ts` — Bento4 SDK management: discovers local installs or auto-downloads per-platform (linux-x64, darwin-x64, darwin-arm64). Only manages `mp4fragment` binary (mp4encrypt and mp4dash removed in Phase 2).
 - `pc2-node/src/services/media/dashPackager.ts` — Orchestrates DASH packaging: CEK generation (16-byte random), CEK encryption via Chipotle Lit Action, PSSH construction (Elacity custom system ID + dDRM metadata), WASM-based CENC encryption + init transform, TypeScript MPD generation, IPFS upload via Helia `storeDirectory()`. Includes 5-attempt retry with exponential backoff for Lit API transient failures. Phase 2: replaced mp4dash Python pipeline with mp4split + cenc-encrypt WASM + mpdGenerator.
-- `pc2-node/src/services/media/mp4split.ts` — (NEW Phase 2) TypeScript fMP4 parser: splits fragmented MP4 into per-track init segment + media segments. Extracts codec strings, bandwidth, timescale, resolution metadata.
+- `pc2-node/src/services/media/mp4split.ts` — (NEW Phase 2) TypeScript fMP4 parser with WASM acceleration: `splitFragmentedMP4WASM()` routes through `mp4-split` Rust WASM crate (91KB) for files <=800MB, JS `splitFragmentedMP4FromBuffer()` fallback for larger. Extracts codec strings, bandwidth, timescale, resolution metadata.
 - `pc2-node/src/services/media/mpdGenerator.ts` — (NEW Phase 2) TypeScript DASH MPD XML generator using SegmentTemplate + SegmentTimeline format.
 - `pc2-node/src/api/media.ts` — Extended with `POST /api/media/encode` (multipart upload via Multer disk storage) and `GET /api/media/encode/status/:jobId` (polling). `runEncodePipeline` orchestrates encoder→bento4→dashPackager. Best-effort replication to Elacity IPFS for multi-node discoverability.
 - `pc2-node/src/api/rate-limit.ts` — Added `media_encode` scope (5 jobs/hour/wallet)
@@ -441,7 +441,7 @@ Built a complete local media encoding pipeline for the Creator Dashboard. Video/
 - ~~MetaMask "This transaction is likely to fail" during minting~~ — **FIXED (Mar 18)** — Custom gas estimation with 1.5x buffer + 500k fallback + `sendTxWithRetry()` with Retry/Skip buttons
 - ~~"Media format not supported" on AV1 video playback~~ — **FIXED (Mar 18)** — Three-part fix: nested PSSH stripping in Rust WASM, multi-track init splitting in TypeScript, hdlr offset correction
 
-#### WASM & Rust Optimization Audit — COMPLETE (Mar 18)
+#### WASM & Rust Optimization Audit — COMPLETE (Mar 18-19)
 
 Comprehensive audit of the PC2 node system to identify Rust/WASM optimization opportunities and alignment with ElastOS Runtime capsule convergence.
 
@@ -472,8 +472,8 @@ Comprehensive audit of the PC2 node system to identify Rust/WASM optimization op
 **Audit findings documented in plan:** 18 optimization opportunities across 4 tiers (quick wins → high-impact → medium-impact → strategic). Key areas: WASM precompilation, IPFS chunk assembly in Rust, Rust HTTP proxy, sovereign key management. All aligned with Runtime capsule convergence path.
 
 **Remaining Items Triage (Mar 19):**
-- **Category A — Do soon (v1.3-v1.4):** ~~IPFS chunk assembly~~ **DONE (Mar 19)** — `ipfs-assemble` Rust WASM crate built and integrated. AI serialization optimization (MessagePack for conversation contexts, reduces GC pauses) remains.
-- **Category B — Defer to Carrier interface:** Iroh-based IPFS (#11), Rust proxy relay (#12), async SQLite (#13) — building these now risks targeting the wrong API. Anders' Carrier model explicitly defines transport/discovery as Carrier concerns. Wait for published provider interfaces
+- **Category A — Do soon (v1.3-v1.4):** ~~IPFS chunk assembly~~ **DONE (Mar 19)** — `ipfs-assemble` Rust WASM crate built and integrated. ~~ISO BMFF (MP4) parser~~ **DONE (Mar 19)** — `mp4-split` Rust WASM crate (91KB), DASH encoding pipeline now routes through WASM. ~~WASM decrypt max size~~ **DONE (Mar 19)** — raised from 50MB to 200MB, more non-media files decrypt inside WASM sandbox. AI serialization optimization (MessagePack for conversation contexts, reduces GC pauses) remains.
+- **Category B — Audited, defer:** Init segment split in WASM (SKIP — already WASM for strip, JS split is microseconds on 2-20KB, runs twice per session). NaCl crypto/Boson proxy (DEFER — Carrier will replace Boson transport). API key encryption to WASM (DEFER to v1.5 — infrequent, key still needs JS for HTTP calls, redesign holistically with capsule format).
 - **Category C — Skip:** Tier 4 nice-to-haves (thumbnail WASM, QR WASM, voice PCM) — minimal user impact, not worth the effort
 - **Explicitly NOT our job:** Carrier P2P in Rust (#15) — "Carrier carries, the runtime authorizes, providers define meaning, capsules express intent." Transport is Anders' responsibility
 
@@ -558,6 +558,9 @@ Comprehensive player hardening and UX polish:
 3. **Deploy supernode provisioning** — `/api/ddrm/provision` endpoint coded but NOT deployed to supernodes. See `docs/core/LIT_PRODUCTION_CHECKLIST.md` for deployment steps. **Deploy when Lit Chipotle production network goes live** — deploying against dev network now would mean deploying twice (new endpoints, PKP addresses, dashboard keys expected to change).
 4. ~~**Media pipeline on Chipotle**~~ — **DONE (Mar 18)** — Full encoding pipeline E2E verified: transcode → fragment → CENC encrypt → DASH package → IPFS upload → mint → buy → download → playback. PSSH includes ciphertext, hash, contract-compatible kid, correct authority. Lit Chipotle API recovered.
 5. ~~**IPFS chunk assembly in Rust/WASM (v1.3)**~~ — **DONE (Mar 19)** — New `ipfs-assemble` Rust WASM crate (108KB). `getFile()` now routes files >=10MB through Rust/WASM assembler: chunks written to MemFS, assembled via `Vec::with_capacity()` + `extend_from_slice()` in WASM linear memory, final buffer read back. V8 heap drops from ~400MB to ~200MB for a 200MB file (GC only tracks the final output buffer). Graceful fallback to `Buffer.concat` if WASM unavailable. Also fixed MSE player SourceBuffer limit bug (duplicate `sourceopen` guard).
+5b. ~~**ISO BMFF (MP4) parser in Rust/WASM**~~ — **DONE (Mar 19)** — New `mp4-split` Rust WASM crate (91KB). `splitFragmentedMP4WASM()` wraps WASM binary for DASH encoding pipeline. Full ISO BMFF parsing (ftyp/moov/moof/mdat, track metadata, codec strings). 800MB size guard with JS `splitFragmentedMP4FromBuffer()` fallback. Video encoding noticeably faster.
+5c. ~~**WASM decrypt max size raised to 200MB**~~ — **DONE (Mar 19)** — `WASM_DECRYPT_MAX_BYTES` in `storage.ts` raised from 50MB to 200MB. Non-media dDRM files (images, PDFs, text, code, AI models) up to 200MB now decrypt inside WASM sandbox — CEK never enters V8 memory. Media playback confirmed no per-segment size limit.
+5d. ~~**Player access-denied UX**~~ — **DONE (Mar 19)** — `showError()` in `player.js` detects Lit/access denial keywords and shows "Access Required — purchase to watch" instead of raw technical errors.
 6. **On-chain content indexer** — Replace Elacity GraphQL dependency with event scanner (The Graph / custom). Removes single biggest centralization point. Becomes `elastos://market/*` provider capsule at convergence.
 7. **AI Model Marketplace alpha** — First non-media vertical: GGUF → encrypt → IPFS → ACCESS_TOKEN → decrypt → Ollama. Proves "Amazon of digital assets" story beyond video.
 8. **P-256 ECDH unwrap to WASM (Phase E)** — conditional on Chipotle envelope format. If Chipotle returns CEK directly, this phase is eliminated.
@@ -573,7 +576,7 @@ Comprehensive player hardening and UX polish:
 18. **dApp Store** — global decentralized app marketplace. DeFi protocols (Uniswap, Aave), games, productivity tools packaged as encrypted dApps. Purchase → decrypt → run locally on PC2 node. See `docs/core/ELACITY_UNIVERSAL_ASSET_STRATEGY.md`.
 19. **ElastOS Runtime convergence** — CTO's Runtime at RC4 (0.19.0-rc4). WASM + microVM capsule execution verified. dDRM WASM crates (`aes-gcm-decrypt`, `cenc-decrypt`) target same `wasm32-wasip1` as Runtime's Wasmtime. Convergence path: our renderers become capsules, dDRM becomes a Provider Capsule. See `docs/core/ARCHITECTURE_CONVERGENCE.md`.
 
-**Carrier alignment note (Mar 19):** Per CTO's Carrier model, PC2 code targets the capsule/provider layer (dDRM, marketplace, rendering). Transport/discovery is Carrier's responsibility (Iroh, DHT, gossip, relay). Tier 3 audit items (Iroh IPFS, Rust proxy, Carrier P2P) deferred until Carrier provider interfaces are published. Rules: one runtime = one Carrier node per machine; capsules consume provider contracts, not raw topology; Kubo stays optional.
+**Carrier alignment note (Mar 19):** Per CTO's Carrier model, PC2 code targets the capsule/provider layer (dDRM, marketplace, rendering). Transport/discovery is Carrier's responsibility (Iroh, DHT, gossip, relay). Tier 3 audit items (Iroh IPFS, Rust proxy, Carrier P2P) deferred until Carrier provider interfaces are published. Tier B items (init-split, NaCl/Boson, API key encrypt) audited and individually dispositioned (skip/defer). Rules: one runtime = one Carrier node per machine; capsules consume provider contracts, not raw topology; Kubo stays optional.
 
 #### WASM Crypto Hardening — COMPLETED Phases A-C (Mar 16)
 
@@ -703,6 +706,20 @@ Chipotle TEE available `Lit.Actions` methods:
 | `pc2-node/wasm-apps/ddrm-renderer/ddrm-renderer.wasm` | Rebuilt |
 | `pc2-node/wasm-apps/cenc-decrypt/cenc-decrypt.wasm` | Rebuilt |
 
+**Files changed (WASM Tier B audit, Mar 19):**
+| File | Change |
+|------|--------|
+| `pc2-node/crates/mp4-split/Cargo.toml` | NEW — Rust WASM crate for ISO BMFF (fMP4) parsing |
+| `pc2-node/crates/mp4-split/src/main.rs` | NEW — Full MP4 box parser (ftyp/moov/moof/mdat), track metadata, codec extraction |
+| `pc2-node/wasm-apps/mp4-split/mp4-split.wasm` | NEW — Compiled WASM binary (91KB optimized) |
+| `pc2-node/src/services/media/mp4split.ts` | Added `splitFragmentedMP4WASM()` with WASM routing + JS fallback |
+| `pc2-node/src/services/media/dashPackager.ts` | Updated import to use WASM-accelerated mp4split |
+| `pc2-node/src/services/wasm/WASMRuntime.ts` | Added `executeMp4Split()` method |
+| `pc2-node/scripts/build-wasm.sh` | Added `mp4-split` to build targets |
+| `pc2-node/src/api/storage.ts` | `WASM_DECRYPT_MAX_BYTES` raised from 50MB to 200MB |
+| `pc2-node/data/test-apps/pc2-media-runtime/index.html` | Added `id="error-title"` to error screen `<h2>` |
+| `pc2-node/data/test-apps/pc2-media-runtime/player.js` | User-friendly access denial messages (keyword detection) |
+
 #### Bug Fixes — Mar 16
 
 | Bug | Root Cause | Fix |
@@ -777,7 +794,7 @@ Chipotle TEE available `Lit.Actions` methods:
 - [dDRM Pipeline E2E](fd6755f0-d73c-4e41-8df3-0f57f15071a2) — @elacity-js/access, Creator Dashboard, Lit Action trust model (Path A), capacity credit auto-detection, decrypt endpoint, decentralization analysis. Also: hayro PDF rendering, WASM text fixes, Mint context menu, wallet bridge restore, Elacity branding, WASM crypto hardening Phases A-C, double-signature fix, TXT dimension cap, video autoplay, fMP4 strip+decrypt in Rust
 - [Secure Viewer & PDF](fd6755f0-d73c-4e41-8df3-0f57f15071a2) — secure viewer pipeline, PDF hybrid rendering, two-layer encryption fix, Lit Pinata/relayer integration, auto-decrypt, parallel pages, dDRM Viewer app, .ddrm.json capsules, WASM renderer, GUI integration
 - [Media Runtime E2E](fd6755f0-d73c-4e41-8df3-0f57f15071a2) — server-side DASH/CENC decryption pipeline, Rust WASM cenc-decrypt crate, MSE player, DRM stripping (init+segment), 16-byte IV fix, Smart Account PSSH, two-phase Lit auth
-- [Media Encoding Pipeline](current) — Local media encoding pipeline (FFmpeg→Bento4→CENC→DASH→IPFS), Chipotle CEK encryption, Creator Dashboard media UI, IPC duplicate wallet fix, MetaMask gas estimation fix, PSSH extraction/authority/kid fixes, IPFS pin hang fix, GUI rebuild, **E2E playback + download verified**. AV1 playback fix: nested PSSH stripping in Rust WASM, multi-track init segment splitting, MSE-compatible per-track init delivery. MetaMask mint retry button.
+- [Media Encoding Pipeline](current) — Local media encoding pipeline (FFmpeg→Bento4→CENC→DASH→IPFS), Chipotle CEK encryption, Creator Dashboard media UI, IPC duplicate wallet fix, MetaMask gas estimation fix, PSSH extraction/authority/kid fixes, IPFS pin hang fix, GUI rebuild, **E2E playback + download verified**. AV1 playback fix: nested PSSH stripping in Rust WASM, multi-track init segment splitting, MSE-compatible per-track init delivery. MetaMask mint retry button. WASM optimization Tier B audit: `mp4-split` Rust WASM crate (ISO BMFF parser), WASM decrypt limit raised to 200MB, player access-denied UX, init-split/NaCl/API-key-encrypt audited and deferred.
 
 ---
 
@@ -869,7 +886,7 @@ Chipotle TEE available `Lit.Actions` methods:
 | `pc2-node/wasm-renderer/Cargo.toml` | Rust crate — AES-GCM decrypt + encrypt + image rendering in WASM linear memory |
 | `pc2-node/wasm-renderer/src/decrypt.rs` | AES-256-GCM decrypt + encrypt (random CEK/IV generation) |
 | `pc2-node/wasm-apps/ddrm-renderer/ddrm-renderer.wasm` | Compiled WASM binary (wasm32-wasip1) |
-| `pc2-node/src/services/wasm/WASMRuntime.ts` | Node.js WASI host — @wasmer/wasi + MemFS, executeRenderer/executeDecryptOnly/executeEncrypt/executeCENCDecrypt |
+| `pc2-node/src/services/wasm/WASMRuntime.ts` | Node.js WASI host — @wasmer/wasi + MemFS, executeRenderer/executeDecryptOnly/executeEncrypt/executeCENCDecrypt/executeMp4Split/executeIpfsAssemble |
 
 #### Media Encoding Pipeline (Mar 17-18)
 | File | Purpose |

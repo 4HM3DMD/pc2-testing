@@ -1,0 +1,20 @@
+[package]
+name = "mp4-split"
+version = "0.1.0"
+edition = "2021"
+description = "ISO BMFF (fMP4) parser — splits fragmented MP4 into init segment + media segments in WASM sandbox"
+license = "MIT"
+
+[[bin]]
+name = "mp4-split"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true

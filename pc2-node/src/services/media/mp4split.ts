@@ -9,9 +9,18 @@
  */
 
 import { readFile } from 'fs/promises';
+import { existsSync, readFileSync } from 'fs';
+import { resolve as pathResolve, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import { createLogger } from '../../utils/logger.js';
 
 const logger = createLogger('mp4split');
+
+const __filename_mp4 = fileURLToPath(import.meta.url);
+const __dirname_mp4 = dirname(__filename_mp4);
+
+const WASM_SIZE_LIMIT = 800 * 1024 * 1024;
+let cachedMp4SplitWasm: ArrayBuffer | null = null;
 
 export interface TrackInfo {
   trackId: number;
@@ -283,6 +292,153 @@ function parseMoofDuration(buf: Buffer, moofContentStart: number, moofEnd: numbe
 export async function splitFragmentedMP4(filePath: string): Promise<SplitResult> {
   const buf = await readFile(filePath);
   logger.info(`[mp4split] Parsing fragmented MP4: ${filePath} (${(buf.length / 1024 / 1024).toFixed(1)} MB)`);
+
+  let initEnd = 0;
+  let pos = 0;
+  const segments: SegmentInfo[] = [];
+  let tracks: TrackInfo[] = [];
+
+  while (pos < buf.length) {
+    const box = readBoxHeader(buf, pos);
+    if (!box || box.size < 8) break;
+
+    if (box.type === 'ftyp' || box.type === 'moov' || box.type === 'free' || box.type === 'skip') {
+      if (box.type === 'moov') {
+        tracks = extractTrackInfo(buf, pos, box.size);
+      }
+      initEnd = pos + box.size;
+      pos += box.size;
+      continue;
+    }
+
+    if (box.type === 'moof') {
+      const moofEnd = pos + box.size;
+      const nextBox = readBoxHeader(buf, moofEnd);
+      const segEnd = nextBox?.type === 'mdat' ? moofEnd + nextBox.size : moofEnd;
+
+      const trackId = parseMoofTrackId(buf, pos + box.headerSize, moofEnd);
+      const { duration, sampleCount } = parseMoofDuration(buf, pos + box.headerSize, moofEnd);
+
+      segments.push({
+        trackId,
+        data: Buffer.from(buf.buffer, buf.byteOffset + pos, segEnd - pos),
+        duration,
+        sampleCount,
+      });
+
+      pos = segEnd;
+      continue;
+    }
+
+    pos += box.size;
+  }
+
+  const initSegment = Buffer.from(buf.buffer, buf.byteOffset, initEnd);
+
+  const trackByteCounts = new Map<number, number>();
+  const trackDurations = new Map<number, number>();
+  for (const seg of segments) {
+    trackByteCounts.set(seg.trackId, (trackByteCounts.get(seg.trackId) || 0) + seg.data.length);
+    trackDurations.set(seg.trackId, (trackDurations.get(seg.trackId) || 0) + seg.duration);
+  }
+
+  for (const track of tracks) {
+    const totalBytes = trackByteCounts.get(track.trackId) || 0;
+    const totalDur = trackDurations.get(track.trackId) || 0;
+    if (totalDur > 0) {
+      track.bandwidth = Math.round((totalBytes * 8 * track.timescale) / totalDur);
+    }
+  }
+
+  let totalDuration = 0;
+  const videoTrack = tracks.find(t => t.type === 'video');
+  const primaryTrack = videoTrack || tracks[0];
+  if (primaryTrack) {
+    const dur = trackDurations.get(primaryTrack.trackId) || 0;
+    totalDuration = dur / primaryTrack.timescale;
+  }
+
+  logger.info(`[mp4split] Found ${tracks.length} tracks, ${segments.length} segments, duration=${totalDuration.toFixed(2)}s`);
+  for (const t of tracks) {
+    logger.info(`[mp4split]   Track ${t.trackId}: ${t.type} codec=${t.codec} ${t.width ? `${t.width}x${t.height}` : ''} bw=${t.bandwidth}`);
+  }
+
+  return { tracks, initSegment, segments, totalDuration };
+}
+
+/**
+ * WASM-accelerated fMP4 parser. Falls back to the pure-JS
+ * `splitFragmentedMP4` if the WASM binary is missing, or the file
+ * exceeds 800 MB (MemFS copies the whole buffer in).
+ */
+export async function splitFragmentedMP4WASM(filePath: string): Promise<SplitResult> {
+  const buf = await readFile(filePath);
+  const sizeMB = (buf.length / 1024 / 1024).toFixed(1);
+
+  if (buf.length > WASM_SIZE_LIMIT) {
+    logger.warn(`[mp4split] File too large for WASM (${sizeMB} MB > 800 MB limit), using JS parser`);
+    return splitFragmentedMP4FromBuffer(buf, filePath);
+  }
+
+  try {
+    const { getWASMRuntime } = await import('../wasm/WASMRuntime.js');
+    const runtime = getWASMRuntime();
+
+    if (!cachedMp4SplitWasm) {
+      const wasmPath = pathResolve(__dirname_mp4, '../../../wasm-apps/mp4-split/mp4-split.wasm');
+      if (!existsSync(wasmPath)) {
+        logger.warn(`[mp4split] mp4-split.wasm not found at ${wasmPath}, using JS parser`);
+        return splitFragmentedMP4FromBuffer(buf, filePath);
+      }
+      cachedMp4SplitWasm = readFileSync(wasmPath).buffer;
+      logger.info(`[mp4split] Loaded mp4-split WASM (${(cachedMp4SplitWasm.byteLength / 1024).toFixed(0)} KB)`);
+    }
+
+    const result = await runtime.executeMp4Split(cachedMp4SplitWasm, buf, { timeoutMs: 120000 });
+
+    if (!result.success || !result.initSegment || !result.resultJson?.tracks) {
+      logger.warn(`[mp4split] WASM parse failed (${result.error}), falling back to JS parser`);
+      return splitFragmentedMP4FromBuffer(buf, filePath);
+    }
+
+    const wasmTracks: TrackInfo[] = result.resultJson.tracks;
+    const wasmSegMetas: Array<{ trackId: number; index: number; size: number; duration: number; sampleCount: number }> = result.resultJson.segments || [];
+
+    const segments: SegmentInfo[] = [];
+    for (const meta of wasmSegMetas) {
+      const key = `seg-${meta.trackId}-${meta.index}.bin`;
+      const segBuf = result.segmentBuffers.get(key);
+      if (!segBuf) {
+        logger.warn(`[mp4split] Missing segment buffer ${key} from WASM, falling back to JS parser`);
+        return splitFragmentedMP4FromBuffer(buf, filePath);
+      }
+      segments.push({
+        trackId: meta.trackId,
+        data: segBuf,
+        duration: meta.duration,
+        sampleCount: meta.sampleCount,
+      });
+    }
+
+    logger.info(`[mp4split] WASM parsed ${sizeMB} MB: ${wasmTracks.length} tracks, ${segments.length} segments, duration=${result.resultJson.totalDuration?.toFixed(2)}s (${result.executionTimeMs}ms)`);
+    for (const t of wasmTracks) {
+      logger.info(`[mp4split]   Track ${t.trackId}: ${t.type} codec=${t.codec} ${t.width ? `${t.width}x${t.height}` : ''} bw=${t.bandwidth}`);
+    }
+
+    return {
+      tracks: wasmTracks,
+      initSegment: result.initSegment,
+      segments,
+      totalDuration: result.resultJson.totalDuration ?? 0,
+    };
+  } catch (wasmErr) {
+    logger.warn(`[mp4split] WASM unavailable (${wasmErr instanceof Error ? wasmErr.message : 'unknown'}), falling back to JS parser`);
+    return splitFragmentedMP4FromBuffer(buf, filePath);
+  }
+}
+
+function splitFragmentedMP4FromBuffer(buf: Buffer, filePath: string): SplitResult {
+  logger.info(`[mp4split] Parsing fragmented MP4 (JS): ${filePath} (${(buf.length / 1024 / 1024).toFixed(1)} MB)`);
 
   let initEnd = 0;
   let pos = 0;

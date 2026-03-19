@@ -1318,7 +1318,7 @@ async function recoverCEKAndFetchData(params: DecryptParams, ipfsService?: any):
  * Fallback: Node.js crypto for very large files or WASM failures.
  * Returns raw decrypted Buffer. Caller is responsible for zeroing it after use.
  */
-const WASM_DECRYPT_MAX_BYTES = 50 * 1024 * 1024; // 50MB — above this, Node.js crypto is used
+const WASM_DECRYPT_MAX_BYTES = 200 * 1024 * 1024; // 200MB — above this, Node.js crypto is used (CEK briefly in V8)
 
 async function decryptAssetTwoLayer(params: DecryptParams, ipfsService?: any): Promise<Buffer> {
   const { cekBase64, encryptedBytes } = await recoverCEKAndFetchData(params, ipfsService);

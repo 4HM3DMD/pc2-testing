@@ -4,7 +4,7 @@ set -euo pipefail
 # Build all PC2 WASM crates for wasm32-wasip1 and deploy to wasm-apps/
 # Usage: bash pc2-node/scripts/build-wasm.sh [crate-name]
 #   No args = build all crates
-#   crate-name = build only that crate (ddrm-renderer, cenc-decrypt, cenc-encrypt, ipfs-assemble)
+#   crate-name = build only that crate (ddrm-renderer, cenc-decrypt, cenc-encrypt, ipfs-assemble, mp4-split)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PC2_NODE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -17,6 +17,7 @@ declare -A CRATE_DIRS=(
   ["cenc-decrypt"]="$PC2_NODE_DIR/crates/cenc-decrypt"
   ["cenc-encrypt"]="$PC2_NODE_DIR/crates/cenc-encrypt"
   ["ipfs-assemble"]="$PC2_NODE_DIR/crates/ipfs-assemble"
+  ["mp4-split"]="$PC2_NODE_DIR/crates/mp4-split"
 )
 
 declare -A OUTPUT_DIRS=(
@@ -24,6 +25,7 @@ declare -A OUTPUT_DIRS=(
   ["cenc-decrypt"]="$PC2_NODE_DIR/wasm-apps/cenc-decrypt"
   ["cenc-encrypt"]="$PC2_NODE_DIR/wasm-apps/cenc-encrypt"
   ["ipfs-assemble"]="$PC2_NODE_DIR/wasm-apps/ipfs-assemble"
+  ["mp4-split"]="$PC2_NODE_DIR/wasm-apps/mp4-split"
 )
 
 build_crate() {

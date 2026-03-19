@@ -916,6 +916,98 @@ export class WASMRuntime {
     }
 
     /**
+     * Parse a fragmented MP4 (ISO BMFF) inside WASM linear memory.
+     * Keeps the full MP4 buffer out of V8 during parsing — only
+     * the structured result (init segment, per-track media segments,
+     * track metadata) crosses back to Node.js.
+     *
+     * MemFS paths:
+     *   /input/fragmented.mp4          raw fMP4 file
+     *   /output/result.json            { tracks, segments, totalDuration, initSize }
+     *   /output/init.bin               init segment bytes
+     *   /output/seg-{trackId}-{i}.bin  each moof+mdat pair
+     */
+    async executeMp4Split(
+        wasmBinary: ArrayBuffer | Uint8Array,
+        mp4Buffer: Buffer,
+        options?: { timeoutMs?: number },
+    ): Promise<{ success: boolean; resultJson: any; initSegment: Buffer | null; segmentBuffers: Map<string, Buffer>; error?: string; executionTimeMs: number }> {
+        const timeoutMs = options?.timeoutMs ?? Math.max(this.defaultTimeoutMs, 120000);
+        const startTime = Date.now();
+
+        try {
+            await this.acquireExecutionSlot();
+        } catch (error: any) {
+            return { success: false, resultJson: null, initSegment: null, segmentBuffers: new Map(), error: `Queue error: ${error.message}`, executionTimeMs: Date.now() - startTime };
+        }
+
+        try {
+            if (!this.initialized) await this.initialize();
+            this.clearMemFS();
+
+            this.writeToMemFS('/input/fragmented.mp4', mp4Buffer);
+            try { this.memFs!.createDir('/output'); } catch { /* may already exist */ }
+
+            const wasiResult = await this.executeWASIStart(wasmBinary, timeoutMs);
+            if (!wasiResult.success) {
+                return { success: false, resultJson: null, initSegment: null, segmentBuffers: new Map(), error: wasiResult.error ?? 'WASI execution failed', executionTimeMs: Date.now() - startTime };
+            }
+
+            const outputFs = wasiResult.wasiFs;
+            let resultStr: string | null = null;
+            if (outputFs) {
+                const bytes = this.readFromSpecificMemFS(outputFs, '/output/result.json');
+                if (bytes) resultStr = new TextDecoder().decode(bytes);
+            }
+            if (!resultStr) {
+                const bytes = this.readFromMemFS('/output/result.json');
+                if (bytes) resultStr = new TextDecoder().decode(bytes);
+            }
+            if (!resultStr && wasiResult.stdout) resultStr = wasiResult.stdout;
+            if (!resultStr) {
+                return { success: false, resultJson: null, initSegment: null, segmentBuffers: new Map(), error: 'mp4-split produced no output', executionTimeMs: Date.now() - startTime };
+            }
+
+            let result: any;
+            try { result = JSON.parse(resultStr); } catch { result = { success: false, error: 'Invalid result JSON' }; }
+
+            if (!result.success) {
+                return { success: false, resultJson: result, initSegment: null, segmentBuffers: new Map(), error: result.error, executionTimeMs: Date.now() - startTime };
+            }
+
+            let initSegment: Buffer | null = null;
+            let raw: Uint8Array | null = null;
+            if (outputFs) raw = this.readFromSpecificMemFS(outputFs, '/output/init.bin');
+            if (!raw) raw = this.readFromMemFS('/output/init.bin');
+            if (raw) {
+                initSegment = Buffer.from(raw);
+            }
+
+            const segmentBuffers = new Map<string, Buffer>();
+            if (result.segments) {
+                for (const seg of result.segments) {
+                    const key = `seg-${seg.trackId}-${seg.index}.bin`;
+                    let segRaw: Uint8Array | null = null;
+                    if (outputFs) segRaw = this.readFromSpecificMemFS(outputFs, `/output/${key}`);
+                    if (!segRaw) segRaw = this.readFromMemFS(`/output/${key}`);
+                    if (segRaw) {
+                        segmentBuffers.set(key, Buffer.from(segRaw));
+                    }
+                }
+            }
+
+            logger.info(`[WASMRuntime] mp4-split output: ${result.tracks?.length ?? 0} tracks, ${result.segments?.length ?? 0} segments, init=${initSegment?.length ?? 0}B in ${Date.now() - startTime}ms`);
+
+            return { success: true, resultJson: result, initSegment, segmentBuffers, executionTimeMs: Date.now() - startTime };
+        } catch (error: any) {
+            return { success: false, resultJson: null, initSegment: null, segmentBuffers: new Map(), error: error.message, executionTimeMs: Date.now() - startTime };
+        } finally {
+            this.clearMemFS();
+            this.releaseExecutionSlot();
+        }
+    }
+
+    /**
      * Decrypt-only mode: AES-GCM decryption inside WASM linear memory.
      * Returns raw plaintext bytes — the CEK never touches Node.js memory.
      *

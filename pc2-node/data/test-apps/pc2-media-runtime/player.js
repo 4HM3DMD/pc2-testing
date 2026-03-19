@@ -21,6 +21,7 @@ const STANDALONE = params.standalone === 'true' || params.standalone === true;
 const $loading = document.getElementById('loading-screen');
 const $loadingText = document.getElementById('loading-text');
 const $error = document.getElementById('error-screen');
+const $errorTitle = document.getElementById('error-title');
 const $errorText = document.getElementById('error-text');
 const $container = document.getElementById('player-container');
 const $video = document.getElementById('video');
@@ -124,7 +125,22 @@ function showError(msg) {
   $loading.style.display = 'none';
   $container.style.display = 'none';
   $error.style.display = 'flex';
-  $errorText.textContent = msg;
+
+  const lower = (msg || '').toLowerCase();
+  const isAccessDenied = lower.includes('accesstoken') ||
+    lower.includes('access denied') ||
+    lower.includes('does not hold') ||
+    lower.includes('not authorized') ||
+    lower.includes('access control') ||
+    lower.includes('lit action denied');
+
+  if (isAccessDenied) {
+    $errorTitle.textContent = 'Access Required';
+    $errorText.textContent = 'You need to purchase this content to watch it. Please buy an Access Token from the marketplace.';
+  } else {
+    $errorTitle.textContent = 'Playback Error';
+    $errorText.textContent = msg;
+  }
 }
 
 // ─── Session Refresh ─────────────────────────────────────────────────
