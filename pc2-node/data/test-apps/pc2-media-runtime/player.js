@@ -16,6 +16,8 @@ let BUYER_ADDRESS = params.buyerAddress || '';
 let REQUEST_ID = params.requestId || '';
 let LIT_AUTH_SIG = params.litAuthSig || null;
 const STANDALONE = params.standalone === 'true' || params.standalone === true;
+const THUMBNAIL = params.thumbnail || new URLSearchParams(window.location.search).get('thumbnail') || '';
+console.log('[player] params keys:', Object.keys(params), 'THUMBNAIL:', THUMBNAIL ? THUMBNAIL.substring(0, 80) : '(empty)');
 
 // ─── DOM ─────────────────────────────────────────────────────────────
 const $loading = document.getElementById('loading-screen');
@@ -535,12 +537,22 @@ async function init() {
       return;
     }
 
-    // Audio-only: show music placeholder
     isAudioOnly = videoTrackIdx === -1;
     if (isAudioOnly) {
       const $audioArt = document.getElementById('audio-art');
       const $audioTitle = document.getElementById('audio-title');
-      if ($audioArt) $audioArt.style.display = 'flex';
+      if ($audioArt) {
+        $audioArt.style.display = 'flex';
+        if (THUMBNAIL) {
+          const img = document.createElement('img');
+          img.src = THUMBNAIL;
+          img.alt = data.title || 'Audio';
+          img.onerror = function() { this.style.display = 'none'; };
+          $audioArt.insertBefore(img, $audioArt.firstChild);
+          const svgIcon = $audioArt.querySelector('svg');
+          if (svgIcon) svgIcon.style.display = 'none';
+        }
+      }
       if ($audioTitle) $audioTitle.textContent = data.title || 'Audio';
     }
 

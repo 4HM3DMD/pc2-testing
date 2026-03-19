@@ -370,24 +370,25 @@ body {
   transform: translateY(-2px);
 }
 
+/* Elacity Media Card spec: 16:9, #070707 background, letterboxing for non-16:9 images */
 .video-card-thumb {
   position: relative;
   width: 100%;
   aspect-ratio: 16 / 9;
-  background: var(--bg-surface);
-  border-radius: var(--radius-md);
+  background: #070707;
+  border-radius: 12px;
   overflow: hidden;
+  display: flex;
+  justify-content: center;
+  align-items: center;
 }
 
 .video-card-thumb img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
-  transition: transform 0.3s;
-}
-
-.video-card:hover .video-card-thumb img {
-  transform: scale(1.03);
+  max-height: 100%;
+  object-fit: contain;
+  object-position: center;
 }
 
 .video-card-thumb .content-badge {
@@ -513,16 +514,21 @@ body {
 .detail-media {
   width: 100%;
   aspect-ratio: 16 / 9;
-  background: var(--bg-surface);
-  border-radius: var(--radius-lg);
+  background: #070707;
+  border-radius: 12px;
   overflow: hidden;
   margin-bottom: 20px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
 }
 
 .detail-media img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  max-height: 100%;
+  object-fit: contain;
+  object-position: center;
 }
 
 .detail-preview-player {

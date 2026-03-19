@@ -23,7 +23,8 @@ html, body { height: 100%; overflow: hidden; background: #000; color: #e5e5e5; f
 #buffering-overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.35); pointer-events: none; z-index: 5; }
 
 /* Audio-only placeholder */
-#audio-art { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; background: #121212; z-index: 3; pointer-events: none; }
+#audio-art { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; background: #070707; z-index: 3; pointer-events: none; }
+#audio-art img { max-width: 55%; max-height: 65%; object-fit: contain; border-radius: 8px; box-shadow: 0 8px 32px rgba(0,0,0,0.6); }
 #audio-art p { color: #a3a3a3; font-size: 16px; max-width: 300px; text-align: center; line-height: 1.4; }
 
 /* Watermark */

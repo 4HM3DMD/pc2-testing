@@ -11,7 +11,7 @@
 **Release:** v1.1.0 tagged and released on 2026-03-03 (134 commits squash-merged to main)
 **Launcher:** v1.1.1 released — version display, one-click updates, full networking install
 **DAO Proposal:** Live at https://elastos.com/proposals/69a24f49247f130078064edd
-**Last Commit:** fix: WASM CEK base64 padding + local Three.js libs + help overlay + Creator MIME detection
+**Last Commit:** fix: market thumbnail letterboxing + audio artwork in Media Runtime player
 
 #### AV1 Playback Fix & Init Segment Splitting (Mar 18)
 
@@ -783,6 +783,20 @@ Expanded the dDRM Viewer to support four new interactive content types beyond th
 - [ ] **Audio routing fix** — remove audio passthrough from dDRM Viewer, ensure all audio goes through Media Runtime encoding pipeline (DASH segments, per-segment WASM decrypt). Currently audio plays via passthrough (weaker security model — full decrypted blob in browser memory). Critical for security parity with video.
 - [x] **Creator Dashboard MIME hints** — `resolveFileMime()` added to `elacity-creator/app.js` with EXT_MIME_MAP for .glb, .gltf, .obj, .stl, .fbx, .woff, .woff2, .ttf, .otf, .csv, .tsv, .gz, .tar, .onnx, .safetensors, .gguf. All downstream references use `state.resolvedMime` *(completed Mar 19)*
 - [ ] **E2E test** — mint one GLB + CSV + font + ZIP, purchase each, open in viewer, verify rendering and anti-piracy. GLB verified ✅. Others pending.
+
+**Market & Player UX fixes (Mar 19 — session 2):**
+- **Market thumbnail letterboxing** — `.video-card-thumb` and `.detail-media` changed from `object-fit: cover` (crops non-16:9 images) to `object-fit: contain` with centered flexbox layout and `#070707` background. Removed hover zoom scale. Matches live Elacity site "Media Card" spec.
+- **Audio artwork in Media Runtime** — When playing audio-only content, the PC2 Media Runtime player now displays the asset's cover artwork (thumbnail) instead of just the music note icon. Thumbnail URL passed from market app via `puter.args.thumbnail`, extracted from the detail view's displayed image (`dom.detailImage.src`). Styled with `max-width: 55%; max-height: 65%; border-radius: 8px; box-shadow` for album-art presentation.
+- **Installed apps sync** — Discovered that `pc2-media-runtime` loads from `data/installed-apps/` (higher priority in `static.ts`) not `data/test-apps/`. Copied updated `player.js` and `player.css` to installed-apps. Added cache-busting query strings (`?v=2`) to `index.html` script/link tags.
+
+**Files changed (Market & Player UX, Mar 19):**
+| File | Change |
+|------|--------|
+| `pc2-node/data/test-apps/elacity-market/styles.css` | Thumbnail letterboxing: `object-fit: contain`, flex centering, `#070707` bg, no hover zoom |
+| `pc2-node/data/test-apps/elacity-market/app.js` | Pass `thumbnail` in `handlePlay` launchApp args |
+| `pc2-node/data/test-apps/pc2-media-runtime/player.js` | Read `THUMBNAIL` from puter.args, create `<img>` in `#audio-art` for audio-only |
+| `pc2-node/data/test-apps/pc2-media-runtime/player.css` | Audio artwork `<img>` styling (contain, shadow, border-radius) |
+| `pc2-node/data/test-apps/pc2-media-runtime/index.html` | Cache-busting `?v=2` on player.js and player.css |
 
 **Wave 1 fixes (Mar 19 — debugging session):**
 - **WASM CEK base64 padding** — Chipotle REST API returns unpadded base64 CEK (43 chars for 32-byte key). `ddrm-renderer` WASM `decrypt_only` mode requires standard padded base64. Added padding normalization in `storage.ts` for both `decryptAssetTwoLayer` and `renderViaWASM`. WASM decrypt-only now succeeds (54ms) — CEK never touches Node.js V8 heap.

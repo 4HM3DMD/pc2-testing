@@ -1749,7 +1749,12 @@
             authority: props.authority || '',
             buyerAddress: checksumAddr,
             requestId: prepareResult.requestId,
-            litAuthSig: authSig
+            litAuthSig: authSig,
+            thumbnail: (function() {
+              var url = resolveIpfsUrl(nft.image || '') || resolveIpfsUrl((meta.media || {}).previewURL || '') || getImageUrl(nft);
+              console.log('[handlePlay] thumbnail URL:', url);
+              return url;
+            })()
           }
         }, '*');
       });
