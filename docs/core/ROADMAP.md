@@ -285,6 +285,7 @@ These diagrams from Rong define the north star. Every work stream should move us
 - [ ] Social features foundation (chat between node owners)
 - [ ] IoT device connectivity patterns (sensors → personal cloud)
 - [ ] dDRM CEK mesh caching — P2P key relay between nodes with shared ACCESS_TOKEN ownership. Signed attestation proves on-chain rights. Reduces Lit API calls and cost at network scale. Prerequisite: Chipotle migration complete
+- [ ] **Carrier alignment** — PC2 capsules consume provider contracts (`elastos://peer/*`, `localhost://storage/*`), not raw topology. Transport/discovery = Carrier (Anders). Security/rendering/marketplace = capsule/provider layer (us). Rules: one runtime = one Carrier node per machine; capsules must not spawn their own Carrier nodes; Kubo stays optional, not Carrier core
 
 **Awareness Layer (Context + Memory):**
 - [ ] Context ingestion pipeline — location, photos, voice, motion, activity events all flowing to node
@@ -329,6 +330,8 @@ These diagrams from Rong define the north star. Every work stream should move us
 - [x] AES-GCM encrypt in WASM — non-media file encryption (`encrypt_only` mode in ddrm-renderer). Plaintext never touches Node.js memory. **DONE (Mar 18)**
 - [x] WASM & I/O quick wins (5) — wasm-opt build pass, WASM preload, cache key fix, async thumbnail, async static I/O. **DONE (Mar 18)**
 - [x] **Phase 2: mp4dash replaced with WASM pipeline (Mar 18)** — `mp4split.ts` (fMP4 parser), `mpdGenerator.ts` (DASH MPD XML), `executeCENCEncrypt()` in WASMRuntime, `dashPackager.ts` rewritten. Zero Python/mp4encrypt dependency. Only mp4fragment binary retained.
+- [x] **IPFS chunk assembly in Rust/WASM (v1.3)** — **DONE (Mar 19)** — New `ipfs-assemble` Rust WASM crate. Files >=10MB assembled in WASM linear memory (`Vec::with_capacity` + `extend_from_slice`), reducing V8 heap from ~400MB to ~200MB for a 200MB file. Graceful fallback to `Buffer.concat`. Proto-capsule: same `wasm32-wasip1` binary runs in today's Wasmer and tomorrow's Wasmtime Runtime.
+- [ ] **WASM optimization audit: remaining items triage** — Tier 1-2 COMPLETE (11/18 — IPFS assemble now done). Tier 3 strategic items (Iroh IPFS, Rust proxy, Carrier P2P) **deferred until Anders publishes Carrier provider interfaces** — building to the wrong API would be wasted effort. Category A remaining: AI serialization (MessagePack, v1.4).
 
 **dApp Store (Global Decentralized App Marketplace):**
 - [ ] dApp bundle format — encrypted app package with manifest (permissions, runtime, categories)
@@ -743,9 +746,9 @@ Starting Month 1 (March 2026):
 | Release | Target | Focus |
 |---------|--------|-------|
 | v1.1.0 | March 2026 | Merge Jetson branch, bug fixes, AV1 player |
-| v1.2.0 | April 2026 | **Lit Chipotle dDRM** (non-media DONE, media E2E DONE Mar 18), local media encoding (FFmpeg+WASM CENC+DASH — E2E verified, Python-free), AV1 playback verified (init splitting + PSSH strip), supernode provisioning deployment, hardware expansion, installer improvements, WireGuard bundling |
-| v1.3.0 | May 2026 | AI Model Marketplace alpha (GGUF→Ollama), dApp bundles, datasets, `@elacity-js/asset-packager` |
-| v1.4.0 | June 2026 | Multi-rendition encoding, fiat onramp, Rust optimization sprint (IPFS chunk assembly, Rust HTTP proxy) |
+| v1.2.0 | April 2026 | **Lit Chipotle dDRM** (non-media DONE, media E2E DONE Mar 18), local media encoding (FFmpeg+WASM CENC+DASH — E2E verified, Python-free), AV1 playback verified (init splitting + PSSH strip), supernode provisioning ready (deploy when Lit Chipotle production network goes live), hardware expansion, installer improvements, WireGuard bundling |
+| v1.3.0 | May 2026 | IPFS streaming chunk assembly (production reliability — OOM fix for large files on Jetson), AI Model Marketplace alpha (GGUF→Ollama), on-chain content indexer, dApp bundles, `@elacity-js/asset-packager` |
+| v1.4.0 | June 2026 | Multi-rendition encoding, fiat onramp, AI serialization optimization (MessagePack), signed capsule format (bridge to Runtime) |
 | v1.5.0 | July 2026 | dApp Store v1 (categories, ratings, HTML5 games, 3D viewer), mobile companion alpha |
 | v1.6.0 | August 2026 | Signed capsule format (bridge to Runtime), Supernode Access Tokens, bandwidth metering |
 | v1.7.0 | September 2026 | Protocol fees alpha, white-label SDK alpha, enterprise pilot |

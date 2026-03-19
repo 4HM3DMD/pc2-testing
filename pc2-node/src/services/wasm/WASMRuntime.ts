@@ -832,6 +832,90 @@ export class WASMRuntime {
     }
 
     /**
+     * Assemble IPFS UnixFS chunks into a contiguous buffer inside WASM linear
+     * memory.  Keeps chunk data out of V8's GC-tracked heap — the only
+     * Node.js Buffer is the final assembled output read back from MemFS.
+     *
+     * MemFS paths:
+     *   /input/command.json     { chunk_count, total_bytes }
+     *   /input/chunk-{i}.bin    raw chunk data (0-indexed)
+     *   /output/result.json     { success, assembled_bytes }
+     *   /output/assembled.bin   concatenated output
+     */
+    async executeIPFSAssemble(
+        wasmBinary: ArrayBuffer | Uint8Array,
+        chunks: Buffer[],
+        totalLength: number,
+        options?: { timeoutMs?: number },
+    ): Promise<{ success: boolean; assembled: Buffer | null; error?: string; executionTimeMs: number }> {
+        const timeoutMs = options?.timeoutMs ?? Math.max(this.defaultTimeoutMs, 120000);
+        const startTime = Date.now();
+
+        try {
+            await this.acquireExecutionSlot();
+        } catch (error: any) {
+            return { success: false, assembled: null, error: `Queue error: ${error.message}`, executionTimeMs: Date.now() - startTime };
+        }
+
+        try {
+            if (!this.initialized) await this.initialize();
+            this.clearMemFS();
+
+            const commandJson = JSON.stringify({ chunk_count: chunks.length, total_bytes: totalLength });
+            this.writeToMemFS('/input/command.json', Buffer.from(commandJson, 'utf-8'));
+
+            for (let i = 0; i < chunks.length; i++) {
+                this.writeToMemFS(`/input/chunk-${i}.bin`, chunks[i]);
+            }
+
+            try { this.memFs!.createDir('/output'); } catch { /* may already exist */ }
+
+            const wasiResult = await this.executeWASIStart(wasmBinary, timeoutMs);
+            if (!wasiResult.success) {
+                return { success: false, assembled: null, error: wasiResult.error ?? 'WASI execution failed', executionTimeMs: Date.now() - startTime };
+            }
+
+            const outputFs = wasiResult.wasiFs;
+            let resultStr: string | null = null;
+            if (outputFs) {
+                const bytes = this.readFromSpecificMemFS(outputFs, '/output/result.json');
+                if (bytes) resultStr = new TextDecoder().decode(bytes);
+            }
+            if (!resultStr) {
+                const bytes = this.readFromMemFS('/output/result.json');
+                if (bytes) resultStr = new TextDecoder().decode(bytes);
+            }
+            if (!resultStr && wasiResult.stdout) resultStr = wasiResult.stdout;
+            if (!resultStr) {
+                return { success: false, assembled: null, error: 'IPFS assemble produced no output', executionTimeMs: Date.now() - startTime };
+            }
+
+            let result: any;
+            try { result = JSON.parse(resultStr); } catch { result = { success: false, error: 'Invalid result JSON' }; }
+
+            let assembled: Buffer | null = null;
+            if (result.success) {
+                let raw: Uint8Array | null = null;
+                if (outputFs) raw = this.readFromSpecificMemFS(outputFs, '/output/assembled.bin');
+                if (!raw) raw = this.readFromMemFS('/output/assembled.bin');
+                if (raw) {
+                    assembled = Buffer.from(raw);
+                    logger.info(`[WASMRuntime] IPFS assemble output: ${raw.length} bytes in ${Date.now() - startTime}ms`);
+                } else {
+                    logger.warn('[WASMRuntime] IPFS assemble: success=true but no /output/assembled.bin found');
+                }
+            }
+
+            return { success: result.success, assembled, error: result.error, executionTimeMs: Date.now() - startTime };
+        } catch (error: any) {
+            return { success: false, assembled: null, error: error.message, executionTimeMs: Date.now() - startTime };
+        } finally {
+            this.clearMemFS();
+            this.releaseExecutionSlot();
+        }
+    }
+
+    /**
      * Decrypt-only mode: AES-GCM decryption inside WASM linear memory.
      * Returns raw plaintext bytes — the CEK never touches Node.js memory.
      *

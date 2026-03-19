@@ -560,6 +560,12 @@ async function init() {
 
     mediaSource.addEventListener('sourceopen', async () => {
       console.log('[player] sourceopen fired, readyState:', mediaSource.readyState);
+
+      if (mediaSource.sourceBuffers.length > 0) {
+        console.warn('[player] sourceopen fired but SourceBuffers already exist — skipping duplicate init');
+        return;
+      }
+
       URL.revokeObjectURL(msUrl);
       try {
         if (videoTrackIdx !== -1) {

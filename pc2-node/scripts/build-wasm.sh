@@ -4,7 +4,7 @@ set -euo pipefail
 # Build all PC2 WASM crates for wasm32-wasip1 and deploy to wasm-apps/
 # Usage: bash pc2-node/scripts/build-wasm.sh [crate-name]
 #   No args = build all crates
-#   crate-name = build only that crate (ddrm-renderer, cenc-decrypt, cenc-encrypt)
+#   crate-name = build only that crate (ddrm-renderer, cenc-decrypt, cenc-encrypt, ipfs-assemble)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PC2_NODE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -16,12 +16,14 @@ declare -A CRATE_DIRS=(
   ["ddrm-renderer"]="$PC2_NODE_DIR/wasm-renderer"
   ["cenc-decrypt"]="$PC2_NODE_DIR/crates/cenc-decrypt"
   ["cenc-encrypt"]="$PC2_NODE_DIR/crates/cenc-encrypt"
+  ["ipfs-assemble"]="$PC2_NODE_DIR/crates/ipfs-assemble"
 )
 
 declare -A OUTPUT_DIRS=(
   ["ddrm-renderer"]="$PC2_NODE_DIR/wasm-apps/ddrm-renderer"
   ["cenc-decrypt"]="$PC2_NODE_DIR/wasm-apps/cenc-decrypt"
   ["cenc-encrypt"]="$PC2_NODE_DIR/wasm-apps/cenc-encrypt"
+  ["ipfs-assemble"]="$PC2_NODE_DIR/wasm-apps/ipfs-assemble"
 )
 
 build_crate() {
@@ -58,7 +60,7 @@ build_crate() {
   # wasm-opt pass: shrink binary + speed up instantiation
   if command -v wasm-opt &>/dev/null; then
     echo "  Running wasm-opt -Oz..."
-    wasm-opt -Oz "$output_dir/$name.wasm" -o "$output_dir/$name.wasm"
+    wasm-opt -Oz --enable-bulk-memory "$output_dir/$name.wasm" -o "$output_dir/$name.wasm"
     local size_opt
     size_opt=$(wc -c < "$output_dir/$name.wasm" | tr -d ' ')
     echo "  wasm-opt: $size_before -> $size_opt bytes ($(( (size_before - size_opt) * 100 / size_before ))% smaller)"

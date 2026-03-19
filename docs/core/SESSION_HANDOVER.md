@@ -471,6 +471,12 @@ Comprehensive audit of the PC2 node system to identify Rust/WASM optimization op
 
 **Audit findings documented in plan:** 18 optimization opportunities across 4 tiers (quick wins → high-impact → medium-impact → strategic). Key areas: WASM precompilation, IPFS chunk assembly in Rust, Rust HTTP proxy, sovereign key management. All aligned with Runtime capsule convergence path.
 
+**Remaining Items Triage (Mar 19):**
+- **Category A — Do soon (v1.3-v1.4):** ~~IPFS chunk assembly~~ **DONE (Mar 19)** — `ipfs-assemble` Rust WASM crate built and integrated. AI serialization optimization (MessagePack for conversation contexts, reduces GC pauses) remains.
+- **Category B — Defer to Carrier interface:** Iroh-based IPFS (#11), Rust proxy relay (#12), async SQLite (#13) — building these now risks targeting the wrong API. Anders' Carrier model explicitly defines transport/discovery as Carrier concerns. Wait for published provider interfaces
+- **Category C — Skip:** Tier 4 nice-to-haves (thumbnail WASM, QR WASM, voice PCM) — minimal user impact, not worth the effort
+- **Explicitly NOT our job:** Carrier P2P in Rust (#15) — "Carrier carries, the runtime authorizes, providers define meaning, capsules express intent." Transport is Anders' responsibility
+
 #### PC2 Media Runtime — WORKING END-TO-END (Mar 15-16)
 
 Built a complete server-side DASH/CENC media decryption pipeline for PC2. Elacity's existing player relies on browser-native DRM (EME/CDM + SharedArrayBuffer) which can't work inside PC2's sandboxed iframes. The PC2 node now intercepts encrypted DASH streams, decrypts them server-side, strips all DRM signaling, and streams clear content to a lightweight MSE-based JavaScript player.
@@ -549,21 +555,25 @@ Comprehensive player hardening and UX polish:
 #### Next Up — Engineering Priorities
 1. ~~**Lit Chipotle migration**~~ — **DONE (Mar 13-18)** — Phases 0-5 complete. Migrated to new `chipotle-dev` network. All Lit Action CIDs registered. Pinned encrypt action (`non-media-encrypt-chipotle.js`). Auto-provisioning from supernodes built. **E2E verified** (PDF, image, text — all decrypt via Chipotle on new platform).
 2. ~~**End-to-end testing**~~ — **DONE (Mar 18)** — Full Creator mint → buy → dDRM Viewer decrypt verified on new Lit dev network. WASM rendering, watermarks, on-chain access check all confirmed working.
-3. **Deploy supernode provisioning** — `/api/ddrm/provision` endpoint coded but NOT deployed to supernodes. See `docs/core/LIT_PRODUCTION_CHECKLIST.md` for deployment steps. **This is a v1.2.0 release blocker.**
+3. **Deploy supernode provisioning** — `/api/ddrm/provision` endpoint coded but NOT deployed to supernodes. See `docs/core/LIT_PRODUCTION_CHECKLIST.md` for deployment steps. **Deploy when Lit Chipotle production network goes live** — deploying against dev network now would mean deploying twice (new endpoints, PKP addresses, dashboard keys expected to change).
 4. ~~**Media pipeline on Chipotle**~~ — **DONE (Mar 18)** — Full encoding pipeline E2E verified: transcode → fragment → CENC encrypt → DASH package → IPFS upload → mint → buy → download → playback. PSSH includes ciphertext, hash, contract-compatible kid, correct authority. Lit Chipotle API recovered.
-5. **P-256 ECDH unwrap to WASM (Phase E)** — conditional on Chipotle envelope format. If Chipotle returns CEK directly, this phase is eliminated.
-6. ~~**`cenc-encrypt` Rust WASM crate**~~ — **BUILT + INTEGRATED (Mar 17-18)** — AES-128-CTR per-sample encryption, init segment transformation (sinf/tenc injection), binary PSSH generation. 8 tests pass. Now fully wired into the encoding pipeline via `executeCENCEncrypt()` in WASMRuntime, replacing mp4dash + mp4encrypt.
-7. ~~**`pssh-gen` Rust WASM crate**~~ — **INCLUDED in `cenc-encrypt`** — `pssh.rs` module generates binary PSSH boxes with Elacity system ID and dDRM metadata.
-8. ~~**WASM crypto hardening (Phases A-C)**~~ — DONE (Mar 16). Branch: `feature/wasm-crypto-hardening`.
-9. ~~**WASM renderer hardening**~~ — DONE (Mar 16) — PDF, code, images, text all render inside WASM.
-10. ~~**Viewer UX enhancements**~~ — DONE (Mar 16) — zoom, pan, page nav, audio player, toolbar.
-11. ~~**AES-GCM encrypt in WASM**~~ — **DONE (Mar 18)** — Non-media encryption now uses WASM `encrypt_only` mode. Plaintext never touches Node.js memory.
-12. ~~**Quick wins (5)**~~ — **DONE (Mar 18)** — wasm-opt build, WASM preload, cache key fix, async thumbnail, async static I/O.
-13. **On-chain indexer prototype** — replace Elacity GraphQL dependency with event scanner (The Graph / custom)
-12. **Self-provisioned RLI tokens** — each node mints own capacity credits, removes Elacity wallet dependency
-13. **AI Model Marketplace alpha** — first non-media vertical: GGUF → encrypt → IPFS → ACCESS_TOKEN → decrypt → Ollama
-14. **dApp Store** — global decentralized app marketplace. DeFi protocols (Uniswap, Aave), games, productivity tools packaged as encrypted dApps. Purchase → decrypt → run locally on PC2 node. See `docs/core/ELACITY_UNIVERSAL_ASSET_STRATEGY.md`.
-15. **ElastOS Runtime convergence** — CTO's Runtime at RC4 (0.19.0-rc4). WASM + microVM capsule execution verified. dDRM WASM crates (`aes-gcm-decrypt`, `cenc-decrypt`) target same `wasm32-wasip1` as Runtime's Wasmtime. Convergence path: our renderers become capsules, dDRM becomes a Provider Capsule. See `docs/core/ARCHITECTURE_CONVERGENCE.md`.
+5. ~~**IPFS chunk assembly in Rust/WASM (v1.3)**~~ — **DONE (Mar 19)** — New `ipfs-assemble` Rust WASM crate (108KB). `getFile()` now routes files >=10MB through Rust/WASM assembler: chunks written to MemFS, assembled via `Vec::with_capacity()` + `extend_from_slice()` in WASM linear memory, final buffer read back. V8 heap drops from ~400MB to ~200MB for a 200MB file (GC only tracks the final output buffer). Graceful fallback to `Buffer.concat` if WASM unavailable. Also fixed MSE player SourceBuffer limit bug (duplicate `sourceopen` guard).
+6. **On-chain content indexer** — Replace Elacity GraphQL dependency with event scanner (The Graph / custom). Removes single biggest centralization point. Becomes `elastos://market/*` provider capsule at convergence.
+7. **AI Model Marketplace alpha** — First non-media vertical: GGUF → encrypt → IPFS → ACCESS_TOKEN → decrypt → Ollama. Proves "Amazon of digital assets" story beyond video.
+8. **P-256 ECDH unwrap to WASM (Phase E)** — conditional on Chipotle envelope format. If Chipotle returns CEK directly, this phase is eliminated.
+9. ~~**`cenc-encrypt` Rust WASM crate**~~ — **BUILT + INTEGRATED (Mar 17-18)** — AES-128-CTR per-sample encryption, init segment transformation (sinf/tenc injection), binary PSSH generation. 8 tests pass. Now fully wired into the encoding pipeline via `executeCENCEncrypt()` in WASMRuntime, replacing mp4dash + mp4encrypt.
+10. ~~**`pssh-gen` Rust WASM crate**~~ — **INCLUDED in `cenc-encrypt`** — `pssh.rs` module generates binary PSSH boxes with Elacity system ID and dDRM metadata.
+11. ~~**WASM crypto hardening (Phases A-C)**~~ — DONE (Mar 16). Branch: `feature/wasm-crypto-hardening`.
+12. ~~**WASM renderer hardening**~~ — DONE (Mar 16) — PDF, code, images, text all render inside WASM.
+13. ~~**Viewer UX enhancements**~~ — DONE (Mar 16) — zoom, pan, page nav, audio player, toolbar.
+14. ~~**AES-GCM encrypt in WASM**~~ — **DONE (Mar 18)** — Non-media encryption now uses WASM `encrypt_only` mode. Plaintext never touches Node.js memory.
+15. ~~**Quick wins (5)**~~ — **DONE (Mar 18)** — wasm-opt build, WASM preload, cache key fix, async thumbnail, async static I/O.
+16. **Signed capsule format (v1.4-v1.6)** — Ed25519 sign all WASM binaries and dApp bundles. Cheapest convergence investment with highest payoff — Runtime verifies signatures before loading capsules.
+17. **Self-provisioned RLI tokens** — each node mints own capacity credits, removes Elacity wallet dependency
+18. **dApp Store** — global decentralized app marketplace. DeFi protocols (Uniswap, Aave), games, productivity tools packaged as encrypted dApps. Purchase → decrypt → run locally on PC2 node. See `docs/core/ELACITY_UNIVERSAL_ASSET_STRATEGY.md`.
+19. **ElastOS Runtime convergence** — CTO's Runtime at RC4 (0.19.0-rc4). WASM + microVM capsule execution verified. dDRM WASM crates (`aes-gcm-decrypt`, `cenc-decrypt`) target same `wasm32-wasip1` as Runtime's Wasmtime. Convergence path: our renderers become capsules, dDRM becomes a Provider Capsule. See `docs/core/ARCHITECTURE_CONVERGENCE.md`.
+
+**Carrier alignment note (Mar 19):** Per CTO's Carrier model, PC2 code targets the capsule/provider layer (dDRM, marketplace, rendering). Transport/discovery is Carrier's responsibility (Iroh, DHT, gossip, relay). Tier 3 audit items (Iroh IPFS, Rust proxy, Carrier P2P) deferred until Carrier provider interfaces are published. Rules: one runtime = one Carrier node per machine; capsules consume provider contracts, not raw topology; Kubo stays optional.
 
 #### WASM Crypto Hardening — COMPLETED Phases A-C (Mar 16)
 

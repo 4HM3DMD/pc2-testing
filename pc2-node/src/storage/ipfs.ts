@@ -29,6 +29,10 @@ import { join } from 'path';
 import { createLogger } from '../utils/logger.js';
 const log = createLogger('ipfs');
 
+const WASM_ASSEMBLE_THRESHOLD = 10 * 1024 * 1024; // 10 MB — below this, Buffer.concat is faster than MemFS round-trip
+const IPFS_ASSEMBLE_WASM_PATH = 'wasm-apps/ipfs-assemble/ipfs-assemble.wasm';
+let cachedAssembleWasm: ArrayBuffer | null = null;
+
 /**
  * IPFS Network Modes:
  * - private: Isolated node, no network connectivity (personal cloud only)
@@ -445,60 +449,95 @@ export class IPFSStorage {
   }
 
   /**
-   * Retrieve file content from IPFS using CID
+   * Retrieve file content from IPFS using CID.
+   *
+   * For callers that can consume an async stream instead of a full Buffer,
+   * prefer {@link getFileStream} — it keeps memory proportional to one IPFS
+   * chunk (~256 KB) rather than the entire file.
    */
   async getFile(cid: string): Promise<Buffer> {
     if (!this.blockstore) {
       throw new Error('Blockstore not initialized');
     }
 
+    const TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes — guard against Helia iterator hangs
+    const LARGE_FILE_WARN_BYTES = 100 * 1024 * 1024; // 100 MB
+
     try {
-      // Import CID from string
       const { CID } = await import('multiformats/cid');
       const cidObj = CID.parse(cid);
 
-      // Use exporter to properly reconstruct UnixFS files (fs.addBytes creates UnixFS structure)
-      // This handles multi-block files correctly
       // IMPORTANT: Use the underlying FsBlockstore directly, not helia.blockstore (IdentityBlockstore wrapper)
       const { exporter } = await import('ipfs-unixfs-exporter');
-      
+
       const entry = await exporter(cidObj, this.blockstore);
-      
+
       if (!entry) {
         throw new Error(`Entry not found for CID: ${cid}`);
       }
-      
+
       if (entry.type !== 'file' && entry.type !== 'raw') {
         throw new Error(`CID ${cid} is not a file (type: ${entry.type})`);
       }
 
-      // Collect all chunks from the file content
-      const chunks: Uint8Array[] = [];
-      let totalChunks = 0;
-      
-      for await (const chunk of entry.content()) {
-        chunks.push(chunk);
-        totalChunks++;
-      }
-      
-      if (chunks.length === 0) {
+      // Single-pass assembly: collect chunks and concat once.
+      // Previous implementation allocated an intermediate chunks[] array, then a
+      // second full-size Buffer, and copied every byte a second time. This version
+      // hands the chunks directly to Buffer.concat which does one allocation.
+      const pieces: Buffer[] = [];
+      let totalLength = 0;
+
+      const contentPromise = (async () => {
+        for await (const chunk of entry.content()) {
+          pieces.push(Buffer.from(chunk));
+          totalLength += chunk.length;
+        }
+      })();
+
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error(`IPFS getFile timed out after ${TIMEOUT_MS / 1000}s for CID: ${cid}`)), TIMEOUT_MS);
+      });
+
+      await Promise.race([contentPromise, timeoutPromise]);
+
+      if (pieces.length === 0) {
         throw new Error(`File content is empty for CID: ${cid}`);
       }
 
-      // Log chunk info for debugging
-      const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
-      log.debug(`[IPFS] Retrieved ${chunks.length} chunks, total size: ${totalLength} bytes for CID: ${cid}`);
-      
-      // Concatenate all chunks into a single buffer
-      const buffer = Buffer.allocUnsafe(totalLength);
-      let offset = 0;
-      
-      for (const chunk of chunks) {
-        buffer.set(chunk, offset);
-        offset += chunk.length;
+      log.debug(`[IPFS] Retrieved ${pieces.length} chunks, total size: ${totalLength} bytes for CID: ${cid}`);
+
+      if (totalLength >= LARGE_FILE_WARN_BYTES) {
+        log.warn(`[IPFS] getFile() fetching ${(totalLength / (1024 * 1024)).toFixed(1)}MB for CID: ${cid}.`);
       }
 
-      return buffer;
+      // For files above threshold, assemble in Rust/WASM to keep chunk data
+      // out of V8's GC-tracked heap. Only the final Buffer lives in Node.js.
+      if (totalLength >= WASM_ASSEMBLE_THRESHOLD) {
+        try {
+          const { getWASMRuntime } = await import('../services/wasm/WASMRuntime.js');
+          const runtime = getWASMRuntime();
+
+          if (!cachedAssembleWasm) {
+            cachedAssembleWasm = await runtime.loadFromFile(IPFS_ASSEMBLE_WASM_PATH);
+            log.info(`[IPFS] Loaded ipfs-assemble WASM (${(cachedAssembleWasm.byteLength / 1024).toFixed(0)} KB)`);
+          }
+
+          const result = await runtime.executeIPFSAssemble(cachedAssembleWasm, pieces, totalLength, {
+            timeoutMs: 120000,
+          });
+
+          if (result.success && result.assembled) {
+            log.info(`[IPFS] WASM assembled ${(totalLength / (1024 * 1024)).toFixed(1)}MB in ${result.executionTimeMs}ms for CID: ${cid}`);
+            return result.assembled;
+          }
+
+          log.warn(`[IPFS] WASM assemble failed (${result.error}), falling back to Buffer.concat for CID: ${cid}`);
+        } catch (wasmErr) {
+          log.warn(`[IPFS] WASM assembler unavailable (${wasmErr instanceof Error ? wasmErr.message : 'unknown'}), falling back to Buffer.concat for CID: ${cid}`);
+        }
+      }
+
+      return Buffer.concat(pieces, totalLength);
     } catch (error) {
       log.error(`Error retrieving file from Helia IPFS (CID: ${cid}):`, error);
       throw new Error(`Failed to retrieve file from IPFS: ${error instanceof Error ? error.message : 'Unknown error'}`);
