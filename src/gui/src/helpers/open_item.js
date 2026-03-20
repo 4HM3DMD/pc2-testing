@@ -128,9 +128,12 @@ Please try recreating the link.`);
         }
     }
     //----------------------------------------------------------------
-    // Is this a .edrm file? (DRM-protected media from Elacity)
+    // Is this a .ddrm file? (unified dDRM capsule — protected asset from Elacity)
+    // Also handles legacy .edrm and .ddrm.json for backward compatibility
     //----------------------------------------------------------------
-    else if ( /\.edrm(\s*\(\d+\))?$/i.test($(el_item).attr('data-name')) ) {
+    else if ( /\.ddrm(\s*\(\d+\))?$/i.test($(el_item).attr('data-name'))
+           || /\.edrm(\s*\(\d+\))?$/i.test($(el_item).attr('data-name'))
+           || /\.ddrm(\s*\(\d+\))?\.json$/i.test($(el_item).attr('data-name')) ) {
         try {
             let descriptor = null;
             try {
@@ -148,80 +151,50 @@ Please try recreating the link.`);
                 const text = await readRes.text();
                 descriptor = JSON.parse(text);
             } catch (e) {
-                console.error('Error reading .edrm descriptor:', e);
+                console.error('Error reading .ddrm descriptor:', e);
             }
 
-            if ( descriptor && descriptor.contractAddress && descriptor.tokenId ) {
-                const channel = descriptor.contractAddress;
-                const tokenId = descriptor.tokenId;
-
-                // Launch PC2 media runtime as a native UIWindow
-                const launch_app = (await import('./launch_app.js')).default;
-                await launch_app({
-                    name: 'pc2-media-runtime',
-                    window_title: (descriptor.title || 'Untitled') + ' — PC2 Media Player',
-                    args: {
-                        channel:         channel,
-                        tokenId:         tokenId,
-                        mediaUri:        descriptor.cid || '',
-                        title:           descriptor.title || '',
-                        authority:       descriptor.authority || '',
-                        thumbnail:       descriptor.thumbnail || '',
-                        standalone:      'true',
-                    },
-                });
+            if ( !descriptor ) {
+                UIAlert('Could not read dDRM capsule. The file may be corrupted.');
             } else {
-                UIAlert('Could not read DRM media descriptor. The file may be corrupted.');
-            }
-        } catch ( error ) {
-            console.error('Error opening DRM media:', error);
-            UIAlert(`Error opening DRM media: ${ error.message}`);
-        }
-    }
-    //----------------------------------------------------------------
-    // Is this a .ddrm.json file? (dDRM capsule - protected non-media asset)
-    //----------------------------------------------------------------
-    else if ( /\.ddrm(\s*\(\d+\))?\.json$/i.test($(el_item).attr('data-name')) ) {
-        try {
-            let capsule = null;
-            try {
-                const apiOrigin = window.api_origin || window.location.origin;
-                const token = window.auth_token || (typeof puter !== 'undefined' && puter.authToken) || '';
-                const readRes = await fetch(`${ apiOrigin}/read`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        ...(token ? { 'Authorization': `Bearer ${ token}` } : {}),
-                    },
-                    body: JSON.stringify({ path: item_path }),
-                });
-                if ( !readRes.ok ) throw new Error(`Read failed: ${ readRes.status}`);
-                const text = await readRes.text();
-                capsule = JSON.parse(text);
-            } catch (e) {
-                console.error('Error reading .ddrm.json capsule:', e);
-            }
-
-            if ( capsule && capsule.encryptedDataCid && capsule.kid ) {
+                const isMedia = descriptor.type === 'media'
+                    || (!descriptor.type && descriptor.cid && descriptor.contractAddress && !descriptor.encryptedDataCid);
                 const launch_app = (await import('./launch_app.js')).default;
-                await launch_app({
-                    name: 'ddrm-viewer',
-                    window_title: (capsule.title || 'Untitled') + ' — dDRM Viewer',
-                    args: {
-                        litCiphertext:     capsule.litCiphertext || '',
-                        dataToEncryptHash: capsule.dataToEncryptHash || '',
-                        encryptedDataCid:  capsule.encryptedDataCid,
-                        iv:                capsule.iv || '',
-                        kid:               capsule.kid,
-                        buyerAddress:      capsule.acquiredBy || '',
-                        mimeType:          capsule.mimeType || 'application/octet-stream',
-                        title:             capsule.title || 'Untitled',
-                        actionCid:         capsule.actionCid || '',
-                        authority:         capsule.authority || '',
-                    },
-                });
-            } else {
-                UIAlert('Could not read dDRM capsule descriptor. The file may be corrupted or missing required fields.');
+
+                if ( isMedia ) {
+                    await launch_app({
+                        name: 'pc2-media-runtime',
+                        window_title: (descriptor.title || 'Untitled') + ' — PC2 Media Player',
+                        args: {
+                            channel:         descriptor.contractAddress || '',
+                            tokenId:         descriptor.tokenId || '',
+                            mediaUri:        descriptor.cid || '',
+                            title:           descriptor.title || '',
+                            authority:       descriptor.authority || '',
+                            thumbnail:       descriptor.thumbnail || '',
+                            standalone:      'true',
+                        },
+                    });
+                } else if ( descriptor.encryptedDataCid && descriptor.kid ) {
+                    await launch_app({
+                        name: 'ddrm-viewer',
+                        window_title: (descriptor.title || 'Untitled') + ' — dDRM Viewer',
+                        args: {
+                            litCiphertext:     descriptor.litCiphertext || '',
+                            dataToEncryptHash: descriptor.dataToEncryptHash || '',
+                            encryptedDataCid:  descriptor.encryptedDataCid,
+                            iv:                descriptor.iv || '',
+                            kid:               descriptor.kid,
+                            buyerAddress:      descriptor.acquiredBy || '',
+                            mimeType:          descriptor.mimeType || 'application/octet-stream',
+                            title:             descriptor.title || 'Untitled',
+                            actionCid:         descriptor.actionCid || '',
+                            authority:         descriptor.authority || '',
+                        },
+                    });
+                } else {
+                    UIAlert('Could not determine asset type from dDRM capsule. The file may be corrupted or missing required fields.');
+                }
             }
         } catch ( error ) {
             console.error('Error opening dDRM capsule:', error);

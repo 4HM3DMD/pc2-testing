@@ -59,7 +59,92 @@ export function supportsThumbnails(mimeType: string | null | undefined): boolean
          mimeType.startsWith('video/') || 
          mimeType === 'application/pdf' ||
          mimeType === 'text/plain' ||
-         mimeType.startsWith('text/');
+         mimeType.startsWith('text/') ||
+         mimeType === 'application/x-ddrm' ||
+         mimeType === 'application/x-edrm' ||
+         mimeType === 'application/x-ddrm+json';
+}
+
+const DDRM_BADGE_SIZE = 40;
+const DDRM_BORDER_WIDTH = 4;
+const DDRM_THUMB_SIZE = 128;
+const DDRM_INNER_SIZE = DDRM_THUMB_SIZE - DDRM_BORDER_WIDTH * 2;
+
+const DDRM_BADGE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="${DDRM_BADGE_SIZE}" height="${DDRM_BADGE_SIZE}" viewBox="0 0 40 40">
+  <circle cx="20" cy="20" r="18" fill="#5C6BC0" stroke="#FFFFFF" stroke-width="2.5"/>
+  <path d="M20 30s7-3.5 7-8.75V14.75L20 12l-7 2.75v6.5C13 26.5 20 30 20 30z" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linejoin="round"/>
+  <circle cx="20" cy="20.5" r="1.8" fill="#FFFFFF"/>
+</svg>`;
+
+const DDRM_BORDER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="${DDRM_THUMB_SIZE}" height="${DDRM_THUMB_SIZE}" viewBox="0 0 ${DDRM_THUMB_SIZE} ${DDRM_THUMB_SIZE}">
+  <rect x="1" y="1" width="${DDRM_THUMB_SIZE - 2}" height="${DDRM_THUMB_SIZE - 2}" rx="8" ry="8" fill="none" stroke="#5C6BC0" stroke-width="${DDRM_BORDER_WIDTH}"/>
+</svg>`;
+
+/**
+ * Generate thumbnail for a dDRM capsule file.
+ * Fetches the NFT artwork, adds an indigo border frame, and
+ * composites a 40px dDRM shield badge in the bottom-right corner.
+ */
+async function generateDdrmThumbnail(jsonContent: string): Promise<string | null> {
+  if (!sharp || typeof sharp !== 'function') return null;
+
+  try {
+    const descriptor = JSON.parse(jsonContent);
+    let thumbnailUrl: string = descriptor.thumbnail || '';
+    if (!thumbnailUrl) return null;
+
+    if (thumbnailUrl.startsWith('ipfs://')) {
+      thumbnailUrl = 'https://ipfs.ela.city/ipfs/' + thumbnailUrl.slice(7);
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    let imgRes: Response;
+    try {
+      imgRes = await fetch(thumbnailUrl, { signal: controller.signal });
+    } finally {
+      clearTimeout(timeout);
+    }
+    if (!imgRes.ok) return null;
+
+    const imgBuffer = Buffer.from(await imgRes.arrayBuffer());
+
+    const artworkInner = await sharp(imgBuffer)
+      .resize(DDRM_INNER_SIZE, DDRM_INNER_SIZE, { fit: 'cover' })
+      .png()
+      .toBuffer();
+
+    const badgePng = await sharp(Buffer.from(DDRM_BADGE_SVG))
+      .resize(DDRM_BADGE_SIZE, DDRM_BADGE_SIZE)
+      .png()
+      .toBuffer();
+
+    const borderPng = await sharp(Buffer.from(DDRM_BORDER_SVG))
+      .resize(DDRM_THUMB_SIZE, DDRM_THUMB_SIZE)
+      .png()
+      .toBuffer();
+
+    const composited = await sharp({
+        create: {
+          width: DDRM_THUMB_SIZE,
+          height: DDRM_THUMB_SIZE,
+          channels: 4,
+          background: { r: 92, g: 107, b: 192, alpha: 1 },
+        }
+      })
+      .composite([
+        { input: artworkInner, left: DDRM_BORDER_WIDTH, top: DDRM_BORDER_WIDTH },
+        { input: borderPng, left: 0, top: 0 },
+        { input: badgePng, gravity: 'southeast' },
+      ])
+      .png()
+      .toBuffer();
+
+    return `data:image/png;base64,${composited.toString('base64')}`;
+  } catch (error: any) {
+    logger.warn(`[Thumbnail] ⚠️  dDRM thumbnail generation failed: ${error.message}`);
+    return null;
+  }
 }
 
 /**
@@ -80,6 +165,15 @@ export async function generateThumbnail(
   if (typeof sharp !== 'function') {
     logger.warn('[Thumbnail] ⚠️  Sharp is not a function, skipping thumbnail generation');
     return null;
+  }
+
+  // dDRM capsule files: fetch NFT artwork and composite badge
+  if (mimeType === 'application/x-ddrm' || mimeType === 'application/x-edrm' || mimeType === 'application/x-ddrm+json') {
+    const jsonStr = Buffer.isBuffer(fileContent) ? fileContent.toString('utf8')
+      : fileContent instanceof Uint8Array ? Buffer.from(fileContent).toString('utf8')
+      : null;
+    if (!jsonStr) return null;
+    return generateDdrmThumbnail(jsonStr);
   }
   
   try {

@@ -105,11 +105,7 @@ const content_type_to_icon = (type) => {
     {
         icon = 'file-video.svg';
     }
-    else if ( type === 'application/x-edrm' )
-    {
-        icon = 'file-edrm.svg';
-    }
-    else if ( type === 'application/x-ddrm+json' )
+    else if ( type === 'application/x-ddrm' || type === 'application/x-edrm' || type === 'application/x-ddrm+json' )
     {
         icon = 'file-ddrm.svg';
     }

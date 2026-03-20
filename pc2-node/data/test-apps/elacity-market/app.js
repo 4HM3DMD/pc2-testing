@@ -1981,9 +1981,9 @@
     dom.purchaseStatus.classList.remove('hidden');
   }
 
-  // ── Auto Pin & Register as .edrm / .ddrm.json ───────
+  // ── Auto Pin & Register as .ddrm (unified dDRM capsule) ───────
 
-  function buildDdrmCapsule(nft) {
+  function buildDdrmDescriptor(nft) {
     var meta = nft.metadata || {};
     var props = meta.properties || {};
     var media = meta.media || nft._rawMedia || {};
@@ -1992,47 +1992,61 @@
     var title = meta.name || nft.name || 'Untitled';
     var cid = asset.cid || asset.uri || media.uri || '';
     if (cid) cid = cid.replace('ipfs://', '');
-    var dataToEncryptHash = asset.dataToEncryptHash || '';
-    var cleanHash = dataToEncryptHash.startsWith('0x') ? dataToEncryptHash.slice(2) : dataToEncryptHash;
-    var kid = cleanHash ? '0x' + cleanHash.slice(0, 32).padEnd(32, '0') : '';
-    var mime = asset.mimeType || media.contentType || media.mimeType || 'application/octet-stream';
+    var thumbnailUrl = nft.image || meta.image || (nft.channel && nft.channel.image) || (nft.channel && nft.channel.imageURL) || '';
+    var nonMedia = isNonMediaAsset(nft);
 
-    return {
+    var descriptor = {
+      schema: 'ddrm-capsule-v2',
+      type: nonMedia ? 'non-media' : 'media',
       version: 1,
-      schema: 'ddrm-capsule-v1',
       title: title,
-      encryptedDataCid: cid,
-      mimeType: mime,
-      dataToEncryptHash: dataToEncryptHash,
-      kid: kid,
-      litCiphertext: asset.litCiphertext || '',
-      iv: asset.iv || '',
-      actionCid: asset.actionCid || '',
-      authority: asset.authority || props.authority || '',
       contractAddress: nft.contractAddress || (nft.channel && nft.channel.address) || '',
-      ledger: props.ledger || nft.contractAddress || '',
       tokenId: tokenId,
+      authority: (asset.authority || props.authority || ''),
       operative: (nft.operative && nft.operative.address) || '',
-      thumbnail: nft.image || meta.image || (nft.channel && nft.channel.image) || (nft.channel && nft.channel.imageURL) || '',
+      ledger: props.ledger || nft.contractAddress || '',
+      thumbnail: thumbnailUrl,
       acquiredAt: new Date().toISOString(),
       acquiredBy: Wallet.getAddress() || '',
     };
+
+    if (nonMedia) {
+      var dataToEncryptHash = asset.dataToEncryptHash || '';
+      var cleanHash = dataToEncryptHash.startsWith('0x') ? dataToEncryptHash.slice(2) : dataToEncryptHash;
+      descriptor.encryptedDataCid = cid;
+      descriptor.mimeType = asset.mimeType || media.contentType || media.mimeType || 'application/octet-stream';
+      descriptor.dataToEncryptHash = dataToEncryptHash;
+      descriptor.kid = cleanHash ? '0x' + cleanHash.slice(0, 32).padEnd(32, '0') : '';
+      descriptor.litCiphertext = asset.litCiphertext || '';
+      descriptor.iv = asset.iv || '';
+      descriptor.actionCid = asset.actionCid || '';
+    } else {
+      var localGateway = window.location.origin + '/ipfs/';
+      descriptor.cid = cid;
+      descriptor.gateway = localGateway;
+      descriptor.fallbackGateway = 'https://ipfs.ela.city/ipfs/';
+      descriptor.mediaType = media.mimeType || media.contentType || 'video';
+      descriptor.duration = media.duration || 0;
+      descriptor.isProtected = !!(nft.isProtected || (media.protectionType && media.protectionType !== 'none'));
+    }
+
+    return descriptor;
   }
 
   function saveDdrmCapsule(nft, folderPath) {
-    var capsule = buildDdrmCapsule(nft);
-    if (!capsule.encryptedDataCid || !capsule.kid) return Promise.resolve();
+    var descriptor = buildDdrmDescriptor(nft);
+    if (descriptor.type === 'non-media' && (!descriptor.encryptedDataCid || !descriptor.kid)) return Promise.resolve();
 
-    var safeName = capsule.title.replace(/[^a-zA-Z0-9 _\-]/g, '').substring(0, 80).trim() || 'asset';
-    var capsulePath = folderPath + '/' + safeName + '.ddrm.json';
+    var safeName = descriptor.title.replace(/[^a-zA-Z0-9 _\-]/g, '').substring(0, 80).trim() || 'asset';
+    var capsulePath = folderPath + '/' + safeName + '.ddrm';
 
     return pc2Fetch('/write', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         path: capsulePath,
-        content: JSON.stringify(capsule, null, 2),
-        mime_type: 'application/x-ddrm+json',
+        content: JSON.stringify(descriptor, null, 2),
+        mime_type: 'application/x-ddrm',
         overwrite: false,
         dedupe_name: true,
       })
@@ -2076,27 +2090,9 @@
     var folder = nonMedia
       ? (assetMime.startsWith('image/') ? 'Pictures' : 'Documents')
       : 'Videos';
-    var ext = nonMedia ? '.ddrm.json' : '.edrm';
-    var savePath = '/' + walletAddr + '/' + folder + '/' + safeName + ext;
+    var savePath = '/' + walletAddr + '/' + folder + '/' + safeName + '.ddrm';
 
-    var localGateway = window.location.origin + '/ipfs/';
-    var descriptor = nonMedia ? buildDdrmCapsule(nft) : {
-      version: 1,
-      title: title,
-      cid: cid,
-      gateway: localGateway,
-      fallbackGateway: 'https://ipfs.ela.city/ipfs/',
-      contractAddress: nft.contractAddress || (nft.channel && nft.channel.address) || '',
-      tokenId: tokenId,
-      authority: props.authority || '',
-      operative: (nft.operative && nft.operative.address) || '',
-      ledger: props.ledger || nft.contractAddress || '',
-      thumbnail: nft.image || meta.image || (nft.channel && nft.channel.image) || (nft.channel && nft.channel.imageURL) || '',
-      mediaType: media.mimeType || media.contentType || 'video',
-      duration: media.duration || 0,
-      isProtected: !!(nft.isProtected || (media.protectionType && media.protectionType !== 'none')),
-      acquiredAt: new Date().toISOString()
-    };
+    var descriptor = buildDdrmDescriptor(nft);
 
     progressFill.style.width = '10%';
     progressText.textContent = 'Downloading content from Elacity network...';
@@ -2128,14 +2124,13 @@
         descriptor.pinnedSize = (pinResult && pinResult.totalSize) || 0;
         descriptor.blockCount = (pinResult && pinResult.blockCount) || 0;
 
-        var descriptorMime = nonMedia ? 'application/x-ddrm+json' : 'application/x-edrm';
         return pc2Fetch('/write', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             path: savePath,
             content: JSON.stringify(descriptor, null, 2),
-            mime_type: descriptorMime,
+            mime_type: 'application/x-ddrm',
             overwrite: false,
             dedupe_name: true
           })

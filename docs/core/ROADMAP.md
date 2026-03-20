@@ -132,8 +132,9 @@ These diagrams from Rong define the north star. Every work stream should move us
 - [ ] App Center UI rebuild against real backend APIs
 
 **Download-to-Node / Content Seeding:**
-- [x] Save-to-Cloud with `.edrm` descriptor, progress UI, and "Open Videos folder" *(completed Mar 4)*
-- [x] `.edrm` file type support in GUI — icon, MIME, double-click opens player *(completed Mar 4)*
+- [x] Save-to-Cloud with `.ddrm` descriptor (unified format), progress UI, and "Open folder" link *(completed Mar 4, unified Mar 20)*
+- [x] Unified `.ddrm` capsule format — single extension for media + non-media, `type` field routing, NFT artwork thumbnails with dDRM badge, backward compat with `.edrm` and `.ddrm.json` *(completed Mar 20)*
+- [x] `.ddrm` file type support in GUI — icon, MIME, double-click routes to correct viewer *(completed Mar 4, unified Mar 20)*
 - [x] IPFS CAR format support for directory CIDs (DASH segments) *(completed Mar 4)*
 - [ ] Auto-download on purchase (trigger pin automatically after buy)
 - [ ] Auto-pin + DHT announce for purchased content (CDN effect)

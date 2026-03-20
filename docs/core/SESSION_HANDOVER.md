@@ -98,11 +98,12 @@ Critical playback bug resolved — encrypted AV1 video now plays end-to-end insi
 - **Bootstrap addresses** — `PC2_SUPERNODE_BOOTSTRAP` in `ipfs.ts` points all PC2 nodes to the relay
 
 #### Download-to-Node / Seeding — FUNCTIONAL
-- **"Save to Cloud" button** on owned assets — downloads content from Elacity IPFS gateway, saves `.edrm` descriptor to user's Videos folder
-- **`.edrm` descriptor format** — JSON file containing CID, contract address, token ID, gateway URL, media metadata
-- **Progress UI** — animated progress bar, status messages, "Open Videos folder" link on completion
+- **"Save to Cloud" button** on owned assets — downloads content from Elacity IPFS gateway, saves `.ddrm` descriptor to user's filesystem
+- **Unified `.ddrm` capsule format** (ddrm-capsule-v2) — single file extension for all protected assets (media and non-media). JSON descriptor with `type` field (`"media"` or `"non-media"`) for routing to the correct viewer. Replaces legacy `.edrm` (media) and `.ddrm.json` (non-media) formats. Backward compatible with both legacy formats.
+- **NFT artwork thumbnails with dDRM badge** — when saving a `.ddrm` file, server fetches NFT artwork from descriptor's `thumbnail` URL, resizes to 128px, adds 4px indigo border frame and 40px dDRM shield badge in bottom-right corner. Files display with actual NFT artwork in the filesystem.
+- **Progress UI** — animated progress bar, status messages, "Open folder" link on completion
 - **`openFolder` IPC handler** — new message type in `IPC.js` to open file explorer at a specific path from within dApps
-- **`.edrm` file type support in GUI** — custom icon (padlock + green tick), MIME type registration, double-click opens Elacity player popup
+- **`.ddrm` file type support in GUI** — unified `file-ddrm.svg` icon, MIME type `application/x-ddrm`, double-click reads descriptor and routes to `pc2-media-runtime` (media) or `ddrm-viewer` (non-media). Legacy `.edrm` and `.ddrm.json` still recognized.
 - **IPFS CAR format support** — `fetchViaGateway` in `storage/ipfs.ts` handles directory CIDs via CAR import, Elacity gateway as primary
 - **Auth for backend calls** — `pc2Fetch()` wrapper extracts `puter.auth.token` from iframe URL, includes `Authorization: Bearer` header
 

@@ -230,12 +230,11 @@ const item_icon = async (fsentry) => {
     else if ( fsentry.name.toLowerCase().endsWith('.zip') ) {
         return { image: window.icons['file-zip.svg'], type: 'icon' };
     }
-    // *.edrm (DRM-protected media from Elacity)
-    else if ( fsentry.name.toLowerCase().endsWith('.edrm') ) {
-        return { image: window.icons['file-edrm.svg'], type: 'icon' };
-    }
-    // *.ddrm.json (dDRM capsule - protected non-media asset)
-    else if ( fsentry.name.toLowerCase().endsWith('.ddrm.json') ) {
+    // *.ddrm (unified dDRM capsule — protected asset from Elacity)
+    // Also matches legacy *.edrm and *.ddrm.json
+    else if ( fsentry.name.toLowerCase().endsWith('.ddrm')
+           || fsentry.name.toLowerCase().endsWith('.edrm')
+           || fsentry.name.toLowerCase().endsWith('.ddrm.json') ) {
         return { image: window.icons['file-ddrm.svg'], type: 'icon' };
     }
     // --------------------------------------------------

@@ -42,14 +42,17 @@ function Mime() {
       return 'application/x-weblink';
     }
     
-    // DRM-protected media descriptor
-    if (ext === 'edrm') {
-      return 'application/x-edrm';
+    // Unified dDRM capsule (protected asset from Elacity)
+    if (ext === 'ddrm') {
+      return 'application/x-ddrm';
     }
     
-    // dDRM capsule (protected non-media asset)
+    // Legacy format aliases
+    if (ext === 'edrm') {
+      return 'application/x-ddrm';
+    }
     if (ext === 'ddrm.json') {
-      return 'application/x-ddrm+json';
+      return 'application/x-ddrm';
     }
     
     return (hasDot || !hasPath) && this._types[ext] || null;
@@ -62,12 +65,16 @@ function Mime() {
       return 'weblink';
     }
     
-    if (type === 'application/x-edrm') {
-      return 'edrm';
+    if (type === 'application/x-ddrm') {
+      return 'ddrm';
     }
     
+    // Legacy MIME aliases
+    if (type === 'application/x-edrm') {
+      return 'ddrm';
+    }
     if (type === 'application/x-ddrm+json') {
-      return 'ddrm.json';
+      return 'ddrm';
     }
     
     return type && this._extensions[type.toLowerCase()] || null;
