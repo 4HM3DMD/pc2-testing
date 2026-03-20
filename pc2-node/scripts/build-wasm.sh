@@ -28,6 +28,15 @@ declare -A OUTPUT_DIRS=(
   ["mp4-split"]="$PC2_NODE_DIR/wasm-apps/mp4-split"
 )
 
+# Crypto crates get -O3 (maximize speed); utility crates get -Oz (minimize size)
+declare -A WASM_OPT_LEVEL=(
+  ["ddrm-renderer"]="-Oz"
+  ["cenc-decrypt"]="-O3"
+  ["cenc-encrypt"]="-O3"
+  ["ipfs-assemble"]="-Oz"
+  ["mp4-split"]="-Oz"
+)
+
 build_crate() {
   local name="$1"
   local crate_dir="${CRATE_DIRS[$name]}"
@@ -59,13 +68,14 @@ build_crate() {
   size_before=$(wc -c < "$wasm_path" | tr -d ' ')
   cp "$wasm_path" "$output_dir/$name.wasm"
 
-  # wasm-opt pass: shrink binary + speed up instantiation
+  # wasm-opt pass: per-crate optimization level
+  local opt_flag="${WASM_OPT_LEVEL[$name]:--Oz}"
   if command -v wasm-opt &>/dev/null; then
-    echo "  Running wasm-opt -Oz..."
-    wasm-opt -Oz --enable-bulk-memory "$output_dir/$name.wasm" -o "$output_dir/$name.wasm"
+    echo "  Running wasm-opt $opt_flag..."
+    wasm-opt "$opt_flag" --enable-bulk-memory --enable-nontrapping-float-to-int --enable-simd "$output_dir/$name.wasm" -o "$output_dir/$name.wasm"
     local size_opt
     size_opt=$(wc -c < "$output_dir/$name.wasm" | tr -d ' ')
-    echo "  wasm-opt: $size_before -> $size_opt bytes ($(( (size_before - size_opt) * 100 / size_before ))% smaller)"
+    echo "  wasm-opt: $size_before -> $size_opt bytes ($(( (size_before - size_opt) * 100 / size_before ))% reduction)"
   else
     echo "  wasm-opt not found — install via: npm i -g binaryen (or brew install binaryen)"
     echo "  Skipping optimization (binary will still work, just larger)"

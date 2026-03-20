@@ -170,7 +170,7 @@ export class WASMRuntime {
             file.write(new Uint8Array(content));
             file.flush();
             
-            logger.info(`[WASMRuntime] Prepared file for WASI: ${realPath} -> ${wasiPath} (${content.length} bytes)`);
+            logger.debug(`[WASMRuntime] Prepared file for WASI: ${realPath} -> ${wasiPath} (${content.length} bytes)`);
         } catch (error: any) {
             logger.error(`[WASMRuntime] Failed to prepare file for WASI: ${realPath}`, error);
             throw new Error(`Failed to prepare file for WASI: ${error.message}`);
@@ -367,8 +367,8 @@ export class WASMRuntime {
                              imp.module === 'wasi:cli'
             );
 
-            logger.info(`[WASMRuntime] Module imports: ${moduleImports.map((i: any) => `${i.module}::${i.name}`).join(', ') || 'none'}`);
-            logger.info(`[WASMRuntime] Module requires WASI: ${requiresWASI}`);
+            logger.debug(`[WASMRuntime] Module imports: ${moduleImports.map((i: any) => `${i.module}::${i.name}`).join(', ') || 'none'}`);
+            logger.debug(`[WASMRuntime] Module requires WASI: ${requiresWASI}`);
 
             // Try to instantiate with WASI first, fall back to standard WebAssembly if WASI fails
             let instance: WebAssembly.Instance;
@@ -387,13 +387,13 @@ export class WASMRuntime {
 
                     // Get imports from WASI
                     const imports = wasi.getImports(wasmModule) as any;
-                    logger.info(`[WASMRuntime] WASI imports provided: ${Object.keys(imports).length} import modules`);
-                    logger.info(`[WASMRuntime] WASI import modules: ${Object.keys(imports).join(', ')}`);
+                    logger.debug(`[WASMRuntime] WASI imports provided: ${Object.keys(imports).length} import modules`);
+                    logger.debug(`[WASMRuntime] WASI import modules: ${Object.keys(imports).join(', ')}`);
                     
                     // Log what WASI is providing for wasi_snapshot_preview1
                     if (imports['wasi_snapshot_preview1']) {
                         const wasiImports = imports['wasi_snapshot_preview1'];
-                        logger.info(`[WASMRuntime] WASI preview1 imports: ${Object.keys(wasiImports).join(', ')}`);
+                        logger.debug(`[WASMRuntime] WASI preview1 imports: ${Object.keys(wasiImports).join(', ')}`);
                     }
 
                     // Instantiate WASM module with WASI imports using WebAssembly.instantiate
@@ -500,7 +500,7 @@ export class WASMRuntime {
             // Execute the function with processed arguments
             const result = func(...processedArgs);
 
-            logger.info(`[WASMRuntime] Executed function "${functionName}" with args:`, args, 'Result:', result);
+            logger.debug(`[WASMRuntime] Executed function "${functionName}" with args:`, args, 'Result:', result);
 
             return {
                 success: true,
@@ -595,7 +595,7 @@ export class WASMRuntime {
             this.writeToMemFS('/input/command.json', Buffer.from(commandJson, 'utf-8'));
             this.writeToMemFS('/input/encrypted.bin', encryptedBytes);
 
-            logger.info(`[WASMRuntime] Renderer input: command=${commandJson.length}B, encrypted=${encryptedBytes.length}B`);
+            logger.debug(`[WASMRuntime] Renderer input: command=${commandJson.length}B, encrypted=${encryptedBytes.length}B`);
 
             // Run WASI _start with timeout
             const wasiResult = await this.executeWASIStart(wasmBinary, timeoutMs);
@@ -624,7 +624,7 @@ export class WASMRuntime {
             }
             if (!resultJson && wasiResult.stdout) {
                 resultJson = wasiResult.stdout;
-                logger.info(`[WASMRuntime] Using stdout fallback for result (${resultJson.length}B)`);
+                logger.debug(`[WASMRuntime] Using stdout fallback for result (${resultJson.length}B)`);
             }
 
             if (!resultJson) {
@@ -661,7 +661,7 @@ export class WASMRuntime {
                 }
             }
 
-            logger.info(`[WASMRuntime] Renderer output: success=${result.success}, type=${result.content_type}, size=${renderedBytes?.length ?? 0}B`);
+            logger.debug(`[WASMRuntime] Renderer output: success=${result.success}, type=${result.content_type}, size=${renderedBytes?.length ?? 0}B`);
 
             return {
                 result,
@@ -734,7 +734,7 @@ export class WASMRuntime {
             let result: any;
             try { result = JSON.parse(resultJson); } catch { result = { success: false, error: 'Invalid result JSON' }; }
 
-            logger.info(`[WASMRuntime] CENC result: ${resultJson.substring(0, 200)}`);
+            logger.debug(`[WASMRuntime] CENC result: ${resultJson.substring(0, 200)}`);
 
             let decryptedBytes: Buffer | null = null;
             if (result.success) {
@@ -743,7 +743,7 @@ export class WASMRuntime {
                 if (!raw) raw = this.readFromMemFS('/output/segment.bin');
                 if (raw) {
                     decryptedBytes = Buffer.from(raw);
-                    logger.info(`[WASMRuntime] CENC output: ${raw.length} bytes`);
+                    logger.debug(`[WASMRuntime] CENC output: ${raw.length} bytes`);
                 } else {
                     logger.warn('[WASMRuntime] CENC: result.success=true but no /output/segment.bin found');
                 }
@@ -900,7 +900,7 @@ export class WASMRuntime {
                 if (!raw) raw = this.readFromMemFS('/output/assembled.bin');
                 if (raw) {
                     assembled = Buffer.from(raw);
-                    logger.info(`[WASMRuntime] IPFS assemble output: ${raw.length} bytes in ${Date.now() - startTime}ms`);
+                    logger.debug(`[WASMRuntime] IPFS assemble output: ${raw.length} bytes in ${Date.now() - startTime}ms`);
                 } else {
                     logger.warn('[WASMRuntime] IPFS assemble: success=true but no /output/assembled.bin found');
                 }
@@ -996,7 +996,7 @@ export class WASMRuntime {
                 }
             }
 
-            logger.info(`[WASMRuntime] mp4-split output: ${result.tracks?.length ?? 0} tracks, ${result.segments?.length ?? 0} segments, init=${initSegment?.length ?? 0}B in ${Date.now() - startTime}ms`);
+            logger.debug(`[WASMRuntime] mp4-split output: ${result.tracks?.length ?? 0} tracks, ${result.segments?.length ?? 0} segments, init=${initSegment?.length ?? 0}B in ${Date.now() - startTime}ms`);
 
             return { success: true, resultJson: result, initSegment, segmentBuffers, executionTimeMs: Date.now() - startTime };
         } catch (error: any) {
@@ -1048,7 +1048,7 @@ export class WASMRuntime {
             this.writeToMemFS('/input/command.json', Buffer.from(JSON.stringify(command), 'utf-8'));
             this.writeToMemFS('/input/encrypted.bin', encryptedBytes);
 
-            logger.info(`[WASMRuntime] DecryptOnly input: encrypted=${encryptedBytes.length}B`);
+            logger.debug(`[WASMRuntime] DecryptOnly input: encrypted=${encryptedBytes.length}B`);
 
             const wasiResult = await this.executeWASIStart(wasmBinary, timeoutMs);
             if (!wasiResult.success) {
@@ -1080,7 +1080,7 @@ export class WASMRuntime {
                 if (!raw) raw = this.readFromMemFS('/output/decrypted.bin');
                 if (raw) {
                     decryptedBytes = Buffer.from(raw);
-                    logger.info(`[WASMRuntime] DecryptOnly output: ${raw.length} bytes`);
+                    logger.debug(`[WASMRuntime] DecryptOnly output: ${raw.length} bytes`);
                 } else {
                     logger.warn('[WASMRuntime] DecryptOnly: result.success=true but no /output/decrypted.bin found');
                 }
@@ -1128,7 +1128,7 @@ export class WASMRuntime {
             this.writeToMemFS('/input/command.json', Buffer.from(JSON.stringify(command), 'utf-8'));
             this.writeToMemFS('/input/plaintext.bin', plaintextBytes);
 
-            logger.info(`[WASMRuntime] Encrypt input: plaintext=${plaintextBytes.length}B`);
+            logger.debug(`[WASMRuntime] Encrypt input: plaintext=${plaintextBytes.length}B`);
 
             const wasiResult = await this.executeWASIStart(wasmBinary, timeoutMs);
             if (!wasiResult.success) {
@@ -1175,7 +1175,7 @@ export class WASMRuntime {
             if (!raw) raw = this.readFromMemFS('/output/encrypted.bin');
             if (raw) {
                 encryptedBytes = Buffer.from(raw);
-                logger.info(`[WASMRuntime] Encrypt output: ${raw.length} bytes`);
+                logger.debug(`[WASMRuntime] Encrypt output: ${raw.length} bytes`);
             } else {
                 logger.warn('[WASMRuntime] Encrypt: result.success=true but no /output/encrypted.bin found');
             }
@@ -1248,7 +1248,7 @@ export class WASMRuntime {
                     this.compiledModuleCache.set(cacheKey, wasmModule);
                     logger.info(`[WASMRuntime] Compiled WASM module (${binaryBuffer.byteLength}B) — cached`);
                 } else {
-                    logger.info(`[WASMRuntime] Reusing cached compiled WASM module (${binaryBuffer.byteLength}B)`);
+                    logger.debug(`[WASMRuntime] Reusing cached compiled WASM module (${binaryBuffer.byteLength}B)`);
                 }
 
                 const wasi = new WASI({
@@ -1280,7 +1280,7 @@ export class WASMRuntime {
                 }
 
                 const stdout = wasi.getStdoutString();
-                logger.info(`[WASMRuntime] WASI module exited with code ${exitCode}`);
+                logger.debug(`[WASMRuntime] WASI module exited with code ${exitCode}`);
 
                 if (!completed) {
                     completed = true;
@@ -1324,7 +1324,7 @@ export class WASMRuntime {
 
             // Read file
             const buffer = fs.readFileSync(resolvedPath);
-            logger.info(`[WASMRuntime] Loaded WASM binary from: ${resolvedPath} (${buffer.length} bytes)`);
+            logger.debug(`[WASMRuntime] Loaded WASM binary from: ${resolvedPath} (${buffer.length} bytes)`);
 
             return buffer.buffer;
         } catch (error: any) {

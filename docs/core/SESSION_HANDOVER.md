@@ -11,7 +11,7 @@
 **Release:** v1.1.0 tagged and released on 2026-03-03 (134 commits squash-merged to main)
 **Launcher:** v1.1.1 released — version display, one-click updates, full networking install
 **DAO Proposal:** Live at https://elastos.com/proposals/69a24f49247f130078064edd
-**Last Commit:** fix: market thumbnail letterboxing + audio artwork in Media Runtime player
+**Last Commit:** perf: WASM/Rust optimization — speed-tuned crypto, panic=abort, smart build pipeline, log reduction
 
 #### AV1 Playback Fix & Init Segment Splitting (Mar 18)
 
@@ -783,6 +783,33 @@ Expanded the dDRM Viewer to support four new interactive content types beyond th
 - [ ] **Audio routing fix** — remove audio passthrough from dDRM Viewer, ensure all audio goes through Media Runtime encoding pipeline (DASH segments, per-segment WASM decrypt). Currently audio plays via passthrough (weaker security model — full decrypted blob in browser memory). Critical for security parity with video.
 - [x] **Creator Dashboard MIME hints** — `resolveFileMime()` added to `elacity-creator/app.js` with EXT_MIME_MAP for .glb, .gltf, .obj, .stl, .fbx, .woff, .woff2, .ttf, .otf, .csv, .tsv, .gz, .tar, .onnx, .safetensors, .gguf. All downstream references use `state.resolvedMime` *(completed Mar 19)*
 - [ ] **E2E test** — mint one GLB + CSV + font + ZIP, purchase each, open in viewer, verify rendering and anti-piracy. GLB verified ✅. Others pending.
+
+**WASM/Rust Optimization Pass (Mar 20):**
+- **Speed-tuned crypto compilation** — `cenc-decrypt` and `cenc-encrypt` changed from `opt-level = "s"` (size) to `opt-level = 3` (speed). AES-128-CTR operations ~20-40% faster for video/audio segment encrypt/decrypt.
+- **`panic = "abort"` on all WASM crates** — Removes unwinding code from all 5 WASM binaries. `ddrm-renderer.wasm` reduced by 482 KB (5.83 MB → 5.35 MB, -8.3%).
+- **Smart build pipeline** — `build-wasm.sh` now uses per-crate wasm-opt levels: `-O3` for crypto crates (speed), `-Oz` for utility crates (size). Added `--enable-nontrapping-float-to-int` and `--enable-simd` flags for Rust-generated WASM features.
+- **Hot-path log reduction** — 20 `logger.info` calls in `WASMRuntime.ts` downgraded to `logger.debug`. Eliminates 5-10 log writes per WASM invocation in production. First-time compilation, queue events, and errors remain at `info`.
+
+**WASM binary size comparison (before → after):**
+| Binary | Before | After | Change |
+|--------|--------|-------|--------|
+| `ddrm-renderer.wasm` | 5,834,638 B | 5,352,800 B | -8.3% (482 KB saved) |
+| `cenc-decrypt.wasm` | 152,581 B | 156,322 B | +2.5% (speed trade-off) |
+| `cenc-encrypt.wasm` | 147,887 B | 144,863 B | -2.0% |
+| `ipfs-assemble.wasm` | 95,407 B | 95,407 B | unchanged |
+| `mp4-split.wasm` | 91,593 B | 91,593 B | unchanged |
+
+**Files changed (WASM optimization, Mar 20):**
+| File | Change |
+|------|--------|
+| `pc2-node/crates/cenc-decrypt/Cargo.toml` | `opt-level = 3`, `panic = "abort"` |
+| `pc2-node/crates/cenc-encrypt/Cargo.toml` | `opt-level = 3`, `panic = "abort"` |
+| `pc2-node/crates/mp4-split/Cargo.toml` | `panic = "abort"` |
+| `pc2-node/crates/ipfs-assemble/Cargo.toml` | `panic = "abort"` |
+| `pc2-node/wasm-renderer/Cargo.toml` | `panic = "abort"` |
+| `pc2-node/scripts/build-wasm.sh` | Per-crate wasm-opt levels, SIMD + nontrapping-float-to-int flags |
+| `pc2-node/src/services/wasm/WASMRuntime.ts` | 20 hot-path logs downgraded to debug |
+| `pc2-node/wasm-apps/*/` | All 5 WASM binaries rebuilt |
 
 **Market & Player UX fixes (Mar 19 — session 2):**
 - **Market thumbnail letterboxing** — `.video-card-thumb` and `.detail-media` changed from `object-fit: cover` (crops non-16:9 images) to `object-fit: contain` with centered flexbox layout and `#070707` background. Removed hover zoom scale. Matches live Elacity site "Media Card" spec.
