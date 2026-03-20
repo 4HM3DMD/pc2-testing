@@ -34,7 +34,19 @@ var ElacityAPI = (function () {
       body: JSON.stringify({ query: query, variables: body })
     })
       .then(function (res) {
-        if (!res.ok) throw new Error('API request failed: ' + res.status);
+        if (!res.ok) {
+          return res.text().then(function (txt) {
+            var msg = 'API ' + res.status;
+            try {
+              var parsed = JSON.parse(txt);
+              if (parsed.errors && parsed.errors[0]) msg += ': ' + parsed.errors[0].message;
+            } catch (_) {
+              if (txt && txt.length < 300) msg += ': ' + txt;
+            }
+            console.error('[API] Request failed:', msg, 'headers:', JSON.stringify(headers));
+            throw new Error(msg);
+          });
+        }
         return res.json();
       })
       .then(function (json) {
@@ -304,6 +316,7 @@ var ElacityAPI = (function () {
         address\n\
         description\n\
         channelType\n\
+        categories\n\
         image\n\
         imageURL\n\
         coverImage\n\
@@ -321,6 +334,10 @@ var ElacityAPI = (function () {
             unit\n\
             value\n\
           }\n\
+        }\n\
+        tokenAccess {\n\
+          address\n\
+          value\n\
         }\n\
       }\n\
     }\n' + PROFILE_FIELDS;
@@ -608,7 +625,13 @@ var ElacityAPI = (function () {
       body: JSON.stringify({ query: FETCH_ACCESSIBLE_ASSETS_QUERY, variables: body })
     })
       .then(function (res) {
-        if (!res.ok) throw new Error('API request failed: ' + res.status);
+        if (!res.ok) {
+          return res.text().then(function (txt) {
+            var msg = 'API ' + res.status;
+            try { var p = JSON.parse(txt); if (p.errors && p.errors[0]) msg += ': ' + p.errors[0].message; } catch (_) {}
+            throw new Error(msg);
+          });
+        }
         return res.json();
       })
       .then(function (json) {
@@ -794,6 +817,7 @@ var ElacityAPI = (function () {
             unclaimedRewards\n\
             ledger\n\
             tokenId\n\
+            hexTokenId\n\
           }\n\
           ... on RoyaltyChannel {\n\
             id\n\
@@ -836,6 +860,161 @@ var ElacityAPI = (function () {
     }, true).then(function (data) { return data.rewards || []; });
   }
 
+  // ── Activity Event Queries ─────────────────────────
+
+  var ACTIVITY_EVENT_FIELDS = '\
+    _id\n\
+    event\n\
+    token { address name }\n\
+    to { address }\n\
+    from { address }\n\
+    quantity\n\
+    price\n\
+    paymentToken\n\
+    blockNumber\n\
+    txHash\n\
+    createdAt\n\
+    tokenID\n\
+    metadata\n';
+
+  function searchListingEvents(contractAddress, tokenId, limit) {
+    var query = '\
+      query SearchListings($query: ActivityQueryInput) {\n\
+        events: searchListingEvents(query: $query) {\n\
+          ' + ACTIVITY_EVENT_FIELDS + '\
+        }\n\
+      }';
+    return gql(query, {
+      query: { contractAddress: contractAddress, tokenId: tokenId, limit: limit || 20 }
+    }).then(function (data) { return data.events || []; });
+  }
+
+  function searchTradeEvents(contractAddress, tokenId, limit) {
+    var query = '\
+      query SearchTrades($query: ActivityQueryInput) {\n\
+        events: searchTradeEvents(query: $query) {\n\
+          ' + ACTIVITY_EVENT_FIELDS + '\
+        }\n\
+      }';
+    return gql(query, {
+      query: { contractAddress: contractAddress, tokenId: tokenId, limit: limit || 20 }
+    }).then(function (data) { return data.events || []; });
+  }
+
+  function searchOfferEvents(contractAddress, tokenId, limit) {
+    var query = '\
+      query SearchOffers($query: ActivityQueryInput) {\n\
+        events: searchOfferEvents(query: $query) {\n\
+          ' + ACTIVITY_EVENT_FIELDS + '\
+        }\n\
+      }';
+    return gql(query, {
+      query: { contractAddress: contractAddress, tokenId: tokenId, limit: limit || 20 }
+    }).then(function (data) { return data.events || []; });
+  }
+
+  function searchIncomingOfferEvents(contractAddress, tokenId, limit) {
+    var query = '\
+      query SearchIncomingOffers($query: ActivityQueryInput) {\n\
+        events: searchIncomingOfferEvents(query: $query) {\n\
+          ' + ACTIVITY_EVENT_FIELDS + '\
+        }\n\
+      }';
+    return gql(query, {
+      query: { contractAddress: contractAddress, tokenId: tokenId, limit: limit || 20 }
+    }).then(function (data) { return data.events || []; });
+  }
+
+  // ── Statistics Queries ─────────────────────────────
+
+  function fetchStatisticByAsset(address, ledger, tokenId) {
+    var query = '\
+      query FetchStatistic($input: AssetStatisticInput!) {\n\
+        stat: fetchStatisticByAsset(input: $input) {\n\
+          views\n\
+          sold\n\
+          totalSupply\n\
+          totalRevenue\n\
+          unpublished\n\
+          resell { totalResell totalVendors totalRevenue percentage }\n\
+          price\n\
+          opType\n\
+        }\n\
+      }';
+    return gql(query, {
+      input: { address: address, ledger: ledger, tokenId: tokenId }
+    }).then(function (data) { return data.stat; });
+  }
+
+  function governanceStatistics(address, account) {
+    var query = '\
+      query GovStats($address: String!, $account: String) {\n\
+        stats: governanceStatistics(address: $address, account: $account) {\n\
+          royalties { distribution }\n\
+          rewards { volumeUSD claimableVolumeUSD distributions { volume paymentToken } }\n\
+          governance { available owned volumeUSD }\n\
+          floor\n\
+        }\n\
+      }';
+    return gql(query, { address: address, account: account })
+      .then(function (data) { return data.stats; });
+  }
+
+  // ── Publish/Unpublish ──────────────────────────────
+
+  function toggleUnpublish(contractAddress, tokenId, unpublish) {
+    var mutation = '\
+      mutation ToggleUnpublish($contractAddress: String!, $tokenId: String!, $unpublish: Boolean!) {\n\
+        toggleUnpublish(contractAddress: $contractAddress, tokenId: $tokenId, unpublish: $unpublish)\n\
+      }';
+    return gql(mutation, {
+      contractAddress: contractAddress,
+      tokenId: String(tokenId),
+      unpublish: unpublish
+    }, true);
+  }
+
+  // ── Channel Management ─────────────────────────────
+
+  function updateChannelInformation(address, input) {
+    var mutation = '\
+      mutation UpdateChannel($address: String!, $input: ChannelInformationInput!) {\n\
+        channel: updateChannelInformation(address: $address, input: $input) {\n\
+          name\n\
+          description\n\
+          categories\n\
+          image\n\
+          coverImage\n\
+        }\n\
+      }';
+    return gql(mutation, { address: address, input: input }, true);
+  }
+
+  function updateSubscriptionPlan(address, actions) {
+    var mutation = '\
+      mutation UpdatePlan($address: String!, $input: [SubscriptionPlanUpdateAction]!) {\n\
+        updateSubscriptionPlan(address: $address, input: $input) {\n\
+          name\n\
+          plans {\n\
+            planId\n\
+            label\n\
+            price\n\
+          }\n\
+        }\n\
+      }';
+    return gql(mutation, { address: address, input: actions }, true);
+  }
+
+  function fetchManagedChannels(creatorAddress, filters) {
+    var query = creatorAddress ? { creator: creatorAddress.toLowerCase() } : {};
+    return gql(FETCH_CHANNELS_QUERY, {
+      query: query,
+      filters: filters || { offset: 0, limit: 100, sort: { itemsCount: -1 } }
+    }, true).then(function (data) {
+      return data.channels || { total: 0, data: [] };
+    });
+  }
+
   return {
     fetchItems: fetchItems,
     fetchAccessibleAssets: fetchAccessibleAssets,
@@ -866,6 +1045,16 @@ var ElacityAPI = (function () {
     fetchSubscriptions: fetchSubscriptions,
     fetchRoyaltyItems: fetchRoyaltyItems,
     fetchRewardSummary: fetchRewardSummary,
+    searchListingEvents: searchListingEvents,
+    searchTradeEvents: searchTradeEvents,
+    searchOfferEvents: searchOfferEvents,
+    searchIncomingOfferEvents: searchIncomingOfferEvents,
+    fetchStatisticByAsset: fetchStatisticByAsset,
+    governanceStatistics: governanceStatistics,
+    toggleUnpublish: toggleUnpublish,
+    updateChannelInformation: updateChannelInformation,
+    updateSubscriptionPlan: updateSubscriptionPlan,
+    fetchManagedChannels: fetchManagedChannels,
     PRESETS: PRESETS
   };
 })();

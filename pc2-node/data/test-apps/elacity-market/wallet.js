@@ -23,6 +23,7 @@ var Wallet = (function () {
   var ERC20_ABI = [
     'function approve(address spender, uint256 amount) returns (bool)',
     'function allowance(address owner, address spender) view returns (uint256)',
+    'function balanceOf(address account) view returns (uint256)',
     'function decimals() view returns (uint8)'
   ];
   var OPERATIVE_ABI = [
@@ -65,8 +66,10 @@ var Wallet = (function () {
 
   var AUTHORITY_GATEWAY_ADDRESS = '0x8fe6bf9877B78BF0126819ff2593235E54Ee1E29';
   var TRADE_GATEWAY_ADDRESS = '0x9eC53758b698f9F68C0654DDd9159173a159a459';
+  var USDC_ADDRESS = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
   var TOKEN_ID_ACCESS = 1;
   var TOKEN_ID_ROYALTY_SHARE = 2;
+  var TOKEN_ID_DISTRIBUTION = 3;
 
   var connectedAddress = null;
   var smartAccountAddress = new URLSearchParams(window.location.search).get('puter.smart_account') || null;
@@ -838,6 +841,96 @@ var Wallet = (function () {
     }).catch(function () { return null; });
   }
 
+  // ── Royalty Share Offers (TradeGateway) ─────────────
+
+  function createRoyaltyOffer(operativeAddr, quantity, pricePerToken, payToken) {
+    if (!connectedAddress) throw new Error('Wallet not connected');
+    payToken = payToken || USDC_ADDRESS;
+
+    return ensureBase().then(function () {
+      var totalCost = BigInt(quantity) * BigInt(pricePerToken);
+      var erc20Iface = new ethers.Interface(ERC20_ABI);
+      var allowanceData = erc20Iface.encodeFunctionData('allowance', [connectedAddress, TRADE_GATEWAY_ADDRESS]);
+
+      return getProvider().request({
+        method: 'eth_call',
+        params: [{ to: payToken, data: allowanceData }, 'latest']
+      }).then(function (result) {
+        var current = BigInt(result);
+        if (current < totalCost) {
+          var approveData = erc20Iface.encodeFunctionData('approve', [TRADE_GATEWAY_ADDRESS, totalCost.toString()]);
+          return parentSendTransaction({ to: payToken, data: approveData, value: '0x0' });
+        }
+      }).then(function () {
+        var tgIface = new ethers.Interface(TRADE_GATEWAY_ABI);
+        var data = tgIface.encodeFunctionData('createOffer', [
+          operativeAddr,
+          ethers.getBigInt(TOKEN_ID_ROYALTY_SHARE),
+          ethers.getBigInt(quantity),
+          ethers.getBigInt(pricePerToken),
+          payToken
+        ]);
+        return parentSendTransaction({ to: TRADE_GATEWAY_ADDRESS, data: data, value: '0x0' });
+      });
+    });
+  }
+
+  function acceptRoyaltyOffer(fromAddr, operativeAddr, quantity) {
+    if (!connectedAddress) throw new Error('Wallet not connected');
+
+    return ensureBase().then(function () {
+      var opIface = new ethers.Interface(OPERATIVE_ABI);
+      var approvedData = opIface.encodeFunctionData('isApprovedForAll', [connectedAddress, TRADE_GATEWAY_ADDRESS]);
+
+      return getProvider().request({
+        method: 'eth_call',
+        params: [{ to: operativeAddr, data: approvedData }, 'latest']
+      }).then(function (result) {
+        var isApproved = result !== '0x0000000000000000000000000000000000000000000000000000000000000000';
+        if (!isApproved) {
+          var setApprovalData = opIface.encodeFunctionData('setApprovalForAll', [TRADE_GATEWAY_ADDRESS, true]);
+          return parentSendTransaction({ to: operativeAddr, data: setApprovalData, value: '0x0' });
+        }
+      }).then(function () {
+        var tgIface = new ethers.Interface(TRADE_GATEWAY_ABI);
+        var data = tgIface.encodeFunctionData('acceptOffer', [
+          fromAddr,
+          operativeAddr,
+          ethers.getBigInt(TOKEN_ID_ROYALTY_SHARE),
+          ethers.getBigInt(quantity)
+        ]);
+        return parentSendTransaction({ to: TRADE_GATEWAY_ADDRESS, data: data, value: '0x0' });
+      });
+    });
+  }
+
+  function cancelRoyaltyOffer(operativeAddr) {
+    if (!connectedAddress) throw new Error('Wallet not connected');
+
+    return ensureBase().then(function () {
+      var tgIface = new ethers.Interface(TRADE_GATEWAY_ABI);
+      var data = tgIface.encodeFunctionData('cancelOffer', [
+        operativeAddr,
+        ethers.getBigInt(TOKEN_ID_ROYALTY_SHARE)
+      ]);
+      return parentSendTransaction({ to: TRADE_GATEWAY_ADDRESS, data: data, value: '0x0' });
+    });
+  }
+
+  // ── Distribution Token Balance ────────────────────
+
+  function getDistributionBalance(operativeAddr, ownerAddr) {
+    if (!operativeAddr || !ownerAddr) return Promise.resolve('0');
+    var iface = new ethers.Interface(OPERATIVE_ABI);
+    var data = iface.encodeFunctionData('balanceOf', [ownerAddr, ethers.getBigInt(TOKEN_ID_DISTRIBUTION)]);
+    return getProvider().request({
+      method: 'eth_call',
+      params: [{ to: operativeAddr, data: data }, 'latest']
+    }).then(function (result) {
+      return ethers.AbiCoder.defaultAbiCoder().decode(['uint256'], result)[0].toString();
+    }).catch(function () { return '0'; });
+  }
+
   // ── NFT Transfer (channel-level ERC721 only) ──────
 
   function transferNFT(nftAddress, tokenId, recipientAddress, isERC1155, amount) {
@@ -898,11 +991,17 @@ var Wallet = (function () {
     batchWithdrawRewards: batchWithdrawRewards,
     getRoyaltySellers: getRoyaltySellers,
     getRoyaltyListing: getRoyaltyListing,
+    createRoyaltyOffer: createRoyaltyOffer,
+    acceptRoyaltyOffer: acceptRoyaltyOffer,
+    cancelRoyaltyOffer: cancelRoyaltyOffer,
+    getDistributionBalance: getDistributionBalance,
     transferNFT: transferNFT,
     BASE_CHAIN_ID: BASE_CHAIN_ID,
     AUTHORITY_GATEWAY_ADDRESS: AUTHORITY_GATEWAY_ADDRESS,
     TRADE_GATEWAY_ADDRESS: TRADE_GATEWAY_ADDRESS,
+    USDC_ADDRESS: USDC_ADDRESS,
     TOKEN_ID_ACCESS: TOKEN_ID_ACCESS,
-    TOKEN_ID_ROYALTY_SHARE: TOKEN_ID_ROYALTY_SHARE
+    TOKEN_ID_ROYALTY_SHARE: TOKEN_ID_ROYALTY_SHARE,
+    TOKEN_ID_DISTRIBUTION: TOKEN_ID_DISTRIBUTION
   };
 })();

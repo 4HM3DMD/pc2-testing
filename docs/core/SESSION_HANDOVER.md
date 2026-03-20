@@ -1,4 +1,4 @@
-# Session Handover — Mar 13, 2026
+# Session Handover — Mar 20, 2026
 
 > **Read this first when starting a new agent session.**
 
@@ -11,7 +11,78 @@
 **Release:** v1.1.0 tagged and released on 2026-03-03 (134 commits squash-merged to main)
 **Launcher:** v1.1.1 released — version display, one-click updates, full networking install
 **DAO Proposal:** Live at https://elastos.com/proposals/69a24f49247f130078064edd
-**Last Commit:** feat: Elacity Market — earnings page, marketplace features, dual-wallet ownership
+**Last Commit:** feat: marketplace API hardening, channel management fixes, My Channels hub
+
+### Known Issues
+
+1. **Lit Protocol Chipotle endpoint DOWN** — `api.dev.litprotocol.com` redirects (307) to a Phala dStack TEE worker (`f8fce543471dc9f5f5643aa217422398c36e5edc-8000.dstack-base-prod5.phala.network`) that is unreachable (connect timeout). This blocks ALL dDRM operations (playback, minting, encrypt, decrypt). **Not our code — upstream infrastructure outage.** When it comes back, everything works without changes.
+2. **Channel edit save** — was returning 400; improved error handling now captures actual server error. Added auto SIWE re-auth for expired tokens. Needs user re-test.
+3. **`updateSubscriptionPlan` mutation format** — was previously incorrect (flat fields instead of `{ action, args }` wrapper). Fixed to match GraphQL schema (`SubscriptionPlanUpdateAction` requires `args: SubscriptionPlanInput!`). Also fixed `paymentToken` → `payToken`, `price` Int → String, added return field selection.
+4. **Token-gating field names** — was sending `{ tokenAddress, minimumBalance }` but `TokenOwnershipInput` expects `{ address, value }` (value as Float). Fixed.
+
+### Latest Session Work (Mar 20 — Marketplace Hardening)
+
+**Feedback fixes (6 gaps closed):**
+1. **Token-gating CRUD** — full add/edit/remove form for channel owners with on-chain token validation
+2. **Plan UPDATE action** — owners can now update existing plans (not just add/remove)
+3. **Per-tab earnings badges** — individual counts on Assets/Channels/Offers tabs (not just one dot)
+4. **Expanded earnings fields** — per-wallet access balances, governance volume, floor price, subscriber count, channel type, multi-token rewards
+5. **Multi-token withdrawal** — per-payment-token (USDC+ETH) claimable amounts with individual + batch withdraw
+6. **TradeGateway royalty offers** — confirmed using real royalty offer data
+
+**My Channels management hub:**
+- New "My Channels" tab in Earnings view
+- Server-side `creator` filter via `ChannelQueryInput` (confirmed via GraphQL schema introspection)
+- Channel cards with "View", "Edit Details", "Manage Plans" buttons
+- Centralized plan modal (openManagePlansModal)
+
+**API hardening:**
+- `gql()` now captures response body for non-200 errors (was just "API request failed: 400")
+- Debug logging on mutation calls
+- Auto SIWE re-auth before mutations if token expired
+- `RETRIEVE_CHANNEL_QUERY` now includes `categories` field
+- `updateSubscriptionPlan` mutation: added `{ action, args }` wrapper, return field selection, correct field names
+- `TokenOwnershipInput`: corrected field names (`address`/`value` not `tokenAddress`/`minimumBalance`)
+- `fetchManagedChannels`: uses server-side `creator` filter instead of client-side filtering
+
+#### Full Feature Implementation (Mar 20)
+
+Implemented all features from the Market dApp Full Features plan:
+
+**Architecture:**
+- Added `window.ElaMarket` namespace export for capsule-ready module bridge
+- Created `app-features.js` — extended features module using namespace pattern
+- Custom events (`ela-detail-rendered`, `ela-channel-rendered`, `wallet-connected`) for cross-module hooks
+- 6 files total: `app.js` (core), `app-features.js` (extensions), `api.js`, `wallet.js`, `styles.css`, `index.html`
+
+**Features implemented:**
+1. **Seller sorting** — cheapest first, "Best Price" tag on top seller
+2. **Properties accordion** — collapsible panel with content type, duration, file size, access type, protection status, supply, storage, upload date, royalties, usage rights, label, authority (BaseScan link), blockchain, contract (BaseScan link)
+3. **Earnings badge** — per-tab notification counts on Assets/Channels/Offers tabs
+4. **Activity history** — accordion section on detail page with Listings/Sales/Offers tabs, fetched via `searchListingEvents`/`searchTradeEvents`/`searchOfferEvents`
+5. **Publish/Unpublish toggle** — publisher-only toggle using `toggleUnpublish` mutation + `fetchStatisticByAsset`
+6. **Scarcity badges** — "X/Y" badges on grid cards, "Sold out" critical badge, "Low stock" warning, urgency indicator with pulsing dot
+7. **Expanded earnings** — click-to-expand items with per-wallet balances, multi-token rewards (USDC+ETH), governance volume, floor price, royalty distribution progress bars
+8. **Royalty offer wallet functions** — `createRoyaltyOffer`, `acceptRoyaltyOffer`, `cancelRoyaltyOffer` using TradeGateway ABI, with USDC approval flow
+9. **Offer UI** — "Make Offer" modal on detail page for royalty shares, "Offers" tab in Earnings with outgoing/incoming offers and Accept/Cancel actions
+10. **Channel management** — "Edit Channel" modal for creators (name, description, categories, image, cover image), uses `updateChannelInformation` mutation with auto re-auth
+11. **Subscription plan management** — full add/update/remove via `updateSubscriptionPlan` with correct `{ action, args }` format
+12. **Token-gating full CRUD** — add/edit/remove token thresholds with on-chain validation, correct `TokenOwnershipInput` format
+13. **Subscription lifecycle** — expiry display (active/warning/expired), unsubscribe button with confirmation, renewal prompt for expired subs
+14. **Distribution rights** — Token ID 3 balance displayed in governance section
+15. **My Channels hub** — dedicated tab in Earnings with channel list, edit/plans management
+
+**New API queries added:** `searchListingEvents`, `searchTradeEvents`, `searchOfferEvents`, `searchIncomingOfferEvents`, `fetchStatisticByAsset`, `governanceStatistics`, `toggleUnpublish`, `updateChannelInformation`, `updateSubscriptionPlan`, `fetchManagedChannels`
+
+**New wallet functions added:** `createRoyaltyOffer`, `acceptRoyaltyOffer`, `cancelRoyaltyOffer`, `getDistributionBalance`, `TOKEN_ID_DISTRIBUTION = 3`, `USDC_ADDRESS`, `batchWithdrawRewards`
+
+**GraphQL schema verified via introspection:**
+- `ChannelInformationInput`: name, description, categories, image, coverImage, tokenAccess
+- `SubscriptionPlanUpdateAction`: action (ActionType enum: ADD/UPDATE/REMOVE) + args (SubscriptionPlanInput)
+- `SubscriptionPlanInput`: planId, label, duration (DurationInput), description, price (String!), payToken
+- `TokenOwnershipInput`: address, value (Float), decimals (Int)
+- `ChannelQueryInput`: address, creator, channelType, categories, access, flags
+- `DurationInput`: value (Int!), unit (String!)
 
 #### AV1 Playback Fix & Init Segment Splitting (Mar 18)
 

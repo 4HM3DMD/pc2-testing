@@ -86,6 +86,7 @@
     dom.viewWatchlater = document.getElementById('view-watchlater');
     dom.viewDetail = document.getElementById('view-detail');
     dom.viewEarnings = document.getElementById('view-earnings');
+    dom.detailSupplyInfo = document.getElementById('detail-supply-info');
     dom.earningsAuthPrompt = document.getElementById('earnings-auth-prompt');
     dom.earningsSummary = document.getElementById('earnings-summary');
     dom.earningsTotalAmount = document.getElementById('earnings-total-amount');
@@ -488,7 +489,13 @@
     if (viewName === 'channels') loadChannelsDirectory();
     if (viewName === 'subscriptions') renderSubscriptionsView();
     if (viewName === 'watchlater') loadWatchLater();
-    if (viewName === 'earnings') loadEarningsView();
+    if (viewName === 'earnings') {
+      if (window.ElaMarket && window.ElaMarket.loadEarningsView) {
+        window.ElaMarket.loadEarningsView();
+      } else {
+        loadEarningsView();
+      }
+    }
   }
 
   // ── Video Card Rendering ─────────────────────────────
@@ -540,6 +547,23 @@
       ? '<span class="resellable-badge">Resellable</span>'
       : '';
 
+    var scarcityBadgeHtml = '';
+    var operative = item.operative || {};
+    var accessInfo = operative.access || {};
+    var listingsArr = accessInfo.listings || [];
+    var ts = parseInt(accessInfo.totalSupply) || 0;
+    if (ts > 0 && opType !== 0) {
+      var fs = 0;
+      listingsArr.forEach(function (l) { fs += (parseInt(l.quantity) || 0); });
+      if (fs === 0) {
+        scarcityBadgeHtml = '<span class="scarcity-badge critical">Sold out</span>';
+      } else if ((fs / ts) * 100 <= 20) {
+        scarcityBadgeHtml = '<span class="scarcity-badge low">' + fs + '/' + ts + '</span>';
+      } else {
+        scarcityBadgeHtml = '<span class="scarcity-badge">' + fs + '/' + ts + '</span>';
+      }
+    }
+
     card.innerHTML =
       '<div class="video-card-thumb">' +
         (imageUrl ? '<img src="' + escapeHtml(imageUrl) + '" alt="' + title + '" loading="lazy" onerror="this.style.display=\'none\'" />' : '') +
@@ -547,6 +571,7 @@
         priceBadgeHtml +
         walletBadgeHtml +
         resellableBadgeHtml +
+        scarcityBadgeHtml +
       '</div>' +
       '<div class="video-card-info">' +
         '<div class="video-card-avatar">' + avatarContent + '</div>' +
@@ -817,6 +842,8 @@
     dom.detailOwned.classList.add('hidden');
     dom.detailBalanceInfo.classList.add('hidden');
     dom.detailBalanceInfo.innerHTML = '';
+    dom.detailSupplyInfo.classList.add('hidden');
+    dom.detailSupplyInfo.innerHTML = '';
     dom.playBtn.classList.add('hidden');
     dom.playOwnedBtn.classList.add('hidden');
     dom.detailAttributes.innerHTML = '';
@@ -1000,6 +1027,7 @@
     }
 
     renderRoyaltyInfo(nft);
+    renderSupplyInfo(nft);
     renderOpTypeBadge(nft);
     if (isOwned) {
       renderOwnershipBalances(nft);
@@ -1023,6 +1051,8 @@
         '</div>';
     });
     dom.detailAttributes.innerHTML = attrHtml;
+
+    window.dispatchEvent(new CustomEvent('ela-detail-rendered', { detail: { nft: nft } }));
   }
 
   var OP_TYPE_LABELS = { 0: 'Free', 1: 'Buy Once', 2: 'Buy & Resell' };
@@ -1070,19 +1100,118 @@
       var saBal = results[1] !== undefined ? (parseInt(results[1]) || 0) : 0;
       var total = eoaBal + saBal;
 
-      if (total === 0) return;
-
-      var html = '';
-      html += '<span class="balance-chip eoa">EOA: ' + eoaBal + ' access token' + (eoaBal !== 1 ? 's' : '') + '</span>';
+      var html = '<div class="your-holdings">';
+      html += '<span class="holdings-label">Your Holdings</span>';
+      html += '<div class="holdings-wallets">';
+      html += '<span class="balance-chip eoa' + (eoaBal === 0 ? ' empty' : '') + '">EOA: <strong>' + eoaBal + '</strong></span>';
       if (hasSA) {
-        html += '<span class="balance-chip sa">Smart: ' + saBal + ' access token' + (saBal !== 1 ? 's' : '') + '</span>';
+        html += '<span class="balance-chip sa' + (saBal === 0 ? ' empty' : '') + '">Smart: <strong>' + saBal + '</strong></span>';
       }
+      html += '<span class="holdings-total">Total: <strong>' + total + '</strong></span>';
+      html += '</div>';
+      html += '</div>';
 
       dom.detailBalanceInfo.innerHTML = html;
       dom.detailBalanceInfo.classList.remove('hidden');
     }).catch(function (err) {
       console.warn('[Detail] Failed to fetch balances:', err);
     });
+  }
+
+  function renderSupplyInfo(nft) {
+    var operative = nft.operative || {};
+    var access = operative.access || {};
+    var listings = access.listings || [];
+    var totalSupply = parseInt(access.totalSupply) || 0;
+    var opType = operative.opType || 0;
+    var meta = nft.metadata || {};
+    var props = meta.properties || {};
+
+    if (!totalSupply && opType === 0) {
+      dom.detailSupplyInfo.classList.add('hidden');
+      return;
+    }
+
+    var forSale = 0;
+    listings.forEach(function (l) { forSale += (parseInt(l.quantity) || 0); });
+
+    var pctAvailable = totalSupply > 0 ? (forSale / totalSupply) * 100 : 0;
+    var pctSold = totalSupply > 0 ? ((totalSupply - forSale) / totalSupply) * 100 : 0;
+    var isLowStock = pctAvailable > 0 && pctAvailable <= 20;
+    var isSoldOut = forSale === 0 && totalSupply > 0;
+
+    var fillClass = isSoldOut ? 'critical' : isLowStock ? 'low-stock' : '';
+
+    var html = '<div class="supply-bar">';
+    html += '<div class="supply-visual">';
+    html += '<div class="supply-text">';
+    html += '<span>Available: <strong>' + forSale.toLocaleString() + '</strong> / ' + totalSupply.toLocaleString() + '</span>';
+    if (forSale > 0) {
+      html += '<span class="supply-badge for-sale">' + forSale + ' for sale</span>';
+    } else if (isSoldOut && opType !== 0) {
+      html += '<span class="supply-badge sold-out">Sold out</span>';
+    }
+    html += '</div>';
+    html += '<div class="supply-track"><div class="supply-fill ' + fillClass + '" style="width: ' + Math.max(pctSold, 2) + '%"></div></div>';
+    html += '<div class="supply-text"><span>' + (totalSupply - forSale).toLocaleString() + ' held by owners</span>';
+    if (isLowStock && forSale > 0) {
+      html += '<span class="supply-badge low-stock">Low stock!</span>';
+    }
+    html += '</div>';
+    html += '</div>';
+    html += '</div>';
+
+    if (isLowStock && forSale > 0) {
+      html += '<div class="urgency-indicator"><span class="urgency-dot"></span>Low stock — only ' + forSale + ' left!</div>';
+    }
+
+    var contentType = (meta.media && meta.media.contentType) || (meta.media && meta.media.mimeType) || props.mimeType || '';
+    var storage = (nft.tokenURI && nft.tokenURI.indexOf('ipfs') !== -1) ? 'IPFS' : 'On-chain';
+    var accessType = opType === 0 ? 'Free' : opType === 1 ? 'Buy Once' : 'Buy & Resell';
+    var resellerCutRaw = operative.resellerCut || 0;
+    var resellerPct = resellerCutRaw ? (resellerCutRaw / 10) : 0;
+    var creatorPct = resellerCutRaw ? (100 - resellerPct) : null;
+
+    var duration = '';
+    var attrs = meta.attributes || [];
+    for (var ai = 0; ai < attrs.length; ai++) {
+      if ((attrs[ai].trait_type || '').toLowerCase() === 'duration') { duration = String(attrs[ai].value || ''); break; }
+    }
+
+    var fileSize = (meta.media && meta.media.size) ? meta.media.size : '';
+    if (fileSize && typeof fileSize === 'number') {
+      if (fileSize >= 1073741824) fileSize = (fileSize / 1073741824).toFixed(1) + ' GB';
+      else if (fileSize >= 1048576) fileSize = (fileSize / 1048576).toFixed(1) + ' MB';
+      else if (fileSize >= 1024) fileSize = (fileSize / 1024).toFixed(1) + ' KB';
+      else fileSize = fileSize + ' B';
+    }
+
+    html += '<div class="props-accordion">';
+    html += '<button class="props-accordion-toggle" onclick="this.parentNode.classList.toggle(\'open\')"><span>Properties</span><span class="accordion-arrow">&#9662;</span></button>';
+    html += '<div class="props-accordion-body">';
+    html += '<div class="props-grid">';
+    if (contentType) html += '<div class="prop-row"><span class="prop-label">Content Type</span><span class="prop-value">' + escapeHtml(contentType) + '</span></div>';
+    if (duration) html += '<div class="prop-row"><span class="prop-label">Duration</span><span class="prop-value">' + escapeHtml(duration) + '</span></div>';
+    if (fileSize) html += '<div class="prop-row"><span class="prop-label">File Size</span><span class="prop-value">' + escapeHtml(String(fileSize)) + '</span></div>';
+    html += '<div class="prop-row"><span class="prop-label">Access Type</span><span class="prop-value">' + accessType + '</span></div>';
+    html += '<div class="prop-row"><span class="prop-label">Protected</span><span class="prop-value">' + (nft.isProtected ? 'Yes (dDRM)' : 'No') + '</span></div>';
+    html += '<div class="prop-row"><span class="prop-label">Total Supply</span><span class="prop-value">' + totalSupply.toLocaleString() + '</span></div>';
+    html += '<div class="prop-row"><span class="prop-label">Available</span><span class="prop-value">' + forSale.toLocaleString() + ' / ' + totalSupply.toLocaleString() + (isSoldOut && opType !== 0 ? ' (sold out)' : '') + '</span></div>';
+    html += '<div class="prop-row"><span class="prop-label">Storage</span><span class="prop-value">' + storage + '</span></div>';
+    if (nft.createdAt) html += '<div class="prop-row"><span class="prop-label">Uploaded</span><span class="prop-value">' + new Date(nft.createdAt).toLocaleDateString() + '</span></div>';
+    if (creatorPct !== null) html += '<div class="prop-row"><span class="prop-label">Creator Royalty</span><span class="prop-value">' + creatorPct + '%</span></div>';
+    if (resellerPct && opType === 2) html += '<div class="prop-row"><span class="prop-label">Reseller Cut</span><span class="prop-value">' + resellerPct + '%</span></div>';
+    if (props.distribution) html += '<div class="prop-row"><span class="prop-label">Usage Rights</span><span class="prop-value">' + escapeHtml(props.distribution) + '</span></div>';
+    if (props.labelType) html += '<div class="prop-row"><span class="prop-label">Label</span><span class="prop-value">' + escapeHtml(props.labelType) + '</span></div>';
+    if (props.authority) html += '<div class="prop-row"><span class="prop-label">Authority</span><span class="prop-value"><a href="https://basescan.org/address/' + escapeHtml(props.authority) + '" target="_blank" rel="noopener">' + formatAddress(props.authority) + '</a></span></div>';
+    html += '<div class="prop-row"><span class="prop-label">Blockchain</span><span class="prop-value">Base (8453)</span></div>';
+    if (operative.address) html += '<div class="prop-row"><span class="prop-label">Contract</span><span class="prop-value"><a href="https://basescan.org/address/' + escapeHtml(operative.address) + '" target="_blank" rel="noopener">' + formatAddress(operative.address) + '</a></span></div>';
+    html += '</div>';
+    html += '</div>';
+    html += '</div>';
+
+    dom.detailSupplyInfo.innerHTML = html;
+    dom.detailSupplyInfo.classList.remove('hidden');
   }
 
   function renderOpTypeBadge(nft) {
@@ -1115,8 +1244,13 @@
       });
 
       Promise.all(promises).then(function (results) {
-        results.forEach(function (r) {
-          if (!r.listing || r.listing.quantity === 0) return;
+        var validResults = results.filter(function (r) { return r.listing && r.listing.quantity > 0; });
+
+        validResults.sort(function (a, b) {
+          return Number(a.listing.pricePerToken) - Number(b.listing.pricePerToken);
+        });
+
+        validResults.forEach(function (r, idx) {
           var decimals = getTokenSymbol(r.listing.payToken) === 'USDC' ? 6 : 18;
           var displayPrice = Number(r.listing.pricePerToken) / Math.pow(10, decimals);
           var sellerLower = r.seller.toLowerCase();
@@ -1124,9 +1258,11 @@
           var isSA = saAddr && (sellerLower === saAddr.toLowerCase());
           var isSelf = isEOA || isSA;
           var selfLabel = isEOA ? 'You (EOA)' : isSA ? 'You (Smart)' : '';
-          html += '<div class="seller-row' + (isSelf ? ' seller-self' : '') + '">';
+          var isBest = (idx === 0 && validResults.length > 1);
+          html += '<div class="seller-row' + (isSelf ? ' seller-self' : '') + (isBest ? ' seller-best' : '') + '">';
           html += '<span class="seller-addr">' + (isSelf ? selfLabel : formatAddress(r.seller)) + '</span>';
           html += '<span class="seller-price">' + formatPrice(displayPrice, r.listing.payToken) + '</span>';
+          if (isBest) html += '<span class="best-price-tag">Best Price</span>';
           html += '<span class="seller-qty">x' + r.listing.quantity + '</span>';
           if (isSelf) {
             html += '<button class="cancel-listing-btn" data-operative="' + operativeAddr + '" data-tokenid="' + tokenId + '" data-qty="' + r.listing.quantity + '">Cancel</button>';
@@ -1740,6 +1876,8 @@
     itemList.forEach(function (item) {
       dom.channelItemsGrid.appendChild(renderCard(normalizeLedgerAsset(item)));
     });
+
+    window.dispatchEvent(new CustomEvent('ela-channel-rendered', { detail: { channel: channel } }));
   }
 
   var SUBSCRIPTION_ABI = [
@@ -3016,6 +3154,7 @@
     if (address) {
       dom.walletBtn.textContent = formatAddress(address);
       dom.walletBtn.classList.add('connected');
+      window.dispatchEvent(new CustomEvent('wallet-connected'));
     } else {
       dom.walletBtn.textContent = 'Connect Wallet';
       dom.walletBtn.classList.remove('connected');
@@ -3109,10 +3248,15 @@
     dom.earningsTabs.addEventListener('click', function (e) {
       var tab = e.target.closest('.earnings-tab');
       if (!tab) return;
+      if (tab.dataset.tab === 'offers') return;
       dom.earningsTabs.querySelectorAll('.earnings-tab').forEach(function (t) { t.classList.remove('active'); });
       tab.classList.add('active');
       state.earningsTab = tab.dataset.tab;
-      loadEarningsData(state.earningsTab);
+      if (window.ElaMarket && window.ElaMarket.loadEarningsData) {
+        window.ElaMarket.loadEarningsData(state.earningsTab);
+      } else {
+        loadEarningsData(state.earningsTab);
+      }
     });
 
     dom.earningsWithdrawAllBtn.addEventListener('click', handleWithdrawAll);
@@ -3334,7 +3478,7 @@
 
       html += '<div class="earnings-item" data-contract="' + escapeHtml(item.address) + '"' +
         (item.ledger ? ' data-ledger="' + escapeHtml(item.ledger) + '"' : '') +
-        (item.tokenId !== undefined ? ' data-tokenid="' + item.tokenId + '"' : '') +
+        (item.hexTokenId ? ' data-hextokenid="' + escapeHtml(item.hexTokenId) + '"' : '') +
         ' data-category="' + category + '">';
       html += '<img class="earnings-item-thumb" src="' + escapeHtml(thumb) + '" alt="" onerror="this.style.display=\'none\'" />';
       html += '<div class="earnings-item-info">';
@@ -3371,14 +3515,6 @@
 
     dom.earningsList.querySelectorAll('.earnings-item').forEach(function (el) {
       el.style.cursor = 'pointer';
-      el.addEventListener('click', function () {
-        var ledger = el.getAttribute('data-ledger');
-        var tokenId = el.getAttribute('data-tokenid');
-        var cat = el.getAttribute('data-category');
-        if (cat === 'assets' && ledger && tokenId !== null) {
-          openDetail(ledger, tokenId);
-        }
-      });
     });
   }
 
@@ -3480,6 +3616,42 @@
         updateWalletUI();
       });
   }
+
+  // ── Namespace Export (capsule-ready module bridge) ───
+  window.ElaMarket = {
+    state: state,
+    dom: dom,
+    utils: {
+      escapeHtml: escapeHtml,
+      formatPrice: formatPrice,
+      formatAddress: formatAddress,
+      formatDate: formatDate,
+      formatViews: formatViews,
+      resolveIpfsUrl: resolveIpfsUrl,
+      getImageUrl: getImageUrl,
+      getCreatorName: getCreatorName,
+      getTokenSymbol: getTokenSymbol,
+      showToast: showToast,
+      decodeContractError: decodeContractError,
+      isNonMediaAsset: isNonMediaAsset,
+      getListing: getListing,
+      normalizeLedgerAsset: normalizeLedgerAsset,
+      pc2Fetch: pc2Fetch,
+      USDC_ADDRESS: USDC_ADDRESS,
+      PAGE_SIZE: PAGE_SIZE
+    },
+    openDetail: openDetail,
+    openChannel: openChannel,
+    switchView: switchView,
+    renderCard: renderCard,
+    loadBrowse: loadBrowse,
+    loadEarningsView: loadEarningsView,
+    loadEarningsData: loadEarningsData,
+    renderGovernanceSection: renderGovernanceSection,
+    renderSupplyInfo: renderSupplyInfo,
+    renderOpTypeBadge: renderOpTypeBadge,
+    renderOwnershipBalances: renderOwnershipBalances
+  };
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init);
