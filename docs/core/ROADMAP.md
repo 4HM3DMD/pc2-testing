@@ -2,7 +2,7 @@
 
 > **Purpose:** Single source of truth for all strategic goals, technical work streams, and milestones — directly mapped to the Keystone Fund proposal and Rong Chen's original vision
 > **Created:** 2026-02-24
-> **Last Updated:** 2026-03-19
+> **Last Updated:** 2026-03-20
 > **Status:** Living document — update as work progresses
 
 ---
@@ -211,6 +211,8 @@ These diagrams from Rong define the north star. Every work stream should move us
   - [x] **WASM CEK base64 padding fix** — Chipotle REST API returns unpadded base64 CEK (43 chars for 32-byte key), Rust WASM decrypt-only mode requires standard padding. Added padding normalization in storage.ts. WASM decrypt-only now succeeds for all passthrough types (3D, fonts, datasets, archives) — CEK never touches Node.js memory *(fixed Mar 19)*
   - [x] **Market thumbnail letterboxing** — `.video-card-thumb` and `.detail-media` changed to `object-fit: contain` with centered flex layout and `#070707` background. Matches live Elacity site "Media Card" spec *(fixed Mar 19)*
   - [x] **Audio artwork in Media Runtime** — Audio-only playback now displays asset cover art (thumbnail) in the player. URL passed via `puter.args.thumbnail` from market app, styled as album art with shadow/border-radius *(completed Mar 19)*
+  - [x] **Marketplace feature audit & implementation (Mar 20)** — Access token resale with wallet selector (EOA/Smart Account), dual-wallet ownership display, resellerCut fix (per-mille→percentage), dynamic sellers list with self-identification ("You (EOA)" / "You (Smart)"), royalty shares & rewards display per wallet, governance section always visible for connected wallets
+  - [x] **Dedicated Earnings/Revenue page (Mar 20)** — New sidebar tab with Assets/Channels sub-tabs, dual-wallet aggregation (EOA+SA), total unclaimed banner, per-item withdraw, batch "Withdraw All" (multicall), clickable items to detail view. GraphQL: `fetchMyRoyaltyItemsByAddress` + `fetchRewardSummaryByAddress`
   - [ ] **Audio routing fix** — Remove audio passthrough from dDRM Viewer; ensure all audio routes through Media Runtime encoding pipeline (DASH segments, per-segment WASM decrypt) for consistent security model
 - [ ] **Tier 2 — Medium Markets (local runtime integration):** dApp Store, AI models (GGUF → Ollama), code packages (npm), datasets, HTML5 games. Need PC2 backend endpoints for decrypt-and-load.
 - [ ] **Tier 3 — Complex Markets (ElastOS Runtime v2):** Native software/games, API marketplace, agent marketplace. Need Runtime capsule sandboxes (WASM/Firecracker). Runtime v2 capsule model provides isolated execution for all interactive content types (3D, games, dApps) — capability tokens replace blob URLs.

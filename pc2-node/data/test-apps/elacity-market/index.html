@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Elacity Market</title>
   <link rel="icon" type="image/png" href="assets/favicon.png">
-  <link rel="stylesheet" href="styles.css?v=4">
+  <link rel="stylesheet" href="styles.css?v=9">
 </head>
 <body>
 
@@ -40,6 +40,10 @@
       <button class="nav-item" data-view="watchlater">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
         <span>Watch Later</span>
+      </button>
+      <button class="nav-item" data-view="earnings">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+        <span>Earnings</span>
       </button>
     </nav>
 
@@ -235,6 +239,37 @@
       </div>
     </section>
 
+    <!-- Earnings View -->
+    <section id="view-earnings" class="view hidden">
+      <div class="view-header">
+        <h2 class="view-title">Revenue & Earnings</h2>
+      </div>
+      <div id="earnings-auth-prompt" class="auth-prompt hidden">
+        <p>Connect your wallet to view your earnings.</p>
+      </div>
+      <div id="earnings-summary" class="earnings-summary hidden">
+        <div class="earnings-total">
+          <span class="earnings-total-label">Total Unclaimed</span>
+          <span id="earnings-total-amount" class="earnings-total-amount">$0.00</span>
+          <button id="earnings-withdraw-all-btn" style="display: inline-flex; align-items: center; justify-content: center; padding: 8px 16px; font-size: 13px; line-height: 1; font-family: inherit; background: #22c55e; color: white; border: none; border-radius: 6px; cursor: pointer; margin-left: 12px;" disabled>Withdraw All</button>
+        </div>
+      </div>
+      <div class="earnings-tabs" id="earnings-tabs">
+        <button class="earnings-tab active" data-tab="assets">Assets</button>
+        <button class="earnings-tab" data-tab="channels">Channels</button>
+      </div>
+      <div id="earnings-list" class="earnings-list"></div>
+      <div id="earnings-loading" class="loading-indicator hidden">
+        <div class="spinner"></div>
+        <span>Loading earnings data...</span>
+      </div>
+      <div id="earnings-empty" class="empty-state hidden">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+        <h3>No royalty holdings found</h3>
+        <p>You'll see your earnings here when you hold royalty share tokens for any channels or assets.</p>
+      </div>
+    </section>
+
     <!-- Detail View (replaces content area, not a modal) -->
     <section id="view-detail" class="view hidden">
       <div class="detail-topbar">
@@ -290,6 +325,7 @@
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
             <span>Owned</span>
           </div>
+          <div id="detail-balance-info" class="detail-balance-info hidden"></div>
           <button id="download-node-btn" class="action-btn download-node-btn hidden" title="Save to your personal cloud">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19.35 10.04A7.49 7.49 0 0 0 12 4C9.11 4 6.6 5.64 5.35 8.04A5.994 5.994 0 0 0 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96z"/><polyline points="8 13 12 17 16 13"/><line x1="12" y1="17" x2="12" y2="9"/></svg>
             <span>Save to Cloud</span>
@@ -298,6 +334,30 @@
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
             <span>Open in Viewer</span>
           </button>
+          <div class="detail-owner-actions hidden" id="detail-owner-actions">
+            <button id="resell-btn" class="action-btn action-resell" title="List your access tokens for sale">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+              <span>Sell</span>
+            </button>
+            <button id="transfer-btn" class="action-btn action-transfer" title="Transfer this NFT to another address">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+              <span>Transfer</span>
+            </button>
+          </div>
+          <div id="detail-royalty-info" class="detail-royalty-info hidden"></div>
+          <div id="detail-sellers-list" class="detail-sellers-list hidden"></div>
+          <div id="detail-governance" class="detail-governance hidden">
+            <div class="governance-header">
+              <span class="governance-title">Royalty Shares</span>
+            </div>
+            <div id="governance-balance" class="governance-row"></div>
+            <div id="governance-rewards" class="governance-row"></div>
+            <div class="governance-actions" id="governance-actions">
+              <button id="gov-withdraw-btn" class="action-btn action-withdraw hidden" title="Withdraw pending rewards">Withdraw</button>
+              <button id="gov-list-btn" class="action-btn action-resell hidden" title="List royalty shares for sale">List Shares</button>
+              <button id="gov-transfer-btn" class="action-btn action-transfer hidden" title="Transfer royalty shares">Transfer Shares</button>
+            </div>
+          </div>
           <div id="download-status" class="download-status hidden"></div>
           <div id="detail-attributes" class="detail-attributes"></div>
           <div id="purchase-status" class="purchase-status hidden"></div>
@@ -345,12 +405,120 @@
     </div>
   </div>
 
+  <!-- Resell Modal -->
+  <div id="resell-modal" class="modal-overlay hidden">
+    <div class="modal-dialog resell-dialog">
+      <div class="modal-header">
+        <h3 id="resell-modal-title">List Access Token for Sale</h3>
+        <button id="resell-modal-close" class="modal-close-btn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-desc" id="resell-asset-name"></p>
+        <div id="resell-wallet-picker" class="wallet-picker"></div>
+        <div class="form-group">
+          <label for="resell-price">Price per token (USDC)</label>
+          <input type="number" id="resell-price" min="0.01" step="0.01" placeholder="e.g. 2.50" class="form-input" />
+        </div>
+        <div class="form-group">
+          <label for="resell-quantity">Quantity</label>
+          <input type="number" id="resell-quantity" min="1" max="100" value="1" class="form-input" />
+        </div>
+        <div id="resell-royalty-note" class="royalty-note"></div>
+        <div id="resell-status" class="modal-status hidden"></div>
+      </div>
+      <div class="modal-footer">
+        <button id="resell-cancel-btn" style="display: inline-flex; align-items: center; justify-content: center; padding: 8px 16px; font-size: 13px; line-height: 1; font-family: inherit; background: #f3f4f6; border: 1px solid #d1d5db; border-radius: 6px; cursor: pointer;">Cancel</button>
+        <button id="resell-confirm-btn" style="display: inline-flex; align-items: center; justify-content: center; padding: 8px 16px; font-size: 13px; line-height: 1; font-family: inherit; background: #3b82f6; color: white; border: none; border-radius: 6px; cursor: pointer;">List for Sale</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Transfer Modal -->
+  <div id="transfer-modal" class="modal-overlay hidden">
+    <div class="modal-dialog transfer-dialog">
+      <div class="modal-header">
+        <h3>Transfer NFT</h3>
+        <button id="transfer-modal-close" class="modal-close-btn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-desc" id="transfer-asset-name"></p>
+        <div class="form-group">
+          <label for="transfer-recipient">Recipient Address</label>
+          <input type="text" id="transfer-recipient" placeholder="0x..." class="form-input" />
+        </div>
+        <div class="transfer-warning">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          <span>This action is irreversible. The NFT will be permanently transferred.</span>
+        </div>
+        <div id="transfer-status" class="modal-status hidden"></div>
+      </div>
+      <div class="modal-footer">
+        <button id="transfer-cancel-btn" style="display: inline-flex; align-items: center; justify-content: center; padding: 8px 16px; font-size: 13px; line-height: 1; font-family: inherit; background: #f3f4f6; border: 1px solid #d1d5db; border-radius: 6px; cursor: pointer;">Cancel</button>
+        <button id="transfer-confirm-btn" style="display: inline-flex; align-items: center; justify-content: center; padding: 8px 16px; font-size: 13px; line-height: 1; font-family: inherit; background: #dc2626; color: white; border: none; border-radius: 6px; cursor: pointer;">Transfer</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Governance List Shares Modal -->
+  <div id="gov-list-modal" class="modal-overlay hidden">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3>List Royalty Shares</h3>
+        <button id="gov-list-modal-close" class="modal-close-btn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-desc" id="gov-list-asset-name"></p>
+        <div id="gov-list-balance-info" class="form-group" style="font-size:13px;color:var(--text-secondary)"></div>
+        <div class="form-group">
+          <label for="gov-list-amount">Amount (tokens, 10 = 1%)</label>
+          <input type="number" id="gov-list-amount" min="1" step="1" placeholder="e.g. 10" class="form-input" />
+        </div>
+        <div class="form-group">
+          <label for="gov-list-price">Price per token (USDC)</label>
+          <input type="number" id="gov-list-price" min="0.01" step="0.01" placeholder="e.g. 5.00" class="form-input" />
+        </div>
+        <div id="gov-list-status" class="modal-status hidden"></div>
+      </div>
+      <div class="modal-footer">
+        <button id="gov-list-cancel-btn" style="display: inline-flex; align-items: center; justify-content: center; padding: 8px 16px; font-size: 13px; line-height: 1; font-family: inherit; background: #f3f4f6; border: 1px solid #d1d5db; border-radius: 6px; cursor: pointer;">Cancel</button>
+        <button id="gov-list-confirm-btn" style="display: inline-flex; align-items: center; justify-content: center; padding: 8px 16px; font-size: 13px; line-height: 1; font-family: inherit; background: #3b82f6; color: white; border: none; border-radius: 6px; cursor: pointer;">List for Sale</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Governance Transfer Shares Modal -->
+  <div id="gov-transfer-modal" class="modal-overlay hidden">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3>Transfer Royalty Shares</h3>
+        <button id="gov-transfer-modal-close" class="modal-close-btn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-desc" id="gov-transfer-asset-name"></p>
+        <div id="gov-transfer-balance-info" class="form-group" style="font-size:13px;color:var(--text-secondary)"></div>
+        <div class="form-group">
+          <label for="gov-transfer-amount">Amount (tokens, 10 = 1%)</label>
+          <input type="number" id="gov-transfer-amount" min="1" step="1" placeholder="e.g. 10" class="form-input" />
+        </div>
+        <div class="form-group">
+          <label for="gov-transfer-recipient">Recipient Address</label>
+          <input type="text" id="gov-transfer-recipient" placeholder="0x..." class="form-input" />
+        </div>
+        <div id="gov-transfer-status" class="modal-status hidden"></div>
+      </div>
+      <div class="modal-footer">
+        <button id="gov-transfer-cancel-btn" style="display: inline-flex; align-items: center; justify-content: center; padding: 8px 16px; font-size: 13px; line-height: 1; font-family: inherit; background: #f3f4f6; border: 1px solid #d1d5db; border-radius: 6px; cursor: pointer;">Cancel</button>
+        <button id="gov-transfer-confirm-btn" style="display: inline-flex; align-items: center; justify-content: center; padding: 8px 16px; font-size: 13px; line-height: 1; font-family: inherit; background: #dc2626; color: white; border: none; border-radius: 6px; cursor: pointer;">Transfer</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Toast Container -->
   <div id="toast-container" class="toast-container"></div>
 
   <script src="https://cdn.jsdelivr.net/npm/ethers@6.13.4/dist/ethers.umd.min.js"></script>
-  <script src="api.js?v=4"></script>
-  <script src="wallet.js?v=4"></script>
-  <script src="app.js?v=4"></script>
+  <script src="api.js?v=9"></script>
+  <script src="wallet.js?v=8"></script>
+  <script src="app.js?v=10"></script>
 </body>
 </html>

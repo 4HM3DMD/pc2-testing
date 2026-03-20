@@ -11,7 +11,7 @@
 **Release:** v1.1.0 tagged and released on 2026-03-03 (134 commits squash-merged to main)
 **Launcher:** v1.1.1 released — version display, one-click updates, full networking install
 **DAO Proposal:** Live at https://elastos.com/proposals/69a24f49247f130078064edd
-**Last Commit:** perf: WASM/Rust optimization — speed-tuned crypto, panic=abort, smart build pipeline, log reduction
+**Last Commit:** feat: Elacity Market — earnings page, marketplace features, dual-wallet ownership
 
 #### AV1 Playback Fix & Init Segment Splitting (Mar 18)
 
@@ -818,6 +818,50 @@ Expanded the dDRM Viewer to support four new interactive content types beyond th
 | `pc2-node/src/storage/ipfs.ts` | WASM assemble threshold lowered from 10MB to 5MB |
 | `pc2-node/wasm-apps/*/` | All 5 WASM binaries rebuilt |
 
+#### Elacity Market — Marketplace Features & Earnings Page (Mar 20)
+
+**Marketplace Feature Audit & Implementation:**
+Comprehensive audit of Elacity Market dApp against smart contract reference (AuthorityGateway, TradeGateway, Operative contracts on Base). Identified architectural differences (no Marketplace/Auction contracts on Base) and implemented all P0-P4 features.
+
+**Key features implemented:**
+- **Access token resale** — "List for Sale" flow with wallet selector (EOA/Smart Account), sellers list identifying user's own listings ("You (EOA)" / "You (Smart)"), price input in USDC, quantity selection
+- **Dual-wallet ownership display** — asset detail page shows access token balances per wallet (EOA and Smart Account chips)
+- **Royalty info display** — `resellerCut` correctly converted from per-mille to percentage, creator/reseller split shown
+- **Royalty shares & rewards** — governance section shows royalty share balances and pending rewards from both EOA and Smart Accounts, always visible for connected wallets (creators see their royalties regardless of access token ownership)
+- **Dynamic sellers listings** — active sellers list from AuthorityGateway with price, quantity, buy buttons
+- **Resellable badges** — "Buy & Resell" vs "Buy Once" badge based on `OP_TYPE()`
+
+**Dedicated Earnings/Revenue Page (NEW):**
+- New sidebar tab "Earnings" with dollar sign icon
+- Two sub-tabs: **Assets** and **Channels** — fetches `fetchMyRoyaltyItemsByAddress` and `fetchRewardSummaryByAddress` from Elacity GraphQL
+- **Dual-wallet aggregation** — queries both EOA and Smart Account, merges and deduplicates results
+- **Summary banner** — total unclaimed rewards across all contracts with green "Withdraw All" button
+- **Per-item list** — thumbnail, name, royalty share %, contract address, unclaimed amount, individual "Withdraw" button
+- **Single-contract withdraw** — calls `withdrawRewards(paymentToken)` or `multicall` for multiple payment tokens
+- **Batch "Withdraw All"** — sequentially processes each contract with unclaimed rewards, shows progress ("Withdrawing 1/5...")
+- **Clickable items** — asset items navigate to detail page
+
+**GraphQL queries added to api.js:**
+- `fetchMyRoyaltyItemsByAddress(address, category, filters)` — paginated royalty items with `RoyaltyAsset` and `RoyaltyChannel` fragments
+- `fetchRewardSummaryByAddress(address, category)` — unclaimed rewards and distributions per contract
+
+**Wallet.js additions:**
+- `batchWithdrawRewards(operativeAddr, payTokens)` — multicall-based batch withdrawal for multiple payment tokens on a single contract
+
+**Bug fixes:**
+- Fixed `400 API request failed` — removed unsupported `royalty` field from `GET_ASSET_QUERY` GraphQL (schema mismatch: `LedgerTokenProperties` vs `StandardAsset`)
+- Fixed `resellerCut` displaying "900%" — was showing raw per-mille value, now divides by 10 for correct percentage (90%)
+- Fixed `resellAccessToken()` wallet routing — `useWallet` parameter ensures EOA transactions aren't forced through Smart Account
+
+**Files changed (Marketplace features + Earnings, Mar 20):**
+| File | Change |
+|------|--------|
+| `pc2-node/data/test-apps/elacity-market/api.js` | Removed invalid `royalty` GraphQL field, added `fetchRoyaltyItems` and `fetchRewardSummary` queries |
+| `pc2-node/data/test-apps/elacity-market/app.js` | Earnings view (loadEarningsData, renderEarningsList, handleEarningsWithdraw, handleWithdrawAll), renderOwnershipBalances, enhanced renderGovernanceSection (dual-wallet), renderRoyaltyInfo fix (per-mille), openResellModal wallet picker, renderOpTypeBadge seller identification |
+| `pc2-node/data/test-apps/elacity-market/wallet.js` | `batchWithdrawRewards()` multicall, `resellAccessToken()` useWallet parameter |
+| `pc2-node/data/test-apps/elacity-market/index.html` | Earnings view section, sidebar nav item, detail-balance-info div, resell modal wallet picker, renamed Resell→Sell |
+| `pc2-node/data/test-apps/elacity-market/styles.css` | Earnings view styles (summary, tabs, list, items, withdraw buttons), wallet picker, balance chips |
+
 **Market & Player UX fixes (Mar 19 — session 2):**
 - **Market thumbnail letterboxing** — `.video-card-thumb` and `.detail-media` changed from `object-fit: cover` (crops non-16:9 images) to `object-fit: contain` with centered flexbox layout and `#070707` background. Removed hover zoom scale. Matches live Elacity site "Media Card" spec.
 - **Audio artwork in Media Runtime** — When playing audio-only content, the PC2 Media Runtime player now displays the asset's cover artwork (thumbnail) instead of just the music note icon. Thumbnail URL passed from market app via `puter.args.thumbnail`, extracted from the detail view's displayed image (`dom.detailImage.src`). Styled with `max-width: 55%; max-height: 65%; border-radius: 8px; box-shadow` for album-art presentation.
@@ -923,7 +967,8 @@ Expanded the dDRM Viewer to support four new interactive content types beyond th
 - [dDRM Pipeline E2E](fd6755f0-d73c-4e41-8df3-0f57f15071a2) — @elacity-js/access, Creator Dashboard, Lit Action trust model (Path A), capacity credit auto-detection, decrypt endpoint, decentralization analysis. Also: hayro PDF rendering, WASM text fixes, Mint context menu, wallet bridge restore, Elacity branding, WASM crypto hardening Phases A-C, double-signature fix, TXT dimension cap, video autoplay, fMP4 strip+decrypt in Rust
 - [Secure Viewer & PDF](fd6755f0-d73c-4e41-8df3-0f57f15071a2) — secure viewer pipeline, PDF hybrid rendering, two-layer encryption fix, Lit Pinata/relayer integration, auto-decrypt, parallel pages, dDRM Viewer app, .ddrm.json capsules, WASM renderer, GUI integration
 - [Media Runtime E2E](fd6755f0-d73c-4e41-8df3-0f57f15071a2) — server-side DASH/CENC decryption pipeline, Rust WASM cenc-decrypt crate, MSE player, DRM stripping (init+segment), 16-byte IV fix, Smart Account PSSH, two-phase Lit auth
-- [Media Encoding Pipeline](current) — Local media encoding pipeline (FFmpeg→Bento4→CENC→DASH→IPFS), Chipotle CEK encryption, Creator Dashboard media UI, IPC duplicate wallet fix, MetaMask gas estimation fix, PSSH extraction/authority/kid fixes, IPFS pin hang fix, GUI rebuild, **E2E playback + download verified**. AV1 playback fix: nested PSSH stripping in Rust WASM, multi-track init segment splitting, MSE-compatible per-track init delivery. MetaMask mint retry button. WASM optimization Tier B audit: `mp4-split` Rust WASM crate (ISO BMFF parser), WASM decrypt limit raised to 200MB, player access-denied UX, init-split/NaCl/API-key-encrypt audited and deferred. **Wave 1 Universal Asset Viewers**: 3D model viewer (Three.js, 5 loaders, PBR lighting, OrbitControls, wireframe/grid/auto-rotate toolbar, model info panel, watermark + blob revocation), CSV/dataset viewer (paginated table, sort, search, column stats), font viewer (@font-face blob, specimen, custom text), archive viewer (JSZip file tree), backend passthrough in `storage.ts`.
+- [Marketplace Features & Earnings](current) — Marketplace feature audit, dual-wallet ownership display, resale flow with wallet selector, royalty shares/rewards display, dedicated Earnings/Revenue page with per-item and batch withdraw, GraphQL royalty queries, multicall batch withdrawal
+- [Media Encoding Pipeline](fd6755f0-d73c-4e41-8df3-0f57f15071a2) — Local media encoding pipeline (FFmpeg→Bento4→CENC→DASH→IPFS), Chipotle CEK encryption, Creator Dashboard media UI, IPC duplicate wallet fix, MetaMask gas estimation fix, PSSH extraction/authority/kid fixes, IPFS pin hang fix, GUI rebuild, **E2E playback + download verified**. AV1 playback fix: nested PSSH stripping in Rust WASM, multi-track init segment splitting, MSE-compatible per-track init delivery. MetaMask mint retry button. WASM optimization Tier B audit: `mp4-split` Rust WASM crate (ISO BMFF parser), WASM decrypt limit raised to 200MB, player access-denied UX, init-split/NaCl/API-key-encrypt audited and deferred. **Wave 1 Universal Asset Viewers**: 3D model viewer (Three.js, 5 loaders, PBR lighting, OrbitControls, wireframe/grid/auto-rotate toolbar, model info panel, watermark + blob revocation), CSV/dataset viewer (paginated table, sort, search, column stats), font viewer (@font-face blob, specimen, custom text), archive viewer (JSZip file tree), backend passthrough in `storage.ts`.
 
 ---
 

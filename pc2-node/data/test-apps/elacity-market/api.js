@@ -197,13 +197,13 @@ var ElacityAPI = (function () {
           name\n\
           description\n\
           properties {\n\
-            contract\n\
-            publisher { ...profileFields }\n\
-            ledger\n\
-            chainId\n\
-            authority\n\
-            labelType\n\
-            distribution\n\
+        contract\n\
+        publisher { ...profileFields }\n\
+        ledger\n\
+        chainId\n\
+        authority\n\
+        labelType\n\
+        distribution\n\
           }\n\
           media {\n\
             uri\n\
@@ -776,6 +776,66 @@ var ElacityAPI = (function () {
     }).catch(function () {});
   }
 
+  // ── Royalty / Earnings Queries ─────────────────────
+
+  var FETCH_ROYALTY_ITEMS_QUERY = '\
+    query FetchMyRoyaltyItems($address: String!, $category: RewardsCategory!, $filters: FilterPaginationInput) {\n\
+      items: fetchMyRoyaltyItemsByAddress(address: $address, category: $category, filters: $filters) {\n\
+        total\n\
+        data {\n\
+          __typename\n\
+          ... on RoyaltyAsset {\n\
+            id\n\
+            address\n\
+            name\n\
+            thumbnail\n\
+            share\n\
+            beneficiary\n\
+            unclaimedRewards\n\
+            ledger\n\
+            tokenId\n\
+          }\n\
+          ... on RoyaltyChannel {\n\
+            id\n\
+            address\n\
+            name\n\
+            thumbnail\n\
+            share\n\
+            beneficiary\n\
+            unclaimedRewards\n\
+          }\n\
+        }\n\
+      }\n\
+    }';
+
+  var FETCH_REWARD_SUMMARY_QUERY = '\
+    query FetchRewardSummary($address: String!, $category: RewardsCategory!) {\n\
+      rewards: fetchRewardSummaryByAddress(address: $address, category: $category) {\n\
+        address\n\
+        name\n\
+        unclaimedRewards\n\
+        distributions {\n\
+          volume\n\
+          paymentToken\n\
+        }\n\
+      }\n\
+    }';
+
+  function fetchRoyaltyItems(address, category, offset, limit) {
+    return gql(FETCH_ROYALTY_ITEMS_QUERY, {
+      address: address,
+      category: category,
+      filters: { offset: offset || 0, limit: limit || 50 }
+    }, true).then(function (data) { return data.items; });
+  }
+
+  function fetchRewardSummary(address, category) {
+    return gql(FETCH_REWARD_SUMMARY_QUERY, {
+      address: address,
+      category: category
+    }, true).then(function (data) { return data.rewards || []; });
+  }
+
   return {
     fetchItems: fetchItems,
     fetchAccessibleAssets: fetchAccessibleAssets,
@@ -804,6 +864,8 @@ var ElacityAPI = (function () {
     toggleLike: toggleLike,
     incrementViews: incrementViews,
     fetchSubscriptions: fetchSubscriptions,
+    fetchRoyaltyItems: fetchRoyaltyItems,
+    fetchRewardSummary: fetchRewardSummary,
     PRESETS: PRESETS
   };
 })();

@@ -85,6 +85,15 @@
     dom.viewSubscriptions = document.getElementById('view-subscriptions');
     dom.viewWatchlater = document.getElementById('view-watchlater');
     dom.viewDetail = document.getElementById('view-detail');
+    dom.viewEarnings = document.getElementById('view-earnings');
+    dom.earningsAuthPrompt = document.getElementById('earnings-auth-prompt');
+    dom.earningsSummary = document.getElementById('earnings-summary');
+    dom.earningsTotalAmount = document.getElementById('earnings-total-amount');
+    dom.earningsWithdrawAllBtn = document.getElementById('earnings-withdraw-all-btn');
+    dom.earningsTabs = document.getElementById('earnings-tabs');
+    dom.earningsList = document.getElementById('earnings-list');
+    dom.earningsLoading = document.getElementById('earnings-loading');
+    dom.earningsEmpty = document.getElementById('earnings-empty');
 
     dom.categoryTabs = document.getElementById('category-tabs');
     dom.contentTypeTabs = document.getElementById('content-type-tabs');
@@ -143,6 +152,7 @@
     dom.detailPriceSection = document.getElementById('detail-price-section');
     dom.detailPrice = document.getElementById('detail-price');
     dom.detailOwned = document.getElementById('detail-owned');
+    dom.detailBalanceInfo = document.getElementById('detail-balance-info');
     dom.buyBtn = document.getElementById('buy-btn');
     dom.playBtn = document.getElementById('play-btn');
     dom.playOwnedBtn = document.getElementById('play-owned-btn');
@@ -160,6 +170,58 @@
     dom.downloadStatus = document.getElementById('download-status');
     dom.toastContainer = document.getElementById('toast-container');
     dom.themeToggle = document.getElementById('theme-toggle');
+
+    dom.detailOwnerActions = document.getElementById('detail-owner-actions');
+    dom.resellBtn = document.getElementById('resell-btn');
+    dom.transferBtn = document.getElementById('transfer-btn');
+    dom.detailRoyaltyInfo = document.getElementById('detail-royalty-info');
+
+    dom.resellModal = document.getElementById('resell-modal');
+    dom.resellModalTitle = document.getElementById('resell-modal-title');
+    dom.resellPrice = document.getElementById('resell-price');
+    dom.resellQuantity = document.getElementById('resell-quantity');
+    dom.resellAssetName = document.getElementById('resell-asset-name');
+    dom.resellWalletPicker = document.getElementById('resell-wallet-picker');
+    dom.resellRoyaltyNote = document.getElementById('resell-royalty-note');
+    dom.resellStatus = document.getElementById('resell-status');
+    dom.resellConfirmBtn = document.getElementById('resell-confirm-btn');
+    dom.resellCancelBtn = document.getElementById('resell-cancel-btn');
+    dom.resellModalClose = document.getElementById('resell-modal-close');
+
+    dom.transferModal = document.getElementById('transfer-modal');
+    dom.transferRecipient = document.getElementById('transfer-recipient');
+    dom.transferAssetName = document.getElementById('transfer-asset-name');
+    dom.transferStatus = document.getElementById('transfer-status');
+    dom.transferConfirmBtn = document.getElementById('transfer-confirm-btn');
+    dom.transferCancelBtn = document.getElementById('transfer-cancel-btn');
+    dom.transferModalClose = document.getElementById('transfer-modal-close');
+
+    dom.detailGovernance = document.getElementById('detail-governance');
+    dom.govBalance = document.getElementById('governance-balance');
+    dom.govRewards = document.getElementById('governance-rewards');
+    dom.govWithdrawBtn = document.getElementById('gov-withdraw-btn');
+    dom.govListBtn = document.getElementById('gov-list-btn');
+    dom.govTransferBtn = document.getElementById('gov-transfer-btn');
+
+    dom.govListModal = document.getElementById('gov-list-modal');
+    dom.govListAssetName = document.getElementById('gov-list-asset-name');
+    dom.govListBalanceInfo = document.getElementById('gov-list-balance-info');
+    dom.govListAmount = document.getElementById('gov-list-amount');
+    dom.govListPrice = document.getElementById('gov-list-price');
+    dom.govListStatus = document.getElementById('gov-list-status');
+    dom.govListConfirmBtn = document.getElementById('gov-list-confirm-btn');
+    dom.govListCancelBtn = document.getElementById('gov-list-cancel-btn');
+    dom.govListModalClose = document.getElementById('gov-list-modal-close');
+
+    dom.govTransferModal = document.getElementById('gov-transfer-modal');
+    dom.govTransferAssetName = document.getElementById('gov-transfer-asset-name');
+    dom.govTransferBalanceInfo = document.getElementById('gov-transfer-balance-info');
+    dom.govTransferAmount = document.getElementById('gov-transfer-amount');
+    dom.govTransferRecipient = document.getElementById('gov-transfer-recipient');
+    dom.govTransferStatus = document.getElementById('gov-transfer-status');
+    dom.govTransferConfirmBtn = document.getElementById('gov-transfer-confirm-btn');
+    dom.govTransferCancelBtn = document.getElementById('gov-transfer-cancel-btn');
+    dom.govTransferModalClose = document.getElementById('gov-transfer-modal-close');
   }
 
   // ── Helpers ──────────────────────────────────────────
@@ -398,7 +460,8 @@
     subscriptions: 'viewSubscriptions',
     watchlater: 'viewWatchlater',
     detail: 'viewDetail',
-    channel: 'viewChannel'
+    channel: 'viewChannel',
+    earnings: 'viewEarnings'
   };
 
   function switchView(viewName) {
@@ -425,6 +488,7 @@
     if (viewName === 'channels') loadChannelsDirectory();
     if (viewName === 'subscriptions') renderSubscriptionsView();
     if (viewName === 'watchlater') loadWatchLater();
+    if (viewName === 'earnings') loadEarningsView();
   }
 
   // ── Video Card Rendering ─────────────────────────────
@@ -465,11 +529,15 @@
       else if (ownerWallet === 'sa') walletLabel = 'Smart';
       else if (ownerWallet === 'both') walletLabel = 'Both';
     }
+    var opType = (item.operative && item.operative.opType) || 0;
     var priceBadgeHtml = isOwned
       ? '<span class="price-badge owned-badge">Owned</span>'
       : (price ? '<span class="price-badge">' + price + '</span>' : '');
     var walletBadgeHtml = walletLabel
       ? '<span class="wallet-badge wallet-badge-' + (item._ownerWallet || '') + '">' + walletLabel + '</span>'
+      : '';
+    var resellableBadgeHtml = (isOwned && opType === 2)
+      ? '<span class="resellable-badge">Resellable</span>'
       : '';
 
     card.innerHTML =
@@ -478,6 +546,7 @@
         (contentType ? '<span class="content-badge">' + escapeHtml(contentType) + '</span>' : '') +
         priceBadgeHtml +
         walletBadgeHtml +
+        resellableBadgeHtml +
       '</div>' +
       '<div class="video-card-info">' +
         '<div class="video-card-avatar">' + avatarContent + '</div>' +
@@ -746,6 +815,8 @@
     dom.detailPriceSection.classList.add('hidden');
     dom.buyBtn.classList.remove('hidden');
     dom.detailOwned.classList.add('hidden');
+    dom.detailBalanceInfo.classList.add('hidden');
+    dom.detailBalanceInfo.innerHTML = '';
     dom.playBtn.classList.add('hidden');
     dom.playOwnedBtn.classList.add('hidden');
     dom.detailAttributes.innerHTML = '';
@@ -753,6 +824,19 @@
     dom.downloadNodeBtn.classList.add('hidden');
     dom.openViewerBtn.classList.add('hidden');
     dom.downloadStatus.classList.add('hidden');
+    dom.detailOwnerActions.classList.add('hidden');
+    dom.resellBtn.classList.add('hidden');
+    dom.transferBtn.classList.add('hidden');
+    dom.detailRoyaltyInfo.classList.add('hidden');
+    dom.detailRoyaltyInfo.innerHTML = '';
+    var sellersEl = document.getElementById('detail-sellers-list');
+    if (sellersEl) { sellersEl.classList.add('hidden'); sellersEl.innerHTML = ''; }
+    dom.detailGovernance.classList.add('hidden');
+    dom.govBalance.innerHTML = '';
+    dom.govRewards.innerHTML = '';
+    dom.govWithdrawBtn.classList.add('hidden');
+    dom.govListBtn.classList.add('hidden');
+    dom.govTransferBtn.classList.add('hidden');
     dom.saveBtn.classList.remove('saved');
     dom.saveLabel.textContent = 'Save';
     dom.likeBtn.classList.remove('liked');
@@ -895,6 +979,33 @@
         var ownedPrice = listing.price / Math.pow(10, ownedDecimals);
         dom.detailPrice.textContent = formatPrice(ownedPrice, listing.payToken) + ' (Owned)';
       }
+
+      var opType = (nft.operative && nft.operative.opType) || 0;
+      var hasActions = false;
+
+      if (opType === 2) {
+        dom.resellBtn.classList.remove('hidden');
+        hasActions = true;
+      }
+
+      var isChannelNFT = nft.variant === 'ERC721' || (!nft.operative);
+      if (isChannelNFT) {
+        dom.transferBtn.classList.remove('hidden');
+        hasActions = true;
+      }
+
+      if (hasActions) {
+        dom.detailOwnerActions.classList.remove('hidden');
+      }
+    }
+
+    renderRoyaltyInfo(nft);
+    renderOpTypeBadge(nft);
+    if (isOwned) {
+      renderOwnershipBalances(nft);
+    }
+    if (nft.operative && nft.operative.address && Wallet.isConnected()) {
+      renderGovernanceSection(nft);
     }
 
     var attrs = (meta.attributes || []).filter(function (a) {
@@ -912,6 +1023,597 @@
         '</div>';
     });
     dom.detailAttributes.innerHTML = attrHtml;
+  }
+
+  var OP_TYPE_LABELS = { 0: 'Free', 1: 'Buy Once', 2: 'Buy & Resell' };
+
+  function renderRoyaltyInfo(nft) {
+    var props = (nft.metadata && nft.metadata.properties) || {};
+    var operative = nft.operative || {};
+    var resellerCutRaw = operative.resellerCut;
+    var opType = operative.opType || 0;
+    var resellerPct = resellerCutRaw ? (resellerCutRaw / 10) : 0;
+    var creatorPct = resellerCutRaw ? (100 - resellerPct) : null;
+
+    var html = '<div class="royalty-info-inner">';
+    html += '<span class="royalty-info-title">License</span>';
+    html += '<span class="royalty-chip optype-chip">' + escapeHtml(OP_TYPE_LABELS[opType] || 'Unknown') + '</span>';
+    if (creatorPct !== null) {
+      html += '<span class="royalty-chip">Creator royalty: ' + escapeHtml(String(creatorPct)) + '%</span>';
+    }
+    if (resellerPct && opType === 2) {
+      html += '<span class="royalty-chip reseller-chip">Reseller keeps ' + escapeHtml(String(resellerPct)) + '%</span>';
+    }
+    html += '</div>';
+    dom.detailRoyaltyInfo.innerHTML = html;
+    dom.detailRoyaltyInfo.classList.remove('hidden');
+  }
+
+  function renderOwnershipBalances(nft) {
+    var operative = nft.operative || {};
+    var operativeAddr = operative.address || '';
+    if (!operativeAddr) return;
+
+    var eoaAddr = Wallet.getAddress();
+    var saAddr = Wallet.getSmartAccountAddress();
+    var hasSA = Wallet.hasSmartAccount();
+
+    if (!eoaAddr) return;
+
+    var promises = [Wallet.getAccessTokenBalance(operativeAddr, eoaAddr)];
+    if (hasSA && saAddr && saAddr.toLowerCase() !== eoaAddr.toLowerCase()) {
+      promises.push(Wallet.getAccessTokenBalance(operativeAddr, saAddr));
+    }
+
+    Promise.all(promises).then(function (results) {
+      var eoaBal = parseInt(results[0]) || 0;
+      var saBal = results[1] !== undefined ? (parseInt(results[1]) || 0) : 0;
+      var total = eoaBal + saBal;
+
+      if (total === 0) return;
+
+      var html = '';
+      html += '<span class="balance-chip eoa">EOA: ' + eoaBal + ' access token' + (eoaBal !== 1 ? 's' : '') + '</span>';
+      if (hasSA) {
+        html += '<span class="balance-chip sa">Smart: ' + saBal + ' access token' + (saBal !== 1 ? 's' : '') + '</span>';
+      }
+
+      dom.detailBalanceInfo.innerHTML = html;
+      dom.detailBalanceInfo.classList.remove('hidden');
+    }).catch(function (err) {
+      console.warn('[Detail] Failed to fetch balances:', err);
+    });
+  }
+
+  function renderOpTypeBadge(nft) {
+    var operative = nft.operative || {};
+    var opType = operative.opType || 0;
+    var operativeAddr = operative.address || '';
+    var ownerAddr = Wallet.getSignerAddress() || Wallet.getAddress() || '';
+
+    if (!operativeAddr || !ownerAddr) return;
+
+    var sellersContainer = document.getElementById('detail-sellers-list');
+    if (!sellersContainer) return;
+    sellersContainer.innerHTML = '';
+    sellersContainer.classList.add('hidden');
+
+    var tokenId = (nft.tokenId && nft.tokenId.hexTokenID) || nft.tokenId || '0';
+    var eoaAddr = Wallet.getAddress() || '';
+    var saAddr = Wallet.getSmartAccountAddress() || '';
+
+    Wallet.getAccessSellers(operativeAddr, tokenId).then(function (sellers) {
+      if (!sellers || sellers.length === 0) return;
+
+      var html = '<div class="sellers-list-inner">';
+      html += '<span class="sellers-title">Active Sellers (' + sellers.length + ')</span>';
+
+      var promises = sellers.map(function (seller) {
+        return Wallet.getAccessListing(operativeAddr, tokenId, seller).then(function (listing) {
+          return { seller: seller, listing: listing };
+        });
+      });
+
+      Promise.all(promises).then(function (results) {
+        results.forEach(function (r) {
+          if (!r.listing || r.listing.quantity === 0) return;
+          var decimals = getTokenSymbol(r.listing.payToken) === 'USDC' ? 6 : 18;
+          var displayPrice = Number(r.listing.pricePerToken) / Math.pow(10, decimals);
+          var sellerLower = r.seller.toLowerCase();
+          var isEOA = (sellerLower === eoaAddr.toLowerCase());
+          var isSA = saAddr && (sellerLower === saAddr.toLowerCase());
+          var isSelf = isEOA || isSA;
+          var selfLabel = isEOA ? 'You (EOA)' : isSA ? 'You (Smart)' : '';
+          html += '<div class="seller-row' + (isSelf ? ' seller-self' : '') + '">';
+          html += '<span class="seller-addr">' + (isSelf ? selfLabel : formatAddress(r.seller)) + '</span>';
+          html += '<span class="seller-price">' + formatPrice(displayPrice, r.listing.payToken) + '</span>';
+          html += '<span class="seller-qty">x' + r.listing.quantity + '</span>';
+          if (isSelf) {
+            html += '<button class="cancel-listing-btn" data-operative="' + operativeAddr + '" data-tokenid="' + tokenId + '" data-qty="' + r.listing.quantity + '">Cancel</button>';
+          }
+          html += '</div>';
+        });
+        html += '</div>';
+        sellersContainer.innerHTML = html;
+        sellersContainer.classList.remove('hidden');
+
+        sellersContainer.querySelectorAll('.cancel-listing-btn').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            var op = btn.getAttribute('data-operative');
+            var tid = btn.getAttribute('data-tokenid');
+            var qty = btn.getAttribute('data-qty');
+            btn.disabled = true;
+            btn.textContent = '...';
+            Wallet.cancelAccessListing(op, tid, qty)
+              .then(function () {
+                showToast('Listing cancelled', 'success');
+                btn.parentNode.remove();
+              })
+              .catch(function (err) {
+                btn.disabled = false;
+                btn.textContent = 'Cancel';
+                if (err.message && err.message.indexOf('rejected') === -1) {
+                  showToast('Failed: ' + decodeContractError(err.message), 'error');
+                }
+              });
+          });
+        });
+      });
+    });
+  }
+
+  function decodeContractError(msg) {
+    if (!msg) return 'Transaction failed';
+    var errorMap = {
+      'AvailabilityError': 'Not enough copies available',
+      'InsufficientBalance': 'Insufficient balance',
+      'InsufficientOwningError': "You don't own enough tokens",
+      'InvalidOperativeError': 'Invalid content contract',
+      'InvalidPaymentTokenError': 'Payment token not accepted',
+      'NotApprovedError': 'Please approve the contract first',
+      'NotAllowedError': "You don't have permission for this action",
+      'PriceFulfillmentError': 'Incorrect payment amount',
+      'NoOverrideError': 'Cannot override existing listing',
+      'AccessDenied': "You don't have access to this content",
+      'InvalidSignature': 'Invalid license signature'
+    };
+    var keys = Object.keys(errorMap);
+    for (var i = 0; i < keys.length; i++) {
+      if (msg.indexOf(keys[i]) !== -1) return errorMap[keys[i]];
+    }
+    if (msg.indexOf('insufficient') !== -1) return 'Insufficient balance for this transaction';
+    if (msg.indexOf('revert') !== -1) return 'Transaction reverted by contract';
+    return msg;
+  }
+
+  // ── Governance (Royalty Shares) ─────────────────────
+
+  function renderGovernanceSection(nft) {
+    var operative = nft.operative || {};
+    var operativeAddr = operative.address || '';
+    if (!operativeAddr) return;
+
+    var eoaAddr = Wallet.getAddress() || '';
+    var saAddr = Wallet.getSmartAccountAddress() || '';
+    var hasSA = Wallet.hasSmartAccount();
+    if (!eoaAddr) return;
+
+    var balancePromises = [Wallet.getRoyaltyShareBalance(operativeAddr, eoaAddr)];
+    if (hasSA && saAddr && saAddr.toLowerCase() !== eoaAddr.toLowerCase()) {
+      balancePromises.push(Wallet.getRoyaltyShareBalance(operativeAddr, saAddr));
+    }
+
+    Promise.all(balancePromises).then(function (results) {
+      var eoaBal = parseInt(results[0]) || 0;
+      var saBal = results[1] !== undefined ? (parseInt(results[1]) || 0) : 0;
+      var totalBal = eoaBal + saBal;
+
+      if (totalBal <= 0) return;
+
+      var pct = (totalBal / 10).toFixed(1);
+      var balHtml = '<span class="label">Your royalty shares:</span> ';
+      if (hasSA) {
+        balHtml += '<span class="balance-chip eoa" style="font-size:11px;">' + eoaBal + ' EOA</span>';
+        balHtml += '<span class="balance-chip sa" style="font-size:11px;">' + saBal + ' Smart</span>';
+        balHtml += '<span class="value" style="margin-left:6px;">(' + pct + '% total)</span>';
+      } else {
+        balHtml += '<span class="value">' + totalBal + ' tokens (' + pct + '%)</span>';
+      }
+      dom.govBalance.innerHTML = balHtml;
+
+      dom.govListBtn.classList.remove('hidden');
+      dom.govTransferBtn.classList.remove('hidden');
+      dom.detailGovernance.classList.remove('hidden');
+
+      var rewardPromises = [Wallet.getPendingRewards(operativeAddr, eoaAddr, USDC_ADDRESS)];
+      if (hasSA && saAddr && saAddr.toLowerCase() !== eoaAddr.toLowerCase()) {
+        rewardPromises.push(Wallet.getPendingRewards(operativeAddr, saAddr, USDC_ADDRESS));
+      }
+
+      Promise.all(rewardPromises).then(function (rResults) {
+        var eoaRewards = Number(rResults[0]) || 0;
+        var saRewards = rResults[1] !== undefined ? (Number(rResults[1]) || 0) : 0;
+        var totalRewards = eoaRewards + saRewards;
+
+        if (totalRewards === 0) {
+          dom.govRewards.innerHTML = '<span class="label">Pending rewards:</span> <span class="value">0 USDC</span>';
+          return;
+        }
+
+        var rewardHtml = '<span class="label">Pending rewards:</span> ';
+        if (hasSA && (eoaRewards > 0 || saRewards > 0)) {
+          if (eoaRewards > 0) rewardHtml += '<span class="balance-chip eoa" style="font-size:11px;">' + (eoaRewards / 1e6).toFixed(2) + ' USDC (EOA)</span>';
+          if (saRewards > 0) rewardHtml += '<span class="balance-chip sa" style="font-size:11px;">' + (saRewards / 1e6).toFixed(2) + ' USDC (Smart)</span>';
+        } else {
+          rewardHtml += '<span class="value">' + (totalRewards / 1e6).toFixed(2) + ' USDC</span>';
+        }
+        dom.govRewards.innerHTML = rewardHtml;
+        dom.govWithdrawBtn.classList.remove('hidden');
+      });
+    });
+  }
+
+  function handleGovWithdraw() {
+    var nft = state.detailItem;
+    if (!nft) return;
+    var operativeAddr = (nft.operative && nft.operative.address) || '';
+    if (!operativeAddr) return;
+
+    dom.govWithdrawBtn.disabled = true;
+    dom.govWithdrawBtn.textContent = 'Withdrawing...';
+
+    Wallet.withdrawRewards(operativeAddr, USDC_ADDRESS)
+      .then(function () {
+        showToast('Rewards withdrawn!', 'success');
+        dom.govWithdrawBtn.classList.add('hidden');
+        dom.govRewards.innerHTML = '<span class="label">Pending rewards:</span> <span class="value">0 USDC</span>';
+      })
+      .catch(function (err) {
+        if (err.message && err.message.indexOf('rejected') === -1) {
+          showToast('Withdraw failed: ' + decodeContractError(err.message), 'error');
+        }
+      })
+      .finally(function () {
+        dom.govWithdrawBtn.disabled = false;
+        dom.govWithdrawBtn.textContent = 'Withdraw';
+      });
+  }
+
+  function openGovListModal() {
+    var nft = state.detailItem;
+    if (!nft) return;
+    var meta = nft.metadata || {};
+    dom.govListAssetName.textContent = meta.name || nft.name || 'Untitled';
+    dom.govListAmount.value = '';
+    dom.govListPrice.value = '';
+    dom.govListStatus.classList.add('hidden');
+    dom.govListConfirmBtn.disabled = false;
+
+    var operativeAddr = (nft.operative && nft.operative.address) || '';
+    var ownerAddr = Wallet.getSignerAddress() || Wallet.getAddress() || '';
+    Wallet.getRoyaltyShareBalance(operativeAddr, ownerAddr).then(function (bal) {
+      dom.govListBalanceInfo.textContent = 'You hold ' + bal + ' royalty share tokens (' + (bal / 10).toFixed(1) + '%)';
+    });
+
+    dom.govListModal.classList.remove('hidden');
+  }
+
+  function closeGovListModal() { dom.govListModal.classList.add('hidden'); }
+
+  function handleGovListConfirm() {
+    var nft = state.detailItem;
+    if (!nft) return;
+
+    var amount = parseInt(dom.govListAmount.value, 10);
+    var price = parseFloat(dom.govListPrice.value);
+
+    if (!amount || amount <= 0) { showToast('Enter a valid amount', 'error'); return; }
+    if (!price || price <= 0) { showToast('Enter a valid price', 'error'); return; }
+    if (price > 1000000) { showToast('Price exceeds maximum', 'error'); return; }
+
+    var operativeAddr = (nft.operative && nft.operative.address) || '';
+    var priceWei = BigInt(Math.round(price * 1e6)).toString();
+
+    dom.govListConfirmBtn.disabled = true;
+    dom.govListStatus.textContent = 'Submitting...';
+    dom.govListStatus.className = 'modal-status pending';
+    dom.govListStatus.classList.remove('hidden');
+
+    Wallet.listRoyaltyShares(operativeAddr, amount, priceWei, USDC_ADDRESS)
+      .then(function () {
+        dom.govListStatus.textContent = 'Listed!';
+        dom.govListStatus.className = 'modal-status success';
+        showToast('Royalty shares listed for sale!', 'success');
+        setTimeout(closeGovListModal, 1500);
+      })
+      .catch(function (err) {
+        if (err.message && err.message.indexOf('rejected') !== -1) {
+          dom.govListStatus.classList.add('hidden');
+          dom.govListConfirmBtn.disabled = false;
+          return;
+        }
+        dom.govListStatus.textContent = decodeContractError(err.message);
+        dom.govListStatus.className = 'modal-status error';
+        dom.govListConfirmBtn.disabled = false;
+      });
+  }
+
+  function openGovTransferModal() {
+    var nft = state.detailItem;
+    if (!nft) return;
+    var meta = nft.metadata || {};
+    dom.govTransferAssetName.textContent = meta.name || nft.name || 'Untitled';
+    dom.govTransferAmount.value = '';
+    dom.govTransferRecipient.value = '';
+    dom.govTransferStatus.classList.add('hidden');
+    dom.govTransferConfirmBtn.disabled = false;
+
+    var operativeAddr = (nft.operative && nft.operative.address) || '';
+    var ownerAddr = Wallet.getSignerAddress() || Wallet.getAddress() || '';
+    Wallet.getRoyaltyShareBalance(operativeAddr, ownerAddr).then(function (bal) {
+      dom.govTransferBalanceInfo.textContent = 'You hold ' + bal + ' royalty share tokens (' + (bal / 10).toFixed(1) + '%)';
+    });
+
+    dom.govTransferModal.classList.remove('hidden');
+  }
+
+  function closeGovTransferModal() { dom.govTransferModal.classList.add('hidden'); }
+
+  function handleGovTransferConfirm() {
+    var nft = state.detailItem;
+    if (!nft) return;
+
+    var amount = parseInt(dom.govTransferAmount.value, 10);
+    var recipient = (dom.govTransferRecipient.value || '').trim();
+
+    if (!amount || amount <= 0) { showToast('Enter a valid amount', 'error'); return; }
+    if (!recipient || !ethers.isAddress(recipient)) { showToast('Enter a valid address', 'error'); return; }
+
+    var operativeAddr = (nft.operative && nft.operative.address) || '';
+
+    dom.govTransferConfirmBtn.disabled = true;
+    dom.govTransferStatus.textContent = 'Submitting...';
+    dom.govTransferStatus.className = 'modal-status pending';
+    dom.govTransferStatus.classList.remove('hidden');
+
+    Wallet.transferRoyaltyShares(operativeAddr, recipient, amount)
+      .then(function () {
+        dom.govTransferStatus.textContent = 'Transferred!';
+        dom.govTransferStatus.className = 'modal-status success';
+        showToast('Royalty shares transferred!', 'success');
+        setTimeout(closeGovTransferModal, 1500);
+      })
+      .catch(function (err) {
+        if (err.message && err.message.indexOf('rejected') !== -1) {
+          dom.govTransferStatus.classList.add('hidden');
+          dom.govTransferConfirmBtn.disabled = false;
+          return;
+        }
+        dom.govTransferStatus.textContent = decodeContractError(err.message);
+        dom.govTransferStatus.className = 'modal-status error';
+        dom.govTransferConfirmBtn.disabled = false;
+      });
+  }
+
+  // ── Resell Modal ──────────────────────────────────
+
+  function openResellModal() {
+    var nft = state.detailItem;
+    if (!nft) return;
+
+    var opType = (nft.operative && nft.operative.opType) || 0;
+    if (opType !== 2) {
+      showToast('This content is not resellable (buy-once only)', 'error');
+      return;
+    }
+
+    var operative = nft.operative || {};
+    var operativeAddr = operative.address || '';
+    var meta = nft.metadata || {};
+    dom.resellAssetName.textContent = meta.name || nft.name || 'Untitled';
+    dom.resellPrice.value = '';
+    dom.resellQuantity.value = '1';
+    dom.resellStatus.classList.add('hidden');
+    dom.resellConfirmBtn.disabled = false;
+    state.resellSelectedWallet = null;
+
+    var resellerCutRaw = operative.resellerCut || 0;
+    var resellerPct = resellerCutRaw ? (resellerCutRaw / 10) : 0;
+    dom.resellRoyaltyNote.textContent = resellerPct
+      ? 'You receive ' + resellerPct + '% of the sale price. The creator receives ' + (100 - resellerPct) + '%.'
+      : '';
+
+    var eoaAddr = Wallet.getAddress();
+    var saAddr = Wallet.getSmartAccountAddress();
+    var hasSA = Wallet.hasSmartAccount();
+
+    dom.resellWalletPicker.innerHTML = '<div style="font-size:12px;color:var(--text-secondary);">Loading balances...</div>';
+    dom.resellModal.classList.remove('hidden');
+
+    var balancePromises = [
+      operativeAddr ? Wallet.getAccessTokenBalance(operativeAddr, eoaAddr) : Promise.resolve('0')
+    ];
+    if (hasSA && saAddr) {
+      balancePromises.push(
+        operativeAddr ? Wallet.getAccessTokenBalance(operativeAddr, saAddr) : Promise.resolve('0')
+      );
+    }
+
+    Promise.all(balancePromises).then(function (results) {
+      var eoaBal = parseInt(results[0]) || 0;
+      var saBal = results[1] !== undefined ? (parseInt(results[1]) || 0) : 0;
+
+      var html = '';
+      html += '<div class="wallet-picker-option' + (eoaBal > 0 ? ' selected' : ' disabled') + '" data-wallet="eoa">';
+      html += '<span class="wallet-picker-label">EOA Wallet</span>';
+      html += '<span class="wallet-picker-balance">' + eoaBal + ' token' + (eoaBal !== 1 ? 's' : '') + '</span>';
+      html += '<span class="wallet-picker-addr">' + formatAddress(eoaAddr) + '</span>';
+      html += '</div>';
+
+      if (hasSA && saAddr) {
+        html += '<div class="wallet-picker-option' + (saBal > 0 && eoaBal === 0 ? ' selected' : '') + (saBal === 0 ? ' disabled' : '') + '" data-wallet="sa">';
+        html += '<span class="wallet-picker-label">Smart Account</span>';
+        html += '<span class="wallet-picker-balance">' + saBal + ' token' + (saBal !== 1 ? 's' : '') + '</span>';
+        html += '<span class="wallet-picker-addr">' + formatAddress(saAddr) + '</span>';
+        html += '</div>';
+      }
+
+      dom.resellWalletPicker.innerHTML = html;
+
+      if (eoaBal > 0) {
+        state.resellSelectedWallet = 'eoa';
+        dom.resellQuantity.max = eoaBal;
+      } else if (saBal > 0) {
+        state.resellSelectedWallet = 'sa';
+        dom.resellQuantity.max = saBal;
+      }
+
+      dom.resellWalletPicker.querySelectorAll('.wallet-picker-option').forEach(function (opt) {
+        opt.addEventListener('click', function () {
+          if (opt.classList.contains('disabled')) return;
+          dom.resellWalletPicker.querySelectorAll('.wallet-picker-option').forEach(function (o) { o.classList.remove('selected'); });
+          opt.classList.add('selected');
+          state.resellSelectedWallet = opt.getAttribute('data-wallet');
+          var maxQty = state.resellSelectedWallet === 'sa' ? saBal : eoaBal;
+          dom.resellQuantity.max = maxQty;
+          if (parseInt(dom.resellQuantity.value) > maxQty) dom.resellQuantity.value = maxQty;
+        });
+      });
+    }).catch(function () {
+      dom.resellWalletPicker.innerHTML = '';
+      state.resellSelectedWallet = 'eoa';
+    });
+  }
+
+  function closeResellModal() {
+    dom.resellModal.classList.add('hidden');
+  }
+
+  function handleResellConfirm() {
+    var nft = state.detailItem;
+    if (!nft) return;
+
+    if (!state.resellSelectedWallet) {
+      showToast('Please select a wallet to sell from', 'error');
+      return;
+    }
+
+    var price = parseFloat(dom.resellPrice.value);
+    var quantity = parseInt(dom.resellQuantity.value, 10) || 1;
+
+    if (!price || price <= 0) {
+      showToast('Please enter a valid price', 'error');
+      return;
+    }
+    if (price > 1000000) {
+      showToast('Price exceeds maximum (1,000,000 USDC)', 'error');
+      return;
+    }
+
+    var operativeAddr = (nft.operative && nft.operative.address) || '';
+    if (!operativeAddr) {
+      showToast('Cannot list — no operative contract found', 'error');
+      return;
+    }
+
+    var ledgerAddr = (nft.metadata && nft.metadata.properties && nft.metadata.properties.ledger)
+      || nft.contractAddress || (nft.channel && nft.channel.address) || '';
+    var tokenId = (nft.tokenId && nft.tokenId.hexTokenID) || nft.tokenId || '0';
+
+    var priceWei = BigInt(Math.round(price * 1e6)).toString();
+
+    dom.resellConfirmBtn.disabled = true;
+    dom.resellStatus.textContent = 'Submitting transaction...';
+    dom.resellStatus.className = 'modal-status pending';
+    dom.resellStatus.classList.remove('hidden');
+
+    Wallet.resellAccessToken(ledgerAddr, tokenId, quantity, priceWei, USDC_ADDRESS, operativeAddr, state.resellSelectedWallet)
+      .then(function () {
+        dom.resellStatus.textContent = 'Listed for sale!';
+        dom.resellStatus.className = 'modal-status success';
+        showToast('Access token listed for resale!', 'success');
+        setTimeout(closeResellModal, 1500);
+      })
+      .catch(function (err) {
+        if (err.message && (err.message.indexOf('rejected') !== -1 || err.message.indexOf('denied') !== -1)) {
+          dom.resellStatus.classList.add('hidden');
+          dom.resellConfirmBtn.disabled = false;
+          return;
+        }
+        dom.resellStatus.textContent = decodeContractError(err.message) || 'Transaction failed';
+        dom.resellStatus.className = 'modal-status error';
+        dom.resellConfirmBtn.disabled = false;
+      });
+  }
+
+  // ── Transfer Modal ────────────────────────────────
+
+  function openTransferModal() {
+    var nft = state.detailItem;
+    if (!nft) return;
+
+    var isChannelNFT = nft.variant === 'ERC721' || (!nft.operative);
+    if (!isChannelNFT) {
+      showToast('Access tokens cannot be transferred directly. Use the Resell feature instead.', 'error');
+      return;
+    }
+
+    var meta = nft.metadata || {};
+    dom.transferAssetName.textContent = meta.name || nft.name || 'Untitled';
+    dom.transferRecipient.value = '';
+    dom.transferStatus.classList.add('hidden');
+    dom.transferConfirmBtn.disabled = false;
+    dom.transferModal.classList.remove('hidden');
+  }
+
+  function closeTransferModal() {
+    dom.transferModal.classList.add('hidden');
+  }
+
+  function handleTransferConfirm() {
+    var nft = state.detailItem;
+    if (!nft) return;
+
+    var recipient = (dom.transferRecipient.value || '').trim();
+    if (!recipient || !ethers.isAddress(recipient)) {
+      showToast('Please enter a valid Ethereum address', 'error');
+      return;
+    }
+
+    var ownAddress = (Wallet.getAddress() || '').toLowerCase();
+    if (recipient.toLowerCase() === ownAddress) {
+      showToast('Cannot transfer to your own address', 'error');
+      return;
+    }
+
+    var nftAddress = nft.contractAddress || (nft.channel && nft.channel.address) || '';
+    var tokenId = (nft.tokenId && nft.tokenId.hexTokenID) || nft.tokenId || '0';
+
+    dom.transferConfirmBtn.disabled = true;
+    dom.transferStatus.textContent = 'Submitting transaction...';
+    dom.transferStatus.className = 'modal-status pending';
+    dom.transferStatus.classList.remove('hidden');
+
+    Wallet.transferNFT(nftAddress, tokenId, recipient, false)
+      .then(function () {
+        dom.transferStatus.textContent = 'Transfer submitted!';
+        dom.transferStatus.className = 'modal-status success';
+        showToast('NFT transfer submitted!', 'success');
+        setTimeout(function () {
+          closeTransferModal();
+          loadMyAssets();
+        }, 2000);
+      })
+      .catch(function (err) {
+        if (err.message && (err.message.indexOf('rejected') !== -1 || err.message.indexOf('denied') !== -1)) {
+          dom.transferStatus.classList.add('hidden');
+          dom.transferConfirmBtn.disabled = false;
+          return;
+        }
+        dom.transferStatus.textContent = decodeContractError(err.message) || 'Transaction failed';
+        dom.transferStatus.className = 'modal-status error';
+        dom.transferConfirmBtn.disabled = false;
+      });
   }
 
   function goBack() {
@@ -1970,7 +2672,7 @@
         if (msg.indexOf('user rejected') !== -1 || msg.indexOf('User denied') !== -1) {
           setPurchaseStatus('error', 'Transaction cancelled by user.');
         } else {
-          setPurchaseStatus('error', 'Purchase failed: ' + msg);
+          setPurchaseStatus('error', 'Purchase failed: ' + decodeContractError(msg));
         }
       });
   }
@@ -2404,6 +3106,17 @@
       if (state.channelsDirLoaded) renderChannelsDirectory();
     });
 
+    dom.earningsTabs.addEventListener('click', function (e) {
+      var tab = e.target.closest('.earnings-tab');
+      if (!tab) return;
+      dom.earningsTabs.querySelectorAll('.earnings-tab').forEach(function (t) { t.classList.remove('active'); });
+      tab.classList.add('active');
+      state.earningsTab = tab.dataset.tab;
+      loadEarningsData(state.earningsTab);
+    });
+
+    dom.earningsWithdrawAllBtn.addEventListener('click', handleWithdrawAll);
+
     dom.searchInput.addEventListener('input', function () {
       clearTimeout(state.searchTimeout);
       state.searchTimeout = setTimeout(function () {
@@ -2435,12 +3148,13 @@
     });
 
     document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape' && !document.getElementById('subscribe-modal').classList.contains('hidden')) {
-        closeSubscribeModal();
-        return;
-      }
-      if (e.key === 'Escape' && (state.activeView === 'detail' || state.activeView === 'channel')) {
-        goBack();
+      if (e.key === 'Escape') {
+        if (!dom.govListModal.classList.contains('hidden')) { closeGovListModal(); return; }
+        if (!dom.govTransferModal.classList.contains('hidden')) { closeGovTransferModal(); return; }
+        if (!dom.resellModal.classList.contains('hidden')) { closeResellModal(); return; }
+        if (!dom.transferModal.classList.contains('hidden')) { closeTransferModal(); return; }
+        if (!document.getElementById('subscribe-modal').classList.contains('hidden')) { closeSubscribeModal(); return; }
+        if (state.activeView === 'detail' || state.activeView === 'channel') { goBack(); }
       }
     });
 
@@ -2454,6 +3168,29 @@
     dom.playOwnedBtn.addEventListener('click', handlePlay);
     dom.saveBtn.addEventListener('click', handleSave);
     dom.likeBtn.addEventListener('click', handleLike);
+
+    dom.resellBtn.addEventListener('click', openResellModal);
+    dom.transferBtn.addEventListener('click', openTransferModal);
+    dom.resellConfirmBtn.addEventListener('click', handleResellConfirm);
+    dom.resellCancelBtn.addEventListener('click', closeResellModal);
+    dom.resellModalClose.addEventListener('click', closeResellModal);
+    dom.resellModal.addEventListener('click', function (e) { if (e.target === this) closeResellModal(); });
+    dom.transferConfirmBtn.addEventListener('click', handleTransferConfirm);
+    dom.transferCancelBtn.addEventListener('click', closeTransferModal);
+    dom.transferModalClose.addEventListener('click', closeTransferModal);
+    dom.transferModal.addEventListener('click', function (e) { if (e.target === this) closeTransferModal(); });
+
+    dom.govWithdrawBtn.addEventListener('click', handleGovWithdraw);
+    dom.govListBtn.addEventListener('click', openGovListModal);
+    dom.govTransferBtn.addEventListener('click', openGovTransferModal);
+    dom.govListConfirmBtn.addEventListener('click', handleGovListConfirm);
+    dom.govListCancelBtn.addEventListener('click', closeGovListModal);
+    dom.govListModalClose.addEventListener('click', closeGovListModal);
+    dom.govListModal.addEventListener('click', function (e) { if (e.target === this) closeGovListModal(); });
+    dom.govTransferConfirmBtn.addEventListener('click', handleGovTransferConfirm);
+    dom.govTransferCancelBtn.addEventListener('click', closeGovTransferModal);
+    dom.govTransferModalClose.addEventListener('click', closeGovTransferModal);
+    dom.govTransferModal.addEventListener('click', function (e) { if (e.target === this) closeGovTransferModal(); });
 
     Wallet.setupListeners({
       onAccountChange: function () {
@@ -2473,6 +3210,248 @@
           });
       },
       onChainChange: function () { updateWalletUI(); }
+    });
+  }
+
+  // ── Earnings View ──────────────────────────────────────
+
+  state.earningsTab = 'assets';
+  state.earningsData = null;
+  state.earningsRewards = null;
+
+  function loadEarningsView() {
+    if (!Wallet.isConnected() || !ElacityAPI.isAuthenticated()) {
+      dom.earningsAuthPrompt.classList.remove('hidden');
+      dom.earningsSummary.classList.add('hidden');
+      dom.earningsList.innerHTML = '';
+      dom.earningsEmpty.classList.add('hidden');
+      return;
+    }
+    dom.earningsAuthPrompt.classList.add('hidden');
+    loadEarningsData(state.earningsTab);
+  }
+
+  function loadEarningsData(category) {
+    var eoaAddr = Wallet.getAddress();
+    var saAddr = Wallet.getSmartAccountAddress();
+    var hasSA = Wallet.hasSmartAccount() && saAddr && saAddr.toLowerCase() !== (eoaAddr || '').toLowerCase();
+    if (!eoaAddr) return;
+
+    dom.earningsList.innerHTML = '';
+    dom.earningsEmpty.classList.add('hidden');
+    dom.earningsLoading.classList.remove('hidden');
+    dom.earningsSummary.classList.add('hidden');
+
+    var itemsPromises = [ElacityAPI.fetchRoyaltyItems(eoaAddr, category, 0, 100)];
+    var rewardsPromises = [ElacityAPI.fetchRewardSummary(eoaAddr, category)];
+    if (hasSA) {
+      itemsPromises.push(ElacityAPI.fetchRoyaltyItems(saAddr, category, 0, 100));
+      rewardsPromises.push(ElacityAPI.fetchRewardSummary(saAddr, category));
+    }
+
+    Promise.all([Promise.all(itemsPromises), Promise.all(rewardsPromises)]).then(function (all) {
+      dom.earningsLoading.classList.add('hidden');
+      var itemResults = all[0];
+      var rewardResults = all[1];
+
+      var mergedData = [];
+      var seenIds = {};
+      itemResults.forEach(function (res) {
+        if (!res || !res.data) return;
+        res.data.forEach(function (item) {
+          var key = (item.address || item.id || '').toLowerCase();
+          if (!seenIds[key]) {
+            seenIds[key] = true;
+            mergedData.push(item);
+          }
+        });
+      });
+
+      var rewards = [];
+      var seenRewards = {};
+      rewardResults.forEach(function (arr) {
+        (arr || []).forEach(function (r) {
+          var key = (r.address || '').toLowerCase();
+          if (!seenRewards[key]) {
+            seenRewards[key] = true;
+            rewards.push(r);
+          } else {
+            var existing = rewards.find(function (e) { return e.address.toLowerCase() === key; });
+            if (existing) {
+              existing.unclaimedRewards = (existing.unclaimedRewards || 0) + (r.unclaimedRewards || 0);
+              (r.distributions || []).forEach(function (d) {
+                var found = existing.distributions.find(function (ed) { return ed.paymentToken === d.paymentToken; });
+                if (found) { found.volume += d.volume; }
+                else { existing.distributions.push(d); }
+              });
+            }
+          }
+        });
+      });
+
+      var items = { total: mergedData.length, data: mergedData };
+      state.earningsData = items;
+      state.earningsRewards = rewards;
+
+      var rewardsMap = {};
+      var totalUnclaimed = 0;
+      rewards.forEach(function (r) {
+        rewardsMap[r.address.toLowerCase()] = r;
+        totalUnclaimed += (r.unclaimedRewards || 0);
+      });
+
+      dom.earningsTotalAmount.textContent = '$' + totalUnclaimed.toFixed(4);
+      dom.earningsSummary.classList.remove('hidden');
+
+      if (totalUnclaimed > 0) {
+        dom.earningsWithdrawAllBtn.disabled = false;
+      } else {
+        dom.earningsWithdrawAllBtn.disabled = true;
+      }
+
+      if (!items || !items.data || items.data.length === 0) {
+        dom.earningsEmpty.classList.remove('hidden');
+        return;
+      }
+
+      renderEarningsList(items.data, rewardsMap, category);
+    }).catch(function (err) {
+      dom.earningsLoading.classList.add('hidden');
+      dom.earningsEmpty.classList.remove('hidden');
+      console.warn('[Earnings] Load failed:', err);
+    });
+  }
+
+  function renderEarningsList(items, rewardsMap, category) {
+    var html = '';
+    items.forEach(function (item) {
+      var thumb = resolveIpfsUrl(item.thumbnail || '');
+      var reward = rewardsMap[(item.address || '').toLowerCase()] || {};
+      var unclaimed = reward.unclaimedRewards || 0;
+      var distributions = reward.distributions || [];
+      var hasRewards = unclaimed > 0;
+      var sharePct = (item.share || 0).toFixed(1);
+
+      html += '<div class="earnings-item" data-contract="' + escapeHtml(item.address) + '"' +
+        (item.ledger ? ' data-ledger="' + escapeHtml(item.ledger) + '"' : '') +
+        (item.tokenId !== undefined ? ' data-tokenid="' + item.tokenId + '"' : '') +
+        ' data-category="' + category + '">';
+      html += '<img class="earnings-item-thumb" src="' + escapeHtml(thumb) + '" alt="" onerror="this.style.display=\'none\'" />';
+      html += '<div class="earnings-item-info">';
+      html += '<div class="earnings-item-name">' + escapeHtml(item.name || 'Untitled') + '</div>';
+      html += '<div class="earnings-item-meta">';
+      html += '<span class="earnings-item-share">' + sharePct + '% royalty</span>';
+      html += '<span>' + escapeHtml(item.__typename === 'RoyaltyChannel' ? 'Channel' : 'Asset') + '</span>';
+      html += '<span>' + formatAddress(item.address) + '</span>';
+      html += '</div>';
+      html += '</div>';
+      html += '<div class="earnings-item-right">';
+      html += '<span class="earnings-item-unclaimed' + (hasRewards ? '' : ' zero') + '">' +
+        (hasRewards ? '$' + unclaimed.toFixed(4) : '$0.00') + '</span>';
+
+      if (hasRewards) {
+        var payTokens = distributions.map(function (d) { return d.paymentToken; }).join(',');
+        html += '<button class="earnings-withdraw-btn" data-contract="' + escapeHtml(item.address) + '" data-paytokens="' + escapeHtml(payTokens) + '">Withdraw</button>';
+      }
+
+      html += '</div>';
+      html += '</div>';
+    });
+
+    dom.earningsList.innerHTML = html;
+
+    dom.earningsList.querySelectorAll('.earnings-withdraw-btn').forEach(function (btn) {
+      btn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        var contractAddr = btn.getAttribute('data-contract');
+        var payTokens = (btn.getAttribute('data-paytokens') || '').split(',').filter(Boolean);
+        handleEarningsWithdraw(contractAddr, payTokens, btn);
+      });
+    });
+
+    dom.earningsList.querySelectorAll('.earnings-item').forEach(function (el) {
+      el.style.cursor = 'pointer';
+      el.addEventListener('click', function () {
+        var ledger = el.getAttribute('data-ledger');
+        var tokenId = el.getAttribute('data-tokenid');
+        var cat = el.getAttribute('data-category');
+        if (cat === 'assets' && ledger && tokenId !== null) {
+          openDetail(ledger, tokenId);
+        }
+      });
+    });
+  }
+
+  function handleEarningsWithdraw(contractAddr, payTokens, btn) {
+    if (!contractAddr || payTokens.length === 0) return;
+
+    btn.disabled = true;
+    btn.textContent = 'Withdrawing...';
+
+    var withdrawPromise;
+    if (payTokens.length === 1) {
+      withdrawPromise = Wallet.withdrawRewards(contractAddr, payTokens[0]);
+    } else {
+      withdrawPromise = Wallet.batchWithdrawRewards(contractAddr, payTokens);
+    }
+
+    withdrawPromise.then(function () {
+      btn.textContent = 'Done!';
+      btn.style.background = '#22c55e';
+      showToast('Rewards withdrawn!', 'success');
+      setTimeout(function () { loadEarningsData(state.earningsTab); }, 2000);
+    }).catch(function (err) {
+      btn.disabled = false;
+      btn.textContent = 'Withdraw';
+      if (err.message && err.message.indexOf('rejected') === -1) {
+        showToast('Withdraw failed: ' + decodeContractError(err.message), 'error');
+      }
+    });
+  }
+
+  function handleWithdrawAll() {
+    var rewards = state.earningsRewards;
+    if (!rewards || rewards.length === 0) return;
+
+    var contractsWithRewards = rewards.filter(function (r) {
+      return r.unclaimedRewards > 0 && r.distributions && r.distributions.length > 0;
+    });
+
+    if (contractsWithRewards.length === 0) {
+      showToast('No rewards to withdraw', 'error');
+      return;
+    }
+
+    dom.earningsWithdrawAllBtn.disabled = true;
+    dom.earningsWithdrawAllBtn.textContent = 'Withdrawing...';
+
+    var chain = Promise.resolve();
+    var completed = 0;
+    var total = contractsWithRewards.length;
+
+    contractsWithRewards.forEach(function (r) {
+      var payTokens = r.distributions.map(function (d) { return d.paymentToken; });
+      chain = chain.then(function () {
+        dom.earningsWithdrawAllBtn.textContent = 'Withdrawing ' + (completed + 1) + '/' + total + '...';
+        if (payTokens.length === 1) {
+          return Wallet.withdrawRewards(r.address, payTokens[0]);
+        }
+        return Wallet.batchWithdrawRewards(r.address, payTokens);
+      }).then(function () {
+        completed++;
+      });
+    });
+
+    chain.then(function () {
+      dom.earningsWithdrawAllBtn.textContent = 'Done!';
+      showToast('All rewards withdrawn! (' + completed + ' contracts)', 'success');
+      setTimeout(function () { loadEarningsData(state.earningsTab); }, 2000);
+    }).catch(function (err) {
+      dom.earningsWithdrawAllBtn.disabled = false;
+      dom.earningsWithdrawAllBtn.textContent = 'Withdraw All';
+      if (err.message && err.message.indexOf('rejected') === -1) {
+        showToast('Batch withdraw failed: ' + decodeContractError(err.message), 'error');
+      }
     });
   }
 

@@ -747,7 +747,37 @@ body {
   background: rgba(34, 197, 94, 0.1);
   border: 1px solid rgba(34, 197, 94, 0.2);
   border-radius: var(--radius-sm);
+  margin-bottom: 8px;
+}
+
+.detail-balance-info {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
   margin-bottom: 16px;
+  font-size: 12px;
+}
+
+.balance-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-weight: 500;
+  font-size: 12px;
+}
+
+.balance-chip.eoa {
+  background: rgba(99, 102, 241, 0.12);
+  color: #818cf8;
+  border: 1px solid rgba(99, 102, 241, 0.2);
+}
+
+.balance-chip.sa {
+  background: rgba(168, 85, 247, 0.12);
+  color: #c084fc;
+  border: 1px solid rgba(168, 85, 247, 0.2);
 }
 
 .download-node-btn {
@@ -1169,6 +1199,224 @@ body {
   border: 1px solid var(--border); border-radius: 6px; cursor: pointer;
 }
 .wallet-choice-cancel:hover { color: var(--text-primary); border-color: var(--text-secondary); }
+
+/* ── Resell / Transfer Modals ───────────────────────── */
+.modal-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.6);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 9999;
+}
+.modal-overlay.hidden { display: none; }
+.modal-dialog {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  width: 420px;
+  max-width: 90vw;
+  overflow: hidden;
+}
+.modal-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+}
+.modal-header h3 { margin: 0; font-size: 16px; color: var(--text-primary); }
+.modal-close-btn {
+  background: none; border: none; font-size: 22px; color: var(--text-secondary);
+  cursor: pointer; padding: 0; line-height: 1;
+}
+.modal-close-btn:hover { color: var(--text-primary); }
+.modal-body { padding: 16px 20px; }
+.modal-desc { margin: 0 0 12px; color: var(--text-secondary); font-size: 13px; }
+.modal-footer {
+  display: flex; justify-content: flex-end; gap: 8px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--border);
+}
+.form-group { margin-bottom: 12px; }
+.form-group label {
+  display: block; font-size: 12px; font-weight: 600;
+  color: var(--text-secondary); margin-bottom: 4px;
+}
+.form-input {
+  width: 100%; padding: 8px 12px; font-size: 14px;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg-primary); color: var(--text-primary);
+  font-family: inherit; box-sizing: border-box;
+}
+.form-input:focus { outline: none; border-color: var(--accent); }
+.royalty-note {
+  font-size: 12px; color: var(--text-secondary);
+  padding: 8px 0; font-style: italic;
+}
+
+.wallet-picker {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.wallet-picker-option {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 8px;
+  border-radius: 8px;
+  border: 2px solid var(--border);
+  background: var(--bg-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+  font-size: 12px;
+}
+
+.wallet-picker-option:hover {
+  border-color: var(--accent);
+}
+
+.wallet-picker-option.selected {
+  border-color: var(--accent);
+  background: rgba(99, 102, 241, 0.1);
+}
+
+.wallet-picker-option.disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.wallet-picker-label {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.wallet-picker-balance {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.wallet-picker-addr {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  font-family: monospace;
+}
+.modal-status {
+  font-size: 13px; padding: 8px 12px; border-radius: 6px; margin-top: 12px;
+}
+.modal-status.pending { background: #eff6ff; color: #1d4ed8; }
+.modal-status.success { background: #f0fdf4; color: #16a34a; }
+.modal-status.error { background: #fef2f2; color: #dc2626; }
+.transfer-warning {
+  display: flex; align-items: flex-start; gap: 8px;
+  padding: 10px 12px; border-radius: 6px;
+  background: #fef2f2; color: #dc2626; font-size: 12px;
+  margin-top: 8px;
+}
+.transfer-warning svg { flex-shrink: 0; margin-top: 1px; }
+
+/* ── Owner Actions ──────────────────────────────────── */
+.detail-owner-actions {
+  display: flex; gap: 8px; margin-top: 8px;
+}
+.detail-owner-actions.hidden { display: none; }
+.action-resell {
+  background: linear-gradient(135deg, #3b82f6, #8b5cf6) !important;
+  color: #fff !important; border: none !important;
+}
+.action-resell:hover { opacity: 0.9; }
+.action-transfer {
+  background: var(--bg-secondary) !important;
+  border: 1px solid var(--border) !important;
+}
+
+/* ── Royalty Info ───────────────────────────────────── */
+.detail-royalty-info { margin-top: 12px; }
+.detail-royalty-info.hidden { display: none; }
+.royalty-info-inner {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 8px 12px; border-radius: 6px;
+  background: var(--bg-secondary); border: 1px solid var(--border);
+}
+.royalty-info-title {
+  font-size: 11px; font-weight: 700; color: var(--text-secondary);
+  text-transform: uppercase; letter-spacing: 0.5px;
+}
+.royalty-chip {
+  font-size: 12px; padding: 2px 8px; border-radius: 10px;
+  background: rgba(99,102,241,0.12); color: var(--accent);
+  font-weight: 500;
+}
+
+/* ── Sellers List ───────────────────────────────────── */
+.detail-sellers-list { margin-top: 12px; }
+.detail-sellers-list.hidden { display: none; }
+.sellers-list-inner {
+  padding: 10px 12px; border-radius: 6px;
+  background: var(--bg-secondary); border: 1px solid var(--border);
+}
+.sellers-title {
+  display: block; font-size: 11px; font-weight: 700;
+  color: var(--text-secondary); text-transform: uppercase;
+  letter-spacing: 0.5px; margin-bottom: 8px;
+}
+.seller-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 0; font-size: 13px;
+  border-top: 1px solid var(--border);
+}
+.seller-row:first-of-type { border-top: none; }
+.seller-self { background: rgba(99,102,241,0.06); margin: 0 -8px; padding: 6px 8px; border-radius: 4px; }
+.seller-addr { flex: 1; color: var(--text-secondary); font-family: var(--font-mono); font-size: 12px; }
+.seller-price { font-weight: 600; color: var(--text-primary); }
+.seller-qty { color: var(--text-secondary); font-size: 12px; }
+.cancel-listing-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 4px 10px; font-size: 11px; line-height: 1;
+  font-family: inherit; background: #fef2f2; color: #dc2626;
+  border: 1px solid #fecaca; border-radius: 4px; cursor: pointer;
+}
+.cancel-listing-btn:hover { background: #fee2e2; }
+.cancel-listing-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ── Governance Section ─────────────────────────────── */
+.detail-governance { margin-top: 12px; }
+.detail-governance.hidden { display: none; }
+.governance-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 8px;
+}
+.governance-title {
+  font-size: 11px; font-weight: 700; color: var(--text-secondary);
+  text-transform: uppercase; letter-spacing: 0.5px;
+}
+.governance-row {
+  font-size: 13px; color: var(--text-primary);
+  padding: 4px 0;
+}
+.governance-row .label { color: var(--text-secondary); margin-right: 4px; }
+.governance-row .value { font-weight: 600; }
+.governance-actions {
+  display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap;
+}
+.governance-actions .hidden { display: none; }
+.action-withdraw {
+  background: linear-gradient(135deg, #059669, #10b981) !important;
+  color: #fff !important; border: none !important;
+}
+
+/* ── Resellable Badge (on cards) ────────────────────── */
+.resellable-badge {
+  position: absolute; top: 8px; left: 8px;
+  padding: 2px 8px; font-size: 10px; font-weight: 600;
+  background: rgba(139,92,246,0.9); color: #fff;
+  border-radius: 10px; letter-spacing: 0.3px;
+}
+
+/* ── OpType Badge ──────────────────────────────────── */
+.optype-chip { background: rgba(16,185,129,0.12) !important; color: #059669 !important; }
+.reseller-chip { background: rgba(139,92,246,0.12) !important; color: #7c3aed !important; }
 
 /* ── Toast ───────────────────────────────────────────── */
 .toast-container {
@@ -1682,6 +1930,165 @@ body {
 
 .detail-channel.clickable:hover .channel-name {
   color: var(--accent);
+}
+
+/* ── Earnings View ────────────────────────────────────── */
+.earnings-summary {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 20px;
+  margin-bottom: 16px;
+}
+
+.earnings-total {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.earnings-total-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.earnings-total-amount {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--success);
+}
+
+.earnings-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 16px;
+  background: var(--bg-secondary);
+  border-radius: var(--radius);
+  padding: 4px;
+  width: fit-content;
+}
+
+.earnings-tab {
+  padding: 8px 20px;
+  font-size: 13px;
+  font-weight: 500;
+  font-family: inherit;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.earnings-tab.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.earnings-tab:hover:not(.active) {
+  color: var(--text-primary);
+}
+
+.earnings-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.earnings-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  transition: border-color 0.15s;
+}
+
+.earnings-item:hover {
+  border-color: var(--accent);
+}
+
+.earnings-item-thumb {
+  width: 48px;
+  height: 48px;
+  border-radius: 8px;
+  object-fit: cover;
+  background: var(--bg-tertiary);
+  flex-shrink: 0;
+}
+
+.earnings-item-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.earnings-item-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.earnings-item-meta {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.earnings-item-share {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.earnings-item-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.earnings-item-unclaimed {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--success);
+}
+
+.earnings-item-unclaimed.zero {
+  color: var(--text-tertiary);
+}
+
+.earnings-withdraw-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5px 12px;
+  font-size: 11px;
+  line-height: 1;
+  font-family: inherit;
+  font-weight: 600;
+  color: #fff;
+  background: var(--accent);
+  border: none;
+  border-radius: 14px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.earnings-withdraw-btn:hover {
+  background: var(--accent-hover);
+}
+
+.earnings-withdraw-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 /* ── Utility ─────────────────────────────────────────── */
