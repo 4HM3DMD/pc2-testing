@@ -789,6 +789,9 @@ Expanded the dDRM Viewer to support four new interactive content types beyond th
 - **`panic = "abort"` on all WASM crates** — Removes unwinding code from all 5 WASM binaries. `ddrm-renderer.wasm` reduced by 482 KB (5.83 MB → 5.35 MB, -8.3%).
 - **Smart build pipeline** — `build-wasm.sh` now uses per-crate wasm-opt levels: `-O3` for crypto crates (speed), `-Oz` for utility crates (size). Added `--enable-nontrapping-float-to-int` and `--enable-simd` flags for Rust-generated WASM features.
 - **Hot-path log reduction** — 20 `logger.info` calls in `WASMRuntime.ts` downgraded to `logger.debug`. Eliminates 5-10 log writes per WASM invocation in production. First-time compilation, queue events, and errors remain at `info`.
+- **Security: CEK buffer zeroing** — `unwrapECDHEnvelope()` in `media.ts` now zeroes the decrypted license buffer (`decrypted.fill(0)`) after CEK extraction, preventing sensitive key material from lingering in V8 heap.
+- **Security: derived key zeroing** — `encryptMnemonicWithSignature()` and `decryptMnemonicWithSignature()` in `encryption.ts` now zero the derived AES key (`key.fill(0)`) in `finally` blocks, ensuring cleanup even on error paths.
+- **IPFS WASM threshold lowered** — `WASM_ASSEMBLE_THRESHOLD` in `ipfs.ts` lowered from 10MB to 5MB. More files assembled in WASM linear memory (outside V8 heap), reducing GC pressure on constrained devices like Jetson.
 
 **WASM binary size comparison (before → after):**
 | Binary | Before | After | Change |
@@ -809,6 +812,9 @@ Expanded the dDRM Viewer to support four new interactive content types beyond th
 | `pc2-node/wasm-renderer/Cargo.toml` | `panic = "abort"` |
 | `pc2-node/scripts/build-wasm.sh` | Per-crate wasm-opt levels, SIMD + nontrapping-float-to-int flags |
 | `pc2-node/src/services/wasm/WASMRuntime.ts` | 20 hot-path logs downgraded to debug |
+| `pc2-node/src/api/media.ts` | CEK buffer zeroing in `unwrapECDHEnvelope` (`decrypted.fill(0)` after extraction) |
+| `pc2-node/src/utils/encryption.ts` | Derived key zeroing in mnemonic encrypt/decrypt (`key.fill(0)` in `finally`) |
+| `pc2-node/src/storage/ipfs.ts` | WASM assemble threshold lowered from 10MB to 5MB |
 | `pc2-node/wasm-apps/*/` | All 5 WASM binaries rebuilt |
 
 **Market & Player UX fixes (Mar 19 — session 2):**

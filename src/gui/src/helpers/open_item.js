@@ -130,7 +130,7 @@ Please try recreating the link.`);
     //----------------------------------------------------------------
     // Is this a .edrm file? (DRM-protected media from Elacity)
     //----------------------------------------------------------------
-    else if ( $(el_item).attr('data-name').toLowerCase().endsWith('.edrm') ) {
+    else if ( /\.edrm(\s*\(\d+\))?$/i.test($(el_item).attr('data-name')) ) {
         try {
             let descriptor = null;
             try {
@@ -166,6 +166,7 @@ Please try recreating the link.`);
                         mediaUri:        descriptor.cid || '',
                         title:           descriptor.title || '',
                         authority:       descriptor.authority || '',
+                        thumbnail:       descriptor.thumbnail || '',
                         standalone:      'true',
                     },
                 });
@@ -180,7 +181,7 @@ Please try recreating the link.`);
     //----------------------------------------------------------------
     // Is this a .ddrm.json file? (dDRM capsule - protected non-media asset)
     //----------------------------------------------------------------
-    else if ( $(el_item).attr('data-name').toLowerCase().endsWith('.ddrm.json') ) {
+    else if ( /\.ddrm(\s*\(\d+\))?\.json$/i.test($(el_item).attr('data-name')) ) {
         try {
             let capsule = null;
             try {

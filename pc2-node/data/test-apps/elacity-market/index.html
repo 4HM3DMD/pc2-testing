@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Elacity Market</title>
   <link rel="icon" type="image/png" href="assets/favicon.png">
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles.css?v=3">
 </head>
 <body>
 
@@ -322,12 +322,35 @@
     </div>
   </div>
 
+  <!-- Wallet Choice Modal (Purchase) -->
+  <div id="wallet-choice-modal" class="wallet-choice-overlay hidden">
+    <div class="wallet-choice-dialog">
+      <h3>Choose Wallet for Purchase</h3>
+      <p class="wallet-choice-desc">Select which wallet to use for this purchase.</p>
+      <div class="wallet-choice-options">
+        <button id="wallet-choice-sa" class="wallet-choice-btn wallet-choice-sa">
+          <span class="wallet-choice-icon">&#x1f4b3;</span>
+          <span class="wallet-choice-label">Smart Account</span>
+          <span class="wallet-choice-sub" id="wallet-choice-sa-addr"></span>
+          <span class="wallet-choice-tag">Recommended</span>
+        </button>
+        <button id="wallet-choice-eoa" class="wallet-choice-btn wallet-choice-eoa">
+          <span class="wallet-choice-icon">&#x1f511;</span>
+          <span class="wallet-choice-label">EOA Wallet</span>
+          <span class="wallet-choice-sub" id="wallet-choice-eoa-addr"></span>
+          <span class="wallet-choice-note">Requires Base network</span>
+        </button>
+      </div>
+      <button id="wallet-choice-cancel" class="wallet-choice-cancel">Cancel</button>
+    </div>
+  </div>
+
   <!-- Toast Container -->
   <div id="toast-container" class="toast-container"></div>
 
   <script src="https://cdn.jsdelivr.net/npm/ethers@6.13.4/dist/ethers.umd.min.js"></script>
-  <script src="api.js"></script>
-  <script src="wallet.js"></script>
-  <script src="app.js"></script>
+  <script src="api.js?v=3"></script>
+  <script src="wallet.js?v=3"></script>
+  <script src="app.js?v=3"></script>
 </body>
 </html>

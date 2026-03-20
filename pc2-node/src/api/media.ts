@@ -1192,7 +1192,9 @@ async function unwrapECDHEnvelope(
                    (decrypted[bodyOffset + 2] << 8) | decrypted[bodyOffset + 3];
   const cekHash = crypto.createHash('sha256').update(cekBytes).digest('hex').slice(0, 12);
   logger.info(`[media/CEK] Unwrapped license: metaSize=${metaSize}, keyCount=${keyCount}, cekLen=${cekBytes.length}, cekSha=${cekHash}`);
-  return Buffer.from(cekBytes).toString('base64');
+  const result = Buffer.from(cekBytes).toString('base64');
+  decrypted.fill(0);
+  return result;
 }
 
 /**

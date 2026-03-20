@@ -443,10 +443,51 @@ var Wallet = (function () {
     });
   }
 
+  function getSmartAccountAddress() {
+    return smartAccountAddress;
+  }
+
+  function hasSmartAccount() {
+    return !!smartAccountAddress && smartAccountAddress.toLowerCase() !== (connectedAddress || '').toLowerCase();
+  }
+
+  function buyAccessWithEOA(authorityAddr, seller, ledger, tokenId, quantity, priceWei, payToken, operativeAddr) {
+    if (!connectedAddress) throw new Error('Wallet not connected');
+
+    return ensureBase().then(function () {
+      var isNativePayment = !payToken || payToken === ZERO_ADDRESS;
+      var iface = new ethers.Interface(BUY_ACCESS_ABI);
+
+      if (isNativePayment) {
+        var data = iface.encodeFunctionData(
+          'buyAccess(address,address,uint256,uint256,uint256)',
+          [seller, ledger, ethers.getBigInt(tokenId), ethers.getBigInt(quantity), ethers.getBigInt(priceWei)]
+        );
+        return parentSendTransaction({ to: authorityAddr, data: data, value: ethers.toQuantity(ethers.getBigInt(priceWei)) });
+      }
+
+      var buyData = iface.encodeFunctionData(
+        'buyAccess(address,address,uint256,uint256,uint256,address)',
+        [seller, ledger, ethers.getBigInt(tokenId), ethers.getBigInt(quantity), ethers.getBigInt(priceWei), payToken]
+      );
+      var buyTx = { to: authorityAddr, data: buyData, value: '0x0' };
+
+      return getPaymentProcessor(operativeAddr)
+        .then(function (approvalTarget) {
+          return approveIfNeeded(payToken, priceWei, approvalTarget);
+        })
+        .then(function () {
+          return parentSendTransaction(buyTx);
+        });
+    });
+  }
+
   return {
     connect: connect,
     getAddress: getAddress,
     getSignerAddress: getSignerAddress,
+    getSmartAccountAddress: getSmartAccountAddress,
+    hasSmartAccount: hasSmartAccount,
     isConnected: isConnected,
     getChainId: getChainId,
     isOnBase: isOnBase,
@@ -454,6 +495,7 @@ var Wallet = (function () {
     siweLogin: siweLogin,
     signMessage: signMessage,
     buyAccess: buyAccess,
+    buyAccessWithEOA: buyAccessWithEOA,
     waitForReceipt: waitForReceipt,
     setupListeners: setupListeners,
     BASE_CHAIN_ID: BASE_CHAIN_ID

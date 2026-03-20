@@ -304,6 +304,26 @@
     });
   }
 
+  function getAssetOwnerWallet(nft) {
+    var addr = (nft.contractAddress || '').toLowerCase();
+    var tid = (nft.tokenId && nft.tokenId.hexTokenID) || nft.tokenId || '';
+    for (var i = 0; i < state.assetsItems.length; i++) {
+      var a = state.assetsItems[i];
+      if ((a.contractAddress || '').toLowerCase() === addr &&
+          (a.hexTokenID || a.tokenID || '') === tid) {
+        return a._ownerWallet || null;
+      }
+    }
+    return null;
+  }
+
+  function getBuyerAddressForAsset(nft) {
+    var wallet = getAssetOwnerWallet(nft);
+    if (wallet === 'eoa') return Wallet.getAddress();
+    if (wallet === 'sa') return Wallet.getSignerAddress();
+    return Wallet.getAddress();
+  }
+
   function escapeHtml(text) {
     if (!text) return '';
     var el = document.createElement('span');
@@ -415,6 +435,14 @@
     card.dataset.contractAddress = item.contractAddress;
     card.dataset.tokenId = item.hexTokenID || item.tokenID;
 
+    // Check library ownership even when rendering from feed
+    var itemRef = { contractAddress: item.contractAddress, tokenId: item.hexTokenID || item.tokenID };
+    if (!isOwned && state.assetsItems.length > 0 && isAssetInLibrary(itemRef)) {
+      isOwned = true;
+    }
+    // Also check API access field from browse query
+    if (!isOwned && item.access && item.access.haveAccess) isOwned = true;
+
     var imageUrl = getImageUrl(item);
     var title = escapeHtml(item.name || 'Untitled');
     var channelName = escapeHtml(getChannelName(item));
@@ -430,15 +458,26 @@
 
     var hasChannel = item.channel && item.channel.address;
 
+    var walletLabel = '';
+    if (isOwned) {
+      var ownerWallet = item._ownerWallet || getAssetOwnerWallet(itemRef);
+      if (ownerWallet === 'eoa') walletLabel = 'EOA';
+      else if (ownerWallet === 'sa') walletLabel = 'Smart';
+      else if (ownerWallet === 'both') walletLabel = 'Both';
+    }
     var priceBadgeHtml = isOwned
       ? '<span class="price-badge owned-badge">Owned</span>'
       : (price ? '<span class="price-badge">' + price + '</span>' : '');
+    var walletBadgeHtml = walletLabel
+      ? '<span class="wallet-badge wallet-badge-' + (item._ownerWallet || '') + '">' + walletLabel + '</span>'
+      : '';
 
     card.innerHTML =
       '<div class="video-card-thumb">' +
         (imageUrl ? '<img src="' + escapeHtml(imageUrl) + '" alt="' + title + '" loading="lazy" onerror="this.style.display=\'none\'" />' : '') +
         (contentType ? '<span class="content-badge">' + escapeHtml(contentType) + '</span>' : '') +
         priceBadgeHtml +
+        walletBadgeHtml +
       '</div>' +
       '<div class="video-card-info">' +
         '<div class="video-card-avatar">' + avatarContent + '</div>' +
@@ -616,33 +655,55 @@
   }
 
   function loadMyAssets() {
-    var addr = Wallet.getAddress();
-    var signer = Wallet.getSignerAddress();
-    if (state.assetsLoading || !addr) return;
+    var eoaAddr = Wallet.getAddress();
+    var saAddr = Wallet.getSignerAddress();
+    if (state.assetsLoading || !eoaAddr) return;
     state.assetsLoading = true;
 
     dom.assetsLoading.classList.remove('hidden');
     dom.assetsEmpty.classList.add('hidden');
     dom.assetsGrid.innerHTML = '';
 
-    console.log('[Library] Loading assets for EOA:', addr, 'signer:', signer, 'auth:', ElacityAPI.isAuthenticated(), 'apiSigner:', ElacityAPI.getSignerAddress());
+    var hasSeparateSA = saAddr && eoaAddr.toLowerCase() !== saAddr.toLowerCase();
+    console.log('[Library] Loading assets — EOA:', eoaAddr, 'SA:', saAddr, 'dual:', hasSeparateSA);
 
-    ElacityAPI.fetchAccessibleAssets(0, PAGE_SIZE)
-      .then(function (result) {
+    var fetches = [ElacityAPI.fetchAccessibleAssetsForAddress(saAddr || eoaAddr, 0, PAGE_SIZE)];
+    if (hasSeparateSA) {
+      fetches.push(ElacityAPI.fetchAccessibleAssetsForAddress(eoaAddr, 0, PAGE_SIZE));
+    }
+
+    Promise.all(fetches)
+      .then(function (results) {
         state.assetsLoading = false;
         dom.assetsLoading.classList.add('hidden');
 
-        var count = result && result.data ? result.data.length : 0;
-        console.log('[Library] Got', count, 'items (total:', result ? result.total : 0, ')');
+        var saItems = (results[0] && results[0].data) || [];
+        var eoaItems = hasSeparateSA ? ((results[1] && results[1].data) || []) : [];
 
-        if (!result || !result.data || result.data.length === 0) {
+        saItems.forEach(function (item) { item._ownerWallet = 'sa'; });
+        eoaItems.forEach(function (item) { item._ownerWallet = 'eoa'; });
+
+        var seen = {};
+        var merged = [];
+        saItems.concat(eoaItems).forEach(function (item) {
+          var key = (item.contractAddress || '') + ':' + (item.hexTokenID || item.tokenID || '');
+          if (seen[key]) {
+            seen[key]._ownerWallet = 'both';
+          } else {
+            seen[key] = item;
+            merged.push(item);
+          }
+        });
+
+        console.log('[Library] SA:', saItems.length, 'EOA:', eoaItems.length, 'merged:', merged.length);
+
+        if (merged.length === 0) {
           dom.assetsEmpty.classList.remove('hidden');
           return;
         }
 
-        state.assetsItems = result.data;
-
-        result.data.forEach(function (item) {
+        state.assetsItems = merged;
+        merged.forEach(function (item) {
           dom.assetsGrid.appendChild(renderCard(item, true));
         });
       })
@@ -797,7 +858,8 @@
 
     var listing = getListing(nft);
     var hasListing = listing && listing.price;
-    var isOwned = state.detailIsOwned || isAssetInLibrary(nft);
+    var apiSaysOwned = nft.access && nft.access.haveAccess;
+    var isOwned = state.detailIsOwned || isAssetInLibrary(nft) || apiSaysOwned;
 
     if (hasListing && !isOwned) {
       dom.detailPriceSection.classList.remove('hidden');
@@ -1701,13 +1763,14 @@
     var title = meta.name || nft.name || 'Untitled';
     var mediaUri = (media.uri || '').replace('ipfs://', '');
     var tokenURI = (nft.tokenURI || '').replace('ipfs://', '');
-    var walletAddr = Wallet.getAddress() || '';
+    var walletAddr = getBuyerAddressForAsset(nft) || Wallet.getAddress() || '';
 
     if (!walletAddr) {
       showToast('Please connect your wallet first', 'error');
       return;
     }
 
+    console.log('[handlePlay] Using buyer address:', walletAddr, 'ownerWallet:', getAssetOwnerWallet(nft));
     var checksumAddr = ethers.getAddress(walletAddr);
     showToast('Preparing Lit authentication...', 'info');
 
@@ -1781,6 +1844,38 @@
 
   // ── Purchase Flow ────────────────────────────────────
 
+  function showWalletChoiceModal() {
+    return new Promise(function (resolve, reject) {
+      var modal = document.getElementById('wallet-choice-modal');
+      var saBtn = document.getElementById('wallet-choice-sa');
+      var eoaBtn = document.getElementById('wallet-choice-eoa');
+      var cancelBtn = document.getElementById('wallet-choice-cancel');
+      var saAddrEl = document.getElementById('wallet-choice-sa-addr');
+      var eoaAddrEl = document.getElementById('wallet-choice-eoa-addr');
+
+      var sa = Wallet.getSmartAccountAddress() || Wallet.getSignerAddress();
+      var eoa = Wallet.getAddress();
+      saAddrEl.textContent = sa ? (sa.slice(0, 6) + '...' + sa.slice(-4)) : '';
+      eoaAddrEl.textContent = eoa ? (eoa.slice(0, 6) + '...' + eoa.slice(-4)) : '';
+
+      modal.classList.remove('hidden');
+
+      function cleanup() {
+        modal.classList.add('hidden');
+        saBtn.removeEventListener('click', onSA);
+        eoaBtn.removeEventListener('click', onEOA);
+        cancelBtn.removeEventListener('click', onCancel);
+      }
+      function onSA() { cleanup(); resolve('sa'); }
+      function onEOA() { cleanup(); resolve('eoa'); }
+      function onCancel() { cleanup(); reject(new Error('Purchase cancelled')); }
+
+      saBtn.addEventListener('click', onSA);
+      eoaBtn.addEventListener('click', onEOA);
+      cancelBtn.addEventListener('click', onCancel);
+    });
+  }
+
   function handleBuy() {
     var nft = state.detailItem;
     if (!nft || state.purchasing) return;
@@ -1791,41 +1886,51 @@
       return;
     }
 
-    state.purchasing = true;
-    dom.buyBtn.disabled = true;
-    setPurchaseStatus('pending', 'Connecting wallet...');
-
     var ensureConnected = Wallet.isConnected()
       ? Promise.resolve()
       : Wallet.connect().then(function () { updateWalletUI(); });
 
-    ensureConnected
-      .then(function () {
-        setPurchaseStatus('pending', 'Switching to Base chain...');
-        return Wallet.switchToBase ? Wallet.switchToBase() : Promise.resolve();
-      })
-      .then(function () {
-        var tokenId = (nft.tokenId && nft.tokenId.hexTokenID) || nft.tokenId || '0';
-        var meta = nft.metadata || {};
-        var props = meta.properties || {};
-        var authorityAddr = props.authority;
-        var ledger = props.ledger || nft.contractAddress || (nft.channel && nft.channel.address);
+    var walletChoicePromise = ensureConnected.then(function () {
+      if (Wallet.hasSmartAccount()) return showWalletChoiceModal();
+      return 'eoa';
+    });
 
-        if (!authorityAddr) {
-          throw new Error('No AuthorityGateway address found for this asset');
-        }
+    walletChoicePromise
+      .then(function (walletChoice) {
+        state.purchasing = true;
+        dom.buyBtn.disabled = true;
+        setPurchaseStatus('pending', walletChoice === 'eoa' ? 'Switching to Base chain...' : 'Preparing Smart Account...');
 
-        setPurchaseStatus('pending', 'Confirm transaction in your wallet...');
-        return Wallet.buyAccess(
-          authorityAddr,
-          listing.seller,
-          ledger,
-          tokenId,
-          1,
-          String(listing.price),
-          listing.payToken,
-          nft.operative ? nft.operative.address : null
-        );
+        var chainReady = walletChoice === 'eoa'
+          ? (Wallet.switchToBase ? Wallet.switchToBase() : Promise.resolve())
+          : Promise.resolve();
+
+        return chainReady.then(function () {
+          var tokenId = (nft.tokenId && nft.tokenId.hexTokenID) || nft.tokenId || '0';
+          var meta = nft.metadata || {};
+          var props = meta.properties || {};
+          var authorityAddr = props.authority;
+          var ledger = props.ledger || nft.contractAddress || (nft.channel && nft.channel.address);
+
+          if (!authorityAddr) {
+            throw new Error('No AuthorityGateway address found for this asset');
+          }
+
+          setPurchaseStatus('pending', 'Confirm transaction in your wallet...');
+
+          if (walletChoice === 'eoa') {
+            return Wallet.buyAccessWithEOA(
+              authorityAddr, listing.seller, ledger, tokenId, 1,
+              String(listing.price), listing.payToken,
+              nft.operative ? nft.operative.address : null
+            );
+          }
+          return Wallet.buyAccess(
+            authorityAddr, listing.seller, ledger, tokenId, 1,
+            String(listing.price), listing.payToken,
+            nft.operative ? nft.operative.address : null
+          );
+        });
       })
       .then(function (txHashOrReceipt) {
         if (txHashOrReceipt && txHashOrReceipt._smartAccountConfirmed) {
@@ -1908,7 +2013,7 @@
       ledger: props.ledger || nft.contractAddress || '',
       tokenId: tokenId,
       operative: (nft.operative && nft.operative.address) || '',
-      thumbnail: meta.image || (nft.channel && nft.channel.image) || '',
+      thumbnail: nft.image || meta.image || (nft.channel && nft.channel.image) || (nft.channel && nft.channel.imageURL) || '',
       acquiredAt: new Date().toISOString(),
       acquiredBy: Wallet.getAddress() || '',
     };
@@ -1986,7 +2091,7 @@
       authority: props.authority || '',
       operative: (nft.operative && nft.operative.address) || '',
       ledger: props.ledger || nft.contractAddress || '',
-      thumbnail: meta.image || (nft.channel && nft.channel.image) || '',
+      thumbnail: nft.image || meta.image || (nft.channel && nft.channel.image) || (nft.channel && nft.channel.imageURL) || '',
       mediaType: media.mimeType || media.contentType || 'video',
       duration: media.duration || 0,
       isProtected: !!(nft.isProtected || (media.protectionType && media.protectionType !== 'none')),
@@ -2117,7 +2222,8 @@
     var kid = cleanHash ? ('0x' + cleanHash.slice(0, 32).padEnd(32, '0')) : '';
 
     var mime = asset.mimeType || media.contentType || media.mimeType || 'application/octet-stream';
-    var buyerAddr = Wallet.getAddress() || '';
+    var buyerAddr = getBuyerAddressForAsset(nft) || Wallet.getAddress() || '';
+    console.log('[Viewer] Using buyer address:', buyerAddr, 'ownerWallet:', getAssetOwnerWallet(nft));
 
     var litCiphertext = asset.litCiphertext || enc.litCiphertext || enc.ciphertext || '';
     var iv = asset.iv || enc.iv || '';

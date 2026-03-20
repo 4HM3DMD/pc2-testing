@@ -596,6 +596,29 @@ var ElacityAPI = (function () {
     ).then(function (data) { return data.assets; });
   }
 
+  function fetchAccessibleAssetsForAddress(address, offset, limit) {
+    var headers = { 'Content-Type': 'application/json' };
+    if (authToken) headers['Authorization'] = 'Bearer ' + authToken;
+    if (address) headers['X-ETH-Signer'] = address.toLowerCase();
+
+    var body = { query: {}, filters: { offset: offset || 0, limit: limit || 20, sort: { createdAt: -1 } } };
+    return fetch(GQL_ENDPOINT, {
+      method: 'POST',
+      headers: headers,
+      body: JSON.stringify({ query: FETCH_ACCESSIBLE_ASSETS_QUERY, variables: body })
+    })
+      .then(function (res) {
+        if (!res.ok) throw new Error('API request failed: ' + res.status);
+        return res.json();
+      })
+      .then(function (json) {
+        if (json.errors && json.errors.length > 0 && (!json.data || Object.values(json.data).every(function (v) { return v === null; }))) {
+          throw new Error(json.errors[0].message || 'GraphQL error');
+        }
+        return json.data ? json.data.assets : { total: 0, data: [] };
+      });
+  }
+
   function fetchWithPreset(presetName, offset, limit) {
     var preset = PRESETS[presetName];
     if (!preset) throw new Error('Unknown preset: ' + presetName);
@@ -756,6 +779,7 @@ var ElacityAPI = (function () {
   return {
     fetchItems: fetchItems,
     fetchAccessibleAssets: fetchAccessibleAssets,
+    fetchAccessibleAssetsForAddress: fetchAccessibleAssetsForAddress,
     fetchWithPreset: fetchWithPreset,
     getAssetDetail: getAssetDetail,
     getNonce: getNonce,

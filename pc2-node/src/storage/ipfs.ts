@@ -29,7 +29,7 @@ import { join } from 'path';
 import { createLogger } from '../utils/logger.js';
 const log = createLogger('ipfs');
 
-const WASM_ASSEMBLE_THRESHOLD = 10 * 1024 * 1024; // 10 MB — below this, Buffer.concat is faster than MemFS round-trip
+const WASM_ASSEMBLE_THRESHOLD = 5 * 1024 * 1024; // 5 MB — WASM assembly reduces V8 heap pressure on constrained devices
 const IPFS_ASSEMBLE_WASM_PATH = 'wasm-apps/ipfs-assemble/ipfs-assemble.wasm';
 let cachedAssembleWasm: ArrayBuffer | null = null;
 

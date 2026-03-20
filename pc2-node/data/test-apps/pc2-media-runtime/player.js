@@ -16,7 +16,8 @@ let BUYER_ADDRESS = params.buyerAddress || '';
 let REQUEST_ID = params.requestId || '';
 let LIT_AUTH_SIG = params.litAuthSig || null;
 const STANDALONE = params.standalone === 'true' || params.standalone === true;
-const THUMBNAIL = params.thumbnail || new URLSearchParams(window.location.search).get('thumbnail') || '';
+const RAW_THUMBNAIL = params.thumbnail || new URLSearchParams(window.location.search).get('thumbnail') || '';
+const THUMBNAIL = RAW_THUMBNAIL.startsWith('ipfs://') ? 'https://ipfs.ela.city/ipfs/' + RAW_THUMBNAIL.slice(7) : RAW_THUMBNAIL;
 console.log('[player] params keys:', Object.keys(params), 'THUMBNAIL:', THUMBNAIL ? THUMBNAIL.substring(0, 80) : '(empty)');
 
 // ─── DOM ─────────────────────────────────────────────────────────────
@@ -172,22 +173,26 @@ async function refreshSession() {
           const err = await prepareRes.json().catch(() => ({ error: prepareRes.statusText }));
           throw new Error(err.error || 'Failed to prepare re-authentication');
         }
-        const { requestId, siweMessage } = await prepareRes.json();
+        const { requestId, siweMessage, chipotleMode } = await prepareRes.json();
         REQUEST_ID = requestId;
 
-        const msgHex = '0x' + Array.from(new TextEncoder().encode(siweMessage))
-          .map(b => b.toString(16).padStart(2, '0')).join('');
-        const sig = await window.ethereum.request({
-          method: 'personal_sign',
-          params: [msgHex, eoaAddress],
-        });
+        if (chipotleMode || !siweMessage) {
+          LIT_AUTH_SIG = { sig: '0x', derivedVia: 'chipotle-api-key', signedMessage: '', address: eoaAddress };
+        } else {
+          const msgHex = '0x' + Array.from(new TextEncoder().encode(siweMessage))
+            .map(b => b.toString(16).padStart(2, '0')).join('');
+          const sig = await window.ethereum.request({
+            method: 'personal_sign',
+            params: [msgHex, eoaAddress],
+          });
 
-        LIT_AUTH_SIG = {
-          sig,
-          derivedVia: 'web3.eth.personal.sign',
-          signedMessage: siweMessage,
-          address: eoaAddress,
-        };
+          LIT_AUTH_SIG = {
+            sig,
+            derivedVia: 'web3.eth.personal.sign',
+            signedMessage: siweMessage,
+            address: eoaAddress,
+          };
+        }
       }
 
       // Re-init the session to get a new sessionId with fresh CEK
@@ -445,7 +450,11 @@ async function performStandaloneLitAuth() {
     .then(a => (a && a.length > 0) ? a : window.ethereum.request({ method: 'eth_requestAccounts' }));
   const eoaAddress = accounts[0];
   const sp = new URLSearchParams(window.location.search);
-  BUYER_ADDRESS = sp.get('puter.smart_account') || eoaAddress;
+  const smartAccount = sp.get('puter.smart_account') || null;
+  // Store both addresses so init() can try the other if the first fails
+  window.__pc2_eoaAddress = eoaAddress;
+  window.__pc2_saAddress = (smartAccount && smartAccount.toLowerCase() !== eoaAddress.toLowerCase()) ? smartAccount : null;
+  BUYER_ADDRESS = eoaAddress;
 
   $loadingText.textContent = 'Preparing Lit authentication...';
 
@@ -454,24 +463,28 @@ async function performStandaloneLitAuth() {
     const err = await prepareRes.json().catch(() => ({ error: prepareRes.statusText }));
     throw new Error(err.error || 'Failed to prepare Lit authentication');
   }
-  const { requestId, siweMessage } = await prepareRes.json();
+  const { requestId, siweMessage, chipotleMode } = await prepareRes.json();
   REQUEST_ID = requestId;
 
-  $loadingText.textContent = 'Please sign the authentication message in your wallet...';
+  if (chipotleMode || !siweMessage) {
+    LIT_AUTH_SIG = { sig: '0x', derivedVia: 'chipotle-api-key', signedMessage: '', address: eoaAddress };
+  } else {
+    $loadingText.textContent = 'Please sign the authentication message in your wallet...';
 
-  const msgHex = '0x' + Array.from(new TextEncoder().encode(siweMessage))
-    .map(b => b.toString(16).padStart(2, '0')).join('');
-  const sig = await window.ethereum.request({
-    method: 'personal_sign',
-    params: [msgHex, eoaAddress],
-  });
+    const msgHex = '0x' + Array.from(new TextEncoder().encode(siweMessage))
+      .map(b => b.toString(16).padStart(2, '0')).join('');
+    const sig = await window.ethereum.request({
+      method: 'personal_sign',
+      params: [msgHex, eoaAddress],
+    });
 
-  LIT_AUTH_SIG = {
-    sig: sig,
-    derivedVia: 'web3.eth.personal.sign',
-    signedMessage: siweMessage,
-    address: eoaAddress,
-  };
+    LIT_AUTH_SIG = {
+      sig: sig,
+      derivedVia: 'web3.eth.personal.sign',
+      signedMessage: siweMessage,
+      address: eoaAddress,
+    };
+  }
 }
 
 // ─── Init ────────────────────────────────────────────────────────────
@@ -488,18 +501,60 @@ async function init() {
 
     $loadingText.textContent = 'Resolving content and recovering decryption key...';
 
-    const initBody = {
-      channel: CHANNEL,
-      tokenId: TOKEN_ID,
-      mediaUri: MEDIA_URI,
-      tokenURI: TOKEN_URI,
-      title: TITLE,
-      authority: AUTHORITY,
-      buyerAddress: BUYER_ADDRESS,
-    };
-    if (REQUEST_ID) initBody.requestId = REQUEST_ID;
-    if (LIT_AUTH_SIG) initBody.litAuthSig = LIT_AUTH_SIG;
-    const initRes = await apiFetch('/api/media/init', initBody);
+    // Resolve both wallet addresses for fallback regardless of launch mode
+    const urlParams = new URLSearchParams(window.location.search);
+    const saFromUrl = urlParams.get('puter.smart_account') || null;
+    let eoaAddr = window.__pc2_eoaAddress || null;
+    let saAddr = window.__pc2_saAddress || saFromUrl || null;
+
+    // Get EOA from wallet bridge (with timeout to avoid hanging)
+    if (!eoaAddr && window.ethereum) {
+      try {
+        const accts = await Promise.race([
+          window.ethereum.request({ method: 'eth_accounts' }),
+          new Promise(function (_, rej) { setTimeout(function () { rej(new Error('timeout')); }, 2000); })
+        ]);
+        if (accts && accts[0]) eoaAddr = accts[0];
+      } catch (_) { /* ignore */ }
+    }
+    // Ensure EOA and SA are actually different addresses
+    if (saAddr && eoaAddr && saAddr.toLowerCase() === eoaAddr.toLowerCase()) saAddr = null;
+    // If BUYER_ADDRESS is the SA, make sure we have the EOA as alternate (and vice versa)
+    if (eoaAddr && BUYER_ADDRESS && eoaAddr.toLowerCase() === BUYER_ADDRESS.toLowerCase()) eoaAddr = null;
+    if (saAddr && BUYER_ADDRESS && saAddr.toLowerCase() === BUYER_ADDRESS.toLowerCase()) saAddr = null;
+    console.log('[player] Wallet fallback — BUYER:', BUYER_ADDRESS, 'altEOA:', eoaAddr, 'altSA:', saAddr);
+
+    async function tryInit(buyerAddr) {
+      const body = {
+        channel: CHANNEL, tokenId: TOKEN_ID, mediaUri: MEDIA_URI,
+        tokenURI: TOKEN_URI, title: TITLE, authority: AUTHORITY,
+        buyerAddress: buyerAddr,
+      };
+      if (REQUEST_ID) body.requestId = REQUEST_ID;
+      if (LIT_AUTH_SIG) body.litAuthSig = LIT_AUTH_SIG;
+      return apiFetch('/api/media/init', body);
+    }
+
+    async function isAccessError(res) {
+      try {
+        const body = await res.clone().json();
+        const msg = (body.error || '').toLowerCase();
+        return msg.includes('access') || msg.includes('denied') || msg.includes('token') || msg.includes('no valid');
+      } catch (_) { return false; }
+    }
+
+    let initRes = await tryInit(BUYER_ADDRESS);
+    // If access denied, try alternate wallet addresses
+    if (!initRes.ok && saAddr && await isAccessError(initRes)) {
+      console.log('[player] Access denied with', BUYER_ADDRESS, '— trying SA:', saAddr);
+      BUYER_ADDRESS = saAddr;
+      initRes = await tryInit(BUYER_ADDRESS);
+    }
+    if (!initRes.ok && eoaAddr && await isAccessError(initRes)) {
+      console.log('[player] Access denied with', BUYER_ADDRESS, '— trying EOA:', eoaAddr);
+      BUYER_ADDRESS = eoaAddr;
+      initRes = await tryInit(BUYER_ADDRESS);
+    }
     if (!initRes.ok) {
       const err = await initRes.json().catch(() => ({ error: initRes.statusText }));
       showError(err.error || 'Failed to initialize playback');
