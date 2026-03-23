@@ -115,8 +115,8 @@
       container = document.createElement('div');
       container.id = 'detail-activity';
       container.className = 'activity-section';
-      var govEl = document.getElementById('detail-governance');
-      if (govEl) govEl.parentNode.insertBefore(container, govEl.nextSibling);
+      var govSection = document.getElementById('detail-governance-section');
+      if (govSection) govSection.parentNode.insertBefore(container, govSection.nextSibling);
       else {
         var body = document.querySelector('.detail-body');
         if (body) body.appendChild(container);
@@ -507,13 +507,13 @@
         offerContainer = document.createElement('div');
         offerContainer.id = 'detail-offer-section';
         offerContainer.className = 'offer-section';
-        var govEl = document.getElementById('detail-governance');
-        if (govEl) govEl.parentNode.insertBefore(offerContainer, govEl.nextSibling);
+        var govSection = document.getElementById('detail-governance-section');
+        if (govSection) govSection.parentNode.insertBefore(offerContainer, govSection.nextSibling);
       }
 
       offerContainer.innerHTML =
         '<div style="font-size:13px;font-weight:600;color:var(--text-primary);margin-bottom:8px;">Royalty Share Offers</div>' +
-        '<button id="make-offer-btn" style="display:inline-flex;align-items:center;justify-content:center;padding:8px 16px;font-size:13px;line-height:1;font-family:inherit;background:var(--accent);color:white;border:none;border-radius:6px;cursor:pointer;">Make Offer</button>';
+        '<button id="make-offer-btn" class="btn-primary">Make Offer</button>';
 
       document.getElementById('make-offer-btn').addEventListener('click', function () {
         openMakeOfferModal(nft);
@@ -550,8 +550,8 @@
           '<div id="offer-status" class="modal-status hidden"></div>' +
         '</div>' +
         '<div class="modal-footer">' +
-          '<button id="offer-cancel-btn" style="display:inline-flex;align-items:center;justify-content:center;padding:8px 16px;font-size:13px;line-height:1;font-family:inherit;background:#f3f4f6;border:1px solid #d1d5db;border-radius:6px;cursor:pointer;">Cancel</button>' +
-          '<button id="offer-confirm-btn" style="display:inline-flex;align-items:center;justify-content:center;padding:8px 16px;font-size:13px;line-height:1;font-family:inherit;background:var(--accent);color:white;border:none;border-radius:6px;cursor:pointer;">Submit Offer</button>' +
+          '<button id="offer-cancel-btn" class="btn-secondary">Cancel</button>' +
+          '<button id="offer-confirm-btn" class="btn-primary">Submit Offer</button>' +
         '</div>' +
       '</div>';
 
@@ -896,7 +896,7 @@
         '<div class="modal-header"><h3>Manage Plans — ' + u.escapeHtml(channelData.name || '') + '</h3><button class="modal-close-btn" id="plans-modal-close">&times;</button></div>' +
         '<div class="modal-body">' +
           '<div id="plans-list">' + plansHtml + '</div>' +
-          '<button id="plans-add-btn" style="display:inline-flex;align-items:center;justify-content:center;padding:8px 16px;font-size:13px;line-height:1;font-family:inherit;background:var(--accent);color:white;border:none;border-radius:6px;cursor:pointer;margin-top:12px;">+ Add Plan</button>' +
+          '<button id="plans-add-btn" class="btn-primary" style="margin-top:12px">+ Add Plan</button>' +
         '</div>' +
       '</div>';
 
@@ -989,8 +989,8 @@
           '<div id="edit-ch-status" class="modal-status hidden"></div>' +
         '</div>' +
         '<div class="modal-footer">' +
-          '<button id="edit-ch-cancel" style="display:inline-flex;align-items:center;justify-content:center;padding:8px 16px;font-size:13px;line-height:1;font-family:inherit;background:#f3f4f6;border:1px solid #d1d5db;border-radius:6px;cursor:pointer;">Cancel</button>' +
-          '<button id="edit-ch-save" style="display:inline-flex;align-items:center;justify-content:center;padding:8px 16px;font-size:13px;line-height:1;font-family:inherit;background:#3b82f6;color:white;border:none;border-radius:6px;cursor:pointer;">Save Changes</button>' +
+          '<button id="edit-ch-cancel" class="btn-secondary">Cancel</button>' +
+          '<button id="edit-ch-save" class="btn-primary">Save Changes</button>' +
         '</div>' +
       '</div>';
 
@@ -1100,7 +1100,7 @@
       });
     }
 
-    html += '<button id="add-plan-btn" style="display:inline-flex;align-items:center;justify-content:center;padding:8px 16px;font-size:13px;line-height:1;font-family:inherit;background:var(--accent);color:white;border:none;border-radius:6px;cursor:pointer;margin-top:8px;">+ Add Plan</button>';
+    html += '<button id="add-plan-btn" class="btn-primary" style="margin-top:8px">+ Add Plan</button>';
 
     container.innerHTML = html;
 
@@ -1156,8 +1156,8 @@
           '<div id="edit-plan-status" class="modal-status hidden"></div>' +
         '</div>' +
         '<div class="modal-footer">' +
-          '<button id="eplan-cancel" style="display:inline-flex;align-items:center;justify-content:center;padding:8px 16px;font-size:13px;line-height:1;font-family:inherit;background:#f3f4f6;border:1px solid #d1d5db;border-radius:6px;cursor:pointer;">Cancel</button>' +
-          '<button id="eplan-save" style="display:inline-flex;align-items:center;justify-content:center;padding:8px 16px;font-size:13px;line-height:1;font-family:inherit;background:#3b82f6;color:white;border:none;border-radius:6px;cursor:pointer;">Save Changes</button>' +
+          '<button id="eplan-cancel" class="btn-secondary">Cancel</button>' +
+          '<button id="eplan-save" class="btn-primary">Save Changes</button>' +
         '</div>' +
       '</div>';
 
@@ -1215,8 +1215,8 @@
           '<div id="add-plan-status" class="modal-status hidden"></div>' +
         '</div>' +
         '<div class="modal-footer">' +
-          '<button id="add-plan-cancel" style="display:inline-flex;align-items:center;justify-content:center;padding:8px 16px;font-size:13px;line-height:1;font-family:inherit;background:#f3f4f6;border:1px solid #d1d5db;border-radius:6px;cursor:pointer;">Cancel</button>' +
-          '<button id="add-plan-confirm" style="display:inline-flex;align-items:center;justify-content:center;padding:8px 16px;font-size:13px;line-height:1;font-family:inherit;background:#3b82f6;color:white;border:none;border-radius:6px;cursor:pointer;">Add Plan</button>' +
+          '<button id="add-plan-cancel" class="btn-secondary">Cancel</button>' +
+          '<button id="add-plan-confirm" class="btn-primary">Add Plan</button>' +
         '</div>' +
       '</div>';
 
@@ -1307,7 +1307,7 @@
       }
 
       if (isCreator) {
-        html += '<button id="add-gate-btn" style="display:inline-flex;align-items:center;justify-content:center;padding:6px 14px;font-size:12px;line-height:1;font-family:inherit;background:var(--accent);color:white;border:none;border-radius:6px;cursor:pointer;margin-top:8px;">+ Add Token Gate</button>';
+        html += '<button id="add-gate-btn" class="btn-primary btn-icon" style="margin-top:8px">+ Add Token Gate</button>';
       }
 
       container.innerHTML = html;
@@ -1377,8 +1377,8 @@
           '<div id="gate-status" class="modal-status hidden"></div>' +
         '</div>' +
         '<div class="modal-footer">' +
-          '<button id="gate-cancel" style="display:inline-flex;align-items:center;justify-content:center;padding:8px 16px;font-size:13px;line-height:1;font-family:inherit;background:#f3f4f6;border:1px solid #d1d5db;border-radius:6px;cursor:pointer;">Cancel</button>' +
-          '<button id="gate-save" style="display:inline-flex;align-items:center;justify-content:center;padding:8px 16px;font-size:13px;line-height:1;font-family:inherit;background:#3b82f6;color:white;border:none;border-radius:6px;cursor:pointer;">Save</button>' +
+          '<button id="gate-cancel" class="btn-secondary">Cancel</button>' +
+          '<button id="gate-save" class="btn-primary">Save</button>' +
         '</div>' +
       '</div>';
 
@@ -1496,10 +1496,10 @@
           container.innerHTML =
             '<div class="sub-expiry ' + statusClass + '">' +
               '<span>' + statusText + '</span>' +
-              (daysLeft <= 0 ? '<button id="renew-sub-btn" style="display:inline-flex;align-items:center;justify-content:center;padding:4px 12px;font-size:11px;line-height:1;font-family:inherit;background:var(--accent);color:white;border:none;border-radius:4px;cursor:pointer;margin-left:8px;">Renew</button>' : '') +
+              (daysLeft <= 0 ? '<button id="renew-sub-btn" class="btn-primary" style="padding:4px 12px;font-size:11px;margin-left:8px;min-height:auto;border-radius:4px">Renew</button>' : '') +
             '</div>' +
             (access.hasAccess && daysLeft > 0 ?
-              '<button id="unsub-btn" style="display:inline-flex;align-items:center;justify-content:center;padding:6px 14px;font-size:12px;line-height:1;font-family:inherit;background:transparent;border:1px solid var(--border);border-radius:6px;cursor:pointer;margin-top:6px;color:var(--text-secondary);">Unsubscribe</button>' : '');
+              '<button id="unsub-btn" class="btn-secondary" style="margin-top:6px;padding:6px 14px;font-size:12px">Unsubscribe</button>' : '');
 
           var renewBtn = document.getElementById('renew-sub-btn');
           if (renewBtn) {

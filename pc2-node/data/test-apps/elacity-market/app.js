@@ -67,7 +67,9 @@
     channelsDirCategory: 'all',
     selectedPlan: null,
     viewedAssets: {},
-    initializing: true
+    initializing: true,
+    libraryFilter: 'all',
+    pinnedCIDs: null
   };
 
   // ── DOM References ───────────────────────────────────
@@ -96,15 +98,18 @@
     dom.earningsLoading = document.getElementById('earnings-loading');
     dom.earningsEmpty = document.getElementById('earnings-empty');
 
-    dom.categoryTabs = document.getElementById('category-tabs');
-    dom.contentTypeTabs = document.getElementById('content-type-tabs');
-    dom.searchTypeTabs = document.getElementById('search-type-tabs');
+    dom.feedFilterChips = document.getElementById('feed-filter-chips');
     dom.nftGrid = document.getElementById('nft-grid');
     dom.browseLoading = document.getElementById('browse-loading');
     dom.browseEmpty = document.getElementById('browse-empty');
-    dom.loadMoreBtn = document.getElementById('load-more-btn');
+    dom.feedSentinel = document.getElementById('feed-sentinel');
 
     dom.searchInput = document.getElementById('search-input');
+    dom.searchClearBtn = document.getElementById('search-clear-btn');
+    dom.searchRecent = document.getElementById('search-recent');
+    dom.searchRecentList = document.getElementById('search-recent-list');
+    dom.searchResultsCount = document.getElementById('search-results-count');
+    dom.searchTypeChips = document.getElementById('search-type-chips');
     dom.searchGrid = document.getElementById('search-grid');
     dom.searchLoading = document.getElementById('search-loading');
     dom.searchEmpty = document.getElementById('search-empty');
@@ -466,7 +471,8 @@
   };
 
   function switchView(viewName) {
-    if (viewName !== 'detail' && viewName !== 'channel') {
+    var isSlideView = (viewName === 'detail' || viewName === 'channel');
+    if (!isSlideView) {
       state.previousView = viewName;
     }
     state.activeView = viewName;
@@ -478,17 +484,30 @@
 
     Object.keys(VIEW_MAP).forEach(function (key) {
       var el = dom[VIEW_MAP[key]];
-      if (el) {
-        el.classList.toggle('active', key === viewName);
-        el.classList.toggle('hidden', key !== viewName);
+      if (!el) return;
+      var isTarget = (key === viewName);
+      el.classList.remove('view-enter', 'view-slide-in', 'view-slide-out');
+      if (isTarget) {
+        el.classList.remove('hidden');
+        el.classList.add('active');
+        el.classList.add(isSlideView ? 'view-slide-in' : 'view-enter');
+      } else {
+        el.classList.remove('active');
+        el.classList.add('hidden');
       }
     });
 
+    if (feedObserver) feedObserver.disconnect();
+
     if (viewName === 'library') renderMyAssetsView();
-    if (viewName === 'search') dom.searchInput.focus();
+    if (viewName === 'search') {
+      dom.searchInput.focus();
+      showRecentSearches();
+    }
     if (viewName === 'channels') loadChannelsDirectory();
     if (viewName === 'subscriptions') renderSubscriptionsView();
     if (viewName === 'watchlater') loadWatchLater();
+    if (viewName === 'feed') setupFeedObserver();
     if (viewName === 'earnings') {
       if (window.ElaMarket && window.ElaMarket.loadEarningsView) {
         window.ElaMarket.loadEarningsView();
@@ -500,18 +519,30 @@
 
   // ── Video Card Rendering ─────────────────────────────
 
-  function renderCard(item, isOwned) {
+  var CONTENT_TYPE_ICONS = {
+    video: '▶',
+    audio: '♫',
+    image: '◻',
+    ebook: '📄',
+    'ai-model': '🤖',
+    dataset: '📊',
+    code: '⟨⟩'
+  };
+
+  function renderCard(item, isOwned, cardIndex) {
     var card = document.createElement('div');
-    card.className = 'video-card';
+    card.className = 'video-card card-appear';
+    card.setAttribute('role', 'article');
     card.dataset.contractAddress = item.contractAddress;
     card.dataset.tokenId = item.hexTokenID || item.tokenID;
+    if (typeof cardIndex === 'number') {
+      card.style.animationDelay = (cardIndex * 40) + 'ms';
+    }
 
-    // Check library ownership even when rendering from feed
     var itemRef = { contractAddress: item.contractAddress, tokenId: item.hexTokenID || item.tokenID };
     if (!isOwned && state.assetsItems.length > 0 && isAssetInLibrary(itemRef)) {
       isOwned = true;
     }
-    // Also check API access field from browse query
     if (!isOwned && item.access && item.access.haveAccess) isOwned = true;
 
     var imageUrl = getImageUrl(item);
@@ -526,61 +557,32 @@
     var avatarContent = avatarUrl
       ? '<img src="' + escapeHtml(avatarUrl) + '" alt="" onerror="this.style.display=\'none\';this.parentNode.textContent=\'' + avatarInitial + '\'" />'
       : avatarInitial;
-
     var hasChannel = item.channel && item.channel.address;
 
-    var walletLabel = '';
-    if (isOwned) {
-      var ownerWallet = item._ownerWallet || getAssetOwnerWallet(itemRef);
-      if (ownerWallet === 'eoa') walletLabel = 'EOA';
-      else if (ownerWallet === 'sa') walletLabel = 'Smart';
-      else if (ownerWallet === 'both') walletLabel = 'Both';
-    }
-    var opType = (item.operative && item.operative.opType) || 0;
-    var priceBadgeHtml = isOwned
-      ? '<span class="price-badge owned-badge">Owned</span>'
-      : (price ? '<span class="price-badge">' + price + '</span>' : '');
-    var walletBadgeHtml = walletLabel
-      ? '<span class="wallet-badge wallet-badge-' + (item._ownerWallet || '') + '">' + walletLabel + '</span>'
-      : '';
-    var resellableBadgeHtml = (isOwned && opType === 2)
-      ? '<span class="resellable-badge">Resellable</span>'
-      : '';
+    card.setAttribute('aria-label', title + (isOwned ? ' (Owned)' : (price ? ' — ' + price : '')));
 
-    var scarcityBadgeHtml = '';
-    var operative = item.operative || {};
-    var accessInfo = operative.access || {};
-    var listingsArr = accessInfo.listings || [];
-    var ts = parseInt(accessInfo.totalSupply) || 0;
-    if (ts > 0 && opType !== 0) {
-      var fs = 0;
-      listingsArr.forEach(function (l) { fs += (parseInt(l.quantity) || 0); });
-      if (fs === 0) {
-        scarcityBadgeHtml = '<span class="scarcity-badge critical">Sold out</span>';
-      } else if ((fs / ts) * 100 <= 20) {
-        scarcityBadgeHtml = '<span class="scarcity-badge low">' + fs + '/' + ts + '</span>';
-      } else {
-        scarcityBadgeHtml = '<span class="scarcity-badge">' + fs + '/' + ts + '</span>';
-      }
-    }
+    var contentBadge = contentType ? '<span class="content-badge">' + escapeHtml(contentType) + '</span>' : '';
+    var priceBadge = isOwned
+      ? '<span class="price-badge owned-badge">✓ Owned</span>'
+      : (price ? '<span class="price-badge">' + price + '</span>' : '');
+
+    var thumbContent = imageUrl
+      ? '<img src="' + escapeHtml(imageUrl) + '" alt="' + title + '" loading="lazy" onerror="this.style.display=\'none\';this.nextElementSibling&&this.nextElementSibling.classList.remove(\'hidden\')" />' +
+        '<div class="thumb-placeholder hidden">' + (CONTENT_TYPE_ICONS[contentType] || '◻') + '</div>'
+      : '<div class="thumb-placeholder">' + (CONTENT_TYPE_ICONS[contentType] || '◻') + '</div>';
 
     card.innerHTML =
       '<div class="video-card-thumb">' +
-        (imageUrl ? '<img src="' + escapeHtml(imageUrl) + '" alt="' + title + '" loading="lazy" onerror="this.style.display=\'none\'" />' : '') +
-        (contentType ? '<span class="content-badge">' + escapeHtml(contentType) + '</span>' : '') +
-        priceBadgeHtml +
-        walletBadgeHtml +
-        resellableBadgeHtml +
-        scarcityBadgeHtml +
+        thumbContent +
+        contentBadge +
+        priceBadge +
       '</div>' +
       '<div class="video-card-info">' +
         '<div class="video-card-avatar">' + avatarContent + '</div>' +
         '<div class="video-card-text">' +
           '<div class="video-card-title">' + title + '</div>' +
           '<div class="video-card-channel' + (hasChannel ? ' clickable' : '') + '">' + channelName + '</div>' +
-          '<div class="video-card-stats">' +
-            (views ? '<span>' + views + '</span>' : '') +
-          '</div>' +
+          (views ? '<div class="video-card-stats"><span>' + views + '</span></div>' : '') +
         '</div>' +
       '</div>';
 
@@ -598,6 +600,33 @@
 
   // ── Feed (Browse) ───────────────────────────────────
 
+  var feedObserver = null;
+
+  function renderSkeletons(container, count) {
+    for (var i = 0; i < count; i++) {
+      var sk = document.createElement('div');
+      sk.className = 'skeleton-card';
+      sk.innerHTML = '<div class="skeleton-thumb"></div><div class="skeleton-text"></div><div class="skeleton-text-short"></div>';
+      container.appendChild(sk);
+    }
+  }
+
+  function removeSkeletons(container) {
+    var skeletons = container.querySelectorAll('.skeleton-card');
+    skeletons.forEach(function (s) { s.remove(); });
+  }
+
+  function setupFeedObserver() {
+    if (feedObserver) feedObserver.disconnect();
+    if (!dom.feedSentinel) return;
+    feedObserver = new IntersectionObserver(function (entries) {
+      if (entries[0].isIntersecting && !state.browseLoading && state.browseOffset < state.browseTotal) {
+        loadBrowse(true);
+      }
+    }, { rootMargin: '200px' });
+    feedObserver.observe(dom.feedSentinel);
+  }
+
   function loadBrowse(append) {
     if (state.browseLoading) return;
     state.browseLoading = true;
@@ -608,9 +637,8 @@
       dom.nftGrid.innerHTML = '';
     }
 
-    dom.browseLoading.classList.remove('hidden');
     dom.browseEmpty.classList.add('hidden');
-    dom.loadMoreBtn.classList.add('hidden');
+    renderSkeletons(dom.nftGrid, append ? 4 : 8);
 
     var preset = ElacityAPI.PRESETS[state.activeCategory];
     var args = preset(state.browseOffset, PAGE_SIZE);
@@ -624,7 +652,7 @@
     ElacityAPI.fetchItems(query, filters)
       .then(function (result) {
         state.browseLoading = false;
-        dom.browseLoading.classList.add('hidden');
+        removeSkeletons(dom.nftGrid);
 
         if (!result || !result.data) {
           if (!append) dom.browseEmpty.classList.remove('hidden');
@@ -635,21 +663,21 @@
         var validItems = (result.data || []).filter(function (item) { return item !== null; });
         state.browseItems = state.browseItems.concat(validItems);
         state.browseOffset += result.data ? result.data.length : 0;
+        var baseIndex = state.browseItems.length - validItems.length;
 
-        validItems.forEach(function (item) {
-          dom.nftGrid.appendChild(renderCard(item));
+        validItems.forEach(function (item, idx) {
+          dom.nftGrid.appendChild(renderCard(item, false, baseIndex + idx));
         });
 
         if (state.browseItems.length === 0) {
           dom.browseEmpty.classList.remove('hidden');
         }
 
-        if (state.browseOffset < state.browseTotal) {
-          dom.loadMoreBtn.classList.remove('hidden');
-        }
+        setupFeedObserver();
       })
       .catch(function (err) {
         state.browseLoading = false;
+        removeSkeletons(dom.nftGrid);
         dom.browseLoading.classList.add('hidden');
         showToast('Failed to load: ' + err.message, 'error');
       });
@@ -657,18 +685,55 @@
 
   // ── Search ──────────────────────────────────────────
 
+  function getRecentSearches() {
+    try { return JSON.parse(localStorage.getItem('ela_recent_searches') || '[]'); } catch (e) { return []; }
+  }
+
+  function saveRecentSearch(q) {
+    if (!q) return;
+    var recent = getRecentSearches().filter(function (s) { return s !== q; });
+    recent.unshift(q);
+    if (recent.length > 8) recent = recent.slice(0, 8);
+    try { localStorage.setItem('ela_recent_searches', JSON.stringify(recent)); } catch (e) { /* noop */ }
+  }
+
+  function showRecentSearches() {
+    var recent = getRecentSearches();
+    if (recent.length === 0 || state.searchQuery) {
+      dom.searchRecent.classList.add('hidden');
+      return;
+    }
+    dom.searchRecent.classList.remove('hidden');
+    dom.searchRecentList.innerHTML = '';
+    recent.forEach(function (term) {
+      var btn = document.createElement('button');
+      btn.className = 'search-recent-item';
+      btn.textContent = term;
+      btn.addEventListener('click', function () {
+        dom.searchInput.value = term;
+        dom.searchClearBtn.classList.remove('hidden');
+        state.searchQuery = term;
+        dom.searchRecent.classList.add('hidden');
+        loadSearch();
+      });
+      dom.searchRecentList.appendChild(btn);
+    });
+  }
+
   function loadSearch() {
     var q = state.searchQuery;
     if (!q) {
       dom.searchGrid.innerHTML = '';
       dom.searchEmpty.classList.add('hidden');
+      dom.searchResultsCount.classList.add('hidden');
       return;
     }
 
     state.searchLoading = true;
-    dom.searchLoading.classList.remove('hidden');
     dom.searchEmpty.classList.add('hidden');
+    dom.searchResultsCount.classList.add('hidden');
     dom.searchGrid.innerHTML = '';
+    renderSkeletons(dom.searchGrid, 6);
 
     var searchQuery = { type: 'single' };
     if (state.searchContentType !== 'all') {
@@ -681,21 +746,28 @@
     )
       .then(function (result) {
         state.searchLoading = false;
-        dom.searchLoading.classList.add('hidden');
+        removeSkeletons(dom.searchGrid);
+
+        saveRecentSearch(q);
 
         if (!result || !result.data || result.data.length === 0) {
           dom.searchEmpty.classList.remove('hidden');
+          dom.searchResultsCount.textContent = 'No results for "' + q + '"';
+          dom.searchResultsCount.classList.remove('hidden');
           return;
         }
 
         state.searchItems = result.data;
-        result.data.forEach(function (item) {
-          dom.searchGrid.appendChild(renderCard(item));
+        dom.searchResultsCount.textContent = result.data.length + (result.total > result.data.length ? ' of ' + result.total : '') + ' result' + (result.data.length !== 1 ? 's' : '');
+        dom.searchResultsCount.classList.remove('hidden');
+
+        result.data.forEach(function (item, idx) {
+          dom.searchGrid.appendChild(renderCard(item, false, idx));
         });
       })
       .catch(function (err) {
         state.searchLoading = false;
-        dom.searchLoading.classList.add('hidden');
+        removeSkeletons(dom.searchGrid);
         showToast('Search failed: ' + err.message, 'error');
       });
   }
@@ -703,11 +775,12 @@
   // ── My Library ──────────────────────────────────────
 
   function renderMyAssetsView() {
+    var libraryControls = document.getElementById('library-controls');
     if (!Wallet.isConnected()) {
-      console.log('[Library] Wallet not connected, showing auth prompt');
       dom.authPrompt.classList.remove('hidden');
       dom.assetsGrid.classList.add('hidden');
       dom.assetsEmpty.classList.add('hidden');
+      if (libraryControls) { libraryControls.classList.add('hidden'); libraryControls.style.display = 'none'; }
       return;
     }
 
@@ -736,6 +809,7 @@
 
     dom.authPrompt.classList.add('hidden');
     dom.assetsGrid.classList.remove('hidden');
+    if (libraryControls) { libraryControls.classList.remove('hidden'); libraryControls.style.display = 'flex'; }
 
     if (state.assetsItems.length === 0 && !state.assetsLoading) {
       loadMyAssets();
@@ -744,8 +818,54 @@
 
   function refreshLibrary() {
     state.assetsItems = [];
+    state.pinnedCIDs = null;
     state.assetsLoading = false;
     loadMyAssets();
+  }
+
+  function fetchPinnedCIDs() {
+    return pc2Fetch('/api/storage/ipfs/pins')
+      .then(function (res) { return res.ok ? res.json() : { cids: [] }; })
+      .then(function (data) {
+        state.pinnedCIDs = new Set(data.cids || []);
+        return state.pinnedCIDs;
+      })
+      .catch(function () { state.pinnedCIDs = new Set(); return state.pinnedCIDs; });
+  }
+
+  function getAssetCID(item) {
+    var meta = item.metadata || {};
+    var asset = item._rawAsset || meta.asset || {};
+    var media = meta.media || {};
+    var cid = asset.cid || asset.uri || media.uri || '';
+    return cid.replace('ipfs://', '').split('/')[0];
+  }
+
+  function applyLibraryFilter() {
+    var filter = state.libraryFilter;
+    dom.assetsGrid.innerHTML = '';
+    if (!state.assetsItems || state.assetsItems.length === 0) {
+      dom.assetsEmpty.classList.remove('hidden');
+      return;
+    }
+
+    var pinSet = state.pinnedCIDs || new Set();
+    var filtered = state.assetsItems;
+    if (filter === 'downloaded') {
+      filtered = state.assetsItems.filter(function (item) { return pinSet.has(getAssetCID(item)); });
+    } else if (filter === 'not-downloaded') {
+      filtered = state.assetsItems.filter(function (item) { return !pinSet.has(getAssetCID(item)); });
+    }
+
+    if (filtered.length === 0) {
+      dom.assetsEmpty.classList.remove('hidden');
+      dom.assetsEmpty.querySelector('h3').textContent = filter === 'downloaded' ? 'No downloaded items' : filter === 'not-downloaded' ? 'All items downloaded' : 'No items';
+      return;
+    }
+    dom.assetsEmpty.classList.add('hidden');
+    filtered.forEach(function (item, idx) {
+      dom.assetsGrid.appendChild(renderCard(item, true, idx));
+    });
   }
 
   function loadMyAssets() {
@@ -754,9 +874,9 @@
     if (state.assetsLoading || !eoaAddr) return;
     state.assetsLoading = true;
 
-    dom.assetsLoading.classList.remove('hidden');
     dom.assetsEmpty.classList.add('hidden');
     dom.assetsGrid.innerHTML = '';
+    renderSkeletons(dom.assetsGrid, 6);
 
     var hasSeparateSA = saAddr && eoaAddr.toLowerCase() !== saAddr.toLowerCase();
     console.log('[Library] Loading assets — EOA:', eoaAddr, 'SA:', saAddr, 'dual:', hasSeparateSA);
@@ -769,7 +889,7 @@
     Promise.all(fetches)
       .then(function (results) {
         state.assetsLoading = false;
-        dom.assetsLoading.classList.add('hidden');
+        removeSkeletons(dom.assetsGrid);
 
         var saItems = (results[0] && results[0].data) || [];
         var eoaItems = hasSeparateSA ? ((results[1] && results[1].data) || []) : [];
@@ -789,22 +909,20 @@
           }
         });
 
-        console.log('[Library] SA:', saItems.length, 'EOA:', eoaItems.length, 'merged:', merged.length);
-
         if (merged.length === 0) {
           dom.assetsEmpty.classList.remove('hidden');
           return;
         }
 
         state.assetsItems = merged;
-        merged.forEach(function (item) {
-          dom.assetsGrid.appendChild(renderCard(item, true));
+
+        fetchPinnedCIDs().then(function () {
+          applyLibraryFilter();
         });
       })
       .catch(function (err) {
         state.assetsLoading = false;
-        dom.assetsLoading.classList.add('hidden');
-        console.error('[Library] Error:', err);
+        removeSkeletons(dom.assetsGrid);
         dom.assetsEmpty.classList.remove('hidden');
         showToast('Failed to load library: ' + err.message, 'error');
       });
@@ -838,11 +956,10 @@
     dom.detailViews.textContent = '';
     dom.detailDescription.textContent = '';
     dom.detailPriceSection.classList.add('hidden');
-    dom.buyBtn.classList.remove('hidden');
+    setBuyButtonState('idle');
     dom.detailOwned.classList.add('hidden');
     dom.detailBalanceInfo.classList.add('hidden');
     dom.detailBalanceInfo.innerHTML = '';
-    dom.detailSupplyInfo.classList.add('hidden');
     dom.detailSupplyInfo.innerHTML = '';
     dom.playBtn.classList.add('hidden');
     dom.playOwnedBtn.classList.add('hidden');
@@ -857,8 +974,10 @@
     dom.detailRoyaltyInfo.classList.add('hidden');
     dom.detailRoyaltyInfo.innerHTML = '';
     var sellersEl = document.getElementById('detail-sellers-list');
-    if (sellersEl) { sellersEl.classList.add('hidden'); sellersEl.innerHTML = ''; }
+    if (sellersEl) { sellersEl.innerHTML = ''; }
     dom.detailGovernance.classList.add('hidden');
+    var govSection = document.getElementById('detail-governance-section');
+    if (govSection) govSection.classList.add('hidden');
     dom.govBalance.innerHTML = '';
     dom.govRewards.innerHTML = '';
     dom.govWithdrawBtn.classList.add('hidden');
@@ -1360,6 +1479,8 @@
       dom.govListBtn.classList.remove('hidden');
       dom.govTransferBtn.classList.remove('hidden');
       dom.detailGovernance.classList.remove('hidden');
+      var govSection = document.getElementById('detail-governance-section');
+      if (govSection) govSection.classList.remove('hidden');
 
       var rewardPromises = [Wallet.getPendingRewards(operativeAddr, eoaAddr, USDC_ADDRESS)];
       if (hasSA && saAddr && saAddr.toLowerCase() !== eoaAddr.toLowerCase()) {
@@ -2744,8 +2865,7 @@
     walletChoicePromise
       .then(function (walletChoice) {
         state.purchasing = true;
-        dom.buyBtn.disabled = true;
-        setPurchaseStatus('pending', walletChoice === 'eoa' ? 'Switching to Base chain...' : 'Preparing Smart Account...');
+        setBuyButtonState('waiting', walletChoice === 'eoa' ? 'Switching to Base chain…' : 'Preparing Smart Account…');
 
         var chainReady = walletChoice === 'eoa'
           ? (Wallet.switchToBase ? Wallet.switchToBase() : Promise.resolve())
@@ -2762,7 +2882,7 @@
             throw new Error('No AuthorityGateway address found for this asset');
           }
 
-          setPurchaseStatus('pending', 'Confirm transaction in your wallet...');
+          setBuyButtonState('waiting', 'Confirm transaction in your wallet…');
 
           if (walletChoice === 'eoa') {
             return Wallet.buyAccessWithEOA(
@@ -2782,13 +2902,13 @@
         if (txHashOrReceipt && txHashOrReceipt._smartAccountConfirmed) {
           return txHashOrReceipt;
         }
-        setPurchaseStatus('pending', 'Transaction submitted. Waiting for confirmation...');
+        setBuyButtonState('confirming', 'Transaction submitted. Waiting for confirmation…');
         return Wallet.waitForReceipt(txHashOrReceipt);
       })
       .then(function (receipt) {
         var success = receipt && (receipt.status === '0x1' || receipt.status === 1);
         if (success) {
-          setPurchaseStatus('success', 'Purchase successful! Saving to your node...');
+          setBuyButtonState('success', 'Purchase successful! Saving to your node…');
           dom.detailPriceSection.classList.add('hidden');
           dom.playBtn.classList.add('hidden');
           dom.detailOwned.classList.remove('hidden');
@@ -2804,21 +2924,48 @@
           setTimeout(function () { state.assetsItems = []; }, 8000);
           setTimeout(function () { state.assetsItems = []; }, 20000);
         } else {
-          setPurchaseStatus('error', 'Transaction failed. Please try again.');
+          setBuyButtonState('error', 'Transaction failed. Please try again.');
         }
         state.purchasing = false;
-        dom.buyBtn.disabled = false;
       })
       .catch(function (err) {
         state.purchasing = false;
-        dom.buyBtn.disabled = false;
         var msg = err.message || String(err);
         if (msg.indexOf('user rejected') !== -1 || msg.indexOf('User denied') !== -1) {
-          setPurchaseStatus('error', 'Transaction cancelled by user.');
+          setBuyButtonState('error', 'Transaction cancelled.');
         } else {
-          setPurchaseStatus('error', 'Purchase failed: ' + decodeContractError(msg));
+          setBuyButtonState('error', 'Purchase failed: ' + decodeContractError(msg));
         }
       });
+  }
+
+  function setBuyButtonState(st, message) {
+    if (st === 'idle') {
+      dom.buyBtn.disabled = false;
+      dom.buyBtn.className = 'btn-primary buy-btn';
+      dom.buyBtn.textContent = 'Buy Now';
+      dom.purchaseStatus.classList.add('hidden');
+    } else if (st === 'waiting') {
+      dom.buyBtn.disabled = true;
+      dom.buyBtn.className = 'btn-primary buy-btn buy-btn-waiting';
+      dom.buyBtn.textContent = 'Waiting…';
+      setPurchaseStatus('pending', message || 'Confirm in wallet…');
+    } else if (st === 'confirming') {
+      dom.buyBtn.disabled = true;
+      dom.buyBtn.className = 'btn-primary buy-btn buy-btn-confirming';
+      dom.buyBtn.textContent = 'Confirming…';
+      setPurchaseStatus('pending', message || 'Transaction submitted…');
+    } else if (st === 'success') {
+      dom.buyBtn.disabled = true;
+      dom.buyBtn.className = 'btn-success buy-btn buy-btn-success';
+      dom.buyBtn.innerHTML = '✓ Purchased';
+      setPurchaseStatus('success', message || 'Purchase complete!');
+    } else if (st === 'error') {
+      dom.buyBtn.disabled = false;
+      dom.buyBtn.className = 'btn-primary buy-btn';
+      dom.buyBtn.textContent = 'Buy Now';
+      setPurchaseStatus('error', message || 'Transaction failed');
+    }
   }
 
   function setPurchaseStatus(type, message) {
@@ -3206,30 +3353,28 @@
         .catch(function (err) { showToast('Connection failed: ' + err.message, 'error'); });
     });
 
-    dom.categoryTabs.addEventListener('click', function (e) {
-      var tab = e.target.closest('.filter-tab');
-      if (!tab) return;
-      document.querySelectorAll('.filter-tab').forEach(function (t) { t.classList.remove('active'); });
-      tab.classList.add('active');
-      state.activeCategory = tab.dataset.category;
+    dom.feedFilterChips.addEventListener('click', function (e) {
+      var chip = e.target.closest('.filter-chip');
+      if (!chip) return;
+      dom.feedFilterChips.querySelectorAll('.filter-chip').forEach(function (c) { c.classList.remove('active'); });
+      chip.classList.add('active');
+      if (chip.dataset.category) {
+        state.activeCategory = chip.dataset.category;
+        state.activeContentType = 'all';
+      }
+      if (chip.dataset.type && chip.dataset.type !== 'all') {
+        state.activeContentType = chip.dataset.type;
+        if (!chip.dataset.category) state.activeCategory = 'all';
+      }
       loadBrowse(false);
     });
 
-    dom.contentTypeTabs.addEventListener('click', function (e) {
-      var tab = e.target.closest('.type-tab');
-      if (!tab) return;
-      dom.contentTypeTabs.querySelectorAll('.type-tab').forEach(function (t) { t.classList.remove('active'); });
-      tab.classList.add('active');
-      state.activeContentType = tab.dataset.type;
-      loadBrowse(false);
-    });
-
-    dom.searchTypeTabs.addEventListener('click', function (e) {
-      var tab = e.target.closest('.type-tab');
-      if (!tab) return;
-      dom.searchTypeTabs.querySelectorAll('.type-tab').forEach(function (t) { t.classList.remove('active'); });
-      tab.classList.add('active');
-      state.searchContentType = tab.dataset.type;
+    dom.searchTypeChips.addEventListener('click', function (e) {
+      var chip = e.target.closest('.filter-chip');
+      if (!chip) return;
+      dom.searchTypeChips.querySelectorAll('.filter-chip').forEach(function (c) { c.classList.remove('active'); });
+      chip.classList.add('active');
+      state.searchContentType = chip.dataset.type;
       if (state.searchQuery) loadSearch();
     });
 
@@ -3269,14 +3414,30 @@
 
     dom.searchInput.addEventListener('input', function () {
       clearTimeout(state.searchTimeout);
+      var val = dom.searchInput.value.trim();
+      dom.searchClearBtn.classList.toggle('hidden', !val);
+      if (!val) {
+        showRecentSearches();
+        dom.searchResultsCount.classList.add('hidden');
+      }
       state.searchTimeout = setTimeout(function () {
-        state.searchQuery = dom.searchInput.value.trim();
-        loadSearch();
-      }, 500);
+        state.searchQuery = val;
+        if (val) {
+          dom.searchRecent.classList.add('hidden');
+          loadSearch();
+        }
+      }, 300);
     });
 
-    dom.loadMoreBtn.addEventListener('click', function () {
-      loadBrowse(true);
+    dom.searchClearBtn.addEventListener('click', function () {
+      dom.searchInput.value = '';
+      dom.searchClearBtn.classList.add('hidden');
+      dom.searchResultsCount.classList.add('hidden');
+      dom.searchGrid.innerHTML = '';
+      dom.searchEmpty.classList.add('hidden');
+      state.searchQuery = '';
+      showRecentSearches();
+      dom.searchInput.focus();
     });
 
     dom.authBtn.addEventListener('click', handleAuth);
@@ -3287,6 +3448,20 @@
         refreshLibrary();
       }
     });
+
+    var libraryFilterEl = document.getElementById('library-filter');
+    if (libraryFilterEl) {
+      libraryFilterEl.addEventListener('click', function (e) {
+        var btn = e.target.closest('.segment-btn');
+        if (!btn) return;
+        libraryFilterEl.querySelectorAll('.segment-btn').forEach(function (b) { b.classList.remove('active'); });
+        btn.classList.add('active');
+        state.libraryFilter = btn.dataset.filter || 'all';
+        if (state.assetsItems.length > 0) {
+          applyLibraryFilter();
+        }
+      });
+    }
     dom.detailBackBtn.addEventListener('click', goBack);
     dom.channelBackBtn.addEventListener('click', goBack);
     dom.subscribeBtn.addEventListener('click', handleSubscribe);
@@ -3299,6 +3474,8 @@
 
     document.addEventListener('keydown', function (e) {
       if (e.key === 'Escape') {
+        var wcm = document.getElementById('wallet-choice-modal');
+        if (wcm && !wcm.classList.contains('hidden')) { wcm.classList.add('hidden'); return; }
         if (!dom.govListModal.classList.contains('hidden')) { closeGovListModal(); return; }
         if (!dom.govTransferModal.classList.contains('hidden')) { closeGovTransferModal(); return; }
         if (!dom.resellModal.classList.contains('hidden')) { closeResellModal(); return; }
@@ -3307,6 +3484,22 @@
         if (state.activeView === 'detail' || state.activeView === 'channel') { goBack(); }
       }
     });
+
+    document.querySelectorAll('.collapsible-header').forEach(function (header) {
+      header.addEventListener('click', function () {
+        var section = header.closest('.collapsible-section');
+        if (!section) return;
+        var isOpen = section.classList.toggle('open');
+        header.setAttribute('aria-expanded', String(isOpen));
+      });
+    });
+
+    var wcOverlay = document.getElementById('wallet-choice-modal');
+    if (wcOverlay) {
+      wcOverlay.addEventListener('click', function (e) {
+        if (e.target === wcOverlay) wcOverlay.classList.add('hidden');
+      });
+    }
 
     dom.themeToggle.addEventListener('click', toggleTheme);
 
@@ -3370,14 +3563,36 @@
   state.earningsRewards = null;
 
   function loadEarningsView() {
-    if (!Wallet.isConnected() || !ElacityAPI.isAuthenticated()) {
+    if (!Wallet.isConnected()) {
       dom.earningsAuthPrompt.classList.remove('hidden');
       dom.earningsSummary.classList.add('hidden');
       dom.earningsList.innerHTML = '';
       dom.earningsEmpty.classList.add('hidden');
       return;
     }
+    if (!ElacityAPI.isAuthenticated()) {
+      dom.earningsAuthPrompt.classList.add('hidden');
+      dom.earningsSummary.classList.add('hidden');
+      dom.earningsList.innerHTML = '';
+      dom.earningsEmpty.classList.add('hidden');
+      dom.earningsLoading.classList.remove('hidden');
+      Wallet.siweLogin()
+        .then(function () {
+          dom.earningsLoading.classList.add('hidden');
+          loadEarningsView();
+        })
+        .catch(function (err) {
+          dom.earningsLoading.classList.add('hidden');
+          dom.earningsAuthPrompt.classList.remove('hidden');
+          showToast('Earnings login failed: ' + (err.message || 'signature rejected'), 'error');
+        });
+      return;
+    }
     dom.earningsAuthPrompt.classList.add('hidden');
+    var emptyH3 = dom.earningsEmpty.querySelector('h3');
+    var emptyP = dom.earningsEmpty.querySelector('p');
+    if (emptyH3) emptyH3.textContent = 'No royalty holdings found';
+    if (emptyP) emptyP.textContent = "You'll see your earnings here when you hold royalty share tokens for any channels or assets.";
     loadEarningsData(state.earningsTab);
   }
 
@@ -3468,6 +3683,11 @@
     }).catch(function (err) {
       dom.earningsLoading.classList.add('hidden');
       dom.earningsEmpty.classList.remove('hidden');
+      var emptyH3 = dom.earningsEmpty.querySelector('h3');
+      var emptyP = dom.earningsEmpty.querySelector('p');
+      if (emptyH3) emptyH3.textContent = 'Failed to load earnings';
+      if (emptyP) emptyP.textContent = 'Could not reach the Elacity API. Check your connection and try refreshing.';
+      showToast('Earnings load failed: ' + (err.message || 'network error'), 'error');
       console.warn('[Earnings] Load failed:', err);
     });
   }
@@ -3604,6 +3824,7 @@
     cacheDom();
     bindEvents();
     loadBrowse(false);
+    setupFeedObserver();
 
     Wallet.connect()
       .then(function () {

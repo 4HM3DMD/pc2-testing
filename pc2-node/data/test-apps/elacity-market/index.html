@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Elacity Market</title>
   <link rel="icon" type="image/png" href="assets/favicon.png">
-  <link rel="stylesheet" href="styles.css?v=13">
+  <link rel="stylesheet" href="styles.css?v=20">
 </head>
 <body>
 
@@ -16,7 +16,7 @@
       <img class="sidebar-logo logo-dark" src="assets/logo-white.svg" alt="Elacity" />
     </div>
 
-    <nav class="sidebar-nav" id="sidebar-nav">
+    <nav class="sidebar-nav" id="sidebar-nav" role="navigation" aria-label="Main navigation">
       <button class="nav-item active" data-view="feed">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
         <span>Feed</span>
@@ -67,29 +67,22 @@
     <section id="view-feed" class="view active">
       <div class="view-header">
         <h2 class="view-title">Feed</h2>
-        <div class="filter-tabs" id="category-tabs">
-          <button class="filter-tab active" data-category="buyNow">Buy Now</button>
-          <button class="filter-tab" data-category="popular">Popular</button>
-          <button class="filter-tab" data-category="all">All</button>
-        </div>
       </div>
-      <div class="content-type-tabs" id="content-type-tabs">
-        <button class="type-tab active" data-type="all">All</button>
-        <button class="type-tab" data-type="video">Video</button>
-        <button class="type-tab" data-type="audio">Audio</button>
-        <button class="type-tab" data-type="image">Image</button>
+      <div class="filter-chips" id="feed-filter-chips">
+        <button class="filter-chip active" data-category="buyNow" data-type="all">Buy Now</button>
+        <button class="filter-chip" data-category="popular" data-type="all">Popular</button>
+        <button class="filter-chip" data-category="all" data-type="all">All</button>
+        <span class="filter-chip-divider" style="width:1px;background:var(--border);align-self:stretch;margin:0 4px;flex-shrink:0"></span>
+        <button class="filter-chip" data-category="" data-type="video">Video</button>
+        <button class="filter-chip" data-category="" data-type="audio">Audio</button>
+        <button class="filter-chip" data-category="" data-type="image">Image</button>
       </div>
       <div id="nft-grid" class="content-grid"></div>
-      <div id="browse-loading" class="loading-indicator hidden">
-        <div class="spinner"></div>
-        <span>Loading...</span>
-      </div>
+      <div id="browse-loading" class="loading-indicator hidden"></div>
       <div id="browse-empty" class="empty-state hidden">
         <p>No items found</p>
       </div>
-      <div class="load-more-wrap">
-        <button id="load-more-btn" class="load-more-btn hidden">Load More</button>
-      </div>
+      <div id="feed-sentinel" class="feed-sentinel"></div>
     </section>
 
     <!-- Search View -->
@@ -97,20 +90,23 @@
       <div class="view-header">
         <div class="search-bar">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          <input type="text" id="search-input" placeholder="Search Elacity..." autofocus />
+          <input type="text" id="search-input" placeholder="Search Elacity..." />
+          <button id="search-clear-btn" class="search-clear hidden" type="button" aria-label="Clear search">&times;</button>
         </div>
       </div>
-      <div class="content-type-tabs" id="search-type-tabs">
-        <button class="type-tab active" data-type="all">All</button>
-        <button class="type-tab" data-type="video">Video</button>
-        <button class="type-tab" data-type="audio">Audio</button>
-        <button class="type-tab" data-type="image">Image</button>
+      <div id="search-recent" class="search-recent hidden">
+        <span class="search-recent-label">Recent</span>
+        <div id="search-recent-list" class="search-recent-list"></div>
+      </div>
+      <div id="search-results-count" class="search-results-count hidden"></div>
+      <div class="filter-chips" id="search-type-chips">
+        <button class="filter-chip active" data-type="all">All</button>
+        <button class="filter-chip" data-type="video">Video</button>
+        <button class="filter-chip" data-type="audio">Audio</button>
+        <button class="filter-chip" data-type="image">Image</button>
       </div>
       <div id="search-grid" class="content-grid"></div>
-      <div id="search-loading" class="loading-indicator hidden">
-        <div class="spinner"></div>
-        <span>Searching...</span>
-      </div>
+      <div id="search-loading" class="loading-indicator hidden"></div>
       <div id="search-empty" class="empty-state hidden">
         <p>No results found</p>
       </div>
@@ -120,7 +116,14 @@
     <section id="view-library" class="view hidden">
       <div class="view-header">
         <h2 class="view-title">My Library</h2>
-        <button id="library-refresh-btn" style="display: inline-flex; align-items: center; justify-content: center; padding: 6px 12px; font-size: 12px; line-height: 1; font-family: inherit; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); border-radius: 6px; cursor: pointer; color: #ccc; margin-left: auto;" title="Refresh library">↻ Refresh</button>
+        <div id="library-controls" class="hidden" style="display:none;align-items:center;gap:12px;margin-left:auto">
+          <div class="segmented-control" id="library-filter">
+            <button class="segment-btn active" data-filter="all">All</button>
+            <button class="segment-btn" data-filter="downloaded">Downloaded</button>
+            <button class="segment-btn" data-filter="not-downloaded">Not Downloaded</button>
+          </div>
+          <button id="library-refresh-btn" class="btn-icon" title="Refresh library">↻</button>
+        </div>
       </div>
       <div id="auth-prompt" class="auth-prompt hidden">
         <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -128,13 +131,10 @@
         </svg>
         <h2>Sign in to view your library</h2>
         <p>Authenticate with your wallet to access your Elacity content.</p>
-        <button id="auth-btn" class="primary-btn">Sign In with Wallet</button>
+        <button id="auth-btn" class="btn-primary" style="padding:12px 28px;font-size:14px">Sign In with Wallet</button>
       </div>
       <div id="assets-grid" class="content-grid hidden"></div>
-      <div id="assets-loading" class="loading-indicator hidden">
-        <div class="spinner"></div>
-        <span>Loading your library...</span>
-      </div>
+      <div id="assets-loading" class="loading-indicator hidden"></div>
       <div id="assets-empty" class="empty-state hidden">
         <p>Your library is empty. Browse the feed to discover content.</p>
       </div>
@@ -249,10 +249,20 @@
         <p>Connect your wallet to view your earnings.</p>
       </div>
       <div id="earnings-summary" class="earnings-summary hidden">
-        <div class="earnings-total">
-          <span class="earnings-total-label">Total Unclaimed</span>
-          <span id="earnings-total-amount" class="earnings-total-amount">$0.00</span>
-          <button id="earnings-withdraw-all-btn" style="display: inline-flex; align-items: center; justify-content: center; padding: 8px 16px; font-size: 13px; line-height: 1; font-family: inherit; background: #22c55e; color: white; border: none; border-radius: 6px; cursor: pointer; margin-left: 12px;" disabled>Withdraw All</button>
+        <div class="earnings-dashboard-cards">
+          <div class="earnings-dash-card earnings-dash-primary">
+            <span class="earnings-dash-label">Total Unclaimed</span>
+            <span id="earnings-total-amount" class="earnings-total-amount">$0.00</span>
+            <button id="earnings-withdraw-all-btn" class="btn-success" disabled>Withdraw All</button>
+          </div>
+          <div class="earnings-dash-card" id="earnings-dash-total-earned">
+            <span class="earnings-dash-label">Total Earned</span>
+            <span class="earnings-dash-value" id="earnings-total-earned">$0.00</span>
+          </div>
+          <div class="earnings-dash-card" id="earnings-dash-active-assets">
+            <span class="earnings-dash-label">Active Assets</span>
+            <span class="earnings-dash-value" id="earnings-active-count">0</span>
+          </div>
         </div>
       </div>
       <div class="earnings-tabs" id="earnings-tabs">
@@ -274,18 +284,27 @@
     <!-- Detail View (replaces content area, not a modal) -->
     <section id="view-detail" class="view hidden">
       <div class="detail-topbar">
-        <button id="detail-back-btn" class="back-btn">
+        <button id="detail-back-btn" class="back-btn" aria-label="Go back">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
         </button>
       </div>
       <div class="detail-content">
+        <!-- Media Zone -->
         <div class="detail-media" id="detail-media">
           <img id="detail-image" src="" alt="" />
           <div id="detail-preview-player" class="detail-preview-player hidden"></div>
         </div>
+
         <div class="detail-body">
+          <!-- Identity Zone -->
           <h1 id="detail-title"></h1>
           <div class="detail-channel" id="detail-creator"></div>
+          <div class="detail-meta" id="detail-meta">
+            <span id="detail-date"></span>
+            <span id="detail-views"></span>
+          </div>
+
+          <!-- Action Bar -->
           <div class="detail-action-row">
             <button id="preview-btn" class="action-btn action-preview hidden" title="Preview">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8" fill="currentColor" stroke="none"/></svg>
@@ -307,19 +326,24 @@
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>
               <span id="like-count"></span>
             </button>
+            <button id="download-node-btn" class="action-btn download-node-btn hidden" title="Save to your personal cloud">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19.35 10.04A7.49 7.49 0 0 0 12 4C9.11 4 6.6 5.64 5.35 8.04A5.994 5.994 0 0 0 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96z"/><polyline points="8 13 12 17 16 13"/><line x1="12" y1="17" x2="12" y2="9"/></svg>
+              <span>Save to Cloud</span>
+            </button>
+            <button id="open-viewer-btn" class="action-btn action-viewer open-viewer-btn hidden" title="Open in dDRM Viewer (secure runtime)">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+              <span>Open in Viewer</span>
+            </button>
           </div>
-          <div class="detail-meta" id="detail-meta">
-            <span id="detail-date"></span>
-            <span id="detail-views"></span>
-          </div>
-          <p id="detail-description" class="detail-description"></p>
+
+          <!-- Commerce Zone -->
           <div id="detail-price-section" class="detail-price-section hidden">
             <div class="price-row">
               <div>
                 <div class="price-label">Price</div>
                 <div id="detail-price" class="price-value"></div>
               </div>
-              <button id="buy-btn" class="primary-btn buy-btn">Buy Now</button>
+              <button id="buy-btn" class="btn-primary buy-btn">Buy Now</button>
             </div>
           </div>
           <div id="detail-owned" class="detail-owned-badge hidden">
@@ -327,15 +351,8 @@
             <span>Owned</span>
           </div>
           <div id="detail-balance-info" class="detail-balance-info hidden"></div>
-          <div id="detail-supply-info" class="detail-supply-info hidden"></div>
-          <button id="download-node-btn" class="action-btn download-node-btn hidden" title="Save to your personal cloud">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19.35 10.04A7.49 7.49 0 0 0 12 4C9.11 4 6.6 5.64 5.35 8.04A5.994 5.994 0 0 0 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96z"/><polyline points="8 13 12 17 16 13"/><line x1="12" y1="17" x2="12" y2="9"/></svg>
-            <span>Save to Cloud</span>
-          </button>
-          <button id="open-viewer-btn" class="action-btn action-viewer open-viewer-btn hidden" title="Open in dDRM Viewer (secure runtime)">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-            <span>Open in Viewer</span>
-          </button>
+          <div id="purchase-status" class="purchase-status hidden"></div>
+          <div id="download-status" class="download-status hidden"></div>
           <div class="detail-owner-actions hidden" id="detail-owner-actions">
             <button id="resell-btn" class="action-btn action-resell" title="List your access tokens for sale">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
@@ -346,23 +363,57 @@
               <span>Transfer</span>
             </button>
           </div>
-          <div id="detail-royalty-info" class="detail-royalty-info hidden"></div>
-          <div id="detail-sellers-list" class="detail-sellers-list hidden"></div>
-          <div id="detail-governance" class="detail-governance hidden">
-            <div class="governance-header">
-              <span class="governance-title">Royalty Shares</span>
-            </div>
-            <div id="governance-balance" class="governance-row"></div>
-            <div id="governance-rewards" class="governance-row"></div>
-            <div class="governance-actions" id="governance-actions">
-              <button id="gov-withdraw-btn" class="action-btn action-withdraw hidden" title="Withdraw pending rewards">Withdraw</button>
-              <button id="gov-list-btn" class="action-btn action-resell hidden" title="List royalty shares for sale">List Shares</button>
-              <button id="gov-transfer-btn" class="action-btn action-transfer hidden" title="Transfer royalty shares">Transfer Shares</button>
+
+          <!-- About Section (collapsible) -->
+          <div id="detail-about-section" class="collapsible-section open">
+            <button class="collapsible-header" aria-expanded="true">
+              <span>About</span>
+              <span class="collapse-arrow">▼</span>
+            </button>
+            <div class="collapsible-body">
+              <div class="collapsible-content">
+                <p id="detail-description" class="detail-description"></p>
+                <div id="detail-attributes" class="detail-attributes"></div>
+              </div>
             </div>
           </div>
-          <div id="download-status" class="download-status hidden"></div>
-          <div id="detail-attributes" class="detail-attributes"></div>
-          <div id="purchase-status" class="purchase-status hidden"></div>
+
+          <!-- Market Section (collapsible) -->
+          <div id="detail-market-section" class="collapsible-section">
+            <button class="collapsible-header" aria-expanded="false">
+              <span>Market</span>
+              <span class="collapse-arrow">▼</span>
+            </button>
+            <div class="collapsible-body">
+              <div class="collapsible-content">
+                <div id="detail-supply-info" class="detail-supply-info"></div>
+                <div id="detail-royalty-info" class="detail-royalty-info"></div>
+                <div id="detail-sellers-list" class="detail-sellers-list"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Governance Section (collapsible) -->
+          <div id="detail-governance-section" class="collapsible-section hidden">
+            <button class="collapsible-header" aria-expanded="false">
+              <span>Royalty Shares</span>
+              <span class="collapse-arrow">▼</span>
+            </button>
+            <div class="collapsible-body">
+              <div class="collapsible-content">
+                <div id="detail-governance" class="detail-governance">
+                  <div id="governance-balance" class="governance-row"></div>
+                  <div id="governance-rewards" class="governance-row"></div>
+                  <div class="governance-actions" id="governance-actions">
+                    <button id="gov-withdraw-btn" class="action-btn action-withdraw hidden" title="Withdraw pending rewards">Withdraw</button>
+                    <button id="gov-list-btn" class="action-btn action-resell hidden" title="List royalty shares for sale">List Shares</button>
+                    <button id="gov-transfer-btn" class="action-btn action-transfer hidden" title="Transfer royalty shares">Transfer Shares</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
         </div>
       </div>
     </section>
@@ -370,11 +421,11 @@
   </main>
 
   <!-- Subscription Plans Modal -->
-  <div id="subscribe-modal" class="sub-modal-overlay hidden">
+  <div id="subscribe-modal" class="sub-modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="sub-modal-title">
     <div class="sub-modal">
       <div class="sub-modal-header">
         <h3 id="sub-modal-title">Subscribe to Channel</h3>
-        <button id="sub-modal-close" class="sub-modal-close">&times;</button>
+        <button id="sub-modal-close" class="sub-modal-close" aria-label="Close">&times;</button>
       </div>
       <div id="sub-modal-plans" class="sub-modal-plans"></div>
       <div class="sub-modal-footer">
@@ -385,9 +436,9 @@
   </div>
 
   <!-- Wallet Choice Modal (Purchase) -->
-  <div id="wallet-choice-modal" class="wallet-choice-overlay hidden">
+  <div id="wallet-choice-modal" class="wallet-choice-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="wallet-choice-title">
     <div class="wallet-choice-dialog">
-      <h3>Choose Wallet for Purchase</h3>
+      <h3 id="wallet-choice-title">Choose Wallet for Purchase</h3>
       <p class="wallet-choice-desc">Select which wallet to use for this purchase.</p>
       <div class="wallet-choice-options">
         <button id="wallet-choice-sa" class="wallet-choice-btn wallet-choice-sa">
@@ -408,11 +459,11 @@
   </div>
 
   <!-- Resell Modal -->
-  <div id="resell-modal" class="modal-overlay hidden">
+  <div id="resell-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="resell-modal-title">
     <div class="modal-dialog resell-dialog">
       <div class="modal-header">
         <h3 id="resell-modal-title">List Access Token for Sale</h3>
-        <button id="resell-modal-close" class="modal-close-btn">&times;</button>
+        <button id="resell-modal-close" class="modal-close-btn" aria-label="Close">&times;</button>
       </div>
       <div class="modal-body">
         <p class="modal-desc" id="resell-asset-name"></p>
@@ -429,18 +480,18 @@
         <div id="resell-status" class="modal-status hidden"></div>
       </div>
       <div class="modal-footer">
-        <button id="resell-cancel-btn" style="display: inline-flex; align-items: center; justify-content: center; padding: 8px 16px; font-size: 13px; line-height: 1; font-family: inherit; background: #f3f4f6; border: 1px solid #d1d5db; border-radius: 6px; cursor: pointer;">Cancel</button>
-        <button id="resell-confirm-btn" style="display: inline-flex; align-items: center; justify-content: center; padding: 8px 16px; font-size: 13px; line-height: 1; font-family: inherit; background: #3b82f6; color: white; border: none; border-radius: 6px; cursor: pointer;">List for Sale</button>
+        <button id="resell-cancel-btn" class="btn-secondary">Cancel</button>
+        <button id="resell-confirm-btn" class="btn-primary">List for Sale</button>
       </div>
     </div>
   </div>
 
   <!-- Transfer Modal -->
-  <div id="transfer-modal" class="modal-overlay hidden">
+  <div id="transfer-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="transfer-modal-title">
     <div class="modal-dialog transfer-dialog">
       <div class="modal-header">
-        <h3>Transfer NFT</h3>
-        <button id="transfer-modal-close" class="modal-close-btn">&times;</button>
+        <h3 id="transfer-modal-title">Transfer NFT</h3>
+        <button id="transfer-modal-close" class="modal-close-btn" aria-label="Close">&times;</button>
       </div>
       <div class="modal-body">
         <p class="modal-desc" id="transfer-asset-name"></p>
@@ -455,22 +506,22 @@
         <div id="transfer-status" class="modal-status hidden"></div>
       </div>
       <div class="modal-footer">
-        <button id="transfer-cancel-btn" style="display: inline-flex; align-items: center; justify-content: center; padding: 8px 16px; font-size: 13px; line-height: 1; font-family: inherit; background: #f3f4f6; border: 1px solid #d1d5db; border-radius: 6px; cursor: pointer;">Cancel</button>
-        <button id="transfer-confirm-btn" style="display: inline-flex; align-items: center; justify-content: center; padding: 8px 16px; font-size: 13px; line-height: 1; font-family: inherit; background: #dc2626; color: white; border: none; border-radius: 6px; cursor: pointer;">Transfer</button>
+        <button id="transfer-cancel-btn" class="btn-secondary">Cancel</button>
+        <button id="transfer-confirm-btn" class="btn-danger">Transfer</button>
       </div>
     </div>
   </div>
 
   <!-- Governance List Shares Modal -->
-  <div id="gov-list-modal" class="modal-overlay hidden">
+  <div id="gov-list-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="gov-list-modal-title">
     <div class="modal-dialog">
       <div class="modal-header">
-        <h3>List Royalty Shares</h3>
-        <button id="gov-list-modal-close" class="modal-close-btn">&times;</button>
+        <h3 id="gov-list-modal-title">List Royalty Shares</h3>
+        <button id="gov-list-modal-close" class="modal-close-btn" aria-label="Close">&times;</button>
       </div>
       <div class="modal-body">
         <p class="modal-desc" id="gov-list-asset-name"></p>
-        <div id="gov-list-balance-info" class="form-group" style="font-size:13px;color:var(--text-secondary)"></div>
+        <div id="gov-list-balance-info" class="form-group modal-desc"></div>
         <div class="form-group">
           <label for="gov-list-amount">Amount (tokens, 10 = 1%)</label>
           <input type="number" id="gov-list-amount" min="1" step="1" placeholder="e.g. 10" class="form-input" />
@@ -482,22 +533,22 @@
         <div id="gov-list-status" class="modal-status hidden"></div>
       </div>
       <div class="modal-footer">
-        <button id="gov-list-cancel-btn" style="display: inline-flex; align-items: center; justify-content: center; padding: 8px 16px; font-size: 13px; line-height: 1; font-family: inherit; background: #f3f4f6; border: 1px solid #d1d5db; border-radius: 6px; cursor: pointer;">Cancel</button>
-        <button id="gov-list-confirm-btn" style="display: inline-flex; align-items: center; justify-content: center; padding: 8px 16px; font-size: 13px; line-height: 1; font-family: inherit; background: #3b82f6; color: white; border: none; border-radius: 6px; cursor: pointer;">List for Sale</button>
+        <button id="gov-list-cancel-btn" class="btn-secondary">Cancel</button>
+        <button id="gov-list-confirm-btn" class="btn-primary">List for Sale</button>
       </div>
     </div>
   </div>
 
   <!-- Governance Transfer Shares Modal -->
-  <div id="gov-transfer-modal" class="modal-overlay hidden">
+  <div id="gov-transfer-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="gov-transfer-modal-title">
     <div class="modal-dialog">
       <div class="modal-header">
-        <h3>Transfer Royalty Shares</h3>
-        <button id="gov-transfer-modal-close" class="modal-close-btn">&times;</button>
+        <h3 id="gov-transfer-modal-title">Transfer Royalty Shares</h3>
+        <button id="gov-transfer-modal-close" class="modal-close-btn" aria-label="Close">&times;</button>
       </div>
       <div class="modal-body">
         <p class="modal-desc" id="gov-transfer-asset-name"></p>
-        <div id="gov-transfer-balance-info" class="form-group" style="font-size:13px;color:var(--text-secondary)"></div>
+        <div id="gov-transfer-balance-info" class="form-group modal-desc"></div>
         <div class="form-group">
           <label for="gov-transfer-amount">Amount (tokens, 10 = 1%)</label>
           <input type="number" id="gov-transfer-amount" min="1" step="1" placeholder="e.g. 10" class="form-input" />
@@ -509,19 +560,19 @@
         <div id="gov-transfer-status" class="modal-status hidden"></div>
       </div>
       <div class="modal-footer">
-        <button id="gov-transfer-cancel-btn" style="display: inline-flex; align-items: center; justify-content: center; padding: 8px 16px; font-size: 13px; line-height: 1; font-family: inherit; background: #f3f4f6; border: 1px solid #d1d5db; border-radius: 6px; cursor: pointer;">Cancel</button>
-        <button id="gov-transfer-confirm-btn" style="display: inline-flex; align-items: center; justify-content: center; padding: 8px 16px; font-size: 13px; line-height: 1; font-family: inherit; background: #dc2626; color: white; border: none; border-radius: 6px; cursor: pointer;">Transfer</button>
+        <button id="gov-transfer-cancel-btn" class="btn-secondary">Cancel</button>
+        <button id="gov-transfer-confirm-btn" class="btn-danger">Transfer</button>
       </div>
     </div>
   </div>
 
   <!-- Toast Container -->
-  <div id="toast-container" class="toast-container"></div>
+  <div id="toast-container" class="toast-container" role="status" aria-live="polite"></div>
 
   <script src="https://cdn.jsdelivr.net/npm/ethers@6.13.4/dist/ethers.umd.min.js"></script>
   <script src="api.js?v=14"></script>
   <script src="wallet.js?v=9"></script>
-  <script src="app.js?v=13"></script>
-  <script src="app-features.js?v=5"></script>
+  <script src="app.js?v=21"></script>
+  <script src="app-features.js?v=6"></script>
 </body>
 </html>

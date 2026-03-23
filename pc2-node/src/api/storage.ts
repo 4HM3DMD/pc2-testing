@@ -577,6 +577,22 @@ router.post('/ipfs/add-directory', authenticate, async (req: AuthenticatedReques
 });
 
 /**
+ * GET /api/ipfs/pins
+ * Returns the list of CIDs pinned locally for the authenticated user.
+ */
+router.get('/ipfs/pins', authenticate, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const db = req.app.locals.db;
+    if (!db) return res.status(503).json({ error: 'Database not available' });
+    const walletAddress = req.user?.wallet_address;
+    const cids = db.getPinnedCIDs(walletAddress);
+    res.json({ success: true, cids });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to list pinned CIDs' });
+  }
+});
+
+/**
  * POST /api/ipfs/pin
  * Pin a remote CID to the local IPFS node (fetches content from the network/gateway).
  * Used by the Elacity Market to download owned media to the user's node.

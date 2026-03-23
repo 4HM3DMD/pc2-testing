@@ -11,8 +11,8 @@
 **Release:** v1.1.0 tagged and released on 2026-03-03 (134 commits squash-merged to main)
 **Launcher:** v1.1.1 released — version display, one-click updates, full networking install
 **DAO Proposal:** Live at https://elastos.com/proposals/69a24f49247f130078064edd
-**Last Commit:** feat: product consolidation — RPC fallback, disk/bandwidth enforcement, P2P discovery, creator analytics
-**Active Plan:** `~/.cursor/plans/pc2_product_consolidation_c90fb064.plan.md` — 5-phase sovereign product roadmap
+**Last Commit:** feat: Apple-grade Elacity Market redesign — unified design system, card system, transitions, accessibility
+**Active Plan:** `~/.cursor/plans/apple-grade_market_redesign_45904657.plan.md` — 16-phase UI/UX overhaul (COMPLETE)
 
 ### Known Issues (RESOLVED)
 
@@ -31,7 +31,83 @@
 3. **`updateSubscriptionPlan` mutation format** — was previously incorrect (flat fields instead of `{ action, args }` wrapper). Fixed to match GraphQL schema (`SubscriptionPlanUpdateAction` requires `args: SubscriptionPlanInput!`). Also fixed `paymentToken` → `payToken`, `price` Int → String, added return field selection.
 4. **Token-gating field names** — was sending `{ tokenAddress, minimumBalance }` but `TokenOwnershipInput` expects `{ address, value }` (value as Float). Fixed.
 
-### Latest Session Work (Mar 23 — Product Consolidation: Phase 1-2 Infrastructure)
+### Latest Session Work (Mar 23 — Apple-Grade Elacity Market Redesign)
+
+**Context:** Full UI/UX overhaul of the Elacity Market dApp following Apple Human Interface Design principles. 16-phase plan covering design tokens, card system, navigation, detail view, modals, per-view polish, accessibility, and app-features.js compatibility. All 16 phases COMPLETE.
+
+**Plan:** `~/.cursor/plans/apple-grade_market_redesign_45904657.plan.md`
+
+#### What Was Implemented
+
+**Phase 1 — Foundation (Design System)**
+- Unified CSS custom properties with Creator Dashboard tokens: `--accent: #3b82f6`, `--radius-sm/md/lg`, shadow hierarchy (`--shadow-sm/md/lg`), motion tokens (`--ease-out`, `--ease-spring`, `--duration-fast/normal/slow`)
+- Dark mode shadow tokens
+- New button CSS classes: `.btn-primary`, `.btn-secondary`, `.btn-danger`, `.btn-success`, `.btn-icon` — all inline `style=""` attributes removed from HTML (30+ instances)
+- Responsive breakpoints: 4-col/3-col/2-col/1-col grid, sidebar collapse to icons at 768px, mobile bottom tab bar at <768px
+
+**Phase 2 — Card System**
+- Redesigned `renderCard()`: max 2 badges (content type + price/owned), hover `translateY(-2px)` + shadow, active `scale(0.98)` spring, staggered `cardAppear` animation with `animationDelay`
+- Colored placeholder with content-type icon for missing thumbnails (CONTENT_TYPE_ICONS map)
+- Skeleton shimmer loading (`.skeleton`, `.skeleton-card`, `.skeleton-thumb`, `.skeleton-text`) replaces spinner
+- IntersectionObserver infinite scroll replaces "Load More" button, with cleanup on view switch
+
+**Phase 3 — Navigation**
+- View cross-fade transitions: `.view-enter` (200ms), `.view-slide-in` from right (300ms), `.view-slide-out` to right
+- Sidebar active indicator animation (`::before` pseudo-element with `indicatorIn`)
+
+**Phase 4 — Detail View**
+- Restructured into spatial zones: Media → Identity → Action Bar → Commerce → About → Market → Governance
+- Three collapsible sections (`#detail-about-section`, `#detail-market-section`, `#detail-governance-section`) with expand/collapse toggle and `aria-expanded`
+- Buy button state machine: idle → waiting (pulse) → confirming → success (checkmark animation) → error
+
+**Phase 5 — Modal System**
+- Unified modal CSS with `modalEnter` animation (scale 0.95→1.0 + fade)
+- ARIA: `role="dialog"`, `aria-modal="true"`, `aria-labelledby` on all 6 modals
+- Escape key handler for wallet-choice modal, backdrop click to close
+
+**Phase 6 — Per-View Polish**
+- Feed: single-row filter chips (`.filter-chips`) replacing dual tab rows, skeleton loading
+- Search: Apple-style rounded input with clear button, 300ms debounce, recent searches (localStorage), result count badge
+- Library: segmented control (All / Downloaded / Not Downloaded) — wired with `fetchPinnedCIDs()` API + client-side filtering
+- Channels: category pills, cover image gradient overlay, subscribe state animation
+- Earnings: dashboard summary cards (Total Unclaimed / Total Earned / Active Assets), auto SIWE login, improved error messages
+
+**Phase 7 — Accessibility & Compatibility**
+- ARIA roles on all interactive elements: cards (`role="article"`), sidebar (`role="navigation"`), toasts (`role="status"`, `aria-live="polite"`)
+- `@media (prefers-reduced-motion: reduce)` disables all animations
+- `app-features.js`: 3 DOM insertion point fixes (governance section → collapsible wrapper), 13 inline button styles replaced with CSS classes, CustomEvent contract verified
+
+**Bug Fixes in This Session**
+- Library segmented control (Downloaded/Not Downloaded) had no JavaScript wiring — added `GET /api/storage/ipfs/pins` endpoint + client-side filter logic
+- Earnings view didn't auto-trigger SIWE login when wallet connected but not authenticated — added auto SIWE like Library view
+- Earnings error catch showed "No royalty holdings found" on network failure — now shows "Failed to load earnings" with connectivity message
+- `app-features.js` activity section inserted inside collapsible governance content (wrong parent) — fixed to insert at `detail-body` level
+- `app-features.js` offer section similarly broken — fixed to use `detail-governance-section` wrapper
+
+#### Files Changed
+
+| File | Change |
+|------|--------|
+| `pc2-node/data/test-apps/elacity-market/styles.css` | +594 lines — complete CSS overhaul: design tokens, button classes, skeleton loading, view transitions, card animations, filter chips, collapsible sections, modal animations, responsive breakpoints, reduced-motion, earnings dashboard |
+| `pc2-node/data/test-apps/elacity-market/index.html` | Restructured HTML: removed 30+ inline styles, filter chips replace tabs, collapsible detail sections, ARIA on all modals/toast/sidebar, segmented library control, earnings dashboard cards, version bumps (v=21) |
+| `pc2-node/data/test-apps/elacity-market/app.js` | +457 lines — renderCard redesign, skeleton loading, infinite scroll, view transitions, buy button state machine, debounced search, recent searches, library filter (fetchPinnedCIDs + applyLibraryFilter), auto SIWE for earnings, improved error handling |
+| `pc2-node/data/test-apps/elacity-market/app-features.js` | DOM target fixes for new HTML structure (3 insertion points), 13 inline button styles → CSS classes, version bump (v=6) |
+| `pc2-node/src/api/storage.ts` | +16 lines — new `GET /api/storage/ipfs/pins` endpoint listing user's pinned CIDs |
+
+#### What's Next
+
+1. **V3 contract migration** — when new Elacity V3 contracts deploy, update ABIs and addresses in Creator Dashboard
+2. **Lit Protocol mainnet** — when Chipotle goes to mainnet (Mar 25+), update endpoints
+3. **Content Intelligence roadmap** — `~/.cursor/plans/content_intelligence_roadmap_e7c257b7.plan.md`
+4. **Enterprise roadmap (PDR)** — `~/.cursor/plans/pdr-aligned_enterprise_roadmap_b7f66066.plan.md`
+
+#### Known Issue
+
+- **Elacity API (`base.ela.city`) returning 502** — intermittent backend downtime affecting all views that fetch from GraphQL (Feed, Search, Library, Earnings, Watch Later, Channels). Not a code issue. Monitor with: `curl -s -o /dev/null -w "%{http_code}" "https://base.ela.city/api/2.0/graphql" -X POST -H "Content-Type: application/json" -d '{"query":"{ __typename }"}'`
+
+---
+
+### Previous Session Work (Mar 23 — Product Consolidation: Phase 1-2 Infrastructure)
 
 **Context:** Deep research on ERC-8183 (Agentic Commerce), ERC-8004 (Trustless Agents), and x402 (HTTP Micropayments) led to a 5-phase product consolidation plan. Phases 1-2 were prioritized and largely completed in this session.
 
