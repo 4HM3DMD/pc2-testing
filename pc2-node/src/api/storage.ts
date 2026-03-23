@@ -2078,6 +2078,75 @@ router.post('/ipfs/upload-elacity', authenticate, async (req: AuthenticatedReque
   }
 });
 
+/**
+ * POST /api/storage/ipfs/upload-elacity-directory
+ * Add metadata.json to local IPFS as a flat file, convert CIDv1→CIDv0,
+ * then replicate to Elacity for public gateway reachability.
+ *
+ * CIDv0 (Qm...) is used as the tokenURI because Elacity's go-ipfs gateway
+ * resolves CIDv0 natively. The content hash is identical — just different encoding.
+ *
+ * Body: { files: Record<string, string (base64)> }
+ * Response: { success: true, cid: string (CIDv0) }
+ */
+router.post('/ipfs/upload-elacity-directory', authenticate, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { files } = req.body;
+
+    if (!files || typeof files !== 'object' || !files['metadata.json']) {
+      res.status(400).json({ error: 'Missing metadata.json in files object' });
+      return;
+    }
+
+    const metadataBytes = Buffer.from(files['metadata.json'] as string, 'base64');
+    const ipfs = req.app.locals.ipfs;
+    if (!ipfs) {
+      res.status(500).json({ error: 'IPFS service not available' });
+      return;
+    }
+
+    // 1. Add metadata.json as a flat file to local IPFS (returns CIDv1 with dag-pb codec)
+    const cidV1String = await ipfs.storeFile(new Uint8Array(metadataBytes), { pin: true, announce: true });
+    logger.info(`[IPFS-Elacity] Metadata added to local IPFS: ${cidV1String}`);
+
+    // 2. Convert CIDv1 (bafybei...) to CIDv0 (Qm...) — same content hash, just different encoding
+    const { CID } = await import('multiformats/cid');
+    const cidV1 = CID.parse(cidV1String);
+    let cidV0String: string;
+    try {
+      cidV0String = cidV1.toV0().toString();
+    } catch {
+      logger.warn(`[IPFS-Elacity] CIDv1→CIDv0 conversion failed (codec=${cidV1.code}), using v1`);
+      cidV0String = cidV1String;
+    }
+    logger.info(`[IPFS-Elacity] CIDv0: ${cidV0String}`);
+
+    // 3. Replicate to Elacity IPFS for public gateway reachability (fire-and-forget)
+    const ELACITY_UPLOAD = 'https://base.ela.city/api/2.0/files/upload';
+    try {
+      const formData = new FormData();
+      formData.append('file', new Blob([new Uint8Array(metadataBytes)]), 'metadata.json');
+      const uploadResp = await fetch(ELACITY_UPLOAD, {
+        method: 'POST',
+        headers: { 'X-Target-Flow': 'dir,ipfs' },
+        body: formData,
+      });
+      if (uploadResp.ok) {
+        logger.info('[IPFS-Elacity] Replicated metadata to Elacity IPFS');
+      } else {
+        logger.warn(`[IPFS-Elacity] Replication failed: ${uploadResp.status} (non-fatal — DHT will propagate)`);
+      }
+    } catch (replicateErr: any) {
+      logger.warn(`[IPFS-Elacity] Replication failed (non-fatal): ${replicateErr.message}`);
+    }
+
+    res.json({ success: true, cid: cidV0String });
+  } catch (error: any) {
+    logger.error('[IPFS-Elacity] Metadata upload error:', error);
+    res.status(500).json({ error: error.message || 'Elacity metadata upload failed' });
+  }
+});
+
 // Backend-specific initialization
 // Lit SDK (Datil) is ALWAYS needed for encryption (Chipotle doesn't support it).
 // Pre-warm the SDK lazily — it connects on first encrypt request.

@@ -1280,13 +1280,19 @@ import {
 import { ensureBento4 } from '../services/media/bento4.js';
 import { createEncryptedDASH } from '../services/media/dashPackager.js';
 
+import { execFile } from 'child_process';
+import { promisify } from 'util';
+
+const execFileAsync = promisify(execFile);
+
 interface EncodeJob {
   id: string;
   status: 'queued' | 'analyzing' | 'transcoding' | 'fragmenting' | 'packaging' | 'uploading' | 'complete' | 'error';
   progress: { percent: number; fps: number; speed: string; time: string; stage: string };
-  result?: { cid: string; mpdUri: string; kid: string; size: number; dataToEncryptHash: string; ciphertext: string };
+  result?: { cid: string; mpdUri: string; kid: string; size: number; dataToEncryptHash: string; ciphertext: string; previewURL?: string };
   error?: string;
   startedAt: number;
+  previewDuration?: number;
 }
 
 const encodeJobs = new Map<string, EncodeJob>();
@@ -1326,11 +1332,14 @@ router.post('/encode', mediaUpload.single('file'), async (req: AuthenticatedRequ
       return;
     }
 
+    const previewDuration = parseInt(req.body?.previewDuration, 10) || 0;
+
     const job: EncodeJob = {
       id: jobId,
       status: 'analyzing',
       progress: { percent: 0, fps: 0, speed: '0x', time: '00:00:00.00', stage: 'analyzing' },
       startedAt: Date.now(),
+      previewDuration: previewDuration > 0 ? Math.min(previewDuration, 60) : 0,
     };
     encodeJobs.set(jobId, job);
 
@@ -1399,6 +1408,75 @@ async function runEncodePipeline(
     });
     logger.info(`[media/encode] Job ${job.id}: transcode complete — ${result.resolution} via ${result.codec}`);
 
+    // 2b. Generate preview clip (unencrypted, lower quality, first N seconds)
+    let previewCid: string | undefined;
+    const totalDurationSec = parseFloat(info.format.duration) || 0;
+    const previewSec = job.previewDuration || 0;
+
+    if (previewSec > 0 && totalDurationSec > previewSec) {
+      try {
+        const previewPath = join(workDir, 'preview.mp4');
+        const isAudio = plan.isAudioOnly;
+
+        const ffmpegArgs: string[] = [
+          '-i', result.outputPath,
+          '-t', String(previewSec),
+          ...(isAudio
+            ? ['-c:a', 'aac', '-b:a', '96k', '-vn']
+            : [
+                '-c:v', 'libx264', '-preset', 'fast', '-crf', '28',
+                '-vf', 'scale=min(640\\,iw):-2',
+                '-c:a', 'aac', '-b:a', '96k',
+              ]),
+          '-movflags', '+faststart',
+          '-y', previewPath,
+        ];
+
+        await execFileAsync('ffmpeg', ffmpegArgs, { timeout: 60000 });
+        logger.info(`[media/encode] Job ${job.id}: preview clip generated (${previewSec}s)`);
+
+        const { readFile } = await import('fs/promises');
+        const previewBytes = await readFile(previewPath);
+
+        // Upload to local IPFS
+        const ipfs = appLocals.ipfs;
+        if (ipfs?.storeFile) {
+          previewCid = await ipfs.storeFile(new Uint8Array(previewBytes), { pin: true });
+          logger.info(`[media/encode] Job ${job.id}: preview pinned locally, CID=${previewCid}`);
+        }
+
+        // Replicate preview to Elacity IPFS and use the returned CIDv0
+        if (previewCid) {
+          try {
+            const ELACITY_UPLOAD = 'https://base.ela.city/api/2.0/files/upload';
+            const formData = new FormData();
+            formData.append('file', new Blob([new Uint8Array(previewBytes)]), 'preview.mp4');
+            const elaResp = await fetch(ELACITY_UPLOAD, {
+              method: 'POST',
+              headers: { 'X-Target-Flow': 'ipfs' },
+              body: formData,
+              signal: AbortSignal.timeout(30000),
+            });
+            if (elaResp.ok) {
+              const elaData = await elaResp.json() as Array<{ path: string; size: number }>;
+              if (elaData?.[0]?.path) {
+                previewCid = elaData[0].path;
+                logger.info(`[media/encode] Job ${job.id}: preview on Elacity IPFS, CID=${previewCid}`);
+              }
+            } else {
+              logger.warn(`[media/encode] Job ${job.id}: preview Elacity upload returned ${elaResp.status}`);
+            }
+          } catch {
+            logger.warn(`[media/encode] Job ${job.id}: preview Elacity replication failed — using local CID`);
+          }
+        }
+      } catch (previewErr: any) {
+        logger.warn(`[media/encode] Job ${job.id}: preview generation failed (non-fatal): ${previewErr.message}`);
+      }
+    } else if (previewSec > 0 && totalDurationSec <= previewSec) {
+      logger.info(`[media/encode] Job ${job.id}: skipping preview — content duration (${totalDurationSec}s) ≤ preview duration (${previewSec}s)`);
+    }
+
     // 3. Fragment
     job.status = 'fragmenting';
     job.progress.stage = 'fragmenting';
@@ -1434,19 +1512,25 @@ async function runEncodePipeline(
 
       if (existsSync(dashDir)) {
         const files = walkFiles(dashDir, '');
-        for (const f of files) {
-          try {
+        let replicated = 0;
+        const BATCH_SIZE = 5;
+        const UPLOAD_TIMEOUT = 15000;
+        for (let i = 0; i < files.length; i += BATCH_SIZE) {
+          const batch = files.slice(i, i + BATCH_SIZE);
+          const results = await Promise.allSettled(batch.map(async (f) => {
             const bytes = rfSync(f.path);
-            const formData = new FormData();
-            formData.append('file', new Blob([new Uint8Array(bytes)]), f.relPath);
+            const fd = new FormData();
+            fd.append('file', new Blob([new Uint8Array(bytes)]), f.relPath);
             await fetch(ELACITY_UPLOAD, {
               method: 'POST',
               headers: { 'X-Target-Flow': 'ipfs' },
-              body: formData,
+              body: fd,
+              signal: AbortSignal.timeout(UPLOAD_TIMEOUT),
             });
-          } catch { /* best-effort — local pin still works */ }
+          }));
+          replicated += results.filter(r => r.status === 'fulfilled').length;
         }
-        logger.info(`[media/encode] Job ${job.id}: replicated ${files.length} files to Elacity IPFS`);
+        logger.info(`[media/encode] Job ${job.id}: replicated ${replicated}/${files.length} files to Elacity IPFS`);
       }
     } catch (replicateErr: any) {
       logger.warn(`[media/encode] Job ${job.id}: Elacity replication failed (non-fatal): ${replicateErr.message}`);
@@ -1462,6 +1546,10 @@ async function runEncodePipeline(
       size: dashResult.size,
       dataToEncryptHash: dashResult.dataToEncryptHash,
       ciphertext: dashResult.ciphertext,
+      duration: parseFloat(info.format.duration) || undefined,
+      resolution: result.resolution || undefined,
+      codec: result.codec || undefined,
+      previewURL: previewCid ? `ipfs://${previewCid}` : undefined,
     };
 
     logger.info(`[media/encode] Job ${job.id}: COMPLETE in ${Date.now() - job.startedAt}ms — CID=${dashResult.cid}`);

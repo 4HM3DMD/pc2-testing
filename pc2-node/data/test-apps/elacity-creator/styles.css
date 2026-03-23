@@ -409,6 +409,174 @@ code.result-value {
   gap: 8px;
 }
 
+/* ── Floating Progress Bar ── */
+.floating-progress {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 9999;
+  background: var(--bg-elevated);
+  border-top: 1px solid var(--border);
+  padding: 10px 20px 12px;
+  box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.3);
+  transition: transform 0.3s ease, opacity 0.3s ease;
+}
+.floating-progress.hiding {
+  transform: translateY(100%);
+  opacity: 0;
+}
+.floating-progress-inner {
+  max-width: 800px;
+  margin: 0 auto;
+}
+.floating-progress-track {
+  width: 100%;
+  height: 6px;
+  background: var(--bg);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+.floating-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, var(--accent), #818cf8);
+  border-radius: 3px;
+  transition: width 0.5s ease;
+}
+.floating-progress.done .floating-progress-fill {
+  background: var(--success);
+}
+.floating-progress-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.floating-progress-text {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.floating-progress.done .floating-progress-text {
+  color: var(--success);
+}
+.floating-progress-pct {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+.floating-progress.done .floating-progress-pct {
+  color: var(--success);
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Confirmation Section ── */
+.confirmation-section h3 {
+  color: var(--text);
+}
+.legal-checkboxes label {
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 0.15s;
+}
+.legal-checkboxes label:hover {
+  color: var(--text);
+}
+.legal-checkboxes input[type="checkbox"]:checked + span {
+  color: var(--success);
+}
+
+/* ── Revenue Distribution ── */
+.royalty-row input, .royalty-row select {
+  transition: border-color 0.15s;
+}
+.royalty-row input:focus, .royalty-row select:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+/* ── Subscription Plans ── */
+.plan-row input, .plan-row select {
+  transition: border-color 0.15s;
+}
+.plan-row input:focus, .plan-row select:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+/* ── Token-Gating ── */
+.token-gate-row input {
+  transition: border-color 0.15s;
+}
+.token-gate-row input:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+/* ── Multi-select categories ── */
+select[multiple] {
+  background: var(--bg-elevated);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px;
+  font-size: 13px;
+}
+select[multiple] option {
+  padding: 4px 8px;
+}
+select[multiple] option:checked {
+  background: var(--accent);
+  color: white;
+}
+
+/* ── Range slider styling ── */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--border);
+  outline: none;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: pointer;
+  border: 2px solid var(--bg-surface);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+}
+input[type="range"]::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: pointer;
+  border: 2px solid var(--bg-surface);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+}
+
+/* ── Supply Tier Buttons ── */
+.supply-tier-btn {
+  background: var(--bg-elevated) !important;
+  border: 1px solid var(--border) !important;
+  color: var(--text-muted) !important;
+  transition: all 0.15s;
+}
+.supply-tier-btn:hover {
+  border-color: var(--accent) !important;
+  color: var(--text) !important;
+}
+
+/* ── Field hints ── */
+.field-hint.success { color: var(--success); }
+.field-hint.error { color: var(--error); }
+
 /* ── Utility ── */
 .hidden { display: none !important; }
 
@@ -418,4 +586,5 @@ code.result-value {
   #steps-bar { font-size: 11px; }
   .step span:not(.step-num) { display: none; }
   main { padding: 20px 16px; }
+  .royalty-row, .plan-row, .token-gate-row { flex-wrap: wrap; }
 }

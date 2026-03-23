@@ -212,7 +212,7 @@ export async function generateThumbnail(
         
         await execFileAsync('ffmpeg', [
           '-i', tempVideoPath,
-          '-ss', '0',
+          '-ss', '3',
           '-vframes', '1',
           '-vf', 'scale=128:128:force_original_aspect_ratio=decrease',
           '-q:v', '2',
@@ -319,11 +319,11 @@ export async function generateThumbnail(
           return null;
         }
         
-        // Convert buffer to text
         const textContent = buffer.toString('utf8');
         
-        const previewText = textContent.substring(0, 2000);
-        const lines = previewText.split('\n').slice(0, 25);
+        // Only show first few lines as a teaser, not full readable content
+        const previewText = textContent.substring(0, 800);
+        const lines = previewText.split('\n').slice(0, 12);
         
         const canvasWidth = 400;
         const canvasHeight = 300;
@@ -345,11 +345,9 @@ export async function generateThumbnail(
         for (const line of lines) {
           if (y + lineHeight > canvasHeight - padding) break;
           
-          // Truncate line if too long
           let displayLine = line;
           const metrics = ctx.measureText(displayLine);
           if (metrics.width > maxWidth) {
-            // Truncate and add ellipsis
             while (ctx.measureText(displayLine + '...').width > maxWidth && displayLine.length > 0) {
               displayLine = displayLine.slice(0, -1);
             }
@@ -359,6 +357,15 @@ export async function generateThumbnail(
           ctx.fillText(displayLine, padding, y);
           y += lineHeight;
         }
+        
+        // Fade-out gradient so bottom text is unreadable — teaser only
+        const fadeStart = canvasHeight * 0.4;
+        const gradient = ctx.createLinearGradient(0, fadeStart, 0, canvasHeight);
+        gradient.addColorStop(0, 'rgba(248, 249, 250, 0)');
+        gradient.addColorStop(0.6, 'rgba(248, 249, 250, 0.85)');
+        gradient.addColorStop(1, 'rgba(248, 249, 250, 1)');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, fadeStart, canvasWidth, canvasHeight - fadeStart);
         
         // Convert canvas to PNG buffer
         const textImageBuffer = canvasInstance.toBuffer('image/png');

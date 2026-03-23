@@ -299,33 +299,60 @@ The same `createChannel` mutation is used to register a channel that was deploye
 
 ---
 
-## 6. Asset Registration with Backend (BackgroundJob Pipeline)
+## 6. Sovereign Asset Publishing & IPFS Strategy
 
-Minted assets are registered via the BackgroundJob system, not a simple mutation.
+### How sovereign-minted assets appear on Elacity Marketplace
 
-### Elacity's media minting pipeline
-1. **Create BackgroundJob**: `createBackgroundJob(input)` — tracks upload → transcode → encode → generate_metadata → broadcast_tx
-2. **Generate metadata**: `generateBackgroundJobMetadata(requestId, payload)` — backend builds the IPFS metadata directory and returns `metadataURI`
-3. **After on-chain mint**: `updateBackgroundJob(requestId, input)` — transitions to COMPLETED
+Elacity's on-chain indexer watches for `AssetCreated` events and resolves `tokenURI(tokenId)` to fetch metadata from `ipfs.ela.city`. No explicit backend notification is needed — the asset appears automatically if:
 
-The backend learns about assets through this pipeline. There is no separate "register asset" mutation.
+1. The `tokenURI` is a CIDv0 (`Qm...`) that resolves on `ipfs.ela.city`
+2. The metadata JSON has the expected `elacity-asset-envelope-v1` structure
+3. The `image`, `properties.authority`, and `properties.ledger` fields are present
 
-### For sovereign packaging (PC2 model)
-- **If marketplace visibility on ela.city is needed**: Use the BackgroundJob system, or confirm with the Elacity team if the on-chain indexer picks up assets that have valid `tokenURI` metadata
-- **If building a PC2-native marketplace**: No backend registration needed. Read on-chain `AssetCreated` events and resolve `tokenURI(tokenId)` for metadata
+### IPFS Upload Strategy (Resolved Mar 23, 2026)
 
-### Why previously minted assets are invisible
-Assets minted without a BackgroundJob have no record in the Elacity backend. The on-chain indexer may eventually detect them if it scans for `AssetCreated` events, but this depends on the indexer's implementation.
+**Working approach**: Upload `metadata.json` as a **flat file** to Elacity's IPFS using:
+
+```
+POST https://base.ela.city/api/2.0/files/upload
+Header: X-Target-Flow: ipfs
+Body: FormData with single file named 'metadata.json'
+```
+
+This returns a CIDv0 (`Qm...`) for the raw JSON content, which resolves directly at `https://ipfs.ela.city/ipfs/{CID}`. This CID is used as the on-chain `tokenURI`.
+
+**Local backup**: The PC2 node also creates a full metadata directory (containing `metadata.json`, `content.json`, `contract.json`, and token-type JSONs) on its local Helia IPFS node with DHT announcement. This CIDv1 directory serves as the sovereign backup.
+
+**What does NOT work**: Using `X-Target-Flow: dir,ipfs` for directory uploads — Elacity's API adds timestamp prefixes to filenames (e.g., `1774248661915_metadata.json`) which breaks metadata resolution.
+
+### Preview & Thumbnail IPFS Strategy
+
+Preview clips and thumbnails are also uploaded to Elacity via the same `upload` endpoint with `X-Target-Flow: ipfs`. The CIDv0 returned by Elacity is used in metadata fields (`media.previewURL`, `image`) to ensure they resolve on the public gateway.
+
+### Elacity Platform Items (for future discussion)
+
+See `.cursor/tasks/ELACITY-PLATFORM-ITEMS/ELACITY-PLATFORM-ITEMS.md` for items that would improve sovereign publishing support on the Elacity platform side:
+
+1. **CIDv1 support in indexer** — long-term fix so sovereign nodes don't need Elacity's upload API
+2. **`LedgerAsset.image` nullable in GraphQL** — prevents query crashes when metadata resolution fails
+3. **Simplified asset registration mutation** — alternative to BackgroundJob pipeline for sovereign minters
+4. **On-chain event auto-indexing** — watch `AssetCreated` events for frictionless sovereign publishing
 
 ---
 
 ## 8. Key Considerations for Sovereign Packaging
 
-- **IPFS pinning**: Your node is the sole pinner. Content becomes unreachable if the node goes offline. Consider remote pinning (Pinata, web3.storage) for availability.
-- **Backend registration**: On-chain minting alone doesn't make assets visible in the Elacity marketplace. You must call the GraphQL `createChannel` mutation (with auth + tx hash) and use the BackgroundJob pipeline for assets. Without this, assets exist on-chain but the Elacity indexer won't surface them.
-- **MINTER_ROLE for paid content**: Minting with opType 1 or 2 requires `MINTER_ROLE` on the channel contract. For your own channel, the creator wallet automatically has `DEFAULT_ADMIN_ROLE` and can grant `MINTER_ROLE`. For the public Elacity channel, the role must be granted by the channel admin.
-- **No transcoding needed for non-media**: Elacity's backend transcodes video/audio to MPEG-DASH. For documents, images, data files — skip this entirely. Just encrypt the raw file.
-- **Universal Accounts (later)**: Elacity uses `REACT_APP_TX_EXECUTOR=ua` with Particle Network Universal Accounts. The smart account address is `msg.sender` on-chain. For now, using EOA directly works for channel creation and free mints. UA can be wired in later for paid minting.
+- **IPFS pinning**: Your node is the primary pinner. Elacity IPFS receives copies for public gateway reachability. Content remains available P2P via DHT if Elacity goes offline — true sovereign cloud.
+- **CID strategy**: Upload `metadata.json` as a flat file to Elacity's upload API (`X-Target-Flow: ipfs`) to get a CIDv0. This is the tokenURI. Keep local CIDv1 directory as sovereign backup. See Section 6 above.
+- **On-chain visibility**: Elacity's on-chain indexer detects `AssetCreated` events and resolves the tokenURI. The metadata CID must be accessible on `ipfs.ela.city` for the asset to appear in the marketplace feed.
+- **MINTER_ROLE for paid content**: Minting with opType 1 or 2 requires `MINTER_ROLE` on the channel contract. The Creator Dashboard verifies `hasRole(MINTER_ROLE)` before attempting mint to fail fast.
+- **DASH encryption for media**: Video/audio files are transcoded to MPEG-DASH with CENC encryption. The DRM key is encrypted with Lit Protocol (Chipotle backend). Non-media files use AES-GCM encryption directly.
+- **Preview system**: Video/audio files can have an optional preview clip (first N seconds, user-configurable). The preview is uploaded unencrypted to IPFS and referenced in `media.previewURL`.
+- **Auto-thumbnails**: All asset types auto-generate a thumbnail if none is provided. Video extracts a frame at 3s, audio generates a waveform placeholder, PDFs render the first page, images are resized with blur overlay.
+- **Content trust signals**: Metadata includes `contentHash` (SHA-256 of original file), `legal` attestation (cryptographic hash of creator declarations), and content intelligence fields (`wordCount`, `lineCount`, `originalSize`) for AI agent verification.
+- **Adult content filtering**: `adult: true/false` flag in metadata enables marketplace-level content filtering.
+- **Post-mint local seeding**: After minting, the asset and metadata CIDs are registered with the local ContentSeedingService for DHT announcement and persistence.
+- **Universal Accounts (later)**: Elacity uses `REACT_APP_TX_EXECUTOR=ua` with Particle Network Universal Accounts. For now, using EOA directly works. UA can be wired in later for paid minting.
 
 ---
 

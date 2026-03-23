@@ -49,11 +49,55 @@
   var OP_TYPES = { FREE: 0, BUY_ONCE: 1, BUY_AND_RESELL: 2 };
   var ROLE_ACCESS_TOKEN = 1;
   var ROLE_ROYALTY_SHARE = 2;
+  var ROLE_DISTRIBUTION_RIGHT = 3;
   var ELACITY_ROYALTY_ADDRESS = '0x0917Aa260359670F7855a5454c630993ce40C52D';
   var ELACITY_CHANNEL_ROYALTY_ADDRESS = '0xCE4639Aa1E47E400683F49d95025475D5F50192d';
   var ELACITY_ROYALTY_PERCENT = 5;
   var DEFAULT_CHANNEL = '0x2fb53d4ab93112a6c0a1e54ffcd7199c6fd37412';
   var ELACITY_BACKEND = 'https://base.ela.city/api';
+
+  var CHANNEL_SCOPE = { PUBLIC: 1, PRIVATE: 2 };
+  var CHANNEL_TYPE = { STANDARD: 1, MULTI: 2 };
+
+  var USDT_BASE = '0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2';
+  var CURRENCIES = [
+    { symbol: 'USDC', address: USDC_BASE, decimals: 6 },
+    { symbol: 'USDT', address: USDT_BASE, decimals: 6 },
+    { symbol: 'ETH', address: '0x0000000000000000000000000000000000000000', decimals: 18 },
+  ];
+
+  var DURATION_OPTIONS = [
+    { value: 1, unit: 'days', label: '1 Day', seconds: 86400 },
+    { value: 7, unit: 'days', label: '1 Week', seconds: 604800 },
+    { value: 1, unit: 'months', label: '1 Month', seconds: 2592000 },
+    { value: 3, unit: 'months', label: '3 Months', seconds: 7776000 },
+    { value: 6, unit: 'months', label: '6 Months', seconds: 15552000 },
+    { value: 12, unit: 'months', label: '1 Year', seconds: 31104000 },
+  ];
+
+  var DEFAULT_PLANS = [
+    { price: '5', payToken: '0x0000000000000000000000000000000000000000', duration: { value: 1, unit: 'months' }, label: '1 Month', description: 'Monthly subscription' },
+    { price: '25.50', payToken: '0x0000000000000000000000000000000000000000', duration: { value: 6, unit: 'months' }, label: '6 Months', description: '6-month subscription with 15% discount' },
+    { price: '45.00', payToken: '0x0000000000000000000000000000000000000000', duration: { value: 12, unit: 'months' }, label: '1 Year', description: 'Annual subscription with 25% discount' },
+  ];
+
+  var SUPPLY_TIERS = [
+    { name: 'Standard Edition', supply: 1000, price: 4.99, description: 'Accessible pricing for your entire community' },
+    { name: 'Limited Edition', supply: 384, price: 12.99, description: 'Premium scarcity with broad appeal' },
+    { name: 'Exclusive Edition', supply: 125, price: 39.99, description: 'Ultra-rare collectible with maximum resale potential' },
+  ];
+
+  var ERC20_ABI = [
+    'function name() view returns (string)',
+    'function symbol() view returns (string)',
+    'function decimals() view returns (uint8)',
+    'function balanceOf(address) view returns (uint256)',
+  ];
+
+  var SUBSCRIPTION_MODULE_ABI = [
+    'function bulkUpdatePlans(tuple(string action, bytes args)[] updates)',
+    'function configureTokenOwnershipAccess(tuple(address tokenAddress, uint256 threshold)[] thresholds)',
+  ];
 
   // ── State ─────────────────────────────────────────────
 
@@ -64,6 +108,11 @@
     currentStep: 1,
     result: null,
     customThumbnail: null,
+    processingResult: null,
+    processingError: null,
+    processingRunning: false,
+    metadataUploaded: false,
+    metaCid: null,
   };
 
   // ── DOM refs ──────────────────────────────────────────
@@ -142,6 +191,11 @@
           dom.walletBtn.textContent = accounts[0].substring(0, 6) + '...' + accounts[0].slice(-4);
           dom.walletBtn.classList.add('connected');
           showToast('Wallet connected', 'success');
+          // Auto-fill creator address in first royalty row
+          var firstRoyaltyAddr = document.querySelector('.royalty-row .royalty-address');
+          if (firstRoyaltyAddr && !firstRoyaltyAddr.value) {
+            firstRoyaltyAddr.value = accounts[0];
+          }
           if (state.currentStep >= 2 && !state.channelsLoaded) {
             loadChannels(accounts[0]);
           }
@@ -172,6 +226,12 @@
 
     if (n === 2 && state.walletAddress && !state.channelsLoaded) {
       loadChannels(state.walletAddress);
+    }
+    if (n === 2 && state.walletAddress) {
+      var firstRoyaltyAddr = document.querySelector('.royalty-row .royalty-address');
+      if (firstRoyaltyAddr && !firstRoyaltyAddr.value) {
+        firstRoyaltyAddr.value = state.walletAddress;
+      }
     }
   }
 
@@ -362,15 +422,19 @@
     dom.filePreview.classList.remove('hidden');
     dom.btnToStep2.disabled = false;
 
-    // Show media encoding badge for video/audio files
+    // Show media encoding badge and preview settings for video/audio files
     var existingBadge = document.getElementById('media-encode-badge');
     if (existingBadge) existingBadge.remove();
+    var previewSection = document.getElementById('preview-settings-section');
     if (isMedia) {
       var badge = document.createElement('div');
       badge.id = 'media-encode-badge';
       badge.style.cssText = 'margin-top: 8px; padding: 6px 12px; background: linear-gradient(135deg, #6366f1, #8b5cf6); color: white; border-radius: 6px; font-size: 12px; display: flex; align-items: center; gap: 6px;';
       badge.innerHTML = '<span style="font-size: 14px;">&#9881;</span> Media Encoding Pipeline — will transcode, DASH package, CENC encrypt & upload to IPFS';
       dom.filePreview.appendChild(badge);
+      if (previewSection) previewSection.style.display = '';
+    } else {
+      if (previewSection) previewSection.style.display = 'none';
     }
 
     // For media files, don't read into memory — the backend handles the file directly
@@ -402,6 +466,14 @@
     dom.fileInput.value = '';
     var existingBadge = document.getElementById('media-encode-badge');
     if (existingBadge) existingBadge.remove();
+    var previewSection = document.getElementById('preview-settings-section');
+    if (previewSection) previewSection.style.display = 'none';
+    var prevEnabled = document.getElementById('preview-enabled');
+    var prevDur = document.getElementById('preview-duration');
+    if (prevEnabled) { prevEnabled.checked = true; prevEnabled.disabled = false; }
+    if (prevDur) { prevDur.value = '15'; prevDur.disabled = false; }
+    var prevDisplay = document.getElementById('preview-duration-display');
+    if (prevDisplay) prevDisplay.textContent = '15s';
   }
 
   // ── Form validation ───────────────────────────────────
@@ -410,10 +482,39 @@
     var title = dom.assetTitle.value.trim();
     var category = dom.assetCategory.value;
     var price = parseFloat(dom.assetPrice.value);
+    var accessMethod = dom.assetAccess.value;
     var ch = getSelectedChannel();
     var hasChannel = ch && ethers.isAddress(ch);
-    var valid = title.length > 0 && category && !isNaN(price) && price >= 0 && hasChannel;
+
+    var titleValid = title.length >= 3;
+    var categoryValid = !!category;
+    var priceValid = accessMethod === 'free' || (!isNaN(price) && price >= 0.001 && price <= 1000000);
+    var channelValid = hasChannel;
+
+    var royaltyValid = validateRoyaltyTotal();
+    var royaltyHint = document.getElementById('royalty-total-hint');
+    if (royaltyHint) {
+      if (royaltyValid) {
+        royaltyHint.textContent = 'Platform fee: 5% (auto-added). Your shares total 95%.';
+        royaltyHint.style.color = '';
+      } else {
+        var partners = getRoyaltyPartners();
+        var total = partners.reduce(function (s, r) { return s + Number(r.royalty); }, 0);
+        royaltyHint.textContent = 'Shares total ' + total.toFixed(1) + '% — must equal 95% (platform takes 5%).';
+        royaltyHint.style.color = 'var(--error)';
+      }
+    }
+
+    var valid = titleValid && categoryValid && priceValid && channelValid && royaltyValid;
     dom.btnToStep3.disabled = !valid;
+  }
+
+  function validateStep3() {
+    var legalChecks = document.querySelectorAll('.legal-check');
+    var allChecked = true;
+    legalChecks.forEach(function (cb) { if (!cb.checked) allChecked = false; });
+    var btnSign = document.getElementById('btn-sign-mint');
+    if (btnSign) btnSign.disabled = !allChecked || !state.metadataUploaded;
   }
 
   // ── Encrypt & Upload pipeline ─────────────────────────
@@ -424,6 +525,11 @@
     if (!el || !statusEl) return;
     el.className = 'progress-step ' + (cls || '');
     statusEl.textContent = status;
+    if (cls === 'active' || cls === 'done') {
+      var labelEl = el.querySelector('.prog-label');
+      var label = labelEl ? labelEl.textContent : status;
+      updateFloatingProgress(id, label + (cls === 'active' ? ' — ' + status : ''), cls);
+    }
   }
 
   function swapProgressStepsForMedia() {
@@ -535,20 +641,109 @@
     return bytes;
   }
 
+  // ── Floating progress bar ──────────────────────────
+  var PIPELINE_WEIGHTS = {
+    'prog-connect':      { start: 0,  end: 10 },
+    'prog-encrypt':      { start: 10, end: 45 },
+    'prog-upload-asset': { start: 45, end: 60 },
+    'prog-upload-meta':  { start: 60, end: 80 },
+    'prog-pin':          { start: 80, end: 90 },
+    'prog-mint':         { start: 90, end: 97 },
+    'prog-approve':      { start: 97, end: 100 },
+  };
+
+  function updateFloatingProgress(stepId, label, stepState) {
+    var bar = document.getElementById('floating-progress');
+    var fill = document.getElementById('floating-progress-fill');
+    var text = document.getElementById('floating-progress-text');
+    var pct = document.getElementById('floating-progress-pct');
+    if (!bar) return;
+
+    bar.style.display = '';
+    bar.classList.remove('done', 'hiding');
+
+    var weight = PIPELINE_WEIGHTS[stepId];
+    var percent = 0;
+    if (weight) {
+      percent = stepState === 'done' ? weight.end : weight.start;
+    }
+
+    if (fill) fill.style.width = percent + '%';
+    if (text) text.textContent = label;
+    if (pct) pct.textContent = Math.round(percent) + '%';
+
+    if (stepState === 'done' && stepId === 'prog-approve') {
+      bar.classList.add('done');
+      if (fill) fill.style.width = '100%';
+      if (pct) pct.textContent = '100%';
+      if (text) text.textContent = 'Published successfully';
+      setTimeout(function () {
+        bar.classList.add('hiding');
+        setTimeout(function () { bar.style.display = 'none'; }, 350);
+      }, 3000);
+    }
+  }
+
+  function hideFloatingProgress() {
+    var bar = document.getElementById('floating-progress');
+    if (bar) {
+      bar.classList.add('hiding');
+      setTimeout(function () { bar.style.display = 'none'; bar.classList.remove('hiding', 'done'); }, 350);
+    }
+  }
+
+  // ── Legal attestation for metadata ────────────────
+  var LEGAL_ATTESTATIONS = [
+    { key: 'rights', text: 'I am the rightful owner or have obtained all necessary rights, licenses, and permissions to distribute this content' },
+    { key: 'lawful', text: 'This content does not contain illegal, harmful, defamatory, or prohibited material under applicable law' },
+    { key: 'ip', text: 'No unauthorized use of third-party copyrighted, trademarked, or proprietary material' },
+    { key: 'terms', text: 'I accept responsibility for this publication and agree to the network terms of use' },
+  ];
+
+  async function buildLegalAttestation(walletAddress) {
+    var timestamp = new Date().toISOString();
+    var attestationText = LEGAL_ATTESTATIONS.map(function (a) { return a.key + ':' + a.text; }).join('|');
+    var payload = walletAddress.toLowerCase() + '|' + timestamp + '|' + attestationText;
+
+    var encoder = new TextEncoder();
+    var data = encoder.encode(payload);
+    var hashBuffer = await crypto.subtle.digest('SHA-256', data);
+    var hashArray = Array.from(new Uint8Array(hashBuffer));
+    var hashHex = hashArray.map(function (b) { return b.toString(16).padStart(2, '0'); }).join('');
+
+    return {
+      version: '1.0',
+      attestedAt: timestamp,
+      attestedBy: walletAddress.toLowerCase(),
+      declarations: LEGAL_ATTESTATIONS.map(function (a) { return a.key; }),
+      hash: '0x' + hashHex,
+    };
+  }
+
   function buildMetadataEnvelope(params) {
     var contentType = params.mimeType || 'application/octet-stream';
+    var isPublic = params.accessMethod === 'free';
+    var isResellable = params.accessMethod === 'buy_and_resell';
+    var distributionLabel = params.accessMethod === 'buy_once' ? 'Buy Once'
+      : params.accessMethod === 'free' ? 'Free' : 'Buy & Resell';
+    var currency = params.currency || CURRENCIES[0];
+    var categories = Array.isArray(params.categories) ? params.categories
+      : (params.category ? [params.category] : []);
+    var tags = Array.isArray(params.tags) ? params.tags : [];
+
     return {
       schema: 'elacity-asset-envelope-v1',
       name: params.title,
       description: params.description,
       image: params.image || '',
-      category: params.category,
+      category: categories[0] || '',
       media: {
         uri: 'ipfs://' + params.assetCid,
         contentType: contentType,
         mimeType: contentType,
         protectionType: 'lit-aes-gcm-v1',
         size: params.size,
+        object: 'self://content.json',
       },
       asset: {
         cid: params.assetCid,
@@ -565,27 +760,118 @@
         rpc: 'https://mainnet.base.org',
       },
       pricing: {
-        currency: 'USDC',
+        currency: currency.symbol,
+        currencyAddress: currency.address,
+        currencyDecimals: currency.decimals,
         price: params.price,
         accessMethod: params.accessMethod || 'buy_and_resell',
         copies: params.copies || 10000,
+        resellerCut: isResellable ? (params.resellerCut || 900) : undefined,
       },
       properties: {
         chainId: BASE_CHAIN_ID,
         ledger: params.channel || DEFAULT_CHANNEL,
         authority: params.authority || CONTRACTS.AUTHORITY_GATEWAY,
         publisher: params.creatorAddress,
-        distribution: params.accessMethod === 'buy_once' ? 'Buy Once'
-          : params.accessMethod === 'free' ? 'Free' : 'Buy & Resell',
-        categories: [params.category],
+        contract: 'self://contract.json',
+        labelType: 'Creator',
+        distribution: distributionLabel,
+        tags: tags,
+        categories: categories,
       },
       creator: {
         address: params.creatorAddress,
         channel: params.channel || DEFAULT_CHANNEL,
       },
+      adult: !!params.isAdult,
+      legal: params.legalAttestation || null,
       createdAt: new Date().toISOString(),
       version: '1.0.0',
     };
+  }
+
+  function buildContentJson(params) {
+    var contentType = params.mimeType || 'application/octet-stream';
+    return {
+      uri: 'ipfs://' + params.assetCid,
+      contentType: contentType,
+      size: params.size,
+      protectionType: params.protectionType || 'lit-aes-gcm-v1',
+      dataToEncryptHash: params.dataToEncryptHash,
+      kid: params.kid || '',
+      encrypted: true,
+      algorithm: params.algorithm || 'aes-256-gcm',
+    };
+  }
+
+  function getContentTypeCode(mimeType) {
+    if (!mimeType) return 'B';
+    if (mimeType.startsWith('audio/')) return 'F';
+    if (mimeType.startsWith('image/')) return 'D';
+    if (mimeType === 'application/pdf' || mimeType.startsWith('text/')) return 'E';
+    return 'B';
+  }
+
+  function buildContractJson(params) {
+    var isPublic = params.accessMethod === 'free';
+    var isResellable = params.accessMethod === 'buy_and_resell';
+    var currency = params.currency || CURRENCIES[0];
+    return {
+      type: 'MCO',
+      version: '1.0',
+      chainId: BASE_CHAIN_ID,
+      channel: params.channel || DEFAULT_CHANNEL,
+      authority: params.authority || CONTRACTS.AUTHORITY_GATEWAY,
+      contentType: getContentTypeCode(params.mimeType),
+      opType: isPublic ? 0 : (isResellable ? 2 : 1),
+      supply: params.copies || 10000,
+      price: params.price,
+      paymentToken: currency.address,
+      paymentDecimals: currency.decimals,
+      resellerCut: isResellable ? (params.resellerCut || 900) : 0,
+      royalties: (params.royalties || []).map(function (r) {
+        return { address: r.address, percentage: r.royalty };
+      }),
+    };
+  }
+
+  function buildTokenTypeJsons(params) {
+    var files = {};
+    var imageUri = params.image || '';
+    var isPublic = params.accessMethod === 'free';
+    var isResellable = params.accessMethod === 'buy_and_resell';
+
+    if (!isPublic) {
+      files['0000000000000000000000000000000000000000000000000000000000000001.json'] = {
+        type: 'AccessToken',
+        name: 'Access Token',
+        description: 'Allow owner to access the content',
+        image: imageUri,
+        properties: {
+          kid: params.kid || params.dataToEncryptHash || '',
+          title: params.title,
+        },
+      };
+
+      files['0000000000000000000000000000000000000000000000000000000000000002.json'] = {
+        type: 'RoyaltyShare',
+        name: 'Royalty Share',
+        decimals: 1,
+        description: '10 shares = 1% of revenue',
+        image: imageUri,
+      };
+
+      if (isResellable) {
+        files['0000000000000000000000000000000000000000000000000000000000000003.json'] = {
+          type: 'DistributionRight',
+          name: 'Distribution Right',
+          description: 'Allow owner to distribute the content via trade',
+          image: imageUri,
+        };
+      }
+    }
+
+    return files;
   }
 
   // ── Local AES-GCM encryption (no Lit Protocol needed) ─
@@ -634,14 +920,35 @@
     var coder = ethers.AbiCoder.defaultAbiCoder();
     var cid16 = hashToContentId(params.contentId);
     var metadataUri = 'ipfs://' + params.metadataCID;
-    var creatorPer1000 = Math.round((100 - ELACITY_ROYALTY_PERCENT) * 10);
-    var elacityPer1000 = Math.round(ELACITY_ROYALTY_PERCENT * 10);
+    var isResellable = params.opType === OP_TYPES.BUY_AND_RESELL;
 
-    var addresses = [params.creatorAddress, params.creatorAddress, ELACITY_CHANNEL_ROYALTY_ADDRESS];
-    var roleTypes = [ROLE_ACCESS_TOKEN, ROLE_ROYALTY_SHARE, ROLE_ROYALTY_SHARE];
-    var amounts = [params.copies, creatorPer1000, elacityPer1000];
+    var royalties = params.royalties || [
+      { address: params.creatorAddress, royalty: 100 - ELACITY_ROYALTY_PERCENT, identifier: 'A' },
+    ];
+    royalties = royalties.concat([
+      { address: ELACITY_CHANNEL_ROYALTY_ADDRESS, royalty: ELACITY_ROYALTY_PERCENT },
+    ]);
 
-    if (params.opType === OP_TYPES.BUY_AND_RESELL) {
+    var addresses = [params.creatorAddress];
+    var roleTypes = [ROLE_ACCESS_TOKEN];
+    var amounts = [params.copies];
+
+    royalties.forEach(function (r) {
+      addresses.push(r.address);
+      roleTypes.push(ROLE_ROYALTY_SHARE);
+      amounts.push(Math.round(10 * Number(r.royalty)));
+    });
+
+    if (isResellable) {
+      var distributor = royalties.find(function (r) { return r.identifier === 'C' || r.key === 'C'; });
+      if (distributor && distributor.address !== params.creatorAddress) {
+        addresses.push(distributor.address);
+        roleTypes.push(ROLE_DISTRIBUTION_RIGHT);
+        amounts.push(1);
+      }
+    }
+
+    if (isResellable) {
       return coder.encode(
         ['bytes16', 'string', 'address[]', 'uint256[]', 'uint256[]', 'uint16'],
         [cid16, metadataUri, addresses, roleTypes, amounts, params.resellerCut || 900]
@@ -863,8 +1170,8 @@
       description: channelDesc,
       properties: { creator: state.walletAddress },
       attributes: [
-        { trait_type: 'Type', value: 1 },
-        { trait_type: 'Scope', value: 1 },
+        { trait_type: 'Type', value: CHANNEL_TYPE.STANDARD },
+        { trait_type: 'Scope', value: CHANNEL_SCOPE.PRIVATE },
       ],
     };
     channelMeta['0000000000000000000000000000000000000000000000000000000000000002.json'] = {
@@ -873,6 +1180,22 @@
       properties: { decimals: 1, creator: state.walletAddress },
       attributes: [],
     };
+
+    var channelPlansForMeta = getChannelPlans();
+    channelPlansForMeta.forEach(function (plan, idx) {
+      var planIdx = idx + 1;
+      var r = BigInt(0xff) << BigInt(120);
+      var shifted = BigInt(planIdx) << BigInt(112);
+      var tokenId = (r | shifted).toString(16).padStart(64, '0');
+      channelMeta[tokenId + '.json'] = {
+        name: plan.label + ' - ' + channelName,
+        description: plan.description || plan.label + ' plan',
+        image: '',
+        attributes: [
+          { trait_type: 'Duration', value: plan.duration.value + ' ' + plan.duration.unit },
+        ],
+      };
+    });
 
     var files = {};
     for (var fname in channelMeta) {
@@ -896,23 +1219,36 @@
     var creatorPer1000 = Math.round((100 - ELACITY_ROYALTY_PERCENT) * 10);
     var elacityPer1000 = Math.round(ELACITY_ROYALTY_PERCENT * 10);
 
+    var channelPlans = getChannelPlans();
+    var channelTokenAccess = getTokenAccessThresholds();
+    var channelRoyalties = getRoyaltyPartners();
+
+    var royaltyTuples = channelRoyalties.map(function (r) {
+      return [r.address, Math.round(10 * Number(r.royalty))];
+    });
+    royaltyTuples.push([ELACITY_CHANNEL_ROYALTY_ADDRESS, elacityPer1000]);
+
+    var planTuples = channelPlans.map(function (p) {
+      var durOpt = DURATION_OPTIONS.find(function (d) { return d.value === p.duration.value && d.unit === p.duration.unit; });
+      var durationSecs = durOpt ? durOpt.seconds : 2592000;
+      var priceWei = ethers.parseUnits(p.price.toString(), 18);
+      return [0, p.payToken, priceWei, durationSecs, true];
+    });
+
+    var tokenAccessTuples = channelTokenAccess.map(function (tk) {
+      return [tk.address, ethers.parseUnits(String(tk.value), tk.decimals || 0)];
+    });
+
     var coder = ethers.AbiCoder.defaultAbiCoder();
     var configData = coder.encode(
       ['tuple(address,uint256)[]', 'tuple(uint8,address,uint256,uint256,bool)[]', 'tuple(address,uint256)[]'],
-      [
-        [
-          [state.walletAddress, creatorPer1000],
-          [ELACITY_CHANNEL_ROYALTY_ADDRESS, elacityPer1000],
-        ],
-        [],
-        [],
-      ]
+      [royaltyTuples, planTuples, tokenAccessTuples]
     );
 
     var iface = new ethers.Interface(ABI.CHANNEL_CORE);
     var callData = iface.encodeFunctionData('createChannel', [
-      1,
-      1,
+      CHANNEL_TYPE.STANDARD,
+      CHANNEL_SCOPE.PRIVATE,
       channelName,
       'ipfs://' + metaCid,
       configData,
@@ -957,6 +1293,14 @@
         name: channelName,
         address: channelAddr,
         description: channelDesc,
+        plans: channelPlans.map(function (p) {
+          var durOpt = DURATION_OPTIONS.find(function (d) { return d.value === p.duration.value && d.unit === p.duration.unit; });
+          return { price: p.price, payToken: p.payToken, duration: durOpt ? durOpt.seconds : 2592000, label: p.label };
+        }),
+        tokenAccess: channelTokenAccess.map(function (tk) {
+          return { address: tk.address, value: parseFloat(String(tk.value)) };
+        }),
+        categories: [],
         creator: state.walletAddress,
         txHash: txHash,
       });
@@ -1031,13 +1375,13 @@
       address: params.address,
       description: params.description || '',
       creator: params.creator.toLowerCase(),
-      scope: '1',
-      channelType: '1',
-      image: '',
-      coverImage: '',
-      categories: [],
-      plans: [],
-      tokenAccess: [],
+      scope: String(CHANNEL_SCOPE.PRIVATE),
+      channelType: String(CHANNEL_TYPE.STANDARD),
+      image: params.image || '',
+      coverImage: params.coverImage || '',
+      categories: params.categories || [],
+      plans: params.plans || [],
+      tokenAccess: params.tokenAccess || [],
     };
 
     var authToken = await getElacityAuthToken(params.creator);
@@ -1122,19 +1466,127 @@
     return null;
   }
 
+  // ── Form data helpers ────────────────────────────────
+
+  function getSelectedCategories() {
+    var primary = dom.assetCategory.value;
+    return primary ? [primary] : [];
+  }
+
+  function getSelectedTags() {
+    var el = document.getElementById('asset-tags');
+    if (!el || !el.value.trim()) return [];
+    return el.value.split(',').map(function (t) { return t.trim(); }).filter(Boolean);
+  }
+
+  function getResellerCut() {
+    var el = document.getElementById('reseller-cut');
+    if (!el) return 900;
+    return parseInt(el.value) || 900;
+  }
+
+  function getSelectedCurrencyAddress() {
+    var el = document.getElementById('asset-currency');
+    if (!el) return USDC_BASE;
+    return el.value || USDC_BASE;
+  }
+
+  var priceCurrency = USDC_BASE;
+
+  function getRoyaltyPartners() {
+    var rows = document.querySelectorAll('.royalty-row');
+    if (!rows || rows.length === 0) {
+      return [{ address: state.walletAddress, royalty: 100 - ELACITY_ROYALTY_PERCENT, identifier: 'A' }];
+    }
+    var partners = [];
+    rows.forEach(function (row) {
+      var addrEl = row.querySelector('.royalty-address');
+      var pctEl = row.querySelector('.royalty-percent');
+      var roleEl = row.querySelector('.royalty-role');
+      if (addrEl && pctEl) {
+        var addr = addrEl.value.trim();
+        var pct = parseFloat(pctEl.value);
+        if (addr && pct > 0) {
+          partners.push({
+            address: addr,
+            royalty: pct,
+            identifier: roleEl ? roleEl.value : (partners.length === 0 ? 'A' : 'B'),
+            key: roleEl ? roleEl.value : undefined,
+          });
+        }
+      }
+    });
+    if (partners.length === 0) {
+      return [{ address: state.walletAddress, royalty: 100 - ELACITY_ROYALTY_PERCENT, identifier: 'A' }];
+    }
+    return partners;
+  }
+
+  function getChannelPlans() {
+    var rows = document.querySelectorAll('.plan-row');
+    if (!rows || rows.length === 0) return [];
+    var plans = [];
+    rows.forEach(function (row) {
+      var priceEl = row.querySelector('.plan-price');
+      var durEl = row.querySelector('.plan-duration');
+      var labelEl = row.querySelector('.plan-label');
+      if (priceEl && durEl) {
+        var durOpt = DURATION_OPTIONS.find(function (d) { return d.label === durEl.value; }) || DURATION_OPTIONS[2];
+        plans.push({
+          price: priceEl.value || '0',
+          payToken: '0x0000000000000000000000000000000000000000',
+          duration: { value: durOpt.value, unit: durOpt.unit },
+          label: durOpt.label,
+          description: labelEl ? labelEl.value : durOpt.label + ' plan',
+        });
+      }
+    });
+    return plans;
+  }
+
+  function getTokenAccessThresholds() {
+    var rows = document.querySelectorAll('.token-gate-row');
+    if (!rows || rows.length === 0) return [];
+    var thresholds = [];
+    rows.forEach(function (row) {
+      var addrEl = row.querySelector('.token-gate-address');
+      var valEl = row.querySelector('.token-gate-value');
+      if (addrEl && valEl) {
+        var addr = addrEl.value.trim();
+        var val = parseFloat(valEl.value);
+        if (addr && val > 0 && ethers.isAddress(addr)) {
+          thresholds.push({ address: addr, value: val, decimals: 0 });
+        }
+      }
+    });
+    return thresholds;
+  }
+
+  function validateRoyaltyTotal() {
+    var partners = getRoyaltyPartners();
+    var total = partners.reduce(function (sum, r) { return sum + Number(r.royalty); }, 0) + ELACITY_ROYALTY_PERCENT;
+    return Math.abs(total - 100) < 0.01;
+  }
+
+  function updateRevenueCalc() {
+    var priceEl = dom.assetPrice;
+    var copiesEl = dom.assetCopies;
+    var calcEl = document.getElementById('revenue-calc');
+    if (!calcEl || !priceEl || !copiesEl) return;
+    var p = parseFloat(priceEl.value) || 0;
+    var c = parseInt(copiesEl.value) || 0;
+    var total = (p * c).toFixed(2);
+    calcEl.textContent = 'Potential revenue: ' + c + ' × $' + p.toFixed(2) + ' = $' + total;
+  }
+
   // ── Pipeline ─────────────────────────────────────────
 
   async function runPipeline() {
-    var title = dom.assetTitle.value.trim();
-    var description = dom.assetDescription.value.trim();
-    var category = dom.assetCategory.value;
-    var price = parseFloat(dom.assetPrice.value);
-    var accessMethod = dom.assetAccess.value;
-    var copies = parseInt(dom.assetCopies.value) || 10000;
-    var channel = getSelectedChannel();
     var usedLocalEncryption = false;
 
-    console.log('[Creator] Pipeline starting. Channel:', channel, '| Select value:', dom.assetChannel.value, '| Custom:', dom.assetChannelCustom.value);
+    console.log('[Creator] Pipeline starting (background — metadata fields read later)');
+
+    updateFloatingProgress('prog-connect', 'Starting pipeline...', 'active');
 
     dom.progressError.classList.add('hidden');
     dom.btnBackTo2.disabled = true;
@@ -1152,6 +1604,22 @@
       var encryptResult;
       var mediaEncodeResult = null;
 
+      // SHA-256 hash of the original unencrypted file — proof of content integrity
+      var originalContentHash = null;
+      try {
+        var hashSource = isMediaFile
+          ? new Uint8Array(await state.selectedFile.arrayBuffer())
+          : state.fileBytes;
+        if (hashSource) {
+          var hashBuf = await crypto.subtle.digest('SHA-256', hashSource);
+          var hashArr = Array.from(new Uint8Array(hashBuf));
+          originalContentHash = '0x' + hashArr.map(function (b) { return b.toString(16).padStart(2, '0'); }).join('');
+          console.log('[Creator] Original content SHA-256:', originalContentHash.substring(0, 20) + '...');
+        }
+      } catch (hashErr) {
+        console.warn('[Creator] Content hash generation failed (non-fatal):', hashErr.message);
+      }
+
       if (isMediaFile) {
         // ── Media Path: Encode + CENC encrypt via backend pipeline ──
         swapProgressStepsForMedia();
@@ -1161,6 +1629,12 @@
 
         var formData = new FormData();
         formData.append('file', state.selectedFile);
+
+        var previewEnabled = document.getElementById('preview-enabled');
+        var previewDurSlider = document.getElementById('preview-duration');
+        if (previewEnabled && previewEnabled.checked && previewDurSlider) {
+          formData.append('previewDuration', previewDurSlider.value);
+        }
 
         var encodeResp = await pc2Fetch('/api/media/encode', {
           method: 'POST',
@@ -1370,6 +1844,16 @@
       } // end else (non-media IPFS upload)
 
       // ── Step 3: Build & upload metadata ─────────────────
+      // Read form values now (user has had time to fill them while processing ran)
+      var title = dom.assetTitle.value.trim();
+      var description = dom.assetDescription.value.trim();
+      var category = dom.assetCategory.value;
+      var price = parseFloat(dom.assetPrice.value);
+      var accessMethod = dom.assetAccess.value;
+      var copies = parseInt(dom.assetCopies.value) || 10000;
+      var channel = getSelectedChannel();
+      priceCurrency = getSelectedCurrencyAddress();
+
       setProgStep('prog-upload-meta', 'Building metadata...', 'active');
 
       // Resolve authority (gateway) and generate thumbnail for metadata
@@ -1401,19 +1885,110 @@
           thumbBase64 = uint8ToBase64(new Uint8Array(await thumbBlob.arrayBuffer()));
           console.log('[Creator] Using user-selected thumbnail');
         } else if (state.selectedFile && state.resolvedMime.startsWith('image/')) {
+          // Low-res + slight blur to prevent usability as a substitute
           var autoCanvas = document.createElement('canvas');
           var autoCtx = autoCanvas.getContext('2d');
           var autoImg = await createImageBitmap(state.selectedFile);
-          var autoDim = 400;
+          var autoDim = 200;
           var autoScale = Math.min(autoDim / autoImg.width, autoDim / autoImg.height, 1);
           autoCanvas.width = Math.round(autoImg.width * autoScale);
           autoCanvas.height = Math.round(autoImg.height * autoScale);
+          autoCtx.filter = 'blur(1px)';
           autoCtx.drawImage(autoImg, 0, 0, autoCanvas.width, autoCanvas.height);
+          autoCtx.filter = 'none';
+          autoCtx.fillStyle = 'rgba(0,0,0,0.08)';
+          autoCtx.fillRect(0, 0, autoCanvas.width, autoCanvas.height);
           var autoBlob = await new Promise(function (resolve) {
-            autoCanvas.toBlob(resolve, 'image/jpeg', 0.8);
+            autoCanvas.toBlob(resolve, 'image/jpeg', 0.6);
           });
           thumbBase64 = uint8ToBase64(new Uint8Array(await autoBlob.arrayBuffer()));
-          console.log('[Creator] Auto-generated thumbnail from image');
+          console.log('[Creator] Auto-generated thumbnail from image (low-res)');
+        } else if (state.selectedFile && state.resolvedMime.startsWith('video/')) {
+          // Extract a frame from the video at 2 seconds (or 0s for short clips)
+          try {
+            thumbBase64 = await new Promise(function (resolve, reject) {
+              var videoEl = document.createElement('video');
+              videoEl.preload = 'auto';
+              videoEl.muted = true;
+              videoEl.playsInline = true;
+              var blobUrl = URL.createObjectURL(state.selectedFile);
+              videoEl.src = blobUrl;
+
+              var resolved = false;
+              function captureFrame() {
+                if (resolved) return;
+                resolved = true;
+                var vw = videoEl.videoWidth || 640;
+                var vh = videoEl.videoHeight || 360;
+                var thumbDim = 640;
+                var thumbScale = Math.min(thumbDim / vw, thumbDim / vh, 1);
+                var cw = Math.round(vw * thumbScale);
+                var ch = Math.round(vh * thumbScale);
+                var vCanvas = document.createElement('canvas');
+                vCanvas.width = cw;
+                vCanvas.height = ch;
+                var vCtx = vCanvas.getContext('2d');
+                vCtx.drawImage(videoEl, 0, 0, cw, ch);
+                vCanvas.toBlob(function (blob) {
+                  URL.revokeObjectURL(blobUrl);
+                  videoEl.src = '';
+                  if (blob) {
+                    blob.arrayBuffer().then(function (buf) {
+                      resolve(uint8ToBase64(new Uint8Array(buf)));
+                    });
+                  } else {
+                    resolve(null);
+                  }
+                }, 'image/jpeg', 0.85);
+              }
+
+              videoEl.addEventListener('seeked', captureFrame, { once: true });
+              videoEl.addEventListener('loadeddata', function () {
+                var seekTo = Math.min(2, videoEl.duration * 0.1);
+                videoEl.currentTime = seekTo;
+              }, { once: true });
+              videoEl.addEventListener('error', function () {
+                URL.revokeObjectURL(blobUrl);
+                resolve(null);
+              }, { once: true });
+              setTimeout(function () { if (!resolved) { resolved = true; URL.revokeObjectURL(blobUrl); resolve(null); } }, 15000);
+              videoEl.load();
+            });
+            if (thumbBase64) console.log('[Creator] Auto-generated thumbnail from video frame');
+          } catch (vThumbErr) {
+            console.warn('[Creator] Video thumbnail extraction failed:', vThumbErr.message);
+          }
+        } else if (state.selectedFile && state.resolvedMime.startsWith('audio/')) {
+          // Generate a simple audio waveform placeholder thumbnail
+          try {
+            var aCanvas = document.createElement('canvas');
+            aCanvas.width = 640;
+            aCanvas.height = 360;
+            var aCtx = aCanvas.getContext('2d');
+            aCtx.fillStyle = '#1a1a2e';
+            aCtx.fillRect(0, 0, 640, 360);
+            aCtx.strokeStyle = '#6366f1';
+            aCtx.lineWidth = 2;
+            aCtx.beginPath();
+            var barCount = 48;
+            var barWidth = 640 / barCount;
+            for (var bi = 0; bi < barCount; bi++) {
+              var h = 40 + Math.random() * 140;
+              var x = bi * barWidth + barWidth * 0.2;
+              var y = (360 - h) / 2;
+              aCtx.fillStyle = 'rgba(99, 102, 241, ' + (0.5 + Math.random() * 0.5) + ')';
+              aCtx.fillRect(x, y, barWidth * 0.6, h);
+            }
+            aCtx.fillStyle = '#e2e8f0';
+            aCtx.font = 'bold 18px sans-serif';
+            aCtx.textAlign = 'center';
+            aCtx.fillText(state.selectedFile.name.substring(0, 40), 320, 340);
+            var aBlob = await new Promise(function (resolve) { aCanvas.toBlob(resolve, 'image/jpeg', 0.85); });
+            thumbBase64 = uint8ToBase64(new Uint8Array(await aBlob.arrayBuffer()));
+            console.log('[Creator] Auto-generated audio waveform thumbnail');
+          } catch (aThumbErr) {
+            console.warn('[Creator] Audio thumbnail generation failed:', aThumbErr.message);
+          }
         } else if (state.selectedFile && (state.resolvedMime === 'application/pdf' || state.resolvedMime === 'text/plain' || state.resolvedMime.startsWith('text/'))) {
           // Server-side thumbnail generation for PDFs and text files
           var fileBytes = new Uint8Array(await state.selectedFile.arrayBuffer());
@@ -1432,6 +2007,42 @@
             }
           } else {
             console.warn('[Creator] Server thumbnail failed:', serverThumbResp.status, await serverThumbResp.text().catch(function() { return ''; }));
+          }
+        }
+
+        // Generic fallback for any file type that didn't produce a thumbnail
+        if (!thumbBase64 && state.selectedFile) {
+          try {
+            var fCanvas = document.createElement('canvas');
+            fCanvas.width = 640;
+            fCanvas.height = 360;
+            var fCtx = fCanvas.getContext('2d');
+            var grad = fCtx.createLinearGradient(0, 0, 640, 360);
+            grad.addColorStop(0, '#1e1b4b');
+            grad.addColorStop(1, '#312e81');
+            fCtx.fillStyle = grad;
+            fCtx.fillRect(0, 0, 640, 360);
+            fCtx.fillStyle = 'rgba(99, 102, 241, 0.15)';
+            fCtx.beginPath();
+            fCtx.arc(320, 150, 60, 0, Math.PI * 2);
+            fCtx.fill();
+            fCtx.fillStyle = '#a5b4fc';
+            fCtx.font = 'bold 36px sans-serif';
+            fCtx.textAlign = 'center';
+            fCtx.textBaseline = 'middle';
+            var ext = (state.selectedFile.name.split('.').pop() || '?').toUpperCase();
+            fCtx.fillText(ext, 320, 150);
+            fCtx.fillStyle = '#e2e8f0';
+            fCtx.font = '16px sans-serif';
+            fCtx.fillText(state.selectedFile.name.substring(0, 44), 320, 240);
+            fCtx.fillStyle = '#94a3b8';
+            fCtx.font = '13px sans-serif';
+            fCtx.fillText(state.resolvedMime || 'unknown', 320, 268);
+            var fBlob = await new Promise(function (resolve) { fCanvas.toBlob(resolve, 'image/jpeg', 0.85); });
+            thumbBase64 = uint8ToBase64(new Uint8Array(await fBlob.arrayBuffer()));
+            console.log('[Creator] Fallback thumbnail generated for', state.resolvedMime);
+          } catch (fThumbErr) {
+            console.warn('[Creator] Fallback thumbnail failed:', fThumbErr.message);
           }
         }
 
@@ -1455,10 +2066,23 @@
         console.warn('[Creator] No thumbnail generated — asset will have no preview image in marketplace');
       }
 
-      var envelope = buildMetadataEnvelope({
+      var selectedCurrency = CURRENCIES.find(function (c) { return c.address === priceCurrency; }) || CURRENCIES[0];
+      var selectedCategories = getSelectedCategories();
+      var selectedTags = getSelectedTags();
+      var resellerCut = getResellerCut();
+      var royaltyPartners = getRoyaltyPartners();
+
+      var isAdultContent = !!(document.getElementById('adult-content-check') && document.getElementById('adult-content-check').checked);
+      var legalAttestation = await buildLegalAttestation(state.walletAddress);
+
+      var metaParams = {
         title: title,
         description: description,
-        category: category,
+        category: selectedCategories[0] || category,
+        categories: selectedCategories.length > 0 ? selectedCategories : [category],
+        tags: selectedTags,
+        isAdult: isAdultContent,
+        legalAttestation: legalAttestation,
         assetCid: assetCid,
         mimeType: state.resolvedMime || 'application/octet-stream',
         size: state.selectedFile.size,
@@ -1467,26 +2091,62 @@
         price: price,
         accessMethod: accessMethod,
         copies: copies,
+        resellerCut: resellerCut,
+        currency: selectedCurrency,
+        royalties: royaltyPartners,
         creatorAddress: state.walletAddress,
         channel: channel,
         authority: authorityAddress,
         image: imageUri,
-      });
+      };
 
-      // Two-layer encryption: store Lit-encrypted CEK and IV in metadata
+      var envelope = buildMetadataEnvelope(metaParams);
+
       if (encryptResult.litCiphertext) {
         envelope.asset.litCiphertext = encryptResult.litCiphertext;
         envelope.asset.iv = encryptResult.iv;
         envelope.asset.litBackend = encryptResult.litBackend || 'chipotle';
       }
 
-      // Media-specific metadata: DASH/CENC fields from encoder pipeline
       if (isMediaFile && mediaEncodeResult) {
         envelope.asset.protectionType = 'cenc:web3-drm-v1';
         envelope.asset.mpdUri = mediaEncodeResult.mpdUri;
         envelope.asset.kid = mediaEncodeResult.kid;
         envelope.asset.litBackend = 'chipotle';
         envelope.asset.mediaType = state.resolvedMime.startsWith('video/') ? 'video' : 'audio';
+        envelope.media.previewURL = mediaEncodeResult.previewURL || undefined;
+        if (mediaEncodeResult.duration) envelope.media.duration = mediaEncodeResult.duration;
+        if (mediaEncodeResult.resolution) envelope.media.resolution = mediaEncodeResult.resolution;
+        if (mediaEncodeResult.codec) envelope.media.codec = mediaEncodeResult.codec;
+      }
+
+      // Content integrity proof — buyers (and AI agents) can verify post-purchase
+      if (originalContentHash) {
+        envelope.asset.contentHash = originalContentHash;
+        envelope.asset.contentHashAlgorithm = 'SHA-256';
+      }
+
+      // Content stats for buyer trust signals (machine-readable by AI agents)
+      try {
+        var mime = state.resolvedMime || '';
+        if (!isMediaFile && state.fileBytes) {
+          if (mime.startsWith('text/') || mime === 'application/json') {
+            var textContent = new TextDecoder().decode(state.fileBytes);
+            var wordCount = textContent.split(/\s+/).filter(function (w) { return w.length > 0; }).length;
+            var lineCount = textContent.split(/\n/).length;
+            envelope.media.wordCount = wordCount;
+            envelope.media.lineCount = lineCount;
+          } else if (mime.startsWith('image/')) {
+            envelope.media.fileType = 'image';
+          }
+          envelope.media.originalSize = state.selectedFile.size;
+          envelope.media.originalName = state.selectedFile.name;
+        } else if (isMediaFile) {
+          envelope.media.originalSize = state.selectedFile.size;
+          envelope.media.originalName = state.selectedFile.name;
+        }
+      } catch (statsErr) {
+        console.warn('[Creator] Content stats extraction failed (non-fatal):', statsErr.message);
       }
 
       if (usedLocalEncryption) {
@@ -1494,24 +2154,70 @@
         envelope.asset._localKey = encryptResult._localDevKey;
       }
 
-      var metaJsonStr = JSON.stringify(envelope, null, 2);
-      var metaBase64 = btoa(unescape(encodeURIComponent(metaJsonStr)));
+      var kid = (isMediaFile && mediaEncodeResult) ? mediaEncodeResult.kid : (encryptResult.dataToEncryptHash || '');
 
-      // Upload to local IPFS (directory format for local gateway)
+      var contentJson = buildContentJson({
+        assetCid: assetCid,
+        mimeType: state.resolvedMime || 'application/octet-stream',
+        size: state.selectedFile.size,
+        dataToEncryptHash: encryptResult.dataToEncryptHash,
+        kid: kid,
+        protectionType: envelope.asset.protectionType,
+        algorithm: envelope.asset.algorithm,
+      });
+
+      var contractJson = buildContractJson({
+        accessMethod: accessMethod,
+        channel: channel,
+        authority: authorityAddress,
+        copies: copies,
+        price: price,
+        resellerCut: resellerCut,
+        currency: selectedCurrency,
+        royalties: royaltyPartners,
+        mimeType: state.resolvedMime || 'application/octet-stream',
+      });
+
+      var tokenTypeFiles = buildTokenTypeJsons({
+        accessMethod: accessMethod,
+        image: imageUri,
+        title: title,
+        kid: kid,
+        dataToEncryptHash: encryptResult.dataToEncryptHash,
+      });
+
+      function jsonToBase64(obj) {
+        return btoa(unescape(encodeURIComponent(JSON.stringify(obj, null, 2))));
+      }
+
+      var metaDirFiles = {
+        'metadata.json': jsonToBase64(envelope),
+        'content.json': jsonToBase64(contentJson),
+        'contract.json': jsonToBase64(contractJson),
+      };
+      for (var tokenFileName in tokenTypeFiles) {
+        metaDirFiles[tokenFileName] = jsonToBase64(tokenTypeFiles[tokenFileName]);
+      }
+
       var localMetaDirCid = null;
       var localMetaResp = await pc2Fetch('/api/storage/ipfs/add-directory', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ files: { 'metadata.json': metaBase64 }, announce: true }),
+        body: JSON.stringify({ files: metaDirFiles, announce: true }),
       });
       if (localMetaResp.ok) {
         var localMetaData = await localMetaResp.json();
         localMetaDirCid = localMetaData.cid;
         console.log('[Creator] Local meta dir CID:', localMetaDirCid);
       }
+      if (!localMetaDirCid) {
+        throw new Error('Failed to create metadata directory on local IPFS');
+      }
 
-      // Upload metadata to Elacity's IPFS (raw file CID for public access)
-      setProgStep('prog-upload-meta', 'Pinning to Elacity IPFS...', 'active');
+      // Upload metadata.json as a flat file to Elacity IPFS — returns a CIDv0 (Qm...)
+      setProgStep('prog-upload-meta', 'Uploading to Elacity IPFS...', 'active');
+
+      var metaBase64 = jsonToBase64(envelope);
       var metaCid = null;
       try {
         var elacityMetaResp = await pc2Fetch('/api/storage/ipfs/upload-elacity', {
@@ -1537,7 +2243,7 @@
       }
       setProgStep('prog-upload-meta', 'CID: ' + metaCid.substring(0, 12) + '...', 'done');
 
-      // ── Step 3b: Verify on Elacity gateway ──────────────
+      // Verify on Elacity gateway
       setProgStep('prog-pin', 'Verifying...', 'active');
       try {
         var verifyResp = await fetch('https://ipfs.ela.city/ipfs/' + metaCid, {
@@ -1545,13 +2251,36 @@
           signal: AbortSignal.timeout(10000),
         });
         if (verifyResp.ok) {
-          setProgStep('prog-pin', 'Verified on ipfs.ela.city', 'done');
+          setProgStep('prog-pin', 'Live on ipfs.ela.city', 'done');
         } else {
-          setProgStep('prog-pin', 'Uploaded (gateway pending)', 'done');
+          setProgStep('prog-pin', 'Uploaded — indexing...', 'done');
         }
-      } catch (e) {
-        setProgStep('prog-pin', 'Uploaded to Elacity IPFS', 'done');
+      } catch (verifyErr) {
+        setProgStep('prog-pin', 'Uploaded — will index shortly', 'done');
       }
+
+      // ── Wait for user to review and click Sign & Mint ──
+      state.metaCid = metaCid;
+      state.metadataUploaded = true;
+      state.processingRunning = false;
+
+      var fpBar = document.getElementById('floating-progress');
+      var fpFill = document.getElementById('floating-progress-fill');
+      var fpText = document.getElementById('floating-progress-text');
+      var fpPct = document.getElementById('floating-progress-pct');
+      if (fpBar) fpBar.classList.add('done');
+      if (fpFill) fpFill.style.width = '90%';
+      if (fpText) fpText.textContent = 'Ready to publish — complete the checklist below';
+      if (fpPct) fpPct.textContent = '90%';
+
+      setProgStep('prog-mint', 'Ready — check the boxes below and click Sign & Mint', 'active');
+      dom.btnBackTo2.disabled = false;
+      validateStep3();
+
+      await new Promise(function (resolve) {
+        state._mintResolve = resolve;
+      });
+      dom.btnBackTo2.disabled = true;
 
       // ── Step 4: Mint on Channel contract ──────────────
       var mintedTokenId = null;
@@ -1578,8 +2307,23 @@
         var gatewayAddress = await getChannelAuthority(channel);
         console.log('[Creator] Channel authority (gateway):', gatewayAddress);
 
+        // Verify MINTER_ROLE before attempting mint to fail fast
+        var MINTER_ROLE = ethers.keccak256(ethers.toUtf8Bytes('MINTER_ROLE'));
+        try {
+          var acIface = new ethers.Interface(ABI.ACCESS_CONTROL);
+          var roleCheck = await rpcCall(channel, acIface.encodeFunctionData('hasRole', [MINTER_ROLE, state.walletAddress]));
+          var hasMinterRole = acIface.decodeFunctionResult('hasRole', roleCheck)[0];
+          if (!hasMinterRole) {
+            throw new Error('Your wallet does not have MINTER_ROLE on this channel. Create your own channel or request access from the channel owner.');
+          }
+          console.log('[Creator] MINTER_ROLE verified for', state.walletAddress);
+        } catch (roleCheckErr) {
+          if (roleCheckErr.message.includes('MINTER_ROLE')) throw roleCheckErr;
+          console.warn('[Creator] Could not verify MINTER_ROLE (proceeding anyway):', roleCheckErr.message);
+        }
+
         var feeInfo = await getMintingFee();
-        var priceWei = ethers.parseUnits(price.toString(), 6);
+        var priceWei = ethers.parseUnits(price.toString(), selectedCurrency.decimals);
         var opType = accessMethod === 'free' ? OP_TYPES.FREE
           : accessMethod === 'buy_once' ? OP_TYPES.BUY_ONCE
           : OP_TYPES.BUY_AND_RESELL;
@@ -1591,11 +2335,12 @@
               creatorAddress: state.walletAddress,
               copies: copies,
               opType: opType,
-              resellerCut: 900,
+              resellerCut: resellerCut,
+              royalties: royaltyPartners,
             })
           : '0x';
         var sellRawData = opType !== OP_TYPES.FREE
-          ? encodeSellRawData(copies, priceWei, USDC_BASE)
+          ? encodeSellRawData(copies, priceWei, selectedCurrency.address)
           : '0x';
 
         var mintUri = metaCid;
@@ -1715,11 +2460,45 @@
       var mintLabel = mintedTokenId ? ' Token #' + mintedTokenId : '';
       showToast('Asset published!' + mintLabel + modeLabel, 'success');
 
+      // Post-mint: register asset locally so it appears in library and is seedable
+      if (assetCid && state.walletAddress) {
+        try {
+          await pc2Fetch('/api/storage/ipfs/pin', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ cid: assetCid }),
+          });
+          console.log('[Creator] Asset registered for local seeding:', assetCid);
+        } catch (seedErr) {
+          console.warn('[Creator] Local seed registration failed (non-fatal):', seedErr.message);
+        }
+      }
+      if (metaCid && state.walletAddress) {
+        try {
+          await pc2Fetch('/api/storage/ipfs/pin', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ cid: metaCid }),
+          });
+          console.log('[Creator] Metadata registered for local seeding:', metaCid);
+        } catch (seedErr) {
+          console.warn('[Creator] Metadata seed registration failed (non-fatal):', seedErr.message);
+        }
+      }
+
+      // Post-mint: Elacity's on-chain indexer detects AssetCreated events and resolves
+      // the tokenURI metadata from ipfs.ela.city. The flat metadata CID uploaded above
+      // is resolvable, so the asset will appear in the feed automatically.
+      // No explicit backend notification needed when using the upload-elacity endpoint.
+
     } catch (err) {
+      state.processingRunning = false;
       dom.progressError.textContent = 'Error: ' + (err.message || 'Unknown error');
       dom.progressError.classList.remove('hidden');
       dom.btnBackTo2.disabled = false;
       showToast('Pipeline failed: ' + (err.message || ''), 'error');
+
+      hideFloatingProgress();
 
       PROGRESS_STEPS.forEach(function (id) {
         var el = document.getElementById(id);
@@ -1735,6 +2514,12 @@
     state.fileBytes = null;
     state.result = null;
     state.customThumbnail = null;
+    state.processingResult = null;
+    state.processingError = null;
+    state.processingRunning = false;
+    state.metadataUploaded = false;
+    state.metaCid = null;
+    state._mintResolve = null;
     clearFile();
     // Reset thumbnail picker UI
     if (dom.thumbPreviewImg) dom.thumbPreviewImg.src = '';
@@ -1756,6 +2541,7 @@
     });
     restoreProgressStepsDefault();
     resetMediaSubSteps();
+    hideFloatingProgress();
 
     goToStep(1);
   }
@@ -1921,6 +2707,169 @@
       if (isCustom) dom.assetChannelCustom.focus();
     });
 
+    // Reseller cut slider
+    var resellerSlider = document.getElementById('reseller-cut');
+    var resellerGroup = document.getElementById('reseller-cut-group');
+    if (resellerSlider) {
+      resellerSlider.addEventListener('input', function () {
+        var pct = parseInt(resellerSlider.value) / 10;
+        document.getElementById('reseller-cut-display').textContent = pct + '%';
+        document.getElementById('reseller-pct').textContent = pct;
+        document.getElementById('partner-pct').textContent = (100 - pct);
+      });
+    }
+
+    // Show/hide reseller cut based on access method
+    dom.assetAccess.addEventListener('change', function () {
+      if (resellerGroup) {
+        resellerGroup.style.display = dom.assetAccess.value === 'buy_and_resell' ? '' : 'none';
+      }
+    });
+
+    // Revenue calc update
+    if (dom.assetPrice) {
+      dom.assetPrice.addEventListener('input', updateRevenueCalc);
+    }
+    if (dom.assetCopies) {
+      dom.assetCopies.addEventListener('input', updateRevenueCalc);
+    }
+
+    // Supply tier presets
+    document.querySelectorAll('.supply-tier-btn').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var supply = parseInt(btn.getAttribute('data-supply'));
+        var tierPrice = parseFloat(btn.getAttribute('data-price'));
+        if (dom.assetCopies) dom.assetCopies.value = supply;
+        if (dom.assetPrice) dom.assetPrice.value = tierPrice;
+        updateRevenueCalc();
+      });
+    });
+
+    // Add royalty partner
+    var btnAddRoyalty = document.getElementById('btn-add-royalty');
+    if (btnAddRoyalty) {
+      btnAddRoyalty.addEventListener('click', function () {
+        var container = document.getElementById('royalty-container');
+        var row = document.createElement('div');
+        row.className = 'royalty-row';
+        row.style.cssText = 'display:flex; gap:6px; align-items:center; margin-bottom:4px;';
+        row.innerHTML = '<select class="royalty-role" style="width:90px; padding:6px; font-size:12px; border:1px solid var(--border); border-radius:4px; background:var(--bg-elevated); color:var(--text);"><option value="B" selected>Partner</option><option value="C">Distributor</option></select>' +
+          '<input class="royalty-address" type="text" placeholder="0x... wallet" style="flex:1; padding:6px; font-size:12px; border:1px solid var(--border); border-radius:4px; background:var(--bg-elevated); color:var(--text);" />' +
+          '<input class="royalty-percent" type="number" min="0.1" max="94.9" step="0.1" value="10" style="width:70px; padding:6px; font-size:12px; border:1px solid var(--border); border-radius:4px; background:var(--bg-elevated); color:var(--text); text-align:right;" />' +
+          '<span style="font-size:12px; color:var(--text-muted);">%</span>' +
+          '<button type="button" class="royalty-remove" style="display:inline-flex; align-items:center; justify-content:center; width:24px; height:24px; font-size:14px; line-height:1; font-family:inherit; background:var(--error); color:white; border:none; border-radius:4px; cursor:pointer;">&times;</button>';
+        container.appendChild(row);
+        row.querySelector('.royalty-remove').addEventListener('click', function () { row.remove(); });
+      });
+    }
+
+    // Auto-fill creator address in first royalty row
+    function fillCreatorRoyaltyAddress() {
+      if (!state.walletAddress) return;
+      var firstAddr = document.querySelector('.royalty-row .royalty-address');
+      if (firstAddr && !firstAddr.value) firstAddr.value = state.walletAddress;
+    }
+
+    // Add subscription plan
+    var btnAddPlan = document.getElementById('btn-add-plan');
+    if (btnAddPlan) {
+      btnAddPlan.addEventListener('click', function () {
+        addPlanRow({ price: '5', duration: '1 Month' });
+      });
+    }
+
+    // Use default 3-tier plans
+    var btnDefaultPlans = document.getElementById('btn-use-default-plans');
+    if (btnDefaultPlans) {
+      btnDefaultPlans.addEventListener('click', function () {
+        var container = document.getElementById('plans-container');
+        container.innerHTML = '';
+        DEFAULT_PLANS.forEach(function (p) {
+          addPlanRow({ price: p.price, duration: p.label, description: p.description });
+        });
+      });
+    }
+
+    function addPlanRow(defaults) {
+      var container = document.getElementById('plans-container');
+      var row = document.createElement('div');
+      row.className = 'plan-row';
+      row.style.cssText = 'display:flex; gap:6px; align-items:center; margin-bottom:4px;';
+      var durOptions = DURATION_OPTIONS.map(function (d) {
+        var sel = d.label === (defaults.duration || '1 Month') ? ' selected' : '';
+        return '<option value="' + d.label + '"' + sel + '>' + d.label + '</option>';
+      }).join('');
+      row.innerHTML = '<select class="plan-duration" style="width:110px; padding:6px; font-size:12px; border:1px solid var(--border); border-radius:4px; background:var(--bg-elevated); color:var(--text);">' + durOptions + '</select>' +
+        '<input class="plan-price" type="number" min="0.01" step="0.01" value="' + (defaults.price || '5') + '" placeholder="Price" style="width:80px; padding:6px; font-size:12px; border:1px solid var(--border); border-radius:4px; background:var(--bg-elevated); color:var(--text); text-align:right;" />' +
+        '<span style="font-size:12px; color:var(--text-muted);">ETH</span>' +
+        '<input class="plan-label" type="text" placeholder="Description" value="' + (defaults.description || '') + '" style="flex:1; padding:6px; font-size:12px; border:1px solid var(--border); border-radius:4px; background:var(--bg-elevated); color:var(--text);" />' +
+        '<button type="button" class="plan-remove" style="display:inline-flex; align-items:center; justify-content:center; width:24px; height:24px; font-size:14px; line-height:1; font-family:inherit; background:var(--error); color:white; border:none; border-radius:4px; cursor:pointer;">&times;</button>';
+      container.appendChild(row);
+      row.querySelector('.plan-remove').addEventListener('click', function () { row.remove(); });
+    }
+
+    // Add token gate
+    var btnAddTokenGate = document.getElementById('btn-add-token-gate');
+    if (btnAddTokenGate) {
+      btnAddTokenGate.addEventListener('click', function () {
+        var container = document.getElementById('token-gate-container');
+        var row = document.createElement('div');
+        row.className = 'token-gate-row';
+        row.style.cssText = 'display:flex; gap:6px; align-items:center; margin-bottom:4px;';
+        row.innerHTML = '<input class="token-gate-address" type="text" placeholder="0x... token contract" style="flex:1; padding:6px; font-size:12px; border:1px solid var(--border); border-radius:4px; background:var(--bg-elevated); color:var(--text);" />' +
+          '<input class="token-gate-value" type="number" min="1" step="1" value="1" placeholder="Min balance" style="width:80px; padding:6px; font-size:12px; border:1px solid var(--border); border-radius:4px; background:var(--bg-elevated); color:var(--text); text-align:right;" />' +
+          '<span class="token-gate-info" style="font-size:11px; color:var(--text-muted); min-width:60px;"></span>' +
+          '<button type="button" class="token-gate-remove" style="display:inline-flex; align-items:center; justify-content:center; width:24px; height:24px; font-size:14px; line-height:1; font-family:inherit; background:var(--error); color:white; border:none; border-radius:4px; cursor:pointer;">&times;</button>';
+        container.appendChild(row);
+        row.querySelector('.token-gate-remove').addEventListener('click', function () { row.remove(); });
+
+        // Token introspection on blur
+        var addrInput = row.querySelector('.token-gate-address');
+        var infoSpan = row.querySelector('.token-gate-info');
+        addrInput.addEventListener('blur', async function () {
+          var addr = addrInput.value.trim();
+          if (!addr || !ethers.isAddress(addr)) { infoSpan.textContent = ''; return; }
+          try {
+            var iface = new ethers.Interface(ERC20_ABI);
+            var nameData = await rpcCall(addr, iface.encodeFunctionData('symbol', []));
+            var sym = iface.decodeFunctionResult('symbol', nameData)[0];
+            infoSpan.textContent = sym;
+            infoSpan.style.color = 'var(--success)';
+          } catch (_) {
+            infoSpan.textContent = 'NFT?';
+            infoSpan.style.color = 'var(--text-muted)';
+          }
+        });
+      });
+    }
+
+    // Show channel plans/token-gating sections when "Create" is clicked
+    var channelCreateBtn = document.getElementById('btn-create-channel');
+    if (channelCreateBtn) {
+      channelCreateBtn.addEventListener('click', function () {
+        document.getElementById('channel-plans-section').style.display = '';
+        document.getElementById('channel-tokengating-section').style.display = '';
+      }, { once: true });
+    }
+
+    // Preview duration display
+    var previewDurSlider = document.getElementById('preview-duration');
+    if (previewDurSlider) {
+      previewDurSlider.addEventListener('input', function () {
+        document.getElementById('preview-duration-display').textContent = previewDurSlider.value + 's';
+      });
+    }
+
+    // Royalty percent inputs — validate on change
+    document.addEventListener('input', function (e) {
+      if (e.target && e.target.classList.contains('royalty-percent')) validateStep2();
+    });
+
+    // Step 3 legal checkboxes
+    document.addEventListener('change', function (e) {
+      if (e.target && e.target.classList.contains('legal-check')) validateStep3();
+    });
+
     // Step 2 form validation
     ['input', 'change'].forEach(function (evt) {
       dom.assetTitle.addEventListener(evt, validateStep2);
@@ -1931,24 +2880,28 @@
       dom.assetChannelCustom.addEventListener(evt, validateStep2);
     });
 
-    // Step navigation
+    // Step 1 → Step 2: go to metadata form and start pipeline in background
     dom.btnToStep2.addEventListener('click', function () {
       goToStep(2);
-      var btn = document.getElementById('btn-to-step-3');
-      if (btn && state.isMediaFile) {
-        btn.textContent = 'Encode, Upload & Mint';
-      } else if (btn) {
-        btn.textContent = 'Encrypt, Upload & Mint';
+      // Lock preview settings — instruction is baked into the encode request
+      var prevEnabled = document.getElementById('preview-enabled');
+      var prevDur = document.getElementById('preview-duration');
+      if (prevEnabled) prevEnabled.disabled = true;
+      if (prevDur) prevDur.disabled = true;
+      // Start the pipeline — it runs encrypt+upload while user fills metadata,
+      // then pauses before minting and waits for user to click Sign & Mint
+      if (!state.processingRunning) {
+        state.processingRunning = true;
+        runPipeline();
       }
     });
+
     dom.btnBackTo1.addEventListener('click', function () { goToStep(1); });
-    dom.btnToStep3.addEventListener('click', function () {
+
+    // Step 2 → Step 3: validate form, then show review page where pipeline progress is visible
+    dom.btnToStep3.addEventListener('click', async function () {
       if (!state.walletAddress) {
         showToast('Connect your wallet first', 'error');
-        return;
-      }
-      if (!state.fileBytes && !state.isMediaFile) {
-        showToast('File not loaded yet — please wait', 'error');
         return;
       }
       var ch = getSelectedChannel();
@@ -1961,8 +2914,31 @@
         return;
       }
       goToStep(3);
-      runPipeline();
+
+      var summary = document.getElementById('confirmation-summary');
+      if (summary) {
+        var p = parseFloat(dom.assetPrice.value) || 0;
+        var c = parseInt(dom.assetCopies.value) || 0;
+        var currency = CURRENCIES.find(function (cur) { return cur.address === getSelectedCurrencyAddress(); }) || CURRENCIES[0];
+        summary.innerHTML = '<b>' + (dom.assetTitle.value || 'Untitled') + '</b> — ' +
+          c + ' copies at ' + p + ' ' + currency.symbol + ' each (' + dom.assetAccess.value.replace(/_/g, ' ') + ')';
+      }
+
+      // Fees are handled internally during mint — no separate display needed
     });
+
+    // Sign & Mint: user clicks after reviewing legal checkboxes — unblocks the pipeline
+    var btnSignMint = document.getElementById('btn-sign-mint');
+    if (btnSignMint) {
+      btnSignMint.addEventListener('click', function () {
+        if (state._mintResolve) {
+          btnSignMint.disabled = true;
+          state._mintResolve();
+          state._mintResolve = null;
+        }
+      });
+    }
+
     dom.btnBackTo2.addEventListener('click', function () { goToStep(2); });
     dom.btnNewAsset.addEventListener('click', resetAll);
 
