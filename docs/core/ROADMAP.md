@@ -2,7 +2,7 @@
 
 > **Purpose:** Single source of truth for all strategic goals, technical work streams, and milestones — directly mapped to the Keystone Fund proposal and Rong Chen's original vision
 > **Created:** 2026-02-24
-> **Last Updated:** 2026-03-20
+> **Last Updated:** 2026-03-23
 > **Status:** Living document — update as work progresses
 
 ---
@@ -458,6 +458,28 @@ These diagrams from Rong define the north star. Every work stream should move us
 - [ ] Agent buyer support — MCP/A2A endpoints for autonomous agent procurement of ACCESS_TOKENs
 - [ ] Elacity dDRM API product — one API key for encrypt/decrypt/mint/upload/verify/stream. Pay-per-request + tiered subscription revenue model. Target markets: AI agents (MCP/A2A), third-party marketplaces, WordPress/Shopify plugins, white-label integrations. Foundation: Chipotle migration makes all Lit calls simple HTTP POSTs
 
+**Enterprise Rights Infrastructure (PDR):**
+- [x] Enterprise metadata schema — `pc2-node/src/sdk/types.ts` with licensing, aiTraining, provenance, contentIntelligence, compliance interfaces (Mar 23)
+- [x] Perceptual hashing — pHash/Chromaprint/SimHash in `pc2-node/src/services/media/fingerprint.ts` (Mar 23)
+- [x] Hash registry — `content_hashes` DB table + query functions in `database.ts` (Mar 23)
+- [x] Content Intelligence Service — `pc2-node/src/services/ContentIntelligenceService.ts` using Ollama (Mar 23)
+- [x] Contract config centralization — `pc2-node/src/sdk/config.ts`, all addresses in one file (Mar 23)
+- [x] Publish toolbar button — one-click upload dropdown in desktop toolbar, launches Creator Dashboard (Mar 23)
+- [x] Publish Queue / Drafts — `publish_drafts` DB table (migration 21), `/api/drafts` REST endpoints, auto-save at pipeline checkpoint, resume signing from any device, badge count + queue list in toolbar dropdown (Mar 23)
+- [ ] **BLOCKED (V3 + Lit):** V3 ABI migration — update Creator Dashboard ABIs (`DIGITAL_ASSET`, `OPERATIVE`, `CHANNEL_CORE`, `CORE_STORAGE`), contract addresses, `operativeOf` fallback, `parseAssetCreatedEvent` event signatures, and `encodeSellRawData`/`encodeOpRawData` encoding to match new V3 contract interfaces
+- [ ] **BLOCKED (V3 + Lit):** SDK extraction — `pc2-node/src/sdk/` modules (metadata, contracts, channels, mint, licensing, compliance, pricing)
+- [ ] **BLOCKED (V3 + Lit):** Server-side pipeline orchestrator — `sdk/mint.ts` chains encode→encrypt→upload→metadata autonomously on node, enables "upload and walk away" (Jetson processes while user is offline)
+- [ ] **BLOCKED (V3 + Lit):** Enterprise REST API — `/api/v1/content`, `/api/v1/license`, `/api/v1/compliance` with API key auth
+- [ ] **BLOCKED (V3 + Lit):** MCP Server — `elacity.content.*`, `elacity.license.*` tools for AI buyer agents
+- [ ] AI Training Data wedge product — `licensing.aiTraining` metadata, training-rights access method
+- [ ] Pre-publish safety screening — safetyScore gate in SDK mint pipeline
+- [ ] Compliance dashboard — audit trail view, report export (PDF/JSON), license summary
+- [ ] Enterprise billing — Stripe integration, usage metering, subscription tiers ($2-5K/mo)
+- [ ] Multi-vertical metadata templates — AI Training, Media, Software/API, Academic, Datasets
+- [ ] Sandbox environment — Base Sepolia testnet for pilot onboarding
+- [ ] Developer documentation — quickstart, OpenAPI 3.0, code examples (Node.js, Python, cURL)
+- [ ] Target: 3-5 enterprise pilots active, $30K+ MRR by Month 12
+
 **Year 1 Report:**
 - [ ] Comprehensive development output report (commits, releases, features)
 - [ ] Network statistics (active nodes, transactions, uptime)
@@ -729,6 +751,72 @@ Phase 3 (M7+) — Agent Economy:
   Content creators as registered agents with reputation scores
 ```
 
+### Enterprise Rights Infrastructure (PDR — March 2026)
+
+> **Strategic Pivot:** From general-purpose sovereign compute to focused B2B enterprise licensing infrastructure, with AI training data licensing as the primary wedge market.
+> **Thesis:** Every AI company will need provable, auditable licensing of training data within 2-3 years. Elacity's existing protocol is the infrastructure to deliver it.
+> **Positioning:** "Stripe for content licensing" / "Compliance infrastructure for the AI economy"
+> **Full PDR:** See `.cursor/plans/pdr-aligned_enterprise_roadmap_b7f66066.plan.md`
+
+```
+PDR Phase 1 — Foundation (Months 0-3, Mar-Jun 2026):
+  SDK Extraction — extract Creator Dashboard pipeline into pc2-node/src/sdk/
+    → sdk/metadata.ts, sdk/contracts.ts, sdk/channels.ts, sdk/mint.ts
+    → sdk/licensing.ts (NEW: license terms, AI training permissions)
+    → sdk/compliance.ts (NEW: audit trail, chain-of-custody export)
+    → sdk/types.ts (enterprise metadata schema with licensing.aiTraining)
+  Enterprise REST API — /api/v1/content, /api/v1/license, /api/v1/compliance
+    → API key auth, blockchain-invisible JSON responses
+    → "20 lines of code" integration simplicity
+  Developer Documentation — quickstart, OpenAPI 3.0 reference, code examples
+
+PDR Phase 2 — Wedge Product (Months 3-6, Jun-Sep 2026):
+  "Elacity for AI Training Data" — vertical product for data owner licensing
+    → licensing.type: 'training-rights' metadata template
+    → AI training scope, attribution, derivative works, model type restrictions
+  Content Intelligence Service — Ollama-powered analysis before publishing
+    → classification, quality assessment, safety screening, provenance
+    → ContentIntelligenceReport embedded in metadata = compliance documentation
+  MCP Server — pc2-node/src/mcp/server.ts
+    → elacity.content.package, .analyze, .search
+    → elacity.license.verify, .acquire
+    → How AI buyer agents interact with the protocol
+  Perceptual Hashing — pHash (images/video), Chromaprint (audio), SimHash (text)
+    → Provenance verification for AI training data
+    → Duplicate/piracy detection across network
+  Compliance Dashboard — audit trail, report export, license summary
+  Sandbox Environment — Base Sepolia testnet for pilot onboarding
+
+PDR Phase 3 — Traction & Revenue (Months 6-12, Sep 2026-Mar 2027):
+  Target: $30K+ MRR from enterprise subscriptions + transaction fees
+  Pre-publish Safety Screening — integrated into SDK mint pipeline
+  Enterprise Billing — Stripe, usage metering, subscription tiers
+  Multi-Vertical Templates — Media, Datasets, Software/API, Academic, AI Models
+  Regulatory Engagement — EU AI Office, ASEAN regulators
+
+PDR Phase 4 — Scale (Months 12-24, Mar 2027-Mar 2028):
+  Target: $200K+ MRR, Series A positioning
+  On-chain Reputation — per-wallet scores, flag/dispute tracking
+  Dispute Resolution — licensing arbitration (manual → DAO)
+  CSAM Screening — hash matching + AI classification (legal prerequisite)
+  Invisible Watermarking — buyer-specific marks during Lit decryption
+  Agent Economy Bridge — ERC-8004, autonomous procurement via MCP
+  Content Versioning — version chains, upgrade licensing
+```
+
+**PDR-to-Milestone Mapping:**
+- PDR Phase 1 (SDK) accelerates Milestone 5 (Developer Platform) by ~9 months
+- PDR Phase 2 (API/MCP) aligns with Milestone 4 (dDRM API product)
+- PDR Phase 3 (billing/revenue) aligns with Milestone 4 (Protocol Fees)
+- PDR Phase 4 (agent economy) aligns with Milestone 7
+
+**Revenue Model:**
+- Enterprise SaaS: $2-5K/month base for platform access, compliance dashboard, support SLAs
+- Transaction fees: 1-5% on licensing revenue processed through the protocol
+- At scale, transaction fees dominate (Stripe model)
+
+**ICP:** Mid-tier content companies ($10-500M revenue) producing IP that AI companies want to train on — independent film studios, mid-size music labels, academic publishers, SaaS companies with API products, AI training data providers, open-source AI model creators.
+
 ### Network Hardening (from NETWORK_HARDENING.md)
 
 | Priority | Item | Target Milestone | Status |
@@ -789,13 +877,13 @@ Starting Month 1 (March 2026):
 |---------|--------|-------|
 | v1.1.0 | March 2026 | Merge Jetson branch, bug fixes, AV1 player |
 | v1.2.0 | April 2026 | **Lit Chipotle dDRM** (non-media DONE, media E2E DONE Mar 18), local media encoding (FFmpeg+WASM CENC+DASH — E2E verified, Python-free), AV1 playback verified (init splitting + PSSH strip), WASM optimization (mp4-split Rust crate, IPFS chunk assembly, decrypt limit 200MB, player UX), **Universal Asset Viewers** (3D models with VFX features, CSV datasets, fonts, archives — Tier 1 completion), audio routing fix (all audio through Media Runtime DASH), supernode provisioning ready (deploy when Lit Chipotle production network goes live), hardware expansion, installer improvements, WireGuard bundling |
-| v1.3.0 | May 2026 | IPFS streaming chunk assembly (production reliability — OOM fix for large files on Jetson), AI Model Marketplace alpha (GGUF→Ollama), on-chain content indexer (**DONE** — ContentIndexerService), dApp bundles, `@elacity-js/asset-packager` |
-| v1.4.0 | June 2026 | Multi-rendition encoding, fiat onramp, AI serialization optimization (MessagePack), signed capsule format (bridge to Runtime) |
-| v1.5.0 | July 2026 | dApp Store v1 (categories, ratings, HTML5 games), mobile companion alpha |
-| v1.6.0 | August 2026 | Signed capsule format (bridge to Runtime), Supernode Access Tokens, bandwidth metering |
-| v1.7.0 | September 2026 | Protocol fees alpha, white-label SDK alpha, enterprise pilot |
-| v1.8.0 | October 2026 | Developer SDK, composable assets (nested licensing) |
-| v1.9.0 | November 2026 | Agent buyer support (MCP/A2A), capsule marketplace alpha |
+| v1.3.0 | May 2026 | IPFS streaming chunk assembly (production reliability — OOM fix for large files on Jetson), AI Model Marketplace alpha (GGUF→Ollama), on-chain content indexer (**DONE** — ContentIndexerService), dApp bundles, `@elacity-js/asset-packager`, **PDR: SDK Extraction (pc2-node/src/sdk/)**, **PDR: Enterprise metadata schema (licensing, aiTraining, provenance types)** |
+| v1.4.0 | June 2026 | Multi-rendition encoding, fiat onramp, AI serialization optimization (MessagePack), signed capsule format (bridge to Runtime), **PDR: Enterprise REST API (/api/v1/*)**, **PDR: Developer documentation (quickstart, OpenAPI)** |
+| v1.5.0 | July 2026 | dApp Store v1 (categories, ratings, HTML5 games), mobile companion alpha, **PDR: Perceptual hashing + hash registry**, **PDR: MCP Server (pc2-node/src/mcp/server.ts)** |
+| v1.6.0 | August 2026 | Signed capsule format (bridge to Runtime), Supernode Access Tokens, bandwidth metering, **PDR: Content Intelligence Service**, **PDR: AI Training Data product** |
+| v1.7.0 | September 2026 | Protocol fees alpha, white-label SDK alpha, **PDR: Compliance dashboard**, **PDR: Sandbox environment**, enterprise pilot onboarding |
+| v1.8.0 | October 2026 | Developer SDK, composable assets (nested licensing), **PDR: Pre-publish safety screening**, **PDR: Enterprise billing (Stripe)** |
+| v1.9.0 | November 2026 | Agent buyer support (MCP/A2A), capsule marketplace alpha, **PDR: Multi-vertical templates** |
 | v1.10.0 | December 2026 | Year 1 hardening + comprehensive review |
 | v2.0.0 | Q1 2027 | **Runtime convergence** — PC2 desktop as Shell capsule, dDRM as Provider Capsule, full capability tokens |
 

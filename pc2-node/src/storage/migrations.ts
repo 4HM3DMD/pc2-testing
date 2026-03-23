@@ -31,7 +31,7 @@ function findSchemaFile(): string {
   }
   throw new Error(`Schema file not found. Tried: ${SCHEMA_FILE} and ${sourceSchema}`);
 }
-const CURRENT_VERSION = 19;
+const CURRENT_VERSION = 21;
 
 interface Migration {
   version: number;
@@ -781,6 +781,80 @@ export function runMigrations(db: Database.Database): void {
         recordMigration(db, 19);
       } catch (error: any) {
         log.error(`❌ Migration 19 error: ${error.message}`);
+        throw error;
+      }
+    }
+
+    // Migration 20: Content hashes table for perceptual fingerprinting + duplicate detection
+    if (currentVersion < 20) {
+      try {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS content_hashes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            phash TEXT NOT NULL,
+            algorithm TEXT NOT NULL DEFAULT 'phash',
+            token_id TEXT,
+            channel TEXT,
+            creator TEXT,
+            content_type TEXT,
+            metadata_cid TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            source TEXT NOT NULL DEFAULT 'local'
+          )
+        `);
+
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_content_hashes_phash ON content_hashes(phash)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_content_hashes_creator ON content_hashes(creator)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_content_hashes_token ON content_hashes(token_id)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_content_hashes_source ON content_hashes(source)`);
+
+        log.info('✅ Migration 20 complete: Content hashes table created');
+        recordMigration(db, 20);
+      } catch (error: any) {
+        log.error(`❌ Migration 20 error: ${error.message}`);
+        throw error;
+      }
+    }
+
+    if (currentVersion < 21) {
+      try {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS publish_drafts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            wallet_address TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'ready',
+            title TEXT NOT NULL,
+            description TEXT,
+            category TEXT,
+            file_name TEXT,
+            file_size INTEGER,
+            mime_type TEXT,
+            asset_cid TEXT NOT NULL,
+            metadata_cid TEXT NOT NULL,
+            encrypt_hash TEXT NOT NULL,
+            channel TEXT NOT NULL,
+            price TEXT,
+            currency_address TEXT,
+            currency_symbol TEXT,
+            copies INTEGER DEFAULT 1,
+            access_method TEXT DEFAULT 'buy_once',
+            reseller_cut INTEGER DEFAULT 0,
+            royalty_partners TEXT,
+            thumbnail_cid TEXT,
+            adult INTEGER DEFAULT 0,
+            steps TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+          )
+        `);
+
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_drafts_wallet ON publish_drafts(wallet_address)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_drafts_status ON publish_drafts(status)`);
+
+        log.info('✅ Migration 21 complete: Publish drafts table created');
+        recordMigration(db, 21);
+      } catch (error: any) {
+        log.error(`❌ Migration 21 error: ${error.message}`);
         throw error;
       }
     }

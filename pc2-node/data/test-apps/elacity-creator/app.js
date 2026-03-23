@@ -21,11 +21,13 @@
 
   var USDC_BASE = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 
+  // V2 contract ABIs — must be updated when Elacity dDRM V3 contracts deploy
   var ABI = {
     DIGITAL_ASSET: [
       'function mint(string _uri, uint16 opType, bytes opRawData, bytes sellRawData) payable',
       'function authority() view returns (address)',
       'function totalSupply() view returns (uint256)',
+      'function operativeOf(uint256 tokenId) view returns (address)',
       'event AssetCreated(uint256 indexed _tokenId, address indexed _creator, string _tokenURI, uint16 _opType, address indexed opContract)',
     ],
     CORE_STORAGE: [
@@ -113,6 +115,7 @@
     processingRunning: false,
     metadataUploaded: false,
     metaCid: null,
+    draftId: null,
   };
 
   // ── DOM refs ──────────────────────────────────────────
@@ -421,6 +424,23 @@
     dom.dropZone.classList.add('hidden');
     dom.filePreview.classList.remove('hidden');
     dom.btnToStep2.disabled = false;
+
+    // Auto-detect category from MIME type
+    var autoCategory = '';
+    if (resolvedMime.startsWith('video/')) autoCategory = 'video';
+    else if (resolvedMime.startsWith('audio/')) autoCategory = 'audio';
+    else if (resolvedMime.startsWith('image/')) autoCategory = 'image';
+    else if (resolvedMime === 'application/pdf') autoCategory = 'ebook';
+    else if (resolvedMime.startsWith('text/')) autoCategory = 'document';
+    else if (resolvedMime === 'application/json') autoCategory = 'dataset';
+    else if (resolvedMime === 'font/ttf' || resolvedMime === 'font/otf' || resolvedMime === 'font/woff' || resolvedMime === 'font/woff2') autoCategory = 'font';
+    else if (file.name.match(/\.(glb|gltf|obj|fbx|stl|usdz)$/i)) autoCategory = '3d-model';
+    else if (file.name.match(/\.(py|js|ts|rs|go|java|c|cpp|h|rb|php|sh|sql|zip|tar|gz)$/i)) autoCategory = 'code';
+    else if (file.name.match(/\.(csv|tsv|parquet|jsonl|ndjson|xml)$/i)) autoCategory = 'dataset';
+    else if (file.name.match(/\.(onnx|safetensors|pt|pth|h5|pb|tflite|gguf|ggml)$/i)) autoCategory = 'ai-model';
+    if (autoCategory && dom.assetCategory) {
+      dom.assetCategory.value = autoCategory;
+    }
 
     // Show media encoding badge and preview settings for video/audio files
     var existingBadge = document.getElementById('media-encode-badge');
@@ -1091,17 +1111,7 @@
     var start = Date.now();
     maxWait = maxWait || 120000;
     while (Date.now() - start < maxWait) {
-      // Smart Account wallets (Particle/UniversalX) return UserOperation hashes
-      // that standard RPC won't recognize. Try the wallet provider first since it
-      // can resolve UserOp hashes to real receipts.
-      try {
-        var walletReceipt = await window.ethereum.request({
-          method: 'eth_getTransactionReceipt',
-          params: [txHash],
-        });
-        if (walletReceipt && walletReceipt.status) return walletReceipt;
-      } catch (_) { /* wallet provider doesn't support it, fall through */ }
-
+      // Try standard RPC first — returns complete logs needed for event parsing
       var resp = await fetch(BASE_RPC, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1114,6 +1124,18 @@
       var json = await resp.json();
       var receipt = json.result;
       if (receipt && receipt.status) return receipt;
+
+      // Fallback: Smart Account wallets (Particle/UniversalX) return UserOperation
+      // hashes that standard RPC won't recognize. Try the wallet provider which can
+      // resolve UserOp hashes to real receipts.
+      try {
+        var walletReceipt = await window.ethereum.request({
+          method: 'eth_getTransactionReceipt',
+          params: [txHash],
+        });
+        if (walletReceipt && walletReceipt.status) return walletReceipt;
+      } catch (_) { /* wallet provider doesn't support it, keep polling */ }
+
       await new Promise(function (r) { setTimeout(r, 3000); });
     }
     console.warn('[Creator] waitForReceipt timed out for', txHash);
@@ -1844,7 +1866,28 @@
       } // end else (non-media IPFS upload)
 
       // ── Step 3: Build & upload metadata ─────────────────
-      // Read form values now (user has had time to fill them while processing ran)
+      // Wait for user to advance past step 2 (confirm their metadata inputs)
+      if (state.currentStep < 3) {
+        setProgStep('prog-upload-meta', 'Waiting for you to confirm metadata...', 'active');
+        var fpBar = document.getElementById('floating-progress');
+        var fpFill = document.getElementById('floating-progress-fill');
+        var fpText = document.getElementById('floating-progress-text');
+        var fpPct = document.getElementById('floating-progress-pct');
+        if (fpBar) fpBar.classList.add('done');
+        if (fpFill) fpFill.style.width = '70%';
+        if (fpText) fpText.textContent = 'Processing complete — fill in details and click Next';
+        if (fpPct) fpPct.textContent = '70%';
+        await new Promise(function (resolve) {
+          var check = setInterval(function () {
+            if (state.currentStep >= 3) {
+              clearInterval(check);
+              resolve();
+            }
+          }, 200);
+        });
+      }
+
+      // Read form values now (user has confirmed them by advancing to step 3)
       var title = dom.assetTitle.value.trim();
       var description = dom.assetDescription.value.trim();
       var category = dom.assetCategory.value;
@@ -2264,6 +2307,42 @@
       state.metadataUploaded = true;
       state.processingRunning = false;
 
+      // Save draft so user can close and come back to sign later
+      try {
+        var draftBody = {
+          title: title,
+          description: description,
+          category: category,
+          file_name: state.selectedFile ? state.selectedFile.name : '',
+          file_size: state.selectedFile ? state.selectedFile.size : 0,
+          mime_type: state.resolvedMime || '',
+          asset_cid: assetCid,
+          metadata_cid: metaCid,
+          encrypt_hash: encryptResult.dataToEncryptHash,
+          channel: channel,
+          price: String(price || 0),
+          currency_address: priceCurrency,
+          currency_symbol: (CURRENCIES.find(function (c) { return c.address === priceCurrency; }) || CURRENCIES[0]).symbol,
+          copies: copies,
+          access_method: accessMethod,
+          reseller_cut: getResellerCut(),
+          royalty_partners: JSON.stringify(getRoyaltyPartners()),
+          thumbnail_cid: imageUri || '',
+          adult: isAdultContent,
+        };
+        var draftResp = await pc2Fetch('/api/drafts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(draftBody),
+        });
+        if (draftResp.ok) {
+          var draftData = await draftResp.json();
+          state.draftId = draftData.id;
+        }
+      } catch (draftErr) {
+        console.warn('[Creator] Draft auto-save failed:', draftErr.message);
+      }
+
       var fpBar = document.getElementById('floating-progress');
       var fpFill = document.getElementById('floating-progress-fill');
       var fpText = document.getElementById('floating-progress-text');
@@ -2375,11 +2454,27 @@
           }
         }
 
+        // On-chain fallback: look up operative contract if receipt parsing missed it
+        if (!mintedOpContract && mintedTokenId && opType !== OP_TYPES.FREE) {
+          try {
+            var opLookupData = iface.encodeFunctionData('operativeOf', [mintedTokenId]);
+            var opLookupResult = await rpcCall(channel, opLookupData);
+            var opDecoded = iface.decodeFunctionResult('operativeOf', opLookupResult);
+            if (opDecoded[0] && opDecoded[0] !== ethers.ZeroAddress) {
+              mintedOpContract = opDecoded[0];
+              console.log('[Creator] Operative found via on-chain lookup:', mintedOpContract);
+            }
+          } catch (opLookupErr) {
+            console.warn('[Creator] operativeOf lookup failed:', opLookupErr.message);
+          }
+        }
+
         setProgStep('prog-mint', mintedTokenId
           ? 'Token #' + mintedTokenId + ' minted'
           : 'Minted (tx: ' + mintTxHash.substring(0, 10) + '...)', 'done');
 
         // ── Step 5: Set approval on Operative ─────────
+        var gatewayApproved = false;
         if (mintedOpContract && mintedOpContract !== '0x0000000000000000000000000000000000000000') {
           try {
             setProgStep('prog-approve', 'Waiting for chain to settle...', 'active');
@@ -2398,6 +2493,7 @@
               console.warn('[Creator] Approval receipt timed out. Tx may still confirm:', approveTxHash);
             } else {
               setProgStep('prog-approve', 'Gateway approved', 'done');
+              gatewayApproved = true;
             }
             console.log('[Creator] setApprovalForAll on', mintedOpContract, 'for gateway', gatewayAddress);
           } catch (approveErr) {
@@ -2407,15 +2503,25 @@
           }
         } else if (opType === OP_TYPES.FREE) {
           setProgStep('prog-approve', 'Skipped (free content)', 'done');
+          gatewayApproved = true;
         } else {
-          setProgStep('prog-approve', 'Skipped (operative not detected)', 'done');
+          setProgStep('prog-approve', '⚠️ Operative not detected — use Fix tool below', 'error');
+          showToast('Gateway approval could not run — use Fix Gateway Approval tool below.', 'error');
         }
       } else {
         setProgStep('prog-mint', 'Skipped (no channel)', 'done');
         setProgStep('prog-approve', 'Skipped', 'done');
       }
 
-      // ── Done — show results ───────────────────────────
+      // ── Done — delete draft since mint completed ──────
+      if (state.draftId) {
+        try {
+          await pc2Fetch('/api/drafts/' + state.draftId, { method: 'DELETE' });
+        } catch (_) {}
+        state.draftId = null;
+      }
+
+      // ── Show results ───────────────────────────────────
       var didMintOnChain = !!(channel && ethers.isAddress(channel) && mintTxHash);
 
       state.result = {
@@ -2436,8 +2542,6 @@
 
       if (didMintOnChain) {
         var tokenLabel = mintedTokenId ? 'Token #' + mintedTokenId : 'tx ' + mintTxHash.substring(0, 10) + '...';
-        document.getElementById('result-title').textContent = 'Asset Minted On-Chain';
-        document.getElementById('result-desc').textContent = 'Your encrypted asset is on IPFS and minted on Base as ' + tokenLabel + '.';
         document.getElementById('result-row-token').style.display = '';
         document.getElementById('result-token-id').textContent = mintedTokenId || mintTxHash;
         document.getElementById('result-row-channel').style.display = '';
@@ -2446,7 +2550,15 @@
           document.getElementById('result-row-operative').style.display = '';
           document.getElementById('result-operative').textContent = mintedOpContract;
         }
-        document.getElementById('result-note').innerHTML = '<strong>Live on Base:</strong> Your asset is now on the Elacity channel. <a href="https://basescan.org/tx/' + mintTxHash + '" target="_blank">View on BaseScan</a>';
+        if (gatewayApproved) {
+          document.getElementById('result-title').textContent = 'Asset Minted On-Chain';
+          document.getElementById('result-desc').textContent = 'Your encrypted asset is on IPFS and minted on Base as ' + tokenLabel + '.';
+          document.getElementById('result-note').innerHTML = '<strong>Live on Base:</strong> Your asset is now on the Elacity channel. <a href="https://basescan.org/tx/' + mintTxHash + '" target="_blank">View on BaseScan</a>';
+        } else {
+          document.getElementById('result-title').textContent = 'Minted — Gateway Approval Needed';
+          document.getElementById('result-desc').textContent = 'Token ' + tokenLabel + ' was minted but the marketplace approval did not complete. Buyers cannot purchase until you approve.';
+          document.getElementById('result-note').innerHTML = '<strong>Action required:</strong> Use the <em>Fix Gateway Approval</em> tool below to send the approval transaction. <a href="https://basescan.org/tx/' + mintTxHash + '" target="_blank">View mint on BaseScan</a>';
+        }
       } else {
         document.getElementById('result-title').textContent = 'Asset Published to IPFS';
         document.getElementById('result-desc').textContent = 'Your encrypted asset is stored on IPFS and ready for on-chain listing.';
@@ -2458,7 +2570,16 @@
       goToStep(4);
       var modeLabel = usedLocalEncryption ? ' (local dev mode)' : '';
       var mintLabel = mintedTokenId ? ' Token #' + mintedTokenId : '';
-      showToast('Asset published!' + mintLabel + modeLabel, 'success');
+      if (didMintOnChain && !gatewayApproved) {
+        showToast('Minted' + mintLabel + ' — gateway approval still needed' + modeLabel, 'error');
+        // Pre-fill the Fix Gateway Approval tool so user doesn't have to find the address
+        if (mintedOpContract) {
+          var fixInput = document.getElementById('fix-operative-addr');
+          if (fixInput) fixInput.value = mintedOpContract;
+        }
+      } else {
+        showToast('Asset published!' + mintLabel + modeLabel, 'success');
+      }
 
       // Post-mint: register asset locally so it appears in library and is seedable
       if (assetCid && state.walletAddress) {
@@ -2519,6 +2640,7 @@
     state.processingRunning = false;
     state.metadataUploaded = false;
     state.metaCid = null;
+    state.draftId = null;
     state._mintResolve = null;
     clearFile();
     // Reset thumbnail picker UI
@@ -3062,13 +3184,333 @@
         .catch(function () {});
     }
 
-    // Pre-load file when launched via right-click "Mint on Elacity"
+    // Resume from saved draft (launched from toolbar queue)
+    async function resumeFromDraft(draftId) {
+      try {
+        var resp = await pc2Fetch('/api/drafts/' + draftId);
+        if (!resp.ok) throw new Error('Draft not found');
+        var draft = await resp.json();
+
+        if (state.walletAddress && state.walletAddress.toLowerCase() !== draft.wallet_address.toLowerCase()) {
+          showToast('Wallet mismatch — this draft belongs to a different wallet', 'error');
+          return;
+        }
+
+        // Populate form fields from draft
+        if (dom.assetTitle) dom.assetTitle.value = draft.title || '';
+        if (dom.assetDescription) dom.assetDescription.value = draft.description || '';
+        if (dom.assetCategory) dom.assetCategory.value = draft.category || '';
+        if (dom.assetPrice) dom.assetPrice.value = draft.price || '0';
+        if (dom.assetAccess) dom.assetAccess.value = draft.access_method || 'buy_and_resell';
+        if (dom.assetCopies) dom.assetCopies.value = draft.copies || 10000;
+        var channelSel = dom.assetChannel;
+        if (channelSel && draft.channel) {
+          channelSel.value = draft.channel;
+          if (channelSel.value !== draft.channel) {
+            channelSel.value = 'custom';
+            if (dom.assetChannelCustom) {
+              dom.assetChannelCustom.value = draft.channel;
+              dom.assetChannelCustom.style.display = '';
+            }
+          }
+        }
+        var currSel = document.getElementById('asset-currency');
+        if (currSel && draft.currency_address) currSel.value = draft.currency_address;
+        var adultCheck = document.getElementById('adult-content-check');
+        if (adultCheck) adultCheck.checked = !!draft.adult;
+
+        // Set state as if pipeline completed
+        state.metaCid = draft.metadata_cid;
+        state.metadataUploaded = true;
+        state.processingRunning = false;
+        state.draftId = draftId;
+
+        // Update file preview with draft info
+        var fileInfo = document.getElementById('file-info');
+        if (fileInfo) {
+          fileInfo.innerHTML = '<strong>' + (draft.file_name || 'Untitled') + '</strong><br>' +
+            '<span style="color:#888">' + (draft.mime_type || '') + ' — ' + formatSize(draft.file_size || 0) + '</span>';
+        }
+        var filePreview = document.getElementById('file-preview-area');
+        if (filePreview) filePreview.classList.remove('hidden');
+
+        // Jump to step 3 (review & sign) with all progress steps done
+        ['prog-fragment', 'prog-encrypt', 'prog-upload', 'prog-finalize', 'prog-upload-meta', 'prog-pin'].forEach(function (id) {
+          setProgStep(id, 'Done (from saved draft)', 'done');
+        });
+
+        goToStep(3);
+
+        // Build review summary card from draft data
+        var reviewEl = document.getElementById('review-summary');
+        if (reviewEl) {
+          var draftPrice = parseFloat(draft.price) || 0;
+          var draftCopies = draft.copies || 10000;
+          var draftCurrency = CURRENCIES.find(function (c) { return c.address === draft.currency_address; }) || CURRENCIES[0];
+          var draftAccessLabel = draft.access_method === 'buy_and_resell' ? 'Buy & Resell'
+            : draft.access_method === 'buy_once' ? 'Buy Once' : 'Free';
+          var rows = [
+            { label: 'Title', value: draft.title || 'Untitled' },
+            { label: 'Category', value: draft.category || '—' },
+            { label: 'Price', value: draft.access_method === 'free' ? 'Free' : draftPrice.toFixed(2) + ' ' + draftCurrency.symbol },
+            { label: 'Copies', value: draftCopies.toLocaleString() },
+            { label: 'Access', value: draftAccessLabel },
+            { label: 'Channel', value: (draft.channel || '').length > 12 ? (draft.channel || '').substring(0, 8) + '...' + (draft.channel || '').slice(-4) : (draft.channel || '') },
+          ];
+          if (draft.description) {
+            rows.splice(1, 0, { label: 'Description', value: draft.description.length > 60 ? draft.description.substring(0, 60) + '...' : draft.description });
+          }
+          reviewEl.innerHTML = rows.map(function (r) {
+            return '<div class="review-row"><span class="review-label">' + r.label + '</span><span class="review-value">' + r.value + '</span></div>';
+          }).join('');
+        }
+
+        // Populate step 4 summary grid
+        var priceSum = document.getElementById('result-summary-price-val');
+        var copiesSum = document.getElementById('result-summary-copies-val');
+        var channelSum = document.getElementById('result-summary-channel-val');
+        if (priceSum) {
+          var dCur = CURRENCIES.find(function (c) { return c.address === draft.currency_address; }) || CURRENCIES[0];
+          priceSum.textContent = draft.access_method === 'free' ? 'Free' : (parseFloat(draft.price) || 0).toFixed(2) + ' ' + dCur.symbol;
+        }
+        if (copiesSum) copiesSum.textContent = (draft.copies || 10000).toLocaleString();
+        if (channelSum) channelSum.textContent = (draft.channel || '').substring(0, 8) + '...' + (draft.channel || '').slice(-4);
+
+        setProgStep('prog-mint', 'Ready — check the boxes below and click Sign & Mint', 'active');
+        validateStep3();
+
+        showToast('Draft loaded — review and sign to publish', 'success');
+
+        // Wait for user to click Sign & Mint
+        await new Promise(function (resolve) {
+          state._mintResolve = resolve;
+        });
+
+        // Execute mint using draft data
+        var channel = draft.channel;
+        var metaCid = draft.metadata_cid;
+        var encryptHash = draft.encrypt_hash;
+        var price = parseFloat(draft.price) || 0;
+        var accessMethod = draft.access_method || 'buy_and_resell';
+        var copies = draft.copies || 10000;
+        var selectedCurrency = CURRENCIES.find(function (c) { return c.address === draft.currency_address; }) || CURRENCIES[0];
+
+        var mintedTokenId = null;
+        var mintedOpContract = null;
+        var mintTxHash = null;
+
+        if (channel && ethers.isAddress(channel)) {
+          setProgStep('prog-mint', 'Preparing...', 'active');
+
+          try {
+            await window.ethereum.request({
+              method: 'wallet_switchEthereumChain',
+              params: [{ chainId: '0x2105' }],
+            });
+          } catch (switchErr) {
+            console.warn('[Creator] Chain switch failed:', switchErr.message);
+          }
+
+          var gatewayAddress = await getChannelAuthority(channel);
+
+          // Verify MINTER_ROLE
+          var MINTER_ROLE = ethers.keccak256(ethers.toUtf8Bytes('MINTER_ROLE'));
+          try {
+            var roleData = new ethers.Interface(['function hasRole(bytes32,address) view returns (bool)'])
+              .encodeFunctionData('hasRole', [MINTER_ROLE, state.walletAddress]);
+            var roleResult = await rpcCall(channel, roleData);
+            var hasRole = roleResult !== '0x' + '0'.repeat(64);
+            if (!hasRole) {
+              setProgStep('prog-mint', 'Granting MINTER_ROLE...', 'active');
+              var grantIface = new ethers.Interface(['function grantRole(bytes32,address)']);
+              var grantData = grantIface.encodeFunctionData('grantRole', [MINTER_ROLE, state.walletAddress]);
+              var grantTxHash = await sendTxWithRetry('prog-mint', 'Grant MINTER_ROLE', channel, grantData);
+              await waitForReceipt(grantTxHash);
+            }
+          } catch (roleCheckErr) {
+            if (roleCheckErr.message.includes('MINTER_ROLE')) throw roleCheckErr;
+          }
+
+          var feeInfo = await getMintingFee();
+          var priceWei = ethers.parseUnits(price.toString(), selectedCurrency.decimals);
+          var opType = accessMethod === 'free' ? OP_TYPES.FREE
+            : accessMethod === 'buy_once' ? OP_TYPES.BUY_ONCE
+            : OP_TYPES.BUY_AND_RESELL;
+
+          var opRawData = opType !== OP_TYPES.FREE
+            ? encodeOpRawData({
+                contentId: encryptHash,
+                metadataCID: metaCid,
+                creatorAddress: state.walletAddress,
+                copies: copies,
+                opType: opType,
+                resellerCut: draft.reseller_cut || 1000,
+                royalties: draft.royalty_partners ? JSON.parse(draft.royalty_partners) : [],
+              })
+            : '0x';
+          var sellRawData = opType !== OP_TYPES.FREE
+            ? encodeSellRawData(copies, priceWei, selectedCurrency.address)
+            : '0x';
+
+          var iface = new ethers.Interface(ABI.DIGITAL_ASSET);
+          var mintData = iface.encodeFunctionData('mint', [metaCid, opType, opRawData, sellRawData]);
+
+          mintTxHash = await sendTxWithRetry('prog-mint', 'Mint on Channel contract', channel, mintData, feeInfo.fee);
+          setProgStep('prog-mint', 'Confirming tx...', 'active');
+          var mintReceipt = await waitForReceipt(mintTxHash);
+
+          if (mintReceipt.status === '0x0' || mintReceipt.status === 0) {
+            throw new Error('Mint transaction reverted');
+          }
+
+          var assetEvent = parseAssetCreatedEvent(mintReceipt, channel);
+          if (assetEvent) {
+            mintedTokenId = assetEvent.tokenId;
+            mintedOpContract = assetEvent.opContract;
+          }
+
+          if (!mintedTokenId) {
+            try {
+              var supplyData = iface.encodeFunctionData('totalSupply', []);
+              var supplyResult = await rpcCall(channel, supplyData);
+              var supplyDecoded = iface.decodeFunctionResult('totalSupply', supplyResult);
+              mintedTokenId = supplyDecoded[0].toString();
+            } catch (tsErr) {
+              console.warn('[Creator] Could not get totalSupply:', tsErr.message);
+            }
+          }
+
+          // On-chain fallback for operative
+          if (!mintedOpContract && mintedTokenId && opType !== OP_TYPES.FREE) {
+            try {
+              var opLookupData = iface.encodeFunctionData('operativeOf', [mintedTokenId]);
+              var opLookupResult = await rpcCall(channel, opLookupData);
+              var opDecoded = iface.decodeFunctionResult('operativeOf', opLookupResult);
+              if (opDecoded[0] && opDecoded[0] !== ethers.ZeroAddress) {
+                mintedOpContract = opDecoded[0];
+              }
+            } catch (opLookupErr) {
+              console.warn('[Creator] operativeOf lookup failed:', opLookupErr.message);
+            }
+          }
+
+          setProgStep('prog-mint', mintedTokenId ? 'Token #' + mintedTokenId + ' minted' : 'Minted', 'done');
+
+          // Gateway approval
+          var gatewayApproved = false;
+          if (mintedOpContract && mintedOpContract !== ethers.ZeroAddress) {
+            try {
+              setProgStep('prog-approve', 'Waiting for chain to settle...', 'active');
+              await new Promise(function (r) { setTimeout(r, 5000); });
+              setProgStep('prog-approve', 'Approving gateway...', 'active');
+              var opIface = new ethers.Interface(ABI.OPERATIVE);
+              var approveData = opIface.encodeFunctionData('setApprovalForAll', [gatewayAddress, true]);
+              var approveTxHash = await sendTxWithRetry('prog-approve', 'Gateway approval', mintedOpContract, approveData);
+              var approveReceipt = await waitForReceipt(approveTxHash);
+              if (approveReceipt.status !== '0x0' && approveReceipt.status !== 0) {
+                setProgStep('prog-approve', 'Gateway approved', 'done');
+                gatewayApproved = true;
+              }
+            } catch (approveErr) {
+              setProgStep('prog-approve', 'Failed — use Fix tool below', 'error');
+              showToast('Gateway approval failed. Use Fix Gateway Approval tool.', 'error');
+            }
+          } else if (opType !== OP_TYPES.FREE) {
+            setProgStep('prog-approve', 'Operative not detected — use Fix tool below', 'error');
+          }
+
+          // Delete draft after successful mint
+          try {
+            await pc2Fetch('/api/drafts/' + draftId, { method: 'DELETE' });
+          } catch (_) {}
+          state.draftId = null;
+
+          // Show results
+          state.result = {
+            assetCid: draft.asset_cid,
+            metaCid: metaCid,
+            encryptHash: encryptHash,
+            size: draft.file_size || 0,
+            tokenId: mintedTokenId,
+            txHash: mintTxHash,
+            channel: channel,
+            opContract: mintedOpContract,
+          };
+
+          var resultAssetCid = document.getElementById('result-asset-cid');
+          var resultMetaCid = document.getElementById('result-meta-cid');
+          var resultEncryptHash = document.getElementById('result-encrypt-hash');
+          var resultSize = document.getElementById('result-size');
+          if (resultAssetCid) resultAssetCid.textContent = draft.asset_cid;
+          if (resultMetaCid) resultMetaCid.textContent = metaCid;
+          if (resultEncryptHash) resultEncryptHash.textContent = encryptHash;
+          if (resultSize) resultSize.textContent = formatSize(draft.file_size || 0);
+
+          var tokenLabel = mintedTokenId ? 'Token #' + mintedTokenId : 'tx ' + mintTxHash.substring(0, 10) + '...';
+          var resultRowToken = document.getElementById('result-row-token');
+          var resultTokenId = document.getElementById('result-token-id');
+          var resultRowChannel = document.getElementById('result-row-channel');
+          var resultChannel = document.getElementById('result-channel');
+          var resultRowOperative = document.getElementById('result-row-operative');
+          var resultOperative = document.getElementById('result-operative');
+          var resultTitle = document.getElementById('result-title');
+          var resultDesc = document.getElementById('result-desc');
+          var resultNote = document.getElementById('result-note');
+
+          if (resultRowToken) resultRowToken.style.display = '';
+          if (resultTokenId) resultTokenId.textContent = mintedTokenId || mintTxHash;
+          if (resultRowChannel) resultRowChannel.style.display = '';
+          if (resultChannel) resultChannel.textContent = channel;
+          if (mintedOpContract && resultRowOperative) {
+            resultRowOperative.style.display = '';
+            if (resultOperative) resultOperative.textContent = mintedOpContract;
+          }
+          if (gatewayApproved) {
+            if (resultTitle) resultTitle.textContent = 'Asset Minted On-Chain';
+            if (resultDesc) resultDesc.textContent = 'Your encrypted asset is on IPFS and minted on Base as ' + tokenLabel + '.';
+            if (resultNote) resultNote.innerHTML = '<strong>Live on Base:</strong> Your asset is now on the Elacity channel. <a href="https://basescan.org/tx/' + mintTxHash + '" target="_blank">View on BaseScan</a>';
+          } else {
+            if (resultTitle) resultTitle.textContent = 'Minted — Gateway Approval Needed';
+            if (resultDesc) resultDesc.textContent = 'Token ' + tokenLabel + ' was minted but the marketplace approval did not complete.';
+            if (resultNote) resultNote.innerHTML = '<strong>Action required:</strong> Use the <em>Fix Gateway Approval</em> tool below. <a href="https://basescan.org/tx/' + mintTxHash + '" target="_blank">View on BaseScan</a>';
+            var fixInput = document.getElementById('fix-operative-addr');
+            if (fixInput && mintedOpContract) fixInput.value = mintedOpContract;
+          }
+
+          goToStep(4);
+          if (gatewayApproved) {
+            showToast('Asset published! Token #' + mintedTokenId, 'success');
+          } else {
+            showToast('Minted — gateway approval still needed', 'error');
+          }
+        }
+      } catch (err) {
+        console.error('[Creator] Resume from draft failed:', err);
+        showToast('Resume failed: ' + (err.message || ''), 'error');
+      }
+    }
+
+    // Pre-load file or resume draft when launched
     (function () {
       var puterArgs;
       try {
         var raw = new URLSearchParams(window.location.search).get('puter.args');
         puterArgs = raw ? JSON.parse(raw) : {};
       } catch (_) { puterArgs = {}; }
+
+      // Resume from draft takes priority
+      if (puterArgs.resumeDraft) {
+        resumeFromDraft(puterArgs.resumeDraft);
+        return;
+      }
+
+      // Pick up file from toolbar dropdown (window.__mintFile set by UIMintButton)
+      if (puterArgs.fromToolbar && window.parent && window.parent.__mintFile) {
+        var mintFile = window.parent.__mintFile;
+        window.parent.__mintFile = null;
+        handleFileSelected(mintFile);
+        return;
+      }
 
       if (!puterArgs.filePath) return;
 

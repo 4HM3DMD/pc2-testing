@@ -1289,7 +1289,7 @@ interface EncodeJob {
   id: string;
   status: 'queued' | 'analyzing' | 'transcoding' | 'fragmenting' | 'packaging' | 'uploading' | 'complete' | 'error';
   progress: { percent: number; fps: number; speed: string; time: string; stage: string };
-  result?: { cid: string; mpdUri: string; kid: string; size: number; dataToEncryptHash: string; ciphertext: string; previewURL?: string };
+  result?: { cid: string; mpdUri: string; kid: string; size: number; dataToEncryptHash: string; ciphertext: string; previewURL?: string; duration?: number; resolution?: string; codec?: string };
   error?: string;
   startedAt: number;
   previewDuration?: number;

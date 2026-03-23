@@ -41,6 +41,7 @@ import updateRouter from './update.js';
 import accessControlRouter from './access-control.js';
 import didRouter from './did.js';
 import walletRouter from './wallet.js';
+import draftsRouter from './drafts.js';
 import gatewayRouter from './gateway.js';
 import systemRouter from './system.js';
 import contextRouter from './context.js';
@@ -362,6 +363,7 @@ export function setupAPI(app: Express): void {
   app.use('/api/access', accessControlRouter);
   app.use('/api/did', didRouter);
   app.use('/api/wallet', walletRouter);
+  app.use('/api/drafts', draftsRouter);
   app.use('/api/gateway', gatewayRouter);
   app.use('/api/system', systemRouter);
   app.use('/api/context', contextRouter);

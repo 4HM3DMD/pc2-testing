@@ -2032,4 +2032,204 @@ export class DatabaseManager {
       assets,
     };
   }
+
+  // ── Content Hash Registry (perceptual fingerprinting) ───────────────────
+
+  insertContentHash(record: {
+    phash: string;
+    algorithm?: string;
+    token_id?: string;
+    channel?: string;
+    creator?: string;
+    content_type?: string;
+    metadata_cid?: string;
+    source?: string;
+  }): number {
+    const db = this.getDB();
+    const result = db.prepare(`
+      INSERT INTO content_hashes (phash, algorithm, token_id, channel, creator, content_type, metadata_cid, source)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      record.phash,
+      record.algorithm || 'phash',
+      record.token_id || null,
+      record.channel || null,
+      record.creator ? record.creator.toLowerCase() : null,
+      record.content_type || null,
+      record.metadata_cid || null,
+      record.source || 'local',
+    );
+    return result.lastInsertRowid as number;
+  }
+
+  findSimilarHashes(phash: string, algorithm: string = 'phash'): Array<{
+    id: number;
+    phash: string;
+    token_id: string | null;
+    channel: string | null;
+    creator: string | null;
+    content_type: string | null;
+    created_at: string;
+    source: string;
+  }> {
+    const db = this.getDB();
+    return db.prepare(`
+      SELECT id, phash, token_id, channel, creator, content_type, created_at, source
+      FROM content_hashes
+      WHERE algorithm = ?
+      ORDER BY created_at DESC
+    `).all(algorithm) as any[];
+  }
+
+  getHashesByCreator(creator: string): Array<{
+    id: number;
+    phash: string;
+    algorithm: string;
+    token_id: string | null;
+    channel: string | null;
+    content_type: string | null;
+    created_at: string;
+  }> {
+    const db = this.getDB();
+    return db.prepare(`
+      SELECT id, phash, algorithm, token_id, channel, content_type, created_at
+      FROM content_hashes
+      WHERE creator = ?
+      ORDER BY created_at DESC
+    `).all(creator.toLowerCase()) as any[];
+  }
+
+  getHashByTokenId(tokenId: string): {
+    id: number;
+    phash: string;
+    algorithm: string;
+    channel: string | null;
+    creator: string | null;
+    content_type: string | null;
+    created_at: string;
+    source: string;
+  } | undefined {
+    const db = this.getDB();
+    return db.prepare(`
+      SELECT id, phash, algorithm, channel, creator, content_type, created_at, source
+      FROM content_hashes
+      WHERE token_id = ?
+    `).get(tokenId) as any;
+  }
+
+  getContentHashStats(): { total: number; byAlgorithm: Record<string, number>; bySource: Record<string, number> } {
+    const db = this.getDB();
+    const total = (db.prepare('SELECT COUNT(*) as c FROM content_hashes').get() as any).c;
+    const algoRows = db.prepare('SELECT algorithm, COUNT(*) as c FROM content_hashes GROUP BY algorithm').all() as any[];
+    const sourceRows = db.prepare('SELECT source, COUNT(*) as c FROM content_hashes GROUP BY source').all() as any[];
+    const byAlgorithm: Record<string, number> = {};
+    const bySource: Record<string, number> = {};
+    for (const r of algoRows) byAlgorithm[r.algorithm] = r.c;
+    for (const r of sourceRows) bySource[r.source] = r.c;
+    return { total, byAlgorithm, bySource };
+  }
+
+  // ── Publish Drafts (queue / sign-later) ─────────────────────────────
+
+  insertDraft(record: {
+    wallet_address: string;
+    title: string;
+    description?: string;
+    category?: string;
+    file_name?: string;
+    file_size?: number;
+    mime_type?: string;
+    asset_cid: string;
+    metadata_cid: string;
+    encrypt_hash: string;
+    channel: string;
+    price?: string;
+    currency_address?: string;
+    currency_symbol?: string;
+    copies?: number;
+    access_method?: string;
+    reseller_cut?: number;
+    royalty_partners?: string;
+    thumbnail_cid?: string;
+    adult?: boolean;
+    steps?: string;
+  }): number {
+    const db = this.getDB();
+    const result = db.prepare(`
+      INSERT INTO publish_drafts (
+        wallet_address, title, description, category, file_name, file_size, mime_type,
+        asset_cid, metadata_cid, encrypt_hash, channel, price, currency_address,
+        currency_symbol, copies, access_method, reseller_cut, royalty_partners,
+        thumbnail_cid, adult, steps
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      record.wallet_address.toLowerCase(),
+      record.title,
+      record.description || null,
+      record.category || null,
+      record.file_name || null,
+      record.file_size || null,
+      record.mime_type || null,
+      record.asset_cid,
+      record.metadata_cid,
+      record.encrypt_hash,
+      record.channel,
+      record.price || null,
+      record.currency_address || null,
+      record.currency_symbol || null,
+      record.copies || 1,
+      record.access_method || 'buy_once',
+      record.reseller_cut || 0,
+      record.royalty_partners || null,
+      record.thumbnail_cid || null,
+      record.adult ? 1 : 0,
+      record.steps || null,
+    );
+    return result.lastInsertRowid as number;
+  }
+
+  getDraftsByWallet(walletAddress: string): any[] {
+    const db = this.getDB();
+    return db.prepare(`
+      SELECT * FROM publish_drafts
+      WHERE wallet_address = ?
+      ORDER BY created_at DESC
+    `).all(walletAddress.toLowerCase());
+  }
+
+  getDraftById(id: number, walletAddress: string): any | undefined {
+    const db = this.getDB();
+    return db.prepare(`
+      SELECT * FROM publish_drafts
+      WHERE id = ? AND wallet_address = ?
+    `).get(id, walletAddress.toLowerCase());
+  }
+
+  updateDraftStatus(id: number, walletAddress: string, status: string): boolean {
+    const db = this.getDB();
+    const result = db.prepare(`
+      UPDATE publish_drafts
+      SET status = ?, updated_at = datetime('now')
+      WHERE id = ? AND wallet_address = ?
+    `).run(status, id, walletAddress.toLowerCase());
+    return result.changes > 0;
+  }
+
+  deleteDraft(id: number, walletAddress: string): boolean {
+    const db = this.getDB();
+    const result = db.prepare(`
+      DELETE FROM publish_drafts
+      WHERE id = ? AND wallet_address = ?
+    `).run(id, walletAddress.toLowerCase());
+    return result.changes > 0;
+  }
+
+  getDraftCount(walletAddress: string): number {
+    const db = this.getDB();
+    const row = db.prepare(`
+      SELECT COUNT(*) as c FROM publish_drafts
+      WHERE wallet_address = ? AND status IN ('ready', 'processing')
+    `).get(walletAddress.toLowerCase()) as any;
+    return row?.c || 0;
+  }
 }

@@ -70,6 +70,7 @@
     "qrcode": "^1.5.4",
     "qrcode-terminal": "^0.12.0",
     "sharp": "^0.33.0",
+    "sharp-phash": "^2.2.0",
     "socket.io": "^4.7.2",
     "tar": "^7.5.2",
     "tweetnacl": "^1.0.3",

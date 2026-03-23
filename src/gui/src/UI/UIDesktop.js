@@ -47,6 +47,7 @@ import UIAccountSidebar from "./UIAccountSidebar.js"
 import walletService from "../services/WalletService.js"
 import initPC2StatusBar from "./UIPC2StatusBar.js"
 import UIAIChat from "./AI/UIAIChat.js"
+import initMintButton from "./UIMintButton.js"
 import WorkspaceManager from "../helpers/WorkspaceManager.js"
 import { toggleMissionControl } from "./UIMissionControl.js"
 
@@ -1319,6 +1320,11 @@ async function UIDesktop(options) {
     // AI Side Panel
     // ---------------------------------------------------------------
     UIAIChat();
+
+    // ---------------------------------------------------------------
+    // Mint / Publish Toolbar Button
+    // ---------------------------------------------------------------
+    initMintButton();
 
     // --------------------------------------------------------
     // Dragster

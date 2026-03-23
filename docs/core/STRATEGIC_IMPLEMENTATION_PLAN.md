@@ -1,9 +1,14 @@
 # Strategic Implementation Plan: Sash + Anders Vision
 ## Puter-on-PC2 Architecture
 
-**Date:** 2025-01-11 (Started) | 2026-01-27 (Current)  
+**Date:** 2025-01-11 (Started) | 2026-03-23 (Current)  
 **Branch:** `main` (Clawdbot Integration Merged)  
-**Status:** ✅ **v1.0.0 READY FOR LAUNCH** - All Core Features Complete
+**Status:** ✅ **v1.0.0 READY FOR LAUNCH** - All Core Features Complete  
+**Next Phase:** Enterprise Rights Infrastructure (PDR) — Phase A complete (types, hashing, intelligence, config, publish toolbar, publish queue/drafts). Phase B (SDK, server-side orchestrator, API, MCP) blocked on V3 contracts + Lit mainnet.  
+**PDR Roadmap:** See `docs/core/ROADMAP.md` section "Enterprise Rights Infrastructure (PDR — March 2026)"  
+**Working Plan:** See `.cursor/plans/content_intelligence_roadmap_e7c257b7.plan.md` for implementation details  
+**Gate:** dDRM V3 contract deploy (week of Mar 24) + Lit Protocol mainnet (Mar 25) must stabilize before Phase B begins  
+**Publish Queue:** `publish_drafts` SQLite table + `/api/drafts` REST API + auto-save at pipeline checkpoint + resume signing from toolbar. Enables "process now, sign later" and cross-device signing.
 
 ---
 
