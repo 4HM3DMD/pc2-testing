@@ -692,11 +692,19 @@
     if (text) text.textContent = label;
     if (pct) pct.textContent = Math.round(percent) + '%';
 
+    // Sync the smooth progress bar in step 3 panel
+    var smoothFill = document.getElementById('smooth-progress-fill');
+    var smoothLabel = document.getElementById('smooth-progress-label');
+    if (smoothFill) smoothFill.style.width = percent + '%';
+    if (smoothLabel) smoothLabel.textContent = label;
+
     if (stepState === 'done' && stepId === 'prog-approve') {
       bar.classList.add('done');
       if (fill) fill.style.width = '100%';
       if (pct) pct.textContent = '100%';
       if (text) text.textContent = 'Published successfully';
+      if (smoothFill) smoothFill.style.width = '100%';
+      if (smoothLabel) smoothLabel.textContent = 'Published successfully';
       setTimeout(function () {
         bar.classList.add('hiding');
         setTimeout(function () { bar.style.display = 'none'; }, 350);
@@ -2991,6 +2999,18 @@
     document.addEventListener('change', function (e) {
       if (e.target && e.target.classList.contains('legal-check')) validateStep3();
     });
+
+    // Wire the custom toggle to the hidden checkboxes
+    var legalToggle = document.getElementById('legal-toggle');
+    if (legalToggle) {
+      legalToggle.addEventListener('click', function () {
+        var isActive = legalToggle.classList.toggle('active');
+        legalToggle.setAttribute('aria-checked', String(isActive));
+        var checks = document.querySelectorAll('.legal-check');
+        checks.forEach(function (cb) { cb.checked = isActive; });
+        validateStep3();
+      });
+    }
 
     // Step 2 form validation
     ['input', 'change'].forEach(function (evt) {

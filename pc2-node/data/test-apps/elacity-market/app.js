@@ -2589,6 +2589,12 @@
     var nft = state.detailItem;
     if (!nft) return;
 
+    // Non-media assets (images, PDFs, etc.) should open in the viewer, not the media player
+    if (isNonMediaAsset(nft)) {
+      handleOpenInViewer();
+      return;
+    }
+
     var channel = nft.channel && nft.channel.address;
     var tokenId = (nft.tokenId && nft.tokenId.hexTokenID) || '';
 
