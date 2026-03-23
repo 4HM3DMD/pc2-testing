@@ -2,8 +2,8 @@
 
 > **Purpose:** Team-facing document covering what we've built, how decentralized it is, what's remaining, and the path to the walk-away test.
 > **Created:** 2026-03-14
-> **Last Updated:** 2026-03-15
-> **Branch:** `dDRM-extended`
+> **Last Updated:** 2026-03-23
+> **Branch:** `feature/lit-chipotle-migration`
 
 ---
 
@@ -102,13 +102,13 @@ Lit Protocol's Datil production network requires capacity credits (RLI tokens). 
 
 | Dependency | What It Does | Impact If Down | Decentralization Path |
 |------------|-------------|----------------|----------------------|
-| **Elacity GraphQL API** (`base.ela.city/api/2.0/graphql`) | Browse, search, library, asset details, channel discovery | No content discovery | On-chain indexer (The Graph or custom) |
+| **Elacity GraphQL API** (`base.ela.city/api/2.0/graphql`) | Browse, search, library, asset details, channel discovery | No content discovery | ✅ On-chain indexer (`ContentIndexerService`) — DONE. Fallback only |
 | **Elacity IPFS Gateway** (`ipfs.ela.city/ipfs/`) | Content serving, metadata, image resolution | Can't load content | Each node runs own IPFS, use public gateways |
 | **Elacity IPFS Upload** (`base.ela.city/api/2.0/files/upload`) | Upload encrypted assets + metadata | Can't publish new assets | Upload to local IPFS, propagate via DHT |
 | **Elacity Auth** (nonce/login) | GraphQL API authentication | Can't query API | Node-local wallet signature verification |
 | **Capacity Credit Wallet** (`0x581D...`) | RLI delegation for Lit operations | Rate-limited decryption | Each node mints own RLI tokens |
 | **Royalty Addresses** (`0x0917...`, `0xCE46...`) | Protocol fee recipient on every sale | Fees flow to Elacity only | On-chain configurable per-channel |
-| **Base RPC** (`mainnet.base.org`) | On-chain reads/writes | All on-chain ops fail | Use redundant RPC providers |
+| **Base RPC** (`mainnet.base.org`) | On-chain reads/writes | All on-chain ops fail | ✅ Shared `rpc.ts` utility with 5 endpoints + round-robin failover |
 
 ---
 
@@ -126,7 +126,7 @@ A new PC2 node operator can:
 | Browse Elacity marketplace | ✅ Yes | Elacity API online |
 | Purchase assets | ✅ Yes | USDC + gas |
 | Decrypt purchased assets | ⚠️ Needs capacity credits | Private key for RLI wallet |
-| Discover other nodes' content | ❌ No | Depends on Elacity GraphQL |
+| Discover other nodes' content | ✅ Yes | On-chain indexer scans Base events locally |
 | Self-provision capacity credits | ❌ No | Not yet implemented |
 
 ---
@@ -137,21 +137,30 @@ The "walk-away test" means: Elacity Labs stops running infrastructure, but the p
 
 ### Tier 1: Critical Path (Enables P2P Without Elacity Infrastructure)
 
-#### 1.1 — Decentralized Content Index
+#### 1.1 — Decentralized Content Index — ✅ COMPLETE (Mar 21)
 
 **Problem:** All content discovery goes through `base.ela.city/api/2.0/graphql`. If this API is down, nodes can't find content.
 
-**Solution:** On-chain indexer that reads Base chain events directly.
+**Solution:** `ContentIndexerService` — on-chain event scanner running on each PC2 node.
 
-- Channel contracts emit `AssetCreated` / `TransferSingle` events with `tokenURI` pointing to IPFS metadata
-- Each PC2 node can run a lightweight indexer that:
-  - Monitors Channel contract events on Base
-  - Builds a local SQLite database of all assets
-  - Serves browse/search/library queries locally
-- **Options:** The Graph subgraph (hosted or self-hosted), custom event scanner, or Ponder/Envio indexer
-- **Impact:** Removes the single biggest centralization point
-
-**Effort:** Medium (1-2 weeks)
+- ✅ Scans `DigitalAssetRegistered` events from CoreStorage contract on Base
+- ✅ Builds local `content_catalog` SQLite table (migration 19) with indexes on creator, type, content_id, channel, status, block
+- ✅ Resolves metadata: calls `tokenURI()` on channel contracts, fetches JSON from IPFS (local-first, then gateway fallback)
+- ✅ Classifies asset types automatically (image, video, audio, document, code, ai-model, dataset, 3d, font, etc.)
+- ✅ API endpoints: `GET /api/catalog` (browse/filter/search), `GET /api/catalog/stats`, `GET /api/catalog/content/:contentId`
+- ✅ RPC failover with rotation across multiple providers
+- ✅ Configurable: scan interval (30min), max blocks per scan (10K), metadata fetch concurrency (3)
+- ✅ **Versioned contract design** — when v3 contracts deploy, add to config:
+  ```json
+  "contracts": {
+    "v2": { "core_storage": "0xc8F50Bf1...", "from_block": 12345678 },
+    "v3": { "core_storage": "0xNEW...", "from_block": 99999999 }
+  }
+  ```
+  No code changes needed — the indexer picks up both v2 and v3 content.
+- ✅ Progress tracking via settings (`indexer_last_block_v2`) — resumes from where it left off across restarts
+- **Files:** `pc2-node/src/services/ContentIndexerService.ts`, `pc2-node/src/storage/database.ts` (ContentCatalogItem + 7 methods), `pc2-node/src/api/index.ts` (3 routes)
+- **Impact:** Removes the single biggest centralization point — Elacity GraphQL is now optional for content discovery
 
 #### 1.2 — Self-Sufficient IPFS
 
@@ -161,12 +170,19 @@ The "walk-away test" means: Elacity Labs stops running infrastructure, but the p
 
 - We already have Helia running on each node with:
   - ✅ DHT announcement (`dht.provide()`)
-  - ✅ Periodic re-announcement (every 4 hours)
+  - ✅ Tiered re-announcement — hot (2h) / warm (6h) / cold (12h) based on serve recency *(upgraded Mar 21)*
+  - ✅ Startup burst re-announcement of all pinned CIDs *(added Mar 21)*
   - ✅ Bitswap-first fetching
   - ✅ Circuit relay + NAT traversal
   - ✅ Supernode IPFS relay nodes
+  - ✅ **ContentSeedingService** — automatic pin queue with priority, dedup, retry, gap recovery, and persistent serve tracking *(added Mar 21)*
+  - ✅ Persistent serve stats (`serve_count`, `last_served_at`) for CID tier classification *(added Mar 21)*
+  - ✅ Unpin endpoint (`DELETE /api/ipfs/unpin/:cid`) for content removal *(added Mar 21)*
+- ✅ **Auto-download on purchase** — `pinAndRegisterMedia()` in Market dApp auto-calls `POST /api/storage/ipfs/pin` → `seedContent()` after `buyAccess()`. Full chain: purchase → pin → DHT announce → DB tracking *(verified Mar 23)*
+- ✅ **Disk quota enforcement** — `isQuotaExceeded()` in ContentSeedingService checks `statfsSync` against `disk_quota_percent` *(completed Mar 23)*
+- ✅ **Bandwidth enforcement** — `bandwidthGuard` middleware on `/ipfs/` routes, rolling 5s window, 503 with Retry-After *(completed Mar 23)*
 - **Remaining:**
-  - Upload goes to **local IPFS first**, with optional Elacity mirror
+  - Upload goes to **local IPFS first**, with optional Elacity mirror (DEFERRED — needs Elacity-side coordination)
   - Content resolves from **any IPFS gateway** (local → peers → public gateways)
   - Metadata `tokenURI` should use `ipfs://` URIs (already the case), resolvable from any gateway
   - Pin content on multiple providers (Pinata, web3.storage) for redundancy
@@ -438,12 +454,25 @@ Lit Protocol is deprecating the Datil network in favor of **Chipotle** (v3):
 
 ## Next Steps (Priority Order)
 
-1. **Lit Chipotle migration research** → create account, verify REST API, test Lit Action execution
-2. **Replace Datil v7 SDK with Chipotle REST API** in storage.ts (~400 lines → ~50 lines)
-3. **Test text file (.txt) flow** → secure viewer text pipeline implemented but untested
-4. **On-chain indexer prototype** (Tier 1.1) → removes GraphQL dependency
-5. **Self-provisioned RLI tokens / API keys** (Tier 1.3) → removes Elacity capacity wallet dependency
-6. **AI Model Marketplace alpha** → first non-media vertical (GGUF → encrypt → buy → Ollama)
+1. ~~**On-chain indexer prototype** (Tier 1.1) → removes GraphQL dependency~~ — ✅ DONE (Mar 21)
+2. ~~**Lit Chipotle migration**~~ — ✅ DONE (Mar 21)
+3. ~~**Add fallback Base RPC providers**~~ — ✅ DONE (Mar 23). Shared `rpc.ts` utility with 5 public endpoints, round-robin + failover. All backend files wired (`storage.ts`, `chipotle-client.ts`, `dashPackager.ts`)
+4. ~~**Disk quota + bandwidth enforcement**~~ — ✅ DONE (Mar 23). `isQuotaExceeded()` in ContentSeedingService, `bandwidthGuard` middleware in public.ts
+5. ~~**P2P content discovery**~~ — ✅ DONE (Mar 23). Catalog `is_local` flag, DHT `countProviders()`, `/api/catalog/providers/:cid`
+6. ~~**Creator analytics**~~ — ✅ DONE (Mar 23). `getCreatorStats()`, `GET /api/catalog/creator/:address`
+7. **Self-provisioned capacity credits** (Tier 1.3) → LIKELY OBSOLETE. Chipotle uses API keys, not RLI. Re-evaluate when production launches
+8. **Reverse IPFS flow** (Tier 1.2) → upload local-first, Elacity mirror optional — DEFERRED (needs Elacity-side coordination and v3 contracts)
+9. **Creator publishing UX polish** → channel creation, pricing presets, DHT announce after mint
+10. **AI Model Marketplace alpha** → first non-media vertical (GGUF → encrypt → buy → Ollama)
+
+### V3 Contract Upgrade Notes
+
+The on-chain content indexer is designed for forward compatibility with Elacity v3 contracts:
+
+- **Config-only swap**: Add a `"v3"` entry to `content_indexer.contracts` in `config/default.json` with the new `core_storage` address and `from_block`
+- **Parallel scanning**: Both v2 and v3 content will be indexed simultaneously — no migration needed
+- **Event signature changes**: If v3 emits different events (e.g., different topic signature or different event fields), a small parser update in `ContentIndexerService.scanDigitalAssetRegistered()` may be needed per version. The versioned architecture isolates these changes
+- **Database compatible**: The `content_catalog` table includes a `contract_version` column — v2 and v3 content coexist in the same table
 
 ---
 

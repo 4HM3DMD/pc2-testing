@@ -1,15 +1,14 @@
 /**
  * Lit Action: Non-Media Asset Decryption (Chipotle/PKP-AES)
  *
- * Chipotle-specific version using Lit.Actions.Decrypt (PKP-AES) instead of
- * Datil's decryptAndCombine (threshold BLS).
+ * Chipotle v3 calls `main(params)` with js_params as the argument.
  *
- * Trust model identical to the Datil version:
+ * Trust model:
  *   - On-chain access check via AuthorityGateway.hasAccessByContentId()
  *   - Immutable code pinned on IPFS, runs in TEE
- *   - userAddress from jsParams (server-verified buyer, not :userAddress)
+ *   - userAddress from params (server-verified buyer)
  *
- * jsParams expected:
+ * params expected:
  *   - ciphertext:          PKP-AES encrypted CEK (hex string from Lit.Actions.Encrypt)
  *   - dataToEncryptHash:   SHA-256 hash of the original plaintext (for verification)
  *   - kid:                 Content identifier (bytes16, e.g. "0xabc...")
@@ -20,7 +19,8 @@
  *   - userAddress:         The buyer's wallet address to verify access for
  */
 
-(async () => {
+async function main(params) {
+  const { ciphertext, dataToEncryptHash, kid, pkpId, authority, chain, chainId, rpc, userAddress } = params;
   const normalizedKid = kid.startsWith("0x") ? kid : "0x" + kid;
 
   const toChecksum = (addr) => {
@@ -32,7 +32,6 @@
   const checksumAuthority = toChecksum(authority);
   const checksumUser = toChecksum(userAddress);
 
-  // Step 1: Verify on-chain access
   const abi = [{
     inputs: [
       { name: "holder", type: "address" },
@@ -58,12 +57,10 @@
     return;
   }
 
-  // Step 2: Decrypt the CEK via PKP-AES (Chipotle)
   const cek = await Lit.Actions.Decrypt({
     pkpId: pkpId,
     ciphertext: ciphertext,
   });
 
-  // Step 3: Return the raw CEK (base64)
   Lit.Actions.setResponse({ response: cek });
-})();
+}

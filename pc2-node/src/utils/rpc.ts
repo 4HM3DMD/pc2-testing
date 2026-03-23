@@ -1,0 +1,77 @@
+/**
+ * Shared Base RPC utility
+ *
+ * Provides round-robin RPC endpoint selection with automatic failover.
+ * Initialized from config.content_indexer.rpc_urls (the node-wide RPC pool).
+ *
+ * Future: supernodes could offer cached/load-balanced Base RPC as a Tier 2
+ * service, reducing public RPC dependency for the entire PC2 network.
+ */
+
+import { createLogger } from './logger.js';
+
+const log = createLogger('rpc');
+
+const DEFAULT_BASE_RPC_URLS = [
+  'https://mainnet.base.org',
+  'https://base.llamarpc.com',
+  'https://base-rpc.publicnode.com',
+  'https://1rpc.io/base',
+  'https://base.meowrpc.com',
+];
+
+const DEFAULT_TIMEOUT_MS = 15_000;
+
+let rpcUrls: string[] = [...DEFAULT_BASE_RPC_URLS];
+let currentIndex = 0;
+
+export function initBaseRpcPool(urls?: string[]): void {
+  if (urls && urls.length > 0) {
+    rpcUrls = urls;
+  }
+  currentIndex = 0;
+  log.info(`RPC pool initialized with ${rpcUrls.length} endpoints: ${rpcUrls[0]}...`);
+}
+
+export function getBaseRpcUrl(): string {
+  return rpcUrls[currentIndex % rpcUrls.length];
+}
+
+export function rotateBaseRpc(): string {
+  currentIndex = (currentIndex + 1) % rpcUrls.length;
+  log.debug(`Rotated to RPC: ${rpcUrls[currentIndex]}`);
+  return rpcUrls[currentIndex];
+}
+
+export function getBaseRpcUrls(): string[] {
+  return [...rpcUrls];
+}
+
+export async function baseRpcCall(method: string, params: any[], timeoutMs = DEFAULT_TIMEOUT_MS): Promise<any> {
+  let lastError: Error | null = null;
+
+  for (let attempt = 0; attempt < rpcUrls.length; attempt++) {
+    const url = getBaseRpcUrl();
+    try {
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+
+      if (!resp.ok) throw new Error(`HTTP ${resp.status} from ${url}`);
+
+      const json = await resp.json() as { result?: any; error?: { message?: string } };
+      if (json.error) throw new Error(json.error.message || JSON.stringify(json.error));
+
+      return json.result;
+    } catch (err: any) {
+      lastError = err;
+      log.debug(`RPC call ${method} failed on ${url}: ${err.message}`);
+      rotateBaseRpc();
+    }
+  }
+
+  throw lastError || new Error(`All ${rpcUrls.length} RPC endpoints failed for ${method}`);
+}

@@ -92,6 +92,35 @@ export interface Config {
       max_connections?: number;
     };
   };
+  seeding?: {
+    enabled?: boolean;                    // Master toggle (default: true)
+    auto_pin_purchases?: boolean;         // Auto-pin after marketplace buy (default: true)
+    disk_quota_percent?: number;          // Max % of available disk for seeded content (default: 50)
+    max_concurrent_pins?: number;         // Parallel pin downloads (default: 3)
+    max_upload_mbps?: number;             // Bandwidth cap for serving, 0 = unlimited (default: 0)
+    announce_hot_interval_hours?: number; // Re-announce cadence for hot content (default: 2)
+    announce_warm_interval_hours?: number; // Re-announce cadence for warm content (default: 6)
+    announce_cold_interval_hours?: number; // Re-announce cadence for cold content (default: 12)
+  };
+  blockchain?: {
+    chain_id?: number;                    // Base chain ID (default: 8453)
+    chain_name?: string;                  // Chain name for Lit/wallet operations (default: "base")
+    rpc_urls?: string[];                  // Shared Base RPC pool with failover
+  };
+  content_indexer?: {
+    enabled?: boolean;                    // Master toggle (default: true)
+    scan_interval_minutes?: number;       // How often to scan for new content (default: 30)
+    rpc_urls?: string[];                  // Base RPC endpoints with fallback
+    max_blocks_per_scan?: number;         // Block range per eth_getLogs call (default: 10000)
+    metadata_fetch_concurrency?: number;  // Parallel IPFS metadata fetches (default: 3)
+    metadata_gateway_urls?: string[];     // IPFS gateways for metadata resolution
+    contracts?: Record<string, {          // Versioned contract config (key = version e.g. "v2")
+      channel_core?: string;
+      core_storage?: string;
+      authority_gateway?: string;
+      from_block?: number;
+    }>;
+  };
 }
 
 const DEFAULT_CONFIG_PATH = join(__dirname, '../../config/default.json');

@@ -79,6 +79,32 @@ export interface AIConversation {
   updated_at: number;
 }
 
+export interface ContentCatalogItem {
+  id?: number;
+  content_id: string | null;
+  channel_address: string;
+  token_id: number;
+  operative_address: string | null;
+  creator_address: string;
+  name: string | null;
+  description: string | null;
+  image_url: string | null;
+  content_cid: string | null;
+  metadata_cid: string | null;
+  mime_type: string | null;
+  asset_type: string | null;
+  price: string | null;
+  payment_token: string | null;
+  op_type: number | null;
+  chain_id: number;
+  block_number: number;
+  tx_hash: string | null;
+  contract_version: string;
+  metadata_status: 'pending' | 'resolved' | 'failed';
+  indexed_at: number;
+  metadata_json: string | null;
+}
+
 export interface InstalledApp {
   app_name: string;
   title: string;
@@ -557,6 +583,82 @@ export class DatabaseManager {
   updatePinnedCIDAnnouncedAt(cid: string): void {
     const db = this.getDB();
     db.prepare(`UPDATE pinned_cids SET last_announced_at = ? WHERE cid = ?`).run(Date.now(), cid);
+  }
+
+  // ============================================================================
+  // Content Seeding — Serve Tracking & Pin Status
+  // ============================================================================
+
+  updateServeStats(cid: string): void {
+    const db = this.getDB();
+    db.prepare(`
+      UPDATE pinned_cids
+      SET last_served_at = ?, serve_count = serve_count + 1
+      WHERE cid = ?
+    `).run(Date.now(), cid);
+  }
+
+  updatePinStatus(cid: string, status: 'queued' | 'pinning' | 'complete' | 'failed'): void {
+    const db = this.getDB();
+    db.prepare(`UPDATE pinned_cids SET pin_status = ? WHERE cid = ?`).run(status, cid);
+  }
+
+  isCIDPinnedOrQueued(cid: string): boolean {
+    const db = this.getDB();
+    const row = db.prepare(`
+      SELECT 1 FROM pinned_cids WHERE cid = ? AND pin_status IN ('queued', 'pinning', 'complete')
+    `).get(cid);
+    return !!row;
+  }
+
+  getIncompletePins(): Array<{ cid: string; wallet_address: string; size: number }> {
+    const db = this.getDB();
+    return db.prepare(`
+      SELECT cid, wallet_address, size FROM pinned_cids
+      WHERE pin_status IN ('queued', 'pinning', 'failed')
+    `).all() as Array<{ cid: string; wallet_address: string; size: number }>;
+  }
+
+  getHotCIDs(): string[] {
+    const db = this.getDB();
+    const cutoff = Date.now() - (24 * 60 * 60 * 1000);
+    const rows = db.prepare(`
+      SELECT DISTINCT cid FROM pinned_cids
+      WHERE last_served_at IS NOT NULL AND last_served_at > ? AND pin_status = 'complete'
+    `).all(cutoff) as { cid: string }[];
+    return rows.map(r => r.cid);
+  }
+
+  getWarmCIDs(): string[] {
+    const db = this.getDB();
+    const hotCutoff = Date.now() - (24 * 60 * 60 * 1000);
+    const warmCutoff = Date.now() - (7 * 24 * 60 * 60 * 1000);
+    const rows = db.prepare(`
+      SELECT DISTINCT cid FROM pinned_cids
+      WHERE last_served_at IS NOT NULL AND last_served_at > ? AND last_served_at <= ? AND pin_status = 'complete'
+    `).all(warmCutoff, hotCutoff) as { cid: string }[];
+    return rows.map(r => r.cid);
+  }
+
+  getColdCIDs(): string[] {
+    const db = this.getDB();
+    const warmCutoff = Date.now() - (7 * 24 * 60 * 60 * 1000);
+    const rows = db.prepare(`
+      SELECT DISTINCT cid FROM pinned_cids
+      WHERE (last_served_at IS NULL OR last_served_at <= ?) AND pin_status = 'complete'
+    `).all(warmCutoff) as { cid: string }[];
+    return rows.map(r => r.cid);
+  }
+
+  removePinnedCID(cid: string): void {
+    const db = this.getDB();
+    db.prepare(`DELETE FROM pinned_cids WHERE cid = ?`).run(cid);
+  }
+
+  getTotalPinnedSize(): number {
+    const db = this.getDB();
+    const row = db.prepare(`SELECT COALESCE(SUM(size), 0) as total FROM pinned_cids WHERE pin_status = 'complete'`).get() as { total: number };
+    return row.total;
   }
 
   // ============================================================================
@@ -1650,5 +1752,284 @@ export class DatabaseManager {
     const db = this.getDB();
     const result = db.prepare('DELETE FROM installed_apps WHERE app_name = ?').run(appName);
     return result.changes > 0;
+  }
+
+  // ── Content Catalog (On-Chain Indexer) ──────────────────────
+
+  upsertCatalogItem(item: ContentCatalogItem): void {
+    const db = this.getDB();
+    db.prepare(`
+      INSERT INTO content_catalog
+        (content_id, channel_address, token_id, operative_address, creator_address,
+         name, description, image_url, content_cid, metadata_cid, mime_type,
+         asset_type, price, payment_token, op_type, chain_id, block_number,
+         tx_hash, contract_version, metadata_status, indexed_at, metadata_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(channel_address, token_id, chain_id) DO UPDATE SET
+        content_id = COALESCE(excluded.content_id, content_id),
+        operative_address = COALESCE(excluded.operative_address, operative_address),
+        name = COALESCE(excluded.name, name),
+        description = COALESCE(excluded.description, description),
+        image_url = COALESCE(excluded.image_url, image_url),
+        content_cid = COALESCE(excluded.content_cid, content_cid),
+        metadata_cid = COALESCE(excluded.metadata_cid, metadata_cid),
+        mime_type = COALESCE(excluded.mime_type, mime_type),
+        asset_type = COALESCE(excluded.asset_type, asset_type),
+        price = COALESCE(excluded.price, price),
+        payment_token = COALESCE(excluded.payment_token, payment_token),
+        metadata_status = excluded.metadata_status,
+        metadata_json = COALESCE(excluded.metadata_json, metadata_json)
+    `).run(
+      item.content_id, item.channel_address, item.token_id, item.operative_address,
+      item.creator_address, item.name, item.description, item.image_url,
+      item.content_cid, item.metadata_cid, item.mime_type, item.asset_type,
+      item.price, item.payment_token, item.op_type, item.chain_id,
+      item.block_number, item.tx_hash, item.contract_version,
+      item.metadata_status, item.indexed_at, item.metadata_json
+    );
+  }
+
+  getCatalogItemsPendingMetadata(limit = 50): ContentCatalogItem[] {
+    const db = this.getDB();
+    return db.prepare(`
+      SELECT * FROM content_catalog
+      WHERE metadata_status = 'pending'
+      ORDER BY block_number ASC
+      LIMIT ?
+    `).all(limit) as ContentCatalogItem[];
+  }
+
+  updateCatalogMetadata(channelAddress: string, tokenId: number, chainId: number, updates: Partial<ContentCatalogItem>): void {
+    const db = this.getDB();
+    const fields: string[] = [];
+    const values: any[] = [];
+
+    for (const [key, value] of Object.entries(updates)) {
+      if (value !== undefined && key !== 'channel_address' && key !== 'token_id' && key !== 'chain_id') {
+        fields.push(`${key} = ?`);
+        values.push(value);
+      }
+    }
+
+    if (fields.length === 0) return;
+
+    values.push(channelAddress, tokenId, chainId);
+    db.prepare(`
+      UPDATE content_catalog SET ${fields.join(', ')}
+      WHERE channel_address = ? AND token_id = ? AND chain_id = ?
+    `).run(...values);
+  }
+
+  catalogItemExists(channelAddress: string, tokenId: number, chainId: number): boolean {
+    const db = this.getDB();
+    const row = db.prepare(`
+      SELECT 1 FROM content_catalog
+      WHERE channel_address = ? AND token_id = ? AND chain_id = ?
+    `).get(channelAddress, tokenId, chainId);
+    return !!row;
+  }
+
+  getCatalogItems(options: {
+    assetType?: string;
+    creator?: string;
+    search?: string;
+    limit?: number;
+    offset?: number;
+  } = {}): { items: ContentCatalogItem[]; total: number } {
+    const db = this.getDB();
+    const conditions: string[] = ["metadata_status = 'resolved'"];
+    const params: any[] = [];
+
+    if (options.assetType) {
+      conditions.push('asset_type = ?');
+      params.push(options.assetType);
+    }
+    if (options.creator) {
+      conditions.push('creator_address = ?');
+      params.push(options.creator);
+    }
+    if (options.search) {
+      conditions.push('(name LIKE ? OR description LIKE ?)');
+      params.push(`%${options.search}%`, `%${options.search}%`);
+    }
+
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    const countRow = db.prepare(`SELECT COUNT(*) as total FROM content_catalog ${where}`).get(...params) as { total: number };
+
+    const limit = options.limit || 50;
+    const offset = options.offset || 0;
+    const items = db.prepare(`
+      SELECT * FROM content_catalog ${where}
+      ORDER BY block_number DESC
+      LIMIT ? OFFSET ?
+    `).all(...params, limit, offset) as ContentCatalogItem[];
+
+    return { items, total: countRow.total };
+  }
+
+  getCatalogItemByContentId(contentId: string): ContentCatalogItem | undefined {
+    const db = this.getDB();
+    return db.prepare(`
+      SELECT * FROM content_catalog WHERE content_id = ?
+    `).get(contentId) as ContentCatalogItem | undefined;
+  }
+
+  getCreatorEarningsLocal(creatorAddress: string): {
+    assets: Array<{
+      name: string | null;
+      content_cid: string | null;
+      asset_type: string | null;
+      price: string | null;
+      channel_address: string;
+      token_id: number;
+      serve_count: number;
+      bytes_served: number;
+      last_served_at: number | null;
+      is_pinned_locally: boolean;
+    }>;
+    totals: { assets: number; totalServes: number; totalBytesServed: number; locallyPinned: number };
+  } {
+    const db = this.getDB();
+    const rows = db.prepare(`
+      SELECT
+        c.name, c.content_cid, c.asset_type, c.price,
+        c.channel_address, c.token_id,
+        COALESCE(p.serve_count, 0) as serve_count,
+        COALESCE(p.size, 0) as bytes_served,
+        p.last_served_at,
+        CASE WHEN p.pin_status = 'complete' THEN 1 ELSE 0 END as is_pinned
+      FROM content_catalog c
+      LEFT JOIN pinned_cids p ON c.content_cid = p.cid
+      WHERE c.creator_address = ? AND c.metadata_status = 'resolved'
+      ORDER BY COALESCE(p.serve_count, 0) DESC
+    `).all(creatorAddress.toLowerCase()) as any[];
+
+    let totalServes = 0;
+    let totalBytes = 0;
+    let pinned = 0;
+
+    const assets = rows.map(r => {
+      totalServes += r.serve_count;
+      totalBytes += r.bytes_served;
+      if (r.is_pinned) pinned++;
+      return {
+        name: r.name,
+        content_cid: r.content_cid,
+        asset_type: r.asset_type,
+        price: r.price,
+        channel_address: r.channel_address,
+        token_id: r.token_id,
+        serve_count: r.serve_count,
+        bytes_served: r.bytes_served,
+        last_served_at: r.last_served_at,
+        is_pinned_locally: !!r.is_pinned,
+      };
+    });
+
+    return {
+      assets,
+      totals: { assets: assets.length, totalServes, totalBytesServed: totalBytes, locallyPinned: pinned },
+    };
+  }
+
+  getNodeSeedingStats(): {
+    totalPinnedCIDs: number;
+    totalBytesSeeded: number;
+    totalServes: number;
+    topServed: Array<{ cid: string; serve_count: number; size: number; last_served_at: number | null }>;
+  } {
+    const db = this.getDB();
+    const summary = db.prepare(`
+      SELECT
+        COUNT(*) as total,
+        COALESCE(SUM(size), 0) as bytes,
+        COALESCE(SUM(serve_count), 0) as serves
+      FROM pinned_cids WHERE pin_status = 'complete'
+    `).get() as any;
+
+    const top = db.prepare(`
+      SELECT cid, serve_count, size, last_served_at
+      FROM pinned_cids
+      WHERE pin_status = 'complete' AND serve_count > 0
+      ORDER BY serve_count DESC
+      LIMIT 20
+    `).all() as any[];
+
+    return {
+      totalPinnedCIDs: summary.total,
+      totalBytesSeeded: summary.bytes,
+      totalServes: summary.serves,
+      topServed: top,
+    };
+  }
+
+  getCatalogStats(): { total: number; resolved: number; pending: number; failed: number; byType: Record<string, number> } {
+    const db = this.getDB();
+    const total = (db.prepare('SELECT COUNT(*) as c FROM content_catalog').get() as any).c;
+    const resolved = (db.prepare("SELECT COUNT(*) as c FROM content_catalog WHERE metadata_status = 'resolved'").get() as any).c;
+    const pending = (db.prepare("SELECT COUNT(*) as c FROM content_catalog WHERE metadata_status = 'pending'").get() as any).c;
+    const failed = (db.prepare("SELECT COUNT(*) as c FROM content_catalog WHERE metadata_status = 'failed'").get() as any).c;
+    const typeRows = db.prepare("SELECT asset_type, COUNT(*) as c FROM content_catalog WHERE metadata_status = 'resolved' AND asset_type IS NOT NULL GROUP BY asset_type").all() as any[];
+    const byType: Record<string, number> = {};
+    for (const row of typeRows) {
+      byType[row.asset_type] = row.c;
+    }
+    return { total, resolved, pending, failed, byType };
+  }
+
+  getCreatorStats(creatorAddress: string): {
+    totalAssets: number;
+    byType: Record<string, number>;
+    locallyPinned: number;
+    totalServes: number;
+    totalBytesServed: number;
+    assets: Array<{
+      name: string | null;
+      content_cid: string | null;
+      asset_type: string | null;
+      channel_address: string;
+      token_id: number;
+      serve_count: number;
+      size: number;
+      last_served_at: number | null;
+    }>;
+  } {
+    const db = this.getDB();
+    const addr = creatorAddress.toLowerCase();
+
+    const assets = db.prepare(`
+      SELECT c.name, c.content_cid, c.asset_type, c.channel_address, c.token_id,
+             COALESCE(p.serve_count, 0) as serve_count,
+             COALESCE(p.size, 0) as size,
+             p.last_served_at
+      FROM content_catalog c
+      LEFT JOIN pinned_cids p ON c.content_cid = p.cid
+      WHERE LOWER(c.creator_address) = ?
+        AND c.metadata_status = 'resolved'
+      ORDER BY COALESCE(p.serve_count, 0) DESC
+    `).all(addr) as any[];
+
+    const byType: Record<string, number> = {};
+    let locallyPinned = 0;
+    let totalServes = 0;
+    let totalBytesServed = 0;
+
+    for (const a of assets) {
+      const t = a.asset_type || 'unknown';
+      byType[t] = (byType[t] || 0) + 1;
+      if (a.serve_count > 0) locallyPinned++;
+      totalServes += a.serve_count;
+      totalBytesServed += a.size * a.serve_count;
+    }
+
+    return {
+      totalAssets: assets.length,
+      byType,
+      locallyPinned,
+      totalServes,
+      totalBytesServed,
+      assets,
+    };
   }
 }

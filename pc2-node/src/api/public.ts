@@ -43,6 +43,10 @@ const cdnStats: CDNStats = {
   bySource: {},
 };
 
+// Module-level reference set by createPublicRouter — used to update persistent
+// serve stats (last_served_at / serve_count) for seeded content.
+let _dbRef: DatabaseManager | null = null;
+
 function trackCDNBandwidth(cid: string, bytes: number): void {
   cdnStats.bytesServed += bytes;
   cdnStats.requestCount += 1;
@@ -51,6 +55,13 @@ function trackCDNBandwidth(cid: string, bytes: number): void {
   }
   cdnStats.bySource[cid].bytes += bytes;
   cdnStats.bySource[cid].requests += 1;
+
+  recordBandwidth(bytes);
+
+  // Persistent serve tracking for content seeding tier classification
+  if (_dbRef) {
+    try { _dbRef.updateServeStats(cid); } catch { /* non-critical */ }
+  }
 }
 
 export function getCDNStats(): CDNStats {
@@ -67,6 +78,53 @@ const contentRateLimit = rateLimit({
   legacyHeaders: false,
   validate: { trustProxy: false },
 });
+
+// ---------------------------------------------------------------------------
+// Bandwidth limiter — enforces seeding.max_upload_mbps (0 = unlimited)
+// ---------------------------------------------------------------------------
+let _bandwidthLimitBytesPerSec = 0;
+let _bandwidthWindowBytes = 0;
+let _bandwidthWindowStart = Date.now();
+const BANDWIDTH_WINDOW_MS = 5000;
+
+export function setBandwidthLimit(mbps: number): void {
+  _bandwidthLimitBytesPerSec = mbps > 0 ? (mbps * 1_000_000 / 8) : 0;
+  if (_bandwidthLimitBytesPerSec > 0) {
+    logger.info(`[CDN] Bandwidth limit set: ${mbps} Mbps (${(_bandwidthLimitBytesPerSec / 1024).toFixed(0)} KB/s)`);
+  }
+}
+
+function recordBandwidth(bytes: number): void {
+  const now = Date.now();
+  if (now - _bandwidthWindowStart > BANDWIDTH_WINDOW_MS) {
+    _bandwidthWindowBytes = 0;
+    _bandwidthWindowStart = now;
+  }
+  _bandwidthWindowBytes += bytes;
+}
+
+function isBandwidthExceeded(): boolean {
+  if (_bandwidthLimitBytesPerSec <= 0) return false;
+  const now = Date.now();
+  if (now - _bandwidthWindowStart > BANDWIDTH_WINDOW_MS) {
+    _bandwidthWindowBytes = 0;
+    _bandwidthWindowStart = now;
+    return false;
+  }
+  const elapsed = (now - _bandwidthWindowStart) / 1000;
+  const currentRate = elapsed > 0 ? _bandwidthWindowBytes / elapsed : 0;
+  return currentRate >= _bandwidthLimitBytesPerSec;
+}
+
+function bandwidthGuard(req: Request, res: Response, next: Function): void {
+  if (isBandwidthExceeded()) {
+    res.status(503).set('Retry-After', '5').json({
+      error: 'Bandwidth limit reached, try again shortly',
+    });
+    return;
+  }
+  next();
+}
 
 /**
  * Parse an HTTP Range header into start/end byte offsets.
@@ -438,6 +496,7 @@ export function createPublicRouter(
   ipfs: IPFSStorage | null
 ): Router {
   const router = Router();
+  _dbRef = db;
 
   // NOTE: Rate limiting is applied per-route below, not globally.
   // This prevents the rate limiter from affecting non-public routes
@@ -450,8 +509,8 @@ export function createPublicRouter(
    * streaming: /ipfs/<rootCID>/stream.mpd, /ipfs/<rootCID>/video/seg-1.m4s
    * Must be registered BEFORE the :filename? route so multi-segment paths match.
    */
-  router.head('/ipfs/:cid/*', contentRateLimit, ipfsDAGPathHandler(ipfs));
-  router.get('/ipfs/:cid/*', contentRateLimit, ipfsDAGPathHandler(ipfs));
+  router.head('/ipfs/:cid/*', contentRateLimit, bandwidthGuard, ipfsDAGPathHandler(ipfs));
+  router.get('/ipfs/:cid/*', contentRateLimit, bandwidthGuard, ipfsDAGPathHandler(ipfs));
 
   /**
    * GET|HEAD /ipfs/:cid
@@ -460,8 +519,8 @@ export function createPublicRouter(
    * Serve content directly by CID with streaming and Range request support.
    * HEAD returns headers (size, MIME, Accept-Ranges) without loading content.
    */
-  router.head('/ipfs/:cid/:filename?', contentRateLimit, ipfsCidHandler(ipfs, db));
-  router.get('/ipfs/:cid/:filename?', contentRateLimit, ipfsCidHandler(ipfs, db));
+  router.head('/ipfs/:cid/:filename?', contentRateLimit, bandwidthGuard, ipfsCidHandler(ipfs, db));
+  router.get('/ipfs/:cid/:filename?', contentRateLimit, bandwidthGuard, ipfsCidHandler(ipfs, db));
 
   /**
    * GET|HEAD /public/:wallet/*

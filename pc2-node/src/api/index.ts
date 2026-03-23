@@ -28,7 +28,7 @@ import { createBackup, listBackups, downloadBackup, deleteBackup, restoreBackup 
 import { handleTerminalStats, handleTerminalAdminStats, handleDestroyAllTerminals, handleTerminalStatus, handleExecCommand, handleExecScript, handleListTools } from './terminal.js';
 import { handleListApiKeys, handleCreateApiKey, handleDeleteApiKey, handleRevokeApiKey, handleGetScopes } from './apikeys.js';
 import { handleListTools as handleListAgentTools, handleGetTool, handleListCategories, handleGetOpenAPISchema } from './tools.js';
-import { createPublicRouter } from './public.js';
+import { createPublicRouter, setBandwidthLimit, getCDNStats } from './public.js';
 import { IPFSStorage } from '../storage/ipfs.js';
 import { httpClientRouter } from './http-client.js';
 import { gitRouter } from './git.js';
@@ -186,6 +186,12 @@ export function setupAPI(app: Express): void {
     const publicRouter = createPublicRouter(db, filesystem, ipfs);
     app.use(publicRouter);
     logger.info('[API] Public IPFS gateway enabled at /ipfs/:cid and /public/:wallet/*');
+
+    const nodeConfig = app.locals.config as Config | undefined;
+    const uploadLimit = nodeConfig?.seeding?.max_upload_mbps ?? 0;
+    if (uploadLimit > 0) {
+      setBandwidthLimit(uploadLimit);
+    }
   } else {
     logger.warn('[API] Public IPFS gateway disabled - database or filesystem not available');
   }
@@ -362,6 +368,117 @@ export function setupAPI(app: Express): void {
   app.use('/api/ai', voiceRouter);
   app.use('/api/registry', registryRouter);
   app.use('/api/supernode', createSupernodeRouter());
+
+  // Content Catalog (on-chain indexed content — public read, no auth needed for browsing)
+  app.get('/api/catalog', (req: Request, res: Response) => {
+    const catalogDb = req.app.locals.db as DatabaseManager | undefined;
+    if (!catalogDb) return res.status(503).json({ error: 'Database not available' });
+
+    const { asset_type, creator, search, limit: l, offset: o } = req.query;
+    const result = catalogDb.getCatalogItems({
+      assetType: asset_type as string | undefined,
+      creator: creator as string | undefined,
+      search: search as string | undefined,
+      limit: parseInt(l as string) || 50,
+      offset: parseInt(o as string) || 0,
+    });
+
+    const pinnedCids = new Set(catalogDb.getPinnedCIDs());
+    const enriched = result.items.map((item: any) => ({
+      ...item,
+      is_local: !!(item.content_cid && pinnedCids.has(item.content_cid)),
+    }));
+
+    res.json({ success: true, total: result.total, items: enriched });
+  });
+
+  app.get('/api/catalog/stats', (req: Request, res: Response) => {
+    const catalogDb = req.app.locals.db as DatabaseManager | undefined;
+    if (!catalogDb) return res.status(503).json({ error: 'Database not available' });
+
+    const stats = catalogDb.getCatalogStats();
+    const indexer = req.app.locals.indexerService;
+    res.json({
+      success: true,
+      catalog: stats,
+      indexer: indexer ? indexer.getStats() : { enabled: false },
+    });
+  });
+
+  app.get('/api/catalog/content/:contentId', (req: Request, res: Response) => {
+    const catalogDb = req.app.locals.db as DatabaseManager | undefined;
+    if (!catalogDb) return res.status(503).json({ error: 'Database not available' });
+
+    const item = catalogDb.getCatalogItemByContentId(req.params.contentId) as any;
+    if (!item) return res.status(404).json({ error: 'Asset not found' });
+
+    const pinnedCids = new Set(catalogDb.getPinnedCIDs());
+    item.is_local = !!(item.content_cid && pinnedCids.has(item.content_cid));
+
+    res.json({ success: true, item });
+  });
+
+  app.get('/api/catalog/providers/:cid', async (req: Request, res: Response) => {
+    const catalogIpfs = ipfs;
+    if (!catalogIpfs) return res.status(503).json({ error: 'IPFS not available' });
+
+    const { cid } = req.params;
+    const count = await catalogIpfs.countProviders(cid);
+
+    res.json({ success: true, cid, providers: count });
+  });
+
+  app.get('/api/catalog/creator/:address', (req: Request, res: Response) => {
+    const catalogDb = req.app.locals.db as DatabaseManager | undefined;
+    if (!catalogDb) return res.status(503).json({ error: 'Database not available' });
+
+    const stats = catalogDb.getCreatorStats(req.params.address);
+    const cdnStatsData = req.app.locals.seedingService?.getStats?.() ?? null;
+
+    res.json({
+      success: true,
+      creator: req.params.address,
+      ...stats,
+      seeding: cdnStatsData ? {
+        enabled: cdnStatsData.enabled,
+        queueLength: cdnStatsData.queueLength,
+        activeDownloads: cdnStatsData.activeDownloads,
+        disk: cdnStatsData.disk,
+      } : null,
+    });
+  });
+
+  app.get('/api/catalog/creator/:address', (req: Request, res: Response) => {
+    const catalogDb = req.app.locals.db as DatabaseManager | undefined;
+    if (!catalogDb) return res.status(503).json({ error: 'Database not available' });
+
+    const earnings = catalogDb.getCreatorEarningsLocal(req.params.address);
+
+    res.json({ success: true, ...earnings });
+  });
+
+  app.get('/api/catalog/seeding', (req: Request, res: Response) => {
+    const catalogDb = req.app.locals.db as DatabaseManager | undefined;
+    if (!catalogDb) return res.status(503).json({ error: 'Database not available' });
+
+    const seedingStats = catalogDb.getNodeSeedingStats();
+    const seedingService = req.app.locals.seedingService;
+
+    const cdn = getCDNStats();
+    const uptimeMs = Date.now() - cdn.startedAt;
+
+    res.json({
+      success: true,
+      seeding: seedingStats,
+      service: seedingService ? seedingService.getStats() : null,
+      cdn: {
+        bytesServed: cdn.bytesServed,
+        requestCount: cdn.requestCount,
+        uptimeMs,
+        avgBytesPerSec: uptimeMs > 0 ? Math.round(cdn.bytesServed / (uptimeMs / 1000)) : 0,
+      },
+    });
+  });
 
   // Installed Apps (dApp Store) — requires db for registration
   if (db) {

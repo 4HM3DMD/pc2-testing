@@ -1,26 +1,24 @@
 /**
  * Lit Action: Media Asset CEK Decryption (Chipotle/PKP-AES)
  *
- * Recovers the 16-byte CENC Content Encryption Key for DASH/CENC media
- * playback. Performs on-chain access verification via AuthorityGateway
- * before decrypting.
+ * Chipotle v3 calls `main(params)` with js_params as the argument.
  *
- * Returns the raw CEK directly (not wrapped in an ECDH envelope like Datil).
- * The PC2 media runtime detects litBackend=chipotle in the PSSH metadata
- * and uses this direct CEK path instead of the Datil ECDH unwrap.
+ * Recovers the 16-byte CENC Content Encryption Key for DASH/CENC media playback.
+ * Performs on-chain access verification via AuthorityGateway before decrypting.
  *
- * jsParams expected:
- *   - ciphertext:          PKP-AES encrypted CEK (hex string from Lit.Actions.Encrypt)
- *   - dataToEncryptHash:   SHA-256 hash of the original plaintext (for verification)
- *   - kid:                 Content identifier (bytes16, e.g. "0xabc...")
- *   - pkpId:               PKP wallet address used to encrypt (for Decrypt)
+ * params expected:
+ *   - ciphertext:          PKP-AES encrypted CEK
+ *   - dataToEncryptHash:   SHA-256 hash of the original plaintext
+ *   - kid:                 Content identifier (bytes16)
+ *   - pkpId:               PKP wallet address used to encrypt
  *   - authority:           AuthorityGateway contract address
  *   - chain:               Chain name (e.g. "base")
  *   - rpc:                 RPC endpoint URL
  *   - userAddress:         The buyer's wallet address to verify access for
  */
 
-(async () => {
+async function main(params) {
+  const { ciphertext, dataToEncryptHash, kid, pkpId, authority, chain, chainId, rpc, userAddress } = params;
   const normalizedKid = kid.startsWith("0x") ? kid : "0x" + kid;
 
   const toChecksum = (addr) => {
@@ -63,4 +61,4 @@
   });
 
   Lit.Actions.setResponse({ response: cek });
-})();
+}

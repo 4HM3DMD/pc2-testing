@@ -30,9 +30,12 @@ const ELACITY_SYSTEM_ID = 'bf8ef85d2c54475d8c1ee27db60332a2';
 const MEDIA_DECRYPT_ACTION_CID = 'QmcNdiSuT2c2zKwhGozTgvT12uP26gAWMw2D49GvcLj2Go';
 const MEDIA_ENCRYPT_ACTION_CID = 'QmdwzJvfgCRvNh9pQ63zroFozR9CfJdiweqTCkVMubD47U';
 
+import { getBaseRpcUrl } from '../../utils/rpc.js';
+
 const DEFAULT_AUTHORITY = process.env.DDRM_AUTHORITY || '0x8fe6bf9877B78BF0126819ff2593235E54Ee1E29';
 const DEFAULT_CHAIN_ID = parseInt(process.env.DDRM_CHAIN_ID || '8453', 10);
-const DEFAULT_RPC = process.env.DDRM_RPC || 'https://mainnet.base.org';
+// Env var override for PSSH-embedded RPC; falls back to shared pool
+const DEFAULT_RPC = process.env.DDRM_RPC || getBaseRpcUrl();
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 

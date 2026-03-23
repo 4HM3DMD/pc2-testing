@@ -2779,10 +2779,10 @@ async function handleApiRequest(req, res) {
         chainId: 8453,
         rpc: 'https://mainnet.base.org',
         actions: {
-          nonMediaEncrypt: 'QmUdZUxe6BVoXiZcw4hE86YCHsgQVGEmgbN6sr7MhnL8pp',
-          nonMediaDecrypt: 'QmfWksjQkuLxVGEZdHrbFKxUb2sL4K34bLYbD3mAKv2CZA',
-          mediaEncrypt: 'QmdwzJvfgCRvNh9pQ63zroFozR9CfJdiweqTCkVMubD47U',
-          mediaDecrypt: 'QmcNdiSuT2c2zKwhGozTgvT12uP26gAWMw2D49GvcLj2Go',
+          nonMediaEncrypt: 'QmNayE5MYzXcoMS9nvRk6MUo8r4ESLa3i65vHXzuBsnC2b',
+          nonMediaDecrypt: 'QmYuh3LQXcC5Ddk7xTV2eR8Xvp1xKNSzqoimqpyM1SSDMC',
+          mediaEncrypt: 'QmXgZXJw9pzSeRkVZLtgNzgaxfErKhthv7j7Etge6WNG4u',
+          mediaDecrypt: 'QmTPi2w7tSfGb7AzkMDCR6bCdSHkU5v5C6CGJC3sULTZN9',
         },
       }));
     } catch (err) {

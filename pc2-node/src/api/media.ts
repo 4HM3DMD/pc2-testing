@@ -444,7 +444,8 @@ async function detectSmartAccountUser(
 ): Promise<boolean> {
   // Extract RPC URL from PSSH data (the Lit Action embeds it)
   const saEntry = psshEntries.find(p => p.protectionType === 'cenc:lit-drm-sa-v1');
-  const rpcUrl = saEntry?.data?.rpc || 'https://mainnet.base.org';
+  const { getBaseRpcUrl } = await import('../utils/rpc.js');
+  const rpcUrl = saEntry?.data?.rpc || getBaseRpcUrl();
 
   // Build calldata for factory.getAddress(entryPoint, initData, salt=0)
   // initData = 0x2ede3bc0 + eoaAddress (padded to 32 bytes)

@@ -30,6 +30,9 @@ import { logger, createLogger } from './utils/logger.js';
 const log = createLogger('pc2');
 import { AIChatService } from './services/ai/AIChatService.js';
 import { BosonService } from './services/boson/index.js';
+import { ContentSeedingService } from './services/ContentSeedingService.js';
+import { ContentIndexerService } from './services/ContentIndexerService.js';
+import { initBaseRpcPool } from './utils/rpc.js';
 import { getGatewayService, createChannelBridge } from './services/gateway/index.js';
 import { getNodeConfig } from './api/setup.js';
 import { fileURLToPath } from 'url';
@@ -43,6 +46,8 @@ let config: Config;
 try {
   config = loadConfig();
   logger.info('✅ Configuration loaded');
+
+  initBaseRpcPool(config.content_indexer?.rpc_urls);
 } catch (error) {
   logger.error('❌ Failed to load configuration:', error);
   process.exit(1);
@@ -64,6 +69,8 @@ const IPFS_REPO_PATH = process.env.IPFS_REPO_PATH || config.storage.ipfs_repo_pa
   let filesystem: FilesystemManager | null = null;
   let aiService: AIChatService | null = null;
   let bosonService: BosonService | null = null;
+  let seedingService: ContentSeedingService | null = null;
+  let indexerService: ContentIndexerService | null = null;
 
 async function main() {
   logger.info('Starting PC2 Node...');
@@ -119,10 +126,23 @@ async function main() {
     filesystem = new FilesystemManager(ipfs, db);
     logger.info('✅ Filesystem manager initialized');
     logger.info(`   IPFS mode: ${ipfsMode}`);
+
+    // Initialize content seeding service (silent CDN participation)
+    seedingService = new ContentSeedingService(config);
+    seedingService.initialize(ipfs, db);
   } catch (error) {
     logger.error('❌ Failed to initialize IPFS:', error);
     logger.warn('   File storage will not be available');
     // Don't exit - server can still run without IPFS (for development)
+  }
+
+  // Initialize content indexer (on-chain content catalog)
+  try {
+    indexerService = new ContentIndexerService(config);
+    indexerService.initialize(db!, ipfs);
+  } catch (error) {
+    logger.error('❌ Failed to initialize content indexer:', error);
+    logger.warn('   Content discovery will fall back to Elacity GraphQL');
   }
 
   // Initialize AI, Gateway, and Boson in parallel — they're independent of each other,
@@ -274,6 +294,16 @@ async function main() {
     app.locals.bosonService = bosonService;
   }
 
+  // Make seeding service available to routes
+  if (seedingService) {
+    app.locals.seedingService = seedingService;
+  }
+
+  // Make indexer service available to routes
+  if (indexerService) {
+    app.locals.indexerService = indexerService;
+  }
+
   // Handle server listen with retry for EADDRINUSE
   // Increased retries and delay to handle slow port release after crashes
   const startServer = (retries = 5, delay = 5000): void => {
@@ -299,62 +329,21 @@ async function main() {
   
   startServer();
 
-  // ============================================================================
-  // Periodic IPFS DHT Re-announcement
-  // DHT provider records expire after ~24 hours, so we re-announce periodically
-  // ============================================================================
-  
-  const RE_ANNOUNCE_INTERVAL = 12 * 60 * 60 * 1000; // 12 hours in milliseconds
-  
-  const runPeriodicAnnouncement = async () => {
-    if (!ipfs || !db) return;
-    
-    // Check if IPFS can announce (not in private mode, DHT available)
-    if (!ipfs.canAnnounce()) {
-      logger.debug('[IPFS] Skipping periodic announcement (DHT not available)');
-      return;
-    }
-    
-    // Get IPFS config to check if auto-announce is enabled
-    const ipfsConfig = (config as any).ipfs || {};
-    if (ipfsConfig.auto_announce_public === false) {
-      logger.debug('[IPFS] Skipping periodic announcement (auto_announce_public disabled)');
-      return;
-    }
-    
-    try {
-      const allCIDs = db.getAllAnnouncableCIDs();
-      if (allCIDs.length === 0) {
-        logger.debug('[IPFS] No CIDs to announce');
-        return;
-      }
-
-      logger.info(`[IPFS] Starting periodic re-announcement of ${allCIDs.length} CIDs (public + purchased)...`);
-      const result = await ipfs.announceMultipleCIDs(allCIDs);
-      logger.info(`[IPFS] Periodic announcement complete: ${result.success} success, ${result.failed} failed`);
-    } catch (error) {
-      logger.error('[IPFS] Periodic announcement failed:', error);
-    }
-  };
-  
-  // Run initial announcement after a delay (let IPFS connect to peers first)
-  if (ipfs && ipfs.getNetworkMode() !== 'private') {
-    setTimeout(() => {
-      runPeriodicAnnouncement().catch(e => logger.error('[IPFS] Initial announcement error:', e));
-    }, 60 * 1000); // Wait 1 minute after startup
-    
-    // Schedule periodic re-announcement
-    const announcementInterval = setInterval(() => {
-      runPeriodicAnnouncement().catch(e => logger.error('[IPFS] Periodic announcement error:', e));
-    }, RE_ANNOUNCE_INTERVAL);
-    
-    logger.info(`[IPFS] Scheduled periodic DHT re-announcement every ${RE_ANNOUNCE_INTERVAL / 1000 / 60 / 60} hours`);
-  }
+  // DHT re-announcement is now managed by ContentSeedingService with
+  // tiered hot/warm/cold cadence + startup burst. See ContentSeedingService.ts.
 
   // Graceful shutdown
   const shutdown = async () => {
     logger.info('Shutting down gracefully...');
     
+    if (indexerService) {
+      indexerService.shutdown();
+    }
+
+    if (seedingService) {
+      seedingService.shutdown();
+    }
+
     if (bosonService) {
       try {
         await bosonService.stop();

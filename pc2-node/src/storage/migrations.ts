@@ -31,7 +31,7 @@ function findSchemaFile(): string {
   }
   throw new Error(`Schema file not found. Tried: ${SCHEMA_FILE} and ${sourceSchema}`);
 }
-const CURRENT_VERSION = 17;
+const CURRENT_VERSION = 19;
 
 interface Migration {
   version: number;
@@ -697,6 +697,90 @@ export function runMigrations(db: Database.Database): void {
         recordMigration(db, 17);
       } catch (error: any) {
         log.error(`❌ Migration 17 error: ${error.message}`);
+        throw error;
+      }
+    }
+
+    // Migration 18: Content seeding — add serve tracking + pin status to pinned_cids
+    if (currentVersion < 18) {
+      try {
+        log.info('📦 Running Migration 18: Content seeding columns...');
+
+        try {
+          db.exec('ALTER TABLE pinned_cids ADD COLUMN last_served_at INTEGER');
+        } catch { /* column may already exist */ }
+
+        try {
+          db.exec('ALTER TABLE pinned_cids ADD COLUMN serve_count INTEGER NOT NULL DEFAULT 0');
+        } catch { /* column may already exist */ }
+
+        try {
+          db.exec("ALTER TABLE pinned_cids ADD COLUMN pin_status TEXT NOT NULL DEFAULT 'complete'");
+        } catch { /* column may already exist */ }
+
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_pinned_cids_status
+          ON pinned_cids(pin_status)
+        `);
+
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_pinned_cids_served
+          ON pinned_cids(last_served_at)
+        `);
+
+        log.info('✅ Migration 18 complete: Content seeding columns added');
+        recordMigration(db, 18);
+      } catch (error: any) {
+        log.error(`❌ Migration 18 error: ${error.message}`);
+        throw error;
+      }
+    }
+
+    // Migration 19: Content catalog table for on-chain content indexer
+    if (currentVersion < 19) {
+      try {
+        log.info('📦 Running Migration 19: Content catalog table...');
+
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS content_catalog (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            content_id TEXT,
+            channel_address TEXT NOT NULL,
+            token_id INTEGER NOT NULL,
+            operative_address TEXT,
+            creator_address TEXT NOT NULL,
+            name TEXT,
+            description TEXT,
+            image_url TEXT,
+            content_cid TEXT,
+            metadata_cid TEXT,
+            mime_type TEXT,
+            asset_type TEXT,
+            price TEXT,
+            payment_token TEXT,
+            op_type INTEGER,
+            chain_id INTEGER NOT NULL DEFAULT 8453,
+            block_number INTEGER NOT NULL,
+            tx_hash TEXT,
+            contract_version TEXT NOT NULL DEFAULT 'v2',
+            metadata_status TEXT NOT NULL DEFAULT 'pending',
+            indexed_at INTEGER NOT NULL,
+            metadata_json TEXT,
+            UNIQUE(channel_address, token_id, chain_id)
+          )
+        `);
+
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_content_catalog_creator ON content_catalog(creator_address)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_content_catalog_type ON content_catalog(asset_type)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_content_catalog_content_id ON content_catalog(content_id)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_content_catalog_channel ON content_catalog(channel_address)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_content_catalog_status ON content_catalog(metadata_status)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_content_catalog_block ON content_catalog(block_number)`);
+
+        log.info('✅ Migration 19 complete: Content catalog table created');
+        recordMigration(db, 19);
+      } catch (error: any) {
+        log.error(`❌ Migration 19 error: ${error.message}`);
         throw error;
       }
     }

@@ -184,8 +184,46 @@ CREATE TABLE IF NOT EXISTS pinned_cids (
   size INTEGER NOT NULL DEFAULT 0,
   pinned_at INTEGER NOT NULL,
   last_announced_at INTEGER,
+  last_served_at INTEGER,
+  serve_count INTEGER NOT NULL DEFAULT 0,
+  pin_status TEXT NOT NULL DEFAULT 'complete',
   PRIMARY KEY (cid, wallet_address)
 );
+
+-- Content catalog table: On-chain indexed content for decentralized discovery
+CREATE TABLE IF NOT EXISTS content_catalog (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  content_id TEXT,
+  channel_address TEXT NOT NULL,
+  token_id INTEGER NOT NULL,
+  operative_address TEXT,
+  creator_address TEXT NOT NULL,
+  name TEXT,
+  description TEXT,
+  image_url TEXT,
+  content_cid TEXT,
+  metadata_cid TEXT,
+  mime_type TEXT,
+  asset_type TEXT,
+  price TEXT,
+  payment_token TEXT,
+  op_type INTEGER,
+  chain_id INTEGER NOT NULL DEFAULT 8453,
+  block_number INTEGER NOT NULL,
+  tx_hash TEXT,
+  contract_version TEXT NOT NULL DEFAULT 'v2',
+  metadata_status TEXT NOT NULL DEFAULT 'pending',
+  indexed_at INTEGER NOT NULL,
+  metadata_json TEXT,
+  UNIQUE(channel_address, token_id, chain_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_content_catalog_creator ON content_catalog(creator_address);
+CREATE INDEX IF NOT EXISTS idx_content_catalog_type ON content_catalog(asset_type);
+CREATE INDEX IF NOT EXISTS idx_content_catalog_content_id ON content_catalog(content_id);
+CREATE INDEX IF NOT EXISTS idx_content_catalog_channel ON content_catalog(channel_address);
+CREATE INDEX IF NOT EXISTS idx_content_catalog_status ON content_catalog(metadata_status);
+CREATE INDEX IF NOT EXISTS idx_content_catalog_block ON content_catalog(block_number);
 
 -- Context events table: Awareness layer data (location, photos, voice, activity)
 CREATE TABLE IF NOT EXISTS context_events (
@@ -228,6 +266,8 @@ CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_wallet ON scheduled_tasks(wallet_
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_next_run ON scheduled_tasks(next_run_at);
 CREATE INDEX IF NOT EXISTS idx_installed_apps_cid ON installed_apps(cid);
 CREATE INDEX IF NOT EXISTS idx_pinned_cids_wallet ON pinned_cids(wallet_address);
+CREATE INDEX IF NOT EXISTS idx_pinned_cids_status ON pinned_cids(pin_status);
+CREATE INDEX IF NOT EXISTS idx_pinned_cids_served ON pinned_cids(last_served_at);
 CREATE INDEX IF NOT EXISTS idx_context_wallet_time ON context_events(wallet, timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_context_type ON context_events(type);
 

@@ -1,17 +1,15 @@
 /**
  * Lit Action: Media Asset CEK Encryption (Chipotle/PKP-AES)
  *
- * Encrypts a 16-byte (128-bit) CENC Content Encryption Key using
- * Lit.Actions.Encrypt (PKP-AES). Identical mechanism to non-media encryption
- * but kept as a separate action for distinct CID registration and future
- * divergence (e.g. media-specific PSSH metadata handling).
+ * Chipotle v3 calls `main(params)` with js_params as the argument.
  *
- * jsParams expected:
+ * params expected:
  *   - plaintext:  The base64-encoded 16-byte media CEK to encrypt
  *   - pkpId:      PKP wallet address to encrypt under
  */
 
-(async () => {
+async function main(params) {
+  const { pkpId, plaintext } = params;
   try {
     const encrypted = await Lit.Actions.Encrypt({
       pkpId: pkpId,
@@ -21,4 +19,4 @@
   } catch (e) {
     Lit.Actions.setResponse({ response: JSON.stringify({ error: e.message }) });
   }
-})();
+}

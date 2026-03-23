@@ -18,6 +18,7 @@ import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import https from 'https';
 import { createLogger } from '../utils/logger.js';
+import { getBaseRpcUrl } from '../utils/rpc.js';
 
 const logger = createLogger('chipotle');
 
@@ -38,7 +39,6 @@ const DEFAULT_API_URL = 'https://api.dev.litprotocol.com';
 const PROD_API_URL = 'https://api.litprotocol.com';
 
 const DEFAULT_AUTHORITY = '0x8fe6bf9877B78BF0126819ff2593235E54Ee1E29';
-const DEFAULT_RPC = 'https://mainnet.base.org';
 const DEFAULT_CHAIN = 'base';
 const DEFAULT_CHAIN_ID = 8453;
 const DEFAULT_PKP_ID = '0x09bdfc8f8ec5a3bd2970497b930bd94839f22227';
@@ -348,7 +348,7 @@ async function executeLitAction(params: LitActionParams, config?: ChipotleConfig
     },
     body: JSON.stringify({
       code: params.code,
-      js_params: params.jsParams,
+      js_params: params.jsParams || {},
     }),
   });
 
@@ -404,7 +404,7 @@ export async function recoverNonMediaCEK(
     authority: params.authority || DEFAULT_AUTHORITY,
     chain: params.chain || DEFAULT_CHAIN,
     chainId: params.chainId || DEFAULT_CHAIN_ID,
-    rpc: params.rpc || DEFAULT_RPC,
+    rpc: params.rpc || getBaseRpcUrl(),
     userAddress: params.buyerAddress,
   };
 
@@ -453,7 +453,7 @@ export async function recoverMediaCEKEnvelope(
     authority: params.authority || DEFAULT_AUTHORITY,
     chain: params.chain || DEFAULT_CHAIN,
     chainId: params.chainId || DEFAULT_CHAIN_ID,
-    rpc: params.rpc || DEFAULT_RPC,
+    rpc: params.rpc || getBaseRpcUrl(),
     userAddress: params.buyerAddress,
   };
 

@@ -12,6 +12,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { getWASMRuntime, type RendererCommand } from '../services/wasm/WASMRuntime.js';
+import { getBaseRpcUrl } from '../utils/rpc.js';
 
 const router = Router();
 
@@ -587,36 +588,49 @@ router.post('/ipfs/pin', authenticate, async (req: AuthenticatedRequest, res: Re
       return res.status(503).json({ error: 'IPFS not available' });
     }
 
-    const { cid } = req.body;
+    const { cid, estimatedSize } = req.body;
     if (!cid || typeof cid !== 'string') {
       return res.status(400).json({ error: 'Missing or invalid CID' });
     }
 
     const cidClean = cid.replace(/^ipfs:\/\//, '').replace(/^\/ipfs\//, '').split('/')[0];
+    const walletAddress = req.user?.wallet_address;
 
-    logger.info(`[Storage API] Pinning remote CID: ${cidClean}`);
+    // Delegate to ContentSeedingService when available — handles dedup,
+    // queue management, retry, DHT announce, and DB tracking automatically.
+    const seedingService = req.app.locals.seedingService;
+    if (seedingService && walletAddress) {
+      seedingService.seedContent(cidClean, walletAddress, {
+        priority: 'immediate',
+        estimatedSizeBytes: estimatedSize || 0,
+      });
+      return res.json({
+        success: true,
+        cid: cidClean,
+        queued: true,
+        message: 'Content queued for pinning and seeding',
+      });
+    }
+
+    // Fallback: direct pin without seeding service
+    logger.info(`[Storage API] Pinning remote CID (no seeding service): ${cidClean}`);
     const result = await ipfs.pinRemoteCID(cidClean, { timeoutMs: 180000 });
 
     if (result.success) {
       logger.info(`[Storage API] Successfully pinned CID: ${cidClean} (${result.size} bytes, ${result.type}, ${result.timeMs}ms)`);
 
-      // Track in pinned_cids for CDN stats and periodic DHT re-announcement
       const db = req.app.locals.db;
-      const walletAddress = req.user?.wallet_address;
       if (db && walletAddress) {
         try {
           db.trackPinnedCID(cidClean, walletAddress, result.size || 0, 'marketplace');
-          logger.info(`[Storage API] Tracked pinned CID for CDN: ${cidClean}`);
         } catch (trackErr) {
           logger.warn(`[Storage API] Failed to track pinned CID (non-fatal): ${cidClean}`, trackErr);
         }
       }
 
-      // Announce on DHT so other nodes can discover this content via Bitswap
       if (ipfs.canAnnounce()) {
         ipfs.announceCID(cidClean).then((announced: boolean) => {
           if (announced) {
-            logger.info(`[Storage API] Announced pinned CID to DHT: ${cidClean}`);
             db?.updatePinnedCIDAnnouncedAt(cidClean);
           }
         }).catch((err: any) => {
@@ -637,6 +651,32 @@ router.post('/ipfs/pin', authenticate, async (req: AuthenticatedRequest, res: Re
   } catch (error: any) {
     logger.error('[Storage API]: Error pinning remote CID:', error);
     res.status(500).json({ error: error.message || 'Failed to pin CID' });
+  }
+});
+
+/**
+ * DELETE /api/ipfs/unpin/:cid
+ * Remove a CID from seeding. Stops serving and removes tracking record.
+ */
+router.delete('/ipfs/unpin/:cid', authenticate, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { cid } = req.params;
+    if (!cid) {
+      return res.status(400).json({ error: 'Missing CID' });
+    }
+
+    const seedingService = req.app.locals.seedingService;
+    if (seedingService) {
+      seedingService.unseedContent(cid);
+    } else {
+      const db = req.app.locals.db;
+      if (db) db.removePinnedCID(cid);
+    }
+
+    res.json({ success: true, cid, message: 'Content removed from seeding' });
+  } catch (error: any) {
+    logger.error(`[Storage API] Error unseeding CID ${req.params.cid}:`, error);
+    res.status(500).json({ error: error.message || 'Failed to unseed CID' });
   }
 });
 
@@ -899,7 +939,6 @@ if (!NON_MEDIA_ACTION_CID && existsSync(LIT_ACTION_CID_PATH)) {
 }
 
 const DEFAULT_AUTHORITY = '0x580C26DeFf267Ef40A72cf10a4A42050F0641b8B';
-const DEFAULT_RPC = 'https://mainnet.base.org';
 
 /**
  * Build access conditions for Lit encrypt/decrypt.
@@ -1231,7 +1270,7 @@ async function recoverCEKAndFetchData(params: DecryptParams, ipfsService?: any):
     if (!effectiveActionCid) throw new Error('No Lit Action CID configured');
     const effectiveAuthority = authority || DEFAULT_AUTHORITY;
     const effectiveChain = chain || 'base';
-    const effectiveRpc = rpc || DEFAULT_RPC;
+    const effectiveRpc = rpc || getBaseRpcUrl();
 
     const executeParams: any = {
       sessionSigs,

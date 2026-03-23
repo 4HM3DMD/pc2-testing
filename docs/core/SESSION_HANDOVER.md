@@ -1,4 +1,4 @@
-# Session Handover — Mar 20, 2026
+# Session Handover — Mar 23, 2026
 
 > **Read this first when starting a new agent session.**
 
@@ -11,16 +11,129 @@
 **Release:** v1.1.0 tagged and released on 2026-03-03 (134 commits squash-merged to main)
 **Launcher:** v1.1.1 released — version display, one-click updates, full networking install
 **DAO Proposal:** Live at https://elastos.com/proposals/69a24f49247f130078064edd
-**Last Commit:** feat: marketplace API hardening, channel management fixes, My Channels hub
+**Last Commit:** feat: product consolidation — RPC fallback, disk/bandwidth enforcement, P2P discovery, creator analytics
+**Active Plan:** `~/.cursor/plans/pc2_product_consolidation_c90fb064.plan.md` — 5-phase sovereign product roadmap
 
-### Known Issues
+### Known Issues (RESOLVED)
 
-1. **Lit Protocol Chipotle endpoint DOWN** — `api.dev.litprotocol.com` redirects (307) to a Phala dStack TEE worker (`f8fce543471dc9f5f5643aa217422398c36e5edc-8000.dstack-base-prod5.phala.network`) that is unreachable (connect timeout). This blocks ALL dDRM operations (playback, minting, encrypt, decrypt). **Not our code — upstream infrastructure outage.** When it comes back, everything works without changes.
+1. **Lit Protocol Chipotle v3 Breaking Changes (FIXED Mar 21)** — After their TEE outage/restart, Chipotle deployed undocumented breaking changes:
+   - **IIFE → `main(params)` pattern**: Lit Actions no longer support `(async () => { ... })()` with global variable injection. Code must now export `async function main(params)` — the TEE calls it with `js_params` as the argument.
+   - **Wallet-group bindings cleared**: PKP wallets were removed from groups during the restart. Had to re-add via `add_pkp_to_group` API.
+   - **Action CID re-registration**: New code structure = new IPFS hashes. All 4 action CIDs re-registered via `add_action_to_group`.
+   - **Fix applied**: All 4 Lit Action scripts rewritten (`non-media-decrypt-chipotle.js`, `media-decrypt-chipotle.js`, `non-media-encrypt-chipotle.js`, `media-encrypt-chipotle.js`), CIDs registered, PKP added to group. Working as of Mar 21.
+   - **IMPORTANT for future sessions**: Always use `async function main(params)` pattern for Chipotle Lit Actions. Use `get_lit_action_ipfs_id` endpoint to compute CIDs server-side. After code changes, must: (1) register new CID via `add_action_to_group`, (2) rebuild TypeScript (`npx tsc`), (3) restart node.
+   - **Registered Action CIDs (Mar 21)**:
+     - `non-media-decrypt-chipotle.js` → `QmYuh3LQXcC5Ddk7xTV2eR8Xvp1xKNSzqoimqpyM1SSDMC`
+     - `media-decrypt-chipotle.js` → `QmTPi2w7tSfGb7AzkMDCR6bCdSHkU5v5C6CGJC3sULTZN9`
+     - `non-media-encrypt-chipotle.js` → `QmNayE5MYzXcoMS9nvRk6MUo8r4ESLa3i65vHXzuBsnC2b`
+     - `media-encrypt-chipotle.js` → `QmXgZXJw9pzSeRkVZLtgNzgaxfErKhthv7j7Etge6WNG4u`
 2. **Channel edit save** — was returning 400; improved error handling now captures actual server error. Added auto SIWE re-auth for expired tokens. Needs user re-test.
 3. **`updateSubscriptionPlan` mutation format** — was previously incorrect (flat fields instead of `{ action, args }` wrapper). Fixed to match GraphQL schema (`SubscriptionPlanUpdateAction` requires `args: SubscriptionPlanInput!`). Also fixed `paymentToken` → `payToken`, `price` Int → String, added return field selection.
 4. **Token-gating field names** — was sending `{ tokenAddress, minimumBalance }` but `TokenOwnershipInput` expects `{ address, value }` (value as Float). Fixed.
 
-### Latest Session Work (Mar 20 — Marketplace Hardening)
+### Latest Session Work (Mar 23 — Product Consolidation: Phase 1-2 Infrastructure)
+
+**Context:** Deep research on ERC-8183 (Agentic Commerce), ERC-8004 (Trustless Agents), and x402 (HTTP Micropayments) led to a 5-phase product consolidation plan. Phases 1-2 were prioritized and largely completed in this session.
+
+**Active plan:** `~/.cursor/plans/pc2_product_consolidation_c90fb064.plan.md`
+
+#### Phase 1 Completion: Walk-Away Independence
+
+**1. Shared Base RPC utility (NEW file)**
+- Created `pc2-node/src/utils/rpc.ts` — centralized RPC endpoint management
+- 5 public Base RPC endpoints: `mainnet.base.org`, `base.llamarpc.com`, `base-rpc.publicnode.com`, `1rpc.io/base`, `base.meowrpc.com`
+- Round-robin selection via `getBaseRpcUrl()`, manual rotation via `rotateBaseRpc()`
+- `baseRpcCall()` with automatic failover: tries all endpoints before throwing
+- Wired into: `storage.ts`, `chipotle-client.ts`, `dashPackager.ts` (replaces hardcoded `mainnet.base.org`)
+- Config: `content_indexer.rpc_urls` in `config/default.json` updated to 5 URLs
+- Pool initialized at startup: `initBaseRpcPool(config.content_indexer?.rpc_urls)` in `index.ts`
+
+**2. ContentIndexerService ESM fix**
+- `@noble/hashes` v2.0.1 ESM import crash (`ERR_PACKAGE_PATH_NOT_EXPORTED` for `./sha3`) — replaced with precomputed keccak256 topic hash constants:
+  ```typescript
+  const TOPICS = {
+    ChannelCreated: '0x2158ff0f68c57975fa16024dd5c348aed296bfd80e9e55bf75d137999875de57',
+    DigitalAssetRegistered: '0x797fefe7355137765738c87aa128138d8b7514df662b4444e9ef0d0e24299622',
+  } as const;
+  ```
+
+**3. Config loader fix**
+- Removed duplicate `blockchain` interface definition in `src/config/loader.ts`
+
+#### Phase 2 Completion: P2P Commerce Loop
+
+**4. Auto-download on purchase (2a) — verified already complete**
+- `pinAndRegisterMedia()` in Market dApp already calls `POST /api/storage/ipfs/pin` → `seedContent()` after `buyAccess()`
+- Full chain: purchase → pin → DHT announce → DB tracking
+
+**5. Disk quota enforcement (2d)**
+- `ContentSeedingService.isQuotaExceeded()` — checks disk usage via `statfsSync('.')` against `seeding.disk_quota_percent` config (default 50%)
+- Queue pauses when quota exceeded, resumes when space freed
+- `database.ts`: added `getTotalPinnedSize()` — sums size of all completed pins
+- `getStats()` enriched with `disk: { quotaExceeded, pinnedSizeBytes }`
+
+**6. Bandwidth enforcement (2d)**
+- `public.ts`: `bandwidthGuard` middleware on all `/ipfs/` routes
+- Rolling 5-second window tracks bytes served
+- Returns 503 with `Retry-After: 5` when `seeding.max_upload_mbps` exceeded (default 0 = unlimited)
+- `setBandwidthLimit(mbps)` exported, called from config at startup in `index.ts`
+- `recordBandwidth(bytes)` integrated into `trackCDNBandwidth`
+
+**7. P2P content discovery (2e)**
+- `GET /api/catalog` enriched with `is_local` boolean (cross-references `pinned_cids` table for each content CID)
+- `GET /api/catalog/content/:contentId` also returns `is_local`
+- `GET /api/catalog/providers/:cid` — new endpoint for on-demand DHT provider count
+- `ipfs.ts`: added `countProviders(cidString, timeoutMs=8000)` — queries DHT `findProviders`, counts `PROVIDER` events
+
+**8. Creator analytics (2c)**
+- `database.ts`: added `getCreatorStats(creatorAddress)` — joins `content_catalog` with `pinned_cids`:
+  - `totalAssets`, `byType` (Record), `locallyPinned`, `totalServes`, `totalBytesServed`
+  - Per-asset: name, content_cid, asset_type, channel_address, token_id, serve_count, size, last_served_at
+- `GET /api/catalog/creator/:address` — returns creator stats + seeding service status (enabled, queue, disk)
+
+**9. Supernode RPC vision**
+- Documented in ROADMAP.md under "Supernode Economics" — supernodes offer cached/load-balanced Base RPC as a gated Tier 2 service
+- Revenue via Access Token gating, reduces public RPC pressure
+
+#### Files Changed This Session
+
+| File | Change |
+|------|--------|
+| `pc2-node/src/utils/rpc.ts` | **NEW** — shared Base RPC utility |
+| `pc2-node/src/services/ContentIndexerService.ts` | Precomputed topic hashes, removed `@noble/hashes` dependency |
+| `pc2-node/src/config/loader.ts` | Fixed duplicate `blockchain` interface |
+| `pc2-node/config/default.json` | 5 RPC URLs in `content_indexer.rpc_urls` |
+| `pc2-node/src/storage/database.ts` | `getTotalPinnedSize()`, `getCreatorStats()` |
+| `pc2-node/src/services/ContentSeedingService.ts` | `isQuotaExceeded()`, disk quota enforcement in `drainQueue()` |
+| `pc2-node/src/api/public.ts` | `bandwidthGuard` middleware, `setBandwidthLimit()`, `recordBandwidth()` |
+| `pc2-node/src/api/index.ts` | `is_local` flag on catalog, `/api/catalog/providers/:cid`, `/api/catalog/creator/:address` |
+| `pc2-node/src/storage/ipfs.ts` | `countProviders()` method |
+| `pc2-node/src/index.ts` | `setBandwidthLimit` initialization from config |
+| `pc2-node/src/api/storage.ts` | `getBaseRpcUrl()` replaces hardcoded RPC |
+| `pc2-node/src/api/chipotle-client.ts` | `getBaseRpcUrl()` replaces hardcoded RPC |
+| `pc2-node/src/services/media/dashPackager.ts` | `getBaseRpcUrl()` replaces hardcoded RPC (with env override) |
+| `docs/core/ROADMAP.md` | Supernode RPC vision, indexer + auto-download marked complete |
+| `docs/core/DECENTRALIZATION_STATUS.md` | Indexer marked complete, RPC fallback noted |
+
+#### What's Next
+
+**Remaining from Phase 2:**
+- **Phase 2b: Creator publishing UX polish** — channel creation, pricing presets, DHT announce after mint. Core E2E flow works. This is the last open Phase 2 item.
+
+**Phase 3: AI Model Marketplace (not started):**
+- Verify large file encryption (4-70GB GGUF) — may need streaming encryption
+- Model purchase → decrypt → Ollama auto-load pipeline
+- Model licensing modes (perpetual, per-inference, time-limited)
+- AI model catalog with specialized metadata
+
+**Deferred items (waiting on external dependencies):**
+- Phase 1: Local-first IPFS — needs Elacity-side coordination and v3 contracts
+- Phase 1: Self-provisioned capacity credits — Chipotle uses API keys now, not RLI tokens. Re-evaluate when Chipotle production launches
+- Elacity v3 contracts — indexer has versioned design, config-only swap when v3 deploys
+
+---
+
+### Previous Session Work (Mar 20 — Marketplace Hardening)
 
 **Feedback fixes (6 gaps closed):**
 1. **Token-gating CRUD** — full add/edit/remove form for channel owners with on-chain token validation
@@ -157,16 +270,32 @@ Critical playback bug resolved — encrypted AV1 video now plays end-to-end insi
 - **Local IPFS playback** — content loaded from local Helia node (`localhost:4200/ipfs/`) with fallback to Elacity CDN
 - **UnixFS DAG path resolution** — `/ipfs/:cid/*` wildcard route resolves nested paths within directory CIDs (DASH segments, manifests)
 
-#### Decentralized CDN Network — COMPLETE (Mar 5-6)
+#### Decentralized CDN Network — COMPLETE (Mar 5-6, upgraded Mar 21)
 - **NAT Traversal** — `@libp2p/circuit-relay-v2`, `@libp2p/dcutr`, `@libp2p/autonat` wired into Helia node for peer reachability behind NATs
 - **Bitswap-first fetching** — `fetchViaBitswap()` method tries DHT `findProviders` + direct peer block exchange before falling back to HTTP gateways
 - **CID announcement** — purchased content is announced on the Kademlia DHT via `dht.provide()` so other nodes can discover it
-- **Periodic re-announcement** — background process re-announces all pinned CIDs (public files + marketplace purchases) every 4 hours
-- **`pinned_cids` SQLite table** — tracks marketplace purchases with wallet address, size, source, and last announcement time (Migration 17)
+- **Tiered re-announcement (Mar 21)** — `ContentSeedingService` replaces flat 12h interval with hot/warm/cold cadence:
+  - Hot CIDs (served in last 24h): re-announced every 2 hours
+  - Warm CIDs (served in last 7 days): re-announced every 6 hours
+  - Cold CIDs (not recently served): re-announced every 12 hours
+  - Startup burst: all pinned CIDs re-announced immediately on node start
+- **`pinned_cids` SQLite table** — tracks marketplace purchases with wallet address, size, source, last announcement time, `last_served_at`, `serve_count`, and `pin_status` (Migration 17 + Migration 18)
+- **Persistent serve tracking (Mar 21)** — every IPFS gateway fetch increments `serve_count` and updates `last_served_at` in the DB, enabling tier classification
 - **In-memory CDN bandwidth tracking** — `trackCDNBandwidth()` records bytes served per CID, request counts, source breakdown (local/bitswap/gateway)
 - **`GET /api/cdn/stats` endpoint** — exposes CDN bandwidth stats, top CIDs, uptime, IPFS network info
 - **Supernode IPFS Relay** — standalone libp2p node deployed on 69.164.241.210:4003 (TCP) + 4004 (WS), provides circuit relay + DHT server for NAT traversal
 - **Bootstrap addresses** — `PC2_SUPERNODE_BOOTSTRAP` in `ipfs.ts` points all PC2 nodes to the relay
+
+#### ContentSeedingService — COMPLETE (Mar 21)
+- **`src/services/ContentSeedingService.ts`** — orchestrates automatic pinning, DHT announcement, and serve tracking for the Elacity P2P CDN. Every buyer's node silently becomes a CDN edge.
+- **Priority pin queue** — configurable concurrency (`max_concurrent_pins`, default 3), immediate/background priority, FIFO drain
+- **Defensive safeguards** — CID normalization (ipfs://, /ipfs/, path segments), Helia-ready guard with deferred ops, dedup check (DB + in-memory), adaptive timeouts (180s base + 2s/MB, capped at 10min), content-not-found vs network error distinction
+- **Retry with exponential backoff** — 3 attempts at 30s/60s/120s intervals; content-not-found errors fail immediately
+- **Gap recovery** — incomplete pins (`queued`, `pinning`, `failed`) re-queued at background priority on startup
+- **Config section** — `seeding` block in `config.json` with: `enabled`, `auto_pin_purchases`, `disk_quota_percent` (50%), `max_concurrent_pins` (3), `max_upload_mbps` (0 = unlimited), tiered announce intervals
+- **Unpin endpoint** — `DELETE /api/ipfs/unpin/:cid` for explicit content removal from seeding
+- **Integration** — wired into `index.ts` (lifecycle), `storage.ts` (pin endpoint delegates to service), `public.ts` (serve tracking)
+- **WASM optimization** — `ipfs-assemble` crate rebuilt with `opt-level = 3` (speed over size) for faster large file assembly during pin
 
 #### Download-to-Node / Seeding — FUNCTIONAL
 - **"Save to Cloud" button** on owned assets — downloads content from Elacity IPFS gateway, saves `.ddrm` descriptor to user's filesystem
@@ -182,6 +311,32 @@ Critical playback bug resolved — encrypted AV1 video now plays end-to-end insi
 - Pre-built player at `test-apps/elacity-player/` with DASH streaming, DRM decryption, EIP-712 license requests
 
 ### What Needs Work Next (Priority Order)
+
+#### Chipotle Production + Elacity v3 Contracts Migration (Target: Mar 25)
+
+**Chipotle production network (Lit Protocol):**
+The seeding service (`ContentSeedingService`) is CID-agnostic and needs **zero changes** for the Chipotle production migration. The changes needed are in the Lit/dDRM layer:
+- [ ] `chipotle-client.ts`: switch `DEFAULT_API_URL` from `api.dev.litprotocol.com` to production URL
+- [ ] Re-register all 4 Lit Action scripts on production network, update `.lit-action-cid`
+- [ ] Update `DEFAULT_PKP_ID` to production PKP (or use provisioning response)
+- [ ] `deploy/web-gateway/index.js`: change `network: 'chipotle-dev'` to production
+- [ ] Verify `SUPERNODE_PROVISION_URLS` endpoints if provisioning routes change
+
+**Elacity v3 smart contracts:**
+The seeding service is also contract-agnostic — it receives clean CID strings from the marketplace. Contract-related changes:
+- [ ] Update `AuthorityGateway` addresses in:
+  - `chipotle-client.ts` (currently `0x8fe6bf98...`)
+  - `storage.ts` (currently `0x580C26De...`)
+  - `packages/access/src/constants.ts` (currently `0x580C26De...`)
+- [ ] If `hasAccessByContentId()` ABI changes, update all 4 Lit Action scripts
+- [ ] If tokenURI metadata schema changes (where CIDs are embedded), update `buildDdrmDescriptor()` in `elacity-market/app.js`
+- [ ] Ideally: move all contract addresses and Lit URLs to env vars or config.json rather than hardcoding
+
+**Relationship:** The full Elacity purchase → seed → decrypt flow is:
+1. Buy AccessToken on Base via `AuthorityGateway.buyAccess()` — **contract-dependent**
+2. Extract CID from tokenURI metadata (`asset.cid`) — **metadata-schema-dependent**
+3. `POST /api/storage/ipfs/pin` → `ContentSeedingService.seedContent()` — **CID-agnostic, no changes needed**
+4. Decrypt: Lit Action calls `AuthorityGateway.hasAccessByContentId()` — **contract + Lit-dependent**
 
 #### Supernode Decentralization — Phase 1 (Completed Mar 7)
 - [x] Backup system (InterServer -> Contabo, 6h rsync)
@@ -1073,14 +1228,17 @@ Comprehensive audit of Elacity Market dApp against smart contract reference (Aut
 | `pc2-node/data/test-apps/elacity-market/index.html` | HTML structure |
 | `pc2-node/data/test-apps/elacity-market/styles.css` | All CSS including light/dark themes |
 
-### CDN Network
+### CDN Network & Content Infrastructure
 | File | Purpose |
 |------|---------|
-| `pc2-node/src/storage/ipfs.ts` | Helia node, NAT traversal, Bitswap, DHT announce, bootstrap |
-| `pc2-node/src/api/public.ts` | IPFS gateway, CDN bandwidth tracking, `/api/cdn/stats` |
-| `pc2-node/src/storage/database.ts` | `trackPinnedCID`, `getAllAnnouncableCIDs` |
-| `pc2-node/src/storage/migrations.ts` | Migration 17: `pinned_cids` table |
-| `pc2-node/src/index.ts` | Periodic DHT re-announcement loop |
+| `pc2-node/src/storage/ipfs.ts` | Helia node, NAT traversal, Bitswap, DHT announce, bootstrap, `countProviders()` |
+| `pc2-node/src/api/public.ts` | IPFS gateway, CDN bandwidth tracking, `bandwidthGuard` middleware, `/api/cdn/stats` |
+| `pc2-node/src/storage/database.ts` | `trackPinnedCID`, `getAllAnnouncableCIDs`, `getTotalPinnedSize`, `getCreatorStats` |
+| `pc2-node/src/storage/migrations.ts` | Migration 17: `pinned_cids` table; Migration 19: `content_catalog` table |
+| `pc2-node/src/index.ts` | Periodic DHT re-announcement loop, `setBandwidthLimit` init |
+| `pc2-node/src/utils/rpc.ts` | Shared Base RPC utility — 5 endpoints, round-robin, failover |
+| `pc2-node/src/services/ContentIndexerService.ts` | On-chain event scanner for content catalog (DigitalAssetRegistered events) |
+| `pc2-node/src/services/ContentSeedingService.ts` | Automatic pinning, DHT announce, disk quota enforcement |
 | `deploy/ipfs-relay/` | Standalone IPFS relay deployed on supernode |
 
 ### Lit Action (runs on Lit TEE nodes)

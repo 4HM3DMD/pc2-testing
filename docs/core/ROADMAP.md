@@ -136,8 +136,21 @@ These diagrams from Rong define the north star. Every work stream should move us
 - [x] Unified `.ddrm` capsule format — single extension for media + non-media, `type` field routing, NFT artwork thumbnails with dDRM badge, backward compat with `.edrm` and `.ddrm.json` *(completed Mar 20)*
 - [x] `.ddrm` file type support in GUI — icon, MIME, double-click routes to correct viewer *(completed Mar 4, unified Mar 20)*
 - [x] IPFS CAR format support for directory CIDs (DASH segments) *(completed Mar 4)*
-- [ ] Auto-download on purchase (trigger pin automatically after buy)
-- [ ] Auto-pin + DHT announce for purchased content (CDN effect)
+- [x] **ContentSeedingService** — automatic pinning, DHT announcement, and serve tracking for purchased content *(completed Mar 21)*
+  - Priority pin queue with configurable concurrency (`max_concurrent_pins: 3`)
+  - Dedup guard (DB + in-memory), Helia-ready guard with deferred ops, CID normalization
+  - Adaptive timeouts (180s base + 2s/MB, capped at 10min), exponential backoff retry (3 attempts)
+  - Tiered DHT re-announcement: hot (2h) / warm (6h) / cold (12h) based on `last_served_at`
+  - Startup burst re-announcement of all pinned CIDs
+  - Gap recovery: incomplete pins re-queued on restart
+  - Persistent serve tracking (`serve_count`, `last_served_at`) updated on every gateway fetch
+  - Seeding config section in `config.json` with conservative defaults
+  - Database migration 18: `last_served_at`, `serve_count`, `pin_status` columns + indexes
+  - `DELETE /api/ipfs/unpin/:cid` endpoint for explicit content removal
+  - `ipfs-assemble` WASM crate rebuilt with `opt-level = 3` (speed over size) for faster large file assembly
+- [x] Auto-download on purchase — `pinAndRegisterMedia()` in Market dApp auto-calls `POST /api/storage/ipfs/pin` → `seedContent()` after successful `buyAccess()`. Full chain: purchase → pin → DHT announce → DB tracking *(verified Mar 23)*
+  - [x] **Disk quota enforcement** — `ContentSeedingService.isQuotaExceeded()` checks `statfsSync` disk usage against `seeding.disk_quota_percent` (default 50%). Queue pauses when quota exceeded, resumes when space freed. `getStats()` reports quota status and total pinned size *(completed Mar 23)*
+  - [x] **Bandwidth enforcement** — `bandwidthGuard` middleware on all IPFS gateway routes (`/ipfs/:cid/*`). Rolling 5s window tracks bytes served, returns 503 with Retry-After when `seeding.max_upload_mbps` exceeded (default 0 = unlimited). `setBandwidthLimit()` called from config at startup *(completed Mar 23)*
 
 **Creator Tools:**
 - [x] Local media encoding pipeline — FFmpeg transcode + Bento4 fragment/package + CENC-AES-128-CTR encrypt + DASH packaging + IPFS upload. Adaptive codec selection (NVIDIA GPU / SVT-AV1 / x264). Creator Dashboard integration with detailed sub-step progress UI. Chipotle Lit Action CEK encryption. **E2E verified Mar 18**: Creator mint → buy → download → DASH playback inside PC2. *(completed Mar 17-18)*
@@ -217,7 +230,7 @@ These diagrams from Rong define the north star. Every work stream should move us
   - [x] **Marketplace feedback fixes (Mar 20)** — Token-gating full CRUD (add/edit/remove thresholds with on-chain `configureTokenOwnershipAccess`), plan UPDATE action (not just add/remove), per-tab earnings badge counts (assets/channels/offers), expanded earnings fields (per-wallet balances, governance volume, floor price, subscriber count, channel type), multi-token withdrawal UI (USDC+ETH with batch multicall), TradeGateway royalty offers verified
   - [x] **My Channels management hub (Mar 20)** — New tab in Earnings with channel list, "Edit Details" / "Manage Plans" buttons, centralized channel administration. Server-side `creator` filter via `ChannelQueryInput`. GraphQL schema introspection for correct mutation formats (`SubscriptionPlanUpdateAction.args` wrapper, `TokenOwnershipInput` field names, `price` as String)
   - [x] **API hardening (Mar 20)** — Enhanced `gql()` error handling captures response body for non-200 errors, debug logging on mutations, auto SIWE re-auth on expired tokens, `RETRIEVE_CHANNEL_QUERY` now includes `categories` field
-  - [ ] **Audio routing fix** — Remove audio passthrough from dDRM Viewer; ensure all audio routes through Media Runtime encoding pipeline (DASH segments, per-segment WASM decrypt) for consistent security model
+  - [x] **Audio routing fix** — Creator Dashboard routes all audio through media encoding pipeline (DASH/CENC). Audio passthrough in dDRM Viewer retained as legacy fallback only. New audio always goes through Media Runtime *(verified Mar 21)*
 - [ ] **Tier 2 — Medium Markets (local runtime integration):** dApp Store, AI models (GGUF → Ollama), code packages (npm), datasets, HTML5 games. Need PC2 backend endpoints for decrypt-and-load.
 - [ ] **Tier 3 — Complex Markets (ElastOS Runtime v2):** Native software/games, API marketplace, agent marketplace. Need Runtime capsule sandboxes (WASM/Firecracker). Runtime v2 capsule model provides isolated execution for all interactive content types (3D, games, dApps) — capability tokens replace blob URLs.
 
@@ -324,6 +337,7 @@ These diagrams from Rong define the north star. Every work stream should move us
 - [x] Selective IPFS DHT announcement for dDRM content (`announce: true`) *(completed Mar 5 — dht.provide + periodic re-announce)*
 - [x] Marketplace UI within ElastOS (browse, purchase, download) *(completed Mar 3-4 — Elacity Market dApp)*
 - [x] Buyer node becomes seeder (CDN effect for encrypted content) *(completed Mar 5-6 — Bitswap-first + NAT traversal + relay)*
+- [x] **P2P content discovery** — catalog API enriched with `is_local` flag (cross-references pinned CIDs), `GET /api/catalog/providers/:cid` endpoint for on-demand DHT provider counting, `countProviders()` method on IPFSStorage. Enables fully decentralized content browsing without Elacity GraphQL *(completed Mar 23)*
 - [ ] Incentivized encrypted content CDN — PC2 buyer nodes collectively serve encrypted segments via IPFS Bitswap. Bandwidth contribution tracking per node. Popular content auto-replicates across buyer network. Economic incentive via dDRM contribution credits
 
 **Universal Asset Marketplace (dDRM beyond media):**
@@ -339,8 +353,11 @@ These diagrams from Rong define the north star. Every work stream should move us
 - [x] **dDRM Viewer** — dedicated secure viewer app with native PC2 windowing, scrollable document view, .ddrm.json capsule support *(completed Mar 15)*
 - [x] **GUI file type integration** — `.ddrm.json` icon, MIME, double-click → dDRM Viewer *(completed Mar 15)*
 - [x] **PC2 Media Runtime** — server-side DASH/CENC decryption: Rust WASM cenc-decrypt crate + MSE player + DRM stripping + Lit CEK recovery. End-to-end video playback verified *(completed Mar 16)*
-- [x] **Lit Chipotle migration** — Datil deprecated ~April 25, 2026. Replaced v7 SDK with REST API. `chipotle-client.ts` module, `LIT_BACKEND` feature flag, dual-mode rollback. Non-media + media encrypt/decrypt E2E verified on new dev network. Auto-provisioning coded. **RELEASE BLOCKER: supernode deployment pending.** See `docs/core/LIT_PRODUCTION_CHECKLIST.md` *(completed Mar 13-18)*
-- [ ] On-chain content indexer — replace Elacity GraphQL dependency with event scanner (The Graph / custom). See [DECENTRALIZATION_STATUS.md](./DECENTRALIZATION_STATUS.md) Tier 1.1
+- [x] **Lit Chipotle migration** — Datil deprecated ~April 25, 2026. Replaced v7 SDK with REST API. `chipotle-client.ts` module, `LIT_BACKEND` feature flag, dual-mode rollback. Non-media + media encrypt/decrypt E2E verified on new dev network. Auto-provisioning coded. **CRITICAL: Mar 21 — Chipotle TEE restarted with breaking changes (IIFE → `async function main(params)` pattern). All 4 Lit Action scripts rewritten, CIDs re-registered, PKP re-added to group. See SESSION_HANDOVER.md.** *(completed Mar 13-18, breaking change fix Mar 21)*
+- [x] **On-chain content indexer** — `ContentIndexerService` scans Base chain for `DigitalAssetRegistered` events from CoreStorage, builds local `content_catalog` SQLite table. Versioned contract support (v2 now, v3 config-only swap). Metadata resolution from IPFS (local-first, gateway fallback). API: `GET /api/catalog`, `GET /api/catalog/stats`, `GET /api/catalog/content/:contentId`. RPC failover with rotation. Replaces Elacity GraphQL dependency for content discovery *(completed Mar 21)*
+  - Database migration 19: `content_catalog` table with indexes (creator, type, content_id, channel, status, block)
+  - Configurable scan interval (default 30min), max blocks per scan (10K), metadata fetch concurrency (3)
+  - Versioned contract design: when v3 contracts deploy, add `"v3": { "core_storage": "0xNEW...", "from_block": N }` to config — no code changes needed
 - [ ] Self-provisioned RLI tokens — each PC2 node mints own capacity credits, removes Elacity wallet dependency. See Tier 1.3
 - [ ] AI Model Marketplace alpha — encrypt GGUF/SafeTensors model → IPFS → ACCESS_TOKEN → decrypt on PC2 → load in Ollama
 - [ ] Code/Plugin Marketplace — dDRM-gated npm packages, themes, extensions
@@ -402,6 +419,7 @@ These diagrams from Rong define the north star. Every work stream should move us
 - [ ] List Access Tokens on Elacity Market alongside media content
 - [ ] Bandwidth metering and attestation for proportional revenue distribution
 - [ ] On-chain SupernodeOperatorRegistry for trustless operator management
+- [ ] **Supernode RPC Service (Tier 2)** — supernodes offer cached/load-balanced Base RPC as a gated service. Leaf nodes route on-chain reads through their supernode instead of hitting public RPCs directly. Benefits: reduced rate-limit pressure on public endpoints, lower latency for content indexer scans, revenue via Access Token gating (premium RPC tier with higher rate limits). Implementation: caching reverse proxy (e.g. erigon light node or simple response cache) in front of Base RPC, exposed via supernode gateway endpoint, Access Token verification at gateway layer. Foundation: shared `rpc.ts` utility already supports endpoint rotation — adding a supernode RPC URL to the pool is a config change
 - [ ] See [SUPERNODE_ECONOMICS.md](./SUPERNODE_ECONOMICS.md) for full strategy
 
 **Network Infrastructure:**
@@ -771,7 +789,7 @@ Starting Month 1 (March 2026):
 |---------|--------|-------|
 | v1.1.0 | March 2026 | Merge Jetson branch, bug fixes, AV1 player |
 | v1.2.0 | April 2026 | **Lit Chipotle dDRM** (non-media DONE, media E2E DONE Mar 18), local media encoding (FFmpeg+WASM CENC+DASH — E2E verified, Python-free), AV1 playback verified (init splitting + PSSH strip), WASM optimization (mp4-split Rust crate, IPFS chunk assembly, decrypt limit 200MB, player UX), **Universal Asset Viewers** (3D models with VFX features, CSV datasets, fonts, archives — Tier 1 completion), audio routing fix (all audio through Media Runtime DASH), supernode provisioning ready (deploy when Lit Chipotle production network goes live), hardware expansion, installer improvements, WireGuard bundling |
-| v1.3.0 | May 2026 | IPFS streaming chunk assembly (production reliability — OOM fix for large files on Jetson), AI Model Marketplace alpha (GGUF→Ollama), on-chain content indexer, dApp bundles, `@elacity-js/asset-packager` |
+| v1.3.0 | May 2026 | IPFS streaming chunk assembly (production reliability — OOM fix for large files on Jetson), AI Model Marketplace alpha (GGUF→Ollama), on-chain content indexer (**DONE** — ContentIndexerService), dApp bundles, `@elacity-js/asset-packager` |
 | v1.4.0 | June 2026 | Multi-rendition encoding, fiat onramp, AI serialization optimization (MessagePack), signed capsule format (bridge to Runtime) |
 | v1.5.0 | July 2026 | dApp Store v1 (categories, ratings, HTML5 games), mobile companion alpha |
 | v1.6.0 | August 2026 | Signed capsule format (bridge to Runtime), Supernode Access Tokens, bandwidth metering |

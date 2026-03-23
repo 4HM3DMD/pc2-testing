@@ -1548,6 +1548,38 @@ export class IPFSStorage {
   }
 
   /**
+   * Count DHT providers for a CID without fetching content.
+   * Returns the number of peers advertising they have this content.
+   * Times out after the specified duration (default 8s).
+   */
+  async countProviders(cidString: string, timeoutMs = 8000): Promise<number> {
+    if (!this.canAnnounce()) return -1;
+
+    try {
+      const { CID } = await import('multiformats/cid');
+      const cidObj = CID.parse(cidString);
+      const dht = (this.helia!.libp2p.services as any).dht;
+      if (!dht) return -1;
+
+      let count = 0;
+      const signal = AbortSignal.timeout(timeoutMs);
+
+      for await (const event of dht.findProviders(cidObj, { signal })) {
+        if (event.name === 'PROVIDER') {
+          count += event.providers.length;
+        }
+      }
+      return count;
+    } catch (e: any) {
+      if (e.message?.includes('abort') || e.message?.includes('timeout')) {
+        return 0;
+      }
+      log.debug(`[IPFS] countProviders error for ${cidString}: ${e.message}`);
+      return -1;
+    }
+  }
+
+  /**
    * Stop IPFS node gracefully
    */
   async stop(): Promise<void> {
