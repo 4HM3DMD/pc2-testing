@@ -69,7 +69,8 @@
     viewedAssets: {},
     initializing: true,
     libraryFilter: 'all',
-    pinnedCIDs: null
+    pinnedCIDs: null,
+    showAdultContent: false
   };
 
   // ── DOM References ───────────────────────────────────
@@ -304,6 +305,16 @@
     if (item._rawMeta && item._rawMeta.licensing && item._rawMeta.licensing.aiTraining) {
       return !!item._rawMeta.licensing.aiTraining.permitted;
     }
+    return false;
+  }
+
+  function isAdultContent(item) {
+    var attrs = (item.metadata && item.metadata.attributes) || [];
+    for (var i = 0; i < attrs.length; i++) {
+      if (attrs[i].trait_type === 'Adult Content' && attrs[i].value === '18+') return true;
+    }
+    if (item._rawMeta && item._rawMeta.adult) return true;
+    if (item.metadata && item.metadata.adult) return true;
     return false;
   }
 
@@ -577,6 +588,7 @@
       ? '<span class="price-badge owned-badge">✓ Owned</span>'
       : (price ? '<span class="price-badge">' + price + '</span>' : '');
     var aiBadge = hasAITrainingPermitted(item) ? '<span class="ai-training-badge" title="AI training permitted">AI</span>' : '';
+    var adultBadge = isAdultContent(item) ? '<span class="adult-content-badge" title="Adult content (18+)">18+</span>' : '';
 
     var thumbContent = imageUrl
       ? '<img src="' + escapeHtml(imageUrl) + '" alt="' + title + '" loading="lazy" onerror="this.style.display=\'none\';this.nextElementSibling&&this.nextElementSibling.classList.remove(\'hidden\')" />' +
@@ -589,6 +601,7 @@
         contentBadge +
         priceBadge +
         aiBadge +
+        adultBadge +
       '</div>' +
       '<div class="video-card-info">' +
         '<div class="video-card-avatar">' + avatarContent + '</div>' +
@@ -674,6 +687,11 @@
 
         state.browseTotal = result.total;
         var validItems = (result.data || []).filter(function (item) { return item !== null; });
+        if (state.showAdultContent) {
+          validItems = validItems.filter(function (item) { return isAdultContent(item); });
+        } else {
+          validItems = validItems.filter(function (item) { return !isAdultContent(item); });
+        }
         state.browseItems = state.browseItems.concat(validItems);
         state.browseOffset += result.data ? result.data.length : 0;
         var baseIndex = state.browseItems.length - validItems.length;
@@ -1186,6 +1204,7 @@
     dom.detailAttributes.innerHTML = attrHtml;
 
     renderAITrainingBadge(nft);
+    renderAdultContentBadge(nft);
 
     window.dispatchEvent(new CustomEvent('ela-detail-rendered', { detail: { nft: nft } }));
   }
@@ -1256,6 +1275,26 @@
     html += '<span class="ai-training-detail-scope">' + escapeHtml(scope) + ' use</span>';
     html += '</div>';
     return html;
+  }
+
+  function renderAdultContentBadge(nft) {
+    var el = document.getElementById('detail-adult-content');
+    if (!el) return;
+
+    if (isAdultContent(nft)) {
+      var html = '<div class="adult-content-detail">';
+      html += '<div class="adult-content-detail-header">';
+      html += '<span class="adult-content-detail-icon">⚠</span>';
+      html += '<span class="adult-content-detail-title">Adult Content (18+)</span>';
+      html += '</div>';
+      html += '<span class="adult-content-detail-note">This content has been flagged as adult material</span>';
+      html += '</div>';
+      el.innerHTML = html;
+      el.classList.remove('hidden');
+    } else {
+      el.innerHTML = '';
+      el.classList.add('hidden');
+    }
   }
 
   function renderOwnershipBalances(nft) {
@@ -3416,7 +3455,15 @@
     dom.feedFilterChips.addEventListener('click', function (e) {
       var chip = e.target.closest('.filter-chip');
       if (!chip) return;
-      dom.feedFilterChips.querySelectorAll('.filter-chip').forEach(function (c) { c.classList.remove('active'); });
+
+      if (chip.dataset.toggle === 'adult') {
+        state.showAdultContent = !state.showAdultContent;
+        chip.classList.toggle('active', state.showAdultContent);
+        loadBrowse(false);
+        return;
+      }
+
+      dom.feedFilterChips.querySelectorAll('.filter-chip:not([data-toggle])').forEach(function (c) { c.classList.remove('active'); });
       chip.classList.add('active');
       if (chip.dataset.category) {
         state.activeCategory = chip.dataset.category;

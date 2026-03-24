@@ -231,6 +231,7 @@ const DAG_MIME_TYPES: Record<string, string> = {
   '.xml': 'application/xml',
   '.json': 'application/json',
   '.txt': 'text/plain',
+  '.md': 'text/markdown',
 };
 
 function mimeFromPath(filePath: string): string {

@@ -76,6 +76,8 @@
         <button class="filter-chip" data-category="" data-type="video">Video</button>
         <button class="filter-chip" data-category="" data-type="audio">Audio</button>
         <button class="filter-chip" data-category="" data-type="image">Image</button>
+        <span class="filter-chip-divider" style="width:1px;background:var(--border);align-self:stretch;margin:0 4px;flex-shrink:0"></span>
+        <button class="filter-chip adult-filter-chip" id="adult-filter-toggle" data-toggle="adult" title="Show adult content (18+)">18+</button>
       </div>
       <div id="nft-grid" class="content-grid"></div>
       <div id="browse-loading" class="loading-indicator hidden"></div>
@@ -380,6 +382,9 @@
 
           <!-- AI Training Badge -->
           <div id="detail-ai-training" class="hidden"></div>
+
+          <!-- Adult Content Badge -->
+          <div id="detail-adult-content" class="hidden"></div>
 
           <!-- Market Section (collapsible) -->
           <div id="detail-market-section" class="collapsible-section">

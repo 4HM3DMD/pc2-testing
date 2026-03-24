@@ -382,6 +382,7 @@
     '.woff2': 'font/woff2',
     '.ttf': 'font/ttf',
     '.otf': 'font/otf',
+    '.md': 'text/markdown',
     '.csv': 'text/csv',
     '.tsv': 'text/tab-separated-values',
     '.gz': 'application/gzip',
@@ -431,6 +432,7 @@
     else if (resolvedMime.startsWith('audio/')) autoCategory = 'audio';
     else if (resolvedMime.startsWith('image/')) autoCategory = 'image';
     else if (resolvedMime === 'application/pdf') autoCategory = 'ebook';
+    else if (resolvedMime === 'text/markdown' && file.name.match(/skill/i)) autoCategory = 'skill';
     else if (resolvedMime.startsWith('text/')) autoCategory = 'document';
     else if (resolvedMime === 'application/json') autoCategory = 'dataset';
     else if (resolvedMime === 'font/ttf' || resolvedMime === 'font/otf' || resolvedMime === 'font/woff' || resolvedMime === 'font/woff2') autoCategory = 'font';
@@ -2185,6 +2187,12 @@
       if (hasAITraining) {
         assetAttributes.push({ trait_type: 'AI Training', value: 'Allowed' });
       }
+      if (category === 'skill') {
+        assetAttributes.push({ trait_type: 'Content Type', value: 'AI Agent Skill' });
+      }
+      if (isAdultContent) {
+        assetAttributes.push({ trait_type: 'Adult Content', value: '18+' });
+      }
 
       var metaParams = {
         title: title,
@@ -2742,6 +2750,10 @@
     if (ltHidden) ltHidden.value = 'perpetual';
     var aiToggle = document.getElementById('ai-training-toggle');
     if (aiToggle) { aiToggle.classList.remove('active'); aiToggle.setAttribute('aria-checked', 'false'); }
+    var adultToggle = document.getElementById('adult-toggle');
+    if (adultToggle) { adultToggle.classList.remove('active'); adultToggle.setAttribute('aria-checked', 'false'); }
+    var adultCheck = document.getElementById('adult-content-check');
+    if (adultCheck) adultCheck.checked = false;
 
     PROGRESS_STEPS.forEach(function (id) {
       setProgStep(id, 'Waiting...', '');
@@ -3106,6 +3118,16 @@
       });
     }
 
+    var adultToggle = document.getElementById('adult-toggle');
+    if (adultToggle) {
+      adultToggle.addEventListener('click', function () {
+        var isActive = adultToggle.classList.toggle('active');
+        adultToggle.setAttribute('aria-checked', String(isActive));
+        var hidden = document.getElementById('adult-content-check');
+        if (hidden) hidden.checked = isActive;
+      });
+    }
+
     // Step 2 form validation
     ['input', 'change'].forEach(function (evt) {
       dom.assetTitle.addEventListener(evt, validateStep2);
@@ -3176,6 +3198,10 @@
         var licensingData = getLicensingData();
         if (licensingData.type === 'training-rights') {
           rows.push({ label: 'AI Training', value: 'Allowed (' + (licensingData.aiTraining.scope || 'commercial') + ')' });
+        }
+        var adultCheck = document.getElementById('adult-content-check');
+        if (adultCheck && adultCheck.checked) {
+          rows.push({ label: 'Adult Content', value: '18+ Flagged' });
         }
         reviewEl.innerHTML = rows.map(function (r) {
           return '<div class="review-row"><span class="review-label">' + r.label + '</span><span class="review-value">' + r.value + '</span></div>';
