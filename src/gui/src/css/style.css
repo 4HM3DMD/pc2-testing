@@ -2328,8 +2328,8 @@ html:not([data-theme="light"]) {
 [data-theme="light"] .topbar .toolbar-puter-logo {
     filter: none;
 }
-/* Counter-invert profile photo so it stays natural */
-[data-theme="light"] .topbar .toolbar-btn .profile-image {
+/* Counter-invert profile photo so actual photos stay natural (not the default SVG icon) */
+[data-theme="light"] .topbar .toolbar-btn .profile-image.profile-image-has-picture {
     filter: invert(1);
 }
 /* Counter-invert PC2 status dot so it stays green (connected) / orange (disconnected) */

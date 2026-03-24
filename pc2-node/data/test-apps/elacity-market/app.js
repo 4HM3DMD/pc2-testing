@@ -296,6 +296,17 @@
     return null;
   }
 
+  function hasAITrainingPermitted(item) {
+    var attrs = (item.metadata && item.metadata.attributes) || [];
+    for (var i = 0; i < attrs.length; i++) {
+      if (attrs[i].trait_type === 'AI Training' && attrs[i].value === 'Allowed') return true;
+    }
+    if (item._rawMeta && item._rawMeta.licensing && item._rawMeta.licensing.aiTraining) {
+      return !!item._rawMeta.licensing.aiTraining.permitted;
+    }
+    return false;
+  }
+
   function isNonMediaAsset(nft) {
     var meta = nft.metadata || {};
     var media = meta.media || {};
@@ -565,6 +576,7 @@
     var priceBadge = isOwned
       ? '<span class="price-badge owned-badge">✓ Owned</span>'
       : (price ? '<span class="price-badge">' + price + '</span>' : '');
+    var aiBadge = hasAITrainingPermitted(item) ? '<span class="ai-training-badge" title="AI training permitted">AI</span>' : '';
 
     var thumbContent = imageUrl
       ? '<img src="' + escapeHtml(imageUrl) + '" alt="' + title + '" loading="lazy" onerror="this.style.display=\'none\';this.nextElementSibling&&this.nextElementSibling.classList.remove(\'hidden\')" />' +
@@ -576,6 +588,7 @@
         thumbContent +
         contentBadge +
         priceBadge +
+        aiBadge +
       '</div>' +
       '<div class="video-card-info">' +
         '<div class="video-card-avatar">' + avatarContent + '</div>' +
@@ -1164,12 +1177,15 @@
       attrHtml += '<div class="attribute-chip"><span class="attr-label">Type</span><span class="attr-value">' + escapeHtml(media.contentType) + '</span></div>';
     }
     attrs.forEach(function (attr) {
+      if (attr.trait_type === 'AI Training') return;
       attrHtml += '<div class="attribute-chip">' +
         '<span class="attr-label">' + escapeHtml(attr.trait_type || '') + '</span>' +
         '<span class="attr-value">' + escapeHtml(String(attr.value || '')) + '</span>' +
         '</div>';
     });
     dom.detailAttributes.innerHTML = attrHtml;
+
+    renderAITrainingBadge(nft);
 
     window.dispatchEvent(new CustomEvent('ela-detail-rendered', { detail: { nft: nft } }));
   }
@@ -1196,6 +1212,50 @@
     html += '</div>';
     dom.detailRoyaltyInfo.innerHTML = html;
     dom.detailRoyaltyInfo.classList.remove('hidden');
+  }
+
+  function renderAITrainingBadge(nft) {
+    var el = document.getElementById('detail-ai-training');
+    if (!el) return;
+
+    var permitted = hasAITrainingPermitted(nft);
+
+    if (!permitted && nft._rawMeta && nft._rawMeta.licensing && nft._rawMeta.licensing.aiTraining) {
+      permitted = !!nft._rawMeta.licensing.aiTraining.permitted;
+    }
+
+    if (!permitted) {
+      var tokenURI = nft.tokenURI || '';
+      if (tokenURI) {
+        fetchRawMetadataLocalFirst(tokenURI)
+          .then(function (rawMeta) {
+            if (rawMeta && rawMeta.licensing && rawMeta.licensing.aiTraining && rawMeta.licensing.aiTraining.permitted) {
+              el.innerHTML = buildAITrainingBadgeHtml(rawMeta.licensing);
+              el.classList.remove('hidden');
+            }
+          })
+          .catch(function () {});
+      }
+      el.classList.add('hidden');
+      return;
+    }
+
+    var licensing = (nft._rawMeta && nft._rawMeta.licensing) || {};
+    el.innerHTML = buildAITrainingBadgeHtml(licensing);
+    el.classList.remove('hidden');
+  }
+
+  function buildAITrainingBadgeHtml(licensing) {
+    var ai = (licensing && licensing.aiTraining) || {};
+    var scope = ai.scope ? ai.scope.charAt(0).toUpperCase() + ai.scope.slice(1) : 'Commercial';
+    var html = '<div class="ai-training-detail">';
+    html += '<div class="ai-training-detail-header">';
+    html += '<span class="ai-training-detail-icon">✦</span>';
+    html += '<span class="ai-training-detail-title">AI Training Allowed</span>';
+    html += '</div>';
+    html += '<span class="ai-training-detail-scope">' + escapeHtml(scope) + ' use</span>';
+    html += '</div>';
+    return html;
   }
 
   function renderOwnershipBalances(nft) {

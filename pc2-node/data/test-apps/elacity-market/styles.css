@@ -512,6 +512,64 @@ body {
 .wallet-badge-sa { background: #8b5cf6; color: #fff; }
 .wallet-badge-both { background: #10b981; color: #fff; }
 
+/* AI Training badge on card thumbnails */
+.video-card-thumb .ai-training-badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 7px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  line-height: 1;
+  color: #fff;
+  background: linear-gradient(135deg, #007aff 0%, #5856d6 100%);
+  border-radius: 4px;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
+}
+
+/* AI Training detail badge */
+.ai-training-detail {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  background: linear-gradient(135deg, rgba(0, 122, 255, 0.08) 0%, rgba(88, 86, 214, 0.08) 100%);
+  border: 1px solid rgba(0, 122, 255, 0.2);
+  border-radius: var(--radius-sm, 8px);
+  margin-bottom: 12px;
+}
+.ai-training-detail-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ai-training-detail-icon {
+  font-size: 16px;
+  color: #007aff;
+  line-height: 1;
+}
+.ai-training-detail-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #007aff;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
+}
+.ai-training-detail-scope {
+  font-size: 12px;
+  color: var(--text-muted, #8e8e93);
+  margin-left: auto;
+}
+
+/* Light mode adjustments */
+[data-theme="light"] .ai-training-detail {
+  background: linear-gradient(135deg, rgba(0, 122, 255, 0.06) 0%, rgba(88, 86, 214, 0.06) 100%);
+  border-color: rgba(0, 122, 255, 0.15);
+}
+
 .video-card-info {
   display: flex;
   gap: 10px;

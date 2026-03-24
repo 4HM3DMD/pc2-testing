@@ -64,6 +64,11 @@ function initMintButton() {
                 font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif;
                 user-select: none;
             }
+            html[data-theme="light"] .mint-dropdown {
+                background: rgba(255, 255, 255, 0.95);
+                border: 1px solid rgba(0,0,0,0.1);
+                box-shadow: 0 8px 32px rgba(0,0,0,0.12);
+            }
             .mint-dropdown-header {
                 display: flex;
                 align-items: center;
@@ -74,6 +79,7 @@ function initMintButton() {
                 font-weight: 600;
                 letter-spacing: -0.01em;
             }
+            html[data-theme="light"] .mint-dropdown-header { color: #1a1a1a; }
             .mint-drop-zone {
                 border: 1.5px dashed rgba(255,255,255,0.18);
                 border-radius: 10px;
@@ -86,19 +92,31 @@ function initMintButton() {
                 cursor: pointer;
                 transition: all 0.2s ease;
             }
+            html[data-theme="light"] .mint-drop-zone {
+                border-color: rgba(0,0,0,0.15);
+            }
             .mint-drop-zone:hover,
             .mint-drop-zone.drag-over {
                 border-color: rgba(255,255,255,0.35);
                 background: rgba(255,255,255,0.04);
             }
+            html[data-theme="light"] .mint-drop-zone:hover,
+            html[data-theme="light"] .mint-drop-zone.drag-over {
+                border-color: rgba(0,0,0,0.3);
+                background: rgba(0,0,0,0.03);
+            }
             .mint-drop-zone.drag-over svg { stroke: #fff; }
+            html[data-theme="light"] .mint-drop-zone.drag-over svg { stroke: #333; }
+            html[data-theme="light"] .mint-drop-zone svg { stroke: #999; }
             .mint-drop-zone-text {
                 color: #999;
                 font-size: 12px;
                 text-align: center;
                 line-height: 1.4;
             }
+            html[data-theme="light"] .mint-drop-zone-text { color: #666; }
             .mint-drop-zone-browse { color: #6b9fff; cursor: pointer; }
+            html[data-theme="light"] .mint-drop-zone-browse { color: #3b82f6; }
             .mint-hint {
                 color: #555;
                 font-size: 10px;
@@ -106,11 +124,13 @@ function initMintButton() {
                 margin-top: 10px;
                 line-height: 1.4;
             }
+            html[data-theme="light"] .mint-hint { color: #999; }
             .mint-queue-divider {
                 height: 1px;
                 background: rgba(255,255,255,0.08);
                 margin: 14px 0 10px;
             }
+            html[data-theme="light"] .mint-queue-divider { background: rgba(0,0,0,0.08); }
             .mint-queue-header {
                 display: flex;
                 align-items: center;
@@ -120,6 +140,7 @@ function initMintButton() {
                 font-size: 11px;
                 font-weight: 500;
             }
+            html[data-theme="light"] .mint-queue-header { color: #666; }
             .mint-queue-count {
                 background: rgba(255,255,255,0.1);
                 color: #ccc;
@@ -127,6 +148,7 @@ function initMintButton() {
                 padding: 1px 6px;
                 border-radius: 8px;
             }
+            html[data-theme="light"] .mint-queue-count { background: rgba(0,0,0,0.06); color: #666; }
             .mint-queue-list {
                 max-height: 180px;
                 overflow-y: auto;
@@ -144,6 +166,7 @@ function initMintButton() {
                 transition: background 0.15s;
             }
             .mint-queue-item:hover { background: rgba(255,255,255,0.06); }
+            html[data-theme="light"] .mint-queue-item:hover { background: rgba(0,0,0,0.04); }
             .mint-queue-icon { font-size: 20px; flex-shrink: 0; width: 28px; text-align: center; }
             .mint-queue-info { flex: 1; min-width: 0; }
             .mint-queue-title {
@@ -154,7 +177,9 @@ function initMintButton() {
                 overflow: hidden;
                 text-overflow: ellipsis;
             }
+            html[data-theme="light"] .mint-queue-title { color: #1a1a1a; }
             .mint-queue-meta { color: #666; font-size: 10px; margin-top: 2px; }
+            html[data-theme="light"] .mint-queue-meta { color: #999; }
             .mint-queue-actions {
                 display: flex;
                 flex-direction: column;
@@ -171,6 +196,7 @@ function initMintButton() {
                 gap: 2px;
                 cursor: pointer;
             }
+            html[data-theme="light"] .mint-queue-sign { color: #3b82f6; }
             .mint-queue-cancel {
                 color: #666;
                 font-size: 10px;
@@ -178,23 +204,40 @@ function initMintButton() {
                 transition: color 0.15s;
             }
             .mint-queue-cancel:hover { color: #ef4444; }
+            .toolbar, .topbar {
+                overflow: visible !important;
+            }
+            .mint-toolbar-btn {
+                overflow: visible !important;
+                position: relative;
+            }
             .mint-badge {
                 position: absolute;
-                top: -2px;
-                right: -2px;
-                min-width: 14px;
-                height: 14px;
-                border-radius: 7px;
-                background: #3b82f6;
+                top: -4px;
+                right: -6px;
+                min-width: 16px;
+                height: 16px;
+                border-radius: 9px;
+                background: #007aff;
                 color: #fff;
-                font-size: 9px;
+                font-size: 10px;
                 font-weight: 700;
                 display: flex;
                 align-items: center;
                 justify-content: center;
-                padding: 0 3px;
+                padding: 0 4px;
                 line-height: 1;
-                z-index: 1;
+                z-index: 10;
+                box-sizing: border-box;
+                pointer-events: none;
+                border: 2px solid rgba(26, 26, 26, 0.7);
+                font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
+            }
+            [data-theme="light"] .mint-badge {
+                border-color: rgba(231, 238, 245, 0.9);
+            }
+            [data-theme="light"] .topbar .mint-badge {
+                filter: invert(1);
             }
         </style>
     `);
@@ -211,7 +254,9 @@ function initMintButton() {
         cachedDraftCount = count;
         $('.mint-toolbar-btn .mint-badge').remove();
         if (count > 0) {
-            $('.mint-toolbar-btn').append(`<span class="mint-badge">${count}</span>`);
+            $('.mint-toolbar-btn').each(function () {
+                $(this).append(`<span class="mint-badge">${count}</span>`);
+            });
         }
     };
 
@@ -255,6 +300,22 @@ function initMintButton() {
     };
 
     insertButton();
+
+    // Listen for postMessage from Creator app iframe
+    window.addEventListener('message', function (e) {
+        if (!e.data) return;
+        if (e.data.msg === 'mint-draft-saved') {
+            setTimeout(fetchBadgeCount, 300);
+        }
+        if (e.data.msg === 'mint-close-creator') {
+            // Find and close the Creator app window from the shell side
+            const $creatorWin = $(`.window[data-app="elacity-creator"]`);
+            if ($creatorWin.length) {
+                $creatorWin.close({ bypass_iframe_messaging: true });
+            }
+            setTimeout(fetchBadgeCount, 500);
+        }
+    });
 
     const closeDropdown = () => { $('.mint-dropdown').remove(); };
 

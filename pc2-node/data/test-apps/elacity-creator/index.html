@@ -341,74 +341,9 @@
               <input type="hidden" id="license-attribution" value="true" />
 
               <input type="hidden" id="license-type" value="perpetual" />
-
-              <!-- AI Training details — visible when AI training toggle is on -->
-              <div id="ai-training-panel" class="ai-training-panel" style="display:none;">
-
-                <div class="form-group">
-                  <label>Who can train on it?</label>
-                  <div class="access-cards" id="training-scope-cards" style="grid-template-columns: repeat(3, 1fr);">
-                    <div class="access-card" data-value="research">
-                      <span class="access-card-title">Research Only</span>
-                      <span class="access-card-desc">Academic and non-profit use</span>
-                    </div>
-                    <div class="access-card selected" data-value="commercial">
-                      <span class="access-card-title">Commercial</span>
-                      <span class="access-card-desc">Companies building products</span>
-                    </div>
-                    <div class="access-card" data-value="both">
-                      <span class="access-card-title">Anyone</span>
-                      <span class="access-card-desc">No restrictions on who trains</span>
-                    </div>
-                  </div>
-                  <input type="hidden" id="training-scope" value="commercial" />
-                </div>
-
-                <div class="form-group">
-                  <label>What types of AI models?</label>
-                  <span class="field-hint">Select which kinds of AI can be trained on your data</span>
-                  <div class="model-type-chips" id="model-type-chips">
-                    <label class="model-chip selected"><input type="checkbox" value="llm" checked hidden /><span>Text / LLM</span></label>
-                    <label class="model-chip selected"><input type="checkbox" value="vision" checked hidden /><span>Image / Vision</span></label>
-                    <label class="model-chip"><input type="checkbox" value="audio" hidden /><span>Audio / Speech</span></label>
-                    <label class="model-chip"><input type="checkbox" value="code" hidden /><span>Code</span></label>
-                    <label class="model-chip"><input type="checkbox" value="multimodal" hidden /><span>Multimodal</span></label>
-                    <label class="model-chip"><input type="checkbox" value="diffusion" hidden /><span>Image Gen</span></label>
-                    <label class="model-chip"><input type="checkbox" value="embedding" hidden /><span>Search / Embedding</span></label>
-                  </div>
-                </div>
-
-                <div class="form-group">
-                  <div class="toggle-row">
-                    <div class="toggle-track" id="training-derivatives" role="switch" aria-checked="false" tabindex="0">
-                      <div class="toggle-knob"></div>
-                    </div>
-                    <div class="toggle-label-group">
-                      <span class="toggle-label">Allow derivative works</span>
-                      <span class="field-hint">The trained model's outputs can be used to create new datasets</span>
-                    </div>
-                  </div>
-                </div>
-
-                <div class="form-group">
-                  <label>Who owns what the AI creates?</label>
-                  <div class="access-cards" id="output-ownership-cards" style="grid-template-columns: repeat(3, 1fr);">
-                    <div class="access-card" data-value="licensor">
-                      <span class="access-card-title">You</span>
-                      <span class="access-card-desc">You own outputs from models trained on your data</span>
-                    </div>
-                    <div class="access-card selected" data-value="licensee">
-                      <span class="access-card-title">Buyer</span>
-                      <span class="access-card-desc">The person who trains the model owns the output</span>
-                    </div>
-                    <div class="access-card" data-value="shared">
-                      <span class="access-card-title">Shared</span>
-                      <span class="access-card-desc">Both you and the buyer share ownership</span>
-                    </div>
-                  </div>
-                  <input type="hidden" id="output-ownership" value="licensee" />
-                </div>
-              </div>
+              <!-- Smart defaults for AI training details (no UI — kept simple) -->
+              <input type="hidden" id="training-scope" value="commercial" />
+              <input type="hidden" id="output-ownership" value="licensee" />
 
             </div>
           </div>
@@ -545,15 +480,16 @@
           </div>
         </div>
 
-        <!-- Confirmation summary (hidden, populated by JS) -->
-        <div id="confirmation-summary" style="display:none;"></div>
 
         <div id="progress-error" class="progress-error hidden"></div>
 
         <div class="step-actions" style="flex-direction: column; gap: 8px;">
           <button class="btn btn-publish" id="btn-sign-mint" disabled>Publish</button>
           <p class="publish-hint">This will request a blockchain transaction from your wallet</p>
-          <button class="btn btn-secondary" id="btn-back-to-2" disabled style="align-self: flex-start;">Back</button>
+          <div style="display: flex; gap: 8px; align-self: stretch;">
+            <button class="btn btn-secondary" id="btn-back-to-2" disabled>Back</button>
+            <button class="btn btn-secondary" id="btn-publish-later" style="display:none; margin-left: auto;">Publish Later</button>
+          </div>
         </div>
       </section>
 

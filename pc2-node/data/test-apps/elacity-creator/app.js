@@ -811,6 +811,7 @@
         address: params.creatorAddress,
         channel: params.channel || DEFAULT_CHANNEL,
       },
+      attributes: params.attributes || [],
       adult: !!params.isAdult,
       licensing: params.licensing || undefined,
       legal: params.legalAttestation || null,
@@ -1650,21 +1651,13 @@
 
     var result = { type: 'training-rights', terms: terms };
 
-    var scope = (document.getElementById('training-scope') || {}).value || 'commercial';
-    var derivativesEl = document.getElementById('training-derivatives');
-    var ownership = (document.getElementById('output-ownership') || {}).value || 'licensee';
-
-    var modelTypes = [];
-    var chips = document.querySelectorAll('#model-type-chips input[type="checkbox"]');
-    chips.forEach(function (cb) { if (cb.checked) modelTypes.push(cb.value); });
-
     result.aiTraining = {
       permitted: true,
-      scope: scope,
-      modelTypes: modelTypes,
-      attribution: terms.attribution,
-      derivativeWorks: derivativesEl ? derivativesEl.classList.contains('active') : false,
-      outputOwnership: ownership,
+      scope: 'commercial',
+      modelTypes: ['llm', 'vision', 'audio', 'code', 'multimodal', 'diffusion', 'embedding'],
+      attribution: true,
+      derivativeWorks: false,
+      outputOwnership: 'licensee',
     };
 
     return result;
@@ -2187,6 +2180,11 @@
       var isAdultContent = !!(document.getElementById('adult-content-check') && document.getElementById('adult-content-check').checked);
       var legalAttestation = await buildLegalAttestation(state.walletAddress);
       var licensingData = getLicensingData();
+      var hasAITraining = licensingData.type === 'training-rights' && licensingData.aiTraining && licensingData.aiTraining.permitted;
+      var assetAttributes = [];
+      if (hasAITraining) {
+        assetAttributes.push({ trait_type: 'AI Training', value: 'Allowed' });
+      }
 
       var metaParams = {
         title: title,
@@ -2194,6 +2192,7 @@
         category: selectedCategories[0] || category,
         categories: selectedCategories.length > 0 ? selectedCategories : [category],
         tags: selectedTags,
+        attributes: assetAttributes,
         isAdult: isAdultContent,
         legalAttestation: legalAttestation,
         licensing: licensingData.type !== 'perpetual' ? licensingData : undefined,
@@ -2410,6 +2409,12 @@
         if (draftResp.ok) {
           var draftData = await draftResp.json();
           state.draftId = draftData.id;
+          // Notify parent window (desktop shell) so the publish badge updates
+          try {
+            if (window.parent && window.parent !== window) {
+              window.parent.postMessage({ msg: 'mint-draft-saved' }, '*');
+            }
+          } catch (_) {}
         }
       } catch (draftErr) {
         console.warn('[Creator] Draft auto-save failed:', draftErr.message);
@@ -2426,6 +2431,8 @@
 
       setProgStep('prog-mint', 'Ready — check the boxes below and click Sign & Mint', 'active');
       dom.btnBackTo2.disabled = false;
+      var publishLaterBtn = document.getElementById('btn-publish-later');
+      if (publishLaterBtn) publishLaterBtn.style.display = '';
       validateStep3();
 
       await new Promise(function (resolve) {
@@ -2735,10 +2742,6 @@
     if (ltHidden) ltHidden.value = 'perpetual';
     var aiToggle = document.getElementById('ai-training-toggle');
     if (aiToggle) { aiToggle.classList.remove('active'); aiToggle.setAttribute('aria-checked', 'false'); }
-    var derivToggle = document.getElementById('training-derivatives');
-    if (derivToggle) { derivToggle.classList.remove('active'); derivToggle.setAttribute('aria-checked', 'false'); }
-    var aiPanel = document.getElementById('ai-training-panel');
-    if (aiPanel) aiPanel.style.display = 'none';
 
     PROGRESS_STEPS.forEach(function (id) {
       setProgStep(id, 'Waiting...', '');
@@ -3100,37 +3103,6 @@
         aiTrainingToggle.setAttribute('aria-checked', String(isActive));
         var hidden = document.getElementById('license-type');
         if (hidden) hidden.value = isActive ? 'training-rights' : 'perpetual';
-        var panel = document.getElementById('ai-training-panel');
-        if (panel) panel.style.display = isActive ? '' : 'none';
-      });
-    }
-
-    wireCardSelector('training-scope-cards', 'training-scope');
-    wireCardSelector('output-ownership-cards', 'output-ownership');
-
-    // License term toggles removed — terms are hardcoded defaults until
-    // dApps exist that can enforce commercial use, modification, and attribution
-
-    // Training derivatives toggle
-    var trainDerivEl = document.getElementById('training-derivatives');
-    if (trainDerivEl) {
-      trainDerivEl.addEventListener('click', function () {
-        var isActive = trainDerivEl.classList.toggle('active');
-        trainDerivEl.setAttribute('aria-checked', String(isActive));
-      });
-    }
-
-    // Model type chip toggles
-    var chipContainer = document.getElementById('model-type-chips');
-    if (chipContainer) {
-      chipContainer.addEventListener('click', function (e) {
-        var chip = e.target.closest('.model-chip');
-        if (!chip) return;
-        var cb = chip.querySelector('input[type="checkbox"]');
-        if (cb) {
-          cb.checked = !cb.checked;
-          chip.classList.toggle('selected', cb.checked);
-        }
       });
     }
 
@@ -3152,6 +3124,8 @@
       var prevDur = document.getElementById('preview-duration');
       if (prevEnabled) prevEnabled.disabled = true;
       if (prevDur) prevDur.disabled = true;
+      // Validate with pre-filled values so continue button enables immediately
+      validateStep2();
       // Start the pipeline — it runs encrypt+upload while user fills metadata,
       // then pauses before minting and waits for user to click Sign & Mint
       if (!state.processingRunning) {
@@ -3179,13 +3153,33 @@
       }
       goToStep(3);
 
-      var summary = document.getElementById('confirmation-summary');
-      if (summary) {
+      var reviewEl = document.getElementById('review-summary');
+      if (reviewEl) {
         var p = parseFloat(dom.assetPrice.value) || 0;
         var c = parseInt(dom.assetCopies.value) || 0;
         var currency = CURRENCIES.find(function (cur) { return cur.address === getSelectedCurrencyAddress(); }) || CURRENCIES[0];
-        summary.innerHTML = '<b>' + (dom.assetTitle.value || 'Untitled') + '</b> — ' +
-          c + ' copies at ' + p + ' ' + currency.symbol + ' each (' + dom.assetAccess.value.replace(/_/g, ' ') + ')';
+        var accessLabel = dom.assetAccess.value === 'buy_and_resell' ? 'Buy & Resell'
+          : dom.assetAccess.value === 'buy_once' ? 'Buy Once' : 'Free';
+        var channelVal = dom.assetChannel.value || '';
+        var channelDisplay = channelVal.length > 12 ? channelVal.substring(0, 8) + '...' + channelVal.slice(-4) : channelVal;
+        var rows = [
+          { label: 'Title', value: dom.assetTitle.value || 'Untitled' },
+          { label: 'Price', value: dom.assetAccess.value === 'free' ? 'Free' : p.toFixed(2) + ' ' + currency.symbol },
+          { label: 'Copies', value: c.toLocaleString() },
+          { label: 'Access', value: accessLabel },
+          { label: 'Channel', value: channelDisplay },
+        ];
+        var desc = (dom.assetDescription.value || '').trim();
+        if (desc) {
+          rows.splice(1, 0, { label: 'Description', value: desc.length > 60 ? desc.substring(0, 60) + '...' : desc });
+        }
+        var licensingData = getLicensingData();
+        if (licensingData.type === 'training-rights') {
+          rows.push({ label: 'AI Training', value: 'Allowed (' + (licensingData.aiTraining.scope || 'commercial') + ')' });
+        }
+        reviewEl.innerHTML = rows.map(function (r) {
+          return '<div class="review-row"><span class="review-label">' + r.label + '</span><span class="review-value">' + r.value + '</span></div>';
+        }).join('');
       }
 
       // Fees are handled internally during mint — no separate display needed
@@ -3205,6 +3199,21 @@
 
     dom.btnBackTo2.addEventListener('click', function () { goToStep(2); });
     dom.btnNewAsset.addEventListener('click', resetAll);
+
+    var btnPublishLater = document.getElementById('btn-publish-later');
+    if (btnPublishLater) {
+      btnPublishLater.addEventListener('click', function () {
+        showToast('Saved — you can publish from the toolbar later', 'success');
+        try {
+          if (window.parent && window.parent !== window) {
+            window.parent.postMessage({ msg: 'mint-draft-saved' }, '*');
+            setTimeout(function () {
+              window.parent.postMessage({ msg: 'mint-close-creator' }, '*');
+            }, 1000);
+          }
+        } catch (_) {}
+      });
+    }
 
     // ── Fix Gateway Approval tool ──────────────────────
     var fixOpInput = document.getElementById('fix-operative-addr');
@@ -3419,6 +3428,8 @@
         if (channelSum) channelSum.textContent = (draft.channel || '').substring(0, 8) + '...' + (draft.channel || '').slice(-4);
 
         setProgStep('prog-mint', 'Ready — check the boxes below and click Sign & Mint', 'active');
+        var publishLaterBtn2 = document.getElementById('btn-publish-later');
+        if (publishLaterBtn2) publishLaterBtn2.style.display = '';
         validateStep3();
 
         showToast('Draft loaded — review and sign to publish', 'success');
