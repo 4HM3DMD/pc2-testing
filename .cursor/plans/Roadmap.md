@@ -1,6 +1,6 @@
 # PC2 Post-Launch Roadmap
 
-**Status:** v1.1.0 Released (Mar 3). Branch `feature/elacity-ddrm-marketplace` active. | **Date:** March 2026 | **Last Updated:** March 8, 2026
+**Status:** v1.1.0 Released (Mar 3). Branch `feature/lit-chipotle-migration` active. | **Date:** March 2026 | **Last Updated:** March 24, 2026
 
 ---
 
@@ -433,7 +433,7 @@ Offer pre-configured PC2 hardware for users who want plug-and-play sovereignty. 
 | Ubuntu build deps auto-install | ✅ Shipped |
 | WireGuard reconnection with exponential backoff | ✅ Shipped |
 
-### v1.1.x - Bug Fixes & Normal People (Mar-Apr 2026)
+### v1.1.x - Bug Fixes, Normal People & dDRM (Mar-Apr 2026)
 
 | Feature | Status |
 |---------|--------|
@@ -442,6 +442,11 @@ Offer pre-configured PC2 hardware for users who want plug-and-play sovereignty. 
 | Pre-built Pi/Jetson images | Pending |
 | Improved error messages | Pending |
 | Community networking fix (WG+AWG+VLESS install) | ✅ Done (Mar 8) |
+| Elacity Creator app (publish pipeline) | ✅ Done |
+| Elacity Market app (Apple-grade redesign) | ✅ Done |
+| AI Training Licensing — Phase C2 metadata | ✅ Done (Mar 24) |
+| dDRM capsule format + viewer | ✅ Done |
+| WASM/Rust crypto optimization | ✅ Done |
 
 ### v1.2 - Windows & External Access (Mar-Apr 2026)
 
@@ -452,7 +457,7 @@ Offer pre-configured PC2 hardware for users who want plug-and-play sovereignty. 
 | ActiveProxy auto-connect in Desktop Launcher | Pending |
 | Desktop Launcher shows ela.city domain status | Pending |
 
-### v1.5 - ElastOS Integration Begins (Q2 2026)
+### v1.5 - ElastOS Integration & Advanced Licensing (Q2 2026)
 
 | Feature | Status |
 |---------|--------|
@@ -460,6 +465,9 @@ Offer pre-configured PC2 hardware for users who want plug-and-play sovereignty. 
 | Direct PC2-to-PC2 chat | Pending |
 | IoT device networking | Pending |
 | PC2 as capsule (`elastos://QmPC2...`) | Pending |
+| Time-limited access tokens (rental model) | Pending |
+| Pay-per-use access tokens (metered access) | Pending |
+| License enforcement dApps (commercial use, modification, attribution) | Pending |
 | Optional Firecracker deployment | Pending |
 | Multi-domain support (`ela.net`, `pc2.net`) | Pending |
 

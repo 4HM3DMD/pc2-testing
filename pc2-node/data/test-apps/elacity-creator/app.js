@@ -812,6 +812,7 @@
         channel: params.channel || DEFAULT_CHANNEL,
       },
       adult: !!params.isAdult,
+      licensing: params.licensing || undefined,
       legal: params.legalAttestation || null,
       createdAt: new Date().toISOString(),
       version: '1.0.0',
@@ -1609,6 +1610,66 @@
     calcEl.textContent = 'Potential revenue: ' + c + ' × $' + p.toFixed(2) + ' = $' + total;
   }
 
+  // ── Licensing helpers ────────────────────────────────
+
+  function wireCardSelector(containerId, hiddenInputId, onChange) {
+    var container = document.getElementById(containerId);
+    if (!container) return;
+    container.addEventListener('click', function (e) {
+      var card = e.target.closest('.access-card');
+      if (!card) return;
+      container.querySelectorAll('.access-card').forEach(function (c) { c.classList.remove('selected'); });
+      card.classList.add('selected');
+      var val = card.getAttribute('data-value');
+      if (hiddenInputId) {
+        var hidden = document.getElementById(hiddenInputId);
+        if (hidden) {
+          hidden.value = val;
+          hidden.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+      }
+      if (onChange) onChange(val);
+    });
+  }
+
+  function getLicensingData() {
+    var terms = {
+      commercial: true,
+      modification: false,
+      redistribution: false,
+      attribution: true,
+      exclusivity: false,
+    };
+
+    var aiTrainingToggle = document.getElementById('ai-training-toggle');
+    var isAITrainingEnabled = aiTrainingToggle ? aiTrainingToggle.classList.contains('active') : false;
+
+    if (!isAITrainingEnabled) {
+      return { type: 'perpetual', terms: terms };
+    }
+
+    var result = { type: 'training-rights', terms: terms };
+
+    var scope = (document.getElementById('training-scope') || {}).value || 'commercial';
+    var derivativesEl = document.getElementById('training-derivatives');
+    var ownership = (document.getElementById('output-ownership') || {}).value || 'licensee';
+
+    var modelTypes = [];
+    var chips = document.querySelectorAll('#model-type-chips input[type="checkbox"]');
+    chips.forEach(function (cb) { if (cb.checked) modelTypes.push(cb.value); });
+
+    result.aiTraining = {
+      permitted: true,
+      scope: scope,
+      modelTypes: modelTypes,
+      attribution: terms.attribution,
+      derivativeWorks: derivativesEl ? derivativesEl.classList.contains('active') : false,
+      outputOwnership: ownership,
+    };
+
+    return result;
+  }
+
   // ── Pipeline ─────────────────────────────────────────
 
   async function runPipeline() {
@@ -2125,6 +2186,7 @@
 
       var isAdultContent = !!(document.getElementById('adult-content-check') && document.getElementById('adult-content-check').checked);
       var legalAttestation = await buildLegalAttestation(state.walletAddress);
+      var licensingData = getLicensingData();
 
       var metaParams = {
         title: title,
@@ -2134,6 +2196,7 @@
         tags: selectedTags,
         isAdult: isAdultContent,
         legalAttestation: legalAttestation,
+        licensing: licensingData.type !== 'perpetual' ? licensingData : undefined,
         assetCid: assetCid,
         mimeType: state.resolvedMime || 'application/octet-stream',
         size: state.selectedFile.size,
@@ -2337,6 +2400,7 @@
           royalty_partners: JSON.stringify(getRoyaltyPartners()),
           thumbnail_cid: imageUri || '',
           adult: isAdultContent,
+          licensing: licensingData.type !== 'perpetual' ? JSON.stringify(licensingData) : '',
         };
         var draftResp = await pc2Fetch('/api/drafts', {
           method: 'POST',
@@ -2665,6 +2729,16 @@
     state.channelsLoaded = false;
     dom.progressError.classList.add('hidden');
     dom.btnBackTo2.disabled = false;
+
+    // Reset licensing section
+    var ltHidden = document.getElementById('license-type');
+    if (ltHidden) ltHidden.value = 'perpetual';
+    var aiToggle = document.getElementById('ai-training-toggle');
+    if (aiToggle) { aiToggle.classList.remove('active'); aiToggle.setAttribute('aria-checked', 'false'); }
+    var derivToggle = document.getElementById('training-derivatives');
+    if (derivToggle) { derivToggle.classList.remove('active'); derivToggle.setAttribute('aria-checked', 'false'); }
+    var aiPanel = document.getElementById('ai-training-panel');
+    if (aiPanel) aiPanel.style.display = 'none';
 
     PROGRESS_STEPS.forEach(function (id) {
       setProgStep(id, 'Waiting...', '');
@@ -3009,6 +3083,54 @@
         var checks = document.querySelectorAll('.legal-check');
         checks.forEach(function (cb) { cb.checked = isActive; });
         validateStep3();
+      });
+    }
+
+    // Wire card selectors (access method + licensing)
+    wireCardSelector('access-cards', 'asset-access', function (val) {
+      var resellerGroup = document.getElementById('reseller-group');
+      if (resellerGroup) resellerGroup.style.display = val === 'buy_and_resell' ? '' : 'none';
+      validateStep2();
+    });
+
+    var aiTrainingToggle = document.getElementById('ai-training-toggle');
+    if (aiTrainingToggle) {
+      aiTrainingToggle.addEventListener('click', function () {
+        var isActive = aiTrainingToggle.classList.toggle('active');
+        aiTrainingToggle.setAttribute('aria-checked', String(isActive));
+        var hidden = document.getElementById('license-type');
+        if (hidden) hidden.value = isActive ? 'training-rights' : 'perpetual';
+        var panel = document.getElementById('ai-training-panel');
+        if (panel) panel.style.display = isActive ? '' : 'none';
+      });
+    }
+
+    wireCardSelector('training-scope-cards', 'training-scope');
+    wireCardSelector('output-ownership-cards', 'output-ownership');
+
+    // License term toggles removed — terms are hardcoded defaults until
+    // dApps exist that can enforce commercial use, modification, and attribution
+
+    // Training derivatives toggle
+    var trainDerivEl = document.getElementById('training-derivatives');
+    if (trainDerivEl) {
+      trainDerivEl.addEventListener('click', function () {
+        var isActive = trainDerivEl.classList.toggle('active');
+        trainDerivEl.setAttribute('aria-checked', String(isActive));
+      });
+    }
+
+    // Model type chip toggles
+    var chipContainer = document.getElementById('model-type-chips');
+    if (chipContainer) {
+      chipContainer.addEventListener('click', function (e) {
+        var chip = e.target.closest('.model-chip');
+        if (!chip) return;
+        var cb = chip.querySelector('input[type="checkbox"]');
+        if (cb) {
+          cb.checked = !cb.checked;
+          chip.classList.toggle('selected', cb.checked);
+        }
       });
     }
 
