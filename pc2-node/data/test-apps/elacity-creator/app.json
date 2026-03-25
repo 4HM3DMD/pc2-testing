@@ -18,7 +18,30 @@
     "network": true,
     "ipfs": { "pin": true, "fetch": true, "add": true },
     "ipc": ["launchApp", "openFolder"],
-    "drm": true
+    "drm": true,
+    "api_endpoints": [
+      "POST /read",
+      "POST /api/storage/ipfs/add-directory",
+      "POST /api/storage/ipfs/add",
+      "POST /api/storage/ipfs/upload-elacity",
+      "POST /api/storage/ipfs/pin",
+      "POST /api/storage/lit/encrypt",
+      "POST /api/storage/thumbnail",
+      "POST /api/media/encode",
+      "GET /api/media/encode/status/:jobId",
+      "POST /api/drafts",
+      "GET /api/drafts/:id",
+      "DELETE /api/drafts/:id"
+    ],
+    "postMessage_events": {
+      "sends": ["mint-draft-saved", "mint-close-creator"],
+      "receives": []
+    },
+    "external_services": [
+      "https://base.ela.city/api/2.0/graphql",
+      "https://mainnet.base.org",
+      "https://ipfs.ela.city/ipfs/"
+    ]
   },
 
   "requirements": {

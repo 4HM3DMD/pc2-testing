@@ -6,6 +6,24 @@
   "author": "Elacity",
   "icon": null,
   "entry": "index.html",
+  "type": "web",
+  "category": "media",
+
+  "capabilities": {
+    "wallet": false,
+    "network": true,
+    "drm": true,
+    "api_endpoints": [
+      "POST /api/media/prepare-auth",
+      "POST /api/media/init",
+      "POST /api/media/segment"
+    ],
+    "postMessage_events": {
+      "sends": [],
+      "receives": []
+    }
+  },
+
   "requirements": {
     "minVersion": "1.1.0"
   },

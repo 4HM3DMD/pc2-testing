@@ -13,7 +13,17 @@
 
   "capabilities": {
     "network": true,
-    "ipc": ["launchApp"]
+    "ipc": ["launchApp"],
+    "api_endpoints": [
+      "GET /api/supernode/specs",
+      "GET /api/supernode/relay/status",
+      "GET /api/boson/connectivity",
+      "GET /api/registry/supernodes"
+    ],
+    "postMessage_events": {
+      "sends": [],
+      "receives": []
+    }
   },
 
   "requirements": {

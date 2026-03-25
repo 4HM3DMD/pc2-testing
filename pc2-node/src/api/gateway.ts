@@ -998,4 +998,30 @@ router.post('/saved-channels/:channelId/connect', authenticate, async (req: Auth
   }
 });
 
+/**
+ * GET /api/gateway/audit
+ * Query agent audit logs (paginated, filterable by agent and action)
+ */
+router.get('/audit', authenticate, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const db = req.app.locals.db;
+    const agentId = req.query.agent_id as string | undefined;
+    const action = req.query.action as string | undefined;
+    const limit = Math.min(parseInt(req.query.limit as string) || 100, 500);
+    const offset = parseInt(req.query.offset as string) || 0;
+
+    const logs = db.getAgentAuditLogs({ agentId, action, limit, offset });
+
+    const parsed = logs.map((row: Record<string, unknown>) => ({
+      ...row,
+      detail: typeof row.detail === 'string' ? JSON.parse(row.detail) : row.detail,
+    }));
+
+    res.json({ success: true, data: parsed, pagination: { limit, offset, count: parsed.length } });
+  } catch (error: any) {
+    logger.error('[Gateway API] Error getting audit logs:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 export default router;

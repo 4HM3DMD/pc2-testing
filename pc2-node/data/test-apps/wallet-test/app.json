@@ -12,7 +12,13 @@
   "category": "tools",
 
   "capabilities": {
-    "wallet": true
+    "wallet": true,
+    "api_endpoints": [],
+    "postMessage_events": {
+      "sends": ["wallet-bridge requests"],
+      "receives": ["wallet-bridge responses"]
+    },
+    "notes": "Test harness for wallet bridge postMessage protocol only"
   },
 
   "requirements": {},

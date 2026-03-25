@@ -943,6 +943,21 @@ export class GatewayService extends EventEmitter {
   }
   
   /**
+   * Validate and normalize agent workspace path.
+   * Ensures consistent paths for Runtime v2 namespace mapping (see docs/core/NAMESPACE_MAPPING.md).
+   */
+  private validateAgentWorkspace(agentId: string, workspace?: string): string {
+    const defaultPath = `~/pc2/agents/${agentId}`;
+    if (!workspace) return defaultPath;
+
+    const expectedPattern = /^~\/pc2\/(agents\/[\w-]+|personal)$/;
+    if (!expectedPattern.test(workspace)) {
+      logger.warn(`[GatewayService] Agent "${agentId}" has non-standard workspace path: "${workspace}". Expected pattern: ~/pc2/agents/{id} (see NAMESPACE_MAPPING.md)`);
+    }
+    return workspace;
+  }
+
+  /**
    * Update or create an agent (alias for upsertAgent with partial data support)
    */
   async updateAgent(agentId: string, agentData: Partial<AgentConfig>): Promise<void> {
@@ -952,7 +967,7 @@ export class GatewayService extends EventEmitter {
       id: agentId,
       name: agentData.name || existing?.name || 'New Agent',
       enabled: agentData.enabled ?? existing?.enabled ?? true,
-      workspace: agentData.workspace || existing?.workspace || `~/pc2/agents/${agentId}`,
+      workspace: this.validateAgentWorkspace(agentId, agentData.workspace || existing?.workspace),
       model: agentData.model || existing?.model,
       permissions: agentData.permissions || existing?.permissions || {
         fileRead: true,

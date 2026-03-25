@@ -2232,4 +2232,72 @@ export class DatabaseManager {
     `).get(walletAddress.toLowerCase()) as any;
     return row?.c || 0;
   }
+
+  // ============================================================================
+  // Agent Audit Log Operations (AI action tracking — separate from API audit_logs)
+  // ============================================================================
+
+  insertAgentAuditLog(
+    agentId: string,
+    action: string,
+    detail?: Record<string, unknown>,
+    source?: string,
+    sessionKey?: string
+  ): void {
+    const db = this.getDB();
+    db.prepare(`
+      INSERT INTO agent_audit_log (agent_id, action, detail, source, session_key)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(
+      agentId,
+      action,
+      detail ? JSON.stringify(detail) : null,
+      source || null,
+      sessionKey || null
+    );
+  }
+
+  getAgentAuditLogs(options: {
+    agentId?: string;
+    action?: string;
+    limit?: number;
+    offset?: number;
+  } = {}): Array<Record<string, unknown>> {
+    const db = this.getDB();
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+
+    if (options.agentId) {
+      conditions.push('agent_id = ?');
+      params.push(options.agentId);
+    }
+    if (options.action) {
+      conditions.push('action = ?');
+      params.push(options.action);
+    }
+
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    const limit = options.limit || 100;
+    const offset = options.offset || 0;
+
+    return db.prepare(`
+      SELECT * FROM agent_audit_log
+      ${where}
+      ORDER BY timestamp DESC
+      LIMIT ? OFFSET ?
+    `).all(...params, limit, offset) as Array<Record<string, unknown>>;
+  }
+
+  /**
+   * Remove agent audit log entries older than retentionDays.
+   * Returns number of rows deleted.
+   */
+  cleanupAgentAuditLogs(retentionDays = 30): number {
+    const db = this.getDB();
+    const result = db.prepare(`
+      DELETE FROM agent_audit_log
+      WHERE timestamp < datetime('now', '-' || ? || ' days')
+    `).run(retentionDays);
+    return result.changes;
+  }
 }

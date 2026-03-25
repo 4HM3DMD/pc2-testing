@@ -137,7 +137,21 @@ export interface SkillDefinition {
   tools: string[];
   permissions: string[];
   content: string;
-  source: 'bundled' | 'user';
+  source: 'bundled' | 'user' | 'purchased';
+}
+
+/**
+ * A skill that has been loaded and parsed, ready for system prompt injection.
+ * Carries frontmatter metadata alongside the body for trust boundary enforcement.
+ */
+export interface LoadedSkill {
+  id: string;
+  name: string;
+  source: 'bundled' | 'user' | 'purchased';
+  tools: string[];
+  body: string;
+  contentHash: string;
+  hashVerified: boolean;
 }
 
 /**

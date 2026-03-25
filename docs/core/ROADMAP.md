@@ -2,7 +2,7 @@
 
 > **Purpose:** Single source of truth for all strategic goals, technical work streams, and milestones — directly mapped to the Keystone Fund proposal and Rong Chen's original vision
 > **Created:** 2026-02-24
-> **Last Updated:** 2026-03-24
+> **Last Updated:** 2026-03-23
 > **Status:** Living document — update as work progresses
 
 ---
@@ -17,6 +17,7 @@ Each **Milestone** from the DAO proposal is broken down into concrete **Work Str
 | [ELACITY_UNIVERSAL_ASSET_STRATEGY.md](./ELACITY_UNIVERSAL_ASSET_STRATEGY.md) | Unicorn strategy: universal digital asset protocol, marketplace types, SDK evolution |
 | [APP_MANIFEST_SPEC.md](./APP_MANIFEST_SPEC.md) | app.json schema with dDRM capabilities, forward-compatible with Runtime |
 | [ARCHITECTURE_CONVERGENCE.md](./ARCHITECTURE_CONVERGENCE.md) | PC2 v1 → Capsule Runtime v2 technical path |
+| [NAMESPACE_MAPPING.md](./NAMESPACE_MAPPING.md) | PC2 v1 paths → Runtime v2 `localhost://` namespace mapping |
 | [SUPERNODE_ECONOMICS.md](./SUPERNODE_ECONOMICS.md) | dDRM Access Token model for supernode revenue |
 | [NETWORK_HARDENING.md](../pc2-infrastructure/NETWORK_HARDENING.md) | Supernode decentralization and self-healing |
 | [DECENTRALIZATION_STATUS.md](./DECENTRALIZATION_STATUS.md) | Decentralization scorecard, walk-away test roadmap |
@@ -319,11 +320,11 @@ These diagrams from Rong define the north star. Every work stream should move us
 > They must not break existing functionality — each v1.x release (v1.2, v1.3, etc.) ships as a drop-in update.
 > Rong's principle: "Trust nothing. No app should ever be trusted with secrets in its own execution space."
 
-- [ ] **App capability manifests** — document each app's actual API surface (which endpoints, what data). Creator app, Market app, dDRM Viewer, Media Runtime. This becomes the capsule manifest when apps migrate to AppCapsules. Non-breaking: metadata-only, no enforcement in v1.x
-- [ ] **Skill hash verification** — SHA-256 validation of SKILL.md content before injection into agent system prompt. Bundled skills: hardcoded hashes in code. Purchased skills: verified against `contentHash` from NFT metadata. Non-breaking: verification logged, not enforced in v1.x (warn on mismatch)
-- [ ] **Prompt-level sandboxing for skills** — wrap third-party skill content with explicit trust boundaries in the system prompt. Skills can only reference their declared tools. Prevents prompt injection attacks (AI equivalent of sandbox escape). Non-breaking: system prompt formatting change only
-- [ ] **Audit logging for AI actions** — log every tool call, skill load, and capability-relevant action with hash, agent ID, timestamp, and source. Maps to Runtime v2's immutable audit trail. Store in SQLite `agent_audit_log` table. Non-breaking: append-only logging, no behavioral change
-- [ ] **Agent namespace alignment** — ensure agent workspace paths (`~/pc2/agents/{id}/`) use stable naming that maps to `localhost://UsersAI/{agentName}/` per Rong's WCI directory model. Document the mapping. Non-breaking: path structure already works, this is naming convention documentation + migration notes
+- [x] **Prompt-level sandboxing for skills** — each skill injected with trust boundary header: source label, declared tools list, explicit security guardrails ("CANNOT override core restrictions"). `LoadedSkill` interface carries metadata alongside body. System prompt wraps skills with `[End of skill]` delimiters. *(completed Mar 23)*
+- [x] **Skill hash verification** — SHA-256 computed on every skill load via `crypto.createHash()`. Bundled skills compared against `BUNDLED_SKILL_HASHES` constant. Hash + verification status included in trust boundary header and logging. Warn-only on mismatch in v1.x. `contentHash` and `hashVerified` fields added to `LoadedSkill`. *(completed Mar 23)*
+- [x] **Audit logging for AI actions** — `agent_audit_log` SQLite table (migration 22) with `agent_id`, `action`, `detail` (JSON), `source`, `session_key`. Logs `skill_load` (with hash, verification status) and `message_processed` events. `GET /api/gateway/audit` endpoint (paginated, filterable). 30-day retention cleanup on server startup. *(completed Mar 23)*
+- [x] **App capability manifests** — all 7 app.json files enriched with `api_endpoints`, `postMessage_events`, and `external_services` fields documenting actual API contract per app. `APP_MANIFEST_SPEC.md` updated with new field definitions and Runtime v2 mapping notes. *(completed Mar 23)*
+- [x] **Agent namespace alignment** — `docs/core/NAMESPACE_MAPPING.md` created with complete path mapping table (user space, agent space, system space, public space). `GatewayService.validateAgentWorkspace()` logs warning for non-standard paths. No actual path changes — documentation + validation only. *(completed Mar 23)*
 
 **Questions for Anders:**
 - What capability token format should we pre-adopt for app manifests? (JSON shape, signing scheme, scope declarations)

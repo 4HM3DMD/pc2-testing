@@ -17,7 +17,16 @@
     "wallet": true,
     "network": true,
     "ipfs": { "fetch": true },
-    "drm": true
+    "drm": true,
+    "api_endpoints": [],
+    "postMessage_events": {
+      "sends": [],
+      "receives": []
+    },
+    "external_services": [
+      "https://base.ela.city/api/2.0/graphql"
+    ],
+    "notes": "Bundled React app — uses Elacity backend GraphQL directly, not local PC2 API endpoints"
   },
 
   "requirements": {

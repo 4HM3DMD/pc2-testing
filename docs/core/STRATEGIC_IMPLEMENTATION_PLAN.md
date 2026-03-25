@@ -4819,10 +4819,12 @@ if (isThumbnailUpdate) {
 - ✅ `.md` file support in Creator app (publishable as Wealth Capsule with `Content Type: AI Agent Skill` attribute)
 - ✅ Max 10 active skills per agent (safety cap on prompt size)
 
-**Phase 2 — Trust & Sandboxing (Next):**
-- [ ] SHA-256 hash verification before skill loading (Rong: "validate the hash of every module")
-- [ ] Prompt-level sandboxing — wrap skill content with trust boundaries, tool-scoping per skill
-- [ ] Audit logging — every skill load logged with hash, agent ID, timestamp, source
+**Phase 2 — Trust & Sandboxing (Complete, 2026-03-23):**
+- ✅ SHA-256 hash verification before skill loading — `crypto.createHash('sha256')` on every load, bundled skill hashes hardcoded in `BUNDLED_SKILL_HASHES` constant, warn-only on mismatch in v1.x
+- ✅ Prompt-level sandboxing — `LoadedSkill` interface carries metadata (name, source, tools, hash, verified), each skill wrapped with trust boundary header in `buildSystemPrompt()`: tool restrictions, source label, explicit security guardrails, `[End of skill]` delimiter
+- ✅ Audit logging — `agent_audit_log` SQLite table (migration 22), logs `skill_load` and `message_processed` events with hash/source/session context, `GET /api/gateway/audit` paginated endpoint, 30-day retention cleanup on startup
+- ✅ App capability manifests — all 7 app.json files enriched with `api_endpoints`, `postMessage_events`, `external_services` documenting actual API contract, `APP_MANIFEST_SPEC.md` updated with new field definitions and Runtime v2 mapping
+- ✅ Agent namespace alignment — `NAMESPACE_MAPPING.md` with complete path mapping table (v1 paths -> `localhost://` URIs), `GatewayService.validateAgentWorkspace()` warns on non-standard paths, zero actual path changes
 
 **Phase 3 — Purchased Skills via dDRM (Designed, not built):**
 - [ ] In-memory-only decrypt — raw skill text never touches filesystem, only server process memory
@@ -4834,15 +4836,29 @@ if (isThumbnailUpdate) {
 **Runtime v2 Convergence Path:**
 - SKILL.md frontmatter `tools` and `permissions` declarations map to capability token scopes
 - Content-addressed skill identity (CID) maps to `elastos://` addressing
-- Agent workspace `~/pc2/agents/{id}/` maps to `localhost://UsersAI/{agentName}/`
+- Agent workspace `~/pc2/agents/{id}/` maps to `localhost://UsersAI/{agentName}/` (documented in `NAMESPACE_MAPPING.md`)
 - Prompt-level sandboxing is the v1.x equivalent of Runtime v2's WASM sandbox boundary
+- App manifest `api_endpoints` become capability token scopes in Runtime v2
+- Audit log format aligns with Runtime v2's immutable audit trail
 
-**Files Created/Modified:**
+**Files Created/Modified (Phase 1 — Bundled Skills):**
 - `pc2-node/data/skills/*/SKILL.md` — 4 bundled skill definitions
 - `pc2-node/src/services/gateway/types.ts` — `SkillDefinition` interface, `skills` field on `AgentConfig`
 - `pc2-node/src/services/gateway/ChannelBridge.ts` — skill loader, frontmatter parser, prompt injection
 - `pc2-node/src/api/gateway.ts` — `GET /api/gateway/skills` endpoint
 - `src/gui/src/UI/Channels/UIAgentEditor.js` — Skills UI section
+
+**Files Created/Modified (Phase 2 — Trust, Sandboxing & Convergence):**
+- `pc2-node/src/services/gateway/types.ts` — `LoadedSkill` interface with `contentHash`, `hashVerified`
+- `pc2-node/src/services/gateway/ChannelBridge.ts` — `computeHash()`, `BUNDLED_SKILL_HASHES`, trust boundary wrapping, audit logging calls
+- `pc2-node/src/storage/migrations.ts` — migration 22 (`agent_audit_log` table)
+- `pc2-node/src/storage/database.ts` — `insertAgentAuditLog()`, `getAgentAuditLogs()`, `cleanupAgentAuditLogs()`
+- `pc2-node/src/api/gateway.ts` — `GET /api/gateway/audit` endpoint
+- `pc2-node/src/server.ts` — audit log cleanup on startup
+- `pc2-node/src/services/gateway/GatewayService.ts` — `validateAgentWorkspace()`
+- `pc2-node/data/test-apps/*/app.json` — 7 apps enriched with `api_endpoints`, `postMessage_events`, `external_services`
+- `docs/core/APP_MANIFEST_SPEC.md` — new capability fields documented
+- `docs/core/NAMESPACE_MAPPING.md` — new file: complete v1 -> v2 path mapping
 
 ---
 

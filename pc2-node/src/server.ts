@@ -193,6 +193,18 @@ export function createServer(options: ServerOptions): { app: Express; server: Se
     // Store indexer in app.locals for potential API access
     app.locals.indexer = indexer;
   }
+
+  // Cleanup old audit logs on startup (30-day retention)
+  if (options.database) {
+    try {
+      const deleted = options.database.cleanupAgentAuditLogs(30);
+      if (deleted > 0) {
+        log.info(`[Server] Cleaned up ${deleted} old audit log entries`);
+      }
+    } catch (error: any) {
+      log.warn('[Server] Audit log cleanup failed (non-critical):', error.message);
+    }
+  }
   
   return { app, server };
 }

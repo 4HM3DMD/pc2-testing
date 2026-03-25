@@ -31,7 +31,7 @@ function findSchemaFile(): string {
   }
   throw new Error(`Schema file not found. Tried: ${SCHEMA_FILE} and ${sourceSchema}`);
 }
-const CURRENT_VERSION = 21;
+const CURRENT_VERSION = 22;
 
 interface Migration {
   version: number;
@@ -855,6 +855,32 @@ export function runMigrations(db: Database.Database): void {
         recordMigration(db, 21);
       } catch (error: any) {
         log.error(`❌ Migration 21 error: ${error.message}`);
+        throw error;
+      }
+    }
+
+    // Migration 22: Agent audit log table for AI action tracking
+    if (currentVersion < 22) {
+      try {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS agent_audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL DEFAULT (datetime('now')),
+            agent_id TEXT NOT NULL,
+            action TEXT NOT NULL,
+            detail TEXT,
+            source TEXT,
+            session_key TEXT
+          )
+        `);
+
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_audit_agent_ts ON agent_audit_log(agent_id, timestamp)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_audit_action ON agent_audit_log(action)`);
+
+        log.info('✅ Migration 22 complete: Agent audit log table created');
+        recordMigration(db, 22);
+      } catch (error: any) {
+        log.error(`❌ Migration 22 error: ${error.message}`);
         throw error;
       }
     }

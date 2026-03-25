@@ -16,7 +16,14 @@
     "wallet": true,
     "network": true,
     "ipfs": { "pin": false, "fetch": true },
-    "drm": true
+    "drm": true,
+    "api_endpoints": [
+      "POST /api/storage/lit/secure-view"
+    ],
+    "postMessage_events": {
+      "sends": [],
+      "receives": []
+    }
   },
 
   "requirements": {

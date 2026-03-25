@@ -19,7 +19,20 @@
     "network": true,
     "ipfs": { "pin": true, "fetch": true },
     "ipc": ["launchApp", "openFolder"],
-    "drm": true
+    "drm": true,
+    "api_endpoints": [
+      "GET /api/storage/ipfs/pins",
+      "POST /api/storage/ipfs/pin",
+      "POST /api/media/prepare-auth",
+      "POST /write"
+    ],
+    "postMessage_events": {
+      "sends": ["launchApp:pc2-media-runtime", "launchApp:ddrm-viewer", "openFolder"],
+      "receives": []
+    },
+    "external_services": [
+      "https://ipfs.ela.city/ipfs/"
+    ]
   },
 
   "requirements": {

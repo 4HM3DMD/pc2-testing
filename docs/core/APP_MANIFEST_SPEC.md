@@ -178,6 +178,32 @@ Capabilities declare what permissions the app requires from the PC2 host. In PC2
 | `ipfs` | `IPFSCaps` | Access to IPFS operations. `fetch`: retrieve content by CID. `pin`: pin content to local node. |
 | `ipc` | `string[]` | List of IPC message types the app can send to the host (e.g., `launchApp`, `openFolder`, `notify`). |
 | `drm` | `boolean` | Access to dDRM decryption and license verification (Lit Protocol / Elacity SDK). Required for any dDRM-protected content. |
+| `api_endpoints` | `string[]` | Explicit list of PC2 API routes the app uses (e.g., `"POST /api/drafts"`, `"GET /api/storage/ipfs/pins"`). Not enforced in v1.x — declarative only, maps to Runtime v2 capability tokens. |
+| `postMessage_events` | `PostMessageCaps` | IPC events the app sends and receives via `window.parent.postMessage`. |
+| `external_services` | `string[]` | External URLs the app communicates with (e.g., `"https://base.ela.city/api/2.0/graphql"`). Declares network dependencies for Runtime v2 network scoping. |
+| `notes` | `string` | Free-text annotation explaining the app's API usage pattern. Optional. |
+
+#### PostMessageCaps Object
+
+```json
+{
+  "sends": ["mint-draft-saved", "mint-close-creator"],
+  "receives": ["wallet-response"]
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `sends` | `string[]` | Message types the app sends to the host shell. |
+| `receives` | `string[]` | Message types the app listens for from the host shell. |
+
+#### Runtime v2 Mapping
+
+In v1.x, `api_endpoints`, `postMessage_events`, and `external_services` are metadata only. In Runtime v2:
+
+- `api_endpoints` become scoped capability tokens — the capsule can only call declared endpoints
+- `postMessage_events` become IPC channel grants — the capsule can only send/receive declared events
+- `external_services` become network allowlist entries — the capsule cannot contact undeclared hosts
 
 #### Reserved Capabilities (Future)
 
