@@ -2,7 +2,7 @@
 
 > **Purpose:** Single source of truth for all strategic goals, technical work streams, and milestones — directly mapped to the Keystone Fund proposal and Rong Chen's original vision
 > **Created:** 2026-02-24
-> **Last Updated:** 2026-03-23
+> **Last Updated:** 2026-03-24
 > **Status:** Living document — update as work progresses
 
 ---
@@ -309,11 +309,30 @@ These diagrams from Rong define the north star. Every work stream should move us
   - [x] `SkillDefinition` interface and `skills?: string[]` on `AgentConfig` in gateway types
   - [x] `.md` file support added to Creator app (EXT_MIME_MAP, guessMimeType, DAG_MIME_TYPES) with auto-category detection for `skill` content type
   - [x] `{ trait_type: 'Content Type', value: 'AI Agent Skill' }` NFT attribute for published skills
-  - [ ] Skill hash verification — SHA-256 validation before loading (trust nothing, per Rong's AppCapsule principle)
-  - [ ] Prompt-level sandboxing — wrap third-party skill content with explicit trust boundaries and tool-scoping
-  - [ ] Audit logging for skill loads — hash, agent ID, timestamp, source (bundled/user/purchased)
-  - [ ] Purchased skill support — in-memory decrypt via dDRM pipeline, ownership verification on every agent message, no raw text on filesystem
-  - [ ] Skill tools for agent — `list_available_skills`, `describe_skill` let the agent discover and recommend skills
+  - [x] Skill hash verification — SHA-256 validation before loading (trust nothing, per Rong's AppCapsule principle) *(completed Mar 23)*
+  - [x] Prompt-level sandboxing — wrap third-party skill content with explicit trust boundaries and tool-scoping *(completed Mar 23)*
+  - [x] Audit logging for skill loads — hash, agent ID, timestamp, source (bundled/user/purchased) *(completed Mar 23)*
+  - [x] **Purchased skill support (Phase 3)** — decrypt via Lit Protocol dDRM pipeline, install to user filesystem, on-chain ownership verification with 5-min TTL cache, revocation on ownership loss. `POST /api/gateway/skills/install`, `DELETE /api/gateway/skills/:skillId`. Market app "Install Skill" button for AI Agent Skill content type. `installed_skills` SQLite table (migration 23). *(completed Mar 23)*
+  - [x] **Skill discovery tools** — `list_available_skills` and `describe_skill` AI tools let the agent discover bundled + user-installed skills and recommend enabling them conversationally. Integrated into `ToolExecutor` and `AIChatService`. *(completed Mar 23)*
+- [x] **A2UI Canvas (v1.3)** — Agent-driven desktop windows via Socket.IO. AI agent can push live HTML widgets as draggable, resizable windows on the PC2 desktop. Inspired by [OpenClaw's A2UI](https://github.com/openclaw/openclaw) canvas protocol, adapted to PC2's `UIWindow(iframe_srcdoc)` windowed environment. *(completed Mar 23)*
+  - [x] `canvas_create` — opens a new window with title, HTML content, configurable width/height. Returns `canvas_id` for updates.
+  - [x] `canvas_update` — replaces HTML content in an existing canvas window. Optional title update.
+  - [x] `canvas_remove` — closes a canvas window programmatically.
+  - [x] Socket.IO events: `canvas.push`, `canvas.update`, `canvas.remove`, `canvas.closed` (user closes window)
+  - [x] Dark-theme base styles injected automatically (tables, headings, badges, code blocks)
+  - [x] Security: `iframe_srcdoc` sandbox (no `allow-same-origin`), no external scripts
+- [x] **Multi-Agent Communication (v1.3)** — Agents can discover and delegate tasks to each other. Enables specialization: one agent with DeFi skills, another with file management, etc. *(completed Mar 23)*
+  - [x] `agents_list` — returns all configured agents with name, model, skills, enabled status
+  - [x] `agent_delegate` — sends a message to another agent and returns its response (depth-limited to 1)
+  - [x] Delegation uses target agent's soul and model, called via `AIChatService.complete()` without tools (prevents recursive chains)
+- [x] **Voice Interface (v1.3)** — Full voice interaction with browser-native fallback. Server-side: Whisper STT + Piper TTS pipeline (`/api/ai/voice`). Client-side: Web Speech API fallback when server voice not installed — `SpeechRecognition` for STT, `SpeechSynthesis` for TTS. *(completed Mar 23)*
+  - [x] Server pipeline: browser audio (webm/opus) → ffmpeg (wav) → Whisper → AI → Piper → audio response
+  - [x] Browser fallback: `SpeechRecognition` API for STT → sends transcript as normal chat message → auto-TTS response
+  - [x] Waveform visualization (canvas-based frequency bars) during recording
+  - [x] "Read aloud" button on all AI messages using `SpeechSynthesis` API
+  - [x] Voice conversation mode: auto-speaks AI responses when initiated via voice input
+  - [x] Install endpoint (`POST /api/ai/voice/install`) for automated Whisper + Piper setup on Linux
+- [x] **Canvas Dashboards Skill** — Bundled skill (`data/skills/canvas-dashboards/SKILL.md`) teaching agents best practices for building canvas widgets: data tables, stat cards, side-by-side comparisons, color palette, sizing guidelines. *(completed Mar 23)*
 
 **v1.x Runtime v2 Convergence Preparation:**
 > These items make PC2 v1.x releases forward-compatible with Anders' Runtime v2 capsule model.
@@ -331,6 +350,25 @@ These diagrams from Rong define the north star. Every work stream should move us
 - Should `localhost://UsersAI/` be a reserved path in Runtime v2's namespace today, or will it be provisioned dynamically?
 - For the dDRM Provider Capsule: should our Rust WASM crates (`aes-gcm-decrypt`, `cenc-decrypt`) target `wasm32-wasip1` Preview 1 or Preview 2 for capsule compatibility?
 - Is there a canonical way to expose "skill install" as a capsule operation, or should we design our own and align later?
+
+**Puter Upstream Audit (Mar 23):**
+> Audited 1,493 upstream Puter commits since fork. Sovereignty-first principle: no cloud-dependent features, no new external dependencies. Result: 1 fix worth porting out of 1,493 commits.
+
+- [x] **Shell escape fix** — `HostDiskUsageService.js` had command injection vulnerability via `execSync` with user-controlled directory paths. Replaced with `execFileSync` (argument array, no shell invocation). Zero new dependencies. Better than upstream fix (they added `shescape` npm dependency). *(completed Mar 23)*
+- [x] **Skipped (by design):** Access token suspension (cloud-centric, irrelevant to PC2 wallet auth), FS stat optimization (files diverged 278+124 lines, too risky), GUI fixes (53K+ lines diverged), AI improvements (PC2 has independent AI stack), KV store changes (cloud-coupled), PeerService/Workers (centralized patterns)
+
+**v1.3 Release — HIGH PRIORITY (blocked on external dependencies):**
+
+> **Status:** Implementation-ready. Blocked on two external inputs. Execute immediately when received.
+> **Gate 1:** Lit Protocol production network details (production dashboard URL, API URL, account setup)
+> **Gate 2:** Elacity V3 audited smart contract ABIs + addresses
+> **Plan:** See `.cursor/plans/v1.3_release_plan_7cce212d.plan.md` for full execution checklist
+
+- [ ] **BLOCKED (Lit production):** Chipotle production swap — create production account on `dashboard.litprotocol.com`, register all 4 Lit Action CIDs, create scoped usage API key, fund account, update `DEFAULT_API_URL` + `DEFAULT_PKP_ID` in `chipotle-client.ts`, update `deploy/web-gateway/index.js` provisioning config, deploy to both supernodes (InterServer + Contabo), E2E test (mint -> buy -> decrypt)
+- [ ] **BLOCKED (V3 contracts):** V3 contract migration — update addresses in 8+ locations (`sdk/config.ts`, `config/default.json`, `chipotle-client.ts`, `storage.ts`, `dashPackager.ts`, `elacity-creator/app.js`, `elacity-market/wallet.js`, `packages/access`), update V2 ABIs to V3 in Creator Dashboard, reconcile two AuthorityGateway addresses (`0x8fe6...` vs `0x580C...`), add `"v3"` entry to Content Indexer config, rebuild `@elacity-js/access` vendor bundles
+- [ ] **BLOCKED (V3 + Lit):** PDR Phase B — SDK extraction (`sdk/metadata.ts`, `sdk/contracts.ts`, `sdk/channels.ts`, `sdk/mint.ts`, `sdk/licensing.ts`, `sdk/compliance.ts`), Enterprise REST API (`/api/v1/content`, `/api/v1/license`, `/api/v1/compliance`), MCP Server for AI buyer agents (`elacity.content.*`, `elacity.license.*`)
+- [ ] Media pipeline E2E test on Chipotle — video/audio DASH/CENC path wired but unverified
+- [ ] Merge `feature/lit-chipotle-migration` -> `main`, tag v1.3.0
 
 **Omnichain ELA:**
 - [ ] Begin ELA liquidity deployment across target EVM chains

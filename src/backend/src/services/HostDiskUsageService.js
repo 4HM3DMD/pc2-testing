@@ -18,7 +18,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 const BaseService = require('./BaseService');
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
 const config = require('../config');
 
 /**
@@ -111,15 +111,21 @@ class HostDiskUsageService extends BaseService {
         };
     }
 
+    _dfField (directory, fieldIndex) {
+        const dfOutput = execFileSync('df', ['-P', directory], { encoding: 'utf-8' });
+        const lines = dfOutput.trim().split('\n');
+        if (lines.length < 2) return '';
+        return lines[1].trim().split(/\s+/)[fieldIndex] || '';
+    }
+
     // Get the mountpoint/drive of the current working directory in mac os
     get_darwin_mountpoint (directory) {
-        return execSync(`df -P "${directory}" | awk 'NR==2 {print $6}'`, { encoding: 'utf-8' }).trim();
+        return this._dfField(directory, 5);
     }
 
     // Get the mountpoint/drive of the current working directory in linux
     get_linux_mountpint (directory) {
-        return execSync(`df -P "${directory}" | awk 'NR==2 {print $6}'`, { encoding: 'utf-8' }).trim();
-        // TODO: Implement for linux systems
+        return this._dfField(directory, 5);
     }
 
     // Get the drive of the current working directory in windows
@@ -129,14 +135,12 @@ class HostDiskUsageService extends BaseService {
 
     // Get the total drive capacity on the mountpoint/drive in mac os
     get_disk_capacity_darwin (mountpoint) {
-        const disk_info = execSync(`df -P "${mountpoint}" | awk 'NR==2 {print $2}'`, { encoding: 'utf-8' }).trim().split(' ');
-        return parseInt(disk_info) * 512;
+        return parseInt(this._dfField(mountpoint, 1)) * 512;
     }
 
     // Get the total drive capacity on the mountpoint/drive in linux
     get_disk_capacity_linux (mountpoint) {
-        const disk_info = execSync(`df -P "${mountpoint}" | awk 'NR==2 {print $2}'`, { encoding: 'utf-8' }).trim().split(' ');
-        return parseInt(disk_info) * 1024;
+        return parseInt(this._dfField(mountpoint, 1)) * 1024;
     }
 
     // Get the total drive capacity on the drive in windows
@@ -146,14 +150,12 @@ class HostDiskUsageService extends BaseService {
 
     // Get the free space on the mountpoint/drive in mac os
     get_disk_use_darwin (mountpoint) {
-        const disk_info = execSync(`df -P "${mountpoint}" | awk 'NR==2 {print $4}'`, { encoding: 'utf-8' }).trim().split(' ');
-        return parseInt(disk_info) * 512;
+        return parseInt(this._dfField(mountpoint, 3)) * 512;
     }
 
     // Get the free space on the mountpoint/drive in linux
     get_disk_use_linux (mountpoint) {
-        const disk_info = execSync(`df -P "${mountpoint}" | awk 'NR==2 {print $4}'`, { encoding: 'utf-8' }).trim().split(' ');
-        return parseInt(disk_info) * 1024;
+        return parseInt(this._dfField(mountpoint, 3)) * 1024;
     }
 
     // Get the free space on the drive in windows

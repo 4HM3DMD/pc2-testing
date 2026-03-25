@@ -8,7 +8,9 @@
 **PDR Roadmap:** See `docs/core/ROADMAP.md` section "Enterprise Rights Infrastructure (PDR — March 2026)"  
 **Working Plan:** See `.cursor/plans/content_intelligence_roadmap_e7c257b7.plan.md` for implementation details  
 **Gate:** dDRM V3 contract deploy (week of Mar 24) + Lit Protocol mainnet (Mar 25) must stabilize before Phase B begins  
-**Publish Queue:** `publish_drafts` SQLite table + `/api/drafts` REST API + auto-save at pipeline checkpoint + resume signing from toolbar. Enables "process now, sign later" and cross-device signing.
+**Publish Queue:** `publish_drafts` SQLite table + `/api/drafts` REST API + auto-save at pipeline checkpoint + resume signing from toolbar. Enables "process now, sign later" and cross-device signing.  
+**v1.3 Release Plan:** See `.cursor/plans/v1.3_release_plan_7cce212d.plan.md` — HIGH PRIORITY, execution-ready when Lit production details + V3 ABIs/addresses received. Covers Chipotle prod swap (code changes + supernode deployment), V3 contract migration (8+ address locations + ABI updates), and PDR Phase B (SDK extraction + Enterprise API + MCP Server for AI data licensing market).
+**Puter Upstream Audit (Mar 23):** Audited 1,493 upstream commits. 1 security fix ported (shell escape in `HostDiskUsageService.js` — `execSync` → `execFileSync`, zero new deps). All other changes skipped: cloud-centric auth, heavily diverged FS/GUI code, centralized patterns incompatible with sovereignty model.
 
 ---
 
@@ -4807,7 +4809,7 @@ if (isThumbnailUpdate) {
 
 ### Skills System (2026-03-24)
 
-**Status:** ✅ **PHASE 1 COMPLETE** — Bundled skills shipped, purchased skills designed
+**Status:** ✅ **PHASE 1-3 COMPLETE** — Bundled skills, trust/sandboxing, purchased skills via dDRM, and skill discovery all shipped
 
 **Phase 1 — Bundled Skills (Complete):**
 - ✅ `SKILL.md` format with YAML frontmatter (name, description, version, author, tools, permissions)
@@ -4826,12 +4828,17 @@ if (isThumbnailUpdate) {
 - ✅ App capability manifests — all 7 app.json files enriched with `api_endpoints`, `postMessage_events`, `external_services` documenting actual API contract, `APP_MANIFEST_SPEC.md` updated with new field definitions and Runtime v2 mapping
 - ✅ Agent namespace alignment — `NAMESPACE_MAPPING.md` with complete path mapping table (v1 paths -> `localhost://` URIs), `GatewayService.validateAgentWorkspace()` warns on non-standard paths, zero actual path changes
 
-**Phase 3 — Purchased Skills via dDRM (Designed, not built):**
-- [ ] In-memory-only decrypt — raw skill text never touches filesystem, only server process memory
-- [ ] On-chain ownership verification per agent message — `hasAccessByContentId(buyerAddress, kid)`
-- [ ] TTL cache in server memory (5 min) — re-verify ownership periodically
-- [ ] Market app "Install Skill" action for `Content Type: AI Agent Skill` capsules
-- [ ] Cache eviction on ownership loss — sell NFT = immediate skill revocation
+**Phase 3 — Purchased Skills via dDRM & Skill Discovery (Complete, 2026-03-23):**
+- ✅ `POST /api/gateway/skills/install` — decrypt SKILL.md via Lit Protocol dDRM, save to user filesystem (`pc2/skills/{id}/SKILL.md`), record in `installed_skills` table
+- ✅ `DELETE /api/gateway/skills/:skillId` — remove from filesystem, `installed_skills` table, and any agent's active skills list
+- ✅ `GET /api/gateway/skills/installed` — list all installed purchased skills for a wallet
+- ✅ On-chain ownership verification in `ChannelBridge.loadSkillContent()` — `hasAccessByContentId(kid, buyerAddress)` via ethers.js
+- ✅ TTL cache (5 min) — `ownershipCache` Map with expiry timestamps, re-verify periodically, grace period on network errors
+- ✅ Ownership revocation — if on-chain check returns false: delete skill from filesystem, remove from all agent configs, audit log `skill_revoked` event
+- ✅ Market app "Install Skill" button — shown for `Content Type: AI Agent Skill` capsules when owned, calls install endpoint, success redirects to Agent Editor
+- ✅ `installed_skills` SQLite table (migration 23) — `wallet_address`, `skill_id`, `kid`, `content_hash`, `name`, `description`, `last_verified`
+- ✅ Skill discovery tools — `list_available_skills` and `describe_skill` AI tools in `SkillsTools.ts`, dispatched in `ToolExecutor.ts`, included in `allTools` in `AIChatService.ts`
+- ✅ Skill scanner — `scanAvailableSkills()` method scans bundled + user-installed skills, queries agent config for active status
 
 **Runtime v2 Convergence Path:**
 - SKILL.md frontmatter `tools` and `permissions` declarations map to capability token scopes
@@ -4859,6 +4866,41 @@ if (isThumbnailUpdate) {
 - `pc2-node/data/test-apps/*/app.json` — 7 apps enriched with `api_endpoints`, `postMessage_events`, `external_services`
 - `docs/core/APP_MANIFEST_SPEC.md` — new capability fields documented
 - `docs/core/NAMESPACE_MAPPING.md` — new file: complete v1 -> v2 path mapping
+
+**Files Created/Modified (Phase 3 — Purchased Skills & Discovery):**
+- `pc2-node/src/services/ai/tools/SkillsTools.ts` — NEW: `list_available_skills` and `describe_skill` tool definitions
+- `pc2-node/src/services/ai/tools/ToolExecutor.ts` — `scanAvailableSkills()`, `parseSkillFrontmatter()`, new `case` handlers for skill tools
+- `pc2-node/src/services/ai/AIChatService.ts` — `skillsTools` added to `allTools` array
+- `pc2-node/src/storage/migrations.ts` — migration 23 (`installed_skills` table)
+- `pc2-node/src/storage/database.ts` — `insertInstalledSkill()`, `getInstalledSkill()`, `getInstalledSkills()`, `updateSkillVerification()`, `deleteInstalledSkill()`
+- `pc2-node/src/api/gateway.ts` — `POST /api/gateway/skills/install`, `GET /api/gateway/skills/installed`, `DELETE /api/gateway/skills/:skillId`
+- `pc2-node/src/api/storage.ts` — exported `decryptAssetTwoLayer()` and `DecryptParams` for reuse
+- `pc2-node/src/services/gateway/ChannelBridge.ts` — `ownershipCache`, `verifySkillOwnership()`, `revokeSkill()`, purchased skill detection in `loadSkillContent()`
+- `pc2-node/data/test-apps/elacity-market/app.js` — `isAISkillAsset()`, `renderInstallSkillButton()`, `installSkillFromNFT()`
+- `pc2-node/data/test-apps/elacity-market/index.html` — `detail-install-skill` div
+- `pc2-node/data/test-apps/elacity-market/styles.css` — Install Skill section styling
+
+**Phase 4 — A2UI Canvas & Multi-Agent Communication (Complete, 2026-03-23):**
+- ✅ **A2UI Canvas** — Agent-driven desktop windows via Socket.IO, inspired by [OpenClaw's A2UI protocol](https://github.com/openclaw/openclaw). Three tools: `canvas_create` (opens window with HTML), `canvas_update` (live content refresh), `canvas_remove` (programmatic close). Frontend handlers on `canvas.push`, `canvas.update`, `canvas.remove` Socket.IO events create `UIWindow({ iframe_srcdoc })` instances — draggable, resizable, with dark-theme base styles. `canvas.closed` event fires when user closes window. Sandboxed via `iframe_srcdoc` (no `allow-same-origin`, no external scripts).
+- ✅ **Multi-Agent Communication** — Two tools: `agents_list` (discover all configured agents), `agent_delegate` (send message to another agent, receive response). Delegation calls `AIChatService.complete()` with target agent's soul content and model, without tools (depth-limited to 1, no recursive chains). Enables specialization and cooperation between agents.
+
+**Files Created/Modified (Phase 4 — Canvas & Multi-Agent):**
+- `pc2-node/src/services/ai/tools/CanvasTools.ts` — NEW: `canvas_create`, `canvas_update`, `canvas_remove` tool definitions
+- `pc2-node/src/services/ai/tools/AgentTools.ts` — NEW: `agents_list`, `agent_delegate` tool definitions
+- `pc2-node/src/services/ai/tools/ToolExecutor.ts` — canvas dispatch (emit Socket.IO events), agent dispatch (`delegateToAgent` method), `aiService` option added to constructor
+- `pc2-node/src/services/ai/AIChatService.ts` — `canvasTools` and `agentTools` added to `allTools`, `aiService: this` passed to `ToolExecutor`
+- `src/gui/src/UI/UIDesktop.js` — Socket.IO handlers for `canvas.push`, `canvas.update`, `canvas.remove` events; `_canvasWindows` tracking map; dark-theme HTML wrapping; `canvas.closed` emit on window close
+
+**Phase 5 — Voice Interface & Canvas Dashboards Skill (Complete, 2026-03-24):**
+- ✅ **Voice Interface** — Full voice interaction with dual-mode architecture. **Server-side pipeline**: browser audio (webm/opus) → ffmpeg (wav) → Whisper STT → AI response via `AIChatService.complete()` → Piper TTS → base64 audio response. Includes `/api/ai/voice/install` for automated Whisper + Piper + ffmpeg setup on Linux, `/api/ai/voice/status` for health checks, `/api/ai/voice/enable|disable` for service control. **Browser-native fallback**: when server voice unavailable, uses Web Speech API (`SpeechRecognition` for STT, `SpeechSynthesis` for TTS). Transcript sent through normal chat pipeline with full streaming + tool support. **Voice conversation mode**: auto-speaks AI response when user initiated via voice input — reset after each response. **Read Aloud button**: speaker icon on all AI messages for on-demand TTS — toggles between "Read" and "Stop" states. Waveform visualization (canvas-based frequency bar animation) during server recording.
+- ✅ **Canvas Dashboards Skill** — Bundled skill (`data/skills/canvas-dashboards/SKILL.md`) with SHA-256 hash registered in `BUNDLED_SKILL_HASHES`. Teaches agents visual dashboard patterns: data tables, stat card grids, side-by-side comparisons, semantic color palette (green/blue/red/yellow/orange/purple matching PC2 desktop), badge system, sizing guidelines for small/standard/wide/large windows, update patterns for live data refresh. Makes A2UI canvas immediately useful without agents needing prior HTML knowledge.
+
+**Files Created/Modified (Phase 5 — Voice & Canvas Skill):**
+- `pc2-node/data/skills/canvas-dashboards/SKILL.md` — NEW: bundled skill for canvas dashboard patterns
+- `pc2-node/src/services/gateway/ChannelBridge.ts` — `canvas-dashboards` hash added to `BUNDLED_SKILL_HASHES`
+- `src/gui/src/UI/AI/UIAIChat.js` — Browser STT/TTS functions (`speakText`, `stopSpeaking`, `startBrowserSTT`, `finishBrowserSTT`), voice conversation mode, Read Aloud button on AI messages, `SpeechSynthesis` voice preloading, fallback logic in voice button handler
+- `src/gui/src/css/style.css` — `.ai-speak-btn` styles (dark/light mode, speaking state animation)
+- `pc2-node/src/api/voice.ts` — (existing, no changes) Full Whisper + Piper server-side pipeline
 
 ---
 
