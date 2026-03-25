@@ -18,6 +18,9 @@ import { FilesystemManager } from '../../storage/filesystem.js';
 import { DatabaseManager } from '../../storage/database.js';
 import { GatewayService, getGatewayService } from './GatewayService.js';
 import { AgentMemoryManager } from '../ai/memory/AgentMemoryManager.js';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+import fs from 'fs';
 import type {
   ChannelMessage,
   ChannelReply,
@@ -25,6 +28,10 @@ import type {
   AgentConfig,
   AgentPermissions,
 } from './types.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const BUNDLED_SKILLS_DIR = join(__dirname, '../../../data/skills');
 
 /**
  * Message with channel metadata
@@ -236,8 +243,18 @@ export class ChannelBridge {
       }
     }
     
-    // Build messages array for AI with memory context
-    const messages = this.buildMessages(session, agent, content.text || '', memoryContent);
+    // Load active skills content
+    const MAX_ACTIVE_SKILLS = 10;
+    let skillContents: string[] = [];
+    const activeSkills = (agent.skills || []).slice(0, MAX_ACTIVE_SKILLS);
+    if (activeSkills.length > 0) {
+      const loaded = await Promise.all(activeSkills.map(id => this.loadSkillContent(id)));
+      skillContents = loaded.filter((s): s is string => s !== null);
+      logger.info('[ChannelBridge] Loaded skills:', { agentId: agent.id, requested: activeSkills.length, loaded: skillContents.length });
+    }
+    
+    // Build messages array for AI with memory context and skills
+    const messages = this.buildMessages(session, agent, content.text || '', memoryContent, skillContents);
     
     // Get tool filter based on agent permissions
     const toolFilter = this.getToolFilter(agent.permissions);
@@ -313,12 +330,13 @@ export class ChannelBridge {
     session: SessionContext,
     agent: AgentConfig,
     currentMessage: string,
-    memoryContent?: string
+    memoryContent?: string,
+    skillContents?: string[]
   ): Array<{ role: 'system' | 'user' | 'assistant'; content: string }> {
     const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [];
     
-    // System prompt with agent context and memory
-    const systemPrompt = this.buildSystemPrompt(session, agent, memoryContent);
+    // System prompt with agent context, memory, and skills
+    const systemPrompt = this.buildSystemPrompt(session, agent, memoryContent, skillContents);
     messages.push({ role: 'system', content: systemPrompt });
     
     // Add history (excluding the current message which is added separately)
@@ -337,9 +355,73 @@ export class ChannelBridge {
   }
   
   /**
+   * Parse YAML-like frontmatter from a SKILL.md file.
+   * Handles flat key-value pairs and simple arrays (- item format).
+   */
+  private parseSkillFrontmatter(raw: string): { meta: Record<string, any>; body: string } {
+    const fmMatch = raw.match(/^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/);
+    if (!fmMatch) return { meta: {}, body: raw };
+
+    const meta: Record<string, any> = {};
+    const lines = fmMatch[1].split('\n');
+    let currentKey = '';
+
+    for (const line of lines) {
+      const kvMatch = line.match(/^(\w+):\s*(.*)$/);
+      if (kvMatch) {
+        currentKey = kvMatch[1];
+        const val = kvMatch[2].trim();
+        if (val === '' || val === '[]') {
+          meta[currentKey] = [];
+        } else {
+          meta[currentKey] = val;
+        }
+      } else if (line.match(/^\s+-\s+/) && currentKey) {
+        const item = line.replace(/^\s+-\s+/, '').trim();
+        if (!Array.isArray(meta[currentKey])) meta[currentKey] = [];
+        meta[currentKey].push(item);
+      }
+    }
+
+    return { meta, body: fmMatch[2].trim() };
+  }
+
+  /**
+   * Load a skill's markdown body by ID.
+   * Checks bundled skills first, then user filesystem.
+   */
+  private async loadSkillContent(skillId: string): Promise<string | null> {
+    const bundledPath = join(BUNDLED_SKILLS_DIR, skillId, 'SKILL.md');
+    try {
+      const raw = await fs.promises.readFile(bundledPath, 'utf-8');
+      const { body } = this.parseSkillFrontmatter(raw);
+      return body;
+    } catch {
+      // Not a bundled skill — try user filesystem
+    }
+
+    if (this.filesystem && this.ownerWalletAddress) {
+      try {
+        const userSkillPath = `pc2/skills/${skillId}/SKILL.md`;
+        const raw = await this.filesystem.readFile(this.ownerWalletAddress, userSkillPath);
+        if (raw) {
+          const text = typeof raw === 'string' ? raw : raw.toString('utf-8');
+          const { body } = this.parseSkillFrontmatter(text);
+          return body;
+        }
+      } catch {
+        // Skill not found in user filesystem either
+      }
+    }
+
+    logger.warn(`[ChannelBridge] Skill not found: ${skillId}`);
+    return null;
+  }
+
+  /**
    * Build system prompt for the agent
    */
-  private buildSystemPrompt(session: SessionContext, agent: AgentConfig, memoryContent?: string): string {
+  private buildSystemPrompt(session: SessionContext, agent: AgentConfig, memoryContent?: string, skillContents?: string[]): string {
     const parts: string[] = [];
     
     // Get soul content from agent configuration (not channel settings)
@@ -389,6 +471,15 @@ export class ChannelBridge {
       parts.push(`- You can set reminders and scheduled tasks`);
     }
     
+    // Inject active skills
+    if (skillContents && skillContents.length > 0) {
+      parts.push(`\n## Active Skills`);
+      parts.push(`You have the following specialized skills enabled:`);
+      for (const skill of skillContents) {
+        parts.push(`\n${skill}`);
+      }
+    }
+    
     // Restrictions
     parts.push(`\n## Restrictions`);
     if (!perms.fileWrite) {
@@ -413,7 +504,13 @@ export class ChannelBridge {
     }
     parts.push(`- If you cannot do something, explain why clearly`);
     
-    return parts.join('\n');
+    const prompt = parts.join('\n');
+    logger.debug('[ChannelBridge] System prompt built', {
+      agentId: agent.id,
+      promptLength: prompt.length,
+      skillsActive: skillContents?.length || 0,
+    });
+    return prompt;
   }
   
   /**

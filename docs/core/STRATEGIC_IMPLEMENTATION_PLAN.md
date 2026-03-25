@@ -4805,6 +4805,45 @@ if (isThumbnailUpdate) {
 
 **Timeline:** Research started 2025-01-20 → Implementation complete 2026-01-27 (1 year)
 
+### Skills System (2026-03-24)
+
+**Status:** ✅ **PHASE 1 COMPLETE** — Bundled skills shipped, purchased skills designed
+
+**Phase 1 — Bundled Skills (Complete):**
+- ✅ `SKILL.md` format with YAML frontmatter (name, description, version, author, tools, permissions)
+- ✅ `SkillDefinition` interface and `skills?: string[]` field on `AgentConfig`
+- ✅ Skill loader in `ChannelBridge` — reads bundled skills from `data/skills/`, parses frontmatter, injects content into `buildSystemPrompt()`
+- ✅ `GET /api/gateway/skills` endpoint — scans bundled skills directory, returns metadata
+- ✅ UIAgentEditor "Skills" section — toggle checkboxes, permission-mismatch warning icons, persisted in gateway config
+- ✅ 4 bundled skills: Wallet Operations, File Management, System Admin, Elacity Market
+- ✅ `.md` file support in Creator app (publishable as Wealth Capsule with `Content Type: AI Agent Skill` attribute)
+- ✅ Max 10 active skills per agent (safety cap on prompt size)
+
+**Phase 2 — Trust & Sandboxing (Next):**
+- [ ] SHA-256 hash verification before skill loading (Rong: "validate the hash of every module")
+- [ ] Prompt-level sandboxing — wrap skill content with trust boundaries, tool-scoping per skill
+- [ ] Audit logging — every skill load logged with hash, agent ID, timestamp, source
+
+**Phase 3 — Purchased Skills via dDRM (Designed, not built):**
+- [ ] In-memory-only decrypt — raw skill text never touches filesystem, only server process memory
+- [ ] On-chain ownership verification per agent message — `hasAccessByContentId(buyerAddress, kid)`
+- [ ] TTL cache in server memory (5 min) — re-verify ownership periodically
+- [ ] Market app "Install Skill" action for `Content Type: AI Agent Skill` capsules
+- [ ] Cache eviction on ownership loss — sell NFT = immediate skill revocation
+
+**Runtime v2 Convergence Path:**
+- SKILL.md frontmatter `tools` and `permissions` declarations map to capability token scopes
+- Content-addressed skill identity (CID) maps to `elastos://` addressing
+- Agent workspace `~/pc2/agents/{id}/` maps to `localhost://UsersAI/{agentName}/`
+- Prompt-level sandboxing is the v1.x equivalent of Runtime v2's WASM sandbox boundary
+
+**Files Created/Modified:**
+- `pc2-node/data/skills/*/SKILL.md` — 4 bundled skill definitions
+- `pc2-node/src/services/gateway/types.ts` — `SkillDefinition` interface, `skills` field on `AgentConfig`
+- `pc2-node/src/services/gateway/ChannelBridge.ts` — skill loader, frontmatter parser, prompt injection
+- `pc2-node/src/api/gateway.ts` — `GET /api/gateway/skills` endpoint
+- `src/gui/src/UI/Channels/UIAgentEditor.js` — Skills UI section
+
 ---
 
 ## 🌐 Phase 6: Elacity dDRM Integration (Future Vision)

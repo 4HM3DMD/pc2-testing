@@ -9,12 +9,20 @@ import { Router, Request, Response } from 'express';
 import { authenticate, AuthenticatedRequest } from './middleware.js';
 import { logger } from '../utils/logger.js';
 import { getGatewayService } from '../services/gateway/index.js';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+import fs from 'fs';
 import type {
   ChannelType,
   ChannelConfig,
   AgentConfig,
   SavedChannel,
+  SkillDefinition,
 } from '../services/gateway/types.js';
+
+const __gatewayFilename = fileURLToPath(import.meta.url);
+const __gatewayDirname = dirname(__gatewayFilename);
+const BUNDLED_SKILLS_DIR = join(__gatewayDirname, '../../data/skills');
 
 const router = Router();
 
@@ -393,6 +401,76 @@ router.post('/channels/:channel/disconnect', authenticate, async (req: Authentic
       success: false,
       error: error.message,
     });
+  }
+});
+
+/**
+ * Parse YAML-like frontmatter from a SKILL.md file
+ */
+function parseSkillFrontmatter(raw: string): { meta: Record<string, any>; body: string } {
+  const fmMatch = raw.match(/^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/);
+  if (!fmMatch) return { meta: {}, body: raw };
+
+  const meta: Record<string, any> = {};
+  const lines = fmMatch[1].split('\n');
+  let currentKey = '';
+
+  for (const line of lines) {
+    const kvMatch = line.match(/^(\w+):\s*(.*)$/);
+    if (kvMatch) {
+      currentKey = kvMatch[1];
+      const val = kvMatch[2].trim();
+      if (val === '' || val === '[]') {
+        meta[currentKey] = [];
+      } else {
+        meta[currentKey] = val;
+      }
+    } else if (line.match(/^\s+-\s+/) && currentKey) {
+      const item = line.replace(/^\s+-\s+/, '').trim();
+      if (!Array.isArray(meta[currentKey])) meta[currentKey] = [];
+      meta[currentKey].push(item);
+    }
+  }
+
+  return { meta, body: fmMatch[2].trim() };
+}
+
+/**
+ * GET /api/gateway/skills
+ * List all available skills (bundled)
+ */
+router.get('/skills', authenticate, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const skills: Omit<SkillDefinition, 'content'>[] = [];
+
+    if (fs.existsSync(BUNDLED_SKILLS_DIR)) {
+      const dirs = await fs.promises.readdir(BUNDLED_SKILLS_DIR, { withFileTypes: true });
+      for (const dir of dirs) {
+        if (!dir.isDirectory()) continue;
+        const skillPath = join(BUNDLED_SKILLS_DIR, dir.name, 'SKILL.md');
+        try {
+          const raw = await fs.promises.readFile(skillPath, 'utf-8');
+          const { meta } = parseSkillFrontmatter(raw);
+          skills.push({
+            id: dir.name,
+            name: meta.name || dir.name,
+            description: meta.description || '',
+            version: meta.version || '1.0.0',
+            author: meta.author || 'Unknown',
+            tools: Array.isArray(meta.tools) ? meta.tools : [],
+            permissions: Array.isArray(meta.permissions) ? meta.permissions : [],
+            source: 'bundled',
+          });
+        } catch {
+          logger.warn(`[Gateway API] Could not read skill: ${dir.name}`);
+        }
+      }
+    }
+
+    res.json({ success: true, data: skills });
+  } catch (error: any) {
+    logger.error('[Gateway API] Error listing skills:', error);
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 

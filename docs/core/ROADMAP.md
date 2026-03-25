@@ -2,7 +2,7 @@
 
 > **Purpose:** Single source of truth for all strategic goals, technical work streams, and milestones — directly mapped to the Keystone Fund proposal and Rong Chen's original vision
 > **Created:** 2026-02-24
-> **Last Updated:** 2026-03-23
+> **Last Updated:** 2026-03-24
 > **Status:** Living document — update as work progresses
 
 ---
@@ -303,6 +303,33 @@ These diagrams from Rong define the north star. Every work stream should move us
 - [ ] AI agent file management improvements
 - [ ] RAG retrieval optimization for personal documents
 - [ ] Evaluate PersonaPlex-7B (NVIDIA full-duplex voice) as Jetson hardware matures
+- [x] **Skills System (v1.2)** — SKILL.md format with YAML frontmatter (name, description, version, author, tools, permissions). Skills injected into agent system prompt via `ChannelBridge.buildSystemPrompt()`. Lightweight frontmatter parser (no YAML dependency). `GET /api/gateway/skills` endpoint scans `data/skills/` for available skills. UIAgentEditor skills section with toggles and permission-mismatch warnings. Max 10 active skills per agent. *(completed Mar 24)*
+  - [x] 4 bundled skills: Wallet Operations, File Management, System Admin, Elacity Market
+  - [x] `SkillDefinition` interface and `skills?: string[]` on `AgentConfig` in gateway types
+  - [x] `.md` file support added to Creator app (EXT_MIME_MAP, guessMimeType, DAG_MIME_TYPES) with auto-category detection for `skill` content type
+  - [x] `{ trait_type: 'Content Type', value: 'AI Agent Skill' }` NFT attribute for published skills
+  - [ ] Skill hash verification — SHA-256 validation before loading (trust nothing, per Rong's AppCapsule principle)
+  - [ ] Prompt-level sandboxing — wrap third-party skill content with explicit trust boundaries and tool-scoping
+  - [ ] Audit logging for skill loads — hash, agent ID, timestamp, source (bundled/user/purchased)
+  - [ ] Purchased skill support — in-memory decrypt via dDRM pipeline, ownership verification on every agent message, no raw text on filesystem
+  - [ ] Skill tools for agent — `list_available_skills`, `describe_skill` let the agent discover and recommend skills
+
+**v1.x Runtime v2 Convergence Preparation:**
+> These items make PC2 v1.x releases forward-compatible with Anders' Runtime v2 capsule model.
+> They must not break existing functionality — each v1.x release (v1.2, v1.3, etc.) ships as a drop-in update.
+> Rong's principle: "Trust nothing. No app should ever be trusted with secrets in its own execution space."
+
+- [ ] **App capability manifests** — document each app's actual API surface (which endpoints, what data). Creator app, Market app, dDRM Viewer, Media Runtime. This becomes the capsule manifest when apps migrate to AppCapsules. Non-breaking: metadata-only, no enforcement in v1.x
+- [ ] **Skill hash verification** — SHA-256 validation of SKILL.md content before injection into agent system prompt. Bundled skills: hardcoded hashes in code. Purchased skills: verified against `contentHash` from NFT metadata. Non-breaking: verification logged, not enforced in v1.x (warn on mismatch)
+- [ ] **Prompt-level sandboxing for skills** — wrap third-party skill content with explicit trust boundaries in the system prompt. Skills can only reference their declared tools. Prevents prompt injection attacks (AI equivalent of sandbox escape). Non-breaking: system prompt formatting change only
+- [ ] **Audit logging for AI actions** — log every tool call, skill load, and capability-relevant action with hash, agent ID, timestamp, and source. Maps to Runtime v2's immutable audit trail. Store in SQLite `agent_audit_log` table. Non-breaking: append-only logging, no behavioral change
+- [ ] **Agent namespace alignment** — ensure agent workspace paths (`~/pc2/agents/{id}/`) use stable naming that maps to `localhost://UsersAI/{agentName}/` per Rong's WCI directory model. Document the mapping. Non-breaking: path structure already works, this is naming convention documentation + migration notes
+
+**Questions for Anders:**
+- What capability token format should we pre-adopt for app manifests? (JSON shape, signing scheme, scope declarations)
+- Should `localhost://UsersAI/` be a reserved path in Runtime v2's namespace today, or will it be provisioned dynamically?
+- For the dDRM Provider Capsule: should our Rust WASM crates (`aes-gcm-decrypt`, `cenc-decrypt`) target `wasm32-wasip1` Preview 1 or Preview 2 for capsule compatibility?
+- Is there a canonical way to expose "skill install" as a capsule operation, or should we design our own and align later?
 
 **Omnichain ELA:**
 - [ ] Begin ELA liquidity deployment across target EVM chains
@@ -574,12 +601,13 @@ These diagrams from Rong define the north star. Every work stream should move us
 **Agent Economy:**
 - [ ] Agent-to-agent communication (capability-gated trust)
 - [ ] Investable agents with dDRM-protected capabilities
-- [ ] Tradeable skill capsules (agent expertise as distributable CIDs)
+- [ ] Tradeable skill capsules (agent expertise as distributable CIDs) — **foundation shipped in v1.2**: SKILL.md format, `.md` publishable as Wealth Capsule, `Content Type: AI Agent Skill` attribute, Market feed + detail badge. Convergence path: SKILL.md → signed data capsule with capability declarations, in-memory-only decrypt (CEK never on disk), ownership verification per agent message
 - [ ] Agent marketplace (deploy, discover, interact)
 - [ ] Evaluate ERC-8004 agent registry for node/agent identity and discovery
 - [ ] Register PC2 nodes and Flint agent in ERC-8004 Identity Registry (ERC-721)
 - [ ] Integrate ERC-8004 Reputation Registry for dApp Store app/agent ratings
 - [ ] Expose MCP/A2A endpoints in agent registration files for cross-agent discovery
+- [ ] Agent workspace namespace alignment — `~/pc2/agents/{id}/` maps to `localhost://UsersAI/{agentName}/` per Rong's WCI directory model (Users and UsersAI as parallel peer actors)
 
 **Carrier Network:**
 - [ ] Multi-supernode WireGuard with load balancing (NETWORK_HARDENING Phase 2)
