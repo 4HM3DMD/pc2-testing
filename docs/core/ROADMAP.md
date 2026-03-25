@@ -2,7 +2,7 @@
 
 > **Purpose:** Single source of truth for all strategic goals, technical work streams, and milestones — directly mapped to the Keystone Fund proposal and Rong Chen's original vision
 > **Created:** 2026-02-24
-> **Last Updated:** 2026-03-24
+> **Last Updated:** 2026-03-23
 > **Status:** Living document — update as work progresses
 
 ---
@@ -22,6 +22,7 @@ Each **Milestone** from the DAO proposal is broken down into concrete **Work Str
 | [NETWORK_HARDENING.md](../pc2-infrastructure/NETWORK_HARDENING.md) | Supernode decentralization and self-healing |
 | [DECENTRALIZATION_STATUS.md](./DECENTRALIZATION_STATUS.md) | Decentralization scorecard, walk-away test roadmap |
 | [AGENT_HANDOVER.md](./AGENT_HANDOVER.md) | Current state, coding patterns, infrastructure |
+| [POST_QUANTUM_AUDIT.md](./POST_QUANTUM_AUDIT.md) | PQ crypto audit, vulnerability map, Lit replacement strategy, migration roadmap |
 | [ARM_DEVICES.md](../deployment/ARM_DEVICES.md) | Jetson/Raspberry Pi deployment |
 
 ---
@@ -719,6 +720,43 @@ These diagrams from Rong define the north star. Every work stream should move us
 | Awareness Layer | Location + photo + voice + memory → contextual agent | 🔨 Phase 2-3 |
 | Full-duplex Voice | PersonaPlex-7B or equivalent on-device voice model | 📋 Phase 3+ |
 | Runtime manages ALL network traffic | Capability-gated networking in runtime | 📋 Phase 3 |
+
+### Post-Quantum Cryptographic Migration
+
+> **Audit:** See `docs/core/POST_QUANTUM_AUDIT.md` for full crypto primitive inventory and vulnerability assessment.
+> **Principle:** Replacing Lit Protocol, building PQ crypto, and packaging for Runtime v2 capsules are the same project — do them together.
+
+**Current Posture:**
+- Symmetric crypto (AES-256-GCM, SHA-256, ChaCha20): **PQ-adequate** ✅
+- AES-128-CTR (CENC media only): **Acceptable** for media content lifecycle (Grover: 2^64 ops, impractical) ✅
+- Key wrapping (Lit ECDH P-256, BLS threshold): **Vulnerable** — highest priority ❌
+- Transport (WireGuard Curve25519, libp2p Noise X25519, Boson X25519+Ed25519): **Vulnerable** ❌
+- Identity (secp256k1 ECDSA via Particle/Ethereum): **Vulnerable** — follows Ethereum EIP-8141 timeline ❌
+
+**Sovereign Key Management (Lit Replacement + PQ):**
+```
+Current:   Lit Chipotle REST API (ECDH P-256 + BLS threshold)
+Phase A:   Dual-write — Lit + PC2 supernode Shamir custody (3+ supernodes required)
+Phase B:   PC2 primary, Lit fallback
+Phase C:   PC2 only, Lit optional
+Phase D:   Content re-encryption from Lit to PC2 with PQ wrapping
+```
+
+| Priority | Action | Target | Status |
+|----------|--------|--------|--------|
+| P1 | AES-256-CTR mode flag in CENC Rust crates | When convenient | 📋 Planned |
+| P2 | Grow supernode count to 3+ | Q2-Q3 2026 | 📋 Prerequisite for custody |
+| P2 | Prototype `elastos-keycustody` Rust crate (Shamir + ML-KEM-768, wasm32-wasip1) | Q3 2026 | 📋 Planned |
+| P2 | Evaluate ML-KEM/ML-DSA Rust crates for wasm32-wasip1 | Q3 2026 | 📋 Research |
+| P3 | Dual-write: Lit + PC2 custodian for new content | Q4 2026 | 📋 Planned |
+| P3 | libp2p Noise PQ hybrid (when js-libp2p ships) | 2027 | 📋 Dep on ecosystem |
+| P3 | Boson CryptoBox: ML-KEM-768 + X25519 hybrid | 2027 | 📋 Our code |
+| P4 | PC2 primary key custody, Lit fallback only | 2027-2028 | 📋 Sovereignty milestone |
+| P4 | Content re-encryption tooling (Lit CEKs -> PQ custody) | 2027-2028 | 📋 Planned |
+| P5 | Full Lit removal — PC2 sovereign key management | 2028 | 📋 Walk-away complete |
+| P5 | Full PQ stack (all transports, all identity) | 2028-2030 | 📋 Pre-Q-Day |
+
+**Runtime v2 Convergence:** `elastos-keycustody` crate targets `wasm32-wasip1` — runs as WASM module in v1.x, becomes signed capsule in v2. PQ primitives (ML-KEM-768, ML-DSA-65) built in from day 1.
 
 ### Elacity dDRM SDK Integration Path — Universal Asset Protocol
 
