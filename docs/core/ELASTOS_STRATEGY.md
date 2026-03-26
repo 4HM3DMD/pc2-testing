@@ -74,6 +74,54 @@ Today's web is a "data browser" — you visit websites and pull data from their 
 
 In ElastOS terms, these are **capsules** — self-contained apps distributed by their content fingerprint (CID). You install them from a marketplace, or a friend sends you one. They run on your hardware, not a corporate server. Nobody can take them away from you.
 
+### The Binary Attack Problem — Why Apps Can't Be Trusted
+
+Every virus, trojan, and ransomware attack is fundamentally the same thing: **a binary that was trusted too much.** Your password manager and a random game you downloaded both run in the same environment with the same access to your operating system. Rong identified this in 2002:
+
+> *"No app should ever be trusted with passwords or secrets in its own execution space."*
+
+**How apps work today (broken):**
+
+Your operating system loads the app. The OS trusts the app. The app trusts whatever libraries it needs. Nobody verifies anything after the initial install. A library update could inject malicious code and nobody would know.
+
+**Rong's AppCapsule model:**
+
+Each app is a self-contained capsule that carries its own loader — its own "startup sequence." When the capsule launches, its loader:
+
+1. **Checks the hash of every module** — every library, every dependency, every piece of code inside the capsule is verified against a known hash. If a single byte has been tampered with, the capsule refuses to start. This is like a pilot running through a pre-flight checklist before every flight — you don't just trust that the plane is fine because it was fine yesterday.
+
+2. **Cryptographically verifies credentials** — the capsule proves it is what it claims to be. Signed by the developer, verified by the Runtime. Not "this file is named PhotoEditor.exe so it's probably the photo editor" — actual cryptographic proof.
+
+3. **Trusts nothing** — the capsule doesn't trust the network, doesn't trust other apps, doesn't even trust the operating system to have loaded it correctly. It verifies everything itself. This is what "zero trust" actually means — not the marketing buzzword, but the architecture.
+
+### Why the Internet Needs an Operating System
+
+Every PC has an operating system because you need something to decide which programs can run, control what each program can access, prevent one program from crashing another, and manage shared resources. Without an OS, your computer would be chaos.
+
+**The internet today has no operating system.** When you download an app, run a browser extension, execute a smart contract, or deploy an AI agent — there is no equivalent of an OS managing what that code can do. We have firewalls (partial, blunt), antivirus (reactive, always behind), app store review (centralized, slow), and browser sandboxes (limited, constantly bypassed). But nothing that enforces boundaries, verifies code, scopes permissions, and audits actions at a system level across the network.
+
+**That's what Elastos is.** The missing operating system for the internet — the thing that sits between untrusted code and your resources, the same way Windows/macOS sits between apps and your hardware.
+
+### Defense in Depth — Two Layers of Protection
+
+Rong's two principles combine into a complete security architecture:
+
+```
+INSIDE-OUT (the capsule protects itself):
+  AppCapsule → verifies own hash → validates credentials → trusts nothing
+
+OUTSIDE-IN (the Runtime protects the user):
+  Runtime → sandboxes every capsule → never exposes secrets → enforces permissions → logs everything
+
+Neither trusts the other. The user is protected by both layers.
+```
+
+The reason people don't understand this yet is the same reason people didn't understand why PCs needed operating systems in the 1970s. Early computers ran one program at a time. Why would you need an OS? Then multitasking arrived, and suddenly you needed process isolation, memory protection, file permissions — an OS.
+
+The internet is at that same inflection point. We're about to run AI agents, autonomous programs, smart contracts, and personal cloud services — all interacting, all needing access to sensitive data. Without an Internet OS to sandbox and govern them, we're back to the 1970s — one bad program takes down everything.
+
+Rong saw this in 2002. Anders is building it now. The AI agent wave is about to make it obvious to everyone else.
+
 ---
 
 ## The Three-Phase Architecture Journey

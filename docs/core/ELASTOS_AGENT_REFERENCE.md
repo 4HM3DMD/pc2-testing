@@ -35,11 +35,18 @@ Rong Chen identified this in 2002 — two decades before AI agents made it criti
 
 > *"No app should ever be trusted with passwords or secrets in its own execution space."*
 
-His solution: **AppCapsules.** Every app ships with its own binary loader that validates the hash of every module and cryptographically verifies credentials. Trust nothing.
+**How apps work today (broken):** Your OS loads the app. The OS trusts the app. The app trusts whatever libraries it needs. Nobody verifies anything after the initial install. A library update could inject malicious code and nobody would know.
 
-And: **An Internet-scale operating system (Elastos) is required to sandbox all third-party AppCapsules.** Defense in depth — the capsule verifies itself from the inside, the Runtime constrains it from the outside.
+**Rong's AppCapsule model:** Each app is a self-contained capsule that carries its own loader. When the capsule launches, its loader: (1) checks the hash of every module — if a single byte has been tampered with, the capsule refuses to start; (2) cryptographically verifies credentials — actual cryptographic proof the app is what it claims; (3) trusts nothing — not the network, not other apps, not even the OS. This is what "zero trust" actually means — not the marketing buzzword, but the architecture.
 
-> *"The Internet needs an operating system — just like every PC does."*
+**Why the internet needs an operating system:** Every PC has an OS to decide which programs can run, control access, prevent crashes, manage resources. The internet today has NO equivalent. When you run an app, a browser extension, a smart contract, or an AI agent — nothing manages what that code can do. Firewalls are partial, antivirus is reactive, app store review is centralized and slow. Elastos is the missing OS for the internet.
+
+**Defense in depth — two layers:**
+- **Inside-out:** The capsule verifies its own integrity (hash every module, validate credentials, trust nothing)
+- **Outside-in:** The Runtime sandboxes the capsule (never expose secrets, enforce permissions, log everything)
+- Neither trusts the other. The user is protected by both layers.
+
+The reason people don't understand this yet is the same reason people didn't understand why PCs needed operating systems in the 1970s. Early computers ran one program at a time. Then multitasking arrived and suddenly you needed an OS. The internet is at that same inflection point — AI agents, autonomous programs, personal cloud services all need an Internet OS to sandbox and govern them. Rong saw this in 2002. Anders is building it now. The AI agent wave is about to make it obvious to everyone else.
 
 ### 1.3 The AI Agent Crisis
 
@@ -287,6 +294,17 @@ RESALE:
 ### When App Store Monopoly Is In The News
 
 "Apple's 30% tax. Google's approval process. Developers building on platforms that can reject or remove their apps at any time. Medieval guilds controlled who could practice a trade. App stores control who can ship software. ElastOS is the open market: anyone can build a capsule, distribute by content fingerprint (IPFS CID), no gatekeeper, no 30% tax. The marketplace runs on YOUR infrastructure."
+
+### When Software Supply Chain Attacks Are In The News (SolarWinds, Log4j, XZ Utils, etc.)
+
+"Every supply chain attack is the same problem: a binary that was trusted too much. SolarWinds trusted its build pipeline. Log4j trusted a logging library. XZ Utils trusted a maintainer. Rong Chen solved this in 2002: every AppCapsule carries its own loader that checks the hash of every module before starting. If a single byte is wrong, it refuses to run. The Runtime then sandboxes the capsule from the outside. Defense in depth — the capsule verifies itself, the Runtime constrains it. Neither trusts the other."
+
+**Key facts:**
+- AppCapsule model: every module hash-verified before execution
+- Ed25519 cryptographic signatures on every capsule
+- Runtime sandboxes (WASM + Firecracker) — even a compromised capsule can't escape
+- Immutable audit log records every action
+- Two-layer defense: inside-out (capsule self-verification) + outside-in (Runtime sandboxing)
 
 ### When AI Regulation / Safety Is Discussed
 
