@@ -2,7 +2,7 @@
 
 > **Purpose:** Single source of truth for all strategic goals, technical work streams, and milestones — directly mapped to the Keystone Fund proposal and Rong Chen's original vision
 > **Created:** 2026-02-24
-> **Last Updated:** 2026-03-23
+> **Last Updated:** 2026-03-26
 > **Status:** Living document — update as work progresses
 
 ---
@@ -262,6 +262,18 @@ These diagrams from Rong define the north star. Every work stream should move us
 - [ ] Performance profiling on Jetson (memory, CPU, IPFS block store)
 - [x] Reduce PC2 cold-start time — parallelized AI/Gateway/Boson initialization
 - [x] Mobile-responsive UI improvements — taskbar z-index fix, responsive layouts, virtual desktops
+
+**Backup & Restore System (Mnemonic-as-Identity Security Model):**
+- [x] **Mnemonic derivation fix** — `deriveFromMnemonic()` in IdentityService.ts now uses `tweetnacl.sign.keyPair.fromSeed()` with HKDF-SHA256 for deterministic Ed25519 key derivation. New nodes (v2) generate mnemonic first, then derive keys. Same mnemonic always produces same keypair. Existing v1 nodes grandfathered. *(completed Mar 26)*
+- [x] **Stolen backup protection** — v2 backups encrypt `identity.json` to `identity.enc` using AES-256-GCM with a key derived from the public key (which itself derives from the mnemonic). Stolen backup without mnemonic cannot hijack domain. `backup-meta.json` versioning distinguishes v1 (plaintext) from v2 (encrypted) backups. *(completed Mar 26)*
+- [x] **Expanded backup contents** — Backups now include `data/installed-apps/` (user dApps) and `data/agents/` (AI agent memory/history). *(completed Mar 26)*
+- [x] **Pre-auth restore endpoint** — Rate-limited `POST /api/setup/restore` (unauthenticated, setup phase only) with disk-based upload (no OOM risk). Two-step flow: upload+validate, then finalize with mnemonic for v2 backups. *(completed Mar 26)*
+- [x] **Setup wizard restore UI** — "Restore from Backup" button on welcome screen. File upload with drag-and-drop, mnemonic entry for v2 backups, backup contents summary. Auto-detects CLI restores with pending `identity.enc`. *(completed Mar 26)*
+- [x] **Identity conflict detection** — On startup, queries gateway for username registration. If another node claimed the same username (dual-node conflict), logs warning and auto re-registers. *(completed Mar 26)*
+- [x] **Disk-based restore upload** — Authenticated `POST /api/backups/restore` switched from `memoryStorage` to `diskStorage` to prevent OOM on large backup uploads. *(completed Mar 26)*
+- [x] **32 automated tests** — Deterministic derivation, DER round-trip, sign/verify, backup encryption/decryption, stolen backup rejection, v1 backward compatibility, full backup-restore cycle simulation. All passing. *(completed Mar 26)*
+- [ ] **DEFERRED: Gateway signed registration** — Harden `POST /api/register` to require Ed25519 signature (separate task, `deploy/web-gateway/` codebase)
+- [ ] **DEFERRED: Graceful deregistration** — `POST /api/unregister` + call from `ConnectivityService.stop()`
 
 **DePIN Hardware Expansion:**
 - [x] Validate one-command installer on fresh Jetson Orin Nano — tested on 2 devices (EverlastingOS + Anders)

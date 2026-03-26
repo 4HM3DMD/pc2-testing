@@ -196,6 +196,40 @@ export class BosonService {
 
     this.initialized = true;
     logger.info('✅ Boson service initialized');
+
+    // 6. Background identity conflict check (non-blocking)
+    this.checkIdentityConflict().catch(() => {});
+  }
+
+  /**
+   * Check if our registered username still points to this node on the gateway.
+   * Logs a warning if another node has claimed the same username (identity conflict).
+   * This can happen after restoring a backup while the original node is still running.
+   */
+  private async checkIdentityConflict(): Promise<void> {
+    const username = this.usernameService.getUsername();
+    const nodeId = this.identityService.getNodeId();
+    if (!username || !nodeId) return;
+
+    try {
+      const lookup = await this.usernameService.lookup(username);
+      if (!lookup) return;
+
+      if (lookup.nodeId !== nodeId) {
+        logger.warn(`⚠️  IDENTITY CONFLICT: username "${username}.ela.city" is registered to node ${lookup.nodeId.substring(0, 12)}..., but this node is ${nodeId.substring(0, 12)}...`);
+        logger.warn(`   Another node may be running with the same identity. Re-registering username...`);
+        
+        // Re-register to reclaim the username for this node
+        const result = await this.usernameService.register(username);
+        if (result.success) {
+          logger.info(`✅ Username "${username}.ela.city" re-registered to this node`);
+        } else {
+          logger.error(`❌ Failed to re-register username: ${result.error}`);
+        }
+      }
+    } catch (error: any) {
+      logger.debug(`[Boson] Identity conflict check skipped: ${error.message}`);
+    }
   }
 
   /**

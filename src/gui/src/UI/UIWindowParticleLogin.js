@@ -210,30 +210,52 @@ async function UIWindowParticleLogin(options = {}) {
             showWalletConnectSetupModal(iframe, iframeUrl);
         });
 
-        // System readiness badge — bottom-right corner
+        // System readiness badge — desktop: bottom-left, mobile: top-center below "Presented by"
         $('#pc2-system-readiness').remove();
         const readinessBadgeHtml = `
-            <div id="pc2-system-readiness" style="
-                position: fixed;
-                bottom: 12px;
-                right: 16px;
-                z-index: 2147483647;
-                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            ">
+            <style>
+                #pc2-system-readiness {
+                    position: fixed;
+                    bottom: 38px;
+                    left: 16px;
+                    z-index: 2147483647;
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                }
+                #pc2-readiness-panel {
+                    left: 0;
+                    right: auto;
+                    bottom: 36px;
+                    top: auto;
+                }
+                @media (max-width: 768px) {
+                    #pc2-system-readiness {
+                        bottom: auto;
+                        top: 48px;
+                        left: 50%;
+                        transform: translateX(-50%);
+                    }
+                    #pc2-readiness-panel {
+                        left: 50% !important;
+                        transform: translateX(-50%);
+                        bottom: auto !important;
+                        top: 36px !important;
+                    }
+                }
+            </style>
+            <div id="pc2-system-readiness">
                 <div id="pc2-readiness-badge" style="
                     display: inline-flex;
                     align-items: center;
                     gap: 6px;
                     padding: 6px 12px;
-                    background: rgba(0,0,0,0.5);
-                    backdrop-filter: blur(8px);
-                    border: 1px solid rgba(255,255,255,0.1);
+                    background: #1c1c1e;
+                    border: 1px solid rgba(255,255,255,0.08);
                     border-radius: 20px;
                     cursor: pointer;
                     transition: all 0.2s;
                     font-size: 12px;
                     color: #9ca3af;
-                " onmouseover="this.style.background='rgba(0,0,0,0.7)'" onmouseout="this.style.background='rgba(0,0,0,0.5)'">
+                " onmouseover="this.style.background='#2c2c2e'" onmouseout="this.style.background='#1c1c1e'">
                     <span id="pc2-readiness-dot" style="
                         width: 8px;
                         height: 8px;
@@ -246,24 +268,21 @@ async function UIWindowParticleLogin(options = {}) {
                 <div id="pc2-readiness-panel" style="
                     display: none;
                     position: absolute;
-                    bottom: 40px;
-                    right: 0;
                     width: 280px;
-                    background: rgba(17,24,39,0.95);
-                    backdrop-filter: blur(12px);
-                    border: 1px solid rgba(255,255,255,0.1);
-                    border-radius: 12px;
+                    background: #1c1c1e;
+                    border: 1px solid rgba(255,255,255,0.08);
+                    border-radius: 16px;
                     padding: 16px;
-                    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+                    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
                 ">
-                    <div style="font-size: 13px; font-weight: 600; color: #f3f4f6; margin-bottom: 12px;">System Status</div>
-                    <div id="pc2-readiness-items" style="display: flex; flex-direction: column; gap: 8px;"></div>
+                    <div style="font-size: 13px; font-weight: 600; color: #ffffff; margin-bottom: 12px;">System Status</div>
+                    <div id="pc2-readiness-items" style="display: flex; flex-direction: column; gap: 6px;"></div>
                     <div id="pc2-readiness-footer" style="
                         margin-top: 12px;
                         padding-top: 10px;
-                        border-top: 1px solid rgba(255,255,255,0.08);
+                        border-top: 1px solid rgba(255,255,255,0.06);
                         font-size: 11px;
-                        color: #6b7280;
+                        color: #8e8e93;
                     "></div>
                 </div>
             </div>
@@ -311,17 +330,17 @@ async function UIWindowParticleLogin(options = {}) {
 
                 items.innerHTML = data.checks.map(function(c) {
                     const icon = c.status === 'ok'
-                        ? '<span style="color:#22c55e;">&#10003;</span>'
-                        : '<span style="color:#f59e0b;">&#9888;</span>';
-                    const detailColor = c.status === 'ok' ? '#6b7280' : '#f59e0b';
-                    return '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">'
+                        ? '<span style="color:#22c55e;font-size:13px;">&#10003;</span>'
+                        : '<span style="color:#f59e0b;font-size:13px;">&#9888;</span>';
+                    const statusBadge = c.status === 'ok'
+                        ? '<span style="font-size:10px;color:#22c55e;background:rgba(34,197,94,0.12);padding:2px 8px;border-radius:10px;">OK</span>'
+                        : '<span style="font-size:10px;color:#f59e0b;background:rgba(245,158,11,0.12);padding:2px 8px;border-radius:10px;">Missing</span>';
+                    return '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:#2c2c2e;border-radius:10px;">'
                         + '<div style="display:flex;align-items:center;gap:8px;">'
                         + icon
-                        + '<span style="font-size:12px;color:#d1d5db;">' + c.label + '</span>'
+                        + '<span style="font-size:12px;color:#ffffff;">' + c.label + '</span>'
                         + '</div>'
-                        + '<span style="font-size:11px;color:' + detailColor + ';">'
-                        + (c.status === 'ok' ? 'OK' : 'Missing')
-                        + '</span>'
+                        + statusBadge
                         + '</div>';
                 }).join('');
 

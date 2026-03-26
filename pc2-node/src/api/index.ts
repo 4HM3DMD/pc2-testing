@@ -30,6 +30,7 @@ import { handleListApiKeys, handleCreateApiKey, handleDeleteApiKey, handleRevoke
 import { handleListTools as handleListAgentTools, handleGetTool, handleListCategories, handleGetOpenAPISchema } from './tools.js';
 import { createPublicRouter, setBandwidthLimit, getCDNStats } from './public.js';
 import { IPFSStorage } from '../storage/ipfs.js';
+import { checkTransportBinaries, ensureTransportBinaries } from '../utils/binary-manager.js';
 import { httpClientRouter } from './http-client.js';
 import { gitRouter } from './git.js';
 import { auditRouter, auditMiddleware } from './audit.js';
@@ -158,7 +159,6 @@ export function setupAPI(app: Express): void {
   // System readiness endpoint (no auth required)
   // Reports transport binary availability for login screen health badge
   app.get('/api/system-readiness', (_req: Request, res: Response) => {
-    const { checkTransportBinaries } = require('../utils/binary-manager.js');
     const db = app.locals.db;
     const filesystem = app.locals.filesystem;
 
@@ -204,7 +204,6 @@ export function setupAPI(app: Express): void {
   // System readiness fix endpoint (auth required — modifies system)
   app.post('/api/system-readiness/fix', authenticate, async (_req: AuthenticatedRequest, res: Response) => {
     try {
-      const { ensureTransportBinaries } = require('../utils/binary-manager.js');
       const report = await ensureTransportBinaries();
       res.json({
         success: true,
@@ -651,9 +650,18 @@ export function setupAPI(app: Express): void {
     }
   });
   
-  // Restore endpoint with larger file size limit (backups can be GB)
+  // Restore endpoint with disk-based storage (backups can be GB — avoids OOM)
+  const restoreUploadDir = path.join(uploadTmpDir, 'restore');
+  if (!fs.existsSync(restoreUploadDir)) fs.mkdirSync(restoreUploadDir, { recursive: true });
+
   const restoreUpload = multer({
-    storage: multer.memoryStorage(),
+    storage: multer.diskStorage({
+      destination: restoreUploadDir,
+      filename: (_req, file, cb) => {
+        const unique = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        cb(null, `${unique}-${file.originalname}`);
+      },
+    }),
     limits: {
       fileSize: 10 * 1024 * 1024 * 1024 // 10GB max file size for backups
     }

@@ -258,7 +258,11 @@ export async function restoreBackup(req: AuthenticatedRequest & { file?: Express
       finalBackupPath = join(BACKUPS_DIR, `${nameWithoutExt}-uploaded-${timestamp}.tar.gz`);
     }
 
-    writeFileSync(finalBackupPath, req.file.buffer);
+    // File is already on disk via diskStorage; move it to the final path
+    const { renameSync: mvSync } = await import('fs');
+    if (req.file.path !== finalBackupPath) {
+      mvSync(req.file.path, finalBackupPath);
+    }
     const savedFilename = finalBackupPath.split('/').pop() || backupFilename;
 
     logger.info('[Backup API] Backup file saved', {
