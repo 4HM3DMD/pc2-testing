@@ -147,16 +147,15 @@ router.get('/status', (req: Request, res: Response) => {
     const hasPendingRestore = existsSync(RESTORE_STAGING_DIR);
     const hasEncryptedIdentity = existsSync(join(DATA_DIR, 'identity.enc'));
     
-    // Extended flow: welcome -> restore-mnemonic -> username -> complete
+    // Extended flow: welcome -> username -> complete
+    // Always show welcome first on fresh installs so restore option is visible
     let step: 'welcome' | 'restore-mnemonic' | 'username' | 'complete' = 'complete';
     
     if (!setupComplete) {
       if (hasEncryptedIdentity && !hasIdentity) {
         step = 'restore-mnemonic';
-      } else if (!hasIdentity) {
-        step = 'welcome';
       } else if (!hasUsername) {
-        step = 'username';
+        step = 'welcome';
       } else {
         step = 'complete';
       }

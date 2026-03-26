@@ -46,6 +46,14 @@ elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
     OS="linux"
 fi
 
+if grep -qi "microsoft\|wsl" /proc/version 2>/dev/null; then
+    echo -e "${YELLOW}WSL detected!${NC} For best results on Windows, use the dedicated WSL installer:"
+    echo -e "  ${CYAN}curl -fsSL https://raw.githubusercontent.com/Elacity/pc2.net/main/scripts/install-wsl.sh | bash${NC}"
+    echo ""
+    echo -e "${NC}Continuing with generic install in 5 seconds (Ctrl+C to cancel)...${NC}"
+    sleep 5
+fi
+
 echo -e "${CYAN}Detected: ${OS}${NC}"
 echo ""
 
