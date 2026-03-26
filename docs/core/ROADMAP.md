@@ -24,6 +24,7 @@ Each **Milestone** from the DAO proposal is broken down into concrete **Work Str
 | [AGENT_HANDOVER.md](./AGENT_HANDOVER.md) | Current state, coding patterns, infrastructure |
 | [POST_QUANTUM_AUDIT.md](./POST_QUANTUM_AUDIT.md) | PQ crypto audit, vulnerability map, Lit replacement strategy, migration roadmap |
 | [ARM_DEVICES.md](../deployment/ARM_DEVICES.md) | Jetson/Raspberry Pi deployment |
+| [ELASTOS_AGENT_REFERENCE.md](./ELASTOS_AGENT_REFERENCE.md) | Complete agent reference: why/how/what, talking points, competitive positioning, audience angles |
 
 ---
 
