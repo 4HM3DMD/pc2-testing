@@ -198,7 +198,9 @@ export class BosonService {
     logger.info('✅ Boson service initialized');
 
     // 6. Background identity conflict check (non-blocking)
-    this.checkIdentityConflict().catch(() => {});
+    this.checkIdentityConflict().catch((err) => {
+      logger.debug('Identity conflict check failed (non-critical)', { error: err?.message });
+    });
   }
 
   /**

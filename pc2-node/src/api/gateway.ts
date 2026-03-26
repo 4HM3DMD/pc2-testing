@@ -9,6 +9,7 @@ import { Router, Request, Response } from 'express';
 import { createHash } from 'crypto';
 import { authenticate, AuthenticatedRequest } from './middleware.js';
 import { logger } from '../utils/logger.js';
+import { parseSkillFrontmatter } from '../utils/skill-parser.js';
 import { getGatewayService } from '../services/gateway/index.js';
 import { decryptAssetTwoLayer } from './storage.js';
 import type { DecryptParams } from './storage.js';
@@ -406,37 +407,6 @@ router.post('/channels/:channel/disconnect', authenticate, async (req: Authentic
     });
   }
 });
-
-/**
- * Parse YAML-like frontmatter from a SKILL.md file
- */
-function parseSkillFrontmatter(raw: string): { meta: Record<string, any>; body: string } {
-  const fmMatch = raw.match(/^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/);
-  if (!fmMatch) return { meta: {}, body: raw };
-
-  const meta: Record<string, any> = {};
-  const lines = fmMatch[1].split('\n');
-  let currentKey = '';
-
-  for (const line of lines) {
-    const kvMatch = line.match(/^(\w+):\s*(.*)$/);
-    if (kvMatch) {
-      currentKey = kvMatch[1];
-      const val = kvMatch[2].trim();
-      if (val === '' || val === '[]') {
-        meta[currentKey] = [];
-      } else {
-        meta[currentKey] = val;
-      }
-    } else if (line.match(/^\s+-\s+/) && currentKey) {
-      const item = line.replace(/^\s+-\s+/, '').trim();
-      if (!Array.isArray(meta[currentKey])) meta[currentKey] = [];
-      meta[currentKey].push(item);
-    }
-  }
-
-  return { meta, body: fmMatch[2].trim() };
-}
 
 /**
  * GET /api/gateway/skills

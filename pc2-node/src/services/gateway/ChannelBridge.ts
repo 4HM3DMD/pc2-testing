@@ -13,6 +13,7 @@
  */
 
 import { logger } from '../../utils/logger.js';
+import { parseSkillFrontmatter } from '../../utils/skill-parser.js';
 import { AIChatService, CompleteRequest } from '../ai/AIChatService.js';
 import { FilesystemManager } from '../../storage/filesystem.js';
 import { DatabaseManager } from '../../storage/database.js';
@@ -400,38 +401,6 @@ export class ChannelBridge {
   }
   
   /**
-   * Parse YAML-like frontmatter from a SKILL.md file.
-   * Handles flat key-value pairs and simple arrays (- item format).
-   */
-  private parseSkillFrontmatter(raw: string): { meta: Record<string, any>; body: string } {
-    const fmMatch = raw.match(/^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/);
-    if (!fmMatch) return { meta: {}, body: raw };
-
-    const meta: Record<string, any> = {};
-    const lines = fmMatch[1].split('\n');
-    let currentKey = '';
-
-    for (const line of lines) {
-      const kvMatch = line.match(/^(\w+):\s*(.*)$/);
-      if (kvMatch) {
-        currentKey = kvMatch[1];
-        const val = kvMatch[2].trim();
-        if (val === '' || val === '[]') {
-          meta[currentKey] = [];
-        } else {
-          meta[currentKey] = val;
-        }
-      } else if (line.match(/^\s+-\s+/) && currentKey) {
-        const item = line.replace(/^\s+-\s+/, '').trim();
-        if (!Array.isArray(meta[currentKey])) meta[currentKey] = [];
-        meta[currentKey].push(item);
-      }
-    }
-
-    return { meta, body: fmMatch[2].trim() };
-  }
-
-  /**
    * Compute SHA-256 hash of content.
    */
   private computeHash(content: string): string {
@@ -455,7 +424,7 @@ export class ChannelBridge {
         logger.warn(`[ChannelBridge] Skill hash mismatch for bundled skill "${skillId}". Expected: ${expectedHash.slice(0, 12)}... Got: ${contentHash.slice(0, 12)}... (file may have been modified)`);
       }
 
-      const { meta, body } = this.parseSkillFrontmatter(raw);
+      const { meta, body } = parseSkillFrontmatter(raw);
       return {
         id: skillId,
         name: (meta.name as string) || skillId,
@@ -476,7 +445,7 @@ export class ChannelBridge {
         if (raw) {
           const text = typeof raw === 'string' ? raw : raw.toString('utf-8');
           const contentHash = this.computeHash(text);
-          const { meta, body } = this.parseSkillFrontmatter(text);
+          const { meta, body } = parseSkillFrontmatter(text);
 
           // Check if this is a purchased skill that needs ownership verification
           const installRecord = this.db

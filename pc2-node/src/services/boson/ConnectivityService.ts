@@ -1184,13 +1184,19 @@ export class ConnectivityService {
         this.wgBlockedByDPI = false;
 
         if (this.vlessRealityService?.isConnected()) {
-          this.vlessRealityService.disconnect().catch(() => {});
+          this.vlessRealityService.disconnect().catch((err) => {
+            logger.debug('VLESS disconnect during reconnect failed', { error: err?.message });
+          });
         }
         if (this.amneziaWGService?.isConnected()) {
-          this.amneziaWGService.disconnect().catch(() => {});
+          this.amneziaWGService.disconnect().catch((err) => {
+            logger.debug('AmneziaWG disconnect during reconnect failed', { error: err?.message });
+          });
           this.handleAmneziaWGDown();
         } else if (this.wireGuardService?.isConnected()) {
-          this.wireGuardService.disconnect().catch(() => {});
+          this.wireGuardService.disconnect().catch((err) => {
+            logger.debug('WireGuard disconnect during reconnect failed', { error: err?.message });
+          });
           this.handleWireGuardDown();
         } else if (this.status.connected) {
           this.status.connected = false;

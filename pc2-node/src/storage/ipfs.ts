@@ -267,7 +267,9 @@ export class IPFSStorage {
       // Clean up any partial initialization
       if (this.helia) {
         try {
-          await this.helia.stop().catch(() => {}); // Ignore stop errors
+          await this.helia.stop().catch((err) => {
+            log.debug('Helia stop during cleanup failed (expected)', { error: err?.message });
+          });
         } catch {
           // Ignore cleanup errors
         }

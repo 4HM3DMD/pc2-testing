@@ -11,6 +11,7 @@ import fs from 'fs';
 import { FilesystemManager } from '../../../storage/filesystem.js';
 import { DatabaseManager } from '../../../storage/database.js';
 import { logger } from '../../../utils/logger.js';
+import { parseSkillFrontmatter } from '../../../utils/skill-parser.js';
 import { Server as SocketIOServer } from 'socket.io';
 import { broadcastItemAdded, broadcastItemRemoved, broadcastItemMoved, broadcastItemUpdated, broadcastToUser } from '../../../websocket/events.js';
 import { getGatewayService } from '../../gateway/index.js';
@@ -1780,37 +1781,6 @@ export class ToolExecutor {
   }
 
   /**
-   * Parse YAML-like frontmatter from a SKILL.md file.
-   */
-  private parseSkillFrontmatter(raw: string): { meta: Record<string, any>; body: string } {
-    const fmMatch = raw.match(/^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/);
-    if (!fmMatch) return { meta: {}, body: raw };
-
-    const meta: Record<string, any> = {};
-    const lines = fmMatch[1].split('\n');
-    let currentKey = '';
-
-    for (const line of lines) {
-      const kvMatch = line.match(/^(\w+):\s*(.*)$/);
-      if (kvMatch) {
-        currentKey = kvMatch[1];
-        const val = kvMatch[2].trim();
-        if (val === '' || val === '[]') {
-          meta[currentKey] = [];
-        } else {
-          meta[currentKey] = val;
-        }
-      } else if (line.match(/^\s+-\s+/) && currentKey) {
-        const item = line.replace(/^\s+-\s+/, '').trim();
-        if (!Array.isArray(meta[currentKey])) meta[currentKey] = [];
-        meta[currentKey].push(item);
-      }
-    }
-
-    return { meta, body: fmMatch[2].trim() };
-  }
-
-  /**
    * Scan all available skills (bundled + user-installed) and return metadata.
    * Includes whether each skill is currently active on this agent.
    */
@@ -1843,7 +1813,7 @@ export class ToolExecutor {
           const skillPath = join(BUNDLED_SKILLS_DIR, dir.name, 'SKILL.md');
           try {
             const raw = await fs.promises.readFile(skillPath, 'utf-8');
-            const { meta } = this.parseSkillFrontmatter(raw);
+            const { meta } = parseSkillFrontmatter(raw);
             skills.push({
               id: dir.name,
               name: meta.name || dir.name,
@@ -1878,7 +1848,7 @@ export class ToolExecutor {
               const raw = await this.filesystem.readFile(`${userSkillsDir}/${skillId}/SKILL.md`, this.walletAddress);
               if (raw) {
                 const text = typeof raw === 'string' ? raw : raw.toString('utf-8');
-                const { meta } = this.parseSkillFrontmatter(text);
+                const { meta } = parseSkillFrontmatter(text);
                 skills.push({
                   id: skillId,
                   name: meta.name || skillId,

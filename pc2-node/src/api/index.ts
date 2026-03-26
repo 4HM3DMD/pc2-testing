@@ -26,6 +26,7 @@ import { handleGetApp } from './apps.js';
 import { handleGetVersions, handleGetVersion, handleRestoreVersion } from './versions.js';
 import { createBackup, listBackups, downloadBackup, deleteBackup, restoreBackup } from './backup.js';
 import { handleTerminalStats, handleTerminalAdminStats, handleDestroyAllTerminals, handleTerminalStatus, handleExecCommand, handleExecScript, handleListTools } from './terminal.js';
+import { getTerminalService } from '../services/terminal/TerminalService.js';
 import { handleListApiKeys, handleCreateApiKey, handleDeleteApiKey, handleRevokeApiKey, handleGetScopes } from './apikeys.js';
 import { handleListTools as handleListAgentTools, handleGetTool, handleListCategories, handleGetOpenAPISchema } from './tools.js';
 import { createPublicRouter, setBandwidthLimit, getCDNStats } from './public.js';
@@ -94,11 +95,9 @@ export function setupAPI(app: Express): void {
     const ipfsStatus = filesystem ? 'available' : 'not initialized';
     const websocketStatus = io ? 'active' : 'not initialized';
     
-    // Import terminal service to check isolation mode
     let terminalStatus = 'not initialized';
     let terminalIsolation = 'unknown';
     try {
-      const { getTerminalService } = require('./terminal.js');
       const terminalService = getTerminalService();
       if (terminalService) {
         terminalStatus = terminalService.isAvailable() ? 'available' : 'unavailable';
@@ -511,15 +510,6 @@ export function setupAPI(app: Express): void {
         disk: cdnStatsData.disk,
       } : null,
     });
-  });
-
-  app.get('/api/catalog/creator/:address', (req: Request, res: Response) => {
-    const catalogDb = req.app.locals.db as DatabaseManager | undefined;
-    if (!catalogDb) return res.status(503).json({ error: 'Database not available' });
-
-    const earnings = catalogDb.getCreatorEarningsLocal(req.params.address);
-
-    res.json({ success: true, ...earnings });
   });
 
   app.get('/api/catalog/seeding', (req: Request, res: Response) => {
