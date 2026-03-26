@@ -84,6 +84,65 @@ export interface BinaryReport {
   failed: string[];
 }
 
+export interface BinaryCheckResult {
+  name: string;
+  found: boolean;
+  path: string | null;
+}
+
+/**
+ * Resolve the actual path where a binary was found, or null if missing.
+ */
+function resolveBinaryPath(name: string, bundledDir: string, systemPaths: string[]): string | null {
+  const isWin = process.platform === 'win32';
+  const binaryName = isWin ? `${name}.exe` : name;
+
+  const bundledPath = join(bundledDir, binaryName);
+  if (existsSync(bundledPath)) return bundledPath;
+
+  for (const p of systemPaths) {
+    if (existsSync(p)) return p;
+  }
+
+  if (!isWin) {
+    try {
+      const found = execSync(`which ${name} 2>/dev/null`, {
+        stdio: 'pipe',
+        timeout: 3000,
+        shell: '/bin/sh',
+      }).toString().trim();
+      if (found && existsSync(found)) return found;
+    } catch { /* not on PATH */ }
+  }
+
+  return null;
+}
+
+/**
+ * Read-only check of all transport binaries for the current platform.
+ * Does NOT download anything — just reports what's found and what's missing.
+ */
+export function checkTransportBinaries(): BinaryCheckResult[] {
+  const binDir = getBundledBinDir();
+  const platform = process.platform;
+  const results: BinaryCheckResult[] = [];
+
+  for (const spec of TRANSPORT_BINARIES) {
+    if (!spec.platforms.includes(platform) && !spec.platforms.includes('all')) {
+      continue;
+    }
+
+    const resolvedPath = resolveBinaryPath(spec.name, binDir, spec.systemPaths);
+    results.push({
+      name: spec.name,
+      found: resolvedPath !== null,
+      path: resolvedPath,
+    });
+  }
+
+  return results;
+}
+
 /**
  * Resolve the bundled binaries directory for the current platform.
  * Matches the path used by WireGuardService.getBundledBinDir().

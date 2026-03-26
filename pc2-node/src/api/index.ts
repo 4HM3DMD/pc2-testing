@@ -155,6 +155,70 @@ export function setupAPI(app: Express): void {
   app.get('/health', healthHandler);
   app.get('/api/health', healthHandler);
 
+  // System readiness endpoint (no auth required)
+  // Reports transport binary availability for login screen health badge
+  app.get('/api/system-readiness', (_req: Request, res: Response) => {
+    const { checkTransportBinaries } = require('../utils/binary-manager.js');
+    const db = app.locals.db;
+    const filesystem = app.locals.filesystem;
+
+    const binaryChecks = checkTransportBinaries();
+
+    const checks = [
+      {
+        id: 'database',
+        label: 'Database',
+        status: db ? 'ok' as const : 'missing' as const,
+        detail: db ? 'Connected' : 'Not initialized',
+        fixable: false,
+      },
+      {
+        id: 'ipfs',
+        label: 'IPFS Storage',
+        status: filesystem ? 'ok' as const : 'missing' as const,
+        detail: filesystem ? 'Available' : 'Not initialized',
+        fixable: false,
+      },
+      ...binaryChecks.map((b: { name: string; found: boolean; path: string | null }) => ({
+        id: b.name,
+        label: b.name === 'wireguard-go' ? 'WireGuard'
+             : b.name === 'amneziawg-go' ? 'AmneziaWG'
+             : b.name === 'awg-quick' ? 'AWG Quick'
+             : b.name === 'sing-box' ? 'VLESS Transport'
+             : b.name,
+        status: b.found ? 'ok' as const : 'missing' as const,
+        detail: b.found ? `Found at ${b.path}` : 'Not installed',
+        fixable: !b.found,
+        fixAction: 'install-binaries',
+      })),
+    ];
+
+    const okCount = checks.filter(c => c.status === 'ok').length;
+    const overall = okCount === checks.length ? 'ready'
+                  : okCount >= checks.length - 1 ? 'degraded'
+                  : 'issues';
+
+    res.json({ overall, checks, total: checks.length, ok: okCount });
+  });
+
+  // System readiness fix endpoint (auth required — modifies system)
+  app.post('/api/system-readiness/fix', authenticate, async (_req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { ensureTransportBinaries } = require('../utils/binary-manager.js');
+      const report = await ensureTransportBinaries();
+      res.json({
+        success: true,
+        downloaded: report.downloaded,
+        failed: report.failed,
+        message: report.failed.length > 0
+          ? `Installed ${report.downloaded} binaries. Failed: ${report.failed.join(', ')}`
+          : `All transport binaries installed successfully (${report.downloaded} downloaded)`,
+      });
+    } catch (err) {
+      res.status(500).json({ success: false, message: (err as Error).message });
+    }
+  });
+
   // Version endpoint (no auth required)
   app.get('/version', handleVersion);
   

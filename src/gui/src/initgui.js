@@ -703,6 +703,49 @@ window.initgui = async function(options){
                     
                     // Check for updates after desktop loads (30 second delay)
                     setTimeout(() => window.checkForUpdates?.(), 30000);
+
+                    // Check system readiness and offer to fix missing dependencies (5s delay)
+                    setTimeout(async () => {
+                        try {
+                            const readinessResp = await fetch(`${window.api_origin || ''}/api/system-readiness`);
+                            if (!readinessResp.ok) return;
+                            const readiness = await readinessResp.json();
+                            const missing = readiness.checks.filter(c => c.status !== 'ok' && c.fixable);
+                            if (missing.length === 0) return;
+
+                            const names = missing.map(c => c.label).join(', ');
+                            UIAlert({
+                                message: `${missing.length} system component${missing.length > 1 ? 's' : ''} not installed: ${names}.\n\nWould you like to install them now? This downloads transport binaries needed for reliable connectivity.`,
+                                buttons: [
+                                    { label: 'Install Now', value: 'install', type: 'primary' },
+                                    { label: 'Later', value: 'later' },
+                                ],
+                            }).then(async (choice) => {
+                                if (choice !== 'install') return;
+                                try {
+                                    const fixResp = await fetch(`${window.api_origin || ''}/api/system-readiness/fix`, {
+                                        method: 'POST',
+                                        headers: {
+                                            'Authorization': `Bearer ${window.auth_token}`,
+                                            'Content-Type': 'application/json',
+                                        },
+                                    });
+                                    const result = await fixResp.json();
+                                    UIAlert({
+                                        message: result.success
+                                            ? (result.message || 'Transport binaries installed successfully.')
+                                            : (result.message || 'Failed to install some components. Try running scripts/fix-networking.sh manually.'),
+                                        buttons: [{ label: 'OK', value: 'ok', type: 'primary' }],
+                                    });
+                                } catch {
+                                    UIAlert({
+                                        message: 'Failed to install components. Try running scripts/fix-networking.sh manually.',
+                                        buttons: [{ label: 'OK', value: 'ok', type: 'primary' }],
+                                    });
+                                }
+                            });
+                        } catch { /* readiness check failed, skip silently */ }
+                    }, 5000);
                 } catch (statError) {
                     console.warn('[initgui]: Desktop stat failed, loading desktop anyway:', statError.message);
                     // Still load desktop even if stat fails - better than grey screen

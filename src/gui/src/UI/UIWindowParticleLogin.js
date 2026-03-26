@@ -176,8 +176,8 @@ async function UIWindowParticleLogin(options = {}) {
         // Clean up event listener when window is closed
         $(el_window).on('remove', function() {
             window.removeEventListener('message', messageHandler);
-            // Remove the trouble link when window closes
             $('#wc-trouble-link-container').remove();
+            $('#pc2-system-readiness').remove();
         });
         
         // Add "Having trouble?" link at bottom-left (opposite to "Presented by ElacityLabs")
@@ -209,6 +209,141 @@ async function UIWindowParticleLogin(options = {}) {
             e.stopPropagation();
             showWalletConnectSetupModal(iframe, iframeUrl);
         });
+
+        // System readiness badge — bottom-right corner
+        $('#pc2-system-readiness').remove();
+        const readinessBadgeHtml = `
+            <div id="pc2-system-readiness" style="
+                position: fixed;
+                bottom: 12px;
+                right: 16px;
+                z-index: 2147483647;
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            ">
+                <div id="pc2-readiness-badge" style="
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 6px;
+                    padding: 6px 12px;
+                    background: rgba(0,0,0,0.5);
+                    backdrop-filter: blur(8px);
+                    border: 1px solid rgba(255,255,255,0.1);
+                    border-radius: 20px;
+                    cursor: pointer;
+                    transition: all 0.2s;
+                    font-size: 12px;
+                    color: #9ca3af;
+                " onmouseover="this.style.background='rgba(0,0,0,0.7)'" onmouseout="this.style.background='rgba(0,0,0,0.5)'">
+                    <span id="pc2-readiness-dot" style="
+                        width: 8px;
+                        height: 8px;
+                        border-radius: 50%;
+                        background: #6b7280;
+                        flex-shrink: 0;
+                    "></span>
+                    <span id="pc2-readiness-label">Checking...</span>
+                </div>
+                <div id="pc2-readiness-panel" style="
+                    display: none;
+                    position: absolute;
+                    bottom: 40px;
+                    right: 0;
+                    width: 280px;
+                    background: rgba(17,24,39,0.95);
+                    backdrop-filter: blur(12px);
+                    border: 1px solid rgba(255,255,255,0.1);
+                    border-radius: 12px;
+                    padding: 16px;
+                    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+                ">
+                    <div style="font-size: 13px; font-weight: 600; color: #f3f4f6; margin-bottom: 12px;">System Status</div>
+                    <div id="pc2-readiness-items" style="display: flex; flex-direction: column; gap: 8px;"></div>
+                    <div id="pc2-readiness-footer" style="
+                        margin-top: 12px;
+                        padding-top: 10px;
+                        border-top: 1px solid rgba(255,255,255,0.08);
+                        font-size: 11px;
+                        color: #6b7280;
+                    "></div>
+                </div>
+            </div>
+        `;
+        $('body').append(readinessBadgeHtml);
+
+        // Toggle panel on badge click
+        document.getElementById('pc2-readiness-badge').addEventListener('click', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            const panel = document.getElementById('pc2-readiness-panel');
+            panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+        });
+
+        // Close panel when clicking elsewhere
+        document.addEventListener('click', function(e) {
+            const container = document.getElementById('pc2-system-readiness');
+            if (container && !container.contains(e.target)) {
+                const panel = document.getElementById('pc2-readiness-panel');
+                if (panel) panel.style.display = 'none';
+            }
+        });
+
+        // Fetch system readiness
+        (async function checkSystemReadiness() {
+            try {
+                const apiOrigin = window.api_origin || window.location.origin;
+                const resp = await fetch(`${apiOrigin}/api/system-readiness`);
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                const data = await resp.json();
+
+                const dot = document.getElementById('pc2-readiness-dot');
+                const label = document.getElementById('pc2-readiness-label');
+                const items = document.getElementById('pc2-readiness-items');
+                const footer = document.getElementById('pc2-readiness-footer');
+
+                if (!dot || !label || !items || !footer) return;
+
+                const dotColor = data.overall === 'ready' ? '#22c55e'
+                               : data.overall === 'degraded' ? '#f59e0b'
+                               : '#ef4444';
+                dot.style.background = dotColor;
+                label.textContent = `${data.ok}/${data.total} Ready`;
+                label.style.color = data.overall === 'ready' ? '#9ca3af' : '#f59e0b';
+
+                items.innerHTML = data.checks.map(function(c) {
+                    const icon = c.status === 'ok'
+                        ? '<span style="color:#22c55e;">&#10003;</span>'
+                        : '<span style="color:#f59e0b;">&#9888;</span>';
+                    const detailColor = c.status === 'ok' ? '#6b7280' : '#f59e0b';
+                    return '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">'
+                        + '<div style="display:flex;align-items:center;gap:8px;">'
+                        + icon
+                        + '<span style="font-size:12px;color:#d1d5db;">' + c.label + '</span>'
+                        + '</div>'
+                        + '<span style="font-size:11px;color:' + detailColor + ';">'
+                        + (c.status === 'ok' ? 'OK' : 'Missing')
+                        + '</span>'
+                        + '</div>';
+                }).join('');
+
+                const missingCount = data.total - data.ok;
+                if (missingCount > 0) {
+                    footer.textContent = missingCount + ' component' + (missingCount > 1 ? 's' : '') + ' can be installed after login';
+                } else {
+                    footer.textContent = 'All systems operational';
+                    footer.style.color = '#22c55e';
+                }
+
+                // Store readiness data for post-login fix flow
+                window.__pc2SystemReadiness = data;
+
+            } catch (err) {
+                const label = document.getElementById('pc2-readiness-label');
+                if (label) {
+                    label.textContent = 'Status unavailable';
+                    label.style.color = '#6b7280';
+                }
+            }
+        })();
         
         // Function to show the WalletConnect setup modal - using direct DOM overlay for highest z-index
         function showWalletConnectSetupModal(iframe, baseIframeUrl) {
