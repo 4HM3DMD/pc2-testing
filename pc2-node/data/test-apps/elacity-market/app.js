@@ -318,6 +318,14 @@
     return false;
   }
 
+  function isAISkillAsset(item) {
+    var attrs = (item.metadata && item.metadata.attributes) || [];
+    for (var i = 0; i < attrs.length; i++) {
+      if (attrs[i].trait_type === 'Content Type' && attrs[i].value === 'AI Agent Skill') return true;
+    }
+    return false;
+  }
+
   function isNonMediaAsset(nft) {
     var meta = nft.metadata || {};
     var media = meta.media || {};
@@ -1205,6 +1213,7 @@
 
     renderAITrainingBadge(nft);
     renderAdultContentBadge(nft);
+    renderInstallSkillButton(nft);
 
     window.dispatchEvent(new CustomEvent('ela-detail-rendered', { detail: { nft: nft } }));
   }
@@ -1295,6 +1304,116 @@
       el.innerHTML = '';
       el.classList.add('hidden');
     }
+  }
+
+  function renderInstallSkillButton(nft) {
+    var el = document.getElementById('detail-install-skill');
+    if (!el) return;
+
+    var isOwned = state.detailIsOwned || isAssetInLibrary(nft) || (nft.access && nft.access.haveAccess);
+
+    if (isAISkillAsset(nft) && isOwned) {
+      var meta = nft.metadata || {};
+      var media = meta.media || {};
+      var asset = meta.asset || {};
+      var kid = nft.kid || asset.kid || (nft.operative && nft.operative.kid) || '';
+      var skillId = (meta.name || nft.name || 'skill').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+
+      var html = '<div class="install-skill-section">';
+      html += '<div class="install-skill-header">';
+      html += '<span class="install-skill-icon">🤖</span>';
+      html += '<span class="install-skill-title">AI Agent Skill</span>';
+      html += '</div>';
+      html += '<p class="install-skill-note">This asset is an AI Agent Skill. Install it to enhance your AI agent\'s capabilities.</p>';
+      html += '<button id="install-skill-btn" class="install-skill-btn" '
+        + 'data-kid="' + escapeHtml(kid) + '" '
+        + 'data-skill-id="' + escapeHtml(skillId) + '"'
+        + '>Install Skill</button>';
+      html += '</div>';
+
+      el.innerHTML = html;
+      el.classList.remove('hidden');
+
+      var btn = document.getElementById('install-skill-btn');
+      if (btn) {
+        btn.addEventListener('click', function () {
+          installSkillFromNFT(nft);
+        });
+      }
+    } else if (isAISkillAsset(nft) && !isOwned) {
+      var html2 = '<div class="install-skill-section">';
+      html2 += '<div class="install-skill-header">';
+      html2 += '<span class="install-skill-icon">🤖</span>';
+      html2 += '<span class="install-skill-title">AI Agent Skill</span>';
+      html2 += '</div>';
+      html2 += '<p class="install-skill-note">Purchase this skill to enhance your AI agent\'s capabilities.</p>';
+      html2 += '</div>';
+      el.innerHTML = html2;
+      el.classList.remove('hidden');
+    } else {
+      el.innerHTML = '';
+      el.classList.add('hidden');
+    }
+  }
+
+  function installSkillFromNFT(nft) {
+    var meta = nft.metadata || {};
+    var media = meta.media || {};
+    var asset = meta.asset || {};
+    var rawAsset = nft._rawAsset || asset;
+
+    var kid = nft.kid || rawAsset.kid || (nft.operative && nft.operative.kid) || '';
+    var litCiphertext = rawAsset.litCiphertext || rawAsset.ciphertext || '';
+    var dataToEncryptHash = rawAsset.dataToEncryptHash || '';
+    var iv = rawAsset.iv || '';
+    var encryptedDataCid = (rawAsset.uri || rawAsset.cid || '').replace('ipfs://', '');
+    var buyerAddress = Wallet.isConnected() ? Wallet.getAddress() : '';
+    var authority = rawAsset.authority || '';
+    var chainId = rawAsset.chainId || 8453;
+
+    var skillId = (meta.name || nft.name || 'skill').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+
+    var btn = document.getElementById('install-skill-btn');
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = 'Installing...';
+    }
+
+    fetch('/api/gateway/skills/install', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        skillId: skillId,
+        kid: kid,
+        litCiphertext: litCiphertext,
+        dataToEncryptHash: dataToEncryptHash,
+        iv: iv,
+        encryptedDataCid: encryptedDataCid,
+        buyerAddress: buyerAddress,
+        authority: authority,
+        chainId: chainId
+      })
+    })
+      .then(function (resp) { return resp.json(); })
+      .then(function (data) {
+        if (data.success) {
+          if (btn) {
+            btn.textContent = '✓ Installed';
+            btn.classList.add('installed');
+          }
+          alert('Skill "' + (data.data.name || skillId) + '" installed! Enable it in your Agent Editor (Settings > AI Agent > Skills).');
+        } else {
+          throw new Error(data.error || 'Install failed');
+        }
+      })
+      .catch(function (err) {
+        console.error('[InstallSkill] Error:', err);
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = 'Install Skill';
+        }
+        alert('Failed to install skill: ' + err.message);
+      });
   }
 
   function renderOwnershipBalances(nft) {

@@ -31,7 +31,7 @@ function findSchemaFile(): string {
   }
   throw new Error(`Schema file not found. Tried: ${SCHEMA_FILE} and ${sourceSchema}`);
 }
-const CURRENT_VERSION = 22;
+const CURRENT_VERSION = 23;
 
 interface Migration {
   version: number;
@@ -881,6 +881,37 @@ export function runMigrations(db: Database.Database): void {
         recordMigration(db, 22);
       } catch (error: any) {
         log.error(`❌ Migration 22 error: ${error.message}`);
+        throw error;
+      }
+    }
+
+    // Migration 23: Installed skills table for purchased skill ownership tracking
+    if (currentVersion < 23) {
+      try {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS installed_skills (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            wallet_address TEXT NOT NULL,
+            skill_id TEXT NOT NULL,
+            kid TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            name TEXT,
+            description TEXT,
+            authority TEXT,
+            chain_id INTEGER DEFAULT 8453,
+            installed_at TEXT DEFAULT (datetime('now')),
+            last_verified TEXT DEFAULT (datetime('now')),
+            UNIQUE(wallet_address, skill_id)
+          )
+        `);
+
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_installed_skills_wallet ON installed_skills(wallet_address)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_installed_skills_kid ON installed_skills(kid)`);
+
+        log.info('✅ Migration 23 complete: Installed skills table created');
+        recordMigration(db, 23);
+      } catch (error: any) {
+        log.error(`❌ Migration 23 error: ${error.message}`);
         throw error;
       }
     }

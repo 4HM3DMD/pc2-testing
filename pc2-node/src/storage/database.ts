@@ -2288,6 +2288,67 @@ export class DatabaseManager {
     `).all(...params, limit, offset) as Array<Record<string, unknown>>;
   }
 
+  // ============================================================================
+  // Installed Skills Operations (purchased skill tracking)
+  // ============================================================================
+
+  insertInstalledSkill(data: {
+    walletAddress: string;
+    skillId: string;
+    kid: string;
+    contentHash: string;
+    name?: string;
+    description?: string;
+    authority?: string;
+    chainId?: number;
+  }): void {
+    const db = this.getDB();
+    db.prepare(`
+      INSERT OR REPLACE INTO installed_skills
+        (wallet_address, skill_id, kid, content_hash, name, description, authority, chain_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      data.walletAddress.toLowerCase(),
+      data.skillId,
+      data.kid,
+      data.contentHash,
+      data.name || null,
+      data.description || null,
+      data.authority || null,
+      data.chainId || 8453
+    );
+  }
+
+  getInstalledSkill(walletAddress: string, skillId: string): Record<string, unknown> | null {
+    const db = this.getDB();
+    const row = db.prepare(
+      'SELECT * FROM installed_skills WHERE wallet_address = ? AND skill_id = ?'
+    ).get(walletAddress.toLowerCase(), skillId) as Record<string, unknown> | undefined;
+    return row ?? null;
+  }
+
+  getInstalledSkills(walletAddress: string): Array<Record<string, unknown>> {
+    const db = this.getDB();
+    return db.prepare(
+      'SELECT * FROM installed_skills WHERE wallet_address = ? ORDER BY installed_at DESC'
+    ).all(walletAddress.toLowerCase()) as Array<Record<string, unknown>>;
+  }
+
+  updateSkillVerification(walletAddress: string, skillId: string): void {
+    const db = this.getDB();
+    db.prepare(
+      `UPDATE installed_skills SET last_verified = datetime('now') WHERE wallet_address = ? AND skill_id = ?`
+    ).run(walletAddress.toLowerCase(), skillId);
+  }
+
+  deleteInstalledSkill(walletAddress: string, skillId: string): boolean {
+    const db = this.getDB();
+    const result = db.prepare(
+      'DELETE FROM installed_skills WHERE wallet_address = ? AND skill_id = ?'
+    ).run(walletAddress.toLowerCase(), skillId);
+    return result.changes > 0;
+  }
+
   /**
    * Remove agent audit log entries older than retentionDays.
    * Returns number of rows deleted.

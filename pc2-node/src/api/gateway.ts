@@ -6,9 +6,12 @@
  */
 
 import { Router, Request, Response } from 'express';
+import { createHash } from 'crypto';
 import { authenticate, AuthenticatedRequest } from './middleware.js';
 import { logger } from '../utils/logger.js';
 import { getGatewayService } from '../services/gateway/index.js';
+import { decryptAssetTwoLayer } from './storage.js';
+import type { DecryptParams } from './storage.js';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import fs from 'fs';
@@ -1020,6 +1023,170 @@ router.get('/audit', authenticate, async (req: AuthenticatedRequest, res: Respon
     res.json({ success: true, data: parsed, pagination: { limit, offset, count: parsed.length } });
   } catch (error: any) {
     logger.error('[Gateway API] Error getting audit logs:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * POST /api/gateway/skills/install
+ * Decrypt a purchased SKILL.md via Lit Protocol and install to user filesystem.
+ * Ownership is verified by Lit Action on-chain (hasAccessByContentId).
+ */
+router.post('/skills/install', authenticate, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const {
+      skillId, kid, litCiphertext, dataToEncryptHash, iv,
+      encryptedDataCid, buyerAddress, authority, chainId,
+    } = req.body;
+
+    if (!skillId || !kid || !litCiphertext || !dataToEncryptHash || !iv || !encryptedDataCid || !buyerAddress) {
+      res.status(400).json({ success: false, error: 'Missing required fields: skillId, kid, litCiphertext, dataToEncryptHash, iv, encryptedDataCid, buyerAddress' });
+      return;
+    }
+
+    const filesystem = req.app.locals.filesystem;
+    const db = req.app.locals.db;
+    const ipfs = req.app.locals.ipfs;
+
+    if (!filesystem) {
+      res.status(503).json({ success: false, error: 'Filesystem not available' });
+      return;
+    }
+
+    logger.info(`[Gateway API] Installing skill "${skillId}" for ${buyerAddress}, kid=${kid}`);
+
+    // Decrypt the SKILL.md via Lit Protocol (ownership verified on-chain inside Lit Action)
+    const decryptParams: DecryptParams = {
+      litCiphertext,
+      dataToEncryptHash,
+      iv,
+      encryptedDataCid,
+      kid,
+      buyerAddress,
+      authority,
+      chainId,
+    };
+
+    const decryptedBytes = await decryptAssetTwoLayer(decryptParams, ipfs);
+    const skillContent = decryptedBytes.toString('utf-8');
+
+    // Verify it's a valid SKILL.md (has frontmatter)
+    const { meta } = parseSkillFrontmatter(skillContent);
+    if (!meta.name) {
+      res.status(400).json({ success: false, error: 'Decrypted content is not a valid SKILL.md (missing name in frontmatter)' });
+      return;
+    }
+
+    // Compute hash of the decrypted content
+    const contentHash = createHash('sha256').update(skillContent, 'utf-8').digest('hex');
+
+    // Save to user filesystem at pc2/skills/{skillId}/SKILL.md
+    const skillPath = `pc2/skills/${skillId}/SKILL.md`;
+    await filesystem.writeFile(skillPath, Buffer.from(skillContent, 'utf-8'), buyerAddress, {
+      mimeType: 'text/markdown',
+    });
+
+    // Record in installed_skills table
+    db.insertInstalledSkill({
+      walletAddress: buyerAddress,
+      skillId,
+      kid,
+      contentHash,
+      name: meta.name,
+      description: meta.description,
+      authority,
+      chainId,
+    });
+
+    // Zero out decrypted bytes from memory
+    decryptedBytes.fill(0);
+
+    logger.info(`[Gateway API] Skill "${skillId}" installed for ${buyerAddress} (hash: ${contentHash.slice(0, 12)}...)`);
+
+    res.json({
+      success: true,
+      data: {
+        skillId,
+        name: meta.name,
+        description: meta.description || '',
+        tools: Array.isArray(meta.tools) ? meta.tools : [],
+        permissions: Array.isArray(meta.permissions) ? meta.permissions : [],
+        contentHash,
+        source: 'purchased',
+      }
+    });
+  } catch (error: any) {
+    logger.error('[Gateway API] Error installing skill:', error);
+    const status = error.message?.includes('Access denied') ? 403 : 500;
+    res.status(status).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * GET /api/gateway/skills/installed
+ * List all installed (purchased) skills for the authenticated user.
+ */
+router.get('/skills/installed', authenticate, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const db = req.app.locals.db;
+    const walletAddress = req.query.wallet as string;
+    if (!walletAddress) {
+      res.status(400).json({ success: false, error: 'wallet query parameter required' });
+      return;
+    }
+    const skills = db.getInstalledSkills(walletAddress);
+    res.json({ success: true, data: skills });
+  } catch (error: any) {
+    logger.error('[Gateway API] Error listing installed skills:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * DELETE /api/gateway/skills/:skillId
+ * Uninstall a purchased skill — removes from filesystem and installed_skills table.
+ */
+router.delete('/skills/:skillId', authenticate, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { skillId } = req.params;
+    const walletAddress = req.query.wallet as string || req.body?.walletAddress;
+
+    if (!walletAddress) {
+      res.status(400).json({ success: false, error: 'wallet address required (query param or body)' });
+      return;
+    }
+
+    const db = req.app.locals.db;
+    const filesystem = req.app.locals.filesystem;
+
+    // Remove from installed_skills table
+    const deleted = db.deleteInstalledSkill(walletAddress, skillId);
+
+    // Remove from filesystem
+    if (filesystem) {
+      try {
+        const skillPath = `pc2/skills/${skillId}/SKILL.md`;
+        await filesystem.deleteFile(skillPath, walletAddress);
+      } catch {
+        // File may not exist — that's ok
+      }
+    }
+
+    // Remove from any agent's active skills list
+    const gateway = getGatewayService(db);
+    const agents = gateway.getAgents();
+    for (const agent of agents) {
+      if (agent.skills?.includes(skillId)) {
+        const updatedSkills = agent.skills.filter((s: string) => s !== skillId);
+        await gateway.updateAgent(agent.id, { skills: updatedSkills });
+        logger.info(`[Gateway API] Removed skill "${skillId}" from agent "${agent.id}"`);
+      }
+    }
+
+    logger.info(`[Gateway API] Skill "${skillId}" uninstalled for ${walletAddress} (found in db: ${deleted})`);
+    res.json({ success: true, data: { skillId, removed: deleted } });
+  } catch (error: any) {
+    logger.error('[Gateway API] Error uninstalling skill:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });

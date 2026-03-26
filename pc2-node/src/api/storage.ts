@@ -1221,7 +1221,7 @@ router.post('/lit/encrypt', authenticate, async (req: AuthenticatedRequest, res:
  * Shared two-layer decryption: Lit Action recovers CEK, then AES-GCM decrypts file.
  * Returns raw decrypted Buffer. Caller is responsible for zeroing it after use.
  */
-interface DecryptParams {
+export interface DecryptParams {
   litCiphertext: string;
   dataToEncryptHash: string;
   iv: string;
@@ -1375,7 +1375,7 @@ async function recoverCEKAndFetchData(params: DecryptParams, ipfsService?: any):
  */
 const WASM_DECRYPT_MAX_BYTES = 200 * 1024 * 1024; // 200MB — above this, Node.js crypto is used (CEK briefly in V8)
 
-async function decryptAssetTwoLayer(params: DecryptParams, ipfsService?: any): Promise<Buffer> {
+export async function decryptAssetTwoLayer(params: DecryptParams, ipfsService?: any): Promise<Buffer> {
   const { cekBase64, encryptedBytes } = await recoverCEKAndFetchData(params, ipfsService);
 
   // Chipotle REST API may return base64 without padding — the Rust WASM

@@ -2640,7 +2640,7 @@
         if (gatewayApproved) {
           document.getElementById('result-title').textContent = 'Asset Minted On-Chain';
           document.getElementById('result-desc').textContent = 'Your encrypted asset is on IPFS and minted on Base as ' + tokenLabel + '.';
-          document.getElementById('result-note').innerHTML = '<strong>Live on Base:</strong> Your asset is now on the Elacity channel. <a href="https://basescan.org/tx/' + mintTxHash + '" target="_blank">View on BaseScan</a>';
+        document.getElementById('result-note').innerHTML = '<strong>Live on Base:</strong> Your asset is now on the Elacity channel. <a href="https://basescan.org/tx/' + mintTxHash + '" target="_blank">View on BaseScan</a>';
         } else {
           document.getElementById('result-title').textContent = 'Minted — Gateway Approval Needed';
           document.getElementById('result-desc').textContent = 'Token ' + tokenLabel + ' was minted but the marketplace approval did not complete. Buyers cannot purchase until you approve.';
@@ -2665,7 +2665,7 @@
           if (fixInput) fixInput.value = mintedOpContract;
         }
       } else {
-        showToast('Asset published!' + mintLabel + modeLabel, 'success');
+      showToast('Asset published!' + mintLabel + modeLabel, 'success');
       }
 
       // Post-mint: register asset locally so it appears in library and is seedable

@@ -57,3 +57,6 @@ pc2-node/test-*.js.map
 # Runtime data (IPFS datastore, supernode cache)
 data/ipfs/
 data/supernodes.json
+
+# Temporary files
+pc2-node/tmp/

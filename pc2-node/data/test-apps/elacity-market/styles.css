@@ -645,6 +645,68 @@ body {
   border-color: rgba(255, 59, 48, 0.15);
 }
 
+/* Install Skill Section */
+.install-skill-section {
+  padding: 14px 16px;
+  background: linear-gradient(135deg, rgba(0, 122, 255, 0.08) 0%, rgba(88, 86, 214, 0.08) 100%);
+  border: 1px solid rgba(0, 122, 255, 0.2);
+  border-radius: var(--radius-sm, 8px);
+  margin-bottom: 12px;
+}
+.install-skill-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.install-skill-icon {
+  font-size: 16px;
+  line-height: 1;
+}
+.install-skill-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #007aff;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
+}
+.install-skill-note {
+  font-size: 12px;
+  color: var(--text-muted, #8e8e93);
+  margin: 0 0 10px 0;
+  line-height: 1.4;
+}
+.install-skill-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 20px;
+  font-size: 13px;
+  line-height: 1;
+  font-family: inherit;
+  font-weight: 600;
+  background: #007aff;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+}
+.install-skill-btn:hover {
+  background: #0066d6;
+}
+.install-skill-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.install-skill-btn.installed {
+  background: #34c759;
+  cursor: default;
+}
+[data-theme="light"] .install-skill-section {
+  background: linear-gradient(135deg, rgba(0, 122, 255, 0.06) 0%, rgba(88, 86, 214, 0.06) 100%);
+  border-color: rgba(0, 122, 255, 0.15);
+}
+
 .video-card-info {
   display: flex;
   gap: 10px;

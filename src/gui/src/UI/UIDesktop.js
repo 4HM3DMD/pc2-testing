@@ -376,6 +376,101 @@ async function UIDesktop(options) {
         window.launch_apps.recent = window.launch_apps.recent.slice(0, window.launch_recent_apps_count);
     })
 
+    // ── A2UI Canvas Events ──────────────────────────────────────────
+    // Agent-driven windows: the AI pushes HTML content as desktop windows
+
+    // Track open canvas windows: canvas_id -> DOM element
+    window._canvasWindows = window._canvasWindows || {};
+
+    window.socket.on('canvas.push', async (data) => {
+        if (!data || !data.canvas_id || !data.html) return;
+
+        const canvasId = data.canvas_id;
+        const title = data.title || 'AI Canvas';
+        const width = Math.min(Math.max(data.width || 600, 300), 1200);
+        const height = Math.min(Math.max(data.height || 400, 200), 900);
+
+        // Wrap HTML with dark theme base styles
+        const wrappedHtml = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+            * { box-sizing: border-box; margin: 0; padding: 0; }
+            body { font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif;
+                   font-size: 13px; color: #e0e0e0; background: #1e1e2e; padding: 16px;
+                   line-height: 1.5; overflow-y: auto; }
+            table { width: 100%; border-collapse: collapse; margin: 8px 0; }
+            th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid #333; }
+            th { font-weight: 600; color: #b0b0b0; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+            h1, h2, h3 { color: #ffffff; margin: 12px 0 8px 0; }
+            h1 { font-size: 18px; } h2 { font-size: 15px; } h3 { font-size: 13px; }
+            a { color: #007aff; text-decoration: none; }
+            code { background: #2a2a3e; padding: 2px 6px; border-radius: 4px; font-size: 12px; }
+            pre { background: #2a2a3e; padding: 12px; border-radius: 6px; overflow-x: auto; }
+            .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+            .badge-green { background: rgba(52,199,89,0.15); color: #34c759; }
+            .badge-blue { background: rgba(0,122,255,0.15); color: #007aff; }
+            .badge-red { background: rgba(255,59,48,0.15); color: #ff3b30; }
+            .badge-yellow { background: rgba(255,204,0,0.15); color: #ffcc00; }
+        </style></head><body>${data.html}</body></html>`;
+
+        const el = await UIWindow({
+            title: title,
+            iframe_srcdoc: wrappedHtml,
+            width: width,
+            height: height,
+            app: 'ai-canvas',
+            is_resizable: true,
+            allow_native_ctxmenu: true,
+            show_in_taskbar: true,
+        });
+
+        window._canvasWindows[canvasId] = el;
+
+        // Clean up tracking when window is closed
+        $(el).on('remove', () => {
+            delete window._canvasWindows[canvasId];
+            // Notify backend that window was closed by user
+            if (window.socket && window.socket.connected) {
+                window.socket.emit('canvas.closed', { canvas_id: canvasId });
+            }
+        });
+    });
+
+    window.socket.on('canvas.update', (data) => {
+        if (!data || !data.canvas_id || !data.html) return;
+
+        const el = window._canvasWindows[data.canvas_id];
+        if (!el) return;
+
+        const iframe = $(el).find('.window-app-iframe')[0];
+        if (iframe) {
+            const wrappedHtml = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+                * { box-sizing: border-box; margin: 0; padding: 0; }
+                body { font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif;
+                       font-size: 13px; color: #e0e0e0; background: #1e1e2e; padding: 16px;
+                       line-height: 1.5; overflow-y: auto; }
+                table { width: 100%; border-collapse: collapse; margin: 8px 0; }
+                th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid #333; }
+                th { font-weight: 600; color: #b0b0b0; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+                h1, h2, h3 { color: #ffffff; margin: 12px 0 8px 0; }
+                a { color: #007aff; } code { background: #2a2a3e; padding: 2px 6px; border-radius: 4px; font-size: 12px; }
+            </style></head><body>${data.html}</body></html>`;
+            iframe.srcdoc = wrappedHtml;
+        }
+
+        if (data.title) {
+            $(el).find('.window-head-title').text(data.title);
+        }
+    });
+
+    window.socket.on('canvas.remove', (data) => {
+        if (!data || !data.canvas_id) return;
+
+        const el = window._canvasWindows[data.canvas_id];
+        if (el) {
+            $(el).close();
+            delete window._canvasWindows[data.canvas_id];
+        }
+    });
+
     window.socket.on('item.removed', async (item) => {
         console.log('[Frontend] ✅ Received item.removed event:', item, 'socket.id:', window.socket.id);
         

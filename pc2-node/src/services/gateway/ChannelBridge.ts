@@ -40,6 +40,7 @@ const BUNDLED_SKILL_HASHES: Record<string, string> = {
   'file-management': '3f2af30ab16c5f13196c5252afd93cd9523890c886f4ab520157624b8e4f8d16',
   'system-admin': '42a1d1bbd1d5daa6f5d3029aea0fec56a5641a9a16970421828d5b805f04200d',
   'elacity-market': '7b349e4a56860cf02c7d08f4538806148ab6b0899802e213d9a0e57dfea1a05b',
+  'canvas-dashboards': '2a87719caa6931f34a9b3967b03bfb750e12b675f7e4ffc357925c2471ca022f',
 };
 
 /**
@@ -119,6 +120,10 @@ export class ChannelBridge {
   
   // Max history per session
   private readonly MAX_HISTORY = 20;
+  
+  // Ownership verification cache for purchased skills: skillId -> { verified, expiresAt }
+  private ownershipCache: Map<string, { verified: boolean; expiresAt: number }> = new Map();
+  private readonly OWNERSHIP_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
   
   constructor(
     aiService: AIChatService,
@@ -467,19 +472,42 @@ export class ChannelBridge {
     if (this.filesystem && this.ownerWalletAddress) {
       try {
         const userSkillPath = `pc2/skills/${skillId}/SKILL.md`;
-        const raw = await this.filesystem.readFile(this.ownerWalletAddress, userSkillPath);
+        const raw = await this.filesystem.readFile(userSkillPath, this.ownerWalletAddress);
         if (raw) {
           const text = typeof raw === 'string' ? raw : raw.toString('utf-8');
           const contentHash = this.computeHash(text);
           const { meta, body } = this.parseSkillFrontmatter(text);
+
+          // Check if this is a purchased skill that needs ownership verification
+          const installRecord = this.db
+            ? this.db.getInstalledSkill(this.ownerWalletAddress, skillId)
+            : null;
+          const isPurchased = !!installRecord;
+
+          if (isPurchased) {
+            const ownershipValid = await this.verifySkillOwnership(
+              skillId,
+              installRecord.kid as string,
+              this.ownerWalletAddress
+            );
+
+            if (!ownershipValid) {
+              logger.warn(`[ChannelBridge] Ownership lost for purchased skill "${skillId}" — revoking`);
+              await this.revokeSkill(skillId);
+              return null;
+            }
+          }
+
           return {
             id: skillId,
             name: (meta.name as string) || skillId,
-            source: 'user',
+            source: isPurchased ? 'purchased' : 'user',
             tools: Array.isArray(meta.tools) ? meta.tools : [],
             body,
             contentHash,
-            hashVerified: false, // User skills have no expected hash in v1.x
+            hashVerified: isPurchased
+              ? contentHash === (installRecord?.content_hash as string)
+              : false,
           };
         }
       } catch {
@@ -489,6 +517,88 @@ export class ChannelBridge {
 
     logger.warn(`[ChannelBridge] Skill not found: ${skillId}`);
     return null;
+  }
+
+  /**
+   * Verify on-chain ownership for a purchased skill, with 5-minute TTL cache.
+   * Returns true if the user still has access, false if ownership is lost.
+   */
+  private async verifySkillOwnership(skillId: string, kid: string, walletAddress: string): Promise<boolean> {
+    const cacheKey = `${walletAddress}:${skillId}`;
+    const cached = this.ownershipCache.get(cacheKey);
+    if (cached && Date.now() < cached.expiresAt) {
+      return cached.verified;
+    }
+
+    try {
+      // On-chain verification via ethers.js — call hasAccessByContentId on the Elacity registry
+      const { ethers } = await import('ethers');
+      const rpcUrl = process.env.BASE_RPC_URL || 'https://mainnet.base.org';
+      const provider = new ethers.JsonRpcProvider(rpcUrl);
+
+      const registryAddress = process.env.ELACITY_REGISTRY_ADDRESS || '0x96826e93c4b0bb9D4dFCcb080bFe6E05cC363e36';
+      const kidHex = kid.startsWith('0x') ? kid : `0x${kid}`;
+
+      const abi = ['function hasAccessByContentId(bytes32 contentId, address user) view returns (bool)'];
+      const contract = new ethers.Contract(registryAddress, abi, provider);
+      const hasAccess: boolean = await contract.hasAccessByContentId(kidHex, walletAddress);
+
+      this.ownershipCache.set(cacheKey, {
+        verified: hasAccess,
+        expiresAt: Date.now() + this.OWNERSHIP_CACHE_TTL,
+      });
+
+      if (this.db) {
+        this.db.updateSkillVerification(walletAddress, skillId);
+      }
+
+      logger.info(`[ChannelBridge] Ownership check for "${skillId}": ${hasAccess ? 'valid' : 'REVOKED'}`);
+      return hasAccess;
+    } catch (error: any) {
+      logger.warn(`[ChannelBridge] Ownership verification failed for "${skillId}": ${error.message} — allowing cached/grace period`);
+      // On verification failure (network issue), allow access for TTL period
+      this.ownershipCache.set(cacheKey, {
+        verified: true,
+        expiresAt: Date.now() + this.OWNERSHIP_CACHE_TTL,
+      });
+      return true;
+    }
+  }
+
+  /**
+   * Revoke a purchased skill — delete from filesystem, remove from agent configs, clean DB record.
+   */
+  private async revokeSkill(skillId: string): Promise<void> {
+    if (this.ownerWalletAddress && this.filesystem) {
+      try {
+        await this.filesystem.deleteFile(`pc2/skills/${skillId}/SKILL.md`, this.ownerWalletAddress);
+      } catch { /* already gone */ }
+    }
+
+    if (this.db && this.ownerWalletAddress) {
+      this.db.deleteInstalledSkill(this.ownerWalletAddress, skillId);
+
+      this.db.insertAgentAuditLog(
+        'system',
+        'skill_revoked',
+        { skillId, reason: 'ownership_lost' },
+        'ownership_verifier'
+      );
+    }
+
+    // Remove from all agents
+    const agents = this.gateway.getAgents();
+    for (const agent of agents) {
+      if (agent.skills?.includes(skillId)) {
+        const updatedSkills = agent.skills.filter((s: string) => s !== skillId);
+        await this.gateway.updateAgent(agent.id, { skills: updatedSkills });
+      }
+    }
+
+    // Clear cache entry
+    if (this.ownerWalletAddress) {
+      this.ownershipCache.delete(`${this.ownerWalletAddress}:${skillId}`);
+    }
   }
 
   /**
