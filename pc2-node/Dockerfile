@@ -18,6 +18,47 @@
 #
 # Version: 1.0.0
 
+# ---------------------------------------------------------------------------
+# Stage 1: Compile transport binaries (wireguard-go, amneziawg-go, sing-box)
+# Runs in parallel with the Node.js builder stage for faster builds.
+# ---------------------------------------------------------------------------
+FROM golang:1.22-alpine AS transport-builder
+
+RUN apk add --no-cache git
+
+ARG TARGETARCH=amd64
+
+WORKDIR /build
+
+RUN mkdir -p /binaries
+
+# wireguard-go: userspace WireGuard implementation
+RUN git clone --depth 1 https://git.zx2c4.com/wireguard-go && \
+    cd wireguard-go && \
+    CGO_ENABLED=0 go build -o /binaries/wireguard-go
+
+# amneziawg-go: DPI-resistant WireGuard fork
+RUN git clone --depth 1 https://github.com/amnezia-vpn/amneziawg-go && \
+    cd amneziawg-go && \
+    CGO_ENABLED=0 go build -o /binaries/amneziawg-go
+
+# awg-quick: AmneziaWG interface management script
+RUN git clone --depth 1 https://github.com/amnezia-vpn/amneziawg-tools && \
+    cp amneziawg-tools/src/wg-quick/linux.bash /binaries/awg-quick && \
+    sed -i 's|/var/run/wireguard/|/var/run/amneziawg/|g' /binaries/awg-quick && \
+    sed -i 's|PROGRAM="${0##*/}"|PROGRAM="awg-quick"|g' /binaries/awg-quick
+
+# sing-box: VLESS Reality transport (pre-built release)
+RUN SINGBOX_ARCH=$(if [ "$TARGETARCH" = "amd64" ]; then echo "amd64"; else echo "$TARGETARCH"; fi) && \
+    wget -q "https://github.com/SagerNet/sing-box/releases/download/v1.13.0/sing-box-1.13.0-linux-${SINGBOX_ARCH}.tar.gz" -O /tmp/singbox.tar.gz && \
+    tar -xzf /tmp/singbox.tar.gz -C /tmp && \
+    find /tmp -name "sing-box" -type f -exec cp {} /binaries/sing-box \;
+
+RUN chmod +x /binaries/*
+
+# ---------------------------------------------------------------------------
+# Stage 2: Build the Node.js application
+# ---------------------------------------------------------------------------
 FROM node:20-alpine AS builder
 
 # Install build dependencies
@@ -38,17 +79,27 @@ COPY . .
 # Build the application
 RUN cd pc2-node && npm run build:backend || true
 
-# Production image
+# ---------------------------------------------------------------------------
+# Stage 3: Production image
+# ---------------------------------------------------------------------------
 FROM node:20-alpine
 
 # Install runtime dependencies
-# - bubblewrap: Required for namespace isolation (multi-user security)
-# - tini: Proper init system for containers
-# - ca-certificates: For HTTPS
+# - bubblewrap: namespace isolation (multi-user security)
+# - tini: proper init system for containers
+# - ca-certificates: HTTPS
+# - wireguard-tools: wg and wg-quick CLI (C binary, installed via OS package)
+# - bash: required by wg-quick and awg-quick scripts
+# - iproute2: required by wg-quick for ip link/route management
+# - iptables: required by wg-quick for NAT/firewall rules
 RUN apk add --no-cache \
     bubblewrap \
     tini \
     ca-certificates \
+    wireguard-tools \
+    bash \
+    iproute2 \
+    iptables \
     && rm -rf /var/cache/apk/*
 
 # Create non-root user for security
@@ -70,6 +121,16 @@ COPY --from=builder /app/config ./config
 # Copy entrypoint script
 COPY --from=builder /app/pc2-node/scripts/docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN chmod +x /app/docker-entrypoint.sh
+
+# Copy pre-built transport binaries into the bundled dir that binary-manager checks first.
+# Node.js arch naming: amd64 -> x64, arm64 -> arm64
+ARG TARGETARCH=amd64
+RUN NODE_ARCH=$(if [ "$TARGETARCH" = "amd64" ]; then echo "x64"; else echo "$TARGETARCH"; fi) && \
+    mkdir -p /app/bin/linux-${NODE_ARCH}
+COPY --from=transport-builder /binaries/ /tmp/transport-binaries/
+RUN NODE_ARCH=$(if [ "$TARGETARCH" = "amd64" ]; then echo "x64"; else echo "$TARGETARCH"; fi) && \
+    cp /tmp/transport-binaries/* /app/bin/linux-${NODE_ARCH}/ && \
+    rm -rf /tmp/transport-binaries
 
 # Create data directory with proper permissions
 RUN mkdir -p /app/data /app/certs && \

@@ -389,12 +389,6 @@
       opacity: 1;
     }
     
-    textarea:focus {
-      outline: none;
-      border-color: var(--accent) !important;
-      box-shadow: 0 0 0 3px rgba(240, 185, 11, 0.15);
-    }
-    
     .copy-recovery-btn {
       background: transparent;
       border: 1px solid var(--accent);
@@ -435,77 +429,7 @@
           <h2>Welcome to PC2</h2>
           <p>Your personal, sovereign cloud computer.<br>Let's set up your node in a few simple steps.</p>
         </div>
-        <button class="btn btn-primary" onclick="goToStep('username')" style="margin-bottom: 12px;">Get Started</button>
-        <button class="btn btn-secondary" onclick="goToStep('restore-upload')">Restore from Backup</button>
-      </div>
-      
-      <!-- Step: Restore Upload -->
-      <div id="step-restore-upload" class="step">
-        <div class="step-header">
-          <h2>Restore from Backup</h2>
-          <p>Upload a PC2 backup archive to restore your node's data, identity, and configuration.</p>
-        </div>
-        <div class="form-group">
-          <label>Backup File (.tar.gz)</label>
-          <div style="border: 2px dashed var(--border); border-radius: 12px; padding: 32px 16px; text-align: center; cursor: pointer; transition: border-color 0.2s;" id="drop-zone" onclick="document.getElementById('backup-file-input').click()">
-            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--text-secondary)" stroke-width="1.5" style="margin-bottom: 12px;">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-              <polyline points="17 8 12 3 7 8"></polyline>
-              <line x1="12" y1="3" x2="12" y2="15"></line>
-            </svg>
-            <p style="color: var(--text-secondary); font-size: 14px; margin: 0;" id="drop-zone-text">Click to select or drag & drop your backup file</p>
-            <input type="file" id="backup-file-input" accept=".tar.gz,.gz" style="display: none;" onchange="handleFileSelected(this)">
-          </div>
-          <div id="restore-upload-status" class="input-status" style="margin-top: 8px;"></div>
-        </div>
-        <div style="display: flex; gap: 12px;">
-          <button class="btn btn-secondary" style="flex: 1;" onclick="cancelRestore(); goToStep('welcome')">Back</button>
-          <button id="btn-upload-restore" class="btn btn-primary" style="flex: 1;" disabled onclick="uploadBackup()">Upload & Validate</button>
-        </div>
-      </div>
-      
-      <!-- Step: Restore Mnemonic -->
-      <div id="step-restore-mnemonic" class="step">
-        <div class="step-header">
-          <h2>Enter Recovery Phrase</h2>
-          <p>This backup contains an encrypted identity. Enter your 24-word recovery phrase to unlock it.</p>
-        </div>
-        <div class="form-group">
-          <label>24-Word Recovery Phrase</label>
-          <textarea
-            id="restore-mnemonic-input"
-            rows="4"
-            placeholder="word1 word2 word3 ... word24"
-            style="width: 100%; padding: 14px 16px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 12px; color: var(--text-primary); font-size: 14px; font-family: monospace; resize: vertical; transition: border-color 0.2s;"
-            oninput="validateMnemonicInput()"
-          ></textarea>
-          <div id="restore-mnemonic-status" class="input-status" style="margin-top: 8px;"></div>
-        </div>
-        <div id="restore-backup-contents" style="display: none;">
-          <label style="font-size: 14px; color: var(--text-secondary); margin-bottom: 8px; display: block;">Backup Contents</label>
-          <div class="info-box" id="restore-contents-list"></div>
-        </div>
-        <div style="display: flex; gap: 12px; margin-top: 16px;">
-          <button class="btn btn-secondary" style="flex: 1;" onclick="cancelRestore(); goToStep('welcome')">Cancel</button>
-          <button id="btn-finalize-restore" class="btn btn-primary" style="flex: 1;" disabled onclick="finalizeRestore()">Restore Node</button>
-        </div>
-      </div>
-      
-      <!-- Step: Restore Complete -->
-      <div id="step-restore-complete" class="step">
-        <div class="step-header" style="text-align: center;">
-          <div class="success-header">
-            <div class="success-icon">
-              <svg viewBox="0 0 24 24" fill="currentColor">
-                <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
-              </svg>
-            </div>
-            <h2 style="margin: 0;">Backup Restored!</h2>
-          </div>
-          <p id="restore-complete-msg">Your node data has been restored. The server needs to restart to apply the changes.</p>
-        </div>
-        <div class="info-box" id="restore-result-info"></div>
-        <button class="btn btn-primary" onclick="window.location.reload()">Restart & Continue Setup</button>
+        <button class="btn btn-primary" onclick="goToStep('username')">Get Started</button>
       </div>
       
       <!-- Step 2: Username -->
@@ -610,17 +534,11 @@
             </span>
           </div>
         </div>
-        <div style="background: rgba(234, 179, 8, 0.08); border: 1px solid rgba(234, 179, 8, 0.25); border-radius: 10px; padding: 14px 16px; margin-top: 12px; margin-bottom: 16px;">
-          <p style="color: var(--text-secondary); font-size: 12px; margin: 0 0 10px 0; line-height: 1.5;">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 4px; color: var(--warning);"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
-            <strong style="color: var(--warning);">Your recovery phrase is the only way to restore your node and domain if you lose access.</strong> It cannot be retrieved once this page is closed or your node restarts. Copy it now and store it safely offline.
-          </p>
-          <label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer; font-size: 13px; color: var(--text-primary); line-height: 1.4;">
-            <input type="checkbox" id="mnemonic-ack-checkbox" onchange="document.getElementById('btn-login-desktop').disabled = !this.checked" style="margin-top: 2px; accent-color: var(--primary); width: 16px; height: 16px; flex-shrink: 0;">
-            I have saved my recovery phrase. I understand it cannot be retrieved later.
-          </label>
-        </div>
-        <button class="btn btn-primary" id="btn-login-desktop" onclick="openDesktop()" disabled>Login to PC2</button>
+        <p style="color: var(--text-secondary); font-size: 12px; text-align: center; margin-top: 12px; margin-bottom: 20px;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 4px; color: var(--warning);"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+          <strong style="color: var(--warning);">Important:</strong> Save your recovery phrase offline. You can also encrypt it later in Settings → Account.
+        </p>
+        <button class="btn btn-primary" onclick="openDesktop()">Login to PC2</button>
       </div>
       
       <div class="progress-dots" id="progress-dots">
@@ -647,19 +565,14 @@
         const status = await response.json();
         
         if (status.setupComplete) {
+          // Already set up, redirect to main app
           window.location.href = '/';
           return;
         }
         
-        // If there's an encrypted identity pending (from CLI restore), 
-        // jump straight to the mnemonic entry step
-        if (status.step === 'restore-mnemonic' || status.hasEncryptedIdentity) {
-          restoreNeedsMnemonic = true;
-          goToStep('restore-mnemonic');
-          return;
-        }
-        
-        goToStep(status.step || 'welcome');
+        // Always start on welcome step for fresh setup experience
+        // The welcome screen provides important context before setup
+        goToStep('welcome');
       } catch (error) {
         console.error('Failed to check setup status:', error);
       }
@@ -670,43 +583,29 @@
       document.querySelectorAll('.step').forEach(el => el.classList.remove('active'));
       
       // Show target step
-      const stepEl = document.getElementById(`step-${step}`);
-      if (stepEl) stepEl.classList.add('active');
+      document.getElementById(`step-${step}`).classList.add('active');
       
-      // Update progress dots (only for main flow steps)
-      const mainSteps = ['welcome', 'username', 'complete'];
-      const restoreSteps = ['welcome', 'restore-upload', 'restore-mnemonic', 'restore-complete'];
-      const isRestoreFlow = restoreSteps.includes(step) && step !== 'welcome';
+      // Update progress dots
+      const steps = ['welcome', 'username', 'complete'];
+      const stepIndex = steps.indexOf(step);
       
-      const activeSteps = isRestoreFlow ? restoreSteps : mainSteps;
-      const stepIndex = activeSteps.indexOf(step);
-      
-      // Show/hide progress dots based on flow
-      const dotsContainer = document.getElementById('progress-dots');
-      if (isRestoreFlow || step === 'restore-complete') {
-        dotsContainer.style.display = 'none';
-      } else {
-        dotsContainer.style.display = 'flex';
-        document.querySelectorAll('.progress-dot').forEach((dot, i) => {
-          dot.classList.remove('active', 'completed');
-          if (i < stepIndex) {
-            dot.classList.add('completed');
-          } else if (i === stepIndex) {
-            dot.classList.add('active');
-          }
-        });
-      }
+      document.querySelectorAll('.progress-dot').forEach((dot, i) => {
+        dot.classList.remove('active', 'completed');
+        if (i < stepIndex) {
+          dot.classList.add('completed');
+        } else if (i === stepIndex) {
+          dot.classList.add('active');
+        }
+      });
       
       currentStep = step;
       
+      // Focus username input if on that step
       if (step === 'username') {
         setTimeout(() => document.getElementById('username-input').focus(), 100);
       }
       
-      if (step === 'restore-mnemonic') {
-        setTimeout(() => document.getElementById('restore-mnemonic-input').focus(), 100);
-      }
-      
+      // Fetch info when going to complete step
       if (step === 'complete') {
         fetchAndDisplayInfo();
       }
@@ -951,210 +850,6 @@
         document.body.removeChild(textarea);
       }
     }
-    
-    // ========================================================
-    // Restore from Backup
-    // ========================================================
-    let selectedFile = null;
-    let restoreNeedsMnemonic = false;
-    let restoreContents = [];
-    
-    function handleFileSelected(input) {
-      const file = input.files[0];
-      if (!file) return;
-      
-      selectedFile = file;
-      const dropText = document.getElementById('drop-zone-text');
-      const sizeStr = file.size > 1024*1024 
-        ? (file.size / 1024 / 1024).toFixed(1) + ' MB' 
-        : (file.size / 1024).toFixed(1) + ' KB';
-      dropText.innerHTML = `<strong>${file.name}</strong><br><span style="font-size:12px;color:var(--text-secondary);">${sizeStr}</span>`;
-      document.getElementById('drop-zone').style.borderColor = 'var(--accent)';
-      document.getElementById('btn-upload-restore').disabled = false;
-      document.getElementById('restore-upload-status').textContent = '';
-    }
-    
-    async function uploadBackup() {
-      if (!selectedFile) return;
-      
-      const btn = document.getElementById('btn-upload-restore');
-      const status = document.getElementById('restore-upload-status');
-      btn.disabled = true;
-      btn.textContent = 'Uploading...';
-      status.innerHTML = '<span class="loading-spinner"></span> Uploading and validating backup...';
-      status.className = 'input-status checking';
-      
-      try {
-        const formData = new FormData();
-        formData.append('file', selectedFile);
-        
-        const response = await fetch('/api/setup/restore', {
-          method: 'POST',
-          body: formData,
-        });
-        
-        const result = await response.json();
-        
-        if (!response.ok) {
-          throw new Error(result.error || 'Upload failed');
-        }
-        
-        restoreNeedsMnemonic = result.needsMnemonic;
-        restoreContents = result.contents || [];
-        
-        if (restoreNeedsMnemonic) {
-          showRestoreContents();
-          goToStep('restore-mnemonic');
-        } else {
-          // v1 backup — finalize immediately (no mnemonic needed)
-          await finalizeRestore();
-        }
-      } catch (error) {
-        status.textContent = error.message;
-        status.className = 'input-status error';
-        btn.disabled = false;
-        btn.textContent = 'Upload & Validate';
-      }
-    }
-    
-    function showRestoreContents() {
-      if (restoreContents.length === 0) return;
-      const container = document.getElementById('restore-contents-list');
-      container.innerHTML = restoreContents.map(c => {
-        const icon = c.includes('database') ? '💾' : c.includes('identity') ? '🔑' : c.includes('ipfs') ? '📦' : '📄';
-        return `<div class="info-row"><span class="label">${icon}</span><span class="value" style="max-width:none;font-family:inherit;">${c}</span></div>`;
-      }).join('');
-      document.getElementById('restore-backup-contents').style.display = 'block';
-    }
-    
-    function validateMnemonicInput() {
-      const input = document.getElementById('restore-mnemonic-input').value.trim();
-      const words = input.split(/\s+/).filter(w => w.length > 0);
-      const status = document.getElementById('restore-mnemonic-status');
-      const btn = document.getElementById('btn-finalize-restore');
-      
-      if (words.length === 0) {
-        status.textContent = '';
-        btn.disabled = true;
-        return;
-      }
-      
-      if (words.length < 24) {
-        status.textContent = `${words.length}/24 words entered`;
-        status.className = 'input-status checking';
-        btn.disabled = true;
-      } else if (words.length === 24) {
-        status.textContent = '✓ 24 words entered';
-        status.className = 'input-status available';
-        btn.disabled = false;
-      } else {
-        status.textContent = `Too many words (${words.length}/24)`;
-        status.className = 'input-status error';
-        btn.disabled = true;
-      }
-    }
-    
-    async function finalizeRestore() {
-      const btn = document.getElementById('btn-finalize-restore');
-      if (btn) {
-        btn.disabled = true;
-        btn.textContent = 'Restoring...';
-      }
-      
-      try {
-        const body = {};
-        if (restoreNeedsMnemonic) {
-          const mnemonic = document.getElementById('restore-mnemonic-input').value.trim();
-          if (!mnemonic) throw new Error('Please enter your recovery phrase');
-          body.mnemonic = mnemonic;
-        }
-        
-        const response = await fetch('/api/setup/restore/finalize', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        });
-        
-        const result = await response.json();
-        
-        if (!response.ok) {
-          throw new Error(result.error || 'Restore failed');
-        }
-        
-        // Show success
-        const infoBox = document.getElementById('restore-result-info');
-        const items = (result.restored || []).map(name => 
-          `<div class="info-row"><span class="label">✅</span><span class="value" style="max-width:none;font-family:inherit;">${name}</span></div>`
-        ).join('');
-        infoBox.innerHTML = items;
-        
-        if (result.nodeId) {
-          document.getElementById('restore-complete-msg').textContent = 
-            `Your node identity (${result.nodeId.substring(0, 12)}...) has been restored. Complete the setup wizard to register your username.`;
-        }
-        
-        goToStep('restore-complete');
-      } catch (error) {
-        if (restoreNeedsMnemonic) {
-          const status = document.getElementById('restore-mnemonic-status');
-          status.textContent = error.message;
-          status.className = 'input-status error';
-          if (btn) {
-            btn.disabled = false;
-            btn.textContent = 'Restore Node';
-          }
-        } else {
-          const status = document.getElementById('restore-upload-status');
-          status.textContent = error.message;
-          status.className = 'input-status error';
-          const uploadBtn = document.getElementById('btn-upload-restore');
-          if (uploadBtn) {
-            uploadBtn.disabled = false;
-            uploadBtn.textContent = 'Upload & Validate';
-          }
-        }
-      }
-    }
-    
-    async function cancelRestore() {
-      selectedFile = null;
-      restoreNeedsMnemonic = false;
-      restoreContents = [];
-      document.getElementById('drop-zone-text').textContent = 'Click to select or drag & drop your backup file';
-      document.getElementById('drop-zone').style.borderColor = '';
-      document.getElementById('btn-upload-restore').disabled = true;
-      document.getElementById('restore-upload-status').textContent = '';
-      
-      // Clean up staging on server
-      try { await fetch('/api/setup/restore', { method: 'DELETE' }); } catch {}
-    }
-    
-    // Drag and drop support
-    document.addEventListener('DOMContentLoaded', () => {
-      const dropZone = document.getElementById('drop-zone');
-      if (!dropZone) return;
-      
-      dropZone.addEventListener('dragover', (e) => {
-        e.preventDefault();
-        dropZone.style.borderColor = 'var(--accent)';
-      });
-      
-      dropZone.addEventListener('dragleave', () => {
-        if (!selectedFile) dropZone.style.borderColor = '';
-      });
-      
-      dropZone.addEventListener('drop', (e) => {
-        e.preventDefault();
-        const file = e.dataTransfer.files[0];
-        if (file && file.name.endsWith('.tar.gz')) {
-          const input = document.getElementById('backup-file-input');
-          const dt = new DataTransfer();
-          dt.items.add(file);
-          input.files = dt.files;
-          handleFileSelected(input);
-        }
-      });
-    });
     
     async function copyRecoveryPhrase() {
       const btn = document.getElementById('copy-recovery-btn');

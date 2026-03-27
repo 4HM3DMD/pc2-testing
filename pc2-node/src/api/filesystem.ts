@@ -387,6 +387,8 @@ function appendInstalledAppEntries(entries: any[], desktopPath: string, req: Aut
       let manifest: any;
       try { manifest = JSON.parse(app.manifest_json); } catch { continue; }
 
+      if (manifest.hidden) continue;
+
       const appTitle = app.title || app.app_name;
       const appPath = `${desktopPath}/${appTitle}`;
       const uid = `uuid-app-${app.app_name}`;

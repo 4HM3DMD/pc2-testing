@@ -629,24 +629,27 @@ export default {
                 .pc2-backup-btn {
                     padding: 6px 12px;
                     font-size: 12px;
-                    border: 1px solid #d1d5db;
-                    background: #fff;
+                    border: none;
                     border-radius: 4px;
                     cursor: pointer;
-                }
-                .pc2-backup-btn:hover {
-                    background: #f9fafb;
+                    color: white;
+                    font-family: inherit;
+                    line-height: 1;
+                    display: inline-flex;
+                    align-items: center;
+                    justify-content: center;
                 }
                 .pc2-backup-btn.download {
-                    color: #3b82f6;
-                    border-color: #3b82f6;
+                    background: #2563eb;
+                }
+                .pc2-backup-btn.download:hover {
+                    background: #1d4ed8;
                 }
                 .pc2-backup-btn.delete {
-                    color: #dc2626;
-                    border-color: #dc2626;
+                    background: #991b1b;
                 }
                 .pc2-backup-btn.delete:hover {
-                    background: #fee2e2;
+                    background: #7f1d1d;
                 }
                 @keyframes spin {
                     from { transform: rotate(0deg); }

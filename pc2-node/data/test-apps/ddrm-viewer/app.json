@@ -40,5 +40,7 @@
 
   "distribution": {
     "channel": "stable"
-  }
+  },
+
+  "hidden": true
 }

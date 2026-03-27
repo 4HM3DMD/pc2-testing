@@ -92,17 +92,6 @@
       "https://base.meowrpc.com"
     ]
   },
-  "blockchain": {
-    "chain_id": 8453,
-    "chain_name": "base",
-    "rpc_urls": [
-      "https://mainnet.base.org",
-      "https://base.llamarpc.com",
-      "https://base-rpc.publicnode.com",
-      "https://1rpc.io/base",
-      "https://base.meowrpc.com"
-    ]
-  },
   "content_indexer": {
     "enabled": true,
     "scan_interval_minutes": 30,

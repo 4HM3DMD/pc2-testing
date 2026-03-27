@@ -202,6 +202,7 @@ export function handleGetLaunchApps(req: Request, res: Response): void {
       const installedApps = appInstallService.list();
       for (const installed of installedApps) {
         const manifest = JSON.parse(installed.manifest_json);
+        if (manifest.hidden) continue;
         let iconUrl: string | undefined;
         if (manifest.iconDataUrl) {
           iconUrl = manifest.iconDataUrl;
