@@ -4,6 +4,10 @@
  * Makes the hidden data iframe visible as a centered overlay so the user
  * can interact with Particle's signing UI. Restores hidden state after
  * completion, rejection, dismiss, or timeout.
+ *
+ * Supports:
+ *   - eth_sendTransaction → posts particle-wallet.eoa-send
+ *   - personal_sign       → posts particle-wallet.eoa-send with method override
  */
 
 const RESULT_TIMEOUT_MS = 60000;
@@ -19,9 +23,6 @@ async function UIWindowParticleSigning({ method, params }) {
         }
 
         const requestId = `signing-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-        const txObj = params?.[0] || {};
-        const { chainId: chainIdHex, ...txParams } = txObj;
-        const chainId = chainIdHex ? parseInt(chainIdHex, 16) : undefined;
 
         const backdrop = document.createElement('div');
         backdrop.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:2147483640;';
@@ -70,7 +71,7 @@ async function UIWindowParticleSigning({ method, params }) {
             if (respId !== requestId) return;
 
             if (type === 'particle-wallet.eoa-send-result') {
-                cleanup(resolve, payload?.txHash);
+                cleanup(resolve, payload?.txHash || payload?.signature);
             }
             if (type === 'particle-wallet.rpc-result') {
                 cleanup(resolve, payload?.result);
@@ -82,11 +83,26 @@ async function UIWindowParticleSigning({ method, params }) {
 
         window.addEventListener('message', messageHandler);
 
-        iframe.contentWindow?.postMessage({
-            type: 'particle-wallet.eoa-send',
-            requestId,
-            payload: { txParams, chainId },
-        }, '*');
+        if (method === 'personal_sign') {
+            iframe.contentWindow?.postMessage({
+                type: 'particle-wallet.eoa-send',
+                requestId,
+                payload: {
+                    method: 'personal_sign',
+                    params: params,
+                },
+            }, '*');
+        } else {
+            const txObj = params?.[0] || {};
+            const { chainId: chainIdHex, ...txParams } = txObj;
+            const chainId = chainIdHex ? parseInt(chainIdHex, 16) : undefined;
+
+            iframe.contentWindow?.postMessage({
+                type: 'particle-wallet.eoa-send',
+                requestId,
+                payload: { txParams, chainId },
+            }, '*');
+        }
     });
 }
 

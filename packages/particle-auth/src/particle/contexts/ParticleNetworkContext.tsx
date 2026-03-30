@@ -937,10 +937,9 @@ const ParticleNetworkProvider: React.FC<React.PropsWithChildren<ParticleNetworkC
           }
 
           case 'particle-wallet.eoa-send': {
-            console.log('[Particle Wallet Handler] eoa-send: connector?', !!connector, 'connectedEoa?', connectedEoaAddress);
+            console.log('[Particle Wallet Handler] eoa-send: connector?', !!connector, 'connectedEoa?', connectedEoaAddress, 'method?', payload.method);
             let eoaProvider = await connector?.getProvider();
             if (!eoaProvider) {
-              // ConnectKit may still be restoring — retry a few times
               for (let attempt = 0; attempt < 3 && !eoaProvider; attempt++) {
                 console.log('[Particle Wallet Handler] Provider not ready, retrying...', attempt + 1);
                 await new Promise(r => setTimeout(r, 1500));
@@ -948,6 +947,21 @@ const ParticleNetworkProvider: React.FC<React.PropsWithChildren<ParticleNetworkC
               }
             }
             if (!eoaProvider) throw new Error('No wallet provider available — session may not be restored. Try logging out and back in.');
+
+            if (payload.method === 'personal_sign') {
+              console.log('[Particle Wallet Handler] personal_sign request via eoa-send');
+              const signResult = await (eoaProvider as any).request({
+                method: 'personal_sign',
+                params: payload.params,
+              });
+              console.log('[Particle Wallet Handler] personal_sign result:', signResult?.substring(0, 20) + '...');
+              window.parent.postMessage({
+                type: 'particle-wallet.eoa-send-result',
+                requestId,
+                payload: { signature: signResult, txHash: signResult },
+              }, '*');
+              break;
+            }
 
             const targetChainId = payload.chainId;
             if (targetChainId) {
@@ -1113,6 +1127,66 @@ const ParticleNetworkProvider: React.FC<React.PropsWithChildren<ParticleNetworkC
                 hash: result.transactionHash || result.hash || transaction.transactionId,
                 transactionId: transaction.transactionId,
                 result,
+              },
+            }, '*');
+            break;
+          }
+
+          case 'particle-wallet.create-transfer': {
+            if (!smartAccountInfo?.smartAccountAddress) {
+              throw new Error('Smart Account not yet initialized. Please wait for wallet to fully connect.');
+            }
+
+            const { to, amount, tokenAddress, chainId: targetChainId, decimals = 18 } = payload;
+
+            const transferPayload = {
+              token: {
+                chainId: targetChainId || 8453,
+                address: tokenAddress || '0x0000000000000000000000000000000000000000',
+              },
+              amount: amount,
+              receiver: to,
+            };
+
+            console.log('[Particle Wallet Handler] create-transfer:', transferPayload);
+
+            const createdTx = await universalAccount.createTransferTransaction(transferPayload);
+
+            console.log('[Particle Wallet Handler] Transfer transaction created, rootHash:', createdTx.rootHash);
+
+            window.parent.postMessage({
+              type: 'particle-wallet.create-transfer-result',
+              requestId,
+              payload: {
+                rootHash: createdTx.rootHash,
+                transactionData: JSON.parse(JSON.stringify(createdTx)),
+                eoaAddress: connectedEoaAddress,
+              },
+            }, '*');
+            break;
+          }
+
+          case 'particle-wallet.submit-transfer': {
+            if (!universalAccount) {
+              throw new Error('Universal Account not available');
+            }
+
+            const { transactionData: txData, signature: sig } = payload;
+
+            console.log('[Particle Wallet Handler] submit-transfer: sig=', sig?.substring(0, 20) + '...');
+
+            const submitResult = await universalAccount.sendTransaction(txData, sig);
+
+            console.log('[Particle Wallet Handler] Transaction submitted:', submitResult);
+
+            window.parent.postMessage({
+              type: 'particle-wallet.send-result',
+              requestId,
+              payload: {
+                success: true,
+                hash: submitResult.transactionHash || submitResult.hash || txData.transactionId,
+                transactionId: txData.transactionId,
+                result: submitResult,
               },
             }, '*');
             break;

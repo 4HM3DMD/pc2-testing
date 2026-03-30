@@ -724,6 +724,10 @@ class WalletService {
                     logger.log('Received eoa-send-result:', payload?.txHash);
                     this._handleGenericResult(payload || {}, requestId);
                     break;
+                case 'particle-wallet.create-transfer-result':
+                    logger.log('Received create-transfer-result:', payload?.rootHash);
+                    this._handleGenericResult(payload || {}, requestId);
+                    break;
                 case 'particle-wallet.rpc-result':
                     logger.log('Received rpc-result:', payload?.result);
                     this._handleGenericResult(payload || {}, requestId);
@@ -2198,7 +2202,16 @@ class WalletService {
             return this._sendEOATransaction({ to, amount, tokenAddress, decimals, chainId });
         }
         
-        // Universal Account mode: Use Particle iframe
+        // Universal Account mode
+        const loginMethod = window.user?.login_method || localStorage.getItem('pc2_login_method') || '';
+        const EXTERNAL_METHODS = ['metamask', 'walletconnect', 'coinbase'];
+        const isEmbedded = !EXTERNAL_METHODS.includes(loginMethod);
+        
+        if (isEmbedded) {
+            return this._sendSmartWalletEmbedded({ to, amount, tokenAddress, chainId, decimals });
+        }
+        
+        // External wallet: signing happens natively in MetaMask/etc — use existing single-step path
         return this._sendToIframe('particle-wallet.send', {
             from: this.getAddress(),
             to,
@@ -2207,6 +2220,45 @@ class WalletService {
             chainId,
             decimals,
             mode: walletMode,
+        });
+    }
+    
+    /**
+     * Smart Wallet send for embedded (email/social) logins.
+     * 3-phase: create transfer → sign with popup → submit
+     */
+    async _sendSmartWalletEmbedded({ to, amount, tokenAddress, chainId, decimals = 18 }) {
+        // Phase 1: Create the transfer transaction (hidden iframe, no UI)
+        logger.log('Smart Wallet embedded send — Phase 1: creating transfer');
+        const createResult = await this._sendToIframe('particle-wallet.create-transfer', {
+            to, amount, tokenAddress, chainId, decimals,
+        });
+        
+        const { rootHash, transactionData, eoaAddress } = createResult;
+        if (!rootHash || !transactionData) {
+            throw new Error('Failed to create transfer transaction');
+        }
+        
+        logger.log('Smart Wallet embedded send — Phase 2: signing rootHash via popup');
+        
+        // Phase 2: Sign the rootHash with the visible signing popup
+        const { default: UIWindowParticleSigning } = await import('../UI/UIWindowParticleSigning.js');
+        
+        const signature = await UIWindowParticleSigning({
+            method: 'personal_sign',
+            params: [rootHash, eoaAddress],
+        });
+        
+        if (!signature || signature === 'pending') {
+            throw new Error('Signing was not completed');
+        }
+        
+        logger.log('Smart Wallet embedded send — Phase 3: submitting signed transaction');
+        
+        // Phase 3: Submit the signed transaction (hidden iframe, no UI)
+        return this._sendToIframe('particle-wallet.submit-transfer', {
+            transactionData,
+            signature,
         });
     }
     
