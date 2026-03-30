@@ -545,7 +545,7 @@ const ru = {
         
         // Wallet
         'total_balance': 'Общий баланс',
-        'universal': 'Универсальный',
+        'universal': 'Agent Wallet',
         'send': 'Отправить',
         'receive': 'Получить',
         'tokens': 'Токены',

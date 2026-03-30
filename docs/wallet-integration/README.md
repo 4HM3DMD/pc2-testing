@@ -1,83 +1,98 @@
 # Wallet Integration Documentation
 
-> **For DePin Team Handoff**  
-> Last Updated: December 2025
+> **Last Updated**: March 2026  
+> **Status**: Production — `feature/lit-chipotle-migration` branch
+
+## Quick Links
+
+| Document | Purpose |
+|---|---|
+| **[PARTICLE_AUTH_REFERENCE.md](./PARTICLE_AUTH_REFERENCE.md)** | Complete reference: login flows, transaction routing, message protocol, known issues |
+| **[DAPP_WALLET_INTEGRATION.md](./DAPP_WALLET_INTEGRATION.md)** | Guide for integrating wallet auth into external dApps (Elacity Market, etc.) |
+
+---
 
 ## Overview
 
-This document describes the Particle Network wallet integration in PuterOS, enabling users to authenticate with blockchain wallets and manage digital assets across multiple chains.
+PC2.net uses Particle Network for wallet authentication and transaction signing. Users can log in with email, Google, Apple, or any external wallet (MetaMask, WalletConnect).
+
+Each user has two wallet addresses:
+- **EOA Wallet** — their personal crypto wallet (raw EOA)
+- **Agent Wallet** — an ERC-4337 smart account wallet, cross-chain, gasless (formerly "Universal Account")
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         PUTER MAIN WINDOW                           │
-│                                                                     │
-│  ┌─────────────────┐  ┌──────────────────┐  ┌────────────────────┐ │
-│  │ UIAccountSidebar│  │UIWindowAccountSend│  │UIWindowAccountReceive│
-│  │  (Wallet Panel) │  │  (Send Modal)    │  │   (Receive Modal)  │ │
-│  └────────┬────────┘  └────────┬─────────┘  └──────────┬─────────┘ │
-│           │                    │                       │            │
-│           └────────────────────┼───────────────────────┘            │
-│                                ▼                                    │
-│                    ┌─────────────────────┐                          │
-│                    │   WalletService.js  │   ◄── Central Manager    │
-│                    │  • Mode switching   │                          │
-│                    │  • Token fetching   │                          │
-│                    │  • Transaction send │                          │
-│                    │  • History fetch    │                          │
-│                    └──────────┬──────────┘                          │
-│                               │                                     │
-│         ┌─────────────────────┼─────────────────────┐               │
-│         │                     │                     │               │
-│         ▼                     ▼                     ▼               │
-│  ┌─────────────────┐   ┌────────────┐   ┌────────────────────┐     │
-│  │ Hidden Particle │   │ MetaMask   │   │ Elastos Proxy      │     │
-│  │ Iframe          │   │ (EOA)      │   │ (Backend)          │     │
-│  │ (Universal Acct)│   │            │   │                    │     │
-│  └─────────────────┘   └────────────┘   └────────────────────┘     │
-└─────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│                         PUTER MAIN WINDOW                            │
+│                                                                      │
+│  ┌──────────────────┐  ┌──────────────────┐  ┌───────────────────┐  │
+│  │ UIAccountSidebar │  │UIWindowAccountSend│  │UIWindowParticle   │  │
+│  │  (Wallet Panel)  │  │  (Send Modal)    │  │Signing (Popups)   │  │
+│  └────────┬─────────┘  └────────┬─────────┘  └─────────┬─────────┘  │
+│           │                     │                       │            │
+│           └─────────────────────┼───────────────────────┘            │
+│                                 ▼                                    │
+│                     ┌─────────────────────┐                          │
+│                     │   WalletService.js  │  ← Central Orchestrator  │
+│                     │  • Mode switching   │                          │
+│                     │  • Token fetching   │                          │
+│                     │  • Transaction send │                          │
+│                     │  • Login detection  │                          │
+│                     └──────────┬──────────┘                          │
+│                                │                                     │
+│           ┌────────────────────┼──────────────────────┐              │
+│           │                    │                      │              │
+│           ▼                    ▼                      ▼              │
+│  ┌────────────────┐  ┌─────────────────┐  ┌─────────────────┐       │
+│  │ Particle Auth  │  │ MetaMask        │  │ Elastos Backend │       │
+│  │ hidden iframe  │  │ (window.ethereum)│  │ (transaction    │       │
+│  │ (wallet mode)  │  │                 │  │  history proxy) │       │
+│  └────────────────┘  └─────────────────┘  └─────────────────┘       │
+└──────────────────────────────────────────────────────────────────────┘
 ```
-
----
-
-## Key Files
-
-| File | Purpose | Lines |
-|------|---------|-------|
-| `src/gui/src/services/WalletService.js` | Central wallet management | ~1,500 |
-| `src/gui/src/UI/UIAccountSidebar.js` | Slide-out wallet panel | ~1,200 |
-| `src/gui/src/UI/UIWindowAccountSend.js` | Send tokens modal | ~1,050 |
-| `src/gui/src/UI/UIWindowAccountReceive.js` | Receive tokens modal | ~650 |
-| `src/gui/src/helpers/particle-constants.js` | Chain & token constants | ~360 |
-| `src/gui/src/helpers/logger.js` | Production-safe logging | ~100 |
-| `src/gui/src/helpers/ethereum-provider.js` | Safe provider accessor | ~150 |
-| `src/gui/src/types/wallet.js` | JSDoc type definitions | ~120 |
-| `src/backend/src/routers/elastos-proxy.js` | CORS proxy for Elastos | ~40 |
 
 ---
 
 ## Wallet Modes
 
-### Universal Mode (Default)
-- **Account Type**: Smart Account (ERC-4337)
-- **Chains**: Base, Ethereum, Polygon, Arbitrum, Solana, etc.
-- **Tokens**: USDC, USDT, ETH, BTC, SOL, BNB
-- **Features**: 
+### Agent Wallet Mode (Default)
+- **Account Type**: Smart Account (ERC-4337) — the "Agent Wallet"
+- **Chains**: Base, Ethereum, Polygon, Arbitrum, Optimism, Solana, and more
+- **Tokens**: USDC, USDT, ETH, BTC, SOL, BNB, and more
+- **Features**:
   - Aggregated multi-chain balances
   - Cross-chain transaction routing
   - Gasless transactions (sponsored)
+  - Works with both email/social and external wallet logins
 
-### Elastos Mode
+### EOA / Elastos Mode
 - **Account Type**: EOA (Externally Owned Account)
-- **Chains**: Elastos Smart Chain only
-- **Tokens**: ELA only
+- **Chains**: Elastos Smart Chain (also Base/EVM for email login)
+- **Tokens**: ELA, or any ERC-20 on supported chains
 - **Features**:
-  - Direct MetaMask transactions
-  - Native ELA transfers
-  - Elastos explorer integration
+  - Direct wallet transactions
+  - Native ELA transfers on Elastos
+  - For email logins: in-app signing popup
+  - For external wallets: native wallet popup
+
+---
+
+## Key Files
+
+| File | Purpose |
+|------|---------|
+| `packages/particle-auth/src/particle/contexts/ParticleNetworkContext.tsx` | All Particle logic, message handlers |
+| `src/gui/src/services/WalletService.js` | Central wallet management, transaction routing |
+| `src/gui/src/UI/UIAccountSidebar.js` | Slide-out wallet panel |
+| `src/gui/src/UI/UIWindowAccountSend.js` | Send tokens modal |
+| `src/gui/src/UI/UIWindowAccountReceive.js` | Receive tokens modal |
+| `src/gui/src/UI/UIWindowParticleSigning.js` | In-app signing popup |
+| `src/gui/src/UI/UIWindowParticleLogin.js` | Login window |
+| `src/gui/src/helpers/particle-constants.js` | Chain & token constants |
+| `packages/particle-auth/.env` | Particle project credentials |
 
 ---
 
@@ -87,7 +102,6 @@ This document describes the Particle Network wallet integration in PuterOS, enab
 ```javascript
 import walletService from '../services/WalletService.js';
 
-// Check if user has wallet
 if (walletService.isConnected()) {
     walletService.initialize();
 }
@@ -95,57 +109,42 @@ if (walletService.isConnected()) {
 
 ### Mode Switching
 ```javascript
-// Switch to Elastos EOA mode
-await walletService.setMode('elastos');
+await walletService.setMode('universal'); // Agent Wallet mode
+await walletService.setMode('elastos');   // EOA mode
 
-// Switch back to Universal Account
-await walletService.setMode('universal');
-
-// Get current mode
 const mode = walletService.getMode(); // 'universal' | 'elastos'
 ```
 
 ### Data Access
 ```javascript
-// Get tokens for current mode
-const tokens = walletService.getTokens();
-
-// Get total USD balance
-const balance = walletService.getTotalBalance();
-
-// Get transactions
-const transactions = walletService.getTransactions();
-
-// Get addresses
-const smartAddress = walletService.getSmartAccountAddress();
-const eoaAddress = walletService.getEOAAddress();
-const solanaAddress = walletService.getSolanaAddress();
+const tokens          = walletService.getTokens();
+const balance         = walletService.getTotalBalance();
+const transactions    = walletService.getTransactions();
+const smartAddress    = walletService.getSmartAccountAddress(); // Agent Wallet
+const eoaAddress      = walletService.getEOAAddress();
+const solanaAddress   = walletService.getSolanaAddress();
 ```
 
 ### Subscriptions
 ```javascript
-// Subscribe to wallet updates
 const unsubscribe = walletService.subscribe((data) => {
-    console.log('Wallet updated:', data);
-    // data.tokens, data.totalBalance, data.mode, etc.
+    // data.tokens, data.totalBalance, data.mode, data.eoaAddress, etc.
 });
-
-// Cleanup when done
-unsubscribe();
+unsubscribe(); // cleanup
 ```
 
 ### Transactions
 ```javascript
-// Send tokens
+// WalletService automatically routes to the correct signing method
+// based on wallet mode and login method
 const result = await walletService.sendTokens({
     to: '0xRecipient...',
     amount: '10.5',
-    tokenAddress: null, // null for native token
-    chainId: 8453, // Base
+    tokenAddress: null, // null = native token
+    chainId: 8453,      // Base
     decimals: 18,
 });
 
-// Estimate fees
 const fee = await walletService.estimateFee({
     to: '0xRecipient...',
     amount: '10.5',
@@ -157,108 +156,33 @@ const fee = await walletService.estimateFee({
 
 ---
 
-## Communication Flow
-
-### Particle Iframe (Universal Mode)
-```
-Main Window                    Hidden Iframe
-    │                              │
-    │  particle-wallet.get-tokens  │
-    │ ─────────────────────────────>│
-    │                              │
-    │      (Calls Particle API)    │
-    │                              │
-    │  particle-wallet.tokens      │
-    │ <─────────────────────────────│
-    │                              │
-```
-
-### Direct MetaMask (Elastos Mode)
-```
-Main Window                    MetaMask
-    │                              │
-    │  wallet_switchEthereumChain  │
-    │ ─────────────────────────────>│
-    │                              │
-    │  eth_sendTransaction         │
-    │ ─────────────────────────────>│
-    │                              │
-    │  (User approves in MetaMask) │
-    │                              │
-    │  Transaction Hash            │
-    │ <─────────────────────────────│
-```
-
----
-
-## Type Definitions
-
-See `src/gui/src/types/wallet.js` for complete types:
+## Detecting Login Method
 
 ```javascript
-/**
- * @typedef {Object} Token
- * @property {string} symbol - Token symbol (e.g., "USDC")
- * @property {string} name - Human-readable name
- * @property {string} balance - Token balance as decimal string
- * @property {number} decimals - Token decimals
- * @property {string} network - Network name
- * @property {number} chainId - Chain ID
- * @property {string} [contractAddress] - ERC-20 address
- * @property {string} [usdValue] - USD value
- */
+const loginMethod = window.user?.login_method
+    || localStorage.getItem('pc2_login_method')
+    || '';
 
-/**
- * @typedef {Object} Transaction
- * @property {string} transactionId - Internal ID
- * @property {string} [txHash] - On-chain hash
- * @property {string} tag - Transaction type
- * @property {string} status - Status
- * @property {string} createdAt - ISO timestamp
- */
+const EXTERNAL_METHODS = ['metamask', 'walletconnect', 'coinbase'];
+const isEmbeddedLogin = !EXTERNAL_METHODS.includes(loginMethod);
+// isEmbeddedLogin = true → email/social, signing via in-app popup
+// isEmbeddedLogin = false → external wallet, signing via wallet popup
 ```
 
 ---
 
-## Constants
+## Supported Chains (Agent Wallet Mode)
 
-### Supported Chains (Universal Mode)
 ```javascript
 import { CHAIN_INFO } from '../helpers/particle-constants.js';
 
-// CHAIN_INFO[chainId] = { name, icon, explorer, color }
-CHAIN_INFO[8453]   // Base
+CHAIN_INFO[8453]   // Base (default)
 CHAIN_INFO[1]      // Ethereum
 CHAIN_INFO[137]    // Polygon
 CHAIN_INFO[42161]  // Arbitrum
 CHAIN_INFO[10]     // Optimism
 CHAIN_INFO[56]     // BSC
 CHAIN_INFO[20]     // Elastos
-```
-
-### Token Addresses
-```javascript
-import { getTokenAddress } from '../helpers/particle-constants.js';
-
-const usdcOnBase = getTokenAddress('USDC', 'Base');
-// '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'
-```
-
----
-
-## Backend Proxy
-
-The Elastos explorer API has CORS issues. We proxy through our backend:
-
-```javascript
-// Frontend call
-const response = await fetch(`${window.api_origin}/api/elastos/transactions?address=${address}`);
-
-// Backend route (src/backend/src/routers/elastos-proxy.js)
-router.get('/api/elastos/transactions', async (req, res) => {
-    const response = await fetch(`https://esc.elastos.io/api?...`);
-    res.json(await response.json());
-});
 ```
 
 ---
@@ -270,9 +194,11 @@ try {
     await walletService.sendTokens({ ... });
 } catch (error) {
     if (error.code === 4001) {
-        // User rejected in wallet
+        // User rejected transaction in their wallet
     } else if (error.message.includes('insufficient funds')) {
         // Not enough balance
+    } else if (error.message.includes('No wallet provider')) {
+        // Session not restored — user needs to re-login
     } else {
         // Generic error
     }
@@ -281,54 +207,23 @@ try {
 
 ---
 
-## Security Considerations
+## Security
 
-1. **Origin Verification**: All postMessage communication verifies `event.origin`
-2. **Address Validation**: Uses `isValidAddressForChain()` for EVM/Solana
-3. **Provider Abstraction**: Never access `window.ethereum` directly - use helpers
-4. **Session Mismatch**: Auto-reinitializes if Particle session doesn't match expected address
-
----
-
-## DePin Integration Points
-
-For connecting personal hardware boxes:
-
-1. **Authentication**: Use `window.user.wallet_address` as device identity
-2. **Mode Selection**: Elastos mode for native ELA, Universal for stablecoins
-3. **Transaction Signing**: Use `WalletService.sendTokens()` for payments
-4. **Balance Checking**: Subscribe to wallet updates for real-time balances
+1. **Origin Verification**: All postMessage handlers check `event.origin`
+2. **Address Validation**: Uses `isValidAddressForChain()` before any transaction
+3. **Provider Abstraction**: Never access `window.ethereum` directly — use helpers
+4. **Logout Isolation**: `wagmi.*` localStorage keys cleared on logout to prevent auto-reconnect
 
 ---
 
-## Testing
+## For DePin Integration
 
-Run tests:
-```bash
-cd src/gui
-npm test -- --grep="WalletService"
-```
-
-Test file: `src/gui/src/services/__tests__/WalletService.test.js`
+Use the wallet addresses as device identity:
+- `window.user.wallet_address` → EOA address (always available)
+- `walletService.getSmartAccountAddress()` → Agent Wallet address
+- EOA mode for ELA native payments
+- Agent Wallet mode for stablecoin cross-chain payments
 
 ---
 
-## Logging
-
-Production logging is disabled by default. Enable for debugging:
-
-```javascript
-window.DEBUG_MODE = true; // Enables verbose logging
-```
-
-Logs only appear in development (localhost:4100).
-
----
-
-## Contact
-
-For questions about this integration, refer to:
-- `.cursor/tasks/UNIVERSALX-PUTER-INTEGRATION/AUDIT-REPORT.md`
-- Particle Network documentation: https://docs.particle.network/
-
-
+*For full technical details, see [PARTICLE_AUTH_REFERENCE.md](./PARTICLE_AUTH_REFERENCE.md)*

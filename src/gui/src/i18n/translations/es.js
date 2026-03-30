@@ -562,7 +562,7 @@ const es = {
         
         // Wallet
         'total_balance': 'Saldo total',
-        'universal': 'Universal',
+        'universal': 'Agent Wallet',
         'send': 'Enviar',
         'receive': 'Recibir',
         'tokens': 'Tokens',

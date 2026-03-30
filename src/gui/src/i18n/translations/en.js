@@ -552,9 +552,9 @@ const en = {
         'address_copied': 'Address Copied',
         'copied': 'Copied!',
         'click_to_copy': 'Click to copy',
-        'universal_account_address': 'Universal Account Address',
+        'universal_account_address': 'Agent Wallet Address',
         'wallet_address': 'Wallet Address',
-        'universal_account_info': 'This Universal Account address can receive tokens on any supported network. Funds are automatically unified across chains.',
+        'universal_account_info': 'This Agent Wallet address can receive tokens on any supported network. Funds are automatically unified across chains.',
         'eoa_info': 'Send tokens to this address on the correct network to avoid loss of funds.',
         'refresh': 'Refresh',
         'close': 'Close',
@@ -861,7 +861,7 @@ const en = {
         // Wallet Sidebar
         // =====================================================
         'total_balance': 'Total Balance',
-        'universal': 'Universal',
+        'universal': 'Agent Wallet',
         'send': 'Send',
         'receive': 'Receive',
         'tokens': 'Tokens',
