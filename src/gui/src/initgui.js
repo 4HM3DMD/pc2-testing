@@ -1793,12 +1793,14 @@ function requestOpenerOrigin() {
 }
 
 $(document).on('click', '.generic-close-window-button', function(e){
-    $(this).closest('.window').close();
+    const $win = $(this).closest('.window');
+    if (typeof $win.close === 'function') $win.close();
 });
 
 $(document).on('click', function(e){
     if(!$(e.target).hasClass('window-search') && $(e.target).closest('.window-search').length === 0 && !$(e.target).is('.toolbar-btn.search-btn')){
-        $('.window-search').close();
+        const $ws = $('.window-search');
+        if (typeof $ws.close === 'function') $ws.close();
     }
 })
 

@@ -1325,7 +1325,7 @@ class WalletService {
     }
     
     /**
-     * Signing methods that require Particle's embedded signer UI
+     * Signing methods that need the visible popup (Particle shows confirmation UI).
      */
     static SIGNING_METHODS = [
         'eth_sendTransaction', 'personal_sign',
@@ -1335,7 +1335,8 @@ class WalletService {
     
     /**
      * Route an EIP-1193 RPC call to Particle's embedded signer.
-     * Read-only calls go through the data iframe; signing calls open UIWindowParticleSigning.
+     * Signing methods open UIWindowParticleSigning (visible popup).
+     * All other methods go through the hidden data iframe.
      */
     async routeRpcToParticle(method, params) {
         // Fast path: return accounts/chainId without iframe
@@ -1348,8 +1349,12 @@ class WalletService {
         
         // Signing methods: open dedicated UIWindow with signing iframe
         if (WalletService.SIGNING_METHODS.includes(method)) {
-            const { default: UIWindowParticleSigning } = await import('../UI/UIWindowParticleSigning.js');
-            return UIWindowParticleSigning({ method, params });
+            const { default: UIWindowParticleSigning, removeStaleOverlays } = await import('../UI/UIWindowParticleSigning.js');
+            try {
+                return await UIWindowParticleSigning({ method, params });
+            } finally {
+                removeStaleOverlays();
+            }
         }
         
         // All other read-only RPC: forward to data iframe
