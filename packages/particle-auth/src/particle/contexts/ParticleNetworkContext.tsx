@@ -405,12 +405,6 @@ const ParticleNetworkProvider: React.FC<React.PropsWithChildren<ParticleNetworkC
       return;
     }
     
-    // Skip auth if disconnect_particle flag is set (logout in progress)
-    if (localStorage.getItem('disconnect_particle')) {
-      console.log('[Particle Auth]: Skipping auth (disconnect_particle flag set)');
-      return;
-    }
-    
     // Skip auth callback in wallet/signing mode - only the login iframe should do this
     if (isWalletMode || isSigningMode) {
       console.log('[Particle Auth Wallet Mode]: Skipping auth callback (wallet mode)');
@@ -429,7 +423,10 @@ const ParticleNetworkProvider: React.FC<React.PropsWithChildren<ParticleNetworkC
     // Initialize timeout ID as undefined
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
-    if(active) {
+    // Only the wallet mode iframe needs to react to disconnect_particle.
+    // The login iframe relies on wagmi key clearing (done at logout) to prevent
+    // auto-reconnect — processing the flag here would deactivate a fresh user login.
+    if(active && isWalletMode) {
       const isDisconnecting = localStorage.getItem('disconnect_particle');
       if((isDisconnecting)) {
         localStorage.removeItem('disconnect_particle');
