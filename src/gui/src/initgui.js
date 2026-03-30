@@ -1705,6 +1705,19 @@ window.initgui = async function(options){
 
         // disconnect particle under iframe 
         localStorage.setItem('disconnect_particle', 'true');
+        
+        // Clear ConnectKit/wagmi persistence so it cannot auto-reconnect on reload
+        for (const key of Object.keys(localStorage)) {
+            if (
+                key.startsWith('wagmi') ||
+                key.startsWith('wc@') ||
+                key.startsWith('-walletlink') ||
+                key.toLowerCase().includes('connectkit') ||
+                key.toLowerCase().includes('recentconnector')
+            ) {
+                localStorage.removeItem(key);
+            }
+        }
 
         // Reset initialization flags to allow fresh login
         window.initgui_in_progress = false;

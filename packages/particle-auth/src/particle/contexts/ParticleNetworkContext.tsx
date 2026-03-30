@@ -405,6 +405,12 @@ const ParticleNetworkProvider: React.FC<React.PropsWithChildren<ParticleNetworkC
       return;
     }
     
+    // Skip auth if disconnect_particle flag is set (logout in progress)
+    if (localStorage.getItem('disconnect_particle')) {
+      console.log('[Particle Auth]: Skipping auth (disconnect_particle flag set)');
+      return;
+    }
+    
     // Skip auth callback in wallet/signing mode - only the login iframe should do this
     if (isWalletMode || isSigningMode) {
       console.log('[Particle Auth Wallet Mode]: Skipping auth callback (wallet mode)');
