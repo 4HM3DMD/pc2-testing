@@ -672,12 +672,15 @@ const ipc_listener = async (event, handled) => {
     }
     //--------------------------------------------------------
     // walletSendTransaction — app requests eth_sendTransaction via particle iframe (e.g. Elacity buy).
-    // We use only the particle-auth iframe (not main-window provider) so the smart account executes
-    // the buy and the EOA is only the signer; using main window would make the EOA the buyer.
+    // For email/social logins, the signing popup must be visible (UIWindowParticleSigning).
+    // For external wallets (MetaMask), the hidden iframe path works because MetaMask renders its own popup.
     //--------------------------------------------------------
     else if ( event.data.msg === 'walletSendTransaction' && event.data.txParams ) {
-        console.log('[PC2 Wallet] walletSendTransaction received from app, forwarding to particle iframe');
-        walletService.sendTransactionViaParticleIframe(event.data.txParams)
+        console.log('[PC2 Wallet] walletSendTransaction received from app, embedded:', walletService.isEmbeddedLogin());
+        const txPromise = walletService.isEmbeddedLogin()
+            ? walletService.sendTransactionViaParticleEmbedded(event.data.txParams)
+            : walletService.sendTransactionViaParticleIframe(event.data.txParams);
+        txPromise
             .then((txHash) => {
                 target_iframe.contentWindow.postMessage({
                     original_msg_id: msg_id,
@@ -705,10 +708,16 @@ const ipc_listener = async (event, handled) => {
         }, '*');
     }
     //--------------------------------------------------------
-    // walletExecuteSmartAccountBatch — app requests batched smart-account execution (approve + buy, one signature)
+    // walletExecuteSmartAccountBatch — app requests batched smart-account execution (approve + buy, one signature).
+    // For email/social logins, uses 3-phase flow with visible signing popup.
+    // For external wallets, uses hidden iframe (MetaMask renders its own popup).
     //--------------------------------------------------------
     else if ( event.data.msg === 'walletExecuteSmartAccountBatch' && event.data.chainId && Array.isArray(event.data.transactions) ) {
-        walletService.sendSmartAccountBatch(event.data.chainId, event.data.transactions, event.data.expectTokens)
+        console.log('[PC2 Wallet] walletExecuteSmartAccountBatch, embedded:', walletService.isEmbeddedLogin());
+        const batchPromise = walletService.isEmbeddedLogin()
+            ? walletService.sendSmartAccountBatchEmbedded(event.data.chainId, event.data.transactions, event.data.expectTokens)
+            : walletService.sendSmartAccountBatch(event.data.chainId, event.data.transactions, event.data.expectTokens);
+        batchPromise
             .then((result) => {
                 target_iframe.contentWindow.postMessage({
                     original_msg_id: msg_id,

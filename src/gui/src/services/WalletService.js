@@ -728,6 +728,14 @@ class WalletService {
                     logger.log('Received create-transfer-result:', payload?.rootHash);
                     this._handleGenericResult(payload || {}, requestId);
                     break;
+                case 'particle-wallet.execute-universal-batch-create-result':
+                    logger.log('Received batch-create-result:', payload?.rootHash);
+                    this._handleGenericResult(payload || {}, requestId);
+                    break;
+                case 'particle-wallet.execute-universal-batch-submit-result':
+                    logger.log('Received batch-submit-result:', payload?.transactionId);
+                    this._handleGenericResult(payload || {}, requestId);
+                    break;
                 case 'particle-wallet.rpc-result':
                     logger.log('Received rpc-result:', payload?.result);
                     this._handleGenericResult(payload || {}, requestId);
@@ -2262,6 +2270,66 @@ class WalletService {
         });
     }
     
+    /**
+     * Whether the current user logged in via email/social (embedded signer)
+     * vs MetaMask/WalletConnect (external signer).
+     */
+    isEmbeddedLogin() {
+        const loginMethod = window.user?.login_method || localStorage.getItem('pc2_login_method') || '';
+        const EXTERNAL_METHODS = ['metamask', 'walletconnect', 'coinbase'];
+        return !EXTERNAL_METHODS.includes(loginMethod);
+    }
+
+    /**
+     * Send a raw eth_sendTransaction for embedded (email/social) logins via visible signing popup.
+     * For external wallets, the hidden iframe path works because MetaMask renders its own popup.
+     */
+    async sendTransactionViaParticleEmbedded(txParams) {
+        const { default: UIWindowParticleSigning } = await import('../UI/UIWindowParticleSigning.js');
+        const txHash = await UIWindowParticleSigning({
+            method: 'eth_sendTransaction',
+            params: [txParams],
+        });
+        return txHash;
+    }
+
+    /**
+     * Execute a smart account batch for embedded (email/social) logins.
+     * 3-phase: create batch via hidden iframe → sign rootHash via visible popup → submit via hidden iframe.
+     */
+    async sendSmartAccountBatchEmbedded(chainId, transactions, expectTokens) {
+        logger.log('Smart Account batch embedded — Phase 1: creating batch');
+        const createResult = await this._sendToIframe('particle-wallet.execute-universal-batch-create', {
+            chainId, transactions, expectTokens: expectTokens || [],
+        });
+
+        const { rootHash, transactionData, eoaAddress } = createResult;
+        if (!rootHash || !transactionData) {
+            throw new Error('Failed to create batch transaction');
+        }
+
+        logger.log('Smart Account batch embedded — Phase 2: signing rootHash via popup');
+        const { default: UIWindowParticleSigning } = await import('../UI/UIWindowParticleSigning.js');
+        const signature = await UIWindowParticleSigning({
+            method: 'personal_sign',
+            params: [rootHash, eoaAddress],
+        });
+
+        if (!signature || signature === 'pending') {
+            throw new Error('Signing was not completed');
+        }
+
+        logger.log('Smart Account batch embedded — Phase 3: submitting signed batch');
+        const submitResult = await this._sendToIframe('particle-wallet.execute-universal-batch-submit', {
+            transactionData, signature,
+        });
+
+        return {
+            transactionId: submitResult?.transactionId,
+            transactionHash: submitResult?.transactionHash,
+        };
+    }
+
     /**
      * Send transaction via EOA using ethereum provider (MetaMask)
      * Supports any EVM chain - switches MetaMask to the target chain before sending

@@ -931,6 +931,122 @@ const ParticleNetworkProvider: React.FC<React.PropsWithChildren<ParticleNetworkC
             break;
           }
 
+          case 'particle-wallet.execute-universal-batch-create': {
+            if (!universalAccount || !smartAccountInfo?.smartAccountAddress) {
+              throw new Error('Smart account not ready');
+            }
+            const { chainId: createChainId, transactions: createTxs, expectTokens: createExpectTokens } = payload as {
+              chainId: number;
+              transactions: Array<{ to: string; data: string; value?: string }>;
+              expectTokens?: Array<{ type: string; amount: string }>;
+            };
+            if (!createChainId || !Array.isArray(createTxs) || createTxs.length === 0) {
+              throw new Error('chainId and non-empty transactions required');
+            }
+
+            const CHECKIN_ADDR = '0x2361a02e6727Ff1798920186b8ACf0f100f621C0';
+            const RPC_URL = 'https://mainnet.base.org';
+            try {
+              const codeRes = await fetch(RPC_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_getCode', params: [smartAccountInfo.smartAccountAddress, 'latest'] }),
+              });
+              const codeJson = await (codeRes.json() as Promise<{ result: string }>);
+              if (codeJson.result === '0x') {
+                console.log('[Particle Auth] Smart account not deployed, deploying via checkIn...');
+                const deployTx = await universalAccount.createUniversalTransaction({
+                  chainId: createChainId, expectTokens: [],
+                  transactions: [{ to: CHECKIN_ADDR, data: '0x183ff085', value: '0x0' }],
+                });
+                const deployProv = await connector?.getProvider();
+                if (!deployProv) throw new Error('No wallet provider for deployment');
+                const deploySig = await (deployProv as any).request({ method: 'personal_sign', params: [deployTx.rootHash, connectedEoaAddress] });
+                await universalAccount.sendTransaction(deployTx, deploySig);
+                await new Promise((r) => setTimeout(r, 3000));
+              }
+            } catch (deployErr) {
+              console.warn('[Particle Auth] Smart account assertion failed (continuing):', deployErr);
+            }
+
+            const createPayload = {
+              chainId: createChainId,
+              expectTokens: [] as Array<{ type: string; amount: string }>,
+              transactions: createTxs.map((t) => ({ to: t.to, data: t.data, value: t.value || '0x0' })),
+            };
+            const tradeConfig = { usePrimaryTokens: ['usdc'] };
+            console.log('[Particle Auth] batch-create payload:', JSON.stringify(createPayload));
+            const createdBatchTx = await universalAccount.createUniversalTransaction(createPayload, tradeConfig);
+
+            window.parent.postMessage({
+              type: 'particle-wallet.execute-universal-batch-create-result',
+              requestId,
+              payload: {
+                rootHash: createdBatchTx.rootHash,
+                transactionData: JSON.parse(JSON.stringify(createdBatchTx)),
+                eoaAddress: connectedEoaAddress,
+              },
+            }, '*');
+            break;
+          }
+
+          case 'particle-wallet.execute-universal-batch-submit': {
+            if (!universalAccount) {
+              throw new Error('Universal account not ready');
+            }
+            const { transactionData: batchTxData, signature: batchSig } = payload as {
+              transactionData: any;
+              signature: string;
+            };
+
+            const batchSendResult = await universalAccount.sendTransaction(batchTxData, batchSig);
+            const batchTxId = batchSendResult?.transactionId || batchTxData?.transactionId;
+            const batchUniversalTxUrl = `https://universalx.app/activity/details?id=${batchTxId}`;
+            console.log('[Particle Auth] UA batch submitted:', batchTxId, batchUniversalTxUrl);
+
+            let batchOnChainHash: string | null = null;
+            const BATCH_POLL_INTERVAL = 2000;
+            const BATCH_POLL_TIMEOUT = 60000;
+            const batchPollStart = Date.now();
+            while (Date.now() - batchPollStart < BATCH_POLL_TIMEOUT) {
+              try {
+                const batchTxStatus = await universalAccount.getTransaction(batchTxId);
+                const batchStatus = (batchTxStatus as any)?.status;
+                if (batchStatus === 6 || batchStatus === 10 || batchStatus === 14) {
+                  throw new Error(`UA transaction failed with status ${batchStatus}`);
+                }
+                const batchAllOps = [
+                  ...((batchTxStatus as any)?.lendingUserOperations || []),
+                  ...((batchTxStatus as any)?.depositUserOperations || []),
+                  ...((batchTxStatus as any)?.settlementUserOperations || []),
+                  ...((batchTxStatus as any)?.refundUserOperations || []),
+                ];
+                const batchOpWithHash = batchAllOps.find((op: any) => op?.txHash);
+                if (batchOpWithHash) {
+                  batchOnChainHash = batchOpWithHash.txHash;
+                  console.log('[Particle Auth] Batch on-chain hash:', batchOnChainHash);
+                  break;
+                }
+                if (batchStatus === 7) break;
+              } catch (pollErr: any) {
+                if (pollErr?.message?.includes('failed with status')) throw pollErr;
+                console.warn('[Particle Auth] Batch poll error (retrying):', pollErr?.message);
+              }
+              await new Promise((r) => setTimeout(r, BATCH_POLL_INTERVAL));
+            }
+
+            window.parent.postMessage({
+              type: 'particle-wallet.execute-universal-batch-submit-result',
+              requestId,
+              payload: {
+                transactionId: batchTxId,
+                transactionHash: batchOnChainHash || batchSendResult?.transactionHash || (batchSendResult as any)?.hash,
+                universalTxUrl: batchUniversalTxUrl,
+              },
+            }, '*');
+            break;
+          }
+
           case 'particle-wallet.eth-send-transaction': {
             const provider = await connector?.getProvider();
             if (!provider) throw new Error('No wallet provider available');
