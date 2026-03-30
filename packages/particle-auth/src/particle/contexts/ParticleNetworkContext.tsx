@@ -93,6 +93,10 @@ const ParticleNetworkProvider: React.FC<React.PropsWithChildren<ParticleNetworkC
   const [primaryWallet] = useWallets();
   const { disconnect } = useDisconnect();
   const [particleProvider, setParticleProvider] = React.useState<unknown>();
+
+  // Tracks when a logout-triggered deactivation is pending so handleParticleAuthSuccess
+  // can ignore the auto-reconnect auth call that fires before deactivate() completes.
+  const isLogoutPendingRef = React.useRef(false);
   
   // Universal Account state
   const [universalAccount, setUniversalAccount] = React.useState<UniversalAccount | null>(null);
@@ -270,6 +274,13 @@ const ParticleNetworkProvider: React.FC<React.PropsWithChildren<ParticleNetworkC
 
   // After successful authentication with Particle Network
   const handleParticleAuthSuccess = React.useCallback(async () => {
+    // If logout was triggered, skip this auto-reconnect auth and clear the flag
+    // so the next manual login can proceed normally.
+    if (isLogoutPendingRef.current) {
+      console.log('[Particle Auth]: Auth skipped — logout pending, ignoring auto-reconnect');
+      isLogoutPendingRef.current = false;
+      return;
+    }
     try {
       // Build auth payload with Smart Account support
       const authPayload: Record<string, any> = {
@@ -423,13 +434,12 @@ const ParticleNetworkProvider: React.FC<React.PropsWithChildren<ParticleNetworkC
     // Initialize timeout ID as undefined
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
-    // Only the wallet mode iframe needs to react to disconnect_particle.
-    // The login iframe relies on wagmi key clearing (done at logout) to prevent
-    // auto-reconnect — processing the flag here would deactivate a fresh user login.
-    if(active && isWalletMode) {
+    if(active) {
       const isDisconnecting = localStorage.getItem('disconnect_particle');
       if((isDisconnecting)) {
         localStorage.removeItem('disconnect_particle');
+        // Set ref BEFORE deactivating so any pending auth setTimeout sees it
+        isLogoutPendingRef.current = true;
         deactivate();
       }
     }
