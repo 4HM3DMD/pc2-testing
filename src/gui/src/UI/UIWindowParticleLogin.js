@@ -516,9 +516,15 @@ async function UIWindowParticleLogin(options = {}) {
         
         // Set up message handler function that has access to options and resolve
         async function handleAuthSuccess(authData, container, el_window) {
+            // Persist loginMethod from Particle connector detection
+            if (authData.loginMethod) {
+                localStorage.setItem('pc2_login_method', authData.loginMethod);
+            }
+            
             // If the iframe already called the backend and got a token, use that directly
             if (authData.token && authData.user) {
                 console.log('[Particle Auth]: Using pre-authenticated data from iframe');
+                authData.user.login_method = authData.loginMethod || 'email';
                 await completeAuthentication(authData.token, authData.user, container, el_window);
                 return;
             }
@@ -530,6 +536,7 @@ async function UIWindowParticleLogin(options = {}) {
             const requestPayload = {
                 address: authData.address,
                 chainId: authData.chainId,
+                loginMethod: authData.loginMethod || localStorage.getItem('pc2_login_method') || 'email',
             };
             
             // Include Smart Account address if available (UniversalX)
@@ -615,6 +622,11 @@ async function UIWindowParticleLogin(options = {}) {
         
         // Complete the authentication flow
         async function completeAuthentication(token, user, container, el_window) {
+            // Store login method (email, metamask, walletconnect, etc.)
+            const loginMethod = user.login_method || localStorage.getItem('pc2_login_method') || 'email';
+            user.login_method = loginMethod;
+            localStorage.setItem('pc2_login_method', loginMethod);
+            
             // Update Puter's auth state - MUST await to ensure data is saved before reload
             await window.update_auth_data(token, user);
             

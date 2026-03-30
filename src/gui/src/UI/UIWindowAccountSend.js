@@ -66,7 +66,9 @@ async function UIWindowAccountSend(options = {}) {
     
     // Get available networks for default token (filtered by wallet mode)
     const defaultNetworks = getAvailableNetworksForToken(defaultSymbol, walletMode);
-    const defaultNetwork = defaultNetworks[0] || AVAILABLE_NETWORKS[0];
+    const defaultNetwork = (defaultToken?.chainId
+        ? defaultNetworks.find(n => n.chainId === defaultToken.chainId)
+        : null) || defaultNetworks[0] || AVAILABLE_NETWORKS[0];
     
     // Build token options HTML
     const tokenOptionsHtml = tokens.map(token => {
@@ -78,7 +80,8 @@ async function UIWindowAccountSend(options = {}) {
                 data-decimals="${html_encode(token.decimals || 18)}"
                  data-usd-value="${html_encode(token.usdValue || 0)}"
                  data-price="${html_encode(token.price || 0)}"
-                 data-icon="${html_encode(iconUrl)}">
+                 data-icon="${html_encode(iconUrl)}"
+                 data-chain-id="${html_encode(token.chainId || '')}">
                 <img src="${html_encode(iconUrl)}" class="token-option-icon" onerror="this.style.display='none'" />
                 <div class="token-option-info">
                     <span class="token-option-symbol">${html_encode(token.symbol)}</span>
@@ -201,6 +204,7 @@ async function UIWindowAccountSend(options = {}) {
                 <div class="loading-spinner"></div>
                 <div class="sending-title">${i18n('sending') || 'Sending...'}</div>
                 <div class="sending-subtitle">${i18n('please_wait_confirmation') || 'Please wait for confirmation'}</div>
+                <button id="cancel-send-btn" type="button" style="display:inline-flex;align-items:center;justify-content:center;padding:8px 24px;font-size:13px;line-height:1;font-family:inherit;background:#f3f4f6;color:#374151;border:1px solid #d1d5db;border-radius:6px;cursor:pointer;margin-top:16px;">Cancel</button>
             </div>
         </div>
         
@@ -581,7 +585,6 @@ async function UIWindowAccountSend(options = {}) {
                 background: '#ffffff',
             },
             on_close: () => {
-                // Close the wallet sidebar when this window closes
                 if (typeof window.closeSidebar === 'function') {
                     window.closeSidebar();
                 }
@@ -590,6 +593,35 @@ async function UIWindowAccountSend(options = {}) {
         });
         
         const $window = $(el_window);
+
+        // Safe close that avoids the dual-jQuery $.fn.close bug in bundled builds
+        function forceClose() {
+            if (typeof window._particleSigningAbort === 'function') {
+                window._particleSigningAbort('Window closed');
+            }
+            if (typeof window.closeSidebar === 'function') {
+                window.closeSidebar();
+            }
+            const winId = parseInt(el_window.getAttribute('data-id'));
+            if (window.window_stack) {
+                const idx = window.window_stack.indexOf(winId);
+                if (idx > -1) window.window_stack.splice(idx, 1);
+            }
+            const backdrop = el_window.closest('.window-backdrop');
+            if (backdrop) backdrop.remove();
+            if (window.active_element === el_window) window.active_element = null;
+            el_window.remove();
+            if (document.querySelectorAll('.window').length === 0) window.window_counter = 0;
+        }
+
+        const closeBtn = el_window.querySelector('.window-close-btn');
+        if (closeBtn) {
+            closeBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                forceClose();
+            }, true);
+        }
         
         // State
         let selectedToken = defaultToken;
@@ -697,6 +729,16 @@ async function UIWindowAccountSend(options = {}) {
             // Update network options for this token
             updateNetworkOptions();
             
+            // Auto-select network matching the token's chain for better UX
+            const tokenChainId = tokenData.chainId || selectedToken?.chainId;
+            if (tokenChainId) {
+                const availableNetworks = getAvailableNetworksForToken(symbol?.toUpperCase(), walletMode);
+                const matchingNetwork = availableNetworks.find(n => n.chainId === tokenChainId);
+                if (matchingNetwork && matchingNetwork.chainId !== selectedNetwork?.chainId) {
+                    selectNetwork(matchingNetwork);
+                }
+            }
+            
             // Re-validate
             validateForm();
             updateAmountUSD();
@@ -735,6 +777,7 @@ async function UIWindowAccountSend(options = {}) {
                 usdValue: $(this).data('usd-value'),
                 price: $(this).data('price'),
                 icon: $(this).data('icon'),
+                chainId: $(this).data('chain-id') || null,
             };
             
             selectToken(tokenData);
@@ -869,14 +912,18 @@ async function UIWindowAccountSend(options = {}) {
                 return;
             }
             
-            // For Elastos EOA mode, show standard gas fee (no Universal Account API)
-            if (walletMode === 'elastos') {
-                // Elastos Smart Chain has very low gas fees (~0.01 ELA or less)
+            // For EOA mode on EVM chains, show estimated gas fee in native currency
+            if (walletMode === 'elastos' && selectedNetwork?.chainType !== 'solana') {
+                const chainId = selectedNetwork?.chainId;
+                const chainInfo = CHAIN_INFO[chainId] || {};
+                const nativeSymbol = chainInfo.nativeCurrency || 'ETH';
+                const isElastos = chainId === 20 || chainId === 22;
+                const feeAmount = isElastos ? '0.001' : '0.0001';
                 $window.find('#fee-loading').hide();
-                $window.find('#fee-estimate').text('~0.001 ELA');
+                $window.find('#fee-estimate').text(`~${feeAmount} ${nativeSymbol}`);
                 $window.find('#fee-free').hide();
                 $window.find('#fee-error').text('');
-                feeEstimate = { totalELA: 0.001, isElastosEOA: true };
+                feeEstimate = { nativeSymbol, feeAmount: parseFloat(feeAmount), isEOA: true };
                 return;
             }
             
@@ -975,6 +1022,18 @@ async function UIWindowAccountSend(options = {}) {
         // ============================================
         // SEND TRANSACTION
         // ============================================
+        const restoreForm = () => {
+            $window.find('.send-modal-container > *:not(#sending-state)').show();
+            $window.find('#sending-state').hide();
+        };
+
+        $window.find('#cancel-send-btn').on('click', function() {
+            if (typeof window._particleSigningAbort === 'function') {
+                window._particleSigningAbort('User cancelled');
+            }
+            forceClose();
+        });
+
         $window.find('#send-confirm-btn').on('click', async function() {
             const recipient = $window.find('#send-recipient').val().trim();
             const amount = $window.find('#send-amount').val();
@@ -1007,17 +1066,15 @@ async function UIWindowAccountSend(options = {}) {
                     mode: walletMode,
                 });
                 
-                // WalletService.sendTokens expects an OBJECT, not positional args!
                 const result = await walletService.sendTokens({
                     to: recipient,
                     amount: amountStr,
                     tokenAddress: tokenAddress,
                     chainId: selectedNetwork.chainId,
                     decimals: selectedToken.decimals || 18,
-                    mode: walletMode, // Pass mode so iframe knows if it's Elastos EOA
+                    mode: walletMode,
                 });
                 
-                // Success notification
                 UINotification({
                     icon: window.icons['checkmark.svg'],
                     title: i18n('transaction_sent') || 'Transaction Sent',
@@ -1025,24 +1082,22 @@ async function UIWindowAccountSend(options = {}) {
                     duration: 5000,
                 });
                 
-                // Close modal
-                $window.close();
+                forceClose();
                 resolve(result);
                 
             } catch (error) {
                 logger.error(' Send failed:', error);
+                restoreForm();
                 
-                // Restore form
-                $window.find('.send-modal-container > *:not(#sending-state)').show();
-                $window.find('#sending-state').hide();
-                
-                // Show error notification
-                UINotification({
-                    icon: window.icons['warning.svg'],
-                    title: i18n('transaction_failed') || 'Transaction Failed',
-                    text: error.message || 'Failed to send transaction',
-                    duration: 5000,
-                });
+                const isCancelled = error?.message?.includes('cancel') || error?.message?.includes('Cancel');
+                if (!isCancelled) {
+                    UINotification({
+                        icon: window.icons['warning.svg'],
+                        title: i18n('transaction_failed') || 'Transaction Failed',
+                        text: error.message || 'Failed to send transaction',
+                        duration: 5000,
+                    });
+                }
             }
         });
         

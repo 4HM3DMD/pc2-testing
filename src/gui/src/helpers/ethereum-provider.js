@@ -129,6 +129,45 @@ export async function switchChain(chainId) {
     }
 }
 
+const EVM_CHAIN_CONFIGS = {
+    20: ELASTOS_CHAIN_CONFIG,
+    8453: {
+        chainId: '0x2105',
+        chainName: 'Base',
+        nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+        rpcUrls: ['https://mainnet.base.org'],
+        blockExplorerUrls: ['https://basescan.org'],
+    },
+    42161: {
+        chainId: '0xa4b1',
+        chainName: 'Arbitrum One',
+        nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+        rpcUrls: ['https://arb1.arbitrum.io/rpc'],
+        blockExplorerUrls: ['https://arbiscan.io'],
+    },
+    10: {
+        chainId: '0xa',
+        chainName: 'OP Mainnet',
+        nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+        rpcUrls: ['https://mainnet.optimism.io'],
+        blockExplorerUrls: ['https://optimistic.etherscan.io'],
+    },
+    137: {
+        chainId: '0x89',
+        chainName: 'Polygon',
+        nativeCurrency: { name: 'POL', symbol: 'POL', decimals: 18 },
+        rpcUrls: ['https://polygon-rpc.com'],
+        blockExplorerUrls: ['https://polygonscan.com'],
+    },
+    56: {
+        chainId: '0x38',
+        chainName: 'BNB Smart Chain',
+        nativeCurrency: { name: 'BNB', symbol: 'BNB', decimals: 18 },
+        rpcUrls: ['https://bsc-dataseed.binance.org'],
+        blockExplorerUrls: ['https://bscscan.com'],
+    },
+};
+
 /**
  * Add Elastos Smart Chain to the wallet
  * @returns {Promise<void>}
@@ -149,20 +188,37 @@ export async function addElastosChain() {
 }
 
 /**
- * Switch to Elastos Smart Chain, adding it if necessary
+ * Switch to any EVM chain, adding it to the wallet if needed.
+ * Re-requests accounts after switching to avoid authorization errors.
+ * @param {number} chainId - Target chain ID
  * @returns {Promise<void>}
  */
-export async function switchToElastos() {
+export async function switchToChain(chainId) {
+    const provider = getEthereumProvider();
+    if (!provider) throw new Error('No Ethereum provider available');
+
     try {
-        await switchChain(20);
+        await switchChain(chainId);
     } catch (error) {
         if (error.code === 4902) {
-            await addElastosChain();
-            await switchChain(20);
+            const config = EVM_CHAIN_CONFIGS[chainId];
+            if (!config) throw new Error(`No chain config for chainId ${chainId}. Add it to MetaMask manually.`);
+            await provider.request({ method: 'wallet_addEthereumChain', params: [config] });
+            await switchChain(chainId);
         } else {
             throw error;
         }
     }
+
+    await provider.request({ method: 'eth_requestAccounts' });
+}
+
+/**
+ * Switch to Elastos Smart Chain, adding it if necessary
+ * @returns {Promise<void>}
+ */
+export async function switchToElastos() {
+    await switchToChain(20);
 }
 
 /**
@@ -239,6 +295,7 @@ export default {
     requestAccounts,
     getCurrentChainId,
     switchChain,
+    switchToChain,
     switchToElastos,
     addElastosChain,
     sendTransaction,

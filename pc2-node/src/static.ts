@@ -54,6 +54,11 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
   // This ensures app HTML files are processed by our middleware for SDK injection
   // We'll define the route handler inline here to ensure it runs before static file serving
   
+  // Handle /sdk/puter.dev.js - alias for the SDK (bundle.min.js loads this path in dev mode)
+  app.get('/sdk/puter.dev.js', (req: Request, res: Response) => {
+    res.redirect(301, '/puter.js/v2');
+  });
+
   // Handle /puter.js/v2 - SDK file (must be served with correct MIME type)
   // MUST be before express.static() middleware to override default MIME type
   // If file doesn't exist locally, proxy to api.puter.com

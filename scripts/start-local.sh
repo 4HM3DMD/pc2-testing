@@ -261,12 +261,37 @@ main() {
         # Need to clone
         echo -e "${CYAN}Downloading PC2...${NC}"
         cd "$HOME"
-        if [[ -n "${PC2_BRANCH}" ]]; then
-            git clone -b "${PC2_BRANCH}" https://github.com/Elacity/pc2.net.git
-            echo -e "${GREEN}✓ Downloaded PC2 (branch: ${PC2_BRANCH})${NC}"
+
+        # Configure git for large repos over unreliable connections (e.g. China/GFW)
+        git config --global http.version HTTP/1.1
+        git config --global http.postBuffer 524288000
+
+        CLONE_BRANCH="${PC2_BRANCH:-main}"
+        CLONE_OK=false
+
+        # Attempt 1: shallow clone (fast, small download)
+        if git clone --depth 1 -b "$CLONE_BRANCH" https://github.com/Elacity/pc2.net.git 2>&1; then
+            CLONE_OK=true
         else
-            git clone https://github.com/Elacity/pc2.net.git
-            echo -e "${GREEN}✓ Downloaded PC2${NC}"
+            echo -e "${YELLOW}⚠ Shallow clone failed, retrying with full clone...${NC}"
+            rm -rf pc2.net 2>/dev/null
+            # Attempt 2: full clone (slower but sometimes more reliable)
+            if git clone -b "$CLONE_BRANCH" https://github.com/Elacity/pc2.net.git 2>&1; then
+                CLONE_OK=true
+            fi
+        fi
+
+        # Restore default git http version
+        git config --global --unset http.version 2>/dev/null || true
+
+        if $CLONE_OK; then
+            echo -e "${GREEN}✓ Downloaded PC2 (branch: ${CLONE_BRANCH})${NC}"
+        else
+            echo -e "${RED}❌ Failed to download PC2. If you are in China, try:${NC}"
+            echo -e "${YELLOW}   1. Use a stable VPN connection${NC}"
+            echo -e "${YELLOW}   2. Try a GitHub mirror: git clone https://ghproxy.com/https://github.com/Elacity/pc2.net.git${NC}"
+            echo -e "${YELLOW}   3. Download the ZIP from https://github.com/Elacity/pc2.net/archive/refs/heads/main.zip${NC}"
+            exit 1
         fi
         PC2_DIR="$HOME/pc2.net/pc2-node"
     fi

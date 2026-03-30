@@ -16,7 +16,7 @@ import {
 import { Web3Provider } from '../provider/web3-provider';
 
 // BUILD VERSION MARKER - this confirms we're running the latest bundle
-console.log('[Particle Auth Context]: BUILD v2025.01.22.1830 loaded');
+console.log('[Particle Auth Context]: BUILD v2026.03.30.pc2net loaded');
 
 // Smart Account Info interface for UniversalX
 interface SmartAccountInfo {
@@ -99,11 +99,13 @@ const ParticleNetworkProvider: React.FC<React.PropsWithChildren<ParticleNetworkC
   const [smartAccountInfo, setSmartAccountInfo] = React.useState<SmartAccountInfo | undefined>();
   const [primaryAssets, setPrimaryAssets] = React.useState<IAssetsResponse | undefined>();
 
-  // Wallet mode detection: check URL params for address passed from parent
-  const { isWalletMode, urlEoaAddress, urlSmartAddress, shouldLogout } = React.useMemo(() => {
+  // Mode detection: check URL params for address passed from parent
+  const { isWalletMode, isSigningMode, urlEoaAddress, urlSmartAddress, shouldLogout } = React.useMemo(() => {
     const params = new URLSearchParams(window.location.search);
+    const mode = params.get('mode');
     return {
-      isWalletMode: params.get('mode') === 'wallet',
+      isWalletMode: mode === 'wallet',
+      isSigningMode: mode === 'signing',
       urlEoaAddress: params.get('address') || undefined,
       urlSmartAddress: params.get('smartAddress') || undefined,
       shouldLogout: params.get('logout') === 'true',
@@ -122,9 +124,8 @@ const ParticleNetworkProvider: React.FC<React.PropsWithChildren<ParticleNetworkC
     }
   }, [shouldLogout, connectedEoaAddress, disconnect, connector]);
 
-  // In wallet mode, we prefer the connected address (from restored session) 
-  // but fall back to URL address if session isn't restored yet
-  const eoaAddress = connectedEoaAddress || (isWalletMode ? urlEoaAddress : undefined);
+  // In wallet/signing mode, prefer connected address but fall back to URL address
+  const eoaAddress = connectedEoaAddress || ((isWalletMode || isSigningMode) ? urlEoaAddress : undefined);
 
   const library = React.useMemo(
     () => (particleProvider ? new Web3Provider(particleProvider) : null),
@@ -146,20 +147,21 @@ const ParticleNetworkProvider: React.FC<React.PropsWithChildren<ParticleNetworkC
     disconnect({ connector });
   }, [disconnect, connector]);
 
-  // Active when we have both an address AND library (proper authentication context)
-  // In wallet mode, the session should restore from localStorage automatically
+  // Active when we have proper context for the current mode:
+  // - Login/signing mode: needs both eoaAddress AND library (full ConnectKit session)
+  // - Wallet mode: only needs eoaAddress (from URL params) — UA SDK uses HTTP APIs
+  //   for data operations (balance, tokens, tx history) and doesn't need the provider
   const active = React.useMemo(() => {
+    if (isWalletMode && eoaAddress) {
+      console.log('[Particle Auth]: Wallet mode active with URL address:', eoaAddress, '(provider:', !!library, ')');
+      return true;
+    }
     const hasAuth = !!(eoaAddress && library);
-    if (isWalletMode) {
-      console.log('[Particle Auth]: Wallet mode session status:', { 
-        hasAuth, 
-        connectedEoaAddress, 
-        urlEoaAddress,
-        hasLibrary: !!library 
-      });
+    if (isSigningMode) {
+      console.log('[Particle Auth]: Signing mode session status:', { hasAuth, connectedEoaAddress, hasLibrary: !!library });
     }
     return hasAuth;
-  }, [library, eoaAddress, isWalletMode, connectedEoaAddress, urlEoaAddress]);
+  }, [library, eoaAddress, isWalletMode, isSigningMode, connectedEoaAddress]);
 
   React.useEffect(() => {
     if (!active) {
@@ -319,7 +321,14 @@ const ParticleNetworkProvider: React.FC<React.PropsWithChildren<ParticleNetworkC
       const messageTarget = isInIframe ? window.parent : window;
       
       if (data.success) {
-        console.log('[Particle Auth]: Auth SUCCESS, posting to:', isInIframe ? 'parent' : 'self');
+        // Detect login method from connector type
+        const connectorId = connector?.id || connector?.name || '';
+        const loginMethod = connectorId.toLowerCase().includes('metamask') ? 'metamask'
+          : connectorId.toLowerCase().includes('walletconnect') ? 'walletconnect'
+          : connectorId.toLowerCase().includes('coinbase') ? 'coinbase'
+          : 'email';
+        
+        console.log('[Particle Auth]: Auth SUCCESS, loginMethod:', loginMethod, 'connector:', connectorId);
         messageTarget.postMessage({
           type: 'particle-auth.success',
           payload: {
@@ -328,6 +337,7 @@ const ParticleNetworkProvider: React.FC<React.PropsWithChildren<ParticleNetworkC
             chainId,
             token: data.token,
             user: data.user,
+            loginMethod,
           }
         }, '*');
         
@@ -395,8 +405,8 @@ const ParticleNetworkProvider: React.FC<React.PropsWithChildren<ParticleNetworkC
       return;
     }
     
-    // Skip auth callback in wallet mode - only the login iframe should do this
-    if (isWalletMode) {
+    // Skip auth callback in wallet/signing mode - only the login iframe should do this
+    if (isWalletMode || isSigningMode) {
       console.log('[Particle Auth Wallet Mode]: Skipping auth callback (wallet mode)');
       return;
     }
@@ -429,14 +439,108 @@ const ParticleNetworkProvider: React.FC<React.PropsWithChildren<ParticleNetworkC
   }, [deactivate, active]);
 
   // Notify parent that particle-auth iframe is ready (used by WalletService readiness check)
+  // For non-signing mode only; signing mode ready signal is below.
   React.useEffect(() => {
+    if (isSigningMode) return;
+
+    // In wallet mode, ConnectKit session may not restore (different App ID).
+    // Signal ready using the URL-provided address instead.
+    if (isWalletMode && eoaAddress) {
+      window.parent.postMessage({
+        type: 'particle-wallet.ready',
+        payload: { ready: true, address: eoaAddress },
+      }, '*');
+      return;
+    }
+
     if (!connector || !connectedEoaAddress) return;
 
     window.parent.postMessage({
       type: 'particle-wallet.ready',
       payload: { ready: true, address: connectedEoaAddress },
     }, '*');
-  }, [connector, connectedEoaAddress]);
+  }, [connector, connectedEoaAddress, isSigningMode, isWalletMode, eoaAddress]);
+
+  // ==========================================
+  // Signing Mode: Register RPC handler THEN signal ready (single effect to avoid race)
+  // No dependency on `active` — handler calls connector.getProvider() directly.
+  // ==========================================
+  React.useEffect(() => {
+    if (!isSigningMode || !connector || !connectedEoaAddress) return;
+
+    const handleSigningRpc = async (event: MessageEvent) => {
+      const { type, requestId, payload } = event.data || {};
+      if (type !== 'particle-signing.rpc') return;
+
+      try {
+        const signingProvider = await connector.getProvider();
+        if (!signingProvider) throw new Error('Signer not available — session not restored');
+
+        const { method: rpcMethod, params: rpcParams } = payload;
+
+        if (rpcMethod === 'eth_accounts' || rpcMethod === 'eth_requestAccounts') {
+          window.parent.postMessage({
+            type: 'particle-signing.rpc-result',
+            requestId,
+            payload: { result: connectedEoaAddress ? [connectedEoaAddress] : [] },
+          }, '*');
+          return;
+        }
+
+        if (rpcMethod === 'eth_chainId') {
+          const currentChain = await (signingProvider as any).request({ method: 'eth_chainId' });
+          window.parent.postMessage({
+            type: 'particle-signing.rpc-result',
+            requestId,
+            payload: { result: currentChain },
+          }, '*');
+          return;
+        }
+
+        if (rpcMethod === 'eth_sendTransaction' && rpcParams?.[0]?.chainId) {
+          const targetChainHex = rpcParams[0].chainId;
+          try {
+            await (signingProvider as any).request({
+              method: 'wallet_switchEthereumChain',
+              params: [{ chainId: targetChainHex }],
+            });
+          } catch (switchErr: any) {
+            console.log('[Particle Signing Handler] Chain switch info:', switchErr?.message || switchErr);
+          }
+          const { chainId: _removed, ...cleanParams } = rpcParams[0];
+          rpcParams[0] = cleanParams;
+        }
+
+        console.log('[Particle Signing Handler] Calling provider.request:', rpcMethod);
+        const rpcResult = await (signingProvider as any).request({ method: rpcMethod, params: rpcParams });
+        console.log('[Particle Signing Handler] RPC result for', rpcMethod, ':', typeof rpcResult === 'string' ? rpcResult.substring(0, 20) + '...' : rpcResult);
+
+        window.parent.postMessage({
+          type: 'particle-signing.rpc-result',
+          requestId,
+          payload: { result: rpcResult },
+        }, '*');
+      } catch (error: any) {
+        console.error('[Particle Signing Handler] Error:', error);
+        window.parent.postMessage({
+          type: 'particle-wallet.error',
+          requestId,
+          payload: { message: error.message || 'Signing failed' },
+        }, '*');
+      }
+    };
+
+    // Register handler FIRST, then signal ready — eliminates race condition
+    window.addEventListener('message', handleSigningRpc);
+    console.log('[Particle Auth Signing]: RPC handler registered, signaling ready');
+
+    window.parent.postMessage({
+      type: 'particle-signing.ready',
+      payload: { ready: true, address: connectedEoaAddress },
+    }, '*');
+
+    return () => window.removeEventListener('message', handleSigningRpc);
+  }, [isSigningMode, connector, connectedEoaAddress]);
 
   // ==========================================
   // Wallet Data Request Handlers (for Account Sidebar)
@@ -457,7 +561,6 @@ const ParticleNetworkProvider: React.FC<React.PropsWithChildren<ParticleNetworkC
     }, '*');
 
     const handleWalletDataRequest = async (event: MessageEvent) => {
-      // Security: Accept messages from parent window only
       const { type, requestId, payload } = event.data || {};
       
       if (!type?.startsWith('particle-wallet.')) return;
@@ -833,6 +936,99 @@ const ParticleNetworkProvider: React.FC<React.PropsWithChildren<ParticleNetworkC
             break;
           }
 
+          case 'particle-wallet.eoa-send': {
+            console.log('[Particle Wallet Handler] eoa-send: connector?', !!connector, 'connectedEoa?', connectedEoaAddress);
+            let eoaProvider = await connector?.getProvider();
+            if (!eoaProvider) {
+              // ConnectKit may still be restoring — retry a few times
+              for (let attempt = 0; attempt < 3 && !eoaProvider; attempt++) {
+                console.log('[Particle Wallet Handler] Provider not ready, retrying...', attempt + 1);
+                await new Promise(r => setTimeout(r, 1500));
+                eoaProvider = await connector?.getProvider();
+              }
+            }
+            if (!eoaProvider) throw new Error('No wallet provider available — session may not be restored. Try logging out and back in.');
+
+            const targetChainId = payload.chainId;
+            if (targetChainId) {
+              const chainIdHex = '0x' + targetChainId.toString(16);
+              try {
+                await (eoaProvider as any).request({
+                  method: 'wallet_switchEthereumChain',
+                  params: [{ chainId: chainIdHex }],
+                });
+              } catch (switchErr: any) {
+                console.log('[Particle Wallet Handler] Chain switch info:', switchErr?.message || switchErr);
+              }
+            }
+
+            const eoaTxParams = { ...payload.txParams, from: connectedEoaAddress };
+            console.log('[Particle Wallet Handler] EOA send on chain', targetChainId, ':', eoaTxParams);
+
+            const eoaTxHash = await (eoaProvider as any).request({
+              method: 'eth_sendTransaction',
+              params: [eoaTxParams],
+            });
+
+            console.log('[Particle Wallet Handler] EOA tx sent:', eoaTxHash);
+
+            window.parent.postMessage({
+              type: 'particle-wallet.eoa-send-result',
+              requestId,
+              payload: { txHash: eoaTxHash },
+            }, '*');
+            break;
+          }
+
+          case 'particle-wallet.rpc': {
+            const { method: walletRpcMethod, params: walletRpcParams } = payload;
+
+            if (walletRpcMethod === 'eth_accounts' || walletRpcMethod === 'eth_requestAccounts') {
+              window.parent.postMessage({
+                type: 'particle-wallet.rpc-result',
+                requestId,
+                payload: { result: connectedEoaAddress ? [connectedEoaAddress] : [] },
+              }, '*');
+              break;
+            }
+
+            if (walletRpcMethod === 'eth_chainId') {
+              window.parent.postMessage({
+                type: 'particle-wallet.rpc-result',
+                requestId,
+                payload: { result: chainId ? '0x' + chainId.toString(16) : null },
+              }, '*');
+              break;
+            }
+
+            const walletProvider = await connector?.getProvider();
+            if (!walletProvider) throw new Error('No provider available');
+
+            if (walletRpcMethod === 'eth_sendTransaction' && walletRpcParams?.[0]?.chainId) {
+              const targetChainHex = walletRpcParams[0].chainId;
+              try {
+                await (walletProvider as any).request({
+                  method: 'wallet_switchEthereumChain',
+                  params: [{ chainId: targetChainHex }],
+                });
+              } catch (switchErr: any) {
+                console.log('[Particle Wallet RPC] Chain switch info:', switchErr?.message || switchErr);
+              }
+              const { chainId: _removed, ...cleanParams } = walletRpcParams[0];
+              walletRpcParams[0] = cleanParams;
+            }
+
+            console.log('[Particle Wallet RPC] Calling provider.request:', walletRpcMethod);
+            const walletRpcResult = await (walletProvider as any).request({ method: walletRpcMethod, params: walletRpcParams });
+            console.log('[Particle Wallet RPC] Result:', walletRpcMethod, typeof walletRpcResult === 'string' ? walletRpcResult.substring(0, 20) + '...' : walletRpcResult);
+            window.parent.postMessage({
+              type: 'particle-wallet.rpc-result',
+              requestId,
+              payload: { result: walletRpcResult },
+            }, '*');
+            break;
+          }
+
           case 'particle-wallet.send': {
             // Ensure smart account is fully initialized before operations
             if (!smartAccountInfo?.smartAccountAddress) {
@@ -883,9 +1079,16 @@ const ParticleNetworkProvider: React.FC<React.PropsWithChildren<ParticleNetworkC
             console.log('[Particle Wallet Handler] Transaction userOps:', transaction.userOps?.length);
             
             // Sign the rootHash with the EOA wallet
-            const sendProvider = await connector?.getProvider();
+            let sendProvider = await connector?.getProvider();
             if (!sendProvider) {
-              throw new Error('No wallet provider available');
+              for (let attempt = 0; attempt < 3 && !sendProvider; attempt++) {
+                console.log('[Particle Wallet Handler] Send provider not ready, retrying...', attempt + 1);
+                await new Promise(r => setTimeout(r, 1500));
+                sendProvider = await connector?.getProvider();
+              }
+            }
+            if (!sendProvider) {
+              throw new Error('No wallet provider available — session may not be restored. Try logging out and back in.');
             }
             
             console.log('[Particle Wallet Handler] Signing rootHash:', transaction.rootHash, 'with address:', connectedEoaAddress);
@@ -1243,7 +1446,7 @@ const ParticleNetworkProvider: React.FC<React.PropsWithChildren<ParticleNetworkC
     return () => {
       window.removeEventListener('message', handleWalletDataRequest);
     };
-  }, [active, universalAccount]);
+  }, [active, universalAccount, connector, connectedEoaAddress, smartAccountInfo, chainId, eoaAddress]);
 
   // Send updated smart account info to parent when it becomes available
   // This runs separately from the ready message to ensure parent gets the smart account

@@ -24,6 +24,40 @@
     bc = new BroadcastChannel('pc2-wallet-bridge');
   }
 
+  var EXTERNAL_WALLET_METHODS = ['metamask', 'walletconnect', 'coinbase'];
+
+  function isEmbeddedLogin() {
+    var method = (window.user && window.user.login_method)
+      || localStorage.getItem('pc2_login_method') || '';
+    if (EXTERNAL_WALLET_METHODS.indexOf(method) >= 0) return false;
+    return true;
+  }
+
+  function routeToParticle(data, respond) {
+    if (typeof window.pc2RouteRpcToParticle === 'function') {
+      window.pc2RouteRpcToParticle(data.method, data.params)
+        .then(function (result) {
+          respond({
+            type: 'pc2-wallet-rpc-response',
+            id: data.id, method: data.method, result: result
+          });
+        })
+        .catch(function (error) {
+          respond({
+            type: 'pc2-wallet-rpc-response',
+            id: data.id, method: data.method,
+            error: { code: error.code || -32603, message: error.message || String(error) }
+          });
+        });
+    } else {
+      respond({
+        type: 'pc2-wallet-rpc-response',
+        id: data.id, method: data.method,
+        error: { code: 4900, message: 'Embedded wallet not ready' }
+      });
+    }
+  }
+
   function handleRpc(data, respond) {
     if (data.method === 'pc2_getSmartAccountAddress') {
       var sa = (window.user && window.user.smart_account_address) || null;
@@ -31,6 +65,11 @@
         type: 'pc2-wallet-rpc-response',
         id: data.id, method: data.method, result: sa
       });
+      return;
+    }
+
+    if (isEmbeddedLogin()) {
+      routeToParticle(data, respond);
       return;
     }
 
@@ -61,6 +100,19 @@
   }
 
   function handleReady(respond) {
+    var smartAccountAddress = (window.user && window.user.smart_account_address) || null;
+
+    if (isEmbeddedLogin()) {
+      var addr = (window.user && window.user.wallet_address) || '';
+      respond({
+        type: 'pc2-wallet-init',
+        accounts: addr ? [addr] : [],
+        chainId: null,
+        smartAccountAddress: smartAccountAddress
+      });
+      return;
+    }
+
     var provider = window.ethereum;
     if (!provider || provider.isPC2WalletBridge) return;
 
@@ -72,7 +124,6 @@
       .then(function (chain) { chainId = chain; })
       .catch(function () {})
       .finally(function () {
-        var smartAccountAddress = (window.user && window.user.smart_account_address) || null;
         respond({
           type: 'pc2-wallet-init',
           accounts: accounts,

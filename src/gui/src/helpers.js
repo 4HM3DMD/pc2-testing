@@ -549,6 +549,13 @@ window.update_auth_data = async (auth_token, user)=>{
         console.warn('[update_auth_data] Failed to cache whoami data:', e);
     }
 
+    // Restore login_method from user object or localStorage fallback
+    if (!user.login_method) {
+        user.login_method = localStorage.getItem('pc2_login_method') || '';
+    } else {
+        localStorage.setItem('pc2_login_method', user.login_method);
+    }
+    
     // update this session's user data
     window.user = user;
     localStorage.setItem('user', JSON.stringify(to_storable_user(user)));
