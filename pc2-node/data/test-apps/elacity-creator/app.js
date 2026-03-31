@@ -101,12 +101,95 @@
     'function configureTokenOwnershipAccess(tuple(address tokenAddress, uint256 threshold)[] thresholds)',
   ];
 
+  // ── IPC & Smart Account ──────────────────────────────
+
+  var urlParams = new URLSearchParams(window.location.search);
+  var smartAccountAddress = urlParams.get('puter.smart_account') || null;
+  var appInstanceId = urlParams.get('puter.app_instance_id') || '';
+  var ipcMsgCounter = 0;
+
+  function hasSmartAccount() {
+    return !!smartAccountAddress && smartAccountAddress.toLowerCase() !== (state.walletAddress || '').toLowerCase();
+  }
+
+  function getEffectiveAddress(walletChoice) {
+    if (walletChoice === 'sa' && smartAccountAddress) return smartAccountAddress;
+    return state.walletAddress;
+  }
+
+  function parentSendTransaction(txParams) {
+    return new Promise(function (resolve, reject) {
+      var msgId = 'creator-tx-' + (++ipcMsgCounter) + '-' + Date.now();
+      function handler(event) {
+        if (!event.data || event.data.original_msg_id !== msgId) return;
+        window.removeEventListener('message', handler);
+        if (event.data.error) reject(new Error(event.data.error));
+        else resolve(event.data.txHash);
+      }
+      window.addEventListener('message', handler);
+      window.parent.postMessage({
+        $: 'puter-ipc', msg: 'walletSendTransaction',
+        appInstanceID: appInstanceId, env: 'app',
+        uuid: msgId, txParams: txParams,
+      }, '*');
+    });
+  }
+
+  function parentExecuteSmartAccountBatch(chainId, transactions, expectTokens) {
+    return new Promise(function (resolve, reject) {
+      var msgId = 'creator-batch-' + (++ipcMsgCounter) + '-' + Date.now();
+      function handler(event) {
+        if (!event.data || event.data.original_msg_id !== msgId) return;
+        if (event.data.msg !== 'walletExecuteSmartAccountBatchResult') return;
+        window.removeEventListener('message', handler);
+        if (event.data.error) reject(new Error(event.data.error));
+        else resolve({ transactionId: event.data.transactionId, transactionHash: event.data.transactionHash });
+      }
+      window.addEventListener('message', handler);
+      window.parent.postMessage({
+        $: 'puter-ipc', msg: 'walletExecuteSmartAccountBatch',
+        appInstanceID: appInstanceId, env: 'app',
+        uuid: msgId, chainId: chainId,
+        transactions: transactions, expectTokens: expectTokens || [],
+      }, '*');
+    });
+  }
+
+  function showWalletChoice(titleText) {
+    if (!hasSmartAccount()) return Promise.resolve('eoa');
+    return new Promise(function (resolve) {
+      var modal = document.getElementById('mint-wallet-choice-modal');
+      var titleEl = document.getElementById('mint-wc-title');
+      var saBtn = document.getElementById('mint-wc-sa');
+      var eoaBtn = document.getElementById('mint-wc-eoa');
+      var saAddr = document.getElementById('mint-wc-sa-addr');
+      var eoaAddr = document.getElementById('mint-wc-eoa-addr');
+
+      if (titleEl) titleEl.textContent = titleText || 'Choose Wallet';
+      saAddr.textContent = smartAccountAddress ? (smartAccountAddress.slice(0, 6) + '...' + smartAccountAddress.slice(-4)) : '';
+      eoaAddr.textContent = state.walletAddress ? (state.walletAddress.slice(0, 6) + '...' + state.walletAddress.slice(-4)) : '';
+
+      modal.classList.remove('hidden');
+
+      function cleanup() { modal.classList.add('hidden'); saBtn.onclick = null; eoaBtn.onclick = null; }
+      saBtn.onclick = function () { cleanup(); resolve('sa'); };
+      eoaBtn.onclick = function () { cleanup(); resolve('eoa'); };
+    });
+  }
+
+  function getChannelOwnerType(channelSelectEl) {
+    if (!channelSelectEl) return null;
+    var opt = channelSelectEl.options[channelSelectEl.selectedIndex];
+    return opt ? (opt.getAttribute('data-owner') || null) : null;
+  }
+
   // ── State ─────────────────────────────────────────────
 
   var state = {
     selectedFile: null,
     fileBytes: null,
     walletAddress: null,
+    walletChoice: null,
     currentStep: 1,
     result: null,
     customThumbnail: null,
@@ -261,33 +344,58 @@
     select.disabled = true;
 
     try {
-      var addr = walletAddress.toLowerCase();
-      var ownedChannels = await fetchChannelsFromBackend({ creator: addr });
-      var mintableChannels = await fetchChannelsFromBackend({ access: 'mint:' + addr });
+      var eoaAddr = walletAddress.toLowerCase();
+      var saAddr = hasSmartAccount() ? smartAccountAddress.toLowerCase() : null;
+
+      var eoaChannels = await fetchChannelsFromBackend({ creator: eoaAddr });
+      var saChannels = saAddr ? await fetchChannelsFromBackend({ creator: saAddr }) : [];
+
+      var mintableChannels = await fetchChannelsFromBackend({ access: 'mint:' + eoaAddr });
 
       var ownedAddrs = {};
-      ownedChannels.forEach(function (ch) { ownedAddrs[ch.address.toLowerCase()] = true; });
+      eoaChannels.forEach(function (ch) { ownedAddrs[ch.address.toLowerCase()] = true; });
+      saChannels.forEach(function (ch) { ownedAddrs[ch.address.toLowerCase()] = true; });
       var publicChannels = mintableChannels.filter(function (ch) {
         return !ownedAddrs[ch.address.toLowerCase()];
       });
 
       select.innerHTML = '';
+      var hasOwned = eoaChannels.length > 0 || saChannels.length > 0;
 
-      if (ownedChannels.length === 0 && publicChannels.length === 0) {
-        select.innerHTML = '<option value="' + DEFAULT_CHANNEL + '">Public Elacity Channel</option>';
+      if (!hasOwned && publicChannels.length === 0) {
+        var defOpt = document.createElement('option');
+        defOpt.value = DEFAULT_CHANNEL;
+        defOpt.textContent = 'Public Elacity Channel';
+        select.appendChild(defOpt);
         hint.textContent = 'No channels found. Using public Elacity channel (free content only).';
         hint.className = 'field-hint';
       } else {
-        if (ownedChannels.length > 0) {
+        if (eoaChannels.length > 0) {
           var group1 = document.createElement('optgroup');
-          group1.label = 'Your Channels (' + ownedChannels.length + ')';
-          ownedChannels.forEach(function (ch) {
+          group1.label = 'Your Channels — Wallet (' + eoaChannels.length + ')';
+          group1.setAttribute('data-group', 'eoa');
+          eoaChannels.forEach(function (ch) {
             var opt = document.createElement('option');
             opt.value = ch.address;
+            opt.setAttribute('data-owner', 'eoa');
             opt.textContent = ch.name + ' (' + ch.address.substring(0, 8) + '...)';
             group1.appendChild(opt);
           });
           select.appendChild(group1);
+        }
+
+        if (saChannels.length > 0) {
+          var group1a = document.createElement('optgroup');
+          group1a.label = 'Your Channels — Agent Account (' + saChannels.length + ')';
+          group1a.setAttribute('data-group', 'sa');
+          saChannels.forEach(function (ch) {
+            var opt = document.createElement('option');
+            opt.value = ch.address;
+            opt.setAttribute('data-owner', 'sa');
+            opt.textContent = ch.name + ' (' + ch.address.substring(0, 8) + '...)';
+            group1a.appendChild(opt);
+          });
+          select.appendChild(group1a);
         }
 
         if (publicChannels.length > 0) {
@@ -302,9 +410,11 @@
           select.appendChild(group2);
         }
 
-        if (ownedChannels.length > 0) {
-          select.value = ownedChannels[0].address;
-          hint.textContent = 'Your channel selected — you have full minting rights.';
+        if (hasOwned) {
+          var firstOwned = eoaChannels.length > 0 ? eoaChannels[0] : saChannels[0];
+          var firstType = eoaChannels.length > 0 ? 'EOA Wallet' : 'Agent Account';
+          select.value = firstOwned.address;
+          hint.textContent = 'Your channel selected (' + firstType + ') — you have full minting rights.';
           hint.className = 'field-hint success';
         } else {
           hint.textContent = 'Public channels available. Create your own for full minting rights.';
@@ -1041,7 +1151,6 @@
 
   async function sendTx(to, data, value) {
     var txParams = {
-      from: state.walletAddress,
       to: to,
       data: data,
     };
@@ -1049,6 +1158,11 @@
       txParams.value = '0x' + BigInt(value).toString(16);
     }
 
+    if (window.parent !== window && appInstanceId) {
+      return parentSendTransaction(txParams);
+    }
+
+    txParams.from = state.walletAddress;
     var txHash = await window.ethereum.request({
       method: 'eth_sendTransaction',
       params: [txParams],
@@ -1184,8 +1298,10 @@
     return null;
   }
 
-  async function doCreateChannel(channelName, description) {
+  async function doCreateChannel(channelName, description, walletChoice) {
     if (!state.walletAddress) throw new Error('Connect wallet first');
+    walletChoice = walletChoice || 'eoa';
+    var creatorAddr = getEffectiveAddress(walletChoice);
 
     try {
       await window.ethereum.request({
@@ -1195,14 +1311,14 @@
     } catch (_) {}
 
     var feeInfo = await getChannelCreationFee();
-    console.log('[Creator] Channel creation fee:', feeInfo.fee.toString());
+    console.log('[Creator] Channel creation fee:', feeInfo.fee.toString(), 'wallet:', walletChoice);
 
     var channelDesc = description || 'PC2 digital assets channel';
     var channelMeta = {};
     channelMeta['0000000000000000000000000000000000000000000000000000000000000000.json'] = {
       name: channelName,
       description: channelDesc,
-      properties: { creator: state.walletAddress },
+      properties: { creator: creatorAddr },
       attributes: [
         { trait_type: 'Type', value: CHANNEL_TYPE.STANDARD },
         { trait_type: 'Scope', value: CHANNEL_SCOPE.PRIVATE },
@@ -1211,7 +1327,7 @@
     channelMeta['0000000000000000000000000000000000000000000000000000000000000002.json'] = {
       name: 'Royalty Share - ' + channelName,
       description: 'Shares for royalty distribution over all subscriptions to the channel \'' + channelName + '\'',
-      properties: { decimals: 1, creator: state.walletAddress },
+      properties: { decimals: 1, creator: creatorAddr },
       attributes: [],
     };
 
@@ -1288,35 +1404,68 @@
       configData,
     ]);
 
-    var txHash = await sendTx(CONTRACTS.CHANNEL_CORE, callData, feeInfo.fee);
-    console.log('[Creator] createChannel tx:', txHash);
+    var txHash;
+    var channelAddr = null;
 
-    var receipt = await waitForReceipt(txHash);
-    if (receipt.status === '0x0' || receipt.status === 0) {
-      throw new Error('createChannel transaction reverted');
+    if (walletChoice === 'sa' && hasSmartAccount()) {
+      var feeHex = feeInfo.fee && BigInt(feeInfo.fee) > 0n ? '0x' + BigInt(feeInfo.fee).toString(16) : '0x0';
+      var batchResult = await parentExecuteSmartAccountBatch(BASE_CHAIN_ID, [
+        { to: CONTRACTS.CHANNEL_CORE, data: callData, value: feeHex },
+      ], []);
+      txHash = batchResult.transactionHash || batchResult.transactionId;
+      console.log('[Creator] createChannel SA batch tx:', txHash);
+
+      // UA batch hashes can't be resolved by standard eth_getTransactionReceipt.
+      // Poll findRecentChannel instead (queries ChannelCreated events on-chain).
+      var pollStart = Date.now();
+      var pollMax = 60000;
+      while (!channelAddr && Date.now() - pollStart < pollMax) {
+        await new Promise(function (r) { setTimeout(r, 5000); });
+        channelAddr = await findRecentChannel(creatorAddr);
+        if (channelAddr) break;
+        console.log('[Creator] Waiting for SA channel to appear on-chain...');
+      }
+      if (!channelAddr) {
+        throw new Error('Channel created via Agent Account but could not determine address. Check BaseScan tx: ' + txHash);
+      }
+      console.log('[Creator] SA Channel created at:', channelAddr);
+    } else {
+      txHash = await sendTx(CONTRACTS.CHANNEL_CORE, callData, feeInfo.fee);
+      console.log('[Creator] createChannel tx:', txHash);
+
+      var receipt = await waitForReceipt(txHash);
+      if (receipt.status === '0x0' || receipt.status === 0) {
+        throw new Error('createChannel transaction reverted');
+      }
+
+      var event = parseChannelCreatedEvent(receipt);
+      channelAddr = event ? event.channelAddr : null;
+
+      if (!channelAddr) {
+        throw new Error('Channel created but could not parse ChannelCreated event. Tx: ' + txHash);
+      }
+      console.log('[Creator] Channel created at:', channelAddr);
     }
-
-    var event = parseChannelCreatedEvent(receipt);
-    var channelAddr = event ? event.channelAddr : null;
-
-    if (!channelAddr) {
-      throw new Error('Channel created but could not parse ChannelCreated event. Tx: ' + txHash);
-    }
-    console.log('[Creator] Channel created at:', channelAddr);
 
     var MINTER_ROLE = ethers.keccak256(ethers.toUtf8Bytes('MINTER_ROLE'));
     try {
       var acIface = new ethers.Interface(ABI.ACCESS_CONTROL);
-      var hasIt = await rpcCall(channelAddr, acIface.encodeFunctionData('hasRole', [MINTER_ROLE, state.walletAddress]));
-      var hasMinter = acIface.decodeFunctionResult('hasRole', hasIt)[0];
-      if (!hasMinter) {
-        console.log('[Creator] Granting MINTER_ROLE to self...');
-        var grantData = acIface.encodeFunctionData('grantRole', [MINTER_ROLE, state.walletAddress]);
-        var grantTx = await sendTx(channelAddr, grantData);
-        await waitForReceipt(grantTx);
+
+      var ownerHasIt = await rpcCall(channelAddr, acIface.encodeFunctionData('hasRole', [MINTER_ROLE, creatorAddr]));
+      var ownerHasMinter = acIface.decodeFunctionResult('hasRole', ownerHasIt)[0];
+      if (!ownerHasMinter) {
+        console.log('[Creator] Granting MINTER_ROLE to channel owner:', creatorAddr);
+        if (walletChoice === 'sa' && hasSmartAccount()) {
+          await parentExecuteSmartAccountBatch(BASE_CHAIN_ID, [
+            { to: channelAddr, data: acIface.encodeFunctionData('grantRole', [MINTER_ROLE, creatorAddr]), value: '0x0' },
+          ], []);
+        } else {
+          var grantTx = await sendTx(channelAddr, acIface.encodeFunctionData('grantRole', [MINTER_ROLE, creatorAddr]));
+          await waitForReceipt(grantTx);
+        }
         console.log('[Creator] MINTER_ROLE granted');
       } else {
-        console.log('[Creator] Already has MINTER_ROLE');
+        console.log('[Creator] Owner already has MINTER_ROLE');
       }
     } catch (roleErr) {
       console.warn('[Creator] Failed to grant MINTER_ROLE (you may need to do this manually):', roleErr.message);
@@ -1335,7 +1484,7 @@
           return { address: tk.address, value: parseFloat(String(tk.value)) };
         }),
         categories: [],
-        creator: state.walletAddress,
+        creator: creatorAddr,
         txHash: txHash,
       });
       console.log('[Creator] Channel registered with Elacity backend');
@@ -1343,7 +1492,45 @@
       console.warn('[Creator] Backend registration failed (channel still works on-chain):', regErr.message);
     }
 
-    return { address: channelAddr, name: channelName, txHash: txHash };
+    return { address: channelAddr, name: channelName, txHash: txHash, ownerType: walletChoice };
+  }
+
+  async function findRecentChannel(ownerAddress) {
+    var iface = new ethers.Interface(ABI.CHANNEL_CORE);
+    var eventTopic = iface.getEvent('ChannelCreated').topicHash;
+    var ownerTopic = '0x000000000000000000000000' + ownerAddress.toLowerCase().slice(2);
+    try {
+      var blockResp = await fetch(BASE_RPC, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_blockNumber', params: [] }),
+      });
+      var blockJson = await blockResp.json();
+      var currentBlock = parseInt(blockJson.result, 16);
+      var fromBlock = '0x' + Math.max(0, currentBlock - 200).toString(16);
+
+      var resp = await fetch(BASE_RPC, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0', id: 1,
+          method: 'eth_getLogs',
+          params: [{
+            address: CONTRACTS.CHANNEL_CORE,
+            topics: [eventTopic, null, null, ownerTopic],
+            fromBlock: fromBlock,
+            toBlock: 'latest',
+          }],
+        }),
+      });
+      var json = await resp.json();
+      var logs = json.result || [];
+      if (logs.length > 0) {
+        var parsed = iface.parseLog({ topics: logs[logs.length - 1].topics, data: logs[logs.length - 1].data });
+        if (parsed && parsed.name === 'ChannelCreated') return parsed.args.channelAddr;
+      }
+    } catch (_) {}
+    return null;
   }
 
   // ── Elacity backend auth (nonce-sign-login) ──────────
@@ -1384,10 +1571,13 @@
       params: [hexMsg, addr],
     });
 
-    var loginData = await elacityGraphQL(
-      'mutation UserLogin($address: String!, $signature: String!) { userLogin(address: $address, signature: $signature) { token address alias } }',
-      { address: addr, signature: signature }
-    );
+    var loginVars = { address: addr, signature: signature };
+    var sa = smartAccountAddress || null;
+    var loginMutation = sa
+      ? 'mutation UserLogin($address: String!, $signature: String!, $sa: String) { userLogin(address: $address, signature: $signature, sa: $sa) { token address alias } }'
+      : 'mutation UserLogin($address: String!, $signature: String!) { userLogin(address: $address, signature: $signature) { token address alias } }';
+    if (sa) loginVars.sa = sa;
+    var loginData = await elacityGraphQL(loginMutation, loginVars);
 
     var token = loginData.userLogin.token;
     elacityAuthCache = { token: token, address: addr };
@@ -1418,7 +1608,7 @@
       tokenAccess: params.tokenAccess || [],
     };
 
-    var authToken = await getElacityAuthToken(params.creator);
+    var authToken = await getElacityAuthToken(state.walletAddress);
 
     var resp = await fetch(ELACITY_BACKEND + '/2.0/graphql', {
       method: 'POST',
@@ -2456,7 +2646,14 @@
       if (channel && ethers.isAddress(channel)) {
         setProgStep('prog-mint', 'Preparing...', 'active');
 
-        // Only switch chain if not already on Base (avoids MetaMask popup)
+        var walletChoice = getChannelOwnerType(dom.assetChannel) || (hasSmartAccount() ? 'sa' : 'eoa');
+        if (!getChannelOwnerType(dom.assetChannel)) {
+          walletChoice = await showWalletChoice('Choose Wallet for Minting');
+        }
+        state.walletChoice = walletChoice;
+        var effectiveAddr = getEffectiveAddress(walletChoice);
+        console.log('[Creator] Wallet choice:', walletChoice, '(from channel owner) effective:', effectiveAddr);
+
         try {
           var currentChainId = await window.ethereum.request({ method: 'eth_chainId' });
           if (currentChainId !== BASE_CHAIN_HEX) {
@@ -2473,16 +2670,21 @@
         var gatewayAddress = await getChannelAuthority(channel);
         console.log('[Creator] Channel authority (gateway):', gatewayAddress);
 
-        // Verify MINTER_ROLE before attempting mint to fail fast
         var MINTER_ROLE = ethers.keccak256(ethers.toUtf8Bytes('MINTER_ROLE'));
+        var needsGrantRole = false;
         try {
           var acIface = new ethers.Interface(ABI.ACCESS_CONTROL);
-          var roleCheck = await rpcCall(channel, acIface.encodeFunctionData('hasRole', [MINTER_ROLE, state.walletAddress]));
+          var roleCheck = await rpcCall(channel, acIface.encodeFunctionData('hasRole', [MINTER_ROLE, effectiveAddr]));
           var hasMinterRole = acIface.decodeFunctionResult('hasRole', roleCheck)[0];
           if (!hasMinterRole) {
-            throw new Error('Your wallet does not have MINTER_ROLE on this channel. Create your own channel or request access from the channel owner.');
+            if (walletChoice === 'sa') {
+              needsGrantRole = true;
+              console.log('[Creator] SA needs MINTER_ROLE — will include in batch');
+            } else {
+              throw new Error('Your wallet does not have MINTER_ROLE on this channel. Create your own channel or request access from the channel owner.');
+            }
           }
-          console.log('[Creator] MINTER_ROLE verified for', state.walletAddress);
+          console.log('[Creator] MINTER_ROLE verified for', effectiveAddr);
         } catch (roleCheckErr) {
           if (roleCheckErr.message.includes('MINTER_ROLE')) throw roleCheckErr;
           console.warn('[Creator] Could not verify MINTER_ROLE (proceeding anyway):', roleCheckErr.message);
@@ -2498,7 +2700,7 @@
           ? encodeOpRawData({
               contentId: encryptResult.dataToEncryptHash,
               metadataCID: metaCid,
-              creatorAddress: state.walletAddress,
+              creatorAddress: effectiveAddr,
               copies: copies,
               opType: opType,
               resellerCut: resellerCut,
@@ -2514,79 +2716,192 @@
         var mintData = iface.encodeFunctionData('mint', [mintUri, opType, opRawData, sellRawData]);
 
         setProgStep('prog-mint', 'Preparing...', 'active');
-        mintTxHash = await sendTxWithRetry('prog-mint', 'Mint on Channel contract', channel, mintData, feeInfo.fee);
 
-        setProgStep('prog-mint', 'Confirming tx...', 'active');
-        var mintReceipt = await waitForReceipt(mintTxHash);
-
-        if (mintReceipt.status === '0x0' || mintReceipt.status === 0) {
-          throw new Error('Mint transaction reverted');
-        }
-
-        var assetEvent = parseAssetCreatedEvent(mintReceipt, channel);
-        if (assetEvent) {
-          mintedTokenId = assetEvent.tokenId;
-          mintedOpContract = assetEvent.opContract;
-        }
-
-        if (!mintedTokenId) {
-          try {
-            var supplyData = iface.encodeFunctionData('totalSupply', []);
-            var supplyResult = await rpcCall(channel, supplyData);
-            var supplyDecoded = iface.decodeFunctionResult('totalSupply', supplyResult);
-            mintedTokenId = supplyDecoded[0].toString();
-            console.log('[Creator] TokenId from totalSupply:', mintedTokenId);
-          } catch (tsErr) {
-            console.warn('[Creator] Could not get totalSupply:', tsErr.message);
+        if (walletChoice === 'sa' && hasSmartAccount()) {
+          if (needsGrantRole) {
+            var grantIface = new ethers.Interface(ABI.ACCESS_CONTROL);
+            var grantData = grantIface.encodeFunctionData('grantRole', [MINTER_ROLE, smartAccountAddress]);
+            var grantTxHash = await sendTxWithRetry('prog-mint', 'Grant MINTER_ROLE to Agent Account (EOA tx)', channel, grantData, 0);
+            setProgStep('prog-mint', 'Confirming role grant...', 'active');
+            await waitForReceipt(grantTxHash);
           }
-        }
 
-        // On-chain fallback: look up operative contract if receipt parsing missed it
-        if (!mintedOpContract && mintedTokenId && opType !== OP_TYPES.FREE) {
+          var preMintSupply = null;
           try {
-            var opLookupData = iface.encodeFunctionData('operativeOf', [mintedTokenId]);
-            var opLookupResult = await rpcCall(channel, opLookupData);
-            var opDecoded = iface.decodeFunctionResult('operativeOf', opLookupResult);
-            if (opDecoded[0] && opDecoded[0] !== ethers.ZeroAddress) {
-              mintedOpContract = opDecoded[0];
-              console.log('[Creator] Operative found via on-chain lookup:', mintedOpContract);
+            var preSupData = iface.encodeFunctionData('totalSupply', []);
+            var preSupResult = await rpcCall(channel, preSupData);
+            preMintSupply = iface.decodeFunctionResult('totalSupply', preSupResult)[0].toString();
+            console.log('[Creator] Pre-mint totalSupply:', preMintSupply);
+          } catch (_) {}
+
+          var batchTxs = [];
+          var mintFeeHex = feeInfo.fee && BigInt(feeInfo.fee) > 0n ? '0x' + BigInt(feeInfo.fee).toString(16) : '0x0';
+          batchTxs.push({ to: channel, data: mintData, value: mintFeeHex });
+
+          var batchResult = null;
+          while (!batchResult) {
+            try {
+              setProgStep('prog-mint', 'Confirm in wallet (Agent Account batch)...', 'active');
+              batchResult = await parentExecuteSmartAccountBatch(BASE_CHAIN_ID, batchTxs, []);
+            } catch (saBatchErr) {
+              var saBatchMsg = saBatchErr.message || '';
+              console.warn('[Creator] SA batch error:', saBatchMsg);
+              var saRetry = await new Promise(function (resolve) {
+                setProgStep('prog-mint', (saBatchMsg.includes('Insufficient') ? 'Insufficient gas' : 'Failed') + ' — ', 'error');
+                var stepEl = document.getElementById('prog-mint');
+                var statusEl = stepEl && (document.getElementById('prog-mint-status') || stepEl.querySelector('.prog-status') || stepEl.querySelector('span:last-child'));
+                if (!statusEl) { resolve(false); return; }
+                var retryBtn = document.createElement('button');
+                retryBtn.textContent = 'Retry';
+                retryBtn.style.cssText = 'display:inline-flex;align-items:center;justify-content:center;padding:4px 12px;font-size:12px;line-height:1;font-family:inherit;background:#3b82f6;color:white;border:none;border-radius:4px;cursor:pointer;margin-left:8px;';
+                retryBtn.addEventListener('click', function () { retryBtn.remove(); cancelBtn.remove(); resolve(true); });
+                var cancelBtn = document.createElement('button');
+                cancelBtn.textContent = 'Cancel';
+                cancelBtn.style.cssText = 'display:inline-flex;align-items:center;justify-content:center;padding:4px 12px;font-size:12px;line-height:1;font-family:inherit;background:#6b7280;color:white;border:none;border-radius:4px;cursor:pointer;margin-left:4px;';
+                cancelBtn.addEventListener('click', function () { retryBtn.remove(); cancelBtn.remove(); resolve(false); });
+                statusEl.appendChild(retryBtn);
+                statusEl.appendChild(cancelBtn);
+              });
+              if (!saRetry) throw new Error('Mint cancelled: ' + saBatchMsg);
             }
-          } catch (opLookupErr) {
-            console.warn('[Creator] operativeOf lookup failed:', opLookupErr.message);
+          }
+          mintTxHash = batchResult.transactionHash || batchResult.transactionId;
+          var saOnChainHash = batchResult.transactionHash;
+          console.log('[Creator] SA batch result — txHash:', saOnChainHash, 'txId:', batchResult.transactionId);
+
+          setProgStep('prog-mint', 'Waiting for on-chain confirmation...', 'active');
+
+          var saPollStart = Date.now();
+          while (Date.now() - saPollStart < 90000) {
+            await new Promise(function (r) { setTimeout(r, 4000); });
+
+            try {
+              var blockResp = await fetch(BASE_RPC, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_blockNumber', params: [] }),
+              });
+              var blockJson = await blockResp.json();
+              var curBlock = parseInt(blockJson.result, 16);
+              var logsResp = await fetch(BASE_RPC, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  jsonrpc: '2.0', id: 1, method: 'eth_getLogs',
+                  params: [{ address: channel, fromBlock: '0x' + Math.max(0, curBlock - 30).toString(16), toBlock: 'latest' }],
+                }),
+              });
+              var logsJson = await logsResp.json();
+              var channelLogs = logsJson.result || [];
+
+              if (channelLogs.length > 0) {
+                var realTxHash = channelLogs[channelLogs.length - 1].transactionHash;
+                console.log('[Creator] SA found channel activity, real txHash:', realTxHash);
+
+                var rcptResp = await fetch(BASE_RPC, {
+                  method: 'POST', headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_getTransactionReceipt', params: [realTxHash] }),
+                });
+                var rcptJson = await rcptResp.json();
+                if (rcptJson.result && rcptJson.result.logs && rcptJson.result.logs.length > 0) {
+                  console.log('[Creator] SA full receipt — logs:', rcptJson.result.logs.length, 'status:', rcptJson.result.status);
+                  var parsedEvent = parseAssetCreatedEvent(rcptJson.result, channel);
+                  if (parsedEvent) {
+                    mintedTokenId = parsedEvent.tokenId;
+                    mintedOpContract = parsedEvent.opContract;
+                    if (mintedOpContract === ethers.ZeroAddress) mintedOpContract = null;
+                    mintTxHash = realTxHash;
+                    console.log('[Creator] SA mint resolved — tokenId:', mintedTokenId, 'opContract:', mintedOpContract);
+                    break;
+                  }
+                }
+              }
+            } catch (pollErr) {
+              console.warn('[Creator] SA poll error:', pollErr.message);
+            }
+
+            setProgStep('prog-mint', 'Waiting for on-chain confirmation...', 'active');
+          }
+        } else {
+          mintTxHash = await sendTxWithRetry('prog-mint', 'Mint on Channel contract', channel, mintData, feeInfo.fee);
+          setProgStep('prog-mint', 'Confirming tx...', 'active');
+          var mintReceipt = await waitForReceipt(mintTxHash);
+
+          if (mintReceipt.status === '0x0' || mintReceipt.status === 0) {
+            throw new Error('Mint transaction reverted');
+          }
+
+          var assetEvent = parseAssetCreatedEvent(mintReceipt, channel);
+          if (assetEvent) {
+            mintedTokenId = assetEvent.tokenId;
+            mintedOpContract = assetEvent.opContract;
+          }
+
+          if (!mintedTokenId) {
+            try {
+              var supplyData2 = iface.encodeFunctionData('totalSupply', []);
+              var supplyResult2 = await rpcCall(channel, supplyData2);
+              var supplyDecoded2 = iface.decodeFunctionResult('totalSupply', supplyResult2);
+              mintedTokenId = supplyDecoded2[0].toString();
+            } catch (tsErr) {
+              console.warn('[Creator] Could not get totalSupply:', tsErr.message);
+            }
+          }
+
+          if (!mintedOpContract && mintedTokenId && opType !== OP_TYPES.FREE) {
+            try {
+              var opLookupData2 = iface.encodeFunctionData('operativeOf', [mintedTokenId]);
+              var opLookupResult2 = await rpcCall(channel, opLookupData2);
+              var opDecoded2 = iface.decodeFunctionResult('operativeOf', opLookupResult2);
+              if (opDecoded2[0] && opDecoded2[0] !== ethers.ZeroAddress) {
+                mintedOpContract = opDecoded2[0];
+              }
+            } catch (opLookupErr) {
+              console.warn('[Creator] operativeOf lookup failed:', opLookupErr.message);
+            }
           }
         }
 
         setProgStep('prog-mint', mintedTokenId
           ? 'Token #' + mintedTokenId + ' minted'
-          : 'Minted (tx: ' + mintTxHash.substring(0, 10) + '...)', 'done');
+          : 'Minted (tx: ' + (mintTxHash || '').substring(0, 10) + '...)', 'done');
 
         // ── Step 5: Set approval on Operative ─────────
         var gatewayApproved = false;
         if (mintedOpContract && mintedOpContract !== '0x0000000000000000000000000000000000000000') {
-          try {
-            setProgStep('prog-approve', 'Waiting for chain to settle...', 'active');
-            await new Promise(function (r) { setTimeout(r, 5000); });
-
-            setProgStep('prog-approve', 'Approving gateway on ' + mintedOpContract.substring(0, 8) + '...', 'active');
-
-            var opIface = new ethers.Interface(ABI.OPERATIVE);
-            var approveData = opIface.encodeFunctionData('setApprovalForAll', [gatewayAddress, true]);
-
-            var approveTxHash = await sendTxWithRetry('prog-approve', 'Set gateway approval', mintedOpContract, approveData);
-            setProgStep('prog-approve', 'Confirming tx...', 'active');
-            var approveReceipt = await waitForReceipt(approveTxHash);
-            if (approveReceipt.status === 'timeout') {
-              setProgStep('prog-approve', 'Tx sent — verify on BaseScan (' + approveTxHash.substring(0, 10) + '...)', 'done');
-              console.warn('[Creator] Approval receipt timed out. Tx may still confirm:', approveTxHash);
-            } else {
+          if (walletChoice === 'sa' && hasSmartAccount()) {
+            try {
+              setProgStep('prog-approve', 'Approving gateway (Agent Account)...', 'active');
+              await new Promise(function (r) { setTimeout(r, 3000); });
+              var opIface2 = new ethers.Interface(ABI.OPERATIVE);
+              var approveData2 = opIface2.encodeFunctionData('setApprovalForAll', [gatewayAddress, true]);
+              await parentExecuteSmartAccountBatch(BASE_CHAIN_ID, [{ to: mintedOpContract, data: approveData2, value: '0x0' }], []);
               setProgStep('prog-approve', 'Gateway approved', 'done');
               gatewayApproved = true;
+            } catch (approveErr) {
+              console.error('[Creator] SA Gateway approval failed:', approveErr);
+              setProgStep('prog-approve', '⚠️ Failed — use Fix tool below', 'error');
+              showToast('Gateway approval failed. Use the Fix Gateway Approval tool.', 'error');
             }
-            console.log('[Creator] setApprovalForAll on', mintedOpContract, 'for gateway', gatewayAddress);
-          } catch (approveErr) {
-            console.error('[Creator] Gateway approval failed:', approveErr);
-            setProgStep('prog-approve', '⚠️ Failed — use Fix tool below (' + (approveErr.message || '').substring(0, 60) + ')', 'error');
-            showToast('Gateway approval failed. Use the Fix Gateway Approval tool after results load.', 'error');
+          } else {
+            try {
+              setProgStep('prog-approve', 'Waiting for chain to settle...', 'active');
+              await new Promise(function (r) { setTimeout(r, 5000); });
+              setProgStep('prog-approve', 'Approving gateway on ' + mintedOpContract.substring(0, 8) + '...', 'active');
+              var opIface = new ethers.Interface(ABI.OPERATIVE);
+              var approveData = opIface.encodeFunctionData('setApprovalForAll', [gatewayAddress, true]);
+              var approveTxHash = await sendTxWithRetry('prog-approve', 'Set gateway approval', mintedOpContract, approveData);
+              setProgStep('prog-approve', 'Confirming tx...', 'active');
+              var approveReceipt = await waitForReceipt(approveTxHash);
+              if (approveReceipt.status === 'timeout') {
+                setProgStep('prog-approve', 'Tx sent — verify on BaseScan (' + approveTxHash.substring(0, 10) + '...)', 'done');
+              } else {
+                setProgStep('prog-approve', 'Gateway approved', 'done');
+                gatewayApproved = true;
+              }
+            } catch (approveErr) {
+              console.error('[Creator] Gateway approval failed:', approveErr);
+              setProgStep('prog-approve', '⚠️ Failed — use Fix tool below (' + (approveErr.message || '').substring(0, 60) + ')', 'error');
+              showToast('Gateway approval failed. Use the Fix Gateway Approval tool after results load.', 'error');
+            }
           }
         } else if (opType === OP_TYPES.FREE) {
           setProgStep('prog-approve', 'Skipped (free content)', 'done');
@@ -2869,6 +3184,8 @@
         showToast('Connect your wallet first', 'error');
         return;
       }
+
+      var channelWalletChoice = await showWalletChoice('Choose Wallet for Channel');
       var channelName = (dom.assetTitle.value.trim() || 'My PC2') + ' Channel';
       btnCreateChannel.disabled = true;
       btnCreateChannel.textContent = 'Creating...';
@@ -2878,7 +3195,7 @@
       try {
         channelHint.textContent = 'Confirm transaction in wallet...';
         var channelDesc = dom.assetDescription.value.trim() || 'Digital assets channel on PC2';
-        var result = await doCreateChannel(channelName, channelDesc);
+        var result = await doCreateChannel(channelName, channelDesc, channelWalletChoice);
         showToast('Channel created: ' + result.address.substring(0, 10) + '...', 'success');
         state.channelsLoaded = false;
         await loadChannels(state.walletAddress);
@@ -2893,21 +3210,25 @@
           }
         }
         if (!found) {
-          var newGroup = dom.assetChannel.querySelector('optgroup[label^="Your"]');
+          var ownerLabel = result.ownerType === 'sa' ? 'Agent Account' : 'Wallet';
+          var newGroup = dom.assetChannel.querySelector('optgroup[data-group="' + result.ownerType + '"]');
           if (!newGroup) {
             newGroup = document.createElement('optgroup');
-            newGroup.label = 'Your Channels (1)';
+            newGroup.label = 'Your Channels — ' + ownerLabel + ' (1)';
+            newGroup.setAttribute('data-group', result.ownerType);
             dom.assetChannel.insertBefore(newGroup, dom.assetChannel.firstChild);
           }
           var newOpt = document.createElement('option');
           newOpt.value = result.address;
+          newOpt.setAttribute('data-owner', result.ownerType);
           newOpt.textContent = result.name + ' (' + result.address.substring(0, 8) + '...)';
           newGroup.appendChild(newOpt);
         }
 
         dom.assetChannel.value = result.address;
         dom.assetChannelCustom.classList.add('hidden');
-        channelHint.textContent = 'Your channel: ' + result.address.substring(0, 10) + '... (you have full minting rights)';
+        var walletLabel = result.ownerType === 'sa' ? 'Agent Account' : 'EOA Wallet';
+        channelHint.textContent = 'Your channel: ' + result.address.substring(0, 10) + '... (' + walletLabel + ' — full minting rights)';
         channelHint.className = 'field-hint success';
       } catch (err) {
         channelHint.textContent = 'Channel creation failed: ' + (err.message || '').substring(0, 80);
@@ -2919,11 +3240,20 @@
       }
     });
 
-    // Channel dropdown: toggle custom address input
     dom.assetChannel.addEventListener('change', function () {
       var isCustom = dom.assetChannel.value === '__custom__';
       dom.assetChannelCustom.classList.toggle('hidden', !isCustom);
-      if (isCustom) dom.assetChannelCustom.focus();
+      if (isCustom) {
+        dom.assetChannelCustom.focus();
+        return;
+      }
+      var ownerType = getChannelOwnerType(dom.assetChannel);
+      var hint = document.getElementById('channel-hint');
+      if (hint && ownerType) {
+        var label = ownerType === 'sa' ? 'Agent Account' : 'EOA Wallet';
+        hint.textContent = 'Channel selected (' + label + ') — minting will use ' + label + '.';
+        hint.className = 'field-hint success';
+      }
     });
 
     // Reseller cut slider
@@ -3211,7 +3541,6 @@
       // Fees are handled internally during mint — no separate display needed
     });
 
-    // Sign & Mint: user clicks after reviewing legal checkboxes — unblocks the pipeline
     var btnSignMint = document.getElementById('btn-sign-mint');
     if (btnSignMint) {
       btnSignMint.addEventListener('click', function () {
@@ -3481,6 +3810,13 @@
         if (channel && ethers.isAddress(channel)) {
           setProgStep('prog-mint', 'Preparing...', 'active');
 
+          var draftWalletChoice = getChannelOwnerType(dom.assetChannel) || (hasSmartAccount() ? 'sa' : 'eoa');
+          if (!getChannelOwnerType(dom.assetChannel)) {
+            draftWalletChoice = await showWalletChoice('Choose Wallet for Minting');
+          }
+          state.walletChoice = draftWalletChoice;
+          var draftEffectiveAddr = getEffectiveAddress(draftWalletChoice);
+
           try {
             await window.ethereum.request({
               method: 'wallet_switchEthereumChain',
@@ -3492,19 +3828,23 @@
 
           var gatewayAddress = await getChannelAuthority(channel);
 
-          // Verify MINTER_ROLE
           var MINTER_ROLE = ethers.keccak256(ethers.toUtf8Bytes('MINTER_ROLE'));
+          var draftNeedsGrant = false;
           try {
             var roleData = new ethers.Interface(['function hasRole(bytes32,address) view returns (bool)'])
-              .encodeFunctionData('hasRole', [MINTER_ROLE, state.walletAddress]);
+              .encodeFunctionData('hasRole', [MINTER_ROLE, draftEffectiveAddr]);
             var roleResult = await rpcCall(channel, roleData);
-            var hasRole = roleResult !== '0x' + '0'.repeat(64);
-            if (!hasRole) {
-              setProgStep('prog-mint', 'Granting MINTER_ROLE...', 'active');
-              var grantIface = new ethers.Interface(['function grantRole(bytes32,address)']);
-              var grantData = grantIface.encodeFunctionData('grantRole', [MINTER_ROLE, state.walletAddress]);
-              var grantTxHash = await sendTxWithRetry('prog-mint', 'Grant MINTER_ROLE', channel, grantData);
-              await waitForReceipt(grantTxHash);
+            var hasRoleResult = roleResult !== '0x' + '0'.repeat(64);
+            if (!hasRoleResult) {
+              if (draftWalletChoice === 'sa') {
+                draftNeedsGrant = true;
+              } else {
+                setProgStep('prog-mint', 'Granting MINTER_ROLE...', 'active');
+                var grantIface = new ethers.Interface(['function grantRole(bytes32,address)']);
+                var grantData = grantIface.encodeFunctionData('grantRole', [MINTER_ROLE, state.walletAddress]);
+                var grantTxHash = await sendTxWithRetry('prog-mint', 'Grant MINTER_ROLE', channel, grantData);
+                await waitForReceipt(grantTxHash);
+              }
             }
           } catch (roleCheckErr) {
             if (roleCheckErr.message.includes('MINTER_ROLE')) throw roleCheckErr;
@@ -3520,7 +3860,7 @@
             ? encodeOpRawData({
                 contentId: encryptHash,
                 metadataCID: metaCid,
-                creatorAddress: state.walletAddress,
+                creatorAddress: draftEffectiveAddr,
                 copies: copies,
                 opType: opType,
                 resellerCut: draft.reseller_cut || 1000,
@@ -3534,65 +3874,136 @@
           var iface = new ethers.Interface(ABI.DIGITAL_ASSET);
           var mintData = iface.encodeFunctionData('mint', [metaCid, opType, opRawData, sellRawData]);
 
-          mintTxHash = await sendTxWithRetry('prog-mint', 'Mint on Channel contract', channel, mintData, feeInfo.fee);
-          setProgStep('prog-mint', 'Confirming tx...', 'active');
-          var mintReceipt = await waitForReceipt(mintTxHash);
-
-          if (mintReceipt.status === '0x0' || mintReceipt.status === 0) {
-            throw new Error('Mint transaction reverted');
-          }
-
-          var assetEvent = parseAssetCreatedEvent(mintReceipt, channel);
-          if (assetEvent) {
-            mintedTokenId = assetEvent.tokenId;
-            mintedOpContract = assetEvent.opContract;
-          }
-
-          if (!mintedTokenId) {
-            try {
-              var supplyData = iface.encodeFunctionData('totalSupply', []);
-              var supplyResult = await rpcCall(channel, supplyData);
-              var supplyDecoded = iface.decodeFunctionResult('totalSupply', supplyResult);
-              mintedTokenId = supplyDecoded[0].toString();
-            } catch (tsErr) {
-              console.warn('[Creator] Could not get totalSupply:', tsErr.message);
+          if (draftWalletChoice === 'sa' && hasSmartAccount()) {
+            if (draftNeedsGrant) {
+              var dgIface = new ethers.Interface(ABI.ACCESS_CONTROL);
+              var dgData = dgIface.encodeFunctionData('grantRole', [MINTER_ROLE, smartAccountAddress]);
+              var dgTxHash = await sendTxWithRetry('prog-mint', 'Grant MINTER_ROLE to Agent Account (EOA tx)', channel, dgData, 0);
+              setProgStep('prog-mint', 'Confirming role grant...', 'active');
+              await waitForReceipt(dgTxHash);
             }
-          }
 
-          // On-chain fallback for operative
-          if (!mintedOpContract && mintedTokenId && opType !== OP_TYPES.FREE) {
-            try {
-              var opLookupData = iface.encodeFunctionData('operativeOf', [mintedTokenId]);
-              var opLookupResult = await rpcCall(channel, opLookupData);
-              var opDecoded = iface.decodeFunctionResult('operativeOf', opLookupResult);
-              if (opDecoded[0] && opDecoded[0] !== ethers.ZeroAddress) {
-                mintedOpContract = opDecoded[0];
+            var draftBatchTxs = [];
+            var draftMintFee = feeInfo.fee && BigInt(feeInfo.fee) > 0n ? '0x' + BigInt(feeInfo.fee).toString(16) : '0x0';
+            draftBatchTxs.push({ to: channel, data: mintData, value: draftMintFee });
+
+            setProgStep('prog-mint', 'Confirm in wallet (Agent Account batch)...', 'active');
+            var draftBatchResult = await parentExecuteSmartAccountBatch(BASE_CHAIN_ID, draftBatchTxs, []);
+            mintTxHash = draftBatchResult.transactionHash || draftBatchResult.transactionId;
+            console.log('[Creator] Draft SA batch — txHash:', draftBatchResult.transactionHash, 'txId:', draftBatchResult.transactionId);
+
+            setProgStep('prog-mint', 'Waiting for on-chain confirmation...', 'active');
+            var draftPollStart = Date.now();
+            while (Date.now() - draftPollStart < 90000) {
+              await new Promise(function (r) { setTimeout(r, 4000); });
+              try {
+                var dBlkR = await fetch(BASE_RPC, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_blockNumber', params: [] }) });
+                var dBlkJ = await dBlkR.json();
+                var dCurBlk = parseInt(dBlkJ.result, 16);
+                var dLogsR = await fetch(BASE_RPC, {
+                  method: 'POST', headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_getLogs', params: [{ address: channel, fromBlock: '0x' + Math.max(0, dCurBlk - 30).toString(16), toBlock: 'latest' }] }),
+                });
+                var dLogsJ = await dLogsR.json();
+                var dChLogs = dLogsJ.result || [];
+                if (dChLogs.length > 0) {
+                  var dRealHash = dChLogs[dChLogs.length - 1].transactionHash;
+                  var dRcpt = await fetch(BASE_RPC, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_getTransactionReceipt', params: [dRealHash] }),
+                  });
+                  var dRcptJ = await dRcpt.json();
+                  if (dRcptJ.result && dRcptJ.result.logs && dRcptJ.result.logs.length > 0) {
+                    var dParsed = parseAssetCreatedEvent(dRcptJ.result, channel);
+                    if (dParsed) {
+                      mintedTokenId = dParsed.tokenId;
+                      mintedOpContract = dParsed.opContract;
+                      if (mintedOpContract === ethers.ZeroAddress) mintedOpContract = null;
+                      mintTxHash = dRealHash;
+                      console.log('[Creator] Draft SA from receipt — tokenId:', mintedTokenId, 'opContract:', mintedOpContract);
+                      break;
+                    }
+                  }
+                }
+              } catch (dPollErr) {
+                console.warn('[Creator] Draft SA poll error:', dPollErr.message);
               }
-            } catch (opLookupErr) {
-              console.warn('[Creator] operativeOf lookup failed:', opLookupErr.message);
+              setProgStep('prog-mint', 'Waiting for on-chain confirmation...', 'active');
+            }
+          } else {
+            mintTxHash = await sendTxWithRetry('prog-mint', 'Mint on Channel contract', channel, mintData, feeInfo.fee);
+            setProgStep('prog-mint', 'Confirming tx...', 'active');
+            var mintReceipt = await waitForReceipt(mintTxHash);
+
+            if (mintReceipt.status === '0x0' || mintReceipt.status === 0) {
+              throw new Error('Mint transaction reverted');
+            }
+
+            var assetEvent = parseAssetCreatedEvent(mintReceipt, channel);
+            if (assetEvent) {
+              mintedTokenId = assetEvent.tokenId;
+              mintedOpContract = assetEvent.opContract;
+            }
+
+            if (!mintedTokenId) {
+              try {
+                var supplyData = iface.encodeFunctionData('totalSupply', []);
+                var supplyResult = await rpcCall(channel, supplyData);
+                var supplyDecoded = iface.decodeFunctionResult('totalSupply', supplyResult);
+                mintedTokenId = supplyDecoded[0].toString();
+              } catch (tsErr) {
+                console.warn('[Creator] Could not get totalSupply:', tsErr.message);
+              }
+            }
+
+            if (!mintedOpContract && mintedTokenId && opType !== OP_TYPES.FREE) {
+              try {
+                var opLookupData = iface.encodeFunctionData('operativeOf', [mintedTokenId]);
+                var opLookupResult = await rpcCall(channel, opLookupData);
+                var opDecoded = iface.decodeFunctionResult('operativeOf', opLookupResult);
+                if (opDecoded[0] && opDecoded[0] !== ethers.ZeroAddress) {
+                  mintedOpContract = opDecoded[0];
+                }
+              } catch (opLookupErr) {
+                console.warn('[Creator] operativeOf lookup failed:', opLookupErr.message);
+              }
             }
           }
 
           setProgStep('prog-mint', mintedTokenId ? 'Token #' + mintedTokenId + ' minted' : 'Minted', 'done');
 
-          // Gateway approval
           var gatewayApproved = false;
           if (mintedOpContract && mintedOpContract !== ethers.ZeroAddress) {
-            try {
-              setProgStep('prog-approve', 'Waiting for chain to settle...', 'active');
-              await new Promise(function (r) { setTimeout(r, 5000); });
-              setProgStep('prog-approve', 'Approving gateway...', 'active');
-              var opIface = new ethers.Interface(ABI.OPERATIVE);
-              var approveData = opIface.encodeFunctionData('setApprovalForAll', [gatewayAddress, true]);
-              var approveTxHash = await sendTxWithRetry('prog-approve', 'Gateway approval', mintedOpContract, approveData);
-              var approveReceipt = await waitForReceipt(approveTxHash);
-              if (approveReceipt.status !== '0x0' && approveReceipt.status !== 0) {
+            if (draftWalletChoice === 'sa' && hasSmartAccount()) {
+              try {
+                setProgStep('prog-approve', 'Approving gateway (Agent Account)...', 'active');
+                await new Promise(function (r) { setTimeout(r, 3000); });
+                var draftOpIface = new ethers.Interface(ABI.OPERATIVE);
+                var draftApproveData = draftOpIface.encodeFunctionData('setApprovalForAll', [gatewayAddress, true]);
+                await parentExecuteSmartAccountBatch(BASE_CHAIN_ID, [{ to: mintedOpContract, data: draftApproveData, value: '0x0' }], []);
                 setProgStep('prog-approve', 'Gateway approved', 'done');
                 gatewayApproved = true;
+              } catch (approveErr) {
+                setProgStep('prog-approve', 'Failed — use Fix tool below', 'error');
+                showToast('Gateway approval failed. Use Fix Gateway Approval tool.', 'error');
               }
-            } catch (approveErr) {
-              setProgStep('prog-approve', 'Failed — use Fix tool below', 'error');
-              showToast('Gateway approval failed. Use Fix Gateway Approval tool.', 'error');
+            } else {
+              try {
+                setProgStep('prog-approve', 'Waiting for chain to settle...', 'active');
+                await new Promise(function (r) { setTimeout(r, 5000); });
+                setProgStep('prog-approve', 'Approving gateway...', 'active');
+                var opIface = new ethers.Interface(ABI.OPERATIVE);
+                var approveData = opIface.encodeFunctionData('setApprovalForAll', [gatewayAddress, true]);
+                var approveTxHash = await sendTxWithRetry('prog-approve', 'Gateway approval', mintedOpContract, approveData);
+                var approveReceipt = await waitForReceipt(approveTxHash);
+                if (approveReceipt.status !== '0x0' && approveReceipt.status !== 0) {
+                  setProgStep('prog-approve', 'Gateway approved', 'done');
+                  gatewayApproved = true;
+                }
+              } catch (approveErr) {
+                setProgStep('prog-approve', 'Failed — use Fix tool below', 'error');
+                showToast('Gateway approval failed. Use Fix Gateway Approval tool.', 'error');
+              }
             }
           } else if (opType !== OP_TYPES.FREE) {
             setProgStep('prog-approve', 'Operative not detected — use Fix tool below', 'error');

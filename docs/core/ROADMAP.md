@@ -2,7 +2,7 @@
 
 > **Purpose:** Single source of truth for all strategic goals, technical work streams, and milestones — directly mapped to the Keystone Fund proposal and Rong Chen's original vision
 > **Created:** 2026-02-24
-> **Last Updated:** 2026-03-26
+> **Last Updated:** 2026-03-27
 > **Status:** Living document — update as work progresses
 
 ---
@@ -179,6 +179,7 @@ These diagrams from Rong define the north star. Every work stream should move us
   - [x] Capacity credit auto-detection — queries Chronicle Yellowstone for latest valid RLI token, handles 15-day rotation *(implemented Mar 14)*
   - [x] Inline image rendering — decrypted content rendered as blob URL in Market dApp *(implemented Mar 14)*
   - [x] Gateway approval hardening — 5s delay, try-catch, "Fix Gateway Approval" tool *(implemented Mar 14)*
+  - [x] **Agent Wallet (Smart Account) minting** — Full SA batch minting via `parentExecuteSmartAccountBatch`, dual-wallet channel creation (EOA/SA), channel-dictated wallet selection, Universal Account transaction hash resolution (extract real Base tx hash from `eth_getLogs` entries), full receipt parsing for `tokenId` + `opContract`, retry mechanism for SA batch failures with inline Retry/Cancel buttons *(completed Mar 27)*
   - [x] End-to-end decrypt test with capacity credits — **WORKING** (Lit Payment Delegation via Relayer API, Test 13 image + Test 14 PDF verified)
   - [x] Universal asset viewer — **server-side secure viewer** for images (Sharp), PDFs (PDF.js+Canvas hybrid), text (Canvas) with watermarking, buffer zeroing, auto-decrypt, parallel PDF page loading *(completed Mar 15)*
   - [x] **WASM Renderer** — Rust crate compiled to `wasm32-wasip1` for text rendering inside isolated WASM linear memory + `WASMRuntime.ts` Node.js WASI host *(completed Mar 15)*
@@ -235,6 +236,18 @@ These diagrams from Rong define the north star. Every work stream should move us
   - [x] **My Channels management hub (Mar 20)** — New tab in Earnings with channel list, "Edit Details" / "Manage Plans" buttons, centralized channel administration. Server-side `creator` filter via `ChannelQueryInput`. GraphQL schema introspection for correct mutation formats (`SubscriptionPlanUpdateAction.args` wrapper, `TokenOwnershipInput` field names, `price` as String)
   - [x] **API hardening (Mar 20)** — Enhanced `gql()` error handling captures response body for non-200 errors, debug logging on mutations, auto SIWE re-auth on expired tokens, `RETRIEVE_CHANNEL_QUERY` now includes `categories` field
   - [x] **Audio routing fix** — Creator Dashboard routes all audio through media encoding pipeline (DASH/CENC). Audio passthrough in dDRM Viewer retained as legacy fallback only. New audio always goes through Media Runtime *(verified Mar 21)*
+**Runtime Player Unification (Next Priority):**
+- [ ] **Use Rust DDRM player for general media** — The existing Rust-based Media Runtime player should handle ALL video and audio playback, not just dDRM-protected content. When no dDRM contract/operative is detected, play the content directly without decryption. Eliminates the need for separate general media players
+- [ ] **Use DDRM viewer for general documents** — Route PDF and document viewing through the existing dDRM Viewer app. When no dDRM protection is detected, render the content directly. Text files excluded (keep using editor for editability)
+- [ ] **Unified file-open routing** — Update GUI file type handlers to route video/audio/PDF through runtime players by default, falling back gracefully when no dDRM contract exists
+
+**Enhanced Channel Creation UX (Next Priority):**
+- [ ] **Channel-first workflow** — Channel creation/selection should be the first step in the Creator Dashboard before uploading content. If user has no channels, prompt to create one before proceeding
+- [ ] **Rich channel creation form** — Add fields for channel name, description, and metadata during creation (not just a bare contract deploy). Leverage existing `createChannel()` metadata capabilities
+- [ ] **Subscription model integration** — Expose subscription plan configuration during channel creation, leveraging existing subscription lifecycle flows (plan management, token-gating)
+- [x] **Wallet choice in channel creation** — Users can create channels with either EOA or Agent Wallet *(completed Mar 27)*
+- [ ] **Channel management from Creator** — Edit channel details, manage plans, and configure access directly from the Creator Dashboard without switching to the Market app
+
 - [ ] **Tier 2 — Medium Markets (local runtime integration):** dApp Store, AI models (GGUF → Ollama), code packages (npm), datasets, HTML5 games. Need PC2 backend endpoints for decrypt-and-load.
 - [ ] **Tier 3 — Complex Markets (ElastOS Runtime v2):** Native software/games, API marketplace, agent marketplace. Need Runtime capsule sandboxes (WASM/Firecracker). Runtime v2 capsule model provides isolated execution for all interactive content types (3D, games, dApps) — capability tokens replace blob URLs.
 
@@ -258,6 +271,8 @@ These diagrams from Rong define the north star. Every work stream should move us
 **V1 Hardening:**
 - [x] Fix large file upload — was a display bug (total_size*2 removed), uploads were always completing correctly
 - [x] Fix wallpaper not loading via gateway — confirmed resolved after WireGuard reconnect fix
+- [x] **Particle Auth integration** — Dedicated pc2.net Particle project, email/social EOA send, Agent Wallet 3-phase send (create → sign rootHash → submit), signing popup routing for embedded dApps, auto-reconnect guard, dual-jQuery fix, EOA/SA address race condition fix *(completed Mar 25-27)*
+- [x] **dApp Wallet Integration Guide** — Comprehensive docs for Pattern A (embedded postMessage) and Pattern B (standalone ConnectKit), plus Particle Auth reference *(completed Mar 26)*
 - [ ] AV1/Firefox — server-side remuxing for MKV→MP4 (beyond the error message)
 - [ ] Performance profiling on Jetson (memory, CPU, IPFS block store)
 - [x] Reduce PC2 cold-start time — parallelized AI/Gateway/Boson initialization
@@ -995,7 +1010,7 @@ Starting Month 1 (March 2026):
 | Release | Target | Focus |
 |---------|--------|-------|
 | v1.1.0 | March 2026 | Merge Jetson branch, bug fixes, AV1 player |
-| v1.2.0 | April 2026 | **Lit Chipotle dDRM** (non-media DONE, media E2E DONE Mar 18), local media encoding (FFmpeg+WASM CENC+DASH — E2E verified, Python-free), AV1 playback verified (init splitting + PSSH strip), WASM optimization (mp4-split Rust crate, IPFS chunk assembly, decrypt limit 200MB, player UX), **Universal Asset Viewers** (3D models with VFX features, CSV datasets, fonts, archives — Tier 1 completion), audio routing fix (all audio through Media Runtime DASH), supernode provisioning ready (deploy when Lit Chipotle production network goes live), hardware expansion, installer improvements, WireGuard bundling |
+| v1.2.0 | April 2026 | **Lit Chipotle dDRM** (non-media DONE, media E2E DONE Mar 18), local media encoding (FFmpeg+WASM CENC+DASH — E2E verified, Python-free), AV1 playback verified (init splitting + PSSH strip), WASM optimization (mp4-split Rust crate, IPFS chunk assembly, decrypt limit 200MB, player UX), **Universal Asset Viewers** (3D models with VFX features, CSV datasets, fonts, archives — Tier 1 completion), audio routing fix (all audio through Media Runtime DASH), **Particle Auth + Agent Wallet minting** (dual-wallet channel creation, SA batch mint, tx hash resolution — DONE Mar 27), **Runtime player unification** (Rust player for general media, dDRM viewer for general PDFs), **Enhanced channel creation UX** (channel-first workflow, naming/description fields, subscription model), supernode provisioning ready (deploy when Lit Chipotle production network goes live), hardware expansion, installer improvements, WireGuard bundling |
 | v1.3.0 | May 2026 | IPFS streaming chunk assembly (production reliability — OOM fix for large files on Jetson), AI Model Marketplace alpha (GGUF→Ollama), on-chain content indexer (**DONE** — ContentIndexerService), dApp bundles, `@elacity-js/asset-packager`, **PDR: SDK Extraction (pc2-node/src/sdk/)**, **PDR: Enterprise metadata schema (licensing, aiTraining, provenance types)** |
 | v1.4.0 | June 2026 | Multi-rendition encoding, fiat onramp, AI serialization optimization (MessagePack), signed capsule format (bridge to Runtime), **PDR: Enterprise REST API (/api/v1/*)**, **PDR: Developer documentation (quickstart, OpenAPI)** |
 | v1.5.0 | July 2026 | dApp Store v1 (categories, ratings, HTML5 games), mobile companion alpha, **PDR: Perceptual hashing + hash registry**, **PDR: MCP Server (pc2-node/src/mcp/server.ts)** |

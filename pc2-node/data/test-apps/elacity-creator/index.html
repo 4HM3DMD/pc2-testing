@@ -608,6 +608,32 @@
       </div>
     </div>
 
+    <!-- Wallet choice modal (Agent Account vs EOA) -->
+    <div id="mint-wallet-choice-modal" class="hidden" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:10000;display:flex;align-items:center;justify-content:center;">
+      <div style="background:#1e1e2e;border-radius:12px;padding:24px;max-width:380px;width:90%;color:#e0e0e0;font-family:inherit;">
+        <h3 id="mint-wc-title" style="margin:0 0 4px;font-size:16px;color:#fff;">Choose Wallet</h3>
+        <p style="margin:0 0 16px;font-size:13px;color:#888;">Select which wallet will own the asset</p>
+        <button id="mint-wc-sa" style="display:flex;align-items:center;gap:10px;width:100%;padding:14px 16px;margin-bottom:8px;background:#2a2a3e;border:1px solid #3b82f6;border-radius:8px;cursor:pointer;color:#e0e0e0;font-size:14px;font-family:inherit;text-align:left;">
+          <span style="font-size:18px;">&#x2B22;</span>
+          <span style="flex:1;">
+            <strong style="color:#fff;">Agent Account</strong><br>
+            <span style="font-size:12px;color:#888;" id="mint-wc-sa-addr"></span>
+          </span>
+          <span style="font-size:11px;background:#3b82f6;color:#fff;padding:2px 8px;border-radius:4px;">Recommended</span>
+        </button>
+        <button id="mint-wc-eoa" style="display:flex;align-items:center;gap:10px;width:100%;padding:14px 16px;background:#2a2a3e;border:1px solid #444;border-radius:8px;cursor:pointer;color:#e0e0e0;font-size:14px;font-family:inherit;text-align:left;">
+          <span style="font-size:18px;">&#x1F4B3;</span>
+          <span style="flex:1;">
+            <strong style="color:#fff;">EOA Wallet</strong><br>
+            <span style="font-size:12px;color:#888;" id="mint-wc-eoa-addr"></span>
+          </span>
+        </button>
+      </div>
+    </div>
+    <style>
+      #mint-wallet-choice-modal.hidden { display: none !important; }
+    </style>
+
     <!-- Toast container -->
     <div id="toast-container"></div>
   </div>

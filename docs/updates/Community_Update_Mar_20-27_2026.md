@@ -434,10 +434,53 @@ PC2 is forked from the Puter open-source project. This week, several upstream co
 
 ---
 
+## Wallet Integration — Particle Auth, Agent Wallet & Creator Dashboard
+
+**Why this matters:** For Elacity to be a real marketplace, users need to be able to pay and mint with both their traditional wallet (EOA) and their programmable Agent Wallet (Smart Account). This week, both wallet types became fully functional for the entire creator-to-consumer pipeline.
+
+**What was built:**
+
+### Particle Auth Integration (Mar 25–26)
+- **pc2.net Particle project** — Dedicated Particle Network project (`01cdbdd6`) with email/social login, EOA wallet, and Agent Wallet (Universal Account) support
+- **EOA email send** — Users who log in with email/social can send tokens from their EOA via Particle's MPC-TSS in-app signing popup
+- **Agent Wallet send** — Full 3-phase flow (create → sign rootHash → submit) for Smart Account transactions, with visible signing popup for embedded login users
+- **Signing popup routing** — Transactions from dApps (Market, Creator) now route through a visible Particle signing popup instead of failing silently for email/social logins
+
+### Agent Wallet Minting in Creator Dashboard (Mar 27)
+- **Dual-wallet channel creation** — Channels can be created with either EOA or Agent Wallet. The wallet choice is presented at channel creation time
+- **Channel-dictated wallet selection** — When selecting a channel for minting, the wallet used for payment and minting is automatically determined by which wallet owns the channel
+- **Smart Account batch minting** — Minting via Agent Wallet uses `parentExecuteSmartAccountBatch` to bundle mint + role grant in a single UserOp transaction
+- **Universal Account transaction hash resolution** — Particle's `batchResult.transactionHash` is a Universal Account identifier, not a standard Base chain hash. The system now polls `eth_getLogs` for channel activity, extracts the real Base transaction hash from log entries, and fetches the full receipt for event parsing
+- **Gateway approval for SA mints** — Previously, SA mints would succeed on-chain but gateway approval would fail because the operative contract couldn't be resolved. Now the full transaction receipt (containing all events from all contracts including the factory) is parsed correctly for both `tokenId` and `opContract`
+- **Retry mechanism for SA batch failures** — If `parentExecuteSmartAccountBatch` fails (e.g., "Insufficient balance for gas fees"), inline "Retry" / "Cancel" buttons appear on the progress step, allowing re-attempt without restarting the pipeline
+
+### Documentation
+- **dApp Wallet Integration Guide** — Comprehensive guide for integrating PC2.net wallet capabilities into external dApps (Pattern A: embedded postMessage, Pattern B: standalone Particle ConnectKit)
+- **Particle Auth Reference** — Technical deep-dive into login methods, signing flows, and the critical EOA-vs-Agent-Wallet routing decisions
+
+### Bug Fixes (Mar 25–27)
+- Fixed auto re-login after logout by clearing wagmi/ConnectKit persistence
+- Fixed dual-jQuery calls causing UI freeze after signing popup
+- Fixed EOA/SA address race conditions in market wallet transactions
+- Scoped `disconnect_particle` to wallet mode only
+
+---
+
 ## What's Next
 
 Looking ahead, the immediate priorities are:
 
+### Runtime Player Unification
+- **Use Rust DDRM player for general media** — Currently there are separate players for DDRM-protected content and regular media. The Rust-based runtime player should handle all video and audio playback — if no dDRM contract is detected, it should play the content directly without decryption
+- **Use existing viewers for general documents** — PDFs and other document types should also route through the existing DDRM viewer when opened, playing content directly if no protection is detected. Text files remain in the editor (useful for editing)
+
+### Enhanced Channel Creation UX
+- **Channel-first workflow** — Channel creation/selection should be the first step before uploading content. If a user has no channels, they should be prompted to create one
+- **Rich channel creation form** — Support channel naming, description, and metadata fields during creation (not just a bare contract deploy)
+- **Subscription model integration** — Channel creation should expose subscription plan configuration, leveraging the existing subscription lifecycle flows
+- **Wallet choice in channel creation** — Users should be able to create channels with either EOA or Agent Wallet (already implemented, to be enhanced with the richer form)
+
+### Continued Priorities
 1. **V3 Contract Migration** — When new Elacity V3 contracts deploy, update ABIs and addresses in the Creator Dashboard
 2. **Lit Protocol Mainnet** — When Chipotle goes to mainnet, update endpoints and test end-to-end
 3. **Large File Encryption** — Verify the pipeline handles 4–70GB AI model files (GGUFs) with streaming encryption
@@ -466,4 +509,4 @@ Looking ahead, the immediate priorities are:
 
 ---
 
-*This update covers all work from March 20–27, 2026 across the `feature/lit-chipotle-migration` branch (primary development) and the `upstream/main` branch (Puter upstream contributions).*
+*This update covers all work from March 20–27, 2026 across the `feature/lit-chipotle-migration` branch, the `fix/wallet-transaction-flows` branch (wallet integration and SA minting), and the `upstream/main` branch (Puter upstream contributions).*
