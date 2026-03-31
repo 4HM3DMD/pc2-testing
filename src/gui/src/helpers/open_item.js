@@ -185,7 +185,7 @@ Please try recreating the link.`);
                             encryptedDataCid:  descriptor.encryptedDataCid,
                             iv:                descriptor.iv || '',
                             kid:               descriptor.kid,
-                            buyerAddress:      descriptor.acquiredBy || '',
+                            buyerAddress:      (window.user && window.user.smart_account_address) || descriptor.acquiredBy || '',
                             mimeType:          descriptor.mimeType || 'application/octet-stream',
                             title:             descriptor.title || 'Untitled',
                             actionCid:         descriptor.actionCid || '',

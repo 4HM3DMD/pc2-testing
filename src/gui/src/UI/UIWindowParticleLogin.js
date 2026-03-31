@@ -660,7 +660,7 @@ async function UIWindowParticleLogin(options = {}) {
             
             // Show success notification
             if (typeof UINotification !== 'undefined') {
-                const authType = user.auth_type === 'universalx' ? 'UniversalX Smart Account' : 'wallet';
+                const authType = user.auth_type === 'universalx' ? 'Agent Account' : 'wallet';
                 new UINotification({
                     type: 'success',
                     message: `Successfully logged in with ${authType}`,

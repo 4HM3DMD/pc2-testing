@@ -2788,8 +2788,8 @@ $(document).on('click', '.user-options-menu-btn', async function (e) {
         // Show smart_account_address (UniversalX) second if it exists (display-only, no hover/click)
         if (window.user.smart_account_address) {
             const displayName = window.user.smart_account_address.slice(0, 10) + '...' + window.user.smart_account_address.slice(-8);
-            const subtitle = '<span style="display:block;font-size:10px;color:#666;margin-top:2px;margin-left:25px;padding-left:0;text-align:left;">UniversalX Smart Account</span>';
-            // Smart Account icon (shield with bolt)
+            const subtitle = '<span style="display:block;font-size:10px;color:#666;margin-top:2px;margin-left:25px;padding-left:0;text-align:left;">Agent Account</span>';
+            // Agent Account icon (shield with bolt)
             const smartIconSvg = `<svg style="width:16px;height:16px;vertical-align:middle;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M13 6l-4 6h3l-1 6 4-6h-3l1-6z" fill="currentColor" stroke="none"/></svg>`;
             items.push({
                 html: displayName + subtitle,
@@ -2798,7 +2798,7 @@ $(document).on('click', '.user-options-menu-btn', async function (e) {
                 onClick: async function () {}
             });
         }
-        // Invisible spacer (no visible line) so UniversalX Smart Account text is not obscured by Switch Account
+        // Invisible spacer (no visible line) so Agent Account text is not obscured by Switch Account
         if (window.logged_in_users.length > 0 || otherAccounts.length > 0) {
             items.push('-');
         }
@@ -2866,14 +2866,14 @@ $(document).on('click', '.user-options-menu-btn', async function (e) {
                 return;
             }
             
-            // For wallet users, show Smart Account address if available, else EOA
+            // For wallet users, show Agent Account address if available, else EOA
             let displayName = l_user.username;
             let subtitle = '';
             
             if (l_user.smart_account_address) {
-                // Show Smart Account (truncated) with "Smart" label
+                // Show Agent Account (truncated) with label
                 displayName = l_user.smart_account_address.slice(0, 10) + '...' + l_user.smart_account_address.slice(-8);
-                subtitle = '<span style="display:block;font-size:10px;color:#666;margin-top:2px;margin-left:25px;padding-left:0;text-align:left;">UniversalX Smart Account</span>';
+                subtitle = '<span style="display:block;font-size:10px;color:#666;margin-top:2px;margin-left:25px;padding-left:0;text-align:left;">Agent Account</span>';
             } else if (l_user.wallet_address) {
                 // Show EOA address (truncated)
                 displayName = l_user.wallet_address.slice(0, 10) + '...' + l_user.wallet_address.slice(-8);

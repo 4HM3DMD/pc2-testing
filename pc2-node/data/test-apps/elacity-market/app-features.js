@@ -26,14 +26,14 @@
     var hasSA = Wallet.hasSmartAccount() && saAddr && saAddr.toLowerCase() !== eoaAddr.toLowerCase();
 
     var fetches = [
-      ElacityAPI.fetchRewardSummary(eoaAddr, 'Assets').catch(function () { return []; }),
-      ElacityAPI.fetchRewardSummary(eoaAddr, 'Channels').catch(function () { return []; }),
+      ElacityAPI.fetchRewardSummary(eoaAddr, 'assets').catch(function () { return []; }),
+      ElacityAPI.fetchRewardSummary(eoaAddr, 'channels').catch(function () { return []; }),
       ElacityAPI.searchOfferEvents(null, null, 50).catch(function () { return []; }),
       ElacityAPI.searchIncomingOfferEvents(null, null, 50).catch(function () { return []; })
     ];
     if (hasSA) {
-      fetches.push(ElacityAPI.fetchRewardSummary(saAddr, 'Assets').catch(function () { return []; }));
-      fetches.push(ElacityAPI.fetchRewardSummary(saAddr, 'Channels').catch(function () { return []; }));
+      fetches.push(ElacityAPI.fetchRewardSummary(saAddr, 'assets').catch(function () { return []; }));
+      fetches.push(ElacityAPI.fetchRewardSummary(saAddr, 'channels').catch(function () { return []; }));
     }
 
     Promise.all(fetches).then(function (results) {
@@ -48,10 +48,10 @@
       }
 
       var assetCount = 0; var seenA = {};
-      assetRewards.forEach(function (r) { if (!seenA[r.address] && r.unclaimedRewards > 0) { seenA[r.address] = true; assetCount++; } });
+      assetRewards.forEach(function (r) { if (!seenA[r.name] && r.unclaimedRewards > 0) { seenA[r.name] = true; assetCount++; } });
 
       var channelCount = 0; var seenC = {};
-      channelRewards.forEach(function (r) { if (!seenC[r.address] && r.unclaimedRewards > 0) { seenC[r.address] = true; channelCount++; } });
+      channelRewards.forEach(function (r) { if (!seenC[r.name] && r.unclaimedRewards > 0) { seenC[r.name] = true; channelCount++; } });
 
       state._earningsCounts = {
         assets: Math.min(assetCount, 99),

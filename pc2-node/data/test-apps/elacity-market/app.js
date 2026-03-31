@@ -377,7 +377,7 @@
     var decimals = getTokenSymbol(payToken) === 'USDC' ? 6 : 18;
     var displayPrice = rawPrice != null ? rawPrice / Math.pow(10, decimals) : null;
     return Object.assign({}, asset, {
-      contractAddress: asset.address,
+      contractAddress: asset.address || (asset.channel && asset.channel.address) || '',
       hexTokenID: tid.hexTokenID || '',
       tokenID: tid.tokenID != null ? tid.tokenID : 0,
       price: displayPrice,
@@ -418,8 +418,8 @@
   function getBuyerAddressForAsset(nft) {
     var wallet = getAssetOwnerWallet(nft);
     if (wallet === 'eoa') return Wallet.getAddress();
-    if (wallet === 'sa') return Wallet.getSignerAddress();
-    return Wallet.getAddress();
+    if (wallet === 'sa' || wallet === 'both') return Wallet.getSignerAddress();
+    return Wallet.getSignerAddress();
   }
 
   function escapeHtml(text) {
@@ -1367,7 +1367,7 @@
     var dataToEncryptHash = rawAsset.dataToEncryptHash || '';
     var iv = rawAsset.iv || '';
     var encryptedDataCid = (rawAsset.uri || rawAsset.cid || '').replace('ipfs://', '');
-    var buyerAddress = Wallet.isConnected() ? Wallet.getAddress() : '';
+    var buyerAddress = Wallet.isConnected() ? (getBuyerAddressForAsset(nft) || Wallet.getAddress()) : '';
     var authority = rawAsset.authority || '';
     var chainId = rawAsset.chainId || 8453;
 
@@ -1927,7 +1927,7 @@
 
       if (hasSA && saAddr) {
         html += '<div class="wallet-picker-option' + (saBal > 0 && eoaBal === 0 ? ' selected' : '') + (saBal === 0 ? ' disabled' : '') + '" data-wallet="sa">';
-        html += '<span class="wallet-picker-label">Smart Account</span>';
+        html += '<span class="wallet-picker-label">Agent Account</span>';
         html += '<span class="wallet-picker-balance">' + saBal + ' token' + (saBal !== 1 ? 's' : '') + '</span>';
         html += '<span class="wallet-picker-addr">' + formatAddress(saAddr) + '</span>';
         html += '</div>';
@@ -3083,7 +3083,7 @@
     walletChoicePromise
       .then(function (walletChoice) {
         state.purchasing = true;
-        setBuyButtonState('waiting', walletChoice === 'eoa' ? 'Switching to Base chain…' : 'Preparing Smart Account…');
+        setBuyButtonState('waiting', walletChoice === 'eoa' ? 'Switching to Base chain…' : 'Preparing Agent Account…');
 
         var chainReady = walletChoice === 'eoa'
           ? (Wallet.switchToBase ? Wallet.switchToBase() : Promise.resolve())
@@ -3218,7 +3218,7 @@
       ledger: props.ledger || nft.contractAddress || '',
       thumbnail: thumbnailUrl,
       acquiredAt: new Date().toISOString(),
-      acquiredBy: Wallet.getAddress() || '',
+      acquiredBy: Wallet.getSignerAddress() || Wallet.getAddress() || '',
     };
 
     if (nonMedia) {
@@ -3295,7 +3295,7 @@
     var tokenId = (nft.tokenId && nft.tokenId.hexTokenID) || nft.tokenId || '0';
     var title = meta.name || nft.name || 'Untitled';
     var safeName = title.replace(/[^a-zA-Z0-9 _\-]/g, '').substring(0, 80).trim() || 'media';
-    var walletAddr = Wallet.getAddress() || '';
+    var walletAddr = (Wallet.getAddress() || '').toLowerCase();
     var nonMedia = isNonMediaAsset(nft);
     var assetMime = (asset.mimeType || media.contentType || '').toLowerCase();
     var folder = nonMedia

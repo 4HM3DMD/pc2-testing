@@ -419,7 +419,6 @@ var ElacityAPI = (function () {
         offset\n\
         limit\n\
         items {\n\
-          address\n\
           tokenId\n\
           tokenURI\n\
           name\n\
@@ -835,7 +834,6 @@ var ElacityAPI = (function () {
   var FETCH_REWARD_SUMMARY_QUERY = '\
     query FetchRewardSummary($address: String!, $category: RewardsCategory!) {\n\
       rewards: fetchRewardSummaryByAddress(address: $address, category: $category) {\n\
-        address\n\
         name\n\
         unclaimedRewards\n\
         distributions {\n\

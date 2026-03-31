@@ -448,7 +448,7 @@ const en = {
         'server_timeout': 'The server took too long to respond. Please try again.',
         'signup_error': 'An error occurred during signup. Please try again.',
         wallet_address: 'Wallet Address',
-        smart_account_address: 'Smart Account',
+        smart_account_address: 'Agent Account',
         eoa_address: 'EOA Wallet',
 
         // Welcome Window
@@ -995,7 +995,7 @@ const en = {
         'display_name': 'Display Name',
         'admin_wallets': 'Admin Wallets',
         'admin_wallet_eoa': 'Admin Wallet (EOA)',
-        'smart_account': 'Smart Account',
+        'smart_account': 'Agent Account',
         'erc4337_account': 'ERC-4337 Account',
         'elastos_identity': 'Elastos Identity',
         'elastos_did': 'Elastos DID',
@@ -1027,7 +1027,7 @@ const en = {
         'app_store': 'App Store',
         'google_play': 'Google Play',
         'eoa_description': 'Your Externally Owned Account - the original wallet address controlled directly by your private key',
-        'smart_account_description': 'Your ERC-4337 Smart Account - a contract wallet with advanced features like gas sponsorship and batch transactions, owned by your EOA account',
+        'smart_account_description': 'Your Agent Account - a contract wallet with advanced features like gas sponsorship and batch transactions, owned by your EOA account',
         'tether_elastos_did': 'Tether Elastos DID',
         'link_your_did': 'Link Your Elastos DID',
         'verify_identity': 'Verify your decentralized identity',

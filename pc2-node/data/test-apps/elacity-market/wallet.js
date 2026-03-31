@@ -402,9 +402,9 @@ var Wallet = (function () {
     });
   }
 
-  function approveIfNeeded(tokenAddress, amountWei, spender) {
+  function approveIfNeeded(tokenAddress, amountWei, spender, ownerOverride) {
     var iface = new ethers.Interface(ERC20_ABI);
-    var ownerAddr = smartAccountAddress || connectedAddress;
+    var ownerAddr = ownerOverride || smartAccountAddress || connectedAddress;
 
     var allowanceData = iface.encodeFunctionData('allowance', [
       ownerAddr,
@@ -430,8 +430,34 @@ var Wallet = (function () {
         data: approveData
       }).then(function (txHash) {
         return waitForReceipt(txHash);
+      }).then(function () {
+        return waitForAllowance(tokenAddress, ownerAddr, spender, needed);
       });
     });
+  }
+
+  function waitForAllowance(tokenAddress, owner, spender, needed) {
+    var iface = new ethers.Interface(ERC20_ABI);
+    var data = iface.encodeFunctionData('allowance', [owner, spender]);
+    var attempts = 0;
+    var maxAttempts = 15;
+
+    function poll() {
+      return getProvider().request({
+        method: 'eth_call',
+        params: [{ to: tokenAddress, data: data }, 'latest']
+      }).then(function (result) {
+        var current = ethers.getBigInt(result);
+        if (current >= needed) return;
+        attempts++;
+        if (attempts >= maxAttempts) return;
+        return new Promise(function (resolve) {
+          setTimeout(function () { resolve(poll()); }, 1500);
+        });
+      });
+    }
+
+    return poll();
   }
 
   function waitForReceipt(txHash, maxAttempts) {
@@ -516,7 +542,7 @@ var Wallet = (function () {
 
       return getPaymentProcessor(operativeAddr)
         .then(function (approvalTarget) {
-          return approveIfNeeded(payToken, priceWei, approvalTarget);
+          return approveIfNeeded(payToken, priceWei, approvalTarget, connectedAddress);
         })
         .then(function () {
           return parentSendTransaction(buyTx);
@@ -752,7 +778,7 @@ var Wallet = (function () {
       };
 
       if (!isNative) {
-        return approveIfNeeded(payToken, totalPriceWei, TRADE_GATEWAY_ADDRESS)
+        return approveIfNeeded(payToken, totalPriceWei, TRADE_GATEWAY_ADDRESS, connectedAddress)
           .then(function () { return parentSendTransaction(tx); });
       }
       return parentSendTransaction(tx);
@@ -859,7 +885,9 @@ var Wallet = (function () {
         var current = BigInt(result);
         if (current < totalCost) {
           var approveData = erc20Iface.encodeFunctionData('approve', [TRADE_GATEWAY_ADDRESS, totalCost.toString()]);
-          return parentSendTransaction({ to: payToken, data: approveData, value: '0x0' });
+          return parentSendTransaction({ to: payToken, data: approveData, value: '0x0' })
+            .then(function (txHash) { return waitForReceipt(txHash); })
+            .then(function () { return waitForAllowance(payToken, connectedAddress, TRADE_GATEWAY_ADDRESS, totalCost); });
         }
       }).then(function () {
         var tgIface = new ethers.Interface(TRADE_GATEWAY_ABI);
@@ -889,7 +917,8 @@ var Wallet = (function () {
         var isApproved = result !== '0x0000000000000000000000000000000000000000000000000000000000000000';
         if (!isApproved) {
           var setApprovalData = opIface.encodeFunctionData('setApprovalForAll', [TRADE_GATEWAY_ADDRESS, true]);
-          return parentSendTransaction({ to: operativeAddr, data: setApprovalData, value: '0x0' });
+          return parentSendTransaction({ to: operativeAddr, data: setApprovalData, value: '0x0' })
+            .then(function (txHash) { return waitForReceipt(txHash); });
         }
       }).then(function () {
         var tgIface = new ethers.Interface(TRADE_GATEWAY_ABI);
