@@ -78,9 +78,9 @@
   ];
 
   var DEFAULT_PLANS = [
-    { price: '5', payToken: '0x0000000000000000000000000000000000000000', duration: { value: 1, unit: 'months' }, label: '1 Month', description: 'Monthly subscription' },
-    { price: '25.50', payToken: '0x0000000000000000000000000000000000000000', duration: { value: 6, unit: 'months' }, label: '6 Months', description: '6-month subscription with 15% discount' },
-    { price: '45.00', payToken: '0x0000000000000000000000000000000000000000', duration: { value: 12, unit: 'months' }, label: '1 Year', description: 'Annual subscription with 25% discount' },
+    { price: '5', payToken: USDC_BASE, duration: { value: 1, unit: 'months' }, label: '1 Month', description: 'Monthly subscription' },
+    { price: '25.50', payToken: USDC_BASE, duration: { value: 6, unit: 'months' }, label: '6 Months', description: '6-month subscription with 15% discount' },
+    { price: '45.00', payToken: USDC_BASE, duration: { value: 12, unit: 'months' }, label: '1 Year', description: 'Annual subscription with 25% discount' },
   ];
 
   var SUPPLY_TIERS = [
@@ -282,7 +282,7 @@
           if (firstRoyaltyAddr && !firstRoyaltyAddr.value) {
             firstRoyaltyAddr.value = accounts[0];
           }
-          if (state.currentStep >= 2 && !state.channelsLoaded) {
+          if (state.currentStep >= 1 && !state.channelsLoaded) {
             loadChannels(accounts[0]);
           }
         }
@@ -310,7 +310,7 @@
       else if (stepNum < n) s.classList.add('done');
     });
 
-    if (n === 2 && state.walletAddress && !state.channelsLoaded) {
+    if (n === 1 && state.walletAddress && !state.channelsLoaded) {
       loadChannels(state.walletAddress);
     }
     if (n === 2 && state.walletAddress) {
@@ -337,11 +337,83 @@
     return (json.data && json.data.result && json.data.result.data) || [];
   }
 
+  async function retrieveChannelFromBackend(address) {
+    var query = [
+      'query RetrieveChannel($query: ChannelQueryInput) {',
+      '  channel: retrieveChannel(query: $query) {',
+      '    _id name address description channelType categories',
+      '    image imageURL coverImage coverImageURL itemsCount isPublic',
+      '    creator { address }',
+      '    plans { planId label description price payToken duration { unit value } }',
+      '    tokenAccess { address value }',
+      '  }',
+      '}',
+    ].join('\n');
+    var resp = await fetch(ELACITY_BACKEND + '/2.0/graphql', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: query, variables: { query: { address: address } } }),
+    });
+    if (!resp.ok) throw new Error('Failed to retrieve channel: ' + resp.status);
+    var json = await resp.json();
+    if (json.errors && json.errors.length > 0) throw new Error(json.errors[0].message);
+    return (json.data && json.data.channel) || null;
+  }
+
+  async function updateChannelInfoOnBackend(address, input) {
+    var token = await getElacityAuthToken(state.walletAddress);
+    var mutation = [
+      'mutation UpdateChannel($address: String!, $input: ChannelInformationInput!) {',
+      '  channel: updateChannelInformation(address: $address, input: $input) {',
+      '    name description categories image coverImage',
+      '  }',
+      '}',
+    ].join('\n');
+    var resp = await fetch(ELACITY_BACKEND + '/2.0/graphql', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+      body: JSON.stringify({ query: mutation, variables: { address: address, input: input } }),
+    });
+    if (!resp.ok) throw new Error('Update channel failed: ' + resp.status);
+    var json = await resp.json();
+    if (json.errors && json.errors.length > 0) throw new Error(json.errors[0].message);
+    return json.data.channel;
+  }
+
+  async function updateSubscriptionPlanOnBackend(address, actions) {
+    var token = await getElacityAuthToken(state.walletAddress);
+    var mutation = [
+      'mutation UpdatePlan($address: String!, $input: [SubscriptionPlanUpdateAction]!) {',
+      '  updateSubscriptionPlan(address: $address, input: $input) {',
+      '    name plans { planId label price }',
+      '  }',
+      '}',
+    ].join('\n');
+    var resp = await fetch(ELACITY_BACKEND + '/2.0/graphql', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+      body: JSON.stringify({ query: mutation, variables: { address: address, input: actions } }),
+    });
+    if (!resp.ok) throw new Error('Update plans failed: ' + resp.status);
+    var json = await resp.json();
+    if (json.errors && json.errors.length > 0) throw new Error(json.errors[0].message);
+    return json.data.updateSubscriptionPlan;
+  }
+
+  function showChannelStepState(stateId) {
+    var states = document.querySelectorAll('.channel-step-state');
+    states.forEach(function (el) { el.style.display = 'none'; });
+    var target = document.getElementById(stateId);
+    if (target) target.style.display = '';
+  }
+
   async function loadChannels(walletAddress) {
     var select = dom.assetChannel;
     var hint = document.getElementById('channel-hint');
     select.innerHTML = '<option value="">Loading channels...</option>';
     select.disabled = true;
+
+    showChannelStepState('channel-loading');
 
     try {
       var eoaAddr = walletAddress.toLowerCase();
@@ -361,14 +433,17 @@
 
       select.innerHTML = '';
       var hasOwned = eoaChannels.length > 0 || saChannels.length > 0;
+      var hasAny = hasOwned || publicChannels.length > 0;
 
-      if (!hasOwned && publicChannels.length === 0) {
+      if (!hasAny) {
         var defOpt = document.createElement('option');
         defOpt.value = DEFAULT_CHANNEL;
         defOpt.textContent = 'Public Elacity Channel';
         select.appendChild(defOpt);
-        hint.textContent = 'No channels found. Using public Elacity channel (free content only).';
+        hint.textContent = 'No channels found. Create one to start publishing.';
         hint.className = 'field-hint';
+
+        showChannelStepState('channel-empty-state');
       } else {
         if (eoaChannels.length > 0) {
           var group1 = document.createElement('optgroup');
@@ -420,6 +495,8 @@
           hint.textContent = 'Public channels available. Create your own for full minting rights.';
           hint.className = 'field-hint';
         }
+
+        showChannelStepState('channel-select-area');
       }
 
       var customOpt = document.createElement('option');
@@ -427,7 +504,9 @@
       customOpt.textContent = '— Enter address manually —';
       select.appendChild(customOpt);
 
+      select.disabled = false;
       state.channelsLoaded = true;
+      validateStep1();
     } catch (err) {
       console.error('[Creator] Failed to fetch channels:', err);
       select.innerHTML = '<option value="' + DEFAULT_CHANNEL + '">Public Elacity Channel (fallback)</option>';
@@ -437,6 +516,9 @@
       select.appendChild(customFb);
       hint.textContent = 'Could not load channels from Elacity backend. Using default.';
       hint.className = 'field-hint';
+      select.disabled = false;
+      showChannelStepState('channel-select-area');
+      validateStep1();
     }
 
     select.disabled = false;
@@ -534,7 +616,7 @@
     dom.fileMeta.textContent = formatSize(file.size) + ' — ' + (resolvedMime || 'unknown type');
     dom.dropZone.classList.add('hidden');
     dom.filePreview.classList.remove('hidden');
-    dom.btnToStep2.disabled = false;
+    validateStep1();
 
     // Auto-detect category from MIME type
     var autoCategory = '';
@@ -594,7 +676,7 @@
     state.isMediaFile = false;
     dom.dropZone.classList.remove('hidden');
     dom.filePreview.classList.add('hidden');
-    dom.btnToStep2.disabled = true;
+    validateStep1();
     dom.fileInput.value = '';
     var existingBadge = document.getElementById('media-encode-badge');
     if (existingBadge) existingBadge.remove();
@@ -610,18 +692,23 @@
 
   // ── Form validation ───────────────────────────────────
 
+  function validateStep1() {
+    var ch = getSelectedChannel();
+    var hasChannel = ch && ethers.isAddress(ch);
+    var hasFile = !!state.selectedFile;
+    var btn = dom.btnToStep2;
+    if (btn) btn.disabled = !(hasChannel && hasFile);
+  }
+
   function validateStep2() {
     var title = dom.assetTitle.value.trim();
     var category = dom.assetCategory.value;
     var price = parseFloat(dom.assetPrice.value);
     var accessMethod = dom.assetAccess.value;
-    var ch = getSelectedChannel();
-    var hasChannel = ch && ethers.isAddress(ch);
 
     var titleValid = title.length >= 3;
     var categoryValid = !!category;
     var priceValid = accessMethod === 'free' || (!isNaN(price) && price >= 0.001 && price <= 1000000);
-    var channelValid = hasChannel;
 
     var royaltyValid = validateRoyaltyTotal();
     var royaltyHint = document.getElementById('royalty-total-hint');
@@ -637,8 +724,8 @@
       }
     }
 
-    var valid = titleValid && categoryValid && priceValid && channelValid && royaltyValid;
-    dom.btnToStep3.disabled = !valid;
+    var valid = titleValid && categoryValid && priceValid && royaltyValid;
+    if (dom.btnToStep3) dom.btnToStep3.disabled = !valid;
   }
 
   function validateStep3() {
@@ -1381,7 +1468,8 @@
     var planTuples = channelPlans.map(function (p) {
       var durOpt = DURATION_OPTIONS.find(function (d) { return d.value === p.duration.value && d.unit === p.duration.unit; });
       var durationSecs = durOpt ? durOpt.seconds : 2592000;
-      var priceWei = ethers.parseUnits(p.price.toString(), 18);
+      var tokenDecimals = (CURRENCIES.find(function (c) { return c.address === p.payToken; }) || { decimals: 18 }).decimals;
+      var priceWei = ethers.parseUnits(p.price.toString(), tokenDecimals);
       return [0, p.payToken, priceWei, durationSecs, true];
     });
 
@@ -1635,6 +1723,335 @@
     return data.data ? data.data.created : null;
   }
 
+  // ── Tab Switching ──────────────────────────────────────
+
+  function switchTab(tabName) {
+    var mintView = document.getElementById('main');
+    var channelsView = document.getElementById('channels-view');
+    var tabs = document.querySelectorAll('.header-tab');
+    tabs.forEach(function (t) { t.classList.toggle('active', t.getAttribute('data-tab') === tabName); });
+
+    if (tabName === 'mint') {
+      mintView.style.display = '';
+      channelsView.style.display = 'none';
+    } else {
+      mintView.style.display = 'none';
+      channelsView.style.display = '';
+      populateManageChannelSelector();
+    }
+  }
+
+  function populateManageChannelSelector() {
+    var src = document.getElementById('asset-channel');
+    var dst = document.getElementById('manage-channel-select');
+    if (!src || !dst) return;
+
+    var contentEl = document.getElementById('channels-view-content');
+    var loadingEl = document.getElementById('channels-view-loading');
+
+    if (!state.walletAddress || !state.channelsLoaded) {
+      contentEl.style.display = 'none';
+      loadingEl.style.display = '';
+      return;
+    }
+    loadingEl.style.display = 'none';
+    contentEl.style.display = '';
+
+    var prevValue = dst.value;
+    dst.innerHTML = '';
+    var defaultOpt = document.createElement('option');
+    defaultOpt.value = '';
+    defaultOpt.textContent = '— Select a channel to manage —';
+    dst.appendChild(defaultOpt);
+
+    var count = 0;
+    for (var i = 0; i < src.options.length; i++) {
+      var o = src.options[i];
+      if (!o.value || o.value === '__custom__' || !ethers.isAddress(o.value)) continue;
+      if (!o.getAttribute('data-owner')) continue;
+      var opt = document.createElement('option');
+      opt.value = o.value;
+      opt.textContent = o.textContent;
+      dst.appendChild(opt);
+      count++;
+    }
+
+    if (prevValue && dst.querySelector('option[value="' + prevValue + '"]')) {
+      dst.value = prevValue;
+    }
+
+    var emptyMsg = document.getElementById('channels-view-empty');
+    if (emptyMsg) emptyMsg.style.display = count === 0 ? '' : 'none';
+  }
+
+  // ── Channel Management UI ──────────────────────────────
+
+  var managedChannelData = null;
+
+  async function showChannelManagement() {
+    var sel = document.getElementById('manage-channel-select');
+    var addr = sel ? sel.value : '';
+    if (!addr || !ethers.isAddress(addr)) return;
+
+    var section = document.getElementById('channel-manage-section');
+    var loading = document.getElementById('manage-loading');
+    var content = document.getElementById('manage-content');
+    section.style.display = '';
+    loading.style.display = '';
+    content.style.display = 'none';
+
+    try {
+      managedChannelData = await retrieveChannelFromBackend(addr);
+      if (!managedChannelData) throw new Error('Channel not found');
+
+      document.getElementById('manage-channel-name').value = managedChannelData.name || '';
+      document.getElementById('manage-channel-description').value = managedChannelData.description || '';
+
+      loadManagePlans(managedChannelData.plans || []);
+      loadManageTokenGates(managedChannelData.tokenAccess || []);
+
+      loading.style.display = 'none';
+      content.style.display = '';
+    } catch (err) {
+      loading.innerHTML = '<p style="color:var(--error); font-size:13px;">Error: ' + err.message + '</p>';
+    }
+  }
+
+  function hideChannelManagement() {
+    var section = document.getElementById('channel-manage-section');
+    if (section) section.style.display = 'none';
+    managedChannelData = null;
+    setManageStatus('manage-details-status', '');
+    setManageStatus('manage-plans-status', '');
+    setManageStatus('manage-gates-status', '');
+  }
+
+  function setManageStatus(id, msg, isError) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = msg;
+    el.style.color = isError ? 'var(--error)' : 'var(--success)';
+  }
+
+  async function saveChannelDetails() {
+    if (!managedChannelData) return;
+    var name = document.getElementById('manage-channel-name').value.trim();
+    var description = document.getElementById('manage-channel-description').value.trim();
+    if (!name) { setManageStatus('manage-details-status', 'Name is required', true); return; }
+
+    setManageStatus('manage-details-status', 'Saving...');
+    try {
+      await updateChannelInfoOnBackend(managedChannelData.address, { name: name, description: description });
+      setManageStatus('manage-details-status', 'Saved!');
+      managedChannelData.name = name;
+      managedChannelData.description = description;
+
+      ['asset-channel', 'manage-channel-select'].forEach(function (selId) {
+        var sel = document.getElementById(selId);
+        if (!sel) return;
+        var opt = sel.querySelector('option[value="' + managedChannelData.address + '"]');
+        if (opt) opt.textContent = name;
+      });
+    } catch (err) {
+      setManageStatus('manage-details-status', 'Error: ' + err.message, true);
+    }
+  }
+
+  function loadManagePlans(plans) {
+    var container = document.getElementById('manage-plans-container');
+    container.innerHTML = '';
+    var countEl = document.getElementById('manage-plans-count');
+    if (countEl) countEl.textContent = plans.length > 0 ? '(' + plans.length + ' plans)' : '';
+
+    plans.forEach(function (plan) {
+      addManagePlanRow(plan);
+    });
+  }
+
+  function addManagePlanRow(plan) {
+    var container = document.getElementById('manage-plans-container');
+    var row = document.createElement('div');
+    row.className = 'plan-row';
+    row.style.cssText = 'display:flex; gap:6px; align-items:center; margin-bottom:4px;';
+    if (plan.planId) row.setAttribute('data-plan-id', plan.planId);
+
+    var dur = plan.duration || {};
+    var durLabel = dur.value && dur.unit ? dur.value + ' ' + dur.unit : '1 Month';
+    var durOptions = DURATION_OPTIONS.map(function (d) {
+      var matchLabel = d.label;
+      var sel = (d.value === dur.value && d.unit === dur.unit) || matchLabel === durLabel ? ' selected' : '';
+      return '<option value="' + d.label + '"' + sel + '>' + d.label + '</option>';
+    }).join('');
+
+    var payToken = plan.payToken || USDC_BASE;
+    var currencyOptions = CURRENCIES.map(function (c) {
+      var sel = c.address.toLowerCase() === payToken.toLowerCase() ? ' selected' : '';
+      return '<option value="' + c.address + '"' + sel + '>' + c.symbol + '</option>';
+    }).join('');
+
+    row.innerHTML =
+      '<select class="plan-duration" style="width:110px; padding:6px; font-size:12px; border:1px solid var(--border); border-radius:4px; background:var(--bg-elevated); color:var(--text);">' + durOptions + '</select>' +
+      '<input class="plan-price" type="number" min="0.01" step="0.01" value="' + (plan.price || '5') + '" placeholder="Price" style="width:80px; padding:6px; font-size:12px; border:1px solid var(--border); border-radius:4px; background:var(--bg-elevated); color:var(--text); text-align:right;" />' +
+      '<select class="plan-currency" style="width:72px; padding:6px; font-size:12px; border:1px solid var(--border); border-radius:4px; background:var(--bg-elevated); color:var(--text);">' + currencyOptions + '</select>' +
+      '<input class="plan-label" type="text" placeholder="Description" value="' + (plan.description || plan.label || '') + '" style="flex:1; padding:6px; font-size:12px; border:1px solid var(--border); border-radius:4px; background:var(--bg-elevated); color:var(--text);" />' +
+      '<button type="button" class="manage-plan-save" title="Save" style="display:inline-flex; align-items:center; justify-content:center; width:24px; height:24px; font-size:14px; line-height:1; font-family:inherit; background:var(--accent); color:white; border:none; border-radius:4px; cursor:pointer;">&#10003;</button>' +
+      '<button type="button" class="manage-plan-remove" title="Remove" style="display:inline-flex; align-items:center; justify-content:center; width:24px; height:24px; font-size:14px; line-height:1; font-family:inherit; background:var(--error); color:white; border:none; border-radius:4px; cursor:pointer;">&times;</button>';
+
+    container.appendChild(row);
+
+    row.querySelector('.manage-plan-save').addEventListener('click', function () {
+      var planId = row.getAttribute('data-plan-id');
+      if (planId) {
+        saveEditPlan(managedChannelData.address, planId, row);
+      } else {
+        saveAddPlan(managedChannelData.address, row);
+      }
+    });
+    row.querySelector('.manage-plan-remove').addEventListener('click', function () {
+      var planId = row.getAttribute('data-plan-id');
+      if (planId) {
+        removePlan(managedChannelData.address, planId, row);
+      } else {
+        row.remove();
+      }
+    });
+  }
+
+  function readPlanRowData(row) {
+    var durLabel = row.querySelector('.plan-duration').value;
+    var durOpt = DURATION_OPTIONS.find(function (d) { return d.label === durLabel; });
+    var price = row.querySelector('.plan-price').value;
+    var payToken = row.querySelector('.plan-currency').value;
+    var description = row.querySelector('.plan-label').value;
+    return {
+      label: durLabel,
+      description: description || durLabel,
+      duration: durOpt ? { value: durOpt.value, unit: durOpt.unit } : { value: 1, unit: 'months' },
+      price: price,
+      payToken: payToken,
+    };
+  }
+
+  async function saveAddPlan(channelAddress, row) {
+    var data = readPlanRowData(row);
+    setManageStatus('manage-plans-status', 'Adding plan...');
+    try {
+      var result = await updateSubscriptionPlanOnBackend(channelAddress, [{ action: 'ADD', args: data }]);
+      setManageStatus('manage-plans-status', 'Plan added!');
+      if (result && result.plans && result.plans.length > 0) {
+        var lastPlan = result.plans[result.plans.length - 1];
+        if (lastPlan && lastPlan.planId) row.setAttribute('data-plan-id', lastPlan.planId);
+        managedChannelData.plans = result.plans;
+        var countEl = document.getElementById('manage-plans-count');
+        if (countEl) countEl.textContent = '(' + result.plans.length + ' plans)';
+      }
+    } catch (err) {
+      setManageStatus('manage-plans-status', 'Error: ' + err.message, true);
+    }
+  }
+
+  async function saveEditPlan(channelAddress, planId, row) {
+    var data = readPlanRowData(row);
+    data.planId = planId;
+    setManageStatus('manage-plans-status', 'Updating plan...');
+    try {
+      var result = await updateSubscriptionPlanOnBackend(channelAddress, [{ action: 'UPDATE', args: data }]);
+      setManageStatus('manage-plans-status', 'Plan updated!');
+      if (result && result.plans) managedChannelData.plans = result.plans;
+    } catch (err) {
+      setManageStatus('manage-plans-status', 'Error: ' + err.message, true);
+    }
+  }
+
+  async function removePlan(channelAddress, planId, row) {
+    if (!confirm('Remove this plan?')) return;
+    setManageStatus('manage-plans-status', 'Removing plan...');
+    try {
+      var result = await updateSubscriptionPlanOnBackend(channelAddress, [{ action: 'REMOVE', args: { planId: planId } }]);
+      row.remove();
+      setManageStatus('manage-plans-status', 'Plan removed!');
+      if (result && result.plans) {
+        managedChannelData.plans = result.plans;
+        var countEl = document.getElementById('manage-plans-count');
+        if (countEl) countEl.textContent = result.plans.length > 0 ? '(' + result.plans.length + ' plans)' : '';
+      }
+    } catch (err) {
+      setManageStatus('manage-plans-status', 'Error: ' + err.message, true);
+    }
+  }
+
+  function loadManageTokenGates(tokenAccess) {
+    var container = document.getElementById('manage-gates-container');
+    container.innerHTML = '';
+    var countEl = document.getElementById('manage-gates-count');
+    if (countEl) countEl.textContent = tokenAccess.length > 0 ? '(' + tokenAccess.length + ' rules)' : '';
+
+    tokenAccess.forEach(function (gate) {
+      addManageGateRow(gate);
+    });
+  }
+
+  function addManageGateRow(gate) {
+    var container = document.getElementById('manage-gates-container');
+    var row = document.createElement('div');
+    row.className = 'token-gate-row';
+    row.style.cssText = 'display:flex; gap:6px; align-items:center; margin-bottom:4px;';
+    row.innerHTML =
+      '<input class="gate-address" type="text" placeholder="0x... token contract" value="' + (gate.address || '') + '" style="flex:1; padding:6px; font-size:12px; border:1px solid var(--border); border-radius:4px; background:var(--bg-elevated); color:var(--text);" />' +
+      '<input class="gate-value" type="number" min="1" step="1" value="' + (gate.value || '1') + '" placeholder="Min balance" style="width:80px; padding:6px; font-size:12px; border:1px solid var(--border); border-radius:4px; background:var(--bg-elevated); color:var(--text); text-align:right;" />' +
+      '<span class="gate-info" style="font-size:11px; color:var(--text-muted); min-width:60px;"></span>' +
+      '<button type="button" class="gate-remove" style="display:inline-flex; align-items:center; justify-content:center; width:24px; height:24px; font-size:14px; line-height:1; font-family:inherit; background:var(--error); color:white; border:none; border-radius:4px; cursor:pointer;">&times;</button>';
+    container.appendChild(row);
+
+    row.querySelector('.gate-remove').addEventListener('click', function () { row.remove(); });
+
+    var addrInput = row.querySelector('.gate-address');
+    var infoSpan = row.querySelector('.gate-info');
+    if (gate.address && ethers.isAddress(gate.address)) {
+      (async function () {
+        try {
+          var iface = new ethers.Interface(ERC20_ABI);
+          var nameData = await rpcCall(gate.address, iface.encodeFunctionData('symbol', []));
+          var sym = iface.decodeFunctionResult('symbol', nameData)[0];
+          infoSpan.textContent = sym;
+          infoSpan.style.color = 'var(--success)';
+        } catch (_) { infoSpan.textContent = 'NFT?'; infoSpan.style.color = 'var(--text-muted)'; }
+      })();
+    }
+    addrInput.addEventListener('blur', async function () {
+      var addr = addrInput.value.trim();
+      if (!addr || !ethers.isAddress(addr)) { infoSpan.textContent = ''; return; }
+      try {
+        var iface = new ethers.Interface(ERC20_ABI);
+        var nameData = await rpcCall(addr, iface.encodeFunctionData('symbol', []));
+        var sym = iface.decodeFunctionResult('symbol', nameData)[0];
+        infoSpan.textContent = sym;
+        infoSpan.style.color = 'var(--success)';
+      } catch (_) { infoSpan.textContent = 'NFT?'; infoSpan.style.color = 'var(--text-muted)'; }
+    });
+  }
+
+  async function saveTokenGates() {
+    if (!managedChannelData) return;
+    var rows = document.querySelectorAll('#manage-gates-container .token-gate-row');
+    var thresholds = [];
+    for (var i = 0; i < rows.length; i++) {
+      var addr = rows[i].querySelector('.gate-address').value.trim();
+      var val = rows[i].querySelector('.gate-value').value.trim();
+      if (!addr || !ethers.isAddress(addr)) continue;
+      thresholds.push({ address: addr, value: val || '1' });
+    }
+    setManageStatus('manage-gates-status', 'Saving...');
+    try {
+      await updateChannelInfoOnBackend(managedChannelData.address, { tokenAccess: thresholds });
+      managedChannelData.tokenAccess = thresholds;
+      loadManageTokenGates(thresholds);
+      setManageStatus('manage-gates-status', 'Saved!');
+    } catch (err) {
+      setManageStatus('manage-gates-status', 'Error: ' + err.message, true);
+    }
+  }
+
   function parseAssetCreatedEvent(receipt, channelAddress) {
     var iface = new ethers.Interface(ABI.DIGITAL_ASSET);
     var logs = receipt.logs || [];
@@ -1754,11 +2171,13 @@
       var priceEl = row.querySelector('.plan-price');
       var durEl = row.querySelector('.plan-duration');
       var labelEl = row.querySelector('.plan-label');
+      var currEl = row.querySelector('.plan-currency');
       if (priceEl && durEl) {
         var durOpt = DURATION_OPTIONS.find(function (d) { return d.label === durEl.value; }) || DURATION_OPTIONS[2];
+        var tokenAddr = currEl ? currEl.value : USDC_BASE;
         plans.push({
           price: priceEl.value || '0',
-          payToken: '0x0000000000000000000000000000000000000000',
+          payToken: tokenAddr,
           duration: { value: durOpt.value, unit: durOpt.unit },
           label: durOpt.label,
           description: labelEl ? labelEl.value : durOpt.label + ' plan',
@@ -1865,7 +2284,7 @@
     updateFloatingProgress('prog-connect', 'Starting pipeline...', 'active');
 
     dom.progressError.classList.add('hidden');
-    dom.btnBackTo2.disabled = true;
+    if (dom.btnBackTo2) dom.btnBackTo2.disabled = true;
 
     try {
       if (!state.walletAddress) {
@@ -2628,7 +3047,7 @@
       if (fpPct) fpPct.textContent = '90%';
 
       setProgStep('prog-mint', 'Ready — check the boxes below and click Sign & Mint', 'active');
-      dom.btnBackTo2.disabled = false;
+      if (dom.btnBackTo2) dom.btnBackTo2.disabled = false;
       var publishLaterBtn = document.getElementById('btn-publish-later');
       if (publishLaterBtn) publishLaterBtn.style.display = '';
       validateStep3();
@@ -2636,7 +3055,7 @@
       await new Promise(function (resolve) {
         state._mintResolve = resolve;
       });
-      dom.btnBackTo2.disabled = true;
+      if (dom.btnBackTo2) dom.btnBackTo2.disabled = true;
 
       // ── Step 4: Mint on Channel contract ──────────────
       var mintedTokenId = null;
@@ -3018,7 +3437,7 @@
       state.processingRunning = false;
       dom.progressError.textContent = 'Error: ' + (err.message || 'Unknown error');
       dom.progressError.classList.remove('hidden');
-      dom.btnBackTo2.disabled = false;
+      if (dom.btnBackTo2) dom.btnBackTo2.disabled = false;
       showToast('Pipeline failed: ' + (err.message || ''), 'error');
 
       hideFloatingProgress();
@@ -3058,7 +3477,15 @@
     dom.assetCopies.value = '10000';
     state.channelsLoaded = false;
     dom.progressError.classList.add('hidden');
-    dom.btnBackTo2.disabled = false;
+    if (dom.btnBackTo2) dom.btnBackTo2.disabled = false;
+
+    // Reset channel creation form
+    var channelConfig = document.getElementById('channel-create-config');
+    if (channelConfig) channelConfig.style.display = 'none';
+    var channelNameInput = document.getElementById('new-channel-name');
+    if (channelNameInput) channelNameInput.value = '';
+    var channelDescInput = document.getElementById('new-channel-description');
+    if (channelDescInput) channelDescInput.value = '';
 
     // Reset licensing section
     var ltHidden = document.getElementById('license-type');
@@ -3176,75 +3603,132 @@
       if (e.dataTransfer.files.length > 0) handleThumbSelected(e.dataTransfer.files[0]);
     });
 
-    // Create Channel button
+    // Show channel creation form
+    function showChannelCreateForm() {
+      var configPanel = document.getElementById('channel-create-config');
+      if (configPanel) configPanel.style.display = '';
+      var nameInput = document.getElementById('new-channel-name');
+      if (nameInput) nameInput.focus();
+    }
+
+    function hideChannelCreateForm() {
+      var configPanel = document.getElementById('channel-create-config');
+      if (configPanel) configPanel.style.display = 'none';
+      var nameInput = document.getElementById('new-channel-name');
+      var descInput = document.getElementById('new-channel-description');
+      if (nameInput) nameInput.value = '';
+      if (descInput) descInput.value = '';
+    }
+
+    // Create Channel button (shows the creation form)
     var btnCreateChannel = document.getElementById('btn-create-channel');
-    var channelHint = document.getElementById('channel-hint');
-    btnCreateChannel.addEventListener('click', async function () {
-      if (!state.walletAddress) {
-        showToast('Connect your wallet first', 'error');
-        return;
-      }
-
-      var channelWalletChoice = await showWalletChoice('Choose Wallet for Channel');
-      var channelName = (dom.assetTitle.value.trim() || 'My PC2') + ' Channel';
-      btnCreateChannel.disabled = true;
-      btnCreateChannel.textContent = 'Creating...';
-      channelHint.textContent = 'Uploading channel metadata to IPFS...';
-      channelHint.className = 'field-hint';
-
-      try {
-        channelHint.textContent = 'Confirm transaction in wallet...';
-        var channelDesc = dom.assetDescription.value.trim() || 'Digital assets channel on PC2';
-        var result = await doCreateChannel(channelName, channelDesc, channelWalletChoice);
-        showToast('Channel created: ' + result.address.substring(0, 10) + '...', 'success');
-        state.channelsLoaded = false;
-        await loadChannels(state.walletAddress);
-
-        // Ensure the newly created channel is in the dropdown even if the
-        // backend query hasn't indexed it yet.
-        var found = false;
-        for (var i = 0; i < dom.assetChannel.options.length; i++) {
-          if (dom.assetChannel.options[i].value.toLowerCase() === result.address.toLowerCase()) {
-            found = true;
-            break;
-          }
+    if (btnCreateChannel) {
+      btnCreateChannel.addEventListener('click', function () {
+        if (!state.walletAddress) {
+          showToast('Connect your wallet first', 'error');
+          return;
         }
-        if (!found) {
-          var ownerLabel = result.ownerType === 'sa' ? 'Agent Account' : 'Wallet';
-          var newGroup = dom.assetChannel.querySelector('optgroup[data-group="' + result.ownerType + '"]');
-          if (!newGroup) {
-            newGroup = document.createElement('optgroup');
-            newGroup.label = 'Your Channels — ' + ownerLabel + ' (1)';
-            newGroup.setAttribute('data-group', result.ownerType);
-            dom.assetChannel.insertBefore(newGroup, dom.assetChannel.firstChild);
-          }
-          var newOpt = document.createElement('option');
-          newOpt.value = result.address;
-          newOpt.setAttribute('data-owner', result.ownerType);
-          newOpt.textContent = result.name + ' (' + result.address.substring(0, 8) + '...)';
-          newGroup.appendChild(newOpt);
+        showChannelCreateForm();
+      });
+    }
+
+    // "Create Your First Channel" button (empty state)
+    var btnCreateFirst = document.getElementById('btn-create-first-channel');
+    if (btnCreateFirst) {
+      btnCreateFirst.addEventListener('click', function () {
+        if (!state.walletAddress) {
+          showToast('Connect your wallet first', 'error');
+          return;
+        }
+        showChannelCreateForm();
+      });
+    }
+
+    // Cancel channel creation
+    var btnCancelChannel = document.getElementById('btn-cancel-channel');
+    if (btnCancelChannel) {
+      btnCancelChannel.addEventListener('click', function () {
+        hideChannelCreateForm();
+      });
+    }
+
+    // Deploy channel (from creation form)
+    var btnDeployChannel = document.getElementById('btn-deploy-channel');
+    if (btnDeployChannel) {
+      btnDeployChannel.addEventListener('click', async function () {
+        var channelNameInput = document.getElementById('new-channel-name');
+        var channelDescInput = document.getElementById('new-channel-description');
+        var channelName = (channelNameInput ? channelNameInput.value.trim() : '') || 'My Channel';
+        var channelDesc = (channelDescInput ? channelDescInput.value.trim() : '') || 'Digital assets channel on Elacity';
+        var channelHint = document.getElementById('channel-hint');
+
+        if (!state.walletAddress) {
+          showToast('Connect your wallet first', 'error');
+          return;
         }
 
-        dom.assetChannel.value = result.address;
-        dom.assetChannelCustom.classList.add('hidden');
-        var walletLabel = result.ownerType === 'sa' ? 'Agent Account' : 'EOA Wallet';
-        channelHint.textContent = 'Your channel: ' + result.address.substring(0, 10) + '... (' + walletLabel + ' — full minting rights)';
-        channelHint.className = 'field-hint success';
-      } catch (err) {
-        channelHint.textContent = 'Channel creation failed: ' + (err.message || '').substring(0, 80);
-        channelHint.className = 'field-hint';
-        showToast('Channel creation failed: ' + (err.message || ''), 'error');
-      } finally {
-        btnCreateChannel.disabled = false;
-        btnCreateChannel.textContent = '+ Create';
-      }
-    });
+        var channelWalletChoice = await showWalletChoice('Choose Wallet for Channel');
+
+        btnDeployChannel.disabled = true;
+        btnDeployChannel.textContent = 'Deploying...';
+
+        try {
+          var result = await doCreateChannel(channelName, channelDesc, channelWalletChoice);
+          showToast('Channel created: ' + result.address.substring(0, 10) + '...', 'success');
+          hideChannelCreateForm();
+          state.channelsLoaded = false;
+          await loadChannels(state.walletAddress);
+
+          var found = false;
+          for (var i = 0; i < dom.assetChannel.options.length; i++) {
+            if (dom.assetChannel.options[i].value.toLowerCase() === result.address.toLowerCase()) {
+              found = true;
+              break;
+            }
+          }
+          if (!found) {
+            var ownerLabel = result.ownerType === 'sa' ? 'Agent Account' : 'Wallet';
+            var newGroup = dom.assetChannel.querySelector('optgroup[data-group="' + result.ownerType + '"]');
+            if (!newGroup) {
+              newGroup = document.createElement('optgroup');
+              newGroup.label = 'Your Channels — ' + ownerLabel + ' (1)';
+              newGroup.setAttribute('data-group', result.ownerType);
+              dom.assetChannel.insertBefore(newGroup, dom.assetChannel.firstChild);
+            }
+            var newOpt = document.createElement('option');
+            newOpt.value = result.address;
+            newOpt.setAttribute('data-owner', result.ownerType);
+            newOpt.textContent = result.name + ' (' + result.address.substring(0, 8) + '...)';
+            newGroup.appendChild(newOpt);
+          }
+
+          dom.assetChannel.value = result.address;
+          dom.assetChannelCustom.classList.add('hidden');
+          var walletLabel = result.ownerType === 'sa' ? 'Agent Account' : 'EOA Wallet';
+          if (channelHint) {
+            channelHint.textContent = 'Your channel: ' + result.address.substring(0, 10) + '... (' + walletLabel + ' — full minting rights)';
+            channelHint.className = 'field-hint success';
+          }
+          validateStep1();
+        } catch (err) {
+          if (channelHint) {
+            channelHint.textContent = 'Channel creation failed: ' + (err.message || '').substring(0, 80);
+            channelHint.className = 'field-hint';
+          }
+          showToast('Channel creation failed: ' + (err.message || ''), 'error');
+        } finally {
+          btnDeployChannel.disabled = false;
+          btnDeployChannel.textContent = 'Deploy Channel';
+        }
+      });
+    }
 
     dom.assetChannel.addEventListener('change', function () {
       var isCustom = dom.assetChannel.value === '__custom__';
       dom.assetChannelCustom.classList.toggle('hidden', !isCustom);
       if (isCustom) {
         dom.assetChannelCustom.focus();
+        validateStep1();
         return;
       }
       var ownerType = getChannelOwnerType(dom.assetChannel);
@@ -3254,6 +3738,79 @@
         hint.textContent = 'Channel selected (' + label + ') — minting will use ' + label + '.';
         hint.className = 'field-hint success';
       }
+      validateStep1();
+    });
+
+    // Tab switching
+    document.querySelectorAll('.header-tab').forEach(function (tab) {
+      tab.addEventListener('click', function () { switchTab(tab.getAttribute('data-tab')); });
+    });
+
+    // Channels view: selector change loads management
+    var manageSelect = document.getElementById('manage-channel-select');
+    if (manageSelect) {
+      manageSelect.addEventListener('change', function () {
+        if (manageSelect.value && ethers.isAddress(manageSelect.value)) {
+          showChannelManagement();
+        } else {
+          hideChannelManagement();
+        }
+      });
+    }
+
+    var btnChannelsCreate = document.getElementById('btn-channels-create');
+    if (btnChannelsCreate) {
+      btnChannelsCreate.addEventListener('click', function () {
+        if (!state.walletAddress) { showToast('Connect your wallet first', 'error'); return; }
+        switchTab('mint');
+        showChannelCreateForm();
+      });
+    }
+
+    var btnSaveDetails = document.getElementById('btn-save-channel-details');
+    if (btnSaveDetails) btnSaveDetails.addEventListener('click', saveChannelDetails);
+
+    var btnManageAddPlan = document.getElementById('btn-manage-add-plan');
+    if (btnManageAddPlan) {
+      btnManageAddPlan.addEventListener('click', function () {
+        addManagePlanRow({ price: '5', payToken: USDC_BASE, duration: { value: 1, unit: 'months' }, label: '', description: '' });
+      });
+    }
+
+    var btnManageAddGate = document.getElementById('btn-manage-add-gate');
+    if (btnManageAddGate) {
+      btnManageAddGate.addEventListener('click', function () {
+        addManageGateRow({ address: '', value: '1' });
+      });
+    }
+
+    // Save token gates button -- add a save button dynamically if gates exist
+    var gatesBody = document.getElementById('manage-gates-body');
+    if (gatesBody) {
+      var saveGatesBtn = document.createElement('button');
+      saveGatesBtn.type = 'button';
+      saveGatesBtn.className = 'inline-btn primary';
+      saveGatesBtn.textContent = 'Save Token Gates';
+      saveGatesBtn.style.marginTop = '8px';
+      saveGatesBtn.addEventListener('click', saveTokenGates);
+      gatesBody.appendChild(saveGatesBtn);
+    }
+
+    // Collapsible section headers
+    document.querySelectorAll('.manage-section-header').forEach(function (header) {
+      header.addEventListener('click', function () {
+        var targetId = header.getAttribute('data-target');
+        var body = document.getElementById(targetId);
+        if (!body) return;
+        var chevron = header.querySelector('.manage-chevron');
+        if (body.style.display === 'none') {
+          body.style.display = '';
+          if (chevron) chevron.innerHTML = '&#9660;';
+        } else {
+          body.style.display = 'none';
+          if (chevron) chevron.innerHTML = '&#9654;';
+        }
+      });
     });
 
     // Reseller cut slider
@@ -3334,7 +3891,7 @@
         var container = document.getElementById('plans-container');
         container.innerHTML = '';
         DEFAULT_PLANS.forEach(function (p) {
-          addPlanRow({ price: p.price, duration: p.label, description: p.description });
+          addPlanRow({ price: p.price, duration: p.label, description: p.description, payToken: p.payToken });
         });
       });
     }
@@ -3348,9 +3905,14 @@
         var sel = d.label === (defaults.duration || '1 Month') ? ' selected' : '';
         return '<option value="' + d.label + '"' + sel + '>' + d.label + '</option>';
       }).join('');
+      var defaultToken = defaults.payToken || USDC_BASE;
+      var currencyOptions = CURRENCIES.map(function (c) {
+        var sel = c.address === defaultToken ? ' selected' : '';
+        return '<option value="' + c.address + '"' + sel + '>' + c.symbol + '</option>';
+      }).join('');
       row.innerHTML = '<select class="plan-duration" style="width:110px; padding:6px; font-size:12px; border:1px solid var(--border); border-radius:4px; background:var(--bg-elevated); color:var(--text);">' + durOptions + '</select>' +
         '<input class="plan-price" type="number" min="0.01" step="0.01" value="' + (defaults.price || '5') + '" placeholder="Price" style="width:80px; padding:6px; font-size:12px; border:1px solid var(--border); border-radius:4px; background:var(--bg-elevated); color:var(--text); text-align:right;" />' +
-        '<span style="font-size:12px; color:var(--text-muted);">ETH</span>' +
+        '<select class="plan-currency" style="width:72px; padding:6px; font-size:12px; border:1px solid var(--border); border-radius:4px; background:var(--bg-elevated); color:var(--text);">' + currencyOptions + '</select>' +
         '<input class="plan-label" type="text" placeholder="Description" value="' + (defaults.description || '') + '" style="flex:1; padding:6px; font-size:12px; border:1px solid var(--border); border-radius:4px; background:var(--bg-elevated); color:var(--text);" />' +
         '<button type="button" class="plan-remove" style="display:inline-flex; align-items:center; justify-content:center; width:24px; height:24px; font-size:14px; line-height:1; font-family:inherit; background:var(--error); color:white; border:none; border-radius:4px; cursor:pointer;">&times;</button>';
       container.appendChild(row);
@@ -3392,14 +3954,7 @@
       });
     }
 
-    // Show channel plans/token-gating sections when "Create" is clicked
-    var channelCreateBtn = document.getElementById('btn-create-channel');
-    if (channelCreateBtn) {
-      channelCreateBtn.addEventListener('click', function () {
-        document.getElementById('channel-plans-section').style.display = '';
-        document.getElementById('channel-tokengating-section').style.display = '';
-      }, { once: true });
-    }
+    // Channel plans/token-gating are always visible in the creation form now
 
     // Preview duration display
     var previewDurSlider = document.getElementById('preview-duration');
@@ -3458,28 +4013,28 @@
       });
     }
 
-    // Step 2 form validation
+    // Step 1 channel validation
+    ['input', 'change'].forEach(function (evt) {
+      dom.assetChannel.addEventListener(evt, validateStep1);
+      dom.assetChannelCustom.addEventListener(evt, validateStep1);
+    });
+
+    // Step 3 form validation (describe step)
     ['input', 'change'].forEach(function (evt) {
       dom.assetTitle.addEventListener(evt, validateStep2);
       dom.assetCategory.addEventListener(evt, validateStep2);
       dom.assetPrice.addEventListener(evt, validateStep2);
       dom.assetAccess.addEventListener(evt, validateStep2);
-      dom.assetChannel.addEventListener(evt, validateStep2);
-      dom.assetChannelCustom.addEventListener(evt, validateStep2);
     });
 
-    // Step 1 → Step 2: go to metadata form and start pipeline in background
+    // Step 1 → Step 2: channel + file selected, go to describe form and start pipeline
     dom.btnToStep2.addEventListener('click', function () {
       goToStep(2);
-      // Lock preview settings — instruction is baked into the encode request
       var prevEnabled = document.getElementById('preview-enabled');
       var prevDur = document.getElementById('preview-duration');
       if (prevEnabled) prevEnabled.disabled = true;
       if (prevDur) prevDur.disabled = true;
-      // Validate with pre-filled values so continue button enables immediately
       validateStep2();
-      // Start the pipeline — it runs encrypt+upload while user fills metadata,
-      // then pauses before minting and waits for user to click Sign & Mint
       if (!state.processingRunning) {
         state.processingRunning = true;
         runPipeline();
@@ -3496,11 +4051,7 @@
       }
       var ch = getSelectedChannel();
       if (!ch || !ethers.isAddress(ch)) {
-        showToast('Please select a valid channel address before minting', 'error');
-        var hint = document.getElementById('channel-hint');
-        hint.textContent = 'A valid channel address is required. Select one from the list or enter manually.';
-        hint.className = 'field-hint error';
-        dom.assetChannel.focus();
+        showToast('Channel selection required — go back to Step 1', 'error');
         return;
       }
       goToStep(3);
@@ -3537,8 +4088,6 @@
           return '<div class="review-row"><span class="review-label">' + r.label + '</span><span class="review-value">' + r.value + '</span></div>';
         }).join('');
       }
-
-      // Fees are handled internally during mint — no separate display needed
     });
 
     var btnSignMint = document.getElementById('btn-sign-mint');
@@ -3685,6 +4234,9 @@
             state.walletAddress = accounts[0];
             dom.walletBtn.textContent = accounts[0].substring(0, 6) + '...' + accounts[0].slice(-4);
             dom.walletBtn.classList.add('connected');
+            if (!state.channelsLoaded) {
+              loadChannels(accounts[0]);
+            }
           }
         })
         .catch(function () {});

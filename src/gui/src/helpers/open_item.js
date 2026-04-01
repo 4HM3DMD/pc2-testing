@@ -24,6 +24,43 @@ import launch_app from './launch_app.js';
 import path from '../lib/path.js';
 import item_icon from './item_icon.js';
 
+const RUNTIME_EXTENSIONS = {
+    '.mp4':  { app: 'pc2-media-runtime', title: 'Elacity Player', mime: 'video/mp4' },
+    '.webm': { app: 'pc2-media-runtime', title: 'Elacity Player', mime: 'video/webm' },
+    '.mkv':  { app: 'pc2-media-runtime', title: 'Elacity Player', mime: 'video/x-matroska' },
+    '.avi':  { app: 'pc2-media-runtime', title: 'Elacity Player', mime: 'video/x-msvideo' },
+    '.mov':  { app: 'pc2-media-runtime', title: 'Elacity Player', mime: 'video/quicktime' },
+    '.m4v':  { app: 'pc2-media-runtime', title: 'Elacity Player', mime: 'video/mp4' },
+    '.ogv':  { app: 'pc2-media-runtime', title: 'Elacity Player', mime: 'video/ogg' },
+    '.mp3':  { app: 'pc2-media-runtime', title: 'Elacity Player', mime: 'audio/mpeg' },
+    '.wav':  { app: 'pc2-media-runtime', title: 'Elacity Player', mime: 'audio/wav' },
+    '.flac': { app: 'pc2-media-runtime', title: 'Elacity Player', mime: 'audio/flac' },
+    '.m4a':  { app: 'pc2-media-runtime', title: 'Elacity Player', mime: 'audio/mp4' },
+    '.ogg':  { app: 'pc2-media-runtime', title: 'Elacity Player', mime: 'audio/ogg' },
+    '.aac':  { app: 'pc2-media-runtime', title: 'Elacity Player', mime: 'audio/aac' },
+    '.opus': { app: 'pc2-media-runtime', title: 'Elacity Player', mime: 'audio/opus' },
+    '.pdf':  { app: 'ddrm-viewer', title: 'Elacity Viewer', mime: 'application/pdf' },
+    '.jpg':  { app: 'ddrm-viewer', title: 'Elacity Viewer', mime: 'image/jpeg' },
+    '.jpeg': { app: 'ddrm-viewer', title: 'Elacity Viewer', mime: 'image/jpeg' },
+    '.png':  { app: 'ddrm-viewer', title: 'Elacity Viewer', mime: 'image/png' },
+    '.gif':  { app: 'ddrm-viewer', title: 'Elacity Viewer', mime: 'image/gif' },
+    '.webp': { app: 'ddrm-viewer', title: 'Elacity Viewer', mime: 'image/webp' },
+    '.svg':  { app: 'ddrm-viewer', title: 'Elacity Viewer', mime: 'image/svg+xml' },
+    '.bmp':  { app: 'ddrm-viewer', title: 'Elacity Viewer', mime: 'image/bmp' },
+    '.glb':  { app: 'ddrm-viewer', title: 'Elacity Viewer', mime: 'model/gltf-binary' },
+    '.gltf': { app: 'ddrm-viewer', title: 'Elacity Viewer', mime: 'model/gltf+json' },
+    '.obj':  { app: 'ddrm-viewer', title: 'Elacity Viewer', mime: 'model/obj' },
+    '.stl':  { app: 'ddrm-viewer', title: 'Elacity Viewer', mime: 'model/stl' },
+    '.fbx':  { app: 'ddrm-viewer', title: 'Elacity Viewer', mime: 'model/vnd.autodesk.fbx' },
+    '.csv':  { app: 'ddrm-viewer', title: 'Elacity Viewer', mime: 'text/csv' },
+    '.tsv':  { app: 'ddrm-viewer', title: 'Elacity Viewer', mime: 'text/tab-separated-values' },
+    '.ttf':  { app: 'ddrm-viewer', title: 'Elacity Viewer', mime: 'font/ttf' },
+    '.otf':  { app: 'ddrm-viewer', title: 'Elacity Viewer', mime: 'font/otf' },
+    '.woff': { app: 'ddrm-viewer', title: 'Elacity Viewer', mime: 'font/woff' },
+    '.woff2':{ app: 'ddrm-viewer', title: 'Elacity Viewer', mime: 'font/woff2' },
+    '.zip':  { app: 'ddrm-viewer', title: 'Elacity Viewer', mime: 'application/zip' },
+};
+
 const open_item = async function (options) {
     let el_item = options.item;
     const $el_parent_window = $(el_item).closest('.window');
@@ -164,7 +201,7 @@ Please try recreating the link.`);
                 if ( isMedia ) {
                     await launch_app({
                         name: 'pc2-media-runtime',
-                        window_title: (descriptor.title || 'Untitled') + ' — PC2 Media Player',
+                        window_title: (descriptor.title || 'Untitled') + ' — Elacity Player',
                         args: {
                             channel:         descriptor.contractAddress || '',
                             tokenId:         descriptor.tokenId || '',
@@ -208,12 +245,8 @@ Please try recreating the link.`);
         UIAlert('This item can\'t be opened because it\'s in the trash. To use this item, first drag it out of the Trash.');
     }
     //----------------------------------------------------------------
-    // Is this a .zip file? Unzip it (don't open in editor)
+    // .zip handling removed — now handled by RUNTIME_EXTENSIONS routing below
     //----------------------------------------------------------------
-    else if ( !is_dir && path.extname(item_path).toLowerCase() === '.zip' ) {
-        window.unzipItem(item_path);
-        return;
-    }
     //----------------------------------------------------------------
     // Is this a file (no dir) on a SaveFileDialog?
     //----------------------------------------------------------------
@@ -303,6 +336,27 @@ Please try recreating the link.`);
             window_title: path.basename(item_path),
             maximized: shouldMaximize,
             file_uid: file_uid,
+        });
+    }
+    //----------------------------------------------------------------
+    // Route media/document/3D/data/font/archive files to PC2 runtime apps
+    //----------------------------------------------------------------
+    else if ( !is_dir && RUNTIME_EXTENSIONS[path.extname(item_path).toLowerCase()] ) {
+        const ext = path.extname(item_path).toLowerCase();
+        const target = RUNTIME_EXTENSIONS[ext];
+        const filename = path.basename(item_path);
+        const readUrl = `${window.api_origin}/read?path=${encodeURIComponent(item_path)}`;
+
+        launch_app({
+            name: target.app,
+            window_title: filename + ' — ' + target.title,
+            args: {
+                cleartext: 'true',
+                fileUrl: readUrl,
+                mimeType: target.mime,
+                title: filename,
+                thumbnail: '',
+            },
         });
     }
     //----------------------------------------------------------------

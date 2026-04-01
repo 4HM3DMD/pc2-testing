@@ -16,9 +16,11 @@ let BUYER_ADDRESS = params.buyerAddress || '';
 let REQUEST_ID = params.requestId || '';
 let LIT_AUTH_SIG = params.litAuthSig || null;
 const STANDALONE = params.standalone === 'true' || params.standalone === true;
+const CLEARTEXT = params.cleartext === 'true' || params.cleartext === true;
+const FILE_URL = params.fileUrl || new URLSearchParams(window.location.search).get('fileUrl') || '';
 const RAW_THUMBNAIL = params.thumbnail || new URLSearchParams(window.location.search).get('thumbnail') || '';
 const THUMBNAIL = RAW_THUMBNAIL.startsWith('ipfs://') ? 'https://ipfs.ela.city/ipfs/' + RAW_THUMBNAIL.slice(7) : RAW_THUMBNAIL;
-console.log('[player] params keys:', Object.keys(params), 'THUMBNAIL:', THUMBNAIL ? THUMBNAIL.substring(0, 80) : '(empty)');
+console.log('[player] params keys:', Object.keys(params), 'THUMBNAIL:', THUMBNAIL ? THUMBNAIL.substring(0, 80) : '(empty)', 'cleartext:', CLEARTEXT);
 
 // ─── DOM ─────────────────────────────────────────────────────────────
 const $loading = document.getElementById('loading-screen');
@@ -487,8 +489,83 @@ async function performStandaloneLitAuth() {
   }
 }
 
+// ─── Cleartext Playback (non-DRM files) ──────────────────────────────
+function initCleartext() {
+  if (!FILE_URL) {
+    showError('No file URL provided for cleartext playback.');
+    return;
+  }
+
+  var fileUrl = FILE_URL;
+  if (fileUrl.startsWith('/') && !fileUrl.startsWith('//')) {
+    fileUrl = apiOrigin() + fileUrl;
+  }
+
+  var authToken = getAuthToken();
+  if (authToken && fileUrl.indexOf('puter.auth.token') === -1) {
+    fileUrl += (fileUrl.indexOf('?') === -1 ? '?' : '&') + 'puter.auth.token=' + encodeURIComponent(authToken);
+  }
+
+  var title = TITLE || 'Media';
+  document.title = title + ' — Elacity Player';
+
+  var mimeType = params.mimeType || '';
+  isAudioOnly = mimeType.indexOf('audio/') === 0;
+
+  if (isAudioOnly) {
+    var $audioArt = document.getElementById('audio-art');
+    var $audioTitle = document.getElementById('audio-title');
+    if ($audioArt) {
+      $audioArt.style.display = 'flex';
+      if (THUMBNAIL) {
+        var img = document.createElement('img');
+        img.src = THUMBNAIL;
+        img.alt = title;
+        img.onerror = function() { this.style.display = 'none'; };
+        $audioArt.insertBefore(img, $audioArt.firstChild);
+        var svgIcon = $audioArt.querySelector('svg');
+        if (svgIcon) svgIcon.style.display = 'none';
+      }
+    }
+    if ($audioTitle) $audioTitle.textContent = title;
+  }
+
+  if ($qualityGroup) $qualityGroup.style.display = 'none';
+  $watermark.textContent = '';
+
+  $video.src = fileUrl;
+  duration = 0;
+
+  $video.addEventListener('loadedmetadata', function () {
+    duration = $video.duration || 0;
+    $timeDuration.textContent = formatTime(duration);
+    $seekBar.max = String(duration);
+  }, { once: true });
+
+  $video.addEventListener('error', function () {
+    var err = $video.error;
+    if (!err) return;
+    var ext = FILE_URL.split('.').pop().split('?')[0].toLowerCase();
+    var isFirefox = navigator.userAgent.toLowerCase().includes('firefox');
+    var firefoxBlocked = ['mkv', 'avi', 'mov', 'ts'];
+    if (err.code === 4 && isFirefox && firefoxBlocked.indexOf(ext) !== -1) {
+      showError('Firefox cannot play .' + ext + ' files natively. Try Chrome/Edge, or remux to .mp4 / .webm.');
+    }
+  }, { once: true });
+
+  $loading.style.display = 'none';
+  $container.style.display = 'flex';
+
+  $video.play().catch(function () {});
+}
+
 // ─── Init ────────────────────────────────────────────────────────────
 async function init() {
+  if (CLEARTEXT) {
+    initCleartext();
+    return;
+  }
+
   if (!CHANNEL || !TOKEN_ID) {
     showError('Missing channel or tokenId parameters.');
     return;
@@ -567,7 +644,7 @@ async function init() {
     tracks = data.tracks;
 
     if (data.title) {
-      document.title = data.title + ' — PC2 Media Player';
+      document.title = data.title + ' — Elacity Player';
     }
 
     allVideoTracks = tracks.filter(t => t.type === 'video').sort((a, b) => a.bandwidth - b.bandwidth);
@@ -871,16 +948,25 @@ $video.addEventListener('pause', () => { $iconPlay.style.display = 'block'; $ico
 
 $video.addEventListener('timeupdate', () => {
   $timeCurrent.textContent = formatTime($video.currentTime);
-  if (duration > 0) {
+  const d = CLEARTEXT ? ($video.duration || 0) : duration;
+  if (d > 0) {
     $seekBar.value = String($video.currentTime);
-    $seekProgress.style.width = ($video.currentTime / duration * 100) + '%';
+    $seekProgress.style.width = ($video.currentTime / d * 100) + '%';
+  }
+  if (CLEARTEXT) {
+    if (d > 0 && $seekBar.max !== String(d)) {
+      $seekBar.max = String(d);
+      $timeDuration.textContent = formatTime(d);
+    }
   }
   updateBufferedBar();
 });
 
 $seekBar.addEventListener('input', () => {
   const targetTime = parseFloat($seekBar.value);
-  if (isTimeBuffered(targetTime)) {
+  if (CLEARTEXT) {
+    $video.currentTime = targetTime;
+  } else if (isTimeBuffered(targetTime)) {
     $video.currentTime = targetTime;
   } else {
     handleSeekToUnbuffered(targetTime);
@@ -893,7 +979,8 @@ function updateBufferedBar() {
   for (let i = 0; i < $video.buffered.length; i++) {
     if ($video.buffered.end(i) > maxEnd) maxEnd = $video.buffered.end(i);
   }
-  $seekBuffered.style.width = (maxEnd / duration * 100) + '%';
+  const d = CLEARTEXT ? ($video.duration || 0) : duration;
+  if (d > 0) $seekBuffered.style.width = (maxEnd / d * 100) + '%';
 }
 
 $volumeBar.addEventListener('input', () => { $video.volume = parseInt($volumeBar.value) / 100; });
@@ -1021,8 +1108,11 @@ $video.addEventListener('play', () => { controlsIdleTimer = setTimeout(hideContr
 
 // ─── Seek Helper ─────────────────────────────────────────────────────
 function seekByDelta(deltaSec) {
-  const target = Math.max(0, Math.min(duration, $video.currentTime + deltaSec));
-  if (isTimeBuffered(target)) {
+  const d = CLEARTEXT ? ($video.duration || 0) : duration;
+  const target = Math.max(0, Math.min(d, $video.currentTime + deltaSec));
+  if (CLEARTEXT) {
+    $video.currentTime = target;
+  } else if (isTimeBuffered(target)) {
     $video.currentTime = target;
   } else {
     handleSeekToUnbuffered(target);
@@ -1096,13 +1186,15 @@ document.addEventListener('keydown', e => {
   }
 });
 
-// ─── Anti-Piracy ─────────────────────────────────────────────────────
-document.addEventListener('contextmenu', e => e.preventDefault());
-$video.addEventListener('enterpictureinpicture', () => {
-  document.exitPictureInPicture().catch(() => {});
-});
-$video.disablePictureInPicture = true;
-$video.addEventListener('dragstart', e => e.preventDefault());
+// ─── Anti-Piracy (DRM only) ──────────────────────────────────────────
+if (!CLEARTEXT) {
+  document.addEventListener('contextmenu', e => e.preventDefault());
+  $video.addEventListener('enterpictureinpicture', () => {
+    document.exitPictureInPicture().catch(() => {});
+  });
+  $video.disablePictureInPicture = true;
+  $video.addEventListener('dragstart', e => e.preventDefault());
+}
 
 // ─── Start ───────────────────────────────────────────────────────────
 init();

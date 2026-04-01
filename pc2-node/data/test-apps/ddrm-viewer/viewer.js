@@ -96,6 +96,8 @@
   var isFontType = assetParams.mimeType.indexOf('font/') === 0 || assetParams.mimeType === 'application/vnd.ms-fontobject';
   var isArchiveType = assetParams.mimeType === 'application/zip' || assetParams.mimeType === 'application/gzip' || assetParams.mimeType === 'application/x-tar';
   var isInteractivePassthrough = is3DType || isCSVType || isFontType || isArchiveType;
+  var isCleartext = p('cleartext', '') === 'true';
+  var cleartextFileUrl = p('fileUrl', '');
 
   if (isCSVType) isDocumentType = false;
 
@@ -129,13 +131,18 @@
   function init() {
     if (assetParams.title) {
       $title.textContent = assetParams.title;
-      document.title = assetParams.title + ' — dDRM Viewer';
+      document.title = assetParams.title + (isCleartext ? ' — Elacity Viewer' : ' — dDRM Viewer');
     }
 
     $subtitle.textContent = humanMime(assetParams.mimeType);
     $assetType.textContent = assetParams.mimeType;
 
-    disableContextMenu();
+    if (!isCleartext) disableContextMenu();
+
+    if (isCleartext && cleartextFileUrl) {
+      loadCleartext();
+      return;
+    }
 
     if (!assetParams.encryptedDataCid || !assetParams.kid) {
       showError('Missing Parameters', 'This viewer requires asset parameters to be provided via the launch URL.');
@@ -143,6 +150,148 @@
     }
 
     loadFirstPage();
+  }
+
+  // ── Cleartext loading (non-DRM files) ──────────────────
+
+  function loadCleartext() {
+    showLoading();
+    $loadingText.textContent = 'Loading file...';
+
+    $rendererBdg.classList.add('hidden');
+    $watermarkBdg.classList.add('hidden');
+
+    var url = cleartextFileUrl;
+    if (url.startsWith('/') && !url.startsWith('//')) {
+      var sp = new URLSearchParams(window.location.search);
+      var origin = sp.get('puter.api_origin') || window.location.origin;
+      url = origin + url;
+    }
+
+    if (AUTH_TOKEN && url.indexOf('puter.auth.token') === -1) {
+      url += (url.indexOf('?') === -1 ? '?' : '&') + 'puter.auth.token=' + encodeURIComponent(AUTH_TOKEN);
+    }
+
+    var mime = assetParams.mimeType;
+
+    if (mime === 'application/pdf') {
+      loadCleartextPDF(url);
+      return;
+    }
+
+    fetch(url, { credentials: 'include' })
+      .then(function (resp) {
+        if (!resp.ok) throw new Error('Failed to load file (' + resp.status + ')');
+        return resp.blob();
+      })
+      .then(function (blob) {
+        var blobUrl = URL.createObjectURL(blob);
+        viewerState.blobUrls.push(blobUrl);
+
+        if (isAudioType) {
+          showAudioPlayer(blobUrl);
+        } else if (is3DType) {
+          show3DModel(blob);
+        } else if (isCSVType) {
+          showDataTable(blob);
+        } else if (isFontType) {
+          showFontPreview(blobUrl);
+        } else if (isArchiveType) {
+          showArchive(blob);
+        } else if (mime.indexOf('image/') === 0) {
+          showImage(blobUrl);
+        } else {
+          showImage(blobUrl);
+        }
+      })
+      .catch(function (err) {
+        console.error('[Viewer] Cleartext load failed:', err);
+        showError('Load Failed', err.message || 'Unable to load this file.');
+      });
+  }
+
+  function loadCleartextPDF(url) {
+    fetch(url, { credentials: 'include' })
+      .then(function (resp) {
+        if (!resp.ok) throw new Error('Failed to load PDF (' + resp.status + ')');
+        return resp.arrayBuffer();
+      })
+      .then(function (arrayBuf) {
+        if (typeof pdfjsLib === 'undefined') {
+          var blobUrl = URL.createObjectURL(new Blob([arrayBuf], { type: 'application/pdf' }));
+          viewerState.blobUrls.push(blobUrl);
+          showPDFEmbed(blobUrl);
+          return;
+        }
+
+        pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsLib.GlobalWorkerOptions.workerSrc || '';
+
+        pdfjsLib.getDocument({ data: arrayBuf }).promise.then(function (pdf) {
+          viewerState.totalPages = pdf.numPages;
+
+          $loading.classList.add('hidden');
+          $error.classList.add('hidden');
+          $content.classList.remove('hidden');
+          $imgContainer.classList.add('hidden');
+          $docContainer.classList.remove('hidden');
+          $docContainer.innerHTML = '';
+
+          if (viewerState.totalPages > 1) {
+            $pageNav.style.display = 'flex';
+          }
+
+          var scale = 1.5;
+          var rendered = 0;
+
+          for (var i = 1; i <= pdf.numPages; i++) {
+            (function (pageNum) {
+              var canvasEl = document.createElement('canvas');
+              canvasEl.className = 'page-img';
+              canvasEl.style.display = 'block';
+              canvasEl.style.marginBottom = '8px';
+              canvasEl.style.width = '100%';
+              $docContainer.appendChild(canvasEl);
+
+              pdf.getPage(pageNum).then(function (page) {
+                var viewport = page.getViewport({ scale: scale });
+                canvasEl.width = viewport.width;
+                canvasEl.height = viewport.height;
+                var ctx = canvasEl.getContext('2d');
+                page.render({ canvasContext: ctx, viewport: viewport }).promise.then(function () {
+                  rendered++;
+                  viewerState.pagesLoaded = rendered;
+                  updatePageCounter();
+                });
+              });
+            })(i);
+          }
+
+          $content.addEventListener('scroll', trackVisiblePage);
+          initToolbar();
+          updatePageCounter();
+        });
+      })
+      .catch(function (err) {
+        console.error('[Viewer] PDF load failed:', err);
+        showError('PDF Load Failed', err.message || 'Unable to load PDF.');
+      });
+  }
+
+  function showPDFEmbed(blobUrl) {
+    $loading.classList.add('hidden');
+    $error.classList.add('hidden');
+    $content.classList.remove('hidden');
+    $imgContainer.classList.add('hidden');
+    $docContainer.classList.remove('hidden');
+    $docContainer.innerHTML = '';
+
+    var embed = document.createElement('embed');
+    embed.src = blobUrl;
+    embed.type = 'application/pdf';
+    embed.style.width = '100%';
+    embed.style.height = '100%';
+    embed.style.minHeight = '80vh';
+    $docContainer.appendChild(embed);
   }
 
   // ── Secure view request ───────────────────────────────
@@ -603,7 +752,11 @@
       }
 
       var watermarkEl = document.getElementById('model-watermark');
-      watermarkEl.textContent = (assetParams.buyerAddress || '').substring(0, 10) + '...' + ' \u2022 dDRM Protected';
+      if (!isCleartext) {
+        watermarkEl.textContent = (assetParams.buyerAddress || '').substring(0, 10) + '...' + ' \u2022 dDRM Protected';
+      } else {
+        watermarkEl.textContent = '';
+      }
 
       function animate() {
         requestAnimationFrame(animate);

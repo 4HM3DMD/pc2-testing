@@ -1,10 +1,10 @@
 {
   "name": "pc2-media-runtime",
-  "title": "PC2 Media Player",
+  "title": "Elacity Player",
   "version": "0.1.0",
   "description": "Secure DASH/CENC media player for PC2 — plays DRM-protected video and audio inside PC2 using WASM decryption",
   "author": "Elacity",
-  "icon": null,
+  "icon": "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIHZpZXdCb3g9IjAgMCA0OCA0OCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZGVmcz48bGluZWFyR3JhZGllbnQgaWQ9InBnIiB4MT0iMCIgeTE9IjAiIHgyPSIxIiB5Mj0iMSI+PHN0b3Agb2Zmc2V0PSIwJSIgc3RvcC1jb2xvcj0iIzJkZDRiZiIvPjxzdG9wIG9mZnNldD0iMTAwJSIgc3RvcC1jb2xvcj0iIzBkOTQ4OCIvPjwvbGluZWFyR3JhZGllbnQ+PGNsaXBQYXRoIGlkPSJwciI+PHJlY3Qgd2lkdGg9IjQ4IiBoZWlnaHQ9IjQ4IiByeD0iMTAiLz48L2NsaXBQYXRoPjwvZGVmcz48ZyBjbGlwLXBhdGg9InVybCgjcHIpIj48cmVjdCB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIGZpbGw9InVybCgjcGcpIi8+PHBvbHlnb24gcG9pbnRzPSIxOSwxMiAzNiwyNCAxOSwzNiIgZmlsbD0id2hpdGUiIG9wYWNpdHk9IjAuOTUiLz48L2c+PC9zdmc+",
   "entry": "index.html",
   "type": "web",
   "category": "media",

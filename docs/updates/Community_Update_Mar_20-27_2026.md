@@ -466,13 +466,45 @@ PC2 is forked from the Puter open-source project. This week, several upstream co
 
 ---
 
+## Runtime Player Unification — Elacity Player & Viewer (Mar 31)
+
+**Why this matters:** Previously, unprotected media files opened in basic built-in players (a bare `<video>` tag, a simple image viewer, a PDF.js wrapper). DRM-protected content used our sophisticated Rust-based CENC player and dDRM viewer. Now, **all content opens in the Elacity runtime apps** — unifying the experience so users get the same polished player whether their content is protected or not.
+
+**What was built:**
+
+### Elacity Player (Cleartext Mode)
+The Rust-based WASM CENC-decrypting media player (`pc2-media-runtime`) now has a **cleartext mode**. When opened with `cleartext=true`, it sets `video.src` directly via the `/read` endpoint, bypassing the entire DASH/CENC decryption pipeline. All player controls (seek, volume, fullscreen, progress bar, time display) work identically. Audio-only files display a centered audio icon. Browser codec warnings display gracefully for unsupported formats. **DRM functionality is completely preserved** — the cleartext path returns early before any DRM code executes.
+
+### Elacity Viewer (Cleartext Mode)
+The dDRM Viewer (`ddrm-viewer`) now supports cleartext rendering for all non-media asset types:
+- **Images** (JPG, PNG, GIF, WebP, SVG, BMP) — renders via existing `showImage()` with full zoom
+- **PDFs** — client-side rendering via PDF.js with page navigation and zoom controls
+- **3D Models** (GLB, GLTF, OBJ, STL, FBX) — renders via existing Three.js viewer
+- **Data Files** (CSV, TSV) — renders via existing table viewer
+- **Fonts** (TTF, OTF, WOFF, WOFF2) — renders via existing font preview
+- **Archives** (ZIP) — renders via existing archive browser
+
+### Unified File-Open Routing
+A new `RUNTIME_EXTENSIONS` constant in `open_item.js` maps 35+ file extensions to the appropriate Elacity runtime app. Double-clicking any supported file routes it to Elacity Player (video/audio) or Elacity Viewer (images/PDF/3D/data/fonts/archives). Text and code files still open in the editor. User-configured default app preferences take precedence over the runtime routing.
+
+### "Open With" Dual-App Support
+Right-clicking a file and selecting "Open With" now shows **two options**: the Elacity runtime app (first, as default) and the legacy built-in app (Player, Viewer, or PDF) as an alternative. The backend `handleSuggestApps` returns both apps with a `cleartext` flag, and the GUI detects this flag to pass the correct launch arguments.
+
+### Elacity Branding
+- **Renamed**: "PC2 Media Player" → **Elacity Player**, "dDRM Viewer" → **Elacity Viewer**
+- **Custom icons**: Teal play-button gradient icon for Player, matching Elastos logo icon for Viewer
+- **Favicons**: Both apps display their icon in the browser tab
+- **Consistent taskbar**: Both apps show the Elastos logo in the desktop taskbar
+
+---
+
 ## What's Next
 
 Looking ahead, the immediate priorities are:
 
-### Runtime Player Unification
-- **Use Rust DDRM player for general media** — Currently there are separate players for DDRM-protected content and regular media. The Rust-based runtime player should handle all video and audio playback — if no dDRM contract is detected, it should play the content directly without decryption
-- **Use existing viewers for general documents** — PDFs and other document types should also route through the existing DDRM viewer when opened, playing content directly if no protection is detected. Text files remain in the editor (useful for editing)
+### Elacity Viewer Polish
+- **PDF.js full viewer** — Integrate PDF.js's built-in viewer for cleartext PDFs, providing search, print, download, sidebar with thumbnails/outline, and presentation mode (all free with the PDF.js viewer iframe)
+- **Viewer feature parity** — Ensure all cleartext viewer modes have consistent toolbar UX
 
 ### Enhanced Channel Creation UX
 - **Channel-first workflow** — Channel creation/selection should be the first step before uploading content. If a user has no channels, they should be prompted to create one

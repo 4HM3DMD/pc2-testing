@@ -22,6 +22,9 @@ import fs from 'fs/promises';
 import path from 'path';
 
 // Hardcoded base64 icons - must match apps.ts and info.ts for consistency
+const ELACITY_PLAYER_ICON = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIHZpZXdCb3g9IjAgMCA0OCA0OCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZGVmcz48bGluZWFyR3JhZGllbnQgaWQ9InBnIiB4MT0iMCIgeTE9IjAiIHgyPSIxIiB5Mj0iMSI+PHN0b3Agb2Zmc2V0PSIwJSIgc3RvcC1jb2xvcj0iIzJkZDRiZiIvPjxzdG9wIG9mZnNldD0iMTAwJSIgc3RvcC1jb2xvcj0iIzBkOTQ4OCIvPjwvbGluZWFyR3JhZGllbnQ+PGNsaXBQYXRoIGlkPSJwciI+PHJlY3Qgd2lkdGg9IjQ4IiBoZWlnaHQ9IjQ4IiByeD0iMTAiLz48L2NsaXBQYXRoPjwvZGVmcz48ZyBjbGlwLXBhdGg9InVybCgjcHIpIj48cmVjdCB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIGZpbGw9InVybCgjcGcpIi8+PHBvbHlnb24gcG9pbnRzPSIxOSwxMiAzNiwyNCAxOSwzNiIgZmlsbD0id2hpdGUiIG9wYWNpdHk9IjAuOTUiLz48L2c+PC9zdmc+';
+const ELACITY_VIEWER_ICON = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIHZpZXdCb3g9IjAgMCA0OCA0OCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZGVmcz48bGluZWFyR3JhZGllbnQgaWQ9InZnIiB4MT0iMCIgeTE9IjAiIHgyPSIxIiB5Mj0iMSI+PHN0b3Agb2Zmc2V0PSIwJSIgc3RvcC1jb2xvcj0iIzgxOGNmOCIvPjxzdG9wIG9mZnNldD0iMTAwJSIgc3RvcC1jb2xvcj0iIzYzNjZmMSIvPjwvbGluZWFyR3JhZGllbnQ+PGNsaXBQYXRoIGlkPSJ2ciI+PHJlY3Qgd2lkdGg9IjQ4IiBoZWlnaHQ9IjQ4IiByeD0iMTAiLz48L2NsaXBQYXRoPjwvZGVmcz48ZyBjbGlwLXBhdGg9InVybCgjdnIpIj48cmVjdCB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIGZpbGw9InVybCgjdmcpIi8+PHBhdGggZD0iTTYgMjRzNy0xMCAxOC0xMCAxOCAxMCAxOCAxMC03IDEwLTE4IDEwUzYgMjQgNiAyNHoiIHN0cm9rZT0id2hpdGUiIHN0cm9rZS13aWR0aD0iMi41IiBmaWxsPSJub25lIi8+PGNpcmNsZSBjeD0iMjQiIGN5PSIyNCIgcj0iNSIgZmlsbD0id2hpdGUiLz48L2c+PC9zdmc+';
+
 const hardcodedIcons: Record<string, string> = {
   'editor': 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIHZpZXdCb3g9IjAgMCA0OCA0OCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZGVmcz48bGluZWFyR3JhZGllbnQgaWQ9ImVkZ3JhZCIgeDE9IjAiIHkxPSIwIiB4Mj0iMSIgeTI9IjEiPjxzdG9wIG9mZnNldD0iMCUiIHN0b3AtY29sb3I9IiM2MzY2RjEiLz48c3RvcCBvZmZzZXQ9IjEwMCUiIHN0b3AtY29sb3I9IiM0RjQ2RTUiLz48L2xpbmVhckdyYWRpZW50PjxjbGlwUGF0aCBpZD0icm91bmRlZCI+PHJlY3Qgd2lkdGg9IjQ4IiBoZWlnaHQ9IjQ4IiByeD0iMTAiLz48L2NsaXBQYXRoPjwvZGVmcz48ZyBjbGlwLXBhdGg9InVybCgjcm91bmRlZCkiPjxyZWN0IHdpZHRoPSI0OCIgaGVpZ2h0PSI0OCIgZmlsbD0idXJsKCNlZGdyYWQpIi8+PHJlY3QgeD0iMTIiIHk9IjgiIHdpZHRoPSIyNCIgaGVpZ2h0PSIzMiIgcng9IjIiIGZpbGw9IiNmZmYiLz48cmVjdCB4PSIxNiIgeT0iMTQiIHdpZHRoPSIxNiIgaGVpZ2h0PSIyIiBmaWxsPSIjYzdkMmZlIi8+PHJlY3QgeD0iMTYiIHk9IjIwIiB3aWR0aD0iMTYiIGhlaWdodD0iMiIgZmlsbD0iI2M3ZDJmZSIvPjxyZWN0IHg9IjE2IiB5PSIyNiIgd2lkdGg9IjEyIiBoZWlnaHQ9IjIiIGZpbGw9IiNjN2QyZmUiLz48cmVjdCB4PSIxNiIgeT0iMzIiIHdpZHRoPSI4IiBoZWlnaHQ9IjIiIGZpbGw9IiNjN2QyZmUiLz48L2c+PC9zdmc+',
   'viewer': 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIHZpZXdCb3g9IjAgMCA0OCA0OCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZGVmcz48bGluZWFyR3JhZGllbnQgaWQ9InZpZXdncmFkIiB4MT0iMCIgeTE9IjAiIHgyPSIxIiB5Mj0iMSI+PHN0b3Agb2Zmc2V0PSIwJSIgc3RvcC1jb2xvcj0iIzU2ODRmNSIvPjxzdG9wIG9mZnNldD0iMTAwJSIgc3RvcC1jb2xvcj0iIzAzNjNhZCIvPjwvbGluZWFyR3JhZGllbnQ+PGNsaXBQYXRoIGlkPSJyb3VuZGVkIj48cmVjdCB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIHJ4PSIxMCIvPjwvY2xpcFBhdGg+PC9kZWZzPjxnIGNsaXAtcGF0aD0idXJsKCNyb3VuZGVkKSI+PHJlY3Qgd2lkdGg9IjQ4IiBoZWlnaHQ9IjQ4IiBmaWxsPSJ1cmwoI3ZpZXdncmFkKSIvPjxjaXJjbGUgY3g9IjE2IiBjeT0iMTQiIHI9IjUiIGZpbGw9IiNmZmQ3NjQiLz48cGF0aCBkPSJNNiAzOGwxMC0xMiA4IDYgMTAtMTQgMTAgMTR2MTJINnoiIGZpbGw9IiNjYmVhZmIiLz48L2c+PC9zdmc+',
@@ -1606,8 +1609,7 @@ export async function handleSuggestApps(req: AuthenticatedRequest, res: Response
     appIndexUrl = `${baseUrl}/apps/editor/index.html`;
   }
   
-  // Return array of app objects (matching Puter's suggest_app_for_fsentry format)
-  const app = {
+  const builtinApp = {
     uid: appUid,
     uuid: appUid,
     name: appName,
@@ -1615,40 +1617,47 @@ export async function handleSuggestApps(req: AuthenticatedRequest, res: Response
     icon: hardcodedIcons[appName] || undefined,
     index_url: appIndexUrl,
   };
+
+  // Determine the corresponding Elacity runtime app for this file type
+  let runtimeApp: any = null;
+  if (fsname.endsWith('.jpg') || fsname.endsWith('.png') || fsname.endsWith('.webp') ||
+      fsname.endsWith('.svg') || fsname.endsWith('.bmp') || fsname.endsWith('.jpeg') ||
+      fsname.endsWith('.gif') || fsname.endsWith('.pdf') || fsname.endsWith('.glb') ||
+      fsname.endsWith('.gltf') || fsname.endsWith('.obj') || fsname.endsWith('.stl') ||
+      fsname.endsWith('.fbx') || fsname.endsWith('.csv') || fsname.endsWith('.tsv') ||
+      fsname.endsWith('.ttf') || fsname.endsWith('.otf') || fsname.endsWith('.woff') ||
+      fsname.endsWith('.woff2') || fsname.endsWith('.zip')) {
+    runtimeApp = {
+      uid: 'app-elacity-viewer',
+      uuid: 'app-elacity-viewer',
+      name: 'ddrm-viewer',
+      title: 'Elacity Viewer',
+      icon: ELACITY_VIEWER_ICON,
+      index_url: `${baseUrl}/apps/ddrm-viewer/index.html`,
+      cleartext: true,
+    };
+  } else if (fsname.endsWith('.mp4') || fsname.endsWith('.webm') || fsname.endsWith('.mpg') ||
+      fsname.endsWith('.mpv') || fsname.endsWith('.mp3') || fsname.endsWith('.m4a') ||
+      fsname.endsWith('.ogg') || fsname.endsWith('.mov') || fsname.endsWith('.avi') ||
+      fsname.endsWith('.wav') || fsname.endsWith('.flac') || fsname.endsWith('.mkv') ||
+      fsname.endsWith('.av1') || fsname.endsWith('.m4v') || fsname.endsWith('.ogv') ||
+      fsname.endsWith('.aac') || fsname.endsWith('.opus')) {
+    runtimeApp = {
+      uid: 'app-elacity-player',
+      uuid: 'app-elacity-player',
+      name: 'pc2-media-runtime',
+      title: 'Elacity Player',
+      icon: ELACITY_PLAYER_ICON,
+      index_url: `${baseUrl}/apps/pc2-media-runtime/index.html`,
+      cleartext: true,
+    };
+  }
   
-  // Generate file signature (same as /open_item) so viewer can access the file
-  const actualFileUid = fileUid || `uuid-${metadata.path.replace(/\//g, '-')}`;
-  const expires = Math.ceil(Date.now() / 1000) + 9999999999999; // Far future
-  const signature = `sig-${actualFileUid}-${expires}`;
+  logger.info('[SuggestApps] Returning app info', { appName, runtimeApp: runtimeApp?.name, indexUrl: appIndexUrl });
   
-  const cleanBaseUrl = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
-  const cleanPath = metadata.path.startsWith('/') ? metadata.path : '/' + metadata.path;
-  
-  const signatureObj = {
-    uid: actualFileUid,
-    expires: expires,
-    signature: signature,
-    url: `${cleanBaseUrl}/read?file=${encodeURIComponent(cleanPath)}`,
-    read_url: `${cleanBaseUrl}/read?file=${encodeURIComponent(cleanPath)}`,
-    write_url: `${cleanBaseUrl}/writeFile?uid=${actualFileUid}&expires=${expires}&signature=${signature}`,
-    metadata_url: `${cleanBaseUrl}/itemMetadata?uid=${actualFileUid}&expires=${expires}&signature=${signature}`,
-    fsentry_type: metadata.mime_type || 'application/octet-stream',
-    fsentry_is_dir: metadata.is_dir,
-    fsentry_name: fileName,
-    fsentry_size: metadata.size,
-    fsentry_accessed: metadata.updated_at,
-    fsentry_modified: metadata.updated_at,
-    fsentry_created: metadata.created_at,
-    path: cleanPath,
-  };
-  
-  logger.info('[SuggestApps] Returning app info', { appName, indexUrl: appIndexUrl });
-  
-  // Return both signature and suggested apps (matching /open_item format)
-  res.json({
-    signature: signatureObj, // Include signature so viewer can access file
-    suggested_apps: [app],
-  });
+  // Runtime app first (if applicable), then built-in app as alternative
+  const apps = runtimeApp ? [runtimeApp, builtinApp] : [builtinApp];
+  res.json(apps);
 }
 
 /**

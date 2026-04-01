@@ -2987,7 +2987,7 @@
         window.parent.postMessage({
           msg: 'launchApp',
           appName: 'pc2-media-runtime',
-          windowTitle: title + ' — PC2 Media Player',
+          windowTitle: title + ' — Elacity Player',
           args: {
             channel: channel,
             tokenId: tokenId,
@@ -3473,7 +3473,7 @@
       $: 'puter-ipc',
       msg: 'launchApp',
       appName: 'ddrm-viewer',
-      windowTitle: title + ' — dDRM Viewer',
+      windowTitle: title + ' — Elacity Viewer',
       args: viewerArgs,
     }, '*');
   }

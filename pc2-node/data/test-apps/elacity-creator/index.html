@@ -12,15 +12,18 @@
     <header id="app-header">
       <div class="header-left">
         <h1>Elacity Creator</h1>
-        <span class="header-subtitle">Publish digital assets</span>
+        <div class="header-tabs">
+          <button class="header-tab active" data-tab="mint" id="tab-mint">Mint</button>
+          <button class="header-tab" data-tab="channels" id="tab-channels">Channels</button>
+        </div>
       </div>
       <div class="header-right">
         <button id="wallet-btn" class="wallet-btn">Connect Wallet</button>
       </div>
     </header>
 
-    <!-- Main content -->
-    <main id="main">
+    <!-- Main content: Mint view -->
+    <main id="main" data-view="mint">
       <!-- Stepper — continuous track with labels above -->
       <div id="steps-bar">
         <div class="step active" data-step="1">
@@ -44,8 +47,77 @@
         </div>
       </div>
 
-      <!-- Scene 1: Choose Your Asset -->
+      <!-- Scene 1: Choose Your Asset (Channel + File Upload) -->
       <section id="step-1" class="step-panel active" role="tabpanel" aria-labelledby="step-1-label">
+
+        <!-- Channel: Loading state -->
+        <div id="channel-loading" class="channel-step-state" style="text-align:center; padding:24px 0; color:var(--text-muted);">
+          <p style="font-size:15px;">Connect your wallet to load channels...</p>
+        </div>
+
+        <!-- Channel: Has channels — selection UI -->
+        <div id="channel-select-area" class="channel-step-state" style="display:none;">
+          <div class="form-group" style="margin-bottom:16px;">
+            <label for="asset-channel">Channel <span class="required">*</span></label>
+            <div class="channel-row">
+              <select id="asset-channel">
+                <option value="">Loading channels...</option>
+              </select>
+              <button type="button" class="btn btn-accent" id="btn-create-channel" title="Create a new channel on Base">+ New Channel</button>
+            </div>
+            <input type="text" id="asset-channel-custom" class="hidden" placeholder="0x... channel address" style="margin-top:6px;" />
+            <span class="field-hint" id="channel-hint">Select a channel to mint into</span>
+          </div>
+        </div>
+
+        <!-- Channel: No channels — prominent creation prompt -->
+        <div id="channel-empty-state" class="channel-step-state" style="display:none;">
+          <div style="text-align:center; padding:16px 0 24px;">
+            <div style="font-size:40px; margin-bottom:8px;">📡</div>
+            <h3 style="margin:0 0 6px; font-size:18px; font-weight:600; color:var(--text);">Create Your First Channel</h3>
+            <p style="margin:0 0 16px; font-size:13px; color:var(--text-muted); max-width:380px; margin-left:auto; margin-right:auto;">Channels are where your digital assets live on the Elacity marketplace.</p>
+            <button type="button" class="btn btn-primary" id="btn-create-first-channel" style="font-size:14px; padding:10px 24px;">Create Channel</button>
+          </div>
+        </div>
+
+        <!-- Channel creation form (shared by both create paths) -->
+        <div id="channel-create-config" style="display:none; padding:16px; background:var(--bg-elevated); border:1px solid var(--border); border-radius:var(--radius-sm); margin-bottom:16px;">
+          <h3 style="margin:0 0 16px; font-size:16px; font-weight:600; color:var(--text);">New Channel</h3>
+          <div class="form-group" style="margin-bottom:12px;">
+            <label for="new-channel-name">Channel Name <span class="required">*</span></label>
+            <input type="text" id="new-channel-name" placeholder="e.g. My Photography Channel" maxlength="80" />
+          </div>
+          <div class="form-group" style="margin-bottom:12px;">
+            <label for="new-channel-description">Description <span class="optional-tag">(optional)</span></label>
+            <textarea id="new-channel-description" rows="2" placeholder="What kind of content will you publish here?" maxlength="500" style="width:100%; resize:vertical;"></textarea>
+          </div>
+
+          <!-- Subscription Plans -->
+          <div class="form-group" id="channel-plans-section" style="margin-bottom:12px;">
+            <label>Subscription Plans <span class="optional-tag">(optional)</span></label>
+            <span class="field-hint" style="margin-bottom:4px;">Let subscribers access your channel for a recurring fee</span>
+            <div id="plans-container"></div>
+            <div style="display:flex; gap:8px; margin-top:6px;">
+              <button type="button" id="btn-add-plan" class="inline-btn">+ Add Plan</button>
+              <button type="button" id="btn-use-default-plans" class="inline-btn primary">Use 3-Tier Template</button>
+            </div>
+          </div>
+
+          <!-- Token-Gating -->
+          <div class="form-group" id="channel-tokengating-section" style="margin-bottom:12px;">
+            <label>VIP Token Access <span class="optional-tag">(optional)</span></label>
+            <span class="field-hint" style="margin-bottom:4px;">Require holders of specific tokens to access this channel.</span>
+            <div id="token-gate-container"></div>
+            <button type="button" id="btn-add-token-gate" class="inline-btn">+ Add Token Gate</button>
+          </div>
+
+          <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:16px;">
+            <button type="button" class="btn btn-secondary" id="btn-cancel-channel" style="height:36px; font-size:13px; padding:0 14px;">Cancel</button>
+            <button type="button" class="btn btn-primary" id="btn-deploy-channel" style="height:36px; font-size:13px; padding:0 14px;">Deploy Channel</button>
+          </div>
+        </div>
+
+        <!-- File upload -->
         <div class="drop-zone" id="drop-zone" role="button" aria-label="Select file to publish">
           <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
@@ -251,59 +323,15 @@
             </div>
           </div>
 
-          <!-- Section D: Channel (always visible — required for minting) -->
-          <div class="form-section" data-section="channel">
+          <!-- Section D: Settings -->
+          <div class="form-section collapsed" data-section="settings">
             <div class="form-section-header" onclick="this.parentElement.classList.toggle('collapsed')">
-              <span class="form-section-title">Channel & Settings</span>
+              <span class="form-section-title">Settings</span>
               <span class="form-section-chevron">&#9662;</span>
             </div>
             <div class="form-section-body">
-              <!-- Channel -->
-              <div class="form-group">
-                <label for="asset-channel">Channel <span class="required">*</span></label>
-                <div class="channel-row">
-                  <select id="asset-channel">
-                    <option value="">Loading channels...</option>
-                  </select>
-                  <button type="button" class="btn btn-accent" id="btn-create-channel" title="Create a new channel on Base">+ New</button>
-                </div>
-                <input type="text" id="asset-channel-custom" class="hidden" placeholder="0x... channel address" style="margin-top:6px;" />
-                <span class="field-hint" id="channel-hint">Select a channel to mint into</span>
-              </div>
-
-              <!-- Channel Creation Config (shown when user clicks + New, BEFORE deploying) -->
-              <div id="channel-create-config" style="display:none; padding:12px; background:var(--bg-elevated); border:1px solid var(--border); border-radius:var(--radius-sm);">
-                <div class="form-group" style="margin-bottom:12px;">
-                  <label for="new-channel-name">Channel Name</label>
-                  <input type="text" id="new-channel-name" placeholder="My Channel" />
-                </div>
-
-                <!-- Subscription Plans -->
-                <div class="form-group" id="channel-plans-section" style="margin-bottom:12px;">
-                  <label>Subscription Plans <span class="optional-tag">(optional)</span></label>
-                  <div id="plans-container"></div>
-                  <div style="display:flex; gap:8px; margin-top:6px;">
-                    <button type="button" id="btn-add-plan" class="inline-btn">+ Add Plan</button>
-                    <button type="button" id="btn-use-default-plans" class="inline-btn primary">Use 3-Tier Template</button>
-                  </div>
-                </div>
-
-                <!-- Token-Gating -->
-                <div class="form-group" id="channel-tokengating-section" style="margin-bottom:12px;">
-                  <label>VIP Token Access <span class="optional-tag">(optional)</span></label>
-                  <span class="field-hint" style="margin-bottom:4px;">Require holders of specific tokens to access this channel.</span>
-                  <div id="token-gate-container"></div>
-                  <button type="button" id="btn-add-token-gate" class="inline-btn">+ Add Token Gate</button>
-                </div>
-
-                <div style="display:flex; gap:8px; justify-content:flex-end;">
-                  <button type="button" class="btn btn-secondary" id="btn-cancel-channel" style="height:36px; font-size:13px; padding:0 14px;">Cancel</button>
-                  <button type="button" class="btn btn-primary" id="btn-deploy-channel" style="height:36px; font-size:13px; padding:0 14px;">Deploy Channel</button>
-                </div>
-              </div>
-
               <!-- Adult content toggle -->
-              <div class="form-group" style="margin-top:8px;">
+              <div class="form-group">
                 <div class="toggle-row">
                   <div class="toggle-track" id="adult-toggle" role="switch" aria-checked="false" tabindex="0">
                     <div class="toggle-knob"></div>
@@ -594,6 +622,94 @@
         </details>
       </section>
     </main>
+
+    <!-- Channels view (tab) -->
+    <div id="channels-view" style="display:none; padding:24px; max-width:680px; margin:0 auto;">
+      <div id="channels-view-loading" style="text-align:center; padding:32px 0; color:var(--text-muted);">
+        <p style="font-size:14px;">Connect your wallet to manage channels.</p>
+      </div>
+
+      <div id="channels-view-content" style="display:none;">
+        <!-- Channel selector + create -->
+        <div class="form-group" style="margin-bottom:16px;">
+          <label for="manage-channel-select">Your Channels</label>
+          <div style="display:flex; gap:8px; align-items:center;">
+            <select id="manage-channel-select" style="flex:1;"></select>
+            <button type="button" class="btn btn-accent" id="btn-channels-create" title="Create a new channel">+ New Channel</button>
+          </div>
+        </div>
+
+        <!-- Empty state when user owns no channels -->
+        <div id="channels-view-empty" style="display:none; text-align:center; padding:24px 0;">
+          <div style="font-size:36px; margin-bottom:8px;">📡</div>
+          <p style="margin:0 0 8px; font-size:14px; color:var(--text);">You don't own any channels yet.</p>
+          <p style="margin:0; font-size:13px; color:var(--text-muted);">Create one to start managing subscriptions and access.</p>
+        </div>
+
+        <!-- Channel creation form (reused, cloned from mint view) -->
+        <div id="channels-view-create-form" style="display:none;"></div>
+
+        <!-- Management panel -->
+        <div id="channel-manage-section" style="display:none;">
+          <div id="manage-loading" style="text-align:center; padding:16px 0; color:var(--text-muted); display:none;">
+            <p style="font-size:13px;">Loading channel details...</p>
+          </div>
+
+          <div id="manage-content" style="display:none;">
+
+            <!-- Section: Channel Details -->
+            <div class="manage-section" id="manage-details-section">
+              <div class="manage-section-header" data-target="manage-details-body">
+                <span class="manage-chevron">&#9660;</span> Channel Details
+              </div>
+              <div class="manage-section-body" id="manage-details-body">
+                <div class="form-group" style="margin-bottom:10px;">
+                  <label for="manage-channel-name">Name</label>
+                  <input type="text" id="manage-channel-name" placeholder="Channel name" maxlength="80" />
+                </div>
+                <div class="form-group" style="margin-bottom:10px;">
+                  <label for="manage-channel-description">Description</label>
+                  <textarea id="manage-channel-description" rows="2" placeholder="Channel description" maxlength="500" style="width:100%; resize:vertical;"></textarea>
+                </div>
+                <div style="display:flex; gap:8px; align-items:center;">
+                  <button type="button" class="inline-btn primary" id="btn-save-channel-details">Save Changes</button>
+                  <span id="manage-details-status" style="font-size:12px; color:var(--text-muted);"></span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Section: Subscription Plans -->
+            <div class="manage-section" id="manage-plans-section">
+              <div class="manage-section-header" data-target="manage-plans-body">
+                <span class="manage-chevron">&#9654;</span> Subscription Plans <span id="manage-plans-count" style="font-size:11px; color:var(--text-muted);"></span>
+              </div>
+              <div class="manage-section-body" id="manage-plans-body" style="display:none;">
+                <div id="manage-plans-container"></div>
+                <div style="display:flex; gap:8px; margin-top:6px;">
+                  <button type="button" class="inline-btn" id="btn-manage-add-plan">+ Add Plan</button>
+                </div>
+                <span id="manage-plans-status" style="font-size:12px; color:var(--text-muted); display:block; margin-top:6px;"></span>
+              </div>
+            </div>
+
+            <!-- Section: Token-Gating -->
+            <div class="manage-section" id="manage-gates-section">
+              <div class="manage-section-header" data-target="manage-gates-body">
+                <span class="manage-chevron">&#9654;</span> Token-Gating <span id="manage-gates-count" style="font-size:11px; color:var(--text-muted);"></span>
+              </div>
+              <div class="manage-section-body" id="manage-gates-body" style="display:none;">
+                <div id="manage-gates-container"></div>
+                <div style="display:flex; gap:8px; margin-top:6px;">
+                  <button type="button" class="inline-btn" id="btn-manage-add-gate">+ Add Token Gate</button>
+                </div>
+                <span id="manage-gates-status" style="font-size:12px; color:var(--text-muted); display:block; margin-top:6px;"></span>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+    </div>
 
     <!-- Floating progress bar -->
     <div id="floating-progress" class="floating-progress" style="display:none;">

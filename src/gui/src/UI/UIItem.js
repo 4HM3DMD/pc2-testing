@@ -1139,12 +1139,28 @@ function UIItem (options) {
                                         window.mutate_user_preferences(window.user_preferences);
                                     }
                                 }
-                                launch_app({
-                                    name: suggested_app.name,
-                                    file_path: $(el_item).attr('data-path'),
-                                    window_title: $(el_item).attr('data-name'),
-                                    file_uid: $(el_item).attr('data-uid'),
-                                });
+                                if (suggested_app.cleartext) {
+                                    const item_path = $(el_item).attr('data-path');
+                                    const readUrl = `${window.api_origin}/read?path=${encodeURIComponent(item_path)}`;
+                                    launch_app({
+                                        name: suggested_app.name,
+                                        window_title: $(el_item).attr('data-name') + ' — ' + suggested_app.title,
+                                        args: {
+                                            cleartext: 'true',
+                                            fileUrl: readUrl,
+                                            mimeType: '',
+                                            title: $(el_item).attr('data-name'),
+                                            thumbnail: '',
+                                        },
+                                    });
+                                } else {
+                                    launch_app({
+                                        name: suggested_app.name,
+                                        file_path: $(el_item).attr('data-path'),
+                                        window_title: $(el_item).attr('data-name'),
+                                        file_uid: $(el_item).attr('data-uid'),
+                                    });
+                                }
                             },
                         });
                     }

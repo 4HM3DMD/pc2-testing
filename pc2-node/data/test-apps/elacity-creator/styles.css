@@ -71,9 +71,23 @@ body {
   background: var(--bg-surface);
 }
 
-.header-left { display: flex; align-items: baseline; gap: 12px; }
+.header-left { display: flex; align-items: center; gap: 16px; }
 .header-left h1 { font-size: 17px; font-weight: 600; letter-spacing: -0.2px; }
-.header-subtitle { font-size: 13px; color: var(--text-muted); }
+.header-tabs { display: flex; gap: 2px; }
+.header-tab {
+  display: inline-flex; align-items: center; justify-content: center;
+  height: 32px; padding: 0 14px;
+  font-size: 13px; font-weight: 500; line-height: 1;
+  font-family: inherit;
+  background: transparent; color: var(--text-muted);
+  border: 1px solid transparent; border-radius: 6px;
+  cursor: pointer; transition: all var(--duration-fast, 0.15s);
+}
+.header-tab:hover { color: var(--text); background: var(--bg-elevated); }
+.header-tab.active {
+  color: var(--accent); background: var(--accent-subtle, rgba(59,130,246,0.1));
+  border-color: var(--accent);
+}
 
 .wallet-btn {
   display: inline-flex; align-items: center; justify-content: center;
@@ -120,7 +134,7 @@ main {
   position: relative;
   z-index: 1;
   transition: color var(--duration-normal) var(--ease-out);
-  min-width: 60px;
+  min-width: 56px;
 }
 .step.active { color: var(--accent); font-weight: 600; }
 .step.done { color: var(--success); }
@@ -640,6 +654,17 @@ input.field-error, select.field-error, textarea.field-error {
 /* Channel row */
 .channel-row { display: flex; gap: 8px; align-items: center; }
 .channel-row select { flex: 1; }
+
+/* ── Channel Management Panel ── */
+.manage-section { margin-bottom: 12px; }
+.manage-section-header {
+  display: flex; align-items: center; gap: 6px;
+  padding: 8px 0; cursor: pointer; font-size: 14px; font-weight: 600;
+  color: var(--text); user-select: none;
+}
+.manage-section-header:hover { color: var(--accent); }
+.manage-chevron { font-size: 10px; width: 14px; display: inline-block; }
+.manage-section-body { padding: 4px 0 8px 20px; }
 
 /* ── Licensing ── */
 .license-type-cards { grid-template-columns: repeat(4, 1fr); }

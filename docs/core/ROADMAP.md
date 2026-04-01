@@ -2,7 +2,7 @@
 
 > **Purpose:** Single source of truth for all strategic goals, technical work streams, and milestones — directly mapped to the Keystone Fund proposal and Rong Chen's original vision
 > **Created:** 2026-02-24
-> **Last Updated:** 2026-03-27
+> **Last Updated:** 2026-03-31
 > **Status:** Living document — update as work progresses
 
 ---
@@ -25,6 +25,7 @@ Each **Milestone** from the DAO proposal is broken down into concrete **Work Str
 | [POST_QUANTUM_AUDIT.md](./POST_QUANTUM_AUDIT.md) | PQ crypto audit, vulnerability map, Lit replacement strategy, migration roadmap |
 | [ARM_DEVICES.md](../deployment/ARM_DEVICES.md) | Jetson/Raspberry Pi deployment |
 | [ELASTOS_AGENT_REFERENCE.md](./ELASTOS_AGENT_REFERENCE.md) | Complete agent reference: why/how/what, talking points, competitive positioning, audience angles |
+| [elastos-runtime](https://github.com/Elacity/elastos-runtime) | Anders' Rust runtime: capsule model, capability tokens, Carrier P2P, namespace, architecture |
 
 ---
 
@@ -236,17 +237,19 @@ These diagrams from Rong define the north star. Every work stream should move us
   - [x] **My Channels management hub (Mar 20)** — New tab in Earnings with channel list, "Edit Details" / "Manage Plans" buttons, centralized channel administration. Server-side `creator` filter via `ChannelQueryInput`. GraphQL schema introspection for correct mutation formats (`SubscriptionPlanUpdateAction.args` wrapper, `TokenOwnershipInput` field names, `price` as String)
   - [x] **API hardening (Mar 20)** — Enhanced `gql()` error handling captures response body for non-200 errors, debug logging on mutations, auto SIWE re-auth on expired tokens, `RETRIEVE_CHANNEL_QUERY` now includes `categories` field
   - [x] **Audio routing fix** — Creator Dashboard routes all audio through media encoding pipeline (DASH/CENC). Audio passthrough in dDRM Viewer retained as legacy fallback only. New audio always goes through Media Runtime *(verified Mar 21)*
-**Runtime Player Unification (Next Priority):**
-- [ ] **Use Rust DDRM player for general media** — The existing Rust-based Media Runtime player should handle ALL video and audio playback, not just dDRM-protected content. When no dDRM contract/operative is detected, play the content directly without decryption. Eliminates the need for separate general media players
-- [ ] **Use DDRM viewer for general documents** — Route PDF and document viewing through the existing dDRM Viewer app. When no dDRM protection is detected, render the content directly. Text files excluded (keep using editor for editability)
-- [ ] **Unified file-open routing** — Update GUI file type handlers to route video/audio/PDF through runtime players by default, falling back gracefully when no dDRM contract exists
+**Runtime Player Unification — ✅ COMPLETED (Mar 31):**
+- [x] **Elacity Player (cleartext mode)** — `pc2-media-runtime/player.js` detects `cleartext=true` param, sets `video.src` directly via `/read` endpoint, bypasses DASH/CENC pipeline entirely. Handles audio-only, codec warnings, full transport controls. DRM path untouched *(completed Mar 31)*
+- [x] **Elacity Viewer (cleartext mode)** — `ddrm-viewer/viewer.js` detects `cleartext=true`, fetches file via `/read` endpoint, routes to existing renderers (image, 3D, CSV, font, archive). PDF rendering via PDF.js with page navigation and zoom. DRM path untouched *(completed Mar 31)*
+- [x] **Unified file-open routing** — `RUNTIME_EXTENSIONS` constant in `open_item.js` maps 35+ extensions to Elacity Player (video/audio) or Elacity Viewer (images/PDF/3D/CSV/fonts/archives). User default app prefs take precedence. Text/code files fall through to editor *(completed Mar 31)*
+- [x] **"Open With" dual-app support** — Backend `handleSuggestApps` returns both Elacity runtime app (first, with `cleartext` flag) and legacy built-in app as alternative. GUI `UIItem.js` detects `cleartext` flag and passes correct launch args *(completed Mar 31)*
+- [x] **Elacity branding** — Apps renamed from "PC2 Media Player"/"dDRM Viewer" to "Elacity Player"/"Elacity Viewer". Custom SVG icons (teal play-button for player, purple eye for viewer). Favicons added to HTML. Consistent Elastos logo icon in taskbar across both apps *(completed Mar 31)*
 
 **Enhanced Channel Creation UX (Next Priority):**
-- [ ] **Channel-first workflow** — Channel creation/selection should be the first step in the Creator Dashboard before uploading content. If user has no channels, prompt to create one before proceeding
-- [ ] **Rich channel creation form** — Add fields for channel name, description, and metadata during creation (not just a bare contract deploy). Leverage existing `createChannel()` metadata capabilities
-- [ ] **Subscription model integration** — Expose subscription plan configuration during channel creation, leveraging existing subscription lifecycle flows (plan management, token-gating)
+- [x] **Channel-first workflow** — Channel creation/selection is now Step 1 in the Creator Dashboard (5-step flow: Channel → Choose → Describe → Publish → Done). If user has no channels, a prominent "Create Your First Channel" screen is shown *(completed Mar 31)*
+- [x] **Rich channel creation form** — Channel creation form includes name, description, subscription plans, and token-gating fields. Deploy/Cancel buttons wired to on-chain channel deployment *(completed Mar 31)*
+- [x] **Subscription model integration** — Subscription plan configuration (+ Add Plan, 3-Tier Template) and VIP token access are exposed directly in the channel creation form *(completed Mar 31)*
 - [x] **Wallet choice in channel creation** — Users can create channels with either EOA or Agent Wallet *(completed Mar 27)*
-- [ ] **Channel management from Creator** — Edit channel details, manage plans, and configure access directly from the Creator Dashboard without switching to the Market app
+- [x] **Channel management from Creator** — Edit channel details, manage subscription plans, and configure token-gating access directly from the Creator Dashboard via inline management panel *(completed Mar 31)*
 
 - [ ] **Tier 2 — Medium Markets (local runtime integration):** dApp Store, AI models (GGUF → Ollama), code packages (npm), datasets, HTML5 games. Need PC2 backend endpoints for decrypt-and-load.
 - [ ] **Tier 3 — Complex Markets (ElastOS Runtime v2):** Native software/games, API marketplace, agent marketplace. Need Runtime capsule sandboxes (WASM/Firecracker). Runtime v2 capsule model provides isolated execution for all interactive content types (3D, games, dApps) — capability tokens replace blob URLs.
@@ -374,11 +377,25 @@ These diagrams from Rong define the north star. Every work stream should move us
 - [x] **App capability manifests** — all 7 app.json files enriched with `api_endpoints`, `postMessage_events`, and `external_services` fields documenting actual API contract per app. `APP_MANIFEST_SPEC.md` updated with new field definitions and Runtime v2 mapping notes. *(completed Mar 23)*
 - [x] **Agent namespace alignment** — `docs/core/NAMESPACE_MAPPING.md` created with complete path mapping table (user space, agent space, system space, public space). `GatewayService.validateAgentWorkspace()` logs warning for non-standard paths. No actual path changes — documentation + validation only. *(completed Mar 23)*
 
-**Questions for Anders:**
-- What capability token format should we pre-adopt for app manifests? (JSON shape, signing scheme, scope declarations)
-- Should `localhost://UsersAI/` be a reserved path in Runtime v2's namespace today, or will it be provisioned dynamically?
-- For the dDRM Provider Capsule: should our Rust WASM crates (`aes-gcm-decrypt`, `cenc-decrypt`) target `wasm32-wasip1` Preview 1 or Preview 2 for capsule compatibility?
-- Is there a canonical way to expose "skill install" as a capsule operation, or should we design our own and align later?
+**Runtime Audit Findings (Mar 31 — First Public Release):**
+> Comprehensive audit of [github.com/Elacity/elastos-runtime](https://github.com/Elacity/elastos-runtime) completed. Key strategic findings:
+
+- [x] **Server/Headless Host Adapter alignment** — The Runtime defines four host adapter modes: server/headless, desktop, mobile, kiosk. Our PC2 Node.js server + browser-rendered desktop IS the "server/headless" host adapter. This validates our current architecture and positions PC2 as the reference implementation of the first working host adapter. The Runtime proxies capsule HTTP to any browser on any OS — exactly what our Node.js server does today. This means our Node.js stack has a clear architectural role in v2 (not "replace everything with Rust") *(confirmed Mar 31)*
+- [x] **macOS full security model via WASM** — The Runtime is pure Rust and compiles on macOS. The full security model (capability tokens, Ed25519 signatures, content addressing, namespace enforcement, Carrier P2P via iroh, audit logging, WASM sandboxing via Wasmtime) works on macOS. Only the microVM substrate (crosvm/KVM) requires Linux. Our dDRM WASM crates (`aes-gcm-decrypt`, `cenc-decrypt`, `cenc-encrypt`, `ddrm-renderer`, `ipfs-assemble`, `mp4-split`) all target `wasm32-wasip1` and run with full capability-gated security on macOS. macOS packaging (Homebrew, code signing, notarization) is future work, not a blocker *(confirmed Mar 31)*
+- [x] **Provider interface target** — Providers implement a stdin/stdout JSON protocol with `fetch`, `store`, `list`, `delete` operations. This is the clear implementation target for the dDRM Provider Capsule. Our Rust WASM crates map directly to provider operations: `drm:decrypt`, `drm:encrypt`, `drm:verify-access`, `drm:render` *(confirmed Mar 31)*
+- [x] **Carrier alignment validated** — One runtime = one Carrier node per machine (confirmed). Capsules consume `peer/gossip_send`, do not spawn own Carrier nodes (confirmed). Kubo is optional, not Carrier core (confirmed). iroh is the transport implementation, not the contract *(confirmed Mar 31)*
+- [ ] **Convergence risk: blockchain integration** — Runtime has NO EVM wallet, on-chain verification, or payment flows yet (marked "Next" in TASKS.md). This is the biggest gap for Elacity integration and gates the ACCESS_TOKEN → capability token bridge. Our wallet bridge, marketplace, channel creation, and all dDRM on-chain functionality are PC2-specific until the Runtime adds blockchain support. Timeline: unknown, needs discussion with Anders
+
+**Questions for Anders (Resolved from Runtime First Public Release — Mar 31):**
+- [x] **Capability token format** — Answered from [ARCHITECTURE.md](https://github.com/Elacity/elastos-runtime/blob/main/docs/ARCHITECTURE.md): Ed25519-signed struct with `version`, `id`, `capsule`, `issuer`, `resource` (ResourceId), `action` (read/write/execute/message/delete/admin), `constraints` (epoch, delegatable, classification, max_uses), `issued_at`, `expiry`, `signature`. Our `app.json` `permissions` field maps `storage` paths to ResourceId patterns, `api_endpoints` to action scopes *(resolved Mar 31)*
+- [x] **`localhost://UsersAI/` path** — Answered from [NAMESPACES.md](https://github.com/Elacity/elastos-runtime/blob/main/docs/NAMESPACES.md): Already a file-backed localhost root exposed by the runtime. Peer concept to `localhost://Users/...`. Our `NAMESPACE_MAPPING.md` agent path mapping (`~/pc2/agents/{id}/` → `localhost://UsersAI/{agentName}/`) is correct *(resolved Mar 31)*
+- [x] **WASM target** — Answered from `components.json` + GLOSSARY.md: Runtime uses `wasm32-wasip1` (Preview 1) for all WASM capsules. Our crates (`aes-gcm-decrypt`, `cenc-decrypt`, `cenc-encrypt`, `ddrm-renderer`, `ipfs-assemble`, `mp4-split`) already target this. No change needed *(resolved Mar 31)*
+- [ ] **Skill install as capsule operation** — Still open. No skill concept in Runtime yet; our SKILL.md format is ahead of the Runtime. Design our own and align later
+
+**New Questions for Anders (from Runtime Audit):**
+- How should PC2 Node.js position itself as the "server/headless" host adapter? Should we implement the Runtime's HTTP proxy contract, or does the Runtime proxy capsule HTTP itself?
+- What is the timeline for blockchain/EVM wallet integration in the Runtime? This gates our ACCESS_TOKEN → capability token bridge
+- Should we start adapting our `app.json` manifests to also generate `capsule.json` format, or wait for the capsule manifest spec to stabilize?
 
 **Puter Upstream Audit (Mar 23):**
 > Audited 1,493 upstream Puter commits since fork. Sovereignty-first principle: no cloud-dependent features, no new external dependencies. Result: 1 fix worth porting out of 1,493 commits.
@@ -638,20 +655,27 @@ These diagrams from Rong define the north star. Every work stream should move us
 
 **Goal:** Anders' Rust runtime begins integrating. Agent economy emerges.
 
-**ElastOS Runtime Status (as of Mar 18, 2026 — RC4 / 0.19.0-rc4):**
-> 10 Rust crates, dozens of capsules, hundreds of tests. Pure Rust, no C dependencies, no OpenSSL.
-> Verified on x86_64 and aarch64 (Jetson, Raspberry Pi). Fresh install to chat: `curl | bash`.
+**ElastOS Runtime Status (as of Mar 31, 2026 — First Public Release):**
+> Repository: [github.com/Elacity/elastos-runtime](https://github.com/Elacity/elastos-runtime)
+> Pure Rust monorepo (~16K LOC across runtime + common crates, targeting 5-7K trusted core). No C dependencies, no OpenSSL.
+> Verified on Linux x86_64 and aarch64 (Jetson). macOS: compiles and runs (WASM + full security model), microVM requires Linux KVM.
+> Full documentation: ARCHITECTURE, NAMESPACES, CARRIER, COMMAND_MATRIX, GLOSSARY, CAPSULE_MODEL.
+> Fresh install to PC2 home: `curl -fsSL https://elastos.elacitylabs.com/install.sh | bash && elastos setup && elastos`
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| Runtime core (capabilities, signatures, audit) | **Verified** | 12 checks per invocation |
-| WASM execution (Wasmtime) | **Verified** | `wasm32-wasip1` — same target as our WASM crates |
-| microVM execution (crosvm/KVM) | **Verified** | Rootless on Jetson and WSL |
-| Carrier P2P (DID, DHT, gossip, relay) | **Verified** | Cross-network Iroh/QUIC |
+| Runtime core (capabilities, signatures, audit) | **Verified** | 12 checks per capability invocation, Ed25519 signed tokens |
+| WASM execution (Wasmtime) | **Verified** | `wasm32-wasip1` — same target as our WASM crates. Works on macOS |
+| microVM execution (crosvm/KVM) | **Verified** | Rootless on Jetson and WSL. Linux-only (KVM required) |
+| Carrier P2P (DID, DHT, gossip, relay) | **Verified** | iroh (QUIC + DHT + relay). Native↔WASM interop proven Mar 30 |
 | Data capsules (signed content + viewer) | **Working** | Maps directly to `.ddrm.json` + dDRM Viewer |
-| Signed release pipeline | **Proven** | Ed25519 publish/install/update |
-| AI provider (`elastos://ai/`) | **Working** | LLM routing |
-| Blockchain integration | **Next** | DID sidechain bridge, payment flows |
+| Signed release pipeline | **Proven** | Ed25519 publish/install/update. CID/checksum fields in components.json not yet populated |
+| AI provider (`elastos://ai/`) | **Working** | LLM routing via llama-provider |
+| Provider interface | **Documented** | stdin/stdout JSON protocol: `fetch`, `store`, `list`, `delete`. Clear target for dDRM Provider Capsule |
+| Namespace model (`localhost://`, `elastos://`) | **Documented** | `localhost://Users/`, `UsersAI/`, `AppCapsules/`, `WebSpaces/`, `MyWebSite` all defined |
+| Host adapter model | **Documented** | Server/headless (= our PC2 Node.js), desktop, mobile, kiosk modes defined |
+| Blockchain integration | **Next** | No EVM wallet, no on-chain verification yet. Dependency for ACCESS_TOKEN → capability token bridge |
+| macOS packaging | **Not started** | Runtime compiles on macOS, WASM capsules have full security model. Homebrew/code signing/notarization not yet done |
 
 **Runtime Integration (v2.0.0 convergence):**
 - [ ] PC2 desktop as Shell capsule — Puter runs inside Runtime as the orchestrator
@@ -1019,7 +1043,7 @@ Starting Month 1 (March 2026):
 | v1.8.0 | October 2026 | Developer SDK, composable assets (nested licensing), **PDR: Pre-publish safety screening**, **PDR: Enterprise billing (Stripe)** |
 | v1.9.0 | November 2026 | Agent buyer support (MCP/A2A), capsule marketplace alpha, **PDR: Multi-vertical templates** |
 | v1.10.0 | December 2026 | Year 1 hardening + comprehensive review |
-| v2.0.0 | Q1 2027 | **Runtime convergence** — PC2 desktop as Shell capsule, dDRM as Provider Capsule, full capability tokens |
+| v2.0.0 | Q1 2027 | **Runtime convergence** — PC2 desktop as Shell capsule (server/headless host adapter), dDRM as Provider Capsule, full capability tokens. **Risk:** Runtime blockchain integration not yet started (gates ACCESS_TOKEN → capability token bridge) |
 
 *Releases beyond v1.10.0 defined based on Year 1 learnings.*
 
