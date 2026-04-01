@@ -2,7 +2,7 @@
 
 > **Purpose:** Single source of truth for all strategic goals, technical work streams, and milestones — directly mapped to the Keystone Fund proposal and Rong Chen's original vision
 > **Created:** 2026-02-24
-> **Last Updated:** 2026-03-31
+> **Last Updated:** 2026-04-01
 > **Status:** Living document — update as work progresses
 
 ---
@@ -261,7 +261,11 @@ These diagrams from Rong define the north star. Every work stream should move us
 - [ ] **dApp Store UI** — categories, search, ratings, "Verified" badges, auto-update notifications
 - [ ] **dApp sandboxing v1** — CSP + iframe sandbox with postMessage bridge (PC2 v1.x)
 - [ ] **dApp sandboxing v2** — signed capsules with capability tokens (Runtime convergence)
-- [ ] **Use case: DeFi frontends** — Uniswap, Aave, Curve etc. packaged as local dApps (no hosted frontend to attack)
+- [x] **Use case: DeFi frontends — Glide Finance DEX** — First DeFi dApp packaged and running on PC2. Glide Finance (Uniswap V2 fork on ESC) bundled as local dApp with wallet bridge auto-connect, RPC proxy with fallback chain (`api.ela.city/esc` → `api.elastos.io/eth` → `rpc.glidefinance.io`), response cache (38x speedup), deadline fix for broken subgraph. Swap confirmed on-chain: tx `0xb5b9...35b1` *(completed Apr 1)*
+  - [x] `evm-multicall` Rust WASM crate (116KB) — Multicall3 ABI encoder/decoder for batching EVM read calls
+  - [x] `amm-engine` Rust WASM crate (143KB) — Uniswap V2 AMM math engine (getAmountOut, getAmountIn, multi-hop route finding, price impact calculation)
+  - [x] RPC response cache — in-memory TTL cache per method (`eth_chainId`: 1hr, `eth_gasPrice`: 5s, `eth_getCode`: 5min)
+  - [x] **Supernode ESC RPC** — read-only ESC full node on Contabo supernode (systemd service, `127.0.0.1:20636`, method whitelist via gateway proxy at `/rpc/esc`). Self-sovereign chain access for all PC2 nodes *(syncing, ETA ~10h)*
 - [ ] **Use case: Productivity tools** — note-taking, spreadsheet, code editor as owned software
 - [ ] **Use case: HTML5 games** — game bundles sold with royalties on resale
 

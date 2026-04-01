@@ -1334,6 +1334,158 @@ export class WASMRuntime {
     }
 
     /**
+     * Execute evm-multicall WASM module for Multicall3 ABI encode/decode.
+     *
+     * Modes:
+     *   "encode": takes calls[] -> returns encoded aggregate3() calldata
+     *   "decode": takes data hex string -> returns decoded Result[]
+     *
+     * MemFS paths:
+     *   /input/command.json   { mode, calls?, data? }
+     *   /output/result.json   { success, encoded?, results?, error? }
+     */
+    async executeMulticall(
+        wasmBinary: ArrayBuffer | Uint8Array,
+        commandJson: string,
+        options?: { timeoutMs?: number },
+    ): Promise<{ success: boolean; encoded?: string; results?: Array<{ success: boolean; return_data: string }>; error?: string; executionTimeMs: number }> {
+        const timeoutMs = options?.timeoutMs ?? this.defaultTimeoutMs;
+        const startTime = Date.now();
+
+        try {
+            await this.acquireExecutionSlot();
+        } catch (error: any) {
+            return { success: false, error: `Queue error: ${error.message}`, executionTimeMs: Date.now() - startTime };
+        }
+
+        try {
+            if (!this.initialized) await this.initialize();
+            this.clearMemFS();
+
+            this.writeToMemFS('/input/command.json', Buffer.from(commandJson, 'utf-8'));
+            try { this.memFs!.createDir('/output'); } catch { /* may exist */ }
+
+            const wasiResult = await this.executeWASIStart(wasmBinary, timeoutMs);
+            if (!wasiResult.success) {
+                return { success: false, error: wasiResult.error ?? 'WASI execution failed', executionTimeMs: Date.now() - startTime };
+            }
+
+            const outputFs = wasiResult.wasiFs;
+            let resultStr: string | null = null;
+            if (outputFs) {
+                const bytes = this.readFromSpecificMemFS(outputFs, '/output/result.json');
+                if (bytes) resultStr = new TextDecoder().decode(bytes);
+            }
+            if (!resultStr) {
+                const bytes = this.readFromMemFS('/output/result.json');
+                if (bytes) resultStr = new TextDecoder().decode(bytes);
+            }
+            if (!resultStr && wasiResult.stdout) resultStr = wasiResult.stdout;
+            if (!resultStr) {
+                return { success: false, error: 'Multicall produced no output', executionTimeMs: Date.now() - startTime };
+            }
+
+            let result: any;
+            try { result = JSON.parse(resultStr); } catch { result = { success: false, error: 'Invalid result JSON' }; }
+
+            return {
+                success: result.success,
+                encoded: result.encoded,
+                results: result.results,
+                error: result.error,
+                executionTimeMs: Date.now() - startTime,
+            };
+        } catch (error: any) {
+            return { success: false, error: error.message, executionTimeMs: Date.now() - startTime };
+        } finally {
+            this.clearMemFS();
+            this.releaseExecutionSlot();
+        }
+    }
+
+    /**
+     * Execute amm-engine WASM module for local Uniswap V2 AMM calculations.
+     *
+     * Modes:
+     *   "get_amount_out": given input amount + reserves -> output amount, route, price impact
+     *   "get_amount_in":  given output amount + reserves -> required input amount
+     *
+     * MemFS paths:
+     *   /input/command.json   { mode, pairs, token_in, token_out, amount_in/amount_out }
+     *   /output/result.json   { success, amount_out/amount_in, price_impact, route, pairs_used }
+     */
+    async executeAmm(
+        wasmBinary: ArrayBuffer | Uint8Array,
+        commandJson: string,
+        options?: { timeoutMs?: number },
+    ): Promise<{
+        success: boolean;
+        amount_out?: string;
+        amount_in?: string;
+        price_impact?: string;
+        route?: string[];
+        pairs_used?: string[];
+        error?: string;
+        executionTimeMs: number;
+    }> {
+        const timeoutMs = options?.timeoutMs ?? this.defaultTimeoutMs;
+        const startTime = Date.now();
+
+        try {
+            await this.acquireExecutionSlot();
+        } catch (error: any) {
+            return { success: false, error: `Queue error: ${error.message}`, executionTimeMs: Date.now() - startTime };
+        }
+
+        try {
+            if (!this.initialized) await this.initialize();
+            this.clearMemFS();
+
+            this.writeToMemFS('/input/command.json', Buffer.from(commandJson, 'utf-8'));
+            try { this.memFs!.createDir('/output'); } catch { /* may exist */ }
+
+            const wasiResult = await this.executeWASIStart(wasmBinary, timeoutMs);
+            if (!wasiResult.success) {
+                return { success: false, error: wasiResult.error ?? 'WASI execution failed', executionTimeMs: Date.now() - startTime };
+            }
+
+            const outputFs = wasiResult.wasiFs;
+            let resultStr: string | null = null;
+            if (outputFs) {
+                const bytes = this.readFromSpecificMemFS(outputFs, '/output/result.json');
+                if (bytes) resultStr = new TextDecoder().decode(bytes);
+            }
+            if (!resultStr) {
+                const bytes = this.readFromMemFS('/output/result.json');
+                if (bytes) resultStr = new TextDecoder().decode(bytes);
+            }
+            if (!resultStr && wasiResult.stdout) resultStr = wasiResult.stdout;
+            if (!resultStr) {
+                return { success: false, error: 'AMM engine produced no output', executionTimeMs: Date.now() - startTime };
+            }
+
+            let result: any;
+            try { result = JSON.parse(resultStr); } catch { result = { success: false, error: 'Invalid result JSON' }; }
+
+            return {
+                success: result.success,
+                amount_out: result.amount_out,
+                amount_in: result.amount_in,
+                price_impact: result.price_impact,
+                route: result.route,
+                pairs_used: result.pairs_used,
+                error: result.error,
+                executionTimeMs: Date.now() - startTime,
+            };
+        } catch (error: any) {
+            return { success: false, error: error.message, executionTimeMs: Date.now() - startTime };
+        } finally {
+            this.clearMemFS();
+            this.releaseExecutionSlot();
+        }
+    }
+
+    /**
      * List available WASM functions in a binary
      * @param wasmBinary - The WASM binary
      * @returns Array of function names

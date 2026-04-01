@@ -217,6 +217,153 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
     next();
   });
 
+  // Rewrite absolute-path asset requests from embedded dApps.
+  // Apps loaded in iframes may reference assets with absolute paths (e.g. /images/foo.png)
+  // which resolve to the PC2 origin root instead of the app's directory. This middleware
+  // first checks the Referer header to identify the source app, then falls back to scanning
+  // all installed apps (needed when sandboxed iframes strip the Referer).
+  const installedAppsBase = path.resolve(process.env.PC2_DATA_DIR || path.join(process.cwd(), 'data'), 'installed-apps');
+  const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.ico']);
+
+  app.get('/images/*', (req: Request, res: Response, next: NextFunction) => {
+    const ext = path.extname(req.path).toLowerCase();
+    if (!IMAGE_EXTENSIONS.has(ext)) return next();
+
+    const relativeAsset = req.path.slice(1); // strip leading /
+
+    // Strategy 1: use Referer to identify the app
+    const referer = req.headers.referer || '';
+    const appMatch = referer.match(/\/(?:apps|installed-apps)\/([a-z0-9][a-z0-9-]*[a-z0-9])/);
+    if (appMatch) {
+      const appName = appMatch[1];
+      const assetPath = path.resolve(installedAppsBase, appName, relativeAsset);
+      if (assetPath.startsWith(path.resolve(installedAppsBase, appName) + path.sep) && existsSync(assetPath)) {
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        return res.sendFile(assetPath);
+      }
+    }
+
+    // Strategy 2: scan installed apps for the image (fallback when Referer is absent)
+    try {
+      const apps = fs.readdirSync(installedAppsBase, { withFileTypes: true });
+      for (const entry of apps) {
+        if (!entry.isDirectory()) continue;
+        const candidate = path.resolve(installedAppsBase, entry.name, relativeAsset);
+        if (candidate.startsWith(path.resolve(installedAppsBase, entry.name) + path.sep) && existsSync(candidate)) {
+          res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+          return res.sendFile(candidate);
+        }
+      }
+    } catch { /* installed-apps dir may not exist yet */ }
+
+    next();
+  });
+
+  // RPC proxy for embedded dApps (e.g. Glide Finance)
+  // Features: response caching with per-method TTLs, fallback RPC endpoints
+  const ESC_RPC_URLS = [
+    'https://api.ela.city/esc',
+    'https://api.elastos.io/eth',
+    'https://rpc.glidefinance.io',
+    'https://api.elastos.io/esc',
+  ];
+
+  // Per-method cache TTLs (milliseconds). Methods not listed are not cached.
+  const RPC_CACHE_TTLS: Record<string, number> = {
+    'eth_chainId': 3600000,        // 1 hour (never changes)
+    'net_version': 3600000,        // 1 hour
+    'eth_gasPrice': 5000,          // 5s (updates per block)
+    'eth_blockNumber': 5000,       // 5s
+    'eth_getBlockByNumber': 30000, // 30s (immutable once confirmed)
+    'eth_getBlockByHash': 60000,   // 60s (immutable)
+    'eth_getCode': 300000,         // 5 min (rarely changes)
+  };
+
+  const rpcCache = new Map<string, { data: any; expires: number }>();
+
+  function getRpcCacheKey(method: string, params: any[]): string {
+    return `${method}:${JSON.stringify(params)}`;
+  }
+
+  function getCachedRpcResponse(method: string, params: any[]): any | null {
+    const ttl = RPC_CACHE_TTLS[method];
+    if (!ttl) return null;
+    const key = getRpcCacheKey(method, params);
+    const entry = rpcCache.get(key);
+    if (entry && Date.now() < entry.expires) return entry.data;
+    if (entry) rpcCache.delete(key);
+    return null;
+  }
+
+  function setCachedRpcResponse(method: string, params: any[], data: any): void {
+    const ttl = RPC_CACHE_TTLS[method];
+    if (!ttl) return;
+    const key = getRpcCacheKey(method, params);
+    rpcCache.set(key, { data, expires: Date.now() + ttl });
+    // Evict old entries periodically
+    if (rpcCache.size > 500) {
+      const now = Date.now();
+      for (const [k, v] of rpcCache) {
+        if (now >= v.expires) rpcCache.delete(k);
+      }
+    }
+  }
+
+  app.post('/api/rpc/esc', async (req: Request, res: Response) => {
+    const rpcReq = req.body;
+    const method = rpcReq?.method;
+    const params = rpcReq?.params ?? [];
+
+    // Check cache first
+    const cached = getCachedRpcResponse(method, params);
+    if (cached) {
+      res.json({ ...cached, id: rpcReq?.id ?? null });
+      return;
+    }
+
+    const body = JSON.stringify(rpcReq);
+    let lastError: string | null = null;
+
+    for (const rpcUrl of ESC_RPC_URLS) {
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 8000);
+
+        const upstream = await fetch(rpcUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body,
+          signal: controller.signal,
+        });
+
+        clearTimeout(timeout);
+
+        if (!upstream.ok) {
+          lastError = `${rpcUrl}: HTTP ${upstream.status}`;
+          continue;
+        }
+
+        const data = await upstream.json();
+
+        // Cache successful responses
+        if (data && !data.error) {
+          setCachedRpcResponse(method, params, data);
+        }
+
+        res.json(data);
+        return;
+      } catch (err: any) {
+        lastError = `${rpcUrl}: ${err.message}`;
+      }
+    }
+
+    res.status(502).json({
+      jsonrpc: '2.0',
+      id: rpcReq?.id ?? null,
+      error: { code: -32603, message: `All ESC RPCs failed: ${lastError}` },
+    });
+  });
+
   // IMPORTANT: Register /apps/* route BEFORE the static middleware wrapper
   // Express checks app.get() routes before app.use() middleware, but only if registered first
   // The route handler function (appsRouteHandler) is defined later (around line 374) as a function declaration
@@ -247,6 +394,19 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
     }
 
     if (!existsSync(filePath)) {
+      // SPA fallback: serve the app's index.html for extensionless paths
+      // so client-side routers (React Router, Vue Router, etc.) work correctly
+      const appIndexPath = path.resolve(installedAppsDir, appName, 'index.html');
+      if (existsSync(appDir) && existsSync(appIndexPath) && !path.extname(relativePath)) {
+        const bosonService = req.app?.locals?.bosonService;
+        const baseUrl = getBaseUrl(req, bosonService);
+        let html = await readFileAsync(appIndexPath, 'utf-8');
+        const walletShimTag = `<script src="${baseUrl}/pc2-wallet-provider.js"></script>`;
+        html = html.replace(/<head[^>]*>/i, (match: string) => `${match}\n    ${walletShimTag}`);
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        res.type('html').send(html);
+        return;
+      }
       return next();
     }
     const appInstallService = req.app?.locals?.appInstallService;
@@ -887,7 +1047,25 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
       }
     }
     
-    // If file not found, continue to next handler (might be handled by SPA fallback)
+    // SPA fallback for installed dApps: serve the app's index.html for extensionless
+    // paths so client-side routers (React Router, Vue Router, etc.) work correctly
+    const spaAppName = appPath.split('/')[0];
+    if (spaAppName && !path.extname(appPath)) {
+      const spaAppIndex = path.join(dataDir, 'installed-apps', spaAppName, 'index.html');
+      if (existsSync(spaAppIndex)) {
+        const bosonService = req.app?.locals?.bosonService;
+        const baseUrl = getBaseUrl(req, bosonService);
+        const sdkUrl = `${baseUrl}/puter.js/v2`;
+        let htmlContent = await readFileAsync(spaAppIndex, 'utf8');
+        htmlContent = htmlContent.replace(/https?:\/\/[^'"]*\/puter\.js\/v2/g, sdkUrl);
+        const walletShimTag = `<script src="${baseUrl}/pc2-wallet-provider.js"></script>`;
+        htmlContent = htmlContent.replace(/<head[^>]*>/i, (match: string) => `${match}\n    ${walletShimTag}`);
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        res.type('html').send(htmlContent);
+        return;
+      }
+    }
+
     next();
   }
   

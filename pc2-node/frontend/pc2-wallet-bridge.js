@@ -26,6 +26,64 @@
 
   var EXTERNAL_WALLET_METHODS = ['metamask', 'walletconnect', 'coinbase'];
 
+  // Read-only RPC methods that can go directly to chain RPC
+  var DIRECT_RPC_METHODS = [
+    'eth_estimateGas', 'eth_call', 'eth_getBalance', 'eth_getCode',
+    'eth_getTransactionCount', 'eth_getBlockByNumber', 'eth_blockNumber',
+    'eth_gasPrice', 'eth_getTransactionReceipt', 'eth_getTransactionByHash',
+    'eth_getLogs', 'eth_getBlockByHash', 'net_version'
+  ];
+
+  // ESC RPC endpoints with fallback (local proxy first, then Elacity, then public)
+  var ESC_RPC_URLS = [
+    '/api/rpc/esc',
+    'https://api.ela.city/esc',
+    'https://api.elastos.io/eth',
+    'https://rpc.glidefinance.io'
+  ];
+
+  // Current chain ID for the bridge (default: ESC = 20)
+  var bridgeChainId = 20;
+
+  function directRpc(method, params) {
+    var body = JSON.stringify({
+      jsonrpc: '2.0', method: method, params: params || [], id: Date.now()
+    });
+
+    var urlIndex = 0;
+
+    function tryNext() {
+      if (urlIndex >= ESC_RPC_URLS.length) {
+        return Promise.reject(new Error('All ESC RPCs failed for ' + method));
+      }
+      var url = ESC_RPC_URLS[urlIndex++];
+      return fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: body
+      }).then(function (res) {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.json();
+      }).then(function (json) {
+        if (json.error) {
+          var err = new Error(json.error.message || 'RPC error');
+          err.code = json.error.code || -32603;
+          err.data = json.error.data;
+          throw err;
+        }
+        return json.result;
+      }).catch(function (err) {
+        // If this was an RPC-level error (has .code), don't try next — it's a real error
+        if (err.code && err.code !== -32603) throw err;
+        // Network error — try next endpoint
+        if (urlIndex < ESC_RPC_URLS.length) return tryNext();
+        throw err;
+      });
+    }
+
+    return tryNext();
+  }
+
   function isEmbeddedLogin() {
     var method = (window.user && window.user.login_method)
       || localStorage.getItem('pc2_login_method') || '';
@@ -59,6 +117,8 @@
   }
 
   function handleRpc(data, respond) {
+    console.log('[PC2 Bridge] handleRpc:', data.method, '| embedded=' + isEmbeddedLogin());
+
     if (data.method === 'pc2_getSmartAccountAddress') {
       var sa = (window.user && window.user.smart_account_address) || null;
       respond({
@@ -68,6 +128,62 @@
       return;
     }
 
+    // Fast paths that don't need Particle or RPC at all
+    if (data.method === 'eth_accounts' || data.method === 'eth_requestAccounts') {
+      var addr = (window.user && window.user.wallet_address) || '';
+      respond({
+        type: 'pc2-wallet-rpc-response',
+        id: data.id, method: data.method, result: addr ? [addr] : []
+      });
+      return;
+    }
+
+    if (data.method === 'eth_chainId') {
+      respond({
+        type: 'pc2-wallet-rpc-response',
+        id: data.id, method: data.method,
+        result: '0x' + bridgeChainId.toString(16)
+      });
+      return;
+    }
+
+    if (data.method === 'wallet_switchEthereumChain') {
+      var requested = data.params && data.params[0] && data.params[0].chainId;
+      if (requested) {
+        bridgeChainId = parseInt(requested, 16);
+        console.log('[PC2 Bridge] Chain switched to', bridgeChainId);
+      }
+      respond({
+        type: 'pc2-wallet-rpc-response',
+        id: data.id, method: data.method, result: null
+      });
+      return;
+    }
+
+    // Read-only RPC: ALWAYS route directly to chain RPC.
+    // These methods don't need signing, so there's no reason to send them
+    // through MetaMask (which may be on a different chain) or Particle.
+    if (DIRECT_RPC_METHODS.indexOf(data.method) >= 0) {
+      console.log('[PC2 Bridge] Direct RPC:', data.method, '(chain=' + bridgeChainId + ', embedded=' + isEmbeddedLogin() + ')');
+      directRpc(data.method, data.params)
+        .then(function (result) {
+          respond({
+            type: 'pc2-wallet-rpc-response',
+            id: data.id, method: data.method, result: result
+          });
+        })
+        .catch(function (error) {
+          console.warn('[PC2 Bridge] Direct RPC error:', data.method, error.message);
+          respond({
+            type: 'pc2-wallet-rpc-response',
+            id: data.id, method: data.method,
+            error: { code: error.code || -32603, message: error.message || String(error) }
+          });
+        });
+      return;
+    }
+
+    // Signing and other methods: route to Particle via WalletService
     if (isEmbeddedLogin()) {
       routeToParticle(data, respond);
       return;
@@ -107,7 +223,7 @@
       respond({
         type: 'pc2-wallet-init',
         accounts: addr ? [addr] : [],
-        chainId: null,
+        chainId: '0x' + bridgeChainId.toString(16),
         smartAccountAddress: smartAccountAddress
       });
       return;

@@ -30,6 +30,15 @@ import { CHAIN_INFO } from '../helpers/particle-constants.js';
 
 const logger = createLogger('WalletService');
 
+// Read-only methods that can be routed directly to chain RPC
+// Defined at module level to avoid static class field transpilation issues
+const DIRECT_RPC_METHODS = [
+    'eth_estimateGas', 'eth_call', 'eth_getBalance', 'eth_getCode',
+    'eth_getTransactionCount', 'eth_getBlockByNumber', 'eth_blockNumber',
+    'eth_gasPrice', 'eth_getTransactionReceipt', 'eth_getTransactionByHash',
+    'eth_getLogs', 'eth_getBlockByHash', 'net_version',
+];
+
 /**
  * WalletService - Manages wallet data communication with Particle Network
  * 
@@ -53,9 +62,9 @@ class WalletService {
         this.EOA_RPC_URLS = {
             // Elastos Ecosystem (grouped first)
             20: [
+                '/api/rpc/esc',
                 'https://api.elastos.io/eth',
-                'https://api.ela.city/esc',
-                'https://escrpc.elaphant.app',
+                'https://rpc.glidefinance.io',
             ],
             22: [
                 'https://api.elastos.io/eid',
@@ -435,7 +444,7 @@ class WalletService {
      * @param {number} timeout - Request timeout in ms (default 5000)
      * @returns {Promise<Object>} RPC response
      */
-    async rpcCallWithFallback(chainId, payload, timeout = 5000) {
+    async rpcCallWithFallback(chainId, payload, timeout = 10000) {
         const urls = this.EOA_RPC_URLS[chainId];
         if (!urls) throw new Error(`No RPC URLs configured for chain ${chainId}`);
         
@@ -460,18 +469,10 @@ class WalletService {
                     throw new Error(`HTTP ${response.status}`);
                 }
                 
-                const data = await response.json();
-                
-                // Check for RPC-level errors
-                if (data.error) {
-                    throw new Error(data.error.message || 'RPC error');
-                }
-                
-                return data;
+                return await response.json();
             } catch (error) {
                 lastError = error;
                 logger.warn(`RPC failed for ${rpcUrl}:`, error.message);
-                // Try next RPC
             }
         }
         
@@ -1336,6 +1337,7 @@ class WalletService {
     /**
      * Route an EIP-1193 RPC call to Particle's embedded signer.
      * Signing methods open UIWindowParticleSigning (visible popup).
+     * Read-only methods route directly to chain RPC when available.
      * All other methods go through the hidden data iframe.
      */
     async routeRpcToParticle(method, params) {
@@ -1346,7 +1348,21 @@ class WalletService {
         if (method === 'eth_chainId') {
             return '0x' + (this.selectedEOAChainId || 20).toString(16);
         }
-        
+
+        // Handle chain switching: update local state and return success
+        if (method === 'wallet_switchEthereumChain') {
+            const requested = params?.[0]?.chainId;
+            if (requested) {
+                const newChainId = parseInt(requested, 16);
+                if (this.EOA_RPC_URLS[newChainId]) {
+                    this.selectedEOAChainId = newChainId;
+                    logger.log('[WalletService] Chain switched via bridge to', newChainId);
+                    return null;
+                }
+            }
+            // Fall through to Particle for unsupported chains
+        }
+
         // Signing methods: open dedicated UIWindow with signing iframe
         if (WalletService.SIGNING_METHODS.includes(method)) {
             const { default: UIWindowParticleSigning, removeStaleOverlays } = await import('../UI/UIWindowParticleSigning.js');
@@ -1357,7 +1373,38 @@ class WalletService {
             }
         }
         
-        // All other read-only RPC: forward to data iframe
+        // Read-only RPC methods: route directly to chain RPC endpoint
+        // Particle's iframe doesn't reliably handle these for all chains (e.g. ESC)
+        const chainId = this.selectedEOAChainId || 20;
+        if (DIRECT_RPC_METHODS.includes(method) && this.EOA_RPC_URLS[chainId]) {
+            console.log('[WalletService] Direct RPC →', method, 'chain:', chainId);
+            try {
+                const rpcResult = await this.rpcCallWithFallback(chainId, {
+                    jsonrpc: '2.0',
+                    method,
+                    params: params || [],
+                    id: Date.now(),
+                });
+                // RPC-level error (e.g. execution reverted) — return it directly
+                // Do NOT fall through to Particle which doesn't support ESC
+                if (rpcResult.error) {
+                    console.warn('[WalletService] Direct RPC error for', method, ':', rpcResult.error);
+                    const rpcError = new Error(rpcResult.error.message || 'RPC error');
+                    rpcError.code = rpcResult.error.code || -32603;
+                    rpcError.data = rpcResult.error.data;
+                    throw rpcError;
+                }
+                console.log('[WalletService] Direct RPC ✓', method);
+                return rpcResult.result;
+            } catch (directErr) {
+                // If this was an RPC-level error (has .code), propagate it directly
+                if (directErr.code) throw directErr;
+                // Network/timeout error — try Particle as fallback
+                logger.warn('[WalletService] Direct RPC network error for', method, '- falling back to Particle iframe:', directErr.message);
+            }
+        }
+
+        // All other RPC (or network fallback): forward to data iframe
         const result = await this._sendToIframe('particle-wallet.rpc', { method, params });
         return result?.result;
     }

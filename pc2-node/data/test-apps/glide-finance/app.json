@@ -1,0 +1,43 @@
+{
+  "name": "glide-finance",
+  "title": "Glide Finance",
+  "version": "1.0.0",
+  "description": "Decentralized exchange on Elastos Smart Chain. Swap tokens, provide liquidity, and earn rewards.",
+  "author": {
+    "name": "Glide Finance",
+    "url": "https://glidefinance.io"
+  },
+  "license": "GPL-3.0",
+  "icon": "logo_128x128.png",
+  "entry": "index.html",
+  "type": "web",
+  "category": "blockchain",
+
+  "capabilities": {
+    "wallet": true,
+    "network": true
+  },
+
+  "requirements": {
+    "minVersion": "1.1.0"
+  },
+
+  "display": {
+    "maximize": true,
+    "resizable": true,
+    "titlebar": true,
+    "taskbar": true
+  },
+
+  "services": [
+    {
+      "name": "dex",
+      "protocol": "https",
+      "description": "Glide Finance decentralized exchange on Elastos Smart Chain"
+    }
+  ],
+
+  "distribution": {
+    "channel": "stable"
+  }
+}
