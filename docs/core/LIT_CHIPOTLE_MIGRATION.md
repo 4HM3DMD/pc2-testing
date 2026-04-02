@@ -1,9 +1,9 @@
 # Lit Protocol Migration: Datil → Chipotle
 
-> **Purpose:** Reference document for Elacity's migration from Lit Protocol v2 (Datil) to v3 (Chipotle), including the breaking changes discovered on Mar 21, 2026 and the production migration checklist for when Chipotle goes live (~April 25, 2026).
+> **Purpose:** Reference document for Elacity's migration from Lit Protocol v2 (Datil) to v3 (Chipotle), including the breaking changes discovered on Mar 21, 2026, and the completed production migration on Apr 2, 2026.
 >
-> **Last Updated:** 2026-03-21
-> **Status:** Pre-production on `api.dev.litprotocol.com`. Production migration pending.
+> **Last Updated:** 2026-04-02
+> **Status:** PRODUCTION on `api.chipotle.litprotocol.com`. Gate 1 (Lit mainnet) complete. Gate 2 (V3 dDRM contracts) pending.
 
 ---
 
@@ -16,8 +16,9 @@
 | Mar 18 | Auto-provisioning system coded (supernodes distribute API key + PKP) |
 | Mar 20 | Chipotle TEE went **DOWN** (connect timeout to Phala dStack worker) |
 | Mar 21 | TEE came back **UP** with undocumented breaking changes — 4hrs debugging |
-| ~Apr 25 | Chipotle production launch (Lit's stated date). **Action required.** |
-| ~Apr 25 | Datil sunset (30 days after Chipotle production) |
+| Apr 1, 2026 | Lit Chipotle v3 goes **generally available** on production |
+| Apr 2, 2026 | Elacity production migration **completed** — account, group, actions, PKP |
+| ~May 2026 | Gate 2: V3 dDRM contracts (AuthorityGateway) migration (pending) |
 
 ---
 
@@ -130,18 +131,24 @@ curl -X POST "$BASE/core/v1/add_action_to_group" \
 
 ---
 
-## Current Registered CIDs (Mar 21, 2026)
+## Current Registered CIDs (Production — Apr 2, 2026)
 
 | Script | CID | Purpose |
 |--------|-----|---------|
-| `non-media-decrypt-chipotle.js` | `QmYuh3LQXcC5Ddk7xTV2eR8Xvp1xKNSzqoimqpyM1SSDMC` | Decrypt non-media CEK (images, PDFs, 3D, etc.) |
-| `media-decrypt-chipotle.js` | `QmTPi2w7tSfGb7AzkMDCR6bCdSHkU5v5C6CGJC3sULTZN9` | Decrypt media CEK (video/audio DASH) |
 | `non-media-encrypt-chipotle.js` | `QmNayE5MYzXcoMS9nvRk6MUo8r4ESLa3i65vHXzuBsnC2b` | Encrypt non-media CEK (creator upload) |
+| `non-media-decrypt-chipotle.js` | `QmYuh3LQXcC5Ddk7xTV2eR8Xvp1xKNSzqoimqpyM1SSDMC` | Decrypt non-media CEK (images, PDFs, 3D, etc.) |
 | `media-encrypt-chipotle.js` | `QmXgZXJw9pzSeRkVZLtgNzgaxfErKhthv7j7Etge6WNG4u` | Encrypt media CEK (DASH encoding) |
+| `media-decrypt-chipotle.js` | `QmTPi2w7tSfGb7AzkMDCR6bCdSHkU5v5C6CGJC3sULTZN9` | Decrypt media CEK (video/audio DASH) |
 
+**Environment:** Production (Chipotle mainnet)
 **Dashboard group:** `elacity-ddrm` (group ID: 1)
-**PKP wallet:** `0x09bdfc8f8ec5a3bd2970497b930bd94839f22227` (Account Master Wallet)
-**API URL:** `https://api.dev.litprotocol.com`
+**PKP wallet:** `0x68dcf3dc3c38d726e8a7cdca8ab318f49552c05d` (Account Master Wallet — production)
+**API URL:** `https://api.chipotle.litprotocol.com`
+**Account balance:** $10.00 credit ($0.01/sec per action execution)
+
+**Dev environment (preserved for reference):**
+**PKP wallet (dev):** `0x09bdfc8f8ec5a3bd2970497b930bd94839f22227`
+**API URL (dev):** `https://api.dev.litprotocol.com`
 
 ---
 
@@ -191,66 +198,53 @@ curl -X POST "$BASE/core/v1/add_action_to_group" \
 
 ---
 
-## Production Migration Checklist (~April 25, 2026)
+## Production Migration Checklist (Completed Apr 2, 2026)
 
-When Chipotle moves from dev to production, these steps are required:
+### Gate 1: Lit Mainnet (COMPLETE)
 
-### Before Production Launch
+- [x] **Confirm `main(params)` pattern** — Production TEE uses same execution model (verified)
+- [x] **Get production API URL** — `https://api.chipotle.litprotocol.com`
+- [x] **Create production account** — Created via dashboard, funded $10
+- [x] **Create production usage API key** — `pc2-ddrm-v3`, scoped to group 1 (execute only)
+- [x] **Create production PKP wallet** — AMW: `0x68dcf3dc3c38d726e8a7cdca8ab318f49552c05d`
+- [x] **Create production group** — `elacity-ddrm` (group ID: 1)
+- [x] **Register all 4 action CIDs** on production group via `add_action_to_group`
+- [x] **Add PKP to production group** via `add_pkp_to_group`
+- [x] **Verify CIDs match** — `get_lit_action_ipfs_id` confirms same hashes on production
+- [x] **Smoke test encrypt** — Production encrypt action verified ($0.14 cost for setup + test)
+- [x] **Update `chipotle-client.ts`** — `DEFAULT_API_URL` + `DEFAULT_PKP_ID` → production
+- [x] **Update `deploy/web-gateway/index.js`** — `apiUrl`, `network`, `pkpId` → production
+- [x] **Update `ddrm-config.json.template`** — All fields → production values
 
-- [ ] **Confirm `main(params)` pattern** — Verify production TEE uses the same execution model
-- [ ] **Get production API URL** — Will likely change from `api.dev.litprotocol.com` to `api.litprotocol.com`
-- [ ] **Create production account** — New account on production API
-- [ ] **Create production usage API key** — Scoped to the production group
-- [ ] **Create production PKP wallet** — New wallet on production network
-- [ ] **Create production group** — `elacity-ddrm` group on production
+### Gate 1: Remaining Items
 
-### Register Actions on Production
-
-- [ ] **Register all 4 action CIDs** on production group via `add_action_to_group`
-- [ ] **Add PKP to production group** via `add_pkp_to_group`
-- [ ] **Verify CIDs match** — Use `get_lit_action_ipfs_id` on production to confirm same hashes
-
-### Re-encrypt Existing Content (if PKP changes)
-
-If the production PKP is different from the dev PKP, ALL existing encrypted content will need re-encryption because the CEK is encrypted under the specific PKP:
-- [ ] **Assess re-encryption scope** — How many assets encrypted with dev PKP?
-- [ ] **Plan re-encryption pipeline** — Batch decrypt with dev PKP → re-encrypt with prod PKP
-- [ ] **OR maintain dev PKP on production** — If possible, import the same PKP
-
-### Update Supernode Config
-
-- [ ] **Update `deploy/web-gateway/index.js`**:
-  - `apiUrl` → production URL
-  - `network` → `'chipotle'` (not `'chipotle-dev'`)
-  - `usageKey` → production usage key
-  - `pkpId` → production PKP ID
-  - `actions` → production CIDs (should be same if code unchanged)
-- [ ] **Deploy to supernodes** — Push updated gateway to both InterServer and Contabo
-- [ ] **Place production key files** — `/etc/pc2/ddrm-api-key` and `/etc/pc2/ddrm-pkp-id` on each supernode
-
-### Update PC2 Node Code
-
-- [ ] **Update `chipotle-client.ts`**:
-  - `DEFAULT_API_URL` → production URL
-  - `DEFAULT_PKP_ID` → production PKP (if changed)
-  - `DEFAULT_AUTHORITY` → verify same contract on Base
+- [ ] **Deploy supernodes** — Push updated gateway + place `/etc/pc2/ddrm-api-key` with production usage key
+- [ ] **E2E test encrypt + decrypt** — Full round-trip with real content on production Lit
 - [ ] **Rebuild TypeScript** — `npx tsc --project tsconfig.json`
-- [ ] **Clear provision caches** — Delete `data/.chipotle-provision.json` on test nodes
+- [ ] **Clear provision caches** — Delete `data/.chipotle-provision.json` on nodes
+- [ ] **Test auto-provisioning** — Fresh node fetches from updated supernode
 
-### Verify End-to-End
+### Gate 2: V3 dDRM Contracts (PENDING — separate task)
 
-- [ ] **Test encrypt** — Creator Dashboard: upload + encrypt + mint
-- [ ] **Test decrypt** — dDRM Viewer: open purchased non-media asset
-- [ ] **Test media** — PC2 Media Player: play purchased video/audio
-- [ ] **Test auto-provisioning** — Fresh node with no keys fetches from supernode
-- [ ] **Test with multiple wallets** — EOA and Smart Account both work
+- [ ] **Deploy V3 AuthorityGateway** on Base (new contract address)
+- [ ] **Update `DEFAULT_AUTHORITY`** in `chipotle-client.ts` and web-gateway
+- [ ] **Update Lit Action scripts** if contract ABI changes (will invalidate CIDs)
+- [ ] **Re-register CIDs** if action code changes
+- [ ] **Migrate existing access tokens** to V3 contract
+
+### Re-encryption Consideration
+
+The production PKP (`0x68dc...`) is different from dev PKP (`0x09bd...`). Content encrypted on dev testnet cannot be decrypted on production. This is acceptable because:
+1. Dev was only used for internal testing — no real user content
+2. All real production content will be encrypted with the new production PKP
+3. If re-encryption is ever needed, a migration script can be created
 
 ### Rollback Plan
 
 If production Chipotle has issues:
-1. Set `LIT_BACKEND=datil` in env (if Datil still available)
-2. The `chipotle-client.ts` module is isolated — only used when `LIT_BACKEND=chipotle`
-3. The old Datil path in `storage.ts` and `media.ts` is still intact
+1. Revert `chipotle-client.ts` to point at dev API (`git checkout 71bba594f -- pc2-node/src/api/chipotle-client.ts`)
+2. The safety checkpoint commit is `71bba594f` on branch `feature/lit-chipotle-migration`
+3. Dev PKP and group still exist on `api.dev.litprotocol.com` for fallback
 
 ---
 
@@ -259,27 +253,26 @@ If production Chipotle has issues:
 ### Quick Diagnostics
 
 ```bash
+# Production base URL
+BASE=https://api.chipotle.litprotocol.com
+
 # Is the TEE reachable?
-curl -s "https://api.dev.litprotocol.com/core/v1/get_node_chain_config" | python3 -m json.tool
+curl -s "$BASE/core/v1/get_node_chain_config" | python3 -m json.tool
 
-# Test a simple action (must register CID first)
-curl -X POST "https://api.dev.litprotocol.com/core/v1/lit_action" \
-  -H "Content-Type: application/json" \
-  -H "X-Api-Key: $USAGE_KEY" \
-  -d '{"code":"async function main(p) { Lit.Actions.setResponse({ response: JSON.stringify(p) }); }","js_params":{"test":"hello"}}'
-
-# Get the CID the server computes for inline code
-curl -X POST "https://api.dev.litprotocol.com/core/v1/get_lit_action_ipfs_id" \
-  -H "Content-Type: application/json" \
-  -d '"async function main(p) { Lit.Actions.setResponse({ response: JSON.stringify(p) }); }"'
+# Check account balance
+curl -s "$BASE/core/v1/billing/balance" -H "X-Api-Key: $ACCOUNT_KEY"
 
 # List registered actions in group
-curl "https://api.dev.litprotocol.com/core/v1/list_actions?group_id=0x01&page_number=0&page_size=20" \
+curl "$BASE/core/v1/list_actions?group_id=1&page_number=0&page_size=20" \
   -H "X-Api-Key: $ACCOUNT_KEY"
 
 # List wallets in group
-curl "https://api.dev.litprotocol.com/core/v1/list_wallets_in_group?group_id=1&page_number=0&page_size=10" \
+curl "$BASE/core/v1/list_wallets_in_group?group_id=1&page_number=0&page_size=10" \
   -H "X-Api-Key: $ACCOUNT_KEY"
+
+# Get the CID the server computes for a Lit Action file
+jq -Rs '.' path/to/action.js | curl -X POST "$BASE/core/v1/get_lit_action_ipfs_id" \
+  -H "Content-Type: application/json" -d @-
 ```
 
 ### Common Errors
@@ -305,13 +298,21 @@ curl "https://api.dev.litprotocol.com/core/v1/list_wallets_in_group?group_id=1&p
 
 ## Lit Express Dashboard Access
 
-**URL:** https://dashboard.dev.litprotocol.com/dapps/dashboard/
-**API:** https://api.dev.litprotocol.com
-**OpenAPI:** https://api.dev.litprotocol.com/core/v1/openapi.json
-**Docs:** https://vincent.mintlify.app/
+**Production:**
+- **Dashboard:** https://dashboard.chipotle.litprotocol.com/dapps/dashboard/
+- **API:** https://api.chipotle.litprotocol.com
+- **OpenAPI:** https://api.chipotle.litprotocol.com/core/v1/openapi.json
+- **Swagger:** https://api.chipotle.litprotocol.com/core/v1/swagger-ui
+- **Docs:** https://developer.litprotocol.com/
 
-**Account key location:** `pc2-node/data/.chipotle-account-key`
-**Usage key location:** `pc2-node/data/.chipotle-api-key`
+**Dev (preserved for fallback):**
+- **Dashboard:** https://dashboard.dev.litprotocol.com/dapps/dashboard/
+- **API:** https://api.dev.litprotocol.com
+
+**Key file locations:**
+- **Account key:** `pc2-node/data/.chipotle-account-key` (admin only, never distribute)
+- **Usage key:** `pc2-node/data/.chipotle-api-key` (auto-provisioned from supernode)
+- **Provision cache:** `pc2-node/data/.chipotle-provision.json` (auto-created, can be deleted to re-provision)
 
 ---
 

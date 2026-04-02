@@ -956,6 +956,37 @@ if (!NON_MEDIA_ACTION_CID && existsSync(LIT_ACTION_CID_PATH)) {
 
 const DEFAULT_AUTHORITY = '0x580C26DeFf267Ef40A72cf10a4A42050F0641b8B';
 
+// ── Session-scoped CEK cache ──────────────────────────────────
+// Short-lived in-memory cache to avoid redundant Lit Action calls within a
+// single viewing session (e.g. multi-page PDFs, window resize re-renders).
+// - 5 minute TTL, memory-only, cleared on process restart
+// - Keyed on (kid + buyerAddress) so different users never share CEKs
+// - Never written to disk — the AuthorityGateway remains the source of truth
+const CEK_CACHE_TTL_MS = 5 * 60 * 1000;
+const CEK_CACHE_MAX_ENTRIES = 50;
+const cekSessionCache = new Map<string, { cekBase64: string; expiresAt: number }>();
+
+function getCachedCEK(kid: string, buyerAddress: string): string | null {
+  const key = `${kid}:${buyerAddress.toLowerCase()}`;
+  const entry = cekSessionCache.get(key);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) {
+    cekSessionCache.delete(key);
+    return null;
+  }
+  return entry.cekBase64;
+}
+
+function cacheCEK(kid: string, buyerAddress: string, cekBase64: string): void {
+  const key = `${kid}:${buyerAddress.toLowerCase()}`;
+  // Evict oldest entries if at capacity
+  if (cekSessionCache.size >= CEK_CACHE_MAX_ENTRIES) {
+    const oldest = cekSessionCache.keys().next().value;
+    if (oldest) cekSessionCache.delete(oldest);
+  }
+  cekSessionCache.set(key, { cekBase64, expiresAt: Date.now() + CEK_CACHE_TTL_MS });
+}
+
 /**
  * Build access conditions for Lit encrypt/decrypt.
  *
@@ -1257,9 +1288,18 @@ async function recoverCEKAndFetchData(params: DecryptParams, ipfsService?: any):
 
   logger.info(`[Lit] Recover CEK: kid=${kid}, buyer=${buyerAddress}, cid=${encryptedDataCid}, backend=${effectiveBackend}`);
 
+  // Check session cache — avoids a $0.01 Lit call for multi-page PDFs
+  // and re-renders within the same viewing session (5 min TTL).
+  const cachedCek = getCachedCEK(kid, buyerAddress);
+
   // Kick off CEK recovery and IPFS fetch in parallel
   const litStart = Date.now();
   const cekPromise = (async () => {
+    if (cachedCek) {
+      logger.info(`[Lit] CEK cache hit for kid=${kid}, buyer=${buyerAddress.substring(0, 10)}... (saved $0.01)`);
+      return cachedCek;
+    }
+
     if (effectiveBackend === 'chipotle') {
       const { recoverNonMediaCEK } = await import('./chipotle-client.js');
       const cekBase64 = await recoverNonMediaCEK({
@@ -1274,6 +1314,7 @@ async function recoverCEKAndFetchData(params: DecryptParams, ipfsService?: any):
         rpc,
       });
       logger.info(`[Lit] CEK recovered in ${Date.now() - litStart}ms (Chipotle REST)`);
+      cacheCEK(kid, buyerAddress, cekBase64);
       return cekBase64;
     }
 
@@ -1318,6 +1359,7 @@ async function recoverCEKAndFetchData(params: DecryptParams, ipfsService?: any):
     }
 
     logger.info(`[Lit] CEK recovered in ${Date.now() - litStart}ms (Datil SDK)`);
+    cacheCEK(kid, buyerAddress, cekBase64);
     return cekBase64;
   })();
 
@@ -1542,7 +1584,7 @@ router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, 
   try {
     const {
       litCiphertext, dataToEncryptHash, iv, encryptedDataCid, kid,
-      buyerAddress, mimeType,
+      buyerAddress, buyerAddressAlt, mimeType,
       page: pageNum,
       maxWidth: reqMaxWidth,
       litBackend: reqLitBackend,
@@ -1568,6 +1610,42 @@ router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, 
 
     const ipfsService = req.app.locals.ipfs;
 
+    // ── Preflight: resolve which address holds the AccessToken ──
+    // Free on-chain eth_call — avoids wasting a $0.01 Lit Action on the wrong address.
+    const effectiveBody = { ...req.body };
+    let resolvedBuyer = buyerAddress;
+
+    if (buyerAddressAlt && buyerAddressAlt.toLowerCase() !== buyerAddress.toLowerCase()) {
+      try {
+        const { ethers } = await import('ethers');
+        const rpcUrl = req.body.rpc || getBaseRpcUrl();
+        const provider = new ethers.JsonRpcProvider(rpcUrl);
+        const authorityAddr = req.body.authority || DEFAULT_AUTHORITY;
+        const gateway = new ethers.Contract(authorityAddr, [
+          'function hasAccessByContentId(address holder, bytes16 contentId) view returns (bool)',
+        ], provider);
+        const normalizedKid = kid.startsWith('0x') ? kid : `0x${kid}`;
+
+        const [primaryHas, altHas] = await Promise.all([
+          gateway.hasAccessByContentId(buyerAddress, normalizedKid).catch(() => false),
+          gateway.hasAccessByContentId(buyerAddressAlt, normalizedKid).catch(() => false),
+        ]);
+
+        if (!primaryHas && altHas) {
+          resolvedBuyer = buyerAddressAlt;
+          logger.info(`[SecureView] Preflight: primary ${buyerAddress.substring(0, 10)} lacks AccessToken, using alt ${buyerAddressAlt.substring(0, 10)}`);
+        } else if (primaryHas) {
+          logger.info(`[SecureView] Preflight: primary ${buyerAddress.substring(0, 10)} holds AccessToken`);
+        } else {
+          logger.warn(`[SecureView] Preflight: neither address holds AccessToken — proceeding with primary`);
+        }
+      } catch (preflightErr: any) {
+        logger.warn(`[SecureView] Preflight access check failed (non-fatal): ${preflightErr.message}`);
+      }
+    }
+
+    effectiveBody.buyerAddress = resolvedBuyer;
+
     // ── WASM Renderer Path ──────────────────────────────
     // For images, text, and PDFs: decrypt + render inside WASM linear memory.
     // CEK and plaintext never touch Node.js memory.
@@ -1575,7 +1653,7 @@ router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, 
     const wasmSupportedTypes = mime.startsWith('image/') || mime.startsWith('text/') || mime === 'application/pdf' || wasmCodeTypes.includes(mime);
     if (wasmSupportedTypes) {
       try {
-        const wasmResult = await renderViaWASM(req.body, mime, maxWidth, pageNum, ipfsService);
+        const wasmResult = await renderViaWASM(effectiveBody, mime, maxWidth, pageNum, ipfsService);
         if (wasmResult) {
           res.set('Content-Type', wasmResult.contentType);
           res.set('Content-Length', String(wasmResult.rendered.length));
@@ -1584,7 +1662,7 @@ router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, 
             res.set('X-Asset-Pages', String(wasmResult.totalPages));
           }
           res.send(wasmResult.rendered);
-          logger.info(`[SecureView] WASM rendered ${mime}: ${wasmResult.rendered.length} bytes (wasm: ${wasmResult.executionTimeMs}ms, total: ${Date.now() - requestStart}ms) for ${buyerAddress}`);
+          logger.info(`[SecureView] WASM rendered ${mime}: ${wasmResult.rendered.length} bytes (wasm: ${wasmResult.executionTimeMs}ms, total: ${Date.now() - requestStart}ms) for ${resolvedBuyer}`);
           return;
         }
       } catch (wasmErr: any) {
@@ -1594,7 +1672,7 @@ router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, 
 
     // ── Node.js Fallback Path ───────────────────────────
     // Used for PDFs (WASM PDF not yet implemented) and when WASM fails.
-    const decryptedBytes = await decryptAssetTwoLayer(req.body, ipfsService);
+    const decryptedBytes = await decryptAssetTwoLayer(effectiveBody, ipfsService);
 
     // ── Image pipeline (fallback) ────────────────────────
     if (mime.startsWith('image/')) {

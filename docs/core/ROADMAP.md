@@ -414,16 +414,19 @@ These diagrams from Rong define the north star. Every work stream should move us
 
 **v1.3 Release — HIGH PRIORITY (Gate 1 UNBLOCKED):**
 
-> **Status:** Implementation-ready. Gate 1 unblocked — Lit Protocol Chipotle mainnet is live (Apr 2026). Gate 2 still blocked.
-> **Gate 1:** ~~Lit Protocol production network details~~ **UNBLOCKED** — Chipotle mainnet live, dashboard at `dashboard.litprotocol.com`
+> **Status:** Gate 1 COMPLETE — Lit Chipotle mainnet live and integrated (Apr 2, 2026). Gate 2 still blocked.
+> **Gate 1:** ~~Lit Protocol production network details~~ **COMPLETE** — Production account, PKP, group, API keys, Lit Action CIDs all configured. E2E encrypt + decrypt verified.
 > **Gate 2:** Elacity V3 audited smart contract ABIs + addresses — still waiting
 > **Plan:** See `.cursor/plans/v1.3_release_plan_7cce212d.plan.md` for full execution checklist
-> **Next action:** Lit mainnet swap for Elacity Creator/Market dApps (production account, Lit Action CID registration, E2E test)
 
-- [ ] **UNBLOCKED (Lit mainnet live):** Chipotle production swap — create production account on `dashboard.litprotocol.com`, register all 4 Lit Action CIDs, create scoped usage API key, fund account, update `DEFAULT_API_URL` + `DEFAULT_PKP_ID` in `chipotle-client.ts`, update `deploy/web-gateway/index.js` provisioning config, deploy to both supernodes (InterServer + Contabo), E2E test (mint -> buy -> decrypt). **Lit Protocol Chipotle network is now live on mainnet (confirmed Apr 2026).** This unblocks the Elacity app dDRM pipeline for production use. **NEXT PRIORITY after Glide wrap-up.**
+- [x] **COMPLETE (Apr 2):** Chipotle production swap — production account on `dashboard.litprotocol.com`, `elacity-ddrm` group created, non-media Lit Action CID (`QmNayE5MYzXcoMS9nvRk6MUo8r4ESLa3i65vHXzuBsnC2b`) registered, PKP (`0x68dcf3dc...`) added to group, scoped usage API key created, $10 credit funded. Updated `DEFAULT_API_URL` + `DEFAULT_PKP_ID` in `chipotle-client.ts`, local `.chipotle-api-key` + `.chipotle-account-key` files. **E2E verified: mint → encrypt (Lit production) → save .ddrm → open → decrypt (AuthorityGateway access check) → WASM render → watermarked display.**
+- [x] **COMPLETE (Apr 2):** Creator app .ddrm capsule auto-save — after minting, the Creator app saves a `ddrm-capsule-v2` descriptor to the user's local directory (`/<wallet>/Documents|Pictures|Videos/<title>.ddrm`). Contains all encryption params (litCiphertext, iv, dataToEncryptHash, kid, actionCid), contract refs (authority, operative, tokenId), and metadata (title, thumbnail). File is immediately openable in dDRM Viewer without needing the Elacity Market app or API.
+- [x] **COMPLETE (Apr 2):** Dual-wallet access check — `secure-view` endpoint now accepts `buyerAddressAlt` (smart account). Before calling Lit, a free `eth_call` to `AuthorityGateway.hasAccessByContentId()` checks both EOA and smart account in parallel, then sends only the correct address to Lit ($0.01 per decrypt, never $0.02). Works regardless of which wallet minted the asset.
+- [x] **COMPLETE (Apr 2):** CEK session cache — 5-minute in-memory cache keyed on `(kid, buyerAddress)`. Multi-page PDFs cost $0.01/session instead of $0.01/page. Max 50 entries, never written to disk, cleared on process restart. AuthorityGateway remains the source of truth — on-chain check always happens on first call.
 - [ ] **BLOCKED (V3 contracts):** V3 contract migration — update addresses in 8+ locations (`sdk/config.ts`, `config/default.json`, `chipotle-client.ts`, `storage.ts`, `dashPackager.ts`, `elacity-creator/app.js`, `elacity-market/wallet.js`, `packages/access`), update V2 ABIs to V3 in Creator Dashboard, reconcile two AuthorityGateway addresses (`0x8fe6...` vs `0x580C...`), add `"v3"` entry to Content Indexer config, rebuild `@elacity-js/access` vendor bundles
 - [ ] **BLOCKED (V3 + Lit):** PDR Phase B — SDK extraction (`sdk/metadata.ts`, `sdk/contracts.ts`, `sdk/channels.ts`, `sdk/mint.ts`, `sdk/licensing.ts`, `sdk/compliance.ts`), Enterprise REST API (`/api/v1/content`, `/api/v1/license`, `/api/v1/compliance`), MCP Server for AI buyer agents (`elacity.content.*`, `elacity.license.*`)
-- [ ] Media pipeline E2E test on Chipotle — video/audio DASH/CENC path wired but unverified
+- [ ] Media pipeline E2E test on Chipotle — video/audio DASH/CENC path wired but unverified. Non-media E2E verified.
+- [ ] Deploy to supernodes (InterServer + Contabo) — local dev verified, supernode deployment pending
 - [ ] Merge `feature/lit-chipotle-migration` -> `main`, tag v1.3.0
 
 **Omnichain ELA:**
@@ -798,24 +801,76 @@ These diagrams from Rong define the north star. Every work stream should move us
 **Sovereign Key Management (Lit Replacement + PQ):**
 ```
 Current:   Lit Chipotle REST API (ECDH P-256 + BLS threshold)
-Phase A:   Dual-write — Lit + PC2 supernode Shamir custody (3+ supernodes required)
-Phase B:   PC2 primary, Lit fallback
-Phase C:   PC2 only, Lit optional
+           - $0.01/execution, managed service, no hardware requirements
+           - 5-min session cache reduces multi-page PDF costs to $0.01/session
+           - Free eth_call preflight checks both EOA + smart account before Lit call
+           - Break-even vs own TEE: ~45,000 executions/month ($450/month)
+Phase A:   Dual-write — Lit + PC2 supernode TEE custody (3+ supernodes required)
+Phase B:   PC2 primary TEE, Lit fallback
+Phase C:   PC2 only, Lit optional — $0/execution (own hardware)
 Phase D:   Content re-encryption from Lit to PC2 with PQ wrapping
 ```
 
+**Cost Analysis (Lit Protocol Chipotle — as of Apr 2026):**
+- $0.01 per Lit Action execution (minimum 1 second)
+- Read-only operations (API key management, account info): free
+- Credit packages: $5 minimum, no expiry
+- Typical encrypt or decrypt: <1 second = $0.01
+- 100 operations = $1, 10,000 operations = $100
+- Session cache (5 min, memory-only) eliminates redundant calls for multi-page PDFs
+- AuthorityGateway eth_call preflight: free (view function, no gas)
+
+**Self-Sovereign TEE Roadmap (Lit Independence):**
+
+The long-term goal is to run our own TEE enclaves on PC2 supernodes, eliminating per-execution Lit costs while maintaining hardware-isolated key management (the strongest security guarantee).
+
+```
+User opens .ddrm file
+    ↓
+PC2 node checks AuthorityGateway (free eth_call)
+    ↓ AccessToken confirmed
+PC2 node → supernode TEE enclave (Intel TDX / AMD SEV-SNP)
+    ↓
+TEE enclave:
+  - Cryptographic attestation (proves correct, unmodified code)
+  - Master key sealed in enclave storage
+  - Decrypts CEK inside enclave
+  - Returns CEK over attested TLS channel
+    ↓
+PC2 node decrypts in WASM, renders pixels, throws away CEK
+```
+
+| Component | Technology | Estimated Cost |
+|-----------|-----------|---------------|
+| TEE hardware | Intel TDX / AMD SEV-SNP servers (Hetzner/Contabo offer these) | ~$50-150/month per node |
+| Enclave runtime | dstack (what Lit uses), Gramine, or Occlum (open source) | Free |
+| Remote attestation | On-chain verification of TEE attestation reports (Base) | Small gas costs |
+| Key sealing | Master keys sealed to enclave identity, survive reboots | Built into TEE hardware |
+| Redundancy | 3+ TEE nodes minimum for availability | 3x hardware cost |
+| Per-execution cost | $0.00 — own hardware | Amortized in server cost |
+
+**Decision: CEK caching strategy (Apr 2026):**
+- **No persistent CEK caching** — AuthorityGateway is the source of truth (blockchain as law)
+- **Session cache only** — 5 min TTL, memory-only, cleared on restart. Covers multi-page PDFs.
+- **Rationale:** Persistent caching breaks sell/transfer/revocation model. If user sells AccessToken, cached CEK would still work. The $0.01/view cost is the price of provable hardware-isolated security.
+- **Future consideration:** If costs become a concern at scale (>45K decrypts/month), Phase A TEE eliminates per-execution cost entirely while maintaining hardware isolation guarantees.
+
 | Priority | Action | Target | Status |
 |----------|--------|--------|--------|
+| P0 | Lit Chipotle production integration | Apr 2026 | ✅ **COMPLETE** |
+| P0 | Session CEK cache (5 min, memory-only) | Apr 2026 | ✅ **COMPLETE** |
+| P0 | Dual-wallet preflight (EOA + smart account) | Apr 2026 | ✅ **COMPLETE** |
 | P1 | AES-256-CTR mode flag in CENC Rust crates | When convenient | 📋 Planned |
-| P2 | Grow supernode count to 3+ | Q2-Q3 2026 | 📋 Prerequisite for custody |
+| P2 | Grow supernode count to 3+ | Q2-Q3 2026 | 📋 Prerequisite for TEE custody |
+| P2 | Evaluate dstack / Gramine for supernode TEE | Q3 2026 | 📋 Research |
 | P2 | Prototype `elastos-keycustody` Rust crate (Shamir + ML-KEM-768, wasm32-wasip1) | Q3 2026 | 📋 Planned |
 | P2 | Evaluate ML-KEM/ML-DSA Rust crates for wasm32-wasip1 | Q3 2026 | 📋 Research |
-| P3 | Dual-write: Lit + PC2 custodian for new content | Q4 2026 | 📋 Planned |
+| P3 | Dual-write: Lit + PC2 TEE custodian for new content | Q4 2026 | 📋 Planned |
 | P3 | libp2p Noise PQ hybrid (when js-libp2p ships) | 2027 | 📋 Dep on ecosystem |
 | P3 | Boson CryptoBox: ML-KEM-768 + X25519 hybrid | 2027 | 📋 Our code |
-| P4 | PC2 primary key custody, Lit fallback only | 2027-2028 | 📋 Sovereignty milestone |
+| P4 | PC2 TEE primary key custody, Lit fallback only | 2027-2028 | 📋 Sovereignty milestone |
 | P4 | Content re-encryption tooling (Lit CEKs -> PQ custody) | 2027-2028 | 📋 Planned |
-| P5 | Full Lit removal — PC2 sovereign key management | 2028 | 📋 Walk-away complete |
+| P5 | Full Lit removal — PC2 sovereign TEE key management | 2028 | 📋 Walk-away complete |
 | P5 | Full PQ stack (all transports, all identity) | 2028-2030 | 📋 Pre-Q-Day |
 
 **Runtime v2 Convergence:** `elastos-keycustody` crate targets `wasm32-wasip1` — runs as WASM module in v1.x, becomes signed capsule in v2. PQ primitives (ML-KEM-768, ML-DSA-65) built in from day 1.

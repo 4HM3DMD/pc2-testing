@@ -79,6 +79,7 @@
     iv:                p('iv', ''),
     kid:               p('kid', ''),
     buyerAddress:      p('buyerAddress', ''),
+    buyerAddressAlt:   p('buyerAddressAlt', ''),
     mimeType:          p('mimeType', 'application/octet-stream'),
     actionCid:         p('actionCid', ''),
     authority:         p('authority', ''),
@@ -308,6 +309,7 @@
       maxWidth:          assetParams.maxWidth,
       page:              page,
     };
+    if (assetParams.buyerAddressAlt) body.buyerAddressAlt = assetParams.buyerAddressAlt;
     if (assetParams.actionCid) body.actionCid = assetParams.actionCid;
     if (assetParams.authority) body.authority = assetParams.authority;
     if (assetParams.litBackend) body.litBackend = assetParams.litBackend;

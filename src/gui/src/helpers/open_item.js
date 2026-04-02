@@ -222,7 +222,10 @@ Please try recreating the link.`);
                             encryptedDataCid:  descriptor.encryptedDataCid,
                             iv:                descriptor.iv || '',
                             kid:               descriptor.kid,
-                            buyerAddress:      (window.user && window.user.smart_account_address) || descriptor.acquiredBy || '',
+                            buyerAddress:      (window.user && (window.user.wallet_address || window.user.smart_account_address)) || descriptor.acquiredBy || '',
+                            buyerAddressAlt:   (window.user && window.user.wallet_address && window.user.smart_account_address)
+                                                 ? (window.user.wallet_address !== window.user.smart_account_address ? window.user.smart_account_address : '')
+                                                 : '',
                             mimeType:          descriptor.mimeType || 'application/octet-stream',
                             title:             descriptor.title || 'Untitled',
                             actionCid:         descriptor.actionCid || '',

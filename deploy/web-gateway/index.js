@@ -2763,15 +2763,15 @@ async function handleApiRequest(req, res) {
       const apiKey = fs.readFileSync(keyFile, 'utf8').trim();
       const pkpId = fs.existsSync(pkpFile)
         ? fs.readFileSync(pkpFile, 'utf8').trim()
-        : '0x09bdfc8f8ec5a3bd2970497b930bd94839f22227';
+        : '0x68dcf3dc3c38d726e8a7cdca8ab318f49552c05d';
 
       console.log(`[dDRM] Provisioned API key to ${clientIP}`);
 
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({
-        version: 1,
-        network: 'chipotle-dev',
-        apiUrl: 'https://api.dev.litprotocol.com',
+        version: 2,
+        network: 'chipotle',
+        apiUrl: 'https://api.chipotle.litprotocol.com',
         usageKey: apiKey,
         pkpId,
         authority: '0x580c26DefF267EF40A72CF10A4A42050F0641b8B',

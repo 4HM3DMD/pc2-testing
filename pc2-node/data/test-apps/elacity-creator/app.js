@@ -3428,10 +3428,70 @@
         }
       }
 
-      // Post-mint: Elacity's on-chain indexer detects AssetCreated events and resolves
-      // the tokenURI metadata from ipfs.ela.city. The flat metadata CID uploaded above
-      // is resolvable, so the asset will appear in the feed automatically.
-      // No explicit backend notification needed when using the upload-elacity endpoint.
+      // Post-mint: save .ddrm capsule to user's directory so the asset is
+      // immediately openable without needing the Elacity Market app.
+      if (assetCid && state.walletAddress && encryptResult) {
+        try {
+          var walletAddr = state.walletAddress.toLowerCase();
+          var cleanHash = (encryptResult.dataToEncryptHash || '').replace(/^0x/, '');
+          var capsuleKid = cleanHash ? '0x' + cleanHash.slice(0, 32).padEnd(32, '0') : '';
+          var assetMime = state.resolvedMime || 'application/octet-stream';
+          var capsuleFolder = '/' + walletAddr + '/' + (
+            isMediaFile ? 'Videos' :
+            assetMime.startsWith('image/') ? 'Pictures' : 'Documents'
+          );
+          var safeName = (title || 'asset').replace(/[^a-zA-Z0-9 _\-]/g, '').substring(0, 80).trim() || 'asset';
+          var capsulePath = capsuleFolder + '/' + safeName + '.ddrm';
+
+          var capsule = {
+            schema: 'ddrm-capsule-v2',
+            type: isMediaFile ? 'media' : 'non-media',
+            version: 1,
+            title: title || 'Untitled',
+            contractAddress: channel || '',
+            tokenId: mintedTokenId || '0',
+            authority: CONTRACTS.AUTHORITY_GATEWAY,
+            operative: mintedOpContract || '',
+            ledger: channel || '',
+            thumbnail: imageUri || '',
+            acquiredAt: new Date().toISOString(),
+            acquiredBy: state.walletAddress,
+          };
+
+          if (isMediaFile && mediaEncodeResult) {
+            capsule.cid = assetCid;
+            capsule.gateway = window.location.origin + '/ipfs/';
+            capsule.fallbackGateway = 'https://ipfs.ela.city/ipfs/';
+            capsule.mediaType = assetMime.startsWith('video/') ? 'video' : 'audio';
+            capsule.duration = mediaEncodeResult.duration || 0;
+            capsule.isProtected = true;
+          } else {
+            capsule.encryptedDataCid = assetCid;
+            capsule.mimeType = assetMime;
+            capsule.dataToEncryptHash = encryptResult.dataToEncryptHash || '';
+            capsule.kid = capsuleKid;
+            capsule.litCiphertext = encryptResult.litCiphertext || '';
+            capsule.iv = encryptResult.iv || '';
+            capsule.actionCid = encryptResult.actionCid || '';
+            capsule.litBackend = encryptResult.litBackend || 'chipotle';
+          }
+
+          await pc2Fetch('/write', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              path: capsulePath,
+              content: JSON.stringify(capsule, null, 2),
+              mime_type: 'application/x-ddrm',
+              overwrite: false,
+              dedupe_name: true,
+            }),
+          });
+          console.log('[Creator] .ddrm capsule saved:', capsulePath);
+        } catch (capsuleErr) {
+          console.warn('[Creator] .ddrm capsule save failed (non-fatal):', capsuleErr.message);
+        }
+      }
 
     } catch (err) {
       state.processingRunning = false;

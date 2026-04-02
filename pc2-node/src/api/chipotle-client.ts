@@ -35,13 +35,13 @@ const PROVISION_CACHE_PATH = join(DATA_DIR, '.chipotle-provision.json');
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-const DEFAULT_API_URL = 'https://api.dev.litprotocol.com';
-const PROD_API_URL = 'https://api.litprotocol.com';
+const DEFAULT_API_URL = 'https://api.chipotle.litprotocol.com';
+const DEV_API_URL = 'https://api.dev.litprotocol.com';
 
 const DEFAULT_AUTHORITY = '0x8fe6bf9877B78BF0126819ff2593235E54Ee1E29';
 const DEFAULT_CHAIN = 'base';
 const DEFAULT_CHAIN_ID = 8453;
-const DEFAULT_PKP_ID = '0x09bdfc8f8ec5a3bd2970497b930bd94839f22227';
+const DEFAULT_PKP_ID = '0x68dcf3dc3c38d726e8a7cdca8ab318f49552c05d';
 
 const SUPERNODE_PROVISION_URLS = [
   'https://69.164.241.210/api/ddrm/provision',
@@ -298,7 +298,7 @@ function getActionCid(): string {
     if (cid) return cid;
   }
 
-  return 'QmVMgKMKFELHTZf8PmD58nYBhr4S5DHLpuwFTvyDKLPXgq';
+  return 'QmNayE5MYzXcoMS9nvRk6MUo8r4ESLa3i65vHXzuBsnC2b';
 }
 
 // ── Core REST Client ─────────────────────────────────────────────────────────
