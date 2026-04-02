@@ -262,10 +262,9 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
   // RPC proxy for embedded dApps (e.g. Glide Finance)
   // Features: response caching with per-method TTLs, fallback RPC endpoints
   const ESC_RPC_URLS = [
-    'https://api.ela.city/esc',
     'https://api.elastos.io/eth',
-    'https://rpc.glidefinance.io',
     'https://api.elastos.io/esc',
+    'https://rpc.glidefinance.io',
   ];
 
   // Per-method cache TTLs (milliseconds). Methods not listed are not cached.
@@ -280,6 +279,7 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
   };
 
   const rpcCache = new Map<string, { data: any; expires: number }>();
+  let highestBlockSeen = 0;
 
   function getRpcCacheKey(method: string, params: any[]): string {
     return `${method}:${JSON.stringify(params)}`;
@@ -298,9 +298,15 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
   function setCachedRpcResponse(method: string, params: any[], data: any): void {
     const ttl = RPC_CACHE_TTLS[method];
     if (!ttl) return;
+
+    if (method === 'eth_blockNumber' && data?.result) {
+      const blockNum = parseInt(data.result, 16);
+      if (blockNum < highestBlockSeen) return;
+      highestBlockSeen = blockNum;
+    }
+
     const key = getRpcCacheKey(method, params);
     rpcCache.set(key, { data, expires: Date.now() + ttl });
-    // Evict old entries periodically
     if (rpcCache.size > 500) {
       const now = Date.now();
       for (const [k, v] of rpcCache) {
@@ -401,7 +407,7 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
         const bosonService = req.app?.locals?.bosonService;
         const baseUrl = getBaseUrl(req, bosonService);
         let html = await readFileAsync(appIndexPath, 'utf-8');
-        const walletShimTag = `<script src="${baseUrl}/pc2-wallet-provider.js"></script>`;
+        const walletShimTag = `<script src="${baseUrl}/pc2-wallet-provider.js?v=20260402k"></script>`;
         html = html.replace(/<head[^>]*>/i, (match: string) => `${match}\n    ${walletShimTag}`);
         res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
         res.type('html').send(html);
@@ -430,7 +436,7 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
       const bosonService = req.app?.locals?.bosonService;
       const baseUrl = getBaseUrl(req, bosonService);
       let html = await readFileAsync(filePath, 'utf-8');
-      const walletShimTag = `<script src="${baseUrl}/pc2-wallet-provider.js"></script>`;
+      const walletShimTag = `<script src="${baseUrl}/pc2-wallet-provider.js?v=20260402k"></script>`;
       html = html.replace(/<head[^>]*>/i, (match: string) => `${match}\n    ${walletShimTag}`);
       res.type('html').send(html);
       return;
@@ -767,7 +773,7 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
           
           // Inject PC2 wallet provider shim into app HTML
           // This creates window.ethereum inside sandboxed iframes via postMessage bridge
-          const walletShimTag = `<script src="${baseUrl}/pc2-wallet-provider.js"></script>`;
+          const walletShimTag = `<script src="${baseUrl}/pc2-wallet-provider.js?v=20260402k"></script>`;
           htmlContent = htmlContent.replace(/<head[^>]*>/i, (match: string) => `${match}\n    ${walletShimTag}`);
           
           // Per-app COOP/COEP headers for apps that need cross-origin isolation
@@ -1058,7 +1064,7 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
         const sdkUrl = `${baseUrl}/puter.js/v2`;
         let htmlContent = await readFileAsync(spaAppIndex, 'utf8');
         htmlContent = htmlContent.replace(/https?:\/\/[^'"]*\/puter\.js\/v2/g, sdkUrl);
-        const walletShimTag = `<script src="${baseUrl}/pc2-wallet-provider.js"></script>`;
+        const walletShimTag = `<script src="${baseUrl}/pc2-wallet-provider.js?v=20260402k"></script>`;
         htmlContent = htmlContent.replace(/<head[^>]*>/i, (match: string) => `${match}\n    ${walletShimTag}`);
         res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
         res.type('html').send(htmlContent);

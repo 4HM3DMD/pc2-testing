@@ -34,18 +34,66 @@
     'eth_getLogs', 'eth_getBlockByHash', 'net_version'
   ];
 
-  // ESC RPC endpoints with fallback (local proxy first, then Elacity, then public)
-  var ESC_RPC_URLS = [
-    '/api/rpc/esc',
-    'https://api.ela.city/esc',
-    'https://api.elastos.io/eth',
-    'https://rpc.glidefinance.io'
-  ];
+  // Multi-chain RPC endpoints — keyed by decimal chain ID
+  // Only free, no-auth, CORS-enabled endpoints. Avoid llamarpc (ad-blocked), ankr (needs key).
+  var CHAIN_RPC_URLS = {
+    20: ['/api/rpc/esc', 'https://api.elastos.io/eth', 'https://api.elastos.io/esc'],
+    1: ['https://ethereum-rpc.publicnode.com', 'https://1rpc.io/eth', 'https://cloudflare-eth.com'],
+    56: ['https://bsc-dataseed1.binance.org', 'https://bsc-dataseed2.binance.org', 'https://bsc-rpc.publicnode.com'],
+    137: ['https://polygon-bor-rpc.publicnode.com', 'https://polygon-rpc.com'],
+    42161: ['https://arb1.arbitrum.io/rpc', 'https://arbitrum-one-rpc.publicnode.com'],
+    10: ['https://mainnet.optimism.io', 'https://optimism-rpc.publicnode.com'],
+    43114: ['https://api.avax.network/ext/bc/C/rpc', 'https://avalanche-c-chain-rpc.publicnode.com'],
+    250: ['https://rpc.ftm.tools', 'https://fantom-rpc.publicnode.com'],
+    25: ['https://evm.cronos.org']
+  };
 
-  // Current chain ID for the bridge (default: ESC = 20)
+  // Chain metadata for wallet_addEthereumChain
+  var CHAIN_META = {
+    20:    { name: 'Elastos Smart Chain', symbol: 'ELA', decimals: 18, explorer: 'https://esc.elastos.io' },
+    1:     { name: 'Ethereum', symbol: 'ETH', decimals: 18, explorer: 'https://etherscan.io' },
+    56:    { name: 'BNB Smart Chain', symbol: 'BNB', decimals: 18, explorer: 'https://bscscan.com' },
+    137:   { name: 'Polygon', symbol: 'MATIC', decimals: 18, explorer: 'https://polygonscan.com' },
+    42161: { name: 'Arbitrum One', symbol: 'ETH', decimals: 18, explorer: 'https://arbiscan.io' },
+    10:    { name: 'Optimism', symbol: 'ETH', decimals: 18, explorer: 'https://optimistic.etherscan.io' },
+    43114: { name: 'Avalanche C-Chain', symbol: 'AVAX', decimals: 18, explorer: 'https://snowtrace.io' },
+    250:   { name: 'Fantom', symbol: 'FTM', decimals: 18, explorer: 'https://ftmscan.com' },
+    25:    { name: 'Cronos', symbol: 'CRO', decimals: 18, explorer: 'https://cronoscan.com' }
+  };
+
+  // bridgeChainId: controls read-only RPC routing (eth_chainId, eth_blockNumber, etc.)
+  // Stays at 20 (ESC) so Glide's main providers remain stable.
   var bridgeChainId = 20;
+  // walletChainId: tracks what chain the dApp last requested via wallet_switchEthereumChain.
+  // Used by ensureWalletOnChain to switch MetaMask before signing.
+  var walletChainId = 20;
+  var _highestBlock = {};
 
-  function directRpc(method, params) {
+  function getRpcUrls(chainId) {
+    return CHAIN_RPC_URLS[chainId] || [];
+  }
+
+  function buildAddChainParams(chainId) {
+    var meta = CHAIN_META[chainId];
+    var rpcs = getRpcUrls(chainId);
+    if (!meta || rpcs.length === 0) return null;
+    var publicRpcs = rpcs.filter(function (u) { return u.indexOf('/') !== 0; });
+    return {
+      chainId: '0x' + chainId.toString(16),
+      chainName: meta.name,
+      nativeCurrency: { name: meta.symbol, symbol: meta.symbol, decimals: meta.decimals },
+      rpcUrls: publicRpcs.length > 0 ? publicRpcs : rpcs,
+      blockExplorerUrls: [meta.explorer]
+    };
+  }
+
+  function directRpc(method, params, chainOverride) {
+    var chain = chainOverride || bridgeChainId;
+    var urls = getRpcUrls(chain);
+    if (urls.length === 0) {
+      return Promise.reject(new Error('No RPC endpoints configured for chain ' + chain));
+    }
+
     var body = JSON.stringify({
       jsonrpc: '2.0', method: method, params: params || [], id: Date.now()
     });
@@ -53,10 +101,10 @@
     var urlIndex = 0;
 
     function tryNext() {
-      if (urlIndex >= ESC_RPC_URLS.length) {
-        return Promise.reject(new Error('All ESC RPCs failed for ' + method));
+      if (urlIndex >= urls.length) {
+        return Promise.reject(new Error('All RPCs failed for ' + method + ' on chain ' + chain));
       }
-      var url = ESC_RPC_URLS[urlIndex++];
+      var url = urls[urlIndex++];
       return fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -71,12 +119,26 @@
           err.data = json.error.data;
           throw err;
         }
-        return json.result;
+        var result = json.result;
+
+        if (method === 'eth_blockNumber' && result && chain === 20) {
+          var hb = _highestBlock[chain] || 0;
+          var bn = parseInt(result, 16);
+          if (bn > hb) {
+            _highestBlock[chain] = bn;
+          } else if (hb > 0 && bn < hb - 10) {
+            if (urlIndex < urls.length) {
+              console.warn('[PC2 Bridge] Stale block from', url, '(' + bn + ' vs ' + hb + '), trying next RPC');
+              return tryNext();
+            }
+            result = '0x' + hb.toString(16);
+          }
+        }
+
+        return result;
       }).catch(function (err) {
-        // If this was an RPC-level error (has .code), don't try next — it's a real error
         if (err.code && err.code !== -32603) throw err;
-        // Network error — try next endpoint
-        if (urlIndex < ESC_RPC_URLS.length) return tryNext();
+        if (urlIndex < urls.length) return tryNext();
         throw err;
       });
     }
@@ -147,12 +209,32 @@
       return;
     }
 
-    if (data.method === 'wallet_switchEthereumChain') {
-      var requested = data.params && data.params[0] && data.params[0].chainId;
-      if (requested) {
-        bridgeChainId = parseInt(requested, 16);
-        console.log('[PC2 Bridge] Chain switched to', bridgeChainId);
+    if (data.method === 'wallet_switchEthereumChain' || data.method === 'wallet_addEthereumChain') {
+      var requestedHex = data.params && data.params[0] && data.params[0].chainId;
+      var requestedId = requestedHex ? parseInt(requestedHex, 16) : bridgeChainId;
+
+      // Track requested chain for signing only. bridgeChainId stays pinned to ESC (20)
+      // so ethers.js v5 providers remain stable for reads.
+      // Glide's Bridge page cycles through multiple chains during init which would
+      // constantly flip bridgeChainId and break all providers.
+      walletChainId = requestedId;
+      console.log('[PC2 Bridge] wallet_switchEthereumChain:', requestedId, '(signing target, reads stay on ESC)');
+
+      // Forward to MetaMask so the actual wallet is on the right chain for signing
+      if (!isEmbeddedLogin()) {
+        var walletProvider = window.ethereum;
+        if (walletProvider && !walletProvider.isPC2WalletBridge) {
+          walletProvider.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: requestedHex }] })
+            .catch(function (switchErr) {
+              if (switchErr.code === 4902 || (switchErr.message && switchErr.message.indexOf('nrecognized') >= 0)) {
+                var addParams = buildAddChainParams(requestedId);
+                if (addParams) return walletProvider.request({ method: 'wallet_addEthereumChain', params: [addParams] });
+              }
+            })
+            .catch(function () {});
+        }
       }
+
       respond({
         type: 'pc2-wallet-rpc-response',
         id: data.id, method: data.method, result: null
@@ -199,7 +281,78 @@
       return;
     }
 
-    provider.request({ method: data.method, params: data.params })
+    function prefillGasForTx(params) {
+      if (!params || !params[0]) return Promise.resolve(params);
+      var tx = Object.assign({}, params[0]);
+      var tasks = [];
+
+      if (!tx.gas && !tx.gasLimit) {
+        tasks.push(
+          directRpc('eth_estimateGas', [{ from: tx.from, to: tx.to, value: tx.value, data: tx.data }])
+            .then(function (gas) {
+              var padded = Math.ceil(parseInt(gas, 16) * 1.2);
+              tx.gas = '0x' + padded.toString(16);
+              console.log('[PC2 Bridge] Pre-filled gas:', tx.gas, '(estimated:', gas, ')');
+            })
+            .catch(function (e) { console.warn('[PC2 Bridge] Gas estimate failed, MetaMask will estimate:', e.message); })
+        );
+      }
+
+      if (!tx.gasPrice && !tx.maxFeePerGas) {
+        tasks.push(
+          directRpc('eth_gasPrice', [])
+            .then(function (price) {
+              tx.gasPrice = price;
+              console.log('[PC2 Bridge] Pre-filled gasPrice:', price);
+            })
+            .catch(function () {})
+        );
+      }
+
+      if (!tx.chainId) {
+        tx.chainId = '0x' + bridgeChainId.toString(16);
+      }
+
+      if (tasks.length === 0) return Promise.resolve([tx]);
+      return Promise.all(tasks).then(function () { return [tx]; });
+    }
+
+    var isTx = data.method === 'eth_sendTransaction' || data.method === 'eth_signTransaction';
+    var chainHex = '0x' + bridgeChainId.toString(16);
+
+    function ensureWalletOnChain() {
+      var txChainId = (data.params && data.params[0] && data.params[0].chainId)
+        ? parseInt(data.params[0].chainId, 16)
+        : walletChainId;
+      var txChainHex = '0x' + txChainId.toString(16);
+      var addParams = buildAddChainParams(txChainId);
+      return provider.request({ method: 'eth_chainId' }).then(function (current) {
+        var currentId = parseInt(current, 16);
+        console.log('[PC2 Bridge] Wallet on chain', currentId, '| tx needs', txChainId);
+        if (currentId === txChainId) return;
+        return provider.request({
+          method: 'wallet_switchEthereumChain',
+          params: [{ chainId: txChainHex }]
+        }).catch(function (switchErr) {
+          if (switchErr.code === 4902 || (switchErr.message && switchErr.message.indexOf('nrecognized') >= 0)) {
+            if (addParams) return provider.request({ method: 'wallet_addEthereumChain', params: [addParams] });
+          }
+          throw switchErr;
+        }).then(function () {
+          console.log('[PC2 Bridge] Wallet switched to chain', txChainId, 'for signing');
+        });
+      }).catch(function (err) {
+        console.warn('[PC2 Bridge] Chain ensure failed:', err.message, '- proceeding anyway');
+      });
+    }
+
+    var prepare = isTx
+      ? ensureWalletOnChain().then(function () { return prefillGasForTx(data.params); })
+      : Promise.resolve(data.params);
+
+    prepare.then(function (finalParams) {
+      return provider.request({ method: data.method, params: finalParams });
+    })
       .then(function (result) {
         respond({
           type: 'pc2-wallet-rpc-response',
@@ -233,17 +386,15 @@
     if (!provider || provider.isPC2WalletBridge) return;
 
     var accounts = [];
-    var chainId = null;
 
     provider.request({ method: 'eth_accounts' })
-      .then(function (accts) { accounts = accts || []; return provider.request({ method: 'eth_chainId' }); })
-      .then(function (chain) { chainId = chain; })
+      .then(function (accts) { accounts = accts || []; })
       .catch(function () {})
       .finally(function () {
         respond({
           type: 'pc2-wallet-init',
           accounts: accounts,
-          chainId: chainId,
+          chainId: '0x' + bridgeChainId.toString(16),
           smartAccountAddress: smartAccountAddress
         });
       });

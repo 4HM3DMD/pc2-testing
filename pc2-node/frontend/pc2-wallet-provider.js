@@ -66,6 +66,8 @@
         if (Array.isArray(data.result)) connectedAccounts = data.result;
       }
       if (data.method === 'eth_chainId') currentChainId = data.result;
+      // chainChanged event from bridge handles chain updates;
+      // no need to re-query eth_chainId here
     }
 
     if (data.type === 'pc2-wallet-event') {
@@ -179,6 +181,17 @@
   }
 
   window.pc2Wallet = provider;
+
+  // Suppress ethers.js v5 NETWORK_ERROR during chain transitions.
+  // These are non-fatal "underlying network changed" errors from background
+  // polling that happen naturally when chains switch (same as on real MetaMask).
+  window.addEventListener('unhandledrejection', function (event) {
+    var reason = event && event.reason;
+    if (reason && reason.code === 'NETWORK_ERROR' &&
+        reason.message && reason.message.indexOf('underlying network changed') >= 0) {
+      event.preventDefault();
+    }
+  });
 
   setTimeout(function () {
     if (window.ethereum !== provider) {

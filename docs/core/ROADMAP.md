@@ -2,7 +2,7 @@
 
 > **Purpose:** Single source of truth for all strategic goals, technical work streams, and milestones — directly mapped to the Keystone Fund proposal and Rong Chen's original vision
 > **Created:** 2026-02-24
-> **Last Updated:** 2026-04-01
+> **Last Updated:** 2026-04-02
 > **Status:** Living document — update as work progresses
 
 ---
@@ -266,6 +266,11 @@ These diagrams from Rong define the north star. Every work stream should move us
   - [x] `amm-engine` Rust WASM crate (143KB) — Uniswap V2 AMM math engine (getAmountOut, getAmountIn, multi-hop route finding, price impact calculation)
   - [x] RPC response cache — in-memory TTL cache per method (`eth_chainId`: 1hr, `eth_gasPrice`: 5s, `eth_getCode`: 5min)
   - [x] **Supernode ESC RPC** — read-only ESC full node on Contabo supernode (systemd service, `127.0.0.1:20636`, method whitelist via gateway proxy at `/rpc/esc`). Self-sovereign chain access for all PC2 nodes *(syncing, ETA ~10h)*
+  - [x] **Wallet bridge hardening (Apr 2)** — Multi-chain wallet support: `wallet_switchEthereumChain` forwarded to MetaMask/WalletConnect (fire-and-forget), `wallet_addEthereumChain` with full chain metadata (9 chains: ESC, ETH, BSC, Polygon, Arbitrum, Optimism, Avalanche, Fantom, Cronos), auto-add unknown networks. MetaMask "All Networks" gas estimation fix via forced `wallet_addEthereumChain` on connect. WalletConnect compatibility verified. Free, CORS-enabled RPC endpoints only (no API keys). Bridge page hidden (CSS + MutationObserver) due to architectural limitation *(completed Apr 2)*
+  - [x] **Token approval UX fix (Apr 2)** — Fixed Glide "Enabling USDC..." stuck state after approval transactions by ensuring wallet bridge correctly returns transaction receipts
+  - **Known limitation: Bridge page** — Glide's Bridge page performs automatic `wallet_switchEthereumChain` calls during initialization to load multi-chain data. In PC2's sandboxed iframe (single `window.ethereum` proxy), these rapid chain switches destabilize ethers.js v5 providers. Bridge tab hidden from navigation. Requires per-request chain routing or dApp-side isolated providers to fully resolve — deferred to dApp sandboxing v2 (capsule architecture)
+  - **Outstanding: Contabo ESC RPC sync** — Full node started but sync status needs verification. Once synced, all PC2 nodes use self-sovereign ESC access (`/api/rpc/esc`). Check: `curl -s http://127.0.0.1:20636 -X POST -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"eth_syncing","params":[],"id":1}'`
+  - **Outstanding: ESC subgraph** — Glide's subgraph (thegraph.com hosted) is unreliable (stale data, `DEADLINE_EXCEEDED` errors). Long-term: self-hosted subgraph on Contabo supernode indexing ESC. Short-term: deadline workaround with `block_constraint: "number_gte"` already in place
 - [ ] **Use case: Productivity tools** — note-taking, spreadsheet, code editor as owned software
 - [ ] **Use case: HTML5 games** — game bundles sold with royalties on resale
 
@@ -407,14 +412,15 @@ These diagrams from Rong define the north star. Every work stream should move us
 - [x] **Shell escape fix** — `HostDiskUsageService.js` had command injection vulnerability via `execSync` with user-controlled directory paths. Replaced with `execFileSync` (argument array, no shell invocation). Zero new dependencies. Better than upstream fix (they added `shescape` npm dependency). *(completed Mar 23)*
 - [x] **Skipped (by design):** Access token suspension (cloud-centric, irrelevant to PC2 wallet auth), FS stat optimization (files diverged 278+124 lines, too risky), GUI fixes (53K+ lines diverged), AI improvements (PC2 has independent AI stack), KV store changes (cloud-coupled), PeerService/Workers (centralized patterns)
 
-**v1.3 Release — HIGH PRIORITY (blocked on external dependencies):**
+**v1.3 Release — HIGH PRIORITY (Gate 1 UNBLOCKED):**
 
-> **Status:** Implementation-ready. Blocked on two external inputs. Execute immediately when received.
-> **Gate 1:** Lit Protocol production network details (production dashboard URL, API URL, account setup)
-> **Gate 2:** Elacity V3 audited smart contract ABIs + addresses
+> **Status:** Implementation-ready. Gate 1 unblocked — Lit Protocol Chipotle mainnet is live (Apr 2026). Gate 2 still blocked.
+> **Gate 1:** ~~Lit Protocol production network details~~ **UNBLOCKED** — Chipotle mainnet live, dashboard at `dashboard.litprotocol.com`
+> **Gate 2:** Elacity V3 audited smart contract ABIs + addresses — still waiting
 > **Plan:** See `.cursor/plans/v1.3_release_plan_7cce212d.plan.md` for full execution checklist
+> **Next action:** Lit mainnet swap for Elacity Creator/Market dApps (production account, Lit Action CID registration, E2E test)
 
-- [ ] **BLOCKED (Lit production):** Chipotle production swap — create production account on `dashboard.litprotocol.com`, register all 4 Lit Action CIDs, create scoped usage API key, fund account, update `DEFAULT_API_URL` + `DEFAULT_PKP_ID` in `chipotle-client.ts`, update `deploy/web-gateway/index.js` provisioning config, deploy to both supernodes (InterServer + Contabo), E2E test (mint -> buy -> decrypt)
+- [ ] **UNBLOCKED (Lit mainnet live):** Chipotle production swap — create production account on `dashboard.litprotocol.com`, register all 4 Lit Action CIDs, create scoped usage API key, fund account, update `DEFAULT_API_URL` + `DEFAULT_PKP_ID` in `chipotle-client.ts`, update `deploy/web-gateway/index.js` provisioning config, deploy to both supernodes (InterServer + Contabo), E2E test (mint -> buy -> decrypt). **Lit Protocol Chipotle network is now live on mainnet (confirmed Apr 2026).** This unblocks the Elacity app dDRM pipeline for production use. **NEXT PRIORITY after Glide wrap-up.**
 - [ ] **BLOCKED (V3 contracts):** V3 contract migration — update addresses in 8+ locations (`sdk/config.ts`, `config/default.json`, `chipotle-client.ts`, `storage.ts`, `dashPackager.ts`, `elacity-creator/app.js`, `elacity-market/wallet.js`, `packages/access`), update V2 ABIs to V3 in Creator Dashboard, reconcile two AuthorityGateway addresses (`0x8fe6...` vs `0x580C...`), add `"v3"` entry to Content Indexer config, rebuild `@elacity-js/access` vendor bundles
 - [ ] **BLOCKED (V3 + Lit):** PDR Phase B — SDK extraction (`sdk/metadata.ts`, `sdk/contracts.ts`, `sdk/channels.ts`, `sdk/mint.ts`, `sdk/licensing.ts`, `sdk/compliance.ts`), Enterprise REST API (`/api/v1/content`, `/api/v1/license`, `/api/v1/compliance`), MCP Server for AI buyer agents (`elacity.content.*`, `elacity.license.*`)
 - [ ] Media pipeline E2E test on Chipotle — video/audio DASH/CENC path wired but unverified

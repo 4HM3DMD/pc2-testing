@@ -498,27 +498,62 @@ Right-clicking a file and selecting "Open With" now shows **two options**: the E
 
 ---
 
+## Glide Finance DEX — First DeFi dApp on PC2 (Apr 1-2)
+
+**Why this matters:** This is the first third-party dApp running natively inside PC2 — proving that existing Web3 applications can be packaged, downloaded, and run on personal cloud computers without code changes. This validates the entire dApp Store model: apps distributed by content hash, running locally, with wallet access mediated by capability-gated bridges.
+
+**What was built:**
+
+### Glide Finance Integration
+- **Full DEX functionality** — Swap, Liquidity, Farm, Stake, stELA, Analytics, and Governance all working on Elastos Smart Chain
+- **On-chain confirmed** — Token swaps verified on ESC (tx `0xb5b9...35b1`), token approvals working, LP operations functional
+- **Zero code changes to Glide** — The original React frontend runs unmodified inside a sandboxed iframe
+
+### Wallet Bridge (pc2-wallet-bridge.js)
+- **Multi-wallet support** — MetaMask, WalletConnect, and Particle Auth (embedded login) all work through the same bridge
+- **Auto-connect** — dApps auto-connect to the user's wallet without manual connection steps
+- **Multi-chain metadata** — 9 EVM chains configured (ESC, ETH, BSC, Polygon, Arbitrum, Optimism, Avalanche, Fantom, Cronos) with free, CORS-enabled RPC endpoints
+- **Auto-add networks** — If a user's wallet doesn't have a chain configured, `wallet_addEthereumChain` adds it automatically
+- **MetaMask "All Networks" fix** — Forced `wallet_addEthereumChain` on connect ensures gas estimation works correctly regardless of MetaMask's network mode
+- **RPC response cache** — In-memory TTL cache per method (`eth_chainId`: 1hr, `eth_gasPrice`: 5s, `eth_getCode`: 5min) — 38x speedup on cached methods
+
+### WASM Performance Crates (Built, Available for Future Use)
+- **`evm-multicall`** (116KB) — Rust WASM Multicall3 ABI encoder/decoder for batching EVM read calls
+- **`amm-engine`** (143KB) — Rust WASM Uniswap V2 AMM math engine (getAmountOut, multi-hop routing, price impact)
+
+### Supernode ESC RPC
+- **Self-sovereign chain access** — Read-only ESC full node on Contabo supernode (systemd service, method whitelist, gateway proxy at `/rpc/esc`)
+- **Status:** Sync initiated, completion pending verification
+
+### Known Limitation: Bridge Page
+Glide's multi-chain Bridge page is hidden from navigation. The page requires per-chain RPC isolation that isn't possible in the current single-proxy iframe architecture. This will be resolved in Runtime v2's capsule model where each app gets its own capability-scoped network access.
+
+---
+
 ## What's Next
 
-Looking ahead, the immediate priorities are:
+### Immediate Priority: Lit Protocol Mainnet Swap
+**Lit Protocol Chipotle is now live on mainnet (April 2026).** This unblocks the entire Elacity dDRM production pipeline — the biggest external blocker since March.
 
-### Elacity Viewer Polish
-- **PDF.js full viewer** — Integrate PDF.js's built-in viewer for cleartext PDFs, providing search, print, download, sidebar with thumbnails/outline, and presentation mode (all free with the PDF.js viewer iframe)
-- **Viewer feature parity** — Ensure all cleartext viewer modes have consistent toolbar UX
+1. **Lit mainnet account setup** — dashboard, API keys, Lit Action CID registration
+2. **Elacity Creator/Market production deploy** — encrypt → mint → buy → decrypt E2E on mainnet
+3. **Capacity credit monitoring** — track consumption per operation
 
-### Enhanced Channel Creation UX
-- **Channel-first workflow** — Channel creation/selection should be the first step before uploading content. If a user has no channels, they should be prompted to create one
-- **Rich channel creation form** — Support channel naming, description, and metadata fields during creation (not just a bare contract deploy)
-- **Subscription model integration** — Channel creation should expose subscription plan configuration, leveraging the existing subscription lifecycle flows
-- **Wallet choice in channel creation** — Users should be able to create channels with either EOA or Agent Wallet (already implemented, to be enhanced with the richer form)
+### Elacity App Focus
+With Glide stable, priority shifts to Elacity Creator + Market apps with production dDRM:
+- Full publish pipeline on Lit mainnet
+- Media + non-media decrypt verification
+- Channel creation and management
+- EOA + Agent Wallet minting
 
-### Continued Priorities
-1. **V3 Contract Migration** — When new Elacity V3 contracts deploy, update ABIs and addresses in the Creator Dashboard
-2. **Lit Protocol Mainnet** — When Chipotle goes to mainnet, update endpoints and test end-to-end
-3. **Large File Encryption** — Verify the pipeline handles 4–70GB AI model files (GGUFs) with streaming encryption
-4. **App Build Pipeline** — Vite build → static bundle → IPFS pin → CID → registry (the "App Factory")
-5. **Content Intelligence** — Perceptual hashing and content fingerprinting for duplicate detection and rights management
-6. **Runtime v2 Capsule Prototyping** — Begin building the `elastos-keycustody` Rust crate targeting `wasm32-wasip1`
+### dApp-to-Capsule Strategy
+See `docs/updates/DApp_Runtime_Strategy_Apr_2026.md` for the full evolution path from iframe-sandboxed dApps (today) → dApp Store distribution (v1.5) → Runtime capsules (v2.0).
+
+### Outstanding Infrastructure
+1. **Contabo ESC RPC** — verify sync completion, confirm self-sovereign chain access
+2. **ESC Subgraph** — self-hosted Graph Node on Contabo (when ESC RPC is synced)
+3. **V3 Contract Migration** — when new Elacity V3 ABIs arrive, update 8+ locations
+4. **dApp Store packaging** — manifest spec, signed bundles, install flow
 
 ---
 
