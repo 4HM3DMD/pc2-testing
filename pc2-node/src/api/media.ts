@@ -1289,10 +1289,11 @@ interface EncodeJob {
   id: string;
   status: 'queued' | 'analyzing' | 'transcoding' | 'fragmenting' | 'packaging' | 'uploading' | 'complete' | 'error';
   progress: { percent: number; fps: number; speed: string; time: string; stage: string };
-  result?: { cid: string; mpdUri: string; kid: string; size: number; dataToEncryptHash: string; ciphertext: string; previewURL?: string; duration?: number; resolution?: string; codec?: string };
+  result?: { cid: string; mpdUri: string; kid: string; size: number; dataToEncryptHash: string; ciphertext: string; previewURL?: string; duration?: number; resolution?: string; codec?: string; cleartext?: boolean };
   error?: string;
   startedAt: number;
   previewDuration?: number;
+  skipCenc?: boolean;
 }
 
 const encodeJobs = new Map<string, EncodeJob>();
@@ -1333,6 +1334,8 @@ router.post('/encode', mediaUpload.single('file'), async (req: AuthenticatedRequ
     }
 
     const previewDuration = parseInt(req.body?.previewDuration, 10) || 0;
+    const skipCenc = req.body?.skipCenc === 'true' || req.body?.skipCenc === true;
+    logger.info(`[media/encode] Job ${jobId}: skipCenc=${skipCenc} (raw: ${JSON.stringify(req.body?.skipCenc)})`);
 
     const job: EncodeJob = {
       id: jobId,
@@ -1340,6 +1343,7 @@ router.post('/encode', mediaUpload.single('file'), async (req: AuthenticatedRequ
       progress: { percent: 0, fps: 0, speed: '0x', time: '00:00:00.00', stage: 'analyzing' },
       startedAt: Date.now(),
       previewDuration: previewDuration > 0 ? Math.min(previewDuration, 60) : 0,
+      skipCenc,
     };
     encodeJobs.set(jobId, job);
 
@@ -1485,12 +1489,21 @@ async function runEncodePipeline(
     await fragmentMedia(result.outputPath, fragmentedPath, bento4.mp4fragment);
     logger.info(`[media/encode] Job ${job.id}: fragmented`);
 
-    // 4. DASH package with CENC encryption + IPFS upload
+    // 4. DASH package (with or without CENC encryption) + IPFS upload
     job.status = 'packaging';
     job.progress.stage = 'packaging';
     const ipfs = appLocals.ipfs;
-    const dashResult = await createEncryptedDASH([fragmentedPath], workDir, bento4, ipfs);
-    logger.info(`[media/encode] Job ${job.id}: DASH package created, CID=${dashResult.cid}`);
+
+    let dashResult: { cid: string; mpdUri: string; kid: string; size: number; dataToEncryptHash: string; ciphertext: string; cleartext?: boolean };
+
+    if (job.skipCenc) {
+      const { createCleartextDASH } = await import('../services/media/dashPackager.js');
+      dashResult = await createCleartextDASH([fragmentedPath], workDir, ipfs);
+      logger.info(`[media/encode] Job ${job.id}: Cleartext DASH package created, CID=${dashResult.cid}`);
+    } else {
+      dashResult = await createEncryptedDASH([fragmentedPath], workDir, bento4, ipfs);
+      logger.info(`[media/encode] Job ${job.id}: DASH package created, CID=${dashResult.cid}`);
+    }
 
     // 4b. Replicate to Elacity IPFS for multi-node reachability
     job.status = 'uploading';
@@ -1550,6 +1563,7 @@ async function runEncodePipeline(
       resolution: result.resolution || undefined,
       codec: result.codec || undefined,
       previewURL: previewCid ? `ipfs://${previewCid}` : undefined,
+      cleartext: dashResult.cleartext || false,
     };
 
     logger.info(`[media/encode] Job ${job.id}: COMPLETE in ${Date.now() - job.startedAt}ms — CID=${dashResult.cid}`);

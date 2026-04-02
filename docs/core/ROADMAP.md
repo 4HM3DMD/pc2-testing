@@ -423,9 +423,18 @@ These diagrams from Rong define the north star. Every work stream should move us
 - [x] **COMPLETE (Apr 2):** Creator app .ddrm capsule auto-save — after minting, the Creator app saves a `ddrm-capsule-v2` descriptor to the user's local directory (`/<wallet>/Documents|Pictures|Videos/<title>.ddrm`). Contains all encryption params (litCiphertext, iv, dataToEncryptHash, kid, actionCid), contract refs (authority, operative, tokenId), and metadata (title, thumbnail). File is immediately openable in dDRM Viewer without needing the Elacity Market app or API.
 - [x] **COMPLETE (Apr 2):** Dual-wallet access check — `secure-view` endpoint now accepts `buyerAddressAlt` (smart account). Before calling Lit, a free `eth_call` to `AuthorityGateway.hasAccessByContentId()` checks both EOA and smart account in parallel, then sends only the correct address to Lit ($0.01 per decrypt, never $0.02). Works regardless of which wallet minted the asset.
 - [x] **COMPLETE (Apr 2):** CEK session cache — 5-minute in-memory cache keyed on `(kid, buyerAddress)`. Multi-page PDFs cost $0.01/session instead of $0.01/page. Max 50 entries, never written to disk, cleared on process restart. AuthorityGateway remains the source of truth — on-chain check always happens on first call.
+- [x] **COMPLETE (Apr 2):** Free content minting — Creator app now supports "Free" access method alongside "Buy Now" and "Buy & Resell". Free content skips Lit encryption entirely: metadata sets `encrypted: false`, `protectionType: 'none'`, `price: 0`, `copies: undefined`. Media files still transcode to DASH (quality + streaming) but without CENC encryption. Pipeline detects `accessMethod === 'free'` and routes through cleartext encode path. Copies and distribution sections hidden for free assets. E2E verified: upload → transcode (no encrypt) → IPFS → on-chain mint → playback (direct, no Lit call).
+- [x] **COMPLETE (Apr 2):** Media pipeline E2E on Chipotle — video DASH/CENC path fully verified on production Lit Chipotle. PDF, image, video, and audio all tested end-to-end (encrypt → mint → .ddrm save → open → Lit decrypt → WASM render). Fixed `.ts`/`.js` runtime discrepancy: `chipotle-client.js` had outdated `DEFAULT_PKP_ID` (`0x09bdfc8f...` → `0x68dcf3dc...`), `DEFAULT_API_URL` (dev → production), and fallback action CID. These mismatches caused `Contract call reverted with data: 0xd4a84737` inside the Lit TEE.
+- [x] **COMPLETE (Apr 2):** dDRM security hardening audit — comprehensive audit and fix pass on the Lit Protocol integration layer:
+  - **Injection prevention:** `secure-view` endpoint no longer accepts `rpc`, `authority`, or `buyerAddress` from client request body. RPC URL hardcoded to `getBaseRpcUrl()`, authority hardcoded to `DEFAULT_AUTHORITY`, buyer addresses derived exclusively from authenticated session (`req.user.wallet_address`, `req.user.smart_account_address`).
+  - **Rate limiting:** Per-wallet rate limiter on `/lit/secure-view` — 30 calls/minute per wallet address. Periodic cleanup of expired entries.
+  - **Promise coalescing:** Concurrent Lit calls for the same `(kid, buyerAddress)` are coalesced into a single API call. Prevents duplicate Lit charges from rapid-fire requests (e.g., multi-page PDF loads, race conditions).
+  - **Secrets protection:** `.chipotle-*` and `.lit-*` files added to `.gitignore`. API keys never committed to repo.
+  - **Endpoint hardening:** `/lit/server-info` now requires authentication; server wallet address removed from response payload.
+  - **Action CID alignment:** Fallback `getActionCid()` in `chipotle-client.js` updated to match registered production CID (`QmNayE5MYzXcoMS9nvRk6MUo8r4ESLa3i65vHXzuBsnC2b`).
+- [ ] **PLANNED:** Decentralized Lit relay network — PC2 supernodes proxy Lit API calls on behalf of regular nodes. Shared API key stays on supernodes (never distributed to end-user nodes). Architecture: `PC2 Node → [node auth token] → Supernode relay → [shared API key] → Lit Chipotle API`. Benefits: (1) API key never leaves trusted infrastructure, (2) distributed relay eliminates single point of failure, (3) per-node usage attribution enables cost tracking, (4) rate limiting at relay layer protects shared quota, (5) foundation for future Elacity-native TEE network replacing Lit dependency. See decentralization roadmap below.
 - [ ] **BLOCKED (V3 contracts):** V3 contract migration — update addresses in 8+ locations (`sdk/config.ts`, `config/default.json`, `chipotle-client.ts`, `storage.ts`, `dashPackager.ts`, `elacity-creator/app.js`, `elacity-market/wallet.js`, `packages/access`), update V2 ABIs to V3 in Creator Dashboard, reconcile two AuthorityGateway addresses (`0x8fe6...` vs `0x580C...`), add `"v3"` entry to Content Indexer config, rebuild `@elacity-js/access` vendor bundles
 - [ ] **BLOCKED (V3 + Lit):** PDR Phase B — SDK extraction (`sdk/metadata.ts`, `sdk/contracts.ts`, `sdk/channels.ts`, `sdk/mint.ts`, `sdk/licensing.ts`, `sdk/compliance.ts`), Enterprise REST API (`/api/v1/content`, `/api/v1/license`, `/api/v1/compliance`), MCP Server for AI buyer agents (`elacity.content.*`, `elacity.license.*`)
-- [ ] Media pipeline E2E test on Chipotle — video/audio DASH/CENC path wired but unverified. Non-media E2E verified.
 - [ ] Deploy to supernodes (InterServer + Contabo) — local dev verified, supernode deployment pending
 - [ ] Merge `feature/lit-chipotle-migration` -> `main`, tag v1.3.0
 
@@ -445,6 +454,7 @@ These diagrams from Rong define the north star. Every work stream should move us
 - [ ] Social features foundation (chat between node owners)
 - [ ] IoT device connectivity patterns (sensors → personal cloud)
 - [ ] dDRM CEK mesh caching — P2P key relay between nodes with shared ACCESS_TOKEN ownership. Signed attestation proves on-chain rights. Reduces Lit API calls and cost at network scale. Prerequisite: Chipotle migration complete
+- [ ] **Decentralized Lit relay network** — Supernodes act as proxies for Lit Chipotle API calls, keeping the shared API key on trusted infrastructure. Architecture: `PC2 Node → [node auth token] → Supernode relay (round-robin) → [shared API key] → Lit API`. Phase 1: single relay on Contabo/InterServer. Phase 2: multi-supernode relay with load balancing and failover. Phase 3: protocol revenue feeds Lit credit pool, relay cost covered by network fees. Long-term: replace Lit dependency entirely with Elacity-native TEE network (see Milestone 7 — post-quantum TEE roadmap)
 - [ ] **Carrier alignment** — PC2 capsules consume provider contracts (`elastos://peer/*`, `localhost://storage/*`), not raw topology. Transport/discovery = Carrier (Anders). Security/rendering/marketplace = capsule/provider layer (us). Rules: one runtime = one Carrier node per machine; capsules must not spawn their own Carrier nodes; Kubo stays optional, not Carrier core
 
 **Awareness Layer (Context + Memory):**
@@ -804,11 +814,15 @@ Current:   Lit Chipotle REST API (ECDH P-256 + BLS threshold)
            - $0.01/execution, managed service, no hardware requirements
            - 5-min session cache reduces multi-page PDF costs to $0.01/session
            - Free eth_call preflight checks both EOA + smart account before Lit call
+           - Promise coalescing prevents duplicate charges for concurrent requests
+           - Per-wallet rate limiting (30 calls/min) protects shared API quota
+           - Server-side RPC/authority/identity hardening (no client injection)
            - Break-even vs own TEE: ~45,000 executions/month ($450/month)
-Phase A:   Dual-write — Lit + PC2 supernode TEE custody (3+ supernodes required)
-Phase B:   PC2 primary TEE, Lit fallback
-Phase C:   PC2 only, Lit optional — $0/execution (own hardware)
-Phase D:   Content re-encryption from Lit to PC2 with PQ wrapping
+Phase A:   Supernode relay — shared API key on supernodes, regular nodes use auth tokens
+Phase B:   Dual-write — Lit + PC2 supernode TEE custody (3+ supernodes required)
+Phase C:   PC2 primary TEE, Lit fallback
+Phase D:   PC2 only, Lit optional — $0/execution (own hardware)
+Phase E:   Content re-encryption from Lit to PC2 with PQ wrapping
 ```
 
 **Cost Analysis (Lit Protocol Chipotle — as of Apr 2026):**
@@ -1099,7 +1113,7 @@ Starting Month 1 (March 2026):
 | Release | Target | Focus |
 |---------|--------|-------|
 | v1.1.0 | March 2026 | Merge Jetson branch, bug fixes, AV1 player |
-| v1.2.0 | April 2026 | **Lit Chipotle dDRM** (non-media DONE, media E2E DONE Mar 18), local media encoding (FFmpeg+WASM CENC+DASH — E2E verified, Python-free), AV1 playback verified (init splitting + PSSH strip), WASM optimization (mp4-split Rust crate, IPFS chunk assembly, decrypt limit 200MB, player UX), **Universal Asset Viewers** (3D models with VFX features, CSV datasets, fonts, archives — Tier 1 completion), audio routing fix (all audio through Media Runtime DASH), **Particle Auth + Agent Wallet minting** (dual-wallet channel creation, SA batch mint, tx hash resolution — DONE Mar 27), **Runtime player unification** (Rust player for general media, dDRM viewer for general PDFs), **Enhanced channel creation UX** (channel-first workflow, naming/description fields, subscription model), supernode provisioning ready (deploy when Lit Chipotle production network goes live), hardware expansion, installer improvements, WireGuard bundling |
+| v1.2.0 | April 2026 | **Lit Chipotle dDRM — PRODUCTION** (non-media + media E2E verified on mainnet Apr 2), **Free content minting** (cleartext DASH, no Lit, tokenized on-chain), **dDRM security hardening** (injection prevention, rate limiting, promise coalescing, secrets protection), local media encoding (FFmpeg+WASM CENC+DASH — E2E verified, Python-free), AV1 playback verified (init splitting + PSSH strip), WASM optimization (mp4-split Rust crate, IPFS chunk assembly, decrypt limit 200MB, player UX), **Universal Asset Viewers** (3D models with VFX features, CSV datasets, fonts, archives — Tier 1 completion), audio routing fix (all audio through Media Runtime DASH), **Particle Auth + Agent Wallet minting** (dual-wallet channel creation, SA batch mint, tx hash resolution — DONE Mar 27), **Runtime player unification** (Rust player for general media, dDRM viewer for general PDFs), **Enhanced channel creation UX** (channel-first workflow, naming/description fields, subscription model), supernode provisioning ready, hardware expansion, installer improvements, WireGuard bundling |
 | v1.3.0 | May 2026 | IPFS streaming chunk assembly (production reliability — OOM fix for large files on Jetson), AI Model Marketplace alpha (GGUF→Ollama), on-chain content indexer (**DONE** — ContentIndexerService), dApp bundles, `@elacity-js/asset-packager`, **PDR: SDK Extraction (pc2-node/src/sdk/)**, **PDR: Enterprise metadata schema (licensing, aiTraining, provenance types)** |
 | v1.4.0 | June 2026 | Multi-rendition encoding, fiat onramp, AI serialization optimization (MessagePack), signed capsule format (bridge to Runtime), **PDR: Enterprise REST API (/api/v1/*)**, **PDR: Developer documentation (quickstart, OpenAPI)** |
 | v1.5.0 | July 2026 | dApp Store v1 (categories, ratings, HTML5 games), mobile companion alpha, **PDR: Perceptual hashing + hash registry**, **PDR: MCP Server (pc2-node/src/mcp/server.ts)** |

@@ -196,9 +196,41 @@ Please try recreating the link.`);
             } else {
                 const isMedia = descriptor.type === 'media'
                     || (!descriptor.type && descriptor.cid && descriptor.contractAddress && !descriptor.encryptedDataCid);
+                const isCleartext = descriptor.cleartext === true || descriptor.isProtected === false;
                 const launch_app = (await import('./launch_app.js')).default;
 
-                if ( isMedia ) {
+                if ( isCleartext && isMedia ) {
+                    const cleartextFileUrl = descriptor.cid
+                        ? '/ipfs/' + descriptor.cid
+                        : '';
+
+                    await launch_app({
+                        name: 'pc2-media-runtime',
+                        window_title: (descriptor.title || 'Untitled') + ' — Elacity Player',
+                        args: {
+                            channel:         descriptor.contractAddress || '',
+                            tokenId:         descriptor.tokenId || '',
+                            mediaUri:        cleartextFileUrl,
+                            fileUrl:         cleartextFileUrl,
+                            title:           descriptor.title || '',
+                            authority:       descriptor.authority || '',
+                            thumbnail:       descriptor.thumbnail || '',
+                            standalone:      'true',
+                            cleartext:       'true',
+                        },
+                    });
+                } else if ( isCleartext && descriptor.cid ) {
+                    await launch_app({
+                        name: 'ddrm-viewer',
+                        window_title: (descriptor.title || 'Untitled') + ' — dDRM Viewer',
+                        args: {
+                            cleartext:         'true',
+                            cleartextCid:      descriptor.cid,
+                            mimeType:          descriptor.mimeType || 'application/octet-stream',
+                            title:             descriptor.title || 'Untitled',
+                        },
+                    });
+                } else if ( isMedia ) {
                     await launch_app({
                         name: 'pc2-media-runtime',
                         window_title: (descriptor.title || 'Untitled') + ' — Elacity Player',

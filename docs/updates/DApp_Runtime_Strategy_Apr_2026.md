@@ -12,7 +12,7 @@ Glide Finance is the first third-party DeFi dApp running inside PC2 — packaged
 
 **What's done:** Core DEX features (Swap, Liquidity, Farm, Stake, Analytics) work on Elastos Smart Chain. Wallet bridge handles MetaMask + WalletConnect. Token approvals and swaps confirmed on-chain.
 
-**What's next:** Lit Protocol mainnet is now live. Priority shifts to the Elacity Creator/Market apps with production dDRM, then back to dApp Store packaging for broader distribution.
+**What's done (Apr 2):** Lit Protocol Chipotle mainnet fully integrated and verified. All asset types (PDF, image, video, audio) encrypted, minted, and decrypted end-to-end on production Lit. Free content minting added (cleartext DASH, no Lit). Security audit completed — injection prevention, rate limiting, promise coalescing, secrets protection. **What's next:** V3 contract migration (blocked on new ABIs), supernode deployment, decentralized Lit relay architecture.
 
 ---
 
@@ -222,39 +222,69 @@ v2.0 (Runtime Capsules):
 
 ## Lit Protocol Mainnet Transition
 
-### Status: UNBLOCKED
+### Status: COMPLETE ✅ (Apr 2, 2026)
 
-Lit Protocol's Chipotle network is now live on mainnet (confirmed April 2026). This unblocks the entire Elacity dDRM production pipeline.
+Lit Protocol's Chipotle network is live on mainnet and fully integrated. The entire Elacity dDRM pipeline — encrypt, mint, save .ddrm capsule, open, decrypt, render — is verified end-to-end on production Lit infrastructure.
 
-### What This Means
+### What Was Done
 
-| Component | Dev Network (current) | Mainnet (target) |
-|-----------|----------------------|-------------------|
-| Lit Actions | Registered on Chipotle dev | Re-register on Chipotle mainnet |
-| PKP keys | Dev network keys | New mainnet PKP |
-| Capacity credits | Dev credits (free) | Production credits (paid) |
-| API URL | Dev Chipotle API | Production Chipotle API |
-| Encryption | Working E2E on dev | Same code, production endpoints |
+| Component | Dev Network (was) | Mainnet (done) |
+|-----------|-------------------|----------------|
+| Lit Actions | Registered on Chipotle dev | ✅ `QmNayE5MYzXcoMS9nvRk6MUo8r4ESLa3i65vHXzuBsnC2b` registered in `elacity-ddrm` group |
+| PKP keys | Dev network keys | ✅ `0x68dcf3dc...` (Account Master Wallet) added to group |
+| API credits | Dev credits (free) | ✅ $10 credit funded, scoped usage API key created |
+| API URL | `api.dev.litprotocol.com` | ✅ `api.chipotle.litprotocol.com` |
+| Encryption | Working E2E on dev | ✅ E2E verified: PDF, image, video, audio — all formats |
 
-### Migration Steps
+### Migration Steps (Completed)
 
-1. **Create production Lit account** at `dashboard.litprotocol.com`
-2. **Register 4 Lit Action CIDs** (media-decrypt, non-media-decrypt, media-encrypt, non-media-encrypt)
-3. **Create scoped API key** for production use
-4. **Fund account** with capacity credits
-5. **Update `chipotle-client.ts`**: `DEFAULT_API_URL`, `DEFAULT_PKP_ID`
-6. **Update `deploy/web-gateway/index.js`**: provisioning config for both supernodes
-7. **Deploy to InterServer + Contabo supernodes**
-8. **E2E test**: mint → buy → decrypt (media + non-media)
-9. **Update Creator Dashboard**: verify publish pipeline works end-to-end
-10. **Update Market app**: verify purchase + decrypt works
+1. ✅ **Created production Lit account** at `dashboard.litprotocol.com`
+2. ✅ **Created `elacity-ddrm` group** with non-media Lit Action CID registered
+3. ✅ **Created scoped usage API key** (`pc2-ddrm-v3`)
+4. ✅ **Funded account** with $10 credit
+5. ✅ **Updated `chipotle-client.ts`**: `DEFAULT_API_URL`, `DEFAULT_PKP_ID`
+6. ✅ **Fixed `.ts`/`.js` runtime discrepancy**: `chipotle-client.js` had outdated PKP, API URL, and action CID
+7. ✅ **E2E tested**: mint → encrypt → .ddrm save → open → decrypt → render (all asset types)
+8. ✅ **Free content minting**: cleartext DASH without Lit, tokenized on-chain
+9. ✅ **Security hardening audit**: injection prevention, rate limiting, promise coalescing, secrets protection
+10. ⬜ Deploy to InterServer + Contabo supernodes (pending)
 
-### Risk: Capacity Credit Costs
+### Cost Model (Production)
 
-Dev network has free credits. Production will have costs. Need to:
-- Monitor credit consumption per encrypt/decrypt operation
-- Implement credit budgeting in PC2 node config
-- Plan for self-provisioned RLI tokens (each node mints own credits)
+- $0.01 per Lit Action execution (encrypt or decrypt, <1 second each)
+- Session cache: multi-page PDFs cost $0.01/session instead of $0.01/page
+- Promise coalescing: concurrent duplicate calls merged into single execution
+- Per-wallet rate limiting: 30 calls/min protects shared quota from abuse
+- AuthorityGateway preflight: free `eth_call` (view function, no Lit cost)
+- Estimate: 100 operations = $1, 10K operations = $100
+- Break-even vs own TEE: ~45,000 executions/month ($450/month)
+
+### Security Hardening (Completed Apr 2)
+
+| Vulnerability | Severity | Fix |
+|--------------|----------|-----|
+| Client-injectable RPC URL | Critical | Server-side hardcode via `getBaseRpcUrl()` |
+| Client-injectable authority address | Critical | Server-side hardcode `DEFAULT_AUTHORITY` |
+| Client-injectable buyerAddress | Critical | Derived from `req.user` session only |
+| No rate limiting on Lit calls | High | 30 calls/min per wallet with periodic cleanup |
+| Duplicate Lit charges (concurrent) | Medium | Promise coalescing for same `(kid, buyerAddress)` |
+| API keys in git | High | `.chipotle-*`, `.lit-*` added to `.gitignore` |
+| Unauthenticated `/lit/server-info` | Medium | Added `authenticate` middleware |
+| Wallet address in server-info response | Low | Removed from response payload |
+
+### Next: Decentralized Relay Architecture
+
+Current flow (hardened but centralized):
+```
+PC2 Node → [shared API key in local config] → Lit Chipotle API
+```
+
+Planned relay flow (decentralized):
+```
+PC2 Node → [node auth token] → Supernode relay (round-robin) → [shared API key] → Lit API
+```
+
+Benefits: API key never on end-user nodes, distributed failover, per-node cost attribution, foundation for Elacity-native TEE network. See ROADMAP.md Milestone 3 and Post-Quantum sections.
 
 ---
 

@@ -150,6 +150,60 @@
           </div>
         </div>
 
+        <!-- Access method (moved here so pipeline knows whether to encrypt) -->
+        <div id="step1-access-method" class="form-group" style="display:none; margin-top:16px;">
+          <label>Access Method</label>
+          <div class="access-cards" id="access-cards">
+            <div class="access-card" data-value="free">
+              <span class="access-card-title">Free</span>
+              <span class="access-card-desc">No charge — no encryption</span>
+            </div>
+            <div class="access-card" data-value="buy_once">
+              <span class="access-card-title">Buy Once</span>
+              <span class="access-card-desc">One-time purchase</span>
+            </div>
+            <div class="access-card selected" data-value="buy_and_resell">
+              <span class="access-card-title">Buy & Resell</span>
+              <span class="access-card-desc">Resale enabled</span>
+            </div>
+          </div>
+          <select id="asset-access" style="display:none;">
+            <option value="buy_and_resell" selected>Buy & Resell</option>
+            <option value="buy_once">Buy Once</option>
+            <option value="free">Free</option>
+          </select>
+
+          <!-- Pricing + Supply — shown when paid access method selected -->
+          <div id="step1-price-row" style="margin-top:12px;">
+            <label>Price <span class="required">*</span></label>
+            <div class="price-compound">
+              <input type="number" id="asset-price" placeholder="4.99" min="0" max="1000000" step="0.01" value="4.99" />
+              <select id="asset-currency">
+                <option value="0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" selected>USDC</option>
+                <option value="0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2">USDT</option>
+                <option value="0x0000000000000000000000000000000000000000">ETH</option>
+              </select>
+            </div>
+            <span class="field-hint" id="revenue-calc">Revenue projection: 10,000 copies × 4.99 = 49,900</span>
+
+            <div class="form-group" style="margin-top:12px;">
+              <label for="asset-copies">Copies / Supply</label>
+              <input type="number" id="asset-copies" placeholder="10000" min="1" max="10000" step="1" value="10000" />
+              <div class="supply-presets" id="supply-tiers">
+                <button type="button" class="supply-preset" data-supply="1000" data-price="4.99">Standard (1,000)</button>
+                <button type="button" class="supply-preset" data-supply="384" data-price="12.99">Limited (384)</button>
+                <button type="button" class="supply-preset" data-supply="125" data-price="39.99">Exclusive (125)</button>
+              </div>
+            </div>
+
+            <div class="form-group" id="reseller-cut-group" style="margin-top:8px;">
+              <label>Reseller Cut: <span id="reseller-cut-display">90%</span></label>
+              <input type="range" id="reseller-cut" min="100" max="900" step="10" value="900" />
+              <span class="field-hint">Reseller keeps <span id="reseller-pct">90</span>%, revenue partners get <span id="partner-pct">10</span>%</span>
+            </div>
+          </div>
+        </div>
+
         <div class="step-actions">
           <button class="btn btn-primary" id="btn-to-step-2" disabled>Continue</button>
         </div>
@@ -204,69 +258,7 @@
             </div>
           </div>
 
-          <!-- Section B: Pricing -->
-          <div class="form-section" data-section="pricing">
-            <div class="form-section-header" onclick="this.parentElement.classList.toggle('collapsed')">
-              <span class="form-section-title">Pricing</span>
-              <span class="form-section-chevron">&#9662;</span>
-            </div>
-            <div class="form-section-body">
-              <div class="form-group">
-                <label>Access Method</label>
-                <div class="access-cards" id="access-cards">
-                  <div class="access-card" data-value="free">
-                    <span class="access-card-title">Free</span>
-                    <span class="access-card-desc">No charge</span>
-                  </div>
-                  <div class="access-card" data-value="buy_once">
-                    <span class="access-card-title">Buy Once</span>
-                    <span class="access-card-desc">One-time purchase</span>
-                  </div>
-                  <div class="access-card selected" data-value="buy_and_resell">
-                    <span class="access-card-title">Buy & Resell</span>
-                    <span class="access-card-desc">Resale enabled</span>
-                  </div>
-                </div>
-                <!-- Hidden select for JS compatibility -->
-                <select id="asset-access" style="display:none;">
-                  <option value="buy_and_resell" selected>Buy & Resell</option>
-                  <option value="buy_once">Buy Once</option>
-                  <option value="free">Free</option>
-                </select>
-              </div>
-
-              <div class="form-group">
-                <label>Price <span class="required">*</span></label>
-                <div class="price-compound">
-                  <input type="number" id="asset-price" placeholder="4.99" min="0" max="1000000" step="0.01" value="4.99" />
-                  <select id="asset-currency">
-                    <option value="0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" selected>USDC</option>
-                    <option value="0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2">USDT</option>
-                    <option value="0x0000000000000000000000000000000000000000">ETH</option>
-                  </select>
-                </div>
-                <span class="field-hint" id="revenue-calc">Revenue projection: 10,000 copies × 4.99 = 49,900</span>
-              </div>
-
-              <div class="form-group" id="reseller-cut-group">
-                <label>Reseller Cut: <span id="reseller-cut-display">90%</span></label>
-                <input type="range" id="reseller-cut" min="100" max="900" step="10" value="900" />
-                <span class="field-hint">Reseller keeps <span id="reseller-pct">90</span>%, revenue partners get <span id="partner-pct">10</span>%</span>
-              </div>
-
-              <div class="form-group">
-                <label for="asset-copies">Copies / Supply</label>
-                <input type="number" id="asset-copies" placeholder="10000" min="1" max="10000" step="1" value="10000" />
-                <div class="supply-presets" id="supply-tiers">
-                  <button type="button" class="supply-preset" data-supply="1000" data-price="4.99">Standard (1,000)</button>
-                  <button type="button" class="supply-preset" data-supply="384" data-price="12.99">Limited (384)</button>
-                  <button type="button" class="supply-preset" data-supply="125" data-price="39.99">Exclusive (125)</button>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- Section C: Distribution -->
+          <!-- Section B: Distribution -->
           <div class="form-section collapsed" data-section="distribution">
             <div class="form-section-header" onclick="this.parentElement.classList.toggle('collapsed')">
               <span class="form-section-title">Distribution</span>
@@ -513,7 +505,7 @@
         <div id="progress-error" class="progress-error hidden"></div>
 
         <div class="step-actions" style="flex-direction: column; gap: 8px;">
-          <button class="btn btn-publish" id="btn-sign-mint" disabled>Publish</button>
+          <button class="btn btn-publish" id="btn-sign-mint" disabled><span id="btn-sign-mint-text">Publish</span></button>
           <p class="publish-hint">This will request a blockchain transaction from your wallet</p>
           <div style="display: flex; gap: 8px; align-self: stretch;">
             <button class="btn btn-secondary" id="btn-back-to-2" disabled>Back</button>

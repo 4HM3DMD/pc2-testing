@@ -954,7 +954,46 @@ if (!NON_MEDIA_ACTION_CID && existsSync(LIT_ACTION_CID_PATH)) {
   }
 }
 
-const DEFAULT_AUTHORITY = '0x580C26DeFf267Ef40A72cf10a4A42050F0641b8B';
+const DEFAULT_AUTHORITY = '0x8fe6bf9877B78BF0126819ff2593235E54Ee1E29';
+
+// ── Rate limiting for Lit endpoints ───────────────────────────
+// Prevents cost-drain attacks by limiting Lit Action calls per user.
+// 30 Lit calls/minute per wallet — enough for browsing, blocks abuse.
+const LIT_RATE_LIMIT_WINDOW_MS = 60_000;
+const LIT_RATE_LIMIT_MAX_CALLS = 30;
+const litRateLimiter = new Map<string, { count: number; windowStart: number }>();
+
+function checkLitRateLimit(walletAddress: string): boolean {
+  const now = Date.now();
+  const key = walletAddress.toLowerCase();
+  const entry = litRateLimiter.get(key);
+
+  if (!entry || now - entry.windowStart > LIT_RATE_LIMIT_WINDOW_MS) {
+    litRateLimiter.set(key, { count: 1, windowStart: now });
+    return true;
+  }
+
+  if (entry.count >= LIT_RATE_LIMIT_MAX_CALLS) {
+    return false;
+  }
+
+  entry.count++;
+  return true;
+}
+
+// Periodic cleanup of stale rate limit entries
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of litRateLimiter) {
+    if (now - entry.windowStart > LIT_RATE_LIMIT_WINDOW_MS * 2) {
+      litRateLimiter.delete(key);
+    }
+  }
+}, LIT_RATE_LIMIT_WINDOW_MS);
+
+// ── Promise coalescing for concurrent Lit calls ──────────────
+// Prevents duplicate $0.01 charges when concurrent requests hit for the same kid+buyer.
+const pendingLitCalls = new Map<string, Promise<string>>();
 
 // ── Session-scoped CEK cache ──────────────────────────────────
 // Short-lived in-memory cache to avoid redundant Lit Action calls within a
@@ -1281,9 +1320,14 @@ interface CEKRecoveryResult {
 async function recoverCEKAndFetchData(params: DecryptParams, ipfsService?: any): Promise<CEKRecoveryResult> {
   const {
     litCiphertext, dataToEncryptHash, encryptedDataCid, kid,
-    actionCid, authority, chain, chainId, rpc, buyerAddress,
+    actionCid, buyerAddress,
   } = params;
 
+  // Server-controlled: never derive from client-supplied values
+  const effectiveAuthority = DEFAULT_AUTHORITY;
+  const effectiveChain = 'base';
+  const effectiveChainId = 8453;
+  const effectiveRpc = getBaseRpcUrl();
   const effectiveBackend = params.litBackend || LIT_BACKEND;
 
   logger.info(`[Lit] Recover CEK: kid=${kid}, buyer=${buyerAddress}, cid=${encryptedDataCid}, backend=${effectiveBackend}`);
@@ -1294,73 +1338,88 @@ async function recoverCEKAndFetchData(params: DecryptParams, ipfsService?: any):
 
   // Kick off CEK recovery and IPFS fetch in parallel
   const litStart = Date.now();
+  const coalescingKey = `${kid}:${buyerAddress.toLowerCase()}`;
   const cekPromise = (async () => {
     if (cachedCek) {
       logger.info(`[Lit] CEK cache hit for kid=${kid}, buyer=${buyerAddress.substring(0, 10)}... (saved $0.01)`);
       return cachedCek;
     }
 
-    if (effectiveBackend === 'chipotle') {
-      const { recoverNonMediaCEK } = await import('./chipotle-client.js');
-      const cekBase64 = await recoverNonMediaCEK({
-        litCiphertext,
-        dataToEncryptHash,
-        kid,
-        buyerAddress,
-        actionCid: actionCid || NON_MEDIA_ACTION_CID || undefined,
-        authority,
-        chain,
-        chainId,
-        rpc,
-      });
-      logger.info(`[Lit] CEK recovered in ${Date.now() - litStart}ms (Chipotle REST)`);
-      cacheCEK(kid, buyerAddress, cekBase64);
-      return cekBase64;
+    // Promise coalescing: if another request is already fetching this CEK, reuse the in-flight call
+    const pending = pendingLitCalls.get(coalescingKey);
+    if (pending) {
+      logger.info(`[Lit] Coalescing duplicate Lit call for kid=${kid} (saved $0.01)`);
+      return pending;
     }
 
-    // Datil fallback (LIT_BACKEND=datil)
-    const wallet = await getServerWallet();
-    const client = await getLitClient();
-    const sessionSigs = await getExecuteSessionSigs(client, wallet);
+    const doLitCall = async (): Promise<string> => {
+      try {
+        if (effectiveBackend === 'chipotle') {
+          const { recoverNonMediaCEK } = await import('./chipotle-client.js');
+          const cekBase64 = await recoverNonMediaCEK({
+            litCiphertext,
+            dataToEncryptHash,
+            kid,
+            buyerAddress,
+            actionCid: actionCid || NON_MEDIA_ACTION_CID || undefined,
+            authority: effectiveAuthority,
+            chain: effectiveChain,
+            chainId: effectiveChainId,
+            rpc: effectiveRpc,
+          });
+          logger.info(`[Lit] CEK recovered in ${Date.now() - litStart}ms (Chipotle REST)`);
+          cacheCEK(kid, buyerAddress, cekBase64);
+          return cekBase64;
+        }
 
-    const effectiveActionCid = actionCid || NON_MEDIA_ACTION_CID;
-    if (!effectiveActionCid) throw new Error('No Lit Action CID configured');
-    const effectiveAuthority = authority || DEFAULT_AUTHORITY;
-    const effectiveChain = chain || 'base';
-    const effectiveRpc = rpc || getBaseRpcUrl();
+        // Datil fallback (LIT_BACKEND=datil)
+        const wallet = await getServerWallet();
+        const client = await getLitClient();
+        const sessionSigs = await getExecuteSessionSigs(client, wallet);
 
-    const executeParams: any = {
-      sessionSigs,
-      jsParams: {
-        ciphertext: litCiphertext,
-        dataToEncryptHash,
-        kid: kid.startsWith('0x') ? kid : `0x${kid}`,
-        actionIpfsId: effectiveActionCid,
-        authority: effectiveAuthority,
-        chain: effectiveChain,
-        chainId: chainId || 8453,
-        rpc: effectiveRpc,
-        userAddress: buyerAddress,
-      },
-      ipfsId: effectiveActionCid,
+        const effectiveActionCid = actionCid || NON_MEDIA_ACTION_CID;
+        if (!effectiveActionCid) throw new Error('No Lit Action CID configured');
+
+        const executeParams: any = {
+          sessionSigs,
+          jsParams: {
+            ciphertext: litCiphertext,
+            dataToEncryptHash,
+            kid: kid.startsWith('0x') ? kid : `0x${kid}`,
+            actionIpfsId: effectiveActionCid,
+            authority: effectiveAuthority,
+            chain: effectiveChain,
+            chainId: effectiveChainId,
+            rpc: effectiveRpc,
+            userAddress: buyerAddress,
+          },
+          ipfsId: effectiveActionCid,
+        };
+
+        const result = await client.executeJs(executeParams);
+        if (!result.response) throw new Error('Lit Action returned empty response');
+
+        let cekBase64: string;
+        try {
+          const parsed = JSON.parse(result.response);
+          if (parsed.error) throw new Error(parsed.error);
+          cekBase64 = parsed.data || result.response;
+        } catch (e: any) {
+          if (e.message?.includes('Access denied')) throw e;
+          cekBase64 = result.response;
+        }
+
+        logger.info(`[Lit] CEK recovered in ${Date.now() - litStart}ms (Datil SDK)`);
+        cacheCEK(kid, buyerAddress, cekBase64);
+        return cekBase64;
+      } finally {
+        pendingLitCalls.delete(coalescingKey);
+      }
     };
 
-    const result = await client.executeJs(executeParams);
-    if (!result.response) throw new Error('Lit Action returned empty response');
-
-    let cekBase64: string;
-    try {
-      const parsed = JSON.parse(result.response);
-      if (parsed.error) throw new Error(parsed.error);
-      cekBase64 = parsed.data || result.response;
-    } catch (e: any) {
-      if (e.message?.includes('Access denied')) throw e;
-      cekBase64 = result.response;
-    }
-
-    logger.info(`[Lit] CEK recovered in ${Date.now() - litStart}ms (Datil SDK)`);
-    cacheCEK(kid, buyerAddress, cekBase64);
-    return cekBase64;
+    const callPromise = doLitCall();
+    pendingLitCalls.set(coalescingKey, callPromise);
+    return callPromise;
   })();
 
   // IPFS fetch: try local blockstore directly first, then HTTP fallback
@@ -1584,11 +1643,15 @@ router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, 
   try {
     const {
       litCiphertext, dataToEncryptHash, iv, encryptedDataCid, kid,
-      buyerAddress, buyerAddressAlt, mimeType,
+      mimeType,
       page: pageNum,
       maxWidth: reqMaxWidth,
       litBackend: reqLitBackend,
     } = req.body;
+
+    // Derive buyer addresses from authenticated session — never trust client
+    const buyerAddress = req.user?.wallet_address;
+    const buyerAddressAlt = req.user?.smart_account_address || undefined;
 
     if (!litCiphertext || !dataToEncryptHash || !kid || !buyerAddress || !iv || !encryptedDataCid) {
       res.status(400).json({ error: 'Missing required fields for secure view' });
@@ -1612,15 +1675,16 @@ router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, 
 
     // ── Preflight: resolve which address holds the AccessToken ──
     // Free on-chain eth_call — avoids wasting a $0.01 Lit Action on the wrong address.
+    // Server-controlled: RPC and authority are NEVER taken from client requests.
     const effectiveBody = { ...req.body };
+    const rpcUrl = getBaseRpcUrl();
+    const authorityAddr = DEFAULT_AUTHORITY;
     let resolvedBuyer = buyerAddress;
 
     if (buyerAddressAlt && buyerAddressAlt.toLowerCase() !== buyerAddress.toLowerCase()) {
       try {
         const { ethers } = await import('ethers');
-        const rpcUrl = req.body.rpc || getBaseRpcUrl();
         const provider = new ethers.JsonRpcProvider(rpcUrl);
-        const authorityAddr = req.body.authority || DEFAULT_AUTHORITY;
         const gateway = new ethers.Contract(authorityAddr, [
           'function hasAccessByContentId(address holder, bytes16 contentId) view returns (bool)',
         ], provider);
@@ -1645,6 +1709,15 @@ router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, 
     }
 
     effectiveBody.buyerAddress = resolvedBuyer;
+    effectiveBody.rpc = rpcUrl;
+    effectiveBody.authority = authorityAddr;
+
+    // ── Rate Limiting ────────────────────────────────────
+    if (!checkLitRateLimit(buyerAddress)) {
+      logger.warn(`[SecureView] Rate limit exceeded for ${buyerAddress.substring(0, 10)}...`);
+      res.status(429).json({ error: 'Too many requests. Please try again shortly.' });
+      return;
+    }
 
     // ── WASM Renderer Path ──────────────────────────────
     // For images, text, and PDFs: decrypt + render inside WASM linear memory.
@@ -1981,21 +2054,13 @@ router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, 
  * GET /api/storage/lit/server-info
  * Returns the server wallet address and current Lit Action CID.
  */
-router.get('/lit/server-info', async (_req: any, res: Response) => {
+router.get('/lit/server-info', authenticate, async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const wallet = await getServerWallet();
     const info: any = {
-      address: wallet.address,
       actionCid: NON_MEDIA_ACTION_CID || null,
       authority: DEFAULT_AUTHORITY,
       backend: LIT_BACKEND,
     };
-
-    if (LIT_BACKEND === 'chipotle') {
-      const { getChipotleInfo } = await import('./chipotle-client.js');
-      const chipotleInfo = getChipotleInfo();
-      info.chipotle = chipotleInfo;
-    }
 
     res.json(info);
   } catch (error: any) {

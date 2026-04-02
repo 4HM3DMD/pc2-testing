@@ -448,3 +448,33 @@ export async function createEncryptedDASH(
     size,
   };
 }
+
+// ─── Cleartext Pipeline (free content — upload fragmented MP4 directly) ──────
+
+export async function createCleartextDASH(
+  fragmentedFiles: string[],
+  _outputDir: string,
+  ipfs: any,
+): Promise<DashPackageResult & { cleartext: boolean; directPlayback?: boolean }> {
+  const fragmentedPath = fragmentedFiles[0];
+  const { readFileSync } = await import('fs');
+  const fileData = readFileSync(fragmentedPath);
+  logger.info(`[DASHPackager] Cleartext: uploading fragmented MP4 directly (${(fileData.length / 1024 / 1024).toFixed(1)} MB)`);
+
+  const contentHash = '0x' + crypto.createHash('sha256').update(fileData).digest('hex');
+
+  const cidStr = await ipfs.storeFile(new Uint8Array(fileData), { pin: true });
+  logger.info(`[DASHPackager] Cleartext file uploaded to IPFS: ${cidStr}`);
+
+  return {
+    cid: cidStr,
+    mpdUri: '',
+    kid: '',
+    ciphertext: '',
+    dataToEncryptHash: contentHash,
+    litBackend: 'chipotle',
+    size: fileData.length,
+    cleartext: true,
+    directPlayback: true,
+  };
+}

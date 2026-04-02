@@ -491,12 +491,12 @@ async function performStandaloneLitAuth() {
 
 // ─── Cleartext Playback (non-DRM files) ──────────────────────────────
 function initCleartext() {
-  if (!FILE_URL) {
+  var fileUrl = FILE_URL || MEDIA_URI || '';
+  if (!fileUrl) {
     showError('No file URL provided for cleartext playback.');
     return;
   }
 
-  var fileUrl = FILE_URL;
   if (fileUrl.startsWith('/') && !fileUrl.startsWith('//')) {
     fileUrl = apiOrigin() + fileUrl;
   }
@@ -508,6 +508,8 @@ function initCleartext() {
 
   var title = TITLE || 'Media';
   document.title = title + ' — Elacity Player';
+
+  console.log('[player] Cleartext playback — URL:', fileUrl);
 
   var mimeType = params.mimeType || '';
   isAudioOnly = mimeType.indexOf('audio/') === 0;
@@ -545,7 +547,7 @@ function initCleartext() {
   $video.addEventListener('error', function () {
     var err = $video.error;
     if (!err) return;
-    var ext = FILE_URL.split('.').pop().split('?')[0].toLowerCase();
+    var ext = (FILE_URL || fileUrl).split('.').pop().split('?')[0].toLowerCase();
     var isFirefox = navigator.userAgent.toLowerCase().includes('firefox');
     var firefoxBlocked = ['mkv', 'avi', 'mov', 'ts'];
     if (err.code === 4 && isFirefox && firefoxBlocked.indexOf(ext) !== -1) {
@@ -557,6 +559,184 @@ function initCleartext() {
   $container.style.display = 'flex';
 
   $video.play().catch(function () {});
+}
+
+// ─── Cleartext DASH Playback (free DASH content — no decryption) ─────
+async function initCleartextDASH(mpdUrl, title) {
+  $loadingText.textContent = 'Loading cleartext DASH stream...';
+  console.log('[player] Cleartext DASH — fetching MPD:', mpdUrl);
+
+  var authHeaders = {};
+  var token = getAuthToken();
+  if (token) authHeaders['Authorization'] = 'Bearer ' + token;
+
+  function authFetch(url) {
+    return fetch(url, { headers: authHeaders });
+  }
+
+  try {
+    var mpdRes = await authFetch(mpdUrl);
+    if (!mpdRes.ok) throw new Error('Failed to fetch MPD: ' + mpdRes.status);
+    var mpdText = await mpdRes.text();
+
+    var baseUrl = mpdUrl.substring(0, mpdUrl.lastIndexOf('/') + 1);
+    // Strip query params from baseUrl
+    if (baseUrl.indexOf('?') !== -1) baseUrl = baseUrl.substring(0, baseUrl.indexOf('?'));
+    if (!baseUrl.endsWith('/')) baseUrl += '/';
+
+    var parser = new DOMParser();
+    var mpd = parser.parseFromString(mpdText, 'application/xml');
+
+    var adaptSets = mpd.querySelectorAll('AdaptationSet');
+    var ctTracks = [];
+    adaptSets.forEach(function (as) {
+      var rep = as.querySelector('Representation');
+      if (!rep) return;
+      var mimeType = as.getAttribute('mimeType') || rep.getAttribute('mimeType') || '';
+      var codec = rep.getAttribute('codecs') || as.getAttribute('codecs') || '';
+      var initTpl = '', mediaTpl = '', segCount = 0;
+      var segTpl = as.querySelector('SegmentTemplate') || rep.querySelector('SegmentTemplate');
+      if (segTpl) {
+        initTpl = segTpl.getAttribute('initialization') || '';
+        mediaTpl = segTpl.getAttribute('media') || '';
+        var timeline = segTpl.querySelector('SegmentTimeline');
+        if (timeline) {
+          var sElements = timeline.querySelectorAll('S');
+          for (var si = 0; si < sElements.length; si++) {
+            var r = parseInt(sElements[si].getAttribute('r') || '0');
+            segCount += 1 + r;
+          }
+        }
+      }
+      ctTracks.push({ mimeType: mimeType, codec: codec, initTpl: initTpl, mediaTpl: mediaTpl, segCount: segCount });
+    });
+
+    if (ctTracks.length === 0) throw new Error('No tracks found in MPD');
+    console.log('[player] Cleartext DASH tracks:', ctTracks.length, ctTracks.map(function (t) { return t.mimeType + ' codecs=' + t.codec + ' segs=' + t.segCount; }));
+
+    if (!window.MediaSource) {
+      showError('MediaSource API not available in this browser.');
+      return;
+    }
+
+    var ms = new MediaSource();
+    var msUrl = URL.createObjectURL(ms);
+    $video.src = msUrl;
+
+    ms.addEventListener('sourceopen', async function () {
+      URL.revokeObjectURL(msUrl);
+      try {
+        var sourceBuffers = [];
+        for (var ti = 0; ti < ctTracks.length; ti++) {
+          var t = ctTracks[ti];
+          var fullCodec = t.mimeType + '; codecs="' + t.codec + '"';
+          console.log('[player] Cleartext DASH: codec check:', fullCodec, 'supported:', MediaSource.isTypeSupported(fullCodec));
+          if (!MediaSource.isTypeSupported(fullCodec)) {
+            console.warn('[player] Cleartext DASH: codec not supported, skipping:', fullCodec);
+            continue;
+          }
+          var sb = ms.addSourceBuffer(fullCodec);
+          sourceBuffers.push({ sb: sb, track: t, idx: ti });
+        }
+
+        if (sourceBuffers.length === 0) {
+          showError('No supported codecs found for cleartext DASH playback.');
+          return;
+        }
+
+        // Append init segments for all source buffers
+        for (var bi = 0; bi < sourceBuffers.length; bi++) {
+          var entry = sourceBuffers[bi];
+          var initUrl = baseUrl + entry.track.initTpl;
+          console.log('[player] Cleartext DASH: fetching init [' + bi + ']:', initUrl);
+          var initRes = await authFetch(initUrl);
+          if (!initRes.ok) throw new Error('Failed to fetch init segment (' + initRes.status + '): ' + initUrl);
+          var initBuf = await initRes.arrayBuffer();
+          console.log('[player] Cleartext DASH: init [' + bi + '] received:', initBuf.byteLength, 'bytes');
+          await new Promise(function (resolve, reject) {
+            entry.sb.addEventListener('updateend', resolve, { once: true });
+            entry.sb.addEventListener('error', function (e) { reject(new Error('SourceBuffer error on init append')); }, { once: true });
+            entry.sb.appendBuffer(initBuf);
+          });
+          console.log('[player] Cleartext DASH: init [' + bi + '] appended OK');
+        }
+
+        // Fetch and append media segments — interleave for better playback start
+        var totalSegs = 0;
+        for (bi = 0; bi < sourceBuffers.length; bi++) totalSegs += sourceBuffers[bi].track.segCount;
+        var segCounters = sourceBuffers.map(function () { return 1; });
+        var batchSize = 4;
+
+        // Buffer initial batch for quick playback start
+        for (bi = 0; bi < sourceBuffers.length; bi++) {
+          entry = sourceBuffers[bi];
+          for (var s = 0; s < batchSize && segCounters[bi] <= entry.track.segCount; s++) {
+            var segUrl = baseUrl + entry.track.mediaTpl.replace('$Number$', String(segCounters[bi]));
+            var segRes = await authFetch(segUrl);
+            if (!segRes.ok) { console.warn('[player] Cleartext seg fetch failed:', segUrl, segRes.status); break; }
+            var segBuf = await segRes.arrayBuffer();
+            await new Promise(function (resolve, reject) {
+              entry.sb.addEventListener('updateend', resolve, { once: true });
+              entry.sb.addEventListener('error', function () { reject(new Error('SourceBuffer error')); }, { once: true });
+              entry.sb.appendBuffer(segBuf);
+            });
+            segCounters[bi]++;
+          }
+        }
+
+        console.log('[player] Cleartext DASH: initial batch buffered, starting playback');
+        $loading.style.display = 'none';
+        $container.style.display = 'flex';
+        duration = $video.duration || 0;
+        $timeDuration.textContent = formatTime(duration);
+        $seekBar.max = String(duration);
+        if ($qualityGroup) $qualityGroup.style.display = 'none';
+        $watermark.textContent = '';
+        $video.play().catch(function () {});
+
+        // Continue buffering remaining segments in background
+        (async function bufferRemaining() {
+          try {
+            var allDone = false;
+            while (!allDone) {
+              allDone = true;
+              for (var bi2 = 0; bi2 < sourceBuffers.length; bi2++) {
+                var e2 = sourceBuffers[bi2];
+                if (segCounters[bi2] <= e2.track.segCount) {
+                  allDone = false;
+                  var url2 = baseUrl + e2.track.mediaTpl.replace('$Number$', String(segCounters[bi2]));
+                  var r2 = await authFetch(url2);
+                  if (!r2.ok) { segCounters[bi2] = e2.track.segCount + 1; continue; }
+                  var buf2 = await r2.arrayBuffer();
+                  await new Promise(function (resolve) {
+                    e2.sb.addEventListener('updateend', resolve, { once: true });
+                    e2.sb.appendBuffer(buf2);
+                  });
+                  segCounters[bi2]++;
+                }
+              }
+            }
+            if (ms.readyState === 'open') ms.endOfStream();
+            duration = $video.duration || 0;
+            $timeDuration.textContent = formatTime(duration);
+            $seekBar.max = String(duration);
+            console.log('[player] Cleartext DASH: all segments buffered');
+          } catch (bgErr) {
+            console.warn('[player] Cleartext DASH background buffering error:', bgErr.message);
+            if (ms.readyState === 'open') try { ms.endOfStream(); } catch (_) {}
+          }
+        })();
+
+      } catch (e) {
+        console.error('[player] Cleartext DASH sourceopen error:', e);
+        showError('Cleartext DASH playback failed: ' + e.message);
+      }
+    });
+
+  } catch (e) {
+    console.error('[player] Cleartext DASH init error:', e);
+    showError('Failed to load cleartext DASH: ' + e.message);
+  }
 }
 
 // ─── Init ────────────────────────────────────────────────────────────

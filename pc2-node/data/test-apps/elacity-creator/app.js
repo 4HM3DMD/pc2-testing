@@ -668,6 +668,9 @@
       var nameNoExt = file.name.replace(/\.[^.]+$/, '');
       dom.assetTitle.value = nameNoExt;
     }
+
+    var accessArea = document.getElementById('step1-access-method');
+    if (accessArea) accessArea.style.display = '';
   }
 
   function clearFile() {
@@ -688,6 +691,8 @@
     if (prevDur) { prevDur.value = '15'; prevDur.disabled = false; }
     var prevDisplay = document.getElementById('preview-duration-display');
     if (prevDisplay) prevDisplay.textContent = '15s';
+    var accessArea = document.getElementById('step1-access-method');
+    if (accessArea) accessArea.style.display = 'none';
   }
 
   // ── Form validation ───────────────────────────────────
@@ -968,7 +973,7 @@
         uri: 'ipfs://' + params.assetCid,
         contentType: contentType,
         mimeType: contentType,
-        protectionType: 'lit-aes-gcm-v1',
+        protectionType: isPublic ? 'none' : 'lit-aes-gcm-v1',
         size: params.size,
         object: 'self://content.json',
       },
@@ -976,23 +981,23 @@
         cid: params.assetCid,
         mimeType: contentType,
         size: params.size,
-        encrypted: true,
-        algorithm: 'aes-256-gcm',
-        protectionType: 'lit-aes-gcm-v1',
+        encrypted: !isPublic,
+        algorithm: isPublic ? 'none' : 'aes-256-gcm',
+        protectionType: isPublic ? 'none' : 'lit-aes-gcm-v1',
         dataToEncryptHash: params.dataToEncryptHash,
-        actionCid: params.actionCid || '',
-        authority: params.authority || CONTRACTS.AUTHORITY_GATEWAY,
+        actionCid: isPublic ? '' : (params.actionCid || ''),
+        authority: isPublic ? '' : (params.authority || CONTRACTS.AUTHORITY_GATEWAY),
         chain: 'base',
         chainId: BASE_CHAIN_ID,
         rpc: 'https://mainnet.base.org',
       },
       pricing: {
-        currency: currency.symbol,
-        currencyAddress: currency.address,
-        currencyDecimals: currency.decimals,
-        price: params.price,
+        currency: isPublic ? '' : currency.symbol,
+        currencyAddress: isPublic ? '' : currency.address,
+        currencyDecimals: isPublic ? 0 : currency.decimals,
+        price: isPublic ? 0 : params.price,
         accessMethod: params.accessMethod || 'buy_and_resell',
-        copies: params.copies || 10000,
+        copies: isPublic ? undefined : (params.copies || 10000),
         resellerCut: isResellable ? (params.resellerCut || 900) : undefined,
       },
       properties: {
@@ -2279,7 +2284,9 @@
   async function runPipeline() {
     var usedLocalEncryption = false;
 
-    console.log('[Creator] Pipeline starting (background — metadata fields read later)');
+    var pipelineAccessMethod = dom.assetAccess.value;
+    var isFreeContent = pipelineAccessMethod === 'free';
+    console.log('[Creator] Pipeline starting — accessMethod=' + pipelineAccessMethod + (isFreeContent ? ' (cleartext, no encryption)' : ''));
 
     updateFloatingProgress('prog-connect', 'Starting pipeline...', 'active');
 
@@ -2292,8 +2299,8 @@
         state.walletAddress = accounts[0];
       }
 
-      // ── Step 1: Encrypt ───────────────────────────────
-      setProgStep('prog-connect', 'Connecting...', 'active');
+      // ── Step 1: Encrypt (skipped for free content) ──────
+      setProgStep('prog-connect', isFreeContent ? 'Free content — no encryption needed' : 'Connecting...', isFreeContent ? 'done' : 'active');
 
       var isMediaFile = state.resolvedMime.startsWith('video/') || state.resolvedMime.startsWith('audio/');
       var encryptResult;
@@ -2315,7 +2322,134 @@
         console.warn('[Creator] Content hash generation failed (non-fatal):', hashErr.message);
       }
 
-      if (isMediaFile) {
+      if (isFreeContent) {
+        // ── Free content: skip all encryption ──
+        setProgStep('prog-encrypt', 'Skipped (free content)', 'done');
+        encryptResult = {
+          encrypted: null,
+          dataToEncryptHash: originalContentHash || '0x0000000000000000000000000000000000000000000000000000000000000000',
+          actionCid: '',
+          conditions: null,
+          litCiphertext: '',
+          iv: '',
+          litBackend: 'none',
+          cleartext: true,
+        };
+        console.log('[Creator] Free content — encryption skipped, using content hash as ID');
+
+        if (isMediaFile) {
+          // Media still needs transcode + DASH packaging but WITHOUT CENC
+          swapProgressStepsForMedia();
+          setProgStep('prog-connect', 'Uploading file to encoder...', 'active');
+          console.log('[Creator] Free media file — transcode + DASH (no CENC)');
+
+          var formData = new FormData();
+          formData.append('file', state.selectedFile);
+          formData.append('skipCenc', 'true');
+
+          var previewEnabled = document.getElementById('preview-enabled');
+          var previewDurSlider = document.getElementById('preview-duration');
+          if (previewEnabled && previewEnabled.checked && previewDurSlider) {
+            formData.append('previewDuration', previewDurSlider.value);
+          }
+
+          var encodeResp = await pc2Fetch('/api/media/encode', {
+            method: 'POST',
+            body: formData,
+          });
+          if (!encodeResp.ok) {
+            var encErrBody = await encodeResp.json().catch(function () { return {}; });
+            throw new Error(encErrBody.error || 'Media encode failed: ' + encodeResp.status);
+          }
+          var encodeData = await encodeResp.json();
+          var jobId = encodeData.jobId;
+          console.log('[Creator] Encode job started (cleartext):', jobId);
+          setProgStep('prog-connect', 'Uploaded — job ' + jobId.substring(0, 8) + '...', 'done');
+          setProgStep('prog-encrypt', 'Transcoding (no encryption)...', 'active');
+          setMediaSubStep('analyze', 'active', '');
+
+          var pollInterval = 1500;
+          var maxPollTime = 4 * 60 * 60 * 1000;
+          var pollStart = Date.now();
+          var lastStage = '';
+
+          while (true) {
+            await new Promise(function (r) { setTimeout(r, pollInterval); });
+            var statusResp = await pc2Fetch('/api/media/encode/status/' + jobId);
+            if (!statusResp.ok) throw new Error('Failed to check encode status');
+            var statusData = await statusResp.json();
+
+            if (statusData.status === 'error') {
+              var failedSub = STAGE_TO_SUB[lastStage] || 'analyze';
+              setMediaSubStep(failedSub, 'error', statusData.error || 'failed');
+              throw new Error('Media encoding failed: ' + (statusData.error || 'unknown error'));
+            }
+            if (statusData.status === 'complete') {
+              mediaEncodeResult = statusData.result;
+              MEDIA_SUB_STEPS.forEach(function (id) { setMediaSubStep(id, 'done', ''); });
+              setMediaProgress(100, Math.round((Date.now() - pollStart) / 1000));
+              setProgStep('prog-encrypt', 'Complete (cleartext)', 'done');
+              console.log('[Creator] Media encoding complete (cleartext):', mediaEncodeResult);
+              break;
+            }
+
+            var stage = statusData.progress?.stage || statusData.status;
+            var elapsed = Math.round((Date.now() - pollStart) / 1000);
+            var pct = STAGE_PROGRESS[stage] || 0;
+
+            if (stage !== lastStage) {
+              var curSubIdx = MEDIA_SUB_STEPS.indexOf(STAGE_TO_SUB[stage]);
+              if (curSubIdx > 0) {
+                for (var si = 0; si < curSubIdx; si++) {
+                  setMediaSubStep(MEDIA_SUB_STEPS[si], 'done', '');
+                }
+              }
+            }
+            var curSub = STAGE_TO_SUB[stage];
+            if (curSub) {
+              var speed = statusData.progress?.speed || '';
+              var fps = statusData.progress?.fps || 0;
+              var timeStr = statusData.progress?.time || '';
+              var subBarPct = 50;
+              var subInfo = '';
+              if (stage === 'transcoding') {
+                var parts = [];
+                if (speed && speed !== '0x') parts.push(speed);
+                if (fps > 0) parts.push(Math.round(fps) + ' fps');
+                if (timeStr && timeStr !== '00:00:00.00') parts.push(timeStr);
+                subInfo = parts.join(' · ');
+                if (timeStr && timeStr !== '00:00:00.00') {
+                  var tParts = timeStr.split(':');
+                  var tSec = parseInt(tParts[0]) * 3600 + parseInt(tParts[1]) * 60 + parseFloat(tParts[2]);
+                  var estPct = Math.min(5 + (tSec / 120) * 55, 58);
+                  pct = Math.max(pct, estPct);
+                  subBarPct = Math.min(Math.round((tSec / 120) * 100), 95);
+                }
+              }
+              setMediaSubStep(curSub, 'active', subInfo);
+              var subBarEl = document.getElementById('media-sub-' + curSub + '-bar');
+              if (subBarEl) subBarEl.style.width = subBarPct + '%';
+            }
+
+            lastStage = stage;
+            setMediaProgress(pct, elapsed);
+            var headerLabel = stage === 'transcoding' ? 'Transcoding...' :
+                             stage === 'analyzing' ? 'Analyzing...' :
+                             stage === 'fragmenting' ? 'Fragmenting...' :
+                             stage === 'packaging' ? 'Packaging (no encryption)...' :
+                             stage === 'uploading' ? 'Uploading to IPFS...' : 'Processing...';
+            setProgStep('prog-encrypt', headerLabel, 'active');
+
+            if (Date.now() - pollStart > maxPollTime) {
+              throw new Error('Media encoding timed out after ' + (maxPollTime / 3600000) + ' hours');
+            }
+            if (pollInterval < 3000) pollInterval = Math.min(pollInterval + 300, 3000);
+          }
+
+          encryptResult.dataToEncryptHash = mediaEncodeResult.dataToEncryptHash || originalContentHash || '';
+        }
+
+      } else if (isMediaFile) {
         // ── Media Path: Encode + CENC encrypt via backend pipeline ──
         swapProgressStepsForMedia();
 
@@ -2491,18 +2625,17 @@
       setProgStep('prog-encrypt', 'Encrypted', 'done');
       } // end else (non-media path)
 
-      // ── Step 2: Upload encrypted asset to IPFS ────────
+      // ── Step 2: Upload asset to IPFS ────────
       var assetCid;
 
       if (isMediaFile && mediaEncodeResult) {
-        // Media pipeline already handled CENC encryption + IPFS upload
         assetCid = mediaEncodeResult.cid;
         setProgStep('prog-upload-asset', 'CID: ' + assetCid.substring(0, 12) + '... (from encoder)', 'done');
         console.log('[Creator] Media asset CID from encoder:', assetCid);
       } else {
-      // Non-media: Upload to local node AND Elacity's IPFS for public reachability
       setProgStep('prog-upload-asset', 'Uploading to local node...', 'active');
-      var assetBase64 = uint8ToBase64(encryptResult.encrypted);
+      var uploadBytes = isFreeContent ? state.fileBytes : encryptResult.encrypted;
+      var assetBase64 = uint8ToBase64(uploadBytes);
 
       var localAssetResp = await pc2Fetch('/api/storage/ipfs/add', {
         method: 'POST',
@@ -2515,7 +2648,7 @@
       }
       var localAssetData = await localAssetResp.json();
       var localAssetCid = localAssetData.cid;
-      console.log('[Creator] Local asset CID:', localAssetCid);
+      console.log('[Creator] Local asset CID:', localAssetCid, isFreeContent ? '(cleartext)' : '(encrypted)');
 
       setProgStep('prog-upload-asset', 'Pinning to Elacity IPFS...', 'active');
       var assetCid = localAssetCid;
@@ -2523,7 +2656,7 @@
         var elacityAssetResp = await pc2Fetch('/api/storage/ipfs/upload-elacity', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ content: assetBase64, filename: 'encrypted-asset' }),
+          body: JSON.stringify({ content: assetBase64, filename: isFreeContent ? 'free-asset' : 'encrypted-asset' }),
         });
         if (elacityAssetResp.ok) {
           var elacityAssetData = await elacityAssetResp.json();
@@ -2839,10 +2972,16 @@
       }
 
       if (isMediaFile && mediaEncodeResult) {
-        envelope.asset.protectionType = 'cenc:web3-drm-v1';
-        envelope.asset.mpdUri = mediaEncodeResult.mpdUri;
-        envelope.asset.kid = mediaEncodeResult.kid;
-        envelope.asset.litBackend = 'chipotle';
+        if (isFreeContent) {
+          envelope.asset.protectionType = 'none';
+          envelope.asset.cleartext = true;
+          envelope.asset.directPlayback = true;
+        } else {
+          envelope.asset.protectionType = 'cenc:web3-drm-v1';
+          envelope.asset.mpdUri = mediaEncodeResult.mpdUri;
+          envelope.asset.kid = mediaEncodeResult.kid;
+          envelope.asset.litBackend = 'chipotle';
+        }
         envelope.asset.mediaType = state.resolvedMime.startsWith('video/') ? 'video' : 'audio';
         envelope.media.previewURL = mediaEncodeResult.previewURL || undefined;
         if (mediaEncodeResult.duration) envelope.media.duration = mediaEncodeResult.duration;
@@ -3061,6 +3200,14 @@
       var mintedTokenId = null;
       var mintedOpContract = null;
       var mintTxHash = null;
+
+      var needsGatewayApproval = accessMethod !== 'free';
+      var btnMintText = document.getElementById('btn-sign-mint-text');
+      if (btnMintText && needsGatewayApproval) {
+        btnMintText.textContent = 'Transaction 1 of 2 — Minting...';
+      } else if (btnMintText) {
+        btnMintText.textContent = 'Minting...';
+      }
 
       if (channel && ethers.isAddress(channel)) {
         setProgStep('prog-mint', 'Preparing...', 'active');
@@ -3286,6 +3433,8 @@
         // ── Step 5: Set approval on Operative ─────────
         var gatewayApproved = false;
         if (mintedOpContract && mintedOpContract !== '0x0000000000000000000000000000000000000000') {
+          if (btnMintText) btnMintText.textContent = 'Transaction 2 of 2 — Gateway approval...';
+
           if (walletChoice === 'sa' && hasSmartAccount()) {
             try {
               setProgStep('prog-approve', 'Approving gateway (Agent Account)...', 'active');
@@ -3458,7 +3607,20 @@
             acquiredBy: state.walletAddress,
           };
 
-          if (isMediaFile && mediaEncodeResult) {
+          if (isFreeContent) {
+            capsule.cleartext = true;
+            capsule.cid = assetCid;
+            capsule.mimeType = assetMime;
+            capsule.gateway = window.location.origin + '/ipfs/';
+            capsule.fallbackGateway = 'https://ipfs.ela.city/ipfs/';
+            capsule.isProtected = false;
+            if (isMediaFile && mediaEncodeResult) {
+              capsule.type = 'media';
+              capsule.mediaType = assetMime.startsWith('video/') ? 'video' : 'audio';
+              capsule.mpdUri = mediaEncodeResult.mpdUri || '';
+              capsule.duration = mediaEncodeResult.duration || 0;
+            }
+          } else if (isMediaFile && mediaEncodeResult) {
             capsule.cid = assetCid;
             capsule.gateway = window.location.origin + '/ipfs/';
             capsule.fallbackGateway = 'https://ipfs.ela.city/ipfs/';
@@ -3885,11 +4047,18 @@
       });
     }
 
-    // Show/hide reseller cut based on access method
+    // Show/hide reseller cut + price + distribution based on access method
     dom.assetAccess.addEventListener('change', function () {
+      var val = dom.assetAccess.value;
+      var isFree = val === 'free';
       if (resellerGroup) {
-        resellerGroup.style.display = dom.assetAccess.value === 'buy_and_resell' ? '' : 'none';
+        resellerGroup.style.display = val === 'buy_and_resell' ? '' : 'none';
       }
+      var priceRow = document.getElementById('step1-price-row');
+      if (priceRow) priceRow.style.display = isFree ? 'none' : '';
+
+      var distSection = document.querySelector('[data-section="distribution"]');
+      if (distSection) distSection.style.display = isFree ? 'none' : '';
     });
 
     // Revenue calc update
@@ -3901,7 +4070,7 @@
     }
 
     // Supply tier presets
-    document.querySelectorAll('.supply-tier-btn').forEach(function (btn) {
+    document.querySelectorAll('.supply-preset').forEach(function (btn) {
       btn.addEventListener('click', function () {
         var supply = parseInt(btn.getAttribute('data-supply'));
         var tierPrice = parseFloat(btn.getAttribute('data-price'));
@@ -4048,8 +4217,18 @@
 
     // Wire card selectors (access method + licensing)
     wireCardSelector('access-cards', 'asset-access', function (val) {
-      var resellerGroup = document.getElementById('reseller-group');
+      var isFree = val === 'free';
+
+      var priceRow = document.getElementById('step1-price-row');
+      if (priceRow) priceRow.style.display = isFree ? 'none' : '';
+
+      var resellerGroup = document.getElementById('reseller-cut-group');
       if (resellerGroup) resellerGroup.style.display = val === 'buy_and_resell' ? '' : 'none';
+
+      var distSection = document.querySelector('[data-section="distribution"]');
+      if (distSection) distSection.style.display = isFree ? 'none' : '';
+
+      validateStep1();
       validateStep2();
     });
 
@@ -4125,13 +4304,14 @@
           : dom.assetAccess.value === 'buy_once' ? 'Buy Once' : 'Free';
         var channelVal = dom.assetChannel.value || '';
         var channelDisplay = channelVal.length > 12 ? channelVal.substring(0, 8) + '...' + channelVal.slice(-4) : channelVal;
+        var isFreeReview = dom.assetAccess.value === 'free';
         var rows = [
           { label: 'Title', value: dom.assetTitle.value || 'Untitled' },
-          { label: 'Price', value: dom.assetAccess.value === 'free' ? 'Free' : p.toFixed(2) + ' ' + currency.symbol },
-          { label: 'Copies', value: c.toLocaleString() },
-          { label: 'Access', value: accessLabel },
-          { label: 'Channel', value: channelDisplay },
+          { label: 'Price', value: isFreeReview ? 'Free' : p.toFixed(2) + ' ' + currency.symbol },
         ];
+        if (!isFreeReview) rows.push({ label: 'Copies', value: c.toLocaleString() });
+        rows.push({ label: 'Access', value: accessLabel });
+        rows.push({ label: 'Channel', value: channelDisplay });
         var desc = (dom.assetDescription.value || '').trim();
         if (desc) {
           rows.splice(1, 0, { label: 'Description', value: desc.length > 60 ? desc.substring(0, 60) + '...' : desc });
@@ -4367,14 +4547,15 @@
           var draftCurrency = CURRENCIES.find(function (c) { return c.address === draft.currency_address; }) || CURRENCIES[0];
           var draftAccessLabel = draft.access_method === 'buy_and_resell' ? 'Buy & Resell'
             : draft.access_method === 'buy_once' ? 'Buy Once' : 'Free';
+          var isDraftFree = draft.access_method === 'free';
           var rows = [
             { label: 'Title', value: draft.title || 'Untitled' },
             { label: 'Category', value: draft.category || '—' },
-            { label: 'Price', value: draft.access_method === 'free' ? 'Free' : draftPrice.toFixed(2) + ' ' + draftCurrency.symbol },
-            { label: 'Copies', value: draftCopies.toLocaleString() },
-            { label: 'Access', value: draftAccessLabel },
-            { label: 'Channel', value: (draft.channel || '').length > 12 ? (draft.channel || '').substring(0, 8) + '...' + (draft.channel || '').slice(-4) : (draft.channel || '') },
+            { label: 'Price', value: isDraftFree ? 'Free' : draftPrice.toFixed(2) + ' ' + draftCurrency.symbol },
           ];
+          if (!isDraftFree) rows.push({ label: 'Copies', value: draftCopies.toLocaleString() });
+          rows.push({ label: 'Access', value: draftAccessLabel });
+          rows.push({ label: 'Channel', value: (draft.channel || '').length > 12 ? (draft.channel || '').substring(0, 8) + '...' + (draft.channel || '').slice(-4) : (draft.channel || '') });
           if (draft.description) {
             rows.splice(1, 0, { label: 'Description', value: draft.description.length > 60 ? draft.description.substring(0, 60) + '...' : draft.description });
           }

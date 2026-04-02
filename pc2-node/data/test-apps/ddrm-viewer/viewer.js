@@ -98,6 +98,7 @@
   var isArchiveType = assetParams.mimeType === 'application/zip' || assetParams.mimeType === 'application/gzip' || assetParams.mimeType === 'application/x-tar';
   var isInteractivePassthrough = is3DType || isCSVType || isFontType || isArchiveType;
   var isCleartext = p('cleartext', '') === 'true';
+  var cleartextCid = p('cleartextCid', '');
   var cleartextFileUrl = p('fileUrl', '');
 
   if (isCSVType) isDocumentType = false;
@@ -140,7 +141,7 @@
 
     if (!isCleartext) disableContextMenu();
 
-    if (isCleartext && cleartextFileUrl) {
+    if (isCleartext && (cleartextFileUrl || cleartextCid)) {
       loadCleartext();
       return;
     }
@@ -163,10 +164,15 @@
     $watermarkBdg.classList.add('hidden');
 
     var url = cleartextFileUrl;
-    if (url.startsWith('/') && !url.startsWith('//')) {
+    if (!url && cleartextCid) {
       var sp = new URLSearchParams(window.location.search);
       var origin = sp.get('puter.api_origin') || window.location.origin;
-      url = origin + url;
+      url = origin + '/ipfs/' + cleartextCid;
+    }
+    if (url.startsWith('/') && !url.startsWith('//')) {
+      var sp2 = new URLSearchParams(window.location.search);
+      var origin2 = sp2.get('puter.api_origin') || window.location.origin;
+      url = origin2 + url;
     }
 
     if (AUTH_TOKEN && url.indexOf('puter.auth.token') === -1) {

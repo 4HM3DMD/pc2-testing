@@ -60,3 +60,7 @@ data/supernodes.json
 
 # Temporary files
 pc2-node/tmp/
+
+# Lit Protocol / Chipotle secrets (API keys, server keys, provision cache)
+pc2-node/data/.chipotle-*
+pc2-node/data/.lit-*
