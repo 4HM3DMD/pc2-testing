@@ -255,10 +255,24 @@
                   <input type="text" id="asset-tags" placeholder="e.g. machine-learning, pytorch" maxlength="200" />
                 </div>
               </div>
+
+              <!-- Cover Image -->
+              <div class="form-group">
+                <label>Cover Image <span class="optional-tag">(optional)</span></label>
+                <span class="field-hint" style="margin-bottom:4px;">Max 2 MB, 1280×720 recommended. Auto-generated if left empty.</span>
+                <div id="thumb-drop-zone" class="thumb-drop-zone">
+                  <span class="thumb-drop-text">Click or drop an image</span>
+                  <input type="file" id="thumb-input" hidden accept="image/png,image/jpeg,image/jpg,image/bmp,image/webp" />
+                </div>
+                <div id="thumb-preview" class="thumb-preview hidden">
+                  <img id="thumb-preview-img" alt="Thumbnail preview" />
+                  <button type="button" id="thumb-remove" class="thumb-remove" title="Remove thumbnail">&times;</button>
+                </div>
+              </div>
             </div>
           </div>
 
-          <!-- Section B: Distribution -->
+          <!-- Distribution (hidden for free content) -->
           <div class="form-section collapsed" data-section="distribution">
             <div class="form-section-header" onclick="this.parentElement.classList.toggle('collapsed')">
               <span class="form-section-title">Distribution</span>
@@ -299,47 +313,13 @@
                 </div>
               </div>
 
-              <!-- Thumbnail -->
-              <div class="form-group">
-                <label>Cover Image <span class="optional-tag">(optional)</span></label>
-                <span class="field-hint" style="margin-bottom:4px;">Max 2 MB, 1280×720 recommended. Auto-generated if left empty.</span>
-                <div id="thumb-drop-zone" class="thumb-drop-zone">
-                  <span class="thumb-drop-text">Click or drop an image</span>
-                  <input type="file" id="thumb-input" hidden accept="image/png,image/jpeg,image/jpg,image/bmp,image/webp" />
-                </div>
-                <div id="thumb-preview" class="thumb-preview hidden">
-                  <img id="thumb-preview-img" alt="Thumbnail preview" />
-                  <button type="button" id="thumb-remove" class="thumb-remove" title="Remove thumbnail">&times;</button>
-                </div>
-              </div>
             </div>
           </div>
 
-          <!-- Section D: Settings -->
-          <div class="form-section collapsed" data-section="settings">
+          <!-- Licensing & Settings -->
+          <div class="form-section" data-section="licensing">
             <div class="form-section-header" onclick="this.parentElement.classList.toggle('collapsed')">
-              <span class="form-section-title">Settings</span>
-              <span class="form-section-chevron">&#9662;</span>
-            </div>
-            <div class="form-section-body">
-              <!-- Adult content toggle -->
-              <div class="form-group">
-                <div class="toggle-row">
-                  <div class="toggle-track" id="adult-toggle" role="switch" aria-checked="false" tabindex="0">
-                    <div class="toggle-knob"></div>
-                  </div>
-                  <span class="toggle-label" id="adult-toggle-label">Adult content (18+)</span>
-                </div>
-                <span class="field-hint">Flagged in metadata so platforms can filter appropriately</span>
-                <input type="checkbox" id="adult-content-check" style="display:none;" />
-              </div>
-            </div>
-          </div>
-
-          <!-- Section E: Licensing -->
-          <div class="form-section collapsed" data-section="licensing">
-            <div class="form-section-header" onclick="this.parentElement.classList.toggle('collapsed')">
-              <span class="form-section-title">Licensing</span>
+              <span class="form-section-title">Licensing & Settings</span>
               <span class="form-section-chevron">&#9662;</span>
             </div>
             <div class="form-section-body">
@@ -354,6 +334,17 @@
                     <span class="field-hint">Let buyers use this content to train AI models — this may increase demand from AI companies and researchers, leading to more sales</span>
                   </div>
                 </div>
+              </div>
+
+              <div class="form-group">
+                <div class="toggle-row">
+                  <div class="toggle-track" id="adult-toggle" role="switch" aria-checked="false" tabindex="0">
+                    <div class="toggle-knob"></div>
+                  </div>
+                  <span class="toggle-label" id="adult-toggle-label">Adult content (18+)</span>
+                </div>
+                <span class="field-hint">Flagged in metadata so platforms can filter appropriately</span>
+                <input type="checkbox" id="adult-content-check" style="display:none;" />
               </div>
 
               <!-- Hidden defaults for license terms (always on until dApps enforce them) -->
