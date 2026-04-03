@@ -1,47 +1,206 @@
-# ElastOS PC2 — Weekly Community Update
+# ElastOS Weekly Community Update
 ## March 28 – April 3, 2026
 
-> **18 commits** across `feature/lit-chipotle-migration` | **~10,000 lines of Elacity code added** | **102 core files touched** | **724 total files changed** (including Glide Finance static bundle)
+> **ElastOS Runtime v0.1.0 released to the public** | **18 PC2 commits** | **~10,000 lines of Elacity code added** | **102 core files touched** | **Lit Protocol production dDRM live** | **docs.elastos.net launched** | **KuMining partnership live**
 
 ---
 
 ## Table of Contents
 
 1. [The Big Picture — What Happened This Week](#the-big-picture)
-2. [Particle Auth & Agent Wallet — Email Login to On-Chain Minting](#particle-auth--agent-wallet)
-3. [Lit Protocol Chipotle — Production dDRM Is Live](#lit-protocol-chipotle--production-ddrm-is-live)
-4. [Free Content Minting — Not Everything Needs DRM](#free-content-minting)
-5. [Glide Finance DEX — First Third-Party dApp on PC2](#glide-finance-dex--first-third-party-dapp-on-pc2)
-6. [Runtime Player Unification — One Player for All Content](#runtime-player-unification)
-7. [Creator Dashboard Polish — Consolidated Form UX](#creator-dashboard-polish)
-8. [Capsule-Compatible Refactoring — Designing for Runtime v2 Today](#capsule-compatible-refactoring)
-9. [WASM/Rust Consolidation — Moving Security-Sensitive Code into Sandboxes](#wasmrust-consolidation)
-10. [CEK Exposure Audit — Honest Security Assessment](#cek-exposure-audit)
-11. [Wallet Bridge — Multi-Chain, Multi-Wallet, Capability-Ready](#wallet-bridge)
-12. [dDRM Security Hardening — 7 Vulnerabilities Closed](#ddrm-security-hardening)
-13. [Apple Developer Program — macOS Distribution Unblocked](#apple-developer-program)
-14. [Elastos Documentation Portal — docs.elastos.net](#elastos-documentation-portal--docselastosnet)
-15. [KuMining Partnership — ELA Merge-Mining on KuCoin](#kumining-partnership--ela-merge-mining-on-kucoin)
-16. [Ecosystem Operations & Community](#ecosystem-operations--community)
-17. [Documentation & Strategy](#documentation--strategy)
-18. [What's Next](#whats-next)
-19. [Summary Statistics](#summary-statistics)
+2. [ElastOS Runtime v0.1.0 — Public Release](#elastos-runtime-v010--public-release)
+3. [Runtime Engineering — Chat, Security, WCI Exec Room](#runtime-engineering--chat-security-wci-exec-room)
+4. [Particle Auth & Agent Wallet — Email Login to On-Chain Minting](#particle-auth--agent-wallet)
+5. [Lit Protocol Chipotle — Production dDRM Is Live](#lit-protocol-chipotle--production-ddrm-is-live)
+6. [Free Content Minting — Not Everything Needs DRM](#free-content-minting)
+7. [Glide Finance DEX — First Third-Party dApp on PC2](#glide-finance-dex--first-third-party-dapp-on-pc2)
+8. [Runtime Player Unification — One Player for All Content](#runtime-player-unification)
+9. [Creator Dashboard Polish — Consolidated Form UX](#creator-dashboard-polish)
+10. [Capsule-Compatible Refactoring — Designing for Runtime v2 Today](#capsule-compatible-refactoring)
+11. [WASM/Rust Consolidation — Moving Security-Sensitive Code into Sandboxes](#wasmrust-consolidation)
+12. [CEK Exposure Audit — Honest Security Assessment](#cek-exposure-audit)
+13. [Wallet Bridge — Multi-Chain, Multi-Wallet, Capability-Ready](#wallet-bridge)
+14. [dDRM Security Hardening — 7 Vulnerabilities Closed](#ddrm-security-hardening)
+15. [V3 Protocol SDK & Documentation](#v3-protocol-sdk--documentation)
+16. [Apple Developer Program — macOS Distribution Unblocked](#apple-developer-program)
+17. [Elastos Documentation Portal — docs.elastos.net](#elastos-documentation-portal--docselastosnet)
+18. [KuMining Partnership — ELA Merge-Mining on KuCoin](#kumining-partnership--ela-merge-mining-on-kucoin)
+19. [Ecosystem Operations & Community](#ecosystem-operations--community)
+20. [Documentation & Strategy](#documentation--strategy)
+21. [What's Next](#whats-next)
+22. [Summary Statistics](#summary-statistics)
 
 ---
 
 ## The Big Picture
 
-This was the week where PC2 went from "impressive demo" to "production-ready pipeline." Three things happened that transformed the system:
+This was the most significant week in the project's history. Five things happened that together represent a step change:
 
-1. **Lit Protocol Chipotle went live on mainnet**, and we completed end-to-end integration the same day. For the first time, the complete dDRM pipeline — encrypt, mint, buy, decrypt, render — works on production infrastructure with real money.
+1. **The [ElastOS Runtime v0.1.0](https://github.com/Elacity/elastos-runtime) was released publicly on GitHub.** This is the Rust-based execution engine that turns user-owned hardware into a sovereign computing environment — signed capsules, explicit capabilities, zero ambient authority. The first working peer-to-peer chat system running entirely from five isolated capsules was demonstrated, and a browser-based WCI Exec Room collaboration surface was built on the capsule architecture. This is the bridge between V1 (578,000+ lines of production code) and V2 (where every app is cryptographically sandboxed).
 
-2. **The first third-party dApp (Glide Finance DEX) was packaged and runs inside PC2** without any code changes to Glide. This proves the dApp Store model: apps distributed by content hash, running locally, with wallet access mediated by bridges.
+2. **Lit Protocol Chipotle went live on mainnet**, and we completed end-to-end integration the same day. For the first time, the complete dDRM pipeline — encrypt, mint, buy, decrypt, render — works on production infrastructure with real money.
 
-3. **A deep study of Anders' ElastOS Runtime** produced concrete capsule-compatible refactoring — not theoretical planning, but actual code that runs today while being designed to slot into Runtime v2 capsules when ready.
+3. **The first third-party dApp (Glide Finance DEX) was packaged and runs inside PC2** without any code changes to Glide. This proves the dApp Store model: apps distributed by content hash, running locally, with wallet access mediated by bridges.
 
-4. **The Elastos Documentation Portal ([docs.elastos.net](https://docs.elastos.net)) launched**, giving the entire ecosystem a unified, AI-searchable, version-controlled documentation home for the first time. And ELA merge-mining went live on KuCoin's KuMining platform, expanding accessibility for miners.
+4. **PC2 v1 code was refactored for capsule compatibility** — not theoretical planning, but actual code that runs today while being designed to slot into Runtime v2 capsules when ready. Init segment parsing was consolidated into Rust/WASM, capsule manifests were created for all 7 WASM modules, and capability vocabularies were formalized.
 
-**In plain English:** We connected to the production encryption network, proved that other people's apps can run on our system, started building the bridge between today's PC2 and tomorrow's capsule-based Runtime, shipped the ecosystem's first proper documentation portal, and landed a mining partnership with a top exchange — all without breaking a single existing feature.
+5. **The Elastos Documentation Portal ([docs.elastos.net](https://docs.elastos.net)) launched**, giving the entire ecosystem a unified, AI-searchable, version-controlled documentation home for the first time. ELA merge-mining went live on KuCoin's KuMining platform. And the V3 Protocol SDK documentation was published.
+
+**In plain English:** We released the operating system kernel that makes software unable to betray its users, connected PC2 to the production encryption network, proved that other people's apps can run on our system, shipped the ecosystem's first proper documentation portal, landed a mining partnership with a top exchange, and started building the bridge between today's PC2 and tomorrow's Runtime — all without breaking a single existing feature.
+
+---
+
+## ElastOS Runtime v0.1.0 — Public Release
+
+**Why this matters:** The ElastOS Runtime is the answer to a question that has haunted computing for decades: *can software be powerful without being trusted?* Today's internet forces a bad trade — to use software, you surrender control of your data, identity, and compute to someone else's server. The Runtime eliminates that trade. It lets applications run on hardware you own, under rules you set, verified by cryptography rather than corporate promises.
+
+This week, the Runtime was [released publicly on GitHub](https://github.com/Elacity/elastos-runtime) as an open-source MIT-licensed repository — the first time the full capsule execution engine is available for anyone to install, build, and inspect.
+
+### What the Runtime Is
+
+A pure Rust monorepo (~16K LOC, targeting 5-7K trusted core lines) implementing a three-layer architecture:
+
+```
+┌─────────────────────────────────────────────────────┐
+│  Runtime (elastos binary) — minimal trusted base    │
+│  Isolation · Signatures · Capabilities              │
+└─────────────────────────────────────────────────────┘
+                        │
+┌─────────────────────────────────────────────────────┐
+│  Shell (capsule with orchestrator capability)       │
+│  Permission prompts · Capsule orchestration         │
+└─────────────────────────────────────────────────────┘
+                        │
+┌─────────────────────────────────────────────────────┐
+│  Capsules (sandboxed apps and providers)            │
+│  WASM · microVM · data · zero ambient authority     │
+└─────────────────────────────────────────────────────┘
+```
+
+The runtime is the small trusted base. Everything above it — including the shell — runs as a sandboxed capsule with explicit capability tokens. Humans and AI agents use the same capability model. When a capsule starts, it can do *nothing*. It must request specific capabilities — "read this file for one hour," "send a message to this DID," "access the camera for this session" — and the user (or the runtime's policy engine) approves or denies each request. Capability tokens are cryptographically signed, time-limited, and auditable.
+
+### One-Command Install
+
+```bash
+curl -fsSL https://elastos.elacitylabs.com/install.sh | bash
+elastos setup
+elastos
+```
+
+This installs the signed `elastos` binary, provisions the core PC2 home profile through the trusted-source path, and opens the PC2 home surface. Verified on Linux x86_64, aarch64 (NVIDIA Jetson), and WSL.
+
+### What Works Today
+
+| Capability | Status |
+|-----------|--------|
+| Fresh install → setup → PC2 home | Working |
+| Native P2P chat + WASM chat interop | Working |
+| Signed publish, install, and update flow | Working |
+| Content sharing and local site hosting | Working |
+| DID-backed identity across surfaces | Working |
+| Agent capsule with signed gossip | Working |
+| Cross-host chat (WSL ↔ Jetson) | Working |
+| WCI Exec Room (browser collaboration) | Working |
+
+### The Five-Capsule Architecture
+
+The runtime's capabilities were proven through a concrete milestone: a working peer-to-peer chat system built entirely from **five isolated capsule components** — Identity (DID authentication), Networking (Carrier P2P), Shell (user interface), Localhost (local state persistence), and Chat App (messaging logic). Each runs in its own sandbox. No single capsule can access what belongs to another without explicit authorization.
+
+### Release Timeline
+
+| Date | Event |
+|------|-------|
+| Apr 1 | v0.1.0 — Initial public release. Published to `elastos.elacitylabs.com` and verified from clean Docker environment |
+| Apr 2 | v0.1.1 — Removed installer's hidden `xxd` dependency, pinned Rust toolchain, tightened onboarding docs |
+| Apr 3 | Fix: repaired public `components.json` manifest |
+
+### Repository Structure
+
+```
+elastos-runtime/
+├── elastos/               # Core runtime workspace (Rust)
+│   └── crates/            # elastos-server, elastos-runtime, elastos-common, ...
+├── capsules/              # User/provider/demo capsules
+├── docs/                  # Architecture, guides, status (12 documents)
+├── scripts/               # Build, publish, install, proof scripts
+└── tests/                 # Integration tests
+```
+
+**Languages:** Rust 75.9%, JavaScript 14.6%, Shell 8.5%
+
+---
+
+## Runtime Engineering — Chat, Security, WCI Exec Room
+
+**Why this matters:** A public release means nothing if the software doesn't actually work reliably. This section covers the intensive engineering sprint that made the Runtime release-ready — fixing the primary Carrier/Chat blocker, closing 10 security bugs, overhauling the repository's observability tooling, and building the first real browser-based capsule application.
+
+### Chat/Carrier — The Primary Blocker Closed
+
+**The problem:** Native chat and WASM (sandboxed) chat couldn't reliably communicate with each other. Messages would stall, sessions would drop, and the interop proof couldn't pass consistently. This was the single biggest blocker to a credible public release.
+
+**Three root causes found and fixed:**
+1. **Dev-build runtime restart killing connections** — When the runtime restarted during development, existing Carrier connections were silently dropped. Fixed with proper connection lifecycle management.
+2. **Missing `sender_session_id` in GossipMessage** — Capsules with the same DID would skip each other's messages because the session deduplication field was missing. Fixed by adding session identification to the gossip protocol.
+3. **Contract drift between native and capsule chat** — Native chat was sending unsigned messages while capsule chat enforced signature verification. Messages from native chat were silently rejected. Fixed by making native chat sign outgoing messages and presence with the same protocol the capsules use.
+
+**What was built to fix it:**
+- **Shared chat protocol** — Extracted into `elastos_common::chat_protocol` so signing, verification gating, nick binding, and deduplication are defined once and used by all surfaces (native, WASM, microVM)
+- **Native chat now signs and verifies** — Outgoing messages are signed, incoming messages are verified, unknown + unverified senders are gated, verification badges are displayed
+- **WASM chat attaches to managed runtime** — Instead of spawning its own runtime, WASM chat attaches to the shared managed runtime via pipe bridge
+- **Agent capsule signs and verifies** — AI agent capsule now signs outgoing messages and verifies incoming before triggering AI responses
+- **Deterministic interop proof** — `scripts/shared-runtime-gossip-proof.sh` passes reliably. The pty-based interop smoke test also passes independently.
+
+### Security Hardening — 10 Bugs Fixed
+
+| Bug | Severity | Fix |
+|-----|----------|-----|
+| Ambient-authority escape hatch in storage API | Critical | Removed from storage, provider, and namespace handlers |
+| Ambient-authority escape in provider API | Critical | Removed |
+| Ambient-authority escape in namespace API | Critical | Removed |
+| Epoch persistence crash-safety | High | Persist before in-memory update, atomic writes |
+| No line-length limits on bridges | High | 1MB limits on io_bridge, carrier_bridge, carrier_service |
+| Manifest viewer path traversal | High | Validated and sanitized paths |
+| Timestamp monotonic_seq reuse | Medium | Fixed sequence generation |
+| Hardcoded IPFS public gateways | Medium | Removed — all content routes through local provider |
+| Sensitive files exposed via graph viewer | Medium | Blocked `.key`, `.pem`, `.env`, `.elastos/` from API |
+| Stale peer-provider references | Low | Removed from all live surfaces |
+
+### Control Graph Viewer Overhaul
+
+**Why:** Understanding the architecture of a complex runtime requires visual tooling. The control graph viewer provides a live, navigable map of the entire codebase.
+
+**What was built:**
+- **Complete rewrite** — Dagre layout, type-aware sidebar, search, file content modal
+- **Neo4j API backend** — 28 endpoints with tests
+- **102 files reviewed**, all 7 domains audited, 37 folders described
+- **Tooling directories excluded** — only publishable code appears in the graph
+- **New Capsules domain** covering all capsule directories
+
+### WCI Exec Room — First Browser Capsule Application
+
+**Why this matters:** This is the first real proof that useful, daily-use software can run under the capsule trust model. The WCI Exec Room is a browser-facing WASM capsule for live collaboration — not a traditional web chat, but a capsule application where the fundamental trust dynamics are inverted.
+
+**How it's different from a normal web app:**
+- **The browser is not the authority.** Room state lives under `localhost://…/AppCapsules/wci-exec-room` on the hosting PC2 runtime — not in the browser, not on a corporate server.
+- **PC2 is the trust surface.** When someone wants to join through their browser, they are requesting access to a hosted experience. The hosting runtime's owner approves or denies pairing.
+- **Two access tiers:** Hosted guests (browser users, mediated and revocable access) and sovereign members (other PC2 runtimes participating via DIDs with their own trust boundaries).
+- **Notifications are separate from room state** — a notification relay pushes updates into native chat channels without coupling to room internals.
+
+### Repo Cleanup & Documentation
+
+- README slimmed from 257 to 113 lines — focused, honest, no overclaims
+- Plans archived, peer-provider archived, root cleaned
+- `SECURITY.md`, `FALLBACK_LEDGER.md`, `NAMESPACES.md` created
+- `SCORE_MODEL.md` aligned with actual code
+- All stale peer-provider references removed from live surfaces
+- `state.md`, `TASKS.md`, `STATUS.md`, `README.md` aligned to say the same thing
+
+### Cross-Platform Verification
+
+- **Jetson (aarch64):** Full onboarding path proven — install, version check, source show, update check, setup, PC2 home
+- **WSL:** Same path verified + cross-host native Carrier chat (WSL ↔ Jetson)
+- **Clean Docker:** Installer verified from scratch in clean container
+- **Installer improvements:** Removed hidden `xxd` dependency, pinned Rust toolchain documentation
 
 ---
 
@@ -476,6 +635,34 @@ Every RPC request is now tagged with the requesting iframe's origin. Methods are
 
 ---
 
+## V3 Protocol SDK & Documentation
+
+**Why this matters:** Elacity's smart contract system is upgrading from Protocol v2 to v3 — a significant architectural change that affects how digital assets are minted, traded, and governed. The SDK is the interface that PC2, the marketplace, and third-party developers use to interact with these contracts. Without a working SDK and clear documentation, the V3 migration can't proceed.
+
+**What was built (Mar 30 – Apr 3):**
+
+### SDK Development
+- **Co-hosted V3 documentation created** — SDK references, ABIs, and integration guides published at [elacitylabs.gitbook.io/docs](https://elacitylabs.gitbook.io/docs)
+- **SDK integration with default v3** — Built with selectable protocol option (v2/v3), allowing gradual migration
+- **CI/CD pipeline fixed** — SDK deployment was blocked by CI failure; resolved and deployment completed
+- **Frontend integration evaluation** — Ongoing assessment of how the SDK fits into the PC2 marketplace UI
+
+### Protocol Progress ([ELACITY-2206], [ELACITY-2211])
+- Continued work on reliable sync process implementation
+- Adjusting event handlers in backend to update database
+- EventHub wiring to backend — centralizing contract events for reliable state tracking
+- Lit Protocol integration with v3 system under evaluation
+
+### What Remains
+- Wire EventHub to backend and adjust handlers (in progress)
+- Complete frontend integration with SDK
+- Full Lit Protocol + v3 system integration
+- V3 contract deployment to production (blocked on final ABI confirmation)
+
+**Team Confidence Level: 85%**
+
+---
+
 ## Apple Developer Program — macOS Distribution Unblocked
 
 **Why this matters:** Until now, installing the [Elastos Launcher](https://github.com/Elacity/elastos-launcher) on macOS required users to run `xattr -cr` in Terminal to bypass Gatekeeper — a scary, trust-destroying step that most users won't do. With the Apple Developer Program certificate, we can code-sign and notarize the .dmg, making installation a simple double-click.
@@ -633,7 +820,19 @@ The Runtime defines four host adapter modes (server/headless, desktop, mobile, k
 
 ## Summary Statistics
 
-### Engineering
+### ElastOS Runtime
+| Metric | Value |
+|--------|-------|
+| Public release | v0.1.0 → v0.1.1 ([github.com/Elacity/elastos-runtime](https://github.com/Elacity/elastos-runtime)) |
+| Codebase | ~16K LOC Rust (75.9%), JavaScript (14.6%), Shell (8.5%) |
+| Security bugs fixed | 10 (3 critical ambient-authority, 3 high, 3 medium, 1 low) |
+| Chat/Carrier root causes found & fixed | 3 |
+| Cross-platform verification | 3 (Jetson aarch64, WSL, Docker) |
+| Graph viewer: files reviewed | 102 across 7 domains |
+| Neo4j API endpoints | 28 with tests |
+| WCI Exec Room | First browser-based capsule application |
+
+### PC2 Engineering
 | Metric | Value |
 |--------|-------|
 | Commits (this week) | 18 |
@@ -653,6 +852,13 @@ The Runtime defines four host adapter modes (server/headless, desktop, mobile, k
 | Misleading security comments fixed | 5 |
 | Things broken by all of the above | 0 |
 
+### V3 Protocol & Smart Contracts
+| Metric | Value |
+|--------|-------|
+| V3 SDK | Built with selectable v2/v3 protocol, CI/CD fixed, deployed |
+| V3 Documentation | Published at [elacitylabs.gitbook.io/docs](https://elacitylabs.gitbook.io/docs) |
+| Team confidence | 85% |
+
 ### Ecosystem & Operations
 | Metric | Value |
 |--------|-------|
@@ -667,34 +873,47 @@ The Runtime defines four host adapter modes (server/headless, desktop, mobile, k
 
 ### ElastOS Runtime Update
 
-**Anders' Runtime Progress (from state.md dated Mar 31):**
-- Signed installs working — `elastos setup` fetches, verifies Ed25519, installs
-- WASM execution (Wasmtime) and microVM execution (crosvm) both operational
-- Carrier P2P (iroh-based QUIC + DHT + relay) proven native-to-WASM
-- Capability tokens with 12 checks per invocation
-- AI provider (`elastos://ai/` → llama-provider) capsule-native
-- Shell capsule (Puter running inside a microVM) orchestrating capability prompts
+**Milestone: v0.1.0 Public Release** — The ElastOS Runtime was [released on GitHub](https://github.com/Elacity/elastos-runtime) (MIT license), published to `elastos.elacitylabs.com`, and verified from clean Docker environments. This is the first public release of the capsule execution engine.
 
-**PC2's Role:** We identified through this week's audit that PC2 Node.js + browser desktop maps directly to the Runtime's "server/headless" host adapter mode. Our work isn't being replaced — it's being promoted to the reference implementation for the Runtime's web-facing host adapter.
+**Engineering Highlights:**
+- **Chat/Carrier blocker closed** — 3 root causes fixed (runtime restart killing connections, missing sender_session_id, native/capsule contract drift). Shared chat protocol extracted into `elastos_common::chat_protocol`.
+- **10 security bugs fixed** — Ambient-authority escape hatches removed, epoch crash-safety fixed, bridge line-length limits added, path traversal blocked, sensitive files gated from graph API.
+- **WCI Exec Room** — First browser-based capsule application. Live collaboration with DID-based roles, browser guests paired via approve/deny control surface, room state under `localhost://`.
+- **Cross-platform verification** — Jetson (aarch64), WSL, clean Docker. Cross-host native Carrier chat proven (WSL ↔ Jetson).
+- **Control graph viewer overhaul** — Complete rewrite with Dagre layout, Neo4j backend (28 endpoints), 102 files reviewed across 7 domains.
+- **Repo cleanup** — README slimmed 257→113 lines, stale surfaces removed, truth documents aligned.
 
-**Biggest Gap:** The Runtime has NO EVM wallet, marketplace, or payment flows yet. PC2 provides all three today. The convergence model means PC2 fills these gaps while the Runtime matures.
+**Current Focus:**
+- Freeze command and surface model — no new commands, document what exists, remove what doesn't work
+- Make PC2 home "boring and honest" — hide unfinished surfaces, clarify blocked states
+- Keep public repo, installer, manifests, docs, CI, and release proofs in sync
+
+**PC2's Role:** PC2 Node.js + browser desktop maps directly to the Runtime's "server/headless" host adapter mode. PC2 v1 fills the gaps the Runtime doesn't have yet (EVM wallet, marketplace, payment flows) while designing all new code to be capsule-compatible.
 
 ---
 
 ### Elacity dDRM / Smart Contract Update
 
 **Achievements This Week:**
-- Lit Protocol Chipotle production integration — COMPLETE
-- Full E2E dDRM pipeline verified on mainnet
+- Lit Protocol Chipotle production integration — **COMPLETE** (all asset types verified E2E)
 - Free content minting (cleartext DASH, no Lit costs)
-- Security hardening — 7 vulnerabilities closed before production deployment
+- PC2 dDRM security hardening — 7 vulnerabilities closed before production deployment
 - CEK exposure honestly documented with migration path
+- V3 Protocol SDK created with default v3 and selectable protocol option
+- Co-hosted V3 documentation published at [elacitylabs.gitbook.io/docs](https://elacitylabs.gitbook.io/docs)
+- CI/CD fixed for SDK integration and deployment
+- Reliable sync process implementation continued ([ELACITY-2206])
+- Protocol-to-system integration and documentation adjustments ([ELACITY-2211])
 
 **Current Focus:**
-- V3 contract migration preparation (Gate 2 — blocked on new ABIs from Irzhy)
+- Wire EventHub to backend and adjust handlers
+- Complete frontend integration with V3 SDK
+- Integrate Lit Protocol with v3 system
+- V3 contract deployment to production (pending final ABI confirmation)
 - Supernode deployment with production Lit config
-- SDK adjustments to support protocol v3 ([ELACITY-2211])
+
+**Team Confidence Level: 85%**
 
 ---
 
-*This update covers all work from March 28 – April 3, 2026 on the `feature/lit-chipotle-migration` branch. All changes are backward-compatible — nothing that worked last week is broken this week.*
+*This update covers all work from March 28 – April 3, 2026 across the ElastOS Runtime (public release v0.1.0–v0.1.1), the PC2 `feature/lit-chipotle-migration` branch, the V3 Protocol SDK, and ecosystem operations. All PC2 changes are backward-compatible — nothing that worked last week is broken this week.*
