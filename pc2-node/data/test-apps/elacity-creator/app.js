@@ -3638,6 +3638,18 @@
             capsule.litBackend = encryptResult.litBackend || 'chipotle';
           }
 
+          capsule.signedBy = state.walletAddress;
+
+          // Content-address the capsule: SHA-256 of the canonical JSON (without hash field)
+          try {
+            var canonicalJson = JSON.stringify(capsule);
+            var hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonicalJson));
+            var hashArray = Array.from(new Uint8Array(hashBuffer));
+            capsule.capsuleHash = 'sha256:' + hashArray.map(function (b) { return b.toString(16).padStart(2, '0'); }).join('');
+          } catch (hashErr) {
+            console.warn('[Creator] capsuleHash computation failed (non-fatal):', hashErr.message);
+          }
+
           await pc2Fetch('/write', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },

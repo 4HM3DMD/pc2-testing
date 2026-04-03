@@ -1228,7 +1228,8 @@ router.post('/lit/encrypt', authenticate, async (req: AuthenticatedRequest, res:
 
     logger.info(`[Lit] Encrypting ${dataBytes.length} bytes (two-layer: AES + Lit CEK)`);
 
-    // Layer 1: AES-256-GCM encrypt inside WASM — plaintext never touches Node.js memory
+    // Layer 1: AES-256-GCM encrypt inside WASM — plaintext stays in WASM linear memory,
+    // but the generated CEK is returned to Node.js for Lit-wrapping (see CEK Exposure Assessment).
     const wasmBinary = await loadRendererBinary();
     const wasmRuntime = getWASMRuntime();
     const wasmEncryptResult = await wasmRuntime.executeEncrypt(wasmBinary, dataBytes, { timeoutMs: 60000 });
@@ -1470,7 +1471,8 @@ async function recoverCEKAndFetchData(params: DecryptParams, ipfsService?: any):
 
 /**
  * Full two-layer decryption: Lit recovers CEK, AES-GCM decrypts file.
- * Primary path: WASM decrypt-only (CEK isolated in WASM linear memory).
+ * Primary path: WASM decrypt-only (decryption in WASM linear memory;
+ *   CEK passes through Node.js during MemFS write).
  * Fallback: Node.js crypto for very large files or WASM failures.
  * Returns raw decrypted Buffer. Caller is responsible for zeroing it after use.
  */
@@ -1483,7 +1485,7 @@ export async function decryptAssetTwoLayer(params: DecryptParams, ipfsService?: 
   // decrypt-only code path requires standard padded base64.
   const paddedCek = cekBase64.length % 4 === 0 ? cekBase64 : cekBase64 + '='.repeat(4 - (cekBase64.length % 4));
 
-  // WASM path: CEK stays in WASM linear memory
+  // WASM path: decryption happens in WASM, but CEK is passed in via command.json
   if (encryptedBytes.length <= WASM_DECRYPT_MAX_BYTES) {
     try {
       const wasmBinary = await loadRendererBinary();
@@ -1549,7 +1551,10 @@ router.post('/lit/decrypt', authenticate, async (_req: AuthenticatedRequest, res
 // ── WASM Renderer Integration ────────────────────────────────────────
 //
 // The dDRM WASM renderer performs decryption + rendering inside WASM linear
-// memory, ensuring CEK and plaintext never touch Node.js memory.
+// memory. The *rendered pixels* and plaintext stay in WASM. However, the
+// CEK is passed INTO WASM via command.json (base64), so it briefly exists
+// in Node.js memory during the MemFS write. See CAPSULE_COMPATIBILITY.md
+// "CEK Exposure Assessment" for the full data-flow audit.
 // Path: wasm-apps/ddrm-renderer/ddrm-renderer.wasm
 
 const DDRM_RENDERER_PATH = 'wasm-apps/ddrm-renderer/ddrm-renderer.wasm';
@@ -1627,7 +1632,8 @@ async function renderViaWASM(
  * Secure viewer: decrypts asset server-side, renders to lossy image, streams binary.
  * The raw file NEVER leaves server memory. Browser receives only rendered pixels.
  *
- * Primary path: WASM renderer (CEK/plaintext confined to WASM linear memory)
+ * Primary path: WASM renderer (plaintext confined to WASM linear memory;
+ *   CEK passes through Node.js during MemFS write — see CEK Exposure Assessment)
  * Fallback: Node.js Sharp/Canvas/PDF.js (for PDFs or when WASM unavailable)
  *
  * Body: same as /lit/decrypt, plus:
@@ -1721,7 +1727,7 @@ router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, 
 
     // ── WASM Renderer Path ──────────────────────────────
     // For images, text, and PDFs: decrypt + render inside WASM linear memory.
-    // CEK and plaintext never touch Node.js memory.
+    // Plaintext stays in WASM; CEK passes through Node.js during MemFS write.
     const wasmCodeTypes = ['application/javascript', 'application/json', 'application/xml', 'application/x-yaml', 'application/toml', 'application/x-sh'];
     const wasmSupportedTypes = mime.startsWith('image/') || mime.startsWith('text/') || mime === 'application/pdf' || wasmCodeTypes.includes(mime);
     if (wasmSupportedTypes) {

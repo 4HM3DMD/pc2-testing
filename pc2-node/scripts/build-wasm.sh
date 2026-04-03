@@ -90,6 +90,27 @@ build_crate() {
   local size_final
   size_final=$(wc -c < "$output_dir/$name.wasm" | tr -d ' ')
   echo "  Binary: $size_final bytes -> $output_dir/$name.wasm"
+
+  # Update capsule.json with the SHA-256 of the final .wasm binary
+  if [ -f "$output_dir/capsule.json" ]; then
+    local wasm_sha256
+    wasm_sha256=$(shasum -a 256 "$output_dir/$name.wasm" | cut -d' ' -f1)
+    if command -v python3 &>/dev/null; then
+      python3 -c "
+import json, sys
+with open('$output_dir/capsule.json', 'r') as f:
+    c = json.load(f)
+c['sha256'] = '$wasm_sha256'
+with open('$output_dir/capsule.json', 'w') as f:
+    json.dump(c, f, indent=2)
+    f.write('\n')
+"
+      echo "  Capsule manifest updated: sha256=$wasm_sha256"
+    else
+      echo "  python3 not found — capsule.json sha256 not updated"
+    fi
+  fi
+
   echo "  Done."
 }
 

@@ -26,6 +26,33 @@
 
   var EXTERNAL_WALLET_METHODS = ['metamask', 'walletconnect', 'coinbase'];
 
+  // Wallet RPC methods requiring wallet:sign capability (write operations)
+  var SIGN_METHODS = [
+    'eth_sendTransaction', 'eth_signTransaction', 'eth_sign',
+    'personal_sign', 'eth_signTypedData', 'eth_signTypedData_v3', 'eth_signTypedData_v4'
+  ];
+
+  // Known app origins — populated by registered/installed apps.
+  // In v1, all origins are allowed (warn-only). In v2, unregistered origins will be blocked.
+  var _knownOrigins = {};
+
+  function classifyRpcMethod(method) {
+    if (SIGN_METHODS.indexOf(method) !== -1) return 'wallet:sign';
+    if (DIRECT_RPC_METHODS.indexOf(method) !== -1) return 'network:rpc';
+    if (method === 'eth_accounts' || method === 'eth_requestAccounts') return 'wallet:read';
+    if (method === 'wallet_switchEthereumChain' || method === 'wallet_addEthereumChain') return 'network:rpc';
+    return 'wallet:read';
+  }
+
+  function validateOrigin(origin, method) {
+    if (!origin || origin === '*' || origin === 'null') return;
+    if (_knownOrigins[origin]) return;
+    var capability = classifyRpcMethod(method);
+    if (capability === 'wallet:sign') {
+      console.warn('[wallet-bridge] ⚠ Signing request from unregistered origin:', origin, 'method:', method);
+    }
+  }
+
   // Read-only RPC methods that can go directly to chain RPC
   var DIRECT_RPC_METHODS = [
     'eth_estimateGas', 'eth_call', 'eth_getBalance', 'eth_getCode',
@@ -412,6 +439,7 @@
     }
 
     if (data.type === 'pc2-wallet-rpc' && data.id && data.method) {
+      validateOrigin(origin, data.method);
       handleRpc(data, respondPostMessage);
     }
     if (data.type === 'pc2-wallet-ready') {

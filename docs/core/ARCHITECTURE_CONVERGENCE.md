@@ -1159,7 +1159,7 @@ Every vertical uses the same on-chain contracts. Every vertical uses the same `@
 
 ---
 
-*Last updated: 2026-03-18*
+*Last updated: 2026-04-03*
 *Author: AI Development Assistant for Sasha Mitchell*
 
 ---
@@ -1295,3 +1295,35 @@ No shortcuts for agents. No second-class treatment either.
 ```
 
 This is what makes Elacity's agent marketplace viable: agents are first-class citizens in the Runtime with the same cryptographic trust model as humans.
+
+---
+
+## Addendum: Apr 2026 Status Update
+
+### Lit Chipotle Mainnet — COMPLETE (Apr 2, 2026)
+
+The entire Elacity dDRM pipeline is verified end-to-end on production Lit Protocol Chipotle infrastructure. All asset types (PDF, image, video, audio) encrypted, minted, and decrypted on mainnet. Free content minting added. Security audit completed: injection prevention, rate limiting, promise coalescing, secrets protection. See [LIT_CHIPOTLE_MIGRATION.md](./LIT_CHIPOTLE_MIGRATION.md) for full details.
+
+### Runtime First Public Release — Audited (Mar 31 - Apr 3, 2026)
+
+Comprehensive audit of [github.com/Elacity/elastos-runtime](https://github.com/Elacity/elastos-runtime) completed. Key findings:
+- PC2 Node.js server IS the "server/headless" host adapter — our architecture is validated
+- All 6 WASM crates target `wasm32-wasip1` — same as Runtime capsules, no recompilation needed
+- Provider interface (stdin/stdout JSON) documented — clear target for dDRM Provider Capsule
+- **Biggest gap:** Runtime has no EVM wallet or on-chain verification — gates ACCESS_TOKEN bridge
+
+### Capsule-Compatible Refactoring — COMPLETE (Apr 3, 2026)
+
+Introduced capsule-compatible concepts at every major trust boundary without breaking any existing functionality:
+- Unified `CAPABILITY_SCOPES` vocabulary mapping to Runtime capability token actions
+- `CapabilityPrincipal` interface in API middleware (v1: full access, v2: scoped)
+- Ed25519 signature verification in AppInstallService (warn-only in v1)
+- Provider operation interfaces (`DRMProvider`, `StorageProvider`, `IdentityProvider`, `ComputeProvider`)
+- Wallet bridge origin tracking and RPC method capability classification
+- `.ddrm` capsule content hashing (`capsuleHash` + `signedBy` fields)
+
+See [CAPSULE_COMPATIBILITY.md](./CAPSULE_COMPATIBILITY.md) for the full inventory.
+
+### Apple Developer Program — Obtained (Apr 3, 2026)
+
+Apple Developer cert now active. The [elastos-launcher](https://github.com/Elacity/elastos-launcher) .dmg can be code-signed and notarized, eliminating the `xattr -cr` Terminal workaround. macOS users will be able to install with a simple double-click.

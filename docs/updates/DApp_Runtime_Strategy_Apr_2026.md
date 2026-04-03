@@ -2,7 +2,7 @@
 
 > **Date:** April 2, 2026
 > **Branch:** `feature/lit-chipotle-migration`
-> **Context:** Post-Glide Finance integration, pre-Lit mainnet swap
+> **Context:** Post-Glide Finance integration, post-Lit Chipotle mainnet integration
 
 ---
 
@@ -300,29 +300,30 @@ Benefits: API key never on end-user nodes, distributed failover, per-node cost a
 
 ### Elacity App + Lit Mainnet Work Plan
 
-**Phase 1: Lit Mainnet Swap (1-2 days)**
-- [ ] Create production Lit account
-- [ ] Register Lit Action CIDs on mainnet
-- [ ] Update `chipotle-client.ts` endpoints
-- [ ] Deploy to supernodes
-- [ ] E2E test: encrypt → mint → buy → decrypt
+**Phase 1: Lit Mainnet Swap — COMPLETE (Apr 2, 2026)**
+- [x] Create production Lit account
+- [x] Register Lit Action CIDs on mainnet (`QmNayE5MYzXcoMS9nvRk6MUo8r4ESLa3i65vHXzuBsnC2b` in `elacity-ddrm` group)
+- [x] Update `chipotle-client.ts` endpoints (API URL, PKP ID, action CID)
+- [ ] Deploy to supernodes (pending — local dev verified)
+- [x] E2E test: encrypt → mint → buy → decrypt (all asset types verified: PDF, image, video, audio)
 
-**Phase 2: Creator Dashboard Production (1-2 days)**
-- [ ] Verify full publish pipeline on Lit mainnet (file → encrypt → IPFS → mint)
-- [ ] Test capacity credit consumption
-- [ ] Verify channel creation + management
-- [ ] Test both EOA and Agent Wallet minting
+**Phase 2: Creator Dashboard Production — COMPLETE (Apr 2, 2026)**
+- [x] Verify full publish pipeline on Lit mainnet (file → encrypt → IPFS → mint)
+- [x] Test capacity credit consumption ($0.01/operation, $10 funded)
+- [x] Verify channel creation + management
+- [x] Test both EOA and Agent Wallet minting
+- [x] Free content minting (cleartext DASH, no Lit, tokenized on-chain)
 
-**Phase 3: Market App Production (1-2 days)**
-- [ ] Verify purchase + decrypt on Lit mainnet
-- [ ] Test media playback (DASH/CENC pipeline)
-- [ ] Test non-media viewing (images, PDFs, 3D, etc.)
-- [ ] Verify resale flow
+**Phase 3: Market App Production — COMPLETE (Apr 2, 2026)**
+- [x] Verify purchase + decrypt on Lit mainnet
+- [x] Test media playback (DASH/CENC pipeline — video verified)
+- [x] Test non-media viewing (images, PDFs — both verified)
+- [ ] Verify resale flow (blocked — Elacity API intermittently unavailable)
 
-**Phase 4: Wallet Bridge for Elacity (if needed)**
-- Elacity apps already use the PC2 wallet bridge
-- Verify everything still works with latest bridge changes
-- Base chain (chain ID 8453) may need adding to `CHAIN_RPC_URLS` if not already present
+**Phase 4: Wallet Bridge for Elacity — COMPLETE**
+- [x] Elacity apps use PC2 wallet bridge — verified working
+- [x] Base chain (chain ID 8453) present in wallet bridge config
+- [x] Security hardening: injection prevention, rate limiting, promise coalescing
 
 ---
 
@@ -359,15 +360,21 @@ When Runtime v2 capsule architecture is ready:
 
 ## Task Sequence
 
+### Completed (Apr 2, 2026)
+1. ~~**Lit mainnet swap**~~ — ✅ Production account, PKP, group, API keys, Lit Action CIDs configured. E2E verified.
+2. ~~**E2E test Elacity on Lit mainnet**~~ — ✅ All asset types: PDF, image, video, audio. Free content minting added.
+3. ~~**Security hardening audit**~~ — ✅ Injection prevention, rate limiting, promise coalescing, secrets protection.
+4. ~~**Capsule-compatible refactoring**~~ — ✅ Capability vocabulary, structured auth principals, provider interfaces, signature verification (warn-only), wallet bridge origin tracking, dDRM content hashing. See [CAPSULE_COMPATIBILITY.md](../core/CAPSULE_COMPATIBILITY.md).
+
 ### Immediate (This Week)
 1. **Verify Contabo ESC RPC sync status** — SSH check, confirm block height
-2. **Begin Lit mainnet swap** — production account, API keys, Lit Action CIDs
-3. **E2E test Elacity on Lit mainnet** — full pipeline: encrypt → mint → buy → decrypt
+2. **Deploy to supernodes** — InterServer + Contabo with production Lit config
+3. **V3 contract migration** (when Irzhy provides SDK) — update addresses in 8+ locations
 
 ### Short-term (Next 1-2 Weeks)
-4. **Production deploy Elacity** — Creator + Market on Lit mainnet, both supernodes
-5. **V3 contract migration** (when ABIs arrive) — update addresses in 8+ locations
-6. **v1.3 release prep** — merge to main, tag, test on fresh installs
+4. **macOS .dmg code signing** — Apple Developer cert obtained Apr 3. Sign + notarize [elastos-launcher](https://github.com/Elacity/elastos-launcher) .dmg, eliminate `xattr -cr` Terminal workaround
+5. **v1.3 release prep** — merge to main, tag, test on fresh installs
+6. **Decentralized Lit relay** — supernode proxy architecture (API key stays on supernodes)
 
 ### Medium-term (This Month)
 7. **Contabo ESC subgraph** — Graph Node setup (if ESC RPC is synced)
@@ -381,4 +388,4 @@ When Runtime v2 capsule architecture is ready:
 
 ---
 
-*This document is a living strategy guide. Update as external dependencies resolve (V3 contracts, Lit mainnet details, Runtime capsule spec).*
+*This document is a living strategy guide. Updated Apr 3, 2026 — Lit mainnet complete, capsule compatibility refactoring done, Apple Developer cert obtained.*

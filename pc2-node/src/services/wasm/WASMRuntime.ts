@@ -597,8 +597,7 @@ export class WASMRuntime {
 
             logger.debug(`[WASMRuntime] Renderer input: command=${commandJson.length}B, encrypted=${encryptedBytes.length}B`);
 
-            // Run WASI _start with timeout
-            const wasiResult = await this.executeWASIStart(wasmBinary, timeoutMs);
+            const wasiResult = await this.executeWASIStart(wasmBinary, timeoutMs, 'ddrm-renderer');
             if (!wasiResult.success) {
                 return {
                     result: { success: false, error: wasiResult.error ?? 'WASI execution failed' },
@@ -711,7 +710,7 @@ export class WASMRuntime {
             this.writeToMemFS('/input/segment.bin', segmentBytes);
             if (initBytes) this.writeToMemFS('/input/init.bin', initBytes);
 
-            const wasiResult = await this.executeWASIStart(wasmBinary, timeoutMs);
+            const wasiResult = await this.executeWASIStart(wasmBinary, timeoutMs, 'cenc-decrypt');
             if (!wasiResult.success) {
                 return { success: false, decryptedBytes: null, error: wasiResult.error ?? 'WASI execution failed', executionTimeMs: Date.now() - startTime };
             }
@@ -789,7 +788,7 @@ export class WASMRuntime {
             }
             try { this.memFs!.createDir('/output'); } catch { /* may already exist */ }
 
-            const wasiResult = await this.executeWASIStart(wasmBinary, timeoutMs);
+            const wasiResult = await this.executeWASIStart(wasmBinary, timeoutMs, 'cenc-encrypt');
             if (!wasiResult.success) {
                 return { success: false, outputBytes: null, resultJson: null, error: wasiResult.error ?? 'WASI execution failed', executionTimeMs: Date.now() - startTime };
             }
@@ -870,7 +869,7 @@ export class WASMRuntime {
 
             try { this.memFs!.createDir('/output'); } catch { /* may already exist */ }
 
-            const wasiResult = await this.executeWASIStart(wasmBinary, timeoutMs);
+            const wasiResult = await this.executeWASIStart(wasmBinary, timeoutMs, 'ipfs-assemble');
             if (!wasiResult.success) {
                 return { success: false, assembled: null, error: wasiResult.error ?? 'WASI execution failed', executionTimeMs: Date.now() - startTime };
             }
@@ -948,7 +947,7 @@ export class WASMRuntime {
             this.writeToMemFS('/input/fragmented.mp4', mp4Buffer);
             try { this.memFs!.createDir('/output'); } catch { /* may already exist */ }
 
-            const wasiResult = await this.executeWASIStart(wasmBinary, timeoutMs);
+            const wasiResult = await this.executeWASIStart(wasmBinary, timeoutMs, 'mp4-split');
             if (!wasiResult.success) {
                 return { success: false, resultJson: null, initSegment: null, segmentBuffers: new Map(), error: wasiResult.error ?? 'WASI execution failed', executionTimeMs: Date.now() - startTime };
             }
@@ -1008,6 +1007,91 @@ export class WASMRuntime {
     }
 
     /**
+     * Split a multi-track fMP4 init segment into a single-track init
+     * segment inside WASM linear memory (mp4-split "split_init" mode).
+     *
+     * MemFS paths:
+     *   /input/command.json  { mode: "split_init", track_type: "video"|"audio" }
+     *   /input/init.bin      raw multi-track init segment
+     *   /output/result.json  { success, original_size, output_size, tracksRemoved }
+     *   /output/init.bin     single-track init segment
+     */
+    async executeMp4InitSplit(
+        wasmBinary: ArrayBuffer | Uint8Array,
+        initSegment: Buffer,
+        trackType: 'video' | 'audio',
+        options?: { timeoutMs?: number },
+    ): Promise<{ success: boolean; initSegment: Buffer | null; tracksRemoved: number; error?: string; executionTimeMs: number }> {
+        const timeoutMs = options?.timeoutMs ?? this.defaultTimeoutMs;
+        const startTime = Date.now();
+
+        try {
+            await this.acquireExecutionSlot();
+        } catch (error: any) {
+            return { success: false, initSegment: null, tracksRemoved: 0, error: `Queue error: ${error.message}`, executionTimeMs: Date.now() - startTime };
+        }
+
+        try {
+            if (!this.initialized) await this.initialize();
+            this.clearMemFS();
+
+            const commandJson = JSON.stringify({ mode: 'split_init', track_type: trackType });
+            this.writeToMemFS('/input/command.json', Buffer.from(commandJson, 'utf-8'));
+            this.writeToMemFS('/input/init.bin', initSegment);
+            try { this.memFs!.createDir('/output'); } catch { /* may exist */ }
+
+            const wasiResult = await this.executeWASIStart(wasmBinary, timeoutMs, 'mp4-split');
+            if (!wasiResult.success) {
+                return { success: false, initSegment: null, tracksRemoved: 0, error: wasiResult.error ?? 'WASI execution failed', executionTimeMs: Date.now() - startTime };
+            }
+
+            const outputFs = wasiResult.wasiFs;
+            let resultStr: string | null = null;
+            if (outputFs) {
+                const bytes = this.readFromSpecificMemFS(outputFs, '/output/result.json');
+                if (bytes) resultStr = new TextDecoder().decode(bytes);
+            }
+            if (!resultStr) {
+                const bytes = this.readFromMemFS('/output/result.json');
+                if (bytes) resultStr = new TextDecoder().decode(bytes);
+            }
+            if (!resultStr && wasiResult.stdout) resultStr = wasiResult.stdout;
+            if (!resultStr) {
+                return { success: false, initSegment: null, tracksRemoved: 0, error: 'mp4-split split_init produced no output', executionTimeMs: Date.now() - startTime };
+            }
+
+            let result: any;
+            try { result = JSON.parse(resultStr); } catch { result = { success: false, error: 'Invalid result JSON' }; }
+
+            if (!result.success) {
+                return { success: false, initSegment: null, tracksRemoved: 0, error: result.error, executionTimeMs: Date.now() - startTime };
+            }
+
+            let outputInit: Buffer | null = null;
+            let raw: Uint8Array | null = null;
+            if (outputFs) raw = this.readFromSpecificMemFS(outputFs, '/output/init.bin');
+            if (!raw) raw = this.readFromMemFS('/output/init.bin');
+            if (raw) {
+                outputInit = Buffer.from(raw);
+            }
+
+            logger.debug(`[WASMRuntime] mp4-split split_init: ${initSegment.length}B → ${outputInit?.length ?? 0}B, removed ${result.tracksRemoved ?? 0} track(s) in ${Date.now() - startTime}ms`);
+
+            return {
+                success: true,
+                initSegment: outputInit,
+                tracksRemoved: result.tracksRemoved ?? 0,
+                executionTimeMs: Date.now() - startTime,
+            };
+        } catch (error: any) {
+            return { success: false, initSegment: null, tracksRemoved: 0, error: error.message, executionTimeMs: Date.now() - startTime };
+        } finally {
+            this.clearMemFS();
+            this.releaseExecutionSlot();
+        }
+    }
+
+    /**
      * Decrypt-only mode: AES-GCM decryption inside WASM linear memory.
      * Returns raw plaintext bytes — the CEK never touches Node.js memory.
      *
@@ -1050,7 +1134,7 @@ export class WASMRuntime {
 
             logger.debug(`[WASMRuntime] DecryptOnly input: encrypted=${encryptedBytes.length}B`);
 
-            const wasiResult = await this.executeWASIStart(wasmBinary, timeoutMs);
+            const wasiResult = await this.executeWASIStart(wasmBinary, timeoutMs, 'ddrm-renderer');
             if (!wasiResult.success) {
                 return { success: false, decryptedBytes: null, error: wasiResult.error ?? 'WASI execution failed', executionTimeMs: Date.now() - startTime };
             }
@@ -1130,7 +1214,7 @@ export class WASMRuntime {
 
             logger.debug(`[WASMRuntime] Encrypt input: plaintext=${plaintextBytes.length}B`);
 
-            const wasiResult = await this.executeWASIStart(wasmBinary, timeoutMs);
+            const wasiResult = await this.executeWASIStart(wasmBinary, timeoutMs, 'ddrm-renderer');
             if (!wasiResult.success) {
                 return { success: false, encryptedBytes: null, cekBase64: null, ivBase64: null, error: wasiResult.error ?? 'WASI execution failed', executionTimeMs: Date.now() - startTime };
             }
@@ -1212,7 +1296,8 @@ export class WASMRuntime {
      */
     private async executeWASIStart(
         wasmBinary: ArrayBuffer | Uint8Array,
-        timeoutMs: number
+        timeoutMs: number,
+        moduleName?: string
     ): Promise<{ success: boolean; error?: string; wasiFs?: MemFS; stdout?: string }> {
         return new Promise(async (resolve) => {
             let timeoutId: NodeJS.Timeout | null = null;
@@ -1251,9 +1336,16 @@ export class WASMRuntime {
                     logger.debug(`[WASMRuntime] Reusing cached compiled WASM module (${binaryBuffer.byteLength}B)`);
                 }
 
+                const resolvedName = moduleName ?? 'wasm-module';
+                const jobStartTime = Date.now();
+
+                if (binaryBuffer.byteLength > this.defaultMaxMemoryMb * 1024 * 1024 * 0.8) {
+                    logger.warn(`[WASMRuntime] ⚠ Module "${resolvedName}" binary (${(binaryBuffer.byteLength / 1024 / 1024).toFixed(1)}MB) is approaching memory limit (${this.defaultMaxMemoryMb}MB)`);
+                }
+
                 const wasi = new WASI({
                     env: {},
-                    args: ['ddrm-renderer'],
+                    args: [resolvedName],
                     preopens: { '/': '/' },
                     fs: this.memFs!,
                 });
@@ -1264,11 +1356,12 @@ export class WASMRuntime {
                 try {
                     exitCode = wasi.start();
                 } catch (startErr: any) {
-                    // Safety net: check if output was written before the trap
                     const outputExists = this.readFromSpecificMemFS(wasi.fs, '/output/result.json');
                     const stdout = wasi.getStdoutString();
                     if (outputExists || stdout) {
+                        const jobMs = Date.now() - jobStartTime;
                         logger.info(`[WASMRuntime] WASI start() threw but output exists — treating as clean exit: ${startErr.message}`);
+                        logger.info(`[WASMRuntime] 📋 capsule-audit module="${resolvedName}" fingerprint=${fingerprint} exitCode=0(recovered) duration=${jobMs}ms size=${binaryBuffer.byteLength}B`);
                         if (!completed) {
                             completed = true;
                             if (timeoutId) clearTimeout(timeoutId);
@@ -1279,7 +1372,9 @@ export class WASMRuntime {
                     throw startErr;
                 }
 
+                const jobMs = Date.now() - jobStartTime;
                 const stdout = wasi.getStdoutString();
+                logger.info(`[WASMRuntime] 📋 capsule-audit module="${resolvedName}" fingerprint=${fingerprint} exitCode=${exitCode} duration=${jobMs}ms size=${binaryBuffer.byteLength}B`);
                 logger.debug(`[WASMRuntime] WASI module exited with code ${exitCode}`);
 
                 if (!completed) {
@@ -1365,7 +1460,7 @@ export class WASMRuntime {
             this.writeToMemFS('/input/command.json', Buffer.from(commandJson, 'utf-8'));
             try { this.memFs!.createDir('/output'); } catch { /* may exist */ }
 
-            const wasiResult = await this.executeWASIStart(wasmBinary, timeoutMs);
+            const wasiResult = await this.executeWASIStart(wasmBinary, timeoutMs, 'evm-multicall');
             if (!wasiResult.success) {
                 return { success: false, error: wasiResult.error ?? 'WASI execution failed', executionTimeMs: Date.now() - startTime };
             }
@@ -1444,7 +1539,7 @@ export class WASMRuntime {
             this.writeToMemFS('/input/command.json', Buffer.from(commandJson, 'utf-8'));
             try { this.memFs!.createDir('/output'); } catch { /* may exist */ }
 
-            const wasiResult = await this.executeWASIStart(wasmBinary, timeoutMs);
+            const wasiResult = await this.executeWASIStart(wasmBinary, timeoutMs, 'amm-engine');
             if (!wasiResult.success) {
                 return { success: false, error: wasiResult.error ?? 'WASI execution failed', executionTimeMs: Date.now() - startTime };
             }

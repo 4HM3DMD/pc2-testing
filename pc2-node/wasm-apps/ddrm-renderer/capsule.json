@@ -1,0 +1,19 @@
+{
+  "name": "ddrm-renderer",
+  "version": "1.0.0",
+  "description": "AES-GCM decrypt + render (image/text/PDF/code) for dDRM content",
+  "target": "wasm32-wasip1",
+  "binary": "ddrm-renderer.wasm",
+  "sha256": null,
+  "capabilities": ["drm:decrypt", "drm:render", "drm:encrypt"],
+  "provider_operations": ["drm:decrypt", "drm:render", "drm:encrypt-content"],
+  "memfs": {
+    "input": ["/input/command.json", "/input/encrypted.bin", "/input/plaintext.bin"],
+    "output": ["/output/result.json", "/output/rendered.bin", "/output/decrypted.bin", "/output/encrypted.bin"]
+  },
+  "runtime_compatibility": {
+    "wasi_preview": 1,
+    "entry": "_start",
+    "capsule_type": "wasm"
+  }
+}

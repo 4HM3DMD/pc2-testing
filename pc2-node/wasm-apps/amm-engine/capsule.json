@@ -1,0 +1,19 @@
+{
+  "name": "amm-engine",
+  "version": "1.0.0",
+  "description": "Uniswap V2-style AMM math — local quotes and routing",
+  "target": "wasm32-wasip1",
+  "binary": "amm-engine.wasm",
+  "sha256": null,
+  "capabilities": ["compute:wasm"],
+  "provider_operations": ["compute:amm"],
+  "memfs": {
+    "input": ["/input/command.json"],
+    "output": ["/output/result.json"]
+  },
+  "runtime_compatibility": {
+    "wasi_preview": 1,
+    "entry": "_start",
+    "capsule_type": "wasm"
+  }
+}

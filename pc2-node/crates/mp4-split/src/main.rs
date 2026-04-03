@@ -11,7 +11,7 @@
 //!         /output/init.bin      init segment (ftyp + moov + free/skip)
 //!         /output/seg-{trackId}-{index}.bin   each moof+mdat pair
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::process;
 
@@ -325,7 +325,240 @@ fn parse_moof_duration(buf: &[u8], moof_content: usize, moof_end: usize) -> (u64
     (total_duration, sample_count)
 }
 
+// ── split_init mode ──────────────────────────────────────────────────
+// Reads /input/command.json and /input/init.bin, strips all trak boxes
+// except the one matching `track_type` ("video" or "audio"), rebuilds
+// moov (keeping mvhd + target trak + filtered mvex + udta), and writes
+// the result to /output/init.bin + /output/result.json.
+
+#[derive(Deserialize)]
+struct Command {
+    mode: String,
+    #[serde(default)]
+    track_type: Option<String>,
+}
+
+#[derive(Serialize)]
+struct InitSplitResult {
+    success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    original_size: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output_size: Option<usize>,
+    #[serde(rename = "tracksRemoved", skip_serializing_if = "Option::is_none")]
+    tracks_removed: Option<usize>,
+}
+
+fn write_u32_be(val: u32) -> [u8; 4] {
+    val.to_be_bytes()
+}
+
+fn get_handler_type(buf: &[u8], trak_start: usize, trak_end: usize) -> Option<[u8; 4]> {
+    let (mdia_off, mdia_size, mdia_hs) = find_box(buf, trak_start, trak_end, b"mdia")?;
+    let mdia_end = mdia_off + mdia_size;
+    let (hdlr_off, _, hdlr_hs) = find_box(buf, mdia_off + mdia_hs, mdia_end, b"hdlr")?;
+    let h = hdlr_off + hdlr_hs + 8; // version/flags(4) + pre_defined(4)
+    if h + 4 <= buf.len() {
+        let mut ht = [0u8; 4];
+        ht.copy_from_slice(&buf[h..h + 4]);
+        Some(ht)
+    } else {
+        None
+    }
+}
+
+fn get_tkhd_track_id(buf: &[u8], trak_start: usize, trak_end: usize) -> u32 {
+    if let Some((tkhd_off, _, tkhd_hs)) = find_box(buf, trak_start, trak_end, b"tkhd") {
+        let tc = tkhd_off + tkhd_hs;
+        let version = buf[tc];
+        if version == 1 {
+            read_u32(buf, tc + 20)
+        } else {
+            read_u32(buf, tc + 12)
+        }
+    } else {
+        0
+    }
+}
+
+fn run_split_init(command: &Command) -> Result<(), String> {
+    let track_type = command.track_type.as_deref().unwrap_or("video");
+    let target_handler: &[u8; 4] = if track_type == "audio" { b"soun" } else { b"vide" };
+
+    let buf = fs::read("/input/init.bin")
+        .map_err(|e| format!("failed to read /input/init.bin: {e}"))?;
+
+    // Parse top-level boxes
+    let mut ftyp_range: Option<(usize, usize)> = None;
+    let mut moov_range: Option<(usize, usize)> = None;
+    let mut pos = 0usize;
+
+    while pos < buf.len() {
+        let bh = match read_box_header(&buf, pos) {
+            Some(b) if b.size >= 8 => b,
+            _ => break,
+        };
+        match box_type_str(&bh.box_type) {
+            "ftyp" => { ftyp_range = Some((pos, pos + bh.size)); }
+            "moov" => { moov_range = Some((pos, pos + bh.size)); }
+            _ => {}
+        }
+        pos += bh.size;
+    }
+
+    let (ftyp_start, ftyp_end) = ftyp_range
+        .ok_or_else(|| "no ftyp box in init segment".to_string())?;
+    let (moov_start, moov_end) = moov_range
+        .ok_or_else(|| "no moov box in init segment".to_string())?;
+
+    // Parse moov children
+    struct BoxRef { pos: usize, size: usize, box_type: [u8; 4] }
+    let mut moov_children: Vec<BoxRef> = Vec::new();
+    let mut mpos = moov_start + 8;
+    while mpos < moov_end {
+        let bh = match read_box_header(&buf, mpos) {
+            Some(b) if b.size >= 8 => b,
+            _ => break,
+        };
+        moov_children.push(BoxRef { pos: mpos, size: bh.size, box_type: bh.box_type });
+        mpos += bh.size;
+    }
+
+    let traks: Vec<&BoxRef> = moov_children.iter()
+        .filter(|c| &c.box_type == b"trak")
+        .collect();
+
+    if traks.len() <= 1 {
+        // Single track — nothing to split, copy as-is
+        fs::create_dir_all("/output").ok();
+        fs::write("/output/init.bin", &buf[..])
+            .map_err(|e| format!("write init.bin: {e}"))?;
+        let result = InitSplitResult {
+            success: true, error: None,
+            original_size: Some(buf.len()),
+            output_size: Some(buf.len()),
+            tracks_removed: Some(0),
+        };
+        fs::write("/output/result.json", serde_json::to_string(&result).unwrap())
+            .map_err(|e| format!("write result.json: {e}"))?;
+        return Ok(());
+    }
+
+    // Find the target trak
+    let mut target_trak_idx: Option<usize> = None;
+    let mut target_track_id: u32 = 0;
+
+    for (i, trak) in traks.iter().enumerate() {
+        let hs = read_box_header(&buf, trak.pos).map(|h| h.header_size).unwrap_or(8);
+        if let Some(ht) = get_handler_type(&buf, trak.pos + hs, trak.pos + trak.size) {
+            if &ht == target_handler {
+                target_trak_idx = Some(i);
+                target_track_id = get_tkhd_track_id(&buf, trak.pos + hs, trak.pos + trak.size);
+                break;
+            }
+        }
+    }
+
+    let target_idx = target_trak_idx
+        .ok_or_else(|| format!("no {} trak found in moov", track_type))?;
+    let target_trak = traks[target_idx];
+
+    // Rebuild moov: keep mvhd, target trak, filtered mvex, udta, etc.
+    let mut moov_parts: Vec<u8> = Vec::new();
+
+    for child in &moov_children {
+        let ctype = box_type_str(&child.box_type);
+        match ctype {
+            "mvhd" | "udta" | "pssh" => {
+                moov_parts.extend_from_slice(&buf[child.pos..child.pos + child.size]);
+            }
+            "trak" => {
+                if child.pos == target_trak.pos {
+                    moov_parts.extend_from_slice(&buf[child.pos..child.pos + child.size]);
+                }
+            }
+            "mvex" => {
+                // Rebuild mvex: keep mehd + trex for target track only
+                let mvex_hs = read_box_header(&buf, child.pos)
+                    .map(|h| h.header_size).unwrap_or(8);
+                let mvex_end = child.pos + child.size;
+                let mut mvex_inner: Vec<u8> = Vec::new();
+
+                let mut mp = child.pos + mvex_hs;
+                while mp < mvex_end {
+                    let mbh = match read_box_header(&buf, mp) {
+                        Some(b) if b.size >= 8 => b,
+                        _ => break,
+                    };
+                    let mt = box_type_str(&mbh.box_type);
+                    if mt == "mehd" {
+                        mvex_inner.extend_from_slice(&buf[mp..mp + mbh.size]);
+                    } else if mt == "trex" && target_track_id > 0 {
+                        // trex: header(8) + version/flags(4) + track_id(4)
+                        let trex_tid = read_u32(&buf, mp + 12);
+                        if trex_tid == target_track_id {
+                            mvex_inner.extend_from_slice(&buf[mp..mp + mbh.size]);
+                        }
+                    } else if mt == "trex" && target_track_id == 0 {
+                        mvex_inner.extend_from_slice(&buf[mp..mp + mbh.size]);
+                    }
+                    mp += mbh.size;
+                }
+
+                if !mvex_inner.is_empty() {
+                    let mvex_size = (8 + mvex_inner.len()) as u32;
+                    moov_parts.extend_from_slice(&write_u32_be(mvex_size));
+                    moov_parts.extend_from_slice(b"mvex");
+                    moov_parts.extend_from_slice(&mvex_inner);
+                }
+            }
+            _ => {
+                // Keep unknown boxes (iods, etc.)
+                moov_parts.extend_from_slice(&buf[child.pos..child.pos + child.size]);
+            }
+        }
+    }
+
+    // Build output: ftyp + rebuilt moov
+    let moov_total = (8 + moov_parts.len()) as u32;
+    let mut output: Vec<u8> = Vec::new();
+    output.extend_from_slice(&buf[ftyp_start..ftyp_end]);
+    output.extend_from_slice(&write_u32_be(moov_total));
+    output.extend_from_slice(b"moov");
+    output.extend_from_slice(&moov_parts);
+
+    let tracks_removed = traks.len() - 1;
+
+    fs::create_dir_all("/output").ok();
+    fs::write("/output/init.bin", &output)
+        .map_err(|e| format!("write init.bin: {e}"))?;
+
+    let result = InitSplitResult {
+        success: true, error: None,
+        original_size: Some(buf.len()),
+        output_size: Some(output.len()),
+        tracks_removed: Some(tracks_removed),
+    };
+    fs::write("/output/result.json", serde_json::to_string(&result).unwrap())
+        .map_err(|e| format!("write result.json: {e}"))?;
+
+    Ok(())
+}
+
+// ── Original mp4-split mode ────────────────────────────────────────────
+
 fn run() -> Result<(), String> {
+    // Check for command.json to detect split_init mode
+    if let Ok(cmd_bytes) = fs::read("/input/command.json") {
+        if let Ok(cmd) = serde_json::from_slice::<Command>(&cmd_bytes) {
+            if cmd.mode == "split_init" {
+                return run_split_init(&cmd);
+            }
+        }
+    }
+
     let buf = fs::read("/input/fragmented.mp4")
         .map_err(|e| format!("failed to read /input/fragmented.mp4: {e}"))?;
 
@@ -444,16 +677,33 @@ fn main() {
         Ok(()) => {}
         Err(err) => {
             fs::create_dir_all("/output").ok();
-            let result = ResultOutput {
-                success: false,
-                error: Some(err.clone()),
-                tracks: None,
-                segments: None,
-                total_duration: None,
-                init_size: None,
-            };
-            let json = serde_json::to_string(&result).unwrap();
-            let _ = fs::write("/output/result.json", &json);
+
+            // Detect if we were in split_init mode based on command.json
+            let is_split_init = fs::read("/input/command.json").ok()
+                .and_then(|b| serde_json::from_slice::<Command>(&b).ok())
+                .map_or(false, |c| c.mode == "split_init");
+
+            if is_split_init {
+                let result = InitSplitResult {
+                    success: false,
+                    error: Some(err.clone()),
+                    original_size: None,
+                    output_size: None,
+                    tracks_removed: None,
+                };
+                let _ = fs::write("/output/result.json", serde_json::to_string(&result).unwrap());
+            } else {
+                let result = ResultOutput {
+                    success: false,
+                    error: Some(err.clone()),
+                    tracks: None,
+                    segments: None,
+                    total_duration: None,
+                    init_size: None,
+                };
+                let _ = fs::write("/output/result.json", serde_json::to_string(&result).unwrap());
+            }
+
             eprintln!("mp4-split error: {err}");
             process::exit(1);
         }

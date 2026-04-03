@@ -25,6 +25,19 @@ export interface AuthenticatedRequest extends Request {
     scopes: string[];
     name: string;
   };
+  principal?: CapabilityPrincipal;
+}
+
+/**
+ * Structured auth principal with typed capabilities.
+ * v1: user sessions get FULL_CAPABILITY_SET (backward compatible).
+ * v2+: apps receive only their declared manifest capabilities.
+ * Maps to ElastOS Runtime capability tokens.
+ */
+export interface CapabilityPrincipal {
+  type: 'user' | 'apiKey' | 'app';
+  wallet_address: string;
+  scopes: string[];
 }
 
 /**
@@ -463,6 +476,85 @@ export function corsMiddleware(
   if (req.method === 'OPTIONS') {
     res.status(allowed ? 200 : 403).end();
     return;
+  }
+
+  next();
+}
+
+/**
+ * Capability-aware middleware factory.
+ * Checks that req.principal has the required scope before allowing access.
+ *
+ * In v1, this is advisory — user sessions get all scopes by default.
+ * Wire on sensitive routes (e.g. DRM, wallet) as the first enforcement points.
+ * In v2+, apps will only have their manifest-declared scopes.
+ *
+ * Usage: router.post('/lit/secure-view', authenticate, requireCapability('drm:decrypt'), handler)
+ */
+export function requireCapability(scope: string) {
+  return function (req: AuthenticatedRequest, res: Response, next: NextFunction): void {
+    if (!req.principal) {
+      logger.warn('[Capability] No principal on request — authenticate middleware may be missing', {
+        path: req.path,
+        requiredScope: scope,
+      });
+      res.status(401).json({ error: 'Authentication required' });
+      return;
+    }
+
+    if (!req.principal.scopes.includes(scope)) {
+      logger.warn('[Capability] Scope denied', {
+        path: req.path,
+        principalType: req.principal.type,
+        requiredScope: scope,
+        grantedScopes: req.principal.scopes.join(', '),
+      });
+      res.status(403).json({
+        error: 'Insufficient capabilities',
+        required: scope,
+        granted: req.principal.scopes,
+      });
+      return;
+    }
+
+    next();
+  };
+}
+
+/**
+ * Populates req.principal from req.user / req.apiKey.
+ * Call after authenticate(). Separates auth (who are you?) from
+ * authorization (what can you do?).
+ *
+ * v1 behavior: user sessions receive all scopes. API keys receive
+ * their declared scopes. This ensures zero breakage.
+ */
+export function populatePrincipal(
+  req: AuthenticatedRequest,
+  _res: Response,
+  next: NextFunction
+): void {
+  if (req.apiKey) {
+    req.principal = {
+      type: 'apiKey',
+      wallet_address: req.apiKey.wallet_address,
+      scopes: req.apiKey.scopes,
+    };
+  } else if (req.user) {
+    req.principal = {
+      type: 'user',
+      wallet_address: req.user.wallet_address,
+      scopes: [
+        'storage:read', 'storage:write',
+        'ipfs:fetch', 'ipfs:pin',
+        'wallet:read', 'wallet:sign',
+        'drm:decrypt', 'drm:encrypt',
+        'compute:wasm', 'compute:ai',
+        'network:rpc',
+        'ipc:launch', 'ipc:message',
+        'identity:auth',
+      ],
+    };
   }
 
   next();

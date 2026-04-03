@@ -2,7 +2,7 @@
 
 > **Purpose:** Single source of truth for all strategic goals, technical work streams, and milestones — directly mapped to the Keystone Fund proposal and Rong Chen's original vision
 > **Created:** 2026-02-24
-> **Last Updated:** 2026-04-02
+> **Last Updated:** 2026-04-03
 > **Status:** Living document — update as work progresses
 
 ---
@@ -25,6 +25,7 @@ Each **Milestone** from the DAO proposal is broken down into concrete **Work Str
 | [POST_QUANTUM_AUDIT.md](./POST_QUANTUM_AUDIT.md) | PQ crypto audit, vulnerability map, Lit replacement strategy, migration roadmap |
 | [ARM_DEVICES.md](../deployment/ARM_DEVICES.md) | Jetson/Raspberry Pi deployment |
 | [ELASTOS_AGENT_REFERENCE.md](./ELASTOS_AGENT_REFERENCE.md) | Complete agent reference: why/how/what, talking points, competitive positioning, audience angles |
+| [CAPSULE_COMPATIBILITY.md](./CAPSULE_COMPATIBILITY.md) | PC2 v1 capsule compatibility assessment, Runtime study, provider mapping, refactoring inventory |
 | [elastos-runtime](https://github.com/Elacity/elastos-runtime) | Anders' Rust runtime: capsule model, capability tokens, Carrier P2P, namespace, architecture |
 
 ---
@@ -309,7 +310,7 @@ These diagrams from Rong define the north star. Every work stream should move us
 - [ ] Raspberry Pi 4/5 validation and optimization
 - [ ] Explore dedicated DePIN hardware partnerships (plug-and-play boxes)
 - [ ] Debian package (.deb) for ARM devices
-- [ ] macOS package (.dmg) for desktop users — needs Apple Developer cert ($99/year)
+- [ ] macOS package (.dmg) for desktop users — **Apple Developer cert obtained Apr 3, 2026**. [elastos-launcher](https://github.com/Elacity/elastos-launcher) (v1.1.1) ships .dmg but currently requires `xattr -cr` Terminal workaround. Next: code-sign + notarize via Apple Developer cert → users just double-click .dmg, no Terminal needed
 - [ ] Windows native installer (.exe) — after WSL is solid
 
 **Carrier Overlay Network:**
@@ -385,6 +386,13 @@ These diagrams from Rong define the north star. Every work stream should move us
 - [x] **Audit logging for AI actions** — `agent_audit_log` SQLite table (migration 22) with `agent_id`, `action`, `detail` (JSON), `source`, `session_key`. Logs `skill_load` (with hash, verification status) and `message_processed` events. `GET /api/gateway/audit` endpoint (paginated, filterable). 30-day retention cleanup on server startup. *(completed Mar 23)*
 - [x] **App capability manifests** — all 7 app.json files enriched with `api_endpoints`, `postMessage_events`, and `external_services` fields documenting actual API contract per app. `APP_MANIFEST_SPEC.md` updated with new field definitions and Runtime v2 mapping notes. *(completed Mar 23)*
 - [x] **Agent namespace alignment** — `docs/core/NAMESPACE_MAPPING.md` created with complete path mapping table (user space, agent space, system space, public space). `GatewayService.validateAgentWorkspace()` logs warning for non-standard paths. No actual path changes — documentation + validation only. *(completed Mar 23)*
+- [x] **Capsule-compatible refactoring (Apr 3)** — Introduced Runtime-compatible concepts at every major trust boundary without breaking existing functionality. See [CAPSULE_COMPATIBILITY.md](./CAPSULE_COMPATIBILITY.md) for full inventory:
+  - [x] **Unified capability vocabulary** — `CAPABILITY_SCOPES` constant in `pc2-node/src/types/capabilities.ts` maps 1:1 to Runtime capability token `action` fields. Single vocabulary shared across app manifests, API key scopes, and wallet bridge method classification
+  - [x] **Structured auth principals** — `CapabilityPrincipal` interface in `middleware.ts` with `type` (user/apiKey/app), `capabilities`, and `scopes`. V1 sessions get full capability set (backward compatible). `requireCapability()` middleware factory for opt-in per-route enforcement
+  - [x] **Ed25519 signature verification** — `verifyDistributionSignature()` in `AppInstallService.ts` checks `distribution.signature` on app bundles. Uses existing `tweetnacl` dependency. Warn-only in v1 (unsigned apps still install), enforced in v2
+  - [x] **Provider operation interfaces** — TypeScript interfaces in `pc2-node/src/services/providers/types.ts` formalizing Runtime's stdin/stdout JSON protocol: `DRMProvider`, `StorageProvider`, `IdentityProvider`, `ComputeProvider`
+  - [x] **Wallet bridge origin tracking** — Origin validation and RPC method capability classification in `pc2-wallet-bridge.js`. Warns on unregistered origins and classifies methods as `wallet:read`, `wallet:sign`, or `network:rpc`
+  - [x] **dDRM capsule content hashing** — `capsuleHash` (SHA-256) and `signedBy` (creator wallet) fields added to `.ddrm` capsule creation in Creator app. Makes capsules content-addressable for future Runtime data capsule model
 
 **Runtime Audit Findings (Mar 31 — First Public Release):**
 > Comprehensive audit of [github.com/Elacity/elastos-runtime](https://github.com/Elacity/elastos-runtime) completed. Key strategic findings:
@@ -698,7 +706,7 @@ These diagrams from Rong define the north star. Every work stream should move us
 | Namespace model (`localhost://`, `elastos://`) | **Documented** | `localhost://Users/`, `UsersAI/`, `AppCapsules/`, `WebSpaces/`, `MyWebSite` all defined |
 | Host adapter model | **Documented** | Server/headless (= our PC2 Node.js), desktop, mobile, kiosk modes defined |
 | Blockchain integration | **Next** | No EVM wallet, no on-chain verification yet. Dependency for ACCESS_TOKEN → capability token bridge |
-| macOS packaging | **Not started** | Runtime compiles on macOS, WASM capsules have full security model. Homebrew/code signing/notarization not yet done |
+| macOS packaging | **Unblocked** | Apple Developer cert obtained Apr 3, 2026. Runtime compiles on macOS, WASM capsules have full security model. [elastos-launcher](https://github.com/Elacity/elastos-launcher) .dmg ready for code signing + notarization |
 
 **Runtime Integration (v2.0.0 convergence):**
 - [ ] PC2 desktop as Shell capsule — Puter runs inside Runtime as the orchestrator

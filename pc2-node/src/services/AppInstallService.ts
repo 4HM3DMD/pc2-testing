@@ -7,6 +7,8 @@
 
 import { existsSync, mkdirSync, writeFileSync, readFileSync, rmSync, readdirSync, statSync } from 'fs';
 import { join, resolve, basename, normalize } from 'path';
+import { createHash } from 'crypto';
+import nacl from 'tweetnacl';
 import { createLogger } from '../utils/logger.js';
 import { DatabaseManager, InstalledApp } from '../storage/database.js';
 import { IPFSStorage } from '../storage/ipfs.js';
@@ -169,6 +171,8 @@ export class AppInstallService {
       throw new Error(`App bundle exceeds ${MAX_APP_SIZE_BYTES / 1024 / 1024}MB limit`);
     }
 
+    const signatureVerified = this.verifyDistributionSignature(manifest, bundleBuffer);
+
     if (existsSync(appDir)) {
       rmSync(appDir, { recursive: true, force: true });
     }
@@ -201,7 +205,10 @@ export class AppInstallService {
       author: resolveAuthorName(manifest.author),
       permissions_json: JSON.stringify(manifest.capabilities || manifest.permissions || []),
       requirements_json: JSON.stringify(manifest.requirements || {}),
-      manifest_json: JSON.stringify(manifest),
+      manifest_json: JSON.stringify({
+        ...manifest,
+        _signatureVerified: signatureVerified,
+      }),
       installed_at: now,
       updated_at: now,
     };
@@ -210,6 +217,56 @@ export class AppInstallService {
 
     log.info(`[install] ✅ "${appName}" v${manifest.version} installed (${(totalSize / 1024).toFixed(1)} KB)`);
     return installedApp;
+  }
+
+  /**
+   * Verify Ed25519 signature on an app bundle if distribution.signature is present.
+   * v1: warn-only — unsigned apps still install. v2: enforced.
+   *
+   * Signature is verified over SHA-256(bundleBytes) using the public key
+   * from distribution.signedBy (hex-encoded Ed25519 public key).
+   *
+   * @returns true if signature is valid, false if absent or invalid
+   */
+  private verifyDistributionSignature(manifest: AppManifest, bundleBuffer: Buffer): boolean {
+    const dist = manifest.distribution;
+    if (!dist?.signature || !dist?.signedBy) {
+      log.warn(`[install] ⚠ Unsigned app bundle: "${manifest.name}" — capsule-unsigned installs will be blocked in v2`);
+      return false;
+    }
+
+    try {
+      const bundleHash = createHash('sha256').update(bundleBuffer).digest();
+      const signatureBytes = Buffer.from(dist.signature, 'hex');
+      const publicKeyBytes = Buffer.from(dist.signedBy, 'hex');
+
+      if (publicKeyBytes.length !== 32) {
+        log.warn(`[install] ⚠ Invalid signedBy key length for "${manifest.name}": expected 32 bytes, got ${publicKeyBytes.length}`);
+        return false;
+      }
+
+      if (signatureBytes.length !== 64) {
+        log.warn(`[install] ⚠ Invalid signature length for "${manifest.name}": expected 64 bytes, got ${signatureBytes.length}`);
+        return false;
+      }
+
+      const valid = nacl.sign.detached.verify(
+        new Uint8Array(bundleHash),
+        new Uint8Array(signatureBytes),
+        new Uint8Array(publicKeyBytes)
+      );
+
+      if (valid) {
+        log.info(`[install] ✅ Signature verified for "${manifest.name}" (signed by ${dist.signedBy.substring(0, 16)}...)`);
+      } else {
+        log.warn(`[install] ⚠ Signature INVALID for "${manifest.name}" — bundle may have been tampered with`);
+      }
+
+      return valid;
+    } catch (err: any) {
+      log.warn(`[install] ⚠ Signature verification failed for "${manifest.name}": ${err.message}`);
+      return false;
+    }
   }
 
   /**

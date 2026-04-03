@@ -401,7 +401,7 @@ router.post('/segment', async (req: AuthenticatedRequest, res: Response) => {
 
       // Split multi-track init to single-track for MSE compatibility.
       // MSE requires each SourceBuffer to receive only its own track.
-      cleanInit = splitInitForTrack(cleanInit, track.type);
+      cleanInit = await splitInitForTrackWithFallback(cleanInit, track.type);
 
       res.setHeader('Content-Type', 'video/mp4');
       res.setHeader('Content-Length', String(cleanInit.length));
@@ -627,12 +627,44 @@ function extractPSSHJson(initSegment: Buffer): Array<{ protectionType: string; d
 const FALLBACK_IPFS_GATEWAY = 'https://ipfs.ela.city/ipfs/';
 
 /**
+ * WASM-first init segment splitting with JS fallback.
+ * Tries the mp4-split WASM module's split_init mode for performance and
+ * to keep binary data out of V8's GC heap. Falls back to the JS
+ * implementation if WASM is unavailable or fails.
+ */
+async function splitInitForTrackWithFallback(initSegment: Buffer, trackType: 'video' | 'audio'): Promise<Buffer> {
+  try {
+    const wasmBinary = await loadMp4SplitWasmBinary();
+    const wasmRuntime = getWASMRuntime();
+    const result = await wasmRuntime.executeMp4InitSplit(
+      wasmBinary,
+      initSegment,
+      trackType,
+      { timeoutMs: 10000 },
+    );
+
+    if (result.success && result.initSegment) {
+      logger.info(`[media/split] WASM split_init for ${trackType}: ${initSegment.length}B → ${result.initSegment.length}B (removed ${result.tracksRemoved} track(s), ${result.executionTimeMs}ms)`);
+      return result.initSegment;
+    }
+
+    logger.warn(`[media/split] WASM split_init failed (${result.error}), falling back to JS`);
+  } catch (wasmErr: any) {
+    logger.warn(`[media/split] WASM split_init error: ${wasmErr.message}, falling back to JS`);
+  }
+
+  return splitInitForTrack(initSegment, trackType);
+}
+
+/**
  * Split a multi-track fMP4 init segment into a single-track init segment.
  *
  * MSE requires each SourceBuffer to receive an init segment containing only
  * its own track. When Bento4's mp4fragment produces a shared init segment
  * (both video and audio trak boxes inside the same moov), we must rebuild
  * moov to contain only the requested track.
+ *
+ * JS fallback implementation — kept for robustness if WASM path fails.
  *
  * @param initSegment  The full multi-track init segment (ftyp + moov).
  * @param trackType    'video' or 'audio' — determines which trak to keep.
@@ -782,6 +814,22 @@ async function fetchSegmentBytes(url: string, ipfsService?: any): Promise<Buffer
 
   throw new Error(`Failed to fetch segment: ${response.status} ${response.statusText}`);
 }
+
+let cachedMp4SplitWasmBinary: ArrayBuffer | null = null;
+
+async function loadMp4SplitWasmBinary(): Promise<ArrayBuffer> {
+  if (cachedMp4SplitWasmBinary) return cachedMp4SplitWasmBinary;
+  const wasmPath = pathResolve(__dirname, '../../wasm-apps/mp4-split/mp4-split.wasm');
+  if (!existsSync(wasmPath)) {
+    throw new Error(`mp4-split WASM not found: ${wasmPath}`);
+  }
+  cachedMp4SplitWasmBinary = readFileSync(wasmPath).buffer;
+  return cachedMp4SplitWasmBinary;
+}
+
+loadMp4SplitWasmBinary().catch((err) =>
+  logger.warn(`[media] mp4-split WASM preload skipped: ${err.message}`)
+);
 
 let cachedCENCWasmBinary: ArrayBuffer | null = null;
 
