@@ -20,9 +20,12 @@
 11. [Wallet Bridge — Multi-Chain, Multi-Wallet, Capability-Ready](#wallet-bridge)
 12. [dDRM Security Hardening — 7 Vulnerabilities Closed](#ddrm-security-hardening)
 13. [Apple Developer Program — macOS Distribution Unblocked](#apple-developer-program)
-14. [Documentation & Strategy](#documentation--strategy)
-15. [What's Next](#whats-next)
-16. [Summary Statistics](#summary-statistics)
+14. [Elastos Documentation Portal — docs.elastos.net](#elastos-documentation-portal--docselastosnet)
+15. [KuMining Partnership — ELA Merge-Mining on KuCoin](#kumining-partnership--ela-merge-mining-on-kucoin)
+16. [Ecosystem Operations & Community](#ecosystem-operations--community)
+17. [Documentation & Strategy](#documentation--strategy)
+18. [What's Next](#whats-next)
+19. [Summary Statistics](#summary-statistics)
 
 ---
 
@@ -36,7 +39,9 @@ This was the week where PC2 went from "impressive demo" to "production-ready pip
 
 3. **A deep study of Anders' ElastOS Runtime** produced concrete capsule-compatible refactoring — not theoretical planning, but actual code that runs today while being designed to slot into Runtime v2 capsules when ready.
 
-**In plain English:** We connected to the production encryption network, proved that other people's apps can run on our system, and started building the bridge between today's PC2 and tomorrow's capsule-based Runtime — all without breaking a single existing feature.
+4. **The Elastos Documentation Portal ([docs.elastos.net](https://docs.elastos.net)) launched**, giving the entire ecosystem a unified, AI-searchable, version-controlled documentation home for the first time. And ELA merge-mining went live on KuCoin's KuMining platform, expanding accessibility for miners.
+
+**In plain English:** We connected to the production encryption network, proved that other people's apps can run on our system, started building the bridge between today's PC2 and tomorrow's capsule-based Runtime, shipped the ecosystem's first proper documentation portal, and landed a mining partnership with a top exchange — all without breaking a single existing feature.
 
 ---
 
@@ -485,6 +490,85 @@ Every RPC request is now tagged with the requesting iframe's origin. Methods are
 
 ---
 
+## Elastos Documentation Portal — docs.elastos.net
+
+**Why this matters:** For years, Elastos ecosystem information has been scattered across dozens of GitHub repositories, archived websites, legacy documentation, and separate project pages. Developers evaluating the stack had no clear starting point. Node operators couldn't find setup guides. Community members couldn't answer basic questions without asking on Telegram. A fragmented knowledge base is an adoption killer.
+
+**What was built (Mar 31 – Apr 3):**
+
+### A Unified Documentation Home
+The new portal at [docs.elastos.net](https://docs.elastos.net) is structured around the four core pillars of the Elastos stack:
+
+| Pillar | Coverage |
+|--------|----------|
+| **Blockchain** | ELA main chain, ESC, EID, staking, cross-chain activity, DAO governance |
+| **PC2** | Personal Cloud Computer — wallet-based access, storage, local AI, user infrastructure |
+| **Runtime** | Execution layer — application permissions, sandboxing, SmartWeb security model |
+| **Carrier** | Networking layer — peer discovery, NAT traversal, encrypted connections, Boson Network |
+
+### Three Audience Paths
+Rather than forcing everyone through the same technical documentation, the portal is organized by intent:
+- **Use** — For non-developers: wallet setup, staking, governance participation, node setup, PC2 installation
+- **Build** — For developers: smart contracts, DIDs, wallets, storage, peer-to-peer systems
+- **Reference** — Technical material: protocol details, architecture, repository status, deprecation history
+
+### AI-Assisted Search
+The portal includes both full-text search and an **AI assistant** that answers questions using the documentation content itself. Questions like "How do I set up a node?", "What is the difference between ESC and EID?", or "How does ELA staking work?" get answered directly from the docs.
+
+### Repository Inventory
+One of the most important features: a structured view of **all public repositories** across the Elastos and CyberRepublic GitHub organizations with status indicators (active, maintained, stale, archived, forked, deprecated). This prevents developers from accidentally building on outdated or replaced components.
+
+### Built for Long-Term Maintenance
+- Version-controlled and searchable
+- Includes `llms.txt` so AI tools and LLM-based systems can interpret the documentation programmatically
+- Video demonstration created showing search and AI assistant in action
+- Custom announcement banners designed for the portal launch
+
+### Launch
+- [Blog announcement](http://blog.elastos.net/announcement/documentation-portal-live/) published April 3
+- Shared across X, Telegram, and Reddit
+- Community update posted to build awareness ahead of launch
+
+---
+
+## KuMining Partnership — ELA Merge-Mining on KuCoin
+
+**Why this matters:** ELA's security comes from Bitcoin merge-mining — the same miners who secure Bitcoin also secure Elastos. But accessing merge-mining has historically required technical setup. KuMining (KuCoin's cloud mining platform) removes this barrier entirely, letting users participate in ELA mining through a familiar exchange interface.
+
+**What happened (Apr 1–2):**
+- **Partnership finalized** — ELA merge-mining is now available on KuCoin's KuMining platform
+- **Announcement published** — KuCoin Mining announcement created and shared across all channels
+- **Custom banners** — 2 branded banners designed for the KuMining announcement
+- **Research ongoing** — Continuing investigation into ELA on Base chain integration
+
+**Why this matters for the ecosystem:** KuCoin is one of the top global cryptocurrency exchanges. Having ELA merge-mining accessible through their platform significantly expands the pool of potential miners and strengthens network security through broader hash rate distribution.
+
+---
+
+## Ecosystem Operations & Community
+
+**Why this matters:** A healthy ecosystem isn't just code — it's people, partnerships, infrastructure, and responsiveness. This week included significant operational work keeping the network healthy and relationships active.
+
+**What was done (Mar 31 – Apr 3):**
+
+### Community Support & Issue Resolution
+- **Elastos Identity (Essentials) issue** — Users reported problems, investigation discovered the Essentials node was down. Issue reported to Zhiming and subsequently resolved (Apr 1).
+- **Sikasi Node illegal state** — Node operator issue diagnosed and resolved (Apr 2).
+- **Telegram cleanup** — Community channels organized and maintained.
+
+### Partnership & Business Development
+- **MotionTrade discussions** — Meeting held, follow-up questions sent, discussion continues on potential collaboration.
+- **PG chain fee flow investigation** — Research into PG chains' fee earned by EF, results documented (fees in token dev address).
+
+### Content & Communications
+- **March 31 ElastOS update** — Edited, published as threads and posts on X, Telegram, and Reddit
+- **ElastOS update banner** created for social distribution
+- **5 banners for docs.elastos.net** — Custom visual assets for portal launch
+- **2 banners for KuMining announcement** — Partnership visual assets
+- **Video demonstration** — Screen recording of docs.elastos.net search and AI assistant
+
+---
+
 ## Documentation & Strategy
 
 ### New Documents Created
@@ -549,6 +633,7 @@ The Runtime defines four host adapter modes (server/headless, desktop, mobile, k
 
 ## Summary Statistics
 
+### Engineering
 | Metric | Value |
 |--------|-------|
 | Commits (this week) | 18 |
@@ -567,6 +652,16 @@ The Runtime defines four host adapter modes (server/headless, desktop, mobile, k
 | Third-party dApps running in PC2 | 1 (Glide Finance — zero code changes) |
 | Misleading security comments fixed | 5 |
 | Things broken by all of the above | 0 |
+
+### Ecosystem & Operations
+| Metric | Value |
+|--------|-------|
+| Documentation portal launched | [docs.elastos.net](https://docs.elastos.net) — 4 pillars, 3 audience paths, AI search |
+| Exchange partnership | KuMining (KuCoin) — ELA merge-mining live |
+| Community issues resolved | 2 (Essentials node down, Sikasi node illegal state) |
+| Content published | ElastOS weekly update (X, Telegram, Reddit) |
+| Visual assets created | 8 banners (5 docs portal, 2 KuMining, 1 update) + 1 video demo |
+| Partnership discussions active | 1 (MotionTrade — ongoing) |
 
 ---
 
