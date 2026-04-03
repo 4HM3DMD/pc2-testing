@@ -327,3 +327,73 @@ jq -Rs '.' path/to/action.js | curl -X POST "$BASE/core/v1/get_lit_action_ipfs_i
 4. **Keep the account key secure but accessible.** It's needed for group management (registering CIDs, adding PKPs) but should never be distributed to end-user nodes.
 
 5. **Test with `get_lit_action_ipfs_id` + `add_action_to_group` + inline execution** before deploying code changes. This avoids debugging CID mismatches.
+
+---
+
+## Gate 2: V3 dDRM Contract Migration (BLOCKED)
+
+> **Status:** Waiting for Irzhy to confirm V3 backend/frontend integration is complete and provide SDK.
+> **Source:** https://elacitylabs.gitbook.io/docs/protocol/getting-started/getting-started
+> **Repo:** https://github.com/Elacity/v3-drm-protocol
+> **Last checked:** Apr 3, 2026 — "integration of the v3 is not yet completed, only in the sdk part is done"
+
+### V3 Base Contract Addresses (from `deployments/8453.json`)
+
+| Contract | V3 Address | Replaces |
+|----------|-----------|----------|
+| `CentralStorage` | `0x0C1EeA2A3361B80AC0e42179335dB536A951760b` | `CoreStorage` `0xc8F50Bf1A6b765460621f861a64a5d333Bc7f575` |
+| `AuthorityGateway` | `0x09dBe796f40ECEffEAccf243c3d758C4c1d8D87D` | `0x8fe6bf9877B78BF0126819ff2593235E54Ee1E29` (V2) |
+| `RoyaltyTradeGateway` | `0xd02451BCE627EF476B8ee52Cf131C426f67dbcB2` | `TradeGateway` `0x9eC53758b698f9F68C0654DDd9159173a159a459` |
+| `ChannelFactory` | `0xE1365ed47353De2F8A6a69E271e36650A9EE368F` | `ChannelCore` `0x6a3f7780C54cb66291f8f1bE609047C2f664Dbf6` |
+| `AssetFactory` | `0x4c80A6209F16437f0dc4a98E3D43f08aeBF57765` | (new — replaces `DigitalAssetCreator` flow) |
+| `SubscriptionManager` | `0xb00456b57598006ef11d1F1678DcE68713eC897D` | (new) |
+| `EventHub` | `0x5a694A6d988354dca491fe0F6db7a6ef46b656c2` | (new) |
+| `PublicChannelFactory` | `0xfcDffDd1cb844Fb3AC8c5d3477dF227E6E94ff8c` | (new) |
+| `PrivateChannelFactory` | `0x6d0369f5AE83528CC8723027e5F219380d2F26A8` | (new) |
+| `MultiChannelFactory` | `0x2E8B108a60189af117F428A6827B3Bfb2e830931` | (new) |
+| `BuyableOperativeFactory` | `0xFbf39a097aa5577666e30de499e72120C8B3E82a` | (new) |
+| `BuyableSellableOperativeFactory` | `0xd4FE224a71bF3C0c8F3075C4e5FB638C30517DfE` | (new) |
+
+### Key Findings for Our Integration
+
+1. **`hasAccessByContentId(address, bytes16)` is UNCHANGED** on V3 `AuthorityGateway` — our Lit Actions work by just changing the contract address
+2. **`supportsLitProtocol()` is NEW** — V3 AuthorityGateway has first-class Lit Protocol support
+3. **`hasAccess(address, address, uint256)` still exists** — direct access check by ledger + tokenId
+4. **`buyAccess` / `sellAccess` signatures preserved** — market wallet.js changes are address-only
+5. **`createChannel` signature CHANGED**: V2 was `(string, string, string, address)`, V3 is `(uint8, uint8, string, string, bytes)` — Creator app needs ABI update
+6. **Subscription is new**: `subscribePlan(uint8 planId, bytes args)` — not in V2
+
+### Files to Update (when unblocked)
+
+**Server (3 address swaps):**
+- `pc2-node/src/api/storage.ts` — `DEFAULT_AUTHORITY`
+- `pc2-node/src/api/chipotle-client.ts` — `DEFAULT_AUTHORITY`
+- `pc2-node/src/services/media/dashPackager.ts` — `DEFAULT_AUTHORITY`
+
+**Config (1 file):**
+- `pc2-node/config/default.json` — add `v3` section under `content_indexer.contracts`
+
+**Apps (2 files):**
+- `elacity-creator/app.js` — `CONTRACTS.*` block, `ABI.*` block, `createChannel` call
+- `elacity-market/wallet.js` — `AUTHORITY_GATEWAY_ADDRESS`, `TRADE_GATEWAY_ADDRESS`, ABIs
+
+**SDK (2 files + rebuild):**
+- `packages/access/src/contracts/abis.ts` — `BASE_CONTRACTS`, ABI arrays
+- `packages/access/src/constants.ts` — `DEFAULT_AUTHORITY_GATEWAY` (reconcile `0x580C...` vs `0x8fe6...` → `0x09dB...`)
+- Rebuild vendor bundles for Creator + Market apps
+
+**Deploy (2 files):**
+- `deploy/web-gateway/index.js` — provision authority
+- `deploy/web-gateway/ddrm-config.json.template` — authority address
+
+**Lit Actions (0 code changes):**
+- Authority address is passed as a parameter (`params.authority`), not hardcoded in action code
+- No need to re-register CIDs unless action logic changes
+
+### Known Issue to Reconcile
+
+Two different V2 authority addresses exist in the codebase today:
+- `0x8fe6bf9877B78BF0126819ff2593235E54Ee1E29` — used in server code (`storage.ts`, `chipotle-client.ts`, `dashPackager.ts`)
+- `0x580C26DeFf267Ef40A72cf10a4A42050F0641b8B` — used in `@elacity-js/access` constants and `deploy/web-gateway/index.js`
+
+V3 migration must unify both to `0x09dBe796f40ECEffEAccf243c3d758C4c1d8D87D`.
