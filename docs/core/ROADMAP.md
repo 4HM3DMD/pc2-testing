@@ -310,7 +310,7 @@ These diagrams from Rong define the north star. Every work stream should move us
 - [ ] Raspberry Pi 4/5 validation and optimization
 - [ ] Explore dedicated DePIN hardware partnerships (plug-and-play boxes)
 - [ ] Debian package (.deb) for ARM devices
-- [ ] macOS package (.dmg) for desktop users — **Apple Developer cert obtained Apr 3, 2026**. [elastos-launcher](https://github.com/Elacity/elastos-launcher) (v1.1.1) ships .dmg but currently requires `xattr -cr` Terminal workaround. Next: code-sign + notarize via Apple Developer cert → users just double-click .dmg, no Terminal needed
+- [ ] macOS package (.dmg) — **Code signing implemented Apr 6, 2026**. [elastos-launcher](https://github.com/Elacity/elastos-launcher) v1.2.0: Developer ID Application cert, Hardened Runtime + entitlements, `afterAllArtifactBuild` hook auto-converts APFS→HFS+ DMG (workaround for Apple notarization bug DTS r. 134264492), CI secrets configured for automated signing. **Blocked on**: Apple notarization backend activation for new Team ID — submissions accepted but stuck "In Progress". Awaiting Apple Developer Support response. Once unblocked, users just double-click .dmg with no Terminal workaround
 - [ ] Windows native installer (.exe) — after WSL is solid
 
 **Carrier Overlay Network:**
@@ -706,7 +706,7 @@ These diagrams from Rong define the north star. Every work stream should move us
 | Namespace model (`localhost://`, `elastos://`) | **Documented** | `localhost://Users/`, `UsersAI/`, `AppCapsules/`, `WebSpaces/`, `MyWebSite` all defined |
 | Host adapter model | **Documented** | Server/headless (= our PC2 Node.js), desktop, mobile, kiosk modes defined |
 | Blockchain integration | **Next** | No EVM wallet, no on-chain verification yet. Dependency for ACCESS_TOKEN → capability token bridge |
-| macOS packaging | **Unblocked** | Apple Developer cert obtained Apr 3, 2026. Runtime compiles on macOS, WASM capsules have full security model. [elastos-launcher](https://github.com/Elacity/elastos-launcher) .dmg ready for code signing + notarization |
+| macOS packaging | **Signing done, notarization pending** | Apple Developer ID cert + Hardened Runtime + entitlements configured Apr 6. `afterAllArtifactBuild` hook auto-converts APFS→HFS+ DMG. CI pipeline configured with signing secrets. Blocked on Apple notarization backend activation for new accounts — awaiting Apple Support |
 
 **Runtime Integration (v2.0.0 convergence):**
 - [ ] PC2 desktop as Shell capsule — Puter runs inside Runtime as the orchestrator
