@@ -13,18 +13,11 @@ These must be completed before merging to `main` and releasing v1.2.0:
 
 ### Must Do (release blockers)
 
-- [ ] **Deploy gateway update to supernodes** — The `/api/ddrm/provision` endpoint exists in code but is NOT deployed yet. Both supernodes need the updated `web-gateway/index.js`.
-  - InterServer: `69.164.241.210`
-  - Contabo: `38.242.211.112`
-- [ ] **Provision usage key on supernodes** — Write the Chipotle usage API key to `/etc/pc2/ddrm-api-key` on each supernode. Without this, fresh PC2 nodes cannot auto-provision and dDRM will not work.
-  ```bash
-  # On each supernode:
-  mkdir -p /etc/pc2
-  echo "<USAGE_API_KEY>" > /etc/pc2/ddrm-api-key
-  echo "0x09bdfc8f8ec5a3bd2970497b930bd94839f22227" > /etc/pc2/ddrm-pkp-id
-  chmod 600 /etc/pc2/ddrm-api-key /etc/pc2/ddrm-pkp-id
-  ```
-- [ ] **Verify auto-provisioning E2E** — After deploying, test from a clean state: delete `data/.chipotle-api-key`, start node, mint an asset, confirm it auto-provisions and encrypts/decrypts successfully.
+- [x] **Deploy gateway update to supernodes** — *(Completed Apr 6, 2026)* Updated `web-gateway/index.js` deployed to both supernodes. Backups created. Added nginx `/api/ddrm/provision` route on Contabo.
+  - InterServer: `69.164.241.210` — verified externally
+  - Contabo: `38.242.211.112` — verified externally
+- [x] **Provision usage key on supernodes** — *(Completed Apr 6, 2026)* Chipotle usage API key written to `/etc/pc2/ddrm-api-key` and PKP ID to `/etc/pc2/ddrm-pkp-id` on both servers (chmod 600). Also deployed `ddrm-config.json` to gateway working directories.
+- [ ] **Verify auto-provisioning E2E** — Test from a clean state: delete `data/.chipotle-api-key`, start node, mint an asset, confirm it auto-provisions and encrypts/decrypts successfully.
 - [ ] **Lit production network status** — Confirm with Lit team whether `chipotle-dev` is stable enough for production use, or if we should wait for their production launch. If dev-only, document this as a known limitation in release notes.
 - [ ] **Git commit all changes** — Ensure `non-media-encrypt-chipotle.js`, `chipotle-client.ts` updates, gateway update, docs are all committed.
 
