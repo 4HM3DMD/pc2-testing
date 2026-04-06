@@ -12,14 +12,12 @@ export const BASE_CHAIN_NAME = 'base';
  * Default AuthorityGateway contract on Base mainnet.
  * This is the entry point for buyAccess() and hasAccess() checks.
  */
-export const DEFAULT_AUTHORITY_GATEWAY = '0x580C26DeFf267Ef40A72cf10a4A42050F0641b8B';
+export const DEFAULT_AUTHORITY_GATEWAY = '0x09dBe796f40ECEffEAccf243c3d758C4c1d8D87D';
 
 /**
- * Lit Protocol network configuration.
- * datil-dev and datil-test testnets are currently offline (ports unreachable).
- * Using 'datil' (production) which has 6 healthy nodes on standard port 443.
+ * Lit Protocol network: Chipotle (v3 TEE).
  */
-export const DEFAULT_LIT_NETWORK = 'datil';
+export const DEFAULT_LIT_NETWORK = 'chipotle';
 
 /**
  * Lit Protocol capacity credit (RLI) token ID on Chronicle Yellowstone.

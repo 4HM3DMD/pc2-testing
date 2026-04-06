@@ -114,11 +114,14 @@ export interface Config {
     max_blocks_per_scan?: number;         // Block range per eth_getLogs call (default: 10000)
     metadata_fetch_concurrency?: number;  // Parallel IPFS metadata fetches (default: 3)
     metadata_gateway_urls?: string[];     // IPFS gateways for metadata resolution
-    contracts?: Record<string, {          // Versioned contract config (key = version e.g. "v2")
-      channel_core?: string;
-      core_storage?: string;
+    contracts?: Record<string, {          // Versioned contract config (key = version e.g. "v3")
+      channel_factory?: string;
+      central_storage?: string;
       authority_gateway?: string;
+      event_hub?: string;
       from_block?: number;
+      channel_core?: string;              // V2 compat alias for channel_factory
+      core_storage?: string;              // V2 compat alias for central_storage
     }>;
   };
 }

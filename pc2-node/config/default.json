@@ -100,11 +100,12 @@
     "metadata_fetch_concurrency": 3,
     "metadata_gateway_urls": ["https://ipfs.ela.city/ipfs/", "https://dweb.link/ipfs/", "https://cloudflare-ipfs.com/ipfs/"],
     "contracts": {
-      "v2": {
-        "channel_core": "0x6a3f7780C54cb66291f8f1bE609047C2f664Dbf6",
-        "core_storage": "0xc8F50Bf1A6b765460621f861a64a5d333Bc7f575",
-        "authority_gateway": "0x8fe6bf9877B78BF0126819ff2593235E54Ee1E29",
-        "from_block": 20000000
+      "v3": {
+        "channel_factory": "0xE1365ed47353De2F8A6a69E271e36650A9EE368F",
+        "central_storage": "0x0C1EeA2A3361B80AC0e42179335dB536A951760b",
+        "authority_gateway": "0x09dBe796f40ECEffEAccf243c3d758C4c1d8D87D",
+        "event_hub": "0x5a694A6d988354dca491fe0F6db7a6ef46b656c2",
+        "from_block": 43892000
       }
     }
   }

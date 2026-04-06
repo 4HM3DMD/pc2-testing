@@ -2774,7 +2774,7 @@ async function handleApiRequest(req, res) {
         apiUrl: 'https://api.chipotle.litprotocol.com',
         usageKey: apiKey,
         pkpId,
-        authority: '0x580c26DefF267EF40A72CF10A4A42050F0641b8B',
+        authority: '0x09dBe796f40ECEffEAccf243c3d758C4c1d8D87D',
         chain: 'base',
         chainId: 8453,
         rpc: 'https://mainnet.base.org',

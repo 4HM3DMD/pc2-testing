@@ -64,8 +64,9 @@ export {
 // Contract ABIs, addresses, and mint encoding helpers
 export {
   DIGITAL_ASSET_ABI,
-  CORE_STORAGE_ABI,
-  CHANNEL_CORE_ABI,
+  CENTRAL_STORAGE_ABI,
+  CHANNEL_FACTORY_ABI,
+  AUTHORITY_GATEWAY_ABI,
   OPERATIVE_BUYABLE_ABI,
   BASE_CONTRACTS,
   OP_TYPES,
@@ -78,6 +79,8 @@ export {
   encodeSellRawData,
   hashToContentId,
   type MintDataParams,
+  CORE_STORAGE_ABI,
+  CHANNEL_CORE_ABI,
 } from './contracts/index.js';
 
 // Events

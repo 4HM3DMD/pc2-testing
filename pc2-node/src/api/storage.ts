@@ -954,7 +954,7 @@ if (!NON_MEDIA_ACTION_CID && existsSync(LIT_ACTION_CID_PATH)) {
   }
 }
 
-const DEFAULT_AUTHORITY = '0x8fe6bf9877B78BF0126819ff2593235E54Ee1E29';
+const DEFAULT_AUTHORITY = '0x09dBe796f40ECEffEAccf243c3d758C4c1d8D87D';
 
 // ── Rate limiting for Lit endpoints ───────────────────────────
 // Prevents cost-drain attacks by limiting Lit Action calls per user.

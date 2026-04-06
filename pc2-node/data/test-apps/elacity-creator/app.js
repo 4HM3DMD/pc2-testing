@@ -13,30 +13,34 @@
   var BASE_CHAIN_HEX = '0x2105';
 
   var CONTRACTS = {
-    CORE_STORAGE: '0xc8F50Bf1A6b765460621f861a64a5d333Bc7f575',
-    AUTHORITY_GATEWAY: '0x8fe6bf9877B78BF0126819ff2593235E54Ee1E29',
-    CHANNEL_CORE: '0x6a3f7780C54cb66291f8f1bE609047C2f664Dbf6',
-    TRADE_GATEWAY: '0x9eC53758b698f9F68C0654DDd9159173a159a459',
+    CENTRAL_STORAGE: '0x0C1EeA2A3361B80AC0e42179335dB536A951760b',
+    AUTHORITY_GATEWAY: '0x09dBe796f40ECEffEAccf243c3d758C4c1d8D87D',
+    CHANNEL_FACTORY: '0xE1365ed47353De2F8A6a69E271e36650A9EE368F',
+    ROYALTY_TRADE_GATEWAY: '0xd02451BCE627EF476B8ee52Cf131C426f67dbcB2',
+    ASSET_FACTORY: '0x4c80A6209F16437f0dc4a98E3D43f08aeBF57765',
+    EVENT_HUB: '0x5a694A6d988354dca491fe0F6db7a6ef46b656c2',
   };
 
   var USDC_BASE = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 
-  // V2 contract ABIs — must be updated when Elacity dDRM V3 contracts deploy
+  // V3 contract ABIs (Elacity dDRM V3 on Base)
   var ABI = {
     DIGITAL_ASSET: [
       'function mint(string _uri, uint16 opType, bytes opRawData, bytes sellRawData) payable',
       'function authority() view returns (address)',
       'function totalSupply() view returns (uint256)',
-      'function operativeOf(uint256 tokenId) view returns (address)',
-      'event AssetCreated(uint256 indexed _tokenId, address indexed _creator, string _tokenURI, uint16 _opType, address indexed opContract)',
+      'event AssetCreated(address indexed _to, address indexed _channel, uint256 _tokenId, string _tokenUri, uint16 _opType, address indexed opContract)',
     ],
-    CORE_STORAGE: [
+    AUTHORITY_GATEWAY: [
+      'function operative(address channel, uint256 tokenId) view returns (address)',
+    ],
+    CENTRAL_STORAGE: [
       'function mediaCreationFee() view returns (uint256 fee, address token)',
       'function channelCreationFee() view returns (uint256 fee, address token)',
     ],
-    CHANNEL_CORE: [
+    CHANNEL_FACTORY: [
       'function createChannel(uint8 _channelType, uint8 _scope, string _name, string _tokenURI, bytes data) payable',
-      'event ChannelCreated(address indexed channelAddr, uint8 indexed channelType, address indexed owner, uint8 scope, string name)',
+      'event ChannelCreated(uint8 indexed channelType, uint8 indexed scope, address indexed creator, address channel, address factoryAddr)',
     ],
     OPERATIVE: [
       'function setApprovalForAll(address operator, bool approved)',
@@ -1204,9 +1208,9 @@
   }
 
   async function getMintingFee() {
-    var iface = new ethers.Interface(ABI.CORE_STORAGE);
+    var iface = new ethers.Interface(ABI.CENTRAL_STORAGE);
     var data = iface.encodeFunctionData('mediaCreationFee', []);
-    var result = await rpcCall(CONTRACTS.CORE_STORAGE, data);
+    var result = await rpcCall(CONTRACTS.CENTRAL_STORAGE, data);
     var decoded = iface.decodeFunctionResult('mediaCreationFee', result);
     return { fee: decoded.fee, token: decoded.token };
   }
@@ -1363,26 +1367,27 @@
   // ── Channel creation ─────────────────────────────────
 
   async function getChannelCreationFee() {
-    var iface = new ethers.Interface(ABI.CORE_STORAGE);
+    var iface = new ethers.Interface(ABI.CENTRAL_STORAGE);
     var data = iface.encodeFunctionData('channelCreationFee', []);
-    var result = await rpcCall(CONTRACTS.CORE_STORAGE, data);
+    var result = await rpcCall(CONTRACTS.CENTRAL_STORAGE, data);
     var decoded = iface.decodeFunctionResult('channelCreationFee', result);
     return { fee: decoded.fee, token: decoded.token };
   }
 
   function parseChannelCreatedEvent(receipt) {
-    var iface = new ethers.Interface(ABI.CHANNEL_CORE);
+    var iface = new ethers.Interface(ABI.CHANNEL_FACTORY);
     var logs = receipt.logs || [];
     for (var i = 0; i < logs.length; i++) {
       try {
         var parsed = iface.parseLog({ topics: logs[i].topics, data: logs[i].data });
         if (parsed && parsed.name === 'ChannelCreated') {
+          // V3: (uint8 indexed channelType, uint8 indexed scope, address indexed creator, address channel, address factoryAddr)
           return {
-            channelAddr: parsed.args.channelAddr,
+            channelAddr: parsed.args.channel,
             channelType: Number(parsed.args.channelType),
-            owner: parsed.args.owner,
+            owner: parsed.args.creator,
             scope: Number(parsed.args.scope),
-            name: parsed.args.name,
+            name: '',
           };
         }
       } catch (_) { /* not our event */ }
@@ -1488,7 +1493,7 @@
       [royaltyTuples, planTuples, tokenAccessTuples]
     );
 
-    var iface = new ethers.Interface(ABI.CHANNEL_CORE);
+    var iface = new ethers.Interface(ABI.CHANNEL_FACTORY);
     var callData = iface.encodeFunctionData('createChannel', [
       CHANNEL_TYPE.STANDARD,
       CHANNEL_SCOPE.PRIVATE,
@@ -1503,7 +1508,7 @@
     if (walletChoice === 'sa' && hasSmartAccount()) {
       var feeHex = feeInfo.fee && BigInt(feeInfo.fee) > 0n ? '0x' + BigInt(feeInfo.fee).toString(16) : '0x0';
       var batchResult = await parentExecuteSmartAccountBatch(BASE_CHAIN_ID, [
-        { to: CONTRACTS.CHANNEL_CORE, data: callData, value: feeHex },
+        { to: CONTRACTS.CHANNEL_FACTORY, data: callData, value: feeHex },
       ], []);
       txHash = batchResult.transactionHash || batchResult.transactionId;
       console.log('[Creator] createChannel SA batch tx:', txHash);
@@ -1523,7 +1528,7 @@
       }
       console.log('[Creator] SA Channel created at:', channelAddr);
     } else {
-      txHash = await sendTx(CONTRACTS.CHANNEL_CORE, callData, feeInfo.fee);
+      txHash = await sendTx(CONTRACTS.CHANNEL_FACTORY, callData, feeInfo.fee);
       console.log('[Creator] createChannel tx:', txHash);
 
       var receipt = await waitForReceipt(txHash);
@@ -1589,7 +1594,7 @@
   }
 
   async function findRecentChannel(ownerAddress) {
-    var iface = new ethers.Interface(ABI.CHANNEL_CORE);
+    var iface = new ethers.Interface(ABI.CHANNEL_FACTORY);
     var eventTopic = iface.getEvent('ChannelCreated').topicHash;
     var ownerTopic = '0x000000000000000000000000' + ownerAddress.toLowerCase().slice(2);
     try {
@@ -1609,7 +1614,7 @@
           jsonrpc: '2.0', id: 1,
           method: 'eth_getLogs',
           params: [{
-            address: CONTRACTS.CHANNEL_CORE,
+            address: CONTRACTS.CHANNEL_FACTORY,
             topics: [eventTopic, null, null, ownerTopic],
             fromBlock: fromBlock,
             toBlock: 'latest',
@@ -1620,7 +1625,7 @@
       var logs = json.result || [];
       if (logs.length > 0) {
         var parsed = iface.parseLog({ topics: logs[logs.length - 1].topics, data: logs[logs.length - 1].data });
-        if (parsed && parsed.name === 'ChannelCreated') return parsed.args.channelAddr;
+        if (parsed && parsed.name === 'ChannelCreated') return parsed.args.channel;
       }
     } catch (_) {}
     return null;
@@ -3414,14 +3419,15 @@
 
           if (!mintedOpContract && mintedTokenId && opType !== OP_TYPES.FREE) {
             try {
-              var opLookupData2 = iface.encodeFunctionData('operativeOf', [mintedTokenId]);
-              var opLookupResult2 = await rpcCall(channel, opLookupData2);
-              var opDecoded2 = iface.decodeFunctionResult('operativeOf', opLookupResult2);
+              var agIface2 = new ethers.Interface(ABI.AUTHORITY_GATEWAY);
+              var opLookupData2 = agIface2.encodeFunctionData('operative', [channel, mintedTokenId]);
+              var opLookupResult2 = await rpcCall(CONTRACTS.AUTHORITY_GATEWAY, opLookupData2);
+              var opDecoded2 = agIface2.decodeFunctionResult('operative', opLookupResult2);
               if (opDecoded2[0] && opDecoded2[0] !== ethers.ZeroAddress) {
                 mintedOpContract = opDecoded2[0];
               }
             } catch (opLookupErr) {
-              console.warn('[Creator] operativeOf lookup failed:', opLookupErr.message);
+              console.warn('[Creator] operative lookup failed:', opLookupErr.message);
             }
           }
         }
@@ -4763,14 +4769,15 @@
 
             if (!mintedOpContract && mintedTokenId && opType !== OP_TYPES.FREE) {
               try {
-                var opLookupData = iface.encodeFunctionData('operativeOf', [mintedTokenId]);
-                var opLookupResult = await rpcCall(channel, opLookupData);
-                var opDecoded = iface.decodeFunctionResult('operativeOf', opLookupResult);
+                var agIface = new ethers.Interface(ABI.AUTHORITY_GATEWAY);
+                var opLookupData = agIface.encodeFunctionData('operative', [channel, mintedTokenId]);
+                var opLookupResult = await rpcCall(CONTRACTS.AUTHORITY_GATEWAY, opLookupData);
+                var opDecoded = agIface.decodeFunctionResult('operative', opLookupResult);
                 if (opDecoded[0] && opDecoded[0] !== ethers.ZeroAddress) {
                   mintedOpContract = opDecoded[0];
                 }
               } catch (opLookupErr) {
-                console.warn('[Creator] operativeOf lookup failed:', opLookupErr.message);
+                console.warn('[Creator] operative lookup failed:', opLookupErr.message);
               }
             }
           }

@@ -27,16 +27,17 @@ interface IndexerConfig {
 }
 
 interface ContractVersionConfig {
-  channelCore?: string;
-  coreStorage?: string;
+  channelFactory?: string;
+  centralStorage?: string;
   authorityGateway?: string;
+  eventHub?: string;
   fromBlock: number;
 }
 
-// Precomputed keccak256 topic hashes (avoids @noble/hashes ESM resolution issues with tsx)
+// V3 precomputed keccak256 topic hashes
 const TOPICS = {
-  ChannelCreated: '0x2158ff0f68c57975fa16024dd5c348aed296bfd80e9e55bf75d137999875de57',
-  DigitalAssetRegistered: '0x797fefe7355137765738c87aa128138d8b7514df662b4444e9ef0d0e24299622',
+  ChannelCreated: '0x4ae6ef95ddade103ca67593cd4cf68dda177aa1054ad4eeb4963d2c3df44702e',
+  DigitalAssetRegistered: '0x1b24f7763272894608506beba5887c374d345cd231bf52bd03f40bc2d0508d7b',
 } as const;
 
 const TOKEN_URI_SELECTOR = '0xc87b56dd';
@@ -113,9 +114,10 @@ export class ContentIndexerService {
     if (c.contracts) {
       for (const [version, cfg] of Object.entries(c.contracts)) {
         this.config.contracts[version] = {
-          channelCore: cfg.channel_core,
-          coreStorage: cfg.core_storage,
+          channelFactory: cfg.channel_factory ?? cfg.channel_core,
+          centralStorage: cfg.central_storage ?? cfg.core_storage,
           authorityGateway: cfg.authority_gateway,
+          eventHub: cfg.event_hub,
           fromBlock: cfg.from_block ?? 0,
         };
       }
@@ -266,8 +268,9 @@ export class ContentIndexerService {
     for (let from = startBlock; from <= latestBlock; from += this.config.maxBlocksPerScan) {
       const to = Math.min(from + this.config.maxBlocksPerScan - 1, latestBlock);
 
-      if (cfg.coreStorage) {
-        const count = await this.scanDigitalAssetRegistered(cfg.coreStorage, version, from, to);
+      const eventSource = cfg.eventHub ?? cfg.centralStorage;
+      if (eventSource) {
+        const count = await this.scanDigitalAssetRegistered(eventSource, version, from, to);
         newAssets += count;
       }
 
@@ -286,11 +289,11 @@ export class ContentIndexerService {
     }
   }
 
-  private async scanDigitalAssetRegistered(coreStorageAddress: string, version: string, fromBlock: number, toBlock: number): Promise<number> {
+  private async scanDigitalAssetRegistered(eventSourceAddress: string, version: string, fromBlock: number, toBlock: number): Promise<number> {
     if (!this.db) return 0;
 
     const logs = await this.getLogs(
-      coreStorageAddress,
+      eventSourceAddress,
       [TOPICS.DigitalAssetRegistered],
       fromBlock,
       toBlock
@@ -300,10 +303,15 @@ export class ContentIndexerService {
 
     for (const entry of logs) {
       try {
+        // V3 DigitalAssetRegistered(address indexed channel, uint256 indexed tokenId,
+        //   address creator, string tokenURI, uint16 opType, bytes16 contentId)
         const channelAddress = unpadAddress(entry.topics[1]);
         const tokenId = fromHex(entry.topics[2]);
-        const operativeAddress = unpadAddress(entry.topics[3]);
         const blockNumber = fromHex(entry.blockNumber);
+
+        // Non-indexed params in data: creator (address), tokenURI (string), opType (uint16), contentId (bytes16)
+        const data = entry.data?.replace('0x', '') ?? '';
+        const creatorAddress = data.length >= 64 ? unpadAddress('0x' + data.slice(0, 64)) : '';
 
         if (this.db.catalogItemExists(channelAddress, tokenId, 8453)) {
           continue;
@@ -313,8 +321,8 @@ export class ContentIndexerService {
           content_id: null,
           channel_address: channelAddress,
           token_id: tokenId,
-          operative_address: operativeAddress,
-          creator_address: '', // will be resolved from tokenURI metadata
+          operative_address: '',
+          creator_address: creatorAddress,
           name: null,
           description: null,
           image_url: null,
@@ -333,9 +341,6 @@ export class ContentIndexerService {
           indexed_at: Date.now(),
           metadata_json: null,
         };
-
-        // Attempt to get creator from transaction sender
-        item.creator_address = unpadAddress(entry.topics[1]);
 
         this.db.upsertCatalogItem(item);
         count++;

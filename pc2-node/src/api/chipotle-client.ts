@@ -38,7 +38,7 @@ const PROVISION_CACHE_PATH = join(DATA_DIR, '.chipotle-provision.json');
 const DEFAULT_API_URL = 'https://api.chipotle.litprotocol.com';
 const DEV_API_URL = 'https://api.dev.litprotocol.com';
 
-const DEFAULT_AUTHORITY = '0x8fe6bf9877B78BF0126819ff2593235E54Ee1E29';
+const DEFAULT_AUTHORITY = '0x09dBe796f40ECEffEAccf243c3d758C4c1d8D87D';
 const DEFAULT_CHAIN = 'base';
 const DEFAULT_CHAIN_ID = 8453;
 const DEFAULT_PKP_ID = '0x68dcf3dc3c38d726e8a7cdca8ab318f49552c05d';

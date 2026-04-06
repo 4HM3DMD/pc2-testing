@@ -4,7 +4,7 @@
   "apiUrl": "https://api.chipotle.litprotocol.com",
   "usageKey": "REPLACE_WITH_USAGE_API_KEY",
   "pkpId": "0x68dcf3dc3c38d726e8a7cdca8ab318f49552c05d",
-  "authority": "0x8fe6bf9877B78BF0126819ff2593235E54Ee1E29",
+  "authority": "0x09dBe796f40ECEffEAccf243c3d758C4c1d8D87D",
   "chain": "base",
   "chainId": 8453,
   "rpc": "https://mainnet.base.org",

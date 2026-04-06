@@ -255752,7 +255752,7 @@ var require_uint8arrays = __commonJS({
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.utf8Decode = utf8Decode2;
-    exports2.base64ToUint8Array = base64ToUint8Array3;
+    exports2.base64ToUint8Array = base64ToUint8Array2;
     exports2.uint8ArrayToBase64 = uint8ArrayToBase642;
     exports2.uint8arrayFromString = uint8arrayFromString;
     exports2.uint8arrayToString = uint8arrayToString;
@@ -255796,7 +255796,7 @@ var require_uint8arrays = __commonJS({
       }
       return str;
     }
-    function base64ToUint8Array3(base64Str) {
+    function base64ToUint8Array2(base64Str) {
       const binaryStr = atob(base64Str);
       const len = binaryStr.length;
       const bytes2 = new Uint8Array(len);
@@ -255829,10 +255829,10 @@ var require_uint8arrays = __commonJS({
           }
           return new Uint8Array(arr);
         case "base64":
-          return base64ToUint8Array3(str);
+          return base64ToUint8Array2(str);
         case "base64url":
         case "base64urlpad":
-          return base64ToUint8Array3(base64UrlPadToBase64(str));
+          return base64ToUint8Array2(base64UrlPadToBase64(str));
         default:
           throw new constants_1.InvalidParamType({
             info: {
@@ -474327,7 +474327,7 @@ var require_src26 = __commonJS({
   }
 });
 
-// src/lit/session.ts
+// src/lit/session.js
 var import_lit_node_client = __toESM(require_src26(), 1);
 var import_constants9 = __toESM(require_src(), 1);
 
@@ -497613,11 +497613,11 @@ var wordlists = {
   en: LangEn.wordlist()
 };
 
-// src/constants.ts
+// src/constants.js
 var BASE_CHAIN_ID = 8453;
 var BASE_CHAIN_NAME = "base";
-var DEFAULT_AUTHORITY_GATEWAY = "0x580C26DeFf267Ef40A72cf10a4A42050F0641b8B";
-var DEFAULT_LIT_NETWORK = "datil";
+var DEFAULT_AUTHORITY_GATEWAY = "0x09dBe796f40ECEffEAccf243c3d758C4c1d8D87D";
+var DEFAULT_LIT_NETWORK = "chipotle";
 var CAPACITY_TOKEN_ID = "429689";
 var DRM_SYSTEM_IDS = {
   "cenc:lit-drm-v1": "t4VVRojlQPi6mcPjMDP77g==",
@@ -497637,7 +497637,7 @@ var DEFAULT_IPFS_GATEWAY = "https://ipfs.ela.city/ipfs/";
 var LOCAL_IPFS_GATEWAY = "http://localhost:4200/ipfs/";
 var AES_IV_LENGTH = 12;
 
-// src/lit/session.ts
+// src/lit/session.js
 var LitSession = class {
   client = null;
   provider = null;
@@ -497730,18 +497730,10 @@ var LitSession = class {
   isConnected() {
     return this.client?.ready === true && this.address !== null;
   }
-  /**
-   * Create an ethers.BrowserProvider from the wallet provider.
-   * Used for signing operations needed by Lit Protocol.
-   */
   getEthersSigner() {
     const provider = this.getProvider();
     return new ethers_exports.BrowserProvider(provider);
   }
-  /**
-   * Sign a message using the connected wallet.
-   * Emits 'sign_request' before signing and 'sign_error' on failure.
-   */
   async signMessage(message2) {
     this.events.emit("sign_request");
     try {
@@ -497767,7 +497759,7 @@ var LitSession = class {
   }
 };
 
-// src/events.ts
+// src/events.js
 var AccessEventEmitter = class {
   listeners = /* @__PURE__ */ new Map();
   on(event, handler) {
@@ -497781,7 +497773,8 @@ var AccessEventEmitter = class {
   }
   emit(event, ...args) {
     const handlers = this.listeners.get(event);
-    if (!handlers) return;
+    if (!handlers)
+      return;
     for (const handler of handlers) {
       try {
         handler(...args);
@@ -497794,7 +497787,7 @@ var AccessEventEmitter = class {
   }
 };
 
-// src/verify/access-token.ts
+// src/verify/access-token.js
 async function verifyAccess(provider, params, options) {
   const { ledger, tokenId, wallet } = params;
   const authorityAddr = options?.authorityGateway ?? DEFAULT_AUTHORITY_GATEWAY;
@@ -497803,11 +497796,7 @@ async function verifyAccess(provider, params, options) {
     throw new Error("No wallet address provided for access verification");
   }
   const browserProvider = new ethers_exports.BrowserProvider(provider);
-  const gateway = new ethers_exports.Contract(
-    authorityAddr,
-    AUTHORITY_GATEWAY_ABI,
-    browserProvider
-  );
+  const gateway = new ethers_exports.Contract(authorityAddr, AUTHORITY_GATEWAY_ABI, browserProvider);
   try {
     const hasAccess = await gateway.hasAccess(holderAddr, ledger, tokenId);
     let tokenBalance = 0n;
@@ -497828,10 +497817,10 @@ async function verifyAccess(provider, params, options) {
   }
 }
 
-// src/lit/key-retrieval.ts
+// src/lit/key-retrieval.js
 var import_auth_helpers = __toESM(require_src19(), 1);
 
-// src/lit/conditions.ts
+// src/lit/conditions.js
 function buildAccessTokenCondition(ledger, tokenId, chain2) {
   return [
     {
@@ -497887,7 +497876,7 @@ function buildCreatorOrAccessCondition(ledger, tokenId, creatorAddress, chain2) 
   ];
 }
 
-// src/utils.ts
+// src/utils.js
 function getCryptoApi() {
   if (typeof globalThis.crypto !== "undefined") {
     return globalThis.crypto;
@@ -497943,15 +497932,13 @@ function generateNonce() {
   return Array.from(bytes2).map((b12) => b12.toString(16).padStart(2, "0")).join("");
 }
 
-// src/lit/key-retrieval.ts
+// src/lit/key-retrieval.js
 async function acquireKey(session, params, events) {
   const { ledger, tokenId, ciphertext, dataToEncryptHash } = params;
   const client = session.getClient();
   const address = session.getSignerAddress();
   if (!ciphertext || !dataToEncryptHash) {
-    throw new Error(
-      "acquireKey() requires ciphertext and dataToEncryptHash from the asset metadata. These are set during encryption via encryptBuffer()."
-    );
+    throw new Error("acquireKey() requires ciphertext and dataToEncryptHash from the asset metadata. These are set during encryption via encryptBuffer().");
   }
   const conditions = buildAccessTokenCondition(ledger, tokenId);
   events.emit("sign_request");
@@ -498007,12 +497994,10 @@ async function acquireKey(session, params, events) {
   }
 }
 async function acquireLicense(_session, _params, _events) {
-  throw new Error(
-    "acquireLicense() is not yet implemented. The existing WASM media player handles CENC license acquisition independently via EIP-712 LicenseRequest signing against the AuthorityGateway. This bridge will be implemented when the media-player is updated to delegate to @elacity-js/access."
-  );
+  throw new Error("acquireLicense() is not yet implemented. The existing WASM media player handles CENC license acquisition independently via EIP-712 LicenseRequest signing against the AuthorityGateway. This bridge will be implemented when the media-player is updated to delegate to @elacity-js/access.");
 }
 
-// src/crypto/encrypt.ts
+// src/crypto/encrypt.js
 async function encryptBuffer(session, data, params) {
   const { ledger, tokenId } = params;
   const client = session.getClient();
@@ -498033,25 +498018,15 @@ async function encryptBuffer(session, data, params) {
 async function encryptWithKey(data, keyBytes) {
   const cryptoApi = getCryptoApi();
   const iv = cryptoApi.getRandomValues(new Uint8Array(AES_IV_LENGTH));
-  const key = await cryptoApi.subtle.importKey(
-    "raw",
-    keyBytes.buffer,
-    { name: "AES-GCM", length: 256 },
-    false,
-    ["encrypt"]
-  );
-  const encrypted = await cryptoApi.subtle.encrypt(
-    { name: "AES-GCM", iv },
-    key,
-    data.buffer
-  );
+  const key = await cryptoApi.subtle.importKey("raw", keyBytes.buffer, { name: "AES-GCM", length: 256 }, false, ["encrypt"]);
+  const encrypted = await cryptoApi.subtle.encrypt({ name: "AES-GCM", iv }, key, data.buffer);
   return {
     encrypted: new Uint8Array(encrypted),
     iv
   };
 }
 
-// src/crypto/decrypt.ts
+// src/crypto/decrypt.js
 var import_auth_helpers2 = __toESM(require_src19(), 1);
 async function decryptWithLit(session, params, events) {
   const { ciphertext, dataToEncryptHash, ledger, tokenId } = params;
@@ -498112,22 +498087,12 @@ async function decryptWithKey(encrypted, key) {
   const cryptoApi = getCryptoApi();
   const iv = encrypted.slice(0, AES_IV_LENGTH);
   const ciphertext = encrypted.slice(AES_IV_LENGTH);
-  const cryptoKey = await cryptoApi.subtle.importKey(
-    "raw",
-    key.raw.buffer,
-    { name: "AES-GCM", length: 256 },
-    false,
-    ["decrypt"]
-  );
-  const decrypted = await cryptoApi.subtle.decrypt(
-    { name: "AES-GCM", iv },
-    cryptoKey,
-    ciphertext.buffer
-  );
+  const cryptoKey = await cryptoApi.subtle.importKey("raw", key.raw.buffer, { name: "AES-GCM", length: 256 }, false, ["decrypt"]);
+  const decrypted = await cryptoApi.subtle.decrypt({ name: "AES-GCM", iv }, cryptoKey, ciphertext.buffer);
   return new Uint8Array(decrypted);
 }
 
-// src/fetch/ipfs.ts
+// src/fetch/ipfs.js
 async function fetchFromIpfs(cid, options) {
   const primary = options?.gateway ?? LOCAL_IPFS_GATEWAY;
   const fallback2 = options?.fallbackGateway ?? DEFAULT_IPFS_GATEWAY;
@@ -498156,7 +498121,7 @@ async function fetchWithTimeout(url, timeout) {
   }
 }
 
-// src/client.ts
+// src/client.js
 var ElacityAccess = class {
   session;
   events;
@@ -498165,89 +498130,32 @@ var ElacityAccess = class {
     this.events = new AccessEventEmitter();
     this.session = new LitSession(this.events);
   }
-  /**
-   * Connect to the Lit Network with a wallet provider.
-   * Must be called before any access operations.
-   */
   async connect(provider, options) {
     this.options = options ?? {};
     await this.session.connect(provider, options);
   }
-  /**
-   * Disconnect from the Lit Network and clean up resources.
-   */
   async disconnect() {
     await this.session.disconnect();
     this.events.removeAllListeners();
   }
-  /**
-   * Check if a wallet holds an ACCESS_TOKEN for a specific asset.
-   *
-   * This is a pure verification step — no key material is retrieved.
-   * The Runtime will call this to decide whether to issue a capability token.
-   */
   async verifyAccess(params) {
-    return verifyAccess(
-      this.session.getProvider(),
-      params,
-      {
-        authorityGateway: this.options.authorityGateway,
-        signerAddress: this.session.getSignerAddress()
-      }
-    );
+    return verifyAccess(this.session.getProvider(), params, {
+      authorityGateway: this.options.authorityGateway,
+      signerAddress: this.session.getSignerAddress()
+    });
   }
-  /**
-   * Acquire a standalone decryption key from the Lit Network.
-   *
-   * Proves ACCESS_TOKEN ownership via SIWE-signed session to Lit nodes,
-   * then retrieves the symmetric key. The key can be used with
-   * decryptBuffer() for one or more decryption operations.
-   *
-   * Requires ciphertext and dataToEncryptHash from asset metadata.
-   */
   async acquireKey(params) {
     return acquireKey(this.session, params, this.events);
   }
-  /**
-   * Acquire a CENC-compatible license for the media-player WASM module.
-   *
-   * NOT YET IMPLEMENTED — the existing WASM media player handles CENC
-   * license acquisition independently. This bridge point exists for
-   * a future where media-player delegates to @elacity-js/access.
-   *
-   * @throws Error — not yet implemented
-   */
   async acquireLicense(params) {
     return acquireLicense(this.session, params, this.events);
   }
-  /**
-   * Encrypt data with Lit Protocol access conditions (creator side).
-   *
-   * The encrypted data and metadata should be uploaded to IPFS.
-   * Only wallets holding the ACCESS_TOKEN can decrypt it later.
-   */
   async encryptBuffer(data, params) {
     return encryptBuffer(this.session, data, params);
   }
-  /**
-   * Decrypt data using a previously acquired key (consumer side).
-   *
-   * For non-media assets: uses WebCrypto AES-GCM.
-   * For streaming media: use acquireLicense() with the media-player instead.
-   */
   async decryptBuffer(encrypted, key) {
     return decryptWithKey(encrypted, key);
   }
-  /**
-   * High-level convenience: fetch encrypted content from IPFS and decrypt.
-   *
-   * Combines:
-   * 1. fetchFromIpfs() — download encrypted bytes
-   * 2. decryptWithLit() — prove access and decrypt via Lit Protocol
-   *
-   * The CID points to raw Lit-encrypted bytes on IPFS.
-   * The dataToEncryptHash must be passed in (from the asset's metadata envelope).
-   */
   async fetchAndDecrypt(params) {
     const { cid, ledger, tokenId, gateway, fallbackGateway } = params;
     const encrypted = await fetchFromIpfs(cid, { gateway, fallbackGateway });
@@ -498265,20 +498173,14 @@ var ElacityAccess = class {
     } catch {
       ciphertext = encrypted;
     }
-    return decryptWithLit(
-      this.session,
-      { ciphertext, dataToEncryptHash, ledger, tokenId },
-      this.events
-    );
+    return decryptWithLit(this.session, { ciphertext, dataToEncryptHash, ledger, tokenId }, this.events);
   }
-  // ── Event handling ─────────────────────────────────────
   on(event, handler) {
     this.events.on(event, handler);
   }
   off(event, handler) {
     this.events.off(event, handler);
   }
-  // ── State accessors ────────────────────────────────────
   isConnected() {
     return this.session.isConnected();
   }
@@ -498298,7 +498200,7 @@ var ElacityAccess = class {
   }
 };
 
-// src/crypto/payload.ts
+// src/crypto/payload.js
 function parseLicensePayload(payload) {
   return {
     keyIds: payload.kids ?? [],
@@ -498329,23 +498231,26 @@ function selectDrmSystem(refs, priorities) {
   const available = [];
   for (const refId of Object.keys(refs)) {
     const drmType = systemIdToType.get(refId);
-    if (!drmType) continue;
+    if (!drmType)
+      continue;
     const config = merged[drmType];
     if (config && !config.disabled) {
       available.push({ type: drmType, priority: config.priority });
     }
   }
-  if (available.length === 0) return null;
+  if (available.length === 0)
+    return null;
   available.sort((a6, b12) => a6.priority - b12.priority);
   return available[0].type;
 }
 function getPsshData(refs, drmSystem) {
   const systemId = DRM_SYSTEM_IDS[drmSystem];
-  if (!systemId) return null;
+  if (!systemId)
+    return null;
   return refs[systemId] ?? null;
 }
 
-// src/contracts/abis.ts
+// src/contracts/abis.js
 var DIGITAL_ASSET_ABI = [
   "function mint(string _uri, uint16 opType, bytes opRawData, bytes sellRawData) payable",
   "function authority() view returns (address)",
@@ -498355,17 +498260,23 @@ var DIGITAL_ASSET_ABI = [
   "function balanceOf(address account, uint256 id) view returns (uint256)",
   "function setApprovalForAll(address operator, bool approved)",
   "function isApprovedForAll(address account, address operator) view returns (bool)",
-  "function subscribePlan(uint8 planId)",
-  "event AssetCreated(uint256 indexed _tokenId, address indexed _creator, string _tokenURI, uint16 _opType, address indexed opContract)",
-  "event DigitalAssetRegistered(address indexed ledger, uint256 indexed tokenId, address indexed operator)"
+  "function subscribePlan(uint8 planId, bytes args)",
+  "event AssetCreated(address indexed _to, address indexed _channel, uint256 _tokenId, string _tokenUri, uint16 _opType, address indexed opContract)",
+  "event DigitalAssetRegistered(address indexed channel, uint256 indexed tokenId, address creator, string tokenURI, uint16 opType, bytes16 contentId)"
 ];
-var CORE_STORAGE_ABI = [
+var CENTRAL_STORAGE_ABI = [
   "function mediaCreationFee() view returns (uint256 fee, address token)",
   "function channelCreationFee() view returns (uint256 fee, address token)",
   "function bindIP(bytes16 _contentId, address channel, uint256 tokenId)"
 ];
-var CHANNEL_CORE_ABI = [
-  "function createChannel(string name, string symbol, string description, address authority) payable returns (address)"
+var CHANNEL_FACTORY_ABI = [
+  "function createChannel(uint8 _channelType, uint8 _scope, string _name, string _tokenURI, bytes data) payable",
+  "event ChannelCreated(uint8 indexed channelType, uint8 indexed scope, address indexed creator, address channel, address factoryAddr)"
+];
+var AUTHORITY_GATEWAY_ABI2 = [
+  "function operative(address channel, uint256 tokenId) view returns (address)",
+  "function hasAccessByContentId(address holder, bytes16 contentId) view returns (bool)",
+  "function supportsLitProtocol() pure returns (bool)"
 ];
 var OPERATIVE_BUYABLE_ABI = [
   "function setApprovalForAll(address operator, bool approved)",
@@ -498373,11 +498284,16 @@ var OPERATIVE_BUYABLE_ABI = [
   "function balanceOf(address account, uint256 id) view returns (uint256)",
   "function paymentProcessor() view returns (address)"
 ];
+var CORE_STORAGE_ABI = CENTRAL_STORAGE_ABI;
+var CHANNEL_CORE_ABI = CHANNEL_FACTORY_ABI;
 var BASE_CONTRACTS = {
-  CORE_STORAGE: "0xc8F50Bf1A6b765460621f861a64a5d333Bc7f575",
-  AUTHORITY_GATEWAY: "0x8fe6bf9877B78BF0126819ff2593235E54Ee1E29",
-  CHANNEL_CORE: "0x6a3f7780C54cb66291f8f1bE609047C2f664Dbf6",
-  TRADE_GATEWAY: "0x9eC53758b698f9F68C0654DDd9159173a159a459",
+  CENTRAL_STORAGE: "0x0C1EeA2A3361B80AC0e42179335dB536A951760b",
+  AUTHORITY_GATEWAY: "0x09dBe796f40ECEffEAccf243c3d758C4c1d8D87D",
+  CHANNEL_FACTORY: "0xE1365ed47353De2F8A6a69E271e36650A9EE368F",
+  ROYALTY_TRADE_GATEWAY: "0xd02451BCE627EF476B8ee52Cf131C426f67dbcB2",
+  ASSET_FACTORY: "0x4c80A6209F16437f0dc4a98E3D43f08aeBF57765",
+  EVENT_HUB: "0x5a694A6d988354dca491fe0F6db7a6ef46b656c2",
+  SUBSCRIPTION_MANAGER: "0xb00456b57598006ef11d1F1678DcE68713eC897D",
   UNIVERSAL_CHECKIN: "0x2361a02e6727Ff1798920186b8ACf0f100f621C0"
 };
 var OP_TYPES = {
@@ -498393,7 +498309,7 @@ var ROLE_TYPES = {
 var BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 var PUBLIC_ELACITY_CHANNEL = "0x2fb53d4ab93112a6c0a1e54ffcd7199c6fd37412";
 
-// src/contracts/encode.ts
+// src/contracts/encode.js
 var ELACITY_ROYALTY_ADDRESS = "0x0917Aa260359670F7855a5454c630993ce40C52D";
 var ELACITY_ROYALTY_PERCENT = 5;
 function hashToContentId(hash2) {
@@ -498402,16 +498318,9 @@ function hashToContentId(hash2) {
   return "0x" + stripped.slice(0, 32).padEnd(32, "0");
 }
 function encodeOpRawData(params) {
-  const {
-    contentId,
-    metadataCID,
-    creatorAddress,
-    copies,
-    opType,
-    creatorRoyaltyPercent = 95,
-    resellerCut = 900
-  } = params;
-  if (opType === OP_TYPES.FREE) return "0x";
+  const { contentId, metadataCID, creatorAddress, copies, opType, creatorRoyaltyPercent = 95, resellerCut = 900 } = params;
+  if (opType === OP_TYPES.FREE)
+    return "0x";
   const cid16 = hashToContentId(contentId);
   const metadataUri = `ipfs://${metadataCID}`;
   const creatorPer1000 = Math.round(creatorRoyaltyPercent * 10);
@@ -498429,19 +498338,19 @@ function encodeOpRawData(params) {
   return ethers_exports.AbiCoder.defaultAbiCoder().encode(abiTypes, abiValues);
 }
 function encodeSellRawData(copies, priceInWei, payTokenAddress) {
-  return ethers_exports.AbiCoder.defaultAbiCoder().encode(
-    ["uint256", "uint256", "address"],
-    [copies, priceInWei, payTokenAddress]
-  );
+  return ethers_exports.AbiCoder.defaultAbiCoder().encode(["uint256", "uint256", "address"], [copies, priceInWei, payTokenAddress]);
 }
 export {
+  AUTHORITY_GATEWAY_ABI2 as AUTHORITY_GATEWAY_ABI,
   AccessEventEmitter,
   BASE_CHAIN_ID,
   BASE_CHAIN_NAME,
   BASE_CONTRACTS,
   BASE_USDC,
   CAPACITY_TOKEN_ID,
+  CENTRAL_STORAGE_ABI,
   CHANNEL_CORE_ABI,
+  CHANNEL_FACTORY_ABI,
   CORE_STORAGE_ABI,
   DEFAULT_AUTHORITY_GATEWAY,
   DEFAULT_IPFS_GATEWAY,
