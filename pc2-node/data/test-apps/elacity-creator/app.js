@@ -325,6 +325,60 @@
     }
   }
 
+  // ── V3 on-chain channel discovery ──────────────────────
+
+  async function fetchV3ChannelsOnChain(walletAddress) {
+    try {
+      var iface = new ethers.Interface(ABI.CHANNEL_FACTORY);
+      var topic0 = iface.getEvent('ChannelCreated').topicHash;
+      var creatorTopic = '0x' + walletAddress.toLowerCase().replace('0x', '').padStart(64, '0');
+
+      var blockResp = await fetch(BASE_RPC, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_blockNumber', params: [] }),
+      });
+      var blockJson = await blockResp.json();
+      var latestBlock = parseInt(blockJson.result, 16);
+      var fromBlock = '0x' + Math.max(0, latestBlock - 9000).toString(16);
+
+      var logsResp = await fetch(BASE_RPC, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0', id: 1, method: 'eth_getLogs',
+          params: [{ address: CONTRACTS.CHANNEL_FACTORY, fromBlock: fromBlock, toBlock: 'latest', topics: [topic0, null, null, creatorTopic] }],
+        }),
+      });
+      var logsJson = await logsResp.json();
+      var logs = (logsJson.result || []);
+      if (logs.length === 0) return [];
+
+      var channels = [];
+      for (var i = 0; i < logs.length; i++) {
+        var data = logs[i].data || '0x';
+        if (data.length < 130) continue;
+        var channelAddr = '0x' + data.slice(26, 66);
+        var chName = channelAddr.substring(0, 10) + '...';
+        try {
+          var nameSelector = '0x06fdde03';
+          var nameResp = await fetch(BASE_RPC, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_call', params: [{ to: channelAddr, data: nameSelector }, 'latest'] }),
+          });
+          var nameJson = await nameResp.json();
+          if (nameJson.result && nameJson.result.length > 2) {
+            var decoded = ethers.AbiCoder.defaultAbiCoder().decode(['string'], nameJson.result);
+            if (decoded[0]) chName = decoded[0];
+          }
+        } catch (_) {}
+        channels.push({ address: ethers.getAddress(channelAddr), name: chName, _v3: true, creator: { address: walletAddress } });
+      }
+      return channels;
+    } catch (err) {
+      console.warn('[Creator] V3 on-chain channel scan failed:', err.message);
+      return [];
+    }
+  }
+
   // ── Channel fetching from Elacity backend ──────────────
 
   async function fetchChannelsFromBackend(query) {
@@ -423,17 +477,12 @@
       var eoaAddr = walletAddress.toLowerCase();
       var saAddr = hasSmartAccount() ? smartAccountAddress.toLowerCase() : null;
 
-      var eoaChannels = await fetchChannelsFromBackend({ creator: eoaAddr });
-      var saChannels = saAddr ? await fetchChannelsFromBackend({ creator: saAddr }) : [];
+      var [eoaChannels, saChannels] = await Promise.all([
+        fetchV3ChannelsOnChain(eoaAddr),
+        saAddr ? fetchV3ChannelsOnChain(saAddr) : Promise.resolve([]),
+      ]);
 
-      var mintableChannels = await fetchChannelsFromBackend({ access: 'mint:' + eoaAddr });
-
-      var ownedAddrs = {};
-      eoaChannels.forEach(function (ch) { ownedAddrs[ch.address.toLowerCase()] = true; });
-      saChannels.forEach(function (ch) { ownedAddrs[ch.address.toLowerCase()] = true; });
-      var publicChannels = mintableChannels.filter(function (ch) {
-        return !ownedAddrs[ch.address.toLowerCase()];
-      });
+      var publicChannels = [];
 
       select.innerHTML = '';
       var hasOwned = eoaChannels.length > 0 || saChannels.length > 0;
@@ -1163,9 +1212,7 @@
     var royalties = params.royalties || [
       { address: params.creatorAddress, royalty: 100 - ELACITY_ROYALTY_PERCENT, identifier: 'A' },
     ];
-    royalties = royalties.concat([
-      { address: ELACITY_CHANNEL_ROYALTY_ADDRESS, royalty: ELACITY_ROYALTY_PERCENT },
-    ]);
+    // V3: protocol takes its cut via protocolShares (5%) automatically — no manual Elacity push
 
     var addresses = [params.creatorAddress];
     var roleTypes = [ROLE_ACCESS_TOKEN];
@@ -1473,7 +1520,7 @@
     var royaltyTuples = channelRoyalties.map(function (r) {
       return [r.address, Math.round(10 * Number(r.royalty))];
     });
-    royaltyTuples.push([ELACITY_CHANNEL_ROYALTY_ADDRESS, elacityPer1000]);
+    // V3: protocol takes its cut via protocolShares (5%) automatically — no manual Elacity push
 
     var planTuples = channelPlans.map(function (p) {
       var durOpt = DURATION_OPTIONS.find(function (d) { return d.value === p.duration.value && d.unit === p.duration.unit; });
@@ -3277,7 +3324,7 @@
               resellerCut: resellerCut,
               royalties: royaltyPartners,
             })
-          : '0x';
+          : ethers.AbiCoder.defaultAbiCoder().encode(['bytes16'], [hashToContentId(encryptResult.dataToEncryptHash)]);
         var sellRawData = opType !== OP_TYPES.FREE
           ? encodeSellRawData(copies, priceWei, selectedCurrency.address)
           : '0x';
@@ -4677,7 +4724,7 @@
                 resellerCut: draft.reseller_cut || 1000,
                 royalties: draft.royalty_partners ? JSON.parse(draft.royalty_partners) : [],
               })
-            : '0x';
+            : ethers.AbiCoder.defaultAbiCoder().encode(['bytes16'], [hashToContentId(encryptHash)]);
           var sellRawData = opType !== OP_TYPES.FREE
             ? encodeSellRawData(copies, priceWei, selectedCurrency.address)
             : '0x';
