@@ -310,7 +310,7 @@ These diagrams from Rong define the north star. Every work stream should move us
 - [ ] Raspberry Pi 4/5 validation and optimization
 - [ ] Explore dedicated DePIN hardware partnerships (plug-and-play boxes)
 - [ ] Debian package (.deb) for ARM devices
-- [ ] macOS package (.dmg) — **Code signing implemented Apr 6, 2026**. [elastos-launcher](https://github.com/Elacity/elastos-launcher) v1.2.0: Developer ID Application cert, Hardened Runtime + entitlements, `afterAllArtifactBuild` hook auto-converts APFS→HFS+ DMG (workaround for Apple notarization bug DTS r. 134264492), CI secrets configured for automated signing. **Blocked on**: Apple notarization backend activation for new Team ID — submissions accepted but stuck "In Progress". Awaiting Apple Developer Support response. Once unblocked, users just double-click .dmg with no Terminal workaround
+- [ ] macOS package (.dmg) — **Code signing implemented Apr 6, 2026**. [elastos-launcher](https://github.com/Elacity/elastos-launcher) v1.2.0: Developer ID Application cert, Hardened Runtime + entitlements, CI secrets configured for automated signing. **Apple DTS response (Apr 6):** Quinn (DTS Engineer) confirmed the APFS→HFS+ workaround was a red herring — DTS r. 134264492 was about UDF images, not APFS. The "In Progress" delay was the normal in-depth analysis path for new accounts. Apple's system learns to recognize apps over time, so future submissions should clear faster. **Action:** revert to APFS DMG (remove `afterAllArtifactBuild` HFS+ hook), resubmit, and share notary UUID with DTS if still delayed. See [Notarisation Resources](https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution). Team ID: LA64G2ZMY2
 - [ ] Windows native installer (.exe) — after WSL is solid
 
 **Carrier Overlay Network:**
@@ -706,7 +706,7 @@ These diagrams from Rong define the north star. Every work stream should move us
 | Namespace model (`localhost://`, `elastos://`) | **Documented** | `localhost://Users/`, `UsersAI/`, `AppCapsules/`, `WebSpaces/`, `MyWebSite` all defined |
 | Host adapter model | **Documented** | Server/headless (= our PC2 Node.js), desktop, mobile, kiosk modes defined |
 | Blockchain integration | **Next** | No EVM wallet, no on-chain verification yet. Dependency for ACCESS_TOKEN → capability token bridge |
-| macOS packaging | **Signing done, notarization pending** | Apple Developer ID cert + Hardened Runtime + entitlements configured Apr 6. `afterAllArtifactBuild` hook auto-converts APFS→HFS+ DMG. CI pipeline configured with signing secrets. Blocked on Apple notarization backend activation for new accounts — awaiting Apple Support |
+| macOS packaging | **Signing done, notarization clearing** | Apple Developer ID cert + Hardened Runtime + entitlements configured Apr 6. CI pipeline configured with signing secrets. Apple DTS confirmed APFS→HFS+ workaround unnecessary (DTS r. 134264492 was about UDF, not APFS). Delay was normal in-depth analysis for new accounts — system learns over time. **Next:** revert to APFS DMG, resubmit, share UUID if delayed. Team ID: LA64G2ZMY2 |
 
 **Runtime Integration (v2.0.0 convergence):**
 - [ ] PC2 desktop as Shell capsule — Puter runs inside Runtime as the orchestrator
