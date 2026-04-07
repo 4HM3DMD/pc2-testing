@@ -72,7 +72,8 @@
     10: ['https://mainnet.optimism.io', 'https://optimism-rpc.publicnode.com'],
     43114: ['https://api.avax.network/ext/bc/C/rpc', 'https://avalanche-c-chain-rpc.publicnode.com'],
     250: ['https://rpc.ftm.tools', 'https://fantom-rpc.publicnode.com'],
-    25: ['https://evm.cronos.org']
+    25: ['https://evm.cronos.org'],
+    8453: ['https://mainnet.base.org', 'https://base-rpc.publicnode.com', 'https://1rpc.io/base']
   };
 
   // Chain metadata for wallet_addEthereumChain
@@ -85,7 +86,8 @@
     10:    { name: 'Optimism', symbol: 'ETH', decimals: 18, explorer: 'https://optimistic.etherscan.io' },
     43114: { name: 'Avalanche C-Chain', symbol: 'AVAX', decimals: 18, explorer: 'https://snowtrace.io' },
     250:   { name: 'Fantom', symbol: 'FTM', decimals: 18, explorer: 'https://ftmscan.com' },
-    25:    { name: 'Cronos', symbol: 'CRO', decimals: 18, explorer: 'https://cronoscan.com' }
+    25:    { name: 'Cronos', symbol: 'CRO', decimals: 18, explorer: 'https://cronoscan.com' },
+    8453:  { name: 'Base', symbol: 'ETH', decimals: 18, explorer: 'https://basescan.org' }
   };
 
   // bridgeChainId: controls read-only RPC routing (eth_chainId, eth_blockNumber, etc.)
@@ -313,13 +315,20 @@
       var tx = Object.assign({}, params[0]);
       var tasks = [];
 
+      var txChain = tx.chainId ? parseInt(tx.chainId, 16) : walletChainId;
+
+      if (!tx.from) {
+        var userAddr = (window.user && window.user.wallet_address) || '';
+        if (userAddr) tx.from = userAddr;
+      }
+
       if (!tx.gas && !tx.gasLimit) {
         tasks.push(
-          directRpc('eth_estimateGas', [{ from: tx.from, to: tx.to, value: tx.value, data: tx.data }])
+          directRpc('eth_estimateGas', [{ from: tx.from, to: tx.to, value: tx.value, data: tx.data }], txChain)
             .then(function (gas) {
               var padded = Math.ceil(parseInt(gas, 16) * 1.2);
               tx.gas = '0x' + padded.toString(16);
-              console.log('[PC2 Bridge] Pre-filled gas:', tx.gas, '(estimated:', gas, ')');
+              console.log('[PC2 Bridge] Pre-filled gas:', tx.gas, '(estimated:', gas, ', chain:', txChain, ')');
             })
             .catch(function (e) { console.warn('[PC2 Bridge] Gas estimate failed, MetaMask will estimate:', e.message); })
         );
@@ -327,7 +336,7 @@
 
       if (!tx.gasPrice && !tx.maxFeePerGas) {
         tasks.push(
-          directRpc('eth_gasPrice', [])
+          directRpc('eth_gasPrice', [], txChain)
             .then(function (price) {
               tx.gasPrice = price;
               console.log('[PC2 Bridge] Pre-filled gasPrice:', price);
@@ -337,7 +346,7 @@
       }
 
       if (!tx.chainId) {
-        tx.chainId = '0x' + bridgeChainId.toString(16);
+        tx.chainId = '0x' + txChain.toString(16);
       }
 
       if (tasks.length === 0) return Promise.resolve([tx]);
@@ -373,12 +382,40 @@
       });
     }
 
+    function ensureCorrectAccount(params) {
+      if (!isTx || !params || !params[0] || !params[0].from) return Promise.resolve();
+      var expectedFrom = params[0].from.toLowerCase();
+      return provider.request({ method: 'eth_accounts' }).then(function (accounts) {
+        var selected = (accounts && accounts[0]) ? accounts[0].toLowerCase() : '';
+        if (selected && selected !== expectedFrom) {
+          var short = expectedFrom.substring(0, 6) + '...' + expectedFrom.slice(-4);
+          console.warn('[PC2 Bridge] MetaMask account mismatch — selected:', selected, 'expected:', expectedFrom);
+          return provider.request({ method: 'wallet_requestPermissions', params: [{ eth_accounts: {} }] })
+            .then(function () {
+              return provider.request({ method: 'eth_accounts' });
+            })
+            .then(function (newAccounts) {
+              var newSelected = (newAccounts && newAccounts[0]) ? newAccounts[0].toLowerCase() : '';
+              if (newSelected !== expectedFrom) {
+                throw new Error('Wrong MetaMask account selected. Please switch to ' + short + ' in MetaMask and try again.');
+              }
+              console.log('[PC2 Bridge] Account switched to', short);
+            });
+        }
+      }).catch(function (err) {
+        if (err.message && err.message.indexOf('Wrong MetaMask account') >= 0) throw err;
+        console.warn('[PC2 Bridge] Account check failed (non-fatal):', err.message);
+      });
+    }
+
     var prepare = isTx
       ? ensureWalletOnChain().then(function () { return prefillGasForTx(data.params); })
       : Promise.resolve(data.params);
 
     prepare.then(function (finalParams) {
-      return provider.request({ method: data.method, params: finalParams });
+      return ensureCorrectAccount(finalParams).then(function () {
+        return provider.request({ method: data.method, params: finalParams });
+      });
     })
       .then(function (result) {
         respond({

@@ -2,7 +2,7 @@
 
 > **Purpose:** Team-facing document covering what we've built, how decentralized it is, what's remaining, and the path to the walk-away test.
 > **Created:** 2026-03-14
-> **Last Updated:** 2026-03-23
+> **Last Updated:** 2026-04-07
 > **Branch:** `feature/lit-chipotle-migration`
 
 ---
@@ -340,18 +340,31 @@ The "walk-away test" means: Elacity Labs stops running infrastructure, but the p
 
 ## Protocol Fee Model (Already Decentralized)
 
-Revenue flows are enforced by smart contracts, not infrastructure:
+Revenue flows are enforced by smart contracts, not infrastructure.
+
+### V3 Model (Active)
+
+V3 contracts handle protocol fees automatically via `protocolShares` — no manual royalty calculation needed:
 
 ```
-Buyer pays 1.00 USDC for AccessToken
-  ├── 0.95 USDC → Creator wallet (on-chain transfer)
-  ├── 0.05 USDC → Elacity royalty wallet (on-chain transfer, configured per-channel)
-  └── AuthorityGateway may take additional protocol fee (on-chain)
+At mint time (V3 — verified on-chain Apr 6, 2026):
+  ROYALTY_SHARE token (ID 2) distribution:
+  ├── 950 per-mille (95%) → Creator wallet
+  └──  50 per-mille (5%)  → Protocol address (0xdb0e70c1...)
+
+  ACCESS_TOKEN (ID 1, 1M copies) → Creator (for sale)
+  DISTRIBUTION_RIGHT (ID 3, 1 copy) → Creator
+
+On primary buy:
+  Buyer pays USDC → AuthorityGateway.buyAccess()
+  ├── Creator share → Creator wallet (per ROYALTY_SHARE)
+  ├── Protocol share → Protocol wallet (per ROYALTY_SHARE)
+  └── AccessToken transferred → Buyer
 
 On resale:
   ├── Resale price → Seller
-  ├── Royalty % → Creator (enforced by operative contract)
-  └── Protocol fee → AuthorityGateway
+  ├── Royalty % → Creator (enforced by operative resellerCut)
+  └── Protocol fee → per ROYALTY_SHARE distribution
 ```
 
 **Walk-away implication:** Even if all Elacity infrastructure goes offline, every `buyAccess()` call on-chain still:
@@ -365,13 +378,32 @@ Protocol fees are collected at the **smart contract level**, not the infrastruct
 
 ## Key Contracts (Base Mainnet, Chain ID 8453)
 
+### V3 Contracts (Active — ElastOS v1.2+)
+
+| Contract | Address | Purpose |
+|----------|---------|---------|
+| CentralStorage | `0x0C1EeA2A3361B80AC0e42179335dB536A951760b` | Content registration, fee lookups |
+| AuthorityGateway | `0x09dBe796f40ECEffEAccf243c3d758C4c1d8D87D` | Access control, `buyAccess()`, `hasAccessByContentId()` |
+| ChannelFactory | `0xE1365ed47353De2F8A6a69E271e36650A9EE368F` | Channel creation, `ChannelCreated` events |
+| RoyaltyTradeGateway | `0xd02451BCE627EF476B8ee52Cf131C426f67dbcB2` | Secondary market royalty share trading |
+| EventHub | `0x5a694A6d988354dca491fe0F6db7a6ef46b656c2` | Cross-contract event aggregation |
+| USDC | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` | Payment token (6 decimals) |
+
+**V3 key changes from V2:**
+- `protocolShares` (5%) handled automatically by V3 contracts — no manual royalty addition needed
+- `operative(address channel, uint256 tokenId)` replaces V2 `operativeOf` for lookups
+- `ChannelFactory` deploys channels (V2 used `ChannelCore`)
+- `CentralStorage` replaces `CoreStorage` for content registration
+- `EventHub` aggregates events from all V3 contracts (key for indexer integration)
+
+### V2 Contracts (Legacy — reference only)
+
 | Contract | Address | Purpose |
 |----------|---------|---------|
 | CoreStorage | `0xc8F50Bf1A6b765460621f861a64a5d333Bc7f575` | Fee lookups, storage |
-| AuthorityGateway | `0x8fe6bf9877B78BF0126819ff2593235E54Ee1E29` | Access control, `buyAccess()`, `hasAccessByContentId()` |
+| AuthorityGateway | `0x8fe6bf9877B78BF0126819ff2593235E54Ee1E29` | Access control |
 | ChannelCore | `0x6a3f7780C54cb66291f8f1bE609047C2f664Dbf6` | Channel creation, minting |
 | TradeGateway | `0x9eC53758b698f9F68C0654DDd9159173a159a459` | Secondary market trading |
-| USDC | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` | Payment token (6 decimals) |
 | OperativeBuyable Factory | `0x4A49A185c4bD77f037cE4f9fE788fc95ec8f3123` | Deploys buy-only operatives |
 | OperativeBuyableSellable Factory | `0x50002734a4546Ca153BF8b4cC703Fc53Ba90eb9f` | Deploys buy+resell operatives |
 
@@ -393,6 +425,18 @@ Protocol fees are collected at the **smart contract level**, not the infrastruct
 ---
 
 ## Verified On-Chain Transactions
+
+### V3 Transactions (Apr 2026 — ElastOS v1.2 E2E Testing)
+
+| Event | Tx Hash | Details |
+|-------|---------|---------|
+| V3 Channel creation | on-chain | Channel `0x6756E140...` via ChannelFactory, EOA owner `0x34DA...3Dc3` |
+| V3 Free mint (image) | on-chain | Token minted, contentId bound to CentralStorage, WASM viewer playback confirmed |
+| V3 Paid mint (video) | `0xc1a854205ba6...` | Channel `0x6756E140...`, Operative `0x6e2514...`, buy_and_resell, 0.01 USDC |
+| V3 Royalty verification | decoded from logs | ROYALTY_SHARE: 950/1000 creator, 50/1000 protocol — confirmed correct |
+| V3 Paid mint (video 2) | on-chain | Channel `0xb4a1c563...`, playback confirmed, MetaMask account-switch UX verified |
+
+### V2 Transactions (Legacy — Mar 2026)
 
 | Event | Tx Hash | Details |
 |-------|---------|---------|
@@ -473,6 +517,19 @@ The on-chain content indexer is designed for forward compatibility with Elacity 
 - **Parallel scanning**: Both v2 and v3 content will be indexed simultaneously — no migration needed
 - **Event signature changes**: If v3 emits different events (e.g., different topic signature or different event fields), a small parser update in `ContentIndexerService.scanDigitalAssetRegistered()` may be needed per version. The versioned architecture isolates these changes
 - **Database compatible**: The `content_catalog` table includes a `contract_version` column — v2 and v3 content coexist in the same table
+
+#### V3 Migration Status (Apr 7, 2026)
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| **Creator Dashboard** | ✅ V3 Live | V3 ABIs, channel creation, free/paid minting, royalty distribution all verified |
+| **Market App (Frontend)** | ✅ V3 Ready | V3 contract addresses, ABIs, Base chain — no V2 crossovers |
+| **Market App (Backend/API)** | ⏳ Blocked | Elacity GraphQL indexer has NOT indexed V3 channels or assets (`total: 0`). Buy/sell testing blocked until indexer processes V3 EventHub events |
+| **Wallet Bridge** | ✅ V3 Live | Base chain (8453) added, gas estimation fixed, account-switch UX added |
+| **ContentIndexerService** | ⏳ Needs Config | V3 CentralStorage address (`0x0C1EeA...`) + `from_block` (43892000) to be added to config |
+| **Lit Chipotle (dDRM)** | ⏳ Needs V3 ABI | `hasAccessByContentId` call in Lit Action needs V3 AuthorityGateway address |
+
+**Key insight:** The centralized Elacity GraphQL API is the current bottleneck — it has 0 V3 assets indexed and doesn't recognize V3 channels. The **walk-away path** (ContentIndexerService on each node) is designed to solve this, but needs V3 config added. The supernode strategy (Tier 2) would further accelerate indexer scans by routing Base RPC reads through supernodes.
 
 ---
 

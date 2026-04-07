@@ -422,9 +422,9 @@ These diagrams from Rong define the north star. Every work stream should move us
 
 **v1.3 Release — HIGH PRIORITY (Gate 1 UNBLOCKED):**
 
-> **Status:** Gate 1 COMPLETE — Lit Chipotle mainnet live and integrated (Apr 2, 2026). Gate 2 still blocked.
+> **Status:** Gate 1 COMPLETE — Lit Chipotle mainnet live and integrated (Apr 2, 2026). Gate 2 IN PROGRESS — V3 contracts received, Creator Dashboard testing complete, Market blocked on indexer.
 > **Gate 1:** ~~Lit Protocol production network details~~ **COMPLETE** — Production account, PKP, group, API keys, Lit Action CIDs all configured. E2E encrypt + decrypt verified.
-> **Gate 2:** Elacity V3 audited smart contract ABIs + addresses — still waiting
+> **Gate 2:** Elacity V3 smart contracts — **IN PROGRESS**. Addresses received, Creator app migrated, 4/7 E2E tests passed. See `docs/core/V3_E2E_TESTING_STATUS.md`
 > **Plan:** See `.cursor/plans/v1.3_release_plan_7cce212d.plan.md` for full execution checklist
 
 - [x] **COMPLETE (Apr 2):** Chipotle production swap — production account on `dashboard.litprotocol.com`, `elacity-ddrm` group created, non-media Lit Action CID (`QmNayE5MYzXcoMS9nvRk6MUo8r4ESLa3i65vHXzuBsnC2b`) registered, PKP (`0x68dcf3dc...`) added to group, scoped usage API key created, $10 credit funded. Updated `DEFAULT_API_URL` + `DEFAULT_PKP_ID` in `chipotle-client.ts`, local `.chipotle-api-key` + `.chipotle-account-key` files. **E2E verified: mint → encrypt (Lit production) → save .ddrm → open → decrypt (AuthorityGateway access check) → WASM render → watermarked display.**
@@ -441,7 +441,7 @@ These diagrams from Rong define the north star. Every work stream should move us
   - **Endpoint hardening:** `/lit/server-info` now requires authentication; server wallet address removed from response payload.
   - **Action CID alignment:** Fallback `getActionCid()` in `chipotle-client.js` updated to match registered production CID (`QmNayE5MYzXcoMS9nvRk6MUo8r4ESLa3i65vHXzuBsnC2b`).
 - [ ] **PLANNED:** Decentralized Lit relay network — PC2 supernodes proxy Lit API calls on behalf of regular nodes. Shared API key stays on supernodes (never distributed to end-user nodes). Architecture: `PC2 Node → [node auth token] → Supernode relay → [shared API key] → Lit Chipotle API`. Benefits: (1) API key never leaves trusted infrastructure, (2) distributed relay eliminates single point of failure, (3) per-node usage attribution enables cost tracking, (4) rate limiting at relay layer protects shared quota, (5) foundation for future Elacity-native TEE network replacing Lit dependency. See decentralization roadmap below.
-- [ ] **BLOCKED (V3 contracts):** V3 contract migration — update addresses in 8+ locations (`sdk/config.ts`, `config/default.json`, `chipotle-client.ts`, `storage.ts`, `dashPackager.ts`, `elacity-creator/app.js`, `elacity-market/wallet.js`, `packages/access`), update V2 ABIs to V3 in Creator Dashboard, reconcile two AuthorityGateway addresses (`0x8fe6...` vs `0x580C...`), add `"v3"` entry to Content Indexer config, rebuild `@elacity-js/access` vendor bundles
+- [ ] **IN PROGRESS (V3 contracts):** V3 contract migration — ✅ Creator Dashboard (`app.js`) fully migrated to V3 ABIs, tested channel creation + free/paid minting + royalty distribution. ✅ Market app (`wallet.js`) V3 addresses verified, no V2 crossovers. ✅ Wallet bridge Base chain support added. ⏳ Remaining: `sdk/config.ts` V3 addresses, `config/default.json` Content Indexer V3 entry, `chipotle-client.ts` V3 AuthorityGateway for `hasAccessByContentId`, `packages/access` vendor bundles. ⛔ Market E2E blocked on Elacity GraphQL indexer (0 V3 assets indexed). See `docs/core/V3_E2E_TESTING_STATUS.md`
 - [ ] **BLOCKED (V3 + Lit):** PDR Phase B — SDK extraction (`sdk/metadata.ts`, `sdk/contracts.ts`, `sdk/channels.ts`, `sdk/mint.ts`, `sdk/licensing.ts`, `sdk/compliance.ts`), Enterprise REST API (`/api/v1/content`, `/api/v1/license`, `/api/v1/compliance`), MCP Server for AI buyer agents (`elacity.content.*`, `elacity.license.*`)
 - [x] Deploy to supernodes (InterServer + Contabo) — **Deployed Apr 6, 2026**. Updated web-gateway with `/api/ddrm/provision` endpoint, wrote Chipotle usage API key + PKP ID to `/etc/pc2/` on both servers, added nginx route on Contabo. Both endpoints verified externally. Fresh PC2 nodes can now auto-provision Lit Chipotle credentials on first startup
 - [ ] Merge `feature/lit-chipotle-migration` -> `main`, tag v1.3.0
@@ -502,6 +502,7 @@ These diagrams from Rong define the north star. Every work stream should move us
   - Database migration 19: `content_catalog` table with indexes (creator, type, content_id, channel, status, block)
   - Configurable scan interval (default 30min), max blocks per scan (10K), metadata fetch concurrency (3)
   - Versioned contract design: when v3 contracts deploy, add `"v3": { "core_storage": "0xNEW...", "from_block": N }` to config — no code changes needed
+  - **V3 contracts now available** (Apr 2026): CentralStorage `0x0C1EeA2A3361B80AC0e42179335dB536A951760b`, EventHub `0x5a694A6d988354dca491fe0F6db7a6ef46b656c2`, from_block `43892000`. V3 uses EventHub for aggregated events — parser update may be needed for EventHub topic signatures
 - [ ] Self-provisioned RLI tokens — each PC2 node mints own capacity credits, removes Elacity wallet dependency. See Tier 1.3
 - [ ] AI Model Marketplace alpha — encrypt GGUF/SafeTensors model → IPFS → ACCESS_TOKEN → decrypt on PC2 → load in Ollama
 - [ ] Code/Plugin Marketplace — dDRM-gated npm packages, themes, extensions
@@ -610,7 +611,7 @@ These diagrams from Rong define the north star. Every work stream should move us
 - [x] Contract config centralization — `pc2-node/src/sdk/config.ts`, all addresses in one file (Mar 23)
 - [x] Publish toolbar button — one-click upload dropdown in desktop toolbar, launches Creator Dashboard (Mar 23)
 - [x] Publish Queue / Drafts — `publish_drafts` DB table (migration 21), `/api/drafts` REST endpoints, auto-save at pipeline checkpoint, resume signing from any device, badge count + queue list in toolbar dropdown (Mar 23)
-- [ ] **BLOCKED (V3 + Lit):** V3 ABI migration — update Creator Dashboard ABIs (`DIGITAL_ASSET`, `OPERATIVE`, `CHANNEL_CORE`, `CORE_STORAGE`), contract addresses, `operativeOf` fallback, `parseAssetCreatedEvent` event signatures, and `encodeSellRawData`/`encodeOpRawData` encoding to match new V3 contract interfaces
+- [x] **COMPLETE (Apr 6–7):** V3 ABI migration (Creator Dashboard) — Updated `app.js` with V3 ABIs: `ChannelFactory.createChannel`, `operative(address,uint256)` (replaces V2 `operativeOf`), `CentralStorage` events, `AssetFactory.mint` encoding, `bytes16 contentId` in `opRawData`. V3 `protocolShares` (5%) handled automatically — removed manual Elacity royalty from `getRoyaltyPartners`. Channel discovery via on-chain `ChannelCreated` event scan (parallelized, cached). 11 bugs fixed during testing (see `V3_E2E_TESTING_STATUS.md`)
 - [ ] **BLOCKED (V3 + Lit):** SDK extraction — `pc2-node/src/sdk/` modules (metadata, contracts, channels, mint, licensing, compliance, pricing)
 - [ ] **BLOCKED (V3 + Lit):** Server-side pipeline orchestrator — `sdk/mint.ts` chains encode→encrypt→upload→metadata autonomously on node, enables "upload and walk away" (Jetson processes while user is offline)
 - [ ] **BLOCKED (V3 + Lit):** Enterprise REST API — `/api/v1/content`, `/api/v1/license`, `/api/v1/compliance` with API key auth

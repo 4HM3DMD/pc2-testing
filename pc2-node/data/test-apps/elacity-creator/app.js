@@ -325,10 +325,45 @@
     }
   }
 
-  // ── V3 on-chain channel discovery ──────────────────────
+  // ── V3 channel discovery: cache → on-chain (V3 factory only) ──
+
+  var CHANNEL_FACTORY_DEPLOY_BLOCK = 43892000;
+  var CHANNEL_CACHE_KEY = 'elacity_v3only_channels_';
+  var CHANNEL_CACHE_TTL = 30 * 60 * 1000;
+
+  function getCachedChannels(walletAddress) {
+    try {
+      var raw = localStorage.getItem(CHANNEL_CACHE_KEY + walletAddress.toLowerCase());
+      if (!raw) return null;
+      var cached = JSON.parse(raw);
+      if (Date.now() - cached.ts > CHANNEL_CACHE_TTL) return null;
+      return cached.channels;
+    } catch (_) { return null; }
+  }
+
+  function setCachedChannels(walletAddress, channels) {
+    try {
+      localStorage.setItem(CHANNEL_CACHE_KEY + walletAddress.toLowerCase(),
+        JSON.stringify({ ts: Date.now(), channels: channels }));
+    } catch (_) {}
+  }
+
+  async function rpcBatch(calls) {
+    var resp = await fetch(BASE_RPC, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(calls.map(function (c, i) { return { jsonrpc: '2.0', id: i, method: c.method, params: c.params }; })),
+    });
+    return resp.json();
+  }
 
   async function fetchV3ChannelsOnChain(walletAddress) {
     try {
+      var cached = getCachedChannels(walletAddress);
+      if (cached && cached.length > 0) {
+        console.log('[Creator] V3 channels from cache (' + cached.length + ')');
+        return cached;
+      }
+
       var iface = new ethers.Interface(ABI.CHANNEL_FACTORY);
       var topic0 = iface.getEvent('ChannelCreated').topicHash;
       var creatorTopic = '0x' + walletAddress.toLowerCase().replace('0x', '').padStart(64, '0');
@@ -337,45 +372,63 @@
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_blockNumber', params: [] }),
       });
-      var blockJson = await blockResp.json();
-      var latestBlock = parseInt(blockJson.result, 16);
-      var fromBlock = '0x' + Math.max(0, latestBlock - 9000).toString(16);
+      var latestBlock = parseInt((await blockResp.json()).result, 16);
 
-      var logsResp = await fetch(BASE_RPC, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          jsonrpc: '2.0', id: 1, method: 'eth_getLogs',
-          params: [{ address: CONTRACTS.CHANNEL_FACTORY, fromBlock: fromBlock, toBlock: 'latest', topics: [topic0, null, null, creatorTopic] }],
-        }),
-      });
-      var logsJson = await logsResp.json();
-      var logs = (logsJson.result || []);
-      if (logs.length === 0) return [];
+      var CHUNK = 9999;
+      var PARALLEL = 5;
+      var minBlock = CHANNEL_FACTORY_DEPLOY_BLOCK;
+      var foundAddrs = {};
 
-      var channels = [];
-      for (var i = 0; i < logs.length; i++) {
-        var data = logs[i].data || '0x';
-        if (data.length < 130) continue;
-        var channelAddr = '0x' + data.slice(26, 66);
-        var chName = channelAddr.substring(0, 10) + '...';
+      var ranges = [];
+      for (var c = latestBlock; c > minBlock; c = c - CHUNK - 1) {
+        ranges.push({ from: Math.max(c - CHUNK, minBlock), to: c });
+      }
+
+      for (var b = 0; b < ranges.length; b += PARALLEL) {
+        var batch = ranges.slice(b, b + PARALLEL);
+        var calls = batch.map(function (r) {
+          return { method: 'eth_getLogs', params: [{ address: CONTRACTS.CHANNEL_FACTORY, fromBlock: '0x' + r.from.toString(16), toBlock: '0x' + r.to.toString(16), topics: [topic0, null, null, creatorTopic] }] };
+        });
         try {
-          var nameSelector = '0x06fdde03';
-          var nameResp = await fetch(BASE_RPC, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_call', params: [{ to: channelAddr, data: nameSelector }, 'latest'] }),
+          var results = await rpcBatch(calls);
+          if (!Array.isArray(results)) results = [results];
+          results.forEach(function (r) {
+            (r.result || []).forEach(function (log) {
+              if (log.data && log.data.length >= 130) {
+                foundAddrs[ethers.getAddress('0x' + log.data.slice(26, 66))] = true;
+              }
+            });
           });
-          var nameJson = await nameResp.json();
-          if (nameJson.result && nameJson.result.length > 2) {
-            var decoded = ethers.AbiCoder.defaultAbiCoder().decode(['string'], nameJson.result);
+        } catch (_) {}
+      }
+
+      var addrs = Object.keys(foundAddrs);
+      if (addrs.length === 0) return [];
+
+      var nameCalls = addrs.map(function (a) {
+        return { method: 'eth_call', params: [{ to: a, data: '0x06fdde03' }, 'latest'] };
+      });
+      var nameResults = [];
+      try { nameResults = await rpcBatch(nameCalls); } catch (_) {}
+      if (!Array.isArray(nameResults)) nameResults = [nameResults];
+
+      var channels = addrs.map(function (addr, idx) {
+        var chName = addr.substring(0, 10) + '...';
+        try {
+          var r = nameResults[idx];
+          if (r && r.result && r.result.length > 2) {
+            var decoded = ethers.AbiCoder.defaultAbiCoder().decode(['string'], r.result);
             if (decoded[0]) chName = decoded[0];
           }
         } catch (_) {}
-        channels.push({ address: ethers.getAddress(channelAddr), name: chName, _v3: true, creator: { address: walletAddress } });
-      }
+        return { address: addr, name: chName, _v3: true, creator: { address: walletAddress } };
+      });
+
+      setCachedChannels(walletAddress, channels);
       return channels;
     } catch (err) {
-      console.warn('[Creator] V3 on-chain channel scan failed:', err.message);
-      return [];
+      console.warn('[Creator] V3 channel scan failed:', err.message);
+      return getCachedChannels(walletAddress) || [];
     }
   }
 
@@ -3187,6 +3240,7 @@
 
       // Save draft so user can close and come back to sign later
       try {
+        var draftWalletType = getChannelOwnerType(dom.assetChannel) || (hasSmartAccount() ? 'sa' : 'eoa');
         var draftBody = {
           title: title,
           description: description,
@@ -3198,6 +3252,7 @@
           metadata_cid: metaCid,
           encrypt_hash: encryptResult.dataToEncryptHash,
           channel: channel,
+          wallet_choice: draftWalletType,
           price: String(price || 0),
           currency_address: priceCurrency,
           currency_symbol: (CURRENCIES.find(function (c) { return c.address === priceCurrency; }) || CURRENCIES[0]).symbol,
@@ -3243,6 +3298,8 @@
       if (publishLaterBtn) publishLaterBtn.style.display = '';
       validateStep3();
 
+      var mintSuccess = false;
+      while (!mintSuccess) {
       await new Promise(function (resolve) {
         state._mintResolve = resolve;
       });
@@ -3261,6 +3318,7 @@
         btnMintText.textContent = 'Minting...';
       }
 
+      try {
       if (channel && ethers.isAddress(channel)) {
         setProgStep('prog-mint', 'Preparing...', 'active');
 
@@ -3269,7 +3327,21 @@
           walletChoice = await showWalletChoice('Choose Wallet for Minting');
         }
         state.walletChoice = walletChoice;
+
+        if (!state.walletAddress) {
+          try {
+            var accts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+            if (accts && accts[0]) state.walletAddress = accts[0];
+          } catch (_) {}
+        }
+        if (!state.walletAddress) {
+          throw new Error('Wallet not connected — please reconnect your wallet and try again.');
+        }
+
         var effectiveAddr = getEffectiveAddress(walletChoice);
+        if (!effectiveAddr || effectiveAddr === '0x' || effectiveAddr.length < 10) {
+          throw new Error('Could not determine wallet address for ' + walletChoice + '. Reconnect wallet and try again.');
+        }
         console.log('[Creator] Wallet choice:', walletChoice, '(from channel owner) effective:', effectiveAddr);
 
         try {
@@ -3536,6 +3608,23 @@
         setProgStep('prog-approve', 'Skipped', 'done');
       }
 
+      mintSuccess = true;
+      } catch (mintStepErr) {
+        console.error('[Creator] Mint step failed:', mintStepErr.message);
+        var btnSignMintRetry = document.getElementById('btn-sign-mint');
+        var btnMintTextRetry = document.getElementById('btn-sign-mint-text');
+        if (btnSignMintRetry) btnSignMintRetry.disabled = false;
+        if (btnMintTextRetry) btnMintTextRetry.textContent = 'Retry Sign & Mint';
+        setProgStep('prog-mint', 'Failed — click Retry above', 'error');
+        if (dom.btnBackTo2) dom.btnBackTo2.disabled = false;
+        showToast('Mint failed: ' + (mintStepErr.message || '').substring(0, 80) + ' — click Retry', 'error');
+        PROGRESS_STEPS.forEach(function (id) {
+          var el = document.getElementById(id);
+          if (el && el.classList.contains('active')) setProgStep(id, 'Waiting for retry', 'pending');
+        });
+      }
+      } // end while (!mintSuccess)
+
       // ── Done — delete draft since mint completed ──────
       if (state.draftId) {
         try {
@@ -3735,6 +3824,7 @@
           setProgStep(id, 'Failed', 'error');
         }
       });
+
     }
   }
 
@@ -4567,14 +4657,21 @@
         if (dom.assetAccess) dom.assetAccess.value = draft.access_method || 'buy_and_resell';
         if (dom.assetCopies) dom.assetCopies.value = draft.copies || 10000;
         var channelSel = dom.assetChannel;
+        var draftOwner = draft.wallet_choice || null;
         if (channelSel && draft.channel) {
           channelSel.value = draft.channel;
-          if (channelSel.value !== draft.channel) {
-            channelSel.value = 'custom';
-            if (dom.assetChannelCustom) {
-              dom.assetChannelCustom.value = draft.channel;
-              dom.assetChannelCustom.style.display = '';
+          if (channelSel.value === draft.channel) {
+            var selOpt = channelSel.options[channelSel.selectedIndex];
+            if (selOpt && draftOwner && !selOpt.getAttribute('data-owner')) {
+              selOpt.setAttribute('data-owner', draftOwner);
             }
+          } else {
+            var draftOpt = document.createElement('option');
+            draftOpt.value = draft.channel;
+            draftOpt.textContent = (draft.title || 'Draft') + ' (' + draft.channel.substring(0, 8) + '...)';
+            if (draftOwner) draftOpt.setAttribute('data-owner', draftOwner);
+            channelSel.insertBefore(draftOpt, channelSel.firstChild);
+            channelSel.value = draft.channel;
           }
         }
         var currSel = document.getElementById('asset-currency');
@@ -4668,12 +4765,26 @@
         if (channel && ethers.isAddress(channel)) {
           setProgStep('prog-mint', 'Preparing...', 'active');
 
-          var draftWalletChoice = getChannelOwnerType(dom.assetChannel) || (hasSmartAccount() ? 'sa' : 'eoa');
-          if (!getChannelOwnerType(dom.assetChannel)) {
+          var draftWalletChoice = getChannelOwnerType(dom.assetChannel) || draft.wallet_choice || (hasSmartAccount() ? 'sa' : 'eoa');
+          if (!getChannelOwnerType(dom.assetChannel) && !draft.wallet_choice) {
             draftWalletChoice = await showWalletChoice('Choose Wallet for Minting');
           }
           state.walletChoice = draftWalletChoice;
+
+          if (!state.walletAddress) {
+            try {
+              var draftAccts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+              if (draftAccts && draftAccts[0]) state.walletAddress = draftAccts[0];
+            } catch (_) {}
+          }
+          if (!state.walletAddress) {
+            throw new Error('Wallet not connected — please reconnect your wallet and try again.');
+          }
+
           var draftEffectiveAddr = getEffectiveAddress(draftWalletChoice);
+          if (!draftEffectiveAddr || draftEffectiveAddr === '0x' || draftEffectiveAddr.length < 10) {
+            throw new Error('Could not determine wallet address for ' + draftWalletChoice + '. Reconnect wallet and try again.');
+          }
 
           try {
             await window.ethereum.request({
@@ -4721,7 +4832,7 @@
                 creatorAddress: draftEffectiveAddr,
                 copies: copies,
                 opType: opType,
-                resellerCut: draft.reseller_cut || 1000,
+                resellerCut: draft.reseller_cut || 900,
                 royalties: draft.royalty_partners ? JSON.parse(draft.royalty_partners) : [],
               })
             : ethers.AbiCoder.defaultAbiCoder().encode(['bytes16'], [hashToContentId(encryptHash)]);
