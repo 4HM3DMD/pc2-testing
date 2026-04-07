@@ -527,7 +527,7 @@ The on-chain content indexer is designed for forward compatibility with Elacity 
 | **Market App (Backend/API)** | ⏳ Blocked | Elacity GraphQL indexer has NOT indexed V3 channels or assets (`total: 0`). Buy/sell testing blocked until indexer processes V3 EventHub events |
 | **Wallet Bridge** | ✅ V3 Live | Base chain (8453) added, gas estimation fixed, account-switch UX added |
 | **ContentIndexerService** | ⏳ Needs Config | V3 CentralStorage address (`0x0C1EeA...`) + `from_block` (43892000) to be added to config |
-| **Lit Chipotle (dDRM)** | ⏳ Needs V3 ABI | `hasAccessByContentId` call in Lit Action needs V3 AuthorityGateway address |
+| **Lit Chipotle (dDRM)** | ✅ V3 Live | `DEFAULT_AUTHORITY` in `storage.ts`, `chipotle-client.ts`, `dashPackager.ts` already points to V3 AuthorityGateway. Playback of V3-minted content confirmed |
 
 **Key insight:** The centralized Elacity GraphQL API is the current bottleneck — it has 0 V3 assets indexed and doesn't recognize V3 channels. The **walk-away path** (ContentIndexerService on each node) is designed to solve this, but needs V3 config added. The supernode strategy (Tier 2) would further accelerate indexer scans by routing Base RPC reads through supernodes.
 
