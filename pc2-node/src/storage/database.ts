@@ -83,7 +83,7 @@ export interface ContentCatalogItem {
   id?: number;
   content_id: string | null;
   channel_address: string;
-  token_id: number;
+  token_id: string;
   operative_address: string | null;
   creator_address: string;
   name: string | null;
@@ -152,6 +152,9 @@ export class DatabaseManager {
     
     // Enable foreign keys
     this.db.pragma('foreign_keys = ON');
+    
+    // WAL mode for concurrent read/write (indexer writes while API reads)
+    this.db.pragma('journal_mode = WAL');
     
     // Run migrations
     runMigrations(this.db);
@@ -1791,15 +1794,18 @@ export class DatabaseManager {
 
   getCatalogItemsPendingMetadata(limit = 50): ContentCatalogItem[] {
     const db = this.getDB();
+    const retryAfterMs = 60 * 60 * 1000; // retry failed items after 1 hour
+    const retryCutoff = Date.now() - retryAfterMs;
     return db.prepare(`
       SELECT * FROM content_catalog
       WHERE metadata_status = 'pending'
-      ORDER BY block_number ASC
+         OR (metadata_status = 'failed' AND indexed_at < ?)
+      ORDER BY metadata_status ASC, block_number ASC
       LIMIT ?
-    `).all(limit) as ContentCatalogItem[];
+    `).all(retryCutoff, limit) as ContentCatalogItem[];
   }
 
-  updateCatalogMetadata(channelAddress: string, tokenId: number, chainId: number, updates: Partial<ContentCatalogItem>): void {
+  updateCatalogMetadata(channelAddress: string, tokenId: string, chainId: number, updates: Partial<ContentCatalogItem>): void {
     const db = this.getDB();
     const fields: string[] = [];
     const values: any[] = [];
@@ -1820,7 +1826,7 @@ export class DatabaseManager {
     `).run(...values);
   }
 
-  catalogItemExists(channelAddress: string, tokenId: number, chainId: number): boolean {
+  catalogItemExists(channelAddress: string, tokenId: string, chainId: number): boolean {
     const db = this.getDB();
     const row = db.prepare(`
       SELECT 1 FROM content_catalog
@@ -1832,6 +1838,7 @@ export class DatabaseManager {
   getCatalogItems(options: {
     assetType?: string;
     creator?: string;
+    channel?: string;
     search?: string;
     limit?: number;
     offset?: number;
@@ -1847,6 +1854,10 @@ export class DatabaseManager {
     if (options.creator) {
       conditions.push('creator_address = ?');
       params.push(options.creator);
+    }
+    if (options.channel) {
+      conditions.push('LOWER(channel_address) = LOWER(?)');
+      params.push(options.channel);
     }
     if (options.search) {
       conditions.push('(name LIKE ? OR description LIKE ?)');
@@ -1868,11 +1879,164 @@ export class DatabaseManager {
     return { items, total: countRow.total };
   }
 
+  getOwnedCatalogItems(walletAddress: string, options: { limit?: number; offset?: number } = {}): { items: ContentCatalogItem[]; total: number } {
+    const db = this.getDB();
+    const limit = options.limit || 50;
+    const offset = options.offset || 0;
+    const walletLower = walletAddress.toLowerCase();
+
+    const query = `
+      SELECT cc.* FROM content_catalog cc
+      WHERE cc.metadata_status = 'resolved'
+        AND (
+          LOWER(cc.creator_address) = ?
+          OR cc.content_cid IN (SELECT cid FROM pinned_cids WHERE LOWER(wallet_address) = ?)
+          OR cc.content_cid IN (SELECT DISTINCT cid FROM pinned_cids)
+        )
+      ORDER BY cc.block_number DESC
+      LIMIT ? OFFSET ?
+    `;
+
+    const countQuery = `
+      SELECT COUNT(*) as total FROM content_catalog cc
+      WHERE cc.metadata_status = 'resolved'
+        AND (
+          LOWER(cc.creator_address) = ?
+          OR cc.content_cid IN (SELECT cid FROM pinned_cids WHERE LOWER(wallet_address) = ?)
+          OR cc.content_cid IN (SELECT DISTINCT cid FROM pinned_cids)
+        )
+    `;
+
+    const countRow = db.prepare(countQuery).get(walletLower, walletLower) as { total: number };
+    const items = db.prepare(query).all(walletLower, walletLower, limit, offset) as ContentCatalogItem[];
+
+    return { items, total: countRow.total };
+  }
+
   getCatalogItemByContentId(contentId: string): ContentCatalogItem | undefined {
     const db = this.getDB();
     return db.prepare(`
       SELECT * FROM content_catalog WHERE content_id = ?
     `).get(contentId) as ContentCatalogItem | undefined;
+  }
+
+  getCatalogItemByToken(channelAddress: string, tokenId: string): ContentCatalogItem | undefined {
+    const db = this.getDB();
+    return db.prepare(`
+      SELECT * FROM content_catalog WHERE LOWER(channel_address) = LOWER(?) AND token_id = ?
+    `).get(channelAddress, tokenId) as ContentCatalogItem | undefined;
+  }
+
+  getCatalogItemByOperative(operativeAddress: string): ContentCatalogItem | undefined {
+    const db = this.getDB();
+    return db.prepare(`
+      SELECT * FROM content_catalog
+      WHERE LOWER(operative_address) = LOWER(?) AND metadata_status = 'resolved'
+      LIMIT 1
+    `).get(operativeAddress) as ContentCatalogItem | undefined;
+  }
+
+  getCatalogChannels(): Array<{
+    address: string;
+    creator: string;
+    name: string | null;
+    description: string | null;
+    categories: string | null;
+    image: string | null;
+    coverImage: string | null;
+    plans: string | null;
+    tokenAccess: string | null;
+    itemsCount: number;
+  }> {
+    const db = this.getDB();
+    const rows = db.prepare(`
+      SELECT
+        c.channel_address as address,
+        c.creator_address as creator,
+        MIN(c.name) as name,
+        MIN(c.image_url) as image,
+        COUNT(*) as itemsCount,
+        m.name as meta_name,
+        m.description as meta_description,
+        m.categories as meta_categories,
+        m.image as meta_image,
+        m.cover_image as meta_cover_image,
+        m.plans as meta_plans,
+        m.token_access as meta_token_access
+      FROM content_catalog c
+      LEFT JOIN channel_metadata m ON LOWER(m.address) = LOWER(c.channel_address)
+      WHERE c.metadata_status = 'resolved'
+      GROUP BY LOWER(c.channel_address)
+      ORDER BY COUNT(*) DESC
+    `).all() as any[];
+
+    return rows.map((r: any) => ({
+      address: r.address,
+      creator: r.creator,
+      name: r.meta_name || r.name,
+      description: r.meta_description || null,
+      categories: r.meta_categories || null,
+      image: r.meta_image || r.image,
+      coverImage: r.meta_cover_image || null,
+      plans: r.meta_plans || null,
+      tokenAccess: r.meta_token_access || null,
+      itemsCount: r.itemsCount,
+    }));
+  }
+
+  getChannelMetadata(address: string): {
+    name?: string;
+    description?: string;
+    categories?: string;
+    image?: string;
+    coverImage?: string;
+    plans?: string;
+    tokenAccess?: string;
+  } | null {
+    const db = this.getDB();
+    const row = db.prepare(`SELECT * FROM channel_metadata WHERE LOWER(address) = LOWER(?)`).get(address) as any;
+    if (!row) return null;
+    return {
+      name: row.name || undefined,
+      description: row.description || undefined,
+      categories: row.categories || undefined,
+      image: row.image || undefined,
+      coverImage: row.cover_image || undefined,
+      plans: row.plans || undefined,
+      tokenAccess: row.token_access || undefined,
+    };
+  }
+
+  updateChannelMetadata(address: string, input: {
+    name?: string;
+    description?: string;
+    categories?: string;
+    image?: string;
+    coverImage?: string;
+    plans?: string;
+    tokenAccess?: string;
+  }, updatedBy?: string): void {
+    const db = this.getDB();
+    const existing = this.getChannelMetadata(address);
+    if (existing) {
+      const sets: string[] = [];
+      const params: any[] = [];
+      if (input.name !== undefined) { sets.push('name = ?'); params.push(input.name); }
+      if (input.description !== undefined) { sets.push('description = ?'); params.push(input.description); }
+      if (input.categories !== undefined) { sets.push('categories = ?'); params.push(input.categories); }
+      if (input.image !== undefined) { sets.push('image = ?'); params.push(input.image); }
+      if (input.coverImage !== undefined) { sets.push('cover_image = ?'); params.push(input.coverImage); }
+      if (input.plans !== undefined) { sets.push('plans = ?'); params.push(input.plans); }
+      if (input.tokenAccess !== undefined) { sets.push('token_access = ?'); params.push(input.tokenAccess); }
+      if (sets.length === 0) return;
+      sets.push("updated_at = strftime('%s','now')");
+      if (updatedBy) { sets.push('updated_by = ?'); params.push(updatedBy); }
+      params.push(address.toLowerCase());
+      db.prepare(`UPDATE channel_metadata SET ${sets.join(', ')} WHERE LOWER(address) = LOWER(?)`).run(...params);
+    } else {
+      db.prepare(`INSERT INTO channel_metadata (address, name, description, categories, image, cover_image, plans, token_access, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(address.toLowerCase(), input.name || null, input.description || null, input.categories || null, input.image || null, input.coverImage || null, input.plans || null, input.tokenAccess || null, updatedBy || null);
+    }
   }
 
   getCreatorEarningsLocal(creatorAddress: string): {

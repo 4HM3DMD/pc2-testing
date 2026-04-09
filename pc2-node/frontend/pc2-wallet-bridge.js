@@ -242,12 +242,11 @@
       var requestedHex = data.params && data.params[0] && data.params[0].chainId;
       var requestedId = requestedHex ? parseInt(requestedHex, 16) : bridgeChainId;
 
-      // Track requested chain for signing only. bridgeChainId stays pinned to ESC (20)
-      // so ethers.js v5 providers remain stable for reads.
-      // Glide's Bridge page cycles through multiple chains during init which would
-      // constantly flip bridgeChainId and break all providers.
+      // Update both chain IDs so reads AND signing target the requested chain.
+      // V3 contracts live on Base (8453), so eth_call must route there after switch.
+      bridgeChainId = requestedId;
       walletChainId = requestedId;
-      console.log('[PC2 Bridge] wallet_switchEthereumChain:', requestedId, '(signing target, reads stay on ESC)');
+      console.log('[PC2 Bridge] wallet_switchEthereumChain:', requestedId, '(reads + signing now on chain', requestedId + ')');
 
       // Forward to MetaMask so the actual wallet is on the right chain for signing
       if (!isEmbeddedLogin()) {

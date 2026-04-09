@@ -40,6 +40,20 @@ var Wallet = (function () {
     'function safeTransferFrom(address from, address to, uint256 id, uint256 amount, bytes data)',
     'function royaltyInfo(uint256 salePrice) view returns (tuple(address receiver, uint256 amount)[])'
   ];
+  var SUBSCRIPTION_MODULE_ABI = [
+    'function bulkUpdatePlans(tuple(string action, bytes args)[] updates)',
+    'function getPlans() view returns (tuple(uint8 planId, address payToken, uint256 price, uint256 duration, bool active)[])',
+    'function configureTokenOwnershipAccess(tuple(address tokenAddress, uint256 threshold)[] thresholds)',
+    'function hasActiveSubscription(address subscriber) view returns (bool)',
+    'function subscribePlan(uint8 planId, bool recurring) payable',
+    'function paymentProcessor() view returns (address)'
+  ];
+  var TOKEN_INTROSPECT_ABI = [
+    'function name() view returns (string)',
+    'function symbol() view returns (string)',
+    'function decimals() view returns (uint8)',
+    'function supportsInterface(bytes4 interfaceId) view returns (bool)'
+  ];
   var AUTHORITY_GATEWAY_ABI = [
     'function sellAccess(address ledger, uint256 tokenId, uint256 quantity, uint256 pricePerToken, address payToken)',
     'function withdrawListing(address operative, uint256 tokenId, uint256 quantity)',
@@ -185,6 +199,12 @@ var Wallet = (function () {
       })
       .then(function (sa) {
         if (sa) smartAccountAddress = sa;
+        // V3 contracts live on Base — ensure bridge routes reads to 8453
+        if (currentChainId !== BASE_CHAIN_ID) {
+          return switchToBase().then(function () {
+            return { address: connectedAddress, chainId: currentChainId, smartAccountAddress: smartAccountAddress };
+          });
+        }
         return { address: connectedAddress, chainId: currentChainId, smartAccountAddress: smartAccountAddress };
       })
       .catch(function (err) {
@@ -266,9 +286,9 @@ var Wallet = (function () {
       .then(function (signature) {
         var sa = smartAccountAddress || getProvider().smartAccountAddress || null;
         if (sa) smartAccountAddress = sa;
-        siwePromise = null;
         return ElacityAPI.login(connectedAddress, signature, sa).then(function (auth) {
           if (auth && auth.sa) smartAccountAddress = auth.sa;
+          siwePromise = null;
           return auth;
         });
       })
@@ -336,12 +356,20 @@ var Wallet = (function () {
 
             return parentExecuteSmartAccountBatch(chainIdDecimal, transactions, expectTokens);
           }).then(function (result) {
-            // Particle iframe already confirmed the tx on-chain, so return a
-            // receipt-like object to skip redundant eth_getTransactionReceipt polling
+            var hash = result.transactionHash;
+            var isOnChainHash = hash && hash.length === 66 && hash.startsWith('0x');
+            if (!isOnChainHash) {
+              console.warn('[Wallet buyAccess] UA transaction submitted but no on-chain hash. ID:', result.transactionId);
+              if (result.transactionId) {
+                console.log('[Wallet buyAccess] Check status at: https://universalx.app/activity/details?id=' + result.transactionId);
+              }
+            }
             return {
-              status: '0x1',
-              transactionHash: result.transactionHash || result.transactionId,
-              _smartAccountConfirmed: true
+              status: isOnChainHash ? '0x1' : '0x0',
+              transactionHash: hash || result.transactionId,
+              transactionId: result.transactionId,
+              _smartAccountConfirmed: true,
+              _uaPending: !isOnChainHash
             };
           });
         });
@@ -715,13 +743,15 @@ var Wallet = (function () {
 
   // ── Royalty Share Operations (TradeGateway) ────────
 
-  function listRoyaltyShares(operativeAddr, quantity, priceWei, payToken) {
+  function listRoyaltyShares(operativeAddr, quantity, priceWei, payToken, useWallet) {
     if (!connectedAddress) throw new Error('Wallet not connected');
 
     return ensureBase().then(function () {
       var opIface = new ethers.Interface(OPERATIVE_ABI);
       var tgIface = new ethers.Interface(TRADE_GATEWAY_ABI);
-      var ownerAddr = smartAccountAddress || connectedAddress;
+      var useEOA = (useWallet === 'eoa');
+      var useSA = !useEOA && hasSmartAccount();
+      var ownerAddr = useSA ? smartAccountAddress : connectedAddress;
 
       var isApprovedData = opIface.encodeFunctionData('isApprovedForAll', [ownerAddr, TRADE_GATEWAY_ADDRESS]);
       return getProvider().request({
@@ -745,7 +775,7 @@ var Wallet = (function () {
         ]);
         transactions.push({ to: TRADE_GATEWAY_ADDRESS, data: sellData, value: '0x0' });
 
-        if (hasSmartAccount()) {
+        if (useSA) {
           var chainIdDecimal = currentChainId ? parseInt(currentChainId, 16) : 8453;
           return parentExecuteSmartAccountBatch(chainIdDecimal, transactions, []);
         }
@@ -768,20 +798,43 @@ var Wallet = (function () {
     return ensureBase().then(function () {
       var tgIface = new ethers.Interface(TRADE_GATEWAY_ABI);
       var isNative = !payToken || payToken === ZERO_ADDRESS;
-      var data = tgIface.encodeFunctionData('buyToken', [
+      var buyData = tgIface.encodeFunctionData('buyToken', [
         sellerAddr, operativeAddr, ethers.getBigInt(TOKEN_ID_ROYALTY_SHARE), ethers.getBigInt(quantity)
       ]);
-      var tx = {
+      var buyTx = {
         to: TRADE_GATEWAY_ADDRESS,
-        data: data,
+        data: buyData,
         value: isNative ? ethers.toQuantity(ethers.getBigInt(totalPriceWei)) : '0x0'
       };
 
+      if (hasSmartAccount() && !isNative) {
+        var chainIdDecimal = currentChainId ? parseInt(currentChainId, 16) : 8453;
+        var saAddr = (smartAccountAddress || '').toLowerCase();
+        var erc20Iface = new ethers.Interface(ERC20_ABI);
+        var allowanceData = erc20Iface.encodeFunctionData('allowance', [saAddr, TRADE_GATEWAY_ADDRESS]);
+        return getProvider().request({
+          method: 'eth_call',
+          params: [{ to: payToken, data: allowanceData }, 'latest']
+        }).then(function (result) {
+          var current = ethers.getBigInt(result);
+          var needed = ethers.getBigInt(totalPriceWei);
+          var transactions = [];
+          if (current < needed) {
+            var approveData = erc20Iface.encodeFunctionData('approve', [TRADE_GATEWAY_ADDRESS, ethers.MaxUint256]);
+            transactions.push({ to: payToken, data: approveData, value: '0x0' });
+          }
+          transactions.push(buyTx);
+          var priceNum = Number(ethers.getBigInt(totalPriceWei));
+          var usdcAmount = (priceNum / 1e6).toString();
+          return parentExecuteSmartAccountBatch(chainIdDecimal, transactions, [{ type: 'usdc', amount: usdcAmount }]);
+        });
+      }
+
       if (!isNative) {
         return approveIfNeeded(payToken, totalPriceWei, TRADE_GATEWAY_ADDRESS, connectedAddress)
-          .then(function () { return parentSendTransaction(tx); });
+          .then(function () { return parentSendTransaction(buyTx); });
       }
-      return parentSendTransaction(tx);
+      return parentSendTransaction(buyTx);
     });
   }
 
@@ -799,41 +852,62 @@ var Wallet = (function () {
     });
   }
 
-  function transferRoyaltyShares(operativeAddr, recipientAddr, amount) {
+  function transferRoyaltyShares(operativeAddr, recipientAddr, amount, fromWallet) {
     if (!connectedAddress) throw new Error('Wallet not connected');
     if (!ethers.isAddress(recipientAddr)) throw new Error('Invalid recipient address');
 
     return ensureBase().then(function () {
-      var fromAddr = connectedAddress;
+      var useSA = (fromWallet === 'sa') && hasSmartAccount();
+      var fromAddr = useSA ? smartAccountAddress : connectedAddress;
       var iface = new ethers.Interface(OPERATIVE_ABI);
       var data = iface.encodeFunctionData('safeTransferFrom', [
         fromAddr, recipientAddr, ethers.getBigInt(TOKEN_ID_ROYALTY_SHARE), ethers.getBigInt(amount), '0x'
       ]);
-      return parentSendTransaction({ to: operativeAddr, data: data, value: '0x0' });
+      var tx = { to: operativeAddr, data: data, value: '0x0' };
+
+      if (useSA) {
+        var chainIdDecimal = currentChainId ? parseInt(currentChainId, 16) : 8453;
+        return parentExecuteSmartAccountBatch(chainIdDecimal, [tx], []);
+      }
+      return parentSendTransaction(tx);
     });
   }
 
-  function withdrawRewards(operativeAddr, payToken) {
+  function withdrawRewards(operativeAddr, payToken, fromWallet) {
     if (!connectedAddress) throw new Error('Wallet not connected');
 
     return ensureBase().then(function () {
+      var useSA = (fromWallet === 'sa') && hasSmartAccount();
       var iface = new ethers.Interface(OPERATIVE_ABI);
       var data = iface.encodeFunctionData('withdrawRewards', [payToken]);
-      return parentSendTransaction({ to: operativeAddr, data: data, value: '0x0' });
+      var tx = { to: operativeAddr, data: data, value: '0x0' };
+
+      if (useSA) {
+        var chainIdDecimal = currentChainId ? parseInt(currentChainId, 16) : 8453;
+        return parentExecuteSmartAccountBatch(chainIdDecimal, [tx], []);
+      }
+      return parentSendTransaction(tx);
     });
   }
 
-  function batchWithdrawRewards(operativeAddr, payTokens) {
+  function batchWithdrawRewards(operativeAddr, payTokens, fromWallet) {
     if (!connectedAddress) throw new Error('Wallet not connected');
     if (!payTokens || payTokens.length === 0) throw new Error('No payment tokens');
 
     return ensureBase().then(function () {
+      var useSA = (fromWallet === 'sa') && hasSmartAccount();
       var iface = new ethers.Interface(OPERATIVE_ABI);
       var encodedCalls = payTokens.map(function (pt) {
         return iface.encodeFunctionData('withdrawRewards', [pt]);
       });
       var data = iface.encodeFunctionData('multicall', [encodedCalls]);
-      return parentSendTransaction({ to: operativeAddr, data: data, value: '0x0' });
+      var tx = { to: operativeAddr, data: data, value: '0x0' };
+
+      if (useSA) {
+        var chainIdDecimal = currentChainId ? parseInt(currentChainId, 16) : 8453;
+        return parentExecuteSmartAccountBatch(chainIdDecimal, [tx], []);
+      }
+      return parentSendTransaction(tx);
     });
   }
 
@@ -875,6 +949,37 @@ var Wallet = (function () {
 
     return ensureBase().then(function () {
       var totalCost = BigInt(quantity) * BigInt(pricePerToken);
+      var tgIface = new ethers.Interface(TRADE_GATEWAY_ABI);
+      var offerData = tgIface.encodeFunctionData('createOffer', [
+        operativeAddr,
+        ethers.getBigInt(TOKEN_ID_ROYALTY_SHARE),
+        ethers.getBigInt(quantity),
+        ethers.getBigInt(pricePerToken),
+        payToken
+      ]);
+      var offerTx = { to: TRADE_GATEWAY_ADDRESS, data: offerData, value: '0x0' };
+
+      if (hasSmartAccount()) {
+        var chainIdDecimal = currentChainId ? parseInt(currentChainId, 16) : 8453;
+        var saAddr = (smartAccountAddress || '').toLowerCase();
+        var erc20Iface = new ethers.Interface(ERC20_ABI);
+        var allowanceData = erc20Iface.encodeFunctionData('allowance', [saAddr, TRADE_GATEWAY_ADDRESS]);
+        return getProvider().request({
+          method: 'eth_call',
+          params: [{ to: payToken, data: allowanceData }, 'latest']
+        }).then(function (result) {
+          var current = BigInt(result);
+          var transactions = [];
+          if (current < totalCost) {
+            var approveData = erc20Iface.encodeFunctionData('approve', [TRADE_GATEWAY_ADDRESS, ethers.MaxUint256]);
+            transactions.push({ to: payToken, data: approveData, value: '0x0' });
+          }
+          transactions.push(offerTx);
+          var usdcAmount = (Number(totalCost) / 1e6).toString();
+          return parentExecuteSmartAccountBatch(chainIdDecimal, transactions, [{ type: 'usdc', amount: usdcAmount }]);
+        });
+      }
+
       var erc20Iface = new ethers.Interface(ERC20_ABI);
       var allowanceData = erc20Iface.encodeFunctionData('allowance', [connectedAddress, TRADE_GATEWAY_ADDRESS]);
 
@@ -890,59 +995,72 @@ var Wallet = (function () {
             .then(function () { return waitForAllowance(payToken, connectedAddress, TRADE_GATEWAY_ADDRESS, totalCost); });
         }
       }).then(function () {
-        var tgIface = new ethers.Interface(TRADE_GATEWAY_ABI);
-        var data = tgIface.encodeFunctionData('createOffer', [
-          operativeAddr,
-          ethers.getBigInt(TOKEN_ID_ROYALTY_SHARE),
-          ethers.getBigInt(quantity),
-          ethers.getBigInt(pricePerToken),
-          payToken
-        ]);
-        return parentSendTransaction({ to: TRADE_GATEWAY_ADDRESS, data: data, value: '0x0' });
+        return parentSendTransaction(offerTx);
       });
     });
   }
 
-  function acceptRoyaltyOffer(fromAddr, operativeAddr, quantity) {
+  function acceptRoyaltyOffer(fromAddr, operativeAddr, quantity, fromWallet) {
     if (!connectedAddress) throw new Error('Wallet not connected');
 
     return ensureBase().then(function () {
+      var useSA = (fromWallet === 'sa') && hasSmartAccount();
+      var ownerAddr = useSA ? smartAccountAddress : connectedAddress;
       var opIface = new ethers.Interface(OPERATIVE_ABI);
-      var approvedData = opIface.encodeFunctionData('isApprovedForAll', [connectedAddress, TRADE_GATEWAY_ADDRESS]);
+      var tgIface = new ethers.Interface(TRADE_GATEWAY_ABI);
+
+      var approvedData = opIface.encodeFunctionData('isApprovedForAll', [ownerAddr, TRADE_GATEWAY_ADDRESS]);
 
       return getProvider().request({
         method: 'eth_call',
         params: [{ to: operativeAddr, data: approvedData }, 'latest']
       }).then(function (result) {
-        var isApproved = result !== '0x0000000000000000000000000000000000000000000000000000000000000000';
+        var isApproved = result !== '0x' + '0'.repeat(64);
+        var acceptData = tgIface.encodeFunctionData('acceptOffer', [
+          fromAddr, operativeAddr, ethers.getBigInt(TOKEN_ID_ROYALTY_SHARE), ethers.getBigInt(quantity)
+        ]);
+
+        if (useSA) {
+          var transactions = [];
+          if (!isApproved) {
+            var approveData = opIface.encodeFunctionData('setApprovalForAll', [TRADE_GATEWAY_ADDRESS, true]);
+            transactions.push({ to: operativeAddr, data: approveData, value: '0x0' });
+          }
+          transactions.push({ to: TRADE_GATEWAY_ADDRESS, data: acceptData, value: '0x0' });
+          var chainIdDecimal = currentChainId ? parseInt(currentChainId, 16) : 8453;
+          return parentExecuteSmartAccountBatch(chainIdDecimal, transactions, []);
+        }
+
         if (!isApproved) {
           var setApprovalData = opIface.encodeFunctionData('setApprovalForAll', [TRADE_GATEWAY_ADDRESS, true]);
           return parentSendTransaction({ to: operativeAddr, data: setApprovalData, value: '0x0' })
-            .then(function (txHash) { return waitForReceipt(txHash); });
+            .then(function (txHash) { return waitForReceipt(txHash); })
+            .then(function () {
+              return parentSendTransaction({ to: TRADE_GATEWAY_ADDRESS, data: acceptData, value: '0x0' });
+            });
         }
-      }).then(function () {
-        var tgIface = new ethers.Interface(TRADE_GATEWAY_ABI);
-        var data = tgIface.encodeFunctionData('acceptOffer', [
-          fromAddr,
-          operativeAddr,
-          ethers.getBigInt(TOKEN_ID_ROYALTY_SHARE),
-          ethers.getBigInt(quantity)
-        ]);
-        return parentSendTransaction({ to: TRADE_GATEWAY_ADDRESS, data: data, value: '0x0' });
+        return parentSendTransaction({ to: TRADE_GATEWAY_ADDRESS, data: acceptData, value: '0x0' });
       });
     });
   }
 
-  function cancelRoyaltyOffer(operativeAddr) {
+  function cancelRoyaltyOffer(operativeAddr, fromWallet) {
     if (!connectedAddress) throw new Error('Wallet not connected');
 
     return ensureBase().then(function () {
+      var useSA = (fromWallet === 'sa') && hasSmartAccount();
       var tgIface = new ethers.Interface(TRADE_GATEWAY_ABI);
       var data = tgIface.encodeFunctionData('cancelOffer', [
         operativeAddr,
         ethers.getBigInt(TOKEN_ID_ROYALTY_SHARE)
       ]);
-      return parentSendTransaction({ to: TRADE_GATEWAY_ADDRESS, data: data, value: '0x0' });
+      var tx = { to: TRADE_GATEWAY_ADDRESS, data: data, value: '0x0' };
+
+      if (useSA) {
+        var chainIdDecimal = currentChainId ? parseInt(currentChainId, 16) : 8453;
+        return parentExecuteSmartAccountBatch(chainIdDecimal, [tx], []);
+      }
+      return parentSendTransaction(tx);
     });
   }
 
@@ -986,6 +1104,147 @@ var Wallet = (function () {
     });
   }
 
+  // ── On-Chain Subscription Plan Management ──────────
+
+  var DURATION_SECONDS = {
+    days: 86400,
+    weeks: 604800,
+    months: 2592000,
+    years: 31104000
+  };
+
+  function convertDurationToSeconds(durValue, durUnit) {
+    var base = DURATION_SECONDS[durUnit] || DURATION_SECONDS.months;
+    return durValue * base;
+  }
+
+  function getPlans(channelAddr) {
+    var iface = new ethers.Interface(SUBSCRIPTION_MODULE_ABI);
+    var data = iface.encodeFunctionData('getPlans', []);
+    return getProvider().request({
+      method: 'eth_call',
+      params: [{ to: channelAddr, data: data }, 'latest']
+    }).then(function (result) {
+      var decoded = iface.decodeFunctionResult('getPlans', result)[0];
+      return decoded.map(function (p) {
+        var payToken = p.payToken;
+        var isUSDC = payToken.toLowerCase() === USDC_ADDRESS.toLowerCase();
+        var decimals = isUSDC ? 6 : 18;
+        var priceHuman = Number(ethers.formatUnits(p.price, decimals));
+        var durationSecs = Number(p.duration);
+        var dur = secondsToDuration(durationSecs);
+        return {
+          planId: Number(p.planId),
+          payToken: payToken,
+          price: priceHuman,
+          priceWei: p.price.toString(),
+          duration: dur,
+          durationSeconds: durationSecs,
+          active: p.active
+        };
+      });
+    }).catch(function (err) {
+      console.warn('[Wallet] getPlans failed:', err.message);
+      return [];
+    });
+  }
+
+  function secondsToDuration(secs) {
+    if (secs >= 31104000) return { value: Math.round(secs / 31104000), unit: 'years' };
+    if (secs >= 2592000) return { value: Math.round(secs / 2592000), unit: 'months' };
+    if (secs >= 604800) return { value: Math.round(secs / 604800), unit: 'weeks' };
+    return { value: Math.round(secs / 86400), unit: 'days' };
+  }
+
+  function introspectToken(tokenAddr) {
+    if (!tokenAddr || !ethers.isAddress(tokenAddr)) {
+      return Promise.resolve({ valid: false });
+    }
+    var iface = new ethers.Interface(TOKEN_INTROSPECT_ABI);
+
+    var nameCall = getProvider().request({
+      method: 'eth_call',
+      params: [{ to: tokenAddr, data: iface.encodeFunctionData('name', []) }, 'latest']
+    }).then(function (r) {
+      return iface.decodeFunctionResult('name', r)[0];
+    }).catch(function () { return null; });
+
+    var symbolCall = getProvider().request({
+      method: 'eth_call',
+      params: [{ to: tokenAddr, data: iface.encodeFunctionData('symbol', []) }, 'latest']
+    }).then(function (r) {
+      return iface.decodeFunctionResult('symbol', r)[0];
+    }).catch(function () { return null; });
+
+    var decimalsCall = getProvider().request({
+      method: 'eth_call',
+      params: [{ to: tokenAddr, data: iface.encodeFunctionData('decimals', []) }, 'latest']
+    }).then(function (r) {
+      return Number(iface.decodeFunctionResult('decimals', r)[0]);
+    }).catch(function () { return -1; });
+
+    var ERC721_INTERFACE_ID = '0x80ac58cd';
+    var erc721Call = getProvider().request({
+      method: 'eth_call',
+      params: [{ to: tokenAddr, data: iface.encodeFunctionData('supportsInterface', [ERC721_INTERFACE_ID]) }, 'latest']
+    }).then(function (r) {
+      return iface.decodeFunctionResult('supportsInterface', r)[0];
+    }).catch(function () { return false; });
+
+    return Promise.all([nameCall, symbolCall, decimalsCall, erc721Call])
+      .then(function (results) {
+        var name = results[0];
+        var symbol = results[1];
+        var decimals = results[2];
+        var isERC721 = results[3];
+
+        if (!name && !symbol) return { valid: false };
+
+        return {
+          valid: true,
+          name: name,
+          symbol: symbol,
+          isERC721: isERC721,
+          isERC20: !isERC721 && decimals >= 0,
+          decimals: isERC721 ? 0 : (decimals >= 0 ? decimals : 18)
+        };
+      });
+  }
+
+  function getTokenDecimals(payToken) {
+    if (!payToken || payToken === ZERO_ADDRESS) return Promise.resolve(18);
+    if (payToken.toLowerCase() === USDC_ADDRESS.toLowerCase()) return Promise.resolve(6);
+    var iface = new ethers.Interface(TOKEN_INTROSPECT_ABI);
+    return getProvider().request({
+      method: 'eth_call',
+      params: [{ to: payToken, data: iface.encodeFunctionData('decimals', []) }, 'latest']
+    }).then(function (r) {
+      return Number(iface.decodeFunctionResult('decimals', r)[0]);
+    }).catch(function () { return 18; });
+  }
+
+  // V3 contracts do not implement bulkUpdatePlans, configureTokenOwnershipAccess,
+  // or subscribePlan on-chain. Plan/token-gate management is handled via local
+  // catalog API. These stubs exist so callers don't crash if they reference them.
+
+  function bulkUpdatePlans() {
+    return Promise.reject(new Error('bulkUpdatePlans is not available in V3 contracts. Use local catalog API.'));
+  }
+
+  function configureTokenAccess() {
+    return Promise.reject(new Error('configureTokenOwnershipAccess is not available in V3 contracts. Use local catalog API.'));
+  }
+
+  function subscribePlan() {
+    return Promise.reject(new Error('subscribePlan is not available in V3 contracts yet.'));
+  }
+
+  function checkSubscription(channelAddr, subscriberAddr) {
+    // V3 hasActiveSubscription exists but requires subscriptionManager to be set.
+    // For now we return false since the subscription manager isn't deployed yet.
+    return Promise.resolve(false);
+  }
+
   return {
     connect: connect,
     getAddress: getAddress,
@@ -1025,12 +1284,19 @@ var Wallet = (function () {
     cancelRoyaltyOffer: cancelRoyaltyOffer,
     getDistributionBalance: getDistributionBalance,
     transferNFT: transferNFT,
+    getPlans: getPlans,
+    bulkUpdatePlans: bulkUpdatePlans,
+    configureTokenAccess: configureTokenAccess,
+    subscribePlan: subscribePlan,
+    checkSubscription: checkSubscription,
+    introspectToken: introspectToken,
     BASE_CHAIN_ID: BASE_CHAIN_ID,
     AUTHORITY_GATEWAY_ADDRESS: AUTHORITY_GATEWAY_ADDRESS,
     TRADE_GATEWAY_ADDRESS: TRADE_GATEWAY_ADDRESS,
     USDC_ADDRESS: USDC_ADDRESS,
     TOKEN_ID_ACCESS: TOKEN_ID_ACCESS,
     TOKEN_ID_ROYALTY_SHARE: TOKEN_ID_ROYALTY_SHARE,
-    TOKEN_ID_DISTRIBUTION: TOKEN_ID_DISTRIBUTION
+    TOKEN_ID_DISTRIBUTION: TOKEN_ID_DISTRIBUTION,
+    getProvider: getProvider
   };
 })();

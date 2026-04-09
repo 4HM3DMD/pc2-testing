@@ -2,7 +2,7 @@
 
 **Task ID**: MARKET-FEATURES
 **Created**: 2026-03-20
-**Updated**: 2026-03-13
+**Updated**: 2026-04-09
 **Status**: InProgress
 **Priority**: High
 
@@ -93,17 +93,47 @@ The following features were in the original plan but are NOT applicable on Base 
 | 1 | Buy Once | No | No |
 | 2 | Buy & Resell | Yes | Yes |
 
+### Phase 4 — Royalty Offers (Completed)
+- [x] **Create Royalty Offer** via `TradeGateway.createOffer()` (SA batch + EOA)
+- [x] **Accept Royalty Offer** via `TradeGateway.acceptOffer()`
+- [x] **Cancel Royalty Offer** via `TradeGateway.cancelOffer()`
+- [x] **Offers Tab in Earnings** with resolved asset names from `metadata`
+- [x] **Batch Reward Withdrawal** via `operative.multicall()`
+
+### Phase 5 — UI/UX Unification (Completed 2026-04-09)
+- [x] **Commerce zone unified** — Price always visible, owner badge additive
+- [x] **Library ownership filter** — Backend `/api/catalog/owned/:address`
+- [x] **Publisher owner actions** — Edit Price, Delist, Earnings strip
+- [x] **Shared `renderAvatar()`** — Consistent across all views
+- [x] **Earnings consistency** — `formatPrice()` for zero/small amounts
+- [x] **Offer token names** — Resolved from GraphQL `metadata.name`
+- [x] **Badge alignment** — Vertically centered nav badges
+- [x] **Pinned icon** — CSS dot instead of emoji
+
+## Known Issues (Identified 2026-04-09)
+
+See full audit: `.cursor/tasks/MARKET-FEATURES/MARKET-UI-AUDIT-APRIL-2026.md`
+
+- **P0**: Publisher delist missing `quantity` argument
+- **P1**: `cancelAccessListing` / `cancelRoyaltyListing` — EOA only, SA users can't cancel
+- **P1**: Offer accept/cancel UI doesn't pass `fromWallet` for SA users
+- **P2**: `transferNFT` is EOA-only
+- **P2**: `expectTokens` hardcodes USDC 6 decimals
+
 ## Future Considerations
 
 - Subscription plan management (`bulkUpdatePlans`) for channel owners
 - Token-gated access configuration (`configureTokenOwnershipAccess`)
-- Royalty share offers via TradeGateway (`createOffer`, `acceptOffer`, `cancelOffer`)
-- Batch reward withdrawal via `multicall()`
+- SA confirmation via log polling (match Creator app pattern)
 
 ## Files Modified
 
 - `pc2-node/data/test-apps/elacity-market/wallet.js` — All contract interactions
-- `pc2-node/data/test-apps/elacity-market/app.js` — UI logic, modals, handlers
-- `pc2-node/data/test-apps/elacity-market/index.html` — Modal HTML, governance section
-- `pc2-node/data/test-apps/elacity-market/styles.css` — Styling for new features
-- `pc2-node/data/test-apps/elacity-market/api.js` — GraphQL query (royalty field)
+- `pc2-node/data/test-apps/elacity-market/app.js` — UI logic, rendering, formatting, earnings
+- `pc2-node/data/test-apps/elacity-market/app-features.js` — Earnings, offers, publisher actions, royalty UI
+- `pc2-node/data/test-apps/elacity-market/api.js` — Local catalog, GraphQL proxy, owned items
+- `pc2-node/data/test-apps/elacity-market/index.html` — Commerce, skeleton, breadcrumbs
+- `pc2-node/data/test-apps/elacity-market/styles.css` — Full layout/styling
+- `pc2-node/src/api/index.ts` — Catalog/earnings/graphql-proxy endpoints
+- `pc2-node/src/storage/database.ts` — Catalog model, channel metadata, operative lookup
+- `pc2-node/src/storage/migrations.ts` — Migrations 24-26

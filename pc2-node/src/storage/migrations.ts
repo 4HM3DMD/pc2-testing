@@ -31,7 +31,7 @@ function findSchemaFile(): string {
   }
   throw new Error(`Schema file not found. Tried: ${SCHEMA_FILE} and ${sourceSchema}`);
 }
-const CURRENT_VERSION = 23;
+const CURRENT_VERSION = 26;
 
 interface Migration {
   version: number;
@@ -912,6 +912,109 @@ export function runMigrations(db: Database.Database): void {
         recordMigration(db, 23);
       } catch (error: any) {
         log.error(`❌ Migration 23 error: ${error.message}`);
+        throw error;
+      }
+    }
+
+    // Migration 24: Recreate content_catalog with token_id as TEXT (V3 uint256 token IDs overflow JS numbers)
+    if (currentVersion < 24) {
+      try {
+        log.info('📦 Running Migration 24: Recreate content_catalog with TEXT token_id...');
+
+        db.exec(`DROP TABLE IF EXISTS content_catalog`);
+
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS content_catalog (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            content_id TEXT,
+            channel_address TEXT NOT NULL,
+            token_id TEXT NOT NULL,
+            operative_address TEXT,
+            creator_address TEXT NOT NULL,
+            name TEXT,
+            description TEXT,
+            image_url TEXT,
+            content_cid TEXT,
+            metadata_cid TEXT,
+            mime_type TEXT,
+            asset_type TEXT,
+            price TEXT,
+            payment_token TEXT,
+            op_type INTEGER,
+            chain_id INTEGER NOT NULL DEFAULT 8453,
+            block_number INTEGER NOT NULL,
+            tx_hash TEXT,
+            contract_version TEXT NOT NULL DEFAULT 'v2',
+            metadata_status TEXT NOT NULL DEFAULT 'pending',
+            indexed_at INTEGER NOT NULL,
+            metadata_json TEXT,
+            UNIQUE(channel_address, token_id, chain_id)
+          )
+        `);
+
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_content_catalog_creator ON content_catalog(creator_address)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_content_catalog_type ON content_catalog(asset_type)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_content_catalog_content_id ON content_catalog(content_id)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_content_catalog_channel ON content_catalog(channel_address)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_content_catalog_status ON content_catalog(metadata_status)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_content_catalog_block ON content_catalog(block_number)`);
+
+        // Reset indexer progress so it re-scans from configured from_block
+        db.exec(`DELETE FROM settings WHERE key LIKE 'indexer_last_block_%'`);
+
+        log.info('✅ Migration 24 complete: content_catalog recreated with TEXT token_id, indexer progress reset');
+        recordMigration(db, 24);
+      } catch (error: any) {
+        log.error(`❌ Migration 24 error: ${error.message}`);
+        throw error;
+      }
+    }
+
+    // Migration 25: Channel metadata overrides (V3 channels have no backend-stored metadata)
+    if (currentVersion < 25) {
+      try {
+        log.info('📦 Running Migration 25: Channel metadata table...');
+
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS channel_metadata (
+            address TEXT PRIMARY KEY NOT NULL,
+            name TEXT,
+            description TEXT,
+            categories TEXT,
+            image TEXT,
+            cover_image TEXT,
+            updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+            updated_by TEXT
+          )
+        `);
+
+        log.info('✅ Migration 25 complete: channel_metadata table created');
+        recordMigration(db, 25);
+      } catch (error: any) {
+        log.error(`❌ Migration 25 error: ${error.message}`);
+        throw error;
+      }
+    }
+
+    // Migration 26: Add plans and token_access columns to channel_metadata
+    if (currentVersion < 26) {
+      try {
+        log.info('📦 Running Migration 26: Add plans/token_access to channel_metadata...');
+
+        const cols = db.prepare(`PRAGMA table_info(channel_metadata)`).all() as any[];
+        const colNames = cols.map((c: any) => c.name);
+
+        if (!colNames.includes('plans')) {
+          db.exec(`ALTER TABLE channel_metadata ADD COLUMN plans TEXT`);
+        }
+        if (!colNames.includes('token_access')) {
+          db.exec(`ALTER TABLE channel_metadata ADD COLUMN token_access TEXT`);
+        }
+
+        log.info('✅ Migration 26 complete: plans/token_access columns added');
+        recordMigration(db, 26);
+      } catch (error: any) {
+        log.error(`❌ Migration 26 error: ${error.message}`);
         throw error;
       }
     }

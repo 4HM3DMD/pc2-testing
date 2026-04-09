@@ -94,7 +94,7 @@
   },
   "content_indexer": {
     "enabled": true,
-    "scan_interval_minutes": 30,
+    "scan_interval_minutes": 5,
     "rpc_urls": ["https://mainnet.base.org", "https://base.llamarpc.com", "https://base-rpc.publicnode.com", "https://1rpc.io/base", "https://base.meowrpc.com"],
     "max_blocks_per_scan": 10000,
     "metadata_fetch_concurrency": 3,

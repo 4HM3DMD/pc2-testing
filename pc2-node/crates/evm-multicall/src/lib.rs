@@ -1,10 +1,11 @@
-//! Multicall3 ABI encoding/decoding for batching EVM read-only calls.
+//! EVM ABI encoding/decoding toolkit — runs in WASM sandbox.
+//!
+//! Modes:
+//!   "encode"     — Multicall3 aggregate3(Call3[]) calldata encoding
+//!   "decode"     — Multicall3 aggregate3 result decoding
+//!   "abi_decode" — Generic ABI parameter decoding (address, uint256, string, etc.)
 //!
 //! Multicall3 contract: 0xcA11bde05977b3631167028862bE2a173976CA11
-//! Function: aggregate3(Call3[]) returns (Result[])
-//!
-//! Call3 = (address target, bool allowFailure, bytes callData)
-//! Result = (bool success, bytes returnData)
 
 use serde::{Deserialize, Serialize};
 
@@ -13,6 +14,7 @@ pub struct MulticallInput {
     pub mode: String,
     pub calls: Option<Vec<CallInput>>,
     pub data: Option<String>,
+    pub types: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -27,7 +29,7 @@ fn default_true() -> bool {
     true
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct MulticallOutput {
     pub success: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -36,9 +38,11 @@ pub struct MulticallOutput {
     pub encoded: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub results: Option<Vec<CallResult>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub values: Option<Vec<String>>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct CallResult {
     pub success: bool,
     pub return_data: String,
@@ -213,54 +217,113 @@ fn read_uint256(data: &[u8]) -> usize {
     usize::from_be_bytes(buf)
 }
 
+/// Decode ABI-encoded parameters given a list of type names.
+/// Handles both static types (uint256, address, bool, uint16, uint8, bytes16, bytes32)
+/// and dynamic types (string, bytes) with proper offset resolution.
+pub fn decode_abi_params(data: &[u8], types: &[String]) -> Result<Vec<String>, String> {
+    let mut values = Vec::with_capacity(types.len());
+    for (i, typ) in types.iter().enumerate() {
+        let slot_start = i * 32;
+        if slot_start + 32 > data.len() {
+            return Err(format!("data too short for param {i} ({typ}): need {} bytes, have {}", slot_start + 32, data.len()));
+        }
+        let word = &data[slot_start..slot_start + 32];
+
+        match typ.as_str() {
+            "address" => {
+                if word[..12].iter().any(|&b| b != 0) {
+                    return Err(format!("param {i}: invalid address padding"));
+                }
+                values.push(format!("0x{}", hex::encode(&word[12..])));
+            }
+            "uint256" => {
+                values.push(format!("0x{}", hex::encode(word)));
+            }
+            "uint16" => {
+                let val = u16::from_be_bytes([word[30], word[31]]);
+                values.push(val.to_string());
+            }
+            "uint8" => {
+                values.push(word[31].to_string());
+            }
+            "bool" => {
+                values.push(if word[31] != 0 { "true" } else { "false" }.to_string());
+            }
+            "bytes16" => {
+                values.push(format!("0x{}", hex::encode(&word[..16])));
+            }
+            "bytes32" => {
+                values.push(format!("0x{}", hex::encode(word)));
+            }
+            "string" | "bytes" => {
+                let offset = read_uint256(word);
+                if offset + 32 > data.len() {
+                    return Err(format!("param {i}: string/bytes offset {offset} out of bounds (data len {})", data.len()));
+                }
+                let len = read_uint256(&data[offset..offset + 32]);
+                let content_start = offset + 32;
+                if content_start + len > data.len() {
+                    return Err(format!("param {i}: string/bytes length {len} exceeds data at offset {content_start} (data len {})", data.len()));
+                }
+                let content = &data[content_start..content_start + len];
+                if typ == "string" {
+                    match std::str::from_utf8(content) {
+                        Ok(s) => values.push(s.to_string()),
+                        Err(_) => return Err(format!("param {i}: invalid UTF-8 in string")),
+                    }
+                } else {
+                    values.push(format!("0x{}", hex::encode(content)));
+                }
+            }
+            other => {
+                return Err(format!("unsupported type: '{other}'"));
+            }
+        }
+    }
+
+    Ok(values)
+}
+
+/// Helper to build an error output.
+fn err_out(msg: String) -> MulticallOutput {
+    MulticallOutput { success: false, error: Some(msg), encoded: None, results: None, values: None }
+}
+
 /// Process a multicall command from JSON.
 pub fn process(command_json: &str) -> String {
     let input: MulticallInput = match serde_json::from_str(command_json) {
         Ok(v) => v,
-        Err(e) => {
-            return serde_json::to_string(&MulticallOutput {
-                success: false,
-                error: Some(format!("invalid JSON: {e}")),
-                encoded: None,
-                results: None,
-            })
-            .unwrap_or_default();
-        }
+        Err(e) => return serde_json::to_string(&err_out(format!("invalid JSON: {e}"))).unwrap_or_default(),
     };
 
     match input.mode.as_str() {
         "encode" => {
             let calls = match input.calls {
                 Some(c) => c,
-                None => {
-                    return serde_json::to_string(&MulticallOutput {
-                        success: false,
-                        error: Some("missing 'calls' field".to_string()),
-                        encoded: None,
-                        results: None,
-                    })
-                    .unwrap_or_default();
-                }
+                None => return serde_json::to_string(&err_out("missing 'calls' field".into())).unwrap_or_default(),
             };
 
             match encode_aggregate3(&calls) {
                 Ok(encoded) => serde_json::to_string(&MulticallOutput {
-                    success: true,
-                    error: None,
-                    encoded: Some(encode_hex(&encoded)),
-                    results: None,
-                })
-                .unwrap_or_default(),
-                Err(e) => serde_json::to_string(&MulticallOutput {
-                    success: false,
-                    error: Some(e),
-                    encoded: None,
-                    results: None,
-                })
-                .unwrap_or_default(),
+                    success: true, error: None, encoded: Some(encode_hex(&encoded)), results: None, values: None,
+                }).unwrap_or_default(),
+                Err(e) => serde_json::to_string(&err_out(e)).unwrap_or_default(),
             }
         }
         "decode" => {
+            let data_hex = match input.data {
+                Some(d) => d,
+                None => return serde_json::to_string(&err_out("missing 'data' field".into())).unwrap_or_default(),
+            };
+
+            match decode_hex(&data_hex).and_then(|bytes| decode_aggregate3_result(&bytes)) {
+                Ok(results) => serde_json::to_string(&MulticallOutput {
+                    success: true, error: None, encoded: None, results: Some(results), values: None,
+                }).unwrap_or_default(),
+                Err(e) => serde_json::to_string(&err_out(e)).unwrap_or_default(),
+            }
+        }
+        "abi_decode" => {
             let data_hex = match input.data {
                 Some(d) => d,
                 None => {
@@ -269,17 +332,33 @@ pub fn process(command_json: &str) -> String {
                         error: Some("missing 'data' field".to_string()),
                         encoded: None,
                         results: None,
+                        values: None,
                     })
                     .unwrap_or_default();
                 }
             };
 
-            match decode_hex(&data_hex).and_then(|bytes| decode_aggregate3_result(&bytes)) {
-                Ok(results) => serde_json::to_string(&MulticallOutput {
+            let types = match input.types {
+                Some(t) => t,
+                None => {
+                    return serde_json::to_string(&MulticallOutput {
+                        success: false,
+                        error: Some("missing 'types' field".to_string()),
+                        encoded: None,
+                        results: None,
+                        values: None,
+                    })
+                    .unwrap_or_default();
+                }
+            };
+
+            match decode_hex(&data_hex).and_then(|bytes| decode_abi_params(&bytes, &types)) {
+                Ok(values) => serde_json::to_string(&MulticallOutput {
                     success: true,
                     error: None,
                     encoded: None,
-                    results: Some(results),
+                    results: None,
+                    values: Some(values),
                 })
                 .unwrap_or_default(),
                 Err(e) => serde_json::to_string(&MulticallOutput {
@@ -287,16 +366,92 @@ pub fn process(command_json: &str) -> String {
                     error: Some(e),
                     encoded: None,
                     results: None,
+                    values: None,
                 })
                 .unwrap_or_default(),
             }
         }
         other => serde_json::to_string(&MulticallOutput {
             success: false,
-            error: Some(format!("unknown mode: '{other}', expected 'encode' or 'decode'")),
+            error: Some(format!("unknown mode: '{other}', expected 'encode', 'decode', or 'abi_decode'")),
             encoded: None,
             results: None,
+            values: None,
         })
         .unwrap_or_default(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn abi_decode_single_string() {
+        // ABI-encoded return value of tokenURI(): a single string "ipfs://QmTest"
+        // offset(0x20) + length(13) + "ipfs://QmTest" padded
+        let data = hex::decode(
+            "0000000000000000000000000000000000000000000000000000000000000020\
+             000000000000000000000000000000000000000000000000000000000000000d\
+             697066733a2f2f516d5465737400000000000000000000000000000000000000"
+        ).unwrap();
+        let types = vec!["string".to_string()];
+        let result = decode_abi_params(&data, &types).unwrap();
+        assert_eq!(result, vec!["ipfs://QmTest"]);
+    }
+
+    #[test]
+    fn abi_decode_multi_param_tuple() {
+        // abi.encode(uint256, string, uint16) matching AssetCreated event data
+        // tokenId = 0x00...01, tokenUri = "ipfs://Qm", opType = 2
+        let token_id = "0000000000000000000000000000000000000000000000000000000000000001";
+        let string_offset = "0000000000000000000000000000000000000000000000000000000000000060"; // 96
+        let op_type = "0000000000000000000000000000000000000000000000000000000000000002";
+        let string_len = "0000000000000000000000000000000000000000000000000000000000000009";
+        let string_data = "697066733a2f2f516d0000000000000000000000000000000000000000000000"; // "ipfs://Qm"
+        let hex_str = format!("{token_id}{string_offset}{op_type}{string_len}{string_data}");
+        let data = hex::decode(&hex_str).unwrap();
+        let types = vec!["uint256".to_string(), "string".to_string(), "uint16".to_string()];
+        let result = decode_abi_params(&data, &types).unwrap();
+        assert_eq!(result[0], format!("0x{token_id}"));
+        assert_eq!(result[1], "ipfs://Qm");
+        assert_eq!(result[2], "2");
+    }
+
+    #[test]
+    fn abi_decode_address_and_bool() {
+        let addr = "000000000000000000000000abcdef1234567890abcdef1234567890abcdef12";
+        let bool_true = "0000000000000000000000000000000000000000000000000000000000000001";
+        let data = hex::decode(format!("{addr}{bool_true}")).unwrap();
+        let types = vec!["address".to_string(), "bool".to_string()];
+        let result = decode_abi_params(&data, &types).unwrap();
+        assert_eq!(result[0], "0xabcdef1234567890abcdef1234567890abcdef12");
+        assert_eq!(result[1], "true");
+    }
+
+    #[test]
+    fn abi_decode_empty_data_errors() {
+        let result = decode_abi_params(&[], &["uint256".to_string()]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn abi_decode_bounds_violation() {
+        // String with offset pointing past end of data
+        let data = hex::decode(
+            "00000000000000000000000000000000000000000000000000000000000000ff"
+        ).unwrap();
+        let result = decode_abi_params(&data, &["string".to_string()]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("out of bounds"));
+    }
+
+    #[test]
+    fn abi_decode_via_process_json() {
+        let json = r#"{"mode":"abi_decode","data":"0x0000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000568656c6c6f000000000000000000000000000000000000000000000000000000","types":["string"]}"#;
+        let result_json = process(json);
+        let result: MulticallOutput = serde_json::from_str(&result_json).unwrap();
+        assert!(result.success);
+        assert_eq!(result.values.unwrap(), vec!["hello"]);
     }
 }

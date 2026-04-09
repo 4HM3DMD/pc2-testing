@@ -6,12 +6,19 @@ var ElacityAPI = (function () {
   'use strict';
 
   var BASE_URL = 'https://base.ela.city/api';
-  var GQL_ENDPOINT = BASE_URL + '/2.0/graphql';
+  var GQL_ENDPOINT_REMOTE = BASE_URL + '/2.0/graphql';
+  var GQL_ENDPOINT = '/api/elacity/graphql';
   var authToken = null;
+  var signerAddress = null;
+
+  try {
+    var storedToken = sessionStorage.getItem('elacity_auth_token');
+    var storedSigner = sessionStorage.getItem('elacity_signer_address');
+    if (storedToken) authToken = storedToken;
+    if (storedSigner) signerAddress = storedSigner;
+  } catch (_) {}
 
   // ── GraphQL Transport ────────────────────────────────
-
-  var signerAddress = null;
 
   function gql(query, variables, requiresAuth) {
     var headers = { 'Content-Type': 'application/json' };
@@ -43,7 +50,10 @@ var ElacityAPI = (function () {
             } catch (_) {
               if (txt && txt.length < 300) msg += ': ' + txt;
             }
-            console.error('[API] Request failed:', msg, 'headers:', JSON.stringify(headers));
+            var isSchemaError = res.status === 400 && /Cannot query field|must have a selection of subfields/.test(msg);
+            if (!isSchemaError) {
+              console.error('[API] Request failed:', msg, 'headers:', JSON.stringify(headers));
+            }
             throw new Error(msg);
           });
         }
@@ -576,14 +586,149 @@ var ElacityAPI = (function () {
 
   // ── Public API ───────────────────────────────────────
 
+  function fetchFromCatalog(offset, limit, channelAddress) {
+    var origin = window.puter_api_origin || window.location.origin;
+    var url = origin + '/api/catalog?limit=' + (limit || 50) + '&offset=' + (offset || 0);
+    if (channelAddress) url += '&channel=' + encodeURIComponent(channelAddress);
+    return fetch(url)
+      .then(function (res) { return res.json(); })
+      .then(function (json) {
+        if (!json.success) return null;
+        var nfts = json.items.filter(function (i) { return i.metadata_status === 'resolved'; })
+          .map(function (item) { return catalogItemToNft(item); });
+        if (nfts.length === 0) return null;
+        return { total: json.total, offset: offset || 0, limit: limit || 50, data: nfts };
+      })
+      .catch(function () { return null; });
+  }
+
   function fetchItems(query, filters) {
-    return gql(FETCH_ITEMS_QUERY, { query: query, filters: filters })
-      .then(function (data) { return data.assets; });
+    var off = (filters && filters.offset) || 0;
+    var lim = (filters && filters.limit) || 50;
+
+    return fetchFromCatalog(off, lim).then(function (catalogResult) {
+      if (catalogResult && catalogResult.data.length > 0) {
+        console.log('[API] Using local catalog (' + catalogResult.data.length + ' items)');
+        return catalogResult;
+      }
+      return gql(FETCH_ITEMS_QUERY, { query: query, filters: filters })
+        .then(function (data) { return data.assets; });
+    });
+  }
+
+  function catalogItemToNft(item) {
+    var raw = {};
+    try { raw = item.metadata_json ? JSON.parse(item.metadata_json) : {}; } catch (_) {}
+    var media = raw.media || {};
+    var props = raw.properties || {};
+    var pricing = raw.pricing || {};
+    var asset = raw.asset || {};
+    var creator = raw.creator || {};
+    var chMeta = item._channelMeta || {};
+
+    var channelName = chMeta.name || props.labelType || '';
+    var channelImage = chMeta.image || chMeta.coverImage || '';
+    var creatorAlias = creator.name || creator.alias || '';
+
+    return {
+      tokenId: item.token_id,
+      contractAddress: item.channel_address,
+      hexTokenID: item.token_id,
+      tokenID: item.token_id,
+      address: item.channel_address,
+      tokenURI: item.metadata_cid ? ('ipfs://' + item.metadata_cid) : '',
+      image: item.image_url || '',
+      name: item.name || raw.name || 'Untitled',
+      createdAt: raw.createdAt || new Date(item.indexed_at).toISOString(),
+      views: 0,
+      isProtected: !!(asset.encrypted || media.protectionType),
+      channel: {
+        address: item.channel_address,
+        name: channelName,
+        image: channelImage,
+        imageURL: channelImage,
+        description: chMeta.description || '',
+        itemsCount: 0,
+        creator: { address: item.creator_address || creator.address || '', alias: creatorAlias, avatar: '' }
+      },
+      metadata: {
+        kid: raw.kid || asset.kid || (props.kid || null),
+        name: item.name || raw.name || '',
+        description: raw.description || item.description || '',
+        media: {
+          uri: media.uri || '',
+          contentType: media.contentType || media.mimeType || item.mime_type || '',
+          protectionType: media.protectionType || '',
+          previewURL: media.previewURL || '',
+          size: media.size || 0,
+        },
+        properties: {
+          contract: props.contract || '',
+          publisher: { address: item.creator_address || props.publisher || '' },
+          ledger: props.ledger || item.channel_address,
+          chainId: props.chainId || item.chain_id || 8453,
+          authority: props.authority || asset.authority || '',
+          labelType: props.labelType || '',
+          distribution: props.distribution || '',
+        },
+        asset: asset,
+        attributes: raw.attributes || [],
+      },
+      operative: {
+        address: item.operative_address || '',
+        opType: pricing.accessMethod === 'buy_and_resell' ? 2 : (pricing.price ? 1 : 0),
+        resellerCut: pricing.resellerCut || 0,
+        owner: item.creator_address || '',
+        access: {
+          totalSupply: pricing.copies || 0,
+          listings: pricing.price ? [{
+            seller: item.creator_address || '',
+            price: String(Math.round(pricing.price * Math.pow(10, pricing.currencyDecimals || 6))),
+            quantity: pricing.copies || 1,
+            payToken: pricing.currencyAddress || '',
+          }] : [],
+        },
+      },
+      _rawAsset: asset,
+      _catalogItem: true,
+      _isLocal: !!item.is_local,
+      _contentCid: item.content_cid || '',
+    };
+  }
+
+  function fetchAssetFromCatalog(contractAddress, tokenId) {
+    var tid = (tokenId && typeof tokenId === 'object') ? (tokenId.hexTokenID || tokenId.tokenID || String(tokenId)) : String(tokenId || '');
+    if (!tid || tid === 'undefined') return Promise.resolve(null);
+    if (!contractAddress || typeof contractAddress !== 'string') return Promise.resolve(null);
+    var origin = window.puter_api_origin || window.location.origin;
+    return fetch(origin + '/api/catalog/asset/' + encodeURIComponent(contractAddress) + '/' + encodeURIComponent(tid))
+      .then(function (res) {
+        if (!res.ok) return null;
+        return res.json();
+      })
+      .then(function (json) {
+        if (json && json.success && json.item) {
+          console.log('[API] Loaded asset from local catalog:', json.item.name);
+          return catalogItemToNft(json.item);
+        }
+        return null;
+      })
+      .catch(function () { return null; });
   }
 
   function getAssetDetail(contractAddress, tokenId) {
-    return gql(GET_ASSET_QUERY, { address: contractAddress, tokenId: tokenId })
-      .then(function (data) { return data.nft; });
+    if (contractAddress && typeof contractAddress === 'object') {
+      var obj = contractAddress;
+      contractAddress = obj.contractAddress || obj.address || '';
+      tokenId = tokenId || obj.hexTokenID || obj.tokenID || '';
+    }
+    var tid = (tokenId && typeof tokenId === 'object') ? (tokenId.hexTokenID || tokenId.tokenID || String(tokenId)) : String(tokenId || '');
+    if (!contractAddress || typeof contractAddress !== 'string') return Promise.reject(new Error('Invalid contract address'));
+    return fetchAssetFromCatalog(contractAddress, tid).then(function (catalogNft) {
+      if (catalogNft) return catalogNft;
+      return gql(GET_ASSET_QUERY, { address: contractAddress, tokenId: tid })
+        .then(function (data) { return data.nft; });
+    });
   }
 
   function getNonce(address) {
@@ -599,6 +744,10 @@ var ElacityAPI = (function () {
         if (data.auth && data.auth.token) {
           authToken = data.auth.token;
           signerAddress = (data.auth.sa || address).toLowerCase();
+          try {
+            sessionStorage.setItem('elacity_auth_token', authToken);
+            sessionStorage.setItem('elacity_signer_address', signerAddress);
+          } catch (_) {}
         }
         return data.auth;
       });
@@ -613,32 +762,52 @@ var ElacityAPI = (function () {
   }
 
   function fetchAccessibleAssetsForAddress(address, offset, limit) {
-    var headers = { 'Content-Type': 'application/json' };
-    if (authToken) headers['Authorization'] = 'Bearer ' + authToken;
-    if (address) headers['X-ETH-Signer'] = address.toLowerCase();
+    if (address) {
+      return pc2Fetch('/api/catalog/owned/' + address + '?offset=' + (offset || 0) + '&limit=' + (limit || 50))
+        .then(function (res) { return res.json(); })
+        .then(function (json) {
+          if (json.success && json.items) {
+            var nfts = json.items.map(catalogItemToNft);
+            console.log('[API] Library owned items:', nfts.length, 'of', json.total);
+            return { data: nfts, total: json.total };
+          }
+          return { data: [], total: 0 };
+        })
+        .catch(function (err) {
+          console.warn('[API] Owned catalog fetch failed, falling back:', err.message);
+          return fetchFromCatalog(offset || 0, limit || 50);
+        });
+    }
+    return fetchFromCatalog(offset || 0, limit || 50).then(function (localResult) {
+      if (localResult && localResult.data && localResult.data.length > 0) {
+        console.log('[API] Library using local catalog (V3 only):', localResult.data.length, 'items');
+        return localResult;
+      }
+      var headers = { 'Content-Type': 'application/json' };
+      if (authToken) headers['Authorization'] = 'Bearer ' + authToken;
+      if (address) headers['X-ETH-Signer'] = address.toLowerCase();
 
-    var body = { query: {}, filters: { offset: offset || 0, limit: limit || 20, sort: { createdAt: -1 } } };
-    return fetch(GQL_ENDPOINT, {
-      method: 'POST',
-      headers: headers,
-      body: JSON.stringify({ query: FETCH_ACCESSIBLE_ASSETS_QUERY, variables: body })
-    })
-      .then(function (res) {
-        if (!res.ok) {
-          return res.text().then(function (txt) {
-            var msg = 'API ' + res.status;
-            try { var p = JSON.parse(txt); if (p.errors && p.errors[0]) msg += ': ' + p.errors[0].message; } catch (_) {}
-            throw new Error(msg);
-          });
-        }
-        return res.json();
+      var body = { query: {}, filters: { offset: offset || 0, limit: limit || 20, sort: { createdAt: -1 } } };
+      return fetch(GQL_ENDPOINT, {
+        method: 'POST',
+        headers: headers,
+        body: JSON.stringify({ query: FETCH_ACCESSIBLE_ASSETS_QUERY, variables: body })
       })
-      .then(function (json) {
-        if (json.errors && json.errors.length > 0 && (!json.data || Object.values(json.data).every(function (v) { return v === null; }))) {
-          throw new Error(json.errors[0].message || 'GraphQL error');
-        }
-        return json.data ? json.data.assets : { total: 0, data: [] };
-      });
+        .then(function (res) {
+          if (!res.ok) throw new Error('API ' + res.status);
+          return res.json();
+        })
+        .then(function (json) {
+          if (json.errors && json.errors.length > 0 && (!json.data || Object.values(json.data).every(function (v) { return v === null; }))) {
+            throw new Error(json.errors[0].message || 'GraphQL error');
+          }
+          return json.data ? json.data.assets : { total: 0, data: [] };
+        })
+        .catch(function (err) {
+          console.warn('[API] fetchAccessibleAssets GraphQL also failed:', err.message);
+          return { total: 0, data: [] };
+        });
+    });
   }
 
   function fetchWithPreset(presetName, offset, limit) {
@@ -648,8 +817,14 @@ var ElacityAPI = (function () {
     var args = preset(offset, limit);
     var requiresAuth = args[2] === true;
 
-    return gql(FETCH_ITEMS_QUERY, { query: args[0], filters: args[1] }, requiresAuth)
-      .then(function (data) { return data.assets; });
+    return fetchFromCatalog(offset, limit).then(function (catalogResult) {
+      if (catalogResult && catalogResult.data.length > 0) {
+        console.log('[API] Using local catalog for preset "' + presetName + '" (' + catalogResult.data.length + ' items)');
+        return catalogResult;
+      }
+      return gql(FETCH_ITEMS_QUERY, { query: args[0], filters: args[1] }, requiresAuth)
+        .then(function (data) { return data.assets; });
+    });
   }
 
   function isAuthenticated() {
@@ -663,29 +838,102 @@ var ElacityAPI = (function () {
   function clearAuth() {
     authToken = null;
     signerAddress = null;
+    try {
+      sessionStorage.removeItem('elacity_auth_token');
+      sessionStorage.removeItem('elacity_signer_address');
+    } catch (_) {}
   }
 
   function setSignerAddress(address) {
     signerAddress = address;
   }
 
+  function retrieveChannelFromCatalog(channelAddress) {
+    return fetchChannelsFromCatalog().then(function (result) {
+      if (!result || !result.data) return null;
+      return result.data.find(function (ch) {
+        return ch.address && ch.address.toLowerCase() === channelAddress.toLowerCase();
+      }) || null;
+    });
+  }
+
   function retrieveChannel(channelAddress) {
-    return gql(RETRIEVE_CHANNEL_QUERY, { query: { address: channelAddress } })
-      .then(function (data) { return data.channel; });
+    return retrieveChannelFromCatalog(channelAddress)
+      .then(function (localChannel) {
+        if (localChannel) return localChannel;
+        return gql(RETRIEVE_CHANNEL_QUERY, { query: { address: channelAddress } })
+          .then(function (data) { return data.channel || null; })
+          .catch(function () { return null; });
+      });
+  }
+
+  function fetchChannelsFromCatalog() {
+    var origin = window.puter_api_origin || window.location.origin;
+    return fetch(origin + '/api/catalog/channels')
+      .then(function (res) { return res.ok ? res.json() : null; })
+      .then(function (json) {
+        if (!json || !json.data || json.data.length === 0) return null;
+        var channels = json.data.map(function (ch) {
+          var cats = [];
+          if (ch.categories) {
+            try { cats = typeof ch.categories === 'string' ? JSON.parse(ch.categories) : ch.categories; } catch (_) { cats = ch.categories.split(',').map(function (c) { return c.trim(); }); }
+          }
+          var plans = [];
+          if (ch.plans) {
+            try { plans = typeof ch.plans === 'string' ? JSON.parse(ch.plans) : ch.plans; } catch (_) { plans = []; }
+          }
+          var tokenAccess = [];
+          if (ch.tokenAccess) {
+            try { tokenAccess = typeof ch.tokenAccess === 'string' ? JSON.parse(ch.tokenAccess) : ch.tokenAccess; } catch (_) { tokenAccess = []; }
+          }
+          return {
+            _id: ch.address,
+            name: ch.name || ('Channel ' + ch.address.substring(0, 8)),
+            address: ch.address,
+            description: ch.description || '',
+            channelType: 'content',
+            categories: Array.isArray(cats) ? cats : [],
+            image: ch.image || '',
+            imageURL: ch.image || '',
+            coverImage: ch.coverImage || '',
+            coverImageURL: ch.coverImage || '',
+            itemsCount: ch.itemsCount || 0,
+            creator: { address: ch.creator },
+            plans: plans,
+            tokenAccess: tokenAccess
+          };
+        });
+        return { total: channels.length, offset: 0, limit: channels.length, data: channels };
+      })
+      .catch(function () { return null; });
   }
 
   function fetchChannels(offset, limit) {
-    return gql(FETCH_CHANNELS_QUERY, {
-      query: {},
-      filters: { offset: offset || 0, limit: limit || 30, sort: { itemsCount: -1 } }
-    }).then(function (data) { return data.channels; });
+    return fetchChannelsFromCatalog()
+      .then(function (localResult) {
+        if (localResult && localResult.data && localResult.data.length > 0) {
+          console.log('[API] Using local catalog channels (' + localResult.data.length + ' V3 channels)');
+          return localResult;
+        }
+        return gql(FETCH_CHANNELS_QUERY, {
+          query: {},
+          filters: { offset: offset || 0, limit: limit || 30, sort: { itemsCount: -1 } }
+        }).then(function (data) { return data.channels; });
+      });
   }
 
   function fetchChannelItems(channelAddress, offset, limit) {
-    return gql(FETCH_CHANNEL_ITEMS_QUERY, {
-      query: { address: channelAddress },
-      filters: { offset: offset || 0, limit: limit || 40, sort: { createdAt: -1 } }
-    }).then(function (data) { return data.assets; });
+    return fetchFromCatalog(offset || 0, limit || 40, channelAddress)
+      .then(function (localResult) {
+        if (localResult && localResult.data && localResult.data.length > 0) {
+          console.log('[API] Using local catalog for channel items (' + localResult.data.length + ' items)');
+          return localResult;
+        }
+        return gql(FETCH_CHANNEL_ITEMS_QUERY, {
+          query: { address: channelAddress },
+          filters: { offset: offset || 0, limit: limit || 40, sort: { createdAt: -1 } }
+        }).then(function (data) { return data.assets; });
+      });
   }
 
   function listSubscribers(channelAddress, followerAddress) {
@@ -836,26 +1084,65 @@ var ElacityAPI = (function () {
       rewards: fetchRewardSummaryByAddress(address: $address, category: $category) {\n\
         name\n\
         unclaimedRewards\n\
-        distributions {\n\
-          volume\n\
-          paymentToken\n\
-        }\n\
       }\n\
     }';
 
-  function fetchRoyaltyItems(address, category, offset, limit) {
-    return gql(FETCH_ROYALTY_ITEMS_QUERY, {
-      address: address,
-      category: category,
-      filters: { offset: offset || 0, limit: limit || 50 }
-    }, true).then(function (data) { return data.items; });
+  var _earningsCache = {};
+  var _earningsForceRefresh = false;
+
+  function fetchEarningsFromCatalog(address, category, walletLabel) {
+    var cacheKey = address.toLowerCase() + ':' + (category || 'assets');
+    if (!_earningsForceRefresh && _earningsCache[cacheKey]) return _earningsCache[cacheKey];
+
+    var url = '/api/catalog/earnings/' + encodeURIComponent(address) +
+      '?category=' + encodeURIComponent(category || 'assets');
+    if (walletLabel) url += '&walletLabel=' + encodeURIComponent(walletLabel);
+    if (_earningsForceRefresh) url += '&refresh=1';
+
+    _earningsCache[cacheKey] = fetch(url)
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!data.success) throw new Error(data.error || 'Local earnings query failed');
+        return data;
+      })
+      .catch(function (err) {
+        delete _earningsCache[cacheKey];
+        throw err;
+      });
+    return _earningsCache[cacheKey];
   }
 
-  function fetchRewardSummary(address, category) {
-    return gql(FETCH_REWARD_SUMMARY_QUERY, {
-      address: address,
-      category: category
-    }, true).then(function (data) { return data.rewards || []; });
+  function clearEarningsCache(forceServerRefresh) {
+    _earningsCache = {};
+    if (forceServerRefresh) _earningsForceRefresh = true;
+    setTimeout(function () { _earningsForceRefresh = false; }, 5000);
+  }
+
+  function fetchRoyaltyItems(address, category, offset, limit, walletLabel) {
+    return fetchEarningsFromCatalog(address, category, walletLabel)
+      .then(function (data) { return data.items; })
+      .catch(function (localErr) {
+        console.warn('[API] Local earnings failed, trying GraphQL:', localErr.message);
+        return gql(FETCH_ROYALTY_ITEMS_QUERY, {
+          address: address,
+          category: category,
+          filters: { offset: offset || 0, limit: limit || 50 }
+        }, true).then(function (data) { return data.items; })
+          .catch(function () { return { total: 0, data: [] }; });
+      });
+  }
+
+  function fetchRewardSummary(address, category, walletLabel) {
+    return fetchEarningsFromCatalog(address, category, walletLabel)
+      .then(function (data) { return data.rewards || []; })
+      .catch(function (localErr) {
+        console.warn('[API] Local reward summary failed, trying GraphQL:', localErr.message);
+        return gql(FETCH_REWARD_SUMMARY_QUERY, {
+          address: address,
+          category: category
+        }, true).then(function (data) { return data.rewards || []; })
+          .catch(function () { return []; });
+      });
   }
 
   // ── Activity Event Queries ─────────────────────────
@@ -863,7 +1150,7 @@ var ElacityAPI = (function () {
   var ACTIVITY_EVENT_FIELDS = '\
     _id\n\
     event\n\
-    token { address name }\n\
+    token { contractAddress name }\n\
     to { address }\n\
     from { address }\n\
     quantity\n\
@@ -935,13 +1222,14 @@ var ElacityAPI = (function () {
           totalRevenue\n\
           unpublished\n\
           resell { totalResell totalVendors totalRevenue percentage }\n\
-          price\n\
+          price { amount payToken }\n\
           opType\n\
         }\n\
       }';
     return gql(query, {
       input: { address: address, ledger: ledger, tokenId: tokenId }
-    }).then(function (data) { return data.stat; });
+    }).then(function (data) { return data.stat; })
+      .catch(function () { return null; });
   }
 
   function governanceStatistics(address, account) {
@@ -949,13 +1237,14 @@ var ElacityAPI = (function () {
       query GovStats($address: String!, $account: String) {\n\
         stats: governanceStatistics(address: $address, account: $account) {\n\
           royalties { distribution }\n\
-          rewards { volumeUSD claimableVolumeUSD distributions { volume paymentToken } }\n\
+          rewards { volumeUSD claimableVolumeUSD }\n\
           governance { available owned volumeUSD }\n\
-          floor\n\
+          floor { price paymentToken }\n\
         }\n\
       }';
     return gql(query, { address: address, account: account })
-      .then(function (data) { return data.stats; });
+      .then(function (data) { return data.stats; })
+      .catch(function () { return null; });
   }
 
   // ── Publish/Unpublish ──────────────────────────────
@@ -974,7 +1263,51 @@ var ElacityAPI = (function () {
 
   // ── Channel Management ─────────────────────────────
 
-  function updateChannelInformation(address, input) {
+  function uploadToIpfs(file, pc2FetchFn) {
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onload = function () {
+        var base64 = reader.result.split(',')[1];
+        var fetchFn = pc2FetchFn || fetch;
+        fetchFn('/api/storage/ipfs/add', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: base64, announce: true })
+        }).then(function (res) {
+          if (!res.ok) throw new Error('Upload failed: ' + res.status);
+          return res.json();
+        }).then(function (json) {
+          if (!json.success) throw new Error(json.error || 'Upload failed');
+          resolve('ipfs://' + json.cid);
+        }).catch(reject);
+      };
+      reader.onerror = function () { reject(new Error('Failed to read file')); };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function updateChannelLocal(address, input, pc2FetchFn) {
+    var body = {};
+    if (input.name !== undefined) body.name = input.name;
+    if (input.description !== undefined) body.description = input.description;
+    if (input.categories !== undefined) body.categories = Array.isArray(input.categories) ? JSON.stringify(input.categories) : input.categories;
+    if (input.image !== undefined) body.image = input.image;
+    if (input.coverImage !== undefined) body.coverImage = input.coverImage;
+    var fetchFn = pc2FetchFn || fetch;
+    return fetchFn('/api/catalog/channel/' + encodeURIComponent(address), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }).then(function (res) {
+      if (!res.ok) throw new Error('API ' + res.status);
+      return res.json();
+    }).then(function (json) {
+      if (!json.success) throw new Error(json.error || 'Update failed');
+      return json.channel;
+    });
+  }
+
+  function updateChannelInformation(address, input, pc2FetchFn) {
     var mutation = '\
       mutation UpdateChannel($address: String!, $input: ChannelInformationInput!) {\n\
         channel: updateChannelInformation(address: $address, input: $input) {\n\
@@ -985,32 +1318,100 @@ var ElacityAPI = (function () {
           coverImage\n\
         }\n\
       }';
-    return gql(mutation, { address: address, input: input }, true);
+    return gql(mutation, { address: address, input: input }, true)
+      .catch(function (gqlErr) {
+        console.warn('[API] GraphQL channel update failed, falling back to local:', gqlErr.message);
+        return updateChannelLocal(address, input, pc2FetchFn);
+      });
   }
 
-  function updateSubscriptionPlan(address, actions) {
-    var mutation = '\
-      mutation UpdatePlan($address: String!, $input: [SubscriptionPlanUpdateAction]!) {\n\
-        updateSubscriptionPlan(address: $address, input: $input) {\n\
-          name\n\
-          plans {\n\
-            planId\n\
-            label\n\
-            price\n\
-          }\n\
-        }\n\
-      }';
-    return gql(mutation, { address: address, input: actions }, true);
+  function updateSubscriptionPlanLocal(address, actions, pc2FetchFn) {
+    var fetchFn = pc2FetchFn || fetch;
+    var origin = window.puter_api_origin || window.location.origin;
+    return fetchFn(origin + '/api/catalog/channel/' + address.toLowerCase())
+      .then(function (res) { return res.ok ? res.json() : null; })
+      .then(function (json) {
+        var existing = [];
+        if (json && json.channel && json.channel.plans) {
+          try { existing = typeof json.channel.plans === 'string' ? JSON.parse(json.channel.plans) : json.channel.plans; } catch (_) { existing = []; }
+        }
+        actions.forEach(function (act) {
+          if (act.action === 'ADD') {
+            existing.push({
+              planId: 'plan_' + Date.now(),
+              label: act.args.label,
+              description: act.args.description || '',
+              duration: act.args.duration,
+              price: act.args.price,
+              payToken: act.args.payToken
+            });
+          } else if (act.action === 'REMOVE' && act.args && act.args.planId) {
+            existing = existing.filter(function (p) { return p.planId !== act.args.planId; });
+          } else if (act.action === 'UPDATE' && act.args && act.args.planId) {
+            existing = existing.map(function (p) {
+              if (p.planId === act.args.planId) {
+                return Object.assign({}, p, act.args);
+              }
+              return p;
+            });
+          }
+        });
+        return fetchFn(origin + '/api/catalog/channel/' + address.toLowerCase(), {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ plans: JSON.stringify(existing) })
+        });
+      })
+      .then(function (res) { return res.json(); })
+      .then(function (json) {
+        if (!json.success) throw new Error(json.error || 'Local plan update failed');
+        return json.channel;
+      });
+  }
+
+  function updateSubscriptionPlan(address, actions, pc2FetchFn) {
+    // V3 contracts do not have bulkUpdatePlans on-chain;
+    // plan modifications are stored in local catalog and backend index.
+    return updateSubscriptionPlanLocal(address, actions, pc2FetchFn)
+      .then(function (result) {
+        var mutation = '\
+          mutation UpdatePlan($address: String!, $input: [SubscriptionPlanUpdateAction]!) {\n\
+            updateSubscriptionPlan(address: $address, input: $input) {\n\
+              name\n\
+              plans {\n\
+                planId\n\
+                label\n\
+                price\n\
+              }\n\
+            }\n\
+          }';
+        gql(mutation, { address: address, input: actions }, true).catch(function (err) {
+          console.warn('[API] Backend plan indexing failed (non-critical):', err.message);
+        });
+        return result;
+      });
   }
 
   function fetchManagedChannels(creatorAddress, filters) {
-    var query = creatorAddress ? { creator: creatorAddress.toLowerCase() } : {};
-    return gql(FETCH_CHANNELS_QUERY, {
-      query: query,
-      filters: filters || { offset: 0, limit: 100, sort: { itemsCount: -1 } }
-    }, true).then(function (data) {
-      return data.channels || { total: 0, data: [] };
-    });
+    var addr = (creatorAddress || '').toLowerCase();
+    if (!addr) return Promise.resolve({ total: 0, data: [] });
+
+    return fetchEarningsFromCatalog(addr, 'my-channels', 'EOA')
+      .then(function (data) {
+        if (data.items && data.items.data && data.items.data.length > 0) {
+          return { total: data.items.total, data: data.items.data };
+        }
+        throw new Error('No local channels');
+      })
+      .catch(function () {
+        var query = { creator: addr };
+        return gql(FETCH_CHANNELS_QUERY, {
+          query: query,
+          filters: filters || { offset: 0, limit: 100, sort: { itemsCount: -1 } }
+        }, true).then(function (data) {
+          return data.channels || { total: 0, data: [] };
+        });
+      });
   }
 
   return {
@@ -1043,6 +1444,7 @@ var ElacityAPI = (function () {
     fetchSubscriptions: fetchSubscriptions,
     fetchRoyaltyItems: fetchRoyaltyItems,
     fetchRewardSummary: fetchRewardSummary,
+    clearEarningsCache: clearEarningsCache,
     searchListingEvents: searchListingEvents,
     searchTradeEvents: searchTradeEvents,
     searchOfferEvents: searchOfferEvents,
@@ -1051,6 +1453,8 @@ var ElacityAPI = (function () {
     governanceStatistics: governanceStatistics,
     toggleUnpublish: toggleUnpublish,
     updateChannelInformation: updateChannelInformation,
+    updateChannelLocal: updateChannelLocal,
+    uploadToIpfs: uploadToIpfs,
     updateSubscriptionPlan: updateSubscriptionPlan,
     fetchManagedChannels: fetchManagedChannels,
     PRESETS: PRESETS

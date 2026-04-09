@@ -1,18 +1,38 @@
 /**
  * ContentIndexerService
  *
- * Scans Base chain for Elacity content events (ChannelCreated, DigitalAssetRegistered)
- * and builds a local content catalog in SQLite. This replaces the dependency on
- * Elacity's centralized GraphQL API for content discovery.
+ * Scans Base chain for Elacity content events (ChannelCreated, DigitalAssetRegistered,
+ * AssetCreated) and builds a local content catalog in SQLite. This replaces the
+ * dependency on Elacity's centralized GraphQL API for content discovery.
  *
  * Design: versioned contract support — when v3 contracts deploy, add a new entry
  * to config.content_indexer.contracts and the indexer picks them up automatically.
  */
 
+import { readFileSync, existsSync } from 'fs';
+import { resolve as pathResolve, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import { createLogger } from '../utils/logger.js';
 import type { Config } from '../config/loader.js';
 import type { DatabaseManager, ContentCatalogItem } from '../storage/database.js';
 import type { IPFSStorage } from '../storage/ipfs.js';
+import { getWASMRuntime } from './wasm/WASMRuntime.js';
+import type WASMRuntime from './wasm/WASMRuntime.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+const MULTICALL_WASM_PATH = pathResolve(__dirname, '../../wasm-apps/evm-multicall/evm-multicall.wasm');
+let cachedMulticallWasm: ArrayBuffer | null = null;
+
+function loadMulticallWasm(): ArrayBuffer {
+  if (cachedMulticallWasm) return cachedMulticallWasm;
+  if (!existsSync(MULTICALL_WASM_PATH)) {
+    throw new Error(`evm-multicall WASM not found: ${MULTICALL_WASM_PATH}`);
+  }
+  cachedMulticallWasm = readFileSync(MULTICALL_WASM_PATH).buffer;
+  return cachedMulticallWasm;
+}
 
 const log = createLogger('content-indexer');
 
@@ -34,10 +54,11 @@ interface ContractVersionConfig {
   fromBlock: number;
 }
 
-// V3 precomputed keccak256 topic hashes
+// Precomputed keccak256 topic hashes for contract events
 const TOPICS = {
   ChannelCreated: '0x4ae6ef95ddade103ca67593cd4cf68dda177aa1054ad4eeb4963d2c3df44702e',
   DigitalAssetRegistered: '0x1b24f7763272894608506beba5887c374d345cd231bf52bd03f40bc2d0508d7b',
+  AssetCreated: '0xc0a995e4052be044599af577ab2f3382d67bd34df95a76226e7c464e9d4dba46',
 } as const;
 
 const TOKEN_URI_SELECTOR = '0xc87b56dd';
@@ -93,6 +114,7 @@ function classifyAssetType(mimeType: string | null | undefined): string {
 export class ContentIndexerService {
   private db: DatabaseManager | null = null;
   private ipfs: IPFSStorage | null = null;
+  private wasmRuntime: WASMRuntime | null = null;
   private config: IndexerConfig;
   private scanTimer: ReturnType<typeof setInterval> | null = null;
   private isScanning = false;
@@ -127,6 +149,14 @@ export class ContentIndexerService {
   initialize(db: DatabaseManager, ipfs?: IPFSStorage | null): void {
     this.db = db;
     this.ipfs = ipfs ?? null;
+
+    try {
+      this.wasmRuntime = getWASMRuntime();
+      loadMulticallWasm();
+      log.info('WASM ABI decoder loaded (evm-multicall)');
+    } catch (error: any) {
+      log.warn(`WASM ABI decoder not available, using JS fallback: ${error.message}`);
+    }
 
     if (!this.config.enabled) {
       log.info('Content indexer disabled in config');
@@ -222,6 +252,24 @@ export class ContentIndexerService {
     return this.rpcCall('eth_call', [{ to, data }, 'latest']);
   }
 
+  // ── WASM ABI decoder ─────────────────────────────────────────
+
+  private async abiDecode(dataHex: string, types: string[]): Promise<string[] | null> {
+    if (!this.wasmRuntime || !cachedMulticallWasm) return null;
+
+    try {
+      const command = JSON.stringify({ mode: 'abi_decode', data: dataHex, types });
+      const result = await this.wasmRuntime.executeMulticall(cachedMulticallWasm, command, { timeoutMs: 5000 });
+      if (result.success && result.values) {
+        return result.values;
+      }
+      log.debug(`WASM abi_decode failed: ${result.error}`);
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
   // ── Scan cycle ─────────────────────────────────────────────
 
   private async runScanCycle(): Promise<void> {
@@ -270,8 +318,9 @@ export class ContentIndexerService {
 
       const eventSource = cfg.eventHub ?? cfg.centralStorage;
       if (eventSource) {
-        const count = await this.scanDigitalAssetRegistered(eventSource, version, from, to);
-        newAssets += count;
+        const countLegacy = await this.scanDigitalAssetRegistered(eventSource, version, from, to);
+        const countV3 = await this.scanAssetCreated(eventSource, version, from, to);
+        newAssets += countLegacy + countV3;
       }
 
       scannedTo = to;
@@ -303,24 +352,24 @@ export class ContentIndexerService {
 
     for (const entry of logs) {
       try {
-        // V3 DigitalAssetRegistered(address indexed channel, uint256 indexed tokenId,
+        // DigitalAssetRegistered(address indexed channel, uint256 indexed tokenId,
         //   address creator, string tokenURI, uint16 opType, bytes16 contentId)
         const channelAddress = unpadAddress(entry.topics[1]);
-        const tokenId = fromHex(entry.topics[2]);
+        const tokenIdHex = entry.topics[2]; // keep as hex — uint256 overflows JS numbers
         const blockNumber = fromHex(entry.blockNumber);
 
         // Non-indexed params in data: creator (address), tokenURI (string), opType (uint16), contentId (bytes16)
         const data = entry.data?.replace('0x', '') ?? '';
         const creatorAddress = data.length >= 64 ? unpadAddress('0x' + data.slice(0, 64)) : '';
 
-        if (this.db.catalogItemExists(channelAddress, tokenId, 8453)) {
+        if (this.db.catalogItemExists(channelAddress, tokenIdHex, 8453)) {
           continue;
         }
 
         const item: ContentCatalogItem = {
           content_id: null,
           channel_address: channelAddress,
-          token_id: tokenId,
+          token_id: tokenIdHex,
           operative_address: '',
           creator_address: creatorAddress,
           name: null,
@@ -346,6 +395,92 @@ export class ContentIndexerService {
         count++;
       } catch (error: any) {
         log.debug(`Failed to parse event: ${error.message}`);
+      }
+    }
+
+    return count;
+  }
+
+  /**
+   * Scan V3 EventHub AssetCreated events.
+   *
+   * AssetCreated(address indexed _to, address indexed _channel, uint256 _tokenId,
+   *              string _tokenUri, uint16 _opType, address indexed opContract)
+   *
+   *   topics[0] = event sig, topics[1] = _to (creator), topics[2] = _channel, topics[3] = opContract
+   *   data = abi.encode(uint256 _tokenId, string _tokenUri, uint16 _opType)
+   */
+  private async scanAssetCreated(eventSourceAddress: string, version: string, fromBlock: number, toBlock: number): Promise<number> {
+    if (!this.db) return 0;
+
+    const logs = await this.getLogs(
+      eventSourceAddress,
+      [TOPICS.AssetCreated],
+      fromBlock,
+      toBlock
+    );
+
+    let count = 0;
+
+    for (const entry of logs) {
+      try {
+        const creatorAddress = unpadAddress(entry.topics[1]);
+        const channelAddress = unpadAddress(entry.topics[2]);
+        const operativeAddress = unpadAddress(entry.topics[3]);
+        const blockNumber = fromHex(entry.blockNumber);
+
+        const dataHex = entry.data ?? '0x';
+        const data = dataHex.replace('0x', '');
+        if (data.length < 128) continue;
+
+        // V3 token IDs are full 256-bit hashes — store as hex to avoid JS number overflow
+        const tokenIdHex = '0x' + data.slice(0, 64);
+
+        if (this.db.catalogItemExists(channelAddress, tokenIdHex, 8453)) {
+          continue;
+        }
+
+        // Try WASM ABI decode to extract tokenUri directly from event data
+        // data = abi.encode(uint256 _tokenId, string _tokenUri, uint16 _opType)
+        let eventTokenUri: string | null = null;
+        let eventOpType: number | null = null;
+        const decoded = await this.abiDecode(dataHex, ['uint256', 'string', 'uint16']);
+        if (decoded && decoded.length === 3) {
+          eventTokenUri = decoded[1] || null;
+          eventOpType = parseInt(decoded[2], 10) || null;
+        }
+
+        const metadataCid = eventTokenUri ? this.extractCid(eventTokenUri) : null;
+
+        const item: ContentCatalogItem = {
+          content_id: null,
+          channel_address: channelAddress,
+          token_id: tokenIdHex,
+          operative_address: operativeAddress,
+          creator_address: creatorAddress,
+          name: null,
+          description: null,
+          image_url: null,
+          content_cid: null,
+          metadata_cid: metadataCid,
+          mime_type: null,
+          asset_type: null,
+          price: null,
+          payment_token: null,
+          op_type: eventOpType,
+          chain_id: 8453,
+          block_number: blockNumber,
+          tx_hash: entry.transactionHash || null,
+          contract_version: version,
+          metadata_status: 'pending',
+          indexed_at: Date.now(),
+          metadata_json: null,
+        };
+
+        this.db.upsertCatalogItem(item);
+        count++;
+      } catch (error: any) {
+        log.debug(`Failed to parse AssetCreated event: ${error.message}`);
       }
     }
 
@@ -393,27 +528,36 @@ export class ContentIndexerService {
     if (!this.db) return false;
 
     try {
-      // Step 1: Get tokenURI from the channel contract
-      const callData = TOKEN_URI_SELECTOR + padUint256(item.token_id).slice(2);
-      const uriResult = await this.ethCall(item.channel_address, callData);
+      let tokenURI: string | null = null;
 
-      if (!uriResult || uriResult === '0x') {
-        this.db.updateCatalogMetadata(item.channel_address, item.token_id, item.chain_id, {
-          metadata_status: 'failed',
-        });
-        return false;
+      // If metadata_cid was extracted from event data, build the URI directly
+      if (item.metadata_cid) {
+        tokenURI = `ipfs://${item.metadata_cid}`;
       }
 
-      const tokenURI = decodeAbiString(uriResult);
+      // Otherwise, fetch tokenURI from the channel contract
       if (!tokenURI) {
-        this.db.updateCatalogMetadata(item.channel_address, item.token_id, item.chain_id, {
-          metadata_status: 'failed',
-        });
+        const tokenIdPadded = item.token_id.replace('0x', '').padStart(64, '0');
+        const callData = TOKEN_URI_SELECTOR + tokenIdPadded;
+        const uriResult = await this.ethCall(item.channel_address, callData);
+
+        if (!uriResult || uriResult === '0x') {
+          this.db.updateCatalogMetadata(item.channel_address, item.token_id, item.chain_id, { metadata_status: 'failed' });
+          return false;
+        }
+
+        // Try WASM decoder first, fall back to JS
+        const decoded = await this.abiDecode(uriResult, ['string']);
+        tokenURI = decoded?.[0] ?? decodeAbiString(uriResult);
+      }
+
+      if (!tokenURI) {
+        this.db.updateCatalogMetadata(item.channel_address, item.token_id, item.chain_id, { metadata_status: 'failed' });
         return false;
       }
 
       // Step 2: Extract CID from tokenURI and fetch metadata
-      const metadataCid = this.extractCid(tokenURI);
+      const metadataCid = item.metadata_cid ?? this.extractCid(tokenURI);
       const metadata = await this.fetchMetadata(tokenURI);
 
       if (!metadata) {

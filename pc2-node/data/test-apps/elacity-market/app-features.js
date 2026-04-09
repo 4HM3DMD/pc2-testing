@@ -115,9 +115,10 @@
       container = document.createElement('div');
       container.id = 'detail-activity';
       container.className = 'activity-section';
-      var govSection = document.getElementById('detail-governance-section');
-      if (govSection) govSection.parentNode.insertBefore(container, govSection.nextSibling);
-      else {
+      var anchor = document.getElementById('detail-activity-anchor');
+      if (anchor) {
+        anchor.parentNode.insertBefore(container, anchor);
+      } else {
         var body = document.querySelector('.detail-body');
         if (body) body.appendChild(container);
       }
@@ -270,8 +271,8 @@
 
       var expandIcon = document.createElement('span');
       expandIcon.className = 'earnings-item-expand-icon';
-      expandIcon.innerHTML = '&#9662;';
-      item.querySelector('.earnings-item-info').appendChild(expandIcon);
+      expandIcon.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>';
+      item.appendChild(expandIcon);
 
       var panel = document.createElement('div');
       panel.className = 'earnings-expanded-panel';
@@ -281,7 +282,7 @@
       var itemType = item.dataset.itemtype || 'asset';
 
       item.addEventListener('click', function (e) {
-        if (e.target.closest('.earnings-withdraw-btn')) return;
+        if (e.target.closest('.earnings-withdraw-btn') || e.target.closest('.action-btn')) return;
         item.classList.toggle('expanded');
         if (item.classList.contains('expanded') && !panel.dataset.loaded) {
           loadExpandedStats(panel, contractAddr, ledger, tokenId, itemType);
@@ -304,15 +305,11 @@
     }
     fetches.push(ElacityAPI.governanceStatistics(contractAddr, account).catch(function () { return null; }));
 
-    if (!isChannel && contractAddr) {
-      fetches.push(Wallet.getAccessTokenBalance(contractAddr, eoaAddr).catch(function () { return 0; }));
-      fetches.push(saAddr && saAddr.toLowerCase() !== eoaAddr.toLowerCase()
-        ? Wallet.getAccessTokenBalance(contractAddr, saAddr).catch(function () { return 0; })
-        : Promise.resolve(0));
+    if (contractAddr) {
       fetches.push(Wallet.getPendingRewards(contractAddr, account, Wallet.USDC_ADDRESS).catch(function () { return '0'; }));
       fetches.push(Wallet.getPendingRewards(contractAddr, account, '0x0000000000000000000000000000000000000000').catch(function () { return '0'; }));
     } else {
-      fetches.push(Promise.resolve(0), Promise.resolve(0), Promise.resolve('0'), Promise.resolve('0'));
+      fetches.push(Promise.resolve('0'), Promise.resolve('0'));
     }
 
     if (isChannel) {
@@ -322,15 +319,26 @@
       fetches.push(Promise.resolve(null), Promise.resolve(null));
     }
 
+    // [6] on-chain royalty balance for current user (EOA + SA combined)
+    if (!isChannel && contractAddr) {
+      fetches.push(
+        Promise.all([
+          Wallet.getRoyaltyShareBalance(contractAddr, eoaAddr).catch(function () { return 0; }),
+          saAddr ? Wallet.getRoyaltyShareBalance(contractAddr, saAddr).catch(function () { return 0; }) : Promise.resolve(0)
+        ]).then(function (bals) { return Number(bals[0]) + Number(bals[1]); })
+      );
+    } else {
+      fetches.push(Promise.resolve(0));
+    }
+
     Promise.all(fetches).then(function (results) {
       var stat = results[0];
       var gov = results[1];
-      var eoaAccessBal = results[2] || 0;
-      var saAccessBal = results[3] || 0;
-      var usdcRewards = results[4] || '0';
-      var ethRewards = results[5] || '0';
-      var subInfo = results[6];
-      var channelInfo = results[7];
+      var usdcRewards = results[2] || '0';
+      var ethRewards = results[3] || '0';
+      var subInfo = results[4];
+      var channelInfo = results[5];
+      var onChainRoyaltyBal = results[6] || 0;
       panel.dataset.loaded = '1';
 
       var html = '<div class="stats-cards">';
@@ -362,27 +370,29 @@
         }
       }
 
-      if (!isChannel) {
-        html += '<div class="stat-card"><div class="stat-card-label">My Access (EOA)</div><div class="stat-card-value">' + eoaAccessBal + '</div></div>';
-        if (saAddr && saAddr.toLowerCase() !== eoaAddr.toLowerCase()) {
-          html += '<div class="stat-card"><div class="stat-card-label">My Access (SA)</div><div class="stat-card-value">' + saAccessBal + '</div></div>';
+      var govOwned = (gov && gov.governance && gov.governance.owned) || 0;
+      var govAvail = (gov && gov.governance && gov.governance.available) || 0;
+      var govVol = (gov && gov.governance && gov.governance.volumeUSD) || 0;
+
+      // V3 on-chain fallback: 1000 royalty tokens = 100%
+      if (govOwned === 0 && onChainRoyaltyBal > 0) {
+        govOwned = onChainRoyaltyBal;
+        govAvail = 1000;
+      }
+
+      if (govOwned > 0 || govAvail > 0) {
+        var yourPct = (govOwned / 10).toFixed(1);
+        var availPct = govAvail > 0 ? ((govAvail / 10).toFixed(1)) : '0';
+        html += '<div class="stat-card"><div class="stat-card-label">Your Royalty</div><div class="stat-card-value">' + yourPct + '%</div></div>';
+        html += '<div class="stat-card"><div class="stat-card-label">Total Supply</div><div class="stat-card-value">' + availPct + '%</div></div>';
+        if (govVol > 0) {
+          html += '<div class="stat-card"><div class="stat-card-label">Gov. Volume</div><div class="stat-card-value">$' + govVol.toFixed(2) + '</div></div>';
         }
       }
 
-      if (gov) {
-        if (gov.governance) {
-          var avail = gov.governance.available || 0;
-          var owned = gov.governance.owned || 0;
-          var govVol = gov.governance.volumeUSD || 0;
-          var yourPct = avail > 0 ? ((owned / 10).toFixed(1)) : '0';
-          var availPct = avail > 0 ? ((avail / 10).toFixed(1)) : '0';
-          html += '<div class="stat-card"><div class="stat-card-label">Your Royalty</div><div class="stat-card-value">' + yourPct + '%</div></div>';
-          html += '<div class="stat-card"><div class="stat-card-label">Available Royalty</div><div class="stat-card-value">' + availPct + '%</div></div>';
-          html += '<div class="stat-card"><div class="stat-card-label">Gov. Volume</div><div class="stat-card-value">$' + govVol.toFixed(2) + '</div></div>';
-        }
-        if (gov.floor !== undefined && gov.floor !== null) {
-          html += '<div class="stat-card"><div class="stat-card-label">Floor (Royalty)</div><div class="stat-card-value">' + u.formatPrice(gov.floor) + '</div></div>';
-        }
+      if (gov && gov.floor !== undefined && gov.floor !== null) {
+        var floorVal = (typeof gov.floor === 'object') ? gov.floor.price : gov.floor;
+        if (floorVal) html += '<div class="stat-card"><div class="stat-card-label">Floor (Royalty)</div><div class="stat-card-value">' + u.formatPrice(floorVal) + '</div></div>';
       }
 
       html += '</div>';
@@ -398,17 +408,17 @@
         if (hasUsdc) {
           html += '<div class="withdraw-token-row" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">';
           html += '<span style="font-size:12px;">USDC: <strong>$' + usdcVal.toFixed(2) + '</strong></span>';
-          html += '<button class="earnings-withdraw-btn" data-action="withdraw" data-contract="' + u.escapeHtml(contractAddr) + '" data-paytoken="' + Wallet.USDC_ADDRESS + '">Withdraw</button>';
+          html += '<button class="earnings-withdraw-btn" data-action="withdraw" data-contract="' + u.escapeHtml(contractAddr) + '" data-paytoken="' + Wallet.USDC_ADDRESS + '" data-wallet="' + walletKey + '">Withdraw</button>';
           html += '</div>';
         }
         if (hasEth) {
           html += '<div class="withdraw-token-row" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">';
           html += '<span style="font-size:12px;">ETH: <strong>' + ethVal.toFixed(6) + '</strong></span>';
-          html += '<button class="earnings-withdraw-btn" data-action="withdraw" data-contract="' + u.escapeHtml(contractAddr) + '" data-paytoken="0x0000000000000000000000000000000000000000">Withdraw</button>';
+          html += '<button class="earnings-withdraw-btn" data-action="withdraw" data-contract="' + u.escapeHtml(contractAddr) + '" data-paytoken="0x0000000000000000000000000000000000000000" data-wallet="' + walletKey + '">Withdraw</button>';
           html += '</div>';
         }
         if (hasUsdc && hasEth) {
-          html += '<button class="earnings-withdraw-btn" data-action="withdraw-all" data-contract="' + u.escapeHtml(contractAddr) + '" style="margin-top:4px;background:var(--accent);">Withdraw All</button>';
+          html += '<button class="earnings-withdraw-btn" data-action="withdraw-all" data-contract="' + u.escapeHtml(contractAddr) + '" data-wallet="' + walletKey + '" style="margin-top:4px;background:var(--accent);">Withdraw All</button>';
         }
         html += '</div>';
       }
@@ -438,11 +448,11 @@
         }
       }
 
-      html += '<div class="expanded-actions">';
-      if (ledger && tokenId) {
-        html += '<button class="action-btn" onclick="ElaMarket.openDetail(\'' + u.escapeHtml(contractAddr) + '\', \'' + u.escapeHtml(tokenId) + '\')"><span>View Asset</span></button>';
-      }
-      html += '</div>';
+      var walletLabel = panel.closest('.earnings-item') ? (panel.closest('.earnings-item').dataset.walletlabel || '') : '';
+      var walletKey = walletLabel.toLowerCase().indexOf('smart') !== -1 ? 'sa' : 'eoa';
+      var ownerAddr = walletKey === 'sa' ? (Wallet.getSmartAccountAddress() || eoaAddr) : eoaAddr;
+
+      // Action buttons moved to top-level earnings-item-actions row
 
       panel.innerHTML = html;
 
@@ -451,11 +461,13 @@
           e.stopPropagation();
           var contract = btn.dataset.contract;
           var paytoken = btn.dataset.paytoken;
+          var wKey = btn.dataset.wallet || walletKey;
           btn.disabled = true;
           btn.textContent = '...';
-          Wallet.withdrawRewards(contract, paytoken).then(function () {
+          Wallet.withdrawRewards(contract, paytoken, wKey).then(function () {
             u.showToast('Withdrawal submitted!', 'success');
             btn.textContent = 'Done';
+            if (typeof ElacityAPI !== 'undefined' && ElacityAPI.clearEarningsCache) ElacityAPI.clearEarningsCache(true);
           }).catch(function (err) {
             btn.disabled = false;
             btn.textContent = 'Withdraw';
@@ -470,12 +482,14 @@
         btn.addEventListener('click', function (e) {
           e.stopPropagation();
           var contract = btn.dataset.contract;
+          var wKey = btn.dataset.wallet || walletKey;
           btn.disabled = true;
           btn.textContent = '...';
           var tokens = [Wallet.USDC_ADDRESS, '0x0000000000000000000000000000000000000000'];
-          Wallet.batchWithdrawRewards(contract, tokens).then(function () {
+          Wallet.batchWithdrawRewards(contract, tokens, wKey).then(function () {
             u.showToast('All rewards withdrawn!', 'success');
             btn.textContent = 'Done';
+            if (typeof ElacityAPI !== 'undefined' && ElacityAPI.clearEarningsCache) ElacityAPI.clearEarningsCache(true);
           }).catch(function (err) {
             btn.disabled = false;
             btn.textContent = 'Withdraw All';
@@ -485,6 +499,325 @@
           });
         });
       });
+
+      // Action buttons (List Shares/Transfer/Sell) moved to top-level row
+    });
+  }
+
+  // ── List Royalty Shares Modal ────────────────────
+
+  function openListSharesModal(contractAddr, walletKey, currentBalance) {
+    var existing = document.getElementById('list-shares-modal');
+    if (existing) existing.remove();
+
+    var pctLabel = (currentBalance / 10).toFixed(1);
+
+    var modal = document.createElement('div');
+    modal.id = 'list-shares-modal';
+    modal.className = 'modal-overlay';
+    modal.innerHTML =
+      '<div class="modal-dialog">' +
+        '<div class="modal-header">' +
+          '<h3>List Royalty Shares for Sale</h3>' +
+          '<button class="modal-close-btn" id="list-shares-close">&times;</button>' +
+        '</div>' +
+        '<div class="modal-body">' +
+          '<p class="modal-desc">You hold <strong>' + currentBalance + '</strong> royalty tokens (' + pctLabel + '%) from wallet: <strong>' + (walletKey === 'sa' ? 'Smart Account' : 'EOA') + '</strong></p>' +
+          '<div class="form-group">' +
+            '<label for="ls-quantity">Quantity to list (10 tokens = 1%)</label>' +
+            '<input type="number" id="ls-quantity" min="1" max="' + currentBalance + '" step="1" placeholder="e.g. 10" class="form-input" />' +
+          '</div>' +
+          '<div class="form-group">' +
+            '<label for="ls-price">Price per token (USDC)</label>' +
+            '<input type="number" id="ls-price" min="0.000001" step="0.01" placeholder="e.g. 5.00" class="form-input" />' +
+          '</div>' +
+          '<div id="ls-summary" style="font-size:12px;color:var(--text-secondary);padding:6px 0;"></div>' +
+          '<div id="ls-status" class="modal-status hidden"></div>' +
+        '</div>' +
+        '<div class="modal-footer">' +
+          '<button id="ls-cancel" class="btn-secondary">Cancel</button>' +
+          '<button id="ls-confirm" class="btn-primary">List for Sale</button>' +
+        '</div>' +
+      '</div>';
+
+    document.body.appendChild(modal);
+
+    var qtyInput = document.getElementById('ls-quantity');
+    var priceInput = document.getElementById('ls-price');
+    var summaryEl = document.getElementById('ls-summary');
+
+    function updateSummary() {
+      var q = parseInt(qtyInput.value) || 0;
+      var p = parseFloat(priceInput.value) || 0;
+      if (q > 0 && p > 0) {
+        summaryEl.textContent = 'Total: $' + (q * p).toFixed(2) + ' USDC for ' + (q / 10).toFixed(1) + '% royalty share';
+      } else {
+        summaryEl.textContent = '';
+      }
+    }
+    qtyInput.addEventListener('input', updateSummary);
+    priceInput.addEventListener('input', updateSummary);
+
+    document.getElementById('list-shares-close').addEventListener('click', function () { modal.remove(); });
+    document.getElementById('ls-cancel').addEventListener('click', function () { modal.remove(); });
+
+    document.getElementById('ls-confirm').addEventListener('click', function () {
+      var qty = parseInt(qtyInput.value);
+      var priceUsd = parseFloat(priceInput.value);
+      if (!qty || qty <= 0 || qty > currentBalance) { u.showToast('Enter a valid quantity (max ' + currentBalance + ')', 'error'); return; }
+      if (!priceUsd || priceUsd <= 0) { u.showToast('Enter a valid price', 'error'); return; }
+
+      var priceWei = BigInt(Math.round(priceUsd * 1e6));
+      var btn = document.getElementById('ls-confirm');
+      var statusEl = document.getElementById('ls-status');
+
+      btn.disabled = true;
+      btn.textContent = 'Submitting...';
+      statusEl.textContent = 'Sending transaction...';
+      statusEl.classList.remove('hidden');
+
+      Wallet.listRoyaltyShares(contractAddr, qty, priceWei.toString(), Wallet.USDC_ADDRESS, walletKey === 'sa' ? undefined : 'eoa')
+        .then(function () {
+          u.showToast('Shares listed for sale!', 'success');
+          modal.remove();
+        })
+        .catch(function (err) {
+          btn.disabled = false;
+          btn.textContent = 'List for Sale';
+          if (err.message && err.message.indexOf('rejected') === -1) {
+            statusEl.textContent = 'Failed: ' + u.decodeContractError(err.message);
+          } else {
+            statusEl.classList.add('hidden');
+          }
+        });
+    });
+  }
+
+  // ── Transfer Shares Modal ──────────────────────
+
+  function openTransferSharesModal(contractAddr, walletKey, currentBalance) {
+    var existing = document.getElementById('transfer-shares-modal');
+    if (existing) existing.remove();
+
+    var pctLabel = (currentBalance / 10).toFixed(1);
+
+    var modal = document.createElement('div');
+    modal.id = 'transfer-shares-modal';
+    modal.className = 'modal-overlay';
+    modal.innerHTML =
+      '<div class="modal-dialog">' +
+        '<div class="modal-header">' +
+          '<h3>Transfer Royalty Shares</h3>' +
+          '<button class="modal-close-btn" id="transfer-shares-close">&times;</button>' +
+        '</div>' +
+        '<div class="modal-body">' +
+          '<p class="modal-desc">You hold <strong>' + currentBalance + '</strong> royalty tokens (' + pctLabel + '%) from wallet: <strong>' + (walletKey === 'sa' ? 'Smart Account' : 'EOA') + '</strong></p>' +
+          '<div class="form-group">' +
+            '<label for="ts-recipient">Recipient Address</label>' +
+            '<input type="text" id="ts-recipient" placeholder="0x..." class="form-input" />' +
+          '</div>' +
+          '<div class="form-group">' +
+            '<label for="ts-quantity">Quantity to transfer (10 tokens = 1%)</label>' +
+            '<input type="number" id="ts-quantity" min="1" max="' + currentBalance + '" step="1" placeholder="e.g. 10" class="form-input" />' +
+          '</div>' +
+          '<div id="ts-status" class="modal-status hidden"></div>' +
+        '</div>' +
+        '<div class="modal-footer">' +
+          '<button id="ts-cancel" class="btn-secondary">Cancel</button>' +
+          '<button id="ts-confirm" class="btn-primary">Transfer</button>' +
+        '</div>' +
+      '</div>';
+
+    document.body.appendChild(modal);
+
+    document.getElementById('transfer-shares-close').addEventListener('click', function () { modal.remove(); });
+    document.getElementById('ts-cancel').addEventListener('click', function () { modal.remove(); });
+
+    document.getElementById('ts-confirm').addEventListener('click', function () {
+      var recipient = document.getElementById('ts-recipient').value.trim();
+      var qty = parseInt(document.getElementById('ts-quantity').value);
+
+      if (!recipient || !ethers.isAddress(recipient)) { u.showToast('Enter a valid recipient address', 'error'); return; }
+      if (!qty || qty <= 0 || qty > currentBalance) { u.showToast('Enter a valid quantity (max ' + currentBalance + ')', 'error'); return; }
+
+      var eoaAddr = (Wallet.getAddress() || '').toLowerCase();
+      var saAddr = (Wallet.getSmartAccountAddress() || '').toLowerCase();
+      if (recipient.toLowerCase() === eoaAddr || recipient.toLowerCase() === saAddr) {
+        u.showToast('Cannot transfer to yourself', 'error');
+        return;
+      }
+
+      var btn = document.getElementById('ts-confirm');
+      var statusEl = document.getElementById('ts-status');
+
+      btn.disabled = true;
+      btn.textContent = 'Transferring...';
+      statusEl.textContent = 'Sending transaction...';
+      statusEl.classList.remove('hidden');
+
+      Wallet.transferRoyaltyShares(contractAddr, recipient, qty, walletKey)
+        .then(function () {
+          u.showToast('Shares transferred!', 'success');
+          modal.remove();
+          if (typeof ElacityAPI !== 'undefined' && ElacityAPI.clearEarningsCache) ElacityAPI.clearEarningsCache(true);
+        })
+        .catch(function (err) {
+          btn.disabled = false;
+          btn.textContent = 'Transfer';
+          if (err.message && err.message.indexOf('rejected') === -1) {
+            statusEl.textContent = 'Failed: ' + u.decodeContractError(err.message);
+          } else {
+            statusEl.classList.add('hidden');
+          }
+        });
+    });
+  }
+
+  // ── List Access for Resale Modal ───────────────
+
+  function openResellAccessModal(contractAddr, ledger, tokenId, walletKey) {
+    var existing = document.getElementById('resell-access-modal');
+    if (existing) existing.remove();
+
+    var eoaAddr = (Wallet.getAddress() || '').toLowerCase();
+    var saAddr = (Wallet.getSmartAccountAddress() || '').toLowerCase();
+    var hasSA = !!saAddr;
+
+    var modal = document.createElement('div');
+    modal.id = 'resell-access-modal';
+    modal.className = 'modal-overlay';
+    modal.innerHTML =
+      '<div class="modal-dialog">' +
+        '<div class="modal-header">' +
+          '<h3>List Access Token for Resale</h3>' +
+          '<button class="modal-close-btn" id="resell-close">&times;</button>' +
+        '</div>' +
+        '<div class="modal-body">' +
+          '<div id="ra-balance-info" style="margin-bottom:12px;padding:10px;background:var(--card-bg,#1a1a2e);border-radius:8px;font-size:13px;">' +
+            '<div style="color:#888;">Loading balances...</div>' +
+          '</div>' +
+          (hasSA ?
+            '<div class="form-group">' +
+              '<label>List from wallet</label>' +
+              '<select id="ra-wallet" class="form-input">' +
+                '<option value="sa"' + (walletKey === 'sa' ? ' selected' : '') + '>Agent Account (' + (saAddr ? saAddr.substring(0,6) + '…' + saAddr.slice(-4) : '') + ')</option>' +
+                '<option value="eoa"' + (walletKey === 'eoa' ? ' selected' : '') + '>EOA Wallet (' + (eoaAddr ? eoaAddr.substring(0,6) + '…' + eoaAddr.slice(-4) : '') + ')</option>' +
+              '</select>' +
+            '</div>' : '') +
+          '<div class="form-group">' +
+            '<label for="ra-quantity">Quantity</label>' +
+            '<input type="number" id="ra-quantity" min="1" step="1" value="1" class="form-input" />' +
+          '</div>' +
+          '<div class="form-group">' +
+            '<label for="ra-price">Price per token (USDC)</label>' +
+            '<input type="number" id="ra-price" min="0.000001" step="0.01" placeholder="e.g. 0.02" class="form-input" />' +
+          '</div>' +
+          '<div id="ra-existing-listing" class="hidden" style="margin-top:8px;padding:8px 10px;background:#2d2a1e;border:1px solid #665e3a;border-radius:6px;font-size:12px;color:#eab308;"></div>' +
+          '<div id="ra-status" class="modal-status hidden"></div>' +
+        '</div>' +
+        '<div class="modal-footer">' +
+          '<button id="ra-cancel" class="btn-secondary">Cancel</button>' +
+          '<button id="ra-confirm" class="btn-primary">List for Resale</button>' +
+        '</div>' +
+      '</div>';
+
+    document.body.appendChild(modal);
+
+    var eoaBal = 0, saBal = 0;
+    var eoaListing = null, saListing = null;
+
+    function updateBalanceInfo() {
+      var infoEl = document.getElementById('ra-balance-info');
+      if (!infoEl) return;
+      var html = '';
+      if (hasSA) {
+        html += '<div style="display:flex;justify-content:space-between;margin-bottom:4px;"><span>Agent Account:</span> <strong>' + saBal + ' access token' + (saBal !== 1 ? 's' : '') + '</strong></div>';
+      }
+      html += '<div style="display:flex;justify-content:space-between;"><span>EOA Wallet:</span> <strong>' + eoaBal + ' access token' + (eoaBal !== 1 ? 's' : '') + '</strong></div>';
+      infoEl.innerHTML = html;
+    }
+
+    function updateExistingListing() {
+      var walletEl = document.getElementById('ra-wallet');
+      var sel = walletEl ? walletEl.value : (walletKey || 'sa');
+      var listing = sel === 'sa' ? saListing : eoaListing;
+      var el = document.getElementById('ra-existing-listing');
+      if (!el) return;
+      if (listing && listing.quantity > 0) {
+        var priceUsd = (parseInt(listing.pricePerToken) / 1e6).toFixed(2);
+        el.innerHTML = '⚠ You already have <strong>' + listing.quantity + '</strong> listed at <strong>$' + priceUsd + ' USDC</strong> each from this wallet. A new listing will <strong>replace</strong> the existing one.';
+        el.classList.remove('hidden');
+      } else {
+        el.classList.add('hidden');
+      }
+    }
+
+    var fetches = [];
+    fetches.push(Wallet.getAccessTokenBalance(contractAddr, eoaAddr).then(function (b) { eoaBal = Number(b); }).catch(function () {}));
+    if (hasSA) {
+      fetches.push(Wallet.getAccessTokenBalance(contractAddr, saAddr).then(function (b) { saBal = Number(b); }).catch(function () {}));
+    }
+    fetches.push(Wallet.getAccessListing(contractAddr, Wallet.TOKEN_ID_ACCESS, eoaAddr).then(function (l) { eoaListing = l; }).catch(function () {}));
+    if (hasSA) {
+      fetches.push(Wallet.getAccessListing(contractAddr, Wallet.TOKEN_ID_ACCESS, saAddr).then(function (l) { saListing = l; }).catch(function () {}));
+    }
+    function setQtyToBalance() {
+      var walletEl = document.getElementById('ra-wallet');
+      var sel = walletEl ? walletEl.value : (walletKey || 'sa');
+      var bal = sel === 'sa' ? saBal : eoaBal;
+      var qtyEl = document.getElementById('ra-quantity');
+      if (qtyEl && bal > 0) qtyEl.value = bal;
+    }
+
+    Promise.all(fetches).then(function () {
+      updateBalanceInfo();
+      updateExistingListing();
+      setQtyToBalance();
+    });
+
+    document.getElementById('resell-close').addEventListener('click', function () { modal.remove(); });
+    document.getElementById('ra-cancel').addEventListener('click', function () { modal.remove(); });
+
+    if (hasSA) {
+      document.getElementById('ra-wallet').addEventListener('change', function () { updateExistingListing(); setQtyToBalance(); });
+    }
+
+    document.getElementById('ra-confirm').addEventListener('click', function () {
+      var walletEl = document.getElementById('ra-wallet');
+      var selectedWallet = walletEl ? walletEl.value : (walletKey || 'sa');
+      var qty = parseInt(document.getElementById('ra-quantity').value);
+      var priceUsd = parseFloat(document.getElementById('ra-price').value);
+      if (!qty || qty <= 0) { u.showToast('Enter a valid quantity', 'error'); return; }
+      if (!priceUsd || priceUsd <= 0) { u.showToast('Enter a valid price', 'error'); return; }
+
+      var maxBal = selectedWallet === 'sa' ? saBal : eoaBal;
+      if (qty > maxBal) { u.showToast('You only have ' + maxBal + ' access token(s) in this wallet', 'error'); return; }
+
+      var priceWei = BigInt(Math.round(priceUsd * 1e6));
+      var btn = document.getElementById('ra-confirm');
+      var statusEl = document.getElementById('ra-status');
+
+      btn.disabled = true;
+      btn.textContent = 'Submitting...';
+      statusEl.textContent = 'Sending transaction...';
+      statusEl.classList.remove('hidden');
+
+      var useWallet = selectedWallet === 'eoa' ? 'eoa' : undefined;
+
+      Wallet.resellAccessToken(ledger, tokenId, qty, priceWei.toString(), Wallet.USDC_ADDRESS, contractAddr, useWallet)
+        .then(function () {
+          u.showToast('Access token listed for resale!', 'success');
+          modal.remove();
+        })
+        .catch(function (err) {
+          btn.disabled = false;
+          btn.textContent = 'List for Resale';
+          if (err.message && err.message.indexOf('rejected') === -1) {
+            statusEl.textContent = 'Failed: ' + u.decodeContractError(err.message);
+          } else {
+            statusEl.classList.add('hidden');
+          }
+        });
     });
   }
 
@@ -594,13 +927,24 @@
 
   // ── Offers Tab in Earnings ────────────────────────
 
+  function getOfferTokenName(evt) {
+    if (evt.metadata && evt.metadata.name) return evt.metadata.name;
+    if (evt.token && evt.token.name) return evt.token.name;
+    var addr = (evt.metadata && evt.metadata.contractAddress) ||
+               (evt.token && (evt.token.contractAddress || evt.token.address)) || '';
+    if (addr) return u.formatAddress(addr);
+    return 'Unknown token';
+  }
+
+  function getOfferContractAddr(evt) {
+    return (evt.metadata && evt.metadata.contractAddress) ||
+           (evt.token && (evt.token.contractAddress || evt.token.address)) || '';
+  }
+
   function loadEarningsOffers() {
     var listEl = document.getElementById('earnings-list');
     if (!listEl) return;
     listEl.innerHTML = '<div class="loading-indicator"><div class="spinner"></div><span>Loading offers...</span></div>';
-
-    var eoaAddr = Wallet.getAddress();
-    var saAddr = Wallet.getSmartAccountAddress();
 
     Promise.all([
       ElacityAPI.searchOfferEvents(null, null, 50).catch(function () { return []; }),
@@ -614,20 +958,26 @@
         return;
       }
 
+      renderOffersList(listEl, outgoing, incoming);
+    });
+  }
+
+  function renderOffersList(listEl, outgoing, incoming) {
       var html = '';
 
       if (outgoing.length > 0) {
         html += '<div style="font-size:12px;font-weight:600;color:var(--text-secondary);padding:8px 0;">Outgoing Offers</div>';
         outgoing.forEach(function (evt) {
-          var tokenName = (evt.token && evt.token.name) || 'Unknown';
+          var tokenAddr = getOfferContractAddr(evt);
+          var tokenName = getOfferTokenName(evt);
           var price = evt.price ? u.formatPrice(evt.price, evt.paymentToken) : '';
           html += '<div class="offer-row">';
           html += '<span style="flex:1;font-weight:500;">' + u.escapeHtml(tokenName) + '</span>';
           html += '<span>x' + (evt.quantity || 1) + '</span>';
           if (price) html += '<span style="font-weight:600;">' + price + '</span>';
           html += '<span style="font-size:11px;color:var(--text-tertiary);">' + (evt.createdAt ? new Date(evt.createdAt).toLocaleDateString() : '') + '</span>';
-          if (evt.token && evt.token.address) {
-            html += '<button class="earnings-withdraw-btn" data-action="cancel-offer" data-contract="' + u.escapeHtml(evt.token.address) + '">Cancel</button>';
+          if (tokenAddr) {
+            html += '<button class="earnings-withdraw-btn" data-action="cancel-offer" data-contract="' + u.escapeHtml(tokenAddr) + '">Cancel</button>';
           }
           html += '</div>';
         });
@@ -636,7 +986,8 @@
       if (incoming.length > 0) {
         html += '<div style="font-size:12px;font-weight:600;color:var(--text-secondary);padding:8px 0;margin-top:8px;">Incoming Offers</div>';
         incoming.forEach(function (evt) {
-          var tokenName = (evt.token && evt.token.name) || 'Unknown';
+          var tokenAddr = getOfferContractAddr(evt);
+          var tokenName = getOfferTokenName(evt);
           var price = evt.price ? u.formatPrice(evt.price, evt.paymentToken) : '';
           var fromAddr = (evt.from && evt.from.address) || '';
           html += '<div class="offer-row">';
@@ -644,8 +995,8 @@
           html += '<span style="font-size:11px;">from ' + u.formatAddress(fromAddr) + '</span>';
           html += '<span>x' + (evt.quantity || 1) + '</span>';
           if (price) html += '<span style="font-weight:600;">' + price + '</span>';
-          if (evt.token && evt.token.address && fromAddr) {
-            html += '<button class="earnings-withdraw-btn" data-action="accept-offer" data-contract="' + u.escapeHtml(evt.token.address) + '" data-from="' + u.escapeHtml(fromAddr) + '" data-qty="' + (evt.quantity || 1) + '" style="background:var(--success);">Accept</button>';
+          if (tokenAddr && fromAddr) {
+            html += '<button class="earnings-withdraw-btn" data-action="accept-offer" data-contract="' + u.escapeHtml(tokenAddr) + '" data-from="' + u.escapeHtml(fromAddr) + '" data-qty="' + (evt.quantity || 1) + '" style="background:var(--success);">Accept</button>';
           }
           html += '</div>';
         });
@@ -692,6 +1043,319 @@
           });
         });
       });
+  }
+
+  // ── Royalty Order Book (Asset Detail) ──────────────
+
+  function renderOrderBook(nft) {
+    var operative = nft.operative || {};
+    var operativeAddr = operative.address || '';
+    if (!operativeAddr) return;
+
+    var section = document.getElementById('detail-orderbook-section');
+    var container = document.getElementById('orderbook-listings');
+    if (!section || !container) return;
+
+    container.innerHTML = '<div class="loading-indicator"><div class="spinner"></div></div>';
+    section.classList.remove('hidden');
+
+    Wallet.getRoyaltySellers(operativeAddr).then(function (sellers) {
+      if (!sellers || sellers.length === 0) {
+        container.innerHTML = '<div style="padding:16px;text-align:center;color:var(--text-tertiary);font-size:12px;">No royalty shares listed for sale</div>';
+        return;
+      }
+
+      var eoaAddr = (Wallet.getAddress() || '').toLowerCase();
+      var saAddr = (Wallet.getSmartAccountAddress() || '').toLowerCase();
+
+      var listingPromises = sellers.map(function (seller) {
+        return Wallet.getRoyaltyListing(operativeAddr, seller).then(function (listing) {
+          if (!listing || listing.quantity <= 0) return null;
+          return { seller: seller, quantity: listing.quantity, pricePerToken: listing.pricePerToken, payToken: listing.payToken };
+        }).catch(function () { return null; });
+      });
+
+      Promise.all(listingPromises).then(function (listings) {
+        var valid = listings.filter(function (l) { return l !== null; });
+        if (valid.length === 0) {
+          container.innerHTML = '<div style="padding:16px;text-align:center;color:var(--text-tertiary);font-size:12px;">No active royalty listings</div>';
+          return;
+        }
+
+        valid.sort(function (a, b) { return Number(BigInt(a.pricePerToken) - BigInt(b.pricePerToken)); });
+
+        var html = '<div class="orderbook-header" style="display:grid;grid-template-columns:1fr 80px 100px 90px;gap:8px;padding:8px 12px;font-size:11px;font-weight:600;color:var(--text-tertiary);border-bottom:1px solid var(--border);">';
+        html += '<span>Seller</span><span>Qty (%)</span><span>Price/token</span><span></span>';
+        html += '</div>';
+
+        valid.forEach(function (l) {
+          var isSelf = l.seller.toLowerCase() === eoaAddr || l.seller.toLowerCase() === saAddr;
+          var priceFmt = (Number(l.pricePerToken) / 1e6).toFixed(2);
+          var pctStr = (l.quantity / 10).toFixed(1);
+
+          html += '<div class="orderbook-row" style="display:grid;grid-template-columns:1fr 80px 100px 90px;gap:8px;padding:10px 12px;align-items:center;border-bottom:1px solid var(--border-light);font-size:12px;">';
+          html += '<span style="font-weight:500;">' + u.formatAddress(l.seller) + (isSelf ? ' <span style="color:var(--accent);font-size:10px;">(you)</span>' : '') + '</span>';
+          html += '<span>' + l.quantity + ' (' + pctStr + '%)</span>';
+          html += '<span style="font-weight:600;">$' + priceFmt + '</span>';
+
+          if (isSelf) {
+            html += '<button class="action-btn orderbook-cancel" data-seller="' + u.escapeHtml(l.seller) + '" data-qty="' + l.quantity + '" style="font-size:11px;padding:4px 10px;color:#ef4444;border-color:#ef4444;">Cancel</button>';
+          } else {
+            html += '<button class="action-btn orderbook-buy" data-seller="' + u.escapeHtml(l.seller) + '" data-operative="' + u.escapeHtml(operativeAddr) + '" data-qty="' + l.quantity + '" data-price="' + l.pricePerToken + '" data-paytoken="' + u.escapeHtml(l.payToken) + '" style="font-size:11px;padding:4px 10px;background:var(--accent);color:#fff;border-color:var(--accent);">Buy</button>';
+          }
+          html += '</div>';
+        });
+
+        if (Wallet.isConnected()) {
+          html += '<div style="padding:10px 12px;">';
+          html += '<button class="btn-primary orderbook-make-offer" data-operative="' + u.escapeHtml(operativeAddr) + '" style="width:100%;font-size:12px;">Make Offer for Royalty Shares</button>';
+          html += '</div>';
+        }
+
+        container.innerHTML = html;
+
+        container.querySelectorAll('.orderbook-buy').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            openBuyRoyaltyModal(btn.dataset.seller, btn.dataset.operative, parseInt(btn.dataset.qty), btn.dataset.price, btn.dataset.paytoken);
+          });
+        });
+
+        container.querySelectorAll('.orderbook-cancel').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            btn.disabled = true;
+            btn.textContent = '...';
+            var qty = parseInt(btn.dataset.qty);
+            Wallet.cancelRoyaltyListing(operativeAddr, qty).then(function () {
+              u.showToast('Listing cancelled', 'success');
+              renderOrderBook(nft);
+            }).catch(function (err) {
+              btn.disabled = false;
+              btn.textContent = 'Cancel';
+              if (err.message && err.message.indexOf('rejected') === -1) {
+                u.showToast('Failed: ' + u.decodeContractError(err.message), 'error');
+              }
+            });
+          });
+        });
+
+        container.querySelectorAll('.orderbook-make-offer').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            openMakeOfferModal(nft);
+          });
+        });
+      });
+    }).catch(function (err) {
+      container.innerHTML = '<div style="padding:16px;text-align:center;color:var(--text-tertiary);font-size:12px;">Failed to load: ' + u.escapeHtml(err.message) + '</div>';
+    });
+  }
+
+  // ── Buy Royalty Shares Modal ─────────────────────
+
+  function openBuyRoyaltyModal(sellerAddr, operativeAddr, maxQty, pricePerToken, payToken) {
+    var existing = document.getElementById('buy-royalty-modal');
+    if (existing) existing.remove();
+
+    var priceFmt = (Number(pricePerToken) / 1e6).toFixed(2);
+    var eoaAddr = (Wallet.getAddress() || '').toLowerCase();
+    var saAddr = (Wallet.getSmartAccountAddress() || '').toLowerCase();
+
+    if (sellerAddr.toLowerCase() === eoaAddr || sellerAddr.toLowerCase() === saAddr) {
+      u.showToast('Cannot buy your own listing', 'error');
+      return;
+    }
+
+    var modal = document.createElement('div');
+    modal.id = 'buy-royalty-modal';
+    modal.className = 'modal-overlay';
+    modal.innerHTML =
+      '<div class="modal-dialog">' +
+        '<div class="modal-header">' +
+          '<h3>Buy Royalty Shares</h3>' +
+          '<button class="modal-close-btn" id="buy-royalty-close">&times;</button>' +
+        '</div>' +
+        '<div class="modal-body">' +
+          '<p class="modal-desc">Seller: ' + u.formatAddress(sellerAddr) + ' — $' + priceFmt + ' per token</p>' +
+          '<div class="form-group">' +
+            '<label for="br-quantity">Quantity (max ' + maxQty + ', 10 tokens = 1%)</label>' +
+            '<input type="number" id="br-quantity" min="1" max="' + maxQty + '" step="1" value="' + maxQty + '" class="form-input" />' +
+          '</div>' +
+          '<div id="br-total" style="font-size:13px;font-weight:600;padding:6px 0;">Total: $' + (maxQty * Number(pricePerToken) / 1e6).toFixed(2) + ' USDC</div>' +
+          '<div id="br-status" class="modal-status hidden"></div>' +
+        '</div>' +
+        '<div class="modal-footer">' +
+          '<button id="br-cancel" class="btn-secondary">Cancel</button>' +
+          '<button id="br-confirm" class="btn-primary">Buy Now</button>' +
+        '</div>' +
+      '</div>';
+
+    document.body.appendChild(modal);
+
+    var qtyInput = document.getElementById('br-quantity');
+    var totalEl = document.getElementById('br-total');
+
+    qtyInput.addEventListener('input', function () {
+      var q = parseInt(qtyInput.value) || 0;
+      var total = (q * Number(pricePerToken) / 1e6).toFixed(2);
+      totalEl.textContent = 'Total: $' + total + ' USDC';
+    });
+
+    document.getElementById('buy-royalty-close').addEventListener('click', function () { modal.remove(); });
+    document.getElementById('br-cancel').addEventListener('click', function () { modal.remove(); });
+
+    document.getElementById('br-confirm').addEventListener('click', function () {
+      var qty = parseInt(qtyInput.value);
+      if (!qty || qty <= 0 || qty > maxQty) { u.showToast('Enter a valid quantity (max ' + maxQty + ')', 'error'); return; }
+
+      var totalPrice = BigInt(qty) * BigInt(pricePerToken);
+      var btn = document.getElementById('br-confirm');
+      var statusEl = document.getElementById('br-status');
+
+      btn.disabled = true;
+      btn.textContent = 'Processing...';
+      statusEl.textContent = 'Sending transaction...';
+      statusEl.classList.remove('hidden');
+
+      Wallet.buyRoyaltyShares(sellerAddr, operativeAddr, qty, totalPrice.toString(), payToken)
+        .then(function () {
+          u.showToast('Royalty shares purchased!', 'success');
+          modal.remove();
+          if (typeof ElacityAPI !== 'undefined' && ElacityAPI.clearEarningsCache) ElacityAPI.clearEarningsCache(true);
+        })
+        .catch(function (err) {
+          btn.disabled = false;
+          btn.textContent = 'Buy Now';
+          if (err.message && err.message.indexOf('rejected') === -1) {
+            statusEl.textContent = 'Failed: ' + u.decodeContractError(err.message);
+          } else {
+            statusEl.classList.add('hidden');
+          }
+        });
+    });
+  }
+
+  // ── Vendors (Access Resale) Section ──────────────
+
+  function renderVendorsSection(nft) {
+    var operative = nft.operative || {};
+    var operativeAddr = operative.address || '';
+    if (!operativeAddr) return;
+
+    var section = document.getElementById('detail-vendors-section');
+    var container = document.getElementById('vendors-listings');
+    if (!section || !container) return;
+
+    var tokenId = (nft.tokenId && nft.tokenId.hexTokenID) || nft.tokenId || '0';
+    var ledger = nft.ledger || nft.address || '';
+
+    container.innerHTML = '<div class="loading-indicator"><div class="spinner"></div></div>';
+
+    Wallet.getAccessSellers(operativeAddr, tokenId).then(function (sellers) {
+      if (!sellers || sellers.length === 0) {
+        section.classList.add('hidden');
+        return;
+      }
+
+      section.classList.remove('hidden');
+
+      var eoaAddr = (Wallet.getAddress() || '').toLowerCase();
+      var saAddr = (Wallet.getSmartAccountAddress() || '').toLowerCase();
+
+      var listingPromises = sellers.map(function (seller) {
+        return Wallet.getAccessListing(operativeAddr, tokenId, seller).then(function (listing) {
+          if (!listing || listing.quantity <= 0) return null;
+          return { seller: seller, quantity: listing.quantity, pricePerToken: listing.pricePerToken, payToken: listing.payToken };
+        }).catch(function () { return null; });
+      });
+
+      Promise.all(listingPromises).then(function (listings) {
+        var valid = listings.filter(function (l) { return l !== null; });
+        if (valid.length === 0) {
+          section.classList.add('hidden');
+          return;
+        }
+
+        valid.sort(function (a, b) { return Number(BigInt(a.pricePerToken) - BigInt(b.pricePerToken)); });
+
+        var html = '<div class="vendor-grid-header">';
+        html += '<span>Seller</span><span>Qty</span><span>Price</span><span></span>';
+        html += '</div>';
+
+        valid.forEach(function (l) {
+          var isSelf = l.seller.toLowerCase() === eoaAddr || l.seller.toLowerCase() === saAddr;
+          var priceFmt = (Number(l.pricePerToken) / 1e6).toFixed(4);
+
+          html += '<div class="vendor-grid-row">';
+          html += '<span>' + u.formatAddress(l.seller) + (isSelf ? ' <span style="color:var(--accent);font-size:10px;">(you)</span>' : '') + '</span>';
+          html += '<span>' + l.quantity + '</span>';
+          html += '<span class="vendor-price">$' + priceFmt + '</span>';
+
+          if (isSelf) {
+            html += '<button class="action-btn vendor-cancel" data-operative="' + u.escapeHtml(operativeAddr) + '" data-tokenid="' + u.escapeHtml(tokenId) + '" data-qty="' + l.quantity + '" style="font-size:11px;padding:4px 10px;color:#ef4444;border-color:#ef4444;">Cancel</button>';
+          } else {
+            html += '<div class="vendor-buy-group">' +
+              '<input type="number" class="vendor-qty-input" value="1" min="1" max="' + l.quantity + '" title="Quantity" />' +
+              '<button class="action-btn vendor-buy" data-seller="' + u.escapeHtml(l.seller) + '" data-operative="' + u.escapeHtml(operativeAddr) + '" data-ledger="' + u.escapeHtml(ledger) + '" data-tokenid="' + u.escapeHtml(tokenId) + '" data-max-qty="' + l.quantity + '" data-price="' + l.pricePerToken + '" data-paytoken="' + u.escapeHtml(l.payToken) + '" style="font-size:11px;padding:4px 10px;background:var(--accent);color:#fff;border-color:var(--accent);">Buy</button>' +
+              '</div>';
+          }
+          html += '</div>';
+        });
+
+        container.innerHTML = html;
+
+        container.querySelectorAll('.vendor-buy').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            var group = btn.closest('.vendor-buy-group');
+            var qtyInput = group ? group.querySelector('.vendor-qty-input') : null;
+            var qty = qtyInput ? (parseInt(qtyInput.value, 10) || 1) : 1;
+            var maxQty = parseInt(btn.dataset.maxQty) || 1;
+            if (qty < 1) qty = 1;
+            if (qty > maxQty) qty = maxQty;
+            btn.disabled = true;
+            btn.textContent = '...';
+            Wallet.buyAccess(
+              Wallet.AUTHORITY_GATEWAY_ADDRESS,
+              btn.dataset.seller,
+              btn.dataset.ledger,
+              btn.dataset.tokenid,
+              String(qty),
+              btn.dataset.price,
+              btn.dataset.paytoken,
+              btn.dataset.operative
+            ).then(function (result) {
+                u.showToast(result && result._uaPending ? 'Purchase submitted — settling on-chain' : 'Access token purchased!', 'success');
+                renderVendorsSection(nft);
+              })
+              .catch(function (err) {
+                btn.disabled = false;
+                btn.textContent = 'Buy';
+                if (err.message && err.message.indexOf('rejected') === -1) {
+                  u.showToast('Failed: ' + u.decodeContractError(err.message), 'error');
+                }
+              });
+          });
+        });
+
+        container.querySelectorAll('.vendor-cancel').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            btn.disabled = true;
+            btn.textContent = '...';
+            Wallet.cancelAccessListing(btn.dataset.operative, btn.dataset.tokenid, parseInt(btn.dataset.qty))
+              .then(function () {
+                u.showToast('Listing cancelled', 'success');
+                renderVendorsSection(nft);
+              })
+              .catch(function (err) {
+                btn.disabled = false;
+                btn.textContent = 'Cancel';
+                if (err.message && err.message.indexOf('rejected') === -1) {
+                  u.showToast('Failed: ' + u.decodeContractError(err.message), 'error');
+                }
+              });
+          });
+        });
+      });
+    }).catch(function () {
+      section.classList.add('hidden');
     });
   }
 
@@ -722,6 +1386,77 @@
     }).catch(function () {});
   }
 
+  // ── Asset Owner Actions (Edit Price / Delist) ──────
+
+  function renderAssetOwnerActions(nft) {
+    var operative = nft.operative || {};
+    var operativeAddr = operative.address || '';
+    if (!operativeAddr || !Wallet.isConnected()) return;
+
+    var publisherAddr = (nft.metadata && nft.metadata.properties && nft.metadata.properties.publisher && nft.metadata.properties.publisher.address) || '';
+    var eoaAddr = (Wallet.getAddress() || '').toLowerCase();
+    var saAddr = (Wallet.getSmartAccountAddress() || '').toLowerCase();
+    var isPublisher = publisherAddr && (publisherAddr.toLowerCase() === eoaAddr || publisherAddr.toLowerCase() === saAddr);
+
+    if (!isPublisher) return;
+
+    var existingStrip = document.getElementById('publisher-action-strip');
+    if (existingStrip) existingStrip.remove();
+
+    var tokenId = (nft.tokenId && nft.tokenId.hexTokenID) || nft.tokenId || '0';
+    var ownerActions = document.getElementById('detail-owner-actions');
+    if (!ownerActions) return;
+
+    var strip = document.createElement('div');
+    strip.id = 'publisher-action-strip';
+    strip.className = 'publisher-action-strip';
+    strip.innerHTML =
+      '<div class="publisher-strip-label">Publisher Actions</div>' +
+      '<div class="publisher-strip-btns">' +
+        '<button id="publisher-edit-price-btn" class="action-btn action-edit-price" title="Update listing price">' +
+          '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>' +
+          '<span>Edit Price</span>' +
+        '</button>' +
+        '<button id="publisher-delist-btn" class="action-btn action-delist" title="Remove listing">' +
+          '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>' +
+          '<span>Delist</span>' +
+        '</button>' +
+        '<button id="publisher-earnings-btn" class="action-btn action-earnings" title="View earnings for this asset">' +
+          '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>' +
+          '<span>Earnings</span>' +
+        '</button>' +
+      '</div>';
+
+    ownerActions.parentNode.insertBefore(strip, ownerActions.nextSibling);
+
+    document.getElementById('publisher-edit-price-btn').addEventListener('click', function () {
+      var resellBtn = document.getElementById('resell-btn');
+      if (resellBtn) resellBtn.click();
+    });
+
+    document.getElementById('publisher-delist-btn').addEventListener('click', function () {
+      if (!confirm('Remove your listing for this asset? You can re-list later.')) return;
+      var btn = this;
+      btn.disabled = true;
+      btn.querySelector('span').textContent = 'Delisting...';
+      Wallet.cancelAccessListing(operativeAddr, tokenId).then(function () {
+        u.showToast('Listing removed', 'success');
+        strip.remove();
+        renderVendorsSection(nft);
+      }).catch(function (err) {
+        u.showToast('Delist failed: ' + (err.message || err), 'error');
+        btn.disabled = false;
+        btn.querySelector('span').textContent = 'Delist';
+      });
+    });
+
+    document.getElementById('publisher-earnings-btn').addEventListener('click', function () {
+      if (typeof window.ElacityApp !== 'undefined' && window.ElacityApp.switchView) {
+        window.ElacityApp.switchView('earnings');
+      }
+    });
+  }
+
   // ── Hook into detail rendering via custom event ────
 
   window.addEventListener('ela-detail-rendered', function (e) {
@@ -729,17 +1464,32 @@
     if (!nft) return;
     renderActivitySection(nft);
     renderPublishToggle(nft);
+    renderAssetOwnerActions(nft);
     renderOfferSection(nft);
+    renderOrderBook(nft);
+    renderVendorsSection(nft);
     renderDistributionRights(nft);
   });
 
   // ── Hook into earnings rendering ──────────────────
 
+  function retryEnhance(attempt) {
+    var listEl = document.getElementById('earnings-list');
+    var items = listEl ? listEl.querySelectorAll('.earnings-item:not([data-enhanced])') : [];
+    if (items.length > 0) {
+      enhanceEarningsItems();
+      return;
+    }
+    if (attempt < 6) {
+      setTimeout(function () { retryEnhance(attempt + 1); }, 500 + attempt * 300);
+    }
+  }
+
   var _origLoadEarningsData = M.loadEarningsData;
   if (_origLoadEarningsData) {
     window.ElaMarket.loadEarningsData = function (category) {
       _origLoadEarningsData(category);
-      setTimeout(enhanceEarningsItems, 800);
+      retryEnhance(0);
     };
   }
 
@@ -765,21 +1515,6 @@
       loadEarningsOffers();
     });
 
-    // My Channels tab
-    var myChTab = document.createElement('button');
-    myChTab.className = 'earnings-tab';
-    myChTab.dataset.tab = 'mychannels';
-    myChTab.textContent = 'My Channels';
-    tabsEl.appendChild(myChTab);
-
-    myChTab.addEventListener('click', function (e) {
-      e.stopPropagation();
-      tabsEl.querySelectorAll('.earnings-tab').forEach(function (t) { t.classList.remove('active'); });
-      myChTab.classList.add('active');
-      state.earningsTab = 'mychannels';
-      loadMyChannels();
-    });
-
     updateTabBadges();
   }
 
@@ -795,9 +1530,21 @@
     var emptyEl = document.getElementById('earnings-empty');
     if (emptyEl) emptyEl.classList.add('hidden');
 
-    var creatorAddr = ElacityAPI.getSignerAddress() || Wallet.getSmartAccountAddress() || Wallet.getAddress() || '';
-    ElacityAPI.fetchManagedChannels(creatorAddr, { offset: 0, limit: 100, sort: { itemsCount: -1 } }).then(function (result) {
-      var channels = (result && result.data) || [];
+    var eoaAddr = Wallet.getAddress() || '';
+    var saAddr = Wallet.getSmartAccountAddress() || '';
+    var fetchPromises = [ElacityAPI.fetchManagedChannels(eoaAddr)];
+    if (saAddr && saAddr.toLowerCase() !== eoaAddr.toLowerCase()) {
+      fetchPromises.push(ElacityAPI.fetchManagedChannels(saAddr));
+    }
+    Promise.all(fetchPromises).then(function (results) {
+      var channels = [];
+      var seen = {};
+      results.forEach(function (result) {
+        ((result && result.data) || []).forEach(function (ch) {
+          var key = (ch.address || '').toLowerCase();
+          if (!seen[key]) { seen[key] = true; channels.push(ch); }
+        });
+      });
 
       if (channels.length === 0) {
         listEl.innerHTML = '<div class="empty-state"><p>You don\'t own any channels yet</p></div>';
@@ -806,7 +1553,7 @@
 
       var html = '';
       channels.forEach(function (ch) {
-        var thumb = ch.image ? u.resolveIpfsUrl(ch.image) : '';
+        var thumb = (ch.image || ch.thumbnail) ? u.resolveIpfsUrl(ch.image || ch.thumbnail) : '';
         html += '<div class="my-channel-card" data-address="' + u.escapeHtml(ch.address) + '">';
         html += '<div class="my-channel-header">';
         if (thumb) html += '<img class="my-channel-thumb" src="' + u.escapeHtml(thumb) + '" alt="" onerror="this.style.display=\'none\'" />';
@@ -866,36 +1613,17 @@
   }
 
   function openManagePlansModal(channelData) {
-    var plans = channelData.plans || [];
     var existing = document.getElementById('manage-plans-modal');
     if (existing) existing.remove();
 
     var modal = document.createElement('div');
     modal.id = 'manage-plans-modal';
     modal.className = 'modal-overlay';
-
-    var plansHtml = '';
-    if (plans.length > 0) {
-      plans.forEach(function (plan, idx) {
-        var priceUsd = ((plan.price || 0) / 1e6).toFixed(2);
-        var dur = plan.duration ? (plan.duration.value + ' ' + plan.duration.unit) : '—';
-        plansHtml += '<div class="plan-modal-row" style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border);">';
-        plansHtml += '<span style="flex:1;font-weight:500;">' + u.escapeHtml(plan.label || 'Plan ' + (idx + 1)) + '</span>';
-        plansHtml += '<span style="font-size:12px;color:var(--text-secondary);">' + dur + '</span>';
-        plansHtml += '<span style="font-weight:600;">$' + priceUsd + '</span>';
-        plansHtml += '<button class="earnings-withdraw-btn modal-edit-plan" data-idx="' + idx + '">Edit</button>';
-        plansHtml += '<button class="earnings-withdraw-btn modal-remove-plan" data-idx="' + idx + '" style="background:#ef4444;">Remove</button>';
-        plansHtml += '</div>';
-      });
-    } else {
-      plansHtml = '<div style="padding:16px 0;text-align:center;color:var(--text-tertiary);font-size:12px;">No plans configured</div>';
-    }
-
     modal.innerHTML =
       '<div class="modal-dialog" style="max-width:520px;">' +
         '<div class="modal-header"><h3>Manage Plans — ' + u.escapeHtml(channelData.name || '') + '</h3><button class="modal-close-btn" id="plans-modal-close">&times;</button></div>' +
         '<div class="modal-body">' +
-          '<div id="plans-list">' + plansHtml + '</div>' +
+          '<div id="plans-list"><div style="padding:16px 0;text-align:center;color:var(--text-tertiary);font-size:12px;">Loading plans from contract...</div></div>' +
           '<button id="plans-add-btn" class="btn-primary" style="margin-top:12px">+ Add Plan</button>' +
         '</div>' +
       '</div>';
@@ -903,67 +1631,117 @@
     document.body.appendChild(modal);
 
     document.getElementById('plans-modal-close').addEventListener('click', function () { modal.remove(); });
-
     document.getElementById('plans-add-btn').addEventListener('click', function () {
       modal.remove();
       openAddPlanModal(channelData);
     });
 
-    modal.querySelectorAll('.modal-edit-plan').forEach(function (btn) {
-      btn.addEventListener('click', function () {
-        var plan = plans[parseInt(btn.dataset.idx)];
-        if (plan) { modal.remove(); openEditPlanModal(channelData, plan); }
-      });
-    });
+    // Fetch plans from on-chain contract (source of truth), fallback to local cache
+    var plansPromise = (Wallet.getPlans ? Wallet.getPlans(channelData.address) : Promise.resolve([]));
+    plansPromise.then(function (onChainPlans) {
+      var plans = onChainPlans.length > 0 ? onChainPlans : (channelData.plans || []);
 
-    modal.querySelectorAll('.modal-remove-plan').forEach(function (btn) {
-      btn.addEventListener('click', function () {
-        var idx = parseInt(btn.dataset.idx);
-        var plan = plans[idx];
-        if (!plan) return;
-        btn.disabled = true;
-        btn.textContent = '...';
-        ElacityAPI.updateSubscriptionPlan(channelData.address, [{ action: 'REMOVE', args: { planId: plan.planId, label: plan.label } }])
-          .then(function () {
-            u.showToast('Plan removed', 'success');
-            btn.closest('.plan-modal-row').remove();
-            plans.splice(idx, 1);
-          })
-          .catch(function (err) {
-            btn.disabled = false;
-            btn.textContent = 'Remove';
-            u.showToast('Failed: ' + err.message, 'error');
-          });
+      // Merge label/description from local metadata (these aren't stored on-chain)
+      var localPlans = channelData.plans || [];
+      plans = plans.map(function (p) {
+        var local = localPlans.find(function (lp) { return lp.planId === p.planId || lp.planId === String(p.planId); });
+        return {
+          planId: p.planId,
+          payToken: p.payToken,
+          price: p.price,
+          duration: p.duration,
+          durationSeconds: p.durationSeconds,
+          active: p.active !== false,
+          label: (local && local.label) || p.label || ('Plan #' + p.planId),
+          description: (local && local.description) || p.description || ''
+        };
+      });
+
+      channelData._onChainPlans = plans;
+
+      var plansHtml = '';
+      if (plans.length > 0) {
+        plans.filter(function (p) { return p.active !== false; }).forEach(function (plan, idx) {
+          var priceStr = typeof plan.price === 'number' ? plan.price.toFixed(2) : parseFloat(plan.price || 0).toFixed(2);
+          var dur = plan.duration ? (plan.duration.value + ' ' + plan.duration.unit) : '—';
+          var symbol = u.getTokenSymbol ? u.getTokenSymbol(plan.payToken) : 'USDC';
+          plansHtml += '<div class="plan-modal-row" style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border);">';
+          plansHtml += '<span style="flex:1;font-weight:500;">' + u.escapeHtml(plan.label) + '</span>';
+          plansHtml += '<span style="font-size:12px;color:var(--text-secondary);">' + dur + '</span>';
+          plansHtml += '<span style="font-weight:600;">' + priceStr + ' ' + symbol + '</span>';
+          plansHtml += '<button class="earnings-withdraw-btn modal-edit-plan" data-idx="' + idx + '">Edit</button>';
+          plansHtml += '<button class="earnings-withdraw-btn modal-remove-plan" data-idx="' + idx + '" style="background:#ef4444;">Remove</button>';
+          plansHtml += '</div>';
+        });
+      } else {
+        plansHtml = '<div style="padding:16px 0;text-align:center;color:var(--text-tertiary);font-size:12px;">No plans configured</div>';
+      }
+
+      document.getElementById('plans-list').innerHTML = plansHtml;
+
+      modal.querySelectorAll('.modal-edit-plan').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          var plan = plans[parseInt(btn.dataset.idx)];
+          if (plan) { modal.remove(); openEditPlanModal(channelData, plan); }
+        });
+      });
+
+      modal.querySelectorAll('.modal-remove-plan').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          var idx = parseInt(btn.dataset.idx);
+          var plan = plans[idx];
+          if (!plan) return;
+          btn.disabled = true;
+          btn.textContent = '...';
+          ElacityAPI.updateSubscriptionPlan(channelData.address, [{ action: 'REMOVE', args: { planId: plan.planId, label: plan.label } }], u.pc2Fetch)
+            .then(function () {
+              u.showToast('Plan removed!', 'success');
+              btn.closest('.plan-modal-row').remove();
+              plans.splice(idx, 1);
+            })
+            .catch(function (err) {
+              btn.disabled = false;
+              btn.textContent = 'Remove';
+              u.showToast('Failed: ' + err.message, 'error');
+            });
+        });
       });
     });
   }
 
   // ── Channel Management ────────────────────────────
 
-  function renderChannelManagement(channelData) {
-    if (!channelData || !Wallet.isConnected()) return;
-
+  function isChannelCreator(channelData) {
+    if (!channelData || !Wallet.isConnected()) return false;
     var creatorAddr = (channelData.creator && channelData.creator.address) || '';
+    if (!creatorAddr) return false;
     var eoaAddr = (Wallet.getAddress() || '').toLowerCase();
     var saAddr = (Wallet.getSmartAccountAddress() || '').toLowerCase();
-    var isCreator = creatorAddr && (creatorAddr.toLowerCase() === eoaAddr || creatorAddr.toLowerCase() === saAddr);
+    return creatorAddr.toLowerCase() === eoaAddr || creatorAddr.toLowerCase() === saAddr;
+  }
 
-    if (!isCreator) return;
+  function renderChannelManagement(channelData) {
+    if (!isChannelCreator(channelData)) return;
 
     var existing = document.getElementById('channel-mgmt-btn');
     if (existing) return;
 
-    var profileInfo = document.querySelector('.channel-profile-info');
-    if (!profileInfo) return;
+    var statsEl = document.querySelector('.channel-page-stats');
+    if (!statsEl) return;
 
-    var editBtn = document.createElement('button');
-    editBtn.id = 'channel-mgmt-btn';
-    editBtn.className = 'channel-edit-btn';
-    editBtn.textContent = 'Edit Channel';
-    profileInfo.appendChild(editBtn);
+    var btns = [
+      { label: 'Edit Channel', handler: function () { openEditChannelModal(channelData); } },
+      { label: 'Manage Plans', handler: function () { openManagePlansModal(channelData); } },
+      { label: 'Token Gating', handler: function () { openTokenGateModal(channelData, null); } }
+    ];
 
-    editBtn.addEventListener('click', function () {
-      openEditChannelModal(channelData);
+    btns.forEach(function (cfg, i) {
+      var btn = document.createElement('button');
+      btn.className = 'channel-edit-btn';
+      if (i === 0) btn.id = 'channel-mgmt-btn';
+      btn.textContent = cfg.label;
+      btn.addEventListener('click', cfg.handler);
+      statsEl.appendChild(btn);
     });
   }
 
@@ -984,8 +1762,16 @@
           '<div class="form-group"><label>Name</label><input type="text" id="edit-ch-name" class="form-input" value="' + u.escapeHtml(channelData.name || '') + '" /></div>' +
           '<div class="form-group"><label>Description</label><textarea id="edit-ch-desc" class="form-input" rows="3">' + u.escapeHtml(channelData.description || '') + '</textarea></div>' +
           '<div class="form-group"><label>Categories (comma-separated)</label><input type="text" id="edit-ch-cats" class="form-input" value="' + u.escapeHtml((channelData.categories || []).join(', ')) + '" /></div>' +
-          '<div class="form-group"><label>Image URL</label><input type="text" id="edit-ch-image" class="form-input" value="' + u.escapeHtml(channelData.image || '') + '" /></div>' +
-          '<div class="form-group"><label>Cover Image URL</label><input type="text" id="edit-ch-cover" class="form-input" value="' + u.escapeHtml(channelData.coverImage || '') + '" /></div>' +
+          '<div class="form-group"><label>Channel Image</label>' +
+            (channelData.image ? '<div id="edit-ch-image-preview" style="margin-bottom:8px;"><img src="' + u.resolveIpfsUrl(channelData.image, true) + '" onerror="this.src=\'' + u.resolveIpfsUrl(channelData.image) + '\'" style="max-width:120px;max-height:120px;border-radius:8px;object-fit:cover;" /></div>' : '<div id="edit-ch-image-preview" style="margin-bottom:8px;color:#888;font-size:12px;">No image set</div>') +
+            '<input type="file" id="edit-ch-image-file" accept="image/*" class="form-input" style="padding:6px;" />' +
+            '<input type="hidden" id="edit-ch-image" value="' + u.escapeHtml(channelData.image || '') + '" />' +
+          '</div>' +
+          '<div class="form-group"><label>Cover Image</label>' +
+            (channelData.coverImage ? '<div id="edit-ch-cover-preview" style="margin-bottom:8px;"><img src="' + u.resolveIpfsUrl(channelData.coverImage, true) + '" onerror="this.src=\'' + u.resolveIpfsUrl(channelData.coverImage) + '\'" style="max-width:200px;max-height:80px;border-radius:8px;object-fit:cover;" /></div>' : '<div id="edit-ch-cover-preview" style="margin-bottom:8px;color:#888;font-size:12px;">No cover image set</div>') +
+            '<input type="file" id="edit-ch-cover-file" accept="image/*" class="form-input" style="padding:6px;" />' +
+            '<input type="hidden" id="edit-ch-cover" value="' + u.escapeHtml(channelData.coverImage || '') + '" />' +
+          '</div>' +
           '<div id="edit-ch-status" class="modal-status hidden"></div>' +
         '</div>' +
         '<div class="modal-footer">' +
@@ -999,63 +1785,98 @@
     document.getElementById('edit-channel-close').addEventListener('click', function () { modal.remove(); });
     document.getElementById('edit-ch-cancel').addEventListener('click', function () { modal.remove(); });
 
+    // Live preview for image file inputs
+    document.getElementById('edit-ch-image-file').addEventListener('change', function () {
+      var file = this.files && this.files[0];
+      if (!file) return;
+      var preview = document.getElementById('edit-ch-image-preview');
+      var reader = new FileReader();
+      reader.onload = function () { preview.innerHTML = '<img src="' + reader.result + '" style="max-width:120px;max-height:120px;border-radius:8px;object-fit:cover;" />'; };
+      reader.readAsDataURL(file);
+    });
+    document.getElementById('edit-ch-cover-file').addEventListener('change', function () {
+      var file = this.files && this.files[0];
+      if (!file) return;
+      var preview = document.getElementById('edit-ch-cover-preview');
+      var reader = new FileReader();
+      reader.onload = function () { preview.innerHTML = '<img src="' + reader.result + '" style="max-width:200px;max-height:80px;border-radius:8px;object-fit:cover;" />'; };
+      reader.readAsDataURL(file);
+    });
+
     document.getElementById('edit-ch-save').addEventListener('click', function () {
       var btn = this;
       btn.disabled = true;
       btn.textContent = 'Saving...';
+      var statusEl = document.getElementById('edit-ch-status');
+      statusEl.classList.add('hidden');
 
       var cats = document.getElementById('edit-ch-cats').value.split(',').map(function (c) { return c.trim(); }).filter(Boolean);
+      var imageFile = document.getElementById('edit-ch-image-file').files[0];
+      var coverFile = document.getElementById('edit-ch-cover-file').files[0];
 
-      var original = {
-        name: channelData.name || '',
-        description: channelData.description || '',
-        categories: channelData.categories || [],
-        image: channelData.image || '',
-        coverImage: channelData.coverImage || ''
-      };
-
-      var formData = {
-        name: document.getElementById('edit-ch-name').value,
-        description: document.getElementById('edit-ch-desc').value,
-        categories: cats,
-        image: document.getElementById('edit-ch-image').value,
-        coverImage: document.getElementById('edit-ch-cover').value
-      };
-
-      var input = {};
-      Object.keys(original).forEach(function (key) {
-        var origVal = original[key];
-        var newVal = formData[key];
-        if (Array.isArray(origVal)) {
-          if (JSON.stringify(newVal) !== JSON.stringify(origVal)) input[key] = newVal;
-        } else if (newVal !== origVal) {
-          input[key] = newVal;
+      var authReady = ElacityAPI.isAuthenticated() ? Promise.resolve() : Wallet.siweLogin();
+      authReady.then(function () {
+        var uploads = [];
+        if (imageFile) {
+          statusEl.textContent = 'Uploading image to IPFS...';
+          statusEl.classList.remove('hidden');
+          uploads.push(ElacityAPI.uploadToIpfs(imageFile, u.pc2Fetch).then(function (uri) { document.getElementById('edit-ch-image').value = uri; }));
         }
-      });
+        if (coverFile) {
+          statusEl.textContent = imageFile ? 'Uploading images to IPFS...' : 'Uploading cover to IPFS...';
+          statusEl.classList.remove('hidden');
+          uploads.push(ElacityAPI.uploadToIpfs(coverFile, u.pc2Fetch).then(function (uri) { document.getElementById('edit-ch-cover').value = uri; }));
+        }
 
-      if (Object.keys(input).length === 0) {
-        btn.disabled = false;
-        btn.textContent = 'Save Changes';
-        u.showToast('No changes detected', 'info');
-        return;
-      }
+        return Promise.all(uploads);
+      }).then(function () {
+        var original = {
+          name: channelData.name || '',
+          description: channelData.description || '',
+          categories: channelData.categories || [],
+          image: channelData.image || '',
+          coverImage: channelData.coverImage || ''
+        };
 
-      console.log('[ChannelEdit] Saving changes to', channelData.address, 'input:', JSON.stringify(input), 'auth:', ElacityAPI.isAuthenticated());
+        var formData = {
+          name: document.getElementById('edit-ch-name').value,
+          description: document.getElementById('edit-ch-desc').value,
+          categories: cats,
+          image: document.getElementById('edit-ch-image').value,
+          coverImage: document.getElementById('edit-ch-cover').value
+        };
 
-      var doSave = function () {
-        return ElacityAPI.updateChannelInformation(channelData.address, input).then(function () {
+        var input = {};
+        Object.keys(original).forEach(function (key) {
+          var origVal = original[key];
+          var newVal = formData[key];
+          if (Array.isArray(origVal)) {
+            if (JSON.stringify(newVal) !== JSON.stringify(origVal)) input[key] = newVal;
+          } else if (newVal !== origVal) {
+            input[key] = newVal;
+          }
+        });
+
+        if (Object.keys(input).length === 0) {
+          btn.disabled = false;
+          btn.textContent = 'Save Changes';
+          u.showToast('No changes detected', 'info');
+          return;
+        }
+
+        statusEl.textContent = 'Saving...';
+        statusEl.classList.remove('hidden');
+        console.log('[ChannelEdit] Saving changes to', channelData.address, 'input:', JSON.stringify(input), 'auth:', ElacityAPI.isAuthenticated());
+
+        return ElacityAPI.updateChannelInformation(channelData.address, input, u.pc2Fetch).then(function () {
           u.showToast('Channel updated!', 'success');
           modal.remove();
           M.openChannel(channelData.address);
         });
-      };
-
-      var savePromise = ElacityAPI.isAuthenticated() ? doSave() : Wallet.siweLogin().then(doSave);
-      savePromise.catch(function (err) {
+      }).catch(function (err) {
         console.error('[ChannelEdit] Save failed:', err);
         btn.disabled = false;
         btn.textContent = 'Save Changes';
-        var statusEl = document.getElementById('edit-ch-status');
         statusEl.textContent = 'Failed: ' + err.message;
         statusEl.classList.remove('hidden');
       });
@@ -1065,77 +1886,31 @@
   // ── Subscription Plan Management ──────────────────
 
   function renderPlanManagement(channelData) {
-    if (!channelData || !Wallet.isConnected()) return;
+    if (!isChannelCreator(channelData)) return;
 
-    var creatorAddr = (channelData.creator && channelData.creator.address) || '';
-    var eoaAddr = (Wallet.getAddress() || '').toLowerCase();
-    var saAddr = (Wallet.getSmartAccountAddress() || '').toLowerCase();
-    var isCreator = creatorAddr && (creatorAddr.toLowerCase() === eoaAddr || creatorAddr.toLowerCase() === saAddr);
-    if (!isCreator) return;
+    var plans = channelData.plans || [];
+    if (plans.length === 0) return;
 
     var container = document.getElementById('channel-plans-mgmt');
     if (!container) {
       container = document.createElement('div');
       container.id = 'channel-plans-mgmt';
-      container.style.cssText = 'margin-top:16px;';
-      var contentGrid = document.getElementById('channel-items-grid');
-      if (contentGrid) contentGrid.parentNode.insertBefore(container, contentGrid);
+      container.style.cssText = 'margin-top:12px;';
+      var contentTitle = document.querySelector('.channel-section-title');
+      if (contentTitle) contentTitle.parentNode.insertBefore(container, contentTitle);
     }
 
-    var plans = channelData.plans || [];
-    var html = '<h3 class="channel-section-title">Manage Subscription Plans</h3>';
-
-    if (plans.length > 0) {
-      plans.forEach(function (plan, idx) {
-        html += '<div class="plan-card">';
-        html += '<div class="plan-card-header"><span class="plan-name">' + u.escapeHtml(plan.label || 'Plan ' + (idx + 1)) + '</span>';
-        html += '<span class="plan-price">' + u.formatPrice(plan.price, plan.payToken) + '</span></div>';
-        if (plan.description) html += '<div class="plan-desc">' + u.escapeHtml(plan.description) + '</div>';
-        if (plan.duration) html += '<div class="plan-duration">Duration: ' + plan.duration.value + ' ' + plan.duration.unit + '</div>';
-        html += '<div class="plan-actions">';
-        html += '<button class="earnings-withdraw-btn" data-action="edit-plan" data-idx="' + idx + '">Edit</button>';
-        html += '<button class="earnings-withdraw-btn" data-action="remove-plan" data-idx="' + idx + '" style="background:#ef4444;">Remove</button>';
-        html += '</div>';
-        html += '</div>';
-      });
-    }
-
-    html += '<button id="add-plan-btn" class="btn-primary" style="margin-top:8px">+ Add Plan</button>';
+    var html = '';
+    plans.forEach(function (plan, idx) {
+      html += '<div class="plan-card">';
+      html += '<div class="plan-card-header"><span class="plan-name">' + u.escapeHtml(plan.label || 'Plan ' + (idx + 1)) + '</span>';
+      html += '<span class="plan-price">' + u.formatPrice(plan.price, plan.payToken) + '</span></div>';
+      if (plan.description) html += '<div class="plan-desc">' + u.escapeHtml(plan.description) + '</div>';
+      if (plan.duration) html += '<div class="plan-duration">Duration: ' + plan.duration.value + ' ' + plan.duration.unit + '</div>';
+      html += '</div>';
+    });
 
     container.innerHTML = html;
-
-    document.getElementById('add-plan-btn').addEventListener('click', function () {
-      openAddPlanModal(channelData);
-    });
-
-    container.querySelectorAll('[data-action="edit-plan"]').forEach(function (btn) {
-      btn.addEventListener('click', function () {
-        var idx = parseInt(btn.dataset.idx);
-        var plan = plans[idx];
-        if (!plan) return;
-        openEditPlanModal(channelData, plan);
-      });
-    });
-
-    container.querySelectorAll('[data-action="remove-plan"]').forEach(function (btn) {
-      btn.addEventListener('click', function () {
-        var idx = parseInt(btn.dataset.idx);
-        var plan = plans[idx];
-        if (!plan) return;
-        btn.disabled = true;
-        btn.textContent = '...';
-        ElacityAPI.updateSubscriptionPlan(channelData.address, [{ action: 'REMOVE', args: { planId: plan.planId, label: plan.label } }])
-          .then(function () {
-            u.showToast('Plan removed', 'success');
-            btn.parentNode.parentNode.remove();
-          })
-          .catch(function (err) {
-            btn.disabled = false;
-            btn.textContent = 'Remove';
-            u.showToast('Failed: ' + err.message, 'error');
-          });
-      });
-    });
   }
 
   function openEditPlanModal(channelData, plan) {
@@ -1152,7 +1927,7 @@
           '<div class="form-group"><label>Description</label><input type="text" id="eplan-desc" class="form-input" value="' + u.escapeHtml(plan.description || '') + '" /></div>' +
           '<div class="form-group"><label>Duration Value</label><input type="number" id="eplan-dur-val" class="form-input" min="1" value="' + ((plan.duration && plan.duration.value) || 30) + '" /></div>' +
           '<div class="form-group"><label>Duration Unit</label><select id="eplan-dur-unit" class="form-input"><option value="days"' + ((plan.duration && plan.duration.unit === 'days') ? ' selected' : '') + '>Days</option><option value="months"' + ((plan.duration && plan.duration.unit === 'months') ? ' selected' : '') + '>Months</option><option value="years"' + ((plan.duration && plan.duration.unit === 'years') ? ' selected' : '') + '>Years</option></select></div>' +
-          '<div class="form-group"><label>Price (USDC)</label><input type="number" id="eplan-price" class="form-input" min="0.01" step="0.01" value="' + ((plan.price || 0) / 1e6).toFixed(2) + '" /></div>' +
+          '<div class="form-group"><label>Price (USDC)</label><input type="number" id="eplan-price" class="form-input" min="0.01" step="0.01" value="' + (typeof plan.price === 'number' ? plan.price.toFixed(2) : parseFloat(plan.price || 0).toFixed(2)) + '" /></div>' +
           '<div id="edit-plan-status" class="modal-status hidden"></div>' +
         '</div>' +
         '<div class="modal-footer">' +
@@ -1181,10 +1956,10 @@
           label: plan.label,
           description: document.getElementById('eplan-desc').value,
           duration: { value: parseInt(document.getElementById('eplan-dur-val').value) || 30, unit: document.getElementById('eplan-dur-unit').value },
-          price: String(Math.round(price * 1e6)),
+          price: String(price),
           payToken: plan.payToken || Wallet.USDC_ADDRESS
         }
-      }]).then(function () {
+      }], u.pc2Fetch).then(function () {
         u.showToast('Plan updated!', 'success');
         modal.remove();
         M.openChannel(channelData.address);
@@ -1245,10 +2020,10 @@
           label: label,
           description: desc,
           duration: { value: durVal, unit: durUnit },
-          price: String(Math.round(price * 1e6)),
+          price: String(price),
           payToken: Wallet.USDC_ADDRESS || '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'
         }
-      }]).then(function () {
+      }], u.pc2Fetch).then(function () {
         u.showToast('Plan added!', 'success');
         modal.remove();
         M.openChannel(channelData.address);
@@ -1275,69 +2050,30 @@
       if (desc) desc.parentNode.insertBefore(container, desc.nextSibling);
     }
 
-    var creatorAddr = (channelData.creator && channelData.creator.address) || '';
-    var eoaAddr = (Wallet.getAddress() || '').toLowerCase();
-    var saAddr = (Wallet.getSmartAccountAddress() || '').toLowerCase();
-    var isCreator = Wallet.isConnected() && creatorAddr && (creatorAddr.toLowerCase() === eoaAddr || creatorAddr.toLowerCase() === saAddr);
+    var isCreator = isChannelCreator(channelData);
 
-    if (tokenAccess.length === 0 && !isCreator) return;
+    if (tokenAccess.length === 0) {
+      if (container) container.remove();
+      return;
+    }
 
     function renderGateUI(accessResult) {
       var hasAccess = accessResult && accessResult.haveAccess;
       var html = '';
 
-      if (tokenAccess.length > 0) {
-        html += '<div class="gate-status ' + (hasAccess ? 'granted' : 'denied') + '">' +
-          (hasAccess ? '&#10003; Access Granted' : '&#128274; Token-Gated Content') +
-        '</div>';
-        html += '<div class="gate-requirements">';
-        tokenAccess.forEach(function (req) {
-          html += '<div class="gate-req-row" style="display:flex;align-items:center;gap:8px;">';
-          html += '<span style="flex:1;">Token: ' + u.formatAddress(req.address) + '</span>';
-          html += '<span>Min: ' + (req.value || '1') + '</span>';
-          if (isCreator) {
-            html += '<button class="earnings-withdraw-btn gate-edit-btn" data-gate-addr="' + u.escapeHtml(req.address) + '" data-gate-val="' + u.escapeHtml(String(req.value || '1')) + '">Edit</button>';
-            html += '<button class="earnings-withdraw-btn gate-remove-btn" data-gate-addr="' + u.escapeHtml(req.address) + '" style="background:#ef4444;">Remove</button>';
-          }
-          html += '</div>';
-        });
+      html += '<div class="gate-status ' + (hasAccess ? 'granted' : 'denied') + '">' +
+        (hasAccess ? '&#10003; Access Granted' : '&#128274; Token-Gated Content') +
+      '</div>';
+      html += '<div class="gate-requirements">';
+      tokenAccess.forEach(function (req) {
+        html += '<div class="gate-req-row" style="display:flex;align-items:center;gap:8px;">';
+        html += '<span style="flex:1;">Token: ' + u.formatAddress(req.address) + '</span>';
+        html += '<span>Min: ' + (req.value || '1') + '</span>';
         html += '</div>';
-      } else if (isCreator) {
-        html += '<div style="font-size:12px;color:var(--text-tertiary);margin-bottom:8px;">No token-gating rules configured</div>';
-      }
-
-      if (isCreator) {
-        html += '<button id="add-gate-btn" class="btn-primary btn-icon" style="margin-top:8px">+ Add Token Gate</button>';
-      }
+      });
+      html += '</div>';
 
       container.innerHTML = html;
-
-      if (isCreator) {
-        var addBtn = document.getElementById('add-gate-btn');
-        if (addBtn) {
-          addBtn.addEventListener('click', function () {
-            openTokenGateModal(channelData, null);
-          });
-        }
-
-        container.querySelectorAll('.gate-edit-btn').forEach(function (btn) {
-          btn.addEventListener('click', function () {
-            openTokenGateModal(channelData, { address: btn.dataset.gateAddr, value: btn.dataset.gateVal });
-          });
-        });
-
-        container.querySelectorAll('.gate-remove-btn').forEach(function (btn) {
-          btn.addEventListener('click', function () {
-            var addr = btn.dataset.gateAddr;
-            btn.disabled = true;
-            btn.textContent = '...';
-            var thresholds = tokenAccess
-              .filter(function (t) { return t.address.toLowerCase() !== addr.toLowerCase(); })
-              .map(function (t) { return { address: t.address, value: parseFloat(t.value) || 1 }; });
-            saveTokenGateConfig(channelData.address, thresholds);
-          });
-        });
-      }
     }
 
     if (!Wallet.isConnected()) {
@@ -1387,28 +2123,38 @@
     document.getElementById('gate-modal-close').addEventListener('click', function () { modal.remove(); });
     document.getElementById('gate-cancel').addEventListener('click', function () { modal.remove(); });
 
+    var gateTokenInfo = null;
     var addrInput = document.getElementById('gate-token-addr');
     if (!isEdit) {
       addrInput.addEventListener('blur', function () {
         var addr = addrInput.value.trim();
         var infoEl = document.getElementById('gate-token-info');
+        gateTokenInfo = null;
         if (!addr || !ethers.isAddress(addr)) {
           infoEl.textContent = addr ? 'Invalid address' : '';
           infoEl.style.color = '#ef4444';
           return;
         }
-        infoEl.textContent = 'Validating...';
+        infoEl.textContent = 'Detecting token type...';
         infoEl.style.color = 'var(--text-tertiary)';
-        validateTokenContract(addr).then(function (info) {
-          if (info) {
-            infoEl.textContent = 'Valid: ' + info;
+        Wallet.introspectToken(addr).then(function (info) {
+          if (info && info.valid) {
+            gateTokenInfo = info;
+            var label = info.isERC721 ? 'ERC-721 NFT' : ('ERC-20 (' + info.decimals + ' decimals)');
+            infoEl.textContent = (info.name || '') + (info.symbol ? ' (' + info.symbol + ')' : '') + ' — ' + label;
             infoEl.style.color = '#22c55e';
+            var balLabel = document.querySelector('label[for="gate-min-bal"]') || document.getElementById('gate-min-bal').previousElementSibling;
+            if (balLabel) {
+              balLabel.textContent = info.isERC721 ? 'Minimum NFTs Required' : 'Minimum Token Balance Required';
+            }
           } else {
             infoEl.textContent = 'Could not verify token — proceed with caution';
             infoEl.style.color = '#f59e0b';
           }
         });
       });
+    } else if (existingRule) {
+      gateTokenInfo = { valid: true, decimals: existingRule.decimals || 0, isERC721: (existingRule.decimals === 0) };
     }
 
     document.getElementById('gate-save').addEventListener('click', function () {
@@ -1420,7 +2166,7 @@
         u.showToast('Enter a valid token address', 'error');
         return;
       }
-      if (!minBal || parseInt(minBal) < 1) {
+      if (!minBal || parseFloat(minBal) < (gateTokenInfo && gateTokenInfo.isERC721 ? 1 : 0.000001)) {
         u.showToast('Minimum balance must be at least 1', 'error');
         return;
       }
@@ -1431,8 +2177,12 @@
       var tokenAccess = channelData.tokenAccess || [];
       var newThresholds = tokenAccess
         .filter(function (t) { return t.address.toLowerCase() !== addr.toLowerCase(); })
-        .map(function (t) { return { address: t.address, value: parseFloat(t.value) || 1 }; });
-      newThresholds.push({ address: addr, value: parseFloat(minBal) || 1 });
+        .map(function (t) { return { address: t.address, value: parseFloat(t.value) || 1, decimals: t.decimals }; });
+      newThresholds.push({
+        address: addr,
+        value: parseFloat(minBal) || 1,
+        decimals: gateTokenInfo ? gateTokenInfo.decimals : 0
+      });
 
       saveTokenGateConfig(channelData.address, newThresholds);
       modal.remove();
@@ -1457,7 +2207,7 @@
     ElacityAPI.updateChannelInformation(channelAddress, {
       tokenAccess: thresholds
     }).then(function () {
-      u.showToast('Token gate updated!', 'success');
+      u.showToast('Token gate config saved!', 'success');
       M.openChannel(channelAddress);
     }).catch(function (err) {
       u.showToast('Failed: ' + err.message, 'error');
@@ -1548,6 +2298,19 @@
     renderSubscriptionStatus(channelData);
   });
 
+  // ── Expose functions for app.js to call ───────────
+  window.ElaMarket.openEditChannelModal = openEditChannelModal;
+  window.ElaMarket.openManagePlansModal = openManagePlansModal;
+  window.ElaMarket.openResellAccessModal = function (contractAddr, ledger, hexTokenId) {
+    openResellAccessModal(contractAddr, ledger, hexTokenId);
+  };
+  window.ElaMarket.openListRoyaltySharesModal = function (contractAddr) {
+    openListSharesModal(contractAddr, 'eoa', 0);
+  };
+  window.ElaMarket.openTransferSharesModal = function (contractAddr) {
+    openTransferSharesModal(contractAddr, 'eoa', 0);
+  };
+
   // ── Hook into earnings view ───────────────────────
 
   var _origLoadEarningsView = M.loadEarningsView;
@@ -1555,8 +2318,8 @@
     _origLoadEarningsView();
     setTimeout(function () {
       setupExtraTabs();
-      enhanceEarningsItems();
-    }, 600);
+    }, 300);
+    retryEnhance(0);
   };
 
   // ── Init: set up badge and hook wallet connect ────

@@ -971,7 +971,7 @@ const ParticleNetworkProvider: React.FC<React.PropsWithChildren<ParticleNetworkC
 
             const createPayload = {
               chainId: createChainId,
-              expectTokens: [] as Array<{ type: string; amount: string }>,
+              expectTokens: createExpectTokens || [],
               transactions: createTxs.map((t) => ({ to: t.to, data: t.data, value: t.value || '0x0' })),
             };
             const tradeConfig = { usePrimaryTokens: ['usdc'] };

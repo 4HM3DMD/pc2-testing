@@ -93,6 +93,8 @@
     dom.earningsAuthPrompt = document.getElementById('earnings-auth-prompt');
     dom.earningsSummary = document.getElementById('earnings-summary');
     dom.earningsTotalAmount = document.getElementById('earnings-total-amount');
+    dom.earningsTotalEarned = document.getElementById('earnings-total-earned');
+    dom.earningsActiveCount = document.getElementById('earnings-active-count');
     dom.earningsWithdrawAllBtn = document.getElementById('earnings-withdraw-all-btn');
     dom.earningsTabs = document.getElementById('earnings-tabs');
     dom.earningsList = document.getElementById('earnings-list');
@@ -161,7 +163,6 @@
     dom.detailOwned = document.getElementById('detail-owned');
     dom.detailBalanceInfo = document.getElementById('detail-balance-info');
     dom.buyBtn = document.getElementById('buy-btn');
-    dom.playBtn = document.getElementById('play-btn');
     dom.playOwnedBtn = document.getElementById('play-owned-btn');
     dom.detailAttributes = document.getElementById('detail-attributes');
     dom.previewBtn = document.getElementById('preview-btn');
@@ -175,6 +176,12 @@
     dom.downloadNodeBtn = document.getElementById('download-node-btn');
     dom.openViewerBtn = document.getElementById('open-viewer-btn');
     dom.downloadStatus = document.getElementById('download-status');
+    dom.shareBtn = document.getElementById('share-btn');
+    dom.detailLoading = document.getElementById('detail-loading');
+    dom.detailLoaded = document.getElementById('detail-loaded');
+    dom.detailImagePlaceholder = document.getElementById('detail-image-placeholder');
+    dom.detailBreadcrumb = document.getElementById('detail-breadcrumb');
+    dom.detailBalanceInline = document.getElementById('detail-balance-inline');
     dom.toastContainer = document.getElementById('toast-container');
     dom.themeToggle = document.getElementById('theme-toggle');
 
@@ -246,7 +253,15 @@
     var num = typeof price === 'string' ? parseFloat(price) : price;
     if (isNaN(num)) return '';
     var symbol = getTokenSymbol(paymentToken);
-    var formatted = num < 0.01 ? num.toExponential(2) : num.toFixed(2);
+    if (num === 0) return '$0.00';
+    var formatted;
+    if (num < 0.001) {
+      formatted = num.toFixed(6).replace(/0+$/, '');
+    } else if (num < 0.01) {
+      formatted = num.toFixed(4);
+    } else {
+      formatted = num.toFixed(2);
+    }
     return formatted + ' ' + symbol;
   }
 
@@ -283,6 +298,17 @@
       if (item.channel.imageURL && resolveIpfsUrl(item.channel.imageURL)) return item.channel.imageURL;
     }
     return null;
+  }
+
+  function renderAvatar(imageUrl, name, sizeClass) {
+    var initial = (name || '?').charAt(0).toUpperCase();
+    var resolved = resolveIpfsUrl(imageUrl || '', true) || resolveIpfsUrl(imageUrl || '');
+    if (resolved) {
+      return '<img src="' + escapeHtml(resolved) + '" alt=""' +
+        (sizeClass ? ' class="' + sizeClass + '"' : '') +
+        ' onerror="this.style.display=\'none\';this.parentNode.textContent=\'' + initial + '\'" />';
+    }
+    return initial;
   }
 
   function getContentType(item) {
@@ -351,12 +377,16 @@
     return ct.indexOf('video') === -1 && ct.indexOf('audio') === -1;
   }
 
-  function resolveIpfsUrl(url) {
+  var IPFS_GATEWAY = 'https://ipfs.ela.city/ipfs/';
+  var IPFS_LOCAL_GATEWAY = (window.puter_api_origin || window.location.origin) + '/ipfs/';
+
+  function resolveIpfsUrl(url, useLocal) {
     if (!url) return '';
-    if (url.startsWith('ipfs://')) return 'https://ipfs.ela.city/ipfs/' + url.slice(7);
+    var gw = useLocal ? IPFS_LOCAL_GATEWAY : IPFS_GATEWAY;
+    if (url.startsWith('ipfs://')) return gw + url.slice(7);
     if (url.startsWith('thumbnail:')) return '';
-    if (url.match(/^Qm[1-9A-HJ-NP-Za-km-z]{44}/)) return 'https://ipfs.ela.city/ipfs/' + url;
-    if (url.match(/^bafy[a-z2-7]{55}/i)) return 'https://ipfs.ela.city/ipfs/' + url;
+    if (url.match(/^Qm[1-9A-HJ-NP-Za-km-z]{44}/)) return gw + url;
+    if (url.match(/^bafy[a-z2-7]{55}/i)) return gw + url;
     return url;
   }
 
@@ -582,11 +612,7 @@
     var contentType = getContentType(item);
     var price = formatPrice(item.price, item.paymentToken);
     var views = item.views ? formatViews(item.views) : '';
-    var avatarUrl = resolveIpfsUrl(getCreatorAvatar(item) || '');
-    var avatarInitial = (creatorName || '?').charAt(0).toUpperCase();
-    var avatarContent = avatarUrl
-      ? '<img src="' + escapeHtml(avatarUrl) + '" alt="" onerror="this.style.display=\'none\';this.parentNode.textContent=\'' + avatarInitial + '\'" />'
-      : avatarInitial;
+    var avatarContent = renderAvatar(getCreatorAvatar(item), creatorName);
     var hasChannel = item.channel && item.channel.address;
 
     card.setAttribute('aria-label', title + (isOwned ? ' (Owned)' : (price ? ' — ' + price : '')));
@@ -796,11 +822,20 @@
           return;
         }
 
-        state.searchItems = result.data;
-        dom.searchResultsCount.textContent = result.data.length + (result.total > result.data.length ? ' of ' + result.total : '') + ' result' + (result.data.length !== 1 ? 's' : '');
+        var searchItems = result.data.filter(function (item) {
+          if (!item) return false;
+          return state.showAdultContent ? isAdultContent(item) : !isAdultContent(item);
+        });
+        state.searchItems = searchItems;
+        dom.searchResultsCount.textContent = searchItems.length + (result.total > searchItems.length ? ' of ' + result.total : '') + ' result' + (searchItems.length !== 1 ? 's' : '');
         dom.searchResultsCount.classList.remove('hidden');
 
-        result.data.forEach(function (item, idx) {
+        if (searchItems.length === 0) {
+          dom.searchEmpty.classList.remove('hidden');
+          return;
+        }
+
+        searchItems.forEach(function (item, idx) {
           dom.searchGrid.appendChild(renderCard(item, false, idx));
         });
       })
@@ -970,6 +1005,12 @@
   // ── Detail View ─────────────────────────────────────
 
   function openDetail(contractAddress, tokenId, isOwned) {
+    if (contractAddress && typeof contractAddress === 'object') {
+      var obj = contractAddress;
+      contractAddress = obj.contractAddress || obj.address || '';
+      tokenId = obj.hexTokenID || obj.tokenID || tokenId;
+      isOwned = obj.isOwned || isOwned;
+    }
     switchView('detail');
 
     state.detailContractAddress = contractAddress;
@@ -978,29 +1019,35 @@
     state.detailSaved = false;
     state.detailLikes = null;
 
+    dom.detailLoading.classList.remove('hidden');
+    dom.detailLoaded.classList.add('hidden');
+
     dom.previewPlayer.innerHTML = '';
     dom.previewPlayer.classList.add('hidden');
     dom.detailImage.style.display = '';
     dom.detailImage.src = '';
     dom.detailImage.style.objectFit = '';
     dom.detailImage.style.height = '';
+    dom.detailImagePlaceholder.classList.add('hidden');
+    dom.detailImagePlaceholder.textContent = '';
     dom.previewBtn.classList.add('hidden');
     var mediaEl = document.getElementById('detail-media');
     if (mediaEl) { mediaEl.style.aspectRatio = ''; mediaEl.style.maxHeight = ''; mediaEl.style.overflowY = ''; }
     var pdfContainer = document.getElementById('pdf-pages-container');
     if (pdfContainer) pdfContainer.remove();
-    dom.detailTitle.textContent = 'Loading...';
+    dom.detailTitle.textContent = '';
     dom.detailCreator.innerHTML = '';
     dom.detailDate.textContent = '';
     dom.detailViews.textContent = '';
     dom.detailDescription.textContent = '';
     dom.detailPriceSection.classList.add('hidden');
     setBuyButtonState('idle');
+    dom.buyBtn.classList.add('hidden');
     dom.detailOwned.classList.add('hidden');
     dom.detailBalanceInfo.classList.add('hidden');
     dom.detailBalanceInfo.innerHTML = '';
+    dom.detailBalanceInline.textContent = '';
     dom.detailSupplyInfo.innerHTML = '';
-    dom.playBtn.classList.add('hidden');
     dom.playOwnedBtn.classList.add('hidden');
     dom.detailAttributes.innerHTML = '';
     dom.purchaseStatus.classList.add('hidden');
@@ -1026,6 +1073,7 @@
     dom.saveLabel.textContent = 'Save';
     dom.likeBtn.classList.remove('liked');
     dom.likeCount.textContent = '';
+    dom.detailBreadcrumb.innerHTML = '';
 
     ElacityAPI.getAssetDetail(contractAddress, tokenId)
       .then(function (nft) {
@@ -1037,9 +1085,6 @@
 
         state.detailItem = nft;
 
-        // For non-media assets, the Elacity GraphQL API doesn't expose our
-        // custom `asset` field. Fetch raw metadata from IPFS to get the
-        // encrypted content CID and dataToEncryptHash.
         var tokenURI = nft.tokenURI || '';
         var needsRawMeta = isNonMediaAsset(nft) && tokenURI;
         if (needsRawMeta) {
@@ -1048,15 +1093,14 @@
               if (rawMeta && rawMeta.asset) {
                 nft._rawAsset = rawMeta.asset;
                 nft._rawMedia = rawMeta.media;
-                console.log('[Detail] Raw metadata loaded, asset CID:', rawMeta.asset.cid);
               }
             })
-            .catch(function (e) { console.warn('[Detail] Failed to fetch raw metadata:', e.message); })
+            .catch(function () {})
             .finally(function () {
-              renderDetail(nft);
+              showDetailContent(nft);
             });
         } else {
-          renderDetail(nft);
+          showDetailContent(nft);
         }
 
         loadDetailInteractions(contractAddress, tokenId);
@@ -1073,35 +1117,63 @@
       });
   }
 
+  function showDetailContent(nft) {
+    dom.detailLoading.classList.add('hidden');
+    dom.detailLoaded.classList.remove('hidden');
+    renderDetail(nft);
+  }
+
   function renderDetail(nft) {
     var meta = nft.metadata || {};
     var media = meta.media || {};
     var channel = nft.channel || {};
     var creator = channel.creator || {};
 
-    var imageUrl = resolveIpfsUrl(nft.image || media.previewURL || '');
+    var imageUrl = getImageUrl(nft) || resolveIpfsUrl(media.previewURL || '');
+    var contentType = getContentType(nft);
+    var contentTypeKey = contentType ? contentType.toLowerCase() : '';
     dom.detailImage.src = imageUrl;
     dom.detailImage.alt = nft.name || '';
-    dom.detailImage.onerror = function () { this.style.display = 'none'; };
-    if (imageUrl) dom.detailImage.style.display = '';
+    dom.detailImage.onerror = function () {
+      this.style.display = 'none';
+      dom.detailImagePlaceholder.textContent = CONTENT_TYPE_ICONS[contentTypeKey] || '\u25FB';
+      dom.detailImagePlaceholder.classList.remove('hidden');
+    };
+    if (imageUrl) {
+      dom.detailImage.style.display = '';
+      dom.detailImagePlaceholder.classList.add('hidden');
+    } else {
+      dom.detailImage.style.display = 'none';
+      dom.detailImagePlaceholder.textContent = CONTENT_TYPE_ICONS[contentTypeKey] || '\u25FB';
+      dom.detailImagePlaceholder.classList.remove('hidden');
+    }
+
+    if (channel && channel.address) {
+      var channelLabel = escapeHtml(channel.name || formatAddress(channel.address));
+      dom.detailBreadcrumb.innerHTML = '<a onclick="ElaMarket.openChannel(\'' + escapeHtml(channel.address) + '\')">' + channelLabel + '</a>';
+    }
 
     dom.detailTitle.textContent = meta.name || nft.name || 'Untitled';
 
     var creatorName = (creator.did && creator.did.credentials && creator.did.credentials.name) ||
       creator.alias || formatAddress(creator.address || '');
-    var creatorAvatar = resolveIpfsUrl(
+    var rawChannelImg = channel.imageURL || channel.image || '';
+    var channelImg = resolveIpfsUrl(rawChannelImg, true) || resolveIpfsUrl(rawChannelImg);
+    var creatorAvatar = channelImg || resolveIpfsUrl(
       (creator.did && creator.did.credentials && creator.did.credentials.avatar && creator.did.credentials.avatar.thumbnail) ||
-      creator.avatar || channel.imageURL || '');
+      creator.avatar || '');
 
     var hasChannelLink = channel && channel.address;
+    var displayName = channel.name || creatorName || 'Unknown';
+    var showCreatorSub = channel.name && creatorName && channel.name !== creatorName;
 
-    var detailAvatarInitial = (creatorName || '?').charAt(0).toUpperCase();
     dom.detailCreator.innerHTML =
       '<div class="channel-avatar">' +
-        (creatorAvatar ? '<img src="' + escapeHtml(creatorAvatar) + '" alt="" onerror="this.style.display=\'none\';this.parentNode.textContent=\'' + detailAvatarInitial + '\'" />' : detailAvatarInitial) +
+        renderAvatar(creatorAvatar, displayName) +
       '</div>' +
       '<div class="channel-info">' +
-        '<div class="channel-name">' + escapeHtml(channel.name || creatorName || 'Unknown') + '</div>' +
+        '<div class="channel-name">' + escapeHtml(displayName) + '</div>' +
+        (showCreatorSub ? '<div class="channel-subs">' + escapeHtml(creatorName) + '</div>' : '') +
         (channel.itemsCount ? '<div class="channel-subs">' + channel.itemsCount + ' items</div>' : '') +
       '</div>';
 
@@ -1130,16 +1202,21 @@
     var apiSaysOwned = nft.access && nft.access.haveAccess;
     var isOwned = state.detailIsOwned || isAssetInLibrary(nft) || apiSaysOwned;
 
-    if (hasListing && !isOwned) {
+    if (hasListing) {
       dom.detailPriceSection.classList.remove('hidden');
       var decimals = getTokenSymbol(listing.payToken) === 'USDC' ? 6 : 18;
       var displayPrice = listing.price / Math.pow(10, decimals);
       dom.detailPrice.textContent = formatPrice(displayPrice, listing.payToken);
-      dom.playBtn.classList.remove('hidden');
-      dom.detailOwned.classList.add('hidden');
-      dom.downloadNodeBtn.classList.add('hidden');
-    } else {
-      dom.detailOwned.classList.remove('hidden');
+      if (isOwned) {
+        dom.buyBtn.classList.add('hidden');
+        dom.detailOwned.classList.remove('hidden');
+      } else {
+        dom.buyBtn.classList.remove('hidden');
+      }
+    }
+
+    if (isOwned) {
+      if (!hasListing) dom.detailOwned.classList.remove('hidden');
       var rawAsset = nft._rawAsset || (nft.metadata && nft.metadata.asset) || {};
       var cid = media.uri || rawAsset.uri || rawAsset.cid;
       if (cid) cid = cid.replace('ipfs://', '');
@@ -1149,20 +1226,10 @@
         if (cid) {
           dom.openViewerBtn.classList.remove('hidden');
           dom.downloadNodeBtn.classList.remove('hidden');
-          console.log('[Detail] Non-media asset, CID:', cid, 'hash:', rawAsset.dataToEncryptHash);
-        } else {
-          console.warn('[Detail] Non-media asset but no CID found');
         }
       } else {
         dom.playOwnedBtn.classList.remove('hidden');
         if (cid) dom.downloadNodeBtn.classList.remove('hidden');
-      }
-      if (hasListing && isOwned) {
-        dom.detailPriceSection.classList.remove('hidden');
-        dom.buyBtn.classList.add('hidden');
-        var ownedDecimals = getTokenSymbol(listing.payToken) === 'USDC' ? 6 : 18;
-        var ownedPrice = listing.price / Math.pow(10, ownedDecimals);
-        dom.detailPrice.textContent = formatPrice(ownedPrice, listing.payToken) + ' (Owned)';
       }
 
       var opType = (nft.operative && nft.operative.opType) || 0;
@@ -1193,23 +1260,40 @@
     if (nft.operative && nft.operative.address && Wallet.isConnected()) {
       renderGovernanceSection(nft);
     }
+    enrichFromChain(nft);
 
     var attrs = (meta.attributes || []).filter(function (a) {
-      return a.trait_type && a.trait_type.indexOf('iscc::') !== 0;
+      return a.trait_type && a.trait_type.indexOf('iscc::') !== 0 && a.trait_type !== 'AI Training';
     });
 
-    var attrHtml = '';
-    if (media.contentType) {
-      attrHtml += '<div class="attribute-chip"><span class="attr-label">Type</span><span class="attr-value">' + escapeHtml(media.contentType) + '</span></div>';
+    var hasAttrs = attrs.length > 0 || media.contentType;
+    if (hasAttrs) {
+      var attrHtml = '';
+      if (media.contentType) {
+        attrHtml += '<div class="attribute-chip"><span class="attr-label">Type</span><span class="attr-value">' + escapeHtml(media.contentType) + '</span></div>';
+      }
+      attrs.forEach(function (attr) {
+        attrHtml += '<div class="attribute-chip">' +
+          '<span class="attr-label">' + escapeHtml(attr.trait_type || '') + '</span>' +
+          '<span class="attr-value">' + escapeHtml(String(attr.value || '')) + '</span>' +
+          '</div>';
+      });
+      dom.detailAttributes.innerHTML = attrHtml;
+      dom.detailAttributes.classList.remove('hidden');
+    } else {
+      dom.detailAttributes.innerHTML = '';
+      dom.detailAttributes.classList.add('hidden');
     }
-    attrs.forEach(function (attr) {
-      if (attr.trait_type === 'AI Training') return;
-      attrHtml += '<div class="attribute-chip">' +
-        '<span class="attr-label">' + escapeHtml(attr.trait_type || '') + '</span>' +
-        '<span class="attr-value">' + escapeHtml(String(attr.value || '')) + '</span>' +
-        '</div>';
-    });
-    dom.detailAttributes.innerHTML = attrHtml;
+
+    var aboutSection = document.getElementById('detail-about-section');
+    if (aboutSection) {
+      var hasAboutContent = (meta.description || '').trim() || hasAttrs;
+      if (hasAboutContent) {
+        aboutSection.classList.remove('hidden');
+      } else {
+        aboutSection.classList.add('hidden');
+      }
+    }
 
     renderAITrainingBadge(nft);
     renderAdultContentBadge(nft);
@@ -1221,21 +1305,16 @@
   var OP_TYPE_LABELS = { 0: 'Free', 1: 'Buy Once', 2: 'Buy & Resell' };
 
   function renderRoyaltyInfo(nft) {
-    var props = (nft.metadata && nft.metadata.properties) || {};
     var operative = nft.operative || {};
     var resellerCutRaw = operative.resellerCut;
     var opType = operative.opType || 0;
     var resellerPct = resellerCutRaw ? (resellerCutRaw / 10) : 0;
-    var creatorPct = resellerCutRaw ? (100 - resellerPct) : null;
 
     var html = '<div class="royalty-info-inner">';
     html += '<span class="royalty-info-title">License</span>';
     html += '<span class="royalty-chip optype-chip">' + escapeHtml(OP_TYPE_LABELS[opType] || 'Unknown') + '</span>';
-    if (creatorPct !== null) {
-      html += '<span class="royalty-chip">Creator royalty: ' + escapeHtml(String(creatorPct)) + '%</span>';
-    }
-    if (resellerPct && opType === 2) {
-      html += '<span class="royalty-chip reseller-chip">Reseller keeps ' + escapeHtml(String(resellerPct)) + '%</span>';
+    if (opType === 2 && resellerPct) {
+      html += '<span class="royalty-chip reseller-chip">Reseller: ' + escapeHtml(String(resellerPct)) + '%</span>';
     }
     html += '</div>';
     dom.detailRoyaltyInfo.innerHTML = html;
@@ -1450,9 +1529,11 @@
 
       dom.detailBalanceInfo.innerHTML = html;
       dom.detailBalanceInfo.classList.remove('hidden');
-    }).catch(function (err) {
-      console.warn('[Detail] Failed to fetch balances:', err);
-    });
+
+      if (total > 0 && dom.detailBalanceInline) {
+        dom.detailBalanceInline.textContent = '\u00B7 ' + total + ' token' + (total !== 1 ? 's' : '');
+      }
+    }).catch(function () {});
   }
 
   function renderSupplyInfo(nft) {
@@ -1479,35 +1560,35 @@
 
     var fillClass = isSoldOut ? 'critical' : isLowStock ? 'low-stock' : '';
 
+    var listed = forSale;
+    var held = totalSupply - forSale;
+
     var html = '<div class="supply-bar">';
     html += '<div class="supply-visual">';
     html += '<div class="supply-text">';
-    html += '<span>Available: <strong>' + forSale.toLocaleString() + '</strong> / ' + totalSupply.toLocaleString() + '</span>';
-    if (forSale > 0) {
-      html += '<span class="supply-badge for-sale">' + forSale + ' for sale</span>';
+    html += '<span>Listed: <strong>' + listed.toLocaleString() + '</strong> / ' + totalSupply.toLocaleString() + '</span>';
+    if (listed > 0) {
+      html += '<span class="supply-badge for-sale">' + listed.toLocaleString() + ' for sale</span>';
     } else if (isSoldOut && opType !== 0) {
       html += '<span class="supply-badge sold-out">Sold out</span>';
     }
     html += '</div>';
     html += '<div class="supply-track"><div class="supply-fill ' + fillClass + '" style="width: ' + Math.max(pctSold, 2) + '%"></div></div>';
-    html += '<div class="supply-text"><span>' + (totalSupply - forSale).toLocaleString() + ' held by owners</span>';
-    if (isLowStock && forSale > 0) {
+    html += '<div class="supply-text"><span>' + held.toLocaleString() + ' held by owners</span>';
+    if (isLowStock && listed > 0) {
       html += '<span class="supply-badge low-stock">Low stock!</span>';
     }
     html += '</div>';
     html += '</div>';
     html += '</div>';
 
-    if (isLowStock && forSale > 0) {
-      html += '<div class="urgency-indicator"><span class="urgency-dot"></span>Low stock — only ' + forSale + ' left!</div>';
+    if (isLowStock && listed > 0) {
+      html += '<div class="urgency-indicator"><span class="urgency-dot"></span>Low stock — only ' + listed.toLocaleString() + ' left!</div>';
     }
 
     var contentType = (meta.media && meta.media.contentType) || (meta.media && meta.media.mimeType) || props.mimeType || '';
     var storage = (nft.tokenURI && nft.tokenURI.indexOf('ipfs') !== -1) ? 'IPFS' : 'On-chain';
     var accessType = opType === 0 ? 'Free' : opType === 1 ? 'Buy Once' : 'Buy & Resell';
-    var resellerCutRaw = operative.resellerCut || 0;
-    var resellerPct = resellerCutRaw ? (resellerCutRaw / 10) : 0;
-    var creatorPct = resellerCutRaw ? (100 - resellerPct) : null;
 
     var duration = '';
     var attrs = meta.attributes || [];
@@ -1523,32 +1604,145 @@
       else fileSize = fileSize + ' B';
     }
 
-    html += '<div class="props-accordion">';
-    html += '<button class="props-accordion-toggle" onclick="this.parentNode.classList.toggle(\'open\')"><span>Properties</span><span class="accordion-arrow">&#9662;</span></button>';
-    html += '<div class="props-accordion-body">';
-    html += '<div class="props-grid">';
+    html += '<div class="props-grid" style="margin-top:12px">';
     if (contentType) html += '<div class="prop-row"><span class="prop-label">Content Type</span><span class="prop-value">' + escapeHtml(contentType) + '</span></div>';
     if (duration) html += '<div class="prop-row"><span class="prop-label">Duration</span><span class="prop-value">' + escapeHtml(duration) + '</span></div>';
     if (fileSize) html += '<div class="prop-row"><span class="prop-label">File Size</span><span class="prop-value">' + escapeHtml(String(fileSize)) + '</span></div>';
     html += '<div class="prop-row"><span class="prop-label">Access Type</span><span class="prop-value">' + accessType + '</span></div>';
     html += '<div class="prop-row"><span class="prop-label">Protected</span><span class="prop-value">' + (nft.isProtected ? 'Yes (dDRM)' : 'No') + '</span></div>';
     html += '<div class="prop-row"><span class="prop-label">Total Supply</span><span class="prop-value">' + totalSupply.toLocaleString() + '</span></div>';
-    html += '<div class="prop-row"><span class="prop-label">Available</span><span class="prop-value">' + forSale.toLocaleString() + ' / ' + totalSupply.toLocaleString() + (isSoldOut && opType !== 0 ? ' (sold out)' : '') + '</span></div>';
-    html += '<div class="prop-row"><span class="prop-label">Storage</span><span class="prop-value">' + storage + '</span></div>';
+    html += '<div class="prop-row"><span class="prop-label">Available</span><span class="prop-value">' + listed.toLocaleString() + ' / ' + totalSupply.toLocaleString() + (isSoldOut && opType !== 0 ? ' (sold out)' : '') + '</span></div>';
+    var storageHtml = storage;
+    if (nft._isLocal) {
+      storageHtml += ' <span class="seeding-badge pinned" title="This node is pinning and seeding this content"><span class="status-dot pinned-dot"></span> Pinned</span>';
+    }
+    html += '<div class="prop-row" id="detail-storage-row"><span class="prop-label">Storage</span><span class="prop-value">' + storageHtml + '</span></div>';
+    if (nft._contentCid) {
+      html += '<div class="prop-row" id="detail-seeding-row"><span class="prop-label">Network</span><span class="prop-value" id="detail-seeding-value"><span class="seeding-loading">Checking peers\u2026</span></span></div>';
+    }
     if (nft.createdAt) html += '<div class="prop-row"><span class="prop-label">Uploaded</span><span class="prop-value">' + new Date(nft.createdAt).toLocaleDateString() + '</span></div>';
-    if (creatorPct !== null) html += '<div class="prop-row"><span class="prop-label">Creator Royalty</span><span class="prop-value">' + creatorPct + '%</span></div>';
-    if (resellerPct && opType === 2) html += '<div class="prop-row"><span class="prop-label">Reseller Cut</span><span class="prop-value">' + resellerPct + '%</span></div>';
     if (props.distribution) html += '<div class="prop-row"><span class="prop-label">Usage Rights</span><span class="prop-value">' + escapeHtml(props.distribution) + '</span></div>';
     if (props.labelType) html += '<div class="prop-row"><span class="prop-label">Label</span><span class="prop-value">' + escapeHtml(props.labelType) + '</span></div>';
     if (props.authority) html += '<div class="prop-row"><span class="prop-label">Authority</span><span class="prop-value"><a href="https://basescan.org/address/' + escapeHtml(props.authority) + '" target="_blank" rel="noopener">' + formatAddress(props.authority) + '</a></span></div>';
     html += '<div class="prop-row"><span class="prop-label">Blockchain</span><span class="prop-value">Base (8453)</span></div>';
     if (operative.address) html += '<div class="prop-row"><span class="prop-label">Contract</span><span class="prop-value"><a href="https://basescan.org/address/' + escapeHtml(operative.address) + '" target="_blank" rel="noopener">' + formatAddress(operative.address) + '</a></span></div>';
     html += '</div>';
-    html += '</div>';
-    html += '</div>';
 
     dom.detailSupplyInfo.innerHTML = html;
     dom.detailSupplyInfo.classList.remove('hidden');
+  }
+
+  function enrichFromChain(nft) {
+    var operative = nft.operative || {};
+    var access = operative.access || {};
+    var listings = access.listings || [];
+    var totalSupply = parseInt(access.totalSupply) || 0;
+    var channel = nft.channel || {};
+
+    if (operative.address && listings.length > 0 && totalSupply > 0) {
+      var seller = listings[0].seller;
+      if (seller) {
+        Wallet.getAccessTokenBalance(operative.address, seller).then(function (sellerBal) {
+          if (sellerBal === undefined || sellerBal === null) return;
+          var catalogListed = 0;
+          listings.forEach(function (l) { catalogListed += (parseInt(l.quantity) || 0); });
+          if (sellerBal === catalogListed) return;
+
+          var listed = sellerBal;
+          var held = totalSupply - listed;
+          var pctSold = totalSupply > 0 ? (held / totalSupply) * 100 : 0;
+          var isSoldOut = listed === 0 && totalSupply > 0;
+          var isLowStock = listed > 0 && ((listed / totalSupply) * 100) <= 20;
+          var fillClass = isSoldOut ? 'critical' : isLowStock ? 'low-stock' : '';
+
+          var supplyTextEls = dom.detailSupplyInfo.querySelectorAll('.supply-text');
+          if (supplyTextEls[0]) {
+            var badge = '';
+            if (listed > 0) badge = '<span class="supply-badge for-sale">' + listed.toLocaleString() + ' for sale</span>';
+            else if (isSoldOut) badge = '<span class="supply-badge sold-out">Sold out</span>';
+            supplyTextEls[0].innerHTML = '<span>Listed: <strong>' + listed.toLocaleString() + '</strong> / ' + totalSupply.toLocaleString() + '</span>' + badge;
+          }
+          if (supplyTextEls[1]) {
+            var heldBadge = isLowStock && listed > 0 ? '<span class="supply-badge low-stock">Low stock!</span>' : '';
+            supplyTextEls[1].innerHTML = '<span>' + held.toLocaleString() + ' held by owners</span>' + heldBadge;
+          }
+          var fillEl = dom.detailSupplyInfo.querySelector('.supply-fill');
+          if (fillEl) {
+            fillEl.className = 'supply-fill ' + fillClass;
+            fillEl.style.width = Math.max(pctSold, 2) + '%';
+          }
+
+          var availEl = dom.detailSupplyInfo.querySelector('.prop-value');
+          var propRows = dom.detailSupplyInfo.querySelectorAll('.prop-row');
+          for (var i = 0; i < propRows.length; i++) {
+            var label = propRows[i].querySelector('.prop-label');
+            if (label && label.textContent === 'Available') {
+              var valEl = propRows[i].querySelector('.prop-value');
+              if (valEl) valEl.textContent = listed.toLocaleString() + ' / ' + totalSupply.toLocaleString() + (isSoldOut ? ' (sold out)' : '');
+              break;
+            }
+          }
+
+          var urgencyEl = dom.detailSupplyInfo.querySelector('.urgency-indicator');
+          if (urgencyEl) urgencyEl.remove();
+          if (isLowStock && listed > 0) {
+            var urgency = document.createElement('div');
+            urgency.className = 'urgency-indicator';
+            urgency.innerHTML = '<span class="urgency-dot"></span>Low stock — only ' + listed.toLocaleString() + ' left!';
+            dom.detailSupplyInfo.querySelector('.supply-bar').after(urgency);
+          }
+        }).catch(function () {});
+      }
+    }
+
+    var GENERIC_NAMES = ['Channel', 'Creator', 'Unknown', ''];
+    if (channel.address && (!channel.name || GENERIC_NAMES.indexOf(channel.name) !== -1)) {
+      fetchChannelName(channel.address).then(function (name) {
+        if (!name) return;
+        var nameEl = dom.detailCreator.querySelector('.channel-name');
+        if (nameEl) nameEl.textContent = name;
+        if (dom.detailBreadcrumb) {
+          dom.detailBreadcrumb.innerHTML = '<a onclick="ElaMarket.openChannel(\'' + escapeHtml(channel.address) + '\')">' + escapeHtml(name) + '</a>';
+        }
+      }).catch(function () {});
+    }
+
+    if (nft._contentCid) {
+      var origin = window.puter_api_origin || window.location.origin;
+      fetch(origin + '/api/catalog/providers/' + encodeURIComponent(nft._contentCid))
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (data) {
+          var el = document.getElementById('detail-seeding-value');
+          if (!el || !data) return;
+          var providers = data.providers || 0;
+          var html = '';
+          if (providers > 0) {
+            html = '<span class="seeding-badge active">' + providers + ' node' + (providers !== 1 ? 's' : '') + ' seeding</span>';
+          } else if (nft._isLocal) {
+            html = '<span class="seeding-badge local-only">This node only</span>';
+          } else {
+            html = '<span class="seeding-badge pending">Discovering peers\u2026</span>';
+          }
+          el.innerHTML = html;
+        })
+        .catch(function () {
+          var el = document.getElementById('detail-seeding-value');
+          if (el) el.innerHTML = '<span class="seeding-badge">-</span>';
+        });
+    }
+  }
+
+  function fetchChannelName(channelAddress) {
+    var iface = new ethers.Interface(['function name() view returns (string)']);
+    var data = iface.encodeFunctionData('name', []);
+    return Wallet.getProvider().request({
+      method: 'eth_call',
+      params: [{ to: channelAddress, data: data }, 'latest']
+    }).then(function (result) {
+      if (!result || result === '0x') return null;
+      var decoded = iface.decodeFunctionResult('name', result);
+      return decoded[0] || null;
+    }).catch(function () { return null; });
   }
 
   function renderOpTypeBadge(nft) {
@@ -1734,6 +1928,11 @@
     var operativeAddr = (nft.operative && nft.operative.address) || '';
     if (!operativeAddr) return;
 
+    var rewardText = dom.govRewards.textContent || '';
+    if (!confirm('Withdraw pending rewards?\n\n' + rewardText.replace(/Pending rewards:\s*/, '') + '\n\nThis will submit a blockchain transaction.')) {
+      return;
+    }
+
     dom.govWithdrawBtn.disabled = true;
     dom.govWithdrawBtn.textContent = 'Withdrawing...';
 
@@ -1884,6 +2083,15 @@
 
     var operative = nft.operative || {};
     var operativeAddr = operative.address || '';
+    var ledgerAddr = (nft.metadata && nft.metadata.properties && nft.metadata.properties.ledger)
+      || nft.contractAddress || (nft.channel && nft.channel.address) || '';
+    var tokenId = (nft.tokenId && nft.tokenId.hexTokenID) || nft.tokenId || '0';
+
+    if (window.ElaMarket && window.ElaMarket.openResellAccessModal) {
+      window.ElaMarket.openResellAccessModal(operativeAddr, ledgerAddr, tokenId);
+      return;
+    }
+
     var meta = nft.metadata || {};
     dom.resellAssetName.textContent = meta.name || nft.name || 'Untitled';
     dom.resellPrice.value = '';
@@ -1895,7 +2103,7 @@
     var resellerCutRaw = operative.resellerCut || 0;
     var resellerPct = resellerCutRaw ? (resellerCutRaw / 10) : 0;
     dom.resellRoyaltyNote.textContent = resellerPct
-      ? 'You receive ' + resellerPct + '% of the sale price. The creator receives ' + (100 - resellerPct) + '%.'
+      ? 'You receive ' + resellerPct + '% of the sale price. Royalty holders receive ' + (100 - resellerPct) + '%.'
       : '';
 
     var eoaAddr = Wallet.getAddress();
@@ -2180,16 +2388,20 @@
 
     dom.channelDescription.textContent = channel.description || '';
 
-    var coverSrc = resolveIpfsUrl(channel.coverImage || channel.coverImageURL || '');
-    if (coverSrc) {
-      dom.channelCover.innerHTML = '<img src="' + escapeHtml(coverSrc) + '" alt="" onerror="this.style.display=\'none\'" />';
+    var coverRaw = channel.coverImage || channel.coverImageURL || '';
+    var coverLocal = resolveIpfsUrl(coverRaw, true);
+    var coverExt = resolveIpfsUrl(coverRaw);
+    if (coverLocal) {
+      dom.channelCover.innerHTML = '<img src="' + escapeHtml(coverLocal) + '" alt="" onerror="if(this.src!==\'' + escapeHtml(coverExt) + '\'){this.src=\'' + escapeHtml(coverExt) + '\'}else{this.style.display=\'none\'}" />';
     }
 
-    var avatarUrl = resolveIpfsUrl(channel.image || channel.imageURL ||
+    var avatarRaw = channel.image || channel.imageURL ||
       (creator.did && creator.did.credentials && creator.did.credentials.avatar && creator.did.credentials.avatar.thumbnail) ||
-      creator.avatar || '');
-    if (avatarUrl) {
-      dom.channelAvatarLg.innerHTML = '<img src="' + escapeHtml(avatarUrl) + '" alt="" onerror="this.parentNode.textContent=\'' + (channel.name || '?').charAt(0).toUpperCase() + '\'" />';
+      creator.avatar || '';
+    var avatarLocal = resolveIpfsUrl(avatarRaw, true);
+    var avatarExt = resolveIpfsUrl(avatarRaw);
+    if (avatarLocal) {
+      dom.channelAvatarLg.innerHTML = '<img src="' + escapeHtml(avatarLocal) + '" alt="" onerror="if(this.src!==\'' + escapeHtml(avatarExt) + '\'){this.src=\'' + escapeHtml(avatarExt) + '\'}else{this.parentNode.textContent=\'' + (channel.name || '?').charAt(0).toUpperCase() + '\'}" />';
     } else {
       dom.channelAvatarLg.textContent = (channel.name || '?').charAt(0).toUpperCase();
     }
@@ -2197,10 +2409,47 @@
     var hasPlans = channel.plans && channel.plans.length > 0;
     if (subscribers && subscribers.isAmong) {
       dom.subscribeBtn.classList.add('subscribed');
-      dom.subscribeBtn.textContent = 'Subscribed';
+      dom.subscribeBtn.textContent = hasPlans ? 'Subscribed' : 'Following';
     } else if (hasPlans) {
       var cheapest = channel.plans.reduce(function (min, p) { return p.price < min.price ? p : min; }, channel.plans[0]);
       dom.subscribeBtn.textContent = 'Subscribe from ' + formatPrice(cheapest.price, cheapest.payToken);
+    } else {
+      dom.subscribeBtn.textContent = 'Follow';
+    }
+
+    // Load plans from on-chain contract (source of truth) and check subscription
+    if (Wallet.isConnected() && channel.address) {
+      var subscriberAddr = Wallet.getSignerAddress() || Wallet.getAddress();
+      Promise.all([
+        Wallet.getPlans ? Wallet.getPlans(channel.address) : Promise.resolve([]),
+        Wallet.checkSubscription ? Wallet.checkSubscription(channel.address, subscriberAddr) : Promise.resolve(false)
+      ]).then(function (results) {
+        var onChainPlans = results[0];
+        var hasActiveSub = results[1];
+
+        if (onChainPlans.length > 0) {
+          var localPlans = channel.plans || [];
+          channel.plans = onChainPlans.map(function (p) {
+            var local = localPlans.find(function (lp) { return String(lp.planId) === String(p.planId); });
+            return {
+              planId: p.planId, payToken: p.payToken, price: p.price,
+              duration: p.duration, active: p.active,
+              label: (local && local.label) || ('Plan #' + p.planId),
+              description: (local && local.description) || ''
+            };
+          }).filter(function (p) { return p.active !== false; });
+          state.channelData = channel;
+        }
+
+        var plansExist = channel.plans && channel.plans.length > 0;
+        if (hasActiveSub) {
+          dom.subscribeBtn.classList.add('subscribed');
+          dom.subscribeBtn.textContent = plansExist ? 'Subscribed' : 'Following';
+        } else if (plansExist && !(subscribers && subscribers.isAmong)) {
+          var cheapestPlan = channel.plans.reduce(function (min, p) { return p.price < min.price ? p : min; }, channel.plans[0]);
+          dom.subscribeBtn.textContent = 'Subscribe from ' + formatPrice(cheapestPlan.price, cheapestPlan.payToken);
+        }
+      }).catch(function () {});
     }
 
     dom.channelItemsLoading.classList.add('hidden');
@@ -2459,9 +2708,6 @@
     var card = document.createElement('div');
     card.className = 'subscription-card';
 
-    var avatarUrl = resolveIpfsUrl(channel.imageURL || '');
-    var initial = (channel.name || '?').charAt(0).toUpperCase();
-
     var creatorName = '';
     if (channel.creator) {
       creatorName = (channel.creator.did && channel.creator.did.credentials && channel.creator.did.credentials.name) ||
@@ -2470,7 +2716,7 @@
 
     card.innerHTML =
       '<div class="sub-avatar">' +
-        (avatarUrl ? '<img src="' + escapeHtml(avatarUrl) + '" alt="" onerror="this.style.display=\'none\';this.parentNode.textContent=\'' + initial + '\'" />' : initial) +
+        renderAvatar(channel.imageURL, channel.name) +
       '</div>' +
       '<div class="sub-info">' +
         '<div class="sub-name">' + escapeHtml(channel.name || 'Unknown Channel') + '</div>' +
@@ -2624,23 +2870,23 @@
       var card = document.createElement('div');
       card.className = 'dir-card';
 
-      var coverUrl = resolveIpfsUrl(ch.coverImage || ch.coverImageURL || ch.image || ch.imageURL || '');
-      var avatarUrl = getOwnerAvatar(ch);
+      var coverRaw = ch.coverImage || ch.coverImageURL || ch.image || ch.imageURL || '';
+      var coverLocal = resolveIpfsUrl(coverRaw, true);
+      var coverExt = resolveIpfsUrl(coverRaw);
       var ownerName = escapeHtml(getOwnerName(ch));
-      var ownerInitial = (ownerName || '?').charAt(0).toUpperCase();
       var subs = (ch.statistics && ch.statistics.subscribers) || 0;
       var category = (ch.categories && ch.categories[0]) || '';
       var entry = getEntryPrice(ch);
 
       card.innerHTML =
         '<div class="dir-card-cover">' +
-          (coverUrl ? '<img src="' + escapeHtml(coverUrl) + '" alt="" loading="lazy" onerror="this.style.display=\'none\'" />' : '') +
+          (coverLocal ? '<img src="' + escapeHtml(coverLocal) + '" alt="" loading="lazy" onerror="if(this.src!==\'' + escapeHtml(coverExt) + '\'){this.src=\'' + escapeHtml(coverExt) + '\'}else{this.style.display=\'none\'}" />' : '') +
           '<span class="dir-subs-badge"><svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg> ' + subs + '</span>' +
           (category ? '<span class="dir-cat-badge">' + escapeHtml(category) + '</span>' : '') +
         '</div>' +
         '<div class="dir-card-body">' +
           '<div class="dir-card-avatar">' +
-            (avatarUrl ? '<img src="' + escapeHtml(avatarUrl) + '" alt="" onerror="this.style.display=\'none\';this.parentNode.textContent=\'' + ownerInitial + '\'" />' : ownerInitial) +
+            renderAvatar(getOwnerAvatar(ch), ownerName) +
           '</div>' +
           '<div class="dir-card-info">' +
             '<div class="dir-card-name">' + escapeHtml(ch.name || 'Untitled') + '</div>' +
@@ -2677,7 +2923,9 @@
       var row = document.createElement('div');
       row.className = 'dir-list-row';
 
-      var imgUrl = resolveIpfsUrl(ch.image || ch.imageURL || '');
+      var imgRaw = ch.image || ch.imageURL || '';
+      var imgLocal = resolveIpfsUrl(imgRaw, true);
+      var imgExt = resolveIpfsUrl(imgRaw);
       var ownerName = escapeHtml(getOwnerName(ch));
       var subs = (ch.statistics && ch.statistics.subscribers) || 0;
       var category = (ch.categories && ch.categories[0]) || '';
@@ -2685,7 +2933,7 @@
 
       row.innerHTML =
         '<div class="dir-list-name">' +
-          (imgUrl ? '<img src="' + escapeHtml(imgUrl) + '" alt="" onerror="this.style.display=\'none\'" />' : '<div style="width:36px;height:36px;border-radius:8px;background:var(--bg-surface);display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:600;color:var(--accent)">' + (ch.name || '?').charAt(0).toUpperCase() + '</div>') +
+          (imgLocal ? '<img src="' + escapeHtml(imgLocal) + '" alt="" onerror="if(this.src!==\'' + escapeHtml(imgExt) + '\'){this.src=\'' + escapeHtml(imgExt) + '\'}else{this.style.display=\'none\'}" />' : '<div style="width:36px;height:36px;border-radius:8px;background:var(--bg-surface);display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:600;color:var(--accent)">' + (ch.name || '?').charAt(0).toUpperCase() + '</div>') +
           '<div class="dir-list-name-text"><strong>' + escapeHtml(ch.name || 'Untitled') + '</strong>' +
             (category ? '<small>' + escapeHtml(category) + '</small>' : '') +
           '</div>' +
@@ -2824,6 +3072,8 @@
       dom.watchlaterGrid.innerHTML = '';
       dom.watchlaterLoading.classList.add('hidden');
       dom.watchlaterEmpty.classList.remove('hidden');
+      dom.watchlaterEmpty.querySelector('h3').textContent = 'Sign in to see saved items';
+      dom.watchlaterEmpty.querySelector('p').textContent = 'Connect your wallet to access your watch later list.';
       return;
     }
 
@@ -2873,9 +3123,9 @@
 
           state.watchLaterItems = validItems;
 
-          validItems.forEach(function (nft) {
+          validItems.forEach(function (nft, idx) {
             var cardItem = {
-              contractAddress: nft.channel ? nft.channel.address : '',
+              contractAddress: nft.contractAddress || nft.address || (nft.channel ? nft.channel.address : ''),
               hexTokenID: (nft.tokenId && nft.tokenId.hexTokenID) || nft.tokenId || '',
               tokenID: (nft.tokenId && nft.tokenId.tokenID) || '',
               name: nft.name || (nft.metadata && nft.metadata.name) || 'Untitled',
@@ -2888,7 +3138,8 @@
               metadata: nft.metadata,
               operative: nft.operative
             };
-            dom.watchlaterGrid.appendChild(renderCard(cardItem));
+            var owned = isAssetInLibrary(cardItem);
+            dom.watchlaterGrid.appendChild(renderCard(cardItem, owned, idx));
           });
         });
       })
@@ -2897,6 +3148,22 @@
         dom.watchlaterLoading.classList.add('hidden');
         showToast('Failed to load watch later: ' + err.message, 'error');
       });
+  }
+
+  // ── Share ───────────────────────────────────────────
+
+  function handleShare() {
+    var nft = state.detailItem;
+    if (!nft) return;
+    var url = window.location.origin + window.location.pathname +
+      '#asset/' + (nft.contractAddress || '') + '/' + (nft.hexTokenID || nft.tokenId || '0');
+    if (navigator.share) {
+      navigator.share({ title: (nft.metadata && nft.metadata.name) || nft.name || 'Elacity Asset', url: url }).catch(function () {});
+    } else if (navigator.clipboard) {
+      navigator.clipboard.writeText(url).then(function () {
+        showToast('Link copied to clipboard', 'success');
+      });
+    }
   }
 
   // ── Preview Flow ─────────────────────────────────────
@@ -3125,22 +3392,26 @@
       })
       .then(function (receipt) {
         var success = receipt && (receipt.status === '0x1' || receipt.status === 1);
+        var uaPending = receipt && receipt._uaPending;
         if (success) {
           setBuyButtonState('success', 'Purchase successful! Saving to your node…');
-          dom.detailPriceSection.classList.add('hidden');
-          dom.playBtn.classList.add('hidden');
+          dom.buyBtn.classList.add('hidden');
           dom.detailOwned.classList.remove('hidden');
           dom.playOwnedBtn.classList.remove('hidden');
           showToast('Purchase complete! Auto-downloading...', 'success');
           state.detailIsOwned = true;
           pinAndRegisterMedia(nft);
 
-          // Invalidate library cache so next visit re-fetches from backend.
-          // Retry after delays to account for Elacity GraphQL indexing lag.
           state.assetsItems = [];
           state.assetsLoading = false;
           setTimeout(function () { state.assetsItems = []; }, 8000);
           setTimeout(function () { state.assetsItems = []; }, 20000);
+        } else if (uaPending) {
+          setBuyButtonState('confirming', 'Transaction submitted — settling on-chain. This may take a minute…');
+          showToast('Transaction submitted to Universal Account. Check status shortly.', 'info');
+          if (receipt.transactionId) {
+            console.log('[Buy] UA transaction pending. Check: https://universalx.app/activity/details?id=' + receipt.transactionId);
+          }
         } else {
           setBuyButtonState('error', 'Transaction failed. Please try again.');
         }
@@ -3162,6 +3433,7 @@
       dom.buyBtn.disabled = false;
       dom.buyBtn.className = 'btn-primary buy-btn';
       dom.buyBtn.textContent = 'Buy Now';
+      dom.buyBtn.classList.remove('hidden');
       dom.purchaseStatus.classList.add('hidden');
     } else if (st === 'waiting') {
       dom.buyBtn.disabled = true;
@@ -3645,6 +3917,8 @@
       if (!val) {
         showRecentSearches();
         dom.searchResultsCount.classList.add('hidden');
+        dom.searchGrid.innerHTML = '';
+        dom.searchEmpty.classList.add('hidden');
       }
       state.searchTimeout = setTimeout(function () {
         state.searchQuery = val;
@@ -3733,10 +4007,10 @@
     dom.downloadNodeBtn.addEventListener('click', handleDownloadToNode);
     dom.openViewerBtn.addEventListener('click', handleOpenInViewer);
     dom.previewBtn.addEventListener('click', handlePreview);
-    dom.playBtn.addEventListener('click', handlePlay);
     dom.playOwnedBtn.addEventListener('click', handlePlay);
     dom.saveBtn.addEventListener('click', handleSave);
     dom.likeBtn.addEventListener('click', handleLike);
+    dom.shareBtn.addEventListener('click', handleShare);
 
     dom.resellBtn.addEventListener('click', openResellModal);
     dom.transferBtn.addEventListener('click', openTransferModal);
@@ -3765,7 +4039,9 @@
       onAccountChange: function () {
         updateWalletUI();
         if (state.initializing) return;
-        if (state._lastSignedAddress === Wallet.getAddress()) return;
+        var currentAddr = (Wallet.getAddress() || '').toLowerCase();
+        var lastAddr = (state._lastSignedAddress || '').toLowerCase();
+        if (!currentAddr || currentAddr === lastAddr) return;
         ElacityAPI.clearAuth();
         state.assetsItems = [];
         state._lastSignedAddress = Wallet.getAddress();
@@ -3828,16 +4104,21 @@
     var hasSA = Wallet.hasSmartAccount() && saAddr && saAddr.toLowerCase() !== (eoaAddr || '').toLowerCase();
     if (!eoaAddr) return;
 
+    // "channels" tab = owned channels with subscription revenue
+    var apiCategory = (category === 'channels') ? 'my-channels' : category;
+
     dom.earningsList.innerHTML = '';
     dom.earningsEmpty.classList.add('hidden');
     dom.earningsLoading.classList.remove('hidden');
     dom.earningsSummary.classList.add('hidden');
 
-    var itemsPromises = [ElacityAPI.fetchRoyaltyItems(eoaAddr, category, 0, 100)];
-    var rewardsPromises = [ElacityAPI.fetchRewardSummary(eoaAddr, category)];
+    ElacityAPI.clearEarningsCache();
+
+    var itemsPromises = [ElacityAPI.fetchRoyaltyItems(eoaAddr, apiCategory, 0, 100, 'EOA')];
+    var rewardsPromises = [ElacityAPI.fetchRewardSummary(eoaAddr, apiCategory, 'EOA')];
     if (hasSA) {
-      itemsPromises.push(ElacityAPI.fetchRoyaltyItems(saAddr, category, 0, 100));
-      rewardsPromises.push(ElacityAPI.fetchRewardSummary(saAddr, category));
+      itemsPromises.push(ElacityAPI.fetchRoyaltyItems(saAddr, apiCategory, 0, 100, 'Smart Account'));
+      rewardsPromises.push(ElacityAPI.fetchRewardSummary(saAddr, apiCategory, 'Smart Account'));
     }
 
     Promise.all([Promise.all(itemsPromises), Promise.all(rewardsPromises)]).then(function (all) {
@@ -3885,13 +4166,20 @@
       state.earningsRewards = rewards;
 
       var rewardsMap = {};
-      var totalUnclaimed = 0;
       rewards.forEach(function (r) {
         rewardsMap[r.address.toLowerCase()] = r;
-        totalUnclaimed += (r.unclaimedRewards || 0);
       });
 
-      dom.earningsTotalAmount.textContent = '$' + totalUnclaimed.toFixed(4);
+      var totalUnclaimed = 0;
+      var withRewards = 0;
+      mergedData.forEach(function (item) {
+        totalUnclaimed += (item.unclaimedRewards || 0);
+        if ((item.unclaimedRewards || 0) > 0) withRewards++;
+      });
+
+      dom.earningsTotalAmount.textContent = formatPrice(totalUnclaimed);
+      if (dom.earningsTotalEarned) dom.earningsTotalEarned.textContent = String(mergedData.length);
+      if (dom.earningsActiveCount) dom.earningsActiveCount.textContent = String(withRewards);
       dom.earningsSummary.classList.remove('hidden');
 
       if (totalUnclaimed > 0) {
@@ -3921,33 +4209,80 @@
   function renderEarningsList(items, rewardsMap, category) {
     var html = '';
     items.forEach(function (item) {
-      var thumb = resolveIpfsUrl(item.thumbnail || '');
-      var reward = rewardsMap[(item.address || '').toLowerCase()] || {};
-      var unclaimed = reward.unclaimedRewards || 0;
-      var distributions = reward.distributions || [];
+      var thumb = getImageUrl(item) || resolveIpfsUrl(item.thumbnail || '');
+      var unclaimed = item.unclaimedRewards || 0;
+      var rewardEntry = rewardsMap[(item.address || '').toLowerCase()];
+      if (rewardEntry && rewardEntry.unclaimedRewards > unclaimed) {
+        unclaimed = rewardEntry.unclaimedRewards;
+      }
+      var distributions = (rewardEntry && rewardEntry.distributions) || item.distributions || [];
       var hasRewards = unclaimed > 0;
       var sharePct = (item.share || 0).toFixed(1);
+
+      var isChannel = item.__typename === 'OwnedChannel' || item.__typename === 'RoyaltyChannel';
+      var itemType = isChannel ? 'channel' : 'asset';
+
+      var walletTag = item.walletLabel ? ' <span style="color:#94a3b8;font-size:11px">(' + escapeHtml(item.walletLabel) + ')</span>' : '';
 
       html += '<div class="earnings-item" data-contract="' + escapeHtml(item.address) + '"' +
         (item.ledger ? ' data-ledger="' + escapeHtml(item.ledger) + '"' : '') +
         (item.hexTokenId ? ' data-hextokenid="' + escapeHtml(item.hexTokenId) + '"' : '') +
+        ' data-itemtype="' + itemType + '"' +
         ' data-category="' + category + '">';
       html += '<img class="earnings-item-thumb" src="' + escapeHtml(thumb) + '" alt="" onerror="this.style.display=\'none\'" />';
       html += '<div class="earnings-item-info">';
-      html += '<div class="earnings-item-name">' + escapeHtml(item.name || 'Untitled') + '</div>';
+      html += '<div class="earnings-item-name">' + escapeHtml(item.name || 'Untitled') + walletTag + '</div>';
       html += '<div class="earnings-item-meta">';
-      html += '<span class="earnings-item-share">' + sharePct + '% royalty</span>';
-      html += '<span>' + escapeHtml(item.__typename === 'RoyaltyChannel' ? 'Channel' : 'Asset') + '</span>';
+
+      if (isChannel) {
+        html += '<span style="color:#8b5cf6;font-weight:600">Channel</span>';
+        if (item.itemsCount !== undefined) {
+          html += '<span>' + item.itemsCount + ' asset' + (item.itemsCount !== 1 ? 's' : '') + '</span>';
+        }
+        html += '<span>Subscription Revenue</span>';
+      } else {
+        html += '<span class="earnings-item-share">' + sharePct + '% royalty</span>';
+        html += '<span>Asset</span>';
+      }
       html += '<span>' + formatAddress(item.address) + '</span>';
       html += '</div>';
+
+      // Action buttons row
+      html += '<div class="earnings-item-actions">';
+      if (isChannel) {
+        html += '<button class="action-btn ei-view" data-addr="' + escapeHtml(item.address) + '">View</button>';
+        html += '<button class="action-btn ei-ch-edit" data-addr="' + escapeHtml(item.address) + '">Edit Details</button>';
+        html += '<button class="action-btn ei-ch-plans" data-addr="' + escapeHtml(item.address) + '">Manage Plans</button>';
+      } else {
+        html += '<button class="action-btn ei-view-asset" data-addr="' + escapeHtml(item.address) + '"' +
+          (item.ledger ? ' data-ledger="' + escapeHtml(item.ledger) + '"' : '') +
+          (item.hexTokenId ? ' data-hextokenid="' + escapeHtml(item.hexTokenId) + '"' : '') +
+          '>View</button>';
+        if (parseFloat(sharePct) > 0) {
+          html += '<button class="action-btn ei-list-shares" data-addr="' + escapeHtml(item.address) + '">List Royalty Shares</button>';
+          html += '<button class="action-btn ei-transfer-shares" data-addr="' + escapeHtml(item.address) + '">Transfer Shares</button>';
+        }
+        html += '<button class="action-btn ei-resell" data-addr="' + escapeHtml(item.address) + '"' +
+          (item.ledger ? ' data-ledger="' + escapeHtml(item.ledger) + '"' : '') +
+          (item.hexTokenId ? ' data-hextokenid="' + escapeHtml(item.hexTokenId) + '"' : '') +
+          '>Sell Access</button>';
+      }
+      html += '</div>';
+
       html += '</div>';
       html += '<div class="earnings-item-right">';
       html += '<span class="earnings-item-unclaimed' + (hasRewards ? '' : ' zero') + '">' +
-        (hasRewards ? '$' + unclaimed.toFixed(4) : '$0.00') + '</span>';
+        (hasRewards ? formatPrice(unclaimed) : '$0.00') + '</span>';
 
       if (hasRewards) {
         var payTokens = distributions.map(function (d) { return d.paymentToken; }).join(',');
-        html += '<button class="earnings-withdraw-btn" data-contract="' + escapeHtml(item.address) + '" data-paytokens="' + escapeHtml(payTokens) + '">Withdraw</button>';
+        var wLabel = item.walletLabel || '';
+        var operatives = (item.operatives && item.operatives.length > 0) ? item.operatives.join(',') : '';
+        html += '<button class="earnings-withdraw-btn" data-contract="' + escapeHtml(item.address) + '"' +
+          (operatives ? ' data-operatives="' + escapeHtml(operatives) + '"' : '') +
+          ' data-paytokens="' + escapeHtml(payTokens) + '" data-wallet-label="' + escapeHtml(wLabel) + '" title="Withdraw to ' + escapeHtml(wLabel || 'wallet') + '">Withdraw' + (wLabel ? ' (' + escapeHtml(wLabel) + ')' : '') + '</button>';
+      } else if (!isChannel) {
+        html += '<span style="color:#64748b;font-size:11px">No rewards yet</span>';
       }
 
       html += '</div>';
@@ -3960,8 +4295,94 @@
       btn.addEventListener('click', function (e) {
         e.stopPropagation();
         var contractAddr = btn.getAttribute('data-contract');
+        var operatives = (btn.getAttribute('data-operatives') || '').split(',').filter(Boolean);
         var payTokens = (btn.getAttribute('data-paytokens') || '').split(',').filter(Boolean);
-        handleEarningsWithdraw(contractAddr, payTokens, btn);
+        var item = btn.closest('.earnings-item');
+        var wLabel = item ? (item.dataset.walletlabel || '') : '';
+        var wKey = wLabel.toLowerCase().indexOf('smart') !== -1 ? 'sa' : undefined;
+        if (operatives.length > 0) {
+          handleChannelWithdraw(operatives, payTokens, btn, wKey);
+        } else {
+          handleEarningsWithdraw(contractAddr, payTokens, btn, wKey);
+        }
+      });
+    });
+
+    // Channel action buttons
+    dom.earningsList.querySelectorAll('.ei-view').forEach(function (btn) {
+      btn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        openChannel(btn.dataset.addr);
+      });
+    });
+
+    dom.earningsList.querySelectorAll('.ei-ch-edit').forEach(function (btn) {
+      btn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        var addr = btn.dataset.addr;
+        ElacityAPI.retrieveChannel(addr).then(function (ch) {
+          if (ch && window.ElaMarket && window.ElaMarket.openEditChannelModal) {
+            window.ElaMarket.openEditChannelModal(ch);
+          }
+        }).catch(function (err) { showToast('Failed: ' + err.message, 'error'); });
+      });
+    });
+
+    dom.earningsList.querySelectorAll('.ei-ch-plans').forEach(function (btn) {
+      btn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        var addr = btn.dataset.addr;
+        ElacityAPI.retrieveChannel(addr).then(function (ch) {
+          if (ch && window.ElaMarket && window.ElaMarket.openManagePlansModal) {
+            window.ElaMarket.openManagePlansModal(ch);
+          }
+        }).catch(function (err) { showToast('Failed: ' + err.message, 'error'); });
+      });
+    });
+
+    // Asset action buttons
+    dom.earningsList.querySelectorAll('.ei-view-asset').forEach(function (btn) {
+      btn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        var addr = btn.dataset.addr;
+        var hexId = btn.dataset.hextokenid || '';
+        openDetail(addr, hexId, false);
+      });
+    });
+
+    dom.earningsList.querySelectorAll('.ei-resell').forEach(function (btn) {
+      btn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        var addr = btn.dataset.addr;
+        var ledger = btn.dataset.ledger || '';
+        var hexId = btn.dataset.hextokenid || '';
+        if (window.ElaMarket && window.ElaMarket.openResellAccessModal) {
+          window.ElaMarket.openResellAccessModal(addr, ledger, hexId);
+        }
+      });
+    });
+
+    dom.earningsList.querySelectorAll('.ei-list-shares').forEach(function (btn) {
+      btn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        var addr = btn.dataset.addr;
+        if (window.ElaMarket && window.ElaMarket.openListRoyaltySharesModal) {
+          window.ElaMarket.openListRoyaltySharesModal(addr);
+        } else {
+          showToast('List royalty shares coming soon', 'info');
+        }
+      });
+    });
+
+    dom.earningsList.querySelectorAll('.ei-transfer-shares').forEach(function (btn) {
+      btn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        var addr = btn.dataset.addr;
+        if (window.ElaMarket && window.ElaMarket.openTransferSharesModal) {
+          window.ElaMarket.openTransferSharesModal(addr);
+        } else {
+          showToast('Transfer shares coming soon', 'info');
+        }
       });
     });
 
@@ -3970,7 +4391,38 @@
     });
   }
 
-  function handleEarningsWithdraw(contractAddr, payTokens, btn) {
+  function handleChannelWithdraw(operatives, payTokens, btn, fromWallet) {
+    if (!operatives.length || !payTokens.length) return;
+    btn.disabled = true;
+    btn.textContent = 'Withdrawing...';
+
+    var chain = Promise.resolve();
+    var completed = 0;
+    operatives.forEach(function (opAddr) {
+      chain = chain.then(function () {
+        btn.textContent = 'Withdrawing ' + (completed + 1) + '/' + operatives.length + '...';
+        return Wallet.withdrawRewards(opAddr, payTokens[0], fromWallet);
+      }).then(function () {
+        completed++;
+      });
+    });
+
+    chain.then(function () {
+      btn.textContent = 'Done!';
+      btn.style.background = '#22c55e';
+      showToast('Channel rewards withdrawn from ' + operatives.length + ' asset(s)!', 'success');
+      ElacityAPI.clearEarningsCache(true);
+      setTimeout(function () { loadEarningsData(state.earningsTab); }, 3000);
+    }).catch(function (err) {
+      btn.disabled = false;
+      btn.textContent = 'Withdraw';
+      if (err.message && err.message.indexOf('rejected') === -1) {
+        showToast('Withdraw failed: ' + decodeContractError(err.message), 'error');
+      }
+    });
+  }
+
+  function handleEarningsWithdraw(contractAddr, payTokens, btn, fromWallet) {
     if (!contractAddr || payTokens.length === 0) return;
 
     btn.disabled = true;
@@ -3978,16 +4430,17 @@
 
     var withdrawPromise;
     if (payTokens.length === 1) {
-      withdrawPromise = Wallet.withdrawRewards(contractAddr, payTokens[0]);
+      withdrawPromise = Wallet.withdrawRewards(contractAddr, payTokens[0], fromWallet);
     } else {
-      withdrawPromise = Wallet.batchWithdrawRewards(contractAddr, payTokens);
+      withdrawPromise = Wallet.batchWithdrawRewards(contractAddr, payTokens, fromWallet);
     }
 
     withdrawPromise.then(function () {
       btn.textContent = 'Done!';
       btn.style.background = '#22c55e';
-      showToast('Rewards withdrawn!', 'success');
-      setTimeout(function () { loadEarningsData(state.earningsTab); }, 2000);
+      showToast('Rewards withdrawn successfully!', 'success');
+      ElacityAPI.clearEarningsCache(true);
+      setTimeout(function () { loadEarningsData(state.earningsTab); }, 3000);
     }).catch(function (err) {
       btn.disabled = false;
       btn.textContent = 'Withdraw';
@@ -4033,7 +4486,8 @@
     chain.then(function () {
       dom.earningsWithdrawAllBtn.textContent = 'Done!';
       showToast('All rewards withdrawn! (' + completed + ' contracts)', 'success');
-      setTimeout(function () { loadEarningsData(state.earningsTab); }, 2000);
+      ElacityAPI.clearEarningsCache(true);
+      setTimeout(function () { loadEarningsData(state.earningsTab); }, 3000);
     }).catch(function (err) {
       dom.earningsWithdrawAllBtn.disabled = false;
       dom.earningsWithdrawAllBtn.textContent = 'Withdraw All';
@@ -4054,6 +4508,7 @@
 
     Wallet.connect()
       .then(function () {
+        state._lastSignedAddress = Wallet.getAddress();
         updateWalletUI();
         return Wallet.siweLogin();
       })
@@ -4066,6 +4521,7 @@
       })
       .catch(function () {
         state.initializing = false;
+        state._lastSignedAddress = Wallet.getAddress();
         updateWalletUI();
       });
   }

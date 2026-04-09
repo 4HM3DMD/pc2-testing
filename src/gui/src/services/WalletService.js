@@ -993,16 +993,24 @@ class WalletService {
      */
     async sendTransactionViaParticleIframe(txParams) {
         console.log('[PC2 Wallet] sendTransactionViaParticleIframe called');
-        const iframe = this._getOrCreateIframe();
+
+        // MetaMask doesn't inject into hidden iframes, so for external wallet
+        // users we sign directly with MetaMask in the parent frame.
+        const provider = window.ethereum;
+        if (!provider || provider.isPC2WalletBridge) {
+            throw new Error('External wallet (MetaMask) not available. Please ensure your wallet extension is enabled.');
+        }
+
         try {
-            console.log('[PC2 Wallet] sending eth-send-transaction to particle iframe');
-            const payload = await this._sendToIframe('particle-wallet.eth-send-transaction', { txParams });
-            if (payload && payload.txHash) {
-                console.log('[PC2 Wallet] tx success:', payload.txHash);
-                return payload.txHash;
-            }
-            console.log('[PC2 Wallet] tx failed:', payload?.error || payload?.message);
-            throw new Error(payload?.error || payload?.message || 'No txHash returned');
+            const fromAddress = txParams.from || window.user?.wallet_address;
+            const fullTxParams = { ...txParams, from: fromAddress };
+            console.log('[PC2 Wallet] Sending tx via MetaMask in parent frame:', fullTxParams);
+            const txHash = await provider.request({
+                method: 'eth_sendTransaction',
+                params: [fullTxParams],
+            });
+            console.log('[PC2 Wallet] tx success:', txHash);
+            return txHash;
         } catch (e) {
             console.log('[PC2 Wallet] sendTransactionViaParticleIframe error:', e?.message);
             throw e;
@@ -1011,20 +1019,48 @@ class WalletService {
 
     /**
      * Execute a batch of contract calls from the smart account (one UserOp, one signature).
+     * For external wallet users (MetaMask): 3-phase flow — create in iframe, sign with
+     * MetaMask in parent frame, submit in iframe. MetaMask doesn't inject into hidden
+     * iframes so signing must happen in the parent frame.
      * @param {number} chainId - Chain ID (e.g. 8453 for Base)
      * @param {Array<{ to: string, data: string, value?: string }>} transactions - Array of tx params
      * @returns {Promise<{ transactionId?: string, transactionHash?: string }>}
      */
     async sendSmartAccountBatch(chainId, transactions, expectTokens) {
-        const payload = await this._sendToIframe('particle-wallet.execute-universal-batch', {
-            chainId,
-            transactions,
-            expectTokens: expectTokens || [],
+        logger.log('Smart Account batch (external wallet) — Phase 1: creating batch');
+        const createResult = await this._sendToIframe('particle-wallet.execute-universal-batch-create', {
+            chainId, transactions, expectTokens: expectTokens || [],
         });
-        if (payload && (payload.transactionId || payload.transactionHash)) {
-            return payload;
+
+        const { rootHash, transactionData, eoaAddress } = createResult;
+        if (!rootHash || !transactionData) {
+            throw new Error('Failed to create batch transaction');
         }
-        throw new Error(payload?.error || payload?.message || 'Batch execution failed');
+
+        logger.log('Smart Account batch (external wallet) — Phase 2: signing rootHash with MetaMask');
+        const provider = window.ethereum;
+        if (!provider) {
+            throw new Error('External wallet (MetaMask) not available for signing. Please ensure your wallet extension is enabled and refresh the page.');
+        }
+
+        const signature = await provider.request({
+            method: 'personal_sign',
+            params: [rootHash, eoaAddress],
+        });
+
+        if (!signature || signature === 'pending') {
+            throw new Error('Signing was not completed');
+        }
+
+        logger.log('Smart Account batch (external wallet) — Phase 3: submitting signed batch');
+        const submitResult = await this._sendToIframe('particle-wallet.execute-universal-batch-submit', {
+            transactionData, signature,
+        });
+
+        return {
+            transactionId: submitResult?.transactionId,
+            transactionHash: submitResult?.transactionHash,
+        };
     }
 
     /**
@@ -2446,13 +2482,24 @@ class WalletService {
                     return { success: true, hash: null, status: 'pending', isEOA: true };
                 }
             } else {
-                // External wallet login: sign via data iframe
-                const result = await this._sendToIframe('particle-wallet.eoa-send', {
-                    txParams,
-                    chainId,
+                // External wallet: sign with MetaMask in parent frame
+                const provider = window.ethereum;
+                if (!provider || provider.isPC2WalletBridge) {
+                    throw new Error('External wallet (MetaMask) not available. Please ensure your wallet extension is enabled.');
+                }
+                try {
+                    await provider.request({
+                        method: 'wallet_switchEthereumChain',
+                        params: [{ chainId: '0x' + chainId.toString(16) }],
+                    });
+                } catch (switchErr) {
+                    logger.warn('Chain switch failed (continuing):', switchErr?.message);
+                }
+                txHash = await provider.request({
+                    method: 'eth_sendTransaction',
+                    params: [{ ...txParams, chainId: '0x' + chainId.toString(16) }],
                 });
-                txHash = result?.txHash;
-                if (!txHash) throw new Error(result?.error || 'Transaction failed');
+                if (!txHash) throw new Error('Transaction failed');
             }
             
             logger.log('EOA transaction sent on', chainName, ':', txHash);

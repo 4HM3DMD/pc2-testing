@@ -1443,7 +1443,7 @@ export class WASMRuntime {
         wasmBinary: ArrayBuffer | Uint8Array,
         commandJson: string,
         options?: { timeoutMs?: number },
-    ): Promise<{ success: boolean; encoded?: string; results?: Array<{ success: boolean; return_data: string }>; error?: string; executionTimeMs: number }> {
+    ): Promise<{ success: boolean; encoded?: string; results?: Array<{ success: boolean; return_data: string }>; values?: string[]; error?: string; executionTimeMs: number }> {
         const timeoutMs = options?.timeoutMs ?? this.defaultTimeoutMs;
         const startTime = Date.now();
 
@@ -1487,6 +1487,7 @@ export class WASMRuntime {
                 success: result.success,
                 encoded: result.encoded,
                 results: result.results,
+                values: result.values,
                 error: result.error,
                 executionTimeMs: Date.now() - startTime,
             };

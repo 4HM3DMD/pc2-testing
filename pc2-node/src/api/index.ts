@@ -438,10 +438,11 @@ export function setupAPI(app: Express): void {
     const catalogDb = req.app.locals.db as DatabaseManager | undefined;
     if (!catalogDb) return res.status(503).json({ error: 'Database not available' });
 
-    const { asset_type, creator, search, limit: l, offset: o } = req.query;
+    const { asset_type, creator, channel, search, limit: l, offset: o } = req.query;
     const result = catalogDb.getCatalogItems({
       assetType: asset_type as string | undefined,
       creator: creator as string | undefined,
+      channel: channel as string | undefined,
       search: search as string | undefined,
       limit: parseInt(l as string) || 50,
       offset: parseInt(o as string) || 0,
@@ -482,6 +483,34 @@ export function setupAPI(app: Express): void {
     res.json({ success: true, item });
   });
 
+  app.get('/api/catalog/asset/:address/:tokenId', (req: Request, res: Response) => {
+    const catalogDb = req.app.locals.db as DatabaseManager | undefined;
+    if (!catalogDb) return res.status(503).json({ error: 'Database not available' });
+
+    const item = catalogDb.getCatalogItemByToken(req.params.address, req.params.tokenId) as any;
+    if (!item) return res.status(404).json({ error: 'Asset not found in local catalog' });
+
+    const pinnedCids = new Set(catalogDb.getPinnedCIDs());
+    item.is_local = !!(item.content_cid && pinnedCids.has(item.content_cid));
+
+    const channelMeta = catalogDb.getChannelMetadata(item.channel_address);
+    if (channelMeta) {
+      item._channelMeta = channelMeta;
+    }
+
+    res.json({ success: true, item });
+  });
+
+  app.get('/api/catalog/operative/:address', (req: Request, res: Response) => {
+    const catalogDb = req.app.locals.db as DatabaseManager | undefined;
+    if (!catalogDb) return res.status(503).json({ error: 'Database not available' });
+
+    const item = catalogDb.getCatalogItemByOperative(req.params.address) as any;
+    if (!item) return res.status(404).json({ error: 'Asset not found' });
+
+    res.json({ success: true, item });
+  });
+
   app.get('/api/catalog/providers/:cid', async (req: Request, res: Response) => {
     const catalogIpfs = ipfs;
     if (!catalogIpfs) return res.status(503).json({ error: 'IPFS not available' });
@@ -512,6 +541,60 @@ export function setupAPI(app: Express): void {
     });
   });
 
+  app.get('/api/catalog/channels', (req: Request, res: Response) => {
+    const catalogDb = req.app.locals.db as DatabaseManager | undefined;
+    if (!catalogDb) return res.status(503).json({ error: 'Database not available' });
+
+    const channels = catalogDb.getCatalogChannels();
+    res.json({ success: true, total: channels.length, data: channels });
+  });
+
+  app.get('/api/catalog/channel/:address', (req: Request, res: Response) => {
+    const catalogDb = req.app.locals.db as DatabaseManager | undefined;
+    if (!catalogDb) return res.status(503).json({ error: 'Database not available' });
+
+    const { address } = req.params;
+    const meta = catalogDb.getChannelMetadata(address);
+    res.json({ success: true, channel: meta || {} });
+  });
+
+  app.put('/api/catalog/channel/:address', authenticate, (req: AuthenticatedRequest, res: Response) => {
+    const catalogDb = req.app.locals.db as DatabaseManager | undefined;
+    if (!catalogDb) return res.status(503).json({ error: 'Database not available' });
+
+    const { address } = req.params;
+    const { name, description, categories, image, coverImage, plans, tokenAccess } = req.body || {};
+    const wallet = req.user?.wallet_address;
+
+    try {
+      catalogDb.updateChannelMetadata(address, { name, description, categories, image, coverImage, plans, tokenAccess }, wallet);
+      const updated = catalogDb.getChannelMetadata(address);
+      res.json({ success: true, channel: updated });
+    } catch (err: any) {
+      logger.error(`[API] Channel metadata update failed: ${err.message}`);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/catalog/owned/:address', (req: Request, res: Response) => {
+    const catalogDb = req.app.locals.db as DatabaseManager | undefined;
+    if (!catalogDb) return res.status(503).json({ error: 'Database not available' });
+
+    const { limit: l, offset: o } = req.query;
+    const result = catalogDb.getOwnedCatalogItems(req.params.address, {
+      limit: parseInt(l as string) || 50,
+      offset: parseInt(o as string) || 0,
+    });
+
+    const pinnedCids = new Set(catalogDb.getPinnedCIDs());
+    const enriched = result.items.map((item: any) => ({
+      ...item,
+      is_local: !!(item.content_cid && pinnedCids.has(item.content_cid)),
+    }));
+
+    res.json({ success: true, total: result.total, items: enriched });
+  });
+
   app.get('/api/catalog/seeding', (req: Request, res: Response) => {
     const catalogDb = req.app.locals.db as DatabaseManager | undefined;
     if (!catalogDb) return res.status(503).json({ error: 'Database not available' });
@@ -533,6 +616,339 @@ export function setupAPI(app: Express): void {
         avgBytesPerSec: uptimeMs > 0 ? Math.round(cdn.bytesServed / (uptimeMs / 1000)) : 0,
       },
     });
+  });
+
+  // Server-side cache for earnings RPC results (avoids repeated flaky calls to public RPC)
+  const earningsCache = new Map<string, { data: any; ts: number }>();
+  const EARNINGS_CACHE_TTL = 30_000;
+
+  // V3 On-Chain Earnings — reads royalty share balances and claimable rewards from operatives
+  // Returns items + rewards in a single response so the frontend only needs one fetch.
+  // Categories: assets (per-asset), channels (aggregated by channel), my-channels (channels user owns)
+  app.get('/api/catalog/earnings/:address', async (req: Request, res: Response) => {
+    const catalogDb = req.app.locals.db as DatabaseManager | undefined;
+    if (!catalogDb) return res.status(503).json({ error: 'Database not available' });
+
+    const walletAddress = req.params.address;
+    if (!walletAddress || !/^0x[a-fA-F0-9]{40}$/.test(walletAddress)) {
+      return res.status(400).json({ error: 'Invalid wallet address' });
+    }
+
+    const category = (req.query.category as string) || 'assets';
+    const walletLabel = (req.query.walletLabel as string) || '';
+    const forceRefresh = req.query.refresh === '1';
+    const USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
+
+    // Serve from server-side cache if fresh (unless force-refresh)
+    const cacheKey = `${walletAddress.toLowerCase()}:${category}`;
+    if (!forceRefresh) {
+      const cached = earningsCache.get(cacheKey);
+      if (cached && Date.now() - cached.ts < EARNINGS_CACHE_TTL) {
+        return res.json(cached.data);
+      }
+    } else {
+      earningsCache.delete(cacheKey);
+    }
+
+    try {
+      const { ethers } = await import('ethers');
+      const { getBaseRpcUrl, rotateBaseRpc } = await import('../utils/rpc.js');
+      const provider = new ethers.JsonRpcProvider(getBaseRpcUrl());
+      const OPERATIVE_ABI = [
+        'function balanceOf(address account, uint256 id) view returns (uint256)',
+        'function rewardsOf(address user, address payToken) view returns (uint256)',
+      ];
+
+      const { items: catalogItems } = catalogDb.getCatalogItems({ limit: 500 });
+
+      // "my-channels" — return channels owned by this address with aggregated on-chain rewards
+      if (category === 'my-channels') {
+        const channels = catalogDb.getCatalogChannels();
+        const owned = channels.filter(ch =>
+          ch.creator.toLowerCase() === walletAddress.toLowerCase()
+        );
+
+        if (owned.length === 0) {
+          const emptyResp = { success: true, items: { total: 0, data: [] }, rewards: [] };
+          earningsCache.set(cacheKey, { data: emptyResp, ts: Date.now() });
+          return res.json(emptyResp);
+        }
+
+        const OPERATIVE_ABI_MC = [
+          'function balanceOf(address account, uint256 id) view returns (uint256)',
+          'function rewardsOf(address user, address payToken) view returns (uint256)',
+        ];
+
+        async function callWithRetryMC(
+          opAddr: string,
+          call: (c: any) => Promise<bigint>,
+          retries = 3,
+        ): Promise<bigint> {
+          for (let i = 0; i <= retries; i++) {
+            try {
+              const p = i === 0 ? provider : new ethers.JsonRpcProvider(getBaseRpcUrl());
+              const c = new ethers.Contract(opAddr, OPERATIVE_ABI_MC, p);
+              return await call(c);
+            } catch {
+              if (i < retries) {
+                rotateBaseRpc();
+                await new Promise(r => setTimeout(r, 200 * (i + 1)));
+              }
+            }
+          }
+          return BigInt(-1);
+        }
+
+        const channelResults: any[] = [];
+        const rewardsSummaryMC: any[] = [];
+
+        for (const ch of owned) {
+          const chAssets = catalogItems.filter(
+            it => it.channel_address && it.channel_address.toLowerCase() === ch.address.toLowerCase() && it.operative_address
+          );
+
+          let totalRewards = 0;
+          let totalRoyaltyShares = 0;
+          const operativesWithRewards: string[] = [];
+
+          for (const asset of chAssets) {
+            try {
+              const royaltyBal = await callWithRetryMC(asset.operative_address!, (c) => c.balanceOf(walletAddress, 2));
+              if (royaltyBal === BigInt(-1)) continue;
+              const rewards = await callWithRetryMC(asset.operative_address!, (c) => c.rewardsOf(walletAddress, USDC));
+              const rewardsVal = rewards === BigInt(-1) ? BigInt(0) : rewards;
+              totalRoyaltyShares += Number(royaltyBal);
+              const rewardsUSDC = Number(ethers.formatUnits(rewardsVal, 6));
+              totalRewards += rewardsUSDC;
+              if (rewardsUSDC > 0) operativesWithRewards.push(asset.operative_address!);
+            } catch {
+              // skip failed operative
+            }
+          }
+
+          channelResults.push({
+            address: ch.address,
+            name: ch.name || 'Untitled Channel',
+            thumbnail: ch.image || null,
+            share: totalRoyaltyShares > 0 ? totalRoyaltyShares / 10 : 0,
+            beneficiary: walletAddress,
+            unclaimedRewards: totalRewards,
+            ledger: ch.address,
+            tokenId: '',
+            itemsCount: ch.itemsCount,
+            walletLabel,
+            operatives: operativesWithRewards,
+            distributions: totalRewards > 0 ? [{ volume: totalRewards, paymentToken: USDC }] : [],
+            __typename: 'OwnedChannel',
+          });
+
+          if (totalRewards > 0) {
+            for (const opAddr of operativesWithRewards) {
+              rewardsSummaryMC.push({
+                name: ch.name || 'Untitled Channel',
+                address: opAddr,
+                unclaimedRewards: totalRewards / operativesWithRewards.length,
+                distributions: [{ volume: totalRewards / operativesWithRewards.length, paymentToken: USDC }],
+              });
+            }
+          }
+        }
+
+        const mcResp = {
+          success: true,
+          items: { total: channelResults.length, data: channelResults },
+          rewards: rewardsSummaryMC,
+        };
+        earningsCache.set(cacheKey, { data: mcResp, ts: Date.now() });
+        return res.json(mcResp);
+      }
+
+      const operativeSet = new Map<string, typeof catalogItems>();
+      for (const item of catalogItems) {
+        if (!item.operative_address) continue;
+        const opLower = item.operative_address.toLowerCase();
+        if (!operativeSet.has(opLower)) operativeSet.set(opLower, []);
+        operativeSet.get(opLower)!.push(item);
+      }
+
+      type EarningsItem = {
+        address: string;
+        name: string;
+        thumbnail: string | null;
+        share: number;
+        beneficiary: string;
+        unclaimedRewards: number;
+        ledger: string;
+        tokenId: string;
+        walletLabel: string;
+        __typename: string;
+      };
+
+      const assetResults: EarningsItem[] = [];
+      const rewardsSummary: Array<{
+        name: string;
+        address: string;
+        unclaimedRewards: number;
+        distributions: Array<{ volume: number; paymentToken: string }>;
+      }> = [];
+
+      let skippedCount = 0;
+
+      function makeProvider() {
+        return new ethers.JsonRpcProvider(getBaseRpcUrl());
+      }
+
+      async function callWithRetry(
+        opAddr: string,
+        call: (op: any) => Promise<bigint>,
+        retries = 3,
+      ): Promise<bigint> {
+        for (let i = 0; i <= retries; i++) {
+          try {
+            const p = i === 0 ? provider : makeProvider();
+            const c = new ethers.Contract(opAddr, OPERATIVE_ABI, p);
+            return await call(c);
+          } catch {
+            if (i < retries) {
+              rotateBaseRpc();
+              await new Promise(r => setTimeout(r, 200 * (i + 1)));
+            }
+          }
+        }
+        return BigInt(-1);
+      }
+
+      // Query operatives sequentially to avoid public RPC rate-limiting
+      for (const [opAddr, items] of operativeSet) {
+        try {
+          const royaltyBal = await callWithRetry(opAddr, (op) => op.balanceOf(walletAddress, 2));
+          if (royaltyBal === BigInt(-1)) {
+            log.warn(`[Earnings] balanceOf failed for ${opAddr} after retries, skipping`);
+            skippedCount++;
+            continue;
+          }
+
+          // rewardsOf can legitimately revert when 0 rewards
+          const rewards = await callWithRetry(opAddr, (op) => op.rewardsOf(walletAddress, USDC));
+          const rewardsVal = rewards === BigInt(-1) ? BigInt(0) : rewards;
+
+          const royaltyCount = Number(royaltyBal);
+          const rewardsUSDC = Number(ethers.formatUnits(rewardsVal, 6));
+
+          if (royaltyCount > 0 || rewardsUSDC > 0) {
+            const item = items[0];
+            const sharePct = royaltyCount / 10;
+
+            assetResults.push({
+              address: opAddr,
+              name: item.name || 'Untitled',
+              thumbnail: item.image_url || null,
+              share: sharePct,
+              beneficiary: walletAddress,
+              unclaimedRewards: rewardsUSDC,
+              ledger: item.channel_address,
+              tokenId: item.token_id,
+              walletLabel,
+              __typename: 'RoyaltyAsset',
+            });
+
+            if (rewardsUSDC > 0) {
+              rewardsSummary.push({
+                name: item.name || 'Untitled',
+                address: opAddr,
+                unclaimedRewards: rewardsUSDC,
+                distributions: [{ volume: rewardsUSDC, paymentToken: USDC }],
+              });
+            }
+          }
+        } catch (err) {
+          log.warn(`[Earnings] Operative ${opAddr} query failed:`, (err as Error).message);
+        }
+      }
+
+      // For "channels" category, aggregate asset results by channel_address
+      if (category === 'channels') {
+        const channelMap = new Map<string, { items: EarningsItem[]; totalRewards: number; totalShare: number }>();
+        for (const asset of assetResults) {
+          const chKey = asset.ledger.toLowerCase();
+          if (!channelMap.has(chKey)) channelMap.set(chKey, { items: [], totalRewards: 0, totalShare: 0 });
+          const entry = channelMap.get(chKey)!;
+          entry.items.push(asset);
+          entry.totalRewards += asset.unclaimedRewards;
+          entry.totalShare = Math.max(entry.totalShare, asset.share);
+        }
+
+        const channelResults: (EarningsItem & { itemsCount?: number })[] = [];
+        for (const [chAddr, entry] of channelMap) {
+          const first = entry.items[0];
+          const catalogChannel = catalogDb.getCatalogChannels().find(
+            ch => ch.address.toLowerCase() === chAddr
+          );
+          channelResults.push({
+            address: chAddr,
+            name: catalogChannel?.name || first.name || 'Untitled Channel',
+            thumbnail: catalogChannel?.image || first.thumbnail,
+            share: entry.totalShare,
+            beneficiary: walletAddress,
+            unclaimedRewards: entry.totalRewards,
+            ledger: chAddr,
+            tokenId: '',
+            walletLabel,
+            itemsCount: catalogChannel?.itemsCount || entry.items.length,
+            __typename: 'RoyaltyChannel',
+          });
+        }
+
+        const channelResponse = {
+          success: true,
+          items: { total: channelResults.length, data: channelResults },
+          rewards: rewardsSummary,
+          _partial: skippedCount > 0,
+        };
+        if (skippedCount === 0) {
+          earningsCache.set(cacheKey, { data: channelResponse, ts: Date.now() });
+        }
+        return res.json(channelResponse);
+      }
+
+      // Default: "assets" category
+      const assetsResponse = {
+        success: true,
+        items: { total: assetResults.length, data: assetResults },
+        rewards: rewardsSummary,
+        _partial: skippedCount > 0,
+      };
+      // Only cache complete results to avoid serving stale partial data
+      if (skippedCount === 0) {
+        earningsCache.set(cacheKey, { data: assetsResponse, ts: Date.now() });
+      } else {
+        log.warn(`[Earnings] ${skippedCount} operative(s) skipped — result not cached`);
+      }
+      res.json(assetsResponse);
+    } catch (err: any) {
+      log.warn('[Earnings] On-chain query failed:', err.message);
+      res.status(500).json({ error: 'Failed to query on-chain earnings: ' + err.message });
+    }
+  });
+
+  // GraphQL Proxy — avoids CORS when market app (localhost iframe) calls base.ela.city
+  app.post('/api/elacity/graphql', async (req: Request, res: Response) => {
+    try {
+      const upstream = 'https://base.ela.city/api/2.0/graphql';
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (req.headers.authorization) headers['Authorization'] = req.headers.authorization as string;
+      if (req.headers['x-eth-signer']) headers['X-ETH-Signer'] = req.headers['x-eth-signer'] as string;
+
+      const resp = await fetch(upstream, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(req.body),
+      });
+      const data = await resp.text();
+      res.status(resp.status).set('Content-Type', 'application/json').send(data);
+    } catch (err: any) {
+      res.status(502).json({ error: 'GraphQL proxy failed: ' + (err.message || String(err)) });
+    }
   });
 
   // Installed Apps (dApp Store) — requires db for registration

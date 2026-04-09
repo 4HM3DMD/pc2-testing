@@ -195,7 +195,7 @@ CREATE TABLE IF NOT EXISTS content_catalog (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   content_id TEXT,
   channel_address TEXT NOT NULL,
-  token_id INTEGER NOT NULL,
+  token_id TEXT NOT NULL,
   operative_address TEXT,
   creator_address TEXT NOT NULL,
   name TEXT,
