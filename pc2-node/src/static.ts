@@ -381,7 +381,7 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
   app.get('/installed-apps/*', async (req: Request, res: Response, next: NextFunction) => {
     const dataDir = process.env.PC2_DATA_DIR || path.join(process.cwd(), 'data');
     const installedAppsDir = path.resolve(dataDir, 'installed-apps');
-    const relativePath = req.path.replace('/installed-apps/', '');
+    const relativePath = decodeURIComponent(req.path.replace('/installed-apps/', ''));
 
     // Extract app name (first path segment) and resolve full path
     const appName = relativePath.split('/')[0];

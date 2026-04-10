@@ -595,6 +595,23 @@ export function setupAPI(app: Express): void {
     res.json({ success: true, total: result.total, items: enriched });
   });
 
+  app.get('/api/catalog/operatives', (req: Request, res: Response) => {
+    const catalogDb = req.app.locals.db as DatabaseManager | undefined;
+    if (!catalogDb) return res.status(503).json({ error: 'Database not available' });
+
+    try {
+      const db = catalogDb.getDB();
+      const rows = db.prepare(`
+        SELECT DISTINCT LOWER(operative_address) as address
+        FROM content_catalog
+        WHERE operative_address IS NOT NULL AND operative_address != ''
+      `).all() as { address: string }[];
+      res.json({ success: true, operatives: rows.map(r => r.address) });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.get('/api/catalog/seeding', (req: Request, res: Response) => {
     const catalogDb = req.app.locals.db as DatabaseManager | undefined;
     if (!catalogDb) return res.status(503).json({ error: 'Database not available' });
@@ -948,6 +965,53 @@ export function setupAPI(app: Express): void {
       res.status(resp.status).set('Content-Type', 'application/json').send(data);
     } catch (err: any) {
       res.status(502).json({ error: 'GraphQL proxy failed: ' + (err.message || String(err)) });
+    }
+  });
+
+  // ESC NFT Marketplace — GraphQL proxy to ela.city/api (ESC backend with 54+ NFT collections)
+  app.post('/api/esc-nft/graphql', async (req: Request, res: Response) => {
+    try {
+      const upstream = 'https://ela.city/api/2.0/graphql';
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (req.headers.authorization) headers['Authorization'] = req.headers.authorization as string;
+      if (req.headers['x-eth-signer']) headers['X-ETH-Signer'] = req.headers['x-eth-signer'] as string;
+
+      const resp = await fetch(upstream, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(req.body),
+      });
+      const data = await resp.text();
+      res.status(resp.status).set('Content-Type', 'application/json').send(data);
+    } catch (err: any) {
+      res.status(502).json({ error: 'ESC NFT GraphQL proxy failed: ' + (err.message || String(err)) });
+    }
+  });
+
+  // ESC NFT Marketplace — REST catch-all proxy to ela.city/api (ESC backend)
+  // Forwards /nftitems/*, /collection/*, /info/*, /like/*, /quotes/*, /2.0/graphql, etc.
+  app.all('/api/esc-nft/:path(*)', async (req: Request, res: Response) => {
+    try {
+      const upstream = `https://ela.city/api/${req.params.path}`;
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (req.headers.authorization) headers['Authorization'] = req.headers.authorization as string;
+      if (req.headers['x-eth-signer']) headers['X-ETH-Signer'] = req.headers['x-eth-signer'] as string;
+
+      const fetchOpts: RequestInit = {
+        method: req.method,
+        headers,
+      };
+
+      if (['POST', 'PUT', 'PATCH'].includes(req.method)) {
+        fetchOpts.body = JSON.stringify(req.body);
+      }
+
+      const resp = await fetch(upstream, fetchOpts);
+      const contentType = resp.headers.get('content-type') || 'application/json';
+      const data = await resp.arrayBuffer();
+      res.status(resp.status).set('Content-Type', contentType).send(Buffer.from(data));
+    } catch (err: any) {
+      res.status(502).json({ error: 'ESC NFT REST proxy failed: ' + (err.message || String(err)) });
     }
   });
 
