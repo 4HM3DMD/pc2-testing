@@ -29,7 +29,8 @@
       ElacityAPI.fetchRewardSummary(eoaAddr, 'assets').catch(function () { return []; }),
       ElacityAPI.fetchRewardSummary(eoaAddr, 'channels').catch(function () { return []; }),
       ElacityAPI.searchOfferEvents(null, null, 50).catch(function () { return []; }),
-      ElacityAPI.searchIncomingOfferEvents(null, null, 50).catch(function () { return []; })
+      ElacityAPI.searchIncomingOfferEvents(null, null, 50).catch(function () { return []; }),
+      ElacityAPI.getV3Operatives()
     ];
     if (hasSA) {
       fetches.push(ElacityAPI.fetchRewardSummary(saAddr, 'assets').catch(function () { return []; }));
@@ -39,12 +40,19 @@
     Promise.all(fetches).then(function (results) {
       var assetRewards = results[0] || [];
       var channelRewards = results[1] || [];
-      var outOffers = results[2] || [];
-      var inOffers = results[3] || [];
+      var v3Set = results[4] || new Set();
+      var outOffers = (results[2] || []).filter(function (evt) {
+        var addr = getOfferContractAddr(evt);
+        return addr && v3Set.has(addr.toLowerCase());
+      });
+      var inOffers = (results[3] || []).filter(function (evt) {
+        var addr = getOfferContractAddr(evt);
+        return addr && v3Set.has(addr.toLowerCase());
+      });
 
       if (hasSA) {
-        assetRewards = assetRewards.concat(results[4] || []);
-        channelRewards = channelRewards.concat(results[5] || []);
+        assetRewards = assetRewards.concat(results[5] || []);
+        channelRewards = channelRewards.concat(results[6] || []);
       }
 
       var assetCount = 0; var seenA = {};
@@ -468,6 +476,8 @@
             u.showToast('Withdrawal submitted!', 'success');
             btn.textContent = 'Done';
             if (typeof ElacityAPI !== 'undefined' && ElacityAPI.clearEarningsCache) ElacityAPI.clearEarningsCache(true);
+            var M = window.ElaMarket || {};
+            if (M.loadEarningsData && M.state) setTimeout(function () { M.loadEarningsData(M.state.earningsTab); }, 3000);
           }).catch(function (err) {
             btn.disabled = false;
             btn.textContent = 'Withdraw';
@@ -490,6 +500,8 @@
             u.showToast('All rewards withdrawn!', 'success');
             btn.textContent = 'Done';
             if (typeof ElacityAPI !== 'undefined' && ElacityAPI.clearEarningsCache) ElacityAPI.clearEarningsCache(true);
+            var M = window.ElaMarket || {};
+            if (M.loadEarningsData && M.state) setTimeout(function () { M.loadEarningsData(M.state.earningsTab); }, 3000);
           }).catch(function (err) {
             btn.disabled = false;
             btn.textContent = 'Withdraw All';
@@ -580,6 +592,8 @@
         .then(function () {
           u.showToast('Shares listed for sale!', 'success');
           modal.remove();
+          var detailNft = (window.ElaMarket || {}).state && window.ElaMarket.state.detailItem;
+          if (detailNft) setTimeout(function () { renderOrderBook(detailNft); }, 2000);
         })
         .catch(function (err) {
           btn.disabled = false;
@@ -660,6 +674,13 @@
           u.showToast('Shares transferred!', 'success');
           modal.remove();
           if (typeof ElacityAPI !== 'undefined' && ElacityAPI.clearEarningsCache) ElacityAPI.clearEarningsCache(true);
+          var detailNft = (window.ElaMarket || {}).state && window.ElaMarket.state.detailItem;
+          if (detailNft) {
+            setTimeout(function () {
+              renderOrderBook(detailNft);
+              if (window.ElaMarket && window.ElaMarket.renderGovernanceSection) window.ElaMarket.renderGovernanceSection(detailNft);
+            }, 2000);
+          }
         })
         .catch(function (err) {
           btn.disabled = false;
@@ -808,6 +829,13 @@
         .then(function () {
           u.showToast('Access token listed for resale!', 'success');
           modal.remove();
+          var detailNft = M.state && M.state.detailItem;
+          if (detailNft) {
+            renderVendorsSection(detailNft);
+            if (window.ElacityApp && window.ElacityApp.enrichFromChain) {
+              setTimeout(function () { window.ElacityApp.enrichFromChain(detailNft); }, 2000);
+            }
+          }
         })
         .catch(function (err) {
           btn.disabled = false;
@@ -828,20 +856,74 @@
     var operativeAddr = operative.address || '';
     if (!operativeAddr || !Wallet.isConnected()) return;
 
-    var eoaAddr = Wallet.getAddress() || '';
-    var saAddr = Wallet.getSmartAccountAddress() || '';
+    var eoaAddr = (Wallet.getAddress() || '').toLowerCase();
+    var saAddr = (Wallet.getSmartAccountAddress() || '').toLowerCase();
+    var walletsToCheck = [eoaAddr, saAddr].filter(Boolean);
 
-    Wallet.getRoyaltyShareBalance(operativeAddr, eoaAddr).then(function (bal) {
-      var hasBal = parseInt(bal) > 0;
-      if (hasBal) return;
+    var offerContainer = document.getElementById('detail-offer-section');
+    if (!offerContainer) {
+      offerContainer = document.createElement('div');
+      offerContainer.id = 'detail-offer-section';
+      offerContainer.className = 'offer-section';
+      var govSection = document.getElementById('detail-governance-section');
+      if (govSection) govSection.parentNode.insertBefore(offerContainer, govSection.nextSibling);
+    }
 
-      var offerContainer = document.getElementById('detail-offer-section');
-      if (!offerContainer) {
-        offerContainer = document.createElement('div');
-        offerContainer.id = 'detail-offer-section';
-        offerContainer.className = 'offer-section';
-        var govSection = document.getElementById('detail-governance-section');
-        if (govSection) govSection.parentNode.insertBefore(offerContainer, govSection.nextSibling);
+    var checks = walletsToCheck.map(function (addr) {
+      return Wallet.getActiveOffer(operativeAddr, addr).then(function (offer) {
+        return offer ? { address: addr, offer: offer } : null;
+      });
+    });
+
+    Promise.all(checks).then(function (results) {
+      var activeOffer = null;
+      for (var i = 0; i < results.length; i++) {
+        if (results[i]) { activeOffer = results[i]; break; }
+      }
+
+      if (activeOffer) {
+        var priceUsd = (Number(activeOffer.offer.pricePerToken) / 1e6).toFixed(4);
+        var totalUsd = (Number(activeOffer.offer.quantity) * Number(activeOffer.offer.pricePerToken) / 1e6).toFixed(2);
+        var walletLabel = activeOffer.address === saAddr ? 'Agent Account' : 'EOA';
+        var cancelWallet = activeOffer.address === saAddr ? 'sa' : 'eoa';
+
+        offerContainer.innerHTML =
+          '<div style="font-size:13px;font-weight:600;color:var(--text-primary);margin-bottom:8px;">Your Active Offer</div>' +
+          '<div style="background:rgba(59,130,246,0.06);border:1px solid var(--border);border-radius:8px;padding:12px;font-size:13px;">' +
+            '<div style="display:flex;justify-content:space-between;margin-bottom:6px;">' +
+              '<span style="color:var(--text-secondary);">Quantity</span>' +
+              '<span style="font-weight:600;">' + activeOffer.offer.quantity + ' tokens (' + (Number(activeOffer.offer.quantity) / 10).toFixed(1) + '%)</span>' +
+            '</div>' +
+            '<div style="display:flex;justify-content:space-between;margin-bottom:6px;">' +
+              '<span style="color:var(--text-secondary);">Price / token</span>' +
+              '<span style="font-weight:600;">' + priceUsd + ' USDC</span>' +
+            '</div>' +
+            '<div style="display:flex;justify-content:space-between;margin-bottom:8px;">' +
+              '<span style="color:var(--text-secondary);">Total cost</span>' +
+              '<span style="font-weight:600;">' + totalUsd + ' USDC</span>' +
+            '</div>' +
+            '<div style="font-size:11px;color:var(--text-muted);margin-bottom:8px;">from ' + walletLabel + ' (' + activeOffer.address.substring(0,6) + '...' + activeOffer.address.slice(-4) + ')</div>' +
+            '<button id="cancel-active-offer-btn" style="display:inline-flex;align-items:center;justify-content:center;padding:8px 16px;font-size:13px;line-height:1;font-family:inherit;background:#dc2626;color:white;border:none;border-radius:6px;cursor:pointer;width:100%;">Cancel Offer</button>' +
+          '</div>';
+
+        document.getElementById('cancel-active-offer-btn').addEventListener('click', function () {
+          var btn = this;
+          btn.disabled = true;
+          btn.textContent = 'Cancelling...';
+          Wallet.cancelRoyaltyOffer(operativeAddr, cancelWallet)
+            .then(function () {
+              u.showToast('Offer cancelled', 'success');
+              setTimeout(function () { renderOfferSection(nft); }, 2000);
+            })
+            .catch(function (err) {
+              btn.disabled = false;
+              btn.textContent = 'Cancel Offer';
+              if (err.message && err.message.indexOf('rejected') === -1) {
+                u.showToast('Failed to cancel: ' + u.decodeContractError(err.message), 'error');
+              }
+            });
+        });
+        return;
       }
 
       offerContainer.innerHTML =
@@ -861,6 +943,64 @@
     var existing = document.getElementById('offer-modal');
     if (existing) existing.remove();
 
+    var eoaAddr = (Wallet.getAddress() || '').toLowerCase();
+    var saAddr = (Wallet.getSmartAccountAddress() || '').toLowerCase();
+
+    var eoaHasAccess = false;
+    var saHasAccess = false;
+    var accessChecks = [];
+    if (eoaAddr) accessChecks.push(Wallet.checkTradeAccess(operativeAddr, eoaAddr).then(function (ok) { eoaHasAccess = ok; }));
+    if (saAddr) accessChecks.push(Wallet.checkTradeAccess(operativeAddr, saAddr).then(function (ok) { saHasAccess = ok; }));
+
+    Promise.all(accessChecks).then(function () {
+      if (!eoaHasAccess && !saHasAccess) {
+        u.showToast('You need to own an access token for this asset before making royalty offers', 'error');
+        return;
+      }
+      _buildOfferModal(nft, operativeAddr, eoaAddr, saAddr, eoaHasAccess, saHasAccess);
+    }).catch(function () {
+      _buildOfferModal(nft, operativeAddr, eoaAddr, saAddr, true, true);
+    });
+  }
+
+  function _buildOfferModal(nft, operativeAddr, eoaAddr, saAddr, eoaHasAccess, saHasAccess) {
+    var hasSA = !!saAddr && saHasAccess;
+    var hasEOA = !!eoaAddr && eoaHasAccess;
+    var selectedWallet = hasSA ? 'sa' : (hasEOA ? 'eoa' : 'sa');
+    var eoaUsdcBal = '...';
+    var saUsdcBal = '...';
+
+    var walletPickerHtml = '';
+    var showBothWallets = hasSA && hasEOA;
+    if (showBothWallets) {
+      walletPickerHtml =
+        '<div class="form-group">' +
+          '<label>Pay from wallet</label>' +
+          '<div id="offer-wallet-picker" style="display:flex;flex-direction:column;gap:6px;">' +
+            '<button type="button" class="offer-wallet-opt' + (selectedWallet === 'sa' ? ' selected' : '') + '" data-wallet="sa" style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border-radius:8px;border:2px solid ' + (selectedWallet === 'sa' ? 'var(--accent)' : 'var(--border)') + ';background:' + (selectedWallet === 'sa' ? 'rgba(59,130,246,0.08)' : 'transparent') + ';cursor:pointer;font-size:13px;color:var(--text-primary);text-align:left;">' +
+              '<div><strong>Agent Account</strong><br><span style="font-size:11px;color:var(--text-muted);">' + (saAddr ? saAddr.substring(0,6) + '...' + saAddr.slice(-4) : '') + '</span></div>' +
+              '<span id="offer-sa-bal" style="font-weight:600;font-size:13px;">' + saUsdcBal + ' USDC</span>' +
+            '</button>' +
+            '<button type="button" class="offer-wallet-opt' + (selectedWallet === 'eoa' ? ' selected' : '') + '" data-wallet="eoa" style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border-radius:8px;border:2px solid ' + (selectedWallet === 'eoa' ? 'var(--accent)' : 'var(--border)') + ';background:' + (selectedWallet === 'eoa' ? 'rgba(59,130,246,0.08)' : 'transparent') + ';cursor:pointer;font-size:13px;color:var(--text-primary);text-align:left;">' +
+              '<div><strong>EOA Wallet</strong><br><span style="font-size:11px;color:var(--text-muted);">' + (eoaAddr ? eoaAddr.substring(0,6) + '...' + eoaAddr.slice(-4) : '') + '</span></div>' +
+              '<span id="offer-eoa-bal" style="font-weight:600;font-size:13px;">' + eoaUsdcBal + ' USDC</span>' +
+            '</button>' +
+          '</div>' +
+        '</div>';
+    } else if (hasSA || hasEOA) {
+      var singleWallet = hasSA ? 'sa' : 'eoa';
+      var singleLabel = hasSA ? 'Agent Account' : 'EOA Wallet';
+      var singleAddr = hasSA ? saAddr : eoaAddr;
+      walletPickerHtml =
+        '<div class="form-group">' +
+          '<label>Paying from</label>' +
+          '<div style="padding:10px 12px;border-radius:8px;border:1px solid var(--border);font-size:13px;color:var(--text-primary);">' +
+            '<strong>' + singleLabel + '</strong> <span style="font-size:11px;color:var(--text-muted);">' + (singleAddr ? singleAddr.substring(0,6) + '...' + singleAddr.slice(-4) : '') + '</span>' +
+            ' — <span id="offer-' + singleWallet + '-bal" style="font-weight:600;">' + (hasSA ? saUsdcBal : eoaUsdcBal) + ' USDC</span>' +
+          '</div>' +
+        '</div>';
+    }
+
     var modal = document.createElement('div');
     modal.id = 'offer-modal';
     modal.className = 'modal-overlay';
@@ -872,6 +1012,7 @@
         '</div>' +
         '<div class="modal-body">' +
           '<p class="modal-desc">' + u.escapeHtml(nft.name || 'Asset') + '</p>' +
+          walletPickerHtml +
           '<div class="form-group">' +
             '<label for="offer-quantity">Quantity (10 tokens = 1%)</label>' +
             '<input type="number" id="offer-quantity" min="1" step="1" placeholder="e.g. 10" class="form-input" />' +
@@ -880,6 +1021,7 @@
             '<label for="offer-price">Price per token (USDC)</label>' +
             '<input type="number" id="offer-price" min="0.01" step="0.01" placeholder="e.g. 5.00" class="form-input" />' +
           '</div>' +
+          '<div id="offer-total-cost" style="font-size:12px;color:var(--text-secondary);margin-top:4px;"></div>' +
           '<div id="offer-status" class="modal-status hidden"></div>' +
         '</div>' +
         '<div class="modal-footer">' +
@@ -890,6 +1032,49 @@
 
     document.body.appendChild(modal);
 
+    var fetches = [
+      Wallet.getERC20Balance(Wallet.USDC_ADDRESS, eoaAddr).then(function (b) {
+        eoaUsdcBal = (Number(b) / 1e6).toFixed(2);
+        var el = document.getElementById('offer-eoa-bal');
+        if (el) el.textContent = eoaUsdcBal + ' USDC';
+      }).catch(function () {})
+    ];
+    if (hasSA) {
+      fetches.push(
+        Wallet.getERC20Balance(Wallet.USDC_ADDRESS, saAddr).then(function (b) {
+          saUsdcBal = (Number(b) / 1e6).toFixed(2);
+          var el = document.getElementById('offer-sa-bal');
+          if (el) el.textContent = saUsdcBal + ' USDC';
+        }).catch(function () {})
+      );
+    }
+    Promise.all(fetches);
+
+    if (showBothWallets) {
+      modal.querySelectorAll('.offer-wallet-opt').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          selectedWallet = btn.dataset.wallet;
+          modal.querySelectorAll('.offer-wallet-opt').forEach(function (b) {
+            b.style.border = '2px solid var(--border)';
+            b.style.background = 'transparent';
+            b.classList.remove('selected');
+          });
+          btn.style.border = '2px solid var(--accent)';
+          btn.style.background = 'rgba(59,130,246,0.08)';
+          btn.classList.add('selected');
+        });
+      });
+    }
+
+    function updateTotalCost() {
+      var qty = parseInt(document.getElementById('offer-quantity').value) || 0;
+      var price = parseFloat(document.getElementById('offer-price').value) || 0;
+      var el = document.getElementById('offer-total-cost');
+      if (el) el.textContent = qty > 0 && price > 0 ? 'Total cost: ' + (qty * price).toFixed(2) + ' USDC' : '';
+    }
+    document.getElementById('offer-quantity').addEventListener('input', updateTotalCost);
+    document.getElementById('offer-price').addEventListener('input', updateTotalCost);
+
     document.getElementById('offer-modal-close').addEventListener('click', function () { modal.remove(); });
     document.getElementById('offer-cancel-btn').addEventListener('click', function () { modal.remove(); });
 
@@ -898,6 +1083,13 @@
       var priceUsd = parseFloat(document.getElementById('offer-price').value);
       if (!qty || qty <= 0) { u.showToast('Enter a valid quantity', 'error'); return; }
       if (!priceUsd || priceUsd <= 0) { u.showToast('Enter a valid price', 'error'); return; }
+
+      var totalCost = qty * priceUsd;
+      var walletBal = selectedWallet === 'sa' ? parseFloat(saUsdcBal) : parseFloat(eoaUsdcBal);
+      if (!isNaN(walletBal) && totalCost > walletBal) {
+        u.showToast('Insufficient USDC balance (' + walletBal.toFixed(2) + ' available)', 'error');
+        return;
+      }
 
       var pricePerToken = BigInt(Math.round(priceUsd * 1e6));
       var btn = document.getElementById('offer-confirm-btn');
@@ -908,18 +1100,92 @@
       statusEl.textContent = 'Sending approval...';
       statusEl.classList.remove('hidden');
 
-      Wallet.createRoyaltyOffer(operativeAddr, qty, pricePerToken.toString(), Wallet.USDC_ADDRESS)
-        .then(function () {
+      Wallet.createRoyaltyOffer(operativeAddr, qty, pricePerToken.toString(), Wallet.USDC_ADDRESS, selectedWallet)
+        .then(function (result) {
+          var isPending = result && result._uaPending;
+
+          if (isPending) {
+            btn.disabled = true;
+            btn.textContent = 'Confirming...';
+            statusEl.textContent = 'Transaction sent — waiting for on-chain confirmation...';
+            statusEl.classList.remove('hidden');
+
+            var txId = result && result.transactionId;
+            var pollCount = 0;
+            var maxPolls = 20;
+            var pollInterval = 3000;
+
+            function pollOffer() {
+              pollCount++;
+              Wallet.getRoyaltyShareBalance(operativeAddr, Wallet.getSmartAccountAddress() || Wallet.getAddress())
+                .then(function () {
+                  return Wallet.getProvider().request({
+                    method: 'eth_call',
+                    params: [{ to: Wallet.USDC_ADDRESS, data: new ethers.Interface(['function balanceOf(address) view returns (uint256)']).encodeFunctionData('balanceOf', [Wallet.getSmartAccountAddress()]) }, 'latest']
+                  });
+                })
+                .then(function () {
+                  if (pollCount >= maxPolls) {
+                    statusEl.innerHTML = 'Offer may still be processing. ' +
+                      (txId ? '<a href="https://universalx.app/activity/details?id=' + txId + '" target="_blank" style="color:var(--accent);">Check status</a>' : 'Please check your Earnings tab later.');
+                    setTimeout(function () { modal.remove(); }, 5000);
+                    return;
+                  }
+                  setTimeout(pollOffer, pollInterval);
+                });
+            }
+
+            var checkTimer = setInterval(function () {
+              ElacityAPI.searchOfferEvents(null, null, 10).then(function (events) {
+                var found = events.some(function (e) {
+                  var from = (e.from && e.from.address || '').toLowerCase();
+                  var sa = (Wallet.getSmartAccountAddress() || '').toLowerCase();
+                  var eoa = (Wallet.getAddress() || '').toLowerCase();
+                  return from === sa || from === eoa;
+                });
+                if (found) {
+                  clearInterval(checkTimer);
+                  u.showToast('Offer confirmed on-chain!', 'success');
+                  modal.remove();
+                  var detailNft = (window.ElaMarket || {}).state && window.ElaMarket.state.detailItem;
+                  if (detailNft) renderOfferSection(detailNft);
+                  if (state.earningsTab === 'offers') loadEarningsOffers();
+                }
+              }).catch(function () {});
+            }, 5000);
+
+            setTimeout(function () {
+              clearInterval(checkTimer);
+              if (document.getElementById('offer-modal')) {
+                statusEl.innerHTML = 'Offer may still be processing. ' +
+                  (txId ? '<a href="https://universalx.app/activity/details?id=' + txId + '" target="_blank" style="color:var(--accent);">Check status</a>' : 'Check your Earnings tab later.');
+                setTimeout(function () { modal.remove(); }, 6000);
+              }
+            }, 60000);
+
+            return;
+          }
+
           u.showToast('Offer submitted!', 'success');
           modal.remove();
+          var detailNft = (window.ElaMarket || {}).state && window.ElaMarket.state.detailItem;
+          if (detailNft) setTimeout(function () { renderOfferSection(detailNft); }, 2000);
+          if (state.earningsTab === 'offers') setTimeout(loadEarningsOffers, 3000);
         })
         .catch(function (err) {
           btn.disabled = false;
           btn.textContent = 'Submit Offer';
-          if (err.message && err.message.indexOf('rejected') === -1) {
-            statusEl.textContent = 'Failed: ' + u.decodeContractError(err.message);
-          } else {
+          var msg = err.message || '';
+          if (msg.indexOf('rejected') !== -1 || msg.indexOf('denied') !== -1) {
             statusEl.classList.add('hidden');
+            return;
+          }
+          if (msg.indexOf('simulation failed') !== -1 || msg.indexOf('NoOverrideError') !== -1) {
+            statusEl.textContent = 'You already have an active offer for this asset. Cancel it first.';
+          } else if (msg.indexOf('TradeActionRestricted') !== -1) {
+            statusEl.textContent = 'This wallet does not have trade access. You need to own an access token first.';
+          } else {
+            statusEl.textContent = 'Failed: ' + u.decodeContractError(msg);
           }
         });
     });
@@ -948,10 +1214,21 @@
 
     Promise.all([
       ElacityAPI.searchOfferEvents(null, null, 50).catch(function () { return []; }),
-      ElacityAPI.searchIncomingOfferEvents(null, null, 50).catch(function () { return []; })
+      ElacityAPI.searchIncomingOfferEvents(null, null, 50).catch(function () { return []; }),
+      ElacityAPI.getV3Operatives()
     ]).then(function (results) {
-      var outgoing = results[0] || [];
-      var incoming = results[1] || [];
+      var allOutgoing = results[0] || [];
+      var allIncoming = results[1] || [];
+      var v3Set = results[2];
+
+      var outgoing = allOutgoing.filter(function (evt) {
+        var addr = getOfferContractAddr(evt);
+        return addr && v3Set.has(addr.toLowerCase());
+      });
+      var incoming = allIncoming.filter(function (evt) {
+        var addr = getOfferContractAddr(evt);
+        return addr && v3Set.has(addr.toLowerCase());
+      });
 
       if (outgoing.length === 0 && incoming.length === 0) {
         listEl.innerHTML = '<div class="empty-state"><p>No offers found</p></div>';
@@ -971,13 +1248,14 @@
           var tokenAddr = getOfferContractAddr(evt);
           var tokenName = getOfferTokenName(evt);
           var price = evt.price ? u.formatPrice(evt.price, evt.paymentToken) : '';
+          var offerFrom = (evt.from && evt.from.address) || '';
           html += '<div class="offer-row">';
           html += '<span style="flex:1;font-weight:500;">' + u.escapeHtml(tokenName) + '</span>';
           html += '<span>x' + (evt.quantity || 1) + '</span>';
           if (price) html += '<span style="font-weight:600;">' + price + '</span>';
           html += '<span style="font-size:11px;color:var(--text-tertiary);">' + (evt.createdAt ? new Date(evt.createdAt).toLocaleDateString() : '') + '</span>';
           if (tokenAddr) {
-            html += '<button class="earnings-withdraw-btn" data-action="cancel-offer" data-contract="' + u.escapeHtml(tokenAddr) + '">Cancel</button>';
+            html += '<button class="earnings-withdraw-btn" data-action="cancel-offer" data-contract="' + u.escapeHtml(tokenAddr) + '" data-offerer="' + u.escapeHtml(offerFrom) + '">Cancel</button>';
           }
           html += '</div>';
         });
@@ -1004,15 +1282,23 @@
 
       listEl.innerHTML = html;
 
+      var eoaAddr = (Wallet.getAddress() || '').toLowerCase();
+      var saAddr = (Wallet.getSmartAccountAddress() || '').toLowerCase();
+      var hasSA = Wallet.hasSmartAccount() && saAddr && saAddr !== eoaAddr;
+
       listEl.querySelectorAll('[data-action="cancel-offer"]').forEach(function (btn) {
         btn.addEventListener('click', function (e) {
           e.stopPropagation();
           var addr = btn.dataset.contract;
+          var offerer = (btn.dataset.offerer || '').toLowerCase();
+          var cancelWallet = (hasSA && offerer === saAddr) ? 'sa' : undefined;
           btn.disabled = true;
           btn.textContent = '...';
-          Wallet.cancelRoyaltyOffer(addr).then(function () {
+          Wallet.cancelRoyaltyOffer(addr, cancelWallet).then(function () {
             u.showToast('Offer cancelled', 'success');
             btn.parentNode.remove();
+            if (typeof ElacityAPI !== 'undefined' && ElacityAPI.clearEarningsCache) ElacityAPI.clearEarningsCache(true);
+            setTimeout(updateEarningsBadge, 3000);
           }).catch(function (err) {
             btn.disabled = false;
             btn.textContent = 'Cancel';
@@ -1030,10 +1316,22 @@
           var from = btn.dataset.from;
           var qty = parseInt(btn.dataset.qty) || 1;
           btn.disabled = true;
-          btn.textContent = '...';
-          Wallet.acceptRoyaltyOffer(from, addr, qty).then(function () {
+          btn.textContent = 'Checking...';
+
+          var detectWallet = Promise.resolve(undefined);
+          if (hasSA) {
+            detectWallet = Wallet.getRoyaltyShareBalance(addr, saAddr)
+              .then(function (bal) { return Number(bal) >= qty ? 'sa' : undefined; })
+              .catch(function () { return undefined; });
+          }
+          detectWallet.then(function (acceptWallet) {
+            btn.textContent = '...';
+            return Wallet.acceptRoyaltyOffer(from, addr, qty, acceptWallet);
+          }).then(function () {
             u.showToast('Offer accepted!', 'success');
             btn.parentNode.remove();
+            if (typeof ElacityAPI !== 'undefined' && ElacityAPI.clearEarningsCache) ElacityAPI.clearEarningsCache(true);
+            setTimeout(updateEarningsBadge, 3000);
           }).catch(function (err) {
             btn.disabled = false;
             btn.textContent = 'Accept';
@@ -1125,9 +1423,14 @@
             btn.disabled = true;
             btn.textContent = '...';
             var qty = parseInt(btn.dataset.qty);
-            Wallet.cancelRoyaltyListing(operativeAddr, qty).then(function () {
+            var sellerLower = (btn.dataset.seller || '').toLowerCase();
+            var cancelWallet = (Wallet.hasSmartAccount() && sellerLower === saAddr) ? 'sa' : undefined;
+            Wallet.cancelRoyaltyListing(operativeAddr, qty, cancelWallet).then(function () {
               u.showToast('Listing cancelled', 'success');
               renderOrderBook(nft);
+              if (window.ElaMarket && window.ElaMarket.renderGovernanceSection) {
+                setTimeout(function () { window.ElaMarket.renderGovernanceSection(nft); }, 2000);
+              }
             }).catch(function (err) {
               btn.disabled = false;
               btn.textContent = 'Cancel';
@@ -1220,6 +1523,13 @@
           u.showToast('Royalty shares purchased!', 'success');
           modal.remove();
           if (typeof ElacityAPI !== 'undefined' && ElacityAPI.clearEarningsCache) ElacityAPI.clearEarningsCache(true);
+          var detailNft = (window.ElaMarket || {}).state && window.ElaMarket.state.detailItem;
+          if (detailNft) {
+            setTimeout(function () {
+              renderOrderBook(detailNft);
+              if (window.ElaMarket && window.ElaMarket.renderGovernanceSection) window.ElaMarket.renderGovernanceSection(detailNft);
+            }, 2000);
+          }
         })
         .catch(function (err) {
           btn.disabled = false;
@@ -1290,7 +1600,7 @@
           html += '<span class="vendor-price">$' + priceFmt + '</span>';
 
           if (isSelf) {
-            html += '<button class="action-btn vendor-cancel" data-operative="' + u.escapeHtml(operativeAddr) + '" data-tokenid="' + u.escapeHtml(tokenId) + '" data-qty="' + l.quantity + '" style="font-size:11px;padding:4px 10px;color:#ef4444;border-color:#ef4444;">Cancel</button>';
+            html += '<button class="action-btn vendor-cancel" data-operative="' + u.escapeHtml(operativeAddr) + '" data-tokenid="' + u.escapeHtml(tokenId) + '" data-qty="' + l.quantity + '" data-seller="' + u.escapeHtml(l.seller) + '" style="font-size:11px;padding:4px 10px;color:#ef4444;border-color:#ef4444;">Cancel</button>';
           } else {
             html += '<div class="vendor-buy-group">' +
               '<input type="number" class="vendor-qty-input" value="1" min="1" max="' + l.quantity + '" title="Quantity" />' +
@@ -1324,6 +1634,9 @@
             ).then(function (result) {
                 u.showToast(result && result._uaPending ? 'Purchase submitted — settling on-chain' : 'Access token purchased!', 'success');
                 renderVendorsSection(nft);
+                if (window.ElaMarket && window.ElaMarket.enrichFromChain) {
+                  setTimeout(function () { window.ElaMarket.enrichFromChain(nft); }, 2000);
+                }
               })
               .catch(function (err) {
                 btn.disabled = false;
@@ -1339,10 +1652,15 @@
           btn.addEventListener('click', function () {
             btn.disabled = true;
             btn.textContent = '...';
-            Wallet.cancelAccessListing(btn.dataset.operative, btn.dataset.tokenid, parseInt(btn.dataset.qty))
+            var sellerLower = (btn.dataset.seller || '').toLowerCase();
+            var cancelWallet = (Wallet.hasSmartAccount() && sellerLower === saAddr) ? 'sa' : undefined;
+            Wallet.cancelAccessListing(btn.dataset.operative, btn.dataset.tokenid, parseInt(btn.dataset.qty), cancelWallet)
               .then(function () {
                 u.showToast('Listing cancelled', 'success');
                 renderVendorsSection(nft);
+                if (window.ElaMarket && window.ElaMarket.enrichFromChain) {
+                  setTimeout(function () { window.ElaMarket.enrichFromChain(nft); }, 2000);
+                }
               })
               .catch(function (err) {
                 btn.disabled = false;
@@ -1438,11 +1756,41 @@
       if (!confirm('Remove your listing for this asset? You can re-list later.')) return;
       var btn = this;
       btn.disabled = true;
-      btn.querySelector('span').textContent = 'Delisting...';
-      Wallet.cancelAccessListing(operativeAddr, tokenId).then(function () {
+      btn.querySelector('span').textContent = 'Finding listing...';
+
+      var eoaLower = eoaAddr.toLowerCase();
+      var saLower = saAddr.toLowerCase();
+      var hasSA = Wallet.hasSmartAccount() && saLower && saLower !== eoaLower;
+      var fetches = [
+        Wallet.getAccessListing(operativeAddr, Wallet.TOKEN_ID_ACCESS, eoaAddr).catch(function () { return null; })
+      ];
+      if (hasSA) {
+        fetches.push(Wallet.getAccessListing(operativeAddr, Wallet.TOKEN_ID_ACCESS, saAddr).catch(function () { return null; }));
+      }
+
+      Promise.all(fetches).then(function (results) {
+        var eoaListing = results[0];
+        var saListing = hasSA ? results[1] : null;
+        var listing = null;
+        var walletKey = 'eoa';
+        if (saListing && saListing.quantity > 0) { listing = saListing; walletKey = 'sa'; }
+        if (eoaListing && eoaListing.quantity > 0) { listing = eoaListing; walletKey = 'eoa'; }
+        if (!listing || !listing.quantity) {
+          u.showToast('No active listing found', 'error');
+          btn.disabled = false;
+          btn.querySelector('span').textContent = 'Delist';
+          return;
+        }
+        btn.querySelector('span').textContent = 'Delisting...';
+        var fromWallet = walletKey === 'sa' ? 'sa' : undefined;
+        return Wallet.cancelAccessListing(operativeAddr, tokenId, listing.quantity, fromWallet);
+      }).then(function () {
         u.showToast('Listing removed', 'success');
         strip.remove();
         renderVendorsSection(nft);
+        if (window.ElaMarket && window.ElaMarket.enrichFromChain) {
+          setTimeout(function () { window.ElaMarket.enrichFromChain(nft); }, 2000);
+        }
       }).catch(function (err) {
         u.showToast('Delist failed: ' + (err.message || err), 'error');
         btn.disabled = false;
@@ -1451,8 +1799,8 @@
     });
 
     document.getElementById('publisher-earnings-btn').addEventListener('click', function () {
-      if (typeof window.ElacityApp !== 'undefined' && window.ElacityApp.switchView) {
-        window.ElacityApp.switchView('earnings');
+      if (window.ElaMarket && window.ElaMarket.switchView) {
+        window.ElaMarket.switchView('earnings');
       }
     });
   }
@@ -2310,6 +2658,9 @@
   window.ElaMarket.openTransferSharesModal = function (contractAddr) {
     openTransferSharesModal(contractAddr, 'eoa', 0);
   };
+  window.ElaMarket.renderOrderBook = renderOrderBook;
+  window.ElaMarket.loadEarningsOffers = loadEarningsOffers;
+  window.ElaMarket.renderVendorsSection = renderVendorsSection;
 
   // ── Hook into earnings view ───────────────────────
 

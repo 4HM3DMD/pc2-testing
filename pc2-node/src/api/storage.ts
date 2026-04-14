@@ -604,22 +604,31 @@ router.post('/ipfs/pin', authenticate, async (req: AuthenticatedRequest, res: Re
       return res.status(503).json({ error: 'IPFS not available' });
     }
 
-    const { cid, estimatedSize } = req.body;
+    const { cid, estimatedSize, buyerWallets } = req.body;
     if (!cid || typeof cid !== 'string') {
       return res.status(400).json({ error: 'Missing or invalid CID' });
     }
 
     const cidClean = cid.replace(/^ipfs:\/\//, '').replace(/^\/ipfs\//, '').split('/')[0];
     const walletAddress = req.user?.wallet_address;
+    const extraWallets: string[] = Array.isArray(buyerWallets)
+      ? buyerWallets.filter((w: unknown) => typeof w === 'string' && w.length > 0).map((w: string) => w.toLowerCase())
+      : [];
 
-    // Delegate to ContentSeedingService when available — handles dedup,
-    // queue management, retry, DHT announce, and DB tracking automatically.
     const seedingService = req.app.locals.seedingService;
     if (seedingService && walletAddress) {
       seedingService.seedContent(cidClean, walletAddress, {
         priority: 'immediate',
         estimatedSizeBytes: estimatedSize || 0,
       });
+
+      const db = req.app.locals.db;
+      if (db && extraWallets.length > 0) {
+        for (const bw of extraWallets) {
+          try { db.trackPinnedCID(cidClean, bw, estimatedSize || 0, 'marketplace'); } catch (_) { /* non-fatal */ }
+        }
+      }
+
       return res.json({
         success: true,
         cid: cidClean,
@@ -641,6 +650,11 @@ router.post('/ipfs/pin', authenticate, async (req: AuthenticatedRequest, res: Re
           db.trackPinnedCID(cidClean, walletAddress, result.size || 0, 'marketplace');
         } catch (trackErr) {
           logger.warn(`[Storage API] Failed to track pinned CID (non-fatal): ${cidClean}`, trackErr);
+        }
+      }
+      if (db && extraWallets.length > 0) {
+        for (const bw of extraWallets) {
+          try { db.trackPinnedCID(cidClean, bw, result.size || 0, 'marketplace'); } catch (_) { /* non-fatal */ }
         }
       }
 

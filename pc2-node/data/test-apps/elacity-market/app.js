@@ -1796,7 +1796,7 @@
           if (isBest) html += '<span class="best-price-tag">Best Price</span>';
           html += '<span class="seller-qty">x' + r.listing.quantity + '</span>';
           if (isSelf) {
-            html += '<button class="cancel-listing-btn" data-operative="' + operativeAddr + '" data-tokenid="' + tokenId + '" data-qty="' + r.listing.quantity + '">Cancel</button>';
+            html += '<button class="cancel-listing-btn" data-operative="' + operativeAddr + '" data-tokenid="' + tokenId + '" data-qty="' + r.listing.quantity + '" data-seller="' + r.seller + '">Cancel</button>';
           }
           html += '</div>';
         });
@@ -1809,12 +1809,15 @@
             var op = btn.getAttribute('data-operative');
             var tid = btn.getAttribute('data-tokenid');
             var qty = btn.getAttribute('data-qty');
+            var sellerAddr = (btn.getAttribute('data-seller') || '').toLowerCase();
+            var cancelWallet = (saAddr && Wallet.hasSmartAccount() && sellerAddr === saAddr.toLowerCase()) ? 'sa' : undefined;
             btn.disabled = true;
             btn.textContent = '...';
-            Wallet.cancelAccessListing(op, tid, qty)
+            Wallet.cancelAccessListing(op, tid, qty, cancelWallet)
               .then(function () {
                 showToast('Listing cancelled', 'success');
                 btn.parentNode.remove();
+                if (state.detailItem) setTimeout(function () { enrichFromChain(state.detailItem); }, 2000);
               })
               .catch(function (err) {
                 btn.disabled = false;
@@ -1840,9 +1843,13 @@
       'NotApprovedError': 'Please approve the contract first',
       'NotAllowedError': "You don't have permission for this action",
       'PriceFulfillmentError': 'Incorrect payment amount',
-      'NoOverrideError': 'Cannot override existing listing',
+      'NoOverrideError': 'You already have an active offer. Cancel it first before making a new one.',
+      'TradeActionRestricted': 'You need an access token before you can trade royalty shares.',
+      'TradableContractFault': 'This asset does not support royalty share trading.',
+      'ReentrantTradeEntryCall': 'Transaction in progress — please wait and try again.',
       'AccessDenied': "You don't have access to this content",
-      'InvalidSignature': 'Invalid license signature'
+      'InvalidSignature': 'Invalid license signature',
+      'simulation failed': 'Transaction would fail on-chain. You may already have an active offer.'
     };
     var keys = Object.keys(errorMap);
     for (var i = 0; i < keys.length; i++) {
@@ -1941,6 +1948,14 @@
         showToast('Rewards withdrawn!', 'success');
         dom.govWithdrawBtn.classList.add('hidden');
         dom.govRewards.innerHTML = '<span class="label">Pending rewards:</span> <span class="value">0 USDC</span>';
+        ElacityAPI.clearEarningsCache(true);
+        setTimeout(function () {
+          if (window.ElaMarket && window.ElaMarket.loadEarningsData) {
+            window.ElaMarket.loadEarningsData(state.earningsTab);
+          } else {
+            loadEarningsData(state.earningsTab);
+          }
+        }, 3000);
       })
       .catch(function (err) {
         if (err.message && err.message.indexOf('rejected') === -1) {
@@ -1999,6 +2014,12 @@
         dom.govListStatus.className = 'modal-status success';
         showToast('Royalty shares listed for sale!', 'success');
         setTimeout(closeGovListModal, 1500);
+        if (state.detailItem) {
+          setTimeout(function () {
+            renderGovernanceSection(state.detailItem);
+            if (window.ElaMarket && window.ElaMarket.renderOrderBook) window.ElaMarket.renderOrderBook(state.detailItem);
+          }, 2000);
+        }
       })
       .catch(function (err) {
         if (err.message && err.message.indexOf('rejected') !== -1) {
@@ -2056,6 +2077,12 @@
         dom.govTransferStatus.className = 'modal-status success';
         showToast('Royalty shares transferred!', 'success');
         setTimeout(closeGovTransferModal, 1500);
+        if (state.detailItem) {
+          setTimeout(function () {
+            renderGovernanceSection(state.detailItem);
+            if (window.ElaMarket && window.ElaMarket.renderOrderBook) window.ElaMarket.renderOrderBook(state.detailItem);
+          }, 2000);
+        }
       })
       .catch(function (err) {
         if (err.message && err.message.indexOf('rejected') !== -1) {
@@ -2216,6 +2243,7 @@
         dom.resellStatus.className = 'modal-status success';
         showToast('Access token listed for resale!', 'success');
         setTimeout(closeResellModal, 1500);
+        if (state.detailItem) setTimeout(function () { enrichFromChain(state.detailItem); }, 2000);
       })
       .catch(function (err) {
         if (err.message && (err.message.indexOf('rejected') !== -1 || err.message.indexOf('denied') !== -1)) {
@@ -2540,17 +2568,73 @@
 
   function openSubscribeModal(channel, plans) {
     state.selectedPlan = null;
+    state.selectedSubWallet = null;
     var modalEl = document.getElementById('subscribe-modal');
     var titleEl = document.getElementById('sub-modal-title');
     var plansEl = document.getElementById('sub-modal-plans');
     var confirmEl = document.getElementById('sub-modal-confirm');
     var statusEl = document.getElementById('sub-modal-status');
+    var pickerEl = document.getElementById('sub-wallet-picker');
+    var saOptEl = document.getElementById('sub-wallet-sa');
+    var eoaOptEl = document.getElementById('sub-wallet-eoa');
 
     titleEl.textContent = 'Subscribe to ' + (channel.name || 'Channel');
     statusEl.textContent = '';
     statusEl.className = 'sub-modal-status';
     confirmEl.disabled = true;
     confirmEl.textContent = 'Select a plan';
+    pickerEl.classList.add('hidden');
+    saOptEl.classList.remove('selected');
+    eoaOptEl.classList.remove('selected');
+
+    var hasSA = Wallet.isConnected() && Wallet.hasSmartAccount();
+    var eoaAddr = Wallet.getAddress() || '';
+    var saAddr = Wallet.getSmartAccountAddress() || '';
+
+    document.getElementById('sub-wallet-eoa-addr').textContent = eoaAddr ? (eoaAddr.slice(0, 6) + '...' + eoaAddr.slice(-4)) : '';
+    document.getElementById('sub-wallet-sa-addr').textContent = saAddr ? (saAddr.slice(0, 6) + '...' + saAddr.slice(-4)) : '';
+    document.getElementById('sub-wallet-eoa-bal').textContent = '';
+    document.getElementById('sub-wallet-sa-bal').textContent = '';
+
+    function updateConfirmButton() {
+      var plan = state.selectedPlan;
+      var wallet = state.selectedSubWallet;
+      if (!plan) {
+        confirmEl.disabled = true;
+        confirmEl.textContent = 'Select a plan';
+      } else if (hasSA && !wallet) {
+        confirmEl.disabled = true;
+        confirmEl.textContent = 'Select a wallet';
+      } else {
+        confirmEl.disabled = false;
+        var priceStr = formatPrice(plan.price, plan.payToken);
+        confirmEl.textContent = 'Subscribe for ' + priceStr;
+      }
+    }
+
+    function fetchBalances(payToken) {
+      var isNative = !payToken || payToken === ADDRESS_ZERO;
+      var fetchFn = isNative ? Wallet.getNativeBalance : function (addr) { return Wallet.getERC20Balance(payToken, addr); };
+      var decimals = isNative ? 18 : null;
+
+      var decPromise = decimals !== null ? Promise.resolve(decimals) : Wallet.getTokenDecimals(payToken);
+      decPromise.then(function (dec) {
+        if (eoaAddr) {
+          fetchFn(eoaAddr).then(function (raw) {
+            var human = Number(ethers.formatUnits(raw, dec));
+            var symbol = isNative ? 'ETH' : (payToken.toLowerCase() === Wallet.USDC_ADDRESS.toLowerCase() ? 'USDC' : '');
+            document.getElementById('sub-wallet-eoa-bal').textContent = human.toFixed(dec <= 6 ? 2 : 4) + (symbol ? ' ' + symbol : '');
+          });
+        }
+        if (hasSA && saAddr) {
+          fetchFn(saAddr).then(function (raw) {
+            var human = Number(ethers.formatUnits(raw, dec));
+            var symbol = isNative ? 'ETH' : (payToken.toLowerCase() === Wallet.USDC_ADDRESS.toLowerCase() ? 'USDC' : '');
+            document.getElementById('sub-wallet-sa-bal').textContent = human.toFixed(dec <= 6 ? 2 : 4) + (symbol ? ' ' + symbol : '');
+          });
+        }
+      });
+    }
 
     plansEl.innerHTML = '';
     plans.forEach(function (plan) {
@@ -2573,12 +2657,32 @@
         plansEl.querySelectorAll('.sub-plan-option').forEach(function (o) { o.classList.remove('selected'); });
         option.classList.add('selected');
         state.selectedPlan = plan;
-        confirmEl.disabled = false;
-        confirmEl.textContent = 'Subscribe for ' + priceStr;
+
+        if (hasSA) {
+          pickerEl.classList.remove('hidden');
+          fetchBalances(plan.payToken);
+        } else {
+          state.selectedSubWallet = 'eoa';
+        }
+        updateConfirmButton();
       });
 
       plansEl.appendChild(option);
     });
+
+    function selectWallet(walletKey) {
+      state.selectedSubWallet = walletKey;
+      saOptEl.classList.toggle('selected', walletKey === 'sa');
+      eoaOptEl.classList.toggle('selected', walletKey === 'eoa');
+      updateConfirmButton();
+    }
+
+    saOptEl.onclick = function () { selectWallet('sa'); };
+    eoaOptEl.onclick = function () { selectWallet('eoa'); };
+
+    if (!hasSA && Wallet.isConnected()) {
+      state.selectedSubWallet = 'eoa';
+    }
 
     modalEl.classList.remove('hidden');
   }
@@ -2586,11 +2690,13 @@
   function closeSubscribeModal() {
     document.getElementById('subscribe-modal').classList.add('hidden');
     state.selectedPlan = null;
+    state.selectedSubWallet = null;
   }
 
   function executeSubscription() {
     var channel = state.channelData;
     var plan = state.selectedPlan;
+    var walletChoice = state.selectedSubWallet;
     if (!channel || !plan) return;
 
     var confirmEl = document.getElementById('sub-modal-confirm');
@@ -2610,55 +2716,18 @@
       authPromise = Promise.resolve();
     }
 
+    var isNative = !plan.payToken || plan.payToken === ADDRESS_ZERO;
+    var fromWallet = walletChoice === 'sa' ? 'sa' : undefined;
+
     authPromise
       .then(function () {
-        statusEl.textContent = 'Switching to Base chain...';
-        return Wallet.switchToBase ? Wallet.switchToBase() : Promise.resolve();
+        statusEl.textContent = 'Preparing transaction...';
+        return Wallet.getTokenDecimals(isNative ? null : plan.payToken);
       })
-      .then(function () {
-        if (typeof ethers === 'undefined') throw new Error('Ethers library not loaded');
-        var provider = new ethers.BrowserProvider(window.ethereum);
-        return provider.getSigner();
-      })
-      .then(function (signer) {
-        var channelContract = new ethers.Contract(channel.address, SUBSCRIPTION_ABI, signer);
-        var isNativeToken = !plan.payToken || plan.payToken === ADDRESS_ZERO;
-
-        if (isNativeToken) {
-          statusEl.textContent = 'Confirm transaction in your wallet...';
-          var value = ethers.parseEther(String(plan.price));
-          return channelContract.subscribePlan(plan.planId, false, { value: value });
-        }
-
-        statusEl.textContent = 'Checking token allowance...';
-        var tokenContract = new ethers.Contract(plan.payToken, ERC20_ABI, signer);
-
-        return tokenContract.decimals()
-          .then(function (decimals) {
-            var amount = ethers.parseUnits(String(plan.price), Number(decimals));
-            return signer.getAddress().then(function (account) {
-              return channelContract.paymentProcessor()
-                .catch(function () { return channel.address; })
-                .then(function (operator) {
-                  return tokenContract.allowance(account, operator).then(function (currentAllowance) {
-                    if (currentAllowance < amount) {
-                      statusEl.textContent = 'Approve token spending...';
-                      return tokenContract.approve(operator, amount).then(function (tx) {
-                        statusEl.textContent = 'Waiting for approval confirmation...';
-                        return tx.wait();
-                      });
-                    }
-                  }).then(function () {
-                    statusEl.textContent = 'Confirm subscription in your wallet...';
-                    return channelContract.subscribePlan(plan.planId, false);
-                  });
-                });
-            });
-          });
-      })
-      .then(function (tx) {
-        statusEl.textContent = 'Waiting for confirmation...';
-        return tx.wait();
+      .then(function (decimals) {
+        var priceWei = ethers.parseUnits(String(plan.price), decimals).toString();
+        statusEl.textContent = 'Confirm in your wallet...';
+        return Wallet.subscribeChannel(channel.address, plan.planId, plan.payToken, priceWei, fromWallet);
       })
       .then(function () {
         statusEl.textContent = '';
@@ -3106,7 +3175,7 @@
         var MAX_RESOLVE = 20;
         var toResolve = playlist.contents.slice(0, MAX_RESOLVE);
         var fetches = toResolve.map(function (item) {
-          return ElacityAPI.getAssetDetail(item.contractAddress, item.tokenId)
+          return ElacityAPI.fetchAssetFromCatalog(item.contractAddress, item.tokenId)
             .catch(function () { return null; });
         });
 
@@ -3402,6 +3471,8 @@
           state.detailIsOwned = true;
           pinAndRegisterMedia(nft);
 
+          setTimeout(function () { enrichFromChain(nft); }, 2000);
+
           state.assetsItems = [];
           state.assetsLoading = false;
           setTimeout(function () { state.assetsItems = []; }, 8000);
@@ -3409,6 +3480,7 @@
         } else if (uaPending) {
           setBuyButtonState('confirming', 'Transaction submitted — settling on-chain. This may take a minute…');
           showToast('Transaction submitted to Universal Account. Check status shortly.', 'info');
+          setTimeout(function () { enrichFromChain(nft); }, 15000);
           if (receipt.transactionId) {
             console.log('[Buy] UA transaction pending. Check: https://universalx.app/activity/details?id=' + receipt.transactionId);
           }
@@ -3555,6 +3627,8 @@
 
     dom.downloadNodeBtn.disabled = true;
     dom.downloadNodeBtn.querySelector('span').textContent = 'Saving...';
+    dom.purchaseStatus.classList.add('fade-out');
+    setTimeout(function () { dom.purchaseStatus.classList.add('hidden'); dom.purchaseStatus.classList.remove('fade-out'); }, 300);
     dom.downloadStatus.className = 'download-status pending';
     dom.downloadStatus.innerHTML = '<div class="download-progress-wrap"><div class="download-progress-bar"><div class="download-progress-fill"></div></div><span class="download-progress-text">Saving to your personal cloud...</span></div>';
     dom.downloadStatus.classList.remove('hidden');
@@ -3588,10 +3662,13 @@
       }
     }, 800);
 
+    var buyerWallets = [Wallet.getAddress(), Wallet.getSignerAddress()].filter(Boolean).map(function (a) { return a.toLowerCase(); });
+    var uniqueBuyers = buyerWallets.filter(function (v, i, arr) { return arr.indexOf(v) === i; });
+
     pc2Fetch('/api/storage/ipfs/pin', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ cid: cid })
+      body: JSON.stringify({ cid: cid, buyerWallets: uniqueBuyers })
     })
       .then(function (res) {
         if (!res.ok) throw new Error('Download failed: ' + res.status);
@@ -4559,7 +4636,8 @@
     renderGovernanceSection: renderGovernanceSection,
     renderSupplyInfo: renderSupplyInfo,
     renderOpTypeBadge: renderOpTypeBadge,
-    renderOwnershipBalances: renderOwnershipBalances
+    renderOwnershipBalances: renderOwnershipBalances,
+    enrichFromChain: enrichFromChain
   };
 
   if (document.readyState === 'loading') {

@@ -1891,7 +1891,6 @@ export class DatabaseManager {
         AND (
           LOWER(cc.creator_address) = ?
           OR cc.content_cid IN (SELECT cid FROM pinned_cids WHERE LOWER(wallet_address) = ?)
-          OR cc.content_cid IN (SELECT DISTINCT cid FROM pinned_cids)
         )
       ORDER BY cc.block_number DESC
       LIMIT ? OFFSET ?
@@ -1903,7 +1902,6 @@ export class DatabaseManager {
         AND (
           LOWER(cc.creator_address) = ?
           OR cc.content_cid IN (SELECT cid FROM pinned_cids WHERE LOWER(wallet_address) = ?)
-          OR cc.content_cid IN (SELECT DISTINCT cid FROM pinned_cids)
         )
     `;
 

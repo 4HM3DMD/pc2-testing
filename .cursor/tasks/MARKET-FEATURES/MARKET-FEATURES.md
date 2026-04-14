@@ -2,7 +2,7 @@
 
 **Task ID**: MARKET-FEATURES
 **Created**: 2026-03-20
-**Updated**: 2026-04-09
+**Updated**: 2026-04-14
 **Status**: InProgress
 **Priority**: High
 
@@ -120,6 +120,17 @@ See full audit: `.cursor/tasks/MARKET-FEATURES/MARKET-UI-AUDIT-APRIL-2026.md`
 - **P2**: `transferNFT` is EOA-only
 - **P2**: `expectTokens` hardcodes USDC 6 decimals
 
+### Phase 6 — Elastos NFT Marketplace App (InProgress 2026-04-09 → 2026-04-14)
+- [x] **Build pipeline** — `scripts/build-elastos-nft.sh` clones `elacity-web` `develop` branch, patches for ESC (chain 20), builds Vite SPA
+- [x] **Auto-login** — PC2 wallet injected via `pc2-wallet-bridge.js`; `ConnectorSelect` renders null; `active` = `!!(account)`
+- [x] **UI stripping** — Removed Home tab, Messages, Subscriptions, Create button; Explore is default landing
+- [x] **Content filtering** — API-level `contentType: ['image']` on Explore, Latest NFTs, Most Viewed, Recently Sold
+- [x] **Collections** — Directory renamed to "Collections"; `contractType: 'Collection'` filter on New Collections
+- [x] **Sidebar cleanup** — Only Explore, Collections, Library (Images tab), Revenue pages remain
+- [x] **Tier 1 bundle cleanup** — Removed XMTP WASM, unused route chunks, marketing images; 45MB → 22MB
+- [x] **Conservative chunk fix** — Restored chunks imported by shared contexts (CapsuleExplorer, ChannelViewContext, MediaRawContext, useAccessibility, wrongPasswordModal)
+- [ ] **Full verification** — End-to-end testing of all pages after cleanup
+
 ## Future Considerations
 
 - Subscription plan management (`bulkUpdatePlans`) for channel owners
@@ -137,3 +148,4 @@ See full audit: `.cursor/tasks/MARKET-FEATURES/MARKET-UI-AUDIT-APRIL-2026.md`
 - `pc2-node/src/api/index.ts` — Catalog/earnings/graphql-proxy endpoints
 - `pc2-node/src/storage/database.ts` — Catalog model, channel metadata, operative lookup
 - `pc2-node/src/storage/migrations.ts` — Migrations 24-26
+- `scripts/build-elastos-nft.sh` — Elastos NFT app build pipeline (clone, patch, build, cleanup)

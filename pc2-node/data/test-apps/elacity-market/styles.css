@@ -1118,6 +1118,7 @@ body {
   font-size: 12px;
   padding: 6px 12px;
   border-radius: var(--radius-sm);
+  margin-top: 8px;
   margin-bottom: 12px;
 }
 .download-status.pending { color: var(--text-secondary); background: var(--card-bg); }
@@ -1239,7 +1240,9 @@ body {
   font-size: 13px;
   line-height: 1.5;
   margin-top: 12px;
+  transition: opacity 0.3s ease;
 }
+.purchase-status.fade-out { opacity: 0; }
 
 .purchase-status.pending { background: rgba(245, 158, 11, 0.12); color: var(--warning); }
 .purchase-status.success { background: rgba(34, 197, 94, 0.12); color: var(--success); }
@@ -1400,6 +1403,37 @@ body {
 
 .sub-modal-confirm:hover:not(:disabled) { background: var(--accent-hover); }
 .sub-modal-confirm:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ── Subscribe Wallet Picker ─────────────────────────── */
+.sub-wallet-picker { padding: 0 20px 12px; }
+.sub-wallet-picker.hidden { display: none; }
+.sub-wallet-label {
+  font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.5px; color: var(--text-secondary); margin-bottom: 8px;
+}
+.sub-wallet-options { display: flex; gap: 8px; }
+.sub-wallet-opt {
+  flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px;
+  padding: 10px 8px; border-radius: 8px; cursor: pointer;
+  border: 2px solid var(--border); background: var(--bg-primary);
+  transition: border-color 0.15s, background 0.15s;
+  font-family: inherit; line-height: 1.3; text-align: center;
+}
+.sub-wallet-opt:hover { border-color: var(--accent); background: rgba(99,102,241,0.06); }
+.sub-wallet-opt.selected {
+  border-color: var(--accent); background: rgba(99,102,241,0.1);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.sub-wallet-name { font-size: 12px; font-weight: 600; color: var(--text-primary); }
+.sub-wallet-addr {
+  font-size: 10px; color: var(--text-secondary); font-family: var(--font-mono);
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sub-wallet-bal {
+  font-size: 11px; font-weight: 600; color: var(--accent);
+  min-height: 15px;
+}
+.sub-wallet-bal.insufficient { color: #ef4444; }
 
 /* ── Wallet Choice Modal ─────────────────────────────── */
 .wallet-choice-overlay {

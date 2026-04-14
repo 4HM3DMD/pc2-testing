@@ -584,6 +584,25 @@ var ElacityAPI = (function () {
       }\n\
     }';
 
+  // ── V3 Operative Registry ──────────────────────────────
+
+  var _v3OperativesCache = null;
+
+  function getV3Operatives() {
+    if (_v3OperativesCache) return Promise.resolve(_v3OperativesCache);
+    var origin = window.puter_api_origin || window.location.origin;
+    return fetch(origin + '/api/catalog/operatives')
+      .then(function (res) { return res.json(); })
+      .then(function (json) {
+        if (json.success && json.operatives) {
+          _v3OperativesCache = new Set(json.operatives.map(function (a) { return a.toLowerCase(); }));
+          return _v3OperativesCache;
+        }
+        return new Set();
+      })
+      .catch(function () { return new Set(); });
+  }
+
   // ── Public API ───────────────────────────────────────
 
   function fetchFromCatalog(offset, limit, channelAddress) {
@@ -763,7 +782,8 @@ var ElacityAPI = (function () {
 
   function fetchAccessibleAssetsForAddress(address, offset, limit) {
     if (address) {
-      return pc2Fetch('/api/catalog/owned/' + address + '?offset=' + (offset || 0) + '&limit=' + (limit || 50))
+      var origin = window.puter_api_origin || window.location.origin;
+      return fetch(origin + '/api/catalog/owned/' + address + '?offset=' + (offset || 0) + '&limit=' + (limit || 50))
         .then(function (res) { return res.json(); })
         .then(function (json) {
           if (json.success && json.items) {
@@ -1420,6 +1440,7 @@ var ElacityAPI = (function () {
     fetchAccessibleAssetsForAddress: fetchAccessibleAssetsForAddress,
     fetchWithPreset: fetchWithPreset,
     getAssetDetail: getAssetDetail,
+    fetchAssetFromCatalog: fetchAssetFromCatalog,
     getNonce: getNonce,
     login: login,
     isAuthenticated: isAuthenticated,
@@ -1449,6 +1470,7 @@ var ElacityAPI = (function () {
     searchTradeEvents: searchTradeEvents,
     searchOfferEvents: searchOfferEvents,
     searchIncomingOfferEvents: searchIncomingOfferEvents,
+    getV3Operatives: getV3Operatives,
     fetchStatisticByAsset: fetchStatisticByAsset,
     governanceStatistics: governanceStatistics,
     toggleUnpublish: toggleUnpublish,

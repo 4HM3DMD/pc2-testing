@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Elacity Market</title>
   <link rel="icon" type="image/png" href="assets/favicon.png">
-  <link rel="stylesheet" href="styles.css?v=28">
+  <link rel="stylesheet" href="styles.css?v=30">
 </head>
 <body>
 
@@ -488,6 +488,21 @@
         <button id="sub-modal-close" class="sub-modal-close" aria-label="Close">&times;</button>
       </div>
       <div id="sub-modal-plans" class="sub-modal-plans"></div>
+      <div id="sub-wallet-picker" class="sub-wallet-picker hidden">
+        <div class="sub-wallet-label">Pay with</div>
+        <div class="sub-wallet-options">
+          <button id="sub-wallet-sa" class="sub-wallet-opt" data-wallet="sa">
+            <span class="sub-wallet-name">Agent Account</span>
+            <span class="sub-wallet-addr" id="sub-wallet-sa-addr"></span>
+            <span class="sub-wallet-bal" id="sub-wallet-sa-bal"></span>
+          </button>
+          <button id="sub-wallet-eoa" class="sub-wallet-opt" data-wallet="eoa">
+            <span class="sub-wallet-name">EOA Wallet</span>
+            <span class="sub-wallet-addr" id="sub-wallet-eoa-addr"></span>
+            <span class="sub-wallet-bal" id="sub-wallet-eoa-bal"></span>
+          </button>
+        </div>
+      </div>
       <div class="sub-modal-footer">
         <div id="sub-modal-status" class="sub-modal-status"></div>
         <button id="sub-modal-confirm" class="sub-modal-confirm" disabled>Select a plan</button>
@@ -630,9 +645,9 @@
   <div id="toast-container" class="toast-container" role="status" aria-live="polite"></div>
 
   <script src="https://cdn.jsdelivr.net/npm/ethers@6.13.4/dist/ethers.umd.min.js"></script>
-  <script src="api.js?v=31"></script>
-  <script src="wallet.js?v=16"></script>
-  <script src="app.js?v=43"></script>
-  <script src="app-features.js?v=31"></script>
+  <script src="api.js?v=34"></script>
+  <script src="wallet.js?v=21"></script>
+  <script src="app.js?v=52"></script>
+  <script src="app-features.js?v=39"></script>
 </body>
 </html>
