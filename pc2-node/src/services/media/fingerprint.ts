@@ -156,7 +156,7 @@ async function computeVideoHash(
       computedAt,
     };
   } finally {
-    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => { });
   }
 }
 

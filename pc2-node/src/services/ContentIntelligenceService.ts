@@ -606,5 +606,6 @@ function fallbackProvenance(existingHash?: string): ContentProvenance {
   return {
     originalHash: existingHash || '',
     firstPublished: new Date().toISOString(),
+    similarContentFound: false,
   };
 }
