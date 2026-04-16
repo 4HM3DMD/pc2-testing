@@ -225,11 +225,12 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
   const installedAppsBase = path.resolve(process.env.PC2_DATA_DIR || path.join(process.cwd(), 'data'), 'installed-apps');
   const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.ico']);
 
-  app.get('/images/*', (req: Request, res: Response, next: NextFunction) => {
-    const ext = path.extname(req.path).toLowerCase();
-    if (!IMAGE_EXTENSIONS.has(ext)) return next();
-
-    const relativeAsset = req.path.slice(1); // strip leading /
+  // Resolve absolute asset paths from embedded dApps back to the correct app directory.
+  // Apps in iframes use <img src="/static/..."> or <img src="/images/..."> which resolve
+  // to the PC2 root instead of the app's directory. This handler checks Referer first,
+  // then falls back to scanning all installed apps.
+  const resolveInstalledAppAsset = (req: Request, res: Response, next: NextFunction) => {
+    const relativeAsset = decodeURIComponent(req.path.slice(1)); // strip leading /
 
     // Strategy 1: use Referer to identify the app
     const referer = req.headers.referer || '';
@@ -243,7 +244,7 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
       }
     }
 
-    // Strategy 2: scan installed apps for the image (fallback when Referer is absent)
+    // Strategy 2: scan installed apps for the asset (fallback when Referer is absent)
     try {
       const apps = fs.readdirSync(installedAppsBase, { withFileTypes: true });
       for (const entry of apps) {
@@ -257,7 +258,16 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
     } catch { /* installed-apps dir may not exist yet */ }
 
     next();
+  };
+
+  app.get('/images/*', (req: Request, res: Response, next: NextFunction) => {
+    const ext = path.extname(req.path).toLowerCase();
+    if (!IMAGE_EXTENSIONS.has(ext)) return next();
+    resolveInstalledAppAsset(req, res, next);
   });
+
+  app.get('/static/*', resolveInstalledAppAsset);
+  app.get('/fonts/*', resolveInstalledAppAsset);
 
   // RPC proxy for embedded dApps (e.g. Glide Finance)
   // Features: response caching with per-method TTLs, fallback RPC endpoints

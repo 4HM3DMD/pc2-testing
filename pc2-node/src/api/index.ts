@@ -1,6 +1,7 @@
 import express, { Express, Request, Response, NextFunction } from 'express';
 import cookieParser from 'cookie-parser';
 import multer from 'multer';
+import https from 'https';
 import os from 'os';
 import path from 'path';
 import fs from 'fs';
@@ -411,6 +412,8 @@ export function setupAPI(app: Express): void {
 
   // Storage usage endpoint
   app.use('/api/storage', storageRouter);
+  // NFT pin routes (in storageRouter at /nft/*) also mounted at /api/nft/*
+  app.use('/api', storageRouter);
   app.use('/api/media', mediaRouter);
   app.use('/api/ai', aiRouter);
   app.use('/api/wasm', wasmRouter);
@@ -986,6 +989,36 @@ export function setupAPI(app: Express): void {
     } catch (err: any) {
       res.status(502).json({ error: 'ESC NFT GraphQL proxy failed: ' + (err.message || String(err)) });
     }
+  });
+
+  // ESC RPC Proxy — forwards JSON-RPC calls to Contabo ESC archive node (self-signed cert)
+  const escRpcAgent = new https.Agent({ rejectUnauthorized: false });
+  app.post('/api/esc-rpc', (req: Request, res: Response) => {
+    const postData = JSON.stringify(req.body);
+    const proxyReq = https.request({
+      hostname: '38.242.211.112',
+      port: 443,
+      path: '/rpc/esc',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(postData) },
+      agent: escRpcAgent,
+      timeout: 15000,
+    }, (proxyRes) => {
+      let body = '';
+      proxyRes.on('data', (chunk) => { body += chunk; });
+      proxyRes.on('end', () => {
+        res.status(proxyRes.statusCode || 200).set('Content-Type', 'application/json').send(body);
+      });
+    });
+    proxyReq.on('error', (err) => {
+      res.status(502).json({ error: 'ESC RPC proxy failed: ' + (err.message || String(err)) });
+    });
+    proxyReq.on('timeout', () => {
+      proxyReq.destroy();
+      res.status(504).json({ error: 'ESC RPC proxy timeout' });
+    });
+    proxyReq.write(postData);
+    proxyReq.end();
   });
 
   // ESC NFT Marketplace — REST catch-all proxy to ela.city/api (ESC backend)

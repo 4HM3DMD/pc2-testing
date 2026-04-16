@@ -120,7 +120,7 @@ See full audit: `.cursor/tasks/MARKET-FEATURES/MARKET-UI-AUDIT-APRIL-2026.md`
 - **P2**: `transferNFT` is EOA-only
 - **P2**: `expectTokens` hardcodes USDC 6 decimals
 
-### Phase 6 — Elastos NFT Marketplace App (InProgress 2026-04-09 → 2026-04-14)
+### Phase 6 — Elastos NFT Marketplace App (Completed 2026-04-09 → 2026-04-16)
 - [x] **Build pipeline** — `scripts/build-elastos-nft.sh` clones `elacity-web` `develop` branch, patches for ESC (chain 20), builds Vite SPA
 - [x] **Auto-login** — PC2 wallet injected via `pc2-wallet-bridge.js`; `ConnectorSelect` renders null; `active` = `!!(account)`
 - [x] **UI stripping** — Removed Home tab, Messages, Subscriptions, Create button; Explore is default landing
@@ -129,7 +129,22 @@ See full audit: `.cursor/tasks/MARKET-FEATURES/MARKET-UI-AUDIT-APRIL-2026.md`
 - [x] **Sidebar cleanup** — Only Explore, Collections, Library (Images tab), Revenue pages remain
 - [x] **Tier 1 bundle cleanup** — Removed XMTP WASM, unused route chunks, marketing images; 45MB → 22MB
 - [x] **Conservative chunk fix** — Restored chunks imported by shared contexts (CapsuleExplorer, ChannelViewContext, MediaRawContext, useAccessibility, wrongPasswordModal)
-- [ ] **Full verification** — End-to-end testing of all pages after cleanup
+- [x] **Profile image fix** — Patched `account.ts` to recognize relative `/api/esc-nft/thumbnails/...` URLs (was wrapping them in broken ipfsLink)
+- [x] **IPFS gateway fix** — Replaced dead gateways (`cloudflare-ipfs.com`, `ipfs.ela.city`) with `ipfs.io` in source + post-build sed
+- [x] **Contabo ESC RPC** — Added `/api/esc-rpc` proxy to Contabo archive node (38.242.211.112), plus Contabo nginx `/rpc/esc` route
+- [x] **RPC fallback** — `rpcs.ts` has both Contabo proxy and public `api.ela.city/esc` as fallback
+- [ ] **Full verification** — End-to-end testing of all pages after cleanup (InProgress)
+
+### Phase 7 — NFT IPFS Pinning (InProgress 2026-04-16)
+- [x] **Database** — `nft_pins` table with migration 27, composite primary key `(cid, wallet_address)`, joins with `pinned_cids`
+- [x] **API endpoints** — `POST /api/nft/pin`, `GET /api/nft/pins`, `GET /api/nft/pin/:cid`, `DELETE /api/nft/pin/:cid`
+- [x] **Route mounting** — Storage router mounted at `/api` in addition to `/api/storage` for clean `/api/nft/*` paths
+- [x] **ArtAssetView patch** — Pin + Download buttons below NFT image (visible to owners, extracts CID from metadata)
+- [x] **MyVault patch** — PinnedCidsContext fetches user's pinned CIDs, green pin badge on pinned NFT cards
+- [x] **Auth fix** — Frontend extracts `puter.auth.token` from URL params, passes via `Authorization: Bearer` header
+- [ ] **Testing** — Verify pin/unpin flow end-to-end with real NFTs (blocked: some NFTs use HIVE not IPFS)
+- [ ] **HIVE NFT support** — NFTs stored on HIVE (`hive://public.ela.city/...`) need tokenURI metadata fetch to extract IPFS CID
+- [ ] **Local-first IPFS serving** — Route pinned NFT images through node's own `/ipfs/:cid` gateway before external fallback
 
 ## Future Considerations
 
@@ -139,13 +154,20 @@ See full audit: `.cursor/tasks/MARKET-FEATURES/MARKET-UI-AUDIT-APRIL-2026.md`
 
 ## Files Modified
 
+### Elacity Market (Phase 1-5)
 - `pc2-node/data/test-apps/elacity-market/wallet.js` — All contract interactions
 - `pc2-node/data/test-apps/elacity-market/app.js` — UI logic, rendering, formatting, earnings
 - `pc2-node/data/test-apps/elacity-market/app-features.js` — Earnings, offers, publisher actions, royalty UI
 - `pc2-node/data/test-apps/elacity-market/api.js` — Local catalog, GraphQL proxy, owned items
 - `pc2-node/data/test-apps/elacity-market/index.html` — Commerce, skeleton, breadcrumbs
 - `pc2-node/data/test-apps/elacity-market/styles.css` — Full layout/styling
-- `pc2-node/src/api/index.ts` — Catalog/earnings/graphql-proxy endpoints
-- `pc2-node/src/storage/database.ts` — Catalog model, channel metadata, operative lookup
-- `pc2-node/src/storage/migrations.ts` — Migrations 24-26
-- `scripts/build-elastos-nft.sh` — Elastos NFT app build pipeline (clone, patch, build, cleanup)
+
+### Elastos NFT + Infrastructure (Phase 6-7)
+- `scripts/build-elastos-nft.sh` — Elastos NFT app build pipeline (clone, patch, build, cleanup, NFT pin UI, IPFS gateway fix)
+- `pc2-node/data/test-apps/elastos-nft-src/.env.production` — ESC chain config, IPFS gateway (`ipfs.io`)
+- `pc2-node/src/api/index.ts` — Catalog/earnings/graphql-proxy endpoints, ESC RPC proxy (`/api/esc-rpc`), storage router dual-mount
+- `pc2-node/src/api/storage.ts` — NFT pin CRUD endpoints (`/nft/pin`, `/nft/pins`, `/nft/pin/:cid`)
+- `pc2-node/src/storage/database.ts` — Catalog model, channel metadata, operative lookup, NFT pin tracking methods
+- `pc2-node/src/storage/migrations.ts` — Migrations 24-27 (27 = `nft_pins` table)
+- `pc2-node/src/storage/schema.sql` — Added `nft_pins` table + indexes
+- `pc2-node/src/static.ts` — Refactored asset resolver for `/images/*`, `/static/*`, `/fonts/*` from embedded dApps

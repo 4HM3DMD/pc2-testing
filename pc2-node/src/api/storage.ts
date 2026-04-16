@@ -710,6 +710,177 @@ router.delete('/ipfs/unpin/:cid', authenticate, async (req: AuthenticatedRequest
   }
 });
 
+// ─── NFT IPFS Pinning ────────────────────────────────────────────────────────
+
+/**
+ * POST /api/nft/pin
+ * Pin an NFT's IPFS content to the local node and register it in the virtual filesystem.
+ */
+router.post('/nft/pin', authenticate, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const db = req.app.locals.db;
+    const ipfs = req.app.locals.ipfs;
+    const seedingService = req.app.locals.seedingService;
+    const filesystem = req.app.locals.filesystem;
+
+    if (!db) return res.status(503).json({ error: 'Database not available' });
+    if (!ipfs) return res.status(503).json({ error: 'IPFS not available' });
+
+    const { cid, name, collection, contractAddress, tokenId, mimeType } = req.body;
+    if (!cid || typeof cid !== 'string') return res.status(400).json({ error: 'Missing or invalid CID' });
+    if (!name) return res.status(400).json({ error: 'Missing NFT name' });
+    if (!contractAddress || !tokenId) return res.status(400).json({ error: 'Missing contract address or token ID' });
+
+    const cidClean = cid.replace(/^ipfs:\/\//, '').replace(/^\/ipfs\//, '').split('/')[0];
+    const walletAddress = req.user?.wallet_address;
+    if (!walletAddress) return res.status(401).json({ error: 'No wallet address' });
+
+    const ext = (mimeType || 'image/png').split('/').pop() || 'png';
+    const safeName = (name || 'Untitled').replace(/[\/\\:*?"<>|]/g, '_').substring(0, 100);
+    const safeCollection = (collection || 'Unknown').replace(/[\/\\:*?"<>|]/g, '_').substring(0, 80);
+    const filePath = `/${walletAddress}/Pictures/NFTs/${safeCollection}/${safeName}.${ext}`;
+
+    const existing = db.getNFTPin(cidClean, walletAddress);
+    if (existing && existing.pin_status === 'complete') {
+      return res.json({ success: true, cid: cidClean, status: 'already_pinned', filePath: existing.pin_status });
+    }
+
+    db.trackNFTPin({
+      cid: cidClean,
+      walletAddress,
+      contractAddress,
+      tokenId,
+      name: safeName,
+      collectionName: safeCollection,
+      mimeType: mimeType || 'image/png',
+      filePath,
+    });
+
+    if (seedingService) {
+      seedingService.seedContent(cidClean, walletAddress, {
+        priority: 'immediate',
+        estimatedSizeBytes: 0,
+      });
+    } else {
+      ipfs.pinRemoteCID(cidClean, { timeoutMs: 180000 }).then(async (result: any) => {
+        if (result.success) {
+          db.trackPinnedCID(cidClean, walletAddress, result.size || 0, 'nft');
+          db.updateNFTPinStatus(cidClean, 'complete');
+          if (ipfs.canAnnounce()) {
+            ipfs.announceCID(cidClean).catch(() => {});
+          }
+          if (filesystem) {
+            try {
+              const parentDir = filePath.substring(0, filePath.lastIndexOf('/'));
+              await filesystem.createDirectory(parentDir, walletAddress).catch(() => {});
+              await filesystem.createDirectory(parentDir.substring(0, parentDir.lastIndexOf('/')), walletAddress).catch(() => {});
+            } catch { /* directory may already exist */ }
+          }
+        } else {
+          db.updateNFTPinStatus(cidClean, 'failed');
+        }
+      }).catch(() => {
+        db.updateNFTPinStatus(cidClean, 'failed');
+      });
+    }
+
+    db.trackPinnedCID(cidClean, walletAddress, 0, 'nft');
+
+    if (filesystem) {
+      try {
+        const nftDir = `/${walletAddress}/Pictures/NFTs`;
+        const collDir = `${nftDir}/${safeCollection}`;
+        await filesystem.createDirectory(nftDir, walletAddress).catch(() => {});
+        await filesystem.createDirectory(collDir, walletAddress).catch(() => {});
+      } catch { /* directories may already exist */ }
+    }
+
+    res.json({
+      success: true,
+      cid: cidClean,
+      queued: true,
+      filePath,
+      message: 'NFT content queued for pinning',
+    });
+  } catch (error: any) {
+    logger.error('[NFT Pin] Error:', error);
+    res.status(500).json({ error: error.message || 'Failed to pin NFT' });
+  }
+});
+
+/**
+ * GET /api/nft/pins
+ * List all NFTs pinned by the authenticated user with their status.
+ */
+router.get('/nft/pins', authenticate, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const db = req.app.locals.db;
+    if (!db) return res.status(503).json({ error: 'Database not available' });
+
+    const walletAddress = req.user?.wallet_address;
+    if (!walletAddress) return res.status(401).json({ error: 'No wallet address' });
+
+    const pins = db.getNFTPins(walletAddress);
+    res.json({ success: true, pins });
+  } catch (error: any) {
+    logger.error('[NFT Pins] Error listing pins:', error);
+    res.status(500).json({ error: error.message || 'Failed to list NFT pins' });
+  }
+});
+
+/**
+ * GET /api/nft/pin/:cid
+ * Get pin status for a specific CID.
+ */
+router.get('/nft/pin/:cid', authenticate, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const db = req.app.locals.db;
+    if (!db) return res.status(503).json({ error: 'Database not available' });
+
+    const walletAddress = req.user?.wallet_address;
+    if (!walletAddress) return res.status(401).json({ error: 'No wallet address' });
+
+    const cidClean = req.params.cid.replace(/^ipfs:\/\//, '').replace(/^\/ipfs\//, '').split('/')[0];
+    const pin = db.getNFTPin(cidClean, walletAddress);
+    if (!pin) return res.status(404).json({ success: false, pinned: false });
+
+    res.json({ success: true, pinned: true, ...pin });
+  } catch (error: any) {
+    logger.error('[NFT Pin] Error getting pin status:', error);
+    res.status(500).json({ error: error.message || 'Failed to get pin status' });
+  }
+});
+
+/**
+ * DELETE /api/nft/pin/:cid
+ * Unpin an NFT and remove the filesystem entry.
+ */
+router.delete('/nft/pin/:cid', authenticate, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const db = req.app.locals.db;
+    if (!db) return res.status(503).json({ error: 'Database not available' });
+
+    const walletAddress = req.user?.wallet_address;
+    if (!walletAddress) return res.status(401).json({ error: 'No wallet address' });
+
+    const cidClean = req.params.cid.replace(/^ipfs:\/\//, '').replace(/^\/ipfs\//, '').split('/')[0];
+
+    db.removeNFTPin(cidClean, walletAddress);
+
+    const seedingService = req.app.locals.seedingService;
+    if (seedingService) {
+      seedingService.unseedContent(cidClean);
+    } else {
+      db.removePinnedCID(cidClean);
+    }
+
+    res.json({ success: true, cid: cidClean, message: 'NFT unpinned' });
+  } catch (error: any) {
+    logger.error(`[NFT Pin] Error unpinning ${req.params.cid}:`, error);
+    res.status(500).json({ error: error.message || 'Failed to unpin NFT' });
+  }
+});
+
 // ─── Lit Protocol: Server Key + Encrypt/Decrypt ──────────────────────────────
 //
 // Architecture: The pc2-node backend is the trusted decryption service.

@@ -31,7 +31,7 @@ function findSchemaFile(): string {
   }
   throw new Error(`Schema file not found. Tried: ${SCHEMA_FILE} and ${sourceSchema}`);
 }
-const CURRENT_VERSION = 26;
+const CURRENT_VERSION = 27;
 
 interface Migration {
   version: number;
@@ -1015,6 +1015,35 @@ export function runMigrations(db: Database.Database): void {
         recordMigration(db, 26);
       } catch (error: any) {
         log.error(`❌ Migration 26 error: ${error.message}`);
+        throw error;
+      }
+    }
+
+    // Migration 27: Create nft_pins table for NFT IPFS pinning
+    if (currentVersion < 27) {
+      try {
+        log.info('📦 Running Migration 27: Create nft_pins table...');
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS nft_pins (
+            cid TEXT NOT NULL,
+            wallet_address TEXT NOT NULL,
+            contract_address TEXT NOT NULL,
+            token_id TEXT NOT NULL,
+            name TEXT,
+            collection_name TEXT,
+            mime_type TEXT,
+            file_path TEXT,
+            pin_status TEXT NOT NULL DEFAULT 'queued',
+            pinned_at INTEGER NOT NULL,
+            PRIMARY KEY (cid, wallet_address)
+          )
+        `);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_nft_pins_wallet ON nft_pins(wallet_address)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_nft_pins_contract ON nft_pins(contract_address, token_id)`);
+        log.info('✅ Migration 27 complete: nft_pins table created');
+        recordMigration(db, 27);
+      } catch (error: any) {
+        log.error(`❌ Migration 27 error: ${error.message}`);
         throw error;
       }
     }

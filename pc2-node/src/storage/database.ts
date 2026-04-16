@@ -665,6 +665,76 @@ export class DatabaseManager {
   }
 
   // ============================================================================
+  // NFT Pin Tracking
+  // ============================================================================
+
+  trackNFTPin(params: {
+    cid: string;
+    walletAddress: string;
+    contractAddress: string;
+    tokenId: string;
+    name: string;
+    collectionName: string;
+    mimeType?: string;
+    filePath?: string;
+  }): void {
+    const db = this.getDB();
+    db.prepare(`
+      INSERT INTO nft_pins (cid, wallet_address, contract_address, token_id, name, collection_name, mime_type, file_path, pin_status, pinned_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)
+      ON CONFLICT(cid, wallet_address) DO UPDATE SET
+        name = excluded.name,
+        collection_name = excluded.collection_name,
+        mime_type = excluded.mime_type,
+        file_path = excluded.file_path
+    `).run(
+      params.cid, params.walletAddress.toLowerCase(), params.contractAddress.toLowerCase(),
+      params.tokenId, params.name, params.collectionName,
+      params.mimeType || null, params.filePath || null, Date.now()
+    );
+  }
+
+  getNFTPins(walletAddress: string): Array<{
+    cid: string; contract_address: string; token_id: string;
+    name: string; collection_name: string; mime_type: string | null;
+    file_path: string | null; pin_status: string; pinned_at: number;
+  }> {
+    const db = this.getDB();
+    return db.prepare(`
+      SELECT np.cid, np.contract_address, np.token_id, np.name, np.collection_name,
+             np.mime_type, np.file_path, COALESCE(pc.pin_status, np.pin_status) as pin_status, np.pinned_at
+      FROM nft_pins np
+      LEFT JOIN pinned_cids pc ON np.cid = pc.cid AND np.wallet_address = pc.wallet_address
+      WHERE np.wallet_address = ?
+      ORDER BY np.pinned_at DESC
+    `).all(walletAddress.toLowerCase()) as any[];
+  }
+
+  getNFTPin(cid: string, walletAddress: string): {
+    cid: string; contract_address: string; token_id: string;
+    name: string; collection_name: string; pin_status: string;
+  } | undefined {
+    const db = this.getDB();
+    return db.prepare(`
+      SELECT np.cid, np.contract_address, np.token_id, np.name, np.collection_name,
+             COALESCE(pc.pin_status, np.pin_status) as pin_status
+      FROM nft_pins np
+      LEFT JOIN pinned_cids pc ON np.cid = pc.cid AND np.wallet_address = pc.wallet_address
+      WHERE np.cid = ? AND np.wallet_address = ?
+    `).get(cid, walletAddress.toLowerCase()) as any;
+  }
+
+  removeNFTPin(cid: string, walletAddress: string): void {
+    const db = this.getDB();
+    db.prepare(`DELETE FROM nft_pins WHERE cid = ? AND wallet_address = ?`).run(cid, walletAddress.toLowerCase());
+  }
+
+  updateNFTPinStatus(cid: string, status: string): void {
+    const db = this.getDB();
+    db.prepare(`UPDATE nft_pins SET pin_status = ? WHERE cid = ?`).run(status, cid);
+  }
+
+  // ============================================================================
   // Settings Operations
   // ============================================================================
 

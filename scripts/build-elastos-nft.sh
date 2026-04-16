@@ -201,6 +201,82 @@ f.write_text(src)
 print('    ConnectorSelect: render null (PC2 auto-login, no Log In button)')
 "
 
+# Strip profile dropdown: remove Sonic from NetworkSelector, Terms, Affiliate Links, Log Out
+python3 -c "
+import pathlib, re
+
+# 1. Remove Sonic (chain 146) from NetworkSelector filter list
+ns = pathlib.Path('$BUILD_DIR/src/lib/web3/network/NetworkSelector.tsx')
+nsc = ns.read_text()
+nsc = nsc.replace(\"['20', '21', '421614', '146']\", \"['20', '21']\")
+ns.write_text(nsc)
+print('    NetworkSelector: removed Sonic (146) from network list')
+
+# 2. Remove Terms & policies, Affiliate Links, Log Out from AccountPopover
+ap = pathlib.Path('$BUILD_DIR/src/components/mainLayout/AccountPopover.tsx')
+apc = ap.read_text()
+
+# Remove Terms & policies MenuItem (from <MenuItem component=\"a\" href=\"https://docs.ela.city/terms-of-service\" ... to closing </MenuItem>)
+apc = re.sub(
+    r'<MenuItem\s*\n\s*component=\"a\"\s*\n\s*href=\"https://docs\.ela\.city/terms-of-service\"[\s\S]*?Terms & policies[\s\S]*?</MenuItem>',
+    '', apc, count=1
+)
+
+# Remove Affiliate Links Box (from <Box sx={{ px: 2.5 ... to closing </Box> that wraps AffiliateDialog)
+apc = re.sub(
+    r'<Box sx=\{\{\s*\n\s*px: 2\.5,\s*\n\s*py: 1,\s*\n\s*mx: 1,\s*\n\s*borderRadius: 1,\s*\n\s*cursor: .pointer.[\s\S]*?<AffiliateDialog />\s*</Box>',
+    '', apc, count=1
+)
+
+# Remove Log Out button and its wrapper Box
+apc = re.sub(
+    r'<Box sx=\{\{ p: 2, pt: 1\.5 \}\}>\s*<Button fullWidth color=\"inherit\" variant=\"outlined\" onClick=\{handleDisconnect\}>\s*Log out\s*</Button>\s*</Box>',
+    '', apc, count=1
+)
+
+ap.write_text(apc)
+print('    AccountPopover: removed Terms, Affiliate Links, Log Out')
+"
+
+# --- PC2 Tx Speed: Skip Faye backend sync wait (no FayeProvider in PC2 context) ---
+# Without Faye, createTransactionSyncEventCounter's CountWaiter always hits the 30s timeout.
+# Patch TxExecutable to skip the countWaiter.wait() call entirely so transactions resolve
+# immediately after on-chain confirmation (tx.wait()), then RTK cache invalidation fires.
+echo "  - PC2: Patch TxExecutable to skip dead Faye sync wait (instant tx confirmation)"
+python3 -c "
+import pathlib
+
+tx_file = pathlib.Path('$BUILD_DIR/src/lib/web3/executable/tx.ts')
+src = tx_file.read_text()
+
+# Replace the countWaiter.wait() line with an immediate resolution comment
+src = src.replace(
+    'await this.context.countWaiter?.wait(this.context.txCount);',
+    '// PC2: Faye disabled — skip backend sync wait, proceed immediately after on-chain confirmation'
+)
+
+tx_file.write_text(src)
+print('    TxExecutable: skipped countWaiter.wait() (no Faye in PC2)')
+"
+
+# Also patch the UX handler to not create the countWaiter in the first place
+# This is in Web3ApplicationContext.tsx where onTransactionAcquired creates the counter
+python3 -c "
+import pathlib
+
+ctx_file = pathlib.Path('$BUILD_DIR/src/contexts/Web3ApplicationContext.tsx')
+src = ctx_file.read_text()
+
+# Replace the onTransactionAcquired handler to skip creating a countWaiter
+src = src.replace(
+    'ctx.countWaiter = createTransactionSyncEventCounter(tx.hash, ctx.eventTopics);',
+    '// PC2: Faye disabled — skip creating sync counter\n          // ctx.countWaiter = createTransactionSyncEventCounter(tx.hash, ctx.eventTopics);'
+)
+
+ctx_file.write_text(src)
+print('    Web3ApplicationContext: disabled countWaiter creation')
+"
+
 # --- NFT-only UI stripping: remove DRM/Cinema features ---
 echo "  - UI: Strip non-NFT features (Channels, Messages, Subscriptions, Create, DRM content types)"
 
@@ -233,6 +309,172 @@ h.write_text(hc)
 # 2. Header: remove Create button
 sed -i '' "s|<CreateButton />||g" "$BUILD_DIR/src/components/mainLayout/DashboardNavbar.tsx"
 sed -i '' "/import CreateButton/d" "$BUILD_DIR/src/components/mainLayout/DashboardNavbar.tsx"
+
+# 2b. Header: add Back button for in-app navigation (no browser back in PC2 iframe)
+echo "  - PC2: Add back button to header (no browser back in iframe)"
+python3 -c "
+import pathlib
+
+f = pathlib.Path('$BUILD_DIR/src/components/mainLayout/DashboardNavbar.tsx')
+src = f.read_text()
+
+# Add ArrowBack import
+src = src.replace(
+    \"} from '@mui/material';\",
+    \"} from '@mui/material';\nimport ArrowBackIosNewIcon from '@mui/icons-material/ArrowBackIosNew';\"
+)
+
+# Add useNavigate/useLocation imports
+src = src.replace(
+    \"import { useMainLayout } from 'src/layouts';\",
+    \"import { useMainLayout } from 'src/layouts';\nimport { useNavigate, useLocation } from 'react-router-dom';\"
+)
+
+# Add navigate hook inside DashboardNavbar component
+src = src.replace(
+    'const { overlaySidebar } = useMainLayout();',
+    '''const { overlaySidebar } = useMainLayout();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const canGoBack = location.key !== 'default';'''
+)
+
+# Place back button inside the BrandLogo Stack, after DesktopMenu
+src = src.replace(
+    '''<Box sx={{ mx: 1 }}>
+        <DesktopMenu />
+      </Box>
+    </Stack>''',
+    '''<Box sx={{ mx: 1 }}>
+        <DesktopMenu />
+      </Box>
+    </Stack>'''
+)
+
+# Insert back button right after BrandLogo, inside the left section of the Toolbar
+# by wrapping BrandLogo + back button in a flex row
+src = src.replace(
+    '<BrandLogo />',
+    '''<Stack direction=\"row\" alignItems=\"center\">
+          <BrandLogo />
+          {canGoBack && (
+            <IconButton
+              size=\"small\"
+              onClick={() => navigate(-1)}
+              sx={{
+                color: 'text.primary',
+                opacity: 0.7,
+                ml: -0.5,
+                '&:hover': { opacity: 1 },
+              }}
+            >
+              <ArrowBackIosNewIcon sx={{ fontSize: 16 }} />
+            </IconButton>
+          )}
+        </Stack>'''
+)
+
+f.write_text(src)
+print('    DashboardNavbar: added back button to left of header for PC2 iframe navigation')
+"
+
+# 2c. Fix Sell button on listed NFT cards: check handler existence, not just action object
+echo "  - Fix: Sell button priority checks handler existence for listed items"
+python3 -c "
+import pathlib
+
+f = pathlib.Path('$BUILD_DIR/src/components/Capsule/CapsuleAdapter.tsx')
+src = f.read_text()
+src = src.replace(
+    '''// Priority: List item > Update sale terms > Sell Access
+      const actionToExecute = sellActions.listingPut || sellActions.listingEdit || sellActions.sellAccess;''',
+    '''// Priority: prefer action with handler — listed items only have listingEdit handler
+      const actionToExecute = (sellActions.listingPut?.handler && sellActions.listingPut) || (sellActions.listingEdit?.handler && sellActions.listingEdit) || (sellActions.sellAccess?.handler && sellActions.sellAccess);'''
+)
+f.write_text(src)
+print('    CapsuleAdapter: fixed sell button handler priority for listed items')
+"
+
+# 2d. Revenue sidebar badge: only count offers (not channel/asset royalties from removed features)
+echo "  - Fix: Revenue badge only counts active offers (removed channel/asset royalty counts)"
+python3 -c "
+import pathlib
+
+f = pathlib.Path('$BUILD_DIR/src/contexts/MainLayout/MainNavigation.tsx')
+src = f.read_text()
+
+# Remove the channel royalties query
+src = src.replace(
+    '''const { data: channelsRoyaltiesData } = useFetchMyRoyaltyItemsQuery(
+    {
+      address: account || '',
+      category: 'channels',
+      filters: { limit: 100, offset: 0 },
+    },
+    { skip: !account }
+  );''',
+    ''
+)
+
+# Remove the asset royalties query
+src = src.replace(
+    '''const { data: assetsRoyaltiesData } = useFetchMyRoyaltyItemsQuery(
+    {
+      address: account || '',
+      category: 'assets',
+      filters: { limit: 100, offset: 0 },
+    },
+    { skip: !account }
+  );''',
+    ''
+)
+
+# Replace the earningsNotificationCount calculation to only count offers
+src = src.replace(
+    '''const earningsNotificationCount = React.useMemo(() => {
+    let totalCount = 0;
+
+    // Channels with claimable rewards
+    if (channelsRoyaltiesData?.data) {
+      const claimableChannels = channelsRoyaltiesData.data.filter((item) => item.__typename === 'RoyaltyChannel' && item.unclaimedRewards > 0);
+      totalCount += claimableChannels.length;
+    }
+
+    // Assets with claimable rewards
+    if (assetsRoyaltiesData?.data) {
+      const claimableAssets = assetsRoyaltiesData.data.filter((item) => item.__typename === 'RoyaltyAsset' && item.unclaimedRewards > 0);
+      totalCount += claimableAssets.length;
+    }
+
+    // Note: Sales notifications excluded from sidebar badge as requested
+
+    // Offers made (active offers)
+    if (offersMadeData?.data?.length) {
+      totalCount += offersMadeData.data.length;
+    }
+
+    // Offers received (active incoming offers)
+    if (offersReceivedData?.data?.length) {
+      totalCount += offersReceivedData.data.length;
+    }
+
+    return totalCount > 99 ? 99 : totalCount;
+  }, [channelsRoyaltiesData, assetsRoyaltiesData, offersMadeData, offersReceivedData]);''',
+    '''const earningsNotificationCount = React.useMemo(() => {
+    let totalCount = 0;
+    if (offersMadeData?.data?.length) {
+      totalCount += offersMadeData.data.length;
+    }
+    if (offersReceivedData?.data?.length) {
+      totalCount += offersReceivedData.data.length;
+    }
+    return totalCount > 99 ? 99 : totalCount;
+  }, [offersMadeData, offersReceivedData]);'''
+)
+
+f.write_text(src)
+print('    MainNavigation: Revenue badge now only counts active offers')
+"
 
 # 3. Sidebar: remove Subscriptions, Messages, and CinemaSubscriptions
 python3 -c "
@@ -346,7 +588,7 @@ ec = ec.replace(
   };\"\"\",
     \"\"\"const initialFilterValue = {
     searchBy: '',
-    layout: 'normal',
+    layout: 'card',
     categories: ['image'],
   };\"\"\"
 )
@@ -372,6 +614,32 @@ c = c.replace(
 c = c.replace('selectedType={selectedFilter}', '')
 c = c.replace('onTypeChange={onFilterChange}', '')
 f.write_text(c)
+
+# Replace DRM categories with NFT collection categories in CapsuleHorizontalFilter
+# Import CATEGORIES from collection constants and use them instead of horizontalOptionFilters
+chf = pathlib.Path('$BUILD_DIR/src/components/Capsule/filter/CapsuleHorizontalFilter.tsx')
+chfc = chf.read_text()
+chfc = chfc.replace(
+    \"import { horizontalOptionFilters } from './constants';\",
+    \"import { CATEGORIES } from 'src/constants/collection';\"
+)
+chfc = chfc.replace(
+    \"\"\"options={[
+        ...horizontalOptionFilters
+          .map((item) => (
+            {
+              option: item,
+              value: item,
+            }
+          ) as horizontalFilter)]}\"\"\",
+    \"\"\"options={[...CATEGORIES.map((c) => (
+            {
+              option: c.label,
+              value: c.label,
+            }) as horizontalFilter)]}\"\"\"
+)
+chf.write_text(chfc)
+print('    CapsuleHorizontalFilter: replaced DRM categories with NFT collection categories')
 
 # Remove Audio/Video from capsuleType constants, keep only Image (no All)
 g = pathlib.Path('$BUILD_DIR/src/components/Capsule/filter/constants.ts')
@@ -538,23 +806,23 @@ lmc = lmc.replace(
 )
 lm.write_text(lmc)
 
-# --- MostViewedContent: rename, add API-level image filter ---
-mv = pathlib.Path(build_dir) / 'src' / 'components' / 'home' / 'sections' / 'MostViewedContent.tsx'
-mvc = mv.read_text()
-mvc = mvc.replace("title=\"Most Viewed\"", "title=\"Most Viewed NFTs\"")
-# Add contentType: ['image'] to API query
-mvc = mvc.replace(
-    """      type: 'single',
-      from: 0,
-      count: 6, // Fetch 6 items for horizontal scrolling
-      filterby: [],""",
-    """      type: 'single',
-      from: 0,
-      count: 6,
-      filterby: [],
-      contentType: ['image'],"""
+# --- Remove Most Viewed section entirely from HomeExplorer ---
+hec = he.read_text()
+hec = hec.replace("import MostViewedContent from '../sections/MostViewedContent';", '')
+hec = re.sub(
+    r'\s*<section aria-label="Most Viewed">[\s\S]*?</section>',
+    '', hec, count=1
 )
-mv.write_text(mvc)
+he.write_text(hec)
+
+# --- Remove Learning Hub / FeaturedEducationContent section from HomeExplorer ---
+hec = he.read_text()
+hec = hec.replace("import FeaturedEducationContent from '../sections/FeaturedEducationContent';", '')
+hec = re.sub(
+    r'\s*\{/\* Priority 6: Educational Content \*/\}\s*<section aria-label="Learning Hub">[\s\S]*?</section>',
+    '', hec, count=1
+)
+he.write_text(hec)
 
 # --- RecentlySoldContent: rename, add API-level image filter ---
 rs = pathlib.Path(build_dir) / 'src' / 'components' / 'home' / 'sections' / 'RecentlySoldContent.tsx'
@@ -635,13 +903,25 @@ const NewChannelsSection: React.FC = React.memo(() => {
 export default NewChannelsSection;
 ''')
 
-# --- Revenue page: hide Subscriptions from ActivityLineChart ---
+# --- Revenue page: fully remove Subscriptions from activity filters and chart ---
+
+# Remove "Subscriptions" from activity filter options (the toggle buttons below chart)
+af_const = pathlib.Path(build_dir) / 'src' / 'components' / 'profile' / 'filter' / 'constants.ts'
+afc = af_const.read_text()
+afc = afc.replace(
+    "{ option: 'Subscriptions', value: 'Subscription', for: ['account', 'channel', 'sale'] },\n",
+    ""
+)
+af_const.write_text(afc)
+
+# Remove subscriptions from ActivityLineChart entirely
 ac = pathlib.Path(build_dir) / 'src' / 'components' / 'Chart' / 'ActivityLineChart.tsx'
 acc = ac.read_text()
-# Zero out subscription data so the chart line is flat and stats show 0
+import re
+# Zero out subscription data processing
 acc = acc.replace("entry.subscriptions += 1;", "")
 acc = acc.replace("entry.subscriptionAmount += totalAmountUSD;\n", "")
-# Rename "Subscriptions" label to hide it (replace with empty stat)
+# Remove the subscription stats column
 acc = acc.replace(
     """          <Box sx={{ textAlign: 'left' }}>
             <Typography
@@ -662,15 +942,50 @@ acc = acc.replace(
           </Box>""",
     ""
 )
+# Remove subscriptions from total activity sum (show only asset sales)
+acc = acc.replace(
+    "processedData.reduce((sum, d) => sum + d.subscriptions + d.assetSales, 0)",
+    "processedData.reduce((sum, d) => sum + d.assetSales, 0)"
+)
+acc = acc.replace(
+    "processedData.reduce((sum, d) => sum + d.subscriptionAmount + d.assetSalesAmount, 0)",
+    "processedData.reduce((sum, d) => sum + d.assetSalesAmount, 0)"
+)
+# Remove subscription tooltip section
+acc = re.sub(
+    r'<Box sx=\{\{ display: .flex., alignItems: .center., gap: 1 \}\}>\s*<LegendDot color=\{subscriptionColor\} />\s*<Box sx=\{\{ flex: 1 \}\}>\s*<Typography variant="body2">\s*Subscriptions:.*?</Box>\s*</Box>',
+    '',
+    acc,
+    count=1,
+    flags=re.DOTALL
+)
+# Remove subscription from total in tooltip
+acc = acc.replace(
+    "tooltip.data.subscriptions + tooltip.data.assetSales",
+    "tooltip.data.assetSales"
+)
+acc = acc.replace(
+    "tooltip.data.subscriptionAmount + tooltip.data.assetSalesAmount",
+    "tooltip.data.assetSalesAmount"
+)
+# Remove subscription SVG line and data points entirely
+acc = re.sub(
+    r'\{/\* Subscription line \*/\}\s*<path\s+d=\{subscriptionPath\}.*?/>',
+    '',
+    acc,
+    count=1,
+    flags=re.DOTALL
+)
+acc = re.sub(
+    r'\{/\* Data points for subscription line \*/\}\s*\{processedData\.map\(\(point, index\) => \{.*?const x = padding.*?const y = padding \+ chartHeight - \(\(point\.subscriptions.*?\}\)\}',
+    '',
+    acc,
+    count=1,
+    flags=re.DOTALL
+)
 ac.write_text(acc)
 
-# --- Fix FeaturedEducationContent: update channel references ---
-fe = pathlib.Path(build_dir) / 'src' / 'components' / 'home' / 'sections' / 'FeaturedEducationContent.tsx'
-fec = fe.read_text()
-fec = fec.replace("'City Directory & Shops'", "'NFT Collections'")
-fec = fec.replace("'Explore the vibrant marketplace of channels, collections, and digital storefronts in our Web3 city.'", "'Browse NFT collections on the Elastos Smart Chain marketplace.'")
-fec = fec.replace("link: '/channels'", "link: '/channels'")
-fe.write_text(fec)
+# --- FeaturedEducationContent removed (Learning Hub section stripped entirely) ---
 
 # --- Re-add NewChannelsSection import to HomeExplorer (we removed it, now re-add) ---
 he2 = pathlib.Path(build_dir) / 'src' / 'components' / 'home' / 'Main' / 'HomeExplorer.tsx'
@@ -695,6 +1010,409 @@ python3 "$HOME_PATCH" "$BUILD_DIR"
 rm -f "$HOME_PATCH"
 
 echo "  Patches applied."
+
+# --- Fix broken profile/banner images ---
+
+# Switch IPFS gateway to ipfs.io (cloudflare-ipfs.com and ipfs.ela.city are both dead)
+echo "  - IPFS: Switching gateway to ipfs.io"
+sed -i '' "s|https://ipfs.ela.city|https://ipfs.io|g" "$BUILD_DIR/node_modules/@elacity-js/lib/src/utils/url.sanitize.ts"
+sed -i '' "s|https://cloudflare-ipfs.com|https://ipfs.io|g" "$BUILD_DIR/node_modules/@elacity-js/lib/src/utils/url.sanitize.ts"
+sed -i '' "s|http://cloudflare-ipfs.com|https://ipfs.io|g" "$BUILD_DIR/node_modules/@elacity-js/lib/src/utils/url.sanitize.ts"
+sed -i '' "s|https://ipfs.ela.city|https://ipfs.io|g" "$BUILD_DIR/.env"
+sed -i '' "s|https://cloudflare-ipfs.com|https://ipfs.io|g" "$BUILD_DIR/.env"
+sed -i '' "s|http://cloudflare-ipfs.com|https://ipfs.io|g" "$BUILD_DIR/.env"
+
+# Add onerror handler to CoverPhoto to gracefully hide broken banner images
+echo "  - CoverPhoto: Adding onerror handler for broken images"
+python3 -c "
+import pathlib
+f = pathlib.Path('$BUILD_DIR/src/components/profile/CoverPhoto.tsx')
+c = f.read_text()
+# Add state for image error
+c = c.replace(
+    'const [backgroundImage, setImage] = React.useState<string | null>(src || null);',
+    'const [backgroundImage, setImage] = React.useState<string | null>(src || null);\n  const [imageError, setImageError] = React.useState(false);'
+)
+# Hide img on error: change the conditional from backgroundImage to also check imageError
+c = c.replace(
+    '{backgroundImage && (',
+    '{backgroundImage && !imageError && ('
+)
+# Add onError handler to img tag
+c = c.replace(
+    \"alt=\\\"Profile cover\\\"\",
+    'alt=\"Profile cover\" onError={() => setImageError(true)}'
+)
+# Reset error state when src changes
+c = c.replace(
+    'React.useEffect(() => {\n    setImage(src || null);\n  }, [src]);',
+    'React.useEffect(() => {\n    setImage(src || null);\n    setImageError(false);\n  }, [src]);'
+)
+f.write_text(c)
+print('    CoverPhoto patched')
+"
+
+# Add onerror fallback for profile avatars (MUI Avatar handles this natively with fallback)
+# But let's also patch the Image component used for NFT cards to handle IPFS failures
+echo "  - Image: Replacing ipfs.ela.city and cloudflare-ipfs.com everywhere in source"
+python3 -c "
+import pathlib, os
+# Replace in all .ts/.tsx source files
+count = 0
+for root, dirs, files in os.walk('$BUILD_DIR/src'):
+    for fname in files:
+        if fname.endswith(('.ts', '.tsx')):
+            fp = pathlib.Path(root) / fname
+            c = fp.read_text()
+            changed = False
+            if 'ipfs.ela.city' in c:
+                c = c.replace('https://ipfs.ela.city', 'https://ipfs.io')
+                c = c.replace('http://ipfs.ela.city', 'https://ipfs.io')
+                changed = True
+            if 'cloudflare-ipfs.com' in c:
+                c = c.replace('https://cloudflare-ipfs.com', 'https://ipfs.io')
+                c = c.replace('http://cloudflare-ipfs.com', 'https://ipfs.io')
+                changed = True
+            if changed:
+                fp.write_text(c)
+                count += 1
+print(f'    Updated {count} source files with new IPFS gateway')
+"
+
+# Switch ESC RPC to use Contabo archive node via local proxy
+echo "  - RPC: Switching ESC RPC to Contabo node (via /api/esc-rpc proxy)"
+python3 -c "
+import pathlib
+f = pathlib.Path('$BUILD_DIR/src/lib/web3/network/rpcs.ts')
+c = f.read_text()
+c = c.replace(
+    \"'https://api.ela.city/esc',\",
+    \"'/api/esc-rpc',\n      'https://api.ela.city/esc',\"
+)
+f.write_text(c)
+print('    rpcs.ts updated with Contabo RPC proxy')
+"
+
+# Fix profile/banner image URL resolution - relative URLs (/api/...) were being 
+# treated as IPFS hashes and wrapped in ipfsLink(), producing broken URLs
+echo "  - account.ts: Fixing image URL resolution for relative paths"
+ACCT_PATCH=$(mktemp)
+cat > "$ACCT_PATCH" << 'ACCT_PATCH_EOF'
+import pathlib, sys
+build_dir = sys.argv[1]
+f = pathlib.Path(build_dir) / 'src' / 'state' / 'api' / 'account.ts'
+c = f.read_text()
+# Fix: imageHash that's a relative URL (starts with /) should be used as-is, not wrapped in ipfsLink
+old = """...(imageHash &&
+              imageHash.match(/^https?/) && {
+              image: imageHash,
+            }),
+            ...(imageHash &&
+              !imageHash.match(/^https?/) && {
+              image: ipfsLink(`/ipfs/${imageHash}`),
+            }),
+            ...(bannerHash &&
+              bannerHash.match(/^https?/) && {
+              banner: bannerHash,
+            }),
+            ...(bannerHash &&
+              !bannerHash.match(/^https?/) && {
+              banner: ipfsLink(`/ipfs/${bannerHash}`),
+            })"""
+new = """...(imageHash &&
+              (imageHash.match(/^https?/) || imageHash.startsWith('/')) && {
+              image: imageHash,
+            }),
+            ...(imageHash &&
+              !imageHash.match(/^https?/) && !imageHash.startsWith('/') && {
+              image: ipfsLink(`/ipfs/${imageHash}`),
+            }),
+            ...(bannerHash &&
+              (bannerHash.match(/^https?/) || bannerHash.startsWith('/')) && {
+              banner: bannerHash,
+            }),
+            ...(bannerHash &&
+              !bannerHash.match(/^https?/) && !bannerHash.startsWith('/') && {
+              banner: ipfsLink(`/ipfs/${bannerHash}`),
+            })"""
+if old in c:
+    c = c.replace(old, new)
+    f.write_text(c)
+    print('    account.ts URL resolution patched')
+else:
+    print('    WARNING: account.ts patch pattern not found')
+ACCT_PATCH_EOF
+python3 "$ACCT_PATCH" "$BUILD_DIR"
+rm -f "$ACCT_PATCH"
+
+echo "  Image + RPC fixes applied."
+
+# --- NFT IPFS Pinning: Add "Pin to Node" + "Download" buttons on ArtAssetView ---
+echo "  - NFT Pin: Adding Pin + Download buttons to ArtAssetView"
+NFT_PIN_PATCH=$(mktemp)
+cat > "$NFT_PIN_PATCH" << 'NFT_PIN_PATCH_EOF'
+import pathlib, sys
+build_dir = sys.argv[1]
+
+f = pathlib.Path(build_dir) / 'src' / 'components' / 'marketplace' / 'ArtAssetView.tsx'
+c = f.read_text()
+
+# Add PushPin + CircularProgress + Download imports
+c = c.replace(
+    "import ZoomOutMapIcon from '@mui/icons-material/ZoomOutMap';",
+    "import ZoomOutMapIcon from '@mui/icons-material/ZoomOutMap';\nimport PushPinIcon from '@mui/icons-material/PushPin';\nimport FileDownloadIcon from '@mui/icons-material/FileDownload';\nimport CircularProgress from '@mui/material/CircularProgress';"
+)
+
+# Add pin state hooks BEFORE the early returns (isFetching / isError checks).
+old_fetching_check = """  if (isFetching || !mounted.current) {
+    return <Loader />;
+  }"""
+
+pin_hooks_and_fetching = '''  var [pinStatus, setPinStatus] = React.useState('idle');
+
+  var getPC2Token = function() {
+    try {
+      var params = new URLSearchParams(window.location.search);
+      return params.get('puter.auth.token') || '';
+    } catch(e) { return ''; }
+  };
+
+  var pc2AuthHeaders = function(extra) {
+    var h = {};
+    var tk = getPC2Token();
+    if (tk) h['Authorization'] = 'Bearer ' + tk;
+    if (extra) { for (var k in extra) h[k] = extra[k]; }
+    return h;
+  };
+
+  var extractCidFromUrl = function(url) {
+    if (!url) return null;
+    var m = url.match(/(?:ipfs:\\/\\/|\\/ipfs\\/|^)(Qm[a-zA-Z0-9]{44}|baf[a-zA-Z0-9]+)/);
+    return m ? m[1] : null;
+  };
+
+  var nftIpfsCid = React.useMemo(
+    function() {
+      return extractCidFromUrl(result?.data?.metadata?.image)
+        || extractCidFromUrl(result?.data?.imageURL)
+        || extractCidFromUrl(result?.data?.tokenURI);
+    },
+    [result?.data?.metadata?.image, result?.data?.imageURL, result?.data?.tokenURI]
+  );
+
+  React.useEffect(function() {
+    if (!nftIpfsCid || !isOwned) return;
+    fetch('/api/nft/pin/' + nftIpfsCid, { headers: pc2AuthHeaders() })
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (data.pinned) {
+          setPinStatus(data.pin_status === 'complete' ? 'pinned' : 'pinning');
+        }
+      })
+      .catch(function() {});
+  }, [nftIpfsCid, isOwned]);
+
+  var handlePinToNode = React.useCallback(function() {
+    if (!nftIpfsCid || pinStatus === 'pinned' || pinStatus === 'pinning') return;
+    setPinStatus('pinning');
+    fetch('/api/nft/pin', {
+      method: 'POST',
+      headers: pc2AuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({
+        cid: nftIpfsCid,
+        name: result?.data?.name || 'Untitled',
+        collection: result?.data?.collection?.name || address || 'Unknown',
+        contractAddress: address || '',
+        tokenId: String(id || ''),
+        mimeType: result?.data?.metadata?.mimeType || 'image/png',
+      }),
+    })
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (data.success) { setPinStatus('pinned'); } else { setPinStatus('error'); }
+      })
+      .catch(function() { setPinStatus('error'); });
+  }, [nftIpfsCid, pinStatus, result?.data, address, id]);
+
+  var handleDownloadNft = React.useCallback(function() {
+    var imgUrl = result?.data?.metadata?.image || result?.data?.imageURL;
+    if (!imgUrl) return;
+    var a = document.createElement('a');
+    a.href = imgUrl;
+    a.target = '_blank';
+    a.download = (result?.data?.name || 'nft') + '.' + (result?.data?.metadata?.mimeType || 'image/png').split('/').pop();
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  }, [result?.data]);
+
+  if (isFetching || !mounted.current) {
+    return <Loader />;
+  }'''
+
+c = c.replace(old_fetching_check, pin_hooks_and_fetching)
+
+# Add prominent Pin + Download buttons BELOW the image box (after </Box> that wraps the image)
+# We target the closing of the image container and add buttons after it
+old_image_close = """            </Box>
+            <Box sx={{ display: { xs: 'block', sm: 'none' }, my: 4 }}>
+              <ArtAssetHeader"""
+
+new_image_close = """            </Box>
+            {isOwned && (
+              <Stack direction="row" spacing={1} sx={{ mt: 1.5, mb: 1 }}>
+                {nftIpfsCid && (
+                  <Button
+                    variant={pinStatus === 'pinned' ? 'contained' : 'outlined'}
+                    size="small"
+                    startIcon={pinStatus === 'pinning' ? <CircularProgress size={16} /> : <PushPinIcon />}
+                    onClick={handlePinToNode}
+                    disabled={pinStatus === 'pinned' || pinStatus === 'pinning'}
+                    sx={{
+                      flex: 1,
+                      textTransform: 'none',
+                      borderColor: pinStatus === 'pinned' ? '#4caf50' : undefined,
+                      color: pinStatus === 'pinned' ? '#fff' : undefined,
+                      backgroundColor: pinStatus === 'pinned' ? '#4caf50' : undefined,
+                      '&:hover': { backgroundColor: pinStatus === 'pinned' ? '#388e3c' : undefined },
+                    }}
+                  >
+                    {pinStatus === 'pinned' ? 'Pinned to Node' : pinStatus === 'pinning' ? 'Pinning...' : 'Pin to My Node'}
+                  </Button>
+                )}
+                <Button
+                  variant="outlined"
+                  size="small"
+                  startIcon={<FileDownloadIcon />}
+                  onClick={handleDownloadNft}
+                  sx={{ flex: 1, textTransform: 'none' }}
+                >
+                  Download
+                </Button>
+              </Stack>
+            )}
+            <Box sx={{ display: { xs: 'block', sm: 'none' }, my: 4 }}>
+              <ArtAssetHeader"""
+
+c = c.replace(old_image_close, new_image_close)
+
+f.write_text(c)
+print('    ArtAssetView.tsx patched with Pin + Download buttons')
+NFT_PIN_PATCH_EOF
+python3 "$NFT_PIN_PATCH" "$BUILD_DIR"
+rm -f "$NFT_PIN_PATCH"
+
+echo "  NFT Pin + Download buttons patched."
+
+# --- NFT IPFS Pinning: Add pin indicator on Library cards ---
+echo "  - NFT Pin: Adding pin indicator to Library cards"
+LIB_PIN_PATCH=$(mktemp)
+cat > "$LIB_PIN_PATCH" << 'LIB_PIN_PATCH_EOF'
+import pathlib, sys
+build_dir = sys.argv[1]
+
+f = pathlib.Path(build_dir) / 'src' / 'components' / 'MyContracts' / 'Library' / 'MyVaultExplorer.tsx'
+c = f.read_text()
+
+# Add PushPin icon and state imports
+c = c.replace(
+    "import CapsuleAdapter from 'src/components/Capsule/CapsuleAdapter';",
+    "import CapsuleAdapter from 'src/components/Capsule/CapsuleAdapter';\nimport PushPinIcon from '@mui/icons-material/PushPin';\nimport Tooltip from '@mui/material/Tooltip';"
+)
+
+# Add a context provider for pinned CIDs at the top of the MyVaultExplorer component
+# We'll add a custom hook that fetches pinned CIDs once
+old_card_render = '''const MyVaultCardRender: React.FC<MyVaultCardRenderProps> = ({
+  item,
+}) => (
+  <CapsuleAdapter
+    item={item as CapsuleItem}
+    listingIcon={FolderCopyIcon}
+  />
+);'''
+
+new_card_render = '''const PinnedCidsContext = React.createContext<Set<string>>(new Set());
+
+const getPC2AuthToken = (): string => {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('puter.auth.token') || '';
+  } catch(e) { return ''; }
+};
+
+const usePinnedCids = () => {
+  const [cids, setCids] = React.useState<Set<string>>(new Set());
+  React.useEffect(() => {
+    const tk = getPC2AuthToken();
+    const headers: Record<string, string> = {};
+    if (tk) headers['Authorization'] = 'Bearer ' + tk;
+    fetch('/api/nft/pins', { headers })
+      .then(r => r.json())
+      .then(data => {
+        if (data.pins) {
+          setCids(new Set(data.pins.map((p: any) => p.cid)));
+        }
+      })
+      .catch(() => {});
+  }, []);
+  return cids;
+};
+
+const extractCid = (url: string | undefined): string | null => {
+  if (!url) return null;
+  const match = url.match(/(?:ipfs:\\/\\/|\\/ipfs\\/|^)(Qm[a-zA-Z0-9]{44}|baf[a-zA-Z0-9]+)/);
+  return match ? match[1] : null;
+};
+
+const MyVaultCardRender: React.FC<MyVaultCardRenderProps> = ({
+  item,
+}) => {
+  const pinnedCids = React.useContext(PinnedCidsContext);
+  const capsule = item as CapsuleItem;
+  const cid = extractCid(capsule.imageURL) || extractCid(capsule.tokenURI);
+  const isPinned = cid ? pinnedCids.has(cid) : false;
+
+  return (
+    <Box sx={{ position: 'relative' }}>
+      <CapsuleAdapter
+        item={capsule}
+        listingIcon={FolderCopyIcon}
+      />
+      {isPinned && (
+        <Tooltip title="Pinned to your node">
+          <Box sx={{
+            position: 'absolute', top: 8, right: 8, zIndex: 2,
+            bgcolor: 'rgba(0,0,0,0.6)', borderRadius: '50%',
+            width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            <PushPinIcon sx={{ fontSize: 16, color: '#4caf50' }} />
+          </Box>
+        </Tooltip>
+      )}
+    </Box>
+  );
+};'''
+
+c = c.replace(old_card_render, new_card_render)
+
+# Wrap the LazyLoadProvider with PinnedCidsContext.Provider
+c = c.replace(
+    "return (\n    <LazyLoadProvider",
+    "const pinnedCids = usePinnedCids();\n\n  return (\n    <PinnedCidsContext.Provider value={pinnedCids}>\n    <LazyLoadProvider"
+)
+
+c = c.replace(
+    "    </LazyLoadProvider>\n  );\n};",
+    "    </LazyLoadProvider>\n    </PinnedCidsContext.Provider>\n  );\n};"
+)
+
+f.write_text(c)
+print('    MyVaultExplorer.tsx patched with pin indicators')
+LIB_PIN_PATCH_EOF
+python3 "$LIB_PIN_PATCH" "$BUILD_DIR"
+rm -f "$LIB_PIN_PATCH"
+
+echo "  Library pin indicators patched."
 step_time
 
 # 4. Install dependencies
@@ -729,6 +1447,15 @@ for item in "$OUTPUT_DIR"/*; do
 done
 cp -r "$BUILD_DIR/build/"* "$OUTPUT_DIR/"
 
+# 6b. Post-build: fix any remaining dead IPFS gateways in compiled JS
+echo "  - Post-build: Replacing dead IPFS gateways in compiled JS..."
+find "$OUTPUT_DIR/assets" -name '*.js' -exec sed -i '' \
+  -e 's|https://cloudflare-ipfs\.com|https://ipfs.io|g' \
+  -e 's|http://cloudflare-ipfs\.com|https://ipfs.io|g' \
+  -e 's|https://ipfs\.ela\.city|https://ipfs.io|g' \
+  {} +
+echo "    Done replacing dead gateways in built JS"
+
 # 7. Post-build cleanup: remove dead weight from unused features
 echo "[7/8] Post-build cleanup (removing unused features)..."
 SIZE_BEFORE=$(du -sm "$OUTPUT_DIR" | awk '{print $1}')
@@ -743,31 +1470,32 @@ rm -f "$OUTPUT_DIR/wasm_exec.js"
 # Also remove its script tag from index.html if present
 sed -i '' '/<script src=".*wasm_exec.js"><\/script>/d' "$OUTPUT_DIR/index.html" 2>/dev/null
 
-# 7c. Unused lazy-loaded JS route chunks (features stripped from UI)
-# CONSERVATIVE: Only delete chunks for routes that are confirmed unreachable
-# Do NOT delete chunks that may be imported by shared contexts or the main bundle
-echo "  - Removing unused route chunks..."
-cd "$OUTPUT_DIR/assets"
-rm -f AdminConsole-*.js
-rm -f PlayerView-*.js
-rm -f signup-*.js
-rm -f RegisterForm-*.js
-rm -f SubscriptionExplorer-*.js
-rm -f CinemaExplorer-*.js
-rm -f CinemaHorizontalFilter-*.js
-rm -f ChannelCreate-*.js
-rm -f HistoryMediaItemList-*.js
-rm -f MediaHistory-*.js
-rm -f MediaRow-*.js
-rm -f MediaRoyalties-*.js
-rm -f Messages-*.js
-rm -f MyChannelsTabView-*.js
-rm -f NoVideoFound-*.js
-cd "$OUTPUT_DIR"
+# 7c. JS chunk cleanup DISABLED
+# Vite's __vitePreload lists shared dependencies across routes. Deleting ANY chunk
+# that appears as a preload dependency (even for unused routes) causes dynamic imports
+# to fail for ALL routes that share those dependencies. The ~2MB savings is not worth
+# the breakage. Only WASM and image cleanup is safe.
+echo "  - Skipping JS chunk cleanup (Vite preload dependencies are shared)"
 
 # 7d. Static mascot/marketing images (features removed from UI)
-echo "  - Removing unused static images..."
-rm -rf "$OUTPUT_DIR/static/elacity/bella and flint"
+# Keep essential "bella and flint" images used by active pages (empty states)
+echo "  - Removing unused static images (keeping active empty-state images)..."
+# Selectively remove unused bella and flint images instead of entire directory
+# Keep: No Assets Flint Bella.png (Library), Jumping.png (Explore), No activity .png (Revenue),
+#        Flint Ingelligence.png (Chart), Shopping Flint Bella.png (Revenue assets empty)
+if [ -d "$OUTPUT_DIR/static/elacity/bella and flint" ]; then
+  cd "$OUTPUT_DIR/static/elacity/bella and flint"
+  for f in *; do
+    case "$f" in
+      "No Assets Flint Bella.png"|"Jumping.png"|"No activity .png"|"Flint Ingelligence.png"|"Shopping Flint Bella.png"|"Confused Flint Bella.png"|"Flint Unimpressed.png")
+        ;; # keep
+      *)
+        rm -f "$f"
+        ;;
+    esac
+  done
+  cd "$OUTPUT_DIR"
+fi
 rm -rf "$OUTPUT_DIR/static/elacity/flint"
 rm -rf "$OUTPUT_DIR/static/img"
 rm -rf "$OUTPUT_DIR/static/mock-images"
@@ -883,9 +1611,19 @@ try {
 })();
 </script>'''
 
-html = html.replace('<head>', '<head>\n' + inject, 1)
+dark_scrollbar_css = r'''<style>
+/* Dark scrollbar matching Elacity Market dark theme */
+* { scrollbar-width: thin; scrollbar-color: #444 #121212; }
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #666; }
+::-webkit-scrollbar-corner { background: transparent; }
+</style>'''
+
+html = html.replace('<head>', '<head>\n' + inject + '\n' + dark_scrollbar_css, 1)
 index.write_text(html)
-print("  Injected PC2 bootstrap script into index.html")
+print("  Injected PC2 bootstrap script + dark scrollbar CSS into index.html")
 PYEOF
 
 BUILD_END=$(date +%s)

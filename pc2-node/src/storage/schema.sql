@@ -190,6 +190,21 @@ CREATE TABLE IF NOT EXISTS pinned_cids (
   PRIMARY KEY (cid, wallet_address)
 );
 
+-- NFT Pins table: Tracks NFT images pinned to the node by owners
+CREATE TABLE IF NOT EXISTS nft_pins (
+  cid TEXT NOT NULL,
+  wallet_address TEXT NOT NULL,
+  contract_address TEXT NOT NULL,
+  token_id TEXT NOT NULL,
+  name TEXT,
+  collection_name TEXT,
+  mime_type TEXT,
+  file_path TEXT,
+  pin_status TEXT NOT NULL DEFAULT 'queued',
+  pinned_at INTEGER NOT NULL,
+  PRIMARY KEY (cid, wallet_address)
+);
+
 -- Content catalog table: On-chain indexed content for decentralized discovery
 CREATE TABLE IF NOT EXISTS content_catalog (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -265,6 +280,8 @@ CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action);
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_wallet ON scheduled_tasks(wallet_address);
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_next_run ON scheduled_tasks(next_run_at);
 CREATE INDEX IF NOT EXISTS idx_installed_apps_cid ON installed_apps(cid);
+CREATE INDEX IF NOT EXISTS idx_nft_pins_wallet ON nft_pins(wallet_address);
+CREATE INDEX IF NOT EXISTS idx_nft_pins_contract ON nft_pins(contract_address, token_id);
 CREATE INDEX IF NOT EXISTS idx_pinned_cids_wallet ON pinned_cids(wallet_address);
 CREATE INDEX IF NOT EXISTS idx_pinned_cids_status ON pinned_cids(pin_status);
 CREATE INDEX IF NOT EXISTS idx_pinned_cids_served ON pinned_cids(last_served_at);
