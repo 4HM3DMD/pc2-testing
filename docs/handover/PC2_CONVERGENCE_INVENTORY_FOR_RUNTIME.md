@@ -5,6 +5,16 @@
 > **To:** Anders / Runtime Engineering
 > **Purpose:** Everything PC2 has built that maps to Runtime capsules, providers, and infrastructure -- ready for the bottoms-up convergence starting with v0.1.2
 
+### Repositories
+
+| Repo | Branch | URL |
+|------|--------|-----|
+| **PC2 (main codebase)** | `feature/lit-chipotle-migration` | [github.com/Elacity/pc2.net](https://github.com/Elacity/pc2.net/tree/feature/lit-chipotle-migration) |
+| **ElastOS Runtime** | `review/0.1.2` | [github.com/Elacity/elastos-runtime](https://github.com/Elacity/elastos-runtime/tree/review/0.1.2) |
+| **ElastOS Launcher** (Electron) | `main` | [github.com/Elacity/elastos-launcher](https://github.com/Elacity/elastos-launcher) |
+| **Elacity Market** (React dApp) | `main` | [github.com/aspect-build/elacity-app](https://github.com/aspect-build/elacity-app) |
+| **Elacity JS SDK** | `main` | [github.com/aspect-build/elacity-js](https://github.com/aspect-build/elacity-js) |
+
 ---
 
 ## TL;DR
@@ -59,6 +69,8 @@ These compile to the exact same WASI target the Runtime uses via Wasmtime. No re
 | `amm-engine` | ~143KB | Uniswap V2 AMM math (price calculation) | DeFi Capsule |
 
 All crates built with `wasm-opt` optimization, `panic = "abort"`, and SIMD-enabled where applicable.
+
+**Source:** [`pc2-node/packages/`](https://github.com/Elacity/pc2.net/tree/feature/lit-chipotle-migration/pc2-node/packages) — each crate is a subdirectory with its own `Cargo.toml`.
 
 **Build:**
 ```bash
@@ -132,8 +144,8 @@ App (iframe/capsule)
 ```
 
 **Key files:**
-- `pc2-node/src/wallet-bridge/pc2-wallet-bridge.js` -- Parent-side handler (800 lines)
-- `pc2-node/frontend/pc2-wallet-provider.js` -- EIP-1193 shim injected into iframes
+- [`pc2-node/src/wallet-bridge/pc2-wallet-bridge.js`](https://github.com/Elacity/pc2.net/blob/feature/lit-chipotle-migration/pc2-node/src/wallet-bridge/pc2-wallet-bridge.js) -- Parent-side handler (800 lines)
+- [`pc2-node/frontend/pc2-wallet-provider.js`](https://github.com/Elacity/pc2.net/blob/feature/lit-chipotle-migration/pc2-node/frontend/pc2-wallet-provider.js) -- EIP-1193 shim injected into iframes
 
 **Chain support:** 9 chains configured with RPCs + metadata, including ESC (20), Base (8453), Ethereum (1), BSC (56), Polygon (137).
 
@@ -170,12 +182,12 @@ Buyer views asset:
 
 ### Smart Contracts (Base Mainnet, chain 8453)
 
-| Contract | Address | Purpose |
-|----------|---------|---------|
-| AuthorityGateway | `0x8fe6bf9877B78BF0126819ff2593235E54Ee1E29` | Buy/sell ACCESS_TOKENs |
-| TradeGateway | `0x9eC53758b698f9F68C0654DDd9159173a159a459` | Trade ROYALTY_SHAREs |
-| CoreStorage | `0xc8F50Bf1A6b765460621f861a64a5d333Bc7f575` | Content registry |
-| ChannelCore | `0x6a3f7780C54cb66291f8f1bE609047C2f664Dbf6` | Creator channels |
+| Contract | Address | Explorer | Purpose |
+|----------|---------|----------|---------|
+| AuthorityGateway | `0x8fe6bf9877B78BF0126819ff2593235E54Ee1E29` | [BaseScan](https://basescan.org/address/0x8fe6bf9877B78BF0126819ff2593235E54Ee1E29) | Buy/sell ACCESS_TOKENs |
+| TradeGateway | `0x9eC53758b698f9F68C0654DDd9159173a159a459` | [BaseScan](https://basescan.org/address/0x9eC53758b698f9F68C0654DDd9159173a159a459) | Trade ROYALTY_SHAREs |
+| CoreStorage | `0xc8F50Bf1A6b765460621f861a64a5d333Bc7f575` | [BaseScan](https://basescan.org/address/0xc8F50Bf1A6b765460621f861a64a5d333Bc7f575) | Content registry |
+| ChannelCore | `0x6a3f7780C54cb66291f8f1bE609047C2f664Dbf6` | [BaseScan](https://basescan.org/address/0x6a3f7780C54cb66291f8f1bE609047C2f664Dbf6) | Creator channels |
 
 ### As a Runtime Provider Capsule
 
@@ -204,15 +216,15 @@ We've already introduced Runtime-compatible concepts at trust boundaries:
 
 | What | Where | Purpose |
 |------|-------|---------|
-| `CAPABILITY_SCOPES` constant | `types/capabilities.ts` | 1:1 mapping to Runtime capability token actions |
-| `CapabilityPrincipal` interface | `middleware.ts` | Structured auth with type/capabilities/scopes |
-| Ed25519 signature verification | `AppInstallService.ts` | Verifies app bundle signatures (warn-only in v1) |
-| Provider operation interfaces | `services/providers/types.ts` | `DRMProvider`, `StorageProvider`, `IdentityProvider`, `ComputeProvider` |
-| Wallet bridge origin tracking | `pc2-wallet-bridge.js` | Origin validation + RPC method capability classification |
+| `CAPABILITY_SCOPES` constant | [`pc2-node/src/types/capabilities.ts`](https://github.com/Elacity/pc2.net/blob/feature/lit-chipotle-migration/pc2-node/src/types/capabilities.ts) | 1:1 mapping to Runtime capability token actions |
+| `CapabilityPrincipal` interface | [`pc2-node/src/middleware.ts`](https://github.com/Elacity/pc2.net/blob/feature/lit-chipotle-migration/pc2-node/src/middleware.ts) | Structured auth with type/capabilities/scopes |
+| Ed25519 signature verification | [`pc2-node/src/services/AppInstallService.ts`](https://github.com/Elacity/pc2.net/blob/feature/lit-chipotle-migration/pc2-node/src/services/AppInstallService.ts) | Verifies app bundle signatures (warn-only in v1) |
+| Provider operation interfaces | [`pc2-node/src/services/providers/types.ts`](https://github.com/Elacity/pc2.net/blob/feature/lit-chipotle-migration/pc2-node/src/services/providers/types.ts) | `DRMProvider`, `StorageProvider`, `IdentityProvider`, `ComputeProvider` |
+| Wallet bridge origin tracking | [`pc2-wallet-bridge.js`](https://github.com/Elacity/pc2.net/blob/feature/lit-chipotle-migration/pc2-node/src/wallet-bridge/pc2-wallet-bridge.js) | Origin validation + RPC method capability classification |
 | dDRM capsule content hashing | Creator app | SHA-256 `capsuleHash` + `signedBy` fields on `.ddrm` capsules |
 | Audit logging | `agent_audit_log` table | Logs skill loads, AI actions with hash verification |
 | App manifests | 7 `app.json` files | `api_endpoints`, `postMessage_events`, `external_services` |
-| Namespace mapping | `NAMESPACE_MAPPING.md` | PC2 paths → `localhost://` namespace table |
+| Namespace mapping | [`NAMESPACE_MAPPING.md`](https://github.com/Elacity/pc2.net/blob/feature/lit-chipotle-migration/docs/core/NAMESPACE_MAPPING.md) | PC2 paths → `localhost://` namespace table |
 
 ---
 
@@ -275,14 +287,25 @@ These are PC2 v1 patterns that should be replaced by Runtime equivalents:
 
 ## 9. Reference Documents
 
-| Document | Location | What It Covers |
-|----------|----------|---------------|
-| Architecture Convergence | `docs/core/ARCHITECTURE_CONVERGENCE.md` | 1330-line deep dive: PC2 vs Runtime, mapping every component |
-| Capsule Compatibility | `docs/core/CAPSULE_COMPATIBILITY.md` | Refactoring inventory, provider mapping, status table |
-| Namespace Mapping | `docs/core/NAMESPACE_MAPPING.md` | PC2 paths → `localhost://` namespace |
-| App Manifest Spec | `docs/core/APP_MANIFEST_SPEC.md` | `app.json` schema, forward-compatible with Runtime |
-| dDRM Technical Handover | `docs/handover/IRZHY_DDRM_HANDOVER.md` | Complete dDRM implementation guide |
-| dApp Runtime Strategy | `docs/updates/DApp_Runtime_Strategy_Apr_2026.md` | iframe → capsule evolution roadmap |
+All in the [PC2 repository](https://github.com/Elacity/pc2.net/tree/feature/lit-chipotle-migration):
+
+| Document | Link | What It Covers |
+|----------|------|---------------|
+| Architecture Convergence | [`docs/core/ARCHITECTURE_CONVERGENCE.md`](https://github.com/Elacity/pc2.net/blob/feature/lit-chipotle-migration/docs/core/ARCHITECTURE_CONVERGENCE.md) | 1330-line deep dive: PC2 vs Runtime, mapping every component |
+| Capsule Compatibility | [`docs/core/CAPSULE_COMPATIBILITY.md`](https://github.com/Elacity/pc2.net/blob/feature/lit-chipotle-migration/docs/core/CAPSULE_COMPATIBILITY.md) | Refactoring inventory, provider mapping, status table |
+| Namespace Mapping | [`docs/core/NAMESPACE_MAPPING.md`](https://github.com/Elacity/pc2.net/blob/feature/lit-chipotle-migration/docs/core/NAMESPACE_MAPPING.md) | PC2 paths → `localhost://` namespace |
+| App Manifest Spec | [`docs/core/APP_MANIFEST_SPEC.md`](https://github.com/Elacity/pc2.net/blob/feature/lit-chipotle-migration/docs/core/APP_MANIFEST_SPEC.md) | `app.json` schema, forward-compatible with Runtime |
+| dDRM Technical Handover | `docs/handover/IRZHY_DDRM_HANDOVER.md` *(private — contains secrets, not on GitHub)* | Complete dDRM implementation guide |
+| dApp Runtime Strategy | [`docs/updates/DApp_Runtime_Strategy_Apr_2026.md`](https://github.com/Elacity/pc2.net/blob/feature/lit-chipotle-migration/docs/updates/DApp_Runtime_Strategy_Apr_2026.md) | iframe → capsule evolution roadmap |
+| PC2 Roadmap | [`docs/core/ROADMAP.md`](https://github.com/Elacity/pc2.net/blob/feature/lit-chipotle-migration/docs/core/ROADMAP.md) | Full milestones + Runtime integration status table |
+
+### Live Products
+
+| Product | URL |
+|---------|-----|
+| Elacity Market (live) | [https://ela.city](https://ela.city) |
+| ElastOS Launcher releases | [github.com/Elacity/elastos-launcher/releases](https://github.com/Elacity/elastos-launcher/releases/tag/v1.2.2) |
+| Runtime install script | `curl -fsSL https://elastos.elacitylabs.com/install.sh \| bash` |
 
 ---
 
@@ -293,8 +316,8 @@ These are PC2 v1 patterns that should be replaced by Runtime equivalents:
 | Apps | 7 | Market, Creator, NFT, Glide DEX, Player, Viewer, dDRM Viewer |
 | WASM crates | 8 | All `wasm32-wasip1`, crypto + media + EVM |
 | API endpoints | ~100 | File ops, IPFS, AI, wallet, dDRM, terminal, backup |
-| Smart contracts | 4 | AuthorityGateway, TradeGateway, CoreStorage, ChannelCore |
+| Smart contracts | 4 | AuthorityGateway, TradeGateway, CoreStorage, ChannelCore ([BaseScan links above](#smart-contracts-base-mainnet-chain-8453)) |
 | Supported chains | 9 | ESC, Base, Ethereum, BSC, Polygon, Arbitrum, Optimism, Avalanche, Sonic |
 | Content types | 15+ | Video, audio, images, PDF, 3D models, code, datasets, fonts, archives |
-| macOS launcher | Notarized | v1.2.2, Apple Developer ID, double-click install |
-| Linux | AppImage + deb | Jetson + x86_64 verified |
+| macOS launcher | Notarized | [v1.2.2 DMG download](https://github.com/Elacity/elastos-launcher/releases/tag/v1.2.2), Apple Developer ID, double-click install |
+| Linux | AppImage + deb | [v1.2.2 downloads](https://github.com/Elacity/elastos-launcher/releases/tag/v1.2.2), Jetson + x86_64 verified |
