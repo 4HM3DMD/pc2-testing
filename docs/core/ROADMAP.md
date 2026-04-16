@@ -688,29 +688,38 @@ These diagrams from Rong define the north star. Every work stream should move us
 
 **Goal:** Anders' Rust runtime begins integrating. Agent economy emerges.
 
-**ElastOS Runtime Status (as of Mar 31, 2026 — First Public Release):**
-> Repository: [github.com/Elacity/elastos-runtime](https://github.com/Elacity/elastos-runtime)
-> Pure Rust monorepo (~16K LOC across runtime + common crates, targeting 5-7K trusted core). No C dependencies, no OpenSSL.
+**ElastOS Runtime Status (v0.1.2 — Apr 16, 2026):**
+> Repository: [github.com/Elacity/elastos-runtime](https://github.com/Elacity/elastos-runtime) branch `review/0.1.2`
+> Pure Rust monorepo (~96K LOC across 163 Rust files). No C dependencies, no OpenSSL.
 > Verified on Linux x86_64 and aarch64 (Jetson). macOS: compiles and runs (WASM + full security model), microVM requires Linux KVM.
-> Full documentation: ARCHITECTURE, NAMESPACES, CARRIER, COMMAND_MATRIX, GLOSSARY, CAPSULE_MODEL.
-> Fresh install to PC2 home: `curl -fsSL https://elastos.elacitylabs.com/install.sh | bash && elastos setup && elastos`
+> 17 capsules: pc2, agent, chat, chat-wasm, did-provider, gba-emulator, gba-ucity, ipfs-provider, llama-provider, md-viewer, notepad, room-browser, room-browser-ui, site-provider, tunnel-provider, webspace-provider, ai-provider
+> Fresh install: `curl -fsSL https://elastos.elacitylabs.com/install.sh | bash && elastos setup && elastos`
 
 | Component | Status | Notes |
 |-----------|--------|-------|
 | Runtime core (capabilities, signatures, audit) | **Verified** | 12 checks per capability invocation, Ed25519 signed tokens |
 | WASM execution (Wasmtime) | **Verified** | `wasm32-wasip1` — same target as our WASM crates. Works on macOS |
 | microVM execution (crosvm/KVM) | **Verified** | Rootless on Jetson and WSL. Linux-only (KVM required) |
-| Carrier P2P (DID, DHT, gossip, relay) | **Verified** | iroh (QUIC + DHT + relay). Native↔WASM interop proven Mar 30 |
+| Carrier P2P (DID, DHT, gossip, relay) | **Verified** | iroh (QUIC + DHT + relay). Native/WASM interop. Room sync with sovereign invite/accept |
 | Data capsules (signed content + viewer) | **Working** | Maps directly to `.ddrm.json` + dDRM Viewer |
-| Signed release pipeline | **Proven** | Ed25519 publish/install/update. CID/checksum fields in components.json not yet populated |
+| Signed release pipeline | **Proven** | Ed25519 publish/install/update |
 | AI provider (`elastos://ai/`) | **Working** | LLM routing via llama-provider |
-| Provider interface | **Documented** | stdin/stdout JSON protocol: `fetch`, `store`, `list`, `delete`. Clear target for dDRM Provider Capsule |
-| Namespace model (`localhost://`, `elastos://`) | **Documented** | `localhost://Users/`, `UsersAI/`, `AppCapsules/`, `WebSpaces/`, `MyWebSite` all defined |
-| Host adapter model | **Documented** | Server/headless (= our PC2 Node.js), desktop, mobile, kiosk modes defined |
-| Blockchain integration | **Next** | No EVM wallet, no on-chain verification yet. Dependency for ACCESS_TOKEN → capability token bridge |
-| macOS packaging | **COMPLETE -- Notarized** | Apple Developer ID cert + Hardened Runtime + notarization Accepted + stapled. v1.2.2 released on GitHub with DMG/ZIP. Users double-click to install, no Terminal needed. Team ID: LA64G2ZMY2 |
+| DID identity | **Working** | Device-backed `did:key` with Ed25519, local profile storage, shared nickname handling |
+| Room/Chat | **Working** | Native P2P chat, signed messages, cross-runtime Carrier sync, hosted room-browser |
+| Provider interface | **Documented** | stdin/stdout JSON protocol for capsules |
+| Namespace model (`localhost://`, `elastos://`) | **Documented** | Full object model with typed traversal |
+| Host adapter model | **Documented** | Server/headless (= our PC2 Node.js), desktop, mobile, kiosk |
+| Blockchain integration | **Next** | Anders starting: "DID, EVM, Puter, capsule orchestration user journey" |
+| macOS packaging | **COMPLETE** | Apple notarized v1.2.2, double-click install |
 
-**Runtime Integration (v2.0.0 convergence):**
+**Convergence Plan (agreed Apr 16, 2026 — bottoms-up approach):**
+> Anders and Sasha agreed on bottoms-up convergence: start from vanilla Puter in Runtime, migrate PC2 features to capsules one by one.
+> Convergence inventory document prepared: `docs/handover/PC2_CONVERGENCE_INVENTORY_FOR_RUNTIME.md`
+
+- [ ] **Phase 1 (Now):** Anders focuses on capsule orchestration + blockchain connectivity. PC2 provides ESC RPC, wallet bridge reference, convergence doc.
+- [ ] **Phase 2 (Next month):** `wallet-provider` capsule (EVM signing) + `storage-provider` capsule (IPFS). These two unlock blockchain + storage inside Runtime.
+- [ ] **Phase 3:** `drm-provider` capsule using existing WASM crates. Needs Phase 2 providers.
+- [ ] **Phase 4:** App capsules (Market, Creator, Player, Viewer) as signed capsules with capability tokens.
 - [ ] PC2 desktop as Shell capsule — Puter runs inside Runtime as the orchestrator
 - [ ] WASM sandboxed execution for app capsules
 - [ ] Capability token model (capsules request permissions, shell grants/denies)

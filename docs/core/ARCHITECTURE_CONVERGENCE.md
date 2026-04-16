@@ -1324,6 +1324,16 @@ Introduced capsule-compatible concepts at every major trust boundary without bre
 
 See [CAPSULE_COMPATIBILITY.md](./CAPSULE_COMPATIBILITY.md) for the full inventory.
 
-### Apple Developer Program — Obtained (Apr 3, 2026)
+### Apple Developer Program — COMPLETE (Apr 16, 2026)
 
-Apple Developer cert now active. The [elastos-launcher](https://github.com/Elacity/elastos-launcher) .dmg can be code-signed and notarized, eliminating the `xattr -cr` Terminal workaround. macOS users will be able to install with a simple double-click.
+Apple notarization confirmed. v1.2.2 released on GitHub with notarized DMG. Users double-click to install, no Terminal needed.
+
+### Runtime v0.1.2 Convergence Plan — Agreed (Apr 16, 2026)
+
+Anders and Sasha agreed on **bottoms-up convergence**: start from vanilla Puter in Runtime, migrate PC2 features to capsules one by one. Anders is focusing on capsule orchestration + blockchain connectivity next. DID is now derived from device ID (no wallet signatures needed).
+
+**Key decisions:**
+- Start from vanilla Puter (not PC2's customized Puter)
+- PC2 provides ESC RPC endpoint, wallet bridge reference, and convergence inventory doc
+- Migration sequence: wallet-provider → storage-provider → drm-provider → app capsules
+- Full convergence inventory: `docs/handover/PC2_CONVERGENCE_INVENTORY_FOR_RUNTIME.md`
