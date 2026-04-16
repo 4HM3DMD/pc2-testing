@@ -31,7 +31,7 @@ Deep analysis of [github.com/Elacity/elastos-runtime](https://github.com/Elacity
 | Item | Impact |
 |------|--------|
 | `components.json` CID/checksum fields mostly empty | Release pipeline not fully automated |
-| macOS: full security model works, but no code signing/notarization | **Now unblocked** — Apple Developer cert obtained Apr 3, 2026 |
+| macOS: full security model works, code signing + notarization | **COMPLETE** — Apple notarized, v1.2.2 released. Double-click install, no Terminal needed |
 | No blockchain/EVM wallet integration | **Biggest gap** for Elacity — gates ACCESS_TOKEN bridge |
 | No marketplace, no dApp store UI | Runtime is pure infrastructure, no commerce layer |
 | No encrypted capsules (DRM) | Provider interface documented but not implemented |
@@ -450,7 +450,7 @@ The `mp4-split` WASM module now supports a `split_init` mode that strips non-tar
 | Wallet bridge origin tracking | 0.5 day | Yes — **done Apr 3** |
 | dDRM capsule hashing | 0.5 day | Yes — **done Apr 3** |
 | V3 contract migration | 2-3 days | **Blocked** — waiting on Irzhy SDK |
-| macOS .dmg code signing | 1-2 days | **Unblocked** — Apple Developer cert obtained Apr 3 |
+| macOS .dmg code signing | 1-2 days | **DONE** — Notarized + stapled, v1.2.2 on GitHub |
 | Supernode Lit relay | 1-2 days | Yes — needs Contabo/InterServer deployment |
 | dDRM Provider Capsule (Rust) | 2-4 weeks | **Blocked** — needs Runtime EVM integration |
 | ACCESS_TOKEN → capability bridge | 2-4 weeks | **Blocked** — needs Runtime blockchain support |

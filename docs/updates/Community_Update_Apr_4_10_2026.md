@@ -270,10 +270,13 @@ Full audit documented in `.cursor/tasks/MARKET-FEATURES/MARKET-UI-AUDIT-APRIL-20
 - ESC full nodes fully synced on both supernodes (block 36,095,676)
 - Both provision endpoints verified externally
 
-### macOS Notarization
-- Apple DTS confirmed the APFS→HFS+ workaround was a red herring
-- Action: revert to APFS DMG, resubmit, share notary UUID if delayed
-- ROADMAP updated with current status
+### macOS Notarization -- COMPLETE (Confirmed Apr 16)
+- All 6 Apple notarization submissions **Accepted** (Apr 5-6 submissions all cleared)
+- v1.2.2 DMG notarized + ticket stapled locally
+- Gatekeeper confirms: `source=Notarized Developer ID, origin=Developer ID Application: Elacity LLC (LA64G2ZMY2)`
+- **Users can now double-click the .dmg to install -- no Terminal, no `xattr -cr` needed**
+- GitHub release v1.2.2 includes DMG, ZIP, AppImage, .deb, and Windows .exe
+- Apple keychain profile `notary-elacity` stored for future automated submissions
 
 ---
 

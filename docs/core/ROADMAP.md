@@ -310,8 +310,9 @@ These diagrams from Rong define the north star. Every work stream should move us
 - [ ] Raspberry Pi 4/5 validation and optimization
 - [ ] Explore dedicated DePIN hardware partnerships (plug-and-play boxes)
 - [ ] Debian package (.deb) for ARM devices
-- [ ] macOS package (.dmg) — **Code signing implemented Apr 6, 2026**. [elastos-launcher](https://github.com/Elacity/elastos-launcher) v1.2.0: Developer ID Application cert, Hardened Runtime + entitlements, CI secrets configured for automated signing. **Apple DTS response (Apr 6):** Quinn (DTS Engineer) confirmed the APFS→HFS+ workaround was a red herring — DTS r. 134264492 was about UDF images, not APFS. The "In Progress" delay was the normal in-depth analysis path for new accounts. Apple's system learns to recognize apps over time, so future submissions should clear faster. **Action:** revert to APFS DMG (remove `afterAllArtifactBuild` HFS+ hook), resubmit, and share notary UUID with DTS if still delayed. See [Notarisation Resources](https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution). Team ID: LA64G2ZMY2
-- [ ] Windows native installer (.exe) — after WSL is solid
+- [x] **macOS package (.dmg) — NOTARIZED AND RELEASED** *(milestone: Apr 16, 2026)*. [elastos-launcher](https://github.com/Elacity/elastos-launcher) v1.2.2: Developer ID Application cert (`Elacity LLC, LA64G2ZMY2`), Hardened Runtime + entitlements, Apple notarization **Accepted**, ticket stapled. **Users can now double-click the DMG to install — no Terminal, no `xattr -cr` needed.** GitHub release: [v1.2.2](https://github.com/Elacity/elastos-launcher/releases/tag/v1.2.2) with DMG + ZIP + AppImage + deb + Windows exe. CI pipeline: electron-builder signs → `scripts/notarize.js` submits to Apple → UUID returned. Keychain profile `notary-elacity` stored locally for manual submissions.
+- [x] Windows installer (.exe) — available in v1.2.2 release (NSIS installer + portable). Not recommended for daily use (WSL still preferred), but available for testing.
+- [ ] **Android / Google Play** — Electron doesn't target Android natively. Options: (1) Capacitor/Cordova wrapper around the web UI (points to `localhost:4200`), (2) Progressive Web App (PWA) with `manifest.json` (no Play Store), (3) React Native or Flutter native app as a launcher/remote client. Android is primarily useful as a **remote access client** to your PC2 node, not a node host. See assessment below.
 
 **Carrier Overlay Network:**
 - [x] Gateway under systemd with auto-restart — deployed live, enabled for boot
@@ -707,7 +708,7 @@ These diagrams from Rong define the north star. Every work stream should move us
 | Namespace model (`localhost://`, `elastos://`) | **Documented** | `localhost://Users/`, `UsersAI/`, `AppCapsules/`, `WebSpaces/`, `MyWebSite` all defined |
 | Host adapter model | **Documented** | Server/headless (= our PC2 Node.js), desktop, mobile, kiosk modes defined |
 | Blockchain integration | **Next** | No EVM wallet, no on-chain verification yet. Dependency for ACCESS_TOKEN → capability token bridge |
-| macOS packaging | **Signing done, notarization clearing** | Apple Developer ID cert + Hardened Runtime + entitlements configured Apr 6. CI pipeline configured with signing secrets. Apple DTS confirmed APFS→HFS+ workaround unnecessary (DTS r. 134264492 was about UDF, not APFS). Delay was normal in-depth analysis for new accounts — system learns over time. **Next:** revert to APFS DMG, resubmit, share UUID if delayed. Team ID: LA64G2ZMY2 |
+| macOS packaging | **COMPLETE -- Notarized** | Apple Developer ID cert + Hardened Runtime + notarization Accepted + stapled. v1.2.2 released on GitHub with DMG/ZIP. Users double-click to install, no Terminal needed. Team ID: LA64G2ZMY2 |
 
 **Runtime Integration (v2.0.0 convergence):**
 - [ ] PC2 desktop as Shell capsule — Puter runs inside Runtime as the orchestrator

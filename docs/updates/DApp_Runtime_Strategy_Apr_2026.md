@@ -372,7 +372,7 @@ When Runtime v2 capsule architecture is ready:
 3. **V3 contract migration** (when Irzhy provides SDK) — update addresses in 8+ locations
 
 ### Short-term (Next 1-2 Weeks)
-4. **macOS .dmg code signing** — Apple Developer cert obtained Apr 3. Sign + notarize [elastos-launcher](https://github.com/Elacity/elastos-launcher) .dmg, eliminate `xattr -cr` Terminal workaround
+4. ~~**macOS .dmg code signing**~~ — ✅ DONE. Apple notarized + stapled. v1.2.2 released on GitHub. Double-click install, no Terminal needed
 5. **v1.3 release prep** — merge to main, tag, test on fresh installs
 6. **Decentralized Lit relay** — supernode proxy architecture (API key stays on supernodes)
 
