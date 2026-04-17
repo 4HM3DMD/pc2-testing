@@ -5,7 +5,7 @@
  */
 
 import { Router, Response } from 'express';
-import { authenticate, AuthenticatedRequest } from './middleware.js';
+import { authenticate, requireOwner, AuthenticatedRequest } from './middleware.js';
 import { logger } from '../utils/logger.js';
 import { getEffectiveStorageLimit } from './info.js';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
@@ -1182,33 +1182,123 @@ const pendingLitCalls = new Map<string, Promise<string>>();
 
 // ── Session-scoped CEK cache ──────────────────────────────────
 // Short-lived in-memory cache to avoid redundant Lit Action calls within a
-// single viewing session (e.g. multi-page PDFs, window resize re-renders).
-// - 5 minute TTL, memory-only, cleared on process restart
-// - Keyed on (kid + buyerAddress) so different users never share CEKs
-// - Never written to disk — the AuthorityGateway remains the source of truth
+// single viewing session (e.g. multi-page PDFs, multi-chapter EPUBs,
+// window resize re-renders).
+//
+// Properties:
+//   - 5 minute TTL, memory-only, cleared on process restart
+//   - Keyed on (kid + buyerAddress.toLowerCase()) so different users
+//     never share CEKs and checksummed/flat addresses collapse to one entry
+//   - True LRU eviction: reads promote to most-recently-used; inserts at
+//     capacity evict the least-recently-used entry
+//   - Never written to disk — the AuthorityGateway remains the source of truth
+//
+// Known access-revocation tail: if a user's on-chain access is revoked
+// after first decryption, they retain decrypt capability for the remainder
+// of the TTL window. POST /api/admin/cache/flush-cek force-invalidates.
 const CEK_CACHE_TTL_MS = 5 * 60 * 1000;
 const CEK_CACHE_MAX_ENTRIES = 50;
+
+// Aggregate counters for observability + admin flush diagnostics.
+const cekCacheStats = {
+  hits: 0,
+  misses: 0,
+  evictions: 0,
+  expirations: 0,
+  manualFlushes: 0,
+  coalesced: 0,
+};
+
 const cekSessionCache = new Map<string, { cekBase64: string; expiresAt: number }>();
 
+function cekCacheKey(kid: string, buyerAddress: string): string {
+  return `${kid}:${buyerAddress.toLowerCase()}`;
+}
+
 function getCachedCEK(kid: string, buyerAddress: string): string | null {
-  const key = `${kid}:${buyerAddress.toLowerCase()}`;
+  const key = cekCacheKey(kid, buyerAddress);
   const entry = cekSessionCache.get(key);
-  if (!entry) return null;
-  if (Date.now() > entry.expiresAt) {
-    cekSessionCache.delete(key);
+  if (!entry) {
+    cekCacheStats.misses++;
     return null;
   }
+  if (Date.now() > entry.expiresAt) {
+    cekSessionCache.delete(key);
+    cekCacheStats.expirations++;
+    cekCacheStats.misses++;
+    return null;
+  }
+  // LRU promote: Map preserves insertion order, so delete-then-set moves
+  // this entry to the tail (most-recently-used position). Next eviction
+  // will pick the head of the Map (least-recently-used).
+  cekSessionCache.delete(key);
+  cekSessionCache.set(key, entry);
+  cekCacheStats.hits++;
   return entry.cekBase64;
 }
 
 function cacheCEK(kid: string, buyerAddress: string, cekBase64: string): void {
-  const key = `${kid}:${buyerAddress.toLowerCase()}`;
-  // Evict oldest entries if at capacity
-  if (cekSessionCache.size >= CEK_CACHE_MAX_ENTRIES) {
+  const key = cekCacheKey(kid, buyerAddress);
+  // If the key already exists, we still want to promote it — delete first.
+  if (cekSessionCache.has(key)) {
+    cekSessionCache.delete(key);
+  } else if (cekSessionCache.size >= CEK_CACHE_MAX_ENTRIES) {
+    // Evict least-recently-used (head of insertion-ordered Map).
     const oldest = cekSessionCache.keys().next().value;
-    if (oldest) cekSessionCache.delete(oldest);
+    if (oldest) {
+      cekSessionCache.delete(oldest);
+      cekCacheStats.evictions++;
+    }
   }
   cekSessionCache.set(key, { cekBase64, expiresAt: Date.now() + CEK_CACHE_TTL_MS });
+}
+
+/**
+ * Drop cached CEKs. Called by the admin flush endpoint (access revocation,
+ * emergency response) and can be narrowed to a single kid or user.
+ *
+ * @param opts.kid           When set, only entries for this content kid are removed.
+ * @param opts.buyerAddress  When set, only entries for this buyer (lowercased) are removed.
+ *                           If both set, only the exact pair is removed.
+ *                           If neither set, the entire cache is flushed.
+ * @returns number of entries removed
+ */
+export function flushCEKCache(opts: { kid?: string; buyerAddress?: string } = {}): number {
+  const kid = opts.kid;
+  const addr = opts.buyerAddress ? opts.buyerAddress.toLowerCase() : undefined;
+
+  if (!kid && !addr) {
+    const n = cekSessionCache.size;
+    cekSessionCache.clear();
+    cekCacheStats.manualFlushes += n;
+    return n;
+  }
+
+  let removed = 0;
+  for (const key of Array.from(cekSessionCache.keys())) {
+    // Keys are `${kid}:${addr}` — split on last ':' so kids containing ':' still parse.
+    const sep = key.indexOf(':');
+    if (sep === -1) continue;
+    const entryKid = key.slice(0, sep);
+    const entryAddr = key.slice(sep + 1);
+    const kidMatch = !kid || entryKid === kid;
+    const addrMatch = !addr || entryAddr === addr;
+    if (kidMatch && addrMatch) {
+      cekSessionCache.delete(key);
+      removed++;
+    }
+  }
+  cekCacheStats.manualFlushes += removed;
+  return removed;
+}
+
+export function getCEKCacheStats() {
+  return {
+    ...cekCacheStats,
+    size: cekSessionCache.size,
+    capacity: CEK_CACHE_MAX_ENTRIES,
+    ttlMs: CEK_CACHE_TTL_MS,
+  };
 }
 
 /**
@@ -1534,6 +1624,7 @@ async function recoverCEKAndFetchData(params: DecryptParams, ipfsService?: any):
     // Promise coalescing: if another request is already fetching this CEK, reuse the in-flight call
     const pending = pendingLitCalls.get(coalescingKey);
     if (pending) {
+      cekCacheStats.coalesced++;
       logger.info(`[Lit] Coalescing duplicate Lit call for kid=${kid} (saved $0.01)`);
       return pending;
     }
@@ -1730,6 +1821,74 @@ export async function decryptAssetTwoLayer(params: DecryptParams, ipfsService?: 
 router.post('/lit/decrypt', authenticate, async (_req: AuthenticatedRequest, res: Response) => {
   res.status(410).json({
     error: 'This endpoint has been removed for security. Use /api/storage/lit/secure-view instead.',
+  });
+});
+
+/**
+ * GET /api/storage/admin/cek-cache/stats
+ *
+ * Owner-only. Returns CEK cache observability counters — hits, misses,
+ * evictions, expirations, manual flushes, coalesced Lit calls, plus
+ * current size / capacity / TTL.
+ *
+ * Useful for: diagnosing cost spikes (many misses = cache thrash, bump
+ * capacity), verifying coalescing is working (high coalesced = good),
+ * auditing manual flush activity.
+ */
+router.get('/admin/cek-cache/stats', authenticate, requireOwner, (_req: AuthenticatedRequest, res: Response) => {
+  res.json({
+    ok: true,
+    stats: getCEKCacheStats(),
+  });
+});
+
+/**
+ * POST /api/storage/admin/cek-cache/flush
+ *
+ * Owner-only. Force-invalidates cached CEKs. Use when:
+ *   - A user's on-chain access has been revoked and you need to enforce
+ *     the cutoff before the 5-minute TTL elapses
+ *   - A content kid has been rotated and stale CEKs could be misused
+ *   - Debugging / incident response
+ *
+ * Body (all optional):
+ *   { kid?: string, buyerAddress?: string }
+ *
+ * Behaviour:
+ *   - No body / empty body → full cache flush
+ *   - kid only              → flush every user's entry for that kid
+ *   - buyerAddress only     → flush every kid's entry for that buyer
+ *   - both                  → flush the single (kid, buyer) pair
+ *
+ * Response: { ok: true, removed: number, stats: <current stats> }
+ */
+router.post('/admin/cek-cache/flush', authenticate, requireOwner, (req: AuthenticatedRequest, res: Response) => {
+  const body = (req.body || {}) as { kid?: string; buyerAddress?: string };
+  const kid = typeof body.kid === 'string' && body.kid.length > 0 ? body.kid : undefined;
+  const buyerAddress = typeof body.buyerAddress === 'string' && body.buyerAddress.length > 0 ? body.buyerAddress : undefined;
+
+  // Light input validation — prevents oversized garbage payloads polluting logs.
+  if (kid && kid.length > 256) {
+    res.status(400).json({ error: 'kid too long' });
+    return;
+  }
+  if (buyerAddress && buyerAddress.length > 128) {
+    res.status(400).json({ error: 'buyerAddress too long' });
+    return;
+  }
+
+  const removed = flushCEKCache({ kid, buyerAddress });
+  const actor = req.user?.wallet_address || 'unknown';
+  const scope = kid && buyerAddress ? `kid=${kid.substring(0, 12)}…,buyer=${buyerAddress.substring(0, 10)}…`
+    : kid ? `kid=${kid.substring(0, 12)}…`
+    : buyerAddress ? `buyer=${buyerAddress.substring(0, 10)}…`
+    : 'all';
+  logger.info(`[CEKCache] Manual flush by ${actor.substring(0, 10)}… — scope=${scope}, removed=${removed}`);
+
+  res.json({
+    ok: true,
+    removed,
+    stats: getCEKCacheStats(),
   });
 });
 
