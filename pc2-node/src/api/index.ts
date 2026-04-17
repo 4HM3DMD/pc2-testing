@@ -7,6 +7,7 @@ import path from 'path';
 import fs from 'fs';
 import { DatabaseManager, FilesystemManager } from '../storage/index.js';
 import { Config } from '../config/loader.js';
+import { baseRpcCall } from '../utils/rpc.js';
 import { Server as SocketIOServer } from 'socket.io';
 import { authenticate, corsMiddleware, errorHandler, AuthenticatedRequest } from './middleware.js';
 import { logger, createLogger } from '../utils/logger.js';
@@ -460,6 +461,22 @@ export function setupAPI(app: Express): void {
     res.json({ success: true, total: result.total, items: enriched });
   });
 
+  /**
+   * Trigger an immediate indexer scan. Called by the Creator app after channel
+   * creation or minting so users don't wait up to scan_interval_minutes to see
+   * their own new content. Internally guarded against concurrent scans.
+   */
+  app.post('/api/catalog/reindex', async (req: Request, res: Response) => {
+    const indexer = req.app.locals.indexerService;
+    if (!indexer) return res.status(503).json({ error: 'Indexer not available' });
+    try {
+      const result = await indexer.triggerScan();
+      res.json({ success: true, ...result });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.get('/api/catalog/stats', (req: Request, res: Response) => {
     const catalogDb = req.app.locals.db as DatabaseManager | undefined;
     if (!catalogDb) return res.status(503).json({ error: 'Database not available' });
@@ -544,12 +561,52 @@ export function setupAPI(app: Express): void {
     });
   });
 
-  app.get('/api/catalog/channels', (req: Request, res: Response) => {
+  app.get('/api/catalog/channels', async (req: Request, res: Response) => {
     const catalogDb = req.app.locals.db as DatabaseManager | undefined;
     if (!catalogDb) return res.status(503).json({ error: 'Database not available' });
 
     const channels = catalogDb.getCatalogChannels();
-    res.json({ success: true, total: channels.length, data: channels });
+
+    // Lazily resolve missing channel names from on-chain name() and cache.
+    // Caps per-request to stay O(1) at scale — with 1M indexed channels, the
+    // first N requests gradually populate metadata; each subsequent call is free.
+    // Filter by optional ?creator=<addr> so per-user loads resolve just their channels.
+    const creatorFilter = typeof req.query.creator === 'string' ? (req.query.creator as string).toLowerCase() : null;
+    const visibleChannels = creatorFilter
+      ? channels.filter(ch => (ch.creator || '').toLowerCase() === creatorFilter)
+      : channels;
+
+    const MAX_NAME_RESOLVES_PER_REQUEST = 25;
+    const unresolved = visibleChannels.filter(ch => !ch.name).slice(0, MAX_NAME_RESOLVES_PER_REQUEST);
+
+    if (unresolved.length > 0) {
+      await Promise.all(unresolved.map(async (ch) => {
+        try {
+          const result = await baseRpcCall('eth_call', [
+            { to: ch.address, data: '0x06fdde03' },
+            'latest',
+          ], 5000);
+          if (typeof result === 'string' && result.length >= 130) {
+            const hex = result.replace('0x', '');
+            const length = parseInt(hex.slice(64, 128), 16);
+            if (length > 0 && length < 256) {
+              const nameHex = hex.slice(128, 128 + length * 2);
+              const buf = Buffer.from(nameHex, 'hex');
+              const name = buf.toString('utf8').replace(/\0+$/, '').trim();
+              if (name) {
+                catalogDb.updateChannelMetadata(ch.address, { name });
+                ch.name = name;
+              }
+            }
+          }
+        } catch (err: any) {
+          logger.debug(`[catalog/channels] name() resolve failed for ${ch.address}: ${err.message}`);
+        }
+      }));
+    }
+
+    const output = creatorFilter ? visibleChannels : channels;
+    res.json({ success: true, total: output.length, data: output });
   });
 
   app.get('/api/catalog/channel/:address', (req: Request, res: Response) => {

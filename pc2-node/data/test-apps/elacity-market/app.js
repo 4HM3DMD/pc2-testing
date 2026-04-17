@@ -317,6 +317,8 @@
       if (ct.indexOf('video') !== -1) return 'Video';
       if (ct.indexOf('audio') !== -1) return 'Audio';
       if (ct.indexOf('image') !== -1) return 'Image';
+      if (ct === 'application/epub+zip' || ct === 'application/epub') return 'Ebook';
+      if (ct === 'application/vnd.comicbook+zip' || ct === 'application/x-cbz') return 'Comic';
       return ct.split('/')[0];
     }
     if (item.category) return item.category;
@@ -583,7 +585,8 @@
     video: '▶',
     audio: '♫',
     image: '◻',
-    ebook: '📄',
+    ebook: '📖',
+    comic: '💥',
     'ai-model': '🤖',
     dataset: '📊',
     code: '⟨⟩'

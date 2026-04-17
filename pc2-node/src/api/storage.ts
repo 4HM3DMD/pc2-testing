@@ -1758,6 +1758,16 @@ interface WASMRenderResult {
   rendered: Buffer;
   totalPages?: number;
   executionTimeMs: number;
+  /** EPUB: total spine chapters. */
+  totalChapters?: number;
+  /** EPUB: table of contents (cached on first chapter request). */
+  chapters?: Array<{ title: string; chapter_index: number; href: string }>;
+  /** EPUB: `true` when rendition:layout=pre-paginated (fall back to pixel-lock). */
+  fixedLayout?: boolean;
+  /** EPUB: publication title from OPF metadata. */
+  epubTitle?: string;
+  /** EPUB: publication author from OPF metadata. */
+  epubAuthor?: string;
 }
 
 /**
@@ -1772,22 +1782,28 @@ async function renderViaWASM(
   maxWidth: number,
   page?: number,
   ipfsService?: any,
+  chapter?: number,
+  viewportWidth?: number,
 ): Promise<WASMRenderResult | null> {
   const { cekBase64, encryptedBytes } = await recoverCEKAndFetchData(params, ipfsService);
 
   const paddedCek = cekBase64.length % 4 === 0 ? cekBase64 : cekBase64 + '='.repeat(4 - (cekBase64.length % 4));
 
   const watermarkText = `${params.buyerAddress.substring(0, 10)}...${params.buyerAddress.substring(params.buyerAddress.length - 6)} ${new Date().toISOString().split('T')[0]}`;
+  const isEpub = mime === 'application/epub+zip' || mime === 'application/epub';
 
   const command: RendererCommand = {
     cek_b64: paddedCek,
     iv_b64: params.iv,
     mime_type: mime,
     watermark: watermarkText,
-    page: page ? page - 1 : undefined,
+    page: !isEpub && page ? page - 1 : undefined,
+    chapter: isEpub ? (chapter ?? 0) : undefined,
     max_width: maxWidth,
     max_height: Math.round(maxWidth * 1.5),
-    output_format: 'jpeg',
+    output_format: isEpub ? 'html' : 'jpeg',
+    forensic_mark: isEpub ? params.buyerAddress : undefined,
+    viewport_width: isEpub ? (viewportWidth || 680) : undefined,
   };
 
   const wasmBinary = await loadRendererBinary();
@@ -1800,6 +1816,21 @@ async function renderViaWASM(
     throw new Error(`WASM renderer: ${output.result.error}`);
   }
 
+  // EPUB pre-paginated publications signal `fixed_layout=true` without
+  // rendered bytes; caller should retry as CBZ-like pixel-lock.
+  if (!output.renderedBytes && output.result.fixed_layout) {
+    return {
+      contentType: 'application/epub+zip',
+      rendered: Buffer.alloc(0),
+      totalPages: output.result.total_chapters,
+      executionTimeMs: output.executionTimeMs,
+      fixedLayout: true,
+      totalChapters: output.result.total_chapters,
+      epubTitle: output.result.epub_title,
+      epubAuthor: output.result.epub_author,
+    };
+  }
+
   if (!output.renderedBytes) {
     throw new Error('WASM renderer produced no output');
   }
@@ -1809,13 +1840,23 @@ async function renderViaWASM(
     rendered: output.renderedBytes,
     totalPages: output.result.total_pages,
     executionTimeMs: output.executionTimeMs,
+    totalChapters: output.result.total_chapters,
+    chapters: output.result.chapters,
+    fixedLayout: output.result.fixed_layout,
+    epubTitle: output.result.epub_title,
+    epubAuthor: output.result.epub_author,
   };
 }
 
 /**
  * POST /api/storage/lit/secure-view
- * Secure viewer: decrypts asset server-side, renders to lossy image, streams binary.
- * The raw file NEVER leaves server memory. Browser receives only rendered pixels.
+ * Secure viewer: decrypts asset server-side, renders to a locked representation,
+ * streams binary. The raw file NEVER leaves server memory.
+ *
+ * Two render tiers:
+ *   • Pixel-lock — images, PDFs, CBZ comics, source code → JPEG/WebP/PNG
+ *   • HTML-lock  — reflowable EPUB → sanitized XHTML (no JS, strict CSP),
+ *                   zero-width forensic watermark + diagonal SVG overlay
  *
  * Primary path: WASM renderer (plaintext confined to WASM linear memory;
  *   CEK passes through Node.js during MemFS write — see CEK Exposure Assessment)
@@ -1823,11 +1864,18 @@ async function renderViaWASM(
  *
  * Body: same as /lit/decrypt, plus:
  *   mimeType: string,   -- original asset MIME (image/png, application/pdf, etc.)
- *   page?: number,       -- page number for PDFs (1-indexed, default 1)
+ *   page?: number,       -- page number for PDFs / CBZ (1-indexed, default 1)
+ *   chapter?: number,    -- chapter index for EPUB (0-indexed, default 0)
  *   maxWidth?: number,   -- max render width (default 1200)
+ *   viewportWidth?: number, -- EPUB reader pane width in CSS px (default 680)
  *
- * Response: binary image stream (image/jpeg or image/png)
- *   Headers: X-Asset-Type, X-Asset-Pages (for PDFs), X-Watermark, X-Renderer
+ * Response: pixel-lock returns image/jpeg; html-lock returns text/html
+ *   Headers: X-Asset-Type, X-Asset-Pages (PDF/CBZ), X-Asset-Chapters (EPUB),
+ *            X-Asset-TOC (base64 JSON for EPUB TOC), X-Watermark, X-Renderer
+ *
+ * Runtime convergence: this handler maps 1:1 to the future Viewer Provider
+ *   Capsule. Capability scopes consumed: drm:decrypt, drm:verify-access,
+ *   storage:fetch. Provided: drm:render. See PC2_CONVERGENCE_INVENTORY.
  */
 router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, res: Response) => {
   const requestStart = Date.now();
@@ -1836,7 +1884,9 @@ router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, 
       litCiphertext, dataToEncryptHash, iv, encryptedDataCid, kid,
       mimeType,
       page: pageNum,
+      chapter: reqChapter,
       maxWidth: reqMaxWidth,
+      viewportWidth: reqViewportWidth,
       litBackend: reqLitBackend,
     } = req.body;
 
@@ -1911,19 +1961,67 @@ router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, 
     }
 
     // ── WASM Renderer Path ──────────────────────────────
-    // For images, text, and PDFs: decrypt + render inside WASM linear memory.
-    // Plaintext stays in WASM; CEK passes through Node.js during MemFS write.
+    // For images, text, PDFs, EPUB, and CBZ: decrypt + render inside WASM
+    // linear memory. Plaintext stays in WASM; CEK passes through Node.js
+    // during MemFS write.
     const wasmCodeTypes = ['application/javascript', 'application/json', 'application/xml', 'application/x-yaml', 'application/toml', 'application/x-sh'];
-    const wasmSupportedTypes = mime.startsWith('image/') || mime.startsWith('text/') || mime === 'application/pdf' || wasmCodeTypes.includes(mime);
+    const isEpub = mime === 'application/epub+zip' || mime === 'application/epub';
+    const isCbz = mime === 'application/vnd.comicbook+zip' || mime === 'application/x-cbz';
+    const wasmSupportedTypes = mime.startsWith('image/')
+      || mime.startsWith('text/')
+      || mime === 'application/pdf'
+      || wasmCodeTypes.includes(mime)
+      || isEpub
+      || isCbz;
     if (wasmSupportedTypes) {
       try {
-        const wasmResult = await renderViaWASM(effectiveBody, mime, maxWidth, pageNum, ipfsService);
+        const wasmResult = await renderViaWASM(
+          effectiveBody,
+          mime,
+          maxWidth,
+          pageNum,
+          ipfsService,
+          typeof reqChapter === 'number' ? reqChapter : undefined,
+          typeof reqViewportWidth === 'number' ? Math.min(Math.max(reqViewportWidth, 320), 1600) : undefined,
+        );
         if (wasmResult) {
+          // Fixed-layout EPUB: tell the client to retry as pixel-lock.
+          if (wasmResult.fixedLayout && wasmResult.rendered.length === 0) {
+            res.set('X-Renderer', 'wasm');
+            res.set('X-Asset-Layout', 'fixed');
+            if (wasmResult.totalChapters) {
+              res.set('X-Asset-Chapters', String(wasmResult.totalChapters));
+            }
+            if (wasmResult.epubTitle) res.set('X-Asset-Title', encodeURIComponent(wasmResult.epubTitle));
+            if (wasmResult.epubAuthor) res.set('X-Asset-Author', encodeURIComponent(wasmResult.epubAuthor));
+            res.status(409).json({
+              error: 'epub-fixed-layout',
+              message: 'Pre-paginated EPUB detected — use pixel-lock tier per chapter.',
+              totalChapters: wasmResult.totalChapters || 0,
+            });
+            logger.info(`[SecureView] EPUB fixed-layout detected (${wasmResult.totalChapters} chapters) for ${resolvedBuyer}`);
+            return;
+          }
+
           res.set('Content-Type', wasmResult.contentType);
           res.set('Content-Length', String(wasmResult.rendered.length));
           res.set('X-Renderer', 'wasm');
-          if (wasmResult.totalPages) {
-            res.set('X-Asset-Pages', String(wasmResult.totalPages));
+          if (wasmResult.totalPages) res.set('X-Asset-Pages', String(wasmResult.totalPages));
+          if (wasmResult.totalChapters) res.set('X-Asset-Chapters', String(wasmResult.totalChapters));
+          if (wasmResult.epubTitle) res.set('X-Asset-Title', encodeURIComponent(wasmResult.epubTitle));
+          if (wasmResult.epubAuthor) res.set('X-Asset-Author', encodeURIComponent(wasmResult.epubAuthor));
+          if (wasmResult.chapters && wasmResult.chapters.length > 0) {
+            // TOC is returned once; client caches it for the session.
+            const tocB64 = Buffer.from(JSON.stringify(wasmResult.chapters), 'utf8').toString('base64');
+            res.set('X-Asset-TOC', tocB64);
+          }
+          if (isEpub) {
+            // Strict CSP for sanitized HTML: no JS, no remote resources.
+            // Images are inlined as data-URIs by the WASM sanitizer.
+            res.set(
+              'Content-Security-Policy',
+              "default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:; base-uri 'none'; form-action 'none';",
+            );
           }
           res.send(wasmResult.rendered);
           logger.info(`[SecureView] WASM rendered ${mime}: ${wasmResult.rendered.length} bytes (wasm: ${wasmResult.executionTimeMs}ms, total: ${Date.now() - requestStart}ms) for ${resolvedBuyer}`);
@@ -1931,6 +2029,11 @@ router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, 
         }
       } catch (wasmErr: any) {
         logger.warn(`[SecureView] WASM renderer failed, falling back to Node.js: ${wasmErr.message}`);
+        // EPUB and CBZ have no Node.js fallback — surface the error.
+        if (isEpub || isCbz) {
+          res.status(500).json({ error: `Ebook/comic render failed: ${wasmErr.message}` });
+          return;
+        }
       }
     }
 

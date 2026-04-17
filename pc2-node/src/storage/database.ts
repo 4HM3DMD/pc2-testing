@@ -2017,39 +2017,92 @@ export class DatabaseManager {
     itemsCount: number;
   }> {
     const db = this.getDB();
+    // channel_metadata is now the authoritative source — populated by the indexer
+    // when it sees ChannelCreated events, so channels appear BEFORE their first mint.
+    // We LEFT JOIN content_catalog to aggregate itemsCount, but channels with zero
+    // assets still show up. This is critical for the Creator app UX.
     const rows = db.prepare(`
       SELECT
-        c.channel_address as address,
-        c.creator_address as creator,
-        MIN(c.name) as name,
-        MIN(c.image_url) as image,
-        COUNT(*) as itemsCount,
+        m.address as address,
+        m.creator_address as creator,
         m.name as meta_name,
         m.description as meta_description,
         m.categories as meta_categories,
         m.image as meta_image,
         m.cover_image as meta_cover_image,
         m.plans as meta_plans,
-        m.token_access as meta_token_access
-      FROM content_catalog c
-      LEFT JOIN channel_metadata m ON LOWER(m.address) = LOWER(c.channel_address)
-      WHERE c.metadata_status = 'resolved'
-      GROUP BY LOWER(c.channel_address)
-      ORDER BY COUNT(*) DESC
+        m.token_access as meta_token_access,
+        COALESCE(ca.item_count, 0) as itemsCount,
+        ca.first_asset_name as fallback_name,
+        ca.first_asset_image as fallback_image
+      FROM channel_metadata m
+      LEFT JOIN (
+        SELECT
+          channel_address,
+          COUNT(*) as item_count,
+          MIN(name) as first_asset_name,
+          MIN(image_url) as first_asset_image
+        FROM content_catalog
+        WHERE metadata_status = 'resolved'
+        GROUP BY LOWER(channel_address)
+      ) ca ON LOWER(ca.channel_address) = LOWER(m.address)
+      WHERE m.creator_address IS NOT NULL
+      ORDER BY m.block_number DESC NULLS LAST, m.indexed_at DESC NULLS LAST
     `).all() as any[];
 
     return rows.map((r: any) => ({
       address: r.address,
       creator: r.creator,
-      name: r.meta_name || r.name,
+      name: r.meta_name || r.fallback_name,
       description: r.meta_description || null,
       categories: r.meta_categories || null,
-      image: r.meta_image || r.image,
+      image: r.meta_image || r.fallback_image,
       coverImage: r.meta_cover_image || null,
       plans: r.meta_plans || null,
       tokenAccess: r.meta_token_access || null,
       itemsCount: r.itemsCount,
     }));
+  }
+
+  /**
+   * Insert or update a channel discovered via V3 factory ChannelCreated event.
+   * Channels are indexed BEFORE their first mint — critical for Creator app UX.
+   * Name is optional here (resolved lazily via on-chain name() elsewhere).
+   */
+  upsertChannelFromFactory(input: {
+    address: string;
+    creator_address: string;
+    contract_version: string;
+    block_number: number;
+    tx_hash?: string | null;
+    name?: string | null;
+  }): void {
+    const db = this.getDB();
+    const addr = input.address.toLowerCase();
+    const creator = input.creator_address.toLowerCase();
+    const now = Date.now();
+
+    const existing = db.prepare(`SELECT address FROM channel_metadata WHERE LOWER(address) = LOWER(?)`).get(addr) as any;
+
+    if (existing) {
+      // Only fill in factory fields if empty — don't overwrite user-provided metadata
+      db.prepare(`
+        UPDATE channel_metadata SET
+          creator_address = COALESCE(creator_address, ?),
+          contract_version = COALESCE(contract_version, ?),
+          block_number = COALESCE(block_number, ?),
+          tx_hash = COALESCE(tx_hash, ?),
+          indexed_at = COALESCE(indexed_at, ?),
+          name = COALESCE(name, ?)
+        WHERE LOWER(address) = LOWER(?)
+      `).run(creator, input.contract_version, input.block_number, input.tx_hash || null, now, input.name || null, addr);
+    } else {
+      db.prepare(`
+        INSERT INTO channel_metadata
+          (address, creator_address, contract_version, block_number, tx_hash, indexed_at, name)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(addr, creator, input.contract_version, input.block_number, input.tx_hash || null, now, input.name || null);
+    }
   }
 
   getChannelMetadata(address: string): {

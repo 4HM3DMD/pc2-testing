@@ -110,6 +110,12 @@
       <div id="archive-container" class="hidden">
         <div id="archive-tree" class="archive-tree"></div>
       </div>
+
+      <!-- EPUB reflowable ebook reader -->
+      <div id="epub-container" class="hidden"></div>
+
+      <!-- CBZ comic book reader -->
+      <div id="cbz-container" class="hidden"></div>
     </main>
 
     <!-- Floating toolbar -->
@@ -157,6 +163,11 @@
   <script src="lib/FBXLoader.js" defer></script>
   <script src="lib/VertexNormalsHelper.js" defer></script>
   <script src="lib/jszip.min.js" defer></script>
+
+  <!-- Specialized readers (register on window) -->
+  <script src="reader-epub.js" defer></script>
+  <script src="reader-cbz.js" defer></script>
+
   <script src="viewer.js" defer></script>
 </body>
 </html>

@@ -55,7 +55,9 @@ fn encode_output_raw(rgba: &RgbaImage, format: OutputFormat) -> (RenderResult, O
     let mut buf = Vec::new();
 
     let content_type = match format {
-        OutputFormat::Jpeg => {
+        // `Html` is an EPUB-only format; for pixel pipelines we fall
+        // back to JPEG so legacy callers never crash.
+        OutputFormat::Jpeg | OutputFormat::Html => {
             let rgb = DynamicImage::ImageRgba8(rgba.clone()).to_rgb8();
             let mut encoder = JpegEncoder::new_with_quality(&mut buf, DEFAULT_JPEG_QUALITY);
             if let Err(e) = encoder.encode(
@@ -88,10 +90,10 @@ fn encode_output_raw(rgba: &RgbaImage, format: OutputFormat) -> (RenderResult, O
 
     let result = RenderResult {
         success: true,
-        error: None,
         content_type: Some(content_type.to_string()),
         total_pages: Some(1),
         output_size: Some(buf.len()),
+        ..Default::default()
     };
 
     (result, Some(buf))

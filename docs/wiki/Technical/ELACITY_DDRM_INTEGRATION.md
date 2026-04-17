@@ -365,3 +365,18 @@ All ABIs are in `/src/lib/drm/contracts/`:
 | `ChannelCore.json` | `createChannel`, `ChannelCreated` event |
 | `CoreStorage.json` | `channelCreationFee()`, `mediaCreationFee()` |
 | `DigitalAsset.json` | Channel contract ABI: `mint`, `authority()`, `totalSupply()`, `tokenURI()`, `hasRole`, `grantRole`, `MINTER_ROLE`, `DEFAULT_ADMIN_ROLE`, `setApprovalForAll`, `AssetCreated` event |
+
+---
+
+## 10. Content Type Support (V1.2)
+
+The `ddrm-renderer` WASM module supports two render tiers:
+
+- **pixel-lock** — images, PDFs, CBZ comics, source code → watermarked JPEG/WebP/PNG
+- **html-lock** — reflowable EPUB ebooks → sanitized XHTML with strict CSP + zero-width forensic watermark + diagonal SVG overlay
+
+Added in V1.2: `application/epub+zip` (reflowable ebooks) and
+`application/vnd.comicbook+zip` (CBZ comics). See
+[EBOOK_PUBLISHING.md](./EBOOK_PUBLISHING.md) for the full pipeline,
+sanitization rules, viewer integration, fixed-layout EPUB fallback, and
+Runtime alignment notes.

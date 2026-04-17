@@ -96,6 +96,8 @@
   var isCSVType = assetParams.mimeType === 'text/csv' || assetParams.mimeType === 'text/tab-separated-values';
   var isFontType = assetParams.mimeType.indexOf('font/') === 0 || assetParams.mimeType === 'application/vnd.ms-fontobject';
   var isArchiveType = assetParams.mimeType === 'application/zip' || assetParams.mimeType === 'application/gzip' || assetParams.mimeType === 'application/x-tar';
+  var isEpubType = assetParams.mimeType === 'application/epub+zip' || assetParams.mimeType === 'application/epub';
+  var isCbzType = assetParams.mimeType === 'application/vnd.comicbook+zip' || assetParams.mimeType === 'application/x-cbz';
   var isInteractivePassthrough = is3DType || isCSVType || isFontType || isArchiveType;
   var isCleartext = p('cleartext', '') === 'true';
   var cleartextCid = p('cleartextCid', '');
@@ -150,6 +152,9 @@
       showError('Missing Parameters', 'This viewer requires asset parameters to be provided via the launch URL.');
       return;
     }
+
+    if (isEpubType) { loadEpub(); return; }
+    if (isCbzType)  { loadCbz();  return; }
 
     loadFirstPage();
   }
@@ -303,7 +308,8 @@
 
   // ── Secure view request ───────────────────────────────
 
-  function buildBody(page) {
+  function buildBody(page, opts) {
+    opts = opts || {};
     var body = {
       litCiphertext:     assetParams.litCiphertext,
       dataToEncryptHash: assetParams.dataToEncryptHash,
@@ -315,6 +321,8 @@
       maxWidth:          assetParams.maxWidth,
       page:              page,
     };
+    if (typeof opts.chapter === 'number') body.chapter = opts.chapter;
+    if (typeof opts.viewportWidth === 'number') body.viewportWidth = opts.viewportWidth;
     if (assetParams.buyerAddressAlt) body.buyerAddressAlt = assetParams.buyerAddressAlt;
     if (assetParams.actionCid) body.actionCid = assetParams.actionCid;
     if (assetParams.authority) body.authority = assetParams.authority;
@@ -425,6 +433,155 @@
         });
       })(i);
     }
+  }
+
+  // ── EPUB: reflowable ebook ─────────────────────────────
+
+  function decodeTocHeader(b64) {
+    if (!b64) return null;
+    try {
+      var bin = atob(b64);
+      try { return JSON.parse(decodeURIComponent(escape(bin))); }
+      catch (_) { return JSON.parse(bin); }
+    } catch (_) { return null; }
+  }
+
+  function fetchEpubChapter(chapterIdx) {
+    var body = buildBody(1, {
+      chapter: chapterIdx,
+      viewportWidth: Math.max(320, Math.min(window.innerWidth - 40, 900)),
+    });
+    return authFetch('/api/storage/lit/secure-view', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(function (resp) {
+      if (resp.status === 409) {
+        return resp.json().then(function (err) {
+          throw new Error(err.message || 'This EPUB uses a fixed layout which is not yet supported.');
+        });
+      }
+      if (!resp.ok) {
+        return resp.text().then(function (txt) {
+          var m;
+          try { m = JSON.parse(txt).error; } catch (_) { m = 'Failed to load chapter'; }
+          throw new Error(m);
+        });
+      }
+      var totalChapters = parseInt(resp.headers.get('X-Asset-Chapters') || '0', 10);
+      var toc = decodeTocHeader(resp.headers.get('X-Asset-TOC') || '');
+      var title = decodeURIComponent(resp.headers.get('X-Asset-Title') || '');
+      var author = decodeURIComponent(resp.headers.get('X-Asset-Author') || '');
+      var renderer = resp.headers.get('X-Renderer') || '';
+      if (renderer) {
+        $rendererBdg.textContent = renderer;
+        $rendererBdg.classList.remove('hidden');
+      }
+      if (renderer === 'wasm') {
+        $watermarkBdg.textContent = 'Watermarked';
+        $watermarkBdg.classList.remove('hidden');
+      }
+      return resp.text().then(function (html) {
+        return {
+          html: html,
+          totalChapters: totalChapters,
+          toc: toc || [],
+          title: title,
+          author: author,
+        };
+      });
+    });
+  }
+
+  function loadEpub() {
+    if (typeof window.EpubReader === 'undefined' || !window.EpubReader.open) {
+      showError('EPUB Reader Error', 'Ebook reader module not loaded.');
+      return;
+    }
+    showLoading();
+    $loadingText.textContent = 'Opening ebook...';
+
+    var $epub = document.getElementById('epub-container');
+    window.EpubReader.open({
+      container: $epub,
+      blobUrls: viewerState.blobUrls,
+      viewportWidth: Math.max(320, Math.min(window.innerWidth - 40, 900)),
+      fetchChapter: fetchEpubChapter,
+      onReady: function () {
+        $loading.classList.add('hidden');
+        $error.classList.add('hidden');
+        $content.classList.remove('hidden');
+      },
+      onError: function (title, msg) {
+        showError(title, msg);
+      },
+    });
+  }
+
+  // ── CBZ: comic book reader ─────────────────────────────
+
+  function fetchCbzPage(pageNum) {
+    var body = buildBody(pageNum);
+    return authFetch('/api/storage/lit/secure-view', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(function (resp) {
+      if (!resp.ok) {
+        return resp.text().then(function (txt) {
+          var m;
+          try { m = JSON.parse(txt).error; } catch (_) { m = 'Failed to load page'; }
+          throw new Error(m);
+        });
+      }
+      if (!viewerState.cbzInitDone) {
+        var totalPages = parseInt(resp.headers.get('X-Asset-Pages') || '0', 10);
+        if (totalPages > 0) viewerState.totalPages = totalPages;
+        var renderer = resp.headers.get('X-Renderer') || '';
+        if (renderer) {
+          $rendererBdg.textContent = renderer;
+          $rendererBdg.classList.remove('hidden');
+        }
+        if (renderer === 'wasm') {
+          $watermarkBdg.textContent = 'Watermarked';
+          $watermarkBdg.classList.remove('hidden');
+        }
+        viewerState.cbzInitDone = true;
+        if (viewerState.cbzState) {
+          viewerState.cbzState.totalPages = viewerState.totalPages;
+          if (viewerState.cbzState.indicator) {
+            viewerState.cbzState.indicator.textContent = 'Page ' + viewerState.cbzState.current + ' / ' + viewerState.totalPages;
+          }
+        }
+      }
+      return resp.blob();
+    });
+  }
+
+  function loadCbz() {
+    if (typeof window.CbzReader === 'undefined' || !window.CbzReader.open) {
+      showError('Comic Reader Error', 'Comic reader module not loaded.');
+      return;
+    }
+    showLoading();
+    $loadingText.textContent = 'Opening comic...';
+
+    var $cbz = document.getElementById('cbz-container');
+    viewerState.cbzInitDone = false;
+    viewerState.cbzState = window.CbzReader.open({
+      container: $cbz,
+      blobUrls: viewerState.blobUrls,
+      totalPages: 1, // updated after first fetch via X-Asset-Pages
+      fetchPage: fetchCbzPage,
+      onReady: function () {
+        $loading.classList.add('hidden');
+        $error.classList.add('hidden');
+        $content.classList.remove('hidden');
+      },
+      onError: function (title, msg) {
+        showError(title, msg);
+      },
+    });
   }
 
   // ── Display modes ─────────────────────────────────────
@@ -581,6 +738,10 @@
       'application/zip': 'ZIP Archive',
       'application/gzip': 'GZIP Archive',
       'application/x-tar': 'TAR Archive',
+      'application/epub+zip': 'EPUB Ebook',
+      'application/epub': 'EPUB Ebook',
+      'application/vnd.comicbook+zip': 'CBZ Comic',
+      'application/x-cbz': 'CBZ Comic',
     };
     return map[mime] || mime.split('/').pop().toUpperCase();
   }

@@ -31,7 +31,7 @@ function findSchemaFile(): string {
   }
   throw new Error(`Schema file not found. Tried: ${SCHEMA_FILE} and ${sourceSchema}`);
 }
-const CURRENT_VERSION = 27;
+const CURRENT_VERSION = 28;
 
 interface Migration {
   version: number;
@@ -1044,6 +1044,37 @@ export function runMigrations(db: Database.Database): void {
         recordMigration(db, 27);
       } catch (error: any) {
         log.error(`❌ Migration 27 error: ${error.message}`);
+        throw error;
+      }
+    }
+
+    // Migration 28: extend channel_metadata so channels discovered via ChannelCreated
+    // (not yet having any minted assets) can be indexed and listed. This is critical
+    // for the Creator app UX — users must see their channel immediately after creation.
+    if (currentVersion < 28) {
+      try {
+        log.info('📦 Running Migration 28: Extend channel_metadata for factory-indexed channels...');
+        // SQLite ALTER TABLE ADD COLUMN is idempotent via try/catch
+        const addCol = (sql: string) => {
+          try { db.exec(sql); } catch (e: any) {
+            if (!String(e?.message || '').includes('duplicate column')) throw e;
+          }
+        };
+        addCol(`ALTER TABLE channel_metadata ADD COLUMN creator_address TEXT`);
+        addCol(`ALTER TABLE channel_metadata ADD COLUMN contract_version TEXT`);
+        addCol(`ALTER TABLE channel_metadata ADD COLUMN block_number INTEGER`);
+        addCol(`ALTER TABLE channel_metadata ADD COLUMN tx_hash TEXT`);
+        addCol(`ALTER TABLE channel_metadata ADD COLUMN indexed_at INTEGER`);
+        addCol(`ALTER TABLE channel_metadata ADD COLUMN plans TEXT`);
+        addCol(`ALTER TABLE channel_metadata ADD COLUMN token_access TEXT`);
+
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_channel_metadata_creator ON channel_metadata(creator_address)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_channel_metadata_block ON channel_metadata(block_number)`);
+
+        log.info('✅ Migration 28 complete: channel_metadata extended');
+        recordMigration(db, 28);
+      } catch (error: any) {
+        log.error(`❌ Migration 28 error: ${error.message}`);
         throw error;
       }
     }
