@@ -263,6 +263,65 @@ The user's pc2-node follows the same pattern as Elacity's backend. The user's no
 4. Lit nodes verify access conditions and release the decryption key
 5. Content is decrypted locally
 
+### CEK caching (session-scoped, per-buyer, LRU)
+
+Every successful Lit decryption call costs roughly **$0.01** of Chipotle
+usage. A naive implementation would pay that price on every chapter of
+a 14-chapter EPUB or every page of a 40-page PDF. PC2 avoids this with
+a small in-process cache in `pc2-node/src/api/storage.ts`:
+
+- **Key**: `${kid}:${buyerAddress}`. Scoped per-buyer so access
+  revocation on one wallet cannot be bypassed by another.
+- **Value**: the 32-byte AES-256 CEK plus a `cachedAt` timestamp.
+- **TTL**: 5 minutes. After that the cache re-validates against Lit.
+- **Capacity**: 50 entries. Enough for a few concurrent readers without
+  letting memory grow unbounded on a long-running node.
+- **Eviction policy**: **true LRU**. Reads promote the entry to the most
+  recently used position by `delete` + `set` on the backing `Map`,
+  exploiting `Map`'s insertion-order iteration. When capacity is
+  reached we evict the first (oldest-read) key, not the first-inserted
+  one. A previous coarser implementation could evict hot entries on a
+  busy node; the V1.2 fix guarantees active readers stay cached.
+- **Promise coalescing**: if two requests for the same cache-miss key
+  race, only one Lit call goes out. The second awaits the first's
+  promise via `pendingLitCalls: Map<string, Promise<Uint8Array>>`. This
+  prevents a tab reload from double-billing.
+- **Stats**: `hits`, `misses`, `evictions`, `expirations`,
+  `manualFlushes`, `coalesced` counters expose cache behaviour for
+  capacity tuning.
+
+### Owner admin endpoints
+
+Two node-owner-guarded endpoints expose cache control for incident
+response and local observability:
+
+```
+GET  /api/storage/admin/cek-cache/stats
+POST /api/storage/admin/cek-cache/flush
+```
+
+Both are protected by `authenticate` + `requireOwner` middleware — any
+non-owner request is rejected with `401`. `flush` accepts an optional
+body to scope invalidation:
+
+- `{}` — flush all entries.
+- `{ kid }` — drop every cached CEK for a specific content ID (useful
+  if a key is suspected compromised).
+- `{ buyerAddress }` — drop every cached CEK for a wallet (useful
+  after an access-token transfer / revocation).
+- `{ kid, buyerAddress }` — drop one exact entry.
+
+Typical response:
+
+```json
+{
+  "success": true,
+  "flushed": 3,
+  "scope": { "kid": "0xabc…", "buyerAddress": "0x1234…" },
+  "stats": { "size": 47, "hits": 182, "misses": 12, "evictions": 0, "expirations": 1, "manualFlushes": 1, "coalesced": 4 }
+}
+```
+
 ---
 
 ## 5. Backend Authentication (Nonce-Sign-Login)

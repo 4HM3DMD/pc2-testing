@@ -1,7 +1,7 @@
 # Ebook & Comic Publishing — EPUB + CBZ DRM
 
 **Status**: Implemented in PC2 Node, V1.2 release (Rust/WASM).  
-**Last updated**: 2026-04-16
+**Last updated**: 2026-04-17
 
 > Companion to `ELACITY_DDRM_INTEGRATION.md`. Describes how reflowable
 > EPUB ebooks and CBZ comic archives move through the sovereign PC2
@@ -109,7 +109,27 @@ RenderCommand {
      translucent diagonal watermark bearing `0xBuyer — 2026-04-16`
      across the content area. Deterring screen capture without
      destroying readability.
-7. **Return** the sanitized chapter HTML to the node via MemFS, along
+7. **Bake copy-lockdown CSS** into `wrap_chapter_html`. The styles live
+   inside the sanitized chapter HTML itself, so they ride along with
+   the iframe content and cannot be removed by a malicious script in
+   the parent window (the sanitizer strips scripts regardless, so the
+   iframe is also incapable of removing them from the inside):
+   - `user-select: none` + vendor prefixes → mouse text-selection
+     silently blocked.
+   - `::selection { background: transparent; color: inherit }` →
+     keyboard selection (⌘A / Shift-click) still "selects" invisibly,
+     defeating the obvious UX cue for copying.
+   - `-webkit-user-drag: none`, `-webkit-touch-callout: none` on text
+     and images → no drag-out, no iOS long-press action sheet.
+   - `@media print { body { visibility: hidden } }` → print / Save as
+     PDF produces a blank page.
+   - `.asterism` class for typographic scene breaks (`* * *`) so
+     source-formatted dinkuses render as centered separators instead
+     of broken image glyphs.
+   - Paged-mode scaffolding: `body.epub-mode-paged` switches the
+     container into CSS columns so the client can toggle between
+     continuous scroll and Kindle-style paging without a re-render.
+8. **Return** the sanitized chapter HTML to the node via MemFS, along
    with `total_chapters`, `chapters[]`, `epub_title`, `epub_author`.
 
 ### 2.3 On the node (`/api/storage/lit/secure-view`)
@@ -200,13 +220,19 @@ viewer.js
 
 ### 4.1 `reader-epub.js`
 
-Opens a `<iframe sandbox="">` with *no* permissions:
+Opens a `<iframe sandbox="allow-same-origin">` — a deliberate, narrow
+exception to allow the parent frame to apply pagination transforms and
+theme styles to the already-sanitized chapter HTML. Everything else
+stays locked:
 
 - No `allow-scripts` → chapter cannot run JS.
-- No `allow-same-origin` → cannot read cookies or parent DOM.
 - No `allow-top-navigation` → cannot escape the viewer.
 - No `allow-forms` → cannot phish.
 - No `allow-downloads` → cannot save.
+- `allow-same-origin` only → permits parent DOM access to apply
+  theme/paging CSS. The chapter still has no scripts (the sanitizer
+  strips them) so same-origin is a passive capability, not an
+  execution surface.
 
 The iframe loads a `blob:` URL holding the sanitized chapter HTML.
 Theme (light / sepia / dark), font-size (14–26px), and viewport width
@@ -214,12 +240,30 @@ are applied by injecting a `<style id="ddrm-reader-theme">` tag into the
 iframe document on `onload`. Preferences persist in `localStorage` under
 `ddrm-epub-prefs`.
 
+**Reading modes (V1.2.1 — Paged / Scrolling toggle)**
+
+The reader supports two UX models, switchable from the toolbar and
+persisted in `localStorage`:
+
+| Mode       | Behaviour                                                  |
+|------------|------------------------------------------------------------|
+| Paged      | Default. Chapter body is rendered into CSS columns sized to the viewport. `← / →` and `PgUp / PgDn` advance one page at a time; chapter boundaries are crossed with `[` / `]`. |
+| Scrolling  | Traditional webpage scroll. `← / →` and `PgUp / PgDn` scroll within the chapter; `[` / `]` switch chapters. |
+
+The status bar reports mode-aware labels, e.g.
+`Page 3 of 12 · Chapter 1 of 14` in Paged mode and
+`Chapter 1 · 1 of 14` in Scrolling mode. Context-menu, copy, cut and
+print shortcuts are intercepted in the parent **and** inside the
+iframe's `contentDocument` as a defence-in-depth complement to the
+CSS lockdown baked in by the WASM renderer (§2.2 step 7).
+
 Chapter navigation:
-- Toolbar Prev/Next buttons.
+- Toolbar Prev/Next buttons, mode toggle, theme / font-size controls.
 - TOC panel (populated from the `X-Asset-TOC` header cached on first
   chapter response).
 - Internal links: `#epub-link:<href>` clicks are captured and resolved
   to the matching TOC entry.
+- Keyboard: `←/→`, `PgUp/PgDn`, `[/]`, `Home/End`.
 
 ### 4.2 `reader-cbz.js`
 
@@ -290,8 +334,18 @@ Run through this before considering the feature production-ready:
 - [ ] Upload a reflowable EPUB (e.g. Project Gutenberg classic).
 - [ ] Verify chapter 0 loads; toolbar shows TOC; chapter count matches.
 - [ ] Toggle theme (light → sepia → dark); font size +/-.
+- [ ] Toggle Paged ↔ Scrolling mode; verify the status bar label
+      switches from `Page X of Y · Chapter A of B` to `Chapter A · A of B`.
+- [ ] In Paged mode, `←/→` and `PgUp/PgDn` step one page at a time;
+      chapter boundaries are crossed with `[` / `]`.
 - [ ] Click a TOC entry; verify chapter-link navigation.
-- [ ] Right-click in reader → confirm context menu blocked.
+- [ ] **Copy protection**: Try ⌘C / Ctrl+C on selected chapter text →
+      clipboard should be empty (no readable text copied).
+- [ ] **Context menu**: Right-click in reader → confirm context menu blocked.
+- [ ] **Drag-out**: Try to drag an image out of the reader → should be
+      blocked by `-webkit-user-drag: none`.
+- [ ] **Print / Save as PDF**: `⌘P` / `Ctrl+P` → preview should show a
+      blank page (the `@media print` rule hides `body`).
 - [ ] View page source of iframe → confirm no `<script>` tags,
       no external URLs, zero-width characters present in text.
 - [ ] Upload a fixed-layout EPUB → expect 409 + friendly message.
