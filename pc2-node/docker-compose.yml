@@ -1,6 +1,36 @@
 # PC2 Node - Docker Compose Configuration
 # Sovereign Personal Cloud Computer
 #
+# ────────────────────────────────────────────────────────────────────────────
+#  ⚠️  DATA PERSISTENCE — READ ME BEFORE FIRST BOOT ⚠️
+# ────────────────────────────────────────────────────────────────────────────
+#  Your ela.city name, DID, dDRM keys, IPFS repo and installed apps all live
+#  in the `pc2-data` volume declared at the bottom of this file. If that
+#  volume is destroyed, you lose your node identity.
+#
+#  On first boot the node prints a 24-word RECOVERY PHRASE to the container
+#  logs AND to the setup wizard. Write it down offline. With that phrase you
+#  can always rebuild the same DID via `npm run recover-mnemonic` even if
+#  the Docker volume is wiped — your yourname.ela.city handle is recoverable
+#  as long as the phrase is safe.
+#
+#  Safe operations (data preserved):
+#    docker compose stop            # stop, keep volume
+#    docker compose restart         # restart, keep volume
+#    docker compose pull && up -d   # upgrade image, keep volume
+#    docker compose down            # stop + remove container, keep volume
+#
+#  DESTRUCTIVE operations (DATA LOSS — require the recovery phrase to rebuild):
+#    docker compose down -v         # ⚠️  removes `pc2-data` — you need the phrase
+#    docker volume rm pc2-node_pc2-data   # same thing, different syntax
+#    rm -rf ./data-export/                # same thing if you bind-mount
+#
+#  Recommended weekly ritual:
+#    docker compose exec pc2-node npm run backup
+#    # copies a tar.gz into /app/backups inside the volume. Then pull it out:
+#    docker cp pc2-node:/app/backups ./pc2-backups-$(date +%F)
+# ────────────────────────────────────────────────────────────────────────────
+#
 # Quick Start:
 #   PC2_USERNAME=yourname docker-compose up -d
 #   # Your node: https://yourname.ela.city
@@ -8,11 +38,15 @@
 # With Privacy Mode (hide IP):
 #   PC2_USERNAME=yourname BOSON_PRIVACY_MODE=true docker-compose up -d
 #
-# View logs:
+# View logs (SCROLL BACK to capture your recovery phrase on first boot!):
 #   docker-compose logs -f
 #
-# Stop:
+# Stop (keeps data):
 #   docker-compose down
+#
+# Recover identity after data loss (you DID save the phrase, right?):
+#   docker compose run --rm pc2-node npm run recover-mnemonic
+#   # prompts for the 24 words, rewrites identity.json, then start normally.
 #
 # Version: 1.0.0
 
@@ -49,10 +83,17 @@ services:
       - DOMAIN=${DOMAIN:-}
       - LETSENCRYPT_EMAIL=${LETSENCRYPT_EMAIL:-}
     
-    # Persistent storage
+    # Persistent storage.
+    #   pc2-data      — identity, database, IPFS repo, apps. LOSING THIS
+    #                   WITHOUT YOUR RECOVERY PHRASE == losing the node.
+    #   pc2-certs     — TLS certs for your domain (regenerable).
+    #   pc2-backups   — weekly tar.gz snapshots, kept separate so a
+    #                   targeted `docker volume rm pc2-node_pc2-data`
+    #                   does not take the last-chance backup with it.
     volumes:
-      - pc2-data:/app/data          # User data, database, IPFS
+      - pc2-data:/app/data          # User data, database, IPFS (CRITICAL)
       - pc2-certs:/app/certs        # SSL certificates
+      - pc2-backups:/app/backups    # tar.gz snapshots (created by `npm run backup`)
     
     # Security settings for namespace isolation
     security_opt:
@@ -84,9 +125,18 @@ services:
         max-size: "10m"
         max-file: "3"
 
-# Named volumes for persistent data
+# Named volumes for persistent data.
+#
+# ⚠️  `pc2-data` contains the identity file. It survives `docker compose
+#     down`, container replacement, and image upgrades. It does NOT
+#     survive `docker compose down -v` or `docker volume rm`.
+#     Treat your 24-word recovery phrase as the real backup of this
+#     volume — the phrase alone is enough to rebuild the same DID
+#     (see docs/wiki/Technical/RECOVERY.md and `npm run recover-mnemonic`).
 volumes:
   pc2-data:
     driver: local
   pc2-certs:
+    driver: local
+  pc2-backups:
     driver: local

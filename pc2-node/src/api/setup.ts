@@ -16,7 +16,7 @@ import os from 'os';
 import { extract as extractTar } from 'tar';
 import nacl from 'tweetnacl';
 import { logger } from '../utils/logger.js';
-import { toBase58 } from '../services/boson/IdentityService.js';
+import { toBase58, deriveFromMnemonic } from '../services/boson/IdentityService.js';
 
 const router = Router();
 
@@ -490,6 +490,124 @@ router.get('/info', (req: Request, res: Response) => {
 // ============================================================================
 // Backup Restore Endpoints (pre-auth, used during setup wizard)
 // ============================================================================
+
+/**
+ * Mnemonic-only identity restore.
+ * POST /api/setup/restore-mnemonic
+ *
+ * Rebuilds `identity.json` deterministically from a 24-word recovery
+ * phrase. Intended for the scenario where a node operator lost their
+ * Docker volume / data directory but kept their recovery phrase —
+ * because the DID is derived from the mnemonic alone, re-supplying
+ * the phrase regenerates the same node identity (and therefore the
+ * same `yourname.ela.city` handle on the gateway).
+ *
+ * Guarded by:
+ *   - Rate limit: 5 attempts / 15 min / IP (shared with /restore)
+ *   - Only runs when setup is NOT complete and identity.json is absent
+ *     (will never clobber an active identity; use the authenticated
+ *     API or `npm run recover-mnemonic` CLI for explicit overwrite)
+ *   - 24-word phrase, lower-case ASCII, single-space separated
+ *
+ * Body: { mnemonic: string }   — 24 words
+ * Response: { success, nodeId, did, publicUrl? }
+ *
+ * Security note: the phrase never leaves this handler; it lives only
+ * in the request body buffer and is discarded at response time. The
+ * derived private key is written to `identity.json` with mode 0600.
+ */
+router.post('/restore-mnemonic', (req: Request, res: Response) => {
+  try {
+    // Never clobber an active identity. If the user really wants to
+    // overwrite, they need to either (a) delete identity.json from
+    // the data volume and retry, or (b) use the CLI helper which
+    // explicitly moves the existing identity aside.
+    const identityPath = join(DATA_DIR, 'identity.json');
+    if (existsSync(SETUP_COMPLETE_FILE) || existsSync(identityPath)) {
+      return res.status(403).json({
+        error:
+          'Identity already present. Use the CLI (`npm run recover-mnemonic`) or clear the data directory to restore from a mnemonic.',
+      });
+    }
+
+    const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
+    if (!checkRestoreRateLimit(clientIp)) {
+      return res.status(429).json({ error: 'Too many restore attempts. Try again later.' });
+    }
+
+    const { mnemonic } = req.body as { mnemonic?: unknown };
+    if (typeof mnemonic !== 'string' || mnemonic.length === 0) {
+      return res.status(400).json({ error: 'mnemonic is required (string)' });
+    }
+
+    // Normalise: lowercase, collapse whitespace. IdentityService.js
+    // uses the raw mnemonic text verbatim as HKDF IKM, so any
+    // normalisation here MUST match what the generator did originally.
+    // The generator writes `words.join(' ')` after lowercasing from
+    // the fixed wordlist, so we mirror that exactly.
+    const words = mnemonic
+      .trim()
+      .toLowerCase()
+      .split(/\s+/)
+      .filter((w) => w.length > 0);
+
+    if (words.length !== 24) {
+      return res.status(400).json({ error: `Mnemonic must be exactly 24 words (got ${words.length}).` });
+    }
+    if (!words.every((w) => /^[a-z]+$/.test(w))) {
+      return res.status(400).json({ error: 'Mnemonic words must be lower-case letters only.' });
+    }
+
+    const normalized = words.join(' ');
+
+    let publicKey: Buffer;
+    let privateKey: Buffer;
+    try {
+      const derived = deriveFromMnemonic(normalized);
+      publicKey = derived.publicKey;
+      privateKey = derived.privateKey;
+    } catch (err: any) {
+      logger.error('[Setup] restore-mnemonic: derive failed:', err?.message || err);
+      return res.status(400).json({ error: 'Failed to derive identity from mnemonic.' });
+    }
+
+    const rawPublicKey = publicKey.slice(-32);
+    const nodeId = toBase58(rawPublicKey);
+    const did = `did:boson:${nodeId}`;
+
+    // Reconstruct the same on-disk shape that IdentityService produces
+    // on first run — but without persisting the plaintext mnemonic
+    // (users already have it, we never want to store it unencrypted).
+    const identity = {
+      nodeId,
+      did,
+      publicKey: publicKey.toString('hex'),
+      privateKey: privateKey.toString('hex'),
+      identityVersion: 2,
+      createdAt: new Date().toISOString(),
+      restoredFromMnemonic: true,
+    };
+
+    if (!existsSync(DATA_DIR)) {
+      mkdirSync(DATA_DIR, { recursive: true });
+    }
+    writeFileSync(identityPath, JSON.stringify(identity, null, 2), { mode: 0o600 });
+
+    logger.info(`[Setup] Identity restored from mnemonic: ${nodeId.substring(0, 12)}...`);
+
+    return res.json({
+      success: true,
+      nodeId,
+      did,
+      message:
+        'Identity restored. Restart the node to reload the identity, then finish the setup wizard to re-claim your username on the gateway.',
+      needsRestart: true,
+    });
+  } catch (error: any) {
+    logger.error('[Setup] restore-mnemonic failed:', error);
+    return res.status(500).json({ error: 'Failed to restore identity: ' + (error?.message || 'unknown error') });
+  }
+});
 
 /**
  * Upload and validate a backup for restoration.
