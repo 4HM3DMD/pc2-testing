@@ -45,6 +45,30 @@ const MAX_CHAPTERS: usize = 5000;
 /// realistic ebook cover + inline illustrations.
 const MAX_INLINED_IMAGE_BYTES: usize = 8 * 1024 * 1024;
 
+/// Hard ceiling on the uncompressed size of any single ZIP entry we
+/// will read into WASM linear memory. The ZIP header carries the
+/// uncompressed size as attacker-controlled input, so we reject before
+/// allocation rather than after. 32 MB is well above any realistic
+/// chapter XHTML or cover image; anything larger is a red flag.
+const MAX_ENTRY_UNCOMPRESSED_BYTES: u64 = 32 * 1024 * 1024;
+
+/// Compression-ratio ceiling: reject entries whose declared uncompressed
+/// size exceeds the compressed size by more than this factor. Typical
+/// deflate ratios for HTML/XML top out near 10×; 200× is a clear zip-bomb
+/// signature (classic 42.zip weighs 28 GB / 42 KB ≈ 700 000×).
+const MAX_COMPRESSION_RATIO: u64 = 200;
+
+/// Maximum manifest entries we will index from the OPF. Caps the
+/// `HashMap` allocation against a malicious OPF that declares millions
+/// of `<item>` rows to exhaust WASM memory before we ever read content.
+const MAX_MANIFEST_ENTRIES: usize = 10_000;
+
+/// Hard cap on the sanitized chapter HTML buffer. Even with per-image
+/// limits, a chapter with hundreds of images can balloon past this; we
+/// stop emitting once the cap is reached and return what we have so the
+/// reader still renders something usable.
+const MAX_CHAPTER_HTML_BYTES: usize = 16 * 1024 * 1024;
+
 /// Render one chapter of an EPUB to sanitized HTML bytes.
 pub fn render_epub_raw(plaintext: &[u8], cmd: &RenderCommand) -> (RenderResult, Option<Vec<u8>>) {
     let cursor = Cursor::new(plaintext);
@@ -62,7 +86,7 @@ pub fn render_epub_raw(plaintext: &[u8], cmd: &RenderCommand) -> (RenderResult, 
         Err(e) => return (RenderResult::error(format!("epub: read opf: {e}")), None),
     };
 
-    let opf = match parse_opf(&opf_bytes) {
+    let opf = match parse_opf(&opf_bytes, MAX_MANIFEST_ENTRIES) {
         Ok(o) => o,
         Err(e) => return (RenderResult::error(format!("epub: parse opf: {e}")), None),
     };
@@ -123,6 +147,7 @@ pub fn render_epub_raw(plaintext: &[u8], cmd: &RenderCommand) -> (RenderResult, 
         &mut archive,
         chapter_dir,
         forensic,
+        MAX_CHAPTER_HTML_BYTES,
     ) {
         Ok(s) => s,
         Err(e) => {
@@ -214,7 +239,7 @@ fn locate_opf<R: Read + std::io::Seek>(archive: &mut ZipArchive<R>) -> Result<St
     Err("container.xml: rootfile not found".into())
 }
 
-fn parse_opf(opf_bytes: &[u8]) -> Result<OpfMetadata, String> {
+fn parse_opf(opf_bytes: &[u8], manifest_cap: usize) -> Result<OpfMetadata, String> {
     let mut reader = Reader::from_reader(opf_bytes);
     reader.config_mut().trim_text(true);
 
@@ -240,6 +265,15 @@ fn parse_opf(opf_bytes: &[u8]) -> Result<OpfMetadata, String> {
                 let lname = local_name(e.name()).to_vec();
                 match lname.as_slice() {
                     b"item" => {
+                        // Hard cap protects against a hostile OPF that
+                        // lists millions of <item> rows to OOM the WASM
+                        // instance before we ever reach spine/render.
+                        if manifest.len() >= manifest_cap {
+                            // Silently skip overflow entries; the spine
+                            // cap (MAX_CHAPTERS) already bounds what we
+                            // actually try to render.
+                            continue;
+                        }
                         let id = attr_value(&e, b"id").unwrap_or_default();
                         let href = attr_value(&e, b"href").unwrap_or_default();
                         let media = attr_value(&e, b"media-type").unwrap_or_default();
@@ -369,23 +403,36 @@ const ALLOWED_ATTRS_GLOBAL: &[&str] = &["id", "class", "lang", "dir", "title", "
 
 /// Sanitize a single chapter XHTML document. Streams through quick-xml
 /// events, emitting an allow-listed HTML subset and inlining images.
+/// `budget` caps the output buffer — a malicious chapter that would
+/// balloon past it is truncated with a visible marker rather than
+/// allowed to exhaust WASM linear memory.
 fn sanitize_chapter<R: Read + std::io::Seek>(
     xhtml: &str,
     archive: &mut ZipArchive<R>,
     chapter_dir: &str,
     forensic_mark: &str,
+    budget: usize,
 ) -> Result<String, String> {
     let mut reader = Reader::from_str(xhtml);
     reader.config_mut().trim_text(false);
     reader.config_mut().expand_empty_elements = true;
 
-    let mut out = String::with_capacity(xhtml.len() + 512);
+    let mut out = String::with_capacity(xhtml.len().min(budget) + 512);
     let mut in_body = false;
     let mut in_script_like = 0i32; // depth counter for dropped subtrees
     let mut buf = Vec::new();
     let mut forensic_cursor = ForensicCursor::new(forensic_mark);
+    let mut truncated = false;
 
     loop {
+        // Budget check: if the output buffer has blown past the cap
+        // we stop emitting further content so a malicious EPUB (e.g.
+        // deep nesting + many inlined images) can't force the WASM
+        // instance to grow until it runs out of linear memory.
+        if out.len() >= budget {
+            truncated = true;
+            break;
+        }
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => {
                 let name = local_name(e.name());
@@ -465,6 +512,13 @@ fn sanitize_chapter<R: Read + std::io::Seek>(
             _ => {}
         }
         buf.clear();
+    }
+
+    if truncated {
+        // Surface truncation to the reader so the user knows content
+        // was cut — and so forensic logs show it. This string is plain
+        // text only (no tag), matching what the allow-list would emit.
+        out.push_str("\n[Content truncated — chapter exceeded render budget.]\n");
     }
 
     Ok(out)
@@ -751,8 +805,9 @@ fn build_watermark_svg_data_uri(text: &str) -> String {
 
 /// Wrap the sanitized chapter HTML in a minimal HTML document with a
 /// base stylesheet and the diagonal watermark overlay. The reader app
-/// drops this into a sandboxed iframe (`sandbox="allow-same-origin"`,
-/// no scripts) under strict CSP.
+/// drops this into a fully sandboxed iframe (`sandbox=""` — no
+/// scripts, no same-origin, no forms, no popups) under a strict CSP
+/// set by the Node.js `/lit/secure-view` handler.
 fn wrap_chapter_html(chapter: &str, watermark_uri: &str, viewport_width: u32) -> String {
     let wm_layer = if watermark_uri.is_empty() {
         String::new()
@@ -808,8 +863,40 @@ fn read_entry<R: Read + std::io::Seek>(
     name: &str,
 ) -> Result<Vec<u8>, String> {
     let mut f = archive.by_name(name).map_err(|e| e.to_string())?;
-    let mut buf = Vec::with_capacity(f.size() as usize);
-    f.read_to_end(&mut buf).map_err(|e| e.to_string())?;
+    let declared = f.size();
+    let compressed = f.compressed_size();
+
+    // Pre-allocation defence: the ZIP central directory lists attacker-
+    // controlled uncompressed + compressed sizes. Reject anything that
+    // either exceeds the per-entry cap or looks like a zip bomb.
+    if declared > MAX_ENTRY_UNCOMPRESSED_BYTES {
+        return Err(format!(
+            "entry '{}' too large: declared {} bytes (cap {})",
+            name, declared, MAX_ENTRY_UNCOMPRESSED_BYTES
+        ));
+    }
+    if compressed > 0 && declared / compressed.max(1) > MAX_COMPRESSION_RATIO {
+        return Err(format!(
+            "entry '{}' rejected: suspicious compression ratio {}x",
+            name,
+            declared / compressed.max(1)
+        ));
+    }
+
+    // Cap the initial allocation independent of declared size so that
+    // even a miscalculated declared value can't force a huge up-front
+    // allocation. `read_to_end` will grow as needed up to the hard cap
+    // enforced by `take`.
+    let cap = (declared as usize).min(MAX_ENTRY_UNCOMPRESSED_BYTES as usize);
+    let mut buf = Vec::with_capacity(cap);
+    let mut limited = (&mut f).take(MAX_ENTRY_UNCOMPRESSED_BYTES + 1);
+    limited.read_to_end(&mut buf).map_err(|e| e.to_string())?;
+    if buf.len() as u64 > MAX_ENTRY_UNCOMPRESSED_BYTES {
+        return Err(format!(
+            "entry '{}' exceeded uncompressed cap during read",
+            name
+        ));
+    }
     Ok(buf)
 }
 
@@ -918,5 +1005,165 @@ mod tests {
     fn watermark_svg_contains_text() {
         let uri = build_watermark_svg_data_uri("0xabcd");
         assert!(uri.starts_with("data:image/svg+xml;base64,"));
+    }
+
+    // ---------------------------------------------------------------
+    // Hardening tests — added for V1.2 security pass.
+    // ---------------------------------------------------------------
+
+    /// Build an in-memory ZIP with a single named entry of `body` so
+    /// `read_entry` / `sanitize_chapter` tests can run against a real
+    /// `ZipArchive<Cursor<Vec<u8>>>`.
+    fn build_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        use std::io::Write as _;
+        let mut buf = Vec::<u8>::new();
+        {
+            let cursor = Cursor::new(&mut buf);
+            let mut zw = zip::ZipWriter::new(cursor);
+            // default deflate is fine; we're not stress-testing crypto.
+            let opts: zip::write::FileOptions = zip::write::FileOptions::default();
+            for (name, bytes) in entries {
+                zw.start_file(*name, opts).unwrap();
+                zw.write_all(bytes).unwrap();
+            }
+            zw.finish().unwrap();
+        }
+        buf
+    }
+
+    #[test]
+    fn read_entry_accepts_normal_size() {
+        let zip = build_zip(&[("a.txt", b"hello")]);
+        let mut archive = ZipArchive::new(Cursor::new(zip)).unwrap();
+        let out = read_entry(&mut archive, "a.txt").unwrap();
+        assert_eq!(out, b"hello");
+    }
+
+    #[test]
+    fn read_entry_missing_returns_err() {
+        let zip = build_zip(&[("a.txt", b"hello")]);
+        let mut archive = ZipArchive::new(Cursor::new(zip)).unwrap();
+        assert!(read_entry(&mut archive, "missing.txt").is_err());
+    }
+
+    #[test]
+    fn manifest_cap_bounds_hashmap() {
+        // Build an OPF that declares 50 manifest items but pass a
+        // cap of 10 — manifest collection should stop at the cap.
+        let mut items = String::new();
+        for i in 0..50 {
+            items.push_str(&format!(
+                r#"<item id="i{0}" href="c{0}.xhtml" media-type="application/xhtml+xml"/>"#,
+                i
+            ));
+        }
+        let opf = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <metadata><dc:title xmlns:dc="http://purl.org/dc/elements/1.1/">T</dc:title></metadata>
+  <manifest>{}</manifest>
+  <spine><itemref idref="i0"/></spine>
+</package>"#,
+            items
+        );
+        let meta = parse_opf(opf.as_bytes(), 10).unwrap();
+        // Spine still resolves the first entry (which is in the first
+        // 10 captured manifest rows).
+        assert_eq!(meta.spine.len(), 1);
+        // Title was extracted regardless of the cap.
+        assert_eq!(meta.title.as_deref(), Some("T"));
+    }
+
+    #[test]
+    fn manifest_cap_preserves_spine_when_entry_inside_cap() {
+        // Spine points at i3; cap=5 keeps i0..i4 — so spine resolves.
+        let mut items = String::new();
+        for i in 0..20 {
+            items.push_str(&format!(
+                r#"<item id="i{0}" href="c{0}.xhtml" media-type="application/xhtml+xml"/>"#,
+                i
+            ));
+        }
+        let opf = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <metadata/>
+  <manifest>{}</manifest>
+  <spine><itemref idref="i3"/></spine>
+</package>"#,
+            items
+        );
+        let meta = parse_opf(opf.as_bytes(), 5).unwrap();
+        assert_eq!(meta.spine, vec!["c3.xhtml"]);
+    }
+
+    #[test]
+    fn sanitize_chapter_truncates_past_budget() {
+        // Need an archive handle for the sanitizer signature even if no
+        // images are referenced; empty archive is fine.
+        let zip = build_zip(&[("placeholder", b"")]);
+        let mut archive = ZipArchive::new(Cursor::new(zip)).unwrap();
+
+        // Produce an XHTML with a long paragraph so output exceeds the
+        // tiny budget we pass in.
+        let big = "word ".repeat(500);
+        let xhtml = format!(
+            "<?xml version=\"1.0\"?><html><body><p>{}</p></body></html>",
+            big
+        );
+        let sanitized =
+            sanitize_chapter(&xhtml, &mut archive, "", "", 256).unwrap();
+        assert!(
+            sanitized.contains("[Content truncated"),
+            "expected truncation marker, got: {}",
+            &sanitized[sanitized.len().saturating_sub(80)..]
+        );
+    }
+
+    #[test]
+    fn sanitize_chapter_does_not_truncate_under_budget() {
+        let zip = build_zip(&[("placeholder", b"")]);
+        let mut archive = ZipArchive::new(Cursor::new(zip)).unwrap();
+        let xhtml = "<html><body><p>hello world</p></body></html>";
+        let sanitized =
+            sanitize_chapter(xhtml, &mut archive, "", "", 64 * 1024).unwrap();
+        assert!(!sanitized.contains("[Content truncated"));
+        assert!(sanitized.contains("<p>hello world</p>"));
+    }
+
+    #[test]
+    fn sanitize_chapter_strips_script_subtree() {
+        let zip = build_zip(&[("placeholder", b"")]);
+        let mut archive = ZipArchive::new(Cursor::new(zip)).unwrap();
+        let xhtml = "<html><body><p>before</p><script>alert(1)</script><p>after</p></body></html>";
+        let sanitized =
+            sanitize_chapter(xhtml, &mut archive, "", "", 64 * 1024).unwrap();
+        assert!(!sanitized.contains("alert"));
+        assert!(!sanitized.contains("<script"));
+        assert!(sanitized.contains("before"));
+        assert!(sanitized.contains("after"));
+    }
+
+    #[test]
+    fn sanitize_chapter_drops_on_handlers_and_style() {
+        let zip = build_zip(&[("placeholder", b"")]);
+        let mut archive = ZipArchive::new(Cursor::new(zip)).unwrap();
+        let xhtml = r#"<html><body><p onclick="evil()" style="color:red">x</p></body></html>"#;
+        let sanitized =
+            sanitize_chapter(xhtml, &mut archive, "", "", 64 * 1024).unwrap();
+        assert!(!sanitized.contains("onclick"));
+        assert!(!sanitized.contains("style="));
+        assert!(!sanitized.contains("evil"));
+    }
+
+    #[test]
+    fn safety_constants_are_conservative() {
+        // Guard-rail test: keep these limits in the sane zone so a
+        // future refactor can't silently 10× them without review.
+        assert!(MAX_ENTRY_UNCOMPRESSED_BYTES <= 64 * 1024 * 1024);
+        assert!(MAX_CHAPTER_HTML_BYTES <= 64 * 1024 * 1024);
+        assert!(MAX_COMPRESSION_RATIO <= 500);
+        assert!(MAX_MANIFEST_ENTRIES <= 100_000);
+        assert!(MAX_CHAPTERS <= 10_000);
     }
 }

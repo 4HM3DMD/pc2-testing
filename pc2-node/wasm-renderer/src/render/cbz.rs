@@ -23,6 +23,20 @@ const DEFAULT_JPEG_QUALITY: u8 = 85;
 /// Supported page image extensions inside CBZ archives.
 const IMAGE_EXTS: &[&str] = &["jpg", "jpeg", "png", "webp", "gif", "bmp"];
 
+/// Hard ceiling on uncompressed size of any single page we read into
+/// WASM memory. 48 MB covers double-spread high-DPI scans; anything
+/// beyond is treated as a zip-bomb header and rejected.
+const MAX_PAGE_UNCOMPRESSED_BYTES: u64 = 48 * 1024 * 1024;
+
+/// Compression-ratio ceiling — see equivalent constant in `epub.rs`.
+const MAX_COMPRESSION_RATIO: u64 = 200;
+
+/// Maximum number of page entries we will index in a CBZ. No real
+/// comic archive approaches this; the cap blocks a hostile ZIP with
+/// millions of `__MACOSX/`-style decoy filenames from blowing memory
+/// during enumeration.
+const MAX_PAGES: usize = 10_000;
+
 /// Render one page of a CBZ archive to a watermarked JPEG.
 pub fn render_cbz_raw(plaintext: &[u8], cmd: &RenderCommand) -> (RenderResult, Option<Vec<u8>>) {
     let cursor = Cursor::new(plaintext);
@@ -86,6 +100,9 @@ pub fn render_cbz_raw(plaintext: &[u8], cmd: &RenderCommand) -> (RenderResult, O
 fn enumerate_pages<R: Read + std::io::Seek>(archive: &mut ZipArchive<R>) -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
     for i in 0..archive.len() {
+        if names.len() >= MAX_PAGES {
+            break;
+        }
         if let Ok(file) = archive.by_index(i) {
             if file.is_dir() {
                 continue;
@@ -115,8 +132,34 @@ fn read_zip_entry<R: Read + std::io::Seek>(
     name: &str,
 ) -> Result<Vec<u8>, String> {
     let mut entry = archive.by_name(name).map_err(|e| e.to_string())?;
-    let mut buf = Vec::with_capacity(entry.size() as usize);
-    entry.read_to_end(&mut buf).map_err(|e| e.to_string())?;
+    let declared = entry.size();
+    let compressed = entry.compressed_size();
+
+    // Pre-allocation defence — ZIP sizes are attacker-controlled.
+    if declared > MAX_PAGE_UNCOMPRESSED_BYTES {
+        return Err(format!(
+            "page '{}' too large: declared {} bytes (cap {})",
+            name, declared, MAX_PAGE_UNCOMPRESSED_BYTES
+        ));
+    }
+    if compressed > 0 && declared / compressed.max(1) > MAX_COMPRESSION_RATIO {
+        return Err(format!(
+            "page '{}' rejected: suspicious compression ratio {}x",
+            name,
+            declared / compressed.max(1)
+        ));
+    }
+
+    let cap = (declared as usize).min(MAX_PAGE_UNCOMPRESSED_BYTES as usize);
+    let mut buf = Vec::with_capacity(cap);
+    let mut limited = (&mut entry).take(MAX_PAGE_UNCOMPRESSED_BYTES + 1);
+    limited.read_to_end(&mut buf).map_err(|e| e.to_string())?;
+    if buf.len() as u64 > MAX_PAGE_UNCOMPRESSED_BYTES {
+        return Err(format!(
+            "page '{}' exceeded uncompressed cap during read",
+            name
+        ));
+    }
     Ok(buf)
 }
 
@@ -216,5 +259,13 @@ mod tests {
         assert!(is_osx_junk("__MACOSX/page01.jpg"));
         assert!(is_osx_junk("foo/.DS_Store"));
         assert!(!is_osx_junk("chapter/page01.jpg"));
+    }
+
+    #[test]
+    fn safety_constants_are_conservative() {
+        // Guard-rail — keeps future edits from silently widening the caps.
+        assert!(MAX_PAGE_UNCOMPRESSED_BYTES <= 128 * 1024 * 1024);
+        assert!(MAX_COMPRESSION_RATIO <= 500);
+        assert!(MAX_PAGES <= 100_000);
     }
 }

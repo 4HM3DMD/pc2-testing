@@ -1,30 +1,62 @@
 {
   "name": "ddrm-renderer",
-  "version": "1.1.0",
-  "description": "AES-GCM decrypt + render (image/text/PDF/code/EPUB/CBZ) for dDRM content",
+  "version": "1.1.1",
+  "description": "AES-GCM decrypt + render (image/text/PDF/code/EPUB/CBZ) for dDRM content. 1.1.1 hardens EPUB/CBZ ZIP handling against bombs + unbounded allocations.",
   "target": "wasm32-wasip1",
   "binary": "ddrm-renderer.wasm",
-  "sha256": null,
-  "capabilities": ["drm:decrypt", "drm:render", "drm:encrypt"],
-  "provider_operations": ["drm:decrypt", "drm:render", "drm:encrypt-content"],
+  "sha256": "a59988589e27de3d38c5fbd9e4a08dfe7859b7607b17e8d3f6c0ea04a800b028",
+  "capabilities": [
+    "drm:decrypt",
+    "drm:render",
+    "drm:encrypt"
+  ],
+  "provider_operations": [
+    "drm:decrypt",
+    "drm:render",
+    "drm:encrypt-content"
+  ],
   "supported_mime_types": [
-    "image/jpeg", "image/png", "image/webp", "image/gif",
-    "text/plain", "text/markdown", "text/html",
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/gif",
+    "text/plain",
+    "text/markdown",
+    "text/html",
     "application/pdf",
     "application/epub+zip",
-    "application/vnd.comicbook+zip", "application/x-cbz",
-    "application/javascript", "application/json", "application/xml",
-    "application/x-yaml", "application/toml", "application/x-sh",
-    "text/x-python", "text/x-rust", "text/x-c", "text/x-go",
-    "text/x-typescript", "text/x-java", "text/css"
+    "application/vnd.comicbook+zip",
+    "application/x-cbz",
+    "application/javascript",
+    "application/json",
+    "application/xml",
+    "application/x-yaml",
+    "application/toml",
+    "application/x-sh",
+    "text/x-python",
+    "text/x-rust",
+    "text/x-c",
+    "text/x-go",
+    "text/x-typescript",
+    "text/x-java",
+    "text/css"
   ],
   "render_tiers": {
     "pixel-lock": "image/*, application/pdf, application/vnd.comicbook+zip, text/x-* (source code)",
     "html-lock": "application/epub+zip (reflowable; sanitized XHTML with forensic watermark)"
   },
   "memfs": {
-    "input": ["/input/command.json", "/input/encrypted.bin", "/input/plaintext.bin"],
-    "output": ["/output/result.json", "/output/rendered.bin", "/output/decrypted.bin", "/output/encrypted.bin"]
+    "input": [
+      "/input/command.json",
+      "/input/encrypted.bin",
+      "/input/plaintext.bin"
+    ],
+    "output": [
+      "/output/result.json",
+      "/output/rendered.bin",
+      "/output/decrypted.bin",
+      "/output/encrypted.bin"
+    ]
   },
   "runtime_compatibility": {
     "wasi_preview": 1,
