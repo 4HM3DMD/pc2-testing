@@ -818,6 +818,18 @@ fn wrap_chapter_html(chapter: &str, watermark_uri: &str, viewport_width: u32) ->
         )
     };
 
+    // Anti-exfiltration CSS baked into the chapter HTML itself. Because the
+    // iframe forbids JavaScript (sandbox + CSP default-src 'none'), this CSS
+    // is the enforcement layer for copy-protection. Users with devtools can
+    // still override it locally, but the zero-width forensic watermark in
+    // the text nodes survives extraction and traces back to the buyer.
+    //
+    //   * user-select:none + ::selection invisible → Cmd+A / Cmd+C yields
+    //     nothing on the clipboard and no visible selection highlight
+    //   * -webkit-user-drag:none on images → blocks drag-to-desktop save
+    //   * @media print → blanks the content when user prints-to-PDF
+    //   * pointer-events stay enabled on links so internal TOC navigation
+    //     keeps working, but selection is still off inside them
     format!(
         concat!(
             "<!DOCTYPE html>\n",
@@ -826,24 +838,33 @@ fn wrap_chapter_html(chapter: &str, watermark_uri: &str, viewport_width: u32) ->
             "<style>",
             ":root{{color-scheme:light dark}}",
             "html,body{{margin:0;padding:0;font-family:'Source Serif 4','Source Serif Pro',Georgia,serif;line-height:1.65;color:var(--epub-fg,#1a1a1a);background:var(--epub-bg,#fafaf7);}}",
+            "html,body,*{{-webkit-user-select:none!important;-moz-user-select:none!important;-ms-user-select:none!important;user-select:none!important;-webkit-touch-callout:none!important;-webkit-tap-highlight-color:transparent;}}",
+            "::selection{{background:transparent!important;color:inherit!important;}}::-moz-selection{{background:transparent!important;color:inherit!important;}}",
             "body.epub-theme-night{{--epub-fg:#d8d8d2;--epub-bg:#1a1a1c;}}",
             "body.epub-theme-sepia{{--epub-fg:#4b3f2b;--epub-bg:#f4ecd8;}}",
+            "body.epub-mode-paged{{column-gap:48px;column-fill:auto;overflow:hidden;}}",
             "main.epub-chapter{{max-width:{vw}px;margin:0 auto;padding:32px 24px 80px;position:relative;z-index:1;}}",
-            "main.epub-chapter p{{margin:0 0 1em;text-align:justify;hyphens:auto;}}",
-            "main.epub-chapter h1,main.epub-chapter h2,main.epub-chapter h3{{font-family:Inter,ui-sans-serif,system-ui,sans-serif;letter-spacing:-0.01em;}}",
+            "body.epub-mode-paged main.epub-chapter{{max-width:none;padding:28px 32px;height:100%;}}",
+            "main.epub-chapter p{{margin:0 0 1em;text-align:justify;hyphens:auto;orphans:2;widows:2;}}",
+            "main.epub-chapter h1,main.epub-chapter h2,main.epub-chapter h3{{font-family:Inter,ui-sans-serif,system-ui,sans-serif;letter-spacing:-0.01em;break-after:avoid;}}",
             "main.epub-chapter h1{{font-size:1.8em;margin:1.6em 0 .6em;}}",
             "main.epub-chapter h2{{font-size:1.4em;margin:1.4em 0 .5em;}}",
             "main.epub-chapter h3{{font-size:1.15em;margin:1.2em 0 .4em;}}",
-            "main.epub-chapter img{{max-width:100%;height:auto;display:block;margin:1em auto;}}",
+            "main.epub-chapter img{{max-width:100%;height:auto;display:block;margin:1em auto;-webkit-user-drag:none;user-drag:none;pointer-events:none;}}",
             "main.epub-chapter blockquote{{border-left:3px solid rgba(0,0,0,0.18);padding:.2em 1em;margin:1em 0;color:rgba(0,0,0,0.72);}}",
             "main.epub-chapter code,main.epub-chapter pre{{font-family:'IBM Plex Mono',ui-monospace,Consolas,monospace;font-size:.92em;}}",
             "main.epub-chapter pre{{background:rgba(0,0,0,0.06);padding:.9em;border-radius:6px;overflow-x:auto;}}",
-            "main.epub-chapter a{{color:#3b5bdb;text-decoration:underline;}}",
+            "main.epub-chapter a{{color:#3b5bdb;text-decoration:underline;pointer-events:auto;}}",
             "body.epub-theme-night main.epub-chapter a{{color:#94b1ff;}}",
+            // Typographic asterism (scene break, e.g. Alice in Wonderland)
+            "main.epub-chapter p.asterism,main.epub-chapter .asterism{{text-align:center;letter-spacing:.5em;padding:1.2em 0;margin:1.4em 0;color:rgba(0,0,0,0.45);font-size:.95em;break-inside:avoid;}}",
+            "body.epub-theme-night main.epub-chapter p.asterism,body.epub-theme-night main.epub-chapter .asterism{{color:rgba(255,255,255,0.35);}}",
             ".epub-watermark{{position:fixed;inset:0;pointer-events:none;background-repeat:repeat;background-size:520px 260px;opacity:.55;mix-blend-mode:multiply;z-index:2;}}",
             "body.epub-theme-night .epub-watermark{{mix-blend-mode:lighten;opacity:.25;}}",
+            // Print lockdown: blanks the document when the user tries to print-to-PDF.
+            "@media print{{html,body{{visibility:hidden!important;background:#fff!important;}}body::after{{content:'Protected content — printing disabled';visibility:visible!important;position:fixed;inset:0;display:flex;align-items:center;justify-content:center;font-family:system-ui,sans-serif;font-size:18px;color:#555;}}}}",
             "</style></head>",
-            "<body class=\"epub-theme-day\">",
+            "<body class=\"epub-theme-day epub-mode-scroll\">",
             "<main class=\"epub-chapter\">{chapter}</main>",
             "{wm}",
             "</body></html>",
@@ -1005,6 +1026,39 @@ mod tests {
     fn watermark_svg_contains_text() {
         let uri = build_watermark_svg_data_uri("0xabcd");
         assert!(uri.starts_with("data:image/svg+xml;base64,"));
+    }
+
+    #[test]
+    fn wrap_chapter_bakes_in_copy_lockdown() {
+        // Chapter HTML must carry the anti-exfiltration CSS unconditionally.
+        // A user with devtools can bypass it locally, but casual copy-paste
+        // must yield nothing. The zero-width forensic watermark + visible
+        // diagonal SVG still provide attribution for extracted content.
+        let html = wrap_chapter_html("<p>hello</p>", "", 680);
+
+        // user-select:none on everything
+        assert!(html.contains("user-select:none"), "missing user-select:none");
+        assert!(html.contains("-webkit-user-select:none"), "missing -webkit-user-select:none");
+
+        // invisible selection highlight
+        assert!(html.contains("::selection"), "missing ::selection override");
+
+        // images cannot be dragged to desktop
+        assert!(html.contains("-webkit-user-drag:none"), "missing -webkit-user-drag:none");
+
+        // print-to-PDF lockdown
+        assert!(html.contains("@media print"), "missing @media print lockdown");
+        assert!(html.contains("Protected content"), "missing print message");
+
+        // asterism (scene-break) styling
+        assert!(html.contains(".asterism"), "missing asterism styling");
+
+        // paged-mode scaffolding present
+        assert!(html.contains("epub-mode-paged"), "missing paged-mode class");
+        assert!(html.contains("column-gap:48px"), "missing column-gap for paged mode");
+
+        // default mode class on body is scroll
+        assert!(html.contains("epub-mode-scroll"), "default body class must be scroll mode");
     }
 
     // ---------------------------------------------------------------

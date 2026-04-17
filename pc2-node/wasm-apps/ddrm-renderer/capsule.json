@@ -1,10 +1,10 @@
 {
   "name": "ddrm-renderer",
-  "version": "1.1.1",
-  "description": "AES-GCM decrypt + render (image/text/PDF/code/EPUB/CBZ) for dDRM content. 1.1.1 hardens EPUB/CBZ ZIP handling against bombs + unbounded allocations.",
+  "version": "1.1.2",
+  "description": "AES-GCM decrypt + render (image/text/PDF/code/EPUB/CBZ) for dDRM content. 1.1.2 adds EPUB copy-lockdown (user-select:none, print blocked, drag-save blocked), asterism styling, paged-mode scaffolding.",
   "target": "wasm32-wasip1",
   "binary": "ddrm-renderer.wasm",
-  "sha256": "a59988589e27de3d38c5fbd9e4a08dfe7859b7607b17e8d3f6c0ea04a800b028",
+  "sha256": "da8f05e09eda5f62b46bd6c1a84fae5cbf30e57a0e79f27bab435d8715197991",
   "capabilities": [
     "drm:decrypt",
     "drm:render",
