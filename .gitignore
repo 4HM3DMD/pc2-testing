@@ -68,6 +68,15 @@ pc2-node/tmp/
 pc2-node/data/.chipotle-*
 pc2-node/data/.lit-*
 
+# Security test artefacts (exploit target config + evidence logs with redacted CEKs)
+# These scripts prove the Lit Action vulnerability exists; they are NEVER run in CI.
+scripts/security/exploit-target.json
+scripts/security/.exploit-evidence/
+
+# Phase 1 spike run artefacts (timestamped JSON per run). The scripts
+# themselves are tracked; only the raw run outputs are gitignored.
+scripts/spike/.results/
+
 # Confidential handover docs (contain API keys) - only IRZHY handover has secrets
 docs/handover/IRZHY_DDRM_HANDOVER.md
 

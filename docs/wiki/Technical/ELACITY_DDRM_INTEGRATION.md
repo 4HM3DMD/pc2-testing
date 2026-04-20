@@ -3,6 +3,39 @@
 > Source: Elacity codebase analysis, March 2026.
 > This is the single source of truth for on-chain minting, encryption, and marketplace integration.
 
+> ## ⚠️ Known Security Issue — Patch in Flight (V1.2)
+>
+> **Scope**: `non-media-decrypt.js` and `media-decrypt.js` Lit Actions.
+>
+> **Issue**: The buyer's `userAddress` is passed into the Lit Action via
+> `jsParams`. Because the Lit Action code is immutable/public on IPFS,
+> any Lit-compatible caller can supply *any* known authorized buyer's
+> address and receive the CEK. The `AuthorityGateway.hasAccessByContentId`
+> check answers truthfully for the named holder, but nothing proves the
+> caller *is* that holder.
+>
+> **Impact**: Access control is bypassable by any party with access to
+> the publicly-pinned `(ciphertext, dataToEncryptHash, kid,
+> actionIpfsId)` tuple plus any one authorized buyer's wallet address
+> (observable from `AccessTokenMinted` events on-chain).
+>
+> **Fix** (landing in V1.2): **session-key delegation**. At wallet
+> connect, buyer signs **one** `SecureViewDelegation` authorizing an
+> ephemeral, device-bound, non-extractable Web Crypto key to decrypt
+> dDRM content for up to 24 hours across their EOA + smart account.
+> Every subsequent asset open is signed silently by the ephemeral key —
+> zero wallet popups. The Lit Action verifies both signatures and uses
+> the delegation's covered addresses for `hasAccessByContentId`.
+> `userAddress` is removed from `jsParams`. Preserves the "double-click
+> to open" UX while closing the bypass.
+>
+> **Status**: Design + threat model ready for review. No code changes
+> yet. See:
+> - [`LIT-ACTION-SIGNATURE-AUTH/DESIGN.md`](../../../.cursor/tasks/LIT-ACTION-SIGNATURE-AUTH/DESIGN.md) — full protocol, EOA/smart-account matrix, Lit Action pseudocode, rollout plan.
+> - [`LIT-ACTION-SIGNATURE-AUTH/SECURITY.md`](../../../.cursor/tasks/LIT-ACTION-SIGNATURE-AUTH/SECURITY.md) — formal threat model, 20-row attack catalogue, residual-risk analysis, external-audit checklist.
+>
+> **Discovered**: 2026-04-17 pre-release team call.
+
 ## Base Chain (8453) Contract Addresses
 
 | Contract | Address |
@@ -262,6 +295,18 @@ The user's pc2-node follows the same pattern as Elacity's backend. The user's no
 3. Lit session sigs are obtained (SIWE sign)
 4. Lit nodes verify access conditions and release the decryption key
 5. Content is decrypted locally
+
+> **V1.2 change (in flight)**: step 1 is being extended with a
+> one-time `SecureViewDelegation` signed by the buyer's wallet on
+> connect. The delegation authorizes a short-lived, non-extractable
+> ephemeral key (Web Crypto) to sign per-request payloads silently
+> for the session (≤ 24h). The Lit Action verifies both signatures
+> and uses the delegation's `coveredAddresses` for
+> `hasAccessByContentId` — never a `userAddress` parameter. Closes
+> the bypass at the top of this document and preserves the
+> "double-click to open" UX. See
+> [`DESIGN.md`](../../../.cursor/tasks/LIT-ACTION-SIGNATURE-AUTH/DESIGN.md)
+> and [`SECURITY.md`](../../../.cursor/tasks/LIT-ACTION-SIGNATURE-AUTH/SECURITY.md).
 
 ### CEK caching (session-scoped, per-buyer, LRU)
 
