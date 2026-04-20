@@ -174,7 +174,9 @@ interface SecureViewDelegation {
   coveredAddresses: `0x${string}`[];
 
   /** The ephemeral public key that will sign per-request payloads. */
-  /** Hex of the uncompressed SEC1-encoded public key (secp256k1). */
+  /** Hex of the uncompressed SEC1-encoded public key (P-256 / */
+  /** secp256r1). Curve chosen in Phase 1 spike — K-256 is not */
+  /** available in Chromium/Firefox/WebKit. See §10.2. */
   sessionPublicKey: `0x${string}`;
 
   /** Replay window for the whole session. */
@@ -217,8 +219,9 @@ rule as the delegation.
     EIP-1271 is only needed for third-party contract wallets (e.g.,
     Gnosis Safe) where there's no single EOA signer.
 - **Per-request**:
-  - Web Crypto secp256k1 ECDSA signature over canonical JSON of
-    `SecureViewRequest`.
+  - Web Crypto ECDSA signature over canonical JSON of
+    `SecureViewRequest`, using **P-256 (secp256r1)** — the curve
+    locked in Phase 1 §10.2.
   - Verified inside the Lit Action via `crypto.subtle.verify(...)`
     against `delegation.sessionPublicKey`.
 
@@ -349,7 +352,7 @@ Flow through `recoverCEKAndFetchData` (storage.ts line 1596):
 
 `verifyWebCryptoSig` is a small helper using
 `crypto.subtle.importKey('raw', sessionPubBytes, { name: 'ECDSA',
-namedCurve: 'K-256' }, false, ['verify'])` then
+namedCurve: 'P-256' }, false, ['verify'])` then
 `crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, pub,
 sigBytes, canonicalBytes)`.
 
@@ -821,3 +824,54 @@ secp256k1 for EOA delegation sig). All primitives proven sound on
 the server, on three browser engines, and against Base mainnet
 RPC. Next step is the implementation plan in
 `lit-action-session-key-auth_37036101.plan.md` Phase 2.
+
+---
+
+## 11. Phase 2a Primitive-Layer Memo (2026-04-20)
+
+Phase 2a landed the shared cryptographic plumbing that both server
+and client consume. **No user-visible behaviour changes yet** —
+this phase only adds infrastructure that Phase 2b/2c will wire into
+request handlers.
+
+### 11.1 What shipped
+
+| File | Role |
+|---|---|
+| `pc2-node/src/utils/secureViewSession.ts` | Server verifier: canonicalize, buildDelegationPayload, buildRequestPayload, verifyDelegationEip191, verifyDelegationEip1271, verifyRequestSignature (P-256), revocation + anti-replay caches, `verifySecureViewBundle` orchestrator |
+| `pc2-node/data/test-apps/shared/secure-view-session.js` | Client library (classic script, `window.PC2SecureViewSession`): ephemeral P-256 key gen + IndexedDB storage, canonicalize, buildDelegationPayload, signRequest, revokeSession, renderSessionIndicator |
+
+### 11.2 Conformance tests (all green)
+
+| Spike | Script | Verdict | Key metric |
+|---|---|---|---|
+| Server-verifier negative matrix (15 cases) | `scripts/spike/spike-secureview-primitives.mjs` | **PASS 15/15** | Every DESIGN.md §2.6 failure mode returns the correct `VerifyErrorCode` |
+| Client ↔ server interop (Chromium / Firefox / WebKit) | `scripts/spike/spike-client-server-interop.mjs` | **PASS 3/3** | Canonical JSON is byte-identical (480 / 207 bytes); P-256 signatures verify server-side |
+| Non-extractability after IndexedDB reload | `scripts/spike/spike-nonextractable.mjs` | **PASS 3/3** | `exportKey('raw')` and `exportKey('pkcs8')` both throw on the reloaded `privateKey`; `extractable === false` |
+
+### 11.3 Design fidelity
+
+- Canonical JSON implementation in `canonicalize()` is byte-identical
+  between TS server and JS client (verified by interop test — 480
+  bytes delegation, 207 bytes request, in all three engines).
+- SEC1 uncompressed P-256 public keys are always 65 bytes
+  (`0x04 || X || Y`) — structurally enforced by regex
+  `/^0x04[0-9a-fA-F]{128}$/` in the server verifier.
+- Web Crypto `sign()` / `verify()` produces raw `r || s` 64-byte
+  signatures (not DER). The Lit Action in Phase 2d will receive
+  the same shape.
+- Anti-replay map keys on `(delegationNonce, requestNonce)` — NOT
+  per-user — so a user with two tabs open can still get cache hits
+  on different assets; they only collide if they replay the
+  identical per-request nonce within the window.
+- Revocation TTL matches delegation expiry — no memory growth
+  beyond the natural 24h window + `MAX_REVOKED` / `MAX_SEEN_NONCES`
+  caps.
+
+### 11.4 Gate for Phase 2b
+
+Phase 2b (`/lit/begin-session`, `/lit/complete-session`,
+`/lit/revoke-session`, plus wiring `verifySecureViewBundle` into
+`/lit/secure-view`) is cleared to proceed. Server verifier is drop-
+in ready: it does not touch the Lit Protocol, does not spend
+Chipotle credits, and fails closed on every known negative case.
