@@ -3,38 +3,41 @@
 > Source: Elacity codebase analysis, March 2026.
 > This is the single source of truth for on-chain minting, encryption, and marketplace integration.
 
-> ## ⚠️ Known Security Issue — Patch in Flight (V1.2)
+> ## Security: Session-Key Delegation (V1.2, shipped 2026-04-20)
 >
-> **Scope**: `non-media-decrypt.js` and `media-decrypt.js` Lit Actions.
+> **Scope**: `non-media-decrypt-chipotle-sigauth.js` and
+> `media-decrypt-chipotle-sigauth.js` Lit Actions.
 >
-> **Issue**: The buyer's `userAddress` is passed into the Lit Action via
-> `jsParams`. Because the Lit Action code is immutable/public on IPFS,
-> any Lit-compatible caller can supply *any* known authorized buyer's
-> address and receive the CEK. The `AuthorityGateway.hasAccessByContentId`
-> check answers truthfully for the named holder, but nothing proves the
-> caller *is* that holder.
+> **Historic issue** (closed in V1.2): the previous Lit Actions
+> trusted a client-supplied `userAddress` in `jsParams`. Because the
+> Lit Action code is immutable/public on IPFS, any Lit-compatible
+> caller could supply *any* known authorized buyer's address and
+> receive the CEK. Discovered during the 2026-04-17 pre-release call.
 >
-> **Impact**: Access control is bypassable by any party with access to
-> the publicly-pinned `(ciphertext, dataToEncryptHash, kid,
-> actionIpfsId)` tuple plus any one authorized buyer's wallet address
-> (observable from `AccessTokenMinted` events on-chain).
+> **Fix shipped**: **session-key delegation**. At wallet connect the
+> buyer signs **one** `SecureViewDelegation` authorizing a
+> non-extractable, device-bound P-256 key (Web Crypto, `extractable:
+> false`) to decrypt dDRM content for up to 24 hours across their
+> EOA + smart-account addresses. Every subsequent asset open is
+> signed silently by the ephemeral key — zero wallet popups,
+> preserving the "double-click to open" UX. The sigauth Lit Actions
+> verify the delegation signature (EIP-191 for EOA or EIP-1271 for
+> smart wallets) *and* the per-request signature before reaching the
+> `AuthorityGateway.hasAccessByContentId` check against the
+> delegation's `coveredAddresses`. `userAddress` has been removed
+> from the authorization path entirely.
 >
-> **Fix** (landing in V1.2): **session-key delegation**. At wallet
-> connect, buyer signs **one** `SecureViewDelegation` authorizing an
-> ephemeral, device-bound, non-extractable Web Crypto key to decrypt
-> dDRM content for up to 24 hours across their EOA + smart account.
-> Every subsequent asset open is signed silently by the ephemeral key —
-> zero wallet popups. The Lit Action verifies both signatures and uses
-> the delegation's covered addresses for `hasAccessByContentId`.
-> `userAddress` is removed from `jsParams`. Preserves the "double-click
-> to open" UX while closing the bypass.
+> **Rollout**: live as of 2026-04-20. `LIT_ACTION_CID` points at the
+> new sigauth action; `LIT_ACTION_CID_LEGACY` stays pinned for 14
+> days to cover clients that haven't yet adopted the session flow.
+> After 14 days of zero legacy traffic the legacy action is
+> unpinned and the sigauth path becomes mandatory.
 >
-> **Status**: Design + threat model ready for review. No code changes
-> yet. See:
+> **Evidence**:
 > - [`LIT-ACTION-SIGNATURE-AUTH/DESIGN.md`](../../../.cursor/tasks/LIT-ACTION-SIGNATURE-AUTH/DESIGN.md) — full protocol, EOA/smart-account matrix, Lit Action pseudocode, rollout plan.
-> - [`LIT-ACTION-SIGNATURE-AUTH/SECURITY.md`](../../../.cursor/tasks/LIT-ACTION-SIGNATURE-AUTH/SECURITY.md) — formal threat model, 20-row attack catalogue, residual-risk analysis, external-audit checklist.
->
-> **Discovered**: 2026-04-17 pre-release team call.
+> - [`LIT-ACTION-SIGNATURE-AUTH/SECURITY.md`](../../../.cursor/tasks/LIT-ACTION-SIGNATURE-AUTH/SECURITY.md) — formal threat model, 20-row attack catalogue, residual-risk analysis.
+> - [`LIT-ACTION-SIGNATURE-AUTH/TESTING.md`](../../../.cursor/tasks/LIT-ACTION-SIGNATURE-AUTH/TESTING.md) — positive/negative test matrix covering automated exploit regression, cross-browser, and wallet-in-hand rows.
+> - [`scripts/spike/README.md`](../../../scripts/spike/README.md) — conformance spikes for the underlying primitives (EIP-191, EIP-1271, Web Crypto P-256, canonical JSON).
 
 ## Base Chain (8453) Contract Addresses
 

@@ -26,6 +26,7 @@
         <span id="renderer-badge" class="badge hidden"></span>
         <span id="watermark-badge" class="badge badge-secondary hidden"></span>
         <span id="page-counter" class="badge badge-muted hidden"></span>
+        <span id="session-indicator"></span>
       </div>
     </header>
 
@@ -167,6 +168,9 @@
   <!-- Specialized readers (register on window) -->
   <script src="reader-epub.js" defer></script>
   <script src="reader-cbz.js" defer></script>
+
+  <!-- Secure-view session (Option C session-key delegation) -->
+  <script src="lib/secure-view-session.js" defer></script>
 
   <script src="viewer.js" defer></script>
 </body>

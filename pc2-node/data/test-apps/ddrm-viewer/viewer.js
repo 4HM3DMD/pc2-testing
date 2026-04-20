@@ -28,6 +28,201 @@
     return fetch(url, opts);
   }
 
+  // ── Secure-view session (Option C session-key delegation) ────────
+  //
+  // Obtains a 24h signed delegation from the user's wallet once per
+  // session, stores a non-extractable P-256 key in IndexedDB, and
+  // attaches { delegation, delegationSig, request, requestSig } to
+  // every secure-view request so the new sigauth Lit Action can
+  // verify it cryptographically — closing the userAddress spoof path.
+  //
+  // The integration is best-effort: if the capsule has no injected
+  // wallet or the user declines to sign, requests still go through
+  // on the legacy path (14-day rollout window). After the legacy CID
+  // is removed server-side, the sigauth check becomes mandatory.
+  var sessionState = {
+    bootstrapped: false,
+    bootstrapPromise: null,
+    delegationRecord: null, // { delegation, delegationCanonical, delegationSig, expiresAt, ownerAddress }
+    keyPair: null,          // CryptoKeyPair (P-256)
+  };
+
+  function getEthereumProvider() {
+    if (typeof window === 'undefined') return null;
+    // Standard EIP-1193 provider. Covers MetaMask, Rabby, Coinbase,
+    // crypto-wallet browsers. For Puter capsule contexts with no
+    // injected provider, this returns null and we skip the session.
+    return window.ethereum || null;
+  }
+
+  function providerRequest(provider, method, params) {
+    if (typeof provider.request === 'function') {
+      return provider.request({ method: method, params: params });
+    }
+    return new Promise(function (resolve, reject) {
+      provider.sendAsync({ method: method, params: params }, function (err, res) {
+        if (err) reject(err); else resolve(res && res.result);
+      });
+    });
+  }
+
+  function bootstrapSession() {
+    if (sessionState.bootstrapped) return Promise.resolve(sessionState);
+    if (sessionState.bootstrapPromise) return sessionState.bootstrapPromise;
+
+    var SVS = window.PC2SecureViewSession;
+    if (!SVS) {
+      sessionState.bootstrapped = true;
+      return Promise.resolve(sessionState);
+    }
+
+    sessionState.bootstrapPromise = (function () {
+      return SVS.getActiveDelegation().then(function (active) {
+        if (!active) return null;
+        return SVS.loadSessionKey().then(function (keyPair) {
+          if (!keyPair) return null;
+          sessionState.delegationRecord = active;
+          sessionState.keyPair = keyPair;
+          return sessionState;
+        });
+      }).then(function (reused) {
+        if (reused) return reused;
+
+        var provider = getEthereumProvider();
+        if (!provider) {
+          console.warn('[Viewer] No injected wallet provider detected; skipping session bootstrap.');
+          return null;
+        }
+
+        // Generate ephemeral key first — server needs sessionPublicKey
+        // upfront so it can bind it into the delegation payload it
+        // returns. ownerAddress is derived server-side from the
+        // authenticated PC2 session; client cannot forge it.
+        return SVS.createEphemeralKey().then(function (kp) {
+          return authFetch('/api/storage/lit/begin-session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sessionPublicKey: kp.sessionPublicKey }),
+          }).then(function (resp) {
+            if (!resp.ok) throw new Error('begin-session failed: ' + resp.status);
+            return resp.json();
+          }).then(function (data) {
+            var delegation = data && data.delegation;
+            var canonical = data && data.delegationCanonical;
+            if (!delegation || !canonical) throw new Error('begin-session returned invalid payload');
+            var ownerAddress = delegation.ownerAddress;
+            // personal_sign requires an account param. Covered paths:
+            //  - If provider.selectedAddress matches, use it.
+            //  - Otherwise eth_requestAccounts[0] and verify match.
+            return providerRequest(provider, 'eth_accounts', []).then(function (res) {
+              var accounts = Array.isArray(res) ? res : [];
+              if (!accounts.length) {
+                return providerRequest(provider, 'eth_requestAccounts', []).then(function (r2) {
+                  return Array.isArray(r2) ? r2 : [];
+                });
+              }
+              return accounts;
+            }).then(function (accounts) {
+              if (!accounts.length) throw new Error('No wallet account authorized');
+              var signerAddr = accounts[0];
+              if (signerAddr.toLowerCase() !== String(ownerAddress).toLowerCase()) {
+                throw new Error('Wallet account does not match authenticated PC2 session');
+              }
+              return providerRequest(provider, 'personal_sign', [canonical, signerAddr]);
+            }).then(function (delegationSig) {
+              return authFetch('/api/storage/lit/complete-session', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  delegation: canonical, // send canonical string form
+                  delegationSig: delegationSig,
+                }),
+              }).then(function (resp) {
+                if (!resp.ok) throw new Error('complete-session failed: ' + resp.status);
+                var record = {
+                  delegation: delegation,
+                  delegationCanonical: canonical,
+                  delegationSig: delegationSig,
+                  sessionPublicKey: kp.sessionPublicKey,
+                  ownerAddress: ownerAddress,
+                  expiresAt: delegation.expiresAt,
+                };
+                return Promise.all([
+                  SVS.saveSessionKey(kp.keyPair),
+                  SVS.persistDelegation(record),
+                ]).then(function () {
+                  sessionState.keyPair = kp.keyPair;
+                  sessionState.delegationRecord = record;
+                  renderSessionIndicatorIfAvailable();
+                  return sessionState;
+                });
+              });
+            });
+          });
+        }).catch(function (err) {
+          console.warn('[Viewer] Session bootstrap failed — falling back to legacy:', err);
+          return null;
+        });
+      }).then(function (result) {
+        sessionState.bootstrapped = true;
+        return result || sessionState;
+      });
+    })();
+
+    return sessionState.bootstrapPromise;
+  }
+
+  function augmentBodyWithSession(body) {
+    var SVS = window.PC2SecureViewSession;
+    if (!SVS) return Promise.resolve(body);
+    return bootstrapSession().then(function () {
+      var rec = sessionState.delegationRecord;
+      var kp = sessionState.keyPair;
+      if (!rec || !kp || !body.kid) return body;
+      return SVS.signRequest(kp, {
+        kid: body.kid,
+        actionIpfsId: rec.delegation.actionIpfsId,
+      }).then(function (signed) {
+        // Send canonical string forms so the server uses the exact
+        // bytes over which signatures were produced.
+        body.delegation = rec.delegationCanonical;
+        body.delegationSig = rec.delegationSig;
+        body.request = signed.requestCanonical;
+        body.requestSig = signed.requestSig;
+        return body;
+      }).catch(function (err) {
+        console.warn('[Viewer] Failed to sign per-request payload; sending without session:', err);
+        return body;
+      });
+    });
+  }
+
+  function secureViewPost(body) {
+    return augmentBodyWithSession(body).then(function (finalBody) {
+      return authFetch('/api/storage/lit/secure-view', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(finalBody),
+      });
+    });
+  }
+
+  function renderSessionIndicatorIfAvailable() {
+    var SVS = window.PC2SecureViewSession;
+    var container = document.getElementById('session-indicator');
+    if (!SVS || !container) return;
+    SVS.renderSessionIndicator({
+      container: container,
+      serverRevokeUrl: '/api/storage/lit/revoke-session',
+      onRevoke: function () {
+        sessionState.bootstrapped = false;
+        sessionState.bootstrapPromise = null;
+        sessionState.delegationRecord = null;
+        sessionState.keyPair = null;
+      },
+    });
+  }
+
   // ── DOM refs ──────────────────────────────────────────
 
   var $title        = document.getElementById('viewer-title');
@@ -142,6 +337,8 @@
     $assetType.textContent = assetParams.mimeType;
 
     if (!isCleartext) disableContextMenu();
+
+    renderSessionIndicatorIfAvailable();
 
     if (isCleartext && (cleartextFileUrl || cleartextCid)) {
       loadCleartext();
@@ -334,11 +531,7 @@
     $loadingText.textContent = 'Verifying access rights...';
     showLoading();
 
-    authFetch('/api/storage/lit/secure-view', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(buildBody(1)),
-    })
+    secureViewPost(buildBody(1))
     .then(function (resp) {
       if (!resp.ok) {
         return resp.text().then(function (body) {
@@ -401,11 +594,7 @@
   function loadRemainingPages() {
     for (var i = 2; i <= viewerState.totalPages; i++) {
       (function (pageNum) {
-        authFetch('/api/storage/lit/secure-view', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(buildBody(pageNum)),
-        })
+        secureViewPost(buildBody(pageNum))
         .then(function (resp) {
           if (!resp.ok) throw new Error('Page ' + pageNum + ' failed');
           return resp.blob();
@@ -451,11 +640,7 @@
       chapter: chapterIdx,
       viewportWidth: Math.max(320, Math.min(window.innerWidth - 40, 900)),
     });
-    return authFetch('/api/storage/lit/secure-view', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    }).then(function (resp) {
+    return secureViewPost(body).then(function (resp) {
       if (resp.status === 409) {
         return resp.json().then(function (err) {
           throw new Error(err.message || 'This EPUB uses a fixed layout which is not yet supported.');
@@ -522,11 +707,7 @@
 
   function fetchCbzPage(pageNum) {
     var body = buildBody(pageNum);
-    return authFetch('/api/storage/lit/secure-view', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    }).then(function (resp) {
+    return secureViewPost(body).then(function (resp) {
       if (!resp.ok) {
         return resp.text().then(function (txt) {
           var m;

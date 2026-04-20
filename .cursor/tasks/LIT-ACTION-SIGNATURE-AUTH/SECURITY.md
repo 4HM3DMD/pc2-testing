@@ -39,9 +39,12 @@ release), this is a safe and correct posture.
    - `domain`, `chainId`, `actionIpfsId`, `ownerAddress`,
      `coveredAddresses[]`, `sessionPublicKey`, `issuedAt`,
      `expiresAt` (≤ 24h), `nonce`.
-2. An ephemeral secp256k1 keypair is generated **in-browser** via
-   Web Crypto with `extractable: false`. The private key bits never
-   become available to JavaScript, even on this device.
+2. An ephemeral P-256 (secp256r1) keypair is generated **in-browser**
+   via Web Crypto with `extractable: false`. The private key bits
+   never become available to JavaScript, even on this device. P-256
+   was chosen over secp256k1 after the Phase 1 spike showed secp256k1
+   is not supported by Web Crypto in any current browser engine; see
+   DESIGN.md §10.2.
 3. Delegation + signature + public key shipped to PC2, stored.
 
 ### 2.2 Per asset open (no prompt)
@@ -217,7 +220,8 @@ page is live."
 
 | Primitive | Assumption | Where |
 |---|---|---|
-| secp256k1 ECDSA | Signatures are unforgeable without the private key. | Delegation (EOA signer), per-request (ephemeral key). |
+| secp256k1 ECDSA | Signatures are unforgeable without the private key. | Delegation (EOA signer). |
+| P-256 ECDSA (Web Crypto) | Signatures are unforgeable without the private key. | Per-request (ephemeral key). |
 | EIP-191 `personal_sign` | Hash-prefix binding prevents cross-protocol signature reuse. | Delegation from EOA wallets. |
 | EIP-1271 `isValidSignature` | Contract wallets correctly implement per-their-own-policy verification. | Delegation from contract-wallet signers. |
 | Web Crypto `extractable: false` | Browser enforcement is correctly implemented by Chrome, Firefox, Safari. | Ephemeral key protection. |

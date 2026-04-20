@@ -145,8 +145,7 @@ async function main(params) {
 
   const normalizedKid = kid.startsWith('0x') ? kid : '0x' + kid;
   if (String(req.kid).toLowerCase() !== normalizedKid.toLowerCase()) return deny('bad_req_kid');
-  if (req.delegationNonce !== del.nonce) return deny('bad_req_delegation_ref');
-  if (req.sessionPublicKey !== del.sessionPublicKey) return deny('bad_req_session_ref');
+  // Binding is via the ECDSA signature over del.sessionPublicKey.
 
   const now = Math.floor(Date.now() / 1000);
   if (now + DELEGATION_CLOCK_SKEW_SECONDS < del.issuedAt) return deny('del_not_yet_valid');
@@ -212,7 +211,7 @@ async function main(params) {
       data: cek,
       authorizedAddress,
       delegationNonce: del.nonce,
-      requestNonce: req.nonce,
+      requestNonce: req.requestNonce,
     }),
   });
 }

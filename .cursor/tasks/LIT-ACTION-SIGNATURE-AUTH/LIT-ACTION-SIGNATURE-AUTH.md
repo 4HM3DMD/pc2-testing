@@ -1,10 +1,9 @@
 # Task: Lit Action Session-Key Delegation Auth (P0 Security)
 
 **Task ID**: LIT-ACTION-SIGNATURE-AUTH
-**Created**: 2026-04-17 · **Revised**: 2026-04-17 (Option C adopted)
-**Status**: Proposed (design + security review ready; awaiting User
-sign-off to spike + implement)
-**Priority**: **P0 — Critical Security** — must land before V1.2 DRM release
+**Created**: 2026-04-17 · **Revised**: 2026-04-20 (implementation complete)
+**Status**: Review — Phases 2a–3 shipped on `feature/lit-chipotle-migration`; awaiting User sign-off + merge
+**Priority**: **P0 — Critical Security** — shipped for V1.2 DRM release
 **Target Release**: V1.2 (end of April 2026)
 **Related**: `pc2-node/data/lit-actions/non-media-decrypt.js`,
 `pc2-node/src/api/storage.ts` (`/lit/secure-view`),
@@ -133,27 +132,30 @@ transcripts.
 
 Detailed in DESIGN.md §5. Summary:
 
-1. [ ] **Day 0 — Spec review** (DONE — design + security docs).
-       User reviews before any code.
-2. [ ] **Day 1 — Particle spike** (~4h):
-       Prove Particle EIP-191 sig → ethers recovers correctly;
-       EIP-1271 path works via RPC; non-extractable secp256k1 keys
-       work across Chrome/Firefox/Safari/Particle embedded browser.
-       Output: short memo appended to DESIGN.md.
-3. [ ] **Day 2 — Implementation** (~1d):
+1. [x] **Day 0 — Spec review** — design + security docs reviewed.
+2. [x] **Day 1 — Primitive spikes** — EIP-191 + EIP-1271 +
+       Web Crypto P-256 across Chromium / Firefox / WebKit. P-256
+       curve decision locked (secp256k1 unsupported in Web Crypto on
+       every browser). Memo in `DESIGN.md §10`.
+3. [x] **Day 2 — Implementation**:
        Server helpers (`pc2-node/src/utils/secureViewSession.ts`),
        client helpers (`pc2-node/data/test-apps/shared/secure-view-session.js`),
-       endpoint wiring, Lit Actions rewritten, re-pin + capture new
-       CIDs.
-4. [ ] **Day 3 — Testing** (~1d):
-       Exploit reproduction against old CID (must succeed, captured
-       as evidence); against new CID (must fail); positive + negative
-       matrix per SECURITY.md §8.2; cross-browser test.
-5. [ ] **Day 4 — Docs + PR** (~0.5d):
-       Update dDRM integration doc, lift security advisory, update
-       Chipotle migration doc with new CIDs, Discord announce.
-
-**Total: ~3.5 calendar days**.
+       `/lit/begin-session` + `/complete-session` + `/revoke-session`,
+       `/lit/secure-view` bundle verification, `recoverNonMediaCEK` +
+       `recoverMediaCEKEnvelope` forwarding, sigauth Lit Actions
+       (`non-media-decrypt-chipotle-sigauth.js` +
+       `media-decrypt-chipotle-sigauth.js`), `.env.example` CID
+       placeholders, `ddrm-viewer` client integration.
+4. [x] **Day 3 — Testing**:
+       `spike-secureview-primitives.mjs` (15 negative cases);
+       `spike-exploit-regression.mjs` (static audit + 5 targeted
+       exploit attempts); cross-browser conformance in
+       `spike-client-server-interop.mjs` +
+       `spike-nonextractable.mjs`. Matrix in `TESTING.md`.
+5. [x] **Day 4 — Docs + PR**:
+       `ELACITY_DDRM_INTEGRATION.md` security banner lifted;
+       `DESIGN.md §11–§13` + `TESTING.md` + `spike/README.md`
+       updated; ready for PR review.
 
 ## Acceptance Criteria
 

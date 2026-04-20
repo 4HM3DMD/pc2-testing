@@ -980,3 +980,76 @@ Chipotle credits, and fails closed on every known negative case.
 5. After 14 days of zero legacy traffic, `LIT_ACTION_CID_LEGACY`
    gets unset, the legacy file gets deleted, and `userAddress` gets
    stripped from `recoverNonMedia*` / `recoverMedia*` jsParams.
+
+---
+
+## 13. Phase 2e Client-Integration Memo (2026-04-20)
+
+### 13.1 ddrm-viewer (viewer.js)
+
+Session-key delegation is now wired into
+`pc2-node/data/test-apps/ddrm-viewer/viewer.js`:
+
+- `index.html` loads `lib/secure-view-session.js`
+  (copied in-tree from `shared/`; the Puter capsule bundler cannot
+  reach sibling directories at runtime).
+- A new header slot `#session-indicator` renders the active session
+  pill (`Session · 0xabc…1234 · 23h 47m left`) with a one-click
+  sign-out button.
+- `bootstrapSession()` runs once, lazily:
+  1. Checks IndexedDB for a reusable non-expired delegation + the
+     ephemeral P-256 `CryptoKeyPair`. If present, reuse without any
+     wallet interaction.
+  2. Otherwise: generate a fresh P-256 keypair → `POST
+     /lit/begin-session { sessionPublicKey }` → server returns a
+     delegation bound to the PC2-authenticated wallet → dispatch
+     `personal_sign(delegationCanonical, ownerAddress)` via
+     `window.ethereum` → `POST /lit/complete-session` → persist
+     both halves.
+- `augmentBodyWithSession()` transparently injects the canonical
+  strings (`delegation`, `delegationSig`, `request`, `requestSig`)
+  into every `/lit/secure-view` POST. There is a single in-flight
+  `signRequest` per request — P-256 on commodity laptops completes
+  in under a millisecond, imperceptible to the user.
+- Graceful degradation: if no injected provider is present, if the
+  PC2 session wallet disagrees with `window.ethereum.selectedAddress`,
+  or if any network call fails, the viewer silently falls back to the
+  legacy path. During the 14-day rollout window the server accepts
+  both; after `LIT_ACTION_CID_LEGACY` retires, the fallback will be
+  removed and this path becomes mandatory.
+
+UX contract with the user (confirming the "double-click to open"
+feedback): one additional wallet prompt at the first decryption of a
+new login (or after 24 h). Every subsequent asset opens instantly —
+no further signing prompts for the life of the session.
+
+### 13.2 elacity-creator (app.js)
+
+**No changes required.** The creator app is encryption-only
+(`/api/storage/lit/encrypt`). It never calls `/lit/secure-view` and
+thus never needs to produce session signatures. The `.ddrm` capsule
+written post-mint also carries no session-specific fields — session
+state is per-viewer, per-login, and is reconstructed on demand when
+the viewer first opens the asset.
+
+A future "verify after mint" preflight — where the creator re-opens
+its own newly-minted asset inside a hidden viewer frame — would live
+in `ddrm-viewer` and would automatically pick up the session flow
+from §13.1. That is not in scope for this task.
+
+### 13.3 Not-yet-integrated surfaces
+
+Tracked for follow-ups (see the Elacity V1.3 roadmap):
+
+- The Market React app (`elacity-next`) has its own copy of the
+  secure-view caller; its integration will mirror viewer.js and is
+  blocked on a product decision about whether the Market app should
+  own the session for the whole PC2 or whether each capsule should
+  maintain its own IndexedDB slot.
+- The media streaming client in `ddrm-viewer` currently calls
+  `/media/*` range endpoints that internally invoke
+  `recoverMediaCEK`. In the current flow, the *viewer* only signs a
+  session for `NON_MEDIA_ACTION_CID`; media still runs through the
+  legacy action CID because the Lit Action binds `actionIpfsId` into
+  the delegation. Phase 2f will issue a separate media delegation
+  (scoped to `MEDIA_ACTION_CID`) and retire the legacy media CID.

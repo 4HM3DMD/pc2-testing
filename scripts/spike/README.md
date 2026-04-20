@@ -28,6 +28,12 @@ See the design doc for context:
 | `spike-client-server-interop.mjs` | Client ↔ Server | The client-side `secure-view-session.js` running in Chromium / Firefox / WebKit emits canonical JSON that is byte-identical with the TS server (480 B delegation, 207 B request) and whose P-256 signatures the server verifier accepts. |
 | `spike-nonextractable.mjs` | Browser | After storing a CryptoKey in IndexedDB and reloading it, `exportKey('raw' / 'pkcs8', privateKey)` still throws; `extractable === false` survives structured-clone. |
 
+### Phase 3 — exploit regression (complete)
+
+| Script | Layer | Proves |
+|---|---|---|
+| `spike-exploit-regression.mjs` | Server + static audit | The sigauth Lit Action sources never feed `userAddress` into `hasAccessByContentId`; the happy path still passes; five targeted exploit scenarios (tampered coveredAddresses, stripped request sig, request replay, revoked delegation, wrong ephemeral key) all fail with the correct error codes. See `.cursor/tasks/LIT-ACTION-SIGNATURE-AUTH/TESTING.md` for the full positive/negative matrix. |
+
 ## Running
 
 ```bash
@@ -47,6 +53,9 @@ node scripts/spike/spike-webcrypto.runner.mjs
 # Phase 2a client ↔ server conformance (all three engines)
 node scripts/spike/spike-client-server-interop.mjs
 node scripts/spike/spike-nonextractable.mjs
+
+# Phase 3 exploit regression gate (static audit + 5 exploit attempts)
+node scripts/spike/spike-exploit-regression.mjs
 
 # Or just open in any browser for a human-readable render:
 open scripts/spike/spike-webcrypto.html
@@ -77,6 +86,18 @@ server across Chromium / Firefox / WebKit; non-extractability invariant
 survives IndexedDB reload in all three engines.
 
 Phase 2b (endpoint wiring) is cleared.
+
+### Phase 3
+
+**PASS across the board.** `spike-exploit-regression.mjs` closes the
+P0 regression gate: 8 static-audit rows confirm the sigauth Lit
+Actions have removed the userAddress authorization path and wired in
+the ECDSA verifier stack; 1 happy-path row confirms legitimate bundles
+still succeed; 5 targeted exploit rows all fail with the expected
+error codes (`del_sig_invalid`, `req_sig_invalid`, `replayed`,
+`revoked`). See `.cursor/tasks/LIT-ACTION-SIGNATURE-AUTH/TESTING.md`
+for the wallet-in-hand and cross-browser rows that human QA must
+still cover before retiring the legacy CID.
 
 ## Phase 3 follow-ups (not automatable)
 

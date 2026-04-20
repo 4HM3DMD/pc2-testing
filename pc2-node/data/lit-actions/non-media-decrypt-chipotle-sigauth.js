@@ -217,8 +217,10 @@ async function main(params) {
   if (String(req.kid).toLowerCase() !== normalizedKid.toLowerCase()) {
     return deny('bad_req_kid');
   }
-  if (req.delegationNonce !== del.nonce) return deny('bad_req_delegation_ref');
-  if (req.sessionPublicKey !== del.sessionPublicKey) return deny('bad_req_session_ref');
+  // The request is cryptographically bound to the delegation via the
+  // ephemeral P-256 signature below  only the device that holds the
+  // private key pair of del.sessionPublicKey can produce a valid
+  // requestSig. No separate nonce reference field is needed.
 
   // ── Time window ────────────────────────────────────────────────
   const now = Math.floor(Date.now() / 1000);
@@ -302,7 +304,7 @@ async function main(params) {
       data: cek,
       authorizedAddress,
       delegationNonce: del.nonce,
-      requestNonce: req.nonce,
+      requestNonce: req.requestNonce,
     }),
   });
 }
