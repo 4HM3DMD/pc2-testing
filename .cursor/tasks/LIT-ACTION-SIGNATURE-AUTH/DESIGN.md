@@ -875,3 +875,108 @@ Phase 2b (`/lit/begin-session`, `/lit/complete-session`,
 `/lit/secure-view`) is cleared to proceed. Server verifier is drop-
 in ready: it does not touch the Lit Protocol, does not spend
 Chipotle credits, and fails closed on every known negative case.
+
+---
+
+## 12. Phase 2b–2d Implementation Memo (2026-04-20)
+
+### 12.1 What landed in 2b
+
+- `POST /api/storage/lit/begin-session` — derives
+  `coveredAddresses` from the authenticated PC2 session (never from
+  the client body) and returns a server-built delegation payload
+  bound to `NON_MEDIA_ACTION_CID` and `chainId=8453`. Client signs
+  the canonical form via EIP-191 `personal_sign`.
+- `POST /api/storage/lit/complete-session` — defence-in-depth check
+  that the signature verifies. EIP-191 first; EIP-1271 fallback via a
+  `viem` `PublicClient` on Base. Stateless: no pending-session table.
+- `POST /api/storage/lit/revoke-session` — adds the delegation nonce
+  to the per-node revoke map for the rest of its natural window.
+- `GET  /api/storage/admin/session-cache/stats` — owner-only. Exposes
+  revoke + replay map sizes for ops visibility.
+- `/lit/secure-view` grew optional `{ delegation, delegationSig,
+  request, requestSig }` fields. When present,
+  `verifySecureViewBundle()` runs BEFORE any Lit call; failures
+  return HTTP 401 with `{ error: 'session_bundle_invalid', code }`.
+  A cross-check asserts `delegation.ownerAddress` matches the
+  PC2-authenticated wallet (or its paired smart-account) so a
+  session X cannot forward a delegation signed by wallet Y.
+- `DecryptParams.secureViewSession` carries the pre-canonicalised
+  bundle downstream. Canonicalisation happens exactly once (at the
+  handler boundary) — the bytes the Lit Action hashes are the bytes
+  the owner signed.
+
+### 12.2 What landed in 2c
+
+- `chipotle-client.ts`: `SecureViewSessionBundle` type added;
+  `NonMediaDecryptParams` and `MediaDecryptParams` grew an optional
+  `secureViewSession` field. `recoverNonMediaCEK` and
+  `recoverMediaCEKEnvelope` forward `delegation`, `delegationSig`,
+  `request`, `requestSig` into `jsParams` and — in the sigauth path
+  — also `actionIpfsId` so the action can perform its own
+  `del.actionIpfsId === actionIpfsId` check.
+- `storage.ts` Datil non-media fallback, and `media.ts` Datil ECDH
+  fallback, also forward the four fields. Parity is preserved across
+  Chipotle and Datil.
+
+### 12.3 What landed in 2d
+
+- New verifying Lit Action:
+  `pc2-node/data/lit-actions/non-media-decrypt-chipotle-sigauth.js`.
+  Implements §2.7 pseudocode: canonical JSON equality check, domain
+  + chain + action + kid + nonce structural checks, time-window
+  enforcement with `MAX_DELEGATION_WINDOW_SECONDS` and
+  `REQUEST_FRESHNESS_WINDOW_SECONDS` constants matching the server
+  and client byte-for-byte, EIP-191 verification with EIP-1271
+  fallback, P-256 ECDSA request-sig verification via
+  `crypto.subtle.verify`, access check across ALL
+  `coveredAddresses`, and CEK decrypt via
+  `Lit.Actions.Decrypt({ pkpId, ciphertext })`. Response shape:
+  `{ data: cekBase64, authorizedAddress, delegationNonce, requestNonce }`.
+- Sibling media action: `media-decrypt-chipotle-sigauth.js`.
+  Structurally identical; reserved for future media-only divergence.
+- `getChipotleNonMediaActionCode()` takes a `'legacy' | 'sigauth'`
+  mode. Auto-selection: `params.secureViewSession ? 'sigauth' : 'legacy'`.
+  A legacy client that does not upgrade continues to work until its
+  CID's 14-day rollback window expires.
+- `.env.example` documents the new `LIT_ACTION_CID_LEGACY` /
+  `MEDIA_ACTION_CID_LEGACY` variables for the rollback window.
+
+### 12.4 Open items (deferred to Phase 2e / Phase 3)
+
+- **IPFS pinning of the new actions**: requires access to the pinning
+  service / Elacity IPFS credentials. Blocked on ops. The sigauth
+  files are pinned-ready; only the pin call + CID capture is outstanding.
+- **Removing `userAddress` from `jsParams`**: the server still emits
+  `userAddress` when the bundle is present, so legacy action CIDs
+  continue to work during the 14-day overlap. The first commit after
+  the legacy CID retires removes that field from
+  `recoverNonMediaCEK` / `recoverMediaCEKEnvelope` and from the
+  Datil fallback blocks.
+- **Chipotle PKP-AES ACC binding**: unlike Datil's BLS encrypt which
+  bound ciphertexts to `:currentActionIpfsId`, Chipotle's
+  `Lit.Actions.Encrypt({ pkpId, message })` has no visible ACC — any
+  Lit Action that can reach the PKP can `Lit.Actions.Decrypt` the
+  ciphertext. The signature-auth action closes the `userAddress`
+  spoofing hole; platform-level PKP access control against
+  unauthorised actions is a separate concern to be confirmed with
+  the Chipotle team before GA.
+- **Media streaming semantics**: one delegation + one request is
+  consumed once per CEK recovery. DASH segment decryption uses the
+  already-recovered CEK client-side, so no additional signatures are
+  required per segment — the sigauth action is called exactly once
+  per viewing session (same as today's flow).
+
+### 12.5 Rollout sequence
+
+1. PR containing Phase 2a–2d lands on `feature/lit-chipotle-migration`.
+2. Ops runs `POST /api/storage/lit/deploy-action` pointing at the
+   sigauth file, captures the new CID, sets `LIT_ACTION_CID` to the
+   new value and `LIT_ACTION_CID_LEGACY` to the previous value.
+3. Phase 2e ships the client integration to `ddrm-viewer` and the
+   creator preflight.
+4. Production monitoring watches `X-SecureView-Session: verified`
+   header frequency — target 100 % within 7 days.
+5. After 14 days of zero legacy traffic, `LIT_ACTION_CID_LEGACY`
+   gets unset, the legacy file gets deleted, and `userAddress` gets
+   stripped from `recoverNonMedia*` / `recoverMedia*` jsParams.

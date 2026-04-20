@@ -280,9 +280,35 @@ function getNonMediaActionCode(): string {
   return cachedNonMediaCode;
 }
 
-function getChipotleNonMediaActionCode(): string {
-  if (cachedChipotleNonMediaCode) return cachedChipotleNonMediaCode;
+let cachedChipotleSigauthCode: string | null = null;
 
+/**
+ * Load the non-media Chipotle Lit Action source.
+ *
+ * Two variants exist on disk during the Phase 2d rollout:
+ *   - `non-media-decrypt-chipotle.js`          (legacy, trusts `userAddress`)
+ *   - `non-media-decrypt-chipotle-sigauth.js`  (verifies the signed delegation)
+ *
+ * Clients that send `secureViewSession` MUST receive the sigauth action;
+ * clients that don't (legacy callers) continue to get the legacy action
+ * until Phase 2e lands the client integration everywhere. Ops flips
+ * the default by removing the legacy file once 14 days of zero legacy
+ * requests have elapsed.
+ */
+function getChipotleNonMediaActionCode(mode: 'legacy' | 'sigauth' = 'legacy'): string {
+  if (mode === 'sigauth') {
+    if (cachedChipotleSigauthCode) return cachedChipotleSigauthCode;
+    const actionPath = join(DATA_DIR, 'lit-actions/non-media-decrypt-chipotle-sigauth.js');
+    if (!existsSync(actionPath)) {
+      throw new Error(
+        `Chipotle non-media sigauth Lit Action not found at ${actionPath}.`,
+      );
+    }
+    cachedChipotleSigauthCode = readFileSync(actionPath, 'utf8');
+    return cachedChipotleSigauthCode;
+  }
+
+  if (cachedChipotleNonMediaCode) return cachedChipotleNonMediaCode;
   const actionPath = join(DATA_DIR, 'lit-actions/non-media-decrypt-chipotle.js');
   if (!existsSync(actionPath)) {
     throw new Error(
@@ -410,7 +436,10 @@ export async function recoverNonMediaCEK(
   params: NonMediaDecryptParams,
   config?: ChipotleConfig,
 ): Promise<string> {
-  const code = getChipotleNonMediaActionCode();
+  // Auto-routing: a client that signed a SecureViewDelegation gets
+  // the verifying action; legacy callers get the legacy action so
+  // they keep working during the rollout window.
+  const code = getChipotleNonMediaActionCode(params.secureViewSession ? 'sigauth' : 'legacy');
   const pkpId = resolvePkpId(config);
 
   // Session-key delegation fields (Phase 2c, Option C) are always
@@ -431,6 +460,10 @@ export async function recoverNonMediaCEK(
     userAddress: params.buyerAddress,
   };
   if (params.secureViewSession) {
+    // The sigauth Lit Action verifies del.actionIpfsId matches its
+    // own CID; the server must forward the CID explicitly since
+    // Chipotle v3 doesn't expose getIpfsId() to action code.
+    jsParams.actionIpfsId = params.actionCid;
     jsParams.delegation = params.secureViewSession.delegationCanonical;
     jsParams.delegationSig = params.secureViewSession.delegationSig;
     jsParams.request = params.secureViewSession.requestCanonical;
@@ -439,12 +472,14 @@ export async function recoverNonMediaCEK(
 
   const result = await executeLitAction({ code, jsParams }, config);
 
-  // The Lit Action returns the CEK as a plain string (base64) or as JSON { data: base64 }
+  // Legacy action returns a bare base64 string or `{ data: base64 }`.
+  // Sigauth action returns `{ data: base64, authorizedAddress, delegationNonce, requestNonce }`.
   let cekBase64: string;
   try {
     const parsed = JSON.parse(result.response);
     if (parsed.error) {
-      throw new Error(`Lit Action denied: ${parsed.error}`);
+      const detail = parsed.code ? ` (code=${parsed.code})` : '';
+      throw new Error(`Lit Action denied: ${parsed.error}${detail}`);
     }
     cekBase64 = parsed.data || parsed;
   } catch (e) {
