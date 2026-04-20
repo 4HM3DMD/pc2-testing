@@ -944,9 +944,23 @@ Chipotle credits, and fails closed on every known negative case.
 
 ### 12.4 Open items (deferred to Phase 2e / Phase 3)
 
-- **IPFS pinning of the new actions**: requires access to the pinning
-  service / Elacity IPFS credentials. Blocked on ops. The sigauth
-  files are pinned-ready; only the pin call + CID capture is outstanding.
+- ~~**IPFS pinning of the new actions**~~ — ✅ pinned 2026-04-20 via
+  Elacity's Pinata workspace:
+  - `non-media-decrypt-chipotle-sigauth.js`
+    → `bafkreihvm4zkyuefnuptlbdins6cmd2mbslj2xgnyzz3ssdg2ggg3jtkk4`
+    (11,905 bytes)
+  - `media-decrypt-chipotle-sigauth.js`
+    → `bafkreihw7brius3xw2u7ltjac26hoqudulkc6mfwqrjxtrobanz2ryhvsq`
+    (7,625 bytes)
+  - Previous legacy non-media CID (for 14-day overlap):
+    `QmNayE5MYzXcoMS9nvRk6MUo8r4ESLa3i65vHXzuBsnC2b`
+- **Note on Chipotle execution model**: the Chipotle REST API ships
+  Lit Action source *inline* via `/core/v1/lit_action` — the pinned
+  CID is **not** fetched at execution time. The CID is used (a) as
+  the value committed inside `delegation.actionIpfsId` at
+  `/lit/begin-session` and (b) as the value the sigauth Lit Action
+  checks against `jsParams.actionIpfsId` inside itself. Pinning to
+  IPFS therefore serves provenance + public audit, not execution.
 - **Removing `userAddress` from `jsParams`**: the server still emits
   `userAddress` when the bundle is present, so legacy action CIDs
   continue to work during the 14-day overlap. The first commit after

@@ -6,6 +6,27 @@ Positive and negative test cases covering Phase 3 of the
 human-attention rows document what a QA pass must cover in a live
 deployment against real wallets.
 
+## Action CIDs under test
+
+| Role | File | IPFS CID | Pinned |
+|---|---|---|---|
+| Sigauth non-media (active) | `pc2-node/data/lit-actions/non-media-decrypt-chipotle-sigauth.js` | `bafkreihvm4zkyuefnuptlbdins6cmd2mbslj2xgnyzz3ssdg2ggg3jtkk4` | 2026-04-20 |
+| Sigauth media (reserved) | `pc2-node/data/lit-actions/media-decrypt-chipotle-sigauth.js` | `bafkreihw7brius3xw2u7ltjac26hoqudulkc6mfwqrjxtrobanz2ryhvsq` | 2026-04-20 |
+| Legacy non-media (14-day overlap) | `pc2-node/data/lit-actions/non-media-decrypt-chipotle.js` | `QmNayE5MYzXcoMS9nvRk6MUo8r4ESLa3i65vHXzuBsnC2b` | pre-2026-04-20 |
+
+Environment variables (set in `pc2-node/.env`):
+
+```bash
+LIT_ACTION_CID=bafkreihvm4zkyuefnuptlbdins6cmd2mbslj2xgnyzz3ssdg2ggg3jtkk4
+LIT_ACTION_CID_LEGACY=QmNayE5MYzXcoMS9nvRk6MUo8r4ESLa3i65vHXzuBsnC2b
+MEDIA_ACTION_CID=bafkreihw7brius3xw2u7ltjac26hoqudulkc6mfwqrjxtrobanz2ryhvsq
+```
+
+Note: on Chipotle the Lit Action source is shipped inline to
+`/core/v1/lit_action` — the CID is used for provenance plus the
+`delegation.actionIpfsId` ↔ `jsParams.actionIpfsId` binding check
+inside the sigauth action.
+
 ---
 
 ## 1. Automated (CI-gatable)
