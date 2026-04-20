@@ -13,6 +13,18 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { getWASMRuntime, type RendererCommand } from '../services/wasm/WASMRuntime.js';
 import { getBaseRpcUrl } from '../utils/rpc.js';
+import {
+  buildDelegationPayload,
+  canonicalize,
+  verifyDelegationEip191,
+  verifyDelegationEip1271,
+  verifySecureViewBundle,
+  revokeDelegation,
+  _getSessionCacheStats,
+  MAX_DELEGATION_WINDOW_SECONDS,
+  REQUEST_FRESHNESS_WINDOW_SECONDS,
+  type SecureViewDelegation,
+} from '../utils/secureViewSession.js';
 
 const router = Router();
 
@@ -1580,6 +1592,17 @@ export interface DecryptParams {
   rpc?: string;
   buyerAddress: string;
   litBackend?: LitBackend;
+  /**
+   * Optional session-key delegation bundle (Option C). When present,
+   * Phase 2c passes these through to the Lit Action instead of
+   * `userAddress`. When absent, the legacy `userAddress` path runs.
+   */
+  secureViewSession?: {
+    delegationCanonical: string;
+    delegationSig: `0x${string}`;
+    requestCanonical: string;
+    requestSig: `0x${string}`;
+  };
 }
 
 /**
@@ -2007,6 +2030,280 @@ async function renderViaWASM(
   };
 }
 
+// ────────────────────────────────────────────────────────────────────
+// Secure-View Session endpoints (Option C — session-key delegation)
+//
+// These endpoints implement the client-facing half of the Lit Action
+// signature-auth protocol defined in
+// `.cursor/tasks/LIT-ACTION-SIGNATURE-AUTH/DESIGN.md`.
+//
+// Lifecycle:
+//   1. Client calls /begin-session with its ephemeral P-256 pubkey;
+//      server returns an unsigned SecureViewDelegation payload bound
+//      to the current Lit Action CID, chain, and owner.
+//   2. User's wallet signs the canonical JSON (EIP-191 personal_sign);
+//      client posts { delegation, delegationSig } to /complete-session.
+//      Server verifies (EIP-191 first, EIP-1271 fallback via viem
+//      PublicClient) and returns { ok: true, expiresAt }.
+//   3. On every /lit/secure-view call the client attaches
+//      { delegation, delegationSig, request, requestSig } — the
+//      request fields are silently produced by the ephemeral key.
+//   4. /revoke-session adds the delegation nonce to the per-node
+//      revoke map for the rest of its natural window.
+//
+// No delegation state is persisted across PC2 restarts — each node
+// re-verifies on every request, and the Lit Action inside the TEE
+// is the real access boundary.
+// ────────────────────────────────────────────────────────────────────
+
+/** Lazy viem PublicClient for EIP-1271 eth_calls. */
+let __viemPublicClient: any = null;
+async function getViemPublicClient() {
+  if (__viemPublicClient) return __viemPublicClient;
+  const { createPublicClient, http } = await import('viem');
+  const { base } = await import('viem/chains');
+  __viemPublicClient = createPublicClient({
+    chain: base,
+    transport: http(getBaseRpcUrl()),
+  });
+  return __viemPublicClient;
+}
+
+/**
+ * eth_call adapter matching the shape `secureViewSession.verifyDelegationEip1271`
+ * expects. Delegates to viem.
+ */
+async function ethCallAdapter(tx: { to: `0x${string}`; data: `0x${string}` }): Promise<`0x${string}`> {
+  const client = await getViemPublicClient();
+  const raw = await client.request({
+    method: 'eth_call',
+    params: [{ to: tx.to, data: tx.data }, 'latest'],
+  });
+  return raw as `0x${string}`;
+}
+
+/**
+ * POST /api/storage/lit/begin-session
+ * Body: { sessionPublicKey: `0x04${string}`, coveredAddresses?: `0x${string}`[], ttlSeconds?: number }
+ * Returns: { delegation: SecureViewDelegation, delegationCanonical: string, expectedActionIpfsId: string }
+ *
+ * `sessionPublicKey` is the client's ephemeral P-256 SEC1 uncompressed
+ * public key (65 bytes). `coveredAddresses` defaults to
+ * `[wallet_address, smart_account_address]` from the authenticated
+ * session — clients can pass a subset but cannot introduce addresses
+ * not attested by the PC2 session.
+ */
+router.post('/lit/begin-session', authenticate, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const walletAddress = req.user?.wallet_address;
+    const smartAccountAddress = req.user?.smart_account_address;
+    if (!walletAddress) {
+      res.status(401).json({ error: 'Not authenticated' });
+      return;
+    }
+
+    const { sessionPublicKey, coveredAddresses, ttlSeconds } = req.body || {};
+    if (typeof sessionPublicKey !== 'string' || !/^0x04[0-9a-fA-F]{128}$/.test(sessionPublicKey)) {
+      res.status(400).json({ error: 'sessionPublicKey must be 65-byte SEC1 uncompressed P-256 hex (0x04||X||Y)' });
+      return;
+    }
+
+    const defaultCovered: `0x${string}`[] = [walletAddress as `0x${string}`];
+    if (smartAccountAddress && smartAccountAddress.toLowerCase() !== walletAddress.toLowerCase()) {
+      defaultCovered.push(smartAccountAddress as `0x${string}`);
+    }
+
+    let requestedCovered: `0x${string}`[] = defaultCovered;
+    if (Array.isArray(coveredAddresses) && coveredAddresses.length > 0) {
+      // Must be a subset of the authenticated session's addresses — we
+      // never let the client smuggle addresses we haven't verified.
+      const allowed = new Set(defaultCovered.map((a) => a.toLowerCase()));
+      const filtered = coveredAddresses.filter(
+        (a: unknown): a is `0x${string}` =>
+          typeof a === 'string' && /^0x[0-9a-fA-F]{40}$/.test(a) && allowed.has(a.toLowerCase()),
+      );
+      if (filtered.length === 0) {
+        res.status(400).json({ error: 'coveredAddresses contains no address from the authenticated session' });
+        return;
+      }
+      requestedCovered = filtered;
+    }
+
+    const actionIpfsId = NON_MEDIA_ACTION_CID;
+    if (!actionIpfsId) {
+      res.status(503).json({ error: 'Lit Action CID not configured on this node' });
+      return;
+    }
+
+    const ttl = Math.min(
+      Number.isFinite(ttlSeconds) ? Math.max(60, Number(ttlSeconds)) : MAX_DELEGATION_WINDOW_SECONDS,
+      MAX_DELEGATION_WINDOW_SECONDS,
+    );
+
+    const delegation = buildDelegationPayload({
+      ownerAddress: walletAddress as `0x${string}`,
+      coveredAddresses: requestedCovered,
+      sessionPublicKey: sessionPublicKey as `0x${string}`,
+      actionIpfsId,
+      chainId: 8453,
+      ttlSeconds: ttl,
+    });
+
+    res.json({
+      delegation,
+      delegationCanonical: canonicalize(delegation),
+      expectedActionIpfsId: actionIpfsId,
+      maxDelegationWindowSeconds: MAX_DELEGATION_WINDOW_SECONDS,
+      requestFreshnessWindowSeconds: REQUEST_FRESHNESS_WINDOW_SECONDS,
+    });
+  } catch (err: any) {
+    logger.error(`[SecureView.session] begin-session failed: ${err.message}`);
+    res.status(500).json({ error: err.message || 'begin-session failed' });
+  }
+});
+
+/**
+ * POST /api/storage/lit/complete-session
+ * Body: { delegation: string | SecureViewDelegation, delegationSig: string }
+ * Returns: { ok: true, ownerAddress, expiresAt, coveredAddresses } | { error }
+ *
+ * Server verifies the delegation was legitimately signed by the owner
+ * address (EIP-191 first, EIP-1271 via eth_call fallback). This is a
+ * "try it now" check — the client can confirm its session is workable
+ * before attempting to open any assets. No state is persisted: every
+ * /lit/secure-view re-verifies independently.
+ */
+router.post('/lit/complete-session', authenticate, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const walletAddress = req.user?.wallet_address;
+    if (!walletAddress) {
+      res.status(401).json({ error: 'Not authenticated' });
+      return;
+    }
+
+    const { delegation: delIn, delegationSig } = req.body || {};
+    if (!delIn || typeof delegationSig !== 'string') {
+      res.status(400).json({ error: 'Missing delegation or delegationSig' });
+      return;
+    }
+
+    // Accept either canonical JSON string or a parsed object.
+    let delegationObj: SecureViewDelegation;
+    let delegationCanonical: string;
+    if (typeof delIn === 'string') {
+      try {
+        delegationObj = JSON.parse(delIn);
+      } catch {
+        res.status(400).json({ error: 'delegation is not valid JSON' });
+        return;
+      }
+      delegationCanonical = delIn;
+    } else {
+      delegationObj = delIn;
+      delegationCanonical = canonicalize(delIn);
+    }
+
+    // Session sanity: delegation.ownerAddress must match the authenticated wallet.
+    if (
+      typeof delegationObj.ownerAddress !== 'string' ||
+      delegationObj.ownerAddress.toLowerCase() !== walletAddress.toLowerCase()
+    ) {
+      res.status(403).json({ error: 'delegation.ownerAddress does not match authenticated session' });
+      return;
+    }
+
+    // actionIpfsId sanity
+    if (delegationObj.actionIpfsId !== NON_MEDIA_ACTION_CID) {
+      res.status(400).json({ error: 'delegation.actionIpfsId does not match server-configured CID' });
+      return;
+    }
+
+    // EIP-191 first
+    const recovered = await verifyDelegationEip191(delegationCanonical, delegationSig as `0x${string}`);
+    let valid = recovered !== null && recovered.toLowerCase() === delegationObj.ownerAddress.toLowerCase();
+
+    // EIP-1271 fallback — for smart wallets where the owner address IS a contract.
+    if (!valid) {
+      try {
+        const { hashMessage } = await import('viem');
+        const messageHash = hashMessage(delegationCanonical) as `0x${string}`;
+        valid = await verifyDelegationEip1271(
+          delegationObj.ownerAddress as `0x${string}`,
+          messageHash,
+          delegationSig as `0x${string}`,
+          ethCallAdapter,
+        );
+      } catch (e: any) {
+        logger.debug(`[SecureView.session] EIP-1271 fallback threw: ${e.message}`);
+      }
+    }
+
+    if (!valid) {
+      res.status(400).json({ error: 'Delegation signature does not verify (EIP-191 + EIP-1271 both failed)' });
+      return;
+    }
+
+    res.json({
+      ok: true,
+      ownerAddress: delegationObj.ownerAddress,
+      expiresAt: delegationObj.expiresAt,
+      coveredAddresses: delegationObj.coveredAddresses,
+      actionIpfsId: delegationObj.actionIpfsId,
+    });
+  } catch (err: any) {
+    logger.error(`[SecureView.session] complete-session failed: ${err.message}`);
+    res.status(500).json({ error: err.message || 'complete-session failed' });
+  }
+});
+
+/**
+ * POST /api/storage/lit/revoke-session
+ * Body: { delegationNonce: `0x${string}`, expiresAt?: number }
+ * Returns: { ok: true }
+ *
+ * Adds the delegation nonce to the per-node revoke map for the rest
+ * of its natural window. The Lit Action cannot see our revoke map
+ * (it is stateless across nodes), so this is a best-effort server-side
+ * block: it prevents /lit/secure-view on THIS node from honouring the
+ * delegation. Attackers with a fresh delegation that has not been
+ * revoked on every node can still use it, which is why delegations
+ * are intentionally short-lived.
+ */
+router.post('/lit/revoke-session', authenticate, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { delegationNonce, expiresAt } = req.body || {};
+    if (typeof delegationNonce !== 'string' || !/^0x[0-9a-fA-F]+$/.test(delegationNonce)) {
+      res.status(400).json({ error: 'delegationNonce must be hex-encoded' });
+      return;
+    }
+    const exp =
+      Number.isFinite(expiresAt) && Number(expiresAt) > 0
+        ? Number(expiresAt)
+        : Math.floor(Date.now() / 1000) + MAX_DELEGATION_WINDOW_SECONDS;
+    revokeDelegation(delegationNonce as `0x${string}`, exp);
+    logger.info(
+      `[SecureView.session] Revoked delegation nonce=${delegationNonce.substring(0, 10)}… by ${req.user?.wallet_address?.substring(0, 10)}…`,
+    );
+    res.json({ ok: true });
+  } catch (err: any) {
+    logger.error(`[SecureView.session] revoke-session failed: ${err.message}`);
+    res.status(500).json({ error: err.message || 'revoke-session failed' });
+  }
+});
+
+/**
+ * GET /api/storage/admin/session-cache/stats (owner-only)
+ * Surface in-memory session cache sizes for ops visibility.
+ */
+router.get(
+  '/admin/session-cache/stats',
+  authenticate,
+  requireOwner,
+  (_req: AuthenticatedRequest, res: Response) => {
+    res.json(_getSessionCacheStats());
+  },
+);
+
 /**
  * POST /api/storage/lit/secure-view
  * Secure viewer: decrypts asset server-side, renders to a locked representation,
@@ -2047,6 +2344,12 @@ router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, 
       maxWidth: reqMaxWidth,
       viewportWidth: reqViewportWidth,
       litBackend: reqLitBackend,
+      // Session-key delegation fields (Option C) — optional until
+      // Phase 2d swaps the Lit Action CID to the verifying version.
+      delegation: delegationIn,
+      delegationSig,
+      request: sessionRequestIn,
+      requestSig,
     } = req.body;
 
     // Derive buyer addresses from authenticated session — never trust client
@@ -2056,6 +2359,78 @@ router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, 
     if (!litCiphertext || !dataToEncryptHash || !kid || !buyerAddress || !iv || !encryptedDataCid) {
       res.status(400).json({ error: 'Missing required fields for secure view' });
       return;
+    }
+
+    // ── Session-sig defence-in-depth (optional in 2b, required in 2d) ──
+    // When the client sends { delegation, delegationSig, request, requestSig }
+    // we verify them here so malformed / expired / replayed bundles
+    // fail fast (before spending a $0.01 Lit call). The Lit Action
+    // itself still re-verifies everything independently — this block
+    // is strictly a cost and cleanliness optimisation.
+    const hasSessionBundle =
+      delegationIn !== undefined ||
+      delegationSig !== undefined ||
+      sessionRequestIn !== undefined ||
+      requestSig !== undefined;
+
+    if (hasSessionBundle) {
+      if (
+        delegationIn === undefined ||
+        typeof delegationSig !== 'string' ||
+        sessionRequestIn === undefined ||
+        typeof requestSig !== 'string'
+      ) {
+        res.status(400).json({
+          error: 'Incomplete session bundle: delegation, delegationSig, request, requestSig all required together',
+        });
+        return;
+      }
+      const delegationCanonical =
+        typeof delegationIn === 'string' ? delegationIn : canonicalize(delegationIn);
+      const requestCanonical =
+        typeof sessionRequestIn === 'string' ? sessionRequestIn : canonicalize(sessionRequestIn);
+
+      const { hashMessage } = await import('viem');
+      const verify = await verifySecureViewBundle(
+        {
+          delegation: delegationCanonical,
+          delegationSig: delegationSig as `0x${string}`,
+          request: requestCanonical,
+          requestSig: requestSig as `0x${string}`,
+        },
+        {
+          expectedActionIpfsId: NON_MEDIA_ACTION_CID,
+          expectedChainId: 8453,
+          expectedKid: kid,
+          ethCall: ethCallAdapter,
+          messageHashForEip1271: hashMessage(delegationCanonical) as `0x${string}`,
+        },
+      );
+
+      if (!verify.ok) {
+        logger.warn(`[SecureView] Session bundle rejected: ${verify.error}`);
+        res.status(401).json({ error: 'session_bundle_invalid', code: verify.error });
+        return;
+      }
+
+      // Cross-check against authenticated session: delegation owner
+      // must match the PC2-authenticated wallet. Prevents a user with
+      // session X from handing us a delegation signed by a different
+      // wallet Y.
+      const del = verify.delegation!;
+      if (
+        del.ownerAddress.toLowerCase() !== buyerAddress.toLowerCase() &&
+        (!buyerAddressAlt || del.ownerAddress.toLowerCase() !== buyerAddressAlt.toLowerCase())
+      ) {
+        res.status(403).json({ error: 'delegation.ownerAddress does not match authenticated session' });
+        return;
+      }
+
+      // Set a header so ops can see the session layer is in effect.
+      res.setHeader('X-SecureView-Session', 'verified');
+      logger.info(
+        `[SecureView] Session bundle verified: owner=${del.ownerAddress.substring(0, 10)}… covered=${del.coveredAddresses.length}`,
+      );
     }
 
     const mime = (mimeType || 'application/octet-stream').toLowerCase();
@@ -2111,6 +2486,20 @@ router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, 
     effectiveBody.buyerAddress = resolvedBuyer;
     effectiveBody.rpc = rpcUrl;
     effectiveBody.authority = authorityAddr;
+
+    // Pre-canonicalized session bundle for Phase 2c to forward to the
+    // Lit Action. Only populated when the caller included the bundle
+    // and verifySecureViewBundle accepted it above.
+    if (hasSessionBundle) {
+      effectiveBody.secureViewSession = {
+        delegationCanonical:
+          typeof delegationIn === 'string' ? delegationIn : canonicalize(delegationIn),
+        delegationSig: delegationSig as `0x${string}`,
+        requestCanonical:
+          typeof sessionRequestIn === 'string' ? sessionRequestIn : canonicalize(sessionRequestIn),
+        requestSig: requestSig as `0x${string}`,
+      };
+    }
 
     // ── Rate Limiting ────────────────────────────────────
     if (!checkLitRateLimit(buyerAddress)) {
