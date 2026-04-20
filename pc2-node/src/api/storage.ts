@@ -1666,6 +1666,7 @@ async function recoverCEKAndFetchData(params: DecryptParams, ipfsService?: any):
             chain: effectiveChain,
             chainId: effectiveChainId,
             rpc: effectiveRpc,
+            secureViewSession: params.secureViewSession,
           });
           logger.info(`[Lit] CEK recovered in ${Date.now() - litStart}ms (Chipotle REST)`);
           cacheCEK(kid, buyerAddress, cekBase64);
@@ -1680,19 +1681,26 @@ async function recoverCEKAndFetchData(params: DecryptParams, ipfsService?: any):
         const effectiveActionCid = actionCid || NON_MEDIA_ACTION_CID;
         if (!effectiveActionCid) throw new Error('No Lit Action CID configured');
 
+        const datilNonMediaParams: Record<string, unknown> = {
+          ciphertext: litCiphertext,
+          dataToEncryptHash,
+          kid: kid.startsWith('0x') ? kid : `0x${kid}`,
+          actionIpfsId: effectiveActionCid,
+          authority: effectiveAuthority,
+          chain: effectiveChain,
+          chainId: effectiveChainId,
+          rpc: effectiveRpc,
+          userAddress: buyerAddress,
+        };
+        if (params.secureViewSession) {
+          datilNonMediaParams.delegation = params.secureViewSession.delegationCanonical;
+          datilNonMediaParams.delegationSig = params.secureViewSession.delegationSig;
+          datilNonMediaParams.request = params.secureViewSession.requestCanonical;
+          datilNonMediaParams.requestSig = params.secureViewSession.requestSig;
+        }
         const executeParams: any = {
           sessionSigs,
-          jsParams: {
-            ciphertext: litCiphertext,
-            dataToEncryptHash,
-            kid: kid.startsWith('0x') ? kid : `0x${kid}`,
-            actionIpfsId: effectiveActionCid,
-            authority: effectiveAuthority,
-            chain: effectiveChain,
-            chainId: effectiveChainId,
-            rpc: effectiveRpc,
-            userAddress: buyerAddress,
-          },
+          jsParams: datilNonMediaParams,
           ipfsId: effectiveActionCid,
         };
 

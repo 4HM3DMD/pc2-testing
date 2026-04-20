@@ -1077,6 +1077,7 @@ async function recoverMediaCEK(
     chainId: number;
     rpc: string;
     litBackend: string;
+    secureViewSession?: import('./chipotle-client.js').SecureViewSessionBundle;
   },
   wallet: any,
   prebuiltSessionSigs?: any,
@@ -1099,6 +1100,7 @@ async function recoverMediaCEK(
       chain: litParams.chain,
       chainId: litParams.chainId,
       rpc: litParams.rpc,
+      secureViewSession: litParams.secureViewSession,
     });
 
     const crypto = await import('crypto');
@@ -1127,21 +1129,28 @@ async function recoverMediaCEK(
     sessionSigs = await getExecuteSessionSigs(client, wallet);
   }
 
+  const datilJsParams: Record<string, unknown> = {
+    keyAlg: { name: 'ECDH', namedCurve: 'P-256' },
+    publicKey: publicKeyHex,
+    ciphertext: litParams.litCiphertext,
+    dataToEncryptHash: litParams.dataToEncryptHash,
+    kid: litParams.kid.startsWith('0x') ? litParams.kid : `0x${litParams.kid}`,
+    actionIpfsId: litParams.actionCid,
+    authority: litParams.authority,
+    chain: litParams.chain,
+    chainId: litParams.chainId,
+    rpc: litParams.rpc,
+    userAddress: effectiveUserAddr,
+  };
+  if (litParams.secureViewSession) {
+    datilJsParams.delegation = litParams.secureViewSession.delegationCanonical;
+    datilJsParams.delegationSig = litParams.secureViewSession.delegationSig;
+    datilJsParams.request = litParams.secureViewSession.requestCanonical;
+    datilJsParams.requestSig = litParams.secureViewSession.requestSig;
+  }
   const executeParams: any = {
     sessionSigs,
-    jsParams: {
-      keyAlg: { name: 'ECDH', namedCurve: 'P-256' },
-      publicKey: publicKeyHex,
-      ciphertext: litParams.litCiphertext,
-      dataToEncryptHash: litParams.dataToEncryptHash,
-      kid: litParams.kid.startsWith('0x') ? litParams.kid : `0x${litParams.kid}`,
-      actionIpfsId: litParams.actionCid,
-      authority: litParams.authority,
-      chain: litParams.chain,
-      chainId: litParams.chainId,
-      rpc: litParams.rpc,
-      userAddress: effectiveUserAddr,
-    },
+    jsParams: datilJsParams,
     ipfsId: litParams.actionCid,
   };
 

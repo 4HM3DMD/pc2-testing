@@ -67,6 +67,21 @@ export interface LitActionResult {
   hasError: boolean;
 }
 
+/**
+ * Session-key delegation bundle (Option C  see
+ * `.cursor/tasks/LIT-ACTION-SIGNATURE-AUTH/DESIGN.md` §2.7).
+ *
+ * When present, both halves are forwarded to the Lit Action as
+ * canonical JSON strings exactly as the owner signed them. The
+ * new verifying Lit Action uses these; the legacy action ignores them.
+ */
+export interface SecureViewSessionBundle {
+  delegationCanonical: string;
+  delegationSig: `0x${string}`;
+  requestCanonical: string;
+  requestSig: `0x${string}`;
+}
+
 export interface NonMediaDecryptParams {
   litCiphertext: string;
   dataToEncryptHash: string;
@@ -77,6 +92,7 @@ export interface NonMediaDecryptParams {
   chain?: string;
   chainId?: number;
   rpc?: string;
+  secureViewSession?: SecureViewSessionBundle;
 }
 
 export interface MediaDecryptParams {
@@ -90,6 +106,7 @@ export interface MediaDecryptParams {
   chain?: string;
   chainId?: number;
   rpc?: string;
+  secureViewSession?: SecureViewSessionBundle;
 }
 
 export interface EncryptParams {
@@ -396,7 +413,13 @@ export async function recoverNonMediaCEK(
   const code = getChipotleNonMediaActionCode();
   const pkpId = resolvePkpId(config);
 
-  const jsParams = {
+  // Session-key delegation fields (Phase 2c, Option C) are always
+  // forwarded when present. The new verifying Lit Action consumes
+  // them and derives the effective user from delegation.coveredAddresses.
+  // The legacy Lit Action ignores them and continues using userAddress.
+  // When the new action becomes mandatory (post Phase 2d rollout)
+  // userAddress can be removed from this payload.
+  const jsParams: Record<string, unknown> = {
     ciphertext: params.litCiphertext,
     dataToEncryptHash: params.dataToEncryptHash,
     kid: params.kid.startsWith('0x') ? params.kid : `0x${params.kid}`,
@@ -407,6 +430,12 @@ export async function recoverNonMediaCEK(
     rpc: params.rpc || getBaseRpcUrl(),
     userAddress: params.buyerAddress,
   };
+  if (params.secureViewSession) {
+    jsParams.delegation = params.secureViewSession.delegationCanonical;
+    jsParams.delegationSig = params.secureViewSession.delegationSig;
+    jsParams.request = params.secureViewSession.requestCanonical;
+    jsParams.requestSig = params.secureViewSession.requestSig;
+  }
 
   const result = await executeLitAction({ code, jsParams }, config);
 
@@ -443,7 +472,7 @@ export async function recoverMediaCEKEnvelope(
   mediaActionCode: string,
   config?: ChipotleConfig,
 ): Promise<Buffer> {
-  const jsParams = {
+  const jsParams: Record<string, unknown> = {
     keyAlg: { name: 'ECDH', namedCurve: 'P-256' },
     publicKey: params.publicKeyHex,
     ciphertext: params.litCiphertext,
@@ -456,6 +485,13 @@ export async function recoverMediaCEKEnvelope(
     rpc: params.rpc || getBaseRpcUrl(),
     userAddress: params.buyerAddress,
   };
+  // See recoverNonMediaCEK for rationale  kept identical for parity.
+  if (params.secureViewSession) {
+    jsParams.delegation = params.secureViewSession.delegationCanonical;
+    jsParams.delegationSig = params.secureViewSession.delegationSig;
+    jsParams.request = params.secureViewSession.requestCanonical;
+    jsParams.requestSig = params.secureViewSession.requestSig;
+  }
 
   const result = await executeLitAction({ code: mediaActionCode, jsParams }, config);
 
