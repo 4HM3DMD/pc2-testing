@@ -6,6 +6,57 @@
 
 ---
 
+## [1.2.0] - 2026-04-21 (in development — `feature/lit-chipotle-migration`)
+
+### 🔒 Security (P0) — Lit Action Session-Key Delegation
+
+dDRM decryption now uses cryptographically-verified session-key delegation
+inside every Lit Action call. The previous V1.1 authorization path trusted
+a client-supplied `userAddress` parameter; because Lit Action source is
+public and immutable on IPFS, any caller could supply *any* known
+authorized buyer's address and receive the CEK. **This is closed in V1.2.**
+
+- **Session-key delegation (Option C)**: at wallet connect the buyer signs
+  *one* `SecureViewDelegation` authorizing a non-extractable, device-bound
+  P-256 key (Web Crypto, `extractable: false`) to decrypt dDRM content
+  for up to 24 hours across their EOA + smart-account addresses. Every
+  subsequent asset open is signed silently by the ephemeral key — zero
+  wallet popups, "double-click to open" UX preserved.
+- **Lit Actions** (`non-media-decrypt-chipotle.js`,
+  `media-decrypt-chipotle.js`) now verify the EIP-191 (or EIP-1271 for
+  smart wallets) delegation signature, the per-request P-256 signature,
+  the `actionIpfsId` binding, request freshness, replay protection, and
+  delegation expiry/revocation before reaching the on-chain
+  `AuthorityGateway.hasAccessByContentId` check.
+- **`userAddress` removed** from `jsParams` in all paths
+  (`recoverNonMediaCEK`, `recoverMediaCEKEnvelope`, Datil fallback). The
+  effective user is derived from the cryptographically verified
+  `delegation.coveredAddresses`.
+- **Server-authoritative action CID**: `/api/media/init` overrides the
+  PSSH-recorded CID with the server-configured `LIT_ACTION_CID` so legacy
+  assets (minted with the v0 CID baked into their MPD) work with the new
+  sigauth action without re-minting.
+- **Two-phase `/api/media/init`**: returns `412 Precondition Failed` with
+  `{ kid, actionIpfsId }` so the player can produce a signed bundle bound
+  to the correct `actionIpfsId` before the second call. MPD is cached
+  server-side for 60 s so the retry is free.
+- **Hard cutover**: `/lit/secure-view` now returns
+  `401 session_bundle_required` for any request without a signed bundle.
+  Legacy `*-chipotle.js` Lit Action files deleted; `LIT_ACTION_CID_LEGACY`
+  removed from `.env.example` and code paths. The legacy IPFS CID stays
+  pinned for a 14-day rollback window then is unpinned by ops (~2026-05-03).
+- **Verified end-to-end on 2026-04-21**: PDF · PNG · MP4 (AV1+AAC) ·
+  MP3 (AAC) — all four open with one wallet popup at session start,
+  zero popups on subsequent opens, exploit regression spike (14 checks)
+  passes against the canonical sigauth Lit Actions.
+
+References:
+- [`docs/handover/V12_SIGAUTH_HANDOVER.md`](docs/handover/V12_SIGAUTH_HANDOVER.md) — comprehensive cutover handover
+- [`docs/handover/IRZHY_LIT_ACTION_FIX_V12.md`](docs/handover/IRZHY_LIT_ACTION_FIX_V12.md) — public-safe engineer brief
+- [`.cursor/tasks/LIT-ACTION-SIGNATURE-AUTH/`](.cursor/tasks/LIT-ACTION-SIGNATURE-AUTH/) — DESIGN, SECURITY, TESTING
+
+---
+
 ## [1.1.0] - 2026-03-03
 
 > 133 commits since v1.0.0 — squash merged from `feature/jetson-gpu-acceleration`

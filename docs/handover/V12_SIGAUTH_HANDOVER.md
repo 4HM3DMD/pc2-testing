@@ -30,7 +30,7 @@ Original design: `.cursor/tasks/LIT-ACTION-SIGNATURE-AUTH/DESIGN.md`
 |---|---|
 | Buyer signs **one** EIP-191 delegation message authorizing an ephemeral, device-bound P-256 key for 24 h across their EOA + smart account | `pc2-node/src/wallet-bridge/pc2-secure-view-session.js` (key gen, delegation/request signing) + `pc2-secure-view.js` (parent-frame manager) |
 | Per-asset request signed silently by ephemeral key (no wallet prompt) | Same files; bundle returned via `pc2_secureView_sign` RPC |
-| Sigauth Lit Action verifies delegation EIP-191 sig + request P-256 sig + replay protection + action-CID binding | `pc2-node/data/lit-actions/non-media-decrypt-chipotle-sigauth.js` and `media-decrypt-chipotle-sigauth.js` |
+| Sigauth Lit Action verifies delegation EIP-191 sig + request P-256 sig + replay protection + action-CID binding | `pc2-node/data/lit-actions/non-media-decrypt-chipotle.js` and `media-decrypt-chipotle.js` (renamed from `*-sigauth.js` in Phase 5 cleanup; bytes & IPFS CIDs preserved) |
 | Server forwards signed bundle, never sends `userAddress` | `pc2-node/src/api/storage.ts` (`/lit/secure-view`), `pc2-node/src/api/chipotle-client.ts` (`recoverNonMediaCEK`, `recoverMediaCEKEnvelope`), `pc2-node/src/api/media.ts` (`/api/media/init`) |
 
 End-to-end flow:
@@ -71,7 +71,8 @@ requestCanonical, requestSig }`. No silent legacy fall-through.
 File: `pc2-node/src/api/storage.ts`.
 
 **5.2** `getChipotleNonMediaActionCode()` no longer has a `'legacy'`
-mode. It only loads `non-media-decrypt-chipotle-sigauth.js`.
+mode. It only loads `non-media-decrypt-chipotle.js` (the renamed
+sigauth action — same bytes, same IPFS CID).
 File: `pc2-node/src/api/chipotle-client.ts`.
 
 **5.3** `userAddress` removed from `jsParams` in both Datil and Chipotle
@@ -269,12 +270,12 @@ delegation already covers both. Safe to remove in V1.3 cleanup.
 
 | ID | Status | Owner | What |
 |---|---|---|---|
-| `LIT-ACTION-SIGNATURE-AUTH` Phase 5.1–5.3, 6a, 6a-fix2 | ✅ Shipped this session | PC2 | Hard cutover to sigauth, both non-media + media, action CID server-authoritative |
-| `LIT-ACTION-SIGNATURE-AUTH` Phase 5.4–5.7 | ⏳ Pending | PC2 | Delete legacy Lit Action JS files, rename `*-sigauth.js` → canonical, purge legacy env vars |
-| `CREATOR-THUMBNAIL-FALLBACK` | 📝 Newly scaffolded this session | PC2 | Creator silently drops thumbnail when Elacity IPFS upload fails. Local IPFS fallback needed to mirror asset/metadata path. **Surfaced because** Elacity IPFS started 502'ing |
-| `ELACITY-IPFS-UPLOAD-502` | 📝 Newly scaffolded this session | Elacity ops | Investigate 502 + extreme-slowness on Elacity IPFS pinning service |
+| `LIT-ACTION-SIGNATURE-AUTH` Phase 5.1–5.3, 6a, 6a-fix2 | ✅ Shipped 2026-04-21 | PC2 | Hard cutover to sigauth, both non-media + media, action CID server-authoritative |
+| `LIT-ACTION-SIGNATURE-AUTH` Phase 5.4–5.7 | ✅ Shipped 2026-04-21 | PC2 | Legacy Lit Action JS files deleted; `*-sigauth.js` renamed to canonical `*-chipotle.js` (bytes/CIDs preserved); `LIT_ACTION_CID_LEGACY` purged from `.env.example` and code paths |
+| `LIT-ACTION-SIGNATURE-AUTH` Phase 4 (docs + announce) | ✅ Shipped 2026-04-21 | PC2 + comms | P0 banner lifted from `docs/wiki/Technical/ELACITY_DDRM_INTEGRATION.md` and replaced with permanent security feature description; V1.2 changelog entry written; community announcement drafted |
+| `CREATOR-THUMBNAIL-FALLBACK` | 📝 Scaffolded 2026-04-21 | PC2 | Creator silently drops thumbnail when Elacity IPFS upload fails. Local IPFS fallback needed to mirror asset/metadata path. **Surfaced because** Elacity IPFS started 502'ing |
+| `ELACITY-IPFS-UPLOAD-502` | 📝 Scaffolded 2026-04-21 | Elacity ops | Investigate 502 + extreme-slowness on Elacity IPFS pinning service |
 | `IPFS-ELACITY-BOOTSTRAP` | ⏳ Pre-existing | PC2 | Hard-code Elacity's libp2p multiaddrs into PC2 Helia bootstrap so DHT walks resolve fast even when the pin service is degraded |
-| `LIT-ACTION-SIGNATURE-AUTH` Phase 4 (docs + announce) | ⏳ Pending | PC2 + comms | Lift P0 banner from `docs/wiki/Technical/ELACITY_DDRM_INTEGRATION.md`; write changelog; community post |
 
 ## 8. Security posture statement (for the changelog / announcement)
 

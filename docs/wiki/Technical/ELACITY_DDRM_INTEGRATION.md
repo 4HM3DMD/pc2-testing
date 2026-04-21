@@ -3,41 +3,53 @@
 > Source: Elacity codebase analysis, March 2026.
 > This is the single source of truth for on-chain minting, encryption, and marketplace integration.
 
-> ## Security: Session-Key Delegation (V1.2, shipped 2026-04-20)
->
-> **Scope**: `non-media-decrypt-chipotle-sigauth.js` and
-> `media-decrypt-chipotle-sigauth.js` Lit Actions.
->
-> **Historic issue** (closed in V1.2): the previous Lit Actions
-> trusted a client-supplied `userAddress` in `jsParams`. Because the
-> Lit Action code is immutable/public on IPFS, any Lit-compatible
-> caller could supply *any* known authorized buyer's address and
-> receive the CEK. Discovered during the 2026-04-17 pre-release call.
->
-> **Fix shipped**: **session-key delegation**. At wallet connect the
-> buyer signs **one** `SecureViewDelegation` authorizing a
-> non-extractable, device-bound P-256 key (Web Crypto, `extractable:
-> false`) to decrypt dDRM content for up to 24 hours across their
-> EOA + smart-account addresses. Every subsequent asset open is
-> signed silently by the ephemeral key — zero wallet popups,
-> preserving the "double-click to open" UX. The sigauth Lit Actions
-> verify the delegation signature (EIP-191 for EOA or EIP-1271 for
-> smart wallets) *and* the per-request signature before reaching the
-> `AuthorityGateway.hasAccessByContentId` check against the
-> delegation's `coveredAddresses`. `userAddress` has been removed
-> from the authorization path entirely.
->
-> **Rollout**: live as of 2026-04-20. `LIT_ACTION_CID` points at the
-> new sigauth action; `LIT_ACTION_CID_LEGACY` stays pinned for 14
-> days to cover clients that haven't yet adopted the session flow.
-> After 14 days of zero legacy traffic the legacy action is
-> unpinned and the sigauth path becomes mandatory.
->
-> **Evidence**:
-> - [`LIT-ACTION-SIGNATURE-AUTH/DESIGN.md`](../../../.cursor/tasks/LIT-ACTION-SIGNATURE-AUTH/DESIGN.md) — full protocol, EOA/smart-account matrix, Lit Action pseudocode, rollout plan.
-> - [`LIT-ACTION-SIGNATURE-AUTH/SECURITY.md`](../../../.cursor/tasks/LIT-ACTION-SIGNATURE-AUTH/SECURITY.md) — formal threat model, 20-row attack catalogue, residual-risk analysis.
-> - [`LIT-ACTION-SIGNATURE-AUTH/TESTING.md`](../../../.cursor/tasks/LIT-ACTION-SIGNATURE-AUTH/TESTING.md) — positive/negative test matrix covering automated exploit regression, cross-browser, and wallet-in-hand rows.
-> - [`scripts/spike/README.md`](../../../scripts/spike/README.md) — conformance spikes for the underlying primitives (EIP-191, EIP-1271, Web Crypto P-256, canonical JSON).
+## Security model (V1.2+): Session-Key Delegation
+
+dDRM decryption is gated by a session-key delegation scheme. There is
+no caller-supplied identity claim anywhere in the authorization path.
+
+**At wallet connect**, the buyer signs **one** `SecureViewDelegation`
+that authorizes a non-extractable, device-bound P-256 key (Web Crypto,
+`extractable: false`) to decrypt dDRM content for up to 24 hours
+across their EOA + smart-account addresses. The delegation message
+binds: `domain`, `chainId`, `actionIpfsId`, `ownerAddress`,
+`coveredAddresses[]`, `sessionPublicKey`, `issuedAt`, `expiresAt`,
+`nonce`.
+
+**At every asset open**, the ephemeral key signs a per-request message
+that binds `domain`, `kid`, `actionIpfsId`, `requestedAt`,
+`requestNonce`. No wallet popup — Web Crypto P-256 signs in under a
+millisecond. The "double-click to open" UX is preserved.
+
+**Inside the Lit Action TEE**, the action verifies (1) the delegation
+signature (EIP-191 for EOAs, EIP-1271 for smart wallets), (2) the
+per-request P-256 signature, (3) the `actionIpfsId` binding (delegation
+↔ executing action), (4) request freshness + replay protection, (5)
+delegation expiry + revocation. Only then does it iterate
+`delegation.coveredAddresses` and call
+`AuthorityGateway.hasAccessByContentId(addr, kid)`. The CEK is
+released via `Lit.Actions.Decrypt` only after all five checks pass.
+
+**Active Lit Actions** (V1.2, shipped 2026-04-20, cleanup 2026-04-21):
+- `pc2-node/data/lit-actions/non-media-decrypt-chipotle.js` —
+  `bafkreihvm4zkyuefnuptlbdins6cmd2mbslj2xgnyzz3ssdg2ggg3jtkk4`
+- `pc2-node/data/lit-actions/media-decrypt-chipotle.js` —
+  `bafkreihw7brius3xw2u7ltjac26hoqudulkc6mfwqrjxtrobanz2ryhvsq`
+
+Both are pinned on Pinata + Helia and registered in Chipotle group `1`
+(`elacity-ddrm`).
+
+**Failure modes** (all explicit error codes returned by the Lit
+Action / server, no silent fall-through): `del_sig_invalid`,
+`req_sig_invalid`, `bad_action_cid`, `del_expired`, `req_stale_or_future`,
+`replayed`, `revoked`, `access_denied`, `session_bundle_required`.
+
+**Reference material**:
+- [`LIT-ACTION-SIGNATURE-AUTH/DESIGN.md`](../../../.cursor/tasks/LIT-ACTION-SIGNATURE-AUTH/DESIGN.md) — full protocol, EOA/smart-account matrix, Lit Action pseudocode.
+- [`LIT-ACTION-SIGNATURE-AUTH/SECURITY.md`](../../../.cursor/tasks/LIT-ACTION-SIGNATURE-AUTH/SECURITY.md) — formal threat model, 20-row attack catalogue, residual-risk analysis.
+- [`LIT-ACTION-SIGNATURE-AUTH/TESTING.md`](../../../.cursor/tasks/LIT-ACTION-SIGNATURE-AUTH/TESTING.md) — positive/negative test matrix covering automated exploit regression, cross-browser, and wallet-in-hand rows.
+- [`docs/handover/V12_SIGAUTH_HANDOVER.md`](../../handover/V12_SIGAUTH_HANDOVER.md) — V1.2 cutover handover (chronological change log, deployment gotchas, rotation procedure).
+- [`scripts/spike/README.md`](../../../scripts/spike/README.md) — conformance spikes for the underlying primitives (EIP-191, EIP-1271, Web Crypto P-256, canonical JSON).
 
 ## Base Chain (8453) Contract Addresses
 

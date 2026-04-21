@@ -1,8 +1,8 @@
 # Task: Creator — Local IPFS Fallback for Thumbnail Upload
 
 **Task ID**: CREATOR-THUMBNAIL-FALLBACK
-**Created**: 2026-04-21
-**Status**: Proposed
+**Created**: 2026-04-21 · **Shipped**: 2026-04-21
+**Status**: ✅ Done — fix shipped in `pc2-node/data/test-apps/elacity-creator/app.js` (and synced to `installed-apps/`). Mirror QA pass against a degraded Elacity IPFS still pending — recommend running before V1.2 tag.
 **Priority**: P1 — High (assets minted while Elacity IPFS pinning is degraded permanently lose their thumbnail)
 **Target Release**: V1.2 (end of April 2026)
 **Related**: `.cursor/tasks/ELACITY-IPFS-UPLOAD-502/ELACITY-IPFS-UPLOAD-502.md`,

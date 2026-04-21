@@ -1,12 +1,13 @@
 # Task: Lit Action Session-Key Delegation Auth (P0 Security)
 
 **Task ID**: LIT-ACTION-SIGNATURE-AUTH
-**Created**: 2026-04-17 · **Revised**: 2026-04-21 (Phase 5 cutover + Phase 6a player.js migration shipped + 6a-fix2 server-authoritative action CID)
-**Status**: Review — Phases 2a–3 + 5.1–5.3 + 6a + 6a-fix2 shipped; pending 5.4–5.7 cleanup + Phase 4 docs/announce. Full handover: [`docs/handover/V12_SIGAUTH_HANDOVER.md`](../../../docs/handover/V12_SIGAUTH_HANDOVER.md)
+**Created**: 2026-04-17 · **Revised**: 2026-04-21 (Phase 5 hard cutover + Phase 6a player.js migration + 6a-fix2 server-authoritative action CID + Phase 5.4–5.7 cleanup + Phase 4 docs/announce all shipped same day)
+**Status**: ✅ Done — All phases (2a–6a, 5.4–5.7, Phase 4) shipped 2026-04-21. Full handover: [`docs/handover/V12_SIGAUTH_HANDOVER.md`](../../../docs/handover/V12_SIGAUTH_HANDOVER.md)
 **Priority**: **P0 — Critical Security** — shipped for V1.2 DRM release
 **Target Release**: V1.2 (end of April 2026)
 **Verified end-to-end on 2026-04-21**: PDF ✅ · PNG ✅ · MP4 (AV1+AAC) ✅ · MP3 (AAC) ✅
-**Related**: `pc2-node/data/lit-actions/non-media-decrypt.js`,
+**Related**: `pc2-node/data/lit-actions/non-media-decrypt-chipotle.js`,
+`pc2-node/data/lit-actions/media-decrypt-chipotle.js`,
 `pc2-node/src/api/storage.ts` (`/lit/secure-view`),
 `pc2-node/src/api/chipotle-client.ts`
 
@@ -144,9 +145,11 @@ Detailed in DESIGN.md §5. Summary:
        `/lit/begin-session` + `/complete-session` + `/revoke-session`,
        `/lit/secure-view` bundle verification, `recoverNonMediaCEK` +
        `recoverMediaCEKEnvelope` forwarding, sigauth Lit Actions
-       (`non-media-decrypt-chipotle-sigauth.js` +
-       `media-decrypt-chipotle-sigauth.js`), `.env.example` CID
-       placeholders, `ddrm-viewer` client integration.
+       (`non-media-decrypt-chipotle.js` +
+       `media-decrypt-chipotle.js`, both renamed from `*-sigauth.js`
+       in Phase 5 cleanup — bytes & IPFS CIDs preserved),
+       `.env.example` CID placeholders, `ddrm-viewer` client
+       integration.
 4. [x] **Day 3 — Testing**:
        `spike-secureview-primitives.mjs` (15 negative cases);
        `spike-exploit-regression.mjs` (static audit + 5 targeted

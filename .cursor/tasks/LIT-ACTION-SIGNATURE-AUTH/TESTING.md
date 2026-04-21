@@ -10,17 +10,20 @@ deployment against real wallets.
 
 | Role | File | IPFS CID | Pinned |
 |---|---|---|---|
-| Sigauth non-media (active) | `pc2-node/data/lit-actions/non-media-decrypt-chipotle-sigauth.js` | `bafkreihvm4zkyuefnuptlbdins6cmd2mbslj2xgnyzz3ssdg2ggg3jtkk4` | 2026-04-20 |
-| Sigauth media (reserved) | `pc2-node/data/lit-actions/media-decrypt-chipotle-sigauth.js` | `bafkreihw7brius3xw2u7ltjac26hoqudulkc6mfwqrjxtrobanz2ryhvsq` | 2026-04-20 |
-| Legacy non-media (14-day overlap) | `pc2-node/data/lit-actions/non-media-decrypt-chipotle.js` | `QmNayE5MYzXcoMS9nvRk6MUo8r4ESLa3i65vHXzuBsnC2b` | pre-2026-04-20 |
+| Sigauth non-media (active) | `pc2-node/data/lit-actions/non-media-decrypt-chipotle.js` | `bafkreihvm4zkyuefnuptlbdins6cmd2mbslj2xgnyzz3ssdg2ggg3jtkk4` | 2026-04-20 |
+| Sigauth media (active) | `pc2-node/data/lit-actions/media-decrypt-chipotle.js` | `bafkreihw7brius3xw2u7ltjac26hoqudulkc6mfwqrjxtrobanz2ryhvsq` | 2026-04-20 |
+| Legacy non-media (held for ops unpin at 2026-05-03) | (file deleted in Phase 5 cleanup) | `QmNayE5MYzXcoMS9nvRk6MUo8r4ESLa3i65vHXzuBsnC2b` | pre-2026-04-20 |
 
 Environment variables (set in `pc2-node/.env`):
 
 ```bash
 LIT_ACTION_CID=bafkreihvm4zkyuefnuptlbdins6cmd2mbslj2xgnyzz3ssdg2ggg3jtkk4
-LIT_ACTION_CID_LEGACY=QmNayE5MYzXcoMS9nvRk6MUo8r4ESLa3i65vHXzuBsnC2b
 MEDIA_ACTION_CID=bafkreihw7brius3xw2u7ltjac26hoqudulkc6mfwqrjxtrobanz2ryhvsq
 ```
+
+`LIT_ACTION_CID_LEGACY` was retired in Phase 5 cleanup (2026-04-21) — the
+sigauth path is now the only path and there is no legacy fall-through in
+the server.
 
 Note: on Chipotle the Lit Action source is shipped inline to
 `/core/v1/lit_action` — the CID is used for provenance plus the
@@ -31,19 +34,20 @@ inside the sigauth action.
 
 ## 1. Automated (CI-gatable)
 
-Run by `spike-exploit-regression.mjs`. All rows must be **PASS** before
-the legacy Lit Action CID is retired. Green verdict closes the P0
-regression gate.
+Run by `spike-exploit-regression.mjs`. All rows must be **PASS** in CI;
+green verdict closes the P0 regression gate. (After Phase 5 cleanup,
+2026-04-21, this also runs against the canonical filenames below — the
+sigauth bytes are unchanged.)
 
 ### 1.1 Static audit of sigauth Lit Actions
 
 | ID | Check | Expected |
 |---|---|---|
-| A-1 | `non-media-decrypt-chipotle-sigauth.js` does not use `userAddress` for authorization | No match for `hasAccessByContentId(userAddress`, `params.userAddress`, or destructured `userAddress` from `params` |
-| A-2 | `non-media-decrypt-chipotle-sigauth.js` iterates `coveredAddresses` and calls `hasAccessByContentId` | Both identifiers present |
-| A-3 | `non-media-decrypt-chipotle-sigauth.js` contains `verifyWebCryptoP256` | Identifier present |
-| A-4 | `non-media-decrypt-chipotle-sigauth.js` contains `ethers.verifyMessage` and `isValidSignatureEip1271` | Both present |
-| A-5 | `media-decrypt-chipotle-sigauth.js` — same four checks as A-1…A-4 | All present |
+| A-1 | `non-media-decrypt-chipotle.js` does not use `userAddress` for authorization | No match for `hasAccessByContentId(userAddress`, `params.userAddress`, or destructured `userAddress` from `params` |
+| A-2 | `non-media-decrypt-chipotle.js` iterates `coveredAddresses` and calls `hasAccessByContentId` | Both identifiers present |
+| A-3 | `non-media-decrypt-chipotle.js` contains `verifyWebCryptoP256` | Identifier present |
+| A-4 | `non-media-decrypt-chipotle.js` contains `ethers.verifyMessage` and `isValidSignatureEip1271` | Both present |
+| A-5 | `media-decrypt-chipotle.js` — same four checks as A-1…A-4 | All present |
 
 ### 1.2 Happy-path regression
 
@@ -112,7 +116,7 @@ before the legacy CID is retired.
 
 | ID | Scenario | Expected |
 |---|---|---|
-| N-1 | User rejects the initial `personal_sign` prompt | Viewer falls back to the legacy path (during rollout) with a console warning. After the legacy CID retires, the viewer displays an "unable to create secure session" error and surfaces a Retry button. |
+| N-1 | User rejects the initial `personal_sign` prompt | Viewer displays an "unable to create secure session" error and surfaces a Retry button. (Pre-Phase-5 the viewer fell back to a legacy path; after 2026-04-21 the sigauth path is mandatory and there is no fall-back.) |
 | N-2 | User signs the delegation with a different EOA than the PC2 session wallet | `/complete-session` returns 400 with `delegation.ownerAddress does not match authenticated session`. Viewer clears the pending session and re-prompts. |
 | N-3 | User signs in from two tabs simultaneously | Each tab gets its own ephemeral key (IndexedDB is per-origin + per-slot, but tabs share the slot — second tab reuses the first tab's key, no conflict). |
 | N-4 | User revokes the session via the pill's "Sign out" button | IndexedDB cleared, server-side revoke entry added, any open viewer tabs start returning `revoked` on next open. |
@@ -121,7 +125,7 @@ before the legacy CID is retired.
 
 | ID | Metric | Target |
 |---|---|---|
-| R-1 | `% of /lit/secure-view requests with X-SecureView-Session: verified` | ≥ 95% within 7 days of legacy CID being marked `LIT_ACTION_CID_LEGACY` |
+| R-1 | `% of /lit/secure-view requests with X-SecureView-Session: verified` | 100% — legacy fall-through removed in Phase 5 cleanup (2026-04-21); any non-100% reading indicates a server bug or a client predating the cutover and must be investigated |
 | R-2 | Session cache depth on reference node | <= `MAX_DELEGATION_WINDOW_SECONDS * avg_request_rate` (bounded) |
 | R-3 | Delegation verification latency (EIP-191 path) | < 5 ms p95 |
 | R-4 | Delegation verification latency (EIP-1271 path, single `eth_call`) | < 250 ms p95 |

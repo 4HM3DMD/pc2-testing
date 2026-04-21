@@ -69,7 +69,7 @@ We considered three options (full analysis in `DESIGN.md`):
    • Anti-replay cache on (sessionPubKey, requestNonce)
    • Forwards { delegation, delegationSig, request, requestSig } as jsParams
     ▼
-[Lit Action TEE]   ← non-media-decrypt-chipotle-sigauth.js / media-decrypt-chipotle-sigauth.js
+[Lit Action TEE]   ← non-media-decrypt-chipotle.js / media-decrypt-chipotle.js (sigauth)
    • Re-verifies BOTH sigs (server cannot lie)
    • Asserts request.actionIpfsId === Lit.Actions.currentActionIpfsId  ← closes the original bug
    • Asserts request.requestedAt within ±60 s skew, expiresAt > now
@@ -88,12 +88,12 @@ The exact reason the original attack is closed: **the Lit Action no longer trust
 
 | File | New IPFS CID | Replaces |
 |---|---|---|
-| `pc2-node/data/lit-actions/non-media-decrypt-chipotle-sigauth.js` | `bafkreihvm4zkyuefnuptlbdins6cmd2mbslj2xgnyzz3ssdg2ggg3jtkk4` | legacy `Qmc…` non-media action |
-| `pc2-node/data/lit-actions/media-decrypt-chipotle-sigauth.js` | (registered in Chipotle group `1`, CID stored in `data/.lit-action-cid`) | legacy media action |
+| `pc2-node/data/lit-actions/non-media-decrypt-chipotle.js` | `bafkreihvm4zkyuefnuptlbdins6cmd2mbslj2xgnyzz3ssdg2ggg3jtkk4` | legacy `Qmc…` non-media action |
+| `pc2-node/data/lit-actions/media-decrypt-chipotle.js` | `bafkreihw7brius3xw2u7ltjac26hoqudulkc6mfwqrjxtrobanz2ryhvsq` | legacy media action |
 
 Both are pinned to ≥2 IPFS providers and registered with Chipotle group `1` (`elacity-ddrm`).
 
-The legacy CIDs remain pinned for **14 days** as rollback per `LIT-ACTION-SIGNATURE-AUTH.md` §"Acceptance Criteria", then will be removed (Phase 5.4–5.7).
+The two `*-sigauth.js` files were renamed to the canonical `*-chipotle.js` names in Phase 5 cleanup (2026-04-21) — same bytes, same IPFS CIDs, no Chipotle re-registration needed. The legacy vulnerable `*-chipotle.js` files were deleted in the same cleanup; the legacy IPFS CIDs are unpinned by ops at the 14-day mark (~2026-05-03).
 
 ### 3.2 Server changes (TypeScript)
 
@@ -247,8 +247,8 @@ In priority order:
 1. **Threat model**: `.cursor/tasks/LIT-ACTION-SIGNATURE-AUTH/SECURITY.md` — what we defended against, what we did not.
 2. **Protocol spec**: `.cursor/tasks/LIT-ACTION-SIGNATURE-AUTH/DESIGN.md` — exact canonical-JSON shape, sig algorithms, replay window, address recovery.
 3. **The two Lit Actions** (TEE side):
-   - `pc2-node/data/lit-actions/non-media-decrypt-chipotle-sigauth.js`
-   - `pc2-node/data/lit-actions/media-decrypt-chipotle-sigauth.js`
+   - `pc2-node/data/lit-actions/non-media-decrypt-chipotle.js`
+   - `pc2-node/data/lit-actions/media-decrypt-chipotle.js`
 4. **Server enforcement**: `pc2-node/src/api/storage.ts` `/lit/secure-view` and `pc2-node/src/utils/secureViewSession.ts`.
 5. **Client primitives**: `pc2-node/src/wallet-bridge/pc2-secure-view-session.js` + `pc2-secure-view.js`.
 6. **Two-phase media init** (the one non-obvious bit): `pc2-node/src/api/media.ts` `/api/media/init` 412 branch + `pc2-node/data/test-apps/pc2-media-runtime/player.js` `mediaInitWithSecureView` wrapper.

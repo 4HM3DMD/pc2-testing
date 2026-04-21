@@ -922,7 +922,8 @@ Chipotle credits, and fails closed on every known negative case.
 ### 12.3 What landed in 2d
 
 - New verifying Lit Action:
-  `pc2-node/data/lit-actions/non-media-decrypt-chipotle-sigauth.js`.
+  `pc2-node/data/lit-actions/non-media-decrypt-chipotle.js` (renamed from
+  `*-sigauth.js` in Phase 5 cleanup, 2026-04-21; bytes/CID preserved).
   Implements §2.7 pseudocode: canonical JSON equality check, domain
   + chain + action + kid + nonce structural checks, time-window
   enforcement with `MAX_DELEGATION_WINDOW_SECONDS` and
@@ -933,26 +934,33 @@ Chipotle credits, and fails closed on every known negative case.
   `coveredAddresses`, and CEK decrypt via
   `Lit.Actions.Decrypt({ pkpId, ciphertext })`. Response shape:
   `{ data: cekBase64, authorizedAddress, delegationNonce, requestNonce }`.
-- Sibling media action: `media-decrypt-chipotle-sigauth.js`.
-  Structurally identical; reserved for future media-only divergence.
-- `getChipotleNonMediaActionCode()` takes a `'legacy' | 'sigauth'`
-  mode. Auto-selection: `params.secureViewSession ? 'sigauth' : 'legacy'`.
-  A legacy client that does not upgrade continues to work until its
-  CID's 14-day rollback window expires.
-- `.env.example` documents the new `LIT_ACTION_CID_LEGACY` /
-  `MEDIA_ACTION_CID_LEGACY` variables for the rollback window.
+- Sibling media action: `media-decrypt-chipotle.js` (renamed from
+  `*-sigauth.js` in Phase 5 cleanup, 2026-04-21; bytes/CID preserved).
+  Structurally identical to the non-media action; reserved for future
+  media-only divergence.
+- `getChipotleNonMediaActionCode()` is sigauth-only after Phase 5
+  cleanup (2026-04-21). The legacy `'legacy' | 'sigauth'` mode switch
+  has been removed and any caller without a `secureViewSession` bundle
+  receives `401 session_bundle_required` from `/lit/secure-view`.
+- `.env.example` no longer documents `LIT_ACTION_CID_LEGACY` /
+  `MEDIA_ACTION_CID_LEGACY`. The CIDs of the retired legacy actions
+  remain pinned in IPFS for a 14-day window post-cutover (ops unpin at
+  ~2026-05-03) to allow CEK recovery for any client that hasn't yet
+  refreshed.
 
 ### 12.4 Open items (deferred to Phase 2e / Phase 3)
 
 - ~~**IPFS pinning of the new actions**~~ — ✅ pinned 2026-04-20 via
-  Elacity's Pinata workspace:
-  - `non-media-decrypt-chipotle-sigauth.js`
+  Elacity's Pinata workspace (filenames updated in Phase 5 cleanup,
+  2026-04-21; bytes & CIDs unchanged):
+  - `non-media-decrypt-chipotle.js`
     → `bafkreihvm4zkyuefnuptlbdins6cmd2mbslj2xgnyzz3ssdg2ggg3jtkk4`
     (11,905 bytes)
-  - `media-decrypt-chipotle-sigauth.js`
+  - `media-decrypt-chipotle.js`
     → `bafkreihw7brius3xw2u7ltjac26hoqudulkc6mfwqrjxtrobanz2ryhvsq`
     (7,625 bytes)
-  - Previous legacy non-media CID (for 14-day overlap):
+  - Previous legacy non-media CID (held pinned for 14-day rollback,
+    ops unpin ~2026-05-03):
     `QmNayE5MYzXcoMS9nvRk6MUo8r4ESLa3i65vHXzuBsnC2b`
 - **Note on Chipotle execution model**: the Chipotle REST API ships
   Lit Action source *inline* via `/core/v1/lit_action` — the pinned
@@ -961,12 +969,11 @@ Chipotle credits, and fails closed on every known negative case.
   `/lit/begin-session` and (b) as the value the sigauth Lit Action
   checks against `jsParams.actionIpfsId` inside itself. Pinning to
   IPFS therefore serves provenance + public audit, not execution.
-- **Removing `userAddress` from `jsParams`**: the server still emits
-  `userAddress` when the bundle is present, so legacy action CIDs
-  continue to work during the 14-day overlap. The first commit after
-  the legacy CID retires removes that field from
-  `recoverNonMediaCEK` / `recoverMediaCEKEnvelope` and from the
-  Datil fallback blocks.
+- **Removing `userAddress` from `jsParams`**: ✅ shipped in Phase 5.3
+  (2026-04-21). `recoverNonMediaCEK` / `recoverMediaCEKEnvelope` and
+  the Datil fallback blocks no longer pass `userAddress` — the
+  effective user is derived inside the Lit Action from
+  `delegation.coveredAddresses`.
 - **Chipotle PKP-AES ACC binding**: unlike Datil's BLS encrypt which
   bound ciphertexts to `:currentActionIpfsId`, Chipotle's
   `Lit.Actions.Encrypt({ pkpId, message })` has no visible ACC — any
@@ -981,19 +988,26 @@ Chipotle credits, and fails closed on every known negative case.
   required per segment — the sigauth action is called exactly once
   per viewing session (same as today's flow).
 
-### 12.5 Rollout sequence
+### 12.5 Rollout sequence (historical record)
 
 1. PR containing Phase 2a–2d lands on `feature/lit-chipotle-migration`.
+   ✅ shipped 2026-04-19/20.
 2. Ops runs `POST /api/storage/lit/deploy-action` pointing at the
    sigauth file, captures the new CID, sets `LIT_ACTION_CID` to the
    new value and `LIT_ACTION_CID_LEGACY` to the previous value.
+   ✅ shipped 2026-04-20.
 3. Phase 2e ships the client integration to `ddrm-viewer` and the
-   creator preflight.
-4. Production monitoring watches `X-SecureView-Session: verified`
-   header frequency — target 100 % within 7 days.
-5. After 14 days of zero legacy traffic, `LIT_ACTION_CID_LEGACY`
-   gets unset, the legacy file gets deleted, and `userAddress` gets
-   stripped from `recoverNonMedia*` / `recoverMedia*` jsParams.
+   creator preflight. ✅ shipped 2026-04-20/21.
+4. Phase 5 hard cutover: server returns `401 session_bundle_required`
+   for any non-sigauth request, `userAddress` removed from `jsParams`
+   in all paths, server-authoritative action CID enforced for media.
+   ✅ shipped 2026-04-21.
+5. Phase 5.4–5.7 cleanup: legacy `*-chipotle.js` Lit Action files
+   deleted, `*-sigauth.js` renamed to canonical `*-chipotle.js`
+   (bytes/CIDs preserved), `LIT_ACTION_CID_LEGACY` removed from
+   `.env.example` and code paths. ✅ shipped 2026-04-21.
+6. Ops unpins the legacy IPFS CID after the 14-day rollback window
+   expires (~2026-05-03).
 
 ---
 
@@ -1027,10 +1041,11 @@ Session-key delegation is now wired into
   in under a millisecond, imperceptible to the user.
 - Graceful degradation: if no injected provider is present, if the
   PC2 session wallet disagrees with `window.ethereum.selectedAddress`,
-  or if any network call fails, the viewer silently falls back to the
-  legacy path. During the 14-day rollout window the server accepts
-  both; after `LIT_ACTION_CID_LEGACY` retires, the fallback will be
-  removed and this path becomes mandatory.
+  or if any network call fails, the viewer surfaces an "unable to
+  create secure session" error with a Retry button. (Pre-Phase-5 the
+  viewer fell back to a legacy path; after the Phase 5 cleanup on
+  2026-04-21 the sigauth path is mandatory and the server returns
+  `401 session_bundle_required` for any non-sigauth request.)
 
 UX contract with the user (confirming the "double-click to open"
 feedback): one additional wallet prompt at the first decryption of a
