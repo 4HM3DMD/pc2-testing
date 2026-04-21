@@ -44,11 +44,11 @@
   // consistent ("one wallet prompt at session start, double-click to
   // open after that") and removes the iframe wallet attack surface.
   //
-  // The bridge call is best-effort: if the parent has no secure-view
-  // manager (older PC2 build, no injected wallet, user declined the
-  // wallet prompt), the request still goes through on the legacy path
-  // during the 14-day rollout window. After the legacy CID is removed
-  // server-side, the sigauth check becomes mandatory.
+  // The bridge call is mandatory: if the parent has no secure-view
+  // manager (no injected wallet, user declined the wallet prompt) the
+  // server returns 401 session_bundle_required and the viewer surfaces
+  // a re-connect prompt. The legacy 14-day rollout window closed when
+  // Phase 5 cleanup landed (2026-04-21).
 
   var SECURE_VIEW_SIGN_TIMEOUT_MS = 60000;
 

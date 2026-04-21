@@ -3117,15 +3117,54 @@
         }
 
         if (thumbBase64) {
-          var thumbResp = await pc2Fetch('/api/storage/ipfs/upload-elacity', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ content: thumbBase64, filename: 'thumbnail.jpg' }),
-          });
-          if (thumbResp.ok) {
-            var thumbData = await thumbResp.json();
-            imageUri = 'ipfs://' + thumbData.cid;
-            console.log('[Creator] Thumbnail uploaded:', imageUri);
+          // Always pin the thumbnail locally first via Helia. This guarantees
+          // the bytes are reachable through *some* IPFS gateway even when
+          // Elacity's pinning service is degraded (502 / extreme slowness).
+          // Mirrors the belt-and-braces pattern used by the asset upload
+          // and metadata directory upload paths above.
+          var localThumbCid = null;
+          try {
+            var localThumbResp = await pc2Fetch('/api/storage/ipfs/add', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ content: thumbBase64, filename: 'thumbnail.jpg' }),
+            });
+            if (localThumbResp.ok) {
+              var localThumbData = await localThumbResp.json();
+              localThumbCid = localThumbData.cid;
+            } else {
+              console.warn('[Creator] Local thumbnail pin returned', localThumbResp.status);
+            }
+          } catch (localThumbErr) {
+            console.warn('[Creator] Local thumbnail pin failed:', localThumbErr.message);
+          }
+
+          var elacityThumbCid = null;
+          try {
+            var thumbResp = await pc2Fetch('/api/storage/ipfs/upload-elacity', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ content: thumbBase64, filename: 'thumbnail.jpg' }),
+            });
+            if (thumbResp.ok) {
+              var thumbData = await thumbResp.json();
+              elacityThumbCid = thumbData.cid;
+            } else {
+              console.warn('[Creator] Elacity thumbnail upload returned', thumbResp.status);
+            }
+          } catch (elacityThumbErr) {
+            console.warn('[Creator] Elacity thumbnail upload failed:', elacityThumbErr.message);
+          }
+
+          // Prefer Elacity (faster global discovery), fall back to local.
+          // Either way the metadata.json gets a non-empty `imageUri`, so the
+          // marketplace + player + file manager all show the cover art.
+          if (elacityThumbCid) {
+            imageUri = 'ipfs://' + elacityThumbCid;
+            console.log('[Creator] Thumbnail pinned to Elacity:', imageUri);
+          } else if (localThumbCid) {
+            imageUri = 'ipfs://' + localThumbCid;
+            console.log('[Creator] Thumbnail pinned locally only (Elacity unreachable):', imageUri);
           }
         }
       } catch (thumbErr) {
@@ -3133,7 +3172,7 @@
       }
 
       if (!imageUri) {
-        console.warn('[Creator] No thumbnail generated — asset will have no preview image in marketplace');
+        console.warn('[Creator] No thumbnail bytes available — asset will have no preview image in marketplace');
       }
 
       var selectedCurrency = CURRENCIES.find(function (c) { return c.address === priceCurrency; }) || CURRENCIES[0];

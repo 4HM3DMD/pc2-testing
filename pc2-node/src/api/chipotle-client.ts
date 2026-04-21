@@ -281,18 +281,15 @@ function getNonMediaActionCode(): string {
 }
 
 /**
- * Load the non-media Chipotle Lit Action source (sigauth-only after the
- * Phase 5 cutover). Callers must supply a signed SecureViewDelegation +
- * request bundle; the action verifies both before releasing a CEK.
- *
- * The legacy `non-media-decrypt-chipotle.js` action (which trusted
- * `userAddress` from jsParams) has been retired. See
- * `.cursor/tasks/LIT-ACTION-SIGNATURE-AUTH/DESIGN.md` for the attack it
- * closed.
+ * Load the non-media Chipotle Lit Action source. Callers must supply a
+ * signed SecureViewDelegation + request bundle; the action verifies both
+ * before releasing a CEK. See
+ * `.cursor/tasks/LIT-ACTION-SIGNATURE-AUTH/DESIGN.md` for the attack the
+ * sigauth verification closes (V1.1 → V1.2 cutover).
  */
 function getChipotleNonMediaActionCode(): string {
   if (cachedChipotleNonMediaCode) return cachedChipotleNonMediaCode;
-  const actionPath = join(DATA_DIR, 'lit-actions/non-media-decrypt-chipotle-sigauth.js');
+  const actionPath = join(DATA_DIR, 'lit-actions/non-media-decrypt-chipotle.js');
   if (!existsSync(actionPath)) {
     throw new Error(
       `Chipotle non-media Lit Action not found at ${actionPath}.`,
