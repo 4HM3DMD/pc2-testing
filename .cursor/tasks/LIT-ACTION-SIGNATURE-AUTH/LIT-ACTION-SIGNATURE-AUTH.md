@@ -1,10 +1,11 @@
 # Task: Lit Action Session-Key Delegation Auth (P0 Security)
 
 **Task ID**: LIT-ACTION-SIGNATURE-AUTH
-**Created**: 2026-04-17 · **Revised**: 2026-04-20 (implementation complete)
-**Status**: Review — Phases 2a–3 shipped on `feature/lit-chipotle-migration`; awaiting User sign-off + merge
+**Created**: 2026-04-17 · **Revised**: 2026-04-21 (Phase 5 cutover + Phase 6a player.js migration shipped + 6a-fix2 server-authoritative action CID)
+**Status**: Review — Phases 2a–3 + 5.1–5.3 + 6a + 6a-fix2 shipped; pending 5.4–5.7 cleanup + Phase 4 docs/announce. Full handover: [`docs/handover/V12_SIGAUTH_HANDOVER.md`](../../../docs/handover/V12_SIGAUTH_HANDOVER.md)
 **Priority**: **P0 — Critical Security** — shipped for V1.2 DRM release
 **Target Release**: V1.2 (end of April 2026)
+**Verified end-to-end on 2026-04-21**: PDF ✅ · PNG ✅ · MP4 (AV1+AAC) ✅ · MP3 (AAC) ✅
 **Related**: `pc2-node/data/lit-actions/non-media-decrypt.js`,
 `pc2-node/src/api/storage.ts` (`/lit/secure-view`),
 `pc2-node/src/api/chipotle-client.ts`
@@ -244,6 +245,18 @@ Detailed in SECURITY.md §8. Summary:
   `recoverCEKAndFetchData`).
 - **Repinning** is a standard operator task; no Elacity-team
   coordination needed (they pick up the new CID from our env).
+- **Chipotle group registration** is a *separate* step from IPFS
+  pinning and was missed in the initial Phase 2d execution. Any
+  new Lit Action file MUST also be added to Chipotle group `1`
+  (`elacity-ddrm`) using the account key, otherwise Chipotle
+  responds 403 "API key not authorized to execute the specified
+  action (Qm…)". Procedure documented in
+  `docs/core/LIT_CHIPOTLE_MIGRATION.md` §"After Any Code Change to
+  Lit Action Scripts" — three calls: `get_lit_action_ipfs_id`,
+  `add_action`, `add_action_to_group`. Done for the two sigauth
+  CIDs on 2026-04-21:
+    - `QmRxivS9SPdfe6s8rwCqNJaLVKtU9CzfksNqHKjZZbuPy9` (non-media)
+    - `QmNLwJoBBdXPVGvrMKz57dUMiXdJCkB1TiyFBofrNaiJZ5` (media)
 - **Particle spike** (Day 1) de-risks the Particle-specific unknowns
   before full implementation. If the spike fails, we still have a
   path: fall back to EIP-1271 for Particle smart accounts (one
