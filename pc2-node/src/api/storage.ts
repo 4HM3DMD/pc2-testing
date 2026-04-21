@@ -1151,6 +1151,15 @@ if (!NON_MEDIA_ACTION_CID && existsSync(LIT_ACTION_CID_PATH)) {
   }
 }
 
+/**
+ * Returns the server's authoritative sigauth Lit Action CID. Used by other
+ * modules (e.g. media.ts) so that legacy PSSH-recorded action CIDs are
+ * overridden by the server-controlled sigauth action when backend=chipotle.
+ */
+export function getNonMediaActionCid(): string {
+  return NON_MEDIA_ACTION_CID || '';
+}
+
 const DEFAULT_AUTHORITY = '0x09dBe796f40ECEffEAccf243c3d758C4c1d8D87D';
 
 // ── Rate limiting for Lit endpoints ───────────────────────────
@@ -1656,12 +1665,20 @@ async function recoverCEKAndFetchData(params: DecryptParams, ipfsService?: any):
       try {
         if (effectiveBackend === 'chipotle') {
           const { recoverNonMediaCEK } = await import('./chipotle-client.js');
+          // Phase 5 cutover: the delegation in params.secureViewSession is
+          // bound to the server-configured NON_MEDIA_ACTION_CID. The
+          // sigauth Lit Action self-checks del.actionIpfsId ===
+          // jsParams.actionIpfsId, so we must forward the same CID here
+          // regardless of what the asset's PSSH metadata carries.
+          if (!NON_MEDIA_ACTION_CID) {
+            throw new Error('No Lit Action CID configured (NON_MEDIA_ACTION_CID)');
+          }
           const cekBase64 = await recoverNonMediaCEK({
             litCiphertext,
             dataToEncryptHash,
             kid,
             buyerAddress,
-            actionCid: actionCid || NON_MEDIA_ACTION_CID || undefined,
+            actionCid: NON_MEDIA_ACTION_CID,
             authority: effectiveAuthority,
             chain: effectiveChain,
             chainId: effectiveChainId,
@@ -1673,35 +1690,43 @@ async function recoverCEKAndFetchData(params: DecryptParams, ipfsService?: any):
           return cekBase64;
         }
 
-        // Datil fallback (LIT_BACKEND=datil)
+        // Datil fallback (LIT_BACKEND=datil). Phase 5 cutover: the
+        // sigauth Lit Action recovers the authorised address from
+        // delegation.coveredAddresses, so `userAddress` is no longer
+        // sent as a jsParam. NON_MEDIA_ACTION_CID is authoritative.
         const wallet = await getServerWallet();
         const client = await getLitClient();
         const sessionSigs = await getExecuteSessionSigs(client, wallet);
 
-        const effectiveActionCid = actionCid || NON_MEDIA_ACTION_CID;
-        if (!effectiveActionCid) throw new Error('No Lit Action CID configured');
+        if (!NON_MEDIA_ACTION_CID) {
+          throw new Error('No Lit Action CID configured (NON_MEDIA_ACTION_CID)');
+        }
+        if (!params.secureViewSession) {
+          // Belt-and-braces: the HTTP handler already rejects bundle-less
+          // requests, but recoverCEKAndFetchData is also called from
+          // other code paths and we want the sigauth invariant enforced
+          // at the Lit boundary too.
+          throw new Error('secureViewSession bundle is required for Lit decryption');
+        }
 
         const datilNonMediaParams: Record<string, unknown> = {
           ciphertext: litCiphertext,
           dataToEncryptHash,
           kid: kid.startsWith('0x') ? kid : `0x${kid}`,
-          actionIpfsId: effectiveActionCid,
+          actionIpfsId: NON_MEDIA_ACTION_CID,
           authority: effectiveAuthority,
           chain: effectiveChain,
           chainId: effectiveChainId,
           rpc: effectiveRpc,
-          userAddress: buyerAddress,
+          delegation: params.secureViewSession.delegationCanonical,
+          delegationSig: params.secureViewSession.delegationSig,
+          request: params.secureViewSession.requestCanonical,
+          requestSig: params.secureViewSession.requestSig,
         };
-        if (params.secureViewSession) {
-          datilNonMediaParams.delegation = params.secureViewSession.delegationCanonical;
-          datilNonMediaParams.delegationSig = params.secureViewSession.delegationSig;
-          datilNonMediaParams.request = params.secureViewSession.requestCanonical;
-          datilNonMediaParams.requestSig = params.secureViewSession.requestSig;
-        }
         const executeParams: any = {
           sessionSigs,
           jsParams: datilNonMediaParams,
-          ipfsId: effectiveActionCid,
+          ipfsId: NON_MEDIA_ACTION_CID,
         };
 
         const result = await client.executeJs(executeParams);
@@ -2369,30 +2394,38 @@ router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, 
       return;
     }
 
-    // ── Session-sig defence-in-depth (optional in 2b, required in 2d) ──
-    // When the client sends { delegation, delegationSig, request, requestSig }
-    // we verify them here so malformed / expired / replayed bundles
-    // fail fast (before spending a $0.01 Lit call). The Lit Action
-    // itself still re-verifies everything independently — this block
-    // is strictly a cost and cleanliness optimisation.
-    const hasSessionBundle =
+    // ── Session-sig enforcement (Phase 5 hard cutover) ──
+    // The secure-view session bundle is now MANDATORY. The legacy
+    // `userAddress`-in-jsParams path has been retired; any request
+    // without { delegation, delegationSig, request, requestSig } is
+    // rejected outright. The Lit Action still re-verifies everything
+    // independently — this block fails malformed / expired / replayed
+    // bundles fast, before we spend a $0.01 Lit call.
+    const hasAnyBundleField =
       delegationIn !== undefined ||
       delegationSig !== undefined ||
       sessionRequestIn !== undefined ||
       requestSig !== undefined;
 
-    if (hasSessionBundle) {
-      if (
-        delegationIn === undefined ||
-        typeof delegationSig !== 'string' ||
-        sessionRequestIn === undefined ||
-        typeof requestSig !== 'string'
-      ) {
-        res.status(400).json({
-          error: 'Incomplete session bundle: delegation, delegationSig, request, requestSig all required together',
-        });
-        return;
-      }
+    if (
+      !hasAnyBundleField ||
+      delegationIn === undefined ||
+      typeof delegationSig !== 'string' ||
+      sessionRequestIn === undefined ||
+      typeof requestSig !== 'string'
+    ) {
+      logger.warn(
+        `[SecureView] Request rejected: session bundle missing or incomplete (buyer=${buyerAddress.substring(0, 10)}…)`,
+      );
+      res.status(401).json({
+        error: 'session_bundle_required',
+        message:
+          'Secure-view requires a signed delegation + request bundle. Call POST /api/storage/lit/begin-session first.',
+      });
+      return;
+    }
+
+    {
       const delegationCanonical =
         typeof delegationIn === 'string' ? delegationIn : canonicalize(delegationIn);
       const requestCanonical =
@@ -2495,19 +2528,17 @@ router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, 
     effectiveBody.rpc = rpcUrl;
     effectiveBody.authority = authorityAddr;
 
-    // Pre-canonicalized session bundle for Phase 2c to forward to the
-    // Lit Action. Only populated when the caller included the bundle
-    // and verifySecureViewBundle accepted it above.
-    if (hasSessionBundle) {
-      effectiveBody.secureViewSession = {
-        delegationCanonical:
-          typeof delegationIn === 'string' ? delegationIn : canonicalize(delegationIn),
-        delegationSig: delegationSig as `0x${string}`,
-        requestCanonical:
-          typeof sessionRequestIn === 'string' ? sessionRequestIn : canonicalize(sessionRequestIn),
-        requestSig: requestSig as `0x${string}`,
-      };
-    }
+    // Pre-canonicalized session bundle forwarded to the Lit Action
+    // via recoverNonMediaCEK. Always populated — the bundle is
+    // mandatory (enforced above) and has been verified.
+    effectiveBody.secureViewSession = {
+      delegationCanonical:
+        typeof delegationIn === 'string' ? delegationIn : canonicalize(delegationIn),
+      delegationSig: delegationSig as `0x${string}`,
+      requestCanonical:
+        typeof sessionRequestIn === 'string' ? sessionRequestIn : canonicalize(sessionRequestIn),
+      requestSig: requestSig as `0x${string}`,
+    };
 
     // ── Rate Limiting ────────────────────────────────────
     if (!checkLitRateLimit(buyerAddress)) {

@@ -210,6 +210,41 @@
   function handleRpc(data, respond) {
     console.log('[PC2 Bridge] handleRpc:', data.method, '| embedded=' + isEmbeddedLogin());
 
+    // Secure-view (Option C session-key delegation): per-asset signing handled
+    // entirely in the parent frame. Iframes call this method instead of
+    // touching the wallet themselves, so the user sees ONE wallet prompt at
+    // session start (handled by pc2-secure-view.js) and ZERO prompts per
+    // asset open.
+    if (data.method === 'pc2_secureView_sign') {
+      var sv = window.pc2SecureView;
+      if (!sv || typeof sv.signRequest !== 'function') {
+        respond({
+          type: 'pc2-wallet-rpc-response',
+          id: data.id, method: data.method,
+          error: { code: 4900, message: 'Secure-view manager not available' }
+        });
+        return;
+      }
+      var arg = (data.params && data.params[0]) || {};
+      sv.signRequest({ kid: arg.kid, actionIpfsId: arg.actionIpfsId })
+        .then(function (bundle) {
+          console.log('[PC2 Bridge] OK pc2_secureView_sign | kid=' + arg.kid + ' | reqId=' + data.id);
+          respond({
+            type: 'pc2-wallet-rpc-response',
+            id: data.id, method: data.method, result: bundle
+          });
+        })
+        .catch(function (err) {
+          console.warn('[PC2 Bridge] pc2_secureView_sign rejected:', err && err.message, '| reqId=' + data.id);
+          respond({
+            type: 'pc2-wallet-rpc-response',
+            id: data.id, method: data.method,
+            error: { code: err.code || -32603, message: err.message || String(err) }
+          });
+        });
+      return;
+    }
+
     if (data.method === 'pc2_getSmartAccountAddress') {
       var sa = (window.user && window.user.smart_account_address) || null;
       respond({

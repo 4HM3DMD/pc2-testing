@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const REPO_ROOT = resolve(__dirname, '..', '..');
-const CLIENT_SCRIPT_PATH = join(REPO_ROOT, 'pc2-node/data/test-apps/shared/secure-view-session.js');
+const CLIENT_SCRIPT_PATH = join(REPO_ROOT, 'pc2-node/frontend/pc2-secure-view-session.js');
 const RESULTS_DIR = join(__dirname, '.results');
 
 function html() {

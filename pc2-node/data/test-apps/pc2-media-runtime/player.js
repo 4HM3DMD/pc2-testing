@@ -71,6 +71,91 @@ async function apiFetch(path, body) {
   return res;
 }
 
+// ── Secure-view session bundle (Phase 5 sigauth) ─────────────────────
+//
+// /api/media/init now requires a `secureViewSession` bundle signed by
+// the user's ephemeral P-256 key (managed by the parent PC2 frame —
+// see pc2-node/frontend/pc2-secure-view.js). Because the player only
+// learns `kid` and `actionIpfsId` after the server parses the MPD's
+// PSSH, /init runs in two phases:
+//
+//   Phase 1: POST /init without bundle → server parses MPD, caches it,
+//            returns 412 + { needsSecureView: { kid, actionIpfsId } }.
+//   Phase 2: Player asks parent to sign that {kid, actionIpfsId},
+//            re-POSTs /init with bundle attached → server reuses cached
+//            MPD, recovers CEK, returns sessionId.
+//
+// All Lit-bound signing happens in the parent (one wallet prompt at
+// session start, silent thereafter for 24h). This iframe never touches
+// window.ethereum for Lit, only for non-Lit operations.
+const SECURE_VIEW_SIGN_TIMEOUT_MS = 60000;
+
+function requestSignedBundleFromParent(kid, actionIpfsId) {
+  const provider = window.pc2Wallet
+    || (window.ethereum && window.ethereum.isPC2WalletBridge ? window.ethereum : null);
+  if (!provider || typeof provider.request !== 'function') {
+    return Promise.reject(new Error('No PC2 wallet bridge available (window.pc2Wallet missing)'));
+  }
+  return new Promise(function (resolve, reject) {
+    let settled = false;
+    const timer = setTimeout(function () {
+      if (settled) return;
+      settled = true;
+      reject(new Error('pc2_secureView_sign timed out after ' + SECURE_VIEW_SIGN_TIMEOUT_MS + 'ms'));
+    }, SECURE_VIEW_SIGN_TIMEOUT_MS);
+
+    provider.request({
+      method: 'pc2_secureView_sign',
+      params: [{ kid: kid, actionIpfsId: actionIpfsId }],
+    }).then(function (bundle) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(bundle);
+    }).catch(function (err) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(err);
+    });
+  });
+}
+
+// Performs a /api/media/init call that transparently handles the 412
+// → sign-in-parent → retry round-trip. `buildBody` MUST be a function
+// returning a fresh body each invocation (we mutate the second copy).
+async function mediaInitWithSecureView(buildBody) {
+  const firstRes = await apiFetch('/api/media/init', buildBody());
+  if (firstRes.status !== 412) return firstRes;
+
+  let payload;
+  try { payload = await firstRes.json(); } catch (_) { payload = {}; }
+  const need = payload && payload.needsSecureView;
+  if (!need || !need.kid || !need.actionIpfsId) {
+    return firstRes;
+  }
+
+  console.log('[player] /init returned 412 — requesting secure-view bundle from parent: kid=' + need.kid);
+  const bundle = await requestSignedBundleFromParent(need.kid, need.actionIpfsId);
+  // The parent bridge (pc2-secure-view.js) returns { delegation, delegationSig,
+  // request, requestSig } where `delegation` and `request` are already
+  // canonical JSON strings. The server expects them under the names
+  // `delegationCanonical` / `requestCanonical` inside a `secureViewSession`
+  // object, so we just rename here.
+  if (!bundle || !bundle.delegation || !bundle.delegationSig || !bundle.request || !bundle.requestSig) {
+    throw new Error('Parent secure-view bridge returned an incomplete bundle.');
+  }
+
+  const retryBody = buildBody();
+  retryBody.secureViewSession = {
+    delegationCanonical: bundle.delegation,
+    delegationSig: bundle.delegationSig,
+    requestCanonical: bundle.request,
+    requestSig: bundle.requestSig,
+  };
+  return apiFetch('/api/media/init', retryBody);
+}
+
 // ─── State ───────────────────────────────────────────────────────────
 let sessionId = null;
 let tracks = [];
@@ -198,19 +283,20 @@ async function refreshSession() {
       }
 
       // Re-init the session to get a new sessionId with fresh CEK
-      const initBody = {
-        channel: CHANNEL,
-        tokenId: TOKEN_ID,
-        mediaUri: MEDIA_URI,
-        tokenURI: TOKEN_URI,
-        title: TITLE,
-        authority: AUTHORITY,
-        buyerAddress: BUYER_ADDRESS,
-      };
-      if (REQUEST_ID) initBody.requestId = REQUEST_ID;
-      if (LIT_AUTH_SIG) initBody.litAuthSig = LIT_AUTH_SIG;
-
-      const initRes = await apiFetch('/api/media/init', initBody);
+      const initRes = await mediaInitWithSecureView(function () {
+        const initBody = {
+          channel: CHANNEL,
+          tokenId: TOKEN_ID,
+          mediaUri: MEDIA_URI,
+          tokenURI: TOKEN_URI,
+          title: TITLE,
+          authority: AUTHORITY,
+          buyerAddress: BUYER_ADDRESS,
+        };
+        if (REQUEST_ID) initBody.requestId = REQUEST_ID;
+        if (LIT_AUTH_SIG) initBody.litAuthSig = LIT_AUTH_SIG;
+        return initBody;
+      });
       if (!initRes.ok) {
         const err = await initRes.json().catch(() => ({ error: initRes.statusText }));
         throw new Error(err.error || 'Failed to re-initialize session');
@@ -781,7 +867,7 @@ async function init() {
     if (saAddr && BUYER_ADDRESS && saAddr.toLowerCase() === BUYER_ADDRESS.toLowerCase()) saAddr = null;
     console.log('[player] Wallet fallback — BUYER:', BUYER_ADDRESS, 'altEOA:', eoaAddr, 'altSA:', saAddr);
 
-    async function tryInit(buyerAddr) {
+    function buildInitBody(buyerAddr) {
       const body = {
         channel: CHANNEL, tokenId: TOKEN_ID, mediaUri: MEDIA_URI,
         tokenURI: TOKEN_URI, title: TITLE, authority: AUTHORITY,
@@ -789,7 +875,11 @@ async function init() {
       };
       if (REQUEST_ID) body.requestId = REQUEST_ID;
       if (LIT_AUTH_SIG) body.litAuthSig = LIT_AUTH_SIG;
-      return apiFetch('/api/media/init', body);
+      return body;
+    }
+
+    async function tryInit(buyerAddr) {
+      return mediaInitWithSecureView(function () { return buildInitBody(buyerAddr); });
     }
 
     async function isAccessError(res) {

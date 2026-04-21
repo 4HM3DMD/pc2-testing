@@ -157,7 +157,7 @@ async function main() {
     const WALLET_BRIDGE_DIR = join(__dirname, '..', 'src', 'wallet-bridge');
     if (existsSync(WALLET_BRIDGE_DIR)) {
       console.log('\n📦 Copying wallet bridge files...');
-      for (const name of ['pc2-wallet-provider.js', 'pc2-wallet-bridge.js']) {
+      for (const name of ['pc2-wallet-provider.js', 'pc2-wallet-bridge.js', 'pc2-secure-view-session.js', 'pc2-secure-view.js']) {
         const src = join(WALLET_BRIDGE_DIR, name);
         if (existsSync(src)) {
           cpSync(src, join(TARGET_DIR, name));
@@ -562,7 +562,13 @@ async function main() {
     
     <div id="app"></div>
     <script src="/bundle.min.js"></script>
-    <script src="/pc2-wallet-bridge.js"></script>
+    <script src="/pc2-wallet-bridge.js?v=20260421a"></script>
+    <!-- Secure-view session manager (Option C session-key delegation).
+         Owns the ephemeral P-256 key + 24h delegation. Iframes call
+         window.ethereum.request({ method: 'pc2_secureView_sign' }) to
+         get a signed bundle with NO wallet prompt per asset. -->
+    <script src="/pc2-secure-view-session.js?v=20260421a"></script>
+    <script src="/pc2-secure-view.js?v=20260421a"></script>
     <!-- NOTE: gui.js is already bundled into bundle.min.js - do NOT include separately -->
     
     <!-- Initialize GUI -->

@@ -417,7 +417,7 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
         const bosonService = req.app?.locals?.bosonService;
         const baseUrl = getBaseUrl(req, bosonService);
         let html = await readFileAsync(appIndexPath, 'utf-8');
-        const walletShimTag = `<script src="${baseUrl}/pc2-wallet-provider.js?v=20260402k"></script>`;
+        const walletShimTag = `<script src="${baseUrl}/pc2-wallet-provider.js?v=20260421a"></script>`;
         html = html.replace(/<head[^>]*>/i, (match: string) => `${match}\n    ${walletShimTag}`);
         res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
         res.type('html').send(html);
@@ -446,7 +446,7 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
       const bosonService = req.app?.locals?.bosonService;
       const baseUrl = getBaseUrl(req, bosonService);
       let html = await readFileAsync(filePath, 'utf-8');
-      const walletShimTag = `<script src="${baseUrl}/pc2-wallet-provider.js?v=20260402k"></script>`;
+      const walletShimTag = `<script src="${baseUrl}/pc2-wallet-provider.js?v=20260421a"></script>`;
       html = html.replace(/<head[^>]*>/i, (match: string) => `${match}\n    ${walletShimTag}`);
       res.type('html').send(html);
       return;
@@ -783,7 +783,7 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
           
           // Inject PC2 wallet provider shim into app HTML
           // This creates window.ethereum inside sandboxed iframes via postMessage bridge
-          const walletShimTag = `<script src="${baseUrl}/pc2-wallet-provider.js?v=20260402k"></script>`;
+          const walletShimTag = `<script src="${baseUrl}/pc2-wallet-provider.js?v=20260421a"></script>`;
           htmlContent = htmlContent.replace(/<head[^>]*>/i, (match: string) => `${match}\n    ${walletShimTag}`);
           
           // Per-app COOP/COEP headers for apps that need cross-origin isolation
@@ -1074,7 +1074,7 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
         const sdkUrl = `${baseUrl}/puter.js/v2`;
         let htmlContent = await readFileAsync(spaAppIndex, 'utf8');
         htmlContent = htmlContent.replace(/https?:\/\/[^'"]*\/puter\.js\/v2/g, sdkUrl);
-        const walletShimTag = `<script src="${baseUrl}/pc2-wallet-provider.js?v=20260402k"></script>`;
+        const walletShimTag = `<script src="${baseUrl}/pc2-wallet-provider.js?v=20260421a"></script>`;
         htmlContent = htmlContent.replace(/<head[^>]*>/i, (match: string) => `${match}\n    ${walletShimTag}`);
         res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
         res.type('html').send(htmlContent);

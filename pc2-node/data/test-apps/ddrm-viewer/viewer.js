@@ -30,171 +30,83 @@
 
   // ── Secure-view session (Option C session-key delegation) ────────
   //
-  // Obtains a 24h signed delegation from the user's wallet once per
-  // session, stores a non-extractable P-256 key in IndexedDB, and
-  // attaches { delegation, delegationSig, request, requestSig } to
-  // every secure-view request so the new sigauth Lit Action can
-  // verify it cryptographically — closing the userAddress spoof path.
+  // The session lifecycle (ephemeral P-256 keypair, 24h delegation,
+  // wallet personal_sign) lives ENTIRELY in the parent PC2 frame —
+  // see pc2-node/frontend/pc2-secure-view.js. This iframe only asks
+  // the parent to sign a per-asset SecureViewRequest, then attaches
+  // the returned bundle to /lit/secure-view.
   //
-  // The integration is best-effort: if the capsule has no injected
-  // wallet or the user declines to sign, requests still go through
-  // on the legacy path (14-day rollout window). After the legacy CID
-  // is removed server-side, the sigauth check becomes mandatory.
-  var sessionState = {
-    bootstrapped: false,
-    bootstrapPromise: null,
-    delegationRecord: null, // { delegation, delegationCanonical, delegationSig, expiresAt, ownerAddress }
-    keyPair: null,          // CryptoKeyPair (P-256)
-  };
+  // Architectural rationale: third-party wallet extensions (TronLink,
+  // Phantom, Rabby) hijack window.ethereum inside iframes, fanning a
+  // single signature request into N MetaMask popups that frequently
+  // never resolve. Doing the signing in the parent — exactly like
+  // every other PC2 wallet flow (login, mint, send) — makes the UX
+  // consistent ("one wallet prompt at session start, double-click to
+  // open after that") and removes the iframe wallet attack surface.
+  //
+  // The bridge call is best-effort: if the parent has no secure-view
+  // manager (older PC2 build, no injected wallet, user declined the
+  // wallet prompt), the request still goes through on the legacy path
+  // during the 14-day rollout window. After the legacy CID is removed
+  // server-side, the sigauth check becomes mandatory.
 
-  function getEthereumProvider() {
-    if (typeof window === 'undefined') return null;
-    // Standard EIP-1193 provider. Covers MetaMask, Rabby, Coinbase,
-    // crypto-wallet browsers. For Puter capsule contexts with no
-    // injected provider, this returns null and we skip the session.
-    return window.ethereum || null;
-  }
+  var SECURE_VIEW_SIGN_TIMEOUT_MS = 60000;
 
-  function providerRequest(provider, method, params) {
-    if (typeof provider.request === 'function') {
-      return provider.request({ method: method, params: params });
+  function requestSignedBundleFromParent(kid, actionIpfsId) {
+    // Prefer window.pc2Wallet — this is the unambiguous PC2 provider
+    // shim reference. window.ethereum can be hijacked by MetaMask /
+    // TronLink / Phantom inside iframes, in which case
+    // pc2_secureView_sign is rejected as an unknown method before the
+    // call ever reaches the parent bridge.
+    var provider = window.pc2Wallet
+      || (window.ethereum && window.ethereum.isPC2WalletBridge ? window.ethereum : null);
+    if (!provider || typeof provider.request !== 'function') {
+      return Promise.reject(new Error('No PC2 wallet bridge available (window.pc2Wallet missing)'));
     }
     return new Promise(function (resolve, reject) {
-      provider.sendAsync({ method: method, params: params }, function (err, res) {
-        if (err) reject(err); else resolve(res && res.result);
+      var settled = false;
+      var timer = setTimeout(function () {
+        if (settled) return;
+        settled = true;
+        reject(new Error('pc2_secureView_sign timed out after ' + SECURE_VIEW_SIGN_TIMEOUT_MS + 'ms'));
+      }, SECURE_VIEW_SIGN_TIMEOUT_MS);
+
+      provider.request({
+        method: 'pc2_secureView_sign',
+        params: [{ kid: kid, actionIpfsId: actionIpfsId }]
+      }).then(function (bundle) {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(bundle);
+      }).catch(function (err) {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(err);
       });
     });
-  }
-
-  function bootstrapSession() {
-    if (sessionState.bootstrapped) return Promise.resolve(sessionState);
-    if (sessionState.bootstrapPromise) return sessionState.bootstrapPromise;
-
-    var SVS = window.PC2SecureViewSession;
-    if (!SVS) {
-      sessionState.bootstrapped = true;
-      return Promise.resolve(sessionState);
-    }
-
-    sessionState.bootstrapPromise = (function () {
-      return SVS.getActiveDelegation().then(function (active) {
-        if (!active) return null;
-        return SVS.loadSessionKey().then(function (keyPair) {
-          if (!keyPair) return null;
-          sessionState.delegationRecord = active;
-          sessionState.keyPair = keyPair;
-          return sessionState;
-        });
-      }).then(function (reused) {
-        if (reused) return reused;
-
-        var provider = getEthereumProvider();
-        if (!provider) {
-          console.warn('[Viewer] No injected wallet provider detected; skipping session bootstrap.');
-          return null;
-        }
-
-        // Generate ephemeral key first — server needs sessionPublicKey
-        // upfront so it can bind it into the delegation payload it
-        // returns. ownerAddress is derived server-side from the
-        // authenticated PC2 session; client cannot forge it.
-        return SVS.createEphemeralKey().then(function (kp) {
-          return authFetch('/api/storage/lit/begin-session', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ sessionPublicKey: kp.sessionPublicKey }),
-          }).then(function (resp) {
-            if (!resp.ok) throw new Error('begin-session failed: ' + resp.status);
-            return resp.json();
-          }).then(function (data) {
-            var delegation = data && data.delegation;
-            var canonical = data && data.delegationCanonical;
-            if (!delegation || !canonical) throw new Error('begin-session returned invalid payload');
-            var ownerAddress = delegation.ownerAddress;
-            // personal_sign requires an account param. Covered paths:
-            //  - If provider.selectedAddress matches, use it.
-            //  - Otherwise eth_requestAccounts[0] and verify match.
-            return providerRequest(provider, 'eth_accounts', []).then(function (res) {
-              var accounts = Array.isArray(res) ? res : [];
-              if (!accounts.length) {
-                return providerRequest(provider, 'eth_requestAccounts', []).then(function (r2) {
-                  return Array.isArray(r2) ? r2 : [];
-                });
-              }
-              return accounts;
-            }).then(function (accounts) {
-              if (!accounts.length) throw new Error('No wallet account authorized');
-              var signerAddr = accounts[0];
-              if (signerAddr.toLowerCase() !== String(ownerAddress).toLowerCase()) {
-                throw new Error('Wallet account does not match authenticated PC2 session');
-              }
-              return providerRequest(provider, 'personal_sign', [canonical, signerAddr]);
-            }).then(function (delegationSig) {
-              return authFetch('/api/storage/lit/complete-session', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  delegation: canonical, // send canonical string form
-                  delegationSig: delegationSig,
-                }),
-              }).then(function (resp) {
-                if (!resp.ok) throw new Error('complete-session failed: ' + resp.status);
-                var record = {
-                  delegation: delegation,
-                  delegationCanonical: canonical,
-                  delegationSig: delegationSig,
-                  sessionPublicKey: kp.sessionPublicKey,
-                  ownerAddress: ownerAddress,
-                  expiresAt: delegation.expiresAt,
-                };
-                return Promise.all([
-                  SVS.saveSessionKey(kp.keyPair),
-                  SVS.persistDelegation(record),
-                ]).then(function () {
-                  sessionState.keyPair = kp.keyPair;
-                  sessionState.delegationRecord = record;
-                  renderSessionIndicatorIfAvailable();
-                  return sessionState;
-                });
-              });
-            });
-          });
-        }).catch(function (err) {
-          console.warn('[Viewer] Session bootstrap failed — falling back to legacy:', err);
-          return null;
-        });
-      }).then(function (result) {
-        sessionState.bootstrapped = true;
-        return result || sessionState;
-      });
-    })();
-
-    return sessionState.bootstrapPromise;
   }
 
   function augmentBodyWithSession(body) {
-    var SVS = window.PC2SecureViewSession;
-    if (!SVS) return Promise.resolve(body);
-    return bootstrapSession().then(function () {
-      var rec = sessionState.delegationRecord;
-      var kp = sessionState.keyPair;
-      if (!rec || !kp || !body.kid) return body;
-      return SVS.signRequest(kp, {
-        kid: body.kid,
-        actionIpfsId: rec.delegation.actionIpfsId,
-      }).then(function (signed) {
-        // Send canonical string forms so the server uses the exact
-        // bytes over which signatures were produced.
-        body.delegation = rec.delegationCanonical;
-        body.delegationSig = rec.delegationSig;
-        body.request = signed.requestCanonical;
-        body.requestSig = signed.requestSig;
+    if (!body || !body.kid) return Promise.resolve(body);
+    // actionIpfsId is bound into the delegation server-side; the parent
+    // already knows it from /lit/begin-session, so we don't need to
+    // pass it from here. We forward whatever the asset metadata gave
+    // us (if any) so the parent can sanity-check.
+    return requestSignedBundleFromParent(body.kid, body.actionIpfsId)
+      .then(function (bundle) {
+        if (!bundle) return body;
+        body.delegation = bundle.delegation;
+        body.delegationSig = bundle.delegationSig;
+        body.request = bundle.request;
+        body.requestSig = bundle.requestSig;
         return body;
-      }).catch(function (err) {
-        console.warn('[Viewer] Failed to sign per-request payload; sending without session:', err);
+      })
+      .catch(function (err) {
+        console.warn('[Viewer] Secure-view session unavailable; falling back to legacy:', err && err.message);
         return body;
       });
-    });
   }
 
   function secureViewPost(body) {
@@ -204,22 +116,6 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(finalBody),
       });
-    });
-  }
-
-  function renderSessionIndicatorIfAvailable() {
-    var SVS = window.PC2SecureViewSession;
-    var container = document.getElementById('session-indicator');
-    if (!SVS || !container) return;
-    SVS.renderSessionIndicator({
-      container: container,
-      serverRevokeUrl: '/api/storage/lit/revoke-session',
-      onRevoke: function () {
-        sessionState.bootstrapped = false;
-        sessionState.bootstrapPromise = null;
-        sessionState.delegationRecord = null;
-        sessionState.keyPair = null;
-      },
     });
   }
 
@@ -337,8 +233,6 @@
     $assetType.textContent = assetParams.mimeType;
 
     if (!isCleartext) disableContextMenu();
-
-    renderSessionIndicatorIfAvailable();
 
     if (isCleartext && (cleartextFileUrl || cleartextCid)) {
       loadCleartext();

@@ -166,12 +166,15 @@
   <script src="lib/jszip.min.js" defer></script>
 
   <!-- Specialized readers (register on window) -->
-  <script src="reader-epub.js" defer></script>
-  <script src="reader-cbz.js" defer></script>
+  <script src="reader-epub.js?v=20260421a" defer></script>
+  <script src="reader-cbz.js?v=20260421a" defer></script>
 
-  <!-- Secure-view session (Option C session-key delegation) -->
-  <script src="lib/secure-view-session.js" defer></script>
+  <!-- Secure-view session (Option C): primitives + manager live in the
+       PARENT frame (pc2-secure-view-session.js + pc2-secure-view.js,
+       loaded by pc2-node/frontend/index.html). The viewer iframe just
+       calls window.ethereum.request({ method: 'pc2_secureView_sign' })
+       and gets back a signed bundle — no wallet UI inside this iframe. -->
 
-  <script src="viewer.js" defer></script>
+  <script src="viewer.js?v=20260421a" defer></script>
 </body>
 </html>
