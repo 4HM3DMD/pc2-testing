@@ -261,6 +261,41 @@ If telemetry doesn't hit the 99% threshold by T+7 / T+14, **don't flip** — ext
 
 ---
 
+## What's hard-fixed vs. what's gated by a kill-switch
+
+**Important read for anyone worried that "default off" means "security is off".** Most of the fixes are unconditional — there is no switch and they cannot be turned off. Two specific behaviors are gated by a kill-switch purely so legacy v1.1 clients keep working during the rollout window. The high-severity primitives (RCE, key disclosure, mock-token chain) are all in the unconditional set.
+
+### Hard-fixed (no switch — security is enforced 100% of the time, day one)
+
+| Finding / change | What's hard-fixed | Where |
+|---|---|---|
+| **SEC-2** vless RCE | `execSync` replaced with `execFileSync` (argv form, no shell). Plus 8 other `execSync` sites in the gateway converted to `execFileSync`. | `deploy/web-gateway/index.js` — `rg 'execSync\(' deploy/web-gateway` returns 0 |
+| **SEC-3c** `mock-token` chain | Dangerous code branches physically deleted (~88 LOC) | `pc2-node/src/api/middleware.ts`, `whoami.ts`, `info.ts` |
+| **SEC-7** mnemonic disclosure | `requireSetupAuth` middleware — loopback OR `firstRunToken` always required | `pc2-node/src/api/setup.ts` |
+| **SEC-10** `/api/update/install` RCE | `authenticate, requireOwner, installThrottle` always required | `pc2-node/src/api/update.ts:150` |
+| Scoped session tokens | New token type with DB column; iframe apps always get short-lived scoped tokens | `pc2-node/src/api/middleware.ts` + migration #29 |
+| `trust proxy` hardening | Always uses `req.socket.remoteAddress` for security decisions | `pc2-node/src/api/index.ts` |
+| Wave 4 gitleaks | Always runs in CI on every PR + every push to long-lived branches | `.github/workflows/secret-scan.yml` |
+
+### Gated by a kill-switch (compatibility valve for the rollout window)
+
+| Finding / change | Switch | Default | What "off" actually does | What "on" enforces |
+|---|---|---|---|---|
+| **SEC-3a** SIWE on `/auth/particle` | `config.security.siweRequired` | `false` | Signature is **verified** if supplied (logged) but not **required**. Legacy v1.1 client calls still go through. | Missing/invalid signature → 401. New ownership claims require loopback OR `firstRunToken` OR a verified SIWE. |
+| **SEC-8/9** WG/AWG/VLESS provisioning | `GW_AUTH_REQUIRED` env var | `false` | Token presence is **logged for telemetry** but missing/wrong tokens still get `action=allow`. | Missing/wrong tokens → 401. |
+
+### Residual risk during the log-only window (and why it's acceptable)
+
+| Theoretical attack in log-only mode | Severity | Why it's bounded |
+|---|---|---|
+| Attacker claims a fresh v1.2 node remotely without a SIWE signature | Low/Medium | Standard `install-pc2.sh` mints a `firstRunToken` — legitimate remote installs require it. Loopback installs are unaffected. Only a v1.2 node deliberately exposed publicly *without* using the install script and *without* loopback access is in this window. The original CRITICAL escalation path (claim → vless RCE) is hard-fixed. |
+| Attacker re-keys or deletes a WG peer at the gateway | Medium | DoS on the victim's tunnel. RCE path (Finding #2) and TLS-key exfil path are hard-fixed regardless. |
+| Attacker registers a vless username they don't own | Low | DoS-tier impact. The RCE that made Finding #2 CRITICAL is dead. |
+
+In short: **every CRITICAL-severity finding has its CRITICAL component hard-fixed**. The kill-switches gate the remaining defence-in-depth layers that need legacy clients to upgrade before they can be enforced.
+
+---
+
 ## Roll-back paths (every fix is opt-in or revertable)
 
 - **Wave 1 (`mock-token` removal)**: revert commit `80168f706`. Migration #29 (`sessions.scope`) is additive — reverting the binary leaves the columns NULL, which is the legacy contract.
