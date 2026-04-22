@@ -1,425 +1,382 @@
 # Wave 3 — Web-Gateway Lockdown (per-node provisioning tokens)
 
 **Status**: ✅ Done — shipped 2026-04-22
-**Findings closed**: SEC-2 (Critical), SEC-8 (High), SEC-9 (High), SEC-INFRA-GW-AUTH (High)
-**Bonus closed**: SEC-3e (Medium — username squat at registration time)
-**Kill-switch**: `GW_AUTH_REQUIRED=false` (default) → log-only mode for graceful rollout
+**Findings closed**: SEC-2 (Critical), SEC-8 (High), SEC-9 (High), SEC-INFRA-GW-AUTH (High); incidentally SEC-3e (out-of-audit username squat)
+**Out of scope**: Wave 4 (CI secret-scan), Wave 5 (DID JWT verify)
 
 ---
 
-## TL;DR for the busy reviewer
+## TL;DR for a 9th grader
 
-The web-gateway (`deploy/web-gateway/index.js`) is the public-facing
-HTTP server that PC2 nodes call to register usernames, provision
-WireGuard / AmneziaWG / VLESS-Reality peers, and delete them. Until
-this commit, every endpoint that mutated a per-user resource trusted
-**only the username string** for authorisation. Anyone who knew a
-victim's username (it's literally the public part of their `*.ela.city`
-URL) could:
+Before this commit, every PC2 node talked to the supernode gateway
+without any password. The supernode trusted whoever asked. So if I
+knew your username (a public string like `alice`), I could:
 
-1. **Re-key** their WireGuard tunnel and steal the connection (SEC-8)
-2. **Delete** their WireGuard peer and boot them off (SEC-9)
-3. **Inject a shell command** into `/etc/vless-reality/manage-peers.sh`
-   via the `username` field on `/api/vless/register` (SEC-2 — RCE)
-4. **Re-claim** their username and point it at any URL the attacker
-   controlled (SEC-3e — found during this wave's survey)
+- Ask the supernode to swap your VPN keys for mine and steal your
+  tunnel.
+- Tell it to delete your VPN account.
+- Send a username with a backslash in it that ran my code on the
+  supernode (the worst one — full server takeover).
 
-The fix is a per-node 256-bit provisioning token, minted on the FIRST
-`/api/register` call for a username and required in the
-`X-Provisioning-Token` header on every subsequent gateway call that
-acts on that username. Tokens are stored hashed (SHA-256) on the
-gateway and plaintext (mode 0600) on the PC2 node. Token verification
-is constant-time, username-bound, and fail-closed.
+Now, the **first** time your node introduces itself the supernode
+gives it a long random secret token (256 bits). Your node saves it
+to disk so only you can read it (mode `0600`). Every later message
+to the supernode includes that token in a header. The supernode
+checks it before doing anything. Wrong token → 401. No token →
+either 401 (strict mode) or "I'll just log this for now" (default).
 
-The `GW_AUTH_REQUIRED=false` kill-switch keeps the new gateway code
-backwards compatible with old PC2 clients during rollout — every check
-runs and writes `[gw-auth] handler=… username=… token=… enforce=false
-action=allow|deny` telemetry, but does not actually 401 until the
-operator flips `GW_AUTH_REQUIRED=true`.
+The tokens are stored as **hashes** on the supernode (like a
+password), so even if someone steals the gateway's disk they can't
+replay any tokens. Each token is bound to one username — so your
+token can't be used to act on someone else's account.
+
+To keep this from breaking anyone on rollout day, the strict 401s
+are **off by default** (`GW_AUTH_REQUIRED=false`). The supernode
+checks the token but allows the call through and writes a
+`[gw-auth]` log line. Operators deploy the supernode change first,
+let every PC2 node roll out the client change at its own pace, watch
+the logs, and **only then** flip the kill-switch to strict.
 
 ---
 
 ## What this wave does
 
-### 1. ProvisioningTokenStore + verifier (SEC-INFRA-GW-AUTH)
+### 1. New helper — `deploy/web-gateway/lib/provisioning-token.js`
 
-**New file**: `deploy/web-gateway/lib/provisioning-token.js`
-**Forced by spec**: `pc2-node/tests/security/requireProvisioningToken.test.js` (12 active cases, all pass)
+A small, self-contained `ProvisioningTokenStore` class plus a
+top-level `verifyProvisioningToken({ token, username, store })`
+helper. The contract was locked by
+`pc2-node/tests/security/requireProvisioningToken.test.js` (12 active
+test cases). All pass.
 
-Two exports:
+Security properties enforced:
 
-- `class ProvisioningTokenStore` — file-backed
-  (`/root/pc2/web-gateway/data/provisioning-tokens.json`,
-  mode 0600). API: `mint(username)`, `rotate(username)`,
-  `verify(token, username)`, `revoke(username)`, `has(username)`,
-  `toJSON()`.
-- `function verifyProvisioningToken({ token, username, store })` —
-  the per-handler check used inside the gateway.
+- 256-bit (64-hex-char) cryptographically random tokens.
+- Stored as **SHA-256 hash** on disk; never plaintext. Verified by
+  the test suite (`hashes stored, not plaintext` case).
+- Constant-time comparison via `crypto.timingSafeEqual`.
+- Username-bound — token for `node-A` cannot authorise a call for
+  `node-B`. Verified by the `cross-account attack` test case.
+- `mint()` **refuses** to overwrite an existing token (would let an
+  attacker re-claim a victim's username). Use `rotate()` to renew.
+- File-backed persistence via `persistencePath` constructor arg.
+  Atomic write (`tmp` → `rename`), mode `0600`, gracefully ignores
+  corrupt file on load.
 
-Properties (all enforced by the spec test):
+### 2. Gateway integration — `deploy/web-gateway/index.js`
 
-- Tokens are 256-bit (64 hex chars). 128-bit security floor against
-  brute force; 256-bit defends against future quantum (Grover).
-- Stored as SHA-256 hash, **never plaintext**. If an attacker reads
-  the JSON file they see only hashes and cannot replay them
-  anywhere.
-- `verify()` is **constant-time** (uses `crypto.timingSafeEqual`).
-- **Username-bound**: a token minted for `node-A` returns `false`
-  when presented as `node-B`'s authorisation. Limits blast radius
-  to one account if a single PC2 node's disk is read.
-- `verify()` returns `false` (never throws) on any malformed input
-  — keeps gateway handlers simple (no try/catch around the check).
-- `mint()` for an already-existing username **throws**. Renewal is
-  the explicit `rotate()` flow. This blocks the obvious attack
-  "re-call /api/register to overwrite the victim's token".
-- File persistence uses atomic write (`writeFileSync` to `.tmp` then
-  `rename`) so a partial write can't corrupt the store.
+Added at module scope:
 
-### 2. /api/register mint flow (SEC-3e bonus)
+```js
+const provisioningTokenStore = new ProvisioningTokenStore(PROVISIONING_TOKEN_FILE);
+const GW_AUTH_REQUIRED = process.env.GW_AUTH_REQUIRED === 'true';
 
-**Modified**: `deploy/web-gateway/index.js` — the `/api/register`
-handler is now a four-case state machine:
-
-| Case | Username known? | Token in store? | Header? | Outcome |
-|------|------|------|------|------|
-| A | no | no | — | mint + return token |
-| B | yes | yes | matching | accept update; no new token |
-| C | yes | yes | missing/wrong | strict: 401; log-only: allow + telemetry |
-| D | yes | no | — | strict: 401; log-only: mint grandfather + return |
-
-Case D is the migration path. Existing nodes registered before Wave
-3 don't have a token bound; their next boot in log-only mode mints
-one, which they persist locally. Once telemetry shows every node has
-been through Case D once, the operator can safely flip to strict.
-
-Token is returned as `provisioningToken` in the response body **only
-on the call that minted it**. PC2 client side immediately persists
-to `$PC2_DATA/gateway-tokens.json` (mode 0600). The plaintext is
-**never** logged (the response logger redacts the field).
-
-### 3. SEC-2 — execSync → execFileSync sweep + token gate
-
-**Critical bug** (was at L2686 of the original file):
-
-```javascript
-// BEFORE
-uuid = execSync(
-  `/etc/vless-reality/manage-peers.sh add "${normalizedUsername}"`,
-  { stdio: 'pipe', timeout: 10000 }
-).toString().trim();
+function requireProvisioningToken(req, res, username, handlerLabel) {
+  // returns true=continue, false=already responded with 401
+  // log-only mode always returns true; just emits telemetry
+}
 ```
 
-Username is user-supplied. Shell quoting was the only thing between
-an attacker and arbitrary RCE on the supernode as root (the gateway
-runs as root because it needs to manage WireGuard interfaces). A
-payload like `"; rm -rf / #` would have escaped the quotes, called
-`rm -rf /`, then commented out the rest.
+A second helper, `checkPerUsernameDeleteRate(username)`, throttles
+WG/awg peer deletion to 3/min per username (independent of the
+existing per-IP rate limiter, so a runaway script can't lock out the
+legitimate owner from many client IPs).
 
-```javascript
-// AFTER (defence in depth — three layers)
-// Layer 1: strict username regex BEFORE the shell ever sees it
-if (!/^[a-z0-9][a-z0-9_-]{2,29}$/.test(normalizedUsername)) {
-    res.writeHead(400, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ error: "Invalid username (...)" }));
-    return;
-}
+### 3. `/api/register` — token mint flow
 
-// Layer 2: provisioning-token gate — caller must own this username
+The first endpoint a PC2 node hits. Now handles four cases
+explicitly:
+
+- **A** New username — mint a 64-hex token, store the hash, return
+  the plaintext **once** in the response body's `provisioningToken`
+  field.
+- **B** Re-registration **with** correct token — accept and update
+  endpoint info. Token is unchanged. Plaintext NOT returned again.
+- **C** Re-registration **with wrong/missing** token — log-only
+  mode: allow + telemetry. Strict mode: 401.
+- **D** Re-registration with **no token bound yet** (legacy data
+  on supernode pre-Wave 3) — log-only: auto-grandfather (mint a new
+  token + return it once so the legitimate owner gets onboarded on
+  the next boot). Strict: 401 (operator must manually reset).
+
+Case D is what makes the rollout safe for existing nodes: when the
+gateway boots after the upgrade, no one has tokens yet, so the very
+next `/api/register` from each PC2 node mints them automatically.
+
+### 4. SEC-2 — Shell injection on `/api/vless/register`
+
+Pre-fix line (old, scary):
+
+```js
+uuid = execSync(`/etc/vless-reality/manage-peers.sh add "${normalizedUsername}"`, ...);
+```
+
+Fix:
+
+```js
+// Defence layer 1 — pre-shell username regex
+if (!/^[a-z0-9][a-z0-9_-]{2,29}$/.test(normalizedUsername)) return 400;
+
+// Defence layer 2 — token gate
 if (!requireProvisioningToken(req, res, normalizedUsername, 'vless/register')) return;
 
-// Layer 3: execFileSync — array args, no shell, no template interpretation
-uuid = execFileSync(
-    '/etc/vless-reality/manage-peers.sh',
-    ['add', normalizedUsername],
-    { stdio: 'pipe', timeout: 10000 }
-).toString().trim();
+// Defence layer 3 — execFileSync passes args as an array, no shell
+uuid = execFileSync('/etc/vless-reality/manage-peers.sh',
+                    ['add', normalizedUsername], { ... }).toString().trim();
 ```
 
-The full sweep (9 sites): every `execSync(\`...\`)` template literal
-in the gateway has been replaced with `execFileSync(cmd, [args])`.
-Even though the other 8 use server-controlled inputs, the cost of
-hardening is zero and the rule "no template literals into a shell"
-is now uniform. Sites covered: WireGuard interface check, WG add
-peer, WG remove peer, AmneziaWG variants, `wg show`/`awg show`
-dumps, `pgrep -x sing-box`.
+Each layer alone would close the bug; all three together is
+defence in depth. We also swept the eight other `execSync` sites in
+the file and converted them to `execFileSync`. They all use
+server-controlled inputs (interface names from env vars, public
+keys we generated ourselves, hard-coded process names) so the fix
+is a hardening, not a bug fix — but cheap to do once and prevents
+any future drift.
 
-### 4. SEC-8 — token gate on WireGuard re-key
+### 5. SEC-8 — Re-key gating on `/api/wg/register` + `/api/awg/register`
 
-**Modified handlers**: `/api/wg/register`, `/api/awg/register`
+Pre-fix: anyone who knew a victim's username could POST a new
+public key and the gateway would silently swap it in, hijacking the
+tunnel.
 
-Both routes accept an `existingPeer` re-registration that overwrites
-the stored public key. Pre-fix, anyone who knew a username could
-push their own pubkey and intercept the tunnel. Now the same
-provisioning-token check runs on both new and re-key paths. Same
-kill-switch behaviour as everywhere else.
+Fix: token check at the start of the handler. The legitimate node
+always has its token (from the `/api/register` flow); an attacker
+guessing a username doesn't.
 
-### 5. SEC-9 — token gate + per-username throttle on peer DELETE
+### 6. SEC-9 — Peer deletion gating on `DELETE /api/wg/peer/{u}`
 
-**Modified handler**: `DELETE /api/wg/peer/{username}`
-**New handler**: `DELETE /api/awg/peer/{username}` (was missing — operator-only via SSH before)
+Pre-fix: open delete; anyone who knew the username could remove a
+victim's WG peer and force them off the tunnel.
 
-Pre-fix the WG delete required nothing. A single `curl -X DELETE`
-booted any user off the tunnel. Now:
+Fix: token check + per-username rate limit (3 deletes/min). Even
+the legitimate owner can't churn the WG interface for themselves.
 
-- `requireProvisioningToken(...)` gates the call
-- Per-username throttle (`PER_USERNAME_DELETE_MAX = 3 / minute`)
-  prevents a runaway script from churning the WG interface even if
-  the legit owner runs it. The throttle is independent from the
-  per-IP rate limit so a multi-IP attacker can't blow through it.
+### 7. Symmetric `DELETE /api/awg/peer/{u}`
 
-The new `DELETE /api/awg/peer/{u}` endpoint is symmetric — same
-gating, same throttle. Closes a longstanding "operator must SSH in
-to remove an AWG peer" gap and prevents future drift between the
-two surfaces.
+Pre-fix the AmneziaWG side had no delete endpoint at all —
+operators had to SSH into the supernode to clean up stale awg
+peers. Adding it now (gated identically) keeps the wg/awg surfaces
+symmetric and stops future drift where someone forgets which one
+needs the same fix.
 
-### 6. PC2 client side — GatewayTokenStore + header injection
+### 8. PC2-side client — `pc2-node/src/services/gateway/GatewayTokenStore.ts`
 
-**New file**: `pc2-node/src/services/gateway/GatewayTokenStore.ts`
+A small singleton, instantiated once in `BosonService` and passed
+to every service that calls a gateway endpoint. Stores a
+`Map<gatewayBaseUrl, plaintextToken>` because each supernode mints
+its own independent token (PC2 nodes register on the primary plus
+N secondaries via the dual-write pattern).
 
-A per-gateway token cache. Each supernode mints its own token
-independently, so the store is keyed by gateway base URL:
+File: `$PC2_DATA/gateway-tokens.json`, mode `0600`, atomic write.
 
-```json
-{
-  "tokens": {
-    "https://69.164.241.210": "dab3...e615",
-    "https://38.242.211.112": "8215...8c0",
-    "https://contabo.example.com": "..."
-  }
-}
+Helper: `headersFor(url, baseHeaders)` — merges the matching token
+into a header object as `X-Provisioning-Token`. Returns the base
+headers unchanged if no token is stored for that URL (the very
+first `/api/register` call, before any token has been minted).
+
+### 9. Wired into four services
+
+- `UsernameService.register` / `updateEndpoint` /
+  `dualWriteToSecondaries` — capture `provisioningToken` from the
+  response; resend on subsequent calls. Token is **redacted** in
+  the response log.
+- `WireGuardService.provision` — attach token on
+  `/api/wg/register`.
+- `AmneziaWGService.provision` — attach token on
+  `/api/awg/register`.
+- `VLESSRealityService.provision` — attach token on
+  `/api/vless/register`.
+
+Each of these accepts the store via an **optional** config field
+(`gatewayTokenStore?: GatewayTokenStore`). If undefined the code
+silently falls back to the unauthenticated request (legacy
+behaviour). This means:
+
+- Existing tests that build these services with minimal config keep
+  passing — no test plumbing changes required.
+- Operators can hot-rollback by restarting the PC2 node without
+  the store; the gateway will treat the call as Case D (legacy
+  grandfathering) when log-only, or 401 when strict.
+
+---
+
+## Telemetry log format
+
+Every check produces a single greppable line:
+
+```
+[gw-auth] handler=<route> username=<u> token=<present|missing|wrong> enforce=<bool> action=<allow|deny>
 ```
 
-API: `get(gatewayUrl)`, `set(gatewayUrl, token)`,
-`headersFor(gatewayUrl, baseHeaders)` — the latter returns the
-inbound headers plus `X-Provisioning-Token` if a token is stored,
-or just the inbound headers if not (so the very first
-`/api/register` call legitimately goes through unauthenticated).
+Plus a startup line:
 
-**Plumbed into**:
+```
+[gw-auth] Provisioning-token store loaded from <path> (<n> records). Enforcement: <STRICT|log-only>.
+```
 
-- `BosonService` (single instance constructed once per PC2 boot)
-- `UsernameService.register()` — captures the response token
-- `UsernameService.updateEndpoint()` — sends the stored token,
-  captures any new one (Case D grandfather path)
-- `UsernameService.dualWriteToSecondaries()` — same per-secondary
-- `WireGuardService.provision()` — header on `/api/wg/register`
-- `AmneziaWGService.provision()` — header on `/api/awg/register`
-- `VLESSRealityService.provision()` — header on `/api/vless/register`
+Plus, on `/api/register`, one of:
 
-Plaintext tokens are stored on disk at mode 0600 — only the PC2
-process owner can read them. Plaintext is never logged (a redaction
-helper in `UsernameService` strips the field before logging).
+```
+[gw-auth] handler=register username=<u> action=mint-new
+[gw-auth] handler=register username=<u> action=mint-grandfather   (Case D, log-only)
+[gw-auth] handler=register username=<u> token=present action=allow
+```
+
+### Telemetry-driven rollout decision
+
+Once you see roughly:
+
+```
+$ journalctl -u pc2-gateway --since '24h ago' | grep gw-auth | wc -l        # total checks
+$ journalctl -u pc2-gateway --since '24h ago' | grep 'token=present' | wc -l # rolled-out
+$ journalctl -u pc2-gateway --since '24h ago' | grep 'token=missing' | wc -l # not yet
+```
+
+…and `present / total` is ≥ 0.99, set `GW_AUTH_REQUIRED=true` and
+restart the gateway. Done.
+
+---
+
+## Smoke matrix executed at CP-5
+
+Local gateway booted on `127.0.0.1:18080` with isolated state in
+`/tmp/gw-smoke/`. Both modes tested.
+
+### Log-only mode (`GW_AUTH_REQUIRED` unset / `false`)
+
+| # | Test | Expected | Got |
+|---|------|----------|-----|
+| 1 | First `/api/register` for `alice-test` | 200 + 64-hex token | ✅ `dab31ed6…e615` |
+| 2 | Re-register `alice` with correct token | 200, no new token in body | ✅ |
+| 3 | Re-register `alice` without token | 200 + telemetry `token=missing action=allow` | ✅ |
+| 4 | Re-register `alice` with wrong token | 200 + telemetry `token=wrong action=allow` | ✅ |
+| 5 | First `/api/register` for `bob-test` | 200, distinct token | ✅ tokens differ |
+| 6 | Token persistence file inspected | only SHA-256 hashes, never plaintext | ✅ |
+
+### Strict mode (`GW_AUTH_REQUIRED=true`)
+
+| # | Test | Expected | Got |
+|---|------|----------|-----|
+| A | Re-register known user without token | 401 | ✅ `username already claimed; X-Provisioning-Token header required to re-register` |
+| B | Re-register known user with wrong token | 401 | ✅ same message |
+| C | `DELETE /api/wg/peer/alice-test` no token | 401 | ✅ `X-Provisioning-Token header missing or does not match this username` |
+| D | `DELETE /api/wg/peer/random-user` (never registered) | 401 | ✅ `no provisioning token has been issued for this username; call /api/register first` |
+| E | `/api/register` for new username `charlie-test` | 200 + token | ✅ Case A still works in strict |
+| F | Re-register `charlie` with correct token | 200 | ✅ |
+
+Telemetry log shows clear `enforce=true action=deny` lines for
+every attack — what an operator alerts on.
 
 ---
 
 ## Files
 
 ### Created
-- `deploy/web-gateway/lib/provisioning-token.js` (Store + verifier)
-- `pc2-node/src/services/gateway/GatewayTokenStore.ts` (PC2 cache)
+
+- `deploy/web-gateway/lib/provisioning-token.js` — store + verifier (~190 LOC)
+- `pc2-node/src/services/gateway/GatewayTokenStore.ts` — PC2-side per-gateway token cache (~95 LOC)
 - `.cursor/tasks/SEC-2026-04-21-PC2-AUDIT/WAVE-3-GATEWAY-LOCKDOWN.md` (this file)
 
-### Modified — gateway side
-- `deploy/web-gateway/index.js`
-    - import `ProvisioningTokenStore`, `getProvisioningTokenFromRequest`, `execFileSync`
-    - boot-time store load + `[gw-auth]` log line announcing record count + mode
-    - `requireProvisioningToken(req, res, username, label)` middleware-style helper
-    - `checkPerUsernameDeleteRate()` helper for SEC-9 throttle
-    - `/api/register` four-case state machine (Case A/B/C/D)
-    - `/api/wg/register` token gate (new + re-key paths)
-    - `/api/awg/register` token gate (new + re-key paths)
-    - `/api/vless/register` token gate + strict username regex + execFileSync
-    - `DELETE /api/wg/peer/{u}` token gate + per-username throttle
-    - `DELETE /api/awg/peer/{u}` (NEW)
-    - 9 `execSync` sites converted to `execFileSync`
+### Modified
 
-### Modified — PC2 client side
+- `deploy/web-gateway/index.js` — token store init, `requireProvisioningToken` middleware, `/api/register` mint flow, SEC-2 fix, SEC-8 gates, SEC-9 gates, symmetric `DELETE /api/awg/peer/{u}`, 9 `execSync`→`execFileSync` conversions
 - `pc2-node/src/services/boson/BosonService.ts` — instantiate `GatewayTokenStore`, plumb to four sub-services
-- `pc2-node/src/services/boson/UsernameService.ts` — capture token; resend on update + dual-write
-- `pc2-node/src/services/wireguard/WireGuardService.ts` — header on provision call
-- `pc2-node/src/services/wireguard/AmneziaWGService.ts` — header on provision call
-- `pc2-node/src/services/vless/VLESSRealityService.ts` — header on provision call
+- `pc2-node/src/services/boson/UsernameService.ts` — capture / resend token in register, updateEndpoint, dualWriteToSecondaries; redact in logs
+- `pc2-node/src/services/wireguard/WireGuardService.ts` — `headersFor()` on `/api/wg/register`
+- `pc2-node/src/services/wireguard/AmneziaWGService.ts` — `headersFor()` on `/api/awg/register`
+- `pc2-node/src/services/vless/VLESSRealityService.ts` — `headersFor()` on `/api/vless/register`
+
+### Tests un-skipped
+
+- `pc2-node/tests/security/requireProvisioningToken.test.js` — 12 active cases all pass
 
 ---
 
-## Test results
+## Deploy plan
 
-```
-$ npm run test:security
-# tests 79
-# pass 62
-# fail 0
-# skipped 17  (Wave 5 SEC-11 + 1 manual integration)
+1. **Deploy gateway code to one supernode first** — pick the
+   lowest-traffic one (e.g. `38.242.211.112` Contabo).
+   ```
+   ./deploy/web-gateway/deploy.sh 38.242.211.112
+   ```
+   The deploy script `scp`s `index.js`, `package.json`, and
+   recurses into `lib/` (already updated for SEC-INFRA-GW-AUTH);
+   then runs `npm install && systemctl restart pc2-gateway`.
 
-$ npx tsc -p pc2-node --noEmit
-(0 errors)
-```
+2. **Watch `[gw-auth]` lines** in journalctl for ≥ 24 h:
+   ```
+   ssh root@38.242.211.112 'journalctl -u pc2-gateway -f | grep gw-auth'
+   ```
+   Expected: every PC2 node that hits this gateway lands on Case D
+   (`action=mint-grandfather`) once, then on Case B
+   (`token=present action=allow`) on every subsequent boot.
 
-`requireProvisioningToken.test.js`: 12/12 active cases pass — verifies
-all of the security-contract properties listed in section 1.
+3. **Roll out to the other supernodes** at any pace:
+   ```
+   ./deploy/web-gateway/deploy.sh 69.164.241.210   # Linode
+   ./deploy/web-gateway/deploy.sh <interserver-ip>
+   ```
+   No coordination required — log-only mode means PC2 nodes that
+   haven't rolled out their client side yet still work.
 
-### Local gateway smoke matrix (port 18080)
+4. **Roll out PC2-node binary** (the client side that captures and
+   sends the token). Rollout pace is independent of the gateway —
+   each PC2 node will:
+   - On first boot post-upgrade: hit `/api/register` without a
+     token (Case D on every gateway it knows about), receive a
+     fresh token from each supernode, persist them.
+   - On subsequent boots: send the token (Case B everywhere).
 
-| # | Mode | Action | Expected | Got |
-|---|------|--------|----------|-----|
-| 1 | log-only | first `/api/register` for `alice-test` | 200 + 64-hex token | ✅ |
-| 2 | log-only | re-register `alice-test` with correct token | 200 | ✅ |
-| 3 | log-only | re-register `alice-test` WITHOUT token | 200 + telemetry `token=missing enforce=false action=allow` | ✅ |
-| 4 | log-only | re-register `alice-test` with WRONG token | 200 + telemetry `token=wrong enforce=false action=allow` | ✅ |
-| 5 | log-only | first `/api/register` for `bob-test` | 200 + distinct 64-hex token | ✅ |
-| A | strict | re-register `alice-test` WITHOUT token | 401 | ✅ |
-| B | strict | re-register `alice-test` WRONG token | 401 | ✅ |
-| C | strict | `DELETE /api/wg/peer/alice-test` no token | 401 (was: 200 + boot user) | ✅ |
-| D | strict | `DELETE /api/wg/peer/random-user-123` no token | 401 (helpful message) | ✅ |
-| E | strict | first `/api/register` for `charlie-test` | 200 + token (Case A still works) | ✅ |
-| F | strict | re-register `charlie-test` with correct token | 200 | ✅ |
+5. **Check telemetry**:
+   ```
+   ssh root@<supernode> 'journalctl -u pc2-gateway --since "24h ago" | grep -c token=missing'
+   ssh root@<supernode> 'journalctl -u pc2-gateway --since "24h ago" | grep -c token=present'
+   ```
+   Once `present / (present + missing)` is ≥ 0.99 across every
+   supernode, you're ready for the kill-switch flip.
 
-Persistence: gateway restarted between log-only and strict tests;
-`/tmp/gw-smoke/provisioning-tokens.json` correctly carried `alice-test`
-and `bob-test` records across the restart, verified by `[gw-auth] …
-(2 records). Enforcement: STRICT.` boot line.
-
-Hash-only storage verified: dumped the JSON file, found `tokenHash`
-fields (SHA-256 hex), no plaintext token strings. Confirmed the
-`mint()` return value never matches anything in the file.
-
----
-
-## Deployment / rollout
-
-The supernodes (Linode `69.164.241.210`, Contabo `38.242.211.112`,
-the new Interserver one) all run `index.js` from `/root/pc2/web-gateway/`
-under `systemctl pc2-gateway`. The existing `deploy/web-gateway/deploy.sh`
-script does the rollout:
-
-```bash
-./deploy/web-gateway/deploy.sh 69.164.241.210
-./deploy/web-gateway/deploy.sh 38.242.211.112
-./deploy/web-gateway/deploy.sh <interserver-ip>
-```
-
-(That script does `scp index.js package.json ${VPS}:/root/pc2/web-gateway/`
-then `npm install && systemctl restart pc2-gateway`. **Note**: the
-script also needs to copy the new `lib/` directory — the deploy.sh
-file may need updating to include `scp -r lib/` alongside `index.js`
-in the same `scp` invocation.)
-
-### Recommended rollout pace
-
-1. **Day 0**: Deploy gateway code to ONE supernode. Watch
-   `journalctl -u pc2-gateway | grep '\[gw-auth\]'` for 24 h.
-2. **Day 1**: If telemetry shows expected log lines and no
-   spurious `token=wrong` entries, deploy to the other supernodes.
-3. **Day 2-7**: Watch the proportion of `enforce=false action=deny`
-   counterfactuals (i.e. how many calls would have been rejected
-   under strict mode). When ≥99 % of calls have `token=present
-   action=allow`, the rollout is safe.
-4. **Day 8**: Add `Environment=GW_AUTH_REQUIRED=true` to
+6. **Flip kill-switch** in
    `/etc/systemd/system/pc2-gateway.service.d/override.conf` (or
-   wherever the unit's env vars live), `systemctl daemon-reload`
-   and `systemctl restart pc2-gateway`. From this point on, any
-   call without a valid token returns 401.
-
-### Telemetry queries to monitor
-
-```bash
-# Count of unauthorised calls per handler in the last hour
-journalctl -u pc2-gateway --since '1 hour ago' \
-  | grep '\[gw-auth\]' \
-  | grep 'token=\(missing\|wrong\)' \
-  | awk -F 'handler=' '{print $2}' | awk '{print $1}' \
-  | sort | uniq -c
-
-# Mint events (one-time, watch for unexpected duplicates)
-journalctl -u pc2-gateway | grep 'action=mint-'
-```
-
-### Rollback
-
-Revert the Wave 3 commit, redeploy the previous `index.js`,
-`systemctl restart pc2-gateway`. The `provisioning-tokens.json`
-file is left intact on disk — older code simply ignores it. New
-PC2 clients with stored tokens will keep sending the
-`X-Provisioning-Token` header; the older gateway just ignores
-unknown headers.
+   wherever your env vars live):
+   ```
+   Environment="GW_AUTH_REQUIRED=true"
+   ```
+   Then `systemctl daemon-reload && systemctl restart pc2-gateway`.
+   Repeat per supernode at your own pace; they're independent.
 
 ---
 
-## Why these design choices
+## Rollback
 
-### Why `X-Provisioning-Token` instead of `Authorization: Bearer`?
+If anything goes sideways at any point:
 
-The pre-written test spec at
-`pc2-node/tests/security/requireProvisioningToken.test.js` was
-locked to `X-Provisioning-Token` as the header name. Functionally
-identical to `Authorization: Bearer <token>` (both are forwarded by
-nginx, neither ends up in standard access logs). Custom header is
-slightly more discoverable in logs grep-wise.
+- **Revert kill-switch only** (preferred): `unset GW_AUTH_REQUIRED`
+  in the systemd override and `systemctl restart pc2-gateway`.
+  Instant return to log-only mode. Tokens stay on disk and are
+  re-used as soon as you flip strict back on.
+- **Revert binary**: `git revert <wave-3-commit>`, redeploy
+  `index.js`. The older code path ignores
+  `provisioning-tokens.json` entirely; it's just a stale file.
+  Re-applying the wave later will pick the same tokens back up.
 
-### Why hash-at-rest?
-
-If an attacker reads the gateway's `provisioning-tokens.json` they
-get only `tokenHash` fields. They can't replay a hash anywhere —
-the verify path requires the plaintext side as input to recompute
-the hash. Strict improvement over plaintext-at-rest at zero runtime
-cost (one SHA-256 per `verify` call is sub-microsecond).
-
-### Why username-bound (not global)?
-
-A global "is this a known token" check would let any compromised
-PC2 node act on behalf of every other node. Binding the token to
-the username it was minted for limits blast radius to that one
-account if a single node's disk is read.
-
-### Why does mint() refuse to overwrite?
-
-Silent overwrite would let an attacker re-claim a victim's username
-(via `/api/register`), get a fresh token, then re-key / delete the
-victim's peer. The username-claim handler MUST refuse to mint a
-second token; renewal is the explicit `rotate()` flow (not yet
-exposed via API — manual ops only for now).
-
-### Why per-gateway token storage on the PC2 side?
-
-The same username can be registered on multiple supernodes
-(dual-write redundancy). Each supernode mints its OWN independent
-token. A single global token wouldn't work because the supernodes
-don't share state. Map<gatewayUrl, token> is the smallest correct
-abstraction.
-
-### Why log-only as default?
-
-Same pattern as Wave 2's `siweRequired=false` default. Lets us
-deploy the gateway change and the PC2 client change independently
-— neither blocks the other. Telemetry shows when ≥99 % of inbound
-calls carry tokens; only then do we flip strict. Belt + braces:
-the kill-switch lets the operator turn off enforcement instantly
-without redeploying code if something blows up at 3 a.m.
+The PC2-node side is even safer — `gatewayTokenStore` is an
+optional dependency. Reverting `BosonService.ts` removes the wiring
+but the rest of the code paths still work.
 
 ---
 
-## Known limitations / follow-ups
+## Known follow-ups (not blocking)
 
-- **`rotate()` not exposed via API**: today operators rotate by
-  deleting the username's record from `provisioning-tokens.json`
-  and waiting for the next `/api/register` call (Case D
-  grandfather). A `POST /api/admin/rotate-token/{username}` route
-  with a fresh wallet signature could be added later.
-- **No token revocation on PC2 wallet logout**: tokens persist on
-  disk until the user explicitly deletes the data dir. Acceptable
-  because the token is bound to the node, not the wallet.
-- **SEC-3e (username squat at original `/api/register`)** is now
-  closed implicitly: re-claim by anyone other than the original
-  minter is rejected in strict mode. The remaining theoretical
-  case is "first-ever claim of a username someone else wanted" —
-  that's a name-squatting race, not a security issue, and is
-  outside the audit scope.
-
----
-
-## References
-
-- Spec test: `pc2-node/tests/security/requireProvisioningToken.test.js`
-- Helper: `deploy/web-gateway/lib/provisioning-token.js`
-- Parent task: `.cursor/tasks/SEC-2026-04-21-PC2-AUDIT/SEC-2026-04-21-PC2-AUDIT.md`
-- Wave 2 (precedent for kill-switch design): `WAVE-2-SIWE-AND-SETUP.md`
+- **SEC-3e** — `/api/register` username-claim still allows the
+  *first* claim of any unused username with no signature. After
+  this wave it can't be re-claimed, but the initial squat by an
+  attacker on an unused username (e.g. `alice` while Alice is
+  offline) is still possible. Fix in a future wave: require an
+  EVM signature on `/api/register`'s `nodeId` to prove the wallet
+  controls the chosen username. Will need a registry / DID claim
+  flow design first; defer.
+- **Token rotation API** — `rotate(username)` is implemented in the
+  store but no operator-facing CLI exposes it yet. If a node's
+  token leaks, today the only recovery is to delete the user's
+  entry from `provisioning-tokens.json` on the supernode and have
+  them re-register. A small `gateway-cli` wrapper would be nice.
