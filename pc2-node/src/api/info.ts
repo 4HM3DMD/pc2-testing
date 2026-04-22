@@ -253,18 +253,13 @@ export function handleGetLaunchApps(req: Request, res: Response): void {
     
     if (token) {
       try {
-        // Get session from token
-        let session = db.getSession(token);
-        
-        // Handle app tokens (token-0x... format)
-        if (!session && token.startsWith('token-')) {
-          const tokenParts = token.split('-');
-          if (tokenParts.length >= 2 && tokenParts[1].startsWith('0x')) {
-            const walletAddress = tokenParts[1];
-            session = db.getSessionByWallet(walletAddress);
-          }
-        }
-        
+        // SEC-3c (2026-04 audit): the previous implementation also accepted
+        // `token-0x{wallet}-...` tokens here and resolved them via
+        // db.getSessionByWallet(walletAddress) — an unauthenticated wallet-
+        // inference primitive identical to the one removed from the auth
+        // middleware. Branch removed; only real session tokens are honoured.
+        const session = db.getSession(token);
+
         if (session?.wallet_address) {
           // Get recent app names from database
           const recentAppNames = db.getRecentApps(session.wallet_address, 10);

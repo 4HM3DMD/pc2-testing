@@ -26,6 +26,18 @@ export interface Session {
   smart_account_address: string | null;
   created_at: number;
   expires_at: number;
+  /**
+   * NULL = unrestricted (owner/user session).
+   * 'file' = ephemeral session bound to a specific file resource (SEC-3c, 2026-04 audit).
+   * Future: other scope kinds may be added; middleware MUST fail-closed on unknown values.
+   */
+  scope?: string | null;
+  /**
+   * JSON-encoded metadata when scope IS NOT NULL. For scope='file':
+   *   { "fileUid": string, "allowedPath"?: string }
+   * Validated and consumed by isRequestInScope() in api/middleware/scope-check.ts.
+   */
+  scope_data?: string | null;
 }
 
 export interface FileMetadata {
@@ -227,19 +239,61 @@ export class DatabaseManager {
 
   /**
    * Create session
+   *
+   * Optional scope/scope_data fields constrain the session to a specific
+   * resource (SEC-3c, 2026-04 audit). Sessions without scope are
+   * unrestricted user/owner sessions and behave identically to the
+   * pre-migration-29 schema.
    */
   createSession(session: Session): void {
     const db = this.getDB();
     db.prepare(`
-      INSERT INTO sessions (token, wallet_address, smart_account_address, created_at, expires_at)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT INTO sessions (token, wallet_address, smart_account_address, created_at, expires_at, scope, scope_data)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
     `).run(
       session.token,
       session.wallet_address,
       session.smart_account_address,
       session.created_at,
-      session.expires_at
+      session.expires_at,
+      session.scope ?? null,
+      session.scope_data ?? null
     );
+  }
+
+  /**
+   * Create a scoped (resource-bound) session.
+   *
+   * Convenience wrapper around createSession() for the common SEC-3c case:
+   * an ephemeral session minted by /open_item that grants an iframe app
+   * access to ONE file. The middleware enforces scope via isRequestInScope().
+   *
+   * @param input.token            64-hex-char cryptographically random token
+   * @param input.wallet_address   minting user's wallet (the file owner)
+   * @param input.smart_account_address  minting user's SA (or null)
+   * @param input.scope            e.g. 'file'
+   * @param input.scope_data       JSON-encoded scope metadata
+   * @param input.ttl_ms           session lifetime; defaults to 4 hours
+   */
+  createScopedSession(input: {
+    token: string;
+    wallet_address: string;
+    smart_account_address: string | null;
+    scope: string;
+    scope_data: string;
+    ttl_ms?: number;
+  }): void {
+    const now = Date.now();
+    const ttl = input.ttl_ms ?? 4 * 60 * 60 * 1000;
+    this.createSession({
+      token: input.token,
+      wallet_address: input.wallet_address,
+      smart_account_address: input.smart_account_address,
+      created_at: now,
+      expires_at: now + ttl,
+      scope: input.scope,
+      scope_data: input.scope_data,
+    });
   }
 
   /**

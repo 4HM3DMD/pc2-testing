@@ -31,7 +31,7 @@ function findSchemaFile(): string {
   }
   throw new Error(`Schema file not found. Tried: ${SCHEMA_FILE} and ${sourceSchema}`);
 }
-const CURRENT_VERSION = 28;
+const CURRENT_VERSION = 29;
 
 interface Migration {
   version: number;
@@ -1075,6 +1075,29 @@ export function runMigrations(db: Database.Database): void {
         recordMigration(db, 28);
       } catch (error: any) {
         log.error(`❌ Migration 28 error: ${error.message}`);
+        throw error;
+      }
+    }
+
+    // Migration 29 (SEC-3c, 2026-04 audit): add scope/scope_data columns to
+    // sessions so /open_item can mint scoped, file-bound iframe-app tokens
+    // instead of the previous insecure mock-token-* pattern. Existing
+    // sessions remain unrestricted (NULL scope is the legacy contract).
+    if (currentVersion < 29) {
+      try {
+        log.info('📦 Running Migration 29: Add scope/scope_data to sessions (SEC-3c)...');
+        const cols = db.prepare(`PRAGMA table_info(sessions)`).all() as any[];
+        const colNames = cols.map((c: any) => c.name);
+        if (!colNames.includes('scope')) {
+          db.exec(`ALTER TABLE sessions ADD COLUMN scope TEXT`);
+        }
+        if (!colNames.includes('scope_data')) {
+          db.exec(`ALTER TABLE sessions ADD COLUMN scope_data TEXT`);
+        }
+        log.info('✅ Migration 29 complete: sessions.scope/scope_data columns added');
+        recordMigration(db, 29);
+      } catch (error: any) {
+        log.error(`❌ Migration 29 error: ${error.message}`);
         throw error;
       }
     }

@@ -15,6 +15,7 @@
     "dev:legacy": "tsc --watch & nodemon dist/index.js",
     "clean": "node scripts/clean.js",
     "test": "npm run build:backend && node scripts/test-system.js",
+    "test:security": "tsx --test tests/security/*.test.js",
     "backup": "node scripts/backup.js",
     "restore": "node scripts/restore.js",
     "recover-mnemonic": "node scripts/recover-mnemonic.js"
