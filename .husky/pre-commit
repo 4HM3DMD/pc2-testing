@@ -1,1 +1,14 @@
+# Wave 4 (SEC-CI-SECRETSCAN): scan staged diff for secret leaks.
+# Skips silently when gitleaks isn't installed locally — CI is the gate.
+# Install: brew install gitleaks    (or: go install github.com/zricethezav/gitleaks/v8@latest)
+# Bypass:  git commit --no-verify   (do this only for the rare false-positive
+#          you've already added to .gitleaksignore in the same commit).
+if command -v gitleaks >/dev/null 2>&1; then
+  gitleaks protect --staged --redact --no-banner --config=.gitleaks.toml \
+    || { echo ""; echo "❌ gitleaks blocked the commit (see lines above)."; \
+         echo "   Rotate the secret, then either remove it from the diff"; \
+         echo "   or add the fingerprint to .gitleaksignore with a TRIAGE comment."; \
+         exit 1; }
+fi
+
 node tools/validate-eslint.js

@@ -2,7 +2,7 @@
 
 **Task ID**: SEC-2026-04-21-PC2-AUDIT
 **Created**: 2026-04-21
-**Status**: 🟡 In Progress — Waves 0.5, 1, 2, 3 shipped; Waves 4-5 pending
+**Status**: 🟡 In Progress — Waves 0.5, 1, 2, 3, 4 shipped; Wave 5 pending
 **Priority**: **P0 — Critical Security**
 **Scope**: PC2 node (`pc2-node/`) + web-gateway (`deploy/web-gateway/`) + Particle Auth GUI (`packages/particle-auth/`)
 **Out of scope**: `cloud.ela.city` rotation runbook (deferred), iframe app token re-issue (SEC-3d backlog)
@@ -140,11 +140,21 @@ expired TTL) at design time.
 (every check produces `[gw-auth]` telemetry but does not 401). Flip
 to `true` once telemetry shows ≥99 % of inbound calls carry tokens.
 
-### Wave 4 — CI / secret hygiene ⏳
+### Wave 4 — CI / secret hygiene ✅ (THIS COMMIT — see `WAVE-4-SECRET-HYGIENE.md`)
 
-- **SEC-CI-SECRETSCAN**: gitleaks / trufflehog as pre-commit hook
-  + GitHub Action. Sweep `.vscode/.idea/.env*` across the entire
-  repo history.
+- **SEC-CI-SECRETSCAN**: gitleaks at three points — local pre-commit
+  (staged-diff scan, skips silently if not installed), GitHub Action
+  on PR (diff scan), GitHub Action on push (full working-tree scan).
+  Allowlist tuned: 426 raw matches → 0 leaks (413 runtime/vendored
+  noise excluded by `.gitleaks.toml` paths, 12 vendored bundle hits +
+  1 documented historical key suppressed via `.gitleaksignore` with
+  per-finding TRIAGE comments). Scan time 6.7 s on 17k-file checkout.
+
+  **Triage**: 1 real historical leak surfaced — `data/identity.json`
+  (Boson DID node private key, committed at `4b10bad94` on 2026-03-06
+  before the gitignore rule). Already on 4 origin branches. Queued
+  for rotation as a follow-up — *not* fixed in this wave because
+  rotation requires coordination with whoever consumes that DID.
 
 ### Wave 5 — DID hardening (deprioritised, low traffic) ⏳
 
@@ -173,6 +183,11 @@ to `true` once telemetry shows ≥99 % of inbound calls carry tokens.
 - `.cursor/tasks/SEC-2026-04-21-PC2-AUDIT/WAVE-3-GATEWAY-LOCKDOWN.md` (Wave 3 detail)
 - `deploy/web-gateway/lib/provisioning-token.js` (Wave 3 — ProvisioningTokenStore + verifier)
 - `pc2-node/src/services/gateway/GatewayTokenStore.ts` (Wave 3 — PC2-side per-gateway token cache)
+- `.cursor/tasks/SEC-2026-04-21-PC2-AUDIT/WAVE-4-SECRET-HYGIENE.md` (Wave 4 detail)
+- `.gitleaks.toml` (Wave 4 — gitleaks config + path/regex allowlists)
+- `.gitleaksignore` (Wave 4 — fingerprint allowlist for triaged historical findings)
+- `.github/workflows/secret-scan.yml` (Wave 4 — gitleaks-action on PR + push)
+- `docs/wiki/Technical/SECRET_SCANNING.md` (Wave 4 — contributor runbook)
 
 ### Modified
 
@@ -194,6 +209,7 @@ to `true` once telemetry shows ≥99 % of inbound calls carry tokens.
 - `pc2-node/src/services/wireguard/WireGuardService.ts` (Wave 3) — `X-Provisioning-Token` header on `/api/wg/register`
 - `pc2-node/src/services/wireguard/AmneziaWGService.ts` (Wave 3) — same on `/api/awg/register`
 - `pc2-node/src/services/vless/VLESSRealityService.ts` (Wave 3) — same on `/api/vless/register`
+- `.husky/pre-commit` (Wave 4) — prepended `gitleaks protect --staged` call (skips silently if not installed)
 
 ---
 
@@ -235,6 +251,15 @@ to `true` once telemetry shows ≥99 % of inbound calls carry tokens.
     - [x] Strict mode: new username (Case A) still mints token
     - [x] Tokens persist across gateway restart (file-backed)
     - [x] Stored as SHA-256 hash, never plaintext (verified by reading `provisioning-tokens.json`)
+
+### Wave 4 ✅
+- [x] Baseline scan: 426 raw matches → 0 leaks after allowlist tuning
+- [x] `gitleaks detect --no-git --config=.gitleaks.toml` exits 0 on current HEAD (6.7 s)
+- [x] `gitleaks protect --staged` blocks Slack-bot-token diff (negative test)
+- [x] `gitleaks protect --staged` exits 0 on clean stage (positive test)
+- [x] Pre-commit silently skips when `gitleaks` not on PATH (no contributor friction)
+- [x] CI workflow runs on PR + push, fails on leak
+- [x] 1 historical leak surfaced (TRIAGE-1: `data/identity.json` Boson DID key) — rotation queued as follow-up, not addressed in this wave
 
 ---
 
