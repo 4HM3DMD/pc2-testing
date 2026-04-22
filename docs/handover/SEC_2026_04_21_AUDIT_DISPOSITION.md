@@ -5,7 +5,7 @@
 **Report date**: 2026-04-18
 **Triage handoff**: 2026-04-21 (this codebase)
 **This document compiled**: 2026-04-22
-**Status**: 🟢 **All 7 in-scope findings closed in code.** 4 smart-contract findings tracked separately. 1 deferred (low traffic). 2 operational follow-ups required.
+**Status**: 🟢 **All 7 in-scope findings closed in code.** 4 smart-contract findings owned by Irzhy (in progress). 1 deferred (SEC-11, low traffic). v1.2 release roadmap below — see [Phase A](#phase-a--before-pushing-v12-live-release-blocking) for the release-blocking checklist and [Phase C](#phase-c--kill-switch-flip-schedule-post-cutover) for the kill-switch flip schedule.
 
 ---
 
@@ -22,13 +22,13 @@ Of the 11 vulnerabilities reported, this codebase owns **7** (PC2 node + web-gat
 
 The remaining 4 are owned by other workstreams or are explicitly deferred:
 
-- **SEC-1, 4, 5, 6** (smart contracts) — **owned by separate engineer**, not this repo
-- **SEC-11** (DID JWT verify) — **deferred to Wave 5**, low production traffic (~<1%); rationale below
+- **SEC-1, 4, 5, 6** (smart contracts) — **Irzhy is making progress** on a separate repo; will land in his own release cycle
+- **SEC-11** (DID JWT verify) — **deferred to Wave 5**, low production traffic (~<1%); rationale in finding #11 below
 
-Two **operational** items still require human action:
+Two follow-ups exist but **do not block the v1.2 release**:
 
-- **`cloud.ela.city` rotation** — researcher reported this node un-owned for 14.6 days (`uptime: 1265350.22`). Code path is now closed, but the existing node should still be rotated since the un-owned window has been advertised in the report. Status from your team needed.
-- **`data/identity.json` Boson DID key** — Wave 4's secret scanner surfaced a real Ed25519 private key committed at `4b10bad94` (2026-03-06) before the matching `.gitignore` rule. Already exposed on 4 origin branches. Rotation queued as `SEC-2026-04-22-BOSON-DID-ROTATION` (scaffolded today).
+- **`cloud.ela.city` rotation** — researcher reported this node un-owned for 14.6 days (`uptime: 1265350.22`). Decision needed before release day on whether to upgrade-in-place or DNS-cut to a fresh v1.2 node — see [Phase A4](#phase-a--before-pushing-v12-live-release-blocking).
+- **`data/identity.json` Boson DID rotation** — Wave 4's secret scanner surfaced a real Ed25519 private key committed at `4b10bad94` (2026-03-06) before the matching `.gitignore` rule. Already exposed on 4 origin branches. Queued as a v1.2.x patch — see [Phase D1](#phase-d--post-v12-queued-not-blocking).
 
 ---
 
@@ -202,28 +202,49 @@ Plus the implicit recommendation buried in Finding #1 step 6: *"Add pre-commit a
 
 ---
 
-## Outstanding Items (require human decision)
+## v1.2 Release Roadmap (next week)
 
-### 1. Rotate `cloud.ela.city` (operational)
-**Severity**: Medium (window has been documented in the researcher's report).
-**Why**: At report time the node had been un-owned for 14.6 days. The exploitable code paths (Findings 3, 7, 10) are now closed in the v1.2 binary. But the existing node deployment may still be on v1.1 or earlier.
-**Action needed**: Confirm `cloud.ela.city` has been (a) upgraded to v1.2 and (b) had its DID rotated as a precaution. If not done, schedule rotation runbook as `SEC-2026-04-22-CLOUD-ELA-CITY-ROTATION`.
+The 7 in-scope findings are closed in code. The list below tracks what still has to happen around the release itself — split by phase so it's clear what blocks the cutover vs. what runs after.
 
-### 2. Rotate `data/identity.json` Boson DID key (security)
-**Severity**: High (real Ed25519 private key publicly readable on 4 origin branches since 2026-03-06).
-**Detected by**: Wave 4's gitleaks scanner (TRIAGE-1 in `.gitleaksignore`).
-**Already in `.gitignore`** but was committed before the rule was added.
-**Action needed**: See [`SEC-2026-04-22-BOSON-DID-ROTATION.md`](.cursor/tasks/SEC-2026-04-22-BOSON-DID-ROTATION/SEC-2026-04-22-BOSON-DID-ROTATION.md) (scaffolded today). Rotation requires knowing who/what consumes that DID — needs Sash's input.
+### Phase A — Before pushing v1.2 live (release-blocking)
 
-### 3. Email forwarding (operational)
-The researcher noted: *"Sash's initial forwards… bounced with SMTP 535 'authentication rejected'… Gmail Send-as misconfiguration carried over from the Microsoft → Gmail migration."* Until that's fixed, any future researcher reports forwarded from `sash@ela.city` will silently fail to reach `anders@wau.io` / `irzhy@wau.io`.
-**Action needed**: Ops/IT — fix Gmail Send-as auth on `sash@ela.city`. Until then, this document is the authoritative handoff path.
+| # | Item | Owner | Notes |
+|---|---|---|---|
+| A1 | **Smoke test the full SIWE login flow on a clean node** (fresh DB, no existing session) — confirm one wallet popup, owner gets minted, scoped sessions work for iframe apps | dev | Existing `npm run test:security` (79 cases) covers the unit contracts; this is the manual end-to-end |
+| A2 | **Smoke test gateway in log-only mode** — bring up a v1.2 PC2 node against a v1.2 supernode with `GW_AUTH_REQUIRED=false` (default). Confirm `/api/register` mints a provisioning token, the node persists it to `data/.gateway-tokens.json`, and subsequent `/api/wg/register` includes the `X-Provisioning-Token` header | dev / ops | Watch supernode logs — every call should log `provisioning_token=present` |
+| A3 | **Smoke test scoped session tokens** — open a file viewer iframe app, confirm the iframe receives a short-lived scoped token (not the owner's session token), and confirm the scoped token is rejected by general endpoints like `/api/update` | dev | Wave 1 acceptance criterion |
+| A4 | **Confirm `cloud.ela.city` upgrade plan** — decide whether to (a) upgrade in place to v1.2 then rotate its DID, or (b) provision a fresh v1.2 node and DNS-cut over. Either is fine; just decide before release | Sash | Researcher reported it un-owned for 14.6 days at report time. Code paths are now closed in v1.2 binary, but the old deployment may still be on v1.1. |
+| A5 | **Confirm Irzhy's smart-contract fixes status** — they don't block v1.2 of this repo (different deploy target), but the public release notes should know whether to mention them as "in flight" or "shipped" | Sash + Irzhy | Per your update: Irzhy is making progress; will be updated later |
+| A6 | **Tag the release** — once A1-A3 pass, tag `v1.2.0` from `feature/lit-chipotle-migration` (or merge-and-tag from `main`, depending on your release flow) | dev | Existing CHANGELOG entry is already in place |
 
-### 4. SEC-11 (DID JWT verify) — schedule Wave 5
-Deferred but not dismissed. Suggest scheduling for v1.2.1 or v1.3 — should not block v1.2 cutover.
+### Phase B — At v1.2 cutover (release day)
 
-### 5. Smart-contract findings — confirm coverage
-Findings 1, 4, 5, 6 are owned by your other team member. Recommend they produce a similar `disposition.md` on the contracts repo so we can publish a single combined report to the researcher when fixes land.
+| # | Item | Owner | Notes |
+|---|---|---|---|
+| B1 | **Deploy v1.2 supernode binary** with `GW_AUTH_REQUIRED=false` (log-only mode) — this is the **default**, do not change it on release day | ops | Supernode keeps accepting unauthenticated traffic from v1.1 nodes during the rollout window |
+| B2 | **Deploy v1.2 PC2 node binary** with `siweRequired=false` (log-only mode) — also the default | ops / users | Existing sessions on v1.1 keep working through the upgrade |
+| B3 | **Watch logs for the first hour** for any 5xx spike on `/api/register`, `/auth/particle`, `/api/wg/register` | ops | If anything spikes, the kill-switches stay off and we triage |
+
+### Phase C — Kill-switch flip schedule (post-cutover)
+
+This is what I meant by *"turning something on"*. Both kill-switches default to log-only mode at release so nothing breaks for users still on v1.1. They get flipped to enforce mode on a delay once telemetry confirms safety.
+
+| # | When | Switch | Where | Effect |
+|---|---|---|---|---|
+| C1 | **T+7 days** (after release) | `GW_AUTH_REQUIRED=true` | Supernode env (`/etc/elacity-gateway/.env` or systemd unit) | Supernode starts **rejecting** unauthenticated `/api/wg/*`, `/api/awg/*`, `/api/vless/*` calls instead of just logging them. Pre-condition: ≥99% of inbound calls in the last 24h logged `provisioning_token=present`. |
+| C2 | **T+14 days** | `siweRequired=true` | PC2 node default in `pc2-node/src/api/auth.ts` (or per-node `config.json` override) | New ownership claims **require** a verified SIWE signature instead of just logging. Existing owners are unaffected (they already have a session). Pre-condition: ≥99% of `/auth/particle` calls in the last 24h logged `siwe_verified=true`. |
+| C3 | **T+30 days** | Unpin legacy Lit Action CIDs from IPFS | Ops (Pinata / pinning service dashboard) | Already noted in CHANGELOG — closes the rollback window for the Lit Action sigauth cutover |
+
+If telemetry doesn't hit the 99% threshold by T+7 / T+14, **don't flip** — extend the window, investigate, and flip when traffic looks clean. The kill-switch design is specifically to give us this escape hatch.
+
+### Phase D — Post v1.2 (queued, not blocking)
+
+| # | Item | Owner | Target |
+|---|---|---|---|
+| D1 | **Boson DID rotation** ([`SEC-2026-04-22-BOSON-DID-ROTATION`](.cursor/tasks/SEC-2026-04-22-BOSON-DID-ROTATION/SEC-2026-04-22-BOSON-DID-ROTATION.md)) — rotate the `data/identity.json` key surfaced by Wave 4 gitleaks. Needs Sash's input on what consumes the DID. | Sash + dev | v1.2.x patch |
+| D2 | **SEC-11 — DID JWT verify (Wave 5)** — JWT signature validation on `/api/did/callback`, DID-document resolver client, `state`-parameter binding, audit log + owner notification | dev | v1.2.1 or v1.3 |
+| D3 | **Smart-contract disposition doc** — Irzhy produces a parallel `disposition.md` on the contracts repo so we can publish a single combined response to the researcher | Irzhy | When his fixes land |
+| D4 | **Port secret-scanning gate to other Elacity repos** — `lit-keystore-moleculer` first (since it was the source of Finding #1), then any other repo with `.env*` / `.vscode/` / `.idea/` | dev | Recommended; not blocking |
 
 ---
 
@@ -268,6 +289,6 @@ Findings 1, 4, 5, 6 are owned by your other team member. Recommend they produce 
 
 When responding to the researcher, recommend including:
 1. This disposition document (or its TL;DR)
-2. The 4 unpushed→pushed commits as evidence: `80168f706`, `b2e509c18`, `16dccaf39`, `6ba49cfac`
-3. Acknowledgement of the smart-contract findings as in-flight under the other engineer
+2. The 4 commits as evidence: `80168f706`, `b2e509c18`, `16dccaf39`, `6ba49cfac` (all on `feature/lit-chipotle-migration`, will be in v1.2 tag)
+3. Acknowledgement of the smart-contract findings as in flight under Irzhy
 4. Bounty discussion can resume — the 7 in-scope findings are demonstrably closed
