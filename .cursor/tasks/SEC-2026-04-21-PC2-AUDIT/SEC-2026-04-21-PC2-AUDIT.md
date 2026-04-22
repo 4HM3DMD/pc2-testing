@@ -2,7 +2,7 @@
 
 **Task ID**: SEC-2026-04-21-PC2-AUDIT
 **Created**: 2026-04-21
-**Status**: 🟡 In Progress — Wave 0.5 + Wave 1 + Wave 2 shipped, Wave 3-5 pending
+**Status**: 🟡 In Progress — Waves 0.5, 1, 2, 3 shipped; Waves 4-5 pending
 **Priority**: **P0 — Critical Security**
 **Scope**: PC2 node (`pc2-node/`) + web-gateway (`deploy/web-gateway/`) + Particle Auth GUI (`packages/particle-auth/`)
 **Out of scope**: `cloud.ela.city` rotation runbook (deferred), iframe app token re-issue (SEC-3d backlog)
@@ -113,19 +113,32 @@ expired TTL) at design time.
   `*.ela.city` and `*.ela.local` so the SIWE wiring works from any
   Elacity origin.
 
-### Wave 3 — Web-gateway lockdown ⏳ (next)
+### Wave 3 — Web-gateway lockdown ✅ (THIS COMMIT — see `WAVE-3-GATEWAY-LOCKDOWN.md`)
 
-- **SEC-INFRA-GW-AUTH**: per-node provisioning token (HMAC) issued
-  by the gateway and stored locally on the PC2 node. Foundation for
-  SEC-2/8/9 — every gateway-facing endpoint will require it.
-- **SEC-2**: replace `execSync` template literal with
-  `execFileSync` + strict allowlist regex. Sweep all `execSync`
-  sites in `deploy/web-gateway/index.js`.
-- **SEC-8**: re-key endpoint (`/api/wireguard/register`,
-  `/api/awg/register`) requires WireGuard signature from the **old**
-  key + provisioning token.
-- **SEC-9**: `DELETE /api/users/{u}` restricted to self-only +
-  per-username rate limit + provisioning token.
+- **SEC-INFRA-GW-AUTH**: per-node 256-bit provisioning token minted
+  on first `/api/register`, stored hashed on the gateway and
+  plaintext (mode 0600) on the PC2 node. Sent in
+  `X-Provisioning-Token` on every subsequent gateway call. Survives
+  gateway restart. Cross-account binding (token for `node-A` cannot
+  act on `node-B`).
+- **SEC-2**: replaced 9 `execSync` sites with `execFileSync` (no
+  shell, no template interpretation). Added strict username regex
+  pre-shell on `/api/vless/register` for defence in depth. Token
+  also gates the route.
+- **SEC-8**: `/api/wg/register` and `/api/awg/register` now require
+  the matching `X-Provisioning-Token`. Re-key by an attacker
+  rejected; legitimate node always has its token.
+- **SEC-9**: `DELETE /api/wg/peer/{u}` token-gated + per-username
+  delete throttle (3/min). Symmetric `DELETE /api/awg/peer/{u}`
+  added (was missing before — operator-only via SSH).
+- **Bonus / SEC-3e**: `/api/register` re-claim with wrong token now
+  refused (strict mode) or telemetry-logged (log-only). Closes a
+  username-squat bug not in the original audit but found during the
+  Wave 3 survey.
+
+**Kill-switch**: `GW_AUTH_REQUIRED=false` default → log-only mode
+(every check produces `[gw-auth]` telemetry but does not 401). Flip
+to `true` once telemetry shows ≥99 % of inbound calls carry tokens.
 
 ### Wave 4 — CI / secret hygiene ⏳
 
@@ -157,6 +170,9 @@ expired TTL) at design time.
 - `pc2-node/src/api/setup/setup-auth.ts` (Wave 2)
 - `pc2-node/src/api/scope-check.ts` (Wave 1)
 - `pc2-node/src/db/migrations/029-session-scope.ts` (Wave 1)
+- `.cursor/tasks/SEC-2026-04-21-PC2-AUDIT/WAVE-3-GATEWAY-LOCKDOWN.md` (Wave 3 detail)
+- `deploy/web-gateway/lib/provisioning-token.js` (Wave 3 — ProvisioningTokenStore + verifier)
+- `pc2-node/src/services/gateway/GatewayTokenStore.ts` (Wave 3 — PC2-side per-gateway token cache)
 
 ### Modified
 
@@ -172,6 +188,12 @@ expired TTL) at design time.
 - `pc2-node/src/config/loader.ts` — `siweRequired` flag
 - `pc2-node/src/server.ts` — tighten `trust proxy`; mint + print first-run token
 - `packages/particle-auth/src/particle/contexts/ParticleNetworkContext.tsx` — SIWE client wiring (+ rebuilt bundle)
+- `deploy/web-gateway/index.js` (Wave 3) — provisioning-token store + middleware; `/api/register` mint flow; SEC-2/8/9 gating; 9 execSync→execFileSync conversions; symmetric `DELETE /api/awg/peer/{u}`
+- `pc2-node/src/services/boson/BosonService.ts` (Wave 3) — instantiate `GatewayTokenStore`, plumb to four sub-services
+- `pc2-node/src/services/boson/UsernameService.ts` (Wave 3) — capture token from `/api/register` response; resend on update + dual-write
+- `pc2-node/src/services/wireguard/WireGuardService.ts` (Wave 3) — `X-Provisioning-Token` header on `/api/wg/register`
+- `pc2-node/src/services/wireguard/AmneziaWGService.ts` (Wave 3) — same on `/api/awg/register`
+- `pc2-node/src/services/vless/VLESSRealityService.ts` (Wave 3) — same on `/api/vless/register`
 
 ---
 
@@ -196,7 +218,23 @@ expired TTL) at design time.
 - [x] User confirmed end-to-end fresh login: SIWE prompt appears,
       `✅ SIWE signature verified` in server logs
 
-### Wave 3 ⏳ (TBD)
+### Wave 3 ✅
+- [x] `requireProvisioningToken.test.js` — 12 active cases pass (1 manual integration skipped)
+- [x] `npx tsc -p pc2-node --noEmit` 0 errors
+- [x] No new ESLint errors (only pre-existing `no-undef` for Node globals + 14 pre-existing `curly-newline` in unmodified `catch` blocks)
+- [x] Local gateway smoke matrix (port 18080):
+    - [x] First `/api/register` returns 64-hex token
+    - [x] Re-register with correct token (Case B) → 200
+    - [x] Re-register without token, log-only → 200 + telemetry
+    - [x] Re-register with WRONG token, log-only → 200 + telemetry
+    - [x] Two distinct usernames mint distinct tokens
+    - [x] Strict mode: no token → 401
+    - [x] Strict mode: wrong token → 401
+    - [x] Strict mode: `DELETE /api/wg/peer/{u}` no token → 401 (was: 200 deletes anyone)
+    - [x] Strict mode: `DELETE /api/wg/peer/unknown-user` → 401 (helpful message)
+    - [x] Strict mode: new username (Case A) still mints token
+    - [x] Tokens persist across gateway restart (file-backed)
+    - [x] Stored as SHA-256 hash, never plaintext (verified by reading `provisioning-tokens.json`)
 
 ---
 
@@ -217,6 +255,14 @@ Every Wave 2 change has a kill-switch or is fail-open by default:
 Rollback path for any single fix: revert the named commit.
 `SEC-3c` rollback requires DB migration #29 to be backed out (rename
 `sessions.scope` and `sessions.scope_data` to keep schema valid).
+
+**Wave 3 rollback strategy** is identical: `GW_AUTH_REQUIRED=false`
+is the default, so every Wave 3 enforcement is opt-in. Operators
+deploy the gateway change, watch `[gw-auth]` log lines, and only
+flip strict mode once telemetry shows ≥99 % of inbound calls carry
+tokens. To roll back the binary itself, revert the Wave 3 commit
+and `systemctl restart pc2-gateway` — registered tokens stay on
+disk and are simply ignored by the older code path.
 
 ---
 
