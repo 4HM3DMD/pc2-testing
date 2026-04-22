@@ -92,10 +92,10 @@ pub fn render_pdf_raw(plaintext: &[u8], cmd: &RenderCommand) -> (RenderResult, O
     (
         RenderResult {
             success: true,
-            error: None,
             content_type: Some("image/jpeg".to_string()),
             total_pages: Some(total_pages),
             output_size: Some(buf.len()),
+            ..Default::default()
         },
         Some(buf),
     )

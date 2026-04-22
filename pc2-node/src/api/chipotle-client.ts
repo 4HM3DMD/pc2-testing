@@ -67,6 +67,21 @@ export interface LitActionResult {
   hasError: boolean;
 }
 
+/**
+ * Session-key delegation bundle (Option C  see
+ * `.cursor/tasks/LIT-ACTION-SIGNATURE-AUTH/DESIGN.md` §2.7).
+ *
+ * When present, both halves are forwarded to the Lit Action as
+ * canonical JSON strings exactly as the owner signed them. The
+ * new verifying Lit Action uses these; the legacy action ignores them.
+ */
+export interface SecureViewSessionBundle {
+  delegationCanonical: string;
+  delegationSig: `0x${string}`;
+  requestCanonical: string;
+  requestSig: `0x${string}`;
+}
+
 export interface NonMediaDecryptParams {
   litCiphertext: string;
   dataToEncryptHash: string;
@@ -77,6 +92,7 @@ export interface NonMediaDecryptParams {
   chain?: string;
   chainId?: number;
   rpc?: string;
+  secureViewSession?: SecureViewSessionBundle;
 }
 
 export interface MediaDecryptParams {
@@ -90,6 +106,7 @@ export interface MediaDecryptParams {
   chain?: string;
   chainId?: number;
   rpc?: string;
+  secureViewSession?: SecureViewSessionBundle;
 }
 
 export interface EncryptParams {
@@ -263,9 +280,15 @@ function getNonMediaActionCode(): string {
   return cachedNonMediaCode;
 }
 
+/**
+ * Load the non-media Chipotle Lit Action source. Callers must supply a
+ * signed SecureViewDelegation + request bundle; the action verifies both
+ * before releasing a CEK. See
+ * `.cursor/tasks/LIT-ACTION-SIGNATURE-AUTH/DESIGN.md` for the attack the
+ * sigauth verification closes (V1.1 → V1.2 cutover).
+ */
 function getChipotleNonMediaActionCode(): string {
   if (cachedChipotleNonMediaCode) return cachedChipotleNonMediaCode;
-
   const actionPath = join(DATA_DIR, 'lit-actions/non-media-decrypt-chipotle.js');
   if (!existsSync(actionPath)) {
     throw new Error(
@@ -393,10 +416,26 @@ export async function recoverNonMediaCEK(
   params: NonMediaDecryptParams,
   config?: ChipotleConfig,
 ): Promise<string> {
+  // Phase 5 cutover: sigauth action is mandatory. A caller without a
+  // SecureViewDelegation bundle is a programming error — we reject here
+  // rather than silently falling through to a userAddress-trusting
+  // action (that action no longer exists).
+  if (!params.secureViewSession) {
+    throw new Error(
+      '[Chipotle] recoverNonMediaCEK requires params.secureViewSession (signed delegation + request). ' +
+        'Bundle-less callers must be migrated before invoking the Lit action.',
+    );
+  }
+
   const code = getChipotleNonMediaActionCode();
   const pkpId = resolvePkpId(config);
+  logger.info(`[Chipotle] Non-media action kid=${params.kid}`);
 
-  const jsParams = {
+  // Session-key delegation fields (Option C). The sigauth Lit Action
+  // derives the effective user from delegation.coveredAddresses, so
+  // no `userAddress` is sent here — a caller cannot pretend to be
+  // someone else by naming their address.
+  const jsParams: Record<string, unknown> = {
     ciphertext: params.litCiphertext,
     dataToEncryptHash: params.dataToEncryptHash,
     kid: params.kid.startsWith('0x') ? params.kid : `0x${params.kid}`,
@@ -405,17 +444,25 @@ export async function recoverNonMediaCEK(
     chain: params.chain || DEFAULT_CHAIN,
     chainId: params.chainId || DEFAULT_CHAIN_ID,
     rpc: params.rpc || getBaseRpcUrl(),
-    userAddress: params.buyerAddress,
+    // The sigauth Lit Action verifies del.actionIpfsId matches its
+    // own CID; the server must forward the CID explicitly since
+    // Chipotle v3 doesn't expose getIpfsId() to action code.
+    actionIpfsId: params.actionCid,
+    delegation: params.secureViewSession.delegationCanonical,
+    delegationSig: params.secureViewSession.delegationSig,
+    request: params.secureViewSession.requestCanonical,
+    requestSig: params.secureViewSession.requestSig,
   };
 
   const result = await executeLitAction({ code, jsParams }, config);
 
-  // The Lit Action returns the CEK as a plain string (base64) or as JSON { data: base64 }
+  // Sigauth action returns `{ data: base64, authorizedAddress, delegationNonce, requestNonce }`.
   let cekBase64: string;
   try {
     const parsed = JSON.parse(result.response);
     if (parsed.error) {
-      throw new Error(`Lit Action denied: ${parsed.error}`);
+      const detail = parsed.code ? ` (code=${parsed.code})` : '';
+      throw new Error(`Lit Action denied: ${parsed.error}${detail}`);
     }
     cekBase64 = parsed.data || parsed;
   } catch (e) {
@@ -443,7 +490,14 @@ export async function recoverMediaCEKEnvelope(
   mediaActionCode: string,
   config?: ChipotleConfig,
 ): Promise<Buffer> {
-  const jsParams = {
+  // Phase 5 cutover: sigauth bundle is mandatory. See recoverNonMediaCEK.
+  if (!params.secureViewSession) {
+    throw new Error(
+      '[Chipotle] recoverMediaCEKEnvelope requires params.secureViewSession (signed delegation + request).',
+    );
+  }
+
+  const jsParams: Record<string, unknown> = {
     keyAlg: { name: 'ECDH', namedCurve: 'P-256' },
     publicKey: params.publicKeyHex,
     ciphertext: params.litCiphertext,
@@ -454,7 +508,10 @@ export async function recoverMediaCEKEnvelope(
     chain: params.chain || DEFAULT_CHAIN,
     chainId: params.chainId || DEFAULT_CHAIN_ID,
     rpc: params.rpc || getBaseRpcUrl(),
-    userAddress: params.buyerAddress,
+    delegation: params.secureViewSession.delegationCanonical,
+    delegationSig: params.secureViewSession.delegationSig,
+    request: params.secureViewSession.requestCanonical,
+    requestSig: params.secureViewSession.requestSig,
   };
 
   const result = await executeLitAction({ code: mediaActionCode, jsParams }, config);

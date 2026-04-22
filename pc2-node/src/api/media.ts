@@ -44,6 +44,27 @@ setInterval(() => {
   });
 }, 120_000);
 
+// ── MPD cache for 412 two-phase /init flow ───────────────────────────
+// Phase 5 cutover requires /init to return 412 + {kid, actionIpfsId}
+// when no secureViewSession bundle is attached, so the player can ask
+// the parent frame to sign and retry. The MPD parse is the expensive
+// part of /init (IPFS fetch + PSSH extraction); we cache it briefly so
+// the retry doesn't pay that cost twice.
+interface CachedInitContext {
+  mpdText: string;
+  mpdBaseUrl: string;
+  cachedAt: number;
+}
+const initContextCache = new Map<string, CachedInitContext>();
+const INIT_CACHE_TTL_MS = 60_000;
+
+setInterval(() => {
+  const now = Date.now();
+  initContextCache.forEach((val, key) => {
+    if (now - val.cachedAt > INIT_CACHE_TTL_MS) initContextCache.delete(key);
+  });
+}, 60_000);
+
 interface AuthenticatedRequest extends Request {
   user?: { uuid: string; username: string };
 }
@@ -173,26 +194,35 @@ router.post('/init', async (req: AuthenticatedRequest, res: Response) => {
       return;
     }
 
-    // 2. Fetch and parse MPD
-    const mpdUrl = ipfsGateway + mediaUri + '/stream.mpd';
-    logger.info(`[media/init] Fetching MPD: ${mpdUrl}`);
-
+    // 2. Fetch and parse MPD (cached briefly for the 412 → retry round-trip)
+    const cacheKey = mediaUri;
     let mpdText: string;
-    const mpdResponse = await fetch(mpdUrl);
-    if (mpdResponse.ok) {
-      mpdText = await mpdResponse.text();
+    let mpdBaseUrl: string;
+    const cached = initContextCache.get(cacheKey);
+    if (cached && Date.now() - cached.cachedAt < INIT_CACHE_TTL_MS) {
+      mpdText = cached.mpdText;
+      mpdBaseUrl = cached.mpdBaseUrl;
+      logger.info(`[media/init] MPD cache hit for ${cacheKey}`);
     } else {
-      const fallbackUrl = fallbackGateway + mediaUri + '/stream.mpd';
-      logger.info(`[media/init] Local MPD failed (${mpdResponse.status}), trying fallback: ${fallbackUrl}`);
-      const fbResponse = await fetch(fallbackUrl);
-      if (!fbResponse.ok) {
-        res.status(502).json({ error: `Failed to fetch MPD from both gateways (local: ${mpdResponse.status}, public: ${fbResponse.status})` });
-        return;
+      const mpdUrl = ipfsGateway + mediaUri + '/stream.mpd';
+      logger.info(`[media/init] Fetching MPD: ${mpdUrl}`);
+      const mpdResponse = await fetch(mpdUrl);
+      if (mpdResponse.ok) {
+        mpdText = await mpdResponse.text();
+      } else {
+        const fallbackUrl = fallbackGateway + mediaUri + '/stream.mpd';
+        logger.info(`[media/init] Local MPD failed (${mpdResponse.status}), trying fallback: ${fallbackUrl}`);
+        const fbResponse = await fetch(fallbackUrl);
+        if (!fbResponse.ok) {
+          res.status(502).json({ error: `Failed to fetch MPD from both gateways (local: ${mpdResponse.status}, public: ${fbResponse.status})` });
+          return;
+        }
+        mpdText = await fbResponse.text();
       }
-      mpdText = await fbResponse.text();
+      mpdBaseUrl = ipfsGateway + mediaUri + '/';
+      initContextCache.set(cacheKey, { mpdText, mpdBaseUrl, cachedAt: Date.now() });
     }
 
-    const mpdBaseUrl = ipfsGateway + mediaUri + '/';
     const mpd = parseMPD(mpdText, mpdBaseUrl);
     logger.info(`[media/init] Parsed MPD: ${mpd.tracks.length} tracks, ${mpd.duration.toFixed(1)}s`);
 
@@ -256,7 +286,18 @@ router.post('/init', async (req: AuthenticatedRequest, res: Response) => {
       }
     }
 
-    const litParams = {
+    const litParams: {
+      litCiphertext: string;
+      dataToEncryptHash: string;
+      kid: string;
+      actionCid: string;
+      authority: string;
+      chain: string;
+      chainId: number;
+      rpc: string;
+      litBackend: string;
+      secureViewSession?: import('./chipotle-client.js').SecureViewSessionBundle;
+    } = {
       litCiphertext: encData.ciphertext || '',
       dataToEncryptHash: encData.hash || encData.dataToEncryptHash || '',
       kid,
@@ -272,6 +313,52 @@ router.post('/init', async (req: AuthenticatedRequest, res: Response) => {
       res.status(400).json({ error: 'PSSH data incomplete — missing ciphertext, hash, or actionIpfsId' });
       return;
     }
+
+    // Phase 5 sigauth cutover: when the chipotle backend is active, the
+    // server-controlled NON_MEDIA_ACTION_CID is the only action permitted to
+    // run. Legacy assets carry a different `actionIpfsId` in their PSSH
+    // (recorded at mint time, often a v0 non-sigauth CID) — that value is
+    // ignored for the actual Lit invocation and replaced with the
+    // authoritative server-configured sigauth action so that the user's
+    // signed delegation (`actionIpfsId = NON_MEDIA_ACTION_CID`) matches what
+    // is executed inside the TEE. Datil legacy media path keeps the PSSH CID.
+    if ((litParams.litBackend || '').toLowerCase() === 'chipotle') {
+      const { getNonMediaActionCid } = await import('./storage.js');
+      const serverActionCid = getNonMediaActionCid();
+      if (!serverActionCid) {
+        res.status(500).json({ error: 'Server NON_MEDIA_ACTION_CID is not configured' });
+        return;
+      }
+      if (serverActionCid !== litParams.actionCid) {
+        logger.info(
+          `[media/init] Overriding PSSH actionIpfsId for chipotle: pssh=${litParams.actionCid} → server=${serverActionCid}`,
+        );
+      }
+      litParams.actionCid = serverActionCid;
+    }
+
+    // ── Phase 5 sigauth: two-phase secure-view bundle ──────────────
+    // The player can't sign before /init because `kid` and
+    // `actionIpfsId` are only known after server-side MPD/PSSH parse.
+    // If the client didn't attach a bundle yet, hand them back the
+    // {kid, actionIpfsId} so they can request one from the parent
+    // wallet bridge and retry. The MPD is cached above so the retry
+    // skips the IPFS round-trip.
+    const incomingBundle = req.body.secureViewSession;
+    if (!incomingBundle || !incomingBundle.delegationCanonical || !incomingBundle.requestSig) {
+      const normalisedKid = litParams.kid && litParams.kid.startsWith('0x')
+        ? litParams.kid
+        : (litParams.kid ? `0x${litParams.kid}` : '');
+      logger.info(`[media/init] Phase-1 412 → needsSecureView kid=${normalisedKid} actionIpfsId=${litParams.actionCid}`);
+      res.status(412).json({
+        needsSecureView: {
+          kid: normalisedKid,
+          actionIpfsId: litParams.actionCid,
+        },
+      });
+      return;
+    }
+    litParams.secureViewSession = incomingBundle;
 
     const { getServerWallet } = await import('./storage.js');
     const wallet = await getServerWallet();
@@ -1077,28 +1164,36 @@ async function recoverMediaCEK(
     chainId: number;
     rpc: string;
     litBackend: string;
+    secureViewSession?: import('./chipotle-client.js').SecureViewSessionBundle;
   },
   wallet: any,
   prebuiltSessionSigs?: any,
   buyerAddress?: string,
 ): Promise<string> {
-  const effectiveUserAddr = buyerAddress || wallet.address;
   const backend = litParams.litBackend || LIT_BACKEND || 'datil';
 
-  // Chipotle with direct CEK recovery (new media-decrypt-chipotle.js action)
+  // Phase 5 cutover: media decryption requires a secure-view session
+  // bundle. The sigauth Lit Action authorises the caller from
+  // delegation.coveredAddresses, so `userAddress` is no longer sent.
+  if (!litParams.secureViewSession) {
+    throw new Error('[media/CEK] secureViewSession bundle is required for Lit decryption');
+  }
+
+  // Chipotle with direct CEK recovery (sigauth action)
   if (backend === 'chipotle') {
-    logger.info(`[media/CEK] Chipotle direct CEK recovery via ${litParams.actionCid}, kid=${litParams.kid}, user=${effectiveUserAddr}`);
+    logger.info(`[media/CEK] Chipotle direct CEK recovery via ${litParams.actionCid}, kid=${litParams.kid}`);
     const { recoverNonMediaCEK } = await import('./chipotle-client.js');
     const decryptedCek = await recoverNonMediaCEK({
       litCiphertext: litParams.litCiphertext,
       dataToEncryptHash: litParams.dataToEncryptHash,
       kid: litParams.kid,
-      buyerAddress: effectiveUserAddr,
+      buyerAddress: buyerAddress || wallet.address,
       actionCid: litParams.actionCid,
       authority: litParams.authority,
       chain: litParams.chain,
       chainId: litParams.chainId,
       rpc: litParams.rpc,
+      secureViewSession: litParams.secureViewSession,
     });
 
     const crypto = await import('crypto');
@@ -1113,7 +1208,7 @@ async function recoverMediaCEK(
   const rawPubKey = new Uint8Array(await subtle.exportKey('raw', keyPair.publicKey));
   const publicKeyHex = Buffer.from(rawPubKey).toString('hex');
 
-  logger.info(`[media/CEK] Datil ECDH envelope recovery via ${litParams.actionCid}, kid=${litParams.kid}, user=${effectiveUserAddr}`);
+  logger.info(`[media/CEK] Datil ECDH envelope recovery via ${litParams.actionCid}, kid=${litParams.kid}`);
 
   let envelope: Buffer;
 
@@ -1127,21 +1222,25 @@ async function recoverMediaCEK(
     sessionSigs = await getExecuteSessionSigs(client, wallet);
   }
 
+  const datilJsParams: Record<string, unknown> = {
+    keyAlg: { name: 'ECDH', namedCurve: 'P-256' },
+    publicKey: publicKeyHex,
+    ciphertext: litParams.litCiphertext,
+    dataToEncryptHash: litParams.dataToEncryptHash,
+    kid: litParams.kid.startsWith('0x') ? litParams.kid : `0x${litParams.kid}`,
+    actionIpfsId: litParams.actionCid,
+    authority: litParams.authority,
+    chain: litParams.chain,
+    chainId: litParams.chainId,
+    rpc: litParams.rpc,
+    delegation: litParams.secureViewSession.delegationCanonical,
+    delegationSig: litParams.secureViewSession.delegationSig,
+    request: litParams.secureViewSession.requestCanonical,
+    requestSig: litParams.secureViewSession.requestSig,
+  };
   const executeParams: any = {
     sessionSigs,
-    jsParams: {
-      keyAlg: { name: 'ECDH', namedCurve: 'P-256' },
-      publicKey: publicKeyHex,
-      ciphertext: litParams.litCiphertext,
-      dataToEncryptHash: litParams.dataToEncryptHash,
-      kid: litParams.kid.startsWith('0x') ? litParams.kid : `0x${litParams.kid}`,
-      actionIpfsId: litParams.actionCid,
-      authority: litParams.authority,
-      chain: litParams.chain,
-      chainId: litParams.chainId,
-      rpc: litParams.rpc,
-      userAddress: effectiveUserAddr,
-    },
+    jsParams: datilJsParams,
     ipfsId: litParams.actionCid,
   };
 

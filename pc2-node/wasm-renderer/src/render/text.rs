@@ -62,10 +62,10 @@ pub fn render_text_raw(plaintext: &[u8], cmd: &RenderCommand) -> (RenderResult, 
 
     let result = RenderResult {
         success: true,
-        error: None,
         content_type: Some("image/jpeg".to_string()),
         total_pages: Some(1),
         output_size: Some(buf.len()),
+        ..Default::default()
     };
 
     (result, Some(buf))

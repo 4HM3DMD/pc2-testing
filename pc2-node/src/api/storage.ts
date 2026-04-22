@@ -5,7 +5,7 @@
  */
 
 import { Router, Response } from 'express';
-import { authenticate, AuthenticatedRequest } from './middleware.js';
+import { authenticate, requireOwner, AuthenticatedRequest } from './middleware.js';
 import { logger } from '../utils/logger.js';
 import { getEffectiveStorageLimit } from './info.js';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
@@ -13,6 +13,18 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { getWASMRuntime, type RendererCommand } from '../services/wasm/WASMRuntime.js';
 import { getBaseRpcUrl } from '../utils/rpc.js';
+import {
+  buildDelegationPayload,
+  canonicalize,
+  verifyDelegationEip191,
+  verifyDelegationEip1271,
+  verifySecureViewBundle,
+  revokeDelegation,
+  _getSessionCacheStats,
+  MAX_DELEGATION_WINDOW_SECONDS,
+  REQUEST_FRESHNESS_WINDOW_SECONDS,
+  type SecureViewDelegation,
+} from '../utils/secureViewSession.js';
 
 const router = Router();
 
@@ -1139,6 +1151,15 @@ if (!NON_MEDIA_ACTION_CID && existsSync(LIT_ACTION_CID_PATH)) {
   }
 }
 
+/**
+ * Returns the server's authoritative sigauth Lit Action CID. Used by other
+ * modules (e.g. media.ts) so that legacy PSSH-recorded action CIDs are
+ * overridden by the server-controlled sigauth action when backend=chipotle.
+ */
+export function getNonMediaActionCid(): string {
+  return NON_MEDIA_ACTION_CID || '';
+}
+
 const DEFAULT_AUTHORITY = '0x09dBe796f40ECEffEAccf243c3d758C4c1d8D87D';
 
 // ── Rate limiting for Lit endpoints ───────────────────────────
@@ -1182,33 +1203,123 @@ const pendingLitCalls = new Map<string, Promise<string>>();
 
 // ── Session-scoped CEK cache ──────────────────────────────────
 // Short-lived in-memory cache to avoid redundant Lit Action calls within a
-// single viewing session (e.g. multi-page PDFs, window resize re-renders).
-// - 5 minute TTL, memory-only, cleared on process restart
-// - Keyed on (kid + buyerAddress) so different users never share CEKs
-// - Never written to disk — the AuthorityGateway remains the source of truth
+// single viewing session (e.g. multi-page PDFs, multi-chapter EPUBs,
+// window resize re-renders).
+//
+// Properties:
+//   - 5 minute TTL, memory-only, cleared on process restart
+//   - Keyed on (kid + buyerAddress.toLowerCase()) so different users
+//     never share CEKs and checksummed/flat addresses collapse to one entry
+//   - True LRU eviction: reads promote to most-recently-used; inserts at
+//     capacity evict the least-recently-used entry
+//   - Never written to disk — the AuthorityGateway remains the source of truth
+//
+// Known access-revocation tail: if a user's on-chain access is revoked
+// after first decryption, they retain decrypt capability for the remainder
+// of the TTL window. POST /api/admin/cache/flush-cek force-invalidates.
 const CEK_CACHE_TTL_MS = 5 * 60 * 1000;
 const CEK_CACHE_MAX_ENTRIES = 50;
+
+// Aggregate counters for observability + admin flush diagnostics.
+const cekCacheStats = {
+  hits: 0,
+  misses: 0,
+  evictions: 0,
+  expirations: 0,
+  manualFlushes: 0,
+  coalesced: 0,
+};
+
 const cekSessionCache = new Map<string, { cekBase64: string; expiresAt: number }>();
 
+function cekCacheKey(kid: string, buyerAddress: string): string {
+  return `${kid}:${buyerAddress.toLowerCase()}`;
+}
+
 function getCachedCEK(kid: string, buyerAddress: string): string | null {
-  const key = `${kid}:${buyerAddress.toLowerCase()}`;
+  const key = cekCacheKey(kid, buyerAddress);
   const entry = cekSessionCache.get(key);
-  if (!entry) return null;
-  if (Date.now() > entry.expiresAt) {
-    cekSessionCache.delete(key);
+  if (!entry) {
+    cekCacheStats.misses++;
     return null;
   }
+  if (Date.now() > entry.expiresAt) {
+    cekSessionCache.delete(key);
+    cekCacheStats.expirations++;
+    cekCacheStats.misses++;
+    return null;
+  }
+  // LRU promote: Map preserves insertion order, so delete-then-set moves
+  // this entry to the tail (most-recently-used position). Next eviction
+  // will pick the head of the Map (least-recently-used).
+  cekSessionCache.delete(key);
+  cekSessionCache.set(key, entry);
+  cekCacheStats.hits++;
   return entry.cekBase64;
 }
 
 function cacheCEK(kid: string, buyerAddress: string, cekBase64: string): void {
-  const key = `${kid}:${buyerAddress.toLowerCase()}`;
-  // Evict oldest entries if at capacity
-  if (cekSessionCache.size >= CEK_CACHE_MAX_ENTRIES) {
+  const key = cekCacheKey(kid, buyerAddress);
+  // If the key already exists, we still want to promote it — delete first.
+  if (cekSessionCache.has(key)) {
+    cekSessionCache.delete(key);
+  } else if (cekSessionCache.size >= CEK_CACHE_MAX_ENTRIES) {
+    // Evict least-recently-used (head of insertion-ordered Map).
     const oldest = cekSessionCache.keys().next().value;
-    if (oldest) cekSessionCache.delete(oldest);
+    if (oldest) {
+      cekSessionCache.delete(oldest);
+      cekCacheStats.evictions++;
+    }
   }
   cekSessionCache.set(key, { cekBase64, expiresAt: Date.now() + CEK_CACHE_TTL_MS });
+}
+
+/**
+ * Drop cached CEKs. Called by the admin flush endpoint (access revocation,
+ * emergency response) and can be narrowed to a single kid or user.
+ *
+ * @param opts.kid           When set, only entries for this content kid are removed.
+ * @param opts.buyerAddress  When set, only entries for this buyer (lowercased) are removed.
+ *                           If both set, only the exact pair is removed.
+ *                           If neither set, the entire cache is flushed.
+ * @returns number of entries removed
+ */
+export function flushCEKCache(opts: { kid?: string; buyerAddress?: string } = {}): number {
+  const kid = opts.kid;
+  const addr = opts.buyerAddress ? opts.buyerAddress.toLowerCase() : undefined;
+
+  if (!kid && !addr) {
+    const n = cekSessionCache.size;
+    cekSessionCache.clear();
+    cekCacheStats.manualFlushes += n;
+    return n;
+  }
+
+  let removed = 0;
+  for (const key of Array.from(cekSessionCache.keys())) {
+    // Keys are `${kid}:${addr}` — split on last ':' so kids containing ':' still parse.
+    const sep = key.indexOf(':');
+    if (sep === -1) continue;
+    const entryKid = key.slice(0, sep);
+    const entryAddr = key.slice(sep + 1);
+    const kidMatch = !kid || entryKid === kid;
+    const addrMatch = !addr || entryAddr === addr;
+    if (kidMatch && addrMatch) {
+      cekSessionCache.delete(key);
+      removed++;
+    }
+  }
+  cekCacheStats.manualFlushes += removed;
+  return removed;
+}
+
+export function getCEKCacheStats() {
+  return {
+    ...cekCacheStats,
+    size: cekSessionCache.size,
+    capacity: CEK_CACHE_MAX_ENTRIES,
+    ttlMs: CEK_CACHE_TTL_MS,
+  };
 }
 
 /**
@@ -1490,6 +1601,17 @@ export interface DecryptParams {
   rpc?: string;
   buyerAddress: string;
   litBackend?: LitBackend;
+  /**
+   * Optional session-key delegation bundle (Option C). When present,
+   * Phase 2c passes these through to the Lit Action instead of
+   * `userAddress`. When absent, the legacy `userAddress` path runs.
+   */
+  secureViewSession?: {
+    delegationCanonical: string;
+    delegationSig: `0x${string}`;
+    requestCanonical: string;
+    requestSig: `0x${string}`;
+  };
 }
 
 /**
@@ -1534,6 +1656,7 @@ async function recoverCEKAndFetchData(params: DecryptParams, ipfsService?: any):
     // Promise coalescing: if another request is already fetching this CEK, reuse the in-flight call
     const pending = pendingLitCalls.get(coalescingKey);
     if (pending) {
+      cekCacheStats.coalesced++;
       logger.info(`[Lit] Coalescing duplicate Lit call for kid=${kid} (saved $0.01)`);
       return pending;
     }
@@ -1542,44 +1665,68 @@ async function recoverCEKAndFetchData(params: DecryptParams, ipfsService?: any):
       try {
         if (effectiveBackend === 'chipotle') {
           const { recoverNonMediaCEK } = await import('./chipotle-client.js');
+          // Phase 5 cutover: the delegation in params.secureViewSession is
+          // bound to the server-configured NON_MEDIA_ACTION_CID. The
+          // sigauth Lit Action self-checks del.actionIpfsId ===
+          // jsParams.actionIpfsId, so we must forward the same CID here
+          // regardless of what the asset's PSSH metadata carries.
+          if (!NON_MEDIA_ACTION_CID) {
+            throw new Error('No Lit Action CID configured (NON_MEDIA_ACTION_CID)');
+          }
           const cekBase64 = await recoverNonMediaCEK({
             litCiphertext,
             dataToEncryptHash,
             kid,
             buyerAddress,
-            actionCid: actionCid || NON_MEDIA_ACTION_CID || undefined,
+            actionCid: NON_MEDIA_ACTION_CID,
             authority: effectiveAuthority,
             chain: effectiveChain,
             chainId: effectiveChainId,
             rpc: effectiveRpc,
+            secureViewSession: params.secureViewSession,
           });
           logger.info(`[Lit] CEK recovered in ${Date.now() - litStart}ms (Chipotle REST)`);
           cacheCEK(kid, buyerAddress, cekBase64);
           return cekBase64;
         }
 
-        // Datil fallback (LIT_BACKEND=datil)
+        // Datil fallback (LIT_BACKEND=datil). Phase 5 cutover: the
+        // sigauth Lit Action recovers the authorised address from
+        // delegation.coveredAddresses, so `userAddress` is no longer
+        // sent as a jsParam. NON_MEDIA_ACTION_CID is authoritative.
         const wallet = await getServerWallet();
         const client = await getLitClient();
         const sessionSigs = await getExecuteSessionSigs(client, wallet);
 
-        const effectiveActionCid = actionCid || NON_MEDIA_ACTION_CID;
-        if (!effectiveActionCid) throw new Error('No Lit Action CID configured');
+        if (!NON_MEDIA_ACTION_CID) {
+          throw new Error('No Lit Action CID configured (NON_MEDIA_ACTION_CID)');
+        }
+        if (!params.secureViewSession) {
+          // Belt-and-braces: the HTTP handler already rejects bundle-less
+          // requests, but recoverCEKAndFetchData is also called from
+          // other code paths and we want the sigauth invariant enforced
+          // at the Lit boundary too.
+          throw new Error('secureViewSession bundle is required for Lit decryption');
+        }
 
+        const datilNonMediaParams: Record<string, unknown> = {
+          ciphertext: litCiphertext,
+          dataToEncryptHash,
+          kid: kid.startsWith('0x') ? kid : `0x${kid}`,
+          actionIpfsId: NON_MEDIA_ACTION_CID,
+          authority: effectiveAuthority,
+          chain: effectiveChain,
+          chainId: effectiveChainId,
+          rpc: effectiveRpc,
+          delegation: params.secureViewSession.delegationCanonical,
+          delegationSig: params.secureViewSession.delegationSig,
+          request: params.secureViewSession.requestCanonical,
+          requestSig: params.secureViewSession.requestSig,
+        };
         const executeParams: any = {
           sessionSigs,
-          jsParams: {
-            ciphertext: litCiphertext,
-            dataToEncryptHash,
-            kid: kid.startsWith('0x') ? kid : `0x${kid}`,
-            actionIpfsId: effectiveActionCid,
-            authority: effectiveAuthority,
-            chain: effectiveChain,
-            chainId: effectiveChainId,
-            rpc: effectiveRpc,
-            userAddress: buyerAddress,
-          },
-          ipfsId: effectiveActionCid,
+          jsParams: datilNonMediaParams,
+          ipfsId: NON_MEDIA_ACTION_CID,
         };
 
         const result = await client.executeJs(executeParams);
@@ -1733,6 +1880,74 @@ router.post('/lit/decrypt', authenticate, async (_req: AuthenticatedRequest, res
   });
 });
 
+/**
+ * GET /api/storage/admin/cek-cache/stats
+ *
+ * Owner-only. Returns CEK cache observability counters — hits, misses,
+ * evictions, expirations, manual flushes, coalesced Lit calls, plus
+ * current size / capacity / TTL.
+ *
+ * Useful for: diagnosing cost spikes (many misses = cache thrash, bump
+ * capacity), verifying coalescing is working (high coalesced = good),
+ * auditing manual flush activity.
+ */
+router.get('/admin/cek-cache/stats', authenticate, requireOwner, (_req: AuthenticatedRequest, res: Response) => {
+  res.json({
+    ok: true,
+    stats: getCEKCacheStats(),
+  });
+});
+
+/**
+ * POST /api/storage/admin/cek-cache/flush
+ *
+ * Owner-only. Force-invalidates cached CEKs. Use when:
+ *   - A user's on-chain access has been revoked and you need to enforce
+ *     the cutoff before the 5-minute TTL elapses
+ *   - A content kid has been rotated and stale CEKs could be misused
+ *   - Debugging / incident response
+ *
+ * Body (all optional):
+ *   { kid?: string, buyerAddress?: string }
+ *
+ * Behaviour:
+ *   - No body / empty body → full cache flush
+ *   - kid only              → flush every user's entry for that kid
+ *   - buyerAddress only     → flush every kid's entry for that buyer
+ *   - both                  → flush the single (kid, buyer) pair
+ *
+ * Response: { ok: true, removed: number, stats: <current stats> }
+ */
+router.post('/admin/cek-cache/flush', authenticate, requireOwner, (req: AuthenticatedRequest, res: Response) => {
+  const body = (req.body || {}) as { kid?: string; buyerAddress?: string };
+  const kid = typeof body.kid === 'string' && body.kid.length > 0 ? body.kid : undefined;
+  const buyerAddress = typeof body.buyerAddress === 'string' && body.buyerAddress.length > 0 ? body.buyerAddress : undefined;
+
+  // Light input validation — prevents oversized garbage payloads polluting logs.
+  if (kid && kid.length > 256) {
+    res.status(400).json({ error: 'kid too long' });
+    return;
+  }
+  if (buyerAddress && buyerAddress.length > 128) {
+    res.status(400).json({ error: 'buyerAddress too long' });
+    return;
+  }
+
+  const removed = flushCEKCache({ kid, buyerAddress });
+  const actor = req.user?.wallet_address || 'unknown';
+  const scope = kid && buyerAddress ? `kid=${kid.substring(0, 12)}…,buyer=${buyerAddress.substring(0, 10)}…`
+    : kid ? `kid=${kid.substring(0, 12)}…`
+    : buyerAddress ? `buyer=${buyerAddress.substring(0, 10)}…`
+    : 'all';
+  logger.info(`[CEKCache] Manual flush by ${actor.substring(0, 10)}… — scope=${scope}, removed=${removed}`);
+
+  res.json({
+    ok: true,
+    removed,
+    stats: getCEKCacheStats(),
+  });
+});
+
 // ── WASM Renderer Integration ────────────────────────────────────────
 //
 // The dDRM WASM renderer performs decryption + rendering inside WASM linear
@@ -1758,6 +1973,16 @@ interface WASMRenderResult {
   rendered: Buffer;
   totalPages?: number;
   executionTimeMs: number;
+  /** EPUB: total spine chapters. */
+  totalChapters?: number;
+  /** EPUB: table of contents (cached on first chapter request). */
+  chapters?: Array<{ title: string; chapter_index: number; href: string }>;
+  /** EPUB: `true` when rendition:layout=pre-paginated (fall back to pixel-lock). */
+  fixedLayout?: boolean;
+  /** EPUB: publication title from OPF metadata. */
+  epubTitle?: string;
+  /** EPUB: publication author from OPF metadata. */
+  epubAuthor?: string;
 }
 
 /**
@@ -1772,22 +1997,28 @@ async function renderViaWASM(
   maxWidth: number,
   page?: number,
   ipfsService?: any,
+  chapter?: number,
+  viewportWidth?: number,
 ): Promise<WASMRenderResult | null> {
   const { cekBase64, encryptedBytes } = await recoverCEKAndFetchData(params, ipfsService);
 
   const paddedCek = cekBase64.length % 4 === 0 ? cekBase64 : cekBase64 + '='.repeat(4 - (cekBase64.length % 4));
 
   const watermarkText = `${params.buyerAddress.substring(0, 10)}...${params.buyerAddress.substring(params.buyerAddress.length - 6)} ${new Date().toISOString().split('T')[0]}`;
+  const isEpub = mime === 'application/epub+zip' || mime === 'application/epub';
 
   const command: RendererCommand = {
     cek_b64: paddedCek,
     iv_b64: params.iv,
     mime_type: mime,
     watermark: watermarkText,
-    page: page ? page - 1 : undefined,
+    page: !isEpub && page ? page - 1 : undefined,
+    chapter: isEpub ? (chapter ?? 0) : undefined,
     max_width: maxWidth,
     max_height: Math.round(maxWidth * 1.5),
-    output_format: 'jpeg',
+    output_format: isEpub ? 'html' : 'jpeg',
+    forensic_mark: isEpub ? params.buyerAddress : undefined,
+    viewport_width: isEpub ? (viewportWidth || 680) : undefined,
   };
 
   const wasmBinary = await loadRendererBinary();
@@ -1800,6 +2031,21 @@ async function renderViaWASM(
     throw new Error(`WASM renderer: ${output.result.error}`);
   }
 
+  // EPUB pre-paginated publications signal `fixed_layout=true` without
+  // rendered bytes; caller should retry as CBZ-like pixel-lock.
+  if (!output.renderedBytes && output.result.fixed_layout) {
+    return {
+      contentType: 'application/epub+zip',
+      rendered: Buffer.alloc(0),
+      totalPages: output.result.total_chapters,
+      executionTimeMs: output.executionTimeMs,
+      fixedLayout: true,
+      totalChapters: output.result.total_chapters,
+      epubTitle: output.result.epub_title,
+      epubAuthor: output.result.epub_author,
+    };
+  }
+
   if (!output.renderedBytes) {
     throw new Error('WASM renderer produced no output');
   }
@@ -1809,13 +2055,297 @@ async function renderViaWASM(
     rendered: output.renderedBytes,
     totalPages: output.result.total_pages,
     executionTimeMs: output.executionTimeMs,
+    totalChapters: output.result.total_chapters,
+    chapters: output.result.chapters,
+    fixedLayout: output.result.fixed_layout,
+    epubTitle: output.result.epub_title,
+    epubAuthor: output.result.epub_author,
   };
 }
 
+// ────────────────────────────────────────────────────────────────────
+// Secure-View Session endpoints (Option C — session-key delegation)
+//
+// These endpoints implement the client-facing half of the Lit Action
+// signature-auth protocol defined in
+// `.cursor/tasks/LIT-ACTION-SIGNATURE-AUTH/DESIGN.md`.
+//
+// Lifecycle:
+//   1. Client calls /begin-session with its ephemeral P-256 pubkey;
+//      server returns an unsigned SecureViewDelegation payload bound
+//      to the current Lit Action CID, chain, and owner.
+//   2. User's wallet signs the canonical JSON (EIP-191 personal_sign);
+//      client posts { delegation, delegationSig } to /complete-session.
+//      Server verifies (EIP-191 first, EIP-1271 fallback via viem
+//      PublicClient) and returns { ok: true, expiresAt }.
+//   3. On every /lit/secure-view call the client attaches
+//      { delegation, delegationSig, request, requestSig } — the
+//      request fields are silently produced by the ephemeral key.
+//   4. /revoke-session adds the delegation nonce to the per-node
+//      revoke map for the rest of its natural window.
+//
+// No delegation state is persisted across PC2 restarts — each node
+// re-verifies on every request, and the Lit Action inside the TEE
+// is the real access boundary.
+// ────────────────────────────────────────────────────────────────────
+
+/** Lazy viem PublicClient for EIP-1271 eth_calls. */
+let __viemPublicClient: any = null;
+async function getViemPublicClient() {
+  if (__viemPublicClient) return __viemPublicClient;
+  const { createPublicClient, http } = await import('viem');
+  const { base } = await import('viem/chains');
+  __viemPublicClient = createPublicClient({
+    chain: base,
+    transport: http(getBaseRpcUrl()),
+  });
+  return __viemPublicClient;
+}
+
+/**
+ * eth_call adapter matching the shape `secureViewSession.verifyDelegationEip1271`
+ * expects. Delegates to viem.
+ */
+async function ethCallAdapter(tx: { to: `0x${string}`; data: `0x${string}` }): Promise<`0x${string}`> {
+  const client = await getViemPublicClient();
+  const raw = await client.request({
+    method: 'eth_call',
+    params: [{ to: tx.to, data: tx.data }, 'latest'],
+  });
+  return raw as `0x${string}`;
+}
+
+/**
+ * POST /api/storage/lit/begin-session
+ * Body: { sessionPublicKey: `0x04${string}`, coveredAddresses?: `0x${string}`[], ttlSeconds?: number }
+ * Returns: { delegation: SecureViewDelegation, delegationCanonical: string, expectedActionIpfsId: string }
+ *
+ * `sessionPublicKey` is the client's ephemeral P-256 SEC1 uncompressed
+ * public key (65 bytes). `coveredAddresses` defaults to
+ * `[wallet_address, smart_account_address]` from the authenticated
+ * session — clients can pass a subset but cannot introduce addresses
+ * not attested by the PC2 session.
+ */
+router.post('/lit/begin-session', authenticate, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const walletAddress = req.user?.wallet_address;
+    const smartAccountAddress = req.user?.smart_account_address;
+    if (!walletAddress) {
+      res.status(401).json({ error: 'Not authenticated' });
+      return;
+    }
+
+    const { sessionPublicKey, coveredAddresses, ttlSeconds } = req.body || {};
+    if (typeof sessionPublicKey !== 'string' || !/^0x04[0-9a-fA-F]{128}$/.test(sessionPublicKey)) {
+      res.status(400).json({ error: 'sessionPublicKey must be 65-byte SEC1 uncompressed P-256 hex (0x04||X||Y)' });
+      return;
+    }
+
+    const defaultCovered: `0x${string}`[] = [walletAddress as `0x${string}`];
+    if (smartAccountAddress && smartAccountAddress.toLowerCase() !== walletAddress.toLowerCase()) {
+      defaultCovered.push(smartAccountAddress as `0x${string}`);
+    }
+
+    let requestedCovered: `0x${string}`[] = defaultCovered;
+    if (Array.isArray(coveredAddresses) && coveredAddresses.length > 0) {
+      // Must be a subset of the authenticated session's addresses — we
+      // never let the client smuggle addresses we haven't verified.
+      const allowed = new Set(defaultCovered.map((a) => a.toLowerCase()));
+      const filtered = coveredAddresses.filter(
+        (a: unknown): a is `0x${string}` =>
+          typeof a === 'string' && /^0x[0-9a-fA-F]{40}$/.test(a) && allowed.has(a.toLowerCase()),
+      );
+      if (filtered.length === 0) {
+        res.status(400).json({ error: 'coveredAddresses contains no address from the authenticated session' });
+        return;
+      }
+      requestedCovered = filtered;
+    }
+
+    const actionIpfsId = NON_MEDIA_ACTION_CID;
+    if (!actionIpfsId) {
+      res.status(503).json({ error: 'Lit Action CID not configured on this node' });
+      return;
+    }
+
+    const ttl = Math.min(
+      Number.isFinite(ttlSeconds) ? Math.max(60, Number(ttlSeconds)) : MAX_DELEGATION_WINDOW_SECONDS,
+      MAX_DELEGATION_WINDOW_SECONDS,
+    );
+
+    const delegation = buildDelegationPayload({
+      ownerAddress: walletAddress as `0x${string}`,
+      coveredAddresses: requestedCovered,
+      sessionPublicKey: sessionPublicKey as `0x${string}`,
+      actionIpfsId,
+      chainId: 8453,
+      ttlSeconds: ttl,
+    });
+
+    res.json({
+      delegation,
+      delegationCanonical: canonicalize(delegation),
+      expectedActionIpfsId: actionIpfsId,
+      maxDelegationWindowSeconds: MAX_DELEGATION_WINDOW_SECONDS,
+      requestFreshnessWindowSeconds: REQUEST_FRESHNESS_WINDOW_SECONDS,
+    });
+  } catch (err: any) {
+    logger.error(`[SecureView.session] begin-session failed: ${err.message}`);
+    res.status(500).json({ error: err.message || 'begin-session failed' });
+  }
+});
+
+/**
+ * POST /api/storage/lit/complete-session
+ * Body: { delegation: string | SecureViewDelegation, delegationSig: string }
+ * Returns: { ok: true, ownerAddress, expiresAt, coveredAddresses } | { error }
+ *
+ * Server verifies the delegation was legitimately signed by the owner
+ * address (EIP-191 first, EIP-1271 via eth_call fallback). This is a
+ * "try it now" check — the client can confirm its session is workable
+ * before attempting to open any assets. No state is persisted: every
+ * /lit/secure-view re-verifies independently.
+ */
+router.post('/lit/complete-session', authenticate, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const walletAddress = req.user?.wallet_address;
+    if (!walletAddress) {
+      res.status(401).json({ error: 'Not authenticated' });
+      return;
+    }
+
+    const { delegation: delIn, delegationSig } = req.body || {};
+    if (!delIn || typeof delegationSig !== 'string') {
+      res.status(400).json({ error: 'Missing delegation or delegationSig' });
+      return;
+    }
+
+    // Accept either canonical JSON string or a parsed object.
+    let delegationObj: SecureViewDelegation;
+    let delegationCanonical: string;
+    if (typeof delIn === 'string') {
+      try {
+        delegationObj = JSON.parse(delIn);
+      } catch {
+        res.status(400).json({ error: 'delegation is not valid JSON' });
+        return;
+      }
+      delegationCanonical = delIn;
+    } else {
+      delegationObj = delIn;
+      delegationCanonical = canonicalize(delIn);
+    }
+
+    // Session sanity: delegation.ownerAddress must match the authenticated wallet.
+    if (
+      typeof delegationObj.ownerAddress !== 'string' ||
+      delegationObj.ownerAddress.toLowerCase() !== walletAddress.toLowerCase()
+    ) {
+      res.status(403).json({ error: 'delegation.ownerAddress does not match authenticated session' });
+      return;
+    }
+
+    // actionIpfsId sanity
+    if (delegationObj.actionIpfsId !== NON_MEDIA_ACTION_CID) {
+      res.status(400).json({ error: 'delegation.actionIpfsId does not match server-configured CID' });
+      return;
+    }
+
+    // EIP-191 first
+    const recovered = await verifyDelegationEip191(delegationCanonical, delegationSig as `0x${string}`);
+    let valid = recovered !== null && recovered.toLowerCase() === delegationObj.ownerAddress.toLowerCase();
+
+    // EIP-1271 fallback — for smart wallets where the owner address IS a contract.
+    if (!valid) {
+      try {
+        const { hashMessage } = await import('viem');
+        const messageHash = hashMessage(delegationCanonical) as `0x${string}`;
+        valid = await verifyDelegationEip1271(
+          delegationObj.ownerAddress as `0x${string}`,
+          messageHash,
+          delegationSig as `0x${string}`,
+          ethCallAdapter,
+        );
+      } catch (e: any) {
+        logger.debug(`[SecureView.session] EIP-1271 fallback threw: ${e.message}`);
+      }
+    }
+
+    if (!valid) {
+      res.status(400).json({ error: 'Delegation signature does not verify (EIP-191 + EIP-1271 both failed)' });
+      return;
+    }
+
+    res.json({
+      ok: true,
+      ownerAddress: delegationObj.ownerAddress,
+      expiresAt: delegationObj.expiresAt,
+      coveredAddresses: delegationObj.coveredAddresses,
+      actionIpfsId: delegationObj.actionIpfsId,
+    });
+  } catch (err: any) {
+    logger.error(`[SecureView.session] complete-session failed: ${err.message}`);
+    res.status(500).json({ error: err.message || 'complete-session failed' });
+  }
+});
+
+/**
+ * POST /api/storage/lit/revoke-session
+ * Body: { delegationNonce: `0x${string}`, expiresAt?: number }
+ * Returns: { ok: true }
+ *
+ * Adds the delegation nonce to the per-node revoke map for the rest
+ * of its natural window. The Lit Action cannot see our revoke map
+ * (it is stateless across nodes), so this is a best-effort server-side
+ * block: it prevents /lit/secure-view on THIS node from honouring the
+ * delegation. Attackers with a fresh delegation that has not been
+ * revoked on every node can still use it, which is why delegations
+ * are intentionally short-lived.
+ */
+router.post('/lit/revoke-session', authenticate, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { delegationNonce, expiresAt } = req.body || {};
+    if (typeof delegationNonce !== 'string' || !/^0x[0-9a-fA-F]+$/.test(delegationNonce)) {
+      res.status(400).json({ error: 'delegationNonce must be hex-encoded' });
+      return;
+    }
+    const exp =
+      Number.isFinite(expiresAt) && Number(expiresAt) > 0
+        ? Number(expiresAt)
+        : Math.floor(Date.now() / 1000) + MAX_DELEGATION_WINDOW_SECONDS;
+    revokeDelegation(delegationNonce as `0x${string}`, exp);
+    logger.info(
+      `[SecureView.session] Revoked delegation nonce=${delegationNonce.substring(0, 10)}… by ${req.user?.wallet_address?.substring(0, 10)}…`,
+    );
+    res.json({ ok: true });
+  } catch (err: any) {
+    logger.error(`[SecureView.session] revoke-session failed: ${err.message}`);
+    res.status(500).json({ error: err.message || 'revoke-session failed' });
+  }
+});
+
+/**
+ * GET /api/storage/admin/session-cache/stats (owner-only)
+ * Surface in-memory session cache sizes for ops visibility.
+ */
+router.get(
+  '/admin/session-cache/stats',
+  authenticate,
+  requireOwner,
+  (_req: AuthenticatedRequest, res: Response) => {
+    res.json(_getSessionCacheStats());
+  },
+);
+
 /**
  * POST /api/storage/lit/secure-view
- * Secure viewer: decrypts asset server-side, renders to lossy image, streams binary.
- * The raw file NEVER leaves server memory. Browser receives only rendered pixels.
+ * Secure viewer: decrypts asset server-side, renders to a locked representation,
+ * streams binary. The raw file NEVER leaves server memory.
+ *
+ * Two render tiers:
+ *   • Pixel-lock — images, PDFs, CBZ comics, source code → JPEG/WebP/PNG
+ *   • HTML-lock  — reflowable EPUB → sanitized XHTML (no JS, strict CSP),
+ *                   zero-width forensic watermark + diagonal SVG overlay
  *
  * Primary path: WASM renderer (plaintext confined to WASM linear memory;
  *   CEK passes through Node.js during MemFS write — see CEK Exposure Assessment)
@@ -1823,11 +2353,18 @@ async function renderViaWASM(
  *
  * Body: same as /lit/decrypt, plus:
  *   mimeType: string,   -- original asset MIME (image/png, application/pdf, etc.)
- *   page?: number,       -- page number for PDFs (1-indexed, default 1)
+ *   page?: number,       -- page number for PDFs / CBZ (1-indexed, default 1)
+ *   chapter?: number,    -- chapter index for EPUB (0-indexed, default 0)
  *   maxWidth?: number,   -- max render width (default 1200)
+ *   viewportWidth?: number, -- EPUB reader pane width in CSS px (default 680)
  *
- * Response: binary image stream (image/jpeg or image/png)
- *   Headers: X-Asset-Type, X-Asset-Pages (for PDFs), X-Watermark, X-Renderer
+ * Response: pixel-lock returns image/jpeg; html-lock returns text/html
+ *   Headers: X-Asset-Type, X-Asset-Pages (PDF/CBZ), X-Asset-Chapters (EPUB),
+ *            X-Asset-TOC (base64 JSON for EPUB TOC), X-Watermark, X-Renderer
+ *
+ * Runtime convergence: this handler maps 1:1 to the future Viewer Provider
+ *   Capsule. Capability scopes consumed: drm:decrypt, drm:verify-access,
+ *   storage:fetch. Provided: drm:render. See PC2_CONVERGENCE_INVENTORY.
  */
 router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, res: Response) => {
   const requestStart = Date.now();
@@ -1836,8 +2373,16 @@ router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, 
       litCiphertext, dataToEncryptHash, iv, encryptedDataCid, kid,
       mimeType,
       page: pageNum,
+      chapter: reqChapter,
       maxWidth: reqMaxWidth,
+      viewportWidth: reqViewportWidth,
       litBackend: reqLitBackend,
+      // Session-key delegation fields (Option C) — optional until
+      // Phase 2d swaps the Lit Action CID to the verifying version.
+      delegation: delegationIn,
+      delegationSig,
+      request: sessionRequestIn,
+      requestSig,
     } = req.body;
 
     // Derive buyer addresses from authenticated session — never trust client
@@ -1847,6 +2392,86 @@ router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, 
     if (!litCiphertext || !dataToEncryptHash || !kid || !buyerAddress || !iv || !encryptedDataCid) {
       res.status(400).json({ error: 'Missing required fields for secure view' });
       return;
+    }
+
+    // ── Session-sig enforcement (Phase 5 hard cutover) ──
+    // The secure-view session bundle is now MANDATORY. The legacy
+    // `userAddress`-in-jsParams path has been retired; any request
+    // without { delegation, delegationSig, request, requestSig } is
+    // rejected outright. The Lit Action still re-verifies everything
+    // independently — this block fails malformed / expired / replayed
+    // bundles fast, before we spend a $0.01 Lit call.
+    const hasAnyBundleField =
+      delegationIn !== undefined ||
+      delegationSig !== undefined ||
+      sessionRequestIn !== undefined ||
+      requestSig !== undefined;
+
+    if (
+      !hasAnyBundleField ||
+      delegationIn === undefined ||
+      typeof delegationSig !== 'string' ||
+      sessionRequestIn === undefined ||
+      typeof requestSig !== 'string'
+    ) {
+      logger.warn(
+        `[SecureView] Request rejected: session bundle missing or incomplete (buyer=${buyerAddress.substring(0, 10)}…)`,
+      );
+      res.status(401).json({
+        error: 'session_bundle_required',
+        message:
+          'Secure-view requires a signed delegation + request bundle. Call POST /api/storage/lit/begin-session first.',
+      });
+      return;
+    }
+
+    {
+      const delegationCanonical =
+        typeof delegationIn === 'string' ? delegationIn : canonicalize(delegationIn);
+      const requestCanonical =
+        typeof sessionRequestIn === 'string' ? sessionRequestIn : canonicalize(sessionRequestIn);
+
+      const { hashMessage } = await import('viem');
+      const verify = await verifySecureViewBundle(
+        {
+          delegation: delegationCanonical,
+          delegationSig: delegationSig as `0x${string}`,
+          request: requestCanonical,
+          requestSig: requestSig as `0x${string}`,
+        },
+        {
+          expectedActionIpfsId: NON_MEDIA_ACTION_CID,
+          expectedChainId: 8453,
+          expectedKid: kid,
+          ethCall: ethCallAdapter,
+          messageHashForEip1271: hashMessage(delegationCanonical) as `0x${string}`,
+        },
+      );
+
+      if (!verify.ok) {
+        logger.warn(`[SecureView] Session bundle rejected: ${verify.error}`);
+        res.status(401).json({ error: 'session_bundle_invalid', code: verify.error });
+        return;
+      }
+
+      // Cross-check against authenticated session: delegation owner
+      // must match the PC2-authenticated wallet. Prevents a user with
+      // session X from handing us a delegation signed by a different
+      // wallet Y.
+      const del = verify.delegation!;
+      if (
+        del.ownerAddress.toLowerCase() !== buyerAddress.toLowerCase() &&
+        (!buyerAddressAlt || del.ownerAddress.toLowerCase() !== buyerAddressAlt.toLowerCase())
+      ) {
+        res.status(403).json({ error: 'delegation.ownerAddress does not match authenticated session' });
+        return;
+      }
+
+      // Set a header so ops can see the session layer is in effect.
+      res.setHeader('X-SecureView-Session', 'verified');
+      logger.info(
+        `[SecureView] Session bundle verified: owner=${del.ownerAddress.substring(0, 10)}… covered=${del.coveredAddresses.length}`,
+      );
     }
 
     const mime = (mimeType || 'application/octet-stream').toLowerCase();
@@ -1903,6 +2528,18 @@ router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, 
     effectiveBody.rpc = rpcUrl;
     effectiveBody.authority = authorityAddr;
 
+    // Pre-canonicalized session bundle forwarded to the Lit Action
+    // via recoverNonMediaCEK. Always populated — the bundle is
+    // mandatory (enforced above) and has been verified.
+    effectiveBody.secureViewSession = {
+      delegationCanonical:
+        typeof delegationIn === 'string' ? delegationIn : canonicalize(delegationIn),
+      delegationSig: delegationSig as `0x${string}`,
+      requestCanonical:
+        typeof sessionRequestIn === 'string' ? sessionRequestIn : canonicalize(sessionRequestIn),
+      requestSig: requestSig as `0x${string}`,
+    };
+
     // ── Rate Limiting ────────────────────────────────────
     if (!checkLitRateLimit(buyerAddress)) {
       logger.warn(`[SecureView] Rate limit exceeded for ${buyerAddress.substring(0, 10)}...`);
@@ -1911,19 +2548,67 @@ router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, 
     }
 
     // ── WASM Renderer Path ──────────────────────────────
-    // For images, text, and PDFs: decrypt + render inside WASM linear memory.
-    // Plaintext stays in WASM; CEK passes through Node.js during MemFS write.
+    // For images, text, PDFs, EPUB, and CBZ: decrypt + render inside WASM
+    // linear memory. Plaintext stays in WASM; CEK passes through Node.js
+    // during MemFS write.
     const wasmCodeTypes = ['application/javascript', 'application/json', 'application/xml', 'application/x-yaml', 'application/toml', 'application/x-sh'];
-    const wasmSupportedTypes = mime.startsWith('image/') || mime.startsWith('text/') || mime === 'application/pdf' || wasmCodeTypes.includes(mime);
+    const isEpub = mime === 'application/epub+zip' || mime === 'application/epub';
+    const isCbz = mime === 'application/vnd.comicbook+zip' || mime === 'application/x-cbz';
+    const wasmSupportedTypes = mime.startsWith('image/')
+      || mime.startsWith('text/')
+      || mime === 'application/pdf'
+      || wasmCodeTypes.includes(mime)
+      || isEpub
+      || isCbz;
     if (wasmSupportedTypes) {
       try {
-        const wasmResult = await renderViaWASM(effectiveBody, mime, maxWidth, pageNum, ipfsService);
+        const wasmResult = await renderViaWASM(
+          effectiveBody,
+          mime,
+          maxWidth,
+          pageNum,
+          ipfsService,
+          typeof reqChapter === 'number' ? reqChapter : undefined,
+          typeof reqViewportWidth === 'number' ? Math.min(Math.max(reqViewportWidth, 320), 1600) : undefined,
+        );
         if (wasmResult) {
+          // Fixed-layout EPUB: tell the client to retry as pixel-lock.
+          if (wasmResult.fixedLayout && wasmResult.rendered.length === 0) {
+            res.set('X-Renderer', 'wasm');
+            res.set('X-Asset-Layout', 'fixed');
+            if (wasmResult.totalChapters) {
+              res.set('X-Asset-Chapters', String(wasmResult.totalChapters));
+            }
+            if (wasmResult.epubTitle) res.set('X-Asset-Title', encodeURIComponent(wasmResult.epubTitle));
+            if (wasmResult.epubAuthor) res.set('X-Asset-Author', encodeURIComponent(wasmResult.epubAuthor));
+            res.status(409).json({
+              error: 'epub-fixed-layout',
+              message: 'Pre-paginated EPUB detected — use pixel-lock tier per chapter.',
+              totalChapters: wasmResult.totalChapters || 0,
+            });
+            logger.info(`[SecureView] EPUB fixed-layout detected (${wasmResult.totalChapters} chapters) for ${resolvedBuyer}`);
+            return;
+          }
+
           res.set('Content-Type', wasmResult.contentType);
           res.set('Content-Length', String(wasmResult.rendered.length));
           res.set('X-Renderer', 'wasm');
-          if (wasmResult.totalPages) {
-            res.set('X-Asset-Pages', String(wasmResult.totalPages));
+          if (wasmResult.totalPages) res.set('X-Asset-Pages', String(wasmResult.totalPages));
+          if (wasmResult.totalChapters) res.set('X-Asset-Chapters', String(wasmResult.totalChapters));
+          if (wasmResult.epubTitle) res.set('X-Asset-Title', encodeURIComponent(wasmResult.epubTitle));
+          if (wasmResult.epubAuthor) res.set('X-Asset-Author', encodeURIComponent(wasmResult.epubAuthor));
+          if (wasmResult.chapters && wasmResult.chapters.length > 0) {
+            // TOC is returned once; client caches it for the session.
+            const tocB64 = Buffer.from(JSON.stringify(wasmResult.chapters), 'utf8').toString('base64');
+            res.set('X-Asset-TOC', tocB64);
+          }
+          if (isEpub) {
+            // Strict CSP for sanitized HTML: no JS, no remote resources.
+            // Images are inlined as data-URIs by the WASM sanitizer.
+            res.set(
+              'Content-Security-Policy',
+              "default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:; base-uri 'none'; form-action 'none';",
+            );
           }
           res.send(wasmResult.rendered);
           logger.info(`[SecureView] WASM rendered ${mime}: ${wasmResult.rendered.length} bytes (wasm: ${wasmResult.executionTimeMs}ms, total: ${Date.now() - requestStart}ms) for ${resolvedBuyer}`);
@@ -1931,6 +2616,11 @@ router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, 
         }
       } catch (wasmErr: any) {
         logger.warn(`[SecureView] WASM renderer failed, falling back to Node.js: ${wasmErr.message}`);
+        // EPUB and CBZ have no Node.js fallback — surface the error.
+        if (isEpub || isCbz) {
+          res.status(500).json({ error: `Ebook/comic render failed: ${wasmErr.message}` });
+          return;
+        }
       }
     }
 

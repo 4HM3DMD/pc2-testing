@@ -28,6 +28,97 @@
     return fetch(url, opts);
   }
 
+  // ── Secure-view session (Option C session-key delegation) ────────
+  //
+  // The session lifecycle (ephemeral P-256 keypair, 24h delegation,
+  // wallet personal_sign) lives ENTIRELY in the parent PC2 frame —
+  // see pc2-node/frontend/pc2-secure-view.js. This iframe only asks
+  // the parent to sign a per-asset SecureViewRequest, then attaches
+  // the returned bundle to /lit/secure-view.
+  //
+  // Architectural rationale: third-party wallet extensions (TronLink,
+  // Phantom, Rabby) hijack window.ethereum inside iframes, fanning a
+  // single signature request into N MetaMask popups that frequently
+  // never resolve. Doing the signing in the parent — exactly like
+  // every other PC2 wallet flow (login, mint, send) — makes the UX
+  // consistent ("one wallet prompt at session start, double-click to
+  // open after that") and removes the iframe wallet attack surface.
+  //
+  // The bridge call is mandatory: if the parent has no secure-view
+  // manager (no injected wallet, user declined the wallet prompt) the
+  // server returns 401 session_bundle_required and the viewer surfaces
+  // a re-connect prompt. The legacy 14-day rollout window closed when
+  // Phase 5 cleanup landed (2026-04-21).
+
+  var SECURE_VIEW_SIGN_TIMEOUT_MS = 60000;
+
+  function requestSignedBundleFromParent(kid, actionIpfsId) {
+    // Prefer window.pc2Wallet — this is the unambiguous PC2 provider
+    // shim reference. window.ethereum can be hijacked by MetaMask /
+    // TronLink / Phantom inside iframes, in which case
+    // pc2_secureView_sign is rejected as an unknown method before the
+    // call ever reaches the parent bridge.
+    var provider = window.pc2Wallet
+      || (window.ethereum && window.ethereum.isPC2WalletBridge ? window.ethereum : null);
+    if (!provider || typeof provider.request !== 'function') {
+      return Promise.reject(new Error('No PC2 wallet bridge available (window.pc2Wallet missing)'));
+    }
+    return new Promise(function (resolve, reject) {
+      var settled = false;
+      var timer = setTimeout(function () {
+        if (settled) return;
+        settled = true;
+        reject(new Error('pc2_secureView_sign timed out after ' + SECURE_VIEW_SIGN_TIMEOUT_MS + 'ms'));
+      }, SECURE_VIEW_SIGN_TIMEOUT_MS);
+
+      provider.request({
+        method: 'pc2_secureView_sign',
+        params: [{ kid: kid, actionIpfsId: actionIpfsId }]
+      }).then(function (bundle) {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(bundle);
+      }).catch(function (err) {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(err);
+      });
+    });
+  }
+
+  function augmentBodyWithSession(body) {
+    if (!body || !body.kid) return Promise.resolve(body);
+    // actionIpfsId is bound into the delegation server-side; the parent
+    // already knows it from /lit/begin-session, so we don't need to
+    // pass it from here. We forward whatever the asset metadata gave
+    // us (if any) so the parent can sanity-check.
+    return requestSignedBundleFromParent(body.kid, body.actionIpfsId)
+      .then(function (bundle) {
+        if (!bundle) return body;
+        body.delegation = bundle.delegation;
+        body.delegationSig = bundle.delegationSig;
+        body.request = bundle.request;
+        body.requestSig = bundle.requestSig;
+        return body;
+      })
+      .catch(function (err) {
+        console.warn('[Viewer] Secure-view session unavailable; falling back to legacy:', err && err.message);
+        return body;
+      });
+  }
+
+  function secureViewPost(body) {
+    return augmentBodyWithSession(body).then(function (finalBody) {
+      return authFetch('/api/storage/lit/secure-view', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(finalBody),
+      });
+    });
+  }
+
   // ── DOM refs ──────────────────────────────────────────
 
   var $title        = document.getElementById('viewer-title');
@@ -96,6 +187,8 @@
   var isCSVType = assetParams.mimeType === 'text/csv' || assetParams.mimeType === 'text/tab-separated-values';
   var isFontType = assetParams.mimeType.indexOf('font/') === 0 || assetParams.mimeType === 'application/vnd.ms-fontobject';
   var isArchiveType = assetParams.mimeType === 'application/zip' || assetParams.mimeType === 'application/gzip' || assetParams.mimeType === 'application/x-tar';
+  var isEpubType = assetParams.mimeType === 'application/epub+zip' || assetParams.mimeType === 'application/epub';
+  var isCbzType = assetParams.mimeType === 'application/vnd.comicbook+zip' || assetParams.mimeType === 'application/x-cbz';
   var isInteractivePassthrough = is3DType || isCSVType || isFontType || isArchiveType;
   var isCleartext = p('cleartext', '') === 'true';
   var cleartextCid = p('cleartextCid', '');
@@ -150,6 +243,9 @@
       showError('Missing Parameters', 'This viewer requires asset parameters to be provided via the launch URL.');
       return;
     }
+
+    if (isEpubType) { loadEpub(); return; }
+    if (isCbzType)  { loadCbz();  return; }
 
     loadFirstPage();
   }
@@ -303,7 +399,8 @@
 
   // ── Secure view request ───────────────────────────────
 
-  function buildBody(page) {
+  function buildBody(page, opts) {
+    opts = opts || {};
     var body = {
       litCiphertext:     assetParams.litCiphertext,
       dataToEncryptHash: assetParams.dataToEncryptHash,
@@ -315,6 +412,8 @@
       maxWidth:          assetParams.maxWidth,
       page:              page,
     };
+    if (typeof opts.chapter === 'number') body.chapter = opts.chapter;
+    if (typeof opts.viewportWidth === 'number') body.viewportWidth = opts.viewportWidth;
     if (assetParams.buyerAddressAlt) body.buyerAddressAlt = assetParams.buyerAddressAlt;
     if (assetParams.actionCid) body.actionCid = assetParams.actionCid;
     if (assetParams.authority) body.authority = assetParams.authority;
@@ -326,11 +425,7 @@
     $loadingText.textContent = 'Verifying access rights...';
     showLoading();
 
-    authFetch('/api/storage/lit/secure-view', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(buildBody(1)),
-    })
+    secureViewPost(buildBody(1))
     .then(function (resp) {
       if (!resp.ok) {
         return resp.text().then(function (body) {
@@ -393,11 +488,7 @@
   function loadRemainingPages() {
     for (var i = 2; i <= viewerState.totalPages; i++) {
       (function (pageNum) {
-        authFetch('/api/storage/lit/secure-view', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(buildBody(pageNum)),
-        })
+        secureViewPost(buildBody(pageNum))
         .then(function (resp) {
           if (!resp.ok) throw new Error('Page ' + pageNum + ' failed');
           return resp.blob();
@@ -425,6 +516,147 @@
         });
       })(i);
     }
+  }
+
+  // ── EPUB: reflowable ebook ─────────────────────────────
+
+  function decodeTocHeader(b64) {
+    if (!b64) return null;
+    try {
+      var bin = atob(b64);
+      try { return JSON.parse(decodeURIComponent(escape(bin))); }
+      catch (_) { return JSON.parse(bin); }
+    } catch (_) { return null; }
+  }
+
+  function fetchEpubChapter(chapterIdx) {
+    var body = buildBody(1, {
+      chapter: chapterIdx,
+      viewportWidth: Math.max(320, Math.min(window.innerWidth - 40, 900)),
+    });
+    return secureViewPost(body).then(function (resp) {
+      if (resp.status === 409) {
+        return resp.json().then(function (err) {
+          throw new Error(err.message || 'This EPUB uses a fixed layout which is not yet supported.');
+        });
+      }
+      if (!resp.ok) {
+        return resp.text().then(function (txt) {
+          var m;
+          try { m = JSON.parse(txt).error; } catch (_) { m = 'Failed to load chapter'; }
+          throw new Error(m);
+        });
+      }
+      var totalChapters = parseInt(resp.headers.get('X-Asset-Chapters') || '0', 10);
+      var toc = decodeTocHeader(resp.headers.get('X-Asset-TOC') || '');
+      var title = decodeURIComponent(resp.headers.get('X-Asset-Title') || '');
+      var author = decodeURIComponent(resp.headers.get('X-Asset-Author') || '');
+      var renderer = resp.headers.get('X-Renderer') || '';
+      if (renderer) {
+        $rendererBdg.textContent = renderer;
+        $rendererBdg.classList.remove('hidden');
+      }
+      if (renderer === 'wasm') {
+        $watermarkBdg.textContent = 'Watermarked';
+        $watermarkBdg.classList.remove('hidden');
+      }
+      return resp.text().then(function (html) {
+        return {
+          html: html,
+          totalChapters: totalChapters,
+          toc: toc || [],
+          title: title,
+          author: author,
+        };
+      });
+    });
+  }
+
+  function loadEpub() {
+    if (typeof window.EpubReader === 'undefined' || !window.EpubReader.open) {
+      showError('EPUB Reader Error', 'Ebook reader module not loaded.');
+      return;
+    }
+    showLoading();
+    $loadingText.textContent = 'Opening ebook...';
+
+    var $epub = document.getElementById('epub-container');
+    window.EpubReader.open({
+      container: $epub,
+      blobUrls: viewerState.blobUrls,
+      viewportWidth: Math.max(320, Math.min(window.innerWidth - 40, 900)),
+      fetchChapter: fetchEpubChapter,
+      onReady: function () {
+        $loading.classList.add('hidden');
+        $error.classList.add('hidden');
+        $content.classList.remove('hidden');
+      },
+      onError: function (title, msg) {
+        showError(title, msg);
+      },
+    });
+  }
+
+  // ── CBZ: comic book reader ─────────────────────────────
+
+  function fetchCbzPage(pageNum) {
+    var body = buildBody(pageNum);
+    return secureViewPost(body).then(function (resp) {
+      if (!resp.ok) {
+        return resp.text().then(function (txt) {
+          var m;
+          try { m = JSON.parse(txt).error; } catch (_) { m = 'Failed to load page'; }
+          throw new Error(m);
+        });
+      }
+      if (!viewerState.cbzInitDone) {
+        var totalPages = parseInt(resp.headers.get('X-Asset-Pages') || '0', 10);
+        if (totalPages > 0) viewerState.totalPages = totalPages;
+        var renderer = resp.headers.get('X-Renderer') || '';
+        if (renderer) {
+          $rendererBdg.textContent = renderer;
+          $rendererBdg.classList.remove('hidden');
+        }
+        if (renderer === 'wasm') {
+          $watermarkBdg.textContent = 'Watermarked';
+          $watermarkBdg.classList.remove('hidden');
+        }
+        viewerState.cbzInitDone = true;
+        if (viewerState.cbzState) {
+          viewerState.cbzState.totalPages = viewerState.totalPages;
+          if (viewerState.cbzState.indicator) {
+            viewerState.cbzState.indicator.textContent = 'Page ' + viewerState.cbzState.current + ' / ' + viewerState.totalPages;
+          }
+        }
+      }
+      return resp.blob();
+    });
+  }
+
+  function loadCbz() {
+    if (typeof window.CbzReader === 'undefined' || !window.CbzReader.open) {
+      showError('Comic Reader Error', 'Comic reader module not loaded.');
+      return;
+    }
+    showLoading();
+    $loadingText.textContent = 'Opening comic...';
+
+    var $cbz = document.getElementById('cbz-container');
+    viewerState.cbzInitDone = false;
+    viewerState.cbzState = window.CbzReader.open({
+      container: $cbz,
+      blobUrls: viewerState.blobUrls,
+      totalPages: 1, // updated after first fetch via X-Asset-Pages
+      fetchPage: fetchCbzPage,
+      onReady: function () {
+        $loading.classList.add('hidden');
+        $error.classList.add('hidden');
+        $content.classList.remove('hidden');
+      },
+      onError: function (title, msg) {
+        showError(title, msg);
+      },
+    });
   }
 
   // ── Display modes ─────────────────────────────────────
@@ -581,6 +813,10 @@
       'application/zip': 'ZIP Archive',
       'application/gzip': 'GZIP Archive',
       'application/x-tar': 'TAR Archive',
+      'application/epub+zip': 'EPUB Ebook',
+      'application/epub': 'EPUB Ebook',
+      'application/vnd.comicbook+zip': 'CBZ Comic',
+      'application/x-cbz': 'CBZ Comic',
     };
     return map[mime] || mime.split('/').pop().toUpperCase();
   }

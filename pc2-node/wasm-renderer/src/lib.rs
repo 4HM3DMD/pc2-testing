@@ -5,22 +5,29 @@
 //!
 //! ## Operating modes
 //!
-//! | Mode          | Assets                  | Output            |
-//! |---------------|-------------------------|-------------------|
-//! | render        | image, text, pdf        | JPEG/WebP pixels  |
-//! | decrypt_only  | any                     | raw plaintext     |
-//! | encrypt_only  | any                     | CEK+IV+ciphertext |
-//! | stream        | audio, video            | chunked segments  |
-//! | interactive   | games, dApps, wasm-apps | frames via bridge |
+//! | Mode          | Assets                        | Output                          |
+//! |---------------|-------------------------------|---------------------------------|
+//! | render        | image, text, pdf, cbz, code   | JPEG/WebP pixels (pixel-lock)   |
+//! | render        | epub reflowable               | sanitized XHTML (html-lock)     |
+//! | decrypt_only  | any                           | raw plaintext                   |
+//! | encrypt_only  | any                           | CEK+IV+ciphertext               |
+//! | stream        | audio, video                  | chunked segments                |
+//! | interactive   | games, dApps, wasm-apps       | frames via bridge               |
 //!
 //! ## MemFS interface (used by WASMRuntime.ts)
 //!
 //! Input:  /input/command.json  (render parameters including CEK)
 //!         /input/encrypted.bin (raw encrypted content bytes)
 //!         /input/plaintext.bin (raw plaintext bytes — encrypt_only mode)
-//! Output: /output/result.json  (success, content_type, total_pages, error)
-//!         /output/rendered.bin (raw rendered pixel bytes — JPEG/WebP/PNG)
+//! Output: /output/result.json  (success, content_type, total_pages/chapters, error)
+//!         /output/rendered.bin (raw rendered bytes — JPEG/WebP/PNG, or sanitized HTML)
 //!         /output/encrypted.bin (raw ciphertext — encrypt_only mode)
+//!
+//! ## Runtime convergence
+//!
+//! This crate is the future Viewer Provider Capsule in the ElastOS Runtime.
+//! See `docs/handover/PC2_CONVERGENCE_INVENTORY_FOR_RUNTIME.md`. The MemFS
+//! contract here maps 1:1 to `DRMProvider.render(encrypted, cek, mime) -> Buffer`.
 
 mod decrypt;
 #[cfg(feature = "image-render")]
@@ -38,20 +45,27 @@ pub struct RenderCommand {
     pub cek_b64: String,
     /// Base64-encoded initialization vector (12 bytes).
     pub iv_b64: String,
-    /// MIME type of the original asset (e.g. "image/png", "text/plain").
+    /// MIME type of the original asset (e.g. "image/png", "application/epub+zip").
     pub mime_type: String,
     /// Watermark text (buyer address + timestamp).
     pub watermark: Option<String>,
-    /// For multi-page assets (PDF): which page to render (0-indexed).
+    /// For multi-page assets (PDF, CBZ): which page to render (0-indexed).
     pub page: Option<u32>,
-    /// Maximum output width in pixels.
+    /// For EPUB: which chapter to render (0-indexed). Overrides `page` for EPUB.
+    pub chapter: Option<u32>,
+    /// Maximum output width in pixels (pixel-lock renderers).
     pub max_width: Option<u32>,
-    /// Maximum output height in pixels.
+    /// Maximum output height in pixels (pixel-lock renderers).
     pub max_height: Option<u32>,
-    /// Output format preference.
+    /// Output format preference (pixel-lock renderers).
     pub output_format: Option<OutputFormat>,
     /// Operating mode. When "decrypt_only", skip rendering and output raw plaintext.
     pub mode: Option<String>,
+    /// EPUB reader: buyer wallet address for zero-width forensic watermark.
+    /// If absent, falls back to `watermark`.
+    pub forensic_mark: Option<String>,
+    /// EPUB reader: preferred reader pane width in CSS px (for image resizing hints).
+    pub viewport_width: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Copy, Default)]
@@ -61,19 +75,49 @@ pub enum OutputFormat {
     Jpeg,
     Webp,
     Png,
+    /// Output is sanitized HTML (EPUB reflowable tier).
+    Html,
+}
+
+/// Single EPUB table-of-contents entry.
+#[derive(Debug, Serialize, Clone)]
+pub struct TocEntry {
+    pub title: String,
+    pub chapter_index: u32,
+    pub href: String,
 }
 
 /// Result metadata written to /output/result.json.
 /// The actual rendered bytes go to /output/rendered.bin.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Default)]
 pub struct RenderResult {
     pub success: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Response MIME type of the rendered bytes (e.g. "image/jpeg",
+    /// "text/html; charset=utf-8; profile=epub-chapter").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content_type: Option<String>,
+    /// For paginated assets: total pages (PDF, CBZ).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub total_pages: Option<u32>,
+    /// For EPUB: total number of spine chapters.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_chapters: Option<u32>,
+    /// For EPUB: table of contents. Returned on the first chapter load;
+    /// clients should cache it for the session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chapters: Option<Vec<TocEntry>>,
+    /// For EPUB: `true` if the publication declares `rendition:layout=pre-paginated`
+    /// (picture books, comics). Callers should treat these as CBZ-like pixel-lock.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fixed_layout: Option<bool>,
+    /// For EPUB: publication title from OPF metadata.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub epub_title: Option<String>,
+    /// For EPUB: publication author from OPF metadata.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub epub_author: Option<String>,
     /// Size of rendered output in bytes (written to /output/rendered.bin).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_size: Option<usize>,
@@ -84,9 +128,7 @@ impl RenderResult {
         Self {
             success: false,
             error: Some(msg.into()),
-            content_type: None,
-            total_pages: None,
-            output_size: None,
+            ..Default::default()
         }
     }
 }
@@ -149,10 +191,9 @@ fn process_decrypt_only(cmd: &RenderCommand, encrypted_bytes: &[u8]) -> (RenderR
     (
         RenderResult {
             success: true,
-            error: None,
             content_type: Some(cmd.mime_type.clone()),
-            total_pages: None,
             output_size: Some(size),
+            ..Default::default()
         },
         Some(plaintext),
     )
@@ -171,10 +212,9 @@ fn process_encrypt_only(plaintext_bytes: &[u8]) -> (RenderResult, Option<Vec<u8>
     let size = ciphertext.len();
     let result = RenderResult {
         success: true,
-        error: None,
         content_type: Some(format!("cek_b64={cek_b64};iv_b64={iv_b64}")),
-        total_pages: None,
         output_size: Some(size),
+        ..Default::default()
     };
     (result, Some(ciphertext))
 }
@@ -192,6 +232,16 @@ fn route_render_raw(cmd: &RenderCommand, plaintext: &[u8]) -> (RenderResult, Opt
         return render::pdf::render_pdf_raw(plaintext, cmd);
     }
 
+    #[cfg(feature = "epub-render")]
+    if mime == "application/epub+zip" || mime == "application/epub" {
+        return render::epub::render_epub_raw(plaintext, cmd);
+    }
+
+    #[cfg(feature = "cbz-render")]
+    if is_comic_archive(mime) {
+        return render::cbz::render_cbz_raw(plaintext, cmd);
+    }
+
     #[cfg(feature = "code-render")]
     if is_code_type(mime) {
         return render::code::render_code_raw(plaintext, cmd);
@@ -203,6 +253,19 @@ fn route_render_raw(cmd: &RenderCommand, plaintext: &[u8]) -> (RenderResult, Opt
     }
 
     (RenderResult::error(format!("unsupported MIME type: {mime}")), None)
+}
+
+/// CBZ / CBR archives (comic books). CBR (RAR) is not supported — conversion
+/// to CBZ is expected at upload time.
+#[cfg(feature = "cbz-render")]
+fn is_comic_archive(mime: &str) -> bool {
+    matches!(
+        mime,
+        "application/vnd.comicbook+zip"
+            | "application/x-cbz"
+            | "application/x-cbr"
+            | "application/vnd.comicbook-rar"
+    )
 }
 
 /// Check if a MIME type represents source code (as opposed to plain text).
@@ -245,4 +308,3 @@ fn is_code_type(mime: &str) -> bool {
             | "text/x-markdown"
     )
 }
-

@@ -31,7 +31,7 @@ function findSchemaFile(): string {
   }
   throw new Error(`Schema file not found. Tried: ${SCHEMA_FILE} and ${sourceSchema}`);
 }
-const CURRENT_VERSION = 27;
+const CURRENT_VERSION = 29;
 
 interface Migration {
   version: number;
@@ -1044,6 +1044,60 @@ export function runMigrations(db: Database.Database): void {
         recordMigration(db, 27);
       } catch (error: any) {
         log.error(`❌ Migration 27 error: ${error.message}`);
+        throw error;
+      }
+    }
+
+    // Migration 28: extend channel_metadata so channels discovered via ChannelCreated
+    // (not yet having any minted assets) can be indexed and listed. This is critical
+    // for the Creator app UX — users must see their channel immediately after creation.
+    if (currentVersion < 28) {
+      try {
+        log.info('📦 Running Migration 28: Extend channel_metadata for factory-indexed channels...');
+        // SQLite ALTER TABLE ADD COLUMN is idempotent via try/catch
+        const addCol = (sql: string) => {
+          try { db.exec(sql); } catch (e: any) {
+            if (!String(e?.message || '').includes('duplicate column')) throw e;
+          }
+        };
+        addCol(`ALTER TABLE channel_metadata ADD COLUMN creator_address TEXT`);
+        addCol(`ALTER TABLE channel_metadata ADD COLUMN contract_version TEXT`);
+        addCol(`ALTER TABLE channel_metadata ADD COLUMN block_number INTEGER`);
+        addCol(`ALTER TABLE channel_metadata ADD COLUMN tx_hash TEXT`);
+        addCol(`ALTER TABLE channel_metadata ADD COLUMN indexed_at INTEGER`);
+        addCol(`ALTER TABLE channel_metadata ADD COLUMN plans TEXT`);
+        addCol(`ALTER TABLE channel_metadata ADD COLUMN token_access TEXT`);
+
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_channel_metadata_creator ON channel_metadata(creator_address)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_channel_metadata_block ON channel_metadata(block_number)`);
+
+        log.info('✅ Migration 28 complete: channel_metadata extended');
+        recordMigration(db, 28);
+      } catch (error: any) {
+        log.error(`❌ Migration 28 error: ${error.message}`);
+        throw error;
+      }
+    }
+
+    // Migration 29 (SEC-3c, 2026-04 audit): add scope/scope_data columns to
+    // sessions so /open_item can mint scoped, file-bound iframe-app tokens
+    // instead of the previous insecure mock-token-* pattern. Existing
+    // sessions remain unrestricted (NULL scope is the legacy contract).
+    if (currentVersion < 29) {
+      try {
+        log.info('📦 Running Migration 29: Add scope/scope_data to sessions (SEC-3c)...');
+        const cols = db.prepare(`PRAGMA table_info(sessions)`).all() as any[];
+        const colNames = cols.map((c: any) => c.name);
+        if (!colNames.includes('scope')) {
+          db.exec(`ALTER TABLE sessions ADD COLUMN scope TEXT`);
+        }
+        if (!colNames.includes('scope_data')) {
+          db.exec(`ALTER TABLE sessions ADD COLUMN scope_data TEXT`);
+        }
+        log.info('✅ Migration 29 complete: sessions.scope/scope_data columns added');
+        recordMigration(db, 29);
+      } catch (error: any) {
+        log.error(`❌ Migration 29 error: ${error.message}`);
         throw error;
       }
     }

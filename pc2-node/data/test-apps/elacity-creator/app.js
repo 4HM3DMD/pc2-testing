@@ -328,15 +328,15 @@
   // ── V3 channel discovery: cache → on-chain (V3 factory only) ──
 
   var CHANNEL_FACTORY_DEPLOY_BLOCK = 43892000;
-  var CHANNEL_CACHE_KEY = 'elacity_v3only_channels_';
-  var CHANNEL_CACHE_TTL = 30 * 60 * 1000;
+  var CHANNEL_CACHE_KEY = 'elacity_v3_channels_v3_';
+  var CHANNEL_CACHE_TTL = 12 * 60 * 60 * 1000;
 
-  function getCachedChannels(walletAddress) {
+  function getCachedChannels(walletAddress, allowStale) {
     try {
       var raw = localStorage.getItem(CHANNEL_CACHE_KEY + walletAddress.toLowerCase());
       if (!raw) return null;
       var cached = JSON.parse(raw);
-      if (Date.now() - cached.ts > CHANNEL_CACHE_TTL) return null;
+      if (!allowStale && Date.now() - cached.ts > CHANNEL_CACHE_TTL) return null;
       return cached.channels;
     } catch (_) { return null; }
   }
@@ -345,6 +345,12 @@
     try {
       localStorage.setItem(CHANNEL_CACHE_KEY + walletAddress.toLowerCase(),
         JSON.stringify({ ts: Date.now(), channels: channels }));
+    } catch (_) {}
+  }
+
+  function invalidateChannelCache(walletAddress) {
+    try {
+      if (walletAddress) localStorage.removeItem(CHANNEL_CACHE_KEY + walletAddress.toLowerCase());
     } catch (_) {}
   }
 
@@ -364,6 +370,26 @@
         return cached;
       }
 
+      // Return stale cache immediately if available; refresh will happen next time
+      var stale = getCachedChannels(walletAddress, true);
+      if (stale && stale.length > 0) {
+        console.log('[Creator] V3 channels from stale cache (' + stale.length + '), refreshing in background');
+        refreshV3ChannelsInBackground(walletAddress);
+        return stale;
+      }
+
+      return await scanV3ChannelsOnChain(walletAddress);
+    } catch (err) {
+      console.warn('[Creator] V3 channel scan failed:', err.message);
+      return getCachedChannels(walletAddress, true) || [];
+    }
+  }
+
+  function refreshV3ChannelsInBackground(walletAddress) {
+    scanV3ChannelsOnChain(walletAddress).catch(function () {});
+  }
+
+  async function scanV3ChannelsOnChain(walletAddress) {
       var iface = new ethers.Interface(ABI.CHANNEL_FACTORY);
       var topic0 = iface.getEvent('ChannelCreated').topicHash;
       var creatorTopic = '0x' + walletAddress.toLowerCase().replace('0x', '').padStart(64, '0');
@@ -375,31 +401,49 @@
       var latestBlock = parseInt((await blockResp.json()).result, 16);
 
       var CHUNK = 9999;
-      var PARALLEL = 5;
+      var PARALLEL = 8;
       var minBlock = CHANNEL_FACTORY_DEPLOY_BLOCK;
       var foundAddrs = {};
 
-      var ranges = [];
-      for (var c = latestBlock; c > minBlock; c = c - CHUNK - 1) {
-        ranges.push({ from: Math.max(c - CHUNK, minBlock), to: c });
-      }
+      // Scan recent blocks first (last ~2M blocks), then older if needed
+      var recentCutoff = Math.max(latestBlock - 2000000, minBlock);
+      var phases = [
+        { from: recentCutoff, to: latestBlock },
+        { from: minBlock, to: recentCutoff - 1 },
+      ];
 
-      for (var b = 0; b < ranges.length; b += PARALLEL) {
-        var batch = ranges.slice(b, b + PARALLEL);
-        var calls = batch.map(function (r) {
-          return { method: 'eth_getLogs', params: [{ address: CONTRACTS.CHANNEL_FACTORY, fromBlock: '0x' + r.from.toString(16), toBlock: '0x' + r.to.toString(16), topics: [topic0, null, null, creatorTopic] }] };
-        });
-        try {
-          var results = await rpcBatch(calls);
-          if (!Array.isArray(results)) results = [results];
-          results.forEach(function (r) {
-            (r.result || []).forEach(function (log) {
-              if (log.data && log.data.length >= 130) {
-                foundAddrs[ethers.getAddress('0x' + log.data.slice(26, 66))] = true;
-              }
-            });
+      for (var phase = 0; phase < phases.length; phase++) {
+        var phaseRange = phases[phase];
+        if (phaseRange.from > phaseRange.to) continue;
+
+        var ranges = [];
+        for (var c = phaseRange.to; c > phaseRange.from; c = c - CHUNK - 1) {
+          ranges.push({ from: Math.max(c - CHUNK, phaseRange.from), to: c });
+        }
+
+        for (var b = 0; b < ranges.length; b += PARALLEL) {
+          var batch = ranges.slice(b, b + PARALLEL);
+          var calls = batch.map(function (r) {
+            return { method: 'eth_getLogs', params: [{ address: CONTRACTS.CHANNEL_FACTORY, fromBlock: '0x' + r.from.toString(16), toBlock: '0x' + r.to.toString(16), topics: [topic0, null, null, creatorTopic] }] };
           });
-        } catch (_) {}
+          try {
+            var results = await rpcBatch(calls);
+            if (!Array.isArray(results)) results = [results];
+            results.forEach(function (r) {
+              (r.result || []).forEach(function (log) {
+                if (log.data && log.data.length >= 130) {
+                  foundAddrs[ethers.getAddress('0x' + log.data.slice(26, 66))] = true;
+                }
+              });
+            });
+          } catch (_) {}
+        }
+
+        // If we found channels in recent blocks, skip scanning older ones
+        if (Object.keys(foundAddrs).length > 0 && phase === 0) {
+          console.log('[Creator] Found V3 channels in recent blocks, skipping older scan');
+          break;
+        }
       }
 
       var addrs = Object.keys(foundAddrs);
@@ -426,10 +470,41 @@
 
       setCachedChannels(walletAddress, channels);
       return channels;
-    } catch (err) {
-      console.warn('[Creator] V3 channel scan failed:', err.message);
-      return getCachedChannels(walletAddress) || [];
+  }
+
+  // ── Channel fetching from PC2 local catalog (V3-only, indexed from V3 factory) ──
+
+  async function fetchChannelsFromLocalCatalog(creatorAddress) {
+    try {
+      var origin = (typeof window !== 'undefined' && window.puter_api_origin) || window.location.origin;
+      var target = String(creatorAddress || '').toLowerCase();
+      // Server-side filter keeps this O(1) at scale (millions of indexed channels)
+      var resp = await fetch(origin + '/api/catalog/channels?creator=' + encodeURIComponent(target));
+      if (!resp.ok) return [];
+      var json = await resp.json();
+      if (!json || !json.success || !Array.isArray(json.data)) return [];
+      return json.data.map(function (ch) {
+        return {
+          address: ch.address,
+          name: ch.name || (ch.address ? ch.address.substring(0, 10) + '...' : 'Unnamed'),
+          _v3: true,
+          creator: { address: (ch.creator || target).toLowerCase() },
+        };
+      });
+    } catch (_) {
+      return [];
     }
+  }
+
+  /**
+   * Trigger an immediate PC2 indexer scan so newly-created channels or mints
+   * show up without waiting for the regular scan interval (5 min). Fire-and-forget.
+   */
+  async function triggerLocalReindex() {
+    try {
+      var origin = (typeof window !== 'undefined' && window.puter_api_origin) || window.location.origin;
+      await fetch(origin + '/api/catalog/reindex', { method: 'POST' });
+    } catch (_) {}
   }
 
   // ── Channel fetching from Elacity backend ──────────────
@@ -529,11 +604,38 @@
     try {
       var eoaAddr = walletAddress.toLowerCase();
       var saAddr = hasSmartAccount() ? smartAccountAddress.toLowerCase() : null;
+      console.log('[Creator] loadChannels: eoa=' + eoaAddr + ', sa=' + (saAddr || 'none') + ', hasSA=' + hasSmartAccount());
 
-      var [eoaChannels, saChannels] = await Promise.all([
-        fetchV3ChannelsOnChain(eoaAddr),
-        saAddr ? fetchV3ChannelsOnChain(saAddr) : Promise.resolve([]),
-      ]);
+      // PRIMARY: PC2 local catalog — V3-only, indexed from V3 factory, sub-100ms, no network
+      var eoaChannels = [];
+      var saChannels = [];
+      try {
+        var localResults = await Promise.all([
+          fetchChannelsFromLocalCatalog(eoaAddr),
+          saAddr ? fetchChannelsFromLocalCatalog(saAddr) : Promise.resolve([]),
+        ]);
+        eoaChannels = localResults[0] || [];
+        saChannels = localResults[1] || [];
+        console.log('[Creator] loadChannels via PC2 local catalog: eoa=' + eoaChannels.length + ', sa=' + saChannels.length);
+      } catch (localErr) {
+        console.warn('[Creator] Local catalog fetch failed:', localErr.message);
+      }
+
+      // FALLBACK 1: On-chain V3 factory scan (covers very fresh channels not yet indexed)
+      if (eoaChannels.length === 0 && saChannels.length === 0) {
+        console.log('[Creator] No channels from local catalog, trying on-chain V3 scan...');
+        var onChainResults = await Promise.all([
+          fetchV3ChannelsOnChain(eoaAddr),
+          saAddr ? fetchV3ChannelsOnChain(saAddr) : Promise.resolve([]),
+        ]);
+        eoaChannels = onChainResults[0] || [];
+        saChannels = onChainResults[1] || [];
+        console.log('[Creator] loadChannels via on-chain scan: eoa=' + eoaChannels.length + ', sa=' + saChannels.length);
+      }
+
+      // NOTE: We deliberately DO NOT fall back to Elacity backend — it returns V2 channels
+      // mixed with V3, and the user only cares about V3. Local catalog is the V3 source of truth.
+      console.log('[Creator] loadChannels result: eoa=' + eoaChannels.length + ', sa=' + saChannels.length);
 
       var publicChannels = [];
 
@@ -644,6 +746,10 @@
 
   var FILE_ICONS = {
     'application/pdf': '📕',
+    'application/epub+zip': '📖',
+    'application/epub': '📖',
+    'application/vnd.comicbook+zip': '💥',
+    'application/x-cbz': '💥',
     'image/': '🖼️',
     'audio/': '🎵',
     'video/': '🎬',
@@ -688,6 +794,8 @@
     '.onnx': 'application/x-onnx',
     '.safetensors': 'application/x-safetensors',
     '.gguf': 'application/x-gguf',
+    '.epub': 'application/epub+zip',
+    '.cbz': 'application/vnd.comicbook+zip',
   };
 
   function resolveFileMime(file) {
@@ -730,6 +838,8 @@
     else if (resolvedMime.startsWith('audio/')) autoCategory = 'audio';
     else if (resolvedMime.startsWith('image/')) autoCategory = 'image';
     else if (resolvedMime === 'application/pdf') autoCategory = 'ebook';
+    else if (resolvedMime === 'application/epub+zip' || resolvedMime === 'application/epub') autoCategory = 'ebook';
+    else if (resolvedMime === 'application/vnd.comicbook+zip' || resolvedMime === 'application/x-cbz') autoCategory = 'comic';
     else if (resolvedMime === 'text/markdown' && file.name.match(/skill/i)) autoCategory = 'skill';
     else if (resolvedMime.startsWith('text/')) autoCategory = 'document';
     else if (resolvedMime === 'application/json') autoCategory = 'dataset';
@@ -1349,6 +1459,7 @@
     var txParams = {
       to: to,
       data: data,
+      chainId: BASE_CHAIN_HEX,
     };
     if (value && BigInt(value) > 0n) {
       txParams.value = '0x' + BigInt(value).toString(16);
@@ -1689,6 +1800,11 @@
     } catch (regErr) {
       console.warn('[Creator] Backend registration failed (channel still works on-chain):', regErr.message);
     }
+
+    // Trigger local PC2 indexer so the new channel appears in the dropdown
+    // immediately on next loadChannels() call (no 5-minute wait).
+    invalidateChannelCache(creatorAddr);
+    triggerLocalReindex();
 
     return { address: channelAddr, name: channelName, txHash: txHash, ownerType: walletChoice };
   }
@@ -3001,15 +3117,54 @@
         }
 
         if (thumbBase64) {
-          var thumbResp = await pc2Fetch('/api/storage/ipfs/upload-elacity', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ content: thumbBase64, filename: 'thumbnail.jpg' }),
-          });
-          if (thumbResp.ok) {
-            var thumbData = await thumbResp.json();
-            imageUri = 'ipfs://' + thumbData.cid;
-            console.log('[Creator] Thumbnail uploaded:', imageUri);
+          // Always pin the thumbnail locally first via Helia. This guarantees
+          // the bytes are reachable through *some* IPFS gateway even when
+          // Elacity's pinning service is degraded (502 / extreme slowness).
+          // Mirrors the belt-and-braces pattern used by the asset upload
+          // and metadata directory upload paths above.
+          var localThumbCid = null;
+          try {
+            var localThumbResp = await pc2Fetch('/api/storage/ipfs/add', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ content: thumbBase64, filename: 'thumbnail.jpg' }),
+            });
+            if (localThumbResp.ok) {
+              var localThumbData = await localThumbResp.json();
+              localThumbCid = localThumbData.cid;
+            } else {
+              console.warn('[Creator] Local thumbnail pin returned', localThumbResp.status);
+            }
+          } catch (localThumbErr) {
+            console.warn('[Creator] Local thumbnail pin failed:', localThumbErr.message);
+          }
+
+          var elacityThumbCid = null;
+          try {
+            var thumbResp = await pc2Fetch('/api/storage/ipfs/upload-elacity', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ content: thumbBase64, filename: 'thumbnail.jpg' }),
+            });
+            if (thumbResp.ok) {
+              var thumbData = await thumbResp.json();
+              elacityThumbCid = thumbData.cid;
+            } else {
+              console.warn('[Creator] Elacity thumbnail upload returned', thumbResp.status);
+            }
+          } catch (elacityThumbErr) {
+            console.warn('[Creator] Elacity thumbnail upload failed:', elacityThumbErr.message);
+          }
+
+          // Prefer Elacity (faster global discovery), fall back to local.
+          // Either way the metadata.json gets a non-empty `imageUri`, so the
+          // marketplace + player + file manager all show the cover art.
+          if (elacityThumbCid) {
+            imageUri = 'ipfs://' + elacityThumbCid;
+            console.log('[Creator] Thumbnail pinned to Elacity:', imageUri);
+          } else if (localThumbCid) {
+            imageUri = 'ipfs://' + localThumbCid;
+            console.log('[Creator] Thumbnail pinned locally only (Elacity unreachable):', imageUri);
           }
         }
       } catch (thumbErr) {
@@ -3017,7 +3172,7 @@
       }
 
       if (!imageUri) {
-        console.warn('[Creator] No thumbnail generated — asset will have no preview image in marketplace');
+        console.warn('[Creator] No thumbnail bytes available — asset will have no preview image in marketplace');
       }
 
       var selectedCurrency = CURRENCIES.find(function (c) { return c.address === priceCurrency; }) || CURRENCIES[0];
@@ -3692,6 +3847,10 @@
       } else {
       showToast('Asset published!' + mintLabel + modeLabel, 'success');
       }
+
+      // Post-mint: kick PC2 indexer so the new asset appears in catalog/Market
+      // immediately instead of waiting for the next 5-minute scan cycle.
+      triggerLocalReindex();
 
       // Post-mint: register asset locally so it appears in library and is seedable
       if (assetCid && state.walletAddress) {
@@ -4621,21 +4780,67 @@
     });
     approvalObserver.observe(document.getElementById('step-4') || document.body, { childList: true, subtree: true, characterData: true });
 
-    // Auto-connect wallet if available
+    // Auto-connect wallet and switch to Base chain
     if (window.ethereum) {
-      window.ethereum.request({ method: 'eth_accounts' })
+      // Switch to Base first — Elastos NFT may have set bridge to ESC
+      window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: BASE_CHAIN_HEX }] })
+        .catch(function () {})
+        .then(function () {
+          return window.ethereum.request({ method: 'eth_accounts' });
+        })
         .then(function (accounts) {
           if (accounts && accounts[0]) {
             state.walletAddress = accounts[0];
             dom.walletBtn.textContent = accounts[0].substring(0, 6) + '...' + accounts[0].slice(-4);
             dom.walletBtn.classList.add('connected');
-            if (!state.channelsLoaded) {
-              loadChannels(accounts[0]);
+
+            // Detect Smart Account from wallet provider or RPC
+            if (!smartAccountAddress && window.ethereum.smartAccountAddress) {
+              smartAccountAddress = window.ethereum.smartAccountAddress;
             }
+
+            // Wait for SA detection (up to 3s) before loading channels
+            var saPromise = Promise.resolve();
+            if (!smartAccountAddress && window.ethereum.request) {
+              saPromise = Promise.race([
+                window.ethereum.request({ method: 'pc2_getSmartAccountAddress' })
+                  .then(function (sa) {
+                    if (sa && sa.toLowerCase() !== accounts[0].toLowerCase()) {
+                      smartAccountAddress = sa;
+                      console.log('[Creator] SA detected via RPC:', sa);
+                    }
+                  })
+                  .catch(function () {}),
+                new Promise(function (resolve) { setTimeout(resolve, 3000); })
+              ]);
+            }
+
+            saPromise.then(function () {
+              if (!state.channelsLoaded) {
+                loadChannels(accounts[0]);
+              }
+            });
           }
         })
         .catch(function () {});
     }
+
+    // Listen for late-arriving SA address from wallet bridge init
+    window.addEventListener('message', function (e) {
+      if (e.data && e.data.type === 'pc2-wallet-init' && e.data.smartAccountAddress) {
+        var sa = e.data.smartAccountAddress;
+        if (!smartAccountAddress && sa.toLowerCase() !== (state.walletAddress || '').toLowerCase()) {
+          smartAccountAddress = sa;
+          console.log('[Creator] SA from wallet-init event:', sa);
+          if (state.walletAddress && !state.channelsLoaded) {
+            loadChannels(state.walletAddress);
+          } else if (state.walletAddress && state.channelsLoaded) {
+            state.channelsLoaded = false;
+            loadChannels(state.walletAddress);
+          }
+        }
+      }
+    });
 
     // Resume from saved draft (launched from toolbar queue)
     async function resumeFromDraft(draftId) {
@@ -5043,6 +5248,8 @@
           } else {
             showToast('Minted — gateway approval still needed', 'error');
           }
+          // Kick indexer so the asset shows up in local catalog/Market immediately
+          triggerLocalReindex();
         }
       } catch (err) {
         console.error('[Creator] Resume from draft failed:', err);

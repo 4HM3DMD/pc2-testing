@@ -3,6 +3,54 @@
 > Source: Elacity codebase analysis, March 2026.
 > This is the single source of truth for on-chain minting, encryption, and marketplace integration.
 
+## Security model (V1.2+): Session-Key Delegation
+
+dDRM decryption is gated by a session-key delegation scheme. There is
+no caller-supplied identity claim anywhere in the authorization path.
+
+**At wallet connect**, the buyer signs **one** `SecureViewDelegation`
+that authorizes a non-extractable, device-bound P-256 key (Web Crypto,
+`extractable: false`) to decrypt dDRM content for up to 24 hours
+across their EOA + smart-account addresses. The delegation message
+binds: `domain`, `chainId`, `actionIpfsId`, `ownerAddress`,
+`coveredAddresses[]`, `sessionPublicKey`, `issuedAt`, `expiresAt`,
+`nonce`.
+
+**At every asset open**, the ephemeral key signs a per-request message
+that binds `domain`, `kid`, `actionIpfsId`, `requestedAt`,
+`requestNonce`. No wallet popup — Web Crypto P-256 signs in under a
+millisecond. The "double-click to open" UX is preserved.
+
+**Inside the Lit Action TEE**, the action verifies (1) the delegation
+signature (EIP-191 for EOAs, EIP-1271 for smart wallets), (2) the
+per-request P-256 signature, (3) the `actionIpfsId` binding (delegation
+↔ executing action), (4) request freshness + replay protection, (5)
+delegation expiry + revocation. Only then does it iterate
+`delegation.coveredAddresses` and call
+`AuthorityGateway.hasAccessByContentId(addr, kid)`. The CEK is
+released via `Lit.Actions.Decrypt` only after all five checks pass.
+
+**Active Lit Actions** (V1.2, shipped 2026-04-20, cleanup 2026-04-21):
+- `pc2-node/data/lit-actions/non-media-decrypt-chipotle.js` —
+  `bafkreihvm4zkyuefnuptlbdins6cmd2mbslj2xgnyzz3ssdg2ggg3jtkk4`
+- `pc2-node/data/lit-actions/media-decrypt-chipotle.js` —
+  `bafkreihw7brius3xw2u7ltjac26hoqudulkc6mfwqrjxtrobanz2ryhvsq`
+
+Both are pinned on Pinata + Helia and registered in Chipotle group `1`
+(`elacity-ddrm`).
+
+**Failure modes** (all explicit error codes returned by the Lit
+Action / server, no silent fall-through): `del_sig_invalid`,
+`req_sig_invalid`, `bad_action_cid`, `del_expired`, `req_stale_or_future`,
+`replayed`, `revoked`, `access_denied`, `session_bundle_required`.
+
+**Reference material**:
+- [`LIT-ACTION-SIGNATURE-AUTH/DESIGN.md`](../../../.cursor/tasks/LIT-ACTION-SIGNATURE-AUTH/DESIGN.md) — full protocol, EOA/smart-account matrix, Lit Action pseudocode.
+- [`LIT-ACTION-SIGNATURE-AUTH/SECURITY.md`](../../../.cursor/tasks/LIT-ACTION-SIGNATURE-AUTH/SECURITY.md) — formal threat model, 20-row attack catalogue, residual-risk analysis.
+- [`LIT-ACTION-SIGNATURE-AUTH/TESTING.md`](../../../.cursor/tasks/LIT-ACTION-SIGNATURE-AUTH/TESTING.md) — positive/negative test matrix covering automated exploit regression, cross-browser, and wallet-in-hand rows.
+- [`docs/handover/V12_SIGAUTH_HANDOVER.md`](../../handover/V12_SIGAUTH_HANDOVER.md) — V1.2 cutover handover (chronological change log, deployment gotchas, rotation procedure).
+- [`scripts/spike/README.md`](../../../scripts/spike/README.md) — conformance spikes for the underlying primitives (EIP-191, EIP-1271, Web Crypto P-256, canonical JSON).
+
 ## Base Chain (8453) Contract Addresses
 
 | Contract | Address |
@@ -263,6 +311,77 @@ The user's pc2-node follows the same pattern as Elacity's backend. The user's no
 4. Lit nodes verify access conditions and release the decryption key
 5. Content is decrypted locally
 
+> **V1.2 change (in flight)**: step 1 is being extended with a
+> one-time `SecureViewDelegation` signed by the buyer's wallet on
+> connect. The delegation authorizes a short-lived, non-extractable
+> ephemeral key (Web Crypto) to sign per-request payloads silently
+> for the session (≤ 24h). The Lit Action verifies both signatures
+> and uses the delegation's `coveredAddresses` for
+> `hasAccessByContentId` — never a `userAddress` parameter. Closes
+> the bypass at the top of this document and preserves the
+> "double-click to open" UX. See
+> [`DESIGN.md`](../../../.cursor/tasks/LIT-ACTION-SIGNATURE-AUTH/DESIGN.md)
+> and [`SECURITY.md`](../../../.cursor/tasks/LIT-ACTION-SIGNATURE-AUTH/SECURITY.md).
+
+### CEK caching (session-scoped, per-buyer, LRU)
+
+Every successful Lit decryption call costs roughly **$0.01** of Chipotle
+usage. A naive implementation would pay that price on every chapter of
+a 14-chapter EPUB or every page of a 40-page PDF. PC2 avoids this with
+a small in-process cache in `pc2-node/src/api/storage.ts`:
+
+- **Key**: `${kid}:${buyerAddress}`. Scoped per-buyer so access
+  revocation on one wallet cannot be bypassed by another.
+- **Value**: the 32-byte AES-256 CEK plus a `cachedAt` timestamp.
+- **TTL**: 5 minutes. After that the cache re-validates against Lit.
+- **Capacity**: 50 entries. Enough for a few concurrent readers without
+  letting memory grow unbounded on a long-running node.
+- **Eviction policy**: **true LRU**. Reads promote the entry to the most
+  recently used position by `delete` + `set` on the backing `Map`,
+  exploiting `Map`'s insertion-order iteration. When capacity is
+  reached we evict the first (oldest-read) key, not the first-inserted
+  one. A previous coarser implementation could evict hot entries on a
+  busy node; the V1.2 fix guarantees active readers stay cached.
+- **Promise coalescing**: if two requests for the same cache-miss key
+  race, only one Lit call goes out. The second awaits the first's
+  promise via `pendingLitCalls: Map<string, Promise<Uint8Array>>`. This
+  prevents a tab reload from double-billing.
+- **Stats**: `hits`, `misses`, `evictions`, `expirations`,
+  `manualFlushes`, `coalesced` counters expose cache behaviour for
+  capacity tuning.
+
+### Owner admin endpoints
+
+Two node-owner-guarded endpoints expose cache control for incident
+response and local observability:
+
+```
+GET  /api/storage/admin/cek-cache/stats
+POST /api/storage/admin/cek-cache/flush
+```
+
+Both are protected by `authenticate` + `requireOwner` middleware — any
+non-owner request is rejected with `401`. `flush` accepts an optional
+body to scope invalidation:
+
+- `{}` — flush all entries.
+- `{ kid }` — drop every cached CEK for a specific content ID (useful
+  if a key is suspected compromised).
+- `{ buyerAddress }` — drop every cached CEK for a wallet (useful
+  after an access-token transfer / revocation).
+- `{ kid, buyerAddress }` — drop one exact entry.
+
+Typical response:
+
+```json
+{
+  "success": true,
+  "flushed": 3,
+  "scope": { "kid": "0xabc…", "buyerAddress": "0x1234…" },
+  "stats": { "size": 47, "hits": 182, "misses": 12, "evictions": 0, "expirations": 1, "manualFlushes": 1, "coalesced": 4 }
+}
+```
+
 ---
 
 ## 5. Backend Authentication (Nonce-Sign-Login)
@@ -365,3 +484,18 @@ All ABIs are in `/src/lib/drm/contracts/`:
 | `ChannelCore.json` | `createChannel`, `ChannelCreated` event |
 | `CoreStorage.json` | `channelCreationFee()`, `mediaCreationFee()` |
 | `DigitalAsset.json` | Channel contract ABI: `mint`, `authority()`, `totalSupply()`, `tokenURI()`, `hasRole`, `grantRole`, `MINTER_ROLE`, `DEFAULT_ADMIN_ROLE`, `setApprovalForAll`, `AssetCreated` event |
+
+---
+
+## 10. Content Type Support (V1.2)
+
+The `ddrm-renderer` WASM module supports two render tiers:
+
+- **pixel-lock** — images, PDFs, CBZ comics, source code → watermarked JPEG/WebP/PNG
+- **html-lock** — reflowable EPUB ebooks → sanitized XHTML with strict CSP + zero-width forensic watermark + diagonal SVG overlay
+
+Added in V1.2: `application/epub+zip` (reflowable ebooks) and
+`application/vnd.comicbook+zip` (CBZ comics). See
+[EBOOK_PUBLISHING.md](./EBOOK_PUBLISHING.md) for the full pipeline,
+sanitization rules, viewer integration, fixed-layout EPUB fallback, and
+Runtime alignment notes.

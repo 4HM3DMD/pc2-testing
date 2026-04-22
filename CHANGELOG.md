@@ -6,6 +6,149 @@
 
 ---
 
+## [1.2.0] - 2026-04-21 (in development — `feature/lit-chipotle-migration`)
+
+### 🔒 Security (P0) — Lit Action Session-Key Delegation
+
+dDRM decryption now uses cryptographically-verified session-key delegation
+inside every Lit Action call. The previous V1.1 authorization path trusted
+a client-supplied `userAddress` parameter; because Lit Action source is
+public and immutable on IPFS, any caller could supply *any* known
+authorized buyer's address and receive the CEK. **This is closed in V1.2.**
+
+- **Session-key delegation (Option C)**: at wallet connect the buyer signs
+  *one* `SecureViewDelegation` authorizing a non-extractable, device-bound
+  P-256 key (Web Crypto, `extractable: false`) to decrypt dDRM content
+  for up to 24 hours across their EOA + smart-account addresses. Every
+  subsequent asset open is signed silently by the ephemeral key — zero
+  wallet popups, "double-click to open" UX preserved.
+- **Lit Actions** (`non-media-decrypt-chipotle.js`,
+  `media-decrypt-chipotle.js`) now verify the EIP-191 (or EIP-1271 for
+  smart wallets) delegation signature, the per-request P-256 signature,
+  the `actionIpfsId` binding, request freshness, replay protection, and
+  delegation expiry/revocation before reaching the on-chain
+  `AuthorityGateway.hasAccessByContentId` check.
+- **`userAddress` removed** from `jsParams` in all paths
+  (`recoverNonMediaCEK`, `recoverMediaCEKEnvelope`, Datil fallback). The
+  effective user is derived from the cryptographically verified
+  `delegation.coveredAddresses`.
+- **Server-authoritative action CID**: `/api/media/init` overrides the
+  PSSH-recorded CID with the server-configured `LIT_ACTION_CID` so legacy
+  assets (minted with the v0 CID baked into their MPD) work with the new
+  sigauth action without re-minting.
+- **Two-phase `/api/media/init`**: returns `412 Precondition Failed` with
+  `{ kid, actionIpfsId }` so the player can produce a signed bundle bound
+  to the correct `actionIpfsId` before the second call. MPD is cached
+  server-side for 60 s so the retry is free.
+- **Hard cutover**: `/lit/secure-view` now returns
+  `401 session_bundle_required` for any request without a signed bundle.
+  Legacy `*-chipotle.js` Lit Action files deleted; `LIT_ACTION_CID_LEGACY`
+  removed from `.env.example` and code paths. The legacy IPFS CID stays
+  pinned for a 14-day rollback window then is unpinned by ops (~2026-05-03).
+- **Verified end-to-end on 2026-04-21**: PDF · PNG · MP4 (AV1+AAC) ·
+  MP3 (AAC) — all four open with one wallet popup at session start,
+  zero popups on subsequent opens, exploit regression spike (14 checks)
+  passes against the canonical sigauth Lit Actions.
+
+References:
+- [`docs/handover/V12_SIGAUTH_HANDOVER.md`](docs/handover/V12_SIGAUTH_HANDOVER.md) — comprehensive cutover handover
+- [`docs/handover/IRZHY_LIT_ACTION_FIX_V12.md`](docs/handover/IRZHY_LIT_ACTION_FIX_V12.md) — public-safe engineer brief
+- [`.cursor/tasks/LIT-ACTION-SIGNATURE-AUTH/`](.cursor/tasks/LIT-ACTION-SIGNATURE-AUTH/) — DESIGN, SECURITY, TESTING
+
+### 🔒 Security (P0) — jhond0e Audit Triage (`SEC-2026-04-21`)
+
+Closes 7 of 11 vulnerabilities reported by external researcher jhond0e
+(2026-04-18). The 4 smart-contract findings (SEC-1, 4, 5, 6) are owned by
+a separate engineer. SEC-11 (DID JWT verify) is explicitly deferred to
+Wave 5 with documented mitigation. Authoritative disposition lives in
+[`docs/handover/SEC_2026_04_21_AUDIT_DISPOSITION.md`](docs/handover/SEC_2026_04_21_AUDIT_DISPOSITION.md).
+
+**Wave 1 — `mock-token` removal + `/api/update/install` lockdown**
+- **SEC-3c** Removed `mock-token-*` and `token-0x{wallet}-*` branches
+  from `middleware.ts` (~88 LOC of dangerous wallet-inference code) +
+  `whoami.ts` + `info.ts:getLaunchApps`. Replaced one legitimate
+  consumer (file-viewer iframe app) with **scoped session tokens** —
+  short-lived, single-use, file-bound — via new `scope-check` helper
+  and DB migration #29 (`sessions.scope`/`scope_data`).
+- **SEC-10** `authenticate + requireOwner` applied to every
+  `/api/update/*` route (`/install`, `/check`, `/check-github`,
+  `/status`, `/version`). Added 60 s throttle on `/install`, 30 s
+  throttle on `/check-github`. Owner wallet logged for audit trail.
+
+**Wave 2 — SIWE + `/api/setup/*` lockdown + transport hardening**
+- **SEC-3a** New `GET /auth/challenge` issues SIWE (EIP-4361) nonces.
+  `POST /auth/particle` and `POST /api/access/claim-ownership` now
+  require a verified signature when `siweRequired=true`. EIP-1271
+  (smart-contract sigs) and Solana SIWS (ed25519) supported. Particle
+  Auth SDK wired to the new flow in
+  `packages/particle-auth/src/particle/contexts/ParticleNetworkContext.tsx`.
+  Kill-switch defaults to `false` for safe rollout.
+- **SEC-7** New `requireSetupAuth` middleware on
+  `/api/setup/{mnemonic, info, mnemonic-sign-message,
+  acknowledge-mnemonic}`. First-run token (64-hex chars) printed once
+  to stdout/journalctl on initial boot for remote VPS installs.
+  Single-use, TTL-bound. Loopback always allowed.
+- **SEC-trust-proxy** Tightened `app.set('trust proxy', …)` from
+  `true` to `'loopback, linklocal, uniquelocal'`. Security decisions
+  fall back to `req.socket.remoteAddress` so LAN attackers cannot
+  spoof `req.ip` via `X-Forwarded-For`.
+- **SEC-cors** CORS allowlist extended to `*.ela.city` + `*.ela.local`
+  for the SIWE flow.
+
+**Wave 3 — Web-gateway lockdown (RCE + WireGuard hijack)**
+- **SEC-2** `POST /api/vless/register` shell injection closed:
+  `execSync` template literal replaced with `execFileSync` (argv
+  form, no shell). Added `/^[a-z0-9][a-z0-9_-]{2,29}$/` allowlist
+  regex. **All 9 `execSync` call sites in
+  `deploy/web-gateway/index.js` converted to `execFileSync`** —
+  `rg 'execSync\(' deploy/web-gateway` now returns 0 results.
+- **SEC-INFRA-GW-AUTH** New per-node provisioning tokens minted by
+  `POST /api/register` and stored on PC2 nodes at
+  `data/.gateway-tokens.json` (mode 0600). All mutating gateway
+  endpoints (`/api/wg/register`, `/api/wg/peer/<u>` DELETE,
+  `/api/awg/register`, `/api/awg/peer/<u>` DELETE,
+  `/api/vless/register`) require `X-Provisioning-Token` matching
+  the username's record. Cross-account binding enforced.
+- **SEC-8** WG re-key by an unauthorised caller now rejected — token
+  must match the registered node.
+- **SEC-9** WG peer DELETE token-gated + per-username throttle
+  (3/min). Symmetric `DELETE /api/awg/peer/<u>` added with same
+  gating to keep AWG cleanup on the audited path.
+- Kill-switch `GW_AUTH_REQUIRED=false` (default) → log-only mode.
+  Telemetry-driven flip to `true` once ≥99 % of inbound calls
+  carry tokens.
+
+**Wave 4 — CI / secret hygiene (`SEC-CI-SECRETSCAN`)**
+- Three-tier `gitleaks` gate: pre-commit hook (`.husky/pre-commit`,
+  staged-diff scan), GitHub Action on `pull_request` (diff scan),
+  GitHub Action on `push` to long-lived branches (full working-tree
+  scan).
+- `.gitleaks.toml` extends defaults with extensive path exclusions
+  (build artefacts, vendored bundles, `pc2-node/data/`, log files)
+  + stopwords + regexes for public-by-design IDs (IPFS CIDs, EVM
+  and Solana addresses).
+- `.gitleaksignore` documents 4 triaged historical findings
+  (TRIAGE-1 to TRIAGE-4), each with rationale and follow-up link.
+- Baseline reduced from 426 raw matches → 0 detected leaks.
+- Surfaced **TRIAGE-1**: real Ed25519 private key in
+  `data/identity.json` committed at `4b10bad94` (2026-03-06)
+  before the matching `.gitignore` rule. Already on 4 origin
+  branches. Allowlisted with explicit follow-up scaffolded as
+  [`SEC-2026-04-22-BOSON-DID-ROTATION`](.cursor/tasks/SEC-2026-04-22-BOSON-DID-ROTATION/SEC-2026-04-22-BOSON-DID-ROTATION.md).
+- Contributor runbook: [`docs/wiki/Technical/SECRET_SCANNING.md`](docs/wiki/Technical/SECRET_SCANNING.md).
+
+**Test coverage**: `pc2-node/tests/security/*.test.js` — 79 cases
+across 5 spec files (SIWE EOA + EIP-1271 + Solana ed25519, scoped
+session tokens, provisioning tokens, first-run tokens, DID JWT
+contract). All pass on `feature/lit-chipotle-migration`.
+
+References:
+- [`docs/handover/SEC_2026_04_21_AUDIT_DISPOSITION.md`](docs/handover/SEC_2026_04_21_AUDIT_DISPOSITION.md) — **authoritative researcher → fix mapping**
+- [`.cursor/tasks/SEC-2026-04-21-PC2-AUDIT/`](.cursor/tasks/SEC-2026-04-21-PC2-AUDIT/) — Wave 1-4 detail tasks
+- [`.cursor/tasks/SEC-2026-04-22-BOSON-DID-ROTATION/`](.cursor/tasks/SEC-2026-04-22-BOSON-DID-ROTATION/) — DID rotation follow-up
+
+---
+
 ## [1.1.0] - 2026-03-03
 
 > 133 commits since v1.0.0 — squash merged from `feature/jetson-gpu-acceleration`

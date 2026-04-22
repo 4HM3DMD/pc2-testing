@@ -7,12 +7,13 @@ import path from 'path';
 import fs from 'fs';
 import { DatabaseManager, FilesystemManager } from '../storage/index.js';
 import { Config } from '../config/loader.js';
+import { baseRpcCall } from '../utils/rpc.js';
 import { Server as SocketIOServer } from 'socket.io';
 import { authenticate, corsMiddleware, errorHandler, AuthenticatedRequest } from './middleware.js';
 import { logger, createLogger } from '../utils/logger.js';
 const log = createLogger('api-index');
 import { handleWhoami } from './whoami.js';
-import { handleParticleAuth, handleGrantUserApp, handleGetUserAppToken } from './auth.js';
+import { handleParticleAuth, handleGrantUserApp, handleGetUserAppToken, handleAuthChallenge } from './auth.js';
 import { handleStat, handleReaddir, handleRead, handleWrite, handleMkdir, handleDelete, handleMove, handleRename, handleCopy } from './filesystem.js';
 import { handleSign, handleVersion, handleOSUser, handleKV, handleRAO, handleContactUs, handleDriversCall, handleGetWallets, handleOpenItem, handleSuggestApps, handleItemMetadata, handleWriteFile, handleSetDesktopBg, handleSetProfilePicture } from './other.js';
 import { handleAPIInfo, handleGetLaunchApps, handleDF, handleBatch, handleCacheTimestamp, handleStats } from './info.js';
@@ -56,1215 +57,1269 @@ import { createSupernodeRouter } from './supernode.js';
 
 // Extend Express Request to include database, filesystem, config, and WebSocket
 declare global {
-  namespace Express {
-    interface Application {
-      locals: {
-        db?: DatabaseManager;
-        filesystem?: FilesystemManager;
-        config?: Config;
-        io?: SocketIOServer;
-      };
+    namespace Express {
+        interface Application {
+            locals: {
+                db?: DatabaseManager;
+                filesystem?: FilesystemManager;
+                config?: Config;
+                io?: SocketIOServer;
+            };
+        }
     }
-  }
 }
 
-export function setupAPI(app: Express): void {
-  // Debug middleware for specific routes (enable as needed)
-  app.use((req: Request, res: Response, next: NextFunction) => {
+export function setupAPI (app: Express): void {
+    // Debug middleware for specific routes (enable as needed)
+    app.use((req: Request, res: Response, next: NextFunction) => {
     // Uncomment to debug specific routes:
     // if (req.path === '/move') {
     //   logger.info(`[Route Debug] ${req.method} ${req.path}: url=${req.url}`);
     // }
-    next();
-  });
-  
-  // CORS middleware (applied to all routes)
-  app.use(corsMiddleware);
-  
-  // Cookie parser (required for anti-snipe session cookies)
-  app.use(cookieParser());
+        next();
+    });
 
-  // Health check endpoint (no auth required)
-  // Available at both /health and /api/health for Docker compatibility
-  const healthHandler = (req: Request, res: Response) => {
-    const db = app.locals.db;
-    const filesystem = app.locals.filesystem;
-    const config = app.locals.config;
-    const io = app.locals.io;
-    
-    const dbStatus = db ? 'connected' : 'not initialized';
-    const ipfsStatus = filesystem ? 'available' : 'not initialized';
-    const websocketStatus = io ? 'active' : 'not initialized';
-    
-    let terminalStatus = 'not initialized';
-    let terminalIsolation = 'unknown';
-    try {
-      const terminalService = getTerminalService();
-      if (terminalService) {
-        terminalStatus = terminalService.isAvailable() ? 'available' : 'unavailable';
-        terminalIsolation = terminalService.getEffectiveIsolationMode();
-      }
-    } catch {
-      terminalStatus = 'not available';
-    }
-    
-    const health: {
-      status: string;
-      timestamp: string;
-      version: string;
-      uptime: number;
-      database: string;
-      ipfs: string;
-      websocket: string;
-      terminal: {
-        status: string;
-        isolationMode: string;
-      };
-      owner?: {
-        set: boolean;
-        tethered_wallets: number;
-      };
-    } = {
-      status: 'ok',
-      timestamp: new Date().toISOString(),
-      version: '0.1.0',
-      uptime: process.uptime(),
-      database: dbStatus,
-      ipfs: ipfsStatus,
-      websocket: websocketStatus,
-      terminal: {
-        status: terminalStatus,
-        isolationMode: terminalIsolation
-      }
+    // CORS middleware (applied to all routes)
+    app.use(corsMiddleware);
+
+    // Cookie parser (required for anti-snipe session cookies)
+    app.use(cookieParser());
+
+    // Health check endpoint (no auth required)
+    // Available at both /health and /api/health for Docker compatibility
+    const healthHandler = (req: Request, res: Response) => {
+        const db = app.locals.db;
+        const filesystem = app.locals.filesystem;
+        const config = app.locals.config;
+        const io = app.locals.io;
+
+        const dbStatus = db ? 'connected' : 'not initialized';
+        const ipfsStatus = filesystem ? 'available' : 'not initialized';
+        const websocketStatus = io ? 'active' : 'not initialized';
+
+        let terminalStatus = 'not initialized';
+        let terminalIsolation = 'unknown';
+        try {
+            const terminalService = getTerminalService();
+            if ( terminalService ) {
+                terminalStatus = terminalService.isAvailable() ? 'available' : 'unavailable';
+                terminalIsolation = terminalService.getEffectiveIsolationMode();
+            }
+        } catch {
+            terminalStatus = 'not available';
+        }
+
+        const health: {
+            status: string;
+            timestamp: string;
+            version: string;
+            uptime: number;
+            database: string;
+            ipfs: string;
+            websocket: string;
+            terminal: {
+                status: string;
+                isolationMode: string;
+            };
+            owner?: {
+                set: boolean;
+                tethered_wallets: number;
+            };
+        } = {
+            status: 'ok',
+            timestamp: new Date().toISOString(),
+            version: '0.1.0',
+            uptime: process.uptime(),
+            database: dbStatus,
+            ipfs: ipfsStatus,
+            websocket: websocketStatus,
+            terminal: {
+                status: terminalStatus,
+                isolationMode: terminalIsolation,
+            },
+        };
+
+        if ( config ) {
+            health.owner = {
+                set: config.owner.wallet_address !== null,
+                tethered_wallets: config.owner.tethered_wallets.length,
+            };
+        }
+
+        // If critical components are missing, mark as degraded
+        if ( ! db ) {
+            health.status = 'degraded';
+        }
+
+        res.json(health);
     };
 
-    if (config) {
-      health.owner = {
-        set: config.owner.wallet_address !== null,
-        tethered_wallets: config.owner.tethered_wallets.length
-      };
-    }
-    
-    // If critical components are missing, mark as degraded
-    if (!db) {
-      health.status = 'degraded';
-    }
-    
-    res.json(health);
-  };
-  
-  app.get('/health', healthHandler);
-  app.get('/api/health', healthHandler);
+    app.get('/health', healthHandler);
+    app.get('/api/health', healthHandler);
 
-  // System readiness endpoint (no auth required)
-  // Reports transport binary availability for login screen health badge
-  app.get('/api/system-readiness', (_req: Request, res: Response) => {
+    // System readiness endpoint (no auth required)
+    // Reports transport binary availability for login screen health badge
+    app.get('/api/system-readiness', (_req: Request, res: Response) => {
+        const db = app.locals.db;
+        const filesystem = app.locals.filesystem;
+
+        const binaryChecks = checkTransportBinaries();
+
+        const checks = [
+            {
+                id: 'database',
+                label: 'Database',
+                status: db ? 'ok' as const : 'missing' as const,
+                detail: db ? 'Connected' : 'Not initialized',
+                fixable: false,
+            },
+            {
+                id: 'ipfs',
+                label: 'IPFS Storage',
+                status: filesystem ? 'ok' as const : 'missing' as const,
+                detail: filesystem ? 'Available' : 'Not initialized',
+                fixable: false,
+            },
+            ...binaryChecks.map((b: { name: string; found: boolean; path: string | null }) => ({
+                id: b.name,
+                label: b.name === 'wireguard-go' ? 'WireGuard'
+                    : b.name === 'amneziawg-go' ? 'AmneziaWG'
+                        : b.name === 'awg-quick' ? 'AWG Quick'
+                            : b.name === 'sing-box' ? 'VLESS Transport'
+                                : b.name,
+                status: b.found ? 'ok' as const : 'missing' as const,
+                detail: b.found ? `Found at ${b.path}` : 'Not installed',
+                fixable: !b.found,
+                fixAction: 'install-binaries',
+            })),
+        ];
+
+        const okCount = checks.filter(c => c.status === 'ok').length;
+        const overall = okCount === checks.length ? 'ready'
+            : okCount >= checks.length - 1 ? 'degraded'
+                : 'issues';
+
+        res.json({ overall, checks, total: checks.length, ok: okCount });
+    });
+
+    // System readiness fix endpoint (auth required — modifies system)
+    app.post('/api/system-readiness/fix', authenticate, async (_req: AuthenticatedRequest, res: Response) => {
+        try {
+            const report = await ensureTransportBinaries();
+            res.json({
+                success: true,
+                downloaded: report.downloaded,
+                failed: report.failed,
+                message: report.failed.length > 0
+                    ? `Installed ${report.downloaded} binaries. Failed: ${report.failed.join(', ')}`
+                    : `All transport binaries installed successfully (${report.downloaded} downloaded)`,
+            });
+        } catch ( err ) {
+            res.status(500).json({ success: false, message: (err as Error).message });
+        }
+    });
+
+    // Version endpoint (no auth required)
+    app.get('/version', handleVersion);
+
+    // API info endpoint (no auth required)
+    app.get('/api/info', handleAPIInfo);
+
+    // Get launch apps (no auth required)
+    app.get('/get-launch-apps', handleGetLaunchApps);
+
+    // Get app info by name (no auth required - used by window.get_apps)
+    // IMPORTANT: This must be registered BEFORE static file middleware to catch /apps/:name requests
+    app.get('/apps/:name', handleGetApp);
+
+    // Cache timestamp (no auth required - SDK calls this during initialization)
+    app.get('/cache/last-change-timestamp', handleCacheTimestamp);
+
+    // File access (signed URLs - no auth required, signature verified in query)
+    app.get('/file', handleFile);
+
+    // ============================================================================
+    // Public IPFS Gateway (no auth required)
+    // ============================================================================
     const db = app.locals.db;
     const filesystem = app.locals.filesystem;
 
-    const binaryChecks = checkTransportBinaries();
+    // Get IPFS instance from filesystem if available
+    const ipfs = filesystem?.getIPFS() || null;
 
-    const checks = [
-      {
-        id: 'database',
-        label: 'Database',
-        status: db ? 'ok' as const : 'missing' as const,
-        detail: db ? 'Connected' : 'Not initialized',
-        fixable: false,
-      },
-      {
-        id: 'ipfs',
-        label: 'IPFS Storage',
-        status: filesystem ? 'ok' as const : 'missing' as const,
-        detail: filesystem ? 'Available' : 'Not initialized',
-        fixable: false,
-      },
-      ...binaryChecks.map((b: { name: string; found: boolean; path: string | null }) => ({
-        id: b.name,
-        label: b.name === 'wireguard-go' ? 'WireGuard'
-             : b.name === 'amneziawg-go' ? 'AmneziaWG'
-             : b.name === 'awg-quick' ? 'AWG Quick'
-             : b.name === 'sing-box' ? 'VLESS Transport'
-             : b.name,
-        status: b.found ? 'ok' as const : 'missing' as const,
-        detail: b.found ? `Found at ${b.path}` : 'Not installed',
-        fixable: !b.found,
-        fixAction: 'install-binaries',
-      })),
-    ];
+    if ( db && filesystem ) {
+        const publicRouter = createPublicRouter(db, filesystem, ipfs);
+        app.use(publicRouter);
+        logger.info('[API] Public IPFS gateway enabled at /ipfs/:cid and /public/:wallet/*');
 
-    const okCount = checks.filter(c => c.status === 'ok').length;
-    const overall = okCount === checks.length ? 'ready'
-                  : okCount >= checks.length - 1 ? 'degraded'
-                  : 'issues';
-
-    res.json({ overall, checks, total: checks.length, ok: okCount });
-  });
-
-  // System readiness fix endpoint (auth required — modifies system)
-  app.post('/api/system-readiness/fix', authenticate, async (_req: AuthenticatedRequest, res: Response) => {
-    try {
-      const report = await ensureTransportBinaries();
-      res.json({
-        success: true,
-        downloaded: report.downloaded,
-        failed: report.failed,
-        message: report.failed.length > 0
-          ? `Installed ${report.downloaded} binaries. Failed: ${report.failed.join(', ')}`
-          : `All transport binaries installed successfully (${report.downloaded} downloaded)`,
-      });
-    } catch (err) {
-      res.status(500).json({ success: false, message: (err as Error).message });
+        const nodeConfig = app.locals.config as Config | undefined;
+        const uploadLimit = nodeConfig?.seeding?.max_upload_mbps ?? 0;
+        if ( uploadLimit > 0 ) {
+            setBandwidthLimit(uploadLimit);
+        }
+    } else {
+        logger.warn('[API] Public IPFS gateway disabled - database or filesystem not available');
     }
-  });
 
-  // Version endpoint (no auth required)
-  app.get('/version', handleVersion);
-  
-  // API info endpoint (no auth required)
-  app.get('/api/info', handleAPIInfo);
-  
-  // Get launch apps (no auth required)
-  app.get('/get-launch-apps', handleGetLaunchApps);
-  
-  // Get app info by name (no auth required - used by window.get_apps)
-  // IMPORTANT: This must be registered BEFORE static file middleware to catch /apps/:name requests
-  app.get('/apps/:name', handleGetApp);
-  
-  // Cache timestamp (no auth required - SDK calls this during initialization)
-  app.get('/cache/last-change-timestamp', handleCacheTimestamp);
-  
-  // File access (signed URLs - no auth required, signature verified in query)
-  app.get('/file', handleFile);
+    // Authentication endpoints
+    app.get('/auth/challenge', handleAuthChallenge);
+    app.post('/auth/particle', handleParticleAuth);
+    app.post('/auth/grant-user-app', authenticate, handleGrantUserApp);
+    app.get('/auth/get-user-app-token', authenticate, handleGetUserAppToken);
+    app.post('/auth/get-user-app-token', authenticate, handleGetUserAppToken);
 
-  // ============================================================================
-  // Public IPFS Gateway (no auth required)
-  // ============================================================================
-  const db = app.locals.db;
-  const filesystem = app.locals.filesystem;
-  
-  // Get IPFS instance from filesystem if available
-  const ipfs = filesystem?.getIPFS() || null;
-  
-  if (db && filesystem) {
-    const publicRouter = createPublicRouter(db, filesystem, ipfs);
-    app.use(publicRouter);
-    logger.info('[API] Public IPFS gateway enabled at /ipfs/:cid and /public/:wallet/*');
+    // User info endpoints (no auth required - return unauthenticated state if no token)
+    // Match mock server behavior: return 200 with username: null instead of 401
+    app.get('/whoami', handleWhoami);
+    app.get('/os/user', handleOSUser);
+    app.get('/api/stats', authenticate, handleStats);
+    app.get('/api/wallets', authenticate, handleGetWallets);
 
-    const nodeConfig = app.locals.config as Config | undefined;
-    const uploadLimit = nodeConfig?.seeding?.max_upload_mbps ?? 0;
-    if (uploadLimit > 0) {
-      setBandwidthLimit(uploadLimit);
-    }
-  } else {
-    logger.warn('[API] Public IPFS gateway disabled - database or filesystem not available');
-  }
+    // User profile endpoint (per-wallet settings)
+    app.post('/api/user/profile', authenticate, async (req: AuthenticatedRequest, res: Response) => {
+        try {
+            if ( ! req.user ) {
+                return res.status(401).json({ error: 'Unauthorized' });
+            }
 
-  // Authentication endpoints
-  app.post('/auth/particle', handleParticleAuth);
-  app.post('/auth/grant-user-app', authenticate, handleGrantUserApp);
-  app.get('/auth/get-user-app-token', authenticate, handleGetUserAppToken);
-  app.post('/auth/get-user-app-token', authenticate, handleGetUserAppToken);
+            const db = req.app.locals.db;
+            const { display_name } = req.body;
 
-  // User info endpoints (no auth required - return unauthenticated state if no token)
-  // Match mock server behavior: return 200 with username: null instead of 401
-  app.get('/whoami', handleWhoami);
-  app.get('/os/user', handleOSUser);
-  app.get('/api/stats', authenticate, handleStats);
-  app.get('/api/wallets', authenticate, handleGetWallets);
-  
-  // User profile endpoint (per-wallet settings)
-  app.post('/api/user/profile', authenticate, async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      if (!req.user) {
-        return res.status(401).json({ error: 'Unauthorized' });
-      }
-      
-      const db = req.app.locals.db;
-      const { display_name } = req.body;
-      
-      if (display_name !== undefined) {
-        // Save per-wallet display name
-        const key = `user_${req.user.wallet_address}_display_name`;
-        db?.setSetting(key, display_name);
-      }
-      
-      res.json({ success: true });
-    } catch (error) {
-      log.error('[User Profile] Error:', error);
-      res.status(500).json({ error: 'Failed to save profile' });
-    }
-  });
-  
-  app.get('/api/user/profile', authenticate, async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      if (!req.user) {
-        return res.status(401).json({ error: 'Unauthorized' });
-      }
-      
-      const db = req.app.locals.db;
-      const key = `user_${req.user.wallet_address}_display_name`;
-      const displayName = db?.getSetting(key) || '';
-      
-      res.json({ display_name: displayName });
-    } catch (error) {
-      log.error('[User Profile] Error:', error);
-      res.status(500).json({ error: 'Failed to get profile' });
-    }
-  });
-  
-  // Login history endpoint (per-wallet)
-  app.get('/api/user/login-history', authenticate, async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      if (!req.user) {
-        return res.status(401).json({ error: 'Unauthorized' });
-      }
-      
-      const db = req.app.locals.db;
-      const walletAddress = req.user.wallet_address;
-      const currentToken = req.headers.authorization?.replace('Bearer ', '');
-      
-      // Get sessions from database (using available columns)
-      const sessions = db?.db?.prepare(`
+            if ( display_name !== undefined ) {
+                // Save per-wallet display name
+                const key = `user_${req.user.wallet_address}_display_name`;
+                db?.setSetting(key, display_name);
+            }
+
+            res.json({ success: true });
+        } catch ( error ) {
+            log.error('[User Profile] Error:', error);
+            res.status(500).json({ error: 'Failed to save profile' });
+        }
+    });
+
+    app.get('/api/user/profile', authenticate, async (req: AuthenticatedRequest, res: Response) => {
+        try {
+            if ( ! req.user ) {
+                return res.status(401).json({ error: 'Unauthorized' });
+            }
+
+            const db = req.app.locals.db;
+            const key = `user_${req.user.wallet_address}_display_name`;
+            const displayName = db?.getSetting(key) || '';
+
+            res.json({ display_name: displayName });
+        } catch ( error ) {
+            log.error('[User Profile] Error:', error);
+            res.status(500).json({ error: 'Failed to get profile' });
+        }
+    });
+
+    // Login history endpoint (per-wallet)
+    app.get('/api/user/login-history', authenticate, async (req: AuthenticatedRequest, res: Response) => {
+        try {
+            if ( ! req.user ) {
+                return res.status(401).json({ error: 'Unauthorized' });
+            }
+
+            const db = req.app.locals.db;
+            const walletAddress = req.user.wallet_address;
+            const currentToken = req.headers.authorization?.replace('Bearer ', '');
+
+            // Get sessions from database (using available columns)
+            const sessions = db?.db?.prepare(`
         SELECT token, created_at, expires_at
         FROM sessions 
         WHERE wallet_address = ?
         ORDER BY created_at DESC
         LIMIT 20
       `).all(walletAddress) || [];
-      
-      const logins = sessions.map((s: any) => ({
-        timestamp: new Date(s.created_at).toISOString(),
-        ip: 'Local Session',
-        user_agent: 'PC2 Desktop',
-        is_current: s.token === currentToken
-      }));
-      
-      res.json({ logins });
-    } catch (error) {
-      log.error('[Login History] Error:', error);
-      res.json({ logins: [] });
-    }
-  });
-  
-  // List sessions endpoint for Session Manager
-  app.get('/auth/list-sessions', authenticate, async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      if (!req.user) {
-        return res.status(401).json({ error: 'Unauthorized' });
-      }
-      
-      const db = req.app.locals.db;
-      const walletAddress = req.user.wallet_address;
-      const currentToken = req.headers.authorization?.replace('Bearer ', '');
-      
-      const sessions = db?.db?.prepare(`
+
+            const logins = sessions.map((s: any) => ({
+                timestamp: new Date(s.created_at).toISOString(),
+                ip: 'Local Session',
+                user_agent: 'PC2 Desktop',
+                is_current: s.token === currentToken,
+            }));
+
+            res.json({ logins });
+        } catch ( error ) {
+            log.error('[Login History] Error:', error);
+            res.json({ logins: [] });
+        }
+    });
+
+    // List sessions endpoint for Session Manager
+    app.get('/auth/list-sessions', authenticate, async (req: AuthenticatedRequest, res: Response) => {
+        try {
+            if ( ! req.user ) {
+                return res.status(401).json({ error: 'Unauthorized' });
+            }
+
+            const db = req.app.locals.db;
+            const walletAddress = req.user.wallet_address;
+            const currentToken = req.headers.authorization?.replace('Bearer ', '');
+
+            const sessions = db?.db?.prepare(`
         SELECT token, created_at, expires_at
         FROM sessions 
         WHERE wallet_address = ? AND expires_at > ?
         ORDER BY created_at DESC
       `).all(walletAddress, Date.now()) || [];
-      
-      const result = sessions.map((s: any, index: number) => ({
-        uuid: s.token.substring(0, 16),
-        current: s.token === currentToken,
-        meta: {
-          'Created': new Date(s.created_at).toLocaleString(),
-          'Expires': new Date(s.expires_at).toLocaleString(),
-          'Type': 'Wallet Session'
+
+            const result = sessions.map((s: any, index: number) => ({
+                uuid: s.token.substring(0, 16),
+                current: s.token === currentToken,
+                meta: {
+                    'Created': new Date(s.created_at).toLocaleString(),
+                    'Expires': new Date(s.expires_at).toLocaleString(),
+                    'Type': 'Wallet Session',
+                },
+            }));
+
+            res.json(result);
+        } catch ( error ) {
+            log.error('[List Sessions] Error:', error);
+            res.json([]);
         }
-      }));
-      
-      res.json(result);
-    } catch (error) {
-      log.error('[List Sessions] Error:', error);
-      res.json([]);
-    }
-  });
-  
-  // Revoke session endpoint
-  app.post('/auth/revoke-session', authenticate, async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      if (!req.user) {
-        return res.status(401).json({ error: 'Unauthorized' });
-      }
-      
-      const db = req.app.locals.db;
-      const { uuid } = req.body;
-      const walletAddress = req.user.wallet_address;
-      
-      // Find and delete session that starts with this uuid
-      db?.db?.prepare(`
+    });
+
+    // Revoke session endpoint
+    app.post('/auth/revoke-session', authenticate, async (req: AuthenticatedRequest, res: Response) => {
+        try {
+            if ( ! req.user ) {
+                return res.status(401).json({ error: 'Unauthorized' });
+            }
+
+            const db = req.app.locals.db;
+            const { uuid } = req.body;
+            const walletAddress = req.user.wallet_address;
+
+            // Find and delete session that starts with this uuid
+            db?.db?.prepare(`
         DELETE FROM sessions 
         WHERE wallet_address = ? AND token LIKE ?
       `).run(walletAddress, `${uuid}%`);
-      
-      res.json({ success: true });
-    } catch (error) {
-      log.error('[Revoke Session] Error:', error);
-      res.status(500).json({ error: 'Failed to revoke session' });
-    }
-  });
-  
-  // Apply rate limiting and audit middleware before routers so dDRM endpoints are covered
-  app.use(rateLimitMiddleware());
-  app.use(auditMiddleware);
 
-  // Storage usage endpoint
-  app.use('/api/storage', storageRouter);
-  // NFT pin routes (in storageRouter at /nft/*) also mounted at /api/nft/*
-  app.use('/api', storageRouter);
-  app.use('/api/media', mediaRouter);
-  app.use('/api/ai', aiRouter);
-  app.use('/api/wasm', wasmRouter);
-  app.use('/api/resources', resourcesRouter);
-  app.use('/api/http', httpClientRouter);
-  app.use('/api/git', gitRouter);
-  app.use('/api/audit', auditRouter);
-  app.use('/api/scheduler', schedulerRouter);
-  app.use('/api/boson', bosonRouter);
-  app.use('/api/setup', setupRouter);
-  app.use('/api/update', updateRouter);
-  app.use('/api/access', accessControlRouter);
-  app.use('/api/did', didRouter);
-  app.use('/api/wallet', walletRouter);
-  app.use('/api/drafts', draftsRouter);
-  app.use('/api/gateway', gatewayRouter);
-  app.use('/api/system', systemRouter);
-  app.use('/api/context', contextRouter);
-  app.use('/api/ai', voiceRouter);
-  app.use('/api/registry', registryRouter);
-  app.use('/api/supernode', createSupernodeRouter());
-
-  // Content Catalog (on-chain indexed content — public read, no auth needed for browsing)
-  app.get('/api/catalog', (req: Request, res: Response) => {
-    const catalogDb = req.app.locals.db as DatabaseManager | undefined;
-    if (!catalogDb) return res.status(503).json({ error: 'Database not available' });
-
-    const { asset_type, creator, channel, search, limit: l, offset: o } = req.query;
-    const result = catalogDb.getCatalogItems({
-      assetType: asset_type as string | undefined,
-      creator: creator as string | undefined,
-      channel: channel as string | undefined,
-      search: search as string | undefined,
-      limit: parseInt(l as string) || 50,
-      offset: parseInt(o as string) || 0,
+            res.json({ success: true });
+        } catch ( error ) {
+            log.error('[Revoke Session] Error:', error);
+            res.status(500).json({ error: 'Failed to revoke session' });
+        }
     });
 
-    const pinnedCids = new Set(catalogDb.getPinnedCIDs());
-    const enriched = result.items.map((item: any) => ({
-      ...item,
-      is_local: !!(item.content_cid && pinnedCids.has(item.content_cid)),
-    }));
+    // Apply rate limiting and audit middleware before routers so dDRM endpoints are covered
+    app.use(rateLimitMiddleware());
+    app.use(auditMiddleware);
 
-    res.json({ success: true, total: result.total, items: enriched });
-  });
+    // Storage usage endpoint
+    app.use('/api/storage', storageRouter);
+    // NFT pin routes (in storageRouter at /nft/*) also mounted at /api/nft/*
+    app.use('/api', storageRouter);
+    app.use('/api/media', mediaRouter);
+    app.use('/api/ai', aiRouter);
+    app.use('/api/wasm', wasmRouter);
+    app.use('/api/resources', resourcesRouter);
+    app.use('/api/http', httpClientRouter);
+    app.use('/api/git', gitRouter);
+    app.use('/api/audit', auditRouter);
+    app.use('/api/scheduler', schedulerRouter);
+    app.use('/api/boson', bosonRouter);
+    app.use('/api/setup', setupRouter);
+    app.use('/api/update', updateRouter);
+    app.use('/api/access', accessControlRouter);
+    app.use('/api/did', didRouter);
+    app.use('/api/wallet', walletRouter);
+    app.use('/api/drafts', draftsRouter);
+    app.use('/api/gateway', gatewayRouter);
+    app.use('/api/system', systemRouter);
+    app.use('/api/context', contextRouter);
+    app.use('/api/ai', voiceRouter);
+    app.use('/api/registry', registryRouter);
+    app.use('/api/supernode', createSupernodeRouter());
 
-  app.get('/api/catalog/stats', (req: Request, res: Response) => {
-    const catalogDb = req.app.locals.db as DatabaseManager | undefined;
-    if (!catalogDb) return res.status(503).json({ error: 'Database not available' });
+    // Content Catalog (on-chain indexed content — public read, no auth needed for browsing)
+    app.get('/api/catalog', (req: Request, res: Response) => {
+        const catalogDb = req.app.locals.db as DatabaseManager | undefined;
+        if ( ! catalogDb ) return res.status(503).json({ error: 'Database not available' });
 
-    const stats = catalogDb.getCatalogStats();
-    const indexer = req.app.locals.indexerService;
-    res.json({
-      success: true,
-      catalog: stats,
-      indexer: indexer ? indexer.getStats() : { enabled: false },
-    });
-  });
+        const { asset_type, creator, channel, search, limit: l, offset: o } = req.query;
+        const result = catalogDb.getCatalogItems({
+            assetType: asset_type as string | undefined,
+            creator: creator as string | undefined,
+            channel: channel as string | undefined,
+            search: search as string | undefined,
+            limit: parseInt(l as string) || 50,
+            offset: parseInt(o as string) || 0,
+        });
 
-  app.get('/api/catalog/content/:contentId', (req: Request, res: Response) => {
-    const catalogDb = req.app.locals.db as DatabaseManager | undefined;
-    if (!catalogDb) return res.status(503).json({ error: 'Database not available' });
+        const pinnedCids = new Set(catalogDb.getPinnedCIDs());
+        const enriched = result.items.map((item: any) => ({
+            ...item,
+            is_local: !!(item.content_cid && pinnedCids.has(item.content_cid)),
+        }));
 
-    const item = catalogDb.getCatalogItemByContentId(req.params.contentId) as any;
-    if (!item) return res.status(404).json({ error: 'Asset not found' });
-
-    const pinnedCids = new Set(catalogDb.getPinnedCIDs());
-    item.is_local = !!(item.content_cid && pinnedCids.has(item.content_cid));
-
-    res.json({ success: true, item });
-  });
-
-  app.get('/api/catalog/asset/:address/:tokenId', (req: Request, res: Response) => {
-    const catalogDb = req.app.locals.db as DatabaseManager | undefined;
-    if (!catalogDb) return res.status(503).json({ error: 'Database not available' });
-
-    const item = catalogDb.getCatalogItemByToken(req.params.address, req.params.tokenId) as any;
-    if (!item) return res.status(404).json({ error: 'Asset not found in local catalog' });
-
-    const pinnedCids = new Set(catalogDb.getPinnedCIDs());
-    item.is_local = !!(item.content_cid && pinnedCids.has(item.content_cid));
-
-    const channelMeta = catalogDb.getChannelMetadata(item.channel_address);
-    if (channelMeta) {
-      item._channelMeta = channelMeta;
-    }
-
-    res.json({ success: true, item });
-  });
-
-  app.get('/api/catalog/operative/:address', (req: Request, res: Response) => {
-    const catalogDb = req.app.locals.db as DatabaseManager | undefined;
-    if (!catalogDb) return res.status(503).json({ error: 'Database not available' });
-
-    const item = catalogDb.getCatalogItemByOperative(req.params.address) as any;
-    if (!item) return res.status(404).json({ error: 'Asset not found' });
-
-    res.json({ success: true, item });
-  });
-
-  app.get('/api/catalog/providers/:cid', async (req: Request, res: Response) => {
-    const catalogIpfs = ipfs;
-    if (!catalogIpfs) return res.status(503).json({ error: 'IPFS not available' });
-
-    const { cid } = req.params;
-    const count = await catalogIpfs.countProviders(cid);
-
-    res.json({ success: true, cid, providers: count });
-  });
-
-  app.get('/api/catalog/creator/:address', (req: Request, res: Response) => {
-    const catalogDb = req.app.locals.db as DatabaseManager | undefined;
-    if (!catalogDb) return res.status(503).json({ error: 'Database not available' });
-
-    const stats = catalogDb.getCreatorStats(req.params.address);
-    const cdnStatsData = req.app.locals.seedingService?.getStats?.() ?? null;
-
-    res.json({
-      success: true,
-      creator: req.params.address,
-      ...stats,
-      seeding: cdnStatsData ? {
-        enabled: cdnStatsData.enabled,
-        queueLength: cdnStatsData.queueLength,
-        activeDownloads: cdnStatsData.activeDownloads,
-        disk: cdnStatsData.disk,
-      } : null,
-    });
-  });
-
-  app.get('/api/catalog/channels', (req: Request, res: Response) => {
-    const catalogDb = req.app.locals.db as DatabaseManager | undefined;
-    if (!catalogDb) return res.status(503).json({ error: 'Database not available' });
-
-    const channels = catalogDb.getCatalogChannels();
-    res.json({ success: true, total: channels.length, data: channels });
-  });
-
-  app.get('/api/catalog/channel/:address', (req: Request, res: Response) => {
-    const catalogDb = req.app.locals.db as DatabaseManager | undefined;
-    if (!catalogDb) return res.status(503).json({ error: 'Database not available' });
-
-    const { address } = req.params;
-    const meta = catalogDb.getChannelMetadata(address);
-    res.json({ success: true, channel: meta || {} });
-  });
-
-  app.put('/api/catalog/channel/:address', authenticate, (req: AuthenticatedRequest, res: Response) => {
-    const catalogDb = req.app.locals.db as DatabaseManager | undefined;
-    if (!catalogDb) return res.status(503).json({ error: 'Database not available' });
-
-    const { address } = req.params;
-    const { name, description, categories, image, coverImage, plans, tokenAccess } = req.body || {};
-    const wallet = req.user?.wallet_address;
-
-    try {
-      catalogDb.updateChannelMetadata(address, { name, description, categories, image, coverImage, plans, tokenAccess }, wallet);
-      const updated = catalogDb.getChannelMetadata(address);
-      res.json({ success: true, channel: updated });
-    } catch (err: any) {
-      logger.error(`[API] Channel metadata update failed: ${err.message}`);
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  app.get('/api/catalog/owned/:address', (req: Request, res: Response) => {
-    const catalogDb = req.app.locals.db as DatabaseManager | undefined;
-    if (!catalogDb) return res.status(503).json({ error: 'Database not available' });
-
-    const { limit: l, offset: o } = req.query;
-    const result = catalogDb.getOwnedCatalogItems(req.params.address, {
-      limit: parseInt(l as string) || 50,
-      offset: parseInt(o as string) || 0,
+        res.json({ success: true, total: result.total, items: enriched });
     });
 
-    const pinnedCids = new Set(catalogDb.getPinnedCIDs());
-    const enriched = result.items.map((item: any) => ({
-      ...item,
-      is_local: !!(item.content_cid && pinnedCids.has(item.content_cid)),
-    }));
+    /**
+   * Trigger an immediate indexer scan. Called by the Creator app after channel
+   * creation or minting so users don't wait up to scan_interval_minutes to see
+   * their own new content. Internally guarded against concurrent scans.
+   */
+    app.post('/api/catalog/reindex', async (req: Request, res: Response) => {
+        const indexer = req.app.locals.indexerService;
+        if ( ! indexer ) return res.status(503).json({ error: 'Indexer not available' });
+        try {
+            const result = await indexer.triggerScan();
+            res.json({ success: true, ...result });
+        } catch ( err: any ) {
+            res.status(500).json({ error: err.message });
+        }
+    });
 
-    res.json({ success: true, total: result.total, items: enriched });
-  });
+    app.get('/api/catalog/stats', (req: Request, res: Response) => {
+        const catalogDb = req.app.locals.db as DatabaseManager | undefined;
+        if ( ! catalogDb ) return res.status(503).json({ error: 'Database not available' });
 
-  app.get('/api/catalog/operatives', (req: Request, res: Response) => {
-    const catalogDb = req.app.locals.db as DatabaseManager | undefined;
-    if (!catalogDb) return res.status(503).json({ error: 'Database not available' });
+        const stats = catalogDb.getCatalogStats();
+        const indexer = req.app.locals.indexerService;
+        res.json({
+            success: true,
+            catalog: stats,
+            indexer: indexer ? indexer.getStats() : { enabled: false },
+        });
+    });
 
-    try {
-      const db = catalogDb.getDB();
-      const rows = db.prepare(`
+    app.get('/api/catalog/content/:contentId', (req: Request, res: Response) => {
+        const catalogDb = req.app.locals.db as DatabaseManager | undefined;
+        if ( ! catalogDb ) return res.status(503).json({ error: 'Database not available' });
+
+        const item = catalogDb.getCatalogItemByContentId(req.params.contentId) as any;
+        if ( ! item ) return res.status(404).json({ error: 'Asset not found' });
+
+        const pinnedCids = new Set(catalogDb.getPinnedCIDs());
+        item.is_local = !!(item.content_cid && pinnedCids.has(item.content_cid));
+
+        res.json({ success: true, item });
+    });
+
+    app.get('/api/catalog/asset/:address/:tokenId', (req: Request, res: Response) => {
+        const catalogDb = req.app.locals.db as DatabaseManager | undefined;
+        if ( ! catalogDb ) return res.status(503).json({ error: 'Database not available' });
+
+        const item = catalogDb.getCatalogItemByToken(req.params.address, req.params.tokenId) as any;
+        if ( ! item ) return res.status(404).json({ error: 'Asset not found in local catalog' });
+
+        const pinnedCids = new Set(catalogDb.getPinnedCIDs());
+        item.is_local = !!(item.content_cid && pinnedCids.has(item.content_cid));
+
+        const channelMeta = catalogDb.getChannelMetadata(item.channel_address);
+        if ( channelMeta ) {
+            item._channelMeta = channelMeta;
+        }
+
+        res.json({ success: true, item });
+    });
+
+    app.get('/api/catalog/operative/:address', (req: Request, res: Response) => {
+        const catalogDb = req.app.locals.db as DatabaseManager | undefined;
+        if ( ! catalogDb ) return res.status(503).json({ error: 'Database not available' });
+
+        const item = catalogDb.getCatalogItemByOperative(req.params.address) as any;
+        if ( ! item ) return res.status(404).json({ error: 'Asset not found' });
+
+        res.json({ success: true, item });
+    });
+
+    app.get('/api/catalog/providers/:cid', async (req: Request, res: Response) => {
+        const catalogIpfs = ipfs;
+        if ( ! catalogIpfs ) return res.status(503).json({ error: 'IPFS not available' });
+
+        const { cid } = req.params;
+        const count = await catalogIpfs.countProviders(cid);
+
+        res.json({ success: true, cid, providers: count });
+    });
+
+    app.get('/api/catalog/creator/:address', (req: Request, res: Response) => {
+        const catalogDb = req.app.locals.db as DatabaseManager | undefined;
+        if ( ! catalogDb ) return res.status(503).json({ error: 'Database not available' });
+
+        const stats = catalogDb.getCreatorStats(req.params.address);
+        const cdnStatsData = req.app.locals.seedingService?.getStats?.() ?? null;
+
+        res.json({
+            success: true,
+            creator: req.params.address,
+            ...stats,
+            seeding: cdnStatsData ? {
+                enabled: cdnStatsData.enabled,
+                queueLength: cdnStatsData.queueLength,
+                activeDownloads: cdnStatsData.activeDownloads,
+                disk: cdnStatsData.disk,
+            } : null,
+        });
+    });
+
+    app.get('/api/catalog/channels', async (req: Request, res: Response) => {
+        const catalogDb = req.app.locals.db as DatabaseManager | undefined;
+        if ( ! catalogDb ) return res.status(503).json({ error: 'Database not available' });
+
+        const channels = catalogDb.getCatalogChannels();
+
+        // Lazily resolve missing channel names from on-chain name() and cache.
+        // Caps per-request to stay O(1) at scale — with 1M indexed channels, the
+        // first N requests gradually populate metadata; each subsequent call is free.
+        // Filter by optional ?creator=<addr> so per-user loads resolve just their channels.
+        const creatorFilter = typeof req.query.creator === 'string' ? (req.query.creator as string).toLowerCase() : null;
+        const visibleChannels = creatorFilter
+            ? channels.filter(ch => (ch.creator || '').toLowerCase() === creatorFilter)
+            : channels;
+
+        const MAX_NAME_RESOLVES_PER_REQUEST = 25;
+        const unresolved = visibleChannels.filter(ch => !ch.name).slice(0, MAX_NAME_RESOLVES_PER_REQUEST);
+
+        if ( unresolved.length > 0 ) {
+            await Promise.all(unresolved.map(async (ch) => {
+                try {
+                    const result = await baseRpcCall('eth_call', [
+                        { to: ch.address, data: '0x06fdde03' },
+                        'latest',
+                    ], 5000);
+                    if ( typeof result === 'string' && result.length >= 130 ) {
+                        const hex = result.replace('0x', '');
+                        const length = parseInt(hex.slice(64, 128), 16);
+                        if ( length > 0 && length < 256 ) {
+                            const nameHex = hex.slice(128, 128 + length * 2);
+                            const buf = Buffer.from(nameHex, 'hex');
+                            const name = buf.toString('utf8').replace(/\0+$/, '').trim();
+                            if ( name ) {
+                                catalogDb.updateChannelMetadata(ch.address, { name });
+                                ch.name = name;
+                            }
+                        }
+                    }
+                } catch ( err: any ) {
+                    logger.debug(`[catalog/channels] name() resolve failed for ${ch.address}: ${err.message}`);
+                }
+            }));
+        }
+
+        const output = creatorFilter ? visibleChannels : channels;
+        res.json({ success: true, total: output.length, data: output });
+    });
+
+    app.get('/api/catalog/channel/:address', (req: Request, res: Response) => {
+        const catalogDb = req.app.locals.db as DatabaseManager | undefined;
+        if ( ! catalogDb ) return res.status(503).json({ error: 'Database not available' });
+
+        const { address } = req.params;
+        const meta = catalogDb.getChannelMetadata(address);
+        res.json({ success: true, channel: meta || {} });
+    });
+
+    app.put('/api/catalog/channel/:address', authenticate, (req: AuthenticatedRequest, res: Response) => {
+        const catalogDb = req.app.locals.db as DatabaseManager | undefined;
+        if ( ! catalogDb ) return res.status(503).json({ error: 'Database not available' });
+
+        const { address } = req.params;
+        const { name, description, categories, image, coverImage, plans, tokenAccess } = req.body || {};
+        const wallet = req.user?.wallet_address;
+
+        try {
+            catalogDb.updateChannelMetadata(address, { name, description, categories, image, coverImage, plans, tokenAccess }, wallet);
+            const updated = catalogDb.getChannelMetadata(address);
+            res.json({ success: true, channel: updated });
+        } catch ( err: any ) {
+            logger.error(`[API] Channel metadata update failed: ${err.message}`);
+            res.status(500).json({ error: err.message });
+        }
+    });
+
+    app.get('/api/catalog/owned/:address', (req: Request, res: Response) => {
+        const catalogDb = req.app.locals.db as DatabaseManager | undefined;
+        if ( ! catalogDb ) return res.status(503).json({ error: 'Database not available' });
+
+        const { limit: l, offset: o } = req.query;
+        const result = catalogDb.getOwnedCatalogItems(req.params.address, {
+            limit: parseInt(l as string) || 50,
+            offset: parseInt(o as string) || 0,
+        });
+
+        const pinnedCids = new Set(catalogDb.getPinnedCIDs());
+        const enriched = result.items.map((item: any) => ({
+            ...item,
+            is_local: !!(item.content_cid && pinnedCids.has(item.content_cid)),
+        }));
+
+        res.json({ success: true, total: result.total, items: enriched });
+    });
+
+    app.get('/api/catalog/operatives', (req: Request, res: Response) => {
+        const catalogDb = req.app.locals.db as DatabaseManager | undefined;
+        if ( ! catalogDb ) return res.status(503).json({ error: 'Database not available' });
+
+        try {
+            const db = catalogDb.getDB();
+            const rows = db.prepare(`
         SELECT DISTINCT LOWER(operative_address) as address
         FROM content_catalog
         WHERE operative_address IS NOT NULL AND operative_address != ''
       `).all() as { address: string }[];
-      res.json({ success: true, operatives: rows.map(r => r.address) });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  app.get('/api/catalog/seeding', (req: Request, res: Response) => {
-    const catalogDb = req.app.locals.db as DatabaseManager | undefined;
-    if (!catalogDb) return res.status(503).json({ error: 'Database not available' });
-
-    const seedingStats = catalogDb.getNodeSeedingStats();
-    const seedingService = req.app.locals.seedingService;
-
-    const cdn = getCDNStats();
-    const uptimeMs = Date.now() - cdn.startedAt;
-
-    res.json({
-      success: true,
-      seeding: seedingStats,
-      service: seedingService ? seedingService.getStats() : null,
-      cdn: {
-        bytesServed: cdn.bytesServed,
-        requestCount: cdn.requestCount,
-        uptimeMs,
-        avgBytesPerSec: uptimeMs > 0 ? Math.round(cdn.bytesServed / (uptimeMs / 1000)) : 0,
-      },
+            res.json({ success: true, operatives: rows.map(r => r.address) });
+        } catch ( err: any ) {
+            res.status(500).json({ error: err.message });
+        }
     });
-  });
 
-  // Server-side cache for earnings RPC results (avoids repeated flaky calls to public RPC)
-  const earningsCache = new Map<string, { data: any; ts: number }>();
-  const EARNINGS_CACHE_TTL = 30_000;
+    app.get('/api/catalog/seeding', (req: Request, res: Response) => {
+        const catalogDb = req.app.locals.db as DatabaseManager | undefined;
+        if ( ! catalogDb ) return res.status(503).json({ error: 'Database not available' });
 
-  // V3 On-Chain Earnings — reads royalty share balances and claimable rewards from operatives
-  // Returns items + rewards in a single response so the frontend only needs one fetch.
-  // Categories: assets (per-asset), channels (aggregated by channel), my-channels (channels user owns)
-  app.get('/api/catalog/earnings/:address', async (req: Request, res: Response) => {
-    const catalogDb = req.app.locals.db as DatabaseManager | undefined;
-    if (!catalogDb) return res.status(503).json({ error: 'Database not available' });
+        const seedingStats = catalogDb.getNodeSeedingStats();
+        const seedingService = req.app.locals.seedingService;
 
-    const walletAddress = req.params.address;
-    if (!walletAddress || !/^0x[a-fA-F0-9]{40}$/.test(walletAddress)) {
-      return res.status(400).json({ error: 'Invalid wallet address' });
-    }
+        const cdn = getCDNStats();
+        const uptimeMs = Date.now() - cdn.startedAt;
 
-    const category = (req.query.category as string) || 'assets';
-    const walletLabel = (req.query.walletLabel as string) || '';
-    const forceRefresh = req.query.refresh === '1';
-    const USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
+        res.json({
+            success: true,
+            seeding: seedingStats,
+            service: seedingService ? seedingService.getStats() : null,
+            cdn: {
+                bytesServed: cdn.bytesServed,
+                requestCount: cdn.requestCount,
+                uptimeMs,
+                avgBytesPerSec: uptimeMs > 0 ? Math.round(cdn.bytesServed / (uptimeMs / 1000)) : 0,
+            },
+        });
+    });
 
-    // Serve from server-side cache if fresh (unless force-refresh)
-    const cacheKey = `${walletAddress.toLowerCase()}:${category}`;
-    if (!forceRefresh) {
-      const cached = earningsCache.get(cacheKey);
-      if (cached && Date.now() - cached.ts < EARNINGS_CACHE_TTL) {
-        return res.json(cached.data);
-      }
-    } else {
-      earningsCache.delete(cacheKey);
-    }
+    // Server-side cache for earnings RPC results (avoids repeated flaky calls to public RPC)
+    const earningsCache = new Map<string, { data: any; ts: number }>();
+    const EARNINGS_CACHE_TTL = 30_000;
 
-    try {
-      const { ethers } = await import('ethers');
-      const { getBaseRpcUrl, rotateBaseRpc } = await import('../utils/rpc.js');
-      const provider = new ethers.JsonRpcProvider(getBaseRpcUrl());
-      const OPERATIVE_ABI = [
-        'function balanceOf(address account, uint256 id) view returns (uint256)',
-        'function rewardsOf(address user, address payToken) view returns (uint256)',
-      ];
+    // V3 On-Chain Earnings — reads royalty share balances and claimable rewards from operatives
+    // Returns items + rewards in a single response so the frontend only needs one fetch.
+    // Categories: assets (per-asset), channels (aggregated by channel), my-channels (channels user owns)
+    app.get('/api/catalog/earnings/:address', async (req: Request, res: Response) => {
+        const catalogDb = req.app.locals.db as DatabaseManager | undefined;
+        if ( ! catalogDb ) return res.status(503).json({ error: 'Database not available' });
 
-      const { items: catalogItems } = catalogDb.getCatalogItems({ limit: 500 });
-
-      // "my-channels" — return channels owned by this address with aggregated on-chain rewards
-      if (category === 'my-channels') {
-        const channels = catalogDb.getCatalogChannels();
-        const owned = channels.filter(ch =>
-          ch.creator.toLowerCase() === walletAddress.toLowerCase()
-        );
-
-        if (owned.length === 0) {
-          const emptyResp = { success: true, items: { total: 0, data: [] }, rewards: [] };
-          earningsCache.set(cacheKey, { data: emptyResp, ts: Date.now() });
-          return res.json(emptyResp);
+        const walletAddress = req.params.address;
+        if ( !walletAddress || !/^0x[a-fA-F0-9]{40}$/.test(walletAddress) ) {
+            return res.status(400).json({ error: 'Invalid wallet address' });
         }
 
-        const OPERATIVE_ABI_MC = [
-          'function balanceOf(address account, uint256 id) view returns (uint256)',
-          'function rewardsOf(address user, address payToken) view returns (uint256)',
-        ];
+        const category = (req.query.category as string) || 'assets';
+        const walletLabel = (req.query.walletLabel as string) || '';
+        const forceRefresh = req.query.refresh === '1';
+        const USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 
-        async function callWithRetryMC(
-          opAddr: string,
-          call: (c: any) => Promise<bigint>,
-          retries = 3,
-        ): Promise<bigint> {
-          for (let i = 0; i <= retries; i++) {
-            try {
-              const p = i === 0 ? provider : new ethers.JsonRpcProvider(getBaseRpcUrl());
-              const c = new ethers.Contract(opAddr, OPERATIVE_ABI_MC, p);
-              return await call(c);
-            } catch {
-              if (i < retries) {
-                rotateBaseRpc();
-                await new Promise(r => setTimeout(r, 200 * (i + 1)));
-              }
+        // Serve from server-side cache if fresh (unless force-refresh)
+        const cacheKey = `${walletAddress.toLowerCase()}:${category}`;
+        if ( ! forceRefresh ) {
+            const cached = earningsCache.get(cacheKey);
+            if ( cached && Date.now() - cached.ts < EARNINGS_CACHE_TTL ) {
+                return res.json(cached.data);
             }
-          }
-          return BigInt(-1);
+        } else {
+            earningsCache.delete(cacheKey);
         }
 
-        const channelResults: any[] = [];
-        const rewardsSummaryMC: any[] = [];
-
-        for (const ch of owned) {
-          const chAssets = catalogItems.filter(
-            it => it.channel_address && it.channel_address.toLowerCase() === ch.address.toLowerCase() && it.operative_address
-          );
-
-          let totalRewards = 0;
-          let totalRoyaltyShares = 0;
-          const operativesWithRewards: string[] = [];
-
-          for (const asset of chAssets) {
-            try {
-              const royaltyBal = await callWithRetryMC(asset.operative_address!, (c) => c.balanceOf(walletAddress, 2));
-              if (royaltyBal === BigInt(-1)) continue;
-              const rewards = await callWithRetryMC(asset.operative_address!, (c) => c.rewardsOf(walletAddress, USDC));
-              const rewardsVal = rewards === BigInt(-1) ? BigInt(0) : rewards;
-              totalRoyaltyShares += Number(royaltyBal);
-              const rewardsUSDC = Number(ethers.formatUnits(rewardsVal, 6));
-              totalRewards += rewardsUSDC;
-              if (rewardsUSDC > 0) operativesWithRewards.push(asset.operative_address!);
-            } catch {
-              // skip failed operative
-            }
-          }
-
-          channelResults.push({
-            address: ch.address,
-            name: ch.name || 'Untitled Channel',
-            thumbnail: ch.image || null,
-            share: totalRoyaltyShares > 0 ? totalRoyaltyShares / 10 : 0,
-            beneficiary: walletAddress,
-            unclaimedRewards: totalRewards,
-            ledger: ch.address,
-            tokenId: '',
-            itemsCount: ch.itemsCount,
-            walletLabel,
-            operatives: operativesWithRewards,
-            distributions: totalRewards > 0 ? [{ volume: totalRewards, paymentToken: USDC }] : [],
-            __typename: 'OwnedChannel',
-          });
-
-          if (totalRewards > 0) {
-            for (const opAddr of operativesWithRewards) {
-              rewardsSummaryMC.push({
-                name: ch.name || 'Untitled Channel',
-                address: opAddr,
-                unclaimedRewards: totalRewards / operativesWithRewards.length,
-                distributions: [{ volume: totalRewards / operativesWithRewards.length, paymentToken: USDC }],
-              });
-            }
-          }
-        }
-
-        const mcResp = {
-          success: true,
-          items: { total: channelResults.length, data: channelResults },
-          rewards: rewardsSummaryMC,
-        };
-        earningsCache.set(cacheKey, { data: mcResp, ts: Date.now() });
-        return res.json(mcResp);
-      }
-
-      const operativeSet = new Map<string, typeof catalogItems>();
-      for (const item of catalogItems) {
-        if (!item.operative_address) continue;
-        const opLower = item.operative_address.toLowerCase();
-        if (!operativeSet.has(opLower)) operativeSet.set(opLower, []);
-        operativeSet.get(opLower)!.push(item);
-      }
-
-      type EarningsItem = {
-        address: string;
-        name: string;
-        thumbnail: string | null;
-        share: number;
-        beneficiary: string;
-        unclaimedRewards: number;
-        ledger: string;
-        tokenId: string;
-        walletLabel: string;
-        __typename: string;
-      };
-
-      const assetResults: EarningsItem[] = [];
-      const rewardsSummary: Array<{
-        name: string;
-        address: string;
-        unclaimedRewards: number;
-        distributions: Array<{ volume: number; paymentToken: string }>;
-      }> = [];
-
-      let skippedCount = 0;
-
-      function makeProvider() {
-        return new ethers.JsonRpcProvider(getBaseRpcUrl());
-      }
-
-      async function callWithRetry(
-        opAddr: string,
-        call: (op: any) => Promise<bigint>,
-        retries = 3,
-      ): Promise<bigint> {
-        for (let i = 0; i <= retries; i++) {
-          try {
-            const p = i === 0 ? provider : makeProvider();
-            const c = new ethers.Contract(opAddr, OPERATIVE_ABI, p);
-            return await call(c);
-          } catch {
-            if (i < retries) {
-              rotateBaseRpc();
-              await new Promise(r => setTimeout(r, 200 * (i + 1)));
-            }
-          }
-        }
-        return BigInt(-1);
-      }
-
-      // Query operatives sequentially to avoid public RPC rate-limiting
-      for (const [opAddr, items] of operativeSet) {
         try {
-          const royaltyBal = await callWithRetry(opAddr, (op) => op.balanceOf(walletAddress, 2));
-          if (royaltyBal === BigInt(-1)) {
-            log.warn(`[Earnings] balanceOf failed for ${opAddr} after retries, skipping`);
-            skippedCount++;
-            continue;
-          }
+            const { ethers } = await import('ethers');
+            const { getBaseRpcUrl, rotateBaseRpc } = await import('../utils/rpc.js');
+            const provider = new ethers.JsonRpcProvider(getBaseRpcUrl());
+            const OPERATIVE_ABI = [
+                'function balanceOf(address account, uint256 id) view returns (uint256)',
+                'function rewardsOf(address user, address payToken) view returns (uint256)',
+            ];
 
-          // rewardsOf can legitimately revert when 0 rewards
-          const rewards = await callWithRetry(opAddr, (op) => op.rewardsOf(walletAddress, USDC));
-          const rewardsVal = rewards === BigInt(-1) ? BigInt(0) : rewards;
+            const { items: catalogItems } = catalogDb.getCatalogItems({ limit: 500 });
 
-          const royaltyCount = Number(royaltyBal);
-          const rewardsUSDC = Number(ethers.formatUnits(rewardsVal, 6));
+            // "my-channels" — return channels owned by this address with aggregated on-chain rewards
+            if ( category === 'my-channels' ) {
+                const channels = catalogDb.getCatalogChannels();
+                const owned = channels.filter(ch =>
+                    ch.creator.toLowerCase() === walletAddress.toLowerCase());
 
-          if (royaltyCount > 0 || rewardsUSDC > 0) {
-            const item = items[0];
-            const sharePct = royaltyCount / 10;
+                if ( owned.length === 0 ) {
+                    const emptyResp = { success: true, items: { total: 0, data: [] }, rewards: [] };
+                    earningsCache.set(cacheKey, { data: emptyResp, ts: Date.now() });
+                    return res.json(emptyResp);
+                }
 
-            assetResults.push({
-              address: opAddr,
-              name: item.name || 'Untitled',
-              thumbnail: item.image_url || null,
-              share: sharePct,
-              beneficiary: walletAddress,
-              unclaimedRewards: rewardsUSDC,
-              ledger: item.channel_address,
-              tokenId: item.token_id,
-              walletLabel,
-              __typename: 'RoyaltyAsset',
+                const OPERATIVE_ABI_MC = [
+                    'function balanceOf(address account, uint256 id) view returns (uint256)',
+                    'function rewardsOf(address user, address payToken) view returns (uint256)',
+                ];
+
+                async function callWithRetryMC (
+                    opAddr: string,
+                    call: (c: any) => Promise<bigint>,
+                    retries = 3,
+                ): Promise<bigint> {
+                    for ( let i = 0; i <= retries; i++ ) {
+                        try {
+                            const p = i === 0 ? provider : new ethers.JsonRpcProvider(getBaseRpcUrl());
+                            const c = new ethers.Contract(opAddr, OPERATIVE_ABI_MC, p);
+                            return await call(c);
+                        } catch {
+                            if ( i < retries ) {
+                                rotateBaseRpc();
+                                await new Promise(r => setTimeout(r, 200 * (i + 1)));
+                            }
+                        }
+                    }
+                    return BigInt(-1);
+                }
+
+                const channelResults: any[] = [];
+                const rewardsSummaryMC: any[] = [];
+
+                for ( const ch of owned ) {
+                    const chAssets = catalogItems.filter(it => it.channel_address && it.channel_address.toLowerCase() === ch.address.toLowerCase() && it.operative_address);
+
+                    let totalRewards = 0;
+                    let totalRoyaltyShares = 0;
+                    const operativesWithRewards: string[] = [];
+
+                    for ( const asset of chAssets ) {
+                        try {
+                            const royaltyBal = await callWithRetryMC(asset.operative_address!, (c) => c.balanceOf(walletAddress, 2));
+                            if ( royaltyBal === BigInt(-1) ) continue;
+                            const rewards = await callWithRetryMC(asset.operative_address!, (c) => c.rewardsOf(walletAddress, USDC));
+                            const rewardsVal = rewards === BigInt(-1) ? BigInt(0) : rewards;
+                            totalRoyaltyShares += Number(royaltyBal);
+                            const rewardsUSDC = Number(ethers.formatUnits(rewardsVal, 6));
+                            totalRewards += rewardsUSDC;
+                            if ( rewardsUSDC > 0 ) operativesWithRewards.push(asset.operative_address!);
+                        } catch {
+                            // skip failed operative
+                        }
+                    }
+
+                    channelResults.push({
+                        address: ch.address,
+                        name: ch.name || 'Untitled Channel',
+                        thumbnail: ch.image || null,
+                        share: totalRoyaltyShares > 0 ? totalRoyaltyShares / 10 : 0,
+                        beneficiary: walletAddress,
+                        unclaimedRewards: totalRewards,
+                        ledger: ch.address,
+                        tokenId: '',
+                        itemsCount: ch.itemsCount,
+                        walletLabel,
+                        operatives: operativesWithRewards,
+                        distributions: totalRewards > 0 ? [{ volume: totalRewards, paymentToken: USDC }] : [],
+                        __typename: 'OwnedChannel',
+                    });
+
+                    if ( totalRewards > 0 ) {
+                        for ( const opAddr of operativesWithRewards ) {
+                            rewardsSummaryMC.push({
+                                name: ch.name || 'Untitled Channel',
+                                address: opAddr,
+                                unclaimedRewards: totalRewards / operativesWithRewards.length,
+                                distributions: [{ volume: totalRewards / operativesWithRewards.length, paymentToken: USDC }],
+                            });
+                        }
+                    }
+                }
+
+                const mcResp = {
+                    success: true,
+                    items: { total: channelResults.length, data: channelResults },
+                    rewards: rewardsSummaryMC,
+                };
+                earningsCache.set(cacheKey, { data: mcResp, ts: Date.now() });
+                return res.json(mcResp);
+            }
+
+            const operativeSet = new Map<string, typeof catalogItems>();
+            for ( const item of catalogItems ) {
+                if ( ! item.operative_address ) continue;
+                const opLower = item.operative_address.toLowerCase();
+                if ( ! operativeSet.has(opLower) ) operativeSet.set(opLower, []);
+                operativeSet.get(opLower)!.push(item);
+            }
+
+            interface EarningsItem {
+                address: string;
+                name: string;
+                thumbnail: string | null;
+                share: number;
+                beneficiary: string;
+                unclaimedRewards: number;
+                ledger: string;
+                tokenId: string;
+                walletLabel: string;
+                __typename: string;
+            }
+
+            const assetResults: EarningsItem[] = [];
+            const rewardsSummary: Array<{
+                name: string;
+                address: string;
+                unclaimedRewards: number;
+                distributions: Array<{ volume: number; paymentToken: string }>;
+            }> = [];
+
+            let skippedCount = 0;
+
+            function makeProvider () {
+                return new ethers.JsonRpcProvider(getBaseRpcUrl());
+            }
+
+            async function callWithRetry (
+                opAddr: string,
+                call: (op: any) => Promise<bigint>,
+                retries = 3,
+            ): Promise<bigint> {
+                for ( let i = 0; i <= retries; i++ ) {
+                    try {
+                        const p = i === 0 ? provider : makeProvider();
+                        const c = new ethers.Contract(opAddr, OPERATIVE_ABI, p);
+                        return await call(c);
+                    } catch {
+                        if ( i < retries ) {
+                            rotateBaseRpc();
+                            await new Promise(r => setTimeout(r, 200 * (i + 1)));
+                        }
+                    }
+                }
+                return BigInt(-1);
+            }
+
+            // Query operatives sequentially to avoid public RPC rate-limiting
+            for ( const [opAddr, items] of operativeSet ) {
+                try {
+                    const royaltyBal = await callWithRetry(opAddr, (op) => op.balanceOf(walletAddress, 2));
+                    if ( royaltyBal === BigInt(-1) ) {
+                        log.warn(`[Earnings] balanceOf failed for ${opAddr} after retries, skipping`);
+                        skippedCount++;
+                        continue;
+                    }
+
+                    // rewardsOf can legitimately revert when 0 rewards
+                    const rewards = await callWithRetry(opAddr, (op) => op.rewardsOf(walletAddress, USDC));
+                    const rewardsVal = rewards === BigInt(-1) ? BigInt(0) : rewards;
+
+                    const royaltyCount = Number(royaltyBal);
+                    const rewardsUSDC = Number(ethers.formatUnits(rewardsVal, 6));
+
+                    if ( royaltyCount > 0 || rewardsUSDC > 0 ) {
+                        const item = items[0];
+                        const sharePct = royaltyCount / 10;
+
+                        assetResults.push({
+                            address: opAddr,
+                            name: item.name || 'Untitled',
+                            thumbnail: item.image_url || null,
+                            share: sharePct,
+                            beneficiary: walletAddress,
+                            unclaimedRewards: rewardsUSDC,
+                            ledger: item.channel_address,
+                            tokenId: item.token_id,
+                            walletLabel,
+                            __typename: 'RoyaltyAsset',
+                        });
+
+                        if ( rewardsUSDC > 0 ) {
+                            rewardsSummary.push({
+                                name: item.name || 'Untitled',
+                                address: opAddr,
+                                unclaimedRewards: rewardsUSDC,
+                                distributions: [{ volume: rewardsUSDC, paymentToken: USDC }],
+                            });
+                        }
+                    }
+                } catch ( err ) {
+                    log.warn(`[Earnings] Operative ${opAddr} query failed:`, (err as Error).message);
+                }
+            }
+
+            // For "channels" category, aggregate asset results by channel_address
+            if ( category === 'channels' ) {
+                const channelMap = new Map<string, { items: EarningsItem[]; totalRewards: number; totalShare: number }>();
+                for ( const asset of assetResults ) {
+                    const chKey = asset.ledger.toLowerCase();
+                    if ( ! channelMap.has(chKey) ) channelMap.set(chKey, { items: [], totalRewards: 0, totalShare: 0 });
+                    const entry = channelMap.get(chKey)!;
+                    entry.items.push(asset);
+                    entry.totalRewards += asset.unclaimedRewards;
+                    entry.totalShare = Math.max(entry.totalShare, asset.share);
+                }
+
+                const channelResults: (EarningsItem & { itemsCount?: number })[] = [];
+                for ( const [chAddr, entry] of channelMap ) {
+                    const first = entry.items[0];
+                    const catalogChannel = catalogDb.getCatalogChannels().find(
+                                    ch => ch.address.toLowerCase() === chAddr);
+                    channelResults.push({
+                        address: chAddr,
+                        name: catalogChannel?.name || first.name || 'Untitled Channel',
+                        thumbnail: catalogChannel?.image || first.thumbnail,
+                        share: entry.totalShare,
+                        beneficiary: walletAddress,
+                        unclaimedRewards: entry.totalRewards,
+                        ledger: chAddr,
+                        tokenId: '',
+                        walletLabel,
+                        itemsCount: catalogChannel?.itemsCount || entry.items.length,
+                        __typename: 'RoyaltyChannel',
+                    });
+                }
+
+                const channelResponse = {
+                    success: true,
+                    items: { total: channelResults.length, data: channelResults },
+                    rewards: rewardsSummary,
+                    _partial: skippedCount > 0,
+                };
+                if ( skippedCount === 0 ) {
+                    earningsCache.set(cacheKey, { data: channelResponse, ts: Date.now() });
+                }
+                return res.json(channelResponse);
+            }
+
+            // Default: "assets" category
+            const assetsResponse = {
+                success: true,
+                items: { total: assetResults.length, data: assetResults },
+                rewards: rewardsSummary,
+                _partial: skippedCount > 0,
+            };
+            // Only cache complete results to avoid serving stale partial data
+            if ( skippedCount === 0 ) {
+                earningsCache.set(cacheKey, { data: assetsResponse, ts: Date.now() });
+            } else {
+                log.warn(`[Earnings] ${skippedCount} operative(s) skipped — result not cached`);
+            }
+            res.json(assetsResponse);
+        } catch ( err: any ) {
+            log.warn('[Earnings] On-chain query failed:', err.message);
+            res.status(500).json({ error: `Failed to query on-chain earnings: ${ err.message}` });
+        }
+    });
+
+    // GraphQL Proxy — avoids CORS when market app (localhost iframe) calls base.ela.city
+    app.post('/api/elacity/graphql', async (req: Request, res: Response) => {
+        try {
+            const upstream = 'https://base.ela.city/api/2.0/graphql';
+            const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+            if ( req.headers.authorization ) headers['Authorization'] = req.headers.authorization as string;
+            if ( req.headers['x-eth-signer'] ) headers['X-ETH-Signer'] = req.headers['x-eth-signer'] as string;
+
+            const resp = await fetch(upstream, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify(req.body),
             });
-
-            if (rewardsUSDC > 0) {
-              rewardsSummary.push({
-                name: item.name || 'Untitled',
-                address: opAddr,
-                unclaimedRewards: rewardsUSDC,
-                distributions: [{ volume: rewardsUSDC, paymentToken: USDC }],
-              });
-            }
-          }
-        } catch (err) {
-          log.warn(`[Earnings] Operative ${opAddr} query failed:`, (err as Error).message);
+            const data = await resp.text();
+            res.status(resp.status).set('Content-Type', 'application/json').send(data);
+        } catch ( err: any ) {
+            res.status(502).json({ error: `GraphQL proxy failed: ${ err.message || String(err)}` });
         }
-      }
-
-      // For "channels" category, aggregate asset results by channel_address
-      if (category === 'channels') {
-        const channelMap = new Map<string, { items: EarningsItem[]; totalRewards: number; totalShare: number }>();
-        for (const asset of assetResults) {
-          const chKey = asset.ledger.toLowerCase();
-          if (!channelMap.has(chKey)) channelMap.set(chKey, { items: [], totalRewards: 0, totalShare: 0 });
-          const entry = channelMap.get(chKey)!;
-          entry.items.push(asset);
-          entry.totalRewards += asset.unclaimedRewards;
-          entry.totalShare = Math.max(entry.totalShare, asset.share);
-        }
-
-        const channelResults: (EarningsItem & { itemsCount?: number })[] = [];
-        for (const [chAddr, entry] of channelMap) {
-          const first = entry.items[0];
-          const catalogChannel = catalogDb.getCatalogChannels().find(
-            ch => ch.address.toLowerCase() === chAddr
-          );
-          channelResults.push({
-            address: chAddr,
-            name: catalogChannel?.name || first.name || 'Untitled Channel',
-            thumbnail: catalogChannel?.image || first.thumbnail,
-            share: entry.totalShare,
-            beneficiary: walletAddress,
-            unclaimedRewards: entry.totalRewards,
-            ledger: chAddr,
-            tokenId: '',
-            walletLabel,
-            itemsCount: catalogChannel?.itemsCount || entry.items.length,
-            __typename: 'RoyaltyChannel',
-          });
-        }
-
-        const channelResponse = {
-          success: true,
-          items: { total: channelResults.length, data: channelResults },
-          rewards: rewardsSummary,
-          _partial: skippedCount > 0,
-        };
-        if (skippedCount === 0) {
-          earningsCache.set(cacheKey, { data: channelResponse, ts: Date.now() });
-        }
-        return res.json(channelResponse);
-      }
-
-      // Default: "assets" category
-      const assetsResponse = {
-        success: true,
-        items: { total: assetResults.length, data: assetResults },
-        rewards: rewardsSummary,
-        _partial: skippedCount > 0,
-      };
-      // Only cache complete results to avoid serving stale partial data
-      if (skippedCount === 0) {
-        earningsCache.set(cacheKey, { data: assetsResponse, ts: Date.now() });
-      } else {
-        log.warn(`[Earnings] ${skippedCount} operative(s) skipped — result not cached`);
-      }
-      res.json(assetsResponse);
-    } catch (err: any) {
-      log.warn('[Earnings] On-chain query failed:', err.message);
-      res.status(500).json({ error: 'Failed to query on-chain earnings: ' + err.message });
-    }
-  });
-
-  // GraphQL Proxy — avoids CORS when market app (localhost iframe) calls base.ela.city
-  app.post('/api/elacity/graphql', async (req: Request, res: Response) => {
-    try {
-      const upstream = 'https://base.ela.city/api/2.0/graphql';
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (req.headers.authorization) headers['Authorization'] = req.headers.authorization as string;
-      if (req.headers['x-eth-signer']) headers['X-ETH-Signer'] = req.headers['x-eth-signer'] as string;
-
-      const resp = await fetch(upstream, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(req.body),
-      });
-      const data = await resp.text();
-      res.status(resp.status).set('Content-Type', 'application/json').send(data);
-    } catch (err: any) {
-      res.status(502).json({ error: 'GraphQL proxy failed: ' + (err.message || String(err)) });
-    }
-  });
-
-  // ESC NFT Marketplace — GraphQL proxy to ela.city/api (ESC backend with 54+ NFT collections)
-  app.post('/api/esc-nft/graphql', async (req: Request, res: Response) => {
-    try {
-      const upstream = 'https://ela.city/api/2.0/graphql';
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (req.headers.authorization) headers['Authorization'] = req.headers.authorization as string;
-      if (req.headers['x-eth-signer']) headers['X-ETH-Signer'] = req.headers['x-eth-signer'] as string;
-
-      const resp = await fetch(upstream, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(req.body),
-      });
-      const data = await resp.text();
-      res.status(resp.status).set('Content-Type', 'application/json').send(data);
-    } catch (err: any) {
-      res.status(502).json({ error: 'ESC NFT GraphQL proxy failed: ' + (err.message || String(err)) });
-    }
-  });
-
-  // ESC RPC Proxy — forwards JSON-RPC calls to Contabo ESC archive node (self-signed cert)
-  const escRpcAgent = new https.Agent({ rejectUnauthorized: false });
-  app.post('/api/esc-rpc', (req: Request, res: Response) => {
-    const postData = JSON.stringify(req.body);
-    const proxyReq = https.request({
-      hostname: '38.242.211.112',
-      port: 443,
-      path: '/rpc/esc',
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(postData) },
-      agent: escRpcAgent,
-      timeout: 15000,
-    }, (proxyRes) => {
-      let body = '';
-      proxyRes.on('data', (chunk) => { body += chunk; });
-      proxyRes.on('end', () => {
-        res.status(proxyRes.statusCode || 200).set('Content-Type', 'application/json').send(body);
-      });
     });
-    proxyReq.on('error', (err) => {
-      res.status(502).json({ error: 'ESC RPC proxy failed: ' + (err.message || String(err)) });
-    });
-    proxyReq.on('timeout', () => {
-      proxyReq.destroy();
-      res.status(504).json({ error: 'ESC RPC proxy timeout' });
-    });
-    proxyReq.write(postData);
-    proxyReq.end();
-  });
 
-  // ESC NFT Marketplace — REST catch-all proxy to ela.city/api (ESC backend)
-  // Forwards /nftitems/*, /collection/*, /info/*, /like/*, /quotes/*, /2.0/graphql, etc.
-  app.all('/api/esc-nft/:path(*)', async (req: Request, res: Response) => {
-    try {
-      const upstream = `https://ela.city/api/${req.params.path}`;
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (req.headers.authorization) headers['Authorization'] = req.headers.authorization as string;
-      if (req.headers['x-eth-signer']) headers['X-ETH-Signer'] = req.headers['x-eth-signer'] as string;
-
-      const fetchOpts: RequestInit = {
-        method: req.method,
-        headers,
-      };
-
-      if (['POST', 'PUT', 'PATCH'].includes(req.method)) {
-        fetchOpts.body = JSON.stringify(req.body);
-      }
-
-      const resp = await fetch(upstream, fetchOpts);
-      const contentType = resp.headers.get('content-type') || 'application/json';
-      const data = await resp.arrayBuffer();
-      res.status(resp.status).set('Content-Type', contentType).send(Buffer.from(data));
-    } catch (err: any) {
-      res.status(502).json({ error: 'ESC NFT REST proxy failed: ' + (err.message || String(err)) });
-    }
-  });
-
-  // Installed Apps (dApp Store) — requires db for registration
-  if (db) {
-    const dataDir = process.env.PC2_DATA_DIR || path.join(process.cwd(), 'data');
-    const appInstallService = new AppInstallService(db, ipfs, dataDir);
-    app.locals.appInstallService = appInstallService;
-    app.use('/api/installed-apps', authenticate, createInstalledAppsRouter(appInstallService));
-    logger.info('[API] ✅ Installed Apps API enabled at /api/installed-apps');
-
-    // Sync bundled test apps on every startup (re-copies files if source changed)
-    const testAppsDir = path.join(dataDir, 'test-apps');
-    if (fs.existsSync(testAppsDir)) {
-      for (const appFolder of fs.readdirSync(testAppsDir, { withFileTypes: true })) {
-        if (!appFolder.isDirectory()) continue;
-        const appName = appFolder.name;
-
-        const manifestPath = path.join(testAppsDir, appName, 'app.json');
-        if (!fs.existsSync(manifestPath)) continue;
-
+    // ESC NFT Marketplace — GraphQL proxy to ela.city/api (ESC backend with 54+ NFT collections)
+    app.post('/api/esc-nft/graphql', async (req: Request, res: Response) => {
         try {
-          const existing = appInstallService.get(appName);
-          if (existing) appInstallService.uninstall(appName);
-          const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
-          appInstallService.installFromLocal(manifest, path.join(testAppsDir, appName));
-          logger.info(`[API] ✅ Synced bundled app: ${appName}`);
-        } catch (err: any) {
-          logger.warn(`[API] ⚠️  Failed to sync ${appName}: ${err.message}`);
+            const upstream = 'https://ela.city/api/2.0/graphql';
+            const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+            if ( req.headers.authorization ) headers['Authorization'] = req.headers.authorization as string;
+            if ( req.headers['x-eth-signer'] ) headers['X-ETH-Signer'] = req.headers['x-eth-signer'] as string;
+
+            const resp = await fetch(upstream, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify(req.body),
+            });
+            const data = await resp.text();
+            res.status(resp.status).set('Content-Type', 'application/json').send(data);
+        } catch ( err: any ) {
+            res.status(502).json({ error: `ESC NFT GraphQL proxy failed: ${ err.message || String(err)}` });
         }
-      }
-    }
-  }
-  
-  // Rate limit status endpoint
-  app.get('/api/rate-limit/status', authenticate, (req: AuthenticatedRequest, res: Response) => {
-    if (!req.user) {
-      res.status(401).json({ error: 'Unauthorized' });
-      return;
-    }
-    
-    const apiKeyId = (req as any).apiKeyId;
-    const status = getRateLimitStatus(req.user.wallet_address, apiKeyId);
-    res.json({
-      success: true,
-      wallet: req.user.wallet_address.substring(0, 10) + '...',
-      api_key_id: apiKeyId || 'session',
-      limits: status,
     });
-  });
-  
-  // Search endpoint (require auth)
-  app.post('/search', authenticate, handleSearch);
 
-  // File versions endpoints (require auth)
-  app.get('/versions', authenticate, handleGetVersions);
-  app.get('/versions/:versionNumber', authenticate, handleGetVersion);
-  app.post('/versions/:versionNumber/restore', authenticate, handleRestoreVersion);
+    // ESC RPC Proxy — forwards JSON-RPC calls to Contabo ESC archive node (self-signed cert)
+    const escRpcAgent = new https.Agent({ rejectUnauthorized: false });
+    app.post('/api/esc-rpc', (req: Request, res: Response) => {
+        const postData = JSON.stringify(req.body);
+        const proxyReq = https.request({
+            hostname: '38.242.211.112',
+            port: 443,
+            path: '/rpc/esc',
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(postData) },
+            agent: escRpcAgent,
+            timeout: 15000,
+        }, (proxyRes) => {
+            let body = '';
+            proxyRes.on('data', (chunk) => {
+                body += chunk;
+            });
+            proxyRes.on('end', () => {
+                res.status(proxyRes.statusCode || 200).set('Content-Type', 'application/json').send(body);
+            });
+        });
+        proxyReq.on('error', (err) => {
+            res.status(502).json({ error: `ESC RPC proxy failed: ${ err.message || String(err)}` });
+        });
+        proxyReq.on('timeout', () => {
+            proxyReq.destroy();
+            res.status(504).json({ error: 'ESC RPC proxy timeout' });
+        });
+        proxyReq.write(postData);
+        proxyReq.end();
+    });
 
-  // Filesystem endpoints (require auth)
-  // Register /stat BEFORE other routes to ensure it's matched correctly
-  app.all('/stat', authenticate, handleStat); // Use app.all() to handle both GET and POST
-  app.post('/readdir', authenticate, handleReaddir);
-  app.get('/read', authenticate, handleRead);
-  app.post('/read', authenticate, handleRead); // Also support POST for /read
-  app.post('/write', authenticate, handleWrite);
-  // Filesystem endpoints (standard format)
-  app.post('/mkdir', authenticate, handleMkdir);
-  app.post('/delete', authenticate, handleDelete);
-  app.post('/move', authenticate, handleMove);
-  app.post('/rename', authenticate, handleRename);
-  app.post('/copy', authenticate, handleCopy);
-  
-  // Filesystem endpoints (API format - matching mock server)
-  app.post('/api/files/mkdir', authenticate, handleMkdir);
-  app.post('/api/files/delete', authenticate, handleDelete);
-  app.post('/api/files/move', authenticate, handleMove);
-  
-  // Additional filesystem endpoints
-  app.get('/df', authenticate, handleDF);
-  app.post('/df', authenticate, handleDF);
-  
-  // Batch endpoint with multer for multipart file uploads.
-  // Uses diskStorage to stream uploads to a temp dir instead of buffering
-  // entirely in RAM -- critical for large files on memory-constrained devices.
-  // Prefer data directory over os.tmpdir() because /tmp is often tmpfs (RAM-backed)
-  // and can't hold large files on memory-constrained devices like Jetson.
-  const config = app.locals.config as Config | undefined;
-  const dataDir = config?.storage?.database_path ? path.dirname(config.storage.database_path) : null;
-  const uploadTmpDir = dataDir
-    ? path.join(dataDir, 'tmp', 'pc2-uploads')
-    : path.join(os.tmpdir(), 'pc2-uploads');
-  if (!fs.existsSync(uploadTmpDir)) fs.mkdirSync(uploadTmpDir, { recursive: true });
-  logger.info(`[API] Upload temp directory: ${uploadTmpDir}`);
+    // ESC NFT Marketplace — REST catch-all proxy to ela.city/api (ESC backend)
+    // Forwards /nftitems/*, /collection/*, /info/*, /like/*, /quotes/*, /2.0/graphql, etc.
+    app.all('/api/esc-nft/:path(*)', async (req: Request, res: Response) => {
+        try {
+            const upstream = `https://ela.city/api/${req.params.path}`;
+            const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+            if ( req.headers.authorization ) headers['Authorization'] = req.headers.authorization as string;
+            if ( req.headers['x-eth-signer'] ) headers['X-ETH-Signer'] = req.headers['x-eth-signer'] as string;
 
-  const upload = multer({ 
-    storage: multer.diskStorage({
-      destination: uploadTmpDir,
-      filename: (_req, file, cb) => {
-        const unique = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-        cb(null, `${unique}-${file.originalname}`);
-      },
-    }),
-    limits: {
-      fileSize: Infinity // No artificial limit -- user's hardware, user's resources
+            const fetchOpts: RequestInit = {
+                method: req.method,
+                headers,
+            };
+
+            if ( ['POST', 'PUT', 'PATCH'].includes(req.method) ) {
+                fetchOpts.body = JSON.stringify(req.body);
+            }
+
+            const resp = await fetch(upstream, fetchOpts);
+            const contentType = resp.headers.get('content-type') || 'application/json';
+            const data = await resp.arrayBuffer();
+            res.status(resp.status).set('Content-Type', contentType).send(Buffer.from(data));
+        } catch ( err: any ) {
+            res.status(502).json({ error: `ESC NFT REST proxy failed: ${ err.message || String(err)}` });
+        }
+    });
+
+    // Installed Apps (dApp Store) — requires db for registration
+    if ( db ) {
+        const dataDir = process.env.PC2_DATA_DIR || path.join(process.cwd(), 'data');
+        const appInstallService = new AppInstallService(db, ipfs, dataDir);
+        app.locals.appInstallService = appInstallService;
+        app.use('/api/installed-apps', authenticate, createInstalledAppsRouter(appInstallService));
+        logger.info('[API] ✅ Installed Apps API enabled at /api/installed-apps');
+
+        // Sync bundled test apps on every startup (re-copies files if source changed)
+        const testAppsDir = path.join(dataDir, 'test-apps');
+        if ( fs.existsSync(testAppsDir) ) {
+            for ( const appFolder of fs.readdirSync(testAppsDir, { withFileTypes: true }) ) {
+                if ( ! appFolder.isDirectory() ) continue;
+                const appName = appFolder.name;
+
+                const manifestPath = path.join(testAppsDir, appName, 'app.json');
+                if ( ! fs.existsSync(manifestPath) ) continue;
+
+                try {
+                    const existing = appInstallService.get(appName);
+                    if ( existing ) appInstallService.uninstall(appName);
+                    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+                    appInstallService.installFromLocal(manifest, path.join(testAppsDir, appName));
+                    logger.info(`[API] ✅ Synced bundled app: ${appName}`);
+                } catch ( err: any ) {
+                    logger.warn(`[API] ⚠️  Failed to sync ${appName}: ${err.message}`);
+                }
+            }
+        }
     }
-  });
-  
-  // Restore endpoint with disk-based storage (backups can be GB — avoids OOM)
-  const restoreUploadDir = path.join(uploadTmpDir, 'restore');
-  if (!fs.existsSync(restoreUploadDir)) fs.mkdirSync(restoreUploadDir, { recursive: true });
 
-  const restoreUpload = multer({
-    storage: multer.diskStorage({
-      destination: restoreUploadDir,
-      filename: (_req, file, cb) => {
-        const unique = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-        cb(null, `${unique}-${file.originalname}`);
-      },
-    }),
-    limits: {
-      fileSize: 10 * 1024 * 1024 * 1024 // 10GB max file size for backups
-    }
-  });
-  
-  app.post('/batch', authenticate, upload.any(), handleBatch);
+    // Rate limit status endpoint
+    app.get('/api/rate-limit/status', authenticate, (req: AuthenticatedRequest, res: Response) => {
+        if ( ! req.user ) {
+            res.status(401).json({ error: 'Unauthorized' });
+            return;
+        }
 
-  // File signing (require auth)
-  app.post('/sign', authenticate, handleSign);
+        const apiKeyId = (req as any).apiKeyId;
+        const status = getRateLimitStatus(req.user.wallet_address, apiKeyId);
+        res.json({
+            success: true,
+            wallet: `${req.user.wallet_address.substring(0, 10) }...`,
+            api_key_id: apiKeyId || 'session',
+            limits: status,
+        });
+    });
 
-  // Key-value store (require auth)
-  app.get('/kv/:key*', authenticate, handleKV);
-  app.post('/kv/:key*', authenticate, handleKV);
-  app.delete('/kv/:key*', authenticate, handleKV);
-  app.get('/api/kv/:key*', authenticate, handleKV);
-  app.post('/api/kv/:key*', authenticate, handleKV);
-  app.delete('/api/kv/:key*', authenticate, handleKV);
+    // Search endpoint (require auth)
+    app.post('/search', authenticate, handleSearch);
 
-  // Other endpoints (require auth)
-  app.post('/rao', authenticate, handleRAO);
-  app.post('/contactUs', handleContactUs);
-  
-  // Driver calls (require auth)
-  // Note: Raw body capture must happen before body parser, but body parser is global
-  // So we'll check rawBody in the handler if parsed body is empty
-  app.post('/drivers/call', authenticate, handleDriversCall);
+    // File versions endpoints (require auth)
+    app.get('/versions', authenticate, handleGetVersions);
+    app.get('/versions/:versionNumber', authenticate, handleGetVersion);
+    app.post('/versions/:versionNumber/restore', authenticate, handleRestoreVersion);
 
-  // Open item - Get app to open a file (require auth)
-  app.post('/open_item', authenticate, handleOpenItem);
+    // Filesystem endpoints (require auth)
+    // Register /stat BEFORE other routes to ensure it's matched correctly
+    app.all('/stat', authenticate, handleStat); // Use app.all() to handle both GET and POST
+    app.post('/readdir', authenticate, handleReaddir);
+    app.get('/read', authenticate, handleRead);
+    app.post('/read', authenticate, handleRead); // Also support POST for /read
+    app.post('/write', authenticate, handleWrite);
+    // Filesystem endpoints (standard format)
+    app.post('/mkdir', authenticate, handleMkdir);
+    app.post('/delete', authenticate, handleDelete);
+    app.post('/move', authenticate, handleMove);
+    app.post('/rename', authenticate, handleRename);
+    app.post('/copy', authenticate, handleCopy);
 
-  // Suggest apps for a file (require auth)
-  app.post('/suggest_apps', authenticate, handleSuggestApps);
+    // Filesystem endpoints (API format - matching mock server)
+    app.post('/api/files/mkdir', authenticate, handleMkdir);
+    app.post('/api/files/delete', authenticate, handleDelete);
+    app.post('/api/files/move', authenticate, handleMove);
 
-  // Item metadata (require auth)
-  app.get('/itemMetadata', authenticate, handleItemMetadata);
+    // Additional filesystem endpoints
+    app.get('/df', authenticate, handleDF);
+    app.post('/df', authenticate, handleDF);
 
-  // Write file using signed URL (require auth)
-  app.post('/writeFile', authenticate, handleWriteFile);
-  app.put('/writeFile', authenticate, handleWriteFile);
+    // Batch endpoint with multer for multipart file uploads.
+    // Uses diskStorage to stream uploads to a temp dir instead of buffering
+    // entirely in RAM -- critical for large files on memory-constrained devices.
+    // Prefer data directory over os.tmpdir() because /tmp is often tmpfs (RAM-backed)
+    // and can't hold large files on memory-constrained devices like Jetson.
+    const config = app.locals.config as Config | undefined;
+    const dataDir = config?.storage?.database_path ? path.dirname(config.storage.database_path) : null;
+    const uploadTmpDir = dataDir
+        ? path.join(dataDir, 'tmp', 'pc2-uploads')
+        : path.join(os.tmpdir(), 'pc2-uploads');
+    if ( ! fs.existsSync(uploadTmpDir) ) fs.mkdirSync(uploadTmpDir, { recursive: true });
+    logger.info(`[API] Upload temp directory: ${uploadTmpDir}`);
 
-  // Desktop background (require auth)
-  app.post('/set-desktop-bg', authenticate, handleSetDesktopBg);
-  app.post('/set-profile-picture', authenticate, handleSetProfilePicture);
+    const upload = multer({
+        storage: multer.diskStorage({
+            destination: uploadTmpDir,
+            filename: (_req, file, cb) => {
+                const unique = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+                cb(null, `${unique}-${file.originalname}`);
+            },
+        }),
+        limits: {
+            fileSize: Infinity, // No artificial limit -- user's hardware, user's resources
+        },
+    });
 
-  // Elastos blockchain explorer proxy (to avoid CORS issues)
-  app.get('/api/elastos/transactions', authenticate, async (req: Request, res: Response) => {
-    try {
-      const { address, page = '1', pageSize = '20' } = req.query;
-      
-      if (!address || typeof address !== 'string') {
-        res.status(400).json({ error: 'Address is required' });
-        return;
-      }
-      
-      // Proxy to Elastos Smart Chain explorer API
-      const offset = (parseInt(page as string) - 1) * parseInt(pageSize as string);
-      const apiUrl = `https://esc.elastos.io/api?module=account&action=txlist&address=${address}&offset=${offset}&limit=${pageSize}&sort=desc`;
-      
-      const response = await fetch(apiUrl);
-      const data = await response.json();
-      
-      res.json(data);
-    } catch (error) {
-      logger.error('[Elastos Proxy] Error:', error);
-      res.status(500).json({ error: 'Failed to fetch Elastos transactions' });
-    }
-  });
+    // Restore endpoint with disk-based storage (backups can be GB — avoids OOM)
+    const restoreUploadDir = path.join(uploadTmpDir, 'restore');
+    if ( ! fs.existsSync(restoreUploadDir) ) fs.mkdirSync(restoreUploadDir, { recursive: true });
 
-  // Backup management endpoints (require auth)
-  app.post('/api/backups/create', authenticate, createBackup);
-  app.get('/api/backups', authenticate, listBackups);
-  app.get('/api/backups/download/:filename', authenticate, downloadBackup);
-  app.delete('/api/backups/:filename', authenticate, deleteBackup);
-  app.post('/api/backups/restore', authenticate, restoreUpload.single('file'), restoreBackup);
+    const restoreUpload = multer({
+        storage: multer.diskStorage({
+            destination: restoreUploadDir,
+            filename: (_req, file, cb) => {
+                const unique = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+                cb(null, `${unique}-${file.originalname}`);
+            },
+        }),
+        limits: {
+            fileSize: 10 * 1024 * 1024 * 1024, // 10GB max file size for backups
+        },
+    });
 
-  // Terminal endpoints
-  app.get('/api/terminal/status', handleTerminalStatus);  // No auth - check if available
-  app.get('/api/terminal/stats', authenticate, handleTerminalStats);
-  app.get('/api/terminal/admin/stats', authenticate, handleTerminalAdminStats);
-  app.post('/api/terminal/destroy-all', authenticate, handleDestroyAllTerminals);
-  
-  // Terminal command execution API (for AI agents)
-  app.post('/api/terminal/exec', authenticate, handleExecCommand);
-  app.post('/api/terminal/script', authenticate, handleExecScript);
-  app.get('/api/terminal/tools', authenticate, handleListTools);
+    app.post('/batch', authenticate, upload.any(), handleBatch);
 
-  // API Keys management (for agent authentication)
-  app.get('/api/keys', authenticate, handleListApiKeys);
-  app.post('/api/keys', authenticate, handleCreateApiKey);
-  app.delete('/api/keys/:keyId', authenticate, handleDeleteApiKey);
-  app.post('/api/keys/:keyId/revoke', authenticate, handleRevokeApiKey);
-  app.get('/api/keys/scopes', handleGetScopes);  // No auth needed - just lists available scopes
+    // File signing (require auth)
+    app.post('/sign', authenticate, handleSign);
 
-  // Agent Tool Registry (for AI agent discovery)
-  app.get('/api/tools', handleListAgentTools);  // Optional auth - shows scopes if authenticated
-  app.get('/api/tools/categories', handleListCategories);
-  app.get('/api/tools/openapi', handleGetOpenAPISchema);
-  app.get('/api/tools/:name', handleGetTool);
+    // Key-value store (require auth)
+    app.get('/kv/:key*', authenticate, handleKV);
+    app.post('/kv/:key*', authenticate, handleKV);
+    app.delete('/kv/:key*', authenticate, handleKV);
+    app.get('/api/kv/:key*', authenticate, handleKV);
+    app.post('/api/kv/:key*', authenticate, handleKV);
+    app.delete('/api/kv/:key*', authenticate, handleKV);
 
-  // Error handling middleware (must be last)
-  app.use(errorHandler);
+    // Other endpoints (require auth)
+    app.post('/rao', authenticate, handleRAO);
+    app.post('/contactUs', handleContactUs);
+
+    // Driver calls (require auth)
+    // Note: Raw body capture must happen before body parser, but body parser is global
+    // So we'll check rawBody in the handler if parsed body is empty
+    app.post('/drivers/call', authenticate, handleDriversCall);
+
+    // Open item - Get app to open a file (require auth)
+    app.post('/open_item', authenticate, handleOpenItem);
+
+    // Suggest apps for a file (require auth)
+    app.post('/suggest_apps', authenticate, handleSuggestApps);
+
+    // Item metadata (require auth)
+    app.get('/itemMetadata', authenticate, handleItemMetadata);
+
+    // Write file using signed URL (require auth)
+    app.post('/writeFile', authenticate, handleWriteFile);
+    app.put('/writeFile', authenticate, handleWriteFile);
+
+    // Desktop background (require auth)
+    app.post('/set-desktop-bg', authenticate, handleSetDesktopBg);
+    app.post('/set-profile-picture', authenticate, handleSetProfilePicture);
+
+    // Elastos blockchain explorer proxy (to avoid CORS issues)
+    app.get('/api/elastos/transactions', authenticate, async (req: Request, res: Response) => {
+        try {
+            const { address, page = '1', pageSize = '20' } = req.query;
+
+            if ( !address || typeof address !== 'string' ) {
+                res.status(400).json({ error: 'Address is required' });
+                return;
+            }
+
+            // Proxy to Elastos Smart Chain explorer API
+            const offset = (parseInt(page as string) - 1) * parseInt(pageSize as string);
+            const apiUrl = `https://esc.elastos.io/api?module=account&action=txlist&address=${address}&offset=${offset}&limit=${pageSize}&sort=desc`;
+
+            const response = await fetch(apiUrl);
+            const data = await response.json();
+
+            res.json(data);
+        } catch ( error ) {
+            logger.error('[Elastos Proxy] Error:', error);
+            res.status(500).json({ error: 'Failed to fetch Elastos transactions' });
+        }
+    });
+
+    // Backup management endpoints (require auth)
+    app.post('/api/backups/create', authenticate, createBackup);
+    app.get('/api/backups', authenticate, listBackups);
+    app.get('/api/backups/download/:filename', authenticate, downloadBackup);
+    app.delete('/api/backups/:filename', authenticate, deleteBackup);
+    app.post('/api/backups/restore', authenticate, restoreUpload.single('file'), restoreBackup);
+
+    // Terminal endpoints
+    app.get('/api/terminal/status', handleTerminalStatus); // No auth - check if available
+    app.get('/api/terminal/stats', authenticate, handleTerminalStats);
+    app.get('/api/terminal/admin/stats', authenticate, handleTerminalAdminStats);
+    app.post('/api/terminal/destroy-all', authenticate, handleDestroyAllTerminals);
+
+    // Terminal command execution API (for AI agents)
+    app.post('/api/terminal/exec', authenticate, handleExecCommand);
+    app.post('/api/terminal/script', authenticate, handleExecScript);
+    app.get('/api/terminal/tools', authenticate, handleListTools);
+
+    // API Keys management (for agent authentication)
+    app.get('/api/keys', authenticate, handleListApiKeys);
+    app.post('/api/keys', authenticate, handleCreateApiKey);
+    app.delete('/api/keys/:keyId', authenticate, handleDeleteApiKey);
+    app.post('/api/keys/:keyId/revoke', authenticate, handleRevokeApiKey);
+    app.get('/api/keys/scopes', handleGetScopes); // No auth needed - just lists available scopes
+
+    // Agent Tool Registry (for AI agent discovery)
+    app.get('/api/tools', handleListAgentTools); // Optional auth - shows scopes if authenticated
+    app.get('/api/tools/categories', handleListCategories);
+    app.get('/api/tools/openapi', handleGetOpenAPISchema);
+    app.get('/api/tools/:name', handleGetTool);
+
+    // Error handling middleware (must be last)
+    app.use(errorHandler);
 }
-

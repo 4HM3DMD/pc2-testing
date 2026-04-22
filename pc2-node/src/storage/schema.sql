@@ -11,12 +11,18 @@ CREATE TABLE IF NOT EXISTS users (
 );
 
 -- Sessions table: Active user sessions
+-- scope/scope_data (added in migration 29 / SEC-3c, 2026-04 audit) constrain
+-- a session to a specific resource. NULL scope = unrestricted owner/user
+-- session. scope='file' = ephemeral session bound to a single fileUid (used
+-- by Puter iframe apps replacing the previous insecure mock-token pattern).
 CREATE TABLE IF NOT EXISTS sessions (
   token TEXT PRIMARY KEY,
   wallet_address TEXT NOT NULL,
   smart_account_address TEXT,
   created_at INTEGER NOT NULL,
   expires_at INTEGER NOT NULL,
+  scope TEXT,
+  scope_data TEXT,
   FOREIGN KEY (wallet_address) REFERENCES users(wallet_address) ON DELETE CASCADE
 );
 

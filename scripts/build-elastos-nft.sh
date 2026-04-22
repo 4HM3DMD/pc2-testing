@@ -374,8 +374,12 @@ src = src.replace(
         </Stack>'''
 )
 
+## Remove NotificationsPopover from DashboardNavbar (not relevant for NFT marketplace)
+src = src.replace('''import NotificationsPopover from './NotificationsPopover';''', '// NotificationsPopover removed for NFT marketplace')
+src = src.replace('<NotificationsPopover />', '')
+
 f.write_text(src)
-print('    DashboardNavbar: added back button to left of header for PC2 iframe navigation')
+print('    DashboardNavbar: added back button, removed NotificationsPopover')
 "
 
 # 2c. Fix Sell button on listed NFT cards: check handler existence, not just action object
@@ -462,11 +466,18 @@ src = src.replace(
   }, [channelsRoyaltiesData, assetsRoyaltiesData, offersMadeData, offersReceivedData]);''',
     '''const earningsNotificationCount = React.useMemo(() => {
     let totalCount = 0;
+    const now = Date.now();
     if (offersMadeData?.data?.length) {
-      totalCount += offersMadeData.data.length;
+      totalCount += offersMadeData.data.filter((o: any) => {
+        const d = typeof o.deadline === 'number' ? o.deadline : new Date(o.deadline).getTime();
+        return d > now;
+      }).length;
     }
     if (offersReceivedData?.data?.length) {
-      totalCount += offersReceivedData.data.length;
+      totalCount += offersReceivedData.data.filter((o: any) => {
+        const d = typeof o.deadline === 'number' ? o.deadline : new Date(o.deadline).getTime();
+        return d > now;
+      }).length;
     }
     return totalCount > 99 ? 99 : totalCount;
   }, [offersMadeData, offersReceivedData]);'''
@@ -1145,6 +1156,10 @@ ACCT_PATCH_EOF
 python3 "$ACCT_PATCH" "$BUILD_DIR"
 rm -f "$ACCT_PATCH"
 
+# Fix ArtAssetCard: remove linkTarget="_blank" to keep navigation inside PC2 iframe
+echo "  - ArtAssetCard: Remove _blank target (navigate within app, not new window)"
+sed -i '' "s/linkTarget=\"_blank\"//" "$BUILD_DIR/src/components/marketplace/museum/ArtAssetCard.tsx"
+
 echo "  Image + RPC fixes applied."
 
 # --- NFT IPFS Pinning: Add "Pin to Node" + "Download" buttons on ArtAssetView ---
@@ -1625,6 +1640,46 @@ html = html.replace('<head>', '<head>\n' + inject + '\n' + dark_scrollbar_css, 1
 index.write_text(html)
 print("  Injected PC2 bootstrap script + dark scrollbar CSS into index.html")
 PYEOF
+
+# 9. Generate app.json manifest for PC2 app install system
+echo "[9/9] Generating app.json manifest..."
+ICON_B64=$(base64 -i "$OUTPUT_DIR/favicon-64.png" | tr -d '\n')
+cat > "$OUTPUT_DIR/app.json" << APPJSONEOF
+{
+  "name": "elastos-nft",
+  "title": "Elastos NFT",
+  "version": "0.1.0",
+  "description": "Browse, trade, and collect NFTs on the Elastos Smart Chain (ESC).",
+  "author": {
+    "name": "Elacity Labs",
+    "url": "https://ela.city"
+  },
+  "license": "proprietary",
+  "icon": "favicon-64.png",
+  "iconDataUrl": "data:image/png;base64,${ICON_B64}",
+  "entry": "index.html",
+  "type": "web",
+  "category": "marketplace",
+  "capabilities": {
+    "wallet": true,
+    "network": true,
+    "ipfs": { "pin": true, "fetch": true }
+  },
+  "requirements": {
+    "minVersion": "1.1.0"
+  },
+  "display": {
+    "maximize": true,
+    "resizable": true,
+    "titlebar": true,
+    "taskbar": true
+  },
+  "distribution": {
+    "channel": "stable"
+  }
+}
+APPJSONEOF
+echo "  Generated app.json with embedded icon"
 
 BUILD_END=$(date +%s)
 TOTAL=$((BUILD_END - BUILD_START))

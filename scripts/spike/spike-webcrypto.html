@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<!--
+  spike-webcrypto.html — Phase 1 spike #3.
+
+  Proves the ephemeral-key primitives the session-key design depends on:
+    1. crypto.subtle.generateKey({ECDSA, namedCurve}, extractable:false, ['sign'])
+    2. exportKey('raw', privateKey) MUST throw (non-extractability)
+    3. exportKey('raw', publicKey) MUST succeed (server-side verify needs it)
+    4. Sign canonical JSON payload + verify roundtrip
+
+  Tested for both namedCurves:
+    - K-256 (secp256k1) — the preferred curve (ethers-compatible on the server)
+    - P-256 (secp256r1) — universally-supported fallback (since 2017)
+
+  This page writes a JSON results object to window.__SPIKE_RESULTS__ and
+  also renders it to #out so a human can read it. The Playwright runner in
+  spike-webcrypto.runner.mjs polls window.__SPIKE_RESULTS__ and dumps the
+  result for each engine (Chromium, Firefox, WebKit). Wallet in-app browsers
+  inherit from these three engines, so this gives us the full matrix.
+
+  Open directly in any browser (file:// works, no server needed) to test by hand.
+-->
+<meta charset="utf-8" />
+<title>PC2 · spike-webcrypto</title>
+<style>
+  body { font: 14px ui-monospace, Consolas, monospace; padding: 24px; max-width: 980px; }
+  h1 { font-size: 18px; margin: 0 0 16px; }
+  pre { background: #f5f5f5; padding: 16px; border-radius: 6px; overflow: auto; }
+  .pass { color: #16794f; }
+  .fail { color: #b42318; }
+  .pending { color: #6b6b6b; }
+</style>
+<h1>PC2 · Web Crypto ephemeral-key spike</h1>
+<p id="status" class="pending">Running…</p>
+<pre id="out">(no results yet)</pre>
+
+<script type="module">
+  /* eslint-disable no-undef */
+
+  // The canonical SecureViewRequest payload shape from DESIGN.md §2.3.
+  // Signing the SHA-256 of its canonical JSON is what the ephemeral key
+  // will actually do in production.
+  const CANONICAL_PAYLOAD = {
+    domain: 'secure-view',
+    kid: '0xd6fbf08e098f4e90e38c94d99b08c9a1',
+    actionIpfsId: 'QmNayE5MYzXcoMS9nvRk6MUo8r4ESLa3i65vHXzuBsnC2b',
+    requestedAt: 1713516000,
+    requestNonce: 'test-nonce-0',
+  };
+
+  /** Canonical JSON: sorted keys, no whitespace. Matches DESIGN.md §2.4. */
+  function canonicalize(obj) {
+    if (obj === null || typeof obj !== 'object') return JSON.stringify(obj);
+    if (Array.isArray(obj)) return '[' + obj.map(canonicalize).join(',') + ']';
+    const keys = Object.keys(obj).sort();
+    return '{' + keys.map(k => JSON.stringify(k) + ':' + canonicalize(obj[k])).join(',') + '}';
+  }
+
+  /** Try a curve, return per-step pass/fail + diagnostic. */
+  async function runCurve(namedCurve) {
+    const result = {
+      namedCurve,
+      generateKey: null,
+      privateKeyExtractableInvariant: null,
+      publicKeyExport: null,
+      sign: null,
+      verify: null,
+      error: null,
+    };
+
+    // 1. Generate keypair
+    let keyPair;
+    try {
+      keyPair = await crypto.subtle.generateKey(
+        { name: 'ECDSA', namedCurve },
+        false /* extractable */,
+        ['sign', 'verify'],
+      );
+      result.generateKey = 'pass';
+    } catch (err) {
+      result.generateKey = 'fail';
+      result.error = `generateKey: ${err.name || 'Error'}: ${err.message || err}`;
+      return result;
+    }
+
+    // 2. privateKey must NOT be exportable (this is the core security invariant)
+    try {
+      await crypto.subtle.exportKey('raw', keyPair.privateKey);
+      // If we get here, the invariant is violated.
+      result.privateKeyExtractableInvariant = 'fail';
+      result.error = 'privateKey was exportable despite extractable:false';
+      return result;
+    } catch (_err) {
+      result.privateKeyExtractableInvariant = 'pass';
+    }
+    // Also try jwk export just to be sure.
+    try {
+      await crypto.subtle.exportKey('jwk', keyPair.privateKey);
+      result.privateKeyExtractableInvariant = 'fail';
+      result.error = 'privateKey was exportable via jwk despite extractable:false';
+      return result;
+    } catch (_err) {
+      // pass
+    }
+
+    // 3. publicKey MUST be exportable — server needs it to verify request sigs.
+    let spkiBytes;
+    try {
+      spkiBytes = await crypto.subtle.exportKey('spki', keyPair.publicKey);
+      result.publicKeyExport = 'pass';
+    } catch (err) {
+      result.publicKeyExport = 'fail';
+      result.error = `publicKey export failed: ${err.name}: ${err.message}`;
+      return result;
+    }
+
+    // 4. Sign canonical JSON of a realistic payload
+    const canonical = canonicalize(CANONICAL_PAYLOAD);
+    const encoded = new TextEncoder().encode(canonical);
+    let signature;
+    try {
+      signature = await crypto.subtle.sign(
+        { name: 'ECDSA', hash: { name: 'SHA-256' } },
+        keyPair.privateKey,
+        encoded,
+      );
+      result.sign = 'pass';
+    } catch (err) {
+      result.sign = 'fail';
+      result.error = `sign: ${err.name}: ${err.message}`;
+      return result;
+    }
+
+    // 5. Verify the signature roundtrips
+    try {
+      const ok = await crypto.subtle.verify(
+        { name: 'ECDSA', hash: { name: 'SHA-256' } },
+        keyPair.publicKey,
+        signature,
+        encoded,
+      );
+      result.verify = ok ? 'pass' : 'fail';
+      if (!ok) result.error = 'verify returned false for a signature we just created';
+    } catch (err) {
+      result.verify = 'fail';
+      result.error = `verify: ${err.name}: ${err.message}`;
+    }
+
+    result.signatureLength = signature.byteLength;
+    result.publicKeyLength = spkiBytes.byteLength;
+    return result;
+  }
+
+  (async function main() {
+    const userAgent = navigator.userAgent;
+    const engine = (() => {
+      if (/Firefox\//.test(userAgent)) return 'Firefox';
+      if (/Chrome\//.test(userAgent) && !/Edg\//.test(userAgent)) return 'Chromium';
+      if (/Safari\//.test(userAgent) && !/Chrome\//.test(userAgent)) return 'WebKit';
+      if (/Edg\//.test(userAgent)) return 'Edge';
+      return 'Unknown';
+    })();
+
+    const results = {
+      schema: 'spike-webcrypto@v1',
+      engine,
+      userAgent,
+      finishedAt: null,
+      curves: {
+        'K-256': await runCurve('K-256'),
+        'P-256': await runCurve('P-256'),
+      },
+    };
+    results.finishedAt = new Date().toISOString();
+
+    // Decision: a curve fully passes only if each of the 5 pass-checkpoints
+    // (generateKey, privateKeyExtractableInvariant, publicKeyExport, sign, verify)
+    // is 'pass'. Check explicit fields so the tally doesn't drift as the schema grows.
+    const checkFields = ['generateKey', 'privateKeyExtractableInvariant', 'publicKeyExport', 'sign', 'verify'];
+    const allPass = (r) => checkFields.every(f => r[f] === 'pass');
+    const kok = allPass(results.curves['K-256']);
+    const pok = allPass(results.curves['P-256']);
+    results.overall = {
+      kPass: kok,
+      pPass: pok,
+      safeToProceed: pok, // P-256 is the pre-agreed hard requirement; K-256 is nice-to-have
+    };
+
+    window.__SPIKE_RESULTS__ = results;
+    document.getElementById('status').textContent = results.overall.safeToProceed
+      ? `PASS on ${engine} (K-256=${kok}, P-256=${pok})`
+      : `FAIL on ${engine} — P-256 fallback did not pass`;
+    document.getElementById('status').className = results.overall.safeToProceed ? 'pass' : 'fail';
+    document.getElementById('out').textContent = JSON.stringify(results, null, 2);
+  })().catch(err => {
+    const msg = `Top-level error: ${err.name || 'Error'}: ${err.message || err}`;
+    window.__SPIKE_RESULTS__ = { error: msg };
+    document.getElementById('status').textContent = msg;
+    document.getElementById('status').className = 'fail';
+  });
+</script>

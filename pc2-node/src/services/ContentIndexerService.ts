@@ -190,6 +190,19 @@ export class ContentIndexerService {
     return { enabled: this.config.enabled, config: this.config, scanning: this.isScanning };
   }
 
+  /**
+   * Run a scan cycle immediately (out-of-band). Called by API after user actions
+   * (channel creation, mint) so users don't wait up to scanIntervalMinutes to see
+   * their own content. Safe to call repeatedly — isScanning guard prevents overlap.
+   */
+  async triggerScan(): Promise<{ started: boolean; reason?: string }> {
+    if (!this.config.enabled) return { started: false, reason: 'indexer_disabled' };
+    if (this.isScanning) return { started: false, reason: 'already_scanning' };
+    // Fire-and-forget so HTTP caller gets a fast response
+    this.runScanCycle().catch(err => log.error(`Triggered scan failed: ${err.message}`));
+    return { started: true };
+  }
+
   // ── RPC helpers ────────────────────────────────────────────
 
   private getRpcUrl(): string {
@@ -295,8 +308,35 @@ export class ContentIndexerService {
     }
   }
 
+  /**
+   * One-shot historical backfill for ChannelCreated events. Existing installs
+   * running before Migration 28 only indexed channels implicitly via asset events,
+   * leaving channel_metadata without creator_address. This scans the factory once
+   * to retroactively populate those rows so the Creator app sees old channels.
+   */
+  private async backfillChannelsIfNeeded(version: string, cfg: ContractVersionConfig, latestBlock: number): Promise<void> {
+    if (!this.db || !cfg.channelFactory) return;
+
+    const backfillKey = `indexer_channels_backfilled_${version}`;
+    if (this.db.getSetting(backfillKey) === '1') return;
+
+    log.info(`[${version}] Running one-time ChannelCreated backfill from block ${cfg.fromBlock}…`);
+
+    let totalChannels = 0;
+    for (let from = cfg.fromBlock; from <= latestBlock; from += this.config.maxBlocksPerScan) {
+      const to = Math.min(from + this.config.maxBlocksPerScan - 1, latestBlock);
+      totalChannels += await this.scanChannelCreated(cfg.channelFactory, version, from, to);
+    }
+
+    this.db.setSetting(backfillKey, '1');
+    log.info(`[${version}] Backfill complete — indexed ${totalChannels} channel(s)`);
+  }
+
   private async scanContractVersion(version: string, cfg: ContractVersionConfig, latestBlock: number): Promise<void> {
     if (!this.db) return;
+
+    // One-time backfill so pre-existing installs pick up all historical channels
+    await this.backfillChannelsIfNeeded(version, cfg, latestBlock);
 
     const settingKey = `indexer_last_block_${version}`;
     const lastScanned = parseInt(this.db.getSetting(settingKey) || '0', 10);
@@ -312,9 +352,17 @@ export class ContentIndexerService {
 
     let scannedTo = startBlock - 1;
     let newAssets = 0;
+    let newChannels = 0;
 
     for (let from = startBlock; from <= latestBlock; from += this.config.maxBlocksPerScan) {
       const to = Math.min(from + this.config.maxBlocksPerScan - 1, latestBlock);
+
+      // Scan factory for new channels FIRST so they exist before any asset events
+      // reference them. Critical for the Creator app UX (channels must be visible
+      // immediately after creation, not only after first mint).
+      if (cfg.channelFactory) {
+        newChannels += await this.scanChannelCreated(cfg.channelFactory, version, from, to);
+      }
 
       const eventSource = cfg.eventHub ?? cfg.centralStorage;
       if (eventSource) {
@@ -333,9 +381,67 @@ export class ContentIndexerService {
 
     this.db.setSetting(settingKey, String(scannedTo));
 
-    if (newAssets > 0) {
-      log.info(`[${version}] Found ${newAssets} new asset(s) up to block ${scannedTo}`);
+    if (newChannels > 0 || newAssets > 0) {
+      log.info(`[${version}] Indexed ${newChannels} new channel(s), ${newAssets} new asset(s) up to block ${scannedTo}`);
     }
+  }
+
+  /**
+   * Scan V3 Channel Factory for ChannelCreated events.
+   *
+   * ChannelCreated(uint8 indexed channelType, uint8 indexed scope,
+   *                address indexed creator, address channel, address factoryAddr)
+   *
+   *   topics[0] = event sig
+   *   topics[1] = channelType (indexed)
+   *   topics[2] = scope (indexed)
+   *   topics[3] = creator (indexed)
+   *   data = abi.encode(address channel, address factoryAddr)
+   *
+   * We do NOT fetch on-chain name() here (keeps scan fast at scale). Names are
+   * resolved lazily by the API endpoint and cached — so even with 1M channels
+   * the scan stays O(blocks) not O(channels * RPC calls).
+   */
+  private async scanChannelCreated(factoryAddress: string, version: string, fromBlock: number, toBlock: number): Promise<number> {
+    if (!this.db) return 0;
+
+    const logs = await this.getLogs(
+      factoryAddress,
+      [TOPICS.ChannelCreated],
+      fromBlock,
+      toBlock
+    );
+
+    let count = 0;
+
+    for (const entry of logs) {
+      try {
+        if (!entry.topics || entry.topics.length < 4) continue;
+
+        const creatorAddress = unpadAddress(entry.topics[3]);
+        const blockNumber = fromHex(entry.blockNumber);
+
+        // Non-indexed params: address channel, address factoryAddr
+        const dataHex = entry.data ?? '0x';
+        const data = dataHex.replace('0x', '');
+        if (data.length < 64) continue;
+        const channelAddress = unpadAddress('0x' + data.slice(0, 64));
+
+        this.db.upsertChannelFromFactory({
+          address: channelAddress,
+          creator_address: creatorAddress,
+          contract_version: version,
+          block_number: blockNumber,
+          tx_hash: entry.transactionHash || null,
+        });
+
+        count++;
+      } catch (error: any) {
+        log.debug(`Failed to parse ChannelCreated: ${error.message}`);
+      }
+    }
+
+    return count;
   }
 
   private async scanDigitalAssetRegistered(eventSourceAddress: string, version: string, fromBlock: number, toBlock: number): Promise<number> {

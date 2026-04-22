@@ -1,0 +1,134 @@
+# gitleaks configuration for pc2.net
+#
+# Wave 4 — SEC-CI-SECRETSCAN (.cursor/tasks/SEC-2026-04-21-PC2-AUDIT/)
+#
+# Strategy:
+#   - Inherit gitleaks' built-in default rules (high quality, well-tuned).
+#   - Layer a repo-specific allowlist for files that intentionally contain
+#     "secret-shaped" strings: example envs, fixture data, public-by-design
+#     identifiers (Lit Action CIDs, IPFS CIDs, EVM contract addresses).
+#   - Exclude vendored/build artefacts that no scanner should ever touch.
+#
+# Bypass for a single line:    `# gitleaks:allow`
+# Bypass historical fingerprint: add to .gitleaksignore
+#
+# Test locally:  `gitleaks detect --no-git --redact -v`
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "pc2.net repo-wide allowlist"
+
+# ---------------------------------------------------------------------------
+# Path excludes — never scan these
+# ---------------------------------------------------------------------------
+paths = [
+    # Vendored / build artefacts
+    '''(^|/)node_modules/''',
+    '''(^|/)dist/''',
+    '''(^|/)build/''',
+    '''(^|/)target/''',          # Rust build
+    '''(^|/)\.git/''',
+    '''(^|/)coverage/''',
+    '''\.lock$''',
+    '''package-lock\.json$''',
+    '''yarn\.lock$''',
+    '''Cargo\.lock$''',
+
+    # Third-party submodules (out-of-scope for this repo's scanner)
+    '''(^|/)submodules/''',
+
+    # Runtime artefacts that should never be committed (already in
+    # .gitignore but worth excluding from filesystem scans for speed
+    # on developer laptops).
+    '''(^|/)pc2-node/nohup\.out$''',
+    '''(^|/)pc2-node/data/''',
+    '''(^|/)data/ipfs/''',
+    '''(^|/)data/supernodes\.json$''',
+    '''(^|/)volatile/''',
+    '''\.log$''',
+
+    # Compiled JS bundles + sourcemaps shipped to clients
+    '''(^|/)pc2-node/frontend/''',
+    '''(^|/)src/particle-auth/''',
+    '''(^|/)extensions/particle-auth/''',   # Particle Auth SDK bundle
+    '''(^|/)src/backend/apps/.*/assets/''', # Bundled Puter app assets
+    '''(^|/)src/backend/apps/.*/js/''',     # Monaco editor + similar
+    '''\.min\.js$''',
+    '''\.min\.css$''',
+    '''\.bundle\.js$''',
+    '''\.map$''',
+
+    # WASM artefacts
+    '''\.wasm$''',
+    '''(^|/)pkg/''',
+    '''(^|/)wasm-pack/''',
+
+    # Generated test apps + installed apps (mirrors of test-apps/)
+    '''(^|/)pc2-node/data/installed-apps/''',
+    '''(^|/)pc2-node/data/test-apps/.*/dist/''',
+
+    # Lockfile-shaped JSON
+    '''(^|/)pc2-node/data/migrations\.json$''',
+
+    # Repo-managed example envs (intentionally committed, no live creds)
+    '''(^|/)\.env\.example$''',
+    '''(^|/)\.env\.production\.example$''',
+    '''(^|/)\.env\.template$''',
+
+    # Test fixtures + security exploit-repro scripts (deliberately contain
+    # synthetic credentials to prove a vuln). Never run in CI.
+    '''(^|/)scripts/security/exploit-target\.json$''',
+    '''(^|/)scripts/security/.*\.example\.''',
+    '''(^|/)pc2-node/tests/.*/fixtures/''',
+
+    # Documentation that quotes redacted/historical secrets for context.
+    # New leaks must NOT be added; rotate first, then document.
+    '''(^|/)docs/handover/.*\.md$''',
+    '''(^|/)docs/wiki/.*\.md$''',
+    '''(^|/)\.cursor/tasks/.*\.md$''',
+
+    # Public Particle Network project IDs / client keys (browser-exposed
+    # by SDK design — equivalent to Stripe publishable keys).
+    '''(^|/)packages/particle-auth/.*\.tsx?$''',
+]
+
+# ---------------------------------------------------------------------------
+# Stopwords — match these in any rule and the finding is suppressed.
+# Keep this list very tight; broad stopwords hide real leaks.
+# ---------------------------------------------------------------------------
+stopwords = [
+    "EXAMPLE",
+    "PLACEHOLDER",
+    "REPLACE_ME",
+    "REPLACE-ME",
+    "FAKE_KEY",
+    "DUMMY",
+    "your-",
+    "YOUR_",
+    "<your-",
+    "xxxxxxxxxxx",
+    "0000000000",
+    "1111111111",
+]
+
+# ---------------------------------------------------------------------------
+# Regex allowlist — public-by-design identifiers that look like secrets.
+# ---------------------------------------------------------------------------
+regexes = [
+    # IPFS CIDv0 (Qm... 46 chars) and CIDv1 (bafy/baga... base32)
+    '''Qm[1-9A-HJ-NP-Za-km-z]{44}''',
+    '''ba[a-z2-7]{57,}''',
+
+    # Lit Action / Chipotle action CIDs are public — they're pinned
+    # to public IPFS and the gateway downloads them by hash.
+    '''(?i)action[_-]?cid["'\s:=]+[QmBb][A-Za-z0-9]+''',
+
+    # EVM contract / wallet addresses (40 hex chars after 0x). These are
+    # public on-chain identifiers; the *private key* would be the leak.
+    '''0x[a-fA-F0-9]{40}\b''',
+
+    # Solana base58 addresses (32-44 chars, no 0/O/I/l)
+    '''[1-9A-HJ-NP-Za-km-z]{32,44}''',
+]

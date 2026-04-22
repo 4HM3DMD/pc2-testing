@@ -8,6 +8,7 @@ import { Request, Response } from 'express';
 import { AuthenticatedRequest } from './middleware.js';
 import { SignRequest, SignResponse } from '../types/api.js';
 import { FilesystemManager } from '../storage/filesystem.js';
+import { DatabaseManager } from '../storage/database.js';
 import { logger, createLogger } from '../utils/logger.js';
 const log = createLogger('api-other');
 import { broadcastItemUpdated } from '../websocket/events.js';
@@ -1470,9 +1471,31 @@ export async function handleOpenItem(req: AuthenticatedRequest, res: Response): 
     path: cleanPath,
   };
   
-  // Generate mock token (in real Puter, this is a user-app token)
-  const token = `mock-token-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-  
+  // SEC-3c (2026-04 audit): mint a real, file-scoped session token instead
+  // of the previous insecure `mock-token-*` placeholder. The middleware
+  // recognises this token via standard db.getSession() lookup, then enforces
+  // scope='file' against the request's uid/file/path. The iframe app cannot
+  // use this token to access any other resource. TTL defaults to 4h
+  // (long enough for video playback / document edit, short enough that
+  // revocation has bounded blast radius).
+  const db = req.app.locals.db as DatabaseManager | undefined;
+  if (!db) {
+    logger.error('[OpenItem] Database not initialized; cannot mint scoped session');
+    res.status(500).json({ error: 'Database not initialized' });
+    return;
+  }
+  const token = crypto.randomBytes(32).toString('hex');
+  db.createScopedSession({
+    token,
+    wallet_address: req.user.wallet_address,
+    smart_account_address: req.user.smart_account_address ?? null,
+    scope: 'file',
+    scope_data: JSON.stringify({
+      fileUid: actualFileUid,
+      allowedPath: cleanPath,
+    }),
+  });
+
   // Build app object (matching Puter's format)
   const app = {
     uid: appUid,

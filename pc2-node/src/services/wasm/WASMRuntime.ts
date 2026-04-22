@@ -30,10 +30,22 @@ export interface RendererCommand {
     mime_type: string;
     watermark?: string;
     page?: number;
+    /** EPUB chapter index (0-based). Overrides `page` for EPUB assets. */
+    chapter?: number;
     max_width?: number;
     max_height?: number;
-    output_format?: 'jpeg' | 'webp' | 'png';
+    output_format?: 'jpeg' | 'webp' | 'png' | 'html';
     mode?: 'decrypt_only';
+    /** Buyer wallet address — encoded as zero-width Unicode watermark in EPUB text. */
+    forensic_mark?: string;
+    /** Preferred reader pane width in CSS pixels (EPUB reflowable). */
+    viewport_width?: number;
+}
+
+export interface EpubTocEntry {
+    title: string;
+    chapter_index: number;
+    href: string;
 }
 
 export interface RendererResult {
@@ -41,6 +53,11 @@ export interface RendererResult {
     error?: string;
     content_type?: string;
     total_pages?: number;
+    total_chapters?: number;
+    chapters?: EpubTocEntry[];
+    fixed_layout?: boolean;
+    epub_title?: string;
+    epub_author?: string;
     output_size?: number;
 }
 

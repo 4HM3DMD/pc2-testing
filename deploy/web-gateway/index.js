@@ -15,8 +15,12 @@ import https from "https";
 import path from "path";
 import net from "net";
 import zlib from "zlib";
-import { execSync } from "child_process";
+import { execSync, execFileSync } from "child_process";
 import httpProxy from "http-proxy";
+import {
+  ProvisioningTokenStore,
+  getProvisioningTokenFromRequest,
+} from "./lib/provisioning-token.js";
 const { createProxyServer } = httpProxy;
 
 // ============================================================================
@@ -147,6 +151,89 @@ const registry = new Map();
 const rateLimitStore = new Map();
 
 // ============================================================================
+// SEC-INFRA-GW-AUTH (PC2 Security Triage 2026-04-21, Wave 3)
+//
+// Per-node provisioning token store. First /api/register call for a username
+// mints a 256-bit token (returned ONCE in the response body); every subsequent
+// gateway call that acts on that username must include the plaintext token in
+// the X-Provisioning-Token header.
+//
+// GW_AUTH_REQUIRED env-var kill-switch:
+//   - undefined / 'false'  →  log-only mode. Verify if token present, log
+//                              the result for telemetry, but do NOT 401.
+//                              Lets operators deploy the gateway change before
+//                              every PC2 node has rolled out the client side.
+//   - 'true'               →  strict enforcement. Missing or wrong token = 401.
+//
+// Telemetry log format (greppable):
+//   [gw-auth] handler=<route> username=<u> token=<present|missing|wrong>
+//             enforce=<true|false> action=<allow|deny>
+// ============================================================================
+const PROVISIONING_TOKEN_FILE =
+  process.env.PROVISIONING_TOKEN_FILE ||
+  path.join(CONFIG.dataDir, 'provisioning-tokens.json');
+const provisioningTokenStore = new ProvisioningTokenStore(PROVISIONING_TOKEN_FILE);
+const GW_AUTH_REQUIRED = process.env.GW_AUTH_REQUIRED === 'true';
+
+console.log(`[gw-auth] Provisioning-token store loaded from ${PROVISIONING_TOKEN_FILE} (${provisioningTokenStore.toJSON().count} records). Enforcement: ${GW_AUTH_REQUIRED ? 'STRICT' : 'log-only'}.`);
+
+// Per-username delete throttle (SEC-9). Independent from the per-IP rate-limit
+// store above so a legit owner cannot lock themselves out by hammering wg/peer
+// delete from many client IPs.
+const perUsernameDeleteWindow = new Map(); // username -> { windowStart, count }
+const PER_USERNAME_DELETE_WINDOW_MS = 60_000;
+const PER_USERNAME_DELETE_MAX = 3;
+
+function checkPerUsernameDeleteRate(username) {
+  const now = Date.now();
+  const entry = perUsernameDeleteWindow.get(username);
+  if (!entry || now - entry.windowStart > PER_USERNAME_DELETE_WINDOW_MS) {
+    perUsernameDeleteWindow.set(username, { windowStart: now, count: 1 });
+    return true;
+  }
+  entry.count++;
+  return entry.count <= PER_USERNAME_DELETE_MAX;
+}
+
+/**
+ * SEC-INFRA-GW-AUTH guard for any handler that acts on a per-user resource.
+ *
+ * Behaviour:
+ *   - In log-only mode (GW_AUTH_REQUIRED=false): always returns true. Logs
+ *     telemetry so operators can see the rollout completion rate before
+ *     flipping the kill-switch.
+ *   - In strict mode (GW_AUTH_REQUIRED=true): returns true only if the
+ *     X-Provisioning-Token header matches the registered token for the
+ *     named username. Otherwise responds with 401 and returns false (the
+ *     caller MUST `return` immediately when it sees false).
+ *
+ * Returns boolean: true = continue, false = response already sent.
+ */
+function requireProvisioningToken(req, res, username, handlerLabel) {
+  const token = getProvisioningTokenFromRequest(req);
+  const known = provisioningTokenStore.has(username);
+  const verified = token && known && provisioningTokenStore.verify(token, username);
+
+  let tokenState = 'missing';
+  if (token && verified) tokenState = 'present';
+  else if (token && !verified) tokenState = 'wrong';
+
+  const action = (!GW_AUTH_REQUIRED || verified) ? 'allow' : 'deny';
+  console.log(`[gw-auth] handler=${handlerLabel} username=${username} token=${tokenState} enforce=${GW_AUTH_REQUIRED} action=${action}`);
+
+  if (action === 'allow') return true;
+
+  res.writeHead(401, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({
+    error: 'unauthorized',
+    message: known
+      ? 'X-Provisioning-Token header missing or does not match this username'
+      : 'no provisioning token has been issued for this username; call /api/register first',
+  }));
+  return false;
+}
+
+// ============================================================================
 // WireGuard Peer Management
 // ============================================================================
 
@@ -197,7 +284,10 @@ function allocateWGIP() {
 function isWireGuardAvailable() {
   if (!WG_CONFIG.enabled) return false;
   try {
-    execSync(`ip link show ${WG_CONFIG.interface} 2>/dev/null`, { stdio: 'pipe' });
+    // SEC-2 (defence in depth): execFileSync — no shell, no template
+    // interpretation. WG_CONFIG.interface is server-controlled (env var)
+    // so this is low risk pre-fix, but cheap to harden.
+    execFileSync('ip', ['link', 'show', WG_CONFIG.interface], { stdio: 'pipe' });
     return true;
   } catch {
     return false;
@@ -217,8 +307,9 @@ function getServerPublicKey() {
 
 function addWGPeer(publicKey, allowedIP) {
   try {
-    execSync(
-      `wg set ${WG_CONFIG.interface} peer ${publicKey} allowed-ips ${allowedIP}/32`,
+    execFileSync(
+      'wg',
+      ['set', WG_CONFIG.interface, 'peer', publicKey, 'allowed-ips', `${allowedIP}/32`],
       { stdio: 'pipe', timeout: 5000 }
     );
     return true;
@@ -230,8 +321,9 @@ function addWGPeer(publicKey, allowedIP) {
 
 function removeWGPeer(publicKey) {
   try {
-    execSync(
-      `wg set ${WG_CONFIG.interface} peer ${publicKey} remove`,
+    execFileSync(
+      'wg',
+      ['set', WG_CONFIG.interface, 'peer', publicKey, 'remove'],
       { stdio: 'pipe', timeout: 5000 }
     );
     return true;
@@ -328,7 +420,7 @@ function allocateAWGIP() {
 function isAmneziaWGAvailable() {
   if (!AWG_CONFIG.enabled) return false;
   try {
-    execSync(`ip link show ${AWG_CONFIG.interface} 2>/dev/null`, { stdio: 'pipe' });
+    execFileSync('ip', ['link', 'show', AWG_CONFIG.interface], { stdio: 'pipe' });
     return true;
   } catch {
     return false;
@@ -349,8 +441,9 @@ function getAWGServerPublicKey() {
 function addAWGPeer(publicKey, allowedIP) {
   try {
     const tool = fs.existsSync('/usr/local/bin/awg') ? 'awg' : 'wg';
-    execSync(
-      `${tool} set ${AWG_CONFIG.interface} peer ${publicKey} allowed-ips ${allowedIP}/32`,
+    execFileSync(
+      tool,
+      ['set', AWG_CONFIG.interface, 'peer', publicKey, 'allowed-ips', `${allowedIP}/32`],
       { stdio: 'pipe', timeout: 5000 }
     );
     return true;
@@ -363,8 +456,9 @@ function addAWGPeer(publicKey, allowedIP) {
 function removeAWGPeer(publicKey) {
   try {
     const tool = fs.existsSync('/usr/local/bin/awg') ? 'awg' : 'wg';
-    execSync(
-      `${tool} set ${AWG_CONFIG.interface} peer ${publicKey} remove`,
+    execFileSync(
+      tool,
+      ['set', AWG_CONFIG.interface, 'peer', publicKey, 'remove'],
       { stdio: 'pipe', timeout: 5000 }
     );
     return true;
@@ -2294,21 +2388,84 @@ async function handleApiRequest(req, res) {
           return;
         }
 
-        // Store registration
         const normalizedUsername = username.toLowerCase();
+
+        // ====================================================================
+        // SEC-INFRA-GW-AUTH (Wave 3) — provisioning-token bootstrap.
+        // Also incidentally closes SEC-3e (anyone could re-claim any
+        // unused-but-known username pointing at any endpoint URL).
+        //
+        // Cases:
+        //   A. First-ever registration for this username
+        //        → mint token, store mapping, return token in response
+        //   B. Re-registration WITH valid X-Provisioning-Token
+        //        → update endpoint info, return success (token unchanged)
+        //   C. Re-registration WITHOUT or WRONG X-Provisioning-Token
+        //        → log-only mode: allow + telemetry
+        //          strict mode  : 401 (refuse re-claim of someone else's name)
+        //   D. Re-registration with NO token bound yet (legacy / pre-Wave 3)
+        //        → log-only mode: auto-grandfather (mint + return; one-time
+        //          attachment to the existing record so the legitimate owner
+        //          gets their token on next boot)
+        //          strict mode  : 401 (operator must run reset-token CLI)
+        // ====================================================================
+        const inboundToken = getProvisioningTokenFromRequest(req);
+        const tokenAlreadyMinted = provisioningTokenStore.has(normalizedUsername);
+        const usernameAlreadyRegistered = registry.has(normalizedUsername);
+        let mintedToken = null;
+
+        if (!usernameAlreadyRegistered && !tokenAlreadyMinted) {
+          // Case A — first-ever registration
+          mintedToken = provisioningTokenStore.mint(normalizedUsername);
+          console.log(`[gw-auth] handler=register username=${normalizedUsername} action=mint-new`);
+        } else if (tokenAlreadyMinted) {
+          // Case B or C — token exists; verify the inbound matches
+          const tokenOk = inboundToken && provisioningTokenStore.verify(inboundToken, normalizedUsername);
+          if (!tokenOk) {
+            const tokenState = inboundToken ? 'wrong' : 'missing';
+            const action = GW_AUTH_REQUIRED ? 'deny' : 'allow';
+            console.log(`[gw-auth] handler=register username=${normalizedUsername} token=${tokenState} enforce=${GW_AUTH_REQUIRED} action=${action}`);
+            if (GW_AUTH_REQUIRED) {
+              res.writeHead(401, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({
+                error: 'unauthorized',
+                message: 'username already claimed; X-Provisioning-Token header required to re-register',
+              }));
+              return;
+            }
+          } else {
+            console.log(`[gw-auth] handler=register username=${normalizedUsername} token=present action=allow`);
+          }
+        } else {
+          // Case D — legacy registration without a token bound yet
+          if (GW_AUTH_REQUIRED) {
+            console.log(`[gw-auth] handler=register username=${normalizedUsername} legacy enforce=true action=deny`);
+            res.writeHead(401, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({
+              error: 'unauthorized',
+              message: 'username has no provisioning token bound; operator must reset',
+            }));
+            return;
+          }
+          // Log-only grandfathering: mint a token now and return it once.
+          mintedToken = provisioningTokenStore.mint(normalizedUsername);
+          console.log(`[gw-auth] handler=register username=${normalizedUsername} action=mint-grandfather`);
+        }
+
+        // Store / refresh registration
         const nodeInfo = {
           nodeId,
           endpoint,
           registered: new Date().toISOString(),
         };
-        
+
         registry.set(normalizedUsername, nodeInfo);
 
         // Invalidate cache for this user
         registryCache.delete(normalizedUsername);
 
         saveRegistry();
-        
+
         // Phase 3: Also store in DHT (async, don't block response)
         storeToDHT(normalizedUsername, nodeInfo).catch(err => {
           console.warn(`[DHT] Failed to store ${normalizedUsername}: ${err.message}`);
@@ -2316,8 +2473,16 @@ async function handleApiRequest(req, res) {
 
         console.log(`[Gateway] Registered: ${username} -> ${endpoint}`);
 
+        const responseBody = { success: true, username: normalizedUsername };
+        if (mintedToken) {
+          // SECURITY: this is the ONLY time the plaintext token leaves the
+          // gateway. PC2 client must persist it to disk (mode 0600) before
+          // calling any other gateway endpoint. Subsequent re-registrations
+          // by the same node will not return the token (Case B above).
+          responseBody.provisioningToken = mintedToken;
+        }
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ success: true, username: username.toLowerCase() }));
+        res.end(JSON.stringify(responseBody));
       } catch (error) {
         res.writeHead(400, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: "Invalid JSON" }));
@@ -2373,6 +2538,12 @@ async function handleApiRequest(req, res) {
         }
 
         const normalizedUsername = username.toLowerCase();
+
+        // SEC-8 (2026-04 audit) + SEC-INFRA-GW-AUTH: gate every wg/register
+        // call (both new and re-key) on the per-node provisioning token.
+        // Pre-fix any caller who knew a victim's username could change the
+        // peer's public key and steal their tunnel.
+        if (!requireProvisioningToken(req, res, normalizedUsername, 'wg/register')) return;
 
         // Check if this node already has a WireGuard peer assignment
         const existingPeer = wgPeers.peers[normalizedUsername];
@@ -2443,7 +2614,7 @@ async function handleApiRequest(req, res) {
 
     if (wgAvailable) {
       try {
-        const raw = execSync(`wg show ${WG_CONFIG.interface} dump`, { stdio: 'pipe', timeout: 5000 }).toString();
+        const raw = execFileSync('wg', ['show', WG_CONFIG.interface, 'dump'], { stdio: 'pipe', timeout: 5000 }).toString();
         const lines = raw.trim().split('\n');
         // First line is interface info, subsequent lines are peers
         const peers = lines.slice(1).map(line => {
@@ -2478,6 +2649,21 @@ async function handleApiRequest(req, res) {
 
   if (url.pathname.startsWith("/api/wg/peer/") && req.method === "DELETE") {
     const targetUsername = url.pathname.slice("/api/wg/peer/".length).toLowerCase();
+
+    // SEC-9 (2026-04 audit): pre-fix anyone who knew a victim's username
+    // could DELETE their WG peer and boot them off the tunnel. Now the
+    // caller must hold the token minted at /api/register time.
+    if (!requireProvisioningToken(req, res, targetUsername, 'wg/peer/delete')) return;
+
+    // Per-username delete throttle: even the legit owner is limited to
+    // PER_USERNAME_DELETE_MAX deletes per PER_USERNAME_DELETE_WINDOW_MS so
+    // a runaway script cannot churn the WG interface for itself either.
+    if (!checkPerUsernameDeleteRate(targetUsername)) {
+      res.writeHead(429, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Rate limit exceeded for this username", retryAfter: Math.ceil(PER_USERNAME_DELETE_WINDOW_MS / 1000) }));
+      return;
+    }
+
     const peer = wgPeers.peers[targetUsername];
 
     if (!peer) {
@@ -2490,6 +2676,38 @@ async function handleApiRequest(req, res) {
     delete wgPeers.peers[targetUsername];
     saveWGPeers();
     console.log(`[WireGuard] Removed peer ${targetUsername} (${peer.assignedIP})`);
+
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ success: true, removed: targetUsername }));
+    return;
+  }
+
+  // SEC-9 / Wave 3 follow-up: symmetric DELETE for AmneziaWG. Pre-fix this
+  // route did not exist; supernode operators had to SSH in to remove an awg
+  // peer. Adding it now (gated identically) keeps the wg/awg surfaces
+  // symmetric and stops future drift.
+  if (url.pathname.startsWith("/api/awg/peer/") && req.method === "DELETE") {
+    const targetUsername = url.pathname.slice("/api/awg/peer/".length).toLowerCase();
+
+    if (!requireProvisioningToken(req, res, targetUsername, 'awg/peer/delete')) return;
+
+    if (!checkPerUsernameDeleteRate(targetUsername)) {
+      res.writeHead(429, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Rate limit exceeded for this username", retryAfter: Math.ceil(PER_USERNAME_DELETE_WINDOW_MS / 1000) }));
+      return;
+    }
+
+    const peer = awgPeers.peers[targetUsername];
+    if (!peer) {
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Peer not found" }));
+      return;
+    }
+
+    removeAWGPeer(peer.publicKey);
+    delete awgPeers.peers[targetUsername];
+    saveAWGPeers();
+    console.log(`[AmneziaWG] Removed peer ${targetUsername} (${peer.assignedIP})`);
 
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ success: true, removed: targetUsername }));
@@ -2546,6 +2764,11 @@ async function handleApiRequest(req, res) {
 
         const normalizedUsername = username.toLowerCase();
         const resolvedNodeId = nodeId || (registry.get(normalizedUsername) || {}).nodeId || 'unknown';
+
+        // SEC-8 (2026-04 audit) + SEC-INFRA-GW-AUTH: gate awg/register the
+        // same way as wg/register. Same threat: stealing a stealth tunnel
+        // is just as bad as stealing a regular one.
+        if (!requireProvisioningToken(req, res, normalizedUsername, 'awg/register')) return;
 
         const existingPeer = awgPeers.peers[normalizedUsername];
         if (existingPeer) {
@@ -2616,7 +2839,7 @@ async function handleApiRequest(req, res) {
     if (awgAvailable) {
       try {
         const tool = fs.existsSync('/usr/local/bin/awg') ? 'awg' : 'wg';
-        const raw = execSync(`${tool} show ${AWG_CONFIG.interface} dump`, { stdio: 'pipe', timeout: 5000 }).toString();
+        const raw = execFileSync(tool, ['show', AWG_CONFIG.interface, 'dump'], { stdio: 'pipe', timeout: 5000 }).toString();
         const lines = raw.trim().split('\n');
         const peers = lines.slice(1).map(line => {
           const parts = line.split('\t');
@@ -2675,6 +2898,20 @@ async function handleApiRequest(req, res) {
         const credentials = JSON.parse(fs.readFileSync(credentialsFile, 'utf8'));
         const normalizedUsername = username.toLowerCase().trim();
 
+        // SEC-2 (2026-04 audit): defence in depth — even though execFileSync
+        // below avoids shell interpretation, we still reject any username
+        // that does not match the same regex as /api/register so the shell
+        // script never sees a path-traversal / control-char payload.
+        if (!/^[a-z0-9][a-z0-9_-]{2,29}$/.test(normalizedUsername)) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Invalid username (must be 3-30 chars, lowercase alphanumeric with _ or -)" }));
+          return;
+        }
+
+        // SEC-INFRA-GW-AUTH: verify caller owns this username before
+        // mutating any per-user resource on this supernode.
+        if (!requireProvisioningToken(req, res, normalizedUsername, 'vless/register')) return;
+
         let uuid;
         const peersFile = '/etc/vless-reality/peers.json';
         const peers = fs.existsSync(peersFile) ? JSON.parse(fs.readFileSync(peersFile, 'utf8')) : { peers: {} };
@@ -2683,7 +2920,9 @@ async function handleApiRequest(req, res) {
           uuid = peers.peers[normalizedUsername].uuid;
         } else {
           try {
-            uuid = execSync(`/etc/vless-reality/manage-peers.sh add "${normalizedUsername}"`, { stdio: 'pipe', timeout: 10000 }).toString().trim();
+            // SEC-2 fix: execFileSync passes args as an array — no shell, no
+            // injection. The username already passed the regex above.
+            uuid = execFileSync('/etc/vless-reality/manage-peers.sh', ['add', normalizedUsername], { stdio: 'pipe', timeout: 10000 }).toString().trim();
           } catch (err) {
             console.error('[VLESS] Failed to add peer:', err.message);
             res.writeHead(500, { "Content-Type": "application/json" });
@@ -2719,7 +2958,7 @@ async function handleApiRequest(req, res) {
     } catch {}
 
     let processRunning = false;
-    try { execSync('pgrep -x sing-box', { stdio: 'pipe' }); processRunning = true; } catch {}
+    try { execFileSync('pgrep', ['-x', 'sing-box'], { stdio: 'pipe' }); processRunning = true; } catch {}
 
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({

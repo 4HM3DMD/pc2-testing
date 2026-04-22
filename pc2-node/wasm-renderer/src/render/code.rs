@@ -111,10 +111,10 @@ pub fn render_code_raw(plaintext: &[u8], cmd: &RenderCommand) -> (RenderResult, 
     (
         RenderResult {
             success: true,
-            error: None,
             content_type: Some("image/jpeg".to_string()),
             total_pages: Some(1),
             output_size: Some(buf.len()),
+            ..Default::default()
         },
         Some(buf),
     )

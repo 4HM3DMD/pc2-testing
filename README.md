@@ -127,23 +127,93 @@ Download the pre-built image, flash to SD card, and boot.
 | Component | Minimum | Recommended |
 |-----------|---------|-------------|
 | **OS** | Linux, macOS, Windows | Linux (Raspberry Pi OS, Ubuntu) |
-| **Node.js** | 20.x | 23.x |
+| **Node.js** | 20.19+ | 22.15+ LTS |
 | **RAM** | 2GB | 4GB |
 | **Storage** | 10GB | 128GB+ |
 
-### Method 1: Development Setup
+### Local Development Setup (Step-by-Step)
+
+This is the recommended way to run PC2 locally for development.
+
+#### Prerequisites
+
+1. **Git**
+2. **Node.js 22.15+** (recommended via `nvm`)
+3. **npm** (bundled with Node)
+4. **Native build tools** (required by native modules such as `better-sqlite3` and `node-datachannel`)
+   - macOS: install Xcode Command Line Tools (`xcode-select --install`)
+   - Ubuntu/Debian: install `build-essential python3 make g++`
+5. **Optional:** `canvas` system dependencies, if you need PDF/text thumbnails
+
+#### 1) Clone repository
 
 ```bash
-# Clone and install
 git clone https://github.com/Elacity/pc2.net
 cd pc2.net
+```
+
+#### 2) Select Node.js version
+
+```bash
+# If using nvm
+nvm install 22.15.0
+nvm use 22.15.0
+
+# Verify
+node -v
+npm -v
+```
+
+#### 3) Install dependencies (root + pc2-node)
+
+```bash
+# Root dependencies
 npm install
 
-# Build the frontend (if needed)
-cd src/gui && npm run build && cd ../..
+# pc2-node dependencies
+cd pc2-node
+npm install
+cd ..
+```
 
-# Start
-npm start
+#### 4) Build pc2-node
+
+```bash
+cd pc2-node
+npm run build
+cd ..
+```
+
+#### 5) Start PC2 locally
+
+```bash
+npm run start:pc2
+```
+
+Open: `http://localhost:4200`
+
+#### 6) Development run modes
+
+```bash
+# Starts pc2-node (PORT=4200)
+npm run dev:pc2
+
+# Backend TS watch mode (from pc2-node/)
+cd pc2-node
+npm run dev
+```
+
+#### Native module troubleshooting
+
+If startup fails with errors like:
+- `Cannot find module .../node_datachannel.node`
+- `Could not locate the bindings file ... better_sqlite3.node`
+
+rebuild native dependencies using the same Node version you run:
+
+```bash
+cd pc2-node
+npm rebuild node-datachannel better-sqlite3
 ```
 
 ### Method 2: Docker

@@ -119,64 +119,32 @@ export function handleWhoami(req: AuthenticatedRequest, res: Response): void {
     hasAuthHeader: !!authHeader
   });
 
-  // If req.user is not set but we have a token, try to authenticate manually
+  // If req.user is not set but we have a token, try to authenticate manually.
+  //
+  // SEC-3c (2026-04 audit): the previous implementation accepted
+  // `mock-token-*` tokens here and inferred the wallet from path/query/body
+  // substrings, then resolved the matching wallet's session via
+  // db.getSessionByWallet(). An unauthenticated attacker could send any
+  // `mock-token-...` value plus a victim's wallet in the URL and impersonate
+  // the victim. That branch has been removed; whoami now only accepts real
+  // session tokens looked up via db.getSession(). Iframe-app tokens minted
+  // by /open_item are real scope='file' sessions and resolve correctly via
+  // this strict path, returning their bound wallet's identity (with
+  // is_owner forced to false below for scoped sessions).
   if (!req.user && token) {
-    // Check if token is a mock token (development mode)
-    const isMockToken = token.startsWith('mock-token-');
-    let session = db.getSession(token);
-    
-    // If mock token and no session found, try to find session by wallet address from path or get most recent session
-    if (!session && isMockToken) {
-      // Try to extract wallet address from any path in query/body/referer
-      const pathToCheck = (req.query.path as string) || 
-                         (req.query.file as string) ||
-                         (req.body?.path as string) || 
-                         (req.body?.file as string) ||
-                         (req.headers.referer || '');
-      
-      let walletAddress: string | null = null;
-      const walletMatch = pathToCheck.match(/\/0x([a-fA-F0-9]{40})/);
-      if (walletMatch && walletMatch[1]) {
-        walletAddress = '0x' + walletMatch[1];
-      }
-      
-      if (walletAddress) {
-        logger.info('[Whoami] Mock token detected, looking up session by wallet from path', {
-          walletPrefix: walletAddress.substring(0, 10) + '...'
-        });
-        session = db.getSessionByWallet(walletAddress);
-        if (session) {
-          logger.info('[Whoami] Found session for mock token wallet', {
-            walletPrefix: walletAddress.substring(0, 10) + '...',
-            sessionTokenPrefix: session.token.substring(0, 8) + '...'
-          });
-          // Update token to use real session token
-          token = session.token;
-        }
-      } else {
-        // No wallet in path - DO NOT use another user's session as fallback
-        // This would cause security issues and user confusion
-        // Instead, return unauthenticated state so user can log in again
-        logger.warn('[Whoami] Mock token detected, no wallet in path, cannot determine user', {
-          pathToCheck: pathToCheck.substring(0, 100) + (pathToCheck.length > 100 ? '...' : ''),
-          message: 'Cannot use fallback session - would return wrong user. Returning unauthenticated state.'
-        });
-        // Don't set session - let it fall through to unauthenticated response
-      }
-    }
-    
+    const session = db.getSession(token);
     if (session) {
       if (session.expires_at > Date.now()) {
-        // Valid session - create req.user object
         (req as any).user = {
           wallet_address: session.wallet_address,
           smart_account_address: session.smart_account_address,
-          session_token: token
+          session_token: token,
+          session_scope: session.scope ?? null,
         };
         logger.info('[Whoami] Authenticated via token (no middleware)', {
           wallet: session.wallet_address.substring(0, 10) + '...',
           expiresAt: new Date(session.expires_at).toISOString(),
-          wasMockToken: isMockToken
+          scope: session.scope ?? 'none',
         });
       } else {
         logger.warn('[Whoami] Session expired', {
@@ -189,7 +157,6 @@ export function handleWhoami(req: AuthenticatedRequest, res: Response): void {
       logger.warn('[Whoami] Session not found for token', {
         tokenPrefix: token.substring(0, 8) + '...',
         tokenLength: token.length,
-        isMockToken
       });
     }
   }
