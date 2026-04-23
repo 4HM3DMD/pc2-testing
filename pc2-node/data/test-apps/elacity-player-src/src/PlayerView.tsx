@@ -142,7 +142,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: 24,
   },
   errorBox: {
-    background: '#1e1b2e',
+    background: '#1a1a1a',
     border: '1px solid #7f1d1d',
     borderRadius: 12,
     padding: 24,
@@ -157,8 +157,8 @@ const styles: Record<string, React.CSSProperties> = {
   spinner: {
     width: 40,
     height: 40,
-    border: '3px solid #334155',
-    borderTopColor: '#6366f1',
+    border: '3px solid #333333',
+    borderTopColor: '#3b82f6',
     borderRadius: '50%',
     animation: 'spin 1s linear infinite',
   },

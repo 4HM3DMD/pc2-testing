@@ -88,7 +88,7 @@ export const App: React.FC = () => {
             setConnecting(true);
             if (window.ethereum) setProvider(window.ethereum);
           }}
-          style={{ marginTop: 8, padding: '8px 20px', background: '#6366f1', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14 }}
+          style={{ marginTop: 8, padding: '8px 20px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14 }}
         >
           Retry
         </button>
