@@ -2,10 +2,41 @@
 
 **Task ID**: `SEC-2026-04-22-WAVE6-HARDENING`
 **Created**: 2026-04-22
-**Status**: 🟡 **Proposed — awaiting Sash approval. Targets v1.2.1 (≤ T+14 days post-v1.2 release).**
+**Status**: 🟢 **Part 1 SHIPPED (4/8 + 1 deferred) — Part 2 PENDING (4/8)**
 **Priority**: P1 — close before kill-switches flip to strict (Phase C)
-**Findings closed**: A6 (system restart shell), A7 (`curl|sh` install), A8 (TLS verify off), A9 (open path-proxy), A10 (unauth GraphQL/reindex), A11 (DNS-rebind SSRF bypass), A12 (wallet proposal binding), **A16 (`/file` unsigned capability URL)**
+**Findings closed**: A6 (system restart shell), A7 (`curl|sh` install), A8 (TLS verify off), A9 (open path-proxy), A10 (unauth GraphQL/reindex), A11 (DNS-rebind SSRF bypass), A12 (wallet proposal binding), **A16 (`/file` unsigned capability URL)**, A18 (scheduler dangerous-action gate — added 2026-04-22 post-Wave-5 audit)
 **Source**: Internal audit performed 2026-04-22. See [`SEC_2026_04_21_AUDIT_DISPOSITION.md`](../../../docs/handover/SEC_2026_04_21_AUDIT_DISPOSITION.md) §"Internal Audit Findings (2026-04-22)". A16 was discovered during the Wave 5 A4 sweep (2026-04-22) and rolled into this wave per Sash's call (`"for a16 i follow your reccomendation"`).
+
+---
+
+## Status snapshot — 2026-04-22
+
+### ✅ Wave 6 part 1 — SHIPPED (commits on `feature/lit-chipotle-migration`)
+
+| Finding | Commit | One-line |
+|---|---|---|
+| **A12** | `a731206f8` | Wallet proposals bound to originating wallet (approve/reject/execute return 403 on cross-wallet calls). |
+| **A18** | `8b0a71fdd` | `requireOwner` gate on dangerous scheduler actions (`terminal_exec`, `terminal_script`, `git_pull`) at create / update. |
+| **A10** | `d1c2036e4` | `authenticate` + per-IP rate limit (1/5min) on `/api/catalog/reindex`; per-IP rate limit only (30/min) on the two GraphQL forwarders (`authenticate` would break iframe Authorization-forwarding). |
+| **A6**  | `61318414c` | System restart + Jetson commands moved to `execFileSync` argv form; pm2 candidates enumerated in JS via `readdirSync`; no shell, no glob, no env-var interpolation. |
+| docs    | `7a971b6d1` | Hard-fixed table extended for the four above; D0 split into D0a (shipped) + D0b (remaining). |
+
+### ⏳ Wave 6 part 2 — REMAINING (target v1.2.1b)
+
+| Finding | One-line | Why deferred from part 1 |
+|---|---|---|
+| **A8**  | `/api/esc-rpc` TLS pinning — replace `rejectUnauthorized:false` with hostname + public CA (Option 1) or pinned cert + rotation runbook (Option 2). | Needs Sash's input: confirm Contabo's public hostname OR accept the cert-pin runbook. The codebase only has the bare IP `38.242.211.112`. |
+| **A7**  | `install-ollama` SHA-256 pin — download installer to a temp file, verify SHA against a pinned constant, then `execFileSync('sh', [tmpfile])`. | New helper + need to fetch and pin the current installer's SHA. |
+| **A11** | `/api/http` DNS-rebind hardening — undici Dispatcher with `connect.lookup` IP pinning + IPv6 ULA blocklist. | Larger change with new dep (undici Dispatcher); risk of breaking legitimate http-client calls if not tested carefully. |
+| **A16** | `/file?uid` HMAC sign+verify — verifier on `handleFile`, mint-helpers in `other.ts` + `filesystem.ts` + desktop, `fileUrlSigningRequired` kill-switch with 7-day log-only window. | Multi-component change — server verifier + 3 mint sites + a desktop UI helper + kill-switch wiring. Needs its own session. |
+| **A9**  | `esc-nft` prefix allowlist (deferred to **Wave 6.5/7**) | Per Sash's decision: enumerate every desktop UI `esc-nft/:path` call against the live UI for an hour first, then ship the allowlist. |
+
+### 🧪 Verification done so far
+
+- `npx tsc --noEmit` clean across `pc2-node` after each of A6, A10, A12, A18.
+- ESLint clean on all four modified files (`wallet.ts`, `scheduler.ts`, `index.ts`, `system.ts`).
+- Gitleaks pre-commit pass on every commit (5/5 commits on the branch).
+- Wave 6 smoke-test script (`pc2-node/scripts/wave6-smoke.sh`) deferred to land alongside the part-2 fixes — no value running half-coverage smoke.
 
 ---
 

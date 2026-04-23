@@ -4,10 +4,63 @@
 **Original recipient**: `security@elacitylabs.com`
 **Report date**: 2026-04-18
 **Triage handoff**: 2026-04-21 (this codebase)
-**This document compiled**: 2026-04-22 (Researcher report) · 2026-04-22 amended with internal audit findings (A1-A15) · 2026-04-22 amended with Wave 5 implementation + A16 · 2026-04-22 amended with Wave 5.5 (A17 + A19) post-Wave-5 deep-audit findings
-**Status**: 🟢 **All 7 in-scope researcher findings closed in code. Wave 5 (A1-A5) implemented and pushed.** Post-triage internal audit (2026-04-22) surfaced **15 additional findings (A1-A15)** of the same families. Wave 5 sweep surfaced **A16**. The post-Wave-5 deep audit (2026-04-22, second pass) surfaced **A17** (CRITICAL — app-install RCE/exfil) and **A19** (HIGH — multer originalname disk-write traversal); both are **release-blocking** and addressed in Wave 5.5. Wave 5 (A1-A5) is on `feature/lit-chipotle-migration` (commits `63039f6bd`, `38e3706ef`, `250d2c3e8`, `cb99ce5a9`, `82163b092`). Wave 5.5 (A17 + A19) is in progress on the same branch. Wave 6 (A6-A12 + **A16** + **A18**) targets v1.2.1 (≤ T+14 days). Wave 7 (A13-A15 + CORS substring + `.__puter_gui.json` `endsWith` bypass) targets v1.2.2 / v1.3. 4 smart-contract findings owned by Irzhy (in progress). 1 deferred (SEC-11, low traffic).
+**This document compiled**: 2026-04-22 (Researcher report) · 2026-04-22 amended with internal audit findings (A1-A15) · 2026-04-22 amended with Wave 5 implementation + A16 · 2026-04-22 amended with Wave 5.5 (A17 + A19) post-Wave-5 deep-audit findings · 2026-04-22 amended with Wave 6 part 1 (A6 + A10 + A12 + A18) shipped
+**Status**: 🟢 **All 7 in-scope researcher findings closed in code. Wave 5 (A1-A5) + Wave 5.5 (A17, A19) + Wave 6 part 1 (A6, A10, A12, A18) all pushed.** Post-triage internal audit (2026-04-22) surfaced **15 additional findings (A1-A15)** of the same families. Wave 5 sweep surfaced **A16**. The post-Wave-5 deep audit (2026-04-22, second pass) surfaced **A17** (CRITICAL — app-install RCE/exfil), **A19** (HIGH — multer originalname disk-write traversal), and **A18** (MED — scheduler deferred RCE). Wave 5 + 5.5 are release-blocking and pushed. Wave 6 part 1 (A6, A10, A12, A18) is pushed; Wave 6 part 2 (A7, A8, A11, A16) and A9 deferred to v1.2.1b. Wave 7 (A13-A15 + CORS substring + `.__puter_gui.json` `endsWith` bypass) targets v1.2.2 / v1.3. 4 smart-contract findings owned by Irzhy (in progress). 1 deferred (SEC-11, low traffic).
 
-**Current release gate**: ⛔ **Do not tag v1.2.0 until both Wave 5 AND Wave 5.5 commit sets land on `feature/lit-chipotle-migration` and the combined Wave 5 + 5.5 smoke matrix passes.** Wave 5 is pushed (HEAD `82163b092`). Wave 5.5 (A17 + A19) is in code; pending commit + push. See [Phase A0](#phase-a--before-pushing-v12-live-release-blocking).
+**Current release gate**: ⛔ **Do not tag v1.2.0 until both Wave 5 AND Wave 5.5 commit sets land on `feature/lit-chipotle-migration` and the combined Wave 5 + 5.5 smoke matrix passes.** Both pushed (HEAD `7a971b6d1`). Wave 6 part 1 also pushed but is **not** a release gate (v1.2.1 target). See [Phase A0](#phase-a--before-pushing-v12-live-release-blocking).
+
+---
+
+## What's left — single-glance status (2026-04-22 evening)
+
+### 🚦 Release gates for v1.2.0 (must clear before tag)
+
+| # | Item | Status | Owner |
+|---|---|---|---|
+| RG1 | Wave 5 (A1-A5) commits on `feature/lit-chipotle-migration` | ✅ Pushed (`82163b092`) | Done |
+| RG2 | Wave 5.5 (A17 + A19) commits on same branch | ✅ Pushed (`f53118da8`, `ae9bbf0da`, `7fe1c11a5`) | Done |
+| RG3 | Combined Wave 5 + 5.5 smoke matrix (`bash pc2-node/scripts/wave5-smoke.sh`, 26 cases) all green | ⏳ Partial (unauth probes ran clean; auth'd cases need Sash's session token / API keys for the owner + tethered cases) | Sash + dev |
+| RG4 | `npm run test:security` (79 cases, 5 specs) regression-clean | ✅ Last verified 2026-04-22 | Done |
+| RG5 | Smart-contract fixes status (SEC-1/4/5/6) — confirm with Irzhy whether release notes mention "shipped" or "in flight" | ⏳ Pending Irzhy update | Sash + Irzhy |
+| RG6 | `cloud.ela.city` upgrade plan: in-place vs DNS-cut to fresh v1.2 node | ⏳ Pending Sash decision | Sash + ops |
+
+### 🛠 v1.2.1b — Wave 6 part 2 (≤ T+14 days, before kill-switches flip strict)
+
+| # | Item | Blocker |
+|---|---|---|
+| **A8** | `/api/esc-rpc` TLS pinning (replace `rejectUnauthorized:false`) | Sash to confirm Contabo's hostname (Option 1) OR accept the cert-pin runbook (Option 2). |
+| **A7** | `install-ollama` SHA-256 pinning + `execFile` (no shell pipe) | Need to capture and pin the current installer's SHA. |
+| **A11** | `/api/http` SSRF DNS-rebind hardening (undici Dispatcher with `connect.lookup` IP pinning + IPv6 ULA blocklist) | Larger change with new dep — needs careful testing of legitimate http-client calls. |
+| **A16** | `/file?uid` HMAC sign+verify + 3 mint sites (`other.ts`, `filesystem.ts`, desktop helper) + `fileUrlSigningRequired` kill-switch with 7-day log-only window | Multi-component change; needs its own session. |
+| Wave 6 smoke script (`pc2-node/scripts/wave6-smoke.sh`) | Will land alongside the part-2 fixes (no value running half-coverage smoke). |
+
+### 🧹 v1.2.x patches (queued, not blocking)
+
+| # | Item | Status |
+|---|---|---|
+| **A9** | `esc-nft` prefix allowlist (Wave 6.5/7) | Sash to enumerate desktop UI `esc-nft/:path` calls against the live UI for an hour first. |
+| **D1** | Boson DID rotation (`data/identity.json`) | Pending Sash's input on what consumes the DID. |
+| **D2 / SEC-11** | DID JWT verify on `/api/did/callback` (researcher Finding #11) | Queued for v1.2.1 or v1.3. |
+| **D4** | Smart-contract disposition doc (Irzhy's parallel `disposition.md`) | Pending Irzhy. |
+| **D5** | Port secret-scanning gate to other Elacity repos (`lit-keystore-moleculer` first) | Recommended; not blocking. |
+
+### 🪶 v1.2.2 / v1.3 — Wave 7 polish
+
+| # | Item |
+|---|---|
+| **A13** | CORS proper suffix matching — replace `origin.includes('.ela.city')` with parsed-URL `endsWith` so `https://x.ela.city.evil.com` is rejected. |
+| **A14** | Session-token redaction in `auditMiddleware` + `Token extracted` log line. |
+| **A15** | Capsule-signing v2 cutover doc (warn → block-by-default). Tracked separately under `V2-APP-CAPSULE-SIGNING`. |
+| `.__puter_gui.json` bypass | Tighten `authenticate`'s `endsWith('.__puter_gui.json')` to exact post-canonicalization match. |
+
+### 🔁 Kill-switch flips (post-cutover, scheduled)
+
+| # | When | Switch | Pre-condition |
+|---|---|---|---|
+| **C1** | T+7 days | `GW_AUTH_REQUIRED=true` (supernode) | ≥99% of inbound calls in last 24h logged `provisioning_token=present` |
+| **C2** | T+14 days | `siweRequired=true` (PC2 node) | ≥99% of `/auth/particle` calls in last 24h logged `siwe_verified=true` |
+| **C3** | T+30 days | Unpin legacy Lit Action CIDs from IPFS | — |
+| **C4** | After A16 ships, T+7 days | `fileUrlSigningRequired=true` | Log-only window confirms zero legitimate `/file` calls without signed URLs |
 
 ---
 
