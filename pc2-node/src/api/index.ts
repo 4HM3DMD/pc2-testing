@@ -1196,12 +1196,18 @@ export function setupAPI (app: Express): void {
     if ( ! fs.existsSync(uploadTmpDir) ) fs.mkdirSync(uploadTmpDir, { recursive: true });
     logger.info(`[API] Upload temp directory: ${uploadTmpDir}`);
 
+    // SEC-A19 (2026-04 Wave 5.5): the on-disk filename MUST NOT include
+    // `file.originalname` directly. `originalname` is attacker-controlled
+    // and `path.join(uploadDir, '${ts}-${rand}-../../../etc/cron.d/evil')`
+    // normalizes to `/etc/cron.d/evil`. Use a synthetic safe filename for
+    // disk and rely on `req.file.originalname` (preserved by multer) for
+    // any handler that needs the client-supplied name.
     const upload = multer({
         storage: multer.diskStorage({
             destination: uploadTmpDir,
-            filename: (_req, file, cb) => {
+            filename: (_req, _file, cb) => {
                 const unique = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-                cb(null, `${unique}-${file.originalname}`);
+                cb(null, `${unique}.upload`);
             },
         }),
         limits: {
@@ -1213,14 +1219,28 @@ export function setupAPI (app: Express): void {
     const restoreUploadDir = path.join(uploadTmpDir, 'restore');
     if ( ! fs.existsSync(restoreUploadDir) ) fs.mkdirSync(restoreUploadDir, { recursive: true });
 
+    // SEC-A19 (2026-04 Wave 5.5): same as above. The route-level
+    // `isValidBackupFilename` check (Wave 5) gates *use* of the backup;
+    // the pre-write `fileFilter` here gates *write* of the backup. Both
+    // layers are required because multer writes to disk before the route
+    // handler sees the request.
+    const VALID_BACKUP_NAME = /^[A-Za-z0-9_.-]+\.tar\.gz$/;
     const restoreUpload = multer({
         storage: multer.diskStorage({
             destination: restoreUploadDir,
-            filename: (_req, file, cb) => {
+            filename: (_req, _file, cb) => {
                 const unique = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-                cb(null, `${unique}-${file.originalname}`);
+                cb(null, `${unique}.tar.gz`);
             },
         }),
+        fileFilter: (_req, file, cb) => {
+            const baseName = path.basename(file.originalname || '');
+            if (!VALID_BACKUP_NAME.test(baseName)) {
+                cb(new Error('Invalid backup filename. Use only letters, numbers, dot, underscore, hyphen; must end in .tar.gz.'));
+                return;
+            }
+            cb(null, true);
+        },
         limits: {
             fileSize: 10 * 1024 * 1024 * 1024, // 10GB max file size for backups
         },

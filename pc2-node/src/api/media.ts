@@ -1451,15 +1451,20 @@ const uploadTmpDir = join(
   'media-encode',
 );
 
+// SEC-A19 (2026-04 Wave 5.5): the on-disk filename MUST NOT include
+// `file.originalname`. A crafted originalname like
+// `../../../etc/cron.d/evil` would `path.join` outside `uploadTmpDir`.
+// `req.file.originalname` is still preserved by multer for any handler that
+// wants to display the client-supplied name.
 const mediaUpload = multer({
   storage: multer.diskStorage({
     destination: (_req, _file, cb) => {
       if (!existsSync(uploadTmpDir)) fsMkdirSync(uploadTmpDir, { recursive: true });
       cb(null, uploadTmpDir);
     },
-    filename: (_req, file, cb) => {
+    filename: (_req, _file, cb) => {
       const unique = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      cb(null, `${unique}-${file.originalname}`);
+      cb(null, `${unique}.upload`);
     },
   }),
   limits: { fileSize: 4 * 1024 * 1024 * 1024 },
