@@ -21,6 +21,7 @@ import type { AgentConfig } from '../services/gateway/types.js';
 import * as pdfjsLib from 'pdfjs-dist';
 import fs from 'fs/promises';
 import path from 'path';
+import { mintFileUrlSignature, buildExpires } from '../utils/fileUrlSigner.js';
 
 // Hardcoded base64 icons - must match apps.ts and info.ts for consistency
 const ELACITY_PLAYER_ICON = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIHZpZXdCb3g9IjAgMCA0OCA0OCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZGVmcz48bGluZWFyR3JhZGllbnQgaWQ9InBnIiB4MT0iMCIgeTE9IjAiIHgyPSIxIiB5Mj0iMSI+PHN0b3Agb2Zmc2V0PSIwJSIgc3RvcC1jb2xvcj0iIzJkZDRiZiIvPjxzdG9wIG9mZnNldD0iMTAwJSIgc3RvcC1jb2xvcj0iIzBkOTQ4OCIvPjwvbGluZWFyR3JhZGllbnQ+PGNsaXBQYXRoIGlkPSJwciI+PHJlY3Qgd2lkdGg9IjQ4IiBoZWlnaHQ9IjQ4IiByeD0iMTAiLz48L2NsaXBQYXRoPjwvZGVmcz48ZyBjbGlwLXBhdGg9InVybCgjcHIpIj48cmVjdCB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIGZpbGw9InVybCgjcGcpIi8+PHBvbHlnb24gcG9pbnRzPSIxOSwxMiAzNiwyNCAxOSwzNiIgZmlsbD0id2hpdGUiIG9wYWNpdHk9IjAuOTUiLz48L2c+PC9zdmc+';
@@ -110,10 +111,15 @@ export function handleSign(req: AuthenticatedRequest, res: Response): void {
       // Use effectiveFilePath for the rest of the logic
       filePath = effectiveFilePath;
 
-      // Generate signature (simplified - in production, use proper signing)
-      const expires = Math.ceil(Date.now() / 1000) + 999999999; // Very long expiry
-      const action = item.action || 'read';
-      const signature = `sig-${filePath}-${action}-${expires}`;
+      // Mint a signed capability URL (A16). 24h TTL — long enough for
+      // iframe apps to keep working through a normal session, short
+      // enough to bound replay if the URL leaks. The action field is
+      // not part of the signed payload (the verifier only enforces
+      // uid+expires); mint sites that need stricter scoping can move
+      // the action into uid in a follow-up.
+      const expires = buildExpires();
+      const fileUid = `uuid-${filePath.replace(/\//g, '-')}`;
+      const signature = mintFileUrlSignature(fileUid, expires);
 
       // Determine base URL
       const origin = req.headers.origin || req.headers.host;
@@ -121,8 +127,6 @@ export function handleSign(req: AuthenticatedRequest, res: Response): void {
       const baseUrl = isHttps 
         ? `https://${origin.replace(/^https?:\/\//, '').split('/')[0]}`
         : `http://${req.headers.host || 'localhost:4200'}`;
-
-      const fileUid = `uuid-${filePath.replace(/\//g, '-')}`;
 
       signatures.push({
         uid: fileUid,
@@ -1443,11 +1447,11 @@ export async function handleOpenItem(req: AuthenticatedRequest, res: Response): 
     appIndexUrl = `${baseUrl}/apps/editor/index.html`;
   }
 
-  // Generate file signature (matching Puter's sign_file format)
+  // Generate file signature (A16: HMAC-SHA256 with server-only key,
+  // 24h TTL — short enough to bound replay if the URL leaks).
   const actualFileUid = fileUid || `uuid-${metadata.path.replace(/\//g, '-')}`;
-  const expires = Math.ceil(Date.now() / 1000) + 9999999999999; // Far future
-  // Simple signature (in real Puter, this uses SHA256 with secret)
-  const signature = `sig-${actualFileUid}-${expires}`;
+  const expires = buildExpires();
+  const signature = mintFileUrlSignature(actualFileUid, expires);
   
   // Ensure normalizedPath starts with / and baseUrl doesn't end with /
   const cleanBaseUrl = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;

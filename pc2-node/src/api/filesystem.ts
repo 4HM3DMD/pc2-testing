@@ -14,6 +14,7 @@ import { FileMetadata } from '../storage/database.js';
 import { Server as SocketIOServer } from 'socket.io';
 import { logger, createLogger } from '../utils/logger.js';
 import { getBaseUrl } from '../utils/urlUtils.js';
+import { mintFileUrlSignature, buildExpires } from '../utils/fileUrlSigner.js';
 const log = createLogger('api-filesystem');
 
 /**
@@ -2157,8 +2158,9 @@ export async function handleCopy(req: AuthenticatedRequest, res: Response): Prom
         const baseUrl = isHttps 
           ? `https://${req.get('host')}`
           : `http://${req.get('host')}`;
-        const expires = Math.ceil(Date.now() / 1000) + 999999999; // Long expiry
-        const signature = `sig-${fileUid}-${expires}`;
+        // A16: real HMAC-signed URL (24h TTL).
+        const expires = buildExpires();
+        const signature = mintFileUrlSignature(fileUid, expires);
         thumbnail = `${baseUrl}/file?uid=${encodeURIComponent(fileUid)}&expires=${expires}&signature=${encodeURIComponent(signature)}`;
         logger.info('[Copy] Generated thumbnail URL', { thumbnail, fileUid, mimeType });
       }
