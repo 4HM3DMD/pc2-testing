@@ -6,7 +6,7 @@
  */
 
 import { existsSync, mkdirSync, writeFileSync, readFileSync, rmSync, readdirSync, statSync } from 'fs';
-import { join, resolve, basename, normalize } from 'path';
+import { join, resolve, basename, normalize, sep as pathSep } from 'path';
 import { createHash } from 'crypto';
 import nacl from 'tweetnacl';
 import { createLogger } from '../utils/logger.js';
@@ -126,19 +126,36 @@ export class AppInstallService {
   private db: DatabaseManager;
   private ipfs: IPFSStorage | null;
   private appsDir: string;
+  /**
+   * SEC-A17 (2026-04 Wave 5.5): the only directory `installFromLocal` is
+   * allowed to source from. Sideloading an app from anywhere else (e.g.
+   * `data/wallets/`) would let an attacker exfiltrate the owner mnemonic
+   * via the `/installed-apps/*` static route. The route layer also gates
+   * `install-local` with `requireOwner`; this is defense-in-depth so any
+   * future internal caller is also bound to the allowlist.
+   */
+  private devAppsDir: string;
 
   constructor(db: DatabaseManager, ipfs: IPFSStorage | null, dataDir: string) {
     this.db = db;
     this.ipfs = ipfs;
     this.appsDir = resolve(dataDir, 'installed-apps');
+    this.devAppsDir = resolve(dataDir, 'dev-apps');
 
     if (!existsSync(this.appsDir)) {
       mkdirSync(this.appsDir, { recursive: true });
+    }
+    if (!existsSync(this.devAppsDir)) {
+      mkdirSync(this.devAppsDir, { recursive: true });
     }
   }
 
   getAppsDir(): string {
     return this.appsDir;
+  }
+
+  getDevAppsDir(): string {
+    return this.devAppsDir;
   }
 
   /**
@@ -272,6 +289,12 @@ export class AppInstallService {
   /**
    * Install from a local directory (for development / sideloading).
    * Skips IPFS fetch — the files must already exist on disk.
+   *
+   * SEC-A17 (2026-04 Wave 5.5): `localDir` is constrained to live inside
+   * `data/dev-apps/`. Without this, an attacker who reaches this code path
+   * (e.g. via a future internal caller that bypasses the route-level
+   * `requireOwner`) could point `localDir` at `data/wallets/` and have the
+   * mnemonic copied into the static-served `installed-apps/<name>/` dir.
    */
   installFromLocal(manifest: AppManifest, localDir: string): InstalledApp {
     this.validateManifest(manifest);
@@ -279,6 +302,28 @@ export class AppInstallService {
     const appName = manifest.name;
     const appDir = join(this.appsDir, appName);
     const resolvedLocal = resolve(localDir);
+
+    // SEC-A17: strict allowlist. resolve() already collapses '..' segments,
+    // so a path like `data/dev-apps/../wallets` resolves OUTSIDE devAppsDir
+    // and is rejected here.
+    const devRootWithSep = this.devAppsDir.endsWith(pathSep)
+      ? this.devAppsDir
+      : this.devAppsDir + pathSep;
+    if (resolvedLocal !== this.devAppsDir && !resolvedLocal.startsWith(devRootWithSep)) {
+      throw new Error(
+        `localDir must live inside ${this.devAppsDir} (got: ${resolvedLocal})`,
+      );
+    }
+
+    // SEC-A17: prevent self-targeting (copy from installed-apps into
+    // installed-apps), which would also let a crafted path read out
+    // another app's contents.
+    const appsRootWithSep = this.appsDir.endsWith(pathSep)
+      ? this.appsDir
+      : this.appsDir + pathSep;
+    if (resolvedLocal === this.appsDir || resolvedLocal.startsWith(appsRootWithSep)) {
+      throw new Error('localDir must not point inside installed-apps/');
+    }
 
     if (!existsSync(resolvedLocal)) {
       throw new Error(`Local directory does not exist: ${localDir}`);

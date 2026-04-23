@@ -2,11 +2,17 @@
  * Installed Apps API
  *
  * CRUD endpoints for the dApp Store's app install system.
- * All endpoints require authentication.
+ *
+ * SEC-A17 (2026-04 Wave 5.5): owner-mutating routes are gated by
+ * `requireOwner`. Without this, any authenticated tethered wallet could
+ * call `install-local` with `localDir` pointing at the owner's mnemonic
+ * store and then exfiltrate it via the `/installed-apps/*` static route.
+ * Read-only listing routes remain `authenticate`-only so iframe apps and
+ * the dApp Store UI continue to work for non-owner sessions.
  */
 
 import { Router, Response } from 'express';
-import { AuthenticatedRequest } from './middleware.js';
+import { AuthenticatedRequest, requireOwner } from './middleware.js';
 import { AppInstallService, AppManifest } from '../services/AppInstallService.js';
 import { createLogger } from '../utils/logger.js';
 
@@ -52,8 +58,12 @@ export function createInstalledAppsRouter(appInstallService: AppInstallService):
    * Install a new app from IPFS CID + manifest.
    *
    * Body: { manifest: AppManifest, cid: string }
+   *
+   * SEC-A17: requireOwner — installing an app writes to disk under
+   * `data/installed-apps/<name>/` and is served by the static route.
+   * Tethered wallets must not be able to plant arbitrary content there.
    */
-  router.post('/install', async (req: AuthenticatedRequest, res: Response) => {
+  router.post('/install', requireOwner, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { manifest, cid } = req.body as { manifest: AppManifest; cid: string };
 
@@ -77,8 +87,14 @@ export function createInstalledAppsRouter(appInstallService: AppInstallService):
    * Install from a local directory (dev / sideloading).
    *
    * Body: { manifest: AppManifest, localDir: string }
+   *
+   * SEC-A17: requireOwner — `installFromLocal` copies the contents of
+   * `localDir` into `data/installed-apps/<name>/`. Without owner gating
+   * (and the `data/dev-apps/` allowlist enforced in AppInstallService),
+   * any authenticated wallet could exfiltrate the owner's mnemonic by
+   * pointing `localDir` at `data/wallets/`.
    */
-  router.post('/install-local', (req: AuthenticatedRequest, res: Response) => {
+  router.post('/install-local', requireOwner, (req: AuthenticatedRequest, res: Response) => {
     try {
       const { manifest, localDir } = req.body as { manifest: AppManifest; localDir: string };
 
@@ -101,8 +117,10 @@ export function createInstalledAppsRouter(appInstallService: AppInstallService):
    * Update an installed app to a new CID.
    *
    * Body: { manifest: AppManifest, cid: string }
+   *
+   * SEC-A17: requireOwner — same reasoning as `/install`.
    */
-  router.post('/update', async (req: AuthenticatedRequest, res: Response) => {
+  router.post('/update', requireOwner, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { manifest, cid } = req.body as { manifest: AppManifest; cid: string };
 
@@ -123,8 +141,11 @@ export function createInstalledAppsRouter(appInstallService: AppInstallService):
   /**
    * DELETE /api/installed-apps/:name
    * Uninstall an app.
+   *
+   * SEC-A17: requireOwner — uninstall removes files from disk and the DB
+   * row. Tethered wallets must not be able to take an app offline.
    */
-  router.delete('/:name', (req: AuthenticatedRequest, res: Response) => {
+  router.delete('/:name', requireOwner, (req: AuthenticatedRequest, res: Response) => {
     try {
       const removed = appInstallService.uninstall(req.params.name);
       if (!removed) {
