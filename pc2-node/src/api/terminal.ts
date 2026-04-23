@@ -17,7 +17,7 @@ import { Request, Response } from 'express';
 import { AuthenticatedRequest } from './middleware.js';
 import { getTerminalService } from '../services/terminal/TerminalService.js';
 import { logger } from '../utils/logger.js';
-import { exec, spawn as nodeSpawn, ChildProcess } from 'child_process';
+import { exec, execFile, spawn as nodeSpawn, ChildProcess } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -291,6 +291,35 @@ export async function handleExecCommand(req: AuthenticatedRequest, res: Response
     return;
   }
 
+  // Wave 5 (A1): legacy shell mode is disabled. Callers must pass the binary
+  // name in `command` and arguments in `args`. This eliminates the shell
+  // metacharacter injection surface that previously made this endpoint RCE.
+  if (body.shell === true) {
+    res.status(400).json({
+      error: 'shell mode disabled — pass argv via the args field (e.g. command: "ls", args: ["-la"])',
+    });
+    return;
+  }
+
+  // `command` must be a single executable name or absolute path. Reject any
+  // whitespace, shell metacharacters, or quotes — these belong in `args`.
+  if (/[\s;&|`$<>\n\r"']/.test(body.command)) {
+    res.status(400).json({
+      error: 'command must be a single executable — pass arguments via the args field',
+    });
+    return;
+  }
+
+  // Validate args (must be a string[] when present).
+  const argv: string[] = [];
+  if (body.args !== undefined) {
+    if (!Array.isArray(body.args) || body.args.some(a => typeof a !== 'string')) {
+      res.status(400).json({ error: 'args must be an array of strings' });
+      return;
+    }
+    argv.push(...body.args);
+  }
+
   // Set timeout (default 30s, max 5 minutes)
   const timeout = Math.min(body.timeout || 30000, 300000);
   
@@ -325,21 +354,17 @@ export async function handleExecCommand(req: AuthenticatedRequest, res: Response
   logger.info(`[Terminal Exec] User ${req.user.wallet_address.substring(0, 10)} executing: ${body.command.substring(0, 100)}${body.command.length > 100 ? '...' : ''}`);
 
   try {
-    // Build full command with args
-    let fullCommand = body.command;
-    if (body.args && body.args.length > 0) {
-      // Escape args for shell
-      const escapedArgs = body.args.map(arg => `"${arg.replace(/"/g, '\\"')}"`);
-      fullCommand = `${body.command} ${escapedArgs.join(' ')}`;
-    }
-
     const result = await new Promise<ExecResponse>((resolve) => {
-      exec(fullCommand, {
+      // Wave 5 (A1): execFile + shell:false guarantees argv form — the kernel
+      // executes `body.command` directly with `argv` as separate parameters,
+      // bypassing the shell entirely. No metacharacter parsing, no injection.
+      execFile(body.command, argv, {
         cwd,
         env,
         timeout,
+        encoding: 'utf8',
         maxBuffer: 10 * 1024 * 1024, // 10MB max output
-        shell: body.shell !== false ? (os.platform() === 'win32' ? 'cmd.exe' : '/bin/bash') : undefined,
+        shell: false,
       }, (error, stdout, stderr) => {
         const duration = Date.now() - startTime;
         
@@ -348,7 +373,10 @@ export async function handleExecCommand(req: AuthenticatedRequest, res: Response
           const killed = error.killed || false;
           resolve({
             success: false,
-            exitCode: error.code || null,
+            // execFile's error.code is `string | number | null` (e.g. 'ENOENT'
+            // when the binary doesn't exist). Only numeric exit codes are
+            // exposed via exitCode; string system errors surface via `error`.
+            exitCode: typeof error.code === 'number' ? error.code : null,
             stdout: stdout?.substring(0, 5 * 1024 * 1024) || '',
             stderr: stderr?.substring(0, 1 * 1024 * 1024) || '',
             duration,
@@ -428,8 +456,10 @@ export async function handleExecScript(req: AuthenticatedRequest, res: Response)
     return;
   }
 
-  // Validate interpreter
-  const allowedInterpreters = ['/bin/bash', '/bin/sh', 'python3', 'python', 'node', 'ruby', 'perl'];
+  // Wave 5 (A1): tightened interpreter allowlist. Drops python (legacy 2.x),
+  // ruby, and perl — none are required by current PC2 features. Re-add via a
+  // future task if a documented use case appears.
+  const allowedInterpreters = ['/bin/bash', '/bin/sh', 'python3', 'node'];
   const interpreter = body.interpreter || '/bin/bash';
   if (!allowedInterpreters.includes(interpreter)) {
     res.status(400).json({ error: `Invalid interpreter. Allowed: ${allowedInterpreters.join(', ')}` });

@@ -51,20 +51,29 @@ function checkRestoreRateLimit (ip: string): boolean {
 const restoreUploadDir = join(os.tmpdir(), 'pc2-restore-uploads');
 if ( ! existsSync(restoreUploadDir) ) mkdirSync(restoreUploadDir, { recursive: true });
 
+// SEC-A19 (2026-04 Wave 5.5): the multer disk filename MUST NOT include
+// `file.originalname` directly. With the previous `${unique}-${originalname}`
+// pattern, an originalname like `../../../etc/cron.d/evil` resolves to a path
+// outside the upload directory because `path.join` collapses `..` segments.
+// We use a synthetic `${unique}.tar.gz` for disk and tighten the fileFilter
+// from `endsWith('.tar.gz')` to a strict whitelist regex so a path-traversal
+// originalname is rejected before any disk write happens.
+const VALID_RESTORE_BACKUP_NAME = /^[A-Za-z0-9_.-]+\.tar\.gz$/;
 const restoreUpload = multer({
     storage: multer.diskStorage({
         destination: restoreUploadDir,
-        filename: (_req, file, cb) => {
+        filename: (_req, _file, cb) => {
             const unique = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-            cb(null, `${unique}-${file.originalname}`);
+            cb(null, `${unique}.tar.gz`);
         },
     }),
     limits: { fileSize: 10 * 1024 * 1024 * 1024 },
     fileFilter: (_req, file, cb) => {
-        if ( file.originalname.endsWith('.tar.gz') ) {
+        const baseName = (file.originalname || '').split(/[\\/]/).pop() || '';
+        if ( VALID_RESTORE_BACKUP_NAME.test(baseName) ) {
             cb(null, true);
         } else {
-            cb(new Error('Only .tar.gz backup files are accepted'));
+            cb(new Error('Invalid backup filename. Use only letters, numbers, dot, underscore, hyphen; must end in .tar.gz.'));
         }
     },
 });

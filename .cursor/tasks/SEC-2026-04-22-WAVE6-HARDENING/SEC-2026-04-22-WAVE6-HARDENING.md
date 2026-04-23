@@ -1,0 +1,413 @@
+# Wave 6 — Post-Cutover Hardening (SSRF / TLS / Auth-Binding)
+
+**Task ID**: `SEC-2026-04-22-WAVE6-HARDENING`
+**Created**: 2026-04-22
+**Status**: 🟡 **Proposed — awaiting Sash approval. Targets v1.2.1 (≤ T+14 days post-v1.2 release).**
+**Priority**: P1 — close before kill-switches flip to strict (Phase C)
+**Findings closed**: A6 (system restart shell), A7 (`curl|sh` install), A8 (TLS verify off), A9 (open path-proxy), A10 (unauth GraphQL/reindex), A11 (DNS-rebind SSRF bypass), A12 (wallet proposal binding), **A16 (`/file` unsigned capability URL)**
+**Source**: Internal audit performed 2026-04-22. See [`SEC_2026_04_21_AUDIT_DISPOSITION.md`](../../../docs/handover/SEC_2026_04_21_AUDIT_DISPOSITION.md) §"Internal Audit Findings (2026-04-22)". A16 was discovered during the Wave 5 A4 sweep (2026-04-22) and rolled into this wave per Sash's call (`"for a16 i follow your reccomendation"`).
+
+---
+
+## TL;DR for a 9th grader
+
+These eight items are not RCE — none of them lets an attacker run code on your machine. But each one weakens defence in depth, and a few of them (A8, A11, A12, A16) do real damage if they land in the wrong situation:
+
+1. **A6 — system restart**: the restart command runs `bash` with environment-variable expansion. Today the env vars are server-controlled, so it's safe. But if anything in the future routes user input into `process.env`, it becomes RCE. We're closing it now while it's cheap.
+2. **A7 — install-ollama**: `curl https://ollama.com/install.sh | sh`. If ollama.com or its CDN gets hijacked, our nodes execute whatever script the attacker hands back. Pin a SHA-256 hash so a swapped script gets rejected.
+3. **A8 — esc-rpc TLS**: we proxy a hard-coded IP and we *intentionally disabled certificate verification* (probably because the IP didn't match the cert). That's a man-in-the-middle hole — anyone on the path between us and Contabo can rewrite the JSON-RPC response and feed our node fake on-chain data.
+4. **A9 — esc-nft proxy**: we forward any path the caller asks for to `https://ela.city/api/<their path>`. No allowlist. So `/api/esc-nft/admin/secret` becomes `https://ela.city/api/admin/secret`. Lock to the few endpoints we actually use.
+5. **A10 — unauth GraphQL + reindex**: anyone on the network can spam the catalog reindexer or fire heavy GraphQL queries. Add auth + per-IP rate limit.
+6. **A11 — SSRF DNS-rebind**: our HTTP-client allowlist checks the hostname's IP at *check time*. If the attacker controls the DNS, they return a public IP at check time and `127.0.0.1` at fetch time. We need to pin the IP we resolved, then connect to *that* IP.
+7. **A12 — wallet proposals**: any tethered wallet can approve another wallet's pending transaction proposals in the database. The actual on-chain `eth_signTypedData_v4` is still gated by the wallet that holds the key, so this can't drain funds — but it can falsify our records and confuse the owner.
+8. **A16 — `/file` unsigned URL**: the `GET /file?uid=…` endpoint advertises itself in code comments as a "signed URL" for sharing files with iframe apps and previews — but the handler performs **no signature verification at all**. It just parses the wallet address out of the `uid` and returns the matching file. Today that means anyone who can guess or stumble on a `uid` (which contains the file's filename) can fetch the file, no auth needed. Fix: actually verify a signature embedded in `uid` against the owner's session key, with TTL.
+
+These ship as v1.2.1, ideally within 14 days of v1.2. They are **not release-blockers** because (a) none of them are RCE, (b) most can't be abused without already having a session, (c) A16's exposure is bounded by filename unpredictability (the attacker has to guess `0xWALLET-Folder-filename.png`), and (d) the kill-switches in Wave 2/3 don't flip until T+7/T+14 anyway, so v1.2 is no worse than v1.1 on these surfaces during the window.
+
+---
+
+## Why this wave exists
+
+After Wave 5 closed the RCE/cross-user holes, this is the next concentric layer: assume the attacker already cleared `authenticate` (i.e. has *some* valid session, maybe via the legitimate Particle flow on their own wallet) and is now reaching for ways to:
+
+- Get the node to talk to a server they control (SSRF — A8, A9, A11)
+- Trick the node into trusting a swapped supply-chain artifact (A7)
+- Spam the node into resource exhaustion (A10)
+- Falsify records that the owner relies on for decisions (A12)
+- Find a future foothold by leaving brittle shell patterns lying around (A6)
+
+These are all "second-order" risks. None of them can take over the node alone, but each one would amplify a future bug or insider misuse.
+
+---
+
+## What this wave does
+
+### Fix A6 — `/api/system/restart` shell-mode polish
+
+**File**: `pc2-node/src/api/system.ts`
+
+**Today**: Lines 112-119 run `execSync(cmd, { shell: '/bin/bash', stdio: 'ignore' })` for a list of *server-derived* restart commands. The strings include `${process.env.HOME}/...` for glob expansion. As written, `process.env.HOME` is set by the OS at boot and not influenced by any HTTP input. Safe today.
+
+**Why fix it**: Anyone reading the file later might assume "shell + env-var expansion" is a normal pattern and copy it into a handler that does take user input. Closing it removes the temptation.
+
+**Fix**:
+1. Replace the array of shell-string commands with an array of `[binary, ...args]`:
+   ```ts
+   const restartCommands = [
+     ['systemctl', '--user', 'restart', 'pc2-node'],
+     ['pm2',       'restart', 'pc2-node'],
+     ['launchctl', 'kickstart', '-k', `gui/${process.getuid?.() ?? ''}/com.elacity.pc2`],
+     ['killall',   '-HUP', 'pc2-node'],   // last resort
+   ];
+   ```
+2. Switch to `execFile(cmd[0], cmd.slice(1), { stdio: 'ignore', timeout: 30000 })`.
+3. The `${process.env.HOME}` glob was used by one of the dev-mode commands; resolve it in JS with `path.join(os.homedir(), '...')` instead and pass the resolved path as an argv item. No glob expansion needed — restart targets a single known file.
+
+**UX impact**: Zero. Same OSes, same restart behaviour, same fallback chain.
+
+### Fix A7 — `/api/ai/install-ollama` SHA-256 pin
+
+**File**: `pc2-node/src/api/ai.ts`
+
+**Today**: Line ~987 spawns `sh -c 'curl -fsSL https://ollama.com/install.sh | sh'`. This is the standard ollama.com instruction, but it's trust-on-first-use against ollama.com + their CDN.
+
+**Fix** (two-step):
+1. Download the script first into a temp file via `https.get` to a *fixed path* (no shell):
+   ```ts
+   const tmpScript = path.join(os.tmpdir(), `ollama-install-${Date.now()}.sh`);
+   await downloadToFile('https://ollama.com/install.sh', tmpScript);
+   ```
+2. Verify SHA-256 against a constant pinned in the source. If it mismatches, **abort and surface the error**:
+   ```ts
+   const PINNED_SHA256 = '<pin from manual verification on release day>';
+   const actual = await sha256OfFile(tmpScript);
+   if (actual !== PINNED_SHA256) {
+     return res.status(503).json({
+       error: 'Ollama install script SHA mismatch. Refusing to execute.',
+       expected: PINNED_SHA256,
+       actual,
+     });
+   }
+   ```
+3. Then `execFile('sh', [tmpScript], opts)`.
+4. Owner-only: this endpoint already needs `requireOwner` if it doesn't have it; verify and add if missing.
+
+**Pin update process**: when ollama upstream updates the script (rare), the v1.2.x patch releaser:
+1. Inspects the diff manually (`curl -O ollama.com/install.sh; diff old new`)
+2. If safe, updates `PINNED_SHA256` in source
+3. Bumps PC2 patch version
+4. Releases
+
+**UX impact**: First-time installs work the same. If ollama.com gets hijacked, owners see a clear error instead of a silent compromise.
+
+### Fix A8 — `/api/esc-rpc` TLS pinning
+
+**File**: `pc2-node/src/api/index.ts`
+
+**Today**: Lines 1049-1052 instantiate an HTTPS agent with `rejectUnauthorized: false` and proxy JSON-RPC to a hard-coded Contabo IP. The reason for `rejectUnauthorized: false` is presumably that the IP doesn't match the cert (CN binding), but the cure is worse than the disease.
+
+**Fix** (pick whichever Sash prefers — both close the hole):
+- **Option 1 — Hostname-then-pin-IP**: change the upstream from `https://<ip>/...` to `https://api.elastos.io/...` (or whatever public hostname Contabo answers on). Drop `rejectUnauthorized: false`. Use the public CA chain.
+- **Option 2 — Cert pinning**: keep the IP but pin the cert. Use `tls.connect({ host, port, ca: [PINNED_PEM], checkServerIdentity: () => undefined })`. Pin the *exact certificate* in source; rotate when Contabo renews.
+
+Option 1 is preferred (less ongoing maintenance). I'll write Option 1 unless Sash specifies otherwise.
+
+**Plus**: rate-limit `/api/esc-rpc` per IP to 60 req/min. Today it has no limit, so it can be used to amplify outbound traffic to Contabo from a compromised tethered wallet.
+
+**UX impact**: None for the owner. The on-chain query path now has authenticated TLS — chain data we trust is actually the chain.
+
+### Fix A9 — `/api/esc-nft/:path(*)` allowlist
+
+**File**: `pc2-node/src/api/index.ts`
+
+**Today**: Lines 1082-1098 forward any subpath under `/api/esc-nft/` to `https://ela.city/api/<that path>`. Open proxy.
+
+**Fix**:
+1. Allowlist the specific endpoints the desktop UI uses:
+   ```ts
+   const ESC_NFT_ALLOWED = new Set([
+     'tokens/byOwner',
+     'collections/byOwner',
+     'metadata/refresh',
+     // …add the actual list after grepping the desktop UI
+   ]);
+   ```
+2. Reject anything not on the list with `404`.
+3. Add an integration test that exercises every entry in the allowlist (so we know what's actually used and removing one breaks visibly).
+4. Add `requireOwner` if the proxy is for owner-only data; otherwise leave unauthenticated but rate-limit.
+
+**UX impact**: Zero — every legitimate UI call survives. Attacker probes for `/api/esc-nft/admin/...` get clean 404.
+
+### Fix A10 — Unauth catalog reindex + GraphQL proxies
+
+**File**: `pc2-node/src/api/index.ts`
+
+**Today**: Three endpoints have no auth:
+- `POST /api/catalog/reindex` (line ~470) — kicks off a heavy DB scan
+- `POST /api/elacity/graphql` (line ~1009) — proxies arbitrary GraphQL queries to ela.city
+- `POST /api/esc-nft/graphql` (line ~1029) — proxies to esc-nft
+
+Any unauthenticated caller on the LAN (or via mDNS hostname guess on a roaming Mac) can spam these.
+
+**Fix**:
+1. Add `authenticate` to all three. None of them serves a public-facing purpose — they're all called from the desktop UI or the iframe apps.
+2. Add per-IP rate limit: 30 req/min for `/api/elacity/graphql`, 30 req/min for `/api/esc-nft/graphql`, **1 req/5min** for `/api/catalog/reindex` (the indexer is heavy — re-indexing more than once per 5min is a DoS even by an honest user).
+3. Use the existing `expressRateLimit` middleware; no new dependency.
+
+**UX impact**:
+- Tethered/owner: nothing changes — they have a session, they pass `authenticate`, the rate limits are far above normal use.
+- An iframe app that hits these directly without a session token: gets 401 and must use the scoped-session token flow (which it should already be using post-Wave 1).
+
+### Fix A11 — `/api/http` SSRF DNS-rebind protection
+
+**File**: `pc2-node/src/api/http-client.ts`
+
+**Today**: `isBlockedHost(url)` parses the hostname, checks it against a hostname blocklist + private-IP regex. The check is at *URL parse time*, but the actual `fetch()` call later resolves the hostname **again** when the connection is made. An attacker who controls the DNS for `evil.com` can:
+
+1. Set `evil.com`'s A-record to `1.2.3.4` (a public IP) with TTL=0
+2. Wait for our check to pass (`1.2.3.4` is not in the blocklist)
+3. Flip the A-record to `127.0.0.1` between our check and our fetch
+4. Our `fetch('https://evil.com/...')` now hits the loopback API surface
+
+**Fix**:
+1. Replace `isBlockedHost(url)` with `resolveAndValidate(url)` that:
+   - Calls `dns.lookup(hostname, { all: false })` to get the resolved IPv4/IPv6
+   - Checks the **resolved IP** against private/loopback/link-local ranges (10/8, 172.16/12, 192.168/16, 127/8, 169.254/16, IPv6 ::1, fc00::/7, fe80::/10)
+   - Returns the resolved IP for the caller to use
+2. Then construct the actual fetch with `lookup` overridden to a custom function that returns the **already-resolved IP** — preventing the second DNS lookup from returning a different value:
+   ```ts
+   const resolvedIp = await resolveAndValidate(parsedUrl.hostname);
+   const agent = new http.Agent({
+     lookup: (host, opts, cb) => cb(null, resolvedIp, isV6 ? 6 : 4),
+   });
+   await fetch(url, { agent, ... });
+   ```
+3. Extend the blocklist to cover IPv6 ULA/link-local that the current regex misses.
+4. Add an integration test using a stub DNS server (Node's `dgram`-based) that flips the answer between the validation lookup and the fetch lookup, and confirms the fetch hits the validated IP not the flipped one.
+
+**UX impact**: Owner-facing and AI-agent-facing HTTP calls work the same. Attackers using DNS rebinding from a malicious agent prompt get a clean error.
+
+### Fix A12 — Wallet proposal handler binding
+
+**File**: `pc2-node/src/api/wallet.ts`
+
+**Today**: Lines 99-103 (approve), 160-… (reject), 199-… (execute) authenticate the request and look up the proposal by id, but never check that `proposal.walletAddress === req.user.wallet_address`. Any tethered wallet can approve, reject, or attempt to execute another wallet's proposal in the database.
+
+The on-chain side is still safe — actual signing happens in the wallet that holds the key — but `execute` does flip the proposal record to `executed`, and `approve`/`reject` flip status. The owner relies on these records when reviewing AI-proposed transactions.
+
+**Fix**: One-line check at the top of each of the three handlers:
+
+```ts
+const proposal = await proposalsDb.get(id);
+if (!proposal) return res.status(404).json({ error: 'proposal not found' });
+
+if (proposal.walletAddress.toLowerCase() !== req.user.wallet_address.toLowerCase()) {
+  return res.status(403).json({ error: 'this proposal belongs to a different wallet' });
+}
+```
+
+Apply to `/proposals/:id/approve`, `/proposals/:id/reject`, `/proposals/:id/execute`. Same shape; copy-paste the guard.
+
+**UX impact**: Zero for normal use. AI agents that propose on behalf of the owner already use the owner's wallet. An attacker (tethered wallet) trying to approve the owner's pending proposal gets a clean 403 toast.
+
+### Fix A16 — `/file` signed URL must actually be signed
+
+**File**: `pc2-node/src/api/file.ts` (`handleFile`), mounted at `app.get('/file', handleFile)` in `pc2-node/src/api/index.ts`. Note: **no auth middleware is wired**, by design — this is supposed to be a "capability URL" that the desktop and iframe apps can hand to a `<video>` / `<img>` tag without dragging the session token into the markup.
+
+**Today**: The handler header documents the route as serving "signed file access" with the comment `// signature verified in query`. In practice no signature is parsed and no crypto is performed. The flow is:
+
+1. Caller hits `/file?uid=<random-uuid>--0xWALLET-Desktop-foo.png`
+2. Handler regex-extracts the wallet (`0xWALLET`) and the path tail (`Desktop-foo.png` → `Desktop/foo.png`)
+3. Handler returns the file from `data/files/0xWALLET/Desktop/foo.png`
+
+The only thing standing between an attacker and another user's file is the unpredictability of the filename. Filenames are not secrets — they leak via thumbnails, NFT metadata, share links, screenshots, etc.
+
+**Fix** (signed token in URL — same shape as S3 pre-signed URLs):
+
+1. **Mint side** (wherever the desktop/iframe code currently builds a `/file?uid=…` URL): build a payload `{ wallet, path, exp, nonce }`, HMAC it with a server-side key (`config.security.fileUrlSigningKey` — generated at first boot, persisted in `config.json` mode 0600), base64url the payload + sig, and append as `?uid=<payload>.<sig>`.
+   - TTL: 10 minutes default; 1 hour for owner-initiated downloads.
+   - Owner's session is the implicit signer — the URL embeds the wallet that owns the file, never the requesting wallet's session token.
+
+2. **Verify side** (`handleFile`):
+   ```ts
+   const { uid } = req.query;
+   const verified = verifyFileUrlToken(uid as string, fileUrlSigningKey);
+   if (!verified) {
+     logger.warn('[file] invalid or expired uid', { uid: redact(uid) });
+     return res.status(403).json({ error: 'invalid_or_expired_url' });
+   }
+   const { wallet, path, exp } = verified;
+   if (Date.now() > exp) return res.status(403).json({ error: 'expired_url' });
+   // existing path-resolve + send-file logic, scoped to the verified wallet+path
+   ```
+
+3. **Backwards compatibility**: existing v1.1 nodes that hand out the old un-signed `uid` format must keep working through the v1.2.0 → v1.2.1 window. Implement a `siweRequired`-style kill-switch:
+   - `config.security.fileUrlSigningRequired` — defaults to `false` for v1.2.1 ship. When `false`, an unsigned uid logs `[file] legacy-unsigned uid=…` but is still served.
+   - When `true` (flip at T+7d after v1.2.1), unsigned uids return 403.
+   - This mirrors the SIWE / GW_AUTH_REQUIRED rollout pattern — same ops playbook, no surprises.
+
+4. **Generation site sweep**: grep the desktop UI + iframe SDK for places that build `/file?uid=` URLs and convert them to call the new minter helper. Likely sites: thumbnail components, file viewer, AI agent file-attachment payloads. List enumerated at CP-2 of Wave 6 implementation.
+
+**UX impact during log-only (default in v1.2.1)**:
+- Owners and tethered wallets: zero. Existing UI keeps working with old uids. Logs surface every legacy call so we can confirm the desktop UI has been updated before flipping strict.
+- Attackers: zero in v1.2.1 (kill-switch off). Same posture as v1.2.0.
+
+**UX impact after kill-switch flip (T+7d into v1.2.1)**:
+- Owners and tethered wallets: still zero (UI now mints signed urls).
+- Attackers guessing filenames: 403, no file served.
+- Old desktop builds: get 403 on file previews until they upgrade. This is the entire reason for the kill-switch lag.
+
+---
+
+## Telemetry log format
+
+Every Wave 6 fix produces structured deny/anomaly logs:
+
+```
+[ssrf] denied url=… resolved=… reason=loopback
+[ssrf] denied url=… resolved=… reason=private
+[ssrf] dns-mismatch url=… check-ip=… connect-ip=…   (hard-deny — would-be DNS rebind)
+[supplychain] sha-mismatch script=ollama-install expected=… actual=…
+[proxy] denied path=… reason=not-in-allowlist     (esc-nft)
+[wallet] proposal-mismatch req-wallet=… proposal-wallet=…
+[ratelimit] /api/catalog/reindex ip=… retry-after=…
+[file] legacy-unsigned uid=…   (log-only window, A16 kill-switch off)
+[file] invalid-signature uid=… reason=bad-mac
+[file] expired-signature uid=… age-ms=…
+```
+
+Same `journalctl | rg` pattern as Wave 3.
+
+---
+
+## Smoke matrix to execute at CP-5
+
+| # | Test | Expected |
+|---|------|----------|
+| 1 | `POST /api/system/restart` as owner | 200, node restarts via `execFile` (no shell) |
+| 2 | `POST /api/ai/install-ollama` with SHA matching pin | 200, install proceeds |
+| 3 | Pin SHA tampered to wrong value, retry #2 | 503 with explicit "SHA mismatch" message |
+| 4 | `POST /api/esc-rpc` to a known JSON-RPC method | 200 + valid response, TLS verified |
+| 5 | `tcpdump` during #4 | Cert validation observed against correct hostname |
+| 6 | `GET /api/esc-nft/tokens/byOwner` | 200 (allowlisted) |
+| 7 | `GET /api/esc-nft/admin/secret` | 404 (not allowlisted) |
+| 8 | Unauth: `POST /api/catalog/reindex` | 401 |
+| 9 | Unauth: `POST /api/elacity/graphql` | 401 |
+| 10 | 31 reqs in 1min to `/api/elacity/graphql` from one IP | 429 on req 31 |
+| 11 | 2 reqs in 5min to `/api/catalog/reindex` | 429 on req 2 |
+| 12 | `/api/http` to `https://localhost.example.com` (DNS resolves to 127.0.0.1) | denied=ssrf reason=loopback |
+| 13 | `/api/http` to `https://[::1]/foo` (IPv6 loopback) | denied=ssrf |
+| 14 | `/api/http` with rebound DNS (test harness) | denied=dns-mismatch (or fetch hits validated IP) |
+| 15 | Wallet A: `/proposals/<wallet-B-proposal>/approve` | 403 proposal-mismatch |
+| 16 | Wallet A: `/proposals/<wallet-A-proposal>/approve` | 200 (own proposal) |
+| 17 | `/file?uid=<freshly-minted signed uid for owner's file>` | 200, file body |
+| 18 | `/file?uid=<expired signed uid>` | 403 expired_url |
+| 19 | `/file?uid=<signed uid with mac flipped>` | 403 invalid_or_expired_url |
+| 20 | `/file?uid=<unsigned legacy format>` with kill-switch OFF | 200 + `[file] legacy-unsigned` log line |
+| 21 | `/file?uid=<unsigned legacy format>` with kill-switch ON | 403 invalid_or_expired_url |
+| 22 | `/file?uid=<signed uid for wallet A>` requested with no auth | 200 (capability URL is the auth) |
+
+Test harness lives at `pc2-node/tests/security/wave6-smoke.sh`.
+
+---
+
+## Files
+
+### Modified
+
+- `pc2-node/src/api/system.ts` — restartCommands → argv, `execFile` only
+- `pc2-node/src/api/ai.ts` — `install-ollama` SHA-pin + `requireOwner`
+- `pc2-node/src/api/index.ts` — `/api/esc-rpc` TLS hardening, `/api/esc-nft/:path(*)` allowlist, `authenticate` + rate-limit on catalog/reindex + GraphQL proxies
+- `pc2-node/src/api/http-client.ts` — DNS-rebind-safe SSRF protection (resolve once + pin agent lookup)
+- `pc2-node/src/api/wallet.ts` — owner-binding guard on approve / reject / execute
+- `pc2-node/src/api/file.ts` — `handleFile` HMAC verification + TTL on `?uid=…` (A16) + `fileUrlSigningRequired` kill-switch
+- Frontend `/file?uid=` mint sites — replace direct concatenation with new `mintFileUrlToken()` helper (full list enumerated at CP-2)
+
+### Created
+
+- `.cursor/tasks/SEC-2026-04-22-WAVE6-HARDENING/SEC-2026-04-22-WAVE6-HARDENING.md` (this file)
+- `pc2-node/tests/security/wave6-smoke.sh` — 22-case smoke matrix (16 from A6-A12, 6 from A16)
+- `pc2-node/tests/security/dns-rebind-stub.js` — Node DNS test stub that flips answers between two requests
+- `pc2-node/src/utils/fileUrlSigner.ts` — `mintFileUrlToken()` + `verifyFileUrlToken()` HMAC helper for A16
+
+### Possibly created (Sash to choose for A8)
+
+- `pc2-node/src/services/elastos/pinned-ca.pem` — only if we go Option 2 (cert-pin) instead of Option 1 (hostname). Default plan: Option 1, no new file.
+
+---
+
+## Deploy plan
+
+1. **Bundle as `v1.2.1`** — patch release within 14 days of v1.2 cutover. Each fix in its own commit.
+2. **Quality gates** — `npm run test:security` + `wave5-smoke.sh` + `wave6-smoke.sh` all green.
+3. **Roll out via the standard PC2 update channel** — owners get `/api/update/install` notification (which itself is now owner-gated thanks to Wave 1). This is normal patch behaviour; no special steps.
+4. **Monitor**: any `[ssrf] dns-mismatch` log line is a real attack signal — alert on it.
+
+---
+
+## Rollback
+
+Each fix is independently revertable; none have schema changes:
+
+| Fix | Reverts to |
+|---|---|
+| A6 | Brittle shell pattern returns; not exploitable today |
+| A7 | TOFU on ollama.com returns; medium risk |
+| A8 | TLS verification disabled; medium MITM risk |
+| A9 | Open proxy returns; low — but path-injection re-opens |
+| A10 | Unauth GraphQL/reindex returns; DoS risk |
+| A11 | DNS-rebind bypass returns; medium SSRF risk |
+| A12 | Cross-wallet proposal manipulation returns; low (signing still safe) |
+| A16 | Toggle `fileUrlSigningRequired` back to `false` (already the default) — restores log-only behaviour without redeploy |
+
+Standard rule: fix forward, don't revert.
+
+---
+
+## Acceptance criteria
+
+- [ ] `rg "shell:.*bash" pc2-node/src/api/system.ts` returns 0
+- [ ] `rg "rejectUnauthorized.*false" pc2-node/src` returns 0 outside test harnesses
+- [ ] `rg "curl.*\|.*sh" pc2-node/src` returns 0 outside Wave 6 SHA-pinned helper
+- [ ] `/api/esc-nft/<not-in-allowlist>` returns 404 (verified by smoke test)
+- [ ] `/api/catalog/reindex` requires auth + 429s on 2nd call within 5min
+- [ ] `/api/http` to a DNS-rebind harness fetches the validated IP, not the flipped IP
+- [ ] `/api/wallet/proposals/:id/approve` returns 403 when caller's wallet ≠ proposal wallet
+- [ ] `/file?uid=<unsigned>` is logged as `[file] legacy-unsigned` while `fileUrlSigningRequired=false`; returns 403 when flipped to `true`
+- [ ] `/file?uid=<signed-and-fresh>` returns 200 regardless of switch state
+- [ ] `/file?uid=<signed-but-mac-tampered>` returns 403 regardless of switch state
+- [ ] `mintFileUrlToken()` is the only place the desktop UI builds `?uid=…` (verified by `rg "/file\?uid=" src/` returning 0 outside the helper)
+- [ ] All 22 wave6-smoke cases pass
+- [ ] `npm run test:security` clean
+
+---
+
+## UX notes
+
+| User type | Before Wave 6 | After Wave 6 |
+|---|---|---|
+| **Owner** | Everything works (with quiet vulns underneath) | Everything works; on-chain RPC now actually verified; ollama install fails-loud if upstream tampered |
+| **AI agent** (running as owner) | Can be coerced into SSRF by malicious prompt | DNS-rebind blocked; private IPs still blocked; same legitimate URLs work |
+| **Tethered wallet** | Could mess with owner's wallet proposal records | Sees their own proposals only |
+| **Unauth LAN attacker** | Could spam reindex/graphql; could probe esc-nft path-injection | All blocked at 401 / 404 |
+| **Unauth attacker guessing `/file?uid=` filenames** | Could fetch any file whose name they guessed (no crypto check) | After kill-switch flip: 403. During log-only window: same as today, but every legacy hit is logged. |
+
+No UI changes needed. All Wave 6 fixes are server-side and transparent to legitimate flows.
+
+---
+
+## Known follow-ups (Wave 7)
+
+- **A13** — CORS allowlist `.includes('.ela.city')` matches `evil-ela.city`. Tighten to suffix match.
+- **A14** — `auditMiddleware` logs full session token at INFO. Redact.
+- **A15** — Capsule-unsigned app installs warn-only. Already on v2 roadmap; Wave 7 records the decision.
+
+---
+
+## Open questions for Sash before kickoff
+
+1. **A7 SHA pinning** — are we OK with a manual SHA bump in PC2 patch release whenever ollama updates upstream? Alternative is to mirror our own copy of `install.sh` and have it be a Wave-7 ongoing task.
+2. **A8 — Option 1 vs Option 2** — preference for hostname-based TLS (less maintenance) or pinned cert (works even if Contabo's hostnames change)?
+3. **A9 — esc-nft allowlist** — I'll grep the desktop UI for the actual paths used and propose the list; please confirm before merge.
+4. **A16 TTL** — proposal: 10 minutes for embedded thumbnails / iframe previews, 1 hour for owner-initiated downloads. Acceptable, or do you want shorter / longer?
+5. **A16 kill-switch** — same `T+7d into v1.2.1` schedule as SIWE / GW_AUTH? Or do you want to flip immediately on v1.2.1 ship since the desktop will ship the minter in the same release?

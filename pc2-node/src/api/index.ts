@@ -9,7 +9,7 @@ import { DatabaseManager, FilesystemManager } from '../storage/index.js';
 import { Config } from '../config/loader.js';
 import { baseRpcCall } from '../utils/rpc.js';
 import { Server as SocketIOServer } from 'socket.io';
-import { authenticate, corsMiddleware, errorHandler, AuthenticatedRequest } from './middleware.js';
+import { authenticate, requireOwner, corsMiddleware, errorHandler, AuthenticatedRequest } from './middleware.js';
 import { logger, createLogger } from '../utils/logger.js';
 const log = createLogger('api-index');
 import { handleWhoami } from './whoami.js';
@@ -1196,12 +1196,18 @@ export function setupAPI (app: Express): void {
     if ( ! fs.existsSync(uploadTmpDir) ) fs.mkdirSync(uploadTmpDir, { recursive: true });
     logger.info(`[API] Upload temp directory: ${uploadTmpDir}`);
 
+    // SEC-A19 (2026-04 Wave 5.5): the on-disk filename MUST NOT include
+    // `file.originalname` directly. `originalname` is attacker-controlled
+    // and `path.join(uploadDir, '${ts}-${rand}-../../../etc/cron.d/evil')`
+    // normalizes to `/etc/cron.d/evil`. Use a synthetic safe filename for
+    // disk and rely on `req.file.originalname` (preserved by multer) for
+    // any handler that needs the client-supplied name.
     const upload = multer({
         storage: multer.diskStorage({
             destination: uploadTmpDir,
-            filename: (_req, file, cb) => {
+            filename: (_req, _file, cb) => {
                 const unique = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-                cb(null, `${unique}-${file.originalname}`);
+                cb(null, `${unique}.upload`);
             },
         }),
         limits: {
@@ -1213,14 +1219,28 @@ export function setupAPI (app: Express): void {
     const restoreUploadDir = path.join(uploadTmpDir, 'restore');
     if ( ! fs.existsSync(restoreUploadDir) ) fs.mkdirSync(restoreUploadDir, { recursive: true });
 
+    // SEC-A19 (2026-04 Wave 5.5): same as above. The route-level
+    // `isValidBackupFilename` check (Wave 5) gates *use* of the backup;
+    // the pre-write `fileFilter` here gates *write* of the backup. Both
+    // layers are required because multer writes to disk before the route
+    // handler sees the request.
+    const VALID_BACKUP_NAME = /^[A-Za-z0-9_.-]+\.tar\.gz$/;
     const restoreUpload = multer({
         storage: multer.diskStorage({
             destination: restoreUploadDir,
-            filename: (_req, file, cb) => {
+            filename: (_req, _file, cb) => {
                 const unique = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-                cb(null, `${unique}-${file.originalname}`);
+                cb(null, `${unique}.tar.gz`);
             },
         }),
+        fileFilter: (_req, file, cb) => {
+            const baseName = path.basename(file.originalname || '');
+            if (!VALID_BACKUP_NAME.test(baseName)) {
+                cb(new Error('Invalid backup filename. Use only letters, numbers, dot, underscore, hyphen; must end in .tar.gz.'));
+                return;
+            }
+            cb(null, true);
+        },
         limits: {
             fileSize: 10 * 1024 * 1024 * 1024, // 10GB max file size for backups
         },
@@ -1289,12 +1309,17 @@ export function setupAPI (app: Express): void {
         }
     });
 
-    // Backup management endpoints (require auth)
-    app.post('/api/backups/create', authenticate, createBackup);
-    app.get('/api/backups', authenticate, listBackups);
-    app.get('/api/backups/download/:filename', authenticate, downloadBackup);
-    app.delete('/api/backups/:filename', authenticate, deleteBackup);
-    app.post('/api/backups/restore', authenticate, restoreUpload.single('file'), restoreBackup);
+    // Backup management endpoints — owner-only.
+    // Wave 5 (A3): backups contain the owner's mnemonic, identity keys, and
+    // every wallet's data. Tethered wallets must never be able to create,
+    // list, download, delete, or restore them. `requireOwner` is the gate;
+    // the handlers also use execFile + strict filename whitelist as
+    // defense-in-depth.
+    app.post('/api/backups/create', authenticate, requireOwner, createBackup);
+    app.get('/api/backups', authenticate, requireOwner, listBackups);
+    app.get('/api/backups/download/:filename', authenticate, requireOwner, downloadBackup);
+    app.delete('/api/backups/:filename', authenticate, requireOwner, deleteBackup);
+    app.post('/api/backups/restore', authenticate, requireOwner, restoreUpload.single('file'), restoreBackup);
 
     // Terminal endpoints
     app.get('/api/terminal/status', handleTerminalStatus); // No auth - check if available
@@ -1303,9 +1328,11 @@ export function setupAPI (app: Express): void {
     app.post('/api/terminal/destroy-all', authenticate, handleDestroyAllTerminals);
 
     // Terminal command execution API (for AI agents)
-    app.post('/api/terminal/exec', authenticate, handleExecCommand);
-    app.post('/api/terminal/script', authenticate, handleExecScript);
-    app.get('/api/terminal/tools', authenticate, handleListTools);
+    // Wave 5 (A1): owner-only — these endpoints execute arbitrary processes on
+    // the node and were previously reachable by any tethered wallet (RCE).
+    app.post('/api/terminal/exec', authenticate, requireOwner, handleExecCommand);
+    app.post('/api/terminal/script', authenticate, requireOwner, handleExecScript);
+    app.get('/api/terminal/tools', authenticate, requireOwner, handleListTools);
 
     // API Keys management (for agent authentication)
     app.get('/api/keys', authenticate, handleListApiKeys);

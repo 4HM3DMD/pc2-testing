@@ -572,15 +572,27 @@ export async function handleRead(req: AuthenticatedRequest, res: Response): Prom
     // Check if file exists before trying to read
     let fileMetadata = filesystem.getFileMetadata(resolvedPath, walletAddress);
 
-    // Fallback: if not found and path embeds a different wallet address, try that
-    // (handles cases where files were saved under EOA but session uses smart wallet)
+    // Wave 5 (A4): if the file isn't under the session's primary wallet, try
+    // the path-embedded wallet — but ONLY when it matches an alias of the
+    // requesting user (their EOA or their smart-account address, both
+    // case-insensitive). This preserves the legitimate "saved under EOA but
+    // session uses smart wallet" case for the same person while preventing a
+    // tethered wallet from reading another tethered wallet's files by simply
+    // typing /<otherWallet>/Desktop/foo.png.
     if (!fileMetadata) {
       const pathParts = resolvedPath.split('/').filter(Boolean);
       const pathWallet = pathParts[0];
-      if (pathWallet && /^0x[0-9a-fA-F]{40}$/.test(pathWallet) && pathWallet.toLowerCase() !== walletAddress?.toLowerCase()) {
-        fileMetadata = filesystem.getFileMetadata(resolvedPath, pathWallet);
-        if (fileMetadata) {
-          walletAddress = pathWallet;
+      if (pathWallet && /^0x[0-9a-fA-F]{40}$/.test(pathWallet)) {
+        const candidate = pathWallet.toLowerCase();
+        const reqEoa = req.user?.wallet_address?.toLowerCase();
+        const reqSmart = req.user?.smart_account_address?.toLowerCase();
+        const isOwnAlias = !!reqEoa && (candidate === reqEoa || candidate === reqSmart);
+        const differsFromCurrent = candidate !== walletAddress?.toLowerCase();
+        if (isOwnAlias && differsFromCurrent) {
+          fileMetadata = filesystem.getFileMetadata(resolvedPath, pathWallet);
+          if (fileMetadata) {
+            walletAddress = pathWallet;
+          }
         }
       }
     }
