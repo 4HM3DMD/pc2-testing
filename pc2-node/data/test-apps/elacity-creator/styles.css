@@ -1,24 +1,31 @@
 /* ── Elacity Creator — Apple-Grade Design System ── */
+/*
+ * Colour tokens aligned with elacity-market dark mode (2026-04-22) so all
+ * three Elacity sibling apps (Market, Creator, NFT views) share one brand
+ * palette. Variable names kept Creator-local; only the colour values were
+ * remapped to Market's `[data-theme="dark"]` block. Accent blue and
+ * warning amber were already identical and remain unchanged.
+ */
 
 :root {
-  /* Surface hierarchy */
-  --bg: #0f1117;
-  --bg-surface: #1a1d27;
-  --bg-elevated: #222632;
-  --border: #2d3244;
+  /* Surface hierarchy — matches market's dark mode bg-primary / bg-secondary / bg-card */
+  --bg: #121212;
+  --bg-surface: #1a1a1a;
+  --bg-elevated: #1e1e1e;
+  --border: #333333;
 
-  /* Text */
-  --text: #e8eaf0;
-  --text-muted: #8b8fa3;
+  /* Text — matches market's text-primary / text-secondary */
+  --text: #e5e5e5;
+  --text-muted: #a3a3a3;
 
-  /* Single accent — one blue, everywhere */
+  /* Single accent — one blue, everywhere (already matched market) */
   --accent: #3b82f6;
   --accent-hover: #2563eb;
   --accent-subtle: rgba(59, 130, 246, 0.08);
 
-  /* Status */
-  --success: #30D158;
-  --error: #FF453A;
+  /* Status — matches market's success / danger; warning was already aligned */
+  --success: #22c55e;
+  --error: #ef4444;
   --warning: #f59e0b;
 
   /* Radius — two tiers only */
