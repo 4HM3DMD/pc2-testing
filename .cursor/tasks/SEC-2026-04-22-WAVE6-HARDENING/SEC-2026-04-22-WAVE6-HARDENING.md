@@ -25,7 +25,7 @@
 
 | Finding | One-line | Why deferred from part 1 |
 |---|---|---|
-| **A8**  | `/api/esc-rpc` TLS pinning — replace `rejectUnauthorized:false` with hostname + public CA (Option 1) or pinned cert + rotation runbook (Option 2). | Needs Sash's input: confirm Contabo's public hostname OR accept the cert-pin runbook. The codebase only has the bare IP `38.242.211.112`. |
+| **A8**  | `/api/esc-rpc` TLS pinning — replace `rejectUnauthorized:false` with hostname + public CA (Option 1, locked-in). | **Decision locked (2026-04-23)**: Option 1, hostname = **`elastossmartchain.ela.city`**. Live probe of `38.242.211.112:443` confirmed it already serves a valid Let's Encrypt `*.ela.city` wildcard cert (the in-code comment "self-signed cert" is wrong). **Blocker**: Sash is travelling and his DNS provider requires SMS 2FA on a number he can't reach. Parked. **When unblocked**: Sash adds `A elastossmartchain.ela.city → 38.242.211.112` (TTL 30 min) → agent verifies propagation → switches proxy + 4 other `38.242.211.112` call sites to the hostname → removes 5x `rejectUnauthorized:false` → atomic commit. The other Wave 6 part 2 items (A7, A11, A16) do **not** depend on A8 and can ship before it. |
 | **A7**  | `install-ollama` SHA-256 pin — download installer to a temp file, verify SHA against a pinned constant, then `execFileSync('sh', [tmpfile])`. | New helper + need to fetch and pin the current installer's SHA. |
 | **A11** | `/api/http` DNS-rebind hardening — undici Dispatcher with `connect.lookup` IP pinning + IPv6 ULA blocklist. | Larger change with new dep (undici Dispatcher); risk of breaking legitimate http-client calls if not tested carefully. |
 | **A16** | `/file?uid` HMAC sign+verify — verifier on `handleFile`, mint-helpers in `other.ts` + `filesystem.ts` + desktop, `fileUrlSigningRequired` kill-switch with 7-day log-only window. | Multi-component change — server verifier + 3 mint sites + a desktop UI helper + kill-switch wiring. Needs its own session. |
@@ -137,11 +137,25 @@ These are all "second-order" risks. None of them can take over the node alone, b
 
 **Today**: Lines 1049-1052 instantiate an HTTPS agent with `rejectUnauthorized: false` and proxy JSON-RPC to a hard-coded Contabo IP. The reason for `rejectUnauthorized: false` is presumably that the IP doesn't match the cert (CN binding), but the cure is worse than the disease.
 
-**Fix** (pick whichever Sash prefers — both close the hole):
-- **Option 1 — Hostname-then-pin-IP**: change the upstream from `https://<ip>/...` to `https://api.elastos.io/...` (or whatever public hostname Contabo answers on). Drop `rejectUnauthorized: false`. Use the public CA chain.
-- **Option 2 — Cert pinning**: keep the IP but pin the cert. Use `tls.connect({ host, port, ca: [PINNED_PEM], checkServerIdentity: () => undefined })`. Pin the *exact certificate* in source; rotate when Contabo renews.
+**Live probe (2026-04-23) — corrects an earlier mistake in this doc:**
+- `38.242.211.112:443` already serves a **valid Let's Encrypt wildcard `*.ela.city`** (NotBefore `2026-02-20`, NotAfter `2026-05-21`, auto-renewing). The `// self-signed cert` comment in `index.ts:1089` is wrong.
+- `https://38.242.211.112/rpc/esc` returns valid `{"result":"0x22ac22e"}` for `eth_blockNumber` — endpoint is healthy.
+- The **only** thing blocking `rejectUnauthorized: true` is that we connect by raw IP, so TLS hostname verification fails. Adding any `*.ela.city` A record pointing at the IP fixes it instantly.
 
-Option 1 is preferred (less ongoing maintenance). I'll write Option 1 unless Sash specifies otherwise.
+**Fix — Option 1 (locked-in)**:
+1. Sash adds DNS record: `A elastossmartchain.ela.city → 38.242.211.112` (TTL 30 min). *(Hostname locked-in: `esc.ela.city` is already taken; `elastossmartchain.ela.city` is descriptive and available. Wildcard cert covers it automatically.)*
+2. Agent waits ~5 min, verifies with `dig +short elastossmartchain.ela.city`.
+3. Switch the proxy from `hostname: '38.242.211.112', port: 443, path: '/rpc/esc'` → `hostname: 'elastossmartchain.ela.city', port: 443, path: '/rpc/esc'`.
+4. Drop the custom `https.Agent({ rejectUnauthorized: false })` — use the default agent. Standard public-CA verification works.
+5. Migrate the **other 4 call sites** that hit the same IP with `rejectUnauthorized: false` to the same hostname:
+   - `pc2-node/src/api/chipotle-client.ts:48` (DDRM provisioning URL list)
+   - `pc2-node/src/services/boson/ConnectivityService.ts:68,71,79` (supernode failover)
+   - (libp2p multiaddrs in `pc2-node/src/storage/ipfs.ts:54-55` are not HTTPS — leave alone.)
+6. Remove the wrong code comment (`// self-signed cert`).
+
+**Blocker (2026-04-23)**: Sash is travelling. His DNS provider requires SMS 2FA on a number he can't reach. Parked until he's back at his usual SIM. **No SSH, no Contabo console, no cert provisioning required** — everything is already in place; this is one DNS record.
+
+**Option 2 (cert pinning) — rejected**: Now that we know the cert is real public-CA, pinning would be strictly worse (annual rotation burden vs. zero ongoing maintenance with Option 1).
 
 **Plus**: rate-limit `/api/esc-rpc` per IP to 60 req/min. Today it has no limit, so it can be used to amplify outbound traffic to Contabo from a compromised tethered wallet.
 
@@ -363,7 +377,7 @@ Test harness lives at `pc2-node/tests/security/wave6-smoke.sh`.
 
 ### Possibly created (Sash to choose for A8)
 
-- `pc2-node/src/services/elastos/pinned-ca.pem` — only if we go Option 2 (cert-pin) instead of Option 1 (hostname). Default plan: Option 1, no new file.
+- ~~`pc2-node/src/services/elastos/pinned-ca.pem`~~ — **N/A**. Decision locked-in 2026-04-23: Option 1 (hostname `elastossmartchain.ela.city`). No new file needed.
 
 ---
 
@@ -438,7 +452,7 @@ No UI changes needed. All Wave 6 fixes are server-side and transparent to legiti
 ## Open questions for Sash before kickoff
 
 1. **A7 SHA pinning** — are we OK with a manual SHA bump in PC2 patch release whenever ollama updates upstream? Alternative is to mirror our own copy of `install.sh` and have it be a Wave-7 ongoing task.
-2. **A8 — Option 1 vs Option 2** — preference for hostname-based TLS (less maintenance) or pinned cert (works even if Contabo's hostnames change)?
+2. ~~**A8 — Option 1 vs Option 2**~~ — **Resolved 2026-04-23**: Option 1, hostname `elastossmartchain.ela.city`. Awaiting Sash's DNS record once he's back at his usual SIM (DNS provider 2FA).
 3. **A9 — esc-nft allowlist** — I'll grep the desktop UI for the actual paths used and propose the list; please confirm before merge.
 4. **A16 TTL** — proposal: 10 minutes for embedded thumbnails / iframe previews, 1 hour for owner-initiated downloads. Acceptable, or do you want shorter / longer?
 5. **A16 kill-switch** — same `T+7d into v1.2.1` schedule as SIWE / GW_AUTH? Or do you want to flip immediately on v1.2.1 ship since the desktop will ship the minter in the same release?
