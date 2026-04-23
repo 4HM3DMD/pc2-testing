@@ -1289,12 +1289,17 @@ export function setupAPI (app: Express): void {
         }
     });
 
-    // Backup management endpoints (require auth)
-    app.post('/api/backups/create', authenticate, createBackup);
-    app.get('/api/backups', authenticate, listBackups);
-    app.get('/api/backups/download/:filename', authenticate, downloadBackup);
-    app.delete('/api/backups/:filename', authenticate, deleteBackup);
-    app.post('/api/backups/restore', authenticate, restoreUpload.single('file'), restoreBackup);
+    // Backup management endpoints — owner-only.
+    // Wave 5 (A3): backups contain the owner's mnemonic, identity keys, and
+    // every wallet's data. Tethered wallets must never be able to create,
+    // list, download, delete, or restore them. `requireOwner` is the gate;
+    // the handlers also use execFile + strict filename whitelist as
+    // defense-in-depth.
+    app.post('/api/backups/create', authenticate, requireOwner, createBackup);
+    app.get('/api/backups', authenticate, requireOwner, listBackups);
+    app.get('/api/backups/download/:filename', authenticate, requireOwner, downloadBackup);
+    app.delete('/api/backups/:filename', authenticate, requireOwner, deleteBackup);
+    app.post('/api/backups/restore', authenticate, requireOwner, restoreUpload.single('file'), restoreBackup);
 
     // Terminal endpoints
     app.get('/api/terminal/status', handleTerminalStatus); // No auth - check if available
