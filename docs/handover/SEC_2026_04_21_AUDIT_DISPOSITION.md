@@ -4,8 +4,10 @@
 **Original recipient**: `security@elacitylabs.com`
 **Report date**: 2026-04-18
 **Triage handoff**: 2026-04-21 (this codebase)
-**This document compiled**: 2026-04-22
-**Status**: 🟢 **All 7 in-scope findings closed in code.** 4 smart-contract findings owned by Irzhy (in progress). 1 deferred (SEC-11, low traffic). v1.2 release roadmap below — see [Phase A](#phase-a--before-pushing-v12-live-release-blocking) for the release-blocking checklist and [Phase C](#phase-c--kill-switch-flip-schedule-post-cutover) for the kill-switch flip schedule.
+**This document compiled**: 2026-04-22 (Researcher report) · 2026-04-22 amended with internal audit findings (A1-A15) · 2026-04-22 amended with Wave 5 implementation + A16
+**Status**: 🟢 **All 7 in-scope researcher findings closed in code. Wave 5 (A1-A5) implemented and verified.** Post-triage internal audit (2026-04-22) surfaced **15 additional findings (A1-A15)** of the same families plus **1 additional finding (A16)** discovered during the Wave 5 sweep. Wave 5 (A1-A5) RELEASE-BLOCKING items are now implemented in code on `feature/lit-chipotle-migration` (commits TBD; CP6 of [`SEC-2026-04-22-WAVE5-PRE-RELEASE`](.cursor/tasks/SEC-2026-04-22-WAVE5-PRE-RELEASE/SEC-2026-04-22-WAVE5-PRE-RELEASE.md)). Wave 6 (A6-A12 + **A16**) targets v1.2.1 (≤ T+14 days). Wave 7 (A13-A15) targets v1.2.2 / v1.3. 4 smart-contract findings owned by Irzhy (in progress). 1 deferred (SEC-11, low traffic).
+
+**Current release gate**: ⛔ **Do not tag v1.2.0 until the Wave 5 commit set lands on `feature/lit-chipotle-migration` and the smoke matrix passes.** Code is written; pending review + commit. See [Phase A0](#phase-a--before-pushing-v12-live-release-blocking).
 
 ---
 
@@ -29,6 +31,10 @@ Two follow-ups exist but **do not block the v1.2 release**:
 
 - **`cloud.ela.city` rotation** — researcher reported this node un-owned for 14.6 days (`uptime: 1265350.22`). Decision needed before release day on whether to upgrade-in-place or DNS-cut to a fresh v1.2 node — see [Phase A4](#phase-a--before-pushing-v12-live-release-blocking).
 - **`data/identity.json` Boson DID rotation** — Wave 4's secret scanner surfaced a real Ed25519 private key committed at `4b10bad94` (2026-03-06) before the matching `.gitignore` rule. Already exposed on 4 origin branches. Queued as a v1.2.x patch — see [Phase D1](#phase-d--post-v12-queued-not-blocking).
+
+**One additional release-blocker now exists** — see the new Internal Audit section:
+
+- **Wave 5 (A1-A5)** — five same-family findings (3 Critical, 2 High) discovered during a post-triage sweep of the remaining ~46 API files the researcher didn't have time to cover. Same fix shape as SEC-2/SEC-7/SEC-10 (`requireOwner` + `execFile` argv form). Task doc: [`SEC-2026-04-22-WAVE5-PRE-RELEASE`](.cursor/tasks/SEC-2026-04-22-WAVE5-PRE-RELEASE/SEC-2026-04-22-WAVE5-PRE-RELEASE.md).
 
 ---
 
@@ -202,6 +208,49 @@ Plus the implicit recommendation buried in Finding #1 step 6: *"Add pre-commit a
 
 ---
 
+## Internal Audit Findings (2026-04-22)
+
+After the seven researcher findings closed, I (Cursor — Composer 2 acting as senior security reviewer for Sash) audited the remaining ~46 PC2 API files plus the gateway for the same primitives the researcher used (shell-string command construction, missing `requireOwner` on privileged routes, cross-user data leaks, SSRF). Fifteen new findings, grouped into three waves by severity.
+
+### Severity overview
+
+| ID | Severity | Component | One-line | Wave |
+|----|----------|-----------|----------|------|
+| **A1** | 🔴 CRITICAL | `pc2-node/src/api/terminal.ts` | RCE via `/api/terminal/exec` + `/script` (any tethered wallet — missing `requireOwner` + shell mode) | 5 |
+| **A2** | 🔴 CRITICAL | `pc2-node/src/api/git.ts` | RCE via shell-injection in `body.url`/`body.branch`/`body.message` on every `/api/git/*` handler | 5 |
+| **A3** | 🔴 CRITICAL | `pc2-node/src/api/backup.ts` + `index.ts:1293-1297` | Owner-mnemonic exfil + node takeover for any tethered wallet (missing `requireOwner` on download/restore/create/delete + shell-injection in restore filename) | 5 |
+| **A4** | 🟠 HIGH | `pc2-node/src/api/filesystem.ts:577-586` | Cross-user file read — tethered wallet can `GET /read?path=/0xVictim/...` and the fallback returns the victim's file | 5 |
+| **A5** | 🟠 HIGH | `pc2-node/src/api/voice.ts:386,403,418` | Sudo-driven system installs by tethered wallets (missing `requireOwner` on `/voice/install`, `/enable`, `/disable`) | 5 |
+| **A6** | 🟡 MEDIUM | `pc2-node/src/api/system.ts:112-119` | Brittle `shell:'/bin/bash'` with `${process.env.HOME}` glob — not exploitable today, future RCE waiting | 6 |
+| **A7** | 🟡 MEDIUM | `pc2-node/src/api/ai.ts:987` | `spawn('sh',['-c','curl …\|sh'])` for ollama install — TOFU on upstream supply chain | 6 |
+| **A8** | 🟡 MEDIUM | `pc2-node/src/api/index.ts:1049-1052` | `/api/esc-rpc` uses `rejectUnauthorized:false` — TLS verification disabled, MITM-able | 6 |
+| **A9** | 🟡 MEDIUM | `pc2-node/src/api/index.ts:1082-1098` | `/api/esc-nft/:path(*)` is an unauthenticated open proxy with path-injection to `https://ela.city/api/<anything>` | 6 |
+| **A10** | 🟡 MEDIUM | `pc2-node/src/api/index.ts:470,1009,1029` | `/api/catalog/reindex`, `/api/elacity/graphql`, `/api/esc-nft/graphql` all unauth + no rate limit — DoS surface | 6 |
+| **A11** | 🟡 MEDIUM | `pc2-node/src/api/http-client.ts:48-69` | `/api/http` SSRF allowlist is DNS-rebind bypassable (re-resolves at fetch time) + IPv6 link-local missed | 6 |
+| **A12** | 🟡 MEDIUM | `pc2-node/src/api/wallet.ts:99,160,199` | `/proposals/:id/{approve,reject,execute}` don't bind to `req.user.wallet_address` — any tethered wallet can manipulate any wallet's proposal records | 6 |
+| **A13** | 🟢 LOW | `pc2-node/src/api/middleware.ts:440-444` | CORS `.includes('.ela.city')` matches `evil-ela.city.attacker.example`; `.ela.local` is mDNS-claimable | 7 |
+| **A14** | 🟢 LOW | `pc2-node/src/api/middleware.ts:224-230` | `auditMiddleware` + `Token extracted` log lines write the full session token at INFO; replay if logs leak | 7 |
+| **A15** | 🟢 LOW | `pc2-node/src/services/AppInstallService.ts:234` | Capsule signature unverified → install-warn instead of install-block (intentional v1.x; documented as v2 cutover) | 7 |
+| **A16** | 🟡 MEDIUM | `pc2-node/src/api/file.ts` (`handleFile`, mounted at `GET /file` in `index.ts`) | "Signed URL" capability is unsigned — comment claims "signature verified in query" but handler performs zero crypto verification. Wallet address is parsed straight out of the `uid` query param and used to locate the file. Surfaced during Wave 5 A4 sweep, escalated to Wave 6. | 6 |
+
+### Wave grouping rationale
+
+**Wave 5 — release-blocking** (A1-A5): three Critical RCE/exfil paths and two High authorization-bypass paths. Same fix shape as SEC-2/SEC-7/SEC-10 (which are already shipped): add `requireOwner` and replace shell-string command construction with `execFile` argv form. No kill-switches; hard-fixed. Cannot ship v1.2 with these open. See [`SEC-2026-04-22-WAVE5-PRE-RELEASE`](.cursor/tasks/SEC-2026-04-22-WAVE5-PRE-RELEASE/SEC-2026-04-22-WAVE5-PRE-RELEASE.md).
+
+**Wave 6 — post-cutover hardening** (A6-A12 + **A16**): eight Medium items covering SSRF (A8/A9/A11), TLS pinning (A8), supply chain (A7), unauth DoS surfaces (A10), brittle shell patterns (A6), one cross-wallet record-manipulation (A12), and one unsigned "signed URL" capability (**A16** — `handleFile` claims to verify a query signature but performs zero crypto). None is RCE; none can be exploited without an existing session or a guessable filename; each weakens a defence layer that would be hit if an attacker chained another bug. Targets v1.2.1 patch ≤ T+14 days. Important: should land **before** the kill-switches flip to strict (Phase C1/C2), so that the post-cutover security posture is uniform. See [`SEC-2026-04-22-WAVE6-HARDENING`](.cursor/tasks/SEC-2026-04-22-WAVE6-HARDENING/SEC-2026-04-22-WAVE6-HARDENING.md).
+
+**Wave 7 — defence-in-depth polish** (A13-A15): three Low items. A13/A14 are quality-of-defence (no live exploit, but they would amplify a future bug or log leak). A15 is a known v2 gap and Wave 7 just formalises the cutover plan. Targets v1.2.2 or v1.3. See [`SEC-2026-04-22-WAVE7-POLISH`](.cursor/tasks/SEC-2026-04-22-WAVE7-POLISH/SEC-2026-04-22-WAVE7-POLISH.md).
+
+### How these were missed in the original triage
+
+The researcher report was scoped — jhond0e prioritised the highest-dollar paths (vless RCE, mnemonic exfil, smart-contract drains) and didn't have time to enumerate every endpoint. The internal audit applied the *same primitives* he used (`rg 'execSync\|exec(\|spawn(' pc2-node/src/api`, `rg 'authenticate,' pc2-node/src/api/index.ts | rg -v 'requireOwner'`, plus path-tracing on every fallback in filesystem.ts) to the remaining files. Same bug families, same fix shapes — exactly the kind of follow-up sweep that turns a single-finding bounty into a code-quality cycle.
+
+### Why these are reported as "additional findings" rather than "researcher said it"
+
+In honesty to jhond0e: only A1-A5 are clearly within his scope had he gone deeper. A6-A15 are second-order — they're stuff *we* found, not him. When responding to the bounty, the right framing is: "We closed your seven findings; we then internally audited the rest of the surface using your exact methods and found 15 more, bundled as Waves 5/6/7 in the same release line." That keeps the bounty award tied to his work while documenting that we took the report seriously enough to extend it.
+
+---
+
 ## v1.2 Release Roadmap (next week)
 
 The 7 in-scope findings are closed in code. The list below tracks what still has to happen around the release itself — split by phase so it's clear what blocks the cutover vs. what runs after.
@@ -210,12 +259,13 @@ The 7 in-scope findings are closed in code. The list below tracks what still has
 
 | # | Item | Owner | Notes |
 |---|---|---|---|
+| **A0** | ⛔ **MERGE WAVE 5 (A1-A5 internal audit)** — three Critical RCE/exfil paths and two High authorization-bypass paths. Same fix shape as SEC-2/SEC-7/SEC-10. No kill-switches; hard-fixed. | dev | [`SEC-2026-04-22-WAVE5-PRE-RELEASE`](.cursor/tasks/SEC-2026-04-22-WAVE5-PRE-RELEASE/SEC-2026-04-22-WAVE5-PRE-RELEASE.md). Five commits (one per fix) on `feature/lit-chipotle-migration`. Quality gate: `bash pc2-node/tests/security/wave5-smoke.sh` (19 cases) all green + `npm run test:security` regression-clean. **Cannot tag v1.2.0 until this lands.** |
 | A1 | **Smoke test the full SIWE login flow on a clean node** (fresh DB, no existing session) — confirm one wallet popup, owner gets minted, scoped sessions work for iframe apps | dev | Existing `npm run test:security` (79 cases) covers the unit contracts; this is the manual end-to-end |
 | A2 | **Smoke test gateway in log-only mode** — bring up a v1.2 PC2 node against a v1.2 supernode with `GW_AUTH_REQUIRED=false` (default). Confirm `/api/register` mints a provisioning token, the node persists it to `data/.gateway-tokens.json`, and subsequent `/api/wg/register` includes the `X-Provisioning-Token` header | dev / ops | Watch supernode logs — every call should log `provisioning_token=present` |
 | A3 | **Smoke test scoped session tokens** — open a file viewer iframe app, confirm the iframe receives a short-lived scoped token (not the owner's session token), and confirm the scoped token is rejected by general endpoints like `/api/update` | dev | Wave 1 acceptance criterion |
 | A4 | **Confirm `cloud.ela.city` upgrade plan** — decide whether to (a) upgrade in place to v1.2 then rotate its DID, or (b) provision a fresh v1.2 node and DNS-cut over. Either is fine; just decide before release | Sash | Researcher reported it un-owned for 14.6 days at report time. Code paths are now closed in v1.2 binary, but the old deployment may still be on v1.1. |
 | A5 | **Confirm Irzhy's smart-contract fixes status** — they don't block v1.2 of this repo (different deploy target), but the public release notes should know whether to mention them as "in flight" or "shipped" | Sash + Irzhy | Per your update: Irzhy is making progress; will be updated later |
-| A6 | **Tag the release** — once A1-A3 pass, tag `v1.2.0` from `feature/lit-chipotle-migration` (or merge-and-tag from `main`, depending on your release flow) | dev | Existing CHANGELOG entry is already in place |
+| A6 | **Tag the release** — once A0 lands and A1-A3 pass, tag `v1.2.0` from `feature/lit-chipotle-migration` (or merge-and-tag from `main`, depending on your release flow) | dev | Existing CHANGELOG entry is already in place; add Wave 5 line per [Wave 5 § Communications](.cursor/tasks/SEC-2026-04-22-WAVE5-PRE-RELEASE/SEC-2026-04-22-WAVE5-PRE-RELEASE.md#communications) |
 
 ### Phase B — At v1.2 cutover (release day)
 
@@ -239,12 +289,15 @@ If telemetry doesn't hit the 99% threshold by T+7 / T+14, **don't flip** — ext
 
 ### Phase D — Post v1.2 (queued, not blocking)
 
-| # | Item | Owner | Target |
-|---|---|---|---|
-| D1 | **Boson DID rotation** ([`SEC-2026-04-22-BOSON-DID-ROTATION`](.cursor/tasks/SEC-2026-04-22-BOSON-DID-ROTATION/SEC-2026-04-22-BOSON-DID-ROTATION.md)) — rotate the `data/identity.json` key surfaced by Wave 4 gitleaks. Needs Sash's input on what consumes the DID. | Sash + dev | v1.2.x patch |
-| D2 | **SEC-11 — DID JWT verify (Wave 5)** — JWT signature validation on `/api/did/callback`, DID-document resolver client, `state`-parameter binding, audit log + owner notification | dev | v1.2.1 or v1.3 |
-| D3 | **Smart-contract disposition doc** — Irzhy produces a parallel `disposition.md` on the contracts repo so we can publish a single combined response to the researcher | Irzhy | When his fixes land |
-| D4 | **Port secret-scanning gate to other Elacity repos** — `lit-keystore-moleculer` first (since it was the source of Finding #1), then any other repo with `.env*` / `.vscode/` / `.idea/` | dev | Recommended; not blocking |
+| # | Item | Owner | Target | Notes |
+|---|---|---|---|---|
+| **D0** | ⚡ **WAVE 6 — Internal audit hardening (A6-A12 + A16)** — TLS pinning on `/api/esc-rpc`, SHA-pin on ollama install, `requireOwner` + rate-limit on catalog/reindex + GraphQL proxies, esc-nft path allowlist, DNS-rebind-safe SSRF protection in `/api/http`, owner-binding on wallet proposals, argv-only system restart, **and signed-URL crypto verification on `/file` (A16)** | dev | **v1.2.1, ≤ T+14 days** | [`SEC-2026-04-22-WAVE6-HARDENING`](.cursor/tasks/SEC-2026-04-22-WAVE6-HARDENING/SEC-2026-04-22-WAVE6-HARDENING.md). Important: should land **before** the kill-switches flip strict (Phase C1/C2) so the post-cutover security posture is uniform. |
+| D1 | **Boson DID rotation** ([`SEC-2026-04-22-BOSON-DID-ROTATION`](.cursor/tasks/SEC-2026-04-22-BOSON-DID-ROTATION/SEC-2026-04-22-BOSON-DID-ROTATION.md)) — rotate the `data/identity.json` key surfaced by Wave 4 gitleaks. Needs Sash's input on what consumes the DID. | Sash + dev | v1.2.x patch | |
+| D2 | **SEC-11 — DID JWT verify** — JWT signature validation on `/api/did/callback`, DID-document resolver client, `state`-parameter binding, audit log + owner notification | dev | v1.2.1 or v1.3 | Researcher Finding #11. |
+| D3 | **WAVE 7 — Defence-in-depth polish (A13-A15)** — CORS suffix matching, session-token redaction in audit log, capsule-signing v2 cutover doc | dev | **v1.2.2 or v1.3** | [`SEC-2026-04-22-WAVE7-POLISH`](.cursor/tasks/SEC-2026-04-22-WAVE7-POLISH/SEC-2026-04-22-WAVE7-POLISH.md). |
+| D4 | **Smart-contract disposition doc** — Irzhy produces a parallel `disposition.md` on the contracts repo so we can publish a single combined response to the researcher | Irzhy | When his fixes land | |
+| D5 | **Port secret-scanning gate to other Elacity repos** — `lit-keystore-moleculer` first (since it was the source of Finding #1), then any other repo with `.env*` / `.vscode/` / `.idea/` | dev | Recommended; not blocking | |
+| D6 | **V2 — App capsule signing enforcement** — flip `AppInstallService` from warn-only to block-by-default for unsigned capsules. Requires publisher cert authority + manifest schema bump. | dev | v2 release | Documented by Wave 7 (A15). New task doc: [`V2-APP-CAPSULE-SIGNING`](.cursor/tasks/V2-APP-CAPSULE-SIGNING/V2-APP-CAPSULE-SIGNING.md). |
 
 ---
 
@@ -276,6 +329,11 @@ If telemetry doesn't hit the 99% threshold by T+7 / T+14, **don't flip** — ext
 | Scoped session tokens | New token type with DB column; iframe apps always get short-lived scoped tokens | `pc2-node/src/api/middleware.ts` + migration #29 |
 | `trust proxy` hardening | Always uses `req.socket.remoteAddress` for security decisions | `pc2-node/src/api/index.ts` |
 | Wave 4 gitleaks | Always runs in CI on every PR + every push to long-lived branches | `.github/workflows/secret-scan.yml` |
+| **A1 (Wave 5)** terminal RCE | `requireOwner` + `execFile` argv-only; `shell:true` requests rejected with 400 | `pc2-node/src/api/terminal.ts` + `index.ts:1306-1308` |
+| **A2 (Wave 5)** git RCE | All seven handlers (`clone/status/commit/push/pull/log/diff`) refactored to argv form (`execFile('git', args, …)`); URL/branch/ref/remote/path regex pre-validation; `--` argument-injection guard on every positional | `pc2-node/src/api/git.ts` |
+| **A3 (Wave 5)** backup chain | `requireOwner` on all five backup routes; backup filename whitelisted (`/^[A-Za-z0-9_.-]+\.tar\.gz$/`) on download/delete/restore-upload; create + restore use `execFile('node', [scriptPath, …])` | `pc2-node/src/api/backup.ts` + `index.ts:1293-1297` |
+| **A4 (Wave 5)** cross-user file read | Cross-wallet path-derived fallback restricted: a `/<addr>/...` request only retries against `<addr>` if `<addr>` matches the requesting user's EOA *or* their smart-account address (case-insensitive, null-safe). Foreign-wallet reads now return 404. | `pc2-node/src/api/filesystem.ts:577-597` |
+| **A5 (Wave 5)** voice install | `requireOwner` on `/voice/install`, `/enable`, `/disable`; `/voice` + `/voice/status` stay open to tethered wallets | `pc2-node/src/api/voice.ts` |
 
 ### Gated by a kill-switch (compatibility valve for the rollout window)
 
@@ -314,6 +372,9 @@ In short: **every CRITICAL-severity finding has its CRITICAL component hard-fixe
 | Wave 2 detail | [`.cursor/tasks/SEC-2026-04-21-PC2-AUDIT/WAVE-2-SIWE-AND-SETUP.md`](.cursor/tasks/SEC-2026-04-21-PC2-AUDIT/WAVE-2-SIWE-AND-SETUP.md) |
 | Wave 3 detail | [`.cursor/tasks/SEC-2026-04-21-PC2-AUDIT/WAVE-3-GATEWAY-LOCKDOWN.md`](.cursor/tasks/SEC-2026-04-21-PC2-AUDIT/WAVE-3-GATEWAY-LOCKDOWN.md) |
 | Wave 4 detail | [`.cursor/tasks/SEC-2026-04-21-PC2-AUDIT/WAVE-4-SECRET-HYGIENE.md`](.cursor/tasks/SEC-2026-04-21-PC2-AUDIT/WAVE-4-SECRET-HYGIENE.md) |
+| **Wave 5 detail (A1-A5, release-blocking)** | [`.cursor/tasks/SEC-2026-04-22-WAVE5-PRE-RELEASE/SEC-2026-04-22-WAVE5-PRE-RELEASE.md`](.cursor/tasks/SEC-2026-04-22-WAVE5-PRE-RELEASE/SEC-2026-04-22-WAVE5-PRE-RELEASE.md) |
+| **Wave 6 detail (A6-A12, ≤T+14d)** | [`.cursor/tasks/SEC-2026-04-22-WAVE6-HARDENING/SEC-2026-04-22-WAVE6-HARDENING.md`](.cursor/tasks/SEC-2026-04-22-WAVE6-HARDENING/SEC-2026-04-22-WAVE6-HARDENING.md) |
+| **Wave 7 detail (A13-A15, v1.2.2/v1.3)** | [`.cursor/tasks/SEC-2026-04-22-WAVE7-POLISH/SEC-2026-04-22-WAVE7-POLISH.md`](.cursor/tasks/SEC-2026-04-22-WAVE7-POLISH/SEC-2026-04-22-WAVE7-POLISH.md) |
 | Boson DID rotation follow-up | [`.cursor/tasks/SEC-2026-04-22-BOSON-DID-ROTATION/SEC-2026-04-22-BOSON-DID-ROTATION.md`](.cursor/tasks/SEC-2026-04-22-BOSON-DID-ROTATION/SEC-2026-04-22-BOSON-DID-ROTATION.md) |
 | Lit Action V1.2 cutover (separate but adjacent P0) | [`docs/handover/V12_SIGAUTH_HANDOVER.md`](V12_SIGAUTH_HANDOVER.md) |
 | Secret scanning runbook | [`docs/wiki/Technical/SECRET_SCANNING.md`](../wiki/Technical/SECRET_SCANNING.md) |
@@ -324,6 +385,7 @@ In short: **every CRITICAL-severity finding has its CRITICAL component hard-fixe
 
 When responding to the researcher, recommend including:
 1. This disposition document (or its TL;DR)
-2. The 4 commits as evidence: `80168f706`, `b2e509c18`, `16dccaf39`, `6ba49cfac` (all on `feature/lit-chipotle-migration`, will be in v1.2 tag)
+2. The 4 commits as evidence for the original 7 findings: `80168f706`, `b2e509c18`, `16dccaf39`, `6ba49cfac` (all on `feature/lit-chipotle-migration`, will be in v1.2 tag)
 3. Acknowledgement of the smart-contract findings as in flight under Irzhy
-4. Bounty discussion can resume — the 7 in-scope findings are demonstrably closed
+4. **Plus 5 additional findings (A1-A5) discovered during a post-triage internal sweep using your same methods** — closed in Wave 5 ahead of the v1.2 tag. 7 more (A6-A12) hardening items shipping as v1.2.1 ≤ T+14 days. 3 polish items (A13-A15) tracked for v1.2.2/v1.3.
+5. Bounty discussion can resume — the 7 in-scope researcher findings are demonstrably closed; the bonus 15 internal findings are evidence we took the report seriously enough to extend the audit. The right framing is "your work flushed out a class of bugs across the codebase, here's what else we found".
