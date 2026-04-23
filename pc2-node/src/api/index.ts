@@ -9,7 +9,7 @@ import { DatabaseManager, FilesystemManager } from '../storage/index.js';
 import { Config } from '../config/loader.js';
 import { baseRpcCall } from '../utils/rpc.js';
 import { Server as SocketIOServer } from 'socket.io';
-import { authenticate, corsMiddleware, errorHandler, AuthenticatedRequest } from './middleware.js';
+import { authenticate, requireOwner, corsMiddleware, errorHandler, AuthenticatedRequest } from './middleware.js';
 import { logger, createLogger } from '../utils/logger.js';
 const log = createLogger('api-index');
 import { handleWhoami } from './whoami.js';
@@ -1303,9 +1303,11 @@ export function setupAPI (app: Express): void {
     app.post('/api/terminal/destroy-all', authenticate, handleDestroyAllTerminals);
 
     // Terminal command execution API (for AI agents)
-    app.post('/api/terminal/exec', authenticate, handleExecCommand);
-    app.post('/api/terminal/script', authenticate, handleExecScript);
-    app.get('/api/terminal/tools', authenticate, handleListTools);
+    // Wave 5 (A1): owner-only — these endpoints execute arbitrary processes on
+    // the node and were previously reachable by any tethered wallet (RCE).
+    app.post('/api/terminal/exec', authenticate, requireOwner, handleExecCommand);
+    app.post('/api/terminal/script', authenticate, requireOwner, handleExecScript);
+    app.get('/api/terminal/tools', authenticate, requireOwner, handleListTools);
 
     // API Keys management (for agent authentication)
     app.get('/api/keys', authenticate, handleListApiKeys);
