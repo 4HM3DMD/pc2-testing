@@ -2,7 +2,7 @@
 
 **Task ID**: `SEC-2026-04-22-WAVE6-HARDENING`
 **Created**: 2026-04-22
-**Status**: 🟢 **Part 1 SHIPPED (4/8 + 1 deferred) — Part 2 PENDING (4/8)**
+**Status**: 🟢 **Part 1 SHIPPED (4/8 + 1 deferred) — Part 2: 3/4 SHIPPED (A7, A11, A16); A8 PARKED on DNS (Sash travelling)**
 **Priority**: P1 — close before kill-switches flip to strict (Phase C)
 **Findings closed**: A6 (system restart shell), A7 (`curl|sh` install), A8 (TLS verify off), A9 (open path-proxy), A10 (unauth GraphQL/reindex), A11 (DNS-rebind SSRF bypass), A12 (wallet proposal binding), **A16 (`/file` unsigned capability URL)**, A18 (scheduler dangerous-action gate — added 2026-04-22 post-Wave-5 audit)
 **Source**: Internal audit performed 2026-04-22. See [`SEC_2026_04_21_AUDIT_DISPOSITION.md`](../../../docs/handover/SEC_2026_04_21_AUDIT_DISPOSITION.md) §"Internal Audit Findings (2026-04-22)". A16 was discovered during the Wave 5 A4 sweep (2026-04-22) and rolled into this wave per Sash's call (`"for a16 i follow your reccomendation"`).
@@ -21,22 +21,34 @@
 | **A6**  | `61318414c` | System restart + Jetson commands moved to `execFileSync` argv form; pm2 candidates enumerated in JS via `readdirSync`; no shell, no glob, no env-var interpolation. |
 | docs    | `7a971b6d1` | Hard-fixed table extended for the four above; D0 split into D0a (shipped) + D0b (remaining). |
 
-### ⏳ Wave 6 part 2 — REMAINING (target v1.2.1b)
+### ✅ Wave 6 part 2 — 3/4 SHIPPED 2026-04-23 (commits on `feature/lit-chipotle-migration`)
 
-| Finding | One-line | Why deferred from part 1 |
+| Finding | Commit | One-line |
 |---|---|---|
-| **A8**  | `/api/esc-rpc` TLS pinning — replace `rejectUnauthorized:false` with hostname + public CA (Option 1, locked-in). | **Decision locked (2026-04-23)**: Option 1, hostname = **`elastossmartchain.ela.city`**. Live probe of `38.242.211.112:443` confirmed it already serves a valid Let's Encrypt `*.ela.city` wildcard cert (the in-code comment "self-signed cert" is wrong). **Blocker**: Sash is travelling and his DNS provider requires SMS 2FA on a number he can't reach. Parked. **When unblocked**: Sash adds `A elastossmartchain.ela.city → 38.242.211.112` (TTL 30 min) → agent verifies propagation → switches proxy + 4 other `38.242.211.112` call sites to the hostname → removes 5x `rejectUnauthorized:false` → atomic commit. The other Wave 6 part 2 items (A7, A11, A16) do **not** depend on A8 and can ship before it. |
-| **A7**  | `install-ollama` SHA-256 pin — download installer to a temp file, verify SHA against a pinned constant, then `execFileSync('sh', [tmpfile])`. | New helper + need to fetch and pin the current installer's SHA. |
-| **A11** | `/api/http` DNS-rebind hardening — undici Dispatcher with `connect.lookup` IP pinning + IPv6 ULA blocklist. | Larger change with new dep (undici Dispatcher); risk of breaking legitimate http-client calls if not tested carefully. |
-| **A16** | `/file?uid` HMAC sign+verify — verifier on `handleFile`, mint-helpers in `other.ts` + `filesystem.ts` + desktop, `fileUrlSigningRequired` kill-switch with 7-day log-only window. | Multi-component change — server verifier + 3 mint sites + a desktop UI helper + kill-switch wiring. Needs its own session. |
-| **A9**  | `esc-nft` prefix allowlist (deferred to **Wave 6.5/7**) | Per Sash's decision: enumerate every desktop UI `esc-nft/:path` call against the live UI for an hour first, then ship the allowlist. |
+| **A7**  | `01b2ed2dd` | `install-ollama` now downloads via `https.get` to a 0600 tmpfile (no shell pipe), SHA-256-verifies against the pinned constant `OLLAMA_INSTALL_SH_SHA256`, then `spawn('sh', [tmpfile])`. Mismatch → 503 with both expected and actual SHAs. Also gated by `requireOwner`. |
+| **A11** | `9887429e7` | `/api/http` and `/api/download` now `dns.lookup({all,verbatim})` once, validate every returned IP against the private/loopback/link-local blocklist, then build a per-request `undici.Agent` with `connect.lookup` overridden to return the pinned IP — closing the rebind window. IPv6 ULA fc00::/7 + link-local fe80::/10 + IPv4-mapped + CGNAT 100.64/10 added to the blocklist. `undici@^7.19.1` pinned as a direct dep. |
+| **A16** | `2a9e39386` | New `pc2-node/src/utils/fileUrlSigner.ts` (HMAC-SHA256 sign+verify, 32-byte key at `data/.file-url-signing-key` mode 0600, generated on first call, cached in memory). `handleFile` now verifies the URL on every request. `FILE_URL_SIGNING_REQUIRED` kill-switch defaults OFF for v1.2.1 → log-only window via `[file] legacy-unsigned`. All 3 server-side mint sites (`other.ts` /sign, `other.ts` open_item, `filesystem.ts` copy thumbnail) updated to produce real HMAC signatures with 24h TTL. |
+
+### ⏳ Wave 6 part 2 — REMAINING (1/4)
+
+| Finding | One-line | Blocker |
+|---|---|---|
+| **A8**  | `/api/esc-rpc` TLS pinning — replace `rejectUnauthorized:false` with hostname + public CA (Option 1, locked-in). | **Decision locked (2026-04-23)**: Option 1, hostname = **`elastossmartchain.ela.city`**. Live probe of `38.242.211.112:443` confirmed it already serves a valid Let's Encrypt `*.ela.city` wildcard cert (the in-code comment "self-signed cert" is wrong). **Blocker**: Sash is travelling and his DNS provider requires SMS 2FA on a number he can't reach. Parked. **When unblocked**: Sash adds `A elastossmartchain.ela.city → 38.242.211.112` (TTL 30 min) → agent verifies propagation → switches proxy + 4 other `38.242.211.112` call sites to the hostname → removes 5x `rejectUnauthorized:false` → atomic commit. |
+
+### 🔁 Deferred to Wave 6.5/7
+
+| Finding | One-line |
+|---|---|
+| **A9**  | `esc-nft` prefix allowlist — per Sash's decision: enumerate every desktop UI `esc-nft/:path` call against the live UI for an hour first, then ship the allowlist. |
 
 ### 🧪 Verification done so far
 
-- `npx tsc --noEmit` clean across `pc2-node` after each of A6, A10, A12, A18.
-- ESLint clean on all four modified files (`wallet.ts`, `scheduler.ts`, `index.ts`, `system.ts`).
-- Gitleaks pre-commit pass on every commit (5/5 commits on the branch).
-- Wave 6 smoke-test script (`pc2-node/scripts/wave6-smoke.sh`) deferred to land alongside the part-2 fixes — no value running half-coverage smoke.
+- `npx tsc --noEmit` clean across `pc2-node` after each of A6, A10, A12, A18 (part 1) and A7, A11, A16 (part 2).
+- ESLint clean on every modified file.
+- Gitleaks pre-commit pass on every commit (8/8 commits on the branch — 5 part 1 + 3 part 2).
+- A11 IPv4-private regex: 11/11 unit cases (loopback, RFC1918, link-local, CGNAT, public allow incl. `8.8.8.8` and `38.242.211.112`).
+- A16 fileUrlSigner: 12/12 functional cases (key persistence, sign/verify roundtrip, tampered uid/expires/signature rejected, expired URLs rejected, legacy URLs accepted with `legacy: true` when kill-switch off, legacy URLs rejected when kill-switch on, real HMAC continues to work in both kill-switch states).
+- Wave 6 smoke-test script (`pc2-node/scripts/wave6-smoke.sh`) — only A8 remains from part 2; the script will land alongside the A8 commit so we can run the full part-2 matrix in one pass.
 
 ---
 
