@@ -1,6 +1,7 @@
 import express, { Express, Request, Response, NextFunction } from 'express';
 import cookieParser from 'cookie-parser';
 import multer from 'multer';
+import rateLimit from 'express-rate-limit';
 import https from 'https';
 import os from 'os';
 import path from 'path';
@@ -68,6 +69,33 @@ declare global {
         }
     }
 }
+
+/**
+ * SEC-A10 (2026-04-22 audit): per-IP rate limiters for the catalog reindex
+ * trigger and the two upstream GraphQL forwarders. Protects from DoS / cost
+ * amplification on otherwise-unauth surfaces. The reindex limiter is
+ * deliberately strict (1 per 5 min) because the indexer is heavy even when
+ * triggered by a legitimate client.
+ *
+ * The GraphQL proxies remain unauthenticated by design (they forward the
+ * iframe app's own ela.city Bearer token to upstream), so per-IP rate
+ * limiting is the only viable defence.
+ */
+const reindexRateLimiter = rateLimit({
+    windowMs: 5 * 60 * 1000, // 5 minutes
+    max: 1, // 1 trigger per 5 min per IP
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many reindex requests. Try again in a few minutes.' },
+});
+
+const proxyGraphqlRateLimiter = rateLimit({
+    windowMs: 60 * 1000, // 1 minute
+    max: 30, // 30 proxied GraphQL queries per minute per IP
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many GraphQL requests to upstream proxy. Slow down.' },
+});
 
 export function setupAPI (app: Express): void {
     // Debug middleware for specific routes (enable as needed)
@@ -466,8 +494,13 @@ export function setupAPI (app: Express): void {
    * Trigger an immediate indexer scan. Called by the Creator app after channel
    * creation or minting so users don't wait up to scan_interval_minutes to see
    * their own new content. Internally guarded against concurrent scans.
+   *
+   * SEC-A10 (2026-04-22 audit): added authenticate + per-IP rate limit
+   * (1/5min). Iframe creator app authenticates via Referer fallback (its
+   * puter.auth.token URL param appears in the Referer header), so legitimate
+   * use is unaffected.
    */
-    app.post('/api/catalog/reindex', async (req: Request, res: Response) => {
+    app.post('/api/catalog/reindex', reindexRateLimiter, authenticate, async (req: Request, res: Response) => {
         const indexer = req.app.locals.indexerService;
         if ( ! indexer ) return res.status(503).json({ error: 'Indexer not available' });
         try {
@@ -1006,7 +1039,13 @@ export function setupAPI (app: Express): void {
     });
 
     // GraphQL Proxy — avoids CORS when market app (localhost iframe) calls base.ela.city
-    app.post('/api/elacity/graphql', async (req: Request, res: Response) => {
+    // SEC-A10 (2026-04-22 audit): per-IP rate limit only. Adding authenticate
+    // here would break the marketplace iframe, which uses the Authorization
+    // Bearer header to forward its own ela.city auth token to upstream — PC2
+    // cannot intercept that header for session lookup without breaking that
+    // contract. Per-IP rate-limit closes the DoS / cost-amplification surface
+    // (which is the actual A10 finding).
+    app.post('/api/elacity/graphql', proxyGraphqlRateLimiter, async (req: Request, res: Response) => {
         try {
             const upstream = 'https://base.ela.city/api/2.0/graphql';
             const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -1026,7 +1065,9 @@ export function setupAPI (app: Express): void {
     });
 
     // ESC NFT Marketplace — GraphQL proxy to ela.city/api (ESC backend with 54+ NFT collections)
-    app.post('/api/esc-nft/graphql', async (req: Request, res: Response) => {
+    // SEC-A10 (2026-04-22 audit): per-IP rate limit only — same rationale as
+    // /api/elacity/graphql above (forwards iframe's upstream auth header).
+    app.post('/api/esc-nft/graphql', proxyGraphqlRateLimiter, async (req: Request, res: Response) => {
         try {
             const upstream = 'https://ela.city/api/2.0/graphql';
             const headers: Record<string, string> = { 'Content-Type': 'application/json' };
