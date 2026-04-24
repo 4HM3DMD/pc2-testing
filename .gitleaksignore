@@ -48,6 +48,7 @@ src/gui/src/UI/AI/UIAIChat.js:generic-api-key:28
 # never appears in any committed source. Gitleaks' `generic-api-key`
 # rule fires on the high-entropy "ed25519" suffix.
 pc2-node/scripts/package-app.ts:generic-api-key:235
+pc2-node/scripts/package-app.ts:generic-api-key:244
 
 # ---------------------------------------------------------------------------
 # TRIAGE-6 — Public-by-design Ed25519 publisher key for the v1.2 app
