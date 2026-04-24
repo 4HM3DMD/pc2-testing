@@ -309,6 +309,64 @@ All in the [PC2 repository](https://github.com/Elacity/pc2.net/tree/feature/lit-
 
 ---
 
+## 10. First Capsules on ElastOS — the dapp-store unlock
+
+The 6 apps in [`pc2-node/data/test-apps/`](https://github.com/Elacity/pc2.net/tree/feature/lit-chipotle-migration/pc2-node/data/test-apps) (Market, Creator, Elastos NFT, Glide Finance, Elacity Player, dDRM Viewer) are **already in the right shape to become the first 6 capsules on ElastOS Runtime v0.1.x**. Each one ships with:
+
+- Valid `app.json` (capabilities, services, external_services, postMessage_events)
+- Working `index.html` entry
+- Compatible iframe sandbox model
+- Same EIP-1193 wallet shim (`pc2-wallet-provider.js`) the Runtime will expose
+
+### v1.2.x positioning — system apps vs dapp-store capsules
+
+> **Founder direction (2026-04-23):** the v1.2.1 dapp-store unlock targets **two apps as removable capsules**. The four protocol apps stay built-in.
+
+| Role | Apps | v1.2.x behaviour |
+|---|---|---|
+| **System / built-in** (bundled in PC2, can't be uninstalled) | `elacity-market`, `elacity-creator`, `elacity-player`, `ddrm-viewer` | Ship inside the launcher binary. Updates delivered via signed registry entries (CID + sig). These are the dDRM protocol surface — Market is the marketplace UI, Creator is the minting UI, Player opens any `.ddrm` media file, Viewer opens any `.ddrm` non-media file. Removing them would break PC2's value prop. |
+| **Dapp-store capsules** (downloadable from `apps.ela.city`, removable) | `elastos-nft` (Galaxy NFT marketplace), `glide-finance` (Glide DEX) | Uninstalled by default on fresh PC2; one-click install from start menu. First proof points for the dapp-store mechanic. Risk-bounded — install-flow regressions don't affect Market/Creator/Player/Viewer users. |
+
+**All 6 apps still get a CID + Ed25519 signature in the registry.** The split is purely an install-experience choice (does the user have to opt in?), not an infrastructure choice. Same packager output, same IPFS pin, same registry shape — just a `role: "system"` vs `role: "dapp"` field that determines whether the launcher preinstalls it.
+
+### What's missing for the unlock
+
+1. **Tar.gz extraction in `extractBundle`** (~20 LOC + `tar` dep)
+2. **Bundle packager script** — tarball + sign + IPFS-pin (~80 LOC standalone)
+3. **Registry entries with real CIDs + signatures** for all 6 apps (supernode-side, no node code change), with `role: "system" | "dapp"`
+4. **Frontend "Install" button** on `apps.ela.city` for `role: "dapp"` entries (NFT, Glide)
+5. **Launcher start-menu update** — show NFT and Glide as "Available" tiles on fresh PC2 (one-click install)
+6. **Elacity Labs Ed25519 dev signing key** + key-of-record published
+7. **Supernode pin set** — InterServer + Contabo each pin every CID they advertise in the registry (daily cron, ~30 LOC each). Today the supernodes serve registry **metadata** but not bytes; this makes them act as guaranteed seeders. Combined with `ipfs.ela.city` (the canonical Elacity Kubo node, which already hosts media + NFT artwork) and the per-PC2 `ContentSeedingService` (every install adds another seeder organically), every capsule has **four independent sources**. Removes single-host dependency on `ipfs.ela.city`; fresh installs are never DHT-gambled.
+
+Total effort: ~3 eng-days for the packager/extractor/signing, ~2 days for the install UX, ~half a day per supernode operator for the pin-set cron. Purely additive — does not touch v1.2 release surface. Tracked in detail in [V1.2_ADOPTION_ROADMAP.md](../core/V1.2_ADOPTION_ROADMAP.md#first-capsules-on-elastos--the-dapp-store-unlock).
+
+**Why this matters for runtime convergence:** when Anders is ready to host capsules in Runtime v0.1.x, the same tarball + signature + manifest **work without modification**. Capsule loader reads the same `app.json`, validates the same Ed25519 sig, mounts the same wallet bridge. The system/dapp distinction stays in the registry as a "preinstalled" flag — Runtime treats both the same; the Shell preinstalls the system ones at first boot. **Zero rewrite — these 6 apps become the first 6 capsules in the ElastOS app catalog on day 1 of Runtime v0.1.2.**
+
+### Free vs. paid capsules — the dDRM extension
+
+The dapp-store flow above describes **free capsules** (signed tarball, anyone can install). The same protocol naturally extends to **paid capsules** — the dDRM bytes pipeline is content-type agnostic, so the same encryption + Lit/Chipotle wrap + on-chain ACCESS_TOKEN that today gates a video can gate a `.tar.gz` of a capsule.
+
+Mapped to Anders' three-tier architecture (Runtime → Shell → Capsules):
+
+- **Free capsule install** = Anders' existing signed publish/install/update flow. Drop-in compatible with our packager output. Lives in the Runtime + Shell tiers.
+- **Paid capsule install** = a `drm-provider` capsule in the Capsules tier (sibling of `wallet-provider`, `storage-provider`, `payment-provider`). When the Shell sees `manifest.distribution.drm = true`, it delegates fetch+decrypt to `drm-provider` before handing the bytes to the Runtime's signature-verify-and-install path. **The Runtime trusted base does not need to know dDRM exists.** This is the right boundary — small trusted base, dDRM stays in userland where the protocol can evolve.
+
+Practically: ~1 eng-week additional work on top of the free-capsule unlock (~30 LOC packager extension + ~50 LOC `AppInstallService.install()` extension + ~1 day Creator UI + ~1 day Market UI). All composition of components we already have in production. No new contracts, no new infrastructure.
+
+This means **the dapp store IS the Elacity Marketplace.** Free capsules are listings with price 0, paid capsules are listings with a price tag, same wallet flow, same dDRM contracts, same royalty mechanics. Full mechanics in [V1.2_ADOPTION_ROADMAP.md §"Paid Capsules"](../core/V1.2_ADOPTION_ROADMAP.md#paid-capsules--when-the-dapp-store-is-the-marketplace).
+
+| App | v1.2.x role | Bundled today | IPFS-installable (post Phase 1) | Runtime capsule (Anders Phase 4) |
+|---|---|---|---|---|
+| `elacity-market` | **system** (built-in) | ✅ | 📋 needs CID + sig (for update channel) | 📋 same tarball, preinstalled by Shell |
+| `elacity-creator` | **system** (built-in) | ✅ | 📋 needs CID + sig (for update channel) | 📋 same tarball, preinstalled by Shell |
+| `elacity-player` | **system** (built-in, media runtime) | ✅ (rebranded Mar 31) | 📋 needs CID + sig (for update channel) | 📋 same tarball, preinstalled by Shell |
+| `ddrm-viewer` | **system** (built-in, non-media runtime) | ✅ (rebranded Mar 31) | 📋 needs CID + sig (for update channel) | 📋 same tarball, preinstalled by Shell |
+| `elastos-nft` | **dapp** (downloadable) | ✅ | 📋 needs CID + sig — **first dapp-store capsule** | 📋 same tarball, user-installed |
+| `glide-finance` | **dapp** (downloadable) | ✅ | 📋 needs CID + sig — **first dapp-store capsule** | 📋 same tarball, user-installed |
+
+---
+
 ## Quick Reference: What PC2 Ships Today
 
 | Category | Count | Highlights |

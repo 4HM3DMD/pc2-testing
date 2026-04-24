@@ -1,11 +1,14 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+/* Palette aligned with elacity-market / elacity-creator dark mode (2026-04-23)
+   so the dDRM viewer shares one brand with the rest of the Elacity sibling apps.
+   Accent / success / danger were already on the shared palette and are unchanged. */
 :root {
-  --bg: #0f1117;
-  --surface: #1a1d27;
-  --border: #2a2d3a;
-  --text: #e4e4e7;
-  --text-muted: #71717a;
+  --bg: #121212;
+  --surface: #1a1a1a;
+  --border: #333333;
+  --text: #e5e5e5;
+  --text-muted: #a3a3a3;
   --accent: #3b82f6;
   --accent-soft: rgba(59,130,246,0.15);
   --danger: #ef4444;
@@ -861,7 +864,7 @@ img { -webkit-user-drag: none; }
 
 .epub-nav-btn:hover,
 .epub-size-btn:hover,
-.epub-toc-btn:hover { background: rgba(99, 102, 241, 0.12); }
+.epub-toc-btn:hover { background: var(--accent-soft); }
 
 .epub-chapter-indicator {
   display: inline-flex;
@@ -949,7 +952,7 @@ img { -webkit-user-drag: none; }
   color: inherit;
 }
 
-.epub-toc-entry:hover { background: rgba(99, 102, 241, 0.12); }
+.epub-toc-entry:hover { background: var(--accent-soft); }
 
 /* ── CBZ Comic Reader ────────────────────────────────────────── */
 
@@ -1007,7 +1010,7 @@ img { -webkit-user-drag: none; }
 }
 
 .cbz-nav-btn:hover,
-.cbz-mode-btn:hover { background: rgba(99, 102, 241, 0.2); }
+.cbz-mode-btn:hover { background: var(--accent-soft); }
 
 .cbz-page-indicator {
   display: inline-flex;

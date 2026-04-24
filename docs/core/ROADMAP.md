@@ -26,6 +26,8 @@ Each **Milestone** from the DAO proposal is broken down into concrete **Work Str
 | [ARM_DEVICES.md](../deployment/ARM_DEVICES.md) | Jetson/Raspberry Pi deployment |
 | [ELASTOS_AGENT_REFERENCE.md](./ELASTOS_AGENT_REFERENCE.md) | Complete agent reference: why/how/what, talking points, competitive positioning, audience angles |
 | [CAPSULE_COMPATIBILITY.md](./CAPSULE_COMPATIBILITY.md) | PC2 v1 capsule compatibility assessment, Runtime study, provider mapping, refactoring inventory |
+| [V1.2_ADOPTION_ROADMAP.md](./V1.2_ADOPTION_ROADMAP.md) | **Post-v1.2 adoption plan: ranked Tier 1/2/3 features for individual + enterprise traction, runtime-convergence mapping, dapp-store unlock for first capsules. Read this for "what ships next."** |
+| [V1.2_TESTING_CHECKLIST.md](./V1.2_TESTING_CHECKLIST.md) | Manual app-by-app smoke checklist for v1.2 release validation (complements RG3 automated matrix) |
 | [elastos-runtime](https://github.com/Elacity/elastos-runtime) | Anders' Rust runtime: capsule model, capability tokens, Carrier P2P, namespace, architecture |
 
 ---
@@ -89,6 +91,54 @@ These diagrams from Rong define the north star. Every work stream should move us
 ---
 
 ## Work Streams by Milestone
+
+> **Post-v1.2 strategic plan (added 2026-04-23):** the full Tier 1/2/3 ranked plan, dapp-store unlock, paid-capsule mechanics, MCP/vibecoding strategy, and Anders' Runtime alignment all live in [V1.2_ADOPTION_ROADMAP.md](./V1.2_ADOPTION_ROADMAP.md). Milestones below remain the canonical month-by-month plan; the adoption roadmap is the *"what ships in the 30/60/90/120-day windows after v1.2.0 tags"* answer. Headline calls below.
+
+### Post-v1.2 Strategic Plan (summary — full detail in [V1.2_ADOPTION_ROADMAP.md](./V1.2_ADOPTION_ROADMAP.md))
+
+**The framing:** v1.2.0 is the last "feature-only" release. v1.2.1 onwards converts security correctness into adoption — for individuals, creators, devs, and enterprise — using the existing app-install + dDRM + capability infrastructure. Nothing in this plan requires Runtime-tier work from Anders.
+
+**Pre-v1.2 (purely additive, ships with the v1.2.0 tag or just after):**
+- §P0 telemetry pipe (`POST /api/telemetry/onramp`) — every later metric depends on this
+- §P1 app bundle packager + tar.gz extraction in `AppInstallService` — unblocks the dapp store
+- §P2 `npx @elacity/create-capsule <template>` — 4 starting templates (`storefront`, `gated-content`, `agent-app`, `nft-drop`)
+- §P3 one-line PC2 installer (`curl … | sh`) — the "10-minute promise" demo
+- §P4 compliance pack drafts (GDPR DPA, SOC2, non-custodial legal opinion) — start the lawyer clock
+
+**Tier 1 (30–60 days after v1.2.0):**
+- §T1.1 `apps.ela.city` dapp-store UI (categories, search, install button, signature status)
+- §T1.2 streaming royalty UI (per-second ticker in Creator dashboard)
+- §T1.3 per-creator analytics — the Bible's Four R's baked in
+- §T1.4 capsule template gallery (5 → 10 templates, each a YouTube demo)
+- §T1.5 in-runtime "It works" demo (`git clone` to first test payment in <10 min)
+- §T1.6 **Capsule SDK MCP server** — wraps the capsule CLI as MCP tools, makes every Cursor / Claude / Continue / Windsurf user a potential capsule developer with zero learning curve. **Single biggest leverage move on the Acquire (devs) loop node.**
+
+**Tier 2 (60–120 days):** SAML/OIDC SSO, audit-log streaming + SIEM connectors, compliance pack publication, self-hosted PC2 HA cluster — the four enterprise unlocks above the $50k ACV line.
+
+**Tier 3 (120–180+ days):** WordPress/Shopify plugin bridges, mobile companion (read-only first), public attestation registry (the moat), Stripe/Reap fiat on-ramp.
+
+#### First capsules on ElastOS — default apps vs. dapp-store capsules
+
+> **Founder direction (2026-04-23):** the dapp-store unlock at v1.2.1 ships with **two** apps as removable capsules; the four protocol apps stay bundled.
+
+| Role | Apps | Behavior |
+|---|---|---|
+| **Default / system apps** (bundled, signed, registry-tracked, can't be uninstalled) | `elacity-market`, `elacity-creator`, `elacity-player`, `ddrm-viewer` | Ship inside the PC2 binary. Updates delivered via signed registry entries. These are the dDRM protocol surface — removing them would break PC2's value prop. |
+| **First dapp-store capsules** (downloadable from `apps.ela.city`, removable) | `elastos-nft` (Galaxy NFT marketplace), `glide-finance` (Glide DEX) | Uninstalled by default on fresh PC2; one-click install from the start menu. First proof points for the dapp-store mechanic. Risk-bounded — if the install flow regresses, Market/Creator users see no impact. |
+
+**Convergence story (Anders' Runtime v2):** all six apps still become capsules. The `system` vs `dapp` distinction stays in the registry as a "preinstalled" flag — Runtime treats both the same; the Shell preinstalls the four system ones at first boot.
+
+**Where capsule bytes live:** capsule tarballs are content-addressed on IPFS with **four independent sources**: (1) `ipfs.ela.city` — the canonical Elacity Kubo node already hosting media + NFT artwork; (2) **InterServer supernode** with a new pin-set cron (advertise = pin); (3) **Contabo supernode** with the same; (4) every PC2 that already installed the capsule (per-node `ContentSeedingService` is already shipping). Removes single-host dependency on `ipfs.ela.city` and means fresh installs are never DHT-gambled. Pin-set work is half a day per supernode operator — tracked as §P1.6 in the adoption roadmap.
+
+#### Paid capsules — when the dapp store IS the marketplace
+
+The protocol does not care what's inside the encrypted bytes. A signed-and-encrypted tarball is a signed-and-encrypted tarball. So at Phase 3 (v1.2.2):
+- **Free capsule** = signed tarball, IPFS-pinned, anyone can install (NFT + Glide today)
+- **Paid capsule** = encrypted+signed tarball, IPFS-pinned, install gated by an on-chain ACCESS_TOKEN — same dDRM contracts that today wrap a PDF or video
+
+Same contracts on Base mainnet. Same Lit Protocol/Chipotle CEK envelope. Same wallet UX. **The "dapp store" and the "Elacity Marketplace" become one surface** — an app is just another asset type. This is also why the Tier 1 work sequences cleanly toward Anders' Runtime: the `drm-provider` capsule that handles paid-capsule install is the same one that handles paid-media decrypt today.
+
+---
 
 ### Milestone 1 — Campaign Launch & Product Continuity (Mar 1, 2026)
 

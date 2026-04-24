@@ -9,15 +9,26 @@ import { Readable, pipeline } from 'stream';
 import { FilesystemManager } from '../storage/filesystem.js';
 import { AuthenticatedRequest } from './middleware.js';
 import { createLogger } from '../utils/logger.js';
+import { verifyFileUrl, isFileUrlSigningRequired } from '../utils/fileUrlSigner.js';
 const log = createLogger('api-file');
 
 /**
  * Get file by UID (signed access)
- * GET /file?uid=uuid-...
+ * GET /file?uid=uuid-...&expires=…&signature=…
+ *
+ * Signature verification (A16, Wave 6 part 2):
+ *  - Defaults to log-only mode for v1.2.1 (kill-switch
+ *    FILE_URL_SIGNING_REQUIRED=false). Legacy un-signed URLs are still
+ *    served but produce a `[file] legacy-unsigned` log line so we can
+ *    confirm zero legitimate traffic before flipping the switch ON.
+ *  - When FILE_URL_SIGNING_REQUIRED=true: only HMAC-valid + non-expired
+ *    URLs are served; everything else returns 403.
  */
 export async function handleFile(req: Request, res: Response): Promise<void> {
   const filesystem = (req.app.locals.filesystem as FilesystemManager | undefined);
   const uid = req.query.uid as string;
+  const expiresParam = typeof req.query.expires === 'string' ? req.query.expires : undefined;
+  const signatureParam = typeof req.query.signature === 'string' ? req.query.signature : undefined;
 
   if (!filesystem) {
     res.status(500).json({ error: 'Filesystem not initialized' });
@@ -27,6 +38,28 @@ export async function handleFile(req: Request, res: Response): Promise<void> {
   if (!uid) {
     res.status(400).json({ error: 'Missing uid parameter' });
     return;
+  }
+
+  // Verify the capability URL. In log-only mode this only blocks
+  // explicitly-expired URLs and forged signatures; legacy un-signed
+  // URLs pass through with a warning. In strict mode any irregularity
+  // returns 403.
+  const verify = verifyFileUrl(uid, expiresParam, signatureParam);
+  if (!verify.ok) {
+    log.warn('[File] url-rejected', {
+      reason: verify.reason,
+      strict: isFileUrlSigningRequired(),
+      uidPrefix: uid.slice(0, 24),
+    });
+    res.status(403).json({ error: 'invalid_or_expired_url', reason: verify.reason });
+    return;
+  }
+  if (verify.legacy) {
+    log.warn('[File] legacy-unsigned', {
+      uidPrefix: uid.slice(0, 24),
+      hasExpires: !!expiresParam,
+      hasSignature: !!signatureParam,
+    });
   }
 
   try {

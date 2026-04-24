@@ -2,10 +2,53 @@
 
 **Task ID**: `SEC-2026-04-22-WAVE6-HARDENING`
 **Created**: 2026-04-22
-**Status**: 🟡 **Proposed — awaiting Sash approval. Targets v1.2.1 (≤ T+14 days post-v1.2 release).**
+**Status**: 🟢 **Part 1 SHIPPED (4/8 + 1 deferred) — Part 2: 3/4 SHIPPED (A7, A11, A16); A8 PARKED on DNS (Sash travelling)**
 **Priority**: P1 — close before kill-switches flip to strict (Phase C)
-**Findings closed**: A6 (system restart shell), A7 (`curl|sh` install), A8 (TLS verify off), A9 (open path-proxy), A10 (unauth GraphQL/reindex), A11 (DNS-rebind SSRF bypass), A12 (wallet proposal binding), **A16 (`/file` unsigned capability URL)**
+**Findings closed**: A6 (system restart shell), A7 (`curl|sh` install), A8 (TLS verify off), A9 (open path-proxy), A10 (unauth GraphQL/reindex), A11 (DNS-rebind SSRF bypass), A12 (wallet proposal binding), **A16 (`/file` unsigned capability URL)**, A18 (scheduler dangerous-action gate — added 2026-04-22 post-Wave-5 audit)
 **Source**: Internal audit performed 2026-04-22. See [`SEC_2026_04_21_AUDIT_DISPOSITION.md`](../../../docs/handover/SEC_2026_04_21_AUDIT_DISPOSITION.md) §"Internal Audit Findings (2026-04-22)". A16 was discovered during the Wave 5 A4 sweep (2026-04-22) and rolled into this wave per Sash's call (`"for a16 i follow your reccomendation"`).
+
+---
+
+## Status snapshot — 2026-04-22
+
+### ✅ Wave 6 part 1 — SHIPPED (commits on `feature/lit-chipotle-migration`)
+
+| Finding | Commit | One-line |
+|---|---|---|
+| **A12** | `a731206f8` | Wallet proposals bound to originating wallet (approve/reject/execute return 403 on cross-wallet calls). |
+| **A18** | `8b0a71fdd` | `requireOwner` gate on dangerous scheduler actions (`terminal_exec`, `terminal_script`, `git_pull`) at create / update. |
+| **A10** | `d1c2036e4` | `authenticate` + per-IP rate limit (1/5min) on `/api/catalog/reindex`; per-IP rate limit only (30/min) on the two GraphQL forwarders (`authenticate` would break iframe Authorization-forwarding). |
+| **A6**  | `61318414c` | System restart + Jetson commands moved to `execFileSync` argv form; pm2 candidates enumerated in JS via `readdirSync`; no shell, no glob, no env-var interpolation. |
+| docs    | `7a971b6d1` | Hard-fixed table extended for the four above; D0 split into D0a (shipped) + D0b (remaining). |
+
+### ✅ Wave 6 part 2 — 3/4 SHIPPED 2026-04-23 (commits on `feature/lit-chipotle-migration`)
+
+| Finding | Commit | One-line |
+|---|---|---|
+| **A7**  | `01b2ed2dd` | `install-ollama` now downloads via `https.get` to a 0600 tmpfile (no shell pipe), SHA-256-verifies against the pinned constant `OLLAMA_INSTALL_SH_SHA256`, then `spawn('sh', [tmpfile])`. Mismatch → 503 with both expected and actual SHAs. Also gated by `requireOwner`. |
+| **A11** | `9887429e7` | `/api/http` and `/api/download` now `dns.lookup({all,verbatim})` once, validate every returned IP against the private/loopback/link-local blocklist, then build a per-request `undici.Agent` with `connect.lookup` overridden to return the pinned IP — closing the rebind window. IPv6 ULA fc00::/7 + link-local fe80::/10 + IPv4-mapped + CGNAT 100.64/10 added to the blocklist. `undici@^7.19.1` pinned as a direct dep. |
+| **A16** | `2a9e39386` | New `pc2-node/src/utils/fileUrlSigner.ts` (HMAC-SHA256 sign+verify, 32-byte key at `data/.file-url-signing-key` mode 0600, generated on first call, cached in memory). `handleFile` now verifies the URL on every request. `FILE_URL_SIGNING_REQUIRED` kill-switch defaults OFF for v1.2.1 → log-only window via `[file] legacy-unsigned`. All 3 server-side mint sites (`other.ts` /sign, `other.ts` open_item, `filesystem.ts` copy thumbnail) updated to produce real HMAC signatures with 24h TTL. |
+
+### ⏳ Wave 6 part 2 — REMAINING (1/4)
+
+| Finding | One-line | Blocker |
+|---|---|---|
+| **A8**  | `/api/esc-rpc` TLS pinning — replace `rejectUnauthorized:false` with hostname + public CA (Option 1, locked-in). | **Decision locked (2026-04-23)**: Option 1, hostname = **`elastossmartchain.ela.city`**. Live probe of `38.242.211.112:443` confirmed it already serves a valid Let's Encrypt `*.ela.city` wildcard cert (the in-code comment "self-signed cert" is wrong). **Blocker**: Sash is travelling and his DNS provider requires SMS 2FA on a number he can't reach. Parked. **When unblocked**: Sash adds `A elastossmartchain.ela.city → 38.242.211.112` (TTL 30 min) → agent verifies propagation → switches proxy + 4 other `38.242.211.112` call sites to the hostname → removes 5x `rejectUnauthorized:false` → atomic commit. |
+
+### 🔁 Deferred to Wave 6.5/7
+
+| Finding | One-line |
+|---|---|
+| **A9**  | `esc-nft` prefix allowlist — per Sash's decision: enumerate every desktop UI `esc-nft/:path` call against the live UI for an hour first, then ship the allowlist. |
+
+### 🧪 Verification done so far
+
+- `npx tsc --noEmit` clean across `pc2-node` after each of A6, A10, A12, A18 (part 1) and A7, A11, A16 (part 2).
+- ESLint clean on every modified file.
+- Gitleaks pre-commit pass on every commit (8/8 commits on the branch — 5 part 1 + 3 part 2).
+- A11 IPv4-private regex: 11/11 unit cases (loopback, RFC1918, link-local, CGNAT, public allow incl. `8.8.8.8` and `38.242.211.112`).
+- A16 fileUrlSigner: 12/12 functional cases (key persistence, sign/verify roundtrip, tampered uid/expires/signature rejected, expired URLs rejected, legacy URLs accepted with `legacy: true` when kill-switch off, legacy URLs rejected when kill-switch on, real HMAC continues to work in both kill-switch states).
+- Wave 6 smoke-test script (`pc2-node/scripts/wave6-smoke.sh`) — only A8 remains from part 2; the script will land alongside the A8 commit so we can run the full part-2 matrix in one pass.
 
 ---
 
@@ -106,11 +149,25 @@ These are all "second-order" risks. None of them can take over the node alone, b
 
 **Today**: Lines 1049-1052 instantiate an HTTPS agent with `rejectUnauthorized: false` and proxy JSON-RPC to a hard-coded Contabo IP. The reason for `rejectUnauthorized: false` is presumably that the IP doesn't match the cert (CN binding), but the cure is worse than the disease.
 
-**Fix** (pick whichever Sash prefers — both close the hole):
-- **Option 1 — Hostname-then-pin-IP**: change the upstream from `https://<ip>/...` to `https://api.elastos.io/...` (or whatever public hostname Contabo answers on). Drop `rejectUnauthorized: false`. Use the public CA chain.
-- **Option 2 — Cert pinning**: keep the IP but pin the cert. Use `tls.connect({ host, port, ca: [PINNED_PEM], checkServerIdentity: () => undefined })`. Pin the *exact certificate* in source; rotate when Contabo renews.
+**Live probe (2026-04-23) — corrects an earlier mistake in this doc:**
+- `38.242.211.112:443` already serves a **valid Let's Encrypt wildcard `*.ela.city`** (NotBefore `2026-02-20`, NotAfter `2026-05-21`, auto-renewing). The `// self-signed cert` comment in `index.ts:1089` is wrong.
+- `https://38.242.211.112/rpc/esc` returns valid `{"result":"0x22ac22e"}` for `eth_blockNumber` — endpoint is healthy.
+- The **only** thing blocking `rejectUnauthorized: true` is that we connect by raw IP, so TLS hostname verification fails. Adding any `*.ela.city` A record pointing at the IP fixes it instantly.
 
-Option 1 is preferred (less ongoing maintenance). I'll write Option 1 unless Sash specifies otherwise.
+**Fix — Option 1 (locked-in)**:
+1. Sash adds DNS record: `A elastossmartchain.ela.city → 38.242.211.112` (TTL 30 min). *(Hostname locked-in: `esc.ela.city` is already taken; `elastossmartchain.ela.city` is descriptive and available. Wildcard cert covers it automatically.)*
+2. Agent waits ~5 min, verifies with `dig +short elastossmartchain.ela.city`.
+3. Switch the proxy from `hostname: '38.242.211.112', port: 443, path: '/rpc/esc'` → `hostname: 'elastossmartchain.ela.city', port: 443, path: '/rpc/esc'`.
+4. Drop the custom `https.Agent({ rejectUnauthorized: false })` — use the default agent. Standard public-CA verification works.
+5. Migrate the **other 4 call sites** that hit the same IP with `rejectUnauthorized: false` to the same hostname:
+   - `pc2-node/src/api/chipotle-client.ts:48` (DDRM provisioning URL list)
+   - `pc2-node/src/services/boson/ConnectivityService.ts:68,71,79` (supernode failover)
+   - (libp2p multiaddrs in `pc2-node/src/storage/ipfs.ts:54-55` are not HTTPS — leave alone.)
+6. Remove the wrong code comment (`// self-signed cert`).
+
+**Blocker (2026-04-23)**: Sash is travelling. His DNS provider requires SMS 2FA on a number he can't reach. Parked until he's back at his usual SIM. **No SSH, no Contabo console, no cert provisioning required** — everything is already in place; this is one DNS record.
+
+**Option 2 (cert pinning) — rejected**: Now that we know the cert is real public-CA, pinning would be strictly worse (annual rotation burden vs. zero ongoing maintenance with Option 1).
 
 **Plus**: rate-limit `/api/esc-rpc` per IP to 60 req/min. Today it has no limit, so it can be used to amplify outbound traffic to Contabo from a compromised tethered wallet.
 
@@ -332,7 +389,7 @@ Test harness lives at `pc2-node/tests/security/wave6-smoke.sh`.
 
 ### Possibly created (Sash to choose for A8)
 
-- `pc2-node/src/services/elastos/pinned-ca.pem` — only if we go Option 2 (cert-pin) instead of Option 1 (hostname). Default plan: Option 1, no new file.
+- ~~`pc2-node/src/services/elastos/pinned-ca.pem`~~ — **N/A**. Decision locked-in 2026-04-23: Option 1 (hostname `elastossmartchain.ela.city`). No new file needed.
 
 ---
 
@@ -407,7 +464,7 @@ No UI changes needed. All Wave 6 fixes are server-side and transparent to legiti
 ## Open questions for Sash before kickoff
 
 1. **A7 SHA pinning** — are we OK with a manual SHA bump in PC2 patch release whenever ollama updates upstream? Alternative is to mirror our own copy of `install.sh` and have it be a Wave-7 ongoing task.
-2. **A8 — Option 1 vs Option 2** — preference for hostname-based TLS (less maintenance) or pinned cert (works even if Contabo's hostnames change)?
+2. ~~**A8 — Option 1 vs Option 2**~~ — **Resolved 2026-04-23**: Option 1, hostname `elastossmartchain.ela.city`. Awaiting Sash's DNS record once he's back at his usual SIM (DNS provider 2FA).
 3. **A9 — esc-nft allowlist** — I'll grep the desktop UI for the actual paths used and propose the list; please confirm before merge.
 4. **A16 TTL** — proposal: 10 minutes for embedded thumbnails / iframe previews, 1 hour for owner-initiated downloads. Acceptable, or do you want shorter / longer?
 5. **A16 kill-switch** — same `T+7d into v1.2.1` schedule as SIWE / GW_AUTH? Or do you want to flip immediately on v1.2.1 ship since the desktop will ship the minter in the same release?

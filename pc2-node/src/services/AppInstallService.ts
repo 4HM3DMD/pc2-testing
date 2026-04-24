@@ -8,7 +8,10 @@
 import { existsSync, mkdirSync, writeFileSync, readFileSync, rmSync, readdirSync, statSync } from 'fs';
 import { join, resolve, basename, normalize, sep as pathSep } from 'path';
 import { createHash } from 'crypto';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import nacl from 'tweetnacl';
+import * as tar from 'tar';
 import { createLogger } from '../utils/logger.js';
 import { DatabaseManager, InstalledApp } from '../storage/database.js';
 import { IPFSStorage } from '../storage/ipfs.js';
@@ -16,6 +19,8 @@ import { IPFSStorage } from '../storage/ipfs.js';
 const log = createLogger('app-install');
 
 const MAX_APP_SIZE_BYTES = 100 * 1024 * 1024; // 100 MB hard cap per app
+const MAX_BUNDLE_ENTRIES = 10_000;            // zip-bomb guard for tar.gz bundles
+const TAR_GZIP_MAGIC = Buffer.from([0x1f, 0x8b]); // first 2 bytes of any gzip stream
 
 function resolveAuthorName(author?: string | AppAuthor): string | null {
   if (!author) return null;
@@ -127,26 +132,38 @@ export class AppInstallService {
   private ipfs: IPFSStorage | null;
   private appsDir: string;
   /**
-   * SEC-A17 (2026-04 Wave 5.5): the only directory `installFromLocal` is
+   * SEC-A17 (2026-04 Wave 5.5): the only directories `installFromLocal` is
    * allowed to source from. Sideloading an app from anywhere else (e.g.
    * `data/wallets/`) would let an attacker exfiltrate the owner mnemonic
    * via the `/installed-apps/*` static route. The route layer also gates
    * `install-local` with `requireOwner`; this is defense-in-depth so any
    * future internal caller is also bound to the allowlist.
+   *
+   * Both `data/dev-apps/` (owner sideload workspace) and `data/test-apps/`
+   * (repo-shipped bundled-app fixtures consumed by the startup sync hook
+   * in `api/index.ts`) are included. Both are server-controlled paths
+   * not writable via any HTTP route; widening the allowlist by these two
+   * roots does not give an attacker any new plant-a-file primitive.
    */
-  private devAppsDir: string;
+  private allowedLocalRoots: string[];
 
   constructor(db: DatabaseManager, ipfs: IPFSStorage | null, dataDir: string) {
     this.db = db;
     this.ipfs = ipfs;
     this.appsDir = resolve(dataDir, 'installed-apps');
-    this.devAppsDir = resolve(dataDir, 'dev-apps');
+
+    const devAppsDir = resolve(dataDir, 'dev-apps');
+    const testAppsDir = resolve(dataDir, 'test-apps');
+    this.allowedLocalRoots = [devAppsDir, testAppsDir];
 
     if (!existsSync(this.appsDir)) {
       mkdirSync(this.appsDir, { recursive: true });
     }
-    if (!existsSync(this.devAppsDir)) {
-      mkdirSync(this.devAppsDir, { recursive: true });
+    // Auto-create dev-apps (owner workspace). Do NOT auto-create test-apps:
+    // it ships with the repo and its absence simply means there are no
+    // bundled fixtures to sync.
+    if (!existsSync(devAppsDir)) {
+      mkdirSync(devAppsDir, { recursive: true });
     }
   }
 
@@ -155,7 +172,8 @@ export class AppInstallService {
   }
 
   getDevAppsDir(): string {
-    return this.devAppsDir;
+    // dev-apps is the first entry in allowedLocalRoots (see constructor).
+    return this.allowedLocalRoots[0];
   }
 
   /**
@@ -291,10 +309,11 @@ export class AppInstallService {
    * Skips IPFS fetch — the files must already exist on disk.
    *
    * SEC-A17 (2026-04 Wave 5.5): `localDir` is constrained to live inside
-   * `data/dev-apps/`. Without this, an attacker who reaches this code path
-   * (e.g. via a future internal caller that bypasses the route-level
-   * `requireOwner`) could point `localDir` at `data/wallets/` and have the
-   * mnemonic copied into the static-served `installed-apps/<name>/` dir.
+   * one of the allowed roots (`data/dev-apps/` or `data/test-apps/`).
+   * Without this, an attacker who reaches this code path (e.g. via a
+   * future internal caller that bypasses the route-level `requireOwner`)
+   * could point `localDir` at `data/wallets/` and have the mnemonic
+   * copied into the static-served `installed-apps/<name>/` dir.
    */
   installFromLocal(manifest: AppManifest, localDir: string): InstalledApp {
     this.validateManifest(manifest);
@@ -304,14 +323,15 @@ export class AppInstallService {
     const resolvedLocal = resolve(localDir);
 
     // SEC-A17: strict allowlist. resolve() already collapses '..' segments,
-    // so a path like `data/dev-apps/../wallets` resolves OUTSIDE devAppsDir
-    // and is rejected here.
-    const devRootWithSep = this.devAppsDir.endsWith(pathSep)
-      ? this.devAppsDir
-      : this.devAppsDir + pathSep;
-    if (resolvedLocal !== this.devAppsDir && !resolvedLocal.startsWith(devRootWithSep)) {
+    // so a path like `data/dev-apps/../wallets` resolves OUTSIDE every
+    // allowed root and is rejected here.
+    const isInsideAllowedRoot = this.allowedLocalRoots.some((root) => {
+      const rootWithSep = root.endsWith(pathSep) ? root : root + pathSep;
+      return resolvedLocal === root || resolvedLocal.startsWith(rootWithSep);
+    });
+    if (!isInsideAllowedRoot) {
       throw new Error(
-        `localDir must live inside ${this.devAppsDir} (got: ${resolvedLocal})`,
+        `localDir must live inside one of [${this.allowedLocalRoots.join(', ')}] (got: ${resolvedLocal})`,
       );
     }
 
@@ -498,24 +518,120 @@ export class AppInstallService {
 
   /**
    * Extract a bundle buffer to the target directory.
-   * For V1, we support raw single-file HTML or tar/zip bundles.
-   * Initial implementation: treat the buffer as a single index.html if it starts with <!DOCTYPE or <html.
-   * Otherwise attempt tar extraction.
+   *
+   * Supported formats (auto-detected from the magic bytes):
+   *   1. tar.gz   — full multi-file capsule bundle (the format `package-app.ts` emits)
+   *   2. raw HTML — single-file legacy bundle (kept for back-compat with v1.0–v1.1)
+   *
+   * Tar.gz extraction is hardened against the same families of issues that
+   * Wave 5.5 (A17 + A19) closed for the install-from-local + multer paths:
+   *   - Path traversal: every entry path must, after resolution, live strictly
+   *     inside `targetDir`. We use `tar`'s built-in protections AND re-check
+   *     the resolved path manually as defense-in-depth.
+   *   - Symlink/hardlink/device entries: rejected outright. A capsule should
+   *     never contain symlinks; allowing them would let a crafted bundle
+   *     read or write outside its sandbox once the launcher follows the link.
+   *   - Zip-bomb: total uncompressed bytes capped at MAX_APP_SIZE_BYTES,
+   *     entry count capped at MAX_BUNDLE_ENTRIES.
    */
   private async extractBundle(buffer: Buffer, targetDir: string, manifest: AppManifest): Promise<void> {
-    const header = buffer.subarray(0, 64).toString('utf-8').trimStart().toLowerCase();
+    if (buffer.length >= 2 && buffer[0] === TAR_GZIP_MAGIC[0] && buffer[1] === TAR_GZIP_MAGIC[1]) {
+      await this.extractTarGz(buffer, targetDir, manifest);
+      return;
+    }
 
+    const header = buffer.subarray(0, 64).toString('utf-8').trimStart().toLowerCase();
     if (header.startsWith('<!doctype') || header.startsWith('<html') || header.startsWith('<head')) {
       const entryFile = manifest.entry || 'index.html';
       writeFileSync(join(targetDir, entryFile), buffer);
       return;
     }
 
-    // For tar.gz / zip support, we'll need to add extraction libraries later.
-    // For now, write as index.html and log a warning.
-    log.warn(`[extractBundle] Bundle for "${manifest.name}" doesn't look like HTML — writing as-is`);
+    log.warn(`[extractBundle] Bundle for "${manifest.name}" doesn't look like HTML or tar.gz — writing as-is`);
     const entryFile = manifest.entry || 'index.html';
     writeFileSync(join(targetDir, entryFile), buffer);
+  }
+
+  /**
+   * Defensive tar.gz extraction.
+   *
+   * IMPORTANT — error propagation pattern:
+   * `tar` invokes `filter` and `onentry` synchronously from inside its
+   * stream-data handler. Throwing from those callbacks does NOT reliably
+   * surface as a `pipeline()` rejection — it can escape as an uncaught
+   * exception and crash the node process (DoS vector). So instead we record
+   * the first violation in `violationReason`, return false from the filter
+   * to SKIP the malicious entry (so it never lands on disk), let the
+   * pipeline drain normally, and then throw AFTER the pipeline resolves.
+   *
+   * Net effect: malicious bundles are rejected with a clean error and the
+   * partial extraction is wiped by the install() try/catch.
+   */
+  private async extractTarGz(buffer: Buffer, targetDir: string, manifest: AppManifest): Promise<void> {
+    const resolvedTarget = resolve(targetDir);
+    const targetWithSep = resolvedTarget.endsWith(pathSep) ? resolvedTarget : resolvedTarget + pathSep;
+
+    let entryCount = 0;
+    let totalUncompressedBytes = 0;
+    let violationReason: string | null = null;
+
+    const recordViolation = (reason: string): false => {
+      if (violationReason === null) violationReason = reason;
+      return false;
+    };
+
+    const extractor = tar.x({
+      cwd: resolvedTarget,
+      strict: true,
+      preservePaths: false,
+      preserveOwner: false,
+      filter: (entryPath, entry) => {
+        if (violationReason) return false;
+        // Extract-side filter always passes a ReadEntry (the Stats variant is for
+        // the create path). Cast to read .type safely.
+        const readEntry = entry as tar.ReadEntry;
+        const allowedTypes = new Set(['File', 'Directory']);
+        if (!allowedTypes.has(readEntry.type as string)) {
+          return recordViolation(`disallowed entry type "${readEntry.type}" at ${entryPath}`);
+        }
+        if (typeof entryPath !== 'string' || entryPath.length === 0) {
+          return recordViolation('empty entry path');
+        }
+        const candidate = resolve(resolvedTarget, entryPath);
+        if (candidate !== resolvedTarget && !candidate.startsWith(targetWithSep)) {
+          return recordViolation(`path escapes bundle root: ${entryPath}`);
+        }
+        return true;
+      },
+      onentry: (entry) => {
+        if (violationReason) return;
+        entryCount += 1;
+        if (entryCount > MAX_BUNDLE_ENTRIES) {
+          violationReason = `exceeds ${MAX_BUNDLE_ENTRIES} entry cap`;
+          return;
+        }
+        const entrySize = typeof entry.size === 'number' ? entry.size : 0;
+        totalUncompressedBytes += entrySize;
+        if (totalUncompressedBytes > MAX_APP_SIZE_BYTES) {
+          violationReason = `uncompressed bundle exceeds ${MAX_APP_SIZE_BYTES / 1024 / 1024}MB cap`;
+        }
+      },
+      onwarn: (code, message) => {
+        log.warn(`[extractBundle] tar warning for "${manifest.name}": ${code} — ${message}`);
+      },
+    });
+
+    try {
+      await pipeline(Readable.from(buffer), extractor);
+    } catch (err: any) {
+      throw new Error(`tar.gz extraction failed: ${err.message}`);
+    }
+
+    if (violationReason) {
+      throw new Error(`[extractBundle] "${manifest.name}" rejected: ${violationReason}`);
+    }
+
+    log.info(`[extractBundle] ✅ Extracted ${entryCount} entries (${(totalUncompressedBytes / 1024).toFixed(1)} KB uncompressed) for "${manifest.name}"`);
   }
 
   private dirSize(dirPath: string): number {

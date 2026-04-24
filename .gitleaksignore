@@ -37,3 +37,14 @@ docs/core/CHIPOTLE_HANDOVER.md:curl-auth-header:242
 # Gitleaks' `generic-api-key` rule matches any quoted string assigned
 # to a name containing "key".
 src/gui/src/UI/AI/UIAIChat.js:generic-api-key:28
+
+# ---------------------------------------------------------------------------
+# TRIAGE-5 — False positive: the literal string `'elacity-labs.ed25519'`
+# is the DEFAULT FILENAME the capsule packager uses for the developer's
+# Ed25519 signing key (path: ~/.elastos/keys/elacity-labs.ed25519). The
+# string itself is the filename, not key material. The actual private
+# key is generated at runtime by `nacl.sign.keyPair()` (see
+# `loadOrCreateKey`) and persisted to that file with chmod 0600 — it
+# never appears in any committed source. Gitleaks' `generic-api-key`
+# rule fires on the high-entropy "ed25519" suffix.
+pc2-node/scripts/package-app.ts:generic-api-key:235
