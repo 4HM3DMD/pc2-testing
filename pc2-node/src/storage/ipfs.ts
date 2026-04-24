@@ -53,6 +53,7 @@ const PC2_SUPERNODE_BOOTSTRAP: string[] = [
   // Contabo (secondary)
   '/ip4/38.242.211.112/tcp/4003/p2p/12D3KooWAaFWUWN7GQVeNdbdPKUUTmyoQewBAPbwXKKrhxxsck5h',
   '/ip4/38.242.211.112/tcp/4004/ws/p2p/12D3KooWAaFWUWN7GQVeNdbdPKUUTmyoQewBAPbwXKKrhxxsck5h',
+  '/ip4/34.77.31.164/tcp/4001/ipfs/12D3KooWNieM3HRBJdVqaQucZEJdqA3oWKrKf3Gx3hp2cmtR9GNK',
 ];
 
 /**
@@ -64,6 +65,7 @@ const PUBLIC_BOOTSTRAP_NODES = [
   '/dnsaddr/bootstrap.libp2p.io/p2p/QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb',
   '/dnsaddr/bootstrap.libp2p.io/p2p/QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt',
   '/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ',
+  '/ip4/34.77.31.164/tcp/4001/ipfs/12D3KooWNieM3HRBJdVqaQucZEJdqA3oWKrKf3Gx3hp2cmtR9GNK',
 ];
 
 export interface IPFSOptions {
@@ -133,7 +135,7 @@ export class IPFSStorage {
       if (typeof (Promise as any).withResolvers === 'undefined') {
         throw new Error('Promise.withResolvers polyfill not loaded. Helia requires Node.js 22+ or the polyfill.');
       }
-      
+
       log.info('🌐 Initializing Helia IPFS node...');
       log.info(`   Repo path: ${this.repoPath}`);
       log.info(`   Network mode: ${this.networkMode}`);
@@ -184,7 +186,7 @@ export class IPFSStorage {
 
         // Add identify service (required for DHT)
         (libp2pConfig.services as any).identify = identify();
-        
+
         // Add ping service (required for DHT)
         (libp2pConfig.services as any).ping = ping();
 
@@ -255,7 +257,7 @@ export class IPFSStorage {
       const peerId = this.helia.libp2p.peerId;
       log.info(`✅ Helia IPFS node initialized`);
       log.info(`   Node ID: ${peerId.toString()}`);
-      
+
       const addresses = this.helia.libp2p.getMultiaddrs();
       log.info(`   Addresses: ${addresses.length} configured`);
       if (addresses.length > 0) {
@@ -277,12 +279,12 @@ export class IPFSStorage {
         this.fs = null;
       }
       this.isInitialized = false;
-      
+
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       const errorStack = error instanceof Error ? error.stack : undefined;
-      
+
       log.error('❌ Failed to initialize Helia IPFS:', errorMessage);
-      
+
       // Provide helpful error messages for common issues
       if (errorMessage.includes('withResolvers')) {
         log.error('   ⚠️  This error suggests Node.js version < 22');
@@ -297,11 +299,11 @@ export class IPFSStorage {
         log.error(`   💡 Repo path: ${this.repoPath}`);
         log.error('   💡 Try deleting the repo directory and restarting');
       }
-      
+
       if (errorStack && process.env.NODE_ENV !== 'production') {
         log.error('   Stack trace:', errorStack);
       }
-      
+
       throw error;
     }
   }
@@ -347,11 +349,11 @@ export class IPFSStorage {
     const timeout = options?.timeoutMs ?? 15 * 60 * 1000; // 15 min default
 
     try {
-      const data = typeof content === 'string' 
+      const data = typeof content === 'string'
         ? new TextEncoder().encode(content)
         : content instanceof Buffer
-        ? new Uint8Array(content)
-        : content;
+          ? new Uint8Array(content)
+          : content;
 
       const cidPromise = fs.addBytes(data);
       const timeoutPromise = new Promise<never>((_, reject) => {
@@ -390,8 +392,8 @@ export class IPFSStorage {
         const data = typeof content === 'string'
           ? new TextEncoder().encode(content)
           : content instanceof Buffer
-          ? new Uint8Array(content)
-          : content;
+            ? new Uint8Array(content)
+            : content;
 
         return { path: filename, content: data };
       });
@@ -694,7 +696,7 @@ export class IPFSStorage {
       // Import CID and try to get the block
       const { CID } = await import('multiformats/cid');
       const cidObj = CID.parse(cid);
-      
+
       // Try to get the block - if it exists, this will succeed
       await helia.blockstore.get(cidObj);
       return true;
@@ -714,7 +716,7 @@ export class IPFSStorage {
       // Import CID
       const { CID } = await import('multiformats/cid');
       const cidObj = CID.parse(cid);
-      
+
       // Helia pins are managed through the blockstore
       // For now, we'll just ensure the block is in the blockstore
       // (which it should be if we just added it)
@@ -949,26 +951,26 @@ export class IPFSStorage {
       } catch (gatewayError: any) {
         log.debug(`[IPFS] Gateway fetch failed: ${gatewayError.message}`);
       }
-      
+
       // Last resort: try stat + cat with remaining timeout (for directories or special cases)
       const statTimeoutMs = Math.min(timeoutMs - (Date.now() - startTime), 45000);
       let stats: any;
-      
+
       try {
         checkAbort();
         log.debug(`[IPFS] Trying DHT stat for ${cidString}...`);
-        
+
         const statPromise = fs.stat(cid);
-        const timeoutPromise = new Promise((_, reject) => 
+        const timeoutPromise = new Promise((_, reject) =>
           setTimeout(() => reject(new Error('stat_timeout')), statTimeoutMs)
         );
-        
+
         stats = await Promise.race([statPromise, timeoutPromise]);
         log.debug(`[IPFS] CID type: ${stats.type}`);
       } catch (error: any) {
         const errorMsg = error instanceof Error ? error.message : String(error);
         log.debug(`[IPFS] DHT stat failed: ${errorMsg}`);
-        
+
         throw Object.assign(
           new Error(`Content not found: Could not retrieve from local cache, gateways, or DHT`),
           { type: IPFSStorage.PinErrorType.NOT_FOUND }
@@ -1018,8 +1020,8 @@ export class IPFSStorage {
       // Re-throw typed errors as-is
       if (error.type) {
         // Try gateway fallback for NOT_FOUND and NETWORK_ERROR
-        if (error.type === IPFSStorage.PinErrorType.NOT_FOUND || 
-            error.type === IPFSStorage.PinErrorType.NETWORK_ERROR) {
+        if (error.type === IPFSStorage.PinErrorType.NOT_FOUND ||
+          error.type === IPFSStorage.PinErrorType.NETWORK_ERROR) {
           log.debug(`[IPFS] DHT fetch failed, trying gateway fallback...`);
           try {
             const gatewayResult = await this.fetchViaGateway(cidString, timeoutMs - (Date.now() - startTime));
@@ -1053,7 +1055,7 @@ export class IPFSStorage {
       // Handle other errors - try gateway fallback
       log.error(`[IPFS] Failed to pin remote CID ${cidString}:`, error);
       log.debug(`[IPFS] Trying gateway fallback...`);
-      
+
       try {
         const gatewayResult = await this.fetchViaGateway(cidString, timeoutMs - (Date.now() - startTime));
         if (gatewayResult.success) {
@@ -1071,7 +1073,7 @@ export class IPFSStorage {
       } catch (gatewayError: any) {
         log.debug(`[IPFS] Gateway fallback also failed: ${gatewayError.message}`);
       }
-      
+
       throw Object.assign(
         new Error(`Network error: ${error instanceof Error ? error.message : 'Unknown error'}`),
         { type: IPFSStorage.PinErrorType.NETWORK_ERROR }
@@ -1378,7 +1380,7 @@ export class IPFSStorage {
     if (!this.helia || !this.isInitialized) {
       return [];
     }
-    
+
     const connections = this.helia.libp2p.getConnections();
     return connections.map(conn => conn.remotePeer.toString());
   }
@@ -1412,7 +1414,7 @@ export class IPFSStorage {
     const helia = this.getHelia();
     const peerId = helia.libp2p.peerId;
     const addresses = helia.libp2p.getMultiaddrs();
-    
+
     return {
       id: peerId.toString(),
       addresses: addresses.map(addr => addr.toString()),
@@ -1469,12 +1471,12 @@ export class IPFSStorage {
 
       const { CID } = await import('multiformats/cid');
       const cidObj = CID.parse(cid);
-      
+
       log.debug(`[IPFS] Announcing CID to DHT: ${cid}`);
-      
+
       // Use the DHT provide method to announce we have this content
       await dht.provide(cidObj);
-      
+
       log.debug(`[IPFS] ✅ Successfully announced CID to DHT: ${cid}`);
       return true;
     } catch (error) {
@@ -1527,10 +1529,10 @@ export class IPFSStorage {
     canAnnounce: boolean;
     connectedPeers: number;
   } {
-    const dhtEnabled = this.networkMode !== 'private' && 
-                       this.helia !== null && 
-                       (this.helia.libp2p.services as any).dht !== undefined;
-    
+    const dhtEnabled = this.networkMode !== 'private' &&
+      this.helia !== null &&
+      (this.helia.libp2p.services as any).dht !== undefined;
+
     return {
       mode: this.networkMode,
       dhtEnabled,
@@ -1543,10 +1545,10 @@ export class IPFSStorage {
    * Check if DHT is available for announcements
    */
   canAnnounce(): boolean {
-    return this.networkMode !== 'private' && 
-           this.isInitialized && 
-           this.helia !== null &&
-           (this.helia.libp2p.services as any).dht !== undefined;
+    return this.networkMode !== 'private' &&
+      this.isInitialized &&
+      this.helia !== null &&
+      (this.helia.libp2p.services as any).dht !== undefined;
   }
 
   /**

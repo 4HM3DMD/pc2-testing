@@ -1,15 +1,27 @@
 # Chipotle Lit Security Review
 
-Date: 2026-04-17
+Date: 2026-04-23
 Scope: Chipotle Lit Protocol integration in `pc2-node`, with emphasis on media/non-media decrypt flows, auto-provisioning, and the documented Chipotle migration path.
+
+## Update Since 2026-04-17
+
+This review was originally written against the pre-Phase-5 Chipotle decrypt path. The current implementation has materially changed:
+
+- Chipotle decrypt now requires a verified `secureViewSession` bundle instead of trusting a caller-supplied `userAddress`: `pc2-node/src/api/chipotle-client.ts:415-479`, `pc2-node/src/api/chipotle-client.ts:488-520`.
+- `/api/storage/lit/secure-view` rejects bundle-less requests, verifies the delegation/request signatures, and cross-checks the delegation owner against the authenticated PC2 session: `pc2-node/src/api/storage.ts:2370-2555`.
+- The media path also requires the same signed session bundle for CEK recovery: `pc2-node/src/api/media.ts:289-340`, `pc2-node/src/api/media.ts:1160-1203`.
+
+That means the original "`userAddress` is exogenous decryption input" finding no longer describes the current hard-cutover path. It remains useful as historical context for why the signed-bundle design was necessary.
 
 ## Executive Summary
 
-The current Chipotle integration has two critical authorization weaknesses and one high-risk trust-bootstrap issue.
+The current Chipotle integration no longer matches the original pre-cutover threat picture. The most important authorization change is now in place: decryption requires a signed secure-view delegation/request bundle, and the Lit Action is no longer invoked with caller-chosen `userAddress`.
 
-1. Media playback authorization is not tied to a verified user session. The media API accepts any bearer string and trusts a caller-supplied buyer address, which can let an attacker decrypt media for any wallet that already owns access.
-2. The Chipotle decrypt path does not bind ciphertext to the content ID being authorized. A caller who owns one valid asset can likely substitute another asset's ciphertext and encrypted CID while reusing a `kid` they already control, defeating per-asset authorization.
-3. Auto-provisioning disables TLS verification and trusts unsigned supernode responses for the shared usage key and API endpoint, allowing secret/config injection and first-call exfiltration if a supernode or network path is compromised.
+The highest-signal current risks are:
+
+1. The decrypt path is now session-bound, but documentation still contains stale examples of the retired `userAddress`-in-`js_params` model, which can mislead future maintenance and reintroduce the old flaw.
+2. The Chipotle decrypt path still appears weaker than the older Datil flow in ciphertext-to-asset binding; the action now authenticates the caller better, but the review concern about making cryptographic fields authoritative remains relevant.
+3. Auto-provisioning still disables TLS verification and trusts unsigned supernode responses for the shared usage key and API endpoint, allowing secret/config injection and first-call exfiltration if a supernode or network path is compromised.
 
 These issues materially weaken the stated trust model in `docs/core/LIT_CHIPOTLE_MIGRATION.md` and `docs/core/LIT_PRODUCTION_CHECKLIST.md`.
 
