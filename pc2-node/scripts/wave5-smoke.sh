@@ -221,13 +221,20 @@ hdr "A19 multer originalname traversal"
 TMPFILE=$(mktemp)
 echo "fake-backup-content" > "$TMPFILE"
 
-# 1. Crafted originalname with `..` segments → 400 from fileFilter, not 200
+# 1. Crafted originalname with `..` segments → must NOT contaminate /etc/cron.d.
+#    Busboy 1.6 (the parser multer 2.x sits on) strips the path component via
+#    its own basename() before the fileFilter ever runs, so the route sees
+#    `evil.tar.gz` and accepts it (HTTP 200) — the file lands in BACKUPS_DIR
+#    under that safe name. 400/500 are also acceptable if a future multer/
+#    busboy bump stops auto-basenaming. The actual security property — no
+#    write to the malicious target path — is verified by the disk sanity
+#    check at the bottom of this section.
 resp=$(curl -s -o /dev/null -w '%{http_code}' \
   -H "X-API-Key: $OWNER_KEY" \
   -X POST "$BASE_URL/api/backups/restore" \
   -F "file=@${TMPFILE};filename=../../etc/cron.d/evil.tar.gz")
-[[ "$resp" == "400" || "$resp" == "500" ]] && pass "owner + originalname=../../etc/... → $resp (rejected pre-write)" \
-  || fail "path-traversal originalname must be rejected" "got HTTP $resp"
+[[ "$resp" == "200" || "$resp" == "400" || "$resp" == "500" ]] && pass "owner + originalname=../../etc/... → $resp (busboy basename strips traversal)" \
+  || fail "path-traversal originalname must be rejected or normalized" "got HTTP $resp"
 
 # 2. Originalname not ending in .tar.gz → also rejected by fileFilter
 resp=$(curl -s -o /dev/null -w '%{http_code}' \
