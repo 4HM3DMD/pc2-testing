@@ -48,3 +48,23 @@ src/gui/src/UI/AI/UIAIChat.js:generic-api-key:28
 # never appears in any committed source. Gitleaks' `generic-api-key`
 # rule fires on the high-entropy "ed25519" suffix.
 pc2-node/scripts/package-app.ts:generic-api-key:235
+
+# ---------------------------------------------------------------------------
+# TRIAGE-6 — Public-by-design Ed25519 publisher key for the v1.2 app
+# registry. The string `1ab060ba…930367eb` is the PUBLIC half of the
+# Elacity Labs signing keypair — its entire purpose is to be widely
+# distributed so consumers can verify capsule signatures. The matching
+# private key lives off-repo at ~/.elastos/keys/elacity-labs.ed25519
+# (chmod 0600) and is never committed. The README documents the public
+# key precisely so that downstream verifiers (PC2 nodes, dapp-store UI,
+# supernode pin-set cron) can pin it. Gitleaks' `generic-api-key` rule
+# matches the 64-hex-char entropy. Same key also appears verbatim in
+# the per-app registry JSONs as the `signedBy` field — same rationale.
+pc2-node/registry/v1.2/README.md:generic-api-key:11
+pc2-node/registry/v1.2/_index.json:generic-api-key:6
+pc2-node/registry/v1.2/ddrm-viewer-0.1.0.registry.json:generic-api-key:46
+pc2-node/registry/v1.2/elacity-creator-0.1.0.registry.json:generic-api-key:76
+pc2-node/registry/v1.2/elacity-market-0.2.0.registry.json:generic-api-key:66
+pc2-node/registry/v1.2/elacity-player-0.2.0.registry.json:generic-api-key:60
+pc2-node/registry/v1.2/elastos-nft-0.1.0.registry.json:generic-api-key:37
+pc2-node/registry/v1.2/glide-finance-1.0.0.registry.json:generic-api-key:39

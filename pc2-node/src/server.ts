@@ -108,7 +108,16 @@ export function createServer (options: ServerOptions): { app: Express; server: S
     }));
 
     app.use(express.json({
-        limit: '50mb', // Allow large JSON payloads (for AI chat with large PDF text content)
+        // 150mb covers two cases:
+        //   1. Original use: AI chat payloads with large PDF text content (~10-50mb)
+        //   2. v1.2 dapp-store capsule uploads via /api/storage/ipfs/add. The
+        //      base64 encoding of a typical bundled-app tarball (~75-100mb
+        //      compressed) inflates to ~100-130mb of JSON body, which busted
+        //      the previous 50mb ceiling for any non-trivial capsule.
+        // Per-route DoS guards still apply: /api/storage/ipfs/add enforces
+        // its own 100mb decoded-size check on top of this. Owner-only auth
+        // gates every route that accepts a body of this size.
+        limit: '150mb',
         verify: (req: any, res, buf) => {
             // Capture raw body for debugging (especially for /drivers/call and /mkdir)
             if ( req.path === '/drivers/call' || req.path === '/mkdir' ) {

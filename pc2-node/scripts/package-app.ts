@@ -183,11 +183,20 @@ async function pinToLocalNode(tarballPath: string, authToken: string): Promise<{
   const body = JSON.stringify({ content: bytes.toString('base64'), announce: false });
   info(`Pinning ${(bytes.length / 1024).toFixed(1)} KB tarball to ${url}...`);
 
+  // Auth surface: tokens that look like `pc2_<hex>` are API keys (X-API-Key
+  // header, validated by the apikey branch in middleware.ts authenticate()).
+  // Anything else is treated as a session token (Authorization: Bearer).
+  // The packager is intended to be driven by an owner-mode API key in
+  // automation, so this falls through to the API-key path 99% of the time.
+  const isApiKey = authToken.startsWith('pc2_');
   const res = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${authToken}`,
+      ...(isApiKey
+        ? { 'X-API-Key': authToken }
+        : { 'Authorization': `Bearer ${authToken}` }
+      ),
     },
     body,
   });
