@@ -713,6 +713,10 @@ async function initCleartextDASH(mpdUrl, title) {
       URL.revokeObjectURL(msUrl);
       try {
         var sourceBuffers = [];
+        // Detect audio-only stream: no video tracks at all. Audio-only Bento4
+        // DASH needs SourceBuffer.mode = 'sequence' (see encrypted path for
+        // the full rationale).
+        var ctIsAudioOnly = ctTracks.every(function (t) { return t.mimeType.indexOf('video') !== 0; });
         for (var ti = 0; ti < ctTracks.length; ti++) {
           var t = ctTracks[ti];
           var fullCodec = t.mimeType + '; codecs="' + t.codec + '"';
@@ -722,6 +726,10 @@ async function initCleartextDASH(mpdUrl, title) {
             continue;
           }
           var sb = ms.addSourceBuffer(fullCodec);
+          if (ctIsAudioOnly && t.mimeType.indexOf('audio') === 0) {
+            sb.mode = 'sequence';
+            console.log('[player] Cleartext DASH: audio SourceBuffer mode set to "sequence" (audio-only)');
+          }
           sourceBuffers.push({ sb: sb, track: t, idx: ti });
         }
 
@@ -1018,6 +1026,16 @@ async function init() {
             return;
           }
           audioSB = mediaSource.addSourceBuffer(aCodec);
+          // Audio-only Bento4 DASH emits SegmentTimeline `t=` resets between
+          // AAC-frame-aligned segments. Default 'segments' mode honours each
+          // segment's baseMediaDecodeTime, producing tiny gaps that stall
+          // playback (no video timeline to mask them). 'sequence' mode pastes
+          // each fragment directly after the previous one — correct for
+          // audio-only where there is no A/V sync constraint.
+          if (isAudioOnly) {
+            audioSB.mode = 'sequence';
+            console.log('[player] Audio SourceBuffer mode set to "sequence" (audio-only)');
+          }
           console.log('[player] Audio SourceBuffer created');
         }
 
