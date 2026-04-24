@@ -12,6 +12,7 @@
   "entry": "index.html",
   "type": "web",
   "category": "blockchain",
+  "role": "dapp",
 
   "capabilities": {
     "wallet": true,

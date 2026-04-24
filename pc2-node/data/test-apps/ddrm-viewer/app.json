@@ -12,6 +12,7 @@
   "entry": "index.html",
   "type": "web",
   "category": "media",
+  "role": "system",
 
   "capabilities": {
     "wallet": true,

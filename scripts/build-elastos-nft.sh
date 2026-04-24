@@ -1660,6 +1660,7 @@ cat > "$OUTPUT_DIR/app.json" << APPJSONEOF
   "entry": "index.html",
   "type": "web",
   "category": "marketplace",
+  "role": "dapp",
   "capabilities": {
     "wallet": true,
     "network": true,

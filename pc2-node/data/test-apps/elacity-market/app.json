@@ -13,6 +13,7 @@
   "entry": "index.html",
   "type": "web",
   "category": "marketplace",
+  "role": "system",
 
   "capabilities": {
     "wallet": true,

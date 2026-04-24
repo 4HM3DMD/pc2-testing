@@ -13,6 +13,7 @@
   "entry": "index.html",
   "type": "web",
   "category": "creator",
+  "role": "system",
 
   "capabilities": {
     "wallet": true,
