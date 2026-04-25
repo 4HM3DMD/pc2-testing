@@ -246,6 +246,21 @@ CREATE INDEX IF NOT EXISTS idx_content_catalog_channel ON content_catalog(channe
 CREATE INDEX IF NOT EXISTS idx_content_catalog_status ON content_catalog(metadata_status);
 CREATE INDEX IF NOT EXISTS idx_content_catalog_block ON content_catalog(block_number);
 
+-- Telemetry on-ramp table: anonymous funnel events for v1.2 launch metrics
+-- Tracks 4 events: install_started, wallet_ready, first_capsule_open, first_payment.
+-- install_id is a random UUID generated once per node and stored in `settings`
+-- (key: telemetry_install_id) so we can dedupe counts without collecting any PII.
+-- Owner-only write; public-read aggregated only (no raw rows ever exposed).
+CREATE TABLE IF NOT EXISTS telemetry_onramp (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  event TEXT NOT NULL,
+  ts INTEGER NOT NULL,
+  install_id TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_telemetry_onramp_event ON telemetry_onramp(event);
+CREATE INDEX IF NOT EXISTS idx_telemetry_onramp_install ON telemetry_onramp(install_id);
+
 -- Context events table: Awareness layer data (location, photos, voice, activity)
 CREATE TABLE IF NOT EXISTS context_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -31,7 +31,7 @@ function findSchemaFile(): string {
   }
   throw new Error(`Schema file not found. Tried: ${SCHEMA_FILE} and ${sourceSchema}`);
 }
-const CURRENT_VERSION = 29;
+const CURRENT_VERSION = 30;
 
 interface Migration {
   version: number;
@@ -1098,6 +1098,27 @@ export function runMigrations(db: Database.Database): void {
         recordMigration(db, 29);
       } catch (error: any) {
         log.error(`❌ Migration 29 error: ${error.message}`);
+        throw error;
+      }
+    }
+
+    if (currentVersion < 30) {
+      try {
+        log.info('📦 Running Migration 30: Create telemetry_onramp table (A5 §P0 funnel)...');
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS telemetry_onramp (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event TEXT NOT NULL,
+            ts INTEGER NOT NULL,
+            install_id TEXT NOT NULL
+          )
+        `);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_telemetry_onramp_event ON telemetry_onramp(event)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_telemetry_onramp_install ON telemetry_onramp(install_id)`);
+        log.info('✅ Migration 30 complete: telemetry_onramp table + indexes created');
+        recordMigration(db, 30);
+      } catch (error: any) {
+        log.error(`❌ Migration 30 error: ${error.message}`);
         throw error;
       }
     }

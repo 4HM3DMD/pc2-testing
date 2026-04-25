@@ -38,6 +38,7 @@ import { checkTransportBinaries, ensureTransportBinaries } from '../utils/binary
 import { httpClientRouter } from './http-client.js';
 import { gitRouter } from './git.js';
 import { auditRouter, auditMiddleware } from './audit.js';
+import { postOnRampEvent, getOnRampSummary, recordTelemetryOnce } from './telemetry.js';
 import { rateLimitMiddleware, getRateLimitStatus } from './rate-limit.js';
 import { schedulerRouter } from './scheduler.js';
 import bosonRouter from './boson.js';
@@ -1153,9 +1154,24 @@ export function setupAPI (app: Express): void {
         app.use('/api/installed-apps', authenticate, createInstalledAppsRouter(appInstallService));
         logger.info('[API] ✅ Installed Apps API enabled at /api/installed-apps');
 
-        // Sync bundled test apps on every startup (re-copies files if source changed)
+        // Sync bundled test apps on every startup.
+        //
+        // v1.2 boot policy: only auto-install apps whose manifest declares
+        // `role: "system"`. These are the four core capsules that ship as
+        // pre-installed defaults (Market, Player, Creator, dDRM Viewer).
+        // Apps with `role: "dapp"` (Glide, Elastos NFT) and untagged dev/test
+        // artifacts (pc2-media-runtime, supernode-manager, wallet-test) are
+        // intentionally NOT auto-installed — users discover and install them
+        // via the dApp Centre.
+        //
+        // We also opportunistically uninstall any previously auto-installed
+        // non-system bundle (identifiable by `cid` starting with `local:`)
+        // so upgrading testers see the same clean catalog as fresh installs.
+        // Real dApp-Centre installs have a real IPFS CID and are untouched.
         const testAppsDir = path.join(dataDir, 'test-apps');
         if ( fs.existsSync(testAppsDir) ) {
+            const systemBundleNames = new Set<string>();
+
             for ( const appFolder of fs.readdirSync(testAppsDir, { withFileTypes: true }) ) {
                 if ( ! appFolder.isDirectory() ) continue;
                 const appName = appFolder.name;
@@ -1163,18 +1179,58 @@ export function setupAPI (app: Express): void {
                 const manifestPath = path.join(testAppsDir, appName, 'app.json');
                 if ( ! fs.existsSync(manifestPath) ) continue;
 
+                let manifest: any;
+                try {
+                    manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+                } catch ( err: any ) {
+                    logger.warn(`[API] ⚠️  Failed to read ${appName}/app.json: ${err.message}`);
+                    continue;
+                }
+
+                if ( manifest.role !== 'system' ) {
+                    // Non-system bundle: skip auto-install. (Cleanup of any prior
+                    // local: install for this name happens in the second pass below.)
+                    continue;
+                }
+
+                systemBundleNames.add(appName);
+
                 try {
                     const existing = appInstallService.get(appName);
                     if ( existing ) appInstallService.uninstall(appName);
-                    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
                     appInstallService.installFromLocal(manifest, path.join(testAppsDir, appName));
-                    logger.info(`[API] ✅ Synced bundled app: ${appName}`);
+                    logger.info(`[API] ✅ Synced bundled system app: ${appName}`);
                 } catch ( err: any ) {
                     logger.warn(`[API] ⚠️  Failed to sync ${appName}: ${err.message}`);
                 }
             }
+
+            // Cleanup pass: remove stale local: installs for any test-apps bundle
+            // that is no longer marked system (e.g. glide-finance, elastos-nft,
+            // pc2-media-runtime, supernode-manager, wallet-test from earlier boots).
+            try {
+                const allInstalled = appInstallService.list();
+                for ( const inst of allInstalled ) {
+                    if ( ! inst.cid?.startsWith('local:') ) continue;
+                    if ( systemBundleNames.has(inst.app_name) ) continue;
+                    try {
+                        appInstallService.uninstall(inst.app_name);
+                        logger.info(`[API] 🧹 Removed stale auto-installed bundle: ${inst.app_name}`);
+                    } catch ( err: any ) {
+                        logger.warn(`[API] ⚠️  Failed to clean up ${inst.app_name}: ${err.message}`);
+                    }
+                }
+            } catch ( err: any ) {
+                logger.warn(`[API] ⚠️  Failed to enumerate installed apps for cleanup: ${err.message}`);
+            }
         }
     }
+
+    // Telemetry hook (A5b §P0): fire `install_started` exactly once per
+    // node lifetime. Idempotent — safe to call on every boot; the helper
+    // checks the settings key `telemetry_install_started_at` and no-ops
+    // after the first fire. This marks "Door 1" of the v1.2 funnel.
+    recordTelemetryOnce(app.locals.db as DatabaseManager | undefined, 'install_started');
 
     // Rate limit status endpoint
     app.get('/api/rate-limit/status', authenticate, (req: AuthenticatedRequest, res: Response) => {
@@ -1381,6 +1437,14 @@ export function setupAPI (app: Express): void {
     app.delete('/api/keys/:keyId', authenticate, handleDeleteApiKey);
     app.post('/api/keys/:keyId/revoke', authenticate, handleRevokeApiKey);
     app.get('/api/keys/scopes', handleGetScopes); // No auth needed - just lists available scopes
+
+    // Telemetry on-ramp (A5 §P0): anonymous funnel events for v1.2 launch.
+    // POST is owner-only — only the node owner can attribute their own
+    // funnel progress. GET returns aggregated counts only (no PII, no raw
+    // rows) and is intentionally public so a static dashboard can poll it.
+    // Env var PC2_TELEMETRY_DISABLED=true short-circuits the POST.
+    app.post('/api/telemetry/onramp', authenticate, requireOwner, postOnRampEvent);
+    app.get('/api/telemetry/onramp/summary', getOnRampSummary);
 
     // Agent Tool Registry (for AI agent discovery)
     app.get('/api/tools', handleListAgentTools); // Optional auth - shows scopes if authenticated

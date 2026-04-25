@@ -22,6 +22,7 @@ import * as pdfjsLib from 'pdfjs-dist';
 import fs from 'fs/promises';
 import path from 'path';
 import { mintFileUrlSignature, buildExpires } from '../utils/fileUrlSigner.js';
+import { recordTelemetryOnce } from './telemetry.js';
 
 // Hardcoded base64 icons - must match apps.ts and info.ts for consistency
 const ELACITY_PLAYER_ICON = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIHZpZXdCb3g9IjAgMCA0OCA0OCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZGVmcz48bGluZWFyR3JhZGllbnQgaWQ9InBnIiB4MT0iMCIgeTE9IjAiIHgyPSIxIiB5Mj0iMSI+PHN0b3Agb2Zmc2V0PSIwJSIgc3RvcC1jb2xvcj0iIzJkZDRiZiIvPjxzdG9wIG9mZnNldD0iMTAwJSIgc3RvcC1jb2xvcj0iIzBkOTQ4OCIvPjwvbGluZWFyR3JhZGllbnQ+PGNsaXBQYXRoIGlkPSJwciI+PHJlY3Qgd2lkdGg9IjQ4IiBoZWlnaHQ9IjQ4IiByeD0iMTAiLz48L2NsaXBQYXRoPjwvZGVmcz48ZyBjbGlwLXBhdGg9InVybCgjcHIpIj48cmVjdCB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIGZpbGw9InVybCgjcGcpIi8+PHBvbHlnb24gcG9pbnRzPSIxOSwxMiAzNiwyNCAxOSwzNiIgZmlsbD0id2hpdGUiIG9wYWNpdHk9IjAuOTUiLz48L2c+PC9zdmc+';
@@ -255,6 +256,12 @@ export function handleRAO(req: AuthenticatedRequest, res: Response): void {
       if (appName && appName !== 'explorer') {
         db.recordRecentApp(req.user.wallet_address, appName);
         logger.info('[RAO] Recorded recent app', { wallet: req.user.wallet_address.substring(0, 10), app: appName });
+
+        // Telemetry hook (A5b §P0): "Door 3" of the v1.2 funnel.
+        // Fires exactly once per node lifetime — the first time any user
+        // launches any non-system app (excludes 'explorer' which is the
+        // shell itself). Idempotent on subsequent app launches.
+        recordTelemetryOnce(db, 'first_capsule_open');
       }
     } catch (error: any) {
       // Don't fail the request if recording fails
