@@ -109,13 +109,9 @@ export function handleGetLaunchApps(req: Request, res: Response): void {
       icon: loadIconAsBase64('viewer'),
       description: 'View and edit images'
     },
-    {
-      name: 'player',
-      title: 'Media Player',
-      uuid: 'app-player',
-      icon: loadIconAsBase64('player'),
-      description: 'Play audio and video files'
-    },
+    // Legacy `player` (basic browser HTML5 audio/video) removed in v1.2 — replaced
+    // by `elacity-player` capsule (auto-installed at boot via test-apps sync).
+    // Keeping the comment as a tombstone so we don't accidentally re-add it.
     {
       name: 'camera',
       title: 'Camera',
@@ -200,14 +196,30 @@ export function handleGetLaunchApps(req: Request, res: Response): void {
   if (appInstallService) {
     try {
       const installedApps = appInstallService.list();
+      const installedAppsDir = appInstallService.getAppsDir();
+      // Fallback icon filenames probed when a bundle ships without an explicit
+      // icon reference (common for IPFS-published dApps that forget the field).
+      const FALLBACK_ICON_FILES = ['favicon-64.png', 'favicon.png', 'favicon-192.png', 'icon.png', 'icon.svg', 'favicon.ico'];
       for (const installed of installedApps) {
         const manifest = JSON.parse(installed.manifest_json);
         if (manifest.hidden) continue;
         let iconUrl: string | undefined;
         if (manifest.iconDataUrl) {
           iconUrl = manifest.iconDataUrl;
+        } else if (installed.icon && installed.icon.startsWith('data:')) {
+          // Some bundles store the data URL directly in the `icon` field.
+          iconUrl = installed.icon;
         } else if (installed.icon) {
           iconUrl = `${baseUrl}/installed-apps/${installed.app_name}/${installed.icon}`;
+        } else {
+          // Manifest declared no icon: probe the install dir for a sensible default.
+          const appDir = path.join(installedAppsDir, installed.app_name);
+          for (const candidate of FALLBACK_ICON_FILES) {
+            if (existsSync(path.join(appDir, candidate))) {
+              iconUrl = `${baseUrl}/installed-apps/${installed.app_name}/${candidate}`;
+              break;
+            }
+          }
         }
         apps.push({
           name: installed.app_name,

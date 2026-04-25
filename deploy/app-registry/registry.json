@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "updatedAt": "2026-04-24T01:45:06.231Z",
+  "updatedAt": "2026-04-24T14:13:06.138Z",
   "publisher": {
     "name": "Elacity Labs",
     "publicKey": "1ab060ba7578261355504300c1193c484ed8a46a30499c3fa3cb9065930367eb",
@@ -165,324 +165,6 @@
       }
     },
     {
-      "name": "elastos-did",
-      "title": "Elastos DID",
-      "version": "3.0.0",
-      "description": "Generate and manage your Elastos Decentralized Identifier. W3C compliant, self-sovereign identity that you own and control.",
-      "author": {
-        "name": "Elastos Foundation",
-        "url": "https://elastos.io"
-      },
-      "license": "MIT",
-      "icon": "identity",
-      "type": "web",
-      "capabilities": {
-        "wallet": true,
-        "network": true
-      },
-      "requirements": {
-        "minVersion": "1.0.0"
-      },
-      "distribution": {
-        "channel": "stable",
-        "size": 18874368
-      },
-      "registry": {
-        "status": "coming_soon",
-        "category": "blockchain",
-        "badges": [
-          "opensource"
-        ],
-        "staffPick": true,
-        "popular": true,
-        "gradient": "gradient-indigo",
-        "website": "https://elastos.io",
-        "source": "https://github.com/nicktomlin/nicktomlin.github.io",
-        "compatibility": "PC2 1.0+"
-      }
-    },
-    {
-      "name": "btcd-stablecoin",
-      "title": "BTCD",
-      "version": "1.2.0",
-      "description": "Bitcoin Dollar Service — Collateralize your BTC and mint BTCD stablecoins. Unlock liquidity from your Bitcoin without selling.",
-      "author": {
-        "name": "BeL2 Labs",
-        "url": "https://bel2.org"
-      },
-      "license": "proprietary",
-      "icon": "stablecoin",
-      "type": "web",
-      "capabilities": {
-        "wallet": true,
-        "network": true
-      },
-      "requirements": {
-        "minVersion": "1.0.0"
-      },
-      "distribution": {
-        "channel": "stable",
-        "size": 29360128
-      },
-      "registry": {
-        "status": "coming_soon",
-        "category": "blockchain",
-        "badges": [
-          "ddrm"
-        ],
-        "staffPick": true,
-        "popular": true,
-        "gradient": "gradient-green",
-        "website": "https://bel2.org",
-        "compatibility": "PC2 1.0+"
-      }
-    },
-    {
-      "name": "elastos-dao",
-      "title": "Elastos DAO",
-      "version": "2.0.0",
-      "description": "Participate in Elastos governance. Vote on proposals, stake ELA, and shape the future of the Elastos ecosystem.",
-      "author": {
-        "name": "Elastos Foundation",
-        "url": "https://elastos.io"
-      },
-      "license": "MIT",
-      "icon": "governance",
-      "type": "web",
-      "capabilities": {
-        "wallet": true,
-        "network": true
-      },
-      "requirements": {
-        "minVersion": "1.0.0"
-      },
-      "distribution": {
-        "channel": "stable",
-        "size": 23068672
-      },
-      "registry": {
-        "status": "coming_soon",
-        "category": "blockchain",
-        "badges": [
-          "opensource"
-        ],
-        "staffPick": true,
-        "popular": true,
-        "gradient": "gradient-purple",
-        "website": "https://elastos.io/dao",
-        "compatibility": "PC2 1.0+"
-      }
-    },
-    {
-      "name": "elastos-bpos-node",
-      "title": "Elastos BPoS Node",
-      "version": "2.0.0",
-      "description": "Run your own Elastos BPoS validator node. Stake ELA, validate transactions, and earn block rewards.",
-      "author": {
-        "name": "Elastos Foundation",
-        "url": "https://elastos.io"
-      },
-      "license": "MIT",
-      "icon": "server",
-      "type": "web",
-      "capabilities": {
-        "wallet": true,
-        "network": true
-      },
-      "requirements": {
-        "minVersion": "1.0.0"
-      },
-      "distribution": {
-        "channel": "stable",
-        "size": 188743680
-      },
-      "registry": {
-        "status": "coming_soon",
-        "category": "blockchain",
-        "badges": [
-          "opensource"
-        ],
-        "popular": true,
-        "gradient": "gradient-blue",
-        "website": "https://elastos.io",
-        "compatibility": "PC2 1.0+"
-      }
-    },
-    {
-      "name": "uniswap",
-      "title": "Uniswap",
-      "version": "4.0.0",
-      "description": "The leading decentralized exchange. Swap tokens, provide liquidity, and earn fees.",
-      "author": {
-        "name": "Uniswap Labs",
-        "url": "https://uniswap.org"
-      },
-      "license": "proprietary",
-      "icon": "swap",
-      "type": "web",
-      "capabilities": {
-        "wallet": true,
-        "network": true
-      },
-      "requirements": {
-        "minVersion": "1.0.0"
-      },
-      "distribution": {
-        "channel": "stable",
-        "size": 18874368
-      },
-      "registry": {
-        "status": "coming_soon",
-        "category": "blockchain",
-        "badges": [],
-        "popular": true,
-        "gradient": "gradient-pink",
-        "website": "https://uniswap.org",
-        "compatibility": "PC2 1.0+"
-      }
-    },
-    {
-      "name": "bitcoin-node",
-      "title": "Bitcoin Node",
-      "version": "27.0.0",
-      "description": "Run a full Bitcoin Core node on your PC2. Verify transactions independently and support the network.",
-      "author": {
-        "name": "Open Source",
-        "url": "https://bitcoin.org"
-      },
-      "license": "MIT",
-      "icon": "bitcoin",
-      "type": "web",
-      "capabilities": {
-        "network": true
-      },
-      "requirements": {
-        "minVersion": "1.0.0"
-      },
-      "distribution": {
-        "channel": "stable",
-        "size": 36700160
-      },
-      "registry": {
-        "status": "coming_soon",
-        "category": "blockchain",
-        "badges": [
-          "opensource"
-        ],
-        "popular": true,
-        "gradient": "gradient-orange",
-        "website": "https://bitcoin.org",
-        "source": "https://github.com/bitcoin/bitcoin",
-        "compatibility": "PC2 1.0+"
-      }
-    },
-    {
-      "name": "network-guard",
-      "title": "Network Guard",
-      "version": "5.18.0",
-      "description": "Network-wide ad and tracker blocking. Protect all devices on your network without installing anything on them.",
-      "author": {
-        "name": "Open Source",
-        "url": "https://pi-hole.net"
-      },
-      "license": "MIT",
-      "icon": "shield",
-      "type": "web",
-      "capabilities": {
-        "network": true
-      },
-      "requirements": {
-        "minVersion": "1.0.0"
-      },
-      "distribution": {
-        "channel": "stable",
-        "size": 8388608
-      },
-      "registry": {
-        "status": "coming_soon",
-        "category": "tools",
-        "badges": [
-          "opensource"
-        ],
-        "gradient": "gradient-green",
-        "website": "https://pi-hole.net",
-        "compatibility": "PC2 1.0+"
-      }
-    },
-    {
-      "name": "chess-master",
-      "title": "Chess Master",
-      "version": "1.2.0",
-      "description": "Play chess against AI or friends. Multiple difficulty levels, puzzles, and game analysis.",
-      "author": {
-        "name": "Community"
-      },
-      "license": "MIT",
-      "icon": "chess",
-      "type": "wasm",
-      "capabilities": {},
-      "requirements": {
-        "minVersion": "1.0.0"
-      },
-      "distribution": {
-        "channel": "stable",
-        "size": 12582912
-      },
-      "registry": {
-        "status": "coming_soon",
-        "category": "games",
-        "badges": [
-          "wasm"
-        ],
-        "gradient": "gradient-slate",
-        "compatibility": "PC2 1.0+"
-      }
-    },
-    {
-      "name": "supernode-manager",
-      "title": "Supernode Manager",
-      "version": "1.0.0",
-      "description": "Run and manage a full PC2 supernode from your node. Check system specs, deploy services, and monitor network health.",
-      "author": {
-        "name": "Elacity Labs",
-        "url": "https://ela.city"
-      },
-      "license": "proprietary",
-      "icon": "server",
-      "type": "web",
-      "entry": "index.html",
-      "capabilities": {
-        "network": true,
-        "ipc": [
-          "launchApp"
-        ]
-      },
-      "requirements": {
-        "minVersion": "1.1.0"
-      },
-      "display": {
-        "maximize": false,
-        "width": 800,
-        "height": 650
-      },
-      "distribution": {
-        "channel": "stable",
-        "size": 32768
-      },
-      "registry": {
-        "status": "available",
-        "category": "system",
-        "badges": [
-          "system"
-        ],
-        "staffPick": true,
-        "popular": false,
-        "gradient": "gradient-indigo",
-        "website": "https://ela.city",
-        "compatibility": "PC2 1.1+"
-      }
-    },
-    {
       "name": "ddrm-viewer",
       "title": "Elacity Viewer",
       "version": "0.1.0",
@@ -492,7 +174,7 @@
         "url": "https://ela.city"
       },
       "license": "proprietary",
-      "icon": "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIHZpZXdCb3g9IjAgMCA0OCA0OCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZGVmcz48bGluZWFyR3JhZGllbnQgaWQ9InZnIiB4MT0iMCIgeTE9IjAiIHgyPSIxIiB5Mj0iMSI+PHN0b3Agb2Zmc2V0PSIwJSIgc3RvcC1jb2xvcj0iIzgxOGNmOCIvPjxzdG9wIG9mZnNldD0iMTAwJSIgc3RvcC1jb2xvcj0iIzYzNjZmMSIvPjwvbGluZWFyR3JhZGllbnQ+PGNsaXBQYXRoIGlkPSJ2ciI+PHJlY3Qgd2lkdGg9IjQ4IiBoZWlnaHQ9IjQ4IiByeD0iMTAiLz48L2NsaXBQYXRoPjwvZGVmcz48ZyBjbGlwLXBhdGg9InVybCgjdnIpIj48cmVjdCB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIGZpbGw9InVybCgjdmcpIi8+PHBhdGggZD0iTTYgMjRzNy0xMCAxOC0xMCAxOCAxMCAxOCAxMC03IDEwLTE4IDEwUzYgMjQgNiAyNHoiIHN0cm9rZT0id2hpdGUiIHN0cm9rZS13aWR0aD0iMi41IiBmaWxsPSJub25lIi8+PGNpcmNsZSBjeD0iMjQiIGN5PSIyNCIgcj0iNSIgZmlsbD0id2hpdGUiLz48L2c+PC9zdmc+",
+      "icon": "shield",
       "entry": "index.html",
       "type": "web",
       "category": "media",
@@ -533,7 +215,7 @@
       "hidden": true,
       "registry": {
         "status": "available",
-        "category": "utilities",
+        "category": "tools",
         "badges": [
           "ddrm"
         ],
@@ -555,7 +237,7 @@
         "url": "https://ela.city"
       },
       "license": "proprietary",
-      "icon": "icon.png",
+      "icon": "edit",
       "entry": "index.html",
       "type": "web",
       "category": "creator",
@@ -648,7 +330,7 @@
         "url": "https://ela.city"
       },
       "license": "proprietary",
-      "icon": "favicon-64.png",
+      "icon": "image",
       "entry": "index.html",
       "type": "web",
       "category": "marketplace",
@@ -701,7 +383,7 @@
         "url": "https://glidefinance.io"
       },
       "license": "GPL-3.0",
-      "icon": "logo_128x128.png",
+      "icon": "swap",
       "entry": "index.html",
       "type": "web",
       "category": "blockchain",

@@ -58,5 +58,5 @@
     "channel": "stable"
   },
 
-  "hidden": true
+  "hidden": false
 }
