@@ -18,6 +18,7 @@ import { getNodeConfig, saveNodeConfig } from './setup.js';
 import { challengeStore } from './auth/challenge-store.js';
 import { verifySiweSignature } from './auth/siwe-verify.js';
 import { firstRunTokenStore } from './setup/first-run-token.js';
+import { recordTelemetryOnce } from './telemetry.js';
 
 const LOOPBACK_RE = /^(127\.|::1$|::ffff:127\.)/;
 function isLoopback (addr: string | undefined): boolean {
@@ -265,6 +266,12 @@ export async function handleParticleAuth (req: Request, res: Response): Promise<
         // Create or get user
         db.createOrUpdateUser(normalizedWallet, smart_account_address || null);
         db.updateLastLogin(normalizedWallet);
+
+        // Telemetry hook (A5b §P0): "Door 2" of the v1.2 funnel.
+        // Fires exactly once per node lifetime — the first time any wallet
+        // successfully completes auth + has a session-ready user record.
+        // Idempotent on subsequent logins (same wallet OR different wallets).
+        recordTelemetryOnce(db, 'wallet_ready');
 
         // Check for existing valid session
         const existingSession = db.getSessionByWallet(normalizedWallet);

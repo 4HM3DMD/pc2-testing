@@ -14,12 +14,17 @@
   "type": "web",
   "category": "marketplace",
   "role": "system",
-
   "capabilities": {
     "wallet": true,
     "network": true,
-    "ipfs": { "pin": true, "fetch": true },
-    "ipc": ["launchApp", "openFolder"],
+    "ipfs": {
+      "pin": true,
+      "fetch": true
+    },
+    "ipc": [
+      "launchApp",
+      "openFolder"
+    ],
     "drm": true,
     "api_endpoints": [
       "GET /api/storage/ipfs/pins",
@@ -28,25 +33,26 @@
       "POST /write"
     ],
     "postMessage_events": {
-      "sends": ["launchApp:pc2-media-runtime", "launchApp:ddrm-viewer", "openFolder"],
+      "sends": [
+        "launchApp:pc2-media-runtime",
+        "launchApp:ddrm-viewer",
+        "openFolder"
+      ],
       "receives": []
     },
     "external_services": [
       "https://ipfs.ela.city/ipfs/"
     ]
   },
-
   "requirements": {
     "minVersion": "1.1.0"
   },
-
   "display": {
     "maximize": true,
     "resizable": true,
     "titlebar": true,
     "taskbar": true
   },
-
   "services": [
     {
       "name": "marketplace",
@@ -54,8 +60,11 @@
       "description": "Elacity decentralized media marketplace"
     }
   ],
-
   "distribution": {
-    "channel": "stable"
+    "channel": "stable",
+    "cid": "bafybeiczcdan4j7zfw2ychjgzco4y4lbb5mqceezxfl5h7f3koau7t6x5y",
+    "signature": "a0c55bbe82c1397a6ce84129856f7a1a5a9a8dd8506086f130d78be2ae128f010e8ff05182efe5c07f5cd918e85b722a59a471a7650ec34e8247ed8bc7811b02",
+    "signedBy": "1ab060ba7578261355504300c1193c484ed8a46a30499c3fa3cb9065930367eb",
+    "size": 7124385
   }
 }

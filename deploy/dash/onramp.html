@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Elacity v1.2 On-Ramp Funnel</title>
+<style>
+  *,*::before,*::after{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:#0a0a0a;color:#e5e7eb;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;line-height:1.5}
+  .wrap{max-width:1100px;margin:0 auto;padding:48px 24px}
+  header{display:flex;align-items:center;justify-content:space-between;margin-bottom:40px;flex-wrap:wrap;gap:16px}
+  h1{font-size:24px;font-weight:600;margin:0;letter-spacing:-0.01em}
+  .subtitle{color:#9ca3af;font-size:14px;margin-top:4px}
+  .meta{font-size:12px;color:#6b7280;text-align:right}
+  .meta code{background:#1f2937;padding:2px 6px;border-radius:4px;font-size:11px}
+  .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:32px}
+  @media (max-width:780px){.grid{grid-template-columns:repeat(2,1fr)}}
+  @media (max-width:480px){.grid{grid-template-columns:1fr}}
+  .card{background:linear-gradient(180deg,#161616 0%,#0f0f0f 100%);border:1px solid #1f2937;border-radius:10px;padding:20px;position:relative;overflow:hidden}
+  .card::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--accent,#374151)}
+  .card-1{--accent:#3b82f6}
+  .card-2{--accent:#8b5cf6}
+  .card-3{--accent:#ec4899}
+  .card-4{--accent:#10b981}
+  .card-label{color:#9ca3af;font-size:12px;text-transform:uppercase;letter-spacing:0.05em;font-weight:500;margin-bottom:8px}
+  .card-value{font-size:36px;font-weight:600;font-variant-numeric:tabular-nums;color:#f9fafb;line-height:1.1}
+  .card-pct{color:#6b7280;font-size:13px;margin-top:6px;font-variant-numeric:tabular-nums}
+  .card-pct .arrow{color:#ef4444}
+  .funnel{background:#0f0f0f;border:1px solid #1f2937;border-radius:10px;padding:24px;margin-bottom:24px}
+  .funnel-title{color:#9ca3af;font-size:12px;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:16px}
+  .bar{display:flex;align-items:center;margin-bottom:12px;gap:12px;font-size:13px}
+  .bar-label{width:160px;color:#d1d5db;font-weight:500;flex-shrink:0}
+  .bar-fill-wrap{flex:1;height:28px;background:#1f2937;border-radius:6px;overflow:hidden;position:relative}
+  .bar-fill{height:100%;background:linear-gradient(90deg,var(--accent,#3b82f6) 0%,var(--accent2,#1d4ed8) 100%);border-radius:6px;transition:width 0.6s cubic-bezier(0.4,0,0.2,1);display:flex;align-items:center;justify-content:flex-end;padding-right:10px;color:white;font-weight:600;font-size:12px;font-variant-numeric:tabular-nums}
+  .bar-pct{width:60px;color:#9ca3af;text-align:right;font-variant-numeric:tabular-nums}
+  .footer{margin-top:24px;padding-top:24px;border-top:1px solid #1f2937;color:#6b7280;font-size:12px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px}
+  .pulse{display:inline-block;width:6px;height:6px;background:#10b981;border-radius:50%;margin-right:6px;animation:pulse 2s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+  .empty{text-align:center;color:#6b7280;font-size:14px;padding:48px;background:#0f0f0f;border:1px dashed #374151;border-radius:10px}
+  .err{color:#ef4444;background:#1a0808;border:1px solid #7f1d1d;padding:12px;border-radius:6px;font-size:13px;margin-bottom:16px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Elacity v1.2 On-Ramp Funnel</h1>
+      <div class="subtitle">Anonymous adoption metrics — 4-step user journey</div>
+    </div>
+    <div class="meta">
+      <div><span class="pulse"></span>polling <code id="endpoint">…</code></div>
+      <div id="lastUpdated" style="margin-top:4px">never updated</div>
+    </div>
+  </header>
+
+  <div id="error" class="err" style="display:none"></div>
+
+  <div class="grid">
+    <div class="card card-1">
+      <div class="card-label">Door 1 — Install</div>
+      <div class="card-value" id="c-install">—</div>
+      <div class="card-pct">total install_started events</div>
+    </div>
+    <div class="card card-2">
+      <div class="card-label">Door 2 — Wallet Ready</div>
+      <div class="card-value" id="c-wallet">—</div>
+      <div class="card-pct" id="p-wallet">—</div>
+    </div>
+    <div class="card card-3">
+      <div class="card-label">Door 3 — First Capsule</div>
+      <div class="card-value" id="c-open">—</div>
+      <div class="card-pct" id="p-open">—</div>
+    </div>
+    <div class="card card-4">
+      <div class="card-label">Door 4 — First Payment</div>
+      <div class="card-value" id="c-pay">—</div>
+      <div class="card-pct" id="p-pay">—</div>
+    </div>
+  </div>
+
+  <div class="funnel">
+    <div class="funnel-title">Funnel — % of installs that reached each door</div>
+    <div id="funnelBars">
+      <div class="empty">Waiting for first events…</div>
+    </div>
+  </div>
+
+  <div class="footer">
+    <div>Unique installs (deduplicated): <strong id="uniq">—</strong></div>
+    <div>First event: <span id="first">—</span> · Last event: <span id="last">—</span></div>
+  </div>
+</div>
+
+<script>
+(function () {
+  // Endpoint is configurable via ?api=https://your-supernode/api/telemetry/onramp/summary
+  // Defaults to same-origin so the dashboard "just works" when served from the supernode.
+  const params = new URLSearchParams(location.search);
+  const ENDPOINT = params.get('api') || '/api/telemetry/onramp/summary';
+  const REFRESH_MS = parseInt(params.get('refresh') || '15000', 10);
+
+  document.getElementById('endpoint').textContent = ENDPOINT;
+
+  function fmt(n) {
+    if (n == null) return '—';
+    return n.toLocaleString('en-US');
+  }
+
+  function pct(num, denom) {
+    if (!denom || denom === 0) return null;
+    return Math.round((num / denom) * 1000) / 10;
+  }
+
+  function pctLabel(num, denom) {
+    const p = pct(num, denom);
+    if (p == null) return '—';
+    return p.toFixed(1) + '% of installs';
+  }
+
+  function tsLabel(ts) {
+    if (!ts) return 'none';
+    return new Date(ts).toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+  }
+
+  function renderBars(events, total) {
+    const wrap = document.getElementById('funnelBars');
+    if (!total || total === 0) {
+      wrap.innerHTML = '<div class="empty">Waiting for first events…</div>';
+      return;
+    }
+    const rows = [
+      { label: 'install_started', accent: '#3b82f6', accent2: '#1d4ed8', count: events.install_started },
+      { label: 'wallet_ready', accent: '#8b5cf6', accent2: '#6d28d9', count: events.wallet_ready },
+      { label: 'first_capsule_open', accent: '#ec4899', accent2: '#be185d', count: events.first_capsule_open },
+      { label: 'first_payment', accent: '#10b981', accent2: '#047857', count: events.first_payment },
+    ];
+    wrap.innerHTML = rows.map(r => {
+      const p = pct(r.count, total) || 0;
+      return '<div class="bar">' +
+        '<div class="bar-label">' + r.label + '</div>' +
+        '<div class="bar-fill-wrap">' +
+          '<div class="bar-fill" style="width:' + p + '%;--accent:' + r.accent + ';--accent2:' + r.accent2 + '">' +
+            (p >= 8 ? fmt(r.count) : '') +
+          '</div>' +
+        '</div>' +
+        '<div class="bar-pct">' + p.toFixed(1) + '%</div>' +
+      '</div>';
+    }).join('');
+  }
+
+  async function refresh() {
+    const errEl = document.getElementById('error');
+    try {
+      const res = await fetch(ENDPOINT, { cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      errEl.style.display = 'none';
+      const ev = data.events || {};
+      const total = ev.install_started || 0;
+      document.getElementById('c-install').textContent = fmt(ev.install_started);
+      document.getElementById('c-wallet').textContent = fmt(ev.wallet_ready);
+      document.getElementById('c-open').textContent = fmt(ev.first_capsule_open);
+      document.getElementById('c-pay').textContent = fmt(ev.first_payment);
+      document.getElementById('p-wallet').textContent = pctLabel(ev.wallet_ready, total);
+      document.getElementById('p-open').textContent = pctLabel(ev.first_capsule_open, total);
+      document.getElementById('p-pay').textContent = pctLabel(ev.first_payment, total);
+      document.getElementById('uniq').textContent = fmt(data.unique_installs);
+      document.getElementById('first').textContent = tsLabel(data.first_event_ts);
+      document.getElementById('last').textContent = tsLabel(data.last_event_ts);
+      document.getElementById('lastUpdated').textContent = 'updated ' + new Date().toLocaleTimeString();
+      renderBars(ev, total);
+    } catch (err) {
+      errEl.style.display = 'block';
+      errEl.textContent = 'Fetch failed: ' + (err.message || err) + ' — endpoint: ' + ENDPOINT;
+    }
+  }
+
+  refresh();
+  setInterval(refresh, REFRESH_MS);
+})();
+</script>
+</body>
+</html>

@@ -1,27 +1,86 @@
 {
-  "version": 1,
-  "updatedAt": "2026-03-07T00:00:00Z",
+  "version": 2,
+  "updatedAt": "2026-04-24T14:13:06.138Z",
+  "publisher": {
+    "name": "Elacity Labs",
+    "publicKey": "1ab060ba7578261355504300c1193c484ed8a46a30499c3fa3cb9065930367eb",
+    "keyType": "ed25519"
+  },
   "apps": [
     {
       "name": "elacity-market",
       "title": "Elacity Market",
       "version": "0.2.0",
-      "description": "Browse, purchase, and stream dDRM-protected media. The decentralized marketplace for digital content on Elastos.",
-      "author": { "name": "Elacity Labs", "url": "https://ela.city" },
+      "description": "Browse, purchase, and collect digital media NFTs from the Elacity marketplace on Base.",
+      "author": {
+        "name": "Elacity Labs",
+        "url": "https://ela.city"
+      },
       "license": "proprietary",
       "icon": "marketplace",
-      "type": "web",
       "entry": "index.html",
+      "type": "web",
       "category": "marketplace",
-      "capabilities": { "wallet": true, "network": true, "ipfs": { "pin": true, "fetch": true }, "ipc": ["launchApp", "openFolder"], "drm": true },
-      "requirements": { "minVersion": "1.1.0" },
-      "display": { "maximize": true },
-      "services": [{ "name": "marketplace", "protocol": "https", "description": "Elacity decentralized digital asset marketplace" }],
-      "distribution": { "channel": "stable", "size": 2097152 },
+      "role": "system",
+      "capabilities": {
+        "wallet": true,
+        "network": true,
+        "ipfs": {
+          "pin": true,
+          "fetch": true
+        },
+        "ipc": [
+          "launchApp",
+          "openFolder"
+        ],
+        "drm": true,
+        "api_endpoints": [
+          "GET /api/storage/ipfs/pins",
+          "POST /api/storage/ipfs/pin",
+          "POST /api/media/prepare-auth",
+          "POST /write"
+        ],
+        "postMessage_events": {
+          "sends": [
+            "launchApp:pc2-media-runtime",
+            "launchApp:ddrm-viewer",
+            "openFolder"
+          ],
+          "receives": []
+        },
+        "external_services": [
+          "https://ipfs.ela.city/ipfs/"
+        ]
+      },
+      "requirements": {
+        "minVersion": "1.1.0"
+      },
+      "display": {
+        "maximize": true,
+        "resizable": true,
+        "titlebar": true,
+        "taskbar": true
+      },
+      "services": [
+        {
+          "name": "marketplace",
+          "protocol": "https",
+          "description": "Elacity decentralized media marketplace"
+        }
+      ],
+      "distribution": {
+        "channel": "stable",
+        "cid": "bafybeiczcdan4j7zfw2ychjgzco4y4lbb5mqceezxfl5h7f3koau7t6x5y",
+        "signature": "a0c55bbe82c1397a6ce84129856f7a1a5a9a8dd8506086f130d78be2ae128f010e8ff05182efe5c07f5cd918e85b722a59a471a7650ec34e8247ed8bc7811b02",
+        "signedBy": "1ab060ba7578261355504300c1193c484ed8a46a30499c3fa3cb9065930367eb",
+        "size": 7124385
+      },
       "registry": {
         "status": "available",
         "category": "marketplace",
-        "badges": ["ddrm"],
+        "badges": [
+          "ddrm"
+        ],
         "staffPick": true,
         "popular": true,
         "featured": true,
@@ -34,22 +93,70 @@
       "name": "elacity-player",
       "title": "Elacity Player",
       "version": "0.2.0",
-      "description": "The official dDRM-protected media player. Stream encrypted video and audio content with Lit Protocol DRM decryption.",
-      "author": { "name": "Elacity Labs", "url": "https://ela.city" },
+      "description": "DRM-protected media player for Elacity content on Base. Plays DASH-encrypted streams with Lit Protocol key management.",
+      "author": {
+        "name": "Elacity Labs",
+        "url": "https://ela.city"
+      },
       "license": "proprietary",
       "icon": "play",
-      "type": "web",
       "entry": "index.html",
+      "type": "web",
       "category": "media",
-      "capabilities": { "wallet": true, "network": true, "ipfs": { "fetch": true }, "drm": true },
-      "requirements": { "headers": ["cross-origin-isolation"], "popup": true, "minVersion": "1.1.0" },
-      "display": { "maximize": false, "width": 1280, "height": 720 },
-      "services": [{ "name": "drm-player", "protocol": "https", "description": "DRM-protected DASH media playback" }],
-      "distribution": { "channel": "stable", "size": 5242880 },
+      "role": "system",
+      "capabilities": {
+        "wallet": true,
+        "network": true,
+        "ipfs": {
+          "fetch": true
+        },
+        "drm": true,
+        "api_endpoints": [],
+        "postMessage_events": {
+          "sends": [],
+          "receives": []
+        },
+        "external_services": [
+          "https://base.ela.city/api/2.0/graphql"
+        ],
+        "notes": "Bundled React app — uses Elacity backend GraphQL directly, not local PC2 API endpoints"
+      },
+      "requirements": {
+        "headers": [
+          "cross-origin-isolation"
+        ],
+        "popup": true,
+        "minVersion": "1.1.0"
+      },
+      "display": {
+        "maximize": false,
+        "width": 1280,
+        "height": 720,
+        "resizable": true,
+        "titlebar": true,
+        "taskbar": true
+      },
+      "services": [
+        {
+          "name": "drm-player",
+          "protocol": "https",
+          "description": "DRM-protected DASH media playback"
+        }
+      ],
+      "distribution": {
+        "channel": "stable",
+        "cid": "bafybeifbgkjmgnwvddgntdihvssvyncj5xml2ft6qi3dr3hellgf7wgxbi",
+        "signature": "22fc144d20da6601ea9128613affeea9ccccf2837fdc3cc95847ada9ab9f46a7ed1c67d1fa0eebbd781076f35406b8cc87eb7eac9f65ae70a2f687ec08428800",
+        "signedBy": "1ab060ba7578261355504300c1193c484ed8a46a30499c3fa3cb9065930367eb",
+        "size": 1409855
+      },
+      "hidden": true,
       "registry": {
         "status": "available",
         "category": "media",
-        "badges": ["ddrm"],
+        "badges": [
+          "ddrm"
+        ],
         "staffPick": true,
         "popular": true,
         "gradient": "gradient-indigo",
@@ -58,206 +165,268 @@
       }
     },
     {
-      "name": "elastos-did",
-      "title": "Elastos DID",
-      "version": "3.0.0",
-      "description": "Generate and manage your Elastos Decentralized Identifier. W3C compliant, self-sovereign identity that you own and control.",
-      "author": { "name": "Elastos Foundation", "url": "https://elastos.io" },
-      "license": "MIT",
-      "icon": "identity",
-      "type": "web",
-      "capabilities": { "wallet": true, "network": true },
-      "requirements": { "minVersion": "1.0.0" },
-      "distribution": { "channel": "stable", "size": 18874368 },
-      "registry": {
-        "status": "coming_soon",
-        "category": "blockchain",
-        "badges": ["opensource"],
-        "staffPick": true,
-        "popular": true,
-        "gradient": "gradient-indigo",
-        "website": "https://elastos.io",
-        "source": "https://github.com/nicktomlin/nicktomlin.github.io",
-        "compatibility": "PC2 1.0+"
-      }
-    },
-    {
-      "name": "btcd-stablecoin",
-      "title": "BTCD",
-      "version": "1.2.0",
-      "description": "Bitcoin Dollar Service — Collateralize your BTC and mint BTCD stablecoins. Unlock liquidity from your Bitcoin without selling.",
-      "author": { "name": "BeL2 Labs", "url": "https://bel2.org" },
+      "name": "ddrm-viewer",
+      "title": "Elacity Viewer",
+      "version": "0.1.0",
+      "description": "Secure viewer for dDRM-protected digital assets. Validates ownership rights and renders content within an isolated WASM sandbox.",
+      "author": {
+        "name": "Elacity Labs",
+        "url": "https://ela.city"
+      },
       "license": "proprietary",
-      "icon": "stablecoin",
-      "type": "web",
-      "capabilities": { "wallet": true, "network": true },
-      "requirements": { "minVersion": "1.0.0" },
-      "distribution": { "channel": "stable", "size": 29360128 },
-      "registry": {
-        "status": "coming_soon",
-        "category": "blockchain",
-        "badges": ["ddrm"],
-        "staffPick": true,
-        "popular": true,
-        "gradient": "gradient-green",
-        "website": "https://bel2.org",
-        "compatibility": "PC2 1.0+"
-      }
-    },
-    {
-      "name": "elastos-dao",
-      "title": "Elastos DAO",
-      "version": "2.0.0",
-      "description": "Participate in Elastos governance. Vote on proposals, stake ELA, and shape the future of the Elastos ecosystem.",
-      "author": { "name": "Elastos Foundation", "url": "https://elastos.io" },
-      "license": "MIT",
-      "icon": "governance",
-      "type": "web",
-      "capabilities": { "wallet": true, "network": true },
-      "requirements": { "minVersion": "1.0.0" },
-      "distribution": { "channel": "stable", "size": 23068672 },
-      "registry": {
-        "status": "coming_soon",
-        "category": "blockchain",
-        "badges": ["opensource"],
-        "staffPick": true,
-        "popular": true,
-        "gradient": "gradient-purple",
-        "website": "https://elastos.io/dao",
-        "compatibility": "PC2 1.0+"
-      }
-    },
-    {
-      "name": "elastos-bpos-node",
-      "title": "Elastos BPoS Node",
-      "version": "2.0.0",
-      "description": "Run your own Elastos BPoS validator node. Stake ELA, validate transactions, and earn block rewards.",
-      "author": { "name": "Elastos Foundation", "url": "https://elastos.io" },
-      "license": "MIT",
-      "icon": "server",
-      "type": "web",
-      "capabilities": { "wallet": true, "network": true },
-      "requirements": { "minVersion": "1.0.0" },
-      "distribution": { "channel": "stable", "size": 188743680 },
-      "registry": {
-        "status": "coming_soon",
-        "category": "blockchain",
-        "badges": ["opensource"],
-        "popular": true,
-        "gradient": "gradient-blue",
-        "website": "https://elastos.io",
-        "compatibility": "PC2 1.0+"
-      }
-    },
-    {
-      "name": "uniswap",
-      "title": "Uniswap",
-      "version": "4.0.0",
-      "description": "The leading decentralized exchange. Swap tokens, provide liquidity, and earn fees.",
-      "author": { "name": "Uniswap Labs", "url": "https://uniswap.org" },
-      "license": "proprietary",
-      "icon": "swap",
-      "type": "web",
-      "capabilities": { "wallet": true, "network": true },
-      "requirements": { "minVersion": "1.0.0" },
-      "distribution": { "channel": "stable", "size": 18874368 },
-      "registry": {
-        "status": "coming_soon",
-        "category": "blockchain",
-        "badges": [],
-        "popular": true,
-        "gradient": "gradient-pink",
-        "website": "https://uniswap.org",
-        "compatibility": "PC2 1.0+"
-      }
-    },
-    {
-      "name": "bitcoin-node",
-      "title": "Bitcoin Node",
-      "version": "27.0.0",
-      "description": "Run a full Bitcoin Core node on your PC2. Verify transactions independently and support the network.",
-      "author": { "name": "Open Source", "url": "https://bitcoin.org" },
-      "license": "MIT",
-      "icon": "bitcoin",
-      "type": "web",
-      "capabilities": { "network": true },
-      "requirements": { "minVersion": "1.0.0" },
-      "distribution": { "channel": "stable", "size": 36700160 },
-      "registry": {
-        "status": "coming_soon",
-        "category": "blockchain",
-        "badges": ["opensource"],
-        "popular": true,
-        "gradient": "gradient-orange",
-        "website": "https://bitcoin.org",
-        "source": "https://github.com/bitcoin/bitcoin",
-        "compatibility": "PC2 1.0+"
-      }
-    },
-    {
-      "name": "network-guard",
-      "title": "Network Guard",
-      "version": "5.18.0",
-      "description": "Network-wide ad and tracker blocking. Protect all devices on your network without installing anything on them.",
-      "author": { "name": "Open Source", "url": "https://pi-hole.net" },
-      "license": "MIT",
       "icon": "shield",
-      "type": "web",
-      "capabilities": { "network": true },
-      "requirements": { "minVersion": "1.0.0" },
-      "distribution": { "channel": "stable", "size": 8388608 },
-      "registry": {
-        "status": "coming_soon",
-        "category": "tools",
-        "badges": ["opensource"],
-        "gradient": "gradient-green",
-        "website": "https://pi-hole.net",
-        "compatibility": "PC2 1.0+"
-      }
-    },
-    {
-      "name": "chess-master",
-      "title": "Chess Master",
-      "version": "1.2.0",
-      "description": "Play chess against AI or friends. Multiple difficulty levels, puzzles, and game analysis.",
-      "author": { "name": "Community" },
-      "license": "MIT",
-      "icon": "chess",
-      "type": "wasm",
-      "capabilities": {},
-      "requirements": { "minVersion": "1.0.0" },
-      "distribution": { "channel": "stable", "size": 12582912 },
-      "registry": {
-        "status": "coming_soon",
-        "category": "games",
-        "badges": ["wasm"],
-        "gradient": "gradient-slate",
-        "compatibility": "PC2 1.0+"
-      }
-    },
-    {
-      "name": "supernode-manager",
-      "title": "Supernode Manager",
-      "version": "1.0.0",
-      "description": "Run and manage a full PC2 supernode from your node. Check system specs, deploy services, and monitor network health.",
-      "author": { "name": "Elacity Labs", "url": "https://ela.city" },
-      "license": "proprietary",
-      "icon": "server",
-      "type": "web",
       "entry": "index.html",
-      "capabilities": { "network": true, "ipc": ["launchApp"] },
-      "requirements": { "minVersion": "1.1.0" },
-      "display": { "maximize": false, "width": 800, "height": 650 },
-      "distribution": { "channel": "stable", "size": 32768 },
+      "type": "web",
+      "category": "media",
+      "role": "system",
+      "capabilities": {
+        "wallet": true,
+        "network": true,
+        "ipfs": {
+          "pin": false,
+          "fetch": true
+        },
+        "drm": true,
+        "api_endpoints": [
+          "POST /api/storage/lit/secure-view"
+        ],
+        "postMessage_events": {
+          "sends": [],
+          "receives": []
+        }
+      },
+      "requirements": {
+        "minVersion": "1.1.0"
+      },
+      "display": {
+        "width": 900,
+        "height": 700,
+        "resizable": true,
+        "titlebar": true,
+        "taskbar": true
+      },
+      "distribution": {
+        "channel": "stable",
+        "cid": "bafkreicswjb7mvwdgauwd6dhw7ryirndxfraocjo2avn53vfs24oo7jeua",
+        "signature": "64a6b3bee5a7c8a313a6647fef0079aefabbe99f1364adf6d5575f65e17e6343f26038a705221f11b72981681008b0f76ebada7043d2a6c287615bd1fac0450c",
+        "signedBy": "1ab060ba7578261355504300c1193c484ed8a46a30499c3fa3cb9065930367eb",
+        "size": 276452
+      },
+      "hidden": true,
       "registry": {
         "status": "available",
-        "category": "system",
-        "badges": ["system"],
-        "staffPick": true,
+        "category": "tools",
+        "badges": [
+          "ddrm"
+        ],
+        "staffPick": false,
         "popular": false,
-        "gradient": "gradient-indigo",
+        "featured": false,
+        "gradient": "gradient-blue",
         "website": "https://ela.city",
-        "compatibility": "PC2 1.1+"
+        "compatibility": "PC2 1.2+"
+      }
+    },
+    {
+      "name": "elacity-creator",
+      "title": "Elacity Creator",
+      "version": "0.1.0",
+      "description": "Encrypt, upload, and list any digital asset on the Elacity marketplace. Supports PDFs, images, audio, 3D models, AI models, datasets, and more.",
+      "author": {
+        "name": "Elacity Labs",
+        "url": "https://ela.city"
+      },
+      "license": "proprietary",
+      "icon": "edit",
+      "entry": "index.html",
+      "type": "web",
+      "category": "creator",
+      "role": "system",
+      "capabilities": {
+        "wallet": true,
+        "network": true,
+        "ipfs": {
+          "pin": true,
+          "fetch": true,
+          "add": true
+        },
+        "ipc": [
+          "launchApp",
+          "openFolder"
+        ],
+        "drm": true,
+        "api_endpoints": [
+          "POST /read",
+          "POST /api/storage/ipfs/add-directory",
+          "POST /api/storage/ipfs/add",
+          "POST /api/storage/ipfs/upload-elacity",
+          "POST /api/storage/ipfs/pin",
+          "POST /api/storage/lit/encrypt",
+          "POST /api/storage/thumbnail",
+          "POST /api/media/encode",
+          "GET /api/media/encode/status/:jobId",
+          "POST /api/drafts",
+          "GET /api/drafts/:id",
+          "DELETE /api/drafts/:id"
+        ],
+        "postMessage_events": {
+          "sends": [
+            "mint-draft-saved",
+            "mint-close-creator"
+          ],
+          "receives": []
+        },
+        "external_services": [
+          "https://base.ela.city/api/2.0/graphql",
+          "https://mainnet.base.org",
+          "https://ipfs.ela.city/ipfs/"
+        ]
+      },
+      "requirements": {
+        "minVersion": "1.1.0"
+      },
+      "display": {
+        "maximize": true,
+        "resizable": true,
+        "titlebar": true,
+        "taskbar": true
+      },
+      "services": [
+        {
+          "name": "creator",
+          "protocol": "https",
+          "description": "Elacity decentralized asset creation and listing"
+        }
+      ],
+      "distribution": {
+        "channel": "stable",
+        "cid": "bafybeidhttd3uozgo3odpcvs3hvmrsbo2pgrbce6srum65y5qfzzvzztxy",
+        "signature": "dc6b190f16265624624f8f00305ec219a787e5415995494ad811565631b1d0170ea61f7de46335ed5db631c932024c616a1e8ba756fad1c298b751de72853e0a",
+        "signedBy": "1ab060ba7578261355504300c1193c484ed8a46a30499c3fa3cb9065930367eb",
+        "size": 6940382
+      },
+      "registry": {
+        "status": "available",
+        "category": "media",
+        "badges": [
+          "ddrm",
+          "creator"
+        ],
+        "staffPick": true,
+        "popular": true,
+        "featured": true,
+        "gradient": "gradient-pink",
+        "website": "https://ela.city",
+        "compatibility": "PC2 1.2+"
+      }
+    },
+    {
+      "name": "elastos-nft",
+      "title": "Elastos NFT",
+      "version": "0.1.0",
+      "description": "Browse, trade, and collect NFTs on the Elastos Smart Chain (ESC).",
+      "author": {
+        "name": "Elacity Labs",
+        "url": "https://ela.city"
+      },
+      "license": "proprietary",
+      "icon": "image",
+      "entry": "index.html",
+      "type": "web",
+      "category": "marketplace",
+      "role": "dapp",
+      "capabilities": {
+        "wallet": true,
+        "network": true,
+        "ipfs": {
+          "pin": true,
+          "fetch": true
+        }
+      },
+      "requirements": {
+        "minVersion": "1.1.0"
+      },
+      "display": {
+        "maximize": true,
+        "resizable": true,
+        "titlebar": true,
+        "taskbar": true
+      },
+      "distribution": {
+        "channel": "stable",
+        "cid": "bafybeich5bmanb3nx65scjcv3rp3wjcge4np6von6ybwrp7xsob7llczdy",
+        "signature": "40ae07bbd27d32cd6adbecb9796e41c2d46feb34bfafd99e4c6b1276098a7d3629b43c2b47c866411d38c071a135f13d5860b021227b0b1ba1f6cb968e68ea0e",
+        "signedBy": "1ab060ba7578261355504300c1193c484ed8a46a30499c3fa3cb9065930367eb",
+        "size": 10314879
+      },
+      "registry": {
+        "status": "available",
+        "category": "marketplace",
+        "badges": [
+          "nft"
+        ],
+        "staffPick": true,
+        "popular": true,
+        "featured": true,
+        "gradient": "gradient-emerald",
+        "website": "https://ela.city",
+        "compatibility": "PC2 1.2+"
+      }
+    },
+    {
+      "name": "glide-finance",
+      "title": "Glide Finance",
+      "version": "1.0.0",
+      "description": "Decentralized exchange on Elastos Smart Chain. Swap tokens, provide liquidity, and earn rewards.",
+      "author": {
+        "name": "Glide Finance",
+        "url": "https://glidefinance.io"
+      },
+      "license": "GPL-3.0",
+      "icon": "swap",
+      "entry": "index.html",
+      "type": "web",
+      "category": "blockchain",
+      "role": "dapp",
+      "capabilities": {
+        "wallet": true,
+        "network": true
+      },
+      "requirements": {
+        "minVersion": "1.1.0"
+      },
+      "display": {
+        "maximize": true,
+        "resizable": true,
+        "titlebar": true,
+        "taskbar": true
+      },
+      "services": [
+        {
+          "name": "dex",
+          "protocol": "https",
+          "description": "Glide Finance decentralized exchange on Elastos Smart Chain"
+        }
+      ],
+      "distribution": {
+        "channel": "stable",
+        "cid": "bafybeib6jbeosgudsbilc2bhlkbycnhuvdxwc5zfp22dmbsniknxddwvzq",
+        "signature": "a49e1871fc2be08c9f07c50b0fad97244f455318354b70112014dbb473a3e211cc6e16f2930b8c7da12519f85fe6d0be3899c6ded3a839f98341f4f526be400a",
+        "signedBy": "1ab060ba7578261355504300c1193c484ed8a46a30499c3fa3cb9065930367eb",
+        "size": 80443168
+      },
+      "registry": {
+        "status": "available",
+        "category": "defi",
+        "badges": [
+          "defi"
+        ],
+        "staffPick": true,
+        "popular": true,
+        "featured": true,
+        "gradient": "gradient-amber",
+        "website": "https://glidefinance.io",
+        "compatibility": "PC2 1.2+"
       }
     }
   ]

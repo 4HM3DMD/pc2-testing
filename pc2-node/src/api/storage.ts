@@ -6,6 +6,7 @@
 
 import { Router, Response } from 'express';
 import { authenticate, requireOwner, AuthenticatedRequest } from './middleware.js';
+import { recordTelemetryOnSuccess } from './telemetry.js';
 import { logger } from '../utils/logger.js';
 import { getEffectiveStorageLimit } from './info.js';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
@@ -2367,6 +2368,12 @@ router.get(
  *   storage:fetch. Provided: drm:render. See PC2_CONVERGENCE_INVENTORY.
  */
 router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, res: Response) => {
+  // Telemetry hook (A5b §P0): "Door 4" of the v1.2 funnel. Fires exactly
+  // once per node lifetime — the first time a paid-content decrypt SUCCEEDS
+  // (response status 2xx). Uses res.on('finish') because this handler has
+  // 6 success exit points; wrapping each one would be brittle.
+  recordTelemetryOnSuccess(req.app.locals.db, 'first_payment', res);
+
   const requestStart = Date.now();
   try {
     const {

@@ -109,6 +109,21 @@ export interface AppManifest {
   category?: AppCategory;
   system?: boolean;
 
+  /**
+   * Distribution role (v1.2 dapp-store split, see docs/core/V1.2_ADOPTION_ROADMAP.md).
+   *
+   * - `"system"` — first-party Elacity protocol app, ships inside the PC2
+   *   binary, can't be uninstalled. v1.2.x: Market, Creator, Player, Viewer.
+   * - `"dapp"`   — third-party / optional app, installable + removable from
+   *   the dapp store. v1.2.x first capsules: Elastos NFT, Glide Finance.
+   *
+   * Consumed by the apps.ela.city UI in v1.2.1 (decides whether to render
+   * an "Install" button vs an "Up to date" badge). The PC2 node itself
+   * does not branch on this field today; it's metadata for the registry
+   * and the start-menu surface.
+   */
+  role?: 'system' | 'dapp';
+
   capabilities?: AppCapabilities;
 
   /** @deprecated Use `capabilities` instead. Kept for backward compat with existing app.json files. */

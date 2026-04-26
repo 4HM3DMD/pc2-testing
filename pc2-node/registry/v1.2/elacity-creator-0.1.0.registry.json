@@ -14,12 +14,18 @@
   "type": "web",
   "category": "creator",
   "role": "system",
-
   "capabilities": {
     "wallet": true,
     "network": true,
-    "ipfs": { "pin": true, "fetch": true, "add": true },
-    "ipc": ["launchApp", "openFolder"],
+    "ipfs": {
+      "pin": true,
+      "fetch": true,
+      "add": true
+    },
+    "ipc": [
+      "launchApp",
+      "openFolder"
+    ],
     "drm": true,
     "api_endpoints": [
       "POST /read",
@@ -36,7 +42,10 @@
       "DELETE /api/drafts/:id"
     ],
     "postMessage_events": {
-      "sends": ["mint-draft-saved", "mint-close-creator"],
+      "sends": [
+        "mint-draft-saved",
+        "mint-close-creator"
+      ],
       "receives": []
     },
     "external_services": [
@@ -45,18 +54,15 @@
       "https://ipfs.ela.city/ipfs/"
     ]
   },
-
   "requirements": {
     "minVersion": "1.1.0"
   },
-
   "display": {
     "maximize": true,
     "resizable": true,
     "titlebar": true,
     "taskbar": true
   },
-
   "services": [
     {
       "name": "creator",
@@ -64,8 +70,11 @@
       "description": "Elacity decentralized asset creation and listing"
     }
   ],
-
   "distribution": {
-    "channel": "stable"
+    "channel": "stable",
+    "cid": "bafybeidhttd3uozgo3odpcvs3hvmrsbo2pgrbce6srum65y5qfzzvzztxy",
+    "signature": "dc6b190f16265624624f8f00305ec219a787e5415995494ad811565631b1d0170ea61f7de46335ed5db631c932024c616a1e8ba756fad1c298b751de72853e0a",
+    "signedBy": "1ab060ba7578261355504300c1193c484ed8a46a30499c3fa3cb9065930367eb",
+    "size": 6940382
   }
 }
