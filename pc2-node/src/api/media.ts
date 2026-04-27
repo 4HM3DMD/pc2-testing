@@ -527,12 +527,14 @@ const SA_ENTRYPOINT = '0xba418fa699622de824b258c61eb150ed7a13967b';
  */
 async function detectSmartAccountUser(
   eoaAddress: string,
-  psshEntries: Array<{ protectionType: string; data: any }>,
+  _psshEntries: Array<{ protectionType: string; data: any }>,
 ): Promise<boolean> {
-  // Extract RPC URL from PSSH data (the Lit Action embeds it)
-  const saEntry = psshEntries.find(p => p.protectionType === 'cenc:lit-drm-sa-v1');
+  // SEC Wave 8 (M-01): RPC URL is server-controlled. Never honour a
+  // `rpc` field inside PSSH data — PSSH is creator-controlled and an
+  // attacker could point us at internal services (SSRF) or a chain
+  // that returns spoofed results for the factory call below.
   const { getBaseRpcUrl } = await import('../utils/rpc.js');
-  const rpcUrl = saEntry?.data?.rpc || getBaseRpcUrl();
+  const rpcUrl = getBaseRpcUrl();
 
   // Build calldata for factory.getAddress(entryPoint, initData, salt=0)
   // initData = 0x2ede3bc0 + eoaAddress (padded to 32 bytes)
