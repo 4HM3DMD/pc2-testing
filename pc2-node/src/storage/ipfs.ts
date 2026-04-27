@@ -35,6 +35,13 @@ const log = createLogger('ipfs');
 const WASM_ASSEMBLE_THRESHOLD = 5 * 1024 * 1024; // 5 MB — WASM assembly reduces V8 heap pressure on constrained devices
 const IPFS_ASSEMBLE_WASM_PATH = 'wasm-apps/ipfs-assemble/ipfs-assemble.wasm';
 let cachedAssembleWasm: ArrayBuffer | null = null;
+type UnixFSEntryType = 'file' | 'raw' | 'directory' | 'hamt-sharded-directory';
+
+function normalizeUnixFSEntryType(type: string | undefined): 'file' | 'raw' | 'directory' {
+  if (type === 'directory' || type === 'hamt-sharded-directory') return 'directory';
+  if (type === 'raw') return 'raw';
+  return 'file';
+}
 
 /**
  * IPFS Network Modes:
@@ -721,7 +728,7 @@ export class IPFSStorage {
       throw new Error(`Entry not found for CID: ${cidString}`);
     }
 
-    const type = entry.type as 'file' | 'raw' | 'directory';
+    const type = normalizeUnixFSEntryType(entry.type as string | undefined);
     return {
       cid: entry.cid.toString(),
       size: Number(entry.size || 0),
@@ -758,20 +765,44 @@ export class IPFSStorage {
    * Returns array of { name, cid, size, type } for each entry.
    */
   async listDirectory(cidString: string): Promise<Array<{ name: string; cid: string; size: number; type: string }>> {
-    const fs = this.getUnixFS();
     const { CID } = await import('multiformats/cid');
     const cid = CID.parse(cidString);
     const entries: Array<{ name: string; cid: string; size: number; type: string }> = [];
-
-    for await (const entry of fs.ls(cid)) {
-      entries.push({
-        name: entry.name,
-        cid: entry.cid.toString(),
-        size: Number(entry.size || 0),
-        type: entry.type,
-      });
+    const fs = this.getUnixFS();
+    try {
+      for await (const entry of fs.ls(cid)) {
+        entries.push({
+          name: entry.name,
+          cid: entry.cid.toString(),
+          size: Number(entry.size || 0),
+          type: normalizeUnixFSEntryType(entry.type as string | undefined),
+        });
+      }
+      return entries;
+    } catch (lsError: any) {
+      log.debug(`[IPFS] fs.ls fallback for ${cidString}: ${lsError?.message || 'unknown error'}`);
     }
 
+    // Fallback path for legacy/sharded directory formats that fs.ls may not decode.
+    const { exporter } = await import('ipfs-unixfs-exporter');
+    const entry = await exporter(cid, this.blockstore!);
+    if (!entry) return entries;
+    const rootType = normalizeUnixFSEntryType((entry.type as UnixFSEntryType | undefined) || 'file');
+    if (rootType !== 'directory') {
+      throw new Error(`CID ${cidString} is not a directory (type: ${entry.type})`);
+    }
+
+    if (typeof entry.content !== 'function') {
+      return entries;
+    }
+    for await (const child of entry.content()) {
+      entries.push({
+        name: child.name || '',
+        cid: child.cid.toString(),
+        size: Number(child.size || 0),
+        type: normalizeUnixFSEntryType(child.type as string | undefined),
+      });
+    }
     return entries;
   }
 
@@ -831,7 +862,7 @@ export class IPFSStorage {
       return {
         cid: entry.cid.toString(),
         size: Number(entry.size),
-        type: entry.type as 'file' | 'raw' | 'directory',
+        type: normalizeUnixFSEntryType(entry.type as string | undefined),
       };
     } catch {
       return null;
