@@ -516,9 +516,12 @@ export class IPFSStorage {
       });
 
       let dirCid: string | null = null;
+      const importedCids = new Set<string>();
 
       for await (const entry of fs.addAll(candidates, { wrapWithDirectory: true })) {
-        dirCid = entry.cid.toString();
+        const cid = entry.cid.toString();
+        dirCid = cid;
+        importedCids.add(cid);
       }
 
       if (!dirCid) {
@@ -529,8 +532,9 @@ export class IPFSStorage {
         await this.pinFile(dirCid);
       }
 
-      await this.maybeAnnounceStoredCID(dirCid, options?.announce);
+      await this.maybeAnnounceStoredCIDs(Array.from(importedCids), options?.announce);
       void this.maybeWarmPublicGateway(dirCid);
+      void this.maybeWarmPublicGatewayDirectoryPaths(dirCid, Object.keys(files));
 
       log.info(`[IPFS] Stored directory with ${Object.keys(files).length} files: ${dirCid}`);
       return dirCid;
@@ -592,6 +596,29 @@ export class IPFSStorage {
     }
   }
 
+  private async maybeAnnounceStoredCIDs(cids: string[], explicitAnnounce?: boolean): Promise<void> {
+    const unique = Array.from(new Set(cids.filter(Boolean)));
+    if (unique.length === 0) return;
+    if (unique.length === 1) {
+      await this.maybeAnnounceStoredCID(unique[0], explicitAnnounce);
+      return;
+    }
+
+    const autoAnnounce = this.options.autoAnnounceOnStore !== false;
+    const shouldAnnounce = explicitAnnounce === true || (explicitAnnounce === undefined && autoAnnounce);
+    if (!shouldAnnounce) return;
+    if (!this.canAnnounce()) return;
+
+    try {
+      const result = await this.announceMultipleCIDs(unique);
+      if (result.failed > 0) {
+        log.warn(`[IPFS] Store batch auto-announce partial failure: ${result.success} success, ${result.failed} failed`);
+      }
+    } catch (error: any) {
+      log.warn(`[IPFS] Store batch auto-announce failed: ${error?.message || 'unknown error'}`);
+    }
+  }
+
   private async maybeWarmPublicGateway(cid: string): Promise<void> {
     const shouldPrefetch = this.options.prefetchOnStore !== false;
     if (!shouldPrefetch) return;
@@ -607,6 +634,29 @@ export class IPFSStorage {
       log.debug(`[IPFS] Public gateway prefetch: ${cid} -> HTTP ${response.status}`);
     } catch (error: any) {
       log.debug(`[IPFS] Public gateway prefetch failed for ${cid}: ${error?.message || 'unknown error'}`);
+    }
+  }
+
+  private async maybeWarmPublicGatewayDirectoryPaths(rootCid: string, fileNames: string[]): Promise<void> {
+    const shouldPrefetch = this.options.prefetchOnStore !== false;
+    if (!shouldPrefetch) return;
+    if (fileNames.length === 0) return;
+
+    const base = (this.options.publicGatewayPrefetchUrl || 'https://ipfs.ela.city/ipfs/').replace(/\/+$/, '/');
+    const maxWarmups = 16; // Keep bootstrap prefetch bounded.
+
+    for (const name of fileNames.slice(0, maxWarmups)) {
+      const encodedPath = name.split('/').map((part) => encodeURIComponent(part)).join('/');
+      const url = `${base}${encodeURIComponent(rootCid)}/${encodedPath}`;
+      try {
+        const response = await fetch(url, {
+          method: 'HEAD',
+          signal: AbortSignal.timeout(15_000),
+        });
+        log.debug(`[IPFS] Public gateway prefetch path: ${rootCid}/${name} -> HTTP ${response.status}`);
+      } catch (error: any) {
+        log.debug(`[IPFS] Public gateway prefetch path failed for ${rootCid}/${name}: ${error?.message || 'unknown error'}`);
+      }
     }
   }
 
