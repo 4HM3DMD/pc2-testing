@@ -171,7 +171,7 @@ router.get('/usage', authenticate, async (req: AuthenticatedRequest, res: Respon
         size: row.total_size,
         files: row.file_count,
         filesWithCID: row.files_with_cid,
-        percentage: totalResult.total_size > 0 
+        percentage: totalResult.total_size > 0
           ? parseFloat(((row.total_size / totalResult.total_size) * 100).toFixed(1))
           : 0
       })),
@@ -217,11 +217,11 @@ router.get('/usage', authenticate, async (req: AuthenticatedRequest, res: Respon
 router.get('/limit', authenticate, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const db = req.app.locals.db;
-    
+
     if (!req.user) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
-    
+
     const limitSetting = db?.getSetting('storage_limit') || 'auto';
     res.json({ limit: limitSetting });
   } catch (error) {
@@ -237,21 +237,21 @@ router.get('/limit', authenticate, async (req: AuthenticatedRequest, res: Respon
 router.post('/limit', authenticate, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const db = req.app.locals.db;
-    
+
     if (!req.user) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
-    
+
     const { limit } = req.body;
-    
+
     // Validate limit value
     const validLimits = ['auto', '10GB', '25GB', '50GB', '100GB', '250GB', '500GB', 'unlimited'];
     if (!validLimits.includes(limit)) {
       return res.status(400).json({ error: 'Invalid limit value', validValues: validLimits });
     }
-    
+
     db?.setSetting('storage_limit', limit);
-    
+
     // Update global config so it takes effect immediately
     if (!(global as any).pc2Config) {
       (global as any).pc2Config = {};
@@ -263,7 +263,7 @@ router.post('/limit', authenticate, async (req: AuthenticatedRequest, res: Respo
       (global as any).pc2Config.resources.storage = {};
     }
     (global as any).pc2Config.resources.storage.limit = limit;
-    
+
     logger.info(`[Storage API]: Storage limit set to ${limit}`);
     res.json({ success: true, limit });
   } catch (error) {
@@ -302,7 +302,7 @@ router.get('/ipfs/settings', authenticate, async (req: AuthenticatedRequest, res
     if (ipfs) {
       const announcementStats = ipfs.getAnnouncementStats();
       const networkStats = await ipfs.getNetworkStats();
-      
+
       ipfsStats = {
         ...announcementStats,
         peerId: networkStats.peerId,
@@ -386,10 +386,10 @@ router.post('/ipfs/announce', authenticate, async (req: AuthenticatedRequest, re
     }
 
     if (!ipfs.canAnnounce()) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         error: 'DHT announcement not available',
-        reason: ipfs.getNetworkMode() === 'private' 
-          ? 'IPFS is in private mode' 
+        reason: ipfs.getNetworkMode() === 'private'
+          ? 'IPFS is in private mode'
           : 'DHT service not initialized'
       });
     }
@@ -398,8 +398,8 @@ router.post('/ipfs/announce', authenticate, async (req: AuthenticatedRequest, re
     const publicCIDs = db?.getPublicCIDs() || [];
 
     if (publicCIDs.length === 0) {
-      return res.json({ 
-        success: true, 
+      return res.json({
+        success: true,
         message: 'No public files to announce',
         announced: 0,
         failed: 0
@@ -780,13 +780,13 @@ router.post('/nft/pin', authenticate, async (req: AuthenticatedRequest, res: Res
           db.trackPinnedCID(cidClean, walletAddress, result.size || 0, 'nft');
           db.updateNFTPinStatus(cidClean, 'complete');
           if (ipfs.canAnnounce()) {
-            ipfs.announceCID(cidClean).catch(() => {});
+            ipfs.announceCID(cidClean).catch(() => { });
           }
           if (filesystem) {
             try {
               const parentDir = filePath.substring(0, filePath.lastIndexOf('/'));
-              await filesystem.createDirectory(parentDir, walletAddress).catch(() => {});
-              await filesystem.createDirectory(parentDir.substring(0, parentDir.lastIndexOf('/')), walletAddress).catch(() => {});
+              await filesystem.createDirectory(parentDir, walletAddress).catch(() => { });
+              await filesystem.createDirectory(parentDir.substring(0, parentDir.lastIndexOf('/')), walletAddress).catch(() => { });
             } catch { /* directory may already exist */ }
           }
         } else {
@@ -803,8 +803,8 @@ router.post('/nft/pin', authenticate, async (req: AuthenticatedRequest, res: Res
       try {
         const nftDir = `/${walletAddress}/Pictures/NFTs`;
         const collDir = `${nftDir}/${safeCollection}`;
-        await filesystem.createDirectory(nftDir, walletAddress).catch(() => {});
-        await filesystem.createDirectory(collDir, walletAddress).catch(() => {});
+        await filesystem.createDirectory(nftDir, walletAddress).catch(() => { });
+        await filesystem.createDirectory(collDir, walletAddress).catch(() => { });
       } catch { /* directories may already exist */ }
     }
 
@@ -1938,8 +1938,8 @@ router.post('/admin/cek-cache/flush', authenticate, requireOwner, (req: Authenti
   const actor = req.user?.wallet_address || 'unknown';
   const scope = kid && buyerAddress ? `kid=${kid.substring(0, 12)}…,buyer=${buyerAddress.substring(0, 10)}…`
     : kid ? `kid=${kid.substring(0, 12)}…`
-    : buyerAddress ? `buyer=${buyerAddress.substring(0, 10)}…`
-    : 'all';
+      : buyerAddress ? `buyer=${buyerAddress.substring(0, 10)}…`
+        : 'all';
   logger.info(`[CEKCache] Manual flush by ${actor.substring(0, 10)}… — scope=${scope}, removed=${removed}`);
 
   res.json({
@@ -3140,12 +3140,11 @@ router.post('/ipfs/upload-elacity-directory', authenticate, async (req: Authenti
   try {
     const { files } = req.body;
 
-    if (!files || typeof files !== 'object' || !files['metadata.json']) {
-      res.status(400).json({ error: 'Missing metadata.json in files object' });
+    if (!files || typeof files !== 'object') {
+      res.status(400).json({ error: 'Missing files object' });
       return;
     }
 
-    const metadataBytes = Buffer.from(files['metadata.json'] as string, 'base64');
     const ipfs = req.app.locals.ipfs;
     if (!ipfs) {
       res.status(500).json({ error: 'IPFS service not available' });
@@ -3153,7 +3152,12 @@ router.post('/ipfs/upload-elacity-directory', authenticate, async (req: Authenti
     }
 
     // 1. Add metadata.json as a flat file to local IPFS (returns CIDv1 with dag-pb codec)
-    const cidV1String = await ipfs.storeFile(new Uint8Array(metadataBytes), { pin: true, announce: true });
+    const localFilesPayload = Object.fromEntries(
+      Object.entries(files).map(
+        ([filename, jsonValue]) => [filename, new TextEncoder().encode(JSON.stringify(jsonValue))]
+      )
+    );
+    const cidV1String = await ipfs.storeDirectory(localFilesPayload, { pin: true, announce: true });
     logger.info(`[IPFS-Elacity] Metadata added to local IPFS: ${cidV1String}`);
 
     // 2. Convert CIDv1 (bafybei...) to CIDv0 (Qm...) — same content hash, just different encoding
@@ -3168,11 +3172,13 @@ router.post('/ipfs/upload-elacity-directory', authenticate, async (req: Authenti
     }
     logger.info(`[IPFS-Elacity] CIDv0: ${cidV0String}`);
 
+    let finalCid = cidV0String;
+
     // 3. Replicate to Elacity IPFS for public gateway reachability (fire-and-forget)
     const ELACITY_UPLOAD = 'https://base.ela.city/api/2.0/files/upload';
     try {
       const formData = new FormData();
-      formData.append('file', new Blob([new Uint8Array(metadataBytes)]), 'metadata.json');
+      formData.append('data', new Blob([new TextEncoder().encode(JSON.stringify(files))], { type: 'application/json' }), 'metadata.json');
       const uploadResp = await fetch(ELACITY_UPLOAD, {
         method: 'POST',
         headers: { 'X-Target-Flow': 'dir,ipfs' },
@@ -3180,6 +3186,8 @@ router.post('/ipfs/upload-elacity-directory', authenticate, async (req: Authenti
       });
       if (uploadResp.ok) {
         logger.info('[IPFS-Elacity] Replicated metadata to Elacity IPFS');
+        const uploadResult = await uploadResp.json();
+        finalCid = uploadResult[0].path;
       } else {
         logger.warn(`[IPFS-Elacity] Replication failed: ${uploadResp.status} (non-fatal — DHT will propagate)`);
       }
@@ -3187,7 +3195,7 @@ router.post('/ipfs/upload-elacity-directory', authenticate, async (req: Authenti
       logger.warn(`[IPFS-Elacity] Replication failed (non-fatal): ${replicateErr.message}`);
     }
 
-    res.json({ success: true, cid: cidV0String });
+    res.json({ success: true, cid: finalCid });
   } catch (error: any) {
     logger.error('[IPFS-Elacity] Metadata upload error:', error);
     res.status(500).json({ error: error.message || 'Elacity metadata upload failed' });

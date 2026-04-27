@@ -1168,7 +1168,15 @@
     };
   }
 
-  function buildMetadataEnvelope(params) {
+  function getContentTypeCode(mimeType) {
+    if (!mimeType) return 'B';
+    if (mimeType.startsWith('audio/')) return 'F';
+    if (mimeType.startsWith('image/')) return 'D';
+    if (mimeType === 'application/pdf' || mimeType.startsWith('text/')) return 'E';
+    return 'B';
+  }
+
+  function e(params) {
     var contentType = params.mimeType || 'application/octet-stream';
     var isPublic = params.accessMethod === 'free';
     var isResellable = params.accessMethod === 'buy_and_resell';
@@ -1189,9 +1197,11 @@
         uri: 'ipfs://' + params.assetCid,
         contentType: contentType,
         mimeType: contentType,
-        protectionType: isPublic ? 'none' : 'lit-aes-gcm-v1',
-        size: params.size,
         object: 'self://content.json',
+        ...(!isPublic && {
+          protectionType: ['lit-aes-gcm-v1'],
+        }),
+        size: params.size,
       },
       asset: {
         cid: params.assetCid,
@@ -1243,23 +1253,26 @@
   function buildContentJson(params) {
     var contentType = params.mimeType || 'application/octet-stream';
     return {
-      uri: 'ipfs://' + params.assetCid,
-      contentType: contentType,
-      size: params.size,
-      protectionType: params.protectionType || 'lit-aes-gcm-v1',
-      dataToEncryptHash: params.dataToEncryptHash,
-      kid: params.kid || '',
-      encrypted: true,
-      algorithm: params.algorithm || 'aes-256-gcm',
+      title: params.title,
+      type: contentType,
+      description: 'Details about the content, technical informations, etc.',
+      image: params.image,
+      properties: {
+        // keep this here for backward compatibility
+        size: params.size,
+        protectionType: [
+          params.protectionType || 'lit-aes-gcm-v1'
+        ],
+        dataToEncryptHash: params.dataToEncryptHash,
+        kid: params.kid || '',
+      },
+      attributes: [
+        { trait_type: 'Content-Type', value: getContentTypeCode(params.mimeType) },
+        { trait_type: 'Size', value: params.size },
+        { trait_type: 'Encrypted', value: true },
+        { trait_type: 'Algorithm', value: params.algorithm || 'aes-256-gcm' },
+      ]
     };
-  }
-
-  function getContentTypeCode(mimeType) {
-    if (!mimeType) return 'B';
-    if (mimeType.startsWith('audio/')) return 'F';
-    if (mimeType.startsWith('image/')) return 'D';
-    if (mimeType === 'application/pdf' || mimeType.startsWith('text/')) return 'E';
-    return 'B';
   }
 
   function buildContractJson(params) {
@@ -1267,21 +1280,27 @@
     var isResellable = params.accessMethod === 'buy_and_resell';
     var currency = params.currency || CURRENCIES[0];
     return {
+      title: `Contract - ${params.title}`,
       type: 'MCO',
+      description: 'Media Contract Ontology (MCO) formatted in JSON',
       version: '1.0',
-      chainId: BASE_CHAIN_ID,
-      channel: params.channel || DEFAULT_CHANNEL,
-      authority: params.authority || CONTRACTS.AUTHORITY_GATEWAY,
-      contentType: getContentTypeCode(params.mimeType),
-      opType: isPublic ? 0 : (isResellable ? 2 : 1),
-      supply: params.copies || 10000,
-      price: params.price,
-      paymentToken: currency.address,
-      paymentDecimals: currency.decimals,
-      resellerCut: isResellable ? (params.resellerCut || 900) : 0,
-      royalties: (params.royalties || []).map(function (r) {
-        return { address: r.address, percentage: r.royalty };
-      }),
+      properties: {
+        chainId: BASE_CHAIN_ID,
+        channel: params.channel || DEFAULT_CHANNEL,
+        authority: params.authority || CONTRACTS.AUTHORITY_GATEWAY,
+        initialPrice: {
+          value: params.price,
+          paymentToken: currency.address,
+          paymentDecimals: currency.decimals,
+        },
+      },
+      attributes: [
+        { trait_type: 'Content-Type', value: getContentTypeCode(params.mimeType) },
+        { trait_type: 'OpType', value: isPublic ? 0 : (isResellable ? 2 : 1) },
+        { trait_type: 'Supply', value: params.copies || 10000 },
+        { trait_type: 'Resell-Allowed', value: isResellable ? true : false },
+        { trait_type: 'RRL-Percent', value: (isResellable ? (params.resellerCut || 900) : 0) / 10 }
+      ]
     };
   }
 
@@ -1309,6 +1328,10 @@
         decimals: 1,
         description: '10 shares = 1% of revenue',
         image: imageUri,
+        properties: {
+          kid: params.kid || params.dataToEncryptHash || '',
+          title: params.title,
+        },
       };
 
       if (isResellable) {
@@ -1317,6 +1340,10 @@
           name: 'Distribution Right',
           description: 'Allow owner to distribute the content via trade',
           image: imageUri,
+          properties: {
+            kid: params.kid || params.dataToEncryptHash || '',
+            title: params.title,
+          },
         };
       }
     }
@@ -3291,44 +3318,22 @@
         dataToEncryptHash: encryptResult.dataToEncryptHash,
       });
 
-      function jsonToBase64(obj) {
-        return btoa(unescape(encodeURIComponent(JSON.stringify(obj, null, 2))));
-      }
-
       var metaDirFiles = {
-        'metadata.json': jsonToBase64(envelope),
-        'content.json': jsonToBase64(contentJson),
-        'contract.json': jsonToBase64(contractJson),
+        'metadata.json': envelope,
+        'content.json': contentJson,
+        'contract.json': contractJson,
+        ...tokenTypeFiles
       };
-      for (var tokenFileName in tokenTypeFiles) {
-        metaDirFiles[tokenFileName] = jsonToBase64(tokenTypeFiles[tokenFileName]);
-      }
-
-      var localMetaDirCid = null;
-      var localMetaResp = await pc2Fetch('/api/storage/ipfs/add-directory', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ files: metaDirFiles, announce: true }),
-      });
-      if (localMetaResp.ok) {
-        var localMetaData = await localMetaResp.json();
-        localMetaDirCid = localMetaData.cid;
-        console.log('[Creator] Local meta dir CID:', localMetaDirCid);
-      }
-      if (!localMetaDirCid) {
-        throw new Error('Failed to create metadata directory on local IPFS');
-      }
 
       // Upload metadata.json as a flat file to Elacity IPFS — returns a CIDv0 (Qm...)
-      setProgStep('prog-upload-meta', 'Uploading to Elacity IPFS...', 'active');
+      setProgStep('prog-upload-meta', 'Uploading to IPFS...', 'active');
 
-      var metaBase64 = jsonToBase64(envelope);
       var metaCid = null;
       try {
-        var elacityMetaResp = await pc2Fetch('/api/storage/ipfs/upload-elacity', {
+        var elacityMetaResp = await pc2Fetch('/api/storage/ipfs/upload-elacity-directory', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ content: metaBase64, filename: 'metadata.json' }),
+          body: JSON.stringify({ files: metaDirFiles, filename: 'metadataFolder' }),
         });
         if (elacityMetaResp.ok) {
           var elacityMetaData = await elacityMetaResp.json();
@@ -3339,13 +3344,10 @@
         console.warn('[Creator] Elacity meta upload error:', e.message);
       }
 
-      if (!metaCid && localMetaDirCid) {
-        metaCid = localMetaDirCid + '/metadata.json';
-        console.warn('[Creator] Falling back to local directory CID:', metaCid);
-      }
       if (!metaCid) {
         throw new Error('Failed to upload metadata to IPFS');
       }
+
       setProgStep('prog-upload-meta', 'CID: ' + metaCid.substring(0, 12) + '...', 'done');
 
       // Verify on Elacity gateway
@@ -3532,7 +3534,9 @@
               ? encodeSellRawData(copies, priceWei, selectedCurrency.address)
               : '0x';
 
-            var mintUri = metaCid;
+            // we assume `metaCid` is the folder CID that contains all metadata group for this new item
+            // it includes metadata for the media, for the underlying tokens of the operative contract
+            var mintUri = `${metaCid}/metadata.json`;
             var iface = new ethers.Interface(ABI.DIGITAL_ASSET);
             var mintData = iface.encodeFunctionData('mint', [mintUri, opType, opRawData, sellRawData]);
 
