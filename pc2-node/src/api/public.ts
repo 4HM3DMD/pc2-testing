@@ -239,19 +239,206 @@ function mimeFromPath(filePath: string): string {
   return DAG_MIME_TYPES[ext] || 'application/octet-stream';
 }
 
+function isContentMissingError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return lower.includes('not found')
+    || lower.includes('entry not found')
+    || lower.includes('missing block')
+    || lower.includes('no link named')
+    || lower.includes('block was not found')
+    || lower.includes('content not found');
+}
+
+async function tryPinForPublicRequest(ipfs: IPFSStorage, cid: string, context: string): Promise<boolean> {
+  try {
+    const result = await ipfs.pinRemoteCID(cid, {
+      timeoutMs: 45000,
+      maxFiles: 10000,
+    });
+    if (result.success) {
+      logger.info(`[Public Gateway] Auto-fetched CID for ${context}: ${cid} (${result.type}, ${result.size} bytes)`);
+      return true;
+    }
+    return false;
+  } catch (error: any) {
+    logger.debug(`[Public Gateway] Auto-fetch failed for ${context} CID ${cid}: ${error?.message || 'unknown error'}`);
+    return false;
+  }
+}
+
+interface DirectoryListingEntry {
+  name: string;
+  cid: string;
+  size: number;
+  type: string;
+  url: string;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function encodePathSegments(path: string): string {
+  return path
+    .split('/')
+    .filter(Boolean)
+    .map(segment => encodeURIComponent(segment))
+    .join('/');
+}
+
+function formatBytes(size: number): string {
+  if (!Number.isFinite(size) || size < 0) return '-';
+  if (size < 1024) return `${size} B`;
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let value = size;
+  let unitIndex = -1;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[unitIndex]}`;
+}
+
+function normalizeDirectoryEntries(
+  rootCid: string,
+  currentPath: string,
+  entries: Array<{ name: string; cid: string; size: number; type: string }>
+): DirectoryListingEntry[] {
+  const cleanPath = currentPath.replace(/^\/+|\/+$/g, '');
+  const currentPrefix = cleanPath ? `${cleanPath}/` : '';
+
+  return [...entries]
+    .sort((a, b) => {
+      const aIsDir = a.type === 'directory';
+      const bIsDir = b.type === 'directory';
+      if (aIsDir !== bIsDir) return aIsDir ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    })
+    .map(entry => {
+      const entryPath = `${currentPrefix}${entry.name}`;
+      return {
+        ...entry,
+        url: `/ipfs/${encodeURIComponent(rootCid)}/${encodePathSegments(entryPath)}`,
+      };
+    });
+}
+
+function renderDirectoryListing(
+  req: Request,
+  res: Response,
+  opts: {
+    rootCid: string;
+    resolvedCid: string;
+    currentPath: string;
+    entries: DirectoryListingEntry[];
+  }
+): void {
+  const { rootCid, resolvedCid, currentPath, entries } = opts;
+  const cleanPath = currentPath.replace(/^\/+|\/+$/g, '');
+  const pathSuffix = cleanPath ? `/${cleanPath}` : '';
+  const fullPath = `/ipfs/${rootCid}${pathSuffix}`;
+  const displayPath = cleanPath ? `/${cleanPath}` : '/';
+  const pathParts = cleanPath ? cleanPath.split('/').filter(Boolean) : [];
+  const parentPath = pathParts.length > 1 ? pathParts.slice(0, -1).join('/') : '';
+  const parentUrl = cleanPath
+    ? (parentPath
+      ? `/ipfs/${encodeURIComponent(rootCid)}/${encodePathSegments(parentPath)}`
+      : `/ipfs/${encodeURIComponent(rootCid)}`)
+    : null;
+
+  const baseHeaders: Record<string, string> = {
+    'X-IPFS-CID': resolvedCid,
+    'X-IPFS-Root': rootCid,
+    'X-IPFS-Path': fullPath,
+    'X-IPFS-Directory': 'true',
+    'Cache-Control': 'public, max-age=30',
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Expose-Headers': 'X-IPFS-CID, X-IPFS-Root, X-IPFS-Path, X-IPFS-Directory',
+  };
+
+  if (req.method === 'HEAD') {
+    res.status(200).set({
+      ...baseHeaders,
+      'Content-Type': 'text/html; charset=utf-8',
+    }).end();
+    return;
+  }
+
+  const accepted = req.accepts(['html', 'json']);
+  if (accepted === 'json') {
+    res.status(200).set({
+      ...baseHeaders,
+      'Content-Type': 'application/json; charset=utf-8',
+    }).json({
+      cid: rootCid,
+      path: displayPath,
+      isDirectory: true,
+      parent: parentUrl,
+      entries,
+    });
+    return;
+  }
+
+  const rows = entries.map(entry => {
+    const typeLabel = entry.type === 'directory' ? 'dir' : 'file';
+    const sizeLabel = entry.type === 'directory' ? '-' : formatBytes(entry.size);
+    const suffix = entry.type === 'directory' ? '/' : '';
+    return `<tr><td><a href="${entry.url}">${escapeHtml(entry.name)}${suffix}</a></td><td>${typeLabel}</td><td>${sizeLabel}</td></tr>`;
+  }).join('');
+
+  const html = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>IPFS Directory ${escapeHtml(displayPath)}</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: ui-monospace, Menlo, Consolas, monospace; margin: 24px; max-width: 920px; }
+    h1 { margin: 0 0 6px 0; font-size: 20px; }
+    .meta { margin: 0 0 18px 0; color: #666; font-size: 13px; word-break: break-all; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #ccc4; }
+    a { text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .nav { margin: 0 0 10px 0; font-size: 14px; }
+    .empty { color: #777; font-style: italic; }
+  </style>
+</head>
+<body>
+  <h1>Directory Listing</h1>
+  <p class="meta">CID: ${escapeHtml(rootCid)}<br>Path: ${escapeHtml(displayPath)}</p>
+  ${parentUrl ? `<p class="nav"><a href="${parentUrl}">../ parent directory</a></p>` : ''}
+  ${entries.length === 0
+    ? '<p class="empty">Directory is empty.</p>'
+    : `<table><thead><tr><th>Name</th><th>Type</th><th>Size</th></tr></thead><tbody>${rows}</tbody></table>`}
+</body>
+</html>`;
+
+  res.status(200).set({
+    ...baseHeaders,
+    'Content-Type': 'text/html; charset=utf-8',
+  }).send(html);
+}
+
 /**
  * Handler for /ipfs/:cid/* routes — resolves sub-paths within UnixFS DAG
  * directories.  This is what makes DASH streaming work from local IPFS:
  *   GET /ipfs/<rootCID>/stream.mpd
  *   GET /ipfs/<rootCID>/video/seg-1.m4s
  */
-function ipfsDAGPathHandler(ipfs: IPFSStorage | null) {
+function ipfsDAGPathHandler(ipfs: IPFSStorage | null, db: DatabaseManager) {
   return async (req: Request, res: Response) => {
     const { cid } = req.params;
-    const subPath = req.params[0];
+    const subPath = req.params[0] || '';
 
     if (!subPath) {
-      return res.status(400).json({ error: 'Sub-path required' });
+      return ipfsCidHandler(ipfs, db)(req, res);
     }
 
     if (!ipfs || !ipfs.isReady()) {
@@ -259,7 +446,13 @@ function ipfsDAGPathHandler(ipfs: IPFSStorage | null) {
     }
 
     try {
-      const resolved = await ipfs.resolveDAGPath(cid, subPath);
+      let resolved = await ipfs.resolveDAGPath(cid, subPath);
+      if (!resolved) {
+        const fetched = await tryPinForPublicRequest(ipfs, cid, `DAG path ${cid}/${subPath}`);
+        if (fetched) {
+          resolved = await ipfs.resolveDAGPath(cid, subPath);
+        }
+      }
       if (!resolved) {
         return res.status(404).json({
           error: 'Path not found in DAG',
@@ -269,10 +462,31 @@ function ipfsDAGPathHandler(ipfs: IPFSStorage | null) {
       }
 
       if (resolved.type === 'directory') {
-        return res.status(400).json({
-          error: 'Path resolves to a directory, not a file',
+        let listing: Array<{ name: string; cid: string; size: number; type: string }>;
+        try {
+          listing = await ipfs.listDirectory(resolved.cid);
+        } catch (listErr) {
+          const listMessage = listErr instanceof Error ? listErr.message : String(listErr);
+          if (isContentMissingError(listMessage)) {
+            const fetched = await tryPinForPublicRequest(ipfs, cid, `directory listing ${cid}/${subPath}`);
+            if (!fetched) {
+              throw listErr;
+            }
+            listing = await ipfs.listDirectory(resolved.cid);
+          } else {
+            throw listErr;
+          }
+        }
+        const entries = normalizeDirectoryEntries(
+          cid,
+          subPath,
+          listing
+        );
+        return renderDirectoryListing(req, res, {
           rootCid: cid,
-          path: subPath,
+          resolvedCid: resolved.cid,
+          currentPath: subPath,
+          entries,
         });
       }
 
@@ -288,7 +502,7 @@ function ipfsDAGPathHandler(ipfs: IPFSStorage | null) {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
-      if (message.includes('not found') || message.includes('Not found')) {
+      if (isContentMissingError(message)) {
         return res.status(404).json({
           error: 'Content not found',
           rootCid: cid,
@@ -391,25 +605,93 @@ function ipfsCidHandler(ipfs: IPFSStorage | null, db: DatabaseManager) {
       return res.status(503).json({ error: 'IPFS not available' });
     }
 
-    try {
+    const serveCid = async (): Promise<void> => {
       const metadata = db.getFileByCID(cid);
+      if (!filename) {
+        const inspected = await ipfs.inspectCID(cid);
+        if (inspected.type === 'directory') {
+          const rootEntries = normalizeDirectoryEntries(cid, '', await ipfs.listDirectory(inspected.cid));
+          return renderDirectoryListing(req, res, {
+            rootCid: cid,
+            resolvedCid: inspected.cid,
+            currentPath: '',
+            entries: rootEntries,
+          });
+        }
+
+        try {
+          const rootEntries = normalizeDirectoryEntries(cid, '', await ipfs.listDirectory(cid));
+          return renderDirectoryListing(req, res, {
+            rootCid: cid,
+            resolvedCid: cid,
+            currentPath: '',
+            entries: rootEntries,
+          });
+        } catch (dirErr) {
+          const dirMessage = dirErr instanceof Error ? dirErr.message : String(dirErr);
+          if (isContentMissingError(dirMessage)) {
+            // Bubble up so outer handler can auto-pin and retry.
+            throw dirErr;
+          }
+          // Not a directory CID — continue with file flow.
+        }
+      }
+
+      if (metadata?.is_dir) {
+        const entries = normalizeDirectoryEntries(cid, '', await ipfs.listDirectory(cid));
+        return renderDirectoryListing(req, res, {
+          rootCid: cid,
+          resolvedCid: cid,
+          currentPath: '',
+          entries,
+        });
+      }
+
       const mimeType = metadata?.mime_type || 'application/octet-stream';
       const contentFilename = filename || metadata?.path?.split('/').pop() || cid;
 
       // Use DB size for non-Range requests (fast); only hit IPFS when needed
       const needsIpfsSize = !!req.headers.range || !metadata?.size;
-      const fileSize = needsIpfsSize
-        ? await ipfs.getFileSize(cid)
-        : metadata!.size;
+      let fileSize: number;
+      try {
+        fileSize = needsIpfsSize
+          ? await ipfs.getFileSize(cid)
+          : metadata!.size;
+      } catch (sizeError) {
+        const sizeErrorMessage = sizeError instanceof Error ? sizeError.message : String(sizeError);
+        if (sizeErrorMessage.includes('not a file') || sizeErrorMessage.includes('type: directory')) {
+          const entries = normalizeDirectoryEntries(cid, '', await ipfs.listDirectory(cid));
+          return renderDirectoryListing(req, res, {
+            rootCid: cid,
+            resolvedCid: cid,
+            currentPath: '',
+            entries,
+          });
+        }
+        throw sizeError;
+      }
 
       streamToResponse(ipfs, cid, req, res, {
         fileSize,
         mimeType,
         filename: contentFilename,
       });
+    };
+
+    try {
+      return await serveCid();
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
-      if (message.includes('not found') || message.includes('Entry not found')) {
+      if (isContentMissingError(message)) {
+        const fetched = await tryPinForPublicRequest(ipfs, cid, `CID request ${cid}`);
+        if (fetched) {
+          try {
+            return await serveCid();
+          } catch (retryError) {
+            const retryMessage = retryError instanceof Error ? retryError.message : 'Unknown error';
+            logger.warn(`[Public Gateway] Retry serve failed for CID ${cid} after auto-fetch: ${retryMessage}`);
+          }
+        }
         return res.status(404).json({
           error: 'Content not found',
           cid,
@@ -510,8 +792,8 @@ export function createPublicRouter(
    * streaming: /ipfs/<rootCID>/stream.mpd, /ipfs/<rootCID>/video/seg-1.m4s
    * Must be registered BEFORE the :filename? route so multi-segment paths match.
    */
-  router.head('/ipfs/:cid/*', contentRateLimit, bandwidthGuard, ipfsDAGPathHandler(ipfs));
-  router.get('/ipfs/:cid/*', contentRateLimit, bandwidthGuard, ipfsDAGPathHandler(ipfs));
+  router.head('/ipfs/:cid/*', contentRateLimit, bandwidthGuard, ipfsDAGPathHandler(ipfs, db));
+  router.get('/ipfs/:cid/*', contentRateLimit, bandwidthGuard, ipfsDAGPathHandler(ipfs, db));
 
   /**
    * GET|HEAD /ipfs/:cid

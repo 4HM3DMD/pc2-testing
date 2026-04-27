@@ -43,6 +43,8 @@ data/*
 !data/test-apps/
 !data/lit-actions/
 !data/skills/
+libp2p-private-key.protobuf
+data/ipfs/libp2p-private-key.protobuf
 *.db
 *.db-shm
 *.db-wal

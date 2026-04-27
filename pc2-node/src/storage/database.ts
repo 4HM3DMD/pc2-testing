@@ -611,8 +611,30 @@ export class DatabaseManager {
       VALUES (?, ?, ?, ?, ?)
       ON CONFLICT(cid, wallet_address) DO UPDATE SET
         size = excluded.size,
-        source = excluded.source
+      source = excluded.source
     `).run(cid, walletAddress, source, size, Date.now());
+  }
+
+  backfillLocalCIDsToPinned(): number {
+    const db = this.getDB();
+    const now = Date.now();
+    const result = db.prepare(`
+      INSERT OR IGNORE INTO pinned_cids (cid, wallet_address, source, size, pinned_at, pin_status)
+      SELECT DISTINCT
+        f.ipfs_hash as cid,
+        f.wallet_address as wallet_address,
+        'local' as source,
+        COALESCE(f.size, 0) as size,
+        ? as pinned_at,
+        'complete' as pin_status
+      FROM files f
+      WHERE f.ipfs_hash IS NOT NULL
+        AND f.is_dir = 0
+        AND f.wallet_address IS NOT NULL
+        AND f.wallet_address != ''
+    `).run(now);
+
+    return result.changes || 0;
   }
 
   getPinnedCIDs(walletAddress?: string): string[] {

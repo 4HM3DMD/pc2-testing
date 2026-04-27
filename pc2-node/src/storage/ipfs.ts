@@ -11,6 +11,7 @@ import '../utils/polyfill.js';
 import { createHelia, type Helia } from 'helia';
 import { unixfs, type UnixFS } from '@helia/unixfs';
 import { createLibp2p, type Libp2pOptions } from 'libp2p';
+import { generateKeyPair, privateKeyFromProtobuf, privateKeyToProtobuf } from '@libp2p/crypto/keys';
 import { tcp } from '@libp2p/tcp';
 import { webSockets } from '@libp2p/websockets';
 import { noise } from '@chainsafe/libp2p-noise';
@@ -24,7 +25,7 @@ import { dcutr } from '@libp2p/dcutr';
 import { autoNAT } from '@libp2p/autonat';
 import { FsBlockstore } from 'blockstore-fs';
 import { FsDatastore } from 'datastore-fs';
-import { existsSync, mkdirSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { createLogger } from '../utils/logger.js';
 const log = createLogger('ipfs');
@@ -72,7 +73,11 @@ export interface IPFSOptions {
   repoPath: string;
   mode?: IPFSNetworkMode;           // Network mode (default: private)
   enableDHT?: boolean;              // Enable DHT (auto for public/hybrid)
+  dhtClientMode?: boolean;          // DHT client-only mode (default: false for public/hybrid)
   enableBootstrap?: boolean;        // Use public bootstrap nodes
+  autoAnnounceOnStore?: boolean;    // Auto-announce newly stored CIDs (default: true)
+  prefetchOnStore?: boolean;        // Trigger public gateway prefetch after local store (default: true)
+  publicGatewayPrefetchUrl?: string;// Public gateway base URL for prefetch (default: ipfs.ela.city/ipfs/)
   customBootstrap?: string[];       // Additional bootstrap nodes
   supernodeBootstrap?: string[];    // PC2 supernode relay addresses (highest priority)
   relayMode?: boolean;              // Enable relay server mode (for nodes with public IP)
@@ -88,6 +93,7 @@ export class IPFSStorage {
   private networkMode: IPFSNetworkMode;
   private options: IPFSOptions;
   private relayEnabled: boolean = false;
+  private bootstrapReconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(options: IPFSOptions) {
     this.repoPath = options.repoPath;
@@ -105,6 +111,33 @@ export class IPFSStorage {
    */
   getNetworkMode(): IPFSNetworkMode {
     return this.networkMode;
+  }
+
+  /**
+   * Persist libp2p identity key so Peer ID stays stable across restarts.
+   */
+  private getLibp2pKeyPath(): string {
+    return join(this.repoPath, 'libp2p-private-key.protobuf');
+  }
+
+  private async loadOrCreateLibp2pPrivateKey() {
+    const keyPath = this.getLibp2pKeyPath();
+
+    if (existsSync(keyPath)) {
+      try {
+        const keyBytes = readFileSync(keyPath);
+        const key = privateKeyFromProtobuf(new Uint8Array(keyBytes));
+        return key;
+      } catch (error: any) {
+        log.warn(`⚠️  Failed to load persisted libp2p identity key, regenerating: ${error?.message || 'unknown error'}`);
+      }
+    }
+
+    const key = await generateKeyPair('Ed25519');
+    const encoded = privateKeyToProtobuf(key);
+    writeFileSync(keyPath, Buffer.from(encoded), { mode: 0o600 });
+    log.info(`🔐 Created new persistent libp2p identity key: ${keyPath}`);
+    return key;
   }
 
   /**
@@ -143,6 +176,7 @@ export class IPFSStorage {
       // Create blockstore and datastore
       this.blockstore = new FsBlockstore(blockstorePath);
       const datastore = new FsDatastore(datastorePath);
+      const privateKey = await this.loadOrCreateLibp2pPrivateKey();
 
       // Determine if we should enable network features
       const enableNetwork = this.networkMode !== 'private';
@@ -174,12 +208,14 @@ export class IPFSStorage {
         connectionManager: {
           maxConnections: enableNetwork ? 50 : 0,
         },
+        datastore,
+        privateKey,
         services: {} as any
       };
 
       // Add network services for public/hybrid modes
       if (enableNetwork) {
-        log.info(`   DHT: ${enableDHT ? 'enabled (client mode)' : 'disabled'}`);
+        log.info(`   DHT: ${enableDHT ? 'enabled' : 'disabled'}`);
         log.info(`   Bootstrap: ${enableBootstrap ? 'enabled' : 'disabled'}`);
         log.info(`   NAT traversal: enabled (autoNAT + dcutr + circuit-relay-v2)`);
         log.info(`   Max connections: 50`);
@@ -206,10 +242,11 @@ export class IPFSStorage {
           log.info('   Relay server: ENABLED — serving as circuit relay for other peers');
         }
 
-        // DHT: server mode when relay is enabled (full DHT participation),
-        // client mode otherwise (query only, no announcement by default)
+        // DHT defaults to full participation for public/hybrid nodes so this
+        // node can advertise locally-created CIDs to external gateways.
+        // Allow opting back into client mode via config when needed.
         if (enableDHT) {
-          const dhtClientMode = !this.relayEnabled;
+          const dhtClientMode = this.options.dhtClientMode ?? false;
           (libp2pConfig.services as any).dht = kadDHT({
             clientMode: dhtClientMode,
           });
@@ -242,6 +279,8 @@ export class IPFSStorage {
       // Create libp2p instance
       const libp2p = await createLibp2p(libp2pConfig);
 
+      console.log('   Initializing IPFS with libp2p:', libp2p);
+
       // Create Helia node with custom libp2p (no WebRTC)
       // Let Helia start libp2p - don't start it ourselves
       this.helia = await createHelia({
@@ -265,6 +304,28 @@ export class IPFSStorage {
       }
 
       this.isInitialized = true;
+
+      // Kubo-style flow: explicitly dial bootstrap peers after init.
+      // This mirrors `ipfs swarm connect ...` and speeds up peering/provider exchange.
+      if (enableNetwork && enableBootstrap) {
+        const supernodes = [
+          ...PC2_SUPERNODE_BOOTSTRAP,
+          ...(this.options.supernodeBootstrap || [])
+        ];
+        const bootstrapNodes = [
+          ...supernodes,
+          ...(this.options.customBootstrap || []),
+          ...PUBLIC_BOOTSTRAP_NODES,
+        ];
+        void this.connectBootstrapPeers(bootstrapNodes, 'initial');
+
+        if (this.bootstrapReconnectTimer) {
+          clearTimeout(this.bootstrapReconnectTimer);
+        }
+        this.bootstrapReconnectTimer = setTimeout(() => {
+          void this.connectBootstrapPeers(bootstrapNodes, 'post-init');
+        }, 10_000);
+      }
     } catch (error) {
       // Clean up any partial initialization
       if (this.helia) {
@@ -279,6 +340,10 @@ export class IPFSStorage {
         this.fs = null;
       }
       this.isInitialized = false;
+      if (this.bootstrapReconnectTimer) {
+        clearTimeout(this.bootstrapReconnectTimer);
+        this.bootstrapReconnectTimer = null;
+      }
 
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       const errorStack = error instanceof Error ? error.stack : undefined;
@@ -343,7 +408,7 @@ export class IPFSStorage {
   async storeFile(content: Buffer | Uint8Array | string, options?: {
     pin?: boolean;
     timeoutMs?: number;
-    announce?: boolean; // Future: announce CID to DHT (for dDRM marketplace encrypted content)
+    announce?: boolean; // Announce CID to DHT after storing
   }): Promise<string> {
     const fs = this.getUnixFS();
     const timeout = options?.timeoutMs ?? 15 * 60 * 1000; // 15 min default
@@ -366,6 +431,9 @@ export class IPFSStorage {
         await this.pinFile(cid.toString());
       }
 
+      await this.maybeAnnounceStoredCID(cid.toString(), options?.announce);
+      void this.maybeWarmPublicGateway(cid.toString());
+
       return cid.toString();
     } catch (error) {
       log.error('Error storing file in Helia IPFS:', error);
@@ -383,7 +451,7 @@ export class IPFSStorage {
    */
   async storeDirectory(
     files: Record<string, Buffer | Uint8Array | string>,
-    options?: { pin?: boolean; timeoutMs?: number }
+    options?: { pin?: boolean; timeoutMs?: number; announce?: boolean }
   ): Promise<string> {
     const fs = this.getUnixFS();
 
@@ -412,6 +480,9 @@ export class IPFSStorage {
         await this.pinFile(dirCid);
       }
 
+      await this.maybeAnnounceStoredCID(dirCid, options?.announce);
+      void this.maybeWarmPublicGateway(dirCid);
+
       log.info(`[IPFS] Stored directory with ${Object.keys(files).length} files: ${dirCid}`);
       return dirCid;
     } catch (error) {
@@ -427,7 +498,7 @@ export class IPFSStorage {
   async storeFileStream(stream: AsyncIterable<Uint8Array>, options?: {
     pin?: boolean;
     timeoutMs?: number;
-    announce?: boolean; // Future: announce CID to DHT (for dDRM marketplace encrypted content)
+    announce?: boolean; // Announce CID to DHT after storing
   }): Promise<string> {
     const fs = this.getUnixFS();
     const timeout = options?.timeoutMs ?? 30 * 60 * 1000; // 30 min default for large files
@@ -445,10 +516,48 @@ export class IPFSStorage {
         await this.pinFile(cid.toString());
       }
 
+      await this.maybeAnnounceStoredCID(cid.toString(), options?.announce);
+      void this.maybeWarmPublicGateway(cid.toString());
+
       return cid.toString();
     } catch (error) {
       log.error('Error storing file stream in Helia IPFS:', error);
       throw new Error(`Failed to store file stream in IPFS: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async maybeAnnounceStoredCID(cid: string, explicitAnnounce?: boolean): Promise<void> {
+    const autoAnnounce = this.options.autoAnnounceOnStore !== false;
+    const shouldAnnounce = explicitAnnounce === true || (explicitAnnounce === undefined && autoAnnounce);
+
+    if (!shouldAnnounce) return;
+    if (!this.canAnnounce()) return;
+
+    try {
+      const announced = await this.announceCID(cid);
+      if (!announced) {
+        log.debug(`[IPFS] Store auto-announce skipped/failed for CID: ${cid}`);
+      }
+    } catch (error: any) {
+      log.warn(`[IPFS] Store auto-announce failed for CID ${cid}: ${error?.message || 'unknown error'}`);
+    }
+  }
+
+  private async maybeWarmPublicGateway(cid: string): Promise<void> {
+    const shouldPrefetch = this.options.prefetchOnStore !== false;
+    if (!shouldPrefetch) return;
+
+    const base = (this.options.publicGatewayPrefetchUrl || 'https://ipfs.ela.city/ipfs/').replace(/\/+$/, '/');
+    const url = `${base}${encodeURIComponent(cid)}`;
+
+    try {
+      const response = await fetch(url, {
+        method: 'HEAD',
+        signal: AbortSignal.timeout(15_000),
+      });
+      log.debug(`[IPFS] Public gateway prefetch: ${cid} -> HTTP ${response.status}`);
+    } catch (error: any) {
+      log.debug(`[IPFS] Public gateway prefetch failed for ${cid}: ${error?.message || 'unknown error'}`);
     }
   }
 
@@ -546,6 +655,36 @@ export class IPFSStorage {
       log.error(`Error retrieving file from Helia IPFS (CID: ${cid}):`, error);
       throw new Error(`Failed to retrieve file from IPFS: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
+  }
+
+  /**
+   * Get file size from IPFS without loading any content into memory.
+   * Uses the exporter's entry.size which reads only the DAG metadata.
+   */
+  async inspectCID(cidString: string): Promise<{
+    cid: string;
+    size: number;
+    type: 'file' | 'raw' | 'directory';
+  }> {
+    if (!this.blockstore) {
+      throw new Error('Blockstore not initialized');
+    }
+
+    const { CID } = await import('multiformats/cid');
+    const cidObj = CID.parse(cidString);
+    const { exporter } = await import('ipfs-unixfs-exporter');
+
+    const entry = await exporter(cidObj, this.blockstore);
+    if (!entry) {
+      throw new Error(`Entry not found for CID: ${cidString}`);
+    }
+
+    const type = entry.type as 'file' | 'raw' | 'directory';
+    return {
+      cid: entry.cid.toString(),
+      size: Number(entry.size || 0),
+      type,
+    };
   }
 
   /**
@@ -1587,6 +1726,10 @@ export class IPFSStorage {
    * Stop IPFS node gracefully
    */
   async stop(): Promise<void> {
+    if (this.bootstrapReconnectTimer) {
+      clearTimeout(this.bootstrapReconnectTimer);
+      this.bootstrapReconnectTimer = null;
+    }
     if (this.helia && this.isInitialized) {
       try {
         log.info('🛑 Stopping Helia IPFS node...');
@@ -1607,5 +1750,31 @@ export class IPFSStorage {
    */
   isReady(): boolean {
     return this.isInitialized && this.helia !== null;
+  }
+
+  private normalizeBootstrapAddr(addr: string): string {
+    // Accept legacy /ipfs/<peerId> by normalizing to /p2p/<peerId>
+    return addr.replace('/ipfs/', '/p2p/');
+  }
+
+  private async connectBootstrapPeers(peers: string[], phase: 'initial' | 'post-init'): Promise<void> {
+    if (!this.helia || !this.isInitialized || !peers.length) return;
+
+    const uniquePeers = Array.from(new Set(peers.map((p) => this.normalizeBootstrapAddr(p))));
+    log.info(`[IPFS] Bootstrap dial (${phase}): attempting ${uniquePeers.length} peers`);
+
+    let connected = 0;
+    const dialTasks = uniquePeers.map(async (peerAddr) => {
+      try {
+        await (this.helia!.libp2p as any).dial(peerAddr);
+        connected += 1;
+        log.debug(`[IPFS] Bootstrap dial ok (${phase}): ${peerAddr}`);
+      } catch (error: any) {
+        log.debug(`[IPFS] Bootstrap dial failed (${phase}) ${peerAddr}: ${error?.message || 'unknown error'}`);
+      }
+    });
+
+    await Promise.all(dialTasks);
+    log.info(`[IPFS] Bootstrap dial (${phase}) complete: ${connected}/${uniquePeers.length} connected`);
   }
 }

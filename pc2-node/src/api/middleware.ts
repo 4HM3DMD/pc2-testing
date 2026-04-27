@@ -52,19 +52,19 @@ export interface CapabilityPrincipal {
  * Authentication middleware
  * Verifies session token and attaches user to request
  */
-export function authenticate (
+export function authenticate(
     req: AuthenticatedRequest,
     res: Response,
     next: NextFunction,
 ): void {
     // Log all POST requests to filesystem endpoints for debugging
-    if ( req.method === 'POST' && (
+    if (req.method === 'POST' && (
         req.path === '/mkdir' ||
         req.path === '/delete' ||
         req.path === '/move' ||
         req.path === '/writeFile' ||
         req.path.startsWith('/api/files/')
-    ) ) {
+    )) {
         logger.info('[Auth Middleware] Filesystem POST request intercepted', {
             path: req.path,
             method: req.method,
@@ -78,19 +78,19 @@ export function authenticate (
     const db = (req.app.locals.db as DatabaseManager | undefined);
     const config = (req.app.locals.config as Config | undefined);
 
-    if ( ! db ) {
+    if (!db) {
         res.status(500).json({ error: 'Database not initialized' });
         return;
     }
 
     // Special case: Allow /read requests for .__puter_gui.json without auth
     // This is critical for Puter GUI initialization (matching mock server behavior)
-    if ( req.path === '/read' || req.path.startsWith('/read') ) {
+    if (req.path === '/read' || req.path.startsWith('/read')) {
         const pathParam = (req.query.path as string) ||
             (req.query.file as string) ||
             (req.body?.path as string) ||
             (req.body?.file as string);
-        if ( pathParam && (pathParam === '~/.__puter_gui.json' || pathParam.endsWith('.__puter_gui.json')) ) {
+        if (pathParam && (pathParam === '~/.__puter_gui.json' || pathParam.endsWith('.__puter_gui.json'))) {
             logger.info('[Auth Middleware] Allowing .__puter_gui.json read without auth');
             // Set req.user to undefined but allow request to proceed
             req.user = undefined;
@@ -104,42 +104,42 @@ export function authenticate (
     const authHeader = req.headers.authorization;
     let token: string | undefined;
 
-    if ( authHeader?.startsWith('Bearer ') ) {
+    if (authHeader?.startsWith('Bearer ')) {
         token = authHeader.substring(7).trim(); // Remove "Bearer " prefix and trim whitespace
         // Check if token contains comma (multiple values) - take first one
-        if ( token.includes(',') ) {
+        if (token.includes(',')) {
             logger.warn('⚠️ Authorization header contains multiple values, using first', {
-                original: `${authHeader.substring(0, 50) }...`,
-                extracted: `${token.substring(0, 20) }...`,
+                original: `${authHeader.substring(0, 50)}...`,
+                extracted: `${token.substring(0, 20)}...`,
             });
             token = token.split(',')[0].trim();
         }
-    } else if ( req.query.token ) {
+    } else if (req.query.token) {
         token = String(req.query.token).trim();
-    } else if ( req.query.auth_token ) {
+    } else if (req.query.auth_token) {
         token = String(req.query.auth_token).trim();
-    } else if ( req.query['puter.auth.token'] ) {
-    // Check for puter.auth.token in query (common in app iframe URLs)
+    } else if (req.query['puter.auth.token']) {
+        // Check for puter.auth.token in query (common in app iframe URLs)
         token = String(req.query['puter.auth.token']).trim();
-    } else if ( req.body?.token ) {
+    } else if (req.body?.token) {
         token = String(req.body.token).trim();
-    } else if ( req.body?.auth_token ) {
+    } else if (req.body?.auth_token) {
         token = String(req.body.auth_token).trim();
     }
 
     // CRITICAL FIX: Check Referer header for token (matching mock server behavior)
     // App iframes (viewer, player) pass token in URL params, which appear in Referer header
-    if ( !token && req.headers.referer ) {
+    if (!token && req.headers.referer) {
         try {
             const refererUrl = new URL(req.headers.referer);
             const refererToken = refererUrl.searchParams.get('puter.auth.token') ||
                 refererUrl.searchParams.get('token') ||
                 refererUrl.searchParams.get('auth_token');
-            if ( refererToken ) {
+            if (refererToken) {
                 token = refererToken;
                 logger.info('[Auth Middleware] Found token in Referer header', {
-                    tokenPrefix: `${refererToken.substring(0, 20) }...`,
-                    referer: `${req.headers.referer.substring(0, 100) }...`,
+                    tokenPrefix: `${refererToken.substring(0, 20)}...`,
+                    referer: `${req.headers.referer.substring(0, 100)}...`,
                 });
             }
         } catch (e) {
@@ -153,20 +153,20 @@ export function authenticate (
 
     // Check for API key authentication (X-API-Key header)
     const apiKeyHeader = req.headers['x-api-key'] as string | undefined;
-    if ( apiKeyHeader && !token ) {
-    // Hash the API key to compare with stored hash
+    if (apiKeyHeader && !token) {
+        // Hash the API key to compare with stored hash
         const keyHash = createHash('sha256').update(apiKeyHeader).digest('hex');
         const apiKeyRecord = db.getApiKeyByHash(keyHash);
 
-        if ( apiKeyRecord ) {
+        if (apiKeyRecord) {
             // Check if key is revoked
-            if ( apiKeyRecord.revoked ) {
+            if (apiKeyRecord.revoked) {
                 res.status(401).json({ error: 'API key revoked' });
                 return;
             }
 
             // Check if key is expired
-            if ( apiKeyRecord.expires_at && apiKeyRecord.expires_at < Date.now() ) {
+            if (apiKeyRecord.expires_at && apiKeyRecord.expires_at < Date.now()) {
                 res.status(401).json({ error: 'API key expired' });
                 return;
             }
@@ -190,7 +190,7 @@ export function authenticate (
             logger.info('[Auth Middleware] API key authenticated', {
                 keyId: apiKeyRecord.key_id,
                 name: apiKeyRecord.name,
-                walletPrefix: `${apiKeyRecord.wallet_address.substring(0, 10) }...`,
+                walletPrefix: `${apiKeyRecord.wallet_address.substring(0, 10)}...`,
                 scopes: apiKeyRecord.scopes,
             });
 
@@ -199,7 +199,7 @@ export function authenticate (
             logger.warn('[Auth Middleware] Invalid API key', {
                 path: req.path,
                 method: req.method,
-                keyPrefix: `${apiKeyHeader.substring(0, 8) }...`,
+                keyPrefix: `${apiKeyHeader.substring(0, 8)}...`,
             });
             res.status(401).json({ error: 'Invalid API key' });
             return;
@@ -207,12 +207,12 @@ export function authenticate (
     }
 
     // Log for debugging (remove in production)
-    if ( ! token ) {
+    if (!token) {
         logger.warn('Authentication failed: No token provided', {
             path: req.path,
             method: req.method,
             hasAuthHeader: !!authHeader,
-            authHeaderValue: authHeader ? `${authHeader.substring(0, 20) }...` : null,
+            authHeaderValue: authHeader ? `${authHeader.substring(0, 20)}...` : null,
             queryToken: !!(req.query.token || req.query.auth_token),
             bodyToken: !!(req.body?.token || req.body?.auth_token),
         });
@@ -221,13 +221,13 @@ export function authenticate (
     }
 
     // Log successful token extraction (for debugging)
-    logger.info('Token extracted', {
+    logger.debug('Token extracted', {
         path: req.path,
         method: req.method,
         source: authHeader ? 'header' : (req.query.token || req.query.auth_token ? 'query' : 'body'),
-        tokenPrefix: `${token.substring(0, 8) }...`,
+        tokenPrefix: `${token.substring(0, 8)}...`,
         tokenLength: token.length,
-        tokenFull: token.length <= 100 ? token : `${token.substring(0, 100) }...`, // Log full token if short, truncated if long
+        tokenFull: token.length <= 100 ? token : `${token.substring(0, 100)}...`, // Log full token if short, truncated if long
     });
 
     // SEC-3c (2026-04 audit): the previous implementation accepted two
@@ -246,11 +246,11 @@ export function authenticate (
     // are validated below via isRequestInScope().
     const session = db.getSession(token);
 
-    if ( ! session ) {
+    if (!session) {
         logger.warn('Session not found for token', {
             path: req.path,
             method: req.method,
-            tokenPrefix: `${token.substring(0, 8) }...`,
+            tokenPrefix: `${token.substring(0, 8)}...`,
             tokenLength: token.length,
         });
         res.status(401).json({ error: 'Authentication failed', message: 'Invalid session token' });
@@ -258,14 +258,14 @@ export function authenticate (
     }
 
     // Check expiration
-    if ( session.expires_at < Date.now() ) {
+    if (session.expires_at < Date.now()) {
         logger.warn('Session expired', {
             path: req.path,
             method: req.method,
-            tokenPrefix: `${token.substring(0, 8) }...`,
+            tokenPrefix: `${token.substring(0, 8)}...`,
             expiredAt: new Date(session.expires_at).toISOString(),
             now: new Date().toISOString(),
-            expiredBy: `${Math.round((Date.now() - session.expires_at) / 1000) } seconds`,
+            expiredBy: `${Math.round((Date.now() - session.expires_at) / 1000)} seconds`,
         });
         res.status(401).json({ error: 'Authentication failed', message: 'Session expired' });
         return;
@@ -275,18 +275,18 @@ export function authenticate (
     // Sessions minted by /open_item carry scope='file' + scope_data; the
     // helper validates that this request is targeting that exact file.
     // Unrestricted sessions (scope == null) pass through unchanged.
-    if ( session.scope ) {
+    if (session.scope) {
         const inScope = isRequestInScope(session, {
             query: req.query as { uid?: string; file?: string; path?: string },
             body: req.body as { uid?: string; file?: string; path?: string } | undefined,
             path: req.path,
         });
-        if ( ! inScope ) {
+        if (!inScope) {
             logger.warn('[Auth Middleware] Scoped session rejected: request out of scope', {
                 sessionScope: session.scope,
                 reqPath: req.path,
                 method: req.method,
-                tokenPrefix: `${token.substring(0, 8) }...`,
+                tokenPrefix: `${token.substring(0, 8)}...`,
             });
             res.status(403).json({
                 error: 'Forbidden',
@@ -299,21 +299,21 @@ export function authenticate (
     // Extend session on activity (refresh expiration time).
     // Scoped sessions (SEC-3c) are intentionally NOT extended — they are
     // short-lived per design and must expire on schedule.
-    if ( db && config && !session.scope ) {
+    if (db && config && !session.scope) {
         const maxExtension = config.security.session_duration_days * 24 * 60 * 60 * 1000;
         const newExpiresAt = Date.now() + maxExtension;
         db.updateSessionExpiration(token, newExpiresAt);
         logger.debug('Session extended', {
-            tokenPrefix: `${token.substring(0, 8) }...`,
+            tokenPrefix: `${token.substring(0, 8)}...`,
             newExpiresAt: new Date(newExpiresAt).toISOString(),
-            expiresIn: `${Math.round(maxExtension / 1000 / 60) } minutes`,
+            expiresIn: `${Math.round(maxExtension / 1000 / 60)} minutes`,
         });
     }
 
     // Verify owner (if config is available)
-    if ( config ) {
+    if (config) {
         const ownerCheck = verifyOwner(session.wallet_address, config);
-        if ( ! ownerCheck.isAuthorized ) {
+        if (!ownerCheck.isAuthorized) {
             res.status(403).json({
                 error: 'Unauthorized',
                 message: ownerCheck.reason || 'Wallet is not authorized',
@@ -336,7 +336,7 @@ export function authenticate (
 /**
  * Error handling middleware
  */
-export function errorHandler (
+export function errorHandler(
     err: Error,
     req: Request,
     res: Response,
@@ -344,7 +344,7 @@ export function errorHandler (
 ): void {
     logger.error('API Error:', err.message, { path: req.path, method: req.method });
 
-    if ( res.headersSent ) {
+    if (res.headersSent) {
         return next(err);
     }
 
@@ -355,7 +355,7 @@ export function errorHandler (
     };
 
     // Include stack trace in development
-    if ( process.env.NODE_ENV === 'development' ) {
+    if (process.env.NODE_ENV === 'development') {
         errorResponse.details = err.stack?.substring(0, 1000);
     }
 
@@ -368,7 +368,7 @@ export function errorHandler (
  * Must be used after authenticate middleware
  * Supports both EVM and Solana addresses
  */
-export function requireOwner (
+export function requireOwner(
     req: AuthenticatedRequest,
     res: Response,
     next: NextFunction,
@@ -376,7 +376,7 @@ export function requireOwner (
     const nodeConfig = getNodeConfig();
     const config = (req.app.locals.config as Config | undefined);
 
-    if ( ! req.user ) {
+    if (!req.user) {
         res.status(401).json({ error: 'Authentication required' });
         return;
     }
@@ -389,7 +389,7 @@ export function requireOwner (
     // owner endpoints carry no uid/file/path matching the scope), but
     // requireOwner is the last line of defense if a future route order
     // changes that ordering.
-    if ( req.user.session_scope ) {
+    if (req.user.session_scope) {
         logger.warn('[Auth] Scoped session attempted owner-only action', {
             sessionScope: req.user.session_scope,
             path: req.path,
@@ -406,10 +406,10 @@ export function requireOwner (
     const ownerWallet = nodeConfig.ownerWallet || config?.owner?.wallet_address;
 
     // Use compareAddresses for proper EVM/Solana comparison
-    if ( !ownerWallet || !compareAddresses(userWallet, ownerWallet) ) {
+    if (!ownerWallet || !compareAddresses(userWallet, ownerWallet)) {
         logger.warn('[Auth] Non-owner attempted restricted action', {
-            userWallet: `${userWallet.substring(0, 10) }...`,
-            ownerWallet: ownerWallet ? `${ownerWallet.substring(0, 10) }...` : 'not set',
+            userWallet: `${userWallet.substring(0, 10)}...`,
+            ownerWallet: ownerWallet ? `${ownerWallet.substring(0, 10)}...` : 'not set',
         });
         res.status(403).json({ error: 'Owner access required' });
         return;
@@ -421,7 +421,7 @@ export function requireOwner (
 /**
  * CORS middleware (already handled by Express, but for consistency)
  */
-export function corsMiddleware (
+export function corsMiddleware(
     req: Request,
     res: Response,
     next: NextFunction,
@@ -443,14 +443,14 @@ export function corsMiddleware (
         origin.includes('.ela.city') ||
         origin.includes('.ela.local');
 
-    if ( allowed ) {
+    if (allowed) {
         res.setHeader('Access-Control-Allow-Origin', origin || '*');
     }
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Range');
     res.setHeader('Access-Control-Expose-Headers', 'Content-Range, Accept-Ranges, Content-Length');
 
-    if ( req.method === 'OPTIONS' ) {
+    if (req.method === 'OPTIONS') {
         res.status(allowed ? 200 : 403).end();
         return;
     }
@@ -468,9 +468,9 @@ export function corsMiddleware (
  *
  * Usage: router.post('/lit/secure-view', authenticate, requireCapability('drm:decrypt'), handler)
  */
-export function requireCapability (scope: string) {
+export function requireCapability(scope: string) {
     return function (req: AuthenticatedRequest, res: Response, next: NextFunction): void {
-        if ( ! req.principal ) {
+        if (!req.principal) {
             logger.warn('[Capability] No principal on request — authenticate middleware may be missing', {
                 path: req.path,
                 requiredScope: scope,
@@ -479,7 +479,7 @@ export function requireCapability (scope: string) {
             return;
         }
 
-        if ( ! req.principal.scopes.includes(scope) ) {
+        if (!req.principal.scopes.includes(scope)) {
             logger.warn('[Capability] Scope denied', {
                 path: req.path,
                 principalType: req.principal.type,
@@ -506,18 +506,18 @@ export function requireCapability (scope: string) {
  * v1 behavior: user sessions receive all scopes. API keys receive
  * their declared scopes. This ensures zero breakage.
  */
-export function populatePrincipal (
+export function populatePrincipal(
     req: AuthenticatedRequest,
     _res: Response,
     next: NextFunction,
 ): void {
-    if ( req.apiKey ) {
+    if (req.apiKey) {
         req.principal = {
             type: 'apiKey',
             wallet_address: req.apiKey.wallet_address,
             scopes: req.apiKey.scopes,
         };
-    } else if ( req.user ) {
+    } else if (req.user) {
         req.principal = {
             type: 'user',
             wallet_address: req.user.wallet_address,

@@ -121,6 +121,12 @@ export class ContentSeedingService {
     // Gap recovery: re-queue incomplete pins
     this.runGapRecovery();
 
+    // Ensure already-existing local file CIDs participate in ongoing announcements.
+    const backfilled = this.db.backfillLocalCIDsToPinned();
+    if (backfilled > 0) {
+      log.info(`[Seeding] Backfilled ${backfilled} local CID(s) into pinned tracking`);
+    }
+
     // Startup burst: re-announce all pinned CIDs immediately
     this.runStartupAnnouncement();
 
