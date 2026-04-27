@@ -345,13 +345,13 @@
     try {
       localStorage.setItem(CHANNEL_CACHE_KEY + walletAddress.toLowerCase(),
         JSON.stringify({ ts: Date.now(), channels: channels }));
-    } catch (_) {}
+    } catch (_) { }
   }
 
   function invalidateChannelCache(walletAddress) {
     try {
       if (walletAddress) localStorage.removeItem(CHANNEL_CACHE_KEY + walletAddress.toLowerCase());
-    } catch (_) {}
+    } catch (_) { }
   }
 
   async function rpcBatch(calls) {
@@ -386,90 +386,90 @@
   }
 
   function refreshV3ChannelsInBackground(walletAddress) {
-    scanV3ChannelsOnChain(walletAddress).catch(function () {});
+    scanV3ChannelsOnChain(walletAddress).catch(function () { });
   }
 
   async function scanV3ChannelsOnChain(walletAddress) {
-      var iface = new ethers.Interface(ABI.CHANNEL_FACTORY);
-      var topic0 = iface.getEvent('ChannelCreated').topicHash;
-      var creatorTopic = '0x' + walletAddress.toLowerCase().replace('0x', '').padStart(64, '0');
+    var iface = new ethers.Interface(ABI.CHANNEL_FACTORY);
+    var topic0 = iface.getEvent('ChannelCreated').topicHash;
+    var creatorTopic = '0x' + walletAddress.toLowerCase().replace('0x', '').padStart(64, '0');
 
-      var blockResp = await fetch(BASE_RPC, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_blockNumber', params: [] }),
-      });
-      var latestBlock = parseInt((await blockResp.json()).result, 16);
+    var blockResp = await fetch(BASE_RPC, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_blockNumber', params: [] }),
+    });
+    var latestBlock = parseInt((await blockResp.json()).result, 16);
 
-      var CHUNK = 9999;
-      var PARALLEL = 8;
-      var minBlock = CHANNEL_FACTORY_DEPLOY_BLOCK;
-      var foundAddrs = {};
+    var CHUNK = 9999;
+    var PARALLEL = 8;
+    var minBlock = CHANNEL_FACTORY_DEPLOY_BLOCK;
+    var foundAddrs = {};
 
-      // Scan recent blocks first (last ~2M blocks), then older if needed
-      var recentCutoff = Math.max(latestBlock - 2000000, minBlock);
-      var phases = [
-        { from: recentCutoff, to: latestBlock },
-        { from: minBlock, to: recentCutoff - 1 },
-      ];
+    // Scan recent blocks first (last ~2M blocks), then older if needed
+    var recentCutoff = Math.max(latestBlock - 2000000, minBlock);
+    var phases = [
+      { from: recentCutoff, to: latestBlock },
+      { from: minBlock, to: recentCutoff - 1 },
+    ];
 
-      for (var phase = 0; phase < phases.length; phase++) {
-        var phaseRange = phases[phase];
-        if (phaseRange.from > phaseRange.to) continue;
+    for (var phase = 0; phase < phases.length; phase++) {
+      var phaseRange = phases[phase];
+      if (phaseRange.from > phaseRange.to) continue;
 
-        var ranges = [];
-        for (var c = phaseRange.to; c > phaseRange.from; c = c - CHUNK - 1) {
-          ranges.push({ from: Math.max(c - CHUNK, phaseRange.from), to: c });
-        }
-
-        for (var b = 0; b < ranges.length; b += PARALLEL) {
-          var batch = ranges.slice(b, b + PARALLEL);
-          var calls = batch.map(function (r) {
-            return { method: 'eth_getLogs', params: [{ address: CONTRACTS.CHANNEL_FACTORY, fromBlock: '0x' + r.from.toString(16), toBlock: '0x' + r.to.toString(16), topics: [topic0, null, null, creatorTopic] }] };
-          });
-          try {
-            var results = await rpcBatch(calls);
-            if (!Array.isArray(results)) results = [results];
-            results.forEach(function (r) {
-              (r.result || []).forEach(function (log) {
-                if (log.data && log.data.length >= 130) {
-                  foundAddrs[ethers.getAddress('0x' + log.data.slice(26, 66))] = true;
-                }
-              });
-            });
-          } catch (_) {}
-        }
-
-        // If we found channels in recent blocks, skip scanning older ones
-        if (Object.keys(foundAddrs).length > 0 && phase === 0) {
-          console.log('[Creator] Found V3 channels in recent blocks, skipping older scan');
-          break;
-        }
+      var ranges = [];
+      for (var c = phaseRange.to; c > phaseRange.from; c = c - CHUNK - 1) {
+        ranges.push({ from: Math.max(c - CHUNK, phaseRange.from), to: c });
       }
 
-      var addrs = Object.keys(foundAddrs);
-      if (addrs.length === 0) return [];
-
-      var nameCalls = addrs.map(function (a) {
-        return { method: 'eth_call', params: [{ to: a, data: '0x06fdde03' }, 'latest'] };
-      });
-      var nameResults = [];
-      try { nameResults = await rpcBatch(nameCalls); } catch (_) {}
-      if (!Array.isArray(nameResults)) nameResults = [nameResults];
-
-      var channels = addrs.map(function (addr, idx) {
-        var chName = addr.substring(0, 10) + '...';
+      for (var b = 0; b < ranges.length; b += PARALLEL) {
+        var batch = ranges.slice(b, b + PARALLEL);
+        var calls = batch.map(function (r) {
+          return { method: 'eth_getLogs', params: [{ address: CONTRACTS.CHANNEL_FACTORY, fromBlock: '0x' + r.from.toString(16), toBlock: '0x' + r.to.toString(16), topics: [topic0, null, null, creatorTopic] }] };
+        });
         try {
-          var r = nameResults[idx];
-          if (r && r.result && r.result.length > 2) {
-            var decoded = ethers.AbiCoder.defaultAbiCoder().decode(['string'], r.result);
-            if (decoded[0]) chName = decoded[0];
-          }
-        } catch (_) {}
-        return { address: addr, name: chName, _v3: true, creator: { address: walletAddress } };
-      });
+          var results = await rpcBatch(calls);
+          if (!Array.isArray(results)) results = [results];
+          results.forEach(function (r) {
+            (r.result || []).forEach(function (log) {
+              if (log.data && log.data.length >= 130) {
+                foundAddrs[ethers.getAddress('0x' + log.data.slice(26, 66))] = true;
+              }
+            });
+          });
+        } catch (_) { }
+      }
 
-      setCachedChannels(walletAddress, channels);
-      return channels;
+      // If we found channels in recent blocks, skip scanning older ones
+      if (Object.keys(foundAddrs).length > 0 && phase === 0) {
+        console.log('[Creator] Found V3 channels in recent blocks, skipping older scan');
+        break;
+      }
+    }
+
+    var addrs = Object.keys(foundAddrs);
+    if (addrs.length === 0) return [];
+
+    var nameCalls = addrs.map(function (a) {
+      return { method: 'eth_call', params: [{ to: a, data: '0x06fdde03' }, 'latest'] };
+    });
+    var nameResults = [];
+    try { nameResults = await rpcBatch(nameCalls); } catch (_) { }
+    if (!Array.isArray(nameResults)) nameResults = [nameResults];
+
+    var channels = addrs.map(function (addr, idx) {
+      var chName = addr.substring(0, 10) + '...';
+      try {
+        var r = nameResults[idx];
+        if (r && r.result && r.result.length > 2) {
+          var decoded = ethers.AbiCoder.defaultAbiCoder().decode(['string'], r.result);
+          if (decoded[0]) chName = decoded[0];
+        }
+      } catch (_) { }
+      return { address: addr, name: chName, _v3: true, creator: { address: walletAddress } };
+    });
+
+    setCachedChannels(walletAddress, channels);
+    return channels;
   }
 
   // ── Channel fetching from PC2 local catalog (V3-only, indexed from V3 factory) ──
@@ -504,7 +504,7 @@
     try {
       var origin = (typeof window !== 'undefined' && window.puter_api_origin) || window.location.origin;
       await fetch(origin + '/api/catalog/reindex', { method: 'POST' });
-    } catch (_) {}
+    } catch (_) { }
   }
 
   // ── Channel fetching from Elacity backend ──────────────
@@ -1083,13 +1083,13 @@
 
   // ── Floating progress bar ──────────────────────────
   var PIPELINE_WEIGHTS = {
-    'prog-connect':      { start: 0,  end: 10 },
-    'prog-encrypt':      { start: 10, end: 45 },
+    'prog-connect': { start: 0, end: 10 },
+    'prog-encrypt': { start: 10, end: 45 },
     'prog-upload-asset': { start: 45, end: 60 },
-    'prog-upload-meta':  { start: 60, end: 80 },
-    'prog-pin':          { start: 80, end: 90 },
-    'prog-mint':         { start: 90, end: 97 },
-    'prog-approve':      { start: 97, end: 100 },
+    'prog-upload-meta': { start: 60, end: 80 },
+    'prog-pin': { start: 80, end: 90 },
+    'prog-mint': { start: 90, end: 97 },
+    'prog-approve': { start: 97, end: 100 },
   };
 
   function updateFloatingProgress(stepId, label, stepState) {
@@ -1616,7 +1616,7 @@
         method: 'wallet_switchEthereumChain',
         params: [{ chainId: BASE_CHAIN_HEX }],
       });
-    } catch (_) {}
+    } catch (_) { }
 
     var feeInfo = await getChannelCreationFee();
     console.log('[Creator] Channel creation fee:', feeInfo.fee.toString(), 'wallet:', walletChoice);
@@ -1743,7 +1743,7 @@
       console.log('[Creator] createChannel tx:', txHash);
 
       var receipt = await waitForReceipt(txHash);
-      if (receipt.status === '0x0' || receipt.status === 0) {
+      if (Number(receipt.status) === 0) {
         throw new Error('createChannel transaction reverted');
       }
 
@@ -1754,30 +1754,6 @@
         throw new Error('Channel created but could not parse ChannelCreated event. Tx: ' + txHash);
       }
       console.log('[Creator] Channel created at:', channelAddr);
-    }
-
-    var MINTER_ROLE = ethers.keccak256(ethers.toUtf8Bytes('MINTER_ROLE'));
-    try {
-      var acIface = new ethers.Interface(ABI.ACCESS_CONTROL);
-
-      var ownerHasIt = await rpcCall(channelAddr, acIface.encodeFunctionData('hasRole', [MINTER_ROLE, creatorAddr]));
-      var ownerHasMinter = acIface.decodeFunctionResult('hasRole', ownerHasIt)[0];
-      if (!ownerHasMinter) {
-        console.log('[Creator] Granting MINTER_ROLE to channel owner:', creatorAddr);
-        if (walletChoice === 'sa' && hasSmartAccount()) {
-          await parentExecuteSmartAccountBatch(BASE_CHAIN_ID, [
-            { to: channelAddr, data: acIface.encodeFunctionData('grantRole', [MINTER_ROLE, creatorAddr]), value: '0x0' },
-          ], []);
-        } else {
-          var grantTx = await sendTx(channelAddr, acIface.encodeFunctionData('grantRole', [MINTER_ROLE, creatorAddr]));
-          await waitForReceipt(grantTx);
-        }
-        console.log('[Creator] MINTER_ROLE granted');
-      } else {
-        console.log('[Creator] Owner already has MINTER_ROLE');
-      }
-    } catch (roleErr) {
-      console.warn('[Creator] Failed to grant MINTER_ROLE (you may need to do this manually):', roleErr.message);
     }
 
     try {
@@ -1843,7 +1819,7 @@
         var parsed = iface.parseLog({ topics: logs[logs.length - 1].topics, data: logs[logs.length - 1].data });
         if (parsed && parsed.name === 'ChannelCreated') return parsed.args.channel;
       }
-    } catch (_) {}
+    } catch (_) { }
     return null;
   }
 
@@ -2316,12 +2292,12 @@
       }
 
       if (log.topics[0] === TRANSFER_SINGLE_TOPIC
-          && log.topics.length >= 4
-          && log.topics[2] === ZERO_TOPIC
-          && log.address && log.address.toLowerCase() === channelLower) {
+        && log.topics.length >= 4
+        && log.topics[2] === ZERO_TOPIC
+        && log.address && log.address.toLowerCase() === channelLower) {
         try {
           tokenId = BigInt('0x' + log.data.slice(2, 66)).toString();
-        } catch (_) {}
+        } catch (_) { }
       }
     }
 
@@ -2655,10 +2631,10 @@
             lastStage = stage;
             setMediaProgress(pct, elapsed);
             var headerLabel = stage === 'transcoding' ? 'Transcoding...' :
-                             stage === 'analyzing' ? 'Analyzing...' :
-                             stage === 'fragmenting' ? 'Fragmenting...' :
-                             stage === 'packaging' ? 'Packaging (no encryption)...' :
-                             stage === 'uploading' ? 'Uploading to IPFS...' : 'Processing...';
+              stage === 'analyzing' ? 'Analyzing...' :
+                stage === 'fragmenting' ? 'Fragmenting...' :
+                  stage === 'packaging' ? 'Packaging (no encryption)...' :
+                    stage === 'uploading' ? 'Uploading to IPFS...' : 'Processing...';
             setProgStep('prog-encrypt', headerLabel, 'active');
 
             if (Date.now() - pollStart > maxPollTime) {
@@ -2777,10 +2753,10 @@
 
           // Header status
           var headerLabel = stage === 'transcoding' ? 'Transcoding...' :
-                           stage === 'analyzing' ? 'Analyzing...' :
-                           stage === 'fragmenting' ? 'Fragmenting...' :
-                           stage === 'packaging' ? 'Encrypting & packaging...' :
-                           stage === 'uploading' ? 'Uploading to IPFS...' : 'Processing...';
+            stage === 'analyzing' ? 'Analyzing...' :
+              stage === 'fragmenting' ? 'Fragmenting...' :
+                stage === 'packaging' ? 'Encrypting & packaging...' :
+                  stage === 'uploading' ? 'Uploading to IPFS...' : 'Processing...';
           setProgStep('prog-encrypt', headerLabel, 'active');
 
           if (Date.now() - pollStart > maxPollTime) {
@@ -2802,48 +2778,48 @@
         };
 
       } else {
-      try {
-        setProgStep('prog-connect', 'Connecting to Lit (server-side)...', 'active');
-        console.log('[Creator] Encrypting via backend Lit endpoint...');
+        try {
+          setProgStep('prog-connect', 'Connecting to Lit (server-side)...', 'active');
+          console.log('[Creator] Encrypting via backend Lit endpoint...');
 
-        var fileBase64 = uint8ToBase64(state.fileBytes);
-        var litResp = await pc2Fetch('/api/storage/lit/encrypt', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ data: fileBase64 }),
-        });
+          var fileBase64 = uint8ToBase64(state.fileBytes);
+          var litResp = await pc2Fetch('/api/storage/lit/encrypt', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ data: fileBase64 }),
+          });
 
-        if (!litResp.ok) {
-          var litErrBody = await litResp.json().catch(function () { return {}; });
-          throw new Error(litErrBody.error || 'Lit encrypt returned ' + litResp.status);
+          if (!litResp.ok) {
+            var litErrBody = await litResp.json().catch(function () { return {}; });
+            throw new Error(litErrBody.error || 'Lit encrypt returned ' + litResp.status);
+          }
+
+          var litData = await litResp.json();
+          console.log('[Creator] Two-layer encryption succeeded. Hash:', litData.dataToEncryptHash?.substring(0, 20) + '...');
+          console.log('[Creator] Action CID:', litData.actionCid);
+          console.log('[Creator] AES-encrypted data:', litData.encryptedData?.length, 'chars, IV:', litData.iv);
+          setProgStep('prog-connect', 'Lit Connected (' + (litData.litBackend || 'chipotle') + ')', 'done');
+
+          setProgStep('prog-encrypt', 'Encrypting (AES + Lit CEK)...', 'active');
+          encryptResult = {
+            encrypted: base64ToUint8(litData.encryptedData),
+            dataToEncryptHash: litData.dataToEncryptHash,
+            actionCid: litData.actionCid,
+            conditions: litData.conditions,
+            litCiphertext: litData.litCiphertext,
+            iv: litData.iv,
+            litBackend: litData.litBackend || 'chipotle',
+          };
+        } catch (litErr) {
+          console.error('[Creator] Lit Protocol error:', litErr);
+          console.warn('[Creator] Lit server unavailable, using local encryption:', litErr.message);
+          setProgStep('prog-connect', 'Local mode (Lit unavailable)', 'done');
+
+          setProgStep('prog-encrypt', 'Encrypting (local AES-GCM)...', 'active');
+          encryptResult = await localEncrypt(state.fileBytes);
+          usedLocalEncryption = true;
         }
-
-        var litData = await litResp.json();
-        console.log('[Creator] Two-layer encryption succeeded. Hash:', litData.dataToEncryptHash?.substring(0, 20) + '...');
-        console.log('[Creator] Action CID:', litData.actionCid);
-        console.log('[Creator] AES-encrypted data:', litData.encryptedData?.length, 'chars, IV:', litData.iv);
-        setProgStep('prog-connect', 'Lit Connected (' + (litData.litBackend || 'chipotle') + ')', 'done');
-
-        setProgStep('prog-encrypt', 'Encrypting (AES + Lit CEK)...', 'active');
-        encryptResult = {
-          encrypted: base64ToUint8(litData.encryptedData),
-          dataToEncryptHash: litData.dataToEncryptHash,
-          actionCid: litData.actionCid,
-          conditions: litData.conditions,
-          litCiphertext: litData.litCiphertext,
-          iv: litData.iv,
-          litBackend: litData.litBackend || 'chipotle',
-        };
-      } catch (litErr) {
-        console.error('[Creator] Lit Protocol error:', litErr);
-        console.warn('[Creator] Lit server unavailable, using local encryption:', litErr.message);
-        setProgStep('prog-connect', 'Local mode (Lit unavailable)', 'done');
-
-        setProgStep('prog-encrypt', 'Encrypting (local AES-GCM)...', 'active');
-        encryptResult = await localEncrypt(state.fileBytes);
-        usedLocalEncryption = true;
-      }
-      setProgStep('prog-encrypt', 'Encrypted', 'done');
+        setProgStep('prog-encrypt', 'Encrypted', 'done');
       } // end else (non-media path)
 
       // ── Step 2: Upload asset to IPFS ────────
@@ -2854,42 +2830,42 @@
         setProgStep('prog-upload-asset', 'CID: ' + assetCid.substring(0, 12) + '... (from encoder)', 'done');
         console.log('[Creator] Media asset CID from encoder:', assetCid);
       } else {
-      setProgStep('prog-upload-asset', 'Uploading to local node...', 'active');
-      var uploadBytes = isFreeContent ? state.fileBytes : encryptResult.encrypted;
-      var assetBase64 = uint8ToBase64(uploadBytes);
+        setProgStep('prog-upload-asset', 'Uploading to local node...', 'active');
+        var uploadBytes = isFreeContent ? state.fileBytes : encryptResult.encrypted;
+        var assetBase64 = uint8ToBase64(uploadBytes);
 
-      var localAssetResp = await pc2Fetch('/api/storage/ipfs/add', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: assetBase64, announce: true }),
-      });
-      if (!localAssetResp.ok) {
-        var errBody = await localAssetResp.json().catch(function () { return {}; });
-        throw new Error('Local IPFS upload failed: ' + (errBody.error || localAssetResp.status));
-      }
-      var localAssetData = await localAssetResp.json();
-      var localAssetCid = localAssetData.cid;
-      console.log('[Creator] Local asset CID:', localAssetCid, isFreeContent ? '(cleartext)' : '(encrypted)');
-
-      setProgStep('prog-upload-asset', 'Pinning to Elacity IPFS...', 'active');
-      var assetCid = localAssetCid;
-      try {
-        var elacityAssetResp = await pc2Fetch('/api/storage/ipfs/upload-elacity', {
+        var localAssetResp = await pc2Fetch('/api/storage/ipfs/add', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ content: assetBase64, filename: isFreeContent ? 'free-asset' : 'encrypted-asset' }),
+          body: JSON.stringify({ content: assetBase64, announce: true }),
         });
-        if (elacityAssetResp.ok) {
-          var elacityAssetData = await elacityAssetResp.json();
-          assetCid = elacityAssetData.cid;
-          console.log('[Creator] Elacity asset CID:', assetCid);
-        } else {
-          console.warn('[Creator] Elacity IPFS upload failed, using local CID');
+        if (!localAssetResp.ok) {
+          var errBody = await localAssetResp.json().catch(function () { return {}; });
+          throw new Error('Local IPFS upload failed: ' + (errBody.error || localAssetResp.status));
         }
-      } catch (e) {
-        console.warn('[Creator] Elacity IPFS upload error:', e.message);
-      }
-      setProgStep('prog-upload-asset', 'CID: ' + assetCid.substring(0, 12) + '...', 'done');
+        var localAssetData = await localAssetResp.json();
+        var localAssetCid = localAssetData.cid;
+        console.log('[Creator] Local asset CID:', localAssetCid, isFreeContent ? '(cleartext)' : '(encrypted)');
+
+        setProgStep('prog-upload-asset', 'Pinning to Elacity IPFS...', 'active');
+        var assetCid = localAssetCid;
+        try {
+          var elacityAssetResp = await pc2Fetch('/api/storage/ipfs/upload-elacity', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: assetBase64, filename: isFreeContent ? 'free-asset' : 'encrypted-asset' }),
+          });
+          if (elacityAssetResp.ok) {
+            var elacityAssetData = await elacityAssetResp.json();
+            assetCid = elacityAssetData.cid;
+            console.log('[Creator] Elacity asset CID:', assetCid);
+          } else {
+            console.warn('[Creator] Elacity IPFS upload failed, using local CID');
+          }
+        } catch (e) {
+          console.warn('[Creator] Elacity IPFS upload error:', e.message);
+        }
+        setProgStep('prog-upload-asset', 'CID: ' + assetCid.substring(0, 12) + '...', 'done');
       } // end else (non-media IPFS upload)
 
       // ── Step 3: Build & upload metadata ─────────────────
@@ -3076,7 +3052,7 @@
               console.warn('[Creator] Server thumbnail response had no thumbnail field:', Object.keys(serverThumbData));
             }
           } else {
-            console.warn('[Creator] Server thumbnail failed:', serverThumbResp.status, await serverThumbResp.text().catch(function() { return ''; }));
+            console.warn('[Creator] Server thumbnail failed:', serverThumbResp.status, await serverThumbResp.text().catch(function () { return ''; }));
           }
         }
 
@@ -3432,7 +3408,7 @@
             if (window.parent && window.parent !== window) {
               window.parent.postMessage({ msg: 'mint-draft-saved' }, '*');
             }
-          } catch (_) {}
+          } catch (_) { }
         }
       } catch (draftErr) {
         console.warn('[Creator] Draft auto-save failed:', draftErr.message);
@@ -3455,336 +3431,336 @@
 
       var mintSuccess = false;
       while (!mintSuccess) {
-      await new Promise(function (resolve) {
-        state._mintResolve = resolve;
-      });
-      if (dom.btnBackTo2) dom.btnBackTo2.disabled = true;
+        await new Promise(function (resolve) {
+          state._mintResolve = resolve;
+        });
+        if (dom.btnBackTo2) dom.btnBackTo2.disabled = true;
 
-      // ── Step 4: Mint on Channel contract ──────────────
-      var mintedTokenId = null;
-      var mintedOpContract = null;
-      var mintTxHash = null;
+        // ── Step 4: Mint on Channel contract ──────────────
+        var mintedTokenId = null;
+        var mintedOpContract = null;
+        var mintTxHash = null;
 
-      var needsGatewayApproval = accessMethod !== 'free';
-      var btnMintText = document.getElementById('btn-sign-mint-text');
-      if (btnMintText && needsGatewayApproval) {
-        btnMintText.textContent = 'Transaction 1 of 2 — Minting...';
-      } else if (btnMintText) {
-        btnMintText.textContent = 'Minting...';
-      }
-
-      try {
-      if (channel && ethers.isAddress(channel)) {
-        setProgStep('prog-mint', 'Preparing...', 'active');
-
-        var walletChoice = getChannelOwnerType(dom.assetChannel) || (hasSmartAccount() ? 'sa' : 'eoa');
-        if (!getChannelOwnerType(dom.assetChannel)) {
-          walletChoice = await showWalletChoice('Choose Wallet for Minting');
+        var needsGatewayApproval = accessMethod !== 'free';
+        var btnMintText = document.getElementById('btn-sign-mint-text');
+        if (btnMintText && needsGatewayApproval) {
+          btnMintText.textContent = 'Transaction 1 of 2 — Minting...';
+        } else if (btnMintText) {
+          btnMintText.textContent = 'Minting...';
         }
-        state.walletChoice = walletChoice;
-
-        if (!state.walletAddress) {
-          try {
-            var accts = await window.ethereum.request({ method: 'eth_requestAccounts' });
-            if (accts && accts[0]) state.walletAddress = accts[0];
-          } catch (_) {}
-        }
-        if (!state.walletAddress) {
-          throw new Error('Wallet not connected — please reconnect your wallet and try again.');
-        }
-
-        var effectiveAddr = getEffectiveAddress(walletChoice);
-        if (!effectiveAddr || effectiveAddr === '0x' || effectiveAddr.length < 10) {
-          throw new Error('Could not determine wallet address for ' + walletChoice + '. Reconnect wallet and try again.');
-        }
-        console.log('[Creator] Wallet choice:', walletChoice, '(from channel owner) effective:', effectiveAddr);
 
         try {
-          var currentChainId = await window.ethereum.request({ method: 'eth_chainId' });
-          if (currentChainId !== BASE_CHAIN_HEX) {
-            await window.ethereum.request({
-              method: 'wallet_switchEthereumChain',
-              params: [{ chainId: BASE_CHAIN_HEX }],
-            });
-            await new Promise(function (r) { setTimeout(r, 1500); });
-          }
-        } catch (switchErr) {
-          console.warn('[Creator] Chain switch failed (may already be on Base):', switchErr.message);
-        }
+          if (channel && ethers.isAddress(channel)) {
+            setProgStep('prog-mint', 'Preparing...', 'active');
 
-        var gatewayAddress = await getChannelAuthority(channel);
-        console.log('[Creator] Channel authority (gateway):', gatewayAddress);
-
-        var MINTER_ROLE = ethers.keccak256(ethers.toUtf8Bytes('MINTER_ROLE'));
-        var needsGrantRole = false;
-        try {
-          var acIface = new ethers.Interface(ABI.ACCESS_CONTROL);
-          var roleCheck = await rpcCall(channel, acIface.encodeFunctionData('hasRole', [MINTER_ROLE, effectiveAddr]));
-          var hasMinterRole = acIface.decodeFunctionResult('hasRole', roleCheck)[0];
-          if (!hasMinterRole) {
-            if (walletChoice === 'sa') {
-              needsGrantRole = true;
-              console.log('[Creator] SA needs MINTER_ROLE — will include in batch');
-            } else {
-              throw new Error('Your wallet does not have MINTER_ROLE on this channel. Create your own channel or request access from the channel owner.');
+            var walletChoice = getChannelOwnerType(dom.assetChannel) || (hasSmartAccount() ? 'sa' : 'eoa');
+            if (!getChannelOwnerType(dom.assetChannel)) {
+              walletChoice = await showWalletChoice('Choose Wallet for Minting');
             }
-          }
-          console.log('[Creator] MINTER_ROLE verified for', effectiveAddr);
-        } catch (roleCheckErr) {
-          if (roleCheckErr.message.includes('MINTER_ROLE')) throw roleCheckErr;
-          console.warn('[Creator] Could not verify MINTER_ROLE (proceeding anyway):', roleCheckErr.message);
-        }
+            state.walletChoice = walletChoice;
 
-        var feeInfo = await getMintingFee();
-        var priceWei = ethers.parseUnits(price.toString(), selectedCurrency.decimals);
-        var opType = accessMethod === 'free' ? OP_TYPES.FREE
-          : accessMethod === 'buy_once' ? OP_TYPES.BUY_ONCE
-          : OP_TYPES.BUY_AND_RESELL;
-
-        var opRawData = opType !== OP_TYPES.FREE
-          ? encodeOpRawData({
-              contentId: encryptResult.dataToEncryptHash,
-              metadataCID: metaCid,
-              creatorAddress: effectiveAddr,
-              copies: copies,
-              opType: opType,
-              resellerCut: resellerCut,
-              royalties: royaltyPartners,
-            })
-          : ethers.AbiCoder.defaultAbiCoder().encode(['bytes16'], [hashToContentId(encryptResult.dataToEncryptHash)]);
-        var sellRawData = opType !== OP_TYPES.FREE
-          ? encodeSellRawData(copies, priceWei, selectedCurrency.address)
-          : '0x';
-
-        var mintUri = metaCid;
-        var iface = new ethers.Interface(ABI.DIGITAL_ASSET);
-        var mintData = iface.encodeFunctionData('mint', [mintUri, opType, opRawData, sellRawData]);
-
-        setProgStep('prog-mint', 'Preparing...', 'active');
-
-        if (walletChoice === 'sa' && hasSmartAccount()) {
-          if (needsGrantRole) {
-            var grantIface = new ethers.Interface(ABI.ACCESS_CONTROL);
-            var grantData = grantIface.encodeFunctionData('grantRole', [MINTER_ROLE, smartAccountAddress]);
-            var grantTxHash = await sendTxWithRetry('prog-mint', 'Grant MINTER_ROLE to Agent Account (EOA tx)', channel, grantData, 0);
-            setProgStep('prog-mint', 'Confirming role grant...', 'active');
-            await waitForReceipt(grantTxHash);
-          }
-
-          var preMintSupply = null;
-          try {
-            var preSupData = iface.encodeFunctionData('totalSupply', []);
-            var preSupResult = await rpcCall(channel, preSupData);
-            preMintSupply = iface.decodeFunctionResult('totalSupply', preSupResult)[0].toString();
-            console.log('[Creator] Pre-mint totalSupply:', preMintSupply);
-          } catch (_) {}
-
-          var batchTxs = [];
-          var mintFeeHex = feeInfo.fee && BigInt(feeInfo.fee) > 0n ? '0x' + BigInt(feeInfo.fee).toString(16) : '0x0';
-          batchTxs.push({ to: channel, data: mintData, value: mintFeeHex });
-
-          var batchResult = null;
-          while (!batchResult) {
-            try {
-              setProgStep('prog-mint', 'Confirm in wallet (Agent Account batch)...', 'active');
-              batchResult = await parentExecuteSmartAccountBatch(BASE_CHAIN_ID, batchTxs, []);
-            } catch (saBatchErr) {
-              var saBatchMsg = saBatchErr.message || '';
-              console.warn('[Creator] SA batch error:', saBatchMsg);
-              var saRetry = await new Promise(function (resolve) {
-                setProgStep('prog-mint', (saBatchMsg.includes('Insufficient') ? 'Insufficient gas' : 'Failed') + ' — ', 'error');
-                var stepEl = document.getElementById('prog-mint');
-                var statusEl = stepEl && (document.getElementById('prog-mint-status') || stepEl.querySelector('.prog-status') || stepEl.querySelector('span:last-child'));
-                if (!statusEl) { resolve(false); return; }
-                var retryBtn = document.createElement('button');
-                retryBtn.textContent = 'Retry';
-                retryBtn.style.cssText = 'display:inline-flex;align-items:center;justify-content:center;padding:4px 12px;font-size:12px;line-height:1;font-family:inherit;background:#3b82f6;color:white;border:none;border-radius:4px;cursor:pointer;margin-left:8px;';
-                retryBtn.addEventListener('click', function () { retryBtn.remove(); cancelBtn.remove(); resolve(true); });
-                var cancelBtn = document.createElement('button');
-                cancelBtn.textContent = 'Cancel';
-                cancelBtn.style.cssText = 'display:inline-flex;align-items:center;justify-content:center;padding:4px 12px;font-size:12px;line-height:1;font-family:inherit;background:#6b7280;color:white;border:none;border-radius:4px;cursor:pointer;margin-left:4px;';
-                cancelBtn.addEventListener('click', function () { retryBtn.remove(); cancelBtn.remove(); resolve(false); });
-                statusEl.appendChild(retryBtn);
-                statusEl.appendChild(cancelBtn);
-              });
-              if (!saRetry) throw new Error('Mint cancelled: ' + saBatchMsg);
+            if (!state.walletAddress) {
+              try {
+                var accts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+                if (accts && accts[0]) state.walletAddress = accts[0];
+              } catch (_) { }
             }
-          }
-          mintTxHash = batchResult.transactionHash || batchResult.transactionId;
-          var saOnChainHash = batchResult.transactionHash;
-          console.log('[Creator] SA batch result — txHash:', saOnChainHash, 'txId:', batchResult.transactionId);
+            if (!state.walletAddress) {
+              throw new Error('Wallet not connected — please reconnect your wallet and try again.');
+            }
 
-          setProgStep('prog-mint', 'Waiting for on-chain confirmation...', 'active');
-
-          var saPollStart = Date.now();
-          while (Date.now() - saPollStart < 90000) {
-            await new Promise(function (r) { setTimeout(r, 4000); });
+            var effectiveAddr = getEffectiveAddress(walletChoice);
+            if (!effectiveAddr || effectiveAddr === '0x' || effectiveAddr.length < 10) {
+              throw new Error('Could not determine wallet address for ' + walletChoice + '. Reconnect wallet and try again.');
+            }
+            console.log('[Creator] Wallet choice:', walletChoice, '(from channel owner) effective:', effectiveAddr);
 
             try {
-              var blockResp = await fetch(BASE_RPC, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_blockNumber', params: [] }),
-              });
-              var blockJson = await blockResp.json();
-              var curBlock = parseInt(blockJson.result, 16);
-              var logsResp = await fetch(BASE_RPC, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  jsonrpc: '2.0', id: 1, method: 'eth_getLogs',
-                  params: [{ address: channel, fromBlock: '0x' + Math.max(0, curBlock - 30).toString(16), toBlock: 'latest' }],
-                }),
-              });
-              var logsJson = await logsResp.json();
-              var channelLogs = logsJson.result || [];
-
-              if (channelLogs.length > 0) {
-                var realTxHash = channelLogs[channelLogs.length - 1].transactionHash;
-                console.log('[Creator] SA found channel activity, real txHash:', realTxHash);
-
-                var rcptResp = await fetch(BASE_RPC, {
-                  method: 'POST', headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_getTransactionReceipt', params: [realTxHash] }),
+              var currentChainId = await window.ethereum.request({ method: 'eth_chainId' });
+              if (currentChainId !== BASE_CHAIN_HEX) {
+                await window.ethereum.request({
+                  method: 'wallet_switchEthereumChain',
+                  params: [{ chainId: BASE_CHAIN_HEX }],
                 });
-                var rcptJson = await rcptResp.json();
-                if (rcptJson.result && rcptJson.result.logs && rcptJson.result.logs.length > 0) {
-                  console.log('[Creator] SA full receipt — logs:', rcptJson.result.logs.length, 'status:', rcptJson.result.status);
-                  var parsedEvent = parseAssetCreatedEvent(rcptJson.result, channel);
-                  if (parsedEvent) {
-                    mintedTokenId = parsedEvent.tokenId;
-                    mintedOpContract = parsedEvent.opContract;
-                    if (mintedOpContract === ethers.ZeroAddress) mintedOpContract = null;
-                    mintTxHash = realTxHash;
-                    console.log('[Creator] SA mint resolved — tokenId:', mintedTokenId, 'opContract:', mintedOpContract);
-                    break;
-                  }
+                await new Promise(function (r) { setTimeout(r, 1500); });
+              }
+            } catch (switchErr) {
+              console.warn('[Creator] Chain switch failed (may already be on Base):', switchErr.message);
+            }
+
+            var gatewayAddress = await getChannelAuthority(channel);
+            console.log('[Creator] Channel authority (gateway):', gatewayAddress);
+
+            var MINTER_ROLE = ethers.keccak256(ethers.toUtf8Bytes('MINTER_ROLE'));
+            var needsGrantRole = false;
+            try {
+              var acIface = new ethers.Interface(ABI.ACCESS_CONTROL);
+              var roleCheck = await rpcCall(channel, acIface.encodeFunctionData('hasRole', [MINTER_ROLE, effectiveAddr]));
+              var hasMinterRole = acIface.decodeFunctionResult('hasRole', roleCheck)[0];
+              if (!hasMinterRole) {
+                if (walletChoice === 'sa') {
+                  needsGrantRole = true;
+                  console.log('[Creator] SA needs MINTER_ROLE — will include in batch');
+                } else {
+                  throw new Error('Your wallet does not have MINTER_ROLE on this channel. Create your own channel or request access from the channel owner.');
                 }
               }
-            } catch (pollErr) {
-              console.warn('[Creator] SA poll error:', pollErr.message);
+              console.log('[Creator] MINTER_ROLE verified for', effectiveAddr);
+            } catch (roleCheckErr) {
+              if (roleCheckErr.message.includes('MINTER_ROLE')) throw roleCheckErr;
+              console.warn('[Creator] Could not verify MINTER_ROLE (proceeding anyway):', roleCheckErr.message);
             }
 
-            setProgStep('prog-mint', 'Waiting for on-chain confirmation...', 'active');
-          }
-        } else {
-          mintTxHash = await sendTxWithRetry('prog-mint', 'Mint on Channel contract', channel, mintData, feeInfo.fee);
-          setProgStep('prog-mint', 'Confirming tx...', 'active');
-          var mintReceipt = await waitForReceipt(mintTxHash);
+            var feeInfo = await getMintingFee();
+            var priceWei = ethers.parseUnits(price.toString(), selectedCurrency.decimals);
+            var opType = accessMethod === 'free' ? OP_TYPES.FREE
+              : accessMethod === 'buy_once' ? OP_TYPES.BUY_ONCE
+                : OP_TYPES.BUY_AND_RESELL;
 
-          if (mintReceipt.status === '0x0' || mintReceipt.status === 0) {
-            throw new Error('Mint transaction reverted');
-          }
+            var opRawData = opType !== OP_TYPES.FREE
+              ? encodeOpRawData({
+                contentId: encryptResult.dataToEncryptHash,
+                metadataCID: metaCid,
+                creatorAddress: effectiveAddr,
+                copies: copies,
+                opType: opType,
+                resellerCut: resellerCut,
+                royalties: royaltyPartners,
+              })
+              : ethers.AbiCoder.defaultAbiCoder().encode(['bytes16'], [hashToContentId(encryptResult.dataToEncryptHash)]);
+            var sellRawData = opType !== OP_TYPES.FREE
+              ? encodeSellRawData(copies, priceWei, selectedCurrency.address)
+              : '0x';
 
-          var assetEvent = parseAssetCreatedEvent(mintReceipt, channel);
-          if (assetEvent) {
-            mintedTokenId = assetEvent.tokenId;
-            mintedOpContract = assetEvent.opContract;
-          }
+            var mintUri = metaCid;
+            var iface = new ethers.Interface(ABI.DIGITAL_ASSET);
+            var mintData = iface.encodeFunctionData('mint', [mintUri, opType, opRawData, sellRawData]);
 
-          if (!mintedTokenId) {
-            try {
-              var supplyData2 = iface.encodeFunctionData('totalSupply', []);
-              var supplyResult2 = await rpcCall(channel, supplyData2);
-              var supplyDecoded2 = iface.decodeFunctionResult('totalSupply', supplyResult2);
-              mintedTokenId = supplyDecoded2[0].toString();
-            } catch (tsErr) {
-              console.warn('[Creator] Could not get totalSupply:', tsErr.message);
-            }
-          }
+            setProgStep('prog-mint', 'Preparing...', 'active');
 
-          if (!mintedOpContract && mintedTokenId && opType !== OP_TYPES.FREE) {
-            try {
-              var agIface2 = new ethers.Interface(ABI.AUTHORITY_GATEWAY);
-              var opLookupData2 = agIface2.encodeFunctionData('operative', [channel, mintedTokenId]);
-              var opLookupResult2 = await rpcCall(CONTRACTS.AUTHORITY_GATEWAY, opLookupData2);
-              var opDecoded2 = agIface2.decodeFunctionResult('operative', opLookupResult2);
-              if (opDecoded2[0] && opDecoded2[0] !== ethers.ZeroAddress) {
-                mintedOpContract = opDecoded2[0];
+            if (walletChoice === 'sa' && hasSmartAccount()) {
+              if (needsGrantRole) {
+                var grantIface = new ethers.Interface(ABI.ACCESS_CONTROL);
+                var grantData = grantIface.encodeFunctionData('grantRole', [MINTER_ROLE, smartAccountAddress]);
+                var grantTxHash = await sendTxWithRetry('prog-mint', 'Grant MINTER_ROLE to Agent Account (EOA tx)', channel, grantData, 0);
+                setProgStep('prog-mint', 'Confirming role grant...', 'active');
+                await waitForReceipt(grantTxHash);
               }
-            } catch (opLookupErr) {
-              console.warn('[Creator] operative lookup failed:', opLookupErr.message);
+
+              var preMintSupply = null;
+              try {
+                var preSupData = iface.encodeFunctionData('totalSupply', []);
+                var preSupResult = await rpcCall(channel, preSupData);
+                preMintSupply = iface.decodeFunctionResult('totalSupply', preSupResult)[0].toString();
+                console.log('[Creator] Pre-mint totalSupply:', preMintSupply);
+              } catch (_) { }
+
+              var batchTxs = [];
+              var mintFeeHex = feeInfo.fee && BigInt(feeInfo.fee) > 0n ? '0x' + BigInt(feeInfo.fee).toString(16) : '0x0';
+              batchTxs.push({ to: channel, data: mintData, value: mintFeeHex });
+
+              var batchResult = null;
+              while (!batchResult) {
+                try {
+                  setProgStep('prog-mint', 'Confirm in wallet (Agent Account batch)...', 'active');
+                  batchResult = await parentExecuteSmartAccountBatch(BASE_CHAIN_ID, batchTxs, []);
+                } catch (saBatchErr) {
+                  var saBatchMsg = saBatchErr.message || '';
+                  console.warn('[Creator] SA batch error:', saBatchMsg);
+                  var saRetry = await new Promise(function (resolve) {
+                    setProgStep('prog-mint', (saBatchMsg.includes('Insufficient') ? 'Insufficient gas' : 'Failed') + ' — ', 'error');
+                    var stepEl = document.getElementById('prog-mint');
+                    var statusEl = stepEl && (document.getElementById('prog-mint-status') || stepEl.querySelector('.prog-status') || stepEl.querySelector('span:last-child'));
+                    if (!statusEl) { resolve(false); return; }
+                    var retryBtn = document.createElement('button');
+                    retryBtn.textContent = 'Retry';
+                    retryBtn.style.cssText = 'display:inline-flex;align-items:center;justify-content:center;padding:4px 12px;font-size:12px;line-height:1;font-family:inherit;background:#3b82f6;color:white;border:none;border-radius:4px;cursor:pointer;margin-left:8px;';
+                    retryBtn.addEventListener('click', function () { retryBtn.remove(); cancelBtn.remove(); resolve(true); });
+                    var cancelBtn = document.createElement('button');
+                    cancelBtn.textContent = 'Cancel';
+                    cancelBtn.style.cssText = 'display:inline-flex;align-items:center;justify-content:center;padding:4px 12px;font-size:12px;line-height:1;font-family:inherit;background:#6b7280;color:white;border:none;border-radius:4px;cursor:pointer;margin-left:4px;';
+                    cancelBtn.addEventListener('click', function () { retryBtn.remove(); cancelBtn.remove(); resolve(false); });
+                    statusEl.appendChild(retryBtn);
+                    statusEl.appendChild(cancelBtn);
+                  });
+                  if (!saRetry) throw new Error('Mint cancelled: ' + saBatchMsg);
+                }
+              }
+              mintTxHash = batchResult.transactionHash || batchResult.transactionId;
+              var saOnChainHash = batchResult.transactionHash;
+              console.log('[Creator] SA batch result — txHash:', saOnChainHash, 'txId:', batchResult.transactionId);
+
+              setProgStep('prog-mint', 'Waiting for on-chain confirmation...', 'active');
+
+              var saPollStart = Date.now();
+              while (Date.now() - saPollStart < 90000) {
+                await new Promise(function (r) { setTimeout(r, 4000); });
+
+                try {
+                  var blockResp = await fetch(BASE_RPC, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_blockNumber', params: [] }),
+                  });
+                  var blockJson = await blockResp.json();
+                  var curBlock = parseInt(blockJson.result, 16);
+                  var logsResp = await fetch(BASE_RPC, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      jsonrpc: '2.0', id: 1, method: 'eth_getLogs',
+                      params: [{ address: channel, fromBlock: '0x' + Math.max(0, curBlock - 30).toString(16), toBlock: 'latest' }],
+                    }),
+                  });
+                  var logsJson = await logsResp.json();
+                  var channelLogs = logsJson.result || [];
+
+                  if (channelLogs.length > 0) {
+                    var realTxHash = channelLogs[channelLogs.length - 1].transactionHash;
+                    console.log('[Creator] SA found channel activity, real txHash:', realTxHash);
+
+                    var rcptResp = await fetch(BASE_RPC, {
+                      method: 'POST', headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_getTransactionReceipt', params: [realTxHash] }),
+                    });
+                    var rcptJson = await rcptResp.json();
+                    if (rcptJson.result && rcptJson.result.logs && rcptJson.result.logs.length > 0) {
+                      console.log('[Creator] SA full receipt — logs:', rcptJson.result.logs.length, 'status:', rcptJson.result.status);
+                      var parsedEvent = parseAssetCreatedEvent(rcptJson.result, channel);
+                      if (parsedEvent) {
+                        mintedTokenId = parsedEvent.tokenId;
+                        mintedOpContract = parsedEvent.opContract;
+                        if (mintedOpContract === ethers.ZeroAddress) mintedOpContract = null;
+                        mintTxHash = realTxHash;
+                        console.log('[Creator] SA mint resolved — tokenId:', mintedTokenId, 'opContract:', mintedOpContract);
+                        break;
+                      }
+                    }
+                  }
+                } catch (pollErr) {
+                  console.warn('[Creator] SA poll error:', pollErr.message);
+                }
+
+                setProgStep('prog-mint', 'Waiting for on-chain confirmation...', 'active');
+              }
+            } else {
+              mintTxHash = await sendTxWithRetry('prog-mint', 'Mint on Channel contract', channel, mintData, feeInfo.fee);
+              setProgStep('prog-mint', 'Confirming tx...', 'active');
+              var mintReceipt = await waitForReceipt(mintTxHash);
+
+              if (mintReceipt.status === '0x0' || mintReceipt.status === 0) {
+                throw new Error('Mint transaction reverted');
+              }
+
+              var assetEvent = parseAssetCreatedEvent(mintReceipt, channel);
+              if (assetEvent) {
+                mintedTokenId = assetEvent.tokenId;
+                mintedOpContract = assetEvent.opContract;
+              }
+
+              if (!mintedTokenId) {
+                try {
+                  var supplyData2 = iface.encodeFunctionData('totalSupply', []);
+                  var supplyResult2 = await rpcCall(channel, supplyData2);
+                  var supplyDecoded2 = iface.decodeFunctionResult('totalSupply', supplyResult2);
+                  mintedTokenId = supplyDecoded2[0].toString();
+                } catch (tsErr) {
+                  console.warn('[Creator] Could not get totalSupply:', tsErr.message);
+                }
+              }
+
+              if (!mintedOpContract && mintedTokenId && opType !== OP_TYPES.FREE) {
+                try {
+                  var agIface2 = new ethers.Interface(ABI.AUTHORITY_GATEWAY);
+                  var opLookupData2 = agIface2.encodeFunctionData('operative', [channel, mintedTokenId]);
+                  var opLookupResult2 = await rpcCall(CONTRACTS.AUTHORITY_GATEWAY, opLookupData2);
+                  var opDecoded2 = agIface2.decodeFunctionResult('operative', opLookupResult2);
+                  if (opDecoded2[0] && opDecoded2[0] !== ethers.ZeroAddress) {
+                    mintedOpContract = opDecoded2[0];
+                  }
+                } catch (opLookupErr) {
+                  console.warn('[Creator] operative lookup failed:', opLookupErr.message);
+                }
+              }
             }
-          }
-        }
 
-        setProgStep('prog-mint', mintedTokenId
-          ? 'Token #' + mintedTokenId + ' minted'
-          : 'Minted (tx: ' + (mintTxHash || '').substring(0, 10) + '...)', 'done');
+            setProgStep('prog-mint', mintedTokenId
+              ? 'Token #' + mintedTokenId + ' minted'
+              : 'Minted (tx: ' + (mintTxHash || '').substring(0, 10) + '...)', 'done');
 
-        // ── Step 5: Set approval on Operative ─────────
-        var gatewayApproved = false;
-        if (mintedOpContract && mintedOpContract !== '0x0000000000000000000000000000000000000000') {
-          if (btnMintText) btnMintText.textContent = 'Transaction 2 of 2 — Gateway approval...';
+            // ── Step 5: Set approval on Operative ─────────
+            var gatewayApproved = false;
+            if (mintedOpContract && mintedOpContract !== '0x0000000000000000000000000000000000000000') {
+              if (btnMintText) btnMintText.textContent = 'Transaction 2 of 2 — Gateway approval...';
 
-          if (walletChoice === 'sa' && hasSmartAccount()) {
-            try {
-              setProgStep('prog-approve', 'Approving gateway (Agent Account)...', 'active');
-              await new Promise(function (r) { setTimeout(r, 3000); });
-              var opIface2 = new ethers.Interface(ABI.OPERATIVE);
-              var approveData2 = opIface2.encodeFunctionData('setApprovalForAll', [gatewayAddress, true]);
-              await parentExecuteSmartAccountBatch(BASE_CHAIN_ID, [{ to: mintedOpContract, data: approveData2, value: '0x0' }], []);
-              setProgStep('prog-approve', 'Gateway approved', 'done');
+              if (walletChoice === 'sa' && hasSmartAccount()) {
+                try {
+                  setProgStep('prog-approve', 'Approving gateway (Agent Account)...', 'active');
+                  await new Promise(function (r) { setTimeout(r, 3000); });
+                  var opIface2 = new ethers.Interface(ABI.OPERATIVE);
+                  var approveData2 = opIface2.encodeFunctionData('setApprovalForAll', [gatewayAddress, true]);
+                  await parentExecuteSmartAccountBatch(BASE_CHAIN_ID, [{ to: mintedOpContract, data: approveData2, value: '0x0' }], []);
+                  setProgStep('prog-approve', 'Gateway approved', 'done');
+                  gatewayApproved = true;
+                } catch (approveErr) {
+                  console.error('[Creator] SA Gateway approval failed:', approveErr);
+                  setProgStep('prog-approve', '⚠️ Failed — use Fix tool below', 'error');
+                  showToast('Gateway approval failed. Use the Fix Gateway Approval tool.', 'error');
+                }
+              } else {
+                try {
+                  setProgStep('prog-approve', 'Waiting for chain to settle...', 'active');
+                  await new Promise(function (r) { setTimeout(r, 5000); });
+                  setProgStep('prog-approve', 'Approving gateway on ' + mintedOpContract.substring(0, 8) + '...', 'active');
+                  var opIface = new ethers.Interface(ABI.OPERATIVE);
+                  var approveData = opIface.encodeFunctionData('setApprovalForAll', [gatewayAddress, true]);
+                  var approveTxHash = await sendTxWithRetry('prog-approve', 'Set gateway approval', mintedOpContract, approveData);
+                  setProgStep('prog-approve', 'Confirming tx...', 'active');
+                  var approveReceipt = await waitForReceipt(approveTxHash);
+                  if (approveReceipt.status === 'timeout') {
+                    setProgStep('prog-approve', 'Tx sent — verify on BaseScan (' + approveTxHash.substring(0, 10) + '...)', 'done');
+                  } else {
+                    setProgStep('prog-approve', 'Gateway approved', 'done');
+                    gatewayApproved = true;
+                  }
+                } catch (approveErr) {
+                  console.error('[Creator] Gateway approval failed:', approveErr);
+                  setProgStep('prog-approve', '⚠️ Failed — use Fix tool below (' + (approveErr.message || '').substring(0, 60) + ')', 'error');
+                  showToast('Gateway approval failed. Use the Fix Gateway Approval tool after results load.', 'error');
+                }
+              }
+            } else if (opType === OP_TYPES.FREE) {
+              setProgStep('prog-approve', 'Skipped (free content)', 'done');
               gatewayApproved = true;
-            } catch (approveErr) {
-              console.error('[Creator] SA Gateway approval failed:', approveErr);
-              setProgStep('prog-approve', '⚠️ Failed — use Fix tool below', 'error');
-              showToast('Gateway approval failed. Use the Fix Gateway Approval tool.', 'error');
+            } else {
+              setProgStep('prog-approve', '⚠️ Operative not detected — use Fix tool below', 'error');
+              showToast('Gateway approval could not run — use Fix Gateway Approval tool below.', 'error');
             }
           } else {
-            try {
-              setProgStep('prog-approve', 'Waiting for chain to settle...', 'active');
-              await new Promise(function (r) { setTimeout(r, 5000); });
-              setProgStep('prog-approve', 'Approving gateway on ' + mintedOpContract.substring(0, 8) + '...', 'active');
-              var opIface = new ethers.Interface(ABI.OPERATIVE);
-              var approveData = opIface.encodeFunctionData('setApprovalForAll', [gatewayAddress, true]);
-              var approveTxHash = await sendTxWithRetry('prog-approve', 'Set gateway approval', mintedOpContract, approveData);
-              setProgStep('prog-approve', 'Confirming tx...', 'active');
-              var approveReceipt = await waitForReceipt(approveTxHash);
-              if (approveReceipt.status === 'timeout') {
-                setProgStep('prog-approve', 'Tx sent — verify on BaseScan (' + approveTxHash.substring(0, 10) + '...)', 'done');
-              } else {
-                setProgStep('prog-approve', 'Gateway approved', 'done');
-                gatewayApproved = true;
-              }
-            } catch (approveErr) {
-              console.error('[Creator] Gateway approval failed:', approveErr);
-              setProgStep('prog-approve', '⚠️ Failed — use Fix tool below (' + (approveErr.message || '').substring(0, 60) + ')', 'error');
-              showToast('Gateway approval failed. Use the Fix Gateway Approval tool after results load.', 'error');
-            }
+            setProgStep('prog-mint', 'Skipped (no channel)', 'done');
+            setProgStep('prog-approve', 'Skipped', 'done');
           }
-        } else if (opType === OP_TYPES.FREE) {
-          setProgStep('prog-approve', 'Skipped (free content)', 'done');
-          gatewayApproved = true;
-        } else {
-          setProgStep('prog-approve', '⚠️ Operative not detected — use Fix tool below', 'error');
-          showToast('Gateway approval could not run — use Fix Gateway Approval tool below.', 'error');
-        }
-      } else {
-        setProgStep('prog-mint', 'Skipped (no channel)', 'done');
-        setProgStep('prog-approve', 'Skipped', 'done');
-      }
 
-      mintSuccess = true;
-      } catch (mintStepErr) {
-        console.error('[Creator] Mint step failed:', mintStepErr.message);
-        var btnSignMintRetry = document.getElementById('btn-sign-mint');
-        var btnMintTextRetry = document.getElementById('btn-sign-mint-text');
-        if (btnSignMintRetry) btnSignMintRetry.disabled = false;
-        if (btnMintTextRetry) btnMintTextRetry.textContent = 'Retry Sign & Mint';
-        setProgStep('prog-mint', 'Failed — click Retry above', 'error');
-        if (dom.btnBackTo2) dom.btnBackTo2.disabled = false;
-        showToast('Mint failed: ' + (mintStepErr.message || '').substring(0, 80) + ' — click Retry', 'error');
-        PROGRESS_STEPS.forEach(function (id) {
-          var el = document.getElementById(id);
-          if (el && el.classList.contains('active')) setProgStep(id, 'Waiting for retry', 'pending');
-        });
-      }
+          mintSuccess = true;
+        } catch (mintStepErr) {
+          console.error('[Creator] Mint step failed:', mintStepErr.message);
+          var btnSignMintRetry = document.getElementById('btn-sign-mint');
+          var btnMintTextRetry = document.getElementById('btn-sign-mint-text');
+          if (btnSignMintRetry) btnSignMintRetry.disabled = false;
+          if (btnMintTextRetry) btnMintTextRetry.textContent = 'Retry Sign & Mint';
+          setProgStep('prog-mint', 'Failed — click Retry above', 'error');
+          if (dom.btnBackTo2) dom.btnBackTo2.disabled = false;
+          showToast('Mint failed: ' + (mintStepErr.message || '').substring(0, 80) + ' — click Retry', 'error');
+          PROGRESS_STEPS.forEach(function (id) {
+            var el = document.getElementById(id);
+            if (el && el.classList.contains('active')) setProgStep(id, 'Waiting for retry', 'pending');
+          });
+        }
       } // end while (!mintSuccess)
 
       // ── Done — delete draft since mint completed ──────
       if (state.draftId) {
         try {
           await pc2Fetch('/api/drafts/' + state.draftId, { method: 'DELETE' });
-        } catch (_) {}
+        } catch (_) { }
         state.draftId = null;
       }
 
@@ -3820,7 +3796,7 @@
         if (gatewayApproved) {
           document.getElementById('result-title').textContent = 'Asset Minted On-Chain';
           document.getElementById('result-desc').textContent = 'Your encrypted asset is on IPFS and minted on Base as ' + tokenLabel + '.';
-        document.getElementById('result-note').innerHTML = '<strong>Live on Base:</strong> Your asset is now on the Elacity channel. <a href="https://basescan.org/tx/' + mintTxHash + '" target="_blank">View on BaseScan</a>';
+          document.getElementById('result-note').innerHTML = '<strong>Live on Base:</strong> Your asset is now on the Elacity channel. <a href="https://basescan.org/tx/' + mintTxHash + '" target="_blank">View on BaseScan</a>';
         } else {
           document.getElementById('result-title').textContent = 'Minted — Gateway Approval Needed';
           document.getElementById('result-desc').textContent = 'Token ' + tokenLabel + ' was minted but the marketplace approval did not complete. Buyers cannot purchase until you approve.';
@@ -3845,7 +3821,7 @@
           if (fixInput) fixInput.value = mintedOpContract;
         }
       } else {
-      showToast('Asset published!' + mintLabel + modeLabel, 'success');
+        showToast('Asset published!' + mintLabel + modeLabel, 'success');
       }
 
       // Post-mint: kick PC2 indexer so the new asset appears in catalog/Market
@@ -3888,7 +3864,7 @@
           var assetMime = state.resolvedMime || 'application/octet-stream';
           var capsuleFolder = '/' + walletAddr + '/' + (
             isMediaFile ? 'Videos' :
-            assetMime.startsWith('image/') ? 'Pictures' : 'Documents'
+              assetMime.startsWith('image/') ? 'Pictures' : 'Documents'
           );
           var safeName = (title || 'asset').replace(/[^a-zA-Z0-9 _\-]/g, '').substring(0, 80).trim() || 'asset';
           var capsulePath = capsuleFolder + '/' + safeName + '.ddrm';
@@ -4669,7 +4645,7 @@
               window.parent.postMessage({ msg: 'mint-close-creator' }, '*');
             }, 1000);
           }
-        } catch (_) {}
+        } catch (_) { }
       });
     }
 
@@ -4784,7 +4760,7 @@
     if (window.ethereum) {
       // Switch to Base first — Elastos NFT may have set bridge to ESC
       window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: BASE_CHAIN_HEX }] })
-        .catch(function () {})
+        .catch(function () { })
         .then(function () {
           return window.ethereum.request({ method: 'eth_accounts' });
         })
@@ -4810,7 +4786,7 @@
                       console.log('[Creator] SA detected via RPC:', sa);
                     }
                   })
-                  .catch(function () {}),
+                  .catch(function () { }),
                 new Promise(function (resolve) { setTimeout(resolve, 3000); })
               ]);
             }
@@ -4822,7 +4798,7 @@
             });
           }
         })
-        .catch(function () {});
+        .catch(function () { });
     }
 
     // Listen for late-arriving SA address from wallet bridge init
@@ -4980,7 +4956,7 @@
             try {
               var draftAccts = await window.ethereum.request({ method: 'eth_requestAccounts' });
               if (draftAccts && draftAccts[0]) state.walletAddress = draftAccts[0];
-            } catch (_) {}
+            } catch (_) { }
           }
           if (!state.walletAddress) {
             throw new Error('Wallet not connected — please reconnect your wallet and try again.');
@@ -5028,18 +5004,18 @@
           var priceWei = ethers.parseUnits(price.toString(), selectedCurrency.decimals);
           var opType = accessMethod === 'free' ? OP_TYPES.FREE
             : accessMethod === 'buy_once' ? OP_TYPES.BUY_ONCE
-            : OP_TYPES.BUY_AND_RESELL;
+              : OP_TYPES.BUY_AND_RESELL;
 
           var opRawData = opType !== OP_TYPES.FREE
             ? encodeOpRawData({
-                contentId: encryptHash,
-                metadataCID: metaCid,
-                creatorAddress: draftEffectiveAddr,
-                copies: copies,
-                opType: opType,
-                resellerCut: draft.reseller_cut || 900,
-                royalties: draft.royalty_partners ? JSON.parse(draft.royalty_partners) : [],
-              })
+              contentId: encryptHash,
+              metadataCID: metaCid,
+              creatorAddress: draftEffectiveAddr,
+              copies: copies,
+              opType: opType,
+              resellerCut: draft.reseller_cut || 900,
+              royalties: draft.royalty_partners ? JSON.parse(draft.royalty_partners) : [],
+            })
             : ethers.AbiCoder.defaultAbiCoder().encode(['bytes16'], [hashToContentId(encryptHash)]);
           var sellRawData = opType !== OP_TYPES.FREE
             ? encodeSellRawData(copies, priceWei, selectedCurrency.address)
@@ -5187,7 +5163,7 @@
           // Delete draft after successful mint
           try {
             await pc2Fetch('/api/drafts/' + draftId, { method: 'DELETE' });
-          } catch (_) {}
+          } catch (_) { }
           state.draftId = null;
 
           // Show results
