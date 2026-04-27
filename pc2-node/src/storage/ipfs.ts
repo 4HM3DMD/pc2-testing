@@ -13,6 +13,7 @@ import { unixfs, type UnixFS } from '@helia/unixfs';
 import { createLibp2p, type Libp2pOptions } from 'libp2p';
 import { generateKeyPair, privateKeyFromProtobuf, privateKeyToProtobuf } from '@libp2p/crypto/keys';
 import { tcp } from '@libp2p/tcp';
+import { mdns } from '@libp2p/mdns';
 import { webSockets } from '@libp2p/websockets';
 import { noise } from '@chainsafe/libp2p-noise';
 import { yamux } from '@chainsafe/libp2p-yamux';
@@ -55,7 +56,6 @@ const PC2_SUPERNODE_BOOTSTRAP: string[] = [
   // Contabo (secondary)
   '/ip4/38.242.211.112/tcp/4003/p2p/12D3KooWAaFWUWN7GQVeNdbdPKUUTmyoQewBAPbwXKKrhxxsck5h',
   '/ip4/38.242.211.112/tcp/4004/ws/p2p/12D3KooWAaFWUWN7GQVeNdbdPKUUTmyoQewBAPbwXKKrhxxsck5h',
-  '/ip4/34.77.31.164/tcp/4001/ipfs/12D3KooWNieM3HRBJdVqaQucZEJdqA3oWKrKf3Gx3hp2cmtR9GNK',
 ];
 
 /**
@@ -67,6 +67,8 @@ const PUBLIC_BOOTSTRAP_NODES = [
   '/dnsaddr/bootstrap.libp2p.io/p2p/QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb',
   '/dnsaddr/bootstrap.libp2p.io/p2p/QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt',
   '/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ',
+
+  // Elacity CDN
   '/ip4/34.77.31.164/tcp/4001/ipfs/12D3KooWNieM3HRBJdVqaQucZEJdqA3oWKrKf3Gx3hp2cmtR9GNK',
 ];
 
@@ -273,7 +275,8 @@ export class IPFSStorage {
             log.info(`   PC2 supernodes: ${supernodes.length} configured`);
           }
           libp2pConfig.peerDiscovery = [
-            bootstrap({ list: bootstrapNodes })
+            bootstrap({ list: bootstrapNodes }),
+            mdns(),
           ];
         }
       } else {
@@ -290,7 +293,22 @@ export class IPFSStorage {
       this.helia = await createHelia({
         blockstore: this.blockstore,
         datastore,
-        libp2p
+        libp2p,
+      });
+
+      this.helia.libp2p.addEventListener('peer:discovery', async (event) => {
+        log.info(
+          `New peer discovered (${event.detail.id.toString()}) via MDNS`,
+          event.detail.multiaddrs.map((ma) => ma.toString())
+        );
+        try {
+          await this.helia?.libp2p.dial(event.detail.multiaddrs, {
+            signal: AbortSignal.timeout(5000),
+          });
+          log.info(`Successfully dialed peer (${event.detail.id.toString()})`);
+        } catch (err) {
+          log.warn(`Failed to dial peer (${event.detail.id.toString()}):`, (err as Error)?.message);
+        }
       });
 
       // Initialize UnixFS
