@@ -23,6 +23,7 @@ import { bootstrap } from '@libp2p/bootstrap';
 import { circuitRelayTransport, circuitRelayServer } from '@libp2p/circuit-relay-v2';
 import { dcutr } from '@libp2p/dcutr';
 import { autoNAT } from '@libp2p/autonat';
+import { multiaddr } from '@multiformats/multiaddr';
 import { FsBlockstore } from 'blockstore-fs';
 import { FsDatastore } from 'datastore-fs';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
@@ -82,6 +83,7 @@ export interface IPFSOptions {
   supernodeBootstrap?: string[];    // PC2 supernode relay addresses (highest priority)
   relayMode?: boolean;              // Enable relay server mode (for nodes with public IP)
   relayMaxConnections?: number;     // Max relay connections (default: 100)
+  bootstrapHealthcheckIntervalMs?: number; // Periodic bootstrap re-dial when disconnected (default: 30s)
 }
 
 export class IPFSStorage {
@@ -94,6 +96,8 @@ export class IPFSStorage {
   private options: IPFSOptions;
   private relayEnabled: boolean = false;
   private bootstrapReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private bootstrapHealthTimer: ReturnType<typeof setInterval> | null = null;
+  private configuredBootstrapPeers: string[] = [];
 
   constructor(options: IPFSOptions) {
     this.repoPath = options.repoPath;
@@ -317,6 +321,7 @@ export class IPFSStorage {
           ...(this.options.customBootstrap || []),
           ...PUBLIC_BOOTSTRAP_NODES,
         ];
+        this.configuredBootstrapPeers = bootstrapNodes;
         void this.connectBootstrapPeers(bootstrapNodes, 'initial');
 
         if (this.bootstrapReconnectTimer) {
@@ -325,6 +330,21 @@ export class IPFSStorage {
         this.bootstrapReconnectTimer = setTimeout(() => {
           void this.connectBootstrapPeers(bootstrapNodes, 'post-init');
         }, 10_000);
+
+        // Kubo-like resilience: keep trying bootstrap peers when we have no
+        // active connections (common after cold start or transient network issues).
+        if (this.bootstrapHealthTimer) {
+          clearInterval(this.bootstrapHealthTimer);
+        }
+        const intervalMs = this.options.bootstrapHealthcheckIntervalMs ?? 30_000;
+        this.bootstrapHealthTimer = setInterval(() => {
+          if (!this.helia || !this.isInitialized) return;
+          const connected = this.helia.libp2p.getConnections().length;
+          if (connected === 0) {
+            log.info('[IPFS] No active peers detected; running bootstrap re-dial');
+            void this.connectBootstrapPeers(this.configuredBootstrapPeers, 'manual');
+          }
+        }, intervalMs);
       }
     } catch (error) {
       // Clean up any partial initialization
@@ -343,6 +363,10 @@ export class IPFSStorage {
       if (this.bootstrapReconnectTimer) {
         clearTimeout(this.bootstrapReconnectTimer);
         this.bootstrapReconnectTimer = null;
+      }
+      if (this.bootstrapHealthTimer) {
+        clearInterval(this.bootstrapHealthTimer);
+        this.bootstrapHealthTimer = null;
       }
 
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -1524,6 +1548,48 @@ export class IPFSStorage {
     return connections.map(conn => conn.remotePeer.toString());
   }
 
+  getConfiguredBootstrapPeers(): string[] {
+    return Array.from(new Set(this.configuredBootstrapPeers.map((p) => this.normalizeBootstrapAddr(p))));
+  }
+
+  async reconnectBootstrapPeers(phase: 'manual' | 'post-init' | 'initial' = 'manual'): Promise<{
+    attempted: number;
+    connected: number;
+    failed: Array<{ peer: string; error: string }>;
+  }> {
+    if (!this.helia || !this.isInitialized) {
+      return { attempted: 0, connected: 0, failed: [] };
+    }
+
+    const peers = this.getConfiguredBootstrapPeers();
+    if (peers.length === 0) {
+      return { attempted: 0, connected: 0, failed: [] };
+    }
+
+    return this.connectBootstrapPeers(peers, phase);
+  }
+
+  async connectToPeer(peerAddr: string): Promise<{ success: boolean; error?: string }> {
+    if (!this.helia || !this.isInitialized) {
+      return { success: false, error: 'IPFS not initialized' };
+    }
+
+    const normalized = this.normalizeBootstrapAddr(peerAddr.trim());
+    if (!normalized) {
+      return { success: false, error: 'Empty peer address' };
+    }
+
+    try {
+      await (this.helia.libp2p as any).dial(multiaddr(normalized));
+      log.info(`[IPFS] Manual dial ok: ${normalized}`);
+      return { success: true };
+    } catch (error: any) {
+      const message = error?.message || 'unknown error';
+      log.warn(`[IPFS] Manual dial failed ${normalized}: ${message}`);
+      return { success: false, error: message };
+    }
+  }
+
   /**
    * Get network statistics
    */
@@ -1730,6 +1796,10 @@ export class IPFSStorage {
       clearTimeout(this.bootstrapReconnectTimer);
       this.bootstrapReconnectTimer = null;
     }
+    if (this.bootstrapHealthTimer) {
+      clearInterval(this.bootstrapHealthTimer);
+      this.bootstrapHealthTimer = null;
+    }
     if (this.helia && this.isInitialized) {
       try {
         log.info('🛑 Stopping Helia IPFS node...');
@@ -1757,24 +1827,41 @@ export class IPFSStorage {
     return addr.replace('/ipfs/', '/p2p/');
   }
 
-  private async connectBootstrapPeers(peers: string[], phase: 'initial' | 'post-init'): Promise<void> {
-    if (!this.helia || !this.isInitialized || !peers.length) return;
+  private async connectBootstrapPeers(
+    peers: string[],
+    phase: 'initial' | 'post-init' | 'manual'
+  ): Promise<{
+    attempted: number;
+    connected: number;
+    failed: Array<{ peer: string; error: string }>;
+  }> {
+    if (!this.helia || !this.isInitialized || !peers.length) {
+      return { attempted: 0, connected: 0, failed: [] };
+    }
 
     const uniquePeers = Array.from(new Set(peers.map((p) => this.normalizeBootstrapAddr(p))));
     log.info(`[IPFS] Bootstrap dial (${phase}): attempting ${uniquePeers.length} peers`);
 
     let connected = 0;
+    const failed: Array<{ peer: string; error: string }> = [];
     const dialTasks = uniquePeers.map(async (peerAddr) => {
       try {
-        await (this.helia!.libp2p as any).dial(peerAddr);
+        await (this.helia!.libp2p as any).dial(multiaddr(peerAddr));
         connected += 1;
         log.debug(`[IPFS] Bootstrap dial ok (${phase}): ${peerAddr}`);
       } catch (error: any) {
-        log.debug(`[IPFS] Bootstrap dial failed (${phase}) ${peerAddr}: ${error?.message || 'unknown error'}`);
+        const message = error?.message || 'unknown error';
+        failed.push({ peer: peerAddr, error: message });
+        log.debug(`[IPFS] Bootstrap dial failed (${phase}) ${peerAddr}: ${message}`);
       }
     });
 
     await Promise.all(dialTasks);
     log.info(`[IPFS] Bootstrap dial (${phase}) complete: ${connected}/${uniquePeers.length} connected`);
+    return {
+      attempted: uniquePeers.length,
+      connected,
+      failed,
+    };
   }
 }
