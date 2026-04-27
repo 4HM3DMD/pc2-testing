@@ -53,6 +53,35 @@
 | **A15** | Capsule-signing v2 cutover doc (warn → block-by-default). Tracked separately under `V2-APP-CAPSULE-SIGNING`. |
 | `.__puter_gui.json` bypass | Tighten `authenticate`'s `endsWith('.__puter_gui.json')` to exact post-canonicalization match. |
 
+### 🔐 Wave 8 — Chipotle hardening (post-Irzhy review, 2026-04-28)
+
+Irzhy's 2026-04-28 deep audit of the Chipotle Lit migration surfaced three
+release-gating findings separate from the researcher's original set. Full
+detail lives in
+[`.cursor/tasks/SEC-2026-04-28-WAVE8-CHIPOTLE-HARDENING/`](../../.cursor/tasks/SEC-2026-04-28-WAVE8-CHIPOTLE-HARDENING/SEC-2026-04-28-WAVE8-CHIPOTLE-HARDENING.md).
+
+"Wave 8" avoids a name collision with the existing Wave 7 polish
+(A13–A15, v1.2.2). It is unrelated.
+
+| # | Finding | Status |
+|---|---|---|
+| **C-02** | Chipotle Lit Action CEK decrypt was not bound to the authorised `kid`. An owner of `kid-A` could submit `kid-B`'s ciphertext and recover `kid-B`'s CEK. | ✅ Shipped. Both `pc2-node/data/lit-actions/non-media-decrypt-chipotle.js` and `…/media-decrypt-chipotle.js` now enforce `kid == first16Bytes(sha256(cekBase64))` inside the TEE and deny on mismatch. |
+| **M-01** | `pc2-node/src/api/media.ts::detectSmartAccountUser` read its RPC URL from PSSH, letting a creator SSRF the server or spoof chain state. | ✅ Shipped. RPC always comes from `getBaseRpcUrl()`; the PSSH field is ignored (parameter renamed `_psshEntries`). |
+| **H-01.2** | Auto-provisioning accepted unsigned JSON from supernodes — a compromised supernode could inject a malicious `apiUrl`, wrong PKP, or attacker-controlled RPC. | ✅ Shipped. `chipotle-client.ts` now requires a detached Ed25519 signature over a canonical envelope, enforces an `apiUrl` allowlist and a 90-day `signedAt` freshness window, and defaults to strict mode (`PROVISION_SIG_REQUIRED=1`). |
+| H-01.1 | TLS `rejectUnauthorized:false` on supernode provision fetch. | No-op in Wave 8 — already tracked as **A8** above, parked on Sash's DNS-2FA travel block. |
+| C-01 | Media decrypt flow was not authenticated. | No-op — closed by Phase 5 sigauth. Irzhy's write-up was against a pre-Phase-5 snapshot. |
+
+**Release gate**: Wave 8 lands on `feature/lit-chipotle-migration` alongside
+the earlier waves. The Lit Action source changes require a CID rotation
+ceremony on the Chipotle PKP dashboard — see the
+[Wave 8 rotation runbook](../../.cursor/tasks/SEC-2026-04-28-WAVE8-CHIPOTLE-HARDENING/ROTATION_RUNBOOK.md).
+H-01.2 ships with an all-zeros placeholder pubkey (fail-safe); an
+out-of-session Ed25519 key ceremony must replace it before v1.2 tag.
+
+**Regression**: `bash pc2-node/scripts/wave8-smoke.sh` — 5 shell checks +
+9 offline Node cases = 14/14 green. Manual 4-case C-02 end-to-end matrix
+runs post-rotation.
+
 ### 🔁 Kill-switch flips (post-cutover, scheduled)
 
 | # | When | Switch | Pre-condition |
@@ -441,6 +470,8 @@ In short: **every CRITICAL-severity finding has its CRITICAL component hard-fixe
 | **Wave 5.5 detail (A17 + A19, release-blocking hotfix)** | [`.cursor/tasks/SEC-2026-04-22-WAVE5.5-PRE-RELEASE-HOTFIX/SEC-2026-04-22-WAVE5.5-PRE-RELEASE-HOTFIX.md`](.cursor/tasks/SEC-2026-04-22-WAVE5.5-PRE-RELEASE-HOTFIX/SEC-2026-04-22-WAVE5.5-PRE-RELEASE-HOTFIX.md) |
 | **Wave 6 detail (A6-A12 + A16 + A18, ≤T+14d)** | [`.cursor/tasks/SEC-2026-04-22-WAVE6-HARDENING/SEC-2026-04-22-WAVE6-HARDENING.md`](.cursor/tasks/SEC-2026-04-22-WAVE6-HARDENING/SEC-2026-04-22-WAVE6-HARDENING.md) |
 | **Wave 7 detail (A13-A15, v1.2.2/v1.3)** | [`.cursor/tasks/SEC-2026-04-22-WAVE7-POLISH/SEC-2026-04-22-WAVE7-POLISH.md`](.cursor/tasks/SEC-2026-04-22-WAVE7-POLISH/SEC-2026-04-22-WAVE7-POLISH.md) |
+| **Wave 8 detail (C-02 + M-01 + H-01.2, Chipotle hardening, release-blocking)** | [`.cursor/tasks/SEC-2026-04-28-WAVE8-CHIPOTLE-HARDENING/SEC-2026-04-28-WAVE8-CHIPOTLE-HARDENING.md`](../../.cursor/tasks/SEC-2026-04-28-WAVE8-CHIPOTLE-HARDENING/SEC-2026-04-28-WAVE8-CHIPOTLE-HARDENING.md) |
+| **Wave 8 rotation runbook (Lit CIDs + provision key ceremony)** | [`.cursor/tasks/SEC-2026-04-28-WAVE8-CHIPOTLE-HARDENING/ROTATION_RUNBOOK.md`](../../.cursor/tasks/SEC-2026-04-28-WAVE8-CHIPOTLE-HARDENING/ROTATION_RUNBOOK.md) |
 | Boson DID rotation follow-up | [`.cursor/tasks/SEC-2026-04-22-BOSON-DID-ROTATION/SEC-2026-04-22-BOSON-DID-ROTATION.md`](.cursor/tasks/SEC-2026-04-22-BOSON-DID-ROTATION/SEC-2026-04-22-BOSON-DID-ROTATION.md) |
 | Lit Action V1.2 cutover (separate but adjacent P0) | [`docs/handover/V12_SIGAUTH_HANDOVER.md`](V12_SIGAUTH_HANDOVER.md) |
 | Secret scanning runbook | [`docs/wiki/Technical/SECRET_SCANNING.md`](../wiki/Technical/SECRET_SCANNING.md) |
