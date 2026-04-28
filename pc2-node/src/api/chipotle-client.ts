@@ -472,7 +472,8 @@ function getChipotleNonMediaActionCode(): string {
       `Chipotle non-media Lit Action not found at ${actionPath}.`,
     );
   }
-  cachedChipotleNonMediaCode = readFileSync(actionPath, 'utf8');
+  // See getNonMediaActionCode() for why trailing whitespace is stripped.
+  cachedChipotleNonMediaCode = readFileSync(actionPath, 'utf8').replace(/\s+$/, '');
   return cachedChipotleNonMediaCode;
 }
 
@@ -485,6 +486,11 @@ function getChipotleEncryptCode(): string {
       `Chipotle encrypt Lit Action not found at ${actionPath}.`,
     );
   }
+  // The encrypt action was registered in Chipotle's allowlist against the
+  // raw (trailing-newline-preserving) file bytes. Stripping whitespace
+  // here produces a different code hash and triggers HTTP 403. The
+  // decrypt actions were re-registered via a 403-probe ceremony that
+  // stripped the newline — hence the asymmetry with the other loaders.
   cachedChipotleEncryptCode = readFileSync(actionPath, 'utf8');
   return cachedChipotleEncryptCode;
 }

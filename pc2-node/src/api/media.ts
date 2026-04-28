@@ -1134,7 +1134,15 @@ async function fetchLitActionCode(cid: string): Promise<string> {
     try {
       const resp = await fetch(url, { signal: AbortSignal.timeout(10000) });
       if (resp.ok) {
-        const code = await resp.text();
+        const raw = await resp.text();
+        // Chipotle's allowlist is keyed on the byte-exact hash of the
+        // submitted `code` field. The runtime-internal CID we registered
+        // corresponds to the trailing-whitespace-stripped form (captured
+        // from a shell-based 403 probe during key rotation). Keeping the
+        // raw IPFS bytes here produces a different hash and triggers
+        // HTTP 403. See chipotle-client.ts getNonMediaActionCode() for
+        // the same normalisation on locally-loaded actions.
+        const code = raw.replace(/\s+$/, '');
         if (code && code.length > 10) {
           litActionCodeCache.set(cid, code);
           logger.info(`[media/CEK] Fetched Lit Action code from ${url.includes('localhost') ? 'local' : 'remote'} IPFS (${code.length} chars)`);
