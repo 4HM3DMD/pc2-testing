@@ -51,8 +51,11 @@ export const PlayerProvider: React.FC<React.PropsWithChildren<PlayerProviderProp
     PlayerCore.setup({
       remote: true,
       drmSystem: {
-        'cenc:lit-drm-v1': { priority: 1 },
-        'cenc:lit-drm-sa-v1': { priority: 0 },
+        // Unified chipotle media protection (PSSH-driven)
+        'cenc:lit-aes-gcm-v3': { priority: 0 },
+        // Legacy fallback entries for previously minted assets
+        'cenc:lit-drm-sa-v1': { priority: 1 },
+        'cenc:lit-drm-v1': { priority: 2 },
         'cenc:web3-drm-v1': { priority: 10, disabled: true },
       },
     })
