@@ -1160,9 +1160,10 @@ export function setupAPI (app: Express): void {
         // `role: "system"`. These are the four core capsules that ship as
         // pre-installed defaults (Market, Player, Creator, dDRM Viewer).
         // Apps with `role: "dapp"` (Glide, Elastos NFT) and untagged dev/test
-        // artifacts (pc2-media-runtime, supernode-manager, wallet-test) are
-        // intentionally NOT auto-installed — users discover and install them
-        // via the dApp Centre.
+        // artifacts (supernode-manager, wallet-test) are intentionally NOT
+        // auto-installed — users discover and install them via the dApp
+        // Centre. (`pc2-media-runtime` carries `role: "system"` because it is
+        // the required DASH/CENC runtime for `.ddrm` capsule playback.)
         //
         // We also opportunistically uninstall any previously auto-installed
         // non-system bundle (identifiable by `cid` starting with `local:`)
@@ -1207,7 +1208,7 @@ export function setupAPI (app: Express): void {
 
             // Cleanup pass: remove stale local: installs for any test-apps bundle
             // that is no longer marked system (e.g. glide-finance, elastos-nft,
-            // pc2-media-runtime, supernode-manager, wallet-test from earlier boots).
+            // supernode-manager, wallet-test from earlier boots).
             try {
                 const allInstalled = appInstallService.list();
                 for ( const inst of allInstalled ) {
