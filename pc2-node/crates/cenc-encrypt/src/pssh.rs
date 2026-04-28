@@ -5,10 +5,10 @@
 
 use crate::mp4box::make_fullbox;
 
-/// Elacity dDRM PSSH system ID: bf8ef85d-2c54-475d-8c1e-e27db60332a2
+/// Elacity dDRM PSSH system ID: bf2c86c1-d9ff-4ab1-b4be-45ae4d99e1fe
 const ELACITY_SYSTEM_ID: [u8; 16] = [
-    0xbf, 0x8e, 0xf8, 0x5d, 0x2c, 0x54, 0x47, 0x5d,
-    0x8c, 0x1e, 0xe2, 0x7d, 0xb6, 0x03, 0x32, 0xa2,
+    0xbf, 0x2c, 0x86, 0xc1, 0xd9, 0xff, 0x4a, 0xb1,
+    0xb4, 0xbe, 0x45, 0xae, 0x4d, 0x99, 0xe1, 0xfe,
 ];
 
 /// Build a PSSH box (v1) with the Elacity system ID and custom data payload.
@@ -51,7 +51,7 @@ pub fn build_elacity_pssh_data(
     lit_backend: &str,
 ) -> Vec<u8> {
     let json = format!(
-        r#"{{"protocolVersion":"2.0","protectionType":"cenc:web3-drm-v1","variant":"eth.web3.clearkey","ciphersuite":"e8582013","data":{{"authority":"{}","chainId":{},"rpc":"{}","actionIpfsId":"{}","litBackend":"{}"}}}}"#,
+        r#"{{"protocolVersion":"2.0","protectionType":"cenc:lit-aes-gcm-v3","variant":"eth.web3.clearkey","ciphersuite":"e8582013","data":{{"authority":"{}","chainId":{},"rpc":"{}","actionIpfsId":"{}","litBackend":"{}"}}}}"#,
         authority, chain_id, rpc, action_ipfs_id, lit_backend
     );
     json.into_bytes()
@@ -110,7 +110,7 @@ mod tests {
         let data_size = u32::from_be_bytes([pssh[48], pssh[49], pssh[50], pssh[51]]) as usize;
         let json_str = std::str::from_utf8(&pssh[data_start..data_start + data_size]).unwrap();
         assert!(json_str.contains("chipotle"));
-        assert!(json_str.contains("cenc:web3-drm-v1"));
+        assert!(json_str.contains("cenc:lit-aes-gcm-v3"));
         assert!(json_str.contains("0x580c26DefF267EF"));
     }
 }

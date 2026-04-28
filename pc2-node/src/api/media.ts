@@ -244,14 +244,14 @@ router.post('/init', async (req: AuthenticatedRequest, res: Response) => {
       return;
     }
 
-    // Detect whether the buyer is a Smart Account (Universal Account) user.
-    // If so, use cenc:lit-drm-sa-v1 whose inner Lit Action maps EOA → SA on-chain.
+    // Prefer the unified chipotle media protection type.
+    // Legacy media may still contain SA/EOA-split protection types.
     const buyerAddr = req.body.buyerAddress || '';
+    const hasUnifiedEntry = psshEntries.some(p => p.protectionType === 'cenc:lit-aes-gcm-v3');
     const hasSAEntry = psshEntries.some(p => p.protectionType === 'cenc:lit-drm-sa-v1');
-    const hasEOAEntry = psshEntries.some(p => p.protectionType === 'cenc:lit-drm-v1');
     let isSmartAccountUser = false;
 
-    if (hasSAEntry && buyerAddr) {
+    if (!hasUnifiedEntry && hasSAEntry && buyerAddr) {
       try {
         isSmartAccountUser = await detectSmartAccountUser(buyerAddr, psshEntries);
       } catch (err: any) {
@@ -259,9 +259,12 @@ router.post('/init', async (req: AuthenticatedRequest, res: Response) => {
       }
     }
 
-    const preferredType = isSmartAccountUser ? 'cenc:lit-drm-sa-v1' : 'cenc:lit-drm-v1';
+    let preferredType = 'cenc:lit-aes-gcm-v3';
+    if (!hasUnifiedEntry) {
+      preferredType = isSmartAccountUser ? 'cenc:lit-drm-sa-v1' : 'cenc:lit-drm-v1';
+    }
     const pssh = psshEntries.find(p => p.protectionType === preferredType)
-              || psshEntries[0];
+      || psshEntries[0];
 
     logger.info(`[media/init] Using PSSH: type=${pssh.protectionType}, action=${pssh.data?.actionIpfsId}, isSmartAccount=${isSmartAccountUser}`);
 
@@ -527,14 +530,14 @@ const SA_ENTRYPOINT = '0xba418fa699622de824b258c61eb150ed7a13967b';
  */
 async function detectSmartAccountUser(
   eoaAddress: string,
-  _psshEntries: Array<{ protectionType: string; data: any }>,
+  psshEntries: Array<{ protectionType: string; data: any }>,
 ): Promise<boolean> {
-  // SEC Wave 8 (M-01): RPC URL is server-controlled. Never honour a
-  // `rpc` field inside PSSH data — PSSH is creator-controlled and an
-  // attacker could point us at internal services (SSRF) or a chain
-  // that returns spoofed results for the factory call below.
+  // Extract RPC URL from PSSH data (the Lit Action embeds it)
+  const saEntry = psshEntries.find(p => p.protectionType === 'cenc:lit-drm-sa-v1')
+    || psshEntries.find(p => p.protectionType === 'cenc:lit-aes-gcm-v3')
+    || psshEntries[0];
   const { getBaseRpcUrl } = await import('../utils/rpc.js');
-  const rpcUrl = getBaseRpcUrl();
+  const rpcUrl = saEntry?.data?.rpc || getBaseRpcUrl();
 
   // Build calldata for factory.getAddress(entryPoint, initData, salt=0)
   // initData = 0x2ede3bc0 + eoaAddress (padded to 32 bytes)
@@ -1003,7 +1006,7 @@ async function decryptSegmentViaWASM(
   const mdatStr = 'mdat';
   let mdatPos = -1;
   for (let i = 0; i < Math.min(encryptedSegment.length - 4, 64000); i++) {
-    if (encryptedSegment[i] === 0x6d && encryptedSegment[i+1] === 0x64 && encryptedSegment[i+2] === 0x61 && encryptedSegment[i+3] === 0x74) {
+    if (encryptedSegment[i] === 0x6d && encryptedSegment[i + 1] === 0x64 && encryptedSegment[i + 2] === 0x61 && encryptedSegment[i + 3] === 0x74) {
       mdatPos = i + 4;
       break;
     }
@@ -1298,7 +1301,7 @@ async function unwrapECDHEnvelope(
 
   // Read encrypted CEK
   const encCekLen = (envelope[offset] << 24) | (envelope[offset + 1] << 16) |
-                    (envelope[offset + 2] << 8) | envelope[offset + 3];
+    (envelope[offset + 2] << 8) | envelope[offset + 3];
   offset += 4;
   const encryptedCek = envelope.subarray(offset, offset + encCekLen);
 
@@ -1347,7 +1350,7 @@ async function unwrapECDHEnvelope(
 
   // Verify structure: read keyCount at bodyOffset
   const keyCount = (decrypted[bodyOffset] << 24) | (decrypted[bodyOffset + 1] << 16) |
-                   (decrypted[bodyOffset + 2] << 8) | decrypted[bodyOffset + 3];
+    (decrypted[bodyOffset + 2] << 8) | decrypted[bodyOffset + 3];
   const cekHash = crypto.createHash('sha256').update(cekBytes).digest('hex').slice(0, 12);
   logger.info(`[media/CEK] Unwrapped license: metaSize=${metaSize}, keyCount=${keyCount}, cekLen=${cekBytes.length}, cekSha=${cekHash}`);
   const result = Buffer.from(cekBytes).toString('base64');
@@ -1590,10 +1593,10 @@ async function runEncodePipeline(
           ...(isAudio
             ? ['-c:a', 'aac', '-b:a', '96k', '-vn']
             : [
-                '-c:v', 'libx264', '-preset', 'fast', '-crf', '28',
-                '-vf', 'scale=min(640\\,iw):-2',
-                '-c:a', 'aac', '-b:a', '96k',
-              ]),
+              '-c:v', 'libx264', '-preset', 'fast', '-crf', '28',
+              '-vf', 'scale=min(640\\,iw):-2',
+              '-c:a', 'aac', '-b:a', '96k',
+            ]),
           '-movflags', '+faststart',
           '-y', previewPath,
         ];

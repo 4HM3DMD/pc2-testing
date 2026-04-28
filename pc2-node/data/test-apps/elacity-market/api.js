@@ -631,7 +631,85 @@ var ElacityAPI = (function () {
         return catalogResult;
       }
       return gql(FETCH_ITEMS_QUERY, { query: query, filters: filters })
-        .then(function (data) { return data.assets; });
+        .then(function (data) { return normalizeAssetCollection(data.assets); });
+    });
+  }
+
+  function normalizeProtectionTypes(value) {
+    if (Array.isArray(value)) {
+      return value
+        .map(function (v) { return typeof v === 'string' ? v.trim() : ''; })
+        .filter(function (v) { return v.length > 0; });
+    }
+    if (typeof value === 'string' && value.trim()) return [value.trim()];
+    return [];
+  }
+
+  function normalizeAssetProtections(asset) {
+    if (Array.isArray(asset && asset.protections)) {
+      return asset.protections.filter(function (p) { return !!p && typeof p === 'object'; });
+    }
+
+    var protectionType = normalizeProtectionTypes(asset && asset.protectionType);
+    if (protectionType.length === 0) return [];
+
+    return [{
+      algorithm: asset.algorithm || '',
+      protectionType: protectionType[0],
+      dataToEncryptHash: asset.dataToEncryptHash || '',
+      actionCid: asset.actionCid || '',
+      authority: asset.authority || '',
+      chain: asset.chain || '',
+      chainId: asset.chainId || null,
+      rpc: asset.rpc || '',
+      litCiphertext: asset.litCiphertext || '',
+      iv: asset.iv || '',
+      litBackend: asset.litBackend || '',
+      contentHash: asset.contentHash || '',
+      contentHashAlgorithm: asset.contentHashAlgorithm || ''
+    }];
+  }
+
+  function hasEffectiveProtectionTypes(types) {
+    return normalizeProtectionTypes(types).some(function (t) { return t.toLowerCase() !== 'none'; });
+  }
+
+  function hasEffectiveProtections(entries) {
+    if (!Array.isArray(entries)) return false;
+    return entries.some(function (p) {
+      return hasEffectiveProtectionTypes(p && p.protectionType);
+    });
+  }
+
+  function normalizeNftProtectionShape(nft) {
+    if (!nft || !nft.metadata) return nft;
+
+    var meta = nft.metadata || {};
+    var media = meta.media || {};
+    var asset = (nft._rawAsset || meta.asset || {});
+
+    var mediaProtectionTypes = normalizeProtectionTypes(media.protectionType);
+    var protections = normalizeAssetProtections(asset);
+    var encrypted = !!asset.encrypted;
+    var isProtected = encrypted || hasEffectiveProtectionTypes(mediaProtectionTypes) || hasEffectiveProtections(protections);
+
+    var normalizedAsset = Object.assign({}, asset, { protections: protections });
+    var normalizedMeta = Object.assign({}, meta, {
+      media: Object.assign({}, media, { protectionType: mediaProtectionTypes }),
+      asset: normalizedAsset
+    });
+
+    return Object.assign({}, nft, {
+      isProtected: isProtected,
+      metadata: normalizedMeta,
+      _rawAsset: normalizedAsset
+    });
+  }
+
+  function normalizeAssetCollection(collection) {
+    if (!collection || !Array.isArray(collection.data)) return collection;
+    return Object.assign({}, collection, {
+      data: collection.data.map(normalizeNftProtectionShape)
     });
   }
 
@@ -642,6 +720,7 @@ var ElacityAPI = (function () {
     var props = raw.properties || {};
     var pricing = raw.pricing || {};
     var asset = raw.asset || {};
+    var assetProtections = normalizeAssetProtections(asset);
     var creator = raw.creator || {};
     var chMeta = item._channelMeta || {};
 
@@ -649,7 +728,7 @@ var ElacityAPI = (function () {
     var channelImage = chMeta.image || chMeta.coverImage || '';
     var creatorAlias = creator.name || creator.alias || '';
 
-    return {
+    return normalizeNftProtectionShape({
       tokenId: item.token_id,
       contractAddress: item.channel_address,
       hexTokenID: item.token_id,
@@ -677,7 +756,7 @@ var ElacityAPI = (function () {
         media: {
           uri: media.uri || '',
           contentType: media.contentType || media.mimeType || item.mime_type || '',
-          protectionType: media.protectionType || '',
+          protectionType: media.protectionType || [],
           previewURL: media.previewURL || '',
           size: media.size || 0,
         },
@@ -686,7 +765,7 @@ var ElacityAPI = (function () {
           publisher: { address: item.creator_address || props.publisher || '' },
           ledger: props.ledger || item.channel_address,
           chainId: props.chainId || item.chain_id || 8453,
-          authority: props.authority || asset.authority || '',
+          authority: props.authority || (assetProtections[0] && assetProtections[0].authority) || asset.authority || '',
           labelType: props.labelType || '',
           distribution: props.distribution || '',
         },
@@ -712,7 +791,7 @@ var ElacityAPI = (function () {
       _catalogItem: true,
       _isLocal: !!item.is_local,
       _contentCid: item.content_cid || '',
-    };
+    });
   }
 
   function fetchAssetFromCatalog(contractAddress, tokenId) {
@@ -746,7 +825,7 @@ var ElacityAPI = (function () {
     return fetchAssetFromCatalog(contractAddress, tid).then(function (catalogNft) {
       if (catalogNft) return catalogNft;
       return gql(GET_ASSET_QUERY, { address: contractAddress, tokenId: tid })
-        .then(function (data) { return data.nft; });
+        .then(function (data) { return normalizeNftProtectionShape(data.nft); });
     });
   }
 
@@ -777,7 +856,7 @@ var ElacityAPI = (function () {
       FETCH_ACCESSIBLE_ASSETS_QUERY,
       { query: {}, filters: { offset: offset || 0, limit: limit || 20, sort: { createdAt: -1 } } },
       true
-    ).then(function (data) { return data.assets; });
+    ).then(function (data) { return normalizeAssetCollection(data.assets); });
   }
 
   function fetchAccessibleAssetsForAddress(address, offset, limit) {
@@ -843,7 +922,7 @@ var ElacityAPI = (function () {
         return catalogResult;
       }
       return gql(FETCH_ITEMS_QUERY, { query: args[0], filters: args[1] }, requiresAuth)
-        .then(function (data) { return data.assets; });
+        .then(function (data) { return normalizeAssetCollection(data.assets); });
     });
   }
 
@@ -952,7 +1031,7 @@ var ElacityAPI = (function () {
         return gql(FETCH_CHANNEL_ITEMS_QUERY, {
           query: { address: channelAddress },
           filters: { offset: offset || 0, limit: limit || 40, sort: { createdAt: -1 } }
-        }).then(function (data) { return data.assets; });
+        }).then(function (data) { return normalizeAssetCollection(data.assets); });
       });
   }
 

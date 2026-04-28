@@ -25,14 +25,14 @@ import { resolve as pathResolve } from 'path';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const ELACITY_SYSTEM_ID = 'bf8ef85d2c54475d8c1ee27db60332a2';
+const ELACITY_SYSTEM_ID = 'bf2c86c1d9ff4ab1b4be45ae4d99e1fe';
 
 const MEDIA_DECRYPT_ACTION_CID = 'QmSHMSxPogSsNki51fenDzsrkKB3eJfRMHXEPZKqPk6EAb';
 const MEDIA_ENCRYPT_ACTION_CID = 'QmdwzJvfgCRvNh9pQ63zroFozR9CfJdiweqTCkVMubD47U';
 
 import { getBaseRpcUrl } from '../../utils/rpc.js';
 
-const DEFAULT_AUTHORITY = process.env.DDRM_AUTHORITY || '0x09dBe796f40ECEffEAccf243c3d758C4c1d8D87D';
+const DEFAULT_AUTHORITY = process.env.DDRM_AUTHORITY;
 const DEFAULT_CHAIN_ID = parseInt(process.env.DDRM_CHAIN_ID || '8453', 10);
 // Env var override for PSSH-embedded RPC; falls back to shared pool
 const DEFAULT_RPC = process.env.DDRM_RPC || getBaseRpcUrl();
@@ -140,11 +140,11 @@ export function buildPSSHJson(outputDir: string, encryptResult: { ciphertext: st
 
   const protectionData: PSSHProtectionData = {
     protocolVersion: '2.0',
-    protectionType: 'cenc:web3-drm-v1',
+    protectionType: 'cenc:lit-aes-gcm-v3',
     variant: 'eth.web3.clearkey',
     ciphersuite: 'e8582013',
     data: {
-      authority: DEFAULT_AUTHORITY,
+      authority: DEFAULT_AUTHORITY!,
       chainId: DEFAULT_CHAIN_ID,
       rpc: DEFAULT_RPC,
       actionIpfsId: MEDIA_DECRYPT_ACTION_CID,
@@ -163,8 +163,8 @@ export function buildPSSHJson(outputDir: string, encryptResult: { ciphertext: st
 // ─── PSSH Box Injection ─────────────────────────────────────────────────────
 
 const ELACITY_SYSTEM_ID_BYTES = Buffer.from([
-  0xbf, 0x8e, 0xf8, 0x5d, 0x2c, 0x54, 0x47, 0x5d,
-  0x8c, 0x1e, 0xe2, 0x7d, 0xb6, 0x03, 0x32, 0xa2,
+  0xbf, 0x2c, 0x86, 0xc1, 0xd9, 0xff, 0x4a, 0xb1,
+  0xb4, 0xbe, 0x45, 0xae, 0x4d, 0x99, 0xe1, 0xfe,
 ]);
 
 function buildBinaryPSSHBox(kidHex: string, jsonPayload: string): Buffer {
@@ -200,7 +200,7 @@ function injectPSSHBox(
 ): Buffer {
   const psshJson = JSON.stringify({
     protocolVersion: '2.0',
-    protectionType: 'cenc:web3-drm-v1',
+    protectionType: 'cenc:lit-aes-gcm-v3',
     variant: 'eth.web3.clearkey',
     ciphersuite: 'e8582013',
     data: {
@@ -351,7 +351,7 @@ export async function packageDASH(
 
   const psshJson = JSON.stringify({
     protocolVersion: '2.0',
-    protectionType: 'cenc:web3-drm-v1',
+    protectionType: 'cenc:lit-aes-gcm-v3',
     variant: 'eth.web3.clearkey',
     ciphersuite: 'e8582013',
     data: {

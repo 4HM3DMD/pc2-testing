@@ -1179,6 +1179,7 @@
   function buildMetadataEnvelope(params) {
     var contentType = params.mimeType || 'application/octet-stream';
     var isPublic = params.accessMethod === 'free';
+    var isMediaFile = !!params.isMediaFile;
     var isResellable = params.accessMethod === 'buy_and_resell';
     var distributionLabel = params.accessMethod === 'buy_once' ? 'Buy Once'
       : params.accessMethod === 'free' ? 'Free' : 'Buy & Resell';
@@ -1186,9 +1187,22 @@
       : (params.category ? [params.category] : []);
     var tags = Array.isArray(params.tags) ? params.tags : [];
 
+    var protectionType = isMediaFile ? 'cenc:lit-aes-gcm-v3' : 'lit-aes-gcm-v3';
+    var protectionAlgorithm = isMediaFile ? 'aes-128' : 'aes-256-gcm';
+    var protections = isPublic ? null : [{
+      algorithm: protectionAlgorithm,
+      protectionType: protectionType,
+      dataToEncryptHash: params.dataToEncryptHash,
+      actionCid: params.actionCid || '',
+      authority: params.authority || CONTRACTS.AUTHORITY_GATEWAY,
+      chain: 'base',
+      chainId: BASE_CHAIN_ID,
+      rpc: 'https://mainnet.base.org',
+    }];
+
     return {
-      schema: 'https://raw.githubusercontent.com/Elacity/wiki/main/metadata/schemas/asset/v1.0/schema.json',
-      version: '1.0',
+      schema: 'https://raw.githubusercontent.com/Elacity/wiki/main/metadata/schemas/asset/v1.1/schema.json',
+      version: '1.1',
       name: params.title,
       description: params.description,
       image: params.image || '',
@@ -1201,7 +1215,7 @@
         }),
         object: 'self://content.json',
         ...(!isPublic && {
-          protectionType: ['lit-aes-gcm-v1'],
+          protectionType: [protectionType],
         }),
         size: params.size,
       },
@@ -1210,14 +1224,9 @@
         mimeType: contentType,
         size: params.size,
         encrypted: !isPublic,
-        algorithm: isPublic ? 'none' : 'aes-256-gcm',
-        protectionType: isPublic ? 'none' : 'lit-aes-gcm-v1',
-        dataToEncryptHash: params.dataToEncryptHash,
-        actionCid: isPublic ? '' : (params.actionCid || ''),
-        authority: isPublic ? '' : (params.authority || CONTRACTS.AUTHORITY_GATEWAY),
-        chain: 'base',
-        chainId: BASE_CHAIN_ID,
-        rpc: 'https://mainnet.base.org',
+        ...(!isPublic && {
+          protections: protections,
+        }),
       },
       properties: {
         chainId: BASE_CHAIN_ID,
@@ -1233,7 +1242,7 @@
       },
       attributes: [
         ...(params.attributes || []),
-        { trait_type: 'Content-Type', value: getContentTypeCode(params.mimeType) },
+        { trait_type: 'Content-Type', value: contentType },
         { trait_type: 'Size', value: params.size },
         { trait_type: 'Encrypted', value: !isPublic },
         ...(!isPublic ? [
@@ -1241,7 +1250,7 @@
           { trait_type: 'Supply', value: params.copies || 10000 },
           { trait_type: 'Resell-Allowed', value: isResellable ? true : false },
           { trait_type: 'RRL-Percent', value: (isResellable ? (params.resellerCut || 900) : 0) / 10 },
-          { trait_type: 'Algorithm', value: params.algorithm || 'aes-256-gcm' }
+          { trait_type: 'Algorithm', value: protectionAlgorithm }
         ] : []),
         { trait_type: 'Adult', value: !!params.isAdult },
         { trait_type: 'Licensing', value: params.licensing },
@@ -1252,6 +1261,10 @@
 
   function buildContentJson(params) {
     var contentType = params.mimeType || 'application/octet-stream';
+    var protectionTypes = Array.isArray(params.protectionTypes)
+      ? params.protectionTypes.filter(function (t) { return typeof t === 'string' && t.length > 0; })
+      : [];
+    var isEncrypted = !!params.isEncrypted;
     return {
       schema: 'https://raw.githubusercontent.com/Elacity/wiki/main/metadata/schemas/content/v1.0/schema.json',
       version: '1.0',
@@ -1262,17 +1275,17 @@
       properties: {
         // keep this here for backward compatibility
         size: params.size,
-        protectionType: [
-          params.protectionType || 'lit-aes-gcm-v1'
-        ],
+        ...(protectionTypes.length > 0 && {
+          protectionType: protectionTypes,
+        }),
         dataToEncryptHash: params.dataToEncryptHash,
         kid: params.kid || '',
       },
       attributes: [
         { trait_type: 'Content-Type', value: getContentTypeCode(params.mimeType) },
         { trait_type: 'Size', value: params.size },
-        { trait_type: 'Encrypted', value: true },
-        { trait_type: 'Algorithm', value: params.algorithm || 'aes-256-gcm' },
+        { trait_type: 'Encrypted', value: isEncrypted },
+        { trait_type: 'Algorithm', value: params.algorithm || (isEncrypted ? 'aes-256-gcm' : 'none') },
       ]
     };
   }
@@ -1298,7 +1311,7 @@
         },
       },
       attributes: [
-        { trait_type: 'Content-Type', value: getContentTypeCode(params.mimeType) },
+        { trait_type: 'Content-Type', value: params.mimeType },
         { trait_type: 'OpType', value: isPublic ? 0 : (isResellable ? 2 : 1) },
         { trait_type: 'Supply', value: params.copies || 10000 },
         { trait_type: 'Resell-Allowed', value: isResellable ? true : false },
@@ -3235,26 +3248,40 @@
         channel: channel,
         authority: authorityAddress,
         image: imageUri,
+        isMediaFile: isMediaFile,
       };
 
       var envelope = buildMetadataEnvelope(metaParams);
 
-      if (encryptResult.litCiphertext) {
-        envelope.asset.litCiphertext = encryptResult.litCiphertext;
-        envelope.asset.iv = encryptResult.iv;
-        envelope.asset.litBackend = encryptResult.litBackend || 'chipotle';
+      if (encryptResult.litCiphertext && envelope.asset.protections && envelope.asset.protections[0]) {
+        envelope.asset.protections[0].litCiphertext = encryptResult.litCiphertext;
+        envelope.asset.protections[0].iv = encryptResult.iv || '';
+        envelope.asset.protections[0].litBackend = encryptResult.litBackend || 'chipotle';
       }
 
       if (isMediaFile && mediaEncodeResult) {
         if (isFreeContent) {
-          envelope.asset.protectionType = 'none';
+          delete envelope.media.protectionType;
+          delete envelope.asset.protections;
           envelope.asset.cleartext = true;
           envelope.asset.directPlayback = true;
         } else {
-          envelope.asset.protectionType = 'cenc:web3-drm-v1';
+          envelope.media.protectionType = ['cenc:lit-aes-gcm-v3'];
+          envelope.asset.protections = [{
+            algorithm: 'aes-128',
+            protectionType: 'cenc:lit-aes-gcm-v3',
+            dataToEncryptHash: encryptResult.dataToEncryptHash || '',
+            actionCid: encryptResult.actionCid || '',
+            authority: authorityAddress,
+            chain: 'base',
+            chainId: BASE_CHAIN_ID,
+            rpc: 'https://mainnet.base.org',
+            litCiphertext: encryptResult.litCiphertext || '',
+            iv: encryptResult.iv || '',
+            litBackend: encryptResult.litBackend || 'chipotle',
+          }];
           envelope.asset.mpdUri = mediaEncodeResult.mpdUri;
           envelope.asset.kid = mediaEncodeResult.kid;
-          envelope.asset.litBackend = 'chipotle';
         }
         envelope.asset.mediaType = state.resolvedMime.startsWith('video/') ? 'video' : 'audio';
         envelope.media.previewURL = mediaEncodeResult.previewURL || undefined;
@@ -3264,9 +3291,9 @@
       }
 
       // Content integrity proof — buyers (and AI agents) can verify post-purchase
-      if (originalContentHash) {
-        envelope.asset.contentHash = originalContentHash;
-        envelope.asset.contentHashAlgorithm = 'SHA-256';
+      if (originalContentHash && envelope.asset.protections && envelope.asset.protections[0]) {
+        envelope.asset.protections[0].contentHash = originalContentHash;
+        envelope.asset.protections[0].contentHashAlgorithm = 'SHA-256';
       }
 
       // Content stats for buyer trust signals (machine-readable by AI agents)
@@ -3305,8 +3332,9 @@
         size: state.selectedFile.size,
         dataToEncryptHash: encryptResult.dataToEncryptHash,
         kid: kid,
-        protectionType: envelope.asset.protectionType,
-        algorithm: envelope.asset.algorithm,
+        protectionTypes: (envelope.media && Array.isArray(envelope.media.protectionType)) ? envelope.media.protectionType : [],
+        algorithm: (envelope.asset.protections && envelope.asset.protections[0] && envelope.asset.protections[0].algorithm) || (isFreeContent ? 'none' : 'aes-256-gcm'),
+        isEncrypted: !isFreeContent,
       });
 
       var contractJson = buildContractJson({
