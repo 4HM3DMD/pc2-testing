@@ -1182,13 +1182,13 @@
     var isResellable = params.accessMethod === 'buy_and_resell';
     var distributionLabel = params.accessMethod === 'buy_once' ? 'Buy Once'
       : params.accessMethod === 'free' ? 'Free' : 'Buy & Resell';
-    var currency = params.currency || CURRENCIES[0];
     var categories = Array.isArray(params.categories) ? params.categories
       : (params.category ? [params.category] : []);
     var tags = Array.isArray(params.tags) ? params.tags : [];
 
     return {
-      schema: 'elacity-asset-envelope-v1',
+      schema: 'https://raw.githubusercontent.com/Elacity/wiki/main/metadata/schemas/asset/v1.0/schema.json',
+      version: '1.0',
       name: params.title,
       description: params.description,
       image: params.image || '',
@@ -1196,7 +1196,9 @@
       media: {
         uri: 'ipfs://' + params.assetCid,
         contentType: contentType,
-        mimeType: contentType,
+        ...(params.mimeType && {
+          mimeType: params.mimeType,
+        }),
         object: 'self://content.json',
         ...(!isPublic && {
           protectionType: ['lit-aes-gcm-v1'],
@@ -1217,15 +1219,6 @@
         chainId: BASE_CHAIN_ID,
         rpc: 'https://mainnet.base.org',
       },
-      pricing: {
-        currency: isPublic ? '' : currency.symbol,
-        currencyAddress: isPublic ? '' : currency.address,
-        currencyDecimals: isPublic ? 0 : currency.decimals,
-        price: isPublic ? 0 : params.price,
-        accessMethod: params.accessMethod || 'buy_and_resell',
-        copies: isPublic ? undefined : (params.copies || 10000),
-        resellerCut: isResellable ? (params.resellerCut || 900) : undefined,
-      },
       properties: {
         chainId: BASE_CHAIN_ID,
         ledger: params.channel || DEFAULT_CHANNEL,
@@ -1236,23 +1229,32 @@
         distribution: distributionLabel,
         tags: tags,
         categories: categories,
+        legal: params.legalAttestation || null,
       },
-      creator: {
-        address: params.creatorAddress,
-        channel: params.channel || DEFAULT_CHANNEL,
-      },
-      attributes: params.attributes || [],
-      adult: !!params.isAdult,
-      licensing: params.licensing || undefined,
-      legal: params.legalAttestation || null,
+      attributes: [
+        ...(params.attributes || []),
+        { trait_type: 'Content-Type', value: getContentTypeCode(params.mimeType) },
+        { trait_type: 'Size', value: params.size },
+        { trait_type: 'Encrypted', value: !isPublic },
+        ...(!isPublic ? [
+          { trait_type: 'OpType', value: isPublic ? 0 : (isResellable ? 2 : 1) },
+          { trait_type: 'Supply', value: params.copies || 10000 },
+          { trait_type: 'Resell-Allowed', value: isResellable ? true : false },
+          { trait_type: 'RRL-Percent', value: (isResellable ? (params.resellerCut || 900) : 0) / 10 },
+          { trait_type: 'Algorithm', value: params.algorithm || 'aes-256-gcm' }
+        ] : []),
+        { trait_type: 'Adult', value: !!params.isAdult },
+        { trait_type: 'Licensing', value: params.licensing },
+      ],
       createdAt: new Date().toISOString(),
-      version: '1.0.0',
     };
   }
 
   function buildContentJson(params) {
     var contentType = params.mimeType || 'application/octet-stream';
     return {
+      schema: 'https://raw.githubusercontent.com/Elacity/wiki/main/metadata/schemas/content/v1.0/schema.json',
+      version: '1.0',
       title: params.title,
       type: contentType,
       description: 'Details about the content, technical informations, etc.',
@@ -1280,10 +1282,11 @@
     var isResellable = params.accessMethod === 'buy_and_resell';
     var currency = params.currency || CURRENCIES[0];
     return {
+      schema: 'https://raw.githubusercontent.com/Elacity/wiki/main/metadata/schemas/mco/v1.0/schema.json',
+      version: '1.0',
       title: `Contract - ${params.title}`,
       type: 'MCO',
       description: 'Media Contract Ontology (MCO) formatted in JSON',
-      version: '1.0',
       properties: {
         chainId: BASE_CHAIN_ID,
         channel: params.channel || DEFAULT_CHANNEL,
@@ -1312,6 +1315,8 @@
 
     if (!isPublic) {
       files['0000000000000000000000000000000000000000000000000000000000000001.json'] = {
+        schema: 'https://raw.githubusercontent.com/Elacity/wiki/main/metadata/schemas/access-token/v1.0/schema.json',
+        version: '1.0',
         type: 'AccessToken',
         name: 'Access Token',
         description: 'Allow owner to access the content',
@@ -1323,6 +1328,8 @@
       };
 
       files['0000000000000000000000000000000000000000000000000000000000000002.json'] = {
+        schema: 'https://raw.githubusercontent.com/Elacity/wiki/main/metadata/schemas/royalty/v1.0/schema.json',
+        version: '1.0',
         type: 'RoyaltyShare',
         name: 'Royalty Share',
         decimals: 1,
@@ -1336,6 +1343,8 @@
 
       if (isResellable) {
         files['0000000000000000000000000000000000000000000000000000000000000003.json'] = {
+          schema: 'https://raw.githubusercontent.com/Elacity/wiki/main/metadata/schemas/distribution-right/v1.0/schema.json',
+          version: '1.0',
           type: 'DistributionRight',
           name: 'Distribution Right',
           description: 'Allow owner to distribute the content via trade',
@@ -1651,6 +1660,8 @@
     var channelDesc = description || 'PC2 digital assets channel';
     var channelMeta = {};
     channelMeta['0000000000000000000000000000000000000000000000000000000000000000.json'] = {
+      schema: 'https://raw.githubusercontent.com/Elacity/wiki/main/metadata/schemas/channel/v1.0/schema.json',
+      version: '1.0',
       name: channelName,
       description: channelDesc,
       properties: { creator: creatorAddr },
@@ -1660,6 +1671,8 @@
       ],
     };
     channelMeta['0000000000000000000000000000000000000000000000000000000000000002.json'] = {
+      schema: 'https://raw.githubusercontent.com/Elacity/wiki/main/metadata/schemas/royalty/v1.0/schema.json',
+      version: '1.0',
       name: 'Royalty Share - ' + channelName,
       description: 'Shares for royalty distribution over all subscriptions to the channel \'' + channelName + '\'',
       properties: { decimals: 1, creator: creatorAddr },
@@ -1673,9 +1686,10 @@
       var shifted = BigInt(planIdx) << BigInt(112);
       var tokenId = (r | shifted).toString(16).padStart(64, '0');
       channelMeta[tokenId + '.json'] = {
+        schema: 'https://raw.githubusercontent.com/Elacity/wiki/main/metadata/schemas/plan/v1.0/schema.json',
+        version: '1.0',
         name: plan.label + ' - ' + channelName,
         description: plan.description || plan.label + ' plan',
-        image: '',
         attributes: [
           { trait_type: 'Duration', value: plan.duration.value + ' ' + plan.duration.unit },
         ],
@@ -1700,9 +1714,6 @@
     var metaData = await metaResp.json();
     var metaCid = metaData.cid;
     console.log('[Creator] Channel metadata CID:', metaCid);
-
-    var creatorPer1000 = Math.round((100 - ELACITY_ROYALTY_PERCENT) * 10);
-    var elacityPer1000 = Math.round(ELACITY_ROYALTY_PERCENT * 10);
 
     var channelPlans = getChannelPlans();
     var channelTokenAccess = getTokenAccessThresholds();
