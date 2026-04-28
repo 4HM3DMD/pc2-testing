@@ -379,6 +379,39 @@
     return ct.indexOf('video') === -1 && ct.indexOf('audio') === -1;
   }
 
+  function normalizeProtectionTypes(value) {
+    if (Array.isArray(value)) {
+      return value
+        .map(function (v) { return typeof v === 'string' ? v.trim() : ''; })
+        .filter(function (v) { return v.length > 0; });
+    }
+    if (typeof value === 'string' && value.trim()) return [value.trim()];
+    return [];
+  }
+
+  function firstProtectionEntry(asset) {
+    if (asset && Array.isArray(asset.protections) && asset.protections.length > 0) {
+      return asset.protections[0] || {};
+    }
+    return {};
+  }
+
+  function resolveAssetProtectionField(asset, fieldName, fallbackValue) {
+    var fromProtection = firstProtectionEntry(asset)[fieldName];
+    if (fromProtection !== undefined && fromProtection !== null && fromProtection !== '') return fromProtection;
+    if (asset && asset[fieldName] !== undefined && asset[fieldName] !== null && asset[fieldName] !== '') return asset[fieldName];
+    return fallbackValue;
+  }
+
+  function isProtectedByMetadata(asset, media) {
+    var mediaProtectionTypes = normalizeProtectionTypes(media && media.protectionType);
+    var hasMediaProtection = mediaProtectionTypes.some(function (t) { return t.toLowerCase() !== 'none'; });
+    var hasAssetProtection = Array.isArray(asset && asset.protections) && asset.protections.some(function (p) {
+      return normalizeProtectionTypes(p && p.protectionType).some(function (t) { return t.toLowerCase() !== 'none'; });
+    });
+    return !!(asset && asset.encrypted) || hasMediaProtection || hasAssetProtection;
+  }
+
   var IPFS_GATEWAY = 'https://ipfs.ela.city/ipfs/';
   var IPFS_LOCAL_GATEWAY = (window.puter_api_origin || window.location.origin) + '/ipfs/';
 
@@ -1446,12 +1479,12 @@
 
     var kid = nft.kid || rawAsset.kid || (nft.operative && nft.operative.kid) || '';
     var litCiphertext = rawAsset.litCiphertext || rawAsset.ciphertext || '';
-    var dataToEncryptHash = rawAsset.dataToEncryptHash || '';
+    var dataToEncryptHash = resolveAssetProtectionField(rawAsset, 'dataToEncryptHash', '');
     var iv = rawAsset.iv || '';
     var encryptedDataCid = (rawAsset.uri || rawAsset.cid || '').replace('ipfs://', '');
     var buyerAddress = Wallet.isConnected() ? (getBuyerAddressForAsset(nft) || Wallet.getAddress()) : '';
-    var authority = rawAsset.authority || '';
-    var chainId = rawAsset.chainId || 8453;
+    var authority = resolveAssetProtectionField(rawAsset, 'authority', '');
+    var chainId = resolveAssetProtectionField(rawAsset, 'chainId', 8453);
 
     var skillId = (meta.name || nft.name || 'skill').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 
@@ -3560,7 +3593,7 @@
       title: title,
       contractAddress: nft.contractAddress || (nft.channel && nft.channel.address) || '',
       tokenId: tokenId,
-      authority: (asset.authority || props.authority || ''),
+      authority: (resolveAssetProtectionField(asset, 'authority', '') || props.authority || ''),
       operative: (nft.operative && nft.operative.address) || '',
       ledger: props.ledger || nft.contractAddress || '',
       thumbnail: thumbnailUrl,
@@ -3569,7 +3602,7 @@
     };
 
     if (nonMedia) {
-      var dataToEncryptHash = asset.dataToEncryptHash || '';
+      var dataToEncryptHash = resolveAssetProtectionField(asset, 'dataToEncryptHash', '');
       var cleanHash = dataToEncryptHash.startsWith('0x') ? dataToEncryptHash.slice(2) : dataToEncryptHash;
       descriptor.encryptedDataCid = cid;
       descriptor.mimeType = asset.mimeType || media.contentType || media.mimeType || 'application/octet-stream';
@@ -3577,7 +3610,7 @@
       descriptor.kid = cleanHash ? '0x' + cleanHash.slice(0, 32).padEnd(32, '0') : '';
       descriptor.litCiphertext = asset.litCiphertext || '';
       descriptor.iv = asset.iv || '';
-      descriptor.actionCid = asset.actionCid || '';
+      descriptor.actionCid = resolveAssetProtectionField(asset, 'actionCid', '');
     } else {
       var localGateway = window.location.origin + '/ipfs/';
       descriptor.cid = cid;
@@ -3585,7 +3618,7 @@
       descriptor.fallbackGateway = 'https://ipfs.ela.city/ipfs/';
       descriptor.mediaType = media.mimeType || media.contentType || 'video';
       descriptor.duration = media.duration || 0;
-      descriptor.isProtected = !!(nft.isProtected || (media.protectionType && media.protectionType !== 'none'));
+      descriptor.isProtected = !!(nft.isProtected || isProtectedByMetadata(asset, media));
     }
 
     return descriptor;
@@ -3775,7 +3808,7 @@
     var cid = asset.cid || asset.uri || media.uri || enc.encryptedDataCid;
     if (cid) cid = cid.replace('ipfs://', '');
 
-    var dataToEncryptHash = asset.dataToEncryptHash || enc.dataToEncryptHash || enc.hash || '';
+    var dataToEncryptHash = resolveAssetProtectionField(asset, 'dataToEncryptHash', '') || enc.dataToEncryptHash || enc.hash || '';
     var cleanHash = dataToEncryptHash.startsWith('0x') ? dataToEncryptHash.slice(2) : dataToEncryptHash;
     var kid = cleanHash ? ('0x' + cleanHash.slice(0, 32).padEnd(32, '0')) : '';
 
@@ -3785,8 +3818,8 @@
 
     var litCiphertext = asset.litCiphertext || enc.litCiphertext || enc.ciphertext || '';
     var iv = asset.iv || enc.iv || '';
-    var actionCid = asset.actionCid || enc.actionCid || enc.actionIpfsId || '';
-    var authority = asset.authority || enc.authority || props.authority || '';
+    var actionCid = resolveAssetProtectionField(asset, 'actionCid', '') || enc.actionCid || enc.actionIpfsId || '';
+    var authority = resolveAssetProtectionField(asset, 'authority', '') || enc.authority || props.authority || '';
     var title = meta.name || nft.name || 'Untitled';
 
     if (!cid || !kid || !litCiphertext) {
@@ -3852,7 +3885,7 @@
   }
 
   function ensureRawMetadata(nft) {
-    if (nft._rawAsset && nft._rawAsset.dataToEncryptHash) {
+    if (nft._rawAsset && (nft._rawAsset.dataToEncryptHash || (Array.isArray(nft._rawAsset.protections) && nft._rawAsset.protections.length > 0))) {
       return Promise.resolve();
     }
     var tokenURI = nft.tokenURI || '';
