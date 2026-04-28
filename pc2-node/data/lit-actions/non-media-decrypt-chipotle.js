@@ -295,6 +295,27 @@ async function main(params) {
     return deny('decrypt_failed', { detail: String((e && e.message) || e) });
   }
 
+  // ── SEC Wave 8 (C-02): kid ↔ ciphertext binding ─────────────────
+  // Without this check, an attacker who owns kid-A can decrypt any
+  // other asset by submitting kid-B's ciphertext in a request signed
+  // for kid-A: hasAccessByContentId(kid-A) passes, Lit.Actions.Decrypt
+  // releases kid-B's CEK, and the server happily AES-decrypts kid-B's
+  // bytes. We close this by enforcing the canonical invariant:
+  //    kid = first 16 bytes of sha256(cekBase64)
+  // This formula is mirrored by dashPackager.ts (contractKid) and by
+  // the creator + market apps (cleanHash.slice(0, 32)). Every legit
+  // asset satisfies it; swapped-ciphertext attacks do not.
+  const cekBytes = new TextEncoder().encode(cek);
+  const digestBuf = await crypto.subtle.digest('SHA-256', cekBytes);
+  const digestBytes = new Uint8Array(digestBuf);
+  let derivedKid = '0x';
+  for (let i = 0; i < 16; i++) {
+    derivedKid += digestBytes[i].toString(16).padStart(2, '0');
+  }
+  if (derivedKid.toLowerCase() !== normalizedKid.toLowerCase()) {
+    return deny('kid_binding_mismatch');
+  }
+
   // The server keys its CEK cache by (kid, buyerAddress); we return
   // the authorised buyer so storage.ts can attribute the cache entry
   // to the actually-owning address (which may be the smart account,

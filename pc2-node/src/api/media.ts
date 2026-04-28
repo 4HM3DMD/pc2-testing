@@ -264,7 +264,7 @@ router.post('/init', async (req: AuthenticatedRequest, res: Response) => {
       preferredType = isSmartAccountUser ? 'cenc:lit-drm-sa-v1' : 'cenc:lit-drm-v1';
     }
     const pssh = psshEntries.find(p => p.protectionType === preferredType)
-              || psshEntries[0];
+      || psshEntries[0];
 
     logger.info(`[media/init] Using PSSH: type=${pssh.protectionType}, action=${pssh.data?.actionIpfsId}, isSmartAccount=${isSmartAccountUser}`);
 
@@ -1006,7 +1006,7 @@ async function decryptSegmentViaWASM(
   const mdatStr = 'mdat';
   let mdatPos = -1;
   for (let i = 0; i < Math.min(encryptedSegment.length - 4, 64000); i++) {
-    if (encryptedSegment[i] === 0x6d && encryptedSegment[i+1] === 0x64 && encryptedSegment[i+2] === 0x61 && encryptedSegment[i+3] === 0x74) {
+    if (encryptedSegment[i] === 0x6d && encryptedSegment[i + 1] === 0x64 && encryptedSegment[i + 2] === 0x61 && encryptedSegment[i + 3] === 0x74) {
       mdatPos = i + 4;
       break;
     }
@@ -1137,7 +1137,15 @@ async function fetchLitActionCode(cid: string): Promise<string> {
     try {
       const resp = await fetch(url, { signal: AbortSignal.timeout(10000) });
       if (resp.ok) {
-        const code = await resp.text();
+        const raw = await resp.text();
+        // Chipotle's allowlist is keyed on the byte-exact hash of the
+        // submitted `code` field. The runtime-internal CID we registered
+        // corresponds to the trailing-whitespace-stripped form (captured
+        // from a shell-based 403 probe during key rotation). Keeping the
+        // raw IPFS bytes here produces a different hash and triggers
+        // HTTP 403. See chipotle-client.ts getNonMediaActionCode() for
+        // the same normalisation on locally-loaded actions.
+        const code = raw.replace(/\s+$/, '');
         if (code && code.length > 10) {
           litActionCodeCache.set(cid, code);
           logger.info(`[media/CEK] Fetched Lit Action code from ${url.includes('localhost') ? 'local' : 'remote'} IPFS (${code.length} chars)`);
@@ -1293,7 +1301,7 @@ async function unwrapECDHEnvelope(
 
   // Read encrypted CEK
   const encCekLen = (envelope[offset] << 24) | (envelope[offset + 1] << 16) |
-                    (envelope[offset + 2] << 8) | envelope[offset + 3];
+    (envelope[offset + 2] << 8) | envelope[offset + 3];
   offset += 4;
   const encryptedCek = envelope.subarray(offset, offset + encCekLen);
 
@@ -1342,7 +1350,7 @@ async function unwrapECDHEnvelope(
 
   // Verify structure: read keyCount at bodyOffset
   const keyCount = (decrypted[bodyOffset] << 24) | (decrypted[bodyOffset + 1] << 16) |
-                   (decrypted[bodyOffset + 2] << 8) | decrypted[bodyOffset + 3];
+    (decrypted[bodyOffset + 2] << 8) | decrypted[bodyOffset + 3];
   const cekHash = crypto.createHash('sha256').update(cekBytes).digest('hex').slice(0, 12);
   logger.info(`[media/CEK] Unwrapped license: metaSize=${metaSize}, keyCount=${keyCount}, cekLen=${cekBytes.length}, cekSha=${cekHash}`);
   const result = Buffer.from(cekBytes).toString('base64');
@@ -1585,10 +1593,10 @@ async function runEncodePipeline(
           ...(isAudio
             ? ['-c:a', 'aac', '-b:a', '96k', '-vn']
             : [
-                '-c:v', 'libx264', '-preset', 'fast', '-crf', '28',
-                '-vf', 'scale=min(640\\,iw):-2',
-                '-c:a', 'aac', '-b:a', '96k',
-              ]),
+              '-c:v', 'libx264', '-preset', 'fast', '-crf', '28',
+              '-vf', 'scale=min(640\\,iw):-2',
+              '-c:a', 'aac', '-b:a', '96k',
+            ]),
           '-movflags', '+faststart',
           '-y', previewPath,
         ];

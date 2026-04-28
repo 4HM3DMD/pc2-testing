@@ -245,6 +245,10 @@ async function main() {
         }
         
         // Intercept fetch calls to redirect api.puter.com to local server
+        // Also rewrite mainnet.base.org -> /api/rpc/base so WalletService's
+        // public RPC fallback list (src/gui/src/services/WalletService.js
+        // lines ~89 and ~2033) goes through PC2's cached, multi-fallback
+        // proxy instead of hammering the rate-limited public Base endpoint.
         const originalFetch = window.fetch;
         window.fetch = function(...args) {
             const url = args[0];
@@ -269,6 +273,11 @@ async function main() {
                     
                     args[0] = localUrl;
                     args[1] = options;
+                } else if (url.includes('mainnet.base.org')) {
+                    const baseProxyUrl = window.location.origin + '/api/rpc/base';
+                    const localUrl = url.replace(/https?:\\/\\/mainnet\\.base\\.org(?:\\:\\d+)?/gi, baseProxyUrl);
+                    console.log('[PC2]: Intercepting Base RPC fetch:', url, '->', localUrl);
+                    args[0] = localUrl;
                 }
             }
             return originalFetch.apply(this, args);
@@ -290,6 +299,13 @@ async function main() {
                         .replace(/https?:\\/\\/api\\.puter\\.com/g, localOrigin)
                         .replace(/https?:\\/\\/puter\\.com/g, localOrigin);
                     console.log('[PC2]: Intercepting XHR:', url, '->', localUrl);
+                    url = localUrl;
+                    this._interceptedUrl = localUrl;
+                    this._url = localUrl;
+                } else if (url.includes('mainnet.base.org')) {
+                    const baseProxyUrl = window.location.origin + '/api/rpc/base';
+                    const localUrl = url.replace(/https?:\\/\\/mainnet\\.base\\.org(?:\\:\\d+)?/gi, baseProxyUrl);
+                    console.log('[PC2]: Intercepting Base RPC XHR:', url, '->', localUrl);
                     url = localUrl;
                     this._interceptedUrl = localUrl;
                     this._url = localUrl;

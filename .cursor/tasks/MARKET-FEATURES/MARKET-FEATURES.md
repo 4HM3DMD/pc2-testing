@@ -152,6 +152,33 @@ See full audit: `.cursor/tasks/MARKET-FEATURES/MARKET-UI-AUDIT-APRIL-2026.md`
 - Token-gated access configuration (`configureTokenOwnershipAccess`)
 - SA confirmation via log polling (match Creator app pattern)
 
+## Pending Manual Test Matrix (V1.2 pre-release)
+
+Added 2026-04-28 after Buy-button flow was verified end-to-end on a V3 asset
+(mint → catalog surface → different-wallet open → Buy → download → playback).
+The following sibling flows still need a hands-on pass from a second wallet
+before v1.2 sign-off:
+
+- [ ] **Resell Access Tokens** — `AuthorityGateway.sellAccess()` as a secondary
+      owner (buy, then resell at different price, cancel, edit)
+- [ ] **Offers** — create / accept / cancel offers via `TradeGateway` +
+      `AuthorityGateway` (both access tokens and royalty shares)
+- [ ] **Royalty Share trading** — `listRoyaltyShares`, `buyRoyaltyShares`,
+      `cancelRoyaltyListing`, `transferRoyaltyShares`
+- [ ] **Withdraw earnings** — `withdrawRewards` / `batchWithdrawRewards` for
+      access sales, royalty rewards, and channel revenue
+- [ ] **Channel subscriptions** — subscribe, unsubscribe, plan switch, and
+      `getPlans()`-driven pricing (see Irzhy's 2026-04-28 guidance on
+      `channel.tokenURI(tokenId)` for plan metadata)
+- [ ] **Cancel listing** — `withdrawListing` as seller (now uses correct
+      operative-internal tokenId = 1 after Buy-button fix)
+- [ ] **Free asset access** — opType = 0 assets should grant access without
+      price/Buy surface
+
+Each row should be validated on (a) a different-wallet viewer, (b) the
+original creator wallet, and (c) an SA-wrapped wallet. Log outcomes back into
+this section as rows are cleared.
+
 ## Files Modified
 
 ### Elacity Market (Phase 1-5)

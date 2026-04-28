@@ -277,6 +277,17 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
     'https://rpc.glidefinance.io',
   ];
 
+  // Base mainnet RPC fallback list.
+  // Used by `/api/rpc/base` to shield the Particle iframe's `eth_getCode`
+  // smart-account-deployment probe from the public `mainnet.base.org` rate
+  // limiter (429s during rapid wallet re-init). Primary + two community
+  // fallbacks; the handler tries them in order on error.
+  const BASE_RPC_URLS = [
+    'https://mainnet.base.org',
+    'https://base.llamarpc.com',
+    'https://base-rpc.publicnode.com',
+  ];
+
   // Per-method cache TTLs (milliseconds). Methods not listed are not cached.
   const RPC_CACHE_TTLS: Record<string, number> = {
     'eth_chainId': 3600000,        // 1 hour (never changes)
@@ -291,21 +302,23 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
   const rpcCache = new Map<string, { data: any; expires: number }>();
   let highestBlockSeen = 0;
 
-  function getRpcCacheKey(method: string, params: any[]): string {
-    return `${method}:${JSON.stringify(params)}`;
+  // `chainKey` namespaces the cache so ESC (`eth_chainId` = 0x14) and Base
+  // (`eth_chainId` = 0x2105) don't collide on identical (method, params).
+  function getRpcCacheKey(chainKey: string, method: string, params: any[]): string {
+    return `${chainKey}:${method}:${JSON.stringify(params)}`;
   }
 
-  function getCachedRpcResponse(method: string, params: any[]): any | null {
+  function getCachedRpcResponse(chainKey: string, method: string, params: any[]): any | null {
     const ttl = RPC_CACHE_TTLS[method];
     if (!ttl) return null;
-    const key = getRpcCacheKey(method, params);
+    const key = getRpcCacheKey(chainKey, method, params);
     const entry = rpcCache.get(key);
     if (entry && Date.now() < entry.expires) return entry.data;
     if (entry) rpcCache.delete(key);
     return null;
   }
 
-  function setCachedRpcResponse(method: string, params: any[], data: any): void {
+  function setCachedRpcResponse(chainKey: string, method: string, params: any[], data: any): void {
     const ttl = RPC_CACHE_TTLS[method];
     if (!ttl) return;
 
@@ -315,7 +328,19 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
       highestBlockSeen = blockNum;
     }
 
-    const key = getRpcCacheKey(method, params);
+    // Don't cache `eth_getCode` "contract not deployed" replies — this is a
+    // transient state that flips the moment the user deploys, and a stale
+    // `0x` would cause the Particle iframe to re-attempt deployment after a
+    // successful deploy (wasted UserOp). `0x` / `"0x"` both observed in the
+    // wild depending on RPC provider.
+    if (method === 'eth_getCode') {
+      const result = data?.result;
+      if (typeof result === 'string' && (result === '0x' || result === '0x0')) {
+        return;
+      }
+    }
+
+    const key = getRpcCacheKey(chainKey, method, params);
     rpcCache.set(key, { data, expires: Date.now() + ttl });
     if (rpcCache.size > 500) {
       const now = Date.now();
@@ -325,13 +350,19 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
     }
   }
 
-  app.post('/api/rpc/esc', async (req: Request, res: Response) => {
+  // Shared JSON-RPC proxy handler: tries `rpcUrls` in order, caches successful
+  // responses under `chainKey`, returns 502 if every upstream fails.
+  async function handleJsonRpcProxy(
+    req: Request,
+    res: Response,
+    chainKey: string,
+    rpcUrls: string[],
+  ): Promise<void> {
     const rpcReq = req.body;
     const method = rpcReq?.method;
     const params = rpcReq?.params ?? [];
 
-    // Check cache first
-    const cached = getCachedRpcResponse(method, params);
+    const cached = getCachedRpcResponse(chainKey, method, params);
     if (cached) {
       res.json({ ...cached, id: rpcReq?.id ?? null });
       return;
@@ -340,7 +371,7 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
     const body = JSON.stringify(rpcReq);
     let lastError: string | null = null;
 
-    for (const rpcUrl of ESC_RPC_URLS) {
+    for (const rpcUrl of rpcUrls) {
       try {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 8000);
@@ -361,9 +392,8 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
 
         const data = await upstream.json();
 
-        // Cache successful responses
         if (data && !data.error) {
-          setCachedRpcResponse(method, params, data);
+          setCachedRpcResponse(chainKey, method, params, data);
         }
 
         res.json(data);
@@ -376,9 +406,18 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
     res.status(502).json({
       jsonrpc: '2.0',
       id: rpcReq?.id ?? null,
-      error: { code: -32603, message: `All ESC RPCs failed: ${lastError}` },
+      error: { code: -32603, message: `All ${chainKey.toUpperCase()} RPCs failed: ${lastError}` },
     });
-  });
+  }
+
+  app.post('/api/rpc/esc', (req, res) => handleJsonRpcProxy(req, res, 'esc', ESC_RPC_URLS));
+
+  // Base mainnet JSON-RPC proxy.
+  // Exists to silence `mainnet.base.org` 429s from the Particle iframe's
+  // smart-account deployment probe (see `packages/particle-auth/.../ParticleNetworkContext.tsx`
+  // lines ~814, ~988). Rewritten-to transparently by the interceptor script
+  // injected by the `/particle-auth` route handler below.
+  app.post('/api/rpc/base', (req, res) => handleJsonRpcProxy(req, res, 'base', BASE_RPC_URLS));
 
   // IMPORTANT: Register /apps/* route BEFORE the static middleware wrapper
   // Express checks app.get() routes before app.use() middleware, but only if registered first
@@ -581,6 +620,19 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
       }
       
       // Inject API origin script (same as mock server)
+      // Also rewrites `https://mainnet.base.org` -> `${currentOrigin}/api/rpc/base`
+      // so the Particle SDK's public-RPC traffic (both the explicit
+      // `eth_getCode` probes in our wrapper code AND viem's internal RPC
+      // transport called from inside `createTransferTransaction`) goes through
+      // our cached, multi-fallback proxy instead of hammering the
+      // rate-limited public Base RPC (429 during rapid polling).
+      //
+      // The interceptor must handle all three argument shapes that modern
+      // SDKs pass to `fetch`: raw string URLs (our wrapper code), `Request`
+      // objects (viem's HTTP transport does `new Request(url, opts)` before
+      // calling fetch), and `URL` objects. `Request.url` is read-only, so
+      // string-assignment to it silently no-ops — we must clone the Request
+      // with the rewritten URL.
       const apiOriginScript = `
     <script>
         (function() {
@@ -589,22 +641,47 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
             
             const currentOrigin = window.location.origin;
             const apiPuterPattern = /https?:\\/\\/api\\.puter\\.[^\\/:]+(?:\\:\\d+)?/gi;
+            const baseMainnetPattern = /https?:\\/\\/mainnet\\.base\\.org(?:\\:\\d+)?/gi;
+            const baseProxyUrl = currentOrigin + '/api/rpc/base';
+            
+            function rewriteUrlString(s) {
+                if (typeof s !== 'string') return s;
+                if (s.includes('api.puter.')) return s.replace(apiPuterPattern, currentOrigin);
+                if (s.includes('mainnet.base.org')) return s.replace(baseMainnetPattern, baseProxyUrl);
+                return s;
+            }
             
             const originalFetch = window.fetch;
             window.fetch = function(...args) {
-                let url = args[0];
-                if (typeof url === 'string' && url.includes('api.puter.')) {
-                    args[0] = url.replace(apiPuterPattern, currentOrigin);
-                } else if (url && typeof url === 'object' && url.url && url.url.includes('api.puter.')) {
-                    url.url = url.url.replace(apiPuterPattern, currentOrigin);
+                const input = args[0];
+                if (typeof input === 'string') {
+                    args[0] = rewriteUrlString(input);
+                } else if (typeof Request !== 'undefined' && input instanceof Request) {
+                    const rewritten = rewriteUrlString(input.url);
+                    if (rewritten !== input.url) {
+                        args[0] = new Request(rewritten, input);
+                    }
+                } else if (typeof URL !== 'undefined' && input instanceof URL) {
+                    const rewritten = rewriteUrlString(input.href);
+                    if (rewritten !== input.href) {
+                        args[0] = rewritten;
+                    }
+                } else if (input && typeof input === 'object' && typeof input.url === 'string') {
+                    // Legacy {url, ...} descriptor
+                    const rewritten = rewriteUrlString(input.url);
+                    if (rewritten !== input.url) {
+                        try { input.url = rewritten; } catch { args[0] = rewritten; }
+                    }
                 }
                 return originalFetch.apply(this, args);
             };
             
             const originalXHROpen = XMLHttpRequest.prototype.open;
             XMLHttpRequest.prototype.open = function(method, url, ...rest) {
-                if (typeof url === 'string' && url.includes('api.puter.')) {
-                    url = url.replace(apiPuterPattern, currentOrigin);
+                if (typeof url === 'string') {
+                    url = rewriteUrlString(url);
+                } else if (typeof URL !== 'undefined' && url instanceof URL) {
+                    url = rewriteUrlString(url.href);
                 }
                 return originalXHROpen.call(this, method, url, ...rest);
             };

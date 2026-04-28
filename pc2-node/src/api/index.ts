@@ -1160,9 +1160,10 @@ export function setupAPI (app: Express): void {
         // `role: "system"`. These are the four core capsules that ship as
         // pre-installed defaults (Market, Player, Creator, dDRM Viewer).
         // Apps with `role: "dapp"` (Glide, Elastos NFT) and untagged dev/test
-        // artifacts (pc2-media-runtime, supernode-manager, wallet-test) are
-        // intentionally NOT auto-installed — users discover and install them
-        // via the dApp Centre.
+        // artifacts (supernode-manager, wallet-test) are intentionally NOT
+        // auto-installed — users discover and install them via the dApp
+        // Centre. (`pc2-media-runtime` carries `role: "system"` because it is
+        // the required DASH/CENC runtime for `.ddrm` capsule playback.)
         //
         // We also opportunistically uninstall any previously auto-installed
         // non-system bundle (identifiable by `cid` starting with `local:`)
@@ -1207,7 +1208,7 @@ export function setupAPI (app: Express): void {
 
             // Cleanup pass: remove stale local: installs for any test-apps bundle
             // that is no longer marked system (e.g. glide-finance, elastos-nft,
-            // pc2-media-runtime, supernode-manager, wallet-test from earlier boots).
+            // supernode-manager, wallet-test from earlier boots).
             try {
                 const allInstalled = appInstallService.list();
                 for ( const inst of allInstalled ) {
@@ -1383,7 +1384,13 @@ export function setupAPI (app: Express): void {
     app.post('/set-profile-picture', authenticate, handleSetProfilePicture);
 
     // Elastos blockchain explorer proxy (to avoid CORS issues)
-    app.get('/api/elastos/transactions', authenticate, async (req: Request, res: Response) => {
+    // No auth middleware: this is a read-only proxy for fully-public on-chain
+    // data (`https://esc.elastos.io/api`). Same pattern as `/api/rpc/esc` in
+    // static.ts — the upstream reference (`src/backend/src/routers/elastos-proxy.js`)
+    // also has no auth gate. Requiring a token here would only break the wallet
+    // panel's `fetch()` call in `src/gui/src/services/WalletService.js:1700`,
+    // which does not attach one (bug: mock server matches this behavior).
+    app.get('/api/elastos/transactions', async (req: Request, res: Response) => {
         try {
             const { address, page = '1', pageSize = '20' } = req.query;
 

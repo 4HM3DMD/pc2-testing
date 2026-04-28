@@ -206,6 +206,23 @@ async function main(params) {
     return deny('decrypt_failed', { detail: String((e && e.message) || e) });
   }
 
+  // ── SEC Wave 8 (C-02): kid ↔ ciphertext binding ─────────────────
+  // Enforce the canonical invariant kid = first16Bytes(sha256(cekBase64)).
+  // Matches dashPackager.ts contractKid derivation. Blocks the swap
+  // attack where an owner of kid-A submits kid-B's ciphertext to
+  // recover kid-B's CEK. See non-media-decrypt-chipotle.js for the
+  // full rationale.
+  const cekBytes = new TextEncoder().encode(cek);
+  const digestBuf = await crypto.subtle.digest('SHA-256', cekBytes);
+  const digestBytes = new Uint8Array(digestBuf);
+  let derivedKid = '0x';
+  for (let i = 0; i < 16; i++) {
+    derivedKid += digestBytes[i].toString(16).padStart(2, '0');
+  }
+  if (derivedKid.toLowerCase() !== normalizedKid.toLowerCase()) {
+    return deny('kid_binding_mismatch');
+  }
+
   Lit.Actions.setResponse({
     response: JSON.stringify({
       data: cek,

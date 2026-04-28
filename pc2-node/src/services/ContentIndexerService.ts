@@ -740,7 +740,13 @@ export class ContentIndexerService {
 
     if (cid) {
       for (const gateway of this.config.metadataGatewayUrls) {
+        // Legacy format: the metadata CID points directly at a JSON file.
         urls.push(`${gateway}${cid}`);
+        // Current Elacity Creator (from 2026-04-17) uploads metadata as a
+        // UnixFS directory containing metadata.json, content.json, etc.
+        // Fetching the bare CID returns an HTML directory index from most
+        // gateways, which breaks JSON.parse. Try the path-scoped URL second.
+        urls.push(`${gateway}${cid}/metadata.json`);
       }
     }
 
@@ -751,8 +757,17 @@ export class ContentIndexerService {
           headers: { 'Accept': 'application/json' },
         });
 
-        if (response.ok) {
-          return await response.json();
+        if (!response.ok) continue;
+
+        // Guard against gateways that return HTTP 200 + HTML for directory CIDs
+        // (IPFS directory index pages). Parse via text() so a non-JSON body
+        // doesn't throw — we just skip to the next candidate URL.
+        const body = await response.text();
+        if (body.trimStart().startsWith('<')) continue;
+        try {
+          return JSON.parse(body);
+        } catch {
+          continue;
         }
       } catch {
         continue;

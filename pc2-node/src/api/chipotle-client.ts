@@ -17,6 +17,7 @@ import { readFileSync, existsSync, writeFileSync, mkdirSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import https from 'https';
+import { createPublicKey, verify as cryptoVerify } from 'crypto';
 import { createLogger } from '../utils/logger.js';
 import { getBaseRpcUrl } from '../utils/rpc.js';
 
@@ -47,6 +48,32 @@ const SUPERNODE_PROVISION_URLS = [
   'https://69.164.241.210/api/ddrm/provision',
   'https://38.242.211.112/api/ddrm/provision',
 ];
+
+// ── Wave 8 (H-01.2) provision signing ────────────────────────────────────────
+// Supernodes serve dDRM provision config to fresh PC2 nodes. Without a
+// signature, a supernode operator (or anyone who compromises one) can inject
+// arbitrary config — malicious `apiUrl`, wrong PKP, attacker-controlled RPC.
+// Wave 8 adds a detached Ed25519 signature over a canonical envelope; only
+// blobs signed by Elacity Labs' provision key are accepted.
+//
+// The corresponding 32-byte Ed25519 seed lives on each supernode at
+// /etc/pc2/elacity-provision.ed25519 (mode 0600, root-only). The public key
+// below is derived from that seed and pinned here; rotating the key means
+// updating this constant + redeploying both supernodes.
+const ELACITY_LABS_PROVISION_PUBKEY_HEX =
+  '1ab060ba7578261355504300c1193c484ed8a46a30499c3fa3cb9065930367eb';
+
+const PROVISION_SIG_REQUIRED = process.env.PROVISION_SIG_REQUIRED !== '0';
+
+const ALLOWED_PROVISION_API_URLS = new Set([
+  DEFAULT_API_URL,
+  DEV_API_URL,
+]);
+
+const PROVISION_ENVELOPE_DOMAIN = 'elacity.pc2.chipotle-provision.v1';
+const PROVISION_MAX_AGE_SECONDS = 90 * 24 * 3600; // 90 days
+
+const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -138,6 +165,92 @@ interface ProvisionConfig {
   };
 }
 
+/**
+ * Signed-envelope shape returned by Wave 8+ supernodes. The signature is
+ * detached and covers `canonicalize({v, domain, signedAt, payload})` — i.e.
+ * every field except `sig` itself, in canonical-JSON byte order. Supernodes
+ * generate this envelope by signing with Elacity Labs' Ed25519 private key.
+ */
+interface SignedProvisionEnvelope {
+  v: 1;
+  domain: typeof PROVISION_ENVELOPE_DOMAIN;
+  signedAt: number;
+  payload: ProvisionConfig;
+  sig: string;
+}
+
+/**
+ * Canonical-JSON serialiser. Keys sorted ASCII-ascending at every object
+ * level, arrays preserved positionally, no whitespace. Must match the
+ * signer's canonical form byte-for-byte.
+ */
+function canonicalize(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) {
+    return '[' + value.map((v) => canonicalize(v)).join(',') + ']';
+  }
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj).sort();
+  return '{' + keys.map((k) => JSON.stringify(k) + ':' + canonicalize(obj[k])).join(',') + '}';
+}
+
+function isPlaceholderPubKey(hex: string): boolean {
+  return /^0{64}$/.test(hex);
+}
+
+/**
+ * Verify an Ed25519 signature over the canonical bytes of an envelope.
+ * Uses Node's native crypto.verify — 64-byte signature, 32-byte SEC1 raw
+ * public key wrapped in the Ed25519 SPKI DER prefix.
+ */
+function verifyProvisionSignature(envelope: SignedProvisionEnvelope): boolean {
+  if (isPlaceholderPubKey(ELACITY_LABS_PROVISION_PUBKEY_HEX)) {
+    logger.warn('[Chipotle] Provision pubkey is still the all-zeros sentinel; signature check cannot pass.');
+    return false;
+  }
+  if (typeof envelope.sig !== 'string' || envelope.sig.length === 0) return false;
+
+  const pubKeyBytes = Buffer.from(ELACITY_LABS_PROVISION_PUBKEY_HEX, 'hex');
+  if (pubKeyBytes.length !== 32) return false;
+
+  const spkiDer = Buffer.concat([ED25519_SPKI_PREFIX, pubKeyBytes]);
+  const pubKey = createPublicKey({ key: spkiDer, format: 'der', type: 'spki' });
+
+  // Sign over the canonical bytes of the envelope minus the sig field.
+  const { sig: _sig, ...signed } = envelope;
+  const message = Buffer.from(canonicalize(signed), 'utf8');
+  const sigBytes = Buffer.from(envelope.sig, 'base64');
+  if (sigBytes.length !== 64) return false;
+
+  try {
+    return cryptoVerify(null, message, pubKey, sigBytes);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Validate a ProvisionConfig payload for field-level sanity. Even with a
+ * verified signature, we want structural guards in case a future key compromise
+ * lets an attacker mint valid signatures.
+ */
+function validateProvisionPayload(p: ProvisionConfig): { ok: true } | { ok: false; reason: string } {
+  if (!p || typeof p !== 'object') return { ok: false, reason: 'payload_not_object' };
+  if (typeof p.apiUrl !== 'string' || !ALLOWED_PROVISION_API_URLS.has(p.apiUrl)) {
+    return { ok: false, reason: `apiUrl_not_allowlisted:${p.apiUrl}` };
+  }
+  if (typeof p.usageKey !== 'string' || p.usageKey.length < 16 || p.usageKey === 'REPLACE_WITH_USAGE_API_KEY') {
+    return { ok: false, reason: 'usageKey_missing_or_placeholder' };
+  }
+  if (typeof p.pkpId !== 'string' || !p.pkpId.startsWith('0x')) {
+    return { ok: false, reason: 'pkpId_invalid' };
+  }
+  if (typeof p.authority !== 'string' || !p.authority.startsWith('0x')) {
+    return { ok: false, reason: 'authority_invalid' };
+  }
+  return { ok: true };
+}
+
 let cachedProvision: ProvisionConfig | null = null;
 
 function loadCachedProvision(): ProvisionConfig | null {
@@ -174,17 +287,81 @@ function httpsGet(url: string, timeoutMs = 5000): Promise<string> {
   });
 }
 
+/**
+ * Extract a validated ProvisionConfig from a supernode response body.
+ *
+ * Wave 8 (H-01.2): only accept the signed-envelope form by default. In
+ * emergency bootstrap scenarios (PROVISION_SIG_REQUIRED=0) we fall back
+ * to accepting a bare ProvisionConfig with a loud warning — this exists
+ * purely so a fresh fleet can bootstrap before Elacity Labs' key ceremony
+ * completes and should never be used in steady state.
+ */
+function parseProvisionResponse(
+  sourceUrl: string,
+  body: string,
+): { ok: true; config: ProvisionConfig } | { ok: false; reason: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return { ok: false, reason: 'body_not_json' };
+  }
+
+  const looksLikeEnvelope = (
+    parsed !== null &&
+    typeof parsed === 'object' &&
+    'sig' in (parsed as Record<string, unknown>) &&
+    'payload' in (parsed as Record<string, unknown>)
+  );
+
+  if (looksLikeEnvelope) {
+    const envelope = parsed as SignedProvisionEnvelope;
+
+    if (envelope.v !== 1 || envelope.domain !== PROVISION_ENVELOPE_DOMAIN) {
+      return { ok: false, reason: 'envelope_bad_domain_or_version' };
+    }
+    if (typeof envelope.signedAt !== 'number') {
+      return { ok: false, reason: 'envelope_bad_signedAt' };
+    }
+    const nowSec = Math.floor(Date.now() / 1000);
+    if (Math.abs(nowSec - envelope.signedAt) > PROVISION_MAX_AGE_SECONDS) {
+      return { ok: false, reason: `envelope_stale_or_future:${nowSec - envelope.signedAt}s` };
+    }
+    if (!verifyProvisionSignature(envelope)) {
+      return { ok: false, reason: 'provision_sig_invalid' };
+    }
+    const valid = validateProvisionPayload(envelope.payload);
+    if (!valid.ok) return { ok: false, reason: valid.reason };
+
+    logger.info(`[Chipotle] Signed provision accepted from ${sourceUrl} (signedAt=${envelope.signedAt})`);
+    return { ok: true, config: envelope.payload };
+  }
+
+  // Unsigned legacy path — only tolerated if strict-mode is explicitly off.
+  if (PROVISION_SIG_REQUIRED) {
+    return { ok: false, reason: 'unsigned_provision_rejected' };
+  }
+
+  const config = parsed as ProvisionConfig;
+  const valid = validateProvisionPayload(config);
+  if (!valid.ok) return { ok: false, reason: valid.reason };
+
+  logger.warn(`[Chipotle] Accepted UNSIGNED provision from ${sourceUrl} — PROVISION_SIG_REQUIRED=0. This is an emergency bootstrap mode; set PROVISION_SIG_REQUIRED=1 in steady state.`);
+  return { ok: true, config };
+}
+
 async function fetchProvisionFromSupernode(): Promise<ProvisionConfig | null> {
   for (const url of SUPERNODE_PROVISION_URLS) {
     try {
       logger.info(`[Chipotle] Fetching dDRM config from ${url}...`);
       const body = await httpsGet(url);
-      const config: ProvisionConfig = JSON.parse(body);
 
-      if (!config.usageKey || config.usageKey === 'REPLACE_WITH_USAGE_API_KEY') {
-        logger.warn(`[Chipotle] Supernode ${url} has unprovisioned dDRM config, skipping`);
+      const result = parseProvisionResponse(url, body);
+      if (!result.ok) {
+        logger.warn(`[Chipotle] Supernode ${url} rejected: ${result.reason}`);
         continue;
       }
+      const config = result.config;
 
       if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
       writeFileSync(PROVISION_CACHE_PATH, JSON.stringify(config, null, 2), { mode: 0o600 });
@@ -295,7 +472,8 @@ function getChipotleNonMediaActionCode(): string {
       `Chipotle non-media Lit Action not found at ${actionPath}.`,
     );
   }
-  cachedChipotleNonMediaCode = readFileSync(actionPath, 'utf8');
+  // See getNonMediaActionCode() for why trailing whitespace is stripped.
+  cachedChipotleNonMediaCode = readFileSync(actionPath, 'utf8').replace(/\s+$/, '');
   return cachedChipotleNonMediaCode;
 }
 
@@ -308,6 +486,11 @@ function getChipotleEncryptCode(): string {
       `Chipotle encrypt Lit Action not found at ${actionPath}.`,
     );
   }
+  // The encrypt action was registered in Chipotle's allowlist against the
+  // raw (trailing-newline-preserving) file bytes. Stripping whitespace
+  // here produces a different code hash and triggers HTTP 403. The
+  // decrypt actions were re-registered via a 403-probe ceremony that
+  // stripped the newline — hence the asymmetry with the other loaders.
   cachedChipotleEncryptCode = readFileSync(actionPath, 'utf8');
   return cachedChipotleEncryptCode;
 }
@@ -321,7 +504,7 @@ function getActionCid(): string {
     if (cid) return cid;
   }
 
-  return 'QmNayE5MYzXcoMS9nvRk6MUo8r4ESLa3i65vHXzuBsnC2b';
+  return 'QmX5JxcFhyasptCWMA6unFPm3TRYjPSkJb5HhN8289r5uk';
 }
 
 // ── Core REST Client ─────────────────────────────────────────────────────────
