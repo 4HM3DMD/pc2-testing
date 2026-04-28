@@ -244,14 +244,14 @@ router.post('/init', async (req: AuthenticatedRequest, res: Response) => {
       return;
     }
 
-    // Detect whether the buyer is a Smart Account (Universal Account) user.
-    // If so, use cenc:lit-drm-sa-v1 whose inner Lit Action maps EOA → SA on-chain.
+    // Prefer the unified chipotle media protection type.
+    // Legacy media may still contain SA/EOA-split protection types.
     const buyerAddr = req.body.buyerAddress || '';
+    const hasUnifiedEntry = psshEntries.some(p => p.protectionType === 'cenc:lit-aes-gcm-v3');
     const hasSAEntry = psshEntries.some(p => p.protectionType === 'cenc:lit-drm-sa-v1');
-    const hasEOAEntry = psshEntries.some(p => p.protectionType === 'cenc:lit-drm-v1');
     let isSmartAccountUser = false;
 
-    if (hasSAEntry && buyerAddr) {
+    if (!hasUnifiedEntry && hasSAEntry && buyerAddr) {
       try {
         isSmartAccountUser = await detectSmartAccountUser(buyerAddr, psshEntries);
       } catch (err: any) {
@@ -259,7 +259,10 @@ router.post('/init', async (req: AuthenticatedRequest, res: Response) => {
       }
     }
 
-    const preferredType = isSmartAccountUser ? 'cenc:lit-drm-sa-v1' : 'cenc:lit-drm-v1';
+    let preferredType = 'cenc:lit-aes-gcm-v3';
+    if (!hasUnifiedEntry) {
+      preferredType = isSmartAccountUser ? 'cenc:lit-drm-sa-v1' : 'cenc:lit-drm-v1';
+    }
     const pssh = psshEntries.find(p => p.protectionType === preferredType)
               || psshEntries[0];
 
@@ -530,7 +533,9 @@ async function detectSmartAccountUser(
   psshEntries: Array<{ protectionType: string; data: any }>,
 ): Promise<boolean> {
   // Extract RPC URL from PSSH data (the Lit Action embeds it)
-  const saEntry = psshEntries.find(p => p.protectionType === 'cenc:lit-drm-sa-v1');
+  const saEntry = psshEntries.find(p => p.protectionType === 'cenc:lit-drm-sa-v1')
+    || psshEntries.find(p => p.protectionType === 'cenc:lit-aes-gcm-v3')
+    || psshEntries[0];
   const { getBaseRpcUrl } = await import('../utils/rpc.js');
   const rpcUrl = saEntry?.data?.rpc || getBaseRpcUrl();
 

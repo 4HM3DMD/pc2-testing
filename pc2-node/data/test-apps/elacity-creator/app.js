@@ -1187,7 +1187,7 @@
       : (params.category ? [params.category] : []);
     var tags = Array.isArray(params.tags) ? params.tags : [];
 
-    var protectionType = isMediaFile ? 'cenc:lit-aes-gcm-v1' : 'lit-aes-gcm-v1';
+    var protectionType = isMediaFile ? 'cenc:lit-aes-gcm-v3' : 'lit-aes-gcm-v3';
     var protectionAlgorithm = isMediaFile ? 'aes-128' : 'aes-256-gcm';
     var protections = isPublic ? [] : [{
       algorithm: protectionAlgorithm,
@@ -3260,10 +3260,10 @@
           envelope.asset.cleartext = true;
           envelope.asset.directPlayback = true;
         } else {
-          envelope.media.protectionType = ['cenc:lit-aes-gcm-v1'];
+          envelope.media.protectionType = ['cenc:lit-aes-gcm-v3'];
           envelope.asset.protections = [{
             algorithm: 'aes-128',
-            protectionType: 'cenc:lit-aes-gcm-v1',
+            protectionType: 'cenc:lit-aes-gcm-v3',
             dataToEncryptHash: encryptResult.dataToEncryptHash || '',
             actionCid: encryptResult.actionCid || '',
             authority: authorityAddress,
