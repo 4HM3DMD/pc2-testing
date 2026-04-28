@@ -1761,7 +1761,14 @@
     sellersContainer.innerHTML = '';
     sellersContainer.classList.add('hidden');
 
-    var tokenId = (nft.tokenId && nft.tokenId.hexTokenID) || nft.tokenId || '0';
+    // V3 operatives mint access tokens at the operative-internal tokenId = 1
+    // (TOKEN_ID_ACCESS in wallet.js). AuthorityGateway state queries — sellersOf,
+    // listings, withdrawListing — require this operative-tokenId. The ledger's
+    // hex content-hash tokenId is only used for ledger-level calls (buyAccess,
+    // tokenURI). Using the content-hash here would silently return empty and
+    // hide the Buy button. operativeAddr is guaranteed truthy by the early
+    // return above; any asset with an operative is V3 by construction.
+    var tokenId = '1';
     var eoaAddr = Wallet.getAddress() || '';
     var saAddr = Wallet.getSmartAccountAddress() || '';
 
@@ -1806,6 +1813,37 @@
         html += '</div>';
         sellersContainer.innerHTML = html;
         sellersContainer.classList.remove('hidden');
+
+        // Back-fill Buy button when catalog metadata had no pricing section
+        // (PC2 local catalog builds listings[] from metadata_json.pricing; the
+        // creator app only encodes price in on-chain sellRawData, so listings[]
+        // arrives empty and the detail view hides the Buy button. Once we have
+        // live sellers from the AuthorityGateway, reuse them here.)
+        if (nft === state.detailItem && validResults.length > 0) {
+          var buyableResults = validResults.filter(function (r) {
+            var s = (r.seller || '').toLowerCase();
+            return s && s !== eoaAddr.toLowerCase() && (!saAddr || s !== saAddr.toLowerCase());
+          });
+          if (buyableResults.length > 0) {
+            nft.operative.access.listings = buyableResults.map(function (r) {
+              return {
+                seller: r.seller,
+                price: String(r.listing.pricePerToken),
+                quantity: r.listing.quantity,
+                payToken: r.listing.payToken,
+              };
+            });
+            var viewerOwned = state.detailIsOwned || isAssetInLibrary(nft) || (nft.access && nft.access.haveAccess);
+            if (!viewerOwned && dom.detailPriceSection.classList.contains('hidden')) {
+              var best = buyableResults[0];
+              var priceDecimals = getTokenSymbol(best.listing.payToken) === 'USDC' ? 6 : 18;
+              var priceDisplay = Number(best.listing.pricePerToken) / Math.pow(10, priceDecimals);
+              dom.detailPrice.textContent = formatPrice(priceDisplay, best.listing.payToken);
+              dom.detailPriceSection.classList.remove('hidden');
+              dom.buyBtn.classList.remove('hidden');
+            }
+          }
+        }
 
         sellersContainer.querySelectorAll('.cancel-listing-btn').forEach(function (btn) {
           btn.addEventListener('click', function () {
