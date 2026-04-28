@@ -29,6 +29,7 @@ import UIWindowAIChat from '../UI/UIWindowAIChat.js';
  * @param {*} options.name - The name of the app to launch.
  */
 const launch_app = async (options) => {
+    try {
     let transaction;
     // A transaction to trace the time it takes to launch an app and
     // for it to be ready.
@@ -90,6 +91,15 @@ const launch_app = async (options) => {
             console.error(`[launch_app] Failed to get app info for "${options.name}":`, error);
             throw new Error(`Failed to launch app "${options.name}": ${error.message || error}`);
         }
+    }
+
+    // Some backends may still return a single-item array for one app lookup.
+    if (Array.isArray(app_info)) {
+        app_info = app_info[0];
+    }
+
+    if (!app_info || typeof app_info !== 'object') {
+        throw new Error(`Invalid app metadata for "${options.name}"`);
     }
 
     // For backward compatibility reasons we need to make sure that both `uuid` and `uid` are set
@@ -340,7 +350,18 @@ const launch_app = async (options) => {
             const name = app_info.index_url.slice(BUILTIN_PREFIX.length);
             iframe_url = new URL(`${window.gui_origin}/builtin/${name}`);
         } else {
-            iframe_url = new URL(app_info.index_url);
+            try {
+                iframe_url = new URL(app_info.index_url);
+            } catch (e) {
+                // Be lenient with malformed/relative URLs to avoid crashing the shell.
+                iframe_url = new URL(app_info.index_url, window.api_origin || window.location.origin);
+                console.warn('[launch_app] Recovered from malformed app index_url', {
+                    app: options.name,
+                    index_url: app_info.index_url,
+                    recovered: iframe_url.href,
+                    error: e?.message,
+                });
+            }
         }
 
         // add app_instance_id to URL
@@ -413,17 +434,29 @@ const launch_app = async (options) => {
         } else {
             // Try to acquire app token from the server
 
-            let response = await fetch(`${window.api_origin }/auth/get-user-app-token`, {
-                'headers': {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${ window.auth_token}`,
-                },
-                'body': JSON.stringify({ app_uid: app_info.uid ?? app_info.uuid }),
-                'method': 'POST',
-            });
-            let res = await response.json();
-            if ( res.token ) {
-                iframe_url.searchParams.append('puter.auth.token', res.token);
+            try {
+                let response = await fetch(`${window.api_origin }/auth/get-user-app-token`, {
+                    'headers': {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${ window.auth_token}`,
+                    },
+                    'body': JSON.stringify({ app_uid: app_info.uid ?? app_info.uuid }),
+                    'method': 'POST',
+                });
+                let res = await response.json();
+                if ( res.token ) {
+                    iframe_url.searchParams.append('puter.auth.token', res.token);
+                } else {
+                    console.warn('[launch_app] App token response did not include token', {
+                        app: options.name,
+                        status: response.status,
+                    });
+                }
+            } catch (err) {
+                console.warn('[launch_app] Failed to fetch app token; continuing without app-scoped token', {
+                    app: options.name,
+                    error: err?.message || err,
+                });
             }
         }
 
@@ -662,6 +695,21 @@ const launch_app = async (options) => {
     }
 
     return process;
+    } catch (error) {
+        // Last-resort guard: many call sites fire launch_app() without await/catch.
+        // Prevent unhandled rejections from destabilizing the GUI shell.
+        console.error('[launch_app] Fatal launch error:', {
+            app: options?.name,
+            error: error?.message || error,
+            stack: error?.stack,
+        });
+        try {
+            if (window?.alertify?.error) {
+                window.alertify.error(`Failed to open app: ${options?.name || 'unknown app'}`);
+            }
+        } catch (_) {}
+        return null;
+    }
 };
 
 export default launch_app;

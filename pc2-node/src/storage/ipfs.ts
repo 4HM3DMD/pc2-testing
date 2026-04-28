@@ -303,19 +303,21 @@ export class IPFSStorage {
         libp2p,
       });
 
-      this.helia.libp2p.addEventListener('peer:discovery', async (event) => {
+      this.helia.libp2p.addEventListener('peer:discovery', (event) => {
         log.info(
           `New peer discovered (${event.detail.id.toString()}) via MDNS`,
           event.detail.multiaddrs.map((ma) => ma.toString())
         );
-        try {
-          await this.helia?.libp2p.dial(event.detail.multiaddrs, {
-            signal: AbortSignal.timeout(5000),
-          });
-          log.info(`Successfully dialed peer (${event.detail.id.toString()})`);
-        } catch (err) {
+
+        this.helia?.libp2p.dial(event.detail.multiaddrs, {
+          signal: AbortSignal.timeout(5000),
+        }).then(
+          () => {
+            log.info(`Successfully dialed peer (${event.detail.id.toString()})`);
+          }
+        ).catch((err) => {
           log.warn(`Failed to dial peer (${event.detail.id.toString()}):`, (err as Error)?.message);
-        }
+        });
       });
 
       // Initialize UnixFS
