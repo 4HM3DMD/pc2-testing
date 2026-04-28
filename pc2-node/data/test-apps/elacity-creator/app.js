@@ -1201,8 +1201,8 @@
     }];
 
     return {
-      schema: 'https://raw.githubusercontent.com/Elacity/wiki/main/metadata/schemas/asset/v1.0/schema.json',
-      version: '1.0',
+      schema: 'https://raw.githubusercontent.com/Elacity/wiki/main/metadata/schemas/asset/v1.1/schema.json',
+      version: '1.1',
       name: params.title,
       description: params.description,
       image: params.image || '',
@@ -3253,10 +3253,10 @@
 
       var envelope = buildMetadataEnvelope(metaParams);
 
-      if (encryptResult.litCiphertext) {
-        envelope.asset.litCiphertext = encryptResult.litCiphertext;
-        envelope.asset.iv = encryptResult.iv;
-        envelope.asset.litBackend = encryptResult.litBackend || 'chipotle';
+      if (encryptResult.litCiphertext && envelope.asset.protections && envelope.asset.protections[0]) {
+        envelope.asset.protections[0].litCiphertext = encryptResult.litCiphertext;
+        envelope.asset.protections[0].iv = encryptResult.iv || '';
+        envelope.asset.protections[0].litBackend = encryptResult.litBackend || 'chipotle';
       }
 
       if (isMediaFile && mediaEncodeResult) {
@@ -3276,10 +3276,12 @@
             chain: 'base',
             chainId: BASE_CHAIN_ID,
             rpc: 'https://mainnet.base.org',
+            litCiphertext: encryptResult.litCiphertext || '',
+            iv: encryptResult.iv || '',
+            litBackend: encryptResult.litBackend || 'chipotle',
           }];
           envelope.asset.mpdUri = mediaEncodeResult.mpdUri;
           envelope.asset.kid = mediaEncodeResult.kid;
-          envelope.asset.litBackend = 'chipotle';
         }
         envelope.asset.mediaType = state.resolvedMime.startsWith('video/') ? 'video' : 'audio';
         envelope.media.previewURL = mediaEncodeResult.previewURL || undefined;
@@ -3289,9 +3291,9 @@
       }
 
       // Content integrity proof — buyers (and AI agents) can verify post-purchase
-      if (originalContentHash) {
-        envelope.asset.contentHash = originalContentHash;
-        envelope.asset.contentHashAlgorithm = 'SHA-256';
+      if (originalContentHash && envelope.asset.protections && envelope.asset.protections[0]) {
+        envelope.asset.protections[0].contentHash = originalContentHash;
+        envelope.asset.protections[0].contentHashAlgorithm = 'SHA-256';
       }
 
       // Content stats for buyer trust signals (machine-readable by AI agents)

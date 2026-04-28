@@ -661,7 +661,12 @@ var ElacityAPI = (function () {
       authority: asset.authority || '',
       chain: asset.chain || '',
       chainId: asset.chainId || null,
-      rpc: asset.rpc || ''
+      rpc: asset.rpc || '',
+      litCiphertext: asset.litCiphertext || '',
+      iv: asset.iv || '',
+      litBackend: asset.litBackend || '',
+      contentHash: asset.contentHash || '',
+      contentHashAlgorithm: asset.contentHashAlgorithm || ''
     }];
   }
 

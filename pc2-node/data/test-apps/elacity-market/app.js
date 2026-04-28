@@ -1478,9 +1478,9 @@
     var rawAsset = nft._rawAsset || asset;
 
     var kid = nft.kid || rawAsset.kid || (nft.operative && nft.operative.kid) || '';
-    var litCiphertext = rawAsset.litCiphertext || rawAsset.ciphertext || '';
+    var litCiphertext = resolveAssetProtectionField(rawAsset, 'litCiphertext', '') || rawAsset.ciphertext || '';
     var dataToEncryptHash = resolveAssetProtectionField(rawAsset, 'dataToEncryptHash', '');
-    var iv = rawAsset.iv || '';
+    var iv = resolveAssetProtectionField(rawAsset, 'iv', '');
     var encryptedDataCid = (rawAsset.uri || rawAsset.cid || '').replace('ipfs://', '');
     var buyerAddress = Wallet.isConnected() ? (getBuyerAddressForAsset(nft) || Wallet.getAddress()) : '';
     var authority = resolveAssetProtectionField(rawAsset, 'authority', '');
@@ -3608,8 +3608,8 @@
       descriptor.mimeType = asset.mimeType || media.contentType || media.mimeType || 'application/octet-stream';
       descriptor.dataToEncryptHash = dataToEncryptHash;
       descriptor.kid = cleanHash ? '0x' + cleanHash.slice(0, 32).padEnd(32, '0') : '';
-      descriptor.litCiphertext = asset.litCiphertext || '';
-      descriptor.iv = asset.iv || '';
+      descriptor.litCiphertext = resolveAssetProtectionField(asset, 'litCiphertext', '') || '';
+      descriptor.iv = resolveAssetProtectionField(asset, 'iv', '') || '';
       descriptor.actionCid = resolveAssetProtectionField(asset, 'actionCid', '');
     } else {
       var localGateway = window.location.origin + '/ipfs/';
@@ -3816,8 +3816,8 @@
     var buyerAddr = getBuyerAddressForAsset(nft) || Wallet.getAddress() || '';
     console.log('[Viewer] Using buyer address:', buyerAddr, 'ownerWallet:', getAssetOwnerWallet(nft));
 
-    var litCiphertext = asset.litCiphertext || enc.litCiphertext || enc.ciphertext || '';
-    var iv = asset.iv || enc.iv || '';
+    var litCiphertext = resolveAssetProtectionField(asset, 'litCiphertext', '') || enc.litCiphertext || enc.ciphertext || '';
+    var iv = resolveAssetProtectionField(asset, 'iv', '') || enc.iv || '';
     var actionCid = resolveAssetProtectionField(asset, 'actionCid', '') || enc.actionCid || enc.actionIpfsId || '';
     var authority = resolveAssetProtectionField(asset, 'authority', '') || enc.authority || props.authority || '';
     var title = meta.name || nft.name || 'Untitled';
@@ -3850,7 +3850,7 @@
     };
     if (actionCid) viewerArgs.actionCid = actionCid;
     if (authority) viewerArgs.authority = authority;
-    var litBackend = asset.litBackend || enc.litBackend || '';
+    var litBackend = resolveAssetProtectionField(asset, 'litBackend', '') || enc.litBackend || '';
     if (litBackend) viewerArgs.litBackend = litBackend;
     if (authority) viewerArgs.authority = authority;
 
