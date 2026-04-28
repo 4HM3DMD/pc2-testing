@@ -2,8 +2,33 @@
 
 **Task ID**: SEC-2026-04-28-WAVE8-CHIPOTLE-HARDENING
 **Created**: 2026-04-28
-**Status**: Review
+**Status**: Blocked (awaiting upstream fix — see "Blocker" below)
 **Priority**: High (release-gate for v1.2.0 Lit Chipotle migration)
+
+## Blocker (2026-04-28 ~08:50)
+
+Test 4 (the manual 4-case C-02 end-to-end matrix) is blocked on an **unrelated
+upstream bug** introduced by Irzhy in commit
+[`14e151a35`](../../) *"refactor: update content metadata structures and migrate
+to directory-based IPFS storage for creator assets"* on
+`feature/lit-chipotle-migration`. That commit deletes
+`function buildMetadataEnvelope(params)` from
+`pc2-node/data/test-apps/elacity-creator/app.js` (previously at line 1171) but
+leaves the call site at line 3229 (`var envelope = buildMetadataEnvelope(metaParams);`).
+Every mint through the creator app now throws `buildMetadataEnvelope is not defined`
+after the encrypt step succeeds — so Wave 8's encrypt path is proven clean in
+dev, but decrypt cannot be exercised without a completed mint.
+
+Impact on Wave 8 itself: **none** — all Wave 8 code paths are shipped and
+automated checks are green. The blocker is purely on the test harness side.
+
+Resolution path:
+
+1. Irzhy re-introduces (or relocates) `buildMetadataEnvelope` so the refactor
+   is complete.
+2. `git pull` + hard-refresh the elacity-creator iframe (no PC2 rebuild needed
+   — it is a static asset).
+3. Run the 4-case matrix. If green, this task moves Review → Done.
 
 ## Description
 
@@ -104,31 +129,74 @@ runs — this is the fail-safe.
       covering every accept/reject branch.
 - [x] Write this task doc.
 - [x] Append Wave 8 section to `docs/handover/SEC_2026_04_21_AUDIT_DISPOSITION.md`.
-- [x] Write rotation runbook
-      (`.cursor/tasks/SEC-2026-04-28-WAVE8-CHIPOTLE-HARDENING/ROTATION_RUNBOOK.md`)
-      with the new CIDs and the Chipotle-dashboard ceremony steps.
-- [ ] Sash runs the rotation ceremony (PKP authorise + config switch +
-      PC2 restart).
+- [x] Pin both new Lit Actions to Pinata:
+      non-media = `QmX5JxcFhyasptCWMA6unFPm3TRYjPSkJb5HhN8289r5uk`,
+      media = `QmSHMSxPogSsNki51fenDzsrkKB3eJfRMHXEPZKqPk6EAb`. Both verified
+      byte-for-byte against the local source via `gateway.pinata.cloud`.
+- [x] Rotate the in-repo CID labels to the Pinata CIDs:
+      `pc2-node/data/.lit-action-cid` and the hardcoded fallback in
+      `chipotle-client.ts::getActionCid`, plus `MEDIA_DECRYPT_ACTION_CID`
+      in `dashPackager.ts:30`.
+- [x] Elacity Labs Ed25519 key ceremony — **completed 2026-04-28 in-session**:
+      the existing seed at `~/.elastos/keys/elacity-labs.ed25519` was
+      reused (no new keypair generation needed). Derived pubkey hex
+      `1ab060ba7578261355504300c1193c484ed8a46a30499c3fa3cb9065930367eb`
+      pinned in `ELACITY_LABS_PROVISION_PUBKEY_HEX`.
+- [x] Supernode signing pipeline deployed to both boxes:
+      `69.164.241.210` (InterServer, `pc2-gateway.service`) and
+      `38.242.211.112` (Contabo, `pc2-web-gateway.service`). Seed installed
+      at `/etc/pc2/elacity-provision.ed25519` (mode 0600, root-only).
+      `/root/pc2/web-gateway/index.js` patched with the signing helpers
+      (backups at `index.js.pre-wave8.<timestamp>`) and services restarted.
+      Live probe confirms both supernodes emit v1/domain-correct envelopes
+      whose signatures verify against the pinned pubkey.
+- [x] Both supernodes' `ddrm-config.json` updated so the `actions.*Decrypt`
+      CIDs match the new Pinata CIDs (encrypt CIDs left untouched).
+- [x] Added `pc2-node/scripts/wave8-supernode-live-verify.mjs` +
+      `WAVE8_LIVE=1 bash …/wave8-smoke.sh` flag — catches any future
+      drift between supernode private keys and the pinned pubkey.
+- [x] **Chipotle group-1 allowlist ceremony — completed 2026-04-28 via the
+      Chipotle Core API** (discovered mid-testing that Chipotle *does*
+      enforce a per-group action-CID allowlist; previous drafts saying "no
+      dashboard step" were wrong). Chipotle's auth layer checks its own
+      internal CID (from `POST /core/v1/get_lit_action_ipfs_id`) which is
+      distinct from the IPFS canonical CID used for Pinata and for the
+      `actionIpfsId` inside the signed delegation. Registered both Wave 8
+      decrypt actions' Chipotle-internal CIDs
+      (`QmNhgrX2xEaJmd4UiKJA6NvLfEwdweZk9YYZAFZDj69dS4` non-media,
+      `QmeMz4QbJaLueADS1QdamgbxpUXzPWeS8JVsUGeoKpcYQx` media) via
+      `POST /core/v1/add_action` and added them to group 1 via
+      `POST /core/v1/add_action_to_group`. Pre-Wave 8 decrypt CIDs retained
+      as rollback canaries. Verified with a `lit_action` POST using the
+      usage key: HTTP 200 + action-level `missing_session_bundle` (Phase 5
+      delegation gate, as designed) instead of 403. Full procedure in
+      `ROTATION_RUNBOOK.md` Part 3.
 - [ ] Sash runs the 4-case manual C-02 end-to-end matrix (positive +
-      negative for both media and non-media).
-- [ ] Sash runs the Elacity Labs Ed25519 key ceremony and replaces
-      `ELACITY_LABS_PROVISION_PUBKEY_HEX` + updates the supernode
-      provision-signing pipeline.
+      negative for both media and non-media) against a fresh mint on the
+      updated CIDs. **🚫 Blocked 2026-04-28 on Irzhy's commit `14e151a35`
+      deleting `buildMetadataEnvelope` from `elacity-creator/app.js`
+      (line 3229 call site left behind). Proven via console log: the
+      Wave 8 encrypt path executes cleanly with the new CID
+      `QmX5Jxc…r5uk` and fails only at the metadata-envelope step. Irzhy
+      pinged; resuming once he pushes the fix.**
 
 ## Acceptance Criteria
 
 1. `bash pc2-node/scripts/wave8-smoke.sh` → all automated checks PASS
-   (5 shell + 9 offline = 14/14).
-2. `npm run test:security` → no regressions (last clean HEAD was the
+   (5 shell + 9 offline = 14/14). ✅
+2. `WAVE8_LIVE=1 bash pc2-node/scripts/wave8-smoke.sh` → live supernode
+   probe also PASS (both supernodes emit validly-signed envelopes). ✅
+3. `npm run test:security` → no regressions (last clean HEAD was the
    Wave 6 part 2 merge).
-3. Manual C-02 matrix: 2 positive + 2 negative decrypt tests all match
+4. Manual C-02 matrix: 2 positive + 2 negative decrypt tests all match
    expected outcome (see "Manual C-02 end-to-end checks" at the bottom of
    the smoke script).
-4. H-01.2 key ceremony complete: `ELACITY_LABS_PROVISION_PUBKEY_HEX` !=
-   all-zeros and supernodes can produce signed envelopes.
-5. Lit Action CIDs rotated on the Chipotle dashboard; `.lit-action-cid`
-   and `MEDIA_DECRYPT_ACTION_CID` in `dashPackager.ts` point at the new
-   hashes; old CIDs stay authorised as a canary for 24h then are removed.
+5. H-01.2 pubkey pinned + supernodes emit signed envelopes that verify. ✅
+6. `.lit-action-cid` and `MEDIA_DECRYPT_ACTION_CID` point at the Pinata
+   CIDs; supernode `ddrm-config.json` decrypt CIDs updated to match. ✅
+7. Chipotle group-1 allowlist contains both Wave 8 Chipotle-internal CIDs;
+   `lit_action` with the new sources returns HTTP 200 under the usage key
+   (no 403). ✅
 
 ## Files Modified
 
@@ -143,10 +211,11 @@ runs — this is the fail-safe.
 
 | File | Purpose |
 |---|---|
-| `pc2-node/scripts/wave8-smoke.sh` | Automated Wave 8 regression suite (static + offline harness). |
+| `pc2-node/scripts/wave8-smoke.sh` | Automated Wave 8 regression suite (static + offline + opt-in live probe). |
 | `pc2-node/scripts/wave8-provision-sig-test.mjs` | Offline Node harness — 9 cases covering H-01.2 verify logic. |
+| `pc2-node/scripts/wave8-supernode-live-verify.mjs` | Live probe that fetches each supernode's signed envelope and verifies against the pinned pubkey. Run via `WAVE8_LIVE=1 bash wave8-smoke.sh`. |
 | `.cursor/tasks/SEC-2026-04-28-WAVE8-CHIPOTLE-HARDENING/SEC-2026-04-28-WAVE8-CHIPOTLE-HARDENING.md` | This doc. |
-| `.cursor/tasks/SEC-2026-04-28-WAVE8-CHIPOTLE-HARDENING/ROTATION_RUNBOOK.md` | Step-by-step CID rotation + key-ceremony runbook for Sash. |
+| `.cursor/tasks/SEC-2026-04-28-WAVE8-CHIPOTLE-HARDENING/ROTATION_RUNBOOK.md` | Historical record of what was done + future key-rotation procedure. |
 
 ## Testing Strategy
 
@@ -163,11 +232,18 @@ runs — this is the fail-safe.
   Polish track (A13–A15, `.cursor/tasks/SEC-2026-04-22-WAVE7-POLISH`).
 - All C-02/M-01/H-01.2 code comments use `SEC Wave 8 (…)` as the
   grep-anchor so the smoke script can assert fix presence.
-- Rotation ceremony (CIDs + key) is Sash-owned; see `ROTATION_RUNBOOK.md`.
-- `ELACITY_LABS_PROVISION_PUBKEY_HEX` ships as all-zeros; `PROVISION_SIG_REQUIRED`
-  defaults to strict. Consequence: while the placeholder is in place,
-  auto-provisioning refuses all supernode responses. PC2 nodes with an
-  existing `.chipotle-provision.json` are unaffected. Fresh installs during
-  the ceremony window must set `PROVISION_SIG_REQUIRED=0` as an emergency
-  bootstrap; flip back to strict immediately after the real pubkey is
-  committed.
+- Strict-mode auto-provisioning now works end-to-end: the Elacity Labs
+  Ed25519 seed (pre-existing at `~/.elastos/keys/elacity-labs.ed25519`)
+  is installed on both supernodes; PC2 pins the derived pubkey; both
+  supernodes emit signed envelopes that verify. Fresh PC2 installs will
+  succeed without the `PROVISION_SIG_REQUIRED=0` emergency flag.
+- `PROVISION_SIG_REQUIRED=0` is retained only for the "my supernodes are
+  temporarily offline for a key rotation" corner case; steady-state value
+  is `1` (default).
+- **2026-04-28 EOD**: still blocked on Irzhy's `buildMetadataEnvelope` fix.
+  Adjacent cosmetic console-noise items reported by the end-user during
+  the wait were swept in-session and logged separately at
+  [`UIX-2026-04-28-WAVE8-WAITING-POLISH`](../UIX-2026-04-28-WAVE8-WAITING-POLISH/UIX-2026-04-28-WAVE8-WAITING-POLISH.md)
+  to keep Wave 8's commit trail focused on security scope. No Wave 8 code
+  paths touched by that work. Resume manual C-02 matrix tomorrow once
+  Irzhy's fix lands.

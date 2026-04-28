@@ -72,15 +72,55 @@ detail lives in
 | C-01 | Media decrypt flow was not authenticated. | No-op — closed by Phase 5 sigauth. Irzhy's write-up was against a pre-Phase-5 snapshot. |
 
 **Release gate**: Wave 8 lands on `feature/lit-chipotle-migration` alongside
-the earlier waves. The Lit Action source changes require a CID rotation
-ceremony on the Chipotle PKP dashboard — see the
-[Wave 8 rotation runbook](../../.cursor/tasks/SEC-2026-04-28-WAVE8-CHIPOTLE-HARDENING/ROTATION_RUNBOOK.md).
-H-01.2 ships with an all-zeros placeholder pubkey (fail-safe); an
-out-of-session Ed25519 key ceremony must replace it before v1.2 tag.
+the earlier waves. As of 2026-04-28 the ceremony is complete end-to-end:
 
-**Regression**: `bash pc2-node/scripts/wave8-smoke.sh` — 5 shell checks +
-9 offline Node cases = 14/14 green. Manual 4-case C-02 end-to-end matrix
-runs post-rotation.
+- New Lit Actions pinned to Pinata
+  (`QmX5JxcFhyasptCWMA6unFPm3TRYjPSkJb5HhN8289r5uk` non-media,
+  `QmSHMSxPogSsNki51fenDzsrkKB3eJfRMHXEPZKqPk6EAb` media). In-repo labels
+  rotated to match.
+- The existing Elacity Labs Ed25519 seed was reused (no new keypair
+  generated); derived pubkey pinned in `chipotle-client.ts`.
+- Signing pipeline deployed on both supernodes (`pc2-gateway.service` on
+  InterServer `69.164.241.210`, `pc2-web-gateway.service` on Contabo
+  `38.242.211.112`); `/api/ddrm/provision` now returns
+  `{v:1, domain:'elacity.pc2.chipotle-provision.v1', signedAt, payload, sig}`.
+- **Chipotle group-1 allowlist ceremony completed** via the Chipotle Core API.
+  A fresh-install bootstrap test revealed that the Chipotle usage key *is*
+  scoped to a per-group action-CID allowlist — previous drafts of this section
+  claimed no dashboard step existed; that was wrong. Chipotle evaluates two
+  CIDs per action: the IPFS canonical CID (`ipfs add --cid-version=0`, used
+  for Pinata and for the `actionIpfsId` echoed through the delegation) and
+  its own internal CID (returned by `POST /core/v1/get_lit_action_ipfs_id`,
+  checked by the auth layer). Both must be kept in sync. Wave 8 pairings:
+
+  | Action | IPFS canonical (Pinata) | Chipotle-internal (group 1) |
+  |---|---|---|
+  | non-media-decrypt Wave 8 | `QmX5JxcF…r5uk` | `QmNhgrX2…dS4` |
+  | media-decrypt Wave 8 | `QmSHMSx…6EAb` | `QmeMz4Qb…cYQx` |
+
+  Both Chipotle-internal CIDs were registered via `POST /core/v1/add_action`
+  and added to group 1 via `POST /core/v1/add_action_to_group`. The four
+  pre-Wave-8 decrypt CIDs were intentionally retained as rollback canaries.
+  Verified with a `lit_action` call using the usage key: HTTP 200 + an
+  action-level `missing_session_bundle` (the Phase 5 delegation gate firing
+  first, as designed) rather than a 403. Total spend: $0.17. Full procedure
+  for future Lit Action rotations is in the runbook Part 3.
+
+**Regression**: `WAVE8_LIVE=1 bash pc2-node/scripts/wave8-smoke.sh` — 5 shell
+checks + 9 offline Node cases + 1 live supernode probe = **15/15 green**.
+
+**Manual 4-case C-02 end-to-end matrix**: 🚫 **Blocked on unrelated upstream
+bug** (2026-04-28). Irzhy's metadata-refactor commit
+[`14e151a35`](../) *"refactor: update content metadata structures and migrate
+to directory-based IPFS storage for creator assets"* deletes
+`function buildMetadataEnvelope(params)` from
+`pc2-node/data/test-apps/elacity-creator/app.js` while leaving the call site
+at line 3229 (`buildMetadataEnvelope is not defined` thrown at mint time).
+Observed on a fresh Wave 8 bundle: the Wave 8 encrypt path executed cleanly
+with the new CID `QmX5Jxc…r5uk`; the mint pipeline fails only at the metadata
+envelope step, well after any Wave-8-relevant logic. No impact on Wave 8 code
+— this is purely a test-harness regression in Irzhy's in-flight refactor.
+Irzhy pinged 2026-04-28 ~08:50; resumes once he pushes a follow-up commit.
 
 ### 🔁 Kill-switch flips (post-cutover, scheduled)
 

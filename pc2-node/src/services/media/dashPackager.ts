@@ -27,7 +27,7 @@ const __dirname = dirname(__filename);
 
 const ELACITY_SYSTEM_ID = 'bf8ef85d2c54475d8c1ee27db60332a2';
 
-const MEDIA_DECRYPT_ACTION_CID = 'QmcNdiSuT2c2zKwhGozTgvT12uP26gAWMw2D49GvcLj2Go';
+const MEDIA_DECRYPT_ACTION_CID = 'QmSHMSxPogSsNki51fenDzsrkKB3eJfRMHXEPZKqPk6EAb';
 const MEDIA_ENCRYPT_ACTION_CID = 'QmdwzJvfgCRvNh9pQ63zroFozR9CfJdiweqTCkVMubD47U';
 
 import { getBaseRpcUrl } from '../../utils/rpc.js';

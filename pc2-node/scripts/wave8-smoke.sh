@@ -95,6 +95,21 @@ for action in non-media-decrypt-chipotle.js media-decrypt-chipotle.js; do
 done
 
 # ─────────────────────────────────────────────────────────────────────────────
+# H-01.2 — live supernode probe (opt-in: requires network access)
+# ─────────────────────────────────────────────────────────────────────────────
+if [ "${WAVE8_LIVE:-0}" = "1" ]; then
+  hdr "H-01.2: live supernode envelope verification"
+  if node "${SCRIPT_DIR}/wave8-supernode-live-verify.mjs"; then
+    pass "live supernodes returned valid signatures against pinned pubkey"
+  else
+    fail "live supernode verification FAILED" "see output above"
+  fi
+else
+  hdr "H-01.2: live supernode probe (opt-in)"
+  echo "  skipped — set WAVE8_LIVE=1 to run."
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Summary
 # ─────────────────────────────────────────────────────────────────────────────
 hdr "Summary"

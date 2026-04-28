@@ -56,19 +56,12 @@ const SUPERNODE_PROVISION_URLS = [
 // Wave 8 adds a detached Ed25519 signature over a canonical envelope; only
 // blobs signed by Elacity Labs' provision key are accepted.
 //
-// KEY CEREMONY (performed out-of-session by the Elacity Labs ops team):
-//   1. `openssl genpkey -algorithm Ed25519 -out elacity-provision.ed25519.pem`
-//   2. Extract raw 32-byte public key:
-//      `openssl pkey -in elacity-provision.ed25519.pem -pubout -outform DER
-//       | tail -c 32 | xxd -p -c 64`
-//   3. Paste the hex below replacing the all-zeros sentinel.
-//   4. Private key stays offline or in the supernode-signing CI; never commit.
-//
-// Fail-safe: while the pubkey is the all-zeros sentinel, no signature will
-// verify, so strict mode (default) will refuse all provisions. Operators can
-// set PROVISION_SIG_REQUIRED=0 only in emergency bootstrap scenarios.
+// The corresponding 32-byte Ed25519 seed lives on each supernode at
+// /etc/pc2/elacity-provision.ed25519 (mode 0600, root-only). The public key
+// below is derived from that seed and pinned here; rotating the key means
+// updating this constant + redeploying both supernodes.
 const ELACITY_LABS_PROVISION_PUBKEY_HEX =
-  '0000000000000000000000000000000000000000000000000000000000000000';
+  '1ab060ba7578261355504300c1193c484ed8a46a30499c3fa3cb9065930367eb';
 
 const PROVISION_SIG_REQUIRED = process.env.PROVISION_SIG_REQUIRED !== '0';
 
@@ -505,7 +498,7 @@ function getActionCid(): string {
     if (cid) return cid;
   }
 
-  return 'QmNayE5MYzXcoMS9nvRk6MUo8r4ESLa3i65vHXzuBsnC2b';
+  return 'QmX5JxcFhyasptCWMA6unFPm3TRYjPSkJb5HhN8289r5uk';
 }
 
 // ── Core REST Client ─────────────────────────────────────────────────────────
