@@ -1189,7 +1189,7 @@
 
     var protectionType = isMediaFile ? 'cenc:lit-aes-gcm-v3' : 'lit-aes-gcm-v3';
     var protectionAlgorithm = isMediaFile ? 'aes-128' : 'aes-256-gcm';
-    var protections = isPublic ? [] : [{
+    var protections = isPublic ? null : [{
       algorithm: protectionAlgorithm,
       protectionType: protectionType,
       dataToEncryptHash: params.dataToEncryptHash,
@@ -1214,7 +1214,9 @@
           mimeType: params.mimeType,
         }),
         object: 'self://content.json',
-        protectionType: isPublic ? [] : [protectionType],
+        ...(!isPublic && {
+          protectionType: [protectionType],
+        }),
         size: params.size,
       },
       asset: {
@@ -1222,7 +1224,9 @@
         mimeType: contentType,
         size: params.size,
         encrypted: !isPublic,
-        protections: protections,
+        ...(!isPublic && {
+          protections: protections,
+        }),
       },
       properties: {
         chainId: BASE_CHAIN_ID,
@@ -1271,7 +1275,9 @@
       properties: {
         // keep this here for backward compatibility
         size: params.size,
-        protectionType: protectionTypes,
+        ...(protectionTypes.length > 0 && {
+          protectionType: protectionTypes,
+        }),
         dataToEncryptHash: params.dataToEncryptHash,
         kid: params.kid || '',
       },
@@ -3255,8 +3261,8 @@
 
       if (isMediaFile && mediaEncodeResult) {
         if (isFreeContent) {
-          envelope.media.protectionType = [];
-          envelope.asset.protections = [];
+          delete envelope.media.protectionType;
+          delete envelope.asset.protections;
           envelope.asset.cleartext = true;
           envelope.asset.directPlayback = true;
         } else {

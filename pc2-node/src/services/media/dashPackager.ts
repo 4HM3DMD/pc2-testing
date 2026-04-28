@@ -144,7 +144,7 @@ export function buildPSSHJson(outputDir: string, encryptResult: { ciphertext: st
     variant: 'eth.web3.clearkey',
     ciphersuite: 'e8582013',
     data: {
-      authority: DEFAULT_AUTHORITY,
+      authority: DEFAULT_AUTHORITY!,
       chainId: DEFAULT_CHAIN_ID,
       rpc: DEFAULT_RPC,
       actionIpfsId: MEDIA_DECRYPT_ACTION_CID,
