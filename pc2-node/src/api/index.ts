@@ -1383,7 +1383,13 @@ export function setupAPI (app: Express): void {
     app.post('/set-profile-picture', authenticate, handleSetProfilePicture);
 
     // Elastos blockchain explorer proxy (to avoid CORS issues)
-    app.get('/api/elastos/transactions', authenticate, async (req: Request, res: Response) => {
+    // No auth middleware: this is a read-only proxy for fully-public on-chain
+    // data (`https://esc.elastos.io/api`). Same pattern as `/api/rpc/esc` in
+    // static.ts — the upstream reference (`src/backend/src/routers/elastos-proxy.js`)
+    // also has no auth gate. Requiring a token here would only break the wallet
+    // panel's `fetch()` call in `src/gui/src/services/WalletService.js:1700`,
+    // which does not attach one (bug: mock server matches this behavior).
+    app.get('/api/elastos/transactions', async (req: Request, res: Response) => {
         try {
             const { address, page = '1', pageSize = '20' } = req.query;
 
