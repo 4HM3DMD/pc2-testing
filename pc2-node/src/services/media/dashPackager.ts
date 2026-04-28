@@ -32,7 +32,7 @@ const MEDIA_ENCRYPT_ACTION_CID = 'QmdwzJvfgCRvNh9pQ63zroFozR9CfJdiweqTCkVMubD47U
 
 import { getBaseRpcUrl } from '../../utils/rpc.js';
 
-const DEFAULT_AUTHORITY = process.env.DDRM_AUTHORITY || '0x09dBe796f40ECEffEAccf243c3d758C4c1d8D87D';
+const DEFAULT_AUTHORITY = process.env.DDRM_AUTHORITY;
 const DEFAULT_CHAIN_ID = parseInt(process.env.DDRM_CHAIN_ID || '8453', 10);
 // Env var override for PSSH-embedded RPC; falls back to shared pool
 const DEFAULT_RPC = process.env.DDRM_RPC || getBaseRpcUrl();

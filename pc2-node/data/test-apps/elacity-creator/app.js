@@ -1233,7 +1233,7 @@
       },
       attributes: [
         ...(params.attributes || []),
-        { trait_type: 'Content-Type', value: getContentTypeCode(params.mimeType) },
+        { trait_type: 'Content-Type', value: contentType },
         { trait_type: 'Size', value: params.size },
         { trait_type: 'Encrypted', value: !isPublic },
         ...(!isPublic ? [
@@ -1298,7 +1298,7 @@
         },
       },
       attributes: [
-        { trait_type: 'Content-Type', value: getContentTypeCode(params.mimeType) },
+        { trait_type: 'Content-Type', value: params.mimeType },
         { trait_type: 'OpType', value: isPublic ? 0 : (isResellable ? 2 : 1) },
         { trait_type: 'Supply', value: params.copies || 10000 },
         { trait_type: 'Resell-Allowed', value: isResellable ? true : false },
