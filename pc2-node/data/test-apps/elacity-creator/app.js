@@ -3504,26 +3504,6 @@
             var gatewayAddress = await getChannelAuthority(channel);
             console.log('[Creator] Channel authority (gateway):', gatewayAddress);
 
-            var MINTER_ROLE = ethers.keccak256(ethers.toUtf8Bytes('MINTER_ROLE'));
-            var needsGrantRole = false;
-            try {
-              var acIface = new ethers.Interface(ABI.ACCESS_CONTROL);
-              var roleCheck = await rpcCall(channel, acIface.encodeFunctionData('hasRole', [MINTER_ROLE, effectiveAddr]));
-              var hasMinterRole = acIface.decodeFunctionResult('hasRole', roleCheck)[0];
-              if (!hasMinterRole) {
-                if (walletChoice === 'sa') {
-                  needsGrantRole = true;
-                  console.log('[Creator] SA needs MINTER_ROLE — will include in batch');
-                } else {
-                  throw new Error('Your wallet does not have MINTER_ROLE on this channel. Create your own channel or request access from the channel owner.');
-                }
-              }
-              console.log('[Creator] MINTER_ROLE verified for', effectiveAddr);
-            } catch (roleCheckErr) {
-              if (roleCheckErr.message.includes('MINTER_ROLE')) throw roleCheckErr;
-              console.warn('[Creator] Could not verify MINTER_ROLE (proceeding anyway):', roleCheckErr.message);
-            }
-
             var feeInfo = await getMintingFee();
             var priceWei = ethers.parseUnits(price.toString(), selectedCurrency.decimals);
             var opType = accessMethod === 'free' ? OP_TYPES.FREE
@@ -3554,14 +3534,6 @@
             setProgStep('prog-mint', 'Preparing...', 'active');
 
             if (walletChoice === 'sa' && hasSmartAccount()) {
-              if (needsGrantRole) {
-                var grantIface = new ethers.Interface(ABI.ACCESS_CONTROL);
-                var grantData = grantIface.encodeFunctionData('grantRole', [MINTER_ROLE, smartAccountAddress]);
-                var grantTxHash = await sendTxWithRetry('prog-mint', 'Grant MINTER_ROLE to Agent Account (EOA tx)', channel, grantData, 0);
-                setProgStep('prog-mint', 'Confirming role grant...', 'active');
-                await waitForReceipt(grantTxHash);
-              }
-
               var preMintSupply = null;
               try {
                 var preSupData = iface.encodeFunctionData('totalSupply', []);
