@@ -1176,7 +1176,7 @@
     return 'B';
   }
 
-  function e(params) {
+  function buildMetadataEnvelope(params) {
     var contentType = params.mimeType || 'application/octet-stream';
     var isPublic = params.accessMethod === 'free';
     var isResellable = params.accessMethod === 'buy_and_resell';
