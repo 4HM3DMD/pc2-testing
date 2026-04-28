@@ -21,13 +21,28 @@ kept in sync:
 
 Wave 8 CID pairings:
 
-| Action | IPFS canonical (Pinata) | Chipotle-internal (group 1 allowlist) |
-|--------|-------------------------|---------------------------------------|
-| non-media-decrypt (Wave 8, C-02 bound) | `QmX5JxcFhyasptCWMA6unFPm3TRYjPSkJb5HhN8289r5uk` | `QmNhgrX2xEaJmd4UiKJA6NvLfEwdweZk9YYZAFZDj69dS4` |
-| media-decrypt (Wave 8, C-02 bound) | `QmSHMSxPogSsNki51fenDzsrkKB3eJfRMHXEPZKqPk6EAb` | `QmeMz4QbJaLueADS1QdamgbxpUXzPWeS8JVsUGeoKpcYQx` |
+| Action | IPFS canonical (Pinata) | Chipotle-internal, runtime-resolved (group 1 allowlist) | Chipotle-internal, `get_lit_action_ipfs_id` — **DO NOT USE** |
+|--------|-------------------------|---------------------------------------------------------|---------------------------------------------------------------|
+| non-media-decrypt (Wave 8, C-02 bound) | `QmX5JxcFhyasptCWMA6unFPm3TRYjPSkJb5HhN8289r5uk` | **`QmQjQTM1E6CJa6x1ob1xqHKj9sVGuMeRb9LPQCFnDB8oWi`** (decimal `16077627785…083`) | `QmNhgrX2xEaJmd4UiKJA6NvLfEwdweZk9YYZAFZDj69dS4` *(registered 2026-04-28 ~18:00 but never enforced by runtime; kept as a harmless extra allowlist entry)* |
+| media-decrypt (Wave 8, C-02 bound) | `QmSHMSxPogSsNki51fenDzsrkKB3eJfRMHXEPZKqPk6EAb` | `QmeMz4QbJaLueADS1QdamgbxpUXzPWeS8JVsUGeoKpcYQx` *(happens to match — probe on 2026-04-28 ~23:20 returned HTTP 200 without extra registration)* | same CID (only for media the two pipelines happened to agree) |
 
 The pre-Wave 8 decrypt CIDs were **retained** in group 1 as canaries, so a
 short-term rollback is possible without re-touching the dashboard.
+
+> **Runbook correction (2026-04-28 ~23:20).** The rotation ceremony
+> originally used `get_lit_action_ipfs_id` to derive the Chipotle-internal
+> CID. That endpoint returned `QmNhgrX2…dS4` for the non-media source,
+> which was then registered + grouped. The "verify with empty params"
+> probe returned HTTP 200 with `missing_session_bundle` because
+> `lit_action` *also* appears to fall back to the same hash path when it
+> can't resolve the enforced one — making the verify step a false-positive.
+> First real `lit_action` call during Test 4 surfaced a 403 citing
+> internal ID `16077627785…083` (≡ CIDv0 `QmQjQTM1…oWi`). That ID was
+> added to group 1 using the same master-key ceremony; the action now
+> executes. For the media action the two hashes happened to coincide so
+> no correction was needed. The runtime-resolved column above is
+> authoritative for future rotations; see Part 3 Step 4 for the fixed
+> procedure.
 
 What was actually executed on 2026-04-28:
 
@@ -256,18 +271,54 @@ the ceremony below will 4xx in production.
 3. **Update supernode `ddrm-config.json`** on both supernodes with the same
    Pinata CID (so fresh PC2s bootstrap to the correct label).
 
-4. **Resolve Chipotle's internal CID for the new source**:
+4. **Resolve Chipotle's internal CID for the new source** — use the **403
+   probe** method, not `get_lit_action_ipfs_id`:
+
+   > **Gotcha (learned 2026-04-28, Wave 8 Test 4).** Chipotle's
+   > `get_lit_action_ipfs_id` endpoint returns a hash that is **not**
+   > identical to the internal ID enforced by the `lit_action` executor.
+   > Using its output to populate the allowlist leads to a self-consistent
+   > probe (the "verify with empty params" step below passes) that
+   > silently fails on the first real `lit_action` call. The only
+   > reliable source of the enforced internal ID is the 403 response
+   > body from an actual `lit_action` attempt under the usage key.
+
    ```bash
-   MASTER='<account master key>'
+   USAGE=$(cat pc2-node/data/.chipotle-api-key)
    BASE='https://api.chipotle.litprotocol.com/core/v1'
    SRC=$(cat pc2-node/data/lit-actions/non-media-decrypt-chipotle.js)
-   curl -s -X POST -H "X-Api-Key: $MASTER" -H "Content-Type: application/json" \
-     "$BASE/get_lit_action_ipfs_id" -d "$(jq -nc --arg c "$SRC" '$c')"
+
+   # Expected response while NOT allowlisted:
+   #   HTTP 403 body:
+   #   "... not authorized to execute the specified action (<IPFS-CID>/<DECIMAL>)."
+   #
+   # Grab the trailing decimal — that is Chipotle's internal ID.
+   curl -s -X POST -H "X-Api-Key: $USAGE" -H "Content-Type: application/json" \
+     "$BASE/lit_action" \
+     -d "$(jq -nc --arg c "$SRC" '{code:$c, js_params:{}}')"
+
+   # Convert decimal → CIDv0 (base58btc of 0x1220 + 32-byte big-endian digest):
+   python3 -c '
+   ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+   d = int(input("decimal internal ID: "))
+   mh = bytes([0x12, 0x20]) + d.to_bytes(32, "big")
+   n, out = int.from_bytes(mh, "big"), ""
+   while n:
+       n, r = divmod(n, 58); out = ALPHABET[r] + out
+   print("CIDv0:", out)
+   '
    ```
+
+   If the probe returns HTTP 200 (with any action-level error such as
+   `missing_session_bundle`), the action is **already** allowlisted and
+   no further Chipotle Core API work is needed — skip to step 6 for
+   double-checking. That's how the Wave 8 media path looked on
+   2026-04-28 after the non-media entry was fixed.
 
 5. **Register + group-add** the Chipotle-internal CID:
    ```bash
-   CHIP_CID='<output of step 4>'
+   MASTER=$(cat pc2-node/data/.chipotle-account-key)
+   CHIP_CID='<CIDv0 output from step 4>'
    curl -s -X POST -H "X-Api-Key: $MASTER" -H "Content-Type: application/json" \
      "$BASE/add_action" \
      -d "{\"action_ipfs_cid\":\"$CHIP_CID\",\"name\":\"...\",\"description\":\"...\"}"
@@ -276,19 +327,15 @@ the ceremony below will 4xx in production.
      -d "{\"action_ipfs_cid\":\"$CHIP_CID\",\"group_id\":1}"
    ```
 
-6. **Verify** with the usage key, empty params:
-   ```bash
-   USAGE=$(cat pc2-node/data/.chipotle-api-key)
-   curl -s -X POST -H "X-Api-Key: $USAGE" -H "Content-Type: application/json" \
-     "$BASE/lit_action" \
-     -d "$(jq -nc --arg c "$SRC" '{code:$c, js_params:{}}')" | head -c 200
-   # must return HTTP 200 (any action-level error is fine; a 403 means step 5 failed).
-   ```
+6. **Verify** by re-running the **same `lit_action` probe from step 4**.
+   It must now return HTTP 200 (any action-level error such as
+   `missing_session_bundle` is fine; a 403 means steps 5 failed or the
+   CID from step 4 was computed wrong).
 
 7. **Leave the previous Chipotle-internal CID in group 1** as a rollback
    canary for at least one release cycle. Remove it with
    `POST /remove_action_from_group` (`hashed_cid` = the 0x-prefixed
-   keccak256 shown in `/list_actions?group_id=1`) once you're confident.
+   keccak256 shown in the allowlist listing) once you're confident.
 
 ---
 
@@ -306,6 +353,11 @@ the ceremony below will 4xx in production.
 - [x] Automated regression + live supernode probe: 15/15 green.
 - [x] Chipotle group-1 allowlist updated via Core API — both Wave 8
       Chipotle-internal CIDs registered + added; verified with a live
-      `lit_action` call returning HTTP 200 instead of 403.
+      `lit_action` call returning HTTP 200 instead of 403. Amended
+      2026-04-28 ~23:20 after Test 4 exposed that the non-media
+      allowlist entry (`QmNhgrX2…`) was computed from
+      `get_lit_action_ipfs_id` which diverges from the runtime hash;
+      the real runtime-resolved CID `QmQjQTM1…oWi` was added and
+      verified. Media pair was already correct by chance.
 - [ ] Manual C-02 matrix (4 cases): mint, buy, play positive + kid-swap
       negative on both media and non-media.
