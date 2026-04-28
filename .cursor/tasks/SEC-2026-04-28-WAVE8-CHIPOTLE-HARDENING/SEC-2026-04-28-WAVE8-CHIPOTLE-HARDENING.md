@@ -2,33 +2,46 @@
 
 **Task ID**: SEC-2026-04-28-WAVE8-CHIPOTLE-HARDENING
 **Created**: 2026-04-28
-**Status**: Blocked (awaiting upstream fix — see "Blocker" below)
+**Status**: Review (all automated checks green; awaiting manual C-02 matrix run)
 **Priority**: High (release-gate for v1.2.0 Lit Chipotle migration)
 
-## Blocker (2026-04-28 ~08:50)
+## Blocker — resolved 2026-04-28 ~23:40
 
-Test 4 (the manual 4-case C-02 end-to-end matrix) is blocked on an **unrelated
+Test 4 (the manual 4-case C-02 end-to-end matrix) was blocked on an **unrelated
 upstream bug** introduced by Irzhy in commit
 [`14e151a35`](../../) *"refactor: update content metadata structures and migrate
 to directory-based IPFS storage for creator assets"* on
-`feature/lit-chipotle-migration`. That commit deletes
+`feature/lit-chipotle-migration`. That commit deleted
 `function buildMetadataEnvelope(params)` from
 `pc2-node/data/test-apps/elacity-creator/app.js` (previously at line 1171) but
-leaves the call site at line 3229 (`var envelope = buildMetadataEnvelope(metaParams);`).
-Every mint through the creator app now throws `buildMetadataEnvelope is not defined`
-after the encrypt step succeeds — so Wave 8's encrypt path is proven clean in
-dev, but decrypt cannot be exercised without a completed mint.
+left the call site at line 3229 (`var envelope = buildMetadataEnvelope(metaParams);`).
+Every mint through the creator app threw `buildMetadataEnvelope is not defined`
+after the encrypt step succeeded — so Wave 8's encrypt path was proven clean in
+dev, but decrypt could not be exercised without a completed mint.
 
-Impact on Wave 8 itself: **none** — all Wave 8 code paths are shipped and
-automated checks are green. The blocker is purely on the test harness side.
+**Resolution**: Irzhy pushed four follow-up commits to
+`feature/lit-chipotle-migration` on 2026-04-28. Pulled and rebased our 7
+Wave 8 / UI-X / MEDIA commits on top cleanly (zero conflicts — no file
+overlap between his set and ours):
 
-Resolution path:
+| SHA | Subject | Relevance |
+|---|---|---|
+| `149fc06d6` | fix: restore buildMetadataEnvelope function | **Unblocks Test 4** — renames minified helper `e(params)` back to `buildMetadataEnvelope(params)` so line 3229 resolves. |
+| `7a468c751` | fix: adjusted metadata production to the standard | Marketplace envelope layer only — moves to wiki-hosted JSON Schema URLs and NFT-standard `attributes[]`. Does not touch PSSH-in-moov, encryption, Chipotle, or Lit Actions. |
+| `8bf99b065` | fix: removed hasRole check before minting | Simplifies our test path (no role grant needed). |
+| `362b8b8d6` | fix: implement safe guard to prevent crash when opening app | Defensive launch crash prevention in `pc2-node/src/storage/ipfs.ts` and `src/gui/src/helpers/launch_app.js`. Error-handling only, no API surface change. |
 
-1. Irzhy re-introduces (or relocates) `buildMetadataEnvelope` so the refactor
-   is complete.
-2. `git pull` + hard-refresh the elacity-creator iframe (no PC2 rebuild needed
-   — it is a static asset).
-3. Run the 4-case matrix. If green, this task moves Review → Done.
+Impact on Wave 8 itself: **none** — all Wave 8 code paths remained shipped and
+automated checks remained 15/15 green through the rebase. The blocker was
+purely on the test harness side.
+
+Next step:
+
+1. Sash hard-refreshes the elacity-creator iframe (no PC2 rebuild needed — it
+   is a static asset).
+2. Runs the 4-case matrix (mint → buy → play positive + kid-swap negative, for
+   both media and non-media).
+3. If green, this task moves Review → Done and the branch is pushable.
 
 ## Description
 
@@ -173,12 +186,9 @@ runs — this is the fail-safe.
       `ROTATION_RUNBOOK.md` Part 3.
 - [ ] Sash runs the 4-case manual C-02 end-to-end matrix (positive +
       negative for both media and non-media) against a fresh mint on the
-      updated CIDs. **🚫 Blocked 2026-04-28 on Irzhy's commit `14e151a35`
-      deleting `buildMetadataEnvelope` from `elacity-creator/app.js`
-      (line 3229 call site left behind). Proven via console log: the
-      Wave 8 encrypt path executes cleanly with the new CID
-      `QmX5Jxc…r5uk` and fails only at the metadata-envelope step. Irzhy
-      pinged; resuming once he pushes the fix.**
+      updated CIDs. **🟢 Unblocked 2026-04-28 ~23:40** — Irzhy's
+      `149fc06d6` restored `buildMetadataEnvelope`; rebased cleanly on
+      top of his 4 commits (zero conflicts). Ready for the matrix run.
 
 ## Acceptance Criteria
 
@@ -240,10 +250,16 @@ runs — this is the fail-safe.
 - `PROVISION_SIG_REQUIRED=0` is retained only for the "my supernodes are
   temporarily offline for a key rotation" corner case; steady-state value
   is `1` (default).
-- **2026-04-28 EOD**: still blocked on Irzhy's `buildMetadataEnvelope` fix.
-  Adjacent cosmetic console-noise items reported by the end-user during
-  the wait were swept in-session and logged separately at
+- **2026-04-28 EOD (updated 23:40)**: **unblocked.** Irzhy pushed four
+  follow-up commits to `feature/lit-chipotle-migration` (headlined by
+  `149fc06d6` restoring `buildMetadataEnvelope`). Pulled with
+  `git pull --rebase origin feature/lit-chipotle-migration` — 7 local
+  commits replayed cleanly on top of his 4, zero conflicts (proven by
+  pre-rebase file-overlap check: empty intersection). Task flipped
+  Blocked → Review. Adjacent cosmetic console-noise items swept earlier
+  in the wait window are logged separately at
   [`UIX-2026-04-28-WAVE8-WAITING-POLISH`](../UIX-2026-04-28-WAVE8-WAITING-POLISH/UIX-2026-04-28-WAVE8-WAITING-POLISH.md)
-  to keep Wave 8's commit trail focused on security scope. No Wave 8 code
-  paths touched by that work. Resume manual C-02 matrix tomorrow once
-  Irzhy's fix lands.
+  to keep Wave 8's commit trail focused on security scope. No Wave 8
+  code paths touched by that work. Sash to run the 4-case manual C-02
+  matrix on the unified branch; green matrix moves Review → Done and
+  makes all 11 local commits pushable as one set.
