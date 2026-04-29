@@ -104,7 +104,8 @@ export interface Config {
     seeding?: {
         enabled?: boolean; // Master toggle (default: true)
         auto_pin_purchases?: boolean; // Auto-pin after marketplace buy (default: true)
-        disk_quota_percent?: number; // Max % of available disk for seeded content (default: 50)
+        disk_quota_percent?: number; // Hard cap on disk used-% (default: 95)
+        min_free_bytes?: number; // Absolute free-byte floor before pausing pins (default: 2 GB)
         max_concurrent_pins?: number; // Parallel pin downloads (default: 3)
         max_upload_mbps?: number; // Bandwidth cap for serving, 0 = unlimited (default: 0)
         announce_hot_interval_hours?: number; // Re-announce cadence for hot content (default: 2)

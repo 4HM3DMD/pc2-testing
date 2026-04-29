@@ -494,6 +494,32 @@
     return el.innerHTML;
   }
 
+  // Human-readable byte size. Accepts Number or numeric String.
+  function formatSizeBytes(n) {
+    var num = typeof n === 'number' ? n : parseFloat(n);
+    if (!isFinite(num) || num < 0) return '';
+    if (num >= 1073741824) return (num / 1073741824).toFixed(2) + ' GB';
+    if (num >= 1048576) return (num / 1048576).toFixed(1) + ' MB';
+    if (num >= 1024) return (num / 1024).toFixed(1) + ' KB';
+    return Math.round(num) + ' B';
+  }
+
+  // Render NFT attribute values with trait-type-aware formatting so
+  // raw byte counts (Size / Content Size / File Size) and object
+  // blobs don't show up as "202881178" or "[object Object]".
+  function formatAttrValue(traitType, rawValue) {
+    var t = String(traitType || '').toLowerCase().replace(/[-_\s]/g, '');
+    var isSize = t === 'size' || t === 'contentsize' || t === 'filesize' || t === 'bytes';
+    if (isSize) {
+      var human = formatSizeBytes(rawValue);
+      if (human) return human;
+    }
+    if (rawValue && typeof rawValue === 'object') {
+      try { return JSON.stringify(rawValue); } catch (e) { return ''; }
+    }
+    return String(rawValue == null ? '' : rawValue);
+  }
+
   function formatViews(views) {
     if (!views) return '';
     if (views >= 1000000) return (views / 1000000).toFixed(1) + 'M views';
@@ -1088,8 +1114,15 @@
     dom.detailAttributes.innerHTML = '';
     dom.purchaseStatus.classList.add('hidden');
     dom.downloadNodeBtn.classList.add('hidden');
+    // Reset button label/disabled state — otherwise a stuck "Downloading..." /
+    // "Retry Download" label leaks between asset views and the user thinks a
+    // pin is in progress when no request is actually running.
+    var dlSpan = dom.downloadNodeBtn.querySelector('span');
+    if (dlSpan) dlSpan.textContent = 'Download to your node';
+    dom.downloadNodeBtn.disabled = false;
     dom.openViewerBtn.classList.add('hidden');
     dom.downloadStatus.classList.add('hidden');
+    dom.downloadStatus.innerHTML = '';
     dom.detailOwnerActions.classList.add('hidden');
     dom.resellBtn.classList.add('hidden');
     dom.transferBtn.classList.add('hidden');
@@ -1311,7 +1344,7 @@
       attrs.forEach(function (attr) {
         attrHtml += '<div class="attribute-chip">' +
           '<span class="attr-label">' + escapeHtml(attr.trait_type || '') + '</span>' +
-          '<span class="attr-value">' + escapeHtml(String(attr.value || '')) + '</span>' +
+          '<span class="attr-value">' + escapeHtml(formatAttrValue(attr.trait_type, attr.value)) + '</span>' +
           '</div>';
       });
       dom.detailAttributes.innerHTML = attrHtml;

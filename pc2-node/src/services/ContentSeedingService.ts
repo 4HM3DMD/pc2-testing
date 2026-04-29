@@ -52,6 +52,7 @@ interface SeedingConfig {
   enabled: boolean;
   autoPinPurchases: boolean;
   diskQuotaPercent: number;
+  minFreeBytes: number;
   maxConcurrentPins: number;
   maxUploadMbps: number;
   announceHotIntervalHours: number;
@@ -81,7 +82,14 @@ export class ContentSeedingService {
     this.config = {
       enabled: s.enabled ?? true,
       autoPinPurchases: s.auto_pin_purchases ?? true,
-      diskQuotaPercent: s.disk_quota_percent ?? 50,
+      // Percent-based quota is only a failsafe for truly-full disks.
+      // Default 99% so a dev laptop at 96% usage (with 30+ GB genuinely
+      // free on a 1TB drive) isn't locked out. Real gating is done by
+      // minFreeBytes below.
+      diskQuotaPercent: s.disk_quota_percent ?? 99,
+      // Absolute floor on free disk before pinning pauses. 2 GB covers
+      // a handful of concurrent video pins without risking fill-up.
+      minFreeBytes: s.min_free_bytes ?? 2 * 1024 * 1024 * 1024,
       maxConcurrentPins: s.max_concurrent_pins ?? 3,
       maxUploadMbps: s.max_upload_mbps ?? 0,
       announceHotIntervalHours: s.announce_hot_interval_hours ?? 2,
@@ -109,7 +117,7 @@ export class ContentSeedingService {
 
     if (!this.config.enabled) return;
 
-    log.info(`[Seeding] Initialized — auto_pin=${this.config.autoPinPurchases}, quota=${this.config.diskQuotaPercent}%, max_concurrent=${this.config.maxConcurrentPins}`);
+    log.info(`[Seeding] Initialized — auto_pin=${this.config.autoPinPurchases}, min_free=${(this.config.minFreeBytes / (1024 ** 3)).toFixed(1)}GB, quota_cap=${this.config.diskQuotaPercent}%, max_concurrent=${this.config.maxConcurrentPins}`);
 
     // Drain any operations that arrived before IPFS was ready
     if (this.deferredOps.length > 0) {
@@ -256,17 +264,32 @@ export class ContentSeedingService {
   // -----------------------------------------------------------------------
 
   private isQuotaExceeded(): boolean {
-    if (this.config.diskQuotaPercent <= 0 || this.config.diskQuotaPercent >= 100) return false;
     try {
       const stats = statfsSync('.');
       const totalBytes = stats.blocks * stats.bsize;
       const freeBytes = stats.bavail * stats.bsize;
       const usedBytes = totalBytes - freeBytes;
-      const usedPercent = (usedBytes / totalBytes) * 100;
+      const usedPercent = totalBytes > 0 ? (usedBytes / totalBytes) * 100 : 0;
 
-      if (usedPercent >= this.config.diskQuotaPercent) {
+      const freeGB = freeBytes / (1024 ** 3);
+      const minFreeGB = this.config.minFreeBytes / (1024 ** 3);
+
+      // Primary gate: absolute free-bytes floor. Percent is a coarse
+      // metric that punishes users on big-but-mostly-full laptop drives
+      // even when they have dozens of GB genuinely free. Free bytes is
+      // what actually matters for fitting the next pin.
+      if (freeBytes < this.config.minFreeBytes) {
         const pinnedSize = this.db?.getTotalPinnedSize() ?? 0;
-        log.warn(`[Seeding] Disk quota exceeded: ${usedPercent.toFixed(1)}% used (limit: ${this.config.diskQuotaPercent}%, pinned: ${(pinnedSize / (1024 * 1024)).toFixed(0)}MB)`);
+        log.warn(`[Seeding] Pinning paused — only ${freeGB.toFixed(1)}GB free (minimum: ${minFreeGB.toFixed(1)}GB, pinned: ${(pinnedSize / (1024 * 1024)).toFixed(0)}MB)`);
+        return true;
+      }
+
+      // Secondary gate: hard % cap for extreme cases (e.g. 99%+ full).
+      // Disabled when configured >=100.
+      if (this.config.diskQuotaPercent > 0 && this.config.diskQuotaPercent < 100
+          && usedPercent >= this.config.diskQuotaPercent) {
+        const pinnedSize = this.db?.getTotalPinnedSize() ?? 0;
+        log.warn(`[Seeding] Pinning paused — disk ${usedPercent.toFixed(1)}% used (cap: ${this.config.diskQuotaPercent}%, free: ${freeGB.toFixed(1)}GB, pinned: ${(pinnedSize / (1024 * 1024)).toFixed(0)}MB)`);
         return true;
       }
     } catch {
@@ -285,7 +308,7 @@ export class ContentSeedingService {
     if (this.activeCount >= this.config.maxConcurrentPins) return;
 
     if (this.isQuotaExceeded()) {
-      log.warn(`[Seeding] Queue paused — disk quota ${this.config.diskQuotaPercent}% exceeded, ${this.queue.length} item(s) waiting`);
+      log.warn(`[Seeding] Queue paused — disk headroom too low, ${this.queue.length} item(s) waiting`);
       return;
     }
 
