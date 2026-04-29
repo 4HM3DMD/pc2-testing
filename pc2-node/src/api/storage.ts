@@ -687,6 +687,110 @@ interface MirrorProbeResult {
 }
 const mirrorProbeState: Map<string, MirrorProbeResult> = new Map();
 
+/**
+ * Elacity Kubo pin forward (ELACITY-KUBO-PIN-FORWARD task).
+ *
+ * After every successful local pin, fire one authenticated request to
+ * `ipfs.ela.city`'s Kubo API asking it to pin the same CID. Kubo then pulls
+ * the content over libp2p (from this node, via IPFS-ELACITY-BOOTSTRAP peering)
+ * and persists it in its own pinset — surviving this node going offline.
+ *
+ * Requires the Elacity ops team to have deployed the nginx patch in
+ * `docs/handover/ELACITY_IPFS_PIN_ENDPOINT_NGINX_PATCH.md`. Until both
+ * `ELACITY_PIN_FORWARD_URL` and `ELACITY_PIN_FORWARD_TOKEN` are set, this is
+ * a no-op and no network traffic is generated.
+ */
+interface ElacityPinForwardConfig {
+  url: string;
+  token: string;
+}
+
+interface ElacityForwardProbeResult {
+  url: string;
+  lastCid: string;
+  lastStatus: number | 'error';
+  lastError?: string;
+  lastDurationMs: number;
+  lastAt: number;
+}
+let elacityForwardProbeState: ElacityForwardProbeResult | null = null;
+
+function getElacityPinForwardConfig(): ElacityPinForwardConfig | null {
+  const rawUrl = process.env.ELACITY_PIN_FORWARD_URL;
+  const token = process.env.ELACITY_PIN_FORWARD_TOKEN;
+  if (!rawUrl || !token) return null;
+  const url = rawUrl.trim().replace(/\/+$/, '');
+  if (!/^https?:\/\//.test(url)) return null;
+  return { url, token: token.trim() };
+}
+
+function forwardPinToElacityKubo(cid: string): void {
+  const config = getElacityPinForwardConfig();
+  if (!config) return;
+
+  const target = `${config.url}/api/v0/pin/add?arg=${encodeURIComponent(cid)}&recursive=true`;
+  const start = Date.now();
+
+  void fetch(target, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${config.token}` },
+    signal: AbortSignal.timeout(30000),
+  }).then(
+    (response) => {
+      const durationMs = Date.now() - start;
+      elacityForwardProbeState = {
+        url: config.url,
+        lastCid: cid,
+        lastStatus: response.status,
+        lastDurationMs: durationMs,
+        lastAt: Date.now(),
+      };
+      if (response.ok) {
+        logger.info(`[Storage API] Elacity Kubo pin forward ok: cid=${cid} (${durationMs}ms)`);
+      } else {
+        logger.warn(
+          `[Storage API] Elacity Kubo pin forward non-OK: cid=${cid} status=${response.status} (${durationMs}ms)`,
+        );
+      }
+    },
+    (err: any) => {
+      const durationMs = Date.now() - start;
+      const message = err?.message || 'unknown error';
+      elacityForwardProbeState = {
+        url: config.url,
+        lastCid: cid,
+        lastStatus: 'error',
+        lastError: message,
+        lastDurationMs: durationMs,
+        lastAt: Date.now(),
+      };
+      logger.debug(`[Storage API] Elacity Kubo pin forward failed: cid=${cid} (${durationMs}ms): ${message}`);
+    },
+  );
+}
+
+// Emit a single boot-time info line so operators can confirm the forward
+// state from logs. Any non-default env state that still ends up disabled
+// gets a warning so misconfiguration is visible without grepping.
+(() => {
+  const config = getElacityPinForwardConfig();
+  if (config) {
+    logger.info(`[Storage API] Elacity Kubo pin forward: enabled -> ${config.url}`);
+    return;
+  }
+  const hasUrl = !!process.env.ELACITY_PIN_FORWARD_URL;
+  const hasToken = !!process.env.ELACITY_PIN_FORWARD_TOKEN;
+  if (hasUrl && hasToken) {
+    logger.warn(
+      '[Storage API] Elacity Kubo pin forward: both env vars set but ELACITY_PIN_FORWARD_URL is not http(s):// — disabled',
+    );
+  } else if (hasUrl || hasToken) {
+    logger.warn(
+      '[Storage API] Elacity Kubo pin forward: partially configured (both ELACITY_PIN_FORWARD_URL and ELACITY_PIN_FORWARD_TOKEN required) — disabled',
+    );
+  }
+})();
+
 function getConfiguredPinMirrors(): string[] {
   const raw = process.env.SUPERNODE_PIN_MIRRORS;
   if (!raw) return [];
@@ -756,6 +860,22 @@ router.get('/ipfs/pin-mirrors', authenticate, requireOwner, (_req: Authenticated
 });
 
 /**
+ * GET /api/storage/ipfs/elacity-pin-forward
+ * Diagnostic: report whether the Elacity Kubo pin forward is configured and
+ * the last probe result. Owner-guarded — the token is never returned, only
+ * a boolean flag confirming it is present.
+ */
+router.get('/ipfs/elacity-pin-forward', authenticate, requireOwner, (_req: AuthenticatedRequest, res: Response) => {
+  const config = getElacityPinForwardConfig();
+  res.json({
+    enabled: config !== null,
+    url: config?.url ?? null,
+    tokenConfigured: config !== null,
+    lastProbe: elacityForwardProbeState,
+  });
+});
+
+/**
  * POST /api/ipfs/pin
  * Pin a remote CID to the local IPFS node (fetches content from the network/gateway).
  * Used by the Elacity Market to download owned media to the user's node.
@@ -793,6 +913,7 @@ router.post('/ipfs/pin', authenticate, async (req: AuthenticatedRequest, res: Re
       }
 
       fanOutSupernodePinMirrors(cidClean);
+      forwardPinToElacityKubo(cidClean);
 
       return res.json({
         success: true,
@@ -834,6 +955,7 @@ router.post('/ipfs/pin', authenticate, async (req: AuthenticatedRequest, res: Re
       }
 
       fanOutSupernodePinMirrors(cidClean);
+      forwardPinToElacityKubo(cidClean);
 
       res.json({
         success: true,
@@ -3268,6 +3390,8 @@ router.post('/ipfs/upload-elacity', authenticate, async (req: AuthenticatedReque
 
     logger.info(`[IPFS-Elacity] Pinned: ${remoteCid} (${remoteSize} bytes)`);
 
+    forwardPinToElacityKubo(remoteCid);
+
     res.json({
       success: true,
       cid: remoteCid,
@@ -3348,6 +3472,8 @@ router.post('/ipfs/upload-elacity-directory', authenticate, async (req: Authenti
     } catch (replicateErr: any) {
       logger.warn(`[IPFS-Elacity] Replication failed (non-fatal): ${replicateErr.message}`);
     }
+
+    forwardPinToElacityKubo(finalCid);
 
     res.json({ success: true, cid: finalCid });
   } catch (error: any) {
