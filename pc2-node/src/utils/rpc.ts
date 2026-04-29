@@ -24,13 +24,47 @@ const DEFAULT_TIMEOUT_MS = 15_000;
 
 let rpcUrls: string[] = [...DEFAULT_BASE_RPC_URLS];
 let currentIndex = 0;
+let supernodePrependCount = 0;
 
-export function initBaseRpcPool(urls?: string[]): void {
-  if (urls && urls.length > 0) {
-    rpcUrls = urls;
-  }
+/**
+ * Initialize the shared Base RPC pool.
+ *
+ * @param urls          Base list of RPC URLs (from config). Falls back to the
+ *                      hardcoded `DEFAULT_BASE_RPC_URLS` when empty/undefined.
+ * @param supernodeUrls Authoritative supernode-backed RPC endpoints. When
+ *                      provided (typically via the `SUPERNODE_RPC_URLS`
+ *                      env var), these are **prepended** to the effective
+ *                      pool so they are tried first. The existing public
+ *                      fallbacks remain as a safety net — if a supernode
+ *                      URL 404s / 503s / rate-limits, the rotation logic
+ *                      falls through exactly as before.
+ *
+ *                      Empty array or undefined = no supernodes configured;
+ *                      the pool behaves identically to the pre-supernode
+ *                      implementation. This is the default for user nodes
+ *                      that have not opted in.
+ */
+export function initBaseRpcPool(urls?: string[], supernodeUrls?: string[]): void {
+  const baseList = urls && urls.length > 0 ? urls : DEFAULT_BASE_RPC_URLS.slice();
+  const prepend = (supernodeUrls ?? []).filter((u) => typeof u === 'string' && u.length > 0);
+  rpcUrls = [...prepend, ...baseList];
+  supernodePrependCount = prepend.length;
   currentIndex = 0;
-  log.info(`RPC pool initialized with ${rpcUrls.length} endpoints: ${rpcUrls[0]}...`);
+  const supernodeNote = prepend.length > 0 ? ` (${prepend.length} supernode first)` : '';
+  log.info(`RPC pool initialized with ${rpcUrls.length} endpoints${supernodeNote}: ${rpcUrls[0]}...`);
+}
+
+/** Read-only view of pool state for diagnostics and logging. */
+export function getBaseRpcPoolInfo(): {
+  urls: string[];
+  currentIndex: number;
+  supernodeCount: number;
+} {
+  return {
+    urls: [...rpcUrls],
+    currentIndex,
+    supernodeCount: supernodePrependCount,
+  };
 }
 
 export function getBaseRpcUrl(): string {

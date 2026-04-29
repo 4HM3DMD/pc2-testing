@@ -47,7 +47,16 @@ try {
   config = loadConfig();
   logger.info('✅ Configuration loaded');
 
-  initBaseRpcPool(config.content_indexer?.rpc_urls);
+  // Supernode RPC proxy (SUPERNODE-RPC-PROXY task): when the operator has
+  // pointed this node at one or more supernode-backed Base RPC endpoints via
+  // the SUPERNODE_RPC_URLS env var (comma-separated), prepend them to the
+  // shared pool so they are tried before any public fallback. Empty/undefined
+  // = no change to existing behavior.
+  const supernodeRpcUrls = (process.env.SUPERNODE_RPC_URLS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  initBaseRpcPool(config.content_indexer?.rpc_urls, supernodeRpcUrls);
 } catch (error) {
   logger.error('❌ Failed to load configuration:', error);
   process.exit(1);

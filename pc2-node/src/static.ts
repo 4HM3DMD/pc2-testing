@@ -296,13 +296,29 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
   // a3c599d6c) never failing over. With the fallback fix AND this reorder,
   // most reads now hit llamarpc first and `mainnet.base.org` is only used
   // if all three alternatives are down simultaneously (vanishingly rare).
+  //
+  // SUPERNODE_RPC_URLS (comma-separated env var) prepends authoritative
+  // supernode-backed endpoints ahead of the public community RPCs. When the
+  // supernode proxies are deployed (SUPERNODE-RPC-PROXY task), operators flip
+  // the env var on and no code change is required. The existing rate-limit /
+  // HTTP-error fallback logic transparently rolls to the public RPCs if any
+  // supernode URL misbehaves, so adding them at the front of the list is
+  // zero-risk.
+  const supernodeRpcUrlsEnv = (process.env.SUPERNODE_RPC_URLS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
   const BASE_RPC_URLS = [
+    ...supernodeRpcUrlsEnv,
     'https://base.llamarpc.com',
     'https://base-rpc.publicnode.com',
     'https://rpc.ankr.com/base',
     'https://base.blockpi.network/v1/rpc/public',
     'https://mainnet.base.org',
   ];
+  if (supernodeRpcUrlsEnv.length > 0) {
+    log.info(`[rpc-proxy] ${supernodeRpcUrlsEnv.length} supernode RPC endpoint(s) prepended to BASE_RPC_URLS`);
+  }
 
   // Per-method cache TTLs (milliseconds). Methods not listed are not cached.
   //

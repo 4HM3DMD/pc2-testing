@@ -2,8 +2,8 @@
 
 **Task ID**: SUPERNODE-RPC-PROXY
 **Created**: 2026-04-29
-**Status**: Proposed
-**Priority**: Medium (UX follow-up for v1.2.1 / v1.3)
+**Status**: InProgress — client-side plumbing shipped 2026-04-29 (default-off); supernode-side deployment still pending
+**Priority**: P1-A for v1.2 (client side ships now; activation is a one-line env flip once supernode proxies are up)
 
 ## Description
 
@@ -163,3 +163,94 @@ log), and the bundled reorder + eth_call cache change that follows
 make the CURRENT public-RPC flow robust enough to ship v1.2 without
 this task. This task is about removing a third-party dependency, not
 about fixing a bug.
+
+## 2026-04-29 — Phase 1 shipped (client side)
+
+Landed the client-side plumbing so that activation is a pure operator
+env-var change once the supernode proxies are deployed. **No default
+behavior change** — user nodes without `SUPERNODE_RPC_URLS` set behave
+identically to the pre-change implementation.
+
+### Code changes
+
+- **`pc2-node/src/utils/rpc.ts`**:
+  - `initBaseRpcPool(urls?, supernodeUrls?)` now accepts a second
+    argument. Entries are **prepended** to the effective pool so they
+    are tried before any configured or default public RPC.
+  - Empty/undefined `supernodeUrls` = no change (default).
+  - Added `getBaseRpcPoolInfo()` exporting `{ urls, currentIndex, supernodeCount }`
+    for future diagnostics / ops tooling.
+  - Startup log now reports `"N endpoints (K supernode first): <first-url>..."`
+    when supernode URLs are configured.
+
+- **`pc2-node/src/index.ts`**:
+  - Reads `process.env.SUPERNODE_RPC_URLS` (comma-separated), trims,
+    filters empty strings, and passes to `initBaseRpcPool()`.
+
+- **`pc2-node/src/static.ts`**:
+  - Same env-var read applied to the local `BASE_RPC_URLS` array used
+    by `handleJsonRpcProxy('/api/rpc/base')` — the Base JSON-RPC proxy
+    that the Elacity Market wallet (`wallet.js`) and Particle iframe
+    both route through. This is the **user-facing path** and therefore
+    the one that relieves Irzhy's `governor` rate-limit errors.
+  - Supernode URLs are added at the front of the existing public
+    fallback list (llamarpc → publicnode → ankr → blockpi → mainnet.base.org).
+  - One-line `[rpc-proxy] N supernode RPC endpoint(s) prepended...`
+    info log fires at server start when the env var is set.
+
+### Why the existing fallback logic makes this safe
+
+`handleJsonRpcProxy` already:
+- Rolls over on HTTP non-2xx (including 404 / 503).
+- Rolls over on JSON-wrapped "rate-limit" errors (`isTransportRateLimit`,
+  commit `a3c599d6c`).
+- Serves successful responses through the 2 s `eth_call` proxy cache.
+
+So a supernode endpoint that is misconfigured, unreachable, or
+throttled is invisible to the user: the request transparently walks
+down the list and hits a public fallback. Worst case: +8 s of timeout
+per request (`controller.abort(() => 8000)`) before fallback kicks in.
+
+### Smoke verification (local, 2026-04-29)
+
+```
+# Env set, pointing at a bogus supernode URL to exercise fallback
+$ SUPERNODE_RPC_URLS="https://fake-supernode.example.com/base" \
+    node dist/index.js
+[rpc] RPC pool initialized with 6 endpoints (1 supernode first): https://fake-supernode.example.com/base...
+[static] [rpc-proxy] 1 supernode RPC endpoint(s) prepended to BASE_RPC_URLS
+
+$ curl -sX POST http://localhost:4200/api/rpc/base \
+    -H 'Content-Type: application/json' \
+    -d '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}'
+{"jsonrpc":"2.0","id":1,"result":"0x2105"}   # Base chainId 8453 — fallback worked
+```
+
+```
+# Env unset — no change from pre-feature behavior
+$ node dist/index.js
+[rpc] RPC pool initialized with 5 endpoints: https://mainnet.base.org...
+# No [rpc-proxy] supernode log line.
+
+$ curl -sX POST http://localhost:4200/api/rpc/base ...
+{"jsonrpc":"2.0","id":1,"result":"0x2105"}   # identical response
+```
+
+### What still needs to happen (Phase 2)
+
+1. Deploy the supernode proxy service (Option A from Requirements
+   above — nginx/caddy → Alchemy or Infura) on both supernodes.
+2. Verify with the MVP acceptance criteria curls (chainId =
+   `0x2105`, unit tests pass, load test passes).
+3. Publish the two public endpoints
+   (`https://rpc.node1.pc2.ela.city/base` and
+   `https://rpc.node2.pc2.ela.city/base`).
+4. On each user node: set
+   `SUPERNODE_RPC_URLS="https://rpc.node1.pc2.ela.city/base,https://rpc.node2.pc2.ela.city/base"`
+   in the node's environment or systemd unit. Restart. Confirm the
+   `RPC pool initialized with 7 endpoints (2 supernode first)...`
+   startup log.
+
+No additional code changes are required in `pc2-node` after Phase 2 —
+the hooks are already in place. Same activation pattern as
+`SUPERNODE_PIN_MIRRORS` from `SUPERNODE-MEDIA-PINNING`.
