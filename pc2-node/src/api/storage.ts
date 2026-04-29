@@ -452,6 +452,30 @@ router.get('/ipfs/network', authenticate, async (req: AuthenticatedRequest, res:
 });
 
 /**
+ * POST /api/storage/ipfs/reconnect-elacity
+ * Manually (re)dial configured Elacity peers. Useful when the startup dial
+ * fails or the connection manager evicts the peer under LRU pressure.
+ */
+router.post('/ipfs/reconnect-elacity', authenticate, requireOwner, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const ipfs = req.app.locals.ipfs;
+    if (!ipfs) {
+      return res.status(503).json({ error: 'IPFS not available' });
+    }
+    const outcome = await ipfs.reconnectElacityPeers();
+    const status = ipfs.getElacityPeerStatus();
+    res.json({
+      ...outcome,
+      elacityPeered: status.peered,
+      matchedPeerIds: status.matchedPeerIds,
+    });
+  } catch (error: any) {
+    logger.error('[Storage API]: Error reconnecting Elacity peers:', error);
+    res.status(500).json({ error: error?.message || 'Failed to reconnect Elacity peers' });
+  }
+});
+
+/**
  * GET /api/storage/ipfs/peers
  * Diagnostic: report whether this node is currently peered with the configured
  * Elacity public gateway (ipfs.ela.city) so operators can verify that newly

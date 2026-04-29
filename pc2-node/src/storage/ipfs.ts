@@ -119,6 +119,7 @@ export class IPFSStorage {
   private relayEnabled: boolean = false;
   private bootstrapReconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private bootstrapHealthTimer: ReturnType<typeof setInterval> | null = null;
+  private elacityReconnectTimer: ReturnType<typeof setInterval> | null = null;
   private configuredBootstrapPeers: string[] = [];
   private configuredElacityPeers: string[] = [];
   private configuredElacityPeerIds: Set<string> = new Set();
@@ -435,6 +436,35 @@ export class IPFSStorage {
             void this.connectBootstrapPeers(this.configuredBootstrapPeers, 'manual');
           }
         }, intervalMs);
+
+        // Elacity-specific reconnect: the bootstrap health check only fires
+        // at zero peers, but in steady state Elacity connections tend to be
+        // pruned by the remote Kubo (observed 10-25s after startup). A
+        // dedicated 5-min reconnect restores the peering without waiting for
+        // the whole connection pool to drop. Purely additive to the existing
+        // health timer.
+        if (this.elacityReconnectTimer) {
+          clearInterval(this.elacityReconnectTimer);
+        }
+        if (this.configuredElacityPeers.length > 0) {
+          // 60 s cadence: in testing we observed Elacity's Kubo dropping our
+          // connection within 10-25 s of startup, so a 5-min gap would miss
+          // most uploads. 60 s keeps recovery tight without being chatty.
+          const elacityIntervalMs = 60 * 1000;
+          this.elacityReconnectTimer = setInterval(() => {
+            if (!this.helia || !this.isInitialized) return;
+            const status = this.getElacityPeerStatus();
+            if (status.peered) return;
+            log.info('[IPFS] Elacity peer not connected; re-dialing');
+            void this.reconnectElacityPeers().then((result) => {
+              if (result.connected > 0) {
+                log.info(`[IPFS] Elacity reconnect ok (${result.connected}/${result.attempted})`);
+              } else if (result.attempted > 0) {
+                log.warn(`[IPFS] Elacity reconnect failed for all ${result.attempted} peer(s)`);
+              }
+            });
+          }, elacityIntervalMs);
+        }
       }
     } catch (error) {
       // Clean up any partial initialization
@@ -457,6 +487,10 @@ export class IPFSStorage {
       if (this.bootstrapHealthTimer) {
         clearInterval(this.bootstrapHealthTimer);
         this.bootstrapHealthTimer = null;
+      }
+      if (this.elacityReconnectTimer) {
+        clearInterval(this.elacityReconnectTimer);
+        this.elacityReconnectTimer = null;
       }
 
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -1772,6 +1806,31 @@ export class IPFSStorage {
     return this.connectBootstrapPeers(peers, phase);
   }
 
+  /**
+   * Manually (re)dial all configured Elacity peers. Returns per-peer results.
+   * Used as a diagnostic and manual-recovery hook when startup dial fails or
+   * the connection manager evicts the peer (e.g. LRU pressure at max
+   * connections).
+   */
+  async reconnectElacityPeers(): Promise<{
+    attempted: number;
+    connected: number;
+    results: Array<{ peer: string; success: boolean; error?: string }>;
+  }> {
+    if (!this.helia || !this.isInitialized) {
+      return { attempted: 0, connected: 0, results: [] };
+    }
+    const peers = Array.from(new Set(this.configuredElacityPeers));
+    const results: Array<{ peer: string; success: boolean; error?: string }> = [];
+    let connected = 0;
+    for (const peer of peers) {
+      const outcome = await this.connectToPeer(peer);
+      if (outcome.success) connected += 1;
+      results.push({ peer, success: outcome.success, error: outcome.error });
+    }
+    return { attempted: peers.length, connected, results };
+  }
+
   async connectToPeer(peerAddr: string): Promise<{ success: boolean; error?: string }> {
     if (!this.helia || !this.isInitialized) {
       return { success: false, error: 'IPFS not initialized' };
@@ -2002,6 +2061,10 @@ export class IPFSStorage {
     if (this.bootstrapHealthTimer) {
       clearInterval(this.bootstrapHealthTimer);
       this.bootstrapHealthTimer = null;
+    }
+    if (this.elacityReconnectTimer) {
+      clearInterval(this.elacityReconnectTimer);
+      this.elacityReconnectTimer = null;
     }
     if (this.helia && this.isInitialized) {
       try {

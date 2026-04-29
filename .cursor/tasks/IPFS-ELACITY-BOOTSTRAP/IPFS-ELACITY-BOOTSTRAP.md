@@ -52,6 +52,55 @@ new auth wiring, and is the pragmatic location given storage.ts is
 already where IPFS diagnostics live. Endpoint name can be aliased
 later if `node` namespace becomes the convention.
 
+## 2026-04-29 — Live verification + hardening
+
+Ran a full end-to-end verification on the maintainer's pc2-node
+(`0x34daf31b99b5a59ceb18e424dbc112fa6e5f3dc3`). Findings:
+
+1. **PeerID validation** — independently confirmed the hardcoded
+   multiaddr is live. Wrote `pc2-node/scripts/probe-elacity-peerid.mjs`:
+   a throwaway libp2p instance dialed
+   `/ip4/34.77.31.164/tcp/4001/p2p/12D3KooWNieM3HRBJdVqaQucZEJdqA3oWKrKf3Gx3hp2cmtR9GNK`
+   and the noise handshake succeeded. No rotation needed.
+
+2. **Initial boot dial succeeds** — first observation:
+   `Bootstrap dial (post-init) complete: 10/10 connected`,
+   `elacity.peered: true`, matched PeerID present.
+
+3. **Steady-state drop detected** — over a 3-minute observation window
+   the Elacity peer was dropped at ~60 s after startup (connection
+   count fell by 1 to 29, `peered: false`). The existing
+   `bootstrapHealthTimer` does NOT re-dial because it only fires when
+   total connections reach zero. This is a real production-relevant
+   hole.
+
+4. **Auto-reconnect added + verified** — new 60 s-cadence
+   `elacityReconnectTimer` in `IPFSStorage`. Observed at t=120 s:
+   `[IPFS] Elacity peer not connected; re-dialing` →
+   `[IPFS] Elacity reconnect ok (1/1)` → `peered: true`. Stayed
+   peered for the remainder of the observation window.
+
+5. **Manual recovery endpoint** —
+   `POST /api/storage/ipfs/reconnect-elacity` (owner-guarded). Used
+   during diagnosis; retained as a permanent operator tool.
+
+Net: Phase 1 now recovers automatically within ~60 s of any Elacity
+disconnect. That's well inside typical mint → propagation windows
+(mint tx confirmation alone is usually 30-60 s), so upload-to-
+playback reliability should be at-parity with or better than DHT
+discovery for the Irzhy-class failure mode.
+
+Files added/modified in this follow-up:
+- `pc2-node/src/storage/ipfs.ts`: `elacityReconnectTimer`,
+  `reconnectElacityPeers()` method; 60 s interval; cleaned up in both
+  init-error and `stop()` paths.
+- `pc2-node/src/api/storage.ts`:
+  `POST /api/storage/ipfs/reconnect-elacity`.
+- `pc2-node/scripts/probe-elacity-peerid.mjs` (new): standalone libp2p
+  probe for diagnosing whether the hardcoded Elacity multiaddr is
+  current. Run as `node scripts/probe-elacity-peerid.mjs` after
+  `npm run build:backend`.
+
 ### What Phase 1 does NOT include
 
 - Operator-confirmed canonical Elacity multiaddr — still on the
