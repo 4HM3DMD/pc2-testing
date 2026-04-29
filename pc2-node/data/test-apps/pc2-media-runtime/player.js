@@ -199,6 +199,21 @@ const BUFFER_EVICT_BEHIND_SEC = 30;
 const MAX_SEGMENT_RETRIES = 3;
 const MAX_SESSION_REFRESHES = 2;
 
+// Pipelined segment prefetch — fire N fetches in parallel per track instead
+// of one at a time. Appends still run strictly in segment order via the
+// per-track append chain (MSE requires sequential appends). Hides cache-miss
+// latency when segments have to fall back to the public IPFS gateway.
+// Generation counter lets seek/quality-switch invalidate stale in-flight
+// appends without aborting the underlying fetches (bytes are still cached
+// at pc2-node's Helia level, so the work isn't wasted).
+const MAX_CONCURRENT_FETCHES_PER_TRACK = 3;
+let videoInFlight = 0;
+let audioInFlight = 0;
+let videoAppendChain = Promise.resolve();
+let audioAppendChain = Promise.resolve();
+let videoFetchGeneration = 0;
+let audioFetchGeneration = 0;
+
 // Session refresh state — ensures only one refresh runs at a time
 let sessionRefreshPromise = null;
 let sessionRefreshCount = 0;
@@ -473,6 +488,15 @@ async function handleSeekToUnbuffered(targetTime) {
   isSeeking = true;
   $bufferingOverlay.style.display = 'flex';
 
+  // Invalidate any in-flight appends from the pre-seek pipeline. Pending
+  // fetches still resolve (their bytes cache in pc2-node's Helia, so the
+  // work isn't wasted), but their append step is skipped by the generation
+  // check — preventing stale data from corrupting the flushed SourceBuffer.
+  videoFetchGeneration++;
+  audioFetchGeneration++;
+  videoAppendChain = Promise.resolve();
+  audioAppendChain = Promise.resolve();
+
   try {
     const newVideoSeg = videoTrackIdx !== -1 ? segmentIndexForTime(targetTime, videoSegStarts) : 0;
     const newAudioSeg = audioTrackIdx !== -1 ? segmentIndexForTime(targetTime, audioSegStarts) : 0;
@@ -497,23 +521,35 @@ async function handleSeekToUnbuffered(targetTime) {
       await appendToSourceBuffer(audioSB, initData, audioSegmentQueue, v => isAppendingAudio = v);
     }
 
-    // Fetch a batch from the new position
+    // Fetch a batch from the new position, in parallel (fetch concurrently,
+    // append sequentially). Masks cache-miss latency when seeking into a
+    // region whose blocks aren't yet in local Helia.
     videoNextSeg = newVideoSeg;
     audioNextSeg = newAudioSeg;
     const batch = 3;
 
     if (videoSB) {
-      for (let i = 0; i < batch && videoNextSeg < videoSegCount; i++) {
-        const data = await fetchSegmentWithRetry(videoTrackIdx, videoNextSeg, false);
+      const videoFetches = [];
+      const videoStart = videoNextSeg;
+      for (let i = 0; i < batch && videoStart + i < videoSegCount; i++) {
+        videoFetches.push(fetchSegmentWithRetry(videoTrackIdx, videoStart + i, false));
+      }
+      for (let i = 0; i < videoFetches.length; i++) {
+        const data = await videoFetches[i];
         await appendToSourceBuffer(videoSB, data, videoSegmentQueue, v => isAppendingVideo = v);
-        videoNextSeg++;
+        videoNextSeg = videoStart + i + 1;
       }
     }
     if (audioSB) {
-      for (let i = 0; i < batch && audioNextSeg < audioSegCount; i++) {
-        const data = await fetchSegmentWithRetry(audioTrackIdx, audioNextSeg, false);
+      const audioFetches = [];
+      const audioStart = audioNextSeg;
+      for (let i = 0; i < batch && audioStart + i < audioSegCount; i++) {
+        audioFetches.push(fetchSegmentWithRetry(audioTrackIdx, audioStart + i, false));
+      }
+      for (let i = 0; i < audioFetches.length; i++) {
+        const data = await audioFetches[i];
         await appendToSourceBuffer(audioSB, data, audioSegmentQueue, v => isAppendingAudio = v);
-        audioNextSeg++;
+        audioNextSeg = audioStart + i + 1;
       }
     }
 
@@ -1058,19 +1094,31 @@ async function init() {
         videoNextSeg = 0;
         audioNextSeg = 0;
 
+        // Initial batch — kick off all fetches in parallel so a cold-start
+        // (fresh buy, local Helia empty, every segment falling back to the
+        // public gateway) doesn't serialise 4 × RTT before first frame.
+        // Appends still run in strict segment order.
         const initialBatch = 4;
         if (videoSB) {
-          for (let i = 0; i < initialBatch && videoNextSeg < videoSegCount; i++) {
-            const data = await fetchSegmentWithRetry(videoTrackIdx, videoNextSeg, false);
+          const videoFetches = [];
+          for (let i = 0; i < initialBatch && i < videoSegCount; i++) {
+            videoFetches.push(fetchSegmentWithRetry(videoTrackIdx, i, false));
+          }
+          for (let i = 0; i < videoFetches.length; i++) {
+            const data = await videoFetches[i];
             await appendToSourceBuffer(videoSB, data, videoSegmentQueue, v => isAppendingVideo = v);
-            videoNextSeg++;
+            videoNextSeg = i + 1;
           }
         }
         if (audioSB) {
-          for (let i = 0; i < initialBatch && audioNextSeg < audioSegCount; i++) {
-            const data = await fetchSegmentWithRetry(audioTrackIdx, audioNextSeg, false);
+          const audioFetches = [];
+          for (let i = 0; i < initialBatch && i < audioSegCount; i++) {
+            audioFetches.push(fetchSegmentWithRetry(audioTrackIdx, i, false));
+          }
+          for (let i = 0; i < audioFetches.length; i++) {
+            const data = await audioFetches[i];
             await appendToSourceBuffer(audioSB, data, audioSegmentQueue, v => isAppendingAudio = v);
-            audioNextSeg++;
+            audioNextSeg = i + 1;
           }
         }
 
@@ -1132,6 +1180,12 @@ async function switchVideoQuality(newQualityIdx) {
   if (!videoSB || isAppendingVideo) return;
   isSwitchingQuality = true;
 
+  // Invalidate pending pipelined appends so stale data from the old track
+  // can't land after we re-append the new track's init segment (different
+  // codec params would corrupt MSE state).
+  videoFetchGeneration++;
+  videoAppendChain = Promise.resolve();
+
   try {
     const newTrack = allVideoTracks[newQualityIdx];
     const oldLabel = formatQualityLabel(allVideoTracks[currentQualityIdx]);
@@ -1190,29 +1244,57 @@ function startBufferLoop() {
       }
     }
 
-    if (videoSB && videoNextSeg < videoSegCount && !isAppendingVideo && !isSwitchingQuality) {
+    // Video: fire as many parallel fetches as concurrency cap allows, up to
+    // the point where we have BUFFER_AHEAD_SEC of video buffered. Appends
+    // chain sequentially via videoAppendChain so MSE only sees in-order data.
+    // Each pending append captures the current generation; if a seek or
+    // quality-switch bumps the generation before the append runs, the data
+    // is dropped rather than corrupting the freshly-flushed buffer.
+    if (videoSB && videoNextSeg < videoSegCount && !isSwitchingQuality) {
       const bufEnd = getBufferedEnd(videoSB);
-      if (bufEnd - ct < BUFFER_AHEAD_SEC) {
-        try {
-          const data = await fetchSegmentWithRetry(videoTrackIdx, videoNextSeg, false);
-          await appendToSourceBuffer(videoSB, data, videoSegmentQueue, v => isAppendingVideo = v);
-          videoNextSeg++;
-        } catch { /* retry next tick */ }
+      while (
+        videoInFlight < MAX_CONCURRENT_FETCHES_PER_TRACK &&
+        videoNextSeg < videoSegCount &&
+        bufEnd - ct < BUFFER_AHEAD_SEC
+      ) {
+        const segNum = videoNextSeg++;
+        const gen = videoFetchGeneration;
+        videoInFlight++;
+        const fetchPromise = fetchSegmentWithRetry(videoTrackIdx, segNum, false);
+        videoAppendChain = videoAppendChain
+          .then(() => fetchPromise)
+          .then((data) => {
+            if (gen !== videoFetchGeneration) return undefined;
+            return appendToSourceBuffer(videoSB, data, videoSegmentQueue, v => isAppendingVideo = v);
+          })
+          .catch((err) => { console.warn('[player] video seg ' + segNum + ' failed:', err && err.message); })
+          .finally(() => { videoInFlight--; });
       }
     }
-    if (videoNextSeg >= videoSegCount) videoAllDone = true;
+    if (videoNextSeg >= videoSegCount && videoInFlight === 0) videoAllDone = true;
 
-    if (audioSB && audioNextSeg < audioSegCount && !isAppendingAudio) {
+    if (audioSB && audioNextSeg < audioSegCount) {
       const bufEnd = getBufferedEnd(audioSB);
-      if (bufEnd - ct < BUFFER_AHEAD_SEC) {
-        try {
-          const data = await fetchSegmentWithRetry(audioTrackIdx, audioNextSeg, false);
-          await appendToSourceBuffer(audioSB, data, audioSegmentQueue, v => isAppendingAudio = v);
-          audioNextSeg++;
-        } catch { /* retry next tick */ }
+      while (
+        audioInFlight < MAX_CONCURRENT_FETCHES_PER_TRACK &&
+        audioNextSeg < audioSegCount &&
+        bufEnd - ct < BUFFER_AHEAD_SEC
+      ) {
+        const segNum = audioNextSeg++;
+        const gen = audioFetchGeneration;
+        audioInFlight++;
+        const fetchPromise = fetchSegmentWithRetry(audioTrackIdx, segNum, false);
+        audioAppendChain = audioAppendChain
+          .then(() => fetchPromise)
+          .then((data) => {
+            if (gen !== audioFetchGeneration) return undefined;
+            return appendToSourceBuffer(audioSB, data, audioSegmentQueue, v => isAppendingAudio = v);
+          })
+          .catch((err) => { console.warn('[player] audio seg ' + segNum + ' failed:', err && err.message); })
+          .finally(() => { audioInFlight--; });
       }
     }
-    if (audioNextSeg >= audioSegCount) audioAllDone = true;
+    if (audioNextSeg >= audioSegCount && audioInFlight === 0) audioAllDone = true;
 
     if (videoAllDone && audioAllDone && mediaSource.readyState === 'open') {
       try { mediaSource.endOfStream(); } catch { /* already ended */ }
