@@ -1,9 +1,12 @@
 # Handover: Irzhy's Playback Failure (2026-04-28)
 
 > **Audience**: Irzhy + anyone reproducing the same `"Playback Error — fetch failed"`
-> **Status (as of 2026-04-29 18:20 UTC)**: **Fixed end-to-end for Irzhy's two test
+> **Status (as of 2026-04-29 20:00 UTC)**: **Fixed end-to-end for Irzhy's two test
 > CIDs.** Durable reliability for future mints now in place via client-side
 > pin forwarding + corrected nginx timeout on the Elacity Kubo pin endpoint.
+> Two follow-on findings surfaced in afternoon diagnosis — see "Afternoon 2 Update"
+> below. Full download-first buy flow in flight on branch `release/v1.2-pre-release`
+> (task `DOWNLOAD-FIRST-BUY-FLOW`).
 
 ---
 
@@ -147,6 +150,112 @@ sudo nginx -t && sudo nginx -s reload
 
 No Kubo changes need rolling back — the two manual pins can stay
 (harmless) or be removed with `ipfs pin rm --recursive <CID>`.
+
+---
+
+## Afternoon 2 Update — 2026-04-29 20:00 UTC
+
+After shipping the morning fixes, two additional findings surfaced in
+follow-up diagnosis with MTK. Both affect the v1.2 release story; the
+full fix is now scoped as task `DOWNLOAD-FIRST-BUY-FLOW` on branch
+`release/v1.2-pre-release`.
+
+### Finding A — `data/installed-apps/` is the serving path, `data/test-apps/` is source
+
+`pc2-node` serves static app content from
+`pc2-node/data/installed-apps/<app>/`. `pc2-node/data/test-apps/<app>/`
+is the authoritative **source** but does NOT get auto-synced on edit.
+Manual edits to `test-apps/` will not take effect until the files are
+copied into `installed-apps/`. `installed-apps/` is `.gitignore`d via
+`pc2-node/.gitignore:42` (`data/*`).
+
+**Symptom we hit:** the pipelined-prefetch player (`player.js v=6-pipelined`,
+committed `c23f8f070`) was edited in `test-apps/` and committed. But the
+browser kept loading `player.js?v=5-sigauth-2` because the server was
+serving from `installed-apps/pc2-media-runtime/`, which still had the
+pre-v6 copy. Until the files were manually synced, every "fix" MTK
+thought he was testing was against the old code.
+
+**Action taken this afternoon:** manually copied the v6 files into
+`installed-apps/pc2-media-runtime/`. Verified via:
+
+```
+curl -I http://localhost:4200/apps/pc2-media-runtime/player.js
+# Content-Length: 64445   ← matches test-apps copy
+# Last-Modified: Wed, 29 Apr 2026 19:49:15 GMT   ← post-sync timestamp
+```
+
+**Follow-up:** Phase 4 of `DOWNLOAD-FIRST-BUY-FLOW` adds
+`pc2-node/scripts/sync-installed-apps.sh` plus a README note so this
+dual-folder gotcha never surfaces again.
+
+### Finding B — Honest P2P/CDN framing
+
+The "What this means for reliability" flow above is accurate in the
+**creator-upload direction** (the minter's pin reliably reaches
+`ipfs.ela.city` and stays there). In the **buyer-fetch direction** it
+over-promises. Today ~80-90% of first-buy fetches land at
+`ipfs.ela.city` rather than other PC2 nodes, because PC2↔PC2 direct
+provider discovery via DHT is unreliable across Helia↔Kubo boundaries.
+This is acknowledged in-code at
+[`pc2-node/src/storage/ipfs.ts:69-74`](../../pc2-node/src/storage/ipfs.ts):
+
+> "Helia's DHT-based provider record propagation to external Kubo
+>  nodes is unreliable for fresh CIDs. By dialing ipfs.ela.city
+>  directly we guarantee bitswap-level peering..."
+
+This is a **transitional** state, not a bug. The code path for
+announce + DHT lookup is wired ([`ContentSeedingService.ts:328`](../../pc2-node/src/services/ContentSeedingService.ts)),
+it's just the propagation layer that's weak. Release notes should
+reflect this honestly:
+
+| Phase | Primary fetch source | Hub role | Status |
+|---|---|---|---|
+| Today (v1.2) | `ipfs.ela.city` | Supporting hub | Shipping |
+| Near-term (v1.2.x) | Supernode Tier-2 mirrors | Redundancy | `SUPERNODE-MEDIA-PINNING` Phase 2 |
+| Medium-term | PC2 peers + supernodes | Backup / long-tail | DHT bridge / rendezvous |
+| Long-term | Pure peer-to-peer | Cold storage | Full mesh |
+
+**Framing to use in v1.2 release notes** (agreed with MTK):
+"Buyers become CDN seeders and support new buyers, with Elacity IPFS as
+a supporting hub today and supernodes adding Tier-2 backup shortly."
+
+External reviewers tracing traffic during a v1.2 demo will see
+`ipfs.ela.city` as the hot path — that's consistent with the "supporting
+hub" framing, not a contradiction.
+
+### Finding C — Download-first flow is not actually wired today
+
+The current buy flow in
+[`pc2-node/data/test-apps/elacity-market/app.js:3742-3785`](../../pc2-node/data/test-apps/elacity-market/app.js)
+posts to `/api/storage/ipfs/pin` which returns `{queued:true}` within
+milliseconds (fire-and-forget to `seedingService.seedContent`,
+[`ContentSeedingService.ts:158-218`](../../pc2-node/src/services/ContentSeedingService.ts)).
+Immediately after, the client writes a 1 KB `.ddrm` descriptor to the
+user's Videos/Pictures/Documents folder and shows
+"Downloaded & saved — you're now a seeder!" The progress bar at lines
+3731-3737 is a cosmetic timer (10→90% regardless of real state).
+
+**In reality at that moment** the actual media blocks are still
+downloading in the background; playback starts by streaming segments
+that fall through to `ipfs.ela.city` for anything not yet in local
+Helia. This is what caused MTK's 0:19 / 0:21 freezes — serial segment
+fetches racing an incomplete background pin.
+
+**Fix scoped as `DOWNLOAD-FIRST-BUY-FLOW`** (today + tomorrow):
+- Server: `GET /api/storage/ipfs/pin-status/:cid` + `POST /ipfs/pin/:cid/retry`.
+- Client: real polling, `.ddrm` appears as `<title> (Preparing).ddrm`,
+  renamed to `<title>.ddrm` only after pin completes, real elapsed/size
+  display, retry button on failure.
+- Launch gate: single point in
+  [`src/gui/src/helpers/open_item.js:197-266`](../../src/gui/src/helpers/open_item.js)
+  intercepts double-click of any `.ddrm`, polls pin-status, blocks the
+  player/viewer until `complete`. Covers both media (`pc2-media-runtime`)
+  and non-media (`ddrm-viewer`) paths from a single gate.
+- Legacy `.ddrm` files (missing `pinStatus` field) fall through to old
+  behavior so existing libraries don't regress.
+
+Plan lives at `.cursor/plans/download-first_buy_flow_2a92980d.plan.md`.
 
 ---
 
