@@ -260,14 +260,173 @@ Paste-ready blurb:
 
 > **Download-first buy flow.** When you buy an asset, your PC2 node
 > now actually downloads and pins it before claiming "Downloaded." You
-> see honest progress — elapsed time and expected size — and a
+> see a real progress bar (percentage and bytes transferred), a
 > "(Preparing)" placeholder appears in your folder immediately so
-> you're not wondering if the transaction worked. Large downloads can
-> continue in the background; opening the file later resumes the
-> status display. The launcher won't hand you off to the player until
-> the content is fully local.
+> you're not wondering if the transaction worked, and the launcher
+> won't hand you off to the player until the content is fully local.
+> Your file explorer shows the real content size (e.g. 193.5 MB) for
+> protected assets rather than the tiny JSON pointer.
 >
 > Elacity IPFS continues to act as the supporting hub that guarantees
 > content is always reachable; supernode Tier-2 mirrors and direct
 > PC2↔PC2 peer discovery are the next steps on the decentralization
 > roadmap.
+
+---
+
+## Post-Review Fixes (2026-04-29, afternoon/evening)
+
+After the user's live smoke on 2026-04-29, three regressions/gaps
+surfaced. They were fixed against the same `release/v1.2-pre-release`
+branch on top of the Phase 2–4 commits.
+
+### Fix 1 — Fast-path reporting "tiny file" for fully-local DAGs (`60deb0ba`, `87b197b7`)
+
+- **Symptom:** After the initial download-first rewrite, buying a 193 MB
+  video ended with the .ddrm descriptor recording `pinnedSizeBytes=3111`
+  and the market-app library view showing a "tiny file." Opening it
+  worked but the size on disk, in the explorer, and in the pin-status
+  API all lied.
+- **Root cause (two bugs stacked):**
+  1. `pinRemoteCID`'s local-directory fast path summed `child.size`
+     of top-level UnixFS children. For a DASH directory, each child is
+     itself a directory (audio/, video/), and `child.size` on a
+     *directory* is the metadata size (~200 B) — not the cumulative
+     byte count of its descendants. Total came to ~3 KB for a 193 MB
+     asset.
+  2. `ContentSeedingService.processPin` unconditionally wrote the
+     `result.size` from `pinRemoteCID` into `pinned_cids.size`, so the
+     bogus 3 KB value clobbered the honest `estimatedSize` (202,881,178
+     bytes) that came from NFT metadata at queue time.
+- **Fix (`pc2-node/src/storage/ipfs.ts`):** recursive
+  `isDagComplete` now accumulates `dirTotalSize` only from *leaf*
+  nodes (`file` / `raw`), which carry honest byte counts.
+- **Fix (`pc2-node/src/services/ContentSeedingService.ts`):**
+  `processPin` uses `Math.max(result.size, existingDBSize, item.size)`
+  when persisting, so a smaller pin-time value can never overwrite a
+  larger trusted estimate. Existing stale 0-byte rows were repaired
+  via SQL.
+
+### Fix 2 — Disk-quota blocker (`60deb0ba`)
+
+- **Symptom:** "Disk quota exceeded: 96.6% used (limit: 50%, pinned:
+  640MB)" — the user had 32 GB free on disk but the seeding service
+  refused to pin a 193 MB file.
+- **Root cause:** `ContentSeedingService.isQuotaExceeded` used a
+  percentage-only check (default 50 %) which confused "user's full
+  disk" with "content-seeding budget."
+- **Fix:** added absolute `min_free_bytes` (default 2 GB) as the
+  primary guard and raised the failsafe percentage to 99 %. Config is
+  exposed in `pc2-node/config/config.json` → `seeding.min_free_bytes`.
+
+### Fix 3 — Market-app UX (`60deb0ba`)
+
+- Download button no longer sticks on "Downloading..." when switching
+  between asset detail pages — the render-reset path now explicitly
+  restores the label and enabled state.
+- NFT attribute values with `trait_type: "SIZE"` (or similar) are now
+  passed through a byte-formatter so "SIZE 202881178" renders as
+  "SIZE 193.5 MB" in the tags strip.
+
+### Fix 4 — Real-bytes download progress bar (`f3953a1c`)
+
+- **Why:** The Phase 3 UI explicitly used indeterminate progress ("no
+  fake %"). After Fix 1, the user asked for the real thing: a
+  percentage-driven bar that only reaches 100 % when the asset is
+  actually downloaded.
+- **Server (`pc2-node/src/storage/ipfs.ts`,
+  `services/ContentSeedingService.ts`, `api/storage.ts`):**
+  `pinRemoteCID` now takes an `onProgress(bytesReceived)` callback
+  that's threaded into `fetchViaGateway`. `fetchViaGateway` drains
+  `Response.body` via a ReadableStream reader (`readStreamWithProgress`
+  helper) instead of `await response.arrayBuffer()`, emitting
+  cumulative byte counts throttled at 500 ms. `ContentSeedingService`
+  persists those byte counts into a new `pinned_cids.bytes_downloaded`
+  column; `/pin-status/:cid` returns `bytesDownloaded` +
+  `progressPercent`. On `complete` the value snaps to the
+  authoritative size so the bar lands cleanly on 100 %.
+- **DB (`migrations.ts` +31, `schema.sql`, `database.ts`):**
+  `bytes_downloaded` column added, monotonic
+  `updatePinBytesDownloaded`, `resetPinBytesDownloaded` for retries.
+  Migration seeds `bytes_downloaded = size` for already-complete rows
+  so existing pins render 100 % immediately.
+- **Client (`data/test-apps/elacity-market/app.js`):** new
+  `renderProgress(percent, bytesDownloaded, sizeBytes)` replaces the
+  fixed 15 % bar. Text now reads
+  `Downloading to your node... 42% · 34s elapsed · 82.3 MB / 193.5 MB`.
+  Retry path reuses the same bar.
+
+### Fix 5 — File explorer shows content size for `.ddrm` files (`f3953a1c`)
+
+- **Why:** `.ddrm` files on disk are ~1 KB JSON descriptors. The
+  protected content is at the pinned CID. "Star of Bethlehem.ddrm —
+  1 KB" is accurate for the descriptor but wrong for the user's mental
+  model; they expect 193.5 MB like any other file.
+- **Fix (`src/gui/src/UI/UIItem.js`):** when rendering any item whose
+  name matches `/\.ddrm$/`, kick off a single async `/read` of the
+  descriptor, parse `pinnedSizeBytes` (fallback `estimatedSizeBytes`),
+  and substitute it into the `.item-attr--size span`. Cached per
+  `(path, modified)` so repeated renders don't refetch. Silent
+  fallback if the read fails or the JSON lacks the field — the
+  descriptor size stays visible. GUI bundle regenerated via
+  `npm run build:gui`.
+
+### Fix 6 — Chipotle cherry-pick (`27726d68`, co-authored with Irzhy)
+
+Irzhy's `feature/lit-chipotle-migration` (`f0dd5d42f`) included three
+improvements that directly affect P2P reliability for v1.2. Audited
+separately; selectively adopted.
+
+- **Adopted:**
+  - **DHT provide actually executes.** `dht.provide(cidObj)` returns
+    an `AsyncIterable<QueryEvent>`; without a `for await` drain, the
+    DHT query never runs and providers are never announced. This is
+    the silent failure that was making PC2↔PC2 discovery effectively a
+    no-op pre-cherry-pick.
+  - **Circuit-relay transport + `/p2p-circuit` listen address** with
+    `reservationConcurrency: 2`, `reservationCompletionTimeout: 20s`.
+    Essential for NAT'd home-broadband PC2 nodes to receive content
+    over relays.
+  - **Relay-first bootstrap** with a new `relay_bootstrap` config key
+    and a `uniquePeers()` dedupe pass.
+  - **`POST /api/storage/ipfs/announce/:cid`** so operators can force
+    a single-CID DHT announcement.
+- **Local fix on top:** `transportManager.faultTolerance =
+  FaultTolerance.NO_FATAL`. Without it, `createLibp2p` validates every
+  listen address at startup and the `/p2p-circuit` address — which
+  can only bind *after* a relay reservation lands — caused
+  `UnsupportedListenAddressesError` and the node refused to come up.
+  With NO_FATAL the listen registers once the reservation succeeds.
+- **Explicitly skipped:** the GraphQL query trimming in
+  `data/test-apps/elacity-market/api.js` (removed `media.protectionType`,
+  `operative.opType`, `operative.access.listings`). Those fields are
+  consumed in ~28 call sites in `app.js` (pricing, protection-type
+  display, marketplace listings); carrying the change would regress
+  the market UI.
+
+### Verification on fresh bundle (2026-04-29 @ 16:17 local)
+
+- Backend tsc clean; all migrations apply (`Migrations completed`,
+  DB now at version 31).
+- `[ipfs] Relay bootstrap peers: 1 configured`,
+  `[ipfs] ✅ Helia IPFS node initialized` — no
+  `UnsupportedListenAddressesError`.
+- `pinned_cids` row for
+  `bafybeid2zki2kyfe75tjtyr7pfw27r746w2pk6qvx6shxqtbxbhesxavga`:
+  `pin_status=complete`, `size=202881178`, `bytes_downloaded=202881178`
+  → API returns `progressPercent=100`, explorer will render "193.5 MB".
+- `/whoami` returns 200, node PID 15717 is the sole listener on :4200.
+
+**Commits on `release/v1.2-pre-release`:**
+
+- `27726d68` — feat(ipfs): relay-first NAT connectivity + DHT
+  announcement durability (co-authored with Irzhy)
+- `f3953a1c` — feat(download): real-bytes progress bar + content-size
+  for .ddrm in explorer
+
+Awaiting MTK's live end-to-end smoke of:
+1. Buy a fresh asset → watch the bar advance in real time → reach 100 %
+   → `(Preparing).ddrm` becomes `<title>.ddrm` → explorer shows real
+   MB, not KB.
+2. Library → Download — the same path via the other entry point.
+3. Retry a failed pin; bar resets to 0 % then climbs.
