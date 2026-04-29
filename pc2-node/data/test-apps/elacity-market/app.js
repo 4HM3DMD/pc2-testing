@@ -3686,6 +3686,27 @@
     });
   }
 
+  // Download-first buy flow.
+  //
+  // Product promise: "when you buy, you download, you own it, you play it
+  // locally." Implementation:
+  //   1. Write "<title> (Preparing).ddrm" to the folder immediately with
+  //      pinStatus='downloading' so the user sees something real in Videos /
+  //      Pictures / Documents.
+  //   2. POST /api/storage/ipfs/pin with the CID + estimatedSize. The server
+  //      enqueues on ContentSeedingService (fire-and-forget).
+  //   3. Poll /api/storage/ipfs/pin-status/:cid every 2 s. Show elapsed
+  //      time + expected total size. Helia does not expose block-level
+  //      progress cleanly, so we are explicit rather than faking a %.
+  //   4. On `complete`: write the final "<title>.ddrm" with pinStatus='complete'
+  //      and delete the "(Preparing)" placeholder. Show "Downloaded — you own
+  //      this offline."
+  //   5. On `failed`: show a Retry button wired to
+  //      POST /api/storage/ipfs/pin/:cid/retry (30 s client debounce;
+  //      server also 429s inside that window).
+  //   6. After 120 s of pinning, offer "Continue in background" so the user
+  //      is not trapped in the modal on a slow download. The launch gate in
+  //      open_item.js then honours the pinStatus on re-open.
   function pinAndRegisterMedia(nft) {
     var media = (nft.metadata && nft.metadata.media) || {};
     var asset = nft._rawAsset || (nft.metadata && nft.metadata.asset) || {};
@@ -3700,19 +3721,26 @@
     }
 
     dom.downloadNodeBtn.disabled = true;
-    dom.downloadNodeBtn.querySelector('span').textContent = 'Saving...';
+    dom.downloadNodeBtn.querySelector('span').textContent = 'Downloading...';
     dom.purchaseStatus.classList.add('fade-out');
-    setTimeout(function () { dom.purchaseStatus.classList.add('hidden'); dom.purchaseStatus.classList.remove('fade-out'); }, 300);
+    setTimeout(function () {
+      dom.purchaseStatus.classList.add('hidden');
+      dom.purchaseStatus.classList.remove('fade-out');
+    }, 300);
     dom.downloadStatus.className = 'download-status pending';
-    dom.downloadStatus.innerHTML = '<div class="download-progress-wrap"><div class="download-progress-bar"><div class="download-progress-fill"></div></div><span class="download-progress-text">Saving to your personal cloud...</span></div>';
+    dom.downloadStatus.innerHTML =
+      '<div class="download-progress-wrap">' +
+        '<div class="download-progress-bar"><div class="download-progress-fill"></div></div>' +
+        '<span class="download-progress-text">Preparing your content...</span>' +
+      '</div>';
     dom.downloadStatus.classList.remove('hidden');
 
     var progressFill = dom.downloadStatus.querySelector('.download-progress-fill');
     var progressText = dom.downloadStatus.querySelector('.download-progress-text');
+    // Fixed-width indeterminate bar — visual cue, not a fake %. Truth lives in the text.
+    progressFill.style.width = '15%';
 
     var meta = nft.metadata || {};
-    var props = meta.properties || {};
-    var tokenId = (nft.tokenId && nft.tokenId.hexTokenID) || nft.tokenId || '0';
     var title = meta.name || nft.name || 'Untitled';
     var safeName = title.replace(/[^a-zA-Z0-9 _\-]/g, '').substring(0, 80).trim() || 'media';
     var walletAddr = (Wallet.getAddress() || '').toLowerCase();
@@ -3721,93 +3749,282 @@
     var folder = nonMedia
       ? (assetMime.startsWith('image/') ? 'Pictures' : 'Documents')
       : 'Videos';
-    var savePath = '/' + walletAddr + '/' + folder + '/' + safeName + '.ddrm';
+    var preparingName = safeName + ' (Preparing).ddrm';
+    var finalName = safeName + '.ddrm';
+    var folderPath = '/' + walletAddr + '/' + folder;
+    var preparingPath = folderPath + '/' + preparingName;
+    var finalPath = folderPath + '/' + finalName;
+
+    // estimatedSize drives the server's adaptive pin timeout + gives the user an "expected"
+    // figure for the progress text. Not currently sent by the legacy flow (bug).
+    var estimatedSize = 0;
+    if (asset.size) estimatedSize = parseInt(asset.size, 10) || 0;
+    else if (media.size) estimatedSize = parseInt(media.size, 10) || 0;
 
     var descriptor = buildDdrmDescriptor(nft);
+    descriptor.pinStatus = 'downloading';
+    descriptor.estimatedSizeBytes = estimatedSize;
+    descriptor.pinnedSizeBytes = null;
+    descriptor.downloadStartedAt = new Date().toISOString();
 
-    progressFill.style.width = '10%';
-    progressText.textContent = 'Downloading content from Elacity network...';
-
-    var progressVal = 10;
-    var progressTimer = setInterval(function () {
-      if (progressVal < 90) {
-        progressVal += (90 - progressVal) * 0.02;
-        progressFill.style.width = Math.round(progressVal) + '%';
-      }
-    }, 800);
-
-    var buyerWallets = [Wallet.getAddress(), Wallet.getSignerAddress()].filter(Boolean).map(function (a) { return a.toLowerCase(); });
+    var buyerWallets = [Wallet.getAddress(), Wallet.getSignerAddress()]
+      .filter(Boolean)
+      .map(function (a) { return a.toLowerCase(); });
     var uniqueBuyers = buyerWallets.filter(function (v, i, arr) { return arr.indexOf(v) === i; });
 
+    // Polling + UI state
+    var downloadStartMs = Date.now();
+    var pollTimer = null;
+    var backgroundButtonShown = false;
+    var BACKGROUND_BUTTON_THRESHOLD_MS = 120000;
+    var POLL_INTERVAL_MS = 2000;
+    var RETRY_DEBOUNCE_MS = 30000;
+
+    function stopPolling() {
+      if (pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+      }
+    }
+
+    function formatBytes(n) {
+      if (!n || n < 0) return '';
+      if (n >= 1073741824) return (n / 1073741824).toFixed(1) + ' GB';
+      if (n >= 1048576) return (n / 1048576).toFixed(1) + ' MB';
+      if (n >= 1024) return (n / 1024).toFixed(1) + ' KB';
+      return n + ' B';
+    }
+
+    function formatElapsed(ms) {
+      var s = Math.floor(ms / 1000);
+      if (s < 60) return s + 's';
+      var m = Math.floor(s / 60);
+      var r = s % 60;
+      return m + 'm ' + (r < 10 ? '0' : '') + r + 's';
+    }
+
+    function maybeOfferBackgroundButton() {
+      if (backgroundButtonShown) return;
+      if (Date.now() - downloadStartMs <= BACKGROUND_BUTTON_THRESHOLD_MS) return;
+      backgroundButtonShown = true;
+      var cont = document.createElement('a');
+      cont.href = '#';
+      cont.className = 'continue-background-link';
+      cont.style.marginLeft = '8px';
+      cont.textContent = 'Continue in background';
+      cont.addEventListener('click', function (e) {
+        e.preventDefault();
+        stopPolling();
+        dom.downloadStatus.className = 'download-status info';
+        dom.downloadStatus.innerHTML =
+          'Download continues in the background. It will appear as "' + finalName + '" in ' +
+          folder + ' when complete.';
+      });
+      progressText.appendChild(cont);
+    }
+
+    function updatePinningText(sizeBytes) {
+      var elapsed = Date.now() - downloadStartMs;
+      var sizeLabel = formatBytes(estimatedSize || sizeBytes);
+      var suffix = sizeLabel ? ' (~' + sizeLabel + ' expected)' : '';
+      progressText.textContent = 'Downloading to your node... ' + formatElapsed(elapsed) + ' elapsed' + suffix;
+      maybeOfferBackgroundButton();
+    }
+
+    function pollPinStatus() {
+      pc2Fetch('/api/storage/ipfs/pin-status/' + encodeURIComponent(cid))
+        .then(function (res) {
+          if (!res.ok) return null;
+          return res.json();
+        })
+        .then(function (body) {
+          if (!body) return;
+          if (body.status === 'complete') {
+            stopPolling();
+            finalizeDownload(body.sizeBytes || 0);
+            return;
+          }
+          if (body.status === 'failed') {
+            stopPolling();
+            handlePinFailure('Pin failed on server');
+            return;
+          }
+          if (body.status === 'queued') {
+            progressText.textContent = 'Queued for download...';
+            maybeOfferBackgroundButton();
+            return;
+          }
+          // 'pinning' or 'not-pinned' (race window before the first status write) — keep polling
+          updatePinningText(body.sizeBytes);
+        })
+        .catch(function () {
+          // Transient fetch error; the next tick retries. Do not disturb the user's UI.
+        });
+    }
+
+    function finalizeDownload(pinnedBytes) {
+      descriptor.pinStatus = 'complete';
+      descriptor.pinned = true;
+      descriptor.pinnedSizeBytes = pinnedBytes;
+      descriptor.pinnedSize = pinnedBytes;
+
+      pc2Fetch('/write', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          path: finalPath,
+          content: JSON.stringify(descriptor, null, 2),
+          mime_type: 'application/x-ddrm',
+          overwrite: true,
+          dedupe_name: true
+        })
+      }).then(function (res) {
+        if (!res.ok) throw new Error('Finalize write failed: ' + res.status);
+        return res.json();
+      }).then(function () {
+        // Best-effort cleanup of the "(Preparing)" placeholder; non-fatal if it fails.
+        pc2Fetch('/delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ paths: [preparingPath] })
+        }).catch(function () { /* non-fatal */ });
+        showSuccess(pinnedBytes);
+      }).catch(function (err) {
+        console.error('[Download] Finalize write failed:', err);
+        handlePinFailure('Pin completed but saving descriptor failed: ' + (err && err.message));
+      });
+    }
+
+    function showSuccess(pinnedBytes) {
+      dom.downloadNodeBtn.querySelector('span').textContent = 'Downloaded';
+      dom.downloadNodeBtn.disabled = true;
+      dom.downloadStatus.className = 'download-status success';
+      var sizeLabel = formatBytes(pinnedBytes);
+      var sizeSuffix = sizeLabel ? ' (' + sizeLabel + ')' : '';
+      dom.downloadStatus.innerHTML =
+        'Downloaded' + sizeSuffix + ' — you own this offline. ' +
+        '<a href="#" class="open-folder-link">Open ' + folder + ' folder</a>';
+      showToast('Content downloaded to your node!', 'success');
+
+      var folderLink = dom.downloadStatus.querySelector('.open-folder-link');
+      if (folderLink) {
+        folderLink.addEventListener('click', function (e) {
+          e.preventDefault();
+          var appInstanceId = new URLSearchParams(window.location.search).get('puter.app_instance_id') || '';
+          window.parent.postMessage({
+            $: 'puter-ipc',
+            msg: 'openFolder',
+            path: folderPath,
+            appInstanceID: appInstanceId,
+            env: 'app'
+          }, '*');
+        });
+      }
+    }
+
+    function startPolling() {
+      pollTimer = setInterval(pollPinStatus, POLL_INTERVAL_MS);
+      pollPinStatus();
+    }
+
+    function handlePinFailure(message) {
+      stopPolling();
+      console.error('[Download] Pin failed:', message);
+      dom.downloadNodeBtn.querySelector('span').textContent = 'Retry Download';
+      dom.downloadNodeBtn.disabled = false;
+
+      var diskFull = /disk|quota/i.test(message);
+      var msgText = diskFull
+        ? 'Insufficient disk space on your node. Free up space and tap Retry.'
+        : 'Download failed: ' + message + '.';
+
+      dom.downloadStatus.className = 'download-status error';
+      dom.downloadStatus.innerHTML = msgText + ' <a href="#" class="retry-download-link">Retry</a>';
+
+      var retryLink = dom.downloadStatus.querySelector('.retry-download-link');
+      var lastRetryMs = 0;
+
+      if (!retryLink) return;
+
+      retryLink.addEventListener('click', function (e) {
+        e.preventDefault();
+        var now = Date.now();
+        if (now - lastRetryMs < RETRY_DEBOUNCE_MS) {
+          var waitS = Math.ceil((RETRY_DEBOUNCE_MS - (now - lastRetryMs)) / 1000);
+          showToast('Please wait ' + waitS + 's before retrying.', 'info');
+          return;
+        }
+        lastRetryMs = now;
+        retryLink.style.pointerEvents = 'none';
+        retryLink.textContent = 'Retrying...';
+
+        pc2Fetch('/api/storage/ipfs/pin/' + encodeURIComponent(cid) + '/retry', {
+          method: 'POST'
+        }).then(function (res) {
+          if (res.status === 429) {
+            return res.json().then(function (body) {
+              var secs = Math.ceil((body.retryAfterMs || RETRY_DEBOUNCE_MS) / 1000);
+              showToast('Retry rate-limited. Try again in ' + secs + 's.', 'info');
+              retryLink.style.pointerEvents = '';
+              retryLink.textContent = 'Retry';
+            });
+          }
+          if (!res.ok) throw new Error('Retry request failed: ' + res.status);
+          return res.json().then(function () {
+            dom.downloadStatus.className = 'download-status pending';
+            dom.downloadStatus.innerHTML =
+              '<div class="download-progress-wrap">' +
+                '<div class="download-progress-bar"><div class="download-progress-fill"></div></div>' +
+                '<span class="download-progress-text">Queued for retry...</span>' +
+              '</div>';
+            progressFill = dom.downloadStatus.querySelector('.download-progress-fill');
+            progressText = dom.downloadStatus.querySelector('.download-progress-text');
+            progressFill.style.width = '15%';
+            downloadStartMs = Date.now();
+            backgroundButtonShown = false;
+            startPolling();
+          });
+        }).catch(function (err) {
+          console.error('[Download] Retry failed:', err);
+          retryLink.style.pointerEvents = '';
+          retryLink.textContent = 'Retry';
+          showToast('Retry failed: ' + (err && err.message || 'Unknown error'), 'error');
+        });
+      });
+    }
+
+    // Step 1: preparing placeholder (non-fatal if it fails — the download still runs)
+    pc2Fetch('/write', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        path: preparingPath,
+        content: JSON.stringify(descriptor, null, 2),
+        mime_type: 'application/x-ddrm',
+        overwrite: true,
+        dedupe_name: true
+      })
+    }).catch(function (err) {
+      console.warn('[Download] Preparing placeholder write failed (non-fatal):', err);
+    });
+
+    // Step 2: enqueue the pin on the server, then start polling
     pc2Fetch('/api/storage/ipfs/pin', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ cid: cid, buyerWallets: uniqueBuyers })
-    })
-      .then(function (res) {
-        if (!res.ok) throw new Error('Download failed: ' + res.status);
-        return res.json();
+      body: JSON.stringify({
+        cid: cid,
+        estimatedSize: estimatedSize,
+        buyerWallets: uniqueBuyers
       })
-      .then(function (pinResult) {
-        clearInterval(progressTimer);
-        progressVal = 90;
-        progressFill.style.width = '90%';
-        progressText.textContent = 'Saving to your ' + folder + ' folder...';
-
-        descriptor.pinned = !!(pinResult && pinResult.success);
-        descriptor.pinnedSize = (pinResult && pinResult.totalSize) || 0;
-        descriptor.blockCount = (pinResult && pinResult.blockCount) || 0;
-
-        return pc2Fetch('/write', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            path: savePath,
-            content: JSON.stringify(descriptor, null, 2),
-            mime_type: 'application/x-ddrm',
-            overwrite: false,
-            dedupe_name: true
-          })
-        });
-      })
-      .then(function (res) {
-        if (!res.ok) throw new Error('Save failed: ' + res.status);
-        return res.json();
-      })
-      .then(function (writeResult) {
-        clearInterval(progressTimer);
-        progressFill.style.width = '100%';
-        progressText.textContent = '';
-        dom.downloadNodeBtn.querySelector('span').textContent = 'Saved';
-        dom.downloadNodeBtn.disabled = true;
-        dom.downloadStatus.className = 'download-status success';
-        dom.downloadStatus.innerHTML = 'Downloaded & saved — you\'re now a seeder! <a href="#" class="open-folder-link">Open ' + folder + ' folder</a>';
-        showToast('Content downloaded to your node!', 'success');
-
-        var folderLink = dom.downloadStatus.querySelector('.open-folder-link');
-        if (folderLink) {
-          folderLink.addEventListener('click', function (e) {
-            e.preventDefault();
-            var appInstanceId = new URLSearchParams(window.location.search).get('puter.app_instance_id') || '';
-            window.parent.postMessage({
-              $: 'puter-ipc',
-              msg: 'openFolder',
-              path: '/' + walletAddr + '/' + folder,
-              appInstanceID: appInstanceId,
-              env: 'app'
-            }, '*');
-          });
-        }
-      })
-      .catch(function (err) {
-        clearInterval(progressTimer);
-        console.error('[Download] Failed:', err);
-        dom.downloadNodeBtn.querySelector('span').textContent = 'Save to Cloud';
-        dom.downloadNodeBtn.disabled = false;
-        progressFill.style.width = '0%';
-        dom.downloadStatus.className = 'download-status error';
-        dom.downloadStatus.textContent = 'Download failed: ' + (err.message || 'Unknown error') + '. Tap to retry.';
-      });
+    }).then(function (res) {
+      if (!res.ok) throw new Error('Pin request failed: ' + res.status);
+      return res.json();
+    }).then(function () {
+      startPolling();
+    }).catch(function (err) {
+      handlePinFailure((err && err.message) || 'Unknown error');
+    });
   }
 
   // ── Download to Node (manual fallback) ─────────────
