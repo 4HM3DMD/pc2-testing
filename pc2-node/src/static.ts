@@ -279,16 +279,43 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
 
   // Base mainnet RPC fallback list.
   // Used by `/api/rpc/base` to shield the Particle iframe's `eth_getCode`
-  // smart-account-deployment probe from the public `mainnet.base.org` rate
-  // limiter (429s during rapid wallet re-init). Primary + two community
-  // fallbacks; the handler tries them in order on error.
+  // smart-account-deployment probe AND the Elacity Market's AuthorityGateway
+  // read burst (sellersOf + listings + balanceOf on every asset detail open)
+  // from the public `mainnet.base.org` rate limiter.
+  //
+  // Ordering (first succeeds, rest are fallbacks):
+  //   1. llamarpc — ~300 req/min, very reliable, generous read budget
+  //   2. publicnode — ~200 req/min, geo-distributed, good uptime
+  //   3. Ankr public — ~100 req/min, wide geo coverage
+  //   4. BlockPI public — ~100 req/min, Asia-Pacific priority
+  //   5. mainnet.base.org (Coinbase official) — tight ~60 req/min, LAST
+  //
+  // mainnet.base.org was the first entry until 2026-04-28 when user
+  // reports of intermittent "price not showing" traced back to its throttle
+  // saturating and our JSON-wrapped-error fallback logic (prior to
+  // a3c599d6c) never failing over. With the fallback fix AND this reorder,
+  // most reads now hit llamarpc first and `mainnet.base.org` is only used
+  // if all three alternatives are down simultaneously (vanishingly rare).
   const BASE_RPC_URLS = [
-    'https://mainnet.base.org',
     'https://base.llamarpc.com',
     'https://base-rpc.publicnode.com',
+    'https://rpc.ankr.com/base',
+    'https://base.blockpi.network/v1/rpc/public',
+    'https://mainnet.base.org',
   ];
 
   // Per-method cache TTLs (milliseconds). Methods not listed are not cached.
+  //
+  // `eth_call` is parameterized by (to, data) so the cache key already
+  // uniquely identifies each call. 2 seconds = ~1 Base block — long enough
+  // to deduplicate the rapid re-open burst (renderOpTypeBadge fires
+  // sellersOf + N × listings on EVERY asset detail open, plus balanceOf,
+  // plus opType checks; 8-12 reads per click), short enough that listing
+  // state changes (cancel / new seller) surface within one block. The
+  // client-side wallet.js cache (4defea25c) is 30 s and sits on top of
+  // this server-side cache — session cache hits first, then proxy cache
+  // backstops any request that escapes it (e.g. from a different tab or
+  // a fresh iframe instance after app open).
   const RPC_CACHE_TTLS: Record<string, number> = {
     'eth_chainId': 3600000,        // 1 hour (never changes)
     'net_version': 3600000,        // 1 hour
@@ -297,6 +324,7 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
     'eth_getBlockByNumber': 30000, // 30s (immutable once confirmed)
     'eth_getBlockByHash': 60000,   // 60s (immutable)
     'eth_getCode': 300000,         // 5 min (rarely changes)
+    'eth_call': 2000,              // 2s — dedupe read bursts within a block
   };
 
   const rpcCache = new Map<string, { data: any; expires: number }>();
