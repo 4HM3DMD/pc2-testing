@@ -1218,6 +1218,15 @@ export class IPFSStorage {
               const completenessDeadline = Date.now() + quickLocalTimeoutMs;
               const MAX_CHECK_DEPTH = 4;
 
+              let dirFileCount = 0;
+              let dirTotalSize = 0;
+
+              // Walks the DAG verifying every block is local AND accumulating
+              // real leaf-file bytes. Top-level child.size on a UnixFS
+              // directory is the directory's own metadata size (~200B), not
+              // the sum of its descendants, so summing it at the root lies
+              // about the content size (e.g. reports 3KB for a 200MB DASH
+              // directory). Only file/raw leaves carry honest byte counts.
               const isDagComplete = async (checkCid: any, depth: number): Promise<boolean> => {
                 if (Date.now() > completenessDeadline) return false;
                 if (controller.signal.aborted) return false;
@@ -1225,6 +1234,14 @@ export class IPFSStorage {
                 if (depth <= 0) return true;
                 try {
                   const e = await expForCheck(checkCid, this.blockstore!);
+                  if (e.type === 'file' || e.type === 'raw') {
+                    const leafSize = Number((e as any).size || 0);
+                    if (leafSize > 0) {
+                      dirTotalSize += leafSize;
+                      dirFileCount++;
+                    }
+                    return true;
+                  }
                   if (e.type !== 'directory') return true;
                   for await (const child of e.content()) {
                     const childCid = (child as any).cid;
@@ -1238,13 +1255,9 @@ export class IPFSStorage {
                 }
               };
 
-              let dirFileCount = 0;
-              let dirTotalSize = 0;
               let incompleteDag = false;
               try {
                 for await (const child of entry.content()) {
-                  dirFileCount++;
-                  dirTotalSize += Number((child as any).size || 0);
                   const childCid = (child as any).cid;
                   if (!childCid) continue;
                   const ok = await isDagComplete(childCid, MAX_CHECK_DEPTH - 1);
@@ -1259,8 +1272,6 @@ export class IPFSStorage {
                   const lsWork = (async () => {
                     const fs = this.getUnixFS();
                     for await (const child of fs.ls(cid)) {
-                      dirFileCount++;
-                      dirTotalSize += Number(child.size || 0);
                       if (!child.cid) continue;
                       const ok = await isDagComplete(child.cid, MAX_CHECK_DEPTH - 1);
                       if (!ok) {

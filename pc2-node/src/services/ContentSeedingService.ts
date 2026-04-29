@@ -340,9 +340,17 @@ export class ContentSeedingService {
       if (result.success) {
         this.db?.updatePinStatus(cid, 'complete');
 
-        // Update size if we now know it
+        // Only let a pin-time size update the DB if it's at least as large
+        // as what we already knew. Estimated sizes come from trusted NFT
+        // metadata at queue time (e.g. 202881178 for a 193MB asset). The
+        // pinRemoteCID fast path + partial CAR imports can report smaller
+        // intermediate totals and must not clobber the honest estimate —
+        // doing so makes pin-status/API and the .ddrm descriptor report a
+        // "tiny file" for a fully-downloaded asset.
         if (result.size && result.size > 0) {
-          this.db?.trackPinnedCID(cid, walletAddress, result.size, 'marketplace');
+          const existingSize = this.db?.getPinnedCIDDetail(cid)?.size ?? 0;
+          const authoritativeSize = Math.max(result.size, existingSize, item.size || 0);
+          this.db?.trackPinnedCID(cid, walletAddress, authoritativeSize, 'marketplace');
         }
 
         log.info(`[Seeding] Pinned CID ${cid} (${result.size ? `${(result.size / (1024 * 1024)).toFixed(1)}MB` : 'size unknown'}, ${result.timeMs ?? 0}ms)`);
