@@ -352,6 +352,33 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
 
   // Shared JSON-RPC proxy handler: tries `rpcUrls` in order, caches successful
   // responses under `chainKey`, returns 502 if every upstream fails.
+  // Base's public RPC (mainnet.base.org) returns HTTP 200 with a JSON-wrapped
+  // rpc error for transport-level throttling, e.g.
+  //   { error: { message: "rate-limited until QuantaInstant(Nanos(...))" } }
+  // We must treat these as transport failures and fall over to the next RPC
+  // in the list, NOT forward them as-is. Otherwise our llamarpc / publicnode
+  // fallbacks never get used and every read stalls on a single throttled
+  // upstream (observed 2026-04-28 during mint+buy burst: price section
+  // flickered, sellersOf/listings back-fill silently failed).
+  //
+  // Guard: contract reverts are also JSON errors but carry a `data` hex
+  // string or a `code` like 3 with an "execution reverted" message — those
+  // are legitimate, per-tx responses and must NOT trigger a fallback (that
+  // would mask the real revert and spam the fallback RPCs).
+  function isTransportRateLimit(data: unknown): boolean {
+    if (!data || typeof data !== 'object') return false;
+    const err = (data as { error?: { message?: string; data?: unknown } }).error;
+    if (!err || typeof err.message !== 'string') return false;
+    if (err.data !== undefined) return false;
+    const m = err.message.toLowerCase();
+    return (
+      m.includes('rate-limit') ||
+      m.includes('rate limit') ||
+      m.includes('too many requests') ||
+      m.includes('429')
+    );
+  }
+
   async function handleJsonRpcProxy(
     req: Request,
     res: Response,
@@ -391,6 +418,11 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
         }
 
         const data = await upstream.json();
+
+        if (isTransportRateLimit(data)) {
+          lastError = `${rpcUrl}: rate-limited (${(data as { error?: { message?: string } }).error?.message ?? 'unknown'})`;
+          continue;
+        }
 
         if (data && !data.error) {
           setCachedRpcResponse(chainKey, method, params, data);
