@@ -665,6 +665,97 @@ router.get('/ipfs/pins', authenticate, async (req: AuthenticatedRequest, res: Re
 });
 
 /**
+ * Supernode pin-mirror fan-out (SUPERNODE-MEDIA-PINNING task).
+ *
+ * Reads `SUPERNODE_PIN_MIRRORS` env var (comma-separated URLs). When set, every
+ * successful /ipfs/pin call fires a fire-and-forget POST to each mirror so the
+ * supernode Kubo daemons can pin the same CID and act as always-on redundant
+ * providers.
+ *
+ * Default OFF. When the supernode-side endpoint lands, operators flip the env
+ * var on and no client update is required. If any mirror URL is unreachable,
+ * the caller is NOT impacted — requests are bounded by a 5 s timeout and run
+ * outside the response path.
+ */
+interface MirrorProbeResult {
+  url: string;
+  lastCid: string;
+  lastStatus: number | 'error';
+  lastError?: string;
+  lastDurationMs: number;
+  lastAt: number;
+}
+const mirrorProbeState: Map<string, MirrorProbeResult> = new Map();
+
+function getConfiguredPinMirrors(): string[] {
+  const raw = process.env.SUPERNODE_PIN_MIRRORS;
+  if (!raw) return [];
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+function fanOutSupernodePinMirrors(cid: string): void {
+  const mirrors = getConfiguredPinMirrors();
+  if (mirrors.length === 0) return;
+
+  for (const url of mirrors) {
+    const start = Date.now();
+    void fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cid, source: 'pc2-node-mirror' }),
+      signal: AbortSignal.timeout(5000),
+    }).then(
+      (response) => {
+        const durationMs = Date.now() - start;
+        mirrorProbeState.set(url, {
+          url,
+          lastCid: cid,
+          lastStatus: response.status,
+          lastDurationMs: durationMs,
+          lastAt: Date.now(),
+        });
+        if (response.ok) {
+          logger.info(`[Storage API] Mirror pin ok: ${url} cid=${cid} status=${response.status} (${durationMs}ms)`);
+        } else {
+          logger.debug(`[Storage API] Mirror pin non-OK: ${url} cid=${cid} status=${response.status} (${durationMs}ms)`);
+        }
+      },
+      (err: any) => {
+        const durationMs = Date.now() - start;
+        const message = err?.message || 'unknown error';
+        mirrorProbeState.set(url, {
+          url,
+          lastCid: cid,
+          lastStatus: 'error',
+          lastError: message,
+          lastDurationMs: durationMs,
+          lastAt: Date.now(),
+        });
+        logger.debug(`[Storage API] Mirror pin failed: ${url} cid=${cid} (${durationMs}ms): ${message}`);
+      },
+    );
+  }
+}
+
+/**
+ * GET /api/storage/ipfs/pin-mirrors
+ * Diagnostic: report configured supernode pin-mirror URLs and the last probe
+ * result for each (populated after the first fan-out fires). Owner-guarded so
+ * mirror topology doesn't leak to unauthenticated callers.
+ */
+router.get('/ipfs/pin-mirrors', authenticate, requireOwner, (_req: AuthenticatedRequest, res: Response) => {
+  const configured = getConfiguredPinMirrors();
+  res.json({
+    enabled: configured.length > 0,
+    configured,
+    lastProbes: configured.map((url) => mirrorProbeState.get(url) ?? null),
+  });
+});
+
+/**
  * POST /api/ipfs/pin
  * Pin a remote CID to the local IPFS node (fetches content from the network/gateway).
  * Used by the Elacity Market to download owned media to the user's node.
@@ -700,6 +791,8 @@ router.post('/ipfs/pin', authenticate, async (req: AuthenticatedRequest, res: Re
           try { db.trackPinnedCID(cidClean, bw, estimatedSize || 0, 'marketplace'); } catch (_) { /* non-fatal */ }
         }
       }
+
+      fanOutSupernodePinMirrors(cidClean);
 
       return res.json({
         success: true,
@@ -739,6 +832,8 @@ router.post('/ipfs/pin', authenticate, async (req: AuthenticatedRequest, res: Re
           logger.warn(`[Storage API] DHT announcement failed (non-fatal): ${cidClean}`, err);
         });
       }
+
+      fanOutSupernodePinMirrors(cidClean);
 
       res.json({
         success: true,

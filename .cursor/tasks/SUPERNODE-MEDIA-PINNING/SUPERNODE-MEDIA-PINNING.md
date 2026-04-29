@@ -2,15 +2,101 @@
 
 **Task ID**: SUPERNODE-MEDIA-PINNING
 **Created**: 2026-04-29
-**Status**: Proposed
+**Last updated**: 2026-04-29
+**Status**: InProgress — client-side landed (2026-04-29); supernode-side blocked on SSH/deploy
 **Priority**: High — direct unblock for inter-user playback
-**Target Release**: V1.2.1 (post-v1.2.0 fast-follow)
+**Target Release**: V1.2.0 (client side ships in v1.2); supernode side follows when deploy access restored
 **Depends on**: —
-**Blocked by**: —
+**Blocked by**: SSH access to InterServer + Contabo to deploy `POST /api/storage/ipfs/pin` handler on `pc2-web-gateway`
 **Sibling tasks**:
 - [`IPFS-ELACITY-BOOTSTRAP`](../IPFS-ELACITY-BOOTSTRAP/IPFS-ELACITY-BOOTSTRAP.md) — peers PC2 nodes with `ipfs.ela.city`
 - [`UPLOAD-ELACITY-LOCAL-FIRST`](../UPLOAD-ELACITY-LOCAL-FIRST/UPLOAD-ELACITY-LOCAL-FIRST.md) — resilient publish flow
 - [`SUPERNODE-RPC-PROXY`](../SUPERNODE-RPC-PROXY/SUPERNODE-RPC-PROXY.md) — same supernode-as-shared-infra pattern
+
+## 2026-04-29 — Client-side Phase 1 shipped (scope-trimmed)
+
+### Discovery that reshaped the task
+
+On starting implementation it emerged that **most of the originally-scoped
+client code already exists**:
+
+- `POST /api/storage/ipfs/pin` is a live route in
+  `pc2-node/src/api/storage.ts` L672 — uses `seedingService.seedContent()`
+  or falls back to `ipfs.pinRemoteCID()`, with DB tracking via
+  `pinned_cids` and DHT announcement.
+- `pinned_cids` (schema.sql L186) already covers everything a separate
+  `marketplace_pins` table was meant to hold: `cid`, `wallet_address`,
+  `source` (default `'marketplace'`), `size`, `pinned_at`,
+  `last_announced_at`, `last_served_at`, `serve_count`, `pin_status`.
+- `elacity-creator/app.js` L3849/L3861 and `elacity-market/app.js`
+  L3742 already call `POST /api/storage/ipfs/pin` after every
+  successful mint/buy.
+
+So the *genuinely missing* client-side piece was just the
+**supernode pin fan-out** — replicating the CID to the supernode
+pin endpoints once they come online.
+
+### What shipped (v1.2.0)
+
+Config-gated mirror fan-out, default OFF so user nodes have zero
+behaviour change until an operator opts in:
+
+1. **Env var**: `SUPERNODE_PIN_MIRRORS=https://host1/api/storage/ipfs/pin,https://host2/...`
+   (comma-separated). Default unset = no fan-out.
+2. **Fan-out helper** in `pc2-node/src/api/storage.ts`:
+   `fanOutSupernodePinMirrors(cid)`. Called after successful local
+   pin in both the seeding-service branch (line ~712) and the direct
+   `pinRemoteCID` branch (line ~743). Fire-and-forget, 5 s timeout,
+   never awaited — zero impact on /pin response latency.
+3. **Probe state**: module-scoped `mirrorProbeState: Map<url, result>`
+   tracks last CID, HTTP status, duration, error, and timestamp per
+   mirror for operator observability.
+4. **New diagnostic endpoint**:
+   `GET /api/storage/ipfs/pin-mirrors` (auth + owner). Returns
+   `{ enabled, configured, lastProbes }`. Mirrors never seen return
+   `null` probe entries.
+
+### What shipped (v1.2.0) does NOT include
+
+Cut from the original MVP because they only make sense on the supernode
+side, where we can't deploy this session:
+
+- `POST /api/storage/ipfs/pin` on supernodes calling
+  `127.0.0.1:5101/api/v0/pin/add?arg=<cid>&recursive=true`.
+- LRU eviction of the oldest unprotected pin at 90 % of `StorageMax=8G`.
+- Capsule-pin `protected=true` flag.
+- DID-signed rate-limited auth.
+- `/api/health` fields `kuboReachable`, `marketplacePinsCount`,
+  `kuboStorageBytes`.
+- Direct-dial from supernode Kubo to publisher multiaddr after pin.
+
+These land in Phase 2 once deploy access is restored. Activation then
+is a one-line env-var flip on each pc2-node; no client update needed.
+
+### Live verification
+
+Smoke test on maintainer's pc2-node with
+`SUPERNODE_PIN_MIRRORS=https://69.164.241.210/...,https://38.242.211.112/...`:
+
+- `POST /api/storage/ipfs/pin` `{"cid":"bafkqaaa"}` → `200 OK` in ~15 ms
+  (response returned before fan-out starts).
+- Fan-out fired in parallel, both mirrors responded `404` (expected —
+  supernode endpoint not yet deployed): 281 ms InterServer,
+  637 ms Contabo.
+- `GET /api/storage/ipfs/pin-mirrors` now reports per-mirror probe
+  state with status/duration/timestamp.
+
+Confirms: (a) fan-out never blocks caller, (b) 404s from unreachable
+mirrors are tolerated, (c) probe state surfaces operator diagnostics.
+
+### Activation path when supernode side ships
+
+1. Deploy `POST /api/storage/ipfs/pin` handler on each supernode's
+   `pc2-web-gateway` per the MVP spec below.
+2. Operators of user pc2-nodes set
+   `SUPERNODE_PIN_MIRRORS="https://.../api/storage/ipfs/pin,..."` and
+   restart. Existing released builds already ship the fan-out code.
+3. Monitor `GET /api/storage/ipfs/pin-mirrors` for fan-out health.
 
 ## Description
 
