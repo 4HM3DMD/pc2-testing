@@ -107,6 +107,19 @@ async function main() {
     const relayMode = db.getSetting('relay_mode') === 'true';
     const relayMaxConnections = parseInt(db.getSetting('relay_max_connections') || '100', 10);
 
+    // Elacity peers: ENV var wins (operator-controlled), then config file, then default hardcoded.
+    // Empty string in ENV (e.g. ELACITY_IPFS_MULTIADDRS=) explicitly disables peering.
+    const envElacity = process.env.ELACITY_IPFS_MULTIADDRS;
+    let elacityBootstrap: string[] | undefined;
+    if (envElacity !== undefined) {
+      elacityBootstrap = envElacity
+        .split(',')
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
+    } else if (Array.isArray(ipfsConfig.elacity_bootstrap)) {
+      elacityBootstrap = ipfsConfig.elacity_bootstrap;
+    }
+
     ipfs = new IPFSStorage({
       repoPath: IPFS_REPO_PATH,
       mode: ipfsMode,
@@ -118,6 +131,7 @@ async function main() {
       publicGatewayPrefetchUrl: ipfsConfig.public_gateway_prefetch_url,
       customBootstrap: ipfsConfig.custom_bootstrap,
       supernodeBootstrap: ipfsConfig.supernode_bootstrap,
+      elacityBootstrap,
       relayMode,
       relayMaxConnections,
     });

@@ -3,13 +3,65 @@
 **Task ID**: IPFS-ELACITY-BOOTSTRAP
 **Created**: 2026-04-17
 **Last updated**: 2026-04-29
-**Status**: Proposed → ready to elevate to InProgress (concrete production trigger landed 2026-04-28)
-**Priority**: P1 — High (unblocks `UPLOAD-ELACITY-LOCAL-FIRST` and
-fixes intermittent content-fetch timeouts)
-**Target Release**: V1.2.1 (slipped from V1.2.0 — needs Elacity multiaddr handshake to ship)
-**Depends on**: Irzhy/Elacity team confirming `ipfs.ela.city`'s canonical libp2p multiaddr + PeerID
+**Status**: InProgress — Phase 1 (peering + health endpoint) landed 2026-04-29; Phase 2 (multiaddr handshake confirmation) pending
+**Priority**: P1-A — Highest (root-cause fix for v1.2 playback failure; ships in v1.2)
+**Target Release**: V1.2.0 (re-targeted from V1.2.1 after Irzhy production trigger)
+**Depends on**: Irzhy/Elacity team confirming `ipfs.ela.city`'s canonical libp2p multiaddr + PeerID — **non-blocking** for shipping (a sane hardcoded default is in place)
 **Unblocks**: `UPLOAD-ELACITY-LOCAL-FIRST`
 **Sibling**: [`SUPERNODE-MEDIA-PINNING`](../SUPERNODE-MEDIA-PINNING/SUPERNODE-MEDIA-PINNING.md) — covers the supernode side of the same problem
+
+## 2026-04-29 — Phase 1 shipped
+
+Code change set (all in commit on `feature/lit-chipotle-migration`):
+
+- `pc2-node/src/storage/ipfs.ts`:
+  - New constant `ELACITY_DEFAULT_BOOTSTRAP` — hardcoded
+    `/ip4/34.77.31.164/tcp/4001/p2p/12D3KooWNieM3HRBJdVqaQucZEJdqA3oWKrKf3Gx3hp2cmtR9GNK`
+    (lifted from the previous `PUBLIC_BOOTSTRAP_NODES` Elacity entry to
+    become the single source of truth).
+  - New `IPFSOptions.elacityBootstrap?: string[]` — operator override.
+    Empty array explicitly disables Elacity peering; `undefined` falls
+    through to the default constant.
+  - `resolveElacityPeers()` validates each entry via `multiaddr()`,
+    extracts the `/p2p/<peerId>` segment via regex (version-agnostic),
+    and drops malformed entries with a warning rather than blocking
+    startup.
+  - Effective Elacity peers are merged into the bootstrap list at
+    priority `supernodes → elacity → custom → public` and tracked in
+    `configuredElacityPeers` / `configuredElacityPeerIds`.
+  - The existing post-init dial loop and the 30 s `bootstrapHealthTimer`
+    auto-include Elacity peers, so reconnect-on-disconnect already
+    works without new timers.
+  - New public method `getElacityPeerStatus()` walks current libp2p
+    connections, matches against `configuredElacityPeerIds`, and
+    returns `{ peered, configuredPeerIds, configuredMultiaddrs,
+    matchedPeerIds }`.
+- `pc2-node/src/index.ts`: passes `elacityBootstrap` from
+  `process.env.ELACITY_IPFS_MULTIADDRS` (comma-separated) or
+  `config.ipfs.elacity_bootstrap` (array). Env wins; absent both ⇒
+  default constant.
+- `pc2-node/src/api/storage.ts`:
+  `GET /api/storage/ipfs/peers` (auth + owner-guarded) returns
+  `{ connectedPeers, peerList, elacity: { peered, configuredPeerIds,
+  configuredMultiaddrs, matchedPeerIds } }`.
+
+Phase 1 keeps the original health-endpoint location proposal (`/api/
+node/ipfs/peers`) deferred — landing under `/api/storage/ipfs/peers`
+mirrors the existing `/api/storage/ipfs/network` route, requires zero
+new auth wiring, and is the pragmatic location given storage.ts is
+already where IPFS diagnostics live. Endpoint name can be aliased
+later if `node` namespace becomes the convention.
+
+### What Phase 1 does NOT include
+
+- Operator-confirmed canonical Elacity multiaddr — still on the
+  hardcoded `34.77.31.164` entry. If Irzhy/Elacity team supplies a
+  newer multiaddr (e.g. `/dns4/ipfs.ela.city/...`), operators can drop
+  it into `ELACITY_IPFS_MULTIADDRS` without any code change.
+- Runtime PeerID fetch from `https://ipfs.ela.city/api/v0/id`. Parked
+  for Phase 2; env-var override is the safer first move.
+- Public (non-owner) read of peer count. Locked to `requireOwner` for
+  v1.2 to avoid leaking peer-list info to unauthenticated callers.
 
 ## 2026-04-28 production trigger
 

@@ -66,7 +66,22 @@ const PC2_SUPERNODE_BOOTSTRAP: string[] = [
 ];
 
 /**
- * Public IPFS bootstrap nodes (fallback after supernodes)
+ * Elacity public IPFS gateway (ipfs.ela.city) — explicit libp2p peering.
+ *
+ * Why: Helia's DHT-based provider record propagation to external Kubo nodes is
+ * unreliable for fresh CIDs. By dialing ipfs.ela.city directly we guarantee
+ * bitswap-level peering, so newly-stored CIDs become reachable through the
+ * public gateway within seconds instead of relying on DHT propagation.
+ *
+ * Operators may override via the `ELACITY_IPFS_MULTIADDRS` env var or the
+ * `ipfs.elacity_bootstrap` config option (both: comma-separated multiaddrs).
+ */
+const ELACITY_DEFAULT_BOOTSTRAP: string[] = [
+  '/ip4/34.77.31.164/tcp/4001/p2p/12D3KooWNieM3HRBJdVqaQucZEJdqA3oWKrKf3Gx3hp2cmtR9GNK',
+];
+
+/**
+ * Public IPFS bootstrap nodes (fallback after supernodes + Elacity)
  */
 const PUBLIC_BOOTSTRAP_NODES = [
   '/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN',
@@ -74,9 +89,6 @@ const PUBLIC_BOOTSTRAP_NODES = [
   '/dnsaddr/bootstrap.libp2p.io/p2p/QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb',
   '/dnsaddr/bootstrap.libp2p.io/p2p/QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt',
   '/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ',
-
-  // Elacity CDN
-  '/ip4/34.77.31.164/tcp/4001/ipfs/12D3KooWNieM3HRBJdVqaQucZEJdqA3oWKrKf3Gx3hp2cmtR9GNK',
 ];
 
 export interface IPFSOptions {
@@ -90,6 +102,7 @@ export interface IPFSOptions {
   publicGatewayPrefetchUrl?: string;// Public gateway base URL for prefetch (default: ipfs.ela.city/ipfs/)
   customBootstrap?: string[];       // Additional bootstrap nodes
   supernodeBootstrap?: string[];    // PC2 supernode relay addresses (highest priority)
+  elacityBootstrap?: string[];      // Elacity public gateway peers (overrides default; empty array disables)
   relayMode?: boolean;              // Enable relay server mode (for nodes with public IP)
   relayMaxConnections?: number;     // Max relay connections (default: 100)
   bootstrapHealthcheckIntervalMs?: number; // Periodic bootstrap re-dial when disconnected (default: 30s)
@@ -107,12 +120,54 @@ export class IPFSStorage {
   private bootstrapReconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private bootstrapHealthTimer: ReturnType<typeof setInterval> | null = null;
   private configuredBootstrapPeers: string[] = [];
+  private configuredElacityPeers: string[] = [];
+  private configuredElacityPeerIds: Set<string> = new Set();
 
   constructor(options: IPFSOptions) {
     this.repoPath = options.repoPath;
     this.networkMode = options.mode || 'private';
     this.options = options;
     this.relayEnabled = options.relayMode ?? false;
+  }
+
+  /**
+   * Resolve effective Elacity peer multiaddrs:
+   *   - explicit option (including empty array → disabled)
+   *   - else default hardcoded list (single source of truth)
+   *
+   * Each entry is normalized (legacy `/ipfs/` → `/p2p/`) and any entry that
+   * fails to parse is dropped (with a warning) so a malformed override never
+   * blocks node startup.
+   */
+  private resolveElacityPeers(): { peers: string[]; peerIds: Set<string> } {
+    const raw = this.options.elacityBootstrap !== undefined
+      ? this.options.elacityBootstrap
+      : ELACITY_DEFAULT_BOOTSTRAP;
+
+    const peers: string[] = [];
+    const peerIds = new Set<string>();
+    const peerIdPattern = /\/p2p\/([^\/]+)/;
+    for (const entry of raw) {
+      const trimmed = (entry || '').trim();
+      if (!trimmed) continue;
+      const normalized = this.normalizeBootstrapAddr(trimmed);
+      try {
+        // Validate multiaddr parses; we read the peer id via string match
+        // because @multiformats/multiaddr does not expose getPeerId() in all
+        // versions and we want to stay version-agnostic.
+        multiaddr(normalized);
+        const match = peerIdPattern.exec(normalized);
+        if (!match || !match[1]) {
+          log.warn(`[IPFS] Elacity bootstrap entry has no /p2p/<peerId>, skipping: ${normalized}`);
+          continue;
+        }
+        peers.push(normalized);
+        peerIds.add(match[1]);
+      } catch (error: any) {
+        log.warn(`[IPFS] Elacity bootstrap entry malformed, skipping (${error?.message || 'parse error'}): ${normalized}`);
+      }
+    }
+    return { peers, peerIds };
   }
 
   isRelayMode(): boolean {
@@ -267,19 +322,26 @@ export class IPFSStorage {
         }
 
         // Add bootstrap nodes for initial peer discovery
-        // Priority: supernodes → custom → public IPFS nodes
+        // Priority: supernodes → elacity → custom → public IPFS nodes
         if (enableBootstrap) {
           const supernodes = [
             ...PC2_SUPERNODE_BOOTSTRAP,
             ...(this.options.supernodeBootstrap || [])
           ];
+          const elacity = this.resolveElacityPeers();
+          this.configuredElacityPeers = elacity.peers;
+          this.configuredElacityPeerIds = elacity.peerIds;
           const bootstrapNodes = [
             ...supernodes,
+            ...elacity.peers,
             ...(this.options.customBootstrap || []),
             ...PUBLIC_BOOTSTRAP_NODES,
           ];
           if (supernodes.length > 0) {
             log.info(`   PC2 supernodes: ${supernodes.length} configured`);
+          }
+          if (elacity.peers.length > 0) {
+            log.info(`   Elacity peers: ${elacity.peers.length} configured (ipfs.ela.city)`);
           }
           libp2pConfig.peerDiscovery = [
             bootstrap({ list: bootstrapNodes }),
@@ -345,6 +407,7 @@ export class IPFSStorage {
         ];
         const bootstrapNodes = [
           ...supernodes,
+          ...this.configuredElacityPeers,
           ...(this.options.customBootstrap || []),
           ...PUBLIC_BOOTSTRAP_NODES,
         ];
@@ -1651,6 +1714,45 @@ export class IPFSStorage {
 
   getConfiguredBootstrapPeers(): string[] {
     return Array.from(new Set(this.configuredBootstrapPeers.map((p) => this.normalizeBootstrapAddr(p))));
+  }
+
+  /**
+   * Report whether this node is currently peered with any configured Elacity
+   * bootstrap peer. Used by /api/ipfs/peers and operator diagnostics to
+   * confirm content uploaded here will propagate to ipfs.ela.city.
+   */
+  getElacityPeerStatus(): {
+    peered: boolean;
+    configuredPeerIds: string[];
+    configuredMultiaddrs: string[];
+    matchedPeerIds: string[];
+  } {
+    const configuredPeerIds = Array.from(this.configuredElacityPeerIds);
+    const configuredMultiaddrs = Array.from(new Set(this.configuredElacityPeers));
+
+    if (!this.helia || !this.isInitialized || configuredPeerIds.length === 0) {
+      return {
+        peered: false,
+        configuredPeerIds,
+        configuredMultiaddrs,
+        matchedPeerIds: [],
+      };
+    }
+
+    const matched = new Set<string>();
+    for (const conn of this.helia.libp2p.getConnections()) {
+      const remote = conn.remotePeer.toString();
+      if (this.configuredElacityPeerIds.has(remote)) {
+        matched.add(remote);
+      }
+    }
+
+    return {
+      peered: matched.size > 0,
+      configuredPeerIds,
+      configuredMultiaddrs,
+      matchedPeerIds: Array.from(matched),
+    };
   }
 
   async reconnectBootstrapPeers(phase: 'manual' | 'post-init' | 'initial' = 'manual'): Promise<{

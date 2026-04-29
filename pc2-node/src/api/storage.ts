@@ -452,6 +452,41 @@ router.get('/ipfs/network', authenticate, async (req: AuthenticatedRequest, res:
 });
 
 /**
+ * GET /api/storage/ipfs/peers
+ * Diagnostic: report whether this node is currently peered with the configured
+ * Elacity public gateway (ipfs.ela.city) so operators can verify that newly
+ * uploaded content will propagate to the public gateway via bitswap.
+ *
+ * Owner-only because peer-list information should not leak to unauthenticated
+ * callers.
+ */
+router.get('/ipfs/peers', authenticate, requireOwner, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const ipfs = req.app.locals.ipfs;
+    if (!ipfs) {
+      return res.status(503).json({ error: 'IPFS not available' });
+    }
+
+    const elacity = ipfs.getElacityPeerStatus();
+    const connectedPeers = await ipfs.getConnectedPeers();
+
+    res.json({
+      connectedPeers: connectedPeers.length,
+      peerList: connectedPeers.slice(0, 50),
+      elacity: {
+        peered: elacity.peered,
+        configuredPeerIds: elacity.configuredPeerIds,
+        configuredMultiaddrs: elacity.configuredMultiaddrs,
+        matchedPeerIds: elacity.matchedPeerIds,
+      },
+    });
+  } catch (error) {
+    logger.error('[Storage API]: Error getting IPFS peers:', error);
+    res.status(500).json({ error: 'Failed to get IPFS peers' });
+  }
+});
+
+/**
  * POST /api/ipfs/add
  * Add raw content to IPFS and return the CID.
  * Accepts base64-encoded content in JSON body.
