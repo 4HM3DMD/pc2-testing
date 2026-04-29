@@ -724,6 +724,98 @@ function getElacityPinForwardConfig(): ElacityPinForwardConfig | null {
   return { url, token: token.trim() };
 }
 
+// Retry queue for Elacity Kubo pin forwards. In-memory only (pc2-node restarts
+// are rare; a hypothetical restart during pending retries is acceptable because
+// the next /ipfs/pin request from the client will re-trigger a forward). Back
+// off exponentially so a blip on ipfs.ela.city doesn't DOS it on recovery.
+const PIN_RETRY_MAX_ATTEMPTS = 5;
+const PIN_RETRY_BACKOFF_MS: readonly number[] = [60_000, 120_000, 240_000, 480_000, 960_000];
+const PIN_RETRY_MAX_QUEUE = 1000;
+const PIN_RETRY_MAX_AGE_MS = 3_600_000;
+const PIN_RETRY_TICK_MS = 30_000;
+
+interface ElacityPinRetryState {
+  cid: string;
+  attempts: number;
+  firstQueuedAt: number;
+  nextAttemptAt: number;
+  lastError: string;
+}
+
+const elacityPinRetryQueue = new Map<string, ElacityPinRetryState>();
+let elacityRetrySchedulerStarted = false;
+
+/**
+ * Enqueue (or re-queue) a cid for a future pin-forward retry. Applies
+ * exponential backoff and a hard cap on both attempts and total age so
+ * a bad cid cannot sit in the queue forever.
+ */
+function queueElacityPinRetry(cid: string, error: string): void {
+  const existing = elacityPinRetryQueue.get(cid);
+  const attempts = (existing?.attempts ?? 0) + 1;
+
+  if (attempts > PIN_RETRY_MAX_ATTEMPTS) {
+    logger.error(
+      `[Storage API] Elacity pin forward giving up after ${PIN_RETRY_MAX_ATTEMPTS} attempts: cid=${cid} lastError=${error}`,
+    );
+    elacityPinRetryQueue.delete(cid);
+    return;
+  }
+
+  const now = Date.now();
+  const firstQueuedAt = existing?.firstQueuedAt ?? now;
+
+  if (now - firstQueuedAt > PIN_RETRY_MAX_AGE_MS) {
+    logger.error(
+      `[Storage API] Elacity pin forward aged out (>${Math.round(PIN_RETRY_MAX_AGE_MS / 60000)}min): cid=${cid} lastError=${error}`,
+    );
+    elacityPinRetryQueue.delete(cid);
+    return;
+  }
+
+  if (!existing && elacityPinRetryQueue.size >= PIN_RETRY_MAX_QUEUE) {
+    logger.warn(
+      `[Storage API] Elacity pin retry queue full (${PIN_RETRY_MAX_QUEUE}), dropping cid=${cid}`,
+    );
+    return;
+  }
+
+  const backoff = PIN_RETRY_BACKOFF_MS[Math.min(attempts - 1, PIN_RETRY_BACKOFF_MS.length - 1)];
+  elacityPinRetryQueue.set(cid, {
+    cid,
+    attempts,
+    firstQueuedAt,
+    nextAttemptAt: now + backoff,
+    lastError: error,
+  });
+  logger.debug(
+    `[Storage API] Elacity pin forward retry queued: cid=${cid} attempt=${attempts}/${PIN_RETRY_MAX_ATTEMPTS} backoffMs=${backoff}`,
+  );
+}
+
+function ensureElacityPinRetrySchedulerStarted(): void {
+  if (elacityRetrySchedulerStarted) return;
+  if (!getElacityPinForwardConfig()) return;
+  elacityRetrySchedulerStarted = true;
+
+  const tick = (): void => {
+    const now = Date.now();
+    for (const [, state] of elacityPinRetryQueue) {
+      if (state.nextAttemptAt <= now) {
+        // forwardPinToElacityKubo re-enters queueElacityPinRetry on failure
+        // or deletes the entry on success.
+        forwardPinToElacityKubo(state.cid);
+      }
+    }
+  };
+
+  const timer = setInterval(tick, PIN_RETRY_TICK_MS);
+  timer.unref?.();
+  logger.info(
+    `[Storage API] Elacity pin forward retry scheduler started (interval=${PIN_RETRY_TICK_MS}ms, maxAttempts=${PIN_RETRY_MAX_ATTEMPTS})`,
+  );
+}
+
 function forwardPinToElacityKubo(cid: string): void {
   const config = getElacityPinForwardConfig();
   if (!config) return;
@@ -746,10 +838,20 @@ function forwardPinToElacityKubo(cid: string): void {
         lastAt: Date.now(),
       };
       if (response.ok) {
+        elacityPinRetryQueue.delete(cid);
         logger.info(`[Storage API] Elacity Kubo pin forward ok: cid=${cid} (${durationMs}ms)`);
+        return;
+      }
+      // 4xx responses are the caller's fault (auth, bad CID) — no point retrying.
+      // 5xx and gateway timeouts are transient — queue for retry.
+      if (response.status >= 500) {
+        logger.warn(
+          `[Storage API] Elacity Kubo pin forward 5xx: cid=${cid} status=${response.status} (${durationMs}ms) — scheduling retry`,
+        );
+        queueElacityPinRetry(cid, `status=${response.status}`);
       } else {
         logger.warn(
-          `[Storage API] Elacity Kubo pin forward non-OK: cid=${cid} status=${response.status} (${durationMs}ms)`,
+          `[Storage API] Elacity Kubo pin forward non-retryable: cid=${cid} status=${response.status} (${durationMs}ms)`,
         );
       }
     },
@@ -764,7 +866,10 @@ function forwardPinToElacityKubo(cid: string): void {
         lastDurationMs: durationMs,
         lastAt: Date.now(),
       };
-      logger.debug(`[Storage API] Elacity Kubo pin forward failed: cid=${cid} (${durationMs}ms): ${message}`);
+      // Network-level errors (timeout, DNS, refused connection) are always
+      // transient; always retry.
+      logger.debug(`[Storage API] Elacity Kubo pin forward failed: cid=${cid} (${durationMs}ms): ${message} — scheduling retry`);
+      queueElacityPinRetry(cid, message);
     },
   );
 }
@@ -776,6 +881,7 @@ function forwardPinToElacityKubo(cid: string): void {
   const config = getElacityPinForwardConfig();
   if (config) {
     logger.info(`[Storage API] Elacity Kubo pin forward: enabled -> ${config.url}`);
+    ensureElacityPinRetrySchedulerStarted();
     return;
   }
   const hasUrl = !!process.env.ELACITY_PIN_FORWARD_URL;
@@ -867,11 +973,31 @@ router.get('/ipfs/pin-mirrors', authenticate, requireOwner, (_req: Authenticated
  */
 router.get('/ipfs/elacity-pin-forward', authenticate, requireOwner, (_req: AuthenticatedRequest, res: Response) => {
   const config = getElacityPinForwardConfig();
+  const now = Date.now();
+  // Cap exposed retry entries so a pathological queue doesn't balloon the
+  // diagnostic payload. Scheduler still iterates the whole queue internally.
+  const pendingSample = Array.from(elacityPinRetryQueue.values())
+    .slice(0, 20)
+    .map((s) => ({
+      cid: s.cid,
+      attempts: s.attempts,
+      nextAttemptInMs: Math.max(0, s.nextAttemptAt - now),
+      firstQueuedAgoMs: now - s.firstQueuedAt,
+      lastError: s.lastError,
+    }));
   res.json({
     enabled: config !== null,
     url: config?.url ?? null,
     tokenConfigured: config !== null,
     lastProbe: elacityForwardProbeState,
+    retryQueue: {
+      size: elacityPinRetryQueue.size,
+      maxAttempts: PIN_RETRY_MAX_ATTEMPTS,
+      maxQueueSize: PIN_RETRY_MAX_QUEUE,
+      maxAgeMs: PIN_RETRY_MAX_AGE_MS,
+      schedulerStarted: elacityRetrySchedulerStarted,
+      pending: pendingSample,
+    },
   });
 });
 

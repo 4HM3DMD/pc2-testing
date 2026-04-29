@@ -98,6 +98,141 @@ mirrors are tolerated, (c) probe state surfaces operator diagnostics.
    restart. Existing released builds already ship the fan-out code.
 3. Monitor `GET /api/storage/ipfs/pin-mirrors` for fan-out health.
 
+## 2026-04-29 Afternoon — Phase 2 Deployment Plan (supernode side)
+
+### Status update
+
+Irzhy's playback failure from 2026-04-28 has exposed a new, more immediate
+gap than originally diagnosed: `ipfs.ela.city`'s nginx had
+`proxy_read_timeout 120s` on `/api/v0/pin/add`, causing large-DAG pins to
+silently fail. Fix landed 2026-04-29 afternoon (see
+`docs/handover/IRZHY_PLAYBACK_DIAGNOSIS_2026_04_28.md`). With that in
+place, **Tier A (ipfs.ela.city) now works** for new mints via
+`ELACITY-KUBO-PIN-FORWARD`. This task (`SUPERNODE-MEDIA-PINNING`) adds
+**Tier B** — a second durable pin location geographically separated from
+GCP — making the system survive an `ipfs.ela.city` outage without user
+impact.
+
+### Why Phase 2 is deferred (not today)
+
+During the 2026-04-29 afternoon work, we observed:
+
+1. **Kubo pinstore serialization**: on `ipfs.ela.city` a single
+   in-flight `ipfs pin add --progress` for a large DAG blocks every
+   other `pin/ls`, `pin/add`, and `pin/verify` for the duration (tens
+   of minutes). This likely applies to Kubo 0.24 on the supernodes too.
+   Implication: a naive `/api/storage/ipfs/pin` handler that just
+   forwards to `127.0.0.1:5101/api/v0/pin/add?stream-channels=false`
+   will deadlock the supernode pin subsystem if a large pin is
+   in-flight. Mitigation is in the handler design below.
+2. **User directive**: explicit "be very careful — these are live
+   supernodes, do not break anything". Needs a staged rollout with
+   pre-flight checks and one-shot rollback.
+3. **Current Kubo on `ipfs.ela.city` is itself mid-storm** (a pin
+   add is blocking pin/ls right now). Safer to let that settle before
+   we start touching the supernodes.
+
+### Phase 2 deployment plan (one supernode at a time)
+
+All steps are explicitly user-gated. No supernode is touched without
+"approved" on the previous step.
+
+#### Step 1 — Ship handler artefact in the repo (safe, no deploy)
+
+Create `deploy/web-gateway/handlers/ipfs-pin.js` — a standalone handler
+module that:
+
+- Exposes a single function `handleIpfsPin(req, res, deps)` consumable
+  by the existing `pc2-web-gateway` routing layer.
+- Validates body shape (`{ cid: string, source?: string, ... }`) and
+  rejects non-CIDv0/v1 inputs in ~ms.
+- **Async dispatch (critical)**: instead of forwarding `pin/add`
+  synchronously (which blocks on DAG fetch and starves other pin ops),
+  this handler:
+    1. Does a quick `block/stat` probe — returns `202 AlreadyPresent`
+       in ms if Kubo already has the root.
+    2. Returns `202 Accepted` with a `{ jobId, status: "queued" }`
+       body, queues the pin in a small in-process job runner
+       (max 2 concurrent pin/add calls; deeper queue stored in RAM).
+    3. Caller polls `GET /api/storage/ipfs/pin/<jobId>` for status.
+- Rate-limited per-caller-IP with `limit_req`-style token bucket.
+- Reachable only from authorised PC2-node IPs by default — Auth
+  strategy: reuse the existing Wave-3 gateway lockdown mechanism
+  (see `.cursor/tasks/SEC-2026-04-21-PC2-AUDIT/WAVE-3-GATEWAY-LOCKDOWN.md`).
+- Health fields merged into the existing `/api/health` response:
+  `kuboReachable`, `marketplacePinsCount`, `kuboStorageBytes`.
+
+**Testing before deploy**: run `pc2-web-gateway` locally with this
+handler against a local Kubo, confirm behaviour via `curl`.
+
+#### Step 2 — Dry-run on InterServer ONLY (user-gated)
+
+1. Backup `/etc/systemd/system/pc2-web-gateway.service` (current unit).
+2. `scp deploy/web-gateway/handlers/ipfs-pin.js` to the supernode.
+3. Restart `pc2-web-gateway` once (systemd; not Kubo — Kubo untouched).
+4. Verify:
+   - `/api/health` still returns 200 (existing proxy behaviour intact).
+   - `POST /api/storage/ipfs/pin { cid: <known-good CID> }` returns
+     202 Accepted in <100 ms.
+   - Poll shows `done` and Kubo `ipfs pin ls` confirms pin.
+5. Exercise failure path: 401 without auth, 404 on bad CID shape,
+   503 if we kill Kubo API briefly.
+6. 24-hour soak: `journalctl -u pc2-web-gateway -f` + `pin-mirrors`
+   diagnostic on my pc2-node shows steady state.
+
+Rollback at any point: restore previous systemd unit file + restart.
+
+#### Step 3 — Enable fan-out on a single PC2 node (user-gated)
+
+Set `SUPERNODE_PIN_MIRRORS="https://69.164.241.210/api/storage/ipfs/pin"`
+on **one** pc2-node (the maintainer's). Mint a fresh test asset. Verify:
+
+- Fan-out fires (visible in `GET /api/storage/ipfs/pin-mirrors`).
+- InterServer returns 202 + async pin completes within 60 s.
+- Third-party PC2 node can fetch + play the new asset while the
+  minter's node is offline.
+
+#### Step 4 — Mirror to Contabo (user-gated)
+
+Repeat Steps 2–3 for `38.242.211.112`. Set
+`SUPERNODE_PIN_MIRRORS=...,<contabo>` on the maintainer pc2-node. Test
+that all three targets (Elacity + both supernodes) receive the pin.
+
+#### Step 5 — General rollout (user-gated)
+
+Once steps 1–4 are stable for 24 h:
+
+- Document the env var in `docs/setup/PC2_NODE_SETUP.md`.
+- Update `START_SERVER_WITH_ELACITY_PIN.sh` (or a successor) with
+  `SUPERNODE_PIN_MIRRORS` alongside `ELACITY_PIN_FORWARD_*`.
+- Newer pc2-node builds ship with a sensible default for the two
+  supernodes (overridable by operators who don't want to mirror).
+
+### Risks & explicit mitigations (read before approving any step)
+
+| Risk | Likelihood | Blast radius | Mitigation |
+|---|---|---|---|
+| New handler crashes `pc2-web-gateway` on supernode | Low | All proxy traffic on that supernode | Standalone handler in own module, wrapped in try/catch; health probe on startup; rollback = restore previous unit file |
+| Handler deadlocks Kubo pinstore | Medium | All pin ops on that supernode | Async job runner (max 2 concurrent pin/add), `block/stat` fast-path for already-present content, caller gets 202 immediately |
+| Kubo disk fills (8 GB `StorageMax`) | Medium over months | New pins rejected | Phase 2b: LRU eviction table (`marketplace_pins`) — not in this step |
+| Rate limit too loose → abuse | Low | Supernode CPU | Per-IP token bucket; only authorised PC2-node IPs via gateway ACL |
+| DID auth not yet implemented | High | Non-owner can pin anything | Phase 2a uses IP allow-list / shared secret; Phase 2c adds DID-signed auth once `capsule:ipfs-pin` from `elastos-runtime` is nailed down |
+
+### What does NOT need to happen for Phase 2 MVP
+
+Flagged so we don't over-engineer:
+
+- **No `marketplace_pins` table yet.** Kubo's own pinstore is the
+  source of truth. We add the table when we ship LRU eviction (Phase 2b).
+- **No DID-signed auth yet.** Start with IP allow-list + shared token
+  (same pattern as Elacity Kubo bearer). Migrate to DID when
+  `elastos-runtime` capsule lands.
+- **No direct-dial to publisher multiaddr yet.** Rely on
+  `IPFS-ELACITY-BOOTSTRAP` + standard DHT discovery. Add direct-dial if
+  we see Phase 2 pins timing out on block fetch.
+
+---
+
 ## Description
 
 When a user mints media on the Elacity marketplace, automatically pin
