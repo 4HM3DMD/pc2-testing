@@ -97,6 +97,47 @@ var Wallet = (function () {
   var smartAccountAddress = new URLSearchParams(window.location.search).get('puter.smart_account') || null;
   var currentChainId = null;
   var siwePromise = null;
+
+  // Short-lived RPC read cache. Base's public RPC throttles `eth_call` when
+  // the detail view flips back and forth between assets (it fires a burst of
+  // sellersOf + listings + balanceOf per open); throttled reads made the
+  // Buy-button back-fill silently empty and the price section flicker in and
+  // out. 30 s TTL is short enough to pick up fresh listings after a cancel
+  // or a new mint, long enough to survive a rate-limit cooldown.
+  var _rpcReadCache = {};
+  var _RPC_CACHE_TTL_MS = 30000;
+
+  function _cacheGet(key) {
+    var entry = _rpcReadCache[key];
+    if (!entry) return null;
+    if (Date.now() - entry.at > _RPC_CACHE_TTL_MS) {
+      delete _rpcReadCache[key];
+      return null;
+    }
+    return entry.value;
+  }
+
+  function _cacheSet(key, value) {
+    _rpcReadCache[key] = { at: Date.now(), value: value };
+    return value;
+  }
+
+  function _isRateLimitError(err) {
+    var msg = (err && err.message) || '';
+    return msg.indexOf('rate-limited') !== -1
+      || msg.indexOf('Too Many Requests') !== -1
+      || msg.indexOf('429') !== -1;
+  }
+
+  // Retry-once wrapper for read RPC calls that get rate-limited by the
+  // Base public gateway. Only retries on rate-limit errors; all other
+  // failures propagate immediately.
+  function _withRateLimitRetry(fn) {
+    return fn().catch(function (err) {
+      if (!_isRateLimitError(err)) throw err;
+      return new Promise(function (resolve) { setTimeout(resolve, 600); }).then(fn);
+    });
+  }
   var ipcMsgCounter = 0;
   var appInstanceId = new URLSearchParams(window.location.search).get('puter.app_instance_id') || '';
 
@@ -558,6 +599,24 @@ var Wallet = (function () {
   function buyAccessWithEOA(authorityAddr, seller, ledger, tokenId, quantity, priceWei, payToken, operativeAddr) {
     if (!connectedAddress) throw new Error('Wallet not connected');
 
+    // Log inputs once up-front — these are the exact values passed in by
+    // app.js handleBuy. Captures missing/malformed args (Irzhy's 2026-04-28
+    // "Invalid Params" report showed MetaMask rejecting at addDappTransaction
+    // BEFORE the user-approval dialog, which means a field in the tx envelope
+    // was malformed. Logging inputs + the final tx object lets us compare.
+    console.log('[Wallet buyAccessWithEOA] inputs:', {
+      authorityAddr: authorityAddr,
+      seller: seller,
+      ledger: ledger,
+      tokenId: String(tokenId),
+      quantity: String(quantity),
+      priceWei: String(priceWei),
+      payToken: payToken,
+      operativeAddr: operativeAddr,
+      connectedAddress: connectedAddress,
+      currentChainId: currentChainId
+    });
+
     return ensureBase().then(function () {
       var isNativePayment = !payToken || payToken === ZERO_ADDRESS;
       var iface = new ethers.Interface(BUY_ACCESS_ABI);
@@ -567,7 +626,9 @@ var Wallet = (function () {
           'buyAccess(address,address,uint256,uint256,uint256)',
           [seller, ledger, ethers.getBigInt(tokenId), ethers.getBigInt(quantity), ethers.getBigInt(priceWei)]
         );
-        return parentSendTransaction({ to: authorityAddr, data: data, value: ethers.toQuantity(ethers.getBigInt(priceWei)) });
+        var nativeTx = { to: authorityAddr, data: data, value: ethers.toQuantity(ethers.getBigInt(priceWei)) };
+        console.log('[Wallet buyAccessWithEOA] native-payment tx envelope:', nativeTx);
+        return parentSendTransaction(nativeTx);
       }
 
       var buyData = iface.encodeFunctionData(
@@ -575,6 +636,7 @@ var Wallet = (function () {
         [seller, ledger, ethers.getBigInt(tokenId), ethers.getBigInt(quantity), ethers.getBigInt(priceWei), payToken]
       );
       var buyTx = { to: authorityAddr, data: buyData, value: '0x0' };
+      console.log('[Wallet buyAccessWithEOA] erc20 buy tx envelope (after approve):', buyTx);
 
       return getPaymentProcessor(operativeAddr)
         .then(function (approvalTarget) {
@@ -708,6 +770,16 @@ var Wallet = (function () {
   function cancelAccessListing(operativeAddr, tokenId, quantity, fromWallet) {
     if (!connectedAddress) throw new Error('Wallet not connected');
 
+    // See buyAccessWithEOA for rationale on these diagnostic logs.
+    console.log('[Wallet cancelAccessListing] inputs:', {
+      operativeAddr: operativeAddr,
+      tokenId: String(tokenId),
+      quantity: String(quantity),
+      fromWallet: fromWallet,
+      connectedAddress: connectedAddress,
+      currentChainId: currentChainId
+    });
+
     return ensureBase().then(function () {
       var useSA = (fromWallet === 'sa') && hasSmartAccount();
       var iface = new ethers.Interface(AUTHORITY_GATEWAY_ABI);
@@ -717,6 +789,7 @@ var Wallet = (function () {
         ethers.getBigInt(quantity)
       ]);
       var tx = { to: AUTHORITY_GATEWAY_ADDRESS, data: data, value: '0x0' };
+      console.log('[Wallet cancelAccessListing] tx envelope:', tx, 'useSA:', useSA);
 
       if (useSA) {
         var chainIdDecimal = currentChainId ? parseInt(currentChainId, 16) : 8453;
@@ -728,31 +801,43 @@ var Wallet = (function () {
 
   function getAccessSellers(operativeAddr, tokenId) {
     if (!operativeAddr) return Promise.resolve([]);
+    var cacheKey = 'sellers:' + operativeAddr.toLowerCase() + ':' + String(tokenId);
+    var cached = _cacheGet(cacheKey);
+    if (cached) return Promise.resolve(cached);
+
     var iface = new ethers.Interface(AUTHORITY_GATEWAY_ABI);
     var data = iface.encodeFunctionData('sellersOf', [operativeAddr, ethers.getBigInt(tokenId)]);
-    return getProvider().request({
-      method: 'eth_call',
-      params: [{ to: AUTHORITY_GATEWAY_ADDRESS, data: data }, 'latest']
+    return _withRateLimitRetry(function () {
+      return getProvider().request({
+        method: 'eth_call',
+        params: [{ to: AUTHORITY_GATEWAY_ADDRESS, data: data }, 'latest']
+      });
     }).then(function (result) {
       var decoded = ethers.AbiCoder.defaultAbiCoder().decode(['address[]'], result);
-      return decoded[0] || [];
+      return _cacheSet(cacheKey, decoded[0] || []);
     }).catch(function () { return []; });
   }
 
   function getAccessListing(operativeAddr, tokenId, sellerAddr) {
     if (!operativeAddr || !sellerAddr) return Promise.resolve(null);
+    var cacheKey = 'listing:' + operativeAddr.toLowerCase() + ':' + String(tokenId) + ':' + sellerAddr.toLowerCase();
+    var cached = _cacheGet(cacheKey);
+    if (cached) return Promise.resolve(cached);
+
     var iface = new ethers.Interface(AUTHORITY_GATEWAY_ABI);
     var data = iface.encodeFunctionData('listings', [operativeAddr, ethers.getBigInt(tokenId), sellerAddr]);
-    return getProvider().request({
-      method: 'eth_call',
-      params: [{ to: AUTHORITY_GATEWAY_ADDRESS, data: data }, 'latest']
+    return _withRateLimitRetry(function () {
+      return getProvider().request({
+        method: 'eth_call',
+        params: [{ to: AUTHORITY_GATEWAY_ADDRESS, data: data }, 'latest']
+      });
     }).then(function (result) {
       var decoded = ethers.AbiCoder.defaultAbiCoder().decode(['uint256', 'uint256', 'address'], result);
-      return {
+      return _cacheSet(cacheKey, {
         quantity: Number(decoded[0]),
         pricePerToken: decoded[1].toString(),
         payToken: decoded[2]
-      };
+      });
     }).catch(function () { return null; });
   }
 
