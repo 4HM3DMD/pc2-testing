@@ -204,20 +204,55 @@ router.post('/init', async (req: AuthenticatedRequest, res: Response) => {
       mpdBaseUrl = cached.mpdBaseUrl;
       logger.info(`[media/init] MPD cache hit for ${cacheKey}`);
     } else {
+      // MPD fetch with explicit per-gateway timeouts so a hung public IPFS
+      // gateway (e.g. when the CID has not propagated to ipfs.ela.city yet)
+      // never stalls playback for more than MPD_FETCH_TIMEOUT_MS.
+      const MPD_FETCH_TIMEOUT_MS = 10_000;
       const mpdUrl = ipfsGateway + mediaUri + '/stream.mpd';
+      const fallbackUrl = fallbackGateway + mediaUri + '/stream.mpd';
+
+      const fetchWithTimeout = async (url: string) => {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), MPD_FETCH_TIMEOUT_MS);
+        try {
+          const response = await fetch(url, { signal: controller.signal });
+          return { response, error: undefined as { code: string; message: string } | undefined };
+        } catch (err: any) {
+          const cause = err?.cause;
+          const code = err?.name === 'AbortError' ? 'TIMEOUT' : (cause?.code || 'FETCH_ERROR');
+          const message = cause?.message || err?.message || 'Unknown fetch error';
+          return { response: undefined as Awaited<ReturnType<typeof fetch>> | undefined, error: { code, message } };
+        } finally {
+          clearTimeout(timer);
+        }
+      };
+
       logger.info(`[media/init] Fetching MPD: ${mpdUrl}`);
-      const mpdResponse = await fetch(mpdUrl);
-      if (mpdResponse.ok) {
-        mpdText = await mpdResponse.text();
+      const local = await fetchWithTimeout(mpdUrl);
+      if (local.response?.ok) {
+        mpdText = await local.response.text();
       } else {
-        const fallbackUrl = fallbackGateway + mediaUri + '/stream.mpd';
-        logger.info(`[media/init] Local MPD failed (${mpdResponse.status}), trying fallback: ${fallbackUrl}`);
-        const fbResponse = await fetch(fallbackUrl);
-        if (!fbResponse.ok) {
-          res.status(502).json({ error: `Failed to fetch MPD from both gateways (local: ${mpdResponse.status}, public: ${fbResponse.status})` });
+        const localStatus = local.response?.status;
+        const localErr = local.error;
+        logger.info(
+          `[media/init] Local MPD failed (${localStatus ?? localErr?.code}: ${localErr?.message ?? 'non-OK status'}), trying fallback: ${fallbackUrl}`,
+        );
+        const remote = await fetchWithTimeout(fallbackUrl);
+        if (!remote.response?.ok) {
+          const remoteStatus = remote.response?.status;
+          const remoteErr = remote.error;
+          const bothTimedOut = localErr?.code === 'TIMEOUT' && remoteErr?.code === 'TIMEOUT';
+          res.status(502).json({
+            error: bothTimedOut
+              ? 'Content not yet reachable on IPFS. This asset was published from another node and has not propagated to the public gateway yet. Retry shortly, or ask the publisher to peer with ipfs.ela.city.'
+              : `Failed to fetch MPD from both gateways (local: ${localStatus ?? localErr?.code}, public: ${remoteStatus ?? remoteErr?.code})`,
+            localGateway: { status: localStatus, cause: localErr },
+            publicGateway: { status: remoteStatus, cause: remoteErr },
+            mediaUri,
+          });
           return;
         }
-        mpdText = await fbResponse.text();
+        mpdText = await remote.response.text();
       }
       mpdBaseUrl = ipfsGateway + mediaUri + '/';
       initContextCache.set(cacheKey, { mpdText, mpdBaseUrl, cachedAt: Date.now() });
@@ -427,8 +462,17 @@ router.post('/init', async (req: AuthenticatedRequest, res: Response) => {
       totalTimeMs: Date.now() - requestStart,
     });
   } catch (error: any) {
-    logger.error(`[media/init] Error: ${error.message}`, error);
-    res.status(500).json({ error: error.message });
+    const cause = error?.cause;
+    const causeMessage = cause?.message;
+    const causeCode = cause?.code;
+    logger.error(
+      `[media/init] Error: ${error.message}${causeMessage ? ` (cause: ${causeCode || ''} ${causeMessage})` : ''}`,
+      error,
+    );
+    res.status(500).json({
+      error: error.message,
+      ...(causeMessage ? { cause: { code: causeCode, message: causeMessage } } : {}),
+    });
   }
 });
 

@@ -2,12 +2,39 @@
 
 **Task ID**: IPFS-ELACITY-BOOTSTRAP
 **Created**: 2026-04-17
-**Status**: Proposed
+**Last updated**: 2026-04-29
+**Status**: Proposed → ready to elevate to InProgress (concrete production trigger landed 2026-04-28)
 **Priority**: P1 — High (unblocks `UPLOAD-ELACITY-LOCAL-FIRST` and
 fixes intermittent content-fetch timeouts)
-**Target Release**: V1.2 (end of April 2026)
-**Depends on**: —
+**Target Release**: V1.2.1 (slipped from V1.2.0 — needs Elacity multiaddr handshake to ship)
+**Depends on**: Irzhy/Elacity team confirming `ipfs.ela.city`'s canonical libp2p multiaddr + PeerID
 **Unblocks**: `UPLOAD-ELACITY-LOCAL-FIRST`
+**Sibling**: [`SUPERNODE-MEDIA-PINNING`](../SUPERNODE-MEDIA-PINNING/SUPERNODE-MEDIA-PINNING.md) — covers the supernode side of the same problem
+
+## 2026-04-28 production trigger
+
+This task's symptom finally hit a real user. Irzhy reported:
+
+- Bought a marketplace asset minted from another PC2 node
+  (`bafybeiflfrufuucgbeztwducthonjs7zjz2dsdpk4ajkgxodnkoiru7c3y`).
+- Download succeeded (confirmed metadata reached his node).
+- Playback failed at "Resolving content and recovering decryption
+  key…" with the player error `"fetch failed"`.
+
+Live diagnosis in
+[`docs/core/SUPERNODE_CAPABILITY_ASSESSMENT.md`](../../../docs/core/SUPERNODE_CAPABILITY_ASSESSMENT.md)
+§4 confirmed:
+
+- His local IPFS gateway returned non-OK for the DASH stream
+  sub-path because his Helia only had the metadata, not the bytes.
+- `https://ipfs.ela.city/ipfs/<cid>/stream.mpd` timed out at 15 s+ —
+  Elacity's Kubo could not resolve the CID via DHT in any reasonable
+  time.
+- A known-good CID resolved on `ipfs.ela.city` instantly, ruling out a
+  gateway outage.
+
+Net: Elacity's Kubo and the publisher's Helia have no peering, so
+DHT discovery fails. This task is the structural fix.
 
 ## Description
 
