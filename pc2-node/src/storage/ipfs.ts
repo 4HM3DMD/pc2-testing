@@ -12,6 +12,7 @@ import { createHelia, type Helia } from 'helia';
 import { unixfs, type UnixFS } from '@helia/unixfs';
 import { createLibp2p, type Libp2pOptions } from 'libp2p';
 import { generateKeyPair, privateKeyFromProtobuf, privateKeyToProtobuf } from '@libp2p/crypto/keys';
+import { FaultTolerance } from '@libp2p/interface';
 import { tcp } from '@libp2p/tcp';
 import { mdns } from '@libp2p/mdns';
 import { webSockets } from '@libp2p/websockets';
@@ -81,7 +82,18 @@ const ELACITY_DEFAULT_BOOTSTRAP: string[] = [
 ];
 
 /**
- * Public IPFS bootstrap nodes (fallback after supernodes + Elacity)
+ * Relay-first bootstrap targets.
+ * These are attempted early so NAT'd Helia nodes can establish circuit paths.
+ * Same peer as ELACITY_DEFAULT_BOOTSTRAP but declared separately so operators
+ * can extend the relay pool via `ipfs.relay_bootstrap` without disturbing the
+ * direct-peering list.
+ */
+const DEFAULT_RELAY_BOOTSTRAP: string[] = [
+  '/ip4/34.77.31.164/tcp/4001/p2p/12D3KooWNieM3HRBJdVqaQucZEJdqA3oWKrKf3Gx3hp2cmtR9GNK',
+];
+
+/**
+ * Public IPFS bootstrap nodes (fallback after supernodes + Elacity + relays)
  */
 const PUBLIC_BOOTSTRAP_NODES = [
   '/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN',
@@ -103,6 +115,7 @@ export interface IPFSOptions {
   customBootstrap?: string[];       // Additional bootstrap nodes
   supernodeBootstrap?: string[];    // PC2 supernode relay addresses (highest priority)
   elacityBootstrap?: string[];      // Elacity public gateway peers (overrides default; empty array disables)
+  relayBootstrap?: string[];        // Additional relay bootstrap peers from config (circuit relay pool)
   relayMode?: boolean;              // Enable relay server mode (for nodes with public IP)
   relayMaxConnections?: number;     // Max relay connections (default: 100)
   bootstrapHealthcheckIntervalMs?: number; // Periodic bootstrap re-dial when disconnected (default: 30s)
@@ -182,6 +195,10 @@ export class IPFSStorage {
     return this.networkMode;
   }
 
+  private uniquePeers(peers: string[]): string[] {
+    return Array.from(new Set(peers.map((peer) => peer.trim()).filter(Boolean)));
+  }
+
   /**
    * Persist libp2p identity key so Peer ID stays stable across restarts.
    */
@@ -257,13 +274,31 @@ export class IPFSStorage {
         addresses: {
           listen: enableNetwork ? [
             '/ip4/0.0.0.0/tcp/4001',
-            '/ip4/0.0.0.0/tcp/4002/ws'
+            '/ip4/0.0.0.0/tcp/4002/ws',
+            // Allow inbound relayed connections for NAT'd nodes.
+            // /p2p-circuit can only actually listen after a relay reservation
+            // completes, so transportManager.faultTolerance below must allow
+            // it to be unreachable at startup (otherwise createLibp2p throws
+            // UnsupportedListenAddressesError before relay reservations can
+            // even be attempted).
+            '/p2p-circuit'
           ] : []
+        },
+        transportManager: {
+          // NO_FATAL: listen addresses that can't bind at startup are logged
+          // and skipped instead of aborting node initialization. Required for
+          // /p2p-circuit (reservation-dependent) and also makes IPv6-less
+          // hosts degrade gracefully.
+          faultTolerance: FaultTolerance.NO_FATAL
         },
         transports: enableNetwork ? [
           tcp(),
           webSockets(),
-          circuitRelayTransport()
+          // Maintain relay reservations to keep NAT-reachable circuit paths.
+          circuitRelayTransport({
+            reservationConcurrency: 2,
+            reservationCompletionTimeout: 20_000,
+          })
         ] : [
           tcp(),
           webSockets()
@@ -325,19 +360,27 @@ export class IPFSStorage {
         // Add bootstrap nodes for initial peer discovery
         // Priority: supernodes → elacity → custom → public IPFS nodes
         if (enableBootstrap) {
+          const relayBootstrap = [
+            ...DEFAULT_RELAY_BOOTSTRAP,
+            ...(this.options.relayBootstrap || []),
+          ];
           const supernodes = [
             ...PC2_SUPERNODE_BOOTSTRAP,
-            ...(this.options.supernodeBootstrap || [])
+            ...(this.options.supernodeBootstrap || []),
           ];
           const elacity = this.resolveElacityPeers();
           this.configuredElacityPeers = elacity.peers;
           this.configuredElacityPeerIds = elacity.peerIds;
-          const bootstrapNodes = [
+          const bootstrapNodes = this.uniquePeers([
+            ...relayBootstrap,
             ...supernodes,
             ...elacity.peers,
             ...(this.options.customBootstrap || []),
             ...PUBLIC_BOOTSTRAP_NODES,
-          ];
+          ]);
+          if (relayBootstrap.length > 0) {
+            log.info(`   Relay bootstrap peers: ${relayBootstrap.length} configured`);
+          }
           if (supernodes.length > 0) {
             log.info(`   PC2 supernodes: ${supernodes.length} configured`);
           }
@@ -356,8 +399,6 @@ export class IPFSStorage {
       // Create libp2p instance
       const libp2p = await createLibp2p(libp2pConfig);
 
-      console.log('   Initializing IPFS with libp2p:', libp2p);
-
       // Create Helia node with custom libp2p (no WebRTC)
       // Let Helia start libp2p - don't start it ourselves
       this.helia = await createHelia({
@@ -367,10 +408,7 @@ export class IPFSStorage {
       });
 
       this.helia.libp2p.addEventListener('peer:discovery', (event) => {
-        log.info(
-          `New peer discovered (${event.detail.id.toString()}) via MDNS`,
-          event.detail.multiaddrs.map((ma) => ma.toString())
-        );
+        log.info(`New peer discovered (${event.detail.id.toString()}) via MDNS`);
 
         this.helia?.libp2p.dial(event.detail.multiaddrs, {
           signal: AbortSignal.timeout(5000),
@@ -396,22 +434,35 @@ export class IPFSStorage {
       if (addresses.length > 0) {
         log.info(`   First address: ${addresses[0].toString()}`);
       }
+      const relayAddresses = addresses
+        .map((addr) => addr.toString())
+        .filter((addr) => addr.includes('/p2p-circuit'));
+      if (relayAddresses.length > 0) {
+        log.info(`   Relay addresses: ${relayAddresses.length} advertised`);
+      } else if (enableNetwork) {
+        log.warn('⚠️  No /p2p-circuit addresses advertised yet; NAT reachability may be limited until relay reservations are established');
+      }
 
       this.isInitialized = true;
 
       // Kubo-style flow: explicitly dial bootstrap peers after init.
       // This mirrors `ipfs swarm connect ...` and speeds up peering/provider exchange.
       if (enableNetwork && enableBootstrap) {
+        const relayBootstrap = [
+          ...DEFAULT_RELAY_BOOTSTRAP,
+          ...(this.options.relayBootstrap || [])
+        ];
         const supernodes = [
           ...PC2_SUPERNODE_BOOTSTRAP,
           ...(this.options.supernodeBootstrap || [])
         ];
-        const bootstrapNodes = [
+        const bootstrapNodes = this.uniquePeers([
+          ...relayBootstrap,
           ...supernodes,
           ...this.configuredElacityPeers,
           ...(this.options.customBootstrap || []),
           ...PUBLIC_BOOTSTRAP_NODES,
-        ];
+        ]);
         this.configuredBootstrapPeers = bootstrapNodes;
         void this.connectBootstrapPeers(bootstrapNodes, 'initial');
 
@@ -431,9 +482,14 @@ export class IPFSStorage {
         this.bootstrapHealthTimer = setInterval(() => {
           if (!this.helia || !this.isInitialized) return;
           const connected = this.helia.libp2p.getConnections().length;
+          const relayAddrCount = this.helia.libp2p.getMultiaddrs()
+            .map((addr) => addr.toString())
+            .filter((addr) => addr.includes('/p2p-circuit')).length;
           if (connected === 0) {
             log.info('[IPFS] No active peers detected; running bootstrap re-dial');
             void this.connectBootstrapPeers(this.configuredBootstrapPeers, 'manual');
+          } else if (relayAddrCount === 0) {
+            log.warn('[IPFS] Connected peers exist but no relay circuit addresses are advertised; remote pull pinning may stall for NATed nodes');
           }
         }, intervalMs);
 
@@ -579,7 +635,7 @@ export class IPFSStorage {
         await this.pinFile(cid.toString());
       }
 
-      await this.maybeAnnounceStoredCID(cid.toString(), options?.announce);
+      void this.maybeAnnounceStoredCID(cid.toString(), options?.announce);
       void this.maybeWarmPublicGateway(cid.toString());
 
       return cid.toString();
@@ -631,7 +687,7 @@ export class IPFSStorage {
         await this.pinFile(dirCid);
       }
 
-      await this.maybeAnnounceStoredCIDs(Array.from(importedCids), options?.announce);
+      void this.maybeAnnounceStoredCIDs(Array.from(importedCids), options?.announce);
       void this.maybeWarmPublicGateway(dirCid);
       void this.maybeWarmPublicGatewayDirectoryPaths(dirCid, Object.keys(files));
 
@@ -668,7 +724,7 @@ export class IPFSStorage {
         await this.pinFile(cid.toString());
       }
 
-      await this.maybeAnnounceStoredCID(cid.toString(), options?.announce);
+      void this.maybeAnnounceStoredCID(cid.toString(), options?.announce);
       void this.maybeWarmPublicGateway(cid.toString());
 
       return cid.toString();
@@ -2011,8 +2067,12 @@ export class IPFSStorage {
 
       log.debug(`[IPFS] Announcing CID to DHT: ${cid}`);
 
-      // Use the DHT provide method to announce we have this content
-      await dht.provide(cidObj);
+      // IMPORTANT: kad-dht provide() returns an AsyncIterable<QueryEvent>.
+      // We must consume it fully, otherwise the provide query may never run.
+      for await (const _event of dht.provide(cidObj)) {
+        // Drain iterator to completion.
+        // console.log(_event);
+      }
 
       log.debug(`[IPFS] ✅ Successfully announced CID to DHT: ${cid}`);
       return true;

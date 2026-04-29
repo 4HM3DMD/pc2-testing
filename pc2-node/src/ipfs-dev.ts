@@ -346,6 +346,7 @@ async function main(): Promise<void> {
     publicGatewayPrefetchUrl: ipfsConfig.public_gateway_prefetch_url,
     customBootstrap: ipfsConfig.custom_bootstrap,
     supernodeBootstrap: ipfsConfig.supernode_bootstrap,
+    relayBootstrap: ipfsConfig.relay_bootstrap,
   });
 
   await ipfs.initialize();

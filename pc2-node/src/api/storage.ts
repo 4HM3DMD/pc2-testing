@@ -424,6 +424,66 @@ router.post('/ipfs/announce', authenticate, async (req: AuthenticatedRequest, re
 });
 
 /**
+ * POST /api/ipfs/announce/:cid
+ * Manually trigger announcement of one CID to DHT
+ */
+router.post('/ipfs/announce/:cid', authenticate, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const ipfs = req.app.locals.ipfs;
+    const rawCid = req.params.cid;
+
+    if (!rawCid || typeof rawCid !== 'string') {
+      return res.status(400).json({ error: 'Missing or invalid CID' });
+    }
+
+    if (!ipfs) {
+      return res.status(503).json({ error: 'IPFS not available' });
+    }
+
+    if (!ipfs.canAnnounce()) {
+      return res.status(400).json({
+        error: 'DHT announcement not available',
+        reason: ipfs.getNetworkMode() === 'private'
+          ? 'IPFS is in private mode'
+          : 'DHT service not initialized'
+      });
+    }
+
+    const cid = rawCid.replace(/^ipfs:\/\//, '').replace(/^\/ipfs\//, '').split('/')[0];
+    if (!cid) {
+      return res.status(400).json({ error: 'Invalid CID' });
+    }
+
+    logger.info(`[Storage API]: Starting single CID announcement: ${cid}`);
+    const announced = await ipfs.announceCID(cid);
+
+    if (!announced) {
+      return res.status(500).json({
+        success: false,
+        cid,
+        message: 'CID announcement failed'
+      });
+    }
+
+    const db = req.app.locals.db;
+    try {
+      db?.updatePinnedCIDAnnouncedAt(cid);
+    } catch (error) {
+      logger.warn(`[Storage API]: Failed to update announced timestamp (non-fatal): ${cid}`, error);
+    }
+
+    res.json({
+      success: true,
+      cid,
+      message: 'CID announced to DHT'
+    });
+  } catch (error) {
+    logger.error('[Storage API]: Error announcing CID:', error);
+    res.status(500).json({ error: 'Failed to announce CID' });
+  }
+});
+
+/**
  * GET /api/ipfs/network
  * Get IPFS network status and peer information
  */

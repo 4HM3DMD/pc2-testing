@@ -141,6 +141,7 @@ async function main() {
       customBootstrap: ipfsConfig.custom_bootstrap,
       supernodeBootstrap: ipfsConfig.supernode_bootstrap,
       elacityBootstrap,
+      relayBootstrap: ipfsConfig.relay_bootstrap,
       relayMode,
       relayMaxConnections,
     });
