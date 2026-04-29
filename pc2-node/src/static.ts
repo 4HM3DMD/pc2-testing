@@ -420,7 +420,9 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
         const data = await upstream.json();
 
         if (isTransportRateLimit(data)) {
-          lastError = `${rpcUrl}: rate-limited (${(data as { error?: { message?: string } }).error?.message ?? 'unknown'})`;
+          const rlMsg = (data as { error?: { message?: string } }).error?.message ?? 'unknown';
+          lastError = `${rpcUrl}: rate-limited (${rlMsg})`;
+          log.info(`[rpc-proxy] ${chainKey} ${method ?? '?'} rate-limited on ${rpcUrl}, trying next fallback`);
           continue;
         }
 
