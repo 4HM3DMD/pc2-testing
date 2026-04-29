@@ -1196,17 +1196,64 @@ export class IPFSStorage {
 
           if (entry) {
             if (entry.type === 'directory') {
-              // Directory is fully local — count files from listing
+              // Fast path only holds for content we authored locally
+              // (DASH encoder, /upload) — every block in the DAG is in
+              // the blockstore and a pin is just a DB flag.
+              //
+              // For BUYER-side pins the root block may be local because
+              // of a prior /media/init call (which fetched stream.mpd
+              // and a few init segments to extract PSSH) or a gateway
+              // auto-fetch, while the segment and audio blocks are
+              // still remote. Returning fast-path success in that state
+              // marks pin_status='complete' in the DB and writes a
+              // .ddrm claiming "Downloaded (193.5 MB)" when only a few
+              // KB are actually on disk — the exact deception we just
+              // shipped the download-first flow to eliminate.
+              //
+              // Recursively verify the DAG is fully local up to a
+              // bounded depth (covers DASH's root → audio|video → 1 →
+              // segments layout). Falls through to CAR import if any
+              // block is missing.
+              const { exporter: expForCheck } = await import('ipfs-unixfs-exporter');
+              const completenessDeadline = Date.now() + quickLocalTimeoutMs;
+              const MAX_CHECK_DEPTH = 4;
+
+              const isDagComplete = async (checkCid: any, depth: number): Promise<boolean> => {
+                if (Date.now() > completenessDeadline) return false;
+                if (controller.signal.aborted) return false;
+                if (this.blockstore && !(await this.blockstore.has(checkCid))) return false;
+                if (depth <= 0) return true;
+                try {
+                  const e = await expForCheck(checkCid, this.blockstore!);
+                  if (e.type !== 'directory') return true;
+                  for await (const child of e.content()) {
+                    const childCid = (child as any).cid;
+                    if (!childCid) continue;
+                    const ok = await isDagComplete(childCid, depth - 1);
+                    if (!ok) return false;
+                  }
+                  return true;
+                } catch {
+                  return false;
+                }
+              };
+
               let dirFileCount = 0;
               let dirTotalSize = 0;
+              let incompleteDag = false;
               try {
                 for await (const child of entry.content()) {
-                  // directory content() yields child entries
                   dirFileCount++;
                   dirTotalSize += Number((child as any).size || 0);
+                  const childCid = (child as any).cid;
+                  if (!childCid) continue;
+                  const ok = await isDagComplete(childCid, MAX_CHECK_DEPTH - 1);
+                  if (!ok) {
+                    incompleteDag = true;
+                    break;
+                  }
                 }
               } catch {
-                // content() may not work for directories; use ls instead with short timeout
                 try {
                   const lsTimeout = new Promise<void>((resolve) => setTimeout(resolve, quickLocalTimeoutMs));
                   const lsWork = (async () => {
@@ -1214,24 +1261,36 @@ export class IPFSStorage {
                     for await (const child of fs.ls(cid)) {
                       dirFileCount++;
                       dirTotalSize += Number(child.size || 0);
+                      if (!child.cid) continue;
+                      const ok = await isDagComplete(child.cid, MAX_CHECK_DEPTH - 1);
+                      if (!ok) {
+                        incompleteDag = true;
+                        break;
+                      }
                     }
                   })();
                   await Promise.race([lsWork, lsTimeout]);
                 } catch {
-                  // If ls also fails, just report what we know
+                  // If ls also fails, be conservative and fall through
+                  incompleteDag = true;
                 }
               }
 
-              const timeMs = Date.now() - startTime;
-              log.info(`[IPFS] ✅ Local directory confirmed: ${cidString} (${dirTotalSize} bytes, ${dirFileCount} files, ${timeMs}ms)`);
-              return {
-                success: true,
-                cid: cidString,
-                type: 'directory' as const,
-                size: dirTotalSize,
-                files: dirFileCount || 1,
-                timeMs,
-              };
+              if (incompleteDag) {
+                log.info(`[IPFS] Fast path skipped for ${cidString}: DAG not fully local, falling through to CAR import`);
+                // fall through to Bitswap / CAR import below
+              } else {
+                const timeMs = Date.now() - startTime;
+                log.info(`[IPFS] ✅ Local directory confirmed: ${cidString} (${dirTotalSize} bytes, ${dirFileCount} files, ${timeMs}ms)`);
+                return {
+                  success: true,
+                  cid: cidString,
+                  type: 'directory' as const,
+                  size: dirTotalSize,
+                  files: dirFileCount || 1,
+                  timeMs,
+                };
+              }
             }
 
             // File or raw: read content
