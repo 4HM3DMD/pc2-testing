@@ -31,7 +31,7 @@ function findSchemaFile(): string {
   }
   throw new Error(`Schema file not found. Tried: ${SCHEMA_FILE} and ${sourceSchema}`);
 }
-const CURRENT_VERSION = 30;
+const CURRENT_VERSION = 31;
 
 interface Migration {
   version: number;
@@ -1119,6 +1119,31 @@ export function runMigrations(db: Database.Database): void {
         recordMigration(db, 30);
       } catch (error: any) {
         log.error(`❌ Migration 30 error: ${error.message}`);
+        throw error;
+      }
+    }
+
+    // Migration 31: bytes_downloaded column on pinned_cids. Drives the
+    // real-time download progress bar in the Elacity Market app. Seeded
+    // from the existing `size` column for already-complete pins so retro
+    // rows still show 100% instead of 0%.
+    if (currentVersion < 31) {
+      try {
+        log.info('📦 Running Migration 31: Add bytes_downloaded to pinned_cids...');
+        try {
+          db.exec('ALTER TABLE pinned_cids ADD COLUMN bytes_downloaded INTEGER NOT NULL DEFAULT 0');
+        } catch (e: any) {
+          if (!String(e?.message || '').includes('duplicate column')) throw e;
+        }
+        db.exec(`
+          UPDATE pinned_cids
+          SET bytes_downloaded = size
+          WHERE pin_status = 'complete' AND bytes_downloaded = 0
+        `);
+        log.info('✅ Migration 31 complete: bytes_downloaded column added');
+        recordMigration(db, 31);
+      } catch (error: any) {
+        log.error(`❌ Migration 31 error: ${error.message}`);
         throw error;
       }
     }

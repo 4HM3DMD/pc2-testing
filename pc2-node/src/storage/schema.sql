@@ -193,6 +193,7 @@ CREATE TABLE IF NOT EXISTS pinned_cids (
   last_served_at INTEGER,
   serve_count INTEGER NOT NULL DEFAULT 0,
   pin_status TEXT NOT NULL DEFAULT 'complete',
+  bytes_downloaded INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (cid, wallet_address)
 );
 

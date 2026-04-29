@@ -3770,8 +3770,9 @@
 
     var progressFill = dom.downloadStatus.querySelector('.download-progress-fill');
     var progressText = dom.downloadStatus.querySelector('.download-progress-text');
-    // Fixed-width indeterminate bar — visual cue, not a fake %. Truth lives in the text.
-    progressFill.style.width = '15%';
+    // Starts as a minimal visual cue (5%); the first /pin-status poll will
+    // immediately overwrite this with the real server-reported percent.
+    progressFill.style.width = '5%';
 
     var meta = nft.metadata || {};
     var title = meta.name || nft.name || 'Untitled';
@@ -3856,11 +3857,28 @@
       progressText.appendChild(cont);
     }
 
-    function updatePinningText(sizeBytes) {
+    function renderProgress(percent, bytesDownloaded, sizeBytes) {
+      var pct = Math.max(0, Math.min(100, Math.floor(percent || 0)));
+      // Never visually collapse the bar back below 5% — the first poll can
+      // legitimately return 0% before the first 500ms byte-stream tick, and
+      // the user shouldn't see the bar reset.
+      progressFill.style.width = Math.max(pct, 5) + '%';
+
       var elapsed = Date.now() - downloadStartMs;
-      var sizeLabel = formatBytes(estimatedSize || sizeBytes);
-      var suffix = sizeLabel ? ' (~' + sizeLabel + ' expected)' : '';
-      progressText.textContent = 'Downloading to your node... ' + formatElapsed(elapsed) + ' elapsed' + suffix;
+      var totalLabel = formatBytes(sizeBytes || estimatedSize);
+      var doneLabel = formatBytes(bytesDownloaded);
+      var sizePart;
+      if (doneLabel && totalLabel) {
+        sizePart = doneLabel + ' / ' + totalLabel;
+      } else if (totalLabel) {
+        sizePart = '~' + totalLabel + ' expected';
+      } else {
+        sizePart = '';
+      }
+      var elapsedPart = formatElapsed(elapsed) + ' elapsed';
+      var pctPart = pct + '%';
+      progressText.textContent = 'Downloading to your node... ' + pctPart +
+        ' · ' + elapsedPart + (sizePart ? ' · ' + sizePart : '');
       maybeOfferBackgroundButton();
     }
 
@@ -3874,6 +3892,9 @@
           if (!body) return;
           if (body.status === 'complete') {
             stopPolling();
+            // Snap the UI to 100% for the brief moment before finalizeDownload
+            // swaps the panel over to the success state.
+            renderProgress(100, body.sizeBytes || 0, body.sizeBytes || 0);
             finalizeDownload(body.sizeBytes || 0);
             return;
           }
@@ -3884,11 +3905,12 @@
           }
           if (body.status === 'queued') {
             progressText.textContent = 'Queued for download...';
+            progressFill.style.width = '5%';
             maybeOfferBackgroundButton();
             return;
           }
           // 'pinning' or 'not-pinned' (race window before the first status write) — keep polling
-          updatePinningText(body.sizeBytes);
+          renderProgress(body.progressPercent || 0, body.bytesDownloaded || 0, body.sizeBytes || 0);
         })
         .catch(function () {
           // Transient fetch error; the next tick retries. Do not disturb the user's UI.
@@ -4012,7 +4034,7 @@
               '</div>';
             progressFill = dom.downloadStatus.querySelector('.download-progress-fill');
             progressText = dom.downloadStatus.querySelector('.download-progress-text');
-            progressFill.style.width = '15%';
+            progressFill.style.width = '5%';
             downloadStartMs = Date.now();
             backgroundButtonShown = false;
             startPolling();

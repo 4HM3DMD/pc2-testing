@@ -330,11 +330,20 @@ export class ContentSeedingService {
     item.attempt++;
 
     this.db?.updatePinStatus(cid, 'pinning');
+    // Reset bytes_downloaded at the start of a fresh attempt so a failed retry
+    // doesn't inherit stale progress from a previous run.
+    this.db?.resetPinBytesDownloaded(cid);
     log.info(`[Seeding] Pinning CID ${cid} (attempt ${item.attempt}/${item.maxAttempts}, timeout ${Math.round(item.timeoutMs / 1000)}s)`);
 
     try {
       const result = await this.ipfs!.pinRemoteCID(cid, {
         timeoutMs: item.timeoutMs,
+        onProgress: (bytesReceived) => {
+          // Persist only monotonic increases; the DB helper already rejects
+          // backwards updates so parallel gateway attempts from the same
+          // pin can safely emit without racing the row.
+          this.db?.updatePinBytesDownloaded(cid, bytesReceived);
+        },
       });
 
       if (result.success) {
@@ -351,6 +360,14 @@ export class ContentSeedingService {
           const existingSize = this.db?.getPinnedCIDDetail(cid)?.size ?? 0;
           const authoritativeSize = Math.max(result.size, existingSize, item.size || 0);
           this.db?.trackPinnedCID(cid, walletAddress, authoritativeSize, 'marketplace');
+        }
+
+        // Snap bytes_downloaded to the authoritative size so the progress
+        // bar lands on 100% instead of whatever interim value the last
+        // progress emit captured.
+        const finalSize = this.db?.getPinnedCIDDetail(cid)?.size ?? 0;
+        if (finalSize > 0) {
+          this.db?.updatePinBytesDownloaded(cid, finalSize);
         }
 
         log.info(`[Seeding] Pinned CID ${cid} (${result.size ? `${(result.size / (1024 * 1024)).toFixed(1)}MB` : 'size unknown'}, ${result.timeMs ?? 0}ms)`);

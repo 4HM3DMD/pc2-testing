@@ -1181,6 +1181,12 @@ export class IPFSStorage {
   async pinRemoteCID(cidString: string, options?: {
     timeoutMs?: number;
     maxFiles?: number;
+    /**
+     * Called with cumulative bytes received for the CID during long-running
+     * fetches (CAR import, gateway stream). Safe to no-op; callers should
+     * throttle their own persistence (e.g. only write to SQLite every N ms).
+     */
+    onProgress?: (bytesReceived: number) => void;
   }): Promise<{
     success: boolean;
     cid: string;
@@ -1421,7 +1427,7 @@ export class IPFSStorage {
       // Fetch via gateway — CAR import preserves original CID block structure
       log.debug(`[IPFS] Fetching via gateway (CAR preferred) for ${cidString}...`);
       try {
-        const gatewayResult = await this.fetchViaGateway(cidString, timeoutMs - (Date.now() - startTime));
+        const gatewayResult = await this.fetchViaGateway(cidString, timeoutMs - (Date.now() - startTime), options?.onProgress);
         if (gatewayResult.success) {
           const timeMs = Date.now() - startTime;
           log.debug(`[IPFS] ✅ Fetched via gateway: ${cidString} (${gatewayResult.size} bytes, ${gatewayResult.blockCount || 1} blocks, ${timeMs}ms)`);
@@ -1511,7 +1517,7 @@ export class IPFSStorage {
           error.type === IPFSStorage.PinErrorType.NETWORK_ERROR) {
           log.debug(`[IPFS] DHT fetch failed, trying gateway fallback...`);
           try {
-            const gatewayResult = await this.fetchViaGateway(cidString, timeoutMs - (Date.now() - startTime));
+            const gatewayResult = await this.fetchViaGateway(cidString, timeoutMs - (Date.now() - startTime), options?.onProgress);
             if (gatewayResult.success) {
               const timeMs = Date.now() - startTime;
               return {
@@ -1544,7 +1550,7 @@ export class IPFSStorage {
       log.debug(`[IPFS] Trying gateway fallback...`);
 
       try {
-        const gatewayResult = await this.fetchViaGateway(cidString, timeoutMs - (Date.now() - startTime));
+        const gatewayResult = await this.fetchViaGateway(cidString, timeoutMs - (Date.now() - startTime), options?.onProgress);
         if (gatewayResult.success) {
           const timeMs = Date.now() - startTime;
           return {
@@ -1575,7 +1581,59 @@ export class IPFSStorage {
    * Used as fallback when DHT fetching fails
    * @private
    */
-  private async fetchViaGateway(cidString: string, remainingTimeoutMs: number): Promise<{
+  /**
+   * Drain a Fetch response body to a Uint8Array, emitting cumulative byte
+   * counts to `onProgress` at most once every 500ms (or on completion).
+   * Replaces `await response.arrayBuffer()` so long-running CAR/file
+   * downloads expose live progress for the market-app progress bar
+   * without flooding SQLite with per-chunk writes.
+   */
+  private async readStreamWithProgress(
+    response: Response,
+    onProgress?: (bytesReceived: number) => void,
+  ): Promise<Uint8Array> {
+    if (!response.body || typeof response.body.getReader !== 'function') {
+      return new Uint8Array(await response.arrayBuffer());
+    }
+
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    let lastEmit = 0;
+    const EMIT_INTERVAL_MS = 500;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) {
+        chunks.push(value);
+        total += value.length;
+        const now = Date.now();
+        if (onProgress && now - lastEmit >= EMIT_INTERVAL_MS) {
+          lastEmit = now;
+          try { onProgress(total); } catch { /* never let a progress consumer kill a pin */ }
+        }
+      }
+    }
+
+    if (onProgress && total > 0) {
+      try { onProgress(total); } catch { /* same */ }
+    }
+
+    const out = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      out.set(chunk, offset);
+      offset += chunk.length;
+    }
+    return out;
+  }
+
+  private async fetchViaGateway(
+    cidString: string,
+    remainingTimeoutMs: number,
+    onProgress?: (bytesReceived: number) => void,
+  ): Promise<{
     success: boolean;
     size: number;
     content?: Uint8Array;
@@ -1598,7 +1656,13 @@ export class IPFSStorage {
     const timeoutMs = Math.max(remainingTimeoutMs, 120000);
 
     // Phase 1: Try CAR import from gateways that support ?format=car
-    // This handles both files AND directories in one request
+    // This handles both files AND directories in one request.
+    // The response body is streamed (not buffered) so long-running 100+MB
+    // fetches can surface real-time byte counts to `onProgress` for the
+    // download progress bar in the market app. We still need the full CAR
+    // in memory before CarReader can parse it (the format isn't streamable
+    // mid-import on this version of @ipld/car), but progress during the
+    // network-bound phase — which is 99% of perceived wait — is live.
     for (const gateway of GATEWAYS) {
       try {
         const carUrl = `${gateway}${cidString}?format=car`;
@@ -1620,7 +1684,7 @@ export class IPFSStorage {
           continue;
         }
 
-        const carBytes = new Uint8Array(await response.arrayBuffer());
+        const carBytes = await this.readStreamWithProgress(response, onProgress);
         log.debug(`[IPFS] Downloaded CAR: ${carBytes.length} bytes from ${gateway}`);
 
         const { CarReader } = await import('@ipld/car');
@@ -1675,8 +1739,7 @@ export class IPFSStorage {
           continue;
         }
 
-        const buffer = await response.arrayBuffer();
-        const content = new Uint8Array(buffer);
+        const content = await this.readStreamWithProgress(response, onProgress);
 
         log.debug(`[IPFS] ✅ Fetched ${content.length} bytes from gateway ${gateway}`);
 

@@ -683,6 +683,33 @@ export class DatabaseManager {
   }
 
   /**
+   * Update the running byte count for an in-progress pin. Monotonic: never
+   * moves the counter backwards during an ongoing download. Used by
+   * ContentSeedingService to render a real-time download-progress bar in
+   * the market app without having to re-enumerate the blockstore on every
+   * poll.
+   */
+  updatePinBytesDownloaded(cid: string, bytes: number): void {
+    if (!Number.isFinite(bytes) || bytes < 0) return;
+    const db = this.getDB();
+    db.prepare(`
+      UPDATE pinned_cids
+      SET bytes_downloaded = ?
+      WHERE cid = ? AND bytes_downloaded < ?
+    `).run(Math.floor(bytes), cid, Math.floor(bytes));
+  }
+
+  /**
+   * Reset the running byte count for a CID. Called at the start of a fresh
+   * pin attempt so a previous failed run's stale counter doesn't show up as
+   * "already 40% downloaded" on the retry.
+   */
+  resetPinBytesDownloaded(cid: string): void {
+    const db = this.getDB();
+    db.prepare(`UPDATE pinned_cids SET bytes_downloaded = 0 WHERE cid = ?`).run(cid);
+  }
+
+  /**
    * Return the current row for a CID regardless of which wallet owns it.
    * Used by the download-first buy flow to drive per-CID UI state
    * (pin-status polling, launch-gate decisions). Pin status is a property
@@ -695,10 +722,12 @@ export class DatabaseManager {
     size: number;
     pinned_at: number;
     pin_status: 'queued' | 'pinning' | 'complete' | 'failed';
+    bytes_downloaded: number;
   } | null {
     const db = this.getDB();
     const row = db.prepare(`
-      SELECT cid, wallet_address, source, size, pinned_at, pin_status
+      SELECT cid, wallet_address, source, size, pinned_at, pin_status,
+             COALESCE(bytes_downloaded, 0) AS bytes_downloaded
       FROM pinned_cids
       WHERE cid = ?
       ORDER BY pinned_at DESC
@@ -710,6 +739,7 @@ export class DatabaseManager {
       size: number;
       pinned_at: number;
       pin_status: 'queued' | 'pinning' | 'complete' | 'failed';
+      bytes_downloaded: number;
     } | undefined;
     return row ?? null;
   }

@@ -1195,15 +1195,31 @@ router.get('/ipfs/pin-status/:cid', authenticate, (req: AuthenticatedRequest, re
         cid: cidClean,
         status: 'not-pinned',
         sizeBytes: 0,
+        bytesDownloaded: 0,
+        progressPercent: 0,
         source: null,
         pinnedAt: null,
       });
     }
 
+    const sizeBytes = detail.size || 0;
+    const bytesDownloaded = Math.min(detail.bytes_downloaded || 0, sizeBytes || detail.bytes_downloaded || 0);
+    // `progressPercent` is the primary field the market-app progress bar
+    // consumes. When `complete`, snap to 100 regardless of byte counts so
+    // an older row (pinned before Migration 31 populated bytes_downloaded)
+    // can't show "Complete — 0%".
+    const progressPercent = detail.pin_status === 'complete'
+      ? 100
+      : sizeBytes > 0
+        ? Math.min(100, Math.floor((bytesDownloaded / sizeBytes) * 100))
+        : 0;
+
     res.json({
       cid: cidClean,
       status: detail.pin_status,
-      sizeBytes: detail.size || 0,
+      sizeBytes,
+      bytesDownloaded,
+      progressPercent,
       source: detail.source,
       pinnedAt: detail.pinned_at,
     });
