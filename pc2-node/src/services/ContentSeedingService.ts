@@ -374,9 +374,22 @@ export class ContentSeedingService {
     if (!this.db) return;
 
     const incomplete = this.db.getIncompletePins();
-    if (incomplete.length === 0) return;
+    if (incomplete.length === 0) {
+      log.info('[Seeding] Gap recovery: no incomplete pins');
+      return;
+    }
 
-    log.info(`[Seeding] Gap recovery: found ${incomplete.length} incomplete pin(s), re-queuing at background priority`);
+    const breakdown = incomplete.reduce<Record<string, number>>((acc, i) => {
+      // DB rows of 'queued'/'pinning'/'failed' status — group so operators
+      // can see at-a-glance what the restart cleaned up (vs. what needs a
+      // manual nudge).
+      const row = this.db!.getPinnedCIDDetail(i.cid);
+      const status = row?.pin_status ?? 'unknown';
+      acc[status] = (acc[status] ?? 0) + 1;
+      return acc;
+    }, {});
+
+    log.info(`[Seeding] Gap recovery: found ${incomplete.length} incomplete pin(s) (${JSON.stringify(breakdown)}), re-queuing at background priority`);
     for (const item of incomplete) {
       this.seedContent(item.cid, item.wallet_address, {
         priority: 'background',

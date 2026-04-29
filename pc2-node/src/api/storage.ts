@@ -1100,6 +1100,119 @@ router.post('/ipfs/pin', authenticate, async (req: AuthenticatedRequest, res: Re
 });
 
 /**
+ * GET /api/storage/ipfs/pin-status/:cid
+ *
+ * Returns the current pin state of a CID on this node. Drives the
+ * download-first buy flow: the market app polls this every ~2s after
+ * purchase to show honest progress; the file-open launch gate polls
+ * this before launching the player/viewer for any `.ddrm` whose
+ * descriptor carries `pinStatus !== 'complete'`.
+ *
+ * Pin status is a property of the CID on this node (not of the wallet
+ * that purchased it) — a CID already complete on this node returns
+ * `complete` immediately for subsequent buyers.
+ *
+ * Intentionally does NOT return a fake mid-download `pinnedBytes`.
+ * Helia does not expose block-level pin progress cleanly. The client
+ * shows elapsed time + expected total size instead of a fake %.
+ */
+router.get('/ipfs/pin-status/:cid', authenticate, (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { cid } = req.params;
+    if (!cid || typeof cid !== 'string') {
+      return res.status(400).json({ error: 'Missing or invalid CID' });
+    }
+    const cidClean = cid.replace(/^ipfs:\/\//, '').replace(/^\/ipfs\//, '').split('/')[0];
+
+    const db = req.app.locals.db;
+    if (!db) {
+      return res.status(503).json({ error: 'Database not available' });
+    }
+
+    const detail = db.getPinnedCIDDetail(cidClean);
+    if (!detail) {
+      return res.json({
+        cid: cidClean,
+        status: 'not-pinned',
+        sizeBytes: 0,
+        source: null,
+        pinnedAt: null,
+      });
+    }
+
+    res.json({
+      cid: cidClean,
+      status: detail.pin_status,
+      sizeBytes: detail.size || 0,
+      source: detail.source,
+      pinnedAt: detail.pinned_at,
+    });
+  } catch (error: any) {
+    logger.error('[Storage API]: Error fetching pin status:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch pin status' });
+  }
+});
+
+/**
+ * POST /api/storage/ipfs/pin/:cid/retry
+ *
+ * Re-queue a failed pin. Used by the download-first buy flow when a
+ * previous pin attempt ended in `failed` state (network blip, content
+ * not yet on any reachable peer, disk-quota window, etc).
+ *
+ * Guarded by a 30-second per-CID debounce so a user mashing the retry
+ * button does not hammer seedingService / Elacity.
+ */
+const pinRetryLastAttempt = new Map<string, number>();
+const PIN_RETRY_DEBOUNCE_MS = 30_000;
+
+router.post('/ipfs/pin/:cid/retry', authenticate, (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { cid } = req.params;
+    if (!cid || typeof cid !== 'string') {
+      return res.status(400).json({ error: 'Missing or invalid CID' });
+    }
+    const cidClean = cid.replace(/^ipfs:\/\//, '').replace(/^\/ipfs\//, '').split('/')[0];
+
+    const now = Date.now();
+    const last = pinRetryLastAttempt.get(cidClean) ?? 0;
+    if (now - last < PIN_RETRY_DEBOUNCE_MS) {
+      const waitMs = PIN_RETRY_DEBOUNCE_MS - (now - last);
+      return res.status(429).json({
+        error: 'Retry debounce active',
+        retryAfterMs: waitMs,
+        cid: cidClean,
+      });
+    }
+
+    const seedingService = req.app.locals.seedingService;
+    const walletAddress = req.user?.wallet_address;
+    if (!seedingService || !walletAddress) {
+      return res.status(503).json({ error: 'Seeding service unavailable' });
+    }
+
+    const db = req.app.locals.db;
+    const detail = db?.getPinnedCIDDetail(cidClean);
+    if (detail && detail.pin_status === 'complete') {
+      return res.json({ success: true, cid: cidClean, status: 'already_complete' });
+    }
+
+    pinRetryLastAttempt.set(cidClean, now);
+    seedingService.seedContent(cidClean, walletAddress, {
+      priority: 'immediate',
+      estimatedSizeBytes: detail?.size || 0,
+    });
+
+    logger.info(`[Storage API] Pin retry requested for ${cidClean} by ${walletAddress}`);
+
+    return res.json({ success: true, cid: cidClean, queued: true });
+  } catch (error: any) {
+    logger.error('[Storage API]: Error retrying pin:', error);
+    res.status(500).json({ error: error.message || 'Failed to retry pin' });
+  }
+});
+
+/**
  * DELETE /api/ipfs/unpin/:cid
  * Remove a CID from seeding. Stops serving and removes tracking record.
  */

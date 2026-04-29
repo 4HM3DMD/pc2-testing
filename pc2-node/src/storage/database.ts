@@ -682,6 +682,38 @@ export class DatabaseManager {
     db.prepare(`UPDATE pinned_cids SET pin_status = ? WHERE cid = ?`).run(status, cid);
   }
 
+  /**
+   * Return the current row for a CID regardless of which wallet owns it.
+   * Used by the download-first buy flow to drive per-CID UI state
+   * (pin-status polling, launch-gate decisions). Pin status is a property
+   * of the CID on this node, not of a specific wallet's purchase of it.
+   */
+  getPinnedCIDDetail(cid: string): {
+    cid: string;
+    wallet_address: string;
+    source: string;
+    size: number;
+    pinned_at: number;
+    pin_status: 'queued' | 'pinning' | 'complete' | 'failed';
+  } | null {
+    const db = this.getDB();
+    const row = db.prepare(`
+      SELECT cid, wallet_address, source, size, pinned_at, pin_status
+      FROM pinned_cids
+      WHERE cid = ?
+      ORDER BY pinned_at DESC
+      LIMIT 1
+    `).get(cid) as {
+      cid: string;
+      wallet_address: string;
+      source: string;
+      size: number;
+      pinned_at: number;
+      pin_status: 'queued' | 'pinning' | 'complete' | 'failed';
+    } | undefined;
+    return row ?? null;
+  }
+
   isCIDPinnedOrQueued(cid: string): boolean {
     const db = this.getDB();
     const row = db.prepare(`
