@@ -1,140 +1,49 @@
 #!/bin/bash
 #
-# Container entrypoint. Runs once per container start:
-#   1. Symlinks PC2's volatile/{config,runtime} to the persistent /data volume
-#      so config + runtime state survives container replacement.
-#   2. On first boot only: writes a default config.json that flips PC2 mode
-#      ON (otherwise PC2 boots in upstream Puter mode and the Elastos branding
-#      / launcher entries for our extensions are dormant — bug we hit
-#      during manual setup).
-#   3. Hands off to whatever CMD the Dockerfile / compose file specifies
-#      (default: npm start).
+# Container entrypoint — Option A: pc2-node only.
 #
-# The operator can override anything by mounting their own files into /data
-# before container start; we never overwrite an existing config.json.
+# After 17+ rounds of trying to integrate Puter root + pc2-node in one
+# container, we made the architectural call to drop Puter entirely and
+# run pc2-node as the sole server. pc2-node is THE elacity PC2 product:
+# it serves the desktop frontend, owns /api/*, owns /auth/particle, owns
+# the session DB. One server, one auth, one origin.
+#
+# Trade-off: ENM extension (which lived in PC2's Puter-kernel extension
+# system) is no longer loaded. ENM gets shipped as a separate, standalone
+# product later — it doesn't need a desktop OS wrapper to run an ela node.
+#
+# Boots:
+#   1. Ensures the persistent data dir exists (chain + ipfs + DB live here).
+#   2. Starts pc2-node as PID 1 on port 4100 (the operator-facing port).
 
 set -euo pipefail
 
-DATA_DIR="${PC2_DATA_DIR:-/data}"
-CONFIG_DIR="$DATA_DIR/config"
-RUNTIME_DIR="$DATA_DIR/runtime"
-
+PC2_DATA_DIR="${PC2_DATA_DIR:-/data/pc2-node}"
 NODE_NAME="${PC2_NODE_NAME:-My PC2 Node}"
 
-mkdir -p "$CONFIG_DIR" "$RUNTIME_DIR"
+mkdir -p "$PC2_DATA_DIR"
 
-# --- Wire PC2's volatile/* to our persistent volume. -------------------------
-# PC2 looks for config at $REPO/volatile/config and runtime state at
-# $REPO/volatile/runtime. Both paths are inside the image (ephemeral) by
-# default. We replace them with symlinks into /data so anything PC2 writes
-# (DB, mod_packages cache, audit log, our chain state) outlives the container.
-
-link_to_data() {
-    local src="$1"     # /app/volatile/config
-    local dst="$2"     # /data/config
-    # Ensure the parent dir exists. .dockerignore strips volatile/ from the
-    # build context (we don't want operator state baked in), so /app/volatile
-    # is missing in the image — without this, ln -sf fails with
-    # "No such file or directory" and set -e kills the entrypoint.
-    mkdir -p "$(dirname "$src")"
-    # Already a symlink to the right place? leave it.
-    if [[ -L "$src" && "$(readlink "$src")" == "$dst" ]]; then
-        return 0
-    fi
-    # Existing dir or stale symlink — replace.
-    rm -rf "$src"
-    ln -sf "$dst" "$src"
-}
-
-link_to_data "/app/volatile/config" "$CONFIG_DIR"
-link_to_data "/app/volatile/runtime" "$RUNTIME_DIR"
-
-# --- First-boot PC2 profile overlay. ----------------------------------------
-# Critical design decision: we do NOT pre-write config.json. Why:
-#
-#   PC2's RuntimeEnvironment auto-generates config.json on first boot from
-#   src/backend/src/boot/default_config.js — that file is the only path that
-#   includes services.database.engine='sqlite' AND randomly generates the
-#   crypto secrets PC2 needs (cookie_name, jwt_secret, url_signature_secret,
-#   private_uid_secret, private_uid_namespace).
-#
-#   If we pre-write config.json with just our extension settings, PC2 sees
-#   "config exists, skip generation" and boots with no database engine and
-#   no secrets. The `data` extension (priority -10000) immediately crashes
-#   with "svc_database.get is not a function" because StrategizedService
-#   constructed without an engine has no .get() method.
-#
-# Instead: write a profile overlay (pc2.json) that $requires the auto-
-# generated config.json and layers our extension settings on top. PC2's
-# ConfigLoader processes $requires first via deep_proto_merge in
-# src/backend/src/config.js, so defaults flow in correctly.
-#
-# Dockerfile sets ENV PUTER_CONFIG_PROFILE=pc2 so PC2 loads pc2.json.
-#
-# Two flags that let raw-IP / single-domain access work end-to-end:
-#
-# allow_all_host_values=true: lets the operator hit the dashboard via raw
-#   IP (e.g. http://<server-ip>:4100) without an "Invalid Host header" 400
-#   from src/backend/src/modules/web/WebServerService.js.
-#
-# experimental_no_subdomain=true: makes helpers.js subdomain() always return
-#   'api', so routes gated on `subdomain: 'api'` (notably /auth/particle,
-#   the entire api/ family) match regardless of request host. Without this,
-#   the Particle login POST falls through to the catch-all 404 and the
-#   dashboard hangs on a black screen after wallet connect.
-#
-# For production with a real DNS name, replace allow_all_host_values with
-# `domain: "<your-domain>"` and remove experimental_no_subdomain (you'd set
-# up a real api.<your-domain> CNAME instead).
-
-PROFILE_FILE="$CONFIG_DIR/pc2.json"
-if [[ ! -f "$PROFILE_FILE" ]]; then
-    cat > "$PROFILE_FILE" <<EOF
-{
-  "config_name": "PC2 (Docker)",
-  "\$requires": ["config.json"],
-  "allow_all_host_values": true,
-  "experimental_no_subdomain": true,
-  "extensions": {
-    "@elastos/pc2-node": {
-      "pc2_enabled": true,
-      "node_name": "$NODE_NAME"
-    }
-  }
-}
-EOF
-    echo "[entrypoint] Wrote PC2 profile overlay to $PROFILE_FILE"
+if [[ ! -f /app/pc2-node/dist/index.js ]]; then
+    echo "[entrypoint] FATAL: /app/pc2-node/dist/index.js missing — image build incomplete"
+    exit 1
 fi
 
-# --- Start pc2-node sub-server in background. -------------------------------
-# pc2-node provides all /api/* routes the desktop frontend calls (AI chat,
-# IPFS storage, Boson identity, gateway, wallets, backups, system stats).
-# WebServerService.js in PC2 core proxies /api/* and /socket.io/* to it.
-#
-# We start it on port 4202 (4200 is already PC2's WebSocket port). If
-# pc2-node fails to start, log loudly but don't kill the container — the
-# main desktop still loads, just with /api/* features broken (better than
-# nothing while we debug). Logs go to /tmp/pc2-node.log for inspection via
-# `docker compose exec pc2 tail -f /tmp/pc2-node.log`.
+echo "[entrypoint] Starting pc2-node on :${PORT:-4100} (data: $PC2_DATA_DIR)"
 
-PC2_NODE_PORT="${PC2_NODE_PORT:-4202}"
-if [[ -f /app/pc2-node/dist/index.js ]]; then
-    echo "[entrypoint] Starting pc2-node sub-server on :$PC2_NODE_PORT..."
-    (
-        cd /app/pc2-node
-        export PORT="$PC2_NODE_PORT"
-        export NODE_ENV=production
-        export PC2_DATA_DIR=/data/pc2-node
-        mkdir -p "$PC2_DATA_DIR"
-        node dist/index.js
-    ) > /tmp/pc2-node.log 2>&1 &
-    PC2_NODE_PID=$!
-    echo "[entrypoint] pc2-node PID $PC2_NODE_PID"
-    # Brief wait so it's listening before main server starts proxying
-    sleep 2
-else
-    echo "[entrypoint] WARNING: /app/pc2-node/dist/index.js missing — /api/* will 404"
-fi
+cd /app/pc2-node
 
-# --- Hand off to the Dockerfile's CMD (the main Puter desktop server). ------
-exec "$@"
+# pc2-node reads config from process.env.PORT and process.env.PC2_DATA_DIR
+# among others — see pc2-node/src/index.ts and pc2-node/src/config/loader.ts.
+export PORT="${PORT:-4100}"
+export NODE_ENV="${NODE_ENV:-production}"
+export PC2_DATA_DIR
+export PC2_NODE_NAME="$NODE_NAME"
+
+# Boson connectivity defaults — match upstream pc2-node Dockerfile so the
+# ela.city gateway flow has somewhere to phone home for tunneling. Operator
+# can override by setting these env vars in docker-compose.yml.
+export BOSON_GATEWAY_URL="${BOSON_GATEWAY_URL:-https://demo.ela.city}"
+export BOSON_PUBLIC_DOMAIN="${BOSON_PUBLIC_DOMAIN:-ela.city}"
+export BOSON_PRIVACY_MODE="${BOSON_PRIVACY_MODE:-false}"
+
+exec node dist/index.js
