@@ -32,6 +32,11 @@ mkdir -p "$CONFIG_DIR" "$RUNTIME_DIR"
 link_to_data() {
     local src="$1"     # /app/volatile/config
     local dst="$2"     # /data/config
+    # Ensure the parent dir exists. .dockerignore strips volatile/ from the
+    # build context (we don't want operator state baked in), so /app/volatile
+    # is missing in the image — without this, ln -sf fails with
+    # "No such file or directory" and set -e kills the entrypoint.
+    mkdir -p "$(dirname "$src")"
     # Already a symlink to the right place? leave it.
     if [[ -L "$src" && "$(readlink "$src")" == "$dst" ]]; then
         return 0
