@@ -677,12 +677,22 @@
     var avatarContent = renderAvatar(getCreatorAvatar(item), creatorName);
     var hasChannel = item.channel && item.channel.address;
 
-    card.setAttribute('aria-label', title + (isOwned ? ' (Owned)' : (price ? ' — ' + price : '')));
+    // opType 0 = free, 1 = buy once, 2 = buy & resell. Free is known at mint
+    // (encoded on-chain via operative), so we can show "Free" without any
+    // listing being present. Paid items only show a price once a listing
+    // exists; an unlisted paid item shows nothing rather than a misleading
+    // "Free" or "0".
+    var cardOpType = (item.operative && item.operative.opType) || 0;
+    var isFreeItem = cardOpType === 0;
+
+    card.setAttribute('aria-label', title + (isOwned ? ' (Owned)' : (price ? ' — ' + price : (isFreeItem ? ' — Free' : ''))));
 
     var contentBadge = contentType ? '<span class="content-badge">' + escapeHtml(contentType) + '</span>' : '';
     var priceBadge = isOwned
       ? '<span class="price-badge owned-badge">✓ Owned</span>'
-      : (price ? '<span class="price-badge">' + price + '</span>' : '');
+      : (price
+        ? '<span class="price-badge">' + price + '</span>'
+        : (isFreeItem ? '<span class="price-badge free-badge">Free</span>' : ''));
     var aiBadge = hasAITrainingPermitted(item) ? '<span class="ai-training-badge" title="AI training permitted">AI</span>' : '';
     var adultBadge = isAdultContent(item) ? '<span class="adult-content-badge" title="Adult content (18+)">18+</span>' : '';
 

@@ -4890,8 +4890,15 @@
         var filePreview = document.getElementById('file-preview-area');
         if (filePreview) filePreview.classList.remove('hidden');
 
-        // Jump to step 3 (review & sign) with all progress steps done
-        ['prog-fragment', 'prog-encrypt', 'prog-upload', 'prog-finalize', 'prog-upload-meta', 'prog-pin'].forEach(function (id) {
+        // Jump to step 3 (review & sign) with all already-completed pipeline
+        // steps marked done. IDs must match PROGRESS_STEPS (line 1411) — the
+        // older list ('prog-fragment', 'prog-upload', 'prog-finalize') was
+        // from a previous UI iteration and no longer matches the rendered
+        // step elements, which left "Connect to Lit Protocol" and "Upload
+        // to IPFS" stuck on "Waiting..." after a draft resume even though
+        // the asset/metadata CIDs are already in the draft and nothing is
+        // actually re-run.
+        ['prog-connect', 'prog-encrypt', 'prog-upload-asset', 'prog-upload-meta', 'prog-pin'].forEach(function (id) {
           setProgStep(id, 'Done (from saved draft)', 'done');
         });
 
