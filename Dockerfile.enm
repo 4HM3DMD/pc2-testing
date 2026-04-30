@@ -68,6 +68,26 @@ RUN cd extensions/elastos-node-manager \
     && npm install --no-audit --no-fund \
     && cd /app
 
+# Vite reads these at GUI bundle time (compile, not runtime). Defaults match
+# upstream's Dockerfile — the placeholder Particle/WalletConnect IDs are fine
+# because PC2 self-hosted doesn't use those services.
+ARG VITE_PUTER_API_URL=http://puter.localhost:4100
+ARG VITE_PARTICLE_PROJECT_ID=your_particle_project_id
+ARG VITE_PARTICLE_CLIENT_KEY=particle_client
+ARG VITE_PARTICLE_APP_ID=your_particle_app_id
+ARG VITE_WALLETCONNECT_PROJECT_ID=your_walletconnect_project_id
+ENV VITE_PUTER_API_URL=${VITE_PUTER_API_URL}
+ENV VITE_PARTICLE_PROJECT_ID=${VITE_PARTICLE_PROJECT_ID}
+ENV VITE_PARTICLE_CLIENT_KEY=${VITE_PARTICLE_CLIENT_KEY}
+ENV VITE_PARTICLE_APP_ID=${VITE_PARTICLE_APP_ID}
+ENV VITE_WALLETCONNECT_PROJECT_ID=${VITE_WALLETCONNECT_PROJECT_ID}
+
+# Build PC2: lint + tsc + GUI bundle. This is the same step upstream's
+# Dockerfile runs and we previously skipped — tsc emits MeteringService.js
+# (and others) from .ts source. Without it, PC2 crashes on boot with
+# ERR_MODULE_NOT_FOUND, and the dashboard 404s because src/gui/dist is empty.
+RUN npm run build
+
 # Persistent data: config, runtime state, chain data, audit DB. Bind-mount
 # this at run-time: `-v $HOME/pc2-enm-data:/data`.
 VOLUME ["/data"]
