@@ -173,10 +173,28 @@
             self.notifications.info(self.chainId + ' ' + kind, '');
             return self.refresh();
         }).catch(function (err) {
-            self.notifications.warning(
-                'Failed to ' + kind + ' ' + self.chainId,
-                err && err.message ? err.message : String(err),
-            );
+            // Host-conflict 409 carries a structured `conflicts` array. Surface
+            // the per-conflict description + first remediation step so the
+            // operator doesn't have to dig in DevTools.
+            if (err && err.body && Array.isArray(err.body.conflicts)
+                && err.body.conflicts.length > 0) {
+                var blockers = err.body.conflicts.filter(function (c) {
+                    return c && c.severity === 'CRITICAL';
+                });
+                var summary = blockers.map(function (c) {
+                    var firstStep = (c.remediation && c.remediation[0]) || '';
+                    return '• ' + c.description + (firstStep ? ('\n   ' + firstStep) : '');
+                }).join('\n');
+                self.notifications.critical(
+                    'Cannot ' + kind + ' ' + self.chainId + ' — host conflicts',
+                    summary,
+                );
+            } else {
+                self.notifications.warning(
+                    'Failed to ' + kind + ' ' + self.chainId,
+                    err && err.message ? err.message : String(err),
+                );
+            }
         }).then(function () {
             btn.textContent = prev;
             self._busy = false;

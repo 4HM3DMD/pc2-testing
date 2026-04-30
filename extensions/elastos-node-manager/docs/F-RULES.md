@@ -22,6 +22,7 @@ Each rule has: detection logic, action tier, location in the codebase, and the t
 | F16 | No peers >10 min (after F3 restart didn't help) | `rpcSummary.peers===0` AND `firstPeerZeroAt` older than `PEER_ZERO_FALLBACK_MS=600000` | CRITICAL-NOTIFY | Suggest fallback peer config (foundation/community nodes) — no auto-restart | `lib/HealthRules.js:detectF16` | `tests/HealthRules.test.mjs` describe `detectF16` (2 cases) |
 | F17 | Image-pull failure | **DROPPED in Rev 9** — operator pre-builds binary, no pull pipeline | n/a | n/a | n/a | n/a |
 | F18 | No inbound peers >5 min (BPoS only) | `outboundCount > 0` AND `inboundCount===0` AND `firstNoInboundAt` older than `NO_INBOUND_GRACE_MS=300000` AND `dpos.enableArbiter=true` | CRITICAL-NOTIFY | NAT/UPnP guidance for ports 20338+20339 | `lib/HealthRules.js:detectF18` | `tests/HealthRules.test.mjs` describe `detectF18` (3 cases) |
+| F19 | Host conflict (legacy node.sh, rogue ela process, port already bound, systemd unit, stale data) | `HostConflictScanner.scan()` returns at least one CRITICAL entry — checked at setup-time, on every chain start/restart, AND every slow tick | CRITICAL-NOTIFY | Conflict-card UI lists each item with a step-by-step shell remediation (`kill <pid>`, `mv ~/.config/elastos`, etc.). `?force=1` query param overrides. | `lib/HostConflictScanner.js`; `lib/HealthRules.js:detectF19`; `routes/chains.js` start/restart gate; `routes/setup.js:/setup/conflicts` | `tests/HostConflictScanner.test.mjs` (10 cases covering rogue process, port bind, stale PID, F19 detection) |
 
 ## Tier semantics
 
@@ -35,7 +36,20 @@ Each rule has: detection logic, action tier, location in the codebase, and the t
 
 ## Coverage summary
 
-- 16 of 18 rules implemented (F14 + F17 dropped per Rev 9; F15 deferred to v0.2)
-- 50+ unit tests across `tests/HealthRules.test.mjs` and `tests/SelfHealingEngine.test.mjs`
+- 17 of 19 rules implemented (F14 + F17 dropped per Rev 9; F15 deferred to v0.2; F19 added in v0.1.0-alpha.2 for host-conflict detection)
+- 60+ unit tests across `tests/HealthRules.test.mjs`, `tests/SelfHealingEngine.test.mjs`, and `tests/HostConflictScanner.test.mjs`
 - All AUTOMATED-SAFE rules covered by `tests/SelfHealingEngine.test.mjs` end-to-end
 - ClockSkewChecker network-mock tests in `tests/ClockSkewChecker.test.mjs`
+- HostConflictScanner exercised against rogue-process, port-binding, and stale-PID scenarios
+
+## Host conflict catalog (F19)
+
+| Type | Severity | Detection | Default remediation surface |
+|------|----------|-----------|------------------------------|
+| `LEGACY_CONFIG`     | WARNING  | `~/.config/elastos` or `/root/.config/elastos` exists with `config.json` / `keystore.dat` / `ela.txt` | Banner; `mv ~/.config/elastos ~/.config/elastos.legacy` |
+| `ROGUE_PROCESS`     | CRITICAL | `pgrep -af` finds an `ela` basename PID not owned by ENM | Blocks chain start; `kill <pid>` |
+| `PORT_BOUND`        | CRITICAL | `ss -tlnH sport = :<port>` (Linux) or `lsof -iTCP -i:<port>` (macOS) returns a listener for any of 20336/20338/20333/20334/20335/20339 | Blocks chain start; suggests Settings → Mainchain Advanced |
+| `SYSTEMD_UNIT`      | WARNING  | `systemctl is-enabled <name>.service` returns `enabled` or `static` for any of `node`, `ela`, `elastos`, `elamain` | Banner; `sudo systemctl disable --now <name>` |
+| `STALE_DATA`        | INFO     | `~/elastos`, `~/.config/elastos/data`, or `/root/elastos` contains a leveldb `CURRENT` file or `data/` subdir | Info card; suggests pointing `dataDir` at it or archiving |
+| `PERMISSION_DENIED` | CRITICAL | `fs.access(enmDataDir, W_OK \| X_OK)` throws | Blocks chain start; `sudo chown -R $(id -u):$(id -g) <dir>` |
+| `STALE_PID_FILE`    | WARNING  | PID file in `runDir/` references a dead PID or contains malformed bytes | Banner; `rm <pidfile>` (next start cleans automatically) |

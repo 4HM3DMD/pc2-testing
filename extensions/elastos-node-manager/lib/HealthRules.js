@@ -472,7 +472,46 @@ function detectF18(snap) {
 }
 
 /**
- * Run F1-F18 in declaration order. Engine consumes the array as a queue —
+ * F19 — host conflict detected at runtime.
+ *
+ * Mirrors the setup-time scanner but fires inside the slow tick so a
+ * conflict introduced AFTER setup (e.g., operator manually started node.sh,
+ * or systemd auto-started a stale unit on reboot) gets surfaced even though
+ * setup completed successfully.
+ *
+ * snap.hostConflicts is populated by HealthChecker via HostConflictScanner.
+ * Only CRITICAL conflicts fire the rule; warnings stay quiet to avoid
+ * notification spam — they're visible in the dashboard banner instead.
+ */
+function detectF19(snap) {
+    if (!snap || !Array.isArray(snap.hostConflicts)) return null;
+    const blockers = snap.hostConflicts.filter((c) => c && c.severity === 'CRITICAL');
+    if (blockers.length === 0) return null;
+
+    // Pick the most-actionable type to put in the title; the full list lives
+    // in the proposal payload so the operator can read every entry.
+    const titles = blockers.map((c) => c.description).slice(0, 3);
+    const summary = `Host conflict on ${snap.chainId}: ${titles[0]}`;
+    return {
+        ruleId: 'F19',
+        tier: HEALING_TIERS.CRITICAL_NOTIFY,
+        severity: 'CRITICAL',
+        summaryAction: summary,
+        summaryReason:
+            (titles.length > 1
+                ? `Plus ${blockers.length - 1} more conflict(s). `
+                : '')
+            + 'Open the Conflicts panel to resolve before the next restart.',
+        payload: {
+            action: 'host-conflict',
+            chainId: snap.chainId,
+            conflicts: blockers,
+        },
+    };
+}
+
+/**
+ * Run F1-F19 in declaration order. Engine consumes the array as a queue —
  * higher-priority rules (F1 process-dead) appear first so a single tick
  * doesn't propose conflicting actions.
  *
@@ -486,6 +525,7 @@ function runAll(snap) {
         detectF1,  detectF2,  detectF3,  detectF4,  detectF5,
         detectF6,  detectF7,  detectF8,  detectF9,  detectF10,
         detectF11, detectF12, detectF13, detectF16, detectF18,
+        detectF19,
     ];
     for (const fn of detectors) {
         const d = fn(snap);
@@ -501,6 +541,7 @@ module.exports = {
     detectF1, detectF2, detectF3, detectF4, detectF5,
     detectF6, detectF7, detectF8, detectF9, detectF10,
     detectF11, detectF12, detectF13, detectF16, detectF18,
+    detectF19,
     PEER_ZERO_GRACE_MS,
     RPC_UNREACHABLE_GRACE_MS,
     HEIGHT_STALL_GRACE_MS,

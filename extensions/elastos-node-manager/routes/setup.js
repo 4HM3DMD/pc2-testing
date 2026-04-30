@@ -35,6 +35,7 @@ const { ELA_DEFAULT_PORTS } = require('../lib/EnmConstants');
 const ExtIpResolver = require('../lib/ExtIpResolver');
 const crypto = require('node:crypto');
 const { walletScopeId, validateKeystorePath } = require('../lib/EnmSetupHelpers');
+const HostConflictScanner = require('../lib/HostConflictScanner');
 
 /**
  * @param {object} extensionHandle
@@ -86,6 +87,34 @@ function build(extensionHandle) {
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} /setup/state error: ${err.message}`);
             return res.status(500).json(errorBody('Failed to load setup state.'));
+        }
+    });
+
+    /**
+     * GET /setup/conflicts
+     * Scan the host for pre-existing Elastos state that would collide with
+     * an ENM-managed run. Returns an array of conflicts; the wizard renders
+     * each as a remediation card.
+     *
+     * Setup-time AND restart-time check — the start route calls this too and
+     * refuses to spawn if any CRITICAL items are unresolved.
+     */
+    router.get('/conflicts', limit('read'), async (req, res) => {
+        if (!readActorWallet(req)) {
+            return res.status(401).json(errorBody('Authentication required.'));
+        }
+        try {
+            const list = await HostConflictScanner.scan({
+                logger: extensionHandle.log,
+            });
+            return res.json(successBody({
+                conflicts: list,
+                blockers: HostConflictScanner.blockers(list).length,
+                total: list.length,
+            }));
+        } catch (err) {
+            extensionHandle.log.error(`${ENM_LOG_PREFIX} /setup/conflicts: ${err.message}`);
+            return res.status(500).json(errorBody('Conflict scan failed.'));
         }
     });
 

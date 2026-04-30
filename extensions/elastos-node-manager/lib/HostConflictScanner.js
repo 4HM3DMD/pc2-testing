@@ -1,0 +1,511 @@
+/*
+ * Copyright (C) 2026-present Elacity
+ * SPDX-License-Identifier: AGPL-3.0
+ *
+ * HostConflictScanner — detect pre-existing Elastos node state that would
+ * collide with ENM-managed runs.
+ *
+ * Why this matters:
+ *   The operator may have used node.sh (the legacy bash installer) before, or
+ *   have another `ela` process running, or have a systemd unit that fights us
+ *   for control. If we just spawn on top of that, the chain crashes on port
+ *   bind or two ela processes write to the same LevelDB and corrupt it.
+ *
+ *   This scanner runs:
+ *     1. At setup-wizard time (new step BEFORE binary)  → guides operator
+ *     2. On every POST /chains/:id/start                 → blocks CRITICALs
+ *     3. As a slow-tick health check                     → surfaces drift
+ *
+ * Conflict catalog:
+ *   LEGACY_CONFIG       WARNING  ~/.config/elastos exists (node.sh default)
+ *   ROGUE_PROCESS       CRITICAL ela process running outside our control
+ *   PORT_BOUND          CRITICAL one of the 6 ELA ports is occupied
+ *   SYSTEMD_UNIT        WARNING  systemd unit named node|ela|elastos enabled
+ *   STALE_DATA          INFO     prior chain data at known default paths
+ *   PERMISSION_DENIED   CRITICAL ENM data dir owned by another uid (root, etc.)
+ *   STALE_PID_FILE      WARNING  ENM PID file points at a dead process
+ *
+ * Each result is JSON-friendly so the frontend can render remediation cards.
+ *
+ * Pure functions where possible — the only side effects are filesystem reads,
+ * `ps` parsing, and `lsof`/`ss` invocations. Testable via dependency injection
+ * for `runCmd` (default: child_process.execFile).
+ */
+
+'use strict';
+
+const fs = require('node:fs');
+const fsp = require('node:fs/promises');
+const path = require('node:path');
+const os = require('node:os');
+const { execFile } = require('node:child_process');
+
+const { ELA_DEFAULT_PORTS, ENM_LOG_PREFIX } = require('./EnmConstants');
+const { enmDataDir, runDir, pidFilePath } = require('./DataDir');
+const { isPidAlive } = require('./processUtils');
+
+const SEVERITY = Object.freeze({
+    CRITICAL: 'CRITICAL',  // blocks chain start
+    WARNING:  'WARNING',   // surfaces but doesn't block
+    INFO:     'INFO',      // informational only
+});
+
+const TYPES = Object.freeze({
+    LEGACY_CONFIG:     'LEGACY_CONFIG',
+    ROGUE_PROCESS:     'ROGUE_PROCESS',
+    PORT_BOUND:        'PORT_BOUND',
+    SYSTEMD_UNIT:      'SYSTEMD_UNIT',
+    STALE_DATA:        'STALE_DATA',
+    PERMISSION_DENIED: 'PERMISSION_DENIED',
+    STALE_PID_FILE:    'STALE_PID_FILE',
+});
+
+// Known legacy locations from node.sh (sister-repos/Node/build/skeleton/node.sh
+// Rev 1 audit: lines 864/869/1208/1306).
+const LEGACY_CONFIG_PATHS = [
+    '~/.config/elastos',
+    '/root/.config/elastos',
+];
+const LEGACY_DATA_PATHS = [
+    '~/elastos',
+    '~/.config/elastos/data',
+    '/root/elastos',
+];
+
+const SYSTEMD_UNIT_NAMES = ['node', 'ela', 'elastos', 'elamain'];
+
+const DEFAULT_TIMEOUT_MS = 5_000;
+
+/**
+ * @typedef {object} Conflict
+ * @property {string} type      one of TYPES
+ * @property {string} severity  one of SEVERITY
+ * @property {string} description human-readable single-line summary
+ * @property {string[]} remediation step-by-step fix
+ * @property {object} [details] type-specific extra fields (pid, port, path...)
+ */
+
+/**
+ * Run the full scan. All probes are best-effort — if a sub-probe fails (e.g.,
+ * `ps` not on PATH on a stripped-down container), we log and continue rather
+ * than fail the whole scan.
+ *
+ * @param {object} [opts]
+ * @param {number} [opts.timeoutMs] per-subcommand timeout
+ * @param {(name: string, args: string[], opts?: object) => Promise<{stdout:string,stderr:string}>} [opts.runCmd]
+ *   For tests — replace child_process invocation with a stub.
+ * @param {{warn?: (msg:string)=>void, debug?: (msg:string)=>void}} [opts.logger]
+ * @returns {Promise<Array<Conflict>>}
+ */
+async function scan(opts) {
+    const o = opts || {};
+    const log = o.logger || { warn() {}, debug() {} };
+    const timeoutMs = Number.isInteger(o.timeoutMs) ? o.timeoutMs : DEFAULT_TIMEOUT_MS;
+    const run = typeof o.runCmd === 'function' ? o.runCmd : defaultRun(timeoutMs);
+
+    /** @type {Array<Conflict>} */
+    const conflicts = [];
+
+    await Promise.all([
+        scanLegacyConfig(conflicts, log),
+        scanLegacyData(conflicts, log),
+        scanRogueProcesses(conflicts, run, log),
+        scanPortBindings(conflicts, run, log),
+        scanSystemdUnits(conflicts, run, log),
+        scanPermissions(conflicts, log),
+        scanStalePidFiles(conflicts, log),
+    ]);
+
+    // Sort: CRITICAL first, then WARNING, then INFO. Stable inside each tier.
+    const order = { CRITICAL: 0, WARNING: 1, INFO: 2 };
+    conflicts.sort((a, b) => (order[a.severity] - order[b.severity]));
+    return conflicts;
+}
+
+/**
+ * Convenience: filter to only CRITICAL conflicts (chain start should refuse
+ * if any CRITICALs remain unresolved).
+ *
+ * @param {Array<Conflict>} all
+ * @returns {Array<Conflict>}
+ */
+function blockers(all) {
+    return Array.isArray(all) ? all.filter((c) => c.severity === SEVERITY.CRITICAL) : [];
+}
+
+// ============================================================================
+// Probes
+// ============================================================================
+
+/** @private */
+async function scanLegacyConfig(out, log) {
+    for (const raw of LEGACY_CONFIG_PATHS) {
+        const p = expandHome(raw);
+        try {
+            const stat = await fsp.stat(p).catch(() => null);
+            if (!stat || !stat.isDirectory()) continue;
+            const entries = await fsp.readdir(p).catch(() => []);
+            // Only flag if it looks like a real install (has config.json or
+            // keystore.dat). Empty directories from package installs are noise.
+            const looksReal = entries.some((e) => e === 'config.json' || e === 'keystore.dat' || e === 'ela.txt');
+            if (!looksReal) continue;
+
+            out.push({
+                type: TYPES.LEGACY_CONFIG,
+                severity: SEVERITY.WARNING,
+                description: `Legacy node.sh config detected at ${p}`,
+                remediation: [
+                    'A previous Elastos installation lives here.',
+                    'ENM uses its own data dir — these files are not read by ENM.',
+                    'If the old node is still running:',
+                    '  sudo systemctl stop node 2>/dev/null || true',
+                    `  pkill -f 'ela' || true`,
+                    'Then either move the legacy dir aside:',
+                    `  mv ${p} ${p}.legacy-$(date +%Y%m%d)`,
+                    'or import the existing keystore via the setup wizard.',
+                ],
+                details: { path: p, entries: entries.slice(0, 20) },
+            });
+        } catch (err) {
+            log.debug(`${ENM_LOG_PREFIX} legacy-config probe failed for ${p}: ${err.message}`);
+        }
+    }
+}
+
+/** @private */
+async function scanLegacyData(out, log) {
+    for (const raw of LEGACY_DATA_PATHS) {
+        const p = expandHome(raw);
+        try {
+            const stat = await fsp.stat(p).catch(() => null);
+            if (!stat || !stat.isDirectory()) continue;
+            const entries = await fsp.readdir(p).catch(() => []);
+            // Real chain data has a `data` subdir or a leveldb-style file.
+            const looksReal = entries.some(
+                (e) => e === 'data' || e.startsWith('CURRENT') || e.endsWith('.ldb'),
+            );
+            if (!looksReal) continue;
+            const lastModified = stat.mtimeMs;
+
+            out.push({
+                type: TYPES.STALE_DATA,
+                severity: SEVERITY.INFO,
+                description: `Existing chain data at ${p} (last modified ${new Date(lastModified).toISOString().slice(0, 10)})`,
+                remediation: [
+                    'ENM stores chain data under its own dataDir. The existing',
+                    'data here is left untouched.',
+                    'If you want ENM to reuse this data:',
+                    '  Settings → Mainchain Advanced → set dataDir',
+                    'Otherwise it can be archived later:',
+                    `  mv ${p} ${p}.legacy-$(date +%Y%m%d)`,
+                ],
+                details: { path: p, lastModifiedMs: lastModified },
+            });
+        } catch (err) {
+            log.debug(`${ENM_LOG_PREFIX} legacy-data probe failed for ${p}: ${err.message}`);
+        }
+    }
+}
+
+/** @private */
+async function scanRogueProcesses(out, run, log) {
+    if (os.platform() !== 'linux' && os.platform() !== 'darwin') {
+        return; // ps/pgrep semantics differ; we ship Linux/Mac dev support only
+    }
+    try {
+        // `pgrep -af` lists pid + full command-line. We match the ela binary
+        // by its basename and exclude any pid we recognize as our own
+        // managed instance.
+        const { stdout } = await run('pgrep', ['-af', String.raw`(^|/)ela($|\s)`])
+            .catch(() => ({ stdout: '' }));
+        const lines = stdout.split('\n').map((s) => s.trim()).filter(Boolean);
+        const ourPids = await readOurManagedPids();
+
+        for (const line of lines) {
+            const m = line.match(/^(\d+)\s+(.+)$/);
+            if (!m) continue;
+            const pid = parseInt(m[1], 10);
+            const cmd = m[2];
+            if (!Number.isInteger(pid) || pid <= 0) continue;
+            if (pid === process.pid) continue;            // PC2 itself
+            if (ourPids.has(pid)) continue;               // ENM-managed
+            // Heuristic to skip false positives like "elastoshell" or "el-shell".
+            // Match the binary basename "ela" with no other letters before/after.
+            if (!/(^|\/)ela(\s|$)/.test(cmd)) continue;
+            // Skip things like /usr/bin/elasticsearch — basename === ela only.
+            const tokens = cmd.split(/\s+/);
+            const bin = tokens[0] || '';
+            const base = path.basename(bin);
+            if (base !== 'ela') continue;
+
+            out.push({
+                type: TYPES.ROGUE_PROCESS,
+                severity: SEVERITY.CRITICAL,
+                description: `Another ela process is running (pid=${pid})`,
+                remediation: [
+                    'A non-ENM ela process will collide with the chain ENM tries to start.',
+                    `  ps -fp ${pid}      # see what started it`,
+                    'If it was started by node.sh / systemd:',
+                    '  sudo systemctl stop node 2>/dev/null || true',
+                    'If it was started manually:',
+                    `  kill ${pid}`,
+                    `  # if it doesn't exit:`,
+                    `  kill -9 ${pid}`,
+                    'Then click "Re-scan" in the wizard.',
+                ],
+                details: { pid, cmd },
+            });
+        }
+    } catch (err) {
+        log.debug(`${ENM_LOG_PREFIX} pgrep probe failed: ${err.message}`);
+    }
+}
+
+/** @private */
+async function scanPortBindings(out, run, log) {
+    const platform = os.platform();
+    if (platform !== 'linux' && platform !== 'darwin') {
+        return;
+    }
+    const portsToCheck = [
+        { port: ELA_DEFAULT_PORTS.rpc,      role: 'rpc' },
+        { port: ELA_DEFAULT_PORTS.nodePort, role: 'p2p (NodePort)' },
+        { port: ELA_DEFAULT_PORTS.httpInfo, role: 'HttpInfo' },
+        { port: ELA_DEFAULT_PORTS.httpRest, role: 'HttpRest' },
+        { port: ELA_DEFAULT_PORTS.httpWs,   role: 'HttpWs' },
+        { port: ELA_DEFAULT_PORTS.dpos,     role: 'DPoS p2p' },
+    ];
+
+    for (const { port, role } of portsToCheck) {
+        try {
+            const inUse = await checkPortInUse(port, run);
+            if (inUse.bound) {
+                out.push({
+                    type: TYPES.PORT_BOUND,
+                    severity: SEVERITY.CRITICAL,
+                    description: `Port ${port} (${role}) is already in use`,
+                    remediation: [
+                        'A different process is bound to this port.',
+                        platform === 'linux'
+                            ? `  sudo ss -tlnp | grep :${port}`
+                            : `  sudo lsof -i :${port}`,
+                        'Either stop that process, or change the port:',
+                        '  Settings → Mainchain Advanced → Ports',
+                    ],
+                    details: { port, role, holder: inUse.holder },
+                });
+            }
+        } catch (err) {
+            log.debug(`${ENM_LOG_PREFIX} port-${port} probe failed: ${err.message}`);
+        }
+    }
+}
+
+/** @private */
+async function checkPortInUse(port, run) {
+    // Prefer ss (Linux) — lighter than lsof. Fall back to lsof on macOS or
+    // when ss isn't available.
+    if (os.platform() === 'linux') {
+        const { stdout } = await run('ss', ['-tlnH', `sport = :${port}`])
+            .catch(() => ({ stdout: '' }));
+        if (stdout && stdout.trim().length > 0) {
+            return { bound: true, holder: stdout.trim().split('\n')[0] };
+        }
+        return { bound: false };
+    }
+    // macOS / fallback
+    const { stdout } = await run('lsof', ['-iTCP', `-i:${port}`, '-sTCP:LISTEN', '-P', '-n'])
+        .catch(() => ({ stdout: '' }));
+    if (stdout && stdout.split('\n').length > 1) {
+        return { bound: true, holder: stdout.trim().split('\n').slice(1).join('\n') };
+    }
+    return { bound: false };
+}
+
+/** @private */
+async function scanSystemdUnits(out, run, log) {
+    if (os.platform() !== 'linux') return;
+    for (const name of SYSTEMD_UNIT_NAMES) {
+        try {
+            // is-enabled returns 0 if enabled, non-zero otherwise. We capture
+            // the exit status via the rejected promise's `code`.
+            const { stdout, ok } = await run('systemctl', ['is-enabled', `${name}.service`])
+                .then((r) => ({ stdout: (r.stdout || '').trim(), ok: true }))
+                .catch((err) => ({ stdout: (err.stdout || '').trim(), ok: false }));
+            // Only flag if the unit actually exists. systemctl prints
+            // "enabled" / "disabled" / "static" / etc. when it does.
+            const known = ['enabled', 'static', 'alias', 'masked', 'disabled', 'indirect'];
+            if (!known.includes(stdout)) continue;
+            // We only flag enabled or static units (auto-start at boot).
+            if (stdout !== 'enabled' && stdout !== 'static') continue;
+
+            out.push({
+                type: TYPES.SYSTEMD_UNIT,
+                severity: SEVERITY.WARNING,
+                description: `systemd unit ${name}.service is ${stdout}`,
+                remediation: [
+                    'A systemd unit may auto-start ela on boot, fighting ENM for control.',
+                    `  sudo systemctl disable --now ${name}`,
+                    'Then re-scan in the wizard.',
+                ],
+                details: { unit: name, state: stdout, ok },
+            });
+        } catch (err) {
+            log.debug(`${ENM_LOG_PREFIX} systemd ${name} probe failed: ${err.message}`);
+        }
+    }
+}
+
+/** @private */
+async function scanPermissions(out, log) {
+    try {
+        const dir = enmDataDir();
+        await fsp.mkdir(dir, { recursive: true, mode: 0o700 }).catch(() => {});
+        const stat = await fsp.stat(dir).catch(() => null);
+        if (!stat) return;
+
+        const ourUid = process.getuid && process.getuid();
+        // If our process can't write, the dir is unusable regardless of stat.
+        try {
+            await fsp.access(dir, fs.constants.W_OK | fs.constants.X_OK);
+        } catch {
+            out.push({
+                type: TYPES.PERMISSION_DENIED,
+                severity: SEVERITY.CRITICAL,
+                description: `ENM data dir ${dir} is not writable by our user`,
+                remediation: [
+                    `Fix ownership so PC2 can write here:`,
+                    `  sudo chown -R $(id -u):$(id -g) ${dir}`,
+                    `Or move the directory aside and let ENM recreate it:`,
+                    `  mv ${dir} ${dir}.bad && mkdir -p ${dir}`,
+                ],
+                details: { path: dir, owner: stat.uid, ourUid: ourUid != null ? ourUid : null },
+            });
+        }
+    } catch (err) {
+        log.debug(`${ENM_LOG_PREFIX} permission probe failed: ${err.message}`);
+    }
+}
+
+/** @private */
+async function scanStalePidFiles(out, log) {
+    try {
+        const dir = runDir();
+        const files = await fsp.readdir(dir).catch(() => []);
+        for (const fname of files) {
+            if (!fname.startsWith('ela-') || !fname.endsWith('.pid')) continue;
+            const full = path.join(dir, fname);
+            let pid;
+            try {
+                pid = parseInt((await fsp.readFile(full, 'utf8')).trim(), 10);
+            } catch {
+                continue;
+            }
+            if (!Number.isInteger(pid) || pid <= 0) {
+                out.push({
+                    type: TYPES.STALE_PID_FILE,
+                    severity: SEVERITY.WARNING,
+                    description: `Malformed PID file at ${full}`,
+                    remediation: [`  rm ${full}`],
+                    details: { path: full },
+                });
+                continue;
+            }
+            if (!isPidAlive(pid)) {
+                out.push({
+                    type: TYPES.STALE_PID_FILE,
+                    severity: SEVERITY.WARNING,
+                    description: `Stale PID file at ${full} (pid=${pid} no longer running)`,
+                    remediation: [
+                        'A previous chain crashed without cleaning up.',
+                        'ENM normally cleans this on next start; if it persists:',
+                        `  rm ${full}`,
+                    ],
+                    details: { path: full, pid },
+                });
+            }
+        }
+    } catch (err) {
+        log.debug(`${ENM_LOG_PREFIX} stale-pid probe failed: ${err.message}`);
+    }
+}
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+function expandHome(p) {
+    if (!p) return p;
+    if (p.startsWith('~/')) {
+        return path.join(os.homedir(), p.slice(2));
+    }
+    return p;
+}
+
+/**
+ * @returns {Promise<Set<number>>} PIDs of ENM-managed ela processes (so we
+ * exclude them from the rogue-process scan).
+ */
+async function readOurManagedPids() {
+    const pids = new Set();
+    try {
+        const dir = runDir();
+        const files = await fsp.readdir(dir).catch(() => []);
+        for (const fname of files) {
+            if (!fname.startsWith('ela-') || !fname.endsWith('.pid')) continue;
+            try {
+                const raw = await fsp.readFile(path.join(dir, fname), 'utf8');
+                const n = parseInt(raw.trim(), 10);
+                if (Number.isInteger(n) && n > 0) pids.add(n);
+            } catch { /* skip */ }
+        }
+    } catch { /* skip */ }
+    return pids;
+}
+
+/**
+ * Default subcommand runner. Times out, captures stdout/stderr, and rejects
+ * non-zero exits with `code` + `stdout` attached so callers can branch.
+ *
+ * @param {number} timeoutMs
+ */
+function defaultRun(timeoutMs) {
+    return function runCmd(name, args, opts) {
+        return new Promise((resolve, reject) => {
+            execFile(name, args, {
+                timeout: timeoutMs,
+                maxBuffer: 256 * 1024,
+                ...(opts || {}),
+            }, (err, stdout, stderr) => {
+                if (err) {
+                    err.stdout = stdout;
+                    err.stderr = stderr;
+                    return reject(err);
+                }
+                resolve({ stdout: stdout || '', stderr: stderr || '' });
+            });
+        });
+    };
+}
+
+module.exports = {
+    SEVERITY,
+    TYPES,
+    LEGACY_CONFIG_PATHS,
+    LEGACY_DATA_PATHS,
+    SYSTEMD_UNIT_NAMES,
+    scan,
+    blockers,
+    // exposed for tests
+    _internals: {
+        scanLegacyConfig,
+        scanLegacyData,
+        scanRogueProcesses,
+        scanPortBindings,
+        scanSystemdUnits,
+        scanPermissions,
+        scanStalePidFiles,
+        expandHome,
+        readOurManagedPids,
+    },
+};

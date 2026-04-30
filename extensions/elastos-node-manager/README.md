@@ -73,6 +73,10 @@ F15 (audit DB integrity) is deferred to v0.2.
 | Healing notifications not arriving | SSE stream may be disconnected — reload the dashboard. Check browser DevTools → Network for the open `/api/events` connection. |
 | Producer state shows wrong rank | The chain's RPC reports based on current arbiter group; refreshes every 60s. Refresh the dashboard for fresher state. |
 | Setup wizard re-prompts after relaunch | The wizard records progress in `enm_setup_state` table; if PC2's data dir was reset the wizard will start over. |
+| Start button refuses with "host has unresolved conflicts" | Open the toast — it lists every CRITICAL conflict (rogue ela process, port already bound, permission denied). Each entry includes the exact shell command to fix it. After fixing, click Start again. To override anyway: `curl -X POST '/extensions/elastos-node-manager/api/chains/mainchain/start?force=1'` (not recommended). |
+| App keeps detecting old node.sh state from `/.config/elastos/` | That's a `LEGACY_CONFIG` warning — non-blocking. ENM uses its own data dir; the legacy path is just surfaced so you don't accidentally run two installs. Move it aside: `mv ~/.config/elastos ~/.config/elastos.legacy-$(date +%Y%m%d)` and re-scan from the wizard. |
+| systemd unit `node.service` keeps restarting ela | `sudo systemctl disable --now node` — the conflict scanner will flag this until disabled. |
+| F19 keeps firing after I stopped the rogue process | The slow tick caches scan results for 5 min. Hit "Re-scan" in the wizard or wait one tick. |
 
 ## Backup / restore
 

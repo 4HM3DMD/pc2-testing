@@ -39,6 +39,7 @@ const ConfigStore = require('./ConfigStore');
 const { validate } = require('./EnmConfigSchema');
 const { chainDir } = require('./DataDir');
 const ClockSkewChecker = require('./ClockSkewChecker');
+const HostConflictScanner = require('./HostConflictScanner');
 
 class HealthChecker {
     /**
@@ -240,6 +241,10 @@ class HealthChecker {
         const cfg = await this._loadConfigSafe();
         // F13 — host clock check, runs once per slow tick (not per chain).
         const clockSkew = await this._checkClockSkew();
+        // F19 — host conflict scan, also once per tick (cheap when nothing
+        // matches; ss/lsof + readdir on a handful of paths). Cached for 5
+        // minutes so a chain card doesn't re-scan on every refresh.
+        const hostConflicts = await this._scanHostConflicts();
 
         for (const chainInfo of this.listChains()) {
             const chainId = chainInfo.chainId;
@@ -271,11 +276,13 @@ class HealthChecker {
                 ruleState: s,
                 bpos,
                 clockSkew,
+                hostConflicts,
             };
 
             const dets = HealthRules.runAll(snap).filter((d) =>
                 d.ruleId === 'F5'  || d.ruleId === 'F6'  || d.ruleId === 'F8'
-                || d.ruleId === 'F11' || d.ruleId === 'F12' || d.ruleId === 'F13');
+                || d.ruleId === 'F11' || d.ruleId === 'F12' || d.ruleId === 'F13'
+                || d.ruleId === 'F19');
             if (dets.length > 0) {
                 await this.engine.apply(chainId, dets, chainCfg);
             }
@@ -364,6 +371,32 @@ class HealthChecker {
                 `${ENM_LOG_PREFIX} bpos fetch ${chainId}: ${err.message}`,
             );
             return null;
+        }
+    }
+
+    /**
+     * @private
+     * Run the host conflict scanner with a 5-minute cache. Slow-tick is also
+     * 5 minutes, so this just guarantees we don't double-scan when tickNow is
+     * called explicitly (e.g., immediately after a chain start).
+     */
+    async _scanHostConflicts() {
+        const now = Date.now();
+        if (this._hostConflictsCache
+            && (now - this._hostConflictsCache.fetchedAt) < 5 * 60 * 1000) {
+            return this._hostConflictsCache.value;
+        }
+        try {
+            const result = await HostConflictScanner.scan({ logger: this.extensionHandle.log });
+            this._hostConflictsCache = { value: result, fetchedAt: now };
+            return result;
+        } catch (err) {
+            this.extensionHandle.log.debug(
+                `${ENM_LOG_PREFIX} host conflict scan failed: ${err.message}`,
+            );
+            const fail = [];
+            this._hostConflictsCache = { value: fail, fetchedAt: now };
+            return fail;
         }
     }
 

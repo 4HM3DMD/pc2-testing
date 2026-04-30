@@ -28,6 +28,7 @@ const { limit } = require('../lib/EnmRateLimit');
 const { requireOwner, readActorWallet } = require('../lib/OwnerCheckMiddleware');
 const ChainRegistry = require('../lib/ChainRegistry');
 const ConfigStore = require('../lib/ConfigStore');
+const HostConflictScanner = require('../lib/HostConflictScanner');
 
 /**
  * @param {object} extensionHandle
@@ -107,8 +108,32 @@ function build(extensionHandle) {
                     `Chain "${adapter.chainId}" is not configured. Complete the setup wizard first.`,
                 ));
             }
+
+            // Host conflict scan — refuse to spawn if anything CRITICAL is
+            // unresolved (rogue ela process, port already bound, permission
+            // denied on data dir). The operator can override by passing
+            // ?force=1, which the dashboard surfaces as a guarded checkbox.
+            const force = req.query && req.query.force === '1';
+            const conflicts = await HostConflictScanner.scan({ logger: extensionHandle.log });
+            const blockers = HostConflictScanner.blockers(conflicts);
+            if (blockers.length > 0 && !force) {
+                extensionHandle.log.warn(
+                    `${ENM_LOG_PREFIX} refusing start of ${adapter.chainId} — ${blockers.length} CRITICAL host conflicts`,
+                );
+                return res.status(409).json({
+                    success: false,
+                    error: 'Host has unresolved conflicts; refusing to start. Resolve them or pass ?force=1.',
+                    conflicts,
+                });
+            }
+
             const result = await adapter.start(chainCfg);
-            return res.json(successBody(result));
+            return res.json(successBody({
+                ...result,
+                // Surface non-blocking conflicts so the dashboard can show a
+                // banner ("legacy node.sh data nearby") without aborting.
+                warnings: conflicts.filter((c) => c.severity !== 'CRITICAL'),
+            }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} POST /chains/${req.params.chainId}/start: ${err.message}`);
             return res.status(500).json(errorBody(err.message));
@@ -138,8 +163,27 @@ function build(extensionHandle) {
                     `Chain "${adapter.chainId}" is not configured.`,
                 ));
             }
+
+            // Same conflict gate as start. We exclude ROGUE_PROCESS hits
+            // matching our own managed PIDs here — restart's first step is
+            // to stop our own running instance, which would otherwise show
+            // up as a "rogue" until the SIGTERM lands.
+            const force = req.query && req.query.force === '1';
+            const conflicts = await HostConflictScanner.scan({ logger: extensionHandle.log });
+            const blockers = HostConflictScanner.blockers(conflicts);
+            if (blockers.length > 0 && !force) {
+                return res.status(409).json({
+                    success: false,
+                    error: 'Host has unresolved conflicts; refusing to restart. Resolve them or pass ?force=1.',
+                    conflicts,
+                });
+            }
+
             const result = await adapter.restart(chainCfg);
-            return res.json(successBody(result));
+            return res.json(successBody({
+                ...result,
+                warnings: conflicts.filter((c) => c.severity !== 'CRITICAL'),
+            }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} POST /chains/${req.params.chainId}/restart: ${err.message}`);
             return res.status(500).json(errorBody(err.message));
