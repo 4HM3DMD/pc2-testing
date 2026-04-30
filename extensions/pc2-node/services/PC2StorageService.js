@@ -63,7 +63,9 @@ class PC2StorageService {
      * Initialize database tables for IPFS file tracking
      */
     async _initDatabase() {
-        // Create IPFS files table if not exists
+        // Empty [] for params is required on every db.write — PC2's
+        // SqliteDatabaseAccessService._write does params.map() unconditionally
+        // and crashes on undefined.
         await this.db.write(`
             CREATE TABLE IF NOT EXISTS pc2_files (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -80,26 +82,25 @@ class PC2StorageService {
                 encryption_nonce TEXT,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL,
-                
+
                 UNIQUE(wallet_address, file_path)
             )
-        `);
+        `, []);
 
-        // Create indexes
         await this.db.write(`
-            CREATE INDEX IF NOT EXISTS idx_pc2_files_wallet 
+            CREATE INDEX IF NOT EXISTS idx_pc2_files_wallet
             ON pc2_files(wallet_address)
-        `);
-        
+        `, []);
+
         await this.db.write(`
-            CREATE INDEX IF NOT EXISTS idx_pc2_files_path 
+            CREATE INDEX IF NOT EXISTS idx_pc2_files_path
             ON pc2_files(wallet_address, file_path)
-        `);
-        
+        `, []);
+
         await this.db.write(`
-            CREATE INDEX IF NOT EXISTS idx_pc2_files_parent 
+            CREATE INDEX IF NOT EXISTS idx_pc2_files_parent
             ON pc2_files(parent_cid)
-        `);
+        `, []);
     }
 
     /**

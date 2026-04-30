@@ -41,7 +41,9 @@ extension.on('init', async event => {
         // Use extension data API
         const { db } = extension.import('data');
         
-        // Create PC2 tables if they don't exist
+        // Create PC2 tables if they don't exist.
+        // Empty [] for params is required: PC2's SqliteDatabaseAccessService._write
+        // calls params.map() unconditionally and crashes on undefined.
         await db.write(`
             CREATE TABLE IF NOT EXISTS pc2_config (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -53,7 +55,7 @@ extension.on('init', async event => {
                 created_at INTEGER,
                 updated_at INTEGER
             )
-        `);
+        `, []);
         
         // Check if this is first run (no owner yet)
         const nodeConfig = await db.read('SELECT * FROM pc2_config LIMIT 1');
