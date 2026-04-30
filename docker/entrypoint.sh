@@ -5,7 +5,8 @@
 #      so config + runtime state survives container replacement.
 #   2. On first boot only: writes a default config.json that flips PC2 mode
 #      ON (otherwise PC2 boots in upstream Puter mode and the Elastos branding
-#      / ENM launcher entry are dormant — bug we hit during manual setup).
+#      / launcher entries for our extensions are dormant — bug we hit
+#      during manual setup).
 #   3. Hands off to whatever CMD the Dockerfile / compose file specifies
 #      (default: npm start).
 #
@@ -14,7 +15,7 @@
 
 set -euo pipefail
 
-DATA_DIR="${ENM_DATA_ROOT:-/data}"
+DATA_DIR="${PC2_DATA_DIR:-/data}"
 CONFIG_DIR="$DATA_DIR/config"
 RUNTIME_DIR="$DATA_DIR/runtime"
 
@@ -53,7 +54,7 @@ CONFIG_FILE="$CONFIG_DIR/config.json"
 if [[ ! -f "$CONFIG_FILE" ]]; then
     cat > "$CONFIG_FILE" <<EOF
 {
-  "config_name": "PC2 + ENM (Docker)",
+  "config_name": "PC2 (Docker)",
   "extensions": {
     "@elastos/pc2-node": {
       "pc2_enabled": true,

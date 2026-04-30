@@ -1,5 +1,6 @@
 #
-# Build the PC2 + ENM image and push it to GitHub Container Registry.
+# Build the PC2 image (Elastos Node Manager extension bundled inside) and
+# push it to GitHub Container Registry.
 #
 # Triggered on every push to main that touches code that affects the image.
 # The workflow ALSO accepts manual `workflow_dispatch` so you can rebuild
@@ -12,7 +13,7 @@
 # ghcr.io/<owner>/<repo> for public images on the same repo. No PAT needed.
 #
 
-name: Build & publish PC2 + ENM image
+name: Build & publish PC2 image
 
 on:
   push:
@@ -65,14 +66,18 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository_owner }}/pc2-enm
+          # ghcr.io/<owner>/<repo> — auto-derived from the repo slug. If the
+          # repo is later renamed, the image path follows. The bundled
+          # Elastos Node Manager extension is invisible to the operator —
+          # this is "PC2", not a separate product.
+          images: ghcr.io/${{ github.repository }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=ref,event=branch
             type=sha,format=short
           labels: |
-            org.opencontainers.image.title=PC2 + Elastos Node Manager
-            org.opencontainers.image.description=PC2 (Elacity Puter fork) preloaded with the Elastos Node Manager extension and a working PC2-mode config.
+            org.opencontainers.image.title=PC2
+            org.opencontainers.image.description=PC2 (Elacity Puter fork) with a working out-of-the-box config and the Elastos Node Manager extension bundled.
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.licenses=AGPL-3.0
 
