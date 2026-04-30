@@ -71,10 +71,21 @@ link_to_data "/app/volatile/runtime" "$RUNTIME_DIR"
 #
 # Dockerfile sets ENV PUTER_CONFIG_PROFILE=pc2 so PC2 loads pc2.json.
 #
+# Two flags that let raw-IP / single-domain access work end-to-end:
+#
 # allow_all_host_values=true: lets the operator hit the dashboard via raw
-# IP (e.g. http://<server-ip>:4100) without an "Invalid Host header" 400
-# from src/backend/src/modules/web/WebServerService.js. For production with
-# a real DNS name, replace with `domain: "<your-domain>"`.
+#   IP (e.g. http://<server-ip>:4100) without an "Invalid Host header" 400
+#   from src/backend/src/modules/web/WebServerService.js.
+#
+# experimental_no_subdomain=true: makes helpers.js subdomain() always return
+#   'api', so routes gated on `subdomain: 'api'` (notably /auth/particle,
+#   the entire api/ family) match regardless of request host. Without this,
+#   the Particle login POST falls through to the catch-all 404 and the
+#   dashboard hangs on a black screen after wallet connect.
+#
+# For production with a real DNS name, replace allow_all_host_values with
+# `domain: "<your-domain>"` and remove experimental_no_subdomain (you'd set
+# up a real api.<your-domain> CNAME instead).
 
 PROFILE_FILE="$CONFIG_DIR/pc2.json"
 if [[ ! -f "$PROFILE_FILE" ]]; then
@@ -83,6 +94,7 @@ if [[ ! -f "$PROFILE_FILE" ]]; then
   "config_name": "PC2 (Docker)",
   "\$requires": ["config.json"],
   "allow_all_host_values": true,
+  "experimental_no_subdomain": true,
   "extensions": {
     "@elastos/pc2-node": {
       "pc2_enabled": true,
