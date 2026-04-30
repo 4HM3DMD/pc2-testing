@@ -528,6 +528,28 @@ export class AppInstallService {
     if (!this.ipfs) {
       throw new Error('IPFS not available — cannot fetch remote app bundles');
     }
+
+    // Populate the local blockstore from the network first. `getFile` only
+    // reads from disk, so without this step any cold-install CID (typical
+    // for dApp-Centre "Install" clicks) would surface a Node ENOENT from
+    // the blockstore — which is exactly the symptom Irzhy hit on 2026-04-29.
+    // `pinRemoteCID` walks the DAG via bitswap against `PC2_SUPERNODE_BOOTSTRAP`
+    // and falls back to `ipfs.ela.city` gateway CAR if peers are unreachable.
+    // Timeout is generous (5 min) because the Glide Finance bundle is ~80 MB
+    // and a slow home connection via the gateway fallback can take a minute.
+    try {
+      await this.ipfs.pinRemoteCID(cid, { timeoutMs: 300_000 });
+    } catch (err: any) {
+      const type = err?.type;
+      if (type === 'INVALID_CID') {
+        throw new Error(`App bundle CID is not a valid IPFS CID: ${cid}`);
+      }
+      if (type === 'PRIVATE_MODE') {
+        throw new Error('IPFS is in private network mode; remote app installs require public or hybrid mode');
+      }
+      throw new Error(`Unable to fetch app bundle from the IPFS network (CID ${cid}): ${err?.message || err}`);
+    }
+
     return this.ipfs.getFile(cid);
   }
 

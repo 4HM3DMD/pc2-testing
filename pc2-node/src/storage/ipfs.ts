@@ -54,14 +54,31 @@ export type IPFSNetworkMode = 'private' | 'public' | 'hybrid';
 
 /**
  * PC2 Supernode bootstrap addresses
- * These dedicated relay+DHT-server nodes are contacted first for content
- * discovery and NAT traversal. Add multiaddrs as supernodes are deployed.
+ *
+ * Two categories of peer live on the PC2 supernodes:
+ *
+ *   1. `kubo` daemon on port 4101 — this is the process that pins the v1.2
+ *      app-registry CIDs (installed by `deploy/app-registry/scripts/install-pinning.sh`).
+ *      Bitswap fetches for any app-bundle or marketplace-pinned CID must
+ *      reach this peer to succeed, otherwise PC2 falls through to the
+ *      Elacity public gateway and eats the latency.
+ *
+ *   2. `pc2-ipfs-relay` Node.js daemon on ports 4003 (TCP) and 4004 (WS) —
+ *      a libp2p circuit-relay-v2 used for NAT traversal only. It does NOT
+ *      hold any content; listing it does not help content discovery but
+ *      it keeps circuit-hop paths available for home-NAT'd PC2 nodes.
+ *
+ * Peer IDs verified via read-only `ipfs id` over SSH on 2026-04-30.
  */
 const PC2_SUPERNODE_BOOTSTRAP: string[] = [
-  // InterServer (primary)
+  // InterServer kubo (primary — pins v1.2 app bundles, swarm on 4101)
+  '/ip4/69.164.241.210/tcp/4101/p2p/12D3KooWFLBeemSpue43SULYbqmSrgreYDYQdfDKD2MHUnRcMc5f',
+  // Contabo kubo (secondary — pins v1.2 app bundles, swarm on 4101)
+  '/ip4/38.242.211.112/tcp/4101/p2p/12D3KooWQZu8rY8BgD1fLq1yF1ArSnUy9D3Jf71w7C6RpbZy9nVr',
+  // InterServer pc2-ipfs-relay (circuit relay only, no content)
   '/ip4/69.164.241.210/tcp/4003/p2p/12D3KooWMcuTWxkKg7xS3dxRaPDK9BEUHdAvKWf2b5Kdk4Kwxy9G',
   '/ip4/69.164.241.210/tcp/4004/ws/p2p/12D3KooWMcuTWxkKg7xS3dxRaPDK9BEUHdAvKWf2b5Kdk4Kwxy9G',
-  // Contabo (secondary)
+  // Contabo pc2-ipfs-relay (circuit relay only, no content)
   '/ip4/38.242.211.112/tcp/4003/p2p/12D3KooWAaFWUWN7GQVeNdbdPKUUTmyoQewBAPbwXKKrhxxsck5h',
   '/ip4/38.242.211.112/tcp/4004/ws/p2p/12D3KooWAaFWUWN7GQVeNdbdPKUUTmyoQewBAPbwXKKrhxxsck5h',
 ];
