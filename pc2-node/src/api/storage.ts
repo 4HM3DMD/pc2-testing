@@ -3061,6 +3061,9 @@ router.post('/lit/secure-view', authenticate, async (req: AuthenticatedRequest, 
         del.ownerAddress.toLowerCase() !== buyerAddress.toLowerCase() &&
         (!buyerAddressAlt || del.ownerAddress.toLowerCase() !== buyerAddressAlt.toLowerCase())
       ) {
+        logger.warn(
+          `[SecureView] 403 delegation/session mismatch: owner=${del.ownerAddress.substring(0, 10)}… buyer=${buyerAddress.substring(0, 10)}… buyerAlt=${(buyerAddressAlt || '').substring(0, 10) || '(none)'}…`,
+        );
         res.status(403).json({ error: 'delegation.ownerAddress does not match authenticated session' });
         return;
       }

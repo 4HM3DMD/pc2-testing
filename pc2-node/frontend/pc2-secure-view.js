@@ -149,6 +149,23 @@
         return null;
       }
       log('tryRestoreSession: delegation found, expiresAt=' + active.expiresAt + ' actionIpfsId=' + active.delegation.actionIpfsId);
+
+      // Cache-ownership gate. Server-side /secure-view refuses any
+      // request whose delegation.ownerAddress does not match the
+      // authenticated session. If the user logged out and back in
+      // under a different wallet, the IndexedDB delegation is stale
+      // and every non-media open will 403. Detect the mismatch here,
+      // purge the cache, and let ensureSession() re-bootstrap under
+      // the current wallet. Fall through on unknown current wallet
+      // (window.user not populated yet) — the server 403 is still the
+      // final authority.
+      var currentWallet = (globalScope.user && globalScope.user.wallet_address) || '';
+      var cachedOwner = (active.delegation && active.delegation.ownerAddress) || '';
+      if (currentWallet && cachedOwner && currentWallet.toLowerCase() !== cachedOwner.toLowerCase()) {
+        warn('tryRestoreSession: cached delegation owner does not match current session — purging (cached=' + cachedOwner.substring(0, 10) + '… current=' + currentWallet.substring(0, 10) + '…)');
+        return SVS.revokeSession({}).then(function () { return null; });
+      }
+
       return SVS.loadSessionKey().then(function (kp) {
         if (!kp) {
           log('tryRestoreSession: delegation present but session keypair missing — will re-delegate');
