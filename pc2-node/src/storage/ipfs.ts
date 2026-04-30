@@ -425,7 +425,7 @@ export class IPFSStorage {
       });
 
       this.helia.libp2p.addEventListener('peer:discovery', (event) => {
-        log.info(`New peer discovered (${event.detail.id.toString()}) via MDNS`);
+        log.debug(`New peer discovered (${event.detail.id.toString()}) via MDNS`);
 
         this.helia?.libp2p.dial(event.detail.multiaddrs, {
           signal: AbortSignal.timeout(5000),
@@ -434,7 +434,7 @@ export class IPFSStorage {
             log.info(`Successfully dialed peer (${event.detail.id.toString()})`);
           }
         ).catch((err) => {
-          log.warn(`Failed to dial peer (${event.detail.id.toString()}):`, (err as Error)?.message);
+          log.debug(`Failed to dial peer (${event.detail.id.toString()}):`, (err as Error)?.message);
         });
       });
 
