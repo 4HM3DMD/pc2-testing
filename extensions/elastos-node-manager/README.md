@@ -16,12 +16,26 @@ v0.1 targets **BPoS supernode operators on Ubuntu/Debian**. macOS, Windows, and 
 
 ## Operator setup (one-time)
 
-1. Make sure you're on Ubuntu 22.04+ (or Debian 11+) with PC2 running locally.
-2. Open ENM from the PC2 launcher.
-3. The setup wizard's binary step now offers two paths:
-   - **Recommended:** "Install ela for me" — ENM downloads Go (if needed), clones the Elastos.ELA source, builds it, and verifies. ~5 minutes, no shell commands.
-   - **Manual:** "I already have ela built" — paste the path you produced via `make all`. See [docs/BUILD-ELA.md](docs/BUILD-ELA.md) for the manual recipe.
-4. The wizard then walks you through keystore import, network setup, confirm, and start.
+```bash
+# Install Node 20.x if you don't have it
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt install -y nodejs
+
+# Clone, install, start
+git clone https://github.com/4HM3DMD/pc2-testing.git ~/pc2 && cd ~/pc2
+npm install
+cd extensions/elastos-node-manager && npm install && cd ~/pc2
+npm start
+```
+
+Then open `http://<server-ip>:4200` in a browser, click the **Elastos Node Manager** icon, and the wizard handles the rest:
+
+1. OS / disk / wallet checks (auto)
+2. **Binary step**: pick "Install ela for me" — ENM downloads Go if needed, clones the Elastos.ELA source, runs `make all`, and verifies (~5 min, live progress bar). The "I already have ela built" path is still there for power users — see [docs/BUILD-ELA.md](docs/BUILD-ELA.md).
+3. Keystore import (skip for full-node mode)
+4. Network (auto-detect or manual IP)
+5. Confirm + Start mainchain
+
+> **About `npm install`**: PC2's monorepo has two workspaces using different jsdom majors (`src/gui`@21 vs `src/backend`@27), which transitively want different `canvas` peer versions. The `.npmrc` at the repo root sets `legacy-peer-deps=true` so npm picks per-workspace nested copies instead of refusing to resolve. `canvas` is an optional dep used only by jsdom's test renderer; it's never executed by PC2 or ENM at runtime, so this is safe. The setting is committed to the repo — you don't need to add the flag to your install command.
 
 ## Architecture
 
