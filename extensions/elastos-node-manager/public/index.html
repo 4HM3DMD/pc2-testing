@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Elastos Node Manager</title>
+<link rel="stylesheet" href="css/styles.css">
+<link rel="stylesheet" href="css/dashboard.css">
+</head>
+<body>
+<div id="app" data-state="connecting">
+    <header class="enm-header">
+        <h1>Elastos Node Manager</h1>
+        <span class="enm-badge" id="enm-version" aria-label="version">v0.1.0-alpha.1</span>
+    </header>
+
+    <nav class="enm-tabs" id="enm-tabs" role="tablist" hidden>
+        <button type="button" role="tab" data-tab="dashboard" aria-selected="true">Dashboard</button>
+        <button type="button" role="tab" data-tab="logs"      aria-selected="false">Logs</button>
+        <button type="button" role="tab" data-tab="settings"  aria-selected="false">Settings</button>
+        <button type="button" role="tab" data-tab="audit"     aria-selected="false">Audit</button>
+    </nav>
+
+    <main class="enm-main">
+        <div class="enm-spinner" id="enm-spinner" role="status" aria-live="polite">
+            <div class="enm-spinner-dot"></div>
+            <div class="enm-spinner-dot"></div>
+            <div class="enm-spinner-dot"></div>
+            <p class="enm-spinner-text" id="enm-spinner-text">Connecting to Node Manager...</p>
+        </div>
+
+        <div class="enm-error" id="enm-error" hidden role="alert"></div>
+
+        <section class="enm-content" id="enm-content" hidden>
+            <div class="enm-dashboard" id="enm-pane-dashboard"></div>
+            <div class="enm-dashboard" id="enm-pane-logs" hidden></div>
+            <div class="enm-dashboard" id="enm-pane-settings" hidden>
+                <p class="enm-stub">Settings — Phase 5 (Network, Binary, Healing prefs).</p>
+            </div>
+            <div class="enm-dashboard" id="enm-pane-audit" hidden>
+                <p class="enm-stub">Audit log — Phase 5 (filterable + JSON export).</p>
+            </div>
+        </section>
+    </main>
+</div>
+
+<!-- Order matters: strings + utils first (used by services + components), then services, then components, then app controller. -->
+<script src="js/strings.js"></script>
+<script src="js/utils.js"></script>
+<script src="js/services/wallet.js"></script>
+<script src="js/services/api.js"></script>
+<script src="js/services/sse.js"></script>
+<script src="js/services/notifications.js"></script>
+<script src="js/components/system-status.js"></script>
+<script src="js/components/chain-card.js"></script>
+<script src="js/components/log-viewer.js"></script>
+<script src="js/components/proposal-card.js"></script>
+<script src="js/components/setup-wizard.js"></script>
+<script src="js/components/settings-tab.js"></script>
+<script src="js/components/audit-tab.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

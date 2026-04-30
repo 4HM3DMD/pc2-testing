@@ -1,0 +1,40 @@
+{
+  "name": "@elacity/elastos-node-manager",
+  "version": "0.1.0-alpha.1",
+  "description": "PC2 extension that runs and self-heals an Elastos mainchain node for BPoS supernode operators",
+  "main": "main.js",
+  "author": "Elacity",
+  "license": "AGPL-3.0",
+  "engines": {
+    "node": ">=20.18.0"
+  },
+  "dependencies": {
+    "joi": "17.13.3",
+    "tcp-port-used": "1.0.2"
+  },
+  "devDependencies": {
+    "license-checker": "^25.0.1",
+    "vitest": "^1.6.0"
+  },
+  "scripts": {
+    "test": "vitest run --config vitest.config.mjs",
+    "test:watch": "vitest --config vitest.config.mjs",
+    "audit": "npm audit --audit-level=high"
+  },
+  "puter": {
+    "type": "extension",
+    "provides": {
+      "services": []
+    }
+  },
+  "enm": {
+    "supportedOs": [
+      "ubuntu",
+      "debian"
+    ],
+    "minDiskFreeGb": 50,
+    "warnDiskFreeGb": 100,
+    "knownGoodElaVersion": "v0.9.9.5",
+    "auditRetentionDaysDefault": 365
+  }
+}
