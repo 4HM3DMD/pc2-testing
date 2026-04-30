@@ -55,6 +55,10 @@
         var self = this;
         this._refreshProducer();
         this._producerTimer = setInterval(function () { self._refreshProducer(); }, 60_000);
+        // Sync poll — adaptive cadence. Schedules itself; the helper picks
+        // 10s if state==='syncing' and 60s otherwise so the bar updates
+        // smoothly while syncing without hammering /sync when healthy.
+        this._refreshSync();
         return this;
     };
 
@@ -62,6 +66,7 @@
         if (this._unsubscribe) { this._unsubscribe(); }
         if (this._cooldownTimer) { clearInterval(this._cooldownTimer); }
         if (this._producerTimer) { clearInterval(this._producerTimer); }
+        if (this._syncTimer) { clearTimeout(this._syncTimer); }
         if (this.root.parentNode) { this.root.parentNode.removeChild(this.root); }
     };
 
@@ -118,6 +123,15 @@
         }, this);
         this.root.appendChild(this._stats);
 
+        // Sync progress panel — hidden until the chain reports a height or
+        // we have something useful to show. _renderSyncPanel() populates.
+        this._syncPanel = document.createElement('section');
+        this._syncPanel.className = 'enm-chain-sync';
+        this._syncPanel.hidden = true;
+        this._syncPanel.setAttribute('role', 'status');
+        this._syncPanel.setAttribute('aria-live', 'polite');
+        this.root.appendChild(this._syncPanel);
+
         // Action buttons.
         var actions = document.createElement('div');
         actions.className = 'enm-chain-actions';
@@ -135,6 +149,7 @@
     ChainCard.prototype._applyState = function (state) {
         var t = root.enmTOrFallback;
         var coarse = state && state.state ? state.state : 'unconfigured';
+        this._lastCoarseState = coarse;  // drives sync-poll cadence
         this.root.dataset.state = coarse;
         this._badge.textContent = t('chain_state.' + coarse);
         this._badge.className = 'enm-chain-badge enm-chain-badge-' + coarse;
@@ -200,6 +215,119 @@
             self._busy = false;
             self.refresh();
         });
+    };
+
+    /**
+     * Adaptive sync poll. Schedules its own next tick:
+     *   syncing  → every 10s (operator is watching the bar move)
+     *   anything → every 60s (cheap drift check)
+     * Uses setTimeout chain instead of setInterval so timer drift doesn't
+     * accumulate and we can change cadence based on the latest state.
+     *
+     * @private
+     */
+    ChainCard.prototype._refreshSync = function () {
+        var self = this;
+        this.api.get('/chains/' + this.chainId + '/sync', { skipCache: true }).then(function (data) {
+            self._renderSyncPanel(data);
+        }).catch(function () {
+            // Silent — boot race or chain stopped. The panel just stays as-is
+            // and the next tick retries.
+        }).then(function () {
+            if (!self.root || !self.root.isConnected) { return; }
+            // Always re-arm. State drives cadence: 10s while syncing,
+            // 60s while healthy/stalled/stopped.
+            var nextMs = (self._lastCoarseState === 'syncing') ? 10_000 : 60_000;
+            self._syncTimer = setTimeout(function () { self._refreshSync(); }, nextMs);
+        });
+    };
+
+    /**
+     * Render the sync progress panel from a /chains/:id/sync snapshot.
+     * Hides the panel when there's nothing useful to show (no localHeight).
+     *
+     * @private
+     * @param {object|null} data
+     */
+    ChainCard.prototype._renderSyncPanel = function (data) {
+        var t = root.enmTOrFallback;
+        if (!data || data.localHeight == null) {
+            this._syncPanel.hidden = true;
+            return;
+        }
+        this._syncPanel.hidden = false;
+        this._syncPanel.dataset.stale = data.stale ? '1' : '0';
+
+        // First render: build the structure. After that, just update text.
+        if (!this._syncBar) {
+            var heading = document.createElement('h4');
+            heading.className = 'enm-chain-sync-heading';
+            heading.textContent = t('chain_card.sync_heading');
+            this._syncPanel.appendChild(heading);
+
+            var barWrap = document.createElement('div');
+            barWrap.className = 'enm-chain-sync-bar-wrap';
+            barWrap.setAttribute('role', 'progressbar');
+            barWrap.setAttribute('aria-valuemin', '0');
+            barWrap.setAttribute('aria-valuemax', '100');
+            this._syncBar = document.createElement('div');
+            this._syncBar.className = 'enm-chain-sync-bar';
+            barWrap.appendChild(this._syncBar);
+            this._syncBarWrap = barWrap;
+            this._syncPanel.appendChild(barWrap);
+
+            this._syncStatusLine = document.createElement('p');
+            this._syncStatusLine.className = 'enm-chain-sync-status';
+            this._syncPanel.appendChild(this._syncStatusLine);
+
+            this._syncMetricsLine = document.createElement('p');
+            this._syncMetricsLine.className = 'enm-chain-sync-metrics';
+            this._syncPanel.appendChild(this._syncMetricsLine);
+        }
+
+        // Bar fill + ARIA.
+        var pct = (typeof data.percent === 'number') ? data.percent : null;
+        if (pct == null) {
+            // No network reference yet — render an "indeterminate" stripe.
+            this._syncBar.style.width = '100%';
+            this._syncBarWrap.classList.add('enm-chain-sync-indeterminate');
+            this._syncBarWrap.removeAttribute('aria-valuenow');
+        } else {
+            this._syncBar.style.width = pct.toFixed(2) + '%';
+            this._syncBarWrap.classList.remove('enm-chain-sync-indeterminate');
+            this._syncBarWrap.setAttribute('aria-valuenow', String(Math.floor(pct)));
+        }
+        this._syncBar.dataset.pct = pct == null ? '?' : Math.floor(pct);
+
+        // Status line.
+        if (data.stale) {
+            this._syncStatusLine.textContent = t('chain_card.sync_stale');
+        } else if (pct == null) {
+            this._syncStatusLine.textContent = t('chain_card.sync_unknown');
+        } else if (data.blocksBehind === 0) {
+            this._syncStatusLine.textContent = t('chain_card.sync_caught_up');
+        } else {
+            this._syncStatusLine.textContent = t('chain_card.sync_behind', {
+                blocks: data.blocksBehind != null ? data.blocksBehind.toLocaleString() : '?',
+            });
+        }
+
+        // Metrics line — velocity + ETA.
+        var parts = [];
+        if (typeof data.velocityBpm === 'number' && data.velocityBpm > 0) {
+            parts.push(t('chain_card.sync_velocity', {
+                bpm: data.velocityBpm.toFixed(1),
+            }));
+        } else if (data.localHeight != null && data.blocksBehind != null && data.blocksBehind > 0) {
+            parts.push(t('chain_card.sync_no_velocity'));
+        }
+        if (typeof data.etaSec === 'number' && data.etaSec > 0) {
+            parts.push(t(
+                data.etaSec < 60 ? 'chain_card.sync_eta_lt_min' : 'chain_card.sync_eta',
+                { eta: root.enmFormatUptime(data.etaSec) },
+            ));
+        }
+        this._syncMetricsLine.textContent = parts.join(' • ');
     };
 
     /**

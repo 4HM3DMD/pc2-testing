@@ -172,6 +172,77 @@
 
 .enm-chain-actions { display: flex; gap: var(--spacing-sm); }
 
+/* --- Sync progress panel (Phase 6+) --- */
+
+.enm-chain-sync {
+    display: grid;
+    gap: 6px;
+    padding-top: var(--spacing-sm);
+    border-top: 1px solid var(--border-color);
+}
+.enm-chain-sync[data-stale="1"] { opacity: 0.6; }
+.enm-chain-sync-heading {
+    margin: 0;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+.enm-chain-sync-bar-wrap {
+    position: relative;
+    height: 8px;
+    width: 100%;
+    background: var(--bg-page);
+    border: 1px solid var(--border-color);
+    border-radius: 999px;
+    overflow: hidden;
+}
+.enm-chain-sync-bar {
+    height: 100%;
+    width: 0;
+    background: linear-gradient(90deg, var(--chain-syncing), var(--chain-healthy));
+    border-radius: 999px;
+    transition: width 600ms ease-out;
+}
+/* Indeterminate state: when network height is unknown, slide a stripe across
+   so the operator can tell the chain is alive even without a percentage. */
+.enm-chain-sync-bar-wrap.enm-chain-sync-indeterminate .enm-chain-sync-bar {
+    background: linear-gradient(
+        90deg,
+        transparent 0%,
+        var(--chain-syncing) 30%,
+        var(--chain-syncing) 70%,
+        transparent 100%
+    );
+    background-size: 35% 100%;
+    background-repeat: no-repeat;
+    animation: enm-sync-indet 1.4s linear infinite;
+}
+@keyframes enm-sync-indet {
+    0%   { background-position: -35% 0; }
+    100% { background-position: 135% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .enm-chain-sync-bar { transition: none; }
+    .enm-chain-sync-bar-wrap.enm-chain-sync-indeterminate .enm-chain-sync-bar {
+        animation: none;
+        background: var(--chain-syncing);
+    }
+}
+.enm-chain-sync-status {
+    margin: 0;
+    font-size: 13px;
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+}
+.enm-chain-sync-metrics {
+    margin: 0;
+    font-size: 11px;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+}
+
 /* --- BPoS sub-panel (Phase 5) --- */
 
 .enm-chain-bpos {

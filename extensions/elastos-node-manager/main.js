@@ -22,13 +22,16 @@ const { mountRoutes } = require('./routes');
 const ChainRegistry = require('./lib/ChainRegistry');
 const ProposalStore = require('./lib/EnmProposalStore');
 const ConfigStore = require('./lib/ConfigStore');
+const LogCompactor = require('./lib/LogCompactor');
 
 const AUDIT_SWEEP_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24h
 const PROPOSAL_SWEEP_INTERVAL_MS = 60 * 1000;        // 1m
+const LOG_COMPACT_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24h
 const DEFAULT_AUDIT_RETENTION_DAYS = 365;
 
 let auditSweepTimer = null;
 let proposalSweepTimer = null;
+let logCompactTimer = null;
 
 extension.on('preinit', () => {
     extension.log.info(`${ENM_LOG_PREFIX} preinit`);
@@ -101,6 +104,12 @@ extension.on('ready', async () => {
     // Proposal expiry sweep: every minute (cheap update; no row scan unless
     // there are pending proposals past their TTL).
     scheduleProposalSweeps();
+    // Log rotation sweep: gzip old *.log + purge old *.gz once a day.
+    scheduleLogCompaction();
+    // Cold-boot auto-start: any chain with enabled=true gets started after
+    // a small delay (config.global.autoStart.delaySec, default 10s) so the
+    // operator's network/disk are settled.
+    scheduleAutoStart();
 
     extension.log.info(`${ENM_LOG_PREFIX} ready ✓`);
 });
@@ -142,4 +151,80 @@ function scheduleProposalSweeps() {
     if (proposalSweepTimer) clearInterval(proposalSweepTimer);
     proposalSweepTimer = setInterval(runOnce, PROPOSAL_SWEEP_INTERVAL_MS);
     proposalSweepTimer.unref?.();
+}
+
+/**
+ * Once-a-day log rotation: gzip *.log files older than gzipAfterDays,
+ * delete *.gz older than purgeAfterDays. Operator can override the
+ * thresholds in Settings → Mainchain Advanced.
+ */
+function scheduleLogCompaction() {
+    const runOnce = async () => {
+        try {
+            const cfg = await ConfigStore.load();
+            if (cfg.global && cfg.global.logRotation && cfg.global.logRotation.enabled === false) {
+                return; // operator disabled it
+            }
+            const opts = (cfg.global && cfg.global.logRotation) || {};
+            for (const chainId of Object.keys((cfg.chains) || {})) {
+                if (!cfg.chains[chainId] || !cfg.chains[chainId].enabled) continue;
+                await LogCompactor.compactNow({
+                    chainId,
+                    gzipAfterDays: opts.gzipAfterDays,
+                    purgeAfterDays: opts.purgeAfterDays,
+                    logger: extension.log,
+                });
+            }
+        } catch (err) {
+            extension.log.warn(`${ENM_LOG_PREFIX} log compaction failed: ${err.message}`);
+        }
+    };
+    runOnce();
+    if (logCompactTimer) clearInterval(logCompactTimer);
+    logCompactTimer = setInterval(runOnce, LOG_COMPACT_INTERVAL_MS);
+    logCompactTimer.unref?.();
+}
+
+/**
+ * Cold-boot auto-start. Reattach already handles "PC2 restarted while ela
+ * was running" — this handles the case where the host was shut down and
+ * neither PC2 nor ela was running, but the operator wants the chain back up
+ * once PC2 itself is back.
+ *
+ * For cleanliness:
+ *   - Skipped when cfg.global.autoStart.onBoot is false.
+ *   - Skipped when statusSync says the chain is already alive (reattach
+ *     handled it).
+ *   - Delayed by cfg.global.autoStart.delaySec so DNS/network/disk settle
+ *     before we spawn ela. Default 10s.
+ */
+function scheduleAutoStart() {
+    setTimeout(async () => {
+        try {
+            const cfg = await ConfigStore.load();
+            if (!cfg || !cfg.global || !cfg.global.autoStart || cfg.global.autoStart.onBoot === false) {
+                return;
+            }
+            const delaySec = (cfg.global.autoStart.delaySec != null) ? cfg.global.autoStart.delaySec : 10;
+            // Wait the configured delay before kicking off any chain.
+            await new Promise((r) => setTimeout(r, delaySec * 1000));
+            const proc = ChainRegistry.getProcessService();
+            for (const { chainId } of ChainRegistry.listChains()) {
+                const chainCfg = cfg.chains && cfg.chains[chainId];
+                if (!chainCfg || !chainCfg.enabled) continue;
+                if (proc.statusSync(chainId).alive) {
+                    extension.log.debug(`${ENM_LOG_PREFIX} auto-start: ${chainId} already alive (reattached) — skip`);
+                    continue;
+                }
+                try {
+                    extension.log.info(`${ENM_LOG_PREFIX} auto-start: launching ${chainId}`);
+                    await ChainRegistry.getAdapter(chainId).start(chainCfg);
+                } catch (err) {
+                    extension.log.error(`${ENM_LOG_PREFIX} auto-start ${chainId} failed: ${err.message}`);
+                }
+            }
+        } catch (err) {
+            extension.log.warn(`${ENM_LOG_PREFIX} auto-start scheduler failed: ${err.message}`);
+        }
+    }, 100); // schedule the chain on the next tick so the rest of `ready` finishes first
 }

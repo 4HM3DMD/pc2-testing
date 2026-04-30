@@ -29,6 +29,12 @@ const { requireOwner, readActorWallet } = require('../lib/OwnerCheckMiddleware')
 const ChainRegistry = require('../lib/ChainRegistry');
 const ConfigStore = require('../lib/ConfigStore');
 const HostConflictScanner = require('../lib/HostConflictScanner');
+const Diagnostics = require('../lib/Diagnostics');
+const LogCompactor = require('../lib/LogCompactor');
+const fs = require('node:fs');
+const fsp = require('node:fs/promises');
+const path = require('node:path');
+const { chainDir, pidFilePath } = require('../lib/DataDir');
 
 /**
  * @param {object} extensionHandle
@@ -231,6 +237,54 @@ function build(extensionHandle) {
         extensionHandle,
     ));
 
+    // Live sync progress for the dashboard's progress bar.
+    //
+    // Reads from SyncTracker — populated by HealthChecker's medium tick at
+    // 30s cadence. The tracker computes velocity (blocks per minute) from a
+    // rolling 30-min window of (ts, height) samples and ETA-to-fully-synced
+    // from velocity + (networkBest - localHeight).
+    //
+    // Returns a structured snapshot:
+    //   { localHeight, networkHeight, blocksBehind, percent, velocityBpm,
+    //     etaSec, sampleCount, windowMinutes, lastSampleAt, stale }
+    //
+    // Frontend polls this every 10s when state==='syncing' (vs 60s when
+    // healthy) so the bar updates smoothly without burning request budget.
+    router.get('/:chainId/sync', limit('read'), async (req, res) => {
+        if (!readActorWallet(req)) {
+            return res.status(401).json(errorBody('Authentication required.'));
+        }
+        try {
+            const adapter = adapterOr404(req, res, extensionHandle);
+            if (!adapter) return undefined;
+            let snapshot;
+            try {
+                snapshot = ChainRegistry.getSyncTracker().syncSnapshot(adapter.chainId);
+            } catch (err) {
+                // Tracker not yet initialized (boot race). Return an empty
+                // snapshot so the UI can show "—" rather than 500.
+                return res.json(successBody({
+                    localHeight: null,
+                    networkHeight: null,
+                    blocksBehind: null,
+                    percent: null,
+                    velocityBpm: null,
+                    etaSec: null,
+                    sampleCount: 0,
+                    windowMinutes: null,
+                    lastSampleAt: null,
+                    stale: true,
+                }));
+            }
+            return res.json(successBody(snapshot));
+        } catch (err) {
+            extensionHandle.log.debug(
+                `${ENM_LOG_PREFIX} GET /chains/${req.params.chainId}/sync: ${err.message}`,
+            );
+            return res.status(500).json(errorBody(err.message));
+        }
+    });
+
     // BPoS-specific listing — full producer set + height. Useful for an
     // operator browsing the supernode roster from the dashboard.
     router.get('/:chainId/dpos', limit('read'), wrapRpc('dpos',
@@ -298,7 +352,132 @@ function build(extensionHandle) {
         }
     });
 
+    // GET /:chainId/diagnose
+    // Walk every subsystem (config → binary → host conflicts → process →
+    // stale PID → leveldb LOCK → RPC → peers → sync → disk) and return a
+    // structured findings array the dashboard renders as an "exactly what's
+    // wrong" report.
+    router.get('/:chainId/diagnose', limit('read'), async (req, res) => {
+        if (!readActorWallet(req)) {
+            return res.status(401).json(errorBody('Authentication required.'));
+        }
+        try {
+            const adapter = adapterOr404(req, res, extensionHandle);
+            if (!adapter) return undefined;
+            const cfg = await ConfigStore.load();
+            const chainCfg = cfg.chains && cfg.chains[adapter.chainId];
+            const report = await Diagnostics.runFullDiagnose({
+                chainId: adapter.chainId,
+                chainConfig: chainCfg || null,
+                processService: ChainRegistry.getProcessService(),
+                adapter,
+                syncTracker: (() => { try { return ChainRegistry.getSyncTracker(); } catch { return null; } })(),
+                logger: extensionHandle.log,
+            });
+            return res.json(successBody(report));
+        } catch (err) {
+            extensionHandle.log.error(`${ENM_LOG_PREFIX} GET /chains/${req.params.chainId}/diagnose: ${err.message}`);
+            return res.status(500).json(errorBody(err.message));
+        }
+    });
+
+    // POST /:chainId/auto-fix?action=<key>
+    // Whitelisted, idempotent remediations the operator can trigger from the
+    // diagnose UI. Each action maps to a single safe step — never anything
+    // that touches live keys or rewrites chain data.
+    router.post('/:chainId/auto-fix', limit('admin'), requireOwner, async (req, res) => {
+        const action = (req.query && typeof req.query.action === 'string') ? req.query.action : '';
+        if (!Object.values(Diagnostics.AUTO_FIX_ACTIONS).includes(action)) {
+            return res.status(400).json(errorBody(`Unknown auto-fix action "${action}".`));
+        }
+        try {
+            const adapter = adapterOr404(req, res, extensionHandle);
+            if (!adapter) return undefined;
+            const result = await runAutoFix(action, adapter, extensionHandle);
+            return res.json(successBody({ action, ...result }));
+        } catch (err) {
+            extensionHandle.log.error(`${ENM_LOG_PREFIX} POST /chains/${req.params.chainId}/auto-fix: ${err.message}`);
+            return res.status(500).json(errorBody(err.message));
+        }
+    });
+
+    // POST /:chainId/compact-logs
+    // Manually trigger a log rotation pass. Same routine that runs daily —
+    // exposed for the operator's "free space now" button in Settings.
+    router.post('/:chainId/compact-logs', limit('admin'), requireOwner, async (req, res) => {
+        try {
+            const adapter = adapterOr404(req, res, extensionHandle);
+            if (!adapter) return undefined;
+            const cfg = await ConfigStore.load();
+            const opts = (cfg.global && cfg.global.logRotation) || {};
+            const report = await LogCompactor.compactNow({
+                chainId: adapter.chainId,
+                gzipAfterDays: opts.gzipAfterDays,
+                purgeAfterDays: opts.purgeAfterDays,
+                logger: extensionHandle.log,
+            });
+            return res.json(successBody(report));
+        } catch (err) {
+            extensionHandle.log.error(`${ENM_LOG_PREFIX} POST /chains/${req.params.chainId}/compact-logs: ${err.message}`);
+            return res.status(500).json(errorBody(err.message));
+        }
+    });
+
     return router;
+}
+
+/**
+ * Run a whitelisted auto-fix action. Each branch is intentionally narrow:
+ * the operator is implicitly granting permission to do exactly this one
+ * thing, no more.
+ *
+ * @param {string} action     one of Diagnostics.AUTO_FIX_ACTIONS
+ * @param {object} adapter    chain adapter (already 404-guarded)
+ * @param {object} extensionHandle
+ * @returns {Promise<{ ok: boolean, detail: string }>}
+ */
+async function runAutoFix(action, adapter, extensionHandle) {
+    const A = Diagnostics.AUTO_FIX_ACTIONS;
+    if (action === A.REMOVE_STALE_PID) {
+        const p = pidFilePath(adapter.chainId);
+        try {
+            await fsp.unlink(p);
+            return { ok: true, detail: 'Removed ' + p };
+        } catch (err) {
+            if (err.code === 'ENOENT') return { ok: true, detail: 'No PID file to remove' };
+            throw err;
+        }
+    }
+    if (action === A.RESTART_CHAIN) {
+        const cfg = await ConfigStore.load();
+        const chainCfg = cfg.chains && cfg.chains[adapter.chainId];
+        if (!chainCfg) throw new Error('Chain not configured.');
+        await adapter.restart(chainCfg);
+        return { ok: true, detail: 'Restart issued — see audit tab' };
+    }
+    if (action === A.CONFIG_ROLLBACK) {
+        const restored = await ConfigStore.rollback();
+        if (!restored) return { ok: false, detail: 'No backup config to roll back to' };
+        return { ok: true, detail: 'Rolled back to previous config' };
+    }
+    if (action === A.CLEAR_LEVELDB_LOCK) {
+        // Refuse if the chain is alive — clearing LOCK on a live ela would
+        // corrupt the DB. We trust the diagnose step: it only reports the
+        // LOCK file when the process is gone.
+        const proc = ChainRegistry.getProcessService();
+        if (proc.statusSync(adapter.chainId).alive) {
+            throw new Error('Chain is alive — refuse to clear LOCK on a running DB.');
+        }
+        const lockPath = path.join(chainDir(adapter.chainId), 'elastos', 'data', 'chain', 'LOCK');
+        try {
+            await fsp.unlink(lockPath);
+            return { ok: true, detail: 'Removed ' + lockPath };
+        } catch (err) {
+            if (err.code === 'ENOENT') return { ok: true, detail: 'No LOCK file present' };
+            throw err;
+        }
+    }
+    throw new Error('Unhandled action: ' + action);
 }
 
 /**

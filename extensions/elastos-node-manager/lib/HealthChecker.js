@@ -63,6 +63,9 @@ class HealthChecker {
         this.engine = deps.engine;
         this.listChains = deps.listChains;
         this.getAdapter = deps.getAdapter;
+        // Optional — when present, every height sample from the medium tick
+        // is fed in so /chains/:id/sync can render velocity + ETA.
+        this.syncTracker = deps.syncTracker || null;
         // Injected loader makes the tick logic testable without disk I/O.
         // Defaults to ConfigStore.load so production wiring is unchanged.
         this.loadConfig = (typeof deps.loadConfig === 'function')
@@ -198,6 +201,24 @@ class HealthChecker {
                 } else {
                     s.firstHeightStallAt = null;
                     s.lastHeight = rpcSummary.height;
+                }
+                // Feed the SyncTracker so /chains/:id/sync has live velocity
+                // data. Doing this here (medium tick, every 30s) gives the
+                // tracker a steady cadence regardless of dashboard polling.
+                if (this.syncTracker) {
+                    this.syncTracker.record(chainId, rpcSummary.height);
+                    // If getnodestate.neighbors exposes peer heights, the max
+                    // is a strong signal for network-best. Defensive: ela's
+                    // schema may use either Height or height.
+                    if (typeof rpcSummary.peerMaxHeight === 'number'
+                        && rpcSummary.peerMaxHeight > rpcSummary.height) {
+                        this.syncTracker.recordNetworkBest(chainId, rpcSummary.peerMaxHeight);
+                    } else if (typeof rpcSummary.peerMaxHeight === 'number') {
+                        // Even when our height matches or exceeds peers we
+                        // record so the tracker stays aware of where the
+                        // network is.
+                        this.syncTracker.recordNetworkBest(chainId, rpcSummary.peerMaxHeight);
+                    }
                 }
             }
             // F18 timeline — inbound peers count is needed only when arbiter mode.
@@ -509,9 +530,11 @@ class HealthChecker {
             ]);
 
             // F18 input — count inbound vs outbound from getnodestate.Neighbors.
-            // Defensive: the schema may evolve; guard each access.
+            // peerMaxHeight (for SyncTracker) — max of any height field peers
+            // report. Defensive: the schema may evolve; guard each access.
             let inboundCount;
             let outboundCount;
+            let peerMaxHeight;
             const neighbors = nodeState && Array.isArray(nodeState.neighbors)
                 ? nodeState.neighbors
                 : (nodeState && Array.isArray(nodeState.Neighbors) ? nodeState.Neighbors : null);
@@ -519,9 +542,17 @@ class HealthChecker {
                 inboundCount = 0;
                 outboundCount = 0;
                 for (const n of neighbors) {
-                    const isInbound = (n && (n.Inbound === true || n.inbound === true));
+                    if (!n || typeof n !== 'object') continue;
+                    const isInbound = (n.Inbound === true || n.inbound === true);
                     if (isInbound) inboundCount += 1;
                     else outboundCount += 1;
+                    const h = typeof n.height === 'number' ? n.height
+                            : typeof n.Height === 'number' ? n.Height
+                            : typeof n.lastHeight === 'number' ? n.lastHeight
+                            : null;
+                    if (h != null && (peerMaxHeight == null || h > peerMaxHeight)) {
+                        peerMaxHeight = h;
+                    }
                 }
             }
 
@@ -531,6 +562,7 @@ class HealthChecker {
                 peers: typeof peers === 'number' ? peers : undefined,
                 inboundCount,
                 outboundCount,
+                peerMaxHeight,
                 latencyMs: Date.now() - t0,
             };
         } catch (err) {

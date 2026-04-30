@@ -18,6 +18,7 @@ const ElaMainChainAdapter = require('./ElaMainChainAdapter');
 const { SelfHealingEngine } = require('./SelfHealingEngine');
 const { HealthChecker } = require('./HealthChecker');
 const { readNodeOwner } = require('./OwnerCheckMiddleware');
+const { SyncTracker } = require('./SyncTracker');
 
 let initialized = false;
 let processService = null;
@@ -25,6 +26,7 @@ let sseHub = null;
 let logStreamer = null;
 let engine = null;
 let healthChecker = null;
+let syncTracker = null;
 let extensionHandleRef = null;
 /** @type {Map<string, import('./ChainAdapter')>} */
 let adapters = new Map();
@@ -46,8 +48,16 @@ function init(extensionHandle) {
     sseHub = new SseHub({ extensionHandle });
     // ProcessLogStreamer subscribes to processService events on construction.
     logStreamer = new ProcessLogStreamer({ processService, sseHub, extensionHandle });
+    syncTracker = new SyncTracker();
     adapters.set('mainchain', new ElaMainChainAdapter({ processService, extensionHandle }));
     initialized = true;
+}
+
+function getSyncTracker() {
+    if (!syncTracker) {
+        throw new Error('ChainRegistry: not initialized');
+    }
+    return syncTracker;
 }
 
 /**
@@ -88,6 +98,7 @@ function initHealing(getDb) {
         engine,
         listChains,
         getAdapter,
+        syncTracker,
     });
 }
 
@@ -169,6 +180,7 @@ function _resetForTests() {
     logStreamer = null;
     engine = null;
     healthChecker = null;
+    syncTracker = null;
     adapters = new Map();
 }
 
@@ -181,6 +193,7 @@ module.exports = {
     getAdapter,
     getEngine,
     getHealthChecker,
+    getSyncTracker,
     listChains,
     _resetForTests,
 };

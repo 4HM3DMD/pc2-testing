@@ -64,19 +64,127 @@ F15 (audit DB integrity) is deferred to v0.2.
 
 ## Troubleshooting
 
-| Problem | Where to look |
-|---------|---------------|
-| Setup wizard refuses to proceed | OS check: must be Ubuntu/Debian. Disk check: ≥50 GB free. Wallet check: PC2 owner claimed. |
-| `ela` binary verify fails | Re-run `make all` in `Elastos.ELA`. Make sure file is mode 0755. |
-| RPC unreachable after restart | Settings → Mainchain Advanced → check `WhiteIPList` (defaults to 127.0.0.1). |
-| Audit tab is empty | Tab loads paginated; "Load more" extends. Filters apply per-wallet. |
-| Healing notifications not arriving | SSE stream may be disconnected — reload the dashboard. Check browser DevTools → Network for the open `/api/events` connection. |
-| Producer state shows wrong rank | The chain's RPC reports based on current arbiter group; refreshes every 60s. Refresh the dashboard for fresher state. |
-| Setup wizard re-prompts after relaunch | The wizard records progress in `enm_setup_state` table; if PC2's data dir was reset the wizard will start over. |
-| Start button refuses with "host has unresolved conflicts" | Open the toast — it lists every CRITICAL conflict (rogue ela process, port already bound, permission denied). Each entry includes the exact shell command to fix it. After fixing, click Start again. To override anyway: `curl -X POST '/extensions/elastos-node-manager/api/chains/mainchain/start?force=1'` (not recommended). |
-| App keeps detecting old node.sh state from `/.config/elastos/` | That's a `LEGACY_CONFIG` warning — non-blocking. ENM uses its own data dir; the legacy path is just surfaced so you don't accidentally run two installs. Move it aside: `mv ~/.config/elastos ~/.config/elastos.legacy-$(date +%Y%m%d)` and re-scan from the wizard. |
-| systemd unit `node.service` keeps restarting ela | `sudo systemctl disable --now node` — the conflict scanner will flag this until disabled. |
-| F19 keeps firing after I stopped the rogue process | The slow tick caches scan results for 5 min. Hit "Re-scan" in the wizard or wait one tick. |
+The fastest path is **GET `/api/chains/mainchain/diagnose`** (or click the Diagnose button on the chain card). It walks every subsystem in order and tells you *exactly* what's wrong with status badges (`ok` / `warn` / `fail` / `skip`) and step-by-step shell commands. Many findings expose an **Auto-fix** button for a single safe remediation.
+
+### Common scenarios
+
+| Problem | What it means | How to fix |
+|---|---|---|
+| **Chain won't start — "host has unresolved conflicts"** | F19 fired. Another process owns a port, or a rogue `ela` is running, or perms are wrong. | The toast lists every blocker with the exact shell command. After fixing, click Start. Override (not recommended): `?force=1` query param. |
+| **Chain starts then dies in 5 sec** | Usually a stale `LOCK` file in `elastos/data/chain/LOCK` — ela holds it open while running and crashes if a previous instance left it. | Diagnose → "Stale LevelDB LOCK" → click Auto-fix. Or: `rm <chainDir>/elastos/data/chain/LOCK` then Start. |
+| **Stuck at "Syncing" with no progress** | F4 will fire after 10 min. Three causes: (1) zero peers, (2) network height unknown, (3) chain genuinely stalled. | Diagnose shows all three. Velocity reads 0? Restart. Peers=0? Check firewall + DNS. |
+| **Sync velocity dropping over time** | Disk I/O contention or LevelDB needs compaction. | Settings → Mainchain Advanced → "Compact logs" frees the obvious wins. For DB compaction itself, stop the chain, let leveldb's natural background compaction run on next start. |
+| **"RPC unreachable" right after restart** | Normal for the first 30 sec — ela rebuilds indexes before opening RPC. F2 grace is 2 min. | Wait 30 sec, refresh. If it persists past 2 min: Diagnose → check `WhiteIPList` and `rpc.passwordEncrypted`. |
+| **Out of disk** | F5 fires at 20 GB warn / 5 GB critical. ELA grows ~5 GB/month + logs. | (1) Settings → "Compact logs" rotates *.log → *.gz and prunes >90 days. (2) `du -sh ~/.pc2/extensions/elastos-node-manager/chains/mainchain/elastos/{data,logs}` to see what's eating space. (3) Move dataDir to a bigger volume: stop chain → `mv` → update `dataDir` in Settings → Start. |
+| **High RAM / OOM kill** | F6. Default memory limit is 4 GB; archive mode + busy times push it higher. | Settings → Mainchain Advanced → memoryLimitMb → 6144 or 8192. Also `free -h` to confirm host has the headroom. |
+| **Producer dropped to Inactive (BPoS)** | F12. >720 rounds since last block produced. >1300 rounds = forced inactive (deposit penalty risk). | **You must run ela-cli ActivateProducer yourself** — ENM never holds your owner key. The notification has the exact command. After signing + submitting within the 6-block window, refresh the producer card. |
+| **No inbound peers** (BPoS) | F18. P2P (20338) and DPoS p2p (20339) inbound aren't reaching you. | `sudo ufw allow 20338/tcp && sudo ufw allow 20339/tcp`. If behind NAT/router: forward both ports. Cloud providers: open in security group. |
+| **Wrong external IP advertised** | Auto-detect failed or you're behind CGNAT. | Settings → Network → manual override → paste correct IP or DDNS hostname. Test with `curl ifconfig.me` from the host. |
+| **Clock skew warnings** | F13. Host clock drifted > 2 sec. ELA Schnorr signing fails silently above 4.2 sec. | `sudo systemctl restart chrony` or `sudo ntpdate -s pool.ntp.org`. Wait one slow tick (5 min) for ENM to re-check. |
+| **Auto-restart loop won't stop** | F1 escalates after 3 attempts in 10 min — you'll see an OWNER-CONFIRMS proposal instead of more restarts. | Open the proposal modal → reject → **diagnose first** to find the real cause. Approving without diagnosing just resets the budget for another 3 attempts. |
+| **Healing notifications not arriving** | SSE stream may be disconnected. | Reload the dashboard. Browser DevTools → Network → look for the open `/api/events` connection. SSE auto-reconnects with backoff but a stale tab may need a refresh. |
+| **App keeps detecting old `~/.config/elastos/`** | LEGACY_CONFIG warning (non-blocking). ENM uses its own data dir. | `mv ~/.config/elastos ~/.config/elastos.legacy-$(date +%Y%m%d)` and re-scan in the wizard. Or click Adopt to import the existing keystore. |
+| **systemd `node.service` keeps restarting ela behind my back** | Legacy node.sh installer left an enabled unit. | `sudo systemctl disable --now node`. The SYSTEMD_UNIT warning will clear on next scan (5 min cache). |
+| **F19 keeps firing after I stopped the rogue process** | Scan results cached for 5 min. | Wait, or re-trigger scan: `GET /api/setup/conflicts`. |
+| **Audit tab is empty** | Engine only logs on state-transition events. | Trigger anything (start/stop/restart) and you'll see entries. The general HTTP-mutation log is also tracked under `tier=HTTP-MUTATION`. |
+| **Setup wizard re-prompts after relaunch** | Wizard state lives in `enm_setup_state`. If PC2's data dir was reset the table is gone. | Walk through the 9 steps again — config + keystore + network are persisted server-side after each step. |
+| **Producer state shows wrong rank** | RPC reports based on current arbiter group; refreshes every 60s. | Wait one minute or refresh the dashboard. |
+| **`ela --version` reports a different version than ENM expects** | F8. You rebuilt from a newer tag. | Settings → Mainchain Advanced → click Save (no other change needed). ENM accepts the new version. |
+
+### How the diagnose endpoint works
+
+```bash
+curl -s -H "Authorization: Bearer <session>" \
+  http://localhost:4200/extensions/elastos-node-manager/api/chains/mainchain/diagnose | jq
+```
+
+You'll get something like:
+
+```json
+{
+  "success": true,
+  "result": {
+    "summary": { "ok": 6, "warn": 1, "fail": 1, "skip": 0, "unknown": 0 },
+    "findings": [
+      { "id": "config-present", "status": "ok", "title": "Configuration present", "detail": "..." },
+      { "id": "binary-path", "status": "ok", "title": "ela binary present and executable", "detail": "..." },
+      { "id": "process-state", "status": "fail", "title": "Chain process is not running",
+        "detail": "enabled=true but no live PID...",
+        "fixes": ["Click Start in the dashboard.", "If start refuses with host conflicts..."],
+        "autoFix": "restart-chain" },
+      { "id": "leveldb-lock", "status": "warn", "title": "Stale LevelDB LOCK file detected",
+        "detail": "File at ... exists with no live owner. ela will refuse to start.",
+        "fixes": ["rm ...", "Then click Start."],
+        "autoFix": "clear-leveldb-lock" }
+    ]
+  }
+}
+```
+
+Findings with `autoFix` set can be remediated with a single POST:
+```bash
+curl -X POST -H "Authorization: Bearer <session>" \
+  'http://localhost:4200/extensions/elastos-node-manager/api/chains/mainchain/auto-fix?action=clear-leveldb-lock'
+```
+
+Whitelisted actions: `remove-stale-pid`, `restart-chain`, `config-rollback`, `clear-leveldb-lock`. Anything else → 400. None of these touch your keys; the engine refuses to clear `LOCK` on a live chain (it would corrupt the DB).
+
+## Auto-start on host reboot
+
+ENM auto-starts `enabled: true` chains when the extension's `ready` hook fires — both for "PC2 restarted while ela was running" (handled via PID-file reattach) and for cold boots after a host shutdown. Configurable in Settings → General → Auto-start; default on, with a 10s post-boot delay so DNS/network/disk are settled.
+
+For the host itself to auto-restart PC2 after a power cycle, install a systemd unit:
+
+```ini
+# /etc/systemd/system/pc2.service
+[Unit]
+Description=PC2 (Elacity Puter fork)
+After=network.target
+
+[Service]
+Type=simple
+User=YOUR_USER
+WorkingDirectory=/home/YOUR_USER/pc2
+ExecStart=/usr/bin/npm start
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now pc2
+journalctl -u pc2 -f
+```
+
+PC2 starts → ENM extension boots → reads chain config → starts ela. Two subtleties:
+
+1. **Don't enable a `node.service` or `ela.service` separately.** ENM's conflict scanner will flag them as SYSTEMD_UNIT warnings — they'd race ENM for the same chain.
+2. **The 10-second delay is intentional.** Some cloud hosts (especially CGNAT'd VPS) take ~5 sec for outbound DNS to resolve; spawning ela earlier means a flaky first sync. Tune via `cfg.global.autoStart.delaySec` if your environment is faster/slower.
+
+## Log rotation / chain-data compression
+
+The biggest disk hog is ela's on-disk logs (`elastos/logs/node/*.log`, `elastos/logs/dpos/*.log`) — they grow unbounded otherwise. ENM rotates and gzips them automatically:
+
+- Once a day, files older than `gzipAfterDays` (default 7) get gzipped to `*.<date>.gz`.
+- Files older than `purgeAfterDays` (default 90) get deleted.
+- The *current* day's log is left alone (gzipping a live-write target would lose data).
+- Idempotent — already-gzipped files are skipped.
+
+Tunable in Settings → General → Log rotation. Force a pass right now:
+
+```bash
+curl -X POST -H "Authorization: Bearer <session>" \
+  http://localhost:4200/extensions/elastos-node-manager/api/chains/mainchain/compact-logs
+```
+
+Returns `{ gzipped, purged, bytesFreed, files: [...] }`. Typical first run on a 30-day-old install: ~1.2 GB freed.
+
+> **Why no chain-DB compaction button?** ela's LevelDB does background compaction on its own; explicitly compacting it from outside is risky (can corrupt the DB if the chain is live). The right way to reclaim DB space is to stop the chain, let LevelDB's natural compaction settle on next start, or move `dataDir` to a fresh volume and re-sync. Both of those are operator decisions, not auto-fixes.
 
 ## Backup / restore
 

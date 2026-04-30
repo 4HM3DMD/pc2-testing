@@ -89,6 +89,15 @@
             bpos_votes:  'Votes',
             bpos_rank:   'Rank',
             bpos_inactive_rounds: 'Inactive rounds',
+            sync_heading:  'Sync progress',
+            sync_caught_up: 'Fully synced',
+            sync_unknown:   'Network height unknown',
+            sync_behind:    '{blocks} blocks behind',
+            sync_velocity:  '{bpm} blocks/min',
+            sync_eta:       '~{eta} remaining',
+            sync_eta_lt_min: '<1 min remaining',
+            sync_no_velocity: 'measuring rate...',
+            sync_stale:     'Sync data stale — chain may be stopped',
         },
 
         system_status: {

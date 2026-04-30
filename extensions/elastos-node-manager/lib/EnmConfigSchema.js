@@ -91,6 +91,20 @@ const globalSchema = Joi.object({
     audit: Joi.object({
         retentionDays: Joi.number().integer().min(0).max(3650).default(365),
     }).default(),
+    // Auto-start: when PC2 boots and an extension's `ready` hook fires, start
+    // any chain whose `enabled=true`. Reattach handles the "ela was already
+    // running before PC2 restarted" case; this handles cold boots.
+    autoStart: Joi.object({
+        onBoot: Joi.boolean().default(true),
+        delaySec: Joi.number().integer().min(0).max(600).default(10),
+    }).default(),
+    // Log rotation — gzip *.log older than gzipAfterDays, purge *.gz older
+    // than purgeAfterDays. main.js scheduler runs compactNow every 24h.
+    logRotation: Joi.object({
+        enabled: Joi.boolean().default(true),
+        gzipAfterDays: Joi.number().integer().min(1).max(90).default(7),
+        purgeAfterDays: Joi.number().integer().min(7).max(3650).default(90),
+    }).default(),
 });
 
 const setupSchema = Joi.object({
@@ -157,6 +171,8 @@ function defaultConfig() {
             },
             notifications: { criticalRequiresAck: true },
             audit: { retentionDays: 365 },
+            autoStart: { onBoot: true, delaySec: 10 },
+            logRotation: { enabled: true, gzipAfterDays: 7, purgeAfterDays: 90 },
         },
         setup: {
             completed: false,
