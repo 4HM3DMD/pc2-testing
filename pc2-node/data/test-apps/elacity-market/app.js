@@ -3377,8 +3377,8 @@
       return;
     }
 
-    var channel = nft.channel && nft.channel.address;
-    var tokenId = (nft.tokenId && nft.tokenId.hexTokenID) || '';
+    var channel = (nft.channel && nft.channel.address) || nft.contractAddress || '';
+    var tokenId = (nft.tokenId && nft.tokenId.hexTokenID) || nft.tokenId || nft.hexTokenID || '';
 
     if (!channel || !tokenId) {
       showToast('Missing content identity for playback', 'error');
