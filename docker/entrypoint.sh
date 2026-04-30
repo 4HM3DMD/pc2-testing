@@ -49,17 +49,40 @@ link_to_data() {
 link_to_data "/app/volatile/config" "$CONFIG_DIR"
 link_to_data "/app/volatile/runtime" "$RUNTIME_DIR"
 
-# --- First-boot default config: PC2 mode ON. --------------------------------
-# Without this, PC2 boots Puter-mode and logs:
-#   "[PC2 Node]: PC2 mode not enabled. Extension loaded but inactive."
-# The operator can edit config.json after first boot or mount their own.
-# We never overwrite — file existence is the idempotency check.
+# --- First-boot PC2 profile overlay. ----------------------------------------
+# Critical design decision: we do NOT pre-write config.json. Why:
+#
+#   PC2's RuntimeEnvironment auto-generates config.json on first boot from
+#   src/backend/src/boot/default_config.js — that file is the only path that
+#   includes services.database.engine='sqlite' AND randomly generates the
+#   crypto secrets PC2 needs (cookie_name, jwt_secret, url_signature_secret,
+#   private_uid_secret, private_uid_namespace).
+#
+#   If we pre-write config.json with just our extension settings, PC2 sees
+#   "config exists, skip generation" and boots with no database engine and
+#   no secrets. The `data` extension (priority -10000) immediately crashes
+#   with "svc_database.get is not a function" because StrategizedService
+#   constructed without an engine has no .get() method.
+#
+# Instead: write a profile overlay (pc2.json) that $requires the auto-
+# generated config.json and layers our extension settings on top. PC2's
+# ConfigLoader processes $requires first via deep_proto_merge in
+# src/backend/src/config.js, so defaults flow in correctly.
+#
+# Dockerfile sets ENV PUTER_CONFIG_PROFILE=pc2 so PC2 loads pc2.json.
+#
+# allow_all_host_values=true: lets the operator hit the dashboard via raw
+# IP (e.g. http://<server-ip>:4100) without an "Invalid Host header" 400
+# from src/backend/src/modules/web/WebServerService.js. For production with
+# a real DNS name, replace with `domain: "<your-domain>"`.
 
-CONFIG_FILE="$CONFIG_DIR/config.json"
-if [[ ! -f "$CONFIG_FILE" ]]; then
-    cat > "$CONFIG_FILE" <<EOF
+PROFILE_FILE="$CONFIG_DIR/pc2.json"
+if [[ ! -f "$PROFILE_FILE" ]]; then
+    cat > "$PROFILE_FILE" <<EOF
 {
   "config_name": "PC2 (Docker)",
+  "\$requires": ["config.json"],
+  "allow_all_host_values": true,
   "extensions": {
     "@elastos/pc2-node": {
       "pc2_enabled": true,
@@ -68,7 +91,7 @@ if [[ ! -f "$CONFIG_FILE" ]]; then
   }
 }
 EOF
-    echo "[entrypoint] Wrote default PC2-mode config to $CONFIG_FILE"
+    echo "[entrypoint] Wrote PC2 profile overlay to $PROFILE_FILE"
 fi
 
 # --- Hand off to the Dockerfile's CMD. --------------------------------------

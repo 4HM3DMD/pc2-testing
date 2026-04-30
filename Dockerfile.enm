@@ -124,6 +124,13 @@ RUN npm run build:particle-auth \
 # this at run-time: `-v $HOME/pc2-enm-data:/data`.
 VOLUME ["/data"]
 
+# Tell PC2 to load our profile overlay (pc2.json) on top of the auto-generated
+# config.json. The entrypoint writes pc2.json with $requires:["config.json"]
+# + our extension settings + allow_all_host_values; PC2 generates config.json
+# fresh on first boot with default services.database.engine + crypto secrets.
+# Without this, pc2_enabled doesn't get set and PC2 boots in vanilla Puter mode.
+ENV PUTER_CONFIG_PROFILE=pc2
+
 # Network surface:
 #   4100  = PC2 HTTP (the dashboard)
 #   4200  = PC2 WebSocket (live updates)
