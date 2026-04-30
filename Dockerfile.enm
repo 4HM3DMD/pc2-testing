@@ -56,11 +56,25 @@ WORKDIR /app
 # volatile/, etc. out of the build context so the COPY is fast.
 COPY . .
 
-# PC2 monorepo install. .npmrc at the root sets legacy-peer-deps=true, which
-# is required because PC2's workspaces pin different jsdom majors that want
-# different canvas peers. Documented in extensions/elastos-node-manager/
-# README.md "About npm install".
-RUN npm install --no-audit --no-fund
+# PC2 monorepo install. Use `npm ci` (not `npm install`) to reproduce the
+# committed package-lock.json *structure* exactly. This matters because:
+#
+#   - PC2's deps include `schema-utils` (transitive via webpack), which itself
+#     needs ajv@8 + ajv-keywords@5 nested under its own node_modules/.
+#   - The ROOT also has ajv@6 (some other dep needs it). Both must coexist.
+#   - With `npm install` + legacy-peer-deps, npm flattens the tree and hoists
+#     ajv-keywords@5 to the root, where it can only see ajv@6 — webpack then
+#     crashes with "Cannot find module 'ajv/dist/compile/codegen'".
+#   - `npm ci` strictly replicates the lockfile, preserving the nesting.
+#
+# .npmrc still pins legacy-peer-deps=true so npm ci tolerates PC2's
+# jsdom/canvas peer mismatch. Retry loop matches upstream's Dockerfile —
+# multi-arch builds via QEMU sometimes hit registry timeouts.
+RUN for i in 1 2 3; do \
+        npm ci --no-audit --no-fund && break; \
+        [ $i -eq 3 ] && exit 1; \
+        echo "npm ci failed (attempt $i), retrying in 15s..." && sleep 15; \
+    done
 
 # ENM's own deps live in a separate package.json (not part of the workspace),
 # so we install them explicitly.
