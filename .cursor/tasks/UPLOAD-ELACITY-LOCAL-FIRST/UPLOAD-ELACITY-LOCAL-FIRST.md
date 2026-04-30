@@ -2,8 +2,55 @@
 
 **Task ID**: UPLOAD-ELACITY-LOCAL-FIRST
 **Created**: 2026-04-17
-**Status**: Parked (Agreed direction, deferred to next work window)
+**Completed**: 2026-04-30
+**Status**: Done
 **Priority**: High — publish flow UX degrades by 3× 60 s whenever `base.ela.city` is slow
+
+## Resolution Summary (2026-04-30)
+
+Implemented as approved on 2026-04-30 after `base.ela.city` byte-upload
+proxy was confirmed wedged for ~10 days (consistent 60 s 504s on its
+internal Kubo `/api/v0/add` path, regardless of payload size).
+
+**Changes** (single file: `pc2-node/src/api/storage.ts`):
+
+1. `POST /api/storage/ipfs/upload-elacity` (file/byte route) — refactored
+   from "Elacity-first, no fallback" to local-first + fire-and-forget:
+   - Stores bytes on local Helia (`pin: true, announce: true`) →
+     produces canonical CIDv1 (dag-pb) → converts to CIDv0 for
+     gateway compat → responds immediately with `{ success, cid, size,
+     replication: 'pending' }`.
+   - Then kicks off `forwardPinToElacityKubo(localCid)` (no-op until
+     ops sets `ELACITY_PIN_FORWARD_*` env vars).
+   - Then kicks off legacy `base.ela.city` byte upload behind an 8 s
+     `AbortSignal.timeout` — failures logged only, never raised.
+   - Returns `503` only if local IPFS is unavailable, `400` for bad
+     input, `500` only if local store itself fails. No more `502` from
+     remote being down.
+
+2. `POST /api/storage/ipfs/upload-elacity-directory` (metadata route) —
+   was already local-first but synchronously waited up to 60 s for
+   Elacity to optionally overwrite the CID with a byte-identical value.
+   Now responds immediately with the local CIDv0, then fires the same
+   `forwardPinToElacityKubo` + 8 s-capped byte replication off-thread.
+
+3. New shared helper `replicateBytesToElacityFireAndForget()` and module
+   constants `ELACITY_UPLOAD_URL` / `ELACITY_REPLICATION_TIMEOUT_MS` —
+   single source of truth for the legacy byte-replication path.
+
+**Frontend impact**: zero. Verified the three Creator call sites
+(`elacity-creator/app.js` lines 2904/3171/3372) read only `.ok` and
+`.cid` from the response. Adding `replication: 'pending'` is additive.
+
+**User-visible result**: Creator publish flow returns the canonical CID
+in <1 s per call instead of waiting 60 s × 3 = 3 min when Elacity is
+wedged. Content reachability flows through (a) DHT announce
+(auto-fired by `storeFile`/`storeDirectory`, already enabled in
+`config.json` via `auto_announce_public: true`) and (b) the
+pin-forward path (Irzhy-confirmed `/api/v0/pin/add` on
+`ipfs.ela.city`, defaults off until ops enables).
+
+**Build**: `npm run build` clean, no lint errors.
 
 ## Description
 

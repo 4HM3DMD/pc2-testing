@@ -3650,9 +3650,50 @@ router.post('/thumbnail', authenticate, async (req: AuthenticatedRequest, res: R
   }
 });
 
+// Elacity backend's byte-upload proxy. Has been wedged on its internal
+// Kubo /api/v0/add since ~2026-04-21: nginx returns 504 after exactly
+// 60 s with no upstream response, regardless of payload size (a 100-byte
+// probe and a 500 KB file both block for the full minute). We keep the
+// fire-and-forget call as a best-effort byte path, but we never block
+// the user response on it — the local Helia store + DHT announce +
+// forwardPinToElacityKubo are the authoritative durability path.
+const ELACITY_UPLOAD_URL = 'https://base.ela.city/api/2.0/files/upload';
+const ELACITY_REPLICATION_TIMEOUT_MS = 8_000;
+
+async function replicateBytesToElacityFireAndForget(
+  bytes: Buffer,
+  filename: string | undefined,
+  expectedCid: string,
+): Promise<void> {
+  const start = Date.now();
+  try {
+    const formData = new FormData();
+    formData.append('file', new Blob([new Uint8Array(bytes)]), filename || 'content');
+    const resp = await fetch(ELACITY_UPLOAD_URL, {
+      method: 'POST',
+      headers: { 'X-Target-Flow': 'ipfs' },
+      body: formData,
+      signal: AbortSignal.timeout(ELACITY_REPLICATION_TIMEOUT_MS),
+    });
+    const ms = Date.now() - start;
+    if (resp.ok) {
+      logger.info(`[IPFS-Elacity] base.ela.city replication ok for ${expectedCid} (${ms}ms)`);
+    } else {
+      logger.warn(
+        `[IPFS-Elacity] base.ela.city replication non-2xx for ${expectedCid}: status=${resp.status} (${ms}ms) — local CID + DHT announce remain authoritative`,
+      );
+    }
+  } catch (err: any) {
+    const ms = Date.now() - start;
+    const isTimeout = err?.name === 'TimeoutError' || err?.name === 'AbortError';
+    logger.warn(
+      `[IPFS-Elacity] base.ela.city replication ${isTimeout ? 'timed out' : 'failed'} for ${expectedCid} (${ms}ms): ${err?.message || 'unknown'} — local CID + DHT announce remain authoritative`,
+    );
+  }
+}
+
 router.post('/ipfs/upload-elacity', authenticate, async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const ELACITY_UPLOAD = 'https://base.ela.city/api/2.0/files/upload';
     const { content, cid, filename } = req.body;
 
     let bytes: Buffer;
@@ -3676,48 +3717,56 @@ router.post('/ipfs/upload-elacity', authenticate, async (req: AuthenticatedReque
       return;
     }
 
-    logger.info(`[IPFS-Elacity] Uploading ${bytes.length} bytes to Elacity IPFS...`);
-
-    const formData = new FormData();
-    formData.append('file', new Blob([new Uint8Array(bytes)]), filename || 'content');
-
-    const uploadResp = await fetch(ELACITY_UPLOAD, {
-      method: 'POST',
-      headers: { 'X-Target-Flow': 'ipfs' },
-      body: formData,
-    });
-
-    if (!uploadResp.ok) {
-      const errText = await uploadResp.text();
-      logger.error(`[IPFS-Elacity] Upload failed: ${uploadResp.status} ${errText}`);
-      res.status(502).json({ error: `Elacity IPFS upload failed: ${uploadResp.status}` });
+    const ipfs = req.app.locals.ipfs;
+    if (!ipfs) {
+      res.status(503).json({ error: 'IPFS not available' });
       return;
     }
 
-    const uploadData = await uploadResp.json() as Array<{
-      path: string; storage: string; size: number; originalFileName: string;
-    }>;
+    // 1. Store locally on Helia first. The resulting CID is byte-identical
+    //    to what Elacity's Kubo would have produced (same UnixFS dag-pb
+    //    chunking defaults), so callers (elacity-creator) get the canonical
+    //    CID immediately rather than waiting up to 60 s for base.ela.city's
+    //    wedged byte-upload proxy.
+    const cidV1String = await ipfs.storeFile(bytes, { pin: true, announce: true });
 
-    if (!uploadData?.[0]?.path) {
-      res.status(502).json({ error: 'No CID returned from Elacity IPFS' });
-      return;
+    // 2. Convert CIDv1 → CIDv0 for Elacity's go-ipfs gateway compatibility.
+    //    Same content hash, just different encoding. Falls back to CIDv1
+    //    if the codec isn't dag-pb (e.g. raw small-file blocks).
+    const { CID } = await import('multiformats/cid');
+    const cidV1 = CID.parse(cidV1String);
+    let finalCid: string;
+    try {
+      finalCid = cidV1.toV0().toString();
+    } catch {
+      logger.warn(`[IPFS-Elacity] CIDv1→CIDv0 conversion failed (codec=${cidV1.code}), using v1`);
+      finalCid = cidV1String;
     }
 
-    const remoteCid = uploadData[0].path;
-    const remoteSize = uploadData[0].size;
+    logger.info(`[IPFS-Elacity] Stored locally: ${finalCid} (${bytes.length} bytes) — DHT-announced, replication pending`);
 
-    logger.info(`[IPFS-Elacity] Pinned: ${remoteCid} (${remoteSize} bytes)`);
-
-    forwardPinToElacityKubo(remoteCid);
-
+    // 3. Respond IMMEDIATELY with the local CID. Elacity-side reachability
+    //    happens via DHT discovery (auto-fired by storeFile above) and the
+    //    fire-and-forget pin-forward + byte-replication kicked off below.
     res.json({
       success: true,
-      cid: remoteCid,
-      size: remoteSize,
+      cid: finalCid,
+      size: bytes.length,
+      replication: 'pending',
     });
+
+    // 4. Ask Elacity's Kubo to durably pin (no-op when env vars unset;
+    //    default off until ops gives green light).
+    forwardPinToElacityKubo(finalCid);
+
+    // 5. Best-effort legacy byte-upload to base.ela.city. Hard-capped at
+    //    8 s so we move on if the upstream is wedged. Failures logged only.
+    void replicateBytesToElacityFireAndForget(bytes, filename, finalCid);
   } catch (error: any) {
     logger.error('[IPFS-Elacity] Upload error:', error);
-    res.status(500).json({ error: error.message || 'Elacity IPFS upload failed' });
+    if (!res.headersSent) {
+      res.status(500).json({ error: error.message || 'Local IPFS store failed' });
+    }
   }
 });
 
@@ -3768,35 +3817,54 @@ router.post('/ipfs/upload-elacity-directory', authenticate, async (req: Authenti
     }
     logger.info(`[IPFS-Elacity] CIDv0: ${cidV0String}`);
 
-    let finalCid = cidV0String;
+    // 3. Respond IMMEDIATELY with the local CIDv0. Local Helia and Elacity's
+    //    Kubo compute byte-identical CIDs for the same UnixFS payload, so
+    //    overwriting finalCid with the remote response would yield the same
+    //    string. We therefore skip the synchronous wait and kick off the
+    //    Elacity-side replication paths fire-and-forget.
+    res.json({ success: true, cid: cidV0String, replication: 'pending' });
 
-    // 3. Replicate to Elacity IPFS for public gateway reachability (fire-and-forget)
-    const ELACITY_UPLOAD = 'https://base.ela.city/api/2.0/files/upload';
-    try {
-      const formData = new FormData();
-      formData.append('data', new Blob([new TextEncoder().encode(JSON.stringify(files))], { type: 'application/json' }), 'metadata.json');
-      const uploadResp = await fetch(ELACITY_UPLOAD, {
-        method: 'POST',
-        headers: { 'X-Target-Flow': 'dir,ipfs' },
-        body: formData,
-      });
-      if (uploadResp.ok) {
-        logger.info('[IPFS-Elacity] Replicated metadata to Elacity IPFS');
-        const uploadResult = await uploadResp.json();
-        finalCid = uploadResult[0].path;
-      } else {
-        logger.warn(`[IPFS-Elacity] Replication failed: ${uploadResp.status} (non-fatal — DHT will propagate)`);
+    // 4. Ask Elacity's Kubo to durably pin (no-op when env vars unset).
+    forwardPinToElacityKubo(cidV0String);
+
+    // 5. Best-effort legacy byte-upload to base.ela.city (8 s hard cap so we
+    //    don't accumulate hung promises when the upstream is wedged).
+    void (async () => {
+      const start = Date.now();
+      try {
+        const formData = new FormData();
+        formData.append(
+          'data',
+          new Blob([new TextEncoder().encode(JSON.stringify(files))], { type: 'application/json' }),
+          'metadata.json',
+        );
+        const uploadResp = await fetch(ELACITY_UPLOAD_URL, {
+          method: 'POST',
+          headers: { 'X-Target-Flow': 'dir,ipfs' },
+          body: formData,
+          signal: AbortSignal.timeout(ELACITY_REPLICATION_TIMEOUT_MS),
+        });
+        const ms = Date.now() - start;
+        if (uploadResp.ok) {
+          logger.info(`[IPFS-Elacity] Metadata replication ok for ${cidV0String} (${ms}ms)`);
+        } else {
+          logger.warn(
+            `[IPFS-Elacity] Metadata replication non-2xx for ${cidV0String}: status=${uploadResp.status} (${ms}ms) — local CID + DHT announce remain authoritative`,
+          );
+        }
+      } catch (replicateErr: any) {
+        const ms = Date.now() - start;
+        const isTimeout = replicateErr?.name === 'TimeoutError' || replicateErr?.name === 'AbortError';
+        logger.warn(
+          `[IPFS-Elacity] Metadata replication ${isTimeout ? 'timed out' : 'failed'} for ${cidV0String} (${ms}ms): ${replicateErr?.message || 'unknown'} — local CID + DHT announce remain authoritative`,
+        );
       }
-    } catch (replicateErr: any) {
-      logger.warn(`[IPFS-Elacity] Replication failed (non-fatal): ${replicateErr.message}`);
-    }
-
-    forwardPinToElacityKubo(finalCid);
-
-    res.json({ success: true, cid: finalCid });
+    })();
   } catch (error: any) {
     logger.error('[IPFS-Elacity] Metadata upload error:', error);
-    res.status(500).json({ error: error.message || 'Elacity metadata upload failed' });
+    if (!res.headersSent) {
+      res.status(500).json({ error: error.message || 'Local IPFS store failed' });
+    }
   }
 });
 
