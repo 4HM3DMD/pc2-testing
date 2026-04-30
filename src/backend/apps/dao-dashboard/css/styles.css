@@ -46,6 +46,44 @@
     --shadow-lg: 0 10px 15px rgba(0,0,0,0.1);
 }
 
+/* ──────────────────────────────────────────────────────────────────
+   Dark mode palette — mirrors Elacity Market + dApp Centre so the
+   three apps share a consistent look. Activated by setting
+   data-theme="dark" on <html>, persisted via the shared
+   'elacity-theme' localStorage key (see <script> in index.html and
+   the toggle handler in js/app.js).
+   ────────────────────────────────────────────────────────────────── */
+[data-theme="dark"] {
+    --bg-page: #121212;
+    --bg-surface: #1e1e1e;
+    --border-color: #333333;
+    --text-primary: #e5e5e5;
+    --text-secondary: #a3a3a3;
+    --text-muted: #737373;
+    --primary: #3b82f6;
+    --primary-hover: #60a5fa;
+    --success: #34d399;
+    --warning: #fb923c;
+    --error: #f87171;
+
+    --status-registered: #fb923c;
+    --status-cragreed: #60a5fa;
+    --status-voteragreed: #34d399;
+    --status-finished: #a3a3a3;
+    --status-rejected: #f87171;
+
+    --shadow-sm: 0 1px 2px rgba(0,0,0,0.4);
+    --shadow-md: 0 4px 6px rgba(0,0,0,0.5);
+    --shadow-lg: 0 10px 15px rgba(0,0,0,0.6);
+}
+
+/* Dark scrollbars match Market/dApp Centre. */
+[data-theme="dark"] ::-webkit-scrollbar { width: 10px; height: 10px; }
+[data-theme="dark"] ::-webkit-scrollbar-track { background: #1a1a1a; }
+[data-theme="dark"] ::-webkit-scrollbar-thumb { background: #555; border-radius: 5px; }
+[data-theme="dark"] ::-webkit-scrollbar-thumb:hover { background: #666; }
+[data-theme="dark"] { scrollbar-color: #555 #1a1a1a; }
+
 body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
     background: var(--bg-page);
@@ -2818,3 +2856,90 @@ body {
         grid-template-columns: 1fr;
     }
 }
+
+/* ──────────────────────────────────────────────────────────────────
+   Theme toggle button
+   Sits in the header next to the refresh button. Mirrors the
+   styling used in the dApp Centre (.theme-toggle) so the three
+   capsules feel like one product family.
+   ────────────────────────────────────────────────────────────────── */
+.theme-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    background: var(--bg-surface);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+    padding: 0;
+    font-family: inherit;
+}
+.theme-toggle:hover {
+    background: var(--bg-page);
+    color: var(--text-primary);
+}
+.theme-toggle svg {
+    width: 16px;
+    height: 16px;
+}
+.theme-toggle .icon-moon { display: block; }
+.theme-toggle .icon-sun  { display: none; }
+[data-theme="dark"] .theme-toggle .icon-moon { display: none; }
+[data-theme="dark"] .theme-toggle .icon-sun  { display: block; }
+
+/* ──────────────────────────────────────────────────────────────────
+   Dark mode surface fixes
+   The selectors below hardcode light "tint" backgrounds (for status
+   pills / vote-result pills / approve-reject chips). On a dark
+   background those bright cream/mint blocks read as glaring rectangles
+   so we rebuild them with translucent rgba versions of the same hue,
+   keeping the original text colour for legibility.
+   ────────────────────────────────────────────────────────────────── */
+[data-theme="dark"] .proposal-status.registered,
+[data-theme="dark"] .status-badge.registered { background: rgba(251, 146, 60, 0.16); color: var(--status-registered); }
+
+[data-theme="dark"] .proposal-status.cragreed,
+[data-theme="dark"] .status-badge.cragreed { background: rgba(96, 165, 250, 0.16); color: var(--status-cragreed); }
+
+[data-theme="dark"] .proposal-status.voteragreed,
+[data-theme="dark"] .status-badge.voteragreed { background: rgba(52, 211, 153, 0.16); color: var(--status-voteragreed); }
+
+[data-theme="dark"] .proposal-status.finished,
+[data-theme="dark"] .status-badge.finished { background: rgba(163, 163, 163, 0.14); color: var(--status-finished); }
+
+[data-theme="dark"] .proposal-status.crcanceled,
+[data-theme="dark"] .proposal-status.votercanceled,
+[data-theme="dark"] .status-badge.crcanceled,
+[data-theme="dark"] .status-badge.votercanceled { background: rgba(248, 113, 113, 0.16); color: var(--status-rejected); }
+
+[data-theme="dark"] .vote-result.approve { background: rgba(52, 211, 153, 0.16); color: var(--success); }
+[data-theme="dark"] .vote-result.reject  { background: rgba(248, 113, 113, 0.16); color: var(--error); }
+
+/* ──────────────────────────────────────────────────────────────────
+   Dark mode hover / selection states
+   The light-table layouts use #f8fafc / #f1f5f9 / #eff6ff for row
+   hover and item-selected backgrounds. On the dark canvas those
+   white-ish fills flash hard against the surrounding surface, so we
+   rebuild them as translucent primary tints that match the existing
+   .suggestion-row:hover treatment (rgba(59,130,246,0.08)).
+   ────────────────────────────────────────────────────────────────── */
+[data-theme="dark"] .proposal-row:hover  { background: rgba(59, 130, 246, 0.08); }
+[data-theme="dark"] .filter-item:hover   { background: rgba(59, 130, 246, 0.08); }
+[data-theme="dark"] .filter-item.active  { background: rgba(59, 130, 246, 0.16); color: var(--primary); }
+[data-theme="dark"] .vote-option:hover   { background: rgba(59, 130, 246, 0.08); }
+
+/* Selected vote chips: keep the semantic colour cue but as translucent fills
+   so they sit comfortably on the dark surface. */
+[data-theme="dark"] .vote-option.approve.selected { background: rgba(52, 211, 153, 0.12); }
+[data-theme="dark"] .vote-option.reject.selected  { background: rgba(248, 113, 113, 0.12); }
+[data-theme="dark"] .vote-option.abstain.selected { background: rgba(163, 163, 163, 0.12); }
+
+/* Vote-option icon circles use bright pastels that read like little glowing
+   dots in dark mode — desaturate to translucent versions of the same hue. */
+[data-theme="dark"] .vote-option.approve .vote-option-icon { background: rgba(52, 211, 153, 0.18); }
+[data-theme="dark"] .vote-option.reject  .vote-option-icon { background: rgba(248, 113, 113, 0.18); }
+[data-theme="dark"] .vote-option.abstain .vote-option-icon { background: rgba(163, 163, 163, 0.16); }

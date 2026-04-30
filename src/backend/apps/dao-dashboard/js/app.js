@@ -215,6 +215,25 @@ class DAODashboard {
             refreshBtn.addEventListener('click', () => this.refresh());
         }
 
+        // Theme toggle — flips data-theme on <html> and persists the
+        // choice under the shared 'elacity-theme' key so the dApp
+        // Centre and Elacity Market apps inherit the same preference
+        // next time they boot. Initial paint is handled by the inline
+        // <script> in index.html <head>.
+        const themeToggle = document.getElementById('themeToggle');
+        if (themeToggle) {
+            themeToggle.addEventListener('click', () => {
+                const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+                const next = isDark ? 'light' : 'dark';
+                if (next === 'dark') {
+                    document.documentElement.setAttribute('data-theme', 'dark');
+                } else {
+                    document.documentElement.removeAttribute('data-theme');
+                }
+                try { localStorage.setItem('elacity-theme', next); } catch (e) { /* quota or blocked */ }
+            });
+        }
+
         // Pagination
         document.getElementById('prevPage')?.addEventListener('click', () => this.prevPage());
         document.getElementById('nextPage')?.addEventListener('click', () => this.nextPage());
