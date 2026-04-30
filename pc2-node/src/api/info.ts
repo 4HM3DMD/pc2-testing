@@ -190,7 +190,16 @@ export function handleGetLaunchApps(req: Request, res: Response): void {
       maximize_on_start: true
     }
   ];
-  
+
+  // Mark all hardcoded apps above as system apps so the dApp Centre can
+  // classify them authoritatively instead of inferring via the inverse of
+  // /api/installed-apps (which is fragile on auth hiccups — see
+  // .cursor/tasks/DAPP-CENTRE-BUILTIN-CLASSIFICATION).
+  // User-installed apps pushed below carry isSystem: false.
+  for (const a of apps) {
+    a.isSystem = true;
+  }
+
   // Merge installed apps from dApp Store
   const appInstallService = req.app?.locals?.appInstallService;
   if (appInstallService) {
@@ -229,6 +238,7 @@ export function handleGetLaunchApps(req: Request, res: Response): void {
           description: installed.description || '',
           index_url: `${baseUrl}/apps/${installed.app_name}/${manifest.entry || 'index.html'}`,
           installed: true,
+          isSystem: false,
           version: installed.version,
           author: installed.author || undefined,
         });

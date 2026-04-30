@@ -744,6 +744,14 @@
         .modal-btn.primary:hover {
             background: #2563eb;
         }
+        .modal-btn.danger {
+            background: white;
+            border: 1px solid #fecaca;
+            color: #ef4444;
+        }
+        .modal-btn.danger:hover {
+            background: #fef2f2;
+        }
         .modal-btn.disabled {
             background: #f1f5f9;
             border: 1px solid #e2e8f0;
@@ -1127,6 +1135,12 @@
         // ==================== STATE ====================
         let installedApps = [];     // from /api/installed-apps
         let builtInApps = [];       // from /get-launch-apps (system apps)
+        // Fallback install-signal from /get-launch-apps (each user-installed
+        // app is pushed with `installed: true`). Used when /api/installed-apps
+        // fails (401/network) but /get-launch-apps still reports the app, so
+        // classification degrades gracefully instead of flipping the app to
+        // "not installed". See DAPP-CENTRE-BUILTIN-CLASSIFICATION.
+        let launchInstalledNames = new Set();
         let allApps = [];           // merged view for rendering
         let currentCategory = 'all';
         let currentTab = 'discover';
@@ -1206,8 +1220,28 @@
                 console.log(`[dApp Centre] Loaded ${catalogApps.length} apps from registry`);
 
                 const installedNames = new Set(installedApps.map(a => a.name));
+
+                // Secondary install-signal: apps that /get-launch-apps reports
+                // as `installed: true`. Used when /api/installed-apps fails or
+                // races so the UI still knows these are installed.
+                launchInstalledNames = new Set(
+                    launchApps
+                        .filter(a => a.installed === true)
+                        .map(a => a.name)
+                );
+
+                // Primary classifier: the backend's explicit isSystem flag
+                // (added 2026-04-29 — see DAPP-CENTRE-BUILTIN-CLASSIFICATION
+                // task). Fall back to the old inverse-of-installed inference
+                // only if the backend response carries no isSystem flag at
+                // all (older PC2 node behind new frontend).
+                const hasSystemFlag = launchApps.some(a => a.isSystem !== undefined);
+                const isSystemApp = hasSystemFlag
+                    ? (a) => a.isSystem === true
+                    : (a) => !installedNames.has(a.name);
+
                 builtInApps = launchApps
-                    .filter(a => a.name !== 'app-center' && !installedNames.has(a.name))
+                    .filter(a => a.name !== 'app-center' && isSystemApp(a))
                     .map(a => ({
                         id: a.name,
                         name: a.title || a.name,
@@ -1231,9 +1265,14 @@
 
             allApps = [];
 
-            // 1. Add catalog apps with install status
+            // 1. Add catalog apps with install status.
+            // Install signal = primary (/api/installed-apps) OR built-in flag
+            // OR launchApps fallback (if primary failed). Built-in flag is
+            // authoritative — it comes from the backend's isSystem field.
             for (const cat of catalogApps) {
-                const isInstalled = installedNames.has(cat.id) || builtInNames.has(cat.id);
+                const isInstalled = installedNames.has(cat.id)
+                    || builtInNames.has(cat.id)
+                    || launchInstalledNames.has(cat.id);
                 const isBuiltIn = builtInNames.has(cat.id);
                 const isComingSoon = !isInstalled && (cat.registryStatus === 'coming_soon' || (!cat.cid && cat.registryStatus !== 'available'));
                 allApps.push({
@@ -1524,8 +1563,14 @@
             const content = document.getElementById('detailContent');
 
             let actionBtn;
+            let uninstallBtn = '';
             if (app.installed || app.isBuiltIn) {
                 actionBtn = `<button class="modal-btn primary" onclick="closeDetailModal(); openApp('${app.id}')">Open</button>`;
+                // User-installed apps may be removed from the modal too;
+                // built-in/system apps cannot.
+                if (app.installed && !app.isBuiltIn) {
+                    uninstallBtn = `<button class="modal-btn danger" onclick="closeDetailModal(); uninstallApp('${app.id}')">Uninstall</button>`;
+                }
             } else if (app.isComingSoon) {
                 actionBtn = `<button class="modal-btn disabled">Coming Soon</button>`;
             } else {
@@ -1588,6 +1633,7 @@
                     </div>
                     <div class="modal-footer-actions">
                         <button class="modal-btn secondary" onclick="closeDetailModal()">Close</button>
+                        ${uninstallBtn}
                         ${actionBtn}
                     </div>
                 </div>
