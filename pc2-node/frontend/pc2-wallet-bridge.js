@@ -344,12 +344,32 @@
       return;
     }
 
+    // Chains whose RPC nodes only understand legacy (type-0) transactions.
+    // ESC (20) runs an older Geth fork without EIP-1559 support: a type-2
+    // envelope causes the node to RLP-fail decode with "expected input list
+    // for types.txdata" (-32603). MetaMask can silently up-convert a
+    // pre-filled gasPrice into maxFeePerGas/maxPriorityFeePerGas based on
+    // its cached per-chain "supports EIP-1559?" flag (populated from the
+    // last sampled block). That flag varies by user, which is why ESC swaps
+    // (Glide) and ESC NFT mints (Elastos NFT) work for some users and fail
+    // with the RLP error for others on the exact same code path.
+    // Forcing type:'0x0' and stripping any 1559 fields makes the tx shape
+    // unambiguous before MetaMask sees it.
+    var LEGACY_ONLY_CHAINS = [20];
+
     function prefillGasForTx(params) {
       if (!params || !params[0]) return Promise.resolve(params);
       var tx = Object.assign({}, params[0]);
       var tasks = [];
 
       var txChain = tx.chainId ? parseInt(tx.chainId, 16) : walletChainId;
+
+      if (LEGACY_ONLY_CHAINS.indexOf(txChain) >= 0) {
+        tx.type = '0x0';
+        delete tx.maxFeePerGas;
+        delete tx.maxPriorityFeePerGas;
+        delete tx.accessList;
+      }
 
       if (!tx.from) {
         var userAddr = (window.user && window.user.wallet_address) || '';
@@ -373,7 +393,7 @@
           directRpc('eth_gasPrice', [], txChain)
             .then(function (price) {
               tx.gasPrice = price;
-              console.log('[PC2 Bridge] Pre-filled gasPrice:', price);
+              console.log('[PC2 Bridge] Pre-filled gasPrice:', price, '(chain:', txChain, ', legacy:', LEGACY_ONLY_CHAINS.indexOf(txChain) >= 0, ')');
             })
             .catch(function () {})
         );

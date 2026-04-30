@@ -578,7 +578,7 @@ async function main() {
     
     <div id="app"></div>
     <script src="/bundle.min.js"></script>
-    <script src="/pc2-wallet-bridge.js?v=20260421a"></script>
+    <script src="/pc2-wallet-bridge.js?v=20260430a"></script>
     <!-- Secure-view session manager (Option C session-key delegation).
          Owns the ephemeral P-256 key + 24h delegation. Iframes call
          window.ethereum.request({ method: 'pc2_secureView_sign' }) to
