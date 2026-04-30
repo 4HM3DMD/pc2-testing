@@ -1,0 +1,46 @@
+# What NOT to send into the Docker build context.
+# Keeps `docker build` fast and prevents host-only state from leaking into the
+# image (think: a developer's local volatile/runtime database).
+
+# VCS
+.git
+**/.git
+.gitignore
+
+# Node — these get freshly installed inside the image.
+node_modules
+**/node_modules
+package-lock.json
+**/package-lock.json
+npm-debug.log
+**/npm-debug.log
+
+# PC2 runtime state — must NOT be baked into the image. The operator's data
+# lives in the bind-mounted /data volume.
+volatile
+
+# Local environment overrides
+.env
+.env.local
+.env.*.local
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db
+.vscode
+.idea
+
+# Build output / coverage / caches that some sub-projects produce
+**/coverage
+**/.cache
+**/dist
+**/build
+
+# Docker meta — no point copying these into the image being built.
+Dockerfile
+.dockerignore
+docker-compose.yml
+**/docker-compose.yml
+
+# Tarballs from previous builds
+*.tar.gz

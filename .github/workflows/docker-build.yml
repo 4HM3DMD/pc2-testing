@@ -1,0 +1,96 @@
+#
+# Build the PC2 + ENM image and push it to GitHub Container Registry.
+#
+# Triggered on every push to main that touches code that affects the image.
+# The workflow ALSO accepts manual `workflow_dispatch` so you can rebuild
+# without a code change.
+#
+# Multi-arch: we build for linux/amd64 and linux/arm64 (Hetzner ARM, Oracle
+# Free Tier, Raspberry Pi 4/5). QEMU emulates arm64 on the amd64 runner.
+#
+# Auth: GH Actions' default GITHUB_TOKEN is sufficient to push to
+# ghcr.io/<owner>/<repo> for public images on the same repo. No PAT needed.
+#
+
+name: Build & publish PC2 + ENM image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'Dockerfile.enm'
+      - 'Dockerfile.enm.dockerignore'
+      - 'docker/**'
+      - 'extensions/elastos-node-manager/**'
+      - 'package.json'
+      - '.npmrc'
+      - '.github/workflows/docker-build.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: docker-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU (for arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Computes tags + labels from git ref + commit. We get:
+      #   - `latest` on the default branch
+      #   - `main` (branch tag) on every main push
+      #   - `sha-<short>` on every commit for pinning
+      - name: Compute tags + labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/pc2-enm
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=branch
+            type=sha,format=short
+          labels: |
+            org.opencontainers.image.title=PC2 + Elastos Node Manager
+            org.opencontainers.image.description=PC2 (Elacity Puter fork) preloaded with the Elastos Node Manager extension and a working PC2-mode config.
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.licenses=AGPL-3.0
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          # Parallel to the upstream PC2 Dockerfile (which we leave alone so
+          # upstream merges don't conflict). BuildKit auto-picks up
+          # Dockerfile.enm.dockerignore.
+          file: ./Dockerfile.enm
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # GitHub-hosted cache so the second build is fast.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Image digest
+        run: echo "Pushed digest ${{ steps.meta.outputs.digest }}"

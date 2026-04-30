@@ -1,0 +1,90 @@
+# syntax=docker/dockerfile:1.4
+#
+# PC2 + Elastos Node Manager — self-contained image.
+#
+# This file is parallel to the upstream PC2 Dockerfile (Alpine-based, Node 23,
+# multi-stage, vanilla Puter mode). We leave that one alone so future merges
+# from Elacity/pc2.net don't conflict. This Dockerfile builds an image that
+# includes our ENM extension and a default config that flips PC2 mode ON.
+#
+# BuildKit picks up `Dockerfile.enm.dockerignore` automatically — the
+# parallel-ignore convention is documented at
+# https://docs.docker.com/build/concepts/context/#dockerignore-files
+#
+# Built and published by .github/workflows/docker-build.yml on every push to
+# main. Operators install in one line via scripts/install-enm.sh, which writes
+# a docker-compose.yml that pulls this image.
+#
+# What's in the image:
+#   - PC2 (full Elacity / Heyputer fork) at /app
+#   - ENM extension wired in at /app/extensions/elastos-node-manager
+#   - All PC2 + ENM Node deps installed
+#   - Toolchain (git, make, tar, gcc, build-essential) for ENM's auto-builder
+#     to compile ela inside the container at first-run
+#   - iproute2 + procps + lsof for HostConflictScanner (ss, pgrep, lsof)
+#
+# What's NOT in the image:
+#   - Go toolchain. The ENM auto-builder downloads the official portable
+#     release into /data/cache/go-* on first build (no system-wide Go).
+#   - The `ela` binary itself. Built by the operator via the wizard, lands
+#     in /data/cache/auto-build/Elastos.ELA/ela.
+#   - Any operator data. Everything persistent lives under /data, so all
+#     state survives container restarts via a bind mount.
+#
+# Image size: ~1.6 GB on amd64 (PC2's monorepo deps dominate). Reasonable for
+# a self-contained "personal cloud + chain validator" stack.
+
+FROM node:20-bookworm-slim
+
+# System deps. Splitting into a single apt block keeps the layer count low.
+#   git/make/tar/gzip — ENM auto-builder clones Elastos.ELA + runs make all
+#   wget/curl/ca-certificates — auto-builder downloads Go portable
+#   python3/build-essential/pkg-config — native node modules (better-sqlite3,
+#                                          bcrypt, canvas) compile from source
+#   iproute2 — provides `ss` for HostConflictScanner port checks
+#   procps — provides `pgrep` for rogue-ela detection
+#   lsof — fallback when ss isn't available
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git make tar gzip wget curl ca-certificates \
+        python3 build-essential pkg-config \
+        iproute2 procps lsof \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy the entire source tree once. .dockerignore keeps node_modules, .git,
+# volatile/, etc. out of the build context so the COPY is fast.
+COPY . .
+
+# PC2 monorepo install. .npmrc at the root sets legacy-peer-deps=true, which
+# is required because PC2's workspaces pin different jsdom majors that want
+# different canvas peers. Documented in extensions/elastos-node-manager/
+# README.md "About npm install".
+RUN npm install --no-audit --no-fund
+
+# ENM's own deps live in a separate package.json (not part of the workspace),
+# so we install them explicitly.
+RUN cd extensions/elastos-node-manager \
+    && npm install --no-audit --no-fund \
+    && cd /app
+
+# Persistent data: config, runtime state, chain data, audit DB. Bind-mount
+# this at run-time: `-v $HOME/pc2-enm-data:/data`.
+VOLUME ["/data"]
+
+# Network surface:
+#   4100  = PC2 HTTP (the dashboard)
+#   4200  = PC2 WebSocket (live updates)
+#   20336 = ela JSON-RPC (HTTP Basic auth; expose to 127.0.0.1 only by default)
+#   20338 = ela P2P (NodePort) — must be reachable from peers
+#   20339 = ela DPoS p2p — required for BPoS supernode mode
+#   20333 = ela HttpInfo (read-only, optional)
+#   20334 = ela HttpRest (read-only, optional)
+#   20335 = ela HttpWs (read-only, optional)
+EXPOSE 4100 4200 20336 20338 20339 20333 20334 20335
+
+COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD ["npm", "start"]
