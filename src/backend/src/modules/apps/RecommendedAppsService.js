@@ -30,6 +30,7 @@ class RecommendedAppsService extends BaseService {
     static APP_NAMES = [
         'editor',
         'terminal',
+        'elastos-node-manager',
         /* 'app-center',
         'dev-center',
         'code',
