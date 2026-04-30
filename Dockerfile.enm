@@ -82,11 +82,22 @@ ENV VITE_PARTICLE_CLIENT_KEY=${VITE_PARTICLE_CLIENT_KEY}
 ENV VITE_PARTICLE_APP_ID=${VITE_PARTICLE_APP_ID}
 ENV VITE_WALLETCONNECT_PROJECT_ID=${VITE_WALLETCONNECT_PROJECT_ID}
 
-# Build PC2: lint + tsc + GUI bundle. This is the same step upstream's
-# Dockerfile runs and we previously skipped — tsc emits MeteringService.js
-# (and others) from .ts source. Without it, PC2 crashes on boot with
-# ERR_MODULE_NOT_FOUND, and the dashboard 404s because src/gui/dist is empty.
-RUN npm run build
+# Build PC2 — runtime artefacts only. We deliberately bypass `npm run build`
+# (the umbrella script upstream's Dockerfile uses) because it includes an
+# eslint pass over `extensions/`. PC2's mandatory eslint config assumes Node
+# env, so our ENM extension's browser JS under public/js/ trips 189 no-undef
+# errors against `document`/`window`/`EventSource`. Upstream's image doesn't
+# hit this because it doesn't bundle any extension with frontend code.
+#
+# Running the steps directly:
+#   build:particle-auth — Particle wallet OAuth bundle (used by GUI)
+#   build:ts            — emits MeteringService.js etc. from .ts source
+#   src/gui/build.js    — produces dist/bundle.min.js for the dashboard
+#
+# Skipping eslint here is fine — lint is a dev concern, not a runtime one.
+RUN npm run build:particle-auth \
+ && npm run build:ts \
+ && cd src/gui && node ./build.js
 
 # Persistent data: config, runtime state, chain data, audit DB. Bind-mount
 # this at run-time: `-v $HOME/pc2-enm-data:/data`.
