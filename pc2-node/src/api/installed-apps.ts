@@ -12,8 +12,10 @@
  */
 
 import { Router, Response } from 'express';
+import { Server as SocketIOServer } from 'socket.io';
 import { AuthenticatedRequest, requireOwner } from './middleware.js';
-import { AppInstallService, AppManifest } from '../services/AppInstallService.js';
+import { AppInstallService, AppManifest, InstallStage, InstallProgressMeta } from '../services/AppInstallService.js';
+import { broadcastToUser } from '../websocket/events.js';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('api-installed-apps');
@@ -24,10 +26,26 @@ export function createInstalledAppsRouter(appInstallService: AppInstallService):
   /**
    * GET /api/installed-apps
    * List all installed apps.
+   *
+   * Hidden apps (manifest.hidden === true, e.g. pc2-media-runtime which
+   * acts as a backstage WASM helper for elacity-player) are filtered out
+   * so the dApp Centre and other consumers don't surface them as
+   * standalone tiles. /get-launch-apps applies the same filter — see
+   * pc2-node/src/api/info.ts handleGetLaunchApps. Without this guard the
+   * dApp Centre shows two "Elacity Player" cards.
    */
-  router.get('/', (_req: AuthenticatedRequest, res: Response) => {
+  router.get('/', (req: AuthenticatedRequest, res: Response) => {
     try {
-      const apps = appInstallService.list();
+      const includeHidden = String(req.query.include_hidden || '') === '1';
+      const all = appInstallService.list();
+      const apps = includeHidden ? all : all.filter((a) => {
+        try {
+          const manifest = JSON.parse(a.manifest_json || '{}');
+          return !manifest.hidden;
+        } catch {
+          return true;
+        }
+      });
       res.json({ apps });
     } catch (error: any) {
       log.error('[list] Error:', error.message);
@@ -72,8 +90,34 @@ export function createInstalledAppsRouter(appInstallService: AppInstallService):
         return;
       }
 
-      const app = await appInstallService.install(manifest, cid);
-      log.info(`[install] App "${app.app_name}" installed by ${req.user?.wallet_address?.substring(0, 10)}`);
+      // Bridge install-pipeline progress events onto the authenticated
+      // user's Socket.io room so the dApp Centre can draw a meaningful
+      // progress bar. We intentionally only emit to the caller (room
+      // `user:<wallet>`) — other tethered sessions don't care. See
+      // DAPP-UX-POLISH-V12 #6.
+      const io = (req.app.locals.io as SocketIOServer | undefined);
+      const wallet = req.user?.wallet_address;
+      const emitProgress = (stage: InstallStage, pct: number, meta?: InstallProgressMeta) => {
+        if (!io || !wallet) return;
+        broadcastToUser(io, wallet, 'install:progress', {
+          appName: manifest.name,
+          stage,
+          pct,
+          meta,
+        });
+      };
+
+      const app = await appInstallService.install(manifest, cid, emitProgress);
+      log.info(`[install] App "${app.app_name}" installed by ${wallet?.substring(0, 10)}`);
+
+      // Notify room that the installed-apps set changed so clients
+      // (Start menu, dApp Centre) can refresh without a page reload.
+      if (io && wallet) {
+        broadcastToUser(io, wallet, 'apps:changed', {
+          action: 'installed',
+          appName: app.app_name,
+        });
+      }
       res.status(201).json({ app });
     } catch (error: any) {
       log.error('[install] Error:', error.message);
@@ -153,6 +197,17 @@ export function createInstalledAppsRouter(appInstallService: AppInstallService):
         return;
       }
       log.info(`[uninstall] App "${req.params.name}" removed by ${req.user?.wallet_address?.substring(0, 10)}`);
+
+      // Notify room so Start menu drops its cached entry.
+      // See DAPP-UX-POLISH-V12 #4.
+      const io = (req.app.locals.io as SocketIOServer | undefined);
+      const wallet = req.user?.wallet_address;
+      if (io && wallet) {
+        broadcastToUser(io, wallet, 'apps:changed', {
+          action: 'uninstalled',
+          appName: req.params.name,
+        });
+      }
       res.json({ success: true });
     } catch (error: any) {
       log.error('[uninstall] Error:', error.message);

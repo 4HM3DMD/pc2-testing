@@ -10,9 +10,59 @@
             padding: 0;
             box-sizing: border-box;
         }
+
+        /* ── Theme tokens ────────────────────────────────────
+           Mirrors the Elacity Market palette so the two surfaces
+           feel like one product. Theme is persisted under the
+           shared 'elacity-theme' localStorage key, so toggling
+           in either app updates both on next reload.
+           See DAPP-UX-POLISH-V12 follow-up. */
+        :root {
+            --bg-page:       #f8fafc;
+            --bg-surface:    #ffffff;
+            --bg-elev:       #f1f5f9;
+            --bg-input:      #f8fafc;
+            --bg-hover:      #f1f5f9;
+            --border:        #e6ebf2;
+            --border-strong: #cbd5e1;
+            --text-primary:  #1e293b;
+            --text-secondary:#64748b;
+            --text-muted:    #94a3b8;
+            --accent:        #3b82f6;
+            --accent-hover:  #2563eb;
+            --accent-soft:   rgba(59,130,246,0.08);
+            --success:       #22c55e;
+            --warning:       #d97706;
+            --danger:        #ef4444;
+            --shadow-card:   0 1px 3px rgba(15,23,42,0.04);
+            --shadow-hover:  0 6px 18px rgba(15,23,42,0.10);
+        }
+
+        [data-theme="dark"] {
+            --bg-page:       #121212;
+            --bg-surface:    #1a1a1a;
+            --bg-elev:       #1e1e1e;
+            --bg-input:      #262626;
+            --bg-hover:      #262626;
+            --border:        #2e2e2e;
+            --border-strong: #3a3a3a;
+            --text-primary:  #e5e5e5;
+            --text-secondary:#a3a3a3;
+            --text-muted:    #737373;
+            --accent:        #3b82f6;
+            --accent-hover:  #60a5fa;
+            --accent-soft:   rgba(59,130,246,0.16);
+            --success:       #34d399;
+            --warning:       #fbbf24;
+            --danger:        #f87171;
+            --shadow-card:   0 1px 3px rgba(0,0,0,0.3);
+            --shadow-hover:  0 6px 18px rgba(0,0,0,0.5);
+        }
+
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            background: #f8fafc;
+            background: var(--bg-page);
+            color: var(--text-primary);
             height: 100vh;
             overflow: hidden;
         }
@@ -20,7 +70,7 @@
             display: flex;
             flex-direction: column;
             height: 100vh;
-            background: #f8fafc;
+            background: var(--bg-page);
         }
         
         /* Header with tabs */
@@ -233,10 +283,11 @@
             scrollbar-width: none;
         }
         .staff-pick-card {
-            min-width: 320px;
-            height: 200px;
-            border-radius: 16px;
-            padding: 20px;
+            min-width: 360px;
+            max-width: 360px;
+            height: 220px;
+            border-radius: 18px;
+            padding: 24px;
             display: flex;
             flex-direction: column;
             justify-content: flex-end;
@@ -244,38 +295,80 @@
             position: relative;
             overflow: hidden;
             flex-shrink: 0;
-            transition: transform 0.2s;
+            transition: transform 0.25s ease, box-shadow 0.25s ease;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 4px 12px rgba(15,23,42,0.06);
         }
         .staff-pick-card:hover {
-            transform: translateY(-2px);
+            transform: translateY(-3px);
+            box-shadow: 0 8px 24px rgba(15,23,42,0.18);
+        }
+        /* Banner image layer (when registry app declares one). Sits below
+           the gradient veil so the artwork shows through but text stays
+           legible. */
+        .staff-pick-banner {
+            position: absolute;
+            inset: 0;
+            background-size: cover;
+            background-position: center;
+            z-index: 0;
+            opacity: 0.85;
         }
         .staff-pick-card::before {
             content: '';
             position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: linear-gradient(to top, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0) 60%);
+            inset: 0;
+            background: linear-gradient(to top, rgba(0,0,0,0.78) 0%, rgba(0,0,0,0.18) 55%, rgba(0,0,0,0.05) 100%);
             z-index: 1;
         }
         .staff-pick-icon {
             position: absolute;
-            top: 16px;
-            left: 16px;
-            width: 56px;
-            height: 56px;
+            top: 18px;
+            left: 18px;
+            width: 64px;
+            height: 64px;
             background: white;
-            border-radius: 12px;
+            border-radius: 16px;
             display: flex;
             align-items: center;
             justify-content: center;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.18);
             z-index: 2;
+            overflow: hidden;
         }
         .staff-pick-icon svg {
-            width: 32px;
-            height: 32px;
+            width: 36px;
+            height: 36px;
+        }
+        /* Mirror of .app-icon.has-img — when the staff-pick card holds a
+           real bundle logo, the white tile becomes a clean rounded mask
+           so the logo design reads edge-to-edge. SVG glyph picks keep
+           the white tile + 36 px glyph treatment. */
+        .staff-pick-icon.has-img {
+            background: transparent;
+        }
+        .staff-pick-icon img {
+            width: 100%;
+            height: 100%;
+            display: block;
+            object-fit: cover;
+            border-radius: inherit;
+        }
+        .staff-pick-tag {
+            position: absolute;
+            top: 22px;
+            right: 18px;
+            z-index: 2;
+            font-size: 10px;
+            font-weight: 600;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            color: rgba(255,255,255,0.9);
+            background: rgba(255,255,255,0.18);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            padding: 4px 10px;
+            border-radius: 999px;
+            border: 1px solid rgba(255,255,255,0.25);
         }
         .staff-pick-content {
             position: relative;
@@ -283,14 +376,20 @@
             color: white;
         }
         .staff-pick-name {
-            font-size: 18px;
-            font-weight: 600;
-            margin-bottom: 4px;
+            font-size: 20px;
+            font-weight: 700;
+            margin-bottom: 6px;
+            text-shadow: 0 1px 4px rgba(0,0,0,0.25);
         }
         .staff-pick-desc {
             font-size: 13px;
-            opacity: 0.9;
-            line-height: 1.4;
+            opacity: 0.92;
+            line-height: 1.45;
+            text-shadow: 0 1px 3px rgba(0,0,0,0.25);
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
         }
         .section-header {
             display: flex;
@@ -339,11 +438,11 @@
         /* App card */
         .app-card {
             background: white;
-            border: 1px solid #e2e8f0;
-            border-radius: 12px;
-            padding: 16px;
+            border: 1px solid #e6ebf2;
+            border-radius: 14px;
+            padding: 18px;
             cursor: pointer;
-            transition: all 0.2s;
+            transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
             flex-shrink: 0;
         }
         .apps-scroll .app-card {
@@ -355,33 +454,49 @@
             max-width: none;
         }
         .app-card:hover {
-            box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+            box-shadow: 0 6px 18px rgba(15,23,42,0.10);
             transform: translateY(-2px);
+            border-color: #d6dde7;
         }
         .app-card-header {
             display: flex;
-            gap: 12px;
-            margin-bottom: 12px;
+            gap: 14px;
+            margin-bottom: 14px;
+            align-items: flex-start;
         }
         .app-icon {
-            width: 56px;
-            height: 56px;
-            border-radius: 12px;
+            width: 60px;
+            height: 60px;
+            border-radius: 14px;
             display: flex;
             align-items: center;
             justify-content: center;
             flex-shrink: 0;
+            box-shadow: 0 1px 3px rgba(15,23,42,0.08);
+            overflow: hidden;
         }
         .app-icon svg {
             width: 32px;
             height: 32px;
             fill: white;
         }
+        /* Real bundle logos are "complete" icon designs — they ship with
+           their own background, padding and corner radius baked in. We
+           treat the .app-icon box as a clean rounded mask + drop shadow
+           and let the logo fill it edge-to-edge. Wrapping it in another
+           contrasting tile (the previous behaviour) created an awkward
+           double-frame, especially for dark logos sitting on the white
+           container background. See DAPP-UX-POLISH-V12 follow-up #1. */
+        .app-icon.has-img {
+            background: transparent !important;
+            box-shadow: 0 2px 6px rgba(15,23,42,0.12);
+        }
         .app-icon img {
             width: 100%;
             height: 100%;
-            border-radius: 12px;
+            display: block;
             object-fit: cover;
+            border-radius: inherit;
         }
         .app-icon.gradient-blue { background: linear-gradient(135deg, #3b82f6, #1d4ed8); }
         .app-icon.gradient-purple { background: linear-gradient(135deg, #8b5cf6, #6d28d9); }
@@ -426,15 +541,22 @@
         }
         .badge {
             font-size: 10px;
-            padding: 2px 6px;
-            border-radius: 4px;
-            font-weight: 500;
+            padding: 3px 8px;
+            border-radius: 999px;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+            text-transform: uppercase;
+            display: inline-flex;
+            align-items: center;
+            line-height: 1;
         }
-        .badge.wasm { background: #dbeafe; color: #1d4ed8; }
-        .badge.ddrm { background: #fae8ff; color: #a21caf; }
+        .badge.wasm       { background: #dbeafe; color: #1d4ed8; }
+        .badge.ddrm       { background: #fae8ff; color: #a21caf; }
         .badge.opensource { background: #dcfce7; color: #16a34a; }
-        .badge.builtin { background: #f1f5f9; color: #64748b; }
-        .badge.coming-soon { background: #fef3c7; color: #d97706; }
+        .badge.builtin    { background: #f1f5f9; color: #64748b; }
+        .badge.coming-soon{ background: #fef3c7; color: #d97706; }
+        .badge.nft        { background: #fff7ed; color: #c2410c; }
+        .badge.creator    { background: #eef2ff; color: #4338ca; }
         .app-description {
             font-size: 13px;
             color: #64748b;
@@ -471,35 +593,45 @@
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            padding: 6px 16px;
-            border-radius: 6px;
+            padding: 7px 18px;
+            border-radius: 8px;
             font-size: 13px;
             line-height: 1;
-            font-weight: 500;
+            font-weight: 600;
             font-family: inherit;
             cursor: pointer;
-            transition: background 0.15s;
+            transition: background 0.15s, transform 0.1s, box-shadow 0.15s;
             border: none;
             background: #3b82f6;
             color: white;
+            box-shadow: 0 1px 2px rgba(59,130,246,0.25);
         }
         .install-btn:hover {
             background: #2563eb;
+            box-shadow: 0 2px 6px rgba(37,99,235,0.35);
+        }
+        .install-btn:active {
+            transform: translateY(1px);
+            box-shadow: 0 1px 2px rgba(37,99,235,0.25);
         }
         .install-btn.installed {
-            background: #e2e8f0;
-            color: #64748b;
+            background: #f1f5f9;
+            color: #475569;
+            box-shadow: none;
         }
         .install-btn.installed:hover {
-            background: #cbd5e1;
+            background: #e2e8f0;
+            box-shadow: none;
         }
         .install-btn.coming-soon {
-            background: #f1f5f9;
+            background: #f8fafc;
             color: #94a3b8;
             cursor: default;
+            box-shadow: none;
         }
         .install-btn.coming-soon:hover {
-            background: #f1f5f9;
+            background: #f8fafc;
+            box-shadow: none;
         }
         
         /* Modal overlay */
@@ -945,6 +1077,182 @@
         .toast.error {
             background: #dc2626;
         }
+
+        /* ── Theme toggle button ─────────────────────────── */
+        .theme-toggle {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 36px;
+            height: 36px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--bg-surface);
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: background 0.15s, color 0.15s, border-color 0.15s;
+            margin-right: 12px;
+            font-family: inherit;
+            padding: 0;
+        }
+        .theme-toggle:hover {
+            background: var(--bg-hover);
+            color: var(--text-primary);
+            border-color: var(--border-strong);
+        }
+        .theme-toggle svg {
+            width: 18px;
+            height: 18px;
+        }
+        .theme-toggle .icon-moon { display: block; }
+        .theme-toggle .icon-sun  { display: none; }
+        [data-theme="dark"] .theme-toggle .icon-moon { display: none; }
+        [data-theme="dark"] .theme-toggle .icon-sun  { display: block; }
+
+        /* ── Dark mode overrides ─────────────────────────────
+           Surgical re-paint of every surface that the page
+           hardcodes a light colour on. Kept below all the
+           light-mode rules so the cascade order is predictable.
+           Mirrors the Elacity Market dark palette tokens. */
+        [data-theme="dark"] .header,
+        [data-theme="dark"] .sidebar {
+            background: var(--bg-surface);
+            border-color: var(--border);
+        }
+        [data-theme="dark"] .header { border-bottom-color: var(--border); }
+        [data-theme="dark"] .sidebar { border-right-color: var(--border); }
+        [data-theme="dark"] .header-title { color: var(--text-primary); }
+        [data-theme="dark"] .sidebar-title { color: var(--text-muted); }
+        [data-theme="dark"] .category-item { color: var(--text-secondary); }
+        [data-theme="dark"] .category-item:hover { background: var(--bg-hover); color: var(--text-primary); }
+        [data-theme="dark"] .category-item.active { background: var(--accent-soft); color: var(--accent); }
+        [data-theme="dark"] .search-input {
+            background: var(--bg-input);
+            border-color: var(--border);
+            color: var(--text-primary);
+        }
+        [data-theme="dark"] .search-input::placeholder { color: var(--text-muted); }
+        [data-theme="dark"] .search-input:focus {
+            background: var(--bg-elev);
+            border-color: var(--accent);
+        }
+        [data-theme="dark"] .tab { color: var(--text-secondary); }
+        [data-theme="dark"] .tab:hover { color: var(--accent-hover); }
+        [data-theme="dark"] .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+        [data-theme="dark"] .section h2,
+        [data-theme="dark"] .section h3 { color: var(--text-primary); }
+        [data-theme="dark"] .section-title,
+        [data-theme="dark"] .modal-section-title { color: var(--text-secondary); }
+        [data-theme="dark"] .view-all-link { color: var(--accent); }
+
+        [data-theme="dark"] .app-card {
+            background: var(--bg-elev);
+            border-color: var(--border);
+            box-shadow: var(--shadow-card);
+        }
+        [data-theme="dark"] .app-card:hover {
+            border-color: var(--border-strong);
+            box-shadow: var(--shadow-hover);
+        }
+        [data-theme="dark"] .app-name,
+        [data-theme="dark"] .app-price,
+        [data-theme="dark"] .modal-title,
+        [data-theme="dark"] .install-modal-title,
+        [data-theme="dark"] .installed-name { color: var(--text-primary); }
+        [data-theme="dark"] .app-developer,
+        [data-theme="dark"] .app-version,
+        [data-theme="dark"] .app-size,
+        [data-theme="dark"] .modal-developer,
+        [data-theme="dark"] .modal-version,
+        [data-theme="dark"] .install-modal-status,
+        [data-theme="dark"] .installed-meta { color: var(--text-muted); }
+        [data-theme="dark"] .app-description,
+        [data-theme="dark"] .modal-description { color: var(--text-secondary); }
+        [data-theme="dark"] .app-price.free { color: var(--success); }
+
+        /* Icon containers — keep gradient versions intact, but for
+           the white-tile mode used by `getAppIconHtml` (no class) and
+           `staff-pick-icon` (white tile + dark logo), swap to a subtle
+           dark surface so logos don't feel marooned on white. */
+        [data-theme="dark"] .app-icon:not([class*="gradient-"]):not(.has-img) {
+            background: var(--bg-input);
+        }
+        [data-theme="dark"] .staff-pick-icon { background: #f5f5f5; }
+        [data-theme="dark"] .staff-pick-icon.has-img { background: transparent; }
+
+        /* Badges — re-tone for dark backgrounds */
+        [data-theme="dark"] .badge.wasm       { background: rgba(59,130,246,0.18);  color: #93c5fd; }
+        [data-theme="dark"] .badge.ddrm       { background: rgba(217,70,239,0.18);  color: #f0abfc; }
+        [data-theme="dark"] .badge.opensource { background: rgba(34,197,94,0.18);   color: #86efac; }
+        [data-theme="dark"] .badge.builtin    { background: rgba(148,163,184,0.18); color: #cbd5e1; }
+        [data-theme="dark"] .badge.coming-soon{ background: rgba(245,158,11,0.18);  color: #fcd34d; }
+        [data-theme="dark"] .badge.nft        { background: rgba(249,115,22,0.18);  color: #fdba74; }
+        [data-theme="dark"] .badge.creator    { background: rgba(99,102,241,0.18);  color: #a5b4fc; }
+
+        /* Buttons */
+        [data-theme="dark"] .install-btn.installed {
+            background: var(--bg-input);
+            color: var(--text-secondary);
+        }
+        [data-theme="dark"] .install-btn.installed:hover {
+            background: var(--bg-hover);
+        }
+        [data-theme="dark"] .install-btn.coming-soon {
+            background: var(--bg-input);
+            color: var(--text-muted);
+        }
+        [data-theme="dark"] .action-btn.uninstall {
+            background: rgba(239,68,68,0.12);
+            color: #fca5a5;
+        }
+        [data-theme="dark"] .action-btn.uninstall:hover {
+            background: rgba(239,68,68,0.2);
+        }
+
+        /* Modal surfaces */
+        [data-theme="dark"] .modal-overlay { background: rgba(0,0,0,0.65); }
+        [data-theme="dark"] .install-modal,
+        [data-theme="dark"] .app-detail-modal {
+            background: var(--bg-elev);
+            color: var(--text-primary);
+            box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+        }
+        [data-theme="dark"] .modal-header,
+        [data-theme="dark"] .modal-section,
+        [data-theme="dark"] .modal-footer { border-color: var(--border); }
+        [data-theme="dark"] .modal-close { color: var(--text-muted); }
+        [data-theme="dark"] .modal-close:hover { background: var(--bg-hover); color: var(--text-primary); }
+        [data-theme="dark"] .modal-btn.secondary {
+            background: var(--bg-input);
+            color: var(--text-primary);
+            border-color: var(--border);
+        }
+        [data-theme="dark"] .modal-btn.secondary:hover { background: var(--bg-hover); }
+        [data-theme="dark"] .modal-btn.danger {
+            background: rgba(239,68,68,0.18);
+            color: #fca5a5;
+        }
+        [data-theme="dark"] .modal-btn.danger:hover {
+            background: rgba(239,68,68,0.28);
+        }
+        [data-theme="dark"] .progress-bar { background: var(--bg-input); }
+
+        /* Installed list panel */
+        [data-theme="dark"] .installed-item {
+            background: var(--bg-elev);
+            border-color: var(--border);
+        }
+
+        /* Empty / loading */
+        [data-theme="dark"] .empty-state,
+        [data-theme="dark"] .loading-state { color: var(--text-muted); }
+
+        /* Custom scrollbars for dark */
+        [data-theme="dark"] ::-webkit-scrollbar { width: 10px; height: 10px; }
+        [data-theme="dark"] ::-webkit-scrollbar-track { background: var(--bg-page); }
+        [data-theme="dark"] ::-webkit-scrollbar-thumb { background: #404040; border-radius: 5px; }
+        [data-theme="dark"] ::-webkit-scrollbar-thumb:hover { background: #525252; }
     </style>
 </head>
 <body>
@@ -953,14 +1261,25 @@
         <div class="header">
             <div class="header-top">
                 <h1 class="header-title">dApp Centre</h1>
-                <div class="search-container">
-                    <div class="search-icon-wrapper">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <circle cx="11" cy="11" r="8"></circle>
-                            <path d="m21 21-4.35-4.35"></path>
+                <div style="display:flex;align-items:center;">
+                    <button id="themeToggle" class="theme-toggle" aria-label="Toggle theme" title="Toggle dark mode">
+                        <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
                         </svg>
+                        <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="4"></circle>
+                            <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"></path>
+                        </svg>
+                    </button>
+                    <div class="search-container">
+                        <div class="search-icon-wrapper">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="11" cy="11" r="8"></circle>
+                                <path d="m21 21-4.35-4.35"></path>
+                            </svg>
+                        </div>
+                        <input type="text" class="search-input" placeholder="Search apps..." id="searchInput">
                     </div>
-                    <input type="text" class="search-input" placeholder="Search apps..." id="searchInput">
                 </div>
             </div>
             <div class="tabs">
@@ -1141,6 +1460,15 @@
         // classification degrades gracefully instead of flipping the app to
         // "not installed". See DAPP-CENTRE-BUILTIN-CLASSIFICATION.
         let launchInstalledNames = new Set();
+        // Real bundle icon URLs resolved by the backend for installed apps.
+        // The dApp Centre previously rendered installed registry apps with
+        // the registry's category SVG (e.g. `swap` for Glide, `image` for
+        // Elastos NFT). That was obviously wrong — the app bundle ships a
+        // proper branded logo, and /get-launch-apps already returns the
+        // correct icon URL (data: URL or /installed-apps/<name>/…). We mirror
+        // that map so the catalog merge can swap to the real logo when an
+        // app is installed. See DAPP-UX-POLISH-V12.
+        let launchAppIcons = {};
         let allApps = [];           // merged view for rendering
         let currentCategory = 'all';
         let currentTab = 'discover';
@@ -1161,6 +1489,41 @@
             'ai-chat':          { category: 'tools',  gradient: 'gradient-indigo',  iconKey: 'brain',      desc: 'Chat with AI assistants (OpenAI, Anthropic, Ollama).' },
             'dao-dashboard':    { category: 'blockchain', gradient: 'gradient-purple', iconKey: 'governance', desc: 'Monitor Elastos DAO proposals and voting activity.' },
         };
+
+        // ==================== THEME ====================
+        // Shared with the Elacity Market app and any other surface that
+        // wants to honour the same toggle. Toggling here updates the key
+        // so the next time another iframe app boots it picks up the new
+        // theme. See DAPP-UX-POLISH-V12 follow-up.
+        const THEME_KEY = 'elacity-theme';
+
+        function applyTheme(theme) {
+            if (theme === 'dark') {
+                document.documentElement.setAttribute('data-theme', 'dark');
+            } else {
+                document.documentElement.removeAttribute('data-theme');
+            }
+        }
+
+        function initTheme() {
+            const saved = localStorage.getItem(THEME_KEY);
+            // Default to system preference when nothing is stored.
+            if (saved === 'dark' || (!saved && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+                applyTheme('dark');
+            } else {
+                applyTheme('light');
+            }
+        }
+
+        function toggleTheme() {
+            const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+            const next = isDark ? 'light' : 'dark';
+            applyTheme(next);
+            try { localStorage.setItem(THEME_KEY, next); } catch { /* ignore quota */ }
+        }
+
+        // Apply ASAP — before render — so we don't flash the wrong theme.
+        initTheme();
 
         // ==================== INIT ====================
         async function init() {
@@ -1184,13 +1547,18 @@
                 id: app.name,
                 name: app.title || app.name,
                 developer: authorName,
-                category: r.category || 'tools',
+                category: r.category || app.category || 'tools',
                 description: app.description || '',
-                shortDesc: '',
+                shortDesc: r.shortDesc || '',
                 size: formatSize(app.distribution?.size),
                 version: app.version || '',
                 icon: app.icon || 'package',
                 gradient: r.gradient || 'gradient-slate',
+                // Optional hero image for the staff-pick card. Not present
+                // in the current registry payload but reading it here means
+                // the day a publisher adds `registry.banner` (or top-level
+                // `banner`) the cards immediately upgrade. See DAPP-UX-POLISH-V12.
+                banner: r.banner || app.banner || null,
                 badges: r.badges || [],
                 permissions: Object.keys(app.capabilities || {}),
                 isStaffPick: !!r.staffPick,
@@ -1200,6 +1568,13 @@
                 source: r.source || null,
                 cid: app.distribution?.cid || null,
                 registryStatus: r.status || 'coming_soon',
+                // Manifest role — `'system'` for the four core capsules
+                // (Market, Player, Creator, dDRM Viewer) that auto-install
+                // on first boot, `'dapp'` for everything else. Used by
+                // mergeApps to mark these as un-uninstallable. The boot
+                // policy in pc2-node only auto-installs role=system, so
+                // this is the authoritative "ships with PC2" signal.
+                role: app.role || 'dapp',
             };
         }
 
@@ -1212,14 +1587,35 @@
                     fetch('/api/registry/apps').then(r => r.ok ? r.json() : { apps: [] }),
                 ]);
 
-                installedApps = (installedRes.status === 'fulfilled' ? installedRes.value.apps : []) || [];
+                const rawInstalled = (installedRes.status === 'fulfilled' ? installedRes.value.apps : []) || [];
+                // Defence-in-depth: even though /api/installed-apps now drops
+                // manifest.hidden rows on the server (see installed-apps.ts),
+                // we re-apply the same filter here so the dApp Centre stays
+                // correct against older PC2 builds. Hidden apps (e.g.
+                // pc2-media-runtime, the WASM helper that elacity-player
+                // loads in the background) must never surface as a tile —
+                // otherwise users see a duplicate "Elacity Player" card.
+                installedApps = rawInstalled.filter(a => {
+                    try {
+                        const m = a.manifest_json ? JSON.parse(a.manifest_json) : null;
+                        return !(m && m.hidden);
+                    } catch { return true; }
+                });
                 const launchApps = (launchRes.status === 'fulfilled' ? launchRes.value.recommended : []) || [];
                 const registryApps = (registryRes.status === 'fulfilled' ? registryRes.value.apps : []) || [];
 
                 catalogApps = registryApps.map(registryAppToCatalog);
                 console.log(`[dApp Centre] Loaded ${catalogApps.length} apps from registry`);
 
-                const installedNames = new Set(installedApps.map(a => a.name));
+                // The API returns `app_name` on each installed-apps row (the
+                // SQLite column name); we tolerate `name` for forward-compat
+                // should the shape ever be normalised. This was the root cause
+                // of DAPP-UX-POLISH-V12 #1 — the old `a.name` read produced
+                // Set([undefined, …]) which broke every catalog match and
+                // doubled every installable dApp in the All Apps grid.
+                const installedNames = new Set(
+                    installedApps.map(a => a.app_name ?? a.name).filter(Boolean)
+                );
 
                 // Secondary install-signal: apps that /get-launch-apps reports
                 // as `installed: true`. Used when /api/installed-apps fails or
@@ -1229,6 +1625,17 @@
                         .filter(a => a.installed === true)
                         .map(a => a.name)
                 );
+
+                // Build name → iconUrl map for installed apps so the catalog
+                // merge can show the real branded logo from the bundle
+                // (rather than the registry's category SVG). See
+                // DAPP-UX-POLISH-V12 #2. /get-launch-apps already resolves
+                // manifest.iconDataUrl > installed.icon > bundle fallback
+                // probes, so we just mirror the result here.
+                launchAppIcons = {};
+                for (const a of launchApps) {
+                    if (a.name && a.icon) launchAppIcons[a.name] = a.icon;
+                }
 
                 // Primary classifier: the backend's explicit isSystem flag
                 // (added 2026-04-29 — see DAPP-CENTRE-BUILTIN-CLASSIFICATION
@@ -1260,7 +1667,10 @@
         }
 
         function mergeApps() {
-            const installedNames = new Set(installedApps.map(a => a.name));
+            // Same tolerant read as loadData — see DAPP-UX-POLISH-V12 #1.
+            const installedNames = new Set(
+                installedApps.map(a => a.app_name ?? a.name).filter(Boolean)
+            );
             const builtInNames = new Set(builtInApps.map(a => a.id));
 
             allApps = [];
@@ -1268,35 +1678,53 @@
             // 1. Add catalog apps with install status.
             // Install signal = primary (/api/installed-apps) OR built-in flag
             // OR launchApps fallback (if primary failed). Built-in flag is
-            // authoritative — it comes from the backend's isSystem field.
+            // authoritative — it comes from the backend's isSystem field
+            // (hardcoded core apps) OR the registry manifest role === 'system'
+            // (the four pre-installed dApp capsules: Market, Player, Creator,
+            // dDRM Viewer). System-role apps must not be uninstallable from
+            // the dApp Centre — the boot policy will just re-install them on
+            // next start, and accidentally removing the marketplace would
+            // brick the user's content access. See DAPP-UX-POLISH-V12 follow-up.
             for (const cat of catalogApps) {
                 const isInstalled = installedNames.has(cat.id)
                     || builtInNames.has(cat.id)
                     || launchInstalledNames.has(cat.id);
-                const isBuiltIn = builtInNames.has(cat.id);
+                const isBuiltIn = builtInNames.has(cat.id) || cat.role === 'system';
                 const isComingSoon = !isInstalled && (cat.registryStatus === 'coming_soon' || (!cat.cid && cat.registryStatus !== 'available'));
+                // For installed apps, prefer the backend-resolved bundle icon
+                // (the real branded logo) over the registry's category SVG
+                // key. Non-installed apps keep the category glyph so the
+                // "discover" feel is preserved. See DAPP-UX-POLISH-V12 #2.
+                const realIcon = isInstalled ? launchAppIcons[cat.id] : null;
                 allApps.push({
                     ...cat,
                     installed: isInstalled,
                     isBuiltIn: isBuiltIn,
                     isComingSoon,
+                    builtInIcon: realIcon || null,
                 });
             }
 
             // 2. Add installed apps not already in catalog
             for (const inst of installedApps) {
-                if (!catalogApps.find(c => c.id === inst.name)) {
-                    const meta = builtInMeta[inst.name] || {};
-                    let iconDataUrl = null;
-                    try {
-                        if (inst.manifest_json) {
-                            const m = JSON.parse(inst.manifest_json);
-                            if (m.iconDataUrl) iconDataUrl = m.iconDataUrl;
-                        }
-                    } catch { /* ignore */ }
+                const instId = inst.app_name ?? inst.name;
+                if (!instId) continue;
+                if (!catalogApps.find(c => c.id === instId)) {
+                    const meta = builtInMeta[instId] || {};
+                    let iconDataUrl = launchAppIcons[instId] || null;
+                    // Fall back to scraping the stored manifest in case the
+                    // /get-launch-apps lookup missed it (e.g. hidden apps).
+                    if (!iconDataUrl) {
+                        try {
+                            if (inst.manifest_json) {
+                                const m = JSON.parse(inst.manifest_json);
+                                if (m.iconDataUrl) iconDataUrl = m.iconDataUrl;
+                            }
+                        } catch { /* ignore */ }
+                    }
                     allApps.push({
-                        id: inst.name,
-                        name: inst.title || inst.name,
+                        id: instId,
+                        name: inst.title || instId,
                         developer: inst.author || 'Unknown',
                         category: meta.category || 'tools',
                         description: inst.description || '',
@@ -1359,8 +1787,16 @@
         }
 
         function getAppIconHtml(app, cssClass) {
-            if (app.builtInIcon && app.builtInIcon.startsWith('data:')) {
-                return `<div class="app-icon ${cssClass || ''}" style="background:#f1f5f9;"><img src="${app.builtInIcon}" style="width:32px;height:32px;"></div>`;
+            // Prefer a real bundle icon (data: URL or path) when available —
+            // this is what makes installed apps show their branded logo
+            // instead of the registry's category SVG. Both `data:` and
+            // `/installed-apps/<name>/…` URLs are safe in <img src>; anything
+            // else falls through to the category glyph. The `.has-img`
+            // modifier strips the contrasting tile background so the logo's
+            // own design (most ship a self-contained square) reads clean
+            // edge-to-edge inside the rounded mask.
+            if (app.builtInIcon && /^(data:|https?:|\/)/.test(app.builtInIcon)) {
+                return `<div class="app-icon has-img ${cssClass || ''}"><img src="${app.builtInIcon}" alt=""></div>`;
             }
             const gradient = app.gradient || 'gradient-slate';
             const svgIcon = icons[app.icon] || icons.package;
@@ -1372,7 +1808,14 @@
             const extra = [];
             if (app.isBuiltIn) extra.push('<span class="badge builtin">System</span>');
             if (app.isComingSoon) extra.push('<span class="badge coming-soon">Coming Soon</span>');
-            const badgeTexts = { wasm: 'WASM', ddrm: 'dDRM', opensource: 'Open Source', builtin: 'System' };
+            const badgeTexts = {
+                wasm: 'WASM',
+                ddrm: 'dDRM',
+                opensource: 'Open Source',
+                builtin: 'System',
+                nft: 'NFT',
+                creator: 'Creator',
+            };
             const rendered = badgeList
                 .filter(b => b !== 'builtin')
                 .map(b => `<span class="badge ${b}">${badgeTexts[b] || b}</span>`)
@@ -1416,6 +1859,34 @@
             `;
         }
         
+        // Visual gradients for staff-pick cards. Keyed by the app's
+        // `gradient` field from the registry (or builtInMeta for system
+        // apps). Used as the card background when no banner image is set.
+        const STAFF_PICK_GRADIENTS = {
+            'gradient-purple': 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+            'gradient-blue':   'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
+            'gradient-orange': 'linear-gradient(135deg, #f97316 0%, #ea580c 100%)',
+            'gradient-green':  'linear-gradient(135deg, #22c55e 0%, #16a34a 100%)',
+            'gradient-teal':   'linear-gradient(135deg, #14b8a6 0%, #0d9488 100%)',
+            'gradient-pink':   'linear-gradient(135deg, #ec4899 0%, #db2777 100%)',
+            'gradient-yellow': 'linear-gradient(135deg, #eab308 0%, #ca8a04 100%)',
+            'gradient-indigo': 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)',
+            'gradient-cyan':   'linear-gradient(135deg, #06b6d4 0%, #0891b2 100%)',
+            'gradient-slate':  'linear-gradient(135deg, #64748b 0%, #475569 100%)',
+        };
+
+        // Render the icon for a staff-pick card. Prefers the real bundle
+        // logo (data: URL or /installed-apps/<name>/…) when available — the
+        // generic registry SVG glyph (`swap`, `image`, …) is a poor stand-in
+        // for an app's actual brand. See DAPP-UX-POLISH-V12 follow-up.
+        function getStaffPickIconHtml(app) {
+            if (app.builtInIcon && /^(data:|https?:|\/)/.test(app.builtInIcon)) {
+                return `<div class="staff-pick-icon has-img"><img src="${app.builtInIcon}" alt=""></div>`;
+            }
+            const svgIcon = icons[app.icon] || icons.package;
+            return `<div class="staff-pick-icon">${svgIcon}</div>`;
+        }
+
         function renderStaffPicks() {
             const container = document.getElementById('staffPicks');
             const picks = allApps.filter(a => a.isStaffPick).slice(0, 5);
@@ -1423,26 +1894,24 @@
                 document.getElementById('staffPicksSection').style.display = 'none';
                 return;
             }
-            const gradients = {
-                'gradient-purple': 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                'gradient-blue': 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
-                'gradient-orange': 'linear-gradient(135deg, #f97316 0%, #ea580c 100%)',
-                'gradient-green': 'linear-gradient(135deg, #22c55e 0%, #16a34a 100%)',
-                'gradient-teal': 'linear-gradient(135deg, #14b8a6 0%, #0d9488 100%)',
-                'gradient-pink': 'linear-gradient(135deg, #ec4899 0%, #db2777 100%)',
-                'gradient-yellow': 'linear-gradient(135deg, #eab308 0%, #ca8a04 100%)',
-                'gradient-indigo': 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)',
-                'gradient-cyan': 'linear-gradient(135deg, #06b6d4 0%, #0891b2 100%)',
-                'gradient-slate': 'linear-gradient(135deg, #64748b 0%, #475569 100%)'
-            };
             container.innerHTML = picks.map(app => {
-            const bg = gradients[app.gradient] || gradients['gradient-purple'];
-            return `
+                const bg = STAFF_PICK_GRADIENTS[app.gradient] || STAFF_PICK_GRADIENTS['gradient-purple'];
+                // Optional registry-supplied hero image. When present the
+                // gradient is used as fallback paint behind it, and the
+                // dark veil keeps the title legible. Forward-compat — the
+                // current registry doesn't ship `banner` yet.
+                const bannerLayer = app.banner
+                    ? `<div class="staff-pick-banner" style="background-image:url('${app.banner}');"></div>`
+                    : '';
+                const tag = (app.category || '').toUpperCase();
+                return `
                 <div class="staff-pick-card" style="background:${bg};" onclick="showAppDetail('${app.id}')">
-                        <div class="staff-pick-icon">${icons[app.icon] || icons.package}</div>
+                    ${bannerLayer}
+                    ${getStaffPickIconHtml(app)}
+                    ${tag ? `<span class="staff-pick-tag">${tag}</span>` : ''}
                     <div class="staff-pick-content">
                         <div class="staff-pick-name">${app.name}</div>
-                        <div class="staff-pick-desc">${app.shortDesc || app.description.substring(0, 60) + '...'}</div>
+                        <div class="staff-pick-desc">${app.shortDesc || (app.description || '').substring(0, 80) + ((app.description || '').length > 80 ? '…' : '')}</div>
                     </div>
                 </div>
             `;
@@ -1646,6 +2115,49 @@
         }
         
         // ==================== INSTALL / UNINSTALL / OPEN ====================
+
+        // Current install target — progress events coming in on the
+        // `apps:installProgress` postMessage channel are matched against
+        // this to avoid updating the modal for a different in-flight
+        // install. See DAPP-UX-POLISH-V12 #6.
+        let currentInstallAppId = null;
+
+        // Human-readable labels for the server-side stages (pc2-node
+        // `AppInstallService.install` emits these). Anything unknown
+        // falls back to a generic message so an older backend still
+        // looks OK.
+        const INSTALL_STAGE_LABELS = {
+            fetching: 'Fetching package from IPFS…',
+            verifying: 'Verifying package…',
+            extracting: 'Extracting files…',
+            registering: 'Registering app…',
+            done: 'Install complete',
+            failed: 'Install failed',
+        };
+
+        function updateInstallProgress(stage, pct, meta) {
+            const statusEl = document.getElementById('installStatus');
+            const fillEl = document.getElementById('progressFill');
+            if (!statusEl || !fillEl) return;
+
+            let label = INSTALL_STAGE_LABELS[stage] || 'Working…';
+            // Augment with byte/file counts when the server provides them so
+            // the user sees concrete movement during the long extract stage.
+            if (meta && typeof meta.filesExtracted === 'number' && typeof meta.totalFiles === 'number') {
+                label += ` (${meta.filesExtracted}/${meta.totalFiles} files)`;
+            } else if (meta && typeof meta.bytesReceived === 'number' && typeof meta.totalBytes === 'number' && meta.totalBytes > 0) {
+                const mb = (meta.bytesReceived / 1048576).toFixed(1);
+                const total = (meta.totalBytes / 1048576).toFixed(1);
+                label += ` (${mb} / ${total} MB)`;
+            }
+
+            statusEl.textContent = label;
+            if (typeof pct === 'number') {
+                const clamped = Math.max(0, Math.min(100, pct));
+                fillEl.style.width = clamped + '%';
+            }
+        }
+
         async function installApp(appId) {
             const app = allApps.find(a => a.id === appId);
             if (!app) return;
@@ -1657,7 +2169,9 @@
                 showToast('This app does not have an IPFS package yet. Coming soon!', true);
                 return;
             }
-            
+
+            currentInstallAppId = app.id;
+
             const modal = document.getElementById('installModal');
             const content = document.getElementById('installContent');
             const iconHtml = getAppIconHtml(app, 'install-modal-icon');
@@ -1665,17 +2179,20 @@
             content.innerHTML = `
                 ${iconHtml}
                 <div class="install-modal-title">Installing ${app.name}</div>
-                <div class="install-modal-status" id="installStatus">Fetching from IPFS...</div>
+                <div class="install-modal-status" id="installStatus">${INSTALL_STAGE_LABELS.fetching}</div>
                 <div class="progress-bar">
-                    <div class="progress-fill" id="progressFill" style="width: 10%"></div>
+                    <div class="progress-fill" id="progressFill" style="width: 5%"></div>
                 </div>
                 <button class="modal-btn secondary" onclick="closeInstallModal()">Cancel</button>
             `;
             modal.classList.add('active');
             
             try {
-                document.getElementById('progressFill').style.width = '30%';
-                document.getElementById('installStatus').textContent = 'Downloading package...';
+                // Scripted "something is happening" stages as a safety net
+                // in case the server doesn't emit real progress (e.g. an
+                // older backend). Real events from install:progress override
+                // these via updateInstallProgress.
+                updateInstallProgress('fetching', 10);
 
                 const manifest = {
                     name: app.id,
@@ -1692,20 +2209,22 @@
                     body: { manifest, cid: app.cid },
                 });
 
-                document.getElementById('progressFill').style.width = '90%';
-                document.getElementById('installStatus').textContent = 'Finalizing...';
-
                 if (!res.ok) {
                     const err = await res.json().catch(() => ({}));
                     throw new Error(err.error || 'Install failed');
                 }
 
-                document.getElementById('progressFill').style.width = '100%';
+                updateInstallProgress('done', 100);
 
-                // Refresh data and re-render
+                // Refresh local state and re-render
                 await loadData();
                 render();
-                    
+
+                // Tell the parent Puter window that the installed-apps set
+                // has changed so the Start Menu drops its stale cache.
+                // DAPP-UX-POLISH-V12 #4.
+                try { window.parent.postMessage({ msg: 'apps:changed' }, '*'); } catch { /* ignore */ }
+
                     content.innerHTML = `
                     ${iconHtml}
                     <div class="install-modal-title">${app.name} Installed</div>
@@ -1721,6 +2240,8 @@
                     <div class="install-modal-status" style="color:#ef4444;">${err.message}</div>
                     <button class="modal-btn secondary" onclick="closeInstallModal()">Close</button>
                 `;
+            } finally {
+                currentInstallAppId = null;
             }
         }
         
@@ -1746,10 +2267,25 @@
                 showToast(`${app.name} uninstalled`);
                 await loadData();
                 render();
+                // Notify the parent so the Start Menu drops its stale
+                // copy (DAPP-UX-POLISH-V12 #4).
+                try { window.parent.postMessage({ msg: 'apps:changed' }, '*'); } catch { /* ignore */ }
             } catch (err) {
                 showToast(`Failed to uninstall: ${err.message}`, true);
             }
         }
+
+        // ==================== INSTALL PROGRESS BRIDGE ====================
+        // The parent Puter GUI listens on the authenticated Socket.io
+        // connection for `install:progress` events emitted by the pc2-node
+        // install pipeline and forwards them here via postMessage. See
+        // DAPP-UX-POLISH-V12 #6.
+        window.addEventListener('message', (ev) => {
+            if (!ev.data || ev.data.msg !== 'apps:installProgress') return;
+            const { appName, stage, pct, meta } = ev.data;
+            if (!currentInstallAppId || appName !== currentInstallAppId) return;
+            updateInstallProgress(stage, pct, meta);
+        });
 
         function openApp(appId) {
             window.parent.postMessage({
@@ -1769,6 +2305,10 @@
 
         // ==================== EVENT LISTENERS ====================
         function setupEventListeners() {
+            // Theme toggle
+            const themeBtn = document.getElementById('themeToggle');
+            if (themeBtn) themeBtn.addEventListener('click', toggleTheme);
+
             // Tabs
             document.querySelectorAll('.tab').forEach(tab => {
                 tab.addEventListener('click', () => {

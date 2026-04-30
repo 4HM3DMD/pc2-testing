@@ -240,6 +240,45 @@ async function UIDesktop(options) {
         }
     });
 
+    // dApp install progress — bridged from the pc2-node install pipeline.
+    // The dApp Centre runs inside an iframe and can't subscribe to the
+    // authenticated Socket.io room directly, so we forward the event via
+    // postMessage to every live iframe. The dApp Centre keys the update
+    // off `appName` so only the relevant install modal responds.
+    // See DAPP-UX-POLISH-V12 #6.
+    window.socket.on('install:progress', (msg) => {
+        try {
+            document.querySelectorAll('iframe').forEach((frame) => {
+                if (frame?.contentWindow) {
+                    frame.contentWindow.postMessage({
+                        msg: 'apps:installProgress',
+                        ...msg,
+                    }, '*');
+                }
+            });
+        } catch (e) {
+            console.warn('[install:progress] forward failed:', e);
+        }
+    });
+
+    // dApp set changed — refresh the launch-apps cache so the Start
+    // menu renders a fresh tile list on its next open without requiring
+    // a page reload. See DAPP-UX-POLISH-V12 #4.
+    window.socket.on('apps:changed', async () => {
+        try {
+            const token = window.auth_token;
+            if (!token) return;
+            const res = await fetch(`${window.api_origin}/get-launch-apps?icon_size=64`, {
+                headers: { 'Authorization': `Bearer ${token}` },
+            });
+            if (res.ok) {
+                window.launch_apps = await res.json();
+            }
+        } catch (e) {
+            console.warn('[apps:changed] refresh failed:', e);
+        }
+    });
+
     window.socket.on('trash.is_empty', async (msg) => {
         $(`.item[data-path="${html_encode(window.trash_path)}" i]`).find('.item-icon > img').attr('src', msg.is_empty ? window.icons['trash.svg'] : window.icons['trash-full.svg']);
         $(`.window[data-path="${html_encode(window.trash_path)}" i]`).find('.window-head-icon').attr('src', msg.is_empty ? window.icons['trash.svg'] : window.icons['trash-full.svg']);

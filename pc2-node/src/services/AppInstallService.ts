@@ -22,6 +22,34 @@ const MAX_APP_SIZE_BYTES = 100 * 1024 * 1024; // 100 MB hard cap per app
 const MAX_BUNDLE_ENTRIES = 10_000;            // zip-bomb guard for tar.gz bundles
 const TAR_GZIP_MAGIC = Buffer.from([0x1f, 0x8b]); // first 2 bytes of any gzip stream
 
+/**
+ * Stages an install can be in, in order. The dApp Centre has a human-
+ * readable label for each and updates its progress bar accordingly.
+ * `failed` is emitted when install() throws so the UI can show a
+ * terminal error state without waiting for the HTTP response.
+ */
+export type InstallStage =
+  | 'fetching'
+  | 'verifying'
+  | 'extracting'
+  | 'registering'
+  | 'done'
+  | 'failed';
+
+export interface InstallProgressMeta {
+  bytesReceived?: number;
+  totalBytes?: number;
+  filesExtracted?: number;
+  totalFiles?: number;
+  message?: string;
+}
+
+export type InstallProgressCallback = (
+  stage: InstallStage,
+  pct: number,
+  meta?: InstallProgressMeta,
+) => void;
+
 function resolveAuthorName(author?: string | AppAuthor): string | null {
   if (!author) return null;
   if (typeof author === 'string') return author;
@@ -197,76 +225,111 @@ export class AppInstallService {
    * 2. Fetch bundle from IPFS
    * 3. Write to disk at data/installed-apps/<name>/
    * 4. Register in database
+   *
+   * `onProgress` is optional — supplied by the API route so the dApp
+   * Centre can show a real multi-stage progress bar instead of the old
+   * "Downloading…" spinner. See DAPP-UX-POLISH-V12 #6. The callback
+   * is invoked synchronously on the install-execution thread; any
+   * throw is swallowed to keep the install resilient to consumer bugs.
    */
-  async install(manifest: AppManifest, cid: string): Promise<InstalledApp> {
-    this.validateManifest(manifest);
-
-    const appName = manifest.name;
-    const appDir = join(this.appsDir, appName);
-
-    if (this.db.getInstalledApp(appName)) {
-      throw new Error(`App "${appName}" is already installed. Uninstall first or use update.`);
-    }
-
-    log.info(`[install] Starting install of "${appName}" from CID ${cid}`);
-
-    let bundleBuffer: Buffer;
-    try {
-      bundleBuffer = await this.fetchFromIPFS(cid);
-    } catch (err: any) {
-      throw new Error(`Failed to fetch app bundle from IPFS: ${err.message}`);
-    }
-
-    if (bundleBuffer.length > MAX_APP_SIZE_BYTES) {
-      throw new Error(`App bundle exceeds ${MAX_APP_SIZE_BYTES / 1024 / 1024}MB limit`);
-    }
-
-    const signatureVerified = this.verifyDistributionSignature(manifest, bundleBuffer);
-
-    if (existsSync(appDir)) {
-      rmSync(appDir, { recursive: true, force: true });
-    }
-    mkdirSync(appDir, { recursive: true });
-
-    try {
-      await this.extractBundle(bundleBuffer, appDir, manifest);
-    } catch (err: any) {
-      rmSync(appDir, { recursive: true, force: true });
-      throw new Error(`Failed to extract app bundle: ${err.message}`);
-    }
-
-    const entryFile = manifest.entry || 'index.html';
-    if (!existsSync(join(appDir, entryFile))) {
-      rmSync(appDir, { recursive: true, force: true });
-      throw new Error(`App bundle missing entry file: ${entryFile}`);
-    }
-
-    const totalSize = this.dirSize(appDir);
-    const now = Date.now();
-
-    const installedApp: InstalledApp = {
-      app_name: appName,
-      title: manifest.title,
-      version: manifest.version,
-      cid,
-      size: totalSize,
-      icon: manifest.icon || null,
-      description: manifest.description || null,
-      author: resolveAuthorName(manifest.author),
-      permissions_json: JSON.stringify(manifest.capabilities || manifest.permissions || []),
-      requirements_json: JSON.stringify(manifest.requirements || {}),
-      manifest_json: JSON.stringify({
-        ...manifest,
-        _signatureVerified: signatureVerified,
-      }),
-      installed_at: now,
-      updated_at: now,
+  async install(
+    manifest: AppManifest,
+    cid: string,
+    onProgress?: InstallProgressCallback,
+  ): Promise<InstalledApp> {
+    const emit: InstallProgressCallback = (stage, pct, meta) => {
+      if (!onProgress) return;
+      try { onProgress(stage, pct, meta); } catch { /* ignore */ }
     };
 
-    this.db.registerInstalledApp(installedApp);
+    try {
+      this.validateManifest(manifest);
 
-    log.info(`[install] ✅ "${appName}" v${manifest.version} installed (${(totalSize / 1024).toFixed(1)} KB)`);
-    return installedApp;
+      const appName = manifest.name;
+      const appDir = join(this.appsDir, appName);
+
+      if (this.db.getInstalledApp(appName)) {
+        throw new Error(`App "${appName}" is already installed. Uninstall first or use update.`);
+      }
+
+      log.info(`[install] Starting install of "${appName}" from CID ${cid}`);
+      emit('fetching', 5, { message: `Fetching "${appName}" from IPFS…` });
+
+      let bundleBuffer: Buffer;
+      try {
+        bundleBuffer = await this.fetchFromIPFS(cid);
+      } catch (err: any) {
+        throw new Error(`Failed to fetch app bundle from IPFS: ${err.message}`);
+      }
+
+      if (bundleBuffer.length > MAX_APP_SIZE_BYTES) {
+        throw new Error(`App bundle exceeds ${MAX_APP_SIZE_BYTES / 1024 / 1024}MB limit`);
+      }
+
+      emit('verifying', 55, {
+        bytesReceived: bundleBuffer.length,
+        totalBytes: bundleBuffer.length,
+      });
+      const signatureVerified = this.verifyDistributionSignature(manifest, bundleBuffer);
+
+      if (existsSync(appDir)) {
+        rmSync(appDir, { recursive: true, force: true });
+      }
+      mkdirSync(appDir, { recursive: true });
+
+      emit('extracting', 60);
+      try {
+        await this.extractBundle(bundleBuffer, appDir, manifest, (filesExtracted) => {
+          // Progress band 60..90 % during extraction — caps at 90 so the
+          // final `registering` stage has visible headroom. We don't know
+          // totalFiles upfront for a tar stream, so we smooth based on
+          // file count modulo a comfortable maximum (200 files).
+          const approxPct = Math.min(90, 60 + Math.min(30, Math.floor(filesExtracted / 5)));
+          emit('extracting', approxPct, { filesExtracted });
+        });
+      } catch (err: any) {
+        rmSync(appDir, { recursive: true, force: true });
+        throw new Error(`Failed to extract app bundle: ${err.message}`);
+      }
+
+      const entryFile = manifest.entry || 'index.html';
+      if (!existsSync(join(appDir, entryFile))) {
+        rmSync(appDir, { recursive: true, force: true });
+        throw new Error(`App bundle missing entry file: ${entryFile}`);
+      }
+
+      emit('registering', 95);
+      const totalSize = this.dirSize(appDir);
+      const now = Date.now();
+
+      const installedApp: InstalledApp = {
+        app_name: appName,
+        title: manifest.title,
+        version: manifest.version,
+        cid,
+        size: totalSize,
+        icon: manifest.icon || null,
+        description: manifest.description || null,
+        author: resolveAuthorName(manifest.author),
+        permissions_json: JSON.stringify(manifest.capabilities || manifest.permissions || []),
+        requirements_json: JSON.stringify(manifest.requirements || {}),
+        manifest_json: JSON.stringify({
+          ...manifest,
+          _signatureVerified: signatureVerified,
+        }),
+        installed_at: now,
+        updated_at: now,
+      };
+
+      this.db.registerInstalledApp(installedApp);
+
+      log.info(`[install] ✅ "${appName}" v${manifest.version} installed (${(totalSize / 1024).toFixed(1)} KB)`);
+      emit('done', 100, { message: `${manifest.title} installed` });
+      return installedApp;
+    } catch (err: any) {
+      emit('failed', 100, { message: err?.message || String(err) });
+      throw err;
+    }
   }
 
   /**
@@ -571,9 +634,14 @@ export class AppInstallService {
    *   - Zip-bomb: total uncompressed bytes capped at MAX_APP_SIZE_BYTES,
    *     entry count capped at MAX_BUNDLE_ENTRIES.
    */
-  private async extractBundle(buffer: Buffer, targetDir: string, manifest: AppManifest): Promise<void> {
+  private async extractBundle(
+    buffer: Buffer,
+    targetDir: string,
+    manifest: AppManifest,
+    onEntry?: (filesExtracted: number) => void,
+  ): Promise<void> {
     if (buffer.length >= 2 && buffer[0] === TAR_GZIP_MAGIC[0] && buffer[1] === TAR_GZIP_MAGIC[1]) {
-      await this.extractTarGz(buffer, targetDir, manifest);
+      await this.extractTarGz(buffer, targetDir, manifest, onEntry);
       return;
     }
 
@@ -604,7 +672,12 @@ export class AppInstallService {
    * Net effect: malicious bundles are rejected with a clean error and the
    * partial extraction is wiped by the install() try/catch.
    */
-  private async extractTarGz(buffer: Buffer, targetDir: string, manifest: AppManifest): Promise<void> {
+  private async extractTarGz(
+    buffer: Buffer,
+    targetDir: string,
+    manifest: AppManifest,
+    onEntry?: (filesExtracted: number) => void,
+  ): Promise<void> {
     const resolvedTarget = resolve(targetDir);
     const targetWithSep = resolvedTarget.endsWith(pathSep) ? resolvedTarget : resolvedTarget + pathSep;
 
@@ -651,6 +724,12 @@ export class AppInstallService {
         totalUncompressedBytes += entrySize;
         if (totalUncompressedBytes > MAX_APP_SIZE_BYTES) {
           violationReason = `uncompressed bundle exceeds ${MAX_APP_SIZE_BYTES / 1024 / 1024}MB cap`;
+        }
+        // Throttle progress emissions to every 5 entries — an 80 MB
+        // bundle has ~200 entries and firing on every one would saturate
+        // the WebSocket for no visible gain.
+        if (onEntry && entryCount % 5 === 0) {
+          try { onEntry(entryCount); } catch { /* ignore */ }
         }
       },
       onwarn: (code, message) => {

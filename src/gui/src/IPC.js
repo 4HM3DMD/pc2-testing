@@ -152,8 +152,49 @@ const ipc_listener = async (event, handled) => {
             args: event.data.args,
             window_title: event.data.windowTitle,
         });
+        // Focus the new window so it lands on top of the launcher (the
+        // dApp Centre). A single focusWindow() races against:
+        //   (a) the click event on the launcher iframe, which propagates
+        //       to the launcher's mousedown handler and re-focuses the
+        //       launcher *after* our call;
+        //   (b) the new app's iframe `load` event triggering UIWindow
+        //       internals that may also reset focus order;
+        //   (c) the open animation, which transitions opacity over 70 ms.
+        // We fire focus three times: rAF (after current frame), on the
+        // iframe `load` event (after the app paints its first frame),
+        // and a 350 ms backstop to outlast the launcher's late mousedown.
+        // Each call is cheap and idempotent. See DAPP-UX-POLISH-V12 #5.
         if (proc?.references?.el_win) {
-            $(proc.references.el_win).focusWindow();
+            const $win = $(proc.references.el_win);
+            const focusNow = () => {
+                try { $win.focusWindow(); } catch { /* ignore */ }
+            };
+            requestAnimationFrame(focusNow);
+            const $iframe = $win.find('.window-app-iframe');
+            if ($iframe.length) {
+                $iframe.one('load', () => setTimeout(focusNow, 30));
+            }
+            setTimeout(focusNow, 350);
+        }
+        return handled.resolve(true);
+    }
+
+    // dApp Centre posts this after a successful install/uninstall so the
+    // Start menu drops its stale cache without waiting for the WS event.
+    // See DAPP-UX-POLISH-V12 #4.
+    if ( event.data?.msg === 'apps:changed' ) {
+        try {
+            const token = window.auth_token;
+            if (token) {
+                const res = await fetch(`${window.api_origin}/get-launch-apps?icon_size=64`, {
+                    headers: { 'Authorization': `Bearer ${token}` },
+                });
+                if (res.ok) {
+                    window.launch_apps = await res.json();
+                }
+            }
+        } catch (e) {
+            console.warn('[apps:changed postMessage] refresh failed:', e);
         }
         return handled.resolve(true);
     }
