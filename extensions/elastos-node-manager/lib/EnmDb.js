@@ -31,6 +31,13 @@ async function initSchema(db) {
         throw new Error('EnmDb.initSchema: invalid db handle (missing .write)');
     }
 
+    // PC2's SqliteDatabaseAccessService.sqlite_transform_params_ does
+    // params.map(...) without a defensive undefined check, so every
+    // db.write/db.read call MUST pass a params array — even for parameterless
+    // DDL like CREATE TABLE. We pass [] explicitly so the wrapper's .map
+    // succeeds. (Otherwise: "Cannot read properties of undefined (reading
+    // 'map')" at SqliteDatabaseAccessService.js:380.)
+
     // Audit log — state transitions and healing decisions only (NOT every poll tick,
     // per Rev 4 audit recommendation to keep write volume low).
     await db.write(`
@@ -47,10 +54,10 @@ async function initSchema(db) {
             duration_ms INTEGER,
             payload_json TEXT
         )
-    `);
-    await db.write(`CREATE INDEX IF NOT EXISTS idx_enm_audit_ts ON enm_audit_logs(ts DESC)`);
-    await db.write(`CREATE INDEX IF NOT EXISTS idx_enm_audit_wallet ON enm_audit_logs(wallet_address, ts DESC)`);
-    await db.write(`CREATE INDEX IF NOT EXISTS idx_enm_audit_chain ON enm_audit_logs(chain_id, ts DESC)`);
+    `, []);
+    await db.write(`CREATE INDEX IF NOT EXISTS idx_enm_audit_ts ON enm_audit_logs(ts DESC)`, []);
+    await db.write(`CREATE INDEX IF NOT EXISTS idx_enm_audit_wallet ON enm_audit_logs(wallet_address, ts DESC)`, []);
+    await db.write(`CREATE INDEX IF NOT EXISTS idx_enm_audit_chain ON enm_audit_logs(chain_id, ts DESC)`, []);
 
     // OWNER-CONFIRMS proposals (we do NOT reuse PC2's agent_proposals; v0.2 may revisit).
     await db.write(`
@@ -72,9 +79,9 @@ async function initSchema(db) {
             outcome TEXT,
             payload_json TEXT
         )
-    `);
-    await db.write(`CREATE INDEX IF NOT EXISTS idx_enm_prop_status ON enm_proposals(status, expires_at)`);
-    await db.write(`CREATE INDEX IF NOT EXISTS idx_enm_prop_wallet ON enm_proposals(wallet_address, proposed_at DESC)`);
+    `, []);
+    await db.write(`CREATE INDEX IF NOT EXISTS idx_enm_prop_status ON enm_proposals(status, expires_at)`, []);
+    await db.write(`CREATE INDEX IF NOT EXISTS idx_enm_prop_wallet ON enm_proposals(wallet_address, proposed_at DESC)`, []);
 
     // Setup wizard state — single-row table keyed by node owner.
     // Tracks step progression so the operator can resume after restart.
@@ -94,7 +101,7 @@ async function initSchema(db) {
             updated_at INTEGER NOT NULL,
             completed_at INTEGER
         )
-    `);
+    `, []);
 }
 
 /**
