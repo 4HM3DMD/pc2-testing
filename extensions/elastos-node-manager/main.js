@@ -44,6 +44,12 @@ extension.on('init', async () => {
         const { db } = extension.import('data');
         await initSchema(db);
         extension.log.info(`${ENM_LOG_PREFIX} schema ready`);
+
+        // Register ENM as a launcher app so the operator sees an icon to click.
+        // INSERT OR IGNORE — idempotent across restarts.
+        const { registerLauncherApp } = require('./lib/EnmAppRegistry');
+        await registerLauncherApp(db);
+        extension.log.info(`${ENM_LOG_PREFIX} launcher app registered`);
     } catch (err) {
         // Schema init failure is fatal: subsequent route handlers depend on the tables.
         extension.log.error(`${ENM_LOG_PREFIX} schema init failed: ${err.message}`);
