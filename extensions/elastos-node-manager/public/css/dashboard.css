@@ -534,6 +534,74 @@
     line-height: 1.6;
 }
 
+/* --- Auto-install build progress --- */
+
+.enm-wizard-auto-panel,
+.enm-wizard-manual-panel {
+    display: grid;
+    gap: var(--spacing-sm);
+    padding-top: var(--spacing-sm);
+}
+.enm-wizard-build-phase {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+.enm-wizard-build-bar-wrap {
+    height: 8px;
+    background: var(--bg-page);
+    border: 1px solid var(--border-color);
+    border-radius: 999px;
+    overflow: hidden;
+}
+.enm-wizard-build-bar {
+    height: 100%;
+    width: 0;
+    background: linear-gradient(90deg, var(--chain-syncing), var(--chain-healthy));
+    border-radius: 999px;
+    transition: width 600ms ease-out;
+}
+.enm-wizard-build-log-heading {
+    margin: 0;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+.enm-wizard-build-log {
+    margin: 0;
+    padding: var(--spacing-sm);
+    background: #0f172a;
+    color: #cbd5e1;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    font-size: 11px;
+    line-height: 1.45;
+    border-radius: var(--radius-sm);
+    max-height: 240px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+.enm-wizard-build-actions {
+    display: flex;
+    gap: var(--spacing-sm);
+    justify-content: flex-end;
+}
+.enm-wizard-build-error {
+    margin: 0;
+    padding: var(--spacing-sm);
+    background: rgba(239, 68, 68, 0.1);
+    border-left: 3px solid var(--error);
+    border-radius: var(--radius-sm);
+    color: var(--error);
+    font-size: 12px;
+}
+@media (prefers-reduced-motion: reduce) {
+    .enm-wizard-build-bar { transition: none; }
+}
+
 /* --- Settings tab (Phase 5) --- */
 
 .enm-settings { display: grid; gap: var(--spacing-lg); }

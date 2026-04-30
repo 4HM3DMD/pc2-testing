@@ -83,6 +83,7 @@
         var wizard = new root.EnmSetupWizard({
             api: services.api,
             notifications: services.notifications,
+            sse: services.sse,
             onComplete: function () {
                 // After wizard finishes, switch to the dashboard.
                 services.api.invalidate('/setup/state');

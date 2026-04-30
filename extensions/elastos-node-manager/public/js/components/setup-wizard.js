@@ -36,6 +36,7 @@
         }
         this.api = opts.api;
         this.notifications = opts.notifications;
+        this.sse = opts.sse || null;  // optional — auto-install live progress
         this.onComplete = typeof opts.onComplete === 'function' ? opts.onComplete : function () {};
 
         this.root = document.createElement('section');
@@ -178,30 +179,191 @@
         this._body.appendChild(makeHeading(t('wizard.step_binary')));
         this._body.appendChild(makePara(t('wizard.binary_help')));
 
+        // Two paths: auto-install (recommended) or manual path entry.
+        var pathSelector = document.createElement('div');
+        pathSelector.className = 'enm-wizard-radio-row';
+        var modeAuto = document.createElement('input');
+        modeAuto.type = 'radio'; modeAuto.name = 'wizardBinMode'; modeAuto.value = 'auto';
+        modeAuto.checked = true;
+        var modeManual = document.createElement('input');
+        modeManual.type = 'radio'; modeManual.name = 'wizardBinMode'; modeManual.value = 'manual';
+        pathSelector.appendChild(labelEl(modeAuto, t('wizard.binary_auto_btn')));
+        pathSelector.appendChild(labelEl(modeManual, t('wizard.binary_manual_btn')));
+        this._body.appendChild(pathSelector);
+
+        // Auto-install panel
+        var autoPanel = document.createElement('div');
+        autoPanel.className = 'enm-wizard-auto-panel';
+
+        var startBtn = makeBtn(t('wizard.binary_auto_btn'), function () {
+            self._startAutoInstall(autoPanel);
+        });
+        autoPanel.appendChild(startBtn);
+
+        // Manual panel (existing flow)
+        var manualPanel = document.createElement('div');
+        manualPanel.className = 'enm-wizard-manual-panel';
+        manualPanel.style.display = 'none';
+
         var input = document.createElement('input');
         input.type = 'text';
         input.placeholder = t('wizard.binary_placeholder');
         input.className = 'enm-wizard-binary-input';
         input.setAttribute('aria-label', t('wizard.binary_label'));
-        this._body.appendChild(input);
-
-        var status = makePara('');
-        this._body.appendChild(status);
-
-        var verifyBtn = makeBtn('Verify', function () {
-            status.textContent = t('wizard.binary_validating');
+        manualPanel.appendChild(input);
+        var manualStatus = makePara('');
+        manualPanel.appendChild(manualStatus);
+        var verifyBtn = makeBtn(t('wizard.binary_manual_verify_btn'), function () {
+            manualStatus.textContent = t('wizard.binary_validating');
             verifyBtn.disabled = true;
             self.api.post('/setup/binary', { binaryPath: input.value.trim() }).then(function (result) {
-                status.textContent = t('wizard.binary_ok', { version: result.version });
+                manualStatus.textContent = t('wizard.binary_ok', { version: result.version });
                 self._choices.binaryPath = result.resolvedPath;
                 self._choices.binaryVersion = result.version;
-                self._body.appendChild(makeBtn('Continue', function () { self._goto('keystore'); }));
+                manualPanel.appendChild(makeBtn(t('wizard.build_continue_btn'),
+                    function () { self._goto('keystore'); }));
             }).catch(function (err) {
-                status.textContent = t('wizard.binary_fail', { reason: err.message });
+                manualStatus.textContent = t('wizard.binary_fail', { reason: err.message });
                 verifyBtn.disabled = false;
             });
         });
-        this._body.appendChild(verifyBtn);
+        manualPanel.appendChild(verifyBtn);
+
+        this._body.appendChild(autoPanel);
+        this._body.appendChild(manualPanel);
+
+        function applyMode() {
+            autoPanel.style.display   = modeAuto.checked   ? '' : 'none';
+            manualPanel.style.display = modeManual.checked ? '' : 'none';
+        }
+        modeAuto.addEventListener('change', applyMode);
+        modeManual.addEventListener('change', applyMode);
+        applyMode();
+    };
+
+    /**
+     * Kick off the auto-install pipeline and render live progress in the
+     * given panel. The pipeline runs on the server (lib/EnmAutoBuilder); we
+     * subscribe to SSE topic `setup:build` for phase + log updates and fall
+     * back to polling /setup/build-status if SSE is silent for >5s.
+     *
+     * @private
+     */
+    SetupWizard.prototype._startAutoInstall = function (panel) {
+        var self = this;
+        var t = root.enmTOrFallback;
+
+        // Replace the button with the live-progress UI.
+        panel.innerHTML = '';
+
+        var phaseLabel = document.createElement('p');
+        phaseLabel.className = 'enm-wizard-build-phase';
+        phaseLabel.textContent = t('wizard.build_phase_preparing');
+        panel.appendChild(phaseLabel);
+
+        var barWrap = document.createElement('div');
+        barWrap.className = 'enm-wizard-build-bar-wrap';
+        barWrap.setAttribute('role', 'progressbar');
+        barWrap.setAttribute('aria-valuemin', '0');
+        barWrap.setAttribute('aria-valuemax', '100');
+        var bar = document.createElement('div');
+        bar.className = 'enm-wizard-build-bar';
+        barWrap.appendChild(bar);
+        panel.appendChild(barWrap);
+
+        var logHeading = document.createElement('p');
+        logHeading.className = 'enm-wizard-build-log-heading';
+        logHeading.textContent = t('wizard.build_log_heading');
+        panel.appendChild(logHeading);
+
+        var logBox = document.createElement('pre');
+        logBox.className = 'enm-wizard-build-log';
+        logBox.setAttribute('aria-live', 'polite');
+        panel.appendChild(logBox);
+
+        var actions = document.createElement('div');
+        actions.className = 'enm-wizard-build-actions';
+        var cancelBtn = makeBtn(t('wizard.build_cancel_btn'), function () {
+            self.api.del('/setup/auto-install-ela').catch(function () { /* idempotent */ });
+        });
+        actions.appendChild(cancelBtn);
+        panel.appendChild(actions);
+
+        // Map server phase → percent + label. Approximate — exact percent
+        // isn't knowable until make finishes, but the phases give the
+        // operator a meaningful "where am I" signal.
+        var PHASE_PERCENT = {
+            'preparing': 5, 'fetching-go': 15, 'cloning': 30,
+            'building': 60, 'verifying': 95, 'done': 100,
+            'failed': 0, 'cancelled': 0, 'idle': 0,
+        };
+        function applyStatus(status) {
+            if (!status || !status.phase) return;
+            phaseLabel.textContent = t('wizard.build_phase_' + status.phase.replace(/-/g, '_')) || status.phase;
+            var pct = PHASE_PERCENT[status.phase];
+            if (pct != null) {
+                bar.style.width = pct + '%';
+                barWrap.setAttribute('aria-valuenow', String(pct));
+            }
+            if (Array.isArray(status.logTail)) {
+                logBox.textContent = status.logTail.join('\n');
+                logBox.scrollTop = logBox.scrollHeight;
+            }
+            if (status.phase === 'done') {
+                cancelBtn.remove();
+                self._choices.binaryPath = status.resolvedPath;
+                self._choices.binaryVersion = status.version;
+                actions.appendChild(makeBtn(t('wizard.build_continue_btn'), function () {
+                    self._goto('keystore');
+                }));
+            } else if (status.phase === 'failed') {
+                cancelBtn.remove();
+                if (status.error) {
+                    var errLine = document.createElement('p');
+                    errLine.className = 'enm-wizard-build-error';
+                    errLine.textContent = status.error;
+                    panel.insertBefore(errLine, logBox);
+                }
+                actions.appendChild(makeBtn(t('wizard.build_retry_btn'), function () {
+                    self._startAutoInstall(panel);
+                }));
+            }
+        }
+
+        // SSE subscription — live updates.
+        var unsub = null;
+        if (self.sse && typeof self.sse.subscribe === 'function') {
+            unsub = self.sse.subscribe('setup:build', function (payload) {
+                if (payload && payload.phase) {
+                    // Pull the latest snapshot — payload only carries the
+                    // delta. Keeps the UI consistent with the source of truth.
+                    self.api.get('/setup/build-status', { skipCache: true })
+                        .then(applyStatus)
+                        .catch(function () { /* will retry on next event */ });
+                }
+            });
+        }
+        // Polling fallback — every 4 seconds. Cheap (status is in-memory).
+        var pollTimer = setInterval(function () {
+            self.api.get('/setup/build-status', { skipCache: true })
+                .then(function (status) {
+                    applyStatus(status);
+                    if (status.phase === 'done'
+                        || status.phase === 'failed'
+                        || status.phase === 'cancelled') {
+                        clearInterval(pollTimer);
+                        if (unsub) try { unsub(); } catch (_) {}
+                    }
+                })
+                .catch(function () { /* retry on next tick */ });
+        }, 4000);
+
+        // Kick the build.
+        self.api.post('/setup/auto-install-ela').then(function (result) {
+            if (result && result.status) applyStatus(result.status);
+        }).catch(function (err) {
+            phaseLabel.textContent = t('wizard.build_phase_failed') + ': ' + err.message;
+        });
     };
 
     SetupWizard.prototype._render_keystore = function () {

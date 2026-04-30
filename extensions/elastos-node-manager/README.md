@@ -17,9 +17,11 @@ v0.1 targets **BPoS supernode operators on Ubuntu/Debian**. macOS, Windows, and 
 ## Operator setup (one-time)
 
 1. Make sure you're on Ubuntu 22.04+ (or Debian 11+) with PC2 running locally.
-2. Build the ELA binary from source — see [docs/BUILD-ELA.md](docs/BUILD-ELA.md). Takes ~5 minutes.
-3. Open ENM from the PC2 launcher.
-4. The setup wizard will guide you through: locate your `ela` binary, import your keystore, generate config, start the node.
+2. Open ENM from the PC2 launcher.
+3. The setup wizard's binary step now offers two paths:
+   - **Recommended:** "Install ela for me" — ENM downloads Go (if needed), clones the Elastos.ELA source, builds it, and verifies. ~5 minutes, no shell commands.
+   - **Manual:** "I already have ela built" — paste the path you produced via `make all`. See [docs/BUILD-ELA.md](docs/BUILD-ELA.md) for the manual recipe.
+4. The wizard then walks you through keystore import, network setup, confirm, and start.
 
 ## Architecture
 

@@ -72,6 +72,14 @@
         });
     };
 
+    ApiClient.prototype.del = function (path) {
+        var self = this;
+        return this._fetch('DELETE', path).then(function (result) {
+            self._invalidateRelated(path);
+            return result;
+        });
+    };
+
     ApiClient.prototype.invalidate = function (path) {
         this._invalidateRelated(path);
     };

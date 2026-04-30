@@ -36,6 +36,7 @@ const ExtIpResolver = require('../lib/ExtIpResolver');
 const crypto = require('node:crypto');
 const { walletScopeId, validateKeystorePath } = require('../lib/EnmSetupHelpers');
 const HostConflictScanner = require('../lib/HostConflictScanner');
+const ChainRegistry = require('../lib/ChainRegistry');
 
 /**
  * @param {object} extensionHandle
@@ -138,6 +139,100 @@ function build(extensionHandle) {
             }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} /setup/preflight error: ${err.message}`);
+            return res.status(500).json(errorBody(err.message));
+        }
+    });
+
+    /**
+     * GET /setup/build-status
+     *
+     * Snapshot of the auto-build pipeline (idle / preparing / fetching-go /
+     * cloning / building / verifying / done / failed / cancelled). The wizard
+     * polls this as a fallback when SSE isn't available; the SSE topic
+     * `setup:build` is the live channel.
+     */
+    router.get('/build-status', limit('read'), async (req, res) => {
+        if (!readActorWallet(req)) {
+            return res.status(401).json(errorBody('Authentication required.'));
+        }
+        try {
+            const status = ChainRegistry.getAutoBuilder().getStatus();
+            return res.json(successBody(status));
+        } catch (err) {
+            extensionHandle.log.error(`${ENM_LOG_PREFIX} /setup/build-status: ${err.message}`);
+            return res.status(500).json(errorBody(err.message));
+        }
+    });
+
+    /**
+     * POST /setup/auto-install-ela
+     *
+     * Kicks off the one-button "build ela for me" pipeline:
+     *   1. Reuse system Go if version >= 1.20, else download official Go
+     *      release into our private cache (no sudo, no PATH pollution).
+     *   2. git clone Elastos.ELA, checkout the pinned tag (v0.9.9.5).
+     *   3. make all  — output streamed to SSE topic `setup:build`.
+     *   4. Smoke-test the resulting binary.
+     *   5. Persist the resolved path in setup-state so the binary step
+     *      auto-fills.
+     *
+     * Returns immediately. Caller subscribes to SSE for live progress or
+     * polls /setup/build-status. Idempotent: a second call while a build is
+     * in flight returns the existing status.
+     */
+    router.post('/auto-install-ela', limit('admin'), requireOwner, async (req, res) => {
+        const wallet = readActorWallet(req);
+        try {
+            const builder = ChainRegistry.getAutoBuilder();
+            const result = builder.start({ ownerWallet: wallet });
+            // Kick a background watcher: when the build finishes successfully,
+            // persist the binary path into enm_setup_state so the wizard's
+            // binary step picks it up without an extra round-trip.
+            const onPhase = setInterval(async () => {
+                const s = builder.getStatus();
+                if (s.phase === 'done' && s.resolvedPath) {
+                    clearInterval(onPhase);
+                    try {
+                        const { db } = extensionHandle.import('data');
+                        await upsertSetupState(db, wallet, {
+                            binary_path: s.resolvedPath,
+                            binary_version: s.version || null,
+                            current_step: 'keystore',
+                        });
+                    } catch (err) {
+                        extensionHandle.log.warn(
+                            `${ENM_LOG_PREFIX} auto-install: setup-state persist failed: ${err.message}`,
+                        );
+                    }
+                } else if (s.phase === 'failed' || s.phase === 'cancelled') {
+                    clearInterval(onPhase);
+                }
+            }, 2000);
+            // Defensive cap — terminate the watcher after 30 min even if the
+            // build hangs in some weird way, so we don't leak a timer.
+            setTimeout(() => clearInterval(onPhase), 30 * 60 * 1000).unref?.();
+
+            return res.status(result.alreadyRunning ? 202 : 200).json(successBody({
+                alreadyRunning: result.alreadyRunning,
+                status: result.status,
+            }));
+        } catch (err) {
+            extensionHandle.log.error(`${ENM_LOG_PREFIX} /setup/auto-install-ela: ${err.message}`);
+            return res.status(500).json(errorBody(err.message));
+        }
+    });
+
+    /**
+     * DELETE /setup/auto-install-ela
+     *
+     * Cancel an in-flight build. Sends SIGTERM to the child (git/make/tar);
+     * leaves the cache intact so a retry can resume from the cloned source.
+     */
+    router.delete('/auto-install-ela', limit('admin'), requireOwner, async (req, res) => {
+        try {
+            ChainRegistry.getAutoBuilder().cancel();
+            return res.json(successBody(ChainRegistry.getAutoBuilder().getStatus()));
+        } catch (err) {
             return res.status(500).json(errorBody(err.message));
         }
     });
