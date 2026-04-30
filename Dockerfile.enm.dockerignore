@@ -7,11 +7,12 @@
 **/.git
 .gitignore
 
-# Node — these get freshly installed inside the image.
+# Node — node_modules gets freshly installed inside the image, but the
+# lockfile MUST be in the build context so `npm ci` can read it (npm ci
+# fails without a lockfile, and we need npm ci specifically to preserve
+# the nested ajv@8 / ajv-keywords@5 structure that webpack relies on).
 node_modules
 **/node_modules
-package-lock.json
-**/package-lock.json
 npm-debug.log
 **/npm-debug.log
 
