@@ -106,5 +106,35 @@ EOF
     echo "[entrypoint] Wrote PC2 profile overlay to $PROFILE_FILE"
 fi
 
-# --- Hand off to the Dockerfile's CMD. --------------------------------------
+# --- Start pc2-node sub-server in background. -------------------------------
+# pc2-node provides all /api/* routes the desktop frontend calls (AI chat,
+# IPFS storage, Boson identity, gateway, wallets, backups, system stats).
+# WebServerService.js in PC2 core proxies /api/* and /socket.io/* to it.
+#
+# We start it on port 4202 (4200 is already PC2's WebSocket port). If
+# pc2-node fails to start, log loudly but don't kill the container — the
+# main desktop still loads, just with /api/* features broken (better than
+# nothing while we debug). Logs go to /tmp/pc2-node.log for inspection via
+# `docker compose exec pc2 tail -f /tmp/pc2-node.log`.
+
+PC2_NODE_PORT="${PC2_NODE_PORT:-4202}"
+if [[ -f /app/pc2-node/dist/index.js ]]; then
+    echo "[entrypoint] Starting pc2-node sub-server on :$PC2_NODE_PORT..."
+    (
+        cd /app/pc2-node
+        export PORT="$PC2_NODE_PORT"
+        export NODE_ENV=production
+        export PC2_DATA_DIR=/data/pc2-node
+        mkdir -p "$PC2_DATA_DIR"
+        node dist/index.js
+    ) > /tmp/pc2-node.log 2>&1 &
+    PC2_NODE_PID=$!
+    echo "[entrypoint] pc2-node PID $PC2_NODE_PID"
+    # Brief wait so it's listening before main server starts proxying
+    sleep 2
+else
+    echo "[entrypoint] WARNING: /app/pc2-node/dist/index.js missing — /api/* will 404"
+fi
+
+# --- Hand off to the Dockerfile's CMD (the main Puter desktop server). ------
 exec "$@"

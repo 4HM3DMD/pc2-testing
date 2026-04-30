@@ -120,6 +120,19 @@ RUN npm run build:particle-auth \
  && test -f src/backend/src/services/MeteringService/MeteringService.js \
  && cd src/gui && node ./build.js
 
+# pc2-node is the *real* PC2 server — it serves the desktop frontend and
+# provides all /api/* routes (AI chat, IPFS storage, Boson identity, gateway,
+# wallets, backups, etc). Without it, those endpoints 404 and the dashboard
+# is functionally broken. Upstream tolerates tsc errors during build (their
+# Dockerfile uses `|| true`), so we do the same — JS still gets emitted.
+#
+# We also install pc2-node's deps with --legacy-peer-deps because pc2-node
+# has its own peer dep conflicts (separate from PC2's root jsdom/canvas).
+RUN cd pc2-node \
+ && npm install --legacy-peer-deps --no-audit --no-fund \
+ && (npm run build:backend || echo "[pc2-node] tsc exited non-zero — using whatever JS got emitted") \
+ && cd /app
+
 # Persistent data: config, runtime state, chain data, audit DB. Bind-mount
 # this at run-time: `-v $HOME/pc2-enm-data:/data`.
 VOLUME ["/data"]

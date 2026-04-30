@@ -536,6 +536,49 @@ class WebServerService extends BaseService {
         this.router_webhooks = express.Router();
         app.use(this.router_webhooks);
 
+        // Proxy /api/* and /socket.io/* to the pc2-node sub-server.
+        //
+        // pc2-node is the *real* PC2 product server (under pc2-node/ in the
+        // monorepo) — it provides every cloud feature the desktop frontend
+        // calls (AI chat, IPFS storage, Boson identity, gateway agents,
+        // wallets, backups, system stats, WASM apps, etc). It runs as a
+        // background process inside the same Docker container; the
+        // entrypoint starts it on PC2_NODE_PORT (default 4202).
+        //
+        // This must come BEFORE express.json() so the raw request body
+        // streams through unmodified — pc2-node parses its own bodies.
+        //
+        // socket.io is proxied as plain HTTP (long-poll transport works
+        // fine over HTTP). We're not wiring the websocket upgrade path
+        // here; the polling fallback covers our use cases.
+        {
+            const PC2_NODE_PORT = parseInt(process.env.PC2_NODE_PORT || '4202', 10);
+            const proxyToPc2Node = (req, res) => {
+                const opts = {
+                    host: '127.0.0.1',
+                    port: PC2_NODE_PORT,
+                    path: req.originalUrl,
+                    method: req.method,
+                    headers: { ...req.headers, host: `127.0.0.1:${PC2_NODE_PORT}` },
+                };
+                const proxyReq = http.request(opts, (proxyRes) => {
+                    res.writeHead(proxyRes.statusCode, proxyRes.headers);
+                    proxyRes.pipe(res);
+                });
+                proxyReq.on('error', (err) => {
+                    if ( ! res.headersSent ) {
+                        res.status(502).json({
+                            error: 'pc2-node sub-server unreachable',
+                            detail: err.message,
+                        });
+                    }
+                });
+                req.pipe(proxyReq);
+            };
+            app.use('/api', proxyToPc2Node);
+            app.use('/socket.io', proxyToPc2Node);
+        }
+
         app.use((req, res, next) => {
             if ( req.get('x-amz-sns-message-type') ) {
                 req.headers['content-type'] = 'application/json';
