@@ -1,0 +1,50 @@
+{
+  "name": "supernode-manager",
+  "title": "Supernode Manager",
+  "version": "1.0.0",
+  "description": "Run and manage a full PC2 supernode from your node. Check system specs, deploy services, and monitor network health.",
+  "author": {
+    "name": "Elacity Labs",
+    "url": "https://ela.city"
+  },
+  "license": "proprietary",
+  "icon": "icon.svg",
+  "iconDataUrl": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA0OCA0OCI+CiAgPGRlZnM+CiAgICA8bGluZWFyR3JhZGllbnQgaWQ9ImJnIiB4MT0iMCIgeTE9IjAiIHgyPSI0OCIgeTI9IjQ4IiBncmFkaWVudFVuaXRzPSJ1c2VyU3BhY2VPblVzZSI+CiAgICAgIDxzdG9wIG9mZnNldD0iMCIgc3RvcC1jb2xvcj0iIzA1OTY2OSIvPgogICAgICA8c3RvcCBvZmZzZXQ9IjEiIHN0b3AtY29sb3I9IiMwNjRlM2IiLz4KICAgIDwvbGluZWFyR3JhZGllbnQ+CiAgPC9kZWZzPgogIDxyZWN0IHdpZHRoPSI0OCIgaGVpZ2h0PSI0OCIgcng9IjEwIiBmaWxsPSJ1cmwoI2JnKSIvPgogIDxnIGZpbGw9Im5vbmUiIHN0cm9rZT0iI2ZmZiIgc3Ryb2tlLXdpZHRoPSIxLjQiPgogICAgPGxpbmUgeDE9IjI0IiB5MT0iMjQiIHgyPSIxNCIgeTI9IjE0Ii8+CiAgICA8bGluZSB4MT0iMjQiIHkxPSIyNCIgeDI9IjM0IiB5Mj0iMTQiLz4KICAgIDxsaW5lIHgxPSIyNCIgeTE9IjI0IiB4Mj0iMTQiIHkyPSIzNCIvPgogICAgPGxpbmUgeDE9IjI0IiB5MT0iMjQiIHgyPSIzNCIgeTI9IjM0Ii8+CiAgICA8bGluZSB4MT0iMjQiIHkxPSIyNCIgeDI9IjI0IiB5Mj0iMTAiLz4KICAgIDxsaW5lIHgxPSIyNCIgeTE9IjI0IiB4Mj0iMjQiIHkyPSIzOCIvPgogICAgPGxpbmUgeDE9IjE0IiB5MT0iMTQiIHgyPSIzNCIgeTI9IjE0Ii8+CiAgICA8bGluZSB4MT0iMTQiIHkxPSIzNCIgeDI9IjM0IiB5Mj0iMzQiLz4KICAgIDxsaW5lIHgxPSIxNCIgeTE9IjE0IiB4Mj0iMTQiIHkyPSIzNCIvPgogICAgPGxpbmUgeDE9IjM0IiB5MT0iMTQiIHgyPSIzNCIgeTI9IjM0Ii8+CiAgPC9nPgogIDxnIGZpbGw9IiNmZmYiIHN0cm9rZT0ibm9uZSI+CiAgICA8Y2lyY2xlIGN4PSIyNCIgY3k9IjI0IiByPSI0Ii8+CiAgICA8Y2lyY2xlIGN4PSIxNCIgY3k9IjE0IiByPSIyLjUiLz4KICAgIDxjaXJjbGUgY3g9IjM0IiBjeT0iMTQiIHI9IjIuNSIvPgogICAgPGNpcmNsZSBjeD0iMTQiIGN5PSIzNCIgcj0iMi41Ii8+CiAgICA8Y2lyY2xlIGN4PSIzNCIgY3k9IjM0IiByPSIyLjUiLz4KICAgIDxjaXJjbGUgY3g9IjI0IiBjeT0iMTAiIHI9IjIiLz4KICAgIDxjaXJjbGUgY3g9IjI0IiBjeT0iMzgiIHI9IjIiLz4KICA8L2c+Cjwvc3ZnPgo=",
+  "entry": "index.html",
+  "type": "web",
+
+  "capabilities": {
+    "network": true,
+    "ipc": ["launchApp"],
+    "api_endpoints": [
+      "GET /api/supernode/specs",
+      "GET /api/supernode/relay/status",
+      "GET /api/boson/connectivity",
+      "GET /api/registry/supernodes"
+    ],
+    "postMessage_events": {
+      "sends": [],
+      "receives": []
+    }
+  },
+
+  "requirements": {
+    "minVersion": "1.1.0"
+  },
+
+  "display": {
+    "maximize": false,
+    "resizable": true,
+    "titlebar": true,
+    "taskbar": true,
+    "width": 800,
+    "height": 650
+  },
+
+  "distribution": {
+    "channel": "stable"
+  },
+
+  "category": "system",
+  "system": true
+}

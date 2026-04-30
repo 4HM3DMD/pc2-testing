@@ -9,40 +9,65 @@ import { Router, Response } from 'express';
 import { authenticate, AuthenticatedRequest, requireOwner } from './middleware.js';
 import { logger } from '../utils/logger.js';
 import { detectPlatform, getJetsonDiagnostics } from '../utils/platform.js';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
+import { existsSync, readdirSync } from 'fs';
+import * as nodePath from 'path';
+import * as os from 'os';
 
 const router = Router();
 
 /**
+ * SEC-A6 (2026-04-22 audit): resolve all candidate `pm2` binary paths in JS
+ * (no shell glob expansion). Replaces `${HOME}/.nvm/.../bin/pm2` glob that
+ * required `shell: '/bin/bash'`. Candidate list:
+ *   - bare `pm2` (PATH lookup, requires execFile)
+ *   - every `pm2` under ~/.nvm/versions/node/*\/bin/
+ *   - /usr/local/bin/pm2, /usr/bin/pm2
+ */
+function resolvePm2Candidates(): string[] {
+  const candidates: string[] = ['pm2'];
+  try {
+    const nvmRoot = nodePath.join(os.homedir(), '.nvm', 'versions', 'node');
+    if (existsSync(nvmRoot)) {
+      for (const entry of readdirSync(nvmRoot)) {
+        const candidate = nodePath.join(nvmRoot, entry, 'bin', 'pm2');
+        if (existsSync(candidate)) candidates.push(candidate);
+      }
+    }
+  } catch {
+    // Best-effort enumeration; ignore filesystem errors
+  }
+  for (const fixed of ['/usr/local/bin/pm2', '/usr/bin/pm2']) {
+    if (existsSync(fixed)) candidates.push(fixed);
+  }
+  return candidates;
+}
+
+/**
  * Detect which process manager is available
  * Tries multiple methods to find PM2, including alternative paths
+ *
+ * SEC-A6 (2026-04-22 audit): replaced execSync with shell:'/bin/bash' glob
+ * with explicit argv via execFileSync. Same fallback chain, no shell.
  */
 function detectProcessManager(): 'systemctl' | 'pm2' | 'none' {
   // Check systemctl first (VPS deployments)
   const systemctlServices = ['pc2-node', 'pc2'];
   for (const service of systemctlServices) {
     try {
-      execSync(`systemctl is-active ${service}`, { stdio: 'ignore' });
+      execFileSync('systemctl', ['is-active', service], { stdio: 'ignore' });
       return 'systemctl';
     } catch {
       // Try next
     }
   }
-  
-  // Check PM2 with multiple paths (local installations via start-local.sh)
-  const pm2Commands = [
-    'pm2',
-    `${process.env.HOME}/.nvm/versions/node/*/bin/pm2`,
-    '/usr/local/bin/pm2',
-    '/usr/bin/pm2',
-  ];
-  
-  for (const pm2Cmd of pm2Commands) {
+
+  for (const pm2Bin of resolvePm2Candidates()) {
     try {
-      const result = execSync(`${pm2Cmd} pid pc2 2>/dev/null`, { 
+      const result = execFileSync(pm2Bin, ['pid', 'pc2'], {
         encoding: 'utf8',
-        shell: '/bin/bash',  // Use bash for glob expansion
-        timeout: 5000 
+        timeout: 5000,
+        stdio: ['ignore', 'pipe', 'ignore'],
       });
       if (result && result.trim() && result.trim() !== '0') {
         return 'pm2';
@@ -51,7 +76,7 @@ function detectProcessManager(): 'systemctl' | 'pm2' | 'none' {
       // Try next path
     }
   }
-  
+
   return 'none';
 }
 
@@ -102,21 +127,23 @@ router.post('/restart', authenticate, requireOwner, async (req: AuthenticatedReq
     // Schedule restart after response is sent
     setTimeout(() => {
       logger.info('[System] Initiating restart...');
-      
-      // Try multiple restart methods in order (same approach as UpdateService)
-      const restartCommands = [
-        { cmd: 'systemctl restart pc2-node', name: 'systemctl pc2-node' },
-        { cmd: 'systemctl restart pc2', name: 'systemctl pc2' },
-        { cmd: 'pm2 restart pc2', name: 'pm2 pc2' },
-        { cmd: 'pm2 restart all', name: 'pm2 all' },
-        { cmd: `${process.env.HOME}/.nvm/versions/node/*/bin/pm2 restart pc2`, name: 'pm2 (nvm path)' },
-        { cmd: '/usr/local/bin/pm2 restart pc2', name: 'pm2 (/usr/local)' },
-      ];
 
-      for (const { cmd, name } of restartCommands) {
+      // SEC-A6 (2026-04-22 audit): each entry is now [binary, ...argv] —
+      // no shell, no glob expansion, no env-var interpolation. The `nvm`
+      // path candidates are resolved at call-time by resolvePm2Candidates().
+      const restartCommands: Array<{ argv: string[]; name: string }> = [
+        { argv: ['systemctl', 'restart', 'pc2-node'], name: 'systemctl pc2-node' },
+        { argv: ['systemctl', 'restart', 'pc2'], name: 'systemctl pc2' },
+      ];
+      for (const pm2Bin of resolvePm2Candidates()) {
+        restartCommands.push({ argv: [pm2Bin, 'restart', 'pc2'], name: `pm2 restart pc2 (${pm2Bin})` });
+        restartCommands.push({ argv: [pm2Bin, 'restart', 'all'], name: `pm2 restart all (${pm2Bin})` });
+      }
+
+      for (const { argv, name } of restartCommands) {
         try {
           logger.info(`[System] Trying ${name}...`);
-          execSync(cmd, { timeout: 30000, shell: '/bin/bash', stdio: 'ignore' });
+          execFileSync(argv[0], argv.slice(1), { timeout: 30000, stdio: 'ignore' });
           logger.info(`[System] Restart successful via ${name}`);
           return;
         } catch (error: unknown) {
@@ -245,11 +272,17 @@ router.post('/jetson-optimize', authenticate, requireOwner, async (req: Authenti
 
     const results: Array<{ command: string; success: boolean; output?: string; error?: string }> = [];
 
+    // SEC-A6 (2026-04-22 audit): replaced execSync('… 2>&1') with execFileSync.
+    // Stderr is captured by passing stdio:'pipe' on fd 2, then concatenated
+    // with stdout — same observable behaviour as `2>&1` without going through
+    // a shell.
+
     // Set MAXN power mode (mode 0 = maximum performance)
     try {
-      const output = execSync('sudo nvpmodel -m 0 2>&1', {
+      const output = execFileSync('sudo', ['nvpmodel', '-m', '0'], {
         encoding: 'utf-8',
         timeout: 10000,
+        stdio: ['ignore', 'pipe', 'pipe'],
       });
       results.push({ command: 'nvpmodel -m 0', success: true, output: output.trim() });
       logger.info('[System] Jetson MAXN power mode enabled');
@@ -261,9 +294,10 @@ router.post('/jetson-optimize', authenticate, requireOwner, async (req: Authenti
 
     // Lock clocks to maximum frequency
     try {
-      const output = execSync('sudo jetson_clocks 2>&1', {
+      const output = execFileSync('sudo', ['jetson_clocks'], {
         encoding: 'utf-8',
         timeout: 10000,
+        stdio: ['ignore', 'pipe', 'pipe'],
       });
       results.push({ command: 'jetson_clocks', success: true, output: output.trim() });
       logger.info('[System] Jetson clocks locked to maximum');

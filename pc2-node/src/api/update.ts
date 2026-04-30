@@ -1,24 +1,67 @@
 /**
  * Update API Routes
- * 
+ *
  * Endpoints for checking and managing PC2 node updates.
+ *
+ * Security (SEC-10, 2026-04 audit):
+ *   All routes require owner authentication. Without this gate, an
+ *   unauthenticated attacker could trigger `git pull && npm install &&
+ *   restart` (RCE via supply-chain compromise), or hammer `/check-github`
+ *   to exhaust the GitHub API rate-limit (DoS).
+ *
+ *   Throttling: heavy operations (/install, /check-github) carry a
+ *   per-process minimum-interval guard so a runaway loop in a misbehaving
+ *   client cannot accidentally hammer GitHub or the update pipeline.
  */
 
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import { getUpdateService } from '../services/UpdateService.js';
 import { logger } from '../utils/logger.js';
+import { authenticate, requireOwner, AuthenticatedRequest } from './middleware.js';
 
 const router = Router();
 
+// Per-process minimum interval between heavy operations. Belt-and-braces guard
+// against accidental hammering even by an authenticated owner client.
+const INSTALL_MIN_INTERVAL_MS = 60_000;
+const GITHUB_CHECK_MIN_INTERVAL_MS = 30_000;
+
+const throttleState = {
+  install: { lastAt: 0, minIntervalMs: INSTALL_MIN_INTERVAL_MS, label: 'update install' },
+  github: { lastAt: 0, minIntervalMs: GITHUB_CHECK_MIN_INTERVAL_MS, label: 'GitHub release check' },
+};
+
+function makeThrottle(state: { lastAt: number; minIntervalMs: number; label: string }) {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    const now = Date.now();
+    const elapsed = now - state.lastAt;
+    if (elapsed < state.minIntervalMs) {
+      const retryAfterSec = Math.ceil((state.minIntervalMs - elapsed) / 1000);
+      res.setHeader('Retry-After', String(retryAfterSec));
+      res.status(429).json({
+        success: false,
+        error: `Too many requests for ${state.label}. Try again in ${retryAfterSec}s.`,
+        retryAfterSec,
+      });
+      return;
+    }
+    state.lastAt = now;
+    next();
+  };
+}
+
+const installThrottle = makeThrottle(throttleState.install);
+const githubThrottle = makeThrottle(throttleState.github);
+
 /**
- * Get current version and update status
+ * Get current version and update status (owner only)
  * GET /api/update/status
  */
-router.get('/status', (req: Request, res: Response) => {
+router.get('/status', authenticate, requireOwner, (req: Request, res: Response) => {
   try {
     const updateService = getUpdateService();
     const status = updateService.getStatus();
-    
+
     res.json({
       success: true,
       ...status,
@@ -30,14 +73,14 @@ router.get('/status', (req: Request, res: Response) => {
 });
 
 /**
- * Check for updates now
+ * Check for updates now (owner only)
  * POST /api/update/check
  */
-router.post('/check', async (req: Request, res: Response) => {
+router.post('/check', authenticate, requireOwner, async (req: Request, res: Response) => {
   try {
     const updateService = getUpdateService();
     const result = await updateService.checkForUpdates();
-    
+
     res.json({
       success: true,
       ...result,
@@ -49,13 +92,17 @@ router.post('/check', async (req: Request, res: Response) => {
 });
 
 /**
- * Get current version only (for lightweight checks)
+ * Get current version only (owner only — version is recon-relevant)
  * GET /api/update/version
+ *
+ * Note: PC2 node version is intentionally NOT public. An attacker who knows
+ * the exact version can map to specific CVEs. The Puter GUI obtains version
+ * info via authenticated paths it already calls.
  */
-router.get('/version', (req: Request, res: Response) => {
+router.get('/version', authenticate, requireOwner, (req: Request, res: Response) => {
   try {
     const updateService = getUpdateService();
-    
+
     res.json({
       version: updateService.getCurrentVersion(),
       name: 'PC2 Node',
@@ -67,14 +114,14 @@ router.get('/version', (req: Request, res: Response) => {
 });
 
 /**
- * Check GitHub releases for updates
+ * Check GitHub releases for updates (owner only, throttled)
  * POST /api/update/check-github
  */
-router.post('/check-github', async (req: Request, res: Response) => {
+router.post('/check-github', authenticate, requireOwner, githubThrottle, async (req: Request, res: Response) => {
   try {
     const updateService = getUpdateService();
     const result = await updateService.checkGitHubReleases();
-    
+
     res.json({
       success: true,
       ...result,
@@ -86,39 +133,42 @@ router.post('/check-github', async (req: Request, res: Response) => {
 });
 
 /**
- * Install update (owner only)
+ * Install update (owner only, throttled)
  * POST /api/update/install
- * 
+ *
  * This will:
  * 1. git pull origin main
  * 2. npm install
  * 3. npm run build
  * 4. Restart the server
+ *
+ * Pre-fix (SEC-10): unauthenticated; any reachable client could trigger.
+ * Post-fix: authenticate + requireOwner + 60s throttle. The owner's session
+ * token (already present in the GUI's localStorage/cookie) authorizes this
+ * call without any client-side change required.
  */
-router.post('/install', async (req: Request, res: Response) => {
+router.post('/install', authenticate, requireOwner, installThrottle, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const updateService = getUpdateService();
-    
-    // Check if already updating
+
     if (updateService.getIsUpdating()) {
-      return res.status(409).json({ 
-        success: false, 
+      return res.status(409).json({
+        success: false,
         error: 'Update already in progress',
-        progress: updateService.getUpdateProgress()
+        progress: updateService.getUpdateProgress(),
       });
     }
-    
-    // Start the update process
-    logger.info('[Update API] Starting update installation...');
-    
-    // Send immediate response that update is starting
+
+    logger.info('[Update API] Owner-authorized update installation starting', {
+      ownerWalletPrefix: req.user?.wallet_address?.substring(0, 10) + '...',
+    });
+
     res.json({
       success: true,
       message: 'Update started. Server will restart when complete.',
-      status: 'updating'
+      status: 'updating',
     });
-    
-    // Perform update after response is sent
+
     setImmediate(async () => {
       try {
         await updateService.performUpdate();
@@ -133,13 +183,13 @@ router.post('/install', async (req: Request, res: Response) => {
 });
 
 /**
- * Get update progress
+ * Get update progress (owner only)
  * GET /api/update/progress
  */
-router.get('/progress', (req: Request, res: Response) => {
+router.get('/progress', authenticate, requireOwner, (req: Request, res: Response) => {
   try {
     const updateService = getUpdateService();
-    
+
     res.json({
       isUpdating: updateService.getIsUpdating(),
       progress: updateService.getUpdateProgress(),

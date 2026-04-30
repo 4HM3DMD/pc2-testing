@@ -46,6 +46,14 @@ elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
     OS="linux"
 fi
 
+if grep -qi "microsoft\|wsl" /proc/version 2>/dev/null; then
+    echo -e "${YELLOW}WSL detected!${NC} For best results on Windows, use the dedicated WSL installer:"
+    echo -e "  ${CYAN}curl -fsSL https://raw.githubusercontent.com/Elacity/pc2.net/main/scripts/install-wsl.sh | bash${NC}"
+    echo ""
+    echo -e "${NC}Continuing with generic install in 5 seconds (Ctrl+C to cancel)...${NC}"
+    sleep 5
+fi
+
 echo -e "${CYAN}Detected: ${OS}${NC}"
 echo ""
 
@@ -172,11 +180,12 @@ install_build_deps() {
         SUDO=""
     fi
     
-    # Install build-essential, python3, and native module dependencies
+    # Install build-essential, python3, ffmpeg, and native module dependencies
     $SUDO apt-get update -qq
     $SUDO apt-get install -y -qq \
         build-essential \
         python3 \
+        ffmpeg \
         libcairo2-dev \
         libpango1.0-dev \
         libjpeg-dev \
@@ -200,6 +209,23 @@ main() {
     # Install build dependencies for native modules (Debian/Ubuntu only)
     # This must happen BEFORE npm install to ensure native modules compile correctly
     install_build_deps
+    
+    # Install FFmpeg (needed for media encoding pipeline — AV1/H.264 transcoding)
+    if ! command -v ffmpeg &> /dev/null; then
+        echo -e "${CYAN}Installing FFmpeg (media encoding)...${NC}"
+        if [[ "$OS" == "macos" ]]; then
+            if command -v brew &> /dev/null; then
+                brew install ffmpeg 2>&1 || true
+            else
+                echo -e "${YELLOW}FFmpeg not found. Install via: brew install ffmpeg${NC}"
+            fi
+        elif command -v apt-get &> /dev/null; then
+            echo -e "${CYAN}FFmpeg will be installed with build dependencies${NC}"
+        fi
+    fi
+    if command -v ffmpeg &> /dev/null; then
+        echo -e "${GREEN}✓ FFmpeg available$(ffmpeg -encoders 2>&1 | grep -q libsvtav1 && echo ' (AV1 + H.264)' || echo ' (H.264)')${NC}"
+    fi
     
     # Check and install Node.js
     if ! check_node; then
@@ -235,12 +261,37 @@ main() {
         # Need to clone
         echo -e "${CYAN}Downloading PC2...${NC}"
         cd "$HOME"
-        if [[ -n "${PC2_BRANCH}" ]]; then
-            git clone -b "${PC2_BRANCH}" https://github.com/Elacity/pc2.net.git
-            echo -e "${GREEN}✓ Downloaded PC2 (branch: ${PC2_BRANCH})${NC}"
+
+        # Configure git for large repos over unreliable connections (e.g. China/GFW)
+        git config --global http.version HTTP/1.1
+        git config --global http.postBuffer 524288000
+
+        CLONE_BRANCH="${PC2_BRANCH:-main}"
+        CLONE_OK=false
+
+        # Attempt 1: shallow clone (fast, small download)
+        if git clone --depth 1 -b "$CLONE_BRANCH" https://github.com/Elacity/pc2.net.git 2>&1; then
+            CLONE_OK=true
         else
-            git clone https://github.com/Elacity/pc2.net.git
-            echo -e "${GREEN}✓ Downloaded PC2${NC}"
+            echo -e "${YELLOW}⚠ Shallow clone failed, retrying with full clone...${NC}"
+            rm -rf pc2.net 2>/dev/null
+            # Attempt 2: full clone (slower but sometimes more reliable)
+            if git clone -b "$CLONE_BRANCH" https://github.com/Elacity/pc2.net.git 2>&1; then
+                CLONE_OK=true
+            fi
+        fi
+
+        # Restore default git http version
+        git config --global --unset http.version 2>/dev/null || true
+
+        if $CLONE_OK; then
+            echo -e "${GREEN}✓ Downloaded PC2 (branch: ${CLONE_BRANCH})${NC}"
+        else
+            echo -e "${RED}❌ Failed to download PC2. If you are in China, try:${NC}"
+            echo -e "${YELLOW}   1. Use a stable VPN connection${NC}"
+            echo -e "${YELLOW}   2. Try a GitHub mirror: git clone https://ghproxy.com/https://github.com/Elacity/pc2.net.git${NC}"
+            echo -e "${YELLOW}   3. Download the ZIP from https://github.com/Elacity/pc2.net/archive/refs/heads/main.zip${NC}"
+            exit 1
         fi
         PC2_DIR="$HOME/pc2.net/pc2-node"
     fi

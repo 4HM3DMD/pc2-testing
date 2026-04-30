@@ -17,10 +17,13 @@ import { fileURLToPath } from 'url';
 import { authenticate, AuthenticatedRequest } from './middleware.js';
 import { logger } from '../utils/logger.js';
 import { createReadStream } from 'fs';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 
-const execAsync = promisify(exec);
+// Wave 5 (A3): the unsafe `exec` primitive has been removed from this module.
+// All process spawning goes through `execFileAsync` so the kernel receives
+// argv as separate parameters — no shell, no metacharacter parsing.
+const execFileAsync = promisify(execFile);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -28,6 +31,21 @@ const __dirname = dirname(__filename);
 // Get project root
 const PROJECT_ROOT = resolve(__dirname, '../../');
 const BACKUPS_DIR = join(PROJECT_ROOT, 'backups');
+
+/**
+ * Wave 5 (A3): strict whitelist for backup filenames.
+ *
+ * Allowed: alphanumerics, dot, underscore, hyphen, ending in `.tar.gz`.
+ * Rejects: path separators, `..`, leading dash (flag injection), shell
+ * metacharacters, whitespace, NUL/control chars.
+ */
+const BACKUP_FILENAME_RE = /^[A-Za-z0-9_.-]+\.tar\.gz$/;
+function isValidBackupFilename(name: unknown): name is string {
+  if (typeof name !== 'string' || name.length === 0 || name.length > 255) return false;
+  if (name.startsWith('-') || name.startsWith('.')) return false;
+  if (name.includes('..')) return false;
+  return BACKUP_FILENAME_RE.test(name);
+}
 
 /**
  * Create a new backup
@@ -49,12 +67,15 @@ export async function createBackup(req: AuthenticatedRequest, res: Response): Pr
       user: req.user?.wallet_address
     });
 
-    // Run backup script asynchronously
-    // Note: This runs in background, we'll check for new backup after a delay
-    execAsync(`node "${backupScriptPath}"`, {
+    // Wave 5 (A3): argv form — `backupScriptPath` is a server-controlled
+    // constant, but we use execFile uniformly so this module never delegates
+    // to a shell. Runs in background; client polls list endpoint for the new
+    // archive.
+    execFileAsync('node', [backupScriptPath], {
       cwd: PROJECT_ROOT,
       env: process.env,
-      timeout: 300000 // 5 minute timeout
+      timeout: 300000, // 5 minute timeout
+      maxBuffer: 10 * 1024 * 1024,
     })
       .then(() => {
         logger.info('[Backup API] Backup created successfully');
@@ -118,15 +139,10 @@ export async function downloadBackup(req: AuthenticatedRequest, res: Response): 
   try {
     const filename = req.params.filename;
 
-    // Security: Prevent directory traversal
-    if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
-      res.status(400).json({ error: 'Invalid filename' });
-      return;
-    }
-
-    // Only allow .tar.gz files
-    if (!filename.endsWith('.tar.gz')) {
-      res.status(400).json({ error: 'Invalid backup file format' });
+    // Wave 5 (A3): strict whitelist — supersedes the prior `..`/`/`/`\\`
+    // checks and the loose `.endsWith('.tar.gz')` test in one rule.
+    if (!isValidBackupFilename(filename)) {
+      res.status(400).json({ error: 'Invalid backup filename' });
       return;
     }
 
@@ -167,15 +183,9 @@ export async function deleteBackup(req: AuthenticatedRequest, res: Response): Pr
   try {
     const filename = req.params.filename;
 
-    // Security: Prevent directory traversal
-    if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
-      res.status(400).json({ error: 'Invalid filename' });
-      return;
-    }
-
-    // Only allow .tar.gz files
-    if (!filename.endsWith('.tar.gz')) {
-      res.status(400).json({ error: 'Invalid backup file format' });
+    // Wave 5 (A3): strict whitelist (see downloadBackup).
+    if (!isValidBackupFilename(filename)) {
+      res.status(400).json({ error: 'Invalid backup filename' });
       return;
     }
 
@@ -217,9 +227,14 @@ export async function restoreBackup(req: AuthenticatedRequest & { file?: Express
       return;
     }
 
-    // Validate file type
-    if (!req.file.originalname.endsWith('.tar.gz')) {
-      res.status(400).json({ error: 'Invalid backup file format. Backup files must be .tar.gz archives.' });
+    // Wave 5 (A3): strict filename whitelist on the client-supplied
+    // originalname BEFORE we use it to construct any disk path or argv. This
+    // blocks path traversal (`../../etc/foo.tar.gz`), shell metacharacters,
+    // and flag injection (`--anything.tar.gz`).
+    if (!isValidBackupFilename(req.file.originalname)) {
+      res.status(400).json({
+        error: 'Invalid backup filename. Use only letters, numbers, dot, underscore, hyphen; must end in .tar.gz.',
+      });
       return;
     }
 
@@ -258,7 +273,11 @@ export async function restoreBackup(req: AuthenticatedRequest & { file?: Express
       finalBackupPath = join(BACKUPS_DIR, `${nameWithoutExt}-uploaded-${timestamp}.tar.gz`);
     }
 
-    writeFileSync(finalBackupPath, req.file.buffer);
+    // File is already on disk via diskStorage; move it to the final path
+    const { renameSync: mvSync } = await import('fs');
+    if (req.file.path !== finalBackupPath) {
+      mvSync(req.file.path, finalBackupPath);
+    }
     const savedFilename = finalBackupPath.split('/').pop() || backupFilename;
 
     logger.info('[Backup API] Backup file saved', {
@@ -274,12 +293,16 @@ export async function restoreBackup(req: AuthenticatedRequest & { file?: Express
       return;
     }
 
-    // Run restore script asynchronously
-    // Note: The restore script will stop the server, so we need to return response first
-    execAsync(`node "${restoreScriptPath}" "${savedFilename}"`, {
+    // Wave 5 (A3): argv form. `restoreScriptPath` is a server constant;
+    // `savedFilename` has already passed `isValidBackupFilename` (and is
+    // further constrained because it's derived from a validated input plus a
+    // server-generated timestamp). Argv-only ensures the kernel receives
+    // these as separate parameters even if a future change weakens validation.
+    execFileAsync('node', [restoreScriptPath, savedFilename], {
       cwd: PROJECT_ROOT,
       env: process.env,
-      timeout: 600000 // 10 minute timeout
+      timeout: 600000, // 10 minute timeout
+      maxBuffer: 10 * 1024 * 1024,
     })
       .then(() => {
         logger.info('[Backup API] Restore completed successfully');

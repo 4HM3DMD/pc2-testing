@@ -55,6 +55,7 @@ module.exports = eggspress('/auth/particle', {
         smartAccountAddress,   // UniversalX Smart Account address (optional, but preferred)
         particleUuid,          // Particle user UUID (optional)
         particleEmail,         // Particle email if social login (optional)
+        loginMethod,           // Login method: 'email', 'metamask', 'walletconnect', etc.
     } = req.body;
     
     // Validate the address (at minimum we need the EOA address)
@@ -224,8 +225,8 @@ module.exports = eggspress('/auth/particle', {
                 is_temp: false,
                 taskbar_items,
                 referral_code,
-                // UniversalX metadata
                 auth_type: user.smart_account_address ? 'universalx' : 'eoa',
+                login_method: loginMethod || 'email',
             }
         });
     } catch (error) {

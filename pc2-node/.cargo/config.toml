@@ -1,0 +1,33 @@
+# Reproducible WASM capsule builds for PC2 Rust crates
+#
+# All PC2 Rust crates compile to wasm32-wasip1 (WASI Preview 1).
+# This is the same target used by the ElastOS Runtime for capsule execution.
+#
+# Usage: cargo build --release --target wasm32-wasip1
+# Build script: scripts/build-wasm.sh
+
+[build]
+target = "wasm32-wasip1"
+
+[target.wasm32-wasip1]
+# Panic = abort reduces binary size (no unwinding in WASM)
+rustflags = ["-C", "panic=abort"]
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
+
+[profile.release.package.cenc-decrypt]
+opt-level = 3
+
+[profile.release.package.cenc-encrypt]
+opt-level = 3
+
+[profile.release.package.evm-multicall]
+opt-level = 3
+
+[profile.release.package.amm-engine]
+opt-level = 3

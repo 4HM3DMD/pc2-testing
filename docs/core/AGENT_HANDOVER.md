@@ -1,8 +1,8 @@
 # PC2 Agent Handover Document
 
 > **Purpose:** Complete contextual awareness for AI agents working on PC2
-> **Last Updated:** 2026-02-26
-> **Current Status:** v1.1 branch tested on 2 Jetsons, awaiting Sash's validation + merge to main
+> **Last Updated:** 2026-03-04
+> **Current Status:** v1.1.0 on main. Active branch: `feature/elacity-ddrm-marketplace` — Phase 1 foundation + Elacity Market dApp + Download-to-Node complete
 
 ---
 
@@ -103,21 +103,30 @@ User Browser                    Supernode                     PC2 Node (VPS)
      │◄──────────── Response ───────│◄─────── Response ──────────│
 ```
 
-### Transport Priority (ConnectivityService)
+### Transport Priority — Four-Tier Cascade (ConnectivityService)
 
-The node automatically selects the best transport:
-1. **WireGuard** (primary) - kernel-level UDP tunnel, near-localhost speed
-2. **Boson Active Proxy** (fallback) - serial TCP relay, slow but works everywhere
-3. **Direct** - public IP users (VPS), no tunnel needed
+The node automatically selects the best transport and cascades down when blocked:
+1. **WireGuard** (primary) — kernel-level UDP tunnel, near-localhost speed
+2. **AmneziaWG** (UDP stealth) — DPI-resistant WireGuard fork, randomized headers + junk padding
+3. **VLESS Reality + AWG** (TCP stealth) — TLS 1.3 mimicry via sing-box 1.13.0, wraps AWG inside HTTPS to microsoft.com
+4. **ActiveProxy** (relay) — TCP relay via Boson supernode, last resort
 
-### WireGuard Architecture
+The system retries higher tiers periodically so it moves back up when possible. All four tiers are tested on macOS and NVIDIA Jetson.
+
+### Transport Architecture
 
 **Key files:**
 - `pc2-node/src/services/wireguard/WireGuardService.ts` - Client tunnel management (kernel + wireguard-go userspace)
-- `pc2-node/src/services/boson/ConnectivityService.ts` - Transport priority logic + automatic fallback
-- `scripts/install-arm.sh` - **One-command installer** for ARM (Pi/Jetson). Installs Node.js, PM2, WireGuard, builds PC2, starts it. Includes Jetson wireguard-go fallback.
+- `pc2-node/src/services/boson/ConnectivityService.ts` - Transport priority logic + four-tier cascade
+- `pc2-node/src/services/stealth/` - AmneziaWG and VLESS Reality stealth transport services
+- `scripts/install-arm.sh` - **One-command installer** for ARM (Pi/Jetson). Installs Node.js, PM2, WireGuard, AmneziaWG, sing-box, builds PC2, starts it.
+- `scripts/start-local.sh` - **One-command installer** for macOS/Linux desktop. Same full tool chain.
 - `scripts/setup-node.sh` - Standalone WireGuard system prep (can also be run separately)
 - `deploy/web-gateway/index.js` - `/api/wg/register` provisioning endpoint
+- `docs/deployment/STEALTH_MODE.md` - Full stealth mode documentation
+- `docs/deployment/TRANSPORT_ARCHITECTURE.md` - Four-tier cascade architecture
+
+**Install Parity Rule:** All three install paths (start-local.sh, install-arm.sh, Elastos Launcher setupNetworking()) must install the identical set of networking tools. See `elastos-launcher/CONTRIBUTING.md`.
 
 **User flow (one command, then wizard):**
 1. Run `curl -sSL .../install-arm.sh | bash` (installs EVERYTHING including WireGuard)
@@ -282,7 +291,9 @@ pm2 restart pc2    # or: systemctl restart pc2-node (on older setups)
 
 ---
 
-## Current State (2026-02-21)
+## Current State (2026-03-04)
+
+### Release: v1.1.0 (tagged 2026-03-03, 134 commits squash-merged to main)
 
 ### What's Working
 
@@ -290,48 +301,86 @@ pm2 restart pc2    # or: systemctl restart pc2-node (on older setups)
 - ✅ File management (IPFS storage)
 - ✅ Apps (Calculator, Editor, Viewer, Player, Terminal, PDF Reader)
 - ✅ AI Chat (OpenAI, Anthropic, Groq, local Ollama)
+- ✅ Voice AI pipeline (Whisper STT + Ollama + Context API)
 - ✅ Access control (owner/admin/member roles)
 - ✅ Backup & restore
-- ✅ NAT traversal via WireGuard (primary) + Boson Active Proxy (fallback)
+- ✅ Four-tier transport cascade: WireGuard > AmneziaWG > VLESS Reality > ActiveProxy
 - ✅ Subdomain routing (`*.ela.city`)
-- ✅ Auto-update notifications
 - ✅ WireGuard kernel + wireguard-go userspace (Jetson automatic fallback)
-- ✅ One-command ARM installer (`install-arm.sh`) with PM2 auto-start on boot
+- ✅ AmneziaWG stealth transport (DPI-resistant, built from source)
+- ✅ VLESS Reality TCP stealth via sing-box 1.13.0 (TLS 1.3 mimicry)
+- ✅ One-command ARM installer (`install-arm.sh`) — Node.js, PM2, WireGuard, AmneziaWG, sing-box
+- ✅ One-command Mac/Linux installer (`start-local.sh`) — same full tool chain
+- ✅ Desktop Launcher (`elastos-launcher`) — version display, one-click updates, full networking install
 - ✅ Video streaming with HTTP Range/206 support (IPFS byte-range, memory-efficient)
-- ✅ Large file uploads (multi-GB, disk-based streaming via multer)
+- ✅ Large file uploads (multi-GB, disk-based streaming via multer, IPFS size verification)
 - ✅ Gateway gzip compression + keep-alive pooling
-- ✅ PDF and image rendering (fixed binary data corruption)
+- ✅ Desktop UI: full-width top bar, desktop layout toggle, background color picker
+- ✅ Mobile-responsive taskbar
+- ✅ Structured logging (createLogger, module-based, LOG_LEVEL gated)
+- ✅ Jetson power mode auto-optimization (nvpmodel, up to 25W MAXN_SUPER)
 
-### Recently Fixed (2026-02-21)
+### Active Work — Elacity dDRM & dApp Store
 
-1. **WireGuard on Jetson** - wireguard-go userspace fallback (NVIDIA custom kernel lacks module)
-2. **sudo env stripping** - `WG_QUICK_USERSPACE_IMPLEMENTATION` now set before `sudo -E`, SETENV in sudoers
-3. **Video streaming regression** - `ipfs.getFileSize()` was called on every request; now uses DB metadata, IPFS only for Range requests
-4. **PDF blank pages** - Binary data was corrupted by `content.toString('utf8')`; now sends raw Buffer for binary files
-5. **Image loading errors** - Same binary corruption fix as PDFs
-6. **Accept-Ranges header** - Now only set for video/audio types; was causing PDF.js to attempt broken range-based loading
-7. **100MB+ upload crashes** - Switched multer to diskStorage, IPFS streaming upload
-8. **Gateway 206 compression** - Partial content responses are never gzipped (preserves byte-range semantics)
-9. **install-arm.sh rewrite** - Now includes WireGuard setup, PM2 (not systemd), wireguard-go for Jetson, boot persistence
+**Branch:** `feature/elacity-ddrm-marketplace`
+**Plan:** Cursor internal plan — "App Store and Media Market" (ID: `app_store_and_media_market_2489ec7b`)
+**Priority:** First work stream after v1.1.0 release
 
-### Recently Fixed (2026-02-23/24)
+#### Completed (Mar 3-4, 2026)
 
-10. **AV1/Firefox playback** — Player now shows clear error for unsupported containers (MKV/AVI/MOV in Firefox), added `.av1` file support
-11. **IPFS DHT broadcasting** — Switched to client-mode DHT with 50-peer connection limit, private files no longer announced to IPFS network
-12. **Active Proxy overwriting WireGuard** — ConnectivityService now prefers WireGuard on reconnect, Active Proxy can't overwrite a working WireGuard endpoint
-13. **Gateway stale connections** — Health-check every 60s probes WireGuard peers, auto-flushes dead sockets, error-triggered flush on ECONNREFUSED
-14. **PM2 auto-start** — `pm2 startup systemd` integrated into install script for boot persistence
-15. **File creation error** — `window.refresh_item_container` exposed globally (was missing)
-16. **MKV double-click** — Added to file-to-player associations
-17. **Large upload timeout** — Added timeout wrappers to IPFS storeFile/storeFileStream with progress logging
+**Phase 1 Foundation:**
+- ✅ postMessage wallet bridge (`pc2-wallet-bridge.js` + `pc2-wallet-provider.js`) — shims `window.ethereum` for sandboxed iframe apps
+- ✅ COOP/COEP per-app headers for SharedArrayBuffer (media player)
+- ✅ `installed_apps` SQLite table + AppInstallService
+- ✅ Install/uninstall/list/update API endpoints (`/api/apps/*`)
+- ✅ `handleGetLaunchApps()` merges built-in + installed apps
+- ✅ iframe sandbox attributes on all installed apps
+- ✅ Static serving for installed apps with no-cache headers
 
-### Pending Tasks
+**Elacity Market dApp:**
+- ✅ Full market UI (Feed, Channels, Library, Subscriptions, Watch Later)
+- ✅ Light/dark theme toggle
+- ✅ GraphQL API client for Elacity backend
+- ✅ Particle Smart Wallet + auto-SIWE authentication
+- ✅ Channel directory with grid/list views and category filters
+- ✅ On-chain subscription flow (plan selection, ERC-20 approval, subscribePlan)
+- ✅ On-chain purchase flow (buyAccess via AuthorityGateway)
+- ✅ Media preview inline player
+- ✅ Elacity logo integration (light/dark variants)
 
-- [ ] Merge `feature/jetson-gpu-acceleration` to main (after community Jetson testing passes clean)
-- [ ] Large file upload stalling at ~85% on 2.5GB+ (ulimit fix pending verification on Jetson)
-- [ ] Wallpaper not loading via gateway (URL origin mismatch)
-- [ ] Debian package (.deb) for Raspberry Pi
-- [ ] macOS package (.dmg)
+**Download-to-Node / Seeding:**
+- ✅ "Save to Cloud" download with progress UI
+- ✅ `.edrm` descriptor format (JSON with CID, contract, token ID, gateway)
+- ✅ `openFolder` IPC handler — dApps can open file explorer at a path
+- ✅ `.edrm` file type in GUI — custom icon, MIME type, double-click opens player
+- ✅ IPFS CAR format support for directory CIDs
+- ✅ Authenticated backend calls via `pc2Fetch()` wrapper
+
+**Elacity Player:**
+- ✅ Bundled at `test-apps/elacity-player/` with DASH streaming + DRM
+
+#### In Progress
+
+- 🔨 Purchase flow — EOA direct buy works; UA executor path for smart wallet still pending
+- 🔨 End-to-end `.edrm` playback verification from file explorer
+
+#### Remaining (from plan)
+
+- [ ] App registry manifest format + supernode discovery endpoint
+- [ ] App build pipeline documentation
+- [ ] Smart Wallet (UA executor) purchase path
+- [ ] App Center UI rebuild against real backend APIs
+- [ ] Media packager integration (cloud transcode)
+- [ ] App Factory (local build/package/publish pipeline)
+- [ ] Auto-pin + DHT announce for CDN effect
+
+### Other Pending Tasks
+
+- [ ] Keyboard shortcuts (Alt+Tab, Alt+F4)
+- [ ] Explorer context menu (Copy path, Open terminal here)
+- [ ] AV1/Firefox — server-side remuxing for MKV→MP4
+- [ ] Raspberry Pi 4/5 validation
+- [ ] macOS Apple Developer cert for signed .dmg
 - [ ] Multi-domain support (pc2.net, ela.net)
 - [ ] P2P messaging between PC2 nodes
 - [ ] See [ROADMAP.md](./ROADMAP.md) for full strategic roadmap
@@ -343,10 +392,24 @@ pm2 restart pc2    # or: systemctl restart pc2-node (on older setups)
 | Document | Purpose | When to Read |
 |----------|---------|--------------|
 | **This file** | Quick context, key patterns | First |
+| [Session Handover](SESSION_HANDOVER.md) | Current session state, what to work on next | First |
+| [Roadmap](ROADMAP.md) | All milestones with checkboxes | Planning |
+| [Architecture Convergence](ARCHITECTURE_CONVERGENCE.md) | PC2 v1 → capsule runtime v2 path | Architecture |
+| [Stealth Mode](../deployment/STEALTH_MODE.md) | Four-tier transport cascade docs | Networking |
+| [Transport Architecture](../deployment/TRANSPORT_ARCHITECTURE.md) | Transport cascade architecture | Networking |
 | [Strategic Plan](STRATEGIC_IMPLEMENTATION_PLAN.md) | Full project history, detailed phases | Deep dive |
 | [Network Architecture Plan](plans/decentralized_network_architecture.plan.md) | Decentralization vision, P2P design | Future planning |
 | [Infrastructure Architecture](../pc2-infrastructure/ARCHITECTURE.md) | Supernode setup, protocol details | Infrastructure work |
 | [Supernode Guide](../pc2-infrastructure/SUPERNODE_OPERATOR_GUIDE.md) | How to run a supernode | Deploying supernodes |
+
+## Related Repositories
+
+| Repository | Purpose |
+|------------|---------|
+| [Elacity/pc2.net](https://github.com/Elacity/pc2.net) | Main PC2 node |
+| [Elacity/elastos-launcher](https://github.com/Elacity/elastos-launcher) | Desktop launcher (Electron) |
+| [Elacity/document-portal](https://github.com/Elacity/document-portal) | docs.ela.city documentation site |
+| [Elacity/js-sdk](https://github.com/Elacity/js-sdk) | Elacity SDK (dDRM, contracts, media) |
 
 ---
 

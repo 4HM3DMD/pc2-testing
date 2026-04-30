@@ -2,7 +2,8 @@
 
 > **Purpose:** Documents every fragile point in the current supernode/gateway/connectivity architecture and what needs to change before decentralization
 > **Created:** 2026-02-24
-> **Status:** Planning — No code changes yet, these are identified requirements
+> **Status:** Phase 1 complete, Phase 2 built (on branch, not released). Community networking fix available on main.
+> **Last Updated:** 2026-03-08
 
 ---
 
@@ -12,12 +13,61 @@ The current infrastructure works for 10-50 nodes with a single operator who can 
 
 ### Scale Tiers
 
-| Tier | Nodes | Supernodes | Operator Model |
-|------|-------|------------|----------------|
-| **Current** | 10-50 | 1 | Manual SSH, single operator |
-| **Phase 1** | 50-500 | 2-3 | Automated recovery, monitoring dashboard |
-| **Phase 2** | 500-5,000 | 5-10 | Fully self-healing, node auto-migration |
-| **Phase 3** | 5,000-100,000+ | 50+ | Decentralized mesh, no single operator |
+| Tier | Nodes | Supernodes | Operator Model | Status |
+|------|-------|------------|----------------|--------|
+| **Current** | 10-50 | 2 | Manual SSH, single operator | **Active** |
+| **Phase 1** | 50-500 | 2-3 | Automated recovery, monitoring dashboard | **Complete** (transport + gateway) |
+| **Phase 2** | 500-5,000 | 5-10 | Fully self-healing, node auto-migration | Planned |
+| **Phase 3** | 5,000-100,000+ | 50+ | Decentralized mesh, anyone can join | Planned |
+
+### Current Supernode Inventory (2026-03-07)
+
+| Server | Provider | IP | Services | Role |
+|--------|----------|-----|----------|------|
+| InterServer | Linode | 69.164.241.210 | Gateway, Boson DHT, IPFS Relay, App Registry, WireGuard (wg0, 10.100/10.101), AmneziaWG, VLESS, Network Map | Primary |
+| Contabo | Contabo | 38.242.211.112 | Gateway (slim), Boson DHT, IPFS Relay, App Registry (mirror), WireGuard (wg1, 10.102), AmneziaWG (awg0, 10.103), VLESS Reality, PC2 Node | Secondary |
+
+### What's Deployed (Phase 1 Complete)
+- Automated backup: InterServer -> Contabo every 6 hours via rsync/SSH key auth
+- App registry mirror with 5-minute sync from primary
+- Independent IPFS relay (500+ peers, own peer ID)
+- Independent Boson DHT (own node ID, bootstraps from InterServer + Elastos Foundation)
+- PC2 client code updated with multi-supernode failover for registry, IPFS, and Boson
+- Slim web gateway on Contabo (read-replica, subdomain routing, user/registry APIs)
+- Dual-write node registration (PC2 nodes register on all reachable supernodes)
+- WireGuard server on Contabo (wg1, subnet 10.102.0.0/16, port 51820)
+- AmneziaWG server on Contabo (awg0, subnet 10.103.0.0/16, port 51821, obfuscation enabled)
+- VLESS Reality server on Contabo (sing-box, port 8443)
+- Transport provisioning APIs on Contabo gateway (/api/wg/register, /api/awg/register, /api/vless/register)
+- Client-side sequential failover: all transport services try secondary supernodes on primary failure
+- ConnectivityService clears provision cache on tunnel failure for clean re-provisioning
+
+### Three-Tier Network Architecture (Target)
+
+| Tier | Role | Services | Who Runs It |
+|------|------|----------|-------------|
+| **Full Supernode** | Network backbone | Gateway, Boson DHT, IPFS Relay, WG/AWG/VLESS tunnels, App Registry, Active Proxy | Operators (VPS, 4+ cores, 8+ GB RAM, 100+ Mbps) |
+| **Relay Node** | Lightweight contributor | IPFS relay, Boson DHT, content seeding | PC2 users with public IP (toggle in settings) |
+| **Leaf Node** | Consumer | IPFS content seeding, local AI, personal cloud | All PC2 users (default mode, behind NAT) |
+
+### What's Been Done (Phase 2 — Mar 7-8, on branch, NOT yet released)
+- [x] Supernode bootstrap script (`deploy/supernode-bootstrap.sh`) — one-command VPS setup
+- [x] Dynamic supernode discovery — gossip protocol + parallel fetch + disk persistence
+- [x] Relay node mode — Settings toggle + IPFS circuitRelayServer + DHT server mode
+- [x] Supernode dApp in dApp Center — spec check, service status, network view
+- [x] Registry mesh sync via gossip endpoints (bidirectional)
+- [x] Gateway v2.0 deployed to Contabo (register/heartbeat/gossip endpoints)
+- [x] Networking fix script (`scripts/fix-networking.sh`) for community users missing WireGuard
+
+### What's Next (Priority Order)
+1. **InterServer gateway upgrade to v2.0** — purely additive, waiting for go-ahead
+2. **WireGuard bundling** — bundle wg/wg-quick/wireguard-go/sing-box binaries with PC2 app so no user falls back to broken ActiveProxy (see `fix_wireguard_bundling` plan)
+3. **Gateway "node offline" page** — show clear HTML error instead of infinite "initializing" when proxy fails
+4. **Per-domain rate limiting** on gateway
+5. **dDRM Access Token integration** for supernode economics
+
+### Economic Model
+See [SUPERNODE_ECONOMICS.md](../core/SUPERNODE_ECONOMICS.md) for the dDRM Access Token model that will govern supernode revenue as the network scales.
 
 ---
 

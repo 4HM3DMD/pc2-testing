@@ -180,12 +180,20 @@ export class FilesystemManager {
 
     this.db.createOrUpdateFile(metadata);
 
-    // Announce public files to IPFS DHT for discoverability
-    if (isPublic && this.ipfs && this.ipfs.canAnnounce()) {
-      // Run announcement in background (don't block file write)
+    // Track all locally-created CIDs so startup/tiered seeding announcements include them.
+    // This improves remote gateway discoverability for non-public paths too.
+    try {
+      this.db.trackPinnedCID(ipfsHash, walletAddress, size, 'local');
+      this.db.updatePinStatus(ipfsHash, 'complete');
+    } catch (trackError: any) {
+      logger.warn(`[Filesystem] Failed to track local CID ${ipfsHash}: ${trackError.message}`);
+    }
+
+    // Announce all locally-created files to DHT so external gateways can discover providers.
+    if (this.ipfs && this.ipfs.canAnnounce()) {
       this.ipfs.announceCID(ipfsHash).then(announced => {
         if (announced) {
-          logger.info(`[Filesystem] 📡 Announced public file CID to DHT: ${ipfsHash}`);
+          logger.info(`[Filesystem] 📡 Announced local CID to DHT: ${ipfsHash}`);
         }
       }).catch(err => {
         logger.warn(`[Filesystem] Failed to announce CID to DHT: ${err.message}`);
@@ -329,10 +337,17 @@ export class FilesystemManager {
 
     this.db.createOrUpdateFile(metadata);
 
-    if (isPublic && this.ipfs && this.ipfs.canAnnounce()) {
+    try {
+      this.db.trackPinnedCID(ipfsHash, walletAddress, fileSize, 'local');
+      this.db.updatePinStatus(ipfsHash, 'complete');
+    } catch (trackError: any) {
+      logger.warn(`[Filesystem] Failed to track local CID ${ipfsHash}: ${trackError.message}`);
+    }
+
+    if (this.ipfs && this.ipfs.canAnnounce()) {
       this.ipfs.announceCID(ipfsHash).then(announced => {
         if (announced) {
-          logger.info(`[Filesystem] Announced public file CID to DHT: ${ipfsHash}`);
+          logger.info(`[Filesystem] Announced local file CID to DHT: ${ipfsHash}`);
         }
       }).catch(err => {
         logger.warn(`[Filesystem] Failed to announce CID to DHT: ${err.message}`);
@@ -792,6 +807,7 @@ export class FilesystemManager {
 
     const mimeTypes: Record<string, string> = {
       'txt': 'text/plain',
+      'md': 'text/markdown',
       'html': 'text/html',
       'css': 'text/css',
       'js': 'text/javascript',
@@ -837,4 +853,3 @@ export class FilesystemManager {
     return mimeTypes[ext] || null;
   }
 }
-

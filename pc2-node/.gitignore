@@ -4,6 +4,9 @@ node_modules/
 # Build output
 dist/
 
+# Bundled platform binaries (fetched via scripts/fetch-binaries.sh)
+bin/
+
 # Compiled TypeScript in src/ (source is .ts, compiled goes to dist/)
 src/**/*.js
 src/**/*.js.map
@@ -26,8 +29,22 @@ Thumbs.db
 .vscode/
 .idea/
 
-# Data
-data/
+# Secrets / API keys (never commit)
+data/.chipotle-api-key
+data/.chipotle-user-key
+data/.chipotle-account-key
+data/.chipotle-provision.json
+
+# Dev-only test scripts containing secrets
+scripts/test-chipotle-phase1.mjs
+
+# Data (user data, databases, runtime state — but NOT test-apps or lit-actions source)
+data/*
+!data/test-apps/
+!data/lit-actions/
+!data/skills/
+libp2p-private-key.protobuf
+data/ipfs/libp2p-private-key.protobuf
 *.db
 *.db-shm
 *.db-wal

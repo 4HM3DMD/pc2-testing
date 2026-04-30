@@ -6,7 +6,7 @@
  */
 
 import { Router, Response } from 'express';
-import { authenticate, AuthenticatedRequest } from './middleware.js';
+import { authenticate, requireOwner, AuthenticatedRequest } from './middleware.js';
 import multer from 'multer';
 import { spawn, execFile, exec } from 'child_process';
 import { writeFile, unlink, readFile } from 'fs/promises';
@@ -383,7 +383,8 @@ const execAsync = promisify(exec);
  * POST /api/ai/voice/enable
  * Start the whisper-server systemd service.
  */
-router.post('/voice/enable', authenticate, async (_req: AuthenticatedRequest, res: Response) => {
+// Wave 5 (A5): owner-only — invokes `sudo systemctl` on the host.
+router.post('/voice/enable', authenticate, requireOwner, async (_req: AuthenticatedRequest, res: Response) => {
   try {
     await execAsync('sudo systemctl start whisper-server 2>/dev/null');
     // Give it a moment to start
@@ -400,7 +401,8 @@ router.post('/voice/enable', authenticate, async (_req: AuthenticatedRequest, re
  * POST /api/ai/voice/disable
  * Stop the whisper-server systemd service.
  */
-router.post('/voice/disable', authenticate, async (_req: AuthenticatedRequest, res: Response) => {
+// Wave 5 (A5): owner-only — invokes `sudo systemctl` on the host.
+router.post('/voice/disable', authenticate, requireOwner, async (_req: AuthenticatedRequest, res: Response) => {
   try {
     await execAsync('sudo systemctl stop whisper-server 2>/dev/null');
     res.json({ success: true, whisperRunning: false });
@@ -415,7 +417,9 @@ router.post('/voice/disable', authenticate, async (_req: AuthenticatedRequest, r
  * Install Whisper + Piper + ffmpeg in the background.
  * Returns immediately; client should poll /voice/status.
  */
-router.post('/voice/install', authenticate, async (_req: AuthenticatedRequest, res: Response) => {
+// Wave 5 (A5): owner-only — runs apt-get install, git clone, and writes a
+// systemd unit. Tethered wallets must never be able to trigger this path.
+router.post('/voice/install', authenticate, requireOwner, async (_req: AuthenticatedRequest, res: Response) => {
   try {
     // Check if already installed
     const whisperAvailable = await isWhisperAvailable();

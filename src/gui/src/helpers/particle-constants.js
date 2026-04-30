@@ -18,6 +18,7 @@ export const CHAIN_INFO = {
         explorer: 'https://etherscan.io',
         chainType: 'evm',
         color: '#627EEA',
+        nativeCurrency: 'ETH',
     },
     8453: {
         name: 'Base',
@@ -25,6 +26,7 @@ export const CHAIN_INFO = {
         explorer: 'https://basescan.org',
         chainType: 'evm',
         color: '#0052FF',
+        nativeCurrency: 'ETH',
     },
     42161: {
         name: 'Arbitrum',
@@ -32,6 +34,7 @@ export const CHAIN_INFO = {
         explorer: 'https://arbiscan.io',
         chainType: 'evm',
         color: '#28A0F0',
+        nativeCurrency: 'ETH',
     },
     10: {
         name: 'Optimism',
@@ -39,6 +42,7 @@ export const CHAIN_INFO = {
         explorer: 'https://optimistic.etherscan.io',
         chainType: 'evm',
         color: '#FF0420',
+        nativeCurrency: 'ETH',
     },
     137: {
         name: 'Polygon',
@@ -46,6 +50,7 @@ export const CHAIN_INFO = {
         explorer: 'https://polygonscan.com',
         chainType: 'evm',
         color: '#8247E5',
+        nativeCurrency: 'POL',
     },
     56: {
         name: 'BNB Chain',
@@ -53,6 +58,7 @@ export const CHAIN_INFO = {
         explorer: 'https://bscscan.com',
         chainType: 'evm',
         color: '#F0B90B',
+        nativeCurrency: 'BNB',
     },
     43114: {
         name: 'Avalanche',
@@ -60,6 +66,7 @@ export const CHAIN_INFO = {
         explorer: 'https://snowtrace.io',
         chainType: 'evm',
         color: '#E84142',
+        nativeCurrency: 'AVAX',
     },
     101: {
         name: 'Solana',
@@ -67,6 +74,7 @@ export const CHAIN_INFO = {
         explorer: 'https://solscan.io',
         chainType: 'solana',
         color: '#9945FF',
+        nativeCurrency: 'SOL',
     },
     59144: {
         name: 'Linea',
@@ -74,6 +82,7 @@ export const CHAIN_INFO = {
         explorer: 'https://lineascan.build',
         chainType: 'evm',
         color: '#121212',
+        nativeCurrency: 'ETH',
     },
     20: {
         name: 'ESC',
@@ -82,6 +91,7 @@ export const CHAIN_INFO = {
         explorer: 'https://esc.elastos.io',
         chainType: 'evm',
         color: '#F6921A',
+        nativeCurrency: 'ELA',
     },
     22: {
         name: 'EID Chain',
@@ -90,6 +100,7 @@ export const CHAIN_INFO = {
         explorer: 'https://eid.elastos.io',
         chainType: 'evm',
         color: '#F6921A',
+        nativeCurrency: 'ELA',
     },
     12343: {
         name: 'ECO Chain',
@@ -98,6 +109,7 @@ export const CHAIN_INFO = {
         explorer: 'https://eco.elastos.io',
         chainType: 'evm',
         color: '#F6921A',
+        nativeCurrency: 'ELA',
     },
     860621: {
         name: 'PGP Chain',
@@ -106,6 +118,7 @@ export const CHAIN_INFO = {
         explorer: 'https://pgp.elastos.io',
         chainType: 'evm',
         color: '#8B5CF6',
+        nativeCurrency: 'PGP',
     },
 };
 

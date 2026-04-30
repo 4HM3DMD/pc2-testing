@@ -17,8 +17,8 @@ export function createNodesRouter() {
    * List all PC2 nodes (anonymized)
    * 
    * Query params:
-   * - status: filter by status (online, offline, stale)
-   * - activityType: filter by activity (always-on, intermittent, occasional, inactive)
+   * - status: filter by status (online, offline)
+   * - activityType: filter by activity (active, occasional, idle)
    * - limit: max results (default 100)
    */
   router.get('/', (req, res) => {

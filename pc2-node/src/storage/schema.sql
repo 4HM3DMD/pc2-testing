@@ -1,6 +1,6 @@
 -- PC2 Node Database Schema
 -- SQLite database for persistent storage
--- Version 15: Full schema with all migrations applied
+-- Version 16: Full schema with all migrations applied
 
 -- Users table: Wallet-based user accounts
 CREATE TABLE IF NOT EXISTS users (
@@ -11,12 +11,18 @@ CREATE TABLE IF NOT EXISTS users (
 );
 
 -- Sessions table: Active user sessions
+-- scope/scope_data (added in migration 29 / SEC-3c, 2026-04 audit) constrain
+-- a session to a specific resource. NULL scope = unrestricted owner/user
+-- session. scope='file' = ephemeral session bound to a single fileUid (used
+-- by Puter iframe apps replacing the previous insecure mock-token pattern).
 CREATE TABLE IF NOT EXISTS sessions (
   token TEXT PRIMARY KEY,
   wallet_address TEXT NOT NULL,
   smart_account_address TEXT,
   created_at INTEGER NOT NULL,
   expires_at INTEGER NOT NULL,
+  scope TEXT,
+  scope_data TEXT,
   FOREIGN KEY (wallet_address) REFERENCES users(wallet_address) ON DELETE CASCADE
 );
 
@@ -159,6 +165,103 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   FOREIGN KEY (wallet_address) REFERENCES users(wallet_address) ON DELETE CASCADE
 );
 
+-- Installed apps table: User-installed dApps from IPFS
+CREATE TABLE IF NOT EXISTS installed_apps (
+  app_name TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  version TEXT NOT NULL DEFAULT '1.0.0',
+  cid TEXT NOT NULL,
+  size INTEGER DEFAULT 0,
+  icon TEXT,
+  description TEXT,
+  author TEXT,
+  permissions_json TEXT DEFAULT '[]',
+  requirements_json TEXT DEFAULT '{}',
+  manifest_json TEXT NOT NULL DEFAULT '{}',
+  installed_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+-- Pinned CIDs table: Tracks marketplace purchases and CDN-participating content
+CREATE TABLE IF NOT EXISTS pinned_cids (
+  cid TEXT NOT NULL,
+  wallet_address TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'marketplace',
+  size INTEGER NOT NULL DEFAULT 0,
+  pinned_at INTEGER NOT NULL,
+  last_announced_at INTEGER,
+  last_served_at INTEGER,
+  serve_count INTEGER NOT NULL DEFAULT 0,
+  pin_status TEXT NOT NULL DEFAULT 'complete',
+  bytes_downloaded INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (cid, wallet_address)
+);
+
+-- NFT Pins table: Tracks NFT images pinned to the node by owners
+CREATE TABLE IF NOT EXISTS nft_pins (
+  cid TEXT NOT NULL,
+  wallet_address TEXT NOT NULL,
+  contract_address TEXT NOT NULL,
+  token_id TEXT NOT NULL,
+  name TEXT,
+  collection_name TEXT,
+  mime_type TEXT,
+  file_path TEXT,
+  pin_status TEXT NOT NULL DEFAULT 'queued',
+  pinned_at INTEGER NOT NULL,
+  PRIMARY KEY (cid, wallet_address)
+);
+
+-- Content catalog table: On-chain indexed content for decentralized discovery
+CREATE TABLE IF NOT EXISTS content_catalog (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  content_id TEXT,
+  channel_address TEXT NOT NULL,
+  token_id TEXT NOT NULL,
+  operative_address TEXT,
+  creator_address TEXT NOT NULL,
+  name TEXT,
+  description TEXT,
+  image_url TEXT,
+  content_cid TEXT,
+  metadata_cid TEXT,
+  mime_type TEXT,
+  asset_type TEXT,
+  price TEXT,
+  payment_token TEXT,
+  op_type INTEGER,
+  chain_id INTEGER NOT NULL DEFAULT 8453,
+  block_number INTEGER NOT NULL,
+  tx_hash TEXT,
+  contract_version TEXT NOT NULL DEFAULT 'v2',
+  metadata_status TEXT NOT NULL DEFAULT 'pending',
+  indexed_at INTEGER NOT NULL,
+  metadata_json TEXT,
+  UNIQUE(channel_address, token_id, chain_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_content_catalog_creator ON content_catalog(creator_address);
+CREATE INDEX IF NOT EXISTS idx_content_catalog_type ON content_catalog(asset_type);
+CREATE INDEX IF NOT EXISTS idx_content_catalog_content_id ON content_catalog(content_id);
+CREATE INDEX IF NOT EXISTS idx_content_catalog_channel ON content_catalog(channel_address);
+CREATE INDEX IF NOT EXISTS idx_content_catalog_status ON content_catalog(metadata_status);
+CREATE INDEX IF NOT EXISTS idx_content_catalog_block ON content_catalog(block_number);
+
+-- Telemetry on-ramp table: anonymous funnel events for v1.2 launch metrics
+-- Tracks 4 events: install_started, wallet_ready, first_capsule_open, first_payment.
+-- install_id is a random UUID generated once per node and stored in `settings`
+-- (key: telemetry_install_id) so we can dedupe counts without collecting any PII.
+-- Owner-only write; public-read aggregated only (no raw rows ever exposed).
+CREATE TABLE IF NOT EXISTS telemetry_onramp (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  event TEXT NOT NULL,
+  ts INTEGER NOT NULL,
+  install_id TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_telemetry_onramp_event ON telemetry_onramp(event);
+CREATE INDEX IF NOT EXISTS idx_telemetry_onramp_install ON telemetry_onramp(install_id);
+
 -- Context events table: Awareness layer data (location, photos, voice, activity)
 CREATE TABLE IF NOT EXISTS context_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -198,6 +301,12 @@ CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at DESC)
 CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action);
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_wallet ON scheduled_tasks(wallet_address);
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_next_run ON scheduled_tasks(next_run_at);
+CREATE INDEX IF NOT EXISTS idx_installed_apps_cid ON installed_apps(cid);
+CREATE INDEX IF NOT EXISTS idx_nft_pins_wallet ON nft_pins(wallet_address);
+CREATE INDEX IF NOT EXISTS idx_nft_pins_contract ON nft_pins(contract_address, token_id);
+CREATE INDEX IF NOT EXISTS idx_pinned_cids_wallet ON pinned_cids(wallet_address);
+CREATE INDEX IF NOT EXISTS idx_pinned_cids_status ON pinned_cids(pin_status);
+CREATE INDEX IF NOT EXISTS idx_pinned_cids_served ON pinned_cids(last_served_at);
 CREATE INDEX IF NOT EXISTS idx_context_wallet_time ON context_events(wallet, timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_context_type ON context_events(type);
 

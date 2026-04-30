@@ -1,0 +1,13 @@
+{
+  "name": "pc2-app-registry",
+  "version": "1.0.0",
+  "description": "PC2 App Registry — serves the app catalog for dApp discovery",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

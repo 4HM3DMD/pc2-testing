@@ -40,6 +40,17 @@ let currentAIRequestState = 'idle'; // 'idle' | 'connecting' | 'thinking' | 'exe
 // Voice service availability cache (checked once per session)
 let voiceServiceStatus = null;
 
+// Voice conversation mode — when active, AI responses are auto-spoken
+let voiceConversationMode = false;
+let currentSpeechUtterance = null;
+let browserSpeechRecognition = null;
+
+// Preload browser voices (some browsers load them asynchronously)
+if (window.speechSynthesis) {
+    window.speechSynthesis.getVoices();
+    window.speechSynthesis.onvoiceschanged = () => { window.speechSynthesis.getVoices(); };
+}
+
 // Selected agent (set by UIAgentSelector in taskbar)
 // When set, all AI requests use this agent's config (model, personality, permissions)
 window.selectedAgentId = null;
@@ -1063,9 +1074,12 @@ function renderMessage(role, content, messageId, attachedFiles = null) {
         );
     } else if (role === 'assistant') {
         const contentText = typeof content === 'string' ? content : '';
+        const speakerBtnHist = window.speechSynthesis
+            ? `<button class="ai-speak-btn" title="Read aloud"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg><span>Read</span></button>`
+            : '';
         $('.ai-chat-messages').append(
             `<div class="ai-chat-message" id="${messageId}">
-                <div class="ai-chat-message-ai">${renderMarkdown(contentText)}<div class="ai-copy-actions"><button class="ai-copy-btn" title="Copy response"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><span>Copy</span></button></div></div>
+                <div class="ai-chat-message-ai">${renderMarkdown(contentText)}<div class="ai-copy-actions"><button class="ai-copy-btn" title="Copy response"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><span>Copy</span></button>${speakerBtnHist}</div></div>
             </div>`
         );
     }
@@ -2172,6 +2186,116 @@ $(document).on('click', '.ai-attach-btn', async function () {
     }
 });
 
+// Browser-native TTS using SpeechSynthesis API
+function speakText(text) {
+    if (!window.speechSynthesis) return;
+    stopSpeaking();
+
+    const cleanText = text
+        .replace(/```[\s\S]*?```/g, ' code block ')
+        .replace(/`[^`]+`/g, (m) => m.slice(1, -1))
+        .replace(/\*\*([^*]+)\*\*/g, '$1')
+        .replace(/\*([^*]+)\*/g, '$1')
+        .replace(/#{1,6}\s/g, '')
+        .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+        .replace(/[|[\]{}]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    if (!cleanText) return;
+
+    const utterance = new SpeechSynthesisUtterance(cleanText);
+    utterance.rate = 1.05;
+    utterance.pitch = 1.0;
+
+    const voices = window.speechSynthesis.getVoices();
+    const preferred = voices.find(v => v.lang.startsWith('en') && v.name.includes('Samantha'))
+        || voices.find(v => v.lang.startsWith('en') && v.localService)
+        || voices.find(v => v.lang.startsWith('en'));
+    if (preferred) utterance.voice = preferred;
+
+    utterance.onend = () => { currentSpeechUtterance = null; };
+    utterance.onerror = () => { currentSpeechUtterance = null; };
+
+    currentSpeechUtterance = utterance;
+    window.speechSynthesis.speak(utterance);
+}
+
+function stopSpeaking() {
+    if (window.speechSynthesis) {
+        window.speechSynthesis.cancel();
+    }
+    currentSpeechUtterance = null;
+}
+
+function isBrowserSTTAvailable() {
+    return !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+}
+
+function startBrowserSTT($btn) {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) return;
+
+    stopSpeaking();
+    voiceConversationMode = true;
+
+    browserSpeechRecognition = new SpeechRecognition();
+    browserSpeechRecognition.continuous = false;
+    browserSpeechRecognition.interimResults = true;
+    browserSpeechRecognition.lang = 'en-US';
+    browserSpeechRecognition.maxAlternatives = 1;
+
+    voiceRecording = true;
+    $btn.addClass('ai-voice-recording');
+    $btn.attr('title', 'Listening...');
+
+    const chatInput = $('.ai-chat-input');
+    const originalPlaceholder = chatInput.attr('placeholder');
+    chatInput.attr('placeholder', 'Listening...');
+
+    browserSpeechRecognition.onresult = (event) => {
+        let transcript = '';
+        for (let i = 0; i < event.results.length; i++) {
+            transcript += event.results[i][0].transcript;
+        }
+        chatInput.val(transcript);
+
+        if (event.results[event.results.length - 1].isFinal) {
+            finishBrowserSTT($btn, originalPlaceholder);
+            if (transcript.trim()) {
+                sendAIMessage($('.ai-chat-container'));
+            }
+        }
+    };
+
+    browserSpeechRecognition.onerror = (event) => {
+        if (event.error !== 'aborted') {
+            chatInput.attr('placeholder', 'Voice error — try again');
+            setTimeout(() => chatInput.attr('placeholder', originalPlaceholder), 3000);
+        }
+        finishBrowserSTT($btn, originalPlaceholder);
+    };
+
+    browserSpeechRecognition.onend = () => {
+        if (voiceRecording) {
+            finishBrowserSTT($btn, originalPlaceholder);
+        }
+    };
+
+    browserSpeechRecognition.start();
+}
+
+function finishBrowserSTT($btn, originalPlaceholder) {
+    voiceRecording = false;
+    $btn.removeClass('ai-voice-recording');
+    $btn.attr('title', 'Voice input');
+    browserSpeechRecognition = null;
+    const chatInput = $('.ai-chat-input');
+    if (chatInput.attr('placeholder') === 'Listening...') {
+        chatInput.attr('placeholder', originalPlaceholder || 'Talk to ElastOS');
+    }
+}
+
 // Voice input handling
 let voiceMediaRecorder = null;
 let voiceAudioChunks = [];
@@ -2268,18 +2392,30 @@ $(document).on('click', '.ai-voice-btn', async function () {
     const $btn = $(this);
 
     if (voiceRecording) {
+        if (browserSpeechRecognition) {
+            browserSpeechRecognition.stop();
+            return;
+        }
         if (voiceMediaRecorder && voiceMediaRecorder.state !== 'inactive') {
             voiceMediaRecorder.stop();
         }
         return;
     }
 
+    // Stop any ongoing TTS playback when starting a new recording
+    stopSpeaking();
+
     // Pre-check voice service availability
     const status = await checkVoiceStatus();
     if (!status.ready) {
+        // Fall back to browser-native Speech Recognition
+        if (isBrowserSTTAvailable()) {
+            startBrowserSTT($btn);
+            return;
+        }
         const confirmed = await UIAlert({
             type: 'confirm',
-            message: 'Voice AI is not set up. Would you like to open Settings to enable it?',
+            message: 'Voice AI is not set up and your browser does not support Speech Recognition. Would you like to open Settings to install Whisper + Piper?',
             buttons: [
                 { label: 'Open Settings', value: 'settings', type: 'primary' },
                 { label: 'Cancel', value: 'cancel', type: 'secondary' },
@@ -2290,6 +2426,8 @@ $(document).on('click', '.ai-voice-btn', async function () {
         }
         return;
     }
+
+    voiceConversationMode = true;
 
     try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -3419,13 +3557,23 @@ async function sendAIMessage($container) {
         // Apply syntax highlighting to any code blocks
         applyCodeHighlighting();
         
-        // Add copy button INSIDE the ai-chat-message-ai div (after streaming complete)
+        // Add copy + read-aloud buttons INSIDE the ai-chat-message-ai div (after streaming complete)
         if ($aiMessage.find('.ai-copy-actions').length === 0) {
+            const speakerBtn = window.speechSynthesis
+                ? `<button class="ai-speak-btn" title="Read aloud"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg><span>Read</span></button>`
+                : '';
             $aiMessage.append(`
                 <div class="ai-copy-actions">
                     <button class="ai-copy-btn" title="Copy response"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><span>Copy</span></button>
+                    ${speakerBtn}
                 </div>
             `);
+        }
+
+        // Auto-speak response if in voice conversation mode
+        if (voiceConversationMode && fullContent) {
+            speakText(fullContent);
+            voiceConversationMode = false;
         }
         
         scrollChatToBottom();
@@ -3563,6 +3711,40 @@ $(document).on('click', '.ai-copy-btn', function (e) {
     }).catch(err => {
         console.error('[UIAIChat] Failed to copy AI response:', err);
     });
+});
+
+// Read aloud — toggle TTS for a specific AI message
+$(document).on('click', '.ai-speak-btn', function (e) {
+    e.stopPropagation();
+    const $btn = $(this);
+
+    if (currentSpeechUtterance) {
+        stopSpeaking();
+        $btn.find('span').text('Read');
+        $btn.removeClass('ai-speaking');
+        return;
+    }
+
+    const $messageAi = $btn.closest('.ai-chat-message-ai');
+    const $clone = $messageAi.clone();
+    $clone.find('.ai-copy-actions, .ai-loading-indicator, .ai-tool-card').remove();
+    const messageText = $clone.text().trim();
+
+    if (!messageText) return;
+
+    $btn.find('span').text('Stop');
+    $btn.addClass('ai-speaking');
+
+    const originalEnd = () => {
+        $btn.find('span').text('Read');
+        $btn.removeClass('ai-speaking');
+    };
+
+    speakText(messageText);
+    if (currentSpeechUtterance) {
+        currentSpeechUtterance.onend = originalEnd;
+        currentSpeechUtterance.onerror = originalEnd;
+    }
 });
 
 // Edit message

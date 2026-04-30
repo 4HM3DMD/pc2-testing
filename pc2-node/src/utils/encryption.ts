@@ -247,20 +247,24 @@ export function encryptMnemonicWithSignature(
   const key = deriveKeyFromSignature(signature);
   const iv = crypto.randomBytes(IV_LENGTH);
   
-  const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
-  
-  let encrypted = cipher.update(mnemonic, 'utf8');
-  encrypted = Buffer.concat([encrypted, cipher.final()]);
-  
-  const authTag = cipher.getAuthTag();
-  
-  return {
-    ciphertext: encrypted.toString('base64'),
-    iv: iv.toString('base64'),
-    tag: authTag.toString('base64'),
-    address: walletAddress.toLowerCase(),
-    timestamp: Date.now()
-  };
+  try {
+    const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
+    
+    let encrypted = cipher.update(mnemonic, 'utf8');
+    encrypted = Buffer.concat([encrypted, cipher.final()]);
+    
+    const authTag = cipher.getAuthTag();
+    
+    return {
+      ciphertext: encrypted.toString('base64'),
+      iv: iv.toString('base64'),
+      tag: authTag.toString('base64'),
+      address: walletAddress.toLowerCase(),
+      timestamp: Date.now()
+    };
+  } finally {
+    key.fill(0);
+  }
 }
 
 /**
@@ -275,8 +279,8 @@ export function decryptMnemonicWithSignature(
     throw new Error('Encrypted data and signature are required');
   }
 
+  const key = deriveKeyFromSignature(signature);
   try {
-    const key = deriveKeyFromSignature(signature);
     const iv = Buffer.from(encrypted.iv, 'base64');
     const ciphertext = Buffer.from(encrypted.ciphertext, 'base64');
     const authTag = Buffer.from(encrypted.tag, 'base64');
@@ -291,6 +295,8 @@ export function decryptMnemonicWithSignature(
   } catch (error: any) {
     logger.error('[Encryption] Mnemonic decryption failed:', error.message);
     throw new Error('Decryption failed - invalid signature or corrupted data');
+  } finally {
+    key.fill(0);
   }
 }
 

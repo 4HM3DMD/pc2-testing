@@ -703,6 +703,49 @@ window.initgui = async function(options){
                     
                     // Check for updates after desktop loads (30 second delay)
                     setTimeout(() => window.checkForUpdates?.(), 30000);
+
+                    // Check system readiness and offer to fix missing dependencies (5s delay)
+                    setTimeout(async () => {
+                        try {
+                            const readinessResp = await fetch(`${window.api_origin || ''}/api/system-readiness`);
+                            if (!readinessResp.ok) return;
+                            const readiness = await readinessResp.json();
+                            const missing = readiness.checks.filter(c => c.status !== 'ok' && c.fixable);
+                            if (missing.length === 0) return;
+
+                            const names = missing.map(c => c.label).join(', ');
+                            UIAlert({
+                                message: `${missing.length} system component${missing.length > 1 ? 's' : ''} not installed: ${names}.\n\nWould you like to install them now? This downloads transport binaries needed for reliable connectivity.`,
+                                buttons: [
+                                    { label: 'Install Now', value: 'install', type: 'primary' },
+                                    { label: 'Later', value: 'later' },
+                                ],
+                            }).then(async (choice) => {
+                                if (choice !== 'install') return;
+                                try {
+                                    const fixResp = await fetch(`${window.api_origin || ''}/api/system-readiness/fix`, {
+                                        method: 'POST',
+                                        headers: {
+                                            'Authorization': `Bearer ${window.auth_token}`,
+                                            'Content-Type': 'application/json',
+                                        },
+                                    });
+                                    const result = await fixResp.json();
+                                    UIAlert({
+                                        message: result.success
+                                            ? (result.message || 'Transport binaries installed successfully.')
+                                            : (result.message || 'Failed to install some components. Try running scripts/fix-networking.sh manually.'),
+                                        buttons: [{ label: 'OK', value: 'ok', type: 'primary' }],
+                                    });
+                                } catch {
+                                    UIAlert({
+                                        message: 'Failed to install components. Try running scripts/fix-networking.sh manually.',
+                                        buttons: [{ label: 'OK', value: 'ok', type: 'primary' }],
+                                    });
+                                }
+                            });
+                        } catch { /* readiness check failed, skip silently */ }
+                    }, 5000);
                 } catch (statError) {
                     console.warn('[initgui]: Desktop stat failed, loading desktop anyway:', statError.message);
                     // Still load desktop even if stat fails - better than grey screen
@@ -1662,6 +1705,19 @@ window.initgui = async function(options){
 
         // disconnect particle under iframe 
         localStorage.setItem('disconnect_particle', 'true');
+        
+        // Clear ConnectKit/wagmi persistence so it cannot auto-reconnect on reload
+        for (const key of Object.keys(localStorage)) {
+            if (
+                key.startsWith('wagmi') ||
+                key.startsWith('wc@') ||
+                key.startsWith('-walletlink') ||
+                key.toLowerCase().includes('connectkit') ||
+                key.toLowerCase().includes('recentconnector')
+            ) {
+                localStorage.removeItem(key);
+            }
+        }
 
         // Reset initialization flags to allow fresh login
         window.initgui_in_progress = false;
@@ -1737,12 +1793,14 @@ function requestOpenerOrigin() {
 }
 
 $(document).on('click', '.generic-close-window-button', function(e){
-    $(this).closest('.window').close();
+    const $win = $(this).closest('.window');
+    if (typeof $win.close === 'function') $win.close();
 });
 
 $(document).on('click', function(e){
     if(!$(e.target).hasClass('window-search') && $(e.target).closest('.window-search').length === 0 && !$(e.target).is('.toolbar-btn.search-btn')){
-        $('.window-search').close();
+        const $ws = $('.window-search');
+        if (typeof $ws.close === 'function') $ws.close();
     }
 })
 

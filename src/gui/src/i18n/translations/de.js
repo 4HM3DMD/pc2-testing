@@ -506,7 +506,7 @@ const de = {
         
         // Wallet
         'total_balance': 'Gesamtguthaben',
-        'universal': 'Universal',
+        'universal': 'Agent Wallet',
         'send': 'Senden',
         'receive': 'Empfangen',
         'tokens': 'Token',

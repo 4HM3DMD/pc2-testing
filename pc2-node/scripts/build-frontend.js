@@ -153,6 +153,19 @@ async function main() {
       }
     }
 
+    // Copy wallet bridge files (provider shim for iframes, bridge handler for parent)
+    const WALLET_BRIDGE_DIR = join(__dirname, '..', 'src', 'wallet-bridge');
+    if (existsSync(WALLET_BRIDGE_DIR)) {
+      console.log('\n📦 Copying wallet bridge files...');
+      for (const name of ['pc2-wallet-provider.js', 'pc2-wallet-bridge.js', 'pc2-secure-view-session.js', 'pc2-secure-view.js']) {
+        const src = join(WALLET_BRIDGE_DIR, name);
+        if (existsSync(src)) {
+          cpSync(src, join(TARGET_DIR, name));
+          console.log(`   ✅ ${name}`);
+        }
+      }
+    }
+
     // Restore .gitkeep if it existed
     if (hasGitkeep) {
       writeFileSync(gitkeepPath, '');
@@ -232,6 +245,10 @@ async function main() {
         }
         
         // Intercept fetch calls to redirect api.puter.com to local server
+        // Also rewrite mainnet.base.org -> /api/rpc/base so WalletService's
+        // public RPC fallback list (src/gui/src/services/WalletService.js
+        // lines ~89 and ~2033) goes through PC2's cached, multi-fallback
+        // proxy instead of hammering the rate-limited public Base endpoint.
         const originalFetch = window.fetch;
         window.fetch = function(...args) {
             const url = args[0];
@@ -256,6 +273,11 @@ async function main() {
                     
                     args[0] = localUrl;
                     args[1] = options;
+                } else if (url.includes('mainnet.base.org')) {
+                    const baseProxyUrl = window.location.origin + '/api/rpc/base';
+                    const localUrl = url.replace(/https?:\\/\\/mainnet\\.base\\.org(?:\\:\\d+)?/gi, baseProxyUrl);
+                    console.log('[PC2]: Intercepting Base RPC fetch:', url, '->', localUrl);
+                    args[0] = localUrl;
                 }
             }
             return originalFetch.apply(this, args);
@@ -277,6 +299,13 @@ async function main() {
                         .replace(/https?:\\/\\/api\\.puter\\.com/g, localOrigin)
                         .replace(/https?:\\/\\/puter\\.com/g, localOrigin);
                     console.log('[PC2]: Intercepting XHR:', url, '->', localUrl);
+                    url = localUrl;
+                    this._interceptedUrl = localUrl;
+                    this._url = localUrl;
+                } else if (url.includes('mainnet.base.org')) {
+                    const baseProxyUrl = window.location.origin + '/api/rpc/base';
+                    const localUrl = url.replace(/https?:\\/\\/mainnet\\.base\\.org(?:\\:\\d+)?/gi, baseProxyUrl);
+                    console.log('[PC2]: Intercepting Base RPC XHR:', url, '->', localUrl);
                     url = localUrl;
                     this._interceptedUrl = localUrl;
                     this._url = localUrl;
@@ -549,6 +578,13 @@ async function main() {
     
     <div id="app"></div>
     <script src="/bundle.min.js"></script>
+    <script src="/pc2-wallet-bridge.js?v=20260430a"></script>
+    <!-- Secure-view session manager (Option C session-key delegation).
+         Owns the ephemeral P-256 key + 24h delegation. Iframes call
+         window.ethereum.request({ method: 'pc2_secureView_sign' }) to
+         get a signed bundle with NO wallet prompt per asset. -->
+    <script src="/pc2-secure-view-session.js?v=20260421a"></script>
+    <script src="/pc2-secure-view.js?v=20260429a"></script>
     <!-- NOTE: gui.js is already bundled into bundle.min.js - do NOT include separately -->
     
     <!-- Initialize GUI -->

@@ -6,13 +6,89 @@
  */
 
 import { Router, Response } from 'express';
-import { authenticate, AuthenticatedRequest } from './middleware.js';
+import { authenticate, requireOwner, AuthenticatedRequest } from './middleware.js';
 import { logger } from '../utils/logger.js';
 import { detectPlatform, getOllamaServerEnv } from '../utils/platform.js';
 import { AIChatService } from '../services/ai/AIChatService.js';
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync, existsSync, createWriteStream, unlinkSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { tmpdir } from 'os';
+import { createHash } from 'crypto';
+import * as https from 'https';
+
+/**
+ * SHA-256 of the ollama install script we trust.
+ *
+ * Pinned 2026-04-23 by capturing `curl -sSL https://ollama.com/install.sh | shasum -a 256`.
+ * Source: https://ollama.com/install.sh (15902 bytes).
+ *
+ * Update process when ollama upstream changes the script:
+ *  1. `curl -sSL https://ollama.com/install.sh -o /tmp/install.sh`
+ *  2. `diff <(curl -sSL https://github.com/ollama/ollama/raw/main/scripts/install.sh) /tmp/install.sh`
+ *     (or audit the diff against the previous pin manually)
+ *  3. If safe: `shasum -a 256 /tmp/install.sh` → paste new hash here
+ *  4. Bump PC2 patch version, release.
+ *
+ * If this hash mismatches at runtime the request returns 503 with both
+ * expected and actual SHAs so the operator can decide whether to bump or
+ * investigate.
+ */
+const OLLAMA_INSTALL_SH_URL = 'https://ollama.com/install.sh';
+const OLLAMA_INSTALL_SH_SHA256 = '25f64b810b947145095956533e1bdf56eacea2673c55a7e586be4515fc882c9f';
+const OLLAMA_INSTALL_SH_MAX_BYTES = 256 * 1024;
+
+interface DownloadResult {
+  path: string;
+  sha256: string;
+  bytes: number;
+}
+
+function downloadOllamaInstaller(): Promise<DownloadResult> {
+  return new Promise((resolve, reject) => {
+    const tmpPath = join(tmpdir(), `ollama-install-${Date.now()}-${process.pid}.sh`);
+    const fileStream = createWriteStream(tmpPath, { mode: 0o600 });
+    const hash = createHash('sha256');
+    let bytes = 0;
+    let aborted = false;
+
+    const cleanupOnError = (err: Error) => {
+      if (aborted) return;
+      aborted = true;
+      try { unlinkSync(tmpPath); } catch { /* noop */ }
+      reject(err);
+    };
+
+    const req = https.get(OLLAMA_INSTALL_SH_URL, (res) => {
+      if (res.statusCode !== 200) {
+        res.resume();
+        cleanupOnError(new Error(`HTTP ${res.statusCode} from ${OLLAMA_INSTALL_SH_URL}`));
+        return;
+      }
+      res.on('data', (chunk: Buffer) => {
+        bytes += chunk.length;
+        if (bytes > OLLAMA_INSTALL_SH_MAX_BYTES) {
+          res.destroy();
+          cleanupOnError(new Error(`installer exceeded ${OLLAMA_INSTALL_SH_MAX_BYTES} byte cap`));
+          return;
+        }
+        hash.update(chunk);
+        fileStream.write(chunk);
+      });
+      res.on('end', () => {
+        fileStream.end(() => {
+          if (aborted) return;
+          resolve({ path: tmpPath, sha256: hash.digest('hex'), bytes });
+        });
+      });
+      res.on('error', cleanupOnError);
+    });
+    req.setTimeout(15000, () => {
+      req.destroy(new Error('installer download timed out after 15s'));
+    });
+    req.on('error', cleanupOnError);
+  });
+}
 
 const router = Router();
 
@@ -953,7 +1029,7 @@ router.get('/ollama-status', authenticate, async (req: AuthenticatedRequest, res
  * Install Ollama and optionally pull a model
  * This runs the installation in the background and returns immediately
  */
-router.post('/install-ollama', authenticate, async (req: AuthenticatedRequest, res: Response) => {
+router.post('/install-ollama', authenticate, requireOwner, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { exec, spawn } = await import('child_process');
     const { promisify } = await import('util');
@@ -981,17 +1057,47 @@ router.post('/install-ollama', authenticate, async (req: AuthenticatedRequest, r
           result: { message: 'Ollama is already installed', alreadyInstalled: true }
         });
       }
-      
-      // Install Ollama - this will run in background
-      logger.info('[AI API] Starting Ollama installation...');
-      
-      // Run installation script
-      const installProcess = spawn('sh', ['-c', 'curl -fsSL https://ollama.com/install.sh | sh'], {
+
+      // Download installer first, verify SHA-256 against the pinned constant,
+      // then exec the local file (no shell pipe, no TOFU on ollama.com/CDN).
+      logger.info('[AI API] Downloading Ollama installer for SHA verification...');
+      let downloaded: DownloadResult;
+      try {
+        downloaded = await downloadOllamaInstaller();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.error('[AI API] Ollama installer download failed', { error: msg });
+        return res.status(502).json({
+          success: false,
+          error: `Failed to download Ollama installer: ${msg}`,
+        });
+      }
+
+      if (downloaded.sha256 !== OLLAMA_INSTALL_SH_SHA256) {
+        try { unlinkSync(downloaded.path); } catch { /* noop */ }
+        logger.error('[AI API] Ollama install script SHA-256 mismatch', {
+          expected: OLLAMA_INSTALL_SH_SHA256,
+          actual: downloaded.sha256,
+          bytes: downloaded.bytes,
+        });
+        return res.status(503).json({
+          success: false,
+          error: 'Ollama install script SHA-256 mismatch — refusing to execute. Update the pinned hash via a PC2 patch release after auditing the upstream change.',
+          expected: OLLAMA_INSTALL_SH_SHA256,
+          actual: downloaded.sha256,
+        });
+      }
+
+      logger.info('[AI API] Ollama installer SHA verified, starting installation...');
+      const installProcess = spawn('sh', [downloaded.path], {
         detached: true,
-        stdio: 'ignore'
+        stdio: 'ignore',
+      });
+      installProcess.on('exit', () => {
+        try { unlinkSync(downloaded.path); } catch { /* noop */ }
       });
       installProcess.unref();
-      
+
       return res.json({
         success: true,
         result: { 

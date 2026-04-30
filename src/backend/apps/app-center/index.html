@@ -4,15 +4,71 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>dApp Centre - PC2</title>
+    <link rel="icon" type="image/png" sizes="192x192" href="favicon-192.png">
+    <link rel="icon" type="image/png" sizes="128x128" href="favicon-128.png">
+    <link rel="icon" type="image/png" sizes="64x64" href="favicon-64.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
+    <link rel="shortcut icon" href="favicon.ico">
+    <link rel="apple-touch-icon" href="favicon-192.png">
     <style>
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
         }
+
+        /* ── Theme tokens ────────────────────────────────────
+           Mirrors the Elacity Market palette so the two surfaces
+           feel like one product. Theme is persisted under the
+           shared 'elacity-theme' localStorage key, so toggling
+           in either app updates both on next reload.
+           See DAPP-UX-POLISH-V12 follow-up. */
+        :root {
+            --bg-page:       #f8fafc;
+            --bg-surface:    #ffffff;
+            --bg-elev:       #f1f5f9;
+            --bg-input:      #f8fafc;
+            --bg-hover:      #f1f5f9;
+            --border:        #e6ebf2;
+            --border-strong: #cbd5e1;
+            --text-primary:  #1e293b;
+            --text-secondary:#64748b;
+            --text-muted:    #94a3b8;
+            --accent:        #3b82f6;
+            --accent-hover:  #2563eb;
+            --accent-soft:   rgba(59,130,246,0.08);
+            --success:       #22c55e;
+            --warning:       #d97706;
+            --danger:        #ef4444;
+            --shadow-card:   0 1px 3px rgba(15,23,42,0.04);
+            --shadow-hover:  0 6px 18px rgba(15,23,42,0.10);
+        }
+
+        [data-theme="dark"] {
+            --bg-page:       #121212;
+            --bg-surface:    #1a1a1a;
+            --bg-elev:       #1e1e1e;
+            --bg-input:      #262626;
+            --bg-hover:      #262626;
+            --border:        #2e2e2e;
+            --border-strong: #3a3a3a;
+            --text-primary:  #e5e5e5;
+            --text-secondary:#a3a3a3;
+            --text-muted:    #737373;
+            --accent:        #3b82f6;
+            --accent-hover:  #60a5fa;
+            --accent-soft:   rgba(59,130,246,0.16);
+            --success:       #34d399;
+            --warning:       #fbbf24;
+            --danger:        #f87171;
+            --shadow-card:   0 1px 3px rgba(0,0,0,0.3);
+            --shadow-hover:  0 6px 18px rgba(0,0,0,0.5);
+        }
+
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            background: #f8fafc;
+            background: var(--bg-page);
+            color: var(--text-primary);
             height: 100vh;
             overflow: hidden;
         }
@@ -20,7 +76,7 @@
             display: flex;
             flex-direction: column;
             height: 100vh;
-            background: #f8fafc;
+            background: var(--bg-page);
         }
         
         /* Header with tabs */
@@ -217,7 +273,7 @@
             margin-bottom: 32px;
         }
         
-        /* Staff Picks - Large feature cards like Umbrel */
+        /* Staff Picks - Large feature cards */
         .staff-picks-scroll {
             display: flex;
             gap: 16px;
@@ -233,10 +289,11 @@
             scrollbar-width: none;
         }
         .staff-pick-card {
-            min-width: 320px;
-            height: 200px;
-            border-radius: 16px;
-            padding: 20px;
+            min-width: 360px;
+            max-width: 360px;
+            height: 220px;
+            border-radius: 18px;
+            padding: 24px;
             display: flex;
             flex-direction: column;
             justify-content: flex-end;
@@ -244,38 +301,80 @@
             position: relative;
             overflow: hidden;
             flex-shrink: 0;
-            transition: transform 0.2s;
+            transition: transform 0.25s ease, box-shadow 0.25s ease;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 4px 12px rgba(15,23,42,0.06);
         }
         .staff-pick-card:hover {
-            transform: translateY(-2px);
+            transform: translateY(-3px);
+            box-shadow: 0 8px 24px rgba(15,23,42,0.18);
+        }
+        /* Banner image layer (when registry app declares one). Sits below
+           the gradient veil so the artwork shows through but text stays
+           legible. */
+        .staff-pick-banner {
+            position: absolute;
+            inset: 0;
+            background-size: cover;
+            background-position: center;
+            z-index: 0;
+            opacity: 0.85;
         }
         .staff-pick-card::before {
             content: '';
             position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: linear-gradient(to top, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0) 60%);
+            inset: 0;
+            background: linear-gradient(to top, rgba(0,0,0,0.78) 0%, rgba(0,0,0,0.18) 55%, rgba(0,0,0,0.05) 100%);
             z-index: 1;
         }
         .staff-pick-icon {
             position: absolute;
-            top: 16px;
-            left: 16px;
-            width: 56px;
-            height: 56px;
+            top: 18px;
+            left: 18px;
+            width: 64px;
+            height: 64px;
             background: white;
-            border-radius: 12px;
+            border-radius: 16px;
             display: flex;
             align-items: center;
             justify-content: center;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.18);
             z-index: 2;
+            overflow: hidden;
         }
         .staff-pick-icon svg {
-            width: 32px;
-            height: 32px;
+            width: 36px;
+            height: 36px;
+        }
+        /* Mirror of .app-icon.has-img — when the staff-pick card holds a
+           real bundle logo, the white tile becomes a clean rounded mask
+           so the logo design reads edge-to-edge. SVG glyph picks keep
+           the white tile + 36 px glyph treatment. */
+        .staff-pick-icon.has-img {
+            background: transparent;
+        }
+        .staff-pick-icon img {
+            width: 100%;
+            height: 100%;
+            display: block;
+            object-fit: cover;
+            border-radius: inherit;
+        }
+        .staff-pick-tag {
+            position: absolute;
+            top: 22px;
+            right: 18px;
+            z-index: 2;
+            font-size: 10px;
+            font-weight: 600;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            color: rgba(255,255,255,0.9);
+            background: rgba(255,255,255,0.18);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            padding: 4px 10px;
+            border-radius: 999px;
+            border: 1px solid rgba(255,255,255,0.25);
         }
         .staff-pick-content {
             position: relative;
@@ -283,14 +382,20 @@
             color: white;
         }
         .staff-pick-name {
-            font-size: 18px;
-            font-weight: 600;
-            margin-bottom: 4px;
+            font-size: 20px;
+            font-weight: 700;
+            margin-bottom: 6px;
+            text-shadow: 0 1px 4px rgba(0,0,0,0.25);
         }
         .staff-pick-desc {
             font-size: 13px;
-            opacity: 0.9;
-            line-height: 1.4;
+            opacity: 0.92;
+            line-height: 1.45;
+            text-shadow: 0 1px 3px rgba(0,0,0,0.25);
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
         }
         .section-header {
             display: flex;
@@ -339,11 +444,11 @@
         /* App card */
         .app-card {
             background: white;
-            border: 1px solid #e2e8f0;
-            border-radius: 12px;
-            padding: 16px;
+            border: 1px solid #e6ebf2;
+            border-radius: 14px;
+            padding: 18px;
             cursor: pointer;
-            transition: all 0.2s;
+            transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
             flex-shrink: 0;
         }
         .apps-scroll .app-card {
@@ -355,27 +460,49 @@
             max-width: none;
         }
         .app-card:hover {
-            box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+            box-shadow: 0 6px 18px rgba(15,23,42,0.10);
             transform: translateY(-2px);
+            border-color: #d6dde7;
         }
         .app-card-header {
             display: flex;
-            gap: 12px;
-            margin-bottom: 12px;
+            gap: 14px;
+            margin-bottom: 14px;
+            align-items: flex-start;
         }
         .app-icon {
-            width: 56px;
-            height: 56px;
-            border-radius: 12px;
+            width: 60px;
+            height: 60px;
+            border-radius: 14px;
             display: flex;
             align-items: center;
             justify-content: center;
             flex-shrink: 0;
+            box-shadow: 0 1px 3px rgba(15,23,42,0.08);
+            overflow: hidden;
         }
         .app-icon svg {
             width: 32px;
             height: 32px;
             fill: white;
+        }
+        /* Real bundle logos are "complete" icon designs — they ship with
+           their own background, padding and corner radius baked in. We
+           treat the .app-icon box as a clean rounded mask + drop shadow
+           and let the logo fill it edge-to-edge. Wrapping it in another
+           contrasting tile (the previous behaviour) created an awkward
+           double-frame, especially for dark logos sitting on the white
+           container background. See DAPP-UX-POLISH-V12 follow-up #1. */
+        .app-icon.has-img {
+            background: transparent !important;
+            box-shadow: 0 2px 6px rgba(15,23,42,0.12);
+        }
+        .app-icon img {
+            width: 100%;
+            height: 100%;
+            display: block;
+            object-fit: cover;
+            border-radius: inherit;
         }
         .app-icon.gradient-blue { background: linear-gradient(135deg, #3b82f6, #1d4ed8); }
         .app-icon.gradient-purple { background: linear-gradient(135deg, #8b5cf6, #6d28d9); }
@@ -385,6 +512,8 @@
         .app-icon.gradient-cyan { background: linear-gradient(135deg, #06b6d4, #0891b2); }
         .app-icon.gradient-yellow { background: linear-gradient(135deg, #eab308, #ca8a04); }
         .app-icon.gradient-slate { background: linear-gradient(135deg, #64748b, #475569); }
+        .app-icon.gradient-indigo { background: linear-gradient(135deg, #6366f1, #4f46e5); }
+        .app-icon.gradient-teal { background: linear-gradient(135deg, #14b8a6, #0d9488); }
         .app-card-info {
             flex: 1;
             min-width: 0;
@@ -418,13 +547,22 @@
         }
         .badge {
             font-size: 10px;
-            padding: 2px 6px;
-            border-radius: 4px;
-            font-weight: 500;
+            padding: 3px 8px;
+            border-radius: 999px;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+            text-transform: uppercase;
+            display: inline-flex;
+            align-items: center;
+            line-height: 1;
         }
-        .badge.wasm { background: #dbeafe; color: #1d4ed8; }
-        .badge.ddrm { background: #fae8ff; color: #a21caf; }
+        .badge.wasm       { background: #dbeafe; color: #1d4ed8; }
+        .badge.ddrm       { background: #fae8ff; color: #a21caf; }
         .badge.opensource { background: #dcfce7; color: #16a34a; }
+        .badge.builtin    { background: #f1f5f9; color: #64748b; }
+        .badge.coming-soon{ background: #fef3c7; color: #d97706; }
+        .badge.nft        { background: #fff7ed; color: #c2410c; }
+        .badge.creator    { background: #eef2ff; color: #4338ca; }
         .app-description {
             font-size: 13px;
             color: #64748b;
@@ -458,25 +596,48 @@
             color: #22c55e;
         }
         .install-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 7px 18px;
+            border-radius: 8px;
+            font-size: 13px;
+            line-height: 1;
+            font-weight: 600;
+            font-family: inherit;
+            cursor: pointer;
+            transition: background 0.15s, transform 0.1s, box-shadow 0.15s;
+            border: none;
             background: #3b82f6;
             color: white;
-            border: none;
-            padding: 6px 16px;
-            border-radius: 6px;
-            font-size: 13px;
-            font-weight: 500;
-            cursor: pointer;
-            transition: background 0.15s;
+            box-shadow: 0 1px 2px rgba(59,130,246,0.25);
         }
         .install-btn:hover {
             background: #2563eb;
+            box-shadow: 0 2px 6px rgba(37,99,235,0.35);
+        }
+        .install-btn:active {
+            transform: translateY(1px);
+            box-shadow: 0 1px 2px rgba(37,99,235,0.25);
         }
         .install-btn.installed {
-            background: #e2e8f0;
-            color: #64748b;
+            background: #f1f5f9;
+            color: #475569;
+            box-shadow: none;
         }
         .install-btn.installed:hover {
-            background: #cbd5e1;
+            background: #e2e8f0;
+            box-shadow: none;
+        }
+        .install-btn.coming-soon {
+            background: #f8fafc;
+            color: #94a3b8;
+            cursor: default;
+            box-shadow: none;
+        }
+        .install-btn.coming-soon:hover {
+            background: #f8fafc;
+            box-shadow: none;
         }
         
         /* Modal overlay */
@@ -576,31 +737,6 @@
             fill: #64748b;
         }
         
-        /* Gallery */
-        .modal-gallery {
-            padding: 24px;
-            border-bottom: 1px solid #e2e8f0;
-            background: #f8fafc;
-        }
-        .gallery-scroll {
-            display: flex;
-            gap: 12px;
-            overflow-x: auto;
-            padding-bottom: 8px;
-        }
-        .gallery-img {
-            width: 200px;
-            height: 130px;
-            background: linear-gradient(135deg, #e2e8f0, #cbd5e1);
-            border-radius: 8px;
-            flex-shrink: 0;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: #94a3b8;
-            font-size: 12px;
-        }
-        
         /* Modal body */
         .modal-body {
             padding: 24px;
@@ -618,34 +754,6 @@
             font-size: 14px;
             color: #475569;
             line-height: 1.6;
-        }
-        
-        /* What's New */
-        .whats-new {
-            background: #f8fafc;
-            border-radius: 8px;
-            padding: 16px;
-        }
-        .whats-new-version {
-            font-size: 13px;
-            font-weight: 600;
-            color: #1e293b;
-            margin-bottom: 8px;
-        }
-        .whats-new-date {
-            font-size: 11px;
-            color: #94a3b8;
-            margin-left: 8px;
-            font-weight: 400;
-        }
-        .whats-new-list {
-            font-size: 13px;
-            color: #475569;
-            line-height: 1.6;
-            padding-left: 16px;
-        }
-        .whats-new-list li {
-            margin-bottom: 4px;
         }
         
         /* Requirements */
@@ -746,10 +854,15 @@
             color: #22c55e;
         }
         .modal-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
             padding: 10px 24px;
             border-radius: 8px;
             font-size: 14px;
+            line-height: 1;
             font-weight: 500;
+            font-family: inherit;
             cursor: pointer;
             transition: all 0.15s;
         }
@@ -768,6 +881,20 @@
         }
         .modal-btn.primary:hover {
             background: #2563eb;
+        }
+        .modal-btn.danger {
+            background: white;
+            border: 1px solid #fecaca;
+            color: #ef4444;
+        }
+        .modal-btn.danger:hover {
+            background: #fef2f2;
+        }
+        .modal-btn.disabled {
+            background: #f1f5f9;
+            border: 1px solid #e2e8f0;
+            color: #94a3b8;
+            cursor: default;
         }
         
         /* Install progress modal */
@@ -860,10 +987,15 @@
             gap: 8px;
         }
         .action-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
             padding: 8px 16px;
             border-radius: 6px;
             font-size: 13px;
+            line-height: 1;
             font-weight: 500;
+            font-family: inherit;
             cursor: pointer;
             transition: all 0.15s;
         }
@@ -913,6 +1045,220 @@
         .tab-content.active {
             display: block;
         }
+
+        /* Loading spinner */
+        .loading-container {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 60px;
+        }
+        .spinner {
+            width: 32px;
+            height: 32px;
+            border: 3px solid #e2e8f0;
+            border-top-color: #3b82f6;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* Toast notification */
+        .toast {
+            position: fixed;
+            bottom: 24px;
+            left: 50%;
+            transform: translateX(-50%) translateY(100px);
+            background: #1e293b;
+            color: white;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 14px;
+            z-index: 2000;
+            transition: transform 0.3s ease;
+        }
+        .toast.visible {
+            transform: translateX(-50%) translateY(0);
+        }
+        .toast.error {
+            background: #dc2626;
+        }
+
+        /* ── Theme toggle button ─────────────────────────── */
+        .theme-toggle {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 36px;
+            height: 36px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--bg-surface);
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: background 0.15s, color 0.15s, border-color 0.15s;
+            margin-right: 12px;
+            font-family: inherit;
+            padding: 0;
+        }
+        .theme-toggle:hover {
+            background: var(--bg-hover);
+            color: var(--text-primary);
+            border-color: var(--border-strong);
+        }
+        .theme-toggle svg {
+            width: 18px;
+            height: 18px;
+        }
+        .theme-toggle .icon-moon { display: block; }
+        .theme-toggle .icon-sun  { display: none; }
+        [data-theme="dark"] .theme-toggle .icon-moon { display: none; }
+        [data-theme="dark"] .theme-toggle .icon-sun  { display: block; }
+
+        /* ── Dark mode overrides ─────────────────────────────
+           Surgical re-paint of every surface that the page
+           hardcodes a light colour on. Kept below all the
+           light-mode rules so the cascade order is predictable.
+           Mirrors the Elacity Market dark palette tokens. */
+        [data-theme="dark"] .header,
+        [data-theme="dark"] .sidebar {
+            background: var(--bg-surface);
+            border-color: var(--border);
+        }
+        [data-theme="dark"] .header { border-bottom-color: var(--border); }
+        [data-theme="dark"] .sidebar { border-right-color: var(--border); }
+        [data-theme="dark"] .header-title { color: var(--text-primary); }
+        [data-theme="dark"] .sidebar-title { color: var(--text-muted); }
+        [data-theme="dark"] .category-item { color: var(--text-secondary); }
+        [data-theme="dark"] .category-item:hover { background: var(--bg-hover); color: var(--text-primary); }
+        [data-theme="dark"] .category-item.active { background: var(--accent-soft); color: var(--accent); }
+        [data-theme="dark"] .search-input {
+            background: var(--bg-input);
+            border-color: var(--border);
+            color: var(--text-primary);
+        }
+        [data-theme="dark"] .search-input::placeholder { color: var(--text-muted); }
+        [data-theme="dark"] .search-input:focus {
+            background: var(--bg-elev);
+            border-color: var(--accent);
+        }
+        [data-theme="dark"] .tab { color: var(--text-secondary); }
+        [data-theme="dark"] .tab:hover { color: var(--accent-hover); }
+        [data-theme="dark"] .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+        [data-theme="dark"] .section h2,
+        [data-theme="dark"] .section h3 { color: var(--text-primary); }
+        [data-theme="dark"] .section-title,
+        [data-theme="dark"] .modal-section-title { color: var(--text-secondary); }
+        [data-theme="dark"] .view-all-link { color: var(--accent); }
+
+        [data-theme="dark"] .app-card {
+            background: var(--bg-elev);
+            border-color: var(--border);
+            box-shadow: var(--shadow-card);
+        }
+        [data-theme="dark"] .app-card:hover {
+            border-color: var(--border-strong);
+            box-shadow: var(--shadow-hover);
+        }
+        [data-theme="dark"] .app-name,
+        [data-theme="dark"] .app-price,
+        [data-theme="dark"] .modal-title,
+        [data-theme="dark"] .install-modal-title,
+        [data-theme="dark"] .installed-name { color: var(--text-primary); }
+        [data-theme="dark"] .app-developer,
+        [data-theme="dark"] .app-version,
+        [data-theme="dark"] .app-size,
+        [data-theme="dark"] .modal-developer,
+        [data-theme="dark"] .modal-version,
+        [data-theme="dark"] .install-modal-status,
+        [data-theme="dark"] .installed-meta { color: var(--text-muted); }
+        [data-theme="dark"] .app-description,
+        [data-theme="dark"] .modal-description { color: var(--text-secondary); }
+        [data-theme="dark"] .app-price.free { color: var(--success); }
+
+        /* Icon containers — keep gradient versions intact, but for
+           the white-tile mode used by `getAppIconHtml` (no class) and
+           `staff-pick-icon` (white tile + dark logo), swap to a subtle
+           dark surface so logos don't feel marooned on white. */
+        [data-theme="dark"] .app-icon:not([class*="gradient-"]):not(.has-img) {
+            background: var(--bg-input);
+        }
+        [data-theme="dark"] .staff-pick-icon { background: #f5f5f5; }
+        [data-theme="dark"] .staff-pick-icon.has-img { background: transparent; }
+
+        /* Badges — re-tone for dark backgrounds */
+        [data-theme="dark"] .badge.wasm       { background: rgba(59,130,246,0.18);  color: #93c5fd; }
+        [data-theme="dark"] .badge.ddrm       { background: rgba(217,70,239,0.18);  color: #f0abfc; }
+        [data-theme="dark"] .badge.opensource { background: rgba(34,197,94,0.18);   color: #86efac; }
+        [data-theme="dark"] .badge.builtin    { background: rgba(148,163,184,0.18); color: #cbd5e1; }
+        [data-theme="dark"] .badge.coming-soon{ background: rgba(245,158,11,0.18);  color: #fcd34d; }
+        [data-theme="dark"] .badge.nft        { background: rgba(249,115,22,0.18);  color: #fdba74; }
+        [data-theme="dark"] .badge.creator    { background: rgba(99,102,241,0.18);  color: #a5b4fc; }
+
+        /* Buttons */
+        [data-theme="dark"] .install-btn.installed {
+            background: var(--bg-input);
+            color: var(--text-secondary);
+        }
+        [data-theme="dark"] .install-btn.installed:hover {
+            background: var(--bg-hover);
+        }
+        [data-theme="dark"] .install-btn.coming-soon {
+            background: var(--bg-input);
+            color: var(--text-muted);
+        }
+        [data-theme="dark"] .action-btn.uninstall {
+            background: rgba(239,68,68,0.12);
+            color: #fca5a5;
+        }
+        [data-theme="dark"] .action-btn.uninstall:hover {
+            background: rgba(239,68,68,0.2);
+        }
+
+        /* Modal surfaces */
+        [data-theme="dark"] .modal-overlay { background: rgba(0,0,0,0.65); }
+        [data-theme="dark"] .install-modal,
+        [data-theme="dark"] .app-detail-modal {
+            background: var(--bg-elev);
+            color: var(--text-primary);
+            box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+        }
+        [data-theme="dark"] .modal-header,
+        [data-theme="dark"] .modal-section,
+        [data-theme="dark"] .modal-footer { border-color: var(--border); }
+        [data-theme="dark"] .modal-close { color: var(--text-muted); }
+        [data-theme="dark"] .modal-close:hover { background: var(--bg-hover); color: var(--text-primary); }
+        [data-theme="dark"] .modal-btn.secondary {
+            background: var(--bg-input);
+            color: var(--text-primary);
+            border-color: var(--border);
+        }
+        [data-theme="dark"] .modal-btn.secondary:hover { background: var(--bg-hover); }
+        [data-theme="dark"] .modal-btn.danger {
+            background: rgba(239,68,68,0.18);
+            color: #fca5a5;
+        }
+        [data-theme="dark"] .modal-btn.danger:hover {
+            background: rgba(239,68,68,0.28);
+        }
+        [data-theme="dark"] .progress-bar { background: var(--bg-input); }
+
+        /* Installed list panel */
+        [data-theme="dark"] .installed-item {
+            background: var(--bg-elev);
+            border-color: var(--border);
+        }
+
+        /* Empty / loading */
+        [data-theme="dark"] .empty-state,
+        [data-theme="dark"] .loading-state { color: var(--text-muted); }
+
+        /* Custom scrollbars for dark */
+        [data-theme="dark"] ::-webkit-scrollbar { width: 10px; height: 10px; }
+        [data-theme="dark"] ::-webkit-scrollbar-track { background: var(--bg-page); }
+        [data-theme="dark"] ::-webkit-scrollbar-thumb { background: #404040; border-radius: 5px; }
+        [data-theme="dark"] ::-webkit-scrollbar-thumb:hover { background: #525252; }
     </style>
 </head>
 <body>
@@ -921,20 +1267,30 @@
         <div class="header">
             <div class="header-top">
                 <h1 class="header-title">dApp Centre</h1>
-                <div class="search-container">
-                    <div class="search-icon-wrapper">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <circle cx="11" cy="11" r="8"></circle>
-                            <path d="m21 21-4.35-4.35"></path>
+                <div style="display:flex;align-items:center;">
+                    <button id="themeToggle" class="theme-toggle" aria-label="Toggle theme" title="Toggle dark mode">
+                        <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
                         </svg>
+                        <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="4"></circle>
+                            <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"></path>
+                        </svg>
+                    </button>
+                    <div class="search-container">
+                        <div class="search-icon-wrapper">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="11" cy="11" r="8"></circle>
+                                <path d="m21 21-4.35-4.35"></path>
+                            </svg>
+                        </div>
+                        <input type="text" class="search-input" placeholder="Search apps..." id="searchInput">
                     </div>
-                    <input type="text" class="search-input" placeholder="Search apps..." id="searchInput">
                 </div>
             </div>
             <div class="tabs">
                 <div class="tab active" data-tab="discover">Discover</div>
-                <div class="tab" data-tab="installed">Installed</div>
-                <div class="tab" data-tab="updates">Updates <span class="badge">2</span></div>
+                <div class="tab" data-tab="installed">Installed <span class="badge" id="installedBadge" style="display:none;background:#3b82f6;">0</span></div>
             </div>
         </div>
         
@@ -942,70 +1298,58 @@
             <!-- Sidebar -->
         <div class="sidebar">
                 <div class="sidebar-title">Categories</div>
-                <div class="category-item active" data-category="all" onclick="selectCategory(this, 'all')">
+                <div class="category-item active" data-category="all">
                     <svg class="cat-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
                     <span>All Apps</span>
                 </div>
-                <div class="category-item" data-category="ai" onclick="selectCategory(this, 'ai')">
-                    <svg class="cat-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a4 4 0 0 1 4 4v2a4 4 0 0 1-8 0V6a4 4 0 0 1 4-4z"></path><path d="M16 12v4a4 4 0 0 1-8 0v-4"></path><path d="M8 16h8"></path><circle cx="9" cy="9" r="1" fill="currentColor"></circle><circle cx="15" cy="9" r="1" fill="currentColor"></circle></svg>
-                    <span>AI</span>
+                <div class="category-item" data-category="marketplace">
+                    <svg class="cat-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z"></path></svg>
+                    <span>Marketplace</span>
                 </div>
-                <div class="category-item" data-category="media" onclick="selectCategory(this, 'media')">
+                <div class="category-item" data-category="media">
                     <svg class="cat-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
                     <span>Media</span>
                 </div>
-                <div class="category-item" data-category="blockchain" onclick="selectCategory(this, 'blockchain')">
+                <div class="category-item" data-category="defi">
+                    <svg class="cat-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><path d="M12 6v12M9 9h4.5a2.5 2.5 0 010 5H9m0 0h6"></path></svg>
+                    <span>DeFi</span>
+                </div>
+                <div class="category-item" data-category="blockchain">
                     <svg class="cat-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="6" height="6" rx="1"></rect><rect x="16" y="7" width="6" height="6" rx="1"></rect><rect x="9" y="2" width="6" height="6" rx="1"></rect><rect x="9" y="16" width="6" height="6" rx="1"></rect><path d="M8 10h2"></path><path d="M14 10h2"></path><path d="M12 8v2"></path><path d="M12 14v2"></path></svg>
                     <span>Blockchain</span>
                 </div>
-                <div class="category-item" data-category="tools" onclick="selectCategory(this, 'tools')">
+                <div class="category-item" data-category="tools">
                     <svg class="cat-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg>
                     <span>Tools</span>
                 </div>
-                <div class="category-item" data-category="privacy" onclick="selectCategory(this, 'privacy')">
-                    <svg class="cat-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
-                    <span>Privacy</span>
+                <div class="category-item" data-category="system">
+                    <svg class="cat-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+                    <span>System</span>
                 </div>
-                <div class="category-item" data-category="games" onclick="selectCategory(this, 'games')">
-                    <svg class="cat-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="2"></rect><path d="M6 12h4"></path><path d="M8 10v4"></path><circle cx="17" cy="10" r="1" fill="currentColor"></circle><circle cx="15" cy="14" r="1" fill="currentColor"></circle></svg>
-                <span>Games</span>
-            </div>
             </div>
             
             <!-- Main content -->
             <div class="main-content">
                 <!-- Discover tab -->
                 <div class="tab-content active" id="discover-content">
-                    <!-- Staff Picks Section - Umbrel style large cards -->
                     <div class="section" id="staffPicksSection">
                         <div class="section-header">
                             <div>
                                 <div style="font-size:12px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Staff Picks</div>
-                                <h3 class="section-title" style="margin-bottom:0;">Curated for you</h3>
+                                <h3 class="section-title" style="margin-bottom:0;">Featured Apps</h3>
             </div>
             </div>
                         <div class="staff-picks-scroll" id="staffPicks"></div>
             </div>
                     
-                    <!-- Popular Apps Section -->
                     <div class="section" id="popularSection">
                         <div class="section-header">
                             <h3 class="section-title">Popular Apps</h3>
-                            <span class="section-link" onclick="selectCategory(document.querySelector('[data-category=all]'), 'all')">View all</span>
+                            <span class="section-link" onclick="selectCategory('all')">View all</span>
             </div>
                         <div class="apps-scroll" id="popularApps"></div>
             </div>
                     
-                    <!-- New Apps Section -->
-                    <div class="section" id="newAppsSection">
-                        <div class="section-header">
-                            <h3 class="section-title">New Apps</h3>
-                            <span class="section-link" onclick="selectCategory(document.querySelector('[data-category=all]'), 'all')">View all</span>
-            </div>
-                        <div class="apps-scroll" id="newApps"></div>
-            </div>
-                    
-                    <!-- All Apps Grid -->
                     <div class="section" id="allAppsSection">
                         <div class="section-header">
                             <h3 class="section-title" id="allAppsSectionTitle">All Apps</h3>
@@ -1018,12 +1362,6 @@
                 <div class="tab-content" id="installed-content">
                     <h3 class="section-title" style="margin-bottom:16px;">Installed Apps</h3>
                     <div class="installed-list" id="installedList"></div>
-        </div>
-                
-                <!-- Updates tab -->
-                <div class="tab-content" id="updates-content">
-                    <h3 class="section-title" style="margin-bottom:16px;">Available Updates</h3>
-                    <div class="apps-grid" id="updatesGrid"></div>
             </div>
             </div>
         </div>
@@ -1039,30 +1377,26 @@
         <div class="install-modal" id="installContent"></div>
     </div>
 
+    <!-- Toast -->
+    <div class="toast" id="toast"></div>
+
     <script>
         // ==================== IFRAME COMMUNICATION ====================
-        // Required for proper window controls (minimize, maximize, close)
-        
-        // Get appInstanceID from URL parameters
         const urlParams = new URLSearchParams(window.location.search);
         const appInstanceID = urlParams.get('puter.app_instance_id') || 
                               urlParams.get('puter.appInstanceID') || 
                               urlParams.get('appInstanceID');
         
-        // Send READY message to parent window
         if (appInstanceID) {
             window.parent.postMessage({
                 msg: 'READY',
                 appInstanceID: appInstanceID,
                 env: 'app'
             }, '*');
-            console.log('[dApp Centre] Sent READY message to parent');
         }
         
-        // Handle windowWillClose from parent - MUST respond for window to close
         window.addEventListener('message', (event) => {
             if (event.data.msg === 'windowWillClose') {
-                console.log('[dApp Centre] Received windowWillClose, responding...');
                 window.parent.postMessage({
                     msg: 'windowWillCloseAck',
                     original_msg_id: event.data.msg_id
@@ -1070,20 +1404,32 @@
             }
         });
         
-        // ==================== END IFRAME COMMUNICATION ====================
-        
-        // SVG Icons
+        // ==================== AUTH & API ====================
+        function getAuthToken() {
+            return urlParams.get('puter.auth.token') || '';
+        }
+
+        async function pc2Fetch(url, options = {}) {
+            const token = getAuthToken();
+            const headers = { ...(options.headers || {}) };
+            if (token) {
+                headers['Authorization'] = 'Bearer ' + token;
+            }
+            if (options.body && typeof options.body === 'object' && !(options.body instanceof FormData)) {
+                headers['Content-Type'] = 'application/json';
+                options.body = JSON.stringify(options.body);
+            }
+            return fetch(url, { ...options, headers });
+        }
+
+        // ==================== ICONS ====================
         const icons = {
             play: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>',
             brain: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>',
-            bitcoin: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M14.24 10.56C13.93 11.8 12 12.34 12 12.34l.46 1.86s1.93-.54 2.24-1.78c.31-1.24-.46-1.86-.46-1.86zm.67-2.66c.3-1.22-.48-1.85-.48-1.85-.01.01-.01.01-.01.01-1.15-.2-1.94.42-2.25 1.65L12.62 9l-.45-1.83s-1.93.54-2.24 1.78c-.31 1.24.46 1.86.46 1.86l.45 1.83c.54.16 1.93-.54 2.24-1.78.3-1.22-.48-1.85-.48-1.85l.45 1.83 1.86-.46.45-1.83z"/><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/></svg>',
             wallet: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M21 18v1c0 1.1-.9 2-2 2H5c-1.11 0-2-.9-2-2V5c0-1.1.89-2 2-2h14c1.1 0 2 .9 2 2v1h-9c-1.11 0-2 .9-2 2v8c0 1.1.89 2 2 2h9zm-9-2h10V8H12v8zm4-2.5c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/></svg>',
-            sync: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z"/></svg>',
             camera: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="3.2"/><path d="M9 2L7.17 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2h-3.17L15 2H9zm3 15c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5z"/></svg>',
             code: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M9.4 16.6L4.8 12l4.6-4.6L8 6l-6 6 6 6 1.4-1.4zm5.2 0l4.6-4.6-4.6-4.6L16 6l6 6-6 6-1.4-1.4z"/></svg>',
-            chess: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 22H5v-2h14v2M17.16 8.26A8.94 8.94 0 0 0 19 3H5c.34 2.21 1.31 4.18 2.84 5.26C6.07 9.63 5 11.71 5 14c0 1.05.21 2.05.59 2.97L7 18h10l1.41-1.03c.38-.92.59-1.92.59-2.97 0-2.29-1.07-4.37-2.84-5.74z"/></svg>',
             shield: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12H5V6.3l7-3.11v8.8z"/></svg>',
-            home: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>',
             check: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>',
             close: '<svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>',
             link: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>',
@@ -1093,822 +1439,559 @@
             governance: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3L1 9l4 2.18v6L12 21l7-3.82v-6l2-1.09V17h2V9L12 3zm6.82 6L12 12.72 5.18 9 12 5.28 18.82 9zM17 15.99l-5 2.73-5-2.73v-3.72L12 15l5-2.73v3.72z"/></svg>',
             server: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 1h16c1.1 0 2 .9 2 2v4c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V3c0-1.1.9-2 2-2zm0 8h16c1.1 0 2 .9 2 2v4c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2v-4c0-1.1.9-2 2-2zm0 8h16c1.1 0 2 .9 2 2v4c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2v-4c0-1.1.9-2 2-2zm2-12v2h2V5H6zm0 8v2h2v-2H6zm0 8v2h2v-2H6z"/></svg>',
             swap: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M6.99 11L3 15l3.99 4v-3H14v-2H6.99v-3zM21 9l-3.99-4v3H10v2h7.01v3L21 9z"/></svg>',
-            chart: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M3.5 18.49l6-6.01 4 4L22 6.92l-1.41-1.41-7.09 7.97-4-4L2 16.99z"/></svg>',
-            bank: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 10h3v7H4v-7zm6.5 0h3v7h-3v-7zM2 19h20v3H2v-3zm15-9h3v7h-3v-7zm-5-9L2 6v2h20V6L12 1z"/></svg>',
-            nft: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M22 9V7h-2V5c0-1.1-.9-2-2-2H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2v-2h2v-2h-2v-2h2v-2h-2V9h2zm-4 10H4V5h14v14zM6 13h5v4H6v-4zm6-6h4v3h-4V7zM6 7h5v5H6V7zm6 4h4v6h-4v-6z"/></svg>',
-            graph: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M14 6l-3.75 5 2.85 3.8-1.6 1.2C9.81 13.75 7 10 7 10l-6 8h22L14 6z"/></svg>',
-            stake: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M11.8 10.9c-2.27-.59-3-1.2-3-2.15 0-1.09 1.01-1.85 2.7-1.85 1.78 0 2.44.85 2.5 2.1h2.21c-.07-1.72-1.12-3.3-3.21-3.81V3h-3v2.16c-1.94.42-3.5 1.68-3.5 3.61 0 2.31 1.91 3.46 4.7 4.13 2.5.6 3 1.48 3 2.41 0 .69-.49 1.79-2.7 1.79-2.06 0-2.87-.92-2.98-2.1h-2.2c.12 2.19 1.76 3.42 3.68 3.83V21h3v-2.15c1.95-.37 3.5-1.5 3.5-3.55 0-2.84-2.43-3.81-4.7-4.4z"/></svg>',
             marketplace: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M18.36 9l.6 3H5.04l.6-3h12.72M20 4H4v2h16V4zm0 3H4l-1 5v2h1v6h10v-6h4v6h2v-6h1v-2l-1-5zM6 18v-4h6v4H6z"/></svg>',
-            validator: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z"/></svg>',
-            stablecoin: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 17.93c-3.94-.49-7-3.85-7-7.93s3.06-7.44 7-7.93v2.02c-2.84.48-5 2.94-5 5.91s2.16 5.43 5 5.91v2.02zm2-2.02c2.84-.48 5-2.94 5-5.91s-2.16-5.43-5-5.91V4.07c3.94.49 7 3.85 7 7.93s-3.06 7.44-7 7.93v-2.02zM11 11h2v6h-2zm0-4h2v2h-2z"/></svg>',
-            iot: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zM6.5 9L10 5.5 13.5 9H11v4H9V9H6.5zm11 6L14 18.5 10.5 15H13v-4h2v4h2.5z"/></svg>',
-            identity: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/><path d="M20 4h-4l-1-1h-2l-1 1H8v2h12V4z" opacity="0.3"/></svg>'
+            identity: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>',
+            stablecoin: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>',
+            bitcoin: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/><text x="12" y="16" text-anchor="middle" font-size="12" font-weight="bold" fill="currentColor">₿</text></svg>',
+            chess: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 22H5v-2h14v2M17.16 8.26A8.94 8.94 0 0 0 19 3H5c.34 2.21 1.31 4.18 2.84 5.26C6.07 9.63 5 11.71 5 14c0 1.05.21 2.05.59 2.97L7 18h10l1.41-1.03c.38-.92.59-1.92.59-2.97 0-2.29-1.07-4.37-2.84-5.74z"/></svg>',
+            terminal: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 14H4V8h16v10zm-2-1h-6v-2h6v2zM7.5 17l-1.41-1.41L8.67 13l-2.59-2.59L7.5 9l4 4-4 4z"/></svg>',
+            pdf: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 2H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-8.5 7.5c0 .83-.67 1.5-1.5 1.5H9v2H7.5V7H10c.83 0 1.5.67 1.5 1.5v1zm5 2c0 .83-.67 1.5-1.5 1.5h-2.5V7H15c.83 0 1.5.67 1.5 1.5v3zm4-3H19v1h1.5V11H19v2h-1.5V7h3v1.5zM9 9.5h1v-1H9v1zM4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm10 5.5h1v-3h-1v3z"/></svg>',
+            calculator: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-8 14H7v-2h4v2zm0-4H7v-2h4v2zm0-4H7V7h4v2zm6 8h-4v-6h4v6zm0-8h-4V7h4v2z"/></svg>',
+            edit: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>',
+            image: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></svg>',
+            mic: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 14c1.66 0 2.99-1.34 2.99-3L15 5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z"/></svg>',
+            cards: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M21.47 4.35l-1.34-.56v9.03l2.43-5.86c.41-1.02-.06-2.19-1.09-2.61zM19.01 3.8l-6.97-2.93c-.62-.26-1.34.09-1.6.72L4.01 17.32c-.26.62.09 1.34.72 1.6l6.97 2.93c.62.26 1.34-.09 1.6-.72l6.44-15.73c.26-.62-.09-1.34-.72-1.6z"/></svg>',
         };
-        
-        // Mock app catalog
-        const mockApps = [
-            {
-                id: 'elacity-player',
-                name: 'Elacity Player',
-                developer: 'Elacity Labs',
-                category: 'media',
-                description: 'The official dDRM-protected media player. Stream encrypted video and audio content securely on your personal cloud. Supports all major formats with hardware acceleration.',
-                shortDesc: 'Secure dDRM media streaming',
-                size: '45 MB',
-                version: '2.1.0',
-                icon: 'play',
-                gradient: 'gradient-purple',
-                badges: ['ddrm'],
-                permissions: ['Access to your media files', 'Network access for streaming', 'Hardware acceleration'],
-                requirements: { storage: '100 MB', memory: '256 MB', compatibility: 'PC2 1.0+' },
-                installed: false,
-                isNew: false,
-                isPopular: true,
-                isStaffPick: true,
-                website: 'https://elacity.io',
-                source: 'https://github.com/elastos/elacity-player',
-                changelog: [
-                    { version: '2.1.0', date: 'Jan 15, 2026', changes: ['Added hardware acceleration', 'Fixed audio sync issues', 'Improved streaming performance'] },
-                    { version: '2.0.0', date: 'Dec 1, 2025', changes: ['Major UI overhaul', 'Added dDRM support'] }
-                ]
-            },
-            {
-                id: 'elacity-connect',
-                name: 'Elacity Connect',
-                developer: 'Elacity Labs',
-                category: 'tools',
-                description: 'Peer-to-peer connectivity for your smart devices. Control IoT devices, sync data between nodes, and build your own mesh network. No central servers required.',
-                shortDesc: 'P2P smart device connectivity',
-                size: '45 MB',
-                version: '2.0.0',
-                icon: 'iot',
-                gradient: 'gradient-teal',
-                badges: ['ddrm'],
-                permissions: ['Network access', 'Device discovery', 'Bluetooth/WiFi access'],
-                requirements: { storage: '80 MB', memory: '256 MB', compatibility: 'PC2 1.0+' },
-                installed: false,
-                isNew: true,
-                isPopular: true,
-                isStaffPick: true,
-                website: 'https://elacity.io/connect',
-                source: null,
-                changelog: [
-                    { version: '2.0.0', date: 'Jan 12, 2026', changes: ['Mesh networking support', 'Smart home integrations', 'End-to-end encryption'] },
-                    { version: '1.5.0', date: 'Nov 1, 2025', changes: ['Device pairing improvements', 'New device types'] }
-                ]
-            },
-            // Elacity & Elastos Core Apps (Featured)
-            {
-                id: 'elastos-did',
-                name: 'Elastos DID',
-                developer: 'Elastos Foundation',
-                category: 'blockchain',
-                description: 'Generate and manage your Elastos Decentralized Identifier (DID). W3C compliant, self-sovereign identity that you own and control. Use across Web3 applications without centralized accounts.',
-                shortDesc: 'W3C compliant decentralized identity',
-                size: '18 MB',
-                version: '3.0.0',
-                icon: 'identity',
-                gradient: 'gradient-indigo',
-                badges: ['opensource'],
-                permissions: ['Secure key storage', 'Network access'],
-                requirements: { storage: '30 MB', memory: '128 MB', compatibility: 'PC2 1.0+' },
-                installed: false,
-                isNew: false,
-                isPopular: true,
-                isStaffPick: true,
-                price: null,
-                website: 'https://elastos.io/did',
-                source: 'https://github.com/elastos/Elastos.DID.SDK',
-                changelog: [
-                    { version: '3.0.0', date: 'Jan 8, 2026', changes: ['W3C DID 1.0 compliance', 'Verifiable Credentials support', 'Cross-chain resolution'] },
-                    { version: '2.5.0', date: 'Oct 1, 2025', changes: ['Improved key management', 'DID document updates'] }
-                ]
-            },
-            {
-                id: 'elacity-media',
-                name: 'Elacity Media',
-                developer: 'Elacity Labs',
-                category: 'media',
-                description: 'The decentralized marketplace for trading media assets. Buy, sell, and license digital content with dDRM protection. Earn royalties automatically through smart contracts.',
-                shortDesc: 'Trade and license media assets',
-                size: '38 MB',
-                version: '1.5.0',
-                icon: 'marketplace',
-                gradient: 'gradient-purple',
-                badges: ['ddrm'],
-                permissions: ['Wallet access', 'Media access', 'Network access'],
-                requirements: { storage: '100 MB', memory: '256 MB', compatibility: 'PC2 1.0+' },
-                installed: false,
-                isNew: true,
-                isPopular: true,
-                isStaffPick: true,
-                price: null,
-                website: 'https://elacity.io/media',
-                source: null,
-                changelog: [
-                    { version: '1.5.0', date: 'Jan 18, 2026', changes: ['Royalty dashboard', 'Bulk uploads', 'License templates'] },
-                    { version: '1.0.0', date: 'Nov 1, 2025', changes: ['Initial release', 'dDRM integration'] }
-                ]
-            },
-            {
-                id: 'btcd-stablecoin',
-                name: 'BTCD',
-                developer: 'BeL2 Labs',
-                category: 'blockchain',
-                description: 'Bitcoin Dollar Service - Collateralize your BTC and mint BTCD stablecoins. Unlock liquidity from your Bitcoin holdings without selling. Decentralized, over-collateralized, and fully transparent.',
-                shortDesc: 'Mint stablecoins from your BTC',
-                size: '28 MB',
-                version: '1.2.0',
-                icon: 'stablecoin',
-                gradient: 'gradient-green',
-                badges: ['ddrm'],
-                permissions: ['Wallet access', 'Network access', 'Smart contract interaction'],
-                requirements: { storage: '40 MB', memory: '256 MB', compatibility: 'PC2 1.0+' },
-                installed: false,
-                isNew: true,
-                isPopular: true,
-                isStaffPick: true,
-                price: null,
-                website: 'https://bel2.org/btcd',
-                source: null,
-                changelog: [
-                    { version: '1.2.0', date: 'Jan 15, 2026', changes: ['Lower collateral ratios', 'Improved liquidation protection', 'Yield strategies'] },
-                    { version: '1.0.0', date: 'Dec 1, 2025', changes: ['Initial launch', 'BTC collateralization', 'BTCD minting'] }
-                ]
-            },
-            {
-                id: 'elastos-mainchain-wallet',
-                name: 'Elastos Mainchain Wallet',
-                developer: 'Elastos Foundation',
-                category: 'blockchain',
-                description: 'The official wallet for Elastos mainchain. Securely manage your ELA tokens, view transaction history, and interact with the Elastos ecosystem.',
-                shortDesc: 'Official ELA mainchain wallet',
-                size: '25 MB',
-                version: '3.0.0',
-                icon: 'wallet',
-                gradient: 'gradient-blue',
-                badges: ['opensource'],
-                permissions: ['Secure key storage', 'Network access'],
-                requirements: { storage: '50 MB', memory: '128 MB', compatibility: 'PC2 1.0+' },
-                installed: false,
-                isNew: false,
-                isPopular: true,
-                isStaffPick: true,
-                price: null,
-                website: 'https://elastos.io/wallet',
-                source: 'https://github.com/elastos/Elastos.ELA.Wallet',
-                changelog: [
-                    { version: '3.0.0', date: 'Jan 10, 2026', changes: ['New security features', 'Multi-sig support', 'Hardware wallet integration'] },
-                    { version: '2.5.0', date: 'Oct 15, 2025', changes: ['UI refresh', 'QR code scanning'] }
-                ]
-            },
-            {
-                id: 'elastos-bpos-node',
-                name: 'Elastos BPoS Node',
-                developer: 'Elastos Foundation',
-                category: 'blockchain',
-                description: 'Run your own Elastos BPoS (Bonded Proof of Stake) validator node. Stake ELA, validate transactions, earn block rewards, and help secure the Elastos network.',
-                shortDesc: 'Run a staking validator node',
-                size: '180 MB',
-                version: '2.0.0',
-                icon: 'validator',
-                gradient: 'gradient-indigo',
-                badges: ['opensource'],
-                permissions: ['Network access', 'Background service', 'Significant storage'],
-                requirements: { storage: '200 GB', memory: '8 GB', compatibility: 'PC2 1.0+' },
-                installed: false,
-                isNew: true,
-                isPopular: true,
-                price: null,
-                website: 'https://elastos.io/bpos',
-                source: 'https://github.com/elastos/Elastos.ELA',
-                changelog: [
-                    { version: '2.0.0', date: 'Jan 5, 2026', changes: ['BPoS consensus upgrade', 'Improved reward distribution', 'Node monitoring dashboard'] }
-                ]
-            },
-            {
-                id: 'btc-wallet',
-                name: 'BTC Wallet',
-                developer: 'Open Source',
-                category: 'blockchain',
-                description: 'A secure, self-custodial Bitcoin wallet. Full control of your private keys, hardware wallet support, and Lightning Network integration for fast payments.',
-                shortDesc: 'Self-custodial Bitcoin wallet',
-                size: '32 MB',
-                version: '5.0.0',
-                icon: 'bitcoin',
-                gradient: 'gradient-orange',
-                badges: ['opensource'],
-                permissions: ['Secure key storage', 'Network access'],
-                requirements: { storage: '50 MB', memory: '128 MB', compatibility: 'PC2 1.0+' },
-                installed: false,
-                isNew: false,
-                isPopular: true,
-                isStaffPick: true,
-                price: null,
-                website: 'https://bitcoin.org/wallets',
-                source: 'https://github.com/user/btc-wallet',
-                changelog: [
-                    { version: '5.0.0', date: 'Jan 12, 2026', changes: ['Lightning Network support', 'Taproot addresses', 'Improved security'] },
-                    { version: '4.5.0', date: 'Nov 20, 2025', changes: ['Hardware wallet integration', 'Multi-sig support'] }
-                ]
-            },
-            // Other Blockchain Apps
-            {
-                id: 'bitcoin-node',
-                name: 'Bitcoin Node',
-                developer: 'Open Source',
-                category: 'blockchain',
-                description: 'Run a full Bitcoin Core node on your PC2. Verify transactions independently, support the network, and achieve maximum privacy.',
-                shortDesc: 'Full Bitcoin Core node',
-                size: '35 MB',
-                version: '27.0.0',
-                icon: 'bitcoin',
-                gradient: 'gradient-orange',
-                badges: ['opensource'],
-                permissions: ['Network access', 'Significant storage (500GB+)', 'Background processing'],
-                requirements: { storage: '500 GB', memory: '2 GB', compatibility: 'PC2 1.0+' },
-                installed: false,
-                isNew: false,
-                isPopular: true,
-                isStaffPick: true,
-                website: 'https://bitcoin.org',
-                source: 'https://github.com/bitcoin/bitcoin',
-                changelog: [
-                    { version: '27.0.0', date: 'Jan 5, 2026', changes: ['Performance improvements', 'Security patches'] }
-                ]
-            },
-            {
-                id: 'esc-wallet',
-                name: 'ESC Wallet',
-                developer: 'Elastos Foundation',
-                category: 'blockchain',
-                description: 'Official ElastOS sidechain wallet. Manage your ELA, ESC tokens, and interact with smart contracts on the Elastos ecosystem.',
-                size: '28 MB',
-                version: '3.2.1',
-                icon: 'wallet',
-                gradient: 'gradient-green',
-                badges: ['ddrm'],
-                permissions: ['Wallet signing access', 'Network access'],
-                requirements: { storage: '50 MB', memory: '128 MB', compatibility: 'PC2 1.0+' },
-                installed: true,
-                isNew: false,
-                isPopular: true,
-                website: 'https://elastos.org',
-                source: 'https://github.com/elastos/esc-wallet',
-                changelog: [
-                    { version: '3.2.1', date: 'Jan 12, 2026', changes: ['Bug fixes', 'Added new token support'] }
-                ]
-            },
-            {
-                id: 'secure-sync',
-                name: 'Secure Sync',
-                developer: 'Elacity Labs',
-                category: 'tools',
-                description: 'End-to-end encrypted file synchronization across your devices. Your files never leave your control.',
-                size: '18 MB',
-                version: '1.0.2',
-                icon: 'sync',
-                gradient: 'gradient-cyan',
-                badges: ['ddrm'],
-                permissions: ['Full file system access', 'Network access', 'Background sync'],
-                requirements: { storage: '20 MB', memory: '64 MB', compatibility: 'PC2 1.0+' },
-                installed: false,
-                isNew: true,
-                isPopular: false,
-                website: 'https://elacity.io/sync',
-                source: null,
-                changelog: [
-                    { version: '1.0.2', date: 'Jan 8, 2026', changes: ['Initial release', 'Cross-device sync'] }
-                ]
-            },
-            {
-                id: 'photo-vault',
-                name: 'Photo Vault',
-                developer: 'Elacity Labs',
-                category: 'media',
-                description: 'Private photo management with AI-powered organization. Your memories, encrypted and searchable.',
-                size: '52 MB',
-                version: '2.0.0',
-                icon: 'camera',
-                gradient: 'gradient-pink',
-                badges: ['wasm'],
-                permissions: ['Access to photos', 'Local AI processing'],
-                requirements: { storage: '100 MB', memory: '512 MB', compatibility: 'PC2 1.0+' },
-                installed: true,
-                isNew: false,
-                isPopular: true,
-                website: 'https://elacity.io/photos',
-                source: null,
-                changelog: [
-                    { version: '2.0.0', date: 'Dec 20, 2025', changes: ['AI-powered search', 'Face recognition'] }
-                ]
-            },
-            {
-                id: 'code-studio',
-                name: 'Code Studio',
-                developer: 'Open Source',
-                category: 'tools',
-                description: 'A powerful web-based code editor inspired by VS Code. Syntax highlighting, extensions, and Git integration.',
-                size: '85 MB',
-                version: '1.85.0',
-                icon: 'code',
-                gradient: 'gradient-blue',
-                badges: ['opensource'],
-                permissions: ['File system access', 'Terminal access'],
-                requirements: { storage: '150 MB', memory: '256 MB', compatibility: 'PC2 1.0+' },
-                installed: false,
-                isNew: true,
-                isPopular: false,
-                website: 'https://code.visualstudio.com',
-                source: 'https://github.com/microsoft/vscode',
-                changelog: [
-                    { version: '1.85.0', date: 'Jan 1, 2026', changes: ['New extensions API', 'Performance improvements'] }
-                ]
-            },
-            {
-                id: 'chess-master',
-                name: 'Chess Master',
-                developer: 'Elacity Labs',
-                category: 'games',
-                description: 'Play chess against AI or friends. Features multiple difficulty levels, puzzles, and game analysis.',
-                size: '12 MB',
-                version: '1.2.0',
-                icon: 'chess',
-                gradient: 'gradient-slate',
-                badges: ['wasm'],
-                permissions: ['None required'],
-                requirements: { storage: '15 MB', memory: '64 MB', compatibility: 'PC2 1.0+' },
-                installed: false,
-                isNew: false,
-                isPopular: false,
-                website: null,
-                source: 'https://github.com/elacity/chess-master',
-                changelog: [
-                    { version: '1.2.0', date: 'Nov 15, 2025', changes: ['Added puzzles mode', 'Improved AI'] }
-                ]
-            },
-            {
-                id: 'network-guard',
-                name: 'Network Guard',
-                developer: 'Open Source',
-                category: 'privacy',
-                description: 'Network-wide ad and tracker blocking. Protect all devices on your network without installing anything on them.',
-                size: '8 MB',
-                version: '5.18.0',
-                icon: 'shield',
-                gradient: 'gradient-green',
-                badges: ['opensource'],
-                permissions: ['Network DNS access', 'Background service'],
-                requirements: { storage: '20 MB', memory: '128 MB', compatibility: 'PC2 1.0+' },
-                installed: false,
-                isNew: false,
-                isPopular: true,
-                website: 'https://pi-hole.net',
-                source: 'https://github.com/pi-hole/pi-hole',
-                changelog: [
-                    { version: '5.18.0', date: 'Dec 10, 2025', changes: ['Updated blocklists', 'Performance improvements'] }
-                ]
-            },
-            {
-                id: 'home-control',
-                name: 'Home Control',
-                developer: 'Open Source',
-                category: 'tools',
-                description: 'Smart home automation hub. Control lights, thermostats, and IoT devices from your personal cloud.',
-                size: '120 MB',
-                version: '2024.1.0',
-                icon: 'home',
-                gradient: 'gradient-yellow',
-                badges: ['opensource'],
-                permissions: ['Network access', 'Device discovery', 'Background service'],
-                requirements: { storage: '200 MB', memory: '256 MB', compatibility: 'PC2 1.0+' },
-                installed: false,
-                isNew: true,
-                isPopular: false,
-                website: 'https://www.home-assistant.io',
-                source: 'https://github.com/home-assistant/core',
-                changelog: [
-                    { version: '2024.1.0', date: 'Jan 1, 2026', changes: ['New device integrations', 'UI improvements'] }
-                ]
-            },
-            // Web3 DeFi & DAO Apps
-            {
-                id: 'elastos-dao',
-                name: 'Elastos DAO',
-                developer: 'Elastos Foundation',
-                category: 'blockchain',
-                description: 'Participate in Elastos governance. Vote on proposals, stake ELA, and shape the future of the Elastos ecosystem.',
-                shortDesc: 'Decentralized governance for Elastos',
-                size: '22 MB',
-                version: '2.0.0',
-                icon: 'governance',
-                gradient: 'gradient-purple',
-                badges: ['ddrm'],
-                permissions: ['Wallet access', 'Network access'],
-                requirements: { storage: '50 MB', memory: '128 MB', compatibility: 'PC2 1.0+' },
-                installed: false,
-                isNew: true,
-                isPopular: true,
-                isStaffPick: true,
-                price: null,
-                website: 'https://elastos.io/dao',
-                source: 'https://github.com/elastos/Elastos.DAO',
-                changelog: [
-                    { version: '2.0.0', date: 'Jan 18, 2026', changes: ['New voting UI', 'Multi-chain governance', 'Improved staking'] }
-                ]
-            },
-            {
-                id: 'elastos-rpc',
-                name: 'Elastos RPC Node',
-                developer: 'Elastos Foundation',
-                category: 'blockchain',
-                description: 'Run your own Elastos RPC endpoint. Full node access for dApps, direct blockchain queries, and maximum decentralization.',
-                shortDesc: 'Your personal Elastos RPC endpoint',
-                size: '85 MB',
-                version: '1.5.0',
-                icon: 'server',
-                gradient: 'gradient-indigo',
-                badges: ['opensource'],
-                permissions: ['Network access', 'Significant storage', 'Background service'],
-                requirements: { storage: '100 GB', memory: '4 GB', compatibility: 'PC2 1.0+' },
-                installed: false,
-                isNew: false,
-                isPopular: true,
-                price: null,
-                website: 'https://elastos.io/rpc',
-                source: 'https://github.com/elastos/Elastos.ELA',
-                changelog: [
-                    { version: '1.5.0', date: 'Dec 15, 2025', changes: ['Performance optimizations', 'Reduced sync time'] }
-                ]
-            },
-            {
-                id: 'uniswap',
-                name: 'Uniswap',
-                developer: 'Uniswap Labs',
-                category: 'blockchain',
-                description: 'The leading decentralized exchange. Swap tokens, provide liquidity, and earn fees on the largest DEX in DeFi.',
-                shortDesc: 'Decentralized token exchange',
-                size: '18 MB',
-                version: '4.0.0',
-                icon: 'swap',
-                gradient: 'gradient-pink',
-                badges: ['ddrm'],
-                permissions: ['Wallet access', 'Network access'],
-                requirements: { storage: '30 MB', memory: '128 MB', compatibility: 'PC2 1.0+' },
-                installed: false,
-                isNew: false,
-                isPopular: true,
-                isStaffPick: true,
-                price: 4.99,
-                website: 'https://uniswap.org',
-                source: 'https://github.com/Uniswap',
-                changelog: [
-                    { version: '4.0.0', date: 'Jan 10, 2026', changes: ['V4 hooks support', 'Gas optimizations', 'New LP interface'] }
-                ]
-            },
-            {
-                id: 'glide-finance',
-                name: 'Glide Finance',
-                developer: 'Glide Team',
-                category: 'blockchain',
-                description: 'The premier DEX on Elastos Smart Chain. Swap ESC tokens, farm yields, and participate in the Elastos DeFi ecosystem.',
-                shortDesc: 'Elastos native DEX and yield farming',
-                size: '15 MB',
-                version: '3.2.0',
-                icon: 'chart',
-                gradient: 'gradient-teal',
-                badges: ['ddrm'],
-                permissions: ['Wallet access', 'Network access'],
-                requirements: { storage: '25 MB', memory: '128 MB', compatibility: 'PC2 1.0+' },
-                installed: false,
-                isNew: false,
-                isPopular: true,
-                price: null,
-                website: 'https://glidefinance.io',
-                source: 'https://github.com/pjdelport/glide-finance',
-                changelog: [
-                    { version: '3.2.0', date: 'Dec 28, 2025', changes: ['New farming pools', 'UI refresh', 'Gas savings'] }
-                ]
-            },
-            {
-                id: 'aave',
-                name: 'Aave',
-                developer: 'Aave Labs',
-                category: 'blockchain',
-                description: 'Decentralized lending and borrowing. Deposit crypto to earn interest or borrow against your collateral.',
-                size: '20 MB',
-                version: '3.1.0',
-                icon: 'bank',
-                gradient: 'gradient-purple',
-                badges: ['ddrm'],
-                permissions: ['Wallet access', 'Network access'],
-                requirements: { storage: '35 MB', memory: '128 MB', compatibility: 'PC2 1.0+' },
-                installed: false,
-                isNew: false,
-                isPopular: false,
-                price: 9.99,
-                website: 'https://aave.com',
-                source: 'https://github.com/aave',
-                changelog: [
-                    { version: '3.1.0', date: 'Jan 5, 2026', changes: ['New markets', 'Risk parameter updates'] }
-                ]
-            },
-            {
-                id: 'opensea',
-                name: 'OpenSea',
-                developer: 'OpenSea Inc',
-                category: 'blockchain',
-                description: 'The largest NFT marketplace. Browse, buy, sell, and create digital collectibles across multiple blockchains.',
-                size: '25 MB',
-                version: '2.5.0',
-                icon: 'nft',
-                gradient: 'gradient-blue',
-                badges: ['ddrm'],
-                permissions: ['Wallet access', 'Network access', 'Media access'],
-                requirements: { storage: '50 MB', memory: '256 MB', compatibility: 'PC2 1.0+' },
-                installed: false,
-                isNew: true,
-                isPopular: true,
-                price: 2.99,
-                website: 'https://opensea.io',
-                source: null,
-                changelog: [
-                    { version: '2.5.0', date: 'Jan 12, 2026', changes: ['Pro tools', 'Bulk actions', 'Analytics dashboard'] }
-                ]
-            },
-            {
-                id: 'metamask-snap',
-                name: 'MetaMask Snap',
-                developer: 'ConsenSys',
-                category: 'blockchain',
-                description: 'Extended wallet functionality for MetaMask. Custom transaction insights, multi-chain support, and enhanced security.',
-                size: '5 MB',
-                version: '1.0.0',
-                icon: 'wallet',
-                gradient: 'gradient-orange',
-                badges: ['opensource'],
-                permissions: ['Wallet integration'],
-                requirements: { storage: '10 MB', memory: '64 MB', compatibility: 'PC2 1.0+' },
-                installed: false,
-                isNew: true,
-                isPopular: false,
-                price: null,
-                website: 'https://metamask.io/snaps',
-                source: 'https://github.com/MetaMask/snaps',
-                changelog: [
-                    { version: '1.0.0', date: 'Jan 15, 2026', changes: ['Initial release', 'Elastos chain support'] }
-                ]
-            },
-            {
-                id: 'chainlink-oracle',
-                name: 'Chainlink Oracle',
-                developer: 'Chainlink Labs',
-                category: 'blockchain',
-                description: 'Run a Chainlink oracle node. Provide real-world data to smart contracts and earn LINK tokens.',
-                size: '150 MB',
-                version: '2.8.0',
-                icon: 'link',
-                gradient: 'gradient-blue',
-                badges: ['opensource'],
-                permissions: ['Network access', 'Background service', 'API access'],
-                requirements: { storage: '500 MB', memory: '2 GB', compatibility: 'PC2 1.0+' },
-                installed: false,
-                isNew: false,
-                isPopular: false,
-                price: 19.99,
-                website: 'https://chain.link',
-                source: 'https://github.com/smartcontractkit/chainlink',
-                changelog: [
-                    { version: '2.8.0', date: 'Dec 20, 2025', changes: ['New data feeds', 'VRF v2.5 support'] }
-                ]
-            },
-            {
-                id: 'the-graph',
-                name: 'The Graph Node',
-                developer: 'The Graph Foundation',
-                category: 'blockchain',
-                description: 'Index blockchain data with GraphQL. Run subgraphs locally for fast, reliable dApp data queries.',
-                size: '200 MB',
-                version: '0.35.0',
-                icon: 'graph',
-                gradient: 'gradient-purple',
-                badges: ['opensource'],
-                permissions: ['Network access', 'Database access', 'Background service'],
-                requirements: { storage: '50 GB', memory: '4 GB', compatibility: 'PC2 1.0+' },
-                installed: false,
-                isNew: false,
-                isPopular: false,
-                price: 14.99,
-                website: 'https://thegraph.com',
-                source: 'https://github.com/graphprotocol/graph-node',
-                changelog: [
-                    { version: '0.35.0', date: 'Jan 8, 2026', changes: ['Firehose support', 'Query optimization'] }
-                ]
-            },
-            {
-                id: 'lido-staking',
-                name: 'Lido Staking',
-                developer: 'Lido DAO',
-                category: 'blockchain',
-                description: 'Liquid staking for Ethereum and more. Stake ETH, receive stETH, and earn rewards while keeping liquidity.',
-                size: '12 MB',
-                version: '2.0.0',
-                icon: 'stake',
-                gradient: 'gradient-cyan',
-                badges: ['ddrm'],
-                permissions: ['Wallet access', 'Network access'],
-                requirements: { storage: '20 MB', memory: '128 MB', compatibility: 'PC2 1.0+' },
-                installed: false,
-                isNew: true,
-                isPopular: true,
-                price: null,
-                website: 'https://lido.fi',
-                source: 'https://github.com/lidofinance',
-                changelog: [
-                    { version: '2.0.0', date: 'Jan 16, 2026', changes: ['Withdrawals enabled', 'New staking dashboard'] }
-                ]
-            }
-        ];
-        
-        // State
+
+        // ==================== APP CATALOG ====================
+        // Fetched from supernode registry via local /api/registry/apps
+        let catalogApps = [];
+
+        // ==================== STATE ====================
+        let installedApps = [];     // from /api/installed-apps
+        let builtInApps = [];       // from /get-launch-apps (system apps)
+        // Fallback install-signal from /get-launch-apps (each user-installed
+        // app is pushed with `installed: true`). Used when /api/installed-apps
+        // fails (401/network) but /get-launch-apps still reports the app, so
+        // classification degrades gracefully instead of flipping the app to
+        // "not installed". See DAPP-CENTRE-BUILTIN-CLASSIFICATION.
+        let launchInstalledNames = new Set();
+        // Real bundle icon URLs resolved by the backend for installed apps.
+        // The dApp Centre previously rendered installed registry apps with
+        // the registry's category SVG (e.g. `swap` for Glide, `image` for
+        // Elastos NFT). That was obviously wrong — the app bundle ships a
+        // proper branded logo, and /get-launch-apps already returns the
+        // correct icon URL (data: URL or /installed-apps/<name>/…). We mirror
+        // that map so the catalog merge can swap to the real logo when an
+        // app is installed. See DAPP-UX-POLISH-V12.
+        let launchAppIcons = {};
+        let allApps = [];           // merged view for rendering
         let currentCategory = 'all';
         let currentTab = 'discover';
-        // All Apps grid is always shown by default
-        
-        // Initialize
-        function init() {
+        let isLoading = true;
+
+        // Built-in app metadata (enriches the launch_apps data)
+        const builtInMeta = {
+            'editor':           { category: 'tools',  gradient: 'gradient-blue',   iconKey: 'edit',       desc: 'Edit text and code files with syntax highlighting.' },
+            'viewer':           { category: 'media',  gradient: 'gradient-cyan',   iconKey: 'image',      desc: 'View images and photos stored on your personal cloud.' },
+            'player':           { category: 'media',  gradient: 'gradient-purple', iconKey: 'play',       desc: 'Play video and audio files with full format support.' },
+            'camera':           { category: 'media',  gradient: 'gradient-pink',   iconKey: 'camera',     desc: 'Capture photos and video from your device camera.' },
+            'pdf':              { category: 'tools',  gradient: 'gradient-orange',  iconKey: 'pdf',        desc: 'Read and annotate PDF documents.' },
+            'system-terminal':  { category: 'system', gradient: 'gradient-slate',  iconKey: 'terminal',   desc: 'Access the system terminal for advanced operations.' },
+            'recorder':         { category: 'media',  gradient: 'gradient-pink',   iconKey: 'mic',        desc: 'Record audio from your microphone.' },
+            'solitaire-frvr':   { category: 'games',  gradient: 'gradient-green',  iconKey: 'cards',      desc: 'Classic Solitaire card game.' },
+            'calculator':       { category: 'tools',  gradient: 'gradient-blue',   iconKey: 'calculator', desc: 'Standard and scientific calculator.' },
+            'file-processor':   { category: 'tools',  gradient: 'gradient-slate',  iconKey: 'code',       desc: 'Process and convert files between formats.' },
+            'ai-chat':          { category: 'tools',  gradient: 'gradient-indigo',  iconKey: 'brain',      desc: 'Chat with AI assistants (OpenAI, Anthropic, Ollama).' },
+            'dao-dashboard':    { category: 'blockchain', gradient: 'gradient-purple', iconKey: 'governance', desc: 'Monitor Elastos DAO proposals and voting activity.' },
+        };
+
+        // ==================== THEME ====================
+        // Shared with the Elacity Market app and any other surface that
+        // wants to honour the same toggle. Toggling here updates the key
+        // so the next time another iframe app boots it picks up the new
+        // theme. See DAPP-UX-POLISH-V12 follow-up.
+        const THEME_KEY = 'elacity-theme';
+
+        function applyTheme(theme) {
+            if (theme === 'dark') {
+                document.documentElement.setAttribute('data-theme', 'dark');
+            } else {
+                document.documentElement.removeAttribute('data-theme');
+            }
+        }
+
+        function initTheme() {
+            const saved = localStorage.getItem(THEME_KEY);
+            // Default to system preference when nothing is stored.
+            if (saved === 'dark' || (!saved && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+                applyTheme('dark');
+            } else {
+                applyTheme('light');
+            }
+        }
+
+        function toggleTheme() {
+            const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+            const next = isDark ? 'light' : 'dark';
+            applyTheme(next);
+            try { localStorage.setItem(THEME_KEY, next); } catch { /* ignore quota */ }
+        }
+
+        // Apply ASAP — before render — so we don't flash the wrong theme.
+        initTheme();
+
+        // ==================== INIT ====================
+        async function init() {
+            setupEventListeners();
+            await loadData();
+            render();
+        }
+
+        function formatSize(bytes) {
+            if (!bytes || bytes === 0) return '-';
+            if (bytes >= 1073741824) return (bytes / 1073741824).toFixed(1) + ' GB';
+            if (bytes >= 1048576) return (bytes / 1048576).toFixed(0) + ' MB';
+            if (bytes >= 1024) return (bytes / 1024).toFixed(0) + ' KB';
+            return bytes + ' B';
+        }
+
+        function registryAppToCatalog(app) {
+            const r = app.registry || {};
+            const authorName = typeof app.author === 'object' ? app.author.name : (app.author || 'Unknown');
+            return {
+                id: app.name,
+                name: app.title || app.name,
+                developer: authorName,
+                category: r.category || app.category || 'tools',
+                description: app.description || '',
+                shortDesc: r.shortDesc || '',
+                size: formatSize(app.distribution?.size),
+                version: app.version || '',
+                icon: app.icon || 'package',
+                gradient: r.gradient || 'gradient-slate',
+                // Optional hero image for the staff-pick card. Not present
+                // in the current registry payload but reading it here means
+                // the day a publisher adds `registry.banner` (or top-level
+                // `banner`) the cards immediately upgrade. See DAPP-UX-POLISH-V12.
+                banner: r.banner || app.banner || null,
+                badges: r.badges || [],
+                permissions: Object.keys(app.capabilities || {}),
+                isStaffPick: !!r.staffPick,
+                isPopular: !!r.popular,
+                requirements: { storage: formatSize(app.distribution?.size), memory: '-', compatibility: r.compatibility || 'PC2 1.0+' },
+                website: r.website || null,
+                source: r.source || null,
+                cid: app.distribution?.cid || null,
+                registryStatus: r.status || 'coming_soon',
+                // Manifest role — `'system'` for the four core capsules
+                // (Market, Player, Creator, dDRM Viewer) that auto-install
+                // on first boot, `'dapp'` for everything else. Used by
+                // mergeApps to mark these as un-uninstallable. The boot
+                // policy in pc2-node only auto-installs role=system, so
+                // this is the authoritative "ships with PC2" signal.
+                role: app.role || 'dapp',
+            };
+        }
+
+        async function loadData() {
+            isLoading = true;
+            try {
+                const [installedRes, launchRes, registryRes] = await Promise.allSettled([
+                    pc2Fetch('/api/installed-apps').then(r => r.ok ? r.json() : { apps: [] }),
+                    fetch('/get-launch-apps').then(r => r.ok ? r.json() : { recommended: [] }),
+                    fetch('/api/registry/apps').then(r => r.ok ? r.json() : { apps: [] }),
+                ]);
+
+                const rawInstalled = (installedRes.status === 'fulfilled' ? installedRes.value.apps : []) || [];
+                // Defence-in-depth: even though /api/installed-apps now drops
+                // manifest.hidden rows on the server (see installed-apps.ts),
+                // we re-apply the same filter here so the dApp Centre stays
+                // correct against older PC2 builds. Hidden apps (e.g.
+                // pc2-media-runtime, the WASM helper that elacity-player
+                // loads in the background) must never surface as a tile —
+                // otherwise users see a duplicate "Elacity Player" card.
+                installedApps = rawInstalled.filter(a => {
+                    try {
+                        const m = a.manifest_json ? JSON.parse(a.manifest_json) : null;
+                        return !(m && m.hidden);
+                    } catch { return true; }
+                });
+                const launchApps = (launchRes.status === 'fulfilled' ? launchRes.value.recommended : []) || [];
+                const registryApps = (registryRes.status === 'fulfilled' ? registryRes.value.apps : []) || [];
+
+                catalogApps = registryApps.map(registryAppToCatalog);
+                console.log(`[dApp Centre] Loaded ${catalogApps.length} apps from registry`);
+
+                // The API returns `app_name` on each installed-apps row (the
+                // SQLite column name); we tolerate `name` for forward-compat
+                // should the shape ever be normalised. This was the root cause
+                // of DAPP-UX-POLISH-V12 #1 — the old `a.name` read produced
+                // Set([undefined, …]) which broke every catalog match and
+                // doubled every installable dApp in the All Apps grid.
+                const installedNames = new Set(
+                    installedApps.map(a => a.app_name ?? a.name).filter(Boolean)
+                );
+
+                // Secondary install-signal: apps that /get-launch-apps reports
+                // as `installed: true`. Used when /api/installed-apps fails or
+                // races so the UI still knows these are installed.
+                launchInstalledNames = new Set(
+                    launchApps
+                        .filter(a => a.installed === true)
+                        .map(a => a.name)
+                );
+
+                // Build name → iconUrl map for installed apps so the catalog
+                // merge can show the real branded logo from the bundle
+                // (rather than the registry's category SVG). See
+                // DAPP-UX-POLISH-V12 #2. /get-launch-apps already resolves
+                // manifest.iconDataUrl > installed.icon > bundle fallback
+                // probes, so we just mirror the result here.
+                launchAppIcons = {};
+                for (const a of launchApps) {
+                    if (a.name && a.icon) launchAppIcons[a.name] = a.icon;
+                }
+
+                // Primary classifier: the backend's explicit isSystem flag
+                // (added 2026-04-29 — see DAPP-CENTRE-BUILTIN-CLASSIFICATION
+                // task). Fall back to the old inverse-of-installed inference
+                // only if the backend response carries no isSystem flag at
+                // all (older PC2 node behind new frontend).
+                const hasSystemFlag = launchApps.some(a => a.isSystem !== undefined);
+                const isSystemApp = hasSystemFlag
+                    ? (a) => a.isSystem === true
+                    : (a) => !installedNames.has(a.name);
+
+                builtInApps = launchApps
+                    .filter(a => a.name !== 'app-center' && isSystemApp(a))
+                    .map(a => ({
+                        id: a.name,
+                        name: a.title || a.name,
+                        developer: 'System',
+                        icon: a.icon,
+                        version: a.version || '',
+                        description: a.description || '',
+                        isBuiltIn: true,
+                installed: true,
+                    }));
+            } catch (err) {
+                console.error('[dApp Centre] Failed to load data:', err);
+            }
+            isLoading = false;
+            mergeApps();
+        }
+
+        function mergeApps() {
+            // Same tolerant read as loadData — see DAPP-UX-POLISH-V12 #1.
+            const installedNames = new Set(
+                installedApps.map(a => a.app_name ?? a.name).filter(Boolean)
+            );
+            const builtInNames = new Set(builtInApps.map(a => a.id));
+
+            allApps = [];
+
+            // 1. Add catalog apps with install status.
+            // Install signal = primary (/api/installed-apps) OR built-in flag
+            // OR launchApps fallback (if primary failed). Built-in flag is
+            // authoritative — it comes from the backend's isSystem field
+            // (hardcoded core apps) OR the registry manifest role === 'system'
+            // (the four pre-installed dApp capsules: Market, Player, Creator,
+            // dDRM Viewer). System-role apps must not be uninstallable from
+            // the dApp Centre — the boot policy will just re-install them on
+            // next start, and accidentally removing the marketplace would
+            // brick the user's content access. See DAPP-UX-POLISH-V12 follow-up.
+            for (const cat of catalogApps) {
+                const isInstalled = installedNames.has(cat.id)
+                    || builtInNames.has(cat.id)
+                    || launchInstalledNames.has(cat.id);
+                const isBuiltIn = builtInNames.has(cat.id) || cat.role === 'system';
+                const isComingSoon = !isInstalled && (cat.registryStatus === 'coming_soon' || (!cat.cid && cat.registryStatus !== 'available'));
+                // For installed apps, prefer the backend-resolved bundle icon
+                // (the real branded logo) over the registry's category SVG
+                // key. Non-installed apps keep the category glyph so the
+                // "discover" feel is preserved. See DAPP-UX-POLISH-V12 #2.
+                const realIcon = isInstalled ? launchAppIcons[cat.id] : null;
+                allApps.push({
+                    ...cat,
+                    installed: isInstalled,
+                    isBuiltIn: isBuiltIn,
+                    isComingSoon,
+                    builtInIcon: realIcon || null,
+                });
+            }
+
+            // 2. Add installed apps not already in catalog
+            for (const inst of installedApps) {
+                const instId = inst.app_name ?? inst.name;
+                if (!instId) continue;
+                if (!catalogApps.find(c => c.id === instId)) {
+                    const meta = builtInMeta[instId] || {};
+                    let iconDataUrl = launchAppIcons[instId] || null;
+                    // Fall back to scraping the stored manifest in case the
+                    // /get-launch-apps lookup missed it (e.g. hidden apps).
+                    if (!iconDataUrl) {
+                        try {
+                            if (inst.manifest_json) {
+                                const m = JSON.parse(inst.manifest_json);
+                                if (m.iconDataUrl) iconDataUrl = m.iconDataUrl;
+                            }
+                        } catch { /* ignore */ }
+                    }
+                    allApps.push({
+                        id: instId,
+                        name: inst.title || instId,
+                        developer: inst.author || 'Unknown',
+                        category: meta.category || 'tools',
+                        description: inst.description || '',
+                        shortDesc: '',
+                        size: '',
+                        version: inst.version || '',
+                        icon: meta.iconKey || 'package',
+                        gradient: meta.gradient || 'gradient-slate',
+                        badges: [],
+                        permissions: inst.permissions || [],
+                        requirements: { storage: '-', memory: '-', compatibility: 'PC2 1.0+' },
+                        installed: true,
+                        isBuiltIn: false,
+                        isComingSoon: false,
+                isPopular: false,
+                        isStaffPick: false,
+                        builtInIcon: iconDataUrl,
+                        website: null, source: null,
+                    });
+                }
+            }
+
+            // 3. Add built-in apps not already in catalog
+            for (const bi of builtInApps) {
+                if (!catalogApps.find(c => c.id === bi.id)) {
+                    const meta = builtInMeta[bi.id] || {};
+                    allApps.push({
+                        id: bi.id,
+                        name: bi.name,
+                        developer: 'System',
+                        category: meta.category || 'system',
+                        description: meta.desc || bi.description || '',
+                        shortDesc: '',
+                        size: '',
+                        version: bi.version || '',
+                        icon: meta.iconKey || 'package',
+                        gradient: meta.gradient || 'gradient-slate',
+                        badges: ['builtin'],
+                        permissions: [],
+                        requirements: { storage: '-', memory: '-', compatibility: 'PC2 1.0+' },
+                installed: true,
+                        isBuiltIn: true,
+                        isComingSoon: false,
+                isPopular: false,
+                        isStaffPick: false,
+                        builtInIcon: bi.icon,
+                        website: null, source: null,
+                    });
+                }
+            }
+        }
+
+        // ==================== RENDERING ====================
+        function render() {
             renderStaffPicks();
             renderPopularApps();
-            renderNewApps();
+            renderAppsGrid();
             renderInstalledApps();
-            renderUpdates();
-            // Select "All Apps" category by default to show the grid
-            const allCategory = document.querySelector('[data-category="all"]');
-            if (allCategory) {
-                selectCategory(allCategory, 'all');
-            }
-            setupEventListeners();
+            updateInstalledBadge();
         }
-        
-        // Render app card HTML
+
+        function getAppIconHtml(app, cssClass) {
+            // Prefer a real bundle icon (data: URL or path) when available —
+            // this is what makes installed apps show their branded logo
+            // instead of the registry's category SVG. Both `data:` and
+            // `/installed-apps/<name>/…` URLs are safe in <img src>; anything
+            // else falls through to the category glyph. The `.has-img`
+            // modifier strips the contrasting tile background so the logo's
+            // own design (most ship a self-contained square) reads clean
+            // edge-to-edge inside the rounded mask.
+            if (app.builtInIcon && /^(data:|https?:|\/)/.test(app.builtInIcon)) {
+                return `<div class="app-icon has-img ${cssClass || ''}"><img src="${app.builtInIcon}" alt=""></div>`;
+            }
+            const gradient = app.gradient || 'gradient-slate';
+            const svgIcon = icons[app.icon] || icons.package;
+            return `<div class="app-icon ${gradient} ${cssClass || ''}">${svgIcon}</div>`;
+        }
+
+        function getAppBadges(app) {
+            const badgeList = app.badges || [];
+            const extra = [];
+            if (app.isBuiltIn) extra.push('<span class="badge builtin">System</span>');
+            if (app.isComingSoon) extra.push('<span class="badge coming-soon">Coming Soon</span>');
+            const badgeTexts = {
+                wasm: 'WASM',
+                ddrm: 'dDRM',
+                opensource: 'Open Source',
+                builtin: 'System',
+                nft: 'NFT',
+                creator: 'Creator',
+            };
+            const rendered = badgeList
+                .filter(b => b !== 'builtin')
+                .map(b => `<span class="badge ${b}">${badgeTexts[b] || b}</span>`)
+                .join('');
+            return rendered + extra.join('');
+        }
+
+        function getActionButton(app) {
+            if (app.installed || app.isBuiltIn) {
+                return `<button class="install-btn installed" onclick="event.stopPropagation(); openApp('${app.id}')">Open</button>`;
+            }
+            if (app.isComingSoon) {
+                return `<button class="install-btn coming-soon" onclick="event.stopPropagation();">Coming Soon</button>`;
+            }
+            return `<button class="install-btn" onclick="event.stopPropagation(); installApp('${app.id}')">Install</button>`;
+        }
+
         function renderAppCard(app) {
             return `
                 <div class="app-card" onclick="showAppDetail('${app.id}')">
                     <div class="app-card-header">
-                        <div class="app-icon ${app.gradient}">${icons[app.icon]}</div>
+                        ${getAppIconHtml(app)}
                         <div class="app-card-info">
                             <div class="app-name">${app.name}</div>
                             <div class="app-developer">${app.developer}</div>
                             <div class="app-version-row">
-                                <span class="app-version">v${app.version}</span>
-                                <div class="app-badges">
-                                    ${app.badges.map(badge => `<span class="badge ${badge}">${getBadgeText(badge)}</span>`).join('')}
-                                </div>
+                                ${app.version ? `<span class="app-version">v${app.version}</span>` : ''}
+                                <div class="app-badges">${getAppBadges(app)}</div>
                             </div>
                         </div>
                     </div>
                     <div class="app-description">${app.description}</div>
                     <div class="app-card-footer">
                         <div class="app-footer-left">
-                            <span class="app-size">${app.size}</span>
-                            ${app.price ? `<span class="app-price">$${app.price.toFixed(2)}</span>` : '<span class="app-price free">Free</span>'}
+                            ${app.size ? `<span class="app-size">${app.size}</span>` : ''}
+                            <span class="app-price free">Free</span>
                         </div>
-                        <button class="install-btn ${app.installed ? 'installed' : ''}" onclick="event.stopPropagation(); ${app.installed ? `openApp('${app.id}')` : `installApp('${app.id}')`}">
-                            ${app.installed ? 'Open' : (app.price ? `$${app.price.toFixed(2)}` : 'Install')}
-                        </button>
+                        ${getActionButton(app)}
                     </div>
                 </div>
             `;
         }
         
-        // Staff pick card (large Umbrel-style)
-        function renderStaffPickCard(app) {
-            // Use the app's gradient as background
-            const gradients = {
-                'gradient-purple': 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                'gradient-blue': 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
-                'gradient-orange': 'linear-gradient(135deg, #f97316 0%, #ea580c 100%)',
-                'gradient-green': 'linear-gradient(135deg, #22c55e 0%, #16a34a 100%)',
-                'gradient-red': 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)',
-                'gradient-teal': 'linear-gradient(135deg, #14b8a6 0%, #0d9488 100%)',
-                'gradient-pink': 'linear-gradient(135deg, #ec4899 0%, #db2777 100%)',
-                'gradient-yellow': 'linear-gradient(135deg, #eab308 0%, #ca8a04 100%)',
-                'gradient-indigo': 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)',
-                'gradient-cyan': 'linear-gradient(135deg, #06b6d4 0%, #0891b2 100%)'
-            };
-            const bg = gradients[app.gradient] || gradients['gradient-purple'];
-            
-            return `
-                <div class="staff-pick-card" style="background:${bg};" onclick="showAppDetail('${app.id}')">
-                    <div class="staff-pick-icon">${icons[app.icon]}</div>
-                    <div class="staff-pick-content">
-                        <div class="staff-pick-name">${app.name}</div>
-                        <div class="staff-pick-desc">${app.shortDesc || app.description.substring(0, 60) + '...'}</div>
-                    </div>
-                </div>
-            `;
+        // Visual gradients for staff-pick cards. Keyed by the app's
+        // `gradient` field from the registry (or builtInMeta for system
+        // apps). Used as the card background when no banner image is set.
+        const STAFF_PICK_GRADIENTS = {
+            'gradient-purple': 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+            'gradient-blue':   'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
+            'gradient-orange': 'linear-gradient(135deg, #f97316 0%, #ea580c 100%)',
+            'gradient-green':  'linear-gradient(135deg, #22c55e 0%, #16a34a 100%)',
+            'gradient-teal':   'linear-gradient(135deg, #14b8a6 0%, #0d9488 100%)',
+            'gradient-pink':   'linear-gradient(135deg, #ec4899 0%, #db2777 100%)',
+            'gradient-yellow': 'linear-gradient(135deg, #eab308 0%, #ca8a04 100%)',
+            'gradient-indigo': 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)',
+            'gradient-cyan':   'linear-gradient(135deg, #06b6d4 0%, #0891b2 100%)',
+            'gradient-slate':  'linear-gradient(135deg, #64748b 0%, #475569 100%)',
+        };
+
+        // Render the icon for a staff-pick card. Prefers the real bundle
+        // logo (data: URL or /installed-apps/<name>/…) when available — the
+        // generic registry SVG glyph (`swap`, `image`, …) is a poor stand-in
+        // for an app's actual brand. See DAPP-UX-POLISH-V12 follow-up.
+        function getStaffPickIconHtml(app) {
+            if (app.builtInIcon && /^(data:|https?:|\/)/.test(app.builtInIcon)) {
+                return `<div class="staff-pick-icon has-img"><img src="${app.builtInIcon}" alt=""></div>`;
+            }
+            const svgIcon = icons[app.icon] || icons.package;
+            return `<div class="staff-pick-icon">${svgIcon}</div>`;
         }
-        
-        // Render staff picks (large cards)
+
         function renderStaffPicks() {
             const container = document.getElementById('staffPicks');
-            // Use featured/popular apps for staff picks
-            const apps = mockApps.filter(a => a.isStaffPick || a.isPopular).slice(0, 5);
-            container.innerHTML = apps.map(renderStaffPickCard).join('');
+            const picks = allApps.filter(a => a.isStaffPick).slice(0, 5);
+            if (picks.length === 0) {
+                document.getElementById('staffPicksSection').style.display = 'none';
+                return;
+            }
+            container.innerHTML = picks.map(app => {
+                const bg = STAFF_PICK_GRADIENTS[app.gradient] || STAFF_PICK_GRADIENTS['gradient-purple'];
+                // Optional registry-supplied hero image. When present the
+                // gradient is used as fallback paint behind it, and the
+                // dark veil keeps the title legible. Forward-compat — the
+                // current registry doesn't ship `banner` yet.
+                const bannerLayer = app.banner
+                    ? `<div class="staff-pick-banner" style="background-image:url('${app.banner}');"></div>`
+                    : '';
+                const tag = (app.category || '').toUpperCase();
+                return `
+                <div class="staff-pick-card" style="background:${bg};" onclick="showAppDetail('${app.id}')">
+                    ${bannerLayer}
+                    ${getStaffPickIconHtml(app)}
+                    ${tag ? `<span class="staff-pick-tag">${tag}</span>` : ''}
+                    <div class="staff-pick-content">
+                        <div class="staff-pick-name">${app.name}</div>
+                        <div class="staff-pick-desc">${app.shortDesc || (app.description || '').substring(0, 80) + ((app.description || '').length > 80 ? '…' : '')}</div>
+                    </div>
+                </div>
+            `;
+            }).join('');
         }
-        
-        // Render popular apps (horizontal scroll)
+
         function renderPopularApps() {
             const container = document.getElementById('popularApps');
-            const apps = mockApps.filter(a => a.isPopular);
+            const apps = allApps.filter(a => a.isPopular);
             container.innerHTML = apps.map(renderAppCard).join('');
         }
         
-        // Render new apps (horizontal scroll)
-        function renderNewApps() {
-            const container = document.getElementById('newApps');
-            const apps = mockApps.filter(a => a.isNew);
-            container.innerHTML = apps.map(renderAppCard).join('');
-        }
-        
-        // Show all apps grid
-        // Category names for display
         const categoryNames = {
             all: 'All Apps',
-            ai: 'AI',
+            marketplace: 'Marketplace',
             media: 'Media',
+            defi: 'DeFi',
             blockchain: 'Blockchain',
             tools: 'Tools',
-            privacy: 'Privacy',
-            games: 'Games'
+            system: 'System',
         };
-        
-        function selectCategory(element, category) {
+
+        function selectCategory(category) {
                 document.querySelectorAll('.category-item').forEach(i => i.classList.remove('active'));
-            element.classList.add('active');
+            const el = document.querySelector(`[data-category="${category}"]`);
+            if (el) el.classList.add('active');
             currentCategory = category;
             
             const staffSection = document.getElementById('staffPicksSection');
             const popularSection = document.getElementById('popularSection');
-            const newSection = document.getElementById('newAppsSection');
-            const allSection = document.getElementById('allAppsSection');
             const titleEl = document.getElementById('allAppsSectionTitle');
             
             if (category === 'all') {
-                // Show all sections for "All Apps"
                 staffSection.style.display = 'block';
                 popularSection.style.display = 'block';
-                newSection.style.display = 'block';
-                allSection.style.display = 'block';
                 titleEl.textContent = 'All Apps';
             } else {
-                // Hide carousel sections, show only filtered grid
                 staffSection.style.display = 'none';
                 popularSection.style.display = 'none';
-                newSection.style.display = 'none';
-                allSection.style.display = 'block';
                 titleEl.textContent = categoryNames[category] || category;
             }
-            
             renderAppsGrid();
-            // Don't auto-scroll - let user stay at top of page
         }
         
-        // Render apps grid
         function renderAppsGrid(filter = '') {
             const grid = document.getElementById('appsGrid');
-            let apps = mockApps;
+            let apps = allApps;
             
             if (currentCategory !== 'all') {
                 apps = apps.filter(app => app.category === currentCategory);
             }
-            
             if (filter) {
-                const query = filter.toLowerCase();
+                const q = filter.toLowerCase();
                 apps = apps.filter(app => 
-                    app.name.toLowerCase().includes(query) || 
-                    app.description.toLowerCase().includes(query)
+                    app.name.toLowerCase().includes(q) ||
+                    app.description.toLowerCase().includes(q) ||
+                    app.developer.toLowerCase().includes(q)
                 );
             }
-            
             if (apps.length === 0) {
                 grid.innerHTML = `
-                    <div class="empty-state" style="grid-column: 1/-1;">
+                    <div class="empty-state" style="grid-column:1/-1;">
                         <div class="empty-icon">${icons.search}</div>
                         <div class="empty-title">No apps found</div>
                         <div class="empty-description">Try a different search or category</div>
-                    </div>
-                `;
+                    </div>`;
                     return;
                 }
-                
             grid.innerHTML = apps.map(renderAppCard).join('');
         }
         
-        // Render installed apps
         function renderInstalledApps() {
             const list = document.getElementById('installedList');
-            const installed = mockApps.filter(app => app.installed);
+            const installed = allApps.filter(app => app.installed);
             
             if (installed.length === 0) {
                 list.innerHTML = `
@@ -1916,108 +1999,76 @@
                         <div class="empty-icon">${icons.package}</div>
                         <div class="empty-title">No apps installed</div>
                         <div class="empty-description">Browse the Discover tab to find apps</div>
-                            </div>
-                `;
+                    </div>`;
                 return;
             }
             
             list.innerHTML = installed.map(app => `
                 <div class="installed-item">
-                    <div class="app-icon ${app.gradient}">${icons[app.icon]}</div>
+                    ${getAppIconHtml(app)}
                     <div class="installed-info">
                         <div class="installed-name">${app.name}</div>
-                        <div class="installed-meta">v${app.version} - ${app.size}</div>
+                        <div class="installed-meta">${app.version ? 'v' + app.version : ''} ${app.isBuiltIn ? '· System' : ''} ${app.size ? '· ' + app.size : ''}</div>
                             </div>
                     <div class="installed-actions">
                         <button class="action-btn open" onclick="openApp('${app.id}')">Open</button>
-                        <button class="action-btn uninstall" onclick="uninstallApp('${app.id}')">Uninstall</button>
+                        ${!app.isBuiltIn ? `<button class="action-btn uninstall" onclick="uninstallApp('${app.id}')">Uninstall</button>` : ''}
                         </div>
                         </div>
             `).join('');
         }
         
-        // Render updates
-        function renderUpdates() {
-            const grid = document.getElementById('updatesGrid');
-            const withUpdates = mockApps.filter(app => app.installed).slice(0, 2);
-            
-            if (withUpdates.length === 0) {
-                grid.innerHTML = `
-                    <div class="empty-state" style="grid-column: 1/-1;">
-                        <div class="empty-icon">${icons.check}</div>
-                        <div class="empty-title">All apps are up to date</div>
-                        <div class="empty-description">Check back later for updates</div>
-                        </div>
-                    `;
-                return;
+        function updateInstalledBadge() {
+            const count = allApps.filter(a => a.installed).length;
+            const badge = document.getElementById('installedBadge');
+            if (count > 0) {
+                badge.textContent = count;
+                badge.style.display = 'inline';
+            } else {
+                badge.style.display = 'none';
             }
-            
-            grid.innerHTML = withUpdates.map(app => `
-                <div class="app-card">
-                    <div class="app-card-header">
-                        <div class="app-icon ${app.gradient}">${icons[app.icon]}</div>
-                        <div class="app-card-info">
-                            <div class="app-name">${app.name}</div>
-                            <div class="app-developer">${app.developer}</div>
-                            <div class="app-badges">
-                                <span class="badge" style="background:#fef3c7;color:#d97706;">Update available</span>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="app-description">New version available with bug fixes and improvements.</div>
-                    <div class="app-card-footer">
-                        <span class="app-size">${app.size}</span>
-                        <button class="install-btn" onclick="installApp('${app.id}', true)">Update</button>
-                    </div>
-                </div>
-            `).join('');
         }
-        
-        // Show app detail modal
+
+        // ==================== APP DETAIL MODAL ====================
         function showAppDetail(appId) {
-            const app = mockApps.find(a => a.id === appId);
+            const app = allApps.find(a => a.id === appId);
             if (!app) return;
             
             const modal = document.getElementById('detailModal');
             const content = document.getElementById('detailContent');
-            const latestChangelog = app.changelog[0];
+
+            let actionBtn;
+            let uninstallBtn = '';
+            if (app.installed || app.isBuiltIn) {
+                actionBtn = `<button class="modal-btn primary" onclick="closeDetailModal(); openApp('${app.id}')">Open</button>`;
+                // User-installed apps may be removed from the modal too;
+                // built-in/system apps cannot.
+                if (app.installed && !app.isBuiltIn) {
+                    uninstallBtn = `<button class="modal-btn danger" onclick="closeDetailModal(); uninstallApp('${app.id}')">Uninstall</button>`;
+                }
+            } else if (app.isComingSoon) {
+                actionBtn = `<button class="modal-btn disabled">Coming Soon</button>`;
+            } else {
+                actionBtn = `<button class="modal-btn primary" onclick="closeDetailModal(); installApp('${app.id}')">Install</button>`;
+            }
             
             content.innerHTML = `
                 <div class="modal-header">
-                    <div class="modal-icon ${app.gradient}">${icons[app.icon]}</div>
+                    ${getAppIconHtml(app, 'modal-icon-size')}
                     <div class="modal-title-section">
                         <div class="modal-title">${app.name}</div>
                         <div class="modal-developer">${app.developer}</div>
-                        <div class="modal-version">Version ${app.version}</div>
-                        <div class="modal-badges">
-                            ${app.badges.map(badge => `<span class="badge ${badge}">${getBadgeText(badge)}</span>`).join('')}
-                        </div>
+                        ${app.version ? `<div class="modal-version">Version ${app.version}</div>` : ''}
+                        <div class="modal-badges">${getAppBadges(app)}</div>
                     </div>
                     <button class="modal-close" onclick="closeDetailModal()">${icons.close}</button>
-                </div>
-                <div class="modal-gallery">
-                    <div class="gallery-scroll">
-                        <div class="gallery-img">Screenshot 1</div>
-                        <div class="gallery-img">Screenshot 2</div>
-                        <div class="gallery-img">Screenshot 3</div>
-                    </div>
                 </div>
                 <div class="modal-body">
                     <div class="modal-section">
                         <div class="modal-section-title">About</div>
                         <div class="modal-description">${app.description}</div>
                     </div>
-                    
-                    <div class="modal-section">
-                        <div class="modal-section-title">What's New</div>
-                        <div class="whats-new">
-                            <div class="whats-new-version">Version ${latestChangelog.version}<span class="whats-new-date">${latestChangelog.date}</span></div>
-                            <ul class="whats-new-list">
-                                ${latestChangelog.changes.map(c => `<li>${c}</li>`).join('')}
-                            </ul>
-                        </div>
-                    </div>
-                    
+                    ${app.requirements ? `
                     <div class="modal-section">
                         <div class="modal-section-title">Requirements</div>
                         <div class="requirements-grid">
@@ -2034,135 +2085,236 @@
                                 <div class="requirement-label">Compatibility</div>
                             </div>
                         </div>
-                    </div>
-                    
+                    </div>` : ''}
+                    ${app.permissions && app.permissions.length > 0 ? `
                     <div class="modal-section">
                         <div class="modal-section-title">Permissions</div>
                         <ul class="permissions-list">
                             ${app.permissions.map(p => `<li><span class="permission-icon">${icons.check}</span> ${p}</li>`).join('')}
                         </ul>
-                    </div>
-                    
+                    </div>` : ''}
+                    ${(app.website || app.source) ? `
                     <div class="modal-section">
                         <div class="modal-section-title">Developer</div>
                         <div class="developer-links">
                             ${app.website ? `<a class="dev-link" href="${app.website}" target="_blank">${icons.link} Website</a>` : ''}
                             ${app.source ? `<a class="dev-link" href="${app.source}" target="_blank">${icons.github} Source Code</a>` : ''}
                         </div>
-                    </div>
+                    </div>` : ''}
                 </div>
                 <div class="modal-footer">
                     <div class="modal-footer-price">
-                        ${app.price ? `<span class="price-tag">$${app.price.toFixed(2)}</span>` : '<span class="price-tag free">Free</span>'}
+                        <span class="price-tag free">Free</span>
                     </div>
                     <div class="modal-footer-actions">
                         <button class="modal-btn secondary" onclick="closeDetailModal()">Close</button>
-                        <button class="modal-btn primary" onclick="closeDetailModal(); ${app.installed ? `openApp('${app.id}')` : `installApp('${app.id}')`}">
-                            ${app.installed ? 'Open' : (app.price ? `Buy $${app.price.toFixed(2)}` : 'Install')}
-                        </button>
+                        ${uninstallBtn}
+                        ${actionBtn}
                     </div>
                 </div>
             `;
-            
             modal.classList.add('active');
         }
         
-        // Close detail modal
         function closeDetailModal() {
             document.getElementById('detailModal').classList.remove('active');
         }
         
-        // Install app (mock)
-        function installApp(appId, isUpdate = false) {
-            const app = mockApps.find(a => a.id === appId);
+        // ==================== INSTALL / UNINSTALL / OPEN ====================
+
+        // Current install target — progress events coming in on the
+        // `apps:installProgress` postMessage channel are matched against
+        // this to avoid updating the modal for a different in-flight
+        // install. See DAPP-UX-POLISH-V12 #6.
+        let currentInstallAppId = null;
+
+        // Human-readable labels for the server-side stages (pc2-node
+        // `AppInstallService.install` emits these). Anything unknown
+        // falls back to a generic message so an older backend still
+        // looks OK.
+        const INSTALL_STAGE_LABELS = {
+            fetching: 'Fetching package from IPFS…',
+            verifying: 'Verifying package…',
+            extracting: 'Extracting files…',
+            registering: 'Registering app…',
+            done: 'Install complete',
+            failed: 'Install failed',
+        };
+
+        function updateInstallProgress(stage, pct, meta) {
+            const statusEl = document.getElementById('installStatus');
+            const fillEl = document.getElementById('progressFill');
+            if (!statusEl || !fillEl) return;
+
+            let label = INSTALL_STAGE_LABELS[stage] || 'Working…';
+            // Augment with byte/file counts when the server provides them so
+            // the user sees concrete movement during the long extract stage.
+            if (meta && typeof meta.filesExtracted === 'number' && typeof meta.totalFiles === 'number') {
+                label += ` (${meta.filesExtracted}/${meta.totalFiles} files)`;
+            } else if (meta && typeof meta.bytesReceived === 'number' && typeof meta.totalBytes === 'number' && meta.totalBytes > 0) {
+                const mb = (meta.bytesReceived / 1048576).toFixed(1);
+                const total = (meta.totalBytes / 1048576).toFixed(1);
+                label += ` (${mb} / ${total} MB)`;
+            }
+
+            statusEl.textContent = label;
+            if (typeof pct === 'number') {
+                const clamped = Math.max(0, Math.min(100, pct));
+                fillEl.style.width = clamped + '%';
+            }
+        }
+
+        async function installApp(appId) {
+            const app = allApps.find(a => a.id === appId);
             if (!app) return;
-            
+
+            if (app.isComingSoon || app.installed) return;
+
+            // CID-based install: require a CID on the catalog entry
+            if (!app.cid) {
+                showToast('This app does not have an IPFS package yet. Coming soon!', true);
+                return;
+            }
+
+            currentInstallAppId = app.id;
+
             const modal = document.getElementById('installModal');
             const content = document.getElementById('installContent');
+            const iconHtml = getAppIconHtml(app, 'install-modal-icon');
             
             content.innerHTML = `
-                <div class="install-modal-icon ${app.gradient}">${icons[app.icon]}</div>
-                <div class="install-modal-title">${isUpdate ? 'Updating' : 'Installing'} ${app.name}</div>
-                <div class="install-modal-status" id="installStatus">Preparing...</div>
+                ${iconHtml}
+                <div class="install-modal-title">Installing ${app.name}</div>
+                <div class="install-modal-status" id="installStatus">${INSTALL_STAGE_LABELS.fetching}</div>
                 <div class="progress-bar">
-                    <div class="progress-fill" id="progressFill" style="width: 0%"></div>
+                    <div class="progress-fill" id="progressFill" style="width: 5%"></div>
                 </div>
-                <button class="modal-btn secondary" onclick="cancelInstall()">Cancel</button>
+                <button class="modal-btn secondary" onclick="closeInstallModal()">Cancel</button>
             `;
-            
             modal.classList.add('active');
             
-            const steps = [
-                { progress: 20, status: 'Checking requirements...' },
-                { progress: 40, status: 'Downloading package...' },
-                { progress: 70, status: 'Installing...' },
-                { progress: 100, status: 'Complete!' }
-            ];
-            
-            let step = 0;
-            const interval = setInterval(() => {
-                if (step >= steps.length) {
-                    clearInterval(interval);
-                    app.installed = true;
-                    
+            try {
+                // Scripted "something is happening" stages as a safety net
+                // in case the server doesn't emit real progress (e.g. an
+                // older backend). Real events from install:progress override
+                // these via updateInstallProgress.
+                updateInstallProgress('fetching', 10);
+
+                const manifest = {
+                    name: app.id,
+                    title: app.name,
+                    version: app.version || '1.0.0',
+                    description: app.description,
+                    author: app.developer,
+                    entry: 'index.html',
+                    permissions: app.permissions || [],
+                };
+
+                const res = await pc2Fetch('/api/installed-apps/install', {
+                    method: 'POST',
+                    body: { manifest, cid: app.cid },
+                });
+
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    throw new Error(err.error || 'Install failed');
+                }
+
+                updateInstallProgress('done', 100);
+
+                // Refresh local state and re-render
+                await loadData();
+                render();
+
+                // Tell the parent Puter window that the installed-apps set
+                // has changed so the Start Menu drops its stale cache.
+                // DAPP-UX-POLISH-V12 #4.
+                try { window.parent.postMessage({ msg: 'apps:changed' }, '*'); } catch { /* ignore */ }
+
                     content.innerHTML = `
-                        <div class="install-modal-icon ${app.gradient}">${icons[app.icon]}</div>
-                        <div class="install-modal-title">${app.name} ${isUpdate ? 'Updated' : 'Installed'}</div>
+                    ${iconHtml}
+                    <div class="install-modal-title">${app.name} Installed</div>
                         <div class="install-modal-status" style="color:#22c55e;display:flex;align-items:center;justify-content:center;gap:6px;">
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="#22c55e"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
-                            Successfully ${isUpdate ? 'updated' : 'installed'}
+                        ${icons.check} Successfully installed
                         </div>
                         <button class="modal-btn primary" onclick="closeInstallModal(); openApp('${app.id}')">Open App</button>
                     `;
-                    
-                    renderPopularApps();
-                    renderNewApps();
-                    renderInstalledApps();
-                    renderUpdates();
-                    renderAppsGrid();
-                    return;
-                }
-                
-                document.getElementById('progressFill').style.width = steps[step].progress + '%';
-                document.getElementById('installStatus').textContent = steps[step].status;
-                step++;
-            }, 800);
-        }
-        
-        function cancelInstall() {
-            document.getElementById('installModal').classList.remove('active');
+            } catch (err) {
+                content.innerHTML = `
+                    ${iconHtml}
+                    <div class="install-modal-title">Install Failed</div>
+                    <div class="install-modal-status" style="color:#ef4444;">${err.message}</div>
+                    <button class="modal-btn secondary" onclick="closeInstallModal()">Close</button>
+                `;
+            } finally {
+                currentInstallAppId = null;
+            }
         }
         
         function closeInstallModal() {
             document.getElementById('installModal').classList.remove('active');
         }
         
-        function openApp(appId) {
-            const app = mockApps.find(a => a.id === appId);
-            if (!app) return;
-            alert(`Opening ${app.name}...\n\nThis is a mock UI. When dDRM is integrated, this will launch the actual WASM app.`);
-        }
-        
-        function uninstallApp(appId) {
-            const app = mockApps.find(a => a.id === appId);
-            if (!app) return;
-            
-            if (confirm(`Uninstall ${app.name}?\n\nThis will remove the app and its data.`)) {
-                app.installed = false;
-                renderPopularApps();
-                renderNewApps();
-                renderInstalledApps();
-                renderUpdates();
-                renderAppsGrid();
+        async function uninstallApp(appId) {
+            const app = allApps.find(a => a.id === appId);
+            if (!app || app.isBuiltIn) return;
+
+            if (!confirm(`Uninstall ${app.name}?\n\nThis will remove the app and its data.`)) return;
+
+            try {
+                const res = await pc2Fetch(`/api/installed-apps/${encodeURIComponent(appId)}`, {
+                    method: 'DELETE',
+                });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    throw new Error(err.error || 'Uninstall failed');
+                }
+
+                showToast(`${app.name} uninstalled`);
+                await loadData();
+                render();
+                // Notify the parent so the Start Menu drops its stale
+                // copy (DAPP-UX-POLISH-V12 #4).
+                try { window.parent.postMessage({ msg: 'apps:changed' }, '*'); } catch { /* ignore */ }
+            } catch (err) {
+                showToast(`Failed to uninstall: ${err.message}`, true);
             }
         }
-        
-        function getBadgeText(badge) {
-            const texts = { wasm: 'WASM', ddrm: 'dDRM', opensource: 'Open Source' };
-            return texts[badge] || badge;
+
+        // ==================== INSTALL PROGRESS BRIDGE ====================
+        // The parent Puter GUI listens on the authenticated Socket.io
+        // connection for `install:progress` events emitted by the pc2-node
+        // install pipeline and forwards them here via postMessage. See
+        // DAPP-UX-POLISH-V12 #6.
+        window.addEventListener('message', (ev) => {
+            if (!ev.data || ev.data.msg !== 'apps:installProgress') return;
+            const { appName, stage, pct, meta } = ev.data;
+            if (!currentInstallAppId || appName !== currentInstallAppId) return;
+            updateInstallProgress(stage, pct, meta);
+        });
+
+        function openApp(appId) {
+            window.parent.postMessage({
+                msg: 'launchApp',
+                appName: appId,
+            }, '*');
         }
-        
+
+        // ==================== TOAST ====================
+        function showToast(message, isError = false) {
+            const toast = document.getElementById('toast');
+            toast.textContent = message;
+            toast.className = 'toast' + (isError ? ' error' : '');
+            toast.classList.add('visible');
+            setTimeout(() => toast.classList.remove('visible'), 3000);
+        }
+
+        // ==================== EVENT LISTENERS ====================
         function setupEventListeners() {
+            // Theme toggle
+            const themeBtn = document.getElementById('themeToggle');
+            if (themeBtn) themeBtn.addEventListener('click', toggleTheme);
+
             // Tabs
             document.querySelectorAll('.tab').forEach(tab => {
                 tab.addEventListener('click', () => {
@@ -2177,19 +2329,17 @@
             // Categories
             document.querySelectorAll('.category-item').forEach(item => {
                 item.addEventListener('click', () => {
-                    document.querySelectorAll('.category-item').forEach(i => i.classList.remove('active'));
-                    item.classList.add('active');
-                    currentCategory = item.dataset.category;
-                    showAllApps();
+                    selectCategory(item.dataset.category);
                 });
             });
             
             // Search
+            let searchTimeout;
             document.getElementById('searchInput').addEventListener('input', (e) => {
-                if (e.target.value) {
-                    showAllApps();
+                clearTimeout(searchTimeout);
+                searchTimeout = setTimeout(() => {
                     renderAppsGrid(e.target.value);
-                }
+                }, 200);
             });
             
             // Close modals on overlay click
@@ -2202,7 +2352,7 @@
             });
         }
         
-        // Ensure DOM is ready before initializing
+        // ==================== START ====================
         if (document.readyState === 'loading') {
             document.addEventListener('DOMContentLoaded', init);
         } else {

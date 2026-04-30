@@ -6,12 +6,10 @@
 import { Response, Router } from 'express';
 import { AuthenticatedRequest, authenticate } from './middleware.js';
 import { logger } from '../utils/logger.js';
-import { exec, ExecOptions } from 'child_process';
-import { promisify } from 'util';
+import { execFile, ExecFileOptions } from 'child_process';
 import path from 'path';
 import fs from 'fs/promises';
 
-const execAsync = promisify(exec);
 const router = Router();
 
 /**
@@ -35,17 +33,23 @@ function isPathSafe(userHome: string, targetPath: string): boolean {
 }
 
 /**
- * Execute git command in user's directory
+ * Execute git command in user's directory.
+ *
+ * Wave 5 (A2): argv-only — `args` is passed as separate parameters to the
+ * git binary; no shell delegation, no string interpolation. Callers must
+ * validate any user-supplied values before adding them to `args`.
  */
 async function execGit(
-  command: string,
+  args: string[],
   cwd: string,
   timeout: number = 60000
 ): Promise<{ stdout: string; stderr: string }> {
-  const options: ExecOptions = {
+  const options: ExecFileOptions = {
     cwd,
     timeout: Math.min(timeout, MAX_GIT_TIMEOUT),
     maxBuffer: 10 * 1024 * 1024, // 10MB output buffer
+    encoding: 'utf8',
+    shell: false,
     env: {
       ...process.env,
       GIT_TERMINAL_PROMPT: '0', // Disable git prompts
@@ -53,22 +57,75 @@ async function execGit(
     },
   };
 
-  try {
-    const result = await execAsync(command, options);
-    return { 
-      stdout: String(result.stdout || ''), 
-      stderr: String(result.stderr || '') 
-    };
-  } catch (error: any) {
-    // exec throws on non-zero exit codes, but we want to return the output
-    if (error.stdout !== undefined || error.stderr !== undefined) {
-      return { 
-        stdout: String(error.stdout || ''), 
-        stderr: String(error.stderr || '') 
-      };
-    }
-    throw error;
-  }
+  return await new Promise((resolve, reject) => {
+    execFile('git', args, options, (error, stdout, stderr) => {
+      // execFile rejects on non-zero exit; we still want to return the output
+      // so handlers can inspect stderr/stdout for benign cases like
+      // "nothing to commit".
+      if (error && (stdout || stderr)) {
+        resolve({
+          stdout: String(stdout || ''),
+          stderr: String(stderr || ''),
+        });
+        return;
+      }
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve({
+        stdout: String(stdout || ''),
+        stderr: String(stderr || ''),
+      });
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Wave 5 (A2): input validators
+// ---------------------------------------------------------------------------
+// With shell delegation removed, the only remaining injection vector is
+// "argument injection" — passing strings that the git binary will parse as
+// flags (e.g. `--upload-pack=evil`). We defend with two layers:
+//   1. Reject inputs that begin with `-` at validation time.
+//   2. Use the `--` separator before positional arguments so git stops
+//      flag parsing.
+
+/** Reject leading-dash, NUL, control chars, and absurdly long inputs. */
+function isSafeArg(value: string, maxLen = 1024): boolean {
+  if (typeof value !== 'string' || value.length === 0 || value.length > maxLen) return false;
+  if (value.startsWith('-')) return false;
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f]/.test(value)) return false;
+  return true;
+}
+
+/** Git URL: HTTPS or SSH only, no leading dash, no whitespace. */
+function isValidGitUrl(url: string): boolean {
+  if (!isSafeArg(url, 2048)) return false;
+  if (/\s/.test(url)) return false;
+  return url.startsWith('https://') || url.startsWith('git@');
+}
+
+/** Branch/tag/ref name: git's own ref-name rules, simplified. */
+function isValidRef(ref: string): boolean {
+  if (!isSafeArg(ref, 256)) return false;
+  if (/\s/.test(ref)) return false;
+  if (ref.includes('..') || ref.includes('//')) return false;
+  if (/[~^:?*[\\]/.test(ref)) return false;
+  if (ref.endsWith('.lock') || ref.endsWith('/') || ref.endsWith('.')) return false;
+  return true;
+}
+
+/** Remote name: alphanumerics plus `-_.` (no slashes — that's the URL). */
+function isValidRemoteName(name: string): boolean {
+  if (!isSafeArg(name, 100)) return false;
+  return /^[A-Za-z0-9._-]+$/.test(name);
+}
+
+/** Relative file path within a repo: no leading dash, no NUL. */
+function isValidFilePath(p: string): boolean {
+  return isSafeArg(p, 1024);
 }
 
 interface GitCloneRequest {
@@ -96,9 +153,21 @@ async function handleGitClone(req: AuthenticatedRequest, res: Response): Promise
     return;
   }
 
-  // Validate URL
-  if (!body.url.startsWith('https://') && !body.url.startsWith('git@')) {
+  // Wave 5 (A2): validate URL — only HTTPS or SSH, no leading dash, no spaces.
+  if (!isValidGitUrl(body.url)) {
     res.status(400).json({ error: 'Only HTTPS and SSH git URLs are supported' });
+    return;
+  }
+
+  // Wave 5 (A2): validate branch — git ref rules, no flag-injection.
+  if (body.branch !== undefined && !isValidRef(body.branch)) {
+    res.status(400).json({ error: 'Invalid branch name' });
+    return;
+  }
+
+  // Wave 5 (A2): depth must be a positive integer (sent as JSON number).
+  if (body.depth !== undefined && (typeof body.depth !== 'number' || !Number.isInteger(body.depth) || body.depth <= 0)) {
+    res.status(400).json({ error: 'depth must be a positive integer' });
     return;
   }
 
@@ -118,15 +187,17 @@ async function handleGitClone(req: AuthenticatedRequest, res: Response): Promise
 
   const fullPath = path.join(userHome, destination);
 
-  // Build command
-  let command = `git clone`;
+  // Wave 5 (A2): build argv. Flags first, then `--` separator, then positional
+  // args (url, destination). The `--` ensures git won't reparse the URL or
+  // path as a flag even if it somehow contains a leading dash.
+  const args: string[] = ['clone'];
   if (body.branch) {
-    command += ` --branch ${body.branch}`;
+    args.push('--branch', body.branch);
   }
   if (body.depth && body.depth > 0) {
-    command += ` --depth ${body.depth}`;
+    args.push('--depth', String(body.depth));
   }
-  command += ` "${body.url}" "${fullPath}"`;
+  args.push('--', body.url, fullPath);
 
   logger.info('[Git] Cloning repository', {
     url: body.url,
@@ -136,7 +207,7 @@ async function handleGitClone(req: AuthenticatedRequest, res: Response): Promise
 
   try {
     await fs.mkdir(userHome, { recursive: true });
-    const result = await execGit(command, userHome, 120000);
+    const result = await execGit(args, userHome, 120000);
 
     logger.info('[Git] Clone completed', {
       destination: fullPath,
@@ -185,10 +256,10 @@ async function handleGitStatus(req: AuthenticatedRequest, res: Response): Promis
   const fullPath = path.join(userHome, repoPath);
 
   try {
-    // Get status with porcelain format for easy parsing
-    const statusResult = await execGit('git status --porcelain', fullPath);
-    const branchResult = await execGit('git branch --show-current', fullPath);
-    const logResult = await execGit('git log -1 --format="%H|%s|%an|%ad" --date=iso', fullPath);
+    // Wave 5 (A2): argv form — no shell, no quoting needed for the format.
+    const statusResult = await execGit(['status', '--porcelain'], fullPath);
+    const branchResult = await execGit(['branch', '--show-current'], fullPath);
+    const logResult = await execGit(['log', '-1', '--format=%H|%s|%an|%ad', '--date=iso'], fullPath);
 
     // Parse porcelain status
     const changes = statusResult.stdout
@@ -247,9 +318,25 @@ async function handleGitCommit(req: AuthenticatedRequest, res: Response): Promis
   const userHome = getUserHome(req.user.wallet_address);
   const repoPath = body.path || '.';
 
-  if (!body.message) {
+  if (!body.message || typeof body.message !== 'string') {
     res.status(400).json({ error: 'Missing required parameter: message' });
     return;
+  }
+
+  // Wave 5 (A2): bound message length. With argv form there's no shell
+  // injection risk, but a 100MB message would still exhaust memory.
+  if (body.message.length > 10000) {
+    res.status(400).json({ error: 'Commit message too long (max 10000 chars)' });
+    return;
+  }
+
+  // Wave 5 (A2): if individual files are provided, validate each — no leading
+  // dash (would be parsed as a flag), no NUL.
+  if (body.files !== undefined) {
+    if (!Array.isArray(body.files) || body.files.some(f => !isValidFilePath(f))) {
+      res.status(400).json({ error: 'files must be an array of valid relative paths' });
+      return;
+    }
   }
 
   if (!isPathSafe(userHome, repoPath)) {
@@ -260,20 +347,21 @@ async function handleGitCommit(req: AuthenticatedRequest, res: Response): Promis
   const fullPath = path.join(userHome, repoPath);
 
   try {
-    // Add files
+    // Wave 5 (A2): argv form — `git add -- <file>...` stops flag parsing so
+    // even unvalidated paths can't be reinterpreted as flags. The validator
+    // above is the primary defense; `--` is belt-and-suspenders.
     if (body.add_all) {
-      await execGit('git add -A', fullPath);
+      await execGit(['add', '-A'], fullPath);
     } else if (body.files && body.files.length > 0) {
-      const filesArg = body.files.map(f => `"${f}"`).join(' ');
-      await execGit(`git add ${filesArg}`, fullPath);
+      await execGit(['add', '--', ...body.files], fullPath);
     }
 
-    // Commit (escape message)
-    const escapedMessage = body.message.replace(/"/g, '\\"');
-    const result = await execGit(`git commit -m "${escapedMessage}"`, fullPath);
+    // Wave 5 (A2): `git commit -m <message>` with message as a separate argv
+    // entry — no shell parsing, no quote escaping needed.
+    const result = await execGit(['commit', '-m', body.message], fullPath);
 
     // Get new commit hash
-    const hashResult = await execGit('git rev-parse HEAD', fullPath);
+    const hashResult = await execGit(['rev-parse', 'HEAD'], fullPath);
 
     res.json({
       success: true,
@@ -332,12 +420,26 @@ async function handleGitPush(req: AuthenticatedRequest, res: Response): Promise<
   const remote = body.remote || 'origin';
   const branch = body.branch || '';
 
-  let command = `git push ${remote}`;
-  if (branch) {
-    command += ` ${branch}`;
+  // Wave 5 (A2): validate remote and branch — both flow into argv positions
+  // where a leading dash would otherwise be parsed as a git flag.
+  if (!isValidRemoteName(remote)) {
+    res.status(400).json({ error: 'Invalid remote name' });
+    return;
   }
+  if (branch && !isValidRef(branch)) {
+    res.status(400).json({ error: 'Invalid branch name' });
+    return;
+  }
+
+  // Wave 5 (A2): argv form. Order: flags first, then `--` separator, then
+  // positional refspecs. `--force` belongs before `--`.
+  const args: string[] = ['push'];
   if (body.force) {
-    command += ' --force';
+    args.push('--force');
+  }
+  args.push('--', remote);
+  if (branch) {
+    args.push(branch);
   }
 
   logger.info('[Git] Pushing changes', {
@@ -348,7 +450,7 @@ async function handleGitPush(req: AuthenticatedRequest, res: Response): Promise<
   });
 
   try {
-    const result = await execGit(command, fullPath, 120000);
+    const result = await execGit(args, fullPath, 120000);
 
     res.json({
       success: true,
@@ -395,13 +497,24 @@ async function handleGitPull(req: AuthenticatedRequest, res: Response): Promise<
   const remote = body.remote || 'origin';
   const branch = body.branch || '';
 
-  let command = `git pull ${remote}`;
+  // Wave 5 (A2): validate remote and branch (see push handler).
+  if (!isValidRemoteName(remote)) {
+    res.status(400).json({ error: 'Invalid remote name' });
+    return;
+  }
+  if (branch && !isValidRef(branch)) {
+    res.status(400).json({ error: 'Invalid branch name' });
+    return;
+  }
+
+  // Wave 5 (A2): argv form with `--` separator before positional refspecs.
+  const args: string[] = ['pull', '--', remote];
   if (branch) {
-    command += ` ${branch}`;
+    args.push(branch);
   }
 
   try {
-    const result = await execGit(command, fullPath, 120000);
+    const result = await execGit(args, fullPath, 120000);
 
     res.json({
       success: true,
@@ -447,8 +560,11 @@ async function handleGitLog(req: AuthenticatedRequest, res: Response): Promise<v
   const fullPath = path.join(userHome, repoPath);
 
   try {
+    // Wave 5 (A2): argv form. `count` is already a bounded integer (1..100)
+    // via `Math.min(body.count || 10, 100)` above, so it's safe to interpolate
+    // into the `-N` flag.
     const result = await execGit(
-      `git log -${count} --format="%H|%s|%an|%ae|%ad" --date=iso`,
+      ['log', `-${count}`, '--format=%H|%s|%an|%ae|%ad', '--date=iso'],
       fullPath
     );
 
@@ -507,10 +623,10 @@ async function handleGitDiff(req: AuthenticatedRequest, res: Response): Promise<
   }
 
   const fullPath = path.join(userHome, repoPath);
-  const command = body.staged ? 'git diff --staged' : 'git diff';
+  const args: string[] = body.staged ? ['diff', '--staged'] : ['diff'];
 
   try {
-    const result = await execGit(command, fullPath);
+    const result = await execGit(args, fullPath);
 
     res.json({
       success: true,

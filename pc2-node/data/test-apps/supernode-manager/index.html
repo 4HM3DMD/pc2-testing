@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Supernode Manager</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f5f5f5;
+            color: #1a1a2e;
+            padding: 20px;
+            line-height: 1.5;
+        }
+        .header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+        .header-icon {
+            width: 36px;
+            height: 36px;
+            background: linear-gradient(135deg, #6366f1, #8b5cf6);
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .header-icon svg { width: 20px; height: 20px; color: white; }
+        .header h1 { font-size: 18px; font-weight: 700; }
+        .header p { font-size: 12px; color: #666; margin-top: 1px; }
+
+        .tabs {
+            display: flex;
+            gap: 2px;
+            background: #e5e7eb;
+            border-radius: 8px;
+            padding: 2px;
+            margin-bottom: 16px;
+        }
+        .tab {
+            flex: 1;
+            text-align: center;
+            padding: 8px 12px;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            border-radius: 6px;
+            transition: all 0.2s;
+            border: none;
+            background: transparent;
+            color: #6b7280;
+        }
+        .tab.active { background: white; color: #1a1a2e; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+        .tab:hover:not(.active) { color: #374151; }
+
+        .panel { display: none; }
+        .panel.active { display: block; }
+
+        .card {
+            background: white;
+            border-radius: 10px;
+            padding: 16px;
+            margin-bottom: 12px;
+            border: 1px solid #e5e7eb;
+        }
+        .card-title {
+            font-size: 13px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #6b7280;
+            margin-bottom: 10px;
+        }
+
+        .spec-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 0;
+            border-bottom: 1px solid #f3f4f6;
+        }
+        .spec-row:last-child { border-bottom: none; }
+        .spec-name { font-size: 13px; font-weight: 500; }
+        .spec-values { display: flex; align-items: center; gap: 8px; }
+        .spec-required { font-size: 12px; color: #9ca3af; }
+        .spec-actual { font-size: 12px; font-weight: 600; }
+        .spec-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            font-size: 10px;
+        }
+        .spec-badge.pass { background: #dcfce7; color: #16a34a; }
+        .spec-badge.fail { background: #fee2e2; color: #dc2626; }
+
+        .overall-result {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 12px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            margin-top: 12px;
+        }
+        .overall-result.pass { background: #dcfce7; color: #16a34a; }
+        .overall-result.fail { background: #fee2e2; color: #dc2626; }
+
+        .service-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+        .service-card {
+            background: #f9fafb;
+            border-radius: 8px;
+            padding: 10px 12px;
+            border: 1px solid #e5e7eb;
+        }
+        .service-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 4px;
+        }
+        .service-name { font-size: 12px; font-weight: 600; }
+        .service-status {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 11px;
+            font-weight: 500;
+        }
+        .service-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+        }
+        .service-dot.running { background: #22c55e; }
+        .service-dot.stopped { background: #ef4444; }
+        .service-dot.unknown { background: #9ca3af; }
+        .service-detail { font-size: 11px; color: #6b7280; }
+
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 6px 0;
+            border-bottom: 1px solid #f3f4f6;
+            font-size: 13px;
+        }
+        .stat-row:last-child { border-bottom: none; }
+        .stat-label { color: #6b7280; }
+        .stat-value { font-weight: 600; }
+
+        .info-box {
+            background: #eff6ff;
+            border: 1px solid #bfdbfe;
+            border-radius: 8px;
+            padding: 12px;
+            font-size: 12px;
+            color: #1e40af;
+            line-height: 1.6;
+        }
+        .info-box.warn {
+            background: #fffbeb;
+            border-color: #fde68a;
+            color: #92400e;
+        }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 8px 16px;
+            font-size: 13px;
+            line-height: 1;
+            font-family: inherit;
+            font-weight: 500;
+            border-radius: 6px;
+            cursor: pointer;
+            border: none;
+            transition: all 0.2s;
+        }
+        .btn-primary { background: #6366f1; color: white; }
+        .btn-primary:hover { background: #4f46e5; }
+        .btn-primary:disabled { background: #a5b4fc; cursor: not-allowed; }
+        .btn-secondary { background: #f3f4f6; color: #374151; border: 1px solid #d1d5db; }
+        .btn-secondary:hover { background: #e5e7eb; }
+
+        .network-list { list-style: none; }
+        .network-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 0;
+            border-bottom: 1px solid #f3f4f6;
+            font-size: 13px;
+        }
+        .network-item:last-child { border-bottom: none; }
+        .network-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+        .network-badge.active { background: #dcfce7; color: #16a34a; }
+        .network-badge.unhealthy { background: #fee2e2; color: #dc2626; }
+        .network-badge.unknown { background: #f3f4f6; color: #6b7280; }
+
+        .loading {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 40px;
+            color: #9ca3af;
+            font-size: 13px;
+        }
+        .spinner {
+            width: 16px;
+            height: 16px;
+            border: 2px solid #e5e7eb;
+            border-top-color: #6366f1;
+            border-radius: 50%;
+            animation: spin 0.6s linear infinite;
+            margin-right: 8px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="2" y="2" width="20" height="8" rx="2"/>
+                <rect x="2" y="14" width="20" height="8" rx="2"/>
+                <circle cx="6" cy="6" r="1" fill="currentColor"/>
+                <circle cx="6" cy="18" r="1" fill="currentColor"/>
+            </svg>
+        </div>
+        <div>
+            <h1>Supernode Manager</h1>
+            <p>Run and manage PC2 network infrastructure</p>
+        </div>
+    </div>
+
+    <div class="tabs">
+        <button class="tab active" data-panel="specs">Spec Check</button>
+        <button class="tab" data-panel="services">Services</button>
+        <button class="tab" data-panel="network">Network</button>
+    </div>
+
+    <!-- Spec Check Panel -->
+    <div class="panel active" id="panel-specs">
+        <div class="card">
+            <div class="card-title">System Requirements</div>
+            <div id="spec-checks">
+                <div class="loading"><span class="spinner"></span>Checking system specs...</div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-title">What is a Supernode?</div>
+            <div class="info-box">
+                A supernode is a PC2 node that runs the full network stack: WireGuard/AmneziaWG/VLESS tunnels,
+                IPFS relay, Boson DHT, web gateway, and app registry. Supernodes help other nodes connect to
+                the network and earn revenue from Access Token holders.
+                <br><br>
+                <strong>Requirements:</strong> Public IP, 4+ CPU cores, 8+ GB RAM, 50+ GB free disk, Linux x64.
+            </div>
+        </div>
+    </div>
+
+    <!-- Services Panel -->
+    <div class="panel" id="panel-services">
+        <div class="card">
+            <div class="card-title">Relay Mode</div>
+            <div id="relay-status">
+                <div class="loading"><span class="spinner"></span>Loading relay status...</div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-title">Supernode Services</div>
+            <div class="info-box warn">
+                Full supernode deployment requires running the bootstrap script on a dedicated Linux server.
+                Use the Spec Check tab to verify your system meets requirements, then run:
+                <br><br>
+                <code style="background:#fef3c7; padding:2px 6px; border-radius:3px; font-size:11px;">
+                    curl -sL https://ela.city/supernode.sh | bash -s -- --domain your.domain.com
+                </code>
+            </div>
+            <div id="services-grid" style="margin-top:12px;">
+                <div class="service-grid" id="service-cards">
+                    <!-- Populated by JS -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Network Panel -->
+    <div class="panel" id="panel-network">
+        <div class="card">
+            <div class="card-title">Known Supernodes</div>
+            <div id="supernodes-list">
+                <div class="loading"><span class="spinner"></span>Discovering supernodes...</div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-title">Network Stats</div>
+            <div id="network-stats">
+                <div class="loading"><span class="spinner"></span>Loading...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    (function() {
+        const API_BASE = window.location.origin;
+        let authToken = null;
+
+        // Extract auth token from URL params (PC2 dApp pattern)
+        try {
+            const params = new URLSearchParams(window.location.search);
+            const puterAuth = params.get('puter.auth.token');
+            if (puterAuth) authToken = puterAuth;
+        } catch {}
+
+        function pc2Fetch(path, opts = {}) {
+            const headers = opts.headers || {};
+            if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
+            headers['Content-Type'] = headers['Content-Type'] || 'application/json';
+            return fetch(`${API_BASE}${path}`, { ...opts, headers });
+        }
+
+        // Tab switching
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+                tab.classList.add('active');
+                document.getElementById(`panel-${tab.dataset.panel}`).classList.add('active');
+            });
+        });
+
+        // Spec Check
+        async function loadSpecs() {
+            const container = document.getElementById('spec-checks');
+            try {
+                const resp = await pc2Fetch('/api/supernode/specs');
+                if (!resp.ok) throw new Error('API error');
+                const data = await resp.json();
+
+                let html = '';
+                for (const check of data.checks) {
+                    const pass = check.passed;
+                    html += `
+                        <div class="spec-row">
+                            <span class="spec-name">${check.name}</span>
+                            <div class="spec-values">
+                                <span class="spec-required">Required: ${check.required}</span>
+                                <span class="spec-actual">${check.actual}</span>
+                                <span class="spec-badge ${pass ? 'pass' : 'fail'}">${pass ? '&#10003;' : '&#10007;'}</span>
+                            </div>
+                        </div>
+                    `;
+                }
+
+                html += `
+                    <div class="overall-result ${data.passed ? 'pass' : 'fail'}">
+                        ${data.passed
+                            ? '&#10003; System meets supernode requirements'
+                            : '&#10007; System does not meet supernode requirements'}
+                    </div>
+                `;
+                container.innerHTML = html;
+            } catch (err) {
+                container.innerHTML = '<div class="info-box warn">Could not check system specs. Make sure the PC2 node is running.</div>';
+            }
+        }
+
+        // Relay Status
+        async function loadRelayStatus() {
+            const container = document.getElementById('relay-status');
+            try {
+                const resp = await pc2Fetch('/api/supernode/relay/status');
+                if (!resp.ok) throw new Error('API error');
+                const data = await resp.json();
+
+                container.innerHTML = `
+                    <div class="stat-row">
+                        <span class="stat-label">Status</span>
+                        <span class="stat-value" style="color:${data.active ? '#16a34a' : '#6b7280'}">
+                            ${data.active ? 'Active' : (data.enabled ? 'Enabled (restart needed)' : 'Disabled')}
+                        </span>
+                    </div>
+                    <div class="stat-row">
+                        <span class="stat-label">Connected Peers</span>
+                        <span class="stat-value">${data.connectedPeers}</span>
+                    </div>
+                    <div class="stat-row">
+                        <span class="stat-label">Max Connections</span>
+                        <span class="stat-value">${data.maxConnections}</span>
+                    </div>
+                    <div style="margin-top:8px; font-size:12px; color:#6b7280;">
+                        Relay mode can be toggled in <strong>Settings > Personal Cloud > Network Contribution</strong>.
+                    </div>
+                `;
+            } catch {
+                container.innerHTML = '<div class="info-box warn">Could not load relay status.</div>';
+            }
+        }
+
+        // Service Status (shown as info cards for non-supernode nodes)
+        function loadServiceCards() {
+            const services = [
+                { name: 'WireGuard', desc: 'Encrypted tunnels for NAT traversal', port: '51820/UDP' },
+                { name: 'AmneziaWG', desc: 'DPI-resistant obfuscated tunnels', port: '51821/UDP' },
+                { name: 'VLESS Reality', desc: 'TCP stealth transport (TLS mimicry)', port: '8443/TCP' },
+                { name: 'IPFS Relay', desc: 'Circuit relay for NAT\'d peers', port: '4003/TCP' },
+                { name: 'Boson DHT', desc: 'Peer discovery network', port: '39001/UDP' },
+                { name: 'Web Gateway', desc: 'Subdomain routing and APIs', port: '443/TCP' },
+                { name: 'App Registry', desc: 'dApp catalog for the network', port: '4500/TCP' },
+                { name: 'Active Proxy', desc: 'NAT traversal relay', port: '8090/TCP' },
+            ];
+
+            const container = document.getElementById('service-cards');
+            container.innerHTML = services.map(s => `
+                <div class="service-card">
+                    <div class="service-header">
+                        <span class="service-name">${s.name}</span>
+                        <span class="service-status">
+                            <span class="service-dot unknown"></span>
+                            <span style="color:#6b7280;">Supernode only</span>
+                        </span>
+                    </div>
+                    <div class="service-detail">${s.desc} (${s.port})</div>
+                </div>
+            `).join('');
+        }
+
+        // Network: Discover supernodes
+        async function loadSupernodes() {
+            const container = document.getElementById('supernodes-list');
+            try {
+                const resp = await pc2Fetch('/api/boson/connectivity');
+                let supernodes = [];
+
+                if (resp.ok) {
+                    const data = await resp.json();
+                    if (data.discoveredSupernodes) {
+                        supernodes = data.discoveredSupernodes;
+                    }
+                }
+
+                // Also try the supernode API
+                try {
+                    const snResp = await pc2Fetch('/api/registry/supernodes');
+                    if (snResp.ok) {
+                        const snData = await snResp.json();
+                        if (snData.supernodes) supernodes = snData.supernodes;
+                    }
+                } catch {}
+
+                if (supernodes.length === 0) {
+                    // Fallback: show known defaults
+                    supernodes = [
+                        { name: 'Elacity Flagship', address: '69.164.241.210', region: 'US', status: 'active' },
+                        { name: 'Elacity Contabo', address: '38.242.211.112', region: 'EU', status: 'active' },
+                    ];
+                }
+
+                let html = '<ul class="network-list">';
+                for (const sn of supernodes) {
+                    const status = sn.status || 'unknown';
+                    html += `
+                        <li class="network-item">
+                            <span class="network-badge ${status}">${status}</span>
+                            <div>
+                                <div style="font-weight:500;">${sn.name || sn.address}</div>
+                                <div style="font-size:11px; color:#6b7280;">${sn.address} &middot; ${sn.region || '?'}</div>
+                            </div>
+                        </li>
+                    `;
+                }
+                html += '</ul>';
+                container.innerHTML = html;
+            } catch {
+                container.innerHTML = '<div class="info-box warn">Could not discover supernodes.</div>';
+            }
+        }
+
+        // Network Stats
+        async function loadNetworkStats() {
+            const container = document.getElementById('network-stats');
+            try {
+                const resp = await pc2Fetch('/api/boson/connectivity');
+                if (!resp.ok) throw new Error('API error');
+                const data = await resp.json();
+
+                container.innerHTML = `
+                    <div class="stat-row">
+                        <span class="stat-label">Connection</span>
+                        <span class="stat-value" style="color:${data.connected ? '#16a34a' : '#dc2626'}">
+                            ${data.connected ? 'Connected' : 'Disconnected'}
+                        </span>
+                    </div>
+                    <div class="stat-row">
+                        <span class="stat-label">Transport</span>
+                        <span class="stat-value">${data.natType || 'unknown'}</span>
+                    </div>
+                    <div class="stat-row">
+                        <span class="stat-label">Connected Supernode</span>
+                        <span class="stat-value">${data.superNode?.address || 'none'}</span>
+                    </div>
+                    <div class="stat-row">
+                        <span class="stat-label">Stealth Mode</span>
+                        <span class="stat-value">${data.stealthMode ? 'On' : 'Off'}</span>
+                    </div>
+                `;
+            } catch {
+                container.innerHTML = '<div class="info-box warn">Could not load network stats.</div>';
+            }
+        }
+
+        // Init
+        loadSpecs();
+        loadRelayStatus();
+        loadServiceCards();
+        loadSupernodes();
+        loadNetworkStats();
+
+        // Refresh every 30s
+        setInterval(() => {
+            loadRelayStatus();
+            loadNetworkStats();
+        }, 30000);
+    })();
+    </script>
+</body>
+</html>

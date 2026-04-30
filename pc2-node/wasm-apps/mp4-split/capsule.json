@@ -1,0 +1,23 @@
+{
+  "name": "mp4-split",
+  "version": "1.1.0",
+  "description": "ISO BMFF parser — splits fragmented MP4 into init + per-track segments. Supports split_init mode for single-track init segment extraction.",
+  "target": "wasm32-wasip1",
+  "binary": "mp4-split.wasm",
+  "sha256": "36cf790cf3c51aa140bd2f837ff4a056c5a0007658249440f17aa45d59eb5308",
+  "capabilities": ["compute:wasm"],
+  "provider_operations": ["compute:mp4-split", "compute:mp4-split-init"],
+  "memfs": {
+    "input": ["/input/fragmented.mp4", "/input/command.json", "/input/init.bin"],
+    "output": ["/output/result.json", "/output/init.bin", "/output/seg-{trackId}-{i}.bin"]
+  },
+  "modes": {
+    "default": "Splits fragmented MP4 into init + per-track segments (reads /input/fragmented.mp4)",
+    "split_init": "Strips non-target tracks from init segment (reads /input/command.json + /input/init.bin)"
+  },
+  "runtime_compatibility": {
+    "wasi_preview": 1,
+    "entry": "_start",
+    "capsule_type": "wasm"
+  }
+}

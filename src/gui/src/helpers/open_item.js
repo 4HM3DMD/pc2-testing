@@ -24,6 +24,259 @@ import launch_app from './launch_app.js';
 import path from '../lib/path.js';
 import item_icon from './item_icon.js';
 
+// ----------------------------------------------------------------
+// dDRM launch gate
+//
+// Before launching the media runtime or dDRM viewer for any .ddrm
+// capsule, we verify the underlying CID is fully pinned on this node.
+// Playback of an incomplete asset is what caused the stuttering /
+// "fetch failed" UX that motivated the download-first flow.
+//
+// Contract:
+//   - Legacy .ddrm files (no pinStatus field): trust and proceed —
+//     existing libraries must not regress.
+//   - pinStatus === 'complete' (written by the market app after pin
+//     completion): trust and proceed. No server roundtrip on normal
+//     open (would add latency to every double-click).
+//   - pinStatus in {'downloading','failed'} or unexpected: verify
+//     against GET /api/storage/ipfs/pin-status/:cid and show a gate
+//     overlay until the CID is complete / user cancels / user retries.
+//   - API unreachable (node restarting, offline): fall through to the
+//     dispatch so streaming playback still works — do not leave the
+//     user stranded on a modal they cannot dismiss.
+//
+// Returns true to proceed with launch, false to abort.
+// ----------------------------------------------------------------
+const DDRM_PIN_POLL_INTERVAL_MS = 2000;
+const DDRM_RETRY_DEBOUNCE_MS = 30000;
+
+async function ddrmLaunchGate(descriptor) {
+    const cid = descriptor.cid || descriptor.encryptedDataCid;
+    if ( !cid ) return true;
+
+    // Legacy compatibility: pre-v1.2 .ddrm files have no pinStatus field.
+    // Preserve existing playback behavior — do not retrofit the gate onto
+    // files that predate the download-first flow.
+    if ( typeof descriptor.pinStatus === 'undefined' ) return true;
+
+    // Trusted fast path — the market app only writes 'complete' after the
+    // server confirmed the pin. Re-verifying on every open would add a
+    // round-trip to every double-click.
+    if ( descriptor.pinStatus === 'complete' ) return true;
+
+    const cidClean = String(cid).replace(/^ipfs:\/\//, '').replace(/^\/ipfs\//, '');
+    const apiOrigin = window.api_origin || window.location.origin;
+    const token = window.auth_token || (typeof puter !== 'undefined' && puter.authToken) || '';
+
+    async function fetchStatus() {
+        try {
+            const res = await fetch(`${apiOrigin}/api/storage/ipfs/pin-status/${encodeURIComponent(cidClean)}`, {
+                method: 'GET',
+                headers: token ? { 'Authorization': `Bearer ${ token}` } : {},
+            });
+            if ( !res.ok ) return null;
+            return await res.json();
+        } catch ( e ) {
+            return null;
+        }
+    }
+
+    const initial = await fetchStatus();
+    if ( initial === null ) {
+        // Graceful degradation: server unreachable. Let playback attempt —
+        // streaming from ipfs.ela.city still works for already-published
+        // content, and blocking the user behind an un-dismissable modal
+        // would be worse than allowing a potentially-laggy playback.
+        console.warn('[dDRM launch gate] pin-status unreachable, falling through to dispatch');
+        return true;
+    }
+    if ( initial.status === 'complete' ) return true;
+
+    return await showDdrmGateOverlay({
+        descriptor,
+        cidClean,
+        initialStatus: initial,
+        fetchStatus,
+        apiOrigin,
+        token,
+    });
+}
+
+function showDdrmGateOverlay({ descriptor, cidClean, initialStatus, fetchStatus, apiOrigin, token }) {
+    return new Promise((resolve) => {
+        const startedAt = Date.now();
+        let pollTimer = null;
+        let lastRetryMs = 0;
+
+        const backdrop = document.createElement('div');
+        backdrop.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.45);z-index:100000;display:flex;align-items:center;justify-content:center;font-family:inherit;';
+
+        const card = document.createElement('div');
+        card.style.cssText = 'background:#fff;border-radius:10px;padding:24px;max-width:460px;width:92vw;box-shadow:0 12px 32px rgba(0,0,0,0.25);';
+        backdrop.appendChild(card);
+
+        const title = document.createElement('h3');
+        title.style.cssText = 'margin:0 0 12px;font-size:16px;font-weight:600;color:#111;';
+        title.textContent = 'Preparing your content';
+        card.appendChild(title);
+
+        const subtitle = document.createElement('div');
+        subtitle.style.cssText = 'color:#6b7280;font-size:13px;margin-bottom:16px;';
+        subtitle.textContent = descriptor.title || 'Untitled';
+        card.appendChild(subtitle);
+
+        const statusLine = document.createElement('div');
+        statusLine.style.cssText = 'color:#374151;font-size:13px;line-height:1.5;min-height:20px;margin-bottom:20px;';
+        card.appendChild(statusLine);
+
+        const buttonRow = document.createElement('div');
+        buttonRow.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;';
+        card.appendChild(buttonRow);
+
+        function makeButton(label, style) {
+            const b = document.createElement('button');
+            b.textContent = label;
+            b.style.cssText = 'display:inline-flex;align-items:center;justify-content:center;padding:8px 16px;font-size:13px;line-height:1;font-family:inherit;border-radius:6px;cursor:pointer;' + style;
+            return b;
+        }
+
+        const cancelBtn = makeButton('Cancel', 'background:#f3f4f6;border:1px solid #d1d5db;color:#111;');
+        const retryBtn = makeButton('Retry', 'background:#3b82f6;border:none;color:#fff;');
+        retryBtn.style.display = 'none';
+
+        buttonRow.appendChild(cancelBtn);
+        buttonRow.appendChild(retryBtn);
+
+        function cleanup() {
+            if ( pollTimer ) { clearInterval(pollTimer); pollTimer = null; }
+            if ( backdrop.parentNode ) backdrop.parentNode.removeChild(backdrop);
+        }
+
+        cancelBtn.addEventListener('click', () => {
+            cleanup();
+            resolve(false);
+        });
+
+        function formatElapsed(ms) {
+            const s = Math.floor(ms / 1000);
+            if ( s < 60 ) return s + 's';
+            const m = Math.floor(s / 60);
+            const r = s % 60;
+            return m + 'm ' + (r < 10 ? '0' : '') + r + 's';
+        }
+
+        function formatBytes(n) {
+            if ( !n || n < 0 ) return '';
+            if ( n >= 1073741824 ) return (n / 1073741824).toFixed(1) + ' GB';
+            if ( n >= 1048576 ) return (n / 1048576).toFixed(1) + ' MB';
+            if ( n >= 1024 ) return (n / 1024).toFixed(1) + ' KB';
+            return n + ' B';
+        }
+
+        function renderStatus(body) {
+            const expected = descriptor.estimatedSizeBytes || (body && body.sizeBytes) || 0;
+            const suffix = expected ? ' (~' + formatBytes(expected) + ' expected)' : '';
+            if ( body.status === 'queued' ) {
+                statusLine.textContent = 'Queued — waiting for a seeder...';
+                retryBtn.style.display = 'none';
+            } else if ( body.status === 'pinning' || body.status === 'not-pinned' ) {
+                statusLine.textContent = 'Downloading to your node... ' + formatElapsed(Date.now() - startedAt) + ' elapsed' + suffix;
+                retryBtn.style.display = 'none';
+            } else if ( body.status === 'failed' ) {
+                statusLine.textContent = 'Download failed. Tap Retry to try again, or Cancel to close.';
+                retryBtn.style.display = '';
+            }
+        }
+
+        retryBtn.addEventListener('click', async () => {
+            const now = Date.now();
+            if ( now - lastRetryMs < DDRM_RETRY_DEBOUNCE_MS ) {
+                const waitS = Math.ceil((DDRM_RETRY_DEBOUNCE_MS - (now - lastRetryMs)) / 1000);
+                statusLine.textContent = 'Please wait ' + waitS + 's before retrying.';
+                return;
+            }
+            lastRetryMs = now;
+            retryBtn.disabled = true;
+            retryBtn.textContent = 'Retrying...';
+            try {
+                const res = await fetch(`${apiOrigin}/api/storage/ipfs/pin/${encodeURIComponent(cidClean)}/retry`, {
+                    method: 'POST',
+                    headers: token ? { 'Authorization': `Bearer ${ token}` } : {},
+                });
+                if ( res.status === 429 ) {
+                    const body = await res.json().catch(() => ({}));
+                    const secs = Math.ceil((body.retryAfterMs || DDRM_RETRY_DEBOUNCE_MS) / 1000);
+                    statusLine.textContent = 'Retry rate-limited. Try again in ' + secs + 's.';
+                } else if ( !res.ok ) {
+                    statusLine.textContent = 'Retry request failed (' + res.status + ').';
+                } else {
+                    statusLine.textContent = 'Queued for retry...';
+                }
+            } catch ( e ) {
+                statusLine.textContent = 'Retry failed: ' + (e && e.message);
+            } finally {
+                retryBtn.disabled = false;
+                retryBtn.textContent = 'Retry';
+            }
+        });
+
+        async function pollOnce() {
+            const body = await fetchStatus();
+            if ( !body ) {
+                // Server unreachable mid-poll: keep the overlay up, next tick retries.
+                return;
+            }
+            if ( body.status === 'complete' ) {
+                cleanup();
+                resolve(true);
+                return;
+            }
+            renderStatus(body);
+        }
+
+        renderStatus(initialStatus);
+        document.body.appendChild(backdrop);
+        pollTimer = setInterval(pollOnce, DDRM_PIN_POLL_INTERVAL_MS);
+    });
+}
+
+const RUNTIME_EXTENSIONS = {
+    '.mp4':  { app: 'pc2-media-runtime', title: 'Elacity Player', mime: 'video/mp4' },
+    '.webm': { app: 'pc2-media-runtime', title: 'Elacity Player', mime: 'video/webm' },
+    '.mkv':  { app: 'pc2-media-runtime', title: 'Elacity Player', mime: 'video/x-matroska' },
+    '.avi':  { app: 'pc2-media-runtime', title: 'Elacity Player', mime: 'video/x-msvideo' },
+    '.mov':  { app: 'pc2-media-runtime', title: 'Elacity Player', mime: 'video/quicktime' },
+    '.m4v':  { app: 'pc2-media-runtime', title: 'Elacity Player', mime: 'video/mp4' },
+    '.ogv':  { app: 'pc2-media-runtime', title: 'Elacity Player', mime: 'video/ogg' },
+    '.mp3':  { app: 'pc2-media-runtime', title: 'Elacity Player', mime: 'audio/mpeg' },
+    '.wav':  { app: 'pc2-media-runtime', title: 'Elacity Player', mime: 'audio/wav' },
+    '.flac': { app: 'pc2-media-runtime', title: 'Elacity Player', mime: 'audio/flac' },
+    '.m4a':  { app: 'pc2-media-runtime', title: 'Elacity Player', mime: 'audio/mp4' },
+    '.ogg':  { app: 'pc2-media-runtime', title: 'Elacity Player', mime: 'audio/ogg' },
+    '.aac':  { app: 'pc2-media-runtime', title: 'Elacity Player', mime: 'audio/aac' },
+    '.opus': { app: 'pc2-media-runtime', title: 'Elacity Player', mime: 'audio/opus' },
+    '.pdf':  { app: 'ddrm-viewer', title: 'Elacity Viewer', mime: 'application/pdf' },
+    '.jpg':  { app: 'ddrm-viewer', title: 'Elacity Viewer', mime: 'image/jpeg' },
+    '.jpeg': { app: 'ddrm-viewer', title: 'Elacity Viewer', mime: 'image/jpeg' },
+    '.png':  { app: 'ddrm-viewer', title: 'Elacity Viewer', mime: 'image/png' },
+    '.gif':  { app: 'ddrm-viewer', title: 'Elacity Viewer', mime: 'image/gif' },
+    '.webp': { app: 'ddrm-viewer', title: 'Elacity Viewer', mime: 'image/webp' },
+    '.svg':  { app: 'ddrm-viewer', title: 'Elacity Viewer', mime: 'image/svg+xml' },
+    '.bmp':  { app: 'ddrm-viewer', title: 'Elacity Viewer', mime: 'image/bmp' },
+    '.glb':  { app: 'ddrm-viewer', title: 'Elacity Viewer', mime: 'model/gltf-binary' },
+    '.gltf': { app: 'ddrm-viewer', title: 'Elacity Viewer', mime: 'model/gltf+json' },
+    '.obj':  { app: 'ddrm-viewer', title: 'Elacity Viewer', mime: 'model/obj' },
+    '.stl':  { app: 'ddrm-viewer', title: 'Elacity Viewer', mime: 'model/stl' },
+    '.fbx':  { app: 'ddrm-viewer', title: 'Elacity Viewer', mime: 'model/vnd.autodesk.fbx' },
+    '.csv':  { app: 'ddrm-viewer', title: 'Elacity Viewer', mime: 'text/csv' },
+    '.tsv':  { app: 'ddrm-viewer', title: 'Elacity Viewer', mime: 'text/tab-separated-values' },
+    '.ttf':  { app: 'ddrm-viewer', title: 'Elacity Viewer', mime: 'font/ttf' },
+    '.otf':  { app: 'ddrm-viewer', title: 'Elacity Viewer', mime: 'font/otf' },
+    '.woff': { app: 'ddrm-viewer', title: 'Elacity Viewer', mime: 'font/woff' },
+    '.woff2':{ app: 'ddrm-viewer', title: 'Elacity Viewer', mime: 'font/woff2' },
+    '.zip':  { app: 'ddrm-viewer', title: 'Elacity Viewer', mime: 'application/zip' },
+};
+
 const open_item = async function (options) {
     let el_item = options.item;
     const $el_parent_window = $(el_item).closest('.window');
@@ -128,18 +381,132 @@ Please try recreating the link.`);
         }
     }
     //----------------------------------------------------------------
+    // Is this a .ddrm file? (unified dDRM capsule — protected asset from Elacity)
+    // Also handles legacy .edrm and .ddrm.json for backward compatibility
+    //----------------------------------------------------------------
+    else if ( /\.ddrm(\s*\(\d+\))?$/i.test($(el_item).attr('data-name'))
+           || /\.edrm(\s*\(\d+\))?$/i.test($(el_item).attr('data-name'))
+           || /\.ddrm(\s*\(\d+\))?\.json$/i.test($(el_item).attr('data-name')) ) {
+        try {
+            let descriptor = null;
+            try {
+                const apiOrigin = window.api_origin || window.location.origin;
+                const token = window.auth_token || (typeof puter !== 'undefined' && puter.authToken) || '';
+                const readRes = await fetch(`${ apiOrigin}/read`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        ...(token ? { 'Authorization': `Bearer ${ token}` } : {}),
+                    },
+                    body: JSON.stringify({ path: item_path }),
+                });
+                if ( !readRes.ok ) throw new Error(`Read failed: ${ readRes.status}`);
+                const text = await readRes.text();
+                descriptor = JSON.parse(text);
+            } catch (e) {
+                console.error('Error reading .ddrm descriptor:', e);
+            }
+
+            if ( !descriptor ) {
+                UIAlert('Could not read dDRM capsule. The file may be corrupted.');
+            } else {
+                // Launch gate: verify the underlying CID is pinned before
+                // handing off to the runtime. Covers media + non-media in
+                // a single point; legacy capsules (no pinStatus) bypass.
+                const pinReady = await ddrmLaunchGate(descriptor);
+                if ( !pinReady ) {
+                    // User cancelled; stop here without touching the runtime.
+                    return;
+                }
+
+                const isMedia = descriptor.type === 'media'
+                    || (!descriptor.type && descriptor.cid && descriptor.contractAddress && !descriptor.encryptedDataCid);
+                const isCleartext = descriptor.cleartext === true || descriptor.isProtected === false;
+                const launch_app = (await import('./launch_app.js')).default;
+
+                if ( isCleartext && isMedia ) {
+                    const cleartextFileUrl = descriptor.cid
+                        ? '/ipfs/' + descriptor.cid
+                        : '';
+
+                    await launch_app({
+                        name: 'pc2-media-runtime',
+                        window_title: (descriptor.title || 'Untitled') + ' — Elacity Player',
+                        args: {
+                            channel:         descriptor.contractAddress || '',
+                            tokenId:         descriptor.tokenId || '',
+                            mediaUri:        cleartextFileUrl,
+                            fileUrl:         cleartextFileUrl,
+                            title:           descriptor.title || '',
+                            authority:       descriptor.authority || '',
+                            thumbnail:       descriptor.thumbnail || '',
+                            standalone:      'true',
+                            cleartext:       'true',
+                        },
+                    });
+                } else if ( isCleartext && descriptor.cid ) {
+                    await launch_app({
+                        name: 'ddrm-viewer',
+                        window_title: (descriptor.title || 'Untitled') + ' — dDRM Viewer',
+                        args: {
+                            cleartext:         'true',
+                            cleartextCid:      descriptor.cid,
+                            mimeType:          descriptor.mimeType || 'application/octet-stream',
+                            title:             descriptor.title || 'Untitled',
+                        },
+                    });
+                } else if ( isMedia ) {
+                    await launch_app({
+                        name: 'pc2-media-runtime',
+                        window_title: (descriptor.title || 'Untitled') + ' — Elacity Player',
+                        args: {
+                            channel:         descriptor.contractAddress || '',
+                            tokenId:         descriptor.tokenId || '',
+                            mediaUri:        descriptor.cid || '',
+                            title:           descriptor.title || '',
+                            authority:       descriptor.authority || '',
+                            thumbnail:       descriptor.thumbnail || '',
+                            standalone:      'true',
+                        },
+                    });
+                } else if ( descriptor.encryptedDataCid && descriptor.kid ) {
+                    await launch_app({
+                        name: 'ddrm-viewer',
+                        window_title: (descriptor.title || 'Untitled') + ' — dDRM Viewer',
+                        args: {
+                            litCiphertext:     descriptor.litCiphertext || '',
+                            dataToEncryptHash: descriptor.dataToEncryptHash || '',
+                            encryptedDataCid:  descriptor.encryptedDataCid,
+                            iv:                descriptor.iv || '',
+                            kid:               descriptor.kid,
+                            buyerAddress:      (window.user && (window.user.wallet_address || window.user.smart_account_address)) || descriptor.acquiredBy || '',
+                            buyerAddressAlt:   (window.user && window.user.wallet_address && window.user.smart_account_address)
+                                                 ? (window.user.wallet_address !== window.user.smart_account_address ? window.user.smart_account_address : '')
+                                                 : '',
+                            mimeType:          descriptor.mimeType || 'application/octet-stream',
+                            title:             descriptor.title || 'Untitled',
+                            actionCid:         descriptor.actionCid || '',
+                            authority:         descriptor.authority || '',
+                        },
+                    });
+                } else {
+                    UIAlert('Could not determine asset type from dDRM capsule. The file may be corrupted or missing required fields.');
+                }
+            }
+        } catch ( error ) {
+            console.error('Error opening dDRM capsule:', error);
+            UIAlert(`Error opening dDRM capsule: ${ error.message}`);
+        }
+    }
+    //----------------------------------------------------------------
     // Is this a trashed file?
     //----------------------------------------------------------------
     else if ( item_path.startsWith(`${window.trash_path }/`) ) {
         UIAlert('This item can\'t be opened because it\'s in the trash. To use this item, first drag it out of the Trash.');
     }
     //----------------------------------------------------------------
-    // Is this a .zip file? Unzip it (don't open in editor)
+    // .zip handling removed — now handled by RUNTIME_EXTENSIONS routing below
     //----------------------------------------------------------------
-    else if ( !is_dir && path.extname(item_path).toLowerCase() === '.zip' ) {
-        window.unzipItem(item_path);
-        return;
-    }
     //----------------------------------------------------------------
     // Is this a file (no dir) on a SaveFileDialog?
     //----------------------------------------------------------------
@@ -229,6 +596,27 @@ Please try recreating the link.`);
             window_title: path.basename(item_path),
             maximized: shouldMaximize,
             file_uid: file_uid,
+        });
+    }
+    //----------------------------------------------------------------
+    // Route media/document/3D/data/font/archive files to PC2 runtime apps
+    //----------------------------------------------------------------
+    else if ( !is_dir && RUNTIME_EXTENSIONS[path.extname(item_path).toLowerCase()] ) {
+        const ext = path.extname(item_path).toLowerCase();
+        const target = RUNTIME_EXTENSIONS[ext];
+        const filename = path.basename(item_path);
+        const readUrl = `${window.api_origin}/read?path=${encodeURIComponent(item_path)}`;
+
+        launch_app({
+            name: target.app,
+            window_title: filename + ' — ' + target.title,
+            args: {
+                cleartext: 'true',
+                fileUrl: readUrl,
+                mimeType: target.mime,
+                title: filename,
+                thumbnail: '',
+            },
         });
     }
     //----------------------------------------------------------------

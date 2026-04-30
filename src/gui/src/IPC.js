@@ -129,6 +129,91 @@ const ipc_listener = async (event, handled) => {
     }
 
     // --------------------------------------------------------
+    // PC2 Wallet Bridge — handled by pc2-wallet-bridge.js (parent-side).
+    // Do NOT process here to avoid duplicate MetaMask requests.
+    // --------------------------------------------------------
+    if ( event.data?.type === 'pc2-wallet-rpc' ) {
+        return handled.resolve(true);
+    }
+
+    if ( event.data?.type === 'pc2-wallet-ready' ) {
+        return handled.resolve(true);
+    }
+
+    // --------------------------------------------------------
+    // PC2 internal IPC — trusted messages from built-in apps
+    // (App Center, etc.) that use raw postMessage without puter SDK.
+    // Checked BEFORE appInstanceID validation.
+    // --------------------------------------------------------
+    if ( event.data?.msg === 'launchApp' && event.data.appName ) {
+        const launch_app = (await import('./helpers/launch_app.js')).default;
+        const proc = await launch_app({
+            name: event.data.appName,
+            args: event.data.args,
+            window_title: event.data.windowTitle,
+        });
+        // Focus the new window so it lands on top of the launcher (the
+        // dApp Centre). A single focusWindow() races against:
+        //   (a) the click event on the launcher iframe, which propagates
+        //       to the launcher's mousedown handler and re-focuses the
+        //       launcher *after* our call;
+        //   (b) the new app's iframe `load` event triggering UIWindow
+        //       internals that may also reset focus order;
+        //   (c) the open animation, which transitions opacity over 70 ms.
+        // We fire focus three times: rAF (after current frame), on the
+        // iframe `load` event (after the app paints its first frame),
+        // and a 350 ms backstop to outlast the launcher's late mousedown.
+        // Each call is cheap and idempotent. See DAPP-UX-POLISH-V12 #5.
+        if (proc?.references?.el_win) {
+            const $win = $(proc.references.el_win);
+            const focusNow = () => {
+                try { $win.focusWindow(); } catch { /* ignore */ }
+            };
+            requestAnimationFrame(focusNow);
+            const $iframe = $win.find('.window-app-iframe');
+            if ($iframe.length) {
+                $iframe.one('load', () => setTimeout(focusNow, 30));
+            }
+            setTimeout(focusNow, 350);
+        }
+        return handled.resolve(true);
+    }
+
+    // dApp Centre posts this after a successful install/uninstall so the
+    // Start menu drops its stale cache without waiting for the WS event.
+    // See DAPP-UX-POLISH-V12 #4.
+    if ( event.data?.msg === 'apps:changed' ) {
+        try {
+            const token = window.auth_token;
+            if (token) {
+                const res = await fetch(`${window.api_origin}/get-launch-apps?icon_size=64`, {
+                    headers: { 'Authorization': `Bearer ${token}` },
+                });
+                if (res.ok) {
+                    window.launch_apps = await res.json();
+                }
+            }
+        } catch (e) {
+            console.warn('[apps:changed postMessage] refresh failed:', e);
+        }
+        return handled.resolve(true);
+    }
+
+    if ( event.data?.msg === 'openFolder' && event.data.path ) {
+        const folder_path = event.data.path;
+        const folder_title = folder_path.split('/').filter(Boolean).pop() || 'Folder';
+        const icon = await item_icon({ is_dir: true, path: folder_path });
+        UIWindow({
+            path: folder_path,
+            title: folder_title,
+            icon: icon,
+            is_dir: true,
+            app: 'explorer',
+        });
+        return handled.resolve(true);
+    }
+
+    // --------------------------------------------------------
     // Message from apps
     // --------------------------------------------------------
 
@@ -625,6 +710,70 @@ const ipc_listener = async (event, handled) => {
     else if ( event.data.msg === 'mouseClicked' ) {
         // close all popovers whose parent_id is parent_window_id
         $(`.popover[data-parent_id="${parent_window_id}"]`).remove();
+    }
+    //--------------------------------------------------------
+    // walletSendTransaction — app requests eth_sendTransaction via particle iframe (e.g. Elacity buy).
+    // For email/social logins, the signing popup must be visible (UIWindowParticleSigning).
+    // For external wallets (MetaMask), the hidden iframe path works because MetaMask renders its own popup.
+    //--------------------------------------------------------
+    else if ( event.data.msg === 'walletSendTransaction' && event.data.txParams ) {
+        console.log('[PC2 Wallet] walletSendTransaction received from app, embedded:', walletService.isEmbeddedLogin());
+        const txPromise = walletService.isEmbeddedLogin()
+            ? walletService.sendTransactionViaParticleEmbedded(event.data.txParams)
+            : walletService.sendTransactionViaParticleIframe(event.data.txParams);
+        txPromise
+            .then((txHash) => {
+                target_iframe.contentWindow.postMessage({
+                    original_msg_id: msg_id,
+                    msg: 'walletSendTransactionResult',
+                    txHash,
+                }, '*');
+            })
+            .catch((err) => {
+                target_iframe.contentWindow.postMessage({
+                    original_msg_id: msg_id,
+                    msg: 'walletSendTransactionResult',
+                    error: err?.message || String(err),
+                }, '*');
+            });
+    }
+    //--------------------------------------------------------
+    // walletGetSmartAccountAddress — app asks for current smart account (e.g. for batch buy path)
+    //--------------------------------------------------------
+    else if ( event.data.msg === 'walletGetSmartAccountAddress' ) {
+        const sa = walletService.getSmartAccountAddress();
+        target_iframe.contentWindow.postMessage({
+            original_msg_id: msg_id,
+            msg: 'walletGetSmartAccountAddressResult',
+            smartAccountAddress: sa || null,
+        }, '*');
+    }
+    //--------------------------------------------------------
+    // walletExecuteSmartAccountBatch — app requests batched smart-account execution (approve + buy, one signature).
+    // For email/social logins, uses 3-phase flow with visible signing popup.
+    // For external wallets, uses hidden iframe (MetaMask renders its own popup).
+    //--------------------------------------------------------
+    else if ( event.data.msg === 'walletExecuteSmartAccountBatch' && event.data.chainId && Array.isArray(event.data.transactions) ) {
+        console.log('[PC2 Wallet] walletExecuteSmartAccountBatch, embedded:', walletService.isEmbeddedLogin());
+        const batchPromise = walletService.isEmbeddedLogin()
+            ? walletService.sendSmartAccountBatchEmbedded(event.data.chainId, event.data.transactions, event.data.expectTokens)
+            : walletService.sendSmartAccountBatch(event.data.chainId, event.data.transactions, event.data.expectTokens);
+        batchPromise
+            .then((result) => {
+                target_iframe.contentWindow.postMessage({
+                    original_msg_id: msg_id,
+                    msg: 'walletExecuteSmartAccountBatchResult',
+                    transactionId: result?.transactionId,
+                    transactionHash: result?.transactionHash,
+                }, '*');
+            })
+            .catch((err) => {
+                target_iframe.contentWindow.postMessage({
+                    original_msg_id: msg_id,
+                    msg: 'walletExecuteSmartAccountBatchResult',
+                    error: err?.message || String(err),
+                }, '*');
+            });
     }
     //--------------------------------------------------------
     // showDirectoryPicker

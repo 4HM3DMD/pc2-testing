@@ -126,6 +126,35 @@ export interface SavedChannel {
 }
 
 /**
+ * Skill definition parsed from SKILL.md frontmatter + body
+ */
+export interface SkillDefinition {
+  id: string;
+  name: string;
+  description: string;
+  version: string;
+  author: string;
+  tools: string[];
+  permissions: string[];
+  content: string;
+  source: 'bundled' | 'user' | 'purchased';
+}
+
+/**
+ * A skill that has been loaded and parsed, ready for system prompt injection.
+ * Carries frontmatter metadata alongside the body for trust boundary enforcement.
+ */
+export interface LoadedSkill {
+  id: string;
+  name: string;
+  source: 'bundled' | 'user' | 'purchased';
+  tools: string[];
+  body: string;
+  contentHash: string;
+  hashVerified: boolean;
+}
+
+/**
  * Agent identity for display purposes
  */
 export interface AgentIdentity {
@@ -171,6 +200,9 @@ export interface AgentConfig {
   
   // Tethered channels (references to SavedChannel IDs)
   tetheredChannels?: string[];  // Array of SavedChannel IDs
+  
+  // Active skills (references to skill directory IDs)
+  skills?: string[];  // Array of skill IDs (e.g., 'wallet-ops', 'file-management')
 }
 
 /**

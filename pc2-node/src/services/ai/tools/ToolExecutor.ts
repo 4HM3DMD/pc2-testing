@@ -5,14 +5,23 @@
  */
 
 import os from 'os';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+import fs from 'fs';
 import { FilesystemManager } from '../../../storage/filesystem.js';
 import { DatabaseManager } from '../../../storage/database.js';
 import { logger } from '../../../utils/logger.js';
+import { parseSkillFrontmatter } from '../../../utils/skill-parser.js';
 import { Server as SocketIOServer } from 'socket.io';
-import { broadcastItemAdded, broadcastItemRemoved, broadcastItemMoved, broadcastItemUpdated } from '../../../websocket/events.js';
+import { broadcastItemAdded, broadcastItemRemoved, broadcastItemMoved, broadcastItemUpdated, broadcastToUser } from '../../../websocket/events.js';
+import { getGatewayService } from '../../gateway/index.js';
 import { ALLOWED_SETTINGS, AllowedSettingKey } from './SettingsTools.js';
 import { AgentKitExecutor, isAgentKitTool } from './AgentKitExecutor.js';
 import { AgentMemoryManager } from '../memory/AgentMemoryManager.js';
+
+const __toolExecFilename = fileURLToPath(import.meta.url);
+const __toolExecDirname = dirname(__toolExecFilename);
+const BUNDLED_SKILLS_DIR = join(__toolExecDirname, '../../../../data/skills');
 
 // Elastos Smart Chain RPC endpoint for balance queries
 const ESC_RPC_URL = 'https://api.elastos.io/esc';
@@ -29,6 +38,7 @@ export class ToolExecutor {
   private agentKitExecutor?: AgentKitExecutor;
   private agentId?: string;
   private memoryManager?: AgentMemoryManager;
+  private aiService?: any;
 
   constructor(
     private filesystem: FilesystemManager,
@@ -37,7 +47,8 @@ export class ToolExecutor {
     options?: {
       db?: DatabaseManager;
       smartAccountAddress?: string;
-      agentId?: string;  // Agent ID for scoped memory
+      agentId?: string;
+      aiService?: any;
     }
   ) {
     if (!walletAddress) {
@@ -46,6 +57,7 @@ export class ToolExecutor {
     this.db = options?.db;
     this.smartAccountAddress = options?.smartAccountAddress;
     this.agentId = options?.agentId;
+    this.aiService = options?.aiService;
     
     // Initialize per-agent memory manager if agentId is provided
     if (this.agentId) {
@@ -1529,6 +1541,159 @@ export class ToolExecutor {
           };
         }
 
+        case 'list_available_skills': {
+          const skills = await this.scanAvailableSkills();
+          return {
+            success: true,
+            result: {
+              skills,
+              total: skills.length,
+              active: skills.filter((s: any) => s.active).length,
+              hint: 'Users can enable/disable skills in the Agent Editor (Settings > AI Agent > Skills section).',
+            }
+          };
+        }
+
+        case 'describe_skill': {
+          const skillId = args.skill_id as string;
+          if (!skillId) {
+            return { success: false, error: 'skill_id parameter is required' };
+          }
+          const allSkills = await this.scanAvailableSkills();
+          const skill = allSkills.find((s: any) => s.id === skillId);
+          if (!skill) {
+            return { success: false, error: `Skill "${skillId}" not found. Use list_available_skills to see available IDs.` };
+          }
+          return { success: true, result: skill };
+        }
+
+        // ── A2UI Canvas Tools ──────────────────────────────────────────
+
+        case 'canvas_create': {
+          const title = (args.title as string) || 'Canvas';
+          const html = args.html as string;
+          const width = (args.width as number) || 600;
+          const height = (args.height as number) || 400;
+
+          if (!html) {
+            return { success: false, error: 'html parameter is required' };
+          }
+
+          const canvasId = `canvas_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+          if (this.io) {
+            broadcastToUser(this.io, this.walletAddress, 'canvas.push', {
+              canvas_id: canvasId,
+              title,
+              html,
+              width,
+              height,
+            });
+            logger.info(`[ToolExecutor] Canvas created: ${canvasId} "${title}" (${width}x${height})`);
+          } else {
+            logger.warn('[ToolExecutor] canvas_create called but Socket.IO not available');
+          }
+
+          return {
+            success: true,
+            result: {
+              canvas_id: canvasId,
+              title,
+              message: `Window "${title}" opened on the desktop.`,
+            }
+          };
+        }
+
+        case 'canvas_update': {
+          const updateCanvasId = args.canvas_id as string;
+          const updateHtml = args.html as string;
+          const updateTitle = args.title as string | undefined;
+
+          if (!updateCanvasId || !updateHtml) {
+            return { success: false, error: 'canvas_id and html parameters are required' };
+          }
+
+          if (this.io) {
+            broadcastToUser(this.io, this.walletAddress, 'canvas.update', {
+              canvas_id: updateCanvasId,
+              html: updateHtml,
+              ...(updateTitle && { title: updateTitle }),
+            });
+            logger.info(`[ToolExecutor] Canvas updated: ${updateCanvasId}`);
+          }
+
+          return {
+            success: true,
+            result: { canvas_id: updateCanvasId, message: 'Window content updated.' }
+          };
+        }
+
+        case 'canvas_remove': {
+          const removeCanvasId = args.canvas_id as string;
+          if (!removeCanvasId) {
+            return { success: false, error: 'canvas_id parameter is required' };
+          }
+
+          if (this.io) {
+            broadcastToUser(this.io, this.walletAddress, 'canvas.remove', {
+              canvas_id: removeCanvasId,
+            });
+            logger.info(`[ToolExecutor] Canvas removed: ${removeCanvasId}`);
+          }
+
+          return {
+            success: true,
+            result: { canvas_id: removeCanvasId, message: 'Window closed.' }
+          };
+        }
+
+        // ── Multi-Agent Tools ──────────────────────────────────────────
+
+        case 'agents_list': {
+          if (!this.db) {
+            return { success: false, error: 'Database not available for agent listing' };
+          }
+          const gateway = getGatewayService(this.db);
+          const agents = gateway.getAgents();
+          const agentList = agents.map((a: any) => ({
+            id: a.id,
+            name: a.name,
+            enabled: a.enabled !== false,
+            model: a.model || 'default',
+            skills: a.skills || [],
+            is_current: a.id === this.agentId,
+          }));
+
+          return {
+            success: true,
+            result: {
+              agents: agentList,
+              total: agentList.length,
+              current_agent_id: this.agentId || null,
+            }
+          };
+        }
+
+        case 'agent_delegate': {
+          const targetAgentId = args.agent_id as string;
+          const delegateMessage = args.message as string;
+
+          if (!targetAgentId || !delegateMessage) {
+            return { success: false, error: 'agent_id and message parameters are required' };
+          }
+
+          if (targetAgentId === this.agentId) {
+            return { success: false, error: 'Cannot delegate to yourself. Use a different agent_id.' };
+          }
+
+          if (!this.db || !this.aiService) {
+            return { success: false, error: 'Agent delegation requires database and AI service access' };
+          }
+
+          const delegateResult = await this.delegateToAgent(targetAgentId, delegateMessage);
+          return delegateResult;
+        }
+
         default:
           throw new Error(`Unknown tool: ${toolName}`);
       }
@@ -1556,6 +1721,157 @@ export class ToolExecutor {
     const sizes = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  }
+
+  /**
+   * Delegate a message to another agent and return its text response.
+   * Depth-limited to 1 — the target agent's tools exclude agent_delegate.
+   */
+  private async delegateToAgent(targetAgentId: string, message: string): Promise<ToolExecutionResult> {
+    try {
+      const gateway = getGatewayService(this.db!);
+      const targetAgent = gateway.getAgent(targetAgentId);
+
+      if (!targetAgent) {
+        return { success: false, error: `Agent "${targetAgentId}" not found. Use agents_list to see available agents.` };
+      }
+
+      if (targetAgent.enabled === false) {
+        return { success: false, error: `Agent "${targetAgent.name}" is disabled.` };
+      }
+
+      logger.info(`[ToolExecutor] Delegating to agent "${targetAgent.name}" (${targetAgentId}): "${message.slice(0, 80)}..."`);
+
+      // Build a minimal system prompt from the target agent's soul
+      const systemContent = targetAgent.soulContent || targetAgent.customSoul ||
+        `You are ${targetAgent.name}, an AI assistant. Answer the following question directly and concisely.`;
+
+      const messages = [
+        { role: 'system' as const, content: systemContent },
+        { role: 'user' as const, content: message },
+      ];
+
+      // Call AIChatService.complete() without tools to prevent recursive delegation
+      const model = targetAgent.model || 'gpt-4';
+      const response = await this.aiService.complete({
+        messages,
+        model,
+        max_tokens: 2000,
+      });
+
+      // Extract text from the response
+      const responseText = response?.choices?.[0]?.message?.content ||
+        response?.content?.[0]?.text ||
+        (typeof response === 'string' ? response : JSON.stringify(response));
+
+      logger.info(`[ToolExecutor] Delegation to "${targetAgent.name}" complete (${responseText.length} chars)`);
+
+      return {
+        success: true,
+        result: {
+          agent_id: targetAgentId,
+          agent_name: targetAgent.name,
+          response: responseText,
+        }
+      };
+    } catch (error: any) {
+      logger.error(`[ToolExecutor] Agent delegation failed:`, error);
+      return { success: false, error: `Delegation to agent failed: ${error.message}` };
+    }
+  }
+
+  /**
+   * Scan all available skills (bundled + user-installed) and return metadata.
+   * Includes whether each skill is currently active on this agent.
+   */
+  private async scanAvailableSkills(): Promise<Array<Record<string, unknown>>> {
+    const skills: Array<Record<string, unknown>> = [];
+
+    // Get active skill IDs for the current agent
+    let activeSkillIds: string[] = [];
+    if (this.db && this.agentId) {
+      try {
+        const agentRow = this.db.queryOne(
+          'SELECT config FROM gateway_agents WHERE id = ?',
+          this.agentId
+        );
+        if (agentRow?.config) {
+          const config = JSON.parse(agentRow.config);
+          activeSkillIds = config.skills || [];
+        }
+      } catch {
+        // Agent config not found or no skills field — fine
+      }
+    }
+
+    // Scan bundled skills
+    if (fs.existsSync(BUNDLED_SKILLS_DIR)) {
+      try {
+        const dirs = await fs.promises.readdir(BUNDLED_SKILLS_DIR, { withFileTypes: true });
+        for (const dir of dirs) {
+          if (!dir.isDirectory()) continue;
+          const skillPath = join(BUNDLED_SKILLS_DIR, dir.name, 'SKILL.md');
+          try {
+            const raw = await fs.promises.readFile(skillPath, 'utf-8');
+            const { meta } = parseSkillFrontmatter(raw);
+            skills.push({
+              id: dir.name,
+              name: meta.name || dir.name,
+              description: meta.description || '',
+              version: meta.version || '1.0.0',
+              author: meta.author || 'Unknown',
+              tools: Array.isArray(meta.tools) ? meta.tools : [],
+              permissions: Array.isArray(meta.permissions) ? meta.permissions : [],
+              source: 'bundled',
+              active: activeSkillIds.includes(dir.name),
+            });
+          } catch {
+            // Skip unreadable skill files
+          }
+        }
+      } catch {
+        // Skills directory unreadable
+      }
+    }
+
+    // Scan user-installed skills
+    if (this.filesystem && this.walletAddress) {
+      try {
+        const userSkillsDir = 'pc2/skills';
+        const listing = this.filesystem.listDirectory(userSkillsDir, this.walletAddress);
+        if (listing) {
+          for (const item of listing) {
+            if (!item.is_dir) continue;
+            const skillId = item.path?.split('/').pop();
+            if (!skillId) continue;
+            try {
+              const raw = await this.filesystem.readFile(`${userSkillsDir}/${skillId}/SKILL.md`, this.walletAddress);
+              if (raw) {
+                const text = typeof raw === 'string' ? raw : raw.toString('utf-8');
+                const { meta } = parseSkillFrontmatter(text);
+                skills.push({
+                  id: skillId,
+                  name: meta.name || skillId,
+                  description: meta.description || '',
+                  version: meta.version || '1.0.0',
+                  author: meta.author || 'Unknown',
+                  tools: Array.isArray(meta.tools) ? meta.tools : [],
+                  permissions: Array.isArray(meta.permissions) ? meta.permissions : [],
+                  source: 'user',
+                  active: activeSkillIds.includes(skillId),
+                });
+              }
+            } catch {
+              // Skip unreadable user skill
+            }
+          }
+        }
+      } catch {
+        // User skills directory doesn't exist yet — fine
+      }
+    }
+
+    return skills;
   }
 
   /**

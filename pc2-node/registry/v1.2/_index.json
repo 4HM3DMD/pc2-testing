@@ -1,0 +1,359 @@
+{
+  "schema": "elacity-app-registry-v1",
+  "publisher": {
+    "name": "Elacity Labs",
+    "publicKey": "1ab060ba7578261355504300c1193c484ed8a46a30499c3fa3cb9065930367eb",
+    "keyType": "ed25519"
+  },
+  "generatedAt": "2026-04-24T01:21:03.923Z",
+  "apps": [
+    {
+      "name": "ddrm-viewer",
+      "title": "Elacity Viewer",
+      "version": "0.1.0",
+      "description": "Secure viewer for dDRM-protected digital assets. Validates ownership rights and renders content within an isolated WASM sandbox.",
+      "author": {
+        "name": "Elacity Labs",
+        "url": "https://ela.city"
+      },
+      "license": "proprietary",
+      "icon": "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIHZpZXdCb3g9IjAgMCA0OCA0OCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZGVmcz48bGluZWFyR3JhZGllbnQgaWQ9InZnIiB4MT0iMCIgeTE9IjAiIHgyPSIxIiB5Mj0iMSI+PHN0b3Agb2Zmc2V0PSIwJSIgc3RvcC1jb2xvcj0iIzgxOGNmOCIvPjxzdG9wIG9mZnNldD0iMTAwJSIgc3RvcC1jb2xvcj0iIzYzNjZmMSIvPjwvbGluZWFyR3JhZGllbnQ+PGNsaXBQYXRoIGlkPSJ2ciI+PHJlY3Qgd2lkdGg9IjQ4IiBoZWlnaHQ9IjQ4IiByeD0iMTAiLz48L2NsaXBQYXRoPjwvZGVmcz48ZyBjbGlwLXBhdGg9InVybCgjdnIpIj48cmVjdCB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIGZpbGw9InVybCgjdmcpIi8+PHBhdGggZD0iTTYgMjRzNy0xMCAxOC0xMCAxOCAxMCAxOCAxMC03IDEwLTE4IDEwUzYgMjQgNiAyNHoiIHN0cm9rZT0id2hpdGUiIHN0cm9rZS13aWR0aD0iMi41IiBmaWxsPSJub25lIi8+PGNpcmNsZSBjeD0iMjQiIGN5PSIyNCIgcj0iNSIgZmlsbD0id2hpdGUiLz48L2c+PC9zdmc+",
+      "entry": "index.html",
+      "type": "web",
+      "category": "media",
+      "role": "system",
+      "capabilities": {
+        "wallet": true,
+        "network": true,
+        "ipfs": {
+          "pin": false,
+          "fetch": true
+        },
+        "drm": true,
+        "api_endpoints": [
+          "POST /api/storage/lit/secure-view"
+        ],
+        "postMessage_events": {
+          "sends": [],
+          "receives": []
+        }
+      },
+      "requirements": {
+        "minVersion": "1.1.0"
+      },
+      "display": {
+        "width": 900,
+        "height": 700,
+        "resizable": true,
+        "titlebar": true,
+        "taskbar": true
+      },
+      "distribution": {
+        "channel": "stable",
+        "cid": "bafkreicswjb7mvwdgauwd6dhw7ryirndxfraocjo2avn53vfs24oo7jeua",
+        "signature": "64a6b3bee5a7c8a313a6647fef0079aefabbe99f1364adf6d5575f65e17e6343f26038a705221f11b72981681008b0f76ebada7043d2a6c287615bd1fac0450c",
+        "signedBy": "1ab060ba7578261355504300c1193c484ed8a46a30499c3fa3cb9065930367eb",
+        "size": 276452
+      },
+      "hidden": true
+    },
+    {
+      "name": "elacity-creator",
+      "title": "Elacity Creator",
+      "version": "0.1.0",
+      "description": "Encrypt, upload, and list any digital asset on the Elacity marketplace. Supports PDFs, images, audio, 3D models, AI models, datasets, and more.",
+      "author": {
+        "name": "Elacity Labs",
+        "url": "https://ela.city"
+      },
+      "license": "proprietary",
+      "icon": "icon.png",
+      "iconDataUrl": "data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyBpZD0iTGF5ZXJfMSIgZGF0YS1uYW1lPSJMYXllciAxIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNjYuMDIgMjY2LjAyIj4KICA8ZGVmcz4KICAgIDxzdHlsZT4KICAgICAgLmNscy0xIHsKICAgICAgICBmaWxsOiAjZmZmOwogICAgICB9CiAgICA8L3N0eWxlPgogIDwvZGVmcz4KICA8cmVjdCB3aWR0aD0iMjY2LjAyIiBoZWlnaHQ9IjI2Ni4wMiIvPgogIDxwYXRoIGNsYXNzPSJjbHMtMSIgZD0iTTIxMy4zNywxMzMuMzVjMC0xNi4wOS0xMi41MS0yOS4zMS0yOC4zMi0zMC40NSwyLjIzLTQuMzEsMy40Mi05LjEzLDMuNDItMTQuMDEsMC0xNi44NC0xMy43LTMwLjU0LTMwLjU0LTMwLjU0LTkuOTEsMC0xOS4xOSw0Ljg3LTI0Ljg4LDEyLjg2LTUuNTQtNy43Ny0xNC42Mi0xMi44Ni0yNC44OC0xMi44Ni0xNi44NCwwLTMwLjU0LDEzLjctMzAuNTQsMzAuNTQsMCw0Ljg5LDEuMTksOS43LDMuNDEsMTQuMDEtMTUuODMsMS4xMi0yOC4zOCwxNC4zNS0yOC4zOCwzMC40NnMxMi4zNiwyOS4xNSwyOC4wNCwzMC40M2MtMS45Nyw0LjAzLTMuMDgsOC41Ni0zLjA0LDEzLjM0LDAsMTYuODQsMTMuNywzMC41NCwzMC41NCwzMC41NCw5LjkzLDAsMTkuMTktNC44NiwyNC44OC0xMi44Niw1LjU0LDcuNzcsMTQuNjIsMTIuODYsMjQuODgsMTIuODYsMTYuODQsMCwzMC41NC0xMy43LDMwLjU0LTMwLjU0LDAtNC42My0xLjA2LTkuMjEtMy4wNy0xMy4zNSwxNS42NC0xLjMxLDI3Ljk4LTE0LjQ1LDI3Ljk4LTMwLjQzWk0xODIuODgsMTI4Ljc5Yy00LjY4LTYuNjMtMTEuOTItMTEuMzItMjAuMjctMTIuNjIsNC41Mi01LjMyLDExLjEtOC44MywxOC40OS05LjMsMi4xNCwzLjgyLDMuMzYsOC4yMiwzLjM2LDEyLjksMCwzLjE3LS41Niw2LjItMS41OCw5LjAyWk0xODQuNDYsMTQ2LjM2YzAsNC45MS0xLjM0LDkuNTEtMy42OCwxMy40NS03LjUtLjU3LTE0LjE0LTQuMjctMTguNjEtOS44LDguNTQtMS4yLDE1Ljk1LTUuOTMsMjAuNy0xMi42NywxLjAyLDIuODIsMS41OCw1Ljg1LDEuNTgsOS4wMlpNODEuNjEsMTQ2LjM2YzAtMy4xNy41Ni02LjIsMS41OC05LjAyLDMuNTUsNS4wMyw4LjU4LDguOTUsMTQuNDUsMTEuMTEtNS4yNywxLjk0LTkuODYsNS4yOS0xMy4zMSw5LjYtMS43NC0zLjUzLTIuNzItNy41LTIuNzItMTEuNjlaTTgxLjYxLDExOS43N2MwLTQuNjgsMS4yMi05LjA4LDMuMzYtMTIuOSw3LjM3LjQ5LDEzLjkzLDQsMTguNDUsOS4zMS04LjMzLDEuMy0xNS41NSw1Ljk5LTIwLjIyLDEyLjYxLTEuMDItMi44Mi0xLjU4LTUuODUtMS41OC05LjAyWk0xMDkuMjUsMTUwLjYyYzguMjEuMzQsMTUuNzgsNC40NywyMC41MywxMS4xMi00Ljg1LDYuODEtMTIuNjcsMTAuOTgtMjEuMTIsMTEuMTQtMS4zOS0zLjIyLTIuMTYtNi43Ni0yLjE2LTEwLjQ5LDAtNC4wOS45NS04LjEzLDIuNzYtMTEuNzdaTTE1Ni44MiwxNTAuNjJjMS44MSwzLjY0LDIuNzYsNy42OSwyLjc2LDExLjc4LDAsMy43Mi0uNzcsNy4yNy0yLjE2LDEwLjQ5LTguNDUtLjE2LTE2LjI2LTQuMzMtMjEuMTEtMTEuMTMsNC42Mi02LjQ3LDEyLjA2LTEwLjc5LDIwLjUyLTExLjE0Wk0xMzMuMDQsMTU5LjQ0Yy01LjIxLTcuMzItMTMuNC0xMi0yMi4zOC0xMi43NCwyLjAxLTQuMTQsMy4wNy04LjcxLDMuMDctMTMuMzUsMC01LjA1LTEuMjQtOS44MS0zLjQyLTE0LjAxLDkuMzYtLjY2LDE3LjU2LTUuNTUsMjIuNzEtMTIuNzcsNS4yNyw3LjM5LDEzLjU4LDEyLjEsMjIuNjYsMTIuNzctMi4xOCw0LjItMy40Miw4Ljk2LTMuNDIsMTQuMDEsMCw0Ljc4LDEuMTEsOS4zMSwzLjA4LDEzLjM1LTkuMTkuNzctMTcuMjQsNS42Mi0yMi4zMSwxMi43NFpNMTU2Ljc1LDExNS4zOWMtOC4xNS0uMzYtMTUuNjgtNC40Ny0yMC40LTExLjA2LDQuODgtNi44LDEyLjc1LTEwLjk2LDIxLjE5LTExLjA5LDEuMzIsMy4xNSwyLjA1LDYuNiwyLjA1LDEwLjIyLDAsNC4xNS0uOTgsOC4yNC0yLjgzLDExLjkyWk0xMDkuMzIsMTE1LjRjLTEuODUtMy42OC0yLjgzLTcuNzctMi44My0xMS45MywwLTMuNjIuNzMtNy4wNywyLjA1LTEwLjIyLDguNDYuMTIsMTYuMzEsNC4yOCwyMS4xOSwxMS4wOC00LjYxLDYuNDItMTIuMDEsMTAuNzEtMjAuNDEsMTEuMDhaTTE2MS45MSw5My41M2M2LjY5LDEuMDIsMTIuNTcsNC41NCwxNi42NSw5LjU4LTUuOTkuODQtMTEuNDIsMy40Mi0xNS43OCw3LjIyLjUyLTIuMjQuOC00LjU0LjgtNi44NiwwLTMuNDgtLjU5LTYuODItMS42Ny05Ljk0Wk0xMzcuNjEsOTYuOThjLjcxLTIuNTgsMS4xLTUuMjksMS4xLTguMDksMC00LjE2LS44NC04LjEzLTIuMzUtMTEuNzUsOC4wNiwxLjAxLDE1LDUuNjMsMTkuMTQsMTIuMi02LjY4LjU0LTEyLjk2LDMuMjYtMTcuODksNy42NFpNMTM0LjcsODguODljMCw0LjIyLS45OSw4LjIxLTIuNzUsMTEuNzYtNS4yNC02LjUxLTEyLjk2LTEwLjY0LTIxLjM2LTExLjMxLDQuNTEtNy4xNCwxMi4zMi0xMS45OSwyMS4yNy0xMi4zOCwxLjgyLDMuNTksMi44NSw3LjY0LDIuODUsMTEuOTNaTTEwMy4zLDExMC4zOWMtNC4zNS0zLjgyLTkuOC02LjQyLTE1LjgtNy4yNyw0LjA4LTUuMDUsOS45Ni04LjU3LDE2LjY1LTkuNTktMS4wOCwzLjEyLTEuNjcsNi40Ni0xLjY3LDkuOTQsMCwyLjM0LjI4LDQuNjcuODEsNi45M1pNMTA2LjA3LDExOS45MWMyLjMzLDMuOTUsMy42Nyw4LjU0LDMuNjcsMTMuNDUsMCw0LjUzLTEuMTcsOC45Ny0zLjM1LDEyLjktOS4wNS0uNi0xNi44Ny01Ljc1LTIxLjE5LTEzLjE5LDQuMjctNy4zNSwxMS45Ni0xMi40NiwyMC44Ny0xMy4xNlpNMTA0Ljc4LDE1MC44MWMtMS41LDMuNjYtMi4yOCw3LjYtMi4yOCwxMS41OSwwLDMuNTguNjMsNy4wMiwxLjc2LDEwLjIyLTcuMjgtMS4wOC0xMy42MS01LjEzLTE3LjcxLTEwLjg3LDQuMi01Ljg4LDEwLjczLTkuOTgsMTguMjMtMTAuOTNaTTEyOC40MiwxNjkuMjFjLS42OCwyLjUzLTEuMDUsNS4xOS0xLjA1LDcuOTMsMCw0LjEuODIsOC4wMSwyLjI5LDExLjU5LTcuOTItMS4wMS0xNC43Ni01LjUyLTE4LjkyLTExLjk0LDYuNjItLjU2LDEyLjgtMy4yNiwxNy42OC03LjU4Wk0xMzEuMzcsMTc3LjEzYzAtNC4xOS45OC04LjE2LDIuNzItMTEuNjksNS4yMSw2LjUsMTIuODgsMTAuNjIsMjEuMjQsMTEuMzMtNC41NSw3LjAyLTEyLjMxLDExLjc3LTIxLjE5LDEyLjEzLTEuNzctMy41NS0yLjc3LTcuNTUtMi43Ny0xMS43OFpNMTYzLjAyLDE1Ni41OGM0LjIxLDMuNTksOS40LDYuMDcsMTUuMTEsNi45NS00LjA3LDQuNzktOS44MSw4LjEyLTE2LjMxLDkuMDgsMS4xNC0zLjIsMS43Ni02LjYzLDEuNzYtMTAuMjIsMC0xLjk2LS4xOS0zLjktLjU2LTUuODFaTTE1OS42NCwxNDYuMjZjLTIuMTQtMy44Mi0zLjM2LTguMjItMy4zNi0xMi45czEuMzQtOS41MSwzLjY4LTEzLjQ1YzguOTQuNjgsMTYuNjUsNS44LDIwLjkzLDEzLjE3LTQuMzMsNy40NS0xMi4xNywxMi42MS0yMS4yNCwxMy4xOVpNMTU3LjkyLDYyLjM0YzE0LjY0LDAsMjYuNTQsMTEuOTEsMjYuNTQsMjYuNTQsMCw0LjEtLjk2LDguMTUtMi43NSwxMS43Ni01LjE4LTYuNDMtMTIuOS0xMC43Mi0yMS42Mi0xMS4zNC00LjU5LTguNzQtMTMuMy0xNS0yMy41My0xNi4xOCw0Ljk3LTYuNzIsMTIuOS0xMC43OSwyMS4zNS0xMC43OVpNMTA4LjE2LDYyLjM0YzguNzQsMCwxNi41MSw0LjI1LDIxLjM1LDEwLjc5LTEwLjIzLDEuMTgtMTguOTMsNy40NC0yMy41MiwxNi4xOC04LjcyLjYyLTE2LjQ0LDQuOTEtMjEuNjIsMTEuMzQtMS44LTMuNjQtMi43NS03LjY3LTIuNzUtMTEuNzcsMC0xNC42NCwxMS45MS0yNi41NCwyNi41NC0yNi41NFpNNTYuNjUsMTMzLjM1YzAtMTMuNzEsMTAuNDQtMjUuMDIsMjMuNzktMjYuNC0xLjgxLDMuOS0yLjgzLDguMjQtMi44MywxMi44MnMxLjEsOS4yNywzLjA1LDEzLjI5Yy0xLjk1LDQuMDItMy4wNSw4LjUzLTMuMDUsMTMuMjlzMS4xMiw5LjM3LDMuMTEsMTMuNDJjLTEzLjQ4LTEuMjUtMjQuMDgtMTIuNjItMjQuMDgtMjYuNDNaTTEwOC4xNiwyMDMuNjhjLTE0LjY0LDAtMjYuNTQtMTEuOTEtMjYuNTQtMjYuNTQsMC00LjE5Ljk4LTguMTYsMi43Mi0xMS42OSw1LjIsNi40OCwxMi45OSwxMC44MSwyMS43OSwxMS4zOSw0LjY1LDguNjMsMTMuMzIsMTQuNzgsMjMuNDksMTUuOTItNC45Niw2LjgxLTEyLjkzLDEwLjkzLTIxLjQ2LDEwLjkzWk0xNTcuOTIsMjAzLjY4Yy04LjgsMC0xNi42Mi00LjMxLTIxLjQ1LTEwLjkzLDEwLjE3LTEuMTQsMTguODQtNy4yOSwyMy40OC0xNS45Miw4LjgtLjU4LDE2LjU5LTQuOSwyMS43OS0xMS4zOSwxLjc4LDMuNjIsMi43Miw3LjYzLDIuNzIsMTEuNjksMCwxNC42NC0xMS45MSwyNi41NC0yNi41NCwyNi41NFpNMTg1LjM1LDE1OS43N2MxLjk5LTQuMDUsMy4xMS04LjYsMy4xMS0xMy40MnMtMS4xLTkuMjctMy4wNS0xMy4yOWMxLjk1LTQuMDIsMy4wNS04LjUzLDMuMDUtMTMuMjlzLTEuMDItOC45MS0yLjgzLTEyLjgxYzEzLjMyLDEuNDEsMjMuNzMsMTIuNzEsMjMuNzMsMjYuMzlzLTEwLjU2LDI1LjE0LTI0LjAyLDI2LjQyWiIvPgo8L3N2Zz4=",
+      "entry": "index.html",
+      "type": "web",
+      "category": "creator",
+      "role": "system",
+      "capabilities": {
+        "wallet": true,
+        "network": true,
+        "ipfs": {
+          "pin": true,
+          "fetch": true,
+          "add": true
+        },
+        "ipc": [
+          "launchApp",
+          "openFolder"
+        ],
+        "drm": true,
+        "api_endpoints": [
+          "POST /read",
+          "POST /api/storage/ipfs/add-directory",
+          "POST /api/storage/ipfs/add",
+          "POST /api/storage/ipfs/upload-elacity",
+          "POST /api/storage/ipfs/pin",
+          "POST /api/storage/lit/encrypt",
+          "POST /api/storage/thumbnail",
+          "POST /api/media/encode",
+          "GET /api/media/encode/status/:jobId",
+          "POST /api/drafts",
+          "GET /api/drafts/:id",
+          "DELETE /api/drafts/:id"
+        ],
+        "postMessage_events": {
+          "sends": [
+            "mint-draft-saved",
+            "mint-close-creator"
+          ],
+          "receives": []
+        },
+        "external_services": [
+          "https://base.ela.city/api/2.0/graphql",
+          "https://mainnet.base.org",
+          "https://ipfs.ela.city/ipfs/"
+        ]
+      },
+      "requirements": {
+        "minVersion": "1.1.0"
+      },
+      "display": {
+        "maximize": true,
+        "resizable": true,
+        "titlebar": true,
+        "taskbar": true
+      },
+      "services": [
+        {
+          "name": "creator",
+          "protocol": "https",
+          "description": "Elacity decentralized asset creation and listing"
+        }
+      ],
+      "distribution": {
+        "channel": "stable",
+        "cid": "bafybeidhttd3uozgo3odpcvs3hvmrsbo2pgrbce6srum65y5qfzzvzztxy",
+        "signature": "dc6b190f16265624624f8f00305ec219a787e5415995494ad811565631b1d0170ea61f7de46335ed5db631c932024c616a1e8ba756fad1c298b751de72853e0a",
+        "signedBy": "1ab060ba7578261355504300c1193c484ed8a46a30499c3fa3cb9065930367eb",
+        "size": 6940382
+      }
+    },
+    {
+      "name": "elacity-market",
+      "title": "Elacity Market",
+      "version": "0.2.0",
+      "description": "Browse, purchase, and collect digital media NFTs from the Elacity marketplace on Base.",
+      "author": {
+        "name": "Elacity Labs",
+        "url": "https://ela.city"
+      },
+      "license": "proprietary",
+      "icon": "icon.png",
+      "iconDataUrl": "data:image/png;base64,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",
+      "entry": "index.html",
+      "type": "web",
+      "category": "marketplace",
+      "role": "system",
+      "capabilities": {
+        "wallet": true,
+        "network": true,
+        "ipfs": {
+          "pin": true,
+          "fetch": true
+        },
+        "ipc": [
+          "launchApp",
+          "openFolder"
+        ],
+        "drm": true,
+        "api_endpoints": [
+          "GET /api/storage/ipfs/pins",
+          "POST /api/storage/ipfs/pin",
+          "POST /api/media/prepare-auth",
+          "POST /write"
+        ],
+        "postMessage_events": {
+          "sends": [
+            "launchApp:pc2-media-runtime",
+            "launchApp:ddrm-viewer",
+            "openFolder"
+          ],
+          "receives": []
+        },
+        "external_services": [
+          "https://ipfs.ela.city/ipfs/"
+        ]
+      },
+      "requirements": {
+        "minVersion": "1.1.0"
+      },
+      "display": {
+        "maximize": true,
+        "resizable": true,
+        "titlebar": true,
+        "taskbar": true
+      },
+      "services": [
+        {
+          "name": "marketplace",
+          "protocol": "https",
+          "description": "Elacity decentralized media marketplace"
+        }
+      ],
+      "distribution": {
+        "channel": "stable",
+        "cid": "bafybeiczcdan4j7zfw2ychjgzco4y4lbb5mqceezxfl5h7f3koau7t6x5y",
+        "signature": "a0c55bbe82c1397a6ce84129856f7a1a5a9a8dd8506086f130d78be2ae128f010e8ff05182efe5c07f5cd918e85b722a59a471a7650ec34e8247ed8bc7811b02",
+        "signedBy": "1ab060ba7578261355504300c1193c484ed8a46a30499c3fa3cb9065930367eb",
+        "size": 7124385
+      }
+    },
+    {
+      "name": "elacity-player",
+      "title": "Elacity Player",
+      "version": "0.2.0",
+      "description": "DRM-protected media player for Elacity content on Base. Plays DASH-encrypted streams with Lit Protocol key management.",
+      "author": {
+        "name": "Elacity Labs",
+        "url": "https://ela.city"
+      },
+      "license": "proprietary",
+      "icon": "favicon.ico",
+      "iconDataUrl": "data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyBpZD0iTGF5ZXJfMSIgZGF0YS1uYW1lPSJMYXllciAxIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNjYuMDIgMjY2LjAyIj4KICA8ZGVmcz4KICAgIDxzdHlsZT4KICAgICAgLmNscy0xIHsKICAgICAgICBmaWxsOiAjZmZmOwogICAgICB9CiAgICA8L3N0eWxlPgogIDwvZGVmcz4KICA8cmVjdCB3aWR0aD0iMjY2LjAyIiBoZWlnaHQ9IjI2Ni4wMiIvPgogIDxwYXRoIGNsYXNzPSJjbHMtMSIgZD0iTTIxMy4zNywxMzMuMzVjMC0xNi4wOS0xMi41MS0yOS4zMS0yOC4zMi0zMC40NSwyLjIzLTQuMzEsMy40Mi05LjEzLDMuNDItMTQuMDEsMC0xNi44NC0xMy43LTMwLjU0LTMwLjU0LTMwLjU0LTkuOTEsMC0xOS4xOSw0Ljg3LTI0Ljg4LDEyLjg2LTUuNTQtNy43Ny0xNC42Mi0xMi44Ni0yNC44OC0xMi44Ni0xNi44NCwwLTMwLjU0LDEzLjctMzAuNTQsMzAuNTQsMCw0Ljg5LDEuMTksOS43LDMuNDEsMTQuMDEtMTUuODMsMS4xMi0yOC4zOCwxNC4zNS0yOC4zOCwzMC40NnMxMi4zNiwyOS4xNSwyOC4wNCwzMC40M2MtMS45Nyw0LjAzLTMuMDgsOC41Ni0zLjA0LDEzLjM0LDAsMTYuODQsMTMuNywzMC41NCwzMC41NCwzMC41NCw5LjkzLDAsMTkuMTktNC44NiwyNC44OC0xMi44Niw1LjU0LDcuNzcsMTQuNjIsMTIuODYsMjQuODgsMTIuODYsMTYuODQsMCwzMC41NC0xMy43LDMwLjU0LTMwLjU0LDAtNC42My0xLjA2LTkuMjEtMy4wNy0xMy4zNSwxNS42NC0xLjMxLDI3Ljk4LTE0LjQ1LDI3Ljk4LTMwLjQzWk0xODIuODgsMTI4Ljc5Yy00LjY4LTYuNjMtMTEuOTItMTEuMzItMjAuMjctMTIuNjIsNC41Mi01LjMyLDExLjEtOC44MywxOC40OS05LjMsMi4xNCwzLjgyLDMuMzYsOC4yMiwzLjM2LDEyLjksMCwzLjE3LS41Niw2LjItMS41OCw5LjAyWk0xODQuNDYsMTQ2LjM2YzAsNC45MS0xLjM0LDkuNTEtMy42OCwxMy40NS03LjUtLjU3LTE0LjE0LTQuMjctMTguNjEtOS44LDguNTQtMS4yLDE1Ljk1LTUuOTMsMjAuNy0xMi42NywxLjAyLDIuODIsMS41OCw1Ljg1LDEuNTgsOS4wMlpNODEuNjEsMTQ2LjM2YzAtMy4xNy41Ni02LjIsMS41OC05LjAyLDMuNTUsNS4wMyw4LjU4LDguOTUsMTQuNDUsMTEuMTEtNS4yNywxLjk0LTkuODYsNS4yOS0xMy4zMSw5LjYtMS43NC0zLjUzLTIuNzItNy41LTIuNzItMTEuNjlaTTgxLjYxLDExOS43N2MwLTQuNjgsMS4yMi05LjA4LDMuMzYtMTIuOSw3LjM3LjQ5LDEzLjkzLDQsMTguNDUsOS4zMS04LjMzLDEuMy0xNS41NSw1Ljk5LTIwLjIyLDEyLjYxLTEuMDItMi44Mi0xLjU4LTUuODUtMS41OC05LjAyWk0xMDkuMjUsMTUwLjYyYzguMjEuMzQsMTUuNzgsNC40NywyMC41MywxMS4xMi00Ljg1LDYuODEtMTIuNjcsMTAuOTgtMjEuMTIsMTEuMTQtMS4zOS0zLjIyLTIuMTYtNi43Ni0yLjE2LTEwLjQ5LDAtNC4wOS45NS04LjEzLDIuNzYtMTEuNzdaTTE1Ni44MiwxNTAuNjJjMS44MSwzLjY0LDIuNzYsNy42OSwyLjc2LDExLjc4LDAsMy43Mi0uNzcsNy4yNy0yLjE2LDEwLjQ5LTguNDUtLjE2LTE2LjI2LTQuMzMtMjEuMTEtMTEuMTMsNC42Mi02LjQ3LDEyLjA2LTEwLjc5LDIwLjUyLTExLjE0Wk0xMzMuMDQsMTU5LjQ0Yy01LjIxLTcuMzItMTMuNC0xMi0yMi4zOC0xMi43NCwyLjAxLTQuMTQsMy4wNy04LjcxLDMuMDctMTMuMzUsMC01LjA1LTEuMjQtOS44MS0zLjQyLTE0LjAxLDkuMzYtLjY2LDE3LjU2LTUuNTUsMjIuNzEtMTIuNzcsNS4yNyw3LjM5LDEzLjU4LDEyLjEsMjIuNjYsMTIuNzctMi4xOCw0LjItMy40Miw4Ljk2LTMuNDIsMTQuMDEsMCw0Ljc4LDEuMTEsOS4zMSwzLjA4LDEzLjM1LTkuMTkuNzctMTcuMjQsNS42Mi0yMi4zMSwxMi43NFpNMTU2Ljc1LDExNS4zOWMtOC4xNS0uMzYtMTUuNjgtNC40Ny0yMC40LTExLjA2LDQuODgtNi44LDEyLjc1LTEwLjk2LDIxLjE5LTExLjA5LDEuMzIsMy4xNSwyLjA1LDYuNiwyLjA1LDEwLjIyLDAsNC4xNS0uOTgsOC4yNC0yLjgzLDExLjkyWk0xMDkuMzIsMTE1LjRjLTEuODUtMy42OC0yLjgzLTcuNzctMi44My0xMS45MywwLTMuNjIuNzMtNy4wNywyLjA1LTEwLjIyLDguNDYuMTIsMTYuMzEsNC4yOCwyMS4xOSwxMS4wOC00LjYxLDYuNDItMTIuMDEsMTAuNzEtMjAuNDEsMTEuMDhaTTE2MS45MSw5My41M2M2LjY5LDEuMDIsMTIuNTcsNC41NCwxNi42NSw5LjU4LTUuOTkuODQtMTEuNDIsMy40Mi0xNS43OCw3LjIyLjUyLTIuMjQuOC00LjU0LjgtNi44NiwwLTMuNDgtLjU5LTYuODItMS42Ny05Ljk0Wk0xMzcuNjEsOTYuOThjLjcxLTIuNTgsMS4xLTUuMjksMS4xLTguMDksMC00LjE2LS44NC04LjEzLTIuMzUtMTEuNzUsOC4wNiwxLjAxLDE1LDUuNjMsMTkuMTQsMTIuMi02LjY4LjU0LTEyLjk2LDMuMjYtMTcuODksNy42NFpNMTM0LjcsODguODljMCw0LjIyLS45OSw4LjIxLTIuNzUsMTEuNzYtNS4yNC02LjUxLTEyLjk2LTEwLjY0LTIxLjM2LTExLjMxLDQuNTEtNy4xNCwxMi4zMi0xMS45OSwyMS4yNy0xMi4zOCwxLjgyLDMuNTksMi44NSw3LjY0LDIuODUsMTEuOTNaTTEwMy4zLDExMC4zOWMtNC4zNS0zLjgyLTkuOC02LjQyLTE1LjgtNy4yNyw0LjA4LTUuMDUsOS45Ni04LjU3LDE2LjY1LTkuNTktMS4wOCwzLjEyLTEuNjcsNi40Ni0xLjY3LDkuOTQsMCwyLjM0LjI4LDQuNjcuODEsNi45M1pNMTA2LjA3LDExOS45MWMyLjMzLDMuOTUsMy42Nyw4LjU0LDMuNjcsMTMuNDUsMCw0LjUzLTEuMTcsOC45Ny0zLjM1LDEyLjktOS4wNS0uNi0xNi44Ny01Ljc1LTIxLjE5LTEzLjE5LDQuMjctNy4zNSwxMS45Ni0xMi40NiwyMC44Ny0xMy4xNlpNMTA0Ljc4LDE1MC44MWMtMS41LDMuNjYtMi4yOCw3LjYtMi4yOCwxMS41OSwwLDMuNTguNjMsNy4wMiwxLjc2LDEwLjIyLTcuMjgtMS4wOC0xMy42MS01LjEzLTE3LjcxLTEwLjg3LDQuMi01Ljg4LDEwLjczLTkuOTgsMTguMjMtMTAuOTNaTTEyOC40MiwxNjkuMjFjLS42OCwyLjUzLTEuMDUsNS4xOS0xLjA1LDcuOTMsMCw0LjEuODIsOC4wMSwyLjI5LDExLjU5LTcuOTItMS4wMS0xNC43Ni01LjUyLTE4LjkyLTExLjk0LDYuNjItLjU2LDEyLjgtMy4yNiwxNy42OC03LjU4Wk0xMzEuMzcsMTc3LjEzYzAtNC4xOS45OC04LjE2LDIuNzItMTEuNjksNS4yMSw2LjUsMTIuODgsMTAuNjIsMjEuMjQsMTEuMzMtNC41NSw3LjAyLTEyLjMxLDExLjc3LTIxLjE5LDEyLjEzLTEuNzctMy41NS0yLjc3LTcuNTUtMi43Ny0xMS43OFpNMTYzLjAyLDE1Ni41OGM0LjIxLDMuNTksOS40LDYuMDcsMTUuMTEsNi45NS00LjA3LDQuNzktOS44MSw4LjEyLTE2LjMxLDkuMDgsMS4xNC0zLjIsMS43Ni02LjYzLDEuNzYtMTAuMjIsMC0xLjk2LS4xOS0zLjktLjU2LTUuODFaTTE1OS42NCwxNDYuMjZjLTIuMTQtMy44Mi0zLjM2LTguMjItMy4zNi0xMi45czEuMzQtOS41MSwzLjY4LTEzLjQ1YzguOTQuNjgsMTYuNjUsNS44LDIwLjkzLDEzLjE3LTQuMzMsNy40NS0xMi4xNywxMi42MS0yMS4yNCwxMy4xOVpNMTU3LjkyLDYyLjM0YzE0LjY0LDAsMjYuNTQsMTEuOTEsMjYuNTQsMjYuNTQsMCw0LjEtLjk2LDguMTUtMi43NSwxMS43Ni01LjE4LTYuNDMtMTIuOS0xMC43Mi0yMS42Mi0xMS4zNC00LjU5LTguNzQtMTMuMy0xNS0yMy41My0xNi4xOCw0Ljk3LTYuNzIsMTIuOS0xMC43OSwyMS4zNS0xMC43OVpNMTA4LjE2LDYyLjM0YzguNzQsMCwxNi41MSw0LjI1LDIxLjM1LDEwLjc5LTEwLjIzLDEuMTgtMTguOTMsNy40NC0yMy41MiwxNi4xOC04LjcyLjYyLTE2LjQ0LDQuOTEtMjEuNjIsMTEuMzQtMS44LTMuNjQtMi43NS03LjY3LTIuNzUtMTEuNzcsMC0xNC42NCwxMS45MS0yNi41NCwyNi41NC0yNi41NFpNNTYuNjUsMTMzLjM1YzAtMTMuNzEsMTAuNDQtMjUuMDIsMjMuNzktMjYuNC0xLjgxLDMuOS0yLjgzLDguMjQtMi44MywxMi44MnMxLjEsOS4yNywzLjA1LDEzLjI5Yy0xLjk1LDQuMDItMy4wNSw4LjUzLTMuMDUsMTMuMjlzMS4xMiw5LjM3LDMuMTEsMTMuNDJjLTEzLjQ4LTEuMjUtMjQuMDgtMTIuNjItMjQuMDgtMjYuNDNaTTEwOC4xNiwyMDMuNjhjLTE0LjY0LDAtMjYuNTQtMTEuOTEtMjYuNTQtMjYuNTQsMC00LjE5Ljk4LTguMTYsMi43Mi0xMS42OSw1LjIsNi40OCwxMi45OSwxMC44MSwyMS43OSwxMS4zOSw0LjY1LDguNjMsMTMuMzIsMTQuNzgsMjMuNDksMTUuOTItNC45Niw2LjgxLTEyLjkzLDEwLjkzLTIxLjQ2LDEwLjkzWk0xNTcuOTIsMjAzLjY4Yy04LjgsMC0xNi42Mi00LjMxLTIxLjQ1LTEwLjkzLDEwLjE3LTEuMTQsMTguODQtNy4yOSwyMy40OC0xNS45Miw4LjgtLjU4LDE2LjU5LTQuOSwyMS43OS0xMS4zOSwxLjc4LDMuNjIsMi43Miw3LjYzLDIuNzIsMTEuNjksMCwxNC42NC0xMS45MSwyNi41NC0yNi41NCwyNi41NFpNMTg1LjM1LDE1OS43N2MxLjk5LTQuMDUsMy4xMS04LjYsMy4xMS0xMy40MnMtMS4xLTkuMjctMy4wNS0xMy4yOWMxLjk1LTQuMDIsMy4wNS04LjUzLDMuMDUtMTMuMjlzLTEuMDItOC45MS0yLjgzLTEyLjgxYzEzLjMyLDEuNDEsMjMuNzMsMTIuNzEsMjMuNzMsMjYuMzlzLTEwLjU2LDI1LjE0LTI0LjAyLDI2LjQyWiIvPgo8L3N2Zz4=",
+      "entry": "index.html",
+      "type": "web",
+      "category": "media",
+      "role": "system",
+      "capabilities": {
+        "wallet": true,
+        "network": true,
+        "ipfs": {
+          "fetch": true
+        },
+        "drm": true,
+        "api_endpoints": [],
+        "postMessage_events": {
+          "sends": [],
+          "receives": []
+        },
+        "external_services": [
+          "https://base.ela.city/api/2.0/graphql"
+        ],
+        "notes": "Bundled React app — uses Elacity backend GraphQL directly, not local PC2 API endpoints"
+      },
+      "requirements": {
+        "headers": [
+          "cross-origin-isolation"
+        ],
+        "popup": true,
+        "minVersion": "1.1.0"
+      },
+      "display": {
+        "maximize": false,
+        "width": 1280,
+        "height": 720,
+        "resizable": true,
+        "titlebar": true,
+        "taskbar": true
+      },
+      "services": [
+        {
+          "name": "drm-player",
+          "protocol": "https",
+          "description": "DRM-protected DASH media playback"
+        }
+      ],
+      "distribution": {
+        "channel": "stable",
+        "cid": "bafybeifbgkjmgnwvddgntdihvssvyncj5xml2ft6qi3dr3hellgf7wgxbi",
+        "signature": "22fc144d20da6601ea9128613affeea9ccccf2837fdc3cc95847ada9ab9f46a7ed1c67d1fa0eebbd781076f35406b8cc87eb7eac9f65ae70a2f687ec08428800",
+        "signedBy": "1ab060ba7578261355504300c1193c484ed8a46a30499c3fa3cb9065930367eb",
+        "size": 1409855
+      },
+      "hidden": true
+    },
+    {
+      "name": "elastos-nft",
+      "title": "Elastos NFT",
+      "version": "0.1.0",
+      "description": "Browse, trade, and collect NFTs on the Elastos Smart Chain (ESC).",
+      "author": {
+        "name": "Elacity Labs",
+        "url": "https://ela.city"
+      },
+      "license": "proprietary",
+      "icon": "favicon-64.png",
+      "iconDataUrl": "data:image/png;base64,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",
+      "entry": "index.html",
+      "type": "web",
+      "category": "marketplace",
+      "role": "dapp",
+      "capabilities": {
+        "wallet": true,
+        "network": true,
+        "ipfs": {
+          "pin": true,
+          "fetch": true
+        }
+      },
+      "requirements": {
+        "minVersion": "1.1.0"
+      },
+      "display": {
+        "maximize": true,
+        "resizable": true,
+        "titlebar": true,
+        "taskbar": true
+      },
+      "distribution": {
+        "channel": "stable",
+        "cid": "bafybeich5bmanb3nx65scjcv3rp3wjcge4np6von6ybwrp7xsob7llczdy",
+        "signature": "40ae07bbd27d32cd6adbecb9796e41c2d46feb34bfafd99e4c6b1276098a7d3629b43c2b47c866411d38c071a135f13d5860b021227b0b1ba1f6cb968e68ea0e",
+        "signedBy": "1ab060ba7578261355504300c1193c484ed8a46a30499c3fa3cb9065930367eb",
+        "size": 10314879
+      }
+    },
+    {
+      "name": "glide-finance",
+      "title": "Glide Finance",
+      "version": "1.0.0",
+      "description": "Decentralized exchange on Elastos Smart Chain. Swap tokens, provide liquidity, and earn rewards.",
+      "author": {
+        "name": "Glide Finance",
+        "url": "https://glidefinance.io"
+      },
+      "license": "GPL-3.0",
+      "icon": "logo_128x128.png",
+      "entry": "index.html",
+      "type": "web",
+      "category": "blockchain",
+      "role": "dapp",
+      "capabilities": {
+        "wallet": true,
+        "network": true
+      },
+      "requirements": {
+        "minVersion": "1.1.0"
+      },
+      "display": {
+        "maximize": true,
+        "resizable": true,
+        "titlebar": true,
+        "taskbar": true
+      },
+      "services": [
+        {
+          "name": "dex",
+          "protocol": "https",
+          "description": "Glide Finance decentralized exchange on Elastos Smart Chain"
+        }
+      ],
+      "distribution": {
+        "channel": "stable",
+        "cid": "bafybeib6jbeosgudsbilc2bhlkbycnhuvdxwc5zfp22dmbsniknxddwvzq",
+        "signature": "a49e1871fc2be08c9f07c50b0fad97244f455318354b70112014dbb473a3e211cc6e16f2930b8c7da12519f85fe6d0be3899c6ded3a839f98341f4f526be400a",
+        "signedBy": "1ab060ba7578261355504300c1193c484ed8a46a30499c3fa3cb9065930367eb",
+        "size": 80443168
+      }
+    }
+  ]
+}

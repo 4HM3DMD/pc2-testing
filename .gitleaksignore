@@ -1,0 +1,71 @@
+# gitleaks fingerprint allowlist
+#
+# Each line is a SHA-1 fingerprint of an existing finding that has been
+# triaged and accepted. NEW leaks must NOT be added here without:
+#   1. opening a follow-up rotation task,
+#   2. recording the rationale next to the fingerprint, AND
+#   3. linking back to the task ID.
+#
+# Format: <File>:<RuleID>:<StartLine>
+# See:    .cursor/tasks/SEC-2026-04-21-PC2-AUDIT/WAVE-4-SECRET-HYGIENE.md
+
+# ---------------------------------------------------------------------------
+# TRIAGE-1 — Historical Boson DID node identity committed by mistake.
+# Status: PUBLICLY EXPOSED on 4 origin branches since commit 4b10bad94
+#         (2026-03-06). Already in .gitignore but was added before that rule.
+# Action queued: rotate the DID, `git rm --cached`, retire the key.
+# Tracked in: WAVE-4-SECRET-HYGIENE.md → Triage table
+data/identity.json:generic-api-key:5
+
+# ---------------------------------------------------------------------------
+# TRIAGE-2 — Public-by-design website key in a privacy-policy doc for the
+# bundled Solitaire game. The key is the FRVR Solitaire site identifier
+# (publishable, visible in browser network traffic by design). Not a
+# secret. Documenting here for audit trail.
+docs/PRIVACY_CONSENT_POPUP_SOLITAIRE.md:generic-api-key:54
+
+# ---------------------------------------------------------------------------
+# TRIAGE-3 — False positive: gitleaks' `curl-auth-header` rule matched
+# the SHELL-EXAMPLE prefix of a multi-line curl invocation in handover
+# docs (no real bearer token on the line; the `-H "Authorization:"`
+# header itself is not present). Documentation-only.
+docs/core/CHIPOTLE_HANDOVER.md:curl-auth-header:242
+
+# ---------------------------------------------------------------------------
+# TRIAGE-4 — False positive: the constant `CONVERSATIONS_KEY_PREFIX` is
+# a localStorage key prefix string ("ai-conversation-"), not a secret.
+# Gitleaks' `generic-api-key` rule matches any quoted string assigned
+# to a name containing "key".
+src/gui/src/UI/AI/UIAIChat.js:generic-api-key:28
+
+# ---------------------------------------------------------------------------
+# TRIAGE-5 — False positive: the literal string `'elacity-labs.ed25519'`
+# is the DEFAULT FILENAME the capsule packager uses for the developer's
+# Ed25519 signing key (path: ~/.elastos/keys/elacity-labs.ed25519). The
+# string itself is the filename, not key material. The actual private
+# key is generated at runtime by `nacl.sign.keyPair()` (see
+# `loadOrCreateKey`) and persisted to that file with chmod 0600 — it
+# never appears in any committed source. Gitleaks' `generic-api-key`
+# rule fires on the high-entropy "ed25519" suffix.
+pc2-node/scripts/package-app.ts:generic-api-key:235
+pc2-node/scripts/package-app.ts:generic-api-key:244
+
+# ---------------------------------------------------------------------------
+# TRIAGE-6 — Public-by-design Ed25519 publisher key for the v1.2 app
+# registry. The string `1ab060ba…930367eb` is the PUBLIC half of the
+# Elacity Labs signing keypair — its entire purpose is to be widely
+# distributed so consumers can verify capsule signatures. The matching
+# private key lives off-repo at ~/.elastos/keys/elacity-labs.ed25519
+# (chmod 0600) and is never committed. The README documents the public
+# key precisely so that downstream verifiers (PC2 nodes, dapp-store UI,
+# supernode pin-set cron) can pin it. Gitleaks' `generic-api-key` rule
+# matches the 64-hex-char entropy. Same key also appears verbatim in
+# the per-app registry JSONs as the `signedBy` field — same rationale.
+pc2-node/registry/v1.2/README.md:generic-api-key:11
+pc2-node/registry/v1.2/_index.json:generic-api-key:6
+pc2-node/registry/v1.2/ddrm-viewer-0.1.0.registry.json:generic-api-key:46
+pc2-node/registry/v1.2/elacity-creator-0.1.0.registry.json:generic-api-key:76
+pc2-node/registry/v1.2/elacity-market-0.2.0.registry.json:generic-api-key:66
+pc2-node/registry/v1.2/elacity-player-0.2.0.registry.json:generic-api-key:60
+pc2-node/registry/v1.2/elastos-nft-0.1.0.registry.json:generic-api-key:37
+pc2-node/registry/v1.2/glide-finance-1.0.0.registry.json:generic-api-key:39

@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Elacity Viewer</title>
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="viewer.css">
+</head>
+<body>
+  <div id="viewer-container">
+    <!-- Header bar -->
+    <header id="viewer-header">
+      <div class="header-left">
+        <div class="shield-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+          </svg>
+        </div>
+        <div class="header-info">
+          <h1 id="viewer-title">dDRM Viewer</h1>
+          <span id="viewer-subtitle" class="subtitle"></span>
+        </div>
+      </div>
+      <div class="header-right">
+        <span id="renderer-badge" class="badge hidden"></span>
+        <span id="watermark-badge" class="badge badge-secondary hidden"></span>
+        <span id="page-counter" class="badge badge-muted hidden"></span>
+        <span id="session-indicator"></span>
+      </div>
+    </header>
+
+    <!-- Loading state -->
+    <div id="loading-state" class="state-overlay">
+      <div class="spinner"></div>
+      <p id="loading-text">Verifying access rights...</p>
+    </div>
+
+    <!-- Error state -->
+    <div id="error-state" class="state-overlay hidden">
+      <div class="error-icon">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="1.5">
+          <circle cx="12" cy="12" r="10"/>
+          <line x1="15" y1="9" x2="9" y2="15"/>
+          <line x1="9" y1="9" x2="15" y2="15"/>
+        </svg>
+      </div>
+      <h2 id="error-title">Access Denied</h2>
+      <p id="error-message"></p>
+    </div>
+
+    <!-- Content area -->
+    <main id="content-area" class="hidden">
+      <!-- Single image (for image assets) -->
+      <div id="image-container" class="content-display hidden">
+        <img id="rendered-image" alt="Protected content" draggable="false" />
+      </div>
+
+      <!-- Scrollable document (for text / PDF — all pages stacked) -->
+      <div id="document-container" class="document-scroll hidden"></div>
+
+      <!-- Audio player (for audio/* assets) -->
+      <div id="audio-container" class="content-display hidden">
+        <div class="audio-player">
+          <div class="audio-icon">
+            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M9 18V5l12-2v13"/>
+              <circle cx="6" cy="18" r="3"/>
+              <circle cx="18" cy="16" r="3"/>
+            </svg>
+          </div>
+          <div id="audio-title" class="audio-title"></div>
+          <audio id="audio-element" preload="auto"></audio>
+          <div class="audio-controls">
+            <button id="btn-audio-play" class="audio-btn" title="Play/Pause">
+              <svg id="audio-play-icon" width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              <svg id="audio-pause-icon" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" style="display:none;"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+            </button>
+            <span id="audio-time" class="audio-time">0:00 / 0:00</span>
+            <input id="audio-seek" type="range" min="0" max="100" value="0" class="audio-seek" />
+            <input id="audio-volume" type="range" min="0" max="100" value="80" class="audio-volume" title="Volume" />
+          </div>
+        </div>
+      </div>
+
+      <!-- 3D model viewer -->
+      <div id="model-container" class="hidden">
+        <canvas id="model-canvas"></canvas>
+        <div id="model-watermark" class="model-watermark"></div>
+        <div id="model-info" class="model-info hidden">
+          <div id="model-info-content"></div>
+        </div>
+      </div>
+
+      <!-- Dataset table viewer -->
+      <div id="data-container" class="hidden">
+        <div class="data-toolbar">
+          <input id="data-search" type="text" placeholder="Search..." class="data-search" />
+          <span id="data-stats" class="data-stats"></span>
+        </div>
+        <div id="data-table-wrap" class="data-table-wrap"></div>
+        <div id="data-pager" class="data-pager hidden"></div>
+      </div>
+
+      <!-- Font preview viewer -->
+      <div id="font-container" class="hidden">
+        <div id="font-specimen" class="font-specimen"></div>
+      </div>
+
+      <!-- Archive viewer -->
+      <div id="archive-container" class="hidden">
+        <div id="archive-tree" class="archive-tree"></div>
+      </div>
+
+      <!-- EPUB reflowable ebook reader -->
+      <div id="epub-container" class="hidden"></div>
+
+      <!-- CBZ comic book reader -->
+      <div id="cbz-container" class="hidden"></div>
+    </main>
+
+    <!-- Floating toolbar -->
+    <div id="viewer-toolbar" class="hidden">
+      <button id="btn-zoom-out" class="tb-btn" title="Zoom out (-)">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      </button>
+      <button id="zoom-level" class="tb-btn tb-label" title="Reset zoom (0)">100%</button>
+      <button id="btn-zoom-in" class="tb-btn" title="Zoom in (+)">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      </button>
+      <div class="tb-sep"></div>
+      <div id="toolbar-page-nav" style="display:none;">
+        <button id="btn-page-prev" class="tb-btn" title="Previous page (PageUp)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <span id="page-indicator" class="tb-label">1 / 1</span>
+        <button id="btn-page-next" class="tb-btn" title="Next page (PageDown)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
+        <div class="tb-sep"></div>
+      </div>
+      <button id="btn-fullscreen" class="tb-btn" title="Fullscreen (F)">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+      </button>
+    </div>
+
+    <!-- Footer -->
+    <footer id="viewer-footer">
+      <span class="footer-label">Protected by Elacity dDRM</span>
+      <span id="asset-type" class="footer-info"></span>
+    </footer>
+  </div>
+
+  <!-- PDF.js for cleartext PDF rendering -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" defer></script>
+
+  <!-- Three.js r128 + addons (local, bypasses iframe fetch interceptor) -->
+  <script src="lib/three.min.js" defer></script>
+  <script src="lib/OrbitControls.js" defer></script>
+  <script src="lib/GLTFLoader.js" defer></script>
+  <script src="lib/OBJLoader.js" defer></script>
+  <script src="lib/STLLoader.js" defer></script>
+  <script src="lib/fflate.min.js" defer></script>
+  <script src="lib/FBXLoader.js" defer></script>
+  <script src="lib/VertexNormalsHelper.js" defer></script>
+  <script src="lib/jszip.min.js" defer></script>
+
+  <!-- Specialized readers (register on window) -->
+  <script src="reader-epub.js?v=20260421a" defer></script>
+  <script src="reader-cbz.js?v=20260421a" defer></script>
+
+  <!-- Secure-view session (Option C): primitives + manager live in the
+       PARENT frame (pc2-secure-view-session.js + pc2-secure-view.js,
+       loaded by pc2-node/frontend/index.html). The viewer iframe just
+       calls window.ethereum.request({ method: 'pc2_secureView_sign' })
+       and gets back a signed bundle — no wallet UI inside this iframe. -->
+
+  <script src="viewer.js?v=20260421a" defer></script>
+</body>
+</html>

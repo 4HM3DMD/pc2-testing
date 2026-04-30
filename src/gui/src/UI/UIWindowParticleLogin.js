@@ -176,8 +176,8 @@ async function UIWindowParticleLogin(options = {}) {
         // Clean up event listener when window is closed
         $(el_window).on('remove', function() {
             window.removeEventListener('message', messageHandler);
-            // Remove the trouble link when window closes
             $('#wc-trouble-link-container').remove();
+            $('#pc2-system-readiness').remove();
         });
         
         // Add "Having trouble?" link at bottom-left (opposite to "Presented by ElacityLabs")
@@ -209,6 +209,160 @@ async function UIWindowParticleLogin(options = {}) {
             e.stopPropagation();
             showWalletConnectSetupModal(iframe, iframeUrl);
         });
+
+        // System readiness badge — desktop: bottom-left, mobile: top-center below "Presented by"
+        $('#pc2-system-readiness').remove();
+        const readinessBadgeHtml = `
+            <style>
+                #pc2-system-readiness {
+                    position: fixed;
+                    bottom: 38px;
+                    left: 16px;
+                    z-index: 2147483647;
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                }
+                #pc2-readiness-panel {
+                    left: 0;
+                    right: auto;
+                    bottom: 36px;
+                    top: auto;
+                }
+                @media (max-width: 768px) {
+                    #pc2-system-readiness {
+                        bottom: auto;
+                        top: 48px;
+                        left: 50%;
+                        transform: translateX(-50%);
+                    }
+                    #pc2-readiness-panel {
+                        left: 50% !important;
+                        transform: translateX(-50%);
+                        bottom: auto !important;
+                        top: 36px !important;
+                    }
+                }
+            </style>
+            <div id="pc2-system-readiness">
+                <div id="pc2-readiness-badge" style="
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 6px;
+                    padding: 6px 12px;
+                    background: #1c1c1e;
+                    border: 1px solid rgba(255,255,255,0.08);
+                    border-radius: 20px;
+                    cursor: pointer;
+                    transition: all 0.2s;
+                    font-size: 12px;
+                    color: #9ca3af;
+                " onmouseover="this.style.background='#2c2c2e'" onmouseout="this.style.background='#1c1c1e'">
+                    <span id="pc2-readiness-dot" style="
+                        width: 8px;
+                        height: 8px;
+                        border-radius: 50%;
+                        background: #6b7280;
+                        flex-shrink: 0;
+                    "></span>
+                    <span id="pc2-readiness-label">Checking...</span>
+                </div>
+                <div id="pc2-readiness-panel" style="
+                    display: none;
+                    position: absolute;
+                    width: 280px;
+                    background: #1c1c1e;
+                    border: 1px solid rgba(255,255,255,0.08);
+                    border-radius: 16px;
+                    padding: 16px;
+                    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+                ">
+                    <div style="font-size: 13px; font-weight: 600; color: #ffffff; margin-bottom: 12px;">System Status</div>
+                    <div id="pc2-readiness-items" style="display: flex; flex-direction: column; gap: 6px;"></div>
+                    <div id="pc2-readiness-footer" style="
+                        margin-top: 12px;
+                        padding-top: 10px;
+                        border-top: 1px solid rgba(255,255,255,0.06);
+                        font-size: 11px;
+                        color: #8e8e93;
+                    "></div>
+                </div>
+            </div>
+        `;
+        $('body').append(readinessBadgeHtml);
+
+        // Toggle panel on badge click
+        document.getElementById('pc2-readiness-badge').addEventListener('click', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            const panel = document.getElementById('pc2-readiness-panel');
+            panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+        });
+
+        // Close panel when clicking elsewhere
+        document.addEventListener('click', function(e) {
+            const container = document.getElementById('pc2-system-readiness');
+            if (container && !container.contains(e.target)) {
+                const panel = document.getElementById('pc2-readiness-panel');
+                if (panel) panel.style.display = 'none';
+            }
+        });
+
+        // Fetch system readiness
+        (async function checkSystemReadiness() {
+            try {
+                const apiOrigin = window.api_origin || window.location.origin;
+                const resp = await fetch(`${apiOrigin}/api/system-readiness`);
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                const data = await resp.json();
+
+                const dot = document.getElementById('pc2-readiness-dot');
+                const label = document.getElementById('pc2-readiness-label');
+                const items = document.getElementById('pc2-readiness-items');
+                const footer = document.getElementById('pc2-readiness-footer');
+
+                if (!dot || !label || !items || !footer) return;
+
+                const dotColor = data.overall === 'ready' ? '#22c55e'
+                               : data.overall === 'degraded' ? '#f59e0b'
+                               : '#ef4444';
+                dot.style.background = dotColor;
+                label.textContent = `${data.ok}/${data.total} Ready`;
+                label.style.color = data.overall === 'ready' ? '#9ca3af' : '#f59e0b';
+
+                items.innerHTML = data.checks.map(function(c) {
+                    const icon = c.status === 'ok'
+                        ? '<span style="color:#22c55e;font-size:13px;">&#10003;</span>'
+                        : '<span style="color:#f59e0b;font-size:13px;">&#9888;</span>';
+                    const statusBadge = c.status === 'ok'
+                        ? '<span style="font-size:10px;color:#22c55e;background:rgba(34,197,94,0.12);padding:2px 8px;border-radius:10px;">OK</span>'
+                        : '<span style="font-size:10px;color:#f59e0b;background:rgba(245,158,11,0.12);padding:2px 8px;border-radius:10px;">Missing</span>';
+                    return '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:#2c2c2e;border-radius:10px;">'
+                        + '<div style="display:flex;align-items:center;gap:8px;">'
+                        + icon
+                        + '<span style="font-size:12px;color:#ffffff;">' + c.label + '</span>'
+                        + '</div>'
+                        + statusBadge
+                        + '</div>';
+                }).join('');
+
+                const missingCount = data.total - data.ok;
+                if (missingCount > 0) {
+                    footer.textContent = missingCount + ' component' + (missingCount > 1 ? 's' : '') + ' can be installed after login';
+                } else {
+                    footer.textContent = 'All systems operational';
+                    footer.style.color = '#22c55e';
+                }
+
+                // Store readiness data for post-login fix flow
+                window.__pc2SystemReadiness = data;
+
+            } catch (err) {
+                const label = document.getElementById('pc2-readiness-label');
+                if (label) {
+                    label.textContent = 'Status unavailable';
+                    label.style.color = '#6b7280';
+                }
+            }
+        })();
         
         // Function to show the WalletConnect setup modal - using direct DOM overlay for highest z-index
         function showWalletConnectSetupModal(iframe, baseIframeUrl) {
@@ -362,9 +516,15 @@ async function UIWindowParticleLogin(options = {}) {
         
         // Set up message handler function that has access to options and resolve
         async function handleAuthSuccess(authData, container, el_window) {
+            // Persist loginMethod from Particle connector detection
+            if (authData.loginMethod) {
+                localStorage.setItem('pc2_login_method', authData.loginMethod);
+            }
+            
             // If the iframe already called the backend and got a token, use that directly
             if (authData.token && authData.user) {
                 console.log('[Particle Auth]: Using pre-authenticated data from iframe');
+                authData.user.login_method = authData.loginMethod || 'email';
                 await completeAuthentication(authData.token, authData.user, container, el_window);
                 return;
             }
@@ -376,6 +536,7 @@ async function UIWindowParticleLogin(options = {}) {
             const requestPayload = {
                 address: authData.address,
                 chainId: authData.chainId,
+                loginMethod: authData.loginMethod || localStorage.getItem('pc2_login_method') || 'email',
             };
             
             // Include Smart Account address if available (UniversalX)
@@ -461,6 +622,11 @@ async function UIWindowParticleLogin(options = {}) {
         
         // Complete the authentication flow
         async function completeAuthentication(token, user, container, el_window) {
+            // Store login method (email, metamask, walletconnect, etc.)
+            const loginMethod = user.login_method || localStorage.getItem('pc2_login_method') || 'email';
+            user.login_method = loginMethod;
+            localStorage.setItem('pc2_login_method', loginMethod);
+            
             // Update Puter's auth state - MUST await to ensure data is saved before reload
             await window.update_auth_data(token, user);
             
@@ -494,7 +660,7 @@ async function UIWindowParticleLogin(options = {}) {
             
             // Show success notification
             if (typeof UINotification !== 'undefined') {
-                const authType = user.auth_type === 'universalx' ? 'UniversalX Smart Account' : 'wallet';
+                const authType = user.auth_type === 'universalx' ? 'Agent Account' : 'wallet';
                 new UINotification({
                     type: 'success',
                     message: `Successfully logged in with ${authType}`,

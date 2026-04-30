@@ -1809,9 +1809,12 @@ async function UIWindow(options) {
     // --------------------------------------------------------
     if (el_window_head_close_btn) {
         $(el_window_head_close_btn).click(function () {
-            $(el_window).close({
-                shrink_to_target: options.on_close_shrink_to_target
-            });
+            const $w = $(el_window);
+            if (typeof $w.close === 'function') {
+                $w.close({ shrink_to_target: options.on_close_shrink_to_target });
+            } else {
+                el_window.remove();
+            }
         });
     }
 
@@ -2016,7 +2019,7 @@ async function UIWindow(options) {
             stop: function () {
                 window.a_window_is_being_dragged = false;
                 let window_will_snap = false;
-                $( el_window ).draggable( "option", "cursorAt", false );
+                try { $( el_window ).draggable( "option", "cursorAt", false ); } catch (_e) { /* dual-jQuery safe */ }
 
                 $(el_window).removeClass('window-dragging');
                 $(el_window).attr({
@@ -2220,7 +2223,7 @@ async function UIWindow(options) {
                 window.a_window_is_resizing = false;
                 $(el_window_app_iframe).css('pointer-events', 'all');
                 $('.window').css('pointer-events', 'initial');
-                $(el_window_sidebar).resizable("option", "maxWidth", el_window.getBoundingClientRect().width/2);
+                try { $(el_window_sidebar).resizable("option", "maxWidth", el_window.getBoundingClientRect().width/2); } catch (_e) { /* dual-jQuery safe */ }
                 $(el_window).attr({
                     'data-orig-width': $(el_window).width(), 
                     'data-orig-height': $(el_window).height(), 

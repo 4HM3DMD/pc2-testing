@@ -46,6 +46,7 @@ const UIAgentEditor = async function(options = {}) {
             rateLimit: { perMinute: 10, perDay: 100 },
         },
         tetheredChannels: [], // Array of SavedChannel IDs
+        skills: [], // Array of skill IDs
     };
     
     // Fetch existing agent if editing
@@ -77,6 +78,21 @@ const UIAgentEditor = async function(options = {}) {
         }
     } catch (e) {
         console.warn('[AgentEditor] Could not fetch saved channels:', e);
+    }
+    
+    // Fetch available skills
+    let availableSkills = [];
+    try {
+        const skillsResponse = await $.ajax({
+            url: '/api/gateway/skills',
+            method: 'GET',
+            headers: { 'Authorization': `Bearer ${window.auth_token}` }
+        });
+        if (skillsResponse.success && skillsResponse.data) {
+            availableSkills = skillsResponse.data;
+        }
+    } catch (e) {
+        console.warn('[AgentEditor] Could not fetch skills:', e);
     }
     
     // Fetch available AI providers and models
@@ -263,6 +279,31 @@ You are **PC2 Guide**, a knowledgeable assistant for PC2 (Personal Cloud Compute
                         <button type="button" id="clear-memory-btn" style="font-size: 11px; padding: 4px 10px; background: #fff; border: 1px solid #d1d5db; border-radius: 4px; cursor: pointer; color: #dc2626;">Clear Memory</button>
                     </div>
                 </div>
+                
+                <!-- Skills -->
+                ${availableSkills.length > 0 ? `
+                <div class="editor-section" style="margin-bottom: 24px;">
+                    <h3 style="margin: 0 0 12px 0; font-size: 14px; font-weight: 600; color: #374151;">Skills</h3>
+                    <p style="margin: 0 0 8px 0; font-size: 11px; color: #888;">Enable specialized skills to teach your agent new abilities</p>
+                    <div style="background: #f9fafb; border-radius: 8px; padding: 12px; display: grid; gap: 8px;">
+                        ${availableSkills.map(skill => {
+                            const isActive = (agent.skills || []).includes(skill.id);
+                            const missingPerms = (skill.permissions || []).filter(p => !agent.permissions?.[p]);
+                            const warnIcon = missingPerms.length > 0 
+                                ? `<span title="Requires: ${missingPerms.join(', ')}" style="color: #f59e0b; font-size: 14px; margin-left: 4px; cursor: help;">&#9888;</span>` 
+                                : '';
+                            return `
+                            <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
+                                <input type="checkbox" class="skill-checkbox" value="${skill.id}" ${isActive ? 'checked' : ''} style="width: 16px; height: 16px;">
+                                <div style="flex: 1;">
+                                    <div style="font-size: 13px; font-weight: 500;">${skill.name}${warnIcon}</div>
+                                    <div style="font-size: 10px; color: #888;">${skill.description}</div>
+                                </div>
+                            </label>`;
+                        }).join('')}
+                    </div>
+                </div>
+                ` : ''}
                 
                 <!-- Permissions -->
                 <div class="editor-section" style="margin-bottom: 24px;">
@@ -732,6 +773,11 @@ You are **PC2 Guide**, a knowledgeable assistant for PC2 (Personal Cloud Compute
                     
                     const isNewAgent = !agentId || agentId === 'new';
                     const generatedId = isNewAgent ? name.toLowerCase().replace(/[^a-z0-9]/g, '-') : agentId;
+                    // Gather active skills from checkboxes
+                    const activeSkills = $win.find('.skill-checkbox:checked').map(function() {
+                        return $(this).val();
+                    }).get();
+                    
                     const newAgent = {
                         id: generatedId,
                         name,
@@ -764,6 +810,7 @@ You are **PC2 Guide**, a knowledgeable assistant for PC2 (Personal Cloud Compute
                             },
                         },
                         tetheredChannels,
+                        skills: activeSkills,
                     };
                     
                     // Use POST for new agents, PUT for updates

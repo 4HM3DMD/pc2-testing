@@ -220,6 +220,48 @@ function UIItem (options) {
     const el_item_name_editor = document.querySelector(`#item-${item_id} > .item-name-editor`);
     const is_trashed = ($(el_item).attr('data-path') || '').startsWith(`${window.trash_path }/`);
 
+    // For .ddrm capsules the on-disk size is ~1KB (the JSON descriptor).
+    // Users expect to see the *content* size — "Star of Bethlehem.ddrm → 193.5 MB" —
+    // so we asynchronously parse the descriptor and substitute `pinnedSizeBytes`
+    // into the size column. Cached per (path, modified) to avoid re-reading on
+    // every re-render. Falls back silently to the raw descriptor size if the
+    // read fails or the JSON lacks the field.
+    if ( options.name && /\.ddrm(\s*\(\d+\))?$/i.test(options.name) && options.path ) {
+        window.__ddrmContentSizeCache = window.__ddrmContentSizeCache || new Map();
+        const cacheKey = `${options.path}::${modNorm.sec}`;
+        const enrichDdrmSize = async () => {
+            try {
+                let contentSize = window.__ddrmContentSizeCache.get(cacheKey);
+                if ( contentSize === undefined ) {
+                    const apiOrigin = window.api_origin || window.location.origin;
+                    const token = window.auth_token || (typeof puter !== 'undefined' && puter.authToken) || '';
+                    const readRes = await fetch(`${apiOrigin}/read`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+                        },
+                        body: JSON.stringify({ path: options.path }),
+                    });
+                    if ( !readRes.ok ) throw new Error(`Read failed: ${readRes.status}`);
+                    const descriptor = JSON.parse(await readRes.text());
+                    const raw = descriptor && (descriptor.pinnedSizeBytes || descriptor.estimatedSizeBytes || 0);
+                    contentSize = Number(raw) > 0 ? Number(raw) : null;
+                    window.__ddrmContentSizeCache.set(cacheKey, contentSize);
+                }
+                if ( !contentSize ) return;
+                const sizeSpan = el_item.querySelector('.item-attr--size span');
+                if ( sizeSpan && typeof window.byte_format === 'function' ) {
+                    sizeSpan.textContent = window.byte_format(contentSize);
+                }
+                el_item.setAttribute('data-size', String(contentSize));
+            } catch (e) {
+                // Non-fatal — leaves the original descriptor size in place.
+            }
+        };
+        enrichDdrmSize();
+    }
+
     // update parent window's explorer item count if applicable
     if ( options.appendTo !== undefined ) {
         let el_window = options.appendTo;
@@ -1139,12 +1181,28 @@ function UIItem (options) {
                                         window.mutate_user_preferences(window.user_preferences);
                                     }
                                 }
-                                launch_app({
-                                    name: suggested_app.name,
-                                    file_path: $(el_item).attr('data-path'),
-                                    window_title: $(el_item).attr('data-name'),
-                                    file_uid: $(el_item).attr('data-uid'),
-                                });
+                                if (suggested_app.cleartext) {
+                                    const item_path = $(el_item).attr('data-path');
+                                    const readUrl = `${window.api_origin}/read?path=${encodeURIComponent(item_path)}`;
+                                    launch_app({
+                                        name: suggested_app.name,
+                                        window_title: $(el_item).attr('data-name') + ' — ' + suggested_app.title,
+                                        args: {
+                                            cleartext: 'true',
+                                            fileUrl: readUrl,
+                                            mimeType: '',
+                                            title: $(el_item).attr('data-name'),
+                                            thumbnail: '',
+                                        },
+                                    });
+                                } else {
+                                    launch_app({
+                                        name: suggested_app.name,
+                                        file_path: $(el_item).attr('data-path'),
+                                        window_title: $(el_item).attr('data-name'),
+                                        file_uid: $(el_item).attr('data-uid'),
+                                    });
+                                }
                             },
                         });
                     }
@@ -1313,6 +1371,30 @@ function UIItem (options) {
                         }
                     },
                 });
+            }
+            // -------------------------------------------
+            // Mint on Elacity
+            // -------------------------------------------
+            if ( !is_trashed && !is_trash && !options.is_dir ) {
+                const item_name_lc = $(el_item).attr('data-name').toLowerCase();
+                const is_already_protected = item_name_lc.endsWith('.ddrm') || item_name_lc.endsWith('.edrm') || item_name_lc.endsWith('.ddrm.json');
+                if ( !is_already_protected ) {
+                    menu_items.push({
+                        html: 'Mint on Elacity',
+                        onClick: async function () {
+                            launch_app({
+                                name: 'elacity-creator',
+                                window_title: 'Elacity Creator',
+                                args: {
+                                    filePath: options.path,
+                                    fileName: $(el_item).attr('data-name'),
+                                },
+                                file_path: options.path,
+                                file_uid: options.uid,
+                            });
+                        },
+                    });
+                }
             }
             // -------------------------------------------
             // Set as Wallpaper

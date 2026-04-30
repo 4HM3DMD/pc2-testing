@@ -1,0 +1,779 @@
+/**
+ * ContentIndexerService
+ *
+ * Scans Base chain for Elacity content events (ChannelCreated, DigitalAssetRegistered,
+ * AssetCreated) and builds a local content catalog in SQLite. This replaces the
+ * dependency on Elacity's centralized GraphQL API for content discovery.
+ *
+ * Design: versioned contract support — when v3 contracts deploy, add a new entry
+ * to config.content_indexer.contracts and the indexer picks them up automatically.
+ */
+
+import { readFileSync, existsSync } from 'fs';
+import { resolve as pathResolve, dirname } from 'path';
+import { fileURLToPath } from 'url';
+import { createLogger } from '../utils/logger.js';
+import type { Config } from '../config/loader.js';
+import type { DatabaseManager, ContentCatalogItem } from '../storage/database.js';
+import type { IPFSStorage } from '../storage/ipfs.js';
+import { getWASMRuntime } from './wasm/WASMRuntime.js';
+import type WASMRuntime from './wasm/WASMRuntime.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+const MULTICALL_WASM_PATH = pathResolve(__dirname, '../../wasm-apps/evm-multicall/evm-multicall.wasm');
+let cachedMulticallWasm: ArrayBuffer | null = null;
+
+function loadMulticallWasm(): ArrayBuffer {
+  if (cachedMulticallWasm) return cachedMulticallWasm;
+  if (!existsSync(MULTICALL_WASM_PATH)) {
+    throw new Error(`evm-multicall WASM not found: ${MULTICALL_WASM_PATH}`);
+  }
+  cachedMulticallWasm = readFileSync(MULTICALL_WASM_PATH).buffer;
+  return cachedMulticallWasm;
+}
+
+const log = createLogger('content-indexer');
+
+interface IndexerConfig {
+  enabled: boolean;
+  scanIntervalMinutes: number;
+  rpcUrls: string[];
+  maxBlocksPerScan: number;
+  metadataFetchConcurrency: number;
+  metadataGatewayUrls: string[];
+  contracts: Record<string, ContractVersionConfig>;
+}
+
+interface ContractVersionConfig {
+  channelFactory?: string;
+  centralStorage?: string;
+  authorityGateway?: string;
+  eventHub?: string;
+  fromBlock: number;
+}
+
+// Precomputed keccak256 topic hashes for contract events
+const TOPICS = {
+  ChannelCreated: '0x4ae6ef95ddade103ca67593cd4cf68dda177aa1054ad4eeb4963d2c3df44702e',
+  DigitalAssetRegistered: '0x1b24f7763272894608506beba5887c374d345cd231bf52bd03f40bc2d0508d7b',
+  AssetCreated: '0xc0a995e4052be044599af577ab2f3382d67bd34df95a76226e7c464e9d4dba46',
+} as const;
+
+const TOKEN_URI_SELECTOR = '0xc87b56dd';
+
+function toHex(n: number): string {
+  return '0x' + n.toString(16);
+}
+
+function fromHex(hex: string): number {
+  return parseInt(hex, 16);
+}
+
+function padAddress(hex: string): string {
+  const clean = hex.toLowerCase().replace('0x', '');
+  return '0x' + clean.padStart(64, '0');
+}
+
+function unpadAddress(hex: string): string {
+  return '0x' + hex.slice(-40);
+}
+
+function padUint256(n: number): string {
+  return '0x' + n.toString(16).padStart(64, '0');
+}
+
+function decodeAbiString(hex: string): string {
+  const clean = hex.replace('0x', '');
+  if (clean.length < 128) return '';
+  const offset = fromHex(clean.slice(0, 64));
+  const dataStart = offset * 2;
+  if (dataStart + 64 > clean.length) return '';
+  const length = fromHex(clean.slice(dataStart, dataStart + 64));
+  const strHex = clean.slice(dataStart + 64, dataStart + 64 + length * 2);
+  const bytes = new Uint8Array(strHex.match(/.{2}/g)!.map(b => parseInt(b, 16)));
+  return new TextDecoder().decode(bytes);
+}
+
+function classifyAssetType(mimeType: string | null | undefined): string {
+  if (!mimeType) return 'unknown';
+  if (mimeType.startsWith('image/')) return 'image';
+  if (mimeType.startsWith('video/')) return 'video';
+  if (mimeType.startsWith('audio/')) return 'audio';
+  if (mimeType.startsWith('text/')) return 'text';
+  if (mimeType === 'application/pdf') return 'document';
+  if (['application/javascript', 'application/json', 'application/xml', 'application/x-yaml', 'application/toml', 'application/x-sh'].includes(mimeType)) return 'code';
+  if (mimeType.includes('model') || mimeType.includes('gguf') || mimeType.includes('safetensors') || mimeType.includes('onnx')) return 'ai-model';
+  if (mimeType.includes('font')) return 'font';
+  if (mimeType.includes('gltf') || mimeType.includes('fbx') || mimeType.includes('obj')) return '3d';
+  if (mimeType.includes('csv') || mimeType.includes('parquet') || mimeType.includes('jsonl')) return 'dataset';
+  return 'other';
+}
+
+export class ContentIndexerService {
+  private db: DatabaseManager | null = null;
+  private ipfs: IPFSStorage | null = null;
+  private wasmRuntime: WASMRuntime | null = null;
+  private config: IndexerConfig;
+  private scanTimer: ReturnType<typeof setInterval> | null = null;
+  private isScanning = false;
+  private currentRpcIndex = 0;
+
+  constructor(rawConfig: Config) {
+    const c = rawConfig.content_indexer ?? {};
+    const sharedRpcUrls = rawConfig.blockchain?.rpc_urls;
+    this.config = {
+      enabled: c.enabled ?? true,
+      scanIntervalMinutes: c.scan_interval_minutes ?? 30,
+      rpcUrls: c.rpc_urls ?? sharedRpcUrls ?? ['https://mainnet.base.org'],
+      maxBlocksPerScan: c.max_blocks_per_scan ?? 10000,
+      metadataFetchConcurrency: c.metadata_fetch_concurrency ?? 3,
+      metadataGatewayUrls: c.metadata_gateway_urls ?? ['https://ipfs.ela.city/ipfs/', 'https://dweb.link/ipfs/'],
+      contracts: {},
+    };
+
+    if (c.contracts) {
+      for (const [version, cfg] of Object.entries(c.contracts)) {
+        this.config.contracts[version] = {
+          channelFactory: cfg.channel_factory ?? cfg.channel_core,
+          centralStorage: cfg.central_storage ?? cfg.core_storage,
+          authorityGateway: cfg.authority_gateway,
+          eventHub: cfg.event_hub,
+          fromBlock: cfg.from_block ?? 0,
+        };
+      }
+    }
+  }
+
+  initialize(db: DatabaseManager, ipfs?: IPFSStorage | null): void {
+    this.db = db;
+    this.ipfs = ipfs ?? null;
+
+    try {
+      this.wasmRuntime = getWASMRuntime();
+      loadMulticallWasm();
+      log.info('WASM ABI decoder loaded (evm-multicall)');
+    } catch (error: any) {
+      log.warn(`WASM ABI decoder not available, using JS fallback: ${error.message}`);
+    }
+
+    if (!this.config.enabled) {
+      log.info('Content indexer disabled in config');
+      return;
+    }
+
+    if (Object.keys(this.config.contracts).length === 0) {
+      log.warn('No contracts configured for content indexer');
+      return;
+    }
+
+    log.info(`Content indexer initialized (scan every ${this.config.scanIntervalMinutes}m, ${Object.keys(this.config.contracts).length} contract version(s))`);
+
+    setTimeout(() => this.runScanCycle(), 5000);
+
+    this.scanTimer = setInterval(
+      () => this.runScanCycle(),
+      this.config.scanIntervalMinutes * 60 * 1000
+    );
+  }
+
+  shutdown(): void {
+    if (this.scanTimer) {
+      clearInterval(this.scanTimer);
+      this.scanTimer = null;
+    }
+    log.info('Content indexer shut down');
+  }
+
+  getStats(): { enabled: boolean; config: IndexerConfig; scanning: boolean } {
+    return { enabled: this.config.enabled, config: this.config, scanning: this.isScanning };
+  }
+
+  /**
+   * Run a scan cycle immediately (out-of-band). Called by API after user actions
+   * (channel creation, mint) so users don't wait up to scanIntervalMinutes to see
+   * their own content. Safe to call repeatedly — isScanning guard prevents overlap.
+   */
+  async triggerScan(): Promise<{ started: boolean; reason?: string }> {
+    if (!this.config.enabled) return { started: false, reason: 'indexer_disabled' };
+    if (this.isScanning) return { started: false, reason: 'already_scanning' };
+    // Fire-and-forget so HTTP caller gets a fast response
+    this.runScanCycle().catch(err => log.error(`Triggered scan failed: ${err.message}`));
+    return { started: true };
+  }
+
+  // ── RPC helpers ────────────────────────────────────────────
+
+  private getRpcUrl(): string {
+    return this.config.rpcUrls[this.currentRpcIndex % this.config.rpcUrls.length];
+  }
+
+  private rotateRpc(): void {
+    this.currentRpcIndex = (this.currentRpcIndex + 1) % this.config.rpcUrls.length;
+    log.debug(`Rotated to RPC: ${this.getRpcUrl()}`);
+  }
+
+  private async rpcCall(method: string, params: any[]): Promise<any> {
+    const maxAttempts = this.config.rpcUrls.length;
+    let lastError: Error | null = null;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      try {
+        const response = await fetch(this.getRpcUrl(), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+          signal: AbortSignal.timeout(30000),
+        });
+
+        if (!response.ok) {
+          throw new Error(`RPC HTTP ${response.status}`);
+        }
+
+        const json = await response.json() as any;
+        if (json.error) {
+          throw new Error(`RPC error: ${json.error.message || JSON.stringify(json.error)}`);
+        }
+
+        return json.result;
+      } catch (error: any) {
+        lastError = error;
+        log.debug(`RPC call failed on ${this.getRpcUrl()}: ${error.message}`);
+        this.rotateRpc();
+      }
+    }
+
+    throw lastError || new Error('All RPC endpoints failed');
+  }
+
+  private async getLatestBlock(): Promise<number> {
+    const result = await this.rpcCall('eth_blockNumber', []);
+    return fromHex(result);
+  }
+
+  private async getLogs(address: string | string[], topics: (string | null)[], fromBlock: number, toBlock: number): Promise<any[]> {
+    return this.rpcCall('eth_getLogs', [{
+      address,
+      topics,
+      fromBlock: toHex(fromBlock),
+      toBlock: toHex(toBlock),
+    }]);
+  }
+
+  private async ethCall(to: string, data: string): Promise<string> {
+    return this.rpcCall('eth_call', [{ to, data }, 'latest']);
+  }
+
+  // ── WASM ABI decoder ─────────────────────────────────────────
+
+  private async abiDecode(dataHex: string, types: string[]): Promise<string[] | null> {
+    if (!this.wasmRuntime || !cachedMulticallWasm) return null;
+
+    try {
+      const command = JSON.stringify({ mode: 'abi_decode', data: dataHex, types });
+      const result = await this.wasmRuntime.executeMulticall(cachedMulticallWasm, command, { timeoutMs: 5000 });
+      if (result.success && result.values) {
+        return result.values;
+      }
+      log.debug(`WASM abi_decode failed: ${result.error}`);
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  // ── Scan cycle ─────────────────────────────────────────────
+
+  private async runScanCycle(): Promise<void> {
+    if (this.isScanning || !this.db) return;
+    this.isScanning = true;
+
+    try {
+      const latestBlock = await this.getLatestBlock();
+      log.info(`Starting scan cycle (latest block: ${latestBlock})`);
+
+      for (const [version, contractCfg] of Object.entries(this.config.contracts)) {
+        await this.scanContractVersion(version, contractCfg, latestBlock);
+      }
+
+      await this.resolveMetadata();
+
+      const stats = this.db.getCatalogStats();
+      log.info(`Scan cycle complete — catalog: ${stats.total} total, ${stats.resolved} resolved, ${stats.pending} pending`);
+    } catch (error: any) {
+      log.error(`Scan cycle failed: ${error.message}`);
+    } finally {
+      this.isScanning = false;
+    }
+  }
+
+  /**
+   * One-shot historical backfill for ChannelCreated events. Existing installs
+   * running before Migration 28 only indexed channels implicitly via asset events,
+   * leaving channel_metadata without creator_address. This scans the factory once
+   * to retroactively populate those rows so the Creator app sees old channels.
+   */
+  private async backfillChannelsIfNeeded(version: string, cfg: ContractVersionConfig, latestBlock: number): Promise<void> {
+    if (!this.db || !cfg.channelFactory) return;
+
+    const backfillKey = `indexer_channels_backfilled_${version}`;
+    if (this.db.getSetting(backfillKey) === '1') return;
+
+    log.info(`[${version}] Running one-time ChannelCreated backfill from block ${cfg.fromBlock}…`);
+
+    let totalChannels = 0;
+    for (let from = cfg.fromBlock; from <= latestBlock; from += this.config.maxBlocksPerScan) {
+      const to = Math.min(from + this.config.maxBlocksPerScan - 1, latestBlock);
+      totalChannels += await this.scanChannelCreated(cfg.channelFactory, version, from, to);
+    }
+
+    this.db.setSetting(backfillKey, '1');
+    log.info(`[${version}] Backfill complete — indexed ${totalChannels} channel(s)`);
+  }
+
+  private async scanContractVersion(version: string, cfg: ContractVersionConfig, latestBlock: number): Promise<void> {
+    if (!this.db) return;
+
+    // One-time backfill so pre-existing installs pick up all historical channels
+    await this.backfillChannelsIfNeeded(version, cfg, latestBlock);
+
+    const settingKey = `indexer_last_block_${version}`;
+    const lastScanned = parseInt(this.db.getSetting(settingKey) || '0', 10);
+    const startBlock = Math.max(lastScanned + 1, cfg.fromBlock);
+
+    if (startBlock > latestBlock) {
+      log.debug(`[${version}] Already up to date (block ${lastScanned})`);
+      return;
+    }
+
+    const totalBlocks = latestBlock - startBlock;
+    log.info(`[${version}] Scanning blocks ${startBlock} → ${latestBlock} (${totalBlocks} blocks)`);
+
+    let scannedTo = startBlock - 1;
+    let newAssets = 0;
+    let newChannels = 0;
+
+    for (let from = startBlock; from <= latestBlock; from += this.config.maxBlocksPerScan) {
+      const to = Math.min(from + this.config.maxBlocksPerScan - 1, latestBlock);
+
+      // Scan factory for new channels FIRST so they exist before any asset events
+      // reference them. Critical for the Creator app UX (channels must be visible
+      // immediately after creation, not only after first mint).
+      if (cfg.channelFactory) {
+        newChannels += await this.scanChannelCreated(cfg.channelFactory, version, from, to);
+      }
+
+      const eventSource = cfg.eventHub ?? cfg.centralStorage;
+      if (eventSource) {
+        const countLegacy = await this.scanDigitalAssetRegistered(eventSource, version, from, to);
+        const countV3 = await this.scanAssetCreated(eventSource, version, from, to);
+        newAssets += countLegacy + countV3;
+      }
+
+      scannedTo = to;
+
+      if (totalBlocks > this.config.maxBlocksPerScan) {
+        const progress = ((to - startBlock) / totalBlocks * 100).toFixed(1);
+        log.debug(`[${version}] Progress: ${progress}% (block ${to})`);
+      }
+    }
+
+    this.db.setSetting(settingKey, String(scannedTo));
+
+    if (newChannels > 0 || newAssets > 0) {
+      log.info(`[${version}] Indexed ${newChannels} new channel(s), ${newAssets} new asset(s) up to block ${scannedTo}`);
+    }
+  }
+
+  /**
+   * Scan V3 Channel Factory for ChannelCreated events.
+   *
+   * ChannelCreated(uint8 indexed channelType, uint8 indexed scope,
+   *                address indexed creator, address channel, address factoryAddr)
+   *
+   *   topics[0] = event sig
+   *   topics[1] = channelType (indexed)
+   *   topics[2] = scope (indexed)
+   *   topics[3] = creator (indexed)
+   *   data = abi.encode(address channel, address factoryAddr)
+   *
+   * We do NOT fetch on-chain name() here (keeps scan fast at scale). Names are
+   * resolved lazily by the API endpoint and cached — so even with 1M channels
+   * the scan stays O(blocks) not O(channels * RPC calls).
+   */
+  private async scanChannelCreated(factoryAddress: string, version: string, fromBlock: number, toBlock: number): Promise<number> {
+    if (!this.db) return 0;
+
+    const logs = await this.getLogs(
+      factoryAddress,
+      [TOPICS.ChannelCreated],
+      fromBlock,
+      toBlock
+    );
+
+    let count = 0;
+
+    for (const entry of logs) {
+      try {
+        if (!entry.topics || entry.topics.length < 4) continue;
+
+        const creatorAddress = unpadAddress(entry.topics[3]);
+        const blockNumber = fromHex(entry.blockNumber);
+
+        // Non-indexed params: address channel, address factoryAddr
+        const dataHex = entry.data ?? '0x';
+        const data = dataHex.replace('0x', '');
+        if (data.length < 64) continue;
+        const channelAddress = unpadAddress('0x' + data.slice(0, 64));
+
+        this.db.upsertChannelFromFactory({
+          address: channelAddress,
+          creator_address: creatorAddress,
+          contract_version: version,
+          block_number: blockNumber,
+          tx_hash: entry.transactionHash || null,
+        });
+
+        count++;
+      } catch (error: any) {
+        log.debug(`Failed to parse ChannelCreated: ${error.message}`);
+      }
+    }
+
+    return count;
+  }
+
+  private async scanDigitalAssetRegistered(eventSourceAddress: string, version: string, fromBlock: number, toBlock: number): Promise<number> {
+    if (!this.db) return 0;
+
+    const logs = await this.getLogs(
+      eventSourceAddress,
+      [TOPICS.DigitalAssetRegistered],
+      fromBlock,
+      toBlock
+    );
+
+    let count = 0;
+
+    for (const entry of logs) {
+      try {
+        // DigitalAssetRegistered(address indexed channel, uint256 indexed tokenId,
+        //   address creator, string tokenURI, uint16 opType, bytes16 contentId)
+        const channelAddress = unpadAddress(entry.topics[1]);
+        const tokenIdHex = entry.topics[2]; // keep as hex — uint256 overflows JS numbers
+        const blockNumber = fromHex(entry.blockNumber);
+
+        // Non-indexed params in data: creator (address), tokenURI (string), opType (uint16), contentId (bytes16)
+        const data = entry.data?.replace('0x', '') ?? '';
+        const creatorAddress = data.length >= 64 ? unpadAddress('0x' + data.slice(0, 64)) : '';
+
+        if (this.db.catalogItemExists(channelAddress, tokenIdHex, 8453)) {
+          continue;
+        }
+
+        const item: ContentCatalogItem = {
+          content_id: null,
+          channel_address: channelAddress,
+          token_id: tokenIdHex,
+          operative_address: '',
+          creator_address: creatorAddress,
+          name: null,
+          description: null,
+          image_url: null,
+          content_cid: null,
+          metadata_cid: null,
+          mime_type: null,
+          asset_type: null,
+          price: null,
+          payment_token: null,
+          op_type: null,
+          chain_id: 8453,
+          block_number: blockNumber,
+          tx_hash: entry.transactionHash || null,
+          contract_version: version,
+          metadata_status: 'pending',
+          indexed_at: Date.now(),
+          metadata_json: null,
+        };
+
+        this.db.upsertCatalogItem(item);
+        count++;
+      } catch (error: any) {
+        log.debug(`Failed to parse event: ${error.message}`);
+      }
+    }
+
+    return count;
+  }
+
+  /**
+   * Scan V3 EventHub AssetCreated events.
+   *
+   * AssetCreated(address indexed _to, address indexed _channel, uint256 _tokenId,
+   *              string _tokenUri, uint16 _opType, address indexed opContract)
+   *
+   *   topics[0] = event sig, topics[1] = _to (creator), topics[2] = _channel, topics[3] = opContract
+   *   data = abi.encode(uint256 _tokenId, string _tokenUri, uint16 _opType)
+   */
+  private async scanAssetCreated(eventSourceAddress: string, version: string, fromBlock: number, toBlock: number): Promise<number> {
+    if (!this.db) return 0;
+
+    const logs = await this.getLogs(
+      eventSourceAddress,
+      [TOPICS.AssetCreated],
+      fromBlock,
+      toBlock
+    );
+
+    let count = 0;
+
+    for (const entry of logs) {
+      try {
+        const creatorAddress = unpadAddress(entry.topics[1]);
+        const channelAddress = unpadAddress(entry.topics[2]);
+        const operativeAddress = unpadAddress(entry.topics[3]);
+        const blockNumber = fromHex(entry.blockNumber);
+
+        const dataHex = entry.data ?? '0x';
+        const data = dataHex.replace('0x', '');
+        if (data.length < 128) continue;
+
+        // V3 token IDs are full 256-bit hashes — store as hex to avoid JS number overflow
+        const tokenIdHex = '0x' + data.slice(0, 64);
+
+        if (this.db.catalogItemExists(channelAddress, tokenIdHex, 8453)) {
+          continue;
+        }
+
+        // Try WASM ABI decode to extract tokenUri directly from event data
+        // data = abi.encode(uint256 _tokenId, string _tokenUri, uint16 _opType)
+        let eventTokenUri: string | null = null;
+        let eventOpType: number | null = null;
+        const decoded = await this.abiDecode(dataHex, ['uint256', 'string', 'uint16']);
+        if (decoded && decoded.length === 3) {
+          eventTokenUri = decoded[1] || null;
+          eventOpType = parseInt(decoded[2], 10) || null;
+        }
+
+        const metadataCid = eventTokenUri ? this.extractCid(eventTokenUri) : null;
+
+        const item: ContentCatalogItem = {
+          content_id: null,
+          channel_address: channelAddress,
+          token_id: tokenIdHex,
+          operative_address: operativeAddress,
+          creator_address: creatorAddress,
+          name: null,
+          description: null,
+          image_url: null,
+          content_cid: null,
+          metadata_cid: metadataCid,
+          mime_type: null,
+          asset_type: null,
+          price: null,
+          payment_token: null,
+          op_type: eventOpType,
+          chain_id: 8453,
+          block_number: blockNumber,
+          tx_hash: entry.transactionHash || null,
+          contract_version: version,
+          metadata_status: 'pending',
+          indexed_at: Date.now(),
+          metadata_json: null,
+        };
+
+        this.db.upsertCatalogItem(item);
+        count++;
+      } catch (error: any) {
+        log.debug(`Failed to parse AssetCreated event: ${error.message}`);
+      }
+    }
+
+    return count;
+  }
+
+  // ── Metadata resolution ────────────────────────────────────
+
+  private async resolveMetadata(): Promise<void> {
+    if (!this.db) return;
+
+    const pending = this.db.getCatalogItemsPendingMetadata(this.config.metadataFetchConcurrency * 10);
+    if (pending.length === 0) return;
+
+    log.info(`Resolving metadata for ${pending.length} asset(s)...`);
+
+    const chunks = [];
+    for (let i = 0; i < pending.length; i += this.config.metadataFetchConcurrency) {
+      chunks.push(pending.slice(i, i + this.config.metadataFetchConcurrency));
+    }
+
+    let resolved = 0;
+    let failed = 0;
+
+    for (const chunk of chunks) {
+      const results = await Promise.allSettled(
+        chunk.map(item => this.resolveItemMetadata(item))
+      );
+
+      for (const result of results) {
+        if (result.status === 'fulfilled' && result.value) {
+          resolved++;
+        } else {
+          failed++;
+        }
+      }
+    }
+
+    if (resolved > 0 || failed > 0) {
+      log.info(`Metadata resolution: ${resolved} resolved, ${failed} failed`);
+    }
+  }
+
+  private async resolveItemMetadata(item: ContentCatalogItem): Promise<boolean> {
+    if (!this.db) return false;
+
+    try {
+      let tokenURI: string | null = null;
+
+      // If metadata_cid was extracted from event data, build the URI directly
+      if (item.metadata_cid) {
+        tokenURI = `ipfs://${item.metadata_cid}`;
+      }
+
+      // Otherwise, fetch tokenURI from the channel contract
+      if (!tokenURI) {
+        const tokenIdPadded = item.token_id.replace('0x', '').padStart(64, '0');
+        const callData = TOKEN_URI_SELECTOR + tokenIdPadded;
+        const uriResult = await this.ethCall(item.channel_address, callData);
+
+        if (!uriResult || uriResult === '0x') {
+          this.db.updateCatalogMetadata(item.channel_address, item.token_id, item.chain_id, { metadata_status: 'failed' });
+          return false;
+        }
+
+        // Try WASM decoder first, fall back to JS
+        const decoded = await this.abiDecode(uriResult, ['string']);
+        tokenURI = decoded?.[0] ?? decodeAbiString(uriResult);
+      }
+
+      if (!tokenURI) {
+        this.db.updateCatalogMetadata(item.channel_address, item.token_id, item.chain_id, { metadata_status: 'failed' });
+        return false;
+      }
+
+      // Step 2: Extract CID from tokenURI and fetch metadata
+      const metadataCid = item.metadata_cid ?? this.extractCid(tokenURI);
+      const metadata = await this.fetchMetadata(tokenURI);
+
+      if (!metadata) {
+        this.db.updateCatalogMetadata(item.channel_address, item.token_id, item.chain_id, {
+          metadata_cid: metadataCid,
+          metadata_status: 'failed',
+        });
+        return false;
+      }
+
+      // Step 3: Parse metadata and update catalog
+      const contentCid = metadata.media?.uri
+        ? this.extractCid(metadata.media.uri)
+        : null;
+      const mimeType = metadata.media?.contentType || null;
+      const kid = metadata.kid || metadata.properties?.kid || null;
+      const creator = metadata.properties?.publisher || item.creator_address;
+
+      this.db.updateCatalogMetadata(item.channel_address, item.token_id, item.chain_id, {
+        content_id: kid,
+        name: metadata.name || null,
+        description: metadata.description || null,
+        image_url: metadata.image || null,
+        content_cid: contentCid,
+        metadata_cid: metadataCid,
+        mime_type: mimeType,
+        asset_type: classifyAssetType(mimeType),
+        creator_address: creator,
+        metadata_status: 'resolved',
+        metadata_json: JSON.stringify(metadata),
+      });
+
+      return true;
+    } catch (error: any) {
+      log.debug(`Metadata resolution failed for ${item.channel_address}:${item.token_id}: ${error.message}`);
+      this.db?.updateCatalogMetadata(item.channel_address, item.token_id, item.chain_id, {
+        metadata_status: 'failed',
+      });
+      return false;
+    }
+  }
+
+  private extractCid(uri: string): string | null {
+    if (uri.startsWith('ipfs://')) {
+      return uri.replace('ipfs://', '').split('/')[0];
+    }
+    const ipfsMatch = uri.match(/\/ipfs\/([a-zA-Z0-9]+)/);
+    if (ipfsMatch) return ipfsMatch[1];
+    if (uri.startsWith('Qm') || uri.startsWith('bafy')) return uri.split('/')[0];
+    return null;
+  }
+
+  private async fetchMetadata(tokenURI: string): Promise<any | null> {
+    const cid = this.extractCid(tokenURI);
+
+    // Try local IPFS first
+    if (cid && this.ipfs) {
+      try {
+        const buf = await this.ipfs.getFile(cid);
+        if (buf && buf.length > 0) {
+          return JSON.parse(buf.toString('utf8'));
+        }
+      } catch {
+        // Local IPFS didn't have it, fall through to gateways
+      }
+    }
+
+    // Try HTTP gateways
+    const urls: string[] = [];
+
+    if (tokenURI.startsWith('http://') || tokenURI.startsWith('https://')) {
+      urls.push(tokenURI);
+    }
+
+    if (cid) {
+      for (const gateway of this.config.metadataGatewayUrls) {
+        // Legacy format: the metadata CID points directly at a JSON file.
+        urls.push(`${gateway}${cid}`);
+        // Current Elacity Creator (from 2026-04-17) uploads metadata as a
+        // UnixFS directory containing metadata.json, content.json, etc.
+        // Fetching the bare CID returns an HTML directory index from most
+        // gateways, which breaks JSON.parse. Try the path-scoped URL second.
+        urls.push(`${gateway}${cid}/metadata.json`);
+      }
+    }
+
+    for (const url of urls) {
+      try {
+        const response = await fetch(url, {
+          signal: AbortSignal.timeout(15000),
+          headers: { 'Accept': 'application/json' },
+        });
+
+        if (!response.ok) continue;
+
+        // Guard against gateways that return HTTP 200 + HTML for directory CIDs
+        // (IPFS directory index pages). Parse via text() so a non-JSON body
+        // doesn't throw — we just skip to the next candidate URL.
+        const body = await response.text();
+        if (body.trimStart().startsWith('<')) continue;
+        try {
+          return JSON.parse(body);
+        } catch {
+          continue;
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    return null;
+  }
+}

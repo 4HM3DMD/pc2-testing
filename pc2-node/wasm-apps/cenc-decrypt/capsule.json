@@ -1,0 +1,19 @@
+{
+  "name": "cenc-decrypt",
+  "version": "1.0.0",
+  "description": "AES-128-CTR CENC decryption for fMP4/DASH media segments",
+  "target": "wasm32-wasip1",
+  "binary": "cenc-decrypt.wasm",
+  "sha256": null,
+  "capabilities": ["drm:decrypt"],
+  "provider_operations": ["drm:decrypt-media"],
+  "memfs": {
+    "input": ["/input/command.json", "/input/segment.bin", "/input/init.bin"],
+    "output": ["/output/result.json", "/output/segment.bin"]
+  },
+  "runtime_compatibility": {
+    "wasi_preview": 1,
+    "entry": "_start",
+    "capsule_type": "wasm"
+  }
+}

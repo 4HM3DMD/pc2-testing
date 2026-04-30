@@ -1,0 +1,142 @@
+{
+  "name": "Glide",
+  "timestamp": "2022-11-11T00:00:00Z",
+  "version": {
+    "major": 1,
+    "minor": 0,
+    "patch": 0
+  },
+  "tags": {},
+  "logoURI": "https://glidefinance.io/images/tokens/0xd39eC832FF1CaaFAb2729c76dDeac967ABcA8F27.png",
+  "keywords": ["glide", "default"],
+  "tokens": [
+    {
+      "name": "Wrapped Elastos",
+      "symbol": "WELA",
+      "address": "0x517E9e5d46C1EA8aB6f78677d6114Ef47F71f6c4",
+      "chainId": 20,
+      "decimals": 18,
+      "logoURI": "https://glidefinance.io/images/tokens/0x517E9e5d46C1EA8aB6f78677d6114Ef47F71f6c4.png"
+    },
+    {
+      "name": "Glide",
+      "symbol": "GLIDE",
+      "address": "0xd39eC832FF1CaaFAb2729c76dDeac967ABcA8F27",
+      "chainId": 20,
+      "decimals": 18,
+      "logoURI": "https://glidefinance.io/images/tokens/0xd39eC832FF1CaaFAb2729c76dDeac967ABcA8F27.png"
+    },
+    {
+      "name": "Glide Staked ELA",
+      "symbol": "stELA",
+      "address": "0xef366607eAFb7E2323F5817fFc1af1C3E2deDED6",
+      "chainId": 20,
+      "decimals": 18,
+      "logoURI": "https://glidefinance.io/images/tokens/0xef366607eAFb7E2323F5817fFc1af1C3E2deDED6.png"
+    },
+    {
+      "name": "USDC on Elastos",
+      "symbol": "USDC",
+      "address": "0xA06be0F5950781cE28D965E5EFc6996e88a8C141",
+      "chainId": 20,
+      "decimals": 6,
+      "logoURI": "https://glidefinance.io/images/tokens/0xA06be0F5950781cE28D965E5EFc6996e88a8C141.png"
+    },
+    {
+      "name": "ETH on Elastos",
+      "symbol": "ETH",
+      "address": "0x802c3e839E4fDb10aF583E3E759239ec7703501e",
+      "chainId": 20,
+      "decimals": 18,
+      "logoURI": "https://glidefinance.io/images/tokens/0x802c3e839E4fDb10aF583E3E759239ec7703501e.png"
+    },
+    {
+      "name": "BNB on Elastos",
+      "symbol": "BNB",
+      "address": "0x51B85F3889c7EA8f6d5EdEBFBadaDA0fDcE236c9",
+      "chainId": 20,
+      "decimals": 18,
+      "logoURI": "https://glidefinance.io/images/tokens/0x51B85F3889c7EA8f6d5EdEBFBadaDA0fDcE236c9.png"
+    },
+    {
+      "name": "BUSD on Elastos",
+      "symbol": "BUSD",
+      "address": "0x9f1d0Ed4E041C503BD487E5dc9FC935Ab57F9a57",
+      "chainId": 20,
+      "decimals": 18,
+      "logoURI": "https://glidefinance.io/images/tokens/0x9f1d0Ed4E041C503BD487E5dc9FC935Ab57F9a57.png"
+    },
+    {
+      "name": "BTCB on Elastos",
+      "symbol": "BTCB",
+      "address": "0xDF4191Bfe8FAE019fD6aF9433E8ED6bfC4B90CA1",
+      "chainId": 20,
+      "decimals": 18,
+      "logoURI": "https://glidefinance.io/images/tokens/0xDF4191Bfe8FAE019fD6aF9433E8ED6bfC4B90CA1.png"
+    },
+    {
+      "name": "HT on Elastos",
+      "symbol": "HT",
+      "address": "0xeceefC50f9aAcF0795586Ed90a8b9E24f55Ce3F3",
+      "chainId": 20,
+      "decimals": 18,
+      "logoURI": "https://glidefinance.io/images/tokens/0xeceefC50f9aAcF0795586Ed90a8b9E24f55Ce3F3.png"
+    },
+    {
+      "name": "HUSD on Elastos",
+      "symbol": "HUSD",
+      "address": "0xF9Ca2eA3b1024c0DB31adB224B407441bECC18BB",
+      "chainId": 20,
+      "decimals": 8,
+      "logoURI": "https://glidefinance.io/images/tokens/0xF9Ca2eA3b1024c0DB31adB224B407441bECC18BB.png"
+    },
+    {
+      "name": "Material on Elastos",
+      "symbol": "MTRL",
+      "address": "0xe2390b8B08a9Ab68e6f1aaA150B2ddD03900CE25",
+      "chainId": 20,
+      "decimals": 18,
+      "logoURI": "https://glidefinance.io/images/tokens/0xe2390b8B08a9Ab68e6f1aaA150B2ddD03900CE25.png"
+    },
+    {
+      "name": "Elk",
+      "symbol": "ELK",
+      "address": "0xeEeEEb57642040bE42185f49C52F7E9B38f8eeeE",
+      "chainId": 20,
+      "decimals": 18,
+      "logoURI": "https://glidefinance.io/images/tokens/0xeEeEEb57642040bE42185f49C52F7E9B38f8eeeE.png"
+    },
+    {
+      "name": "FilDA on ESC",
+      "symbol": "FILDA",
+      "address": "0x00E71352c91Ff5B820ab4dF08bb47653Db4e32C0",
+      "chainId": 20,
+      "decimals": 18,
+      "logoURI": "https://glidefinance.io/images/tokens/0x00E71352c91Ff5B820ab4dF08bb47653Db4e32C0.png"
+    },
+    {
+      "name": "CreDA Protocol Token",
+      "symbol": "CREDA",
+      "address": "0xc136E6B376a9946B156db1ED3A34b08AFdAeD76d",
+      "chainId": 20,
+      "decimals": 18,
+      "logoURI": "https://glidefinance.io/images/tokens/0xc136E6B376a9946B156db1ED3A34b08AFdAeD76d.png"
+    },
+    {
+      "name": "Bunny",
+      "symbol": "BUNNY",
+      "address": "0x75740FC7058DA148752ef8a9AdFb73966DEb42a8",
+      "chainId": 20,
+      "decimals": 18,
+      "logoURI": "https://glidefinance.io/images/tokens/0x75740FC7058DA148752ef8a9AdFb73966DEb42a8.png"
+    },
+    {
+      "name": "Elastos Gold",
+      "symbol": "GOLD",
+      "address": "0xaA9691BcE68ee83De7B518DfCBBfb62C04B1C0BA",
+      "chainId": 20,
+      "decimals": 18,
+      "logoURI": "https://glidefinance.io/images/tokens/0xaA9691BcE68ee83De7B518DfCBBfb62C04B1C0BA.png"
+    }
+  ]
+}

@@ -31,7 +31,7 @@ function findSchemaFile(): string {
   }
   throw new Error(`Schema file not found. Tried: ${SCHEMA_FILE} and ${sourceSchema}`);
 }
-const CURRENT_VERSION = 15;
+const CURRENT_VERSION = 31;
 
 interface Migration {
   version: number;
@@ -640,6 +640,514 @@ export function runMigrations(db: Database.Database): void {
       }
     }
     
+    // Migration 16: Installed apps table for dApp Store
+    if (currentVersion < 16) {
+      try {
+        log.info('📦 Running Migration 16: Installed apps table...');
+        
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS installed_apps (
+            app_name TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            version TEXT NOT NULL DEFAULT '1.0.0',
+            cid TEXT NOT NULL,
+            size INTEGER DEFAULT 0,
+            icon TEXT,
+            description TEXT,
+            author TEXT,
+            permissions_json TEXT DEFAULT '[]',
+            requirements_json TEXT DEFAULT '{}',
+            manifest_json TEXT NOT NULL DEFAULT '{}',
+            installed_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+          )
+        `);
+        
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_installed_apps_cid
+          ON installed_apps(cid)
+        `);
+        
+        log.info('✅ Migration 16 complete: Installed apps table created');
+        recordMigration(db, 16);
+      } catch (error: any) {
+        log.error(`❌ Migration 16 error: ${error.message}`);
+        throw error;
+      }
+    }
+
+    if (currentVersion < 17) {
+      try {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS pinned_cids (
+            cid TEXT NOT NULL,
+            wallet_address TEXT NOT NULL,
+            source TEXT NOT NULL DEFAULT 'marketplace',
+            size INTEGER NOT NULL DEFAULT 0,
+            pinned_at INTEGER NOT NULL,
+            last_announced_at INTEGER,
+            PRIMARY KEY (cid, wallet_address)
+          )
+        `);
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_pinned_cids_wallet
+          ON pinned_cids(wallet_address)
+        `);
+        log.info('✅ Migration 17 complete: Pinned CIDs table created');
+        recordMigration(db, 17);
+      } catch (error: any) {
+        log.error(`❌ Migration 17 error: ${error.message}`);
+        throw error;
+      }
+    }
+
+    // Migration 18: Content seeding — add serve tracking + pin status to pinned_cids
+    if (currentVersion < 18) {
+      try {
+        log.info('📦 Running Migration 18: Content seeding columns...');
+
+        try {
+          db.exec('ALTER TABLE pinned_cids ADD COLUMN last_served_at INTEGER');
+        } catch { /* column may already exist */ }
+
+        try {
+          db.exec('ALTER TABLE pinned_cids ADD COLUMN serve_count INTEGER NOT NULL DEFAULT 0');
+        } catch { /* column may already exist */ }
+
+        try {
+          db.exec("ALTER TABLE pinned_cids ADD COLUMN pin_status TEXT NOT NULL DEFAULT 'complete'");
+        } catch { /* column may already exist */ }
+
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_pinned_cids_status
+          ON pinned_cids(pin_status)
+        `);
+
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_pinned_cids_served
+          ON pinned_cids(last_served_at)
+        `);
+
+        log.info('✅ Migration 18 complete: Content seeding columns added');
+        recordMigration(db, 18);
+      } catch (error: any) {
+        log.error(`❌ Migration 18 error: ${error.message}`);
+        throw error;
+      }
+    }
+
+    // Migration 19: Content catalog table for on-chain content indexer
+    if (currentVersion < 19) {
+      try {
+        log.info('📦 Running Migration 19: Content catalog table...');
+
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS content_catalog (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            content_id TEXT,
+            channel_address TEXT NOT NULL,
+            token_id INTEGER NOT NULL,
+            operative_address TEXT,
+            creator_address TEXT NOT NULL,
+            name TEXT,
+            description TEXT,
+            image_url TEXT,
+            content_cid TEXT,
+            metadata_cid TEXT,
+            mime_type TEXT,
+            asset_type TEXT,
+            price TEXT,
+            payment_token TEXT,
+            op_type INTEGER,
+            chain_id INTEGER NOT NULL DEFAULT 8453,
+            block_number INTEGER NOT NULL,
+            tx_hash TEXT,
+            contract_version TEXT NOT NULL DEFAULT 'v2',
+            metadata_status TEXT NOT NULL DEFAULT 'pending',
+            indexed_at INTEGER NOT NULL,
+            metadata_json TEXT,
+            UNIQUE(channel_address, token_id, chain_id)
+          )
+        `);
+
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_content_catalog_creator ON content_catalog(creator_address)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_content_catalog_type ON content_catalog(asset_type)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_content_catalog_content_id ON content_catalog(content_id)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_content_catalog_channel ON content_catalog(channel_address)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_content_catalog_status ON content_catalog(metadata_status)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_content_catalog_block ON content_catalog(block_number)`);
+
+        log.info('✅ Migration 19 complete: Content catalog table created');
+        recordMigration(db, 19);
+      } catch (error: any) {
+        log.error(`❌ Migration 19 error: ${error.message}`);
+        throw error;
+      }
+    }
+
+    // Migration 20: Content hashes table for perceptual fingerprinting + duplicate detection
+    if (currentVersion < 20) {
+      try {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS content_hashes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            phash TEXT NOT NULL,
+            algorithm TEXT NOT NULL DEFAULT 'phash',
+            token_id TEXT,
+            channel TEXT,
+            creator TEXT,
+            content_type TEXT,
+            metadata_cid TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            source TEXT NOT NULL DEFAULT 'local'
+          )
+        `);
+
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_content_hashes_phash ON content_hashes(phash)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_content_hashes_creator ON content_hashes(creator)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_content_hashes_token ON content_hashes(token_id)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_content_hashes_source ON content_hashes(source)`);
+
+        log.info('✅ Migration 20 complete: Content hashes table created');
+        recordMigration(db, 20);
+      } catch (error: any) {
+        log.error(`❌ Migration 20 error: ${error.message}`);
+        throw error;
+      }
+    }
+
+    if (currentVersion < 21) {
+      try {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS publish_drafts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            wallet_address TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'ready',
+            title TEXT NOT NULL,
+            description TEXT,
+            category TEXT,
+            file_name TEXT,
+            file_size INTEGER,
+            mime_type TEXT,
+            asset_cid TEXT NOT NULL,
+            metadata_cid TEXT NOT NULL,
+            encrypt_hash TEXT NOT NULL,
+            channel TEXT NOT NULL,
+            price TEXT,
+            currency_address TEXT,
+            currency_symbol TEXT,
+            copies INTEGER DEFAULT 1,
+            access_method TEXT DEFAULT 'buy_once',
+            reseller_cut INTEGER DEFAULT 0,
+            royalty_partners TEXT,
+            thumbnail_cid TEXT,
+            adult INTEGER DEFAULT 0,
+            steps TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+          )
+        `);
+
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_drafts_wallet ON publish_drafts(wallet_address)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_drafts_status ON publish_drafts(status)`);
+
+        log.info('✅ Migration 21 complete: Publish drafts table created');
+        recordMigration(db, 21);
+      } catch (error: any) {
+        log.error(`❌ Migration 21 error: ${error.message}`);
+        throw error;
+      }
+    }
+
+    // Migration 22: Agent audit log table for AI action tracking
+    if (currentVersion < 22) {
+      try {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS agent_audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL DEFAULT (datetime('now')),
+            agent_id TEXT NOT NULL,
+            action TEXT NOT NULL,
+            detail TEXT,
+            source TEXT,
+            session_key TEXT
+          )
+        `);
+
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_audit_agent_ts ON agent_audit_log(agent_id, timestamp)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_audit_action ON agent_audit_log(action)`);
+
+        log.info('✅ Migration 22 complete: Agent audit log table created');
+        recordMigration(db, 22);
+      } catch (error: any) {
+        log.error(`❌ Migration 22 error: ${error.message}`);
+        throw error;
+      }
+    }
+
+    // Migration 23: Installed skills table for purchased skill ownership tracking
+    if (currentVersion < 23) {
+      try {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS installed_skills (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            wallet_address TEXT NOT NULL,
+            skill_id TEXT NOT NULL,
+            kid TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            name TEXT,
+            description TEXT,
+            authority TEXT,
+            chain_id INTEGER DEFAULT 8453,
+            installed_at TEXT DEFAULT (datetime('now')),
+            last_verified TEXT DEFAULT (datetime('now')),
+            UNIQUE(wallet_address, skill_id)
+          )
+        `);
+
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_installed_skills_wallet ON installed_skills(wallet_address)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_installed_skills_kid ON installed_skills(kid)`);
+
+        log.info('✅ Migration 23 complete: Installed skills table created');
+        recordMigration(db, 23);
+      } catch (error: any) {
+        log.error(`❌ Migration 23 error: ${error.message}`);
+        throw error;
+      }
+    }
+
+    // Migration 24: Recreate content_catalog with token_id as TEXT (V3 uint256 token IDs overflow JS numbers)
+    if (currentVersion < 24) {
+      try {
+        log.info('📦 Running Migration 24: Recreate content_catalog with TEXT token_id...');
+
+        db.exec(`DROP TABLE IF EXISTS content_catalog`);
+
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS content_catalog (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            content_id TEXT,
+            channel_address TEXT NOT NULL,
+            token_id TEXT NOT NULL,
+            operative_address TEXT,
+            creator_address TEXT NOT NULL,
+            name TEXT,
+            description TEXT,
+            image_url TEXT,
+            content_cid TEXT,
+            metadata_cid TEXT,
+            mime_type TEXT,
+            asset_type TEXT,
+            price TEXT,
+            payment_token TEXT,
+            op_type INTEGER,
+            chain_id INTEGER NOT NULL DEFAULT 8453,
+            block_number INTEGER NOT NULL,
+            tx_hash TEXT,
+            contract_version TEXT NOT NULL DEFAULT 'v2',
+            metadata_status TEXT NOT NULL DEFAULT 'pending',
+            indexed_at INTEGER NOT NULL,
+            metadata_json TEXT,
+            UNIQUE(channel_address, token_id, chain_id)
+          )
+        `);
+
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_content_catalog_creator ON content_catalog(creator_address)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_content_catalog_type ON content_catalog(asset_type)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_content_catalog_content_id ON content_catalog(content_id)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_content_catalog_channel ON content_catalog(channel_address)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_content_catalog_status ON content_catalog(metadata_status)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_content_catalog_block ON content_catalog(block_number)`);
+
+        // Reset indexer progress so it re-scans from configured from_block
+        db.exec(`DELETE FROM settings WHERE key LIKE 'indexer_last_block_%'`);
+
+        log.info('✅ Migration 24 complete: content_catalog recreated with TEXT token_id, indexer progress reset');
+        recordMigration(db, 24);
+      } catch (error: any) {
+        log.error(`❌ Migration 24 error: ${error.message}`);
+        throw error;
+      }
+    }
+
+    // Migration 25: Channel metadata overrides (V3 channels have no backend-stored metadata)
+    if (currentVersion < 25) {
+      try {
+        log.info('📦 Running Migration 25: Channel metadata table...');
+
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS channel_metadata (
+            address TEXT PRIMARY KEY NOT NULL,
+            name TEXT,
+            description TEXT,
+            categories TEXT,
+            image TEXT,
+            cover_image TEXT,
+            updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+            updated_by TEXT
+          )
+        `);
+
+        log.info('✅ Migration 25 complete: channel_metadata table created');
+        recordMigration(db, 25);
+      } catch (error: any) {
+        log.error(`❌ Migration 25 error: ${error.message}`);
+        throw error;
+      }
+    }
+
+    // Migration 26: Add plans and token_access columns to channel_metadata
+    if (currentVersion < 26) {
+      try {
+        log.info('📦 Running Migration 26: Add plans/token_access to channel_metadata...');
+
+        const cols = db.prepare(`PRAGMA table_info(channel_metadata)`).all() as any[];
+        const colNames = cols.map((c: any) => c.name);
+
+        if (!colNames.includes('plans')) {
+          db.exec(`ALTER TABLE channel_metadata ADD COLUMN plans TEXT`);
+        }
+        if (!colNames.includes('token_access')) {
+          db.exec(`ALTER TABLE channel_metadata ADD COLUMN token_access TEXT`);
+        }
+
+        log.info('✅ Migration 26 complete: plans/token_access columns added');
+        recordMigration(db, 26);
+      } catch (error: any) {
+        log.error(`❌ Migration 26 error: ${error.message}`);
+        throw error;
+      }
+    }
+
+    // Migration 27: Create nft_pins table for NFT IPFS pinning
+    if (currentVersion < 27) {
+      try {
+        log.info('📦 Running Migration 27: Create nft_pins table...');
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS nft_pins (
+            cid TEXT NOT NULL,
+            wallet_address TEXT NOT NULL,
+            contract_address TEXT NOT NULL,
+            token_id TEXT NOT NULL,
+            name TEXT,
+            collection_name TEXT,
+            mime_type TEXT,
+            file_path TEXT,
+            pin_status TEXT NOT NULL DEFAULT 'queued',
+            pinned_at INTEGER NOT NULL,
+            PRIMARY KEY (cid, wallet_address)
+          )
+        `);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_nft_pins_wallet ON nft_pins(wallet_address)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_nft_pins_contract ON nft_pins(contract_address, token_id)`);
+        log.info('✅ Migration 27 complete: nft_pins table created');
+        recordMigration(db, 27);
+      } catch (error: any) {
+        log.error(`❌ Migration 27 error: ${error.message}`);
+        throw error;
+      }
+    }
+
+    // Migration 28: extend channel_metadata so channels discovered via ChannelCreated
+    // (not yet having any minted assets) can be indexed and listed. This is critical
+    // for the Creator app UX — users must see their channel immediately after creation.
+    if (currentVersion < 28) {
+      try {
+        log.info('📦 Running Migration 28: Extend channel_metadata for factory-indexed channels...');
+        // SQLite ALTER TABLE ADD COLUMN is idempotent via try/catch
+        const addCol = (sql: string) => {
+          try { db.exec(sql); } catch (e: any) {
+            if (!String(e?.message || '').includes('duplicate column')) throw e;
+          }
+        };
+        addCol(`ALTER TABLE channel_metadata ADD COLUMN creator_address TEXT`);
+        addCol(`ALTER TABLE channel_metadata ADD COLUMN contract_version TEXT`);
+        addCol(`ALTER TABLE channel_metadata ADD COLUMN block_number INTEGER`);
+        addCol(`ALTER TABLE channel_metadata ADD COLUMN tx_hash TEXT`);
+        addCol(`ALTER TABLE channel_metadata ADD COLUMN indexed_at INTEGER`);
+        addCol(`ALTER TABLE channel_metadata ADD COLUMN plans TEXT`);
+        addCol(`ALTER TABLE channel_metadata ADD COLUMN token_access TEXT`);
+
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_channel_metadata_creator ON channel_metadata(creator_address)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_channel_metadata_block ON channel_metadata(block_number)`);
+
+        log.info('✅ Migration 28 complete: channel_metadata extended');
+        recordMigration(db, 28);
+      } catch (error: any) {
+        log.error(`❌ Migration 28 error: ${error.message}`);
+        throw error;
+      }
+    }
+
+    // Migration 29 (SEC-3c, 2026-04 audit): add scope/scope_data columns to
+    // sessions so /open_item can mint scoped, file-bound iframe-app tokens
+    // instead of the previous insecure mock-token-* pattern. Existing
+    // sessions remain unrestricted (NULL scope is the legacy contract).
+    if (currentVersion < 29) {
+      try {
+        log.info('📦 Running Migration 29: Add scope/scope_data to sessions (SEC-3c)...');
+        const cols = db.prepare(`PRAGMA table_info(sessions)`).all() as any[];
+        const colNames = cols.map((c: any) => c.name);
+        if (!colNames.includes('scope')) {
+          db.exec(`ALTER TABLE sessions ADD COLUMN scope TEXT`);
+        }
+        if (!colNames.includes('scope_data')) {
+          db.exec(`ALTER TABLE sessions ADD COLUMN scope_data TEXT`);
+        }
+        log.info('✅ Migration 29 complete: sessions.scope/scope_data columns added');
+        recordMigration(db, 29);
+      } catch (error: any) {
+        log.error(`❌ Migration 29 error: ${error.message}`);
+        throw error;
+      }
+    }
+
+    if (currentVersion < 30) {
+      try {
+        log.info('📦 Running Migration 30: Create telemetry_onramp table (A5 §P0 funnel)...');
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS telemetry_onramp (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event TEXT NOT NULL,
+            ts INTEGER NOT NULL,
+            install_id TEXT NOT NULL
+          )
+        `);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_telemetry_onramp_event ON telemetry_onramp(event)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_telemetry_onramp_install ON telemetry_onramp(install_id)`);
+        log.info('✅ Migration 30 complete: telemetry_onramp table + indexes created');
+        recordMigration(db, 30);
+      } catch (error: any) {
+        log.error(`❌ Migration 30 error: ${error.message}`);
+        throw error;
+      }
+    }
+
+    // Migration 31: bytes_downloaded column on pinned_cids. Drives the
+    // real-time download progress bar in the Elacity Market app. Seeded
+    // from the existing `size` column for already-complete pins so retro
+    // rows still show 100% instead of 0%.
+    if (currentVersion < 31) {
+      try {
+        log.info('📦 Running Migration 31: Add bytes_downloaded to pinned_cids...');
+        try {
+          db.exec('ALTER TABLE pinned_cids ADD COLUMN bytes_downloaded INTEGER NOT NULL DEFAULT 0');
+        } catch (e: any) {
+          if (!String(e?.message || '').includes('duplicate column')) throw e;
+        }
+        db.exec(`
+          UPDATE pinned_cids
+          SET bytes_downloaded = size
+          WHERE pin_status = 'complete' AND bytes_downloaded = 0
+        `);
+        log.info('✅ Migration 31 complete: bytes_downloaded column added');
+        recordMigration(db, 31);
+      } catch (error: any) {
+        log.error(`❌ Migration 31 error: ${error.message}`);
+        throw error;
+      }
+    }
+
     log.info('✅ Migrations completed');
   } else if (currentVersion === CURRENT_VERSION) {
     // Even if migration version is current, check if FTS5 table exists

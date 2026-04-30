@@ -18,14 +18,6 @@
  */
 
 import { createLogger } from '../helpers/logger.js';
-import { 
-    getEthereumProvider, 
-    hasEthereumProvider,
-    switchToElastos,
-    sendTransaction as sendEthTransaction,
-    estimateGas,
-    ELASTOS_CHAIN_CONFIG 
-} from '../helpers/ethereum-provider.js';
 import { CHAIN_INFO } from '../helpers/particle-constants.js';
 
 // Import type definitions for JSDoc
@@ -37,6 +29,15 @@ import { CHAIN_INFO } from '../helpers/particle-constants.js';
 /** @typedef {import('../types/wallet.js').SendTransactionParams} SendTransactionParams */
 
 const logger = createLogger('WalletService');
+
+// Read-only methods that can be routed directly to chain RPC
+// Defined at module level to avoid static class field transpilation issues
+const DIRECT_RPC_METHODS = [
+    'eth_estimateGas', 'eth_call', 'eth_getBalance', 'eth_getCode',
+    'eth_getTransactionCount', 'eth_getBlockByNumber', 'eth_blockNumber',
+    'eth_gasPrice', 'eth_getTransactionReceipt', 'eth_getTransactionByHash',
+    'eth_getLogs', 'eth_getBlockByHash', 'net_version',
+];
 
 /**
  * WalletService - Manages wallet data communication with Particle Network
@@ -61,9 +62,9 @@ class WalletService {
         this.EOA_RPC_URLS = {
             // Elastos Ecosystem (grouped first)
             20: [
+                '/api/rpc/esc',
                 'https://api.elastos.io/eth',
-                'https://api.ela.city/esc',
-                'https://escrpc.elaphant.app',
+                'https://rpc.glidefinance.io',
             ],
             22: [
                 'https://api.elastos.io/eid',
@@ -443,7 +444,7 @@ class WalletService {
      * @param {number} timeout - Request timeout in ms (default 5000)
      * @returns {Promise<Object>} RPC response
      */
-    async rpcCallWithFallback(chainId, payload, timeout = 5000) {
+    async rpcCallWithFallback(chainId, payload, timeout = 10000) {
         const urls = this.EOA_RPC_URLS[chainId];
         if (!urls) throw new Error(`No RPC URLs configured for chain ${chainId}`);
         
@@ -468,18 +469,10 @@ class WalletService {
                     throw new Error(`HTTP ${response.status}`);
                 }
                 
-                const data = await response.json();
-                
-                // Check for RPC-level errors
-                if (data.error) {
-                    throw new Error(data.error.message || 'RPC error');
-                }
-                
-                return data;
+                return await response.json();
             } catch (error) {
                 lastError = error;
                 logger.warn(`RPC failed for ${rpcUrl}:`, error.message);
-                // Try next RPC
             }
         }
         
@@ -720,6 +713,37 @@ class WalletService {
                     logger.log('Received estimate-swap-result message:', payload);
                     this._handleGenericResult(payload, requestId);
                     break;
+                case 'particle-wallet.eth-send-transaction-result':
+                    logger.log('Received eth-send-transaction-result:', payload?.txHash);
+                    this._handleGenericResult(payload || {}, requestId);
+                    break;
+                case 'particle-wallet.execute-universal-batch-result':
+                    logger.log('Received execute-universal-batch-result:', payload?.transactionId);
+                    this._handleGenericResult(payload || {}, requestId);
+                    break;
+                case 'particle-wallet.eoa-send-result':
+                    logger.log('Received eoa-send-result:', payload?.txHash);
+                    this._handleGenericResult(payload || {}, requestId);
+                    break;
+                case 'particle-wallet.create-transfer-result':
+                    logger.log('Received create-transfer-result:', payload?.rootHash);
+                    this._handleGenericResult(payload || {}, requestId);
+                    break;
+                case 'particle-wallet.execute-universal-batch-create-result':
+                    logger.log('Received batch-create-result:', payload?.rootHash);
+                    this._handleGenericResult(payload || {}, requestId);
+                    break;
+                case 'particle-wallet.execute-universal-batch-submit-result':
+                    logger.log('Received batch-submit-result:', payload?.transactionId);
+                    this._handleGenericResult(payload || {}, requestId);
+                    break;
+                case 'particle-wallet.rpc-result':
+                    logger.log('Received rpc-result:', payload?.result);
+                    this._handleGenericResult(payload || {}, requestId);
+                    break;
+                case 'particle-wallet.diagnostic':
+                    console.log('%c[UA DIAGNOSTIC]', 'color: #ff6600; font-weight: bold; font-size: 14px', payload);
+                    break;
                 case 'particle-wallet.swap-result':
                     logger.log('Received swap-result message:', payload);
                     this._handleSwapResult(payload, requestId);
@@ -955,6 +979,90 @@ class WalletService {
         this._notifyListeners();
     }
     
+    /** Hidden style for particle-auth iframe (default state) */
+    static get PARTICLE_IFRAME_HIDDEN_STYLE() {
+        return 'position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;border:none;visibility:hidden;';
+    }
+
+    /**
+     * Send raw txParams to particle-auth iframe for eth_sendTransaction (e.g. Elacity buy).
+     * Uses only the Particle iframe so the transaction is executed by the smart account (EOA signs there).
+     * Iframe stays hidden so MetaMask popup is not covered.
+     * @param {Object} txParams - { to, data, value?, gas?, from? }
+     * @returns {Promise<string>} Transaction hash
+     */
+    async sendTransactionViaParticleIframe(txParams) {
+        console.log('[PC2 Wallet] sendTransactionViaParticleIframe called');
+
+        // MetaMask doesn't inject into hidden iframes, so for external wallet
+        // users we sign directly with MetaMask in the parent frame.
+        const provider = window.ethereum;
+        if (!provider || provider.isPC2WalletBridge) {
+            throw new Error('External wallet (MetaMask) not available. Please ensure your wallet extension is enabled.');
+        }
+
+        try {
+            const fromAddress = txParams.from || window.user?.wallet_address;
+            const fullTxParams = { ...txParams, from: fromAddress };
+            console.log('[PC2 Wallet] Sending tx via MetaMask in parent frame:', fullTxParams);
+            const txHash = await provider.request({
+                method: 'eth_sendTransaction',
+                params: [fullTxParams],
+            });
+            console.log('[PC2 Wallet] tx success:', txHash);
+            return txHash;
+        } catch (e) {
+            console.log('[PC2 Wallet] sendTransactionViaParticleIframe error:', e?.message);
+            throw e;
+        }
+    }
+
+    /**
+     * Execute a batch of contract calls from the smart account (one UserOp, one signature).
+     * For external wallet users (MetaMask): 3-phase flow — create in iframe, sign with
+     * MetaMask in parent frame, submit in iframe. MetaMask doesn't inject into hidden
+     * iframes so signing must happen in the parent frame.
+     * @param {number} chainId - Chain ID (e.g. 8453 for Base)
+     * @param {Array<{ to: string, data: string, value?: string }>} transactions - Array of tx params
+     * @returns {Promise<{ transactionId?: string, transactionHash?: string }>}
+     */
+    async sendSmartAccountBatch(chainId, transactions, expectTokens) {
+        logger.log('Smart Account batch (external wallet) — Phase 1: creating batch');
+        const createResult = await this._sendToIframe('particle-wallet.execute-universal-batch-create', {
+            chainId, transactions, expectTokens: expectTokens || [],
+        });
+
+        const { rootHash, transactionData, eoaAddress } = createResult;
+        if (!rootHash || !transactionData) {
+            throw new Error('Failed to create batch transaction');
+        }
+
+        logger.log('Smart Account batch (external wallet) — Phase 2: signing rootHash with MetaMask');
+        const provider = window.ethereum;
+        if (!provider) {
+            throw new Error('External wallet (MetaMask) not available for signing. Please ensure your wallet extension is enabled and refresh the page.');
+        }
+
+        const signature = await provider.request({
+            method: 'personal_sign',
+            params: [rootHash, eoaAddress],
+        });
+
+        if (!signature || signature === 'pending') {
+            throw new Error('Signing was not completed');
+        }
+
+        logger.log('Smart Account batch (external wallet) — Phase 3: submitting signed batch');
+        const submitResult = await this._sendToIframe('particle-wallet.execute-universal-batch-submit', {
+            transactionData, signature,
+        });
+
+        return {
+            transactionId: submitResult?.transactionId,
+            transactionHash: submitResult?.transactionHash,
+        };
+    }
+
     /**
      * Handle generic result responses (like estimate-swap-result)
      */
@@ -1018,6 +1126,7 @@ class WalletService {
         // Create a hidden iframe for wallet operations
         iframe = document.createElement('iframe');
         iframe.id = 'particle-wallet-iframe';
+        iframe.setAttribute('allowtransparency', 'true');
         
         // Pass user addresses via URL params so iframe can initialize UniversalAccount
         // without needing to restore the ConnectKit session
@@ -1032,20 +1141,28 @@ class WalletService {
         });
         
         iframe.src = `/particle-auth?${params.toString()}`;
-        iframe.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;border:none;visibility:hidden;';
+        iframe.style.cssText = WalletService.PARTICLE_IFRAME_HIDDEN_STYLE;
         document.body.appendChild(iframe);
         
-        // Mark that we need to wait for iframe to load
+        // Prefer particle-wallet.ready; fallback: consider ready 8s after onload so we don't wait forever
+        // if the iframe never sends ready (e.g. connector not restored in wallet mode).
         this._iframeReady = false;
         iframe.onload = () => {
-            this._iframeReady = true;
+            logger.log('Particle iframe loaded, waiting for particle-wallet.ready (or 8s fallback)...');
+            setTimeout(() => {
+                if (!this._iframeReady) {
+                    logger.log('Particle iframe 8s fallback: marking ready');
+                    this._iframeReady = true;
+                }
+            }, 8000);
         };
         
         return iframe;
     }
     
     /**
-     * Send a request to the particle-auth iframe
+     * Send a request to the particle-auth data iframe (hidden, no UI).
+     * For signing operations, use routeRpcToParticle() which opens UIWindowParticleSigning.
      */
     _sendToIframe(type, data = {}) {
         const requestId = ++this.requestId;
@@ -1056,17 +1173,23 @@ class WalletService {
             return Promise.reject(new Error('Wallet not connected'));
         }
         
+        const isTransactionType = type && (
+            String(type).includes('transaction') ||
+            String(type).includes('send') ||
+            String(type).includes('execute-universal-batch')
+        );
+        const timeoutMs = isTransactionType ? 120000 : 30000;
+        
         return new Promise((resolve, reject) => {
-            // Set timeout for request
             const timeoutId = setTimeout(() => {
                 this.pendingRequests.delete(requestId);
                 reject(new Error('Request timeout'));
-            }, 30000);
+            }, timeoutMs);
             
             this.pendingRequests.set(requestId, {
-                resolve: (data) => {
+                resolve: (resolvedData) => {
                     clearTimeout(timeoutId);
-                    resolve(data);
+                    resolve(resolvedData);
                 },
                 reject: (error) => {
                     clearTimeout(timeoutId);
@@ -1074,10 +1197,12 @@ class WalletService {
                 },
             });
             
-            // Wait for iframe to be ready before sending message
             const sendMessage = () => {
                 if (iframe.contentWindow) {
                     logger.log('Sending message to iframe:', type);
+                    if (type === 'particle-wallet.eth-send-transaction') {
+                        console.log('[PC2 Wallet] posting eth-send-transaction to particle iframe now');
+                    }
                     iframe.contentWindow.postMessage({
                         type,
                         requestId,
@@ -1090,12 +1215,14 @@ class WalletService {
                 }
             };
             
-            // If iframe not ready, wait for ready signal or timeout
+            // If iframe not ready, wait for particle-wallet.ready (set by messageHandler) or timeout
             if (!this._iframeReady) {
-                logger.log('Waiting for iframe to be ready...');
-                // Poll for ready state
+                logger.log('Waiting for iframe to be ready (particle-wallet.ready)...');
+                if (type === 'particle-wallet.eth-send-transaction') {
+                    console.log('[PC2 Wallet] particle iframe not ready yet, waiting up to 30s...');
+                }
                 let attempts = 0;
-                const maxAttempts = 30; // 15 seconds max
+                const maxAttempts = 60; // 30 seconds — iframe needs time to init React + UniversalAccount
                 const checkReady = setInterval(() => {
                     attempts++;
                     if (this._iframeReady) {
@@ -1235,6 +1362,90 @@ class WalletService {
     }
     
     /**
+     * Signing methods that need the visible popup (Particle shows confirmation UI).
+     */
+    static SIGNING_METHODS = [
+        'eth_sendTransaction', 'personal_sign',
+        'eth_signTypedData', 'eth_signTypedData_v3', 'eth_signTypedData_v4',
+        'eth_sign',
+    ];
+    
+    /**
+     * Route an EIP-1193 RPC call to Particle's embedded signer.
+     * Signing methods open UIWindowParticleSigning (visible popup).
+     * Read-only methods route directly to chain RPC when available.
+     * All other methods go through the hidden data iframe.
+     */
+    async routeRpcToParticle(method, params) {
+        // Fast path: return accounts/chainId without iframe
+        if (method === 'eth_accounts' || method === 'eth_requestAccounts') {
+            return [window.user?.wallet_address].filter(Boolean);
+        }
+        if (method === 'eth_chainId') {
+            return '0x' + (this.selectedEOAChainId || 20).toString(16);
+        }
+
+        // Handle chain switching: update local state and return success
+        if (method === 'wallet_switchEthereumChain') {
+            const requested = params?.[0]?.chainId;
+            if (requested) {
+                const newChainId = parseInt(requested, 16);
+                if (this.EOA_RPC_URLS[newChainId]) {
+                    this.selectedEOAChainId = newChainId;
+                    logger.log('[WalletService] Chain switched via bridge to', newChainId);
+                    return null;
+                }
+            }
+            // Fall through to Particle for unsupported chains
+        }
+
+        // Signing methods: open dedicated UIWindow with signing iframe
+        if (WalletService.SIGNING_METHODS.includes(method)) {
+            const { default: UIWindowParticleSigning, removeStaleOverlays } = await import('../UI/UIWindowParticleSigning.js');
+            try {
+                return await UIWindowParticleSigning({ method, params });
+            } finally {
+                removeStaleOverlays();
+            }
+        }
+        
+        // Read-only RPC methods: route directly to chain RPC endpoint
+        // Particle's iframe doesn't reliably handle these for all chains (e.g. ESC)
+        const chainId = this.selectedEOAChainId || 20;
+        if (DIRECT_RPC_METHODS.includes(method) && this.EOA_RPC_URLS[chainId]) {
+            console.log('[WalletService] Direct RPC →', method, 'chain:', chainId);
+            try {
+                const rpcResult = await this.rpcCallWithFallback(chainId, {
+                    jsonrpc: '2.0',
+                    method,
+                    params: params || [],
+                    id: Date.now(),
+                });
+                // RPC-level error (e.g. execution reverted) — return it directly
+                // Do NOT fall through to Particle which doesn't support ESC
+                if (rpcResult.error) {
+                    console.warn('[WalletService] Direct RPC error for', method, ':', rpcResult.error);
+                    const rpcError = new Error(rpcResult.error.message || 'RPC error');
+                    rpcError.code = rpcResult.error.code || -32603;
+                    rpcError.data = rpcResult.error.data;
+                    throw rpcError;
+                }
+                console.log('[WalletService] Direct RPC ✓', method);
+                return rpcResult.result;
+            } catch (directErr) {
+                // If this was an RPC-level error (has .code), propagate it directly
+                if (directErr.code) throw directErr;
+                // Network/timeout error — try Particle as fallback
+                logger.warn('[WalletService] Direct RPC network error for', method, '- falling back to Particle iframe:', directErr.message);
+            }
+        }
+
+        // All other RPC (or network fallback): forward to data iframe
+        const result = await this._sendToIframe('particle-wallet.rpc', { method, params });
+        return result?.result;
+    }
+    
+    /**
      * Initialize wallet connection (create iframe if user is logged in)
      * Call this early in app initialization if user has a wallet
      */
@@ -1247,6 +1458,9 @@ class WalletService {
             // Load tethered DID from backend (for page reloads)
             this.loadTetheredDID().catch(() => {});
         }
+        
+        // Register global RPC router for pc2-wallet-bridge.js
+        window.pc2RouteRpcToParticle = (method, params) => this.routeRpcToParticle(method, params);
     }
     
     /**
@@ -2075,15 +2289,25 @@ class WalletService {
         const walletMode = mode || this.walletMode;
         
         // ============================================
-        // ELASTOS EOA MODE: Use window.ethereum directly (MetaMask)
-        // NOT through Particle iframe!
+        // EOA MODE: Use window.ethereum directly (MetaMask)
+        // Supports any EVM chain, not just Elastos
         // ============================================
-        if (walletMode === 'elastos' && chainId === 20) {
-            logger.log('Using Elastos EOA mode - direct MetaMask transaction');
-            return this._sendElastosEOATransaction({ to, amount, tokenAddress, decimals });
+        const chainInfo = CHAIN_INFO[chainId];
+        if (walletMode === 'elastos' && chainInfo?.chainType === 'evm') {
+            logger.log('Using EOA mode - direct MetaMask transaction on chain:', chainId);
+            return this._sendEOATransaction({ to, amount, tokenAddress, decimals, chainId });
         }
         
-        // Universal Account mode: Use Particle iframe
+        // Universal Account mode
+        const loginMethod = window.user?.login_method || localStorage.getItem('pc2_login_method') || '';
+        const EXTERNAL_METHODS = ['metamask', 'walletconnect', 'coinbase'];
+        const isEmbedded = !EXTERNAL_METHODS.includes(loginMethod);
+        
+        if (isEmbedded) {
+            return this._sendSmartWalletEmbedded({ to, amount, tokenAddress, chainId, decimals });
+        }
+        
+        // External wallet: signing happens natively in MetaMask/etc — use existing single-step path
         return this._sendToIframe('particle-wallet.send', {
             from: this.getAddress(),
             to,
@@ -2096,95 +2320,193 @@ class WalletService {
     }
     
     /**
-     * Send transaction via Elastos EOA using ethereum provider (MetaMask)
-     * This bypasses Particle entirely and uses the user's external wallet
+     * Smart Wallet send for embedded (email/social) logins.
+     * 3-phase: create transfer → sign with popup → submit
+     */
+    async _sendSmartWalletEmbedded({ to, amount, tokenAddress, chainId, decimals = 18 }) {
+        // Phase 1: Create the transfer transaction (hidden iframe, no UI)
+        logger.log('Smart Wallet embedded send — Phase 1: creating transfer');
+        const createResult = await this._sendToIframe('particle-wallet.create-transfer', {
+            to, amount, tokenAddress, chainId, decimals,
+        });
+        
+        const { rootHash, transactionData, eoaAddress } = createResult;
+        if (!rootHash || !transactionData) {
+            throw new Error('Failed to create transfer transaction');
+        }
+        
+        logger.log('Smart Wallet embedded send — Phase 2: signing rootHash via popup');
+        
+        // Phase 2: Sign the rootHash with the visible signing popup
+        const { default: UIWindowParticleSigning } = await import('../UI/UIWindowParticleSigning.js');
+        
+        const signature = await UIWindowParticleSigning({
+            method: 'personal_sign',
+            params: [rootHash, eoaAddress],
+        });
+        
+        if (!signature || signature === 'pending') {
+            throw new Error('Signing was not completed');
+        }
+        
+        logger.log('Smart Wallet embedded send — Phase 3: submitting signed transaction');
+        
+        // Phase 3: Submit the signed transaction (hidden iframe, no UI)
+        return this._sendToIframe('particle-wallet.submit-transfer', {
+            transactionData,
+            signature,
+        });
+    }
+    
+    /**
+     * Whether the current user logged in via email/social (embedded signer)
+     * vs MetaMask/WalletConnect (external signer).
+     */
+    isEmbeddedLogin() {
+        const loginMethod = window.user?.login_method || localStorage.getItem('pc2_login_method') || '';
+        const EXTERNAL_METHODS = ['metamask', 'walletconnect', 'coinbase'];
+        return !EXTERNAL_METHODS.includes(loginMethod);
+    }
+
+    /**
+     * Send a raw eth_sendTransaction for embedded (email/social) logins via visible signing popup.
+     * For external wallets, the hidden iframe path works because MetaMask renders its own popup.
+     */
+    async sendTransactionViaParticleEmbedded(txParams) {
+        const { default: UIWindowParticleSigning } = await import('../UI/UIWindowParticleSigning.js');
+        const txHash = await UIWindowParticleSigning({
+            method: 'eth_sendTransaction',
+            params: [txParams],
+        });
+        return txHash;
+    }
+
+    /**
+     * Execute a smart account batch for embedded (email/social) logins.
+     * 3-phase: create batch via hidden iframe → sign rootHash via visible popup → submit via hidden iframe.
+     */
+    async sendSmartAccountBatchEmbedded(chainId, transactions, expectTokens) {
+        logger.log('Smart Account batch embedded — Phase 1: creating batch');
+        const createResult = await this._sendToIframe('particle-wallet.execute-universal-batch-create', {
+            chainId, transactions, expectTokens: expectTokens || [],
+        });
+
+        const { rootHash, transactionData, eoaAddress } = createResult;
+        if (!rootHash || !transactionData) {
+            throw new Error('Failed to create batch transaction');
+        }
+
+        logger.log('Smart Account batch embedded — Phase 2: signing rootHash via popup');
+        const { default: UIWindowParticleSigning } = await import('../UI/UIWindowParticleSigning.js');
+        const signature = await UIWindowParticleSigning({
+            method: 'personal_sign',
+            params: [rootHash, eoaAddress],
+        });
+
+        if (!signature || signature === 'pending') {
+            throw new Error('Signing was not completed');
+        }
+
+        logger.log('Smart Account batch embedded — Phase 3: submitting signed batch');
+        const submitResult = await this._sendToIframe('particle-wallet.execute-universal-batch-submit', {
+            transactionData, signature,
+        });
+
+        return {
+            transactionId: submitResult?.transactionId,
+            transactionHash: submitResult?.transactionHash,
+        };
+    }
+
+    /**
+     * Send transaction via EOA using ethereum provider (MetaMask)
+     * Supports any EVM chain - switches MetaMask to the target chain before sending
      * @param {Object} params - Transaction parameters
      * @param {string} params.to - Recipient address  
      * @param {string} params.amount - Amount to send
-     * @param {string} [params.tokenAddress] - Token contract (null for native ELA)
+     * @param {string} [params.tokenAddress] - Token contract (null for native token)
      * @param {number} [params.decimals=18] - Token decimals
-     * @returns {Promise<{success: boolean, hash: string, status: string, isElastosEOA: boolean}>}
+     * @param {number} [params.chainId=20] - Target chain ID
+     * @returns {Promise<{success: boolean, hash: string, status: string, isEOA: boolean}>}
      */
-    async _sendElastosEOATransaction({ to, amount, tokenAddress, decimals = 18 }) {
-        // Use safe provider accessor instead of window.ethereum
-        const provider = getEthereumProvider();
-        
-        if (!provider) {
-            throw new Error('No Ethereum wallet detected. Please install MetaMask to use Elastos EOA.');
-        }
-        
-        // EOA address is the user's wallet address (from Particle auth)
+    async _sendEOATransaction({ to, amount, tokenAddress, decimals = 18, chainId = 20 }) {
         const fromAddress = window.user?.wallet_address || this.getAddress();
         
         if (!fromAddress) {
             throw new Error('EOA address not available. Please reconnect your wallet.');
         }
         
-        logger.log('Using EOA address for Elastos:', fromAddress);
+        const chainName = CHAIN_INFO[chainId]?.name || `Chain ${chainId}`;
+        const amountStr = String(amount);
+        const amountInWei = BigInt(Math.floor(parseFloat(amountStr) * Math.pow(10, decimals))).toString(16);
+        const isNativeToken = !tokenAddress || tokenAddress === '0x0000000000000000000000000000000000000000';
+        
+        let txParams;
+        if (isNativeToken) {
+            txParams = {
+                from: fromAddress,
+                to: to,
+                value: '0x' + amountInWei,
+            };
+        } else {
+            const recipientPadded = to.toLowerCase().replace('0x', '').padStart(64, '0');
+            const amountHex = BigInt(Math.floor(parseFloat(amountStr) * Math.pow(10, decimals))).toString(16).padStart(64, '0');
+            txParams = {
+                from: fromAddress,
+                to: tokenAddress,
+                value: '0x0',
+                data: '0xa9059cbb' + recipientPadded + amountHex,
+            };
+        }
+        
+        logger.log('EOA send on', chainName, 'from:', fromAddress);
+        
+        const loginMethod = window.user?.login_method || localStorage.getItem('pc2_login_method') || '';
+        const EXTERNAL_METHODS = ['metamask', 'walletconnect', 'coinbase'];
+        const isEmbedded = !EXTERNAL_METHODS.includes(loginMethod);
         
         try {
-            // Step 1: Switch to Elastos Smart Chain using helper
-            logger.log('Switching to Elastos Smart Chain...');
-            await switchToElastos();
+            let txHash;
             
-            // Step 2: Build transaction
-            const amountStr = String(amount);
-            const amountInWei = BigInt(Math.floor(parseFloat(amountStr) * Math.pow(10, decimals))).toString(16);
-            
-            let txParams;
-            const isNativeELA = !tokenAddress || tokenAddress === '0x0000000000000000000000000000000000000000';
-            
-            if (isNativeELA) {
-                // Native ELA transfer
-                txParams = {
-                    from: fromAddress,
-                    to: to,
-                    value: '0x' + amountInWei,
-                };
-                logger.log('Sending native ELA:', txParams);
+            if (isEmbedded) {
+                const { default: UIWindowParticleSigning } = await import('../UI/UIWindowParticleSigning.js');
+                
+                txHash = await UIWindowParticleSigning({
+                    method: 'eth_sendTransaction',
+                    params: [{ ...txParams, chainId: '0x' + chainId.toString(16) }],
+                });
+                
+                if (txHash === 'pending') {
+                    logger.log('EOA tx signed but hash not returned — treating as success');
+                    this._notifyListeners();
+                    return { success: true, hash: null, status: 'pending', isEOA: true };
+                }
             } else {
-                // ERC-20 token transfer
-                const recipientPadded = to.toLowerCase().replace('0x', '').padStart(64, '0');
-                const amountHex = BigInt(Math.floor(parseFloat(amountStr) * Math.pow(10, decimals))).toString(16).padStart(64, '0');
-                txParams = {
-                    from: fromAddress,
-                    to: tokenAddress, // ERC-20 contract address
-                    value: '0x0',
-                    data: '0xa9059cbb' + recipientPadded + amountHex, // transfer(address,uint256)
-                };
-                logger.log('Sending ERC-20 token:', txParams);
+                // External wallet: sign with MetaMask in parent frame
+                const provider = window.ethereum;
+                if (!provider || provider.isPC2WalletBridge) {
+                    throw new Error('External wallet (MetaMask) not available. Please ensure your wallet extension is enabled.');
+                }
+                try {
+                    await provider.request({
+                        method: 'wallet_switchEthereumChain',
+                        params: [{ chainId: '0x' + chainId.toString(16) }],
+                    });
+                } catch (switchErr) {
+                    logger.warn('Chain switch failed (continuing):', switchErr?.message);
+                }
+                txHash = await provider.request({
+                    method: 'eth_sendTransaction',
+                    params: [{ ...txParams, chainId: '0x' + chainId.toString(16) }],
+                });
+                if (!txHash) throw new Error('Transaction failed');
             }
             
-            // Step 3: Estimate gas and add buffer for Elastos chain
-            try {
-                const gasEstimate = await estimateGas(txParams);
-                // Add 20% buffer for safety
-                const gasWithBuffer = Math.ceil(parseInt(gasEstimate, 16) * 1.2);
-                txParams.gas = '0x' + gasWithBuffer.toString(16);
-                logger.log('Gas estimate with buffer:', txParams.gas);
-            } catch (gasError) {
-                // If gas estimation fails, use a safe default for ELA transfers
-                logger.warn('Gas estimation failed, using default:', gasError.message);
-                txParams.gas = isNativeELA ? '0x5208' : '0x15F90'; // 21000 for native, 90000 for ERC-20
-            }
-            
-            // Step 4: Send transaction via ethereum provider helper
-            const txHash = await sendEthTransaction(txParams);
-            
-            logger.log('Elastos EOA transaction sent:', txHash);
-            
-            // Notify listeners of success
+            logger.log('EOA transaction sent on', chainName, ':', txHash);
             this._notifyListeners();
-            
-            return {
-                success: true,
-                hash: txHash,
-                status: 'pending',
-                isElastosEOA: true,
-            };
-            
+            return { success: true, hash: txHash, status: 'pending', isEOA: true };
         } catch (error) {
-            logger.error('Elastos EOA transaction failed:', error);
+            logger.error('EOA transaction failed on', chainName, ':', error);
             throw error;
         }
     }

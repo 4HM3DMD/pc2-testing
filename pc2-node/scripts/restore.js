@@ -10,9 +10,13 @@
  * - Server configuration
  * - Encryption key (with secure 0600 permissions)
  * - Node configuration (owner wallet, access control, tethered DIDs)
- * - Boson identity (node keypair and DID)
+ * - Boson identity:
+ *     v2 backups: data/identity.enc (requires mnemonic for decryption at setup)
+ *     v1 backups: data/identity.json (plaintext, legacy)
  * - Username registration
  * - Setup completion flag
+ * - Installed apps (data/installed-apps/)
+ * - AI agent memory (data/agents/)
  * 
  * Usage: node scripts/restore.js <backup-filename>
  * Example: node scripts/restore.js pc2-backup-20251219-120000.tar.gz
@@ -44,9 +48,15 @@ const BACKUPS_DIR = join(PROJECT_ROOT, 'backups');
 const CRITICAL_DATA_FILES = [
   { relative: 'data/encryption.key', description: 'Encryption key', permissions: 0o600, sensitive: true },
   { relative: 'data/node-config.json', description: 'Node configuration' },
-  { relative: 'data/identity.json', description: 'Boson identity' },
+  { relative: 'data/identity.json', description: 'Boson identity', identity: true },
   { relative: 'data/username.json', description: 'Username registration' },
   { relative: 'data/setup-complete', description: 'Setup completion flag' }
+];
+
+// Directories to restore if present
+const RESTORE_DIRECTORIES = [
+  { relative: 'data/installed-apps', description: 'Installed applications' },
+  { relative: 'data/agents', description: 'AI agent memory and history' }
 ];
 
 // Resolve absolute paths
@@ -183,6 +193,27 @@ async function restoreBackup(backupFilename) {
 
     console.log('✅ Backup extracted successfully\n');
 
+    // Read backup metadata if available
+    const metaPath = join(tempDir, 'backup-meta.json');
+    let backupMeta = { formatVersion: 1, identityVersion: 1 };
+    if (existsSync(metaPath)) {
+      try {
+        backupMeta = JSON.parse(readFileSync(metaPath, 'utf8'));
+        console.log(`📋 Backup format version: ${backupMeta.formatVersion}`);
+        console.log(`   Identity version: ${backupMeta.identityVersion === 2 ? 'v2 (mnemonic-derived, encrypted)' : 'v1 (legacy, plaintext)'}`);
+        if (backupMeta.createdAt) {
+          console.log(`   Created: ${backupMeta.createdAt}`);
+        }
+        console.log('');
+      } catch {
+        console.log('⚠️  Could not parse backup-meta.json, assuming v1 format\n');
+      }
+    } else {
+      console.log('ℹ️  No backup-meta.json found, assuming v1 format\n');
+    }
+
+    const isV2Backup = backupMeta.formatVersion >= 2;
+
     // Validate extracted files
     const extractedData = join(tempDir, 'data');
     const extractedConfig = join(tempDir, 'config');
@@ -206,11 +237,29 @@ async function restoreBackup(backupFilename) {
       if (existsSync(join(extractedData, 'ipfs'))) {
         console.log('      ✅ IPFS repository');
       }
-      // Check for critical files
+
+      // Check for identity (v2 = encrypted, v1 = plaintext)
+      if (isV2Backup && existsSync(join(extractedData, 'identity.enc'))) {
+        console.log('      ✅ Encrypted identity (identity.enc) - mnemonic required to unlock');
+      } else if (existsSync(join(extractedData, 'identity.json'))) {
+        console.log('      ✅ Boson identity (identity.json)');
+      }
+
+      // Check other critical files (skip identity.json as handled above)
       for (const criticalFile of CRITICAL_DATA_FILES) {
+        if (criticalFile.identity) continue;
         const fileName = criticalFile.relative.replace('data/', '');
         if (existsSync(join(extractedData, fileName))) {
           console.log(`      ✅ ${criticalFile.description} (${fileName})`);
+        }
+      }
+
+      // Check directories
+      for (const dir of RESTORE_DIRECTORIES) {
+        const dirName = dir.relative.replace('data/', '');
+        const dirPath = join(extractedData, dirName);
+        if (existsSync(dirPath) && statSync(dirPath).isDirectory()) {
+          console.log(`      ✅ ${dir.description} (${dirName}/)`);
         }
       }
     }
@@ -266,6 +315,26 @@ async function restoreBackup(backupFilename) {
         mkdirSync(dirname(oldFilePath), { recursive: true });
         renameSync(filePath, oldFilePath);
         console.log(`   ✅ Current ${criticalFile.description} backed up`);
+      }
+    }
+
+    // Backup current identity.enc if present
+    const identityEncPath = resolve(PROJECT_ROOT, 'data/identity.enc');
+    if (existsSync(identityEncPath)) {
+      const oldIdentityEnc = join(oldBackupDir, 'data/identity.enc');
+      mkdirSync(dirname(oldIdentityEnc), { recursive: true });
+      renameSync(identityEncPath, oldIdentityEnc);
+      console.log('   ✅ Current encrypted identity backed up');
+    }
+
+    // Backup current additional directories
+    for (const dir of RESTORE_DIRECTORIES) {
+      const dirPath = resolve(PROJECT_ROOT, dir.relative);
+      if (existsSync(dirPath)) {
+        const oldDirPath = join(oldBackupDir, dir.relative);
+        mkdirSync(dirname(oldDirPath), { recursive: true });
+        renameSync(dirPath, oldDirPath);
+        console.log(`   ✅ Current ${dir.description} backed up`);
       }
     }
 
@@ -334,18 +403,41 @@ async function restoreBackup(backupFilename) {
     const missingCritical = [];
 
     for (const criticalFile of CRITICAL_DATA_FILES) {
+      // Special handling for identity files
+      if (criticalFile.identity) {
+        const encSource = join(extractedData, 'identity.enc');
+        const jsonSource = join(extractedData, 'identity.json');
+
+        if (isV2Backup && existsSync(encSource)) {
+          // v2 backup: copy encrypted identity; the setup wizard will decrypt it
+          const destPath = resolve(PROJECT_ROOT, 'data/identity.enc');
+          mkdirSync(dirname(destPath), { recursive: true });
+          renameSync(encSource, destPath);
+          chmodSync(destPath, 0o600);
+          console.log('   ✅ Encrypted identity restored (identity.enc) — enter mnemonic at setup to unlock');
+          restoredCritical.push({ ...criticalFile, description: 'Encrypted identity (v2)' });
+        } else if (existsSync(jsonSource)) {
+          // v1 backup: restore plaintext identity
+          const destPath = resolve(PROJECT_ROOT, criticalFile.relative);
+          mkdirSync(dirname(destPath), { recursive: true });
+          renameSync(jsonSource, destPath);
+          chmodSync(destPath, 0o600);
+          console.log('   ✅ Boson identity restored (identity.json, legacy v1)');
+          restoredCritical.push(criticalFile);
+        } else {
+          missingCritical.push(criticalFile);
+        }
+        continue;
+      }
+
       const fileName = criticalFile.relative.replace('data/', '');
       const sourcePath = join(extractedData, fileName);
       const destPath = resolve(PROJECT_ROOT, criticalFile.relative);
 
       if (existsSync(sourcePath)) {
-        // Ensure destination directory exists
         mkdirSync(dirname(destPath), { recursive: true });
-        
-        // Move file to destination
         renameSync(sourcePath, destPath);
         
-        // Set secure permissions for sensitive files
         if (criticalFile.permissions) {
           chmodSync(destPath, criticalFile.permissions);
           console.log(`   ✅ ${criticalFile.description} restored (permissions: ${criticalFile.permissions.toString(8)})`);
@@ -358,10 +450,33 @@ async function restoreBackup(backupFilename) {
       }
     }
 
+    // Restore additional directories
+    for (const dir of RESTORE_DIRECTORIES) {
+      const dirName = dir.relative.replace('data/', '');
+      const sourcePath = join(extractedData, dirName);
+      const destPath = resolve(PROJECT_ROOT, dir.relative);
+
+      if (existsSync(sourcePath) && statSync(sourcePath).isDirectory()) {
+        mkdirSync(dirname(destPath), { recursive: true });
+        renameSync(sourcePath, destPath);
+        console.log(`   ✅ ${dir.description} restored`);
+      }
+    }
+
     if (missingCritical.length > 0) {
       console.log(`\n⚠️  Warning: ${missingCritical.length} critical file(s) not found in backup:`);
       missingCritical.forEach(f => console.log(`   - ${f.description} (${f.relative})`));
       console.log('   Some node features may not work correctly.');
+    }
+
+    // For v2 backups, remove setup-complete so the setup wizard runs
+    // (user needs to enter mnemonic to decrypt identity)
+    if (isV2Backup && existsSync(resolve(PROJECT_ROOT, 'data/identity.enc'))) {
+      const setupCompletePath = resolve(PROJECT_ROOT, 'data/setup-complete');
+      if (existsSync(setupCompletePath)) {
+        rmSync(setupCompletePath);
+        console.log('\n📋 Setup wizard will run on next start to complete identity restore.');
+      }
     }
 
     // Clean up temporary directory
@@ -417,7 +532,14 @@ async function restoreBackup(backupFilename) {
     console.log(`\n💡 You can now start the server:`);
     console.log(`   npm start`);
     
-    if (restoredCritical.length === CRITICAL_DATA_FILES.length) {
+    if (isV2Backup && existsSync(resolve(PROJECT_ROOT, 'data/identity.enc'))) {
+      console.log('\n📝 Next steps:');
+      console.log('   1. Start the server: npm start');
+      console.log('   2. The setup wizard will appear');
+      console.log('   3. Choose "Restore from backup"');
+      console.log('   4. Enter your 24-word mnemonic to unlock your identity');
+      console.log('   5. Your domain (username.ela.city) will be restored');
+    } else if (restoredCritical.length === CRITICAL_DATA_FILES.length) {
       console.log('\n🎉 Full node restoration complete!');
       console.log('   - Admin wallet will be recognized');
       console.log('   - All authorized accounts preserved');

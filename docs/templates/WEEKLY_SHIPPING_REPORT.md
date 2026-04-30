@@ -290,6 +290,9 @@ Key qualities that made it effective:
 | Date | File | Blog URL | Key Theme |
 |------|------|----------|-----------|
 | 2026-02-24 | docs/updates/WCI_Update_Feb_24_2026.md | TBD | V1 Live, WCI Audit Passed, Keystone Proposal, v1.1 Preview |
+| 2026-02-28 | docs/updates/WCI_Update_Feb_28_2026.md | TBD | Voice AI, Desktop UI, ARM Hardening, DAO Proposal |
+| 2026-03-13 | docs/updates/WCI_Update_Mar_13_2026.md | TBD | Universal dDRM minting, 3D globe, ElacityLabs.com, Portal redesign |
+| 2026-03-20 | docs/updates/WCI_Update_Mar_20_2026.md | TBD | WASM/Rust runtime, Chipotle, Media Runtime, universal viewers, marketplace |
 
 **GitHub Discussions (shipping reports):**
 
@@ -299,6 +302,9 @@ Key qualities that made it effective:
 | Feb 10-16 | — | 0 | No commits on this branch |
 | Feb 17-23 | [#3](https://github.com/Elacity/pc2.net/discussions/3) | 28 | WireGuard, video streaming, gateway perf, ARM installer, IPFS privacy, community bugs |
 | Feb 24-28 | [#4](https://github.com/Elacity/pc2.net/discussions/4) | 34 | Voice AI, desktop UI upgrades, ARM installer hardening, WireGuard improvements |
+| Mar 2-6 | [#5](https://github.com/Elacity/pc2.net/discussions/5) | — | Supernode decentralization, binary manager, network map upgrade |
+| Mar 6-13 | [#6](https://github.com/Elacity/pc2.net/discussions/6) | 24+ | Universal dDRM minting on Base, 3D globe, ElacityLabs.com overhaul, portal redesign |
+| Mar 14-20 | [#7](https://github.com/Elacity/pc2.net/discussions/7) | 48 | WASM/Rust security runtime, Chipotle migration, Media Runtime, universal viewers, full marketplace |
 | 2026-01-29 | Published on blog | https://blog.elastos.net/wci-ecosystem-report-jan-29-2026/ | IPFS Sharing, NAT Traversal, AI Agents, DAO Dashboard |
 
 *Add new reports to this table as they're created.*

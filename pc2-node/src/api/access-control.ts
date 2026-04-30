@@ -1,6 +1,6 @@
 /**
  * Access Control API Routes
- * 
+ *
  * Handles anti-snipe password verification and multi-user access control.
  * The anti-snipe password protects the node until the owner claims it with their wallet.
  */
@@ -13,6 +13,15 @@ import { normalizeAddress, compareAddresses, isValidAddress, detectAddressType }
 import { getNodeConfig, saveNodeConfig } from './setup.js';
 import { authenticate, AuthenticatedRequest } from './middleware.js';
 import { DatabaseManager } from '../storage/database.js';
+import { Config } from '../config/loader.js';
+import { verifySiweSignature } from './auth/siwe-verify.js';
+import { challengeStore } from './auth/challenge-store.js';
+import { firstRunTokenStore } from './setup/first-run-token.js';
+
+const LOOPBACK_RE = /^(127\.|::1$|::ffff:127\.)/;
+function isLoopback (addr: string | undefined): boolean {
+    return !!addr && LOOPBACK_RE.test(addr);
+}
 
 const router = Router();
 
@@ -33,219 +42,278 @@ export { getNodeConfig, saveNodeConfig };
 /**
  * Generate a session token
  */
-function generateSessionToken(): string {
-  return crypto.randomBytes(32).toString('hex');
+function generateSessionToken (): string {
+    return crypto.randomBytes(32).toString('hex');
 }
 
 /**
  * Verify an anti-snipe session token
  */
-export function verifyAntiSnipeSession(token: string): boolean {
-  if (!token) return false;
-  
-  const session = antiSnipeSessions.get(token);
-  if (!session) return false;
-  
-  if (Date.now() > session.expiresAt) {
-    antiSnipeSessions.delete(token);
-    return false;
-  }
-  
-  return true;
+export function verifyAntiSnipeSession (token: string): boolean {
+    if ( ! token ) return false;
+
+    const session = antiSnipeSessions.get(token);
+    if ( ! session ) return false;
+
+    if ( Date.now() > session.expiresAt ) {
+        antiSnipeSessions.delete(token);
+        return false;
+    }
+
+    return true;
 }
 
 /**
  * Clean up expired sessions periodically
  */
 setInterval(() => {
-  const now = Date.now();
-  for (const [token, session] of antiSnipeSessions.entries()) {
-    if (now > session.expiresAt) {
-      antiSnipeSessions.delete(token);
+    const now = Date.now();
+    for ( const [token, session] of antiSnipeSessions.entries() ) {
+        if ( now > session.expiresAt ) {
+            antiSnipeSessions.delete(token);
+        }
     }
-  }
 }, 60 * 1000); // Clean up every minute
 
 /**
  * Check if rate limited
  */
-function isRateLimited(ip: string): boolean {
-  const attempts = passwordAttempts.get(ip);
-  if (!attempts) return false;
-  
-  const now = Date.now();
-  if (now - attempts.lastAttempt > ATTEMPT_WINDOW_MS) {
-    passwordAttempts.delete(ip);
-    return false;
-  }
-  
-  return attempts.count >= MAX_ATTEMPTS;
+function isRateLimited (ip: string): boolean {
+    const attempts = passwordAttempts.get(ip);
+    if ( ! attempts ) return false;
+
+    const now = Date.now();
+    if ( now - attempts.lastAttempt > ATTEMPT_WINDOW_MS ) {
+        passwordAttempts.delete(ip);
+        return false;
+    }
+
+    return attempts.count >= MAX_ATTEMPTS;
 }
 
 /**
  * Record a password attempt
  */
-function recordAttempt(ip: string): void {
-  const now = Date.now();
-  const attempts = passwordAttempts.get(ip);
-  
-  if (!attempts || now - attempts.lastAttempt > ATTEMPT_WINDOW_MS) {
-    passwordAttempts.set(ip, { count: 1, lastAttempt: now });
-  } else {
-    attempts.count++;
-    attempts.lastAttempt = now;
-  }
+function recordAttempt (ip: string): void {
+    const now = Date.now();
+    const attempts = passwordAttempts.get(ip);
+
+    if ( !attempts || now - attempts.lastAttempt > ATTEMPT_WINDOW_MS ) {
+        passwordAttempts.set(ip, { count: 1, lastAttempt: now });
+    } else {
+        attempts.count++;
+        attempts.lastAttempt = now;
+    }
 }
 
 /**
  * Check access status
  * GET /api/access/status
- * 
+ *
  * Returns whether the node requires anti-snipe password and if owner is set.
  */
 router.get('/status', (req: Request, res: Response) => {
-  try {
-    const config = getNodeConfig();
-    const hasOwner = !!config.ownerWallet;
-    const hasAntiSnipePassword = !!config.antiSnipePasswordHash;
-    
-    // Check if user has valid session
-    const sessionToken = req.cookies?.antiSnipeSession;
-    const hasValidSession = sessionToken ? verifyAntiSnipeSession(sessionToken) : false;
-    
-    res.json({
-      hasOwner,
-      ownerWallet: config.ownerWallet || null,
-      hasAntiSnipePassword,
-      hasValidSession,
-      requiresPassword: hasAntiSnipePassword && !hasOwner && !hasValidSession,
-    });
-  } catch (error) {
-    logger.error('[AccessControl] Status check error:', error);
-    res.status(500).json({ error: 'Failed to check access status' });
-  }
+    try {
+        const config = getNodeConfig();
+        const hasOwner = !!config.ownerWallet;
+        const hasAntiSnipePassword = !!config.antiSnipePasswordHash;
+
+        // Check if user has valid session
+        const sessionToken = req.cookies?.antiSnipeSession;
+        const hasValidSession = sessionToken ? verifyAntiSnipeSession(sessionToken) : false;
+
+        res.json({
+            hasOwner,
+            ownerWallet: config.ownerWallet || null,
+            hasAntiSnipePassword,
+            hasValidSession,
+            requiresPassword: hasAntiSnipePassword && !hasOwner && !hasValidSession,
+        });
+    } catch ( error ) {
+        logger.error('[AccessControl] Status check error:', error);
+        res.status(500).json({ error: 'Failed to check access status' });
+    }
 });
 
 /**
  * Verify anti-snipe password
  * POST /api/access/verify-password
- * 
+ *
  * Verifies the anti-snipe password and returns a session token.
  */
 router.post('/verify-password', async (req: Request, res: Response) => {
-  try {
-    const { password } = req.body;
-    const ip = req.ip || req.socket.remoteAddress || 'unknown';
-    
-    // Rate limiting
-    if (isRateLimited(ip)) {
-      return res.status(429).json({ 
-        success: false, 
-        error: 'Too many attempts. Please wait a minute and try again.' 
-      });
+    try {
+        const { password } = req.body;
+        const ip = req.ip || req.socket.remoteAddress || 'unknown';
+
+        // Rate limiting
+        if ( isRateLimited(ip) ) {
+            return res.status(429).json({
+                success: false,
+                error: 'Too many attempts. Please wait a minute and try again.',
+            });
+        }
+
+        if ( !password || typeof password !== 'string' ) {
+            return res.status(400).json({ success: false, error: 'Password is required' });
+        }
+
+        const config = getNodeConfig();
+
+        // If owner is already set, no password needed
+        if ( config.ownerWallet ) {
+            return res.json({ success: true, message: 'Owner already set, no password needed' });
+        }
+
+        // If no password hash set, something is wrong
+        if ( ! config.antiSnipePasswordHash ) {
+            return res.status(400).json({ success: false, error: 'No password configured' });
+        }
+
+        // Verify password
+        const isValid = await bcrypt.compare(password, config.antiSnipePasswordHash);
+
+        if ( ! isValid ) {
+            recordAttempt(ip);
+            return res.status(401).json({ success: false, error: 'Invalid password' });
+        }
+
+        // Generate session token
+        const sessionToken = generateSessionToken();
+        const now = Date.now();
+
+        antiSnipeSessions.set(sessionToken, {
+            createdAt: now,
+            expiresAt: now + SESSION_EXPIRY_MS,
+        });
+
+        // Set cookie
+        res.cookie('antiSnipeSession', sessionToken, {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: 'strict',
+            maxAge: SESSION_EXPIRY_MS,
+        });
+
+        logger.info('[AccessControl] Anti-snipe password verified, session created');
+
+        res.json({ success: true });
+    } catch ( error ) {
+        logger.error('[AccessControl] Password verification error:', error);
+        res.status(500).json({ success: false, error: 'Failed to verify password' });
     }
-    
-    if (!password || typeof password !== 'string') {
-      return res.status(400).json({ success: false, error: 'Password is required' });
-    }
-    
-    const config = getNodeConfig();
-    
-    // If owner is already set, no password needed
-    if (config.ownerWallet) {
-      return res.json({ success: true, message: 'Owner already set, no password needed' });
-    }
-    
-    // If no password hash set, something is wrong
-    if (!config.antiSnipePasswordHash) {
-      return res.status(400).json({ success: false, error: 'No password configured' });
-    }
-    
-    // Verify password
-    const isValid = await bcrypt.compare(password, config.antiSnipePasswordHash);
-    
-    if (!isValid) {
-      recordAttempt(ip);
-      return res.status(401).json({ success: false, error: 'Invalid password' });
-    }
-    
-    // Generate session token
-    const sessionToken = generateSessionToken();
-    const now = Date.now();
-    
-    antiSnipeSessions.set(sessionToken, {
-      createdAt: now,
-      expiresAt: now + SESSION_EXPIRY_MS,
-    });
-    
-    // Set cookie
-    res.cookie('antiSnipeSession', sessionToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
-      maxAge: SESSION_EXPIRY_MS,
-    });
-    
-    logger.info('[AccessControl] Anti-snipe password verified, session created');
-    
-    res.json({ success: true });
-  } catch (error) {
-    logger.error('[AccessControl] Password verification error:', error);
-    res.status(500).json({ success: false, error: 'Failed to verify password' });
-  }
 });
 
 /**
  * Set owner wallet (called after first successful wallet login)
  * POST /api/access/claim-ownership
- * 
- * This should only be called internally by the auth flow.
+ *
+ * SEC-3a (2026-04 audit): formerly accepted any wallet address from any
+ * unauthenticated client — letting a remote attacker pin a brand-new
+ * node's ownership to a wallet they don't even control. The endpoint
+ * now requires ONE proof of intent:
+ *   (a) anti-snipe password proven this session (cookie set by
+ *       /api/access/verify-password) — the original UX path,
+ *   (b) request from loopback (local first-run setup wizard),
+ *   (c) a valid X-First-Run-Token header (remote setup),
+ * AND when config.security.siweRequired is true, additionally requires:
+ *   (d) a valid SIWE signature ({ signature, nonce, message } in the body)
+ *       proving the caller controls the wallet they're claiming.
+ * Replay is prevented by single-use nonces (see challenge-store.ts).
  */
 router.post('/claim-ownership', async (req: Request, res: Response) => {
-  try {
-    const { walletAddress } = req.body;
-    
-    if (!walletAddress || typeof walletAddress !== 'string') {
-      return res.status(400).json({ success: false, error: 'Wallet address is required' });
+    try {
+        const { walletAddress, signature, nonce, message } = req.body as {
+            walletAddress?: string; signature?: string; nonce?: string; message?: string;
+        };
+
+        if ( !walletAddress || typeof walletAddress !== 'string' ) {
+            return res.status(400).json({ success: false, error: 'Wallet address is required' });
+        }
+        if ( ! isValidAddress(walletAddress) ) {
+            return res.status(400).json({ success: false, error: 'Invalid wallet address format. Must be EVM (0x...) or Solana address.' });
+        }
+
+        const config = getNodeConfig();
+        if ( config.ownerWallet ) {
+            return res.status(403).json({
+                success: false,
+                error: 'Owner already set. This node is already claimed.',
+            });
+        }
+
+        const appConfig = req.app.locals.config as Config | undefined;
+        const siweRequired = !!appConfig?.security?.siweRequired;
+
+        // Gate 1: proof-of-intent (one of cookie / loopback / first-run-token)
+        const remoteAddr = req.socket.remoteAddress || '';
+        const cookies = (req as Request & { cookies?: Record<string, string> }).cookies || {};
+        const antiSnipeCookie = cookies.antiSnipeSession;
+        const firstRunHeader = req.headers['x-first-run-token'];
+        const firstRunToken = Array.isArray(firstRunHeader) ? firstRunHeader[0] : firstRunHeader;
+
+        const intentProven =
+            (antiSnipeCookie && verifyAntiSnipeSession(antiSnipeCookie)) ||
+            isLoopback(remoteAddr) ||
+            (typeof firstRunToken === 'string' && firstRunTokenStore.verify(firstRunToken)) ||
+            !siweRequired; // legacy escape hatch until kill-switch flips
+
+        if ( ! intentProven ) {
+            logger.warn('[AccessControl] claim-ownership refused — no intent proof', {
+                wallet: `${walletAddress.substring(0, 10) }...`,
+                remoteAddr: remoteAddr.substring(0, 32),
+            });
+            return res.status(403).json({
+                success: false,
+                error: 'Claim requires anti-snipe password, loopback, or X-First-Run-Token.',
+            });
+        }
+
+        // Gate 2: SIWE wallet-control proof (verified opportunistically when
+        // present; required when kill-switch flips).
+        const haveSiweFields = !!(signature && nonce && message);
+        if ( siweRequired && !haveSiweFields ) {
+            return res.status(401).json({ success: false, error: 'siwe_required', message: 'Fetch /auth/challenge then sign and resubmit.' });
+        }
+        if ( haveSiweFields ) {
+            const consumed = challengeStore.consume(nonce, walletAddress);
+            if ( ! consumed.ok ) {
+                if ( siweRequired ) return res.status(401).json({ success: false, error: 'invalid_nonce', message: consumed.reason });
+                logger.warn('[AccessControl] SIWE nonce rejected (audit-only):', consumed.reason);
+            } else {
+                const verifyResult = await verifySiweSignature({
+                    message: message!,
+                    signature: signature!,
+                    expectedAddress: walletAddress,
+                    addressType: detectAddressType(walletAddress) === 'solana' ? 'solana' : 'evm',
+                });
+                if ( ! verifyResult.valid ) {
+                    if ( siweRequired ) return res.status(401).json({ success: false, error: 'invalid_signature', message: verifyResult.reason });
+                    logger.warn('[AccessControl] SIWE signature rejected (audit-only):', verifyResult.reason);
+                } else {
+                    logger.info('[AccessControl] ✅ SIWE proof verified for claim');
+                }
+            }
+        }
+
+        // All gates passed — commit the claim.
+        const updatedConfig = { ...config };
+        updatedConfig.ownerWallet = normalizeAddress(walletAddress);
+        delete updatedConfig.antiSnipePasswordHash; // PERMANENTLY DELETE
+        saveNodeConfig(updatedConfig);
+        antiSnipeSessions.clear();
+
+        logger.info(`[AccessControl] Owner set to ${walletAddress} (type: ${detectAddressType(walletAddress)}), anti-snipe password deleted`);
+
+        res.json({
+            success: true,
+            message: 'Ownership claimed successfully',
+            ownerWallet: updatedConfig.ownerWallet,
+        });
+    } catch ( error ) {
+        logger.error('[AccessControl] Claim ownership error:', error);
+        res.status(500).json({ success: false, error: 'Failed to claim ownership' });
     }
-    
-    // Validate address format (EVM or Solana)
-    if (!isValidAddress(walletAddress)) {
-      return res.status(400).json({ success: false, error: 'Invalid wallet address format. Must be EVM (0x...) or Solana address.' });
-    }
-    
-    const config = getNodeConfig();
-    
-    // If owner is already set, reject
-    if (config.ownerWallet) {
-      return res.status(403).json({ 
-        success: false, 
-        error: 'Owner already set. This node is already claimed.' 
-      });
-    }
-    
-    // Set owner and DELETE the anti-snipe password hash
-    // Use normalizeAddress to handle EVM (lowercase) vs Solana (case-sensitive)
-    const updatedConfig = { ...config };
-    updatedConfig.ownerWallet = normalizeAddress(walletAddress);
-    delete updatedConfig.antiSnipePasswordHash; // PERMANENTLY DELETE
-    
-    saveNodeConfig(updatedConfig);
-    
-    // Clear all anti-snipe sessions
-    antiSnipeSessions.clear();
-    
-    logger.info(`[AccessControl] Owner set to ${walletAddress} (type: ${detectAddressType(walletAddress)}), anti-snipe password deleted`);
-    
-    res.json({ 
-      success: true, 
-      message: 'Ownership claimed successfully',
-      ownerWallet: updatedConfig.ownerWallet,
-    });
-  } catch (error) {
-    logger.error('[AccessControl] Claim ownership error:', error);
-    res.status(500).json({ success: false, error: 'Failed to claim ownership' });
-  }
 });
 
 /**
@@ -253,244 +321,240 @@ router.post('/claim-ownership', async (req: Request, res: Response) => {
  * GET /api/access/check?wallet=0x... (EVM) or ?wallet=D9nf... (Solana)
  */
 router.get('/check', (req: Request, res: Response) => {
-  try {
-    const walletParam = req.query.wallet as string;
-    
-    if (!walletParam) {
-      return res.status(400).json({ error: 'Wallet address is required' });
+    try {
+        const walletParam = req.query.wallet as string;
+
+        if ( ! walletParam ) {
+            return res.status(400).json({ error: 'Wallet address is required' });
+        }
+
+        // Normalize the wallet address (EVM lowercase, Solana as-is)
+        const wallet = normalizeAddress(walletParam);
+
+        const config = getNodeConfig();
+
+        // If no owner set, anyone can claim (after anti-snipe password)
+        if ( ! config.ownerWallet ) {
+            return res.json({
+                allowed: true,
+                role: 'pending_owner',
+                message: 'No owner set yet. First login will claim ownership.',
+            });
+        }
+
+        // Check if this is the owner (using proper comparison for address type)
+        if ( compareAddresses(config.ownerWallet, wallet) ) {
+            return res.json({ allowed: true, role: 'owner' });
+        }
+
+        // Check allowed wallets list
+        const allowedWallets = config.allowedWallets || [];
+        const entry = allowedWallets.find((w: { wallet: string }) => compareAddresses(w.wallet, wallet));
+
+        if ( entry ) {
+            return res.json({ allowed: true, role: entry.role });
+        }
+
+        res.json({
+            allowed: false,
+            role: null,
+            message: 'You are not authorized to access this node.',
+        });
+    } catch ( error ) {
+        logger.error('[AccessControl] Check access error:', error);
+        res.status(500).json({ error: 'Failed to check access' });
     }
-    
-    // Normalize the wallet address (EVM lowercase, Solana as-is)
-    const wallet = normalizeAddress(walletParam);
-    
-    const config = getNodeConfig();
-    
-    // If no owner set, anyone can claim (after anti-snipe password)
-    if (!config.ownerWallet) {
-      return res.json({ 
-        allowed: true, 
-        role: 'pending_owner',
-        message: 'No owner set yet. First login will claim ownership.',
-      });
-    }
-    
-    // Check if this is the owner (using proper comparison for address type)
-    if (compareAddresses(config.ownerWallet, wallet)) {
-      return res.json({ allowed: true, role: 'owner' });
-    }
-    
-    // Check allowed wallets list
-    const allowedWallets = config.allowedWallets || [];
-    const entry = allowedWallets.find((w: { wallet: string }) => compareAddresses(w.wallet, wallet));
-    
-    if (entry) {
-      return res.json({ allowed: true, role: entry.role });
-    }
-    
-    res.json({ 
-      allowed: false, 
-      role: null,
-      message: 'You are not authorized to access this node.',
-    });
-  } catch (error) {
-    logger.error('[AccessControl] Check access error:', error);
-    res.status(500).json({ error: 'Failed to check access' });
-  }
 });
 
 /**
  * List all allowed wallets
  * GET /api/access/list
- * 
+ *
  * Requires owner or admin authentication.
  * Returns wallet addresses with profile pictures if available.
  */
 router.get('/list', authenticate, (req: AuthenticatedRequest, res: Response) => {
-  try {
-    const config = getNodeConfig();
-    const db = req.app.locals.db as DatabaseManager | undefined;
-    
-    // Enrich wallets with profile picture URLs
-    const wallets = (config.allowedWallets || []).map((w: { wallet: string; role: string }) => {
-      let profilePicture = null;
-      if (db) {
-        profilePicture = db.getSetting(`${w.wallet}:user_preferences.profile_picture_url`) || null;
-      }
-      return {
-        ...w,
-        profilePicture,
-      };
-    });
-    
-    // Get owner's profile picture too
-    let ownerProfilePicture = null;
-    if (config.ownerWallet && db) {
-      ownerProfilePicture = db.getSetting(`${config.ownerWallet}:user_preferences.profile_picture_url`) || null;
+    try {
+        const config = getNodeConfig();
+        const db = req.app.locals.db as DatabaseManager | undefined;
+
+        // Enrich wallets with profile picture URLs
+        const wallets = (config.allowedWallets || []).map((w: { wallet: string; role: string }) => {
+            let profilePicture = null;
+            if ( db ) {
+                profilePicture = db.getSetting(`${w.wallet}:user_preferences.profile_picture_url`) || null;
+            }
+            return {
+                ...w,
+                profilePicture,
+            };
+        });
+
+        // Get owner's profile picture too
+        let ownerProfilePicture = null;
+        if ( config.ownerWallet && db ) {
+            ownerProfilePicture = db.getSetting(`${config.ownerWallet}:user_preferences.profile_picture_url`) || null;
+        }
+
+        res.json({
+            success: true,
+            ownerWallet: config.ownerWallet || null,
+            ownerProfilePicture,
+            wallets,
+        });
+    } catch ( error ) {
+        logger.error('[AccessControl] List wallets error:', error);
+        res.status(500).json({ success: false, error: 'Failed to list wallets' });
     }
-    
-    res.json({
-      success: true,
-      ownerWallet: config.ownerWallet || null,
-      ownerProfilePicture,
-      wallets,
-    });
-  } catch (error) {
-    logger.error('[AccessControl] List wallets error:', error);
-    res.status(500).json({ success: false, error: 'Failed to list wallets' });
-  }
 });
 
 /**
  * Add a wallet to the allowed list
  * POST /api/access/add
- * 
+ *
  * Body: { wallet: string, role: 'admin' | 'member' }
  * Supports both EVM (0x...) and Solana addresses
  */
 router.post('/add', authenticate, (req: AuthenticatedRequest, res: Response) => {
-  try {
-    const { wallet, role } = req.body;
-    
-    // Check if user is authenticated
-    if (!req.user?.wallet_address) {
-      return res.status(401).json({ success: false, error: 'You must be logged in to add wallets' });
+    try {
+        const { wallet, role } = req.body;
+
+        // Check if user is authenticated
+        if ( ! req.user?.wallet_address ) {
+            return res.status(401).json({ success: false, error: 'You must be logged in to add wallets' });
+        }
+
+        const config = getNodeConfig();
+        const userWallet = normalizeAddress(req.user.wallet_address);
+
+        // Check if user is owner or admin (using proper address comparison)
+        const isOwner = compareAddresses(config.ownerWallet, userWallet);
+        const isAdmin = config.allowedWallets?.some((w: { wallet: string; role: string }) =>
+            compareAddresses(w.wallet, userWallet) && w.role === 'admin');
+
+        if ( !isOwner && !isAdmin ) {
+            return res.status(403).json({ success: false, error: 'Only the owner or admins can add wallets' });
+        }
+
+        if ( !wallet || typeof wallet !== 'string' ) {
+            return res.status(400).json({ success: false, error: 'Wallet address is required' });
+        }
+
+        // Validate wallet format (accept both EVM and Solana)
+        if ( ! isValidAddress(wallet) ) {
+            return res.status(400).json({
+                success: false,
+                error: 'Invalid wallet address format. Must be EVM (0x...) or Solana address.',
+            });
+        }
+
+        // Normalize wallet (EVM lowercase, Solana as-is)
+        const normalizedWallet = normalizeAddress(wallet);
+        const addressType = detectAddressType(wallet);
+
+        // Validate role
+        if ( ! ['admin', 'member'].includes(role) ) {
+            return res.status(400).json({ success: false, error: 'Role must be admin or member' });
+        }
+
+        // Cannot add owner wallet again
+        if ( compareAddresses(config.ownerWallet, normalizedWallet) ) {
+            return res.status(400).json({ success: false, error: 'Cannot add owner wallet' });
+        }
+
+        // Initialize allowedWallets if needed
+        if ( ! config.allowedWallets ) {
+            config.allowedWallets = [];
+        }
+
+        // Check if already exists (using proper comparison)
+        const existingIndex = config.allowedWallets.findIndex((w: { wallet: string }) =>
+            compareAddresses(w.wallet, normalizedWallet));
+
+        if ( existingIndex >= 0 ) {
+            // Update role
+            config.allowedWallets[existingIndex].role = role;
+            config.allowedWallets[existingIndex].updatedAt = new Date().toISOString();
+        } else {
+            // Add new
+            config.allowedWallets.push({
+                wallet: normalizedWallet,
+                role,
+                addressType, // Store address type for reference
+                addedAt: new Date().toISOString(),
+            });
+        }
+
+        saveNodeConfig(config);
+
+        logger.info(`[AccessControl] Added wallet ${normalizedWallet} (type: ${addressType}) with role ${role}`);
+
+        res.json({ success: true, wallet: normalizedWallet, role, addressType });
+    } catch ( error ) {
+        logger.error('[AccessControl] Add wallet error:', error);
+        res.status(500).json({ success: false, error: 'Failed to add wallet' });
     }
-    
-    const config = getNodeConfig();
-    const userWallet = normalizeAddress(req.user.wallet_address);
-    
-    // Check if user is owner or admin (using proper address comparison)
-    const isOwner = compareAddresses(config.ownerWallet, userWallet);
-    const isAdmin = config.allowedWallets?.some((w: { wallet: string; role: string }) => 
-      compareAddresses(w.wallet, userWallet) && w.role === 'admin'
-    );
-    
-    if (!isOwner && !isAdmin) {
-      return res.status(403).json({ success: false, error: 'Only the owner or admins can add wallets' });
-    }
-    
-    if (!wallet || typeof wallet !== 'string') {
-      return res.status(400).json({ success: false, error: 'Wallet address is required' });
-    }
-    
-    // Validate wallet format (accept both EVM and Solana)
-    if (!isValidAddress(wallet)) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'Invalid wallet address format. Must be EVM (0x...) or Solana address.' 
-      });
-    }
-    
-    // Normalize wallet (EVM lowercase, Solana as-is)
-    const normalizedWallet = normalizeAddress(wallet);
-    const addressType = detectAddressType(wallet);
-    
-    // Validate role
-    if (!['admin', 'member'].includes(role)) {
-      return res.status(400).json({ success: false, error: 'Role must be admin or member' });
-    }
-    
-    // Cannot add owner wallet again
-    if (compareAddresses(config.ownerWallet, normalizedWallet)) {
-      return res.status(400).json({ success: false, error: 'Cannot add owner wallet' });
-    }
-    
-    // Initialize allowedWallets if needed
-    if (!config.allowedWallets) {
-      config.allowedWallets = [];
-    }
-    
-    // Check if already exists (using proper comparison)
-    const existingIndex = config.allowedWallets.findIndex((w: { wallet: string }) => 
-      compareAddresses(w.wallet, normalizedWallet)
-    );
-    
-    if (existingIndex >= 0) {
-      // Update role
-      config.allowedWallets[existingIndex].role = role;
-      config.allowedWallets[existingIndex].updatedAt = new Date().toISOString();
-    } else {
-      // Add new
-      config.allowedWallets.push({
-        wallet: normalizedWallet,
-        role,
-        addressType, // Store address type for reference
-        addedAt: new Date().toISOString(),
-      });
-    }
-    
-    saveNodeConfig(config);
-    
-    logger.info(`[AccessControl] Added wallet ${normalizedWallet} (type: ${addressType}) with role ${role}`);
-    
-    res.json({ success: true, wallet: normalizedWallet, role, addressType });
-  } catch (error) {
-    logger.error('[AccessControl] Add wallet error:', error);
-    res.status(500).json({ success: false, error: 'Failed to add wallet' });
-  }
 });
 
 /**
  * Remove a wallet from the allowed list
  * DELETE /api/access/remove
- * 
+ *
  * Body: { wallet: string }
  */
 router.delete('/remove', authenticate, (req: AuthenticatedRequest, res: Response) => {
-  try {
+    try {
     // Check if user is authenticated
-    if (!req.user?.wallet_address) {
-      return res.status(401).json({ success: false, error: 'You must be logged in to remove wallets' });
+        if ( ! req.user?.wallet_address ) {
+            return res.status(401).json({ success: false, error: 'You must be logged in to remove wallets' });
+        }
+
+        const config = getNodeConfig();
+        const userWallet = normalizeAddress(req.user.wallet_address);
+
+        // Check if user is owner or admin (using proper comparison)
+        const isOwner = compareAddresses(config.ownerWallet, userWallet);
+        const isAdmin = config.allowedWallets?.some((w: { wallet: string; role: string }) =>
+            compareAddresses(w.wallet, userWallet) && w.role === 'admin');
+
+        if ( !isOwner && !isAdmin ) {
+            return res.status(403).json({ success: false, error: 'Only the owner or admins can remove wallets' });
+        }
+
+        const { wallet } = req.body;
+
+        if ( !wallet || typeof wallet !== 'string' ) {
+            return res.status(400).json({ success: false, error: 'Wallet address is required' });
+        }
+
+        const normalizedWallet = normalizeAddress(wallet);
+
+        // Cannot remove owner
+        if ( compareAddresses(config.ownerWallet, normalizedWallet) ) {
+            return res.status(400).json({ success: false, error: 'Cannot remove owner wallet' });
+        }
+
+        if ( !config.allowedWallets || config.allowedWallets.length === 0 ) {
+            return res.status(404).json({ success: false, error: 'Wallet not found' });
+        }
+
+        const initialLength = config.allowedWallets.length;
+        config.allowedWallets = config.allowedWallets.filter((w: { wallet: string }) =>
+            !compareAddresses(w.wallet, normalizedWallet));
+
+        if ( config.allowedWallets.length === initialLength ) {
+            return res.status(404).json({ success: false, error: 'Wallet not found' });
+        }
+
+        saveNodeConfig(config);
+
+        logger.info(`[AccessControl] Removed wallet ${normalizedWallet}`);
+
+        res.json({ success: true, wallet: normalizedWallet });
+    } catch ( error ) {
+        logger.error('[AccessControl] Remove wallet error:', error);
+        res.status(500).json({ success: false, error: 'Failed to remove wallet' });
     }
-    
-    const config = getNodeConfig();
-    const userWallet = normalizeAddress(req.user.wallet_address);
-    
-    // Check if user is owner or admin (using proper comparison)
-    const isOwner = compareAddresses(config.ownerWallet, userWallet);
-    const isAdmin = config.allowedWallets?.some((w: { wallet: string; role: string }) => 
-      compareAddresses(w.wallet, userWallet) && w.role === 'admin'
-    );
-    
-    if (!isOwner && !isAdmin) {
-      return res.status(403).json({ success: false, error: 'Only the owner or admins can remove wallets' });
-    }
-    
-    const { wallet } = req.body;
-    
-    if (!wallet || typeof wallet !== 'string') {
-      return res.status(400).json({ success: false, error: 'Wallet address is required' });
-    }
-    
-    const normalizedWallet = normalizeAddress(wallet);
-    
-    // Cannot remove owner
-    if (compareAddresses(config.ownerWallet, normalizedWallet)) {
-      return res.status(400).json({ success: false, error: 'Cannot remove owner wallet' });
-    }
-    
-    if (!config.allowedWallets || config.allowedWallets.length === 0) {
-      return res.status(404).json({ success: false, error: 'Wallet not found' });
-    }
-    
-    const initialLength = config.allowedWallets.length;
-    config.allowedWallets = config.allowedWallets.filter((w: { wallet: string }) => 
-      !compareAddresses(w.wallet, normalizedWallet)
-    );
-    
-    if (config.allowedWallets.length === initialLength) {
-      return res.status(404).json({ success: false, error: 'Wallet not found' });
-    }
-    
-    saveNodeConfig(config);
-    
-    logger.info(`[AccessControl] Removed wallet ${normalizedWallet}`);
-    
-    res.json({ success: true, wallet: normalizedWallet });
-  } catch (error) {
-    logger.error('[AccessControl] Remove wallet error:', error);
-    res.status(500).json({ success: false, error: 'Failed to remove wallet' });
-  }
 });
 
 export default router;

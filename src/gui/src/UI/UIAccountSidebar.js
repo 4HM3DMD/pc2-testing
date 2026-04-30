@@ -682,7 +682,7 @@ async function UIAccountSidebar(options = {}) {
             
             <!-- Mode Toggle -->
             <div class="wallet-mode-toggle" role="group" aria-label="Wallet mode selection">
-                <button class="mode-btn ${currentMode === 'universal' ? 'active' : ''}" data-mode="universal" role="button" aria-pressed="${currentMode === 'universal'}" aria-label="Switch to Universal Account mode for multi-chain tokens">
+                <button class="mode-btn ${currentMode === 'universal' ? 'active' : ''}" data-mode="universal" role="button" aria-pressed="${currentMode === 'universal'}" aria-label="Switch to Agent Wallet mode for multi-chain tokens">
                     <span class="mode-icon" aria-hidden="true">${universalIcon}</span>
                     <span class="mode-label">${i18n('universal') || 'Universal'}</span>
                 </button>

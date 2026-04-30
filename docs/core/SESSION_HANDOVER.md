@@ -1,4 +1,4 @@
-# Session Handover — Feb 26, 2026
+# Session Handover — Mar 23, 2026
 
 > **Read this first when starting a new agent session.**
 
@@ -6,31 +6,1271 @@
 
 ## Where We Are
 
-**Branch:** `feature/jetson-gpu-acceleration` — 60+ commits ahead of main
-**v1.1.0 release:** Blocked on Sash testing on own Jetson hardware (hasn't arrived yet)
+**Branch:** `feature/lit-chipotle-migration` (branched from `feature/wasm-crypto-hardening`)
+**Parent Branch:** `feature/wasm-crypto-hardening` → `feature/ddrm-universal-access-layer` → `feature/elacity-ddrm-marketplace`
+**Release:** v1.1.0 tagged and released on 2026-03-03 (134 commits squash-merged to main)
+**Launcher:** v1.1.1 released — version display, one-click updates, full networking install
+**DAO Proposal:** Live at https://elastos.com/proposals/69a24f49247f130078064edd
+**Last Commit:** feat: Apple-grade Elacity Market redesign — unified design system, card system, transitions, accessibility
+**Active Plan:** `~/.cursor/plans/apple-grade_market_redesign_45904657.plan.md` — 16-phase UI/UX overhaul (COMPLETE)
 
-### Validated
+### Known Issues (RESOLVED)
 
-- One-command Jetson install works end-to-end on 2 independent Jetsons
-- EverlastingOS (`elastos.ela.city`) — WireGuard, uploads, video streaming all working
-- Anders (`alm.ela.city`) — fresh install, WireGuard via wireguard-go, domain live
-- Upload bug was a display issue (progress bar doubling), files always uploaded correctly
-- Gateway under systemd on supernode — auto-restarts, self-healing deployed
-- Weekly shipping reports on GitHub Discussions (#1, #2, #3)
+1. **Lit Protocol Chipotle v3 Breaking Changes (FIXED Mar 21)** — After their TEE outage/restart, Chipotle deployed undocumented breaking changes:
+   - **IIFE → `main(params)` pattern**: Lit Actions no longer support `(async () => { ... })()` with global variable injection. Code must now export `async function main(params)` — the TEE calls it with `js_params` as the argument.
+   - **Wallet-group bindings cleared**: PKP wallets were removed from groups during the restart. Had to re-add via `add_pkp_to_group` API.
+   - **Action CID re-registration**: New code structure = new IPFS hashes. All 4 action CIDs re-registered via `add_action_to_group`.
+   - **Fix applied**: All 4 Lit Action scripts rewritten (`non-media-decrypt-chipotle.js`, `media-decrypt-chipotle.js`, `non-media-encrypt-chipotle.js`, `media-encrypt-chipotle.js`), CIDs registered, PKP added to group. Working as of Mar 21.
+   - **IMPORTANT for future sessions**: Always use `async function main(params)` pattern for Chipotle Lit Actions. Use `get_lit_action_ipfs_id` endpoint to compute CIDs server-side. After code changes, must: (1) register new CID via `add_action_to_group`, (2) rebuild TypeScript (`npx tsc`), (3) restart node.
+   - **Registered Action CIDs (Mar 21)**:
+     - `non-media-decrypt-chipotle.js` → `QmYuh3LQXcC5Ddk7xTV2eR8Xvp1xKNSzqoimqpyM1SSDMC`
+     - `media-decrypt-chipotle.js` → `QmTPi2w7tSfGb7AzkMDCR6bCdSHkU5v5C6CGJC3sULTZN9`
+     - `non-media-encrypt-chipotle.js` → `QmNayE5MYzXcoMS9nvRk6MUo8r4ESLa3i65vHXzuBsnC2b`
+     - `media-encrypt-chipotle.js` → `QmXgZXJw9pzSeRkVZLtgNzgaxfErKhthv7j7Etge6WNG4u`
+2. **Channel edit save** — was returning 400; improved error handling now captures actual server error. Added auto SIWE re-auth for expired tokens. Needs user re-test.
+3. **`updateSubscriptionPlan` mutation format** — was previously incorrect (flat fields instead of `{ action, args }` wrapper). Fixed to match GraphQL schema (`SubscriptionPlanUpdateAction` requires `args: SubscriptionPlanInput!`). Also fixed `paymentToken` → `payToken`, `price` Int → String, added return field selection.
+4. **Token-gating field names** — was sending `{ tokenAddress, minimumBalance }` but `TokenOwnershipInput` expects `{ address, value }` (value as Float). Fixed.
 
-### Waiting On
+### Latest Session Work (Mar 23 — Apple-Grade Elacity Market Redesign)
 
-1. **Sash's own Jetson** — hardware hasn't arrived. Once it does: run one-command install, validate, merge to main, tag v1.1.0
-2. **Anders — WalletConnect/Essentials** — connection failed when scanning QR with Essentials wallet. MetaMask works. Low priority.
-3. **Anders — Ollama model download** — "download complete immediately." Likely Ollama not installed/running. Told him to check `systemctl status ollama`
-4. **EverlastingOS — pull latest** — needs to pull the progress bar fix (total_size*2 removed)
+**Context:** Full UI/UX overhaul of the Elacity Market dApp following Apple Human Interface Design principles. 16-phase plan covering design tokens, card system, navigation, detail view, modals, per-view polish, accessibility, and app-features.js compatibility. All 16 phases COMPLETE.
 
-### DAO Proposal
+**Plan:** `~/.cursor/plans/apple-grade_market_redesign_45904657.plan.md`
 
-- Keystone Fund proposal #356 live at https://elastos.com/suggestion/699c045de3bb57006e75463e
-- Community discussion ongoing. Phantze raised concerns (addressed). EverlastingOS supportive.
-- Council call upcoming — talking points prepared (see previous chat)
-- WCI v1 audit passed. Expenditure portal live.
+#### What Was Implemented
+
+**Phase 1 — Foundation (Design System)**
+- Unified CSS custom properties with Creator Dashboard tokens: `--accent: #3b82f6`, `--radius-sm/md/lg`, shadow hierarchy (`--shadow-sm/md/lg`), motion tokens (`--ease-out`, `--ease-spring`, `--duration-fast/normal/slow`)
+- Dark mode shadow tokens
+- New button CSS classes: `.btn-primary`, `.btn-secondary`, `.btn-danger`, `.btn-success`, `.btn-icon` — all inline `style=""` attributes removed from HTML (30+ instances)
+- Responsive breakpoints: 4-col/3-col/2-col/1-col grid, sidebar collapse to icons at 768px, mobile bottom tab bar at <768px
+
+**Phase 2 — Card System**
+- Redesigned `renderCard()`: max 2 badges (content type + price/owned), hover `translateY(-2px)` + shadow, active `scale(0.98)` spring, staggered `cardAppear` animation with `animationDelay`
+- Colored placeholder with content-type icon for missing thumbnails (CONTENT_TYPE_ICONS map)
+- Skeleton shimmer loading (`.skeleton`, `.skeleton-card`, `.skeleton-thumb`, `.skeleton-text`) replaces spinner
+- IntersectionObserver infinite scroll replaces "Load More" button, with cleanup on view switch
+
+**Phase 3 — Navigation**
+- View cross-fade transitions: `.view-enter` (200ms), `.view-slide-in` from right (300ms), `.view-slide-out` to right
+- Sidebar active indicator animation (`::before` pseudo-element with `indicatorIn`)
+
+**Phase 4 — Detail View**
+- Restructured into spatial zones: Media → Identity → Action Bar → Commerce → About → Market → Governance
+- Three collapsible sections (`#detail-about-section`, `#detail-market-section`, `#detail-governance-section`) with expand/collapse toggle and `aria-expanded`
+- Buy button state machine: idle → waiting (pulse) → confirming → success (checkmark animation) → error
+
+**Phase 5 — Modal System**
+- Unified modal CSS with `modalEnter` animation (scale 0.95→1.0 + fade)
+- ARIA: `role="dialog"`, `aria-modal="true"`, `aria-labelledby` on all 6 modals
+- Escape key handler for wallet-choice modal, backdrop click to close
+
+**Phase 6 — Per-View Polish**
+- Feed: single-row filter chips (`.filter-chips`) replacing dual tab rows, skeleton loading
+- Search: Apple-style rounded input with clear button, 300ms debounce, recent searches (localStorage), result count badge
+- Library: segmented control (All / Downloaded / Not Downloaded) — wired with `fetchPinnedCIDs()` API + client-side filtering
+- Channels: category pills, cover image gradient overlay, subscribe state animation
+- Earnings: dashboard summary cards (Total Unclaimed / Total Earned / Active Assets), auto SIWE login, improved error messages
+
+**Phase 7 — Accessibility & Compatibility**
+- ARIA roles on all interactive elements: cards (`role="article"`), sidebar (`role="navigation"`), toasts (`role="status"`, `aria-live="polite"`)
+- `@media (prefers-reduced-motion: reduce)` disables all animations
+- `app-features.js`: 3 DOM insertion point fixes (governance section → collapsible wrapper), 13 inline button styles replaced with CSS classes, CustomEvent contract verified
+
+**Bug Fixes in This Session**
+- Library segmented control (Downloaded/Not Downloaded) had no JavaScript wiring — added `GET /api/storage/ipfs/pins` endpoint + client-side filter logic
+- Earnings view didn't auto-trigger SIWE login when wallet connected but not authenticated — added auto SIWE like Library view
+- Earnings error catch showed "No royalty holdings found" on network failure — now shows "Failed to load earnings" with connectivity message
+- `app-features.js` activity section inserted inside collapsible governance content (wrong parent) — fixed to insert at `detail-body` level
+- `app-features.js` offer section similarly broken — fixed to use `detail-governance-section` wrapper
+
+#### Files Changed
+
+| File | Change |
+|------|--------|
+| `pc2-node/data/test-apps/elacity-market/styles.css` | +594 lines — complete CSS overhaul: design tokens, button classes, skeleton loading, view transitions, card animations, filter chips, collapsible sections, modal animations, responsive breakpoints, reduced-motion, earnings dashboard |
+| `pc2-node/data/test-apps/elacity-market/index.html` | Restructured HTML: removed 30+ inline styles, filter chips replace tabs, collapsible detail sections, ARIA on all modals/toast/sidebar, segmented library control, earnings dashboard cards, version bumps (v=21) |
+| `pc2-node/data/test-apps/elacity-market/app.js` | +457 lines — renderCard redesign, skeleton loading, infinite scroll, view transitions, buy button state machine, debounced search, recent searches, library filter (fetchPinnedCIDs + applyLibraryFilter), auto SIWE for earnings, improved error handling |
+| `pc2-node/data/test-apps/elacity-market/app-features.js` | DOM target fixes for new HTML structure (3 insertion points), 13 inline button styles → CSS classes, version bump (v=6) |
+| `pc2-node/src/api/storage.ts` | +16 lines — new `GET /api/storage/ipfs/pins` endpoint listing user's pinned CIDs |
+
+#### What's Next
+
+1. **V3 contract migration** — when new Elacity V3 contracts deploy, update ABIs and addresses in Creator Dashboard
+2. **Lit Protocol mainnet** — when Chipotle goes to mainnet (Mar 25+), update endpoints
+3. **Content Intelligence roadmap** — `~/.cursor/plans/content_intelligence_roadmap_e7c257b7.plan.md`
+4. **Enterprise roadmap (PDR)** — `~/.cursor/plans/pdr-aligned_enterprise_roadmap_b7f66066.plan.md`
+
+#### Known Issue
+
+- **Elacity API (`base.ela.city`) returning 502** — intermittent backend downtime affecting all views that fetch from GraphQL (Feed, Search, Library, Earnings, Watch Later, Channels). Not a code issue. Monitor with: `curl -s -o /dev/null -w "%{http_code}" "https://base.ela.city/api/2.0/graphql" -X POST -H "Content-Type: application/json" -d '{"query":"{ __typename }"}'`
+
+---
+
+### Previous Session Work (Mar 23 — Product Consolidation: Phase 1-2 Infrastructure)
+
+**Context:** Deep research on ERC-8183 (Agentic Commerce), ERC-8004 (Trustless Agents), and x402 (HTTP Micropayments) led to a 5-phase product consolidation plan. Phases 1-2 were prioritized and largely completed in this session.
+
+**Active plan:** `~/.cursor/plans/pc2_product_consolidation_c90fb064.plan.md`
+
+#### Phase 1 Completion: Walk-Away Independence
+
+**1. Shared Base RPC utility (NEW file)**
+- Created `pc2-node/src/utils/rpc.ts` — centralized RPC endpoint management
+- 5 public Base RPC endpoints: `mainnet.base.org`, `base.llamarpc.com`, `base-rpc.publicnode.com`, `1rpc.io/base`, `base.meowrpc.com`
+- Round-robin selection via `getBaseRpcUrl()`, manual rotation via `rotateBaseRpc()`
+- `baseRpcCall()` with automatic failover: tries all endpoints before throwing
+- Wired into: `storage.ts`, `chipotle-client.ts`, `dashPackager.ts` (replaces hardcoded `mainnet.base.org`)
+- Config: `content_indexer.rpc_urls` in `config/default.json` updated to 5 URLs
+- Pool initialized at startup: `initBaseRpcPool(config.content_indexer?.rpc_urls)` in `index.ts`
+
+**2. ContentIndexerService ESM fix**
+- `@noble/hashes` v2.0.1 ESM import crash (`ERR_PACKAGE_PATH_NOT_EXPORTED` for `./sha3`) — replaced with precomputed keccak256 topic hash constants:
+  ```typescript
+  const TOPICS = {
+    ChannelCreated: '0x2158ff0f68c57975fa16024dd5c348aed296bfd80e9e55bf75d137999875de57',
+    DigitalAssetRegistered: '0x797fefe7355137765738c87aa128138d8b7514df662b4444e9ef0d0e24299622',
+  } as const;
+  ```
+
+**3. Config loader fix**
+- Removed duplicate `blockchain` interface definition in `src/config/loader.ts`
+
+#### Phase 2 Completion: P2P Commerce Loop
+
+**4. Auto-download on purchase (2a) — verified already complete**
+- `pinAndRegisterMedia()` in Market dApp already calls `POST /api/storage/ipfs/pin` → `seedContent()` after `buyAccess()`
+- Full chain: purchase → pin → DHT announce → DB tracking
+
+**5. Disk quota enforcement (2d)**
+- `ContentSeedingService.isQuotaExceeded()` — checks disk usage via `statfsSync('.')` against `seeding.disk_quota_percent` config (default 50%)
+- Queue pauses when quota exceeded, resumes when space freed
+- `database.ts`: added `getTotalPinnedSize()` — sums size of all completed pins
+- `getStats()` enriched with `disk: { quotaExceeded, pinnedSizeBytes }`
+
+**6. Bandwidth enforcement (2d)**
+- `public.ts`: `bandwidthGuard` middleware on all `/ipfs/` routes
+- Rolling 5-second window tracks bytes served
+- Returns 503 with `Retry-After: 5` when `seeding.max_upload_mbps` exceeded (default 0 = unlimited)
+- `setBandwidthLimit(mbps)` exported, called from config at startup in `index.ts`
+- `recordBandwidth(bytes)` integrated into `trackCDNBandwidth`
+
+**7. P2P content discovery (2e)**
+- `GET /api/catalog` enriched with `is_local` boolean (cross-references `pinned_cids` table for each content CID)
+- `GET /api/catalog/content/:contentId` also returns `is_local`
+- `GET /api/catalog/providers/:cid` — new endpoint for on-demand DHT provider count
+- `ipfs.ts`: added `countProviders(cidString, timeoutMs=8000)` — queries DHT `findProviders`, counts `PROVIDER` events
+
+**8. Creator analytics (2c)**
+- `database.ts`: added `getCreatorStats(creatorAddress)` — joins `content_catalog` with `pinned_cids`:
+  - `totalAssets`, `byType` (Record), `locallyPinned`, `totalServes`, `totalBytesServed`
+  - Per-asset: name, content_cid, asset_type, channel_address, token_id, serve_count, size, last_served_at
+- `GET /api/catalog/creator/:address` — returns creator stats + seeding service status (enabled, queue, disk)
+
+**9. Supernode RPC vision**
+- Documented in ROADMAP.md under "Supernode Economics" — supernodes offer cached/load-balanced Base RPC as a gated Tier 2 service
+- Revenue via Access Token gating, reduces public RPC pressure
+
+#### Files Changed This Session
+
+| File | Change |
+|------|--------|
+| `pc2-node/src/utils/rpc.ts` | **NEW** — shared Base RPC utility |
+| `pc2-node/src/services/ContentIndexerService.ts` | Precomputed topic hashes, removed `@noble/hashes` dependency |
+| `pc2-node/src/config/loader.ts` | Fixed duplicate `blockchain` interface |
+| `pc2-node/config/default.json` | 5 RPC URLs in `content_indexer.rpc_urls` |
+| `pc2-node/src/storage/database.ts` | `getTotalPinnedSize()`, `getCreatorStats()` |
+| `pc2-node/src/services/ContentSeedingService.ts` | `isQuotaExceeded()`, disk quota enforcement in `drainQueue()` |
+| `pc2-node/src/api/public.ts` | `bandwidthGuard` middleware, `setBandwidthLimit()`, `recordBandwidth()` |
+| `pc2-node/src/api/index.ts` | `is_local` flag on catalog, `/api/catalog/providers/:cid`, `/api/catalog/creator/:address` |
+| `pc2-node/src/storage/ipfs.ts` | `countProviders()` method |
+| `pc2-node/src/index.ts` | `setBandwidthLimit` initialization from config |
+| `pc2-node/src/api/storage.ts` | `getBaseRpcUrl()` replaces hardcoded RPC |
+| `pc2-node/src/api/chipotle-client.ts` | `getBaseRpcUrl()` replaces hardcoded RPC |
+| `pc2-node/src/services/media/dashPackager.ts` | `getBaseRpcUrl()` replaces hardcoded RPC (with env override) |
+| `docs/core/ROADMAP.md` | Supernode RPC vision, indexer + auto-download marked complete |
+| `docs/core/DECENTRALIZATION_STATUS.md` | Indexer marked complete, RPC fallback noted |
+
+#### What's Next
+
+**Remaining from Phase 2:**
+- **Phase 2b: Creator publishing UX polish** — channel creation, pricing presets, DHT announce after mint. Core E2E flow works. This is the last open Phase 2 item.
+
+**Phase 3: AI Model Marketplace (not started):**
+- Verify large file encryption (4-70GB GGUF) — may need streaming encryption
+- Model purchase → decrypt → Ollama auto-load pipeline
+- Model licensing modes (perpetual, per-inference, time-limited)
+- AI model catalog with specialized metadata
+
+**Deferred items (waiting on external dependencies):**
+- Phase 1: Local-first IPFS — needs Elacity-side coordination and v3 contracts
+- Phase 1: Self-provisioned capacity credits — Chipotle uses API keys now, not RLI tokens. Re-evaluate when Chipotle production launches
+- Elacity v3 contracts — indexer has versioned design, config-only swap when v3 deploys
+
+---
+
+### Previous Session Work (Mar 20 — Marketplace Hardening)
+
+**Feedback fixes (6 gaps closed):**
+1. **Token-gating CRUD** — full add/edit/remove form for channel owners with on-chain token validation
+2. **Plan UPDATE action** — owners can now update existing plans (not just add/remove)
+3. **Per-tab earnings badges** — individual counts on Assets/Channels/Offers tabs (not just one dot)
+4. **Expanded earnings fields** — per-wallet access balances, governance volume, floor price, subscriber count, channel type, multi-token rewards
+5. **Multi-token withdrawal** — per-payment-token (USDC+ETH) claimable amounts with individual + batch withdraw
+6. **TradeGateway royalty offers** — confirmed using real royalty offer data
+
+**My Channels management hub:**
+- New "My Channels" tab in Earnings view
+- Server-side `creator` filter via `ChannelQueryInput` (confirmed via GraphQL schema introspection)
+- Channel cards with "View", "Edit Details", "Manage Plans" buttons
+- Centralized plan modal (openManagePlansModal)
+
+**API hardening:**
+- `gql()` now captures response body for non-200 errors (was just "API request failed: 400")
+- Debug logging on mutation calls
+- Auto SIWE re-auth before mutations if token expired
+- `RETRIEVE_CHANNEL_QUERY` now includes `categories` field
+- `updateSubscriptionPlan` mutation: added `{ action, args }` wrapper, return field selection, correct field names
+- `TokenOwnershipInput`: corrected field names (`address`/`value` not `tokenAddress`/`minimumBalance`)
+- `fetchManagedChannels`: uses server-side `creator` filter instead of client-side filtering
+
+#### Full Feature Implementation (Mar 20)
+
+Implemented all features from the Market dApp Full Features plan:
+
+**Architecture:**
+- Added `window.ElaMarket` namespace export for capsule-ready module bridge
+- Created `app-features.js` — extended features module using namespace pattern
+- Custom events (`ela-detail-rendered`, `ela-channel-rendered`, `wallet-connected`) for cross-module hooks
+- 6 files total: `app.js` (core), `app-features.js` (extensions), `api.js`, `wallet.js`, `styles.css`, `index.html`
+
+**Features implemented:**
+1. **Seller sorting** — cheapest first, "Best Price" tag on top seller
+2. **Properties accordion** — collapsible panel with content type, duration, file size, access type, protection status, supply, storage, upload date, royalties, usage rights, label, authority (BaseScan link), blockchain, contract (BaseScan link)
+3. **Earnings badge** — per-tab notification counts on Assets/Channels/Offers tabs
+4. **Activity history** — accordion section on detail page with Listings/Sales/Offers tabs, fetched via `searchListingEvents`/`searchTradeEvents`/`searchOfferEvents`
+5. **Publish/Unpublish toggle** — publisher-only toggle using `toggleUnpublish` mutation + `fetchStatisticByAsset`
+6. **Scarcity badges** — "X/Y" badges on grid cards, "Sold out" critical badge, "Low stock" warning, urgency indicator with pulsing dot
+7. **Expanded earnings** — click-to-expand items with per-wallet balances, multi-token rewards (USDC+ETH), governance volume, floor price, royalty distribution progress bars
+8. **Royalty offer wallet functions** — `createRoyaltyOffer`, `acceptRoyaltyOffer`, `cancelRoyaltyOffer` using TradeGateway ABI, with USDC approval flow
+9. **Offer UI** — "Make Offer" modal on detail page for royalty shares, "Offers" tab in Earnings with outgoing/incoming offers and Accept/Cancel actions
+10. **Channel management** — "Edit Channel" modal for creators (name, description, categories, image, cover image), uses `updateChannelInformation` mutation with auto re-auth
+11. **Subscription plan management** — full add/update/remove via `updateSubscriptionPlan` with correct `{ action, args }` format
+12. **Token-gating full CRUD** — add/edit/remove token thresholds with on-chain validation, correct `TokenOwnershipInput` format
+13. **Subscription lifecycle** — expiry display (active/warning/expired), unsubscribe button with confirmation, renewal prompt for expired subs
+14. **Distribution rights** — Token ID 3 balance displayed in governance section
+15. **My Channels hub** — dedicated tab in Earnings with channel list, edit/plans management
+
+**New API queries added:** `searchListingEvents`, `searchTradeEvents`, `searchOfferEvents`, `searchIncomingOfferEvents`, `fetchStatisticByAsset`, `governanceStatistics`, `toggleUnpublish`, `updateChannelInformation`, `updateSubscriptionPlan`, `fetchManagedChannels`
+
+**New wallet functions added:** `createRoyaltyOffer`, `acceptRoyaltyOffer`, `cancelRoyaltyOffer`, `getDistributionBalance`, `TOKEN_ID_DISTRIBUTION = 3`, `USDC_ADDRESS`, `batchWithdrawRewards`
+
+**GraphQL schema verified via introspection:**
+- `ChannelInformationInput`: name, description, categories, image, coverImage, tokenAccess
+- `SubscriptionPlanUpdateAction`: action (ActionType enum: ADD/UPDATE/REMOVE) + args (SubscriptionPlanInput)
+- `SubscriptionPlanInput`: planId, label, duration (DurationInput), description, price (String!), payToken
+- `TokenOwnershipInput`: address, value (Float), decimals (Int)
+- `ChannelQueryInput`: address, creator, channelType, categories, access, flags
+- `DurationInput`: value (Int!), unit (String!)
+
+#### AV1 Playback Fix & Init Segment Splitting (Mar 18)
+
+Critical playback bug resolved — encrypted AV1 video now plays end-to-end inside PC2:
+
+**Root cause chain (3 issues, all fixed):**
+1. **Nested PSSH removal** — `cenc-decrypt` Rust WASM's `strip_encryption_signaling()` only scanned top-level PSSH boxes. The new DASH packager nests PSSH inside `moov`, so they survived stripping. MSE rejected the init segment. **Fix:** Updated `strip.rs` to scan and remove PSSH boxes inside `moov` children.
+2. **Multi-track init segment** — Bento4's `mp4fragment` produces a shared init segment containing both video and audio tracks (`video/1/init.mp4` and `audio/2/init.mp4` are identical files). Chromium's MSE rejects a multi-track init fed to a single-track SourceBuffer (`audio object type 0x40 does not match what is specified in the mimetype`). **Fix:** Added `splitInitForTrack()` in `media.ts` — rebuilds `moov` with only the requested track's `trak` and `trex` entry. Video init: 1288B → 833B. Audio init: 1288B → 728B.
+3. **hdlr offset error** — `splitInitForTrack()` initially read `pre_defined` (all zeros) instead of `handler_type` (`vide`/`soun`) because the offset was +8 instead of +12 from the `hdlr` box type field. **Fix:** Corrected to `hdlrIdx + 12`.
+
+**Player debugging enhancements added:**
+- `appendToSourceBuffer()` now has try/catch around `sb.appendBuffer()` with labeled logging (video/audio)
+- `sourceended`, `sourceclose`, and `<video> error` event listeners log to console
+- Init segment first 16 bytes logged for binary verification
+- MediaSource readyState and SourceBuffer updating state logged before each append
+
+**Files changed:**
+| File | Change |
+|------|--------|
+| `pc2-node/crates/cenc-decrypt/src/strip.rs` | Scan for and remove PSSH inside `moov` children |
+| `pc2-node/src/api/media.ts` | `splitInitForTrack()` + integration after WASM strip |
+| `pc2-node/data/test-apps/pc2-media-runtime/player.js` | Debug logging for MSE append pipeline |
+| `pc2-node/data/test-apps/elacity-creator/app.js` | Gas pre-estimation + `sendTxWithRetry()` for minting |
+| `pc2-node/wasm-apps/cenc-decrypt/cenc-decrypt.wasm` | Rebuilt with PSSH fix |
+
+### What Just Shipped (v1.1.0 on main)
+
+- Four-tier stealth transport cascade (WG > AWG > VLESS Reality > ActiveProxy)
+- Desktop Launcher with version display, one-click updates, and full networking install
+- Desktop UI overhaul (full-width top bar, layout toggle, mobile-responsive)
+- Voice AI pipeline (Whisper + Ollama + Context API)
+- ARM installer hardened (Go auto-detection, AmneziaWG from source, sing-box 1.13.0 pinned, Jetson power mode)
+- Structured logging (no more console.log in production)
+- Security: credentials rotated, removed from docs
+- Upload verification against IPFS
+- WireGuard reconnection with exponential backoff (15s start)
+
+### What's Been Built on This Branch (Elacity dDRM, Mar 3-6)
+
+#### Phase 1 Foundation — COMPLETE
+- **postMessage wallet bridge** (`pc2-wallet-bridge.js`, `pc2-wallet-provider.js`) — shims `window.ethereum` for iframe-sandboxed dApps, routes wallet calls to host Particle Auth
+- **COOP/COEP headers** tested for `SharedArrayBuffer` (media player needs it)
+- **`installed_apps` SQLite table** + `AppInstallService.ts` — app lifecycle management
+- **Install/uninstall/list/update API** endpoints (`/api/apps/*`)
+- **Static file serving** for installed apps with `Cache-Control: no-cache` to prevent stale bundles
+
+#### Elacity Market dApp — FUNCTIONAL
+- **Full market UI** — Pipeline-style sidebar with Feed, Channels, My Library, Subscriptions, Watch Later
+- **Light/dark theme** with toggle
+- **GraphQL API client** (`api.js`) — `fetchAccessibleAssets`, `fetchChannels`, `retrieveChannel`, channel subscriptions, asset detail queries
+- **Wallet integration** (`wallet.js`) — Particle Smart Wallet, auto-SIWE authentication, deduplication of login prompts, `switchToBase()` for chain switching
+- **Channel directory** — grid/list views, category filters, channel detail pages with cover images and subscription tiers
+- **On-chain subscription flow** — plan selection modal, ERC-20 approval, `subscribePlan()` contract call via ethers.js
+- **On-chain purchase flow** — `buyAccess()` via `AuthorityGateway`, ERC-20 approval via `paymentProcessor()` — **verified working** (user purchased and played content)
+- **Media preview** — inline player for content previews
+- **Creator avatars** — resolved from IPFS with proper fallback
+
+#### DRM Playback — WORKING END-TO-END (TWO PIPELINES)
+
+**Pipeline 1: Elacity Player (legacy, for `.edrm` files)**
+- **`.edrm` file double-click** → launches Elacity Player in a dedicated popup window (required for `SharedArrayBuffer`/COOP/COEP)
+- **Lit Protocol DRM** — license acquisition, signature verification, decryption all working; `@lit-protocol/*` pinned to v7.3.0 via npm overrides
+- **Particle Universal Account** — SDK v1.0.24 integration fixed (removed `universalGas: true` for correct API shape)
+
+**Pipeline 2: PC2 Media Runtime (NEW, server-side DASH/CENC decryption)**
+- **Server-side decryption** — PC2 node fetches encrypted DASH segments from local IPFS, decrypts via Rust WASM (`cenc-decrypt` crate), strips all DRM signaling, streams clear fMP4 to browser
+- **Lightweight MSE player** — JavaScript-only player using MediaSource Extensions. No EME, no CDM, no SharedArrayBuffer, no COOP/COEP needed. Works inside PC2 iframe sandbox
+- **Rust WASM `cenc-decrypt`** — parses fMP4 boxes (moof/trun/senc/tenc), performs per-sample AES-128-CTR decryption with correct 16-byte IV support. CEK stays in WASM linear memory
+- **DRM stripping** — init segments: `encv→av01`, `enca→mp4a`, remove `sinf`/`pssh`, adjust all ancestor box sizes. Media segments: remove `senc`/`saiz`/`saio`, fix `trun.data_offset`
+- **Two-phase Lit auth** — server prepares SIWE + ReCap message, user signs in market dApp, signature relayed back to init endpoint for CEK recovery
+- **Smart Account aware** — detects Universal Account via Base factory contract, selects correct PSSH for SA address
+- **Local IPFS playback** — content loaded from local Helia node (`localhost:4200/ipfs/`) with fallback to Elacity CDN
+- **UnixFS DAG path resolution** — `/ipfs/:cid/*` wildcard route resolves nested paths within directory CIDs (DASH segments, manifests)
+
+#### Decentralized CDN Network — COMPLETE (Mar 5-6, upgraded Mar 21)
+- **NAT Traversal** — `@libp2p/circuit-relay-v2`, `@libp2p/dcutr`, `@libp2p/autonat` wired into Helia node for peer reachability behind NATs
+- **Bitswap-first fetching** — `fetchViaBitswap()` method tries DHT `findProviders` + direct peer block exchange before falling back to HTTP gateways
+- **CID announcement** — purchased content is announced on the Kademlia DHT via `dht.provide()` so other nodes can discover it
+- **Tiered re-announcement (Mar 21)** — `ContentSeedingService` replaces flat 12h interval with hot/warm/cold cadence:
+  - Hot CIDs (served in last 24h): re-announced every 2 hours
+  - Warm CIDs (served in last 7 days): re-announced every 6 hours
+  - Cold CIDs (not recently served): re-announced every 12 hours
+  - Startup burst: all pinned CIDs re-announced immediately on node start
+- **`pinned_cids` SQLite table** — tracks marketplace purchases with wallet address, size, source, last announcement time, `last_served_at`, `serve_count`, and `pin_status` (Migration 17 + Migration 18)
+- **Persistent serve tracking (Mar 21)** — every IPFS gateway fetch increments `serve_count` and updates `last_served_at` in the DB, enabling tier classification
+- **In-memory CDN bandwidth tracking** — `trackCDNBandwidth()` records bytes served per CID, request counts, source breakdown (local/bitswap/gateway)
+- **`GET /api/cdn/stats` endpoint** — exposes CDN bandwidth stats, top CIDs, uptime, IPFS network info
+- **Supernode IPFS Relay** — standalone libp2p node deployed on 69.164.241.210:4003 (TCP) + 4004 (WS), provides circuit relay + DHT server for NAT traversal
+- **Bootstrap addresses** — `PC2_SUPERNODE_BOOTSTRAP` in `ipfs.ts` points all PC2 nodes to the relay
+
+#### ContentSeedingService — COMPLETE (Mar 21)
+- **`src/services/ContentSeedingService.ts`** — orchestrates automatic pinning, DHT announcement, and serve tracking for the Elacity P2P CDN. Every buyer's node silently becomes a CDN edge.
+- **Priority pin queue** — configurable concurrency (`max_concurrent_pins`, default 3), immediate/background priority, FIFO drain
+- **Defensive safeguards** — CID normalization (ipfs://, /ipfs/, path segments), Helia-ready guard with deferred ops, dedup check (DB + in-memory), adaptive timeouts (180s base + 2s/MB, capped at 10min), content-not-found vs network error distinction
+- **Retry with exponential backoff** — 3 attempts at 30s/60s/120s intervals; content-not-found errors fail immediately
+- **Gap recovery** — incomplete pins (`queued`, `pinning`, `failed`) re-queued at background priority on startup
+- **Config section** — `seeding` block in `config.json` with: `enabled`, `auto_pin_purchases`, `disk_quota_percent` (50%), `max_concurrent_pins` (3), `max_upload_mbps` (0 = unlimited), tiered announce intervals
+- **Unpin endpoint** — `DELETE /api/ipfs/unpin/:cid` for explicit content removal from seeding
+- **Integration** — wired into `index.ts` (lifecycle), `storage.ts` (pin endpoint delegates to service), `public.ts` (serve tracking)
+- **WASM optimization** — `ipfs-assemble` crate rebuilt with `opt-level = 3` (speed over size) for faster large file assembly during pin
+
+#### Download-to-Node / Seeding — FUNCTIONAL
+- **"Save to Cloud" button** on owned assets — downloads content from Elacity IPFS gateway, saves `.ddrm` descriptor to user's filesystem
+- **Unified `.ddrm` capsule format** (ddrm-capsule-v2) — single file extension for all protected assets (media and non-media). JSON descriptor with `type` field (`"media"` or `"non-media"`) for routing to the correct viewer. Replaces legacy `.edrm` (media) and `.ddrm.json` (non-media) formats. Backward compatible with both legacy formats.
+- **NFT artwork thumbnails with dDRM badge** — when saving a `.ddrm` file, server fetches NFT artwork from descriptor's `thumbnail` URL, resizes to 128px, adds 4px indigo border frame and 40px dDRM shield badge in bottom-right corner. Files display with actual NFT artwork in the filesystem.
+- **Progress UI** — animated progress bar, status messages, "Open folder" link on completion
+- **`openFolder` IPC handler** — new message type in `IPC.js` to open file explorer at a specific path from within dApps
+- **`.ddrm` file type support in GUI** — unified `file-ddrm.svg` icon, MIME type `application/x-ddrm`, double-click reads descriptor and routes to `pc2-media-runtime` (media) or `ddrm-viewer` (non-media). Legacy `.edrm` and `.ddrm.json` still recognized.
+- **IPFS CAR format support** — `fetchViaGateway` in `storage/ipfs.ts` handles directory CIDs via CAR import, Elacity gateway as primary
+- **Auth for backend calls** — `pc2Fetch()` wrapper extracts `puter.auth.token` from iframe URL, includes `Authorization: Bearer` header
+
+#### Elacity Player — BUNDLED
+- Pre-built player at `test-apps/elacity-player/` with DASH streaming, DRM decryption, EIP-712 license requests
+
+### What Needs Work Next (Priority Order)
+
+#### Chipotle Production + Elacity v3 Contracts Migration (Target: Mar 25)
+
+**Chipotle production network (Lit Protocol):**
+The seeding service (`ContentSeedingService`) is CID-agnostic and needs **zero changes** for the Chipotle production migration. The changes needed are in the Lit/dDRM layer:
+- [ ] `chipotle-client.ts`: switch `DEFAULT_API_URL` from `api.dev.litprotocol.com` to production URL
+- [ ] Re-register all 4 Lit Action scripts on production network, update `.lit-action-cid`
+- [ ] Update `DEFAULT_PKP_ID` to production PKP (or use provisioning response)
+- [ ] `deploy/web-gateway/index.js`: change `network: 'chipotle-dev'` to production
+- [ ] Verify `SUPERNODE_PROVISION_URLS` endpoints if provisioning routes change
+
+**Elacity v3 smart contracts:**
+The seeding service is also contract-agnostic — it receives clean CID strings from the marketplace. Contract-related changes:
+- [ ] Update `AuthorityGateway` addresses in:
+  - `chipotle-client.ts` (currently `0x8fe6bf98...`)
+  - `storage.ts` (currently `0x580C26De...`)
+  - `packages/access/src/constants.ts` (currently `0x580C26De...`)
+- [ ] If `hasAccessByContentId()` ABI changes, update all 4 Lit Action scripts
+- [ ] If tokenURI metadata schema changes (where CIDs are embedded), update `buildDdrmDescriptor()` in `elacity-market/app.js`
+- [ ] Ideally: move all contract addresses and Lit URLs to env vars or config.json rather than hardcoding
+
+**Relationship:** The full Elacity purchase → seed → decrypt flow is:
+1. Buy AccessToken on Base via `AuthorityGateway.buyAccess()` — **contract-dependent**
+2. Extract CID from tokenURI metadata (`asset.cid`) — **metadata-schema-dependent**
+3. `POST /api/storage/ipfs/pin` → `ContentSeedingService.seedContent()` — **CID-agnostic, no changes needed**
+4. Decrypt: Lit Action calls `AuthorityGateway.hasAccessByContentId()` — **contract + Lit-dependent**
+
+#### Supernode Decentralization — Phase 1 (Completed Mar 7)
+- [x] Backup system (InterServer -> Contabo, 6h rsync)
+- [x] App Registry mirror + IPFS Relay + Boson DHT on Contabo
+- [x] Web gateway (slim read-replica) on Contabo
+- [x] WireGuard + AmneziaWG + VLESS Reality on Contabo
+- [x] Transport provisioning APIs on Contabo gateway
+- [x] Client-side sequential failover across supernodes
+- [x] Dual-write node registration
+
+#### Supernode Decentralization — Phase 2 (Completed Mar 7-8, NOT YET RELEASED)
+- [x] Gateway v2.0: Contabo added to `DEFAULT_SUPERNODES`, gossip/register/heartbeat endpoints
+- [x] Supernode bootstrap script (`deploy/supernode-bootstrap.sh`) — one-command VPS setup
+- [x] Dynamic supernode discovery — parallel fetch from all endpoints, disk persistence, merge with defaults
+- [x] Relay node mode — Settings toggle + `/api/supernode/relay/*` APIs + IPFS circuitRelayServer
+- [x] Supernode Manager dApp in dApp Center — spec check, service status, network view
+- [x] Networking fix script (`scripts/fix-networking.sh`) — standalone WG+AWG+VLESS installer for community
+
+**Deployed:** Gateway v2.0 on both InterServer and Contabo (Mar 8).
+**Tested:** All gossip/register/heartbeat endpoints verified. 84 users, 16 WireGuard peers, 4 supernodes confirmed after InterServer upgrade.
+**InterServer upgrade:** Completed Mar 8 — backup at `/root/pc2/web-gateway/index.js.bak`.
+
+#### Known Community Issue (Mar 8) — "Keeps Initializing" on Remote Connect
+**Scope:** 21 broken users (proxy:// endpoints), 10 working (WireGuard). Verified on InterServer registry.
+**Root cause:** WireGuard tools not installed. Node falls back to ActiveProxy which registers `proxy://host:8090/session`. Gateway tries HTTP proxy to port 8090 (Boson binary protocol) → `Parse Error: Expected HTTP/` → page hangs on "initializing" forever.
+**Why it happened:** Users installed PC2 before the networking install was added to the scripts (pre-v1.1.0), used the wrong script for their platform (e.g. `start-local.sh` on Jetson — doesn't install `wireguard-go`), or installed manually without running any install script.
+**Fix commands (on `main`, no branch push needed):**
+- **Jetson/ARM:** `curl -sSL https://raw.githubusercontent.com/Elacity/pc2.net/main/scripts/install-arm.sh | bash`
+- **Ubuntu/Debian x86:** `cd ~/pc2.net && git pull && bash scripts/start-local.sh`
+- **Standalone (any Linux):** `bash scripts/fix-networking.sh` (on branch, not yet on main)
+**Permanent fix:** Bundle WireGuard/AWG/VLESS binaries with the app. See plan: `fix_wireguard_bundling_d5a881fa`.
+
+#### Community Fix Verification (In Progress — Mar 8)
+- **Werolo (Jetson):** Running `curl -sSL .../install-arm.sh | bash` to install WireGuard+AWG+VLESS. Awaiting confirmation.
+- **Chelsea (Ubuntu VM x86):** Will run `cd ~/pc2.net && git pull && bash scripts/start-local.sh` tomorrow (Mar 9).
+- **Other affected users (19+):** Same root cause. Post fix commands in community once Werolo/Chelsea confirm.
+
+#### WireGuard Bundling — Phase 1 COMPLETE, Phase 2 IN PROGRESS (Mar 8)
+**Phase 1 (detection infrastructure) — COMPLETE:**
+- [x] Bundled binary detection — `WireGuardService`, `AmneziaWGService`, `VLESSRealityService` check `pc2-node/bin/{platform}-{arch}/` first
+- [x] Windows WireGuard support — `wireguard.exe /installtunnelservice` path
+- [x] `scripts/fetch-binaries.sh` — downloads/compiles `wg`, `wg-quick`, `wireguard-go`, `sing-box` for all platforms
+- [x] Permission setup module — `setupPermissions.ts` with macOS `osascript` auth dialog, Linux sudoers.d, manual instructions
+- [x] API endpoints — `GET /api/supernode/wireguard/status`, `POST /api/supernode/wireguard/setup-permissions`
+- [x] `.gitignore` updated — `bin/` excluded from git
+
+**Phase 2 (runtime auto-provisioning) — COMPLETE (Mar 8):**
+- [x] `BinaryManager` (`pc2-node/src/utils/binary-manager.ts`) — auto-downloads missing transport binaries on first startup
+- [x] `fetch-binaries.sh` enhanced — now also cross-compiles `amneziawg-go` and `awg-quick` for all platforms
+- [x] Integrated into `BosonService.initialize()` — runs before WG/AWG/VLESS service detection
+- [x] Safety net design — install scripts untouched, BinaryManager only downloads if binary genuinely missing
+- [x] Platform support: darwin-arm64, darwin-x64, linux-arm64, linux-x64, win32-x64
+
+**Pending:**
+- [ ] Create GitHub release `pc2-binaries-v1` with pre-compiled binaries for all platforms
+- [ ] Gateway "node offline" page — deferred; replaces infinite "initializing" with friendly HTML + auto-retry
+
+**Verified:** `wg`, `wg-quick`, `wireguard-go`, `sing-box` all detected from bundled paths in dev node logs (darwin-arm64).
+
+> **PRE-MERGE CHECKLIST — Do this BEFORE merging branch to main:**
+> 1. On your Mac, run: `bash pc2-node/scripts/fetch-binaries.sh all`
+>    - This cross-compiles wireguard-go, amneziawg-go, awg-quick, and downloads sing-box for all 5 platforms
+>    - Output lands in `pc2-node/bin/` (gitignored, not committed)
+> 2. Go to GitHub > Elacity/pc2.net > Releases > "Create a new release"
+>    - Tag: `pc2-binaries-v1`
+>    - Title: "PC2 Transport Binaries v1"
+>    - Upload ALL files from `pc2-node/bin/` as release assets, named as:
+>      - `wireguard-go-{platform}-{arch}` (e.g. `wireguard-go-linux-arm64`)
+>      - `amneziawg-go-{platform}-{arch}` (e.g. `amneziawg-go-darwin-arm64`)
+>      - `awg-quick-{platform}` (e.g. `awg-quick-linux`)
+>      - sing-box is downloaded directly from SagerNet releases, no upload needed
+>    - Publish the release
+> 3. Then merge branch to main
+>
+> **Why:** The BinaryManager in `pc2-node/src/utils/binary-manager.ts` downloads from these URLs
+> at startup when binaries are missing. Without the release, downloads return 404 (safe — just
+> logs a warning and continues, same behavior as today). With the release, any missing binary
+> is auto-downloaded on first PC2 startup.
+
+#### App Manifest Specification — COMPLETE (Mar 8)
+- [x] `docs/core/APP_MANIFEST_SPEC.md` — formal spec v1.0 with field reference, validation rules, examples
+- [x] Expanded `AppManifest` interface — added `category`, `system`, `capabilities.drm`, `distribution.signedBy`, expanded `type` to include `microvm`/`agent`
+- [x] Enhanced `validateManifest()` — semver enforcement, entry path safety (backslash check), length limits, capability type warnings
+- [x] All 5 test-app `app.json` files updated — categories, `drm: true` for Elacity apps
+- [x] Registry entries updated — `category` at app level, `drm: true` in capabilities
+- [x] Forward-compatible with: Elacity dDRM SDK, ElastOS Runtime (capsules + capability tokens), ERC-8004 Agent Registry
+- [x] Vision documented: Elacity as universal digital asset marketplace (media, AI models, code, datasets, agents) for humans and agents
+
+#### Universal Asset Strategy — DOCUMENTED (Mar 8)
+- [x] `docs/core/ELACITY_UNIVERSAL_ASSET_STRATEGY.md` — full strategy: Elacity as "Amazon of digital assets"
+- [x] SDK evolution plan: `@elacity-js/access` (universal decrypt), `@elacity-js/asset-packager` (generic encryption)
+- [x] Marketplace verticals mapped: media, AI models, code, datasets, software, agents (with TAMs)
+- [x] Revenue model: 7+ fee streams from media to white-label to enterprise DRM-as-a-Service
+- [x] Strategic blind spots documented: agent-to-agent commerce, composable assets, fiat onramp, mobile, enterprise B2B, creator tools, data unions
+- [x] ROADMAP.md updated with SDK evolution milestones, AI model marketplace, mobile app, fiat onramp, white-label protocol, universal marketplace scaling
+- [x] ARCHITECTURE_CONVERGENCE.md Part 15 added — dDRM as universal access layer, ACCESS_TOKEN-to-capability-token bridge, agent-to-agent commerce
+- [x] APP_MANIFEST_SPEC.md updated — universal asset metadata schema (`asset` field alongside `media`), 12 asset types defined
+
+#### Network Map Visual Upgrade — DEPLOYED (Mar 8)
+- [x] Decentralized topology: full supernode mesh, round-robin PC2 distribution, peer-to-peer links, offline faint links
+- [x] Core vs carrier supernodes: InterServer (`supernode_J1h7RHv5`) + Contabo (`supernode_EbfCHQUf`) are large hubs; Boson relay nodes are smaller
+- [x] Particle flow on all active links (gold backbone, green node-to-super, cyan peer)
+- [x] Animated node painting: pulsing supernode halos, breathing glow on online PC2 nodes
+- [x] Offline nodes are orange (sleeping laptops), stale nodes are dim red
+- [x] Background ambient effects: dot grid + radial glow zones behind each supernode
+- [x] Deployed to https://map.ela.city/ — frontend-only update, server/API untouched
+- [x] Backup at `/root/pc2/network-map/frontend/dist.bak`
+
+#### Network Map Rebrand, 3D Orb, & SEO — DEPLOYED (Mar 12-13)
+- [x] **3D orb visualization (World Computer)** — Three.js force-shield with GLSL shaders, auto-rotating globe with pulsing nodes and animated arc connections, side-by-side with existing 2D graph
+- [x] **Converted orb from TypeScript/Tailwind to JSX/inline styles** — 8 files in `deploy/network-map/frontend/src/components/force-shield/`
+- [x] **Rebranded** header from "ElastOS Personal Cloud Compute (PC2) Network Map" to "ElastOS World Computer Network"
+- [x] **White pill CTA button** — "Set up your node →" matching elacitylabs.com brand
+- [x] **Simplified node statuses** — merged `stale` into `offline`; activity types simplified to `active`/`occasional`/`idle`
+- [x] **Background color `#171717`** for header, footer, nodes card (matching elacitylabs.com cards)
+- [x] **Elacity Labs logo** in header (links to elacitylabs.com) + footer
+- [x] **Favicons** generated from Elacity Labs logo with dark background
+- [x] **Full SEO overhaul:**
+  - Title: "ElastOS World Computer Network — Live Node Map | Elacity"
+  - Rich meta description, keywords, canonical URL
+  - Open Graph + Twitter `summary_large_image` with `og-map.png` social card
+  - 3x JSON-LD schemas: WebApplication, Organization, Dataset
+  - `<noscript>` fallback content for JS-disabled crawlers
+  - SEO text section below node table with dynamic stats
+  - `robots.txt` (allowing GPTBot/CCBot), `sitemap.xml` (hourly changefreq)
+  - GA4 analytics (`G-QW5NN8K9DS`) + Google Search Console verification
+  - Ecosystem footer links (Elacity Labs, Exchange, Docs, Run a Node)
+  - `aria-label` on canvas panels, `role="status"` on stats bar
+- [x] **Mobile fixes** — orb fills panel (absolute positioning), no horizontal page scroll, node ID truncation
+- [x] **App icon fixes** — regenerated base64 icons for Elacity Market and Player, removed desktop shortcuts
+- [x] **Deployed** to InterServer — frontend-only, no server/API/nginx changes
+
+#### PC2 Dev Node (Local)
+- Dev node starts with `cd pc2-node && npm run dev` (NOT `npm start` from root, which launches base Puter)
+- Accessible at `http://localhost:4200/`
+
+#### `@elacity-js/access` — Universal Access Layer (IMPLEMENTED, Mar 13)
+
+Full technical spec at `docs/core/ACCESS_PACKAGE_SPEC.md`. Key decisions:
+
+- **Clean-room build** — built from scratch using Lit Protocol SDK directly, NOT extracted from media-player's 4.5MB minified bundle
+- **Two encryption paths** — CENC-compatible `acquireLicense()` for media-player backward compat + AES-GCM `encryptBuffer()`/`decryptBuffer()` for non-media assets
+- **Browser + Node.js** — dual entry points (`@elacity-js/access` for browser, `@elacity-js/access/node` for server-side)
+- **Capsule-ready** — stateless, no singletons, separated verify/acquire/decrypt operations, extensible types for Runtime capability tokens
+- **Security model** — key transits JS (same as today's player, Widevine L3 equivalent). Non-media files are raw after decrypt (by design — matches Steam/Adobe model). Runtime v2 capsule sandbox closes this gap.
+- **No COOP/COEP needed** — non-media assets use WebCrypto (no WASM, no SharedArrayBuffer), can decrypt server-side on PC2 node. No popup windows.
+- **Creator + Consumer** — same package handles both encryption (creator side) and decryption (consumer side)
+- **Contract ABIs** — `packages/access/src/contracts/` contains DigitalAsset, CoreStorage, ChannelCore ABIs + Base contract addresses + opRawData/sellRawData encoding helpers
+- **On-chain minting — VERIFIED WORKING** — Creator Dashboard integrates full `mint(string,uint16,bytes,bytes)` on Channel contract with correct `opRawData`/`sellRawData` encoding. Paid mint (opType=2 buy_and_resell) verified on public Elacity channel with BaseScan confirmation: AccessToken (10k copies), RoyaltyShare (95% creator / 5% Elacity at `0xCE4639...`), DistributionRight sub-tokens all minted correctly. OperativeBuyableSellable contract deployed at tx `0x26d40e78...`.
+- **Operative approval** — `setApprovalForAll(gateway, true)` on the Operative contract. Event parsing uses `ContractCreated` event from factory as fallback (channel proxy emits non-standard event signatures).
+- **Channel creation — WORKING** — `createChannel()` on ChannelCore (`0x6a3f7780...`) with metadata IPFS directory, 95/5 royalty split, and auto-grant of `MINTER_ROLE` to creator. Backend registration via GraphQL mutation to `base.ela.city/api/2.0/graphql`.
+- **IPFS directory upload** — `POST /api/storage/ipfs/add-directory` creates proper UnixFS directory CIDs so `{dirCID}/metadata.json` resolves on any gateway. Matches Elacity's `X-Target-Flow: dir,ipfs` pattern.
+- **Consumer decryption** — `acquireKey()` with SIWE-signed Lit session + `decryptWithLit()` for full Lit decrypt; `decryptWithKey()` for local AES-GCM; `fetchAndDecrypt()` combining IPFS fetch + Lit decrypt
+
+**Two distinct pipelines (coexisting):**
+- **Media** (video/audio): Existing Elacity CENC DRM pipeline (backend transcode → DASH → license server). We do NOT touch this.
+- **Non-media** (documents, images, 3D models, code, datasets, apps): Server-side Lit Protocol encryption (via pc2-node) → Elacity IPFS → on-chain mint → Lit decrypt. This is what `@elacity-js/access` handles.
+
+**Server-side Lit Protocol (Mar 13-14):**
+- Lit operations moved to pc2-node backend due to iframe sandbox blocking outbound Lit node connections
+- `POST /api/storage/lit/encrypt` — encrypts content with Lit Protocol using server-side LitNodeClientNodeJs
+- `POST /api/storage/lit/decrypt` — decrypts via Lit Action `executeJs()` with on-chain access verification
+- Capacity Credits: Auto-detected from Chronicle Yellowstone — queries RLI contract for latest non-expired token owned by capacity wallet `0x581D4bca...`
+- Delegation: Owner-signed `createCapacityDelegationAuthSig` on backend (not end-user signed)
+- **Blocking:** Waiting for private key of capacity wallet `0x581D4bca99709c1E0cB6f07c9D05719818AA6e49` from Irzhy
+
+**Lit Action Trust Model (Mar 14) — KEY ARCHITECTURE:**
+- Custom Lit Action (`pc2-node/data/lit-actions/non-media-decrypt.js`) runs on 6+ Lit TEE nodes
+- **Self-referential-only conditions** at encrypt time (`:currentActionIpfsId === ourCID`)
+- Access check embedded in action code: `hasAccessByContentId(buyerAddress, kid)` via ethers.js on Lit nodes
+- `buyerAddress` passed as jsParam (not `:userAddress` which would resolve to server wallet)
+- Smart Account aware — passes SA address when buyer uses Universal Account
+- Server reads action code from disk, passes via `code` parameter (bypasses IPFS gateway fetches)
+- Capacity token ID auto-detected from Chronicle Yellowstone chain (handles 15-day rotation cycle)
+
+**Elacity IPFS Pipeline (Mar 13-14) — KEY BREAKTHROUGH:**
+- Local IPFS (Helia) + Elacity IPFS (`POST /api/2.0/files/upload` with `X-Target-Flow: ipfs`) dual-upload
+- Uses raw file CIDs from Elacity (CIDv0/base58) for all public references (tokenURI, asset.cid)
+- `POST /api/storage/ipfs/upload-elacity` endpoint on pc2-node proxies uploads to Elacity's IPFS
+- Solved: CIDv0 vs CIDv1, directory wrapping, chunking differences between Helia and go-ipfs
+
+**Metadata format (fixed Mar 14):**
+- `image` field: auto-generated 400px JPEG thumbnail, uploaded to Elacity IPFS
+- `properties.authority`: resolved from channel's `authority()` function (AuthorityGateway address)
+- `properties.categories`: array matching asset category
+- Without these, Elacity's GraphQL strict schema rejects the asset (`LedgerTokenMetadata.image!`, `LedgerTokenProperties.authority!`)
+
+**On-chain verification:**
+- **First paid mint (Mar 13):** tx `0x26d40e78...` on public Elacity channel `0x2fb53d4a...`
+  - Operative: `0xf2359397...` (OperativeBuyableSellable)
+  - Sub-tokens: AccessToken (id=1, 10k), RoyaltyShare (id=2, 950→creator + 50→Elacity), DistributionRight (id=3)
+- **Marketplace-visible mint (Mar 14):** Channel `0xb4a1c563...` (user-created)
+  - Operative: `0x7D243806...`
+  - Asset CID: `QmSZuxhtcmXtWP465tYGqhs7Bu7bpRXCCaGhxFi63iPNUb`
+  - Metadata CID: `QmUsR7um7f8KvWMbdKGMxhiuwUceLXDLxzZhrNc7FjtkP1`
+  - **Visible on base.ela.city** — detail page loads with thumbnail, metadata, operative info
+- **First purchase (Mar 14):** tx `0xfbfe054a...` via Universal Smart Account
+  - Buyer `0x7efe9dd2...` received resale token (#1) + ACCESS_TOKEN (#3)
+  - 0.01 USDC paid: 0.0095→creator, 0.0005→Elacity
+  - 0.294864 USDC gas fee to Particle/UniversalX paymaster (`0xBeb44C79...`)
+  - Transaction succeeded on-chain despite UI `TypeError` in Elacity's `UAReceiptFetcher.enrichOperationsWithContracts`
+- User-created channels: `0x13446a6a...`, `0xb4a1c563...` (via ChannelCore.createChannel)
+
+**Key contract addresses (Base 8453):**
+- CoreStorage: `0xc8F50Bf1A6b765460621f861a64a5d333Bc7f575`
+- AuthorityGateway: `0x8fe6bf9877B78BF0126819ff2593235E54Ee1E29`
+- ChannelCore: `0x6a3f7780C54cb66291f8f1bE609047C2f664Dbf6`
+- Elacity royalty (assets): `0xCE4639Aa1E47E400683F49d95025475D5F50192d`
+- USDC on Base: `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` (6 decimals)
+- OperativeBuyable factory: `0x4A49A185c4bD77f037cE4f9fE788fc95ec8f3123`
+- OperativeBuyableSellable factory: `0x50002734a4546Ca153BF8b4cC703Fc53Ba90eb9f`
+
+**Tiered marketplace approach:**
+- **Tier 1 (days):** E-books, photos, audio, templates, fonts, 3D models — just encrypt/upload/download
+- **Tier 2 (weeks):** AI models (GGUF → Ollama), code packages, datasets, PC2 dApps — need local runtime integration
+- **Tier 3 (months):** Software licensing, API marketplace, agent marketplace — need capsule sandboxes / Runtime v2
+
+**Implementation branch:** `feature/ddrm-universal-access-layer` (branched from `feature/elacity-ddrm-marketplace`)
+
+**Testing status (updated Mar 14):**
+- [x] Lit Protocol production connectivity — **WORKING** via server-side pc2-node backend (capacity credits + delegation)
+- [x] Paid mint on user-created channels — **VERIFIED WORKING** (channel `0xb4a1c563...`, operative `0x7D243806...`)
+- [x] Integration with Elacity Market dApp backend (asset visibility after mint) — **VERIFIED** (visible on base.ela.city + channel page)
+- [x] On-chain purchase — **VERIFIED** (buyer received ACCESS_TOKEN + resale token, payment split correct)
+- [x] Consumer decrypt endpoint — `POST /api/storage/lit/decrypt` on pc2-node with Lit Action `executeJs()`
+- [x] Lit Action trust model — self-referential conditions, access check in action code, Smart Account aware
+- [x] Capacity credit auto-detection — queries Chronicle Yellowstone for latest valid RLI token
+- [x] Inline image rendering — decrypted content rendered as blob URL in Market dApp
+- [x] Gateway approval retry — 5s delay after mint, try-catch wrapper, "Fix Gateway Approval" tool in Creator
+- [x] Decrypt race condition fix — `ensureRawMetadata()` fetches IPFS metadata synchronously before decrypt
+- [x] **End-to-end decrypt test with capacity credits** — **WORKING** (Test 13 image, Test 14 PDF — Lit Payment Delegation via Relayer API)
+- [x] Fix library showing purchased assets — **FIXED** (Smart Account address used for library query)
+- [ ] Purchase with standard wallet (MetaMask) — to isolate UA receipt parsing bug
+- [x] Two-layer encryption — AES-GCM file encryption + Lit CEK encryption (bypasses 4MB Lit message limit)
+- [x] Lit Payment Delegation — auto-registration of PC2 server wallet via Relayer API (.lit-relayer-config)
+- [x] Pinata-backed Lit Action — self-referential conditions with IPFS CID (QmVMgKMKFELHTZf8PmD58nYBhr4S5DHLpuwFTvyDKLPXgq)
+- [x] Secure viewer pipeline — server-side rendering for images (Sharp), PDFs (PDF.js + Canvas hybrid), text (Canvas)
+- [x] PDF hybrid text rendering — getTextContent() overlay for Node.js (PDF.js can't render font outlines in node-canvas)
+- [x] Auto-decrypt on open — owned assets automatically start decrypting when detail view opens
+- [x] Parallel PDF page loading — all pages fetched simultaneously with placeholder slots
+- [x] Loading overlay — spinner shown in media area during decryption
+- [x] PDF thumbnail generation — POST /api/storage/thumbnail endpoint for Creator app
+- [x] Security: buffer zeroing, no-cache headers, right-click/drag disable, blob URL revocation, lossy JPEG conversion
+- [x] Text file (.txt) secure viewer — verified working with scrollable container (Mar 15)
+- [x] Optional thumbnail picker — user-selected thumbnail (max 2MB) with auto-generated fallback for images, PDFs, and text files (Mar 15)
+- [x] Text file auto-thumbnail — server-side 400x300 text preview via /api/storage/thumbnail (Mar 15)
+- [x] Bug fix: MetaMask "Estimated changes: Unavailable" — pre-estimate gas + chain switch settle delay (Mar 15)
+- [x] Bug fix: Library cache not refreshing after purchase — immediate + delayed cache invalidation (Mar 15)
+- [x] Thumbnail API fix — strip data URI prefix for clean base64 upload to Elacity IPFS (Mar 15)
+- [x] **WASM Renderer** — Rust crate (`wasm-renderer/`) compiled to `wasm32-wasip1`, renders text→image inside WASM linear memory (Mar 15)
+- [x] **WASMRuntime.ts** — Node.js WASI host (888 lines) using `@wasmer/wasi` + MemFS for file-based I/O with WASM module (Mar 15)
+- [x] **dDRM Viewer app** — dedicated PC2 app (`data/test-apps/ddrm-viewer/`) with dark UI, two display modes (image centered, document full-width scrollable), renderer/watermark badges, anti-piracy measures (Mar 15)
+- [x] **dDRM Viewer windowing** — launches as native PC2 UIWindow (iframe) via IPC `postMessage` → `launch_app()`, NOT browser popup (Mar 15)
+- [x] **.ddrm.json capsule format** — descriptor files for non-media assets containing encryptedDataCid, kid, litCiphertext, mimeType, etc. Saved to Documents folder (Mar 15)
+- [x] **GUI file type integration** — `.ddrm.json` icon (indigo shield), MIME registration (`application/x-ddrm+json`), double-click opens dDRM Viewer (Mar 15)
+- [x] **Market "Open" button** — launches dDRM Viewer from asset detail view via IPC (Mar 15)
+- [x] **IPC.js args forwarding** — `launchApp` handler passes structured `args` and `windowTitle` to `launch_app()` (Mar 15)
+- [x] **PDF scrollable view** — all pages stacked vertically with scroll, replacing single-page arrow navigation (Mar 15)
+- [x] **Text full-width view** — rendered text image fills window width for readability (Mar 15)
+- [x] **PC2 Media Runtime** — Rust WASM `cenc-decrypt` crate (AES-128-CTR per-sample, 16-byte IVs), MSE player (no EME/CDM), DRM stripping (init+segment), two-phase Lit auth, SA-aware PSSH selection. **End-to-end DASH video playback verified** *(completed Mar 16)*
+- [x] Lit Chipotle migration — Phases 0-5 complete (Mar 13-17). `chipotle-client.ts` replaces Lit SDK. `LIT_BACKEND=chipotle|datil` feature flag. **E2E round-trip verified** (Mar 17): encrypt + decrypt + plaintext match confirmed.
+
+#### Media Encoding Pipeline — WORKING END-TO-END (Mar 17-18)
+
+Built a complete local media encoding pipeline for the Creator Dashboard. Video/audio files uploaded by creators are transcoded, fragmented, CENC-encrypted, and packaged as DASH streams — all on the local PC2 node, no cloud dependency.
+
+**Key components built:**
+- `pc2-node/src/services/media/encoder.ts` — FFprobe analysis, transcode plan builder, FFmpeg execution. Adapts to hardware: NVIDIA GPU (av1_nvenc), SVT-AV1 (libsvtav1), x264 fallback. Audio-only path. Concurrency guard.
+- `pc2-node/src/services/media/bento4.ts` — Bento4 SDK management: discovers local installs or auto-downloads per-platform (linux-x64, darwin-x64, darwin-arm64). Only manages `mp4fragment` binary (mp4encrypt and mp4dash removed in Phase 2).
+- `pc2-node/src/services/media/dashPackager.ts` — Orchestrates DASH packaging: CEK generation (16-byte random), CEK encryption via Chipotle Lit Action, PSSH construction (Elacity custom system ID + dDRM metadata), WASM-based CENC encryption + init transform, TypeScript MPD generation, IPFS upload via Helia `storeDirectory()`. Includes 5-attempt retry with exponential backoff for Lit API transient failures. Phase 2: replaced mp4dash Python pipeline with mp4split + cenc-encrypt WASM + mpdGenerator.
+- `pc2-node/src/services/media/mp4split.ts` — (NEW Phase 2) TypeScript fMP4 parser with WASM acceleration: `splitFragmentedMP4WASM()` routes through `mp4-split` Rust WASM crate (91KB) for files <=800MB, JS `splitFragmentedMP4FromBuffer()` fallback for larger. Extracts codec strings, bandwidth, timescale, resolution metadata.
+- `pc2-node/src/services/media/mpdGenerator.ts` — (NEW Phase 2) TypeScript DASH MPD XML generator using SegmentTemplate + SegmentTimeline format.
+- `pc2-node/src/api/media.ts` — Extended with `POST /api/media/encode` (multipart upload via Multer disk storage) and `GET /api/media/encode/status/:jobId` (polling). `runEncodePipeline` orchestrates encoder→bento4→dashPackager. Best-effort replication to Elacity IPFS for multi-node discoverability.
+- `pc2-node/src/api/rate-limit.ts` — Added `media_encode` scope (5 jobs/hour/wallet)
+- `pc2-node/src/api/audit.ts` — Added `media_encode` action to audit trail
+
+**Creator Dashboard UI (media-specific):**
+- File type detection (`video/*`, `audio/*`) with `isMediaFile` flag
+- 4 GB max file size for media (vs standard limit for other assets)
+- Large files skip FileReader (no browser memory loading)
+- Purple gradient "Media Encoding Pipeline" badge on file selection
+- Dynamic button text: "Encode, Upload & Mint" for media
+- Detailed sub-step progress panel: Analyze → Transcode → Fragment → CENC Encrypt → IPFS Upload
+- Each sub-step has inline progress bar (green when done, purple when active, red on error)
+- Live transcoding stats: speed multiplier, FPS, elapsed time
+- Weighted progress calculation across pipeline stages
+- Fast-transition handling: marks all prior sub-steps as done when new stage detected between polls
+
+**Chipotle media encryption:**
+- `pc2-node/data/lit-actions/media-encrypt-chipotle.js` — Lit Action for encrypting 16-byte CENC CEK via PKP-AES
+- `pc2-node/data/lit-actions/media-decrypt-chipotle.js` — Lit Action for decrypting CEK with on-chain access check
+- `recoverMediaCEK()` in media.ts updated for `litBackend: 'chipotle'` — direct CEK recovery (no ECDH envelope)
+- PSSH includes `litBackend` field for per-asset backend tracking
+
+**IPFS integration:**
+- `uploadDashToIPFS()` uses Helia `storeDirectory()` for correct UnixFS directory CIDs
+- `pinRemoteCID()` enhanced: uses `ipfs-unixfs-exporter` for robust local directory detection, bypasses Helia `fs.stat()`/`fs.ls()` hangs on large DAGs, `fetchDirectoryRecursive()` uses `entry.size` metadata instead of reading all bytes
+- Best-effort replication of individual DASH files to Elacity IPFS gateway for multi-node reachability
+- Downloaded content stored in PC2 virtual filesystem (IPFS blockstore) with `.edrm` descriptor in user's Videos folder — NOT in native OS Finder
+
+**Critical bug fix — Duplicate wallet signatures (IPC):**
+- Root cause: Both `src/gui/src/IPC.js` and `pc2-node/src/wallet-bridge/pc2-wallet-bridge.js` independently listened for `pc2-wallet-rpc` messages and forwarded them to `window.ethereum`
+- Every wallet interaction (SIWE login, mint, approval, chain switch, play signatures) was sent to MetaMask TWICE ("1 of 2" popups)
+- Fix: `IPC.js` now explicitly ignores `pc2-wallet-rpc` and `pc2-wallet-ready` messages, deferring solely to `pc2-wallet-bridge.js`
+- Documentation warning added to `pc2-wallet-bridge.js` header
+
+**Other fixes:**
+- Removed explicit gas estimation from Creator `sendTx()` — MetaMask handles internally (fixed "Network fee: Unavailable" and "likely to fail")
+- Chain switch check before `wallet_switchEthereumChain` — prevents unnecessary MetaMask popup if already on Base
+- Market `handlePlay` skips `Wallet.signMessage` when `siweMessage` is null (Chipotle mode)
+- Market `onAccountChange` deduplication — prevents double SIWE login
+- `EncodeJob` interface returns `dataToEncryptHash` and `ciphertext` for correct minting `contentId`
+
+**Current status:** Pipeline works end-to-end. **Video playback verified** — Creator mint → buy → download → PC2 Media Player plays DASH/CENC-encrypted video. Download saves `.edrm` descriptor to user's Videos folder in PC2 virtual filesystem.
+
+**Critical fixes applied (Mar 18 — E2E session):**
+- **PSSH extraction pattern** — `extractPSSHJson()` searched for `{"data":{` but Bento4 PSSH JSON starts with `{"protocolVersion":`. Fixed to search multiple patterns.
+- **PSSH missing ciphertext/hash** — `buildPSSHJson()` was called before CEK encryption, so PSSH lacked `ciphertext` and `dataToEncryptHash`. Restructured flow: encrypt CEK first, then build PSSH with result.
+- **PSSH wrong authority address** — `DEFAULT_AUTHORITY` was `0x580c26De...` (incorrect contract). Changed to `0x8fe6bf98...` (the real AuthorityGateway on Base that implements `hasAccessByContentId`). Long-term: authority should be passed dynamically per-channel from creator app.
+- **PSSH kid mismatch** — `kid` was a random UUID from `generateCEK()`, but contract registers `hashToContentId(dataToEncryptHash)`. Fixed: `buildPSSHJson` now derives kid from encryption hash using same formula as creator app.
+- **IPFS pin hanging** — `pinRemoteCID` called `fs.stat()` and `fs.ls()` which both hang on large UnixFS directory DAGs in Helia. Rewrote local detection to use `ipfs-unixfs-exporter` directly against blockstore (fast, bypasses Helia's blocking layers).
+- **GUI IPC not rebuilt** — `src/gui/src/IPC.js` had the duplicate wallet fix in source but GUI bundle was never rebuilt. Ran `npm run build:only` in `src/gui/` to compile fix into `dist/bundle.min.js`.
+
+**Known issues:**
+- Elacity frontend UA receipt parsing: `UAReceiptFetcher.enrichOperationsWithContracts` throws `TypeError` after successful on-chain purchase. Bug is in Elacity's frontend, not our code.
+- MPD parser error for image assets: Elacity's media player tries to parse image metadata as DASH manifest. Expected for non-video content.
+- Lit Datil deprecation: Datil network being deprecated ~April 25, 2026 in favor of Chipotle (REST API, API key auth, TEE-based). Migration required.
+- Authority address is hardcoded to Base AuthorityGateway `0x8fe6bf98...`. Works for all Base channels (shared gateway). Long-term: creator app should pass resolved authority into encode endpoint for per-channel support.
+- ~~MetaMask "This transaction is likely to fail" during minting~~ — **FIXED (Mar 18)** — Custom gas estimation with 1.5x buffer + 500k fallback + `sendTxWithRetry()` with Retry/Skip buttons
+- ~~"Media format not supported" on AV1 video playback~~ — **FIXED (Mar 18)** — Three-part fix: nested PSSH stripping in Rust WASM, multi-track init splitting in TypeScript, hdlr offset correction
+
+#### WASM & Rust Optimization Audit — COMPLETE (Mar 18-19)
+
+Comprehensive audit of the PC2 node system to identify Rust/WASM optimization opportunities and alignment with ElastOS Runtime capsule convergence.
+
+**Quick Wins Completed (5/5):**
+- `build-wasm.sh`: `wasm-opt -Oz` post-build pass added — shrinks binaries ~10-20% on next build (graceful skip if binaryen not installed)
+- `media.ts`: Eager WASM preload at module import — eliminates cold-start disk read on first playback request
+- `WASMRuntime.ts`: Fixed WASM module cache key collision — uses SHA-256 fingerprint instead of `byteLength` (two different modules of same size would wrongly share cache)
+- `thumbnail.ts`: Replaced `execSync(ffmpeg)` with async `execFile` — no longer blocks event loop during video thumbnail generation
+- `static.ts`: Replaced all 4 `readFileSync` calls with async `readFile` for HTML injection paths — unblocks event loop during request handling
+
+**AES-GCM Encrypt in WASM — COMPLETE:**
+- Added `aes_gcm_encrypt_raw()` to `ddrm-renderer/src/decrypt.rs` (random CEK+IV generation inside WASM)
+- Added `encrypt_only` mode to `lib.rs` + `main.rs` — plaintext enters WASM, CEK+IV+ciphertext exits
+- 4 Rust tests pass (2 new: encrypt round-trip, nonce uniqueness)
+- `WASMRuntime.ts`: New `executeEncrypt()` method orchestrates WASM encrypt
+- `storage.ts`: Non-media file encryption (`POST /api/storage/lit/encrypt`) now uses WASM instead of Node.js `crypto.createCipheriv` — **plaintext never touches Node.js memory**
+- WASM binary rebuilt (5.8MB → includes encrypt capability)
+
+**Phase 2 — COMPLETE: mp4dash replaced with WASM pipeline (Mar 18):**
+- `mp4split.ts` (NEW) — TypeScript fMP4 parser that splits fragmented MP4 into init segment + media segments per track, extracts codec strings, bandwidth, timescale, and resolution metadata
+- `mpdGenerator.ts` (NEW) — TypeScript DASH MPD XML generator using SegmentTemplate + SegmentTimeline format (compatible with existing `mpdParser.ts`)
+- `WASMRuntime.ts`: New `executeCENCEncrypt()` method orchestrates calls to `cenc-encrypt` WASM module
+- `dashPackager.ts` REWRITTEN — replaces `mp4dash` Python script pipeline with: mp4split → WASM `transform_init` (sinf/tenc injection) → TypeScript PSSH injection (full JSON with ciphertext+hash+kid) → WASM `encrypt_segment` (per-segment AES-128-CTR) → TypeScript MPD generation → IPFS upload
+- `bento4.ts` SIMPLIFIED — removed Python 3 check, `mp4encrypt`, `mp4dash` references. Only `mp4fragment` binary remains
+- **Zero Python dependency** for media encoding. Zero `mp4encrypt` dependency. Only Bento4 `mp4fragment` binary retained (pure C, no script dependencies)
+- 8 Rust cenc-encrypt tests pass, TypeScript compiles clean
+
+**Audit findings documented in plan:** 18 optimization opportunities across 4 tiers (quick wins → high-impact → medium-impact → strategic). Key areas: WASM precompilation, IPFS chunk assembly in Rust, Rust HTTP proxy, sovereign key management. All aligned with Runtime capsule convergence path.
+
+**Remaining Items Triage (Mar 19):**
+- **Category A — Do soon (v1.3-v1.4):** ~~IPFS chunk assembly~~ **DONE (Mar 19)** — `ipfs-assemble` Rust WASM crate built and integrated. ~~ISO BMFF (MP4) parser~~ **DONE (Mar 19)** — `mp4-split` Rust WASM crate (91KB), DASH encoding pipeline now routes through WASM. ~~WASM decrypt max size~~ **DONE (Mar 19)** — raised from 50MB to 200MB, more non-media files decrypt inside WASM sandbox. AI serialization optimization (MessagePack for conversation contexts, reduces GC pauses) remains.
+- **Category B — Audited, defer:** Init segment split in WASM (SKIP — already WASM for strip, JS split is microseconds on 2-20KB, runs twice per session). NaCl crypto/Boson proxy (DEFER — Carrier will replace Boson transport). API key encryption to WASM (DEFER to v1.5 — infrequent, key still needs JS for HTTP calls, redesign holistically with capsule format).
+- **Category C — Skip:** Tier 4 nice-to-haves (thumbnail WASM, QR WASM, voice PCM) — minimal user impact, not worth the effort
+- **Explicitly NOT our job:** Carrier P2P in Rust (#15) — "Carrier carries, the runtime authorizes, providers define meaning, capsules express intent." Transport is Anders' responsibility
+
+#### PC2 Media Runtime — WORKING END-TO-END (Mar 15-16)
+
+Built a complete server-side DASH/CENC media decryption pipeline for PC2. Elacity's existing player relies on browser-native DRM (EME/CDM + SharedArrayBuffer) which can't work inside PC2's sandboxed iframes. The PC2 node now intercepts encrypted DASH streams, decrypts them server-side, strips all DRM signaling, and streams clear content to a lightweight MSE-based JavaScript player.
+
+**Two WASM runtimes (both running):**
+- **`ddrm-renderer`** — Non-media assets (images, PDFs, text). Decrypts and renders to pixels server-side.
+- **`cenc-decrypt`** (NEW) — Media (video/audio). Rust crate → `wasm32-wasip1`. Parses fMP4 box structure (moof/trun/senc), performs per-sample AES-128-CTR decryption per CENC standard. CEK never leaves WASM linear memory.
+
+**Key components built:**
+- `pc2-node/src/api/media.ts` — Three endpoints: `/api/media/prepare-auth` (Lit SIWE flow), `/api/media/init` (MPD parse + CEK recovery via Lit Protocol), `/api/media/segment` (fetch encrypted segment from IPFS → WASM decrypt → strip DRM → stream clear content)
+- `pc2-node/crates/cenc-decrypt/` — Rust CENC decryptor (mp4box parser, senc/trun/tenc extraction, AES-128-CTR per-sample decrypt with correct 16-byte IV support)
+- `pc2-node/data/test-apps/pc2-media-runtime/` + `data/installed-apps/pc2-media-runtime/` — Lightweight MSE player (no SharedArrayBuffer, no EME, no CDM)
+- `pc2-node/src/services/media/sessionManager.ts` — In-memory session store (CEK + MPD + init segments)
+- `pc2-node/src/services/media/mpdParser.ts` — DASH MPD XML parser
+- `stripEncryptionSignaling()` — Rewrites init segments: `encv→av01`, `enca→mp4a`, removes `sinf`/`pssh`, adjusts all ancestor box sizes
+- `stripSegmentEncryptionBoxes()` — Removes `senc`/`saiz`/`saio` from media segments, fixes `trun.data_offset`
+- Smart Account detection via Base factory contract for SA-aware PSSH selection
+- Two-phase Lit auth: server prepares SIWE + ReCap, user signs in market app, runtime relays to init
+
+**Verified:** First successful end-to-end playback of Elacity DRM-protected DASH video inside PC2 (AV1 codec, AAC audio, 33.8s duration, 16-byte CENC IVs).
+
+#### PC2 Media Runtime — Player Improvements (Mar 16)
+
+Comprehensive player hardening and UX polish:
+
+**Short-term runtime improvements (all completed):**
+- [x] **Session expiry handling** — server returns 410 on expired sessions, client transparently re-authenticates (wallet sign → re-init → retry segment). Idle timeout (2h inactivity) instead of absolute TTL. Concurrency guards + refresh limit.
+- [x] **Audio-only & video-only support** — music note placeholder UI for audio-only DASH content, graceful degradation when video track missing.
+- [x] **Seek into unbuffered regions** — server provides `segmentStarts` array per track. Client maps time→segment, flushes MSE buffers, re-appends init segments, fetches from new position. Works with both seek bar and keyboard shortcuts.
+- [x] **Adaptive bitrate switching (ABR)** — bandwidth measurement via segment fetch timing (harmonic mean), conservative quality selection algorithm (30% headroom for upgrade, 8s cooldown), seamless init-segment swap for quality transitions. Gear icon UI with auto/manual quality selection.
+
+**UI/UX improvements (all completed):**
+- [x] YouTube-style keyboard shortcuts (Space/K=play, J/L=±10s, arrows=±5s, F=fullscreen, M=mute, up/down=volume)
+- [x] Click-to-play on video area
+- [x] Buffering indicator overlay (spinner)
+- [x] Auto-hide controls with cursor hiding (3s idle)
+- [x] Buffer eviction (30s behind playback)
+- [x] Segment retry with exponential backoff (3 attempts)
+- [x] 20-second buffer-ahead window
+- [x] Enhanced error messages for MediaError codes
+- [x] Elacity brand colors (#3b82f6 accent, #262626 controls bg)
+- [x] Quality selector gear icon with dropdown menu (auto + manual quality options)
+
+**Known gotcha:** Puter UIWindow clips bottom ~3-4px of iframe content. Fixed with asymmetric padding (`6px 16px 10px`). Documented in `docs/wiki/Technical/PUTER_WINDOW_GOTCHAS.md`.
+
+#### WASM Renderer Hardening + Viewer UX (Mar 16)
+
+**WASM renderer now handles ALL static content types inside WASM linear memory:**
+- [x] **PDF rendering in WASM** — `hayro` pure-Rust PDF rasterizer (replaced `lopdf` which crashed in WASM). Full-fidelity rendering: layout, fonts, tables, images. WASM binary: 2.7MB → 5.8MB.
+- [x] **Code syntax highlighting** — `syntect` crate (Sublime Text grammars) for 30+ language MIME types (`application/javascript`, `text/x-python`, `text/css`, etc.). Dark editor theme (base16-ocean.dark), line numbers, per-token coloring.
+- [x] Images: already in WASM (image crate). Text: already in WASM (bitmap font).
+- [x] `storage.ts` routing updated: `wasmCodeTypes` array for `application/*` code MIME types.
+- [x] Fixed WASI compilation target — `wasm32-wasip1` (was `wasm32-unknown-unknown`, caused "WASI version could not be determined" error).
+- [x] Fixed Node.js canvas text fallback — proper word wrapping, 640px width, 2000 line limit.
+- [x] Added lowercase bitmap glyphs (a-z) to WASM text renderer.
+- [x] **"Mint on Elacity"** right-click context menu for non-dDRM files, launches `elacity-creator` with file pre-loaded.
+- [x] Restored `pc2-wallet-bridge.js` and `pc2-wallet-provider.js` (deleted in prior commit), fixed Particle smart wallet.
+- [x] Applied Elacity Market brand blue (`#3b82f6`) to dDRM Viewer accent elements.
+
+**dDRM Viewer UX enhancements (all completed):**
+- [x] **Image zoom/pan** — CSS-based zoom (`+`/`-`/`0` keyboard, Ctrl+scroll wheel), drag-to-scroll panning when zoomed, center-stable zoom transitions.
+- [x] **Document zoom + page navigation** — zoom applies to stacked page images, prev/next buttons, page indicator (`1 / N`), scroll-position tracking, PageUp/Down/Home/End keyboard shortcuts.
+- [x] **Floating toolbar** — semi-transparent glassmorphism bar (zoom controls, page nav, fullscreen toggle), auto-hide after 3s idle, show on mousemove, stays visible on hover.
+- [x] **Audio player** — new audio display mode with play/pause, seek bar, volume control, time display. Server-side `secure-view` endpoint extended with audio passthrough (decrypt + pass through bytes with original MIME). HTML5 `<audio>` element with blob URL.
+- [x] **Fullscreen toggle** — `F` key or toolbar button.
+
+**Security status after hardening:**
+| Content Type | WASM (plaintext in sandbox) | Node.js fallback |
+|---|---|---|
+| Images | Primary path | Sharp (on WASM failure) |
+| Text | Primary path | Canvas (on WASM failure) |
+| PDF | Primary path (text extraction) | PDF.js + Canvas |
+| Code | Primary path (syntect highlighting) | Falls through to text |
+| Audio | N/A (passthrough) | Decrypt + pass through |
+
+#### Next Up — Engineering Priorities
+1. ~~**Lit Chipotle migration**~~ — **DONE (Mar 13-18)** — Phases 0-5 complete. Migrated to new `chipotle-dev` network. All Lit Action CIDs registered. Pinned encrypt action (`non-media-encrypt-chipotle.js`). Auto-provisioning from supernodes built. **E2E verified** (PDF, image, text — all decrypt via Chipotle on new platform).
+2. ~~**End-to-end testing**~~ — **DONE (Mar 18)** — Full Creator mint → buy → dDRM Viewer decrypt verified on new Lit dev network. WASM rendering, watermarks, on-chain access check all confirmed working.
+3. **Deploy supernode provisioning** — `/api/ddrm/provision` endpoint coded but NOT deployed to supernodes. See `docs/core/LIT_PRODUCTION_CHECKLIST.md` for deployment steps. **Deploy when Lit Chipotle production network goes live** — deploying against dev network now would mean deploying twice (new endpoints, PKP addresses, dashboard keys expected to change).
+4. ~~**Media pipeline on Chipotle**~~ — **DONE (Mar 18)** — Full encoding pipeline E2E verified: transcode → fragment → CENC encrypt → DASH package → IPFS upload → mint → buy → download → playback. PSSH includes ciphertext, hash, contract-compatible kid, correct authority. Lit Chipotle API recovered.
+5. ~~**IPFS chunk assembly in Rust/WASM (v1.3)**~~ — **DONE (Mar 19)** — New `ipfs-assemble` Rust WASM crate (108KB). `getFile()` now routes files >=10MB through Rust/WASM assembler: chunks written to MemFS, assembled via `Vec::with_capacity()` + `extend_from_slice()` in WASM linear memory, final buffer read back. V8 heap drops from ~400MB to ~200MB for a 200MB file (GC only tracks the final output buffer). Graceful fallback to `Buffer.concat` if WASM unavailable. Also fixed MSE player SourceBuffer limit bug (duplicate `sourceopen` guard).
+5b. ~~**ISO BMFF (MP4) parser in Rust/WASM**~~ — **DONE (Mar 19)** — New `mp4-split` Rust WASM crate (91KB). `splitFragmentedMP4WASM()` wraps WASM binary for DASH encoding pipeline. Full ISO BMFF parsing (ftyp/moov/moof/mdat, track metadata, codec strings). 800MB size guard with JS `splitFragmentedMP4FromBuffer()` fallback. Video encoding noticeably faster.
+5c. ~~**WASM decrypt max size raised to 200MB**~~ — **DONE (Mar 19)** — `WASM_DECRYPT_MAX_BYTES` in `storage.ts` raised from 50MB to 200MB. Non-media dDRM files (images, PDFs, text, code, AI models) up to 200MB now decrypt inside WASM sandbox — CEK never enters V8 memory. Media playback confirmed no per-segment size limit.
+5d. ~~**Player access-denied UX**~~ — **DONE (Mar 19)** — `showError()` in `player.js` detects Lit/access denial keywords and shows "Access Required — purchase to watch" instead of raw technical errors.
+5e. ~~**Wave 1 Universal Asset Viewers**~~ — **DONE (Mar 19)** — 3D model viewer (Three.js, GLTFLoader/OBJLoader/STLLoader/FBXLoader, PBR lighting, OrbitControls, wireframe/grid/auto-rotate toolbar, model info panel, watermark + blob revocation), CSV/dataset viewer (paginated table, sort, search), font viewer (@font-face specimen, custom text), archive viewer (JSZip file tree). Backend passthrough in `storage.ts`. `humanMime` map extended with 15 new MIME types.
+6. **Audio routing fix** — Remove audio passthrough from dDRM Viewer; route all audio through Media Runtime encoding pipeline (DASH segments, per-segment WASM decrypt) for security parity with video. — Replace Elacity GraphQL dependency with event scanner (The Graph / custom). Removes single biggest centralization point. Becomes `elastos://market/*` provider capsule at convergence.
+7. **AI Model Marketplace alpha** — First non-media vertical: GGUF → encrypt → IPFS → ACCESS_TOKEN → decrypt → Ollama. Proves "Amazon of digital assets" story beyond video.
+8. **P-256 ECDH unwrap to WASM (Phase E)** — conditional on Chipotle envelope format. If Chipotle returns CEK directly, this phase is eliminated.
+9. ~~**`cenc-encrypt` Rust WASM crate**~~ — **BUILT + INTEGRATED (Mar 17-18)** — AES-128-CTR per-sample encryption, init segment transformation (sinf/tenc injection), binary PSSH generation. 8 tests pass. Now fully wired into the encoding pipeline via `executeCENCEncrypt()` in WASMRuntime, replacing mp4dash + mp4encrypt.
+10. ~~**`pssh-gen` Rust WASM crate**~~ — **INCLUDED in `cenc-encrypt`** — `pssh.rs` module generates binary PSSH boxes with Elacity system ID and dDRM metadata.
+11. ~~**WASM crypto hardening (Phases A-C)**~~ — DONE (Mar 16). Branch: `feature/wasm-crypto-hardening`.
+12. ~~**WASM renderer hardening**~~ — DONE (Mar 16) — PDF, code, images, text all render inside WASM.
+13. ~~**Viewer UX enhancements**~~ — DONE (Mar 16) — zoom, pan, page nav, audio player, toolbar.
+14. ~~**AES-GCM encrypt in WASM**~~ — **DONE (Mar 18)** — Non-media encryption now uses WASM `encrypt_only` mode. Plaintext never touches Node.js memory.
+15. ~~**Quick wins (5)**~~ — **DONE (Mar 18)** — wasm-opt build, WASM preload, cache key fix, async thumbnail, async static I/O.
+16. **Signed capsule format (v1.4-v1.6)** — Ed25519 sign all WASM binaries and dApp bundles. Cheapest convergence investment with highest payoff — Runtime verifies signatures before loading capsules.
+17. **Self-provisioned RLI tokens** — each node mints own capacity credits, removes Elacity wallet dependency
+18. **dApp Store** — global decentralized app marketplace. DeFi protocols (Uniswap, Aave), games, productivity tools packaged as encrypted dApps. Purchase → decrypt → run locally on PC2 node. See `docs/core/ELACITY_UNIVERSAL_ASSET_STRATEGY.md`.
+19. **ElastOS Runtime convergence** — CTO's Runtime at RC4 (0.19.0-rc4). WASM + microVM capsule execution verified. dDRM WASM crates (`aes-gcm-decrypt`, `cenc-decrypt`) target same `wasm32-wasip1` as Runtime's Wasmtime. Convergence path: our renderers become capsules, dDRM becomes a Provider Capsule. See `docs/core/ARCHITECTURE_CONVERGENCE.md`.
+
+**Carrier alignment note (Mar 19):** Per CTO's Carrier model, PC2 code targets the capsule/provider layer (dDRM, marketplace, rendering). Transport/discovery is Carrier's responsibility (Iroh, DHT, gossip, relay). Tier 3 audit items (Iroh IPFS, Rust proxy, Carrier P2P) deferred until Carrier provider interfaces are published. Tier B items (init-split, NaCl/Boson, API key encrypt) audited and individually dispositioned (skip/defer). Rules: one runtime = one Carrier node per machine; capsules consume provider contracts, not raw topology; Kubo stays optional.
+
+#### WASM Crypto Hardening — COMPLETED Phases A-C (Mar 16)
+
+Branch: `feature/wasm-crypto-hardening` (from `feature/ddrm-universal-access-layer` at `e05f1468e`)
+Task plan: `.cursor/tasks/WASM-CRYPTO-HARDENING/WASM-CRYPTO-HARDENING.md`
+
+**Phase A: Build Infrastructure + AES-GCM Decrypt-Only — DONE**
+- `wasm32-wasip1` added to `rust-toolchain.toml`
+- `pc2-node/scripts/build-wasm.sh` — builds all WASM crates, copies to `wasm-apps/`
+- `decrypt_only` mode in `ddrm-renderer` WASM — AES-GCM decrypt inside WASM linear memory, CEK never in Node.js
+- `executeDecryptOnly()` in `WASMRuntime.ts` — new orchestration method
+- `decryptAssetTwoLayer()` in `storage.ts` refactored: WASM path for files ≤50MB, Node.js fallback for larger
+- Benchmarked: 50MB threshold set based on MemFS overhead
+
+**Phase B: fMP4 Strip + Decrypt Combined — DONE**
+- `strip.rs` — Rust port of `stripEncryptionSignaling` + `stripSegmentEncryptionBoxes` with 64-bit extended box support
+- `strip_init` mode in `cenc-decrypt` — strip only, no decrypt (for init segments)
+- `strip: true` flag in `cenc-decrypt` — combined decrypt+strip in single WASM call
+- `media.ts` refactored: `stripInitViaWASM()` + `decryptSegmentViaWASM()` with `strip: true`
+- JS strip functions commented out (kept for one release cycle as safety net)
+
+**Phase C: PDF Text Extraction Spike — DONE (no implementation)**
+- `hayro-syntax` can parse PDF content stream operators (Tj/TJ) but lacks font-to-Unicode CMap resolution
+- Text extraction not viable without significant work — keeping `pdfjs-dist` for indexing
+- Documented findings, phase closed
+
+**Phase D: Lit Chipotle Migration — COMPLETE (Mar 13, new branch)**
+
+Branch: `feature/lit-chipotle-migration` (from `feature/wasm-crypto-hardening`)
+
+**Phase 0: API Compatibility Testing — PASS (5/5)**
+- Chipotle dev API reachable, inline code execution works
+- Usage key (`pc2-nodes-shared`) authenticates; account key is dashboard-only
+- TEE makes external RPC calls (Base mainnet) — `hasAccessByContentId` works
+- `ipfs_id` not supported (422) — must send inline `code` field
+- ethers v5 in TEE requires `toLowerCase()` before `getAddress()` for mixed-case addresses
+- Test script: `pc2-node/scripts/test-chipotle-phase0.mjs`
+
+**Phase 1: chipotle-client.ts — NEW FILE**
+- `pc2-node/src/api/chipotle-client.ts` — minimal REST client replacing entire `@lit-protocol/*` SDK
+- Three-tier API key: `data/.chipotle-user-key` (Tier 2) > `data/.chipotle-api-key` (Tier 1) > hardcoded default
+- `recoverNonMediaCEK()`, `recoverMediaCEKEnvelope()`, `encryptWithLitAction()`
+- `buildSelfRefConditions()`, `getChipotleInfo()`, `saveUserApiKey()` / `clearUserApiKey()`
+
+**Phase 2: storage.ts decrypt + encrypt migrated**
+- `recoverCEKAndFetchData()` → calls `recoverNonMediaCEK()` from chipotle-client
+- `/lit/encrypt` route → calls `encryptWithLitAction()` (no `client.encrypt()`)
+- IPFS fetch logic unchanged
+
+**Phase 3: media.ts CEK recovery migrated**
+- `recoverMediaCEK()` → calls `recoverMediaCEKEnvelope()` + local ECDH unwrap
+- `fetchLitActionCode()` — fetches media Lit Action JS by IPFS CID (Chipotle requires inline code)
+- `prepare-auth` returns stub in Chipotle mode (no SIWE needed)
+
+**Phase 5: Feature flag + dual-mode**
+- `LIT_BACKEND=chipotle` (default) — Chipotle REST API
+- `LIT_BACKEND=datil` — full Datil SDK (WebSocket, SIWE, capacity credits)
+- Both paths operational — all Datil functions remain intact for rollback
+- `/lit/server-info` reports active backend + tier info
+
+**Chipotle Dashboard Setup (updated Mar 18 — new dev network):**
+- Dashboard: `https://dashboard.dev.litprotocol.com/`
+- Account key: *(stored locally in `data/.chipotle-account-key`, never committed)*
+- Usage key (Tier 1): *(stored locally in `data/.chipotle-api-key`, never committed)* (key name: `pc2-ddrm-v3`, scoped to `elacity-ddrm` group)
+- Group: `elacity-ddrm` (group_id: 1) with encrypt + decrypt CIDs registered
+- PKP: `0x09bdfc8f8ec5a3bd2970497b930bd94839f22227` (Account Master Wallet, added to group via REST API)
+- IPFS Actions registered: `QmUdZUxe6BVoXiZcw4hE86YCHsgQVGEmgbN6sr7MhnL8pp` (encrypt), `QmfWksjQkuLxVGEZdHrbFKxUb2sL4K34bLYbD3mAKv2CZA` (decrypt)
+- Auto-provisioning: coded in `chipotle-client.ts`, gateway endpoint in `deploy/web-gateway/index.js` (**NOT deployed yet**)
+- Full details: `docs/core/CHIPOTLE_HANDOVER.md`
+
+**Remaining items:**
+- Deploy updated `non-media-decrypt.js` to IPFS (new CID due to ethers v5 fix)
+- Test media Lit Action on Chipotle TEE (ECDH envelope format)
+- `packages/access` Chipotle compatibility (Phase 4)
+- Settings UI for Tier 2 user-provided API key (Phase 5b)
+- LITKEY cost analysis for 100+ node network
+
+**CRITICAL FINDING (Mar 17 — RESOLVED):**
+Chipotle TEE uses a completely different cryptographic model than Datil:
+- **Datil**: `Lit.Actions.decryptAndCombine()` — threshold BLS decryption
+- **Chipotle**: `Lit.Actions.Decrypt({ pkpId, ciphertext })` — PKP-based AES
+
+Chipotle does NOT have `decryptAndCombine`. Existing Datil-encrypted assets
+require Datil backend. **New assets** encrypted with Chipotle use PKP-AES and
+are decryptable only via Chipotle. The `litBackend` metadata field tracks which
+scheme was used per asset.
+
+**E2E Round-Trip VERIFIED (Mar 17):**
+1. PC2 node encrypts file with AES-256-GCM (Layer 1)
+2. CEK encrypted via Chipotle `Lit.Actions.Encrypt({ pkpId, message })` (Layer 2)
+3. Chipotle TEE recovers CEK via `Lit.Actions.Decrypt({ pkpId, ciphertext })`
+4. AES-256-GCM decrypts file → original plaintext matches exactly
+5. CEK encoding: clean single-layer base64 (44 chars → 32 bytes)
+6. On-chain access check (`hasAccessByContentId`) confirmed working inside TEE
+
+**Dual-mode operation:**
+- `LIT_BACKEND=datil` — for existing assets (threshold BLS, Lit SDK)
+- `LIT_BACKEND=chipotle` — for new assets (PKP-AES, REST API, no SDK)
+- Production recommendation: use `datil` for existing, `chipotle` for new encryption
+- `/lit/encrypt` response includes `litBackend` field for per-asset tracking
+
+**Dashboard config (Chipotle — see CHIPOTLE_HANDOVER.md for full details):**
+- Dashboard: `https://dashboard.dev.litprotocol.com/`
+- Usage API key: `pc2-ddrm-v3` → *(stored in `data/.chipotle-api-key`)*
+- Group: `elacity-ddrm` (group_id: 1) with PKP `0x09bdfc8f8ec5a3bd2970497b930bd94839f22227` permitted
+- Account key: *(stored in `data/.chipotle-account-key`, dashboard management only)*
+
+Chipotle TEE available `Lit.Actions` methods:
+`Decrypt`, `Encrypt`, `getPrivateKey`, `getLitActionPrivateKey`,
+`getLitActionPublicKey`, `getLitActionWalletAddress`, `setResponse`
+
+**Phase E: P-256 ECDH to WASM — CONDITIONAL on Chipotle format**
+
+**Files changed (WASM hardening):**
+| File | Change |
+|------|--------|
+| `rust-toolchain.toml` | Added `wasm32-wasip1` target |
+| `pc2-node/scripts/build-wasm.sh` | NEW — automated WASM build script |
+| `pc2-node/wasm-renderer/src/lib.rs` | `decrypt_only` mode, `process_decrypt_only()` |
+| `pc2-node/wasm-renderer/src/main.rs` | `decrypt_only` output path (`/output/decrypted.bin`) |
+| `pc2-node/wasm-renderer/src/render/text.rs` | JPEG dim cap (16384px), MAX_LINES recalculated |
+| `pc2-node/src/services/wasm/WASMRuntime.ts` | `executeDecryptOnly()` method |
+| `pc2-node/src/api/storage.ts` | WASM decrypt path with 50MB threshold, Node.js fallback |
+| `pc2-node/crates/cenc-decrypt/src/strip.rs` | NEW — Rust fMP4 box stripping with 64-bit support |
+| `pc2-node/crates/cenc-decrypt/src/lib.rs` | `strip_init` mode, `strip: true` flag |
+| `pc2-node/src/api/media.ts` | `stripInitViaWASM()`, `loadCENCWasmBinary()`, `strip: true` |
+| `pc2-node/wasm-apps/ddrm-renderer/ddrm-renderer.wasm` | Rebuilt |
+| `pc2-node/wasm-apps/cenc-decrypt/cenc-decrypt.wasm` | Rebuilt |
+
+**Files changed (WASM Tier B audit, Mar 19):**
+| File | Change |
+|------|--------|
+| `pc2-node/crates/mp4-split/Cargo.toml` | NEW — Rust WASM crate for ISO BMFF (fMP4) parsing |
+| `pc2-node/crates/mp4-split/src/main.rs` | NEW — Full MP4 box parser (ftyp/moov/moof/mdat), track metadata, codec extraction |
+| `pc2-node/wasm-apps/mp4-split/mp4-split.wasm` | NEW — Compiled WASM binary (91KB optimized) |
+| `pc2-node/src/services/media/mp4split.ts` | Added `splitFragmentedMP4WASM()` with WASM routing + JS fallback |
+| `pc2-node/src/services/media/dashPackager.ts` | Updated import to use WASM-accelerated mp4split |
+| `pc2-node/src/services/wasm/WASMRuntime.ts` | Added `executeMp4Split()` method |
+| `pc2-node/scripts/build-wasm.sh` | Added `mp4-split` to build targets |
+| `pc2-node/src/api/storage.ts` | `WASM_DECRYPT_MAX_BYTES` raised from 50MB to 200MB |
+| `pc2-node/data/test-apps/pc2-media-runtime/index.html` | Added `id="error-title"` to error screen `<h2>` |
+| `pc2-node/data/test-apps/pc2-media-runtime/player.js` | User-friendly access denial messages (keyword detection) |
+
+#### Wave 1 — Universal Asset Viewers (Mar 19)
+
+Expanded the dDRM Viewer to support four new interactive content types beyond the existing image/PDF/text/code/audio viewers. All content is WASM-decrypted server-side, then passed to the client for interactive rendering (passthrough model — same security as existing audio, with blob URL revocation). VFX industry use case: 3D model monetization with timed access and resale royalties.
+
+**Backend changes:**
+- `storage.ts`: New passthrough block before the 415 response for `model/*`, `font/*`, `text/csv`, `text/tab-separated-values`, `application/zip`, `application/gzip`, `application/x-tar`, `application/vnd.ms-fontobject`. Sets `X-Renderer: passthrough` header. Zeroes decrypted buffer after sending.
+
+**3D Model Viewer (Three.js):**
+- Three.js v0.170.0 via ES Module importmap (CDN, loaded only when needed)
+- Five loaders: GLTFLoader (GLB/glTF), OBJLoader, STLLoader, FBXLoader — auto-detected by MIME type
+- PBR lighting: ambient (0.4) + directional (1.0) with shadows + fill light (0.3)
+- ACES Filmic tone mapping, sRGB color space, 2x pixel ratio cap
+- OrbitControls with damping, auto-framing (bounding box → camera position)
+- Animation mixer for GLTF/FBX animated models
+- Grid helper (toggleable)
+- Model info panel: polygon count, material count, bounding box dimensions
+- Toolbar: Wireframe (W), Grid (G), Auto-rotate (A) — both buttons and keyboard shortcuts
+- Anti-piracy: watermark overlay (buyer address + "dDRM Protected"), blob URL revoked after GPU load
+- Dark theme background (#1a1d27), responsive resize handling
+
+**CSV/Dataset Viewer:**
+- Client-side CSV parser with quoted field support (handles embedded commas/newlines)
+- TSV support via MIME type detection
+- Paginated table (100 rows per page) with page navigation
+- Full-text search across all columns
+- Row count and column count stats
+- Dark theme table styling with hover highlight
+- HTML-escaped cell content
+
+**Font Viewer:**
+- `@font-face` loading via `FontFace` API with blob URL
+- Type specimen display: uppercase alphabet, lowercase alphabet, digits
+- Pangram ("The quick brown fox...")
+- Size samples: 72, 48, 36, 24, 18, 14px
+- Custom text input with live preview (48px)
+- Dark theme with subtle section separators
+
+**Archive Viewer:**
+- JSZip v3.10.1 (CDN, deferred load)
+- File tree listing with icons (per extension), sizes, item count
+- Directories sorted first, then alphabetical
+- Total uncompressed size in footer
+- No extraction to disk — read-only listing only
+
+**HTML/CSS additions:**
+- `index.html`: 4 new containers (model-container, data-container, font-container, archive-container), Three.js importmap, JSZip CDN script
+- `viewer.css`: 288 lines of new CSS for all four viewer modes (model canvas, table styling, font specimen, archive tree)
+- `viewer.js`: `humanMime` map extended with 15 new MIME types (model/*, font/*, text/csv, application/zip, etc.)
+
+**Files changed (Wave 1 viewers, Mar 19):**
+| File | Change |
+|------|--------|
+| `pc2-node/data/test-apps/ddrm-viewer/viewer.js` | 4 new viewer modes (3D/CSV/font/archive), 15 MIME types, toolbar, keyboard shortcuts |
+| `pc2-node/data/test-apps/ddrm-viewer/index.html` | 4 new containers, Three.js importmap, JSZip CDN |
+| `pc2-node/data/test-apps/ddrm-viewer/viewer.css` | 288 lines of styling for all new viewer modes |
+| `pc2-node/src/api/storage.ts` | Passthrough block for model/font/CSV/archive MIME types |
+| `docs/core/ROADMAP.md` | Wave 1 items added to Tier 1, v1.2.0 release notes updated |
+
+**Remaining Wave 1 items:**
+- [ ] **Audio routing fix** — remove audio passthrough from dDRM Viewer, ensure all audio goes through Media Runtime encoding pipeline (DASH segments, per-segment WASM decrypt). Currently audio plays via passthrough (weaker security model — full decrypted blob in browser memory). Critical for security parity with video.
+- [x] **Creator Dashboard MIME hints** — `resolveFileMime()` added to `elacity-creator/app.js` with EXT_MIME_MAP for .glb, .gltf, .obj, .stl, .fbx, .woff, .woff2, .ttf, .otf, .csv, .tsv, .gz, .tar, .onnx, .safetensors, .gguf. All downstream references use `state.resolvedMime` *(completed Mar 19)*
+- [ ] **E2E test** — mint one GLB + CSV + font + ZIP, purchase each, open in viewer, verify rendering and anti-piracy. GLB verified ✅. Others pending.
+
+**WASM/Rust Optimization Pass (Mar 20):**
+- **Speed-tuned crypto compilation** — `cenc-decrypt` and `cenc-encrypt` changed from `opt-level = "s"` (size) to `opt-level = 3` (speed). AES-128-CTR operations ~20-40% faster for video/audio segment encrypt/decrypt.
+- **`panic = "abort"` on all WASM crates** — Removes unwinding code from all 5 WASM binaries. `ddrm-renderer.wasm` reduced by 482 KB (5.83 MB → 5.35 MB, -8.3%).
+- **Smart build pipeline** — `build-wasm.sh` now uses per-crate wasm-opt levels: `-O3` for crypto crates (speed), `-Oz` for utility crates (size). Added `--enable-nontrapping-float-to-int` and `--enable-simd` flags for Rust-generated WASM features.
+- **Hot-path log reduction** — 20 `logger.info` calls in `WASMRuntime.ts` downgraded to `logger.debug`. Eliminates 5-10 log writes per WASM invocation in production. First-time compilation, queue events, and errors remain at `info`.
+- **Security: CEK buffer zeroing** — `unwrapECDHEnvelope()` in `media.ts` now zeroes the decrypted license buffer (`decrypted.fill(0)`) after CEK extraction, preventing sensitive key material from lingering in V8 heap.
+- **Security: derived key zeroing** — `encryptMnemonicWithSignature()` and `decryptMnemonicWithSignature()` in `encryption.ts` now zero the derived AES key (`key.fill(0)`) in `finally` blocks, ensuring cleanup even on error paths.
+- **IPFS WASM threshold lowered** — `WASM_ASSEMBLE_THRESHOLD` in `ipfs.ts` lowered from 10MB to 5MB. More files assembled in WASM linear memory (outside V8 heap), reducing GC pressure on constrained devices like Jetson.
+
+**WASM binary size comparison (before → after):**
+| Binary | Before | After | Change |
+|--------|--------|-------|--------|
+| `ddrm-renderer.wasm` | 5,834,638 B | 5,352,800 B | -8.3% (482 KB saved) |
+| `cenc-decrypt.wasm` | 152,581 B | 156,322 B | +2.5% (speed trade-off) |
+| `cenc-encrypt.wasm` | 147,887 B | 144,863 B | -2.0% |
+| `ipfs-assemble.wasm` | 95,407 B | 95,407 B | unchanged |
+| `mp4-split.wasm` | 91,593 B | 91,593 B | unchanged |
+
+**Files changed (WASM optimization, Mar 20):**
+| File | Change |
+|------|--------|
+| `pc2-node/crates/cenc-decrypt/Cargo.toml` | `opt-level = 3`, `panic = "abort"` |
+| `pc2-node/crates/cenc-encrypt/Cargo.toml` | `opt-level = 3`, `panic = "abort"` |
+| `pc2-node/crates/mp4-split/Cargo.toml` | `panic = "abort"` |
+| `pc2-node/crates/ipfs-assemble/Cargo.toml` | `panic = "abort"` |
+| `pc2-node/wasm-renderer/Cargo.toml` | `panic = "abort"` |
+| `pc2-node/scripts/build-wasm.sh` | Per-crate wasm-opt levels, SIMD + nontrapping-float-to-int flags |
+| `pc2-node/src/services/wasm/WASMRuntime.ts` | 20 hot-path logs downgraded to debug |
+| `pc2-node/src/api/media.ts` | CEK buffer zeroing in `unwrapECDHEnvelope` (`decrypted.fill(0)` after extraction) |
+| `pc2-node/src/utils/encryption.ts` | Derived key zeroing in mnemonic encrypt/decrypt (`key.fill(0)` in `finally`) |
+| `pc2-node/src/storage/ipfs.ts` | WASM assemble threshold lowered from 10MB to 5MB |
+| `pc2-node/wasm-apps/*/` | All 5 WASM binaries rebuilt |
+
+#### Elacity Market — Marketplace Features & Earnings Page (Mar 20)
+
+**Marketplace Feature Audit & Implementation:**
+Comprehensive audit of Elacity Market dApp against smart contract reference (AuthorityGateway, TradeGateway, Operative contracts on Base). Identified architectural differences (no Marketplace/Auction contracts on Base) and implemented all P0-P4 features.
+
+**Key features implemented:**
+- **Access token resale** — "List for Sale" flow with wallet selector (EOA/Smart Account), sellers list identifying user's own listings ("You (EOA)" / "You (Smart)"), price input in USDC, quantity selection
+- **Dual-wallet ownership display** — asset detail page shows access token balances per wallet (EOA and Smart Account chips)
+- **Royalty info display** — `resellerCut` correctly converted from per-mille to percentage, creator/reseller split shown
+- **Royalty shares & rewards** — governance section shows royalty share balances and pending rewards from both EOA and Smart Accounts, always visible for connected wallets (creators see their royalties regardless of access token ownership)
+- **Dynamic sellers listings** — active sellers list from AuthorityGateway with price, quantity, buy buttons
+- **Resellable badges** — "Buy & Resell" vs "Buy Once" badge based on `OP_TYPE()`
+
+**Dedicated Earnings/Revenue Page (NEW):**
+- New sidebar tab "Earnings" with dollar sign icon
+- Two sub-tabs: **Assets** and **Channels** — fetches `fetchMyRoyaltyItemsByAddress` and `fetchRewardSummaryByAddress` from Elacity GraphQL
+- **Dual-wallet aggregation** — queries both EOA and Smart Account, merges and deduplicates results
+- **Summary banner** — total unclaimed rewards across all contracts with green "Withdraw All" button
+- **Per-item list** — thumbnail, name, royalty share %, contract address, unclaimed amount, individual "Withdraw" button
+- **Single-contract withdraw** — calls `withdrawRewards(paymentToken)` or `multicall` for multiple payment tokens
+- **Batch "Withdraw All"** — sequentially processes each contract with unclaimed rewards, shows progress ("Withdrawing 1/5...")
+- **Clickable items** — asset items navigate to detail page
+
+**GraphQL queries added to api.js:**
+- `fetchMyRoyaltyItemsByAddress(address, category, filters)` — paginated royalty items with `RoyaltyAsset` and `RoyaltyChannel` fragments
+- `fetchRewardSummaryByAddress(address, category)` — unclaimed rewards and distributions per contract
+
+**Wallet.js additions:**
+- `batchWithdrawRewards(operativeAddr, payTokens)` — multicall-based batch withdrawal for multiple payment tokens on a single contract
+
+**Bug fixes:**
+- Fixed `400 API request failed` — removed unsupported `royalty` field from `GET_ASSET_QUERY` GraphQL (schema mismatch: `LedgerTokenProperties` vs `StandardAsset`)
+- Fixed `resellerCut` displaying "900%" — was showing raw per-mille value, now divides by 10 for correct percentage (90%)
+- Fixed `resellAccessToken()` wallet routing — `useWallet` parameter ensures EOA transactions aren't forced through Smart Account
+
+**Files changed (Marketplace features + Earnings, Mar 20):**
+| File | Change |
+|------|--------|
+| `pc2-node/data/test-apps/elacity-market/api.js` | Removed invalid `royalty` GraphQL field, added `fetchRoyaltyItems` and `fetchRewardSummary` queries |
+| `pc2-node/data/test-apps/elacity-market/app.js` | Earnings view (loadEarningsData, renderEarningsList, handleEarningsWithdraw, handleWithdrawAll), renderOwnershipBalances, enhanced renderGovernanceSection (dual-wallet), renderRoyaltyInfo fix (per-mille), openResellModal wallet picker, renderOpTypeBadge seller identification |
+| `pc2-node/data/test-apps/elacity-market/wallet.js` | `batchWithdrawRewards()` multicall, `resellAccessToken()` useWallet parameter |
+| `pc2-node/data/test-apps/elacity-market/index.html` | Earnings view section, sidebar nav item, detail-balance-info div, resell modal wallet picker, renamed Resell→Sell |
+| `pc2-node/data/test-apps/elacity-market/styles.css` | Earnings view styles (summary, tabs, list, items, withdraw buttons), wallet picker, balance chips |
+
+**Market & Player UX fixes (Mar 19 — session 2):**
+- **Market thumbnail letterboxing** — `.video-card-thumb` and `.detail-media` changed from `object-fit: cover` (crops non-16:9 images) to `object-fit: contain` with centered flexbox layout and `#070707` background. Removed hover zoom scale. Matches live Elacity site "Media Card" spec.
+- **Audio artwork in Media Runtime** — When playing audio-only content, the PC2 Media Runtime player now displays the asset's cover artwork (thumbnail) instead of just the music note icon. Thumbnail URL passed from market app via `puter.args.thumbnail`, extracted from the detail view's displayed image (`dom.detailImage.src`). Styled with `max-width: 55%; max-height: 65%; border-radius: 8px; box-shadow` for album-art presentation.
+- **Installed apps sync** — Discovered that `pc2-media-runtime` loads from `data/installed-apps/` (higher priority in `static.ts`) not `data/test-apps/`. Copied updated `player.js` and `player.css` to installed-apps. Added cache-busting query strings (`?v=2`) to `index.html` script/link tags.
+
+**Files changed (Market & Player UX, Mar 19):**
+| File | Change |
+|------|--------|
+| `pc2-node/data/test-apps/elacity-market/styles.css` | Thumbnail letterboxing: `object-fit: contain`, flex centering, `#070707` bg, no hover zoom |
+| `pc2-node/data/test-apps/elacity-market/app.js` | Pass `thumbnail` in `handlePlay` launchApp args |
+| `pc2-node/data/test-apps/pc2-media-runtime/player.js` | Read `THUMBNAIL` from puter.args, create `<img>` in `#audio-art` for audio-only |
+| `pc2-node/data/test-apps/pc2-media-runtime/player.css` | Audio artwork `<img>` styling (contain, shadow, border-radius) |
+| `pc2-node/data/test-apps/pc2-media-runtime/index.html` | Cache-busting `?v=2` on player.js and player.css |
+
+**Wave 1 fixes (Mar 19 — debugging session):**
+- **WASM CEK base64 padding** — Chipotle REST API returns unpadded base64 CEK (43 chars for 32-byte key). `ddrm-renderer` WASM `decrypt_only` mode requires standard padded base64. Added padding normalization in `storage.ts` for both `decryptAssetTwoLayer` and `renderViaWASM`. WASM decrypt-only now succeeds (54ms) — CEK never touches Node.js V8 heap.
+- **Local Three.js libraries** — Puter iframe fetch interceptor rewrites all external URLs (CDN script tags → localhost HTML 404). Downloaded Three.js r128 core + 6 addons + fflate + JSZip to `ddrm-viewer/lib/`. Removed CDN references. Updated CSP in `static.ts` (CDN allowlist no longer needed but kept for forward compatibility).
+- **ArrayBuffer parsing** — GLTFLoader.load(blobUrl) also triggers the fetch interceptor on blob: URLs. Switched all 4 loaders (GLTF/STL/OBJ/FBX) from `loader.load(url)` to `loader.parse(arrayBuffer)`, bypassing fetch entirely.
+- **Error handler hardening** — `loadFirstPage()` error path used `resp.json()` which crashed on HTML error pages. Changed to `resp.text()` + try/catch JSON parse.
+- **Keyboard shortcuts help overlay** — `?` key or `?` toolbar button shows/hides a help card with all shortcuts (Drag, Scroll, Right-drag, W, N, G, A, S, F, ?). Click-outside-to-dismiss.
+
+**Files changed (Wave 1 fixes, Mar 19):**
+| File | Change |
+|------|--------|
+| `pc2-node/data/test-apps/ddrm-viewer/lib/` | NEW — Local Three.js r128 core + OrbitControls + 5 loaders + fflate + JSZip + VertexNormalsHelper (1MB total) |
+| `pc2-node/data/test-apps/ddrm-viewer/index.html` | CDN scripts → local `lib/` paths, added VertexNormalsHelper |
+| `pc2-node/data/test-apps/ddrm-viewer/viewer.js` | ArrayBuffer parsing (all 4 loaders), help overlay, error handler hardening, toolbar ? button |
+| `pc2-node/data/test-apps/ddrm-viewer/viewer.css` | Help overlay styles (card, kbd, fade-in animation) |
+| `pc2-node/data/test-apps/elacity-creator/app.js` | `resolveFileMime()` + EXT_MIME_MAP for 3D/font/data/AI MIME types, `state.resolvedMime` throughout |
+| `pc2-node/src/api/storage.ts` | CEK base64 padding normalization in `decryptAssetTwoLayer` and `renderViaWASM` |
+
+#### Bug Fixes — Mar 16
+
+| Bug | Root Cause | Fix |
+|-----|-----------|-----|
+| Double wallet signature (1 of 2) | `pc2-wallet-bridge.js` AND `IPC.js` both handled `pc2-wallet-rpc` messages | Removed `pc2-wallet-bridge.js` script tag from `index.html` — `IPC.js` already handles it |
+| Double `eth_sendTransaction` handler | Duplicate handler in `ParticleNetworkContext.tsx` useEffect + switch case | Removed the "early handler" useEffect, kept only switch-case handler |
+| WASM text renderer crash (65535px) | Text rendering produced image >65535px tall, exceeding JPEG limits | Capped `JPEG_MAX_DIM` to 16384, `MAX_LINES` recalculated |
+| `eth_requestAccounts` unnecessary prompt | Market + player always called `eth_requestAccounts` even when already connected | Use `eth_accounts` first, fall back to `eth_requestAccounts` only if empty |
+| Video doesn't autoplay after sign | No `play()` call after initial segments buffered | Added `$video.play()` after `startBufferLoop()` |
+| Server restart loses files | Stale `run-selfhosted.js` process held IPFS ports, IPFS init failed, filesystem undefined | Always kill all node processes before restart; verify IPFS + filesystem in logs |
+
+#### Decentralization Analysis — DOCUMENTED (Mar 14)
+- [x] `docs/core/DECENTRALIZATION_STATUS.md` — comprehensive team document covering architecture, scorecard, and walk-away test roadmap
+- Fully decentralized: smart contracts, access verification, purchase/sale, Lit Action, encryption/decryption, AccessToken ownership
+- Centralized (to be replaced): Elacity GraphQL API, IPFS gateway, IPFS upload, capacity wallet, auth nonce
+- Walk-away test requires: on-chain indexer (Tier 1), self-sufficient IPFS (mostly done), self-provisioned RLI tokens
+- Protocol fees already decentralized — enforced by smart contracts, not infrastructure
+
+#### Backlog — Marketing & Docs (Lower Priority)
+- [ ] **PC2 marketing slides for elacitylabs.com** — audit and rewrite 7 slides (benefits, features, blind spots, full copywriting)
+- [ ] **QuickStart component for elacitylabs.com** — installation instructions UI including Jetson Nano / ARM device entry
+- [ ] **Backlinks from ela.city and docs.ela.city to map.ela.city** — SEO cross-linking between Elacity properties
+
+#### Completed — Previously Next Up
+- ~~**Verify community fix**~~ — Werolo and Chelsea confirmed
+- ~~**InterServer gateway upgrade to v2.0**~~ — DONE (Mar 8)
+- ~~**WireGuard binary bundling (BinaryManager)**~~ — DONE (Mar 8)
+- ~~**App registry manifest format**~~ — DONE (Mar 8)
+- ~~**Universal asset strategy**~~ — DONE (Mar 8)
+- ~~**Network map rebrand, 3D orb, SEO**~~ — DONE (Mar 12-13)
+- ~~**`@elacity-js/access` design + spec**~~ — DONE (Mar 13) — full spec, security model, marketplace tiers, runtime convergence
+- ~~**`@elacity-js/access` implementation**~~ — DONE (Mar 13) — 12 source files (`packages/access/`), Lit Protocol 7.3.0, 47 unit tests passing
+
+### Supernode Infrastructure
+
+#### InterServer (Primary) — 69.164.241.210
+| Service | Port | Status |
+|---------|------|--------|
+| Boson DHT | 39001/UDP | Running |
+| Active Proxy | 8090/TCP | Running |
+| WireGuard (wg0) | 51820/UDP | Running (subnets 10.100/10.101) |
+| AmneziaWG | 51821/UDP | Running |
+| VLESS Reality | 8443/TCP | Running |
+| Web Gateway | 80/443 | Running |
+| IPFS Relay | 4003/TCP, 4004/WS | Running — Peer ID: `12D3KooWMcuTWxkKg7xS3dxRaPDK9BEUHdAvKWf2b5Kdk4Kwxy9G` |
+| Elastos pg-oracle | 20672/TCP | Running (v0.0.3.3) |
+
+#### Contabo (Secondary) — 38.242.211.112
+| Service | Port | Status |
+|---------|------|--------|
+| Boson DHT | 39001/UDP | Running — Node ID: `EbfCHQUfwawec8Pyz9vdYTXRRoR1GpjNPgLc3vAhAoam` |
+| IPFS Relay | 4003/TCP | Running (500+ peers) |
+| App Registry (mirror) | 4500/TCP | Running (5-min sync from primary) |
+| WireGuard (wg1) | 51820/UDP | Running (subnet 10.102) |
+| AmneziaWG (awg0) | 51821/UDP | Running (subnet 10.103) |
+| VLESS Reality (sing-box) | 8443/TCP | Running |
+| Slim Web Gateway | 80/443 | Running (read-replica with transport provisioning APIs) |
+| Automated Backup | cron 6h | Running (rsync from InterServer) |
+
+### Network Decentralization Status
+- **Two independent supernodes** with full transport stack
+- **Sequential failover** — PC2 clients try all supernodes on tunnel failure
+- **Dual-write registration** — new nodes register on all reachable supernodes
+- **Three-tier target** — Full Supernodes > Relay Nodes > Leaf Nodes (see SUPERNODE_ECONOMICS.md)
+
+### Previous Conversation References
+
+- [Elacity dDRM Build](9e02ad6d-ab42-429d-8895-cd864df59823) — dApp store, media market, CDN, wallet bridge
+- [Supernode Decentralization](f18dbf44-f5de-4238-8c62-499018cd4e50) — gateway v2.0, bootstrap script, dynamic discovery, relay mode, supernode dApp, community networking fix, docs update
+- [Network Map + Strategy](d9445cb9-12bd-437e-8d4e-ebb35ef40d64) — network map visual upgrade, universal asset strategy, app manifest spec, binary manager, handover
+- [3D Orb + SEO + Rebrand](6431d137-5dd9-4c8e-b042-5d8c54b908a5) — 3D orb integration, network map rebrand to "World Computer", full SEO overhaul, GA4, app icon fixes, mobile responsiveness
+- [dDRM Pipeline E2E](fd6755f0-d73c-4e41-8df3-0f57f15071a2) — @elacity-js/access, Creator Dashboard, Lit Action trust model (Path A), capacity credit auto-detection, decrypt endpoint, decentralization analysis. Also: hayro PDF rendering, WASM text fixes, Mint context menu, wallet bridge restore, Elacity branding, WASM crypto hardening Phases A-C, double-signature fix, TXT dimension cap, video autoplay, fMP4 strip+decrypt in Rust
+- [Secure Viewer & PDF](fd6755f0-d73c-4e41-8df3-0f57f15071a2) — secure viewer pipeline, PDF hybrid rendering, two-layer encryption fix, Lit Pinata/relayer integration, auto-decrypt, parallel pages, dDRM Viewer app, .ddrm.json capsules, WASM renderer, GUI integration
+- [Media Runtime E2E](fd6755f0-d73c-4e41-8df3-0f57f15071a2) — server-side DASH/CENC decryption pipeline, Rust WASM cenc-decrypt crate, MSE player, DRM stripping (init+segment), 16-byte IV fix, Smart Account PSSH, two-phase Lit auth
+- [Marketplace Features & Earnings](current) — Marketplace feature audit, dual-wallet ownership display, resale flow with wallet selector, royalty shares/rewards display, dedicated Earnings/Revenue page with per-item and batch withdraw, GraphQL royalty queries, multicall batch withdrawal
+- [Media Encoding Pipeline](fd6755f0-d73c-4e41-8df3-0f57f15071a2) — Local media encoding pipeline (FFmpeg→Bento4→CENC→DASH→IPFS), Chipotle CEK encryption, Creator Dashboard media UI, IPC duplicate wallet fix, MetaMask gas estimation fix, PSSH extraction/authority/kid fixes, IPFS pin hang fix, GUI rebuild, **E2E playback + download verified**. AV1 playback fix: nested PSSH stripping in Rust WASM, multi-track init segment splitting, MSE-compatible per-track init delivery. MetaMask mint retry button. WASM optimization Tier B audit: `mp4-split` Rust WASM crate (ISO BMFF parser), WASM decrypt limit raised to 200MB, player access-denied UX, init-split/NaCl/API-key-encrypt audited and deferred. **Wave 1 Universal Asset Viewers**: 3D model viewer (Three.js, 5 loaders, PBR lighting, OrbitControls, wireframe/grid/auto-rotate toolbar, model info panel, watermark + blob revocation), CSV/dataset viewer (paginated table, sort, search, column stats), font viewer (@font-face blob, specimen, custom text), archive viewer (JSZip file tree), backend passthrough in `storage.ts`.
 
 ---
 
@@ -39,67 +1279,205 @@
 | Document | Path | What It's For |
 |----------|------|---------------|
 | **This file** | `docs/core/SESSION_HANDOVER.md` | Start here |
+| **Agent Handover** | `docs/core/AGENT_HANDOVER.md` | Coding patterns, infrastructure |
 | **Roadmap** | `docs/core/ROADMAP.md` | All milestones with checkboxes |
-| **Strategy** | `docs/core/ELASTOS_STRATEGY.md` | Non-technical 3-phase overview |
-| **Why It Matters** | `docs/core/WHY_ELASTOS_MATTERS.md` | Historical parallels, storytelling |
-| **Architecture** | `docs/core/ARCHITECTURE_CONVERGENCE.md` | PC2 v1 → capsule runtime v2 technical path |
-| **Network Hardening** | `docs/pc2-infrastructure/NETWORK_HARDENING.md` | Supernode scale-up requirements |
-| **Agent Handover** | `docs/core/AGENT_HANDOVER.md` | Coding patterns, infrastructure details |
-| **Weekly Report Template** | `docs/templates/WEEKLY_SHIPPING_REPORT.md` | How to generate weekly reports + HTML blog articles |
+| **Architecture** | `docs/core/ARCHITECTURE_CONVERGENCE.md` | PC2 v1 -> capsule runtime v2 |
+| **Universal Asset Strategy** | `docs/core/ELACITY_UNIVERSAL_ASSET_STRATEGY.md` | Unicorn strategy, marketplace verticals, SDK evolution, revenue model |
+| **Decentralization Status** | `docs/core/DECENTRALIZATION_STATUS.md` | Decentralization scorecard, walk-away test roadmap, team handover |
+| **Access Package Spec** | `docs/core/ACCESS_PACKAGE_SPEC.md` | @elacity-js/access technical spec, API, security model, marketplace tiers |
+| **App Manifest Spec** | `docs/core/APP_MANIFEST_SPEC.md` | app.json schema, field reference, validation rules |
+| **Supernode Economics** | `docs/core/SUPERNODE_ECONOMICS.md` | dDRM Access Token model, three-tier architecture |
+| **Network Hardening** | `docs/pc2-infrastructure/NETWORK_HARDENING.md` | Scale tiers, fragile points, supernode inventory |
+| **Stealth Mode** | `docs/deployment/STEALTH_MODE.md` | Transport cascade docs |
+| **CDN Task** | `.cursor/tasks/CDN-EFFECT/CDN-EFFECT.md` | CDN network task details |
 
 ---
 
-## What to Work On Next
+## Key Files for Elacity dDRM Work
 
-From the roadmap (Milestone 2), items that don't need hardware:
+### Elacity Market dApp (runs inside iframe)
+| File | Purpose |
+|------|---------|
+| `pc2-node/data/test-apps/elacity-market/app.js` | Main app logic — rendering, state, download, playback |
+| `pc2-node/data/test-apps/elacity-market/api.js` | GraphQL API client for Elacity backend |
+| `pc2-node/data/test-apps/elacity-market/wallet.js` | Wallet operations — connect, SIWE, buy, subscribe, chain switch |
+| `pc2-node/data/test-apps/elacity-market/index.html` | HTML structure |
+| `pc2-node/data/test-apps/elacity-market/styles.css` | All CSS including light/dark themes |
 
-1. **Mobile-responsive UI** — test in browser, fix layout issues
-2. **WireGuard retry interval** — reduce from 60s to 15s with exponential backoff (quick code change in `ConnectivityService.ts`)
-3. **Basic supernode uptime monitoring** — `/health` endpoint with dashboard
-4. **Automated SSL renewal monitoring** on supernode
-5. **AV1 server-side remuxing** — auto-convert MKV→MP4 for Firefox users
+### CDN Network & Content Infrastructure
+| File | Purpose |
+|------|---------|
+| `pc2-node/src/storage/ipfs.ts` | Helia node, NAT traversal, Bitswap, DHT announce, bootstrap, `countProviders()` |
+| `pc2-node/src/api/public.ts` | IPFS gateway, CDN bandwidth tracking, `bandwidthGuard` middleware, `/api/cdn/stats` |
+| `pc2-node/src/storage/database.ts` | `trackPinnedCID`, `getAllAnnouncableCIDs`, `getTotalPinnedSize`, `getCreatorStats` |
+| `pc2-node/src/storage/migrations.ts` | Migration 17: `pinned_cids` table; Migration 19: `content_catalog` table |
+| `pc2-node/src/index.ts` | Periodic DHT re-announcement loop, `setBandwidthLimit` init |
+| `pc2-node/src/utils/rpc.ts` | Shared Base RPC utility — 5 endpoints, round-robin, failover |
+| `pc2-node/src/services/ContentIndexerService.ts` | On-chain event scanner for content catalog (DigitalAssetRegistered events) |
+| `pc2-node/src/services/ContentSeedingService.ts` | Automatic pinning, DHT announce, disk quota enforcement |
+| `deploy/ipfs-relay/` | Standalone IPFS relay deployed on supernode |
+
+### Lit Action (runs on Lit TEE nodes)
+| File | Purpose |
+|------|---------|
+| `pc2-node/data/lit-actions/non-media-decrypt.js` | Trustless on-chain access check + threshold CEK decryption (ethers v5/v6 compatible) |
+| `pc2-node/data/lit-actions/non-media-decrypt-chipotle.js` | **NEW** — Chipotle-specific: on-chain access check + PKP-AES CEK decryption |
+
+#### Chipotle Migration (Mar 13)
+| File | Purpose |
+|------|---------|
+| `pc2-node/src/api/chipotle-client.ts` | **NEW** — Minimal REST client replacing entire Lit SDK, three-tier API key resolution |
+| `pc2-node/scripts/test-chipotle-phase0.mjs` | Phase 0 API compatibility test script (5 tests) |
+| `pc2-node/src/api/storage.ts` | Updated — `LIT_BACKEND` flag, decrypt/encrypt dual-mode (chipotle/datil) |
+| `pc2-node/src/api/media.ts` | Updated — `LIT_BACKEND` flag, prepare-auth stub, recoverMediaCEK dual-mode |
+
+#### Secure Viewer Pipeline (Mar 15)
+| File | Purpose |
+|------|---------|
+| `pc2-node/src/api/storage.ts` (`/lit/secure-view`) | Server-side asset rendering: Sharp (images), PDF.js+Canvas (PDFs), Canvas (text), WASM fallback |
+| `pc2-node/data/test-apps/elacity-market/app.js` | Auto-decrypt, "Open" button for dDRM Viewer, .ddrm.json capsule save, IPC launch |
+| `pc2-node/data/test-apps/elacity-creator/app.js` | PDF thumbnail generation via `/api/storage/thumbnail` |
+
+#### dDRM Viewer App (Mar 15)
+| File | Purpose |
+|------|---------|
+| `pc2-node/data/test-apps/ddrm-viewer/index.html` | Viewer HTML — header, loading/error states, image + document containers, footer |
+| `pc2-node/data/test-apps/ddrm-viewer/viewer.js` | Client JS — param parsing (puter.args + URL), secure-view API calls, display modes, anti-piracy |
+| `pc2-node/data/test-apps/ddrm-viewer/viewer.css` | Dark theme, full-width document scroll, centered image, badges, scrollbar |
+| `pc2-node/data/test-apps/ddrm-viewer/app.json` | App manifest — capabilities (wallet, network, IPFS, DRM), display settings |
+| `pc2-node/src/api/apps.ts` | dDRM Viewer registration in app map with SVG icon |
+
+#### PC2 Media Runtime (Mar 15-16)
+| File | Purpose |
+|------|---------|
+| `pc2-node/src/api/media.ts` | Media API — prepare-auth, init (MPD+CEK), segment (decrypt+strip+stream) |
+| `pc2-node/crates/cenc-decrypt/src/lib.rs` | WASM entry — orchestrates CENC decryption with tenc-derived IV size |
+| `pc2-node/crates/cenc-decrypt/src/mp4box.rs` | fMP4 box parser — trun, senc, tenc extraction with correct format header skipping |
+| `pc2-node/crates/cenc-decrypt/src/cenc.rs` | AES-128-CTR per-sample decryption (full-sample + subsample support) |
+| `pc2-node/wasm-apps/cenc-decrypt/cenc-decrypt.wasm` | Compiled WASM binary (wasm32-wasip1) |
+| `pc2-node/data/installed-apps/pc2-media-runtime/` | MSE player app (player.js, index.html) — lightweight, no EME/CDM |
+| `pc2-node/src/services/media/sessionManager.ts` | In-memory session store (CEK, tracks, init segments per track) |
+| `pc2-node/src/services/media/mpdParser.ts` | DASH MPD XML parser (tracks, segments, duration, codecs) |
+
+#### WASM Renderer (Mar 15, extended Mar 18)
+| File | Purpose |
+|------|---------|
+| `pc2-node/wasm-renderer/Cargo.toml` | Rust crate — AES-GCM decrypt + encrypt + image rendering in WASM linear memory |
+| `pc2-node/wasm-renderer/src/decrypt.rs` | AES-256-GCM decrypt + encrypt (random CEK/IV generation) |
+| `pc2-node/wasm-apps/ddrm-renderer/ddrm-renderer.wasm` | Compiled WASM binary (wasm32-wasip1) |
+| `pc2-node/src/services/wasm/WASMRuntime.ts` | Node.js WASI host — @wasmer/wasi + MemFS, executeRenderer/executeDecryptOnly/executeEncrypt/executeCENCDecrypt/executeMp4Split/executeIpfsAssemble |
+
+#### Media Encoding Pipeline (Mar 17-18)
+| File | Purpose |
+|------|---------|
+| `pc2-node/src/services/media/encoder.ts` | FFprobe analysis, transcode plans, FFmpeg execution (GPU/CPU adaptive) |
+| `pc2-node/src/services/media/bento4.ts` | Bento4 SDK management — auto-download, platform detection, Python 3 check |
+| `pc2-node/src/services/media/dashPackager.ts` | CEK generation, Chipotle encryption, PSSH construction, WASM CENC encrypt, TypeScript MPD gen, IPFS upload |
+| `pc2-node/src/api/media.ts` | Media encode/status endpoints, `runEncodePipeline` orchestrator, Chipotle CEK recovery |
+| `pc2-node/data/lit-actions/media-encrypt-chipotle.js` | Lit Action for CEK encryption via PKP-AES |
+| `pc2-node/data/lit-actions/media-decrypt-chipotle.js` | Lit Action for CEK decryption with on-chain access check |
+| `pc2-node/data/test-apps/elacity-creator/app.js` | Creator Dashboard with media pipeline UI, progress tracking, sub-step bars |
+| `pc2-node/data/test-apps/elacity-creator/index.html` | HTML structure with media pipeline detail panel |
+
+### Backend APIs
+| File | Purpose |
+|------|---------|
+| `pc2-node/src/api/storage.ts` | Lit encrypt/decrypt, IPFS upload, **secure viewer** (image/PDF/text), thumbnail generation, capacity credit auto-detection |
+| `pc2-node/src/api/installed-apps.ts` | App install/uninstall/list endpoints |
+| `pc2-node/src/services/AppInstallService.ts` | App lifecycle management service |
+| `pc2-node/src/static.ts` | Static serving for installed apps with wallet bridge injection |
+
+### GUI (file explorer, IPC)
+| File | Purpose |
+|------|---------|
+| `src/gui/src/helpers/open_item.js` | `.edrm` → player popup; `.ddrm.json` → dDRM Viewer via `launch_app()` |
+| `src/gui/src/IPC.js` | `openFolder` handler + `launchApp` handler (forwards args/windowTitle to `launch_app`) |
+| `src/gui/src/helpers/item_icon.js` | `.edrm` and `.ddrm.json` custom icons |
+| `src/gui/src/helpers/content_type_to_icon.js` | `application/x-ddrm+json` → `file-ddrm.svg` mapping |
+| `src/gui/src/lib/mime.js` | `.edrm` and `.ddrm.json` MIME type registration |
+| `src/gui/src/icons/file-edrm.svg` | Padlock + green tick icon for media DRM files |
+| `src/gui/src/icons/file-ddrm.svg` | Indigo shield icon with "D" badge for dDRM capsule files |
+
+### Creator Dashboard dApp (runs inside iframe)
+| File | Purpose |
+|------|---------|
+| `pc2-node/data/test-apps/elacity-creator/app.js` | Main app — file select, metadata, encrypt, IPFS upload, mint, setApprovalForAll |
+| `pc2-node/data/test-apps/elacity-creator/index.html` | HTML structure with 4-step wizard |
+| `pc2-node/data/test-apps/elacity-creator/styles.css` | All CSS |
+
+### `@elacity-js/access` SDK (Universal Access Layer)
+| File | Purpose |
+|------|---------|
+| `packages/access/src/client.ts` | Main entry point — connect, encrypt, decrypt, verify, fetchAndDecrypt |
+| `packages/access/src/contracts/abis.ts` | DigitalAsset, CoreStorage, ChannelCore, Operative ABIs + Base addresses |
+| `packages/access/src/contracts/encode.ts` | opRawData/sellRawData encoding for mint() |
+| `packages/access/src/lit/session.ts` | LitNodeClient lifecycle, session sigs, SIWE signing |
+| `packages/access/src/lit/key-retrieval.ts` | acquireKey() with getSessionSigs for consumer decryption |
+| `packages/access/src/crypto/encrypt.ts` | Lit Protocol encrypt (creator side) |
+| `packages/access/src/crypto/decrypt.ts` | decryptWithLit + decryptWithKey (consumer side) |
+| `packages/access/src/fetch/ipfs.ts` | IPFS gateway fetch helper |
+
+### Wallet Bridge (injected into all dApp iframes)
+| File | Purpose |
+|------|---------|
+| `pc2-node/frontend/pc2-wallet-bridge.js` | Host-side bridge — listens for postMessage, routes to Particle |
+| `pc2-node/frontend/pc2-wallet-provider.js` | Guest-side shim — replaces `window.ethereum` inside iframe |
+
+### Network Map (map.ela.city) — Deployed on InterServer
+| File | Purpose |
+|------|---------|
+| `deploy/network-map/frontend/src/App.jsx` | Main frontend — header, side-by-side orb/graph, stats, SEO section, footer |
+| `deploy/network-map/frontend/src/components/force-shield/ShieldScene.jsx` | 3D orb entry point — Three.js canvas, stats overlay |
+| `deploy/network-map/frontend/src/components/force-shield/useNetworkNodes.js` | Fetches `/api/nodes` + WebSocket updates, hashes nodeId to lat/lng |
+| `deploy/network-map/frontend/src/components/force-shield/consts.js` | API base URLs (relative paths for same-origin) |
+| `deploy/network-map/frontend/src/components/NetworkGraph.jsx` | 2D force-directed graph |
+| `deploy/network-map/frontend/src/components/NodeList.jsx` | Node table with filters |
+| `deploy/network-map/frontend/src/components/StatsChart.jsx` | Stats cards and charts |
+| `deploy/network-map/frontend/src/styles.css` | All CSS (bg `#171717`, responsive, `.graph-row` side-by-side) |
+| `deploy/network-map/frontend/index.html` | SEO meta, JSON-LD schemas, GA4, favicons |
+| `deploy/network-map/frontend/public/` | Favicons, `og-map.png`, `robots.txt`, `sitemap.xml`, GSC verification |
+| `deploy/network-map/server/collector.js` | Backend — node status/activity classification |
+| `deploy/network-map/server/database.js` | SQLite queries (no more `stale` status) |
+| `deploy/network-map/server/api/stats.js` | Stats endpoints (`/api/stats/summary`) |
+| `deploy/network-map/server/api/nodes.js` | Nodes endpoint (`/api/nodes`) with CORS |
+
+### Elacity Player (source + built)
+| File | Purpose |
+|------|---------|
+| `pc2-node/data/test-apps/elacity-player-src/` | Player source code (Vite + React + TypeScript) |
+| `pc2-node/data/test-apps/elacity-player/` | Built player bundle (deployed) |
+| `pc2-node/data/test-apps/elacity-player-src/src/PlayerView.tsx` | Gateway resolution logic (local-first + fallback) |
+| `pc2-node/data/test-apps/elacity-player-src/package.json` | `@lit-protocol/*` pinned to v7.3.0 via overrides |
 
 ---
 
-## Supernode Access
+## Infrastructure Access
 
 ```
-SSH: root@69.164.241.210
-Password: [ROTATED -- stored in password manager, not in git]
+Supernode (InterServer): root@69.164.241.210
+Secondary (Contabo):     root@38.242.211.112
+Passwords: ROTATED — stored in password manager, not in git
 ```
-
-- Gateway runs under systemd (`pc2-gateway.service`)
-- Registry: `/root/pc2/web-gateway/data/registry.json` (66 registered nodes)
-- WireGuard: `wg show wg0` (2 peers: EverlastingOS 10.100.0.2, Anders 10.100.0.3)
-- Restart gateway: `systemctl restart pc2-gateway.service`
-- Gateway logs: `/root/pc2/web-gateway/gateway.log`
 
 ---
 
 ## Important Boundaries
 
-- **"Elacity dDRM"** — always use this full name. It's Elacity Labs' commercial protocol, NOT an ELA demand mechanism. Elacity's fees belong to Elacity.
+- **"Elacity dDRM"** — always use this full name. It's Elacity Labs' commercial protocol, NOT an ELA demand mechanism.
 - **ELA value** comes from native mechanisms: Carrier staking, blockchain gas, routing fees, in-OS protocol fees
-- **ElastOS** = open infrastructure (community). **Elacity** = private company operating on it (own stakeholders)
+- **ElastOS** = open infrastructure (community). **Elacity** = private company operating on it.
 - Never reference Anders Alm by name in public docs — refer to "the V2 runtime" or "the capsule architecture"
+- **Install Parity Rule** — launcher, start-local.sh, and install-arm.sh must always install the same tools
+- **Never commit passwords or SSH credentials** — store in password manager only
 
 ---
 
-## Commands for Community Testers
+## Related Repositories
 
-**EverlastingOS (existing install, pull updates):**
-```
-cd ~/pc2.net && git pull origin feature/jetson-gpu-acceleration && cd pc2-node && npm run build && pm2 restart pc2 && pm2 save
-```
-
-**Anders / new Jetson installs:**
-```
-export PC2_BRANCH=feature/jetson-gpu-acceleration
-curl -sSL https://raw.githubusercontent.com/Elacity/pc2.net/feature/jetson-gpu-acceleration/scripts/install-arm.sh | bash
-```
-
----
-
-## When Asked "Give Me My Weekly Report"
-
-Follow `docs/templates/WEEKLY_SHIPPING_REPORT.md` — audit every commit, write GitHub report + blog HTML, post to GitHub Discussions automatically, include Yoast SEO block.
+| Repository | Branch | Status |
+|------------|--------|--------|
+| [pc2.net](https://github.com/Elacity/pc2.net) | `feature/lit-chipotle-migration` | Active development (branched from `feature/wasm-crypto-hardening`) |
+| [elastos-launcher](https://github.com/Elacity/elastos-launcher) | `main` | v1.1.1 released |
+| [document-portal](https://github.com/Elacity/document-portal) | `main` | Up to date |
+| [js-sdk](https://github.com/Elacity/js-sdk) | — | Elacity SDK (reference) |
+| [elacity-web](https://github.com/Elacity/elacity-web) | — | Elacity website (reference for patterns) |

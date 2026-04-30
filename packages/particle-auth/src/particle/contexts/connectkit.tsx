@@ -210,8 +210,7 @@ const config = createConfig({
     isDismissable: false,
     collapseWalletList: false,
     hideContinueButton: true,
-    // Only wallet login for v1 - email/phone/social to be added post-launch
-    connectorsOrder: ['wallet'],
+    connectorsOrder: ['email', 'wallet'],
     logo: elastosLogo,
     language: 'en-US',
     theme: {
@@ -290,16 +289,14 @@ const config = createConfig({
       multiInjectedProviderDiscovery: true,
     }),
 
-    // Email/phone/social login disabled for v1 - to be added post-launch
-    // Social logins require domain whitelisting which doesn't work for self-hosted PC2 instances
-    // authWalletConnectors({
-    //   authTypes: ['email', 'phone'],
-    //   fiatCoin: 'USD',
-    //   promptSettingConfig: {
-    //     promptMasterPasswordSettingWhenLogin: 1,
-    //     promptPaymentPasswordSettingWhenSign: 1,
-    //   },
-    // }),
+    authWalletConnectors({
+      authTypes: ['email'],
+      fiatCoin: 'USD',
+      promptSettingConfig: {
+        promptMasterPasswordSettingWhenLogin: 1,
+        promptPaymentPasswordSettingWhenSign: 1,
+      },
+    }),
   ],
 
   // Configure wallet plugins

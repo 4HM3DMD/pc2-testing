@@ -97,6 +97,24 @@ export default {
                 </div>
             </div>
             
+            <!-- CDN Network -->
+            <div class="storage-section">
+                <div class="storage-section-title">CDN Network <span class="tooltip-icon" title="Your node serves pinned content to other IPFS nodes. Stats reset on restart.">?</span></div>
+                <div class="storage-group">
+                    <div class="storage-group-row"><div class="storage-card-row"><span class="storage-card-label">Bandwidth Served</span><span id="cdn-bytes-served" class="storage-card-value">-</span></div></div>
+                    <div class="storage-group-row"><div class="storage-card-row"><span class="storage-card-label">Requests</span><span id="cdn-request-count" class="storage-card-value">-</span></div></div>
+                    <div class="storage-group-row"><div class="storage-card-row"><span class="storage-card-label">Pinned CIDs <span class="tooltip-icon" title="Content downloaded from the marketplace, tracked for CDN re-announcement.">?</span></span><span id="cdn-pinned-cids" class="storage-card-value">-</span></div></div>
+                    <div class="storage-group-row"><div class="storage-card-row"><span class="storage-card-label">Public CIDs</span><span id="cdn-public-cids" class="storage-card-value">-</span></div></div>
+                    <div class="storage-group-row"><div class="storage-card-row"><span class="storage-card-label">Uptime</span><span id="cdn-uptime" class="storage-card-value">-</span></div></div>
+                    <div class="storage-group-row" id="cdn-top-cids-row" style="display:none;">
+                        <div style="width:100%;">
+                            <div class="storage-card-row" style="margin-bottom:8px;"><span class="storage-card-label">Top Content</span></div>
+                            <div id="cdn-top-cids-list" style="font-size:11px;"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Visibility -->
             <div class="storage-section">
                 <div class="storage-section-title">By Visibility</div>
@@ -803,6 +821,7 @@ export default {
         $el_window.find('#refresh-storage').on('click', () => {
             loadStorageData();
             loadIPFSNetworkInfo();
+            loadCDNStats();
         });
         
         // JavaScript-based tooltip system (appended to body for reliable z-index)
@@ -903,11 +922,49 @@ export default {
             }
         });
         
+        // Load CDN stats
+        async function loadCDNStats() {
+            try {
+                const apiOrigin = window.api_origin || window.location.origin;
+                const response = await fetch(`${apiOrigin}/api/cdn/stats`);
+                if (!response.ok) throw new Error('CDN stats unavailable');
+                const data = await response.json();
+
+                $el_window.find('#cdn-bytes-served').text(formatBytes(data.bytesServed || 0));
+                $el_window.find('#cdn-request-count').text((data.requestCount || 0).toLocaleString());
+                $el_window.find('#cdn-pinned-cids').text(data.pinnedCIDs || 0);
+                $el_window.find('#cdn-public-cids').text(data.publicCIDs || 0);
+
+                // Format uptime
+                const uptimeMs = data.uptimeMs || 0;
+                const hours = Math.floor(uptimeMs / 3600000);
+                const minutes = Math.floor((uptimeMs % 3600000) / 60000);
+                $el_window.find('#cdn-uptime').text(hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`);
+
+                // Top CIDs
+                if (data.topCIDs && data.topCIDs.length > 0) {
+                    $el_window.find('#cdn-top-cids-row').show();
+                    const listHtml = data.topCIDs.slice(0, 5).map(item => {
+                        const shortCid = item.cid.length > 20 ? `${item.cid.slice(0, 10)}...${item.cid.slice(-6)}` : item.cid;
+                        return `<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid #eee;">
+                            <code style="font-size:10px;color:#667eea;" title="${item.cid}">${shortCid}</code>
+                            <span style="color:#666;">${formatBytes(item.bytes)} · ${item.requests} req</span>
+                        </div>`;
+                    }).join('');
+                    $el_window.find('#cdn-top-cids-list').html(listHtml);
+                }
+            } catch (error) {
+                console.warn('[Storage] CDN stats unavailable:', error.message);
+                $el_window.find('#cdn-bytes-served, #cdn-request-count, #cdn-pinned-cids, #cdn-public-cids, #cdn-uptime').text('-');
+            }
+        }
+
         // Store load functions for reuse in on_show
         this._loadStorageData = loadStorageData;
         this._loadIPFSNetworkInfo = loadIPFSNetworkInfo;
         this._loadStorageLimitSetting = loadStorageLimitSetting;
         this._loadIPFSSharingSettings = loadIPFSSharingSettings;
+        this._loadCDNStats = loadCDNStats;
         
         // Initial load - run in parallel with timeout protection
         try {
@@ -916,7 +973,8 @@ export default {
                     loadStorageData().catch(e => console.error('[Storage] loadStorageData error:', e)),
                     loadIPFSNetworkInfo().catch(e => console.error('[Storage] loadIPFSNetworkInfo error:', e)),
                     loadStorageLimitSetting().catch(e => console.error('[Storage] loadStorageLimitSetting error:', e)),
-                    loadIPFSSharingSettings().catch(e => console.error('[Storage] loadIPFSSharingSettings error:', e))
+                    loadIPFSSharingSettings().catch(e => console.error('[Storage] loadIPFSSharingSettings error:', e)),
+                    loadCDNStats().catch(e => console.error('[Storage] loadCDNStats error:', e))
                 ]),
                 new Promise((_, reject) => setTimeout(() => reject(new Error('Storage tab load timeout')), 15000))
             ]);
@@ -932,7 +990,8 @@ export default {
                     Promise.all([
                         this._loadStorageData().catch(e => console.error('[Storage] loadStorageData error:', e)),
                         this._loadIPFSNetworkInfo().catch(e => console.error('[Storage] loadIPFSNetworkInfo error:', e)),
-                        this._loadIPFSSharingSettings ? this._loadIPFSSharingSettings().catch(e => console.error('[Storage] loadIPFSSharingSettings error:', e)) : Promise.resolve()
+                        this._loadIPFSSharingSettings ? this._loadIPFSSharingSettings().catch(e => console.error('[Storage] loadIPFSSharingSettings error:', e)) : Promise.resolve(),
+                        this._loadCDNStats ? this._loadCDNStats().catch(e => console.error('[Storage] loadCDNStats error:', e)) : Promise.resolve()
                     ]),
                     new Promise((_, reject) => setTimeout(() => reject(new Error('Storage refresh timeout')), 10000))
                 ]);

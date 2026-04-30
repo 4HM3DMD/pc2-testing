@@ -1,0 +1,19 @@
+{
+  "name": "evm-multicall",
+  "version": "1.0.0",
+  "description": "Multicall3 ABI encode/decode — batch EVM calls in-process",
+  "target": "wasm32-wasip1",
+  "binary": "evm-multicall.wasm",
+  "sha256": null,
+  "capabilities": ["network:rpc"],
+  "provider_operations": ["network:multicall"],
+  "memfs": {
+    "input": ["/input/command.json"],
+    "output": ["/output/result.json"]
+  },
+  "runtime_compatibility": {
+    "wasi_preview": 1,
+    "entry": "_start",
+    "capsule_type": "wasm"
+  }
+}

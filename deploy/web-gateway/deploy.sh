@@ -18,7 +18,10 @@ echo "🚀 Deploying PC2 Web Gateway to ${VPS_IP}..."
 
 # Sync files
 echo "📂 Syncing files..."
+# Wave 3 (SEC-INFRA-GW-AUTH): provisioning-token helper lives in lib/
+ssh "${VPS_USER}@${VPS_IP}" "mkdir -p ${REMOTE_DIR}/lib"
 scp index.js package.json "${VPS_USER}@${VPS_IP}:${REMOTE_DIR}/"
+scp -r lib/ "${VPS_USER}@${VPS_IP}:${REMOTE_DIR}/"
 
 # Install dependencies and restart
 echo "📦 Installing dependencies..."
