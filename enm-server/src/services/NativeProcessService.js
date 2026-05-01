@@ -276,6 +276,13 @@ class NativeProcessService extends EventEmitter {
                 `NativeProcessService.start: ${configFile} missing — generate it before calling start()`,
             );
         }
+        // Pre-create the chain's data subtree so ela doesn't trip on a
+        // missing dir on its first write. ela mkdir's its data tree
+        // itself in current versions, but that wasn't always true and
+        // costs us nothing to ensure.
+        try {
+            fs.mkdirSync(path.join(cwd, 'elastos'), { recursive: true, mode: 0o700 });
+        } catch (_) { /* swallow — best-effort */ }
 
         const startedAt = Date.now();
         // detached: true so the child survives if PC2 itself crashes.
@@ -357,6 +364,42 @@ class NativeProcessService extends EventEmitter {
         this.emit('started', { chainId, pid: child.pid, startedAt });
 
         return { pid: child.pid, startedAt };
+    }
+
+    /**
+     * Write to a running child's stdin, then close the writeable side.
+     * Used by ElaMainChainAdapter to feed the keystore password to ela on
+     * its first prompt (per node.sh's `cat ~/.config/elastos/ela.txt | nohup
+     * ./ela` pattern, build/skeleton/node.sh:866). Without this, ela hangs
+     * forever waiting for input on a detached child.
+     *
+     * Returns true if we wrote something, false if the child is gone or
+     * its stdin is already closed (e.g. after a reattach across restarts —
+     * we have the PID but not the original handle).
+     *
+     * @param {string} chainId
+     * @param {string} text   raw text; we append a newline so ela's prompt
+     *                        reader treats it as a line.
+     * @returns {boolean}
+     */
+    writeStdin(chainId, text) {
+        const handle = this.handles.get(chainId);
+        if (!handle || !handle.child || !handle.child.stdin || handle.child.stdin.destroyed) {
+            return false;
+        }
+        try {
+            handle.child.stdin.write(String(text));
+            if (!String(text).endsWith('\n')) {
+                handle.child.stdin.write('\n');
+            }
+            handle.child.stdin.end();
+            return true;
+        } catch (err) {
+            this.extensionHandle.log.warn(
+                `${ENM_LOG_PREFIX} ${chainId} writeStdin failed: ${err.message}`,
+            );
+            return false;
+        }
     }
 
     /**

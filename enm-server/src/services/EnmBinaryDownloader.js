@@ -137,6 +137,65 @@ class EnmBinaryDownloader {
     }
 
     /**
+     * Resolve the chain's binary on disk, regardless of whether we have
+     * live in-memory state for it. Used after restart: the binary may
+     * already be installed under enmDataDir()/bin/<chainId>/ but our
+     * downloader's status is back to IDLE.
+     *
+     * Returns { binaryPath, cliPath } if the install artifacts exist on
+     * disk, or null otherwise.
+     *
+     * @param {string} chainId
+     * @returns {Promise<{binaryPath: string, cliPath: string|null}|null>}
+     */
+    async resolveOnDisk(chainId) {
+        const info = CHAINS[chainId];
+        if (!info) return null;
+        const root = path.join(enmDataDir(), 'bin', chainId);
+        try {
+            await fsp.access(root);
+        } catch (_) {
+            return null;
+        }
+        const binaryPath = await EnmBinaryDownloader._locateInTree(root, info.binary);
+        if (!binaryPath) return null;
+        const cliPath = info.cli
+            ? await EnmBinaryDownloader._locateInTree(root, info.cli)
+            : null;
+        return { binaryPath, cliPath };
+    }
+
+    /**
+     * Like getStatus, but rehydrates from disk when in-memory state is
+     * IDLE and artifacts already exist. The wizard uses this to detect
+     * "already installed" after a container restart.
+     */
+    async getStatusWithDisk(chainId) {
+        const status = this.getStatus(chainId);
+        if (status.phase !== PHASES.IDLE) return status;
+        const onDisk = await this.resolveOnDisk(chainId);
+        if (!onDisk) return status;
+        // Synthesize a DONE status — version is unknown unless we can read
+        // it back from --version, which is cheap (the smoke test we already
+        // do). Fall back to "installed" string.
+        const versionOut = await EnmBinaryDownloader._smokeTest(onDisk.binaryPath).catch(() => ({ ok: false }));
+        const version = versionOut.ok
+            ? (versionOut.output.match(/v[0-9]+(?:\.[0-9]+)+/) || [null])[0]
+            : null;
+        const synthesized = {
+            ...this._initialStatus(chainId),
+            phase: PHASES.DONE,
+            binaryPath: onDisk.binaryPath,
+            cliPath: onDisk.cliPath,
+            version,
+            installedAt: null,
+        };
+        // Cache it so subsequent calls don't re-stat.
+        this._status[chainId] = synthesized;
+        return { ...synthesized };
+    }
+
+    /**
      * Resolve the latest version of a chain from the download index.
      *
      * Real-world scrape: the Apache auto-index at download.elastos.io

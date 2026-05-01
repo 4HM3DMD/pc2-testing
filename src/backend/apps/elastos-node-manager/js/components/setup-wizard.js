@@ -456,18 +456,33 @@
         actions.className = 'enm-wizard-actions';
         var startBtn = makeBtn('Write config & start node', 'primary', function () {
             startBtn.disabled = true;
-            startBtn.textContent = 'Working...';
+            startBtn.textContent = 'Saving config...';
 
-            // /setup/network with mode='auto' so the IPAddress is detected.
+            // Three-step finish: stash network choice, complete setup
+            // (writes config), then actually start the node. The button
+            // label promises a start, so we follow through.
             self.api.post('/setup/network', { mode: 'auto' }).then(function () {
                 return self.api.post('/setup/complete', {});
             }).then(function () {
-                self.notifications.info('Setup complete', 'Loading dashboard...');
+                startBtn.textContent = 'Starting node...';
+                return self.api.post('/chains/mainchain/start');
+            }).then(function () {
+                self.notifications.info('Node started', 'Loading dashboard...');
                 self.onComplete();
             }).catch(function (err) {
+                // Surface conflicts (port already bound, rogue ela, etc.)
+                // explicitly — they have a structured `conflicts` array.
+                if (err && err.body && Array.isArray(err.body.conflicts)) {
+                    var blockers = err.body.conflicts
+                        .filter(function (c) { return c.severity === 'CRITICAL'; })
+                        .map(function (c) { return '• ' + c.description; })
+                        .join('\n');
+                    self.notifications.critical('Cannot start — host conflicts', blockers || err.message);
+                } else {
+                    self.notifications.warning('Could not finish setup', err.message || String(err));
+                }
                 startBtn.disabled = false;
                 startBtn.textContent = 'Retry';
-                self.notifications.warning('Could not finish setup', err.message || String(err));
             });
         });
         actions.appendChild(startBtn);

@@ -132,6 +132,23 @@ function build(extensionHandle) {
         try {
             const osResult = osPreflight.check();
             const diskResult = await diskPreflight.check(enmDataDir());
+
+            // Persist the booleans into setup-state so /setup/state and any
+            // later UI surface (e.g., dashboard health tile) can show
+            // "preflight passed" without re-running the checks.
+            try {
+                const { db } = extensionHandle.import('data');
+                await upsertSetupState(db, wallet, {
+                    os_check_passed: osResult && osResult.ok ? 1 : 0,
+                    disk_check_passed: diskResult && diskResult.status !== 'critical' ? 1 : 0,
+                    wallet_check_passed: 1,
+                });
+            } catch (persistErr) {
+                extensionHandle.log.warn(
+                    `${ENM_LOG_PREFIX} /setup/preflight: persist failed: ${persistErr.message}`,
+                );
+            }
+
             return res.json(successBody({
                 os: osResult,
                 disk: diskResult,
@@ -146,17 +163,17 @@ function build(extensionHandle) {
     /**
      * GET /setup/install-status/:chainId
      *
-     * Snapshot of the binary installer state-machine for a single chain
-     * (idle/resolving/downloading/extracting/verifying/done/failed). The
-     * wizard polls this as a fallback when SSE isn't available; the live
-     * channel is SSE topic `setup:install:<chainId>`.
+     * Snapshot of the binary installer state-machine for a single chain.
+     * Uses getStatusWithDisk so a container restart doesn't make us forget
+     * that the binary is already installed.
      */
     router.get('/install-status/:chainId', limit('read'), async (req, res) => {
         if (!readActorWallet(req)) {
             return res.status(401).json(errorBody('Authentication required.'));
         }
         try {
-            const status = ChainRegistry.getBinaryDownloader().getStatus(req.params.chainId);
+            const status = await ChainRegistry.getBinaryDownloader()
+                .getStatusWithDisk(req.params.chainId);
             return res.json(successBody(status));
         } catch (err) {
             return res.status(400).json(errorBody(err.message));
@@ -166,15 +183,21 @@ function build(extensionHandle) {
     /**
      * GET /setup/chains
      *
-     * The catalog of chains we know how to install. The wizard renders
-     * this as the "pick chains" step.
+     * Catalog of chains we know how to install AND start. We hide chains
+     * that are downloadable but have no chain adapter — exposing them
+     * would let the wizard install esc/eid/eco and then the dashboard's
+     * Start button would 404. Better to keep them invisible until the
+     * matching adapters land.
      */
     router.get('/chains', limit('read'), async (req, res) => {
         if (!readActorWallet(req)) {
             return res.status(401).json(errorBody('Authentication required.'));
         }
         try {
-            const chains = ChainRegistry.getBinaryDownloader().listChains();
+            const wired = new Set(ChainRegistry.listChains().map((c) => c.chainId));
+            const chains = ChainRegistry.getBinaryDownloader()
+                .listChains()
+                .filter((c) => wired.has(c.chainId));
             return res.json(successBody({ chains }));
         } catch (err) {
             return res.status(500).json(errorBody(err.message));
@@ -192,7 +215,7 @@ function build(extensionHandle) {
      * `setup:install:<chainId>` for live progress or polls
      * /setup/install-status/:chainId. Idempotent.
      */
-    router.post('/install/:chainId', limit('admin'), requireOwner, async (req, res) => {
+    router.post('/install/:chainId', limit('write'), requireOwner, async (req, res) => {
         const wallet = readActorWallet(req);
         const chainId = req.params.chainId;
         try {
@@ -297,10 +320,15 @@ function build(extensionHandle) {
         const body = req.body || {};
         const enableArbiter = body.enableArbiter !== false; // default to BPoS
         const password = typeof body.password === 'string' ? body.password : '';
+        const ksStashPath = path.join(enmDataDir(), `.setup-keystore-${walletScopeId(wallet)}.json`);
 
         try {
             if (!enableArbiter) {
-                // Full-node mode: no keystore needed. Skip ahead.
+                // Full-node mode: no keystore needed, AND clear any stash
+                // from a previous BPoS attempt — otherwise /setup/complete
+                // would still see it and write enableArbiter=true into the
+                // chain config.
+                await fsp.unlink(ksStashPath).catch(() => {});
                 const { db } = extensionHandle.import('data');
                 await upsertSetupState(db, wallet, {
                     keystore_imported: 1,
@@ -309,11 +337,13 @@ function build(extensionHandle) {
                 return res.json(successBody({ enableArbiter: false, keystoreImported: false }));
             }
 
-            // We need the ela-cli path. It's stored next to the binary in
-            // setup-state from the install step.
+            // Resolve ela-cli — first the in-memory downloader status
+            // (fast path during a single install session), then the disk
+            // (so a container restart doesn't break this step).
             const dl = ChainRegistry.getBinaryDownloader();
-            const installStatus = dl.getStatus('mainchain');
-            if (!installStatus.cliPath) {
+            const onDisk = await dl.getStatusWithDisk('mainchain');
+            const cliPath = onDisk.cliPath;
+            if (!cliPath) {
                 return res.status(409).json(errorBody(
                     'ela-cli not yet installed. Complete the binary install step first.',
                 ));
@@ -321,19 +351,28 @@ function build(extensionHandle) {
 
             const ks = ChainRegistry.getKeystoreService();
             const result = await ks.create({
-                cliPath: installStatus.cliPath,
+                cliPath,
                 password: password || undefined,
                 force: !!body.force,
             });
 
-            // Encrypt + stash the password the same way the path-based flow
-            // used to. /setup/complete folds it into the chain config.
+            // Encrypt + stash the password (consumed by /setup/complete).
             const envelope = encrypt(result.password);
-            const stashPath = path.join(enmDataDir(), `.setup-keystore-${walletScopeId(wallet)}.json`);
-            await atomicWrite(stashPath, JSON.stringify({
+            await atomicWrite(ksStashPath, JSON.stringify({
                 envelope,
                 publicKey: result.publicKey,
                 address: result.address,
+            }), { mode: 0o600 });
+
+            // Cache the public identity (NOT the password) to a separate
+            // file the dashboard's "node identity" tile can read without
+            // a password. This file is NOT deleted by /setup/complete —
+            // we want it to persist for the lifetime of the keystore.
+            const identityPath = path.join(chainDir('mainchain'), 'keystore-account.json');
+            await atomicWrite(identityPath, JSON.stringify({
+                publicKey: result.publicKey,
+                address: result.address,
+                generatedAt: Date.now(),
             }), { mode: 0o600 });
 
             const { db } = extensionHandle.import('data');
@@ -361,10 +400,11 @@ function build(extensionHandle) {
     /**
      * GET /setup/keystore/account
      *
-     * Returns the current keystore's public key + address (no password
-     * required — the keystore file itself contains the public key in
-     * unencrypted form, ela-cli wallet account just reads it). Used by
-     * the dashboard's "node identity" tile.
+     * Returns the current keystore's public key + address from the
+     * cached keystore-account.json (written at /setup/keystore time).
+     * No password needed because we store the public material in plain
+     * JSON when we generate the keystore — the encrypted parts stay in
+     * keystore.dat. Used by the dashboard's node-identity tile.
      */
     router.get('/keystore/account', limit('read'), async (req, res) => {
         if (!readActorWallet(req)) {
@@ -376,9 +416,25 @@ function build(extensionHandle) {
             if (!exists) {
                 return res.json(successBody({ exists: false }));
             }
+            const identityPath = path.join(chainDir('mainchain'), 'keystore-account.json');
+            let publicKey = null;
+            let address = null;
+            try {
+                const raw = await fsp.readFile(identityPath, 'utf8');
+                const parsed = JSON.parse(raw);
+                publicKey = parsed.publicKey || null;
+                address = parsed.address || null;
+            } catch (_) {
+                // No cached identity — keystore was created by an older
+                // build, or the file was deleted. The dashboard treats
+                // missing pubkey as "regenerate not required, but we
+                // can't show the producer identity right now."
+            }
             return res.json(successBody({
                 exists: true,
                 keystorePath: ks.keystorePath(),
+                publicKey,
+                address,
             }));
         } catch (err) {
             return res.status(500).json(errorBody(err.message));

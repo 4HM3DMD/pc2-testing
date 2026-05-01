@@ -41,12 +41,29 @@ function pc2DataDir() {
 }
 
 /**
- * Our extension's data dir, ensured to exist on first call.
+ * Our data dir, ensured to exist on first call.
+ *
+ * Resolution order (highest priority first):
+ *   1. ENM_DATA_DIR — what the operator's docker-compose sets, mapped onto a
+ *      bind-mounted volume (e.g. /data/enm). This is THE production path.
+ *   2. PC2_DATA_DIR + extensions/elastos-node-manager — back-compat from the
+ *      Puter-extension days when ENM lived inside PC2's data tree.
+ *   3. ./data/extensions/elastos-node-manager — last-resort fallback for a
+ *      developer running enm-server outside docker. Drops into the cwd.
+ *
+ * Why this matters: in the deployed setup the docker-compose mounts
+ * ./enm-data:/data/enm and exports ENM_DATA_DIR=/data/enm. If we ignore that
+ * env var and just use the Puter-extension path, every artifact (downloaded
+ * binary, keystore, chain data, PID files) lands inside the container's
+ * ephemeral writable layer instead of the bind-mounted volume — so a
+ * `docker compose down` wipes everything.
  *
  * @returns {string}
  */
 function enmDataDir() {
-    const dir = path.join(pc2DataDir(), 'extensions', ENM_NAME);
+    const dir = process.env.ENM_DATA_DIR
+        ? process.env.ENM_DATA_DIR
+        : path.join(pc2DataDir(), 'extensions', ENM_NAME);
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     return dir;
 }

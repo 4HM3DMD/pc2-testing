@@ -30,10 +30,14 @@ const crypto = require('node:crypto');
 const { execFile } = require('node:child_process');
 
 const { ENM_LOG_PREFIX } = require('./EnmConstants');
-const { enmDataDir } = require('./DataDir');
+const { enmDataDir, chainDir } = require('./DataDir');
 
-const KEYSTORE_DIR_NAME = 'keystore';
 const KEYSTORE_FILENAME = 'keystore.dat';
+// We pin the keystore to the chain's own dir so it sits next to the chain's
+// config.json + its data tree. ElaMainChainAdapter.start() looks here for
+// the file; if we wrote it elsewhere, BPoS starts always failed with
+// "BPoS mode requires keystore at ...". One canonical home, no glue copy.
+const DEFAULT_CHAIN = 'mainchain';
 
 /**
  * Generate a strong random keystore password matching node.sh's policy
@@ -52,7 +56,7 @@ class EnmKeystoreService {
     }
 
     keystorePath() {
-        return path.join(enmDataDir(), KEYSTORE_DIR_NAME, KEYSTORE_FILENAME);
+        return path.join(chainDir(DEFAULT_CHAIN), KEYSTORE_FILENAME);
     }
 
     async exists() {
@@ -98,6 +102,10 @@ class EnmKeystoreService {
         }
 
         const password = opts.password || generatePassword();
+
+        // Defensive +x: a previous container's volume may have
+        // dropped the executable bit (rare, but cheap to ensure).
+        try { await fsp.chmod(opts.cliPath, 0o755); } catch (_) { /* not fatal */ }
 
         // ela-cli writes keystore.dat into the CWD it's invoked from.
         // Run it in the keystore dir so the file lands where we want it.
@@ -199,9 +207,13 @@ class EnmKeystoreService {
      * non-whitespace token sits to its left on the same line.
      */
     static _parseAccount(output) {
-        const lines = output.split(/\r?\n/);
-        const re = /^\s*([A-Za-z0-9]+)\s+([0-9a-fA-F]{60,})\s*$/;
-        for (const line of lines) {
+        // Accept any line where an address-shaped token sits before a
+        // 60+ char hex pubkey. This handles current ela-cli output
+        // (ADDRESS PUBLIC_KEY columns), older output (INDEX ADDRESS
+        // PUBLIC_KEY [TYPE]), and anything in between. We don't anchor
+        // on $/^ because future ela-cli versions might add columns.
+        const re = /\b([A-Za-z0-9]{30,})\s+([0-9a-fA-F]{60,})\b/;
+        for (const line of output.split(/\r?\n/)) {
             const m = re.exec(line);
             if (m) {
                 return { address: m[1], publicKey: m[2] };

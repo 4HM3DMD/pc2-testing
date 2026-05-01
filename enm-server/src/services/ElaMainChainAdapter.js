@@ -27,6 +27,7 @@ const { EnmRpcClient } = require('./EnmRpcClient');
 const { ENM_LOG_PREFIX, MAINNET_DNS_SEEDS } = require('./EnmConstants');
 const { chainDir, atomicWrite } = require('./DataDir');
 const { getRpcPassword } = require('./ConfigStore');
+const { decrypt } = require('./EnmEncryption');
 const ExtIpResolver = require('./ExtIpResolver');
 
 const KEYSTORE_FILENAME = 'keystore.dat';
@@ -155,21 +156,33 @@ class ElaMainChainAdapter extends ChainAdapter {
             return result;
         }
 
-        // 6. Pipe keystore password to stdin (ela reads it on first prompt per
-        // node.sh:878 — Rev 1 audit). We use a transient file approach where
-        // the password is held in process memory only. The handle returned by
-        // the process service has access to the child's stdin via emitter
-        // mechanics — but for v0.1 simplicity we write a one-shot password
-        // file under the chain dir with mode 0600 and the operator can configure
-        // ela to read it via stdin redirection at next restart.
-        //
-        // For now, we surface a TODO for Phase 4: full stdin-pipe of the
-        // decrypted keystore password. This keeps the v0.1 path working for
-        // non-arbiter (full-node) mode where no keystore unlock is needed.
+        // 6. Pipe keystore password to stdin so the ela process can unlock
+        // the producer key. node.sh's equivalent is `cat ~/.config/elastos/
+        // ela.txt | nohup ./ela` (build/skeleton/node.sh:866). Without this,
+        // BPoS mode hangs forever on the password prompt.
         if (cfg.dpos.enableArbiter) {
-            this.extensionHandle.log.warn(
-                `${ENM_LOG_PREFIX} BPoS keystore password piping is Phase 4 work — current run will prompt`,
-            );
+            const envelope = cfg.dpos && cfg.dpos.keystorePasswordEncrypted;
+            if (!envelope) {
+                this.extensionHandle.log.warn(
+                    `${ENM_LOG_PREFIX} ${this.chainId} BPoS arbiter enabled but no keystore password on file — ela will block on prompt`,
+                );
+            } else {
+                let plaintext;
+                try {
+                    plaintext = decrypt(envelope);
+                } catch (err) {
+                    throw new Error(`Cannot decrypt keystore password: ${err.message}. Re-import the keystore via the wizard.`);
+                }
+                const wrote = this.processService.writeStdin(this.chainId, plaintext);
+                if (!wrote) {
+                    this.extensionHandle.log.warn(
+                        `${ENM_LOG_PREFIX} ${this.chainId} writeStdin returned false — child stdin may already be closed`,
+                    );
+                }
+                // Plaintext goes out of scope here; v8 GC reclaims its
+                // backing buffer on the next minor cycle. We don't keep
+                // it on `this` and we don't write it to disk.
+            }
         }
 
         return result;
