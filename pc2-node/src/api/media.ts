@@ -19,6 +19,7 @@ import { parseMPD } from '../services/media/mpdParser.js';
 import { mediaSessionManager } from '../services/media/sessionManager.js';
 import { getWASMRuntime } from '../services/wasm/WASMRuntime.js';
 import { createLogger } from '../utils/logger.js';
+import { getInternalIPFSGateway } from '../utils/urlUtils.js';
 
 const subtle = webcrypto.subtle;
 
@@ -75,15 +76,14 @@ function getAuthToken(req: Request): string | null {
   return (req.body?.auth_token as string) || null;
 }
 
-function getBaseUrl(req: Request, bosonService?: any): string {
-  if (bosonService?.getPublicBaseUrl) {
-    try {
-      const pubUrl = bosonService.getPublicBaseUrl();
-      if (pubUrl) return pubUrl;
-    } catch { /* fall through */ }
-  }
-  return `${req.protocol}://${req.get('host')}`;
-}
+// Use the shared getBaseUrl from utils/urlUtils.ts which correctly honours
+// x-forwarded-host / x-forwarded-proto from reverse proxies (e.g. zzz.ela.city
+// gateway → Jetson on plain HTTP). The previous local implementation built
+// `${req.protocol}://${req.get('host')}` which produced URLs like
+// `https://10.100.0.4:4200/...` when behind a gateway that set `x-forwarded-proto: https`
+// but rewrote the Host header to the upstream IP — the resulting fetch would fail
+// with ERR_SSL_WRONG_VERSION_NUMBER (TLS handshake against a plain-HTTP port).
+// Imported lazily inside the route to avoid changing the file's import block layout.
 
 // ── Lit Backend Selection (mirrors storage.ts) ───────────────────
 type LitBackend = 'chipotle' | 'datil';
@@ -173,8 +173,15 @@ router.post('/init', async (req: AuthenticatedRequest, res: Response) => {
     logger.info(`[media/init] channel=${channel} tokenId=${tokenId} mediaUri=${clientMediaUri || '(none)'}`);
 
     // 1. Resolve media URI — prefer what the frontend already knows
-    const baseUrl = getBaseUrl(req, req.app?.locals?.bosonService);
-    const ipfsGateway = baseUrl + '/ipfs/';
+    //
+    // The "local" gateway here MUST be the loopback URL (http://127.0.0.1:PORT/ipfs/),
+    // not the public-facing baseUrl. These fetches are entirely backend-internal
+    // (MPD parse, init segment for PSSH extraction). If we used the public URL,
+    // every request would round-trip out to the reverse proxy (zzz.ela.city) and
+    // back through WireGuard — wasting bandwidth and adding 200ms-2s latency, and
+    // making local playback dependent on gateway uptime, which defeats the whole
+    // point of running a sovereign PC2 node. See urlUtils.getInternalIPFSGateway.
+    const ipfsGateway = getInternalIPFSGateway();
     const fallbackGateway = 'https://ipfs.ela.city/ipfs/';
 
     let mediaUri = clientMediaUri || '';
@@ -658,18 +665,36 @@ async function fetchJsonFromIPFS(cid: string, localGateway: string, publicGatewa
 }
 
 async function fetchBytesFromIPFS(pathOrUrl: string, localGateway: string, publicGateway: string): Promise<Buffer> {
-  // If already a full URL (from resolved template), use it directly
+  // If already a full URL (from resolved template), use it directly.
+  // We must catch BOTH non-OK responses AND thrown fetch errors (timeout,
+  // network down, TLS handshake failure) — earlier this function only handled
+  // non-OK and let throws bubble, which prevented fallback when the local
+  // gateway URL was malformed (e.g. https://internal-ip:4200 → SSL error).
   if (pathOrUrl.startsWith('http://') || pathOrUrl.startsWith('https://')) {
-    const res = await fetch(pathOrUrl);
-    if (res.ok) return Buffer.from(await res.arrayBuffer());
-    // Try replacing gateway
+    let primaryStatus: number | string = 'fetch threw';
+    try {
+      const res = await fetch(pathOrUrl);
+      if (res.ok) return Buffer.from(await res.arrayBuffer());
+      primaryStatus = res.status;
+    } catch (err: any) {
+      const cause = err?.cause;
+      primaryStatus = cause?.code || err?.code || err?.message || 'fetch threw';
+      logger.warn(`[media] Primary IPFS fetch threw (${primaryStatus}): ${pathOrUrl.substring(0, 80)} — trying public gateway`);
+    }
     const ipfsMatch = pathOrUrl.match(/\/ipfs\/(.+)/);
     if (ipfsMatch) {
       const publicUrl = publicGateway + ipfsMatch[1];
-      const pubRes = await fetch(publicUrl);
-      if (pubRes.ok) return Buffer.from(await pubRes.arrayBuffer());
+      try {
+        const pubRes = await fetch(publicUrl);
+        if (pubRes.ok) return Buffer.from(await pubRes.arrayBuffer());
+        throw new Error(`Public gateway returned ${pubRes.status}`);
+      } catch (pubErr: any) {
+        const pubCause = pubErr?.cause;
+        const pubReason = pubCause?.code || pubErr?.message || 'unknown';
+        throw new Error(`Failed to fetch ${ipfsMatch[1]} from both gateways (local: ${primaryStatus}, public: ${pubReason})`);
+      }
     }
-    throw new Error(`Failed to fetch: ${pathOrUrl} (${res.status})`);
+    throw new Error(`Failed to fetch: ${pathOrUrl} (${primaryStatus})`);
   }
 
   const cleanPath = pathOrUrl.replace('ipfs://', '').replace(/^\/ipfs\//, '');
@@ -925,30 +950,44 @@ function splitInitForTrack(initSegment: Buffer, trackType: 'video' | 'audio'): B
   return result;
 }
 
-async function fetchSegmentBytes(url: string, ipfsService?: any): Promise<Buffer> {
+async function fetchSegmentBytes(url: string, _ipfsService?: any): Promise<Buffer> {
   const ipfsMatch = url.match(/\/ipfs\/(.+)/);
   const ipfsPath = ipfsMatch ? ipfsMatch[1] : '';
 
-  // Try the local gateway URL first (handles CID+subpath correctly)
-  const response = await fetch(url);
-  if (response.ok) {
-    const arrayBuf = await response.arrayBuffer();
-    return Buffer.from(arrayBuf);
+  // Local gateway attempt — catches both non-OK and thrown errors (network,
+  // TLS, timeout). Any failure falls through to the public IPFS gateway so a
+  // single transient blip on the local Helia / loopback never breaks playback.
+  let primaryStatus: number | string = 'fetch threw';
+  try {
+    const response = await fetch(url);
+    if (response.ok) {
+      const arrayBuf = await response.arrayBuffer();
+      return Buffer.from(arrayBuf);
+    }
+    primaryStatus = response.status;
+  } catch (err: any) {
+    const cause = err?.cause;
+    primaryStatus = cause?.code || err?.code || err?.message || 'fetch threw';
   }
 
   // Fallback to public IPFS gateway
   if (ipfsPath) {
     const fallbackUrl = FALLBACK_IPFS_GATEWAY + ipfsPath;
-    logger.info(`[media/segment] Local 404, trying public: ${fallbackUrl.substring(0, 80)}...`);
-    const fbResponse = await fetch(fallbackUrl);
-    if (fbResponse.ok) {
-      const arrayBuf = await fbResponse.arrayBuffer();
-      return Buffer.from(arrayBuf);
+    logger.info(`[media/segment] Local fetch failed (${primaryStatus}), trying public: ${fallbackUrl.substring(0, 80)}...`);
+    try {
+      const fbResponse = await fetch(fallbackUrl);
+      if (fbResponse.ok) {
+        const arrayBuf = await fbResponse.arrayBuffer();
+        return Buffer.from(arrayBuf);
+      }
+      throw new Error(`Failed to fetch segment from both gateways (local: ${primaryStatus}, public: ${fbResponse.status})`);
+    } catch (pubErr: any) {
+      const pubReason = pubErr?.cause?.code || pubErr?.message || 'unknown';
+      throw new Error(`Failed to fetch segment from both gateways (local: ${primaryStatus}, public: ${pubReason})`);
     }
-    throw new Error(`Failed to fetch segment from both gateways (local: ${response.status}, public: ${fbResponse.status})`);
   }
 
-  throw new Error(`Failed to fetch segment: ${response.status} ${response.statusText}`);
+  throw new Error(`Failed to fetch segment: ${primaryStatus}`);
 }
 
 let cachedMp4SplitWasmBinary: ArrayBuffer | null = null;

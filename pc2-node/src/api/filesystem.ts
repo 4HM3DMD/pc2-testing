@@ -2153,11 +2153,9 @@ export async function handleCopy(req: AuthenticatedRequest, res: Response): Prom
       let thumbnail: string | undefined = undefined;
       const mimeType = metadata.mime_type || '';
       if (mimeType.startsWith('image/')) {
-        const origin = req.headers.origin || req.headers.host;
-        const isHttps = origin && typeof origin === 'string' && origin.startsWith('https://');
-        const baseUrl = isHttps 
-          ? `https://${req.get('host')}`
-          : `http://${req.get('host')}`;
+        // Use shared getBaseUrl which honours x-forwarded-host so URLs sent
+        // to the browser are reachable when behind a reverse proxy gateway.
+        const baseUrl = getBaseUrl(req);
         // A16: real HMAC-signed URL (24h TTL).
         const expires = buildExpires();
         const signature = mintFileUrlSignature(fileUid, expires);

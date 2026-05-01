@@ -166,16 +166,41 @@
         return SVS.revokeSession({}).then(function () { return null; });
       }
 
-      return SVS.loadSessionKey().then(function (kp) {
-        if (!kp) {
-          log('tryRestoreSession: delegation present but session keypair missing — will re-delegate');
-          return null;
-        }
-        log('tryRestoreSession: restored cached session (no wallet prompt needed)');
-        sessionState.delegationRecord = active;
-        sessionState.keyPair = kp;
-        return sessionState;
-      });
+      // Action-CID staleness gate. The Lit Action self-checks
+      //   del.actionIpfsId === jsParams.actionIpfsId
+      // inside the TEE, so a delegation cached against a now-rotated
+      // action CID will fail every secure-view call with the cryptic
+      // "Lit Action denied" error until the delegation expires
+      // (potentially months). Detect the mismatch up-front by asking
+      // the server which CID it's bound to, purge the cache, and let
+      // ensureSession() re-bootstrap with the current CID.
+      // Fail-open: if /server-info is unreachable we keep the cache
+      // and let the server be the final authority.
+      var cachedActionCid = (active.delegation && active.delegation.actionIpfsId) || '';
+      return authFetch('/api/storage/lit/server-info', { method: 'GET' })
+        .then(function (resp) { return resp && resp.ok ? resp.json() : null; })
+        .catch(function () { return null; })
+        .then(function (serverInfo) {
+          var serverActionCid = (serverInfo && serverInfo.actionCid) || '';
+          if (serverActionCid && cachedActionCid && serverActionCid !== cachedActionCid) {
+            warn('tryRestoreSession: cached delegation actionIpfsId is stale — purging (cached=' + cachedActionCid.substring(0, 12) + '… server=' + serverActionCid.substring(0, 12) + '…)');
+            return SVS.revokeSession({}).then(function () { return null; });
+          }
+          return active;
+        })
+        .then(function (validatedActive) {
+          if (!validatedActive) return null;
+          return SVS.loadSessionKey().then(function (kp) {
+            if (!kp) {
+              log('tryRestoreSession: delegation present but session keypair missing — will re-delegate');
+              return null;
+            }
+            log('tryRestoreSession: restored cached session (no wallet prompt needed)');
+            sessionState.delegationRecord = validatedActive;
+            sessionState.keyPair = kp;
+            return sessionState;
+          });
+        });
     });
   }
 

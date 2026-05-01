@@ -513,7 +513,30 @@ export class UpdateService {
       await this.execStreamed('npm-node', 'npm', ['install', '--legacy-peer-deps', '--include=dev', '--no-fund', '--no-audit'], { cwd: pc2NodeDir });
       logger.info('[UpdateService] pc2-node npm install complete');
 
-      // Step 4: Build GUI and backend (skip particle-auth rebuild - it's pre-built in repo)
+      // Step 4: Build GUI and backend (skip particle-auth rebuild - it's pre-built in repo).
+      //
+      // We rebuild the wallet-bridge bundle as a separate explicit step BEFORE
+      // the GUI build. The wallet-bridge JS files (pc2-secure-view.js,
+      // pc2-wallet-bridge.js, …) live in src/wallet-bridge/ and need to be
+      // copied into pc2-node/frontend/ for the browser to load them — without
+      // this, fixes to those files (e.g. the v1.2.4 stale-Lit-CID self-heal)
+      // would land in source on disk but never reach users via auto-update,
+      // because the user's browser keeps loading the previously-shipped frontend
+      // copy. build:gui only handles the desktop bundle, not these files.
+      this.updateProgress = 'Syncing wallet bridge...';
+      logger.info('[UpdateService] Syncing wallet-bridge files src -> frontend...');
+      try {
+        await this.execStreamed('build-frontend', 'npm', ['run', 'build:frontend'], { cwd: pc2NodeDir });
+      } catch (frontendErr) {
+        // Don't hard-fail the update — older nodes may not have the
+        // build:frontend script defined. Log and continue; the wallet-bridge
+        // copies in frontend/ that came down via `git reset --hard` will be
+        // used as the source of truth.
+        const msg = frontendErr instanceof Error ? frontendErr.message : String(frontendErr);
+        logger.warn(`[UpdateService] build:frontend skipped (older node?): ${msg}`);
+        this.appendLog('build-frontend', `[warn] build:frontend skipped (non-fatal): ${msg}`);
+      }
+
       this.updateProgress = 'Building application...';
       logger.info('[UpdateService] Running builds...');
       await this.execStreamed('build-gui', 'npm', ['run', 'build:gui'], { cwd: projectRoot });

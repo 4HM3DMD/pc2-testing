@@ -57,6 +57,40 @@ fi
 echo -e "${CYAN}Detected: ${OS}${NC}"
 echo ""
 
+# ─────────────────────────────────────────────────────────────────────
+# Pipe-to-bash detection.
+#
+# When a user runs `curl ... | bash`, this script's stdin is the curl
+# pipe, NOT their terminal. Any later `sudo` prompt, `xcode-select
+# --install` GUI prompt, or `apt-get` interactive question has nowhere
+# to read the user's input from and silently bails. Earlier installs
+# hit exactly this — Homebrew's installer would print "Need sudo
+# access on macOS!" and exit, but later steps wouldn't notice and
+# would carry on printing fake success checkmarks.
+#
+# We refuse to run pipe-to-bash on macOS because every other step
+# (Xcode CLT, Homebrew, brew install) requires a real TTY. On Linux
+# we tolerate it because most distros let `sudo apt-get install -y`
+# work fine without a TTY when the user has cached sudo creds.
+# ─────────────────────────────────────────────────────────────────────
+if [[ "$OS" == "macos" ]] && [ ! -t 0 ]; then
+    echo -e "${RED}❌ This script needs an interactive terminal on macOS.${NC}"
+    echo ""
+    echo -e "${YELLOW}You ran it via \`curl ... | bash\`, which detaches stdin and${NC}"
+    echo -e "${YELLOW}breaks every step that prompts for your password (Xcode${NC}"
+    echo -e "${YELLOW}Command Line Tools, Homebrew, sudo).${NC}"
+    echo ""
+    echo -e "${CYAN}Re-run it like this so it can use your terminal:${NC}"
+    echo ""
+    echo -e "  ${GREEN}bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Elacity/pc2.net/main/scripts/start-local.sh)\"${NC}"
+    echo ""
+    echo -e "  ${YELLOW}or${NC}"
+    echo ""
+    echo -e "  ${GREEN}curl -fsSL https://raw.githubusercontent.com/Elacity/pc2.net/main/scripts/start-local.sh -o /tmp/pc2.sh && bash /tmp/pc2.sh${NC}"
+    echo ""
+    exit 1
+fi
+
 # Load nvm if available
 load_nvm() {
     export NVM_DIR="$HOME/.nvm"
@@ -109,8 +143,28 @@ install_node() {
     echo -e "${YELLOW}Note: Node.js installed via nvm. To use in new terminals, run: source ~/.nvm/nvm.sh${NC}"
 }
 
-# Check for git
+# Check for git.
+#
+# IMPORTANT: on macOS, `command -v git` returns true even on a fresh box
+# because /usr/bin/git is a stub installed by macOS that exists *only* to
+# trigger the Xcode Command Line Tools installer when actually invoked.
+# The earlier check passed silently on this stub, every later compile step
+# (nvm install -> Node compile, npm rebuild -> better-sqlite3 build, brew
+# install) would hit the missing-CLT error, and the user would see a
+# cascade of mysterious failures. The honest test is `xcode-select -p`,
+# which only succeeds once CLT is actually present.
 check_git() {
+    if [[ "$OS" == "macos" ]]; then
+        if xcode-select -p &> /dev/null; then
+            # CLT installed — git stub will work for real
+            echo -e "${GREEN}✓ Xcode Command Line Tools installed${NC}"
+            return 0
+        else
+            echo -e "${YELLOW}⚠ Xcode Command Line Tools not installed${NC}"
+            return 1
+        fi
+    fi
+
     if command -v git &> /dev/null; then
         echo -e "${GREEN}✓ Git installed${NC}"
         return 0
@@ -120,17 +174,28 @@ check_git() {
     fi
 }
 
-# Install git
+# Install git.
+#
+# On macOS, the only sensible way to get git on a fresh box is the
+# Xcode Command Line Tools. We trigger the GUI installer and exit;
+# the user has to wait for the install to finish (5-10 minutes on
+# slow connections) and re-run the script. We can't `wait` for the
+# CLT install programmatically because it hands off to a separate
+# system process.
 install_git() {
     echo -e "${CYAN}Installing Git...${NC}"
     
     if [[ "$OS" == "macos" ]]; then
-        echo -e "${YELLOW}Git is required. On macOS, it usually comes with Xcode Command Line Tools.${NC}"
-        echo -e "${YELLOW}Please run this command and follow the prompts:${NC}"
+        echo -e "${YELLOW}Git on macOS requires Xcode Command Line Tools.${NC}"
+        echo -e "${YELLOW}Triggering the installer now — a system dialog will appear.${NC}"
         echo ""
-        echo -e "${CYAN}  xcode-select --install${NC}"
+        # Best-effort fire-and-forget; the GUI installer takes over.
+        xcode-select --install 2>/dev/null || true
+        echo -e "${YELLOW}A macOS dialog should be open or about to open. Click 'Install',${NC}"
+        echo -e "${YELLOW}wait for it to finish (typically 5-10 minutes), then re-run:${NC}"
         echo ""
-        echo -e "${YELLOW}Then re-run this script.${NC}"
+        echo -e "  ${GREEN}bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Elacity/pc2.net/main/scripts/start-local.sh)\"${NC}"
+        echo ""
         exit 1
     elif [[ "$OS" == "linux" ]]; then
         if command -v apt-get &> /dev/null; then
@@ -144,6 +209,65 @@ install_git() {
     fi
     
     echo -e "${GREEN}✓ Git installed${NC}"
+}
+
+# ─────────────────────────────────────────────────────────────────────
+# macOS Homebrew bootstrap.
+#
+# Homebrew is the canonical package manager on macOS and we need it for
+# ffmpeg + every native-module system library (cairo, pango, libpng,
+# pkg-config, …). Without it, `npm rebuild canvas` fails with
+# `pkg-config: command not found` and the script previously printed a
+# fake success message.
+#
+# The Homebrew installer prompts for sudo to create /opt/homebrew, so
+# this step REQUIRES a real TTY. We've already early-exited above if
+# we're in pipe-to-bash mode, so by here we know stdin is a terminal.
+# ─────────────────────────────────────────────────────────────────────
+ensure_brew_macos() {
+    if [[ "$OS" != "macos" ]]; then return 0; fi
+
+    # Make sure brew is on PATH if already installed (Apple Silicon
+    # vs Intel default install locations).
+    if ! command -v brew &> /dev/null; then
+        if [[ -x /opt/homebrew/bin/brew ]]; then
+            eval "$(/opt/homebrew/bin/brew shellenv)"
+        elif [[ -x /usr/local/bin/brew ]]; then
+            eval "$(/usr/local/bin/brew shellenv)"
+        fi
+    fi
+
+    if command -v brew &> /dev/null; then
+        echo -e "${GREEN}✓ Homebrew installed ($(brew --prefix))${NC}"
+        return 0
+    fi
+
+    echo -e "${CYAN}Installing Homebrew (macOS package manager)...${NC}"
+    echo -e "${YELLOW}You'll be prompted for your Mac password — that's normal,${NC}"
+    echo -e "${YELLOW}Homebrew needs it to create /opt/homebrew.${NC}"
+    echo ""
+
+    # Run the installer with a real TTY (no </dev/null this time —
+    # that was the original bug that made it fail silently).
+    if /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"; then
+        # Add brew to PATH for the rest of this script
+        if [[ -x /opt/homebrew/bin/brew ]]; then
+            eval "$(/opt/homebrew/bin/brew shellenv)"
+        elif [[ -x /usr/local/bin/brew ]]; then
+            eval "$(/usr/local/bin/brew shellenv)"
+        fi
+        # Persist for future shells (zsh is macOS default since Catalina)
+        if [[ -x /opt/homebrew/bin/brew ]] && ! grep -q "brew shellenv" "$HOME/.zprofile" 2>/dev/null; then
+            echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> "$HOME/.zprofile"
+        fi
+        echo -e "${GREEN}✓ Homebrew installed${NC}"
+        return 0
+    fi
+
+    echo -e "${RED}❌ Homebrew install failed.${NC}"
+    echo -e "${YELLOW}Install it manually following the prompts at https://brew.sh${NC}"
+    echo -e "${YELLOW}then re-run this script.${NC}"
+    exit 1
 }
 
 # Check for pm2
@@ -196,35 +320,84 @@ install_build_deps() {
     echo -e "${GREEN}✓ Build dependencies installed${NC}"
 }
 
+# Install native-module system libraries on macOS via Homebrew.
+#
+# better-sqlite3 needs no system libs (compiles SQLite from source).
+# canvas needs cairo + pango + libpng + jpeg + giflib + librsvg + pkg-config —
+#   without these, `npm rebuild canvas` dies with `pkg-config: command not
+#   found` and PDF/text thumbnail generation is silently disabled.
+# ffmpeg is needed by the media encoding pipeline (AV1/H.264 transcode).
+# wireguard-tools is needed for the optional fast-remote-access overlay.
+#
+# We install ALL of these in one `brew install` so brew can dedup and cache
+# the dependency graph properly. Errors are surfaced (no `|| true`) because
+# silent failures here corrupt the whole rest of the install.
+install_macos_brew_libs() {
+    if [[ "$OS" != "macos" ]]; then return 0; fi
+
+    echo -e "${CYAN}Installing macOS native-module system libraries via Homebrew...${NC}"
+    echo -e "${YELLOW}First run can take a few minutes (brew is downloading bottles)...${NC}"
+
+    # Suppress brew's default "auto-update everything when you `brew install`
+    # anything" behaviour. Without this, a fresh-Mac install can stall for
+    # 5-10 minutes auto-upgrading completely unrelated packages (tesseract,
+    # imagemagick, jpeg-xl, …). We only need the bottles for OUR deps; the
+    # user can `brew upgrade` on their own schedule. Verified during 1.2.4
+    # smoke test where this was the dominant install-time cost.
+    export HOMEBREW_NO_AUTO_UPDATE=1
+    export HOMEBREW_NO_INSTALL_UPGRADE=1
+    export HOMEBREW_NO_ENV_HINTS=1
+
+    # `brew install` exits 0 when packages are already installed, so the
+    # idempotent re-run case is fine. Any genuine failure (e.g. brew not
+    # on PATH, network down) we want to see immediately.
+    if ! brew install \
+        ffmpeg \
+        pkg-config \
+        cairo \
+        pango \
+        libpng \
+        jpeg \
+        giflib \
+        librsvg \
+        wireguard-tools; then
+        echo -e "${RED}❌ Homebrew install failed for one or more required libraries.${NC}"
+        echo -e "${YELLOW}Inspect the output above and re-run this script after fixing.${NC}"
+        exit 1
+    fi
+
+    echo -e "${GREEN}✓ macOS system libraries installed${NC}"
+}
+
 # Main installation
 main() {
     echo -e "${CYAN}Checking requirements...${NC}"
     echo ""
     
-    # Check and install Git
+    # Check and install Git (on macOS this means Xcode CLT — see check_git
+    # comment for why the obvious `command -v git` test gives a false
+    # positive on a fresh Mac).
     if ! check_git; then
         install_git
     fi
-    
+
+    # On macOS, ensure Homebrew + system libraries are present BEFORE
+    # touching Node/npm. Without this, npm rebuild canvas later silently
+    # fails (no pkg-config / no cairo) and PDF/text thumbnails never work.
+    if [[ "$OS" == "macos" ]]; then
+        ensure_brew_macos
+        install_macos_brew_libs
+    fi
+
     # Install build dependencies for native modules (Debian/Ubuntu only)
     # This must happen BEFORE npm install to ensure native modules compile correctly
     install_build_deps
-    
-    # Install FFmpeg (needed for media encoding pipeline — AV1/H.264 transcoding)
-    if ! command -v ffmpeg &> /dev/null; then
-        echo -e "${CYAN}Installing FFmpeg (media encoding)...${NC}"
-        if [[ "$OS" == "macos" ]]; then
-            if command -v brew &> /dev/null; then
-                brew install ffmpeg 2>&1 || true
-            else
-                echo -e "${YELLOW}FFmpeg not found. Install via: brew install ffmpeg${NC}"
-            fi
-        elif command -v apt-get &> /dev/null; then
-            echo -e "${CYAN}FFmpeg will be installed with build dependencies${NC}"
-        fi
-    fi
+
+    # FFmpeg sanity check (we install it via brew on macOS and apt on Linux above)
     if command -v ffmpeg &> /dev/null; then
         echo -e "${GREEN}✓ FFmpeg available$(ffmpeg -encoders 2>&1 | grep -q libsvtav1 && echo ' (AV1 + H.264)' || echo ' (H.264)')${NC}"
+    else
+        echo -e "${YELLOW}⚠ FFmpeg not found — media encoding will be unavailable${NC}"
     fi
     
     # Check and install Node.js
@@ -334,14 +507,51 @@ PARTICLE_EOF
     fi
     echo -e "${GREEN}✓ Dependencies installed${NC}"
     
-    # Rebuild native modules (skipped by --ignore-scripts)
-    # This compiles node-pty, better-sqlite3, canvas, etc. for this platform
-    echo -e "${CYAN}Building native modules...${NC}"
+    # Rebuild native modules (skipped by --ignore-scripts above).
+    # This compiles node-pty, better-sqlite3, canvas, etc. against the current
+    # Node ABI. better-sqlite3 is REQUIRED — if it fails the database won't
+    # initialise and the server crashes at boot with ERR_DLOPEN_FAILED. canvas
+    # is optional (PDF/text thumbnails); a failure there is a warning, not fatal.
+    #
+    # The previous version swallowed every error with `|| true` and printed
+    # "✓ Native modules built" regardless. That's how we ended up with
+    # "Timeout waiting for server to start" on fresh installs — npm rebuild
+    # silently failed, the script reported success, then the server crashed
+    # at boot.
+    echo -e "${CYAN}Building native modules (this can take a few minutes)...${NC}"
     cd "$ROOT_DIR"
-    npm rebuild 2>&1 || true
+    npm rebuild 2>&1 || echo -e "${YELLOW}⚠ Root npm rebuild had errors (often optional deps — see above)${NC}"
+
     cd "$PC2_DIR"
-    npm rebuild 2>&1 || true
+    # Force build-from-source to dodge the prebuilt-binary MODULE_VERSION
+    # mismatch that bites every Node 22 fresh install (ERR_DLOPEN_FAILED).
+    if ! npm rebuild --build-from-source 2>&1; then
+        # Don't bail yet — re-run module-by-module so we know exactly what
+        # failed. better-sqlite3 is fatal, canvas is not.
+        echo -e "${YELLOW}⚠ Bulk npm rebuild had errors. Investigating per-module...${NC}"
+        if ! npm rebuild better-sqlite3 --build-from-source 2>&1; then
+            echo -e "${RED}❌ better-sqlite3 failed to compile — server cannot start.${NC}"
+            echo -e "${YELLOW}Common causes:${NC}"
+            echo -e "${YELLOW}  - Xcode Command Line Tools missing (run: xcode-select --install)${NC}"
+            echo -e "${YELLOW}  - Python 3 missing (this is rare on modern macOS)${NC}"
+            echo -e "${YELLOW}  - Disk full${NC}"
+            exit 1
+        fi
+        # Optional natives — warn but continue.
+        npm rebuild canvas 2>&1 || echo -e "${YELLOW}⚠ canvas failed to compile — PDF/text thumbnails disabled (non-fatal)${NC}"
+        npm rebuild sharp 2>&1 || echo -e "${YELLOW}⚠ sharp failed to compile — image/video thumbnails may be limited (non-fatal)${NC}"
+    fi
     echo -e "${GREEN}✓ Native modules built${NC}"
+
+    # Sanity check: load better-sqlite3 to confirm the binary actually
+    # matches this Node's ABI. If it doesn't, fail NOW with a clear
+    # message rather than 30 seconds later in pm2 logs.
+    if ! node -e "require('better-sqlite3')(':memory:').prepare('SELECT 1').get()" 2>&1; then
+        echo -e "${RED}❌ better-sqlite3 loads but throws — Node ABI mismatch.${NC}"
+        echo -e "${YELLOW}Try: cd $PC2_DIR && npm rebuild better-sqlite3 --build-from-source${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}✓ better-sqlite3 verified against Node $(node -v)${NC}"
     
     # Build
     echo -e "${CYAN}Building PC2...${NC}"
@@ -351,23 +561,16 @@ PARTICLE_EOF
     fi
     echo -e "${GREEN}✓ Build complete${NC}"
     
-    # Install WireGuard for fast remote access
+    # Install WireGuard for fast remote access.
+    # On macOS this is already covered by install_macos_brew_libs() above —
+    # we only need to do extra work on Linux here. The previous version had
+    # a buggy `bash ... </dev/null` Homebrew bootstrap inside this branch
+    # that would silently fail because `</dev/null` detached stdin from the
+    # sudo prompt; we removed it because Homebrew is now installed up-front
+    # in ensure_brew_macos() with a real TTY.
     if ! command -v wg &> /dev/null; then
         echo -e "${CYAN}Installing WireGuard for fast remote access...${NC}"
-        if [[ "$OS" == "macos" ]]; then
-            if ! command -v brew &> /dev/null; then
-                echo -e "${CYAN}Installing Homebrew (macOS package manager)...${NC}"
-                /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" </dev/null
-                # Add Homebrew to PATH for this session
-                if [[ -x /opt/homebrew/bin/brew ]]; then
-                    eval "$(/opt/homebrew/bin/brew shellenv)"
-                elif [[ -x /usr/local/bin/brew ]]; then
-                    eval "$(/usr/local/bin/brew shellenv)"
-                fi
-                echo -e "${GREEN}✓ Homebrew installed${NC}"
-            fi
-            brew install wireguard-tools 2>&1 || true
-        elif [[ "$OS" == "linux" ]]; then
+        if [[ "$OS" == "linux" ]]; then
             if command -v apt-get &> /dev/null; then
                 sudo apt-get install -y -qq wireguard-tools 2>&1 || true
             elif command -v yum &> /dev/null; then
@@ -376,6 +579,8 @@ PARTICLE_EOF
         fi
         if command -v wg &> /dev/null; then
             echo -e "${GREEN}✓ WireGuard installed${NC}"
+        else
+            echo -e "${YELLOW}⚠ WireGuard not installed — fast remote access unavailable${NC}"
         fi
     else
         echo -e "${GREEN}✓ WireGuard tools detected${NC}"

@@ -1969,11 +1969,10 @@ export async function handleWriteFile(req: AuthenticatedRequest, res: Response):
     const io = (req.app.locals.io as SocketIOServer | undefined);
     if (io) {
       // Build read URL for thumbnail (images use read URL as thumbnail)
-      // Include cache-busting parameter using IPFS hash to ensure fresh thumbnail
-      const isHttps = req.protocol === 'https';
-      const baseUrl = isHttps 
-        ? `https://${req.get('host')}`
-        : `http://${req.get('host')}`;
+      // Include cache-busting parameter using IPFS hash to ensure fresh thumbnail.
+      // Use shared getBaseUrl which honours x-forwarded-host so URLs sent
+      // to the browser are reachable when behind a reverse proxy gateway.
+      const baseUrl = getBaseUrl(req);
       
       // For image files, include thumbnail URL with cache-busting
       let thumbnail: string | undefined = undefined;

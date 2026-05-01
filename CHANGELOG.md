@@ -6,6 +6,365 @@
 
 ---
 
+## [1.2.4] - 2026-04-30 (hotfix)
+
+> ## ⚠️ How to upgrade — read this first
+>
+> **If your node is on v1.2.3:** click "Update" in the GUI. Clean
+> auto-update, no terminal needed.
+>
+> **If your node is on v1.0.x / v1.1.x / v1.2.0 / v1.2.1 / v1.2.2:**
+> **do NOT use the GUI updater for this jump**. The in-app updater
+> on those versions is missing fixes that v1.2.4 needs to settle
+> cleanly (root-level `npm install`, `HUSKY=0` env override,
+> `npm rebuild --build-from-source`, wallet-bridge sync). It can
+> appear to succeed and then leave the backend crashing on missing
+> deps, or hang forever on `Installing dependencies…` with the
+> `husky` 127 error.
+>
+> Run this in a terminal on the node instead:
+>
+> ```bash
+> curl -fsSL https://raw.githubusercontent.com/Elacity/pc2.net/main/scripts/update.sh | bash
+> ```
+>
+> This is `scripts/update.sh` from this release — idempotent, fail-loud,
+> self-checking. Once you're on v1.2.4 the GUI updater is the right
+> tool again for everything from v1.2.4 onwards.
+
+This release closes the last class of "playback works on the publishing
+node but fails everywhere behind the gateway" bugs, eliminates a
+self-inflicted local-IPFS round-trip that was silently bleeding
+bandwidth and adding seconds of latency to every encrypted-media
+session, and ships a self-healing path so users with stale Lit
+delegations cached in their browser auto-recover instead of being
+locked out for months.
+
+It also hardens the macOS / Mac-mini installation path — every fresh
+install on Node 22 was crashing at startup with the cryptic
+`ERR_DLOPEN_FAILED / NODE_MODULE_VERSION 115 vs 127` error because the
+launcher never re-built `better-sqlite3` against its own bundled Node
+ABI.
+
+### 🐛 Critical #7: encrypted-media playback fails behind the ela.city gateway with `ERR_SSL_WRONG_VERSION_NUMBER`
+
+`/api/media/init` and `/api/media/segment` build the gateway base URL
+with a *local* `getBaseUrl()` that ignored the `x-forwarded-host`
+header from the public reverse proxy (`zzz.ela.city`, `test7.ela.city`,
+…). When a viewer hit the player through the gateway, the proxy set
+`x-forwarded-proto: https` but the upstream `Host` header was the
+internal IP (`10.100.0.4:4200`). The local helper combined them into:
+
+```
+https://10.100.0.4:4200/ipfs/<CID>/stream.mpd
+```
+
+Port 4200 only speaks HTTP, so every fetch for the MPD and init
+segment died with `ERR_SSL_WRONG_VERSION_NUMBER` (a TLS handshake
+hitting an HTTP listener). End result: every media open after gateway
+ingestion threw `Failed to fetch` and the player gave up before the
+public-IPFS fallback ever triggered.
+
+**Fix**: deleted the rogue helper, switched to the shared
+`utils/urlUtils.getBaseUrl` that already honours `x-forwarded-host` /
+`x-forwarded-proto` correctly. This is the same helper every other
+endpoint in `storage.ts` was already using; `media.ts` had simply
+shadowed it with a broken copy. The same audit caught two more
+shadows in `filesystem.ts` and `other.ts` (thumbnail URLs broadcast
+via WebSocket); both now route through the shared helper.
+
+### 🐛 Critical #8: every "local" IPFS fetch was round-tripping through the public gateway
+
+Once Critical #7 was fixed, the new symptom became visible: the
+backend was happily building MPD URLs as
+`https://zzz.ela.city/ipfs/...` and *fetching them itself*. The
+request left the Jetson over WireGuard, hit the public Nginx,
+came back through WireGuard, and was served by the same Helia
+instance the request originated on. Per segment.
+
+Cost per playback: **2–4 wasted external HTTPS round-trips** (MPD
++ init + first segments) and **200ms–2s of avoidable latency**
+before the player saw its first byte. When the gateway was
+slightly congested, the local fetch would hit the 10s timeout and
+fall back to `ipfs.ela.city` — now serving the *same* CID it just
+asked the local node for. Worst-case behaviour: a perfectly
+healthy local node felt slower than streaming from the public
+internet, and a gateway hiccup could break a session that had no
+business depending on the gateway at all.
+
+**Fix**: introduced `utils/urlUtils.getInternalIPFSGateway()`, which
+returns `http://127.0.0.1:${PORT}/ipfs/` (overrideable via
+`LOCAL_IPFS_GATEWAY` for users running a separate Kubo daemon).
+`media.ts` now uses this loopback URL for every backend-internal
+IPFS fetch (MPD parse, PSSH-extraction init, every segment) while
+leaving the *public* `getBaseUrl` reserved for URLs that go to the
+browser. URLs the player consumes are unchanged — segments are
+proxied through `/api/media/segment` regardless — so this is a
+pure server-side optimisation with no client surface change.
+
+Verified on the live Jetson:
+
+```
+[media/init] Fetching MPD: http://127.0.0.1:4200/ipfs/<CID>/stream.mpd
+[media/init] Local MPD failed (404), trying fallback: https://ipfs.ela.city/...
+```
+
+Both legs now resolve in milliseconds; the previously-unreachable
+"local" leg is genuinely local.
+
+While in the area, `fetchBytesFromIPFS()` and `fetchSegmentBytes()`
+were both wrapped in try/catch so a thrown `fetch()` (TLS error,
+DNS failure, timeout) actually triggers the public-gateway fallback
+instead of propagating. Previously only non-OK *responses* fell
+back; *exceptions* killed the request.
+
+### 🐛 Critical #11: wallet-bridge fixes can never reach users via auto-update
+
+A foot-gun discovered while fixing Critical #9 — the auto-update
+flow could in principle pull the new
+`src/wallet-bridge/pc2-secure-view.js`, but the server actually
+serves `frontend/pc2-secure-view.js`, and **nothing in the update
+pipeline copied source → frontend**:
+
+- `build:gui` (root): rebuilds the desktop bundle, copies
+  `bundle.min.js`/`bundle.min.css` to `frontend/`. Does not touch
+  wallet-bridge files.
+- `build:backend` (pc2-node): runs `tsc` only.
+- `build:frontend` (pc2-node): the actual script that copies
+  wallet-bridge files. **Was never invoked by `UpdateService`.**
+
+In practice, every wallet-bridge JS fix to date has reached users
+only because we manually ran `build:frontend` locally before
+committing — i.e. the frontend copies in `git` happened to already
+be in sync with `src/`. Nothing enforced that. A single forgotten
+`npm run build:frontend` and any wallet-bridge fix would land in
+source but never reach the browser.
+
+**Fix**: `UpdateService.performUpdate()` now runs
+`npm run build:frontend` as an explicit step before `build:gui`,
+wrapped in a try/catch so older nodes that don't have the script
+don't break the update. Combined with bumping the
+`pc2-secure-view.js?v=…` cache-buster, this guarantees that future
+fixes to any wallet-bridge file are picked up by the browser
+within one update cycle.
+
+This change takes effect for v1.2.4 → v1.2.5+ updates. The v1.2.3
+→ v1.2.4 transition is covered by manually committing both the
+`src/` and `frontend/` copies of `pc2-secure-view.js`, plus the
+cache-buster bump.
+
+### 🐛 Critical #9: rotated Lit Action CID locks users out for months until cached delegations expire
+
+Phase-5 sigauth Lit Actions self-check `del.actionIpfsId ===
+jsParams.actionIpfsId` inside the TEE. When v1.2.2 rotated the
+hardcoded fallback non-media action CID
+(`QmX5JxcFhyasptCWMA6unFPm3TRYjPSkJb5HhN8289r5uk` →
+`bafkreihvm4zkyuefnuptlbdins6cmd2mbslj2xgnyzz3ssdg2ggg3jtkk4`),
+every browser holding a delegation signed against the old CID
+started failing every secure-view call with `Lit Action denied`.
+
+`SecureViewSession` only purges cached delegations on `expiresAt`,
+so users with a 90-day delegation were locked out of all DDRM
+content for up to 90 days unless they manually wiped IndexedDB.
+
+**Fix**: in `pc2-secure-view.js → tryRestoreSession()`, we now
+fetch `GET /api/storage/lit/server-info` (existing endpoint, no
+new surface) to learn the server's *current* expected
+`actionIpfsId`, compare against the cached delegation's
+`actionIpfsId`, and purge the cache on mismatch — exactly the
+same pattern as the existing wallet-mismatch gate one block
+above. The wipe is silent, the next file-open re-bootstraps a
+fresh delegation against the current CID, and the user sees one
+extra `personal_sign` prompt instead of an infinite loop.
+
+Fail-open: if `/server-info` is unreachable for any reason we keep
+the cache and let the server be the final authority — never break
+existing sessions just because we couldn't reach our own
+endpoint.
+
+### 🐛 Critical #10: macOS launcher fresh install crashes with `NODE_MODULE_VERSION 115 vs 127`
+
+The Elastos Launcher bundles its own Node 22.13.1 (MODULE_VERSION
+127) but the launcher install flow only ran `npm install
+--legacy-peer-deps`. `better-sqlite3@^9.2.2` was published before
+Node 22 existed, so `prebuild-install` on a fresh box pulled the
+Node 20 prebuild (MODULE_VERSION 115). At runtime, the bundled
+Node 22 refused to load the .node binary and the database
+initialiser crashed with `ERR_DLOPEN_FAILED`, which the launcher
+surfaced to the user as the unhelpful "Timeout waiting for server
+to start".
+
+The same trap is going to bite again the next time any native
+dependency adds a Node 24 prebuild before our deps catch up.
+
+**Fix**: in `elastos-launcher/src/main/pc2Manager.ts`, both
+`installPC2()` and the auto-update flow now run
+
+```sh
+HUSKY=0 npm rebuild --build-from-source
+```
+
+immediately after `npm install`. This forces *every* native module
+(better-sqlite3, sharp, bcrypt, node-gyp-built shims) to recompile
+against the actually-bundled Node ABI, regardless of which
+prebuilds happened to be cached on npm. The update flow also
+gained the previously-missing root `npm install` so the GUI
+build dependencies stay in sync.
+
+`HUSKY=0` is forced inline as defence-in-depth alongside the
+`package.json` `prepare` script fix from v1.2.3 — covers any user
+running an old launcher build that pulls a newer pc2-node tree.
+
+(For users already in the broken state from a v1.2.2 / v1.2.3
+launcher install, manual recovery is one command:
+`cd ~/.pc2/pc2-node && ~/.elastos/node/node-v22.13.1-darwin-arm64/bin/npm rebuild better-sqlite3 --build-from-source`,
+then re-launch ElastOS. PC2 boots cleanly afterwards.)
+
+### 🐛 Critical #12: `start-local.sh` (CLI installer) silently fails on every fresh Mac
+
+The terminal-based installer
+(`curl -fsSL …/start-local.sh | bash`) was a minefield of false
+successes on a fresh Mac:
+
+1. **Git stub gives false positive.** macOS ships
+   `/usr/bin/git` as a stub that exists in `PATH` solely to
+   trigger the Xcode CLT installer when invoked. The script's
+   `command -v git` test passed on the stub, so Xcode CLT was
+   never installed; later `nvm install` (which compiles things)
+   bombed with "you may need to install the Xcode Command Line
+   Developer Tools" and the user got stuck.
+2. **`curl | bash` detaches stdin.** Homebrew's installer needs
+   sudo; without a TTY it printed "Need sudo access" and bailed.
+   Every subsequent step that depended on brew (ffmpeg, cairo,
+   pango, …) was missing, but the script kept printing
+   `✓ Native modules built` regardless.
+3. **`npm rebuild 2>&1 || true`** swallowed every native-module
+   compile error. `canvas` failing because `pkg-config` wasn't
+   installed printed nothing, but PDF/text thumbnails were
+   silently disabled.
+4. **No macOS equivalent of `install_build_deps`.** The script
+   had a Debian/Ubuntu branch installing `cairo`, `pango`,
+   `libpng`, `librsvg`, `ffmpeg`, etc. — but on macOS, the
+   equivalent `brew install` was never wired up.
+
+**Fix** (`scripts/start-local.sh`):
+
+- Detect pipe-to-bash mode (`[ ! -t 0 ]`) on macOS and refuse to
+  run with a clear `bash -c "$(curl ...)"` recommendation.
+- Replace `command -v git` with `xcode-select -p` on macOS — the
+  honest test for a usable toolchain.
+- New `ensure_brew_macos` step runs the Homebrew installer with a
+  real TTY, persists the `brew shellenv` to `~/.zprofile` so the
+  user doesn't have to source it manually next time.
+- New `install_macos_brew_libs` installs every native-module
+  system dependency (`ffmpeg`, `pkg-config`, `cairo`, `pango`,
+  `libpng`, `jpeg`, `giflib`, `librsvg`, `wireguard-tools`) in a
+  single `brew install` — matches the apt-get list.
+- Replaced silent `npm rebuild 2>&1 || true` with a fail-loud
+  three-tier strategy: bulk rebuild first, then per-module
+  retries that distinguish required (better-sqlite3) from
+  optional (canvas, sharp) failures. better-sqlite3 failure now
+  exits 1 with a remediation hint; canvas failure prints a
+  warning and continues.
+- New post-rebuild sanity check: `node -e
+  "require('better-sqlite3')(':memory:')…"` actually loads the
+  binary against the running Node ABI before claiming success.
+  Catches the ABI-mismatch class of bugs at install time, not at
+  first server boot.
+
+### Other changes
+
+- **Frontend cache-busters bumped 1.2.1 → 1.2.4** in
+  `pc2-node/scripts/build-frontend.js` (and `frontend/index.html`)
+  so browsers fetch the rebuilt `bundle.min.js` / `bundle.min.css`
+  instead of serving the stale v1.2.1 cached copy after update.
+
+### Update path notes
+
+- **v1.2.3 → v1.2.4**: GUI auto-update is the recommended path. Clean,
+  no manual steps.
+- **v1.2.1 / v1.2.2 → v1.2.4**: GUI auto-update *works* (the v1.2.4
+  `package.json` husky fix carries through `git reset --hard`), but
+  the resulting node will be missing the v1.2.4 `UpdateService`
+  improvements (build:frontend sync, root install) until the next
+  release. **Recommended: run `update.sh` from a terminal** so the
+  node lands on v1.2.4 with everything in sync from the start.
+- **v1.0.x / v1.1.x / v1.2.0 → v1.2.4**: **Do not use the GUI updater.**
+  Their in-app `UpdateService` only runs `npm install` inside
+  `pc2-node`, not at the repo root. If v1.2.4's root `package.json`
+  has gained any new transitive dep (it has — see the loopback
+  IPFS / wallet-bridge work above), the auto-update will appear
+  to "succeed" but the backend will crash on the next boot with
+  `Cannot find module 'X'`. v1.0/v1.1 also predate the husky
+  `prepare`-script fix, so the auto-update may simply hang forever
+  on `Installing dependencies…` with the silent `husky` 127 error.
+  **Use the terminal command in the box at the top of these notes.**
+- **Browser cache**: viewers using the GUI will pick up the new
+  bundle via the `?v=1.2.4` cache-buster — no hard-refresh needed.
+- **Stale Lit delegations**: any browser that signed a delegation
+  against the pre-v1.2.2 action CID (`QmX5Jx...`) self-recovers on
+  next page load — one extra `personal_sign` prompt, no
+  user-visible error.
+
+### Manual recovery / forced upgrade
+
+If your GUI auto-updater hangs, fails, or you're on an older
+release that the in-app updater can't carry forward (notably
+v1.2.0), the canonical recovery is the hardened
+`scripts/update.sh`. It does, in order:
+
+1. PM2 stop + orphan kill + port-free check
+2. `git fetch + git reset --hard origin/main`
+3. `npm install` at **both** root and `pc2-node` (with
+   `HUSKY=0` belt-and-braces)
+4. `npm rebuild --build-from-source` (bulk, then per-module
+   retry — better-sqlite3 fatal, canvas/sharp non-fatal)
+5. `build:frontend` + `build:gui` + `build:backend`
+6. better-sqlite3 ABI sanity check (`require()` it before PM2
+   starts)
+7. `pm2 start` + 10s health-check verification
+
+**One-liner from anywhere on a Jetson / Linux box:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Elacity/pc2.net/main/scripts/update.sh | bash
+```
+
+**From inside an existing checkout:**
+
+```bash
+cd ~/pc2.net && bash scripts/update.sh
+```
+
+**On macOS launcher install (path is `~/.pc2`):**
+
+```bash
+cd ~/.pc2 && bash scripts/update.sh
+```
+
+The script is idempotent — running it twice is safe and a
+reasonable thing to do if the first run reported any module
+warning. It exits 1 with a remediation hint (not a silent
+"success") on every fatal step, which is the opposite of how
+most install scripts in this codebase used to behave.
+
+### Files changed
+
+- `pc2-node/src/utils/urlUtils.ts` — added `getInternalIPFSGateway()`
+- `pc2-node/src/api/media.ts` — loopback gateway, hardened fetch fallback
+- `pc2-node/src/api/filesystem.ts` — shared `getBaseUrl` for thumbnail URLs
+- `pc2-node/src/api/other.ts` — shared `getBaseUrl` for thumbnail URLs
+- `pc2-node/src/wallet-bridge/pc2-secure-view.js` + `pc2-node/frontend/pc2-secure-view.js` — stale-CID self-heal (synced)
+- `pc2-node/src/services/UpdateService.ts` — runs `build:frontend` so wallet-bridge fixes actually reach users
+- `pc2-node/scripts/build-frontend.js` + `pc2-node/frontend/index.html` — bundle + secure-view cache-buster bump
+- `scripts/start-local.sh` — Xcode CLT detection, Homebrew bootstrap with TTY, macOS native libs, fail-loud npm rebuild, better-sqlite3 sanity check
+- `scripts/update.sh` — hardened canonical recovery script (root + pc2-node install, build:frontend, fail-loud rebuild, ABI verify)
+- `package.json` + `pc2-node/package.json` — version 1.2.4
+- `elastos-launcher/src/main/pc2Manager.ts` — `npm rebuild --build-from-source` on install + update
+- `elastos-launcher/package.json` — version 1.2.4
+
+---
+
 ## [1.2.3] - 2026-04-30 (hotfix)
 
 ### 🐛 Critical #6: GUI updater silently hangs on every Jetson update (`sh: husky: not found`)
