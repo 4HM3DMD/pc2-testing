@@ -304,11 +304,14 @@ install_build_deps() {
         SUDO=""
     fi
     
-    # Install build-essential, python3, ffmpeg, and native module dependencies
+    # Install build-essential, python3, cmake, ffmpeg, and native module deps.
+    # cmake is required by node-datachannel's source-build fallback when
+    # prebuild-install can't find a binary for the running Node ABI.
     $SUDO apt-get update -qq
     $SUDO apt-get install -y -qq \
         build-essential \
         python3 \
+        cmake \
         ffmpeg \
         libcairo2-dev \
         libpango1.0-dev \
@@ -351,7 +354,14 @@ install_macos_brew_libs() {
     # `brew install` exits 0 when packages are already installed, so the
     # idempotent re-run case is fine. Any genuine failure (e.g. brew not
     # on PATH, network down) we want to see immediately.
+    #
+    # cmake is required by node-datachannel's source-build fallback when
+    # prebuild-install can't find a binary for the running Node ABI
+    # (e.g. Node 22 napi 8 darwin-arm64). v1.2.4 missed this and crashed
+    # fresh installs at the rebuild step with "OMG CMake executable is
+    # not found". v1.2.5 belt-and-braces it.
     if ! brew install \
+        cmake \
         ffmpeg \
         pkg-config \
         cairo \
@@ -523,35 +533,116 @@ PARTICLE_EOF
     npm rebuild 2>&1 || echo -e "${YELLOW}⚠ Root npm rebuild had errors (often optional deps — see above)${NC}"
 
     cd "$PC2_DIR"
-    # Force build-from-source to dodge the prebuilt-binary MODULE_VERSION
-    # mismatch that bites every Node 22 fresh install (ERR_DLOPEN_FAILED).
-    if ! npm rebuild --build-from-source 2>&1; then
-        # Don't bail yet — re-run module-by-module so we know exactly what
-        # failed. better-sqlite3 is fatal, canvas is not.
-        echo -e "${YELLOW}⚠ Bulk npm rebuild had errors. Investigating per-module...${NC}"
-        if ! npm rebuild better-sqlite3 --build-from-source 2>&1; then
-            echo -e "${RED}❌ better-sqlite3 failed to compile — server cannot start.${NC}"
-            echo -e "${YELLOW}Common causes:${NC}"
-            echo -e "${YELLOW}  - Xcode Command Line Tools missing (run: xcode-select --install)${NC}"
-            echo -e "${YELLOW}  - Python 3 missing (this is rare on modern macOS)${NC}"
-            echo -e "${YELLOW}  - Disk full${NC}"
-            exit 1
-        fi
-        # Optional natives — warn but continue.
-        npm rebuild canvas 2>&1 || echo -e "${YELLOW}⚠ canvas failed to compile — PDF/text thumbnails disabled (non-fatal)${NC}"
-        npm rebuild sharp 2>&1 || echo -e "${YELLOW}⚠ sharp failed to compile — image/video thumbnails may be limited (non-fatal)${NC}"
-    fi
-    echo -e "${GREEN}✓ Native modules built${NC}"
-
-    # Sanity check: load better-sqlite3 to confirm the binary actually
-    # matches this Node's ABI. If it doesn't, fail NOW with a clear
-    # message rather than 30 seconds later in pm2 logs.
-    if ! node -e "require('better-sqlite3')(':memory:').prepare('SELECT 1').get()" 2>&1; then
-        echo -e "${RED}❌ better-sqlite3 loads but throws — Node ABI mismatch.${NC}"
-        echo -e "${YELLOW}Try: cd $PC2_DIR && npm rebuild better-sqlite3 --build-from-source${NC}"
+    # Strategy: only force --build-from-source for better-sqlite3 (the one
+    # module known to ship Node-22-incompatible prebuilds). For everything
+    # else, run plain `npm rebuild` so prebuild-install can use the
+    # prebuilt binary when available.
+    #
+    # v1.2.4 forced --build-from-source for ALL modules, which exposed
+    # node-datachannel's cmake-js source-build path. On Macs without
+    # cmake installed (most fresh installs), that crashed the entire
+    # rebuild step. v1.2.5 reverts to the proven v1.2.3 approach but
+    # also installs cmake up front (see install_macos_brew_libs) as
+    # belt-and-braces.
+    echo -e "${CYAN}Rebuilding better-sqlite3 against current Node ABI...${NC}"
+    if ! npm rebuild better-sqlite3 --build-from-source 2>&1; then
+        echo -e "${RED}❌ better-sqlite3 failed to compile — server cannot start.${NC}"
+        echo -e "${YELLOW}Common causes:${NC}"
+        echo -e "${YELLOW}  - Xcode Command Line Tools missing (run: xcode-select --install)${NC}"
+        echo -e "${YELLOW}  - Python 3 missing (this is rare on modern macOS)${NC}"
+        echo -e "${YELLOW}  - Disk full${NC}"
         exit 1
     fi
-    echo -e "${GREEN}✓ better-sqlite3 verified against Node $(node -v)${NC}"
+
+    # Refresh the rest using prebuilds when available — fast, and
+    # tolerant of any module that doesn't have a prebuild for this Node
+    # version (it'll fall back to source build, which is why we install
+    # cmake/cairo/etc above).
+    echo -e "${CYAN}Refreshing other native modules...${NC}"
+    npm rebuild 2>&1 || echo -e "${YELLOW}⚠ Some optional natives didn't rebuild (non-fatal — see above)${NC}"
+
+    echo -e "${GREEN}✓ Native modules built${NC}"
+
+    # ──────────────────────────────────────────────────────────────────
+    # Native module verification gauntlet.
+    #
+    # Each critical native module gets THREE attempts:
+    #   1. Plain load — most common, works when prebuild-install resolved
+    #      cleanly at npm-install time.
+    #   2. Rebuild — covers ABI drift since last install (e.g. user
+    #      upgraded their Node binary after a prior install).
+    #   3. Clean reinstall — the nuclear option. Wipes node_modules/MOD
+    #      entirely and runs `npm install MOD` which forces a fresh
+    #      prebuild-install query against the CURRENT Node ABI. This
+    #      is what Ahmed had to do manually after v1.2.4 silent-shipped
+    #      a broken node-datachannel — `npm rebuild` reuses stale
+    #      install metadata, only a clean reinstall queries fresh.
+    #
+    # If all three fail, exit with a fix-it-yourself hint that's
+    # SPECIFIC to the module (cmake for node-datachannel, build-tools
+    # for better-sqlite3).
+    # ──────────────────────────────────────────────────────────────────
+
+    # Helper: load-test an ESM module via dynamic import.
+    verify_esm_loads() {
+        local mod="$1"
+        node -e "import('${mod}').then(m => { if (!m) throw new Error('null'); }).catch(e => { console.error(e.message); process.exit(1); })" 2>&1
+    }
+
+    # Helper: load-test a CJS module by requiring + smoke-running it.
+    verify_better_sqlite3_loads() {
+        node -e "require('better-sqlite3')(':memory:').prepare('SELECT 1').get()" 2>&1
+    }
+
+    # ─── better-sqlite3 ───────────────────────────────────────────────
+    echo -e "${CYAN}Verifying better-sqlite3 against Node $(node -v)...${NC}"
+    if ! verify_better_sqlite3_loads >/dev/null 2>&1; then
+        echo -e "${YELLOW}⚠ better-sqlite3 doesn't load — clean reinstalling...${NC}"
+        rm -rf node_modules/better-sqlite3
+        npm install better-sqlite3 --legacy-peer-deps --build-from-source 2>&1 || true
+        if ! verify_better_sqlite3_loads >/dev/null 2>&1; then
+            echo -e "${RED}❌ better-sqlite3 cannot be made to load — server cannot start.${NC}"
+            echo -e "${YELLOW}Common causes:${NC}"
+            echo -e "${YELLOW}  - Xcode Command Line Tools missing (run: xcode-select --install)${NC}"
+            echo -e "${YELLOW}  - Python 3 missing (rare on modern macOS)${NC}"
+            echo -e "${YELLOW}  - Disk full${NC}"
+            verify_better_sqlite3_loads
+            exit 1
+        fi
+        echo -e "${GREEN}✓ better-sqlite3 recovered via clean reinstall${NC}"
+    else
+        echo -e "${GREEN}✓ better-sqlite3 verified${NC}"
+    fi
+
+    # ─── node-datachannel ─────────────────────────────────────────────
+    echo -e "${CYAN}Verifying node-datachannel against Node $(node -v)...${NC}"
+    if ! verify_esm_loads node-datachannel >/dev/null 2>&1; then
+        echo -e "${YELLOW}⚠ node-datachannel doesn't load — clean reinstalling...${NC}"
+        # The clean reinstall trick from Ahmed (v1.2.4 hotfix discovery,
+        # Apr 30 2026): `npm rebuild` reuses stale install metadata, but
+        # `rm -rf node_modules/MOD && npm install MOD` forces prebuild-
+        # install to fetch fresh for the current Node ABI. With cmake
+        # now installed up front, even the source-build fallback works
+        # if prebuild-install can't find a binary.
+        rm -rf node_modules/node-datachannel
+        npm install node-datachannel --legacy-peer-deps 2>&1 || true
+        if ! verify_esm_loads node-datachannel >/dev/null 2>&1; then
+            echo -e "${RED}❌ node-datachannel cannot be made to load — server will crash-loop on boot.${NC}"
+            echo -e "${YELLOW}Manual fix:${NC}"
+            if [[ "$OS" == "macos" ]]; then
+                echo -e "${YELLOW}  brew install cmake${NC}"
+            else
+                echo -e "${YELLOW}  sudo apt install cmake  (or your distro's equivalent)${NC}"
+            fi
+            echo -e "${YELLOW}  cd $PC2_DIR && rm -rf node_modules/node-datachannel && npm install node-datachannel${NC}"
+            echo -e "${YELLOW}If that still fails, paste output to https://github.com/Elacity/pc2.net/issues${NC}"
+            verify_esm_loads node-datachannel
+            exit 1
+        fi
+        echo -e "${GREEN}✓ node-datachannel recovered via clean reinstall${NC}"
+    else
+        echo -e "${GREEN}✓ node-datachannel verified${NC}"
+    fi
     
     # Build
     echo -e "${CYAN}Building PC2...${NC}"

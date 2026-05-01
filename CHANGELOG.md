@@ -6,6 +6,76 @@
 
 ---
 
+## [1.2.5] - 2026-05-01 (hotfix-on-hotfix)
+
+> ## ⚠️ For users who installed v1.2.4 and got stuck
+>
+> If you installed v1.2.4 today and saw either:
+>
+> - **`OMG CMake executable is not found`** at the "Building native modules" step (Sasha's case), OR
+> - **`Cannot find module '../../../build/Release/node_datachannel.node'`** in pm2 logs after install completed (Ahmed's case)
+>
+> Both are the same root cause: `node-datachannel` (a libp2p WebRTC transitive dep) tried to do a cmake-js source build because no prebuild exists for your Node ABI, and cmake wasn't installed. v1.2.4 didn't catch this and either crashed loudly (Sasha) or silently shipped a broken module (Ahmed).
+>
+> **Fix without re-installing everything:**
+> ```bash
+> # macOS
+> brew install cmake
+> cd ~/.pc2/pc2-node    # or ~/pc2.net/pc2-node depending on install
+> npm rebuild node-datachannel
+> pm2 restart pc2
+>
+> # Linux
+> sudo apt install cmake
+> cd ~/.pc2/pc2-node    # or ~/pc2.net/pc2-node depending on install
+> npm rebuild node-datachannel
+> pm2 restart pc2
+> ```
+>
+> **Or (cleaner) re-run the v1.2.5 installer/updater** which now installs cmake up front and verifies node-datachannel loads before declaring success:
+> ```bash
+> # Update existing install:
+> curl -fsSL https://raw.githubusercontent.com/Elacity/pc2.net/main/scripts/update.sh | bash
+> ```
+
+### What v1.2.5 actually fixes
+
+This is a hotfix for v1.2.4. The v1.2.4 release shipped two related regressions:
+
+1. **`npm rebuild --build-from-source` for ALL native modules** (instead of just `better-sqlite3` like v1.2.3 did). This was over-aggressive paranoia. It exposed `node-datachannel`'s cmake-js source-build path on Macs without cmake installed. v1.2.5 reverts to the proven v1.2.3 strategy — only `better-sqlite3` gets force-built, everything else uses prebuilds when available.
+2. **Per-module rebuild fallback didn't include `node-datachannel`**. When the bulk rebuild failed, the script silently skipped node-datachannel and declared success. The server then crash-looped on boot. v1.2.5 adds an explicit verification gauntlet that fails LOUDLY before pm2 ever starts the server.
+
+### The verification gauntlet (Ahmed's contribution)
+
+Both `start-local.sh` and `update.sh` now run a three-attempt verification for each critical native module (`better-sqlite3` and `node-datachannel`):
+
+1. **Plain load** — works when prebuild-install resolved cleanly at install time.
+2. **Rebuild** — covers ABI drift from a prior install (already done up-front).
+3. **Clean reinstall** — `rm -rf node_modules/MOD && npm install MOD`. The nuclear option that forces `prebuild-install` to query fresh against the **current** Node ABI.
+
+Why step 3 matters: Ahmed (Apr 30 2026) discovered that `npm rebuild` reuses the install-time prebuild metadata in `node_modules/MOD/`. If your Node binary changed since install (Homebrew auto-upgraded Node, you switched nvm versions, etc.), `npm rebuild` can succeed without actually fetching the right binary for your current Node. Only **clean reinstall** queries fresh. This is now baked into the scripts so users don't have to discover it themselves.
+
+If all three steps fail for a critical module, the script exits with module-specific fix instructions (`brew install cmake` for node-datachannel, `xcode-select --install` for better-sqlite3, etc.) instead of letting pm2 silently crash-loop.
+
+### Other v1.2.5 fixes
+
+- **`update.sh` now sources nvm + probes common pm2 install paths** before running. v1.2.4's `update.sh` failed for users with nvm-installed pm2 (4HM3D's case) because the curl|bash invocation didn't have `~/.nvm/versions/node/*/bin` on PATH and `pm2 stop pc2` reported "command not found". Now it sources `~/.nvm/nvm.sh`, falls back to probing standard install locations, and exits with a clear "install pm2 first" error if it's genuinely missing.
+- **`cmake` is now in the system-deps install list** for both macOS (Homebrew) and Debian/Ubuntu (apt-get). Belt-and-braces in case any current or future native module falls back to source build.
+- **Cache-busters bumped** — `bundle.min.{js,css}?v=1.2.5`.
+- **Launcher (Elastos Launcher v1.2.5)** updated with the same rebuild-strategy revert; download `ElastOS-1.2.5-arm64.dmg` (signed + notarized + stapled) from the launcher repo.
+
+### Credits
+
+Thanks to **Ahmed (4HM3D)** and **Sasha** for finding both the silent-shipping bug and the recovery pattern within hours of v1.2.4. Ahmed's "rm -rf + clean reinstall" insight (vs `npm rebuild`) is what made the verification gauntlet actually robust against Node-version drift.
+
+### Update path notes
+
+- **v1.2.4 → v1.2.5**: GUI auto-update works cleanly because v1.2.4's `UpdateService` is unchanged in this release. **HOWEVER**, if your v1.2.4 install crash-loops on boot (Ahmed's case), the GUI won't even open to let you click Update — use the terminal `update.sh` instead.
+- **v1.2.3 → v1.2.5**: GUI auto-update works fine.
+- **v1.0/v1.1/v1.2.0/v1.2.1/v1.2.2 → v1.2.5**: still terminal-only, same rules as v1.2.4 release notes.
+
+---
+
 ## [1.2.4] - 2026-04-30 (hotfix)
 
 > ## ⚠️ How to upgrade — read this first

@@ -19,6 +19,31 @@
 
 set -e
 
+# Source nvm if installed so that node/npm/pm2 (commonly installed via
+# `npm i -g pm2` under nvm-managed Node) are on PATH. Without this, the
+# script's bare bash environment doesn't see ~/.nvm/versions/node/*/bin
+# and `pm2 stop` fails with "command not found", breaking step 1 even
+# though pm2 is installed and working in the user's interactive shell.
+# v1.2.4's update.sh shipped without this and broke for users on a
+# nvm-managed pm2 install (reported by 4HM3D, Apr 30 2026).
+export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+if [[ -s "$NVM_DIR/nvm.sh" ]]; then
+    # shellcheck source=/dev/null
+    \. "$NVM_DIR/nvm.sh"
+fi
+
+# Last-ditch: probe the standard nvm-managed pm2 location and add it to
+# PATH if the symlink chain is intact. This catches setups where nvm.sh
+# isn't installed but pm2 is at a known location.
+if ! command -v pm2 >/dev/null 2>&1; then
+    for npm_bin_dir in "$HOME"/.nvm/versions/node/*/bin /usr/local/bin /opt/homebrew/bin; do
+        if [[ -x "$npm_bin_dir/pm2" ]]; then
+            export PATH="$npm_bin_dir:$PATH"
+            break
+        fi
+    done
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PC2_DIR="$(dirname "$SCRIPT_DIR")"
 PC2_NODE_DIR="$PC2_DIR/pc2-node"
@@ -90,6 +115,23 @@ echo "║  Repo: $PC2_DIR"
 echo "╚══════════════════════════════════════════════════════════════╝"
 echo ""
 
+# Verify pm2 is actually reachable now that we've sourced nvm + probed
+# common locations. If it's still missing the user genuinely needs to
+# install it, and we should say so clearly.
+if ! command -v pm2 >/dev/null 2>&1; then
+    echo "❌ pm2 is required but not on PATH."
+    echo ""
+    echo "   Install it (one of):"
+    echo "     npm install -g pm2"
+    echo "     # or with nvm:"
+    echo "     source ~/.nvm/nvm.sh && nvm use default && npm install -g pm2"
+    echo ""
+    echo "   Then re-run this script."
+    exit 1
+fi
+echo "✓ pm2 found at: $(command -v pm2)"
+echo ""
+
 # ─────────────────────────────────────────────────────────────────────
 # Step 1: stop PC2 cleanly so we don't fight ourselves while building
 # ─────────────────────────────────────────────────────────────────────
@@ -158,18 +200,81 @@ npm install --legacy-peer-deps --include=dev --no-fund --no-audit
 # ─────────────────────────────────────────────────────────────────────
 echo ""
 echo "🔨 Step 7: Rebuilding native modules..."
-if ! npm rebuild --build-from-source 2>&1; then
-    echo "   ⚠️  Bulk rebuild had errors, retrying critical modules individually..."
-    if ! npm rebuild better-sqlite3 --build-from-source; then
-        echo ""
-        echo "❌ better-sqlite3 failed to rebuild. The server cannot start without it."
-        echo "   Common causes:"
-        echo "     - missing build tools (Linux: apt install build-essential python3)"
-        echo "     - missing Xcode CLT on macOS (run: xcode-select --install)"
+# Strategy: only force --build-from-source for better-sqlite3 (the one
+# module known to ship Node-22-incompatible prebuilds). For everything
+# else, run plain `npm rebuild` so prebuild-install can use the
+# prebuilt binary when available.
+#
+# v1.2.4 forced --build-from-source for ALL modules, which broke fresh
+# installs because node-datachannel falls back to a cmake-js source
+# build when no prebuild is available — and most users don't have
+# cmake installed. v1.2.5 reverts to the proven v1.2.3 strategy.
+if ! npm rebuild better-sqlite3 --build-from-source 2>&1; then
+    echo ""
+    echo "❌ better-sqlite3 failed to rebuild. The server cannot start without it."
+    echo "   Common causes:"
+    echo "     - missing build tools (Linux: apt install build-essential python3)"
+    echo "     - missing Xcode CLT on macOS (run: xcode-select --install)"
+    exit 1
+fi
+# Refresh the rest using prebuilds when available.
+npm rebuild 2>&1 || echo "   ⚠️  Some optional native modules didn't rebuild (non-fatal — see above)"
+
+# ─────────────────────────────────────────────────────────────────────
+# Step 7b: Native module verification gauntlet.
+#
+# Each critical native module gets THREE attempts:
+#   1. Plain load — works when prebuild-install resolved cleanly.
+#   2. (Already done above for everything via `npm rebuild`.)
+#   3. Clean reinstall — wipes node_modules/MOD, runs `npm install MOD`
+#      which forces a fresh prebuild-install query against the CURRENT
+#      Node ABI. This is what Ahmed had to do manually after v1.2.4
+#      silent-shipped a broken node-datachannel — `npm rebuild` reuses
+#      stale install metadata, only a clean reinstall queries fresh.
+#
+# If both steps fail, exit with a fix-it-yourself hint that's specific
+# to the module.
+# ─────────────────────────────────────────────────────────────────────
+echo ""
+echo "🧪 Step 7b: Verifying critical native modules load..."
+
+# better-sqlite3 (CJS) — verify by initialising an in-memory db.
+if ! node -e "require('better-sqlite3')(':memory:').prepare('SELECT 1').get()" >/dev/null 2>&1; then
+    echo "   ⚠️  better-sqlite3 doesn't load — clean reinstalling..."
+    rm -rf node_modules/better-sqlite3
+    npm install better-sqlite3 --legacy-peer-deps --build-from-source 2>&1 || true
+    if ! node -e "require('better-sqlite3')(':memory:').prepare('SELECT 1').get()" >/dev/null 2>&1; then
+        echo "❌ better-sqlite3 cannot be made to load. Try:"
+        echo "   xcode-select --install    # macOS"
+        echo "   sudo apt install build-essential python3    # Linux"
+        node -e "require('better-sqlite3')(':memory:').prepare('SELECT 1').get()" 2>&1
         exit 1
     fi
-    npm rebuild canvas 2>&1 || echo "   ⚠️  canvas rebuild failed (PDF/text thumbnails disabled, non-fatal)"
-    npm rebuild sharp 2>&1 || echo "   ⚠️  sharp rebuild failed (image thumbnails may degrade, non-fatal)"
+    echo "   ✅ better-sqlite3 recovered via clean reinstall"
+else
+    echo "   ✅ better-sqlite3 verified"
+fi
+
+# node-datachannel (ESM) — verify via dynamic import.
+if ! node -e "import('node-datachannel').then(m => { if (!m) throw new Error('null'); }).catch(e => { console.error(e.message); process.exit(1); })" >/dev/null 2>&1; then
+    echo "   ⚠️  node-datachannel doesn't load — clean reinstalling..."
+    rm -rf node_modules/node-datachannel
+    npm install node-datachannel --legacy-peer-deps 2>&1 || true
+    if ! node -e "import('node-datachannel').then(m => { if (!m) throw new Error('null'); }).catch(e => { console.error(e.message); process.exit(1); })" >/dev/null 2>&1; then
+        echo "❌ node-datachannel cannot be made to load. Try:"
+        if [[ "$(uname -s)" == "Darwin" ]]; then
+            echo "   brew install cmake"
+        else
+            echo "   sudo apt install cmake"
+        fi
+        echo "   cd $PC2_NODE_DIR && rm -rf node_modules/node-datachannel && npm install node-datachannel"
+        echo "   Then re-run this script."
+        node -e "import('node-datachannel').then(()=>console.log('would have loaded')).catch(e => console.error(e.message))" 2>&1
+        exit 1
+    fi
+    echo "   ✅ node-datachannel recovered via clean reinstall"
+else
+    echo "   ✅ node-datachannel verified"
 fi
 
 # ─────────────────────────────────────────────────────────────────────
@@ -199,19 +304,9 @@ echo "🔨 Step 10: Compiling backend..."
 cd "$PC2_NODE_DIR"
 npm run build:backend
 
-# ─────────────────────────────────────────────────────────────────────
-# Step 11: Sanity-check better-sqlite3 against the running Node ABI
-# before we hand off to PM2 — fail here with a clear message rather
-# than 30 seconds later in pm2 logs.
-# ─────────────────────────────────────────────────────────────────────
-echo ""
-echo "🧪 Step 11: Verifying better-sqlite3 works under $(node -v)..."
-if ! node -e "require('better-sqlite3')(':memory:').prepare('SELECT 1').get()" 2>&1; then
-    echo "❌ better-sqlite3 loads but throws — ABI mismatch. Try:"
-    echo "   cd $PC2_NODE_DIR && npm rebuild better-sqlite3 --build-from-source"
-    exit 1
-fi
-echo "   ✅ better-sqlite3 verified"
+# Step 11 (better-sqlite3 ABI re-verify) was merged into Step 7b above
+# — the verification gauntlet now covers both better-sqlite3 AND
+# node-datachannel with the same three-attempt pattern.
 
 # ─────────────────────────────────────────────────────────────────────
 # Step 12: Start under PM2.
