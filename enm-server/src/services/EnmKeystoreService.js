@@ -180,28 +180,31 @@ class EnmKeystoreService {
     }
 
     /**
-     * Parse `ela-cli wallet account` output. The format (per
-     * Elastos.ELA/cmd/wallet/account.go) is a fixed-column table:
+     * Parse `ela-cli wallet account` output. The real-world format
+     * (Elastos.ELA/cmd/wallet/account.go, current behaviour as of
+     * v0.9.9.5) is:
      *
-     *   INDEX                            ADDRESS                        PUBLIC KEY                                                  TYPE
-     *   ----- ---------------------------------- ----------------------------------------------------------------- --------
-     *   0     EabcXXXX...                        023d4a...                                                          MAIN
+     *   ADDRESS                            PUBLIC KEY
+     *   ---------------------------------- ----------------------------------
+     *   ELPPBGPmxXFc1...                   024e0bc9d4fed...
+     *   ---------------------------------- ----------------------------------
      *
-     * We grab the first non-header data row and pull address + pubkey.
+     * No INDEX column, no TYPE column — earlier versions of this
+     * comment said there was one, which is why our previous parser
+     * required a leading numeric column and rejected real output.
+     *
+     * Robust strategy: scan every line for the pattern
+     *     <addressy-token> <hex-pubkey>
+     * where the pubkey is a 60+ char hex string. Address is whatever
+     * non-whitespace token sits to its left on the same line.
      */
     static _parseAccount(output) {
         const lines = output.split(/\r?\n/);
-        // Find the divider (line of dashes) and treat the next non-empty
-        // line as the first record.
-        let dataIdx = -1;
-        for (let i = 0; i < lines.length; i++) {
-            if (/^\s*-+\s+-+/.test(lines[i])) { dataIdx = i + 1; break; }
-        }
-        if (dataIdx < 0) return { publicKey: null, address: null };
-        for (let i = dataIdx; i < lines.length; i++) {
-            const cols = lines[i].trim().split(/\s+/);
-            if (cols.length >= 3 && /^\d+$/.test(cols[0])) {
-                return { address: cols[1], publicKey: cols[2] };
+        const re = /^\s*([A-Za-z0-9]+)\s+([0-9a-fA-F]{60,})\s*$/;
+        for (const line of lines) {
+            const m = re.exec(line);
+            if (m) {
+                return { address: m[1], publicKey: m[2] };
             }
         }
         return { publicKey: null, address: null };

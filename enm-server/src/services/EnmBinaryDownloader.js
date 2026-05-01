@@ -42,30 +42,40 @@ const { enmDataDir } = require('./DataDir');
 // Catalog of supported chains. The URL key matches the path segment
 // download.elastos.io uses; the entry-point key is the file under
 // the extracted tarball that we treat as the canonical executable.
+//
+// `fallbackVersion` is the last release we know the upstream had at
+// the time this catalog was reviewed. If the directory-index scrape
+// fails (Apache config change, redirect, transient parse failure),
+// we fall back to this so the install doesn't dead-end. The smoke
+// test still proves the binary actually works.
 const CHAINS = Object.freeze({
     mainchain: {
         urlSlug: 'elastos-ela',
         binary:  'ela',
         cli:     'ela-cli',
         description: 'Mainchain (ELA) — required for any node setup.',
+        fallbackVersion: 'v0.9.9.5',
     },
     esc: {
         urlSlug: 'elastos-esc',
         binary:  'esc',
         cli:     null,
         description: 'EVM sidechain (ESC) — Solidity smart contracts.',
+        fallbackVersion: 'v0.1.4',
     },
     eid: {
         urlSlug: 'elastos-eid',
         binary:  'eid',
         cli:     null,
         description: 'DID sidechain (EID) — decentralised identity.',
+        fallbackVersion: 'v1.2.4',
     },
     eco: {
         urlSlug: 'elastos-eco',
         binary:  'eco',
         cli:     null,
         description: 'ECO sidechain — community governance.',
+        fallbackVersion: 'v1.0.1',
     },
 });
 
@@ -128,26 +138,64 @@ class EnmBinaryDownloader {
 
     /**
      * Resolve the latest version of a chain from the download index.
-     * Cached for 5 minutes to avoid hammering the index.
+     *
+     * Real-world scrape: the Apache auto-index at download.elastos.io
+     * is mostly stable but quoting (single vs double, no quotes) and
+     * URL prefixing (relative slug vs absolute path) drift across the
+     * different chain subdirs. We try every plausible href shape, and
+     * if none of them match, we fall back to the catalog's
+     * `fallbackVersion` rather than dead-ending the install.
+     *
+     * Caller logs the fallback path so the operator can see "we used
+     * the pinned vX.Y.Z because we couldn't read the index."
      */
     async resolveLatestVersion(chainId) {
         const info = CHAINS[chainId];
         if (!info) throw new Error(`Unknown chain: ${chainId}`);
 
-        const indexPath = `/${info.urlSlug}/?F=1`;
-        const html = await this._httpGetString(DOWNLOAD_HOST, indexPath);
-
-        // Apache auto-index lists subdirs as <a href="elastos-ela-v0.9.9.5/">
-        const re = new RegExp(`href="${info.urlSlug}-(v[0-9]+\\.[0-9]+\\.[0-9]+(?:[-.][0-9a-zA-Z]+)*)/"`, 'g');
-        const versions = [];
-        let m;
-        while ((m = re.exec(html))) versions.push(m[1]);
-        if (versions.length === 0) {
-            throw new Error(`No versions found at https://${DOWNLOAD_HOST}${indexPath}`);
+        let html = '';
+        try {
+            // ?F=1 forces the FancyIndexing layout; without the query
+            // some mirrors return a redirect, others a plain list.
+            html = await this._httpGetString(DOWNLOAD_HOST, `/${info.urlSlug}/?F=1`);
+        } catch (err) {
+            this.logger.warn(`${ENM_LOG_PREFIX} resolve ${chainId}: index fetch failed (${err.message}). Using fallback ${info.fallbackVersion}.`);
+            return info.fallbackVersion;
         }
-        // Highest semver wins. Simple compare on the numeric stem.
+
+        const versions = EnmBinaryDownloader._scanVersions(html, info.urlSlug);
+        if (versions.length === 0) {
+            this.logger.warn(`${ENM_LOG_PREFIX} resolve ${chainId}: no versions matched the index format. First 240 chars: ${html.slice(0, 240).replace(/\s+/g, ' ')}`);
+            this.logger.warn(`${ENM_LOG_PREFIX} resolve ${chainId}: falling back to pinned ${info.fallbackVersion}.`);
+            return info.fallbackVersion;
+        }
         versions.sort(EnmBinaryDownloader._semverCompare);
         return versions[versions.length - 1];
+    }
+
+    /**
+     * Scan a directory-index HTML blob for version directories.
+     * Tolerates: single/double/no quotes, leading slash, absolute or
+     * relative href, mixed case attribute names. Extracts the version
+     * stem (e.g. "v0.9.9.5") regardless of the surrounding chrome.
+     */
+    static _scanVersions(html, urlSlug) {
+        const found = new Set();
+        // Two-pass approach: anything that looks like
+        //   <slug>-vN(.N)+(/-pre/-rc/-anything)*
+        // we consider a version dir.
+        const versionStem = '(v[0-9]+(?:\\.[0-9]+)+(?:[-_.][0-9a-zA-Z]+)*)';
+        const patterns = [
+            // href="slug-v..." or href='slug-v...' or href=slug-v...
+            new RegExp(`(?:href|HREF)\\s*=\\s*["']?[^"'>]*?${urlSlug}-${versionStem}/?["'>]?`, 'g'),
+            // bare text (e.g. inside a directory listing's <pre>)
+            new RegExp(`${urlSlug}-${versionStem}/`, 'g'),
+        ];
+        for (const re of patterns) {
+            let m;
+            while ((m = re.exec(html))) found.add(m[1]);
+        }
+        return Array.from(found);
     }
 
     /**
