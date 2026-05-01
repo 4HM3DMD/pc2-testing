@@ -1,6 +1,6 @@
 {
   "name": "elastos-desktop",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "author": "ElastOS Technologies Inc.",
   "license": "AGPL-3.0-only",
   "description": "ElastOS - Desktop environment in the browser!",
@@ -58,7 +58,7 @@
     "build": "npx eslint --quiet -c eslint/mandatory.eslint.config.js src/backend/src extensions && npm run build:ts && cd src/gui && node ./build.js",
     "prebuild": "npm run build:particle-auth",
     "check-translations": "node tools/check-translations.js",
-    "prepare": "husky",
+    "prepare": "husky 2>/dev/null || true",
     "build:ts": "tsc",
     "gen": "./scripts/gen.sh",
     "build:particle-auth": "cd ./packages/particle-auth && npm install --legacy-peer-deps && npm run build && rm -rf ../../src/particle-auth && mv ./dist ../../src/particle-auth",

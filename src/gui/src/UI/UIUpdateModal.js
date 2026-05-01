@@ -311,12 +311,59 @@ function showUpdateModal(versionInfo) {
                             </div>
                         </div>
 
+                        <div class="update-log-section" style="margin-bottom: 12px;">
+                            <button class="update-log-toggle" type="button" style="
+                                display: flex;
+                                align-items: center;
+                                gap: 8px;
+                                width: 100%;
+                                background: transparent;
+                                border: none;
+                                padding: 6px 0;
+                                cursor: pointer;
+                                font-size: 11px;
+                                color: #6b7280;
+                                font-family: inherit;
+                                font-weight: 500;
+                                text-align: left;
+                            ">
+                                <span class="update-log-toggle-icon" style="
+                                    display: inline-block;
+                                    transition: transform 0.15s ease;
+                                    font-size: 10px;
+                                ">&#9654;</span>
+                                <span class="update-log-toggle-label">View detailed logs</span>
+                                <span class="update-log-line-count" style="
+                                    margin-left: auto;
+                                    font-variant-numeric: tabular-nums;
+                                    color: #9ca3af;
+                                    font-size: 10px;
+                                ">0 lines</span>
+                            </button>
+                            <div class="update-log-panel" style="
+                                display: none;
+                                margin-top: 6px;
+                                background: #0f172a;
+                                border: 1px solid #1e293b;
+                                border-radius: 6px;
+                                padding: 8px 10px;
+                                max-height: 220px;
+                                overflow-y: auto;
+                                font-family: 'SF Mono', Monaco, Menlo, Consolas, monospace;
+                                font-size: 10.5px;
+                                line-height: 1.45;
+                                color: #cbd5e1;
+                                white-space: pre-wrap;
+                                word-break: break-all;
+                            "><div class="update-log-content"><span style="color: #64748b;">Waiting for update output&hellip;</span></div></div>
+                        </div>
+
                         <div class="update-progress-hint" style="
                             font-size: 11px;
                             color: #6b7280;
                             text-align: center;
                             line-height: 1.5;
-                        ">Please keep this window open until the update completes.<br>This may take several minutes on slower devices.</div>
+                        ">Please keep this window open until the update completes.<br>Native dependency compilation can take 10-20 minutes on ARM devices.</div>
                     </div>
                 </div>
                 
@@ -422,6 +469,30 @@ function showUpdateModal(versionInfo) {
         updateModalInstance = null;
     });
 
+    // Live-log dropdown — toggles the dark terminal-style log panel.
+    // Tracks "user-scrolled-up" so auto-scroll only kicks in when the user
+    // is sitting at the bottom (Apple-style sticky-bottom behaviour).
+    const $logToggle = $modal.find('.update-log-toggle');
+    const $logIcon = $modal.find('.update-log-toggle-icon');
+    const $logLabel = $modal.find('.update-log-toggle-label');
+    const $logPanel = $modal.find('.update-log-panel');
+    let logExpanded = false;
+    $logToggle.on('click', function() {
+        logExpanded = !logExpanded;
+        if (logExpanded) {
+            $logPanel.show();
+            $logIcon.css('transform', 'rotate(90deg)');
+            $logLabel.text('Hide detailed logs');
+            // Snap to bottom on open so user sees the latest line.
+            const panelEl = $logPanel[0];
+            if (panelEl) panelEl.scrollTop = panelEl.scrollHeight;
+        } else {
+            $logPanel.hide();
+            $logIcon.css('transform', 'rotate(0deg)');
+            $logLabel.text('View detailed logs');
+        }
+    });
+
     // Install button
     $modal.find('.update-modal-install').on('click', async function() {
         const $btn = $(this);
@@ -432,6 +503,8 @@ function showUpdateModal(versionInfo) {
         const $progressElapsed = $modal.find('.update-progress-elapsed');
         const $stepList = $modal.find('.update-step-list');
         const $progressHint = $modal.find('.update-progress-hint');
+        const $logContent = $modal.find('.update-log-content');
+        const $logLineCount = $modal.find('.update-log-line-count');
         const $notes = $modal.find('.update-modal-notes');
 
         $btn.prop('disabled', true).text('Updating\u2026');
@@ -461,6 +534,9 @@ function showUpdateModal(versionInfo) {
                 $progressElapsed,
                 $stepList,
                 $progressHint,
+                $logContent,
+                $logLineCount,
+                $logPanel,
             });
         } catch (error) {
             console.error('[Update] Installation failed:', error);
@@ -496,8 +572,14 @@ const UPDATE_STEPS = [
 ];
 
 const UPDATE_TOTAL_WEIGHT = UPDATE_STEPS.reduce((sum, s) => sum + s.weight, 0);
-const UPDATE_HARD_TIMEOUT_MS = 12 * 60 * 1000; // 12 minutes — Jetson worst case + buffer
+// 20 minutes covers a Jetson cold install (native compiles of better-sqlite3,
+// node-pty, sharp can total 10-15 min) plus build + restart overhead. Hitting
+// this threshold doesn't claim failure — it surfaces helpful next steps.
+const UPDATE_HARD_TIMEOUT_MS = 20 * 60 * 1000;
 const UPDATE_POLL_INTERVAL_MS = 1500;
+// Max log lines kept in DOM. Mirrors the backend rolling buffer so we don't
+// degrade the modal's perf on a long Jetson update.
+const UPDATE_LOG_MAX_LINES = 400;
 
 /** Format milliseconds as e.g. "1m 23s" or "47s". */
 function formatElapsed(ms) {
@@ -528,15 +610,70 @@ function formatElapsed(ms) {
  *     and even then doesn't claim failure — gives helpful next steps
  */
 async function waitForRestart(refs) {
-    const { $progressText, $progressBar, $progressElapsed, $stepList, $progressHint } = refs;
+    const { $progressText, $progressBar, $progressElapsed, $stepList, $progressHint, $logContent, $logLineCount, $logPanel } = refs;
 
     let currentStepId = null;
     let stepStartedAt = Date.now();
     let serverWentDown = false;
     let consecutiveFailures = 0;
     let lastProgressString = '';
+    let lastLogSeq = 0;
+    let renderedLineCount = 0;
+    let logHasContent = false;
 
     const startedAt = Date.now();
+
+    // Returns whether the log panel is currently scrolled to the bottom
+    // (within 32px tolerance). Used to decide if we should auto-scroll
+    // after appending new lines.
+    function isLogStuckToBottom() {
+        const el = $logPanel && $logPanel[0];
+        if (!el) return true;
+        return (el.scrollHeight - el.scrollTop - el.clientHeight) < 32;
+    }
+
+    function appendLogLines(lines) {
+        if (!Array.isArray(lines) || lines.length === 0 || !$logContent) return;
+        const wasStuck = isLogStuckToBottom();
+        // Clear the placeholder on first real output.
+        if (!logHasContent) {
+            $logContent.empty();
+            logHasContent = true;
+        }
+        const fragments = [];
+        for (const raw of lines) {
+            // Lines arrive as "[HH:MM:SS] [source] message" — colour-code the
+            // tag prefix so users can tell git/npm/build apart at a glance.
+            const m = String(raw).match(/^(\[\d{2}:\d{2}:\d{2}\])\s+(\[[^\]]+\])\s+(.*)$/);
+            let html;
+            if (m) {
+                html = `<span style="color:#64748b;">${window.html_encode(m[1])}</span> ` +
+                       `<span style="color:#7dd3fc;">${window.html_encode(m[2])}</span> ` +
+                       `<span>${window.html_encode(m[3])}</span>`;
+            } else {
+                html = `<span>${window.html_encode(String(raw))}</span>`;
+            }
+            fragments.push(`<div>${html}</div>`);
+        }
+        $logContent.append(fragments.join(''));
+        renderedLineCount += lines.length;
+
+        // Cap the rendered line count so a long Jetson update doesn't blow
+        // up DOM memory. Drop oldest divs.
+        if (renderedLineCount > UPDATE_LOG_MAX_LINES) {
+            const drop = renderedLineCount - UPDATE_LOG_MAX_LINES;
+            $logContent.children().slice(0, drop).remove();
+            renderedLineCount = UPDATE_LOG_MAX_LINES;
+        }
+
+        if ($logLineCount) {
+            $logLineCount.text(renderedLineCount === 1 ? '1 line' : renderedLineCount + ' lines');
+        }
+        if (wasStuck) {
+            const el = $logPanel && $logPanel[0];
+            if (el) el.scrollTop = el.scrollHeight;
+        }
+    }
 
     const tickElapsed = setInterval(() => {
         $progressElapsed.text('Elapsed: ' + formatElapsed(Date.now() - startedAt));
@@ -622,11 +759,13 @@ async function waitForRestart(refs) {
                 }
             }
 
-            // 2) Always try to read backend progress (will fail during restart window)
+            // 2) Always try to read backend progress (will fail during restart window).
+            //    sinceSeq lets the backend send only new log lines, keeping the
+            //    poll payload tiny even when hundreds of lines have streamed.
             try {
-                const r = await fetch('/api/update/progress', {
+                const r = await fetch('/api/update/progress?sinceSeq=' + encodeURIComponent(lastLogSeq), {
                     headers: { 'Authorization': `Bearer ${puter.authToken}` },
-                    signal: AbortSignal.timeout(1500),
+                    signal: AbortSignal.timeout(2500),
                 });
                 if (r.ok) {
                     consecutiveFailures = 0;
@@ -635,6 +774,13 @@ async function waitForRestart(refs) {
                         lastProgressString = data.progress;
                         const detected = detectStep(data.progress);
                         if (detected) { setStep(detected); }
+                    }
+                    // Append any new log lines into the live dropdown.
+                    if (Array.isArray(data.log) && data.log.length > 0) {
+                        appendLogLines(data.log);
+                    }
+                    if (typeof data.logSeq === 'number') {
+                        lastLogSeq = data.logSeq;
                     }
                     // Backend reports update finished but server didn't go down yet —
                     // the restart command was issued, server is about to disappear.
@@ -663,7 +809,8 @@ async function waitForRestart(refs) {
         $progressText.html('<span style="color: #f0ad4e; font-weight: 600;">Update is taking longer than expected</span>');
         $progressHint.html(
             'The update may still be running in the background.<br>' +
-            'Try refreshing this page in a few minutes, or check the server logs:<br>' +
+            'Expand <strong>View detailed logs</strong> above to see live output, ' +
+            'or check the server logs:<br>' +
             '<code style="display: inline-block; margin-top: 6px; padding: 2px 6px; background: #f3f4f6; border-radius: 4px; font-size: 11px;">pm2 logs pc2 --lines 50</code>'
         );
     } finally {

@@ -44,6 +44,7 @@ import { schedulerRouter } from './scheduler.js';
 import bosonRouter from './boson.js';
 import setupRouter from './setup.js';
 import updateRouter from './update.js';
+import { getUpdateService } from '../services/UpdateService.js';
 import accessControlRouter from './access-control.js';
 import didRouter from './did.js';
 import walletRouter from './wallet.js';
@@ -138,6 +139,18 @@ export function setupAPI (app: Express): void {
             terminalStatus = 'not available';
         }
 
+        // Resolve the real PC2 version from the UpdateService (which reads
+        // the project's package.json on boot). Fail-soft: if the service
+        // hasn't been initialized yet, fall back to '0.0.0-dev' rather than
+        // the ancient Puter '0.1.0' literal that confused users into
+        // thinking their node was massively out-of-date.
+        let pc2Version = '0.0.0-dev';
+        try {
+            pc2Version = getUpdateService().getCurrentVersion();
+        } catch {
+            // UpdateService not yet constructed — keep the dev fallback.
+        }
+
         const health: {
             status: string;
             timestamp: string;
@@ -157,7 +170,7 @@ export function setupAPI (app: Express): void {
         } = {
             status: 'ok',
             timestamp: new Date().toISOString(),
-            version: '0.1.0',
+            version: pc2Version,
             uptime: process.uptime(),
             database: dbStatus,
             ipfs: ipfsStatus,

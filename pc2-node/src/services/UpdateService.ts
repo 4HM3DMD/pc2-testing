@@ -7,11 +7,20 @@
 
 import { readFileSync, existsSync } from 'fs';
 import path from 'path';
-import { exec, execSync } from 'child_process';
+import { exec, execSync, spawn } from 'child_process';
 import { promisify } from 'util';
 import { logger } from '../utils/logger.js';
 
 const execAsync = promisify(exec);
+
+// Rolling log buffer cap. 400 lines covers a Jetson cold install + build
+// (each npm install emits ~100 lines max with progress collapsed).
+const LOG_BUFFER_MAX_LINES = 400;
+
+// Watchdog: if a streamed child emits zero bytes for this long, kill it.
+// On Jetson, native compiles can be quiet for a while during cc1plus runs;
+// 8 minutes is generous but bounded so we never silently hang again.
+const STREAM_IDLE_TIMEOUT_MS = 8 * 60 * 1000;
 
 export interface VersionInfo {
   version: string;
@@ -58,6 +67,13 @@ export class UpdateService {
   private checkTimer: NodeJS.Timeout | null = null;
   private isUpdating: boolean = false;
   private updateProgress: string = '';
+  // Rolling buffer of recent stdout/stderr from update sub-commands.
+  // Exposed via /api/update/progress so the UI can show a live "View logs"
+  // dropdown — fixes the v1.2.2 "flying blind" UX where users couldn't tell
+  // whether a 10-min "Installing dependencies" was working or hung.
+  private logBuffer: string[] = [];
+  // Monotonic counter so the UI can detect new lines without diffing strings.
+  private logSeq: number = 0;
 
   constructor(config: UpdateServiceConfig = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -78,6 +94,144 @@ export class UpdateService {
    */
   getUpdateProgress(): string {
     return this.updateProgress;
+  }
+
+  /**
+   * Get rolling log buffer (most recent first cap = LOG_BUFFER_MAX_LINES).
+   * Each entry already includes a HH:MM:SS prefix and source tag.
+   */
+  getUpdateLog(): string[] {
+    return [...this.logBuffer];
+  }
+
+  /**
+   * Monotonic sequence number that increments on each appended log line.
+   * The UI uses this to skip re-rendering when nothing new arrived.
+   */
+  getLogSeq(): number {
+    return this.logSeq;
+  }
+
+  /**
+   * Append a single line to the log buffer. Auto-trims.
+   * Source tag (e.g. "git", "npm-root") helps the UI colour-code lines.
+   */
+  private appendLog(source: string, line: string): void {
+    const trimmed = line.replace(/\r/g, '').trimEnd();
+    if (!trimmed) return;
+    const ts = new Date().toISOString().substring(11, 19);
+    this.logBuffer.push(`[${ts}] [${source}] ${trimmed}`);
+    if (this.logBuffer.length > LOG_BUFFER_MAX_LINES) {
+      this.logBuffer = this.logBuffer.slice(-LOG_BUFFER_MAX_LINES);
+    }
+    this.logSeq++;
+  }
+
+  /**
+   * Reset log buffer at the start of each performUpdate() call.
+   */
+  private resetLog(): void {
+    this.logBuffer = [];
+    this.logSeq = 0;
+  }
+
+  /**
+   * Run a child process with live stdout/stderr capture into the rolling
+   * log buffer. Replaces execAsync for long-running update steps so the
+   * UI gets live feedback and we can enforce an idle-timeout watchdog.
+   *
+   * - HUSKY=0 is forced into the env to neutralise the husky `prepare`
+   *   lifecycle script. Without this, fresh production installs of
+   *   v1.2.2 would crash with "sh: husky: not found" (exit 127).
+   * - Idle watchdog kills any child that produces no output for
+   *   STREAM_IDLE_TIMEOUT_MS, preventing the silent-hang we saw where
+   *   npm crashed but the parent await never resolved.
+   */
+  private execStreamed(
+    source: string,
+    cmd: string,
+    args: string[],
+    opts: { cwd: string; extraEnv?: Record<string, string> } = { cwd: process.cwd() }
+  ): Promise<void> {
+    return new Promise((resolve, reject) => {
+      this.appendLog(source, `$ ${cmd} ${args.join(' ')} (cwd: ${opts.cwd})`);
+
+      const child = spawn(cmd, args, {
+        cwd: opts.cwd,
+        env: {
+          ...process.env,
+          // Disable husky in any pulled-in workspace; production installs
+          // never need git hooks installed.
+          HUSKY: '0',
+          // Force npm to be non-interactive on slow ARM where prompts
+          // would otherwise hang the daemon.
+          CI: process.env.CI || 'true',
+          ...(opts.extraEnv || {}),
+        },
+        shell: false,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+
+      let stdoutBuf = '';
+      let stderrBuf = '';
+      let idleTimer: NodeJS.Timeout | null = null;
+      let killedByWatchdog = false;
+
+      const resetIdle = () => {
+        if (idleTimer) clearTimeout(idleTimer);
+        idleTimer = setTimeout(() => {
+          killedByWatchdog = true;
+          this.appendLog(source, `[watchdog] No output for ${STREAM_IDLE_TIMEOUT_MS / 1000}s — killing process`);
+          try { child.kill('SIGKILL'); } catch { /* noop */ }
+        }, STREAM_IDLE_TIMEOUT_MS);
+      };
+
+      const flushBuf = (buf: string): string => {
+        const lines = buf.split('\n');
+        const tail = lines.pop() || '';
+        for (const line of lines) this.appendLog(source, line);
+        return tail;
+      };
+
+      child.stdout.on('data', (chunk: Buffer) => {
+        stdoutBuf = flushBuf(stdoutBuf + chunk.toString('utf8'));
+        resetIdle();
+      });
+
+      child.stderr.on('data', (chunk: Buffer) => {
+        stderrBuf = flushBuf(stderrBuf + chunk.toString('utf8'));
+        resetIdle();
+      });
+
+      child.on('error', (err) => {
+        if (idleTimer) clearTimeout(idleTimer);
+        this.appendLog(source, `[error] spawn failed: ${err.message}`);
+        reject(err);
+      });
+
+      child.on('exit', (code, signal) => {
+        if (idleTimer) clearTimeout(idleTimer);
+        if (stdoutBuf) this.appendLog(source, stdoutBuf);
+        if (stderrBuf) this.appendLog(source, stderrBuf);
+
+        if (killedByWatchdog) {
+          reject(new Error(`${cmd} killed by watchdog (no output for ${STREAM_IDLE_TIMEOUT_MS / 1000}s)`));
+          return;
+        }
+        if (signal) {
+          reject(new Error(`${cmd} terminated by signal ${signal}`));
+          return;
+        }
+        if (code !== 0) {
+          reject(new Error(`${cmd} exited with code ${code}`));
+          return;
+        }
+        this.appendLog(source, `[ok] ${cmd} ${args.join(' ')} completed`);
+        resolve();
+      });
+
+      resetIdle();
+    });
   }
 
   /**
@@ -291,6 +445,7 @@ export class UpdateService {
 
     this.isUpdating = true;
     this.updateProgress = 'Starting update...';
+    this.resetLog();
 
     try {
       // Find project root (go up from pc2-node to root)
@@ -298,6 +453,7 @@ export class UpdateService {
       const pc2NodeDir = this.config.projectRoot;
 
       logger.info(`[UpdateService] Starting update in ${projectRoot}`);
+      this.appendLog('update', `Starting update in ${projectRoot}`);
 
       // Step 1+2: Fetch upstream and force-reset to origin/main.
       //
@@ -316,15 +472,20 @@ export class UpdateService {
       //     supposed to carry local commits in the first place
       this.updateProgress = 'Fetching latest code...';
       logger.info('[UpdateService] Fetching origin/main...');
-      await execAsync('git fetch origin main', { cwd: projectRoot });
+      await this.execStreamed('git', 'git', ['fetch', 'origin', 'main'], { cwd: projectRoot });
 
       this.updateProgress = 'Resetting to latest release...';
       logger.info('[UpdateService] Resetting working tree to origin/main...');
-      await execAsync('git reset --hard origin/main', { cwd: projectRoot });
+      await this.execStreamed('git', 'git', ['reset', '--hard', 'origin/main'], { cwd: projectRoot });
 
       // Drop ignored assets that an earlier broken update may have
-      // half-installed. Best-effort, never fatal.
-      await execAsync('git clean -fd src/particle-auth/assets/ 2>/dev/null || true', { cwd: projectRoot });
+      // half-installed. Best-effort, never fatal — wrapped in try/catch
+      // so a missing path or repo state quirk can't abort the update.
+      try {
+        await this.execStreamed('git', 'git', ['clean', '-fd', 'src/particle-auth/assets/'], { cwd: projectRoot });
+      } catch (cleanErr) {
+        this.appendLog('git', `[warn] git clean failed (non-fatal): ${cleanErr instanceof Error ? cleanErr.message : String(cleanErr)}`);
+      }
       logger.info('[UpdateService] Working tree synced with origin/main');
 
       // Step 3: npm install (in case of new dependencies)
@@ -335,24 +496,28 @@ export class UpdateService {
       // Using --legacy-peer-deps to avoid dependency conflicts.
       // Using --include=dev (pc2-node only) to ensure @types packages are
       // installed for the TypeScript build.
-      // maxBuffer is bumped because npm's output can exceed the 1 MB default
-      // on slow ARM devices and silently kill the install step.
-      const npmExecOpts = { maxBuffer: 50 * 1024 * 1024 };
+      //
+      // execStreamed forces HUSKY=0 in the env to neutralise the husky
+      // `prepare` lifecycle script — which crashed every v1.2.2 install
+      // with "sh: husky: not found" (exit 127). The package.json fix
+      // (`"prepare": "husky 2>/dev/null || true"`) provides defence in
+      // depth at the package level; HUSKY=0 here covers nodes that
+      // somehow still pull a broken package.json.
       this.updateProgress = 'Installing root dependencies...';
       logger.info('[UpdateService] Running npm install at project root...');
-      await execAsync('npm install --legacy-peer-deps', { cwd: projectRoot, ...npmExecOpts });
+      await this.execStreamed('npm-root', 'npm', ['install', '--legacy-peer-deps', '--no-fund', '--no-audit'], { cwd: projectRoot });
       logger.info('[UpdateService] Root npm install complete');
 
       this.updateProgress = 'Installing pc2-node dependencies...';
       logger.info('[UpdateService] Running npm install in pc2-node...');
-      await execAsync('npm install --legacy-peer-deps --include=dev', { cwd: pc2NodeDir, ...npmExecOpts });
+      await this.execStreamed('npm-node', 'npm', ['install', '--legacy-peer-deps', '--include=dev', '--no-fund', '--no-audit'], { cwd: pc2NodeDir });
       logger.info('[UpdateService] pc2-node npm install complete');
 
       // Step 4: Build GUI and backend (skip particle-auth rebuild - it's pre-built in repo)
       this.updateProgress = 'Building application...';
       logger.info('[UpdateService] Running builds...');
-      await execAsync('npm run build:gui', { cwd: projectRoot, ...npmExecOpts });
-      await execAsync('npm run build:backend', { cwd: pc2NodeDir, ...npmExecOpts });
+      await this.execStreamed('build-gui', 'npm', ['run', 'build:gui'], { cwd: projectRoot });
+      await this.execStreamed('build-backend', 'npm', ['run', 'build:backend'], { cwd: pc2NodeDir });
       logger.info('[UpdateService] Build complete');
 
       // Step 5: Schedule restart
@@ -414,6 +579,7 @@ export class UpdateService {
     dockerImage: string | null;
     isUpdating: boolean;
     updateProgress: string;
+    logSeq: number;
   } {
     const updateAvailable = this.latestVersion 
       ? this.compareVersions(this.currentVersion, this.latestVersion.version) < 0
@@ -429,6 +595,7 @@ export class UpdateService {
       dockerImage: this.latestVersion?.dockerImage || null,
       isUpdating: this.isUpdating,
       updateProgress: this.updateProgress,
+      logSeq: this.logSeq,
     };
   }
 }

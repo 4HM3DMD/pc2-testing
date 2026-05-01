@@ -6,6 +6,136 @@
 
 ---
 
+## [1.2.3] - 2026-04-30 (hotfix)
+
+### 🐛 Critical #6: GUI updater silently hangs on every Jetson update (`sh: husky: not found`)
+
+The v1.2.2 GUI auto-updater could not actually install v1.2.2 on any
+production node. The root cause was a single line in the repo-root
+`package.json`:
+
+```jsonc
+"prepare": "husky"
+```
+
+`husky` is a developer-side git-hooks installer with **no purpose on a
+production node**. When the updater ran `npm install --legacy-peer-deps`
+during a v1.2.1 → v1.2.2 upgrade, npm executed the `prepare` lifecycle
+script **before** the dev-dependency that provides the `husky` binary
+was installed. With `husky` not yet on `PATH`, the script exited 127:
+
+```
+sh: 1: husky: not found
+npm error code 127
+npm error path /home/orin_nano/pc2.net
+npm error command failed
+npm error command sh -c husky
+```
+
+`npm install` therefore failed at the very first step. The
+`UpdateService.performUpdate()` flow used `execAsync` (which
+`await`s the entire child to exit), so the rejection bubbled up,
+the backend logged the failure, and the GUI modal — which only
+polled the `updateProgress` *string* — was left stuck on
+`Installing dependencies…` indefinitely. From the user's
+perspective, every Jetson update silently hung at the second step
+and never recovered.
+
+The same pattern would have broken every future release for every
+node, regardless of arch. This had to ship before any further
+release attempts.
+
+**Fix**: three layers, defence-in-depth.
+
+1. **Root `package.json`** → wrap the husky lifecycle so it can never
+   fail a production install:
+   ```jsonc
+   "prepare": "husky 2>/dev/null || true"
+   ```
+   In dev, husky is in `node_modules/.bin` and the script succeeds
+   exactly as before. In prod (and CI), it fails silently, the
+   `|| true` swallows the non-zero exit, and `npm install` proceeds.
+
+2. **`UpdateService.execStreamed()`** → every update sub-command now
+   runs with `HUSKY=0` and `CI=true` injected into the env, regardless
+   of the `package.json` prepare script. Even nodes that somehow pull a
+   future broken `package.json` cannot reproduce the failure.
+
+3. **Idle watchdog** (`STREAM_IDLE_TIMEOUT_MS = 8 min`) — if any update
+   sub-command produces zero stdout/stderr for 8 minutes, the parent
+   `SIGKILL`s the child and surfaces a real error. No more silent
+   `await`s on dead npm children.
+
+### ✨ "View detailed logs" — live update output, no more flying blind
+
+Even with the husky fix, the v1.2.2 update modal showed only a single
+high-level step label (`Installing dependencies…`) with no insight into
+what `npm install` was actually doing. On a Jetson where the install
+legitimately takes 10-15 minutes, this is genuinely nerve-wracking —
+users had no way to distinguish "compiling sharp from C++ source" from
+"hung on a dead promise". Reported verbatim:
+
+> *"i hoped to get live updates here too so i know exactly whats running
+> if i wanted even if in a drop down, this still makes me feel blind and
+> nervous"*
+
+**Fix**:
+
+- **Backend** (`pc2-node/src/services/UpdateService.ts`):
+  - Replaced `execAsync` with a `spawn`-based `execStreamed()` runner
+    that pipes child stdout/stderr line-by-line into a rolling
+    `logBuffer` (capped at `LOG_BUFFER_MAX_LINES = 400`). Each entry
+    is prefixed with `[HH:MM:SS] [source]` (e.g. `[npm-root]`,
+    `[build-gui]`) so the UI can colour-code by stage.
+  - Added a monotonic `logSeq` counter so the GUI's poll loop can
+    request only new lines (`?sinceSeq=<n>`) instead of re-shipping
+    the entire buffer every 1.5 s.
+  - `getStatus()` and `/api/update/progress` both now return
+    `log: string[]` and `logSeq: number`. Backwards-compatible —
+    older clients ignore the new fields.
+
+- **Frontend** (`src/gui/src/UI/UIUpdateModal.js`):
+  - Added a collapsible **"View detailed logs"** button under the
+    step list. Expands a dark, terminal-style panel rendering the
+    last 400 lines of streamed output.
+  - Sticky-bottom auto-scroll: new lines auto-scroll only when the
+    user is sitting at the bottom of the panel (within 32 px), so
+    scrolling up to read older output won't keep getting yanked
+    back down.
+  - Source tag (`[git]`, `[npm-root]`, `[npm-node]`, `[build-gui]`,
+    `[build-backend]`, `[update]`) is colour-coded so the user can
+    visually scan the active stage at a glance.
+  - Diff polling uses the new `?sinceSeq=` param — only new lines
+    are sent, keeping the poll payload tiny even for a full 400-line
+    install.
+  - "Taking longer than expected" hint now points at the dropdown
+    (*"Expand View detailed logs above to see live output"*) instead
+    of telling users to SSH in and run `pm2 logs`.
+
+### 🐛 Bug fix: `UPDATE_HARD_TIMEOUT_MS` bumped from 12 min → 20 min
+
+The 12-minute "taking longer than expected" warning was an over-
+optimistic guess that fired during normal Jetson updates (where
+native dep compile of `better-sqlite3` + `node-pty` + `sharp`
+totals 8-12 min on its own, before `npm install` even reaches the
+Helia/libp2p tree). Bumped to 20 min, which covers Jetson cold-
+install worst case + build + restart with comfortable headroom.
+Hitting the timeout still doesn't claim failure — it just surfaces
+the dropdown / log-tail next steps.
+
+### Files touched
+
+```
+package.json                                        # prepare script
+pc2-node/package.json                               # version bump
+pc2-node/src/services/UpdateService.ts              # spawn + log buffer + watchdog + HUSKY=0
+pc2-node/src/api/update.ts                          # /progress returns log + logSeq + sinceSeq
+src/gui/src/UI/UIUpdateModal.js                     # log dropdown + 20-min timeout
+CHANGELOG.md                                        # this entry
+```
+
+---
+
 ## [1.2.2] - 2026-04-30 (hotfix)
 
 ### 🐛 Critical #5: Fresh installs hit `Lit Action denied: access_denied` on every asset open

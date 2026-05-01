@@ -185,14 +185,42 @@ router.post('/install', authenticate, requireOwner, installThrottle, async (req:
 /**
  * Get update progress (owner only)
  * GET /api/update/progress
+ *
+ * Optional query params:
+ *   ?sinceSeq=<n>  — only return log lines added after sequence n (saves
+ *                    bandwidth on the GUI's poll loop). When omitted, the
+ *                    full rolling buffer (last 400 lines) is returned.
+ *
+ * The rolling log buffer is the v1.2.3 fix for the v1.2.2 "flying blind"
+ * UX. Each entry is `[HH:MM:SS] [source] message` so the GUI can render
+ * a terminal-style live view of git/npm/build output during updates.
  */
 router.get('/progress', authenticate, requireOwner, (req: Request, res: Response) => {
   try {
     const updateService = getUpdateService();
+    const allLog = updateService.getUpdateLog();
+    const currentSeq = updateService.getLogSeq();
+
+    // Diff slice: when the client passes sinceSeq, only send the lines that
+    // arrived after that point. Crude but sufficient because logSeq is
+    // monotonic and we cap the buffer at 400 lines.
+    const sinceSeqRaw = req.query.sinceSeq;
+    const sinceSeq = typeof sinceSeqRaw === 'string' ? parseInt(sinceSeqRaw, 10) : NaN;
+    let log = allLog;
+    if (Number.isFinite(sinceSeq) && sinceSeq >= 0 && sinceSeq < currentSeq) {
+      // Number of new lines since client's last seen seq, capped at buffer size.
+      const newLineCount = Math.min(currentSeq - sinceSeq, allLog.length);
+      log = allLog.slice(allLog.length - newLineCount);
+    } else if (Number.isFinite(sinceSeq) && sinceSeq >= currentSeq) {
+      // Client is up to date; no new lines.
+      log = [];
+    }
 
     res.json({
       isUpdating: updateService.getIsUpdating(),
       progress: updateService.getUpdateProgress(),
+      log,
+      logSeq: currentSeq,
     });
   } catch (error) {
     logger.error('[Update API] Progress error:', error);
