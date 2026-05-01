@@ -17,22 +17,18 @@
 #
 # What's in the image:
 #   - PC2 (full Elacity / Heyputer fork) at /app
-#   - ENM extension wired in at /app/extensions/elastos-node-manager
-#   - All PC2 + ENM Node deps installed
-#   - Toolchain (git, make, tar, gcc, build-essential) for ENM's auto-builder
-#     to compile ela inside the container at first-run
-#   - iproute2 + procps + lsof for HostConflictScanner (ss, pgrep, lsof)
+#   - PC2's bundled "elastos-node-manager" app frontend at
+#     src/backend/apps/elastos-node-manager/ (served by pc2-node's static
+#     handler at /apps/elastos-node-manager/)
+#   - All PC2 deps installed
 #
 # What's NOT in the image:
-#   - Go toolchain. The ENM auto-builder downloads the official portable
-#     release into /data/cache/go-* on first build (no system-wide Go).
-#   - The `ela` binary itself. Built by the operator via the wizard, lands
-#     in /data/cache/auto-build/Elastos.ELA/ela.
+#   - The ENM backend (chain mgmt, ela auto-build, healing, RPC checks).
+#     Lives in a separate enm-server/ image — operators bring it up as a
+#     sidecar via enm-server/scripts/install-enm.sh. enm-server reads
+#     pc2-node's session DB read-only over a shared bind-mount for auth.
 #   - Any operator data. Everything persistent lives under /data, so all
 #     state survives container restarts via a bind mount.
-#
-# Image size: ~1.6 GB on amd64 (PC2's monorepo deps dominate). Reasonable for
-# a self-contained "personal cloud + chain validator" stack.
 
 FROM node:20-bookworm-slim
 
@@ -75,12 +71,6 @@ RUN for i in 1 2 3; do \
         [ $i -eq 3 ] && exit 1; \
         echo "npm ci failed (attempt $i), retrying in 15s..." && sleep 15; \
     done
-
-# ENM's own deps live in a separate package.json (not part of the workspace),
-# so we install them explicitly.
-RUN cd extensions/elastos-node-manager \
-    && npm install --no-audit --no-fund \
-    && cd /app
 
 # Vite reads these at GUI bundle time (compile, not runtime). Defaults match
 # upstream's Dockerfile — the placeholder Particle/WalletConnect IDs are fine
