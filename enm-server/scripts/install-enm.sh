@@ -84,8 +84,12 @@ else
     volumes:
       # PC2 session DB + node-config (read-only) — auth resolves Bearer
       # tokens against pc2-node's sessions table and reads the owner wallet
-      # from pc2-node's node-config.json
-      - ./data:/data/pc2-node:ro
+      # from pc2-node's node-config.json. We mount the host's pc2-node/
+      # subdir directly (NOT the parent ./data) so the inner path inside
+      # the enm-server container is /data/pc2-node/pc2.db — what
+      # PC2_NODE_DB_PATH defaults to. Mounting ./data here would shadow
+      # the path with a nested ./data/pc2-node/pc2-node/ structure.
+      - ./data/pc2-node:/data/pc2-node:ro
       # ENM state — own SQLite DB, ela build cache, audit logs
       - ./enm-data:/data/enm
     environment:
