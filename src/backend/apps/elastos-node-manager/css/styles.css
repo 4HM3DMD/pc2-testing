@@ -2,202 +2,1130 @@
  * Copyright (C) 2026-present Elacity
  * SPDX-License-Identifier: AGPL-3.0
  *
- * Elastos Node Manager — base styles.
+ * Elastos Node Manager — stylesheet.
  *
- * Phase 1b ships only what the boot screen needs (header, spinner, error).
- * Phase 3 will add chain cards, log viewer, settings tabs, etc.
- *
- * Tokens are deliberately compatible with PC2's dao-dashboard (verified Rev 1
- * audit, lines 9-47 of dao-dashboard/css/styles.css). When we move into PC2,
- * the parent page's tokens will compose with ours via CSS variables.
+ * Design tokens mirror dao-dashboard so both apps look like they belong in
+ * the same desktop. Layout uses a simple 3-row grid (titlebar / tabs / main)
+ * inside a full-height .enm-app — no `position: fixed`, so PC2's window
+ * manager owns minimize / maximize / resize without us interfering.
  */
 
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
 :root {
-    /* Colors compatible with dao-dashboard. */
-    --primary: #3b82f6;
-    --primary-hover: #2563eb;
+    /* ---- color tokens (light) ---- */
     --bg-page: #f8fafc;
     --bg-surface: #ffffff;
+    --bg-muted: #f1f5f9;
+    --bg-code: #0f172a;
     --border-color: #e2e8f0;
-    --text-primary: #0f172a;
-    --text-secondary: #475569;
+    --border-strong: #cbd5e1;
+    --text-primary: #1e293b;
+    --text-secondary: #64748b;
     --text-muted: #94a3b8;
+    --text-inverse: #f8fafc;
+
+    --primary: #3b82f6;
+    --primary-hover: #2563eb;
+    --primary-soft: rgba(59, 130, 246, 0.10);
+
     --success: #22c55e;
-    --warning: #eab308;
+    --warning: #f97316;
     --error: #ef4444;
+    --healing: #8b5cf6;
 
-    /* Chain-state palette (Rev 1 plan). */
-    --chain-healthy: #22c55e;
-    --chain-syncing: #3b82f6;
-    --chain-stalled: #eab308;
-    --chain-stopped: #6b7280;
-    --chain-error: #ef4444;
-    --chain-recovering: #a855f7;
+    /* chain-state palette — matches the 6 PRODUCER_STATES + recovering */
+    --state-healthy: #22c55e;
+    --state-syncing: #3b82f6;
+    --state-stalled: #f97316;
+    --state-stopped: #94a3b8;
+    --state-error: #ef4444;
+    --state-recovering: #8b5cf6;
+    --state-unconfigured: #94a3b8;
 
-    /* Spacing scale. */
+    /* ---- layout tokens ---- */
     --spacing-xs: 4px;
     --spacing-sm: 8px;
     --spacing-md: 16px;
     --spacing-lg: 24px;
     --spacing-xl: 32px;
 
-    /* Radii. */
     --radius-sm: 6px;
     --radius-md: 8px;
     --radius-lg: 12px;
     --radius-xl: 16px;
 
-    /* Shadows. */
-    --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.05);
-    --shadow-md: 0 4px 6px rgba(15, 23, 42, 0.07);
+    --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
+    --shadow-md: 0 4px 12px rgba(15, 23, 42, 0.08);
+    --shadow-lg: 0 12px 32px rgba(15, 23, 42, 0.12);
+
+    --titlebar-height: 44px;
+    --tabs-height: 40px;
 }
 
-@media (prefers-color-scheme: dark) {
-    :root {
-        --bg-page: #0f172a;
-        --bg-surface: #1e293b;
-        --border-color: #334155;
-        --text-primary: #f1f5f9;
-        --text-secondary: #cbd5e1;
-        --text-muted: #64748b;
-    }
-}
-
-* {
-    box-sizing: border-box;
-}
+/* ============================================================
+   Root layout — height-100% chain so minimize works correctly
+   ============================================================ */
 
 html, body {
-    margin: 0;
-    padding: 0;
+    width: 100%;
     height: 100%;
-}
-
-body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
-                 Arial, "Noto Sans", sans-serif;
+    overflow: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+        Oxygen, Ubuntu, Cantarell, sans-serif;
     font-size: 14px;
-    line-height: 1.5;
-    color: var(--text-primary);
     background: var(--bg-page);
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
+    color: var(--text-primary);
 }
 
-#app {
-    display: flex;
-    flex-direction: column;
-    min-height: 100%;
+#app, .enm-app {
+    width: 100%;
+    height: 100%;
+    display: grid;
+    grid-template-rows: var(--titlebar-height) var(--tabs-height) 1fr;
+    background: var(--bg-page);
 }
 
-/* --- Header --- */
+/* ============================================================
+   Title bar — app name + version pill + wallet badge
+   ============================================================ */
 
-.enm-header {
+.enm-titlebar {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    padding: var(--spacing-md) var(--spacing-lg);
+    gap: var(--spacing-md);
+    padding: 0 var(--spacing-md);
     background: var(--bg-surface);
     border-bottom: 1px solid var(--border-color);
-    box-shadow: var(--shadow-sm);
 }
 
-.enm-header h1 {
-    margin: 0;
-    font-size: 18px;
+.enm-titlebar h1 {
+    font-size: 14px;
     font-weight: 600;
-    letter-spacing: -0.01em;
+    color: var(--text-primary);
+    margin: 0;
+}
+
+.enm-titlebar .enm-spacer {
+    flex: 1;
 }
 
 .enm-badge {
-    display: inline-block;
-    padding: 2px var(--spacing-sm);
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    background: var(--primary-soft);
+    color: var(--primary);
     font-size: 11px;
-    font-weight: 500;
-    letter-spacing: 0.02em;
-    text-transform: uppercase;
-    color: var(--text-secondary);
-    background: var(--bg-page);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-sm);
+    font-weight: 600;
+    border-radius: 999px;
+    line-height: 1.6;
 }
 
-/* --- Main --- */
+.enm-wallet-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    background: var(--bg-page);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.enm-wallet-badge[data-state="connected"] {
+    background: var(--primary-soft);
+    border-color: var(--primary);
+    color: var(--primary);
+}
+
+.enm-wallet-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--text-muted);
+}
+
+.enm-wallet-badge[data-state="connected"] .enm-wallet-dot {
+    background: var(--success);
+}
+
+/* ============================================================
+   Tab bar
+   ============================================================ */
+
+.enm-tabs {
+    display: flex;
+    align-items: stretch;
+    gap: 2px;
+    padding: 0 var(--spacing-md);
+    background: var(--bg-surface);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.enm-tabs button {
+    display: inline-flex;
+    align-items: center;
+    padding: 0 var(--spacing-md);
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    font: inherit;
+    font-weight: 500;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s;
+}
+
+.enm-tabs button:hover {
+    color: var(--text-primary);
+}
+
+.enm-tabs button[aria-selected="true"] {
+    color: var(--primary);
+    border-bottom-color: var(--primary);
+}
+
+/* ============================================================
+   Main content area + per-pane scroll
+   ============================================================ */
 
 .enm-main {
-    flex: 1 1 auto;
+    overflow: hidden;
+    position: relative;
+    min-height: 0;
+}
+
+.enm-content {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+}
+
+.enm-pane {
+    width: 100%;
+    height: 100%;
+    overflow: auto;
+    padding: var(--spacing-lg);
+}
+
+.enm-pane[hidden] {
+    display: none !important;
+}
+
+.enm-stub {
+    color: var(--text-muted);
+    font-size: 14px;
+    padding: var(--spacing-lg);
+    text-align: center;
+}
+
+/* ============================================================
+   Spinner + boot error
+   ============================================================ */
+
+.enm-spinner {
+    position: absolute;
+    inset: 0;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    padding: var(--spacing-lg);
+    gap: var(--spacing-md);
+    background: var(--bg-page);
+    z-index: 10;
 }
 
-/* --- Spinner --- */
-
-.enm-spinner {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: var(--spacing-md);
+.enm-spinner-dots {
+    display: inline-flex;
+    gap: 6px;
 }
 
 .enm-spinner-dot {
-    width: 8px;
-    height: 8px;
-    background: var(--primary);
+    width: 10px;
+    height: 10px;
     border-radius: 50%;
-    display: inline-block;
-    margin: 0 3px;
+    background: var(--primary);
     animation: enm-bounce 1.4s infinite ease-in-out both;
 }
 
 .enm-spinner-dot:nth-child(1) { animation-delay: -0.32s; }
 .enm-spinner-dot:nth-child(2) { animation-delay: -0.16s; }
-.enm-spinner-dot:nth-child(3) { animation-delay: 0; }
 
 @keyframes enm-bounce {
-    0%, 80%, 100% { transform: scale(0.7); opacity: 0.6; }
-    40%           { transform: scale(1.0); opacity: 1.0; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-    .enm-spinner-dot {
-        animation: none;
-        opacity: 0.7;
-    }
+    0%, 80%, 100% { transform: scale(0.5); opacity: 0.5; }
+    40%           { transform: scale(1.0); opacity: 1; }
 }
 
 .enm-spinner-text {
-    margin: 0;
     color: var(--text-secondary);
     font-size: 13px;
 }
 
-/* --- Error banner --- */
-
 .enm-error {
-    max-width: 480px;
-    padding: var(--spacing-md);
-    color: var(--error);
+    margin: var(--spacing-xl) auto;
+    max-width: 520px;
+    padding: var(--spacing-lg);
     background: var(--bg-surface);
     border: 1px solid var(--error);
+    border-left: 4px solid var(--error);
     border-radius: var(--radius-md);
+    color: var(--text-primary);
     box-shadow: var(--shadow-sm);
 }
 
-/* --- Content stub (Phase 1b only) --- */
-
-.enm-content {
-    width: 100%;
-    max-width: 720px;
+.enm-error-title {
+    font-weight: 600;
+    margin-bottom: var(--spacing-sm);
+    color: var(--error);
 }
 
-.enm-stub {
-    padding: var(--spacing-lg);
+.enm-error-detail {
+    font-size: 12px;
     color: var(--text-secondary);
+    line-height: 1.5;
+}
+
+/* ============================================================
+   Card — base for system status, chain card, wizard, settings
+   ============================================================ */
+
+.enm-card,
+.enm-chain-card,
+.enm-system-status,
+.enm-log-viewer,
+.enm-wizard,
+.enm-settings,
+.enm-audit {
     background: var(--bg-surface);
-    border: 1px dashed var(--border-color);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-sm);
+}
+
+.enm-card {
+    padding: var(--spacing-lg);
+}
+
+/* ============================================================
+   System status — top strip
+   ============================================================ */
+
+.enm-system-status {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 1px;
+    background: var(--border-color);
+    overflow: hidden;
+    margin-bottom: var(--spacing-lg);
+}
+
+.enm-sys-cell {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: var(--spacing-md);
+    background: var(--bg-surface);
+}
+
+.enm-sys-label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+}
+
+.enm-sys-value {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+}
+
+/* ============================================================
+   Chain cards
+   ============================================================ */
+
+.enm-chains-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+    gap: var(--spacing-lg);
+}
+
+.enm-chain-card {
+    padding: var(--spacing-lg);
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-md);
+}
+
+.enm-chain-card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--spacing-sm);
+}
+
+.enm-chain-card-name {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-primary);
+    text-transform: capitalize;
+}
+
+.enm-chain-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    background: rgba(148, 163, 184, 0.12);
+    color: var(--text-secondary);
+}
+
+.enm-chain-badge::before {
+    content: '';
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+}
+
+.enm-chain-badge-healthy    { background: rgba(34, 197, 94, 0.12);   color: var(--state-healthy); }
+.enm-chain-badge-syncing    { background: rgba(59, 130, 246, 0.12);  color: var(--state-syncing); }
+.enm-chain-badge-stalled    { background: rgba(249, 115, 22, 0.12);  color: var(--state-stalled); }
+.enm-chain-badge-stopped    { background: rgba(148, 163, 184, 0.16); color: var(--state-stopped); }
+.enm-chain-badge-error      { background: rgba(239, 68, 68, 0.12);   color: var(--state-error); }
+.enm-chain-badge-recovering { background: rgba(139, 92, 246, 0.12);  color: var(--state-recovering); }
+
+.enm-chain-stats {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: var(--spacing-sm) var(--spacing-md);
+}
+
+.enm-chain-stats dt {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+}
+
+.enm-chain-stats dd {
+    font-size: 14px;
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+    margin-bottom: var(--spacing-sm);
+}
+
+.enm-chain-sync {
+    border-top: 1px solid var(--border-color);
+    padding-top: var(--spacing-md);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.enm-chain-sync[data-stale="1"] {
+    opacity: 0.7;
+}
+
+.enm-chain-sync-heading {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+}
+
+.enm-chain-sync-bar-wrap {
+    width: 100%;
+    height: 6px;
+    background: var(--bg-muted);
+    border-radius: 999px;
+    overflow: hidden;
+    position: relative;
+}
+
+.enm-chain-sync-bar {
+    height: 100%;
+    background: var(--primary);
+    border-radius: 999px;
+    transition: width 0.4s ease;
+}
+
+.enm-chain-sync-indeterminate .enm-chain-sync-bar {
+    background: linear-gradient(90deg,
+        transparent 0%, var(--primary) 50%, transparent 100%);
+    animation: enm-indet 1.5s linear infinite;
+    width: 50% !important;
+}
+
+@keyframes enm-indet {
+    0%   { transform: translateX(-100%); }
+    100% { transform: translateX(200%); }
+}
+
+.enm-chain-sync-status {
+    font-size: 13px;
+    color: var(--text-primary);
+}
+
+.enm-chain-sync-metrics {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.enm-chain-bpos {
+    border-top: 1px solid var(--border-color);
+    padding-top: var(--spacing-md);
+}
+
+.enm-chain-bpos-heading {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    margin-bottom: var(--spacing-sm);
+}
+
+.enm-chain-bpos-stats {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: var(--spacing-sm) var(--spacing-md);
+}
+
+.enm-chain-bpos-stats dt {
+    font-size: 11px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.enm-chain-bpos-stats dd {
+    font-size: 13px;
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+}
+
+.enm-chain-bpos-stats dd[data-severity="warning"]  { color: var(--warning); font-weight: 600; }
+.enm-chain-bpos-stats dd[data-severity="critical"] { color: var(--error); font-weight: 600; }
+
+.enm-chain-actions {
+    display: flex;
+    gap: var(--spacing-sm);
+    border-top: 1px solid var(--border-color);
+    padding-top: var(--spacing-md);
+}
+
+/* ============================================================
+   Buttons
+   ============================================================ */
+
+.enm-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 8px 16px;
+    font-size: 13px;
+    line-height: 1;
+    font-family: inherit;
+    font-weight: 500;
+    border: 1px solid transparent;
     border-radius: var(--radius-md);
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+    user-select: none;
+}
+
+.enm-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.enm-btn:hover:not(:disabled) {
+    background: var(--bg-muted);
+}
+
+.enm-btn-primary {
+    background: var(--primary);
+    color: #fff;
+    border-color: var(--primary);
+}
+
+.enm-btn-primary:hover:not(:disabled) {
+    background: var(--primary-hover);
+    border-color: var(--primary-hover);
+}
+
+.enm-btn-secondary {
+    background: var(--bg-surface);
+    border-color: var(--border-color);
+    color: var(--text-primary);
+}
+
+.enm-btn-secondary:hover:not(:disabled) {
+    border-color: var(--primary);
+    color: var(--primary);
+}
+
+.enm-btn-danger {
+    background: var(--bg-surface);
+    border-color: var(--error);
+    color: var(--error);
+}
+
+.enm-btn-danger:hover:not(:disabled) {
+    background: var(--error);
+    color: #fff;
+}
+
+/* ============================================================
+   Wizard
+   ============================================================ */
+
+.enm-wizard {
+    padding: var(--spacing-xl);
+    max-width: 720px;
+    margin: 0 auto;
+}
+
+.enm-wizard-steps {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--spacing-sm);
+    list-style: none;
+    margin-bottom: var(--spacing-xl);
+    padding-bottom: var(--spacing-lg);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.enm-wizard-step {
+    padding: 4px 12px;
+    background: var(--bg-muted);
+    color: var(--text-muted);
+    border-radius: var(--radius-md);
+    font-size: 12px;
+    font-weight: 500;
+    text-transform: capitalize;
+}
+
+.enm-wizard-step-done {
+    background: rgba(34, 197, 94, 0.12);
+    color: var(--success);
+}
+
+.enm-wizard-step-active {
+    background: var(--primary);
+    color: #fff;
+}
+
+.enm-wizard-body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-md);
+}
+
+.enm-wizard-body h2,
+.enm-wizard-body h3 {
+    color: var(--text-primary);
+    font-size: 18px;
+    font-weight: 600;
+    margin-bottom: var(--spacing-xs);
+}
+
+.enm-wizard-body p {
+    color: var(--text-secondary);
+    line-height: 1.6;
+}
+
+.enm-wizard-body label {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+}
+
+.enm-wizard-body input[type="text"],
+.enm-wizard-body input[type="password"],
+.enm-wizard-body select,
+.enm-wizard-body textarea {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 13px;
+}
+
+.enm-wizard-body input:focus,
+.enm-wizard-body select:focus,
+.enm-wizard-body textarea:focus {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px var(--primary-soft);
+}
+
+/* ============================================================
+   Settings
+   ============================================================ */
+
+.enm-settings {
+    padding: var(--spacing-lg);
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-lg);
+}
+
+.enm-settings-section {
+    border-top: 1px solid var(--border-color);
+    padding-top: var(--spacing-lg);
+}
+
+.enm-settings-section:first-child {
+    border-top: none;
+    padding-top: 0;
+}
+
+.enm-settings-section h3 {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: var(--spacing-md);
+}
+
+.enm-settings-row {
+    display: grid;
+    grid-template-columns: minmax(180px, 1fr) 2fr;
+    align-items: center;
+    gap: var(--spacing-md);
+    padding: var(--spacing-sm) 0;
+}
+
+.enm-settings-label {
+    font-size: 13px;
+    color: var(--text-primary);
+}
+
+.enm-settings-input {
+    padding: 6px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 13px;
+}
+
+.enm-settings-input:focus {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px var(--primary-soft);
+}
+
+.enm-settings-actions {
+    display: flex;
+    gap: var(--spacing-sm);
+    padding-top: var(--spacing-md);
+    border-top: 1px solid var(--border-color);
+}
+
+.enm-settings-status {
+    font-size: 12px;
+    color: var(--success);
+    align-self: center;
+}
+
+/* ============================================================
+   Audit log
+   ============================================================ */
+
+.enm-audit {
+    padding: var(--spacing-lg);
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-md);
+}
+
+.enm-audit-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--spacing-md);
+}
+
+.enm-audit-head h3 {
+    font-size: 16px;
+    font-weight: 600;
+}
+
+.enm-audit-count {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.enm-audit-filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--spacing-sm);
+    padding: var(--spacing-md);
+    background: var(--bg-muted);
+    border-radius: var(--radius-md);
+}
+
+.enm-audit-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+    font-weight: 600;
+    margin-right: 4px;
+}
+
+.enm-audit-input {
+    padding: 4px 8px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 12px;
+}
+
+.enm-audit-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+
+.enm-audit-table th,
+.enm-audit-table td {
+    padding: 8px 10px;
+    text-align: left;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.enm-audit-table th {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+    background: var(--bg-muted);
+    font-weight: 600;
+}
+
+.enm-audit-table tbody tr:hover {
+    background: var(--bg-muted);
+}
+
+.enm-audit-empty,
+.enm-audit-foot {
+    padding: var(--spacing-md);
     text-align: center;
+    color: var(--text-muted);
+    font-size: 12px;
+}
+
+/* ============================================================
+   Log viewer (terminal style)
+   ============================================================ */
+
+.enm-log-viewer {
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - var(--titlebar-height) - var(--tabs-height) - 2 * var(--spacing-lg));
+    min-height: 360px;
+    overflow: hidden;
+}
+
+.enm-log-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--spacing-sm);
+    padding: var(--spacing-md);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.enm-log-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.enm-log-tail-toggle {
+    padding: 4px 10px;
+    background: var(--bg-muted);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    font: inherit;
+    font-size: 12px;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+
+.enm-log-tail-toggle.enm-log-following {
+    background: rgba(34, 197, 94, 0.12);
+    border-color: var(--success);
+    color: var(--success);
+}
+
+.enm-log-scroller {
+    flex: 1;
+    overflow: auto;
+    padding: var(--spacing-md);
+    background: var(--bg-code);
+    color: #e2e8f0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.enm-log-line {
+    display: flex;
+    gap: var(--spacing-sm);
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.enm-log-line-stderr { color: #fca5a5; }
+.enm-log-line-stdout { color: #e2e8f0; }
+
+.enm-log-ts {
+    color: #64748b;
+    flex-shrink: 0;
+}
+
+.enm-log-text {
+    flex: 1;
+}
+
+.enm-log-empty {
+    color: #94a3b8;
+    text-align: center;
+    padding: var(--spacing-lg);
+}
+
+/* ============================================================
+   Toasts
+   ============================================================ */
+
+.enm-toast-container {
+    position: fixed;
+    top: calc(var(--titlebar-height) + var(--tabs-height) + var(--spacing-md));
+    right: var(--spacing-md);
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-sm);
+    z-index: 100;
+    max-width: 360px;
+}
+
+.enm-toast {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-left: 4px solid var(--text-muted);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-md);
+    padding: var(--spacing-md);
+    transform: translateX(0);
+    opacity: 1;
+    transition: transform 0.2s, opacity 0.2s;
+}
+
+.enm-toast-leaving {
+    transform: translateX(100%);
+    opacity: 0;
+}
+
+.enm-toast-info     { border-left-color: var(--primary); }
+.enm-toast-warning  { border-left-color: var(--warning); }
+.enm-toast-critical { border-left-color: var(--error); }
+.enm-toast-healing  { border-left-color: var(--healing); }
+
+.enm-toast-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--spacing-sm);
+}
+
+.enm-toast-title {
+    font-weight: 600;
+    color: var(--text-primary);
+    font-size: 13px;
+}
+
+.enm-toast-dismiss {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 18px;
+    line-height: 1;
+    padding: 0;
+}
+
+.enm-toast-dismiss:hover {
+    color: var(--text-primary);
+}
+
+.enm-toast-body {
+    margin-top: 4px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+    white-space: pre-wrap;
+}
+
+.enm-toast-ack {
+    margin-top: var(--spacing-sm);
+    padding: 4px 10px;
+    background: var(--error);
+    color: #fff;
+    border: none;
+    border-radius: var(--radius-sm);
+    font: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+/* ============================================================
+   Proposal modal
+   ============================================================ */
+
+.enm-proposal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--spacing-lg);
+    z-index: 200;
+}
+
+.enm-proposal-card {
+    background: var(--bg-surface);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-lg);
+    padding: var(--spacing-xl);
+    max-width: 480px;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-md);
+}
+
+.enm-proposal-heading {
+    font-size: 18px;
+    font-weight: 600;
+}
+
+.enm-prop-heading-warning  { color: var(--warning); }
+.enm-prop-heading-critical { color: var(--error); }
+.enm-prop-heading-healing  { color: var(--healing); }
+.enm-prop-heading-info     { color: var(--primary); }
+
+.enm-proposal-summary {
+    color: var(--text-secondary);
+    line-height: 1.6;
+}
+
+.enm-proposal-cooldown {
+    font-size: 13px;
+    color: var(--warning);
+    font-variant-numeric: tabular-nums;
+}
+
+.enm-proposal-ack {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--spacing-sm);
+    font-size: 13px;
+    color: var(--text-primary);
+}
+
+.enm-proposal-anti-snipe,
+.enm-proposal-reject-reason {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 13px;
+}
+
+.enm-proposal-actions {
+    display: flex;
+    gap: var(--spacing-sm);
+    justify-content: flex-end;
+    border-top: 1px solid var(--border-color);
+    padding-top: var(--spacing-md);
+}
+
+/* ============================================================
+   Dark mode (PC2 doesn't currently push theme to apps, but
+   defensible default mirrors PC2's dao-dashboard pattern)
+   ============================================================ */
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --bg-page: #0f172a;
+        --bg-surface: #1e293b;
+        --bg-muted: #1e293b;
+        --bg-code: #020617;
+        --border-color: #334155;
+        --border-strong: #475569;
+        --text-primary: #f1f5f9;
+        --text-secondary: #cbd5e1;
+        --text-muted: #94a3b8;
+        --primary-soft: rgba(59, 130, 246, 0.18);
+    }
+}
+
+/* ============================================================
+   Responsive — narrow window from PC2's window manager
+   ============================================================ */
+
+@media (max-width: 640px) {
+    .enm-titlebar h1 {
+        font-size: 13px;
+    }
+    .enm-tabs button {
+        padding: 0 var(--spacing-sm);
+        font-size: 13px;
+    }
+    .enm-pane {
+        padding: var(--spacing-md);
+    }
+    .enm-chains-grid {
+        grid-template-columns: 1fr;
+    }
+    .enm-settings-row {
+        grid-template-columns: 1fr;
+    }
 }

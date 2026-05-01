@@ -43,9 +43,16 @@
             title: 'Elastos Node Manager',
             connecting: 'Connecting to Node Manager...',
             reconnecting: 'Reconnecting to Node Manager...',
-            backendUnreachable:
-                'Could not reach the Node Manager backend. The extension may not be loaded by PC2 yet. Reload the page once PC2 is fully started.',
-            generic_error: 'Something went wrong. Check the audit log or restart the extension.',
+            backendUnreachable: 'ENM backend unavailable',
+            backendHelp:
+                'The enm-server sidecar at :4180 is not responding. On the host, run '
+                + '`docker compose logs enm-server` to investigate.',
+            unauthenticatedHelp:
+                'Your PC2 session has expired. Reload the dashboard and sign in again.',
+            forbiddenHelp:
+                'This PC2 node has a different owner. Only the operator who claimed this '
+                + 'node can manage chains.',
+            generic_error: 'Something went wrong',
         },
 
         nav: {
@@ -219,7 +226,7 @@
 
         owner: {
             forbidden: 'Only the node owner can perform this action.',
-            unauthenticated: 'Sign in to PC2 first.',
+            unauthenticated: 'Authentication required',
         },
 
         common: {

@@ -32,7 +32,7 @@ const fs = require('node:fs');
 const { openDb } = require('./db');
 
 // Services
-const { ENM_LOG_PREFIX, ENM_API_PREFIX } = require('./services/EnmConstants');
+const { ENM_LOG_PREFIX, ENM_API_PREFIX, errorBody, successBody } = require('./services/EnmConstants');
 const enmAuditMiddleware = require('./services/EnmAuditMiddleware');
 const ChainRegistry = require('./services/ChainRegistry');
 const { initSchema } = require('./services/EnmDb');
@@ -111,12 +111,21 @@ async function main() {
     });
 
     // whoami — returns the wallet for the current Bearer token, or 401.
-    // Used by the frontend to decide if the user is logged in via PC2.
+    // Used by the frontend wallet service as a fallback when PC2's
+    // 'getTetheredDID' IPC isn't wired up for ENM. Also returns whether the
+    // caller is the node owner so the wallet badge can reflect that.
     api.get('/whoami', (req, res) => {
-        const { readActorWallet } = require('./auth/OwnerCheckMiddleware');
+        const { readActorWallet, readNodeOwner, _walletsEqual } = require('./auth/OwnerCheckMiddleware');
         const wallet = readActorWallet(req);
-        if (!wallet) return res.status(401).json({ error: 'Authentication required.' });
-        res.json({ wallet_address: wallet });
+        if (!wallet) {
+            return res.status(401).json(errorBody('Authentication required.'));
+        }
+        let isOwner = false;
+        try {
+            const owner = readNodeOwner();
+            isOwner = owner ? _walletsEqual(wallet, owner) : false;
+        } catch (_) { /* fail closed on owner check */ }
+        res.json(successBody({ wallet_address: wallet, isOwner }));
     });
 
     api.use('/setup',  setupRouter.build(extensionHandle));

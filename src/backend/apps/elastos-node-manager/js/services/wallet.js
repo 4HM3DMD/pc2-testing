@@ -2,42 +2,55 @@
  * Copyright (C) 2026-present Elacity
  * SPDX-License-Identifier: AGPL-3.0
  *
- * services/wallet.js — tethered DID flow via parent IPC.
+ * services/wallet.js — operator-identity service.
  *
- * Per Rev 6 audit (agent 6):
- *   - Parent listener at pc2.net/src/gui/src/IPC.js:212-271 uses EXACT match on
- *     'dao-wallet-request'. Anything else gets dropped silently.
- *   - Supported actions in v0.1: getTetheredDID, openDIDTether
- *   - signMessage is NOT implemented; v0.1 OWNER-CONFIRMS uses requireOwner
- *     middleware + cooldown + checkbox + optional anti-snipe password.
+ * Two paths to the operator's wallet, tried in order:
  *
- * Also handles:
- *   - READY postMessage on boot (mirrors dao-dashboard:14-22)
- *   - windowWillClose responder (REQUIRED — Rev 6 audit; without it, PC2 hangs
- *     on close)
+ *   1. dao-wallet-request → 'getTetheredDID' postMessage to the parent PC2
+ *      window. Same path dao-dashboard uses (pc2.net/src/gui/src/IPC.js:212).
+ *      Returns { did, wallets } if the operator has tethered a wallet.
+ *
+ *   2. /api/enm/whoami on the sidecar, with the Bearer token taken from the
+ *      `?puter.auth.token=` URL param. The sidecar resolves the token against
+ *      pc2-node's session DB and returns { wallet_address, isOwner }.
+ *
+ * Path 1 covers the "operator has connected an Elastos DID" case; path 2
+ * covers the more common "operator is signed into PC2 with any wallet"
+ * case — which is what we need to run the ela node.
+ *
+ * This file also owns the two postMessage contracts the PC2 window manager
+ * requires of every iframe app:
+ *   - send `{msg:'READY', appInstanceID, env:'app'}` on boot
+ *   - respond to `windowWillClose` with `windowWillCloseAck`
+ * Without these, minimize / close from the PC2 titlebar misbehave.
  */
 
 (function (root) {
     'use strict';
 
     var WALLET_REQUEST_TYPE = 'dao-wallet-request';
-    var REQUEST_TIMEOUT_MS = 30_000;
+    var REQUEST_TIMEOUT_MS = 15_000;
 
     function WalletService() {
-        this.appInstanceId = new URLSearchParams(window.location.search).get('puter.app_instance_id') || null;
-        this.tethered = null; // { did, wallets } once openDIDTether or getTetheredDID succeeds
+        var params = new URLSearchParams(root.location.search);
+        this.appInstanceId = params.get('puter.app_instance_id') || null;
+        this.authToken = params.get('puter.auth.token')
+            || params.get('auth_token')
+            || params.get('token')
+            || null;
+        this.identity = null; // { wallet_address, did?, source: 'tether'|'whoami' }
         this._closeHandlerInstalled = false;
     }
 
     /**
-     * Send the READY signal so PC2 marks our iframe as live.
-     * @returns {void}
+     * Send the READY signal so PC2 marks our iframe as live. Required for
+     * the window-manager handshake — without this, min/close break.
      */
     WalletService.prototype.sendReady = function () {
-        if (!window.parent || window.parent === window) {
+        if (!root.parent || root.parent === root) {
             return;
         }
-        window.parent.postMessage({
+        root.parent.postMessage({
             msg: 'READY',
             appInstanceID: this.appInstanceId,
             env: 'app',
@@ -46,98 +59,128 @@
 
     /**
      * Install the windowWillClose responder. Idempotent.
-     * @returns {void}
      */
     WalletService.prototype.installCloseHandler = function () {
-        if (this._closeHandlerInstalled) {
-            return;
-        }
+        if (this._closeHandlerInstalled) { return; }
         this._closeHandlerInstalled = true;
-        window.addEventListener('message', function (ev) {
-            if (!ev || !ev.data || ev.data.msg !== 'windowWillClose' || !ev.data.msg_id) {
+        root.addEventListener('message', function (ev) {
+            if (!ev || !ev.data || ev.data.msg !== 'windowWillClose') {
                 return;
             }
-            window.parent.postMessage({
-                msg: 'response',
+            root.parent.postMessage({
+                msg: 'windowWillCloseAck',
                 original_msg_id: ev.data.msg_id,
-                response: true,
             }, '*');
         });
     };
 
     /**
-     * Send a wallet request to the parent and resolve with the result.
+     * Resolve the operator's identity. Tries the tethered-DID IPC first,
+     * falls back to the sidecar's /whoami endpoint.
      *
-     * @param {string} action  must be a v0.1-supported action name
-     * @param {object} [data]
-     * @returns {Promise<*>}
+     * @returns {Promise<{wallet_address: string, did?: string, source: string}|null>}
      */
-    WalletService.prototype.sendToParent = function (action, data) {
+    WalletService.prototype.getIdentity = function () {
+        if (this.identity) {
+            return Promise.resolve(this.identity);
+        }
+        var self = this;
+        return this._tryTetheredDID()
+            .catch(function () { return null; })
+            .then(function (tetherResult) {
+                if (tetherResult && tetherResult.wallet_address) {
+                    self.identity = tetherResult;
+                    return tetherResult;
+                }
+                return self._tryWhoami();
+            });
+    };
+
+    /** @private */
+    WalletService.prototype._tryTetheredDID = function () {
         var self = this;
         return new Promise(function (resolve, reject) {
-            if (!window.parent || window.parent === window) {
-                return reject(new Error('Not running inside a PC2 iframe — wallet API unavailable.'));
+            if (!root.parent || root.parent === root) {
+                return reject(new Error('not in iframe'));
             }
             var messageId = 'enm_' + Date.now() + '_' + Math.random().toString(36).slice(2);
 
             function handler(ev) {
-                if (!ev || !ev.data || ev.data.messageId !== messageId) {
-                    return;
-                }
-                window.removeEventListener('message', handler);
+                if (!ev || !ev.data || ev.data.messageId !== messageId) { return; }
+                root.removeEventListener('message', handler);
                 clearTimeout(timer);
                 if (ev.data.error) {
-                    reject(new Error(ev.data.error));
-                } else {
-                    resolve(ev.data.result);
+                    return reject(new Error(ev.data.error));
                 }
+                var r = ev.data.result;
+                if (!r || !r.did) {
+                    return resolve(null);
+                }
+                resolve({
+                    wallet_address: (r.wallets && r.wallets.ela) || r.did,
+                    did: r.did,
+                    wallets: r.wallets || {},
+                    source: 'tether',
+                });
             }
 
             var timer = setTimeout(function () {
-                window.removeEventListener('message', handler);
-                reject(new Error('Wallet request timeout (' + REQUEST_TIMEOUT_MS + 'ms): ' + action));
+                root.removeEventListener('message', handler);
+                // Don't error — just signal "no answer", and let _tryWhoami decide.
+                resolve(null);
             }, REQUEST_TIMEOUT_MS);
 
-            window.addEventListener('message', handler);
-            window.parent.postMessage({
-                type: WALLET_REQUEST_TYPE, // EXACT match required (Rev 6 audit)
+            root.addEventListener('message', handler);
+            root.parent.postMessage({
+                type: WALLET_REQUEST_TYPE,
                 messageId: messageId,
-                action: action,
-                data: data || {},
+                action: 'getTetheredDID',
+                data: {},
                 appInstanceID: self.appInstanceId,
             }, '*');
         });
     };
 
-    /**
-     * Returns { did, wallets } if a wallet is tethered, or null if none yet.
-     * Caches the result for the page session.
-     *
-     * @returns {Promise<{did: string, wallets: object}|null>}
-     */
-    WalletService.prototype.getTetheredDID = function () {
-        var self = this;
-        if (this.tethered) {
-            return Promise.resolve(this.tethered);
+    /** @private */
+    WalletService.prototype._tryWhoami = function () {
+        if (!this.authToken) {
+            return Promise.resolve(null);
         }
-        return this.sendToParent('getTetheredDID').then(function (result) {
-            self.tethered = result || null;
-            return self.tethered;
-        });
+        var apiBase = (root.ENM_API_BASE)
+            ? root.ENM_API_BASE
+            : (root.location.protocol + '//' + root.location.hostname + ':4180/api/enm');
+        var self = this;
+        return fetch(apiBase + '/whoami', {
+            method: 'GET',
+            headers: {
+                'Accept': 'application/json',
+                'Authorization': 'Bearer ' + this.authToken,
+            },
+            credentials: 'include',
+        }).then(function (res) {
+            if (!res.ok) { return null; }
+            return res.json().then(function (body) {
+                if (!body || body.success === false) { return null; }
+                var r = body.result || body;
+                if (!r || !r.wallet_address) { return null; }
+                self.identity = {
+                    wallet_address: r.wallet_address,
+                    isOwner: !!r.isOwner,
+                    source: 'whoami',
+                };
+                return self.identity;
+            });
+        }).catch(function () { return null; });
     };
 
     /**
-     * Open the DID tether modal in the parent. Used when the operator hasn't
-     * tethered a wallet yet. The promise resolves when the modal closes.
-     *
-     * @returns {Promise<{did: string, wallets: object}|null>}
+     * Truncate an address for display. EVM-style if hex, else show first/last
+     * 6/4 chars. Mirrors dao-dashboard's helper.
      */
-    WalletService.prototype.openDIDTether = function () {
-        var self = this;
-        return this.sendToParent('openDIDTether').then(function (result) {
-            self.tethered = result || null;
-            return self.tethered;
-        });
+    WalletService.truncateAddress = function (addr) {
+        if (!addr) { return ''; }
+        if (addr.length <= 12) { return addr; }
+        return addr.slice(0, 6) + '...' + addr.slice(-4);
     };
 
     root.EnmWalletService = WalletService;
