@@ -6,6 +6,66 @@
 
 ---
 
+## [1.2.2] - 2026-04-30 (hotfix)
+
+### 🐛 Critical #5: Fresh installs hit `Lit Action denied: access_denied` on every asset open
+
+The v1.2.1 hotfix introduced a hardcoded fallback Lit Action CID
+(`QmX5JxcFhyasptCWMA6unFPm3TRYjPSkJb5HhN8289r5uk`) so that fresh nodes
+without a `.env` file would still resolve a CID at startup. The CID
+came from `SEC_2026_04_21_AUDIT_DISPOSITION.md` (Wave 8 Pinata re-pin)
+and was confused with the production-active sigauth action. It is
+registered with Chipotle but **not bound to any of the AccessTokens
+currently on-chain** — so every fresh install (Jetson, Pi, anyone
+running the installer without a `.env` file) saw the Lit Action
+return `access_denied` for every asset they legitimately owned.
+
+The canonical V1.2 sigauth Lit Action — pinned to ≥2 IPFS providers,
+end-to-end verified across PDF/PNG/MP4/MP3 on 2026-04-21, documented
+in `V12_SIGAUTH_HANDOVER.md` and `IRZHY_LIT_ACTION_FIX_V12.md`, and
+present in `pc2-node/.env` for every dev environment that has ever
+worked — is `bafkreihvm4zkyuefnuptlbdins6cmd2mbslj2xgnyzz3ssdg2ggg3jtkk4`.
+
+The same CID covers both code paths (per the V12 handover §3.2,
+media-decrypt routes through `recoverNonMediaCEK` on the Chipotle
+backend), so this single fix unblocks PDF / PNG / EPUB / CBZ / MP4 /
+MP3 playback in one shot.
+
+**Fix**:
+
+- `pc2-node/src/api/storage.ts` →
+  `DEFAULT_NON_MEDIA_ACTION_CID` rotated from `QmX5JxcF…r5uk` to
+  `bafkreihvm4…tkk4`.
+- `pc2-node/src/api/chipotle-client.ts` → matching `getActionCid()`
+  fallback rotated to the same value, plus a new **Tier 3 supernode
+  provision lookup** added to the resolution chain
+  (env → file → `loadCachedProvision().actions.nonMediaDecrypt` →
+  hardcoded). The `/api/ddrm/provision` payload from Wave 8+ supernodes
+  already carries `actions.nonMediaDecrypt`; honouring it here means
+  Elacity Labs can rotate the action in the future by updating only
+  the signed supernode payload — no PC2 redeploy required on every
+  node in the world.
+- Comments in both files updated to point future maintainers at the
+  V12 handover docs and to record why the v1.2.1 CID was wrong, so
+  this regression cannot repeat.
+
+**Compatibility**:
+
+- Existing assets minted from any node that ever had the correct
+  `bafkreihvm4…` CID (i.e. all Mac dev environments, all production
+  nodes prior to v1.2.1) decrypt cleanly under v1.2.2 — same CID
+  before and after.
+- Per `V12_SIGAUTH_HANDOVER.md` §3.5, the Lit Action CID is
+  server-authoritative, never asset-authoritative — the server
+  overrides the PSSH-recorded CID at `/api/media/init`. So no asset
+  re-mint is required.
+- The only theoretically-affected assets are those minted on a fresh
+  v1.2.1 install in the ~24 h window between v1.2.1 ship and v1.2.2
+  hotfix. Those assets would be encrypted under `QmX5JxcF…`. Realistic
+  blast radius: zero (fresh installs don't typically mint).
+
+---
+
 ## [1.2.1] - 2026-04-30 (hotfix)
 
 ### 🐛 Critical #4: WalletConnect/Essentials transactions stop hitting MetaMask

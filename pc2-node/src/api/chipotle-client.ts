@@ -496,22 +496,38 @@ function getChipotleEncryptCode(): string {
 }
 
 function getActionCid(): string {
+  // Tier 1: explicit env override (operator/dev workflow).
   const envCid = process.env.LIT_ACTION_CID;
   if (envCid) return envCid;
 
+  // Tier 2: on-disk override file written by `/api/storage/lit/deploy-action`
+  // or by an operator dropping a CID into `data/.lit-action-cid`.
   if (existsSync(LIT_ACTION_CID_PATH)) {
     const cid = readFileSync(LIT_ACTION_CID_PATH, 'utf8').trim();
     if (cid) return cid;
   }
 
-  // Hardcoded fallback — must stay in lock-step with `storage.ts` →
-  // `DEFAULT_NON_MEDIA_ACTION_CID`. The `Qm…` value is what every live
-  // PC2 node currently runs (pc2-node never loads dotenv, so the
-  // `bafkrei…` documented in .env.example is unused at runtime and live
-  // assets reference this `Qm…` in their PSSH `actionIpfsId`).
-  // Rotation procedure: update BOTH in the same commit, see
-  // V12_SIGAUTH_HANDOVER.md §6.2.
-  return 'QmX5JxcFhyasptCWMA6unFPm3TRYjPSkJb5HhN8289r5uk';
+  // Tier 3: supernode-provisioned config (Wave 8+). The signed
+  // ProvisionConfig delivered by `/api/ddrm/provision` carries
+  // `actions.nonMediaDecrypt` — the CID Elacity Labs has registered
+  // with Chipotle for the current fleet. Honouring it here means a
+  // future rotation requires only updating the supernode payload; no
+  // PC2 redeploy or env juggling on every node in the world.
+  const provision = loadCachedProvision();
+  if (provision?.actions?.nonMediaDecrypt) {
+    return provision.actions.nonMediaDecrypt;
+  }
+
+  // Tier 4: hardcoded fallback — must stay in lock-step with `storage.ts`
+  // → `DEFAULT_NON_MEDIA_ACTION_CID`. The `bafkrei…` value is the
+  // canonical V1.2 sigauth action registered with Chipotle group 1 and
+  // pinned to ≥2 IPFS providers. Rotation procedure: update BOTH in the
+  // same commit, see V12_SIGAUTH_HANDOVER.md §6.2.
+  //
+  // (v1.2.1 incorrectly hardcoded `QmX5JxcF…r5uk` here, which is a
+  // Wave-8 re-pin that was registered but not production-active. Fresh
+  // nodes saw `access_denied` on every asset. Fixed in v1.2.2.)
+  return 'bafkreihvm4zkyuefnuptlbdins6cmd2mbslj2xgnyzz3ssdg2ggg3jtkk4';
 }
 
 // ── Core REST Client ─────────────────────────────────────────────────────────

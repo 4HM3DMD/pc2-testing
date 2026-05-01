@@ -1736,25 +1736,26 @@ const LIT_ACTION_CID_PATH = join(__litDirname, '../../data/.lit-action-cid');
 //
 // The value MUST match (a) what is currently registered with Chipotle
 // group `1` (`elacity-ddrm`) and (b) what existing assets reference in
-// their PSSH `actionIpfsId` field at mint time. As of v1.2.x the live
-// production runtime is using this legacy `Qm…` CID — the
-// `bafkreihvm4…` value documented in `.env.example` and the V1.2 sigauth
-// handover doc is dead documentation: pc2-node never loads dotenv, so
-// `pc2-node/.env` has no effect on the live process. Every fresh node
-// has been falling through to this same hardcoded value via
-// `chipotle-client.ts → getActionCid()` for months without breakage.
+// their delegation `actionIpfsId` field at session-bind time. The
+// canonical V1.2 sigauth Lit Action — pinned to ≥2 IPFS providers,
+// registered with Chipotle group 1, and end-to-end verified across
+// PDF/PNG/MP4/MP3 on 2026-04-21 — is `bafkreihvm4…`. See:
+//   - docs/handover/V12_SIGAUTH_HANDOVER.md §6.2
+//   - docs/handover/IRZHY_LIT_ACTION_FIX_V12.md §3.1
+//   - pc2-node/.env (line 7)
+//
+// v1.2.1 hotfix mistakenly hardcoded a Wave-8 re-pin CID
+// (`QmX5JxcF…r5uk`) that was registered but never became
+// production-active. Result: fresh nodes (Jetson, Pi, fresh installer
+// runs without `.env`) saw `Lit Action denied: code=access_denied`
+// on every asset open even though the buyer held a valid AccessToken.
+// Reverted to `bafkreihvm4…` in v1.2.2.
 //
 // SINGLE SOURCE OF TRUTH per V12_SIGAUTH_HANDOVER.md §6.3 — keep
 // `chipotle-client.ts → getActionCid()` final fallback synchronized with
 // this constant. When we rotate the action, update BOTH in the same
 // commit.
-//
-// TODO(post-1.2.1): unify the runtime story — either wire `dotenv.config()`
-// into `pc2-node/src/index.ts` and rotate to the `bafkrei…` sigauth CID
-// across the fleet, or delete `pc2-node/.env` and `.env.example` to remove
-// the documentation drift. Tracked separately to avoid coupling a runtime
-// rotation to a release-blocking hotfix.
-const DEFAULT_NON_MEDIA_ACTION_CID = 'QmX5JxcFhyasptCWMA6unFPm3TRYjPSkJb5HhN8289r5uk';
+const DEFAULT_NON_MEDIA_ACTION_CID = 'bafkreihvm4zkyuefnuptlbdins6cmd2mbslj2xgnyzz3ssdg2ggg3jtkk4';
 
 let NON_MEDIA_ACTION_CID = process.env.LIT_ACTION_CID || '';
 
