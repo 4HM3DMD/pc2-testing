@@ -11,8 +11,14 @@
 
 const ENM_NAME = 'elastos-node-manager';
 const ENM_LOG_PREFIX = '[ENM]';
-const ENM_ROUTE_PREFIX = `/extensions/${ENM_NAME}`;
-const ENM_API_PREFIX = `${ENM_ROUTE_PREFIX}/api`;
+// Under the standalone enm-server (post 0.1-alpha pivot from Puter-extension
+// to PC2 app + sidecar), API routes live at /api/enm/*. The frontend at
+// src/backend/apps/elastos-node-manager/ is served by pc2-node and calls us
+// cross-origin. ENM_ROUTE_PREFIX is unused now (the frontend isn't served
+// by enm-server) but kept exported for backward compat with audit log
+// records that reference it.
+const ENM_ROUTE_PREFIX = `/apps/${ENM_NAME}`;
+const ENM_API_PREFIX = '/api/enm';
 
 // Default ports for ELA mainchain (per common/config/config.go:127,174,266-269).
 // Operator can override in Settings → Advanced.
