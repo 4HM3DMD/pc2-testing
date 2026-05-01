@@ -504,6 +504,13 @@ function getActionCid(): string {
     if (cid) return cid;
   }
 
+  // Hardcoded fallback — must stay in lock-step with `storage.ts` →
+  // `DEFAULT_NON_MEDIA_ACTION_CID`. The `Qm…` value is what every live
+  // PC2 node currently runs (pc2-node never loads dotenv, so the
+  // `bafkrei…` documented in .env.example is unused at runtime and live
+  // assets reference this `Qm…` in their PSSH `actionIpfsId`).
+  // Rotation procedure: update BOTH in the same commit, see
+  // V12_SIGAUTH_HANDOVER.md §6.2.
   return 'QmX5JxcFhyasptCWMA6unFPm3TRYjPSkJb5HhN8289r5uk';
 }
 

@@ -360,13 +360,38 @@ export const ParticleConnectkitContext = React.createContext<ParticleConnectkitC
  */
 const ParticleConnectkit = ({ children }: React.PropsWithChildren<ParticleConnectkitProps>) => {
   const clonedConfig = cloneWithDescriptors(config);
+
+  // Logout-respecting reconnect (v1.2.1): when the user clicks Logout in the
+  // parent UI, initgui.js sets `disconnect_particle=true` and reloads the
+  // page. wagmi/wc@* localStorage keys are wiped, but WalletConnect Core's
+  // own persistence (IndexedDB, sessionStorage, in-memory pairings on the
+  // Essentials side) can still trigger an auto-restore — which then fires
+  // SIWE and silently signs the user back in (user-reported as "I can't log
+  // out, it just signs me back in"). Disabling reconnectOnMount on the very
+  // first mount after a logout prevents the restore at the source. Computed
+  // once via useState so subsequent re-renders don't flip it back to true,
+  // and the flag is consumed here (the source of truth) so it cannot bite
+  // the next login (the v1.2.1 "login loop" bug).
+  // Wallet/signing-mode iframes mount AFTER login (so the flag is already
+  // gone) and receive reconnectOnMount=true, which is required for their WC
+  // session restore to succeed.
+  const [reconnectOnMount] = React.useState(() => {
+    const wantsDisconnect = localStorage.getItem('disconnect_particle');
+    if (wantsDisconnect) {
+      localStorage.removeItem('disconnect_particle');
+      console.log('[ParticleConnectkit]: disconnect_particle flag consumed at boot — reconnectOnMount=false for this mount');
+      return false;
+    }
+    return true;
+  });
+
   return (
     <ParticleConnectkitContext.Provider
       value={{
         config: clonedConfig,
       }}
     >
-      <ConnectKitProvider config={clonedConfig} reconnectOnMount>{children}</ConnectKitProvider>
+      <ConnectKitProvider config={clonedConfig} reconnectOnMount={reconnectOnMount}>{children}</ConnectKitProvider>
     </ParticleConnectkitContext.Provider>
   );
 };

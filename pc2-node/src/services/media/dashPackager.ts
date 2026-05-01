@@ -32,7 +32,16 @@ const MEDIA_ENCRYPT_ACTION_CID = 'QmdwzJvfgCRvNh9pQ63zroFozR9CfJdiweqTCkVMubD47U
 
 import { getBaseRpcUrl } from '../../utils/rpc.js';
 
-const DEFAULT_AUTHORITY = process.env.DDRM_AUTHORITY;
+// V3 AuthorityGateway on Base — must stay in lock-step with the same
+// constant in `storage.ts` and `chipotle-client.ts`. The env var override
+// is supported for future per-deploy authority swaps, but pc2-node does
+// not currently load dotenv (so any `pc2-node/.env` value is ignored at
+// runtime) — without the hardcoded default below, every video packaged
+// by the Creator embedded `authority: undefined` in its PSSH and only
+// played because `media.ts` falls back to the URL-param `clientAuthority`.
+// V1.3 contract migration checklist (`.cursor/tasks/V1.3-RELEASE`) calls
+// out updating all three call sites in lock-step.
+const DEFAULT_AUTHORITY = process.env.DDRM_AUTHORITY || '0x09dBe796f40ECEffEAccf243c3d758C4c1d8D87D';
 const DEFAULT_CHAIN_ID = parseInt(process.env.DDRM_CHAIN_ID || '8453', 10);
 // Env var override for PSSH-embedded RPC; falls back to shared pool
 const DEFAULT_RPC = process.env.DDRM_RPC || getBaseRpcUrl();
@@ -144,7 +153,7 @@ export function buildPSSHJson(outputDir: string, encryptResult: { ciphertext: st
     variant: 'eth.web3.clearkey',
     ciphersuite: 'e8582013',
     data: {
-      authority: DEFAULT_AUTHORITY!,
+      authority: DEFAULT_AUTHORITY,
       chainId: DEFAULT_CHAIN_ID,
       rpc: DEFAULT_RPC,
       actionIpfsId: MEDIA_DECRYPT_ACTION_CID,

@@ -84,7 +84,17 @@ docs/handover/IRZHY_DDRM_HANDOVER.md
 pc2-node/data/test-apps/elastos-nft/
 
 # Built assets in particle-auth
+#
+# We DO want to commit these despite the rule above. The pc2-node update
+# flow (UpdateService.performUpdate) deliberately skips `npm run build:particle-auth`
+# to keep updates fast on ARM, so the bundle MUST ship in the repo. Without the
+# negations below, every Vite rebuild produces new content-hashed filenames that
+# the index.html references but git refuses to track — Jetson nodes pull a
+# repo where index.html points at JS files that don't exist and the WalletConnect
+# iframe 404s. Same lesson the wallet-bridge dir learned in v1.2.0.
 src/particle-auth/assets
+!src/particle-auth/assets/
+!src/particle-auth/assets/**
 # Local dev-only scratch assets (EPUB/CBZ test fixtures, 3D model samples,
 # agent scratch folders). Never part of the shipped repo.
 test-samples/

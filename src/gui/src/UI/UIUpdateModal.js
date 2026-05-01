@@ -245,28 +245,78 @@ function showUpdateModal(versionInfo) {
                         white-space: pre-wrap;
                     ">${releaseNotes}</div>
                     
-                    <div class="update-progress" style="display: none; margin-bottom: 16px;">
-                        <div style="
-                            display: flex;
-                            align-items: center;
-                            justify-content: center;
-                            gap: 12px;
-                            padding: 16px;
-                            background: #f0f7ff;
-                            border-radius: 8px;
+                    <div class="update-progress" style="display: none; margin-bottom: 16px; text-align: left;">
+                        <div class="update-progress-bar-track" style="
+                            width: 100%;
+                            height: 6px;
+                            background: #e5e7eb;
+                            border-radius: 3px;
+                            overflow: hidden;
+                            margin-bottom: 14px;
                         ">
-                            <div class="update-spinner" style="
-                                width: 24px;
-                                height: 24px;
-                                border: 3px solid #e0e0e0;
-                                border-top-color: #4a90d9;
-                                border-radius: 50%;
-                                animation: spin 1s linear infinite;
+                            <div class="update-progress-bar-fill" style="
+                                height: 100%;
+                                width: 0%;
+                                background: linear-gradient(90deg, #4a90d9 0%, #357abd 100%);
+                                border-radius: 3px;
+                                transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1);
                             "></div>
-                            <span class="update-progress-text" style="color: #357abd; font-weight: 500;">
-                                Starting update...
-                            </span>
                         </div>
+
+                        <div class="update-progress-text" style="
+                            font-size: 14px;
+                            color: #111827;
+                            font-weight: 500;
+                            margin-bottom: 4px;
+                            min-height: 20px;
+                        ">Starting update&hellip;</div>
+
+                        <div class="update-progress-elapsed" style="
+                            font-size: 11px;
+                            color: #9ca3af;
+                            margin-bottom: 14px;
+                            font-variant-numeric: tabular-nums;
+                        ">Elapsed: 0s</div>
+
+                        <div class="update-step-list" style="
+                            background: #f9fafb;
+                            border: 1px solid #f3f4f6;
+                            border-radius: 8px;
+                            padding: 10px 14px;
+                            margin-bottom: 14px;
+                        ">
+                            <div class="update-step-item" data-step="fetch" style="display: flex; align-items: center; gap: 10px; padding: 5px 0; opacity: 0.4; font-size: 13px; color: #4b5563; transition: opacity 0.3s ease;">
+                                <span class="update-step-icon" style="width: 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 12px; color: #9ca3af;">&#9675;</span>
+                                <span class="update-step-label">Downloading update</span>
+                            </div>
+                            <div class="update-step-item" data-step="install-root" style="display: flex; align-items: center; gap: 10px; padding: 5px 0; opacity: 0.4; font-size: 13px; color: #4b5563; transition: opacity 0.3s ease;">
+                                <span class="update-step-icon" style="width: 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 12px; color: #9ca3af;">&#9675;</span>
+                                <span class="update-step-label">Installing dependencies</span>
+                            </div>
+                            <div class="update-step-item" data-step="install-node" style="display: flex; align-items: center; gap: 10px; padding: 5px 0; opacity: 0.4; font-size: 13px; color: #4b5563; transition: opacity 0.3s ease;">
+                                <span class="update-step-icon" style="width: 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 12px; color: #9ca3af;">&#9675;</span>
+                                <span class="update-step-label">Installing PC2 components</span>
+                            </div>
+                            <div class="update-step-item" data-step="build" style="display: flex; align-items: center; gap: 10px; padding: 5px 0; opacity: 0.4; font-size: 13px; color: #4b5563; transition: opacity 0.3s ease;">
+                                <span class="update-step-icon" style="width: 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 12px; color: #9ca3af;">&#9675;</span>
+                                <span class="update-step-label">Building application</span>
+                            </div>
+                            <div class="update-step-item" data-step="restart" style="display: flex; align-items: center; gap: 10px; padding: 5px 0; opacity: 0.4; font-size: 13px; color: #4b5563; transition: opacity 0.3s ease;">
+                                <span class="update-step-icon" style="width: 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 12px; color: #9ca3af;">&#9675;</span>
+                                <span class="update-step-label">Restarting server</span>
+                            </div>
+                            <div class="update-step-item" data-step="reconnect" style="display: flex; align-items: center; gap: 10px; padding: 5px 0; opacity: 0.4; font-size: 13px; color: #4b5563; transition: opacity 0.3s ease;">
+                                <span class="update-step-icon" style="width: 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 12px; color: #9ca3af;">&#9675;</span>
+                                <span class="update-step-label">Reconnecting</span>
+                            </div>
+                        </div>
+
+                        <div class="update-progress-hint" style="
+                            font-size: 11px;
+                            color: #6b7280;
+                            text-align: center;
+                            line-height: 1.5;
+                        ">Please keep this window open until the update completes.<br>This may take several minutes on slower devices.</div>
                     </div>
                 </div>
                 
@@ -322,6 +372,29 @@ function showUpdateModal(versionInfo) {
                 opacity: 0.5;
                 cursor: not-allowed;
             }
+            .update-step-item.active {
+                opacity: 1 !important;
+                color: #111827 !important;
+                font-weight: 500;
+            }
+            .update-step-item.complete {
+                opacity: 0.6 !important;
+            }
+            .update-step-item.complete .update-step-icon {
+                color: #16a34a !important;
+                font-size: 14px !important;
+            }
+            .update-step-item.active .update-step-icon {
+                color: #4a90d9 !important;
+            }
+            .update-step-item .update-step-spinner {
+                width: 12px;
+                height: 12px;
+                border: 2px solid #e5e7eb;
+                border-top-color: #4a90d9;
+                border-radius: 50%;
+                animation: spin 0.8s linear infinite;
+            }
         </style>
     `;
 
@@ -329,20 +402,24 @@ function showUpdateModal(versionInfo) {
     $('body').append($modal);
     updateModalInstance = $modal[0];
 
-    // Cancel button
+    // Track update-in-flight so we can block dismissal mid-update
+    let updateInFlight = false;
+
+    // Cancel button — blocked while update is running
     $modal.find('.update-modal-cancel').on('click', function() {
+        if (updateInFlight) { return; }
         localStorage.setItem('updateDismissed', versionInfo.latestVersion);
         $modal.fadeOut(200, function() { $(this).remove(); });
         updateModalInstance = null;
     });
 
-    // Click overlay to close
+    // Click overlay to close — blocked while update is running
     $modal.find('.update-modal-overlay').on('click', function(e) {
-        if (e.target === this) {
-            localStorage.setItem('updateDismissed', versionInfo.latestVersion);
-            $modal.fadeOut(200, function() { $(this).remove(); });
-            updateModalInstance = null;
-        }
+        if (e.target !== this) { return; }
+        if (updateInFlight) { return; }
+        localStorage.setItem('updateDismissed', versionInfo.latestVersion);
+        $modal.fadeOut(200, function() { $(this).remove(); });
+        updateModalInstance = null;
     });
 
     // Install button
@@ -351,16 +428,19 @@ function showUpdateModal(versionInfo) {
         const $cancel = $modal.find('.update-modal-cancel');
         const $progress = $modal.find('.update-progress');
         const $progressText = $modal.find('.update-progress-text');
+        const $progressBar = $modal.find('.update-progress-bar-fill');
+        const $progressElapsed = $modal.find('.update-progress-elapsed');
+        const $stepList = $modal.find('.update-step-list');
+        const $progressHint = $modal.find('.update-progress-hint');
         const $notes = $modal.find('.update-modal-notes');
 
-        // Disable buttons
-        $btn.prop('disabled', true).text('Installing...');
-        $cancel.prop('disabled', true);
+        $btn.prop('disabled', true).text('Updating\u2026');
+        $cancel.prop('disabled', true).css({ opacity: 0.4, cursor: 'not-allowed' });
         $notes.hide();
         $progress.show();
+        updateInFlight = true;
 
         try {
-            // Start the update
             const response = await fetch('/api/update/install', {
                 method: 'POST',
                 headers: {
@@ -371,78 +451,225 @@ function showUpdateModal(versionInfo) {
 
             const result = await response.json();
 
-            if (result.success) {
-                $progressText.text('Downloading latest code...');
-                
-                // Poll for progress and wait for restart
-                await waitForRestart($progressText);
-            } else {
-                throw new Error(result.error || 'Update failed');
+            if (!result.success) {
+                throw new Error(result.error || 'Update failed to start');
             }
+
+            await waitForRestart({
+                $progressText,
+                $progressBar,
+                $progressElapsed,
+                $stepList,
+                $progressHint,
+            });
         } catch (error) {
             console.error('[Update] Installation failed:', error);
-            $progressText.html(`<span style="color: #d9534f;">Update failed: ${window.html_encode(error.message)}</span>`);
+            $progressText.html(`<span style="color: #d9534f; font-weight: 600;">Update failed</span><br><span style="font-size: 12px; color: #6b7280;">${window.html_encode(error.message)}</span>`);
+            $progressHint.hide();
             $btn.prop('disabled', false).text('Retry');
-            $cancel.prop('disabled', false);
+            $cancel.prop('disabled', false).css({ opacity: 1, cursor: 'pointer' });
+            updateInFlight = false;
         }
     });
 }
 
 /**
- * Wait for server to restart and reconnect
+ * Step definitions for the update progress UI.
+ *
+ * Each step has:
+ *   - id:       matches the data-step attribute on the step list DOM
+ *   - match:    regex applied to the backend's progress string to detect this step
+ *               (UpdateService.performUpdate sets this.updateProgress at every stage)
+ *   - label:    user-facing label rendered in the status text
+ *   - weight:   relative share of the total progress bar (sum across all steps = 100)
+ *   - estMs:    rough expected duration on Jetson, used for smooth intra-step
+ *               progress bar interpolation when the backend stays on the same step
+ *               for a while (e.g. 90s of npm install)
  */
-async function waitForRestart($progressText) {
-    const progressMessages = [
-        'Downloading latest code...',
-        'Installing dependencies...',
-        'Building application...',
-        'Restarting server...',
-    ];
+const UPDATE_STEPS = [
+    { id: 'fetch',        match: /^(starting|fetching|resetting)/i,        label: 'Downloading update',        weight: 8,  estMs:  10000 },
+    { id: 'install-root', match: /installing root dependencies/i,           label: 'Installing dependencies',   weight: 35, estMs:  90000 },
+    { id: 'install-node', match: /installing pc2-node dependencies/i,       label: 'Installing PC2 components', weight: 20, estMs:  60000 },
+    { id: 'build',        match: /building application/i,                   label: 'Building application',      weight: 22, estMs:  60000 },
+    { id: 'restart',      match: /restarting server/i,                      label: 'Restarting server',         weight: 10, estMs:  10000 },
+    { id: 'reconnect',    match: null,                                      label: 'Reconnecting',              weight:  5, estMs:  15000 },
+];
 
-    let msgIndex = 0;
-    const progressInterval = setInterval(() => {
-        if (msgIndex < progressMessages.length) {
-            $progressText.text(progressMessages[msgIndex]);
-            msgIndex++;
-        }
-    }, 3000);
+const UPDATE_TOTAL_WEIGHT = UPDATE_STEPS.reduce((sum, s) => sum + s.weight, 0);
+const UPDATE_HARD_TIMEOUT_MS = 12 * 60 * 1000; // 12 minutes — Jetson worst case + buffer
+const UPDATE_POLL_INTERVAL_MS = 1500;
 
-    // Wait a bit for server to start restarting
-    await new Promise(resolve => setTimeout(resolve, 5000));
+/** Format milliseconds as e.g. "1m 23s" or "47s". */
+function formatElapsed(ms) {
+    const total = Math.max(0, Math.floor(ms / 1000));
+    const m = Math.floor(total / 60);
+    const s = total % 60;
+    return m > 0 ? `${m}m ${s}s` : `${s}s`;
+}
 
-    // Try to reconnect
-    let attempts = 0;
-    const maxAttempts = 30;
+/**
+ * Wait for the update to complete by polling /api/update/progress.
+ *
+ * Replaces the previous fake-progress-message implementation that
+ * cycled hardcoded strings on a setInterval and gave up after 65 s.
+ * That UX was both dishonest (text didn't reflect actual state) and
+ * actively misleading (false "taking longer than expected" warning
+ * fired during normal Jetson updates because the install step alone
+ * takes 3-5 minutes).
+ *
+ * This implementation:
+ *   - Polls the real backend progress every 1.5 s
+ *   - Maps backend message → step id → updates step list (checkmarks)
+ *   - Smoothly interpolates the progress bar within long-running steps
+ *     based on elapsed time vs estimated step duration
+ *   - Detects server-going-down (consecutive poll failures while on a
+ *     late step) and switches to /api/health probing for restart detect
+ *   - Hard timeout is 12 minutes (well beyond worst-case Jetson update),
+ *     and even then doesn't claim failure — gives helpful next steps
+ */
+async function waitForRestart(refs) {
+    const { $progressText, $progressBar, $progressElapsed, $stepList, $progressHint } = refs;
 
-    while (attempts < maxAttempts) {
-        try {
-            const response = await fetch('/api/health', { 
-                signal: AbortSignal.timeout(2000) 
-            });
-            
-            if (response.ok) {
-                clearInterval(progressInterval);
-                $progressText.html('<span style="color: #5cb85c;">Update complete! Refreshing...</span>');
-                
-                // Clear dismissed flag so banner doesn't show
-                localStorage.removeItem('updateDismissed');
-                
-                // Reload page after brief delay
-                setTimeout(() => {
-                    window.location.reload();
-                }, 2000);
-                return;
+    let currentStepId = null;
+    let stepStartedAt = Date.now();
+    let serverWentDown = false;
+    let consecutiveFailures = 0;
+    let lastProgressString = '';
+
+    const startedAt = Date.now();
+
+    const tickElapsed = setInterval(() => {
+        $progressElapsed.text('Elapsed: ' + formatElapsed(Date.now() - startedAt));
+    }, 1000);
+
+    function updateBar() {
+        let cumulativeWeight = 0;
+        let stepWeight = 0;
+        let stepEstMs = 60000;
+        for (const step of UPDATE_STEPS) {
+            if (step.id === currentStepId) {
+                stepWeight = step.weight;
+                stepEstMs = step.estMs;
+                break;
             }
-        } catch {
-            // Server not ready yet
+            cumulativeWeight += step.weight;
         }
-
-        attempts++;
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        // Time-based interpolation within the active step. Cap at 0.92 so the
+        // bar never quite fills until the step actually completes — prevents
+        // the "stuck at 99%" frustration if our estimate underruns.
+        const intra = currentStepId
+            ? Math.min(0.92, (Date.now() - stepStartedAt) / stepEstMs)
+            : 0;
+        const pct = ((cumulativeWeight + stepWeight * intra) / UPDATE_TOTAL_WEIGHT) * 100;
+        $progressBar.css('width', pct.toFixed(1) + '%');
     }
 
-    clearInterval(progressInterval);
-    $progressText.html('<span style="color: #f0ad4e;">Restart taking longer than expected. Please refresh manually.</span>');
+    function setStep(newStepId) {
+        if (newStepId === currentStepId) { return; }
+        // Mark the previous step complete (checkmark)
+        if (currentStepId) {
+            const $prev = $stepList.find(`[data-step="${currentStepId}"]`);
+            $prev.removeClass('active').addClass('complete');
+            $prev.find('.update-step-icon').html('&#10003;');
+        }
+        currentStepId = newStepId;
+        stepStartedAt = Date.now();
+        const step = UPDATE_STEPS.find(s => s.id === newStepId);
+        if (step) {
+            const $cur = $stepList.find(`[data-step="${newStepId}"]`);
+            $cur.addClass('active');
+            $cur.find('.update-step-icon').html('<div class="update-step-spinner"></div>');
+            $progressText.text(step.label + '\u2026');
+        }
+        updateBar();
+    }
+
+    function detectStep(msg) {
+        if (!msg) { return null; }
+        for (const step of UPDATE_STEPS) {
+            if (step.match && step.match.test(msg)) { return step.id; }
+        }
+        return null;
+    }
+
+    // Smooth bar tick — keeps the bar inching forward visually even when the
+    // backend stays on the same step for 90 s (npm install). Without this,
+    // long steps would feel frozen.
+    const tickBar = setInterval(updateBar, 500);
+
+    try {
+        while (Date.now() - startedAt < UPDATE_HARD_TIMEOUT_MS) {
+            // 1) If we've previously detected the server going down, prioritize
+            //    health checking — that's how we know restart finished.
+            if (serverWentDown) {
+                try {
+                    const h = await fetch('/api/health', { signal: AbortSignal.timeout(1500) });
+                    if (h.ok) {
+                        if (currentStepId !== 'reconnect') { setStep('reconnect'); }
+                        // Mark reconnect complete and finish
+                        const $rec = $stepList.find('[data-step="reconnect"]');
+                        $rec.removeClass('active').addClass('complete');
+                        $rec.find('.update-step-icon').html('&#10003;');
+                        $progressBar.css('width', '100%');
+                        $progressText.html('<span style="color: #16a34a; font-weight: 600;">Update complete</span><br><span style="font-size: 12px; color: #6b7280;">Reloading\u2026</span>');
+                        $progressHint.hide();
+                        localStorage.removeItem('updateDismissed');
+                        setTimeout(() => window.location.reload(), 1800);
+                        return;
+                    }
+                } catch {
+                    // server still down, keep waiting
+                }
+            }
+
+            // 2) Always try to read backend progress (will fail during restart window)
+            try {
+                const r = await fetch('/api/update/progress', {
+                    headers: { 'Authorization': `Bearer ${puter.authToken}` },
+                    signal: AbortSignal.timeout(1500),
+                });
+                if (r.ok) {
+                    consecutiveFailures = 0;
+                    const data = await r.json();
+                    if (data.progress && data.progress !== lastProgressString) {
+                        lastProgressString = data.progress;
+                        const detected = detectStep(data.progress);
+                        if (detected) { setStep(detected); }
+                    }
+                    // Backend reports update finished but server didn't go down yet —
+                    // the restart command was issued, server is about to disappear.
+                    // Switch into health-check mode.
+                    if (data.isUpdating === false && currentStepId === 'restart') {
+                        serverWentDown = true;
+                    }
+                }
+            } catch {
+                consecutiveFailures++;
+                // 2 consecutive failures while on a late step = server is restarting.
+                // Switch into health-check mode so we detect the comeback.
+                if (consecutiveFailures >= 2 && (currentStepId === 'restart' || currentStepId === 'build')) {
+                    if (!serverWentDown) {
+                        serverWentDown = true;
+                        if (currentStepId !== 'restart') { setStep('restart'); }
+                    }
+                }
+            }
+
+            await new Promise(res => setTimeout(res, UPDATE_POLL_INTERVAL_MS));
+        }
+
+        // Hard timeout reached — don't claim failure (update may still be running),
+        // give the user actionable next steps instead.
+        $progressText.html('<span style="color: #f0ad4e; font-weight: 600;">Update is taking longer than expected</span>');
+        $progressHint.html(
+            'The update may still be running in the background.<br>' +
+            'Try refreshing this page in a few minutes, or check the server logs:<br>' +
+            '<code style="display: inline-block; margin-top: 6px; padding: 2px 6px; background: #f3f4f6; border-radius: 4px; font-size: 11px;">pm2 logs pc2 --lines 50</code>'
+        );
+    } finally {
+        clearInterval(tickElapsed);
+        clearInterval(tickBar);
+    }
 }
 
 /**

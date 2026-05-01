@@ -116,6 +116,23 @@ async function UIWindowParticleLogin(options = {}) {
         container.appendChild(iframe);
         console.log('[UIWindowParticleLogin]: ✅ Iframe appended to container');
         
+        // SIWE bridge overlay state — created when iframe says it's about to
+        // request the second signature, dismissed when auth resolves either way.
+        // See showLoginStatusOverlay() for the styling rationale.
+        let siweBridge = null;
+        let siweBridgeHintTimer = null;
+
+        const dismissSiweBridge = () => {
+            if (siweBridgeHintTimer) {
+                clearTimeout(siweBridgeHintTimer);
+                siweBridgeHintTimer = null;
+            }
+            if (siweBridge) {
+                siweBridge.hide();
+                siweBridge = null;
+            }
+        };
+
         // Set up message listener for communication from iframe
         const messageHandler = (event) => {
             // For security, you might want to check the origin
@@ -123,13 +140,50 @@ async function UIWindowParticleLogin(options = {}) {
             
             const { type, payload } = event.data;
             
+            // SIWE bridge: iframe is about to call personal_sign on the
+            // user's wallet. Show a friendly overlay so the user knows what
+            // to expect and the page never goes dark/silent on them.
+            if (type === 'particle-auth.siwe-pending') {
+                dismissSiweBridge(); // de-dupe in case it fires twice
+                const method = (payload && payload.loginMethod) || 'wallet';
+                const walletLabel =
+                    method === 'metamask' ? 'MetaMask'
+                    : method === 'walletconnect' ? 'your wallet app'
+                    : method === 'coinbase' ? 'Coinbase Wallet'
+                    : 'your wallet';
+                siweBridge = showLoginStatusOverlay({
+                    id: 'pc2-siwe-bridge-overlay',
+                    title: 'Verifying wallet ownership',
+                    message: `Check ${walletLabel} — we're requesting a one-time signature to securely sign you in.`,
+                    hint: '',
+                });
+                // Escalating hints for slow relays (especially WalletConnect on Jetson)
+                siweBridgeHintTimer = setTimeout(() => {
+                    if (!siweBridge) return;
+                    siweBridge.update({
+                        hint: method === 'walletconnect'
+                            ? 'Still waiting — open your wallet app and tap the pending request.'
+                            : 'Still waiting — make sure your wallet popup is in the foreground.',
+                    });
+                    siweBridgeHintTimer = setTimeout(() => {
+                        if (!siweBridge) return;
+                        siweBridge.update({
+                            hint: 'Taking longer than usual. If your wallet didn\'t prompt you, try closing this and signing in again.',
+                        });
+                    }, 12000);
+                }, 8000);
+                return;
+            }
+
             // Handle both old and new message types for compatibility
             if (type === 'particle-auth-success' || type === 'particle-auth.success') {
+                dismissSiweBridge();
                 handleAuthSuccess(payload, container, el_window);
             }
             
             // Handle auth errors
             if (type === 'particle-auth.error') {
+                dismissSiweBridge();
                 console.error('[Particle Auth]:', payload?.message);
                 // Show error notification
                 if (typeof UINotification !== 'undefined') {
@@ -143,6 +197,7 @@ async function UIWindowParticleLogin(options = {}) {
             
             // Handle access denied - redirect to access-denied page
             if (type === 'particle-auth.access-denied') {
+                dismissSiweBridge();
                 console.log('[Particle Auth]: Access denied for wallet:', payload?.wallet);
                 // Close the login window
                 $(el_window).close();
@@ -176,6 +231,7 @@ async function UIWindowParticleLogin(options = {}) {
         // Clean up event listener when window is closed
         $(el_window).on('remove', function() {
             window.removeEventListener('message', messageHandler);
+            dismissSiweBridge();
             $('#wc-trouble-link-container').remove();
             $('#pc2-system-readiness').remove();
         });
@@ -640,6 +696,20 @@ async function UIWindowParticleLogin(options = {}) {
                 window.onbeforeunload = null;
                 console.log('[Particle Auth]: Token saved, preparing redirect...');
                 console.log('[Particle Auth]: Verifying token in localStorage:', localStorage.getItem('auth_token')?.substring(0, 16) + '...');
+
+                // UX fix (#5): paint a persistent overlay over the brief
+                // window between localStorage commit and the page reload.
+                // Without this, the modal closes and the user sees a blank
+                // dark frame for ~100ms+ before the dashboard re-mounts —
+                // confusing on the Jetson where the reload can take longer.
+                showLoginStatusOverlay({
+                    id: 'pc2-login-reload-overlay',
+                    title: 'Signing you in',
+                    message: 'Loading your dashboard…',
+                    hint: '',
+                    accent: '#22c55e',
+                });
+
                 // Replace with a clean URL to prevent password leakage
                 const cleanUrl = window.location.origin + window.location.pathname;
                 // Small delay to ensure localStorage is fully synced before navigation
@@ -717,6 +787,108 @@ function showLoading(container) {
     }
     
     container.appendChild(loadingOverlay);
+}
+
+// ---------------------------------------------------------------------------
+// Login-status overlay (used by SIWE bridge + page-reload transition)
+// ---------------------------------------------------------------------------
+// Shared dark-themed full-window overlay. Matches the login modal palette
+// (#1c1c1e panel, rgba(255,255,255,0.08) borders, #f59e0b accent) so the
+// experience feels continuous. Used in two places:
+//   1. SIWE bridge: after wallet connects but before the second signature
+//      prompt arrives — kills the "dark hang" UX problem on Jetson + WC.
+//   2. Page-reload transition: after successful auth, while the page is
+//      replacing its URL — prevents a momentary blank window.
+function showLoginStatusOverlay({ id, title, message, hint, accent }) {
+    accent = accent || '#f59e0b';
+
+    // Inject keyframes once
+    if (!document.querySelector('style#pc2-login-status-style')) {
+        const style = document.createElement('style');
+        style.id = 'pc2-login-status-style';
+        style.textContent = `
+            @keyframes pc2-login-status-spin { 0%{transform:rotate(0)} 100%{transform:rotate(360deg)} }
+            @keyframes pc2-login-status-fade { 0%{opacity:0} 100%{opacity:1} }
+            @keyframes pc2-login-status-pop  { 0%{transform:scale(.96);opacity:0} 100%{transform:scale(1);opacity:1} }
+        `;
+        document.head.appendChild(style);
+    }
+
+    // Replace any existing instance with the same id
+    const existing = document.getElementById(id);
+    if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
+
+    const overlay = document.createElement('div');
+    overlay.id = id;
+    overlay.style.cssText = `
+        position: fixed; inset: 0; z-index: 2147483646;
+        background: rgba(0, 0, 0, 0.78);
+        backdrop-filter: blur(4px);
+        -webkit-backdrop-filter: blur(4px);
+        display: flex; align-items: center; justify-content: center;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        animation: pc2-login-status-fade 180ms ease-out both;
+    `;
+
+    overlay.innerHTML = `
+        <div style="
+            background: #1c1c1e;
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 16px;
+            padding: 28px 32px;
+            max-width: 360px;
+            width: calc(100% - 32px);
+            box-shadow: 0 25px 50px -12px rgba(0,0,0,0.6);
+            text-align: center;
+            animation: pc2-login-status-pop 220ms cubic-bezier(.2,.9,.3,1) both;
+        ">
+            <div style="
+                width: 56px; height: 56px; margin: 0 auto 18px;
+                border-radius: 50%;
+                background: rgba(245, 158, 11, 0.10);
+                display: flex; align-items: center; justify-content: center;
+                position: relative;
+            ">
+                <div style="
+                    position: absolute; inset: 0;
+                    border: 2px solid rgba(245, 158, 11, 0.18);
+                    border-top-color: ${accent};
+                    border-radius: 50%;
+                    animation: pc2-login-status-spin .9s linear infinite;
+                "></div>
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="${accent}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="3" y="11" width="18" height="11" rx="2"/>
+                    <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                </svg>
+            </div>
+            <div data-overlay-title style="
+                font-size: 16px; font-weight: 600; color: #ffffff;
+                margin-bottom: 8px; letter-spacing: -0.01em;
+            ">${title}</div>
+            <div data-overlay-message style="
+                font-size: 13px; color: #9ca3af; line-height: 1.55;
+            ">${message}</div>
+            <div data-overlay-hint style="
+                margin-top: 20px;
+                font-size: 11px; color: #6b7280;
+                min-height: 14px;
+            ">${hint || ''}</div>
+        </div>
+    `;
+
+    document.body.appendChild(overlay);
+
+    return {
+        element: overlay,
+        update({ title, message, hint }) {
+            if (title !== undefined) overlay.querySelector('[data-overlay-title]').textContent = title;
+            if (message !== undefined) overlay.querySelector('[data-overlay-message]').textContent = message;
+            if (hint !== undefined) overlay.querySelector('[data-overlay-hint]').textContent = hint || '';
+        },
+        hide() {
+            if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+        },
+    };
 }
 
 // Helper function to show processing overlay

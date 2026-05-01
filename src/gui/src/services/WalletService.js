@@ -986,16 +986,30 @@ class WalletService {
 
     /**
      * Send raw txParams to particle-auth iframe for eth_sendTransaction (e.g. Elacity buy).
-     * Uses only the Particle iframe so the transaction is executed by the smart account (EOA signs there).
-     * Iframe stays hidden so MetaMask popup is not covered.
+     * - MetaMask/Coinbase: sign directly via window.ethereum in the parent frame
+     *   (extensions don't inject into hidden iframes; their popup needs the parent context).
+     * - WalletConnect: route through UIWindowParticleSigning (visible overlay) → wallet
+     *   iframe → ConnectKit's restored WC connector → user's mobile wallet (Essentials).
+     *   The iframe owns the WC session because ConnectKit's reconnectOnMount restores it.
      * @param {Object} txParams - { to, data, value?, gas?, from? }
      * @returns {Promise<string>} Transaction hash
      */
     async sendTransactionViaParticleIframe(txParams) {
-        console.log('[PC2 Wallet] sendTransactionViaParticleIframe called');
+        console.log('[PC2 Wallet] sendTransactionViaParticleIframe called, walletConnect:', this.isWalletConnectLogin());
 
-        // MetaMask doesn't inject into hidden iframes, so for external wallet
-        // users we sign directly with MetaMask in the parent frame.
+        if (this.isWalletConnectLogin()) {
+            const fromAddress = txParams.from || window.user?.wallet_address;
+            const fullTxParams = { ...txParams, from: fromAddress };
+            console.log('[PC2 Wallet] Routing tx via WalletConnect iframe:', fullTxParams);
+            const { default: UIWindowParticleSigning } = await import('../UI/UIWindowParticleSigning.js');
+            const txHash = await UIWindowParticleSigning({
+                method: 'eth_sendTransaction',
+                params: [fullTxParams],
+            });
+            console.log('[PC2 Wallet] WalletConnect tx success:', txHash);
+            return txHash;
+        }
+
         const provider = window.ethereum;
         if (!provider || provider.isPC2WalletBridge) {
             throw new Error('External wallet (MetaMask) not available. Please ensure your wallet extension is enabled.');
@@ -1018,6 +1032,16 @@ class WalletService {
     }
 
     /**
+     * True iff the current user is logged in via WalletConnect (Essentials, Rainbow, etc).
+     * WC users sign through the wallet iframe's restored ConnectKit connector instead of
+     * window.ethereum, because the WC provider lives inside the iframe origin.
+     */
+    isWalletConnectLogin() {
+        const loginMethod = window.user?.login_method || localStorage.getItem('pc2_login_method') || '';
+        return loginMethod === 'walletconnect';
+    }
+
+    /**
      * Execute a batch of contract calls from the smart account (one UserOp, one signature).
      * For external wallet users (MetaMask): 3-phase flow — create in iframe, sign with
      * MetaMask in parent frame, submit in iframe. MetaMask doesn't inject into hidden
@@ -1037,16 +1061,25 @@ class WalletService {
             throw new Error('Failed to create batch transaction');
         }
 
-        logger.log('Smart Account batch (external wallet) — Phase 2: signing rootHash with MetaMask');
-        const provider = window.ethereum;
-        if (!provider) {
-            throw new Error('External wallet (MetaMask) not available for signing. Please ensure your wallet extension is enabled and refresh the page.');
-        }
+        logger.log('Smart Account batch (external wallet) — Phase 2: signing rootHash, walletConnect:', this.isWalletConnectLogin());
 
-        const signature = await provider.request({
-            method: 'personal_sign',
-            params: [rootHash, eoaAddress],
-        });
+        let signature;
+        if (this.isWalletConnectLogin()) {
+            const { default: UIWindowParticleSigning } = await import('../UI/UIWindowParticleSigning.js');
+            signature = await UIWindowParticleSigning({
+                method: 'personal_sign',
+                params: [rootHash, eoaAddress],
+            });
+        } else {
+            const provider = window.ethereum;
+            if (!provider) {
+                throw new Error('External wallet (MetaMask) not available for signing. Please ensure your wallet extension is enabled and refresh the page.');
+            }
+            signature = await provider.request({
+                method: 'personal_sign',
+                params: [rootHash, eoaAddress],
+            });
+        }
 
         if (!signature || signature === 'pending') {
             throw new Error('Signing was not completed');
@@ -2481,8 +2514,23 @@ class WalletService {
                     this._notifyListeners();
                     return { success: true, hash: null, status: 'pending', isEOA: true };
                 }
+            } else if (this.isWalletConnectLogin()) {
+                // WalletConnect: route through wallet iframe overlay so the user signs with
+                // their mobile wallet (Essentials) — same path as embedded but the iframe's
+                // restored ConnectKit connector dispatches to the WC provider instead of Particle Auth.
+                const { default: UIWindowParticleSigning } = await import('../UI/UIWindowParticleSigning.js');
+                txHash = await UIWindowParticleSigning({
+                    method: 'eth_sendTransaction',
+                    params: [{ ...txParams, chainId: '0x' + chainId.toString(16) }],
+                });
+                if (txHash === 'pending') {
+                    logger.log('EOA tx (WC) signed but hash not returned — treating as success');
+                    this._notifyListeners();
+                    return { success: true, hash: null, status: 'pending', isEOA: true };
+                }
+                if (!txHash) throw new Error('Transaction failed');
             } else {
-                // External wallet: sign with MetaMask in parent frame
+                // External wallet (MetaMask/Coinbase): sign with the extension in the parent frame
                 const provider = window.ethereum;
                 if (!provider || provider.isPC2WalletBridge) {
                     throw new Error('External wallet (MetaMask) not available. Please ensure your wallet extension is enabled.');

@@ -13,6 +13,15 @@ src/**/*.js.map
 src/**/*.d.ts
 src/**/*.d.ts.map
 
+# Exception: wallet-bridge contains hand-authored ES5 .js sources that ship to
+# the browser (frontend/ copies via build-frontend.js). Without this exception,
+# git reset --hard on update wipes the source dir, build-frontend.js wipes the
+# target dir then finds no source to copy → wallet bridge files vanish from
+# the served frontend, dApps fall back to MetaMask, and WalletConnect users
+# can't sign anything. (Discovered during v1.2.0 → v1.2.1 hotfix on Jetson.)
+!src/wallet-bridge/
+!src/wallet-bridge/**/*.js
+
 # Environment variables
 .env
 .env.local

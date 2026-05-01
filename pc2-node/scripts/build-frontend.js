@@ -153,17 +153,28 @@ async function main() {
       }
     }
 
-    // Copy wallet bridge files (provider shim for iframes, bridge handler for parent)
+    // Copy wallet bridge files (provider shim for iframes, bridge handler for parent).
+    // CRITICAL: if any source file is missing, fail loudly. The earlier silent skip caused
+    // dApps on the Jetson to fall back to MetaMask after an update because the pre-clean
+    // wipe of TARGET_DIR removed the previous copy and no replacement was written.
     const WALLET_BRIDGE_DIR = join(__dirname, '..', 'src', 'wallet-bridge');
-    if (existsSync(WALLET_BRIDGE_DIR)) {
-      console.log('\n📦 Copying wallet bridge files...');
-      for (const name of ['pc2-wallet-provider.js', 'pc2-wallet-bridge.js', 'pc2-secure-view-session.js', 'pc2-secure-view.js']) {
-        const src = join(WALLET_BRIDGE_DIR, name);
-        if (existsSync(src)) {
-          cpSync(src, join(TARGET_DIR, name));
-          console.log(`   ✅ ${name}`);
-        }
+    const WALLET_BRIDGE_FILES = ['pc2-wallet-provider.js', 'pc2-wallet-bridge.js', 'pc2-secure-view-session.js', 'pc2-secure-view.js'];
+    if (!existsSync(WALLET_BRIDGE_DIR)) {
+      throw new Error(`Wallet bridge source directory missing: ${WALLET_BRIDGE_DIR}. Refusing to build a frontend without wallet bridge — dApps would fall back to MetaMask.`);
+    }
+    console.log('\n📦 Copying wallet bridge files...');
+    const missing = [];
+    for (const name of WALLET_BRIDGE_FILES) {
+      const src = join(WALLET_BRIDGE_DIR, name);
+      if (!existsSync(src)) {
+        missing.push(name);
+        continue;
       }
+      cpSync(src, join(TARGET_DIR, name));
+      console.log(`   ✅ ${name}`);
+    }
+    if (missing.length > 0) {
+      throw new Error(`Wallet bridge source files missing: ${missing.join(', ')}. The frontend would ship without working WalletConnect/embedded signing — refusing to continue.`);
     }
 
     // Restore .gitkeep if it existed
@@ -182,7 +193,7 @@ async function main() {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ElastOS - Personal Cloud</title>
-    <link rel="stylesheet" href="/bundle.min.css">
+    <link rel="stylesheet" href="/bundle.min.css?v=1.2.1">
     
     <!-- Initialize API origin before SDK loads -->
     <script>
@@ -225,7 +236,62 @@ async function main() {
         window.api_origin = window.location.origin;
         console.log('[PC2]: Auto-detected API origin:', window.api_origin);
         window.puter_gui_enabled = true;
-        
+
+        // PC2 logout boot-gate (v1.2.1): if a logout was initiated in the
+        // previous page lifetime, force-clear every auth key BEFORE any
+        // XHR fires or any other code reads localStorage.auth_token. This
+        // is the last line of defence against the silent auto-relogin bug.
+        // The XHR interceptor below auto-restores auth_token from any 200
+        // response that echoes a token field (whoami, readdir, stat are
+        // the worst offenders). The synchronous logout cleanup in
+        // initgui.js races against in-flight responses landing in the gap
+        // between the localStorage clear and the page navigation. Even
+        // with the __pc2_logging_out write-path guards, a callback that
+        // sneaks past could re-write the token. This gate runs
+        // synchronously at script load, before any network I/O, so no
+        // race can possibly bypass it. The marker is a timestamp written
+        // by initgui.js logout handler. We accept it within 60 s of click.
+        try {
+            const _logoutAt = parseInt(localStorage.getItem('pc2_logout_at') || '0', 10);
+            if (_logoutAt && (Date.now() - _logoutAt) < 60000) {
+                console.log('[PC2]: 🚪 Recent logout detected (' + Math.round((Date.now() - _logoutAt) / 1000) + 's ago) — force-clearing auth state');
+                localStorage.removeItem('auth_token');
+                localStorage.removeItem('puter_auth_token');
+                localStorage.removeItem('user');
+                localStorage.removeItem('pc2_session');
+                localStorage.removeItem('pc2_config');
+                localStorage.removeItem('pc2_explicitly_disconnected');
+                localStorage.removeItem('logged_in_users');
+                localStorage.setItem('disconnect_particle', 'true');
+                for (const key of Object.keys(localStorage)) {
+                    if (
+                        key.startsWith('wagmi') ||
+                        key.startsWith('wc@') ||
+                        key.startsWith('-walletlink') ||
+                        key.toLowerCase().includes('connectkit') ||
+                        key.toLowerCase().includes('recentconnector')
+                    ) {
+                        localStorage.removeItem(key);
+                    }
+                }
+                localStorage.removeItem('pc2_logout_at');
+                // NOTE (v1.2.1 hotfix): do NOT set window.__pc2_logging_out = true
+                // here. That flag is read by update_auth_data() and the XHR
+                // interceptor below to skip writing tokens. Setting it on
+                // boot keeps it true for the whole page lifetime, which
+                // means a user who logs in again within 60 s would have
+                // their fresh SIWE response token silently dropped — they
+                // would sign successfully but never reach the desktop
+                // (perceived as "stuck on Verifying wallet ownership"). The
+                // logoutrace path that needs this flag is the synchronous
+                // logout cleanup itself; boot does not. localStorage is
+                // already clean by this point so there is nothing left to
+                // protect against.
+            }
+        } catch (e) {
+            console.warn('[PC2]: logout boot-gate threw:', e);
+        }
+
         // Load stored auth token from localStorage
         const storedToken = localStorage.getItem('auth_token');
         if (storedToken) {
@@ -352,11 +418,23 @@ async function main() {
                         if (responseText) {
                             const response = JSON.parse(responseText);
                             if (response.token || response.auth_token) {
-                                const token = response.token || response.auth_token;
-                                if (token.length === 64 && /^[0-9a-f]+$/i.test(token)) {
-                                    window.auth_token = token;
-                                    localStorage.setItem('auth_token', token);
-                                    console.log('[PC2]: ✅ Captured real session token from response, length:', token.length, 'prefix:', token.substring(0, 8) + '...');
+                                // PC2 logout-race fix (v1.2.1): if the user has
+                                // initiated logout, do NOT re-write the auth
+                                // token from any in-flight response. Without
+                                // this guard, a whoami/readdir response landing
+                                // between localStorage.clear and the page
+                                // navigation would silently restore the token
+                                // and the user would be auto-signed back in on
+                                // reload.
+                                if (window.__pc2_logging_out) {
+                                    console.log('[PC2]: ⏭️  Skipping token capture during logout');
+                                } else {
+                                    const token = response.token || response.auth_token;
+                                    if (token.length === 64 && /^[0-9a-f]+$/i.test(token)) {
+                                        window.auth_token = token;
+                                        localStorage.setItem('auth_token', token);
+                                        console.log('[PC2]: ✅ Captured real session token from response, length:', token.length, 'prefix:', token.substring(0, 8) + '...');
+                                    }
                                 }
                             }
                         }
@@ -577,7 +655,7 @@ async function main() {
     </script>
     
     <div id="app"></div>
-    <script src="/bundle.min.js"></script>
+    <script src="/bundle.min.js?v=1.2.1"></script>
     <script src="/pc2-wallet-bridge.js?v=20260430a"></script>
     <!-- Secure-view session manager (Option C session-key delegation).
          Owns the ephemeral P-256 key + 24h delegation. Iframes call

@@ -1724,6 +1724,38 @@ async function getLitClient() {
 // ── Lit Action Configuration ───────────────────────────────────────
 // Our non-media Lit Action (deployed to IPFS — set after first deploy)
 const LIT_ACTION_CID_PATH = join(__litDirname, '../../data/.lit-action-cid');
+
+// Hardcoded fallback for the deployed sigauth Lit Action — used when neither
+// LIT_ACTION_CID env nor the data/.lit-action-cid file is present (typical
+// for a fresh node that has never run /api/storage/lit/deploy-action and
+// has no operator-supplied env override).
+//
+// Without this, every fresh install returned 503 from begin-session and
+// 500 from /api/media/init (chipotle path), breaking ALL playback and
+// non-media Creator packaging for end users.
+//
+// The value MUST match (a) what is currently registered with Chipotle
+// group `1` (`elacity-ddrm`) and (b) what existing assets reference in
+// their PSSH `actionIpfsId` field at mint time. As of v1.2.x the live
+// production runtime is using this legacy `Qm…` CID — the
+// `bafkreihvm4…` value documented in `.env.example` and the V1.2 sigauth
+// handover doc is dead documentation: pc2-node never loads dotenv, so
+// `pc2-node/.env` has no effect on the live process. Every fresh node
+// has been falling through to this same hardcoded value via
+// `chipotle-client.ts → getActionCid()` for months without breakage.
+//
+// SINGLE SOURCE OF TRUTH per V12_SIGAUTH_HANDOVER.md §6.3 — keep
+// `chipotle-client.ts → getActionCid()` final fallback synchronized with
+// this constant. When we rotate the action, update BOTH in the same
+// commit.
+//
+// TODO(post-1.2.1): unify the runtime story — either wire `dotenv.config()`
+// into `pc2-node/src/index.ts` and rotate to the `bafkrei…` sigauth CID
+// across the fleet, or delete `pc2-node/.env` and `.env.example` to remove
+// the documentation drift. Tracked separately to avoid coupling a runtime
+// rotation to a release-blocking hotfix.
+const DEFAULT_NON_MEDIA_ACTION_CID = 'QmX5JxcFhyasptCWMA6unFPm3TRYjPSkJb5HhN8289r5uk';
+
 let NON_MEDIA_ACTION_CID = process.env.LIT_ACTION_CID || '';
 
 // ── Lit Backend Selection ─────────────────────────────────────────
@@ -1741,6 +1773,11 @@ if (!NON_MEDIA_ACTION_CID && existsSync(LIT_ACTION_CID_PATH)) {
   if (NON_MEDIA_ACTION_CID) {
     logger.info(`[Lit] Loaded action CID from file: ${NON_MEDIA_ACTION_CID}`);
   }
+}
+
+if (!NON_MEDIA_ACTION_CID) {
+  NON_MEDIA_ACTION_CID = DEFAULT_NON_MEDIA_ACTION_CID;
+  logger.info(`[Lit] Using hardcoded fallback action CID: ${NON_MEDIA_ACTION_CID}`);
 }
 
 /**

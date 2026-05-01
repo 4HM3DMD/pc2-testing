@@ -299,35 +299,63 @@ export class UpdateService {
 
       logger.info(`[UpdateService] Starting update in ${projectRoot}`);
 
-      // Step 1: Reset any local changes that might block git pull
-      this.updateProgress = 'Preparing for update...';
-      logger.info('[UpdateService] Resetting local changes...');
-      await execAsync('git checkout -- .', { cwd: projectRoot });
-      await execAsync('git clean -fd src/particle-auth/assets/ 2>/dev/null || true', { cwd: projectRoot });
-      logger.info('[UpdateService] Local changes reset');
+      // Step 1+2: Fetch upstream and force-reset to origin/main.
+      //
+      // We deliberately use `git fetch + git reset --hard origin/main`
+      // instead of the previous `git checkout -- . + git pull origin main`
+      // sequence. `git pull` halts with a merge error on any divergent
+      // history (e.g. nodes that were once on a fork or whose history was
+      // rewritten upstream), and the silent failure was the proximate
+      // cause of v1.2.0 nodes never picking up the new release. The hard
+      // reset:
+      //   - replaces local HEAD with origin/main (no merge attempted)
+      //   - restores every tracked file in the working tree
+      //     (subsumes `git checkout -- .`, including any frontend assets
+      //      a previous broken update half-deleted)
+      //   - destroys local commits, but production nodes are not
+      //     supposed to carry local commits in the first place
+      this.updateProgress = 'Fetching latest code...';
+      logger.info('[UpdateService] Fetching origin/main...');
+      await execAsync('git fetch origin main', { cwd: projectRoot });
 
-      // Step 2: Git pull
-      this.updateProgress = 'Downloading latest code...';
-      logger.info('[UpdateService] Running git pull...');
-      await execAsync('git pull origin main', { cwd: projectRoot });
-      logger.info('[UpdateService] Git pull complete');
+      this.updateProgress = 'Resetting to latest release...';
+      logger.info('[UpdateService] Resetting working tree to origin/main...');
+      await execAsync('git reset --hard origin/main', { cwd: projectRoot });
+
+      // Drop ignored assets that an earlier broken update may have
+      // half-installed. Best-effort, never fatal.
+      await execAsync('git clean -fd src/particle-auth/assets/ 2>/dev/null || true', { cwd: projectRoot });
+      logger.info('[UpdateService] Working tree synced with origin/main');
 
       // Step 3: npm install (in case of new dependencies)
-      // Using --legacy-peer-deps to avoid dependency conflicts
-      // Using --include=dev to ensure @types packages are installed for TypeScript build
-      this.updateProgress = 'Installing dependencies...';
-      logger.info('[UpdateService] Running npm install...');
-      await execAsync('npm install --legacy-peer-deps --include=dev', { cwd: pc2NodeDir });
-      logger.info('[UpdateService] npm install complete');
+      // We install at BOTH locations:
+      //   - project root: provides shared/hoisted deps (e.g. ethers, siwe,
+      //     @lit-protocol/*) consumed via dynamic `await import()` from pc2-node
+      //   - pc2-node:     provides pc2-node's own declared deps + @types
+      // Using --legacy-peer-deps to avoid dependency conflicts.
+      // Using --include=dev (pc2-node only) to ensure @types packages are
+      // installed for the TypeScript build.
+      // maxBuffer is bumped because npm's output can exceed the 1 MB default
+      // on slow ARM devices and silently kill the install step.
+      const npmExecOpts = { maxBuffer: 50 * 1024 * 1024 };
+      this.updateProgress = 'Installing root dependencies...';
+      logger.info('[UpdateService] Running npm install at project root...');
+      await execAsync('npm install --legacy-peer-deps', { cwd: projectRoot, ...npmExecOpts });
+      logger.info('[UpdateService] Root npm install complete');
+
+      this.updateProgress = 'Installing pc2-node dependencies...';
+      logger.info('[UpdateService] Running npm install in pc2-node...');
+      await execAsync('npm install --legacy-peer-deps --include=dev', { cwd: pc2NodeDir, ...npmExecOpts });
+      logger.info('[UpdateService] pc2-node npm install complete');
 
       // Step 4: Build GUI and backend (skip particle-auth rebuild - it's pre-built in repo)
       this.updateProgress = 'Building application...';
       logger.info('[UpdateService] Running builds...');
-      await execAsync('npm run build:gui', { cwd: projectRoot });
-      await execAsync('npm run build:backend', { cwd: pc2NodeDir });
+      await execAsync('npm run build:gui', { cwd: projectRoot, ...npmExecOpts });
+      await execAsync('npm run build:backend', { cwd: pc2NodeDir, ...npmExecOpts });
       logger.info('[UpdateService] Build complete');
 
-      // Step 4: Schedule restart
+      // Step 5: Schedule restart
       this.updateProgress = 'Restarting server...';
       logger.info('[UpdateService] Update complete, scheduling restart...');
 

@@ -6,6 +6,255 @@
 
 ---
 
+## [1.2.1] - 2026-04-30 (hotfix)
+
+### 🐛 Critical #4: WalletConnect/Essentials transactions stop hitting MetaMask
+
+`v1.2.0` made WalletConnect logins functional for SIWE auth, but every
+subsequent signing request (Glide swap, Elacity Market buy, ESC token
+transfers, …) still went to whatever extension wallet happened to own
+`window.ethereum` in the parent frame — almost always **MetaMask**, with
+a different account, on the wrong chain. The user got a confusing
+"approve in MetaMask" prompt for a wallet they had never selected, and
+the transaction failed with *"unauthorized account"* or silently signed
+from the wrong address.
+
+Root cause: three `WalletService` methods and the parent-side
+`pc2-wallet-bridge.js` all checked `isEmbeddedLogin()` only. Embedded
+(email/social) users were correctly routed through the hidden Particle
+Auth iframe; everything else fell through to `window.ethereum`. But
+WalletConnect's actual provider doesn't live in the parent frame — it
+lives in the same iframe origin, restored on demand by ConnectKit's
+`reconnectOnMount` from the `wc@*` localStorage keys created during
+login. So the iframe path that worked perfectly for embedded users would
+also have worked for WC users — we just never routed them through it.
+
+**Fix**:
+
+- `WalletService.sendTransactionViaParticleIframe`,
+  `WalletService.sendSmartAccountBatch` (Phase 2), and
+  `WalletService._sendEOATransaction` (external-wallet branch) all gain
+  an `isWalletConnectLogin()` branch that routes through
+  `UIWindowParticleSigning` (the same visible overlay used by embedded
+  signing) instead of `window.ethereum`.
+- `pc2-wallet-bridge.js handleRpc` and `handleReady` now route via
+  `routeToParticle()` for both embedded **and** WalletConnect users (new
+  `shouldRouteViaIframe()` helper). The WC path enters
+  `window.pc2RouteRpcToParticle` → `WalletService.routeRpcToParticle` →
+  `UIWindowParticleSigning` → wallet iframe → restored WC connector →
+  user's mobile wallet. Existing `prefillGasForTx` /
+  `LEGACY_ONLY_CHAINS=[20]` MetaMask path is untouched (it's wrapped by
+  the same `!shouldRouteViaIframe()` gate).
+- `pc2-wallet-bridge.js wallet_switchEthereumChain` no longer
+  double-forwards chain switches to `window.ethereum` for WC users (the
+  iframe handler already issues the switch on its restored connector
+  before each signing call). MetaMask/Coinbase users still get the
+  forward as before.
+- `packages/particle-auth/.../ParticleNetworkContext.tsx` —
+  `particle-wallet.eoa-send` retries `connector.getProvider()` for up to
+  ~9 s (was 4.5 s) so ConnectKit's WC reconnect has time to attach on
+  cold-boot, and the failure message now names the connector ID so
+  operators can tell "WC session expired on phone" apart from "user is
+  not logged in".
+
+**Same-shipment side-fix — wallet bridge sources are tracked again**:
+
+- `pc2-node/.gitignore` line 11 (`src/**/*.js`) was excluding the four
+  hand-authored ES5 wallet-bridge sources (`pc2-wallet-bridge.js`,
+  `pc2-wallet-provider.js`, `pc2-secure-view.js`,
+  `pc2-secure-view-session.js`), so a clean checkout had no source for
+  the build to copy. `pc2-node/scripts/build-frontend.js` wipes the
+  target dir as the first step, so on a fresh node the served frontend
+  ended up with **zero** wallet-bridge files. dApps then fell back to
+  `window.ethereum` (MetaMask), which is the upstream of the WC bug
+  above. **Fix**: added `!src/wallet-bridge/` exception, force-tracked
+  the four source files, and made `build-frontend.js` *throw* (not
+  silently skip) when any wallet-bridge source is missing.
+
+### Verified locally
+
+- WC login → Glide ELA→USDC swap on ESC: prompt opens in **Essentials
+  on phone** (was MetaMask). RLP type-0 fix from v1.1.x still applies
+  (LEGACY_ONLY_CHAINS branch unaffected).
+- WC login → Elacity Market buy V3 asset on Base: approve + buy both
+  prompt in Essentials. Smart-account batch rootHash signs correctly.
+- WC login → hard-refresh `zzz.ela.city`: ConnectKit auto-restores the
+  WC session in the wallet iframe within ~2 s; first signing request
+  works without re-scanning a QR.
+- MetaMask login → Glide swap, Creator mint: identical prompts and flow
+  as before (MM/Coinbase path is gated by `!shouldRouteViaIframe()` so
+  zero behavior change).
+- Email login → Wallet Send tokens: identical to v1.2.0.
+
+---
+
+### 🐛 Critical #5: All playback + non-media packaging broken on fresh nodes
+
+Every fresh PC2 install (`v1.2.0` Jetson at `zzz.ela.city` was the canary)
+returned **HTTP 503** from `POST /api/storage/lit/begin-session` and
+**HTTP 500** from `POST /api/media/init`, breaking:
+
+- Non-media playback (DDRM viewer, ePub reader, image viewer) — secure-view
+  bootstrap fails immediately, and the legacy fallback also 401s because no
+  delegation was issued.
+- Media playback (video player) — `/api/media/init` calls
+  `getNonMediaActionCid()` to override the legacy PSSH `actionIpfsId` with
+  the server-controlled sigauth CID before invoking the Lit Action; with
+  no CID configured the route returned `Server NON_MEDIA_ACTION_CID is not
+  configured`.
+- Creator → non-media packaging (e.g. ebook → Market mint) — the
+  `/api/storage/lit/encrypt` route returned `400 No Lit Action CID
+  configured` so the Creator could not seal new assets.
+
+DASH packaging (Creator → video → Market) was unaffected — `dashPackager.ts`
+embeds the action CID as a hardcoded constant.
+
+Root cause: `pc2-node/src/api/storage.ts` resolved the Lit Action CID from
+`process.env.LIT_ACTION_CID` first, then `data/.lit-action-cid` on disk,
+then **gave up**. The on-disk file is only written when the operator runs
+`POST /api/storage/lit/deploy-action` once at first boot — long-lived dev
+machines have it from months ago, but fresh installs never had it. The
+sibling `pc2-node/src/api/chipotle-client.ts` already used the exact same
+CID (`QmX5JxcFhyasptCWMA6unFPm3TRYjPSkJb5HhN8289r5uk`) as a hardcoded
+fallback for its own internal `getActionCid()` — `storage.ts` simply never
+mirrored that final fallback, so every code path that touched
+`NON_MEDIA_ACTION_CID` (begin-session, secure-view, complete-session,
+encrypt, getNonMediaActionCid, info) silently failed on fresh nodes.
+
+**Fix**: `storage.ts` now defines `DEFAULT_NON_MEDIA_ACTION_CID =
+'QmX5JxcFhyasptCWMA6unFPm3TRYjPSkJb5HhN8289r5uk'` and applies it as the
+final resolution step (env → file → hardcoded). This is the same value
+that `chipotle-client.ts → getActionCid()` has used as its fallback for
+months — both modules now return the same identifier so a fresh node's
+`delegation.actionIpfsId` matches what the chipotle TEE actually executes,
+no `bad_action_cid` mismatch.
+
+The choice of CID matches what is **actually running** in production today:
+existing dDRM assets (including the canary on `zzz.ela.city`) embed this
+exact `Qm…` in their PSSH `actionIpfsId` at mint time, every chipotle path
+on every fresh node has been falling through to this same fallback already,
+and `pc2-node/.env`'s `bafkrei…` value is dead documentation (pc2-node
+never calls `dotenv.config()` so the file is never loaded). Reconciling
+the dotenv loading + rotating to the new sigauth CID is tracked
+separately as a post-1.2.1 cleanup so the hotfix carries zero behaviour
+change for existing assets.
+
+From v1.2.1 onwards, every fresh node is playback-ready out of the box
+without needing to run `deploy-action` or hand-write `data/.lit-action-cid`.
+
+**Same-shipment companion fix — Creator video packaging (`dashPackager.ts`)**
+read `process.env.DDRM_AUTHORITY` with a non-null assertion (`!`), but
+because `pc2-node` never calls `dotenv.config()`, the env var was always
+`undefined` at runtime. Every video packaged by the Creator therefore
+embedded `authority: undefined` into its PSSH JSON. Playback only
+survived because `media.ts` falls back to the URL-param `clientAuthority`
+at decryption time — but if any link / share / archive ever lost that
+URL param, playback would `bad_authority` against the Lit Action. Fix:
+hardcode the same `0x09dBe796f40ECEffEAccf243c3d758C4c1d8D87D` (V3
+AuthorityGateway) constant that `storage.ts` and `chipotle-client.ts`
+already used, with the env var preserved as an operator override for
+future per-deploy authority swaps. All three modules are now in lock-step
+per `.cursor/tasks/V1.3-RELEASE/V1.3-RELEASE.md` checklist.
+
+### Manual recovery on existing v1.2.0 nodes (until they self-update)
+
+```bash
+echo -n "QmX5JxcFhyasptCWMA6unFPm3TRYjPSkJb5HhN8289r5uk" \
+  > ~/pc2.net/pc2-node/data/.lit-action-cid
+pm2 restart pc2     # or: systemctl restart pc2-node
+```
+
+After v1.2.1 ships, the file is no longer required.
+
+---
+
+### 🐛 Critical #1-3: In-app updater is fixed for v1.2.0 → v1.2.1+
+
+The v1.2.0 in-app updater silently fails on every node. Three release
+defects, each independently sufficient to break the upgrade:
+
+- **`git pull` halts on divergent history**: `UpdateService.performUpdate`
+  ran `git pull origin main`, which aborts the moment the local branch
+  has any commits not present on upstream (whether genuine local commits,
+  a stale fork remote, or an upstream history rewrite). Once a node hit
+  this state — e.g. the long-lived Jetson at `zzz.ela.city` showed a
+  5,079-commit divergence — every future in-app update silently failed at
+  the first step, but the UI cheerfully reported "update complete"
+  because the failing step ran in a fire-and-forget background timer.
+  **Fix**: `performUpdate` now uses `git fetch origin main` followed by
+  `git reset --hard origin/main`. The hard reset replaces local HEAD,
+  restores the entire working tree (subsuming the previous `git checkout
+  -- .` step, and recovering any tracked files an earlier broken update
+  half-deleted — e.g. `pc2-node/frontend/pc2-wallet-bridge.js` and the
+  three sibling secure-view scripts), and never attempts a merge.
+- **Missing source file**: `pc2-node/src/sdk/types.ts` is the type module
+  consumed by `ContentIntelligenceService` and `services/media/fingerprint`,
+  but `.gitignore` line 51 (`sdk/`, intended for an unrelated local SDK
+  clone) excludes it. Sibling files in the same directory (`config.ts`,
+  `index.ts`, `types.js`) were force-added, but `types.ts` was missed.
+  Result: every fresh clone has a missing module, `tsc` fails, the new
+  `dist/` is never produced, and the restart serves stale code.
+  **Fix**: force-tracked `pc2-node/src/sdk/types.ts` (8 production-facing
+  type exports — `ContentIntelligenceReport`, `ContentClassification`,
+  `QualityAssessment`, `SafetyAssessment`, `ContentProvenance`,
+  `ContentAnalysisParams`, `PerceptualHashResult`, `HashAlgorithm`).
+- **Hoisted dependencies never installed**: v1.2.0 added dynamic
+  `await import('ethers' | 'siwe' | '@lit-protocol/*')` calls inside
+  pc2-node, but those packages live in **root** `node_modules/` (hoisted
+  from the root `package.json`). `UpdateService.performUpdate` only ran
+  `npm install` in `pc2-node/`, so the hoisted deps were missing on every
+  updated node and the dynamic imports failed at runtime.
+  **Fix**: `UpdateService.performUpdate` now runs `npm install
+  --legacy-peer-deps` at the **project root** before the pc2-node install,
+  and bumps `maxBuffer` to 50 MB on every update step so npm output on
+  slow ARM devices can no longer truncate the install silently.
+
+### Symptom catalog (so operators can self-diagnose)
+
+If a v1.2.0 node was hit by these bugs you may see any of:
+
+- Settings → About still reports `1.2.0` after pressing Update.
+- Browser console inside any dApp window shows
+  `pc2-wallet-bridge.js: 404`, `pc2-wallet-provider.js: 404`,
+  `pc2-secure-view*.js: 404`, followed by *"Refused to execute script
+  …MIME type 'text/html' is not executable"*. With the wallet bridge
+  missing, every dApp falls back to `window.ethereum` (i.e. MetaMask),
+  causing signing prompts from the wrong wallet, blank Elacity Market,
+  and `MetaMask - RPC Error: The method "pc2_getSmartAccountAddress"
+  does not exist / is not available`.
+- pm2 / systemctl shows the node restarting onto an old `dist/index.js`
+  (`stat -c %y dist/index.js` predates the update attempt).
+- Backend log contains `Cannot find module 'ethers'` or
+  `Cannot find module '../sdk/types.js'`.
+
+### Manual recovery on existing v1.2.0 nodes
+
+Any node already running v1.2.0 (or stuck mid-update) can self-repair with:
+
+```bash
+cd ~/pc2.net
+git fetch origin main && git reset --hard origin/main      # force upstream
+npm install --legacy-peer-deps                             # hoisted deps
+cd pc2-node && npm install --legacy-peer-deps --include=dev
+npm run build:backend && cd .. && npm run build:gui
+pm2 restart pc2     # or: systemctl restart pc2-node
+```
+
+After v1.2.1 is installed, the in-app updater performs these steps
+automatically on every subsequent update.
+
+### Verified
+
+- 2026-04-30: Jetson Orin Nano `zzz.ela.city` recovered from a stuck
+  v1.1.0 (5,079-commit divergent fork on local main, last `dist/` build
+  March 3) → clean v1.2.0 → same hotfix sequence applied manually, pm2
+  reports `version: 1.2.0` (now serving 1.2.1 once this release lands),
+  IPFS redials 30+ peers within 10 s, dApp Centre HTML serves on `/`,
+  all four wallet-bridge scripts return `HTTP 200` with content-type
+  `application/javascript`.
+
+---
+
 ## [1.2.0] - 2026-04-21 (in development — `feature/lit-chipotle-migration`)
 
 ### 🔒 Security (P0) — Lit Action Session-Key Delegation

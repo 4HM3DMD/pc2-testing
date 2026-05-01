@@ -16,7 +16,7 @@ import {
 import { Web3Provider } from '../provider/web3-provider';
 
 // BUILD VERSION MARKER - this confirms we're running the latest bundle
-console.log('[Particle Auth Context]: BUILD v2026.03.30.pc2net loaded');
+console.log('[Particle Auth Context]: BUILD v2026.04.30.pc2net.wcsigning-hardening loaded');
 
 // Smart Account Info interface for UniversalX
 interface SmartAccountInfo {
@@ -97,11 +97,49 @@ const ParticleNetworkProvider: React.FC<React.PropsWithChildren<ParticleNetworkC
   // Tracks when a logout-triggered deactivation is pending so handleParticleAuthSuccess
   // can ignore the auto-reconnect auth call that fires before deactivate() completes.
   const isLogoutPendingRef = React.useRef(false);
+  // UX fix (v1.2.1): handleParticleAuthSuccess MUST fire exactly once per
+  // active session. Without this, every re-render of the auth-trigger effect
+  // (smartAccountInfo updates twice in wallet mode, connector resolves
+  // separately) caused another SIWE personal_sign — so users saw 2-3
+  // duplicate "sign to log in" wallet prompts. Reset on disconnect so the
+  // next login can fire again.
+  const authFiredRef = React.useRef(false);
+
+  // WC stale-closure fix (v1.2.1): the signing-mode RPC handler captures
+  // `primaryWallet` and `connector` via closure when its effect first fires.
+  // For WalletConnect users, ConnectKit's reconnectOnMount populates
+  // useAccount() (-> connector) before useWallets() returns the live wagmi
+  // wallet (-> primaryWallet). The in-flight handler's retry loop kept
+  // re-calling resolveSigningProvider() against its stale closure and never
+  // saw the late-arriving primaryWallet, so even though wagmi was healthy
+  // by retry 2, the sign request silently timed out after 9 s. Refs always
+  // point at the latest values regardless of when the handler was bound.
+  const primaryWalletRef = React.useRef(primaryWallet);
+  React.useEffect(() => { primaryWalletRef.current = primaryWallet; }, [primaryWallet]);
+  const connectorRef = React.useRef(connector);
+  React.useEffect(() => { connectorRef.current = connector; }, [connector]);
   
   // Universal Account state
   const [universalAccount, setUniversalAccount] = React.useState<UniversalAccount | null>(null);
   const [smartAccountInfo, setSmartAccountInfo] = React.useState<SmartAccountInfo | undefined>();
   const [primaryAssets, setPrimaryAssets] = React.useState<IAssetsResponse | undefined>();
+
+  // getPrimaryAssets() dedupe (v1.2.1): the desktop sidebar / token list /
+  // chat ready-handler all post `particle-wallet.get-tokens` independently
+  // on every component mount. In a real session log we observed 6+
+  // back-to-back calls in <1s — each one makes a fresh round-trip to
+  // Particle's UA API. Dedupe in two layers:
+  //   (1) in-flight: if a request is already pending, all callers await the
+  //       same promise (no duplicate network).
+  //   (2) cache: 5s TTL on the last successful response. Short enough that
+  //       balances stay fresh after a transaction, long enough to absorb
+  //       the React re-render storm on initial mount.
+  const primaryAssetsCacheRef = React.useRef<{
+    inflight: Promise<IAssetsResponse> | null;
+    value: IAssetsResponse | null;
+    fetchedAt: number;
+  }>({ inflight: null, value: null, fetchedAt: 0 });
+  const PRIMARY_ASSETS_TTL_MS = 5000;
 
   // Mode detection: check URL params for address passed from parent
   const { isWalletMode, isSigningMode, urlEoaAddress, urlSmartAddress, shouldLogout } = React.useMemo(() => {
@@ -282,6 +320,14 @@ const ParticleNetworkProvider: React.FC<React.PropsWithChildren<ParticleNetworkC
       return;
     }
     try {
+      // Compute loginMethod once up front so we can include it in the
+      // SIWE-pending notification AND the eventual success payload.
+      const detectedConnectorId = (connector?.id || connector?.name || '').toLowerCase();
+      const detectedLoginMethod = detectedConnectorId.includes('metamask') ? 'metamask'
+        : detectedConnectorId.includes('walletconnect') ? 'walletconnect'
+        : detectedConnectorId.includes('coinbase') ? 'coinbase'
+        : 'email';
+
       // Build auth payload with Smart Account support
       const authPayload: Record<string, any> = {
         address: eoaAddress,  // EOA address (always present)
@@ -321,8 +367,28 @@ const ParticleNetworkProvider: React.FC<React.PropsWithChildren<ParticleNetworkC
           const challengeRes = await fetch(`${apiOrigin}/auth/challenge?address=${encodeURIComponent(eoaAddress)}`);
           if (challengeRes.ok) {
             const challenge = await challengeRes.json() as { nonce: string; message: string };
-            const provider = await connector?.getProvider();
+            // primaryWallet.connector is the live wagmi connector;
+            // useAccount().connector is a thin descriptor that breaks for WC.
+            const _pwConn = (primaryWallet as any)?.connector;
+            const _acConn = connector as any;
+            const provider = (_pwConn && typeof _pwConn.getProvider === 'function')
+              ? await _pwConn.getProvider()
+              : (_acConn && typeof _acConn.getProvider === 'function' ? await _acConn.getProvider() : undefined);
             if (provider && challenge.message && challenge.nonce) {
+              // UX bridge (#1): tell the parent login modal we're about to
+              // request a signature so it can show a "Verifying wallet
+              // ownership" overlay until success/error fires. Without this,
+              // there's a confusing dead window between wallet-connect and
+              // the wallet's signature popup (especially on Jetson + WC).
+              try {
+                window.parent.postMessage({
+                  type: 'particle-auth.siwe-pending',
+                  payload: { address: eoaAddress, loginMethod: detectedLoginMethod },
+                }, '*');
+              } catch (postErr) {
+                console.warn('[Particle Auth]: Failed to post siwe-pending to parent:', postErr);
+              }
+
               const signature = await (provider as any).request({
                 method: 'personal_sign',
                 params: [challenge.message, eoaAddress],
@@ -372,14 +438,11 @@ const ParticleNetworkProvider: React.FC<React.PropsWithChildren<ParticleNetworkC
       const messageTarget = isInIframe ? window.parent : window;
       
       if (data.success) {
-        // Detect login method from connector type
-        const connectorId = connector?.id || connector?.name || '';
-        const loginMethod = connectorId.toLowerCase().includes('metamask') ? 'metamask'
-          : connectorId.toLowerCase().includes('walletconnect') ? 'walletconnect'
-          : connectorId.toLowerCase().includes('coinbase') ? 'coinbase'
-          : 'email';
-        
-        console.log('[Particle Auth]: Auth SUCCESS, loginMethod:', loginMethod, 'connector:', connectorId);
+        // Reuse the loginMethod computed at the top of this callback so SIWE-pending
+        // and success messages always agree on the connector identity.
+        const loginMethod = detectedLoginMethod;
+
+        console.log('[Particle Auth]: Auth SUCCESS, loginMethod:', loginMethod, 'connector:', detectedConnectorId);
         messageTarget.postMessage({
           type: 'particle-auth.success',
           payload: {
@@ -448,7 +511,11 @@ const ParticleNetworkProvider: React.FC<React.PropsWithChildren<ParticleNetworkC
   // Trigger auth when active AND smart account info is loaded (or after timeout)
   // CRITICAL: Do NOT trigger auth in wallet mode - wallet iframe is for data operations only
   React.useEffect(() => {
-    if (!active) return;
+    if (!active) {
+      // Reset the fire-once guard so the next login can authenticate again.
+      authFiredRef.current = false;
+      return;
+    }
     
     // Skip auth if logout was requested - let logout effect handle disconnect first
     if (shouldLogout) {
@@ -461,34 +528,58 @@ const ParticleNetworkProvider: React.FC<React.PropsWithChildren<ParticleNetworkC
       console.log('[Particle Auth Wallet Mode]: Skipping auth callback (wallet mode)');
       return;
     }
+
+    // Fire-once guard (v1.2.1): without this, smartAccountInfo or connector
+    // changing later in the lifecycle re-runs this effect and fires a SECOND
+    // (or third) SIWE personal_sign on the same login. Users saw 2-3
+    // duplicate wallet prompts. We still allow the effect to RE-SCHEDULE the
+    // setTimeout if the wait window is recomputed (e.g., SA loads early so
+    // we no longer need the 2s wait), but only one timer can ever resolve
+    // into handleParticleAuthSuccess() per session.
+    if (authFiredRef.current) {
+      return;
+    }
     
-    // Wait for Smart Account info to load, but don't wait forever
+    // UX fix (#2): drop the artificial pre-SIWE wait for external wallets.
+    // External wallets (MetaMask/WalletConnect/Coinbase) never produce a
+    // Particle Smart Account in the auth payload, so waiting 2s for one to
+    // arrive is pure dead time — and it's exactly the dead time users see
+    // as a "dark screen" between connect and the second signature prompt
+    // (worst on Jetson + WalletConnect over a slow relay).
+    // Embedded (email/social) logins keep the 2s safety net so the UA SDK
+    // has a chance to attach the Smart Account before we POST.
+    const connectorIdRaw = (connector?.id || connector?.name || '').toLowerCase();
+    const isExternalWallet = ['metamask', 'walletconnect', 'coinbase', 'phantom', 'injected']
+      .some((k) => connectorIdRaw.includes(k));
+    const waitMs = (smartAccountInfo?.smartAccountAddress || isExternalWallet) ? 0 : 2000;
+
     const timeoutId = setTimeout(() => {
+      // Re-check at fire time to win any race with a concurrent re-run.
+      if (authFiredRef.current) return;
+      authFiredRef.current = true;
       handleParticleAuthSuccess();
-    }, smartAccountInfo?.smartAccountAddress ? 0 : 2000); // Wait 2s for Smart Account, or send immediately if available
-    
+    }, waitMs);
+
     return () => clearTimeout(timeoutId);
-  }, [active, smartAccountInfo, handleParticleAuthSuccess, isWalletMode, shouldLogout]);
+  }, [active, smartAccountInfo, handleParticleAuthSuccess, isWalletMode, shouldLogout, connector]);
 
   React.useEffect(() => {
-    // Initialize timeout ID as undefined
-    let timeoutId: ReturnType<typeof setTimeout> | undefined;
-
-    if(active) {
-      const isDisconnecting = localStorage.getItem('disconnect_particle');
-      if((isDisconnecting)) {
+    // The disconnect_particle flag is now consumed at root by connectkit.tsx
+    // (it disables reconnectOnMount for the post-logout boot — the only
+    // reliable way to stop ConnectKit's auto-restore racing with this
+    // effect). This effect remains as a defensive net for the theoretical
+    // case where logout happens in an already-mounted iframe without a page
+    // reload (PC2 always reloads, so this is just belt-and-braces).
+    if (active) {
+      const stillSet = localStorage.getItem('disconnect_particle');
+      if (stillSet) {
         localStorage.removeItem('disconnect_particle');
+        console.log('[Particle Auth]: Late disconnect_particle (active session) — calling deactivate');
         // Set ref BEFORE deactivating so any pending auth setTimeout sees it
         isLogoutPendingRef.current = true;
         deactivate();
       }
     }
-
-    return () => {
-      if (timeoutId !== undefined) {
-        clearTimeout(timeoutId);
-      }
-    };
   }, [deactivate, active]);
 
   // Notify parent that particle-auth iframe is ready (used by WalletService readiness check)
@@ -516,20 +607,59 @@ const ParticleNetworkProvider: React.FC<React.PropsWithChildren<ParticleNetworkC
 
   // ==========================================
   // Signing Mode: Register RPC handler THEN signal ready (single effect to avoid race)
-  // No dependency on `active` — handler calls connector.getProvider() directly.
+  // No dependency on `active` — handler resolves the live wagmi provider on demand.
+  //
+  // CRITICAL: useAccount().connector returns a thin descriptor in Particle's
+  // ConnectKit (no .getProvider method — calling it threw
+  // "je.getProvider is not a function" in production). The real wagmi
+  // Connector instance with .getProvider() lives on useWallets()[0].connector.
+  // Login's SIWE personal_sign already uses that pattern (see line 148).
   // ==========================================
   React.useEffect(() => {
-    if (!isSigningMode || !connector || !connectedEoaAddress) return;
+    if (!isSigningMode || (!primaryWallet && !connector) || !connectedEoaAddress) return;
+
+    const resolveSigningProvider = async (): Promise<unknown> => {
+      // Prefer the wallet returned by useWallets() — that's the live wagmi
+      // Connector with getProvider(). Fall back to useAccount().connector
+      // only if it actually exposes the method (e.g. embedded particle-auth).
+      //
+      // Read both via refs (not closure-captured values): for WC users,
+      // primaryWallet may populate after this handler is registered, and a
+      // closure-captured undefined would never recover. The retry loop is
+      // useless without this — it would just call the same stale closure
+      // six times. See `primaryWalletRef`/`connectorRef` declaration for
+      // full context (v1.2.1 stale-closure fix).
+      const pwConnector = (primaryWalletRef.current as any)?.connector;
+      if (pwConnector && typeof pwConnector.getProvider === 'function') {
+        return await pwConnector.getProvider();
+      }
+      const acConnector = connectorRef.current as any;
+      if (acConnector && typeof acConnector.getProvider === 'function') {
+        return await acConnector.getProvider();
+      }
+      return undefined;
+    };
 
     const handleSigningRpc = async (event: MessageEvent) => {
       const { type, requestId, payload } = event.data || {};
       if (type !== 'particle-signing.rpc') return;
 
       try {
-        const signingProvider = await connector.getProvider();
-        if (!signingProvider) throw new Error('Signer not available — session not restored');
+        let signingProvider = await resolveSigningProvider();
+        // ConnectKit's reconnectOnMount may still be restoring the WC session
+        // when the dApp requests a signature immediately after the iframe
+        // mounts. Retry up to ~9s for the wagmi connector to settle.
+        if (!signingProvider) {
+          for (let attempt = 0; attempt < 6 && !signingProvider; attempt++) {
+            console.log('[Particle Signing Handler] Provider not ready, retrying...', attempt + 1);
+            await new Promise(r => setTimeout(r, 1500));
+            signingProvider = await resolveSigningProvider();
+          }
+        }
+        if (!signingProvider) throw new Error('Signer not available — session not restored. Open Essentials, reconnect to PC2, then try again.');
 
-        const { method: rpcMethod, params: rpcParams } = payload;
+        const { method: rpcMethod } = payload;
+        let rpcParams = payload.params;
 
         if (rpcMethod === 'eth_accounts' || rpcMethod === 'eth_requestAccounts') {
           window.parent.postMessage({
@@ -564,15 +694,45 @@ const ParticleNetworkProvider: React.FC<React.PropsWithChildren<ParticleNetworkC
           rpcParams[0] = cleanParams;
         }
 
-        console.log('[Particle Signing Handler] Calling provider.request:', rpcMethod);
-        const rpcResult = await (signingProvider as any).request({ method: rpcMethod, params: rpcParams });
-        console.log('[Particle Signing Handler] RPC result for', rpcMethod, ':', typeof rpcResult === 'string' ? rpcResult.substring(0, 20) + '...' : rpcResult);
+        // Defence-in-depth signer normalisation. The parent already rewrites
+        // SA→EOA before posting, but in case a dApp routes a sign request
+        // through a different code path, make sure WalletConnect / MetaMask
+        // sees an address it actually owns — otherwise the wallet silently
+        // drops the request (no popup, no error).
+        const SIGN_TYPED_DATA = ['eth_signTypedData', 'eth_signTypedData_v3', 'eth_signTypedData_v4'];
+        if (rpcMethod === 'personal_sign' && Array.isArray(rpcParams)) {
+          const signerInParams = (rpcParams[1] || '').toString().toLowerCase();
+          const expectedSigner = (connectedEoaAddress || '').toLowerCase();
+          if (expectedSigner && signerInParams !== expectedSigner) {
+            console.warn('[Particle Signing Handler] personal_sign signer mismatch — rewriting from', signerInParams || '(empty)', 'to', expectedSigner);
+            rpcParams = [...rpcParams];
+            rpcParams[1] = connectedEoaAddress;
+          }
+        }
+        if ((SIGN_TYPED_DATA.indexOf(rpcMethod) !== -1 || rpcMethod === 'eth_sign') && Array.isArray(rpcParams)) {
+          const signerInParams = (rpcParams[0] || '').toString().toLowerCase();
+          const expectedSigner = (connectedEoaAddress || '').toLowerCase();
+          if (expectedSigner && signerInParams !== expectedSigner) {
+            console.warn('[Particle Signing Handler]', rpcMethod, 'signer mismatch — rewriting from', signerInParams || '(empty)', 'to', expectedSigner);
+            rpcParams = [...rpcParams];
+            rpcParams[0] = connectedEoaAddress;
+          }
+        }
 
-        window.parent.postMessage({
-          type: 'particle-signing.rpc-result',
-          requestId,
-          payload: { result: rpcResult },
-        }, '*');
+        const signingConnectorId = (connector as any)?.id || (connector as any)?.name || 'unknown';
+        console.log('[Particle Signing Handler] Calling provider.request:', rpcMethod, 'via', signingConnectorId);
+        try {
+          const rpcResult = await (signingProvider as any).request({ method: rpcMethod, params: rpcParams });
+          console.log('[Particle Signing Handler] RPC result for', rpcMethod, ':', typeof rpcResult === 'string' ? rpcResult.substring(0, 20) + '...' : rpcResult);
+          window.parent.postMessage({
+            type: 'particle-signing.rpc-result',
+            requestId,
+            payload: { result: rpcResult },
+          }, '*');
+        } catch (signingErr: any) {
+          console.error('[Particle Signing Handler]', rpcMethod, 'FAILED via', signingConnectorId, '— code:', signingErr?.code, '— msg:', signingErr?.message);
+          throw signingErr;
+        }
       } catch (error: any) {
         console.error('[Particle Signing Handler] Error:', error);
         window.parent.postMessage({
@@ -593,7 +753,7 @@ const ParticleNetworkProvider: React.FC<React.PropsWithChildren<ParticleNetworkC
     }, '*');
 
     return () => window.removeEventListener('message', handleSigningRpc);
-  }, [isSigningMode, connector, connectedEoaAddress]);
+  }, [isSigningMode, connector, connectedEoaAddress, primaryWallet]);
 
   // ==========================================
   // Wallet Data Request Handlers (for Account Sidebar)
@@ -623,20 +783,47 @@ const ParticleNetworkProvider: React.FC<React.PropsWithChildren<ParticleNetworkC
           case 'particle-wallet.get-tokens': {
             // Fetch tokens from Universal Account primary assets
             console.log('[Particle Auth]: get-tokens handler called, universalAccount:', !!universalAccount);
-            console.log('[Particle Auth]: Calling getPrimaryAssets()...');
-            
-            // Add timeout to detect hanging calls
-            const timeoutPromise = new Promise((_, reject) => 
+
+            const cache = primaryAssetsCacheRef.current;
+            const now = Date.now();
+
+            const isCacheFresh = !!cache.value && (now - cache.fetchedAt) < PRIMARY_ASSETS_TTL_MS;
+            if (isCacheFresh) {
+              console.log('[Particle Auth]: getPrimaryAssets() cache HIT (age',
+                Math.round((now - cache.fetchedAt) / 100) / 10, 's) — skipping network');
+            } else if (cache.inflight) {
+              console.log('[Particle Auth]: getPrimaryAssets() join in-flight request');
+            } else {
+              console.log('[Particle Auth]: Calling getPrimaryAssets()...');
+            }
+
+            const timeoutPromise = new Promise((_, reject) =>
               setTimeout(() => reject(new Error('getPrimaryAssets() timed out after 15s')), 15000)
             );
-            
+
             let assets: any;
             try {
-              assets = await Promise.race([
-                universalAccount.getPrimaryAssets(),
-                timeoutPromise
-              ]);
-              console.log('[Particle Auth]: getPrimaryAssets() succeeded:', JSON.stringify(assets, null, 2));
+              if (isCacheFresh) {
+                assets = cache.value;
+              } else {
+                if (!cache.inflight) {
+                  cache.inflight = (async () => {
+                    try {
+                      const result = await Promise.race([
+                        universalAccount.getPrimaryAssets(),
+                        timeoutPromise,
+                      ]) as IAssetsResponse;
+                      cache.value = result;
+                      cache.fetchedAt = Date.now();
+                      return result;
+                    } finally {
+                      cache.inflight = null;
+                    }
+                  })();
+                }
+                assets = await cache.inflight;
+                console.log('[Particle Auth]: getPrimaryAssets() succeeded (assets cached for', PRIMARY_ASSETS_TTL_MS, 'ms)');
+              }
             } catch (fetchError: any) {
               console.error('[Particle Auth]: getPrimaryAssets() FAILED:', fetchError.message || fetchError);
               // Return empty response on error
@@ -1088,7 +1275,14 @@ const ParticleNetworkProvider: React.FC<React.PropsWithChildren<ParticleNetworkC
           }
 
           case 'particle-wallet.eth-send-transaction': {
-            const provider = await connector?.getProvider();
+            // Same primaryWallet-first resolution as eoa-send / rpc — see
+            // commentary above for why useAccount().connector cannot be used
+            // for WalletConnect provider access in Particle ConnectKit.
+            const pwConn = (primaryWallet as any)?.connector;
+            const acConn = connector as any;
+            const provider = (pwConn && typeof pwConn.getProvider === 'function')
+              ? await pwConn.getProvider()
+              : (acConn && typeof acConn.getProvider === 'function' ? await acConn.getProvider() : undefined);
             if (!provider) throw new Error('No wallet provider available');
 
             const txParams = { ...payload.txParams, from: connectedEoaAddress };
@@ -1106,29 +1300,82 @@ const ParticleNetworkProvider: React.FC<React.PropsWithChildren<ParticleNetworkC
           }
 
           case 'particle-wallet.eoa-send': {
-            console.log('[Particle Wallet Handler] eoa-send: connector?', !!connector, 'connectedEoa?', connectedEoaAddress, 'method?', payload.method);
-            let eoaProvider = await connector?.getProvider();
+            // Prefer useWallets()[0].connector — it's the live wagmi connector
+            // exposing .getProvider(). useAccount().connector is just a thin
+            // descriptor in Particle ConnectKit and threw
+            // "getProvider is not a function" for WalletConnect users.
+            const connectorIdForLog = (primaryWallet as any)?.connector?.id
+              || (primaryWallet as any)?.connector?.name
+              || (connector as any)?.id
+              || (connector as any)?.name
+              || 'unknown';
+            console.log('[Particle Wallet Handler] eoa-send: connector=', connectorIdForLog, 'connectedEoa?', connectedEoaAddress, 'method?', payload.method);
+            const resolveEoaProvider = async (): Promise<unknown> => {
+              const pw = (primaryWallet as any)?.connector;
+              if (pw && typeof pw.getProvider === 'function') return await pw.getProvider();
+              const ac = connector as any;
+              if (ac && typeof ac.getProvider === 'function') return await ac.getProvider();
+              return undefined;
+            };
+            let eoaProvider = await resolveEoaProvider();
             if (!eoaProvider) {
-              for (let attempt = 0; attempt < 3 && !eoaProvider; attempt++) {
-                console.log('[Particle Wallet Handler] Provider not ready, retrying...', attempt + 1);
+              // For WalletConnect users, ConnectKit's reconnectOnMount may still be running.
+              // Wait up to ~9s (6 × 1.5s) for the WC session to restore from localStorage (wc@* keys).
+              for (let attempt = 0; attempt < 6 && !eoaProvider; attempt++) {
+                console.log('[Particle Wallet Handler] Provider not ready (WC autoConnect in progress?), retrying...', attempt + 1);
                 await new Promise(r => setTimeout(r, 1500));
-                eoaProvider = await connector?.getProvider();
+                eoaProvider = await resolveEoaProvider();
               }
             }
-            if (!eoaProvider) throw new Error('No wallet provider available — session may not be restored. Try logging out and back in.');
+            if (!eoaProvider) {
+              throw new Error(`No wallet provider available — ConnectKit did not restore session for connector "${connectorIdForLog}". For WalletConnect, the session may have expired on the wallet side; please open Essentials and reconnect.`);
+            }
 
             if (payload.method === 'personal_sign') {
-              console.log('[Particle Wallet Handler] personal_sign request via eoa-send');
-              const signResult = await (eoaProvider as any).request({
-                method: 'personal_sign',
-                params: payload.params,
-              });
-              console.log('[Particle Wallet Handler] personal_sign result:', signResult?.substring(0, 20) + '...');
-              window.parent.postMessage({
-                type: 'particle-wallet.eoa-send-result',
-                requestId,
-                payload: { signature: signResult, txHash: signResult },
-              }, '*');
+              // Normalise params: dApps sometimes pass [message, smartAccountAddress]
+              // because they read the wallet address from window.user. The WC
+              // connector only knows the EOA owner — Essentials will silently
+              // drop the request if asked to sign with an address it doesn't
+              // recognise. Always sign with the connected EOA so the user
+              // actually sees a popup.
+              const incomingParams = Array.isArray(payload.params) ? [...payload.params] : [];
+              const signerInParams = (incomingParams[1] || '').toLowerCase();
+              const expectedSigner = (connectedEoaAddress || '').toLowerCase();
+              if (signerInParams && expectedSigner && signerInParams !== expectedSigner) {
+                console.warn(
+                  '[Particle Wallet Handler] personal_sign signer mismatch — dApp asked for',
+                  signerInParams, 'but connector only knows', expectedSigner,
+                  '— rewriting params[1] so the WC wallet actually pops up'
+                );
+                incomingParams[1] = connectedEoaAddress;
+              } else if (!signerInParams && connectedEoaAddress) {
+                incomingParams[1] = connectedEoaAddress;
+              }
+
+              console.log(
+                '[Particle Wallet Handler] personal_sign via',
+                connectorIdForLog,
+                '— signer:', incomingParams[1],
+                '— msg preview:', String(incomingParams[0] || '').slice(0, 80)
+              );
+              try {
+                const signResult = await (eoaProvider as any).request({
+                  method: 'personal_sign',
+                  params: incomingParams,
+                });
+                console.log('[Particle Wallet Handler] personal_sign result:', signResult?.substring(0, 20) + '...');
+                window.parent.postMessage({
+                  type: 'particle-wallet.eoa-send-result',
+                  requestId,
+                  payload: { signature: signResult, txHash: signResult },
+                }, '*');
+              } catch (signErr: any) {
+                console.error(
+                  '[Particle Wallet Handler] personal_sign FAILED via', connectorIdForLog,
+                  '— code:', signErr?.code, '— msg:', signErr?.message
+                );
+                throw signErr;
+              }
               break;
             }
 
@@ -1164,7 +1411,17 @@ const ParticleNetworkProvider: React.FC<React.PropsWithChildren<ParticleNetworkC
           }
 
           case 'particle-wallet.rpc': {
-            const { method: walletRpcMethod, params: walletRpcParams } = payload;
+            const walletRpcMethod = payload.method;
+            // `let` (not `const`): signer-normalisation below may rebind to a
+            // mutated copy. The previous `const` destructure threw a silent
+            // TypeError that surfaced as "no signer popup".
+            let walletRpcParams = payload.params;
+            const rpcConnectorId = (primaryWallet as any)?.connector?.id
+              || (primaryWallet as any)?.connector?.name
+              || (connector as any)?.id
+              || (connector as any)?.name
+              || 'unknown';
+            console.log('[Particle Wallet RPC] connector=', rpcConnectorId, 'method=', walletRpcMethod);
 
             if (walletRpcMethod === 'eth_accounts' || walletRpcMethod === 'eth_requestAccounts') {
               window.parent.postMessage({
@@ -1184,8 +1441,58 @@ const ParticleNetworkProvider: React.FC<React.PropsWithChildren<ParticleNetworkC
               break;
             }
 
-            const walletProvider = await connector?.getProvider();
-            if (!walletProvider) throw new Error('No provider available');
+            // Same retry policy as eoa-send: ConnectKit's reconnectOnMount may
+            // still be restoring the WC session from localStorage when a dApp
+            // requests a signature immediately after page load. Throwing
+            // "No provider available" instantly produced silent failures
+            // (the parent's overlay just sat there until the 45 s timeout).
+            //
+            // Prefer useWallets()[0].connector — that's the live wagmi
+            // connector exposing .getProvider(). useAccount().connector is a
+            // descriptor and threw "getProvider is not a function".
+            const resolveWalletProvider = async (): Promise<unknown> => {
+              // Read via refs, not closure: the wallet-mode handler has the
+              // same stale-closure pitfall as the signing-mode handler — for
+              // WC users, primaryWallet/connector can populate AFTER this
+              // resolver is created, and a closure-captured undefined would
+              // never recover across the retry loop below. See
+              // `primaryWalletRef`/`connectorRef` declaration (v1.2.1 fix).
+              const pw = (primaryWalletRef.current as any)?.connector;
+              if (pw && typeof pw.getProvider === 'function') return await pw.getProvider();
+              const ac = connectorRef.current as any;
+              if (ac && typeof ac.getProvider === 'function') return await ac.getProvider();
+              return undefined;
+            };
+            let walletProvider = await resolveWalletProvider();
+            if (!walletProvider) {
+              for (let attempt = 0; attempt < 6 && !walletProvider; attempt++) {
+                console.log('[Particle Wallet RPC] Provider not ready, retrying...', attempt + 1);
+                await new Promise(r => setTimeout(r, 1500));
+                walletProvider = await resolveWalletProvider();
+              }
+            }
+            if (!walletProvider) {
+              throw new Error(`No wallet provider available — ConnectKit did not restore session for connector "${rpcConnectorId}". For WalletConnect, the session may have expired on the wallet side; please open Essentials and reconnect.`);
+            }
+
+            // Normalise the signer slot for typed-data / eth_sign so external
+            // wallets actually see a signer they recognise (mirrors the same
+            // fix applied to personal_sign in the eoa-send case).
+            const TYPED_DATA = ['eth_signTypedData', 'eth_signTypedData_v3', 'eth_signTypedData_v4'];
+            if (TYPED_DATA.indexOf(walletRpcMethod) !== -1 || walletRpcMethod === 'eth_sign') {
+              const incoming = Array.isArray(walletRpcParams) ? [...walletRpcParams] : [];
+              const signerInParams = (incoming[0] || '').toString().toLowerCase();
+              const expectedSigner = (connectedEoaAddress || '').toLowerCase();
+              if (expectedSigner && signerInParams !== expectedSigner) {
+                console.warn(
+                  '[Particle Wallet RPC]', walletRpcMethod, 'signer mismatch — dApp asked for',
+                  signerInParams || '(empty)', 'but connector only knows', expectedSigner,
+                  '— rewriting params[0] so the wallet actually pops up'
+                );
+                incoming[0] = connectedEoaAddress;
+                walletRpcParams = incoming;
+              }
+            }
 
             if (walletRpcMethod === 'eth_sendTransaction' && walletRpcParams?.[0]?.chainId) {
               const targetChainHex = walletRpcParams[0].chainId;
@@ -1201,14 +1508,22 @@ const ParticleNetworkProvider: React.FC<React.PropsWithChildren<ParticleNetworkC
               walletRpcParams[0] = cleanParams;
             }
 
-            console.log('[Particle Wallet RPC] Calling provider.request:', walletRpcMethod);
-            const walletRpcResult = await (walletProvider as any).request({ method: walletRpcMethod, params: walletRpcParams });
-            console.log('[Particle Wallet RPC] Result:', walletRpcMethod, typeof walletRpcResult === 'string' ? walletRpcResult.substring(0, 20) + '...' : walletRpcResult);
-            window.parent.postMessage({
-              type: 'particle-wallet.rpc-result',
-              requestId,
-              payload: { result: walletRpcResult },
-            }, '*');
+            console.log('[Particle Wallet RPC] Calling provider.request:', walletRpcMethod, 'via', rpcConnectorId);
+            try {
+              const walletRpcResult = await (walletProvider as any).request({ method: walletRpcMethod, params: walletRpcParams });
+              console.log('[Particle Wallet RPC] Result:', walletRpcMethod, typeof walletRpcResult === 'string' ? walletRpcResult.substring(0, 20) + '...' : walletRpcResult);
+              window.parent.postMessage({
+                type: 'particle-wallet.rpc-result',
+                requestId,
+                payload: { result: walletRpcResult },
+              }, '*');
+            } catch (rpcErr: any) {
+              console.error(
+                '[Particle Wallet RPC]', walletRpcMethod, 'FAILED via', rpcConnectorId,
+                '— code:', rpcErr?.code, '— msg:', rpcErr?.message
+              );
+              throw rpcErr;
+            }
             break;
           }
 
