@@ -112,7 +112,11 @@
         el.setAttribute('role', 'region');
         el.setAttribute('aria-live', 'polite');
         el.setAttribute('aria-label', 'Notifications');
-        document.body.appendChild(el);
+        // Anchor inside .enm-main so position:absolute lands below the
+        // chrome (titlebar + tabs) without us needing to know their
+        // height. Falls back to body if .enm-main isn't present yet.
+        var host = document.querySelector('.enm-main') || document.body;
+        host.appendChild(el);
         return el;
     }
 

@@ -4,10 +4,15 @@
  *
  * Elastos Node Manager — stylesheet.
  *
- * Design tokens mirror dao-dashboard so both apps look like they belong in
- * the same desktop. Layout uses a simple 3-row grid (titlebar / tabs / main)
- * inside a full-height .enm-app — no `position: fixed`, so PC2's window
- * manager owns minimize / maximize / resize without us interfering.
+ * Layout: 3-row grid (titlebar / tabs / main) anchored to 100% width and
+ * height of the iframe. PC2's window manager owns minimize / maximize /
+ * resize — we don't use position:fixed for layout chrome, so the host can
+ * shrink us to any size without our content escaping.
+ *
+ * Design language matches dao-dashboard's tokens so both apps look like
+ * they belong in the same desktop. Apple-style polish: focus-visible
+ * rings, subtle press states, container queries on cards, motion-reduce
+ * respect, dark-mode parity.
  */
 
 * {
@@ -17,34 +22,39 @@
 }
 
 :root {
+    color-scheme: light dark;
+
     /* ---- color tokens (light) ---- */
     --bg-page: #f8fafc;
     --bg-surface: #ffffff;
     --bg-muted: #f1f5f9;
+    --bg-elevated: #ffffff;
     --bg-code: #0f172a;
     --border-color: #e2e8f0;
     --border-strong: #cbd5e1;
-    --text-primary: #1e293b;
-    --text-secondary: #64748b;
+    --text-primary: #0f172a;
+    --text-secondary: #475569;
     --text-muted: #94a3b8;
     --text-inverse: #f8fafc;
 
     --primary: #3b82f6;
     --primary-hover: #2563eb;
+    --primary-active: #1d4ed8;
     --primary-soft: rgba(59, 130, 246, 0.10);
+    --primary-softer: rgba(59, 130, 246, 0.06);
 
-    --success: #22c55e;
-    --warning: #f97316;
-    --error: #ef4444;
-    --healing: #8b5cf6;
+    --success: #16a34a;
+    --warning: #ea580c;
+    --error: #dc2626;
+    --healing: #7c3aed;
 
-    /* chain-state palette — matches the 6 PRODUCER_STATES + recovering */
-    --state-healthy: #22c55e;
+    /* chain-state palette */
+    --state-healthy: #16a34a;
     --state-syncing: #3b82f6;
-    --state-stalled: #f97316;
+    --state-stalled: #ea580c;
     --state-stopped: #94a3b8;
-    --state-error: #ef4444;
-    --state-recovering: #8b5cf6;
+    --state-error: #dc2626;
+    --state-recovering: #7c3aed;
     --state-unconfigured: #94a3b8;
 
     /* ---- layout tokens ---- */
@@ -53,36 +63,75 @@
     --spacing-md: 16px;
     --spacing-lg: 24px;
     --spacing-xl: 32px;
+    --spacing-2xl: 48px;
 
     --radius-sm: 6px;
-    --radius-md: 8px;
-    --radius-lg: 12px;
-    --radius-xl: 16px;
+    --radius-md: 10px;
+    --radius-lg: 14px;
+    --radius-xl: 18px;
+    --radius-pill: 999px;
 
-    --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
-    --shadow-md: 0 4px 12px rgba(15, 23, 42, 0.08);
-    --shadow-lg: 0 12px 32px rgba(15, 23, 42, 0.12);
+    --shadow-xs: 0 1px 2px rgba(15, 23, 42, 0.04);
+    --shadow-sm: 0 1px 3px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.04);
+    --shadow-md: 0 4px 12px rgba(15, 23, 42, 0.08), 0 2px 4px rgba(15, 23, 42, 0.04);
+    --shadow-lg: 0 16px 40px rgba(15, 23, 42, 0.16), 0 4px 12px rgba(15, 23, 42, 0.06);
+
+    --focus-ring-color: rgba(59, 130, 246, 0.45);
+    --focus-ring: 0 0 0 3px var(--focus-ring-color);
 
     --titlebar-height: 44px;
     --tabs-height: 40px;
+
+    --motion-fast: 120ms;
+    --motion-base: 180ms;
+    --motion-slow: 280ms;
+    --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+    --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --bg-page: #0b1220;
+        --bg-surface: #111827;
+        --bg-muted: #1e293b;
+        --bg-elevated: #1f2937;
+        --bg-code: #020617;
+        --border-color: #1f2937;
+        --border-strong: #334155;
+        --text-primary: #f1f5f9;
+        --text-secondary: #cbd5e1;
+        --text-muted: #64748b;
+        --primary-soft: rgba(59, 130, 246, 0.16);
+        --primary-softer: rgba(59, 130, 246, 0.08);
+        --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.3);
+        --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.35);
+        --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+        --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.5);
+    }
 }
 
 /* ============================================================
-   Root layout — height-100% chain so minimize works correctly
+   Root layout
    ============================================================ */
 
 html, body {
     width: 100%;
     height: 100%;
     overflow: hidden;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
-        Oxygen, Ubuntu, Cantarell, sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI',
+        Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
     font-size: 14px;
+    font-feature-settings: 'cv11', 'ss01', 'ss03';
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
     background: var(--bg-page);
     color: var(--text-primary);
 }
 
-#app, .enm-app {
+/* No `#app` here — using a class keeps specificity low so the
+   `:has(.enm-tabs[hidden])` override below can win without !important. */
+.enm-app {
     width: 100%;
     height: 100%;
     display: grid;
@@ -90,28 +139,55 @@ html, body {
     background: var(--bg-page);
 }
 
+/* When the tabs nav is hidden (during boot / wizard), drop its row entirely.
+   `display: none` removes the element from the grid, so we'd otherwise leave
+   a stranded empty track — and auto-placement would dump .enm-main into the
+   tabs row. Two rows here, .enm-main lands in the right slot. */
+.enm-app:has(.enm-tabs[hidden]) {
+    grid-template-rows: var(--titlebar-height) 1fr;
+}
+
+/* The HTML `hidden` attribute should always win over our own display rules.
+   Without this, `.enm-tabs { display: flex }` / `.enm-spinner { display: flex }` etc.
+   override the user-agent's `[hidden] { display: none }` and elements bleed through. */
+[hidden] { display: none !important; }
+
+/* Universal focus ring — keyboard-only, doesn't fire on mouse press. */
+:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+    border-radius: var(--radius-sm);
+}
+
 /* ============================================================
-   Title bar — app name + version pill + wallet badge
+   Title bar
    ============================================================ */
 
 .enm-titlebar {
     display: flex;
     align-items: center;
-    gap: var(--spacing-md);
+    gap: var(--spacing-sm);
     padding: 0 var(--spacing-md);
     background: var(--bg-surface);
     border-bottom: 1px solid var(--border-color);
+    min-width: 0;
 }
 
 .enm-titlebar h1 {
     font-size: 14px;
     font-weight: 600;
+    letter-spacing: -0.01em;
     color: var(--text-primary);
-    margin: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex-shrink: 1;
+    min-width: 0;
 }
 
 .enm-titlebar .enm-spacer {
     flex: 1;
+    min-width: var(--spacing-sm);
 }
 
 .enm-badge {
@@ -122,8 +198,10 @@ html, body {
     color: var(--primary);
     font-size: 11px;
     font-weight: 600;
-    border-radius: 999px;
+    letter-spacing: 0.01em;
+    border-radius: var(--radius-pill);
     line-height: 1.6;
+    flex-shrink: 0;
 }
 
 .enm-wallet-badge {
@@ -136,12 +214,17 @@ html, body {
     border-radius: var(--radius-md);
     color: var(--text-secondary);
     font-size: 12px;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
+    max-width: 180px;
+    transition: background var(--motion-base) var(--ease-out),
+                border-color var(--motion-base) var(--ease-out),
+                color var(--motion-base) var(--ease-out);
+    flex-shrink: 0;
 }
 
 .enm-wallet-badge[data-state="connected"] {
     background: var(--primary-soft);
-    border-color: var(--primary);
+    border-color: transparent;
     color: var(--primary);
 }
 
@@ -150,37 +233,67 @@ html, body {
     height: 6px;
     border-radius: 50%;
     background: var(--text-muted);
+    flex-shrink: 0;
+    transition: background var(--motion-base) var(--ease-out);
 }
 
 .enm-wallet-badge[data-state="connected"] .enm-wallet-dot {
     background: var(--success);
+    box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.18);
+}
+
+#enm-wallet-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
 }
 
 /* ============================================================
-   Tab bar
+   Tab bar — animated underline indicator
    ============================================================ */
 
 .enm-tabs {
     display: flex;
     align-items: stretch;
-    gap: 2px;
-    padding: 0 var(--spacing-md);
+    gap: 0;
+    padding: 0 var(--spacing-sm);
     background: var(--bg-surface);
     border-bottom: 1px solid var(--border-color);
+    overflow-x: auto;
+    scrollbar-width: none;
 }
 
+.enm-tabs::-webkit-scrollbar { display: none; }
+
 .enm-tabs button {
+    position: relative;
     display: inline-flex;
     align-items: center;
     padding: 0 var(--spacing-md);
     background: transparent;
     border: none;
-    border-bottom: 2px solid transparent;
     font: inherit;
     font-weight: 500;
     color: var(--text-secondary);
     cursor: pointer;
-    transition: color 0.15s, border-color 0.15s;
+    transition: color var(--motion-fast) var(--ease-out);
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.enm-tabs button::after {
+    content: '';
+    position: absolute;
+    left: var(--spacing-sm);
+    right: var(--spacing-sm);
+    bottom: 0;
+    height: 2px;
+    background: var(--primary);
+    border-radius: 2px 2px 0 0;
+    transform: scaleX(0);
+    transform-origin: center;
+    transition: transform var(--motion-base) var(--ease-out);
 }
 
 .enm-tabs button:hover {
@@ -189,16 +302,24 @@ html, body {
 
 .enm-tabs button[aria-selected="true"] {
     color: var(--primary);
-    border-bottom-color: var(--primary);
+}
+
+.enm-tabs button[aria-selected="true"]::after {
+    transform: scaleX(1);
+}
+
+.enm-tabs button:focus-visible {
+    box-shadow: inset var(--focus-ring);
+    border-radius: var(--radius-sm);
 }
 
 /* ============================================================
-   Main content area + per-pane scroll
+   Main + per-pane scroll
    ============================================================ */
 
 .enm-main {
-    overflow: hidden;
     position: relative;
+    overflow: hidden;
     min-height: 0;
 }
 
@@ -206,12 +327,20 @@ html, body {
     width: 100%;
     height: 100%;
     overflow: hidden;
+    display: grid;
+    grid-template-rows: 1fr;
+    grid-template-columns: 1fr;
+}
+
+.enm-content > .enm-pane {
+    grid-area: 1 / 1;
 }
 
 .enm-pane {
     width: 100%;
     height: 100%;
     overflow: auto;
+    overscroll-behavior: contain;
     padding: var(--spacing-lg);
 }
 
@@ -222,7 +351,7 @@ html, body {
 .enm-stub {
     color: var(--text-muted);
     font-size: 14px;
-    padding: var(--spacing-lg);
+    padding: var(--spacing-2xl) var(--spacing-lg);
     text-align: center;
 }
 
@@ -248,18 +377,18 @@ html, body {
 }
 
 .enm-spinner-dot {
-    width: 10px;
-    height: 10px;
+    width: 8px;
+    height: 8px;
     border-radius: 50%;
     background: var(--primary);
-    animation: enm-bounce 1.4s infinite ease-in-out both;
+    animation: enm-bounce 1.2s infinite var(--ease-in-out);
 }
 
-.enm-spinner-dot:nth-child(1) { animation-delay: -0.32s; }
-.enm-spinner-dot:nth-child(2) { animation-delay: -0.16s; }
+.enm-spinner-dot:nth-child(1) { animation-delay: -0.24s; }
+.enm-spinner-dot:nth-child(2) { animation-delay: -0.12s; }
 
 @keyframes enm-bounce {
-    0%, 80%, 100% { transform: scale(0.5); opacity: 0.5; }
+    0%, 80%, 100% { transform: scale(0.5); opacity: 0.4; }
     40%           { transform: scale(1.0); opacity: 1; }
 }
 
@@ -273,7 +402,7 @@ html, body {
     max-width: 520px;
     padding: var(--spacing-lg);
     background: var(--bg-surface);
-    border: 1px solid var(--error);
+    border: 1px solid var(--border-color);
     border-left: 4px solid var(--error);
     border-radius: var(--radius-md);
     color: var(--text-primary);
@@ -284,16 +413,18 @@ html, body {
     font-weight: 600;
     margin-bottom: var(--spacing-sm);
     color: var(--error);
+    font-size: 15px;
+    letter-spacing: -0.01em;
 }
 
 .enm-error-detail {
-    font-size: 12px;
+    font-size: 13px;
     color: var(--text-secondary);
-    line-height: 1.5;
+    line-height: 1.6;
 }
 
 /* ============================================================
-   Card — base for system status, chain card, wizard, settings
+   Card surfaces — single source of truth
    ============================================================ */
 
 .enm-card,
@@ -306,12 +437,10 @@ html, body {
     background: var(--bg-surface);
     border: 1px solid var(--border-color);
     border-radius: var(--radius-lg);
-    box-shadow: var(--shadow-sm);
+    box-shadow: var(--shadow-xs);
 }
 
-.enm-card {
-    padding: var(--spacing-lg);
-}
+.enm-card { padding: var(--spacing-lg); }
 
 /* ============================================================
    System status — top strip
@@ -332,13 +461,14 @@ html, body {
     gap: 4px;
     padding: var(--spacing-md);
     background: var(--bg-surface);
+    min-width: 0;
 }
 
 .enm-sys-label {
     font-size: 11px;
     font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.06em;
     color: var(--text-muted);
 }
 
@@ -347,23 +477,36 @@ html, body {
     font-weight: 500;
     color: var(--text-primary);
     font-variant-numeric: tabular-nums;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 /* ============================================================
-   Chain cards
+   Chain cards — container queries for true component responsiveness
    ============================================================ */
 
 .enm-chains-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(min(360px, 100%), 1fr));
     gap: var(--spacing-lg);
 }
 
 .enm-chain-card {
+    container-type: inline-size;
     padding: var(--spacing-lg);
     display: flex;
     flex-direction: column;
     gap: var(--spacing-md);
+    transition: transform var(--motion-base) var(--ease-out),
+                box-shadow var(--motion-base) var(--ease-out),
+                border-color var(--motion-base) var(--ease-out);
+}
+
+.enm-chain-card:hover {
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-md);
+    border-color: var(--border-strong);
 }
 
 .enm-chain-card-head {
@@ -371,11 +514,13 @@ html, body {
     align-items: center;
     justify-content: space-between;
     gap: var(--spacing-sm);
+    flex-wrap: wrap;
 }
 
 .enm-chain-card-name {
     font-size: 16px;
     font-weight: 600;
+    letter-spacing: -0.01em;
     color: var(--text-primary);
     text-transform: capitalize;
 }
@@ -385,11 +530,11 @@ html, body {
     align-items: center;
     gap: 6px;
     padding: 4px 10px;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     font-size: 11px;
     font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.04em;
+    letter-spacing: 0.06em;
     background: rgba(148, 163, 184, 0.12);
     color: var(--text-secondary);
 }
@@ -402,16 +547,25 @@ html, body {
     background: currentColor;
 }
 
-.enm-chain-badge-healthy    { background: rgba(34, 197, 94, 0.12);   color: var(--state-healthy); }
+.enm-chain-badge-healthy    { background: rgba(22, 163, 74, 0.12);   color: var(--state-healthy); }
 .enm-chain-badge-syncing    { background: rgba(59, 130, 246, 0.12);  color: var(--state-syncing); }
-.enm-chain-badge-stalled    { background: rgba(249, 115, 22, 0.12);  color: var(--state-stalled); }
+.enm-chain-badge-stalled    { background: rgba(234, 88, 12, 0.12);   color: var(--state-stalled); }
 .enm-chain-badge-stopped    { background: rgba(148, 163, 184, 0.16); color: var(--state-stopped); }
-.enm-chain-badge-error      { background: rgba(239, 68, 68, 0.12);   color: var(--state-error); }
-.enm-chain-badge-recovering { background: rgba(139, 92, 246, 0.12);  color: var(--state-recovering); }
+.enm-chain-badge-error      { background: rgba(220, 38, 38, 0.12);   color: var(--state-error); }
+.enm-chain-badge-recovering { background: rgba(124, 58, 237, 0.12);  color: var(--state-recovering); }
+
+@media (prefers-color-scheme: dark) {
+    .enm-chain-badge-healthy    { background: rgba(22, 163, 74, 0.22); }
+    .enm-chain-badge-syncing    { background: rgba(59, 130, 246, 0.22); }
+    .enm-chain-badge-stalled    { background: rgba(234, 88, 12, 0.22); }
+    .enm-chain-badge-stopped    { background: rgba(148, 163, 184, 0.22); }
+    .enm-chain-badge-error      { background: rgba(220, 38, 38, 0.22); }
+    .enm-chain-badge-recovering { background: rgba(124, 58, 237, 0.22); }
+}
 
 .enm-chain-stats {
     display: grid;
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: var(--spacing-sm) var(--spacing-md);
 }
 
@@ -419,7 +573,7 @@ html, body {
     font-size: 11px;
     font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.06em;
     color: var(--text-muted);
 }
 
@@ -428,6 +582,21 @@ html, body {
     color: var(--text-primary);
     font-variant-numeric: tabular-nums;
     margin-bottom: var(--spacing-sm);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+@container (max-width: 320px) {
+    .enm-chain-stats {
+        grid-template-columns: 1fr;
+    }
+    .enm-chain-actions {
+        flex-wrap: wrap;
+    }
+    .enm-chain-actions .enm-btn {
+        flex: 1 1 calc(50% - var(--spacing-sm));
+    }
 }
 
 .enm-chain-sync {
@@ -438,15 +607,13 @@ html, body {
     gap: 6px;
 }
 
-.enm-chain-sync[data-stale="1"] {
-    opacity: 0.7;
-}
+.enm-chain-sync[data-stale="1"] { opacity: 0.7; }
 
 .enm-chain-sync-heading {
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.06em;
     color: var(--text-muted);
 }
 
@@ -454,16 +621,16 @@ html, body {
     width: 100%;
     height: 6px;
     background: var(--bg-muted);
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     overflow: hidden;
     position: relative;
 }
 
 .enm-chain-sync-bar {
     height: 100%;
-    background: var(--primary);
-    border-radius: 999px;
-    transition: width 0.4s ease;
+    background: linear-gradient(90deg, var(--primary), var(--primary-hover));
+    border-radius: var(--radius-pill);
+    transition: width var(--motion-slow) var(--ease-out);
 }
 
 .enm-chain-sync-indeterminate .enm-chain-sync-bar {
@@ -494,17 +661,17 @@ html, body {
 }
 
 .enm-chain-bpos-heading {
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.06em;
     color: var(--text-muted);
     margin-bottom: var(--spacing-sm);
 }
 
 .enm-chain-bpos-stats {
     display: grid;
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: var(--spacing-sm) var(--spacing-md);
 }
 
@@ -512,7 +679,7 @@ html, body {
     font-size: 11px;
     color: var(--text-muted);
     text-transform: uppercase;
-    letter-spacing: 0.04em;
+    letter-spacing: 0.06em;
 }
 
 .enm-chain-bpos-stats dd {
@@ -532,45 +699,59 @@ html, body {
 }
 
 /* ============================================================
-   Buttons
+   Buttons — Apple-style hover lift, press scale, focus ring
    ============================================================ */
 
 .enm-btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    padding: 8px 16px;
+    gap: 6px;
+    min-height: 36px;
+    padding: 0 14px;
     font-size: 13px;
     line-height: 1;
     font-family: inherit;
     font-weight: 500;
+    letter-spacing: -0.005em;
     border: 1px solid transparent;
     border-radius: var(--radius-md);
     background: var(--bg-surface);
     color: var(--text-primary);
     cursor: pointer;
-    transition: background 0.15s, border-color 0.15s, color 0.15s;
     user-select: none;
+    transition: background var(--motion-fast) var(--ease-out),
+                border-color var(--motion-fast) var(--ease-out),
+                color var(--motion-fast) var(--ease-out),
+                transform var(--motion-fast) var(--ease-out),
+                box-shadow var(--motion-fast) var(--ease-out);
+    will-change: transform;
 }
 
 .enm-btn:disabled {
-    opacity: 0.5;
+    opacity: 0.45;
     cursor: not-allowed;
 }
 
-.enm-btn:hover:not(:disabled) {
-    background: var(--bg-muted);
-}
+.enm-btn:hover:not(:disabled) { background: var(--bg-muted); }
+.enm-btn:active:not(:disabled) { transform: scale(0.97); }
 
 .enm-btn-primary {
     background: var(--primary);
     color: #fff;
     border-color: var(--primary);
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.18) inset, var(--shadow-xs);
 }
 
 .enm-btn-primary:hover:not(:disabled) {
     background: var(--primary-hover);
     border-color: var(--primary-hover);
+}
+
+.enm-btn-primary:active:not(:disabled) {
+    background: var(--primary-active);
+    border-color: var(--primary-active);
+    transform: scale(0.97);
 }
 
 .enm-btn-secondary {
@@ -580,8 +761,8 @@ html, body {
 }
 
 .enm-btn-secondary:hover:not(:disabled) {
-    border-color: var(--primary);
-    color: var(--primary);
+    border-color: var(--border-strong);
+    background: var(--bg-muted);
 }
 
 .enm-btn-danger {
@@ -594,6 +775,8 @@ html, body {
     background: var(--error);
     color: #fff;
 }
+
+.enm-btn:focus-visible { box-shadow: var(--focus-ring); }
 
 /* ============================================================
    Wizard
@@ -623,16 +806,19 @@ html, body {
     font-size: 12px;
     font-weight: 500;
     text-transform: capitalize;
+    transition: background var(--motion-base) var(--ease-out),
+                color var(--motion-base) var(--ease-out);
 }
 
 .enm-wizard-step-done {
-    background: rgba(34, 197, 94, 0.12);
+    background: rgba(22, 163, 74, 0.14);
     color: var(--success);
 }
 
 .enm-wizard-step-active {
     background: var(--primary);
     color: #fff;
+    box-shadow: 0 0 0 4px var(--primary-soft);
 }
 
 .enm-wizard-body {
@@ -644,14 +830,16 @@ html, body {
 .enm-wizard-body h2,
 .enm-wizard-body h3 {
     color: var(--text-primary);
-    font-size: 18px;
+    font-size: 20px;
     font-weight: 600;
+    letter-spacing: -0.02em;
     margin-bottom: var(--spacing-xs);
 }
 
 .enm-wizard-body p {
     color: var(--text-secondary);
-    line-height: 1.6;
+    line-height: 1.65;
+    max-width: 60ch;
 }
 
 .enm-wizard-body label {
@@ -659,7 +847,7 @@ html, body {
     font-size: 12px;
     font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.04em;
+    letter-spacing: 0.06em;
     color: var(--text-muted);
     margin-bottom: 6px;
 }
@@ -669,6 +857,7 @@ html, body {
 .enm-wizard-body select,
 .enm-wizard-body textarea {
     width: 100%;
+    min-height: 36px;
     padding: 8px 12px;
     border: 1px solid var(--border-color);
     border-radius: var(--radius-md);
@@ -676,6 +865,8 @@ html, body {
     color: var(--text-primary);
     font: inherit;
     font-size: 13px;
+    transition: border-color var(--motion-fast) var(--ease-out),
+                box-shadow var(--motion-fast) var(--ease-out);
 }
 
 .enm-wizard-body input:focus,
@@ -683,7 +874,7 @@ html, body {
 .enm-wizard-body textarea:focus {
     outline: none;
     border-color: var(--primary);
-    box-shadow: 0 0 0 3px var(--primary-soft);
+    box-shadow: var(--focus-ring);
 }
 
 /* ============================================================
@@ -708,8 +899,9 @@ html, body {
 }
 
 .enm-settings-section h3 {
-    font-size: 14px;
+    font-size: 15px;
     font-weight: 600;
+    letter-spacing: -0.01em;
     color: var(--text-primary);
     margin-bottom: var(--spacing-md);
 }
@@ -728,6 +920,7 @@ html, body {
 }
 
 .enm-settings-input {
+    min-height: 32px;
     padding: 6px 10px;
     border: 1px solid var(--border-color);
     border-radius: var(--radius-sm);
@@ -735,16 +928,19 @@ html, body {
     color: var(--text-primary);
     font: inherit;
     font-size: 13px;
+    transition: border-color var(--motion-fast) var(--ease-out),
+                box-shadow var(--motion-fast) var(--ease-out);
 }
 
 .enm-settings-input:focus {
     outline: none;
     border-color: var(--primary);
-    box-shadow: 0 0 0 3px var(--primary-soft);
+    box-shadow: var(--focus-ring);
 }
 
 .enm-settings-actions {
     display: flex;
+    flex-wrap: wrap;
     gap: var(--spacing-sm);
     padding-top: var(--spacing-md);
     border-top: 1px solid var(--border-color);
@@ -765,6 +961,7 @@ html, body {
     display: flex;
     flex-direction: column;
     gap: var(--spacing-md);
+    overflow: hidden;
 }
 
 .enm-audit-head {
@@ -772,11 +969,13 @@ html, body {
     align-items: center;
     justify-content: space-between;
     gap: var(--spacing-md);
+    flex-wrap: wrap;
 }
 
 .enm-audit-head h3 {
     font-size: 16px;
     font-weight: 600;
+    letter-spacing: -0.01em;
 }
 
 .enm-audit-count {
@@ -787,6 +986,7 @@ html, body {
 .enm-audit-filters {
     display: flex;
     flex-wrap: wrap;
+    align-items: center;
     gap: var(--spacing-sm);
     padding: var(--spacing-md);
     background: var(--bg-muted);
@@ -796,13 +996,14 @@ html, body {
 .enm-audit-label {
     font-size: 11px;
     text-transform: uppercase;
-    letter-spacing: 0.04em;
+    letter-spacing: 0.06em;
     color: var(--text-muted);
     font-weight: 600;
     margin-right: 4px;
 }
 
 .enm-audit-input {
+    min-height: 30px;
     padding: 4px 8px;
     border: 1px solid var(--border-color);
     border-radius: var(--radius-sm);
@@ -816,6 +1017,18 @@ html, body {
     width: 100%;
     border-collapse: collapse;
     font-size: 12px;
+    display: block;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    white-space: nowrap;
+}
+
+.enm-audit-table thead,
+.enm-audit-table tbody,
+.enm-audit-table tr {
+    display: table;
+    width: 100%;
+    table-layout: fixed;
 }
 
 .enm-audit-table th,
@@ -823,15 +1036,23 @@ html, body {
     padding: 8px 10px;
     text-align: left;
     border-bottom: 1px solid var(--border-color);
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .enm-audit-table th {
     font-size: 11px;
     text-transform: uppercase;
-    letter-spacing: 0.04em;
+    letter-spacing: 0.06em;
     color: var(--text-muted);
     background: var(--bg-muted);
     font-weight: 600;
+    position: sticky;
+    top: 0;
+}
+
+.enm-audit-table tbody tr {
+    transition: background var(--motion-fast) var(--ease-out);
 }
 
 .enm-audit-table tbody tr:hover {
@@ -847,14 +1068,14 @@ html, body {
 }
 
 /* ============================================================
-   Log viewer (terminal style)
+   Log viewer (terminal)
    ============================================================ */
 
 .enm-log-viewer {
     display: flex;
     flex-direction: column;
-    height: calc(100vh - var(--titlebar-height) - var(--tabs-height) - 2 * var(--spacing-lg));
-    min-height: 360px;
+    height: 100%;
+    min-height: 280px;
     overflow: hidden;
 }
 
@@ -865,15 +1086,21 @@ html, body {
     gap: var(--spacing-sm);
     padding: var(--spacing-md);
     border-bottom: 1px solid var(--border-color);
+    flex-shrink: 0;
 }
 
 .enm-log-title {
     font-size: 14px;
     font-weight: 600;
+    letter-spacing: -0.01em;
     color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .enm-log-tail-toggle {
+    min-height: 28px;
     padding: 4px 10px;
     background: var(--bg-muted);
     border: 1px solid var(--border-color);
@@ -882,11 +1109,17 @@ html, body {
     font-size: 12px;
     color: var(--text-secondary);
     cursor: pointer;
+    transition: background var(--motion-fast) var(--ease-out),
+                border-color var(--motion-fast) var(--ease-out),
+                color var(--motion-fast) var(--ease-out);
+    flex-shrink: 0;
 }
 
+.enm-log-tail-toggle:hover { background: var(--border-color); }
+
 .enm-log-tail-toggle.enm-log-following {
-    background: rgba(34, 197, 94, 0.12);
-    border-color: var(--success);
+    background: rgba(22, 163, 74, 0.14);
+    border-color: rgba(22, 163, 74, 0.3);
     color: var(--success);
 }
 
@@ -896,9 +1129,10 @@ html, body {
     padding: var(--spacing-md);
     background: var(--bg-code);
     color: #e2e8f0;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
     font-size: 12px;
-    line-height: 1.5;
+    line-height: 1.55;
+    border-radius: 0 0 var(--radius-lg) var(--radius-lg);
 }
 
 .enm-log-line {
@@ -916,45 +1150,49 @@ html, body {
     flex-shrink: 0;
 }
 
-.enm-log-text {
-    flex: 1;
-}
+.enm-log-text { flex: 1; }
 
 .enm-log-empty {
     color: #94a3b8;
     text-align: center;
-    padding: var(--spacing-lg);
+    padding: var(--spacing-2xl) var(--spacing-lg);
 }
 
 /* ============================================================
-   Toasts
+   Toasts — anchored to .enm-main, not viewport
    ============================================================ */
 
 .enm-toast-container {
-    position: fixed;
-    top: calc(var(--titlebar-height) + var(--tabs-height) + var(--spacing-md));
+    position: absolute;
+    top: var(--spacing-md);
     right: var(--spacing-md);
     display: flex;
     flex-direction: column;
     gap: var(--spacing-sm);
     z-index: 100;
-    max-width: 360px;
+    max-width: min(360px, calc(100vw - 2 * var(--spacing-md)));
+    pointer-events: none;
 }
 
+.enm-toast-container > * { pointer-events: auto; }
+
 .enm-toast {
-    background: var(--bg-surface);
+    background: var(--bg-elevated);
     border: 1px solid var(--border-color);
-    border-left: 4px solid var(--text-muted);
+    border-left: 3px solid var(--text-muted);
     border-radius: var(--radius-md);
     box-shadow: var(--shadow-md);
     padding: var(--spacing-md);
     transform: translateX(0);
     opacity: 1;
-    transition: transform 0.2s, opacity 0.2s;
+    transition: transform var(--motion-base) var(--ease-out),
+                opacity var(--motion-base) var(--ease-out);
+    backdrop-filter: blur(12px) saturate(140%);
+    -webkit-backdrop-filter: blur(12px) saturate(140%);
 }
 
 .enm-toast-leaving {
-    transform: translateX(100%);
+    transform: translateX(calc(100% + var(--spacing-md)));
     opacity: 0;
 }
 
@@ -974,6 +1212,7 @@ html, body {
     font-weight: 600;
     color: var(--text-primary);
     font-size: 13px;
+    letter-spacing: -0.005em;
 }
 
 .enm-toast-dismiss {
@@ -984,9 +1223,18 @@ html, body {
     font-size: 18px;
     line-height: 1;
     padding: 0;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: background var(--motion-fast) var(--ease-out),
+                color var(--motion-fast) var(--ease-out);
 }
 
 .enm-toast-dismiss:hover {
+    background: var(--bg-muted);
     color: var(--text-primary);
 }
 
@@ -994,12 +1242,13 @@ html, body {
     margin-top: 4px;
     font-size: 12px;
     color: var(--text-secondary);
-    line-height: 1.5;
+    line-height: 1.55;
     white-space: pre-wrap;
 }
 
 .enm-toast-ack {
     margin-top: var(--spacing-sm);
+    min-height: 30px;
     padding: 4px 10px;
     background: var(--error);
     color: #fff;
@@ -1009,38 +1258,58 @@ html, body {
     font-size: 12px;
     font-weight: 600;
     cursor: pointer;
+    transition: background var(--motion-fast) var(--ease-out);
 }
 
+.enm-toast-ack:hover { background: #b91c1c; }
+
 /* ============================================================
-   Proposal modal
+   Proposal modal — backdrop blur, slide-up entrance
    ============================================================ */
 
 .enm-proposal-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(15, 23, 42, 0.5);
+    background: rgba(15, 23, 42, 0.45);
+    backdrop-filter: blur(8px) saturate(120%);
+    -webkit-backdrop-filter: blur(8px) saturate(120%);
     display: flex;
     align-items: center;
     justify-content: center;
     padding: var(--spacing-lg);
     z-index: 200;
+    animation: enm-fade-in var(--motion-base) var(--ease-out);
+}
+
+@keyframes enm-fade-in {
+    from { opacity: 0; }
+    to   { opacity: 1; }
 }
 
 .enm-proposal-card {
-    background: var(--bg-surface);
-    border-radius: var(--radius-lg);
+    background: var(--bg-elevated);
+    border-radius: var(--radius-xl);
     box-shadow: var(--shadow-lg);
     padding: var(--spacing-xl);
     max-width: 480px;
     width: 100%;
+    max-height: calc(100vh - 4 * var(--spacing-lg));
+    overflow: auto;
     display: flex;
     flex-direction: column;
     gap: var(--spacing-md);
+    animation: enm-slide-up var(--motion-slow) var(--ease-out);
+}
+
+@keyframes enm-slide-up {
+    from { transform: translateY(12px); opacity: 0; }
+    to   { transform: translateY(0);    opacity: 1; }
 }
 
 .enm-proposal-heading {
     font-size: 18px;
     font-weight: 600;
+    letter-spacing: -0.02em;
 }
 
 .enm-prop-heading-warning  { color: var(--warning); }
@@ -1050,7 +1319,7 @@ html, body {
 
 .enm-proposal-summary {
     color: var(--text-secondary);
-    line-height: 1.6;
+    line-height: 1.65;
 }
 
 .enm-proposal-cooldown {
@@ -1065,11 +1334,13 @@ html, body {
     gap: var(--spacing-sm);
     font-size: 13px;
     color: var(--text-primary);
+    line-height: 1.5;
 }
 
 .enm-proposal-anti-snipe,
 .enm-proposal-reject-reason {
     width: 100%;
+    min-height: 36px;
     padding: 8px 12px;
     border: 1px solid var(--border-color);
     border-radius: var(--radius-md);
@@ -1079,8 +1350,16 @@ html, body {
     font-size: 13px;
 }
 
+.enm-proposal-anti-snipe:focus,
+.enm-proposal-reject-reason:focus {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: var(--focus-ring);
+}
+
 .enm-proposal-actions {
     display: flex;
+    flex-wrap: wrap;
     gap: var(--spacing-sm);
     justify-content: flex-end;
     border-top: 1px solid var(--border-color);
@@ -1088,44 +1367,102 @@ html, body {
 }
 
 /* ============================================================
-   Dark mode (PC2 doesn't currently push theme to apps, but
-   defensible default mirrors PC2's dao-dashboard pattern)
+   Reduced motion — respect the system preference
    ============================================================ */
 
-@media (prefers-color-scheme: dark) {
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+    }
+    .enm-chain-card:hover { transform: none; }
+    .enm-btn:active:not(:disabled) { transform: none; }
+}
+
+/* ============================================================
+   High-contrast — clearer borders + stronger focus
+   ============================================================ */
+
+@media (prefers-contrast: more) {
     :root {
-        --bg-page: #0f172a;
-        --bg-surface: #1e293b;
-        --bg-muted: #1e293b;
-        --bg-code: #020617;
-        --border-color: #334155;
+        --border-color: #94a3b8;
         --border-strong: #475569;
-        --text-primary: #f1f5f9;
-        --text-secondary: #cbd5e1;
-        --text-muted: #94a3b8;
-        --primary-soft: rgba(59, 130, 246, 0.18);
+        --focus-ring: 0 0 0 3px var(--primary);
+    }
+    .enm-chain-badge,
+    .enm-badge {
+        border: 1px solid currentColor;
     }
 }
 
 /* ============================================================
-   Responsive — narrow window from PC2's window manager
+   Responsive — multiple tiers for the host's window manager
    ============================================================ */
 
+/* tablet-down */
+@media (max-width: 1024px) {
+    .enm-pane { padding: var(--spacing-md); }
+}
+
+/* small-tablet */
+@media (max-width: 768px) {
+    .enm-titlebar { padding: 0 var(--spacing-sm); }
+    .enm-tabs { padding: 0 var(--spacing-xs); }
+    .enm-tabs button { padding: 0 var(--spacing-sm); font-size: 13px; }
+    .enm-wizard { padding: var(--spacing-lg); }
+    .enm-settings-row { grid-template-columns: 1fr; gap: var(--spacing-xs); }
+}
+
+/* phone */
 @media (max-width: 640px) {
-    .enm-titlebar h1 {
-        font-size: 13px;
+    .enm-titlebar h1 { font-size: 13px; }
+    #enm-version { display: none; }
+    .enm-wallet-badge { max-width: 130px; padding: 4px 8px; font-size: 11px; }
+    .enm-pane { padding: var(--spacing-sm); }
+    .enm-chains-grid { gap: var(--spacing-md); }
+    .enm-chain-card { padding: var(--spacing-md); }
+    .enm-system-status { grid-template-columns: repeat(2, 1fr); }
+    .enm-error { margin: var(--spacing-md); padding: var(--spacing-md); }
+}
+
+/* small-phone */
+@media (max-width: 480px) {
+    :root {
+        --titlebar-height: 40px;
+        --tabs-height: 36px;
     }
-    .enm-tabs button {
-        padding: 0 var(--spacing-sm);
-        font-size: 13px;
+    .enm-titlebar { gap: var(--spacing-xs); }
+    .enm-wallet-badge {
+        max-width: 92px;
     }
-    .enm-pane {
-        padding: var(--spacing-md);
-    }
-    .enm-chains-grid {
-        grid-template-columns: 1fr;
-    }
-    .enm-settings-row {
-        grid-template-columns: 1fr;
-    }
+    .enm-tabs button { font-size: 12px; padding: 0 10px; }
+    .enm-system-status { grid-template-columns: 1fr; }
+    .enm-chain-card-head { gap: 6px; }
+    .enm-wizard-body h2,
+    .enm-wizard-body h3 { font-size: 17px; }
+}
+
+/* very-narrow — last-resort: drop the wallet badge label, keep the dot */
+@media (max-width: 360px) {
+    #enm-wallet-label { display: none; }
+    .enm-wallet-badge { padding: 6px; }
+}
+
+/* ============================================================
+   Print — hide chrome, render cards as plain blocks
+   ============================================================ */
+
+@media print {
+    .enm-titlebar,
+    .enm-tabs,
+    .enm-toast-container,
+    .enm-spinner,
+    .enm-chain-actions,
+    .enm-settings-actions { display: none !important; }
+    body, .enm-app, .enm-pane { overflow: visible !important; height: auto !important; }
+    .enm-chain-card, .enm-card { break-inside: avoid; }
 }
