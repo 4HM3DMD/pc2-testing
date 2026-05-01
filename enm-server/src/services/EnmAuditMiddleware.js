@@ -21,7 +21,7 @@
 
 const { ENM_LOG_PREFIX, AUDIT_DECISION, HEALING_TIERS } = require('./EnmConstants');
 const { append: appendAudit, redactSensitive } = require('./EnmAuditLog');
-const { readActorWallet } = require('./OwnerCheckMiddleware');
+const { readActorWallet } = require('../auth/OwnerCheckMiddleware');
 
 /**
  * Build the middleware. We need the extension handle to access the DB.

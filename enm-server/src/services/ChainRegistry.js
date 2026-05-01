@@ -17,7 +17,7 @@ const { ProcessLogStreamer } = require('./ProcessLogStreamer');
 const ElaMainChainAdapter = require('./ElaMainChainAdapter');
 const { SelfHealingEngine } = require('./SelfHealingEngine');
 const { HealthChecker } = require('./HealthChecker');
-const { readNodeOwner } = require('./OwnerCheckMiddleware');
+const { readNodeOwner } = require('../auth/OwnerCheckMiddleware');
 const { SyncTracker } = require('./SyncTracker');
 const { EnmAutoBuilder } = require('./EnmAutoBuilder');
 

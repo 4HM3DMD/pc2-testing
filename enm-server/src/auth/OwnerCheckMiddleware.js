@@ -211,7 +211,9 @@ function requireOwner(req, res, next) {
 module.exports = {
     requireOwner,
     readActorWallet,
-    // Exported for tests / introspection only.
-    _readNodeOwner: readNodeOwner,
+    // ChainRegistry needs the owner wallet for self-healing audit attribution
+    // when no operator request is in flight (cron sweepers etc).
+    readNodeOwner,
+    // Exported for tests.
     _walletsEqual: walletsEqual,
 };

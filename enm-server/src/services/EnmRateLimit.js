@@ -23,7 +23,7 @@
 'use strict';
 
 const { errorBody } = require('./EnmConstants');
-const { readActorWallet } = require('./OwnerCheckMiddleware');
+const { readActorWallet } = require('../auth/OwnerCheckMiddleware');
 
 const SCOPE_LIMITS = Object.freeze({
     read:  { max: 100, windowMs: 60_000 },
