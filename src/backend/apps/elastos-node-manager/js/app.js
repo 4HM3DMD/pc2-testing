@@ -7,7 +7,7 @@
  * Boot sequence:
  *   1. wallet.sendReady() + installCloseHandler()           [must run first]
  *   2. wallet.getIdentity()  — non-blocking; populates the wallet badge
- *   3. api.get('/system/health')  — confirm sidecar reachable
+ *   3. api.get('/health')  — confirm sidecar reachable
  *   4. api.get('/setup/state')    — wizard vs. dashboard
  *   5. mount the chosen view
  *   6. SSE subscriptions for live status + healing notifications
@@ -62,7 +62,7 @@
         });
 
         // Step 3 + 4: probe backend, then decide wizard vs dashboard.
-        return this.services.api.get('/system/health', { skipCache: true })
+        return this.services.api.get('/health', { skipCache: true })
             .catch(function (err) {
                 throw withTag(err, 'health');
             })
