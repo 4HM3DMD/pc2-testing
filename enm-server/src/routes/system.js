@@ -23,7 +23,7 @@ const { enmDataDir } = require('../services/DataDir');
 const { round } = require('../services/EnmFormat');
 const ExtIpResolver = require('../services/ExtIpResolver');
 
-const PKG = require('../package.json');
+const PKG = require('../../package.json');
 
 /**
  * @param {object} extensionHandle
