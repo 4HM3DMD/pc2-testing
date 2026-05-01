@@ -20,6 +20,8 @@ const { HealthChecker } = require('./HealthChecker');
 const { readNodeOwner } = require('../auth/OwnerCheckMiddleware');
 const { SyncTracker } = require('./SyncTracker');
 const { EnmAutoBuilder } = require('./EnmAutoBuilder');
+const { EnmBinaryDownloader } = require('./EnmBinaryDownloader');
+const { EnmKeystoreService } = require('./EnmKeystoreService');
 
 let initialized = false;
 let processService = null;
@@ -29,6 +31,8 @@ let engine = null;
 let healthChecker = null;
 let syncTracker = null;
 let autoBuilder = null;
+let binaryDownloader = null;
+let keystoreService = null;
 let extensionHandleRef = null;
 /** @type {Map<string, import('./ChainAdapter')>} */
 let adapters = new Map();
@@ -52,8 +56,20 @@ function init(extensionHandle) {
     logStreamer = new ProcessLogStreamer({ processService, sseHub, extensionHandle });
     syncTracker = new SyncTracker();
     autoBuilder = new EnmAutoBuilder({ extensionHandle, sseHub });
+    binaryDownloader = new EnmBinaryDownloader({ logger: extensionHandle.log, sseHub });
+    keystoreService = new EnmKeystoreService({ logger: extensionHandle.log });
     adapters.set('mainchain', new ElaMainChainAdapter({ processService, extensionHandle }));
     initialized = true;
+}
+
+function getBinaryDownloader() {
+    if (!binaryDownloader) throw new Error('ChainRegistry: not initialized');
+    return binaryDownloader;
+}
+
+function getKeystoreService() {
+    if (!keystoreService) throw new Error('ChainRegistry: not initialized');
+    return keystoreService;
 }
 
 function getSyncTracker() {
@@ -206,6 +222,8 @@ module.exports = {
     getHealthChecker,
     getSyncTracker,
     getAutoBuilder,
+    getBinaryDownloader,
+    getKeystoreService,
     listChains,
     _resetForTests,
 };

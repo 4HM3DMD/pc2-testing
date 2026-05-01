@@ -2,33 +2,25 @@
  * Copyright (C) 2026-present Elacity
  * SPDX-License-Identifier: AGPL-3.0
  *
- * components/setup-wizard.js — first-run wizard (Phase 3 skeleton).
+ * components/setup-wizard.js — 4-step install wizard.
  *
- * Phase 3 ships a 6-step skeleton that wires up to the existing
- * /api/setup/preflight + /api/setup/binary endpoints. Phase 5 will fill in:
- *   - Keystore import step (file picker + password)
- *   - Network override step (extip auto/manual + reachability probe)
- *   - Confirm + start step
+ * Replaces the old 9-step path-driven wizard. The new flow follows what
+ * node.sh actually does — download a prebuilt binary, generate a keystore,
+ * write the config, start. No "build from source," no "paste a path."
  *
- * For Phase 3 the skeleton is enough to let an operator complete the wizard
- * far enough to land on the dashboard, even if the keystore/network steps
- * remain stubs.
+ *   1. Welcome      — what ENM does + system check (OS / disk / arch)
+ *   2. Install      — download mainchain binary from download.elastos.io
+ *                     (live progress over SSE topic setup:install:mainchain)
+ *   3. Keystore     — generate keystore.dat via ela-cli wallet create.
+ *                     Show password ONCE, prompt to download as file.
+ *                     Show producer public key for registration.
+ *   4. Confirm      — review summary, big "Start node" button.
  */
 
 (function (root) {
     'use strict';
 
-    var STEPS = [
-        'welcome',
-        'os',
-        'disk',
-        'wallet',
-        'binary',
-        'keystore',
-        'network',
-        'confirm',
-        'complete',
-    ];
+    var STEPS = ['welcome', 'install', 'keystore', 'confirm'];
 
     function SetupWizard(opts) {
         if (!opts || !opts.api || !opts.notifications) {
@@ -36,25 +28,21 @@
         }
         this.api = opts.api;
         this.notifications = opts.notifications;
-        this.sse = opts.sse || null;  // optional — auto-install live progress
+        this.sse = opts.sse || null;
         this.onComplete = typeof opts.onComplete === 'function' ? opts.onComplete : function () {};
 
         this.root = document.createElement('section');
         this.root.className = 'enm-wizard';
         this._currentStep = 'welcome';
-        this._preflight = null;
-        // Choices the wizard collects across steps. Persisted server-side via
-        // /setup/keystore + /setup/network; held here so the confirm step can
-        // show a summary without an extra GET.
-        this._choices = {
-            binaryPath: null,
-            binaryVersion: null,
-            enableArbiter: true,
-            keystoreImported: false,
-            ipMode: 'auto',
-            ipManual: '',
-            extipDetected: null,
+        this._state = {
+            preflight: null,           // { os, disk }
+            install: null,             // last install status
+            keystore: null,            // { publicKey, address, generatedPassword? }
+            keystorePassword: '',
+            useGeneratedPassword: true,
         };
+        this._unsubscribeInstall = null;
+
         this._renderShell();
     }
 
@@ -65,544 +53,494 @@
     };
 
     SetupWizard.prototype.destroy = function () {
+        if (this._unsubscribeInstall) { this._unsubscribeInstall(); }
         if (this.root.parentNode) { this.root.parentNode.removeChild(this.root); }
     };
 
-    /** @private */
     SetupWizard.prototype._renderShell = function () {
-        // Step indicator at the top.
+        // Step indicator: numbered pills with labels.
         this._stepIndicator = document.createElement('ol');
         this._stepIndicator.className = 'enm-wizard-steps';
         this._stepNodes = {};
-        STEPS.forEach(function (step) {
+        STEPS.forEach(function (step, i) {
             var li = document.createElement('li');
             li.className = 'enm-wizard-step';
             li.dataset.step = step;
-            li.textContent = step;
+            var num = document.createElement('span');
+            num.className = 'enm-wizard-step-num';
+            num.textContent = String(i + 1);
+            var label = document.createElement('span');
+            label.className = 'enm-wizard-step-label';
+            label.textContent = STEP_LABELS[step] || step;
+            li.appendChild(num);
+            li.appendChild(label);
             this._stepIndicator.appendChild(li);
             this._stepNodes[step] = li;
         }, this);
         this.root.appendChild(this._stepIndicator);
 
-        // Body container — re-rendered per step.
         this._body = document.createElement('div');
         this._body.className = 'enm-wizard-body';
         this.root.appendChild(this._body);
     };
 
-    /** @private */
     SetupWizard.prototype._goto = function (step) {
         this._currentStep = step;
+        // Bump sequence so any in-flight async work from the previous
+        // step knows it's stale and bails before mutating the DOM.
+        this._renderSeq = (this._renderSeq || 0) + 1;
         Object.keys(this._stepNodes).forEach(function (k) {
             this._stepNodes[k].classList.toggle('enm-wizard-step-active', k === step);
-            this._stepNodes[k].classList.toggle('enm-wizard-step-done',
-                STEPS.indexOf(k) < STEPS.indexOf(step));
+            this._stepNodes[k].classList.toggle(
+                'enm-wizard-step-done',
+                STEPS.indexOf(k) < STEPS.indexOf(step),
+            );
         }, this);
         this._body.innerHTML = '';
         var renderer = this['_render_' + step];
         if (typeof renderer === 'function') {
             renderer.call(this);
         } else {
-            this._body.appendChild(makePara('Step "' + step + '" not implemented yet — Phase 5.'));
+            this._body.appendChild(makePara('Step "' + step + '" not implemented.'));
         }
     };
+
+    SetupWizard.prototype._isStillRendering = function (capturedSeq) {
+        return this._renderSeq === capturedSeq && this.root.isConnected;
+    };
+
+    // ===================================================================
+    // Step 1 — welcome
+    // ===================================================================
 
     SetupWizard.prototype._render_welcome = function () {
         var t = root.enmTOrFallback;
+        var self = this;
+        var seq = this._renderSeq;
+
         this._body.appendChild(makeHeading(t('wizard.welcome_heading')));
         this._body.appendChild(makePara(t('wizard.welcome_body')));
-        var self = this;
-        this._body.appendChild(makeBtn('Continue', function () { self._goto('os'); }));
-    };
 
-    SetupWizard.prototype._render_os = function () {
-        var self = this;
-        this._body.appendChild(makeHeading(root.enmTOrFallback('wizard.step_os')));
-        var status = makePara('Checking...');
-        this._body.appendChild(status);
-        this._loadPreflight().then(function (pre) {
-            if (pre.os.ok) {
-                status.textContent = root.enmTOrFallback('wizard.os_ok', {
-                    distroId: pre.os.distroId || pre.os.platform,
-                    version: pre.os.version || '',
-                });
-                self._body.appendChild(makeBtn('Continue', function () { self._goto('disk'); }));
-            } else {
-                status.textContent = root.enmTOrFallback('wizard.os_fail', { reason: pre.os.reason || '' });
-                self._body.appendChild(makePara('Cannot proceed on this OS in v0.1.'));
-            }
+        var checkCard = document.createElement('div');
+        checkCard.className = 'enm-wizard-checks';
+        checkCard.innerHTML = '<div class="enm-wizard-checks-spinner"><span class="enm-spinner-dot"></span><span class="enm-spinner-dot"></span><span class="enm-spinner-dot"></span></div><p>Running system checks...</p>';
+        this._body.appendChild(checkCard);
+
+        this.api.get('/setup/preflight', { skipCache: true }).then(function (preflight) {
+            if (!self._isStillRendering(seq)) return;
+            self._state.preflight = preflight;
+            checkCard.innerHTML = '';
+            renderCheckRow(checkCard, 'Operating system',
+                preflight.os && preflight.os.ok,
+                preflight.os && (preflight.os.distroId
+                    ? preflight.os.distroId + ' ' + (preflight.os.version || '')
+                    : preflight.os.platform));
+            renderCheckRow(checkCard, 'Disk space',
+                preflight.disk && preflight.disk.status !== 'critical',
+                preflight.disk
+                    ? Number(preflight.disk.freeGb).toFixed(1) + ' GB free'
+                    : null);
+            renderCheckRow(checkCard, 'Wallet identity',
+                preflight.wallet && preflight.wallet.ok,
+                preflight.wallet && preflight.wallet.walletAddress
+                    ? preflight.wallet.walletAddress.slice(0, 6) + '...' + preflight.wallet.walletAddress.slice(-4)
+                    : null);
+
+            var actions = document.createElement('div');
+            actions.className = 'enm-wizard-actions';
+            var btn = makeBtn('Continue', 'primary', function () { self._goto('install'); });
+            actions.appendChild(btn);
+            self._body.appendChild(actions);
         }).catch(function (err) {
-            status.textContent = err.message;
+            if (!self._isStillRendering(seq)) return;
+            checkCard.innerHTML = '';
+            checkCard.appendChild(makePara('System check failed: ' + (err.message || err)));
         });
     };
 
-    SetupWizard.prototype._render_disk = function () {
+    // ===================================================================
+    // Step 2 — install
+    // ===================================================================
+
+    SetupWizard.prototype._render_install = function () {
         var self = this;
-        this._body.appendChild(makeHeading(root.enmTOrFallback('wizard.step_disk')));
-        var status = makePara('Checking...');
-        this._body.appendChild(status);
-        this._loadPreflight().then(function (pre) {
-            var d = pre.disk;
-            if (d.status === 'good') {
-                status.textContent = root.enmTOrFallback('wizard.disk_ok', { freeGb: d.freeGb.toFixed(1) });
-            } else if (d.status === 'warning') {
-                status.textContent = root.enmTOrFallback('wizard.disk_warn', { freeGb: d.freeGb.toFixed(1) });
-            } else {
-                status.textContent = root.enmTOrFallback('wizard.disk_fail');
-            }
-            if (d.ok) {
-                self._body.appendChild(makeBtn('Continue', function () { self._goto('wallet'); }));
-            }
-        }).catch(function (err) {
-            status.textContent = err.message;
-        });
-    };
+        this._body.appendChild(makeHeading('Install Elastos node'));
+        this._body.appendChild(makePara(
+            'ENM downloads the official mainchain release from download.elastos.io ' +
+            '— same source the upstream node.sh installer uses. No source build, ' +
+            'no toolchain dependencies.',
+        ));
 
-    SetupWizard.prototype._render_wallet = function () {
-        var self = this;
-        this._body.appendChild(makeHeading(root.enmTOrFallback('wizard.step_wallet')));
-        var status = makePara('Checking...');
-        this._body.appendChild(status);
-        this._loadPreflight().then(function (pre) {
-            if (pre.wallet && pre.wallet.ok) {
-                status.textContent = root.enmTOrFallback('wizard.wallet_ok', { wallet: pre.wallet.walletAddress });
-                self._body.appendChild(makeBtn('Continue', function () { self._goto('binary'); }));
-            } else {
-                status.textContent = root.enmTOrFallback('wizard.wallet_fail');
-            }
-        });
-    };
+        var card = document.createElement('div');
+        card.className = 'enm-install-card';
+        this._body.appendChild(card);
 
-    SetupWizard.prototype._render_binary = function () {
-        var self = this;
-        var t = root.enmTOrFallback;
-        this._body.appendChild(makeHeading(t('wizard.step_binary')));
-        this._body.appendChild(makePara(t('wizard.binary_help')));
+        var head = document.createElement('div');
+        head.className = 'enm-install-card-head';
+        head.innerHTML =
+            '<div class="enm-install-icon" aria-hidden="true">⛓</div>' +
+            '<div class="enm-install-meta">' +
+                '<div class="enm-install-name">Mainchain (ELA)</div>' +
+                '<div class="enm-install-sub" id="enm-install-version">Resolving latest version...</div>' +
+            '</div>';
+        card.appendChild(head);
 
-        // Two paths: auto-install (recommended) or manual path entry.
-        var pathSelector = document.createElement('div');
-        pathSelector.className = 'enm-wizard-radio-row';
-        var modeAuto = document.createElement('input');
-        modeAuto.type = 'radio'; modeAuto.name = 'wizardBinMode'; modeAuto.value = 'auto';
-        modeAuto.checked = true;
-        var modeManual = document.createElement('input');
-        modeManual.type = 'radio'; modeManual.name = 'wizardBinMode'; modeManual.value = 'manual';
-        pathSelector.appendChild(labelEl(modeAuto, t('wizard.binary_auto_btn')));
-        pathSelector.appendChild(labelEl(modeManual, t('wizard.binary_manual_btn')));
-        this._body.appendChild(pathSelector);
-
-        // Auto-install panel
-        var autoPanel = document.createElement('div');
-        autoPanel.className = 'enm-wizard-auto-panel';
-
-        var startBtn = makeBtn(t('wizard.binary_auto_btn'), function () {
-            self._startAutoInstall(autoPanel);
-        });
-        autoPanel.appendChild(startBtn);
-
-        // Manual panel (existing flow)
-        var manualPanel = document.createElement('div');
-        manualPanel.className = 'enm-wizard-manual-panel';
-        manualPanel.style.display = 'none';
-
-        var input = document.createElement('input');
-        input.type = 'text';
-        input.placeholder = t('wizard.binary_placeholder');
-        input.className = 'enm-wizard-binary-input';
-        input.setAttribute('aria-label', t('wizard.binary_label'));
-        manualPanel.appendChild(input);
-        var manualStatus = makePara('');
-        manualPanel.appendChild(manualStatus);
-        var verifyBtn = makeBtn(t('wizard.binary_manual_verify_btn'), function () {
-            manualStatus.textContent = t('wizard.binary_validating');
-            verifyBtn.disabled = true;
-            self.api.post('/setup/binary', { binaryPath: input.value.trim() }).then(function (result) {
-                manualStatus.textContent = t('wizard.binary_ok', { version: result.version });
-                self._choices.binaryPath = result.resolvedPath;
-                self._choices.binaryVersion = result.version;
-                manualPanel.appendChild(makeBtn(t('wizard.build_continue_btn'),
-                    function () { self._goto('keystore'); }));
-            }).catch(function (err) {
-                manualStatus.textContent = t('wizard.binary_fail', { reason: err.message });
-                verifyBtn.disabled = false;
-            });
-        });
-        manualPanel.appendChild(verifyBtn);
-
-        this._body.appendChild(autoPanel);
-        this._body.appendChild(manualPanel);
-
-        function applyMode() {
-            autoPanel.style.display   = modeAuto.checked   ? '' : 'none';
-            manualPanel.style.display = modeManual.checked ? '' : 'none';
-        }
-        modeAuto.addEventListener('change', applyMode);
-        modeManual.addEventListener('change', applyMode);
-        applyMode();
-    };
-
-    /**
-     * Kick off the auto-install pipeline and render live progress in the
-     * given panel. The pipeline runs on the server (lib/EnmAutoBuilder); we
-     * subscribe to SSE topic `setup:build` for phase + log updates and fall
-     * back to polling /setup/build-status if SSE is silent for >5s.
-     *
-     * @private
-     */
-    SetupWizard.prototype._startAutoInstall = function (panel) {
-        var self = this;
-        var t = root.enmTOrFallback;
-
-        // Replace the button with the live-progress UI.
-        panel.innerHTML = '';
-
-        var phaseLabel = document.createElement('p');
-        phaseLabel.className = 'enm-wizard-build-phase';
-        phaseLabel.textContent = t('wizard.build_phase_preparing');
-        panel.appendChild(phaseLabel);
-
-        var barWrap = document.createElement('div');
-        barWrap.className = 'enm-wizard-build-bar-wrap';
-        barWrap.setAttribute('role', 'progressbar');
-        barWrap.setAttribute('aria-valuemin', '0');
-        barWrap.setAttribute('aria-valuemax', '100');
-        var bar = document.createElement('div');
-        bar.className = 'enm-wizard-build-bar';
-        barWrap.appendChild(bar);
-        panel.appendChild(barWrap);
-
-        var logHeading = document.createElement('p');
-        logHeading.className = 'enm-wizard-build-log-heading';
-        logHeading.textContent = t('wizard.build_log_heading');
-        panel.appendChild(logHeading);
-
-        var logBox = document.createElement('pre');
-        logBox.className = 'enm-wizard-build-log';
-        logBox.setAttribute('aria-live', 'polite');
-        panel.appendChild(logBox);
+        var progressWrap = document.createElement('div');
+        progressWrap.className = 'enm-install-progress';
+        progressWrap.hidden = true;
+        progressWrap.innerHTML =
+            '<div class="enm-install-bar-wrap"><div class="enm-install-bar"></div></div>' +
+            '<div class="enm-install-status">Idle</div>';
+        card.appendChild(progressWrap);
 
         var actions = document.createElement('div');
-        actions.className = 'enm-wizard-build-actions';
-        var cancelBtn = makeBtn(t('wizard.build_cancel_btn'), function () {
-            self.api.del('/setup/auto-install-ela').catch(function () { /* idempotent */ });
+        actions.className = 'enm-wizard-actions';
+        var startBtn = makeBtn('Download & install', 'primary', function () {
+            startBtn.disabled = true;
+            progressWrap.hidden = false;
+            self._beginInstall(card, startBtn);
         });
-        actions.appendChild(cancelBtn);
-        panel.appendChild(actions);
+        var nextBtn = makeBtn('Continue', 'primary', function () { self._goto('keystore'); });
+        nextBtn.hidden = true;
+        actions.appendChild(startBtn);
+        actions.appendChild(nextBtn);
+        this._body.appendChild(actions);
 
-        // Map server phase → percent + label. Approximate — exact percent
-        // isn't knowable until make finishes, but the phases give the
-        // operator a meaningful "where am I" signal.
-        var PHASE_PERCENT = {
-            'preparing': 5, 'fetching-go': 15, 'cloning': 30,
-            'building': 60, 'verifying': 95, 'done': 100,
-            'failed': 0, 'cancelled': 0, 'idle': 0,
-        };
-        function applyStatus(status) {
-            if (!status || !status.phase) return;
-            phaseLabel.textContent = t('wizard.build_phase_' + status.phase.replace(/-/g, '_')) || status.phase;
-            var pct = PHASE_PERCENT[status.phase];
-            if (pct != null) {
-                bar.style.width = pct + '%';
-                barWrap.setAttribute('aria-valuenow', String(pct));
+        // Pre-poll: maybe it's already installed.
+        var preSeq = this._renderSeq;
+        this.api.get('/setup/install-status/mainchain', { skipCache: true }).then(function (s) {
+            if (!self._isStillRendering(preSeq)) return;
+            if (s && s.phase === 'done') {
+                document.getElementById('enm-install-version').textContent =
+                    'Already installed: ' + (s.version || '');
+                progressWrap.hidden = true;
+                startBtn.hidden = true;
+                nextBtn.hidden = false;
+                self._state.install = s;
             }
-            if (Array.isArray(status.logTail)) {
-                logBox.textContent = status.logTail.join('\n');
-                logBox.scrollTop = logBox.scrollHeight;
+        }).catch(function () { /* boot race; ignore */ });
+    };
+
+    SetupWizard.prototype._beginInstall = function (card, startBtn) {
+        var self = this;
+        var versionLine = card.querySelector('#enm-install-version');
+        var bar = card.querySelector('.enm-install-bar');
+        var status = card.querySelector('.enm-install-status');
+
+        function applyStatus(s) {
+            self._state.install = s;
+            if (s.version) versionLine.textContent = 'Version ' + s.version;
+            var pct = (s.bytesTotal && s.bytesDownloaded)
+                ? Math.min(100, Math.floor((s.bytesDownloaded / s.bytesTotal) * 100))
+                : (s.phase === 'done' ? 100 : 0);
+            bar.style.width = pct + '%';
+            status.textContent = phaseLabel(s);
+            if (s.phase === 'done') {
+                startBtn.hidden = true;
+                var nextBtn = self._body.querySelector('.enm-wizard-actions button:last-child');
+                if (nextBtn) nextBtn.hidden = false;
+                self.notifications.info('ela installed', s.binaryPath || '');
             }
-            if (status.phase === 'done') {
-                cancelBtn.remove();
-                self._choices.binaryPath = status.resolvedPath;
-                self._choices.binaryVersion = status.version;
-                actions.appendChild(makeBtn(t('wizard.build_continue_btn'), function () {
-                    self._goto('keystore');
-                }));
-            } else if (status.phase === 'failed') {
-                cancelBtn.remove();
-                if (status.error) {
-                    var errLine = document.createElement('p');
-                    errLine.className = 'enm-wizard-build-error';
-                    errLine.textContent = status.error;
-                    panel.insertBefore(errLine, logBox);
-                }
-                actions.appendChild(makeBtn(t('wizard.build_retry_btn'), function () {
-                    self._startAutoInstall(panel);
-                }));
+            if (s.phase === 'failed') {
+                status.textContent = 'Failed: ' + (s.error || 'unknown error');
+                startBtn.disabled = false;
+                startBtn.textContent = 'Retry';
             }
         }
 
-        // SSE subscription — live updates.
-        var unsub = null;
-        if (self.sse && typeof self.sse.subscribe === 'function') {
-            unsub = self.sse.subscribe('setup:build', function (payload) {
-                if (payload && payload.phase) {
-                    // Pull the latest snapshot — payload only carries the
-                    // delta. Keeps the UI consistent with the source of truth.
-                    self.api.get('/setup/build-status', { skipCache: true })
-                        .then(applyStatus)
-                        .catch(function () { /* will retry on next event */ });
-                }
-            });
+        // Subscribe to live SSE updates first.
+        if (this.sse && typeof this.sse.subscribe === 'function') {
+            this._unsubscribeInstall = this.sse.subscribe(
+                'setup:install:mainchain',
+                function (payload) { applyStatus(payload); },
+            );
         }
-        // Polling fallback — every 4 seconds. Cheap (status is in-memory).
-        var pollTimer = setInterval(function () {
-            self.api.get('/setup/build-status', { skipCache: true })
-                .then(function (status) {
-                    applyStatus(status);
-                    if (status.phase === 'done'
-                        || status.phase === 'failed'
-                        || status.phase === 'cancelled') {
-                        clearInterval(pollTimer);
-                        if (unsub) try { unsub(); } catch (_) {}
+
+        this.api.post('/setup/install/mainchain').then(function (resp) {
+            applyStatus(resp.status);
+            // Fallback poll in case SSE isn't wired.
+            (function poll() {
+                if (!self.root.isConnected) return;
+                self.api.get('/setup/install-status/mainchain', { skipCache: true }).then(function (s) {
+                    applyStatus(s);
+                    if (s.phase !== 'done' && s.phase !== 'failed') {
+                        setTimeout(poll, 2000);
                     }
-                })
-                .catch(function () { /* retry on next tick */ });
-        }, 4000);
-
-        // Kick the build.
-        self.api.post('/setup/auto-install-ela').then(function (result) {
-            if (result && result.status) applyStatus(result.status);
+                }).catch(function () { setTimeout(poll, 4000); });
+            })();
         }).catch(function (err) {
-            phaseLabel.textContent = t('wizard.build_phase_failed') + ': ' + err.message;
+            status.textContent = 'Install error: ' + (err.message || err);
+            startBtn.disabled = false;
         });
     };
+
+    // ===================================================================
+    // Step 3 — keystore
+    // ===================================================================
 
     SetupWizard.prototype._render_keystore = function () {
         var self = this;
-        var t = root.enmTOrFallback;
-        this._body.appendChild(makeHeading(t('wizard.step_keystore')));
-        this._body.appendChild(makePara(t('wizard.keystore_help')));
 
-        var arbiterToggle = document.createElement('label');
-        arbiterToggle.className = 'enm-wizard-checkbox';
-        var arbiterInput = document.createElement('input');
-        arbiterInput.type = 'checkbox';
-        arbiterInput.checked = self._choices.enableArbiter !== false;
-        arbiterToggle.appendChild(arbiterInput);
-        var arbiterLabel = document.createElement('span');
-        arbiterLabel.textContent = t('wizard.keystore_arbiter_label');
-        arbiterToggle.appendChild(arbiterLabel);
-        this._body.appendChild(arbiterToggle);
+        this._body.appendChild(makeHeading('Generate producer keystore'));
+        this._body.appendChild(makePara(
+            'BPoS supernodes sign blocks with a server-side keystore (keystore.dat). ' +
+            'ENM generates one for you using ela-cli — the keystore stays on this server, ' +
+            'never leaves. Treat the password like a recovery seed: if you lose it, the ' +
+            'producer key is gone forever.',
+        ));
 
-        // Path + password fields, hidden when arbiter mode is off.
-        var ksFields = document.createElement('div');
-        ksFields.className = 'enm-wizard-keystore-fields';
-
-        var pathInput = document.createElement('input');
-        pathInput.type = 'text';
-        pathInput.className = 'enm-wizard-binary-input';
-        pathInput.placeholder = t('wizard.keystore_path_placeholder');
-        pathInput.setAttribute('aria-label', t('wizard.keystore_path_label'));
-        ksFields.appendChild(pathInput);
-
-        var pwInput = document.createElement('input');
-        pwInput.type = 'password';
-        pwInput.autocomplete = 'new-password';
-        pwInput.className = 'enm-wizard-binary-input';
-        pwInput.setAttribute('aria-label', t('wizard.keystore_password_label'));
-        pwInput.placeholder = t('wizard.keystore_password_label');
-        ksFields.appendChild(pwInput);
-
-        this._body.appendChild(ksFields);
-
-        var status = makePara('');
-        this._body.appendChild(status);
-
-        function updateFieldsVisibility() {
-            ksFields.style.display = arbiterInput.checked ? '' : 'none';
-        }
-        arbiterInput.addEventListener('change', updateFieldsVisibility);
-        updateFieldsVisibility();
-
-        var saveBtn = makeBtn(t('wizard.keystore_save_btn'), function () {
-            var enableArbiter = arbiterInput.checked;
-            var body = { enableArbiter: enableArbiter };
-            if (enableArbiter) {
-                if (!pathInput.value.trim() || !pwInput.value) {
-                    status.textContent = t('wizard.keystore_fail', {
-                        reason: 'path and password are required',
-                    });
-                    return;
-                }
-                body.keystorePath = pathInput.value.trim();
-                body.keystorePassword = pwInput.value;
-            }
-            saveBtn.disabled = true;
-            self.api.post('/setup/keystore', body).then(function (result) {
-                self._choices.enableArbiter = enableArbiter;
-                self._choices.keystoreImported = !!result.keystoreImported;
-                status.textContent = enableArbiter
-                    ? t('wizard.keystore_ok')
-                    : '';
-                pwInput.value = ''; // wipe password from memory ASAP
-                self._goto('network');
-            }).catch(function (err) {
-                status.textContent = t('wizard.keystore_fail', { reason: err.message });
-                saveBtn.disabled = false;
-            });
-        });
-        this._body.appendChild(saveBtn);
-    };
-
-    SetupWizard.prototype._render_network = function () {
-        var self = this;
-        var t = root.enmTOrFallback;
-        this._body.appendChild(makeHeading(t('wizard.step_network')));
-        this._body.appendChild(makePara(t('wizard.network_help')));
-
+        // Mode toggle: BPoS (with keystore) vs full-node (no keystore)
         var modeWrap = document.createElement('div');
-        modeWrap.className = 'enm-wizard-radio-row';
-        var auto = document.createElement('input');
-        auto.type = 'radio'; auto.name = 'wizardIpMode'; auto.value = 'auto';
-        auto.checked = self._choices.ipMode !== 'manual';
-        var manual = document.createElement('input');
-        manual.type = 'radio'; manual.name = 'wizardIpMode'; manual.value = 'manual';
-        manual.checked = self._choices.ipMode === 'manual';
-
-        modeWrap.appendChild(labelEl(auto, t('settings.ip_mode_auto')));
-        modeWrap.appendChild(labelEl(manual, t('settings.ip_mode_manual')));
+        modeWrap.className = 'enm-wizard-mode';
+        modeWrap.innerHTML =
+            '<label class="enm-wizard-mode-opt"><input type="radio" name="enm-mode" value="bpos" checked>' +
+            '<span><strong>BPoS supernode</strong><span class="enm-wizard-mode-help">Earn rewards by signing blocks. Requires 2,000 ELA deposit.</span></span></label>' +
+            '<label class="enm-wizard-mode-opt"><input type="radio" name="enm-mode" value="full">' +
+            '<span><strong>Full node</strong><span class="enm-wizard-mode-help">Follow the chain only — no keystore, no deposit.</span></span></label>';
         this._body.appendChild(modeWrap);
 
-        var manualInput = document.createElement('input');
-        manualInput.type = 'text';
-        manualInput.className = 'enm-wizard-binary-input';
-        manualInput.value = self._choices.ipManual || '';
-        manualInput.placeholder = '203.0.113.5  or  myhost.dyndns.org';
-        this._body.appendChild(manualInput);
+        // Password choice
+        var pwCard = document.createElement('div');
+        pwCard.className = 'enm-wizard-pwcard';
+        pwCard.innerHTML =
+            '<label><input type="radio" name="enm-pw" value="generate" checked> Generate a strong password for me</label>' +
+            '<label><input type="radio" name="enm-pw" value="custom"> I\'ll choose my own password</label>' +
+            '<input type="password" id="enm-pw-input" placeholder="Choose a strong password (16+ chars)" autocomplete="new-password" hidden>';
+        this._body.appendChild(pwCard);
 
-        var status = makePara('');
-        this._body.appendChild(status);
-
-        var detectBtn = makeBtn(t('wizard.network_detect_btn'), function () {
-            status.textContent = t('common.loading');
-            self.api.get('/system/extip', { skipCache: true }).then(function (data) {
-                if (data && data.ok && data.ip) {
-                    self._choices.extipDetected = data.ip;
-                    status.textContent = data.ip;
-                } else {
-                    status.textContent = (data && data.reason) || 'Detect failed';
-                }
-            }).catch(function (err) {
-                status.textContent = err.message;
+        var input = pwCard.querySelector('#enm-pw-input');
+        pwCard.querySelectorAll('input[name="enm-pw"]').forEach(function (r) {
+            r.addEventListener('change', function () {
+                self._state.useGeneratedPassword = (r.value === 'generate' && r.checked);
+                input.hidden = self._state.useGeneratedPassword;
             });
         });
-        this._body.appendChild(detectBtn);
 
-        function applyMode() {
-            manualInput.disabled = !manual.checked;
-        }
-        auto.addEventListener('change', applyMode);
-        manual.addEventListener('change', applyMode);
-        applyMode();
-
-        var saveBtn = makeBtn(t('wizard.network_save_btn'), function () {
-            var mode = manual.checked ? 'manual' : 'auto';
-            var body = { mode: mode };
-            if (mode === 'manual') { body.manualValue = manualInput.value.trim(); }
-            saveBtn.disabled = true;
-            self.api.post('/setup/network', body).then(function () {
-                self._choices.ipMode = mode;
-                self._choices.ipManual = body.manualValue || '';
-                self._goto('confirm');
-            }).catch(function (err) {
-                status.textContent = err.message;
-                saveBtn.disabled = false;
-            });
+        var actions = document.createElement('div');
+        actions.className = 'enm-wizard-actions';
+        var generateBtn = makeBtn('Generate keystore', 'primary', function () {
+            generateBtn.disabled = true;
+            generateBtn.textContent = 'Generating...';
+            self._submitKeystore(generateBtn, modeWrap, input);
         });
-        this._body.appendChild(saveBtn);
+        actions.appendChild(generateBtn);
+        this._body.appendChild(actions);
     };
+
+    SetupWizard.prototype._submitKeystore = function (btn, modeWrap, pwInput) {
+        var self = this;
+        var modeRadio = modeWrap.querySelector('input[name="enm-mode"]:checked');
+        var enableArbiter = modeRadio && modeRadio.value === 'bpos';
+        var body = { enableArbiter: enableArbiter };
+        if (enableArbiter && !self._state.useGeneratedPassword) {
+            var pw = (pwInput.value || '').trim();
+            if (pw.length < 8) {
+                btn.disabled = false;
+                btn.textContent = 'Generate keystore';
+                self.notifications.warning('Password too short', 'Use at least 8 characters.');
+                return;
+            }
+            body.password = pw;
+        }
+        this.api.post('/setup/keystore', body).then(function (resp) {
+            self._state.keystore = resp;
+            if (!enableArbiter) {
+                self._goto('confirm');
+                return;
+            }
+            self._showKeystoreReveal(resp);
+        }).catch(function (err) {
+            btn.disabled = false;
+            btn.textContent = 'Retry';
+            self.notifications.warning('Keystore generation failed', err.message || String(err));
+        });
+    };
+
+    SetupWizard.prototype._showKeystoreReveal = function (resp) {
+        var self = this;
+        // Hide the previous body content; show the reveal card.
+        this._body.innerHTML = '';
+        this._body.appendChild(makeHeading('Save your keystore password'));
+        var p = makePara(
+            'Below is the password we generated for your keystore. Save it somewhere ' +
+            'safe — a password manager, a printed copy in a fireproof place, anywhere ' +
+            'that survives the loss of this server. We will not show it again.',
+        );
+        this._body.appendChild(p);
+
+        if (resp.generatedPassword) {
+            var pwReveal = document.createElement('div');
+            pwReveal.className = 'enm-pw-reveal';
+            pwReveal.innerHTML =
+                '<code class="enm-pw-value"></code>' +
+                '<button class="enm-btn enm-btn-secondary enm-pw-copy" type="button">Copy</button>' +
+                '<button class="enm-btn enm-btn-secondary enm-pw-download" type="button">Download .txt</button>';
+            pwReveal.querySelector('.enm-pw-value').textContent = resp.generatedPassword;
+            pwReveal.querySelector('.enm-pw-copy').addEventListener('click', function () {
+                navigator.clipboard.writeText(resp.generatedPassword)
+                    .then(function () { self.notifications.info('Copied', 'Password is in the clipboard. Paste it into your password manager NOW.'); })
+                    .catch(function () { self.notifications.warning('Copy failed', 'Select the password and copy manually.'); });
+            });
+            pwReveal.querySelector('.enm-pw-download').addEventListener('click', function () {
+                var blob = new Blob([
+                    'Elastos Node Manager — keystore password\n',
+                    'Generated: ' + new Date().toISOString() + '\n',
+                    'Producer public key: ' + resp.publicKey + '\n',
+                    'Address: ' + resp.address + '\n\n',
+                    'PASSWORD: ' + resp.generatedPassword + '\n\n',
+                    'Keep this file offline. If you lose this password the keystore is unrecoverable.\n',
+                ], { type: 'text/plain' });
+                var url = URL.createObjectURL(blob);
+                var a = document.createElement('a');
+                a.href = url;
+                a.download = 'elastos-keystore-password.txt';
+                a.click();
+                URL.revokeObjectURL(url);
+            });
+            this._body.appendChild(pwReveal);
+        } else {
+            this._body.appendChild(makePara('You chose your own password. Make sure you have it saved before continuing.'));
+        }
+
+        var ack = document.createElement('label');
+        ack.className = 'enm-pw-ack';
+        ack.innerHTML = '<input type="checkbox" id="enm-pw-ack-check"> I have saved the password somewhere safe.';
+        this._body.appendChild(ack);
+
+        var actions = document.createElement('div');
+        actions.className = 'enm-wizard-actions';
+        var nextBtn = makeBtn('Continue', 'primary', function () { self._goto('confirm'); });
+        nextBtn.disabled = true;
+        actions.appendChild(nextBtn);
+        this._body.appendChild(actions);
+
+        ack.querySelector('input').addEventListener('change', function (ev) {
+            nextBtn.disabled = !ev.target.checked;
+        });
+    };
+
+    // ===================================================================
+    // Step 4 — confirm
+    // ===================================================================
 
     SetupWizard.prototype._render_confirm = function () {
         var self = this;
-        var t = root.enmTOrFallback;
-        this._body.appendChild(makeHeading(t('wizard.confirm_heading')));
+        this._body.appendChild(makeHeading('Ready to start'));
+        this._body.appendChild(makePara(
+            'Review the setup below. Clicking Start will write the chain config, ' +
+            'launch the mainchain process, and take you to the dashboard.',
+        ));
 
-        var summary = document.createElement('ul');
+        var summary = document.createElement('dl');
         summary.className = 'enm-wizard-summary';
-        var role = self._choices.enableArbiter
-            ? t('wizard.confirm_role_arbiter')
-            : t('wizard.confirm_role_full');
-        appendLi(summary, role);
-        appendLi(summary, t('wizard.confirm_binary', { path: self._choices.binaryPath || '—' }));
-        var ipDisplay = self._choices.ipMode === 'manual'
-            ? (self._choices.ipManual || '—')
-            : (self._choices.extipDetected
-                ? self._choices.extipDetected + ' (auto)'
-                : 'auto-detect at start');
-        appendLi(summary, t('wizard.confirm_ip', { value: ipDisplay }));
+        var ks = this._state.keystore || {};
+        var inst = this._state.install || {};
+        var rows = [
+            ['Mainchain version', inst.version || 'mainchain installed'],
+            ['Mode', ks.enableArbiter === false ? 'Full node' : 'BPoS supernode'],
+        ];
+        if (ks.publicKey) {
+            rows.push(['Producer public key', truncMid(ks.publicKey, 12, 12)]);
+        }
+        if (ks.address) {
+            rows.push(['Producer address', ks.address]);
+        }
+        rows.forEach(function (r) {
+            var dt = document.createElement('dt'); dt.textContent = r[0];
+            var dd = document.createElement('dd'); dd.textContent = r[1];
+            summary.appendChild(dt); summary.appendChild(dd);
+        });
         this._body.appendChild(summary);
 
-        var status = makePara('');
-        this._body.appendChild(status);
-
-        var startBtn = makeBtn(t('wizard.confirm_start_btn'), function () {
+        var actions = document.createElement('div');
+        actions.className = 'enm-wizard-actions';
+        var startBtn = makeBtn('Write config & start node', 'primary', function () {
             startBtn.disabled = true;
-            status.textContent = t('wizard.confirm_finishing');
-            self.api.post('/setup/complete').then(function () {
-                self.api.invalidate('/setup/state');
-                status.textContent = t('wizard.confirm_complete_no_start');
-                self._goto('complete');
+            startBtn.textContent = 'Working...';
+
+            // /setup/network with mode='auto' so the IPAddress is detected.
+            self.api.post('/setup/network', { mode: 'auto' }).then(function () {
+                return self.api.post('/setup/complete', {});
+            }).then(function () {
+                self.notifications.info('Setup complete', 'Loading dashboard...');
+                self.onComplete();
             }).catch(function (err) {
-                status.textContent = err.message;
                 startBtn.disabled = false;
+                startBtn.textContent = 'Retry';
+                self.notifications.warning('Could not finish setup', err.message || String(err));
             });
         });
-        this._body.appendChild(startBtn);
+        actions.appendChild(startBtn);
+        this._body.appendChild(actions);
     };
 
-    SetupWizard.prototype._render_complete = function () {
-        var self = this;
-        var t = root.enmTOrFallback;
-        this._body.appendChild(makeHeading(t('wizard.step_complete')));
-        this._body.appendChild(makePara(t('wizard.confirm_complete_no_start')));
-        this._body.appendChild(makeBtn(t('common.close'), function () {
-            self.onComplete();
-        }));
-    };
+    // ===================================================================
+    // helpers
+    // ===================================================================
 
-    /** @private */
-    SetupWizard.prototype._loadPreflight = function () {
-        if (this._preflight) { return Promise.resolve(this._preflight); }
-        var self = this;
-        return this.api.get('/setup/preflight', { skipCache: true }).then(function (pre) {
-            self._preflight = pre;
-            return pre;
-        });
+    var STEP_LABELS = {
+        welcome:  'Welcome',
+        install:  'Install',
+        keystore: 'Keystore',
+        confirm:  'Confirm',
     };
 
     function makeHeading(text) {
         var h = document.createElement('h2');
-        h.className = 'enm-wizard-heading';
         h.textContent = text;
         return h;
     }
+
     function makePara(text) {
         var p = document.createElement('p');
-        p.className = 'enm-wizard-para';
         p.textContent = text;
         return p;
     }
-    function makeBtn(text, onClick) {
+
+    function makeBtn(label, variant, onClick) {
         var b = document.createElement('button');
         b.type = 'button';
-        b.className = 'enm-btn enm-btn-primary';
-        b.textContent = text;
+        b.className = 'enm-btn enm-btn-' + (variant || 'primary');
+        b.textContent = label;
         b.addEventListener('click', onClick);
         return b;
     }
-    function labelEl(input, text) {
-        var l = document.createElement('label');
-        l.className = 'enm-wizard-label';
-        l.appendChild(input);
-        var span = document.createElement('span');
-        span.textContent = text;
-        l.appendChild(span);
-        return l;
+
+    function renderCheckRow(parent, label, ok, detail) {
+        var row = document.createElement('div');
+        row.className = 'enm-wizard-check-row enm-wizard-check-' + (ok ? 'ok' : 'fail');
+        row.innerHTML =
+            '<span class="enm-wizard-check-mark" aria-hidden="true">' + (ok ? '✓' : '!') + '</span>' +
+            '<span class="enm-wizard-check-label"></span>' +
+            '<span class="enm-wizard-check-detail"></span>';
+        row.querySelector('.enm-wizard-check-label').textContent = label;
+        row.querySelector('.enm-wizard-check-detail').textContent = detail || '';
+        parent.appendChild(row);
     }
-    function appendLi(ul, text) {
-        var li = document.createElement('li');
-        li.textContent = text;
-        ul.appendChild(li);
+
+    function phaseLabel(s) {
+        switch (s.phase) {
+            case 'idle':        return 'Ready';
+            case 'resolving':   return 'Looking up the latest release...';
+            case 'downloading':
+                if (s.bytesTotal) {
+                    var mb = (s.bytesDownloaded / 1024 / 1024).toFixed(1);
+                    var total = (s.bytesTotal / 1024 / 1024).toFixed(1);
+                    return 'Downloading... ' + mb + ' / ' + total + ' MB';
+                }
+                return 'Downloading...';
+            case 'extracting':  return 'Extracting...';
+            case 'verifying':   return 'Verifying binary...';
+            case 'done':        return 'Installed';
+            case 'failed':      return 'Failed';
+            default:            return s.phase || '';
+        }
     }
+
+    function truncMid(s, head, tail) {
+        if (!s || s.length <= head + tail + 3) return s;
+        return s.slice(0, head) + '…' + s.slice(-tail);
+    }
+
     root.EnmSetupWizard = SetupWizard;
-    root.ENM_WIZARD_STEPS = STEPS;
 }(typeof window !== 'undefined' ? window : globalThis));

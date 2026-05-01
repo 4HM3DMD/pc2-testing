@@ -1370,6 +1370,436 @@ html, body {
    Reduced motion — respect the system preference
    ============================================================ */
 
+/* ============================================================
+   Wizard step indicator — numbered pills with connectors
+   ============================================================ */
+
+.enm-wizard-steps {
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    list-style: none;
+    margin-bottom: var(--spacing-xl);
+    padding: var(--spacing-md);
+    background: var(--bg-muted);
+    border-radius: var(--radius-lg);
+    counter-reset: enm-step;
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+
+.enm-wizard-steps::-webkit-scrollbar { display: none; }
+
+.enm-wizard-step {
+    flex: 1;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: var(--spacing-sm);
+    padding: 0 var(--spacing-sm);
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-muted);
+    background: none;
+    border-radius: 0;
+    min-width: 0;
+    text-transform: none;
+    position: relative;
+    transition: color var(--motion-base) var(--ease-out);
+}
+
+.enm-wizard-step + .enm-wizard-step::before {
+    content: '';
+    width: 16px;
+    height: 1px;
+    background: var(--border-color);
+    flex-shrink: 0;
+    margin-right: var(--spacing-xs);
+    align-self: center;
+}
+
+.enm-wizard-step-num {
+    width: 24px;
+    height: 24px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    font-size: 11px;
+    font-weight: 600;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    color: var(--text-muted);
+    transition: background var(--motion-base) var(--ease-out),
+                border-color var(--motion-base) var(--ease-out),
+                color var(--motion-base) var(--ease-out);
+    flex-shrink: 0;
+}
+
+.enm-wizard-step-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+}
+
+.enm-wizard-step-active {
+    background: none;
+    box-shadow: none;
+    color: var(--primary);
+}
+
+.enm-wizard-step-active .enm-wizard-step-num {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: #fff;
+    box-shadow: 0 0 0 4px var(--primary-soft);
+}
+
+.enm-wizard-step-done {
+    background: none;
+    color: var(--success);
+}
+
+.enm-wizard-step-done .enm-wizard-step-num {
+    background: var(--success);
+    border-color: var(--success);
+    color: #fff;
+}
+
+.enm-wizard-step-done .enm-wizard-step-num::before {
+    content: '✓';
+}
+
+.enm-wizard-step-done .enm-wizard-step-num > * { display: none; }
+
+/* ============================================================
+   System checks card (welcome step)
+   ============================================================ */
+
+.enm-wizard-checks {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-sm);
+    padding: var(--spacing-md);
+    background: var(--bg-muted);
+    border-radius: var(--radius-md);
+    margin: var(--spacing-md) 0;
+}
+
+.enm-wizard-checks-spinner {
+    display: inline-flex;
+    gap: 6px;
+    margin-right: var(--spacing-sm);
+}
+
+.enm-wizard-check-row {
+    display: grid;
+    grid-template-columns: 24px minmax(120px, 1fr) auto;
+    align-items: center;
+    gap: var(--spacing-sm);
+    padding: var(--spacing-sm) var(--spacing-md);
+    background: var(--bg-surface);
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+}
+
+.enm-wizard-check-mark {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-size: 12px;
+    font-weight: 700;
+    flex-shrink: 0;
+}
+
+.enm-wizard-check-ok   .enm-wizard-check-mark { background: var(--success); }
+.enm-wizard-check-fail .enm-wizard-check-mark { background: var(--warning); }
+
+.enm-wizard-check-label  { color: var(--text-primary); font-weight: 500; }
+.enm-wizard-check-detail { color: var(--text-secondary); font-size: 12px; }
+
+/* ============================================================
+   Install card (install step)
+   ============================================================ */
+
+.enm-install-card {
+    margin: var(--spacing-lg) 0;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    padding: var(--spacing-lg);
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-md);
+}
+
+.enm-install-card-head {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+}
+
+.enm-install-icon {
+    width: 48px;
+    height: 48px;
+    border-radius: var(--radius-md);
+    background: var(--primary-soft);
+    color: var(--primary);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 24px;
+    flex-shrink: 0;
+}
+
+.enm-install-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.enm-install-name {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.enm-install-sub {
+    font-size: 12px;
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+}
+
+.enm-install-progress {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.enm-install-bar-wrap {
+    width: 100%;
+    height: 6px;
+    background: var(--bg-muted);
+    border-radius: var(--radius-pill);
+    overflow: hidden;
+}
+
+.enm-install-bar {
+    width: 0;
+    height: 100%;
+    background: linear-gradient(90deg, var(--primary), var(--primary-hover));
+    transition: width var(--motion-slow) var(--ease-out);
+}
+
+.enm-install-status {
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+/* ============================================================
+   Mode selector + password card (keystore step)
+   ============================================================ */
+
+.enm-wizard-mode {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: var(--spacing-sm);
+    margin: var(--spacing-md) 0;
+}
+
+@media (min-width: 640px) {
+    .enm-wizard-mode { grid-template-columns: 1fr 1fr; }
+}
+
+.enm-wizard-mode-opt {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--spacing-sm);
+    padding: var(--spacing-md);
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: border-color var(--motion-fast) var(--ease-out),
+                background var(--motion-fast) var(--ease-out);
+    text-transform: none;
+    color: var(--text-primary);
+    font-weight: 400;
+    font-size: 13px;
+    margin-bottom: 0;
+    letter-spacing: normal;
+}
+
+.enm-wizard-mode-opt:hover { border-color: var(--border-strong); }
+
+.enm-wizard-mode-opt input[type="radio"] {
+    margin-top: 2px;
+    accent-color: var(--primary);
+}
+
+.enm-wizard-mode-opt input[type="radio"]:checked ~ span {
+    color: var(--primary);
+}
+
+.enm-wizard-mode-opt:has(input[type="radio"]:checked) {
+    border-color: var(--primary);
+    background: var(--primary-softer);
+}
+
+.enm-wizard-mode-opt span {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    text-transform: none;
+    color: inherit;
+    font-weight: 400;
+    letter-spacing: normal;
+}
+
+.enm-wizard-mode-opt strong {
+    font-size: 14px;
+    color: var(--text-primary);
+}
+
+.enm-wizard-mode-help {
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+    font-weight: 400;
+}
+
+.enm-wizard-pwcard {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-sm);
+    padding: var(--spacing-md);
+    background: var(--bg-muted);
+    border-radius: var(--radius-md);
+    margin: var(--spacing-md) 0;
+}
+
+.enm-wizard-body .enm-wizard-pwcard label,
+.enm-wizard-pwcard label {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    font-size: 13px;
+    color: var(--text-primary);
+    font-weight: 500;
+    text-transform: none;
+    letter-spacing: normal;
+    margin: 0;
+    cursor: pointer;
+}
+
+.enm-wizard-body .enm-wizard-mode-opt,
+.enm-wizard-body label.enm-wizard-mode-opt {
+    text-transform: none;
+    letter-spacing: normal;
+    color: var(--text-primary);
+    font-weight: 400;
+    font-size: 13px;
+    margin: 0;
+}
+
+.enm-wizard-pwcard label input[type="radio"] { accent-color: var(--primary); }
+
+.enm-wizard-pwcard input[type="password"] {
+    margin-top: var(--spacing-xs);
+}
+
+/* ============================================================
+   Password reveal card (after keystore generation)
+   ============================================================ */
+
+.enm-pw-reveal {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--spacing-sm);
+    padding: var(--spacing-md);
+    background: var(--bg-code);
+    color: var(--text-inverse);
+    border-radius: var(--radius-md);
+    margin: var(--spacing-md) 0;
+}
+
+.enm-pw-value {
+    flex: 1;
+    min-width: 200px;
+    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
+    font-size: 14px;
+    color: #f1f5f9;
+    word-break: break-all;
+    user-select: all;
+}
+
+.enm-wizard-body label.enm-pw-ack {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    padding: var(--spacing-md);
+    background: rgba(234, 88, 12, 0.06);
+    border: 1px solid rgba(234, 88, 12, 0.2);
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 500;
+    text-transform: none;
+    letter-spacing: normal;
+    margin: 0 0 var(--spacing-md);
+    cursor: pointer;
+}
+
+.enm-pw-ack input[type="checkbox"] {
+    accent-color: var(--warning);
+    width: 16px;
+    height: 16px;
+}
+
+/* ============================================================
+   Wizard summary table (confirm step)
+   ============================================================ */
+
+.enm-wizard-summary {
+    display: grid;
+    grid-template-columns: minmax(160px, auto) 1fr;
+    gap: var(--spacing-sm) var(--spacing-md);
+    margin: var(--spacing-lg) 0;
+    padding: var(--spacing-md);
+    background: var(--bg-muted);
+    border-radius: var(--radius-md);
+    font-size: 13px;
+}
+
+.enm-wizard-summary dt {
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-size: 11px;
+    font-weight: 600;
+    align-self: center;
+}
+
+.enm-wizard-summary dd {
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+    word-break: break-all;
+}
+
+.enm-wizard-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--spacing-sm);
+    margin-top: var(--spacing-lg);
+}
+
 @media (prefers-reduced-motion: reduce) {
     *,
     *::before,

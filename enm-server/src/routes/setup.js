@@ -144,95 +144,96 @@ function build(extensionHandle) {
     });
 
     /**
-     * GET /setup/build-status
+     * GET /setup/install-status/:chainId
      *
-     * Snapshot of the auto-build pipeline (idle / preparing / fetching-go /
-     * cloning / building / verifying / done / failed / cancelled). The wizard
-     * polls this as a fallback when SSE isn't available; the SSE topic
-     * `setup:build` is the live channel.
+     * Snapshot of the binary installer state-machine for a single chain
+     * (idle/resolving/downloading/extracting/verifying/done/failed). The
+     * wizard polls this as a fallback when SSE isn't available; the live
+     * channel is SSE topic `setup:install:<chainId>`.
      */
-    router.get('/build-status', limit('read'), async (req, res) => {
+    router.get('/install-status/:chainId', limit('read'), async (req, res) => {
         if (!readActorWallet(req)) {
             return res.status(401).json(errorBody('Authentication required.'));
         }
         try {
-            const status = ChainRegistry.getAutoBuilder().getStatus();
+            const status = ChainRegistry.getBinaryDownloader().getStatus(req.params.chainId);
             return res.json(successBody(status));
         } catch (err) {
-            extensionHandle.log.error(`${ENM_LOG_PREFIX} /setup/build-status: ${err.message}`);
+            return res.status(400).json(errorBody(err.message));
+        }
+    });
+
+    /**
+     * GET /setup/chains
+     *
+     * The catalog of chains we know how to install. The wizard renders
+     * this as the "pick chains" step.
+     */
+    router.get('/chains', limit('read'), async (req, res) => {
+        if (!readActorWallet(req)) {
+            return res.status(401).json(errorBody('Authentication required.'));
+        }
+        try {
+            const chains = ChainRegistry.getBinaryDownloader().listChains();
+            return res.json(successBody({ chains }));
+        } catch (err) {
             return res.status(500).json(errorBody(err.message));
         }
     });
 
     /**
-     * POST /setup/auto-install-ela
+     * POST /setup/install/:chainId
      *
-     * Kicks off the one-button "build ela for me" pipeline:
-     *   1. Reuse system Go if version >= 1.20, else download official Go
-     *      release into our private cache (no sudo, no PATH pollution).
-     *   2. git clone Elastos.ELA, checkout the pinned tag (v0.9.9.5).
-     *   3. make all  — output streamed to SSE topic `setup:build`.
-     *   4. Smoke-test the resulting binary.
-     *   5. Persist the resolved path in setup-state so the binary step
-     *      auto-fills.
+     * Download + extract + verify the latest release of the given chain
+     * from download.elastos.io. Mirrors what node.sh does — pre-built
+     * tarballs only, no source build, no Go toolchain.
      *
-     * Returns immediately. Caller subscribes to SSE for live progress or
-     * polls /setup/build-status. Idempotent: a second call while a build is
-     * in flight returns the existing status.
+     * Returns immediately. Caller subscribes to SSE topic
+     * `setup:install:<chainId>` for live progress or polls
+     * /setup/install-status/:chainId. Idempotent.
      */
-    router.post('/auto-install-ela', limit('admin'), requireOwner, async (req, res) => {
+    router.post('/install/:chainId', limit('admin'), requireOwner, async (req, res) => {
         const wallet = readActorWallet(req);
+        const chainId = req.params.chainId;
         try {
-            const builder = ChainRegistry.getAutoBuilder();
-            const result = builder.start({ ownerWallet: wallet });
-            // Kick a background watcher: when the build finishes successfully,
-            // persist the binary path into enm_setup_state so the wizard's
-            // binary step picks it up without an extra round-trip.
-            const onPhase = setInterval(async () => {
-                const s = builder.getStatus();
-                if (s.phase === 'done' && s.resolvedPath) {
-                    clearInterval(onPhase);
-                    try {
-                        const { db } = extensionHandle.import('data');
-                        await upsertSetupState(db, wallet, {
-                            binary_path: s.resolvedPath,
-                            binary_version: s.version || null,
-                            current_step: 'keystore',
-                        });
-                    } catch (err) {
-                        extensionHandle.log.warn(
-                            `${ENM_LOG_PREFIX} auto-install: setup-state persist failed: ${err.message}`,
-                        );
+            const dl = ChainRegistry.getBinaryDownloader();
+            const result = await dl.start(chainId);
+
+            // Watcher: when the install finishes, persist into setup-state so
+            // the wizard's "downloaded ela" tile checks itself, and so a later
+            // /setup/complete can find the path without another round-trip.
+            // Mainchain-only — sidechains track their own paths via the chain
+            // adapter once we wire those up.
+            if (chainId === 'mainchain') {
+                const onPhase = setInterval(async () => {
+                    const s = dl.getStatus(chainId);
+                    if (s.phase === 'done' && s.binaryPath) {
+                        clearInterval(onPhase);
+                        try {
+                            const { db } = extensionHandle.import('data');
+                            await upsertSetupState(db, wallet, {
+                                binary_path: s.binaryPath,
+                                binary_version: s.version || null,
+                                current_step: 'keystore',
+                            });
+                        } catch (err) {
+                            extensionHandle.log.warn(
+                                `${ENM_LOG_PREFIX} install ${chainId}: setup-state persist failed: ${err.message}`,
+                            );
+                        }
+                    } else if (s.phase === 'failed') {
+                        clearInterval(onPhase);
                     }
-                } else if (s.phase === 'failed' || s.phase === 'cancelled') {
-                    clearInterval(onPhase);
-                }
-            }, 2000);
-            // Defensive cap — terminate the watcher after 30 min even if the
-            // build hangs in some weird way, so we don't leak a timer.
-            setTimeout(() => clearInterval(onPhase), 30 * 60 * 1000).unref?.();
+                }, 2000);
+                setTimeout(() => clearInterval(onPhase), 15 * 60 * 1000).unref?.();
+            }
 
             return res.status(result.alreadyRunning ? 202 : 200).json(successBody({
                 alreadyRunning: result.alreadyRunning,
                 status: result.status,
             }));
         } catch (err) {
-            extensionHandle.log.error(`${ENM_LOG_PREFIX} /setup/auto-install-ela: ${err.message}`);
-            return res.status(500).json(errorBody(err.message));
-        }
-    });
-
-    /**
-     * DELETE /setup/auto-install-ela
-     *
-     * Cancel an in-flight build. Sends SIGTERM to the child (git/make/tar);
-     * leaves the cache intact so a retry can resume from the cloned source.
-     */
-    router.delete('/auto-install-ela', limit('admin'), requireOwner, async (req, res) => {
-        try {
-            ChainRegistry.getAutoBuilder().cancel();
-            return res.json(successBody(ChainRegistry.getAutoBuilder().getStatus()));
-        } catch (err) {
+            extensionHandle.log.error(`${ENM_LOG_PREFIX} /setup/install/${chainId}: ${err.message}`);
             return res.status(500).json(errorBody(err.message));
         }
     });
@@ -278,28 +279,28 @@ function build(extensionHandle) {
     });
 
     /**
-     * POST /setup/keystore  { keystorePath: string, keystorePassword: string, enableArbiter?: boolean }
+     * POST /setup/keystore  { password?: string, enableArbiter?: boolean }
      *
-     * Operator's keystore.dat lives on their disk (we never generate per Rev 6
-     * RNG-bug findings). We:
-     *   1. Verify the path is an absolute file readable by us
-     *   2. Copy it to chainDir/keystore.dat with mode 0600
-     *   3. Encrypt the password with our AES-GCM and stash the envelope in
-     *      enm_setup_state until /setup/complete folds it into the chain config
+     * Generates a fresh keystore.dat by invoking ela-cli wallet create — same
+     * exact command node.sh runs (build/skeleton/node.sh:1317). The operator
+     * never has to touch a file path. If `password` is omitted, we generate a
+     * 32-char random one and surface it back exactly once in the response;
+     * the caller is responsible for showing it to the operator and offering
+     * a download.
      *
-     * If enableArbiter=false, keystorePath/Password may be empty — non-arbiter
-     * (full-node) mode doesn't need a producer key.
+     * Returns the resulting public key + address so the wizard can show the
+     * producer identity for registration (Essentials mobile or server-side
+     * `producer register v2`).
      */
     router.post('/keystore', limit('admin'), requireOwner, async (req, res) => {
         const wallet = readActorWallet(req);
         const body = req.body || {};
         const enableArbiter = body.enableArbiter !== false; // default to BPoS
-        const keystorePath = typeof body.keystorePath === 'string' ? body.keystorePath.trim() : '';
-        const keystorePassword = typeof body.keystorePassword === 'string' ? body.keystorePassword : '';
+        const password = typeof body.password === 'string' ? body.password : '';
 
         try {
             if (!enableArbiter) {
-                // Full-node mode: skip both, advance to network step.
+                // Full-node mode: no keystore needed. Skip ahead.
                 const { db } = extensionHandle.import('data');
                 await upsertSetupState(db, wallet, {
                     keystore_imported: 1,
@@ -308,63 +309,78 @@ function build(extensionHandle) {
                 return res.json(successBody({ enableArbiter: false, keystoreImported: false }));
             }
 
-            // BPoS mode: keystore path + password are both required.
-            const pathValidation = validateKeystorePath(keystorePath);
-            if (!pathValidation.ok) {
-                return res.status(400).json(errorBody(pathValidation.reason));
-            }
-            if (!keystorePassword || keystorePassword.length < 1) {
-                return res.status(400).json(errorBody('keystorePassword is required for BPoS mode.'));
-            }
-
-            // Read source — confirms readability + size before we copy.
-            let stat;
-            try {
-                stat = await fsp.stat(keystorePath);
-            } catch (err) {
-                if (err.code === 'ENOENT') {
-                    return res.status(400).json(errorBody(`No file at ${keystorePath}.`));
-                }
-                return res.status(400).json(errorBody(`Cannot stat keystore: ${err.message}`));
-            }
-            if (!stat.isFile()) {
-                return res.status(400).json(errorBody('keystorePath is not a regular file.'));
-            }
-            // Reasonable upper bound — keystore.dat is typically <10 KB.
-            if (stat.size > 1_048_576) {
-                return res.status(400).json(errorBody('keystore is implausibly large (>1 MB).'));
+            // We need the ela-cli path. It's stored next to the binary in
+            // setup-state from the install step.
+            const dl = ChainRegistry.getBinaryDownloader();
+            const installStatus = dl.getStatus('mainchain');
+            if (!installStatus.cliPath) {
+                return res.status(409).json(errorBody(
+                    'ela-cli not yet installed. Complete the binary install step first.',
+                ));
             }
 
-            // Copy to chain dir at mode 0600.
-            const dir = chainDir('mainchain');
-            await fsp.mkdir(dir, { recursive: true, mode: 0o700 });
-            const dest = path.join(dir, 'keystore.dat');
-            const data = await fsp.readFile(keystorePath);
-            await atomicWrite(dest, data, { mode: 0o600 });
+            const ks = ChainRegistry.getKeystoreService();
+            const result = await ks.create({
+                cliPath: installStatus.cliPath,
+                password: password || undefined,
+                force: !!body.force,
+            });
 
-            // Encrypt the password — envelope stays in enm_setup_state until
-            // /setup/complete folds it into the chain config.
-            const envelope = encrypt(keystorePassword);
+            // Encrypt + stash the password the same way the path-based flow
+            // used to. /setup/complete folds it into the chain config.
+            const envelope = encrypt(result.password);
+            const stashPath = path.join(enmDataDir(), `.setup-keystore-${walletScopeId(wallet)}.json`);
+            await atomicWrite(stashPath, JSON.stringify({
+                envelope,
+                publicKey: result.publicKey,
+                address: result.address,
+            }), { mode: 0o600 });
 
             const { db } = extensionHandle.import('data');
             await upsertSetupState(db, wallet, {
                 keystore_imported: 1,
                 current_step: 'network',
             });
-            // Stash the envelope on a side channel — we don't want it in
-            // enm_setup_state (long-term row, indexed by wallet); instead
-            // write a sealed file under the data dir, mode 0600. /setup/complete
-            // reads + deletes it.
-            const stashPath = path.join(enmDataDir(), `.setup-keystore-${walletScopeId(wallet)}.json`);
-            await atomicWrite(stashPath, JSON.stringify({ envelope }), { mode: 0o600 });
 
             return res.json(successBody({
                 enableArbiter: true,
                 keystoreImported: true,
-                size: stat.size,
+                publicKey: result.publicKey,
+                address: result.address,
+                // Surfaced to the UI exactly once. The UI MUST prompt the
+                // operator to save this — losing it means losing the
+                // producer key permanently.
+                generatedPassword: password ? null : result.password,
             }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} /setup/keystore error: ${err.message}`);
+            return res.status(500).json(errorBody(err.message));
+        }
+    });
+
+    /**
+     * GET /setup/keystore/account
+     *
+     * Returns the current keystore's public key + address (no password
+     * required — the keystore file itself contains the public key in
+     * unencrypted form, ela-cli wallet account just reads it). Used by
+     * the dashboard's "node identity" tile.
+     */
+    router.get('/keystore/account', limit('read'), async (req, res) => {
+        if (!readActorWallet(req)) {
+            return res.status(401).json(errorBody('Authentication required.'));
+        }
+        try {
+            const ks = ChainRegistry.getKeystoreService();
+            const exists = await ks.exists();
+            if (!exists) {
+                return res.json(successBody({ exists: false }));
+            }
+            return res.json(successBody({
+                exists: true,
+                keystorePath: ks.keystorePath(),
+            }));
+        } catch (err) {
             return res.status(500).json(errorBody(err.message));
         }
     });

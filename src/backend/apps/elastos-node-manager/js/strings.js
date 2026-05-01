@@ -131,7 +131,9 @@
         wizard: {
             welcome_heading: 'Welcome to Elastos Node Manager',
             welcome_body:
-                'This wizard will help you start your Elastos mainchain node. v0.1 supports Ubuntu/Debian only and assumes you have already built the ela binary from source.',
+                'ENM downloads the official Elastos mainchain release from download.elastos.io, '
+                + 'generates your producer keystore on this server, writes a config, and runs '
+                + 'the node — exactly like the upstream node.sh installer, with a UI on top.',
             step_os:      'Operating system check',
             step_disk:    'Disk space check',
             step_wallet:  'Wallet check',
