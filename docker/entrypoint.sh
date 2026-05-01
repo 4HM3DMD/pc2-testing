@@ -39,6 +39,14 @@ export NODE_ENV="${NODE_ENV:-production}"
 export PC2_DATA_DIR
 export PC2_NODE_NAME="$NODE_NAME"
 
+# Pin the SQLite DB path explicitly. Default config (pc2-node/config/default.json)
+# resolves database_path to ./data/pc2.db, which depends on CWD and isn't
+# under the bind-mounted /data volume. Pinning to $PC2_DATA_DIR/pc2.db keeps
+# the DB on the persistent mount AND makes it findable by the enm-server
+# sidecar (read-only mount of /data/pc2-node, default PC2_NODE_DB_PATH points
+# at /data/pc2-node/pc2.db).
+export DB_PATH="${DB_PATH:-$PC2_DATA_DIR/pc2.db}"
+
 # Boson connectivity defaults — match upstream pc2-node Dockerfile so the
 # ela.city gateway flow has somewhere to phone home for tunneling. Operator
 # can override by setting these env vars in docker-compose.yml.

@@ -201,9 +201,9 @@ export function handleGetLaunchApps(req: Request, res: Response): void {
       uuid: 'app-elastos-node-manager',
       icon: loadIconAsBase64('elastos-node-manager'),
       description: 'Manage and monitor your Elastos chain validator node',
-      index_url: `${baseUrl}/extensions/elastos-node-manager/`,
+      index_url: `${baseUrl}/apps/elastos-node-manager/index.html`,
       pc2_exclusive: true,
-      maximize_on_start: false
+      maximize_on_start: true
     }
   ];
   
