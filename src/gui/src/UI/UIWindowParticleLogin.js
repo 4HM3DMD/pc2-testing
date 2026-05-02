@@ -146,16 +146,29 @@ async function UIWindowParticleLogin(options = {}) {
             if (type === 'particle-auth.siwe-pending') {
                 dismissSiweBridge(); // de-dupe in case it fires twice
                 const method = (payload && payload.loginMethod) || 'wallet';
+                // External-wallet methods show their signature prompt in a
+                // browser-extension popup or mobile app push, OUTSIDE this
+                // page → fullscreen blocker is fine and in fact helpful (it
+                // tells the user "stop, look at your wallet, not the page").
+                // Email/social Particle login shows its signature prompt
+                // INSIDE the Particle iframe on this page → a fullscreen
+                // blocker would COVER the iframe and the user can't see or
+                // approve the dialog, leaving them stuck. For those, we drop
+                // to the corner-toast variant.
+                const isExternalWallet = method === 'metamask'
+                    || method === 'walletconnect'
+                    || method === 'coinbase';
                 const walletLabel =
                     method === 'metamask' ? 'MetaMask'
                     : method === 'walletconnect' ? 'your wallet app'
                     : method === 'coinbase' ? 'Coinbase Wallet'
-                    : 'your wallet';
+                    : 'your Particle wallet';
                 siweBridge = showLoginStatusOverlay({
                     id: 'pc2-siwe-bridge-overlay',
                     title: 'Verifying wallet ownership',
                     message: `Check ${walletLabel} — we're requesting a one-time signature to securely sign you in.`,
                     hint: '',
+                    position: isExternalWallet ? 'fullscreen' : 'corner',
                 });
                 // Escalating hints for slow relays (especially WalletConnect on Jetson)
                 siweBridgeHintTimer = setTimeout(() => {
@@ -163,7 +176,9 @@ async function UIWindowParticleLogin(options = {}) {
                     siweBridge.update({
                         hint: method === 'walletconnect'
                             ? 'Still waiting — open your wallet app and tap the pending request.'
-                            : 'Still waiting — make sure your wallet popup is in the foreground.',
+                            : isExternalWallet
+                                ? 'Still waiting — make sure your wallet popup is in the foreground.'
+                                : 'Still waiting — approve the signature in the wallet dialog above.',
                     });
                     siweBridgeHintTimer = setTimeout(() => {
                         if (!siweBridge) return;
@@ -792,24 +807,38 @@ function showLoading(container) {
 // ---------------------------------------------------------------------------
 // Login-status overlay (used by SIWE bridge + page-reload transition)
 // ---------------------------------------------------------------------------
-// Shared dark-themed full-window overlay. Matches the login modal palette
+// Shared dark-themed status overlay. Matches the login modal palette
 // (#1c1c1e panel, rgba(255,255,255,0.08) borders, #f59e0b accent) so the
 // experience feels continuous. Used in two places:
 //   1. SIWE bridge: after wallet connects but before the second signature
 //      prompt arrives — kills the "dark hang" UX problem on Jetson + WC.
 //   2. Page-reload transition: after successful auth, while the page is
 //      replacing its URL — prevents a momentary blank window.
-function showLoginStatusOverlay({ id, title, message, hint, accent }) {
+//
+// Position modes (selected by the caller):
+//   - 'fullscreen' (default): centered modal with dimmed backdrop. Use when
+//     the signature prompt happens OUTSIDE this page (browser-extension
+//     popup, mobile WalletConnect push) — the backdrop tells the user to
+//     focus on their wallet, not the page.
+//   - 'corner': compact bottom-right panel, no backdrop. Use when the
+//     signature prompt happens INSIDE an iframe on this page (Particle
+//     email/social login). A fullscreen overlay would COVER the iframe and
+//     hide Particle's confirm dialog, leaving the user stuck. Visual
+//     language matches buildWalletConnectPanel in UIWindowParticleSigning.js
+//     for a consistent "we're waiting for you to act" mental model.
+function showLoginStatusOverlay({ id, title, message, hint, accent, position }) {
     accent = accent || '#f59e0b';
+    const isCorner = position === 'corner';
 
     // Inject keyframes once
     if (!document.querySelector('style#pc2-login-status-style')) {
         const style = document.createElement('style');
         style.id = 'pc2-login-status-style';
         style.textContent = `
-            @keyframes pc2-login-status-spin { 0%{transform:rotate(0)} 100%{transform:rotate(360deg)} }
-            @keyframes pc2-login-status-fade { 0%{opacity:0} 100%{opacity:1} }
-            @keyframes pc2-login-status-pop  { 0%{transform:scale(.96);opacity:0} 100%{transform:scale(1);opacity:1} }
+            @keyframes pc2-login-status-spin  { 0%{transform:rotate(0)} 100%{transform:rotate(360deg)} }
+            @keyframes pc2-login-status-fade  { 0%{opacity:0} 100%{opacity:1} }
+            @keyframes pc2-login-status-pop   { 0%{transform:scale(.96);opacity:0} 100%{transform:scale(1);opacity:1} }
+            @keyframes pc2-login-status-slide { 0%{transform:translateY(20px);opacity:0} 100%{transform:translateY(0);opacity:1} }
         `;
         document.head.appendChild(style);
     }
@@ -820,30 +849,26 @@ function showLoginStatusOverlay({ id, title, message, hint, accent }) {
 
     const overlay = document.createElement('div');
     overlay.id = id;
-    overlay.style.cssText = `
-        position: fixed; inset: 0; z-index: 2147483646;
-        background: rgba(0, 0, 0, 0.78);
-        backdrop-filter: blur(4px);
-        -webkit-backdrop-filter: blur(4px);
-        display: flex; align-items: center; justify-content: center;
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-        animation: pc2-login-status-fade 180ms ease-out both;
-    `;
 
-    overlay.innerHTML = `
-        <div style="
+    if (isCorner) {
+        // Compact bottom-right panel — no backdrop, doesn't block iframe.
+        overlay.style.cssText = `
+            position: fixed; right: 24px; bottom: 24px;
+            z-index: 2147483642;
             background: #1c1c1e;
             border: 1px solid rgba(255,255,255,0.08);
-            border-radius: 16px;
-            padding: 28px 32px;
-            max-width: 360px;
-            width: calc(100% - 32px);
-            box-shadow: 0 25px 50px -12px rgba(0,0,0,0.6);
-            text-align: center;
-            animation: pc2-login-status-pop 220ms cubic-bezier(.2,.9,.3,1) both;
-        ">
+            border-radius: 12px;
+            padding: 14px 16px 14px 14px;
+            width: 320px; max-width: calc(100vw - 48px);
+            box-shadow: 0 18px 40px -12px rgba(0,0,0,0.65);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            animation: pc2-login-status-slide 220ms cubic-bezier(.2,.9,.3,1) both;
+            display: flex; gap: 12px; align-items: flex-start;
+        `;
+
+        overlay.innerHTML = `
             <div style="
-                width: 56px; height: 56px; margin: 0 auto 18px;
+                flex: 0 0 auto; width: 36px; height: 36px;
                 border-radius: 50%;
                 background: rgba(245, 158, 11, 0.10);
                 display: flex; align-items: center; justify-content: center;
@@ -856,25 +881,82 @@ function showLoginStatusOverlay({ id, title, message, hint, accent }) {
                     border-radius: 50%;
                     animation: pc2-login-status-spin .9s linear infinite;
                 "></div>
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="${accent}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="${accent}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <rect x="3" y="11" width="18" height="11" rx="2"/>
                     <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
                 </svg>
             </div>
-            <div data-overlay-title style="
-                font-size: 16px; font-weight: 600; color: #ffffff;
-                margin-bottom: 8px; letter-spacing: -0.01em;
-            ">${title}</div>
-            <div data-overlay-message style="
-                font-size: 13px; color: #9ca3af; line-height: 1.55;
-            ">${message}</div>
-            <div data-overlay-hint style="
-                margin-top: 20px;
-                font-size: 11px; color: #6b7280;
-                min-height: 14px;
-            ">${hint || ''}</div>
-        </div>
-    `;
+            <div style="flex: 1 1 auto; min-width: 0;">
+                <div data-overlay-title style="
+                    font-size: 13px; font-weight: 600; color: #ffffff;
+                    margin-bottom: 3px; letter-spacing: -0.01em;
+                ">${title}</div>
+                <div data-overlay-message style="
+                    font-size: 12px; color: #9ca3af; line-height: 1.4;
+                ">${message}</div>
+                <div data-overlay-hint style="
+                    margin-top: 6px; font-size: 11px; color: #6b7280; min-height: 0;
+                ">${hint || ''}</div>
+            </div>
+        `;
+    } else {
+        // Fullscreen modal with backdrop (default).
+        overlay.style.cssText = `
+            position: fixed; inset: 0; z-index: 2147483646;
+            background: rgba(0, 0, 0, 0.78);
+            backdrop-filter: blur(4px);
+            -webkit-backdrop-filter: blur(4px);
+            display: flex; align-items: center; justify-content: center;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            animation: pc2-login-status-fade 180ms ease-out both;
+        `;
+
+        overlay.innerHTML = `
+            <div style="
+                background: #1c1c1e;
+                border: 1px solid rgba(255,255,255,0.08);
+                border-radius: 16px;
+                padding: 28px 32px;
+                max-width: 360px;
+                width: calc(100% - 32px);
+                box-shadow: 0 25px 50px -12px rgba(0,0,0,0.6);
+                text-align: center;
+                animation: pc2-login-status-pop 220ms cubic-bezier(.2,.9,.3,1) both;
+            ">
+                <div style="
+                    width: 56px; height: 56px; margin: 0 auto 18px;
+                    border-radius: 50%;
+                    background: rgba(245, 158, 11, 0.10);
+                    display: flex; align-items: center; justify-content: center;
+                    position: relative;
+                ">
+                    <div style="
+                        position: absolute; inset: 0;
+                        border: 2px solid rgba(245, 158, 11, 0.18);
+                        border-top-color: ${accent};
+                        border-radius: 50%;
+                        animation: pc2-login-status-spin .9s linear infinite;
+                    "></div>
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="${accent}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="3" y="11" width="18" height="11" rx="2"/>
+                        <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                    </svg>
+                </div>
+                <div data-overlay-title style="
+                    font-size: 16px; font-weight: 600; color: #ffffff;
+                    margin-bottom: 8px; letter-spacing: -0.01em;
+                ">${title}</div>
+                <div data-overlay-message style="
+                    font-size: 13px; color: #9ca3af; line-height: 1.55;
+                ">${message}</div>
+                <div data-overlay-hint style="
+                    margin-top: 20px;
+                    font-size: 11px; color: #6b7280;
+                    min-height: 14px;
+                ">${hint || ''}</div>
+            </div>
+        `;
+    }
 
     document.body.appendChild(overlay);
 
@@ -928,5 +1010,15 @@ function showProcessingOverlay(container) {
     return processingOverlay;
 }
 
+
+// Expose showLoginStatusOverlay to non-bundled scripts that share this PC2
+// origin (pc2-secure-view.js loads as a top-frame <script>, NOT through the
+// GUI bundle, so it can't `import` from this module). The secure-view
+// delegation flow uses this for the external-wallet personal_sign step,
+// where there is otherwise zero PC2 parent-side UI cueing the user that
+// their wallet popup is what's blocking progress.
+if (typeof window !== 'undefined' && typeof window.pc2ShowLoginStatusOverlay !== 'function') {
+    window.pc2ShowLoginStatusOverlay = showLoginStatusOverlay;
+}
 
 export default UIWindowParticleLogin;

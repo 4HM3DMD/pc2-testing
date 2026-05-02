@@ -63,6 +63,20 @@ const TOPICS = {
 
 const TOKEN_URI_SELECTOR = '0xc87b56dd';
 
+// AuthorityGateway function selectors (precomputed from keccak256 of signature)
+//   sellersOf(address operative, uint256 tokenId) → address[]
+//   listings(address operative, uint256 tokenId, address seller) → (uint256, uint256, address)
+const SELLERS_OF_SELECTOR = '0x997eab2d';
+const LISTINGS_SELECTOR = '0x6bd3a64b';
+
+// V3 access tokens always use this fixed operative-internal tokenId (TOKEN_ID_ACCESS).
+// AuthorityGateway sellersOf/listings are queried against this id, NOT the
+// content-hash tokenId from the ledger. See wallet.js for the same convention.
+const ACCESS_TOKEN_ID = 1;
+
+// Zero address — operative may be 0x000…000 for some legacy entries
+const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
+
 function toHex(n: number): string {
   return '0x' + n.toString(16);
 }
@@ -283,6 +297,183 @@ export class ContentIndexerService {
     }
   }
 
+  // ── Listing price fetcher (AuthorityGateway sellersOf + listings) ──
+  //
+  // For each PAID asset (op_type > 0), query the AuthorityGateway to find the
+  // current cheapest active listing of its access token. Stores the lowest
+  // pricePerToken + payToken into the catalog row's price/payment_token columns
+  // so feed cards can display real prices instead of just "Buy & Resell" tier
+  // labels.
+  //
+  // Skipped for: op_type=0 (free), zero operative address (no business model),
+  // and rows with metadata_status != 'resolved' (stay aligned with the rest of
+  // the indexer's "only operate on resolved rows" invariant).
+  //
+  // Listings change over time (sellers list/delist/reprice), so this runs every
+  // scan cycle after metadata resolution to keep prices fresh.
+
+  private decodeAddressArray(hex: string): string[] {
+    const clean = (hex || '').replace('0x', '');
+    if (clean.length < 128) return [];
+    const offset = fromHex(clean.slice(0, 64));
+    const dataStart = offset * 2;
+    if (dataStart + 64 > clean.length) return [];
+    const length = fromHex(clean.slice(dataStart, dataStart + 64));
+    const arr: string[] = [];
+    for (let i = 0; i < length; i++) {
+      const start = dataStart + 64 + i * 64;
+      if (start + 64 > clean.length) break;
+      arr.push(unpadAddress('0x' + clean.slice(start, start + 64)));
+    }
+    return arr;
+  }
+
+  private decodeListing(hex: string): { quantity: bigint; pricePerToken: bigint; payToken: string } | null {
+    const clean = (hex || '').replace('0x', '');
+    if (clean.length < 192) return null;
+    try {
+      const quantity = BigInt('0x' + clean.slice(0, 64));
+      const pricePerToken = BigInt('0x' + clean.slice(64, 128));
+      const payToken = unpadAddress('0x' + clean.slice(128, 192));
+      return { quantity, pricePerToken, payToken };
+    } catch {
+      return null;
+    }
+  }
+
+  private encodeSellersOfCall(operativeAddress: string, tokenId: number): string {
+    return SELLERS_OF_SELECTOR +
+      padAddress(operativeAddress).slice(2) +
+      padUint256(tokenId).slice(2);
+  }
+
+  private encodeListingsCall(operativeAddress: string, tokenId: number, sellerAddress: string): string {
+    return LISTINGS_SELECTOR +
+      padAddress(operativeAddress).slice(2) +
+      padUint256(tokenId).slice(2) +
+      padAddress(sellerAddress).slice(2);
+  }
+
+  /**
+   * Fetch the cheapest active listing for a given operative's access token
+   * via the AuthorityGateway. Returns { price, paymentToken } as strings, or
+   * { price: null, paymentToken: null } if no active listing exists or if any
+   * RPC call fails (transient — will retry next cycle).
+   *
+   * Both values are returned as decimal strings (not bigint / not hex) since
+   * the catalog row's price column is TEXT and we want safe round-trip without
+   * losing precision on values larger than Number.MAX_SAFE_INTEGER.
+   */
+  private async fetchLowestListing(
+    authorityGatewayAddress: string,
+    operativeAddress: string,
+  ): Promise<{ price: string | null; paymentToken: string | null }> {
+    const empty = { price: null, paymentToken: null };
+    if (!operativeAddress || operativeAddress.toLowerCase() === ZERO_ADDRESS) return empty;
+
+    try {
+      const sellersData = this.encodeSellersOfCall(operativeAddress, ACCESS_TOKEN_ID);
+      const sellersResult = await this.ethCall(authorityGatewayAddress, sellersData);
+      if (!sellersResult || sellersResult === '0x') return empty;
+
+      const sellers = this.decodeAddressArray(sellersResult);
+      if (sellers.length === 0) return empty;
+
+      let lowestPrice: bigint | null = null;
+      let lowestPayToken: string | null = null;
+
+      for (const seller of sellers) {
+        try {
+          const listingData = this.encodeListingsCall(operativeAddress, ACCESS_TOKEN_ID, seller);
+          const listingResult = await this.ethCall(authorityGatewayAddress, listingData);
+          if (!listingResult || listingResult === '0x') continue;
+
+          const listing = this.decodeListing(listingResult);
+          if (!listing || listing.quantity === BigInt(0)) continue;
+
+          if (lowestPrice === null || listing.pricePerToken < lowestPrice) {
+            lowestPrice = listing.pricePerToken;
+            lowestPayToken = listing.payToken;
+          }
+        } catch (err: any) {
+          log.debug(`Listing query failed for ${operativeAddress}/${seller}: ${err.message}`);
+        }
+      }
+
+      if (lowestPrice === null || lowestPayToken === null) return empty;
+
+      return { price: lowestPrice.toString(), paymentToken: lowestPayToken };
+    } catch (err: any) {
+      log.debug(`sellersOf failed for ${operativeAddress}: ${err.message}`);
+      return empty;
+    }
+  }
+
+  /**
+   * Refresh price/payment_token columns for all paid catalog rows. Runs after
+   * metadata resolution in each scan cycle so the feed always sees current
+   * prices. Concurrency-limited (matches metadata fetch concurrency) to stay
+   * gentle on the RPC budget — even with 1k paid assets this completes well
+   * within the scan-interval window.
+   */
+  private async refreshListingsForPaidAssets(): Promise<void> {
+    if (!this.db) return;
+
+    // The AuthorityGateway address is per contract version. Today we ship one
+    // (v3) but iterate explicitly so future versions Just Work.
+    const authorityByVersion: Record<string, string> = {};
+    for (const [version, cfg] of Object.entries(this.config.contracts)) {
+      if (cfg.authorityGateway) authorityByVersion[version] = cfg.authorityGateway;
+    }
+    if (Object.keys(authorityByVersion).length === 0) {
+      log.debug('No authority_gateway configured — skipping listing refresh');
+      return;
+    }
+
+    const rows = this.db.getPaidCatalogItemsForListingRefresh(500);
+    if (rows.length === 0) return;
+
+    log.info(`Refreshing listings for ${rows.length} paid asset(s)...`);
+
+    const concurrency = Math.max(1, this.config.metadataFetchConcurrency);
+    let updated = 0;
+    let cleared = 0;
+    let unchanged = 0;
+
+    for (let i = 0; i < rows.length; i += concurrency) {
+      const chunk = rows.slice(i, i + concurrency);
+      const results = await Promise.allSettled(
+        chunk.map(async (row) => {
+          const authority = authorityByVersion[row.contract_version || 'v3'] ?? authorityByVersion.v3;
+          if (!authority) return null;
+          const { price, paymentToken } = await this.fetchLowestListing(authority, row.operative_address || '');
+          return { row, price, paymentToken };
+        }),
+      );
+
+      for (const r of results) {
+        if (r.status !== 'fulfilled' || !r.value) continue;
+        const { row, price, paymentToken } = r.value;
+        const prevPrice = row.price ?? null;
+        const prevToken = row.payment_token ?? null;
+        if (price === prevPrice && paymentToken === prevToken) {
+          unchanged++;
+          continue;
+        }
+        this.db.updateCatalogMetadata(row.channel_address, row.token_id, row.chain_id, {
+          price,
+          payment_token: paymentToken,
+        });
+        if (price === null) cleared++;
+        else updated++;
+      }
+    }
+
+    if (updated > 0 || cleared > 0) {
+      log.info(`Listing refresh: ${updated} priced, ${cleared} cleared (unlisted), ${unchanged} unchanged`);
+    }
+  }
+
   // ── Scan cycle ─────────────────────────────────────────────
 
   private async runScanCycle(): Promise<void> {
@@ -298,6 +489,14 @@ export class ContentIndexerService {
       }
 
       await this.resolveMetadata();
+
+      // Refresh listing prices for paid assets so feed cards show current prices
+      // instead of just tier labels. Wrapped to never bring down a scan cycle.
+      try {
+        await this.refreshListingsForPaidAssets();
+      } catch (err: any) {
+        log.warn(`Listing refresh failed (non-fatal): ${err.message}`);
+      }
 
       const stats = this.db.getCatalogStats();
       log.info(`Scan cycle complete — catalog: ${stats.total} total, ${stats.resolved} resolved, ${stats.pending} pending`);
@@ -682,11 +881,18 @@ export class ContentIndexerService {
       const kid = metadata.kid || metadata.properties?.kid || null;
       const creator = metadata.properties?.publisher || item.creator_address;
 
+      // Asset metadata typically sets `image` for the card thumbnail, but some
+      // schemas (notably elacity-asset-envelope-v1) leave `image` empty when
+      // the publisher relies on `media.previewURL` for preview images. Falling
+      // back to `media.previewURL` salvages the thumbnail in those cases —
+      // assets with neither field will still surface the type-icon placeholder.
+      const thumbnailCandidate = metadata.image || metadata.media?.previewURL || null;
+
       this.db.updateCatalogMetadata(item.channel_address, item.token_id, item.chain_id, {
         content_id: kid,
         name: metadata.name || null,
         description: metadata.description || null,
-        image_url: metadata.image || null,
+        image_url: thumbnailCandidate,
         content_cid: contentCid,
         metadata_cid: metadataCid,
         mime_type: mimeType,
@@ -719,7 +925,20 @@ export class ContentIndexerService {
   private async fetchMetadata(tokenURI: string): Promise<any | null> {
     const cid = this.extractCid(tokenURI);
 
-    // Try local IPFS first
+    // Try local IPFS first (fast path for flat-file metadata).
+    //
+    // NOTE: this only works for *flat* metadata JSON CIDs. For UnixFS
+    // *directory* CIDs (which is what the current Elacity Creator uploads —
+    // metadata.json + content.json + …), getFile() throws "is not a file
+    // (type: directory)". The catch swallows that and we fall through to
+    // the HTTP gateway list below, which DOES include path-scoped URLs.
+    //
+    // Importantly, that gateway list includes our OWN local HTTP gateway
+    // (`http://127.0.0.1:PORT/ipfs/CID/metadata.json`) which serves data
+    // from the same locally-pinned blockstore but DOES handle directories
+    // properly. Without that, freshly-uploaded mints would fail to resolve
+    // because remote gateways (ipfs.ela.city, dweb.link) hadn't yet
+    // replicated the content (typical lag: 30s-5min). v1.2.6 fix.
     if (cid && this.ipfs) {
       try {
         const buf = await this.ipfs.getFile(cid);
@@ -727,7 +946,7 @@ export class ContentIndexerService {
           return JSON.parse(buf.toString('utf8'));
         }
       } catch {
-        // Local IPFS didn't have it, fall through to gateways
+        // Local IPFS didn't have it (or it's a directory) — fall through to gateways
       }
     }
 
@@ -739,7 +958,17 @@ export class ContentIndexerService {
     }
 
     if (cid) {
-      for (const gateway of this.config.metadataGatewayUrls) {
+      // Build the gateway list with our LOCAL IPFS gateway first, then any
+      // configured remote gateways. This guarantees freshly-uploaded
+      // metadata (still pinned only on this node) resolves immediately,
+      // without waiting for replication to ipfs.ela.city or dweb.link.
+      const localPort = process.env.PORT || '4200';
+      const allGateways = [
+        `http://127.0.0.1:${localPort}/ipfs/`,
+        ...this.config.metadataGatewayUrls,
+      ];
+
+      for (const gateway of allGateways) {
         // Legacy format: the metadata CID points directly at a JSON file.
         urls.push(`${gateway}${cid}`);
         // Current Elacity Creator (from 2026-04-17) uploads metadata as a
@@ -764,11 +993,31 @@ export class ContentIndexerService {
         // doesn't throw — we just skip to the next candidate URL.
         const body = await response.text();
         if (body.trimStart().startsWith('<')) continue;
+
+        let parsed: any;
         try {
-          return JSON.parse(body);
+          parsed = JSON.parse(body);
         } catch {
           continue;
         }
+
+        // Reject directory-listing JSON. PC2's local IPFS gateway and some
+        // other gateways return JSON of the form:
+        //   { cid, path, isDirectory: true, parent, entries: [...] }
+        // when asked for a UnixFS directory CID without a sub-path. That's
+        // NOT the metadata file — it's a description of the directory. We
+        // need to keep trying URLs until we find the actual metadata.json.
+        if (parsed && typeof parsed === 'object' && parsed.isDirectory === true) continue;
+
+        // Sanity-check: real Elacity metadata has at least one of these
+        // top-level fields (schema | name | media | properties | asset).
+        // If none are present, this isn't usable metadata; skip.
+        const looksLikeMetadata = parsed && typeof parsed === 'object' && (
+          parsed.schema || parsed.name || parsed.media || parsed.properties || parsed.asset
+        );
+        if (!looksLikeMetadata) continue;
+
+        return parsed;
       } catch {
         continue;
       }

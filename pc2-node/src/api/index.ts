@@ -584,9 +584,50 @@ export function setupAPI (app: Express): void {
         if ( ! catalogIpfs ) return res.status(503).json({ error: 'IPFS not available' });
 
         const { cid } = req.params;
-        const count = await catalogIpfs.countProviders(cid);
 
-        res.json({ success: true, cid, providers: count });
+        // Probe in parallel:
+        //   1. DHT findProviders — discovers libp2p peers re-announcing the CID
+        //   2. Public HTTP gateways (ipfs.ela.city, dweb.link) — answers "is this
+        //      reachable on the public web?" without requiring DHT participation.
+        // The DHT alone often returns 0 even when content is pinned on Elacity's
+        // Kubo gateway (Kubo doesn't always re-announce on a schedule libp2p can
+        // see within a few seconds). Combining both gives the UI an accurate
+        // "Replicated on Elacity" signal so we don't show a misleading
+        // "This node only" badge on assets that are publicly available.
+        const dhtPromise = catalogIpfs.countProviders(cid, 5000)
+            .catch(() => -1);
+
+        const PUBLIC_GATEWAYS = [
+            { name: 'ipfs.ela.city', url: 'https://ipfs.ela.city/ipfs/' + encodeURIComponent(cid) },
+            { name: 'dweb.link', url: 'https://dweb.link/ipfs/' + encodeURIComponent(cid) },
+        ];
+
+        async function probeGateway(g: { name: string; url: string }): Promise<{ name: string; reachable: boolean }> {
+            try {
+                const resp = await fetch(g.url, {
+                    method: 'HEAD',
+                    redirect: 'follow',
+                    signal: AbortSignal.timeout(3000),
+                });
+                return { name: g.name, reachable: resp.ok };
+            } catch {
+                return { name: g.name, reachable: false };
+            }
+        }
+
+        const gatewayProbes = Promise.all(PUBLIC_GATEWAYS.map(probeGateway));
+
+        const [providerCount, gatewayResults] = await Promise.all([dhtPromise, gatewayProbes]);
+
+        const reachableGateways = gatewayResults.filter(g => g.reachable).map(g => g.name);
+
+        res.json({
+            success: true,
+            cid,
+            providers: providerCount,
+            gateways: gatewayResults,
+            publiclyReachable: reachableGateways.length > 0,
+        });
     });
 
     app.get('/api/catalog/creator/:address', (req: Request, res: Response) => {

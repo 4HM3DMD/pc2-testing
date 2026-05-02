@@ -29,7 +29,7 @@
   var state = {
     activeView: 'feed',
     previousView: 'feed',
-    activeCategory: 'buyNow',
+    activeCategory: 'all',
     searchQuery: '',
     browseItems: [],
     browseTotal: 0,
@@ -677,22 +677,35 @@
     var avatarContent = renderAvatar(getCreatorAvatar(item), creatorName);
     var hasChannel = item.channel && item.channel.address;
 
-    // opType 0 = free, 1 = buy once, 2 = buy & resell. Free is known at mint
-    // (encoded on-chain via operative), so we can show "Free" without any
-    // listing being present. Paid items only show a price once a listing
-    // exists; an unlisted paid item shows nothing rather than a misleading
-    // "Free" or "0".
-    var cardOpType = (item.operative && item.operative.opType) || 0;
+    // opType 0 = Free, 1 = Buy Once, 2 = Buy & Resell. The on-chain truth is
+    // resolved by the api.js adapter (preferring item.op_type from the indexer
+    // over legacy metadata.pricing inference). For paid assets where the
+    // catalog row hasn't yet captured a listing price, fall back to a tier
+    // label ("Buy Once" / "Buy & Resell") so the card never misrepresents a
+    // paid asset as free.
+    var rawOpType = item.operative && item.operative.opType;
+    var cardOpType = (typeof rawOpType === 'number') ? rawOpType : null;
     var isFreeItem = cardOpType === 0;
+    var tierLabel = cardOpType === 1 ? 'Buy Once' : cardOpType === 2 ? 'Buy & Resell' : '';
 
-    card.setAttribute('aria-label', title + (isOwned ? ' (Owned)' : (price ? ' — ' + price : (isFreeItem ? ' — Free' : ''))));
+    var ariaSuffix = '';
+    if (isOwned) ariaSuffix = ' (Owned)';
+    else if (price) ariaSuffix = ' — ' + price;
+    else if (isFreeItem) ariaSuffix = ' — Free';
+    else if (tierLabel) ariaSuffix = ' — ' + tierLabel;
+    card.setAttribute('aria-label', title + ariaSuffix);
 
     var contentBadge = contentType ? '<span class="content-badge">' + escapeHtml(contentType) + '</span>' : '';
-    var priceBadge = isOwned
-      ? '<span class="price-badge owned-badge">✓ Owned</span>'
-      : (price
-        ? '<span class="price-badge">' + price + '</span>'
-        : (isFreeItem ? '<span class="price-badge free-badge">Free</span>' : ''));
+    var priceBadge = '';
+    if (isOwned) {
+      priceBadge = '<span class="price-badge owned-badge">\u2713 Owned</span>';
+    } else if (price) {
+      priceBadge = '<span class="price-badge">' + price + '</span>';
+    } else if (isFreeItem) {
+      priceBadge = '<span class="price-badge free-badge">Free</span>';
+    } else if (tierLabel) {
+      priceBadge = '<span class="price-badge tier-badge">' + tierLabel + '</span>';
+    }
     var aiBadge = hasAITrainingPermitted(item) ? '<span class="ai-training-badge" title="AI training permitted">AI</span>' : '';
     var adultBadge = isAdultContent(item) ? '<span class="adult-content-badge" title="Adult content (18+)">18+</span>' : '';
 
@@ -1294,12 +1307,20 @@
       }
     }
 
-    if (isOwned) {
-      if (!hasListing) dom.detailOwned.classList.remove('hidden');
-      var rawAsset = nft._rawAsset || (nft.metadata && nft.metadata.asset) || {};
-      var cid = media.uri || rawAsset.uri || rawAsset.cid;
-      if (cid) cid = cid.replace('ipfs://', '');
-      var nonMedia = isNonMediaAsset(nft);
+    var rawAsset = nft._rawAsset || (nft.metadata && nft.metadata.asset) || {};
+    var cid = media.uri || rawAsset.uri || rawAsset.cid;
+    if (cid) cid = cid.replace('ipfs://', '');
+    var nonMedia = isNonMediaAsset(nft);
+    var opType = (nft.operative && nft.operative.opType) || 0;
+    var isFree = opType === 0;
+
+    // Play / download / viewer access:
+    // - Owned items: always (paid or free, owner has full access).
+    // - Free items (opType === 0): always — content is cleartext on IPFS
+    //   and doesn't require an access NFT. The publisher of a free item
+    //   may not auto-receive the access NFT and otherwise wouldn't see
+    //   any way to play their own asset on the detail page.
+    if (isOwned || isFree) {
       if (nonMedia) {
         dom.playOwnedBtn.classList.add('hidden');
         if (cid) {
@@ -1310,8 +1331,11 @@
         dom.playOwnedBtn.classList.remove('hidden');
         if (cid) dom.downloadNodeBtn.classList.remove('hidden');
       }
+    }
 
-      var opType = (nft.operative && nft.operative.opType) || 0;
+    if (isOwned) {
+      if (!hasListing) dom.detailOwned.classList.remove('hidden');
+
       var hasActions = false;
 
       if (opType === 2) {
@@ -1624,10 +1648,12 @@
     var meta = nft.metadata || {};
     var props = meta.properties || {};
 
-    if (!totalSupply && opType === 0) {
-      dom.detailSupplyInfo.classList.add('hidden');
-      return;
-    }
+    // Free assets (opType === 0) typically have no access-NFT supply (anyone
+    // can stream them directly from IPFS), but they ARE still indexed on-chain
+    // and users should still be able to verify the NFT contract / token ID /
+    // IPFS CID. We skip the supply-bar UI for free content (meaningless without
+    // listings) but always render the props-grid below it.
+    var showSupplyBar = (opType !== 0) && (totalSupply > 0);
 
     var forSale = 0;
     listings.forEach(function (l) { forSale += (parseInt(l.quantity) || 0); });
@@ -1642,27 +1668,31 @@
     var listed = forSale;
     var held = totalSupply - forSale;
 
-    var html = '<div class="supply-bar">';
-    html += '<div class="supply-visual">';
-    html += '<div class="supply-text">';
-    html += '<span>Listed: <strong>' + listed.toLocaleString() + '</strong> / ' + totalSupply.toLocaleString() + '</span>';
-    if (listed > 0) {
-      html += '<span class="supply-badge for-sale">' + listed.toLocaleString() + ' for sale</span>';
-    } else if (isSoldOut && opType !== 0) {
-      html += '<span class="supply-badge sold-out">Sold out</span>';
-    }
-    html += '</div>';
-    html += '<div class="supply-track"><div class="supply-fill ' + fillClass + '" style="width: ' + Math.max(pctSold, 2) + '%"></div></div>';
-    html += '<div class="supply-text"><span>' + held.toLocaleString() + ' held by owners</span>';
-    if (isLowStock && listed > 0) {
-      html += '<span class="supply-badge low-stock">Low stock!</span>';
-    }
-    html += '</div>';
-    html += '</div>';
-    html += '</div>';
+    var html = '';
 
-    if (isLowStock && listed > 0) {
-      html += '<div class="urgency-indicator"><span class="urgency-dot"></span>Low stock — only ' + listed.toLocaleString() + ' left!</div>';
+    if (showSupplyBar) {
+      html += '<div class="supply-bar">';
+      html += '<div class="supply-visual">';
+      html += '<div class="supply-text">';
+      html += '<span>Listed: <strong>' + listed.toLocaleString() + '</strong> / ' + totalSupply.toLocaleString() + '</span>';
+      if (listed > 0) {
+        html += '<span class="supply-badge for-sale">' + listed.toLocaleString() + ' for sale</span>';
+      } else if (isSoldOut && opType !== 0) {
+        html += '<span class="supply-badge sold-out">Sold out</span>';
+      }
+      html += '</div>';
+      html += '<div class="supply-track"><div class="supply-fill ' + fillClass + '" style="width: ' + Math.max(pctSold, 2) + '%"></div></div>';
+      html += '<div class="supply-text"><span>' + held.toLocaleString() + ' held by owners</span>';
+      if (isLowStock && listed > 0) {
+        html += '<span class="supply-badge low-stock">Low stock!</span>';
+      }
+      html += '</div>';
+      html += '</div>';
+      html += '</div>';
+
+      if (isLowStock && listed > 0) {
+        html += '<div class="urgency-indicator"><span class="urgency-dot"></span>Low stock — only ' + listed.toLocaleString() + ' left!</div>';
+      }
     }
 
     var contentType = (meta.media && meta.media.contentType) || (meta.media && meta.media.mimeType) || props.mimeType || '';
@@ -1689,8 +1719,10 @@
     if (fileSize) html += '<div class="prop-row"><span class="prop-label">File Size</span><span class="prop-value">' + escapeHtml(String(fileSize)) + '</span></div>';
     html += '<div class="prop-row"><span class="prop-label">Access Type</span><span class="prop-value">' + accessType + '</span></div>';
     html += '<div class="prop-row"><span class="prop-label">Protected</span><span class="prop-value">' + (nft.isProtected ? 'Yes (dDRM)' : 'No') + '</span></div>';
-    html += '<div class="prop-row"><span class="prop-label">Total Supply</span><span class="prop-value">' + totalSupply.toLocaleString() + '</span></div>';
-    html += '<div class="prop-row"><span class="prop-label">Available</span><span class="prop-value">' + listed.toLocaleString() + ' / ' + totalSupply.toLocaleString() + (isSoldOut && opType !== 0 ? ' (sold out)' : '') + '</span></div>';
+    if (totalSupply > 0) {
+      html += '<div class="prop-row"><span class="prop-label">Total Supply</span><span class="prop-value">' + totalSupply.toLocaleString() + '</span></div>';
+      html += '<div class="prop-row"><span class="prop-label">Available</span><span class="prop-value">' + listed.toLocaleString() + ' / ' + totalSupply.toLocaleString() + (isSoldOut && opType !== 0 ? ' (sold out)' : '') + '</span></div>';
+    }
     var storageHtml = storage;
     if (nft._isLocal) {
       storageHtml += ' <span class="seeding-badge pinned" title="This node is pinning and seeding this content"><span class="status-dot pinned-dot"></span> Pinned</span>';
@@ -1704,11 +1736,76 @@
     if (props.labelType) html += '<div class="prop-row"><span class="prop-label">Label</span><span class="prop-value">' + escapeHtml(props.labelType) + '</span></div>';
     if (props.authority) html += '<div class="prop-row"><span class="prop-label">Authority</span><span class="prop-value"><a href="https://basescan.org/address/' + escapeHtml(props.authority) + '" target="_blank" rel="noopener">' + formatAddress(props.authority) + '</a></span></div>';
     html += '<div class="prop-row"><span class="prop-label">Blockchain</span><span class="prop-value">Base (8453)</span></div>';
-    if (operative.address) html += '<div class="prop-row"><span class="prop-label">Contract</span><span class="prop-value"><a href="https://basescan.org/address/' + escapeHtml(operative.address) + '" target="_blank" rel="noopener">' + formatAddress(operative.address) + '</a></span></div>';
+
+    // ── On-chain identity (NFT Asset / Token ID / IPFS CID / Operative) ──
+    // Indexed by the catalog regardless of opType — surfaced for both free
+    // (opType 0) and paid (opType 1/2) assets so anyone can verify on-chain
+    // provenance via Basescan + IPFS gateways.
+    var nftContractAddr = nft.contractAddress || '';
+    var nftTokenIdRaw = (nft.tokenId && nft.tokenId.hexTokenID) || nft.tokenId || '';
+    var contentCid = nft._contentCid || '';
+
+    if (nftContractAddr) {
+      html += '<div class="prop-row"><span class="prop-label">Asset Token Contract</span><span class="prop-value">' +
+        '<a href="https://basescan.org/address/' + escapeHtml(nftContractAddr) + '" target="_blank" rel="noopener" title="View asset token contract on Basescan">' +
+          formatAddress(nftContractAddr) +
+        '</a>' +
+        ' <button class="onchain-copy-btn" data-copy="' + escapeHtml(nftContractAddr) + '" title="Copy address" aria-label="Copy asset token contract address">\u29C9</button>' +
+      '</span></div>';
+    }
+
+    if (nftTokenIdRaw) {
+      var tokenIdStr = String(nftTokenIdRaw);
+      var tokenIdShort = tokenIdStr.length > 14 ? (tokenIdStr.substring(0, 8) + '\u2026' + tokenIdStr.substring(tokenIdStr.length - 4)) : tokenIdStr;
+      html += '<div class="prop-row"><span class="prop-label">Token ID</span><span class="prop-value">' +
+        '<span class="onchain-mono" title="' + escapeHtml(tokenIdStr) + '">' + escapeHtml(tokenIdShort) + '</span>' +
+        ' <button class="onchain-copy-btn" data-copy="' + escapeHtml(tokenIdStr) + '" title="Copy token ID" aria-label="Copy token ID">\u29C9</button>' +
+      '</span></div>';
+    }
+
+    if (contentCid) {
+      var cidShort = contentCid.length > 14 ? (contentCid.substring(0, 8) + '\u2026' + contentCid.substring(contentCid.length - 4)) : contentCid;
+      html += '<div class="prop-row"><span class="prop-label">IPFS Content</span><span class="prop-value">' +
+        '<a href="/ipfs/' + escapeHtml(contentCid) + '" target="_blank" rel="noopener" class="onchain-mono" title="Load via this PC2 node (auto-pins on first request)">' +
+          escapeHtml(cidShort) +
+        '</a>' +
+        ' <a href="' + IPFS_GATEWAY + escapeHtml(contentCid) + '" target="_blank" rel="noopener" class="onchain-public-link" title="Verify on public ipfs.ela.city gateway">verify</a>' +
+        ' <button class="onchain-copy-btn" data-copy="' + escapeHtml(contentCid) + '" title="Copy CID" aria-label="Copy IPFS CID">\u29C9</button>' +
+      '</span></div>';
+    }
+
+    if (operative.address) {
+      html += '<div class="prop-row"><span class="prop-label">Operative Contract</span><span class="prop-value">' +
+        '<a href="https://basescan.org/address/' + escapeHtml(operative.address) + '" target="_blank" rel="noopener" title="View business-model contract on Basescan">' +
+          formatAddress(operative.address) +
+        '</a>' +
+        ' <button class="onchain-copy-btn" data-copy="' + escapeHtml(operative.address) + '" title="Copy address" aria-label="Copy operative contract address">\u29C9</button>' +
+      '</span></div>';
+    }
     html += '</div>';
 
     dom.detailSupplyInfo.innerHTML = html;
     dom.detailSupplyInfo.classList.remove('hidden');
+
+    // Wire up copy-to-clipboard buttons.
+    var copyBtns = dom.detailSupplyInfo.querySelectorAll('.onchain-copy-btn');
+    for (var ci = 0; ci < copyBtns.length; ci++) {
+      copyBtns[ci].addEventListener('click', function (evt) {
+        evt.preventDefault();
+        evt.stopPropagation();
+        var val = this.getAttribute('data-copy') || '';
+        if (!val) return;
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(val).then(function () {
+            showToast('Copied to clipboard', 'success');
+          }).catch(function () {
+            showToast('Copy failed', 'error');
+          });
+        } else {
+          showToast('Clipboard unavailable', 'error');
+        }
+      });
+    }
   }
 
   function enrichFromChain(nft) {
@@ -1793,15 +1890,44 @@
         .then(function (data) {
           var el = document.getElementById('detail-seeding-value');
           if (!el || !data) return;
+
+          // Backend returns DHT count + gateway probe results. Build a single
+          // de-duplicated source list so the badge can show "N nodes" with an
+          // expandable list of sources. Sources are: this node (if pinned),
+          // each reachable public gateway, and each DHT peer (counted as one
+          // bucket so we don't claim 1000 peers when the DHT happened to walk
+          // a chatty area).
           var providers = data.providers || 0;
-          var html = '';
-          if (providers > 0) {
-            html = '<span class="seeding-badge active">' + providers + ' node' + (providers !== 1 ? 's' : '') + ' seeding</span>';
-          } else if (nft._isLocal) {
-            html = '<span class="seeding-badge local-only">This node only</span>';
-          } else {
-            html = '<span class="seeding-badge pending">Discovering peers\u2026</span>';
+          var gateways = Array.isArray(data.gateways) ? data.gateways : [];
+          var sources = [];
+          if (nft._isLocal) sources.push({ label: 'This node', detail: 'pinned locally' });
+          for (var gi = 0; gi < gateways.length; gi++) {
+            if (gateways[gi] && gateways[gi].reachable) {
+              sources.push({ label: gateways[gi].name, detail: 'public IPFS gateway' });
+            }
           }
+          if (providers > 0) {
+            sources.push({ label: providers + ' DHT peer' + (providers !== 1 ? 's' : ''), detail: 'discovered via libp2p' });
+          }
+
+          var count = sources.length;
+          var badgeClass = count >= 2 ? 'public' : (count === 1 && nft._isLocal && providers === 0 && gateways.every(function (g) { return !g.reachable; }) ? 'local-only' : (count > 0 ? 'public' : 'pending'));
+          var labelText = count === 0 ? 'Discovering peers\u2026'
+            : count === 1 && sources[0].label === 'This node' ? 'This node only'
+            : count + ' source' + (count !== 1 ? 's' : '');
+
+          // Build the dropdown listing sources. Shown via CSS hover/focus.
+          var listHtml = '';
+          for (var si = 0; si < sources.length; si++) {
+            listHtml += '<li><strong>' + escapeHtml(sources[si].label) + '</strong> <span class="seeding-source-detail">' + escapeHtml(sources[si].detail) + '</span></li>';
+          }
+          if (!listHtml) listHtml = '<li class="seeding-source-empty">No sources found yet \u2014 still probing.</li>';
+
+          var html = '<span class="seeding-badge ' + badgeClass + ' has-dropdown" tabindex="0" role="button" aria-haspopup="true" aria-expanded="false">' +
+            escapeHtml(labelText) +
+            ' <span class="seeding-caret" aria-hidden="true">\u25BE</span>' +
+            '<span class="seeding-dropdown" role="tooltip"><strong class="seeding-dropdown-title">Sources</strong><ul>' + listHtml + '</ul></span>' +
+            '</span>';
           el.innerHTML = html;
         })
         .catch(function () {
@@ -3387,6 +3513,52 @@
       return;
     }
 
+    var meta = nft.metadata || {};
+    var media = meta.media || {};
+    var rawAsset = nft._rawAsset || meta.asset || {};
+    var props = meta.properties || {};
+    var title = meta.name || nft.name || 'Untitled';
+    var mediaUri = (media.uri || rawAsset.cid || rawAsset.uri || '').replace('ipfs://', '');
+    var tokenURI = (nft.tokenURI || '').replace('ipfs://', '');
+
+    // ── Cleartext / direct-playback path ──
+    // Free assets (opType === 0) and any asset whose metadata explicitly
+    // declares `cleartext: true` or `directPlayback: true` are stored as
+    // a single MP4 (or other media file) on IPFS — NOT as a fragmented
+    // DASH bundle with stream.mpd. Trying to play them through the
+    // encrypted-DASH flow (Lit auth + /api/media/init + MPD fetch) will
+    // always fail with "Failed to fetch MPD from both gateways: 404"
+    // because no MPD exists. Launch the player in cleartext mode with
+    // a direct file URL — no auth, no DASH, just <video src="...">.
+    var opType = (nft.operative && nft.operative.opType) || 0;
+    var isCleartext = opType === 0 || rawAsset.cleartext === true || rawAsset.directPlayback === true;
+
+    if (isCleartext) {
+      if (!mediaUri) {
+        showToast('Missing content URI for playback', 'error');
+        return;
+      }
+      var mimeType = media.contentType || rawAsset.mimeType || media.mimeType || '';
+      window.parent.postMessage({
+        msg: 'launchApp',
+        appName: 'pc2-media-runtime',
+        windowTitle: title + ' — Elacity Player',
+        args: {
+          cleartext: true,
+          fileUrl: '/ipfs/' + mediaUri,
+          mediaUri: mediaUri,
+          title: title,
+          mimeType: mimeType,
+          thumbnail: (function () {
+            var url = resolveIpfsUrl(nft.image || '') || resolveIpfsUrl((meta.media || {}).previewURL || '') || getImageUrl(nft);
+            return url;
+          })(),
+        },
+      }, '*');
+      return;
+    }
+
+    // ── Encrypted DASH path ──
     var channel = (nft.channel && nft.channel.address) || nft.contractAddress || '';
     var tokenId = (nft.tokenId && nft.tokenId.hexTokenID) || nft.tokenId || nft.hexTokenID || '';
 
@@ -3395,12 +3567,6 @@
       return;
     }
 
-    var meta = nft.metadata || {};
-    var media = meta.media || {};
-    var props = meta.properties || {};
-    var title = meta.name || nft.name || 'Untitled';
-    var mediaUri = (media.uri || '').replace('ipfs://', '');
-    var tokenURI = (nft.tokenURI || '').replace('ipfs://', '');
     var walletAddr = getBuyerAddressForAsset(nft) || Wallet.getAddress() || '';
 
     if (!walletAddr) {
@@ -3482,7 +3648,13 @@
 
   // ── Purchase Flow ────────────────────────────────────
 
-  function showWalletChoiceModal() {
+  // payToken + priceWei are optional but recommended: when supplied the modal
+  // fetches each wallet's balance of the asset's payment token and shows it
+  // beneath the address, plus a low-balance warning class when the wallet
+  // can't cover priceWei. Balance loads asynchronously and never blocks the
+  // user from picking a wallet — they can still proceed and let the on-chain
+  // tx itself revert if balance is insufficient.
+  function showWalletChoiceModal(payToken, priceWei) {
     return new Promise(function (resolve, reject) {
       var modal = document.getElementById('wallet-choice-modal');
       var saBtn = document.getElementById('wallet-choice-sa');
@@ -3490,13 +3662,69 @@
       var cancelBtn = document.getElementById('wallet-choice-cancel');
       var saAddrEl = document.getElementById('wallet-choice-sa-addr');
       var eoaAddrEl = document.getElementById('wallet-choice-eoa-addr');
+      var saBalEl = document.getElementById('wallet-choice-sa-bal');
+      var eoaBalEl = document.getElementById('wallet-choice-eoa-bal');
 
       var sa = Wallet.getSmartAccountAddress() || Wallet.getSignerAddress();
       var eoa = Wallet.getAddress();
       saAddrEl.textContent = sa ? (sa.slice(0, 6) + '...' + sa.slice(-4)) : '';
       eoaAddrEl.textContent = eoa ? (eoa.slice(0, 6) + '...' + eoa.slice(-4)) : '';
+      if (saBalEl) { saBalEl.textContent = ''; saBalEl.classList.remove('insufficient'); }
+      if (eoaBalEl) { eoaBalEl.textContent = ''; eoaBalEl.classList.remove('insufficient'); }
 
       modal.classList.remove('hidden');
+
+      if (payToken && (sa || eoa)) {
+        var isNative = !payToken || payToken === ADDRESS_ZERO;
+        var fetchFn = isNative
+          ? Wallet.getNativeBalance
+          : function (addr) { return Wallet.getERC20Balance(payToken, addr); };
+        var decPromise = isNative
+          ? Promise.resolve(18)
+          : (Wallet.getTokenDecimals ? Wallet.getTokenDecimals(payToken) : Promise.resolve(6));
+        var symbol = isNative
+          ? 'ETH'
+          : (Wallet.USDC_ADDRESS && payToken.toLowerCase() === Wallet.USDC_ADDRESS.toLowerCase() ? 'USDC' : '');
+
+        decPromise.then(function (dec) {
+          if (saBalEl) saBalEl.textContent = 'Loading\u2026';
+          if (eoaBalEl) eoaBalEl.textContent = 'Loading\u2026';
+          var requiredBig = priceWei ? (function () {
+            try { return BigInt(priceWei); } catch (_) { return null; }
+          })() : null;
+
+          function paint(el, raw) {
+            if (!el) return;
+            try {
+              var human = Number(ethers.formatUnits(raw, dec));
+              var fixed = human.toFixed(dec <= 6 ? 2 : 4);
+              el.textContent = fixed + (symbol ? ' ' + symbol : '') + ' available';
+              if (requiredBig !== null) {
+                var rawBig;
+                try { rawBig = BigInt(raw.toString()); } catch (_) { rawBig = null; }
+                if (rawBig !== null && rawBig < requiredBig) el.classList.add('insufficient');
+              }
+            } catch (_) {
+              el.textContent = '';
+            }
+          }
+
+          if (sa) {
+            fetchFn(sa)
+              .then(function (raw) { paint(saBalEl, raw); })
+              .catch(function () { if (saBalEl) saBalEl.textContent = ''; });
+          } else if (saBalEl) {
+            saBalEl.textContent = '';
+          }
+          if (eoa) {
+            fetchFn(eoa)
+              .then(function (raw) { paint(eoaBalEl, raw); })
+              .catch(function () { if (eoaBalEl) eoaBalEl.textContent = ''; });
+          } else if (eoaBalEl) {
+            eoaBalEl.textContent = '';
+          }
+        });
+      }
 
       function cleanup() {
         modal.classList.add('hidden');
@@ -3529,7 +3757,7 @@
       : Wallet.connect().then(function () { updateWalletUI(); });
 
     var walletChoicePromise = ensureConnected.then(function () {
-      if (Wallet.hasSmartAccount()) return showWalletChoiceModal();
+      if (Wallet.hasSmartAccount()) return showWalletChoiceModal(listing.payToken, listing.price);
       return 'eoa';
     });
 
@@ -4610,7 +4838,12 @@
         if ((item.unclaimedRewards || 0) > 0) withRewards++;
       });
 
-      dom.earningsTotalAmount.textContent = formatPrice(totalUnclaimed);
+      // The /api/catalog/earnings backend queries rewardsOf(wallet, USDC) and
+      // returns values already decimal-converted with USDC's 6-decimal scale.
+      // formatPrice defaults to ETH when no paymentToken is passed, which
+      // would mislabel USDC values like 0.05 as "0.05 ETH". Pass USDC_ADDRESS
+      // explicitly so the symbol displays correctly.
+      dom.earningsTotalAmount.textContent = formatPrice(totalUnclaimed, USDC_ADDRESS);
       if (dom.earningsTotalEarned) dom.earningsTotalEarned.textContent = String(mergedData.length);
       if (dom.earningsActiveCount) dom.earningsActiveCount.textContent = String(withRewards);
       dom.earningsSummary.classList.remove('hidden');
@@ -4704,8 +4937,12 @@
 
       html += '</div>';
       html += '<div class="earnings-item-right">';
+      // Backend returns USDC-denominated values (already decimal-converted).
+      // Use the first distribution's paymentToken when available, falling back
+      // to USDC_ADDRESS so the symbol never silently defaults to ETH.
+      var unclaimedPayToken = (distributions && distributions[0] && distributions[0].paymentToken) || USDC_ADDRESS;
       html += '<span class="earnings-item-unclaimed' + (hasRewards ? '' : ' zero') + '">' +
-        (hasRewards ? formatPrice(unclaimed) : '$0.00') + '</span>';
+        (hasRewards ? formatPrice(unclaimed, unclaimedPayToken) : '$0.00') + '</span>';
 
       if (hasRewards) {
         var payTokens = distributions.map(function (d) { return d.paymentToken; }).join(',');

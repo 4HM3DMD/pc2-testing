@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Elacity Market</title>
   <link rel="icon" type="image/png" href="assets/favicon.png">
-  <link rel="stylesheet" href="styles.css?v=30">
+  <link rel="stylesheet" href="styles.css?v=37">
 </head>
 <body>
 
@@ -69,13 +69,15 @@
         <h2 class="view-title">Feed</h2>
       </div>
       <div class="filter-chips" id="feed-filter-chips">
-        <button class="filter-chip active" data-category="buyNow" data-type="all">Buy Now</button>
-        <button class="filter-chip" data-category="popular" data-type="all">Popular</button>
-        <button class="filter-chip" data-category="all" data-type="all">All</button>
+        <button class="filter-chip active" data-category="all" data-type="all">All</button>
+        <button class="filter-chip" data-category="buyNow" data-type="all">Buy Now</button>
+        <button class="filter-chip" data-category="free" data-type="all">Free</button>
         <span class="filter-chip-divider" style="width:1px;background:var(--border);align-self:stretch;margin:0 4px;flex-shrink:0"></span>
         <button class="filter-chip" data-category="" data-type="video">Video</button>
         <button class="filter-chip" data-category="" data-type="audio">Audio</button>
         <button class="filter-chip" data-category="" data-type="image">Image</button>
+        <button class="filter-chip" data-category="" data-type="ebook">Ebook</button>
+        <button class="filter-chip" data-category="" data-type="3d">3D</button>
         <span class="filter-chip-divider" style="width:1px;background:var(--border);align-self:stretch;margin:0 4px;flex-shrink:0"></span>
         <button class="filter-chip adult-filter-chip" id="adult-filter-toggle" data-toggle="adult" title="Show adult content (18+)">18+</button>
       </div>
@@ -339,7 +341,11 @@
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>
               <span id="like-count"></span>
             </button>
-            <button id="share-btn" class="action-btn" title="Copy link">
+            <!-- Share button hidden for now (UX cleanup, 2026-05-01). The
+                 element is kept in DOM so app.js's dom.shareBtn lookup +
+                 handler wiring still resolve; just remove the .hidden class
+                 to bring it back. -->
+            <button id="share-btn" class="action-btn hidden" title="Copy link">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
               <span>Share</span>
             </button>
@@ -520,12 +526,14 @@
           <span class="wallet-choice-icon">&#x1f4b3;</span>
           <span class="wallet-choice-label">Agent Account</span>
           <span class="wallet-choice-sub" id="wallet-choice-sa-addr"></span>
+          <span class="wallet-choice-balance" id="wallet-choice-sa-bal"></span>
           <span class="wallet-choice-tag">Recommended</span>
         </button>
         <button id="wallet-choice-eoa" class="wallet-choice-btn wallet-choice-eoa">
           <span class="wallet-choice-icon">&#x1f511;</span>
           <span class="wallet-choice-label">EOA Wallet</span>
           <span class="wallet-choice-sub" id="wallet-choice-eoa-addr"></span>
+          <span class="wallet-choice-balance" id="wallet-choice-eoa-bal"></span>
           <span class="wallet-choice-note">Requires Base network</span>
         </button>
       </div>
@@ -645,9 +653,9 @@
   <div id="toast-container" class="toast-container" role="status" aria-live="polite"></div>
 
   <script src="https://cdn.jsdelivr.net/npm/ethers@6.13.4/dist/ethers.umd.min.js"></script>
-  <script src="api.js?v=34"></script>
+  <script src="api.js?v=37"></script>
   <script src="wallet.js?v=22"></script>
-  <script src="app.js?v=53"></script>
-  <script src="app-features.js?v=39"></script>
+  <script src="app.js?v=61"></script>
+  <script src="app-features.js?v=42"></script>
 </body>
 </html>

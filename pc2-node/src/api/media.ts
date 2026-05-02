@@ -248,6 +248,56 @@ router.post('/init', async (req: AuthenticatedRequest, res: Response) => {
         if (!remote.response?.ok) {
           const remoteStatus = remote.response?.status;
           const remoteErr = remote.error;
+
+          // C1: when both gateways fail, check whether this CID is mid-pin on
+          // this node. The download-first buy flow kicks off a pin job at
+          // purchase time; if the user clicks Play before that pin completes,
+          // local gateway 404s (blocks not all here yet) and public gateway
+          // is unlikely to have the asset (just minted on a peer). The legacy
+          // error told the user to "ask the publisher to peer with
+          // ipfs.ela.city", which is the wrong action — they just need to
+          // wait for the pin they ALREADY started to finish. Surface real pin
+          // progress so the player can show a friendly progress UI and
+          // auto-retry instead of bouncing the user.
+          const db = req.app.locals.db;
+          let pinDetail: any = null;
+          try {
+            pinDetail = db?.getPinnedCIDDetail ? db.getPinnedCIDDetail(mediaUri) : null;
+          } catch (e: any) {
+            logger.warn(`[media/init] getPinnedCIDDetail failed: ${e?.message}`);
+          }
+          if (pinDetail && (pinDetail.pin_status === 'pinning' || pinDetail.pin_status === 'queued')) {
+            const sizeBytes = pinDetail.size || 0;
+            const bytesDownloaded = Math.min(
+              pinDetail.bytes_downloaded || 0,
+              sizeBytes || pinDetail.bytes_downloaded || 0,
+            );
+            const progressPercent = sizeBytes > 0
+              ? Math.min(99, Math.floor((bytesDownloaded / sizeBytes) * 100))
+              : 0;
+            res.status(503).json({
+              error: 'pin_in_progress',
+              code: 'pin_in_progress',
+              message: progressPercent > 0
+                ? `Downloading content to your node — ${progressPercent}% complete. This page will retry automatically.`
+                : 'Downloading content to your node. This page will retry automatically.',
+              progressPercent,
+              bytesDownloaded,
+              sizeBytes,
+              mediaUri,
+            });
+            return;
+          }
+          if (pinDetail && pinDetail.pin_status === 'failed') {
+            res.status(503).json({
+              error: 'pin_failed',
+              code: 'pin_failed',
+              message: 'Local download failed. Retry the download from the asset page, then try playing again.',
+              mediaUri,
+            });
+            return;
+          }
+
           const bothTimedOut = localErr?.code === 'TIMEOUT' && remoteErr?.code === 'TIMEOUT';
           res.status(502).json({
             error: bothTimedOut
@@ -1734,8 +1784,8 @@ async function runEncodePipeline(
     job.progress.stage = 'fragmenting';
     const bento4 = await ensureBento4();
     const fragmentedPath = join(workDir, `fragmented_${plan.isAudioOnly ? 'audio' : plan.resolution}.mp4`);
-    await fragmentMedia(result.outputPath, fragmentedPath, bento4.mp4fragment);
-    logger.info(`[media/encode] Job ${job.id}: fragmented`);
+    await fragmentMedia(result.outputPath, fragmentedPath, bento4.mp4fragment, bento4.useFfmpegFallback);
+    logger.info(`[media/encode] Job ${job.id}: fragmented (${bento4.useFfmpegFallback ? 'ffmpeg' : 'mp4fragment'})`);
 
     // 4. DASH package (with or without CENC encryption) + IPFS upload
     job.status = 'packaging';

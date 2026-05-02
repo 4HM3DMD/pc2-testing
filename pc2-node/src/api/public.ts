@@ -246,7 +246,14 @@ function isContentMissingError(message: string): boolean {
     || lower.includes('missing block')
     || lower.includes('no link named')
     || lower.includes('block was not found')
-    || lower.includes('content not found');
+    || lower.includes('content not found')
+    // FsBlockstore throws Node.js fs ENOENT when a block file isn't on disk:
+    //   ENOENT: no such file or directory, open '.../ipfs/blocks/XX/...data'
+    // That's the canonical "block missing locally" signal — without this
+    // the gateway would 500 instead of auto-pinning from peers / the
+    // configured public-gateway prefetch URL. v1.2.6 fix.
+    || lower.includes('enoent')
+    || lower.includes('no such file');
 }
 
 async function tryPinForPublicRequest(ipfs: IPFSStorage, cid: string, context: string): Promise<boolean> {

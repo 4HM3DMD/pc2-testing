@@ -238,7 +238,67 @@
             throw new Error('Wallet account does not match authenticated PC2 session');
           }
           log('runDelegationFlow: requesting personal_sign (wallet prompt expected)…');
+
+          // EverlastingOS-class bug guard: when the user signs the one-time
+          // 24h delegation via an EXTERNAL wallet (MetaMask / WalletConnect /
+          // Coinbase), the only cue is the wallet's own popup. If the popup
+          // is blocked, sits in another window, or is dismissed unread, the
+          // bundle never builds and every subsequent open returns
+          // session_bundle_required — the user has no idea what went wrong.
+          //
+          // We surface a parent-frame BOTTOM-RIGHT corner toast (same visual
+          // pattern as buildWalletConnectPanel in UIWindowParticleSigning,
+          // and as the email-login signature overlay from #21) so the page
+          // itself cues "your wallet is waiting on you" — without a backdrop
+          // takeover. For external wallets the wallet popup is already in
+          // the browser-extension area (outside the page) or another window
+          // entirely, so a fullscreen backdrop would add visual noise without
+          // adding visibility. Embedded (Particle email/social) login already
+          // gets forced-attention UI from UIWindowParticleSigning (centered
+          // iframe + backdrop), so we deliberately skip the overlay there to
+          // avoid stacking two cues on top of one another.
+          //
+          // Cleanup is mandatory on BOTH success and failure so a rejected /
+          // cancelled signature never leaves a frozen overlay behind.
+          var external = !isEmbeddedLogin();
+          var loginMethod = ((globalScope.user || {}).login_method
+            || (globalScope.localStorage && globalScope.localStorage.getItem('pc2_login_method'))
+            || '').toLowerCase();
+          var walletLabel = loginMethod === 'metamask' ? 'MetaMask'
+            : loginMethod === 'walletconnect' ? 'your wallet app'
+            : loginMethod === 'coinbase' ? 'Coinbase Wallet'
+            : 'your wallet';
+
+          var overlay = null;
+          var hintTimer1 = null;
+          var hintTimer2 = null;
+          if (external && typeof globalScope.pc2ShowLoginStatusOverlay === 'function') {
+            overlay = globalScope.pc2ShowLoginStatusOverlay({
+              id: 'pc2-secureview-delegation-overlay',
+              title: 'Approve secure-view session',
+              message: 'Check ' + walletLabel + ' \u2014 one signature unlocks paid content for 24h.',
+              hint: '',
+              position: 'corner',
+            });
+            hintTimer1 = setTimeout(function () {
+              if (overlay && overlay.update) {
+                overlay.update({ hint: 'Still waiting \u2014 open ' + walletLabel + ' to approve.' });
+              }
+            }, 8000);
+            hintTimer2 = setTimeout(function () {
+              if (overlay && overlay.update) {
+                overlay.update({ hint: 'If your wallet didn\u2019t prompt, the popup may have been blocked.' });
+              }
+            }, 20000);
+          }
+          function clearOverlay() {
+            if (hintTimer1) { clearTimeout(hintTimer1); hintTimer1 = null; }
+            if (hintTimer2) { clearTimeout(hintTimer2); hintTimer2 = null; }
+            if (overlay && overlay.hide) { overlay.hide(); overlay = null; }
+          }
+
           return walletPersonalSign(canonical, signerAddr).then(function (delegationSig) {
+            clearOverlay();
             log('runDelegationFlow: delegation signed, POST /api/storage/lit/complete-session');
             return authFetch('/api/storage/lit/complete-session', {
               method: 'POST',
@@ -265,6 +325,12 @@
                 return sessionState;
               });
             });
+          }).catch(function (err) {
+            // Cancelled / rejected / timed-out signature, or network failure
+            // during complete-session. Tear down the overlay before
+            // bubbling so the user isn't stuck behind a frozen modal.
+            clearOverlay();
+            throw err;
           });
         });
       });

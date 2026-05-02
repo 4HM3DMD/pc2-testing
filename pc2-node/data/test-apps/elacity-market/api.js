@@ -540,21 +540,21 @@ var ElacityAPI = (function () {
   // ── Query Presets ────────────────────────────────────
 
   var PRESETS = {
+    all: function (offset, limit) {
+      return [
+        { type: 'single' },
+        { offset: offset || 0, limit: limit || 20, sort: { createdAt: -1 } }
+      ];
+    },
     buyNow: function (offset, limit) {
       return [
         { type: 'single', variant: 'drm', filterby: ['buyNow'] },
         { offset: offset || 0, limit: limit || 20, sort: { listedAt: -1 } }
       ];
     },
-    popular: function (offset, limit) {
+    free: function (offset, limit) {
       return [
-        { type: 'single' },
-        { offset: offset || 0, limit: limit || 20, sort: { views: -1 } }
-      ];
-    },
-    all: function (offset, limit) {
-      return [
-        { type: 'single' },
+        { type: 'single', filterby: ['free'] },
         { offset: offset || 0, limit: limit || 20, sort: { createdAt: -1 } }
       ];
     },
@@ -621,17 +621,98 @@ var ElacityAPI = (function () {
       .catch(function () { return null; });
   }
 
+  // The local /api/catalog endpoint returns ALL resolved items in one batch
+  // (no server-side category / content-type filtering). The PRESETS expressed
+  // intent via { filterby: [...], contentType: [...] } but it was a no-op for
+  // the local catalog path and only wired up to the remote GraphQL fallback.
+  // Apply the same filter intent client-side here so chip selection actually
+  // narrows the visible set on every PC2 node.
+  function applyClientSideFilters(items, query) {
+    if (!Array.isArray(items)) return items;
+    var filterby = (query && query.filterby) || [];
+    var contentType = (query && query.contentType) || [];
+
+    var filtered = items;
+
+    if (filterby.indexOf('buyNow') !== -1) {
+      filtered = filtered.filter(function (n) {
+        var op = n.operative && n.operative.opType;
+        return op === 1 || op === 2;
+      });
+    } else if (filterby.indexOf('free') !== -1) {
+      filtered = filtered.filter(function (n) {
+        var op = (n.operative && n.operative.opType) || 0;
+        return op === 0;
+      });
+    }
+
+    if (contentType.length > 0) {
+      filtered = filtered.filter(function (n) {
+        return matchesContentType(n, contentType);
+      });
+    }
+
+    return filtered;
+  }
+
+  // Maps a chip's data-type value to the catalog row's asset_type. Most chips
+  // are 1:1 (video, audio, image), but "ebook" covers PDF + EPUB which the
+  // indexer stores as asset_type='document' or 'other', and "3d" covers any
+  // glb/gltf/fbx/obj content currently classified as 'ai-model' or '3d'.
+  function matchesContentType(nft, chipTypes) {
+    var rawAssetType = nft._rawAssetType || '';
+    var mime = (nft.metadata && nft.metadata.media && (nft.metadata.media.contentType || nft.metadata.media.mimeType)) || '';
+    var assetTypeStr = String(rawAssetType).toLowerCase();
+    var mimeStr = String(mime).toLowerCase();
+
+    for (var i = 0; i < chipTypes.length; i++) {
+      var chip = String(chipTypes[i]).toLowerCase();
+      if (chip === 'video' && (mimeStr.indexOf('video/') === 0 || assetTypeStr === 'video')) return true;
+      if (chip === 'audio' && (mimeStr.indexOf('audio/') === 0 || assetTypeStr === 'audio')) return true;
+      if (chip === 'image' && (mimeStr.indexOf('image/') === 0 || assetTypeStr === 'image')) return true;
+      if (chip === 'ebook' && (mimeStr.indexOf('epub') !== -1 || mimeStr === 'application/pdf' || assetTypeStr === 'document' || assetTypeStr === 'other')) return true;
+      if (chip === '3d' && (mimeStr.indexOf('gltf') !== -1 || mimeStr.indexOf('glb') !== -1 || assetTypeStr === '3d' || assetTypeStr === 'ai-model')) return true;
+    }
+    return false;
+  }
+
   function fetchItems(query, filters) {
     var off = (filters && filters.offset) || 0;
     var lim = (filters && filters.limit) || 50;
+    var searchBy = (filters && filters.searchBy) || '';
 
     return fetchFromCatalog(off, lim).then(function (catalogResult) {
       if (catalogResult && catalogResult.data.length > 0) {
-        console.log('[API] Using local catalog (' + catalogResult.data.length + ' items)');
-        return catalogResult;
+        var filteredData = applyClientSideFilters(catalogResult.data, query);
+        if (searchBy) filteredData = applySearchTerm(filteredData, searchBy);
+        console.log('[API] Using local catalog (' + catalogResult.data.length + ' items, ' + filteredData.length + ' after filters)');
+        return Object.assign({}, catalogResult, { data: filteredData });
       }
       return gql(FETCH_ITEMS_QUERY, { query: query, filters: filters })
         .then(function (data) { return normalizeAssetCollection(data.assets); });
+    });
+  }
+
+  // Local-catalog search: case-insensitive match against the visible card
+  // fields (asset name, description, channel name, creator address).
+  // The /api/catalog endpoint has no server-side `q=` parameter today, so the
+  // search bar would otherwise return EVERY catalog item regardless of query.
+  // Future enhancement: push this into a SQL LIKE in the backend.
+  function applySearchTerm(items, q) {
+    if (!Array.isArray(items) || !q) return items;
+    var needle = String(q).toLowerCase().trim();
+    if (!needle) return items;
+    return items.filter(function (n) {
+      var name = (n.name || '').toLowerCase();
+      var desc = ((n.metadata && n.metadata.description) || '').toLowerCase();
+      var channelName = ((n.channel && n.channel.name) || '').toLowerCase();
+      var creatorAddr = ((n.channel && n.channel.creator && n.channel.creator.address) || '').toLowerCase();
+      return (
+        name.indexOf(needle) !== -1 ||
+        desc.indexOf(needle) !== -1 ||
+        channelName.indexOf(needle) !== -1 ||
+        creatorAddr.indexOf(needle) !== -1
+      );
     });
   }
 
@@ -713,6 +794,60 @@ var ElacityAPI = (function () {
     });
   }
 
+  // Resolve the asset's operative type (0=Free, 1=Buy Once, 2=Buy & Resell)
+  // by preferring the indexed on-chain truth (item.op_type from the operative
+  // contract event) over the legacy metadata.pricing.accessMethod inference.
+  // Newer asset metadata schemas (v1.1+) no longer embed pricing fields, so
+  // metadata-only inference incorrectly defaulted every paid asset to Free.
+  function catalogResolveOpType(item, pricing) {
+    if (typeof item.op_type === 'number' && item.op_type >= 0) return item.op_type;
+    if (pricing && pricing.accessMethod === 'buy_and_resell') return 2;
+    if (pricing && pricing.price) return 1;
+    return 0;
+  }
+
+  // Build the listings[] array for the operative.access object. Prefers the
+  // indexed on-chain price/payment_token columns; falls back to metadata
+  // pricing for legacy assets that still embed pricing inline.
+  function catalogResolveListings(item, pricing) {
+    if (item.price) {
+      return [{
+        seller: item.creator_address || '',
+        price: String(item.price),
+        quantity: pricing.copies || 1,
+        payToken: item.payment_token || pricing.currencyAddress || '',
+      }];
+    }
+    if (pricing && pricing.price) {
+      return [{
+        seller: item.creator_address || '',
+        price: String(Math.round(pricing.price * Math.pow(10, pricing.currencyDecimals || 6))),
+        quantity: pricing.copies || 1,
+        payToken: pricing.currencyAddress || '',
+      }];
+    }
+    return [];
+  }
+
+  // Surface a decimal-converted top-level { price, paymentToken } on the NFT
+  // object so feed-card render code (formatPrice(item.price, item.paymentToken))
+  // displays the real price (e.g. "$0.01 USDC") rather than falling through to
+  // the tier-label fallback. USDC = 6 decimals, ETH/native = 18.
+  // Returns { price: <number|null>, paymentToken: <string|''> }.
+  function catalogResolveTopLevelPrice(listings) {
+    if (!listings || !listings.length) return { price: null, paymentToken: '' };
+    var l = listings[0];
+    if (!l || !l.price) return { price: null, paymentToken: '' };
+    var token = (l.payToken || '').toLowerCase();
+    var USDC = '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913';
+    var decimals = token === USDC ? 6 : 18;
+    var n;
+    try { n = Number(BigInt(l.price)) / Math.pow(10, decimals); }
+    catch (_) { n = parseFloat(l.price) / Math.pow(10, decimals); }
+    if (!isFinite(n)) return { price: null, paymentToken: '' };
+    return { price: n, paymentToken: l.payToken || '' };
+  }
+
   function catalogItemToNft(item) {
     var raw = {};
     try { raw = item.metadata_json ? JSON.parse(item.metadata_json) : {}; } catch (_) {}
@@ -728,6 +863,9 @@ var ElacityAPI = (function () {
     var channelImage = chMeta.image || chMeta.coverImage || '';
     var creatorAlias = creator.name || creator.alias || '';
 
+    var resolvedListings = catalogResolveListings(item, pricing);
+    var topPrice = catalogResolveTopLevelPrice(resolvedListings);
+
     return normalizeNftProtectionShape({
       tokenId: item.token_id,
       contractAddress: item.channel_address,
@@ -737,6 +875,8 @@ var ElacityAPI = (function () {
       tokenURI: item.metadata_cid ? ('ipfs://' + item.metadata_cid) : '',
       image: item.image_url || '',
       name: item.name || raw.name || 'Untitled',
+      price: topPrice.price,
+      paymentToken: topPrice.paymentToken,
       createdAt: raw.createdAt || new Date(item.indexed_at).toISOString(),
       views: 0,
       isProtected: !!(asset.encrypted || media.protectionType),
@@ -774,21 +914,17 @@ var ElacityAPI = (function () {
       },
       operative: {
         address: item.operative_address || '',
-        opType: pricing.accessMethod === 'buy_and_resell' ? 2 : (pricing.price ? 1 : 0),
+        opType: catalogResolveOpType(item, pricing),
         resellerCut: pricing.resellerCut || 0,
         owner: item.creator_address || '',
         access: {
           totalSupply: pricing.copies || 0,
-          listings: pricing.price ? [{
-            seller: item.creator_address || '',
-            price: String(Math.round(pricing.price * Math.pow(10, pricing.currencyDecimals || 6))),
-            quantity: pricing.copies || 1,
-            payToken: pricing.currencyAddress || '',
-          }] : [],
+          listings: resolvedListings,
         },
       },
       _rawAsset: asset,
       _catalogItem: true,
+      _rawAssetType: item.asset_type || '',
       _isLocal: !!item.is_local,
       _contentCid: item.content_cid || '',
     });

@@ -543,6 +543,44 @@ export class UpdateService {
       await this.execStreamed('build-backend', 'npm', ['run', 'build:backend'], { cwd: pc2NodeDir });
       logger.info('[UpdateService] Build complete');
 
+      // Step 4.5 (v1.2.6): Native-module verification gauntlet.
+      //
+      // Before we restart PC2 against the freshly-installed deps, verify
+      // that the critical native modules actually load. If they don't —
+      // e.g. better-sqlite3 prebuild failed to download because of a
+      // network glitch and we ended up with a half-baked binary — fail
+      // the update LOUDLY now rather than letting PM2 restart-loop on
+      // the new broken state.
+      //
+      // We only test better-sqlite3 here because it's the only native
+      // module that historically had Node-version-specific binaries
+      // (the v9 → v11 bump in v1.2.6 fixes that). bcrypt, node-pty,
+      // sharp, and node-datachannel all use NAPI or platform-subpackage
+      // prebuilds that work across Node versions.
+      this.updateProgress = 'Verifying native modules...';
+      logger.info('[UpdateService] Verifying better-sqlite3 loads against current Node ABI...');
+      try {
+        await this.execStreamed(
+          'verify-natives',
+          'node',
+          ['-e', "require('better-sqlite3')(':memory:').prepare('SELECT 1').get(); console.log('better-sqlite3 OK');"],
+          { cwd: pc2NodeDir }
+        );
+        logger.info('[UpdateService] Native modules verified');
+      } catch (verifyErr) {
+        const errMsg = verifyErr instanceof Error ? verifyErr.message : String(verifyErr);
+        logger.error('[UpdateService] Native module verification FAILED:', errMsg);
+        this.appendLog('verify-natives', `[fatal] Native module verification failed: ${errMsg}`);
+        this.appendLog('verify-natives', '[fatal] PC2 would crash-loop on restart. Aborting update.');
+        this.appendLog('verify-natives', '[hint] Run: cd ' + projectRoot + ' && bash scripts/update.sh');
+        this.isUpdating = false;
+        this.updateProgress = '';
+        return {
+          success: false,
+          message: 'Update built but native modules failed to load. Run scripts/update.sh from terminal to repair.',
+        };
+      }
+
       // Step 5: Schedule restart
       this.updateProgress = 'Restarting server...';
       logger.info('[UpdateService] Update complete, scheduling restart...');

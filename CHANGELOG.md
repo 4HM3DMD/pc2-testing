@@ -6,6 +6,459 @@
 
 ---
 
+## [1.2.6] - 2026-05-01 (no-Xcode-CLT-needed + arm64-video-uploads + freshly-minted-content-shows-up)
+
+> ## TL;DR
+>
+> v1.2.6 makes brand-new Mac installs work for users who have never touched a terminal — no Xcode Command Line Tools required. It also fixes video uploads on arm64 Linux (Jetson, Pi, Graviton) which previously crashed at the "Fragment" step, fixes freshly-minted content not showing up in the marketplace, fixes 500-erroring thumbnails for non-locally-pinned content, plus three other ways v1.2.5 could leave a user stuck on update.
+
+### What v1.2.6 fixes
+
+#### 1. Zero-compiler installs on macOS (Sasha's case)
+
+`better-sqlite3` was pinned to `^9.2.2`, which has NO Node 22 (MODULE_VERSION 127) prebuilt binary for darwin-arm64. The launcher bundles Node 22, so on every fresh install the launcher had to fall back to compiling `better-sqlite3` from C++ source — which requires Xcode Command Line Tools. Users without Xcode CLT (i.e. most non-developers) saw the install report "success" but got a broken state.
+
+**Fix**: bumped `better-sqlite3` from `^9.2.2` → `^11.10.0`. v11 ships Node 22 darwin-arm64 prebuilds. `npm install` now downloads the matching binary directly. **No compiler needed. No Xcode CLT required.**
+
+Verified all other native modules (`bcrypt`, `node-pty`, `sharp`, `node-datachannel`) already use NAPI or platform-specific prebuilt subpackages — they don't need any compiler either.
+
+#### 2. Resilient launcher install when previous attempt failed (Sasha's case, part 2)
+
+Sasha's launcher install crashed on `git clone` because `~/.pc2` was already half-populated from a previous failed attempt. The launcher then called `startPC2` anyway, which spawned a doomed process against the broken state.
+
+**Fix**: launcher now detects three states cleanly:
+- `~/.pc2` doesn't exist → fresh install (clone)
+- `~/.pc2` exists with our `package.json` from `Elacity/pc2.net` → repair install (skip clone, run `npm install` + build to fix the broken state)
+- `~/.pc2` exists but isn't our repo → back up to `~/.pc2_backup_<timestamp>` and clone fresh
+
+Plus: `startPC2` now does a pre-flight load test of `better-sqlite3` before spawning the PC2 process. If it fails to load (broken install state), it surfaces an actionable error instead of crash-looping the user.
+
+#### 3. `update.sh` no longer blocks on benign build artifacts
+
+v1.2.5's `update.sh` safety guard refused to run if `package-lock.json` or `frontend/` had any drift, even though both are regenerated on every update anyway. Users had to manually `git checkout -- ...` or set `PC2_UPDATE_FORCE=1`, with the latter showing a typo'd hint (`bash bash`) when run via `curl | bash`.
+
+**Fix**: `update.sh` now auto-discards known-safe build artifact drift (`package-lock.json`, `pc2-node/package-lock.json`, `pc2-node/frontend/`, `pc2-node/dist/`, `src/particle-auth/assets/`) before checking for real source-code drift. Only **genuine source changes** trigger the safety guard. The `bash bash` typo is also fixed — the recovery hint now detects whether you ran the script via `curl | bash` or from the repo and prints the right command.
+
+#### 4. GUI auto-updater verifies native modules before restart
+
+`UpdateService.ts` (the in-process auto-updater) had no native-module verification step. If a `better-sqlite3` prebuild failed to download for some reason (network glitch, npm cache issue), the update would silently succeed and PC2 would crash-loop on the next restart.
+
+**Fix**: added a load test for `better-sqlite3` between the build step and the restart step. If it fails, the update is aborted with a clear "run scripts/update.sh from terminal" message — no crash loop.
+
+#### 5. Video uploads work on arm64 Linux (Jetson / Pi / Graviton)
+
+Encoder pipeline crashed at the "Fragment" step on arm64 Linux because PC2 tried to download a Bento4 prebuild binary from `bok.net/Bento4/binaries/Bento4-SDK-1-6-0-641.aarch64-unknown-linux.zip`, which returns HTTP 404 — bok.net never published an arm64 Linux build of Bento4. macOS and x86_64 Linux URLs work fine; arm64 Linux was the only affected platform.
+
+Symptom (Creator app on Jetson):
+```
+✓ Analyze
+✓ Transcode
+✗ Fragment — Download failed: HTTP 404
+```
+
+**Fix**: PC2 now detects when no Bento4 prebuild is available for the platform (or when bok.net download fails for any reason) and falls back to ffmpeg-based fragmentation. ffmpeg's `-movflags +frag_keyframe+empty_moov+default_base_moof+dash` produces fragmented MP4 (fMP4) with the same `moof` / `traf` / `tfhd` / `trun` / `mdat` box structure that mp4fragment produces — fully DASH/CMAF-compliant. ffmpeg is already a hard dependency for the transcode step, so it's guaranteed to be available on any node that can encode video at all.
+
+x86_64 Linux and macOS continue to use Bento4's mp4fragment (the proven path). Only platforms without a Bento4 prebuild (currently linux-arm64) use the ffmpeg fallback.
+
+#### 6. Freshly-minted content shows up in the marketplace immediately
+
+After a successful upload + on-chain mint, the indexer would detect the new TransferSingle event but mark the catalog row `metadata_status: 'failed'` and leave `name`, `asset_type`, `content_cid` all `null`. The marketplace UI then filtered the row out as malformed. Two compounding bugs:
+
+1. The current Elacity Creator (since 2026-04-17) uploads metadata as a **UnixFS directory** (`{cid}/metadata.json`, `{cid}/content.json`, …) rather than a flat JSON file. The indexer's local-IPFS fast path called `getFile(cid)` on the bare directory CID, which throws `"is not a file (type: directory)"`. The catch block correctly fell through to the HTTP gateway list — but the configured remote gateways (`ipfs.ela.city`, `dweb.link`) hadn't yet replicated the freshly-pinned content (typical lag: 30s–5min for a brand-new mint). So all gateway URLs failed and the row stayed `failed` until the 1-hour retry window — terrible UX for "I just uploaded, why isn't it there?".
+
+2. When the indexer DID hit a working gateway (specifically PC2's own local gateway), it parsed the gateway's directory-listing JSON (`{ "cid": ..., "isDirectory": true, "entries": [...] }`) **as if it were the metadata** itself. The row was then marked `resolved` but with all fields null because the parsed JSON had no `name` / `media` / `schema` keys.
+
+**Fixes**:
+- `ContentIndexerService.fetchMetadata()` now prepends the local PC2 gateway URL (`http://127.0.0.1:PORT/ipfs/`) to the gateway candidate list. The local gateway serves freshly-pinned content immediately and handles UnixFS directory CIDs via its `/ipfs/:cid/*` route.
+- Same function now rejects responses that are directory-listing JSON (`isDirectory: true`) and requires the parsed body to have at least one of `schema | name | media | properties | asset` before accepting it as metadata.
+- `getCatalogItemsPendingMetadata()` retry-after window: 1 hour → 5 minutes. Combined with the local-gateway fix, this rarely fires — but if it does, users self-heal in 5 min instead of an hour.
+
+#### 7. Public IPFS gateway no longer 500s on non-locally-pinned content
+
+PC2's `/ipfs/:cid` gateway was returning HTTP 500 instantly (~5ms) for any CID not already in the local blockstore — even though the gateway has an auto-pin path that fetches from peers / the configured prefetch URL on demand. Symptom: the marketplace showed broken thumbnails for any content uploaded by other creators that this node hadn't yet seen.
+
+Root cause: `isContentMissingError()` looked for phrases like `"not found"`, `"missing block"`, `"no link named"`, etc., to decide whether to trigger auto-pin. But Helia's FsBlockstore throws Node.js's `ENOENT: no such file or directory, open '...ipfs/blocks/XX/....data'` — which doesn't match any of those substrings. So the gateway treated "block missing locally" as a generic 500 error.
+
+**Fix**: added `'enoent'` and `'no such file'` to the missing-content classifier. Verified on Jetson: thumbnails that previously 500'd now return HTTP 200 (auto-fetched 105 KB–134 KB each in ~12s the first time, then cached).
+
+#### 8. Marketplace asset detail page — correct UX for free content
+
+Two related bugs on the asset detail page when viewing a **free** (opType === 0) asset:
+
+1. **No way to play or download free content.** The play / download / open-in-viewer buttons were guarded by `if (isOwned)`, where `isOwned` resolves to "this user holds the access NFT for this asset". The publisher of a freshly-minted free asset doesn't auto-receive the access NFT, so they had no way to play their own asset on its detail page. Worse, since free content is cleartext on IPFS and doesn't require an access NFT at all, ANY visitor of a free-asset detail page should be able to play / download it — but that path didn't exist.
+
+2. **Misleading "Publisher Actions" strip on free assets.** The strip rendered three buttons for the publisher: **Edit Price**, **Delist**, **Earnings**. None of them apply to free content: there is no listing price to edit, no marketplace listing to delist, and no on-chain earnings to view. Clicking Edit Price would even show a misleading toast "This content is not resellable (buy-once only)" — wrong category entirely.
+
+**Fixes**:
+- `app.js`: play / download / viewer buttons now reveal when `isOwned || isFree`. `isFree` is derived from `nft.operative.opType === 0`.
+- `app-features.js`: `renderAssetOwnerActions()` early-returns on free assets, so the Publisher Actions strip is suppressed entirely. The "Asset is published" toggle (rendered separately by `renderPublishToggle`) remains visible — it's the only meaningful publisher control for free content.
+- `index.html`: cache-buster bumped (`app.js?v=54`, `app-features.js?v=40`) so users get the fix on next page load without a hard reload.
+
+#### 9. Play button works for free / cleartext content
+
+Clicking **Play** on a free asset showed `Playback Error: Failed to fetch MPD from both gateways (local: 404, public: 404)`. Root cause: `handlePlay()` always launched the player through the encrypted-DASH flow, which:
+
+1. Triggers a Lit Protocol auth round-trip (signing a SIWE message)
+2. POSTs `/api/media/init`, which fetches `<mediaUri>/stream.mpd` from local + public IPFS gateways
+
+But free assets are stored as a **single MP4 file** at the bare CID — there's no `stream.mpd` because the content was never DASH-fragmented + CENC-encrypted on the server side (`asset.cleartext: true`, `asset.directPlayback: true`). So the MPD fetch always 404'd.
+
+**Fix**: `handlePlay()` now detects cleartext / direct-playback assets (`opType === 0`, or explicit `cleartext: true` / `directPlayback: true` in metadata) and launches the player in cleartext mode with a direct file URL (`/ipfs/<cid>`). No Lit auth, no DASH MPD fetch, no `/api/media/init` round-trip — just an HTML5 `<video src=...>`. The encrypted-DASH path is preserved verbatim for paid content (opType 1/2 + CENC).
+
+#### 10. Marketplace UX cleanup (small)
+
+- **Download/Save-to-Cloud button height**: was visually misaligned with sibling action buttons because `.download-node-btn` (and `.open-viewer-btn`) had a leftover `margin-bottom: 12px` from a previous stacked layout. Removed — the buttons now sit cleanly in the flex row.
+- **Share button hidden**: `Share` (copy-link) was an unused half-feature; hidden via `class="hidden"` rather than removed, so the JS handler wiring still resolves and we can bring it back later by deleting the class.
+
+#### 11. Royalty / Make Offer / Royalty Market hidden on free assets
+
+The asset detail page rendered three royalty-share-related sections regardless of asset type: **Royalty Share Offers** with a **Make Offer** button (calling the TradeGateway "make offer for royalty shares" flow), and a **Royalty Market** collapsible section listing royalty-share orders. None of these apply to free content (`opType === 0`) — there's no on-chain revenue to distribute, so royalty shares are meaningless and the buttons either no-op or surface confusing errors when clicked.
+
+**Fix**: `app-features.js` — both `renderOfferSection()` and `renderOrderBook()` now early-return when `nft.operative.opType === 0`, removing/hiding their respective DOM nodes so the entire royalty-shares column disappears for free assets. Cache-buster bumped (`app-features.js?v=40` → `?v=41`). The encrypted-DASH path (paid content) is unchanged.
+
+#### 16. Revenue & Earnings page mislabeled USDC values as ETH
+
+The Revenue & Earnings page showed unclaimed rewards as `0.08 ETH`, `0.03 ETH`, etc. when the actual on-chain values were USDC. The misleading labels could lead a publisher to wildly miscalculate their accrued earnings (0.08 ETH ≈ $200, 0.08 USDC = $0.08 — three orders of magnitude apart).
+
+**Root cause**: backend `/api/catalog/earnings/:address` (`src/api/index.ts`) explicitly queries `rewardsOf(wallet, USDC)` on each operative contract and returns values already decimal-converted with USDC's 6-decimal scale (e.g., `0.05` means `$0.05 USDC`). Frontend `app.js:loadEarningsData` and `renderEarningsList` then called `formatPrice(unclaimed)` *without a `paymentToken` argument*, which made `getTokenSymbol(undefined)` fall back to its `'ETH'` default.
+
+**Fix**: pass an explicit payment token to both `formatPrice` calls on the earnings page. The total-unclaimed dashboard tile uses `USDC_ADDRESS` directly (since the backend currently only aggregates USDC rewards). The per-row unclaimed value uses the row's own `distributions[0].paymentToken`, falling back to `USDC_ADDRESS` if the distributions array is missing — so future per-row support for other payment tokens (ETH, etc.) Just Works without further frontend changes.
+
+Result: `0.08 ETH` → `0.08 USDC`, `0.03 ETH` → `0.03 USDC`, etc. — accurate labelling everywhere on the Revenue & Earnings page.
+
+Files: `pc2-node/data/test-apps/elacity-market/app.js` (`loadEarningsData()`, `renderEarningsList()`). Cache-buster bumped (`app.js?v=57` → `?v=58`).
+
+#### 17. "Network: This node only" badge no longer lies about replication
+
+The asset detail page's `Network` row claimed "This node only" for almost every indexed asset on a typical Jetson catalog — even when the content was clearly mirrored on `ipfs.ela.city` and reachable to anyone on the public web. This led the user to (correctly) ask whether the badge was lying — and yes, it was.
+
+**Root cause**: the backend endpoint `/api/catalog/providers/:cid` was a thin wrapper around `IPFSStorage.countProviders()`, which only consulted libp2p's DHT via `findProviders()` with an 8s timeout. Two issues compounded:
+
+1. Elacity's IPFS gateway (Kubo) doesn't always re-announce CIDs on the public DHT in a window libp2p can observe within 8s — so the DHT walk frequently returns 0 PROVIDER events even when the content is fully pinned and HTTP-reachable on `ipfs.ela.city`.
+2. The PC2 indexer auto-pins every indexed asset locally (which is the intended behaviour — that's how the marketplace catalog gets seeded). So `is_local: true` is true for every catalog row on a node that's done its first scan. Combined with `providers === 0`, the frontend then renders "This node only" — which is the **worst possible** answer because it implies the asset is in danger of disappearing if your node goes down.
+
+The truth on a typical Jetson catalog: 22 of 24 assets ARE replicated on `ipfs.ela.city` (verified via direct HEAD probe). Only 2 are genuinely local-only.
+
+**Fix**: `/api/catalog/providers/:cid` now runs the DHT lookup and an HTTP HEAD probe of two known public IPFS gateways (`ipfs.ela.city`, `dweb.link`) in parallel via `Promise.all`. The DHT timeout was also reduced from 8s to 5s for snappier UX (the parallel gateway probe is bounded at 3s, so the total endpoint latency is ~5s worst case instead of ~8s).
+
+New response shape:
+```json
+{
+  "success": true,
+  "cid": "Qm...",
+  "providers": 0,
+  "gateways": [
+    { "name": "ipfs.ela.city", "reachable": true },
+    { "name": "dweb.link", "reachable": false }
+  ],
+  "publiclyReachable": true
+}
+```
+
+Frontend badge logic in `app.js` updated to interpret this:
+
+| DHT count | Public gateway reachable | `_isLocal` | New badge |
+|---|---|---|---|
+| > 0 | any | any | `N nodes seeding` (+ optional `on ipfs.ela.city`) |
+| 0 | yes | true | `Replicated on ipfs.ela.city + this node` (green) |
+| 0 | yes | false | `Replicated on ipfs.ela.city` (green) |
+| 0 | no | true | `This node only` (amber — now actually accurate) |
+| 0 | no | false | `Discovering peers…` (grey) |
+
+Result: assets that are publicly available now correctly say so, and the amber `This node only` warning is now reserved for assets that genuinely have no public gateway mirror — making it actionable (e.g. "you should ask the publisher to peer with `ipfs.ela.city`" rather than "this is normal, ignore it").
+
+Note: `dweb.link` (Protocol Labs' public gateway) frequently returns false on Elacity-ecosystem CIDs because dweb.link relies on its own DHT crawl which doesn't see Kubo announcements from `ipfs.ela.city` either. We probe it anyway as a secondary signal — useful for content uploaded directly to other IPFS-pinning services (Pinata, Filebase, etc.) that DO announce widely.
+
+Files: `pc2-node/src/api/index.ts` (`/api/catalog/providers/:cid` endpoint — added parallel HTTP HEAD probe), `pc2-node/data/test-apps/elacity-market/app.js` (badge interpretation logic in the seeding-row update path), `pc2-node/data/test-apps/elacity-market/styles.css` (new `.seeding-badge.public` rule — green pill for the replicated-on-public-gateway case). Cache-busters bumped (`app.js?v=58` → `?v=59`, `styles.css?v=34` → `?v=35`).
+
+**Follow-up polish (same session):** the first iteration's badge text — "Replicated on ipfs.ela.city + this node" — was visually correct but too long for the property row's column width and got truncated mid-word ("…this nod"). Replaced with a compact "**N sources**" pill that opens a hover/focus dropdown listing each source with its role:
+
+```
+2 sources ▾
+┌─ Sources ──────────────┐
+│ This node              │
+│   pinned locally       │
+│ ipfs.ela.city          │
+│   public IPFS gateway  │
+└────────────────────────┘
+```
+
+Source list construction (de-duplicated):
+- `_isLocal === true` → adds `"This node"` row (pinned locally)
+- Each reachable gateway → adds `"<gateway-name>"` row
+- DHT count > 0 → adds `"N DHT peer(s)"` row (counted as one bucket so we don't claim "1000 peers" when libp2p happened to walk a chatty area)
+
+Edge cases: 0 sources → `"Discovering peers…"` (grey). Exactly 1 source which is `This node` → `"This node only"` (amber, unchanged behaviour). Otherwise green.
+
+The dropdown is keyboard-accessible (`tabindex=0`, `role=button`, `aria-haspopup=true`) and works on hover via `:hover` AND on touch/keyboard via `:focus-within`. Closes when the user moves focus or clicks elsewhere.
+
+Files: `pc2-node/data/test-apps/elacity-market/app.js` (rewrote the seeding-row render to build a structured source list + dropdown markup), `pc2-node/data/test-apps/elacity-market/styles.css` (new `.seeding-badge.has-dropdown`, `.seeding-caret`, `.seeding-dropdown`, `.seeding-source-detail` rules — uses theme tokens for dark/light mode support). Cache-busters bumped (`app.js?v=59` → `?v=60`, `styles.css?v=35` → `?v=36`).
+
+#### 18. Encrypted-DASH playback fixed: codec strings now include profile/level
+
+A paid (encrypted) video upload completed all 10 pipeline steps (Analyze → Transcode → Fragment → Encrypt → Upload → Finalize IPFS → Upload Metadata → Verify on Network → Mint on-chain → Set Marketplace Approval), but the player rejected playback with:
+
+```
+Playback Error
+Video codec "avc1" is not supported by this browser.
+Please update your browser or contact the creator.
+```
+
+The same source video played fine when uploaded as a free (cleartext) asset, because cleartext playback uses progressive `<video src="…">` (browser does its own codec sniffing) while encrypted-DASH uses MediaSource Extensions (MSE) which is **strict** about codec strings: `MediaSource.isTypeSupported('video/mp4; codecs="avc1"')` returns `false` because the browser needs the profile/compat/level suffix (e.g. `avc1.640028` for H.264 High Profile Level 4.0).
+
+**Root cause**: the JS fMP4 parser (`mp4split.ts → parseCodecString`) searched for the `avcC` sub-box starting **immediately after** the `avc1` sample-entry's box header — but ISO/IEC 14496-12 § 8.5.2 puts 78 bytes of fixed `VisualSampleEntry` fields (6 reserved + 2 data_reference_index + 16 pre_defined + 4 width + 4 height + 8 resolution + 4 reserved + 2 frame_count + 32 compressorname + 2 depth + 2 pre_defined) BETWEEN the entry header and any contained boxes. The parser's scan from offset 0 of those fixed bytes hits 8 zero bytes which `readBoxHeader` interprets as a `{size: 0, type: '\0\0\0\0'}` pseudo-box — and `size === 0` means "extends to end of buffer", so `findBox` skips everything in one giant stride and returns null for `avcC`. The parser then falls back to returning the bare fourcc `'avc1'` (no profile/level), which gets baked into the DASH MPD's `codecs="…"` attribute, and the player can't validate it.
+
+This bug has been latent in the JS parser. It bit us **now** because:
+1. v1.2.6 added an ffmpeg-based fragmentation fallback for arm64 Linux (Bento4 has no arm64 prebuild).
+2. The JS parser only kicks in via `splitFragmentedMP4FromBuffer`, which the WASM split path falls back to on errors.
+3. ffmpeg's output is fully ISO-compliant — `avc1` sample entries DO have the 78-byte VisualSampleEntry header — so the parser's incorrect search start exposes the bug.
+4. We don't have a Bento4 baseline on the Jetson to A/B against, but the WASM parser (separately compiled, source not in this repo) appears to have a similar issue: it returned `codec: "avc1"` for the Jetson's encrypted upload too.
+
+**Fixes** (`mp4split.ts`):
+
+1. **Defensive constant + correct child-box scan start.** Added `VISUAL_SAMPLE_ENTRY_FIXED_BYTES = 78` and `AUDIO_SAMPLE_ENTRY_FIXED_BYTES = 28`. `parseCodecString` now starts the `findBox(avcC|esds|av1C)` scan at `entry.start + entry.headerSize + 78` for visual entries (`avc1`/`avc3`/`hev1`/`hvc1`/`av01`) and `+ 28` for audio entries (`mp4a`/`Opus`/`fLaC`). This is the right behaviour per ISO/IEC 14496-12 § 8.5.2.
+
+2. **WASM-path safety net.** Added `refineCodecsFromInitSegment(initSegment, tracks)` which re-runs the fixed JS parser on the init segment after `splitFragmentedMP4WASM` returns and overrides any track's `codec` field with a more-specific string (e.g. replaces bare `"avc1"` with `"avc1.640028"`). Tracks are matched by `trackId`. Init segments are tiny (~KB), so the extra parse is free. This protects against future WASM regressions and the case where the WASM parser is correct on some inputs and wrong on others.
+
+Result: encrypted-DASH playback now works for the paid upload. The MPD's `codecs="…"` attribute carries the full profile/compat/level, MSE accepts the type, and the player loads init + segments cleanly.
+
+Note: paid assets that were **already minted** with the broken codec string in their on-chain metadata + IPFS-pinned MPD will still fail — they need to be **re-encoded** (re-mint, new tokenId). For the first pre-fix paid upload on the Jetson, the simplest recovery is to re-upload as a fresh paid asset; the bad one can stay listed but won't play. (A delist on the bad token is harmless — frees up that listing slot.)
+
+Files: `pc2-node/src/services/media/mp4split.ts` (added 78/28 byte constants + correct child-box scan + new `refineCodecsFromInitSegment` post-pass on the WASM split path).
+
+#### 19. Encrypted-DASH playback fixed (part 2): ffmpeg fragmenter now matches Bento4 topology
+
+The codec-string fix in #18 unblocked MSE codec validation, but the same paid upload then failed at the next step with:
+
+```
+[player] sourceended fired, readyState: ended
+[player] <video> error event: code=3 message=PipelineStatus::CHUNK_DEMUXER_ERROR_APPEND_FAILED:
+        RunSegmentParserLoop: stream parsing failed.
+```
+
+The init segment appended cleanly; the **first media segment** failed. Mac-fragmented assets (Bento4) play fine on the Jetson, so the issue is specific to the Jetson's ffmpeg-fallback fragmentation introduced in v1.2.6.
+
+**Root cause** — `mp4dump` of equivalent fragments shows the structural divergence:
+
+| Property | Bento4 `mp4fragment` | ffmpeg default |
+|---|---|---|
+| Moof topology | **1 traf per moof** (alternating V / A / V / A …) | **1 moof with 2 trafs** (V + A muxed) |
+| Per-asset moof count (~3 min video, 4 s frag) | 87 moofs | 85 moofs |
+
+The cenc-encrypt WASM (`pc2-node/crates/cenc-encrypt/src/mp4box.rs:156-166`) walks the boxes inside each moof, takes the **first** `[traf]` it encounters, and breaks out of the loop. With Bento4-shaped fragments that's correct — there's only ever one traf per moof. With ffmpeg's default multi-traf moof, the WASM only encrypts the first track and silently drops senc/saio entries for the second; the resulting segment is malformed and Chrome's demuxer rejects it.
+
+**Fix** (`pc2-node/src/services/media/encoder.ts`): added `+separate_moof` to the ffmpeg `-movflags`. This forces one-traf-per-moof, matching the Bento4 topology the WASMs were written against. The flag string is now `+frag_keyframe+empty_moov+default_base_moof+separate_moof`. Verified locally with `mp4dump`: ffmpeg now emits 170 moofs for the same input (~85 video + 85 audio, alternating), each with exactly 1 traf — structurally equivalent to Bento4's output.
+
+The remaining tfhd/trun **flag-bit** differences between Bento4 and ffmpeg are mathematically equivalent (Bento4 lists per-sample duration+size+flags explicitly in trun; ffmpeg uses tfhd defaults where samples are uniform). Both layouts carry complete per-sample information — a spec-compliant parser reads both correctly, and the WASM does.
+
+**No changes to**: any Rust crate, any WASM binary, the Bento4 path (Mac / x86 Linux), or any cleartext-playback path. The change is isolated to the ffmpeg fallback used only when no Bento4 prebuild exists for the platform (currently arm64 Linux only).
+
+Files: `pc2-node/src/services/media/encoder.ts` (added `+separate_moof` to the ffmpeg `-movflags`, updated comments to document the structural parity requirement).
+
+#### 20. Buy modal now shows wallet balances so the user can pick informedly
+
+When buying a paid asset, the "Choose Wallet for Purchase" modal listed both wallets (Agent Account / EOA) with addresses but **no balance**, so the user had to guess which wallet had enough USDC for the purchase. If they picked wrong, the on-chain transaction would revert and they'd burn gas + a confusing error.
+
+**Fix** (`pc2-node/data/test-apps/elacity-market/`): the modal now fetches the **payment-token balance** of each wallet (USDC for paid assets, ETH for native-priced assets) and shows it under the address as `0.05 USDC available`. When the wallet's balance is below the asset's price, the line turns red and prefixes a `⚠` so insufficient balance is visually obvious before submission. Balances load asynchronously and don't block the user from picking — they can still proceed and let the on-chain tx revert if they want to.
+
+Implementation: `showWalletChoiceModal(payToken, priceWei)` now takes the listing's payment token + price, calls `Wallet.getERC20Balance` (or `getNativeBalance`) per wallet, formats with `Wallet.getTokenDecimals`, and applies an `.insufficient` class when raw balance < required. The same balance-fetch pattern was already in use by the subscription modal — extracted just enough to share the visual treatment.
+
+Files: `pc2-node/data/test-apps/elacity-market/index.html` (added `<span class="wallet-choice-balance">` to each option), `app.js` (extended `showWalletChoiceModal` + threaded `listing.payToken`/`listing.price` through `handleBuy`), `styles.css` (`.wallet-choice-balance` + `.wallet-choice-balance.insufficient`). Cache-busters bumped (`app.js?v=60 → ?v=61`, `styles.css?v=36 → ?v=37`).
+
+#### 21. Email-login signature prompt no longer hidden behind "Verifying wallet ownership" overlay
+
+The full-screen "Verifying wallet ownership" overlay was added in v1.2.5 for **external-wallet** sign-in (MetaMask, WalletConnect, Coinbase) — there the signature prompt happens in a browser-extension popup or mobile-app push, OUTSIDE this page, so a fullscreen blocker is fine and even helpful: it tells the user "stop, look at your wallet, not the page".
+
+**The bug**: when email login was enabled, the same overlay was used. But Particle's email-flow signature prompt happens **inside the Particle iframe** on this page. The fullscreen overlay (`position: fixed; inset: 0; z-index: 2147483646`) covered the iframe, hiding Particle's confirm dialog. The user could see the overlay's "Check your wallet" message but had no wallet to check — the dialog they needed to click was sitting underneath the overlay, unclickable. Stuck.
+
+**Fix** (`src/gui/src/UI/UIWindowParticleLogin.js`): added a `position` option to `showLoginStatusOverlay` with two modes:
+
+- `'fullscreen'` (default, used for `metamask` / `walletconnect` / `coinbase`): centered modal with backdrop, current behavior.
+- `'corner'` (used for everything else, including `email`): compact bottom-right panel, no backdrop, **doesn't cover the iframe**. Visual language matches `buildWalletConnectPanel` in `UIWindowParticleSigning.js` so the corner-toast pattern is consistent across PC2 (already used for WC sign requests for the same reason: don't cover the dApp the user is interacting with).
+
+The SIWE-pending handler picks the position based on `payload.loginMethod` from the Particle iframe — known external-wallet methods get the fullscreen overlay, everything else gets the corner toast. The corner toast still shows the spinner, the title, the address-prefix message, and the same escalating hint timers (8s + 12s).
+
+Files: `src/gui/src/UI/UIWindowParticleLogin.js` (extended `showLoginStatusOverlay` + branched the SIWE-pending handler on `loginMethod`), `pc2-node/frontend/index.html` + `pc2-node/scripts/build-frontend.js` (cache-buster bumped from `bundle.min.js?v=1.2.5` → `?v=1.2.6` so existing browsers fetch the updated bundle).
+
+#### 22. Playback no longer bounces users with "ask publisher to peer" while their own pin is still in flight
+
+Reported by a v1.2.5 community tester on a different Jetson: bought a paid video → clicked Play → got *"Content not yet reachable on IPFS. This asset was published from another node and has not propagated to the public gateway yet. Retry shortly, or ask the publisher to peer with ipfs.ela.city."* Despite the asset detail page below the player still showing the user's own download in progress (`Downloaded (193.5 MB) — you own this offline`).
+
+The user's local pin job — kicked off at buy time by `ContentSeedingService` — was simply still running when they clicked Play. Local Helia gateway 404s for blocks not yet fetched, public gateway 404s for an asset just minted on a peer node, both timeout, the `/api/media/init` handler concluded "the asset is unreachable on IPFS" and gave the user the wrong action ("ask publisher to peer") when the right action was "wait 30 seconds for the download you already started to finish".
+
+**Fix** (`pc2-node/src/api/media.ts:248-273`): before returning the legacy "ask publisher" 502, query `db.getPinnedCIDDetail(mediaUri)` to see if there's an active pin job for the media CID:
+
+- `pin_status === 'pinning' | 'queued'` → return HTTP 503 with `code: 'pin_in_progress'`, `progressPercent`, `bytesDownloaded`, `sizeBytes`. Player consumes this and shows *"Downloading content to your node — 47% (90.5 / 193.5 MB)…"* on the loading screen, auto-retrying every 5s up to a 5-minute ceiling.
+- `pin_status === 'failed'` → return `code: 'pin_failed'` with a message pointing the user to retry the download from the asset page.
+- No pin record → keep the existing "ask publisher" error (genuinely unreachable, the user never started a download).
+
+Frontend (`pc2-node/data/test-apps/pc2-media-runtime/player.js:937-985`): the init-failure path now loops on `code: 'pin_in_progress'`, repaints the loading screen with current progress, and re-tries `/init` every 5 seconds. When the pin completes, the next retry succeeds and playback proceeds normally — no error screen flashed in between. Bounded by `MAX_PIN_WAIT_RETRIES = 60` (5 min) so a wedged pin eventually surfaces a real error.
+
+What this is NOT (and the boundary matters):
+- This is NOT auto-pinning on `/init`. The pin job already exists from the buy flow. We're only checking its status to avoid lying to the user about why playback isn't working.
+- This is NOT changing IPFS gateway logic, peer discovery, or the 10s per-gateway timeout.
+- For users who never bought (no pin job) the existing behavior is preserved — they still see "Content not yet reachable on IPFS".
+
+Files: `pc2-node/src/api/media.ts` (added pin-status check before the 502 fall-through, returns `code: 'pin_in_progress'` / `'pin_failed'`), `pc2-node/data/test-apps/pc2-media-runtime/player.js` (auto-retry loop on `pin_in_progress`), `pc2-node/data/test-apps/pc2-media-runtime/index.html` (cache-buster bumped `player.js?v=6-pipelined → ?v=7-pin-progress`).
+
+#### 23. External-wallet secure-view delegation now has a forced-attention overlay (closes EverlastingOS bundle-required class)
+
+Reported by a v1.2.5 community tester: bought their first paid asset, clicked Open on the ebook viewer, got `session_bundle_required` from the server. Their install was fine — the secure-view module had not changed between v1.2.5 and v1.2.6 — and the bundle WOULD have built if they had signed the one-time `personal_sign` request that authorises the 24h session-key delegation. They simply never noticed the prompt: their wallet popup was blocked / sat in another window / never propagated to their attention. The page itself gave them zero indication that anything was waiting on them.
+
+Root cause is a UX asymmetry between login methods, not a security bug:
+
+- **Embedded login (Particle email / social):** `walletPersonalSign` routes via `pc2RouteRpcToParticle('personal_sign', …)` → `WalletService.routeRpcToParticle` → `UIWindowParticleSigning`, which already throws a fullscreen backdrop + centered Particle iframe + cancel button. Forced-attention UX, you can't miss it.
+- **External wallet (MetaMask / WalletConnect / Coinbase):** `walletPersonalSign` calls `window.ethereum.request({ method: 'personal_sign', … })` directly. **No PC2 parent-side UI at all.** The only cue is the wallet's own popup, which is exactly the thing that fails reliably (extension popup blockers, mobile push delays, alt-tab confusion, etc).
+
+Fix is asymmetric and minimal: add a parent-frame **bottom-right corner toast** (same visual pattern as `buildWalletConnectPanel` in `UIWindowParticleSigning.js`, used elsewhere in PC2 for "your wallet is waiting on you" cues) on the external-wallet path only, deliberately leaving the embedded path untouched because `UIWindowParticleSigning` already handles it. Why corner-toast over fullscreen-backdrop? For external wallets the signature popup lives outside the page (browser-extension popup OR a separate mobile WC app), so a fullscreen backdrop adds visual takeover without adding visibility — the user can already see/click the wallet popup either way. The corner toast just adds a "we're waiting on you, here's why" cue without dimming the whole page.
+
+Implementation:
+
+- `src/gui/src/UI/UIWindowParticleLogin.js`: expose the existing `showLoginStatusOverlay({ position: 'fullscreen' | 'corner' })` helper as `window.pc2ShowLoginStatusOverlay` so non-bundled top-frame scripts can use it (`pc2-secure-view.js` is loaded as a `<script src>`, not bundled).
+- `pc2-node/src/wallet-bridge/pc2-secure-view.js → runDelegationFlow()`: wrap the `walletPersonalSign(canonical, signerAddr)` call **strictly** with overlay setup before (`position: 'corner'`) and `clearOverlay()` on both `.then` (success) and `.catch` (cancel/reject/timeout). Wallet-label text is derived from `globalScope.user.login_method` (`MetaMask` / `your wallet app` / `Coinbase Wallet` / fallback `your wallet`).
+
+Two carefully scoped guards verified during code review:
+
+1. **Overlay must NEVER appear when not needed.** `runDelegationFlow` is only entered when (a) no IndexedDB delegation exists, OR (b) the cached delegation is expired/invalid. `ensureSession`'s fast path returns the cached state directly without calling `runDelegationFlow`. So once a user signs once, the overlay never shows again until either the 24h delegation expires or the user explicitly logs out (which calls `revoke()`). Verified by trace: every paid-asset open in cached state goes `signRequest → ensureSession (cache hit) → SVS.signRequest(kp, …)` — no `walletPersonalSign`, no overlay.
+
+2. **Both viewer runtimes are covered by ONE fix point.** Ebook/image/PDF viewers (`pc2-node/data/test-apps/ddrm-viewer/`) and the video/audio player (`pc2-node/data/test-apps/pc2-media-runtime/`) both call `pc2_secureView_sign` via `pc2-wallet-bridge.js`, which in turn invokes `window.pc2SecureView.signRequest({ kid, … })` on the parent frame — i.e. the same `pc2-secure-view.js` module. The overlay fix lives at the choke-point of that module, so both runtimes get the fix automatically without per-runtime patches.
+
+Hint escalation matches existing PC2 conventions (corner-toast text is concise to fit the 320px-wide panel):
+- 0s: *"Approve secure-view session — Check MetaMask — one signature unlocks paid content for 24h."*
+- +8s: *"Still waiting — open MetaMask to approve."*
+- +20s: *"If your wallet didn't prompt, the popup may have been blocked."*
+
+The overlay clears the moment the wallet returns a signature (so the user sees an instant transition), or the moment they hit cancel / the wallet rejects (so they're not stuck behind a frozen modal while the error propagates back through `ensureSession` → `signRequest` → the iframe).
+
+Files: `src/gui/src/UI/UIWindowParticleLogin.js` (3-line global export at module bottom), `pc2-node/src/wallet-bridge/pc2-secure-view.js` (overlay wrap + cleanup in both `.then` and `.catch` paths inside `runDelegationFlow`). Cache-busters bumped: `pc2-secure-view.js?v=20260501a → ?v=20260501b` (in both `pc2-node/scripts/build-frontend.js` template and the regenerated `pc2-node/frontend/index.html`). GUI bundle (`pc2-node/frontend/bundle.min.js`) rebuilt to include the new `window.pc2ShowLoginStatusOverlay` export.
+
+#### 15. Marketplace polish round (after live testing on Jetson)
+
+Four small, user-reported bugs fixed in one round after testing the v1.2.6 indexer-listing-fetch on the Jetson. None block functionality, but each makes the difference between "looks rough" and "looks ready".
+
+**a. Edit Price modal: balance text was invisible (dark on dark).** The "List Access Token for Resale" modal's wallet-balance summary box used `background: var(--card-bg, #1a1a2e)` (a dark theme token) inside a light-theme modal — the inherited dark text rendered nearly invisible on the dark box. Replaced with explicit light theme colors (`background: #f3f4f6; color: #111827; border: 1px solid #e5e7eb`) so the box matches the rest of the modal regardless of theme.
+
+**b. Royalty sections squished against each other.** "Royalty Share Offers / Make Offer" (an inline `.offer-section`) had `margin-top: 12px` but no `margin-bottom`, so it touched the next "Royalty Market" collapsible directly. Symmetric `margin-bottom: 12px` added so all three royalty-related sections (Royalty Shares, Royalty Share Offers, Royalty Market) have consistent spacing.
+
+**c. Search bar didn't actually search the local catalog.** `fetchItems(query, filters)` passed `filters.searchBy` along but `fetchFromCatalog` only honored `offset` / `limit`, and `applyClientSideFilters` only handled `filterby` / `contentType` chips. The remote GraphQL fallback path DID honor the search term, but it only kicked in when the local catalog returned 0 items — so on every PC2 node running on its own catalog, typing in the search bar returned the entire catalog regardless of query. New `applySearchTerm()` filters the local-catalog batch case-insensitively against `name`, `description`, `channel.name`, and `creator.address`. Future enhancement: push this into a SQL `LIKE` in the backend so we don't have to filter client-side after fetching everything.
+
+**d. Indexer image fallback to `media.previewURL` when `metadata.image` is empty.** Several older assets (5 of 24 in a typical Jetson catalog) shipped with `metadata.image = ""` and only a `media.previewURL` field. The indexer's previous `image_url: metadata.image || null` rule stored `null`, so feed cards fell through to the type-icon placeholder (`◻`) instead of showing a real preview. Updated to `image_url: metadata.image || metadata.media?.previewURL || null`. Recovered 2 of the 5 thumbnail-less rows immediately on a Jetson backfill (Purple Rain Cover audio, Video). The remaining 3 (Elacity image, Naval Ravikant ebook, alice-in-wonderland ebook) genuinely have no thumbnail field anywhere in their on-chain metadata — those will continue to show the type-icon placeholder until republished.
+
+Files: `pc2-node/src/services/ContentIndexerService.ts` (previewURL fallback), `pc2-node/data/test-apps/elacity-market/api.js` (`applySearchTerm()`), `pc2-node/data/test-apps/elacity-market/app-features.js` (light-theme balance box), `pc2-node/data/test-apps/elacity-market/styles.css` (`.offer-section { margin-bottom: 12px }`). Cache-busters bumped (`api.js?v=36 → ?v=37`, `app-features.js?v=41 → ?v=42`, `styles.css?v=33 → ?v=34`).
+
+#### 14. Indexer fetches live listing prices so feed cards show real prices
+
+Phase A of #13 unblocked the feed display by surfacing on-chain `op_type` correctly — but a paid asset still had no price to render until someone visited its detail page (which queried `getActiveAccessSellers` + `getAccessListing` on the AuthorityGateway client-side). On the home feed, paid assets fell back to a tier label (`Buy & Resell` / `Buy Once`).
+
+**Phase B: indexer-level listing fetch.** `ContentIndexerService` now queries the AuthorityGateway directly during every scan cycle:
+
+1. After metadata resolution, iterate every catalog row with `op_type > 0` and a non-zero `operative_address` (skips free assets — they have no listings — and rows with no business-model contract).
+2. Per row: call `sellersOf(operative, TOKEN_ID_ACCESS=1)` → returns the addresses currently listing the access token.
+3. Per seller: call `listings(operative, 1, seller)` → returns `(quantity, pricePerToken, payToken)`. Skip listings with `quantity === 0` (sold out / withdrawn).
+4. Pick the **lowest `pricePerToken`** with `payToken` among active listings, store both in the catalog row (`price` + `payment_token` columns).
+5. Rows with no active listings get `price = NULL` (paid-but-unlisted is still a meaningful state — keeps the tier-label fallback path correct).
+
+`api.js → catalogItemToNft()` now also surfaces `nft.price` (decimal-converted, e.g. `0.01` for 10000 wei USDC) and `nft.paymentToken` at the top level so the existing `formatPrice(item.price, item.paymentToken)` call in the card render path works without changes. USDC = 6 decimals, ETH/native = 18.
+
+**Result on a typical Jetson catalog**: 22 paid assets now show real prices like `0.01 USDC` on their feed cards. The 1 unlisted paid asset still shows the `Buy & Resell` tier badge (correct — there's no listing). The 1 free asset shows the green `Free` badge (unchanged).
+
+**RPC budget**: 1 `sellersOf` + N `listings` per paid row per scan cycle. With 23 paid rows averaging ~1 seller each, that's ~46 RPC calls per cycle (every 30 minutes by default) — negligible. Concurrency-limited via `metadataFetchConcurrency` to be polite to the RPC endpoint.
+
+Files: `pc2-node/src/services/ContentIndexerService.ts` (`fetchLowestListing()`, `refreshListingsForPaidAssets()`, ABI helpers), `pc2-node/src/storage/database.ts` (`getPaidCatalogItemsForListingRefresh()`), `pc2-node/data/test-apps/elacity-market/api.js` (`catalogResolveTopLevelPrice()`, `nft.price` / `nft.paymentToken` surfaced). Cache-buster bumped (`api.js?v=35` → `?v=36`).
+
+#### 13. Feed cards correctly identify paid vs free assets
+
+The home-feed card render was incorrectly tagging **every asset** as `Free`, regardless of its actual on-chain pricing model. With 23 of 24 indexed assets actually `op_type=2` (Buy & Resell) on a typical PC2 node, this made the feed look like the marketplace was giving everything away.
+
+Two compounding root causes:
+
+1. **Frontend adapter ignored on-chain truth.** `api.js → catalogItemToNft()` resolved opType from `metadata.pricing.accessMethod` (a legacy v1.0 schema field) and ignored the catalog row's `op_type` / `price` / `payment_token` columns — which the indexer DOES populate from the operative contract's `AssetCreated` event. New asset metadata schemas (v1.1+) no longer embed pricing inline, so every paid asset fell through to the metadata-pricing fallback and was labeled `Free`.
+2. **Local catalog endpoint had no server-side filtering.** Chip selection (`Buy Now`, `Free`, `Video`, etc.) sent `filterby` / `contentType` query hints, but `/api/catalog` returned the full unfiltered batch and only the remote GraphQL fallback honored them — meaning chips were essentially decorative on every PC2 node running on its own catalog.
+
+**Fixes**:
+
+- `api.js`: New `catalogResolveOpType()` and `catalogResolveListings()` helpers prefer the indexer's `item.op_type` / `item.price` / `item.payment_token` columns over metadata inference. Falls back to `metadata.pricing` only when the indexer hasn't yet captured on-chain values (transitional case for not-yet-indexed assets).
+- `api.js`: New `applyClientSideFilters()` runs in `fetchItems()` after the catalog batch returns. Filters by `filterby: ['buyNow' | 'free']` and `contentType: ['video' | 'audio' | 'image' | 'ebook' | '3d']` on the already-resolved opType. Chip selection now actually narrows the visible set.
+- `api.js`: New `free` preset (`filterby: ['free']`); dropped `popular` chip (which sorted by view count — meaningless for empty/local catalogs).
+- `app.js` card render: When opType is `1` (Buy Once) or `2` (Buy & Resell) but no listing price has been captured yet, the card shows a tier label (`Buy Once` / `Buy & Resell`) on a yellow `.tier-badge` instead of nothing or `Free`. Free items keep the green `Free` badge unchanged. (Phase B follow-up: indexer should also populate the `price` column from current listings so cards show actual prices instead of tier labels — tracked separately.)
+- `index.html` chip layout: `All | Buy Now | Free  │  Video | Audio | Image | Ebook | 3D  │  18+`. Default selection: `All` (was `Buy Now`).
+- `app.js` state default: `activeCategory: 'all'` (was `'buyNow'`).
+- `styles.css`: New `.tier-badge` (yellow `#fbbf24` on dark) for the paid-but-unlisted case.
+
+Result: a freshly-loaded feed correctly identifies each card's pricing model. The 23 paid + 1 free assets in a typical Jetson catalog now show 23 `Buy & Resell` badges and 1 `Free` badge instead of 24 misleading `Free` badges. Chip selection actually filters.
+
+**Renamed**: "NFT Asset" → "Asset Token Contract" in the on-chain identity rows on the asset detail page, per UX feedback ("NFT" carries speculative-asset baggage that doesn't fit free / utility content). Pairs cleanly with the existing "Operative Contract" label.
+
+#### 12. On-chain identity surfaced on every asset detail page (free + paid)
+
+The asset detail page's **Properties** block (which contains all the on-chain provenance info — Contract, Authority, Blockchain) was being completely hidden for free assets by a stale early-return guard:
+
+```js
+if (!totalSupply && opType === 0) {
+  dom.detailSupplyInfo.classList.add('hidden');
+  return;
+}
+```
+
+Free assets typically have no access-NFT supply (anyone can stream them straight from IPFS), so they hit this guard and lost ALL on-chain info — even though the asset is fully indexed by the catalog with a verifiable NFT contract, token ID, and IPFS content CID. Users had no way to verify what they were looking at on-chain.
+
+A second related gap: even when the Properties block WAS visible (paid assets), it only surfaced the **operative contract** (the business-model contract — TradeGateway / Reseller / etc.) labeled simply as "Contract". The actual **NFT contract** (the ERC-1155 access-token contract — i.e. the asset itself) was not shown anywhere, nor was the **token ID**, nor the **IPFS content CID**. So even on paid assets users couldn't independently verify on-chain provenance through Basescan + IPFS gateways.
+
+**Fix**: `renderSupplyInfo()` reworked to:
+
+1. Replace the hard hide-on-free guard with a `showSupplyBar = (opType !== 0) && (totalSupply > 0)` gate. Free assets now render the props-grid (their on-chain identity) without the supply-bar UI (which is meaningless without listings).
+2. Also conditionally render the `Total Supply` and `Available` rows only when `totalSupply > 0` — same reason.
+3. Add a new on-chain identity block (visible on every indexed asset, free + paid) with four rows:
+   - **NFT Asset** — `nft.contractAddress` → clickable Basescan link with copy-to-clipboard
+   - **Token ID** — `nft.tokenId.hexTokenID` (or numeric) → mono-formatted, truncated, copy-to-clipboard
+   - **IPFS Content** — `nft._contentCid` → two links: local `/ipfs/<cid>` (loads via this PC2 node, auto-pins) + small `verify` link to public `ipfs.ela.city` gateway, plus copy-to-clipboard
+   - **Operative Contract** — `operative.address` → clickable Basescan link with copy-to-clipboard. **Renamed from "Contract"** for clarity (it's the business-model contract, not the NFT itself).
+
+Result: any visitor of a detail page can verify on-chain provenance independently — works the same for free and paid content. Free assets get the same accountability as paid ones.
+
+Files: `app.js` (`renderSupplyInfo()`), `styles.css` (`.onchain-mono`, `.onchain-public-link`, `.onchain-copy-btn`). Cache-busters bumped (`app.js?v=55` → `?v=56`, `styles.css?v=31` → `?v=32`).
+
+### Files changed
+
+- `pc2-node/package.json` — `better-sqlite3` ^9.2.2 → ^11.10.0
+- `pc2-node/package-lock.json` — regenerated
+- `pc2-node/src/services/UpdateService.ts` — native module verification step before restart
+- `pc2-node/src/services/media/bento4.ts` — ffmpeg fallback for platforms with no Bento4 prebuild
+- `pc2-node/src/services/media/encoder.ts` — `fragmentMedia()` dispatches between mp4fragment and ffmpeg
+- `pc2-node/src/api/media.ts` — passes `useFfmpegFallback` flag through to `fragmentMedia()`
+- `pc2-node/src/services/ContentIndexerService.ts` — `fetchMetadata()` uses local PC2 gateway first, rejects directory-listing JSON, requires real metadata-shape fields; new `refreshListingsForPaidAssets()` + `fetchLowestListing()` query AuthorityGateway `sellersOf` + `listings` after metadata resolution to populate `price` / `payment_token` columns from live listings (paid assets only; concurrency-limited); thumbnail fallback `metadata.image || metadata.media.previewURL`
+- `pc2-node/src/storage/database.ts` — `getCatalogItemsPendingMetadata()` retry-after 1h → 5min; new `getPaidCatalogItemsForListingRefresh()` returns paid resolved rows for the listing-refresh pass
+- `pc2-node/src/api/public.ts` — `isContentMissingError()` classifies ENOENT / "no such file" as auto-pinnable
+- `pc2-node/src/api/index.ts` — `/api/catalog/providers/:cid` now runs DHT findProviders (5s) and parallel HTTP HEAD probes of `ipfs.ela.city` + `dweb.link` (3s) so the asset detail page's `Network` row can accurately distinguish "publicly replicated" from "this node only"
+- `pc2-node/src/services/media/mp4split.ts` — `parseCodecString` now correctly skips the 78-byte `VisualSampleEntry` / 28-byte `AudioSampleEntry` fixed-field region per ISO/IEC 14496-12 § 8.5.2 before scanning for `avcC` / `esds` / `av1C` sub-boxes, so codec strings include profile/compat/level (e.g. `avc1.640028` instead of bare `avc1`); new `refineCodecsFromInitSegment` post-pass on the WASM split path overrides any incomplete codec string returned by `mp4-split.wasm`. Fixes "Video codec 'avc1' is not supported by this browser" on encrypted-DASH playback
+- `pc2-node/data/test-apps/elacity-market/api.js` — `catalogResolveOpType()` + `catalogResolveListings()` prefer indexed on-chain `op_type` / `price` / `payment_token` over metadata-inferred values; new `catalogResolveTopLevelPrice()` exposes decimal-converted `nft.price` + `nft.paymentToken` so feed cards display real prices from the indexer's live-listing fetch; new `free` PRESET; dropped `popular` PRESET; new `applyClientSideFilters()` honors chip selection on local-catalog path; new `applySearchTerm()` filters local-catalog batch by name/description/channel/creator (search bar was previously a no-op for the local catalog path); passes `_rawAssetType` through for content-type matching
+- `pc2-node/data/test-apps/elacity-market/app.js` — play/download buttons reveal on `isOwned || isFree`; `handlePlay()` cleartext path for free / direct-playback assets; `renderSupplyInfo()` reworked to keep Properties visible on free assets and add Asset Token Contract / Token ID / IPFS Content rows + rename Contract → Operative Contract; card render now shows tier label (`Buy Once` / `Buy & Resell`) for paid-but-unlisted assets instead of misleading `Free`; `activeCategory` default `buyNow` → `all`; Revenue & Earnings `formatPrice` calls now pass USDC payment-token so amounts label correctly as `USDC` instead of defaulting to `ETH`; seeding-row badge rewritten to show a compact "N sources" pill with a keyboard-accessible hover/focus dropdown listing each source (this node, public gateways, DHT peer count) — replaces the truncating "Replicated on ipfs.ela.city + this node" string and gives the user expandable detail on demand
+- `pc2-node/data/test-apps/elacity-market/app-features.js` — `renderAssetOwnerActions()`, `renderOfferSection()`, `renderOrderBook()` all early-return on free assets (suppresses Publisher Actions, Royalty Share Offers / Make Offer, and Royalty Market sections); "List Access Token for Resale" balance box switched to explicit light-theme colors (no more invisible dark-on-dark text)
+- `pc2-node/data/test-apps/elacity-market/index.html` — cache-buster bumps (api.js v34→v37, app.js v53→v60, app-features.js v39→v42, styles.css v30→v36); Share button hidden via `class="hidden"`; filter chips reordered to `All | Buy Now | Free  │  Video | Audio | Image | Ebook | 3D  │  18+` (drops `Popular`, adds `Free` / `Ebook` / `3D`)
+- `pc2-node/data/test-apps/elacity-market/styles.css` — removed leftover `margin-bottom: 12px` from `.download-node-btn` and `.open-viewer-btn`; added `.onchain-mono`, `.onchain-public-link`, `.onchain-copy-btn` styles for the on-chain identity rows; added `.tier-badge` for paid-but-unlisted card state; added `margin-bottom: 12px` to `.offer-section` so Royalty Share Offers no longer touches Royalty Market; added `.seeding-badge.public` (green pill) for the replicated-on-public-gateway state plus `.seeding-badge.has-dropdown`, `.seeding-caret`, `.seeding-dropdown`, `.seeding-source-detail` for the compact "N sources" pill with hover/focus dropdown
+- `scripts/update.sh` — smarter safety guard, fix `bash bash` typo
+- `elastos-launcher/src/main/pc2Manager.ts`:
+  - `installPC2` — handle existing `~/.pc2` directory gracefully (repair vs backup)
+  - `startPC2` — pre-flight native module load test
+  - removed `--build-from-source` from install and update flows (v11 prebuilts work)
+
+### Compatibility
+
+- **better-sqlite3 v9 → v11**: same JavaScript API. Verified existing v9 databases (26 tables) open and read cleanly with v11 (SQLite 3.49.2). No data migration required.
+- **Existing v1.2.5 nodes**: GUI auto-update or `update.sh` will pull v1.2.6 cleanly. No manual steps needed.
+- **Existing v1.2.0–v1.2.4 nodes**: same as above.
+
+### What's NOT changed in v1.2.6
+
+- VLESS Reality / sing-box / AmneziaWG — same as v1.2.5
+- Frontend — same as v1.2.5
+- Database schema — same as v1.2.5
+- Networking architecture — same as v1.2.5
+
+This is a pure install/update reliability release. No new features, no breaking changes.
+
+---
+
 ## [1.2.5] - 2026-05-01 (hotfix-on-hotfix)
 
 > ## ⚠️ For users who installed v1.2.4 and got stuck

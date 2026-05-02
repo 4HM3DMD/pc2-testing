@@ -946,9 +946,44 @@ async function init() {
       BUYER_ADDRESS = eoaAddr;
       initRes = await tryInit(BUYER_ADDRESS);
     }
+
+    // C1: when /init reports the asset is still pinning locally, show a
+    // friendly "Downloading X%…" UI and auto-retry every few seconds
+    // instead of bouncing the user with the misleading "ask publisher to
+    // peer" error. The pin job was started at buy-time; we just need to
+    // wait for it. Bounded by MAX_PIN_WAIT_RETRIES so a wedged pin
+    // eventually surfaces a real error.
+    const MAX_PIN_WAIT_RETRIES = 60;       // 60 × 5s = 5 min ceiling
+    const PIN_WAIT_INTERVAL_MS = 5000;
+    let pinWaitRetries = 0;
+    while (!initRes.ok && pinWaitRetries < MAX_PIN_WAIT_RETRIES) {
+      let body = null;
+      try { body = await initRes.clone().json(); } catch (_) { body = null; }
+      if (!body || (body.code !== 'pin_in_progress')) break;
+
+      const pct = typeof body.progressPercent === 'number' ? body.progressPercent : 0;
+      const sizeMB = body.sizeBytes ? (body.sizeBytes / (1024 * 1024)).toFixed(1) : null;
+      const dlMB = body.bytesDownloaded ? (body.bytesDownloaded / (1024 * 1024)).toFixed(1) : null;
+      const sizeSuffix = (dlMB && sizeMB) ? ` (${dlMB} / ${sizeMB} MB)` : '';
+      // Reuse the loading screen to show progress; keep error screen hidden
+      // so we don't flash a "Playback Error" between retries.
+      $loading.style.display = 'flex';
+      $error.style.display = 'none';
+      const $loadingText = document.getElementById('loading-text');
+      if ($loadingText) {
+        $loadingText.textContent = pct > 0
+          ? `Downloading content to your node — ${pct}%${sizeSuffix}…`
+          : 'Downloading content to your node…';
+      }
+      console.log(`[player] /init reports pin_in_progress (${pct}%, retry ${pinWaitRetries + 1}/${MAX_PIN_WAIT_RETRIES})`);
+      await new Promise(r => setTimeout(r, PIN_WAIT_INTERVAL_MS));
+      pinWaitRetries++;
+      initRes = await tryInit(BUYER_ADDRESS);
+    }
+
     if (!initRes.ok) {
       const err = await initRes.json().catch(() => ({ error: initRes.statusText }));
-      showError(err.error || 'Failed to initialize playback');
+      showError(err.error || err.message || 'Failed to initialize playback');
       return;
     }
 

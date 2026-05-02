@@ -714,8 +714,8 @@
           '<button class="modal-close-btn" id="resell-close">&times;</button>' +
         '</div>' +
         '<div class="modal-body">' +
-          '<div id="ra-balance-info" style="margin-bottom:12px;padding:10px;background:var(--card-bg,#1a1a2e);border-radius:8px;font-size:13px;">' +
-            '<div style="color:#888;">Loading balances...</div>' +
+          '<div id="ra-balance-info" style="margin-bottom:12px;padding:10px;background:#f3f4f6;color:#111827;border:1px solid #e5e7eb;border-radius:8px;font-size:13px;">' +
+            '<div style="color:#6b7280;">Loading balances...</div>' +
           '</div>' +
           (hasSA ?
             '<div class="form-group">' +
@@ -855,6 +855,16 @@
     var operative = nft.operative || {};
     var operativeAddr = operative.address || '';
     if (!operativeAddr || !Wallet.isConnected()) return;
+
+    // Free assets (opType === 0) have no listing price and produce no
+    // on-chain earnings, so royalty-share offers are meaningless. Skip the
+    // entire "Royalty Share Offers / Make Offer" section for free content.
+    var opType = (operative.opType != null) ? operative.opType : 0;
+    if (opType === 0) {
+      var existingFreeOffer = document.getElementById('detail-offer-section');
+      if (existingFreeOffer) existingFreeOffer.remove();
+      return;
+    }
 
     var eoaAddr = (Wallet.getAddress() || '').toLowerCase();
     var saAddr = (Wallet.getSmartAccountAddress() || '').toLowerCase();
@@ -1354,6 +1364,14 @@
     var container = document.getElementById('orderbook-listings');
     if (!section || !container) return;
 
+    // Free assets (opType === 0) have no royalty-share market because there's
+    // no revenue to distribute. Keep the "Royalty Market" section hidden.
+    var opType = (operative.opType != null) ? operative.opType : 0;
+    if (opType === 0) {
+      section.classList.add('hidden');
+      return;
+    }
+
     container.innerHTML = '<div class="loading-indicator"><div class="spinner"></div></div>';
     section.classList.remove('hidden');
 
@@ -1717,6 +1735,19 @@
     var isPublisher = publisherAddr && (publisherAddr.toLowerCase() === eoaAddr || publisherAddr.toLowerCase() === saAddr);
 
     if (!isPublisher) return;
+
+    // Free assets (opType === 0) have no listing price, no marketplace
+    // listing to delist, and produce no on-chain earnings. Showing the
+    // Publisher Actions strip with Edit Price / Delist / Earnings buttons
+    // is misleading — every button is a no-op or error. The "Asset is
+    // published" toggle (rendered separately by renderPublishToggle) is
+    // the only meaningful publisher control for free content.
+    var opType = (operative.opType != null) ? operative.opType : 0;
+    if (opType === 0) {
+      var freeStrip = document.getElementById('publisher-action-strip');
+      if (freeStrip) freeStrip.remove();
+      return;
+    }
 
     var existingStrip = document.getElementById('publisher-action-strip');
     if (existingStrip) existingStrip.remove();

@@ -2002,7 +2002,16 @@ export class DatabaseManager {
 
   getCatalogItemsPendingMetadata(limit = 50): ContentCatalogItem[] {
     const db = this.getDB();
-    const retryAfterMs = 60 * 60 * 1000; // retry failed items after 1 hour
+    // v1.2.6: reduced retry-after from 1 hour to 5 minutes. The most common
+    // cause of metadata fetch failure is freshly-minted content where the
+    // metadata CID hasn't yet replicated to the configured remote gateways
+    // (ipfs.ela.city, dweb.link) — typically resolves within a couple of
+    // minutes. Waiting an hour for retry was a poor UX: users would mint
+    // an item, see it fail to appear in their marketplace, and have no
+    // way to force a refresh. With the local-gateway fix in
+    // ContentIndexerService.fetchMetadata this should rarely fire, but
+    // 5 min provides a fast self-heal if it does.
+    const retryAfterMs = 5 * 60 * 1000;
     const retryCutoff = Date.now() - retryAfterMs;
     return db.prepare(`
       SELECT * FROM content_catalog
@@ -2011,6 +2020,33 @@ export class DatabaseManager {
       ORDER BY metadata_status ASC, block_number ASC
       LIMIT ?
     `).all(retryCutoff, limit) as ContentCatalogItem[];
+  }
+
+  /**
+   * Return paid catalog rows (op_type > 0) whose listings should be refreshed.
+   * Used by the indexer's listing-price refresh pass — feeds back into the
+   * row's price + payment_token columns so feed cards show current prices.
+   *
+   * Filters:
+   *   - metadata_status = 'resolved'  (don't refresh rows we haven't fully indexed)
+   *   - op_type > 0                   (skip free assets — they have no listings)
+   *   - operative_address NOT zero    (no business model contract = no listings)
+   *
+   * Returns rows ordered by indexed_at DESC so newly-indexed assets get their
+   * price filled in first (best UX for the most-recent uploads).
+   */
+  getPaidCatalogItemsForListingRefresh(limit = 500): ContentCatalogItem[] {
+    const db = this.getDB();
+    return db.prepare(`
+      SELECT * FROM content_catalog
+      WHERE metadata_status = 'resolved'
+        AND op_type IS NOT NULL
+        AND op_type > 0
+        AND operative_address IS NOT NULL
+        AND operative_address != '0x0000000000000000000000000000000000000000'
+      ORDER BY indexed_at DESC
+      LIMIT ?
+    `).all(limit) as ContentCatalogItem[];
   }
 
   updateCatalogMetadata(channelAddress: string, tokenId: string, chainId: number, updates: Partial<ContentCatalogItem>): void {

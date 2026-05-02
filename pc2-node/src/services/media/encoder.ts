@@ -435,12 +435,83 @@ function parseFFmpegProgress(line: string): { percent: number; fps: number; spee
 
 // ─── mp4fragment ────────────────────────────────────────────────────────────
 
+/**
+ * Fragment an MP4 into a DASH-compatible fragmented MP4 (fMP4).
+ *
+ * Two backends:
+ *   - Bento4's mp4fragment (preferred — Linux-x64, macOS)
+ *   - ffmpeg (fallback for linux-arm64 where bok.net has no Bento4 prebuild)
+ *
+ * Pass `useFfmpeg: true` (or pass `'ffmpeg'` as the binary name) to use the
+ * ffmpeg backend. Output structure is equivalent — both produce fMP4 with
+ * `moof` segments suitable for the downstream DASH packager.
+ */
 export async function fragmentMedia(
   mp4Path: string,
   outputPath: string,
-  mp4fragmentBin: string = 'mp4fragment',
+  fragmenterBin: string = 'mp4fragment',
+  useFfmpeg: boolean = false,
 ): Promise<string> {
-  const { stdout, stderr } = await execFileAsync(mp4fragmentBin, [
+  const isFfmpeg = useFfmpeg || fragmenterBin === 'ffmpeg';
+
+  if (isFfmpeg) {
+    // ffmpeg fragmentation. Flags chosen to produce fMP4 segments with the SAME
+    // box-level topology that Bento4's `mp4fragment` produces, so the downstream
+    // CENC encrypt + MPD packager (mp4-split.wasm / cenc-encrypt.wasm) — both
+    // written and tested only against Bento4 output — accept them unchanged.
+    //
+    //   -c copy                       don't re-encode (preserve quality + speed)
+    //   -movflags +frag_keyframe      fragment at keyframe boundaries
+    //   -movflags +empty_moov         empty initial moov, segments contain moof
+    //   -movflags +default_base_moof  set tfhd default-base-is-moof (DASH-spec)
+    //   -movflags +separate_moof      one traf per moof — see below
+    //   -frag_duration 4000000        4s fragments (matches --fragment-duration 4000)
+    //   -map_metadata 0               preserve metadata (matches --copy-udta)
+    //
+    // CRITICAL: `+separate_moof`. By default ffmpeg muxes ALL tracks (video +
+    // audio) into a single moof with multiple [traf] children. Bento4 emits
+    // ONE [traf] per [moof], alternating tracks across consecutive moofs:
+    //
+    //   ffmpeg default              Bento4 (and our WASMs assume this)
+    //   ────────────────            ───────────────────────────────────
+    //   [moof seq=1]                [moof seq=1]
+    //     [traf track=1]              [traf track=1]   ← video
+    //     [traf track=2]            [mdat]
+    //   [mdat]                      [moof seq=2]
+    //                                 [traf track=2]   ← audio
+    //                               [mdat]
+    //
+    // The cenc-encrypt + mp4-split WASMs compute per-sample byte offsets
+    // (senc/saio/saiz) assuming a single traf per moof. With ffmpeg's default
+    // multi-traf moof, those offsets are wrong, and the resulting encrypted
+    // segments fail with PipelineStatus::CHUNK_DEMUXER_ERROR_APPEND_FAILED in
+    // Chrome's demuxer. `+separate_moof` forces one-traf-per-moof, restoring
+    // Bento4-equivalent topology.
+    //
+    // (Note: tfhd/trun flag bits still differ slightly between Bento4 and
+    // ffmpeg — Bento4 lists per-sample duration+size+flags in trun, ffmpeg
+    // uses tfhd defaults where all samples are uniform. Both layouts carry
+    // complete per-sample information, just via different fields, so a
+    // spec-compliant parser will read both correctly.)
+    const { stderr } = await execFileAsync('ffmpeg', [
+      '-y',
+      '-i', mp4Path,
+      '-c', 'copy',
+      '-movflags', '+frag_keyframe+empty_moov+default_base_moof+separate_moof',
+      '-frag_duration', '4000000',
+      '-map_metadata', '0',
+      outputPath,
+    ], { timeout: 600000, maxBuffer: 50 * 1024 * 1024 });
+
+    if (!existsSync(outputPath)) {
+      throw new Error(`ffmpeg fragmentation failed to produce output: ${stderr}`);
+    }
+    logger.info(`[Encoder] Fragmented (ffmpeg) ${mp4Path} -> ${outputPath}`);
+    return outputPath;
+  }
+
+  // Default: mp4fragment from Bento4
+  const { stderr } = await execFileAsync(fragmenterBin, [
     '--fragment-duration', '4000',
     '--copy-udta',
     mp4Path,
@@ -451,6 +522,6 @@ export async function fragmentMedia(
     throw new Error(`mp4fragment failed to produce output: ${stderr}`);
   }
 
-  logger.info(`[Encoder] Fragmented ${mp4Path} -> ${outputPath}`);
+  logger.info(`[Encoder] Fragmented (mp4fragment) ${mp4Path} -> ${outputPath}`);
   return outputPath;
 }

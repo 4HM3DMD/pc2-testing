@@ -86,6 +86,20 @@ function findBox(buf: Buffer, start: number, end: number, type: string): { offse
   return null;
 }
 
+// ISO/IEC 14496-12 § 8.5.2: SampleEntry types have fixed-width metadata BEFORE
+// any contained sub-boxes (avcC, esds, btrt, …). The contained-boxes region is
+// what we want to scan with findBox(). If we don't skip the fixed fields first,
+// the very first 8 bytes (6 reserved + 2 data_reference_index) parse as a
+// {size: 0, type: '\0\0\0\0'} pseudo-box which size=0 interprets as
+// "extends to EOF", causing findBox to skip everything in one giant stride and
+// return null for avcC/esds/av1C.
+//
+// Result before this fix: codec strings like "avc1" (no profile/level), which
+// MSE.isTypeSupported() rejects → "Video codec 'avc1' is not supported by this
+// browser" on every encrypted-DASH playback.
+const VISUAL_SAMPLE_ENTRY_FIXED_BYTES = 78; // 6 + 2 + 16 + 2 + 2 + 4 + 4 + 4 + 2 + 32 + 2 + 2
+const AUDIO_SAMPLE_ENTRY_FIXED_BYTES = 28;  // 6 + 2 + 8 + 2 + 2 + 4 + 4
+
 function parseCodecString(buf: Buffer, stsdOffset: number, stsdSize: number): string {
   const contentStart = stsdOffset + 16;
   if (contentStart >= stsdOffset + stsdSize) return 'unknown';
@@ -94,9 +108,13 @@ function parseCodecString(buf: Buffer, stsdOffset: number, stsdSize: number): st
   if (!entryBox) return 'unknown';
 
   const fourcc = entryBox.type;
+  const childStart = (fourcc === 'mp4a' || fourcc === 'Opus' || fourcc === 'fLaC' || fourcc === 'enca')
+    ? contentStart + entryBox.headerSize + AUDIO_SAMPLE_ENTRY_FIXED_BYTES
+    : contentStart + entryBox.headerSize + VISUAL_SAMPLE_ENTRY_FIXED_BYTES;
+  const childEnd = contentStart + entryBox.size;
 
   if (fourcc === 'avc1' || fourcc === 'avc3') {
-    const avcC = findBox(buf, contentStart + entryBox.headerSize, contentStart + entryBox.size, 'avcC');
+    const avcC = findBox(buf, childStart, childEnd, 'avcC');
     if (avcC && avcC.offset + avcC.headerSize + 3 < buf.length) {
       const p = avcC.offset + avcC.headerSize;
       const profile = buf[p + 1];
@@ -109,7 +127,7 @@ function parseCodecString(buf: Buffer, stsdOffset: number, stsdSize: number): st
 
   if (fourcc === 'hev1' || fourcc === 'hvc1') return fourcc;
   if (fourcc === 'av01') {
-    const av1C = findBox(buf, contentStart + entryBox.headerSize, contentStart + entryBox.size, 'av1C');
+    const av1C = findBox(buf, childStart, childEnd, 'av1C');
     if (av1C && av1C.offset + av1C.headerSize + 4 < buf.length) {
       const p = av1C.offset + av1C.headerSize;
       const profile = (buf[p + 1] >> 5) & 0x7;
@@ -122,7 +140,7 @@ function parseCodecString(buf: Buffer, stsdOffset: number, stsdSize: number): st
   }
 
   if (fourcc === 'mp4a') {
-    const esds = findBox(buf, contentStart + entryBox.headerSize, contentStart + entryBox.size, 'esds');
+    const esds = findBox(buf, childStart, childEnd, 'esds');
     if (esds) return 'mp4a.40.2';
     return 'mp4a.40.2';
   }
@@ -130,7 +148,48 @@ function parseCodecString(buf: Buffer, stsdOffset: number, stsdSize: number): st
   if (fourcc === 'Opus') return 'opus';
   if (fourcc === 'fLaC') return 'flac';
 
+  // Encrypted sample entries ('encv'/'enca') wrap a regular sample entry.
+  // For now we don't recurse — caller will see the wrapper fourcc and the
+  // upstream packager normally rewrites encrypted entries with the inner codec
+  // string baked in.
+
   return fourcc;
+}
+
+/**
+ * Re-parse the moov in an init segment with the JS parser and override codec
+ * strings on the supplied track list. Used by the WASM split path to guarantee
+ * MSE-compatible codec strings (e.g. "avc1.640028" not bare "avc1") regardless
+ * of what the upstream WASM parser produced.
+ *
+ * Tracks are matched by trackId. If the JS parser fails to find a track or
+ * returns "unknown" / a bare fourcc, the original WASM-produced codec string
+ * is left untouched.
+ */
+function refineCodecsFromInitSegment(initSegment: Buffer, tracks: TrackInfo[]): TrackInfo[] {
+  try {
+    const moovBox = findBox(initSegment, 0, initSegment.length, 'moov');
+    if (!moovBox) return tracks;
+
+    const refined = extractTrackInfo(initSegment, moovBox.offset, moovBox.size);
+    if (refined.length === 0) return tracks;
+
+    const refinedById = new Map(refined.map(t => [t.trackId, t]));
+    return tracks.map(t => {
+      const r = refinedById.get(t.trackId);
+      if (!r || !r.codec || r.codec === 'unknown') return t;
+      // Only override if the refined string has more information than the
+      // original (e.g. "avc1.640028" replaces "avc1", but never the other way
+      // around).
+      if (r.codec.length > t.codec.length || r.codec.includes('.')) {
+        return { ...t, codec: r.codec };
+      }
+      return t;
+    });
+  } catch (e) {
+    logger.warn(`[mp4split] refineCodecsFromInitSegment failed: ${e instanceof Error ? e.message : e}`);
+    return tracks;
+  }
 }
 
 function extractTrackInfo(buf: Buffer, moovOffset: number, moovSize: number): TrackInfo[] {
@@ -420,13 +479,23 @@ export async function splitFragmentedMP4WASM(filePath: string): Promise<SplitRes
       });
     }
 
-    logger.info(`[mp4split] WASM parsed ${sizeMB} MB: ${wasmTracks.length} tracks, ${segments.length} segments, duration=${result.resultJson.totalDuration?.toFixed(2)}s (${result.executionTimeMs}ms)`);
-    for (const t of wasmTracks) {
+    // Defensive codec-string refinement: re-run the JS moov parser on the init
+    // segment to get fully-qualified codec strings (avc1.XXYYZZ with
+    // profile/compat/level, av01.X.YYM.ZZ with full AOM tier, etc.) even if the
+    // upstream WASM parser returned a bare fourcc like "avc1" or "av01".
+    // MSE.isTypeSupported() rejects bare fourcc codec strings, so this is the
+    // difference between encrypted-DASH playback working and a "Video codec
+    // 'avc1' is not supported by this browser" error in the player.
+    // The init segment is tiny (~KB) so the extra parse is free.
+    const refinedTracks = refineCodecsFromInitSegment(result.initSegment, wasmTracks);
+
+    logger.info(`[mp4split] WASM parsed ${sizeMB} MB: ${refinedTracks.length} tracks, ${segments.length} segments, duration=${result.resultJson.totalDuration?.toFixed(2)}s (${result.executionTimeMs}ms)`);
+    for (const t of refinedTracks) {
       logger.info(`[mp4split]   Track ${t.trackId}: ${t.type} codec=${t.codec} ${t.width ? `${t.width}x${t.height}` : ''} bw=${t.bandwidth}`);
     }
 
     return {
-      tracks: wasmTracks,
+      tracks: refinedTracks,
       initSegment: result.initSegment,
       segments,
       totalDuration: result.resultJson.totalDuration ?? 0,
