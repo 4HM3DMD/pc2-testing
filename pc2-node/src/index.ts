@@ -1,3 +1,10 @@
+// Load pc2-node/.env BEFORE any module reads process.env
+// (clusterPin, AI providers, comms gateways all check env at module-init time,
+//  so dotenv must run first or they see empty values).
+// .env is gitignored; survives `git reset --hard origin/main` during update.sh.
+// See pc2-node/.env.example for the full opt-in env var catalogue.
+import 'dotenv/config';
+
 // Global error handlers MUST be registered first, before any other imports
 // This prevents WASM modules from registering their own crash-happy handlers
 process.on('unhandledRejection', (reason: any, promise: Promise<any>) => {

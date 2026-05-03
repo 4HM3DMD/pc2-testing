@@ -201,6 +201,99 @@ fi
 echo "   ✅ All ports free"
 
 # ─────────────────────────────────────────────────────────────────────
+# Step 3b (v1.2.7): Migrate inline secrets out of ecosystem.config.cjs.
+#
+# Background: prior to v1.2.7, the only way to set cluster-pin / AI /
+# Lit / RPC credentials for pm2 was to edit ecosystem.config.cjs
+# directly. Step 4 below does `git reset --hard origin/main`, which
+# wipes any operator edits to that tracked file — so any node that
+# customised ecosystem.config.cjs would silently lose its credentials
+# on the next update.
+#
+# v1.2.7 introduces pc2-node/.env (gitignored, survives git reset)
+# as the supported home for these secrets, and ecosystem.config.cjs
+# now reads them from process.env via dotenv.
+#
+# This block scans the live ecosystem.config.cjs for known credential
+# vars and copies any non-empty inline values into pc2-node/.env
+# BEFORE git reset blows them away. We only copy vars that aren't
+# already present in .env (so an operator who already migrated by
+# hand isn't silently overwritten).
+#
+# Strictly opt-in & narrowly-scoped: we don't try to parse arbitrary
+# JS — we grep for `VAR_NAME: "value"` patterns on a hard-coded
+# allowlist of names. If parsing fails (commented-out, multiline, …)
+# we just skip; worst case the operator has to re-set the var by
+# hand, same as today.
+# ─────────────────────────────────────────────────────────────────────
+ECO_FILE="$PC2_DIR/ecosystem.config.cjs"
+ENV_FILE="$PC2_NODE_DIR/.env"
+if [[ -f "$ECO_FILE" ]]; then
+    MIGRATED_VARS=()
+    # Allowlist of vars we know are intended for .env. This list mirrors
+    # pc2-node/.env.example. Adding a new var here = explicit opt-in.
+    MIGRATABLE_VARS=(
+        SUPERNODE_CLUSTER_PIN_URL
+        SUPERNODE_CLUSTER_PIN_TOKEN
+        SUPERNODE_CLUSTER_PIN_REPLICATION_MIN
+        SUPERNODE_CLUSTER_PIN_REPLICATION_MAX
+        NODE_TLS_REJECT_UNAUTHORIZED
+        ELACITY_PIN_FORWARD_URL
+        SUPERNODE_PIN_MIRRORS
+        ANTHROPIC_API_KEY
+        OPENAI_API_KEY
+        GOOGLE_API_KEY
+        XAI_API_KEY
+        OLLAMA_BASE_URL
+        TELEGRAM_BOT_TOKEN
+        LIT_ACTION_CID
+        MEDIA_ACTION_CID
+        LIT_BACKEND
+        SUPERNODE_RPC_URLS
+    )
+    for var in "${MIGRATABLE_VARS[@]}"; do
+        # Match `VAR: "value"` — the canonical inline form. Skip if the
+        # value is empty string OR a `process.env.X || ""` fallback (these
+        # are the post-v1.2.7 forms and don't need migrating).
+        VAL="$(grep -oE "${var}:[[:space:]]*\"[^\"]+\"" "$ECO_FILE" 2>/dev/null | head -1 | sed -E "s/^${var}:[[:space:]]*\"(.*)\"$/\1/")"
+        if [[ -z "$VAL" ]]; then
+            continue
+        fi
+        # Don't overwrite an existing .env entry — operator's choice wins.
+        if [[ -f "$ENV_FILE" ]] && grep -q "^${var}=" "$ENV_FILE" 2>/dev/null; then
+            continue
+        fi
+        # First-time write: ensure pc2-node dir exists (paranoia — it
+        # always should, but if it doesn't `>>` would create a file with
+        # no parent dir and that's harder to debug).
+        mkdir -p "$PC2_NODE_DIR"
+        if [[ ! -f "$ENV_FILE" ]]; then
+            cat > "$ENV_FILE" << 'ENV_HEADER'
+# Auto-created by scripts/update.sh during v1.2.7 migration.
+# Original values were inlined in ecosystem.config.cjs and would have
+# been wiped by `git reset --hard origin/main`. They are now stored
+# here (gitignored, survives updates) and read by dotenv at boot.
+#
+# To rotate: edit a value, then either:
+#   pm2 reload ecosystem.config.cjs --only pc2 --update-env   # picks up new env
+#   bash scripts/update.sh                                    # full update path
+#
+# See pc2-node/.env.example for the full catalogue.
+ENV_HEADER
+        fi
+        echo "${var}=${VAL}" >> "$ENV_FILE"
+        MIGRATED_VARS+=("$var")
+    done
+    if [[ ${#MIGRATED_VARS[@]} -gt 0 ]]; then
+        echo "🔐 Step 3b: Migrated ${#MIGRATED_VARS[@]} inline secret(s) from ecosystem.config.cjs to pc2-node/.env:"
+        for v in "${MIGRATED_VARS[@]}"; do
+            echo "    - $v"
+        done
+        echo "    (these would have been wiped by 'git reset --hard' in step 4)"
+    fi
+fi
+
+# ─────────────────────────────────────────────────────────────────────
 # Step 4: Pull latest code (force-reset, no merges)
 # ─────────────────────────────────────────────────────────────────────
 echo ""
@@ -230,33 +323,24 @@ cd "$PC2_NODE_DIR"
 npm install --legacy-peer-deps --include=dev --no-fund --no-audit
 
 # ─────────────────────────────────────────────────────────────────────
-# Step 7: Rebuild native modules from source.
+# Step 7: Rebuild native modules.
 #
-# Defends against the NODE_MODULE_VERSION mismatch that bites every
-# time the runtime Node version differs from whatever Node was used
-# to install the prebuilds (e.g. fresh launcher install on Node 22
-# pulling Node 20 prebuilds for better-sqlite3 v9).
+# v1.2.7: dropped the --build-from-source for `better-sqlite3` because
+# it was migrated to `@photostructure/sqlite` — a Node-API library
+# whose prebuilds are bundled inside the npm tarball and work across
+# all Node 20+ majors. No per-Node-version compile needed; no Xcode
+# CLT requirement on Mac.
+#
+# We still run `npm rebuild` (without --build-from-source) so that
+# any other native module (bcrypt, sharp, node-datachannel, etc) gets
+# a chance to use a fresh prebuild matching the current Node ABI.
 # ─────────────────────────────────────────────────────────────────────
 echo ""
 echo "🔨 Step 7: Rebuilding native modules..."
-# Strategy: only force --build-from-source for better-sqlite3 (the one
-# module known to ship Node-22-incompatible prebuilds). For everything
-# else, run plain `npm rebuild` so prebuild-install can use the
-# prebuilt binary when available.
-#
-# v1.2.4 forced --build-from-source for ALL modules, which broke fresh
-# installs because node-datachannel falls back to a cmake-js source
-# build when no prebuild is available — and most users don't have
-# cmake installed. v1.2.5 reverts to the proven v1.2.3 strategy.
-if ! npm rebuild better-sqlite3 --build-from-source 2>&1; then
-    echo ""
-    echo "❌ better-sqlite3 failed to rebuild. The server cannot start without it."
-    echo "   Common causes:"
-    echo "     - missing build tools (Linux: apt install build-essential python3)"
-    echo "     - missing Xcode CLT on macOS (run: xcode-select --install)"
-    exit 1
-fi
-# Refresh the rest using prebuilds when available.
+# Plain `npm rebuild` lets prebuild-install resolve prebuilt binaries
+# when available. For node-datachannel specifically, this is the right
+# choice: --build-from-source forces a cmake-js build that needs cmake
+# installed (most users don't have it).
 npm rebuild 2>&1 || echo "   ⚠️  Some optional native modules didn't rebuild (non-fatal — see above)"
 
 # ─────────────────────────────────────────────────────────────────────
@@ -277,21 +361,26 @@ npm rebuild 2>&1 || echo "   ⚠️  Some optional native modules didn't rebuild
 echo ""
 echo "🧪 Step 7b: Verifying critical native modules load..."
 
-# better-sqlite3 (CJS) — verify by initialising an in-memory db.
-if ! node -e "require('better-sqlite3')(':memory:').prepare('SELECT 1').get()" >/dev/null 2>&1; then
-    echo "   ⚠️  better-sqlite3 doesn't load — clean reinstalling..."
-    rm -rf node_modules/better-sqlite3
-    npm install better-sqlite3 --legacy-peer-deps --build-from-source 2>&1 || true
-    if ! node -e "require('better-sqlite3')(':memory:').prepare('SELECT 1').get()" >/dev/null 2>&1; then
-        echo "❌ better-sqlite3 cannot be made to load. Try:"
-        echo "   xcode-select --install    # macOS"
-        echo "   sudo apt install build-essential python3    # Linux"
-        node -e "require('better-sqlite3')(':memory:').prepare('SELECT 1').get()" 2>&1
+# @photostructure/sqlite (CJS, v1.2.7+) — verify by initialising an
+# in-memory db. The library bundles prebuilds for every supported
+# platform inside its npm tarball and uses Node-API, so the historical
+# "compile from source needs Xcode CLT" failure mode is gone. This
+# gauntlet now mostly catches genuine node_modules corruption (partial
+# extraction, disk full mid-install, etc).
+if ! node -e "const { DatabaseSync } = require('@photostructure/sqlite'); new DatabaseSync(':memory:').prepare('SELECT 1').get()" >/dev/null 2>&1; then
+    echo "   ⚠️  @photostructure/sqlite doesn't load — clean reinstalling..."
+    rm -rf node_modules/@photostructure/sqlite
+    npm install @photostructure/sqlite --legacy-peer-deps 2>&1 || true
+    if ! node -e "const { DatabaseSync } = require('@photostructure/sqlite'); new DatabaseSync(':memory:').prepare('SELECT 1').get()" >/dev/null 2>&1; then
+        echo "❌ @photostructure/sqlite cannot be made to load."
+        echo "   This is unusual — the library ships prebuilds for all platforms."
+        echo "   Try a clean reinstall: rm -rf node_modules package-lock.json && npm install"
+        node -e "const { DatabaseSync } = require('@photostructure/sqlite'); new DatabaseSync(':memory:').prepare('SELECT 1').get()" 2>&1
         exit 1
     fi
-    echo "   ✅ better-sqlite3 recovered via clean reinstall"
+    echo "   ✅ @photostructure/sqlite recovered via clean reinstall"
 else
-    echo "   ✅ better-sqlite3 verified"
+    echo "   ✅ @photostructure/sqlite verified"
 fi
 
 # node-datachannel (ESM) — verify via dynamic import.
@@ -343,9 +432,9 @@ echo "🔨 Step 10: Compiling backend..."
 cd "$PC2_NODE_DIR"
 npm run build:backend
 
-# Step 11 (better-sqlite3 ABI re-verify) was merged into Step 7b above
-# — the verification gauntlet now covers both better-sqlite3 AND
-# node-datachannel with the same three-attempt pattern.
+# Step 11 (sqlite ABI re-verify) was merged into Step 7b above — the
+# verification gauntlet now covers both @photostructure/sqlite AND
+# node-datachannel with the same clean-reinstall fallback pattern.
 
 # ─────────────────────────────────────────────────────────────────────
 # Step 12: Start under PM2.

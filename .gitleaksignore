@@ -69,3 +69,29 @@ pc2-node/registry/v1.2/elacity-market-0.2.0.registry.json:generic-api-key:66
 pc2-node/registry/v1.2/elacity-player-0.2.0.registry.json:generic-api-key:60
 pc2-node/registry/v1.2/elastos-nft-0.1.0.registry.json:generic-api-key:37
 pc2-node/registry/v1.2/glide-finance-1.0.0.registry.json:generic-api-key:39
+
+# ---------------------------------------------------------------------------
+# TRIAGE-7 — Public-by-design IPFS Cluster Pinning Services API token,
+# baked into pc2-node as the default for the Elacity supernode mesh
+# (clusterPin.ts:DEFAULT_CLUSTER_PIN_TOKEN). Every fresh community node
+# uses this token to push pins into the cluster on first install with
+# zero operator action ("install and works" UX, agreed v1.2.7 release).
+#
+# Abuse vector mitigation: the supernode nginx vhost rate-limits every
+# inbound /cluster-pin/* request at 30 req/min per source IP with burst
+# 20, returning 429 on overflow. Even with the token publicly known,
+# unbounded pin spam is bounded by per-IP throttling. See:
+#   /etc/nginx/conf.d/cluster-pin.conf  (Contabo)
+#   /etc/nginx/sites-enabled/pc2-gateway  /cluster-pin/ block
+#
+# The token is rotatable (just regenerate + update the nginx map +
+# bump pc2-node defaults in a patch release). Per-node rotatable
+# tokens are slated for v1.2.8 (per-pc2-node bearer token issuance,
+# small admin endpoint on supernode + wizard flow in pc2-node UI),
+# at which point this shared community token can be retired entirely.
+#
+# Tracked in:
+#   .cursor/tasks/SUPERNODE-CLUSTER-SETUP/SUPERNODE-CLUSTER-SETUP.md
+#   .cursor/tasks/SUPERNODE-RPC-PROXY/SUPERNODE-RPC-PROXY.md (related
+#     migration pattern for the parallel RPC-proxy work)
+pc2-node/src/services/clusterPin.ts:generic-api-key:95

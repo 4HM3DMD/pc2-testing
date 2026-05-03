@@ -214,7 +214,11 @@ router.post('/init', async (req: AuthenticatedRequest, res: Response) => {
       // MPD fetch with explicit per-gateway timeouts so a hung public IPFS
       // gateway (e.g. when the CID has not propagated to ipfs.ela.city yet)
       // never stalls playback for more than MPD_FETCH_TIMEOUT_MS.
-      const MPD_FETCH_TIMEOUT_MS = 10_000;
+      // v1.2.7: lowered from 10_000 to 5_000 so the worst-case both-gateways
+      // miss path (10s instead of 20s) stays well under typical reverse-proxy
+      // timeouts (30s) and the user gets the friendly "Downloading…" UI from
+      // the pin_in_progress fallback faster instead of seeing a generic 502.
+      const MPD_FETCH_TIMEOUT_MS = 5_000;
       const mpdUrl = ipfsGateway + mediaUri + '/stream.mpd';
       const fallbackUrl = fallbackGateway + mediaUri + '/stream.mpd';
 
@@ -289,10 +293,46 @@ router.post('/init', async (req: AuthenticatedRequest, res: Response) => {
             return;
           }
           if (pinDetail && pinDetail.pin_status === 'failed') {
+            // v1.2.7: don't dead-end on a stale 'failed' flag. A 'failed' row
+            // here means the seeding service gave up after its retry budget
+            // (~5 min), but in practice the asset often becomes reachable
+            // shortly after — either the publisher's node came back online,
+            // the public-gateway resolver auto-imported the CAR, or DHT
+            // propagation finally caught up. The previous "Local download
+            // failed — retry from asset page" message was a UX dead-end:
+            // there's no obvious retry button, and clicking Play again just
+            // hit the same stale flag for the same misleading message.
+            //
+            // Instead: kick off a fresh seedContent at immediate priority,
+            // reset the byte counter so the progress UI starts at 0, and
+            // downgrade the response to 'pin_in_progress' so the player's
+            // existing 5-min auto-retry loop takes over with the friendly
+            // "Downloading content to your node…" UI. If the pin truly can't
+            // be fetched after 60 retries × 5s = 5 min, the player surfaces
+            // a real error then.
+            const seedingService = req.app.locals.seedingService;
+            const wallet = pinDetail.wallet_address;
+            if (seedingService && wallet) {
+              logger.info(`[media/init] Auto-retry: re-queuing failed pin for ${mediaUri} (wallet ${wallet.slice(0, 10)}…)`);
+              try {
+                if (typeof db?.resetPinBytesDownloaded === 'function') {
+                  db.resetPinBytesDownloaded(mediaUri);
+                }
+                seedingService.seedContent(mediaUri, wallet, {
+                  priority: 'immediate',
+                  estimatedSizeBytes: pinDetail.size || 0,
+                });
+              } catch (e: any) {
+                logger.warn(`[media/init] Pin auto-retry failed: ${e?.message}`);
+              }
+            }
             res.status(503).json({
-              error: 'pin_failed',
-              code: 'pin_failed',
-              message: 'Local download failed. Retry the download from the asset page, then try playing again.',
+              error: 'pin_in_progress',
+              code: 'pin_in_progress',
+              message: 'Re-attempting download — this page will retry automatically.',
+              progressPercent: 0,
+              bytesDownloaded: 0,
+              sizeBytes: pinDetail.size || 0,
               mediaUri,
             });
             return;

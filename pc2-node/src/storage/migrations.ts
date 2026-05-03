@@ -4,7 +4,7 @@
  * Manages database schema versioning and migrations
  */
 
-import Database from 'better-sqlite3';
+import { type Database } from './database.js';
 import { readFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -36,13 +36,13 @@ const CURRENT_VERSION = 31;
 interface Migration {
   version: number;
   description: string;
-  up: (db: Database.Database) => void;
+  up: (db: Database) => void;
 }
 
 /**
  * Get current database version
  */
-function getCurrentVersion(db: Database.Database): number {
+function getCurrentVersion(db: Database): number {
   // Create migrations table if it doesn't exist
   db.exec(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -58,7 +58,7 @@ function getCurrentVersion(db: Database.Database): number {
 /**
  * Record migration as applied
  */
-function recordMigration(db: Database.Database, version: number): void {
+function recordMigration(db: Database, version: number): void {
   db.prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)')
     .run(version, Date.now());
 }
@@ -66,7 +66,7 @@ function recordMigration(db: Database.Database, version: number): void {
 /**
  * Run initial schema creation
  */
-function runInitialSchema(db: Database.Database): void {
+function runInitialSchema(db: Database): void {
   const schemaFile = findSchemaFile();
   const schema = readFileSync(schemaFile, 'utf8');
   db.exec(schema);
@@ -76,7 +76,7 @@ function runInitialSchema(db: Database.Database): void {
 /**
  * Run all pending migrations
  */
-export function runMigrations(db: Database.Database): void {
+export function runMigrations(db: Database): void {
   const currentVersion = getCurrentVersion(db);
 
   if (currentVersion === 0) {

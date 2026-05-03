@@ -39,16 +39,32 @@ Today, every installation path requires terminal commands. This excludes 95% of 
 
 ### 0.1 Signed macOS App (Effort: Low | ETA: 1-2 weeks)
 
-**Current state:** ElastOS Launcher works but requires `xattr -cr` terminal command due to missing Apple code signing. Meanwhile, `start-local.sh` provides a zero-friction terminal install on macOS that auto-installs Homebrew + WireGuard.
+**Current state (updated 2026-05-01 after v1.2.6 ship):** ElastOS Launcher works but still requires terminal commands. Two distinct blockers:
 
-**What's needed:**
+1. **`xattr -cr`** — needed once to clear macOS Gatekeeper quarantine on the unsigned `.app` bundle. Resolved by Apple code signing + notarization (the original scope of this track).
+2. **`xcode-select --install`** — needed on a fresh Mac that's never had Xcode CLT, because `better-sqlite3` is V8-ABI-specific and the launcher's install pipeline can land a wrong-ABI prebuild that requires a C++ recompile to recover from. v1.2.6 attempted to fix this by bumping `better-sqlite3` from `^9.2.2` → `^11.10.0`, but a fresh-install validation on 2026-05-01 confirmed the bump alone is insufficient. **Resolved by**: migrating the dependency to `@photostructure/sqlite` (Node-API, prebuilds bundled in the npm tarball) — tracked in `.cursor/tasks/SQLITE-NO-COMPILE-MIGRATION/SQLITE-NO-COMPILE-MIGRATION.md`, target v1.2.7.
+
+Meanwhile, `start-local.sh` provides a zero-friction *terminal* install on macOS that auto-installs Homebrew + WireGuard (and Xcode CLT when needed) — that path is fine for technical users but is exactly what we're trying to eliminate for the rest.
+
+**What's needed (full no-terminal path):**
+- [ ] Land `@photostructure/sqlite` migration (v1.2.7) — eliminates the Xcode-CLT requirement entirely on Mac
+- [ ] Fix launcher abort bug — when verification gauntlet fails, `process.exit(1)` instead of starting PC2 anyway. Lives in the ElastOS Launcher repo, not `pc2.net`. Track separately when the launcher repo is next touched.
 - [ ] Apple Developer Program enrollment ($99/year)
 - [ ] Code signing certificate setup (Developer ID Application)
 - [ ] Notarization with Apple (automated via `electron-builder`)
 - [ ] Update GitHub Actions to sign builds (CSC_LINK, APPLE_ID secrets)
-- [ ] Result: Download .dmg → Double-click → Works
+- [ ] Result: Download .dmg → Double-click → Works (no `xattr`, no `xcode-select`, no terminal at all)
 
-**Cost:** $99/year
+**Cost:** $99/year (Apple Developer Program). The SQLite migration and launcher abort bug are eng work, not capex.
+
+### 0.3 v1.2.7 patch release scope (in flight as of 2026-05-02)
+
+v1.2.7 is intended as a small, scoped patch release with two items both already triaged into Proposed-status task docs:
+
+1. **`better-sqlite3` → `@photostructure/sqlite` migration** — `.cursor/tasks/SQLITE-NO-COMPILE-MIGRATION/`. Closes the v1.2.6 known-issue #1 (residual Xcode-CLT requirement on fresh Mac installs). ~30 LOC across `pc2-node/src/storage/database.ts`, `pc2-node/src/services/UpdateService.ts`, `scripts/update.sh`, `scripts/install-arm.sh`. Drop-in API; no schema changes.
+2. **MetaMask Mobile in-app browser secure-view fix** — `.cursor/tasks/SECURE-VIEW-MM-MOBILE-INAPP-BROWSER/`. Closes the v1.2.6 known-issue #4 (paid-content playback fails inside MM Mobile's in-app browser). Bug isolated to Particle Auth's `window.ethereum` wrapper rejecting our `personal_sign` call before it reaches MM Mobile. Needs hands-on local debugging via Safari Web Inspector / Chrome DevTools (remote-patch loop hit caching wall on 2026-05-01).
+
+Both tasks are independent — can ship in either order, or together. Combined surface: ~80 LOC. Nothing else is in scope for v1.2.7. v1.3.0 work continues on `feature/lit-chipotle-migration` and remains gated on external dependencies (Lit Chipotle production + Elacity V3 contracts).
 
 ### 0.2 Windows / WSL Support (Effort: Medium | ETA: 2-4 weeks)
 

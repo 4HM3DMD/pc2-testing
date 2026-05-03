@@ -45,6 +45,7 @@ import bosonRouter from './boson.js';
 import setupRouter from './setup.js';
 import updateRouter from './update.js';
 import { getUpdateService } from '../services/UpdateService.js';
+import { getClusterPinConfig, getClusterPinProbeState, getClusterPinRetryQueueSnapshot } from '../services/clusterPin.js';
 import accessControlRouter from './access-control.js';
 import didRouter from './did.js';
 import walletRouter from './wallet.js';
@@ -151,6 +152,44 @@ export function setupAPI (app: Express): void {
             // UpdateService not yet constructed — keep the dev fallback.
         }
 
+        // Cluster pinning summary (v1.2.7+) — public, low-detail. Tells operators
+        // and dashboards whether this node is contributing to the supernode CDN.
+        // Detailed diagnostics still live behind owner auth at
+        // /api/storage/ipfs/cluster-pin.
+        let clusterPinning: {
+            enabled: boolean;
+            url?: string;
+            replication?: { min: number; max: number };
+            lastProbe?: 'ok' | 'error' | 'unknown';
+            retryQueueDepth?: number;
+        } = { enabled: false };
+        try {
+            const cfg = getClusterPinConfig();
+            if ( cfg ) {
+                const probe = getClusterPinProbeState();
+                const retry = getClusterPinRetryQueueSnapshot();
+                let lastProbe: 'ok' | 'error' | 'unknown' = 'unknown';
+                if ( probe ) {
+                    if ( probe.lastStatus === 'error' ) {
+                        lastProbe = 'error';
+                    } else if ( typeof probe.lastStatus === 'number' && probe.lastStatus >= 200 && probe.lastStatus < 300 ) {
+                        lastProbe = 'ok';
+                    } else {
+                        lastProbe = 'error';
+                    }
+                }
+                clusterPinning = {
+                    enabled: true,
+                    url: cfg.url,
+                    replication: { min: cfg.replicationMin, max: cfg.replicationMax },
+                    lastProbe,
+                    retryQueueDepth: retry?.size ?? 0,
+                };
+            }
+        } catch {
+            // clusterPin module not loaded (older build) — leave defaults.
+        }
+
         const health: {
             status: string;
             timestamp: string;
@@ -162,6 +201,9 @@ export function setupAPI (app: Express): void {
             terminal: {
                 status: string;
                 isolationMode: string;
+            };
+            cluster: {
+                pinning: typeof clusterPinning;
             };
             owner?: {
                 set: boolean;
@@ -178,6 +220,9 @@ export function setupAPI (app: Express): void {
             terminal: {
                 status: terminalStatus,
                 isolationMode: terminalIsolation,
+            },
+            cluster: {
+                pinning: clusterPinning,
             },
         };
 

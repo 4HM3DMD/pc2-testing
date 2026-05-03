@@ -264,6 +264,24 @@ async function tryPinForPublicRequest(ipfs: IPFSStorage, cid: string, context: s
     });
     if (result.success) {
       logger.info(`[Public Gateway] Auto-fetched CID for ${context}: ${cid} (${result.type}, ${result.size} bytes)`);
+      // v1.2.7: clear any stale 'failed' / 'queued' / 'pinning' rows in
+      // pinned_cids for this CID. Two pin paths exist on a PC2 node — the
+      // ContentSeedingService (driven by buy events, gives up after ~5 min)
+      // and this public-gateway auto-fetch (driven by gateway requests,
+      // succeeds whenever the bytes are reachable). They didn't talk to
+      // each other before, so a successful auto-fetch left the seeding
+      // service's stale 'failed' row in the DB forever. Subsequent
+      // /api/media/init calls would see that 'failed' status and bounce
+      // the user with a misleading error — even though the bytes were
+      // sitting right there in local IPFS cache. Mark complete now so the
+      // playback path's pin-status check reflects reality.
+      if (_dbRef) {
+        try {
+          _dbRef.updatePinStatus(cid, 'complete');
+        } catch (e: any) {
+          logger.debug(`[Public Gateway] Could not refresh pinned_cids for ${cid}: ${e?.message ?? 'unknown'}`);
+        }
+      }
       return true;
     }
     return false;

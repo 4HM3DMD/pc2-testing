@@ -13,6 +13,13 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { getWASMRuntime, type RendererCommand } from '../services/wasm/WASMRuntime.js';
+import {
+  forwardPinToCluster,
+  getClusterPinConfig,
+  getClusterPinProbeState,
+  getClusterPinRetryQueueSnapshot,
+  queryClusterPinStatus,
+} from '../services/clusterPin.js';
 import { getBaseRpcUrl } from '../utils/rpc.js';
 import {
   buildDelegationPayload,
@@ -1062,6 +1069,55 @@ router.get('/ipfs/elacity-pin-forward', authenticate, requireOwner, (_req: Authe
 });
 
 /**
+ * GET /api/storage/ipfs/cluster-pin
+ * Diagnostic: report whether the IPFS Cluster pin forward is configured and
+ * the last probe + retry queue state. Owner-guarded — token never returned.
+ */
+router.get('/ipfs/cluster-pin', authenticate, requireOwner, (_req: AuthenticatedRequest, res: Response) => {
+  const config = getClusterPinConfig();
+  res.json({
+    enabled: config !== null,
+    url: config?.url ?? null,
+    tokenConfigured: config !== null,
+    replication: config ? { min: config.replicationMin, max: config.replicationMax } : null,
+    lastProbe: getClusterPinProbeState(),
+    retryQueue: getClusterPinRetryQueueSnapshot(),
+  });
+});
+
+/**
+ * GET /api/storage/ipfs/cluster-availability/:cid
+ * Public availability badge: query the IPFS Cluster for a CID's pin status.
+ * Returns delegate multiaddrs the caller can use to dial directly.
+ *
+ * Returns 503 with {available: false, reason: 'cluster-not-configured'} when
+ * SUPERNODE_CLUSTER_PIN_URL is not set so callers can fall back gracefully.
+ */
+router.get('/ipfs/cluster-availability/:cid', async (req, res: Response) => {
+  const cid = String(req.params.cid ?? '').trim();
+  if (!cid) {
+    return res.status(400).json({ error: 'Missing CID' });
+  }
+  if (!getClusterPinConfig()) {
+    return res.status(503).json({ available: false, reason: 'cluster-not-configured' });
+  }
+  try {
+    const status = await queryClusterPinStatus(cid);
+    if (!status) {
+      return res.json({ available: false, status: 'unknown', delegates: [] });
+    }
+    res.json({
+      available: status.status === 'pinned',
+      status: status.status,
+      delegates: status.delegates,
+    });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'unknown error';
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
  * POST /api/ipfs/pin
  * Pin a remote CID to the local IPFS node (fetches content from the network/gateway).
  * Used by the Elacity Market to download owned media to the user's node.
@@ -1100,6 +1156,7 @@ router.post('/ipfs/pin', authenticate, async (req: AuthenticatedRequest, res: Re
 
       fanOutSupernodePinMirrors(cidClean);
       forwardPinToElacityKubo(cidClean);
+      forwardPinToCluster(cidClean);
 
       return res.json({
         success: true,
@@ -1142,6 +1199,7 @@ router.post('/ipfs/pin', authenticate, async (req: AuthenticatedRequest, res: Re
 
       fanOutSupernodePinMirrors(cidClean);
       forwardPinToElacityKubo(cidClean);
+      forwardPinToCluster(cidClean);
 
       res.json({
         success: true,
@@ -3797,6 +3855,11 @@ router.post('/ipfs/upload-elacity', authenticate, async (req: AuthenticatedReque
     //    default off until ops gives green light).
     forwardPinToElacityKubo(finalCid);
 
+    // 4b. Mirror to the IPFS Cluster pinning tier when configured (no-op
+    //     when SUPERNODE_CLUSTER_PIN_URL/TOKEN unset). One call → CRDT
+    //     replication across all cluster peers.
+    forwardPinToCluster(finalCid, filename);
+
     // 5. Best-effort legacy byte-upload to base.ela.city. Hard-capped at
     //    8 s so we move on if the upstream is wedged. Failures logged only.
     void replicateBytesToElacityFireAndForget(bytes, filename, finalCid);
@@ -3864,6 +3927,10 @@ router.post('/ipfs/upload-elacity-directory', authenticate, async (req: Authenti
 
     // 4. Ask Elacity's Kubo to durably pin (no-op when env vars unset).
     forwardPinToElacityKubo(cidV0String);
+
+    // 4b. Mirror to the IPFS Cluster pinning tier when configured (no-op
+    //     when SUPERNODE_CLUSTER_PIN_URL/TOKEN unset).
+    forwardPinToCluster(cidV0String, 'metadata.json');
 
     // 5. Best-effort legacy byte-upload to base.ela.city (8 s hard cap so we
     //    don't accumulate hung promises when the upstream is wedged).

@@ -23,7 +23,7 @@
  *   node scripts/wave5-smoke-bootstrap.mjs --revoke  # delete the temp keys
  */
 
-import Database from 'better-sqlite3';
+import { DatabaseSync, enhance } from '@photostructure/sqlite';
 import { randomBytes, createHash } from 'node:crypto';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -68,7 +68,7 @@ function ensureUserRow(db, walletAddress) {
 
 function provision({ owner, tethered }) {
     if (!existsSync(DB_PATH)) throw new Error(`DB not found at ${DB_PATH}`);
-    const db = new Database(DB_PATH);
+    const db = enhance(new DatabaseSync(DB_PATH));
 
     ensureUserRow(db, owner);
     ensureUserRow(db, tethered);
@@ -101,7 +101,7 @@ function provision({ owner, tethered }) {
 
 function revoke() {
     if (!existsSync(DB_PATH)) throw new Error(`DB not found at ${DB_PATH}`);
-    const db = new Database(DB_PATH);
+    const db = enhance(new DatabaseSync(DB_PATH));
     const result = db.prepare('DELETE FROM api_keys WHERE name = ?').run(NAME_TAG);
     db.close();
     console.log(`Revoked ${result.changes} ephemeral wave5-smoke key(s).`);

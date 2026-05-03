@@ -268,7 +268,7 @@ PARTICLE_EOF
         exit 1
     fi
 
-    print_step "Building native modules (node-pty, better-sqlite3, canvas)..."
+    print_step "Building native modules (node-pty, @photostructure/sqlite, canvas)..."
     cd "$PC2_DIR"
     npm rebuild 2>&1 || true
     cd "$PC2_DIR/pc2-node"
@@ -392,11 +392,23 @@ BASHRC_EOF
 
 start_pc2() {
     PC2_DIR="$HOME/pc2.net/pc2-node"
-    cd "$PC2_DIR"
+    PC2_ROOT="$HOME/pc2.net"
+    cd "$PC2_ROOT"
 
     pm2 delete pc2 2>/dev/null || true
     print_step "Starting PC2..."
-    pm2 start npm --name "pc2" -- start
+    # v1.2.7+: prefer ecosystem.config.cjs over `pm2 start npm` so the
+    # process is registered with the env/restart/log config the project
+    # ships. This also matches what update.sh does, so in-app updates
+    # via `pm2 startOrRestart ecosystem.config.cjs --only pc2 --update-env`
+    # find a matching entry. Falls back to the old form if the file is
+    # missing (e.g. pre-v1.2.7 checkout).
+    if [[ -f "$PC2_ROOT/ecosystem.config.cjs" ]]; then
+        pm2 start "$PC2_ROOT/ecosystem.config.cjs"
+    else
+        cd "$PC2_DIR"
+        pm2 start npm --name "pc2" -- start
+    fi
     pm2 save
 
     sleep 3

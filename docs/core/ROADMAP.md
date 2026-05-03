@@ -2,8 +2,20 @@
 
 > **Purpose:** Single source of truth for all strategic goals, technical work streams, and milestones — directly mapped to the Keystone Fund proposal and Rong Chen's original vision
 > **Created:** 2026-02-24
-> **Last Updated:** 2026-04-03
+> **Last Updated:** 2026-05-02
 > **Status:** Living document — update as work progresses
+
+---
+
+## Release status (snapshot — 2026-05-02)
+
+| Release | Date | State | What it shipped |
+|---|---|---|---|
+| **v1.2.6** | 2026-05-01 | ✅ Tagged + on Jetson | arm64 video upload fix (ffmpeg fragmenter + `+separate_moof` topology), encrypted-DASH codec-string fix, indexer metadata + listing-price fixes, public-IPFS gateway ENOENT classifier, marketplace UX cleanup (free-asset publisher actions, cleartext play, on-chain properties, feed filter chips, balance modal, USDC labels, network sources dropdown), pin-progress UX during playback, secure-view delegation corner-toast for external wallets, buy modal balances. See `CHANGELOG.md` §1.2.6 (23 fixes). |
+| **v1.2.7** *(planned)* | — | 📋 Proposed (two items) | (1) Genuine zero-Xcode-CLT install on macOS — migrate `better-sqlite3` → `@photostructure/sqlite`. Tracked in [`.cursor/tasks/SQLITE-NO-COMPILE-MIGRATION/`](../../.cursor/tasks/SQLITE-NO-COMPILE-MIGRATION/SQLITE-NO-COMPILE-MIGRATION.md). Closes v1.2.6 known-issue #1. (2) MetaMask Mobile in-app browser secure-view delegation fix. Tracked in [`.cursor/tasks/SECURE-VIEW-MM-MOBILE-INAPP-BROWSER/`](../../.cursor/tasks/SECURE-VIEW-MM-MOBILE-INAPP-BROWSER/SECURE-VIEW-MM-MOBILE-INAPP-BROWSER.md). Closes v1.2.6 known-issue #4. Both items independent (~80 LOC combined); awaiting user approval to start. |
+| **v1.3.0** *(blocked)* | — | 🛑 Blocked on external deps | Lit Chipotle production swap + Elacity V3 contract migration + PDR Phase B (SDK/Enterprise API/MCP). Tracked in [`.cursor/tasks/V1.3-RELEASE/V1.3-RELEASE.md`](../../.cursor/tasks/V1.3-RELEASE/V1.3-RELEASE.md). |
+
+The v1.2.x line is converging toward "shippable to non-technical Mac users with no terminal commands at all." v1.2.7 closes the last two known-issue blockers from v1.2.6; everything after that is Apple code-signing ($99/year) + Windows installer.
 
 ---
 

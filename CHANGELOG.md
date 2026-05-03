@@ -6,6 +6,119 @@
 
 ---
 
+## [Unreleased — v1.2.7] - SQLite migration + Supernode IPFS Cluster + playback fixes
+
+> **Scope**: v1.2.7 combines three workstreams:
+> 1. **SQLite migration** (`better-sqlite3` → `@photostructure/sqlite`) — primary motivation, unblocks Mac users running pc2-node from the Elastos launcher (no native compile / Xcode CLT needed).
+> 2. **IPFS Cluster availability tier** — pc2-nodes auto-forward pins to a hosted Cluster mesh so content remains reachable even when the originating node is offline / behind NAT.
+> 3. **Playback fixes A–D** — auto-retry failed pins, clear stale failed flags, faster MPD timeout, clear stale player UI errors.
+>
+> Validated end-to-end on Jetson (production canary, aarch64-linux): SQLite migration applied cleanly, 61 pinned_cids preserved, cluster integration firing, playback fixes serving real users.
+
+### Infrastructure (LIVE on supernodes 2026-05-02)
+
+- **2-node IPFS Cluster mesh deployed** between Contabo (38.242.211.112) and InterServer (69.164.241.210) using `ipfs-cluster-service` v1.1.4 with CRDT consensus. Smoke-tested: pin issued from Contabo replicates to both nodes' Kubo blockstores within 5 seconds. `pc2-cluster.service` systemd unit installed and enabled for boot survival.
+- **Kubo `StorageMax` raised** from 8 GB → Contabo 300 GB / InterServer 1 TB. With replication factor 2 this unlocks ~650 GB of guaranteed marketplace pin capacity (was 0 — the existing supernode Kubos were running at default 8 GB cap with 3+ TB free disk).
+- **Mutual `Peering.Peers`** added to both Kubo configs so they hold direct connections to each other.
+- **UFW** allows port 9096 only from the specific peer IP (defense in depth — cluster swarm secret is the primary security boundary).
+- **nginx reverse proxy** on Contabo (`/etc/nginx/sites-enabled/pc2-gateway`, additive single-`location` change) exposes Cluster Pinning Services API publicly at `https://38.242.211.112/cluster-pin/` with bearer-token gating. `nginx -t` + `systemctl reload nginx` (no restart) — verified zero regression on PC2 frontend, dDRM provision, RPC, and `*.ela.city` marketplace routes.
+- **Multi-token map + per-IP rate limiting** added to the nginx vhost (2026-05-02 evening, additive `/etc/nginx/conf.d/cluster-pin.conf`). Replaces the single inline `if` bearer check with a `map` directive that whitelists multiple bearer tokens (currently 2: legacy Jetson personal + new community shared). `limit_req_zone` enforces 30 req/min per source IP with burst 20 — all overflow returns 429. This is the abuse mitigation that lets the community shared token be public-by-design (baked into pc2-node) without inviting unbounded spam-pinning. `nginx -t` + `nginx -s reload` (no restart) — verified all 4 auth paths and rate-limit threshold from external IP before considering the change live.
+- **Two bearer tokens authorized** in the cluster-pin map: (1) the legacy Jetson personal token (recorded in user's password manager, slated for rotation in v1.2.8 once per-node tokens land), (2) the new community shared token baked into `clusterPin.ts` defaults so every fresh community node gets cluster pinning out-of-the-box.
+- **End-to-end write path verified externally**: POST `/cluster-pin/pins` with bearer → 200 → CRDT replicates to both peers in <5 seconds (confirmed via `ipfs-cluster-ctl status` on InterServer).
+
+Full survey + change log: [`SUPERNODE-CLUSTER-SETUP.md`](.cursor/tasks/SUPERNODE-CLUSTER-SETUP/SUPERNODE-CLUSTER-SETUP.md).
+
+### pc2-node integration (DEPLOYED + VERIFIED on Jetson 2026-05-02)
+
+- **New `pc2-node/src/services/clusterPin.ts` service module** — wraps the IPFS Pinning Services API spec. Mirrors the existing `ELACITY_PIN_FORWARD` pattern: fire-and-forget, exponential-backoff retry queue, hard age cap. **Default ON** in v1.2.7+ — every fresh community node auto-replicates pins to the Elacity supernode mesh on first install with zero operator action. Defaults baked into `clusterPin.ts` (URL + shared community token); abuse bounded by per-IP rate limiting at the supernode (30 req/min + burst 20). Operators who want a different cluster set `SUPERNODE_CLUSTER_PIN_URL` + `_TOKEN` in `pc2-node/.env`; operators who want to disable cluster pinning entirely set them to empty strings.
+- **Wired into 4 pin call sites** in `pc2-node/src/api/storage.ts` alongside (not replacing) the existing `fanOutSupernodePinMirrors` and `forwardPinToElacityKubo` calls. Strictly additive; existing behaviour unchanged.
+- **New diagnostic endpoint** `GET /api/storage/ipfs/cluster-pin` (owner-guarded) — reports whether cluster pinning is configured + last probe + retry queue state.
+- **New availability badge endpoint** `GET /api/storage/ipfs/cluster-availability/:cid` (public) — queries the cluster for a CID's pin status; returns delegate multiaddrs callers can use to direct-dial.
+- **Hot-deployed to Jetson** (production node) with `ecosystem.config.cjs` env update + `pm2 reload`. Boot log confirmed:
+  ```
+  [ClusterPin] enabled -> https://38.242.211.112/cluster-pin (replication=2/2)
+  [ClusterPin] retry scheduler started (interval=30000ms, maxAttempts=5)
+  ```
+- **Backfill script** `pc2-node/scripts/cluster-backfill.mjs` queries `pinned_cids` for `pin_status='failed'` (and stuck `queued`/`pinning`) rows, pushes each into the cluster via the public Pinning Services API, and updates DB to mark them as `complete`. Detects either SQLite adapter (`@photostructure/sqlite` for v1.2.7+, `better-sqlite3` for v1.2.6). DRY_RUN supported.
+- **First production backfill (Jetson, 2026-05-02)**: 1 unique CID rescued (`bafybeidrmrsohnva4asvqptsspwvrtwluldkui7fyvcbpmpfcq7gdgo5p4`, minted 2026-05-01). Confirmed `PINNING` on both supernodes within seconds — directly addresses today's "buyer can't reach minter's content" pain.
+
+### Strategy / Roadmap
+
+- **New task ticket `CAPSULE-RUNTIME-WASM`** filed for v1.4+ work — sketches a Rust/WASM-based capsule runtime giving 3rd-party creators capability-bounded sandboxed execution, mapping directly to Anders' "runtime grants viewer capability" concept.
+
+### Operator notes (must-read before broader rollout)
+
+- **TLS caveat**: cluster URL uses self-signed cert for IP. `NODE_TLS_REJECT_UNAUTHORIZED=0` is set in pc2-node env on Jetson. v1.3.x will introduce a proper-cert subdomain (`cluster.ela.city` or similar) and per-request TLS agent so this global toggle goes away.
+- **Log rotation**: Jetson `pm2-out.log` was 945 MB at deploy time — pm2 logrotate not configured. Add as v1.3.x maintenance item.
+
+### SQLite migration (DEPLOYED + VERIFIED on Jetson 2026-05-02)
+
+- **`@photostructure/sqlite@^1.2.1`** replaces `better-sqlite3`. Ships prebuilt binaries for darwin-arm64, darwin-x64, linux-arm64 (glibc + musl), linux-x64, win32-arm64, win32-x64 — **zero native compile** required on any of these platforms. This unblocks Mac/Elastos-launcher first-run experience (was broken without Xcode CLT).
+- **`enhance()` wrapper** (in `pc2-node/src/storage/database.ts`) makes the new adapter API-identical to better-sqlite3 — call sites unchanged.
+- **Schema-compatible**: SQLite file format identical between adapters; existing `pc2.db` reads cleanly under the new adapter (verified live: 61 pinned_cids + 3 users + 3 sessions preserved on Jetson).
+- **Self-rollback deploy**: hot-deployed to Jetson via self-contained `nohup` script with built-in EXIT trap + watchdog. ~6-second user-visible downtime window. Backup at `/home/orin_nano/pc2.net/.backup-20260503-072358/` for instant rollback if ever needed.
+
+### Polish (release-readiness for community nodes)
+
+- **`SUPERNODE_CLUSTER_PIN_*` env vars now sourced from `process.env`** in root `ecosystem.config.cjs` — community nodes can opt in by setting env vars (or a `pc2-node/.env` file) without needing to edit the tracked config file. Existing Jetson token migrates from `ecosystem.config.cjs` → `pc2-node/.env` to survive future `git reset --hard origin/main` in `update.sh`.
+- **`pm2-logrotate` config** added to root `ecosystem.config.cjs` — Jetson `pm2-out.log` had grown to 945 MB before this; now caps at 50 MB × 7 files per app. Applies to all community nodes on update.
+- **`pc2-node/.env.example`** created — documents all opt-in env vars for cluster pinning, replication, TLS handling, AI providers, comms gateways. Single source of truth for fresh installs.
+- **`/api/health` extended** with `cluster.pinning` summary block — shows whether cluster forwarding is configured + last probe state + retry queue depth. No new endpoint, no auth bloat — folds into existing public health response.
+- **`dotenv/config` loaded** at top of `pc2-node/src/index.ts` so `pc2-node/.env` is honoured (was a dep but never wired in).
+- **Conditional-spread env block in `ecosystem.config.cjs`** — opt-in credential vars (cluster pin URL/token, RPC pool, AI keys, comms tokens, Lit overrides, legacy supernode mirrors) now use `...(process.env.X ? { X: process.env.X } : {})` instead of `X: process.env.X || ""`. This was a critical bug fix: with the old pattern, pm2 would set unset opt-in vars to `""`, then `dotenv` (default `override: false`) would refuse to overwrite empty strings → operator's `pc2-node/.env` was silently ignored. With the new pattern: shell wins if set, else `.env` populates the gap, else feature gracefully off. **Verified all three permutations end-to-end** before landing. Always-set keys (NODE_ENV, PORT, PATH, LIT_BACKEND, REPLICATION_MIN/MAX, NODE_TLS_REJECT_UNAUTHORIZED) keep their hardcoded-default pattern — they're either system controls or safe defaults, no secrets.
+
+### Update flow hardening (v1.2.7, promoted from "v1.2.8+ flagged")
+
+These were originally on the "noticed but didn't change" list. The user surfaced them as release-blockers because the v1.2.7 ecosystem.config.cjs gained new opt-in env vars (cluster pinning, AI keys, Lit, RPC pool) and "in-app update on a Mac via the Elastos launcher should Just Work, no terminal commands" is a hard requirement for the release.
+
+- **`UpdateService` restart now uses `pm2 startOrRestart ecosystem.config.cjs --only pc2 --update-env`** as the first attempt in the existing fallback chain. The previous `pm2 restart pc2` preserved pm2's frozen-at-`pm2-start`-time env, which meant any new env defaults shipped via ecosystem.config.cjs (e.g. the v1.2.7 cluster pinning vars) silently never applied on in-app updates. Existing fallbacks (systemctl, plain pm2 restart, nvm-paths, /usr/local/bin) kept verbatim — the new step only affects the success path on standard installs.
+- **`update.sh` migrates inline secrets** out of `ecosystem.config.cjs` into `pc2-node/.env` BEFORE `git reset --hard origin/main` runs (new step 3b). Allowlist-scoped to known credential vars (cluster pinning, AI keys, Lit, RPC pool, TLS toggle). Skips empty values + post-v1.2.7 `process.env.X || ""` forms. Won't overwrite an already-set .env entry. This is the safety net that prevents the Jetson (the only known node with hardcoded cluster credentials) from losing its token on first v1.2.7 update.
+- **`start-local.sh` + `install-wsl.sh` now register pm2 via `ecosystem.config.cjs`** instead of the legacy `pm2 start npm --name "pc2" -- start`. Three wins:
+  1. The desktop UpdateService's new `pm2 startOrRestart ecosystem.config.cjs --only pc2 --update-env` finds a matching app on its first call (was named "pc2" both ways, but the registration metadata was different — npm-wrapped vs direct script).
+  2. pm2 directly tracks the node process instead of an npm wrapper, so kill signals reach the actual server (eliminates the orphaned-node-after-restart class of bug).
+  3. The env block in `ecosystem.config.cjs` (NODE_ENV, PORT, PATH, restart_delay, kill_timeout, log paths, optional cluster vars) is now the source of truth on every install path — Mac launcher, WSL, ARM Linux, x86 Linux, Jetson all run on the same registration.
+
+### Not yet done (sequenced for v1.2.8+)
+
+- Cut v1.2.7 git tag + GitHub release (pending ElastOS Launcher v1.2.6 release + user smoke-test on Jetson). Token distribution policy for community nodes settled 2026-05-02 evening: shared community token baked into pc2-node code, per-IP rate limiting at supernode, per-node rotatable tokens deferred to v1.2.8.
+- **ElastOS Launcher v1.2.6 release** — BLOCKING for Mac/Linux/Windows GUI users. Launcher v1.2.5's `pc2Manager.ts` still references `better-sqlite3`, which v1.2.7 of pc2.net removed. Without a launcher update first, in-app "Update PC2" on a Mac will trip the launcher's native-module verification gauntlet. ~30 LOC PR to swap the SQLite probe + drop the force-rebuild step. Tracked in `.cursor/tasks/SUPERNODE-CLUSTER-SETUP/SUPERNODE-CLUSTER-SETUP.md` open follow-up #9.
+- InterServer nginx exposure (failover endpoint when Contabo is unreachable).
+- GCloud (`ipfs.ela.city`) joins as third Cluster peer (Phase 4 of `SUPERNODE-CLUSTER-SETUP`).
+- Per-pc2-node bearer token issuance (replace shared community token) — slated for v1.2.8. Path: small admin endpoint on a supernode → wizard flow in pc2-node UI → operator clicks "rotate to my own token" → fresh token issued + saved to `.env`. Default falls back to shared community token until operator opts in.
+- **TLS hygiene** (multi-step, v1.2.8+): (a) `cluster.ela.city` DNS A record pointing at Contabo (operator action — User is travelling, ela.city DNS provider needs SMS verification on Thailand-only number); (b) certbot Let's Encrypt cert on Contabo for cluster.ela.city; (c) update `DEFAULT_CLUSTER_PIN_URL` in `clusterPin.ts` from IP literal to hostname; (d) refactor `UsernameService.ts:17` global `NODE_TLS_REJECT_UNAUTHORIZED=0` to per-request `https.Agent({ rejectUnauthorized: false })` ONLY for known self-signed endpoints. Currently TLS verification is OFF for ALL pc2-node outbound HTTPS — practical risk is low for home/datacentre nodes but real on public Wi-Fi or adversarial networks. Tracked separately as `TLS-PER-REQUEST-AGENT` for v1.2.8.
+- **Supernode RPC proxy Phase 2** (P0, surfaced 2026-05-02 during v1.2.7 smoke test, decision 2026-05-02 evening: ship v1.2.7 WITHOUT supernode default, document operator opt-in via Alchemy/Infura): public Base RPC fallback chain rate-limits during Particle Auth's `getPrimaryAssets()` burst. User hit it during the v1.2.7 mint smoke-test on Jetson; tactical unstuck was Alchemy free-tier key inline in Jetson's `ecosystem.config.cjs`, mint succeeded, cluster pin propagated 2/2 in 730ms, full v1.2.7 acceptance test passed on Jetson canary. Strategic decision: do NOT bundle a shared API key (security + shared rate-limit pooling). Community nodes get the opt-in path documented above (`SUPERNODE_RPC_URLS=<your-alchemy-url>` in `pc2-node/.env`, now actually works thanks to the conditional-spread fix). **v1.2.8** will deploy supernode-backed `https://rpc.ela.city/base` default so opt-in becomes unnecessary — gated on Thailand-DNS round-trip when User is back from USA. Full diagnosis + Phase 2 plan in `.cursor/tasks/SUPERNODE-RPC-PROXY/SUPERNODE-RPC-PROXY.md`.
+### What community node operators should expect on first mint after v1.2.7 update
+
+This section is BLUNT and should be quoted in release-notes / community announcements verbatim.
+
+**Cluster pinning (new in v1.2.7)**: **Works out-of-the-box on every fresh install with zero operator action.** Defaults bake the Elacity supernode cluster URL + a shared community token into `pc2-node/src/services/clusterPin.ts`. Boot log will show `[ClusterPin] enabled -> https://38.242.211.112/cluster-pin (Elacity default) (replication=2/2)`. Per-IP rate limiting at the supernode (30 req/min + burst 20) bounds abuse exposure even though the token is public. Operators who want to use their OWN cluster set both env vars in `pc2-node/.env`; operators who want to disable cluster pinning entirely set them to empty strings (legacy `ELACITY_PIN_FORWARD_URL` and `SUPERNODE_PIN_MIRRORS` still fire if configured).
+
+**Web3 RPC for minting (NOT new in v1.2.7, but more likely to surface)**: pc2-node ships with a default chain of 5 public Base RPC providers (`mainnet.base.org`, `llamarpc`, `publicnode`, `ankr`, `blockpi`). These providers tightened rate limits in 2026, and Particle Auth's `getPrimaryAssets()` makes 15-25 RPC calls per refresh during the mint flow. **If you mint while all 5 providers are simultaneously rate-limited, you will see**:
+
+- `getPrimaryAssets() timed out after 15s` errors in the browser console
+- The Particle wallet sign dialog never appears
+- Or, if you proceed past the sign step, `MetaMask - RPC Error: RPC endpoint returned too many errors, retrying in N minutes`
+
+**Workaround until v1.2.8 supernode RPC proxy ships** (see `SUPERNODE-RPC-PROXY` task — gated on `rpc.ela.city` DNS round-trip):
+
+1. Sign up for a free [Alchemy](https://alchemy.com) account (5 minutes)
+2. Create an app → Base Mainnet → copy the HTTPS endpoint URL (looks like `https://base-mainnet.g.alchemy.com/v2/<key>`)
+3. Edit your `pc2-node/.env` (copy from `.env.example` if you don't have one yet):
+
+   ```
+   SUPERNODE_RPC_URLS=https://base-mainnet.g.alchemy.com/v2/<your-key>
+   ```
+
+4. Reload pc2: `cd ~/pc2.net && pm2 reload ecosystem.config.cjs --only pc2 --update-env`
+5. Confirm in pm2 logs: `[rpc] RPC pool initialized with 6 endpoints (1 supernode first): https://base-mainnet.g.alchemy.com/...`
+6. Try the mint again — token list loads, sign dialog appears, transaction goes through
+
+Alchemy's free tier (300M compute units / month, ~25-30 req/sec) is way more than a single home node needs. Your key never leaves your machine. Same approach works for Infura or any other authenticated Base RPC.
+
+**v1.2.8 will eliminate this opt-in step**: when the User's travel constraints clear, we'll deploy a shared RPC proxy on the supernodes and bake `https://rpc.ela.city/base` into the default `BASE_RPC_URLS`. Every community node will then get supernode-backed RPC for free, with no per-operator setup. Tracked in `.cursor/tasks/SUPERNODE-RPC-PROXY/SUPERNODE-RPC-PROXY.md`.
+
+---
+
 ## [1.2.6] - 2026-05-01 (no-Xcode-CLT-needed + arm64-video-uploads + freshly-minted-content-shows-up)
 
 > ## TL;DR
@@ -18,9 +131,11 @@
 
 `better-sqlite3` was pinned to `^9.2.2`, which has NO Node 22 (MODULE_VERSION 127) prebuilt binary for darwin-arm64. The launcher bundles Node 22, so on every fresh install the launcher had to fall back to compiling `better-sqlite3` from C++ source — which requires Xcode Command Line Tools. Users without Xcode CLT (i.e. most non-developers) saw the install report "success" but got a broken state.
 
-**Fix**: bumped `better-sqlite3` from `^9.2.2` → `^11.10.0`. v11 ships Node 22 darwin-arm64 prebuilds. `npm install` now downloads the matching binary directly. **No compiler needed. No Xcode CLT required.**
+**Fix**: bumped `better-sqlite3` from `^9.2.2` → `^11.10.0`. v11 ships Node 22 darwin-arm64 prebuilds. `npm install` now downloads the matching binary directly when the toolchain matches.
 
 Verified all other native modules (`bcrypt`, `node-pty`, `sharp`, `node-datachannel`) already use NAPI or platform-specific prebuilt subpackages — they don't need any compiler either.
+
+> **⚠️ Postscript (discovered 2026-05-01 evening, fresh Mac install via ElastOS Launcher):** the `^11.10.0` bump on its own is NOT sufficient to deliver a true zero-compiler install. On a fresh macOS without Xcode Command Line Tools, the launcher's install pipeline still ends up with a wrong-ABI `better_sqlite3.node` binary (`NODE_MODULE_VERSION 115` vs Node 22's required `127`) and PC2 crashes at `DatabaseManager.initialize`. Root cause: better-sqlite3 uses V8-specific ABI prebuilds (not Node-API), the launcher's `npm rebuild` step depends on a C++ toolchain to recover from any prebuild mismatch, and `--build-from-source` in our scripts hard-requires Xcode CLT. The launcher's verification gauntlet correctly detects the failure but starts PC2 anyway (separate launcher-repo bug). **Genuine zero-friction install will be delivered in v1.2.7 by migrating from `better-sqlite3` to `@photostructure/sqlite`** — Node-API based, prebuilds bundled inside the npm tarball, single binary per platform works across Node major versions, no postinstall download. See `.cursor/tasks/SQLITE-NO-COMPILE-MIGRATION/` for the full task plan.
 
 #### 2. Resilient launcher install when previous attempt failed (Sasha's case, part 2)
 
@@ -456,6 +571,18 @@ Files: `app.js` (`renderSupplyInfo()`), `styles.css` (`.onchain-mono`, `.onchain
 - Networking architecture — same as v1.2.5
 
 This is a pure install/update reliability release. No new features, no breaking changes.
+
+### Known issues carried into v1.2.7
+
+1. **Fresh-Mac install still requires Xcode CLT in some launcher paths.** §1 above shipped the right *intent* (no compiler needed) but `better-sqlite3`'s V8-specific ABI prebuilds + the launcher's force-rebuild pipeline mean a Mac without Xcode CLT can still end up with a wrong-ABI binary at `Database.initialize` time. **Fix path**: migrate to `@photostructure/sqlite` (drop-in, Node-API, prebuilds bundled inside npm tarball — eliminates the entire class of NODE_MODULE_VERSION mismatch bugs). Tracked in `.cursor/tasks/SQLITE-NO-COMPILE-MIGRATION/SQLITE-NO-COMPILE-MIGRATION.md` (Status: Proposed, awaiting approval).
+
+2. **Launcher continues installation after gauntlet failure.** The launcher's verification gauntlet correctly detects an ABI mismatch and tells the user to `xcode-select --install`, but then continues to `Starting PC2 from …` instead of aborting. PC2 then crashes at `DatabaseManager.initialize`. This is a launcher-repo bug (separate codebase from `pc2.net`) — the gauntlet's failure path needs a hard `process.exit(1)` so the user sees the actionable error without a confusing crash log overwriting it.
+
+3. **Bento4 path on linux-arm64**: still uses the ffmpeg fallback path introduced in §5. Not a bug — works correctly — but if/when bok.net publishes an arm64-Linux Bento4 build, we should switch back to mp4fragment for parity with x86_64 Linux and macOS.
+
+4. **Paid-content playback fails inside MetaMask Mobile's in-app browser** (discovered 2026-05-02). When `zzz.ela.city` is opened inside MetaMask Mobile → Browser, login + general transactions (EOA → smart wallet transfer, signature requests) all work correctly — but tapping **Play** on a paid asset fails synchronously: the secure-view delegation toast flickers and disappears within ~200ms, no `personal_sign` prompt is shown to the user, and the runtime reports `Initialization failed: Invalid parameters: must provide an Ethereum address.`. The error originates in **Particle Auth's provider wrapper** (the bundled minified file `src/particle-auth/assets/index-CLS56Zo3.js` contains that exact validation string), which intercepts `window.ethereum` in the dapp iframe and pre-validates `personal_sign` parameters before they reach MetaMask Mobile. Login + send-transaction work because they go through different code paths that don't trigger the wrapper's validation in the same way. A full evening of remote diagnostic patches (hex-encoded message, lower-cased signer address, EIP-6963 provider discovery with RDNS whitelist, fresh `eth_accounts` re-fetch) all reproduced the same symptom — and were further hampered by aggressive in-app-browser caching that prevented later patches from loading on the user's phone, making remote debugging unproductive. **Fix path**: needs hands-on local debugging in MetaMask Mobile (USB / WebKit Inspector) against a controlled `pc2-secure-view.js` build to confirm whether (a) Particle's wrapper is the actual blocker and we need to bypass it more aggressively, or (b) MM Mobile itself has a stricter validation we're not yet matching, or (c) the issue is elsewhere entirely (e.g. iframe `sandbox` attributes, `window.ethereum` shadowing by `pc2-wallet-provider.js`). Tracked in `.cursor/tasks/SECURE-VIEW-MM-MOBILE-INAPP-BROWSER/SECURE-VIEW-MM-MOBILE-INAPP-BROWSER.md` (Status: Proposed, full diagnostic record + hypothesis tree included). Tonight's experimental patches were reverted so v1.2.6 ships clean — the bug only affects MM Mobile in-app browser; desktop browsers, Brave, Firefox, Safari, Chrome on iOS/Android, and even MM Mobile when used via WalletConnect from an external browser all work correctly.
+
+These four are the only known issues. Everything in v1.2.6's headline list (§1–§23) is verified working on the Jetson at the v1.2.6 tag (commit `124823dd1`).
 
 ---
 

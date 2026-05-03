@@ -3,7 +3,7 @@
 **Task ID**: SUPERNODE-RPC-PROXY
 **Created**: 2026-04-29
 **Status**: InProgress — client-side plumbing shipped 2026-04-29 (default-off); supernode-side deployment still pending
-**Priority**: P1-A for v1.2 (client side ships now; activation is a one-line env flip once supernode proxies are up)
+**Priority**: **P0 — bumped 2026-05-02**. User hit a hard transaction failure during v1.2.7 cluster-pin smoke test on Jetson: Particle Auth `getPrimaryAssets()` timed out 6× in a row (15 s each), then Send dialog returned `MetaMask - RPC Error: RPC endpoint returned too many errors, retrying in 0.37 minutes`. Root cause: public RPC fallback chain (llamarpc → publicnode → ankr → blockpi → mainnet.base.org) all rate-limited at once. NOT a v1.2.7 regression — same failure mode exists on every prior version, but it now blocks the v1.2.7 acceptance test (can't verify cluster pin if user can't mint). v1.2.8 must ship Phase 2 (supernode proxy live on Contabo, default `BASE_RPC_URLS` includes it first).
 
 ## Description
 
@@ -254,3 +254,121 @@ $ curl -sX POST http://localhost:4200/api/rpc/base ...
 No additional code changes are required in `pc2-node` after Phase 2 —
 the hooks are already in place. Same activation pattern as
 `SUPERNODE_PIN_MIRRORS` from `SUPERNODE-MEDIA-PINNING`.
+
+## 2026-05-02 — Production failure during v1.2.7 smoke test (User report)
+
+User attempted v1.2.7 mint smoke-test on Jetson via Mac browser (`https://zzz.ela.city`, routed through Contabo WireGuard relay → Jetson pc2-node). Two failure modes hit back-to-back:
+
+1. **Mint flow stuck at "loading tokens"** — Particle Auth `getPrimaryAssets()` is the upstream-token-list fetcher; it fires ~15-25 RPC calls per refresh (eth_call across multiple ERC-20 contracts + eth_getCode for smart-account deployment probe). Logs show:
+   ```
+   [Particle Auth]: Calling getPrimaryAssets()...
+   [Particle Auth]: getPrimaryAssets() join in-flight request   (×6)
+   Uncaught (in promise) Error: getPrimaryAssets() timed out after 15s   (×6)
+   ```
+   Sign dialog never appeared because the wallet UI had no token list to display.
+2. **Send-tokens dialog returned RPC error** — User then tried sending 0.1 USDC EOA→SmartAccount on Base as an alternate test. `[PC2]: Intercepting Base RPC fetch ...` fired 8× rapid, then:
+   ```
+   MetaMask - RPC Error: RPC endpoint returned too many errors, retrying in 0.5 minutes.
+   [WalletService] EOA transaction failed on Base
+   [UIWindowAccountSend]  Send failed
+   ```
+
+### Diagnosis
+
+`SUPERNODE_RPC_URLS` is empty on Jetson (and on every other community pc2 node — Phase 2 of this task never landed). Effective `BASE_RPC_URLS` was therefore the 5 public providers only. With Particle's burst pattern, every provider in the list ratelimited simultaneously and the proxy's fallback walk had nowhere to go.
+
+### Immediate-unstuck recommendation surfaced to User
+
+1. Wait 5-10 min for public-RPC rate windows to reset, OR
+2. User signs up for Alchemy free tier (300M CU/month, generous), supplies the URL, agent adds it to Jetson's `pc2-node/.env` as `SUPERNODE_RPC_URLS=...`, `pm2 reload ecosystem.config.cjs --only pc2 --update-env` — change is live immediately, RPC dependency on public providers eliminated for the Jetson.
+3. (Roadmap) Phase 2 supernode proxy deployment on Contabo, gated on the same Thailand-DNS round-trip as `cluster.ela.city` (so v1.2.8 can ship `https://rpc.ela.city/base` as a default for ALL community nodes).
+
+### Why this is now blocking v1.2.7 cluster smoke-test
+
+User cannot complete the cluster-pin acceptance test (mint → watch for `[ClusterPin] ok cid=...` in pm2 logs) because the mint cannot proceed past Particle's token-loading phase. Cluster pin code path is unaffected — it just hasn't been exercised yet because no successful mint has occurred since the rate-limit incident. As soon as RPC is unstuck (any of the three options above), the smoke test can resume and v1.2.7 tag-cutting can proceed.
+
+## 2026-05-02 — Tactical unstuck deployed to Jetson (Option B, single-node)
+
+User supplied an Alchemy free-tier Base mainnet API key. Agent deployed it inline as `SUPERNODE_RPC_URLS` in Jetson's `ecosystem.config.cjs` (NOT `.env` — see design gap below) and ran `pm2 reload ecosystem.config.cjs --only pc2 --update-env`. Boot log confirmed:
+
+```
+[rpc] RPC pool initialized with 6 endpoints (1 supernode first): https://base-mainnet.g.alchemy.com/...
+[rpc-proxy] 1 supernode RPC endpoint(s) prepended to BASE_RPC_URLS
+```
+
+Live `eth_chainId` probe through `/api/rpc/base` returned `0x2105` — Alchemy is answering. User can resume the v1.2.7 mint smoke-test.
+
+### Operator hygiene note
+
+The supplied Alchemy API key was shared in chat; it should be **rotated** in the Alchemy dashboard after the Jetson smoke-test passes. Old key dies, new key gets swapped via the same `pm2 reload --update-env` path. Cost of rotation: ~10 sec.
+
+### Design gap discovered while deploying — to fix in v1.2.7 polish (BEFORE tag)
+
+The `dotenv` integration added 2026-05-02 has a bug for the **opt-in supernode env vars**:
+
+- `pc2-node/src/index.ts` calls `dotenv.config()` (default = `override: false`).
+- `ecosystem.config.cjs` historically declares each opt-in var as `KEY: process.env.KEY || ""`.
+- pm2 evaluates that to `""` when the shell doesn't have the var → spawns pc2 with `KEY=""` → dotenv sees `KEY` is "already in process.env" (empty string counts as set) → refuses to overwrite → operator's `pc2-node/.env` value is **silently ignored**.
+
+**Effect**: community pc2 nodes that follow our docs and put `SUPERNODE_CLUSTER_PIN_URL` etc. in `pc2-node/.env` will NOT pick those values up. The supernode infrastructure is invisible to them.
+
+**Fix (v1.2.7 polish, small)**: switch ecosystem.config.cjs to a conditional-spread pattern so absent shell vars don't poison the namespace:
+
+```js
+env: {
+  PORT: 4200,
+  NODE_ENV: 'production',
+  ...(process.env.SUPERNODE_CLUSTER_PIN_URL   ? { SUPERNODE_CLUSTER_PIN_URL:   process.env.SUPERNODE_CLUSTER_PIN_URL }   : {}),
+  ...(process.env.SUPERNODE_CLUSTER_PIN_TOKEN ? { SUPERNODE_CLUSTER_PIN_TOKEN: process.env.SUPERNODE_CLUSTER_PIN_TOKEN } : {}),
+  ...(process.env.SUPERNODE_RPC_URLS          ? { SUPERNODE_RPC_URLS:          process.env.SUPERNODE_RPC_URLS }          : {}),
+  // ... same pattern for all opt-in supernode/AI/comms vars in .env.example
+},
+```
+
+With that pattern: shell env wins if present, else dotenv from `pc2-node/.env` fills the gap. Both paths now actually work as documented.
+
+### Phase 2 (still pending — User-gated on Thailand DNS round-trip)
+
+Same gating constraint as `cluster.ela.city` from `SUPERNODE-CLUSTER-SETUP` follow-up #7:
+
+1. User configures `rpc.ela.city` A record → Contabo `38.242.211.112` (requires SMS verification on Thailand-only number, deferred until back from USA travel).
+2. Agent deploys nginx → Alchemy/Infura proxy on Contabo (`pc2-rpc-base.service`), Let's Encrypt cert via certbot DNS-01 challenge.
+3. Agent updates `pc2-node/src/static.ts` to bake `https://rpc.ela.city/base` into the **default** `BASE_RPC_URLS` (first entry, ahead of public providers).
+4. v1.2.8 ships → every community pc2 node — including ones that never set `SUPERNODE_RPC_URLS` — automatically routes through our supernode RPC, eliminating the public-RPC dependency entirely.
+
+Until Phase 2 lands, the only nodes with rate-limit-resistant RPC are operators who individually configure their own Alchemy/Infura key (currently: Jetson only).
+
+### 2026-05-02 evening — DNS landscape recon + strategic release decision
+
+After the Jetson smoke-test passed (cluster pin verified 2/2 in 730ms via Alchemy unstuck), User raised the critical follow-up: "will community nodes get the same experience? do they need the API key? we shouldn't share it...". Agent surveyed existing `*.ela.city` DNS to evaluate options:
+
+| Subdomain | Target | Status |
+|---|---|---|
+| `gateway.ela.city`, `node1.ela.city`, `cluster.ela.city`, `market.ela.city`, `zzz.ela.city` | InterServer 69.164.241.210 | ✓ Live, HTTPS works (`*.ela.city` wildcard cert) |
+| **`rpc.ela.city`** | **34.147.212.166** | ✗ **DNS exists but IP unreachable** — old/decommissioned, ownership unclear |
+| **`supernode.ela.city`** | **34.142.19.27** | ✗ **DNS exists but IP unreachable** — GCloud range, ownership unclear |
+| `ipfs.ela.city` | CNAME → `cdn.ela.city` | Cloudflare-fronted, separate path |
+
+**Important caveat**: Before any future plan touches `rpc.ela.city`, verify ownership — that DNS record may belong to Elacity (the parent org) rather than the User's pc2.net repo. Asking who currently controls that record is a prerequisite to repointing it. See `docs/core/SUPERNODE_CAPABILITY_ASSESSMENT.md` lines 444 + 488 for the original "decide DNS policy" + "does it belong to us?" questions.
+
+**Options evaluated for unblocking community-node parity**:
+
+| # | Option | Time | TLS | Trade-off |
+|---|---|---|---|---|
+| A | Repoint `rpc.ela.city` → InterServer, deploy nginx→Alchemy on InterServer | 2-3h | ✓ wildcard | **Requires DNS edit access** (User blocked) |
+| B | Same but Contabo workhorse, InterServer TLS frontend over WG | 4-5h | ✓ wildcard | Same DNS blocker |
+| C | Use existing live subdomain path (e.g. `https://node1.ela.city/rpc/base`) | 2-3h | ✓ wildcard | Aesthetically uglier; can rename when DNS unblocked |
+| D | Ship v1.2.7 with no supernode default, operators DIY their own Alchemy key | 10 min | n/a | Bad UX for non-tech operators |
+
+**User decision (2026-05-02 22:49 PST)**: Option D for v1.2.7. Rationale captured by User:
+- `rpc.ela.city` ownership uncertain ("i think the rpc.ela.city is used is it not too? perhaps not im unsure")
+- DNS edit blocked from USA travel
+- Prefers to wait for proper DNS round-trip rather than ship a half-measure
+
+**v1.2.7 polish work that DID land tonight to support the opt-in path**:
+
+1. **Conditional-spread fix in `ecosystem.config.cjs`** — without this, `pc2-node/.env` was silently ignored for opt-in vars (the dotenv override gap). Now operators who follow the docs' advice and set `SUPERNODE_RPC_URLS=...` in `.env` actually get it picked up. End-to-end verified across all three permutations (shell-only, env-only, both).
+2. **CHANGELOG section** — explicit "what to expect on first mint after v1.2.7 update" with verbatim Alchemy walkthrough for operators (5 steps, ~5 minutes).
+3. **`.env.example` already documents** `SUPERNODE_RPC_URLS` syntax and links to provider sign-ups.
+
+**v1.2.8 plan unchanged**: Phase 2 supernode RPC proxy, gated on User's Thailand DNS round-trip when back from USA. When that lands, no operator action required — `pc2-node/src/static.ts` default changes from public-only to supernode-first, every community node updates seamlessly.

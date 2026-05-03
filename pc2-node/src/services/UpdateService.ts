@@ -543,27 +543,29 @@ export class UpdateService {
       await this.execStreamed('build-backend', 'npm', ['run', 'build:backend'], { cwd: pc2NodeDir });
       logger.info('[UpdateService] Build complete');
 
-      // Step 4.5 (v1.2.6): Native-module verification gauntlet.
+      // Step 4.5 (v1.2.6, retained in v1.2.7): Native-module verification
+      // gauntlet.
       //
       // Before we restart PC2 against the freshly-installed deps, verify
       // that the critical native modules actually load. If they don't —
-      // e.g. better-sqlite3 prebuild failed to download because of a
-      // network glitch and we ended up with a half-baked binary — fail
-      // the update LOUDLY now rather than letting PM2 restart-loop on
-      // the new broken state.
+      // e.g. a prebuild failed to extract or node_modules is half-baked —
+      // fail the update LOUDLY now rather than letting PM2 restart-loop
+      // on the new broken state.
       //
-      // We only test better-sqlite3 here because it's the only native
-      // module that historically had Node-version-specific binaries
-      // (the v9 → v11 bump in v1.2.6 fixes that). bcrypt, node-pty,
-      // sharp, and node-datachannel all use NAPI or platform-subpackage
-      // prebuilds that work across Node versions.
+      // v1.2.7: switched the load test from `better-sqlite3` to
+      // `@photostructure/sqlite`. The new library uses Node-API and
+      // ships per-platform prebuilds bundled in the npm tarball, so the
+      // historical NODE_MODULE_VERSION mismatch class of failures is gone.
+      // We retain the gauntlet anyway because (a) cheap defence in depth,
+      // and (b) it still catches genuine "node_modules is corrupt"
+      // failure modes (partial extraction, disk-full mid-install, etc).
       this.updateProgress = 'Verifying native modules...';
-      logger.info('[UpdateService] Verifying better-sqlite3 loads against current Node ABI...');
+      logger.info('[UpdateService] Verifying @photostructure/sqlite loads against current Node ABI...');
       try {
         await this.execStreamed(
           'verify-natives',
           'node',
-          ['-e', "require('better-sqlite3')(':memory:').prepare('SELECT 1').get(); console.log('better-sqlite3 OK');"],
+          ['-e', "const { DatabaseSync } = require('@photostructure/sqlite'); new DatabaseSync(':memory:').prepare('SELECT 1').get(); console.log('@photostructure/sqlite OK');"],
           { cwd: pc2NodeDir }
         );
         logger.info('[UpdateService] Native modules verified');
@@ -572,12 +574,13 @@ export class UpdateService {
         logger.error('[UpdateService] Native module verification FAILED:', errMsg);
         this.appendLog('verify-natives', `[fatal] Native module verification failed: ${errMsg}`);
         this.appendLog('verify-natives', '[fatal] PC2 would crash-loop on restart. Aborting update.');
-        this.appendLog('verify-natives', '[hint] Run: cd ' + projectRoot + ' && bash scripts/update.sh');
+        this.appendLog('verify-natives', '[hint] @photostructure/sqlite ships prebuilds for all platforms. If this fails, node_modules is likely corrupt.');
+        this.appendLog('verify-natives', '[hint] Try: cd ' + pc2NodeDir + ' && rm -rf node_modules package-lock.json && npm install');
         this.isUpdating = false;
         this.updateProgress = '';
         return {
           success: false,
-          message: 'Update built but native modules failed to load. Run scripts/update.sh from terminal to repair.',
+          message: 'Update built but native modules failed to load. Try a clean reinstall: cd pc2-node && rm -rf node_modules package-lock.json && npm install',
         };
       }
 
@@ -588,17 +591,52 @@ export class UpdateService {
       // Return success before restarting
       setTimeout(async () => {
         logger.info('[UpdateService] Attempting restart...');
-        
-        // Try multiple restart methods in order
-        // Include full paths for PM2 since it may not be in PATH for systemd
-        const restartCommands = [
+
+        // v1.2.7 restart preference order:
+        //
+        //   1. `pm2 startOrRestart <ecosystem.config.cjs> --only pc2 --update-env`
+        //      RE-READS ecosystem.config.cjs and refreshes pm2's stored env
+        //      from the file. Without this, pm2's env is frozen at the
+        //      original `pm2 start` time and any new env vars added to
+        //      ecosystem.config.cjs by a release (e.g. SUPERNODE_CLUSTER_PIN_*
+        //      added in v1.2.7) silently never apply on in-app updates.
+        //      This was flagged in v1.2.6 CHANGELOG; promoted into v1.2.7.
+        //
+        //   2-N. existing fallbacks. Kept verbatim — they already work for
+        //        every install path we've seen in production:
+        //        - systemctl unit (Docker/sysadmin installs)
+        //        - bare `pm2 restart pc2` (preserves stale env, but at
+        //          least keeps the process alive)
+        //        - nvm-managed pm2 (Ahmed's setup, Apr 30 2026)
+        //        - /usr/local/bin/pm2 (Homebrew Mac installs)
+        //
+        // The ecosystem path resolves from projectRoot (computed from
+        // this.config.projectRoot above as `path.resolve(projectRoot, '..')`).
+        // If the file isn't at that path (e.g. a non-standard install),
+        // startOrRestart fails and we fall through to the next handler;
+        // the user never sees a difference.
+        const ecosystemPath = path.join(projectRoot, 'ecosystem.config.cjs');
+        const ecosystemExists = existsSync(ecosystemPath);
+
+        const restartCommands: Array<{ cmd: string; name: string }> = [];
+        if (ecosystemExists) {
+          // Quote the path so spaces in ~/Library/Application Support/... etc.
+          // don't break the shell. --only pc2 narrows to our app even if the
+          // ecosystem file later grows additional entries. --update-env is
+          // the bit that actually refreshes pm2's stored env from the file.
+          restartCommands.push({
+            cmd: `pm2 startOrRestart "${ecosystemPath}" --only pc2 --update-env`,
+            name: 'pm2 startOrRestart ecosystem.config.cjs',
+          });
+        }
+        restartCommands.push(
           { cmd: 'systemctl restart pc2-node', name: 'systemctl pc2-node' },
           { cmd: 'systemctl restart pc2', name: 'systemctl pc2' },
           { cmd: 'pm2 restart pc2', name: 'pm2 pc2' },
           { cmd: 'pm2 restart all', name: 'pm2 all' },
           { cmd: `${process.env.HOME}/.nvm/versions/node/*/bin/pm2 restart pc2`, name: 'pm2 (nvm path)' },
           { cmd: '/usr/local/bin/pm2 restart pc2', name: 'pm2 (/usr/local)' },
-        ];
+        );
 
         for (const { cmd, name } of restartCommands) {
           try {

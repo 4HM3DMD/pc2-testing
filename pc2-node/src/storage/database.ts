@@ -4,7 +4,12 @@
  * SQLite database for persistent storage of users, sessions, files, and settings
  */
 
-import Database from 'better-sqlite3';
+import {
+  DatabaseSync,
+  enhance,
+  type DatabaseSyncInstance,
+  type EnhancedDatabaseSync,
+} from '@photostructure/sqlite';
 import { existsSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
 import { runMigrations } from './migrations.js';
@@ -12,6 +17,13 @@ import { encryptApiKeys, decryptApiKeys } from '../utils/encryption.js';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('database');
+
+// Local alias: enhanced @photostructure/sqlite instance with better-sqlite3-
+// compatible .pragma() and .transaction() methods. Migration from
+// `better-sqlite3` (v1.2.7) — both libraries link to SQLite 3.5x and the
+// on-disk pc2.db format is unchanged. DatabaseSyncInstance is the type
+// (the class shape); DatabaseSync is the value (constructor used at runtime).
+export type Database = EnhancedDatabaseSync<DatabaseSyncInstance>;
 
 export interface User {
   wallet_address: string;
@@ -134,14 +146,14 @@ export interface InstalledApp {
 }
 
 export class DatabaseManager {
-  private db: Database.Database | null = null;
+  private db: Database | null = null;
   private dbPath: string;
 
   constructor(dbPath: string) {
     this.dbPath = dbPath;
   }
 
-  getDatabase(): Database.Database | null {
+  getDatabase(): Database | null {
     return this.db;
   }
 
@@ -159,8 +171,9 @@ export class DatabaseManager {
       mkdirSync(dbDir, { recursive: true });
     }
 
-    // Open database connection
-    this.db = new Database(this.dbPath);
+    // Open database connection. enhance() adds better-sqlite3-compatible
+    // .pragma() and .transaction() methods (v1.2.7 SQLite migration).
+    this.db = enhance(new DatabaseSync(this.dbPath));
     
     // Enable foreign keys
     this.db.pragma('foreign_keys = ON');
@@ -177,7 +190,7 @@ export class DatabaseManager {
   /**
    * Get database instance (throws if not initialized)
    */
-  getDB(): Database.Database {
+  getDB(): Database {
     if (!this.db) {
       throw new Error('Database not initialized. Call initialize() first.');
     }

@@ -149,10 +149,11 @@ install_node() {
 # because /usr/bin/git is a stub installed by macOS that exists *only* to
 # trigger the Xcode Command Line Tools installer when actually invoked.
 # The earlier check passed silently on this stub, every later compile step
-# (nvm install -> Node compile, npm rebuild -> better-sqlite3 build, brew
-# install) would hit the missing-CLT error, and the user would see a
-# cascade of mysterious failures. The honest test is `xcode-select -p`,
-# which only succeeds once CLT is actually present.
+# (nvm install -> Node compile, brew install) would hit the missing-CLT
+# error, and the user would see a cascade of mysterious failures. The
+# honest test is `xcode-select -p`, which only succeeds once CLT is
+# actually present. (v1.2.7 dropped the better-sqlite3 source-compile
+# step, but other native deps may still need CLT for source builds.)
 check_git() {
     if [[ "$OS" == "macos" ]]; then
         if xcode-select -p &> /dev/null; then
@@ -325,7 +326,8 @@ install_build_deps() {
 
 # Install native-module system libraries on macOS via Homebrew.
 #
-# better-sqlite3 needs no system libs (compiles SQLite from source).
+# @photostructure/sqlite (v1.2.7+) ships per-platform prebuilds, so no
+#   system libs are needed for it.
 # canvas needs cairo + pango + libpng + jpeg + giflib + librsvg + pkg-config —
 #   without these, `npm rebuild canvas` dies with `pkg-config: command not
 #   found` and PDF/text thumbnail generation is silently disabled.
@@ -518,10 +520,12 @@ PARTICLE_EOF
     echo -e "${GREEN}✓ Dependencies installed${NC}"
     
     # Rebuild native modules (skipped by --ignore-scripts above).
-    # This compiles node-pty, better-sqlite3, canvas, etc. against the current
-    # Node ABI. better-sqlite3 is REQUIRED — if it fails the database won't
-    # initialise and the server crashes at boot with ERR_DLOPEN_FAILED. canvas
-    # is optional (PDF/text thumbnails); a failure there is a warning, not fatal.
+    # This refreshes node-pty, canvas, etc. against the current Node ABI.
+    # @photostructure/sqlite (v1.2.7+) ships prebuilds and doesn't need a
+    # rebuild step, but it IS REQUIRED — if it fails to load, the database
+    # won't initialise and the server crashes at boot with ERR_DLOPEN_FAILED.
+    # The verification gauntlet below covers it. canvas is optional (PDF/text
+    # thumbnails); a failure there is a warning, not fatal.
     #
     # The previous version swallowed every error with `|| true` and printed
     # "✓ Native modules built" regardless. That's how we ended up with
@@ -533,26 +537,17 @@ PARTICLE_EOF
     npm rebuild 2>&1 || echo -e "${YELLOW}⚠ Root npm rebuild had errors (often optional deps — see above)${NC}"
 
     cd "$PC2_DIR"
-    # Strategy: only force --build-from-source for better-sqlite3 (the one
-    # module known to ship Node-22-incompatible prebuilds). For everything
-    # else, run plain `npm rebuild` so prebuild-install can use the
-    # prebuilt binary when available.
+    # v1.2.7: dropped the explicit --build-from-source for `better-sqlite3`
+    # because it was migrated to `@photostructure/sqlite` — a Node-API
+    # library whose prebuilds are bundled inside the npm tarball and work
+    # across all Node 20+ majors. No per-Node-version compile needed; no
+    # Xcode CLT requirement on Mac.
     #
-    # v1.2.4 forced --build-from-source for ALL modules, which exposed
-    # node-datachannel's cmake-js source-build path. On Macs without
-    # cmake installed (most fresh installs), that crashed the entire
-    # rebuild step. v1.2.5 reverts to the proven v1.2.3 approach but
-    # also installs cmake up front (see install_macos_brew_libs) as
-    # belt-and-braces.
-    echo -e "${CYAN}Rebuilding better-sqlite3 against current Node ABI...${NC}"
-    if ! npm rebuild better-sqlite3 --build-from-source 2>&1; then
-        echo -e "${RED}❌ better-sqlite3 failed to compile — server cannot start.${NC}"
-        echo -e "${YELLOW}Common causes:${NC}"
-        echo -e "${YELLOW}  - Xcode Command Line Tools missing (run: xcode-select --install)${NC}"
-        echo -e "${YELLOW}  - Python 3 missing (this is rare on modern macOS)${NC}"
-        echo -e "${YELLOW}  - Disk full${NC}"
-        exit 1
-    fi
+    # We still run `npm rebuild` (plain) so other native modules get a
+    # chance to use a fresh prebuild matching the current Node ABI.
+    # node-datachannel specifically needs prebuilds (its source-build path
+    # requires cmake, which most users don't have).
+    echo -e "${CYAN}Refreshing all native modules against current Node ABI...${NC}"
 
     # Refresh the rest using prebuilds when available — fast, and
     # tolerant of any module that doesn't have a prebuild for this Node
@@ -579,8 +574,9 @@ PARTICLE_EOF
     #      install metadata, only a clean reinstall queries fresh.
     #
     # If all three fail, exit with a fix-it-yourself hint that's
-    # SPECIFIC to the module (cmake for node-datachannel, build-tools
-    # for better-sqlite3).
+    # SPECIFIC to the module (cmake for node-datachannel; clean reinstall
+    # for @photostructure/sqlite, which ships prebuilds and shouldn't
+    # normally fail).
     # ──────────────────────────────────────────────────────────────────
 
     # Helper: load-test an ESM module via dynamic import.
@@ -589,29 +585,31 @@ PARTICLE_EOF
         node -e "import('${mod}').then(m => { if (!m) throw new Error('null'); }).catch(e => { console.error(e.message); process.exit(1); })" 2>&1
     }
 
-    # Helper: load-test a CJS module by requiring + smoke-running it.
-    verify_better_sqlite3_loads() {
-        node -e "require('better-sqlite3')(':memory:').prepare('SELECT 1').get()" 2>&1
+    # Helper: load-test the CJS sqlite module by requiring + smoke-running it.
+    verify_sqlite_loads() {
+        node -e "const { DatabaseSync } = require('@photostructure/sqlite'); new DatabaseSync(':memory:').prepare('SELECT 1').get()" 2>&1
     }
 
-    # ─── better-sqlite3 ───────────────────────────────────────────────
-    echo -e "${CYAN}Verifying better-sqlite3 against Node $(node -v)...${NC}"
-    if ! verify_better_sqlite3_loads >/dev/null 2>&1; then
-        echo -e "${YELLOW}⚠ better-sqlite3 doesn't load — clean reinstalling...${NC}"
-        rm -rf node_modules/better-sqlite3
-        npm install better-sqlite3 --legacy-peer-deps --build-from-source 2>&1 || true
-        if ! verify_better_sqlite3_loads >/dev/null 2>&1; then
-            echo -e "${RED}❌ better-sqlite3 cannot be made to load — server cannot start.${NC}"
-            echo -e "${YELLOW}Common causes:${NC}"
-            echo -e "${YELLOW}  - Xcode Command Line Tools missing (run: xcode-select --install)${NC}"
-            echo -e "${YELLOW}  - Python 3 missing (rare on modern macOS)${NC}"
-            echo -e "${YELLOW}  - Disk full${NC}"
-            verify_better_sqlite3_loads
+    # ─── @photostructure/sqlite (v1.2.7+) ─────────────────────────────
+    # Migrated from better-sqlite3 in v1.2.7. Bundled prebuilds + Node-API
+    # mean the historical "needs Xcode CLT to recompile" failure mode is
+    # gone. This gauntlet now mostly catches genuine node_modules corruption.
+    echo -e "${CYAN}Verifying @photostructure/sqlite against Node $(node -v)...${NC}"
+    if ! verify_sqlite_loads >/dev/null 2>&1; then
+        echo -e "${YELLOW}⚠ @photostructure/sqlite doesn't load — clean reinstalling...${NC}"
+        rm -rf node_modules/@photostructure/sqlite
+        npm install @photostructure/sqlite --legacy-peer-deps 2>&1 || true
+        if ! verify_sqlite_loads >/dev/null 2>&1; then
+            echo -e "${RED}❌ @photostructure/sqlite cannot be made to load — server cannot start.${NC}"
+            echo -e "${YELLOW}This is unusual — the library ships prebuilds for all platforms.${NC}"
+            echo -e "${YELLOW}Try a clean reinstall:${NC}"
+            echo -e "${YELLOW}  cd $PC2_DIR && rm -rf node_modules package-lock.json && npm install${NC}"
+            verify_sqlite_loads
             exit 1
         fi
-        echo -e "${GREEN}✓ better-sqlite3 recovered via clean reinstall${NC}"
+        echo -e "${GREEN}✓ @photostructure/sqlite recovered via clean reinstall${NC}"
     else
-        echo -e "${GREEN}✓ better-sqlite3 verified${NC}"
+        echo -e "${GREEN}✓ @photostructure/sqlite verified${NC}"
     fi
 
     # ─── node-datachannel ─────────────────────────────────────────────
@@ -852,10 +850,30 @@ chmod 440 /etc/sudoers.d/amneziawg"
     
     # Stop any existing pc2 process
     pm2 delete pc2 2>/dev/null || true
-    
-    # Start with pm2
+
+    # Start with pm2.
+    #
+    # v1.2.7+: prefer ecosystem.config.cjs (at PC2 repo root, one level
+    # above pc2-node) over `pm2 start npm`. This:
+    #   - registers the process with env defaults from the file
+    #     (cluster pinning, log paths, restart_delay, kill_timeout, …)
+    #   - runs `node dist/index.js` directly instead of via an npm
+    #     wrapper — pm2 then kills the actual node on restart instead
+    #     of orphaning the child process behind a dead npm shell
+    #   - matches what update.sh / install-arm.sh do, so the in-app
+    #     `pm2 startOrRestart ecosystem.config.cjs --only pc2 --update-env`
+    #     used by UpdateService finds a matching app and refreshes env
+    # Falls back to the old `pm2 start npm` form on the rare clone where
+    # the ecosystem file is missing (e.g. very old branch checkout).
     echo -e "${CYAN}Starting PC2 with PM2 process manager...${NC}"
-    pm2 start npm --name "pc2" -- start
+    PC2_ROOT_DIR="$(dirname "$PC2_DIR")"
+    if [[ -f "$PC2_ROOT_DIR/ecosystem.config.cjs" ]]; then
+        cd "$PC2_ROOT_DIR"
+        pm2 start "$PC2_ROOT_DIR/ecosystem.config.cjs"
+        cd "$PC2_DIR"
+    else
+        pm2 start npm --name "pc2" -- start
+    fi
     
     # Wait a moment for server to start
     sleep 3

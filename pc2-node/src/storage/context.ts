@@ -5,7 +5,7 @@
  * Powers the awareness layer — feeding real-world context into AI conversations.
  */
 
-import Database from 'better-sqlite3';
+import { type Database } from './database.js';
 
 export interface ContextEvent {
   type: 'location' | 'photo' | 'voice_transcript' | 'activity' | 'environment';
@@ -32,9 +32,9 @@ export interface StoredContextEvent extends ContextEvent {
 }
 
 export class ContextStore {
-  private db: Database.Database;
+  private db: Database;
 
-  constructor(db: Database.Database) {
+  constructor(db: Database) {
     this.db = db;
   }
 

@@ -881,6 +881,15 @@ async function init() {
     return;
   }
 
+  // v1.2.7: clear any stale "Playback Error" left over from a previous
+  // attempt before the user retried. Otherwise the old red error pane
+  // stays visible behind/under the new loading state and the user sees
+  // misleading text from a previous (now-stale) failure for ~hundreds of
+  // ms before /init responds. Belt-and-braces with the same toggle in
+  // the pin_in_progress retry loop.
+  $error.style.display = 'none';
+  $loading.style.display = 'flex';
+
   try {
     if (STANDALONE && !LIT_AUTH_SIG) {
       await performStandaloneLitAuth();
