@@ -154,6 +154,7 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
           "style-src 'self' 'unsafe-inline' https:; " +
           "img-src 'self' data: blob: https:; " +
           "font-src 'self' data: https: moz-extension: chrome-extension:; " +
+          "frame-src 'self' https:; " +
           "connect-src 'self' ws: wss: http: https:;"
         );
       }
@@ -783,6 +784,7 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
           "style-src 'self' 'unsafe-inline' https:; " +
           "img-src 'self' data: blob: https:; " +
           "font-src 'self' data: https: moz-extension: chrome-extension:; " +
+          "frame-src 'self' https:; " +
           "connect-src 'self' ws: wss: http: https:;"
         );
       }
@@ -1298,6 +1300,7 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
         "style-src 'self' 'unsafe-inline' https:; " +
         "img-src 'self' data: blob: https:; " +
         "font-src 'self' data: https: moz-extension: chrome-extension:; " +
+        "frame-src 'self' https:; " +
         "connect-src 'self' ws: wss: http: https:;"
       );
     }
