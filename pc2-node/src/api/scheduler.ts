@@ -3,13 +3,47 @@
  * Cron-like task scheduling for automated agent actions
  */
 
-import { Response, Router } from 'express';
-import { AuthenticatedRequest, authenticate } from './middleware.js';
+import { Response, Router, NextFunction } from 'express';
+import { AuthenticatedRequest, authenticate, requireOwner } from './middleware.js';
 import { logger } from '../utils/logger.js';
 import { DatabaseManager } from '../storage/index.js';
 import { randomUUID } from 'crypto';
 
 const router = Router();
+
+/**
+ * SEC-A18 (2026-04-22 audit): actions that, once an executor is wired,
+ * spawn shell commands or mutate the host. These must never be persisted
+ * by a tethered wallet — even though no executor exists today, deferred
+ * RCE rows in the DB become live RCE the moment the runner ships.
+ *
+ * Reviewed at every release; new actions added to SUPPORTED_ACTIONS must
+ * be classified here.
+ */
+const DANGEROUS_ACTIONS = new Set<string>([
+  'terminal_exec',
+  'terminal_script',
+  'git_pull',
+]);
+
+/**
+ * Middleware: if the request body's `action` is in DANGEROUS_ACTIONS,
+ * require owner. Otherwise let the underlying authenticate middleware
+ * decide (tethered wallets can still create http_request / backup_create
+ * tasks for themselves).
+ */
+function requireOwnerForDangerousAction(
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction,
+): void {
+  const action = (req.body && typeof req.body.action === 'string') ? req.body.action : '';
+  if (action && DANGEROUS_ACTIONS.has(action)) {
+    requireOwner(req, res, next);
+    return;
+  }
+  next();
+}
 
 /**
  * Supported cron expression formats (simplified)
@@ -513,12 +547,16 @@ async function handleTriggerTask(req: AuthenticatedRequest, res: Response): Prom
 }
 
 // Register routes
-router.post('/tasks', authenticate, handleCreateTask);
+// SEC-A18 (2026-04-22 audit): create/update/trigger paths gate dangerous
+// actions (terminal_exec / terminal_script / git_pull) behind requireOwner.
+// Read/list/delete remain authenticate-only — owners and tethered wallets
+// can both inspect and clean up their own task rows.
+router.post('/tasks', authenticate, requireOwnerForDangerousAction, handleCreateTask);
 router.get('/tasks', authenticate, handleListTasks);
 router.get('/tasks/:id', authenticate, handleGetTask);
-router.patch('/tasks/:id', authenticate, handleUpdateTask);
-router.put('/tasks/:id', authenticate, handleUpdateTask);
+router.patch('/tasks/:id', authenticate, requireOwnerForDangerousAction, handleUpdateTask);
+router.put('/tasks/:id', authenticate, requireOwnerForDangerousAction, handleUpdateTask);
 router.delete('/tasks/:id', authenticate, handleDeleteTask);
 router.post('/tasks/:id/trigger', authenticate, handleTriggerTask);
 
-export { router as schedulerRouter, SUPPORTED_ACTIONS };
+export { router as schedulerRouter, SUPPORTED_ACTIONS, DANGEROUS_ACTIONS };

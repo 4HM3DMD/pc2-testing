@@ -525,7 +525,7 @@ const fr = {
         
         // Wallet
         'total_balance': 'Solde total',
-        'universal': 'Universel',
+        'universal': 'Agent Wallet',
         'send': 'Envoyer',
         'receive': 'Recevoir',
         'tokens': 'Jetons',

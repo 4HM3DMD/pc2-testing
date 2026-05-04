@@ -10,7 +10,8 @@
  * SECURITY: All operations are scoped to wallet + agent for isolation.
  */
 
-import Database from 'better-sqlite3';
+import { DatabaseSync, enhance } from '@photostructure/sqlite';
+import { type Database } from '../../../storage/database.js';
 import path from 'path';
 import { logger } from '../../../utils/logger.js';
 import { EmbeddingProvider, EmbeddingResult } from './EmbeddingProvider.js';
@@ -90,7 +91,7 @@ function sanitizePathComponent(value: string, name: string): string {
  * Provides vector-based semantic search for agent memories.
  */
 export class VectorMemoryStore {
-  private db: Database.Database | null = null;
+  private db: Database | null = null;
   private config: VectorStoreConfig;
   private dbPath: string;
   private hasVectorSupport = false;
@@ -139,8 +140,9 @@ export class VectorMemoryStore {
       const dir = path.dirname(this.dbPath);
       fs.mkdirSync(dir, { recursive: true });
 
-      // Open database
-      this.db = new Database(this.dbPath);
+      // Open database (v1.2.7: @photostructure/sqlite + enhance() wrapper
+      // gives us better-sqlite3-compatible .pragma() and .transaction()).
+      this.db = enhance(new DatabaseSync(this.dbPath));
       this.db.pragma('journal_mode = WAL');
 
       // Try to load sqlite-vec extension

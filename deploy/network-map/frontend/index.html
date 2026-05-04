@@ -3,16 +3,139 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>PC2 Network Map - Live Decentralized Network Stats</title>
-  <meta name="description" content="Real-time visualization of the PC2 decentralized cloud network. Track nodes online, network growth, and health statistics.">
-  <meta property="og:title" content="PC2 Network Map">
-  <meta property="og:description" content="Watch the decentralized PC2 network grow in real-time.">
+  <title>ElastOS World Computer Network — Live Node Map | Elacity</title>
+  <meta name="description" content="Live map of the ElastOS world computer network. Track online nodes, supernodes, and peer connections in real time. Run your own sovereign cloud node.">
+  <meta name="keywords" content="ElastOS, world computer, node map, decentralized network, sovereign cloud, personal cloud compute, PC2, supernode, peer-to-peer, blockchain nodes, Elacity, node monitor, network dashboard, live node tracker">
+  <meta name="author" content="Elacity Labs">
+  <link rel="canonical" href="https://map.ela.city">
+
+  <!-- Open Graph -->
+  <meta property="og:title" content="ElastOS World Computer Network — Live Node Map">
+  <meta property="og:description" content="Live map of the ElastOS world computer network. Track online nodes, supernodes, and peer connections in real time.">
+  <meta property="og:image" content="https://map.ela.city/og-map.png">
+  <meta property="og:url" content="https://map.ela.city">
   <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Elacity">
+
+  <!-- Twitter Card -->
   <meta name="twitter:card" content="summary_large_image">
-  <link rel="icon" href="/favicon.ico">
+  <meta name="twitter:title" content="ElastOS World Computer Network — Live Node Map">
+  <meta name="twitter:description" content="Live map of the ElastOS world computer network. Track online nodes, supernodes, and peer connections in real time.">
+  <meta name="twitter:image" content="https://map.ela.city/og-map.png">
+
+  <meta name="google-site-verification" content="googleeb1a074dd04be09b.html">
+  <meta name="theme-color" content="#0c0c0e">
+
+  <!-- Google Analytics (GA4) -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-QW5NN8K9DS"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+    gtag('config', 'G-QW5NN8K9DS');
+  </script>
+
+  <!-- Favicons -->
+  <link rel="icon" type="image/x-icon" href="/favicon.ico">
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+
+  <!-- Preloads -->
+  <link rel="preload" href="/images/elacity-labs-logo.svg" as="image">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <!-- JSON-LD: WebApplication -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "WebApplication",
+    "name": "ElastOS World Computer Network Map",
+    "url": "https://map.ela.city",
+    "description": "Real-time visualization of the ElastOS decentralized world computer network. Monitor node status, supernode backbone, peer connections, and network health.",
+    "applicationCategory": "NetworkMonitoring",
+    "operatingSystem": "Web",
+    "browserRequirements": "Requires WebGL support",
+    "offers": {
+      "@type": "Offer",
+      "price": "0",
+      "priceCurrency": "USD"
+    },
+    "creator": {
+      "@type": "Organization",
+      "name": "Elacity Labs",
+      "url": "https://elacitylabs.com"
+    },
+    "screenshot": "https://map.ela.city/og-map.png",
+    "featureList": [
+      "Live node status monitoring",
+      "3D world computer globe visualization",
+      "Network topology graph",
+      "Supernode backbone tracking",
+      "Real-time WebSocket updates",
+      "Node activity classification"
+    ]
+  }
+  </script>
+
+  <!-- JSON-LD: Organization -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "Organization",
+    "name": "Elacity Labs",
+    "url": "https://elacitylabs.com",
+    "logo": "https://elacitylabs.com/logo.png",
+    "description": "Building the world computer you own.",
+    "sameAs": [
+      "https://ela.city",
+      "https://elacitylabs.com",
+      "https://docs.ela.city"
+    ]
+  }
+  </script>
+
+  <!-- JSON-LD: Dataset -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "Dataset",
+    "name": "ElastOS Network Node Data",
+    "description": "Real-time dataset of all registered ElastOS world computer nodes including status, type (supernode/PC2/registered), and activity classification.",
+    "url": "https://map.ela.city",
+    "license": "https://creativecommons.org/licenses/by/4.0/",
+    "creator": {
+      "@type": "Organization",
+      "name": "Elacity Labs"
+    },
+    "temporalCoverage": "2025/..",
+    "variableMeasured": [
+      {
+        "@type": "PropertyValue",
+        "name": "Online Nodes",
+        "description": "Number of ElastOS nodes currently online"
+      },
+      {
+        "@type": "PropertyValue",
+        "name": "Supernodes",
+        "description": "Number of active supernode backbone nodes"
+      },
+      {
+        "@type": "PropertyValue",
+        "name": "Total Registered",
+        "description": "Total number of registered network nodes"
+      }
+    ],
+    "distribution": {
+      "@type": "DataDownload",
+      "contentUrl": "https://map.ela.city/api/nodes?limit=500",
+      "encodingFormat": "application/json"
+    }
+  }
+  </script>
+
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -25,6 +148,22 @@
 </head>
 <body>
   <div id="root"></div>
+  <noscript>
+    <div style="max-width:800px;margin:60px auto;padding:0 24px;color:#ccc;font-family:Inter,system-ui,sans-serif;line-height:1.7">
+      <h1 style="font-size:24px;color:#fff;margin-bottom:16px">ElastOS World Computer Network</h1>
+      <p style="margin-bottom:12px">
+        Real-time map of the ElastOS decentralized world computer network.
+        Track online nodes, supernodes, and peer-to-peer connections.
+        ElastOS is the sovereign cloud operating system — run it on your own hardware,
+        connect directly, trade rights peer-to-peer. No platform. No middleman.
+        Under blockchain law.
+      </p>
+      <p>
+        <a href="https://docs.ela.city/cloud/getting-started" style="color:#F0B90B">Set up your node</a> |
+        <a href="https://elacitylabs.com" style="color:#F0B90B">Learn more at Elacity Labs</a>
+      </p>
+    </div>
+  </noscript>
   <script type="module" src="/src/main.jsx"></script>
 </body>
 </html>

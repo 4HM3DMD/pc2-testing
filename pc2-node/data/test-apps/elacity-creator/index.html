@@ -1,0 +1,750 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Elacity Creator</title>
+  <link rel="icon" type="image/png" sizes="192x192" href="favicon-192.png" />
+  <link rel="icon" type="image/png" sizes="128x128" href="favicon-128.png" />
+  <link rel="icon" type="image/png" sizes="64x64" href="favicon-64.png" />
+  <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png" />
+  <link rel="shortcut icon" href="favicon.ico" />
+  <link rel="apple-touch-icon" href="favicon-192.png" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- Header -->
+    <header id="app-header">
+      <div class="header-left">
+        <h1>Elacity Creator</h1>
+        <div class="header-tabs">
+          <button class="header-tab active" data-tab="mint" id="tab-mint">Mint</button>
+          <button class="header-tab" data-tab="channels" id="tab-channels">Channels</button>
+        </div>
+      </div>
+      <div class="header-right">
+        <button id="wallet-btn" class="wallet-btn">Connect Wallet</button>
+      </div>
+    </header>
+
+    <!-- Main content: Mint view -->
+    <main id="main" data-view="mint">
+      <!-- Stepper — continuous track with labels above -->
+      <div id="steps-bar">
+        <div class="step active" data-step="1">
+          <span class="step-num">1</span>
+          <span>Choose</span>
+        </div>
+        <div class="step-line"></div>
+        <div class="step" data-step="2">
+          <span class="step-num">2</span>
+          <span>Describe</span>
+        </div>
+        <div class="step-line"></div>
+        <div class="step" data-step="3">
+          <span class="step-num">3</span>
+          <span>Publish</span>
+        </div>
+        <div class="step-line"></div>
+        <div class="step" data-step="4">
+          <span class="step-num">4</span>
+          <span>Done</span>
+        </div>
+      </div>
+
+      <!-- Scene 1: Choose Your Asset (Channel + File Upload) -->
+      <section id="step-1" class="step-panel active" role="tabpanel" aria-labelledby="step-1-label">
+
+        <!-- Channel: Loading state -->
+        <div id="channel-loading" class="channel-step-state" style="text-align:center; padding:24px 0; color:var(--text-muted);">
+          <p style="font-size:15px;">Connect your wallet to load channels...</p>
+        </div>
+
+        <!-- Channel: Has channels — selection UI -->
+        <div id="channel-select-area" class="channel-step-state" style="display:none;">
+          <div class="form-group" style="margin-bottom:16px;">
+            <label for="asset-channel">Channel <span class="required">*</span></label>
+            <div class="channel-row">
+              <select id="asset-channel">
+                <option value="">Loading channels...</option>
+              </select>
+              <button type="button" class="btn btn-accent" id="btn-create-channel" title="Create a new channel on Base">+ New Channel</button>
+            </div>
+            <input type="text" id="asset-channel-custom" class="hidden" placeholder="0x... channel address" style="margin-top:6px;" />
+            <span class="field-hint" id="channel-hint">Select a channel to mint into</span>
+          </div>
+        </div>
+
+        <!-- Channel: No channels — prominent creation prompt -->
+        <div id="channel-empty-state" class="channel-step-state" style="display:none;">
+          <div style="text-align:center; padding:16px 0 24px;">
+            <div style="font-size:40px; margin-bottom:8px;">📡</div>
+            <h3 style="margin:0 0 6px; font-size:18px; font-weight:600; color:var(--text);">Create Your First Channel</h3>
+            <p style="margin:0 0 16px; font-size:13px; color:var(--text-muted); max-width:380px; margin-left:auto; margin-right:auto;">Channels are where your digital assets live on the Elacity marketplace.</p>
+            <button type="button" class="btn btn-primary" id="btn-create-first-channel" style="font-size:14px; padding:10px 24px;">Create Channel</button>
+          </div>
+        </div>
+
+        <!-- Channel creation form (shared by both create paths) -->
+        <div id="channel-create-config" style="display:none; padding:16px; background:var(--bg-elevated); border:1px solid var(--border); border-radius:var(--radius-sm); margin-bottom:16px;">
+          <h3 style="margin:0 0 16px; font-size:16px; font-weight:600; color:var(--text);">New Channel</h3>
+          <div class="form-group" style="margin-bottom:12px;">
+            <label for="new-channel-name">Channel Name <span class="required">*</span></label>
+            <input type="text" id="new-channel-name" placeholder="e.g. My Photography Channel" maxlength="80" />
+          </div>
+          <div class="form-group" style="margin-bottom:12px;">
+            <label for="new-channel-description">Description <span class="optional-tag">(optional)</span></label>
+            <textarea id="new-channel-description" rows="2" placeholder="What kind of content will you publish here?" maxlength="500" style="width:100%; resize:vertical;"></textarea>
+          </div>
+
+          <!-- Subscription Plans -->
+          <div class="form-group" id="channel-plans-section" style="margin-bottom:12px;">
+            <label>Subscription Plans <span class="optional-tag">(optional)</span></label>
+            <span class="field-hint" style="margin-bottom:4px;">Let subscribers access your channel for a recurring fee</span>
+            <div id="plans-container"></div>
+            <div style="display:flex; gap:8px; margin-top:6px;">
+              <button type="button" id="btn-add-plan" class="inline-btn">+ Add Plan</button>
+              <button type="button" id="btn-use-default-plans" class="inline-btn primary">Use 3-Tier Template</button>
+            </div>
+          </div>
+
+          <!-- Token-Gating -->
+          <div class="form-group" id="channel-tokengating-section" style="margin-bottom:12px;">
+            <label>VIP Token Access <span class="optional-tag">(optional)</span></label>
+            <span class="field-hint" style="margin-bottom:4px;">Require holders of specific tokens to access this channel.</span>
+            <div id="token-gate-container"></div>
+            <button type="button" id="btn-add-token-gate" class="inline-btn">+ Add Token Gate</button>
+          </div>
+
+          <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:16px;">
+            <button type="button" class="btn btn-secondary" id="btn-cancel-channel" style="height:36px; font-size:13px; padding:0 14px;">Cancel</button>
+            <button type="button" class="btn btn-primary" id="btn-deploy-channel" style="height:36px; font-size:13px; padding:0 14px;">Deploy Channel</button>
+          </div>
+        </div>
+
+        <!-- File upload -->
+        <div class="drop-zone" id="drop-zone" role="button" aria-label="Select file to publish">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="17 8 12 3 7 8"/>
+            <line x1="12" y1="3" x2="12" y2="15"/>
+          </svg>
+          <p class="drop-text">Drop your file here</p>
+          <p class="drop-hint">or click to browse</p>
+          <p class="drop-formats">Video, audio, images, PDFs, 3D models, AI models, datasets, code — any digital asset</p>
+          <input type="file" id="file-input" hidden />
+        </div>
+
+        <div id="file-preview" class="file-preview hidden">
+          <div class="file-info">
+            <div class="file-icon" id="file-icon">📄</div>
+            <div class="file-details">
+              <span class="file-name" id="file-name"></span>
+              <span class="file-meta" id="file-meta"></span>
+            </div>
+            <button class="file-remove" id="file-remove" title="Remove file" aria-label="Remove selected file">&times;</button>
+          </div>
+          <div id="preview-settings-section" class="preview-settings" style="display:none;">
+            <label>
+              <input type="checkbox" id="preview-enabled" checked /> Enable preview
+            </label>
+            <span style="font-size:12px; color:var(--text-muted);">Duration:</span>
+            <input type="range" id="preview-duration" min="5" max="60" step="5" value="15" style="width:120px;" />
+            <span id="preview-duration-display" style="font-size:13px; color:var(--text); min-width:26px; font-weight:500;">15s</span>
+            <span class="preview-hint">Buyers can sample this clip before purchasing</span>
+          </div>
+        </div>
+
+        <!-- Access method (moved here so pipeline knows whether to encrypt) -->
+        <div id="step1-access-method" class="form-group" style="display:none; margin-top:16px;">
+          <label>Access Method</label>
+          <div class="access-cards" id="access-cards">
+            <div class="access-card" data-value="free">
+              <span class="access-card-title">Free</span>
+              <span class="access-card-desc">No charge — no encryption</span>
+            </div>
+            <div class="access-card" data-value="buy_once">
+              <span class="access-card-title">Buy Once</span>
+              <span class="access-card-desc">One-time purchase</span>
+            </div>
+            <div class="access-card selected" data-value="buy_and_resell">
+              <span class="access-card-title">Buy & Resell</span>
+              <span class="access-card-desc">Resale enabled</span>
+            </div>
+          </div>
+          <select id="asset-access" style="display:none;">
+            <option value="buy_and_resell" selected>Buy & Resell</option>
+            <option value="buy_once">Buy Once</option>
+            <option value="free">Free</option>
+          </select>
+
+          <!-- Pricing + Supply — shown when paid access method selected -->
+          <div id="step1-price-row" style="margin-top:12px;">
+            <label>Price <span class="required">*</span></label>
+            <div class="price-compound">
+              <input type="number" id="asset-price" placeholder="4.99" min="0" max="1000000" step="0.01" value="4.99" />
+              <select id="asset-currency">
+                <option value="0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" selected>USDC</option>
+                <option value="0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2">USDT</option>
+                <option value="0x0000000000000000000000000000000000000000">ETH</option>
+              </select>
+            </div>
+            <span class="field-hint" id="revenue-calc">Revenue projection: 10,000 copies × 4.99 = 49,900</span>
+
+            <div class="form-group" style="margin-top:12px;">
+              <label for="asset-copies">Copies / Supply</label>
+              <input type="number" id="asset-copies" placeholder="10000" min="1" max="10000" step="1" value="10000" />
+              <div class="supply-presets" id="supply-tiers">
+                <button type="button" class="supply-preset" data-supply="1000" data-price="4.99">Standard (1,000)</button>
+                <button type="button" class="supply-preset" data-supply="384" data-price="12.99">Limited (384)</button>
+                <button type="button" class="supply-preset" data-supply="125" data-price="39.99">Exclusive (125)</button>
+              </div>
+            </div>
+
+            <div class="form-group" id="reseller-cut-group" style="margin-top:8px;">
+              <label>Reseller Cut: <span id="reseller-cut-display">90%</span></label>
+              <input type="range" id="reseller-cut" min="100" max="900" step="10" value="900" />
+              <span class="field-hint">Reseller keeps <span id="reseller-pct">90</span>%, revenue partners get <span id="partner-pct">10</span>%</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="step-actions">
+          <button class="btn btn-primary" id="btn-to-step-2" disabled>Continue</button>
+        </div>
+      </section>
+
+      <!-- Scene 2: Describe Your Content -->
+      <section id="step-2" class="step-panel" role="tabpanel" aria-labelledby="step-2-label">
+        <div class="form-sections">
+
+          <!-- Section A: Basics -->
+          <div class="form-section" data-section="basics">
+            <div class="form-section-header" onclick="this.parentElement.classList.toggle('collapsed')">
+              <span class="form-section-title">Basics</span>
+              <span class="form-section-chevron">&#9662;</span>
+            </div>
+            <div class="form-section-body">
+              <div class="form-group">
+                <label for="asset-title">Title <span class="required">*</span></label>
+                <input type="text" id="asset-title" placeholder="Give your asset a name" maxlength="120" />
+                <span class="char-count" id="title-char-count">0 / 120</span>
+              </div>
+              <div class="form-group">
+                <label for="asset-description">Description <span class="optional-tag">(optional)</span></label>
+                <textarea id="asset-description" rows="3" placeholder="What is this asset? How should someone use it?" maxlength="2000"></textarea>
+                <span class="char-count" id="desc-char-count">0 / 2000</span>
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="asset-category">Category <span class="required">*</span></label>
+                  <select id="asset-category">
+                    <option value="">Select category...</option>
+                    <option value="ebook">E-book (EPUB / PDF)</option>
+                    <option value="comic">Comic / Graphic Novel (CBZ)</option>
+                    <option value="image">Image / Photography</option>
+                    <option value="audio">Audio / Music</option>
+                    <option value="video">Video</option>
+                    <option value="3d-model">3D Model</option>
+                    <option value="ai-model">AI Model</option>
+                    <option value="dataset">Dataset</option>
+                    <option value="code">Code / Software</option>
+                    <option value="template">Template / Design</option>
+                    <option value="font">Font</option>
+                    <option value="document">Document</option>
+                    <option value="skill">AI Agent Skill</option>
+                    <option value="other">Other</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label for="asset-tags">Tags <span class="optional-tag">(comma separated)</span></label>
+                  <input type="text" id="asset-tags" placeholder="e.g. machine-learning, pytorch" maxlength="200" />
+                </div>
+              </div>
+
+              <!-- Cover Image -->
+              <div class="form-group">
+                <label>Cover Image <span class="optional-tag">(optional)</span></label>
+                <span class="field-hint" style="margin-bottom:4px;">Max 2 MB, 1280×720 recommended. Auto-generated if left empty.</span>
+                <div id="thumb-drop-zone" class="thumb-drop-zone">
+                  <span class="thumb-drop-text">Click or drop an image</span>
+                  <input type="file" id="thumb-input" hidden accept="image/png,image/jpeg,image/jpg,image/bmp,image/webp" />
+                </div>
+                <div id="thumb-preview" class="thumb-preview hidden">
+                  <img id="thumb-preview-img" alt="Thumbnail preview" />
+                  <button type="button" id="thumb-remove" class="thumb-remove" title="Remove thumbnail">&times;</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Distribution (hidden for free content) -->
+          <div class="form-section collapsed" data-section="distribution">
+            <div class="form-section-header" onclick="this.parentElement.classList.toggle('collapsed')">
+              <span class="form-section-title">Distribution</span>
+              <span class="form-section-chevron">&#9662;</span>
+            </div>
+            <div class="form-section-body">
+              <!-- Revenue split bar -->
+              <div class="form-group">
+                <label>Revenue Split</label>
+                <div class="revenue-split-bar" id="revenue-split-bar">
+                  <div class="revenue-split-segment" id="creator-split-segment" style="width:95%; background: var(--accent);"></div>
+                  <div class="revenue-split-segment" style="width:5%; background: var(--text-muted);"></div>
+                </div>
+                <div class="revenue-split-legend">
+                  <span><span class="revenue-split-legend-dot" style="background:var(--accent);"></span>Creator 95%</span>
+                  <span><span class="revenue-split-legend-dot" style="background:var(--text-muted);"></span>Platform 5%</span>
+                </div>
+              </div>
+
+              <!-- Revenue Distribution -->
+              <div class="form-group">
+                <label>Revenue Partners</label>
+                <div id="royalty-container">
+                  <div class="royalty-row">
+                    <select class="royalty-role" style="width:90px; font-size:12px;">
+                      <option value="A" selected>Creator</option>
+                      <option value="B">Partner</option>
+                      <option value="C">Distributor</option>
+                    </select>
+                    <input class="royalty-address" type="text" placeholder="0x... wallet" style="flex:1;" />
+                    <input class="royalty-percent" type="number" min="0.1" max="95" step="0.1" value="95" style="width:70px; text-align:right;" />
+                    <span style="font-size:12px; color:var(--text-muted);">%</span>
+                  </div>
+                </div>
+                <div style="display:flex; gap:8px; align-items:center; margin-top:6px;">
+                  <button type="button" id="btn-add-royalty" class="inline-btn">+ Add Partner</button>
+                  <span class="field-hint" id="royalty-total-hint" style="margin:0;">Platform fee: 5% (auto-added). Your shares must total 95%.</span>
+                </div>
+              </div>
+
+            </div>
+          </div>
+
+          <!-- Licensing & Settings -->
+          <div class="form-section" data-section="licensing">
+            <div class="form-section-header" onclick="this.parentElement.classList.toggle('collapsed')">
+              <span class="form-section-title">Licensing & Settings</span>
+              <span class="form-section-chevron">&#9662;</span>
+            </div>
+            <div class="form-section-body">
+
+              <div class="form-group">
+                <div class="toggle-row">
+                  <div class="toggle-track" id="ai-training-toggle" role="switch" aria-checked="false" tabindex="0">
+                    <div class="toggle-knob"></div>
+                  </div>
+                  <div class="toggle-label-group">
+                    <span class="toggle-label">Allow AI training</span>
+                    <span class="field-hint">Let buyers use this content to train AI models — this may increase demand from AI companies and researchers, leading to more sales</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="form-group">
+                <div class="toggle-row">
+                  <div class="toggle-track" id="adult-toggle" role="switch" aria-checked="false" tabindex="0">
+                    <div class="toggle-knob"></div>
+                  </div>
+                  <span class="toggle-label" id="adult-toggle-label">Adult content (18+)</span>
+                </div>
+                <span class="field-hint">Flagged in metadata so platforms can filter appropriately</span>
+                <input type="checkbox" id="adult-content-check" style="display:none;" />
+              </div>
+
+              <!-- Hidden defaults for license terms (always on until dApps enforce them) -->
+              <input type="hidden" id="license-commercial" value="true" />
+              <input type="hidden" id="license-modification" value="false" />
+              <input type="hidden" id="license-attribution" value="true" />
+
+              <input type="hidden" id="license-type" value="perpetual" />
+              <!-- Smart defaults for AI training details (no UI — kept simple) -->
+              <input type="hidden" id="training-scope" value="commercial" />
+              <input type="hidden" id="output-ownership" value="licensee" />
+
+            </div>
+          </div>
+
+        </div>
+
+        <div class="step-actions">
+          <button class="btn btn-secondary" id="btn-back-to-1">Back</button>
+          <button class="btn btn-primary" id="btn-to-step-3" disabled>Continue</button>
+        </div>
+      </section>
+
+      <!-- Scene 3: Publish -->
+      <section id="step-3" class="step-panel" role="tabpanel" aria-labelledby="step-3-label">
+        <!-- Summary card -->
+        <div class="review-summary" id="review-summary"></div>
+
+        <!-- Smooth progress bar -->
+        <div class="smooth-progress" id="smooth-progress">
+          <div class="smooth-progress-track">
+            <div class="smooth-progress-fill" id="smooth-progress-fill"></div>
+          </div>
+          <div class="smooth-progress-label" id="smooth-progress-label">Preparing your asset...</div>
+        </div>
+
+        <!-- Technical progress (hidden by default, shown via details) -->
+        <details id="tech-progress-details" style="margin-bottom: 16px;">
+          <summary style="font-size:12px; color:var(--text-muted); cursor:pointer; padding:8px 0;">Show technical details</summary>
+          <div class="progress-container" style="margin-top:8px;">
+            <div class="progress-step" id="prog-connect">
+              <div class="prog-icon">🔌</div>
+              <div class="prog-label">Connect to Lit Protocol</div>
+              <div class="prog-status" id="prog-connect-status">Waiting...</div>
+            </div>
+            <div class="progress-step" id="prog-encrypt">
+              <div class="prog-icon">🔐</div>
+              <div class="prog-label">Encrypt asset</div>
+              <div class="prog-status" id="prog-encrypt-status">Waiting...</div>
+            </div>
+            <div id="media-pipeline-detail" style="display: none; margin: 0 0 8px 36px; border-left: 2px solid var(--accent); padding-left: 14px;">
+              <div style="margin-bottom: 8px;">
+                <div style="background: var(--bg); border-radius: 3px; height: 4px; overflow: hidden;">
+                  <div id="media-progress-bar" style="height: 100%; width: 0%; background: var(--accent); transition: width 0.5s ease; border-radius: 3px;"></div>
+                </div>
+                <div id="media-progress-pct" style="font-size: 11px; color: var(--text-muted); margin-top: 3px; text-align: right;">0%</div>
+              </div>
+              <div id="media-sub-analyze" class="media-sub-step" style="display: flex; align-items: center; gap: 8px; padding: 5px 0; font-size: 12px; color: var(--text-muted);">
+                <span id="media-sub-analyze-icon" style="width: 16px; text-align: center; font-size: 13px; flex-shrink: 0;">○</span>
+                <span style="white-space: nowrap;">Analyze</span>
+                <div style="flex: 1; height: 3px; background: var(--bg); border-radius: 3px; overflow: hidden; margin: 0 4px;"><div id="media-sub-analyze-bar" style="height: 100%; width: 0%; background: var(--accent); transition: width 0.4s ease; border-radius: 3px;"></div></div>
+                <span id="media-sub-analyze-info" style="font-size: 11px; color: var(--text-muted); white-space: nowrap; min-width: 50px; text-align: right;"></span>
+              </div>
+              <div id="media-sub-transcode" class="media-sub-step" style="display: flex; align-items: center; gap: 8px; padding: 5px 0; font-size: 12px; color: var(--text-muted);">
+                <span id="media-sub-transcode-icon" style="width: 16px; text-align: center; font-size: 13px; flex-shrink: 0;">○</span>
+                <span style="white-space: nowrap;">Transcode</span>
+                <div style="flex: 1; height: 3px; background: var(--bg); border-radius: 3px; overflow: hidden; margin: 0 4px;"><div id="media-sub-transcode-bar" style="height: 100%; width: 0%; background: var(--accent); transition: width 0.4s ease; border-radius: 3px;"></div></div>
+                <span id="media-sub-transcode-info" style="font-size: 11px; color: var(--text-muted); white-space: nowrap; min-width: 50px; text-align: right;"></span>
+              </div>
+              <div id="media-sub-fragment" class="media-sub-step" style="display: flex; align-items: center; gap: 8px; padding: 5px 0; font-size: 12px; color: var(--text-muted);">
+                <span id="media-sub-fragment-icon" style="width: 16px; text-align: center; font-size: 13px; flex-shrink: 0;">○</span>
+                <span style="white-space: nowrap;">Fragment</span>
+                <div style="flex: 1; height: 3px; background: var(--bg); border-radius: 3px; overflow: hidden; margin: 0 4px;"><div id="media-sub-fragment-bar" style="height: 100%; width: 0%; background: var(--accent); transition: width 0.4s ease; border-radius: 3px;"></div></div>
+                <span id="media-sub-fragment-info" style="font-size: 11px; color: var(--text-muted); white-space: nowrap; min-width: 50px; text-align: right;"></span>
+              </div>
+              <div id="media-sub-encrypt" class="media-sub-step" style="display: flex; align-items: center; gap: 8px; padding: 5px 0; font-size: 12px; color: var(--text-muted);">
+                <span id="media-sub-encrypt-icon" style="width: 16px; text-align: center; font-size: 13px; flex-shrink: 0;">○</span>
+                <span style="white-space: nowrap;">Encrypt</span>
+                <div style="flex: 1; height: 3px; background: var(--bg); border-radius: 3px; overflow: hidden; margin: 0 4px;"><div id="media-sub-encrypt-bar" style="height: 100%; width: 0%; background: var(--accent); transition: width 0.4s ease; border-radius: 3px;"></div></div>
+                <span id="media-sub-encrypt-info" style="font-size: 11px; color: var(--text-muted); white-space: nowrap; min-width: 50px; text-align: right;"></span>
+              </div>
+              <div id="media-sub-upload" class="media-sub-step" style="display: flex; align-items: center; gap: 8px; padding: 5px 0; font-size: 12px; color: var(--text-muted);">
+                <span id="media-sub-upload-icon" style="width: 16px; text-align: center; font-size: 13px; flex-shrink: 0;">○</span>
+                <span style="white-space: nowrap;">Upload</span>
+                <div style="flex: 1; height: 3px; background: var(--bg); border-radius: 3px; overflow: hidden; margin: 0 4px;"><div id="media-sub-upload-bar" style="height: 100%; width: 0%; background: var(--accent); transition: width 0.4s ease; border-radius: 3px;"></div></div>
+                <span id="media-sub-upload-info" style="font-size: 11px; color: var(--text-muted); white-space: nowrap; min-width: 50px; text-align: right;"></span>
+              </div>
+              <div id="media-elapsed" style="font-size: 11px; color: var(--text-muted); margin-top: 6px; text-align: right;"></div>
+            </div>
+            <div class="progress-step" id="prog-upload-asset">
+              <div class="prog-icon">📦</div>
+              <div class="prog-label">Upload to IPFS</div>
+              <div class="prog-status" id="prog-upload-asset-status">Waiting...</div>
+            </div>
+            <div class="progress-step" id="prog-upload-meta">
+              <div class="prog-icon">📋</div>
+              <div class="prog-label">Upload metadata</div>
+              <div class="prog-status" id="prog-upload-meta-status">Waiting...</div>
+            </div>
+            <div class="progress-step" id="prog-pin">
+              <div class="prog-icon">📌</div>
+              <div class="prog-label">Verify on network</div>
+              <div class="prog-status" id="prog-pin-status">Waiting...</div>
+            </div>
+            <div class="progress-step" id="prog-mint">
+              <div class="prog-icon">⛓️</div>
+              <div class="prog-label">Mint on-chain</div>
+              <div class="prog-status" id="prog-mint-status">Waiting...</div>
+            </div>
+            <div class="progress-step" id="prog-approve">
+              <div class="prog-icon">✅</div>
+              <div class="prog-label">Set marketplace approval</div>
+              <div class="prog-status" id="prog-approve-status">Waiting...</div>
+            </div>
+          </div>
+        </details>
+
+        <!-- Legal gate — single toggle -->
+        <div class="legal-gate" id="sign-gate">
+          <div class="legal-gate-row">
+            <div class="toggle-track" id="legal-toggle" role="switch" aria-checked="false" tabindex="0">
+              <div class="toggle-knob"></div>
+            </div>
+            <span class="legal-gate-text">I confirm I have the rights to publish this content and it complies with all applicable laws</span>
+          </div>
+          <!-- Hidden checkboxes preserved for JS attestation logic -->
+          <div class="legal-checkboxes" aria-hidden="true">
+            <label><input type="checkbox" class="legal-check" data-attestation="rights" /><span></span></label>
+            <label><input type="checkbox" class="legal-check" data-attestation="lawful" /><span></span></label>
+            <label><input type="checkbox" class="legal-check" data-attestation="ip" /><span></span></label>
+            <label><input type="checkbox" class="legal-check" data-attestation="terms" /><span></span></label>
+          </div>
+          <div class="legal-gate-details">
+            <details>
+              <summary>Read full terms</summary>
+              <div class="legal-full-text">
+                <ul>
+                  <li>I am the rightful owner or have obtained all necessary rights, licenses, and permissions to distribute this content</li>
+                  <li>This content does not contain illegal, harmful, defamatory, or prohibited material under applicable law</li>
+                  <li>No unauthorized use of third-party copyrighted, trademarked, or proprietary material</li>
+                  <li>I accept responsibility for this publication and agree to the network terms of use</li>
+                </ul>
+              </div>
+            </details>
+          </div>
+        </div>
+
+
+        <div id="progress-error" class="progress-error hidden"></div>
+
+        <div class="step-actions" style="flex-direction: column; gap: 8px;">
+          <button class="btn btn-publish" id="btn-sign-mint" disabled><span id="btn-sign-mint-text">Publish</span></button>
+          <p class="publish-hint">This will request a blockchain transaction from your wallet</p>
+          <div style="display: flex; gap: 8px; align-self: stretch;">
+            <button class="btn btn-secondary" id="btn-back-to-2" disabled>Back</button>
+            <button class="btn btn-secondary" id="btn-publish-later" style="display:none; margin-left: auto;">Publish Later</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Scene 4: Done -->
+      <section id="step-4" class="step-panel" role="tabpanel" aria-labelledby="step-4-label">
+        <div class="result-card">
+          <!-- Animated checkmark SVG -->
+          <div class="result-icon">
+            <svg class="result-checkmark" viewBox="0 0 24 24">
+              <circle cx="12" cy="12" r="11" />
+              <polyline points="7 12.5 10.5 16 17 9" />
+            </svg>
+          </div>
+
+          <h2 id="result-title">Your content is live</h2>
+          <p class="result-desc" id="result-desc">Published and available on the network.</p>
+
+          <!-- Key info summary -->
+          <div class="result-summary" id="result-summary-grid">
+            <div class="result-summary-item" id="result-summary-price" style="display:none;">
+              <div class="result-summary-label">Price</div>
+              <div class="result-summary-value" id="result-summary-price-val"></div>
+            </div>
+            <div class="result-summary-item" id="result-summary-copies" style="display:none;">
+              <div class="result-summary-label">Copies</div>
+              <div class="result-summary-value" id="result-summary-copies-val"></div>
+            </div>
+            <div class="result-summary-item" id="result-summary-channel" style="display:none;">
+              <div class="result-summary-label">Channel</div>
+              <div class="result-summary-value" id="result-summary-channel-val"></div>
+            </div>
+          </div>
+
+          <!-- Technical details (collapsible) -->
+          <div class="result-tech-details">
+            <details>
+              <summary>Technical Details</summary>
+              <div class="result-details">
+                <div class="result-row" id="result-row-token" style="display:none">
+                  <span class="result-label">Token ID</span>
+                  <code class="result-value" id="result-token-id"></code>
+                  <button class="copy-btn" data-copy="result-token-id" title="Copy">📋</button>
+                </div>
+                <div class="result-row" id="result-row-channel" style="display:none">
+                  <span class="result-label">Channel</span>
+                  <code class="result-value" id="result-channel"></code>
+                  <button class="copy-btn" data-copy="result-channel" title="Copy">📋</button>
+                </div>
+                <div class="result-row" id="result-row-operative" style="display:none">
+                  <span class="result-label">Operative</span>
+                  <code class="result-value" id="result-operative"></code>
+                  <button class="copy-btn" data-copy="result-operative" title="Copy">📋</button>
+                </div>
+                <div class="result-row">
+                  <span class="result-label">Asset CID</span>
+                  <code class="result-value" id="result-asset-cid"></code>
+                  <button class="copy-btn" data-copy="result-asset-cid" title="Copy">📋</button>
+                </div>
+                <div class="result-row">
+                  <span class="result-label">Metadata CID</span>
+                  <code class="result-value" id="result-meta-cid"></code>
+                  <button class="copy-btn" data-copy="result-meta-cid" title="Copy">📋</button>
+                </div>
+                <div class="result-row">
+                  <span class="result-label">Encryption</span>
+                  <code class="result-value" id="result-encrypt-hash"></code>
+                  <button class="copy-btn" data-copy="result-encrypt-hash" title="Copy">📋</button>
+                </div>
+                <div class="result-row">
+                  <span class="result-label">File Size</span>
+                  <span class="result-value" id="result-size"></span>
+                </div>
+              </div>
+            </details>
+          </div>
+
+          <div class="result-note" id="result-note"></div>
+        </div>
+
+        <div class="result-actions">
+          <button class="btn btn-primary" id="btn-new-asset">Publish Another</button>
+        </div>
+      </section>
+
+      <!-- Fix Gateway Approval Tool -->
+      <section id="tool-fix-approval" class="tool-panel">
+        <details id="fix-approval-details">
+          <summary class="tool-summary">Fix Gateway Approval</summary>
+          <div class="tool-body">
+            <p class="tool-desc">If minting completed but gateway approval failed, use this to send the missing <code>setApprovalForAll</code> transaction.</p>
+            <div class="form-group" style="margin-bottom:12px;">
+              <label for="fix-operative-addr">Operative Address</label>
+              <input type="text" id="fix-operative-addr" placeholder="0x..." />
+            </div>
+            <div id="fix-approval-status" class="tool-status hidden"></div>
+            <div class="tool-actions">
+              <button id="btn-check-approval" class="btn btn-secondary" style="height:36px; font-size:13px; padding:0 14px;">Check Status</button>
+              <button id="btn-fix-approval" class="btn btn-primary" style="height:36px; font-size:13px; padding:0 14px;" disabled>Send Approval Tx</button>
+            </div>
+          </div>
+        </details>
+      </section>
+    </main>
+
+    <!-- Channels view (tab) -->
+    <div id="channels-view" style="display:none; padding:24px; max-width:680px; margin:0 auto;">
+      <div id="channels-view-loading" style="text-align:center; padding:32px 0; color:var(--text-muted);">
+        <p style="font-size:14px;">Connect your wallet to manage channels.</p>
+      </div>
+
+      <div id="channels-view-content" style="display:none;">
+        <!-- Channel selector + create -->
+        <div class="form-group" style="margin-bottom:16px;">
+          <label for="manage-channel-select">Your Channels</label>
+          <div style="display:flex; gap:8px; align-items:center;">
+            <select id="manage-channel-select" style="flex:1;"></select>
+            <button type="button" class="btn btn-accent" id="btn-channels-create" title="Create a new channel">+ New Channel</button>
+          </div>
+        </div>
+
+        <!-- Empty state when user owns no channels -->
+        <div id="channels-view-empty" style="display:none; text-align:center; padding:24px 0;">
+          <div style="font-size:36px; margin-bottom:8px;">📡</div>
+          <p style="margin:0 0 8px; font-size:14px; color:var(--text);">You don't own any channels yet.</p>
+          <p style="margin:0; font-size:13px; color:var(--text-muted);">Create one to start managing subscriptions and access.</p>
+        </div>
+
+        <!-- Channel creation form (reused, cloned from mint view) -->
+        <div id="channels-view-create-form" style="display:none;"></div>
+
+        <!-- Management panel -->
+        <div id="channel-manage-section" style="display:none;">
+          <div id="manage-loading" style="text-align:center; padding:16px 0; color:var(--text-muted); display:none;">
+            <p style="font-size:13px;">Loading channel details...</p>
+          </div>
+
+          <div id="manage-content" style="display:none;">
+
+            <!-- Section: Channel Details -->
+            <div class="manage-section" id="manage-details-section">
+              <div class="manage-section-header" data-target="manage-details-body">
+                <span class="manage-chevron">&#9660;</span> Channel Details
+              </div>
+              <div class="manage-section-body" id="manage-details-body">
+                <div class="form-group" style="margin-bottom:10px;">
+                  <label for="manage-channel-name">Name</label>
+                  <input type="text" id="manage-channel-name" placeholder="Channel name" maxlength="80" />
+                </div>
+                <div class="form-group" style="margin-bottom:10px;">
+                  <label for="manage-channel-description">Description</label>
+                  <textarea id="manage-channel-description" rows="2" placeholder="Channel description" maxlength="500" style="width:100%; resize:vertical;"></textarea>
+                </div>
+                <div style="display:flex; gap:8px; align-items:center;">
+                  <button type="button" class="inline-btn primary" id="btn-save-channel-details">Save Changes</button>
+                  <span id="manage-details-status" style="font-size:12px; color:var(--text-muted);"></span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Section: Subscription Plans -->
+            <div class="manage-section" id="manage-plans-section">
+              <div class="manage-section-header" data-target="manage-plans-body">
+                <span class="manage-chevron">&#9654;</span> Subscription Plans <span id="manage-plans-count" style="font-size:11px; color:var(--text-muted);"></span>
+              </div>
+              <div class="manage-section-body" id="manage-plans-body" style="display:none;">
+                <div id="manage-plans-container"></div>
+                <div style="display:flex; gap:8px; margin-top:6px;">
+                  <button type="button" class="inline-btn" id="btn-manage-add-plan">+ Add Plan</button>
+                </div>
+                <span id="manage-plans-status" style="font-size:12px; color:var(--text-muted); display:block; margin-top:6px;"></span>
+              </div>
+            </div>
+
+            <!-- Section: Token-Gating -->
+            <div class="manage-section" id="manage-gates-section">
+              <div class="manage-section-header" data-target="manage-gates-body">
+                <span class="manage-chevron">&#9654;</span> Token-Gating <span id="manage-gates-count" style="font-size:11px; color:var(--text-muted);"></span>
+              </div>
+              <div class="manage-section-body" id="manage-gates-body" style="display:none;">
+                <div id="manage-gates-container"></div>
+                <div style="display:flex; gap:8px; margin-top:6px;">
+                  <button type="button" class="inline-btn" id="btn-manage-add-gate">+ Add Token Gate</button>
+                </div>
+                <span id="manage-gates-status" style="font-size:12px; color:var(--text-muted); display:block; margin-top:6px;"></span>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Floating progress bar -->
+    <div id="floating-progress" class="floating-progress" style="display:none;">
+      <div class="floating-progress-inner">
+        <div class="floating-progress-track">
+          <div class="floating-progress-fill" id="floating-progress-fill"></div>
+        </div>
+        <div class="floating-progress-info">
+          <span class="floating-progress-text" id="floating-progress-text">Preparing...</span>
+          <span class="floating-progress-pct" id="floating-progress-pct">0%</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Wallet choice modal (Agent Account vs EOA) -->
+    <div id="mint-wallet-choice-modal" class="hidden" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:10000;display:flex;align-items:center;justify-content:center;">
+      <div style="background:#1e1e2e;border-radius:12px;padding:24px;max-width:380px;width:90%;color:#e0e0e0;font-family:inherit;">
+        <h3 id="mint-wc-title" style="margin:0 0 4px;font-size:16px;color:#fff;">Choose Wallet</h3>
+        <p style="margin:0 0 16px;font-size:13px;color:#888;">Select which wallet will own the asset</p>
+        <button id="mint-wc-sa" style="display:flex;align-items:center;gap:10px;width:100%;padding:14px 16px;margin-bottom:8px;background:#2a2a3e;border:1px solid #3b82f6;border-radius:8px;cursor:pointer;color:#e0e0e0;font-size:14px;font-family:inherit;text-align:left;">
+          <span style="font-size:18px;">&#x2B22;</span>
+          <span style="flex:1;">
+            <strong style="color:#fff;">Agent Account</strong><br>
+            <span style="font-size:12px;color:#888;" id="mint-wc-sa-addr"></span>
+          </span>
+          <span style="font-size:11px;background:#3b82f6;color:#fff;padding:2px 8px;border-radius:4px;">Recommended</span>
+        </button>
+        <button id="mint-wc-eoa" style="display:flex;align-items:center;gap:10px;width:100%;padding:14px 16px;background:#2a2a3e;border:1px solid #444;border-radius:8px;cursor:pointer;color:#e0e0e0;font-size:14px;font-family:inherit;text-align:left;">
+          <span style="font-size:18px;">&#x1F4B3;</span>
+          <span style="flex:1;">
+            <strong style="color:#fff;">EOA Wallet</strong><br>
+            <span style="font-size:12px;color:#888;" id="mint-wc-eoa-addr"></span>
+          </span>
+        </button>
+      </div>
+    </div>
+    <style>
+      #mint-wallet-choice-modal.hidden { display: none !important; }
+    </style>
+
+    <!-- Toast container -->
+    <div id="toast-container"></div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.0/ethers.umd.min.js"></script>
+  <script src="app.js?v=3.1.2"></script>
+</body>
+</html>

@@ -103,10 +103,13 @@ If you don't want AmneziaWG available even as a fallback:
 
 ## Installation
 
-AmneziaWG and sing-box (for VLESS Reality) are automatically installed by the PC2 install scripts:
+AmneziaWG and sing-box (for VLESS Reality) are automatically installed by all PC2 install paths:
 
-- **macOS/Linux desktop:** `start-local.sh` builds `amneziawg-go` from source using Go, installs sing-box via Homebrew (macOS) or binary download (Linux)
-- **ARM/Jetson devices:** `install-arm.sh` does the same, auto-detecting the correct architecture
+- **macOS/Linux desktop (terminal):** `start-local.sh` builds `amneziawg-go` from source using Go, installs sing-box via Homebrew (macOS) or binary download (Linux)
+- **ARM/Jetson devices (terminal):** `install-arm.sh` does the same, auto-detecting the correct architecture
+- **Desktop Launcher:** `setupNetworking()` in `pc2Manager.ts` installs the same tools via GUI password prompts (`osascript` on macOS, `pkexec` on Linux)
+
+> **Install Parity Rule:** All three install paths must install the identical set of networking tools. When adding a new tool to any install script, update all three paths and the launcher's `CONTRIBUTING.md`.
 
 ### Requirements
 

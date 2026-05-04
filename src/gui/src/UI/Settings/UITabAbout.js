@@ -217,7 +217,7 @@ export default {
                 if (response.ok) {
                     const health = await response.json();
                     
-                    $el_window.find('#system-current-version').text(health.version || '0.1.0');
+                    $el_window.find('#system-current-version').text(health.version || '–');
                     $el_window.find('#system-database-status').html(
                         health.database === 'connected' 
                             ? `<span class="status-ok">${i18n('connected')}</span>` 

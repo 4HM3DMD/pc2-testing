@@ -5,12 +5,17 @@
  * - Generates new identity on first run
  * - Stores identity securely in data directory
  * - Provides DID (did:boson:{nodeId})
- * - Provides 24-word mnemonic backup
+ * - Provides 24-word mnemonic backup that deterministically derives the keypair
+ * 
+ * Identity versions:
+ * - v1 (legacy): Keys randomly generated, mnemonic independent (cannot derive keys)
+ * - v2 (current): Mnemonic generated first, keys deterministically derived from it
  */
 
-import { generateKeyPairSync, createHash, randomBytes } from 'crypto';
+import { createHash, randomBytes, createHmac } from 'crypto';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
-import { join, dirname } from 'path';
+import { join } from 'path';
+import nacl from 'tweetnacl';
 import { logger } from '../../utils/logger.js';
 import { 
   EncryptedMnemonic, 
@@ -18,6 +23,10 @@ import {
   decryptMnemonicWithSignature,
   getMnemonicSignMessage 
 } from '../../utils/encryption.js';
+
+// Well-known DER prefixes for Ed25519 key encoding (RFC 8410)
+const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
+const ED25519_PKCS8_PREFIX = Buffer.from('302e020100300506032b657004220420', 'hex');
 
 // BIP39 English wordlist (2048 words)
 // Using a simplified subset for demonstration - in production use a full BIP39 library
@@ -94,8 +103,9 @@ const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvw
 export interface NodeIdentity {
   nodeId: string;           // Base58 encoded public key
   did: string;              // did:boson:{nodeId}
-  publicKey: string;        // Hex encoded public key
-  privateKey: string;       // Hex encoded private key (encrypted in storage)
+  publicKey: string;        // Hex encoded public key (SPKI DER)
+  privateKey: string;       // Hex encoded private key (PKCS8 DER)
+  identityVersion?: number; // 1 = legacy (random keys), 2 = mnemonic-derived keys
   mnemonic?: string;        // 24-word recovery phrase (only in memory on first run)
   encryptedMnemonic?: EncryptedMnemonic;  // Encrypted mnemonic (stored on disk)
   adminWalletAddress?: string;  // First wallet to login becomes admin
@@ -177,15 +187,14 @@ export function fromBase58(str: string): Buffer {
 }
 
 /**
- * Generate a mnemonic from entropy
+ * Generate a 24-word mnemonic from 32 bytes of entropy.
+ * Each word is selected by 2 bytes of entropy mod wordlist size.
  */
 function generateMnemonic(entropy: Buffer): string {
   const words: string[] = [];
   const wordlistSize = WORDLIST.length;
   
-  // Use entropy to select 24 words
   for (let i = 0; i < 24; i++) {
-    // Use 2 bytes of entropy per word (allows for larger wordlist)
     const index = (entropy[i * 2 % entropy.length] * 256 + entropy[(i * 2 + 1) % entropy.length]) % wordlistSize;
     words.push(WORDLIST[index]);
   }
@@ -194,26 +203,39 @@ function generateMnemonic(entropy: Buffer): string {
 }
 
 /**
- * Derive keypair from mnemonic
+ * Derive a deterministic 32-byte Ed25519 seed from a mnemonic phrase.
+ * Uses HKDF-SHA256 with a fixed salt for domain separation.
  */
-function deriveFromMnemonic(mnemonic: string): { publicKey: Buffer; privateKey: Buffer } {
-  // Hash the mnemonic to get seed
-  const seed = createHash('sha512').update(mnemonic).digest();
-  
-  // Use first 32 bytes as Ed25519 seed
-  const { publicKey, privateKey } = generateKeyPairSync('ed25519', {
-    privateKeyEncoding: { type: 'pkcs8', format: 'der' },
-    publicKeyEncoding: { type: 'spki', format: 'der' }
-  });
-  
-  // Note: Node.js doesn't support seeded Ed25519 generation directly
-  // In production, use a proper Ed25519 library like @noble/ed25519
-  // For now, we generate a new keypair (mnemonic serves as backup reference)
-  
-  return {
-    publicKey: Buffer.from(publicKey),
-    privateKey: Buffer.from(privateKey)
-  };
+function mnemonicToSeed(mnemonic: string): Buffer {
+  const ikm = Buffer.from(mnemonic, 'utf8');
+  const salt = Buffer.from('pc2-boson-identity-v2', 'utf8');
+  const info = Buffer.from('ed25519-seed', 'utf8');
+
+  // HKDF-Extract: PRK = HMAC-SHA256(salt, ikm)
+  const prk = createHmac('sha256', salt).update(ikm).digest();
+
+  // HKDF-Expand: OKM = HMAC-SHA256(PRK, info || 0x01) truncated to 32 bytes
+  const okm = createHmac('sha256', prk).update(Buffer.concat([info, Buffer.from([0x01])])).digest();
+
+  return okm;
+}
+
+/**
+ * Derive Ed25519 keypair from mnemonic, returned in PKCS8/SPKI DER format
+ * for storage compatibility with existing getKeypair() logic.
+ */
+export function deriveFromMnemonic(mnemonic: string): { publicKey: Buffer; privateKey: Buffer } {
+  const seed = mnemonicToSeed(mnemonic);
+  const kp = nacl.sign.keyPair.fromSeed(new Uint8Array(seed));
+
+  const rawPub = Buffer.from(kp.publicKey);
+  const rawSeed = seed;
+
+  // Wrap in DER format so getKeypair() can extract via slice(-32)
+  const spki = Buffer.concat([ED25519_SPKI_PREFIX, rawPub]);
+  const pkcs8 = Buffer.concat([ED25519_PKCS8_PREFIX, rawSeed]);
+
+  return { publicKey: spki, privateKey: pkcs8 };
 }
 
 export class IdentityService {
@@ -251,33 +273,27 @@ export class IdentityService {
   }
 
   /**
-   * Generate new node identity
+   * Generate new node identity (v2: mnemonic-derived keys).
+   * 
+   * Flow: entropy --> mnemonic --> HKDF seed --> Ed25519 keypair
+   * The mnemonic deterministically produces the same keypair every time.
    */
   private generateIdentity(): NodeIdentity {
-    // Generate Ed25519 keypair
-    const { publicKey, privateKey } = generateKeyPairSync('ed25519', {
-      privateKeyEncoding: { type: 'pkcs8', format: 'der' },
-      publicKeyEncoding: { type: 'spki', format: 'der' }
-    });
-
-    // Extract raw public key (last 32 bytes of SPKI format)
-    const rawPublicKey = publicKey.slice(-32);
-    
-    // Generate node ID (Base58 of public key)
-    const nodeId = toBase58(rawPublicKey);
-    
-    // Generate DID
-    const did = `did:boson:${nodeId}`;
-    
-    // Generate mnemonic for backup
     const entropy = randomBytes(48);
     const mnemonic = generateMnemonic(entropy);
+
+    const { publicKey, privateKey } = deriveFromMnemonic(mnemonic);
+
+    const rawPublicKey = publicKey.slice(-32);
+    const nodeId = toBase58(rawPublicKey);
+    const did = `did:boson:${nodeId}`;
 
     return {
       nodeId,
       did,
       publicKey: publicKey.toString('hex'),
       privateKey: privateKey.toString('hex'),
+      identityVersion: 2,
       mnemonic,
       createdAt: new Date().toISOString()
     };
@@ -587,5 +603,28 @@ export class IdentityService {
    */
   hasAdminWallet(): boolean {
     return !!this.identity?.adminWalletAddress;
+  }
+
+  /**
+   * Whether this identity was created with mnemonic-derived keys (v2).
+   * Legacy (v1) identities have keys independent of the mnemonic.
+   */
+  isMnemonicDerived(): boolean {
+    return this.identity?.identityVersion === 2;
+  }
+
+  /**
+   * Verify that a mnemonic phrase produces the same keypair as this identity.
+   * Only meaningful for v2 identities; always returns false for v1.
+   */
+  verifyMnemonic(mnemonic: string): boolean {
+    if (!this.identity) return false;
+
+    try {
+      const { publicKey } = deriveFromMnemonic(mnemonic);
+      return publicKey.toString('hex') === this.identity.publicKey;
+    } catch {
+      return false;
+    }
   }
 }

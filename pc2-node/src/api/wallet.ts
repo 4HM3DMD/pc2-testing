@@ -114,7 +114,24 @@ router.post('/proposals/:id/approve', authenticate, async (req: AuthenticatedReq
       res.status(404).json({ error: 'Proposal not found or expired' });
       return;
     }
-    
+
+    // SEC-A12 (2026-04-22 audit): proposals are bound to the wallet that
+    // created them (stored in proposal.from). Reject cross-wallet approvals
+    // so a tethered wallet cannot mutate another wallet's proposal records
+    // (on-chain signing is still gated by the key-holding wallet, but the
+    // DB record drives owner-facing audit/UI).
+    const proposalWallet = (proposal.from || '').toLowerCase();
+    const callerWallet = (walletAddress || '').toLowerCase();
+    if (!proposalWallet || proposalWallet !== callerWallet) {
+      logger.warn('[Wallet API] proposal-mismatch on approve', {
+        proposalId: id,
+        proposalWallet: proposalWallet ? `${proposalWallet.substring(0, 10)}...` : 'unset',
+        callerWallet: callerWallet ? `${callerWallet.substring(0, 10)}...` : 'unset',
+      });
+      res.status(403).json({ error: 'this proposal belongs to a different wallet' });
+      return;
+    }
+
     // Check if proposal is still valid
     if (proposal.status !== 'pending_approval') {
       res.status(400).json({ error: `Proposal already ${proposal.status}` });
@@ -161,9 +178,32 @@ router.post('/proposals/:id/reject', authenticate, async (req: AuthenticatedRequ
   try {
     const { id } = req.params;
     const { reason = 'user' } = req.body;
-    
+    const callerWallet = (req.user?.wallet_address || '').toLowerCase();
+
     logger.info(`[Wallet API] Rejecting proposal ${id}, reason: ${reason}`);
-    
+
+    // SEC-A12 (2026-04-22 audit): bind reject to proposal owner. Fetch
+    // first so we can verify the caller owns the proposal before mutating.
+    let proposal = pendingProposals.get(id);
+    if (!proposal) {
+      const db = getDatabase();
+      proposal = db.getProposal(id);
+    }
+    if (!proposal) {
+      res.status(404).json({ error: 'Proposal not found' });
+      return;
+    }
+    const proposalWallet = (proposal.from || '').toLowerCase();
+    if (!proposalWallet || proposalWallet !== callerWallet) {
+      logger.warn('[Wallet API] proposal-mismatch on reject', {
+        proposalId: id,
+        proposalWallet: proposalWallet ? `${proposalWallet.substring(0, 10)}...` : 'unset',
+        callerWallet: callerWallet ? `${callerWallet.substring(0, 10)}...` : 'unset',
+      });
+      res.status(403).json({ error: 'this proposal belongs to a different wallet' });
+      return;
+    }
+
     // Update proposal status in memory and database
     const updatedProposal = AgentKitExecutor.updateProposalStatus(id, 'rejected', { rejectionReason: reason });
     
@@ -200,9 +240,33 @@ router.post('/proposals/:id/execute', authenticate, async (req: AuthenticatedReq
   try {
     const { id } = req.params;
     const { txHash, signature } = req.body;
-    
+    const callerWallet = (req.user?.wallet_address || '').toLowerCase();
+
     logger.info(`[Wallet API] Executing proposal ${id}, txHash: ${txHash}`);
-    
+
+    // SEC-A12 (2026-04-22 audit): bind execute to proposal owner. Fetch
+    // first so we can verify the caller owns the proposal before flipping
+    // the record to 'executed'.
+    let proposal = pendingProposals.get(id);
+    if (!proposal) {
+      const db = getDatabase();
+      proposal = db.getProposal(id);
+    }
+    if (!proposal) {
+      res.status(404).json({ error: 'Proposal not found' });
+      return;
+    }
+    const proposalWallet = (proposal.from || '').toLowerCase();
+    if (!proposalWallet || proposalWallet !== callerWallet) {
+      logger.warn('[Wallet API] proposal-mismatch on execute', {
+        proposalId: id,
+        proposalWallet: proposalWallet ? `${proposalWallet.substring(0, 10)}...` : 'unset',
+        callerWallet: callerWallet ? `${callerWallet.substring(0, 10)}...` : 'unset',
+      });
+      res.status(403).json({ error: 'this proposal belongs to a different wallet' });
+      return;
+    }
+
     // Update proposal status to executed
     const updatedProposal = AgentKitExecutor.updateProposalStatus(id, 'executed', { txHash });
     

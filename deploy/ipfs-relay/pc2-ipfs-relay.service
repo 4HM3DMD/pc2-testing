@@ -1,0 +1,21 @@
+[Unit]
+Description=PC2 IPFS Relay (Circuit Relay + DHT Server)
+After=network.target pc2-boson.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/pc2/ipfs-relay
+ExecStart=/usr/bin/node index.js
+Restart=always
+RestartSec=10
+Environment=NODE_ENV=production
+Environment=PUBLIC_IP=69.164.241.210
+Environment=TCP_PORT=4003
+Environment=WS_PORT=4004
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pc2-ipfs-relay
+
+[Install]
+WantedBy=multi-user.target

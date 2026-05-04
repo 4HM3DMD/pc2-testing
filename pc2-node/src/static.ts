@@ -1,8 +1,9 @@
 import express, { Express, Request, Response, NextFunction } from 'express';
 import cookieParser from 'cookie-parser';
 import path from 'path';
-import { existsSync, readFileSync, statSync } from 'fs';
+import { existsSync, statSync } from 'fs';
 import fs from 'fs';
+import { readFile as readFileAsync } from 'fs/promises';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import https from 'https';
@@ -53,6 +54,11 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
   // This ensures app HTML files are processed by our middleware for SDK injection
   // We'll define the route handler inline here to ensure it runs before static file serving
   
+  // Handle /sdk/puter.dev.js - alias for the SDK (bundle.min.js loads this path in dev mode)
+  app.get('/sdk/puter.dev.js', (req: Request, res: Response) => {
+    res.redirect(301, '/puter.js/v2');
+  });
+
   // Handle /puter.js/v2 - SDK file (must be served with correct MIME type)
   // MUST be before express.static() middleware to override default MIME type
   // If file doesn't exist locally, proxy to api.puter.com
@@ -144,7 +150,7 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
       if (!isProduction) {
         res.setHeader('Content-Security-Policy', 
           "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: ws: wss: https:; " +
-          "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https://js.puter.com https://cdn.jsdelivr.net https://challenges.cloudflare.com; " +
+          "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https://js.puter.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://unpkg.com https://challenges.cloudflare.com; " +
           "style-src 'self' 'unsafe-inline' https:; " +
           "img-src 'self' data: blob: https:; " +
           "font-src 'self' data: https: moz-extension: chrome-extension:; " +
@@ -211,16 +217,364 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
     next();
   });
 
+  // Rewrite absolute-path asset requests from embedded dApps.
+  // Apps loaded in iframes may reference assets with absolute paths (e.g. /images/foo.png)
+  // which resolve to the PC2 origin root instead of the app's directory. This middleware
+  // first checks the Referer header to identify the source app, then falls back to scanning
+  // all installed apps (needed when sandboxed iframes strip the Referer).
+  const installedAppsBase = path.resolve(process.env.PC2_DATA_DIR || path.join(process.cwd(), 'data'), 'installed-apps');
+  const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.ico']);
+
+  // Resolve absolute asset paths from embedded dApps back to the correct app directory.
+  // Apps in iframes use <img src="/static/..."> or <img src="/images/..."> which resolve
+  // to the PC2 root instead of the app's directory. This handler checks Referer first,
+  // then falls back to scanning all installed apps.
+  const resolveInstalledAppAsset = (req: Request, res: Response, next: NextFunction) => {
+    const relativeAsset = decodeURIComponent(req.path.slice(1)); // strip leading /
+
+    // Strategy 1: use Referer to identify the app
+    const referer = req.headers.referer || '';
+    const appMatch = referer.match(/\/(?:apps|installed-apps)\/([a-z0-9][a-z0-9-]*[a-z0-9])/);
+    if (appMatch) {
+      const appName = appMatch[1];
+      const assetPath = path.resolve(installedAppsBase, appName, relativeAsset);
+      if (assetPath.startsWith(path.resolve(installedAppsBase, appName) + path.sep) && existsSync(assetPath)) {
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        return res.sendFile(assetPath);
+      }
+    }
+
+    // Strategy 2: scan installed apps for the asset (fallback when Referer is absent)
+    try {
+      const apps = fs.readdirSync(installedAppsBase, { withFileTypes: true });
+      for (const entry of apps) {
+        if (!entry.isDirectory()) continue;
+        const candidate = path.resolve(installedAppsBase, entry.name, relativeAsset);
+        if (candidate.startsWith(path.resolve(installedAppsBase, entry.name) + path.sep) && existsSync(candidate)) {
+          res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+          return res.sendFile(candidate);
+        }
+      }
+    } catch { /* installed-apps dir may not exist yet */ }
+
+    next();
+  };
+
+  app.get('/images/*', (req: Request, res: Response, next: NextFunction) => {
+    const ext = path.extname(req.path).toLowerCase();
+    if (!IMAGE_EXTENSIONS.has(ext)) return next();
+    resolveInstalledAppAsset(req, res, next);
+  });
+
+  app.get('/static/*', resolveInstalledAppAsset);
+  app.get('/fonts/*', resolveInstalledAppAsset);
+
+  // RPC proxy for embedded dApps (e.g. Glide Finance)
+  // Features: response caching with per-method TTLs, fallback RPC endpoints
+  const ESC_RPC_URLS = [
+    'https://api.elastos.io/eth',
+    'https://api.elastos.io/esc',
+    'https://rpc.glidefinance.io',
+  ];
+
+  // Base mainnet RPC fallback list.
+  // Used by `/api/rpc/base` to shield the Particle iframe's `eth_getCode`
+  // smart-account-deployment probe AND the Elacity Market's AuthorityGateway
+  // read burst (sellersOf + listings + balanceOf on every asset detail open)
+  // from the public `mainnet.base.org` rate limiter.
+  //
+  // Ordering (first succeeds, rest are fallbacks):
+  //   1. llamarpc — ~300 req/min, very reliable, generous read budget
+  //   2. publicnode — ~200 req/min, geo-distributed, good uptime
+  //   3. Ankr public — ~100 req/min, wide geo coverage
+  //   4. BlockPI public — ~100 req/min, Asia-Pacific priority
+  //   5. mainnet.base.org (Coinbase official) — tight ~60 req/min, LAST
+  //
+  // mainnet.base.org was the first entry until 2026-04-28 when user
+  // reports of intermittent "price not showing" traced back to its throttle
+  // saturating and our JSON-wrapped-error fallback logic (prior to
+  // a3c599d6c) never failing over. With the fallback fix AND this reorder,
+  // most reads now hit llamarpc first and `mainnet.base.org` is only used
+  // if all three alternatives are down simultaneously (vanishingly rare).
+  //
+  // SUPERNODE_RPC_URLS (comma-separated env var) prepends authoritative
+  // supernode-backed endpoints ahead of the public community RPCs. When the
+  // supernode proxies are deployed (SUPERNODE-RPC-PROXY task), operators flip
+  // the env var on and no code change is required. The existing rate-limit /
+  // HTTP-error fallback logic transparently rolls to the public RPCs if any
+  // supernode URL misbehaves, so adding them at the front of the list is
+  // zero-risk.
+  const supernodeRpcUrlsEnv = (process.env.SUPERNODE_RPC_URLS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  const BASE_RPC_URLS = [
+    ...supernodeRpcUrlsEnv,
+    'https://base.llamarpc.com',
+    'https://base-rpc.publicnode.com',
+    'https://rpc.ankr.com/base',
+    'https://base.blockpi.network/v1/rpc/public',
+    'https://mainnet.base.org',
+  ];
+  if (supernodeRpcUrlsEnv.length > 0) {
+    log.info(`[rpc-proxy] ${supernodeRpcUrlsEnv.length} supernode RPC endpoint(s) prepended to BASE_RPC_URLS`);
+  }
+
+  // Per-method cache TTLs (milliseconds). Methods not listed are not cached.
+  //
+  // `eth_call` is parameterized by (to, data) so the cache key already
+  // uniquely identifies each call. 2 seconds = ~1 Base block — long enough
+  // to deduplicate the rapid re-open burst (renderOpTypeBadge fires
+  // sellersOf + N × listings on EVERY asset detail open, plus balanceOf,
+  // plus opType checks; 8-12 reads per click), short enough that listing
+  // state changes (cancel / new seller) surface within one block. The
+  // client-side wallet.js cache (4defea25c) is 30 s and sits on top of
+  // this server-side cache — session cache hits first, then proxy cache
+  // backstops any request that escapes it (e.g. from a different tab or
+  // a fresh iframe instance after app open).
+  const RPC_CACHE_TTLS: Record<string, number> = {
+    'eth_chainId': 3600000,        // 1 hour (never changes)
+    'net_version': 3600000,        // 1 hour
+    'eth_gasPrice': 5000,          // 5s (updates per block)
+    'eth_blockNumber': 5000,       // 5s
+    'eth_getBlockByNumber': 30000, // 30s (immutable once confirmed)
+    'eth_getBlockByHash': 60000,   // 60s (immutable)
+    'eth_getCode': 300000,         // 5 min (rarely changes)
+    'eth_call': 2000,              // 2s — dedupe read bursts within a block
+  };
+
+  const rpcCache = new Map<string, { data: any; expires: number }>();
+  let highestBlockSeen = 0;
+
+  // `chainKey` namespaces the cache so ESC (`eth_chainId` = 0x14) and Base
+  // (`eth_chainId` = 0x2105) don't collide on identical (method, params).
+  function getRpcCacheKey(chainKey: string, method: string, params: any[]): string {
+    return `${chainKey}:${method}:${JSON.stringify(params)}`;
+  }
+
+  function getCachedRpcResponse(chainKey: string, method: string, params: any[]): any | null {
+    const ttl = RPC_CACHE_TTLS[method];
+    if (!ttl) return null;
+    const key = getRpcCacheKey(chainKey, method, params);
+    const entry = rpcCache.get(key);
+    if (entry && Date.now() < entry.expires) return entry.data;
+    if (entry) rpcCache.delete(key);
+    return null;
+  }
+
+  function setCachedRpcResponse(chainKey: string, method: string, params: any[], data: any): void {
+    const ttl = RPC_CACHE_TTLS[method];
+    if (!ttl) return;
+
+    if (method === 'eth_blockNumber' && data?.result) {
+      const blockNum = parseInt(data.result, 16);
+      if (blockNum < highestBlockSeen) return;
+      highestBlockSeen = blockNum;
+    }
+
+    // Don't cache `eth_getCode` "contract not deployed" replies — this is a
+    // transient state that flips the moment the user deploys, and a stale
+    // `0x` would cause the Particle iframe to re-attempt deployment after a
+    // successful deploy (wasted UserOp). `0x` / `"0x"` both observed in the
+    // wild depending on RPC provider.
+    if (method === 'eth_getCode') {
+      const result = data?.result;
+      if (typeof result === 'string' && (result === '0x' || result === '0x0')) {
+        return;
+      }
+    }
+
+    const key = getRpcCacheKey(chainKey, method, params);
+    rpcCache.set(key, { data, expires: Date.now() + ttl });
+    if (rpcCache.size > 500) {
+      const now = Date.now();
+      for (const [k, v] of rpcCache) {
+        if (now >= v.expires) rpcCache.delete(k);
+      }
+    }
+  }
+
+  // Shared JSON-RPC proxy handler: tries `rpcUrls` in order, caches successful
+  // responses under `chainKey`, returns 502 if every upstream fails.
+  // Base's public RPC (mainnet.base.org) returns HTTP 200 with a JSON-wrapped
+  // rpc error for transport-level throttling, e.g.
+  //   { error: { message: "rate-limited until QuantaInstant(Nanos(...))" } }
+  // We must treat these as transport failures and fall over to the next RPC
+  // in the list, NOT forward them as-is. Otherwise our llamarpc / publicnode
+  // fallbacks never get used and every read stalls on a single throttled
+  // upstream (observed 2026-04-28 during mint+buy burst: price section
+  // flickered, sellersOf/listings back-fill silently failed).
+  //
+  // Guard: contract reverts are also JSON errors but carry a `data` hex
+  // string or a `code` like 3 with an "execution reverted" message — those
+  // are legitimate, per-tx responses and must NOT trigger a fallback (that
+  // would mask the real revert and spam the fallback RPCs).
+  function isTransportRateLimit(data: unknown): boolean {
+    if (!data || typeof data !== 'object') return false;
+    const err = (data as { error?: { message?: string; data?: unknown } }).error;
+    if (!err || typeof err.message !== 'string') return false;
+    if (err.data !== undefined) return false;
+    const m = err.message.toLowerCase();
+    return (
+      m.includes('rate-limit') ||
+      m.includes('rate limit') ||
+      m.includes('too many requests') ||
+      m.includes('429')
+    );
+  }
+
+  async function handleJsonRpcProxy(
+    req: Request,
+    res: Response,
+    chainKey: string,
+    rpcUrls: string[],
+  ): Promise<void> {
+    const rpcReq = req.body;
+    const method = rpcReq?.method;
+    const params = rpcReq?.params ?? [];
+
+    const cached = getCachedRpcResponse(chainKey, method, params);
+    if (cached) {
+      res.json({ ...cached, id: rpcReq?.id ?? null });
+      return;
+    }
+
+    const body = JSON.stringify(rpcReq);
+    let lastError: string | null = null;
+
+    for (const rpcUrl of rpcUrls) {
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 8000);
+
+        const upstream = await fetch(rpcUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body,
+          signal: controller.signal,
+        });
+
+        clearTimeout(timeout);
+
+        if (!upstream.ok) {
+          lastError = `${rpcUrl}: HTTP ${upstream.status}`;
+          continue;
+        }
+
+        const data = await upstream.json();
+
+        if (isTransportRateLimit(data)) {
+          const rlMsg = (data as { error?: { message?: string } }).error?.message ?? 'unknown';
+          lastError = `${rpcUrl}: rate-limited (${rlMsg})`;
+          log.info(`[rpc-proxy] ${chainKey} ${method ?? '?'} rate-limited on ${rpcUrl}, trying next fallback`);
+          continue;
+        }
+
+        if (data && !data.error) {
+          setCachedRpcResponse(chainKey, method, params, data);
+        }
+
+        res.json(data);
+        return;
+      } catch (err: any) {
+        lastError = `${rpcUrl}: ${err.message}`;
+      }
+    }
+
+    res.status(502).json({
+      jsonrpc: '2.0',
+      id: rpcReq?.id ?? null,
+      error: { code: -32603, message: `All ${chainKey.toUpperCase()} RPCs failed: ${lastError}` },
+    });
+  }
+
+  app.post('/api/rpc/esc', (req, res) => handleJsonRpcProxy(req, res, 'esc', ESC_RPC_URLS));
+
+  // Base mainnet JSON-RPC proxy.
+  // Exists to silence `mainnet.base.org` 429s from the Particle iframe's
+  // smart-account deployment probe (see `packages/particle-auth/.../ParticleNetworkContext.tsx`
+  // lines ~814, ~988). Rewritten-to transparently by the interceptor script
+  // injected by the `/particle-auth` route handler below.
+  app.post('/api/rpc/base', (req, res) => handleJsonRpcProxy(req, res, 'base', BASE_RPC_URLS));
+
   // IMPORTANT: Register /apps/* route BEFORE the static middleware wrapper
   // Express checks app.get() routes before app.use() middleware, but only if registered first
   // The route handler function (appsRouteHandler) is defined later (around line 374) as a function declaration
   // Function declarations are hoisted, so we can register the route here even though the handler is defined below
   app.get('/apps/*', appsRouteHandler);
   app.get('/builtin/*', appsRouteHandler); // Also handle builtin apps (phoenix, terminal) that use BUILTIN_PREFIX
-  
-  // Wrap static middleware to skip /apps/* and /builtin/* paths
+
+  // Serve installed dApps from data/installed-apps/<name>/
+  app.get('/installed-apps/*', async (req: Request, res: Response, next: NextFunction) => {
+    const dataDir = process.env.PC2_DATA_DIR || path.join(process.cwd(), 'data');
+    const installedAppsDir = path.resolve(dataDir, 'installed-apps');
+    const relativePath = decodeURIComponent(req.path.replace('/installed-apps/', ''));
+
+    // Extract app name (first path segment) and resolve full path
+    const appName = relativePath.split('/')[0];
+    if (!appName || !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(appName)) {
+      res.status(400).send('Invalid app name');
+      return;
+    }
+
+    const filePath = path.resolve(installedAppsDir, relativePath);
+    const appDir = path.resolve(installedAppsDir, appName);
+
+    // Security: resolved path must be strictly within this app's directory
+    if (!filePath.startsWith(appDir + path.sep) && filePath !== appDir) {
+      res.status(403).send('Forbidden');
+      return;
+    }
+
+    if (!existsSync(filePath)) {
+      // SPA fallback: serve the app's index.html for extensionless paths
+      // so client-side routers (React Router, Vue Router, etc.) work correctly
+      const appIndexPath = path.resolve(installedAppsDir, appName, 'index.html');
+      if (existsSync(appDir) && existsSync(appIndexPath) && !path.extname(relativePath)) {
+        const bosonService = req.app?.locals?.bosonService;
+        const baseUrl = getBaseUrl(req, bosonService);
+        let html = await readFileAsync(appIndexPath, 'utf-8');
+        const walletShimTag = `<script src="${baseUrl}/pc2-wallet-provider.js?v=20260421a"></script>`;
+        html = html.replace(/<head[^>]*>/i, (match: string) => `${match}\n    ${walletShimTag}`);
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        res.type('html').send(html);
+        return;
+      }
+      return next();
+    }
+    const appInstallService = req.app?.locals?.appInstallService;
+    if (appInstallService) {
+      const installedApp = appInstallService.get(appName);
+      if (installedApp) {
+        try {
+          const requirements = JSON.parse(installedApp.requirements_json);
+          if (requirements?.headers?.includes('cross-origin-isolation')) {
+            res.setHeader('Cross-Origin-Embedder-Policy', 'credentialless');
+            res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+          }
+        } catch { /* ignore parse errors */ }
+      }
+    }
+
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+
+    // Inject wallet provider shim into HTML files
+    if (filePath.endsWith('.html')) {
+      const bosonService = req.app?.locals?.bosonService;
+      const baseUrl = getBaseUrl(req, bosonService);
+      let html = await readFileAsync(filePath, 'utf-8');
+      const walletShimTag = `<script src="${baseUrl}/pc2-wallet-provider.js?v=20260421a"></script>`;
+      html = html.replace(/<head[^>]*>/i, (match: string) => `${match}\n    ${walletShimTag}`);
+      res.type('html').send(html);
+      return;
+    }
+
+    res.sendFile(filePath);
+  });
+
+  // Wrap static middleware to skip /apps/*, /builtin/*, and /installed-apps/* paths
   app.use((req: Request, res: Response, next: NextFunction) => {
-    if (req.path.startsWith('/apps/') || req.path.startsWith('/builtin/')) {
+    if (req.path.startsWith('/apps/') || req.path.startsWith('/builtin/') || req.path.startsWith('/installed-apps/')) {
       log.debug(`[static.ts] ⏭️  Skipping express.static() for ${req.path} - will be handled by route`);
       return next(); // Skip static file serving, continue to route handlers
     }
@@ -285,7 +639,7 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
   });
 
   // Particle Auth route - must come BEFORE SPA fallback
-  app.get('/particle-auth', (req: Request, res: Response, next: NextFunction) => {
+  app.get('/particle-auth', async (req: Request, res: Response, next: NextFunction) => {
     try {
       // Try multiple possible locations for particle-auth
       // __dirname in compiled code will be dist/, so go up to project root
@@ -321,7 +675,7 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
       
       let html: string;
       try {
-        html = readFileSync(particleAuthPath, 'utf8');
+        html = await readFileAsync(particleAuthPath, 'utf8');
       } catch (readError) {
         log.error(`[Particle Auth]: ❌ Error reading file:`, readError);
         return res.status(500).json({ 
@@ -344,6 +698,19 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
       }
       
       // Inject API origin script (same as mock server)
+      // Also rewrites `https://mainnet.base.org` -> `${currentOrigin}/api/rpc/base`
+      // so the Particle SDK's public-RPC traffic (both the explicit
+      // `eth_getCode` probes in our wrapper code AND viem's internal RPC
+      // transport called from inside `createTransferTransaction`) goes through
+      // our cached, multi-fallback proxy instead of hammering the
+      // rate-limited public Base RPC (429 during rapid polling).
+      //
+      // The interceptor must handle all three argument shapes that modern
+      // SDKs pass to `fetch`: raw string URLs (our wrapper code), `Request`
+      // objects (viem's HTTP transport does `new Request(url, opts)` before
+      // calling fetch), and `URL` objects. `Request.url` is read-only, so
+      // string-assignment to it silently no-ops — we must clone the Request
+      // with the rewritten URL.
       const apiOriginScript = `
     <script>
         (function() {
@@ -352,22 +719,47 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
             
             const currentOrigin = window.location.origin;
             const apiPuterPattern = /https?:\\/\\/api\\.puter\\.[^\\/:]+(?:\\:\\d+)?/gi;
+            const baseMainnetPattern = /https?:\\/\\/mainnet\\.base\\.org(?:\\:\\d+)?/gi;
+            const baseProxyUrl = currentOrigin + '/api/rpc/base';
+            
+            function rewriteUrlString(s) {
+                if (typeof s !== 'string') return s;
+                if (s.includes('api.puter.')) return s.replace(apiPuterPattern, currentOrigin);
+                if (s.includes('mainnet.base.org')) return s.replace(baseMainnetPattern, baseProxyUrl);
+                return s;
+            }
             
             const originalFetch = window.fetch;
             window.fetch = function(...args) {
-                let url = args[0];
-                if (typeof url === 'string' && url.includes('api.puter.')) {
-                    args[0] = url.replace(apiPuterPattern, currentOrigin);
-                } else if (url && typeof url === 'object' && url.url && url.url.includes('api.puter.')) {
-                    url.url = url.url.replace(apiPuterPattern, currentOrigin);
+                const input = args[0];
+                if (typeof input === 'string') {
+                    args[0] = rewriteUrlString(input);
+                } else if (typeof Request !== 'undefined' && input instanceof Request) {
+                    const rewritten = rewriteUrlString(input.url);
+                    if (rewritten !== input.url) {
+                        args[0] = new Request(rewritten, input);
+                    }
+                } else if (typeof URL !== 'undefined' && input instanceof URL) {
+                    const rewritten = rewriteUrlString(input.href);
+                    if (rewritten !== input.href) {
+                        args[0] = rewritten;
+                    }
+                } else if (input && typeof input === 'object' && typeof input.url === 'string') {
+                    // Legacy {url, ...} descriptor
+                    const rewritten = rewriteUrlString(input.url);
+                    if (rewritten !== input.url) {
+                        try { input.url = rewritten; } catch { args[0] = rewritten; }
+                    }
                 }
                 return originalFetch.apply(this, args);
             };
             
             const originalXHROpen = XMLHttpRequest.prototype.open;
             XMLHttpRequest.prototype.open = function(method, url, ...rest) {
-                if (typeof url === 'string' && url.includes('api.puter.')) {
-                    url = url.replace(apiPuterPattern, currentOrigin);
+                if (typeof url === 'string') {
+                    url = rewriteUrlString(url);
+                } else if (typeof URL !== 'undefined' && url instanceof URL) {
+                    url = rewriteUrlString(url.href);
                 }
                 return originalXHROpen.call(this, method, url, ...rest);
             };
@@ -387,7 +779,7 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
       if (!isProduction) {
         res.setHeader('Content-Security-Policy', 
           "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: ws: wss: https:; " +
-          "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https://js.puter.com https://cdn.jsdelivr.net https://challenges.cloudflare.com; " +
+          "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https://js.puter.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://unpkg.com https://challenges.cloudflare.com; " +
           "style-src 'self' 'unsafe-inline' https:; " +
           "img-src 'self' data: blob: https:; " +
           "font-src 'self' data: https: moz-extension: chrome-extension:; " +
@@ -439,7 +831,7 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
   // Express checks app.get() routes before app.use() middleware, so this will be checked first
   // The route registration was moved to before the static middleware wrapper to ensure proper order
   // We use a function declaration (not const) so it can be hoisted and registered before it's defined
-  function appsRouteHandler(req: Request, res: Response, next: NextFunction) {
+  async function appsRouteHandler(req: Request, res: Response, next: NextFunction) {
     // Handle both /apps/* and /builtin/* paths
     const isBuiltin = req.path.startsWith('/builtin/');
     const isApps = req.path.startsWith('/apps/');
@@ -472,7 +864,10 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
       log.debug(`[static.ts] 🧮 Calculator detected! appPath: ${appPath}, calculatorRelativePath: ${calculatorRelativePath}`);
     }
     
+    const dataDir = process.env.PC2_DATA_DIR || path.join(process.cwd(), 'data');
     const possiblePaths = [
+      // Installed dApps (highest priority - user-installed / bundled apps)
+      path.join(dataDir, 'installed-apps', appPath),
       // Frontend apps path (for calculator and other new apps)
       path.join(projectRoot, 'frontend/apps', appPath),
       path.join(process.cwd(), 'frontend/apps', appPath),
@@ -522,6 +917,10 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
         if (mimeTypes[ext]) {
           res.setHeader('Content-Type', mimeTypes[ext]);
         }
+
+        if (!isProduction) {
+          res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        }
         
         // Special handling for app HTML files - inject correct SDK URL
         // This applies to all apps (terminal, phoenix, player, viewer, pdf, editor, etc.)
@@ -531,11 +930,34 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
           const bosonService = req.app?.locals?.bosonService;
           const baseUrl = getBaseUrl(req, bosonService);
           const sdkUrl = `${baseUrl}/puter.js/v2`;
-          let htmlContent = readFileSync(normalizedPath, 'utf8');
+          let htmlContent = await readFileAsync(normalizedPath, 'utf8');
           // Replace any hardcoded SDK URL with the local server's SDK URL
           // This ensures apps work with PC2 node's local SDK
           htmlContent = htmlContent.replace(/https?:\/\/[^'"]*\/puter\.js\/v2/g, sdkUrl);
           log.debug(`[static.ts] ✅ SDK URL replaced in HTML`);
+          
+          // Inject PC2 wallet provider shim into app HTML
+          // This creates window.ethereum inside sandboxed iframes via postMessage bridge
+          const walletShimTag = `<script src="${baseUrl}/pc2-wallet-provider.js?v=20260421a"></script>`;
+          htmlContent = htmlContent.replace(/<head[^>]*>/i, (match: string) => `${match}\n    ${walletShimTag}`);
+          
+          // Per-app COOP/COEP headers for apps that need cross-origin isolation
+          // (e.g. media player needs SharedArrayBuffer for DRM decryption)
+          const appNameForHeaders = appPath.split('/')[0];
+          const appInstallSvc = req.app?.locals?.appInstallService;
+          if (appInstallSvc) {
+            try {
+              const installedApp = appInstallSvc.get(appNameForHeaders);
+              if (installedApp) {
+                const reqs = JSON.parse(installedApp.requirements_json);
+                if (reqs?.headers?.includes('cross-origin-isolation')) {
+                  res.setHeader('Cross-Origin-Embedder-Policy', 'credentialless');
+                  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+                  log.info(`[static.ts] 🔒 COOP/COEP headers set for app: ${appNameForHeaders}`);
+                }
+              }
+            } catch { /* ignore parse errors */ }
+          }
           
           // For calculator app, add SDK initialization script to set API origin
           if (isCalculator) {
@@ -796,326 +1218,28 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
       }
     }
     
-    // If file not found, continue to next handler (might be handled by SPA fallback)
-    next();
-  }
-  
-  // Route handler registration was moved to before the static middleware (around line 151)
-  // We register it there even though the handler is defined here, because function declarations are hoisted
-  
-  // Route handler registration was moved to before the static middleware (around line 152)
-  // We register it there even though the handler is defined here, because function declarations are hoisted
-  // The /builtin/* route is now handled by the same appsRouteHandler function (registered at line 152)
-
-  // REMOVED: Duplicate /builtin/* route handler - now using appsRouteHandler for both /apps/* and /builtin/*
-  // The old handler code is below (commented out) for reference:
-  /*
-  app.get('/builtin/*', (req: Request, res: Response, next: NextFunction) => {
-    console.log(`[static.ts] 🔵 /builtin/* route hit! Path: ${req.path}, Full URL: ${req.url}`);
-    const appPath = req.path.replace('/builtin/', '');
-    console.log(`[static.ts] 🔵 Extracted appPath: ${appPath}`);
-    const projectRoot = path.resolve(__dirname, '../..');
-    
-    // Special handling for terminal app
-    const isTerminal = appPath.startsWith('terminal/') || appPath === 'terminal' || appPath === 'terminal/index.html';
-    const terminalRelativePath = isTerminal ? appPath.replace(/^terminal\/?/, '') || 'index.html' : null;
-    
-    // Special handling for phoenix app
-    const isPhoenix = appPath.startsWith('phoenix/') || appPath === 'phoenix' || appPath === 'phoenix/index.html';
-    const phoenixRelativePath = isPhoenix ? appPath.replace(/^phoenix\/?/, '') || 'index.html' : null;
-    
-    const possiblePaths = [
-      // Terminal app special paths
-      ...(isTerminal && terminalRelativePath ? [
-        path.join(projectRoot, 'src/terminal/dist', terminalRelativePath),
-        path.join(process.cwd(), 'src/terminal/dist', terminalRelativePath),
-        path.join(process.cwd(), '../../src/terminal/dist', terminalRelativePath),
-        path.join(projectRoot, 'src/terminal/assets', terminalRelativePath),
-        path.join(process.cwd(), 'src/terminal/assets', terminalRelativePath),
-        path.join(process.cwd(), '../../src/terminal/assets', terminalRelativePath),
-      ] : []),
-      // Phoenix app special paths
-      ...(isPhoenix && phoenixRelativePath ? [
-        path.join(projectRoot, 'src/phoenix/dist', phoenixRelativePath),
-        path.join(process.cwd(), 'src/phoenix/dist', phoenixRelativePath),
-        path.join(process.cwd(), '../../src/phoenix/dist', phoenixRelativePath),
-        path.join(projectRoot, 'src/phoenix/assets', phoenixRelativePath),
-        path.join(process.cwd(), 'src/phoenix/assets', phoenixRelativePath),
-        path.join(process.cwd(), '../../src/phoenix/assets', phoenixRelativePath),
-      ] : []),
-      // Standard app paths (fallback)
-      path.join(projectRoot, 'src/backend/apps', appPath),
-      path.join(process.cwd(), 'src/backend/apps', appPath),
-      path.join(process.cwd(), '../../src/backend/apps', appPath),
-    ];
-    
-    for (const possiblePath of possiblePaths) {
-      const normalizedPath = path.normalize(possiblePath);
-      if (existsSync(normalizedPath)) {
-        console.log(`[static.ts] ✅ Found file: ${normalizedPath}, isPhoenix: ${isPhoenix}, isTerminal: ${isTerminal}, appPath: ${appPath}`);
-        const ext = path.extname(normalizedPath).toLowerCase();
-        const mimeTypes: Record<string, string> = {
-          '.html': 'text/html',
-          '.js': 'application/javascript',
-          '.css': 'text/css',
-          '.svg': 'image/svg+xml',
-          '.png': 'image/png',
-          '.jpg': 'image/jpeg',
-          '.jpeg': 'image/jpeg',
-          '.gif': 'image/gif',
-          '.webp': 'image/webp',
-          '.json': 'application/json',
-          '.woff': 'font/woff',
-          '.woff2': 'font/woff2',
-          '.ttf': 'font/ttf',
-          '.eot': 'application/vnd.ms-fontobject'
-        };
-        
-        const mimeType = mimeTypes[ext] || 'application/octet-stream';
-        res.setHeader('Content-Type', mimeType);
-        
-        // Special handling for app HTML files - inject correct SDK URL
-        if (ext === '.html') {
-          // Use getBaseUrl to correctly handle Active Proxy (which may not preserve Host header)
-          const bosonService = req.app?.locals?.bosonService;
-          const baseUrl = getBaseUrl(req, bosonService);
-          const sdkUrl = `${baseUrl}/puter.js/v2`;
-          let htmlContent = readFileSync(normalizedPath, 'utf8');
-          // Replace any hardcoded SDK URL with the local server's SDK URL
-          htmlContent = htmlContent.replace(/https?:\/\/[^'"]*\/puter\.js\/v2/g, sdkUrl);
-          
-          // For terminal app, add SDK initialization script to set API origin
-          if (isTerminal) {
-            const sdkInitScript = `
-    <script>
-        // Set API origin before SDK loads (for terminal app)
-        window.api_origin = '${baseUrl}';
-        window.puter_api_origin = '${baseUrl}';
-        console.log('[Terminal] Setting API origin to:', window.api_origin);
-        
-        // Enhanced debugging for terminal app
-        window.addEventListener('error', (e) => {
-            console.error('[Terminal] Global error:', e.error, e.message, e.filename, e.lineno);
-        });
-        window.addEventListener('unhandledrejection', (e) => {
-            console.error('[Terminal] Unhandled promise rejection:', e.reason);
-        });
-    </script>`;
-            // Insert after the SDK script tag
-            htmlContent = htmlContent.replace(
-              /(<script src="[^"]*puter\.js\/v2"><\/script>)/,
-              `$1${sdkInitScript}`
-            );
-            
-            // Also enhance the main_term initialization with better error handling
-            htmlContent = htmlContent.replace(
-              /if \(typeof puter === 'undefined'\) \{[^}]*return;[^}]*\}/s,
-              `if (typeof puter === 'undefined') {
-                console.error('[Terminal] Puter SDK failed to load after ${100 * 50}ms');
-                console.error('[Terminal] window.puter:', typeof window.puter);
-                console.error('[Terminal] window.api_origin:', window.api_origin);
-                document.body.innerHTML = '<div style="padding: 20px; color: red;">Terminal Error: SDK failed to load. Check console.</div>';
-                return;
-            }
-            console.log('[Terminal] ✅ SDK loaded, puter type:', typeof puter);
-            console.log('[Terminal] puter object:', puter);
-            console.log('[Terminal] puter.ui:', puter.ui);
-            console.log('[Terminal] puter.ui.launchApp:', typeof puter.ui.launchApp);
-            console.log('[Terminal] puter.env:', puter.env);
-            console.log('[Terminal] puter.appInstanceID:', puter.appInstanceID);
-            console.log('[Terminal] window.parent:', window.parent);
-            console.log('[Terminal] window.parent === window:', window.parent === window);
-            
-            // Listen for all postMessage events to debug communication
-            window.addEventListener('message', (event) => {
-                if (event.data && (event.data.$ === 'puter-ipc' || event.data.msg === 'launchApp' || event.data.msg === 'childAppLaunched' || event.data.msg === 'READY')) {
-                    console.log('[Terminal] 📨 Received message from parent:', event.data, 'origin:', event.origin);
-                }
-            });
-            
-            // Intercept postMessage to see what's being sent
-            const originalPostMessage = window.parent.postMessage;
-            window.parent.postMessage = function(...args) {
-                const msg = args[0];
-                if (msg && (msg.$ === 'puter-ipc' || msg.msg === 'launchApp' || msg.msg === 'READY')) {
-                    console.log('[Terminal] 📤 Sending message to parent:');
-                    console.log('  $:', msg.$);
-                    console.log('  v:', msg.v);
-                    console.log('  msg:', msg.msg);
-                    console.log('  appInstanceID:', msg.appInstanceID);
-                    console.log('  env:', msg.env);
-                    console.log('  parameters:', msg.parameters);
-                    console.log('  uuid:', msg.uuid);
-                    console.log('  targetOrigin:', args[1]);
-                }
-                return originalPostMessage.apply(window.parent, args);
-            };
-            
-            console.log('[Terminal] Calling main_term()...');
-            let mainTermResolved = false;
-            try {
-                const result = main_term();
-                console.log('[Terminal] main_term() returned:', result);
-                if (result && typeof result.then === 'function') {
-                    console.log('[Terminal] Waiting for main_term() promise...');
-                    result.then((res) => {
-                        mainTermResolved = true;
-                        console.log('[Terminal] ✅ main_term() promise resolved:', res);
-                        // Check if terminal element exists
-                        setTimeout(() => {
-                            const termEl = document.getElementById('terminal');
-                            console.log('[Terminal] Terminal element after resolution:', termEl);
-                            if (termEl) {
-                                console.log('[Terminal] Terminal element found, checking xterm instance...');
-                                const term = termEl._xterm;
-                                console.log('[Terminal] xterm instance:', term);
-                            } else {
-                                console.warn('[Terminal] ⚠️ Terminal element not found after main_term() resolved');
-                            }
-                        }, 1000);
-                    }).catch((err) => {
-                        mainTermResolved = true;
-                        console.error('[Terminal] ❌ main_term() promise rejected:', err);
-                        console.error('[Terminal] Error details:', err.message, err.stack);
-                        document.body.innerHTML = '<div style="padding: 20px; color: red; font-family: monospace;">Terminal Error: ' + (err.message || String(err)) + '<br><br>Stack: ' + (err.stack || 'No stack trace') + '</div>';
-                    });
-                    // Also add a timeout to catch hanging promises
-                    setTimeout(() => {
-                        if (!mainTermResolved) {
-                            console.error('[Terminal] ⚠️ main_term() promise still pending after 10 seconds - likely launchApp() is hanging');
-                            console.error('[Terminal] This usually means the parent window is not responding to puter-ipc messages');
-                        }
-                    }, 10000);
-                } else {
-                    console.log('[Terminal] main_term() returned non-promise:', result);
-                }
-            } catch (error) {
-                console.error('[Terminal] ❌ Error calling main_term():', error);
-                console.error('[Terminal] Error stack:', error.stack);
-                document.body.innerHTML = '<div style="padding: 20px; color: red; font-family: monospace;">Terminal Error: ' + error.message + '<br><br>Stack: ' + (error.stack || 'No stack trace') + '</div>';
-            }`
-            );
-          }
-          
-          // For phoenix app, add SDK initialization script to set API origin
-          if (isPhoenix) {
-            console.log('[static.ts] 🐦 Processing phoenix app HTML, injecting SDK initialization...');
-            console.log('[static.ts] 🐦 Phoenix HTML length:', htmlContent.length);
-            console.log('[static.ts] 🐦 Phoenix HTML contains "main_shell":', htmlContent.includes('main_shell'));
-            const sdkInitScript = `
-    <script>
-        // Visual indicator that phoenix HTML was processed by middleware
-        if (document.body) {
-            document.body.style.backgroundColor = '#1a1a1a';
-            const indicator = document.createElement('div');
-            indicator.id = 'phoenix-middleware-indicator';
-            indicator.style.cssText = 'padding: 10px; color: #00ff00; font-family: monospace; background: #000; position: fixed; top: 0; left: 0; right: 0; z-index: 99999; border-bottom: 2px solid #00ff00;';
-            indicator.textContent = '[Phoenix] ✅ HTML processed by middleware - SDK loading...';
-            document.body.appendChild(indicator);
-        }
-        
-        // Set API origin before SDK loads (for phoenix app)
-        window.api_origin = '${baseUrl}';
-        window.puter_api_origin = '${baseUrl}';
-        console.log('[Phoenix] Setting API origin to:', window.api_origin);
-        
-        // Enhanced debugging for phoenix app
-        window.addEventListener('error', (e) => {
-            console.error('[Phoenix] Global error:', e.error, e.message, e.filename, e.lineno);
-            const indicator = document.getElementById('phoenix-middleware-indicator');
-            if (indicator) indicator.textContent = '[Phoenix] ❌ Error: ' + (e.message || String(e.error));
-        });
-        window.addEventListener('unhandledrejection', (e) => {
-            console.error('[Phoenix] Unhandled promise rejection:', e.reason);
-            const indicator = document.getElementById('phoenix-middleware-indicator');
-            if (indicator) indicator.textContent = '[Phoenix] ❌ Unhandled rejection: ' + String(e.reason);
-        });
-    </script>`;
-            // Insert after the SDK script tag
-            const beforeReplace = htmlContent;
-            htmlContent = htmlContent.replace(
-              /(<script src="[^"]*puter\.js\/v2"><\/script>)/,
-              `$1${sdkInitScript}`
-            );
-            if (htmlContent === beforeReplace) {
-              console.warn('[static.ts] ⚠️ Phoenix SDK script tag replacement failed - SDK script tag not found in HTML');
-            } else {
-              console.log('[static.ts] ✅ Phoenix SDK initialization script injected');
-            }
-            
-            // Enhance the phoenix initialization with better error handling
-            // Match the actual phoenix HTML structure: if (typeof puter === 'undefined') { ... return; }
-            const beforeInitReplace = htmlContent;
-            htmlContent = htmlContent.replace(
-              /if \(typeof puter === 'undefined'\) \{[\s\S]*?return;[\s\S]*?\}/,
-              `if (typeof puter === 'undefined') {
-                console.error('[Phoenix] Puter SDK failed to load after ${100 * 50}ms');
-                console.error('[Phoenix] window.puter:', typeof window.puter);
-                console.error('[Phoenix] window.api_origin:', window.api_origin);
-                document.body.innerHTML = '<div style="padding: 20px; color: red;">Phoenix Error: SDK failed to load. Check console.</div>';
-                return;
-            }
-            console.log('[Phoenix] ✅ SDK loaded, puter type:', typeof puter);
-            console.log('[Phoenix] puter object:', puter);
-            console.log('[Phoenix] puter.env:', puter.env);
-            console.log('[Phoenix] puter.appInstanceID:', puter.appInstanceID);
-            console.log('[Phoenix] puter.parentInstanceID:', puter.parentInstanceID);
-            console.log('[Phoenix] puter.ui:', puter.ui);
-            console.log('[Phoenix] puter.ui.parentApp:', typeof puter.ui?.parentApp);
-            console.log('[Phoenix] URL params:', new URLSearchParams(window.location.search).toString());
-            console.log('[Phoenix] parent_instance_id from URL:', new URLSearchParams(window.location.search).get('puter.parent_instance_id'));
-            console.log('[Phoenix] Testing puter.ui.parentApp()...');
-            const parentApp = puter.ui.parentApp();
-            console.log('[Phoenix] puter.ui.parentApp() result:', parentApp);
-            if (!parentApp) {
-                console.error('[Phoenix] ❌ parentApp() returned null - phoenix will exit!');
-                console.error('[Phoenix] This means puter.parentInstanceID is not set correctly');
-                console.error('[Phoenix] puter.parentInstanceID value:', puter.parentInstanceID);
-                console.error('[Phoenix] URL search params:', window.location.search);
-            } else {
-                console.log('[Phoenix] ✅ parentApp() returned connection:', parentApp);
-            }
-            console.log('[Phoenix] Calling main_shell()...');
-            try {
-                const result = main_shell();
-                console.log('[Phoenix] main_shell() returned:', result);
-                if (result && typeof result.then === 'function') {
-                    console.log('[Phoenix] main_shell() returned a promise, waiting...');
-                    result.then((res) => {
-                        console.log('[Phoenix] ✅ main_shell() promise resolved:', res);
-                    }).catch((err) => {
-                        console.error('[Phoenix] ❌ main_shell() promise rejected:', err);
-                        console.error('[Phoenix] Error details:', err.message, err.stack);
-                        document.body.innerHTML = '<div style="padding: 20px; color: red; font-family: monospace;">Phoenix Error: ' + (err.message || String(err)) + '<br><br>Stack: ' + (err.stack || 'No stack trace') + '</div>';
-                    });
-                }
-            } catch (error) {
-                console.error('[Phoenix] ❌ Error calling main_shell():', error);
-                console.error('[Phoenix] Error stack:', error.stack);
-                document.body.innerHTML = '<div style="padding: 20px; color: red; font-family: monospace;">Phoenix Error: ' + error.message + '<br><br>Stack: ' + (error.stack || 'No stack trace') + '</div>';
-            }`
-            );
-            if (htmlContent === beforeInitReplace) {
-              console.warn('[static.ts] ⚠️ Phoenix initialization code replacement failed - pattern not found in HTML');
-            } else {
-              console.log('[static.ts] ✅ Phoenix initialization code enhanced');
-            }
-          }
-          
-          res.send(htmlContent);
-          return;
-        }
-        
-        res.sendFile(normalizedPath);
+    // SPA fallback for installed dApps: serve the app's index.html for extensionless
+    // paths so client-side routers (React Router, Vue Router, etc.) work correctly
+    const spaAppName = appPath.split('/')[0];
+    if (spaAppName && !path.extname(appPath)) {
+      const spaAppIndex = path.join(dataDir, 'installed-apps', spaAppName, 'index.html');
+      if (existsSync(spaAppIndex)) {
+        const bosonService = req.app?.locals?.bosonService;
+        const baseUrl = getBaseUrl(req, bosonService);
+        const sdkUrl = `${baseUrl}/puter.js/v2`;
+        let htmlContent = await readFileAsync(spaAppIndex, 'utf8');
+        htmlContent = htmlContent.replace(/https?:\/\/[^'"]*\/puter\.js\/v2/g, sdkUrl);
+        const walletShimTag = `<script src="${baseUrl}/pc2-wallet-provider.js?v=20260421a"></script>`;
+        htmlContent = htmlContent.replace(/<head[^>]*>/i, (match: string) => `${match}\n    ${walletShimTag}`);
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        res.type('html').send(htmlContent);
         return;
       }
     }
-    
-    // If file not found, continue to next handler
-    next();
-  });
-  */
 
+    next();
+  }
+  
   // Serve setup wizard (redirect middleware is registered earlier in the file)
   app.use('/setup', express.static(path.join(frontendPath, 'setup'), {
     setHeaders: (res: Response) => {
@@ -1170,7 +1294,7 @@ export function setupStaticServing(app: Express, options: StaticOptions): void {
     if (!isProduction) {
       res.setHeader('Content-Security-Policy', 
         "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: ws: wss: https:; " +
-        "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https://js.puter.com https://cdn.jsdelivr.net https://challenges.cloudflare.com; " +
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https://js.puter.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://unpkg.com https://challenges.cloudflare.com; " +
         "style-src 'self' 'unsafe-inline' https:; " +
         "img-src 'self' data: blob: https:; " +
         "font-src 'self' data: https: moz-extension: chrome-extension:; " +

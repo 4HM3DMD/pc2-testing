@@ -88,5 +88,6 @@ module.exports = async ({ dir, options }) => {
     return new webpack.BannerPlugin({
         banner: prefix_text,
         raw: true,
+        entryOnly: true,
     });
 };

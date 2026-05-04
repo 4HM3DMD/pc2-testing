@@ -21,6 +21,11 @@
 // Debug flag for initgui logging
 const INITGUI_DEBUG = false;
 
+// PC2 GUI build marker (v1.2.1 hotfix). Mirrors the particle-auth marker
+// so we can verify the user is running the latest GUI bundle (not a
+// browser-cached stale copy) when triaging logout / signing reports.
+console.log('[PC2 GUI]: BUILD v2026.04.30.pc2net.wcsigning-hardening loaded');
+
 // CRITICAL: Guard against multiple initgui.js executions
 // This can happen when Particle Auth iframes trigger page events
 if (window._initgui_js_loaded) {
@@ -703,6 +708,49 @@ window.initgui = async function(options){
                     
                     // Check for updates after desktop loads (30 second delay)
                     setTimeout(() => window.checkForUpdates?.(), 30000);
+
+                    // Check system readiness and offer to fix missing dependencies (5s delay)
+                    setTimeout(async () => {
+                        try {
+                            const readinessResp = await fetch(`${window.api_origin || ''}/api/system-readiness`);
+                            if (!readinessResp.ok) return;
+                            const readiness = await readinessResp.json();
+                            const missing = readiness.checks.filter(c => c.status !== 'ok' && c.fixable);
+                            if (missing.length === 0) return;
+
+                            const names = missing.map(c => c.label).join(', ');
+                            UIAlert({
+                                message: `${missing.length} system component${missing.length > 1 ? 's' : ''} not installed: ${names}.\n\nWould you like to install them now? This downloads transport binaries needed for reliable connectivity.`,
+                                buttons: [
+                                    { label: 'Install Now', value: 'install', type: 'primary' },
+                                    { label: 'Later', value: 'later' },
+                                ],
+                            }).then(async (choice) => {
+                                if (choice !== 'install') return;
+                                try {
+                                    const fixResp = await fetch(`${window.api_origin || ''}/api/system-readiness/fix`, {
+                                        method: 'POST',
+                                        headers: {
+                                            'Authorization': `Bearer ${window.auth_token}`,
+                                            'Content-Type': 'application/json',
+                                        },
+                                    });
+                                    const result = await fixResp.json();
+                                    UIAlert({
+                                        message: result.success
+                                            ? (result.message || 'Transport binaries installed successfully.')
+                                            : (result.message || 'Failed to install some components. Try running scripts/fix-networking.sh manually.'),
+                                        buttons: [{ label: 'OK', value: 'ok', type: 'primary' }],
+                                    });
+                                } catch {
+                                    UIAlert({
+                                        message: 'Failed to install components. Try running scripts/fix-networking.sh manually.',
+                                        buttons: [{ label: 'OK', value: 'ok', type: 'primary' }],
+                                    });
+                                }
+                            });
+                        } catch { /* readiness check failed, skip silently */ }
+                    }, 5000);
                 } catch (statError) {
                     console.warn('[initgui]: Desktop stat failed, loading desktop anyway:', statError.message);
                     // Still load desktop even if stat fails - better than grey screen
@@ -1608,27 +1656,105 @@ window.initgui = async function(options){
             }
         }
 
-        // logout
-        try{
-            const resp = await fetch(`${window.gui_origin}/get-anticsrf-token`);
-            const { token } = await resp.json();
-            await $.ajax({
-                url: window.gui_origin + "/logout",
-                type: 'POST',
-                async: true,
-                contentType: "application/json",
-                headers: {
-                    "Authorization": "Bearer " + window.auth_token
-                },
-                data: JSON.stringify({ anti_csrf: token }),
-                statusCode: {
-                    401: function () {
-                    },
-                },
-            })
-        }catch(e){
-            // Ignored
+        // PC2 logout-fix (v1.2.1): the previous flow `await`ed the server
+        // /logout call BEFORE clearing local state. If the server hung or
+        // was slow (e.g. on a flaky tunnel), the awaited promise never
+        // resolved, the localStorage clear and `window.location.href = '/'`
+        // never ran, and the user was left with the original session token
+        // intact. They'd refresh the page and land back in PC2 fully
+        // signed in, perceived as "logout doesn't work / it auto-signs me
+        // back in". Fix: kick the server /logout off as fire-and-forget,
+        // bound by a short timeout, while local cleanup proceeds
+        // immediately and unconditionally.
+        //
+        // PC2 logout-fix #2 (v1.2.1): even with the fire-and-forget above,
+        // there is still a race window. PC2 wraps every XHR with an
+        // interceptor (see pc2-node/scripts/build-frontend.js, the
+        // `Captured real session token from response` block) that, on any
+        // 200 response with a `token`/`auth_token` field, writes the token
+        // back to localStorage. Logout is synchronous — clear localStorage,
+        // then `window.location.href = '/'`. Browsers don't unload
+        // immediately: the current task finishes, then any *already-queued*
+        // XHR `readystatechange` callbacks run, *then* navigation begins.
+        // If a `whoami`/`readdir`/etc. response (which echoes the session
+        // token in its body) lands in that window, the interceptor
+        // re-writes the token we just cleared, the page reloads with the
+        // token intact, and the user is silently auto-restored. Same
+        // hazard for `update_auth_data` callbacks queued by in-flight
+        // requests.
+        //
+        // PC2 logout boot-gate (v1.2.1): also write a `pc2_logout_at`
+        // timestamp to BOTH localStorage and sessionStorage. The
+        // synchronous boot-gate in build-frontend.js reads this on every
+        // page load BEFORE any XHR fires and unconditionally nukes the
+        // auth keys if it's < 60 s old. This is the only race-proof fix
+        // — even if every other guard below fails (server hang, browser
+        // task ordering, callback we missed), the next page load will
+        // refuse to auto-restore the session.
+        try {
+            const _now = String(Date.now());
+            localStorage.setItem('pc2_logout_at', _now);
+            sessionStorage.setItem('pc2_logout_at', _now);
+            console.log('[initgui]: 🚪 logout marker set, beginning cleanup');
+        } catch (e) {
+            console.warn('[initgui]: failed to set logout marker:', e);
         }
+        window.__pc2_logging_out = true;
+
+        // PC2 logout-fix #3 (v1.2.1): MetaMask (and other injected wallets
+        // implementing EIP-2255) remember the origin's authorization across
+        // sessions independently of localStorage. So even after we wipe
+        // every localStorage / wagmi / ConnectKit key and reload the page,
+        // wagmi's injected connector silently calls `eth_accounts` on
+        // mount, MetaMask returns the previously-approved account WITHOUT
+        // prompting, the login UI sees a connected account, and SIWE
+        // auto-fires — perceived by the user as "I clicked logout but it
+        // immediately signs me back in". Fix: explicitly revoke the
+        // origin's permission via EIP-2255 (`wallet_revokePermissions`)
+        // so MetaMask forgets the approval. Best-effort: not all wallets
+        // support EIP-2255 (Coinbase Wallet, older MetaMask, Phantom),
+        // wrap in try/catch with a short timeout. Fired in parallel with
+        // the rest of the cleanup so it doesn't block navigation.
+        if (window.ethereum && typeof window.ethereum.request === 'function') {
+            Promise.race([
+                window.ethereum.request({
+                    method: 'wallet_revokePermissions',
+                    params: [{ eth_accounts: {} }],
+                }),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('wallet_revokePermissions timeout')), 1500)),
+            ]).then(() => {
+                console.log('[initgui]: 🔌 wallet_revokePermissions OK — injected wallet should not auto-reconnect on next load');
+            }).catch((e) => {
+                INITGUI_DEBUG && console.warn('[initgui]: wallet_revokePermissions not supported / timed out:', e?.message || e);
+            });
+        }
+        const _serverLogoutAuthHeader = window.auth_token; // captured before clear
+        const _serverLogoutOrigin = window.gui_origin;
+        Promise.race([
+            (async () => {
+                const resp = await fetch(`${_serverLogoutOrigin}/get-anticsrf-token`);
+                const { token } = await resp.json();
+                await $.ajax({
+                    url: _serverLogoutOrigin + "/logout",
+                    type: 'POST',
+                    async: true,
+                    contentType: "application/json",
+                    headers: {
+                        "Authorization": "Bearer " + _serverLogoutAuthHeader
+                    },
+                    data: JSON.stringify({ anti_csrf: token }),
+                    timeout: 4000,
+                    statusCode: {
+                        401: function () {
+                        },
+                    },
+                });
+            })(),
+            new Promise((resolve) => setTimeout(resolve, 4000))
+        ]).catch((serverErr) => {
+            // Server-side logout is best-effort. Local state is cleared regardless.
+            INITGUI_DEBUG && console.warn('[initgui]: Server logout failed/timed out (continuing):', serverErr);
+        });
 
         // remove this user from the array of logged_in_users
         for (let i = 0; i < window.logged_in_users.length; i++) {
@@ -1662,6 +1788,58 @@ window.initgui = async function(options){
 
         // disconnect particle under iframe 
         localStorage.setItem('disconnect_particle', 'true');
+        
+        // Clear ConnectKit/wagmi persistence so it cannot auto-reconnect on reload
+        for (const key of Object.keys(localStorage)) {
+            if (
+                key.startsWith('wagmi') ||
+                key.startsWith('wc@') ||
+                key.startsWith('-walletlink') ||
+                key.toLowerCase().includes('connectkit') ||
+                key.toLowerCase().includes('recentconnector')
+            ) {
+                localStorage.removeItem(key);
+            }
+        }
+
+        // WC IndexedDB cleanup (v1.2.1): WalletConnect Core persists pending
+        // session_requests + session metadata in IndexedDB, NOT just
+        // localStorage. Without this, after a logout + re-login the WC client
+        // resurrects stale pending requests from previous sessions —
+        // observed in real logs as:
+        //   "Object Error: emitting session_request:1777596439974387
+        //    without any listeners"
+        // and as a phantom second wallet prompt on the next sign-in
+        // ("the second signature didn't progress me to my desktop, I had to
+        // click cancel on my wallet"). Deleting the DBs forces WC to start
+        // clean. Best-effort — failures are non-fatal (deleteDatabase
+        // resolves async; we don't await because reload is imminent).
+        try {
+            const wcDatabases = [
+                'WALLET_CONNECT_V2_INDEXED_DB',
+                'walletconnect',
+                '@walletconnect/keyvaluestorage',
+            ];
+            wcDatabases.forEach(dbName => {
+                try {
+                    indexedDB.deleteDatabase(dbName);
+                } catch (delErr) {
+                    console.warn('[initgui]: failed to delete WC IndexedDB', dbName, delErr);
+                }
+            });
+            // Some browsers also expose databases() to enumerate — defence-in-depth
+            if (typeof indexedDB.databases === 'function') {
+                indexedDB.databases().then(dbs => {
+                    dbs.forEach(db => {
+                        if (db.name && (db.name.toLowerCase().includes('walletconnect') || db.name.toLowerCase().includes('wc_'))) {
+                            try { indexedDB.deleteDatabase(db.name); } catch (_) { /* best effort */ }
+                        }
+                    });
+                }).catch(() => { /* best effort */ });
+            }
+        } catch (idbErr) {
+            console.warn('[initgui]: WC IndexedDB cleanup failed (non-fatal):', idbErr);
+        }
 
         // Reset initialization flags to allow fresh login
         window.initgui_in_progress = false;
@@ -1691,10 +1869,26 @@ window.initgui = async function(options){
         
         // Clear sessionStorage to remove any cached auth
         sessionStorage.clear();
-        
+
+        // PC2 logout boot-gate (v1.2.1): re-write the marker AFTER the
+        // sessionStorage.clear() above blew it away, and AFTER the
+        // localStorage.removeItem chain. This is the second/last write —
+        // whichever survives the next page boot is fine, the boot-gate
+        // only needs ONE of them.
+        try {
+            const _now = String(Date.now());
+            localStorage.setItem('pc2_logout_at', _now);
+            sessionStorage.setItem('pc2_logout_at', _now);
+            console.log('[initgui]: 🚪 logout marker re-set, navigating to /');
+        } catch (e) {
+            console.warn('[initgui]: failed to re-set logout marker:', e);
+        }
+
         INITGUI_DEBUG && console.log('[initgui]: Logout complete, redirecting to home...');
-        // Use location.href instead of location.replace to ensure full page reload
-        window.location.href = '/';
+        // Use location.replace so the user can't simply hit Back to land
+        // on the cached, still-authed view (which the boot-gate would
+        // then nuke anyway, but replace is cleaner UX).
+        window.location.replace('/');
     });
 }
 
@@ -1737,12 +1931,14 @@ function requestOpenerOrigin() {
 }
 
 $(document).on('click', '.generic-close-window-button', function(e){
-    $(this).closest('.window').close();
+    const $win = $(this).closest('.window');
+    if (typeof $win.close === 'function') $win.close();
 });
 
 $(document).on('click', function(e){
     if(!$(e.target).hasClass('window-search') && $(e.target).closest('.window-search').length === 0 && !$(e.target).is('.toolbar-btn.search-btn')){
-        $('.window-search').close();
+        const $ws = $('.window-search');
+        if (typeof $ws.close === 'function') $ws.close();
     }
 })
 

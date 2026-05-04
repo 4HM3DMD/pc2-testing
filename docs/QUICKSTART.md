@@ -31,39 +31,35 @@ curl -fsSL https://raw.githubusercontent.com/Elacity/pc2.net/main/scripts/start-
 - Installs all dependencies
 - Builds and starts the server with PM2
 
-### Windows Users
+### Windows Users (WSL2)
 
-Windows needs a one-time setup (5 minutes), then it works just like Mac.
+Windows runs PC2 via WSL2 (Windows Subsystem for Linux). We have a dedicated installer that handles WSL-specific setup (systemd, node-pty compilation, PM2 persistence).
 
-**Step 1: Install Ubuntu App (One-Time Only)**
+**Step 1: Install WSL2 (One-Time Only)**
 
-1. Click the Windows Start button
-2. Search for "PowerShell"
-3. Right-click "Windows PowerShell" → "Run as administrator"
-4. Paste this command and press Enter:
+Open PowerShell as Administrator and run:
 
 ```powershell
 wsl --install
 ```
 
-5. Wait for it to complete (downloads Ubuntu)
-6. **Restart your computer**
+Restart your computer when prompted.
 
-**Step 2: Run PC2 (Every Time)**
+**Step 2: Install PC2**
 
-1. Click the Windows Start button
-2. Search for "Ubuntu" and click it
-3. A terminal window opens (just like Mac Terminal)
-4. Paste this command and press Enter:
+Open **Ubuntu** from your Start menu, then paste:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Elacity/pc2.net/main/scripts/start-local.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Elacity/pc2.net/main/scripts/install-wsl.sh | bash
 ```
 
-5. Wait for the ElastOS banner and setup to complete
-6. Open your browser to `http://localhost:4200`
+The script validates your WSL environment, offers to enable systemd, installs all dependencies, and starts PC2.
 
-**That's it!** From now on, just open "Ubuntu" from Start menu and run the command.
+**Step 3: Open PC2**
+
+Open your Windows browser to `http://localhost:4200`
+
+For detailed WSL configuration, troubleshooting, and systemd setup, see the [WSL Guide](docs/deployment/WSL_GUIDE.md).
 
 ### What to Expect
 

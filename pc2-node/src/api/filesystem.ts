@@ -13,7 +13,38 @@ import { FileStat, DirectoryEntry, ReadFileRequest, WriteFileRequest, CreateDire
 import { FileMetadata } from '../storage/database.js';
 import { Server as SocketIOServer } from 'socket.io';
 import { logger, createLogger } from '../utils/logger.js';
+import { getBaseUrl } from '../utils/urlUtils.js';
+import { mintFileUrlSignature, buildExpires } from '../utils/fileUrlSigner.js';
 const log = createLogger('api-filesystem');
+
+/**
+ * Resolve username-based paths (e.g. /sash/Desktop) to wallet-based paths
+ * (/0x.../Desktop). The Puter GUI sets desktop_path = /${username}/Desktop
+ * but the DB stores files under /${wallet_address}/Desktop.
+ */
+function resolveUsernamePath(
+  inputPath: string,
+  walletAddress: string,
+  db: any
+): string {
+  if (
+    inputPath.startsWith(`/${walletAddress}`) ||
+    inputPath.startsWith('~') ||
+    inputPath.startsWith('/null') ||
+    !inputPath.startsWith('/')
+  ) {
+    return inputPath;
+  }
+
+  const firstSegment = inputPath.split('/').filter(Boolean)[0];
+  if (!firstSegment || firstSegment.startsWith('0x')) return inputPath;
+
+  const displayName = db?.getSetting?.(`user_${walletAddress}_display_name`);
+  if (displayName && firstSegment === displayName) {
+    return inputPath.replace(`/${firstSegment}`, `/${walletAddress}`);
+  }
+  return inputPath;
+}
 
 /**
  * Get file/folder stat
@@ -119,21 +150,22 @@ export function handleStat(req: AuthenticatedRequest, res: Response): void {
     }
   }
 
-  // Handle ~ (home directory) - replace with user's wallet address
-  // CRITICAL: Also handle /null paths (frontend bug - should be fixed, but handle gracefully)
   let resolvedPath = path;
   if (path.startsWith('~')) {
     resolvedPath = path.replace('~', `/${req.user.wallet_address}`);
   } else if (path.startsWith('/null')) {
-    // Frontend is sending /null/Desktop instead of /wallet/Desktop
-    // Replace /null with the actual wallet address
     resolvedPath = path.replace('/null', `/${req.user.wallet_address}`);
     logger.warn(`[Stat] Replacing /null with wallet address: ${path} -> ${resolvedPath}`);
   } else if (!path.startsWith('/')) {
-    // If path doesn't start with /, assume it's relative to user's home
     resolvedPath = `/${req.user.wallet_address}/${path}`;
   }
-  
+
+  // Resolve username-based paths (e.g. /sash/Desktop -> /0x.../Desktop)
+  {
+    const statDb = (req.app.locals.db as any);
+    resolvedPath = resolveUsernamePath(resolvedPath, req.user.wallet_address, statDb);
+  }
+
   logger.info(`[Stat] Resolved path: ${resolvedPath} (original: ${path}, wallet: ${req.user.wallet_address})`);
 
   if (!filesystem) {
@@ -257,27 +289,23 @@ export function handleReaddir(req: AuthenticatedRequest, res: Response): void {
   if (path.startsWith('~')) {
     resolvedPath = path.replace('~', `/${req.user.wallet_address}`);
   } else if (path.startsWith('/null')) {
-    // Frontend is sending /null/Desktop instead of /wallet/Desktop
-    // Replace /null with the actual wallet address
     resolvedPath = path.replace('/null', `/${req.user.wallet_address}`);
     logger.warn(`[Readdir] Replacing /null with wallet address: ${path} -> ${resolvedPath}`);
   } else if (!path.startsWith('/')) {
-    // If path doesn't start with /, assume it's relative to user's home
     resolvedPath = `/${req.user.wallet_address}/${path}`;
   }
 
+  // Resolve username-based paths (e.g. /sash/Desktop -> /0x.../Desktop)
+  const db = (req.app.locals.db as any);
+  resolvedPath = resolveUsernamePath(resolvedPath, req.user.wallet_address, db);
+
+  const isDesktop = resolvedPath.endsWith('/Desktop') ||
+                    resolvedPath.endsWith('/Desktop/') ||
+                    (resolvedPath === `/${req.user.wallet_address}/Desktop`);
+
   if (!filesystem) {
-    // Return empty directory when filesystem not initialized
-    // But include special items like Trash/bin if it's the Desktop
-    const entries: DirectoryEntry[] = [];
-    
-    // If this is the Desktop, add Trash/bin item
-    // Check if path ends with /Desktop or contains /Desktop/
-    const isDesktop = resolvedPath.endsWith('/Desktop') || 
-                      resolvedPath.endsWith('/Desktop/') ||
-                      resolvedPath.includes('/Desktop/') ||
-                      (resolvedPath === `/${req.user.wallet_address}/Desktop`);
-    
+    const entries: any[] = [];
+
     if (isDesktop) {
       const trashPath = `/${req.user.wallet_address}/.Trash`;
       entries.push({
@@ -292,8 +320,9 @@ export function handleReaddir(req: AuthenticatedRequest, res: Response): void {
         uid: `uuid-${trashPath.replace(/\//g, '-').replace(/^-/, '')}`,
         uuid: `uuid-${trashPath.replace(/\//g, '-').replace(/^-/, '')}`
       });
+
     }
-    
+
     res.json(entries);
     return;
   }
@@ -301,22 +330,19 @@ export function handleReaddir(req: AuthenticatedRequest, res: Response): void {
   try {
     const files = filesystem.listDirectory(resolvedPath, req.user.wallet_address);
 
-    // Match mock server response format exactly
     const entries: any[] = files.map(metadata => {
-      // Check if directory is empty (only for directories)
       let is_empty = false;
       if (metadata.is_dir) {
         try {
           const dirContents = filesystem.listDirectory(metadata.path, req.user!.wallet_address);
           is_empty = dirContents.length === 0;
         } catch (error) {
-          // Directory might not exist or be inaccessible, assume empty
           is_empty = true;
         }
       }
-      
+
       const entry: any = {
-        id: Math.floor(Math.random() * 10000), // Mock server includes id
+        id: Math.floor(Math.random() * 10000),
         uid: `uuid-${metadata.path.replace(/\//g, '-')}`,
         uuid: `uuid-${metadata.path.replace(/\//g, '-')}`,
         name: metadata.path.replace(/\/+$/, '').split('/').pop() || '/',
@@ -324,11 +350,11 @@ export function handleReaddir(req: AuthenticatedRequest, res: Response): void {
         is_dir: metadata.is_dir,
         is_empty: is_empty,
         size: metadata.size || 0,
-        created: Math.floor(metadata.created_at / 1000), // Unix seconds (frontend timeago expects this)
-        modified: Math.floor(metadata.updated_at / 1000), // Unix seconds (frontend timeago expects this)
-        type: metadata.is_dir ? null : (metadata.mime_type || 'application/octet-stream'), // null for dirs, mime_type for files
-        thumbnail: metadata.thumbnail || undefined, // Include thumbnail if available
-        is_public: metadata.is_public || false // Only Public folder should be true
+        created: Math.floor(metadata.created_at / 1000),
+        modified: Math.floor(metadata.updated_at / 1000),
+        type: metadata.is_dir ? null : (metadata.mime_type || 'application/octet-stream'),
+        thumbnail: metadata.thumbnail || undefined,
+        is_public: metadata.is_public || false
       };
       return entry;
     });
@@ -340,6 +366,65 @@ export function handleReaddir(req: AuthenticatedRequest, res: Response): void {
       error: 'Failed to read directory',
       message: error instanceof Error ? error.message : 'Unknown error'
     });
+  }
+}
+
+/**
+ * Append virtual entries for installed dApps so they appear as
+ * desktop shortcuts with proper icons via the Puter GUI's item_icon.js
+ * (which reads associated_app.icon).
+ */
+function appendInstalledAppEntries(entries: any[], desktopPath: string, req: AuthenticatedRequest): void {
+  const appInstallService = req.app?.locals?.appInstallService;
+  if (!appInstallService) return;
+
+  try {
+    const bosonService = req.app?.locals?.bosonService;
+    const baseUrl = getBaseUrl(req, bosonService);
+    const installedApps = appInstallService.list();
+    const now = Math.floor(Date.now() / 1000);
+
+    for (const app of installedApps) {
+      let manifest: any;
+      try { manifest = JSON.parse(app.manifest_json); } catch { continue; }
+
+      if (manifest.hidden) continue;
+
+      const appTitle = app.title || app.app_name;
+      const appPath = `${desktopPath}/${appTitle}`;
+      const uid = `uuid-app-${app.app_name}`;
+
+      let iconUrl: string | undefined;
+      if (manifest.iconDataUrl) {
+        iconUrl = manifest.iconDataUrl;
+      } else if (app.icon) {
+        iconUrl = `${baseUrl}/installed-apps/${app.app_name}/${app.icon}`;
+      }
+
+      entries.push({
+        id: Math.floor(Math.random() * 10000),
+        uid,
+        uuid: uid,
+        name: appTitle,
+        path: appPath,
+        is_dir: false,
+        is_empty: false,
+        size: 0,
+        created: now,
+        modified: now,
+        type: null,
+        is_public: false,
+        associated_app: {
+          name: app.app_name,
+          icon: iconUrl,
+          title: appTitle,
+          uuid: `app-${app.app_name}`,
+          uid: `app-${app.app_name}`,
+        },
+      });
+    }
+  } catch (err) {
+    logger.warn('[Readdir] Failed to append installed app entries:', err instanceof Error ? err.message : String(err));
   }
 }
 
@@ -486,7 +571,33 @@ export async function handleRead(req: AuthenticatedRequest, res: Response): Prom
     });
     
     // Check if file exists before trying to read
-    const fileMetadata = filesystem.getFileMetadata(resolvedPath, walletAddress);
+    let fileMetadata = filesystem.getFileMetadata(resolvedPath, walletAddress);
+
+    // Wave 5 (A4): if the file isn't under the session's primary wallet, try
+    // the path-embedded wallet — but ONLY when it matches an alias of the
+    // requesting user (their EOA or their smart-account address, both
+    // case-insensitive). This preserves the legitimate "saved under EOA but
+    // session uses smart wallet" case for the same person while preventing a
+    // tethered wallet from reading another tethered wallet's files by simply
+    // typing /<otherWallet>/Desktop/foo.png.
+    if (!fileMetadata) {
+      const pathParts = resolvedPath.split('/').filter(Boolean);
+      const pathWallet = pathParts[0];
+      if (pathWallet && /^0x[0-9a-fA-F]{40}$/.test(pathWallet)) {
+        const candidate = pathWallet.toLowerCase();
+        const reqEoa = req.user?.wallet_address?.toLowerCase();
+        const reqSmart = req.user?.smart_account_address?.toLowerCase();
+        const isOwnAlias = !!reqEoa && (candidate === reqEoa || candidate === reqSmart);
+        const differsFromCurrent = candidate !== walletAddress?.toLowerCase();
+        if (isOwnAlias && differsFromCurrent) {
+          fileMetadata = filesystem.getFileMetadata(resolvedPath, pathWallet);
+          if (fileMetadata) {
+            walletAddress = pathWallet;
+          }
+        }
+      }
+    }
+
     if (!fileMetadata) {
       logger.error('[Read] File metadata not found in database', { 
         resolvedPath, 
@@ -2042,13 +2153,12 @@ export async function handleCopy(req: AuthenticatedRequest, res: Response): Prom
       let thumbnail: string | undefined = undefined;
       const mimeType = metadata.mime_type || '';
       if (mimeType.startsWith('image/')) {
-        const origin = req.headers.origin || req.headers.host;
-        const isHttps = origin && typeof origin === 'string' && origin.startsWith('https://');
-        const baseUrl = isHttps 
-          ? `https://${req.get('host')}`
-          : `http://${req.get('host')}`;
-        const expires = Math.ceil(Date.now() / 1000) + 999999999; // Long expiry
-        const signature = `sig-${fileUid}-${expires}`;
+        // Use shared getBaseUrl which honours x-forwarded-host so URLs sent
+        // to the browser are reachable when behind a reverse proxy gateway.
+        const baseUrl = getBaseUrl(req);
+        // A16: real HMAC-signed URL (24h TTL).
+        const expires = buildExpires();
+        const signature = mintFileUrlSignature(fileUid, expires);
         thumbnail = `${baseUrl}/file?uid=${encodeURIComponent(fileUid)}&expires=${expires}&signature=${encodeURIComponent(signature)}`;
         logger.info('[Copy] Generated thumbnail URL', { thumbnail, fileUid, mimeType });
       }

@@ -8,6 +8,7 @@ import { Request, Response } from 'express';
 import { AuthenticatedRequest } from './middleware.js';
 import { SignRequest, SignResponse } from '../types/api.js';
 import { FilesystemManager } from '../storage/filesystem.js';
+import { DatabaseManager } from '../storage/database.js';
 import { logger, createLogger } from '../utils/logger.js';
 const log = createLogger('api-other');
 import { broadcastItemUpdated } from '../websocket/events.js';
@@ -20,8 +21,13 @@ import type { AgentConfig } from '../services/gateway/types.js';
 import * as pdfjsLib from 'pdfjs-dist';
 import fs from 'fs/promises';
 import path from 'path';
+import { mintFileUrlSignature, buildExpires } from '../utils/fileUrlSigner.js';
+import { recordTelemetryOnce } from './telemetry.js';
 
 // Hardcoded base64 icons - must match apps.ts and info.ts for consistency
+const ELACITY_PLAYER_ICON = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIHZpZXdCb3g9IjAgMCA0OCA0OCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZGVmcz48bGluZWFyR3JhZGllbnQgaWQ9InBnIiB4MT0iMCIgeTE9IjAiIHgyPSIxIiB5Mj0iMSI+PHN0b3Agb2Zmc2V0PSIwJSIgc3RvcC1jb2xvcj0iIzJkZDRiZiIvPjxzdG9wIG9mZnNldD0iMTAwJSIgc3RvcC1jb2xvcj0iIzBkOTQ4OCIvPjwvbGluZWFyR3JhZGllbnQ+PGNsaXBQYXRoIGlkPSJwciI+PHJlY3Qgd2lkdGg9IjQ4IiBoZWlnaHQ9IjQ4IiByeD0iMTAiLz48L2NsaXBQYXRoPjwvZGVmcz48ZyBjbGlwLXBhdGg9InVybCgjcHIpIj48cmVjdCB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIGZpbGw9InVybCgjcGcpIi8+PHBvbHlnb24gcG9pbnRzPSIxOSwxMiAzNiwyNCAxOSwzNiIgZmlsbD0id2hpdGUiIG9wYWNpdHk9IjAuOTUiLz48L2c+PC9zdmc+';
+const ELACITY_VIEWER_ICON = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIHZpZXdCb3g9IjAgMCA0OCA0OCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZGVmcz48bGluZWFyR3JhZGllbnQgaWQ9InZnIiB4MT0iMCIgeTE9IjAiIHgyPSIxIiB5Mj0iMSI+PHN0b3Agb2Zmc2V0PSIwJSIgc3RvcC1jb2xvcj0iIzgxOGNmOCIvPjxzdG9wIG9mZnNldD0iMTAwJSIgc3RvcC1jb2xvcj0iIzYzNjZmMSIvPjwvbGluZWFyR3JhZGllbnQ+PGNsaXBQYXRoIGlkPSJ2ciI+PHJlY3Qgd2lkdGg9IjQ4IiBoZWlnaHQ9IjQ4IiByeD0iMTAiLz48L2NsaXBQYXRoPjwvZGVmcz48ZyBjbGlwLXBhdGg9InVybCgjdnIpIj48cmVjdCB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIGZpbGw9InVybCgjdmcpIi8+PHBhdGggZD0iTTYgMjRzNy0xMCAxOC0xMCAxOCAxMCAxOCAxMC03IDEwLTE4IDEwUzYgMjQgNiAyNHoiIHN0cm9rZT0id2hpdGUiIHN0cm9rZS13aWR0aD0iMi41IiBmaWxsPSJub25lIi8+PGNpcmNsZSBjeD0iMjQiIGN5PSIyNCIgcj0iNSIgZmlsbD0id2hpdGUiLz48L2c+PC9zdmc+';
+
 const hardcodedIcons: Record<string, string> = {
   'editor': 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIHZpZXdCb3g9IjAgMCA0OCA0OCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZGVmcz48bGluZWFyR3JhZGllbnQgaWQ9ImVkZ3JhZCIgeDE9IjAiIHkxPSIwIiB4Mj0iMSIgeTI9IjEiPjxzdG9wIG9mZnNldD0iMCUiIHN0b3AtY29sb3I9IiM2MzY2RjEiLz48c3RvcCBvZmZzZXQ9IjEwMCUiIHN0b3AtY29sb3I9IiM0RjQ2RTUiLz48L2xpbmVhckdyYWRpZW50PjxjbGlwUGF0aCBpZD0icm91bmRlZCI+PHJlY3Qgd2lkdGg9IjQ4IiBoZWlnaHQ9IjQ4IiByeD0iMTAiLz48L2NsaXBQYXRoPjwvZGVmcz48ZyBjbGlwLXBhdGg9InVybCgjcm91bmRlZCkiPjxyZWN0IHdpZHRoPSI0OCIgaGVpZ2h0PSI0OCIgZmlsbD0idXJsKCNlZGdyYWQpIi8+PHJlY3QgeD0iMTIiIHk9IjgiIHdpZHRoPSIyNCIgaGVpZ2h0PSIzMiIgcng9IjIiIGZpbGw9IiNmZmYiLz48cmVjdCB4PSIxNiIgeT0iMTQiIHdpZHRoPSIxNiIgaGVpZ2h0PSIyIiBmaWxsPSIjYzdkMmZlIi8+PHJlY3QgeD0iMTYiIHk9IjIwIiB3aWR0aD0iMTYiIGhlaWdodD0iMiIgZmlsbD0iI2M3ZDJmZSIvPjxyZWN0IHg9IjE2IiB5PSIyNiIgd2lkdGg9IjEyIiBoZWlnaHQ9IjIiIGZpbGw9IiNjN2QyZmUiLz48cmVjdCB4PSIxNiIgeT0iMzIiIHdpZHRoPSI4IiBoZWlnaHQ9IjIiIGZpbGw9IiNjN2QyZmUiLz48L2c+PC9zdmc+',
   'viewer': 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIHZpZXdCb3g9IjAgMCA0OCA0OCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZGVmcz48bGluZWFyR3JhZGllbnQgaWQ9InZpZXdncmFkIiB4MT0iMCIgeTE9IjAiIHgyPSIxIiB5Mj0iMSI+PHN0b3Agb2Zmc2V0PSIwJSIgc3RvcC1jb2xvcj0iIzU2ODRmNSIvPjxzdG9wIG9mZnNldD0iMTAwJSIgc3RvcC1jb2xvcj0iIzAzNjNhZCIvPjwvbGluZWFyR3JhZGllbnQ+PGNsaXBQYXRoIGlkPSJyb3VuZGVkIj48cmVjdCB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIHJ4PSIxMCIvPjwvY2xpcFBhdGg+PC9kZWZzPjxnIGNsaXAtcGF0aD0idXJsKCNyb3VuZGVkKSI+PHJlY3Qgd2lkdGg9IjQ4IiBoZWlnaHQ9IjQ4IiBmaWxsPSJ1cmwoI3ZpZXdncmFkKSIvPjxjaXJjbGUgY3g9IjE2IiBjeT0iMTQiIHI9IjUiIGZpbGw9IiNmZmQ3NjQiLz48cGF0aCBkPSJNNiAzOGwxMC0xMiA4IDYgMTAtMTQgMTAgMTR2MTJINnoiIGZpbGw9IiNjYmVhZmIiLz48L2c+PC9zdmc+',
@@ -106,10 +112,15 @@ export function handleSign(req: AuthenticatedRequest, res: Response): void {
       // Use effectiveFilePath for the rest of the logic
       filePath = effectiveFilePath;
 
-      // Generate signature (simplified - in production, use proper signing)
-      const expires = Math.ceil(Date.now() / 1000) + 999999999; // Very long expiry
-      const action = item.action || 'read';
-      const signature = `sig-${filePath}-${action}-${expires}`;
+      // Mint a signed capability URL (A16). 24h TTL — long enough for
+      // iframe apps to keep working through a normal session, short
+      // enough to bound replay if the URL leaks. The action field is
+      // not part of the signed payload (the verifier only enforces
+      // uid+expires); mint sites that need stricter scoping can move
+      // the action into uid in a follow-up.
+      const expires = buildExpires();
+      const fileUid = `uuid-${filePath.replace(/\//g, '-')}`;
+      const signature = mintFileUrlSignature(fileUid, expires);
 
       // Determine base URL
       const origin = req.headers.origin || req.headers.host;
@@ -117,8 +128,6 @@ export function handleSign(req: AuthenticatedRequest, res: Response): void {
       const baseUrl = isHttps 
         ? `https://${origin.replace(/^https?:\/\//, '').split('/')[0]}`
         : `http://${req.headers.host || 'localhost:4200'}`;
-
-      const fileUid = `uuid-${filePath.replace(/\//g, '-')}`;
 
       signatures.push({
         uid: fileUid,
@@ -247,6 +256,12 @@ export function handleRAO(req: AuthenticatedRequest, res: Response): void {
       if (appName && appName !== 'explorer') {
         db.recordRecentApp(req.user.wallet_address, appName);
         logger.info('[RAO] Recorded recent app', { wallet: req.user.wallet_address.substring(0, 10), app: appName });
+
+        // Telemetry hook (A5b §P0): "Door 3" of the v1.2 funnel.
+        // Fires exactly once per node lifetime — the first time any user
+        // launches any non-system app (excludes 'explorer' which is the
+        // shell itself). Idempotent on subsequent app launches.
+        recordTelemetryOnce(db, 'first_capsule_open');
       }
     } catch (error: any) {
       // Don't fail the request if recording fails
@@ -1439,11 +1454,11 @@ export async function handleOpenItem(req: AuthenticatedRequest, res: Response): 
     appIndexUrl = `${baseUrl}/apps/editor/index.html`;
   }
 
-  // Generate file signature (matching Puter's sign_file format)
+  // Generate file signature (A16: HMAC-SHA256 with server-only key,
+  // 24h TTL — short enough to bound replay if the URL leaks).
   const actualFileUid = fileUid || `uuid-${metadata.path.replace(/\//g, '-')}`;
-  const expires = Math.ceil(Date.now() / 1000) + 9999999999999; // Far future
-  // Simple signature (in real Puter, this uses SHA256 with secret)
-  const signature = `sig-${actualFileUid}-${expires}`;
+  const expires = buildExpires();
+  const signature = mintFileUrlSignature(actualFileUid, expires);
   
   // Ensure normalizedPath starts with / and baseUrl doesn't end with /
   const cleanBaseUrl = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
@@ -1467,9 +1482,31 @@ export async function handleOpenItem(req: AuthenticatedRequest, res: Response): 
     path: cleanPath,
   };
   
-  // Generate mock token (in real Puter, this is a user-app token)
-  const token = `mock-token-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-  
+  // SEC-3c (2026-04 audit): mint a real, file-scoped session token instead
+  // of the previous insecure `mock-token-*` placeholder. The middleware
+  // recognises this token via standard db.getSession() lookup, then enforces
+  // scope='file' against the request's uid/file/path. The iframe app cannot
+  // use this token to access any other resource. TTL defaults to 4h
+  // (long enough for video playback / document edit, short enough that
+  // revocation has bounded blast radius).
+  const db = req.app.locals.db as DatabaseManager | undefined;
+  if (!db) {
+    logger.error('[OpenItem] Database not initialized; cannot mint scoped session');
+    res.status(500).json({ error: 'Database not initialized' });
+    return;
+  }
+  const token = crypto.randomBytes(32).toString('hex');
+  db.createScopedSession({
+    token,
+    wallet_address: req.user.wallet_address,
+    smart_account_address: req.user.smart_account_address ?? null,
+    scope: 'file',
+    scope_data: JSON.stringify({
+      fileUid: actualFileUid,
+      allowedPath: cleanPath,
+    }),
+  });
+
   // Build app object (matching Puter's format)
   const app = {
     uid: appUid,
@@ -1606,8 +1643,7 @@ export async function handleSuggestApps(req: AuthenticatedRequest, res: Response
     appIndexUrl = `${baseUrl}/apps/editor/index.html`;
   }
   
-  // Return array of app objects (matching Puter's suggest_app_for_fsentry format)
-  const app = {
+  const builtinApp = {
     uid: appUid,
     uuid: appUid,
     name: appName,
@@ -1615,40 +1651,47 @@ export async function handleSuggestApps(req: AuthenticatedRequest, res: Response
     icon: hardcodedIcons[appName] || undefined,
     index_url: appIndexUrl,
   };
+
+  // Determine the corresponding Elacity runtime app for this file type
+  let runtimeApp: any = null;
+  if (fsname.endsWith('.jpg') || fsname.endsWith('.png') || fsname.endsWith('.webp') ||
+      fsname.endsWith('.svg') || fsname.endsWith('.bmp') || fsname.endsWith('.jpeg') ||
+      fsname.endsWith('.gif') || fsname.endsWith('.pdf') || fsname.endsWith('.glb') ||
+      fsname.endsWith('.gltf') || fsname.endsWith('.obj') || fsname.endsWith('.stl') ||
+      fsname.endsWith('.fbx') || fsname.endsWith('.csv') || fsname.endsWith('.tsv') ||
+      fsname.endsWith('.ttf') || fsname.endsWith('.otf') || fsname.endsWith('.woff') ||
+      fsname.endsWith('.woff2') || fsname.endsWith('.zip')) {
+    runtimeApp = {
+      uid: 'app-elacity-viewer',
+      uuid: 'app-elacity-viewer',
+      name: 'ddrm-viewer',
+      title: 'Elacity Viewer',
+      icon: ELACITY_VIEWER_ICON,
+      index_url: `${baseUrl}/apps/ddrm-viewer/index.html`,
+      cleartext: true,
+    };
+  } else if (fsname.endsWith('.mp4') || fsname.endsWith('.webm') || fsname.endsWith('.mpg') ||
+      fsname.endsWith('.mpv') || fsname.endsWith('.mp3') || fsname.endsWith('.m4a') ||
+      fsname.endsWith('.ogg') || fsname.endsWith('.mov') || fsname.endsWith('.avi') ||
+      fsname.endsWith('.wav') || fsname.endsWith('.flac') || fsname.endsWith('.mkv') ||
+      fsname.endsWith('.av1') || fsname.endsWith('.m4v') || fsname.endsWith('.ogv') ||
+      fsname.endsWith('.aac') || fsname.endsWith('.opus')) {
+    runtimeApp = {
+      uid: 'app-elacity-player',
+      uuid: 'app-elacity-player',
+      name: 'pc2-media-runtime',
+      title: 'Elacity Player',
+      icon: ELACITY_PLAYER_ICON,
+      index_url: `${baseUrl}/apps/pc2-media-runtime/index.html`,
+      cleartext: true,
+    };
+  }
   
-  // Generate file signature (same as /open_item) so viewer can access the file
-  const actualFileUid = fileUid || `uuid-${metadata.path.replace(/\//g, '-')}`;
-  const expires = Math.ceil(Date.now() / 1000) + 9999999999999; // Far future
-  const signature = `sig-${actualFileUid}-${expires}`;
+  logger.info('[SuggestApps] Returning app info', { appName, runtimeApp: runtimeApp?.name, indexUrl: appIndexUrl });
   
-  const cleanBaseUrl = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
-  const cleanPath = metadata.path.startsWith('/') ? metadata.path : '/' + metadata.path;
-  
-  const signatureObj = {
-    uid: actualFileUid,
-    expires: expires,
-    signature: signature,
-    url: `${cleanBaseUrl}/read?file=${encodeURIComponent(cleanPath)}`,
-    read_url: `${cleanBaseUrl}/read?file=${encodeURIComponent(cleanPath)}`,
-    write_url: `${cleanBaseUrl}/writeFile?uid=${actualFileUid}&expires=${expires}&signature=${signature}`,
-    metadata_url: `${cleanBaseUrl}/itemMetadata?uid=${actualFileUid}&expires=${expires}&signature=${signature}`,
-    fsentry_type: metadata.mime_type || 'application/octet-stream',
-    fsentry_is_dir: metadata.is_dir,
-    fsentry_name: fileName,
-    fsentry_size: metadata.size,
-    fsentry_accessed: metadata.updated_at,
-    fsentry_modified: metadata.updated_at,
-    fsentry_created: metadata.created_at,
-    path: cleanPath,
-  };
-  
-  logger.info('[SuggestApps] Returning app info', { appName, indexUrl: appIndexUrl });
-  
-  // Return both signature and suggested apps (matching /open_item format)
-  res.json({
-    signature: signatureObj, // Include signature so viewer can access file
-    suggested_apps: [app],
-  });
+  // Runtime app first (if applicable), then built-in app as alternative
+  const apps = runtimeApp ? [runtimeApp, builtinApp] : [builtinApp];
+  res.json(apps);
 }
 
 /**
@@ -1926,11 +1969,10 @@ export async function handleWriteFile(req: AuthenticatedRequest, res: Response):
     const io = (req.app.locals.io as SocketIOServer | undefined);
     if (io) {
       // Build read URL for thumbnail (images use read URL as thumbnail)
-      // Include cache-busting parameter using IPFS hash to ensure fresh thumbnail
-      const isHttps = req.protocol === 'https';
-      const baseUrl = isHttps 
-        ? `https://${req.get('host')}`
-        : `http://${req.get('host')}`;
+      // Include cache-busting parameter using IPFS hash to ensure fresh thumbnail.
+      // Use shared getBaseUrl which honours x-forwarded-host so URLs sent
+      // to the browser are reachable when behind a reverse proxy gateway.
+      const baseUrl = getBaseUrl(req);
       
       // For image files, include thumbnail URL with cache-busting
       let thumbnail: string | undefined = undefined;

@@ -1,6 +1,6 @@
 # PC2 Post-Launch Roadmap
 
-**Status:** v1.0.0 Launched, v1.1.0 on branch | **Date:** March 2026 | **Last Updated:** March 2, 2026
+**Status:** v1.1.0 Released (Mar 3). Branch `feature/lit-chipotle-migration` active. | **Date:** March 2026 | **Last Updated:** March 24, 2026
 
 ---
 
@@ -39,22 +39,51 @@ Today, every installation path requires terminal commands. This excludes 95% of 
 
 ### 0.1 Signed macOS App (Effort: Low | ETA: 1-2 weeks)
 
-**Current state:** ElastOS Launcher works but requires `xattr -cr` terminal command due to missing Apple code signing. Meanwhile, `start-local.sh` provides a zero-friction terminal install on macOS that auto-installs Homebrew + WireGuard.
+**Current state (updated 2026-05-01 after v1.2.6 ship):** ElastOS Launcher works but still requires terminal commands. Two distinct blockers:
 
-**What's needed:**
+1. **`xattr -cr`** — needed once to clear macOS Gatekeeper quarantine on the unsigned `.app` bundle. Resolved by Apple code signing + notarization (the original scope of this track).
+2. **`xcode-select --install`** — needed on a fresh Mac that's never had Xcode CLT, because `better-sqlite3` is V8-ABI-specific and the launcher's install pipeline can land a wrong-ABI prebuild that requires a C++ recompile to recover from. v1.2.6 attempted to fix this by bumping `better-sqlite3` from `^9.2.2` → `^11.10.0`, but a fresh-install validation on 2026-05-01 confirmed the bump alone is insufficient. **Resolved by**: migrating the dependency to `@photostructure/sqlite` (Node-API, prebuilds bundled in the npm tarball) — tracked in `.cursor/tasks/SQLITE-NO-COMPILE-MIGRATION/SQLITE-NO-COMPILE-MIGRATION.md`, target v1.2.7.
+
+Meanwhile, `start-local.sh` provides a zero-friction *terminal* install on macOS that auto-installs Homebrew + WireGuard (and Xcode CLT when needed) — that path is fine for technical users but is exactly what we're trying to eliminate for the rest.
+
+**What's needed (full no-terminal path):**
+- [ ] Land `@photostructure/sqlite` migration (v1.2.7) — eliminates the Xcode-CLT requirement entirely on Mac
+- [ ] Fix launcher abort bug — when verification gauntlet fails, `process.exit(1)` instead of starting PC2 anyway. Lives in the ElastOS Launcher repo, not `pc2.net`. Track separately when the launcher repo is next touched.
 - [ ] Apple Developer Program enrollment ($99/year)
 - [ ] Code signing certificate setup (Developer ID Application)
 - [ ] Notarization with Apple (automated via `electron-builder`)
 - [ ] Update GitHub Actions to sign builds (CSC_LINK, APPLE_ID secrets)
-- [ ] Result: Download .dmg → Double-click → Works
+- [ ] Result: Download .dmg → Double-click → Works (no `xattr`, no `xcode-select`, no terminal at all)
 
-**Cost:** $99/year
+**Cost:** $99/year (Apple Developer Program). The SQLite migration and launcher abort bug are eng work, not capex.
 
-### 0.2 Windows Installer (Effort: Medium | ETA: 2-4 weeks)
+### 0.3 v1.2.7 patch release scope (in flight as of 2026-05-02)
 
-**Current state:** No Windows support except WSL (which is terminal-based).
+v1.2.7 is intended as a small, scoped patch release with two items both already triaged into Proposed-status task docs:
 
-**Option A: Native Electron App (Recommended)**
+1. **`better-sqlite3` → `@photostructure/sqlite` migration** — `.cursor/tasks/SQLITE-NO-COMPILE-MIGRATION/`. Closes the v1.2.6 known-issue #1 (residual Xcode-CLT requirement on fresh Mac installs). ~30 LOC across `pc2-node/src/storage/database.ts`, `pc2-node/src/services/UpdateService.ts`, `scripts/update.sh`, `scripts/install-arm.sh`. Drop-in API; no schema changes.
+2. **MetaMask Mobile in-app browser secure-view fix** — `.cursor/tasks/SECURE-VIEW-MM-MOBILE-INAPP-BROWSER/`. Closes the v1.2.6 known-issue #4 (paid-content playback fails inside MM Mobile's in-app browser). Bug isolated to Particle Auth's `window.ethereum` wrapper rejecting our `personal_sign` call before it reaches MM Mobile. Needs hands-on local debugging via Safari Web Inspector / Chrome DevTools (remote-patch loop hit caching wall on 2026-05-01).
+
+Both tasks are independent — can ship in either order, or together. Combined surface: ~80 LOC. Nothing else is in scope for v1.2.7. v1.3.0 work continues on `feature/lit-chipotle-migration` and remains gated on external dependencies (Lit Chipotle production + Elacity V3 contracts).
+
+### 0.2 Windows / WSL Support (Effort: Medium | ETA: 2-4 weeks)
+
+**Current state:** Windows users run PC2 via WSL (Ubuntu on Windows). It works but has recurring issues — PM2 process management is unreliable without systemd, builds can fail silently, and users hit cryptic errors on WSL restart. Community member Joel hit `Script not found` errors across 3 installs on 2 laptops. WSL needs to be a 10/10 experience while we build toward the native installer.
+
+**Phase 1: Make WSL Bulletproof (Priority — Before Native Installer)**
+- [ ] Create `scripts/install-wsl.sh` — WSL-specific install script that handles WSL quirks:
+  - Detect WSL environment (`grep -qi microsoft /proc/version`)
+  - Enable systemd if not already (`/etc/wsl.conf` → `[boot] systemd=true`)
+  - Verify build succeeded before PM2 start (`test -f pc2-node/dist/index.js`)
+  - Add `.bashrc` auto-start hook for non-systemd WSL sessions
+  - Clear stale PM2 configs before fresh start
+- [ ] Add build verification to `ecosystem.config.cjs` — pre-start check that `dist/index.js` exists
+- [ ] Add `pm2 startup` alternative for WSL — `.bashrc` hook or Windows Task Scheduler integration
+- [ ] Create WSL troubleshooting guide in `docs/deployment/WSL_GUIDE.md`
+- [ ] Test on Windows 10 + WSL2 Ubuntu 22.04 and Windows 11 + WSL2 Ubuntu 24.04
+- [ ] Add WSL to the install-arm.sh / start-local.sh detection — warn user if WSL detected and suggest WSL-specific steps
+
+**Phase 2: Native Windows Installer (After WSL is Solid)**
 - [ ] Build ElastOS Launcher for Windows (Electron already supports this)
 - [ ] Create proper `.exe` / `.msi` installer via `electron-builder`
 - [ ] Windows code signing certificate (~$200-400/year or free with open source programs)
@@ -62,10 +91,12 @@ Today, every installation path requires terminal commands. This excludes 95% of 
 - [ ] Result: Download .exe → Install → Run
 - [ ] PC2 runs inside the Electron app (same as macOS Desktop Launcher)
 
-**Option B: Windows Subsystem for Linux (Current)**
-- Requires WSL2 knowledge
-- Only for technical users
-- Not a "normal people" solution
+**Known WSL Issues (Reported by Community)**
+| Issue | Root Cause | Status |
+|-------|-----------|--------|
+| `Script not found: pc2` | PM2 saves stale config, `dist/index.js` missing after failed build | Workaround documented, fix pending |
+| PC2 doesn't start after WSL restart | No systemd = PM2 startup/resurrect doesn't work | Needs `.bashrc` hook or systemd enable |
+| Silent build failures | `npm run build` errors swallowed during install | Needs explicit verification step |
 
 ### 0.3 Linux .deb Package (Effort: Medium | ETA: 2-3 weeks)
 
@@ -155,18 +186,19 @@ Today, every installation path requires terminal commands. This excludes 95% of 
 
 | # | Task | Impact | Effort | Target |
 |---|------|--------|--------|--------|
-| 1 | Apple code signing | Removes terminal step for Mac users | Low | Feb 2026 |
-| 2 | Pre-built Pi/Jetson images | Zero-terminal for hardware users | Medium | Feb-Mar 2026 |
-| 3 | ActiveProxy in Desktop Launcher | External access from laptops | Medium | Mar 2026 |
-| 4 | Linux .deb package | Double-click install for Ubuntu/Jetson | Medium | Mar 2026 |
-| 5 | Windows .exe installer | Opens entire Windows market | Medium | Mar-Apr 2026 |
+| 1 | WSL bulletproof install | Fixes Windows/WSL users hitting errors | Low-Med | Mar 2026 |
+| 2 | Apple code signing | Removes terminal step for Mac users | Low | Mar 2026 |
+| 3 | Pre-built Pi/Jetson images | Zero-terminal for hardware users | Medium | Mar-Apr 2026 |
+| 4 | ActiveProxy in Desktop Launcher | External access from laptops | Medium | Apr 2026 |
+| 5 | Linux .deb package | Double-click install for Ubuntu/Jetson | Medium | Apr 2026 |
+| 6 | Windows .exe installer | Opens entire Windows market | Medium | Apr-May 2026 |
 
 ---
 
-## Track 0.7: ActiveProxy NAT Traversal Fix (CRITICAL — In Progress)
+## Track 0.7: ActiveProxy NAT Traversal Fix (COMPLETE — Shipped in v1.1.0)
 
-> **Branch:** `feature/jetson-gpu-acceleration`
-> **Status:** Testing with community member (EverlastingOS on Jetson)
+> **Branch:** `feature/jetson-gpu-acceleration` → merged to `main`
+> **Status:** ✅ Complete — shipped in v1.1.0 (Mar 3, 2026)
 > **Full details:** [ActiveProxy Fix Plan](./activeproxy_fix.md)
 
 The ActiveProxy protocol (Boson NAT traversal enabling `username.ela.city` domains) required a complete rewrite. The PC2 Node.js client had multiple protocol mismatches with the Java Boson server.
@@ -185,7 +217,7 @@ The ActiveProxy protocol (Boson NAT traversal enabling `username.ela.city` domai
 | **Merge to main** | ⏳ Pending | Blocked on Sash's validation |
 | **Deploy updated web-gateway to supernode** | ✅ Done | Live on supernode |
 
-**Latest (Mar 2):** Fully working on EverlastingOS Jetson + Anders' alm.ela.city Jetson. WireGuard provides fast direct access; ActiveProxy works as fallback. Merge to main blocked on Sash's own Jetson validation.
+**Final Status (Mar 3):** Merged to main in v1.1.0. Fully working on EverlastingOS Jetson + Anders' alm.ela.city Jetson. WireGuard provides fast direct access; ActiveProxy works as fallback. Four-tier transport cascade (WG > AWG > VLESS Reality > ActiveProxy) shipped.
 
 ---
 
@@ -403,18 +435,34 @@ Offer pre-configured PC2 hardware for users who want plug-and-play sovereignty. 
 
 ## Track 5: Version Roadmap
 
-### v1.1 - Bug Fixes & Normal People (Feb-Mar 2026)
+### v1.1.0 - Released Mar 3, 2026
+
+| Feature | Status |
+|---------|--------|
+| Four-tier transport cascade (WG > AWG > VLESS > ActiveProxy) | ✅ Shipped |
+| Desktop Launcher v1.1.1 (version display, one-click updates) | ✅ Shipped |
+| Desktop UI overhaul (full-width bar, layout toggle, mobile responsive) | ✅ Shipped |
+| Voice AI pipeline (Whisper + Ollama + Context API) | ✅ Shipped |
+| ARM installer hardened (Go auto-detect, AWG from source, sing-box pinned) | ✅ Shipped |
+| Structured logging (no more console.log in prod) | ✅ Shipped |
+| Security: credentials rotated, removed from docs | ✅ Shipped |
+| Ubuntu build deps auto-install | ✅ Shipped |
+| WireGuard reconnection with exponential backoff | ✅ Shipped |
+
+### v1.1.x - Bug Fixes, Normal People & dDRM (Mar-Apr 2026)
 
 | Feature | Status |
 |---------|--------|
 | Fix recovery phrase copy bug | Pending |
 | Apple code signing (no terminal on Mac) | Pending |
 | Pre-built Pi/Jetson images | Pending |
-| Ubuntu build deps auto-install | ✅ Done |
-| Voice AI pipeline (Whisper + Piper) | ✅ Done |
-| Context awareness API | ✅ Done |
 | Improved error messages | Pending |
-| Documentation improvements | Pending |
+| Community networking fix (WG+AWG+VLESS install) | ✅ Done (Mar 8) |
+| Elacity Creator app (publish pipeline) | ✅ Done |
+| Elacity Market app (Apple-grade redesign) | ✅ Done |
+| AI Training Licensing — Phase C2 metadata | ✅ Done (Mar 24) |
+| dDRM capsule format + viewer | ✅ Done |
+| WASM/Rust crypto optimization | ✅ Done |
 
 ### v1.2 - Windows & External Access (Mar-Apr 2026)
 
@@ -425,7 +473,7 @@ Offer pre-configured PC2 hardware for users who want plug-and-play sovereignty. 
 | ActiveProxy auto-connect in Desktop Launcher | Pending |
 | Desktop Launcher shows ela.city domain status | Pending |
 
-### v1.5 - ElastOS Integration Begins (Q2 2026)
+### v1.5 - ElastOS Integration & Advanced Licensing (Q2 2026)
 
 | Feature | Status |
 |---------|--------|
@@ -433,6 +481,9 @@ Offer pre-configured PC2 hardware for users who want plug-and-play sovereignty. 
 | Direct PC2-to-PC2 chat | Pending |
 | IoT device networking | Pending |
 | PC2 as capsule (`elastos://QmPC2...`) | Pending |
+| Time-limited access tokens (rental model) | Pending |
+| Pay-per-use access tokens (metered access) | Pending |
+| License enforcement dApps (commercial use, modification, attribution) | Pending |
 | Optional Firecracker deployment | Pending |
 | Multi-domain support (`ela.net`, `pc2.net`) | Pending |
 
@@ -543,13 +594,15 @@ Feb 2026        Mar 2026        Q2 2026         Q3 2026         Q4 2026         
 
 ## Related Plans
 
-- [ActiveProxy NAT Traversal Fix](./activeproxy_fix.md) — **Critical, in testing**
+- [ActiveProxy NAT Traversal Fix](./activeproxy_fix.md) — Complete, merged to main in v1.1.0
 - [Jetson SDK Optimization](./jetson_sdk_optimization_3c7e940c.plan.md)
 - [Flint AI Agent Upgrade](./upgrade_flint_ai_agent_4946c79b.plan.md)
+- **Supernode Decentralization** — see `docs/core/SESSION_HANDOVER.md` for full status (Phases 1-2 complete, InterServer upgrade pending)
+- **Community Networking Fix** — `scripts/fix-networking.sh` + ARM/x86 commands (Mar 8)
 
 ---
 
-**Document Version:** 2.0  
+**Document Version:** 3.0  
 **Created:** February 2026  
-**Last Updated:** February 2026  
+**Last Updated:** March 8, 2026  
 **Owner:** Elacity Labs

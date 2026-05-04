@@ -230,6 +230,13 @@ const item_icon = async (fsentry) => {
     else if ( fsentry.name.toLowerCase().endsWith('.zip') ) {
         return { image: window.icons['file-zip.svg'], type: 'icon' };
     }
+    // *.ddrm (unified dDRM capsule — protected asset from Elacity)
+    // Also matches legacy *.edrm and *.ddrm.json
+    else if ( fsentry.name.toLowerCase().endsWith('.ddrm')
+           || fsentry.name.toLowerCase().endsWith('.edrm')
+           || fsentry.name.toLowerCase().endsWith('.ddrm.json') ) {
+        return { image: window.icons['file-ddrm.svg'], type: 'icon' };
+    }
     // --------------------------------------------------
     // Determine icon by set or derived mime type
     // --------------------------------------------------

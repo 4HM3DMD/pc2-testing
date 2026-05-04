@@ -705,6 +705,7 @@ Capabilities: files, terminal, git, http, scheduler`;
                     autoHide: true,
                 });
             });
+            
         }
     },
 };

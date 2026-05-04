@@ -1,0 +1,40 @@
+{
+  "name": "wallet-test",
+  "title": "Wallet Bridge Test",
+  "version": "1.0.0",
+  "description": "Test dApp for verifying the PC2 wallet bridge postMessage system.",
+  "author": {
+    "name": "PC2 Dev"
+  },
+  "license": "MIT",
+  "icon": "icon.svg",
+  "iconDataUrl": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA0OCA0OCI+CiAgPGRlZnM+CiAgICA8bGluZWFyR3JhZGllbnQgaWQ9ImJnIiB4MT0iMCIgeTE9IjAiIHgyPSI0OCIgeTI9IjQ4IiBncmFkaWVudFVuaXRzPSJ1c2VyU3BhY2VPblVzZSI+CiAgICAgIDxzdG9wIG9mZnNldD0iMCIgc3RvcC1jb2xvcj0iIzBkOTQ4OCIvPgogICAgICA8c3RvcCBvZmZzZXQ9IjEiIHN0b3AtY29sb3I9IiMxMTVlNTkiLz4KICAgIDwvbGluZWFyR3JhZGllbnQ+CiAgPC9kZWZzPgogIDxyZWN0IHdpZHRoPSI0OCIgaGVpZ2h0PSI0OCIgcng9IjEwIiBmaWxsPSJ1cmwoI2JnKSIvPgogIDxnIGZpbGw9Im5vbmUiIHN0cm9rZT0iI2ZmZiIgc3Ryb2tlLXdpZHRoPSIxLjgiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+CiAgICA8cmVjdCB4PSI4IiB5PSIyMiIgd2lkdGg9IjEyIiBoZWlnaHQ9IjEwIiByeD0iMiIvPgogICAgPHJlY3QgeD0iMjgiIHk9IjIyIiB3aWR0aD0iMTIiIGhlaWdodD0iMTAiIHJ4PSIyIi8+CiAgICA8cGF0aCBkPSJNOCAyNWgxMk0yOCAyNWgxMiIvPgogICAgPGNpcmNsZSBjeD0iMzciIGN5PSIyNyIgcj0iMS41IiBmaWxsPSIjZmZmIiBzdHJva2U9Im5vbmUiLz4KICAgIDxwYXRoIGQ9Ik0yMCAyNmMwLTYgOC02IDggMCIgc3Ryb2tlLXdpZHRoPSIxLjgiLz4KICAgIDxwYXRoIGQ9Ik0xNyAyMnYtNGMwLTIgMi00IDQtNGg2YzIgMCA0IDIgNCA0djQiIHN0cm9rZS1kYXNoYXJyYXk9IjIgMiIvPgogIDwvZz4KPC9zdmc+Cg==",
+  "entry": "index.html",
+  "type": "web",
+  "category": "tools",
+
+  "capabilities": {
+    "wallet": true,
+    "api_endpoints": [],
+    "postMessage_events": {
+      "sends": ["wallet-bridge requests"],
+      "receives": ["wallet-bridge responses"]
+    },
+    "notes": "Test harness for wallet bridge postMessage protocol only"
+  },
+
+  "requirements": {},
+
+  "display": {
+    "maximize": false,
+    "width": 800,
+    "height": 600,
+    "resizable": true,
+    "titlebar": true,
+    "taskbar": true
+  },
+
+  "distribution": {
+    "channel": "dev"
+  }
+}

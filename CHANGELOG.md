@@ -6,6 +6,1850 @@
 
 ---
 
+## [v1.2.7.5] - 2026-05-04 - Log hygiene + Earnings RPC discipline + Firefox/VPS reach + WireGuard readiness fix
+
+> **Scope**: seven targeted fixes triaged from a community feedback batch (Sasha, EverlastingOS, Brave/Firefox testers) plus one new operator-facing doc. Zero behavioural change to the happy path; every fix is either a noise reduction, a wasted-RPC removal, a misleading-status correction, or a friendlier error in a previously cryptic edge-case. Goal is to make `tail -F ~/Library/Logs/ElastOS/main.log` actually scannable and stop fresh-Mac users seeing the readiness panel report transports as "missing" when they're installed-and-ready.
+
+### Fix 1 — Throttle "no relay-circuit addresses" warning (1× per 5 min)
+
+- The bootstrap healthcheck in [`pc2-node/src/storage/ipfs.ts`](pc2-node/src/storage/ipfs.ts) runs every 30 s. On NATed nodes that never get a libp2p relay reservation, it was emitting `[WARN] [ipfs] Connected peers exist but no relay circuit addresses are advertised` ~720 times per day, drowning real signal in `Library/Logs/ElastOS/main.log`. Added a `lastRelayWarnAt: number = 0` instance field; warn fires at most once per 5 min while the relay-circuit count remains zero. On recovery (count > 0), the throttle resets and the next degradation re-warns immediately. Suppressed cycles emit a `log.debug` so anyone running with `LOG_LEVEL=debug` still sees the per-30s heartbeat.
+- Net effect: ~0.99% reduction in steady-state warn volume for NATed nodes (288 warns/day → 1-2 warns/day) without losing the signal that a configuration change is needed.
+
+### Fix 2 — Skip `0x0` operatives upfront in Earnings (no RPC, no log)
+
+- Both Earnings loops in [`pc2-node/src/api/index.ts`](pc2-node/src/api/index.ts) iterate over operative addresses pulled from the catalog. Some catalog rows have `operative_address = 0x0000000000000000000000000000000000000000` — these represent assets where on-chain operative deployment failed or is still pending. Every call to `balanceOf(0x0, 2)` reverts at the contract level and burns 4 RPC calls (3 retries + initial), 800 ms of wall-clock, and 4 lines of warn output per skipped operative per Earnings poll.
+- Added a top-of-route `ZERO_ADDRESS` constant. Filter it out in both the multi-channel `chAssets` filter (line ~1043) and the single-channel `operativeSet` map construction (line ~1115). Pre-RPC skip → zero retries, zero rotation, zero log noise.
+- Verified against Sasha's `[Earnings] balanceOf failed for 0x0000000000000000000000000000000000000000 after retries, skipping` log spam — that exact line is now impossible to emit.
+
+### Fix 3 — Earnings: per-operative warn → debug, soft-TTL partial cache (5 s)
+
+- Real-operative RPC failures are still possible (public Base RPC has flaky periods). Previously the per-operative warn was fired on every miss and the partial response wasn't cached at all — so the next 30s poll re-ran the full operativeSet against the same flaky RPC. Two-line fix:
+  1. Demoted per-operative warn at line ~1187 to `log.debug` (still visible at `LOG_LEVEL=debug`).
+  2. Added `EARNINGS_PARTIAL_TTL = 5_000` next to the existing `EARNINGS_CACHE_TTL = 30_000`. Cache entries now carry a `partial: boolean` flag; the cache-hit check picks the appropriate TTL based on that flag. Single summary warn at end of route (`N operative(s) skipped due to RPC failures — caching partial result for 5s`) instead of N+1 warns.
+- Net effect: at worst one warn per Earnings poll instead of one per failed operative; on flaky RPC the next 5 s of polls hit the cache instead of re-hammering. Rolling forward is safe: complete results still get the 30 s TTL.
+
+### Fix 4 — CIDv1 → CIDv0 codec pre-check (no expected exception)
+
+- [`pc2-node/src/api/storage.ts`](pc2-node/src/api/storage.ts) at lines ~3835 and ~3915 was calling `cidV1.toV0().toString()` inside a try/catch and warning on every miss. CIDv0 only supports the dag-pb codec (`0x70`); for raw blocks (`0x55`, common for small files like JSON metadata uploads) the conversion always throws by design. Pre-check `cidV1.code === 0x70` and demote the non-dag-pb branch to `log.debug` with a contextual message. Genuinely unexpected dag-pb conversion failures (which would indicate a real bug) still warn with the actual error text — no silent failure.
+- Verified against Sasha's `[WARN] [IPFS-Elacity] CIDv1→CIDv0 conversion failed (codec=85), using v1` log line — codec 85 = `0x55` = raw, expected behaviour, no longer warns.
+
+### Fix 5 — DHT announce: AbortError → warn (transient, with explanation)
+
+- [`pc2-node/src/storage/ipfs.ts`](pc2-node/src/storage/ipfs.ts) `announceCID` and `announceMultipleCIDs` were emitting full `log.error('[IPFS] Failed to announce CID …', error)` for every kad-dht `provide()` timeout. Aborts are bounded by an internal libp2p timeout — they mean the DHT walk didn't finish in time, but the CID is still pinned locally and the next pin-touch / peer want-have will retry. Differentiated handling: `error.name === 'AbortError'` (or `error.code === 'ABORT_ERR'`) → `log.warn` with an explicit "transient — will retry on next pin / fetch" suffix. All other failure modes still log at error.
+- Net effect: operators stop seeing scary stack-trace ERRORs for what is benign behaviour, while genuine bugs (e.g. a malformed CID or a subsystem crash) remain at error level and are easy to spot.
+
+### Fix 6 — Secure-context detection in Elacity Player (Firefox / VPS friendly)
+
+- The community report (EverlastingOS via Firefox, plus the implicit Brave-on-VPS scenario) was: open the player → blank screen → JS console says `crypto.subtle is undefined` and that's it. Browsers gate the Web Crypto API behind a [secure context](https://developer.mozilla.org/en-US/docs/Web/Security/Secure_Contexts) — `https://`, `http://localhost`, or `http://127.0.0.1`. Plain HTTP over a public IP / domain (typical when accessing PC2 on a VPS) does not qualify, regardless of browser.
+- Added an inline `<script>` to [`pc2-node/data/test-apps/elacity-player/index.html`](pc2-node/data/test-apps/elacity-player/index.html) that runs **before** the React bundle. If `!window.isSecureContext` or `!window.crypto?.subtle`, it removes the `#root` div entirely (so React can't clobber the message on mount) and reveals a `#secure-context-warning` panel with three sections:
+  1. "If you're on the same machine as PC2" → use `http://localhost:4200`.
+  2. "If PC2 is on a remote server / VPS" → set up HTTPS via Caddy / Cloudflare Tunnel / nginx + certbot, with a link to the new doc.
+  3. "Things that won't fix this" → switching browsers, updating PC2, disabling extensions (all common but useless first guesses).
+- Diagnostic footer renders `isSecureContext`, `crypto.subtle` availability, and current origin so operators can paste a single line into a support thread instead of describing symptoms.
+- Defence-in-depth: the detection itself is wrapped in try/catch — if it ever throws (e.g. on an unknown browser engine), it falls through to the original React bundle so we don't block users in untested environments. They get the original cryptic error, which is no worse than today.
+
+### Fix 6b — New doc: HTTPS for self-hosted PC2
+
+- [`docs/wiki/Technical/HTTPS_for_self_hosted.md`](docs/wiki/Technical/HTTPS_for_self_hosted.md): explains the secure-context requirement, identifies who needs to act (anyone reaching PC2 over an IP / domain that isn't localhost), and walks through three setup options end-to-end:
+  - **Caddy** — auto Let's Encrypt, ~3 minutes.
+  - **Cloudflare Tunnel** — no inbound ports, no certs, ideal for residential / Jetson behind NAT.
+  - **nginx + certbot** — classic stack for ops who already run nginx.
+- Linked from the in-app warning panel so users hit it the moment they discover the problem. Also flags the v1.2.7.6 roadmap item ("built-in HTTPS in PC2 itself") so anyone reading the doc knows the manual setup is a stop-gap, not the long-term answer.
+
+### Fix 7 — WireGuard readiness: report installed-but-inactive as OK
+
+- Diagnosed from Sasha's live `/api/system-readiness` output on her fresh Mac: `wireguard-go` was reported as `status: "missing"`, `detail: "No tunnel transport detected"`, with a spurious `installHint: "macOS: brew install wireguard-tools"` — even though `~/.pc2/pc2-node/bin/darwin-arm64/wireguard-go` was present and the BinaryManager log line for the boot read `[BinaryManager] All 4 transport binaries present`.
+- Root cause in [`pc2-node/src/api/index.ts`](pc2-node/src/api/index.ts) at lines 279-285: the readiness check shape was `wgOk = wgStatus ? wgStatus.mode !== 'none' : !!wgBinary?.found`. When BosonService had selected an alternative transport (in this case Stealth → forced amnezia-wireguard), `wgStatus.mode` was `'none'` (correctly — no WG tunnel was active) and the binary-found path was completely ignored. Result: a healthy-and-ready WireGuard install was misreported as missing.
+- New shape: `wgBinaryFound = !!wgBinary?.found`, `wgActive = !!(wgStatus && wgStatus.mode !== 'none')`, `wgOk = wgActive || wgBinaryFound`. Detail now reads `'Active (kernel mode)'` / `'Active (userspace fallback)'` when running, `'Installed (inactive — alternative transport in use)'` when present-but-idle, `'Not installed'` only when truly missing. The `brew install` hint is now only shown in the true-missing case, not the inactive case.
+- Verified against Sasha's diagnostic: same input data now yields `status: "ok"`, `detail: "Installed (inactive — alternative transport in use)"`, no spurious install hint. Identical bug pattern exists for AmneziaWG (`awgStatus.available === true` shortcut ignores binary path) but Sasha's report had AWG showing healthy so the fix is scoped to WG; AWG can be addressed in a future release if anyone reports it.
+
+### Build / lint / version
+
+- `package.json` and `pc2-node/package.json` bumped to `1.2.7.5`.
+- `npm run build:backend` clean, `npm run lint` clean.
+- No schema changes, no migration bump (still at `CURRENT_VERSION = 32` from v1.2.7.2).
+- Existing v1.2.6 / v1.2.7.x launchers will pick this up via the in-app `Update PC2` button (clones `origin/main` at runtime — no launcher rebuild needed).
+
+### Roadmap (v1.2.7.6+)
+
+- **Built-in HTTPS in PC2** — self-signed cert on first boot, optional ACME HTTP-01 when a domain is configured. Collapses the three-option reverse-proxy setup into one config flag.
+- **sing-box VLESS daemon** — investigate why the Reality tunnel exits code 0 every health-probe instead of staying alive.
+- **AmneziaWG readiness parity** — apply the Fix 7 logic shape to AWG if anyone reports the inverse scenario (active WG, idle AWG).
+- **EverlastingOS video playback UX** — re-investigate the "took ages, said it downloaded but was still downloading" report once we have fresh playback logs from a streaming session (current logs are from a different time window).
+
+---
+
+## [v1.2.7.4] - 2026-05-04 - AV1 codec string + supernode dDRM hardening + build-fix for in-app updates
+
+> **Scope**: Three independent hot-fixes folded into one ship to give Sasha's other-MacBook fresh-install test the cleanest possible target. (1) Browsers couldn't play any 10-bit AV1 video PC2 transcoded — wrong byte mask in the AV1 codec-string parser. (2) Both supernodes had been signing-and-serving a known-bad `nonMediaDecrypt` CID in their dDRM provision blob — invisible today (latent footgun), would break every PC2 the moment any future refactor unified on `chipotle-client.getActionCid()`. (3) Two untracked gitignored SDK scratch files (`src/sdk/{index,config}.ts`) were breaking `tsc` exit-code, which in turn would brick `set -e` in `scripts/update.sh` step 10 → in-app updates would silently fail for every existing PC2 node trying to roll forward.
+
+### AV1 codec string (10-bit videos rejected by every browser)
+
+- "Playback Error: Video codec 'av01.0.05M.14' is not supported by this browser" on every video transcoded by PC2's SVT-AV1 encoder path. The bit-depth field in the AV1 codec string was computed from the wrong 3 bits of the AV1 sequence header, producing values like 14 that no browser/MSE implementation accepts (there is no 14-bit AV1 profile). The codec string is recomputed from the init segment on every `/api/media/init`, so existing minted assets auto-heal on the next playback attempt — no re-mint needed.
+- **[`pc2-node/src/services/media/mp4split.ts`](pc2-node/src/services/media/mp4split.ts)** (the hot path used by `refineCodecsFromInitSegment` at `/api/media/init`): replaced `bitDepth = ((buf[p+2] >> 1) & 0x7) + 8` with the correct extraction per the [AV1 ISOBMFF spec](https://aomediacodec.github.io/av1-isobmff/#av1codecconfigurationbox-syntax) — `high_bitdepth = (byte2 >> 6) & 0x1`, `twelve_bit = (byte2 >> 5) & 0x1`, then `bitDepth = twelveBit ? 12 : (highBitdepth ? 10 : 8)`. The previous mask was reading `chroma_subsampling_x | chroma_subsampling_y | (high bit of chroma_sample_position)` instead of bit depth — for normal 10-bit yuv420p10le encodes that's `0b110 + 8 = 14`.
+- **[`pc2-node/crates/mp4-split/src/main.rs`](pc2-node/crates/mp4-split/src/main.rs)** had the identical bug in the WASM source path. Fixed for parity. Even though the JS `refineCodecsFromInitSegment` is what wins at runtime today (it overrides any WASM-emitted codec string that has a dot in it — see [`mp4split.ts:197`](pc2-node/src/services/media/mp4split.ts)), keeping the Rust source diverged from the binary would have rotted any future change that disables JS refinement. Aligned with the long-term WASM-first runtime direction.
+- **WASM binary rebuilt** via [`bash pc2-node/scripts/build-wasm.sh mp4-split`](pc2-node/scripts/build-wasm.sh). New artefact at [`pc2-node/wasm-apps/mp4-split/mp4-split.wasm`](pc2-node/wasm-apps/mp4-split/mp4-split.wasm) — 121,935 bytes (was 121,927; +8 bytes from wasm-opt rounding). Capsule [`version`](pc2-node/wasm-apps/mp4-split/capsule.json) bumped `1.1.0 → 1.1.1` (patch — bugfix only, no API change). Capsule `sha256` automatically updated by the build script: `36cf790c… → 0ef9355a…`. Built with `rustc 1.94.0-nightly`, `wasm-opt -Oz` from binaryen, target `wasm32-wasip1`. Rollback path if a regression surfaces post-ship: `git checkout HEAD~1 -- pc2-node/wasm-apps/mp4-split/{mp4-split.wasm,capsule.json}` then restart PC2. Belt-and-braces: [`mp4split.ts:462`](pc2-node/src/services/media/mp4split.ts) falls back to the pure-JS parser if the WASM fails to load — and the JS parser is also correct after this release.
+- Verified by Sasha: re-minted AV1 video plays cleanly on her Mac after the source patch (pre-rebuild).
+
+### Supernode dDRM provision-config fix (`QmX5Jxc…r5uk` → `bafkreihvm4z…tkk4`)
+
+- Both supernodes were signing-and-serving `actions.nonMediaDecrypt = QmX5JxcFhyasptCWMA6unFPm3TRYjPSkJb5HhN8289r5uk` — a Wave-8 re-pin that was registered with Chipotle but never became production-active. Replaced with the canonical V1.2 sigauth CID `bafkreihvm4zkyuefnuptlbdins6cmd2mbslj2xgnyzz3ssdg2ggg3jtkk4` (registered in Chipotle group 1, pinned ≥2 IPFS providers).
+- Edited `/root/pc2/web-gateway/ddrm-config.json` on both InterServer (`69.164.241.210`, `pc2-gateway.service`) and Contabo (`38.242.211.112`, `pc2-web-gateway.service`). Backups left as `ddrm-config.json.pre-cid-fix.<epoch>` per Wave-8 convention. No service restart needed — the Wave-8-patched handler reads the file fresh per request and re-signs with `/etc/pc2/elacity-provision.ed25519` automatically. Live-curl verified both endpoints now serve the corrected CID inside a freshly-signed envelope (`v: 1`, `domain: elacity.pc2.chipotle-provision.v1`, signature verifies against the pinned `ELACITY_LABS_PROVISION_PUBKEY_HEX`).
+- Why it wasn't breaking decryption today: real decrypt traffic flows through `storage.ts:NON_MEDIA_ACTION_CID` which has its own 4-tier resolution chain (env → file → hardcoded `bafkreihvm4z…`) and never consults the supernode-provisioned config. Only `chipotle-client.getActionCid()` does, and today only the diagnostics endpoint calls that. So this was a textbook latent footgun, not a current outage. Now retired.
+
+### PC2 defensive — reject known-bad CIDs in `chipotle-client.getActionCid()`
+
+- Tracked as `CHIPOTLE-REJECT-KNOWN-BAD-CID`. New `KNOWN_BAD_NON_MEDIA_DECRYPT_CIDS` set in [`pc2-node/src/api/chipotle-client.ts`](pc2-node/src/api/chipotle-client.ts). At Tier 3 (the supernode-provisioned config), if the cached `provision.actions.nonMediaDecrypt` matches a known-bad CID, log a warn and fall through to Tier 4 (the trusted hardcoded default) instead of returning it. Belt-and-braces against:
+  1. Existing PC2 nodes whose `data/.chipotle-provision.json` was cached before today's supernode fix (the cache is never time-invalidated; without this defence they'd keep using the bad CID until the file is manually deleted).
+  2. Any future supernode rotation that briefly serves a bad value.
+  3. Any future code path that migrates from `storage.ts:NON_MEDIA_ACTION_CID` to `chipotle-client.getActionCid()`.
+- Set is extensible for future rotations; just add the offending CID to the set in the same release that ships the rotation. Warn message tells the operator exactly how to recover (`Delete data/.chipotle-provision.json to re-fetch from supernode`).
+
+### `tsc` build-fix (un-bricks in-app updates)
+
+- [`pc2-node/tsconfig.json`](pc2-node/tsconfig.json) `exclude` extended to skip `src/sdk/index.ts` and `src/sdk/config.ts`. Both files are untracked-and-gitignored scratch (the parent `.gitignore` rule `sdk/` matches any directory named `sdk/` at any depth, so neither is in any commit) and they import types — `MetadataEnvelope`, `CurrencyInfo`, `MediaDescriptor`, etc. — that the tracked `src/sdk/types.ts` no longer exports. They produce 44 `TS2305` errors on every clean build. Because `scripts/update.sh:20` sets `set -e` and step 10 runs `npm run build:backend`, every existing PC2 node in the wild trying to roll forward to v1.2.7.4 would have aborted at the build step. Excluded specifically (not the whole `src/sdk/` directory) because `src/sdk/types.ts` IS used by [`fingerprint.ts`](pc2-node/src/services/media/fingerprint.ts) and [`ContentIntelligenceService.ts`](pc2-node/src/services/ContentIntelligenceService.ts).
+- Net effect: `npm run build:backend` now exits 0 cleanly. Verified: dist artefacts regenerate, defensive `KNOWN_BAD_NON_MEDIA_DECRYPT_CIDS` logic compiles into `dist/api/chipotle-client.js`, no other behavioural change.
+- Followup for the operator (NOT in this release): decide whether to re-add `MetadataEnvelope` etc. to `src/sdk/types.ts` and force-track `index.ts`/`config.ts`, or delete them. Either way it's a separate task.
+
+### Migration / rebuild notes
+
+- Existing PC2 nodes: `cd pc2-node && npm run build` then restart PC2. The defensive fix kicks in immediately on next call to `getActionCid()` even with a stale `data/.chipotle-provision.json`. AV1 videos play correctly on next `/api/media/init` (no re-mint needed).
+- Fresh PC2 nodes: bootstrap from the (now-corrected) supernode provision endpoint and never see the bad CID at all.
+- Operator follow-up worth doing in a later patch: also default to `libx264` when neither NVENC nor SVT-AV1 hardware accel is available AND the asset is destined for general distribution — AV1 is great for Chromium/Electron but Safari < 17.4 and many mobile browsers still can't decode it. Track as a separate task; not required for Sasha's launcher case (Electron supports AV1 natively).
+
+---
+
+## [v1.2.7.3] - 2026-05-03 - Indexer observability + market UX during warmup
+
+> **Scope**: Two follow-up improvements after v1.2.7.2 root-caused both the fresh-Mac crash AND the empty-market-cards symptom to the same migration bug. (1) Make the indexer LOUD when it can't write to the catalog — the pre-32 silent-failure-mode hid the bug for an entire release cycle. (2) Give fresh-install users visible feedback during the 15-minute initial backfill window so they don't think their node is broken.
+
+### Indexer: surface swallowed errors during scans
+
+- **`scanChannelCreated`, `scanDigitalAssetRegistered`, `scanAssetCreated`** in [`pc2-node/src/services/ContentIndexerService.ts`](pc2-node/src/services/ContentIndexerService.ts) all used to swallow per-event errors into `log.debug(...)`. That's how the missing-`channel_metadata` table on fresh installs hid for an entire release: every `INSERT` threw, every catch silently moved on, and the function returned "0 channels found" while the backfill stamped itself complete. v1.2.7.3 changes the return type from `Promise<number>` to `Promise<{ inserted: number; errors: number }>`. First error per scan promotes to `log.warn` with full context (block number, message). End-of-scan summary if `errors > 0`: `scanChannelCreated [v3]: 8 inserted, 12 failed (first error: …). Likely missing tables, schema drift, or DB write contention. Check /api/diagnose.` Same pattern applied to all three scan methods.
+- **Backfill stamping gated on actual success**. [`backfillChannelsIfNeeded`](pc2-node/src/services/ContentIndexerService.ts) used to ALWAYS write `indexer_channels_backfilled_${version} = 1` after the loop, even if 0 channels actually inserted. Now: if `totalInserted === 0 && totalErrors > 0`, log loudly and **do not stamp**. The next scan cycle (5 minutes later, or earlier via `/api/catalog/reindex`) retries the backfill. So once the underlying cause is fixed (e.g. user runs the migration that creates the table), the catalog auto-recovers without manual intervention.
+
+### `GET /api/catalog/indexer-status` (new endpoint)
+
+- New public-read endpoint in [`pc2-node/src/api/index.ts`](pc2-node/src/api/index.ts) returning live indexer state for the market UI:
+  ```json
+  {
+    "success": true,
+    "ready": false,
+    "scanning": true,
+    "isInitialBackfill": true,
+    "lastChainBlock": 45538200,
+    "lastScanCompletedAt": null,
+    "estimatedSecondsRemaining": 415,
+    "versions": {
+      "v3": {
+        "fromBlock": 43892000,
+        "lastScannedBlock": 44850000,
+        "blocksRemaining": 688200,
+        "progressPct": 58.3,
+        "isBackfilled": false,
+        "lastScanInserted": 8,
+        "lastScanErrors": 0
+      }
+    },
+    "catalog": { "total": 0, "resolved": 0, "pending": 0, "failed": 0, "channels": 0 }
+  }
+  ```
+  - `estimatedSecondsRemaining` assumes ~110k blocks/min throughput (observed on Mac during v1.2.7.2 smoke test, intentionally conservative so we never under-promise).
+  - `ready` is true when `!isInitialBackfill && resolved > 0`.
+  - Backed by a new `getIndexerStatus()` snapshot method on `ContentIndexerService` that reads `indexer_last_block_${version}` + `indexer_channels_backfilled_${version}` settings + cached `lastChainBlock` from the most recent scan cycle.
+
+### Elacity Market: catalog-indexing progress banner
+
+- **New "Building local catalog…" banner** at the top of the Feed view in [`pc2-node/data/test-apps/elacity-market/index.html`](pc2-node/data/test-apps/elacity-market/index.html) + [`app.js`](pc2-node/data/test-apps/elacity-market/app.js) + [`styles.css`](pc2-node/data/test-apps/elacity-market/styles.css). Polls `/api/catalog/indexer-status` every 10 seconds, shows progress percentage, eta, and live counts (channels/items). Hides automatically once `ready === true`. Spinner + accent-tinted strip + thin progress bar — informational, not blocking. User can dismiss for the session via the × button.
+  - Detail line example: `Indexed 58.3% of Base mainnet · ~7 min remaining · 4 channel(s), 12 item(s) so far`.
+  - Cards continue to render via the existing supernode GraphQL fallback during this window — banner only adds context, never blocks content.
+  - `styles.css?v=37 → v=38` cache-bust.
+
+### Notes for review
+
+- Net diff: 5 files modified (1 service, 1 API handler, 1 HTML, 1 CSS, 1 JS).  No new dependencies, no breaking interface changes (the scan methods' new `{inserted, errors}` return type is internal — only `scanContractVersion` and `backfillChannelsIfNeeded` consume it).
+- Indexer changes are defensive: if no errors occur, behaviour is identical to pre-32. If errors DO occur, they now surface in launcher logs / `pc2-diagnose.sh` / `/api/diagnose` instead of being silent.
+- Banner is opt-out per session via the × button (state stored in JS closure, not localStorage — re-shows on next page load if still indexing). Conscious choice: someone troubleshooting a stuck node shouldn't have to remember they dismissed the banner yesterday.
+
+---
+
+## [v1.2.7.2] - 2026-05-03 - Fresh-Mac install hot-patch
+
+> **Scope**: A completely fresh Mac install via the ElastOS Launcher silently exited PC2 with code 1 the first time the user opened Elacity Creator. Root cause: the migration runner returned early on fresh installs and stamped the DB at `CURRENT_VERSION` immediately, meaning migrations 14, 20, 21, 22, 23, 25-28 NEVER ran. Six tables (most importantly `publish_drafts`) were absent on every fresh install since the original `runInitialSchema` was written, and the first time a tenant app queried one of them PC2 crashed without a breadcrumb. This release fixes the migration runner, self-heals broken existing installs, surfaces actionable install hints when transports are missing, and hardens the crash logging so a future silent exit will leave a usable trail.
+
+### Critical fix
+
+- **Fresh-install migration drift fixed**. [`runMigrations`](pc2-node/src/storage/migrations.ts) used to early-return after `runInitialSchema` for `currentVersion === 0` AND stamp the DB at `CURRENT_VERSION` (then `31`), meaning every migration that came AFTER the original schema.sql snapshot never executed on fresh installs. Result: 6 tables (`publish_drafts`, `agent_proposals`, `content_hashes`, `agent_audit_log`, `installed_skills`, `channel_metadata`) were missing on every fresh install, and `elacity-creator`'s first hit to `/api/drafts` produced `no such table: publish_drafts` → 500 → silent `process.exit(1)`. Two-pronged fix:
+  1. [`pc2-node/src/storage/schema.sql`](pc2-node/src/storage/schema.sql) bumped from "Version 16" header to a real Version 32 snapshot with all 6 missing tables + their indexes appended (idempotent `CREATE … IF NOT EXISTS`). Fresh installs now get the full v32 shape from `runInitialSchema()` directly.
+  2. [`pc2-node/src/storage/migrations.ts`](pc2-node/src/storage/migrations.ts) bumped `CURRENT_VERSION` `31 → 32` and added migration 32 ("Self-heal migration-only tables") that reapplies the same `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE` blocks idempotently. Existing v1.2.7.0/.1 installs that booted broken (stamped at 31, missing tables) heal automatically on next start.
+  - Smoke-tested on Sasha's Mac: `[migrations] ✅ Migration 32 complete: migration-only tables healed` log line; `schema_migrations` row at version 32 immediately on relaunch; `elacity-creator` opens with no PC2 exit.
+
+### Crash diagnostics
+
+- **Final-exit breadcrumb in [`pc2-node/src/index.ts`](pc2-node/src/index.ts)**. The pre-32 `unhandledRejection` / `uncaughtException` handlers logged a one-liner via `console.error` only when `code === 'EADDRINUSE'`. Every other silent `process.exit(1)` left no trail and the launcher log just showed `PC2 exited with code 1`. v1.2.7.2 captures the last error in a module-level `lastErrorCapture` and adds `process.on('exit', code => { ... })` + `process.on('beforeExit', ...)` handlers that synchronously dump exit code + last error source + message + stack to stderr. Synchronous-only writes via `console.error` (NOT the buffered `logger`) so they survive a forced exit. The `[PC2] exit code=…` line is the breadcrumb the migration crash should have produced; future silent exits will have it.
+
+### BinaryManager (fresh-Mac transports without Homebrew)
+
+- **No more 4×404 storm in launcher logs**. [`pc2-node/src/utils/binary-manager.ts`](pc2-node/src/utils/binary-manager.ts) `ensureTransportBinaries()` previously made one HTTP request per missing binary against the `pc2-binaries-v1` GitHub release. That release was planned but never published, so every fresh-Mac boot logged 4 separate `HTTP 404` warnings (one per missing transport). v1.2.7.2 adds a one-shot `pc2BinariesReleaseUnavailable` flag — first 404 against `GITHUB_RELEASE_BASE` short-circuits subsequent attempts with a single `pc2-binaries-v1 GitHub release not published — relying on bundled/system binaries only` warning. sing-box (different release host: SagerNet) is unaffected and still attempts download.
+- **One-shot install hint per missing binary**. New `INSTALL_HINTS` catalogue + `getInstallHint(name)` helper (exported) that produces platform-specific advice — e.g. `wireguard-go` missing on macOS → `macOS: brew install wireguard-tools (provides wireguard-go)`. Logged once per process via `[BinaryManager]   wireguard-go install hint → …`. Previously fresh-Mac users had to grep launcher logs and guess.
+- **Hint surfaced through `/api/system-readiness`**. [`pc2-node/src/api/index.ts`](pc2-node/src/api/index.ts) handler now includes an `installHint` field on each missing-binary check, so the launcher UI can show the same `brew install …` command directly without duplicating the hint catalogue.
+- **`pc2-binaries-v1` GitHub release published** with full 4-platform coverage. After v1.2.7.2 was already complete, the binaries `BinaryManager` was supposed to download were still missing, so we cross-compiled and shipped them: 10 assets covering `wireguard-go`, `amneziawg-go`, and `awg-quick` for `darwin-arm64` / `darwin-x64` / `linux-arm64` / `linux-x64` (Go binaries statically linked, ~5 MB each; `awg-quick` is one portable bash script per OS). Reproducible via `bash pc2-node/scripts/fetch-binaries.sh all`. `BinaryManager` now succeeds end-to-end on every supported platform: a fresh-Mac install with no Homebrew, or a vanilla Linux server / Jetson, gets full WireGuard + AmneziaWG transports auto-provisioned on first boot. Verified all 10 download URLs return HTTP 200 and bytes match the expected `Mach-O / ELF arm64|x86_64` architecture. `sing-box` continues to come from SagerNet's own release. Tag deliberately not marked as `latest` so it doesn't shadow user-facing `v1.x.y` releases. URLs follow the existing `BinaryManager` pattern: `https://github.com/Elacity/pc2.net/releases/download/pc2-binaries-v1/{name}-{platform}-{arch}` (or `awg-quick-{platform}` no arch).
+
+### Restart / process management
+
+- **macOS launcher-aware restart in [`pc2-node/src/services/UpdateService.ts`](pc2-node/src/services/UpdateService.ts)**. Previous restart ladder tried `pm2 startOrRestart`, `systemctl restart pc2-node`, `systemctl restart pc2`, `pm2 restart pc2`, `pm2 restart all`, `pm2` via nvm path, `pm2` via /usr/local — none of which exist on a Mac launcher install (Electron spawns PC2 directly via `child_process`). The whole ladder failed loudly in the launcher log, then we exited(0) anyway. v1.2.7.2 short-circuits on `process.platform === 'darwin'` with a single `[UpdateService] macOS detected — skipping pm2/systemctl, exiting cleanly for launcher restart` log line and `process.exit(0)`. Linux / sysadmin / Jetson installs unchanged.
+- **`ecosystem.config.cjs` path doubling fixed**. Previous relative paths (`cwd: "./pc2-node"`, `script: "dist/index.js"`) caused PM2 to resolve `~/.pc2/pc2-node/pc2-node/dist/index.js` when `UpdateService` invoked `pm2 startOrRestart` from inside `pc2-node/`. Replaced with absolute paths derived from `__dirname`. Affects PM2-managed installs (Jetson production); cosmetic on Mac launcher path.
+
+### Indexer race-condition guards
+
+- **`[content-indexer] Scan cycle failed: Database not initialized`** silenced. [`pc2-node/src/services/ContentIndexerService.ts`](pc2-node/src/services/ContentIndexerService.ts) `runScanCycle` catch block now demotes "database not initialized | database is closed | database connection is closed" to `log.debug` (treats them as benign shutdown races); real errors still log loud. Same defensive pattern in [`pc2-node/src/storage/indexer.ts`](pc2-node/src/storage/indexer.ts) `IndexingWorker.scanForUnindexedFiles` (file-FTS background worker), which produced the same noisy line during PC2 shutdown.
+
+### Diagnostic script
+
+- **`scripts/pc2-diagnose.sh` portability + correctness**. (1) `${BASH_SOURCE[0]}` → `${BASH_SOURCE[0]:-}` so the `set -u` mode no longer aborts when the script is piped from `curl | bash` (BASH_SOURCE is unset in that mode). (2) Candidate fallback order inverted: `~/.pc2` (launcher install) is now tried BEFORE `~/pc2.net` (developer clone) so diagnostics on a runtime install describe the right tree.
+
+### Notes for the launcher team
+
+- **Transport binary problem fixed at the PC2 level**: with the `pc2-binaries-v1` GitHub release now live (see BinaryManager section above), every fresh-Mac PC2 boot auto-downloads its own `wireguard-go`, `amneziawg-go`, and `awg-quick` on first run regardless of whether Homebrew is installed. The launcher's existing `brew install` / `git clone && make` runtime-install logic is no longer required for transports. Bundling the binaries as `extraResources` in the Electron app is still nicer (saves the 10 MB first-run download) but is now a polish item, not a blocker. `bash pc2-node/scripts/fetch-binaries.sh all` produces a complete `pc2-node/bin/{platform}-{arch}/` tree if you want to bundle.
+- Launcher does NOT auto-restart PC2 on crash — manual click of "Start" is required after `process.exit(1)`. Recommend adding restart-on-exit logic in `pc2Manager.startPC2` so a future silent exit doesn't strand users at a stopped node.
+- Fresh-launcher Mac apparently re-installs apps on every PC2 restart (e.g. `elacity-creator` uninstalled and re-installed within 70ms during boot). Worth investigating — looks like persistence of the `installed_apps` table is being reset per boot somewhere upstream of PC2.
+
+### Bonus fix discovered post-deploy: empty Elacity Market cards
+
+- **The empty market cards problem on fresh installs was the SAME migration bug.** Initial diagnosis blamed public Base RPC rate-limiting on `eth_getLogs`, but post-deploy verification showed the real cause: when the indexer picked up a `ChannelCreated` event it called [`db.upsertChannelFromFactory()`](pc2-node/src/storage/database.ts) which does `INSERT INTO channel_metadata`. With `channel_metadata` missing on fresh installs the INSERT threw, the indexer's catch swallowed it, and [`scanChannelCreated`](pc2-node/src/services/ContentIndexerService.ts) returned "indexed 0 channels" while still stamping `indexer_channels_backfilled_v3 = 1` so the backfill never retried. Catalog stayed empty forever. The moment the table existed (Migration 32 or manual create), the next scan picked up the same on-chain events and populated the catalog with the 8 channels + 28 assets that had been on-chain all along. Sasha's Mac went from 0 → 28 catalog items in ~15 minutes once `channel_metadata` was healed, on the same public RPCs we'd suspected of throttling. **No RPC changes, no GraphQL fallback, no UX retry logic needed** — Migration 32 fixes both the Creator crash AND the empty-market-cards symptom for every existing broken install on next boot.
+
+---
+
+## [v1.2.7.1] - 2026-05-03 - Community parity hot-patch
+
+> **Scope**: Community operators (EverlastingOS on Jetson, anonymous WSL user) hit two install/update parity bugs within hours of v1.2.7 going live. This is the targeted fix-set so their nodes behave the same as Sasha's canary Jetson.
+
+### Fixes
+
+- **`/api/system-readiness` no longer reports false-alarm "WireGuard Missing"** on kernel-mode WireGuard nodes. Previously the readiness check probed only for the `wireguard-go` userspace binary and ignored kernel mode entirely — community Jetson user (running kernel WireGuard) saw a misleading 5/6 badge despite his tunnel working perfectly. Now consults the live `WireGuardService.getStatus().mode` (`'kernel' | 'userspace' | 'none'`) via `BosonService.getStatus()` so kernel WireGuard counts as OK with detail "Active (kernel mode)". Same fix for AmneziaWG (now uses `AmneziaWGService.getStatus()`). Falls back to the binary probe only when BosonService is not yet initialised (early-boot window). Smoke-tested on macOS dev: 6/6 with detail `"Active (userspace fallback)"` for WireGuard and `"Active (connected)"` for AmneziaWG.
+  - Files: [pc2-node/src/api/index.ts](pc2-node/src/api/index.ts) (`/api/system-readiness` handler).
+  - `POST /api/system-readiness/fix` unchanged — operators can still trigger auto-download from `pc2-binaries-v1` GitHub release.
+
+- **`scripts/update.sh` auto-discard widened to all `package.json` files**. The WSL community user's `git pull` aborted because npm version mismatches had drifted four files (`package.json`, `package-lock.json`, `packages/particle-auth/package.json`, `pc2-node/package-lock.json`). Previously only the two `package-lock.json` files were on the safe-discard list. Now all five known files are discarded automatically, plus a `git ls-files`-based glob fallback catches any future `packages/**/package.json` additions without requiring a code update. `PC2_UPDATE_FORCE=1` override unchanged. Smoke-tested locally: simulated WSL drift on all four files, confirmed `update.sh` auto-discard now cleans them all.
+  - Files: [scripts/update.sh:99](scripts/update.sh).
+  - One-liner unblock for operators who hit this before updating: `cd ~/pc2.net && git checkout -- package.json package-lock.json packages/particle-auth/package.json pc2-node/package-lock.json && bash scripts/update.sh`.
+
+### New (opt-in pull diagnostic)
+
+- **`scripts/pc2-diagnose.sh`** — self-contained operator-side diagnostic that bundles `/api/health` + `/api/system-readiness` + `wg show` + transport-binary `which` probes + `ipfs swarm peers` count + cluster-pin reachability probe + last 80 relevant `pm2` log lines + disk/memory pressure + git state + `.env` keys (values stripped) into a single sanitised text file written to `~/pc2-diagnose-<timestamp>.txt` and stdout. Sanitiser redacts wallets, DIDs, bearer tokens, `?api_key=…` URL params, BEGIN/END PEM markers, and 24-word lowercase mnemonics. **No network upload** — the operator pastes manually. Portable: works on macOS BSD `sed` and GNU `sed`.
+  - One-liner: `curl -fsSL https://raw.githubusercontent.com/Elacity/pc2.net/main/scripts/pc2-diagnose.sh | bash`.
+  - Sanitiser test coverage: 6/6 cases (wallet / DID / Bearer / api_key / 24-word mnemonic / PEM block).
+
+- **`GET /api/diagnose`** (auth-gated) — server-side equivalent returning structured JSON for future GUI consumption. Same data + same sanitisation as the bash script. Every shell-out hard-capped at 5s so a hung tool can't wedge the request. Probes the public Elacity supernode cluster endpoint without any token (a 401 means cluster is up; a connection failure means this node can't reach it). Auth-gated because the response includes recent log lines and binary paths.
+  - File: [pc2-node/src/api/diagnose.ts](pc2-node/src/api/diagnose.ts).
+  - Mounted at `/api/diagnose` from [pc2-node/src/api/index.ts](pc2-node/src/api/index.ts).
+  - GUI button surface ("Copy diagnostic to clipboard" on the readiness panel) deferred to v1.2.8 — endpoint lands now so the bash script and any future GUI agree on the data shape.
+
+### What's deliberately NOT in v1.2.7.1
+
+- Push/heartbeat telemetry to a Contabo collector — explicitly rejected. Opt-in pull only, in line with the personal-cloud promise.
+- "Share diagnostic" GUI button — needs design pass, queued for v1.2.8.
+- Webpack `bundle.min.js may be missing` root-cause investigation — needs EverlastingOS's diagnose output first; most likely Jetson memory pressure during install build but unconfirmed.
+- Install-script convergence audit (`install-arm.sh` vs `install-wsl.sh` vs `start-local.sh` vs `setup-node.sh` ending at the same final state) — separate work, tracked as `INSTALL-SCRIPT-PARITY` for v1.2.8.
+
+### Communications shipped
+
+- **EverlastingOS (Jetson community user)**: "5/6 badge is a false alarm — fixed in v1.2.7.1. Run the diagnose one-liner so we can see why your player is stuck on 'Pin failed on server'."
+- **WSL community user**: "Don't `git pull` directly — use `bash scripts/update.sh`. Quick unblock: `cd ~/pc2.net && git checkout -- package.json package-lock.json packages/particle-auth/package.json pc2-node/package-lock.json && bash scripts/update.sh`."
+
+---
+
+## [v1.2.7] - 2026-05-02 - SQLite migration + Supernode IPFS Cluster + playback fixes
+
+> **Scope**: v1.2.7 combines three workstreams:
+> 1. **SQLite migration** (`better-sqlite3` → `@photostructure/sqlite`) — primary motivation, unblocks Mac users running pc2-node from the Elastos launcher (no native compile / Xcode CLT needed).
+> 2. **IPFS Cluster availability tier** — pc2-nodes auto-forward pins to a hosted Cluster mesh so content remains reachable even when the originating node is offline / behind NAT.
+> 3. **Playback fixes A–D** — auto-retry failed pins, clear stale failed flags, faster MPD timeout, clear stale player UI errors.
+>
+> Validated end-to-end on Jetson (production canary, aarch64-linux): SQLite migration applied cleanly, 61 pinned_cids preserved, cluster integration firing, playback fixes serving real users.
+
+### Infrastructure (LIVE on supernodes 2026-05-02)
+
+- **2-node IPFS Cluster mesh deployed** between Contabo (38.242.211.112) and InterServer (69.164.241.210) using `ipfs-cluster-service` v1.1.4 with CRDT consensus. Smoke-tested: pin issued from Contabo replicates to both nodes' Kubo blockstores within 5 seconds. `pc2-cluster.service` systemd unit installed and enabled for boot survival.
+- **Kubo `StorageMax` raised** from 8 GB → Contabo 300 GB / InterServer 1 TB. With replication factor 2 this unlocks ~650 GB of guaranteed marketplace pin capacity (was 0 — the existing supernode Kubos were running at default 8 GB cap with 3+ TB free disk).
+- **Mutual `Peering.Peers`** added to both Kubo configs so they hold direct connections to each other.
+- **UFW** allows port 9096 only from the specific peer IP (defense in depth — cluster swarm secret is the primary security boundary).
+- **nginx reverse proxy** on Contabo (`/etc/nginx/sites-enabled/pc2-gateway`, additive single-`location` change) exposes Cluster Pinning Services API publicly at `https://38.242.211.112/cluster-pin/` with bearer-token gating. `nginx -t` + `systemctl reload nginx` (no restart) — verified zero regression on PC2 frontend, dDRM provision, RPC, and `*.ela.city` marketplace routes.
+- **Multi-token map + per-IP rate limiting** added to the nginx vhost (2026-05-02 evening, additive `/etc/nginx/conf.d/cluster-pin.conf`). Replaces the single inline `if` bearer check with a `map` directive that whitelists multiple bearer tokens (currently 2: legacy Jetson personal + new community shared). `limit_req_zone` enforces 30 req/min per source IP with burst 20 — all overflow returns 429. This is the abuse mitigation that lets the community shared token be public-by-design (baked into pc2-node) without inviting unbounded spam-pinning. `nginx -t` + `nginx -s reload` (no restart) — verified all 4 auth paths and rate-limit threshold from external IP before considering the change live.
+- **Two bearer tokens authorized** in the cluster-pin map: (1) the legacy Jetson personal token (recorded in user's password manager, slated for rotation in v1.2.8 once per-node tokens land), (2) the new community shared token baked into `clusterPin.ts` defaults so every fresh community node gets cluster pinning out-of-the-box.
+- **End-to-end write path verified externally**: POST `/cluster-pin/pins` with bearer → 200 → CRDT replicates to both peers in <5 seconds (confirmed via `ipfs-cluster-ctl status` on InterServer).
+
+Full survey + change log: [`SUPERNODE-CLUSTER-SETUP.md`](.cursor/tasks/SUPERNODE-CLUSTER-SETUP/SUPERNODE-CLUSTER-SETUP.md).
+
+### pc2-node integration (DEPLOYED + VERIFIED on Jetson 2026-05-02)
+
+- **New `pc2-node/src/services/clusterPin.ts` service module** — wraps the IPFS Pinning Services API spec. Mirrors the existing `ELACITY_PIN_FORWARD` pattern: fire-and-forget, exponential-backoff retry queue, hard age cap. **Default ON** in v1.2.7+ — every fresh community node auto-replicates pins to the Elacity supernode mesh on first install with zero operator action. Defaults baked into `clusterPin.ts` (URL + shared community token); abuse bounded by per-IP rate limiting at the supernode (30 req/min + burst 20). Operators who want a different cluster set `SUPERNODE_CLUSTER_PIN_URL` + `_TOKEN` in `pc2-node/.env`; operators who want to disable cluster pinning entirely set them to empty strings.
+- **Wired into 4 pin call sites** in `pc2-node/src/api/storage.ts` alongside (not replacing) the existing `fanOutSupernodePinMirrors` and `forwardPinToElacityKubo` calls. Strictly additive; existing behaviour unchanged.
+- **New diagnostic endpoint** `GET /api/storage/ipfs/cluster-pin` (owner-guarded) — reports whether cluster pinning is configured + last probe + retry queue state.
+- **New availability badge endpoint** `GET /api/storage/ipfs/cluster-availability/:cid` (public) — queries the cluster for a CID's pin status; returns delegate multiaddrs callers can use to direct-dial.
+- **Hot-deployed to Jetson** (production node) with `ecosystem.config.cjs` env update + `pm2 reload`. Boot log confirmed:
+  ```
+  [ClusterPin] enabled -> https://38.242.211.112/cluster-pin (replication=2/2)
+  [ClusterPin] retry scheduler started (interval=30000ms, maxAttempts=5)
+  ```
+- **Backfill script** `pc2-node/scripts/cluster-backfill.mjs` queries `pinned_cids` for `pin_status='failed'` (and stuck `queued`/`pinning`) rows, pushes each into the cluster via the public Pinning Services API, and updates DB to mark them as `complete`. Detects either SQLite adapter (`@photostructure/sqlite` for v1.2.7+, `better-sqlite3` for v1.2.6). DRY_RUN supported.
+- **First production backfill (Jetson, 2026-05-02)**: 1 unique CID rescued (`bafybeidrmrsohnva4asvqptsspwvrtwluldkui7fyvcbpmpfcq7gdgo5p4`, minted 2026-05-01). Confirmed `PINNING` on both supernodes within seconds — directly addresses today's "buyer can't reach minter's content" pain.
+
+### Strategy / Roadmap
+
+- **New task ticket `CAPSULE-RUNTIME-WASM`** filed for v1.4+ work — sketches a Rust/WASM-based capsule runtime giving 3rd-party creators capability-bounded sandboxed execution, mapping directly to Anders' "runtime grants viewer capability" concept.
+
+### Operator notes (must-read before broader rollout)
+
+- **TLS caveat**: cluster URL uses self-signed cert for IP. `NODE_TLS_REJECT_UNAUTHORIZED=0` is set in pc2-node env on Jetson. v1.3.x will introduce a proper-cert subdomain (`cluster.ela.city` or similar) and per-request TLS agent so this global toggle goes away.
+- **Log rotation**: Jetson `pm2-out.log` was 945 MB at deploy time — pm2 logrotate not configured. Add as v1.3.x maintenance item.
+
+### SQLite migration (DEPLOYED + VERIFIED on Jetson 2026-05-02)
+
+- **`@photostructure/sqlite@^1.2.1`** replaces `better-sqlite3`. Ships prebuilt binaries for darwin-arm64, darwin-x64, linux-arm64 (glibc + musl), linux-x64, win32-arm64, win32-x64 — **zero native compile** required on any of these platforms. This unblocks Mac/Elastos-launcher first-run experience (was broken without Xcode CLT).
+- **`enhance()` wrapper** (in `pc2-node/src/storage/database.ts`) makes the new adapter API-identical to better-sqlite3 — call sites unchanged.
+- **Schema-compatible**: SQLite file format identical between adapters; existing `pc2.db` reads cleanly under the new adapter (verified live: 61 pinned_cids + 3 users + 3 sessions preserved on Jetson).
+- **Self-rollback deploy**: hot-deployed to Jetson via self-contained `nohup` script with built-in EXIT trap + watchdog. ~6-second user-visible downtime window. Backup at `/home/orin_nano/pc2.net/.backup-20260503-072358/` for instant rollback if ever needed.
+
+### Polish (release-readiness for community nodes)
+
+- **`SUPERNODE_CLUSTER_PIN_*` env vars now sourced from `process.env`** in root `ecosystem.config.cjs` — community nodes can opt in by setting env vars (or a `pc2-node/.env` file) without needing to edit the tracked config file. Existing Jetson token migrates from `ecosystem.config.cjs` → `pc2-node/.env` to survive future `git reset --hard origin/main` in `update.sh`.
+- **`pm2-logrotate` config** added to root `ecosystem.config.cjs` — Jetson `pm2-out.log` had grown to 945 MB before this; now caps at 50 MB × 7 files per app. Applies to all community nodes on update.
+- **`pc2-node/.env.example`** created — documents all opt-in env vars for cluster pinning, replication, TLS handling, AI providers, comms gateways. Single source of truth for fresh installs.
+- **`/api/health` extended** with `cluster.pinning` summary block — shows whether cluster forwarding is configured + last probe state + retry queue depth. No new endpoint, no auth bloat — folds into existing public health response.
+- **`dotenv/config` loaded** at top of `pc2-node/src/index.ts` so `pc2-node/.env` is honoured (was a dep but never wired in).
+- **Conditional-spread env block in `ecosystem.config.cjs`** — opt-in credential vars (cluster pin URL/token, RPC pool, AI keys, comms tokens, Lit overrides, legacy supernode mirrors) now use `...(process.env.X ? { X: process.env.X } : {})` instead of `X: process.env.X || ""`. This was a critical bug fix: with the old pattern, pm2 would set unset opt-in vars to `""`, then `dotenv` (default `override: false`) would refuse to overwrite empty strings → operator's `pc2-node/.env` was silently ignored. With the new pattern: shell wins if set, else `.env` populates the gap, else feature gracefully off. **Verified all three permutations end-to-end** before landing. Always-set keys (NODE_ENV, PORT, PATH, LIT_BACKEND, REPLICATION_MIN/MAX, NODE_TLS_REJECT_UNAUTHORIZED) keep their hardcoded-default pattern — they're either system controls or safe defaults, no secrets.
+
+### Update flow hardening (v1.2.7, promoted from "v1.2.8+ flagged")
+
+These were originally on the "noticed but didn't change" list. The user surfaced them as release-blockers because the v1.2.7 ecosystem.config.cjs gained new opt-in env vars (cluster pinning, AI keys, Lit, RPC pool) and "in-app update on a Mac via the Elastos launcher should Just Work, no terminal commands" is a hard requirement for the release.
+
+- **`UpdateService` restart now uses `pm2 startOrRestart ecosystem.config.cjs --only pc2 --update-env`** as the first attempt in the existing fallback chain. The previous `pm2 restart pc2` preserved pm2's frozen-at-`pm2-start`-time env, which meant any new env defaults shipped via ecosystem.config.cjs (e.g. the v1.2.7 cluster pinning vars) silently never applied on in-app updates. Existing fallbacks (systemctl, plain pm2 restart, nvm-paths, /usr/local/bin) kept verbatim — the new step only affects the success path on standard installs.
+- **`update.sh` migrates inline secrets** out of `ecosystem.config.cjs` into `pc2-node/.env` BEFORE `git reset --hard origin/main` runs (new step 3b). Allowlist-scoped to known credential vars (cluster pinning, AI keys, Lit, RPC pool, TLS toggle). Skips empty values + post-v1.2.7 `process.env.X || ""` forms. Won't overwrite an already-set .env entry. This is the safety net that prevents the Jetson (the only known node with hardcoded cluster credentials) from losing its token on first v1.2.7 update.
+- **`start-local.sh` + `install-wsl.sh` now register pm2 via `ecosystem.config.cjs`** instead of the legacy `pm2 start npm --name "pc2" -- start`. Three wins:
+  1. The desktop UpdateService's new `pm2 startOrRestart ecosystem.config.cjs --only pc2 --update-env` finds a matching app on its first call (was named "pc2" both ways, but the registration metadata was different — npm-wrapped vs direct script).
+  2. pm2 directly tracks the node process instead of an npm wrapper, so kill signals reach the actual server (eliminates the orphaned-node-after-restart class of bug).
+  3. The env block in `ecosystem.config.cjs` (NODE_ENV, PORT, PATH, restart_delay, kill_timeout, log paths, optional cluster vars) is now the source of truth on every install path — Mac launcher, WSL, ARM Linux, x86 Linux, Jetson all run on the same registration.
+
+### Not yet done (sequenced for v1.2.8+)
+
+- Cut v1.2.7 git tag + GitHub release (pending ElastOS Launcher v1.2.6 release + user smoke-test on Jetson). Token distribution policy for community nodes settled 2026-05-02 evening: shared community token baked into pc2-node code, per-IP rate limiting at supernode, per-node rotatable tokens deferred to v1.2.8.
+- **ElastOS Launcher v1.2.6 release** — BLOCKING for Mac/Linux/Windows GUI users. Launcher v1.2.5's `pc2Manager.ts` still references `better-sqlite3`, which v1.2.7 of pc2.net removed. Without a launcher update first, in-app "Update PC2" on a Mac will trip the launcher's native-module verification gauntlet. ~30 LOC PR to swap the SQLite probe + drop the force-rebuild step. Tracked in `.cursor/tasks/SUPERNODE-CLUSTER-SETUP/SUPERNODE-CLUSTER-SETUP.md` open follow-up #9.
+- InterServer nginx exposure (failover endpoint when Contabo is unreachable).
+- GCloud (`ipfs.ela.city`) joins as third Cluster peer (Phase 4 of `SUPERNODE-CLUSTER-SETUP`).
+- Per-pc2-node bearer token issuance (replace shared community token) — slated for v1.2.8. Path: small admin endpoint on a supernode → wizard flow in pc2-node UI → operator clicks "rotate to my own token" → fresh token issued + saved to `.env`. Default falls back to shared community token until operator opts in.
+- **TLS hygiene** (multi-step, v1.2.8+): (a) `cluster.ela.city` DNS A record pointing at Contabo (operator action — User is travelling, ela.city DNS provider needs SMS verification on Thailand-only number); (b) certbot Let's Encrypt cert on Contabo for cluster.ela.city; (c) update `DEFAULT_CLUSTER_PIN_URL` in `clusterPin.ts` from IP literal to hostname; (d) refactor `UsernameService.ts:17` global `NODE_TLS_REJECT_UNAUTHORIZED=0` to per-request `https.Agent({ rejectUnauthorized: false })` ONLY for known self-signed endpoints. Currently TLS verification is OFF for ALL pc2-node outbound HTTPS — practical risk is low for home/datacentre nodes but real on public Wi-Fi or adversarial networks. Tracked separately as `TLS-PER-REQUEST-AGENT` for v1.2.8.
+- **Supernode RPC proxy Phase 2** (P0, surfaced 2026-05-02 during v1.2.7 smoke test, decision 2026-05-02 evening: ship v1.2.7 WITHOUT supernode default, document operator opt-in via Alchemy/Infura): public Base RPC fallback chain rate-limits during Particle Auth's `getPrimaryAssets()` burst. User hit it during the v1.2.7 mint smoke-test on Jetson; tactical unstuck was Alchemy free-tier key inline in Jetson's `ecosystem.config.cjs`, mint succeeded, cluster pin propagated 2/2 in 730ms, full v1.2.7 acceptance test passed on Jetson canary. Strategic decision: do NOT bundle a shared API key (security + shared rate-limit pooling). Community nodes get the opt-in path documented above (`SUPERNODE_RPC_URLS=<your-alchemy-url>` in `pc2-node/.env`, now actually works thanks to the conditional-spread fix). **v1.2.8** will deploy supernode-backed `https://rpc.ela.city/base` default so opt-in becomes unnecessary — gated on Thailand-DNS round-trip when User is back from USA. Full diagnosis + Phase 2 plan in `.cursor/tasks/SUPERNODE-RPC-PROXY/SUPERNODE-RPC-PROXY.md`.
+### What community node operators should expect on first mint after v1.2.7 update
+
+This section is BLUNT and should be quoted in release-notes / community announcements verbatim.
+
+**Cluster pinning (new in v1.2.7)**: **Works out-of-the-box on every fresh install with zero operator action.** Defaults bake the Elacity supernode cluster URL + a shared community token into `pc2-node/src/services/clusterPin.ts`. Boot log will show `[ClusterPin] enabled -> https://38.242.211.112/cluster-pin (Elacity default) (replication=2/2)`. Per-IP rate limiting at the supernode (30 req/min + burst 20) bounds abuse exposure even though the token is public. Operators who want to use their OWN cluster set both env vars in `pc2-node/.env`; operators who want to disable cluster pinning entirely set them to empty strings (legacy `ELACITY_PIN_FORWARD_URL` and `SUPERNODE_PIN_MIRRORS` still fire if configured).
+
+**Web3 RPC for minting (NOT new in v1.2.7, but more likely to surface)**: pc2-node ships with a default chain of 5 public Base RPC providers (`mainnet.base.org`, `llamarpc`, `publicnode`, `ankr`, `blockpi`). These providers tightened rate limits in 2026, and Particle Auth's `getPrimaryAssets()` makes 15-25 RPC calls per refresh during the mint flow. **If you mint while all 5 providers are simultaneously rate-limited, you will see**:
+
+- `getPrimaryAssets() timed out after 15s` errors in the browser console
+- The Particle wallet sign dialog never appears
+- Or, if you proceed past the sign step, `MetaMask - RPC Error: RPC endpoint returned too many errors, retrying in N minutes`
+
+**Workaround until v1.2.8 supernode RPC proxy ships** (see `SUPERNODE-RPC-PROXY` task — gated on `rpc.ela.city` DNS round-trip):
+
+1. Sign up for a free [Alchemy](https://alchemy.com) account (5 minutes)
+2. Create an app → Base Mainnet → copy the HTTPS endpoint URL (looks like `https://base-mainnet.g.alchemy.com/v2/<key>`)
+3. Edit your `pc2-node/.env` (copy from `.env.example` if you don't have one yet):
+
+   ```
+   SUPERNODE_RPC_URLS=https://base-mainnet.g.alchemy.com/v2/<your-key>
+   ```
+
+4. Reload pc2: `cd ~/pc2.net && pm2 reload ecosystem.config.cjs --only pc2 --update-env`
+5. Confirm in pm2 logs: `[rpc] RPC pool initialized with 6 endpoints (1 supernode first): https://base-mainnet.g.alchemy.com/...`
+6. Try the mint again — token list loads, sign dialog appears, transaction goes through
+
+Alchemy's free tier (300M compute units / month, ~25-30 req/sec) is way more than a single home node needs. Your key never leaves your machine. Same approach works for Infura or any other authenticated Base RPC.
+
+**v1.2.8 will eliminate this opt-in step**: when the User's travel constraints clear, we'll deploy a shared RPC proxy on the supernodes and bake `https://rpc.ela.city/base` into the default `BASE_RPC_URLS`. Every community node will then get supernode-backed RPC for free, with no per-operator setup. Tracked in `.cursor/tasks/SUPERNODE-RPC-PROXY/SUPERNODE-RPC-PROXY.md`.
+
+---
+
+## [1.2.6] - 2026-05-01 (no-Xcode-CLT-needed + arm64-video-uploads + freshly-minted-content-shows-up)
+
+> ## TL;DR
+>
+> v1.2.6 makes brand-new Mac installs work for users who have never touched a terminal — no Xcode Command Line Tools required. It also fixes video uploads on arm64 Linux (Jetson, Pi, Graviton) which previously crashed at the "Fragment" step, fixes freshly-minted content not showing up in the marketplace, fixes 500-erroring thumbnails for non-locally-pinned content, plus three other ways v1.2.5 could leave a user stuck on update.
+
+### What v1.2.6 fixes
+
+#### 1. Zero-compiler installs on macOS (Sasha's case)
+
+`better-sqlite3` was pinned to `^9.2.2`, which has NO Node 22 (MODULE_VERSION 127) prebuilt binary for darwin-arm64. The launcher bundles Node 22, so on every fresh install the launcher had to fall back to compiling `better-sqlite3` from C++ source — which requires Xcode Command Line Tools. Users without Xcode CLT (i.e. most non-developers) saw the install report "success" but got a broken state.
+
+**Fix**: bumped `better-sqlite3` from `^9.2.2` → `^11.10.0`. v11 ships Node 22 darwin-arm64 prebuilds. `npm install` now downloads the matching binary directly when the toolchain matches.
+
+Verified all other native modules (`bcrypt`, `node-pty`, `sharp`, `node-datachannel`) already use NAPI or platform-specific prebuilt subpackages — they don't need any compiler either.
+
+> **⚠️ Postscript (discovered 2026-05-01 evening, fresh Mac install via ElastOS Launcher):** the `^11.10.0` bump on its own is NOT sufficient to deliver a true zero-compiler install. On a fresh macOS without Xcode Command Line Tools, the launcher's install pipeline still ends up with a wrong-ABI `better_sqlite3.node` binary (`NODE_MODULE_VERSION 115` vs Node 22's required `127`) and PC2 crashes at `DatabaseManager.initialize`. Root cause: better-sqlite3 uses V8-specific ABI prebuilds (not Node-API), the launcher's `npm rebuild` step depends on a C++ toolchain to recover from any prebuild mismatch, and `--build-from-source` in our scripts hard-requires Xcode CLT. The launcher's verification gauntlet correctly detects the failure but starts PC2 anyway (separate launcher-repo bug). **Genuine zero-friction install will be delivered in v1.2.7 by migrating from `better-sqlite3` to `@photostructure/sqlite`** — Node-API based, prebuilds bundled inside the npm tarball, single binary per platform works across Node major versions, no postinstall download. See `.cursor/tasks/SQLITE-NO-COMPILE-MIGRATION/` for the full task plan.
+
+#### 2. Resilient launcher install when previous attempt failed (Sasha's case, part 2)
+
+Sasha's launcher install crashed on `git clone` because `~/.pc2` was already half-populated from a previous failed attempt. The launcher then called `startPC2` anyway, which spawned a doomed process against the broken state.
+
+**Fix**: launcher now detects three states cleanly:
+- `~/.pc2` doesn't exist → fresh install (clone)
+- `~/.pc2` exists with our `package.json` from `Elacity/pc2.net` → repair install (skip clone, run `npm install` + build to fix the broken state)
+- `~/.pc2` exists but isn't our repo → back up to `~/.pc2_backup_<timestamp>` and clone fresh
+
+Plus: `startPC2` now does a pre-flight load test of `better-sqlite3` before spawning the PC2 process. If it fails to load (broken install state), it surfaces an actionable error instead of crash-looping the user.
+
+#### 3. `update.sh` no longer blocks on benign build artifacts
+
+v1.2.5's `update.sh` safety guard refused to run if `package-lock.json` or `frontend/` had any drift, even though both are regenerated on every update anyway. Users had to manually `git checkout -- ...` or set `PC2_UPDATE_FORCE=1`, with the latter showing a typo'd hint (`bash bash`) when run via `curl | bash`.
+
+**Fix**: `update.sh` now auto-discards known-safe build artifact drift (`package-lock.json`, `pc2-node/package-lock.json`, `pc2-node/frontend/`, `pc2-node/dist/`, `src/particle-auth/assets/`) before checking for real source-code drift. Only **genuine source changes** trigger the safety guard. The `bash bash` typo is also fixed — the recovery hint now detects whether you ran the script via `curl | bash` or from the repo and prints the right command.
+
+#### 4. GUI auto-updater verifies native modules before restart
+
+`UpdateService.ts` (the in-process auto-updater) had no native-module verification step. If a `better-sqlite3` prebuild failed to download for some reason (network glitch, npm cache issue), the update would silently succeed and PC2 would crash-loop on the next restart.
+
+**Fix**: added a load test for `better-sqlite3` between the build step and the restart step. If it fails, the update is aborted with a clear "run scripts/update.sh from terminal" message — no crash loop.
+
+#### 5. Video uploads work on arm64 Linux (Jetson / Pi / Graviton)
+
+Encoder pipeline crashed at the "Fragment" step on arm64 Linux because PC2 tried to download a Bento4 prebuild binary from `bok.net/Bento4/binaries/Bento4-SDK-1-6-0-641.aarch64-unknown-linux.zip`, which returns HTTP 404 — bok.net never published an arm64 Linux build of Bento4. macOS and x86_64 Linux URLs work fine; arm64 Linux was the only affected platform.
+
+Symptom (Creator app on Jetson):
+```
+✓ Analyze
+✓ Transcode
+✗ Fragment — Download failed: HTTP 404
+```
+
+**Fix**: PC2 now detects when no Bento4 prebuild is available for the platform (or when bok.net download fails for any reason) and falls back to ffmpeg-based fragmentation. ffmpeg's `-movflags +frag_keyframe+empty_moov+default_base_moof+dash` produces fragmented MP4 (fMP4) with the same `moof` / `traf` / `tfhd` / `trun` / `mdat` box structure that mp4fragment produces — fully DASH/CMAF-compliant. ffmpeg is already a hard dependency for the transcode step, so it's guaranteed to be available on any node that can encode video at all.
+
+x86_64 Linux and macOS continue to use Bento4's mp4fragment (the proven path). Only platforms without a Bento4 prebuild (currently linux-arm64) use the ffmpeg fallback.
+
+#### 6. Freshly-minted content shows up in the marketplace immediately
+
+After a successful upload + on-chain mint, the indexer would detect the new TransferSingle event but mark the catalog row `metadata_status: 'failed'` and leave `name`, `asset_type`, `content_cid` all `null`. The marketplace UI then filtered the row out as malformed. Two compounding bugs:
+
+1. The current Elacity Creator (since 2026-04-17) uploads metadata as a **UnixFS directory** (`{cid}/metadata.json`, `{cid}/content.json`, …) rather than a flat JSON file. The indexer's local-IPFS fast path called `getFile(cid)` on the bare directory CID, which throws `"is not a file (type: directory)"`. The catch block correctly fell through to the HTTP gateway list — but the configured remote gateways (`ipfs.ela.city`, `dweb.link`) hadn't yet replicated the freshly-pinned content (typical lag: 30s–5min for a brand-new mint). So all gateway URLs failed and the row stayed `failed` until the 1-hour retry window — terrible UX for "I just uploaded, why isn't it there?".
+
+2. When the indexer DID hit a working gateway (specifically PC2's own local gateway), it parsed the gateway's directory-listing JSON (`{ "cid": ..., "isDirectory": true, "entries": [...] }`) **as if it were the metadata** itself. The row was then marked `resolved` but with all fields null because the parsed JSON had no `name` / `media` / `schema` keys.
+
+**Fixes**:
+- `ContentIndexerService.fetchMetadata()` now prepends the local PC2 gateway URL (`http://127.0.0.1:PORT/ipfs/`) to the gateway candidate list. The local gateway serves freshly-pinned content immediately and handles UnixFS directory CIDs via its `/ipfs/:cid/*` route.
+- Same function now rejects responses that are directory-listing JSON (`isDirectory: true`) and requires the parsed body to have at least one of `schema | name | media | properties | asset` before accepting it as metadata.
+- `getCatalogItemsPendingMetadata()` retry-after window: 1 hour → 5 minutes. Combined with the local-gateway fix, this rarely fires — but if it does, users self-heal in 5 min instead of an hour.
+
+#### 7. Public IPFS gateway no longer 500s on non-locally-pinned content
+
+PC2's `/ipfs/:cid` gateway was returning HTTP 500 instantly (~5ms) for any CID not already in the local blockstore — even though the gateway has an auto-pin path that fetches from peers / the configured prefetch URL on demand. Symptom: the marketplace showed broken thumbnails for any content uploaded by other creators that this node hadn't yet seen.
+
+Root cause: `isContentMissingError()` looked for phrases like `"not found"`, `"missing block"`, `"no link named"`, etc., to decide whether to trigger auto-pin. But Helia's FsBlockstore throws Node.js's `ENOENT: no such file or directory, open '...ipfs/blocks/XX/....data'` — which doesn't match any of those substrings. So the gateway treated "block missing locally" as a generic 500 error.
+
+**Fix**: added `'enoent'` and `'no such file'` to the missing-content classifier. Verified on Jetson: thumbnails that previously 500'd now return HTTP 200 (auto-fetched 105 KB–134 KB each in ~12s the first time, then cached).
+
+#### 8. Marketplace asset detail page — correct UX for free content
+
+Two related bugs on the asset detail page when viewing a **free** (opType === 0) asset:
+
+1. **No way to play or download free content.** The play / download / open-in-viewer buttons were guarded by `if (isOwned)`, where `isOwned` resolves to "this user holds the access NFT for this asset". The publisher of a freshly-minted free asset doesn't auto-receive the access NFT, so they had no way to play their own asset on its detail page. Worse, since free content is cleartext on IPFS and doesn't require an access NFT at all, ANY visitor of a free-asset detail page should be able to play / download it — but that path didn't exist.
+
+2. **Misleading "Publisher Actions" strip on free assets.** The strip rendered three buttons for the publisher: **Edit Price**, **Delist**, **Earnings**. None of them apply to free content: there is no listing price to edit, no marketplace listing to delist, and no on-chain earnings to view. Clicking Edit Price would even show a misleading toast "This content is not resellable (buy-once only)" — wrong category entirely.
+
+**Fixes**:
+- `app.js`: play / download / viewer buttons now reveal when `isOwned || isFree`. `isFree` is derived from `nft.operative.opType === 0`.
+- `app-features.js`: `renderAssetOwnerActions()` early-returns on free assets, so the Publisher Actions strip is suppressed entirely. The "Asset is published" toggle (rendered separately by `renderPublishToggle`) remains visible — it's the only meaningful publisher control for free content.
+- `index.html`: cache-buster bumped (`app.js?v=54`, `app-features.js?v=40`) so users get the fix on next page load without a hard reload.
+
+#### 9. Play button works for free / cleartext content
+
+Clicking **Play** on a free asset showed `Playback Error: Failed to fetch MPD from both gateways (local: 404, public: 404)`. Root cause: `handlePlay()` always launched the player through the encrypted-DASH flow, which:
+
+1. Triggers a Lit Protocol auth round-trip (signing a SIWE message)
+2. POSTs `/api/media/init`, which fetches `<mediaUri>/stream.mpd` from local + public IPFS gateways
+
+But free assets are stored as a **single MP4 file** at the bare CID — there's no `stream.mpd` because the content was never DASH-fragmented + CENC-encrypted on the server side (`asset.cleartext: true`, `asset.directPlayback: true`). So the MPD fetch always 404'd.
+
+**Fix**: `handlePlay()` now detects cleartext / direct-playback assets (`opType === 0`, or explicit `cleartext: true` / `directPlayback: true` in metadata) and launches the player in cleartext mode with a direct file URL (`/ipfs/<cid>`). No Lit auth, no DASH MPD fetch, no `/api/media/init` round-trip — just an HTML5 `<video src=...>`. The encrypted-DASH path is preserved verbatim for paid content (opType 1/2 + CENC).
+
+#### 10. Marketplace UX cleanup (small)
+
+- **Download/Save-to-Cloud button height**: was visually misaligned with sibling action buttons because `.download-node-btn` (and `.open-viewer-btn`) had a leftover `margin-bottom: 12px` from a previous stacked layout. Removed — the buttons now sit cleanly in the flex row.
+- **Share button hidden**: `Share` (copy-link) was an unused half-feature; hidden via `class="hidden"` rather than removed, so the JS handler wiring still resolves and we can bring it back later by deleting the class.
+
+#### 11. Royalty / Make Offer / Royalty Market hidden on free assets
+
+The asset detail page rendered three royalty-share-related sections regardless of asset type: **Royalty Share Offers** with a **Make Offer** button (calling the TradeGateway "make offer for royalty shares" flow), and a **Royalty Market** collapsible section listing royalty-share orders. None of these apply to free content (`opType === 0`) — there's no on-chain revenue to distribute, so royalty shares are meaningless and the buttons either no-op or surface confusing errors when clicked.
+
+**Fix**: `app-features.js` — both `renderOfferSection()` and `renderOrderBook()` now early-return when `nft.operative.opType === 0`, removing/hiding their respective DOM nodes so the entire royalty-shares column disappears for free assets. Cache-buster bumped (`app-features.js?v=40` → `?v=41`). The encrypted-DASH path (paid content) is unchanged.
+
+#### 16. Revenue & Earnings page mislabeled USDC values as ETH
+
+The Revenue & Earnings page showed unclaimed rewards as `0.08 ETH`, `0.03 ETH`, etc. when the actual on-chain values were USDC. The misleading labels could lead a publisher to wildly miscalculate their accrued earnings (0.08 ETH ≈ $200, 0.08 USDC = $0.08 — three orders of magnitude apart).
+
+**Root cause**: backend `/api/catalog/earnings/:address` (`src/api/index.ts`) explicitly queries `rewardsOf(wallet, USDC)` on each operative contract and returns values already decimal-converted with USDC's 6-decimal scale (e.g., `0.05` means `$0.05 USDC`). Frontend `app.js:loadEarningsData` and `renderEarningsList` then called `formatPrice(unclaimed)` *without a `paymentToken` argument*, which made `getTokenSymbol(undefined)` fall back to its `'ETH'` default.
+
+**Fix**: pass an explicit payment token to both `formatPrice` calls on the earnings page. The total-unclaimed dashboard tile uses `USDC_ADDRESS` directly (since the backend currently only aggregates USDC rewards). The per-row unclaimed value uses the row's own `distributions[0].paymentToken`, falling back to `USDC_ADDRESS` if the distributions array is missing — so future per-row support for other payment tokens (ETH, etc.) Just Works without further frontend changes.
+
+Result: `0.08 ETH` → `0.08 USDC`, `0.03 ETH` → `0.03 USDC`, etc. — accurate labelling everywhere on the Revenue & Earnings page.
+
+Files: `pc2-node/data/test-apps/elacity-market/app.js` (`loadEarningsData()`, `renderEarningsList()`). Cache-buster bumped (`app.js?v=57` → `?v=58`).
+
+#### 17. "Network: This node only" badge no longer lies about replication
+
+The asset detail page's `Network` row claimed "This node only" for almost every indexed asset on a typical Jetson catalog — even when the content was clearly mirrored on `ipfs.ela.city` and reachable to anyone on the public web. This led the user to (correctly) ask whether the badge was lying — and yes, it was.
+
+**Root cause**: the backend endpoint `/api/catalog/providers/:cid` was a thin wrapper around `IPFSStorage.countProviders()`, which only consulted libp2p's DHT via `findProviders()` with an 8s timeout. Two issues compounded:
+
+1. Elacity's IPFS gateway (Kubo) doesn't always re-announce CIDs on the public DHT in a window libp2p can observe within 8s — so the DHT walk frequently returns 0 PROVIDER events even when the content is fully pinned and HTTP-reachable on `ipfs.ela.city`.
+2. The PC2 indexer auto-pins every indexed asset locally (which is the intended behaviour — that's how the marketplace catalog gets seeded). So `is_local: true` is true for every catalog row on a node that's done its first scan. Combined with `providers === 0`, the frontend then renders "This node only" — which is the **worst possible** answer because it implies the asset is in danger of disappearing if your node goes down.
+
+The truth on a typical Jetson catalog: 22 of 24 assets ARE replicated on `ipfs.ela.city` (verified via direct HEAD probe). Only 2 are genuinely local-only.
+
+**Fix**: `/api/catalog/providers/:cid` now runs the DHT lookup and an HTTP HEAD probe of two known public IPFS gateways (`ipfs.ela.city`, `dweb.link`) in parallel via `Promise.all`. The DHT timeout was also reduced from 8s to 5s for snappier UX (the parallel gateway probe is bounded at 3s, so the total endpoint latency is ~5s worst case instead of ~8s).
+
+New response shape:
+```json
+{
+  "success": true,
+  "cid": "Qm...",
+  "providers": 0,
+  "gateways": [
+    { "name": "ipfs.ela.city", "reachable": true },
+    { "name": "dweb.link", "reachable": false }
+  ],
+  "publiclyReachable": true
+}
+```
+
+Frontend badge logic in `app.js` updated to interpret this:
+
+| DHT count | Public gateway reachable | `_isLocal` | New badge |
+|---|---|---|---|
+| > 0 | any | any | `N nodes seeding` (+ optional `on ipfs.ela.city`) |
+| 0 | yes | true | `Replicated on ipfs.ela.city + this node` (green) |
+| 0 | yes | false | `Replicated on ipfs.ela.city` (green) |
+| 0 | no | true | `This node only` (amber — now actually accurate) |
+| 0 | no | false | `Discovering peers…` (grey) |
+
+Result: assets that are publicly available now correctly say so, and the amber `This node only` warning is now reserved for assets that genuinely have no public gateway mirror — making it actionable (e.g. "you should ask the publisher to peer with `ipfs.ela.city`" rather than "this is normal, ignore it").
+
+Note: `dweb.link` (Protocol Labs' public gateway) frequently returns false on Elacity-ecosystem CIDs because dweb.link relies on its own DHT crawl which doesn't see Kubo announcements from `ipfs.ela.city` either. We probe it anyway as a secondary signal — useful for content uploaded directly to other IPFS-pinning services (Pinata, Filebase, etc.) that DO announce widely.
+
+Files: `pc2-node/src/api/index.ts` (`/api/catalog/providers/:cid` endpoint — added parallel HTTP HEAD probe), `pc2-node/data/test-apps/elacity-market/app.js` (badge interpretation logic in the seeding-row update path), `pc2-node/data/test-apps/elacity-market/styles.css` (new `.seeding-badge.public` rule — green pill for the replicated-on-public-gateway case). Cache-busters bumped (`app.js?v=58` → `?v=59`, `styles.css?v=34` → `?v=35`).
+
+**Follow-up polish (same session):** the first iteration's badge text — "Replicated on ipfs.ela.city + this node" — was visually correct but too long for the property row's column width and got truncated mid-word ("…this nod"). Replaced with a compact "**N sources**" pill that opens a hover/focus dropdown listing each source with its role:
+
+```
+2 sources ▾
+┌─ Sources ──────────────┐
+│ This node              │
+│   pinned locally       │
+│ ipfs.ela.city          │
+│   public IPFS gateway  │
+└────────────────────────┘
+```
+
+Source list construction (de-duplicated):
+- `_isLocal === true` → adds `"This node"` row (pinned locally)
+- Each reachable gateway → adds `"<gateway-name>"` row
+- DHT count > 0 → adds `"N DHT peer(s)"` row (counted as one bucket so we don't claim "1000 peers" when libp2p happened to walk a chatty area)
+
+Edge cases: 0 sources → `"Discovering peers…"` (grey). Exactly 1 source which is `This node` → `"This node only"` (amber, unchanged behaviour). Otherwise green.
+
+The dropdown is keyboard-accessible (`tabindex=0`, `role=button`, `aria-haspopup=true`) and works on hover via `:hover` AND on touch/keyboard via `:focus-within`. Closes when the user moves focus or clicks elsewhere.
+
+Files: `pc2-node/data/test-apps/elacity-market/app.js` (rewrote the seeding-row render to build a structured source list + dropdown markup), `pc2-node/data/test-apps/elacity-market/styles.css` (new `.seeding-badge.has-dropdown`, `.seeding-caret`, `.seeding-dropdown`, `.seeding-source-detail` rules — uses theme tokens for dark/light mode support). Cache-busters bumped (`app.js?v=59` → `?v=60`, `styles.css?v=35` → `?v=36`).
+
+#### 18. Encrypted-DASH playback fixed: codec strings now include profile/level
+
+A paid (encrypted) video upload completed all 10 pipeline steps (Analyze → Transcode → Fragment → Encrypt → Upload → Finalize IPFS → Upload Metadata → Verify on Network → Mint on-chain → Set Marketplace Approval), but the player rejected playback with:
+
+```
+Playback Error
+Video codec "avc1" is not supported by this browser.
+Please update your browser or contact the creator.
+```
+
+The same source video played fine when uploaded as a free (cleartext) asset, because cleartext playback uses progressive `<video src="…">` (browser does its own codec sniffing) while encrypted-DASH uses MediaSource Extensions (MSE) which is **strict** about codec strings: `MediaSource.isTypeSupported('video/mp4; codecs="avc1"')` returns `false` because the browser needs the profile/compat/level suffix (e.g. `avc1.640028` for H.264 High Profile Level 4.0).
+
+**Root cause**: the JS fMP4 parser (`mp4split.ts → parseCodecString`) searched for the `avcC` sub-box starting **immediately after** the `avc1` sample-entry's box header — but ISO/IEC 14496-12 § 8.5.2 puts 78 bytes of fixed `VisualSampleEntry` fields (6 reserved + 2 data_reference_index + 16 pre_defined + 4 width + 4 height + 8 resolution + 4 reserved + 2 frame_count + 32 compressorname + 2 depth + 2 pre_defined) BETWEEN the entry header and any contained boxes. The parser's scan from offset 0 of those fixed bytes hits 8 zero bytes which `readBoxHeader` interprets as a `{size: 0, type: '\0\0\0\0'}` pseudo-box — and `size === 0` means "extends to end of buffer", so `findBox` skips everything in one giant stride and returns null for `avcC`. The parser then falls back to returning the bare fourcc `'avc1'` (no profile/level), which gets baked into the DASH MPD's `codecs="…"` attribute, and the player can't validate it.
+
+This bug has been latent in the JS parser. It bit us **now** because:
+1. v1.2.6 added an ffmpeg-based fragmentation fallback for arm64 Linux (Bento4 has no arm64 prebuild).
+2. The JS parser only kicks in via `splitFragmentedMP4FromBuffer`, which the WASM split path falls back to on errors.
+3. ffmpeg's output is fully ISO-compliant — `avc1` sample entries DO have the 78-byte VisualSampleEntry header — so the parser's incorrect search start exposes the bug.
+4. We don't have a Bento4 baseline on the Jetson to A/B against, but the WASM parser (separately compiled, source not in this repo) appears to have a similar issue: it returned `codec: "avc1"` for the Jetson's encrypted upload too.
+
+**Fixes** (`mp4split.ts`):
+
+1. **Defensive constant + correct child-box scan start.** Added `VISUAL_SAMPLE_ENTRY_FIXED_BYTES = 78` and `AUDIO_SAMPLE_ENTRY_FIXED_BYTES = 28`. `parseCodecString` now starts the `findBox(avcC|esds|av1C)` scan at `entry.start + entry.headerSize + 78` for visual entries (`avc1`/`avc3`/`hev1`/`hvc1`/`av01`) and `+ 28` for audio entries (`mp4a`/`Opus`/`fLaC`). This is the right behaviour per ISO/IEC 14496-12 § 8.5.2.
+
+2. **WASM-path safety net.** Added `refineCodecsFromInitSegment(initSegment, tracks)` which re-runs the fixed JS parser on the init segment after `splitFragmentedMP4WASM` returns and overrides any track's `codec` field with a more-specific string (e.g. replaces bare `"avc1"` with `"avc1.640028"`). Tracks are matched by `trackId`. Init segments are tiny (~KB), so the extra parse is free. This protects against future WASM regressions and the case where the WASM parser is correct on some inputs and wrong on others.
+
+Result: encrypted-DASH playback now works for the paid upload. The MPD's `codecs="…"` attribute carries the full profile/compat/level, MSE accepts the type, and the player loads init + segments cleanly.
+
+Note: paid assets that were **already minted** with the broken codec string in their on-chain metadata + IPFS-pinned MPD will still fail — they need to be **re-encoded** (re-mint, new tokenId). For the first pre-fix paid upload on the Jetson, the simplest recovery is to re-upload as a fresh paid asset; the bad one can stay listed but won't play. (A delist on the bad token is harmless — frees up that listing slot.)
+
+Files: `pc2-node/src/services/media/mp4split.ts` (added 78/28 byte constants + correct child-box scan + new `refineCodecsFromInitSegment` post-pass on the WASM split path).
+
+#### 19. Encrypted-DASH playback fixed (part 2): ffmpeg fragmenter now matches Bento4 topology
+
+The codec-string fix in #18 unblocked MSE codec validation, but the same paid upload then failed at the next step with:
+
+```
+[player] sourceended fired, readyState: ended
+[player] <video> error event: code=3 message=PipelineStatus::CHUNK_DEMUXER_ERROR_APPEND_FAILED:
+        RunSegmentParserLoop: stream parsing failed.
+```
+
+The init segment appended cleanly; the **first media segment** failed. Mac-fragmented assets (Bento4) play fine on the Jetson, so the issue is specific to the Jetson's ffmpeg-fallback fragmentation introduced in v1.2.6.
+
+**Root cause** — `mp4dump` of equivalent fragments shows the structural divergence:
+
+| Property | Bento4 `mp4fragment` | ffmpeg default |
+|---|---|---|
+| Moof topology | **1 traf per moof** (alternating V / A / V / A …) | **1 moof with 2 trafs** (V + A muxed) |
+| Per-asset moof count (~3 min video, 4 s frag) | 87 moofs | 85 moofs |
+
+The cenc-encrypt WASM (`pc2-node/crates/cenc-encrypt/src/mp4box.rs:156-166`) walks the boxes inside each moof, takes the **first** `[traf]` it encounters, and breaks out of the loop. With Bento4-shaped fragments that's correct — there's only ever one traf per moof. With ffmpeg's default multi-traf moof, the WASM only encrypts the first track and silently drops senc/saio entries for the second; the resulting segment is malformed and Chrome's demuxer rejects it.
+
+**Fix** (`pc2-node/src/services/media/encoder.ts`): added `+separate_moof` to the ffmpeg `-movflags`. This forces one-traf-per-moof, matching the Bento4 topology the WASMs were written against. The flag string is now `+frag_keyframe+empty_moov+default_base_moof+separate_moof`. Verified locally with `mp4dump`: ffmpeg now emits 170 moofs for the same input (~85 video + 85 audio, alternating), each with exactly 1 traf — structurally equivalent to Bento4's output.
+
+The remaining tfhd/trun **flag-bit** differences between Bento4 and ffmpeg are mathematically equivalent (Bento4 lists per-sample duration+size+flags explicitly in trun; ffmpeg uses tfhd defaults where samples are uniform). Both layouts carry complete per-sample information — a spec-compliant parser reads both correctly, and the WASM does.
+
+**No changes to**: any Rust crate, any WASM binary, the Bento4 path (Mac / x86 Linux), or any cleartext-playback path. The change is isolated to the ffmpeg fallback used only when no Bento4 prebuild exists for the platform (currently arm64 Linux only).
+
+Files: `pc2-node/src/services/media/encoder.ts` (added `+separate_moof` to the ffmpeg `-movflags`, updated comments to document the structural parity requirement).
+
+#### 20. Buy modal now shows wallet balances so the user can pick informedly
+
+When buying a paid asset, the "Choose Wallet for Purchase" modal listed both wallets (Agent Account / EOA) with addresses but **no balance**, so the user had to guess which wallet had enough USDC for the purchase. If they picked wrong, the on-chain transaction would revert and they'd burn gas + a confusing error.
+
+**Fix** (`pc2-node/data/test-apps/elacity-market/`): the modal now fetches the **payment-token balance** of each wallet (USDC for paid assets, ETH for native-priced assets) and shows it under the address as `0.05 USDC available`. When the wallet's balance is below the asset's price, the line turns red and prefixes a `⚠` so insufficient balance is visually obvious before submission. Balances load asynchronously and don't block the user from picking — they can still proceed and let the on-chain tx revert if they want to.
+
+Implementation: `showWalletChoiceModal(payToken, priceWei)` now takes the listing's payment token + price, calls `Wallet.getERC20Balance` (or `getNativeBalance`) per wallet, formats with `Wallet.getTokenDecimals`, and applies an `.insufficient` class when raw balance < required. The same balance-fetch pattern was already in use by the subscription modal — extracted just enough to share the visual treatment.
+
+Files: `pc2-node/data/test-apps/elacity-market/index.html` (added `<span class="wallet-choice-balance">` to each option), `app.js` (extended `showWalletChoiceModal` + threaded `listing.payToken`/`listing.price` through `handleBuy`), `styles.css` (`.wallet-choice-balance` + `.wallet-choice-balance.insufficient`). Cache-busters bumped (`app.js?v=60 → ?v=61`, `styles.css?v=36 → ?v=37`).
+
+#### 21. Email-login signature prompt no longer hidden behind "Verifying wallet ownership" overlay
+
+The full-screen "Verifying wallet ownership" overlay was added in v1.2.5 for **external-wallet** sign-in (MetaMask, WalletConnect, Coinbase) — there the signature prompt happens in a browser-extension popup or mobile-app push, OUTSIDE this page, so a fullscreen blocker is fine and even helpful: it tells the user "stop, look at your wallet, not the page".
+
+**The bug**: when email login was enabled, the same overlay was used. But Particle's email-flow signature prompt happens **inside the Particle iframe** on this page. The fullscreen overlay (`position: fixed; inset: 0; z-index: 2147483646`) covered the iframe, hiding Particle's confirm dialog. The user could see the overlay's "Check your wallet" message but had no wallet to check — the dialog they needed to click was sitting underneath the overlay, unclickable. Stuck.
+
+**Fix** (`src/gui/src/UI/UIWindowParticleLogin.js`): added a `position` option to `showLoginStatusOverlay` with two modes:
+
+- `'fullscreen'` (default, used for `metamask` / `walletconnect` / `coinbase`): centered modal with backdrop, current behavior.
+- `'corner'` (used for everything else, including `email`): compact bottom-right panel, no backdrop, **doesn't cover the iframe**. Visual language matches `buildWalletConnectPanel` in `UIWindowParticleSigning.js` so the corner-toast pattern is consistent across PC2 (already used for WC sign requests for the same reason: don't cover the dApp the user is interacting with).
+
+The SIWE-pending handler picks the position based on `payload.loginMethod` from the Particle iframe — known external-wallet methods get the fullscreen overlay, everything else gets the corner toast. The corner toast still shows the spinner, the title, the address-prefix message, and the same escalating hint timers (8s + 12s).
+
+Files: `src/gui/src/UI/UIWindowParticleLogin.js` (extended `showLoginStatusOverlay` + branched the SIWE-pending handler on `loginMethod`), `pc2-node/frontend/index.html` + `pc2-node/scripts/build-frontend.js` (cache-buster bumped from `bundle.min.js?v=1.2.5` → `?v=1.2.6` so existing browsers fetch the updated bundle).
+
+#### 22. Playback no longer bounces users with "ask publisher to peer" while their own pin is still in flight
+
+Reported by a v1.2.5 community tester on a different Jetson: bought a paid video → clicked Play → got *"Content not yet reachable on IPFS. This asset was published from another node and has not propagated to the public gateway yet. Retry shortly, or ask the publisher to peer with ipfs.ela.city."* Despite the asset detail page below the player still showing the user's own download in progress (`Downloaded (193.5 MB) — you own this offline`).
+
+The user's local pin job — kicked off at buy time by `ContentSeedingService` — was simply still running when they clicked Play. Local Helia gateway 404s for blocks not yet fetched, public gateway 404s for an asset just minted on a peer node, both timeout, the `/api/media/init` handler concluded "the asset is unreachable on IPFS" and gave the user the wrong action ("ask publisher to peer") when the right action was "wait 30 seconds for the download you already started to finish".
+
+**Fix** (`pc2-node/src/api/media.ts:248-273`): before returning the legacy "ask publisher" 502, query `db.getPinnedCIDDetail(mediaUri)` to see if there's an active pin job for the media CID:
+
+- `pin_status === 'pinning' | 'queued'` → return HTTP 503 with `code: 'pin_in_progress'`, `progressPercent`, `bytesDownloaded`, `sizeBytes`. Player consumes this and shows *"Downloading content to your node — 47% (90.5 / 193.5 MB)…"* on the loading screen, auto-retrying every 5s up to a 5-minute ceiling.
+- `pin_status === 'failed'` → return `code: 'pin_failed'` with a message pointing the user to retry the download from the asset page.
+- No pin record → keep the existing "ask publisher" error (genuinely unreachable, the user never started a download).
+
+Frontend (`pc2-node/data/test-apps/pc2-media-runtime/player.js:937-985`): the init-failure path now loops on `code: 'pin_in_progress'`, repaints the loading screen with current progress, and re-tries `/init` every 5 seconds. When the pin completes, the next retry succeeds and playback proceeds normally — no error screen flashed in between. Bounded by `MAX_PIN_WAIT_RETRIES = 60` (5 min) so a wedged pin eventually surfaces a real error.
+
+What this is NOT (and the boundary matters):
+- This is NOT auto-pinning on `/init`. The pin job already exists from the buy flow. We're only checking its status to avoid lying to the user about why playback isn't working.
+- This is NOT changing IPFS gateway logic, peer discovery, or the 10s per-gateway timeout.
+- For users who never bought (no pin job) the existing behavior is preserved — they still see "Content not yet reachable on IPFS".
+
+Files: `pc2-node/src/api/media.ts` (added pin-status check before the 502 fall-through, returns `code: 'pin_in_progress'` / `'pin_failed'`), `pc2-node/data/test-apps/pc2-media-runtime/player.js` (auto-retry loop on `pin_in_progress`), `pc2-node/data/test-apps/pc2-media-runtime/index.html` (cache-buster bumped `player.js?v=6-pipelined → ?v=7-pin-progress`).
+
+#### 23. External-wallet secure-view delegation now has a forced-attention overlay (closes EverlastingOS bundle-required class)
+
+Reported by a v1.2.5 community tester: bought their first paid asset, clicked Open on the ebook viewer, got `session_bundle_required` from the server. Their install was fine — the secure-view module had not changed between v1.2.5 and v1.2.6 — and the bundle WOULD have built if they had signed the one-time `personal_sign` request that authorises the 24h session-key delegation. They simply never noticed the prompt: their wallet popup was blocked / sat in another window / never propagated to their attention. The page itself gave them zero indication that anything was waiting on them.
+
+Root cause is a UX asymmetry between login methods, not a security bug:
+
+- **Embedded login (Particle email / social):** `walletPersonalSign` routes via `pc2RouteRpcToParticle('personal_sign', …)` → `WalletService.routeRpcToParticle` → `UIWindowParticleSigning`, which already throws a fullscreen backdrop + centered Particle iframe + cancel button. Forced-attention UX, you can't miss it.
+- **External wallet (MetaMask / WalletConnect / Coinbase):** `walletPersonalSign` calls `window.ethereum.request({ method: 'personal_sign', … })` directly. **No PC2 parent-side UI at all.** The only cue is the wallet's own popup, which is exactly the thing that fails reliably (extension popup blockers, mobile push delays, alt-tab confusion, etc).
+
+Fix is asymmetric and minimal: add a parent-frame **bottom-right corner toast** (same visual pattern as `buildWalletConnectPanel` in `UIWindowParticleSigning.js`, used elsewhere in PC2 for "your wallet is waiting on you" cues) on the external-wallet path only, deliberately leaving the embedded path untouched because `UIWindowParticleSigning` already handles it. Why corner-toast over fullscreen-backdrop? For external wallets the signature popup lives outside the page (browser-extension popup OR a separate mobile WC app), so a fullscreen backdrop adds visual takeover without adding visibility — the user can already see/click the wallet popup either way. The corner toast just adds a "we're waiting on you, here's why" cue without dimming the whole page.
+
+Implementation:
+
+- `src/gui/src/UI/UIWindowParticleLogin.js`: expose the existing `showLoginStatusOverlay({ position: 'fullscreen' | 'corner' })` helper as `window.pc2ShowLoginStatusOverlay` so non-bundled top-frame scripts can use it (`pc2-secure-view.js` is loaded as a `<script src>`, not bundled).
+- `pc2-node/src/wallet-bridge/pc2-secure-view.js → runDelegationFlow()`: wrap the `walletPersonalSign(canonical, signerAddr)` call **strictly** with overlay setup before (`position: 'corner'`) and `clearOverlay()` on both `.then` (success) and `.catch` (cancel/reject/timeout). Wallet-label text is derived from `globalScope.user.login_method` (`MetaMask` / `your wallet app` / `Coinbase Wallet` / fallback `your wallet`).
+
+Two carefully scoped guards verified during code review:
+
+1. **Overlay must NEVER appear when not needed.** `runDelegationFlow` is only entered when (a) no IndexedDB delegation exists, OR (b) the cached delegation is expired/invalid. `ensureSession`'s fast path returns the cached state directly without calling `runDelegationFlow`. So once a user signs once, the overlay never shows again until either the 24h delegation expires or the user explicitly logs out (which calls `revoke()`). Verified by trace: every paid-asset open in cached state goes `signRequest → ensureSession (cache hit) → SVS.signRequest(kp, …)` — no `walletPersonalSign`, no overlay.
+
+2. **Both viewer runtimes are covered by ONE fix point.** Ebook/image/PDF viewers (`pc2-node/data/test-apps/ddrm-viewer/`) and the video/audio player (`pc2-node/data/test-apps/pc2-media-runtime/`) both call `pc2_secureView_sign` via `pc2-wallet-bridge.js`, which in turn invokes `window.pc2SecureView.signRequest({ kid, … })` on the parent frame — i.e. the same `pc2-secure-view.js` module. The overlay fix lives at the choke-point of that module, so both runtimes get the fix automatically without per-runtime patches.
+
+Hint escalation matches existing PC2 conventions (corner-toast text is concise to fit the 320px-wide panel):
+- 0s: *"Approve secure-view session — Check MetaMask — one signature unlocks paid content for 24h."*
+- +8s: *"Still waiting — open MetaMask to approve."*
+- +20s: *"If your wallet didn't prompt, the popup may have been blocked."*
+
+The overlay clears the moment the wallet returns a signature (so the user sees an instant transition), or the moment they hit cancel / the wallet rejects (so they're not stuck behind a frozen modal while the error propagates back through `ensureSession` → `signRequest` → the iframe).
+
+Files: `src/gui/src/UI/UIWindowParticleLogin.js` (3-line global export at module bottom), `pc2-node/src/wallet-bridge/pc2-secure-view.js` (overlay wrap + cleanup in both `.then` and `.catch` paths inside `runDelegationFlow`). Cache-busters bumped: `pc2-secure-view.js?v=20260501a → ?v=20260501b` (in both `pc2-node/scripts/build-frontend.js` template and the regenerated `pc2-node/frontend/index.html`). GUI bundle (`pc2-node/frontend/bundle.min.js`) rebuilt to include the new `window.pc2ShowLoginStatusOverlay` export.
+
+#### 15. Marketplace polish round (after live testing on Jetson)
+
+Four small, user-reported bugs fixed in one round after testing the v1.2.6 indexer-listing-fetch on the Jetson. None block functionality, but each makes the difference between "looks rough" and "looks ready".
+
+**a. Edit Price modal: balance text was invisible (dark on dark).** The "List Access Token for Resale" modal's wallet-balance summary box used `background: var(--card-bg, #1a1a2e)` (a dark theme token) inside a light-theme modal — the inherited dark text rendered nearly invisible on the dark box. Replaced with explicit light theme colors (`background: #f3f4f6; color: #111827; border: 1px solid #e5e7eb`) so the box matches the rest of the modal regardless of theme.
+
+**b. Royalty sections squished against each other.** "Royalty Share Offers / Make Offer" (an inline `.offer-section`) had `margin-top: 12px` but no `margin-bottom`, so it touched the next "Royalty Market" collapsible directly. Symmetric `margin-bottom: 12px` added so all three royalty-related sections (Royalty Shares, Royalty Share Offers, Royalty Market) have consistent spacing.
+
+**c. Search bar didn't actually search the local catalog.** `fetchItems(query, filters)` passed `filters.searchBy` along but `fetchFromCatalog` only honored `offset` / `limit`, and `applyClientSideFilters` only handled `filterby` / `contentType` chips. The remote GraphQL fallback path DID honor the search term, but it only kicked in when the local catalog returned 0 items — so on every PC2 node running on its own catalog, typing in the search bar returned the entire catalog regardless of query. New `applySearchTerm()` filters the local-catalog batch case-insensitively against `name`, `description`, `channel.name`, and `creator.address`. Future enhancement: push this into a SQL `LIKE` in the backend so we don't have to filter client-side after fetching everything.
+
+**d. Indexer image fallback to `media.previewURL` when `metadata.image` is empty.** Several older assets (5 of 24 in a typical Jetson catalog) shipped with `metadata.image = ""` and only a `media.previewURL` field. The indexer's previous `image_url: metadata.image || null` rule stored `null`, so feed cards fell through to the type-icon placeholder (`◻`) instead of showing a real preview. Updated to `image_url: metadata.image || metadata.media?.previewURL || null`. Recovered 2 of the 5 thumbnail-less rows immediately on a Jetson backfill (Purple Rain Cover audio, Video). The remaining 3 (Elacity image, Naval Ravikant ebook, alice-in-wonderland ebook) genuinely have no thumbnail field anywhere in their on-chain metadata — those will continue to show the type-icon placeholder until republished.
+
+Files: `pc2-node/src/services/ContentIndexerService.ts` (previewURL fallback), `pc2-node/data/test-apps/elacity-market/api.js` (`applySearchTerm()`), `pc2-node/data/test-apps/elacity-market/app-features.js` (light-theme balance box), `pc2-node/data/test-apps/elacity-market/styles.css` (`.offer-section { margin-bottom: 12px }`). Cache-busters bumped (`api.js?v=36 → ?v=37`, `app-features.js?v=41 → ?v=42`, `styles.css?v=33 → ?v=34`).
+
+#### 14. Indexer fetches live listing prices so feed cards show real prices
+
+Phase A of #13 unblocked the feed display by surfacing on-chain `op_type` correctly — but a paid asset still had no price to render until someone visited its detail page (which queried `getActiveAccessSellers` + `getAccessListing` on the AuthorityGateway client-side). On the home feed, paid assets fell back to a tier label (`Buy & Resell` / `Buy Once`).
+
+**Phase B: indexer-level listing fetch.** `ContentIndexerService` now queries the AuthorityGateway directly during every scan cycle:
+
+1. After metadata resolution, iterate every catalog row with `op_type > 0` and a non-zero `operative_address` (skips free assets — they have no listings — and rows with no business-model contract).
+2. Per row: call `sellersOf(operative, TOKEN_ID_ACCESS=1)` → returns the addresses currently listing the access token.
+3. Per seller: call `listings(operative, 1, seller)` → returns `(quantity, pricePerToken, payToken)`. Skip listings with `quantity === 0` (sold out / withdrawn).
+4. Pick the **lowest `pricePerToken`** with `payToken` among active listings, store both in the catalog row (`price` + `payment_token` columns).
+5. Rows with no active listings get `price = NULL` (paid-but-unlisted is still a meaningful state — keeps the tier-label fallback path correct).
+
+`api.js → catalogItemToNft()` now also surfaces `nft.price` (decimal-converted, e.g. `0.01` for 10000 wei USDC) and `nft.paymentToken` at the top level so the existing `formatPrice(item.price, item.paymentToken)` call in the card render path works without changes. USDC = 6 decimals, ETH/native = 18.
+
+**Result on a typical Jetson catalog**: 22 paid assets now show real prices like `0.01 USDC` on their feed cards. The 1 unlisted paid asset still shows the `Buy & Resell` tier badge (correct — there's no listing). The 1 free asset shows the green `Free` badge (unchanged).
+
+**RPC budget**: 1 `sellersOf` + N `listings` per paid row per scan cycle. With 23 paid rows averaging ~1 seller each, that's ~46 RPC calls per cycle (every 30 minutes by default) — negligible. Concurrency-limited via `metadataFetchConcurrency` to be polite to the RPC endpoint.
+
+Files: `pc2-node/src/services/ContentIndexerService.ts` (`fetchLowestListing()`, `refreshListingsForPaidAssets()`, ABI helpers), `pc2-node/src/storage/database.ts` (`getPaidCatalogItemsForListingRefresh()`), `pc2-node/data/test-apps/elacity-market/api.js` (`catalogResolveTopLevelPrice()`, `nft.price` / `nft.paymentToken` surfaced). Cache-buster bumped (`api.js?v=35` → `?v=36`).
+
+#### 13. Feed cards correctly identify paid vs free assets
+
+The home-feed card render was incorrectly tagging **every asset** as `Free`, regardless of its actual on-chain pricing model. With 23 of 24 indexed assets actually `op_type=2` (Buy & Resell) on a typical PC2 node, this made the feed look like the marketplace was giving everything away.
+
+Two compounding root causes:
+
+1. **Frontend adapter ignored on-chain truth.** `api.js → catalogItemToNft()` resolved opType from `metadata.pricing.accessMethod` (a legacy v1.0 schema field) and ignored the catalog row's `op_type` / `price` / `payment_token` columns — which the indexer DOES populate from the operative contract's `AssetCreated` event. New asset metadata schemas (v1.1+) no longer embed pricing inline, so every paid asset fell through to the metadata-pricing fallback and was labeled `Free`.
+2. **Local catalog endpoint had no server-side filtering.** Chip selection (`Buy Now`, `Free`, `Video`, etc.) sent `filterby` / `contentType` query hints, but `/api/catalog` returned the full unfiltered batch and only the remote GraphQL fallback honored them — meaning chips were essentially decorative on every PC2 node running on its own catalog.
+
+**Fixes**:
+
+- `api.js`: New `catalogResolveOpType()` and `catalogResolveListings()` helpers prefer the indexer's `item.op_type` / `item.price` / `item.payment_token` columns over metadata inference. Falls back to `metadata.pricing` only when the indexer hasn't yet captured on-chain values (transitional case for not-yet-indexed assets).
+- `api.js`: New `applyClientSideFilters()` runs in `fetchItems()` after the catalog batch returns. Filters by `filterby: ['buyNow' | 'free']` and `contentType: ['video' | 'audio' | 'image' | 'ebook' | '3d']` on the already-resolved opType. Chip selection now actually narrows the visible set.
+- `api.js`: New `free` preset (`filterby: ['free']`); dropped `popular` chip (which sorted by view count — meaningless for empty/local catalogs).
+- `app.js` card render: When opType is `1` (Buy Once) or `2` (Buy & Resell) but no listing price has been captured yet, the card shows a tier label (`Buy Once` / `Buy & Resell`) on a yellow `.tier-badge` instead of nothing or `Free`. Free items keep the green `Free` badge unchanged. (Phase B follow-up: indexer should also populate the `price` column from current listings so cards show actual prices instead of tier labels — tracked separately.)
+- `index.html` chip layout: `All | Buy Now | Free  │  Video | Audio | Image | Ebook | 3D  │  18+`. Default selection: `All` (was `Buy Now`).
+- `app.js` state default: `activeCategory: 'all'` (was `'buyNow'`).
+- `styles.css`: New `.tier-badge` (yellow `#fbbf24` on dark) for the paid-but-unlisted case.
+
+Result: a freshly-loaded feed correctly identifies each card's pricing model. The 23 paid + 1 free assets in a typical Jetson catalog now show 23 `Buy & Resell` badges and 1 `Free` badge instead of 24 misleading `Free` badges. Chip selection actually filters.
+
+**Renamed**: "NFT Asset" → "Asset Token Contract" in the on-chain identity rows on the asset detail page, per UX feedback ("NFT" carries speculative-asset baggage that doesn't fit free / utility content). Pairs cleanly with the existing "Operative Contract" label.
+
+#### 12. On-chain identity surfaced on every asset detail page (free + paid)
+
+The asset detail page's **Properties** block (which contains all the on-chain provenance info — Contract, Authority, Blockchain) was being completely hidden for free assets by a stale early-return guard:
+
+```js
+if (!totalSupply && opType === 0) {
+  dom.detailSupplyInfo.classList.add('hidden');
+  return;
+}
+```
+
+Free assets typically have no access-NFT supply (anyone can stream them straight from IPFS), so they hit this guard and lost ALL on-chain info — even though the asset is fully indexed by the catalog with a verifiable NFT contract, token ID, and IPFS content CID. Users had no way to verify what they were looking at on-chain.
+
+A second related gap: even when the Properties block WAS visible (paid assets), it only surfaced the **operative contract** (the business-model contract — TradeGateway / Reseller / etc.) labeled simply as "Contract". The actual **NFT contract** (the ERC-1155 access-token contract — i.e. the asset itself) was not shown anywhere, nor was the **token ID**, nor the **IPFS content CID**. So even on paid assets users couldn't independently verify on-chain provenance through Basescan + IPFS gateways.
+
+**Fix**: `renderSupplyInfo()` reworked to:
+
+1. Replace the hard hide-on-free guard with a `showSupplyBar = (opType !== 0) && (totalSupply > 0)` gate. Free assets now render the props-grid (their on-chain identity) without the supply-bar UI (which is meaningless without listings).
+2. Also conditionally render the `Total Supply` and `Available` rows only when `totalSupply > 0` — same reason.
+3. Add a new on-chain identity block (visible on every indexed asset, free + paid) with four rows:
+   - **NFT Asset** — `nft.contractAddress` → clickable Basescan link with copy-to-clipboard
+   - **Token ID** — `nft.tokenId.hexTokenID` (or numeric) → mono-formatted, truncated, copy-to-clipboard
+   - **IPFS Content** — `nft._contentCid` → two links: local `/ipfs/<cid>` (loads via this PC2 node, auto-pins) + small `verify` link to public `ipfs.ela.city` gateway, plus copy-to-clipboard
+   - **Operative Contract** — `operative.address` → clickable Basescan link with copy-to-clipboard. **Renamed from "Contract"** for clarity (it's the business-model contract, not the NFT itself).
+
+Result: any visitor of a detail page can verify on-chain provenance independently — works the same for free and paid content. Free assets get the same accountability as paid ones.
+
+Files: `app.js` (`renderSupplyInfo()`), `styles.css` (`.onchain-mono`, `.onchain-public-link`, `.onchain-copy-btn`). Cache-busters bumped (`app.js?v=55` → `?v=56`, `styles.css?v=31` → `?v=32`).
+
+### Files changed
+
+- `pc2-node/package.json` — `better-sqlite3` ^9.2.2 → ^11.10.0
+- `pc2-node/package-lock.json` — regenerated
+- `pc2-node/src/services/UpdateService.ts` — native module verification step before restart
+- `pc2-node/src/services/media/bento4.ts` — ffmpeg fallback for platforms with no Bento4 prebuild
+- `pc2-node/src/services/media/encoder.ts` — `fragmentMedia()` dispatches between mp4fragment and ffmpeg
+- `pc2-node/src/api/media.ts` — passes `useFfmpegFallback` flag through to `fragmentMedia()`
+- `pc2-node/src/services/ContentIndexerService.ts` — `fetchMetadata()` uses local PC2 gateway first, rejects directory-listing JSON, requires real metadata-shape fields; new `refreshListingsForPaidAssets()` + `fetchLowestListing()` query AuthorityGateway `sellersOf` + `listings` after metadata resolution to populate `price` / `payment_token` columns from live listings (paid assets only; concurrency-limited); thumbnail fallback `metadata.image || metadata.media.previewURL`
+- `pc2-node/src/storage/database.ts` — `getCatalogItemsPendingMetadata()` retry-after 1h → 5min; new `getPaidCatalogItemsForListingRefresh()` returns paid resolved rows for the listing-refresh pass
+- `pc2-node/src/api/public.ts` — `isContentMissingError()` classifies ENOENT / "no such file" as auto-pinnable
+- `pc2-node/src/api/index.ts` — `/api/catalog/providers/:cid` now runs DHT findProviders (5s) and parallel HTTP HEAD probes of `ipfs.ela.city` + `dweb.link` (3s) so the asset detail page's `Network` row can accurately distinguish "publicly replicated" from "this node only"
+- `pc2-node/src/services/media/mp4split.ts` — `parseCodecString` now correctly skips the 78-byte `VisualSampleEntry` / 28-byte `AudioSampleEntry` fixed-field region per ISO/IEC 14496-12 § 8.5.2 before scanning for `avcC` / `esds` / `av1C` sub-boxes, so codec strings include profile/compat/level (e.g. `avc1.640028` instead of bare `avc1`); new `refineCodecsFromInitSegment` post-pass on the WASM split path overrides any incomplete codec string returned by `mp4-split.wasm`. Fixes "Video codec 'avc1' is not supported by this browser" on encrypted-DASH playback
+- `pc2-node/data/test-apps/elacity-market/api.js` — `catalogResolveOpType()` + `catalogResolveListings()` prefer indexed on-chain `op_type` / `price` / `payment_token` over metadata-inferred values; new `catalogResolveTopLevelPrice()` exposes decimal-converted `nft.price` + `nft.paymentToken` so feed cards display real prices from the indexer's live-listing fetch; new `free` PRESET; dropped `popular` PRESET; new `applyClientSideFilters()` honors chip selection on local-catalog path; new `applySearchTerm()` filters local-catalog batch by name/description/channel/creator (search bar was previously a no-op for the local catalog path); passes `_rawAssetType` through for content-type matching
+- `pc2-node/data/test-apps/elacity-market/app.js` — play/download buttons reveal on `isOwned || isFree`; `handlePlay()` cleartext path for free / direct-playback assets; `renderSupplyInfo()` reworked to keep Properties visible on free assets and add Asset Token Contract / Token ID / IPFS Content rows + rename Contract → Operative Contract; card render now shows tier label (`Buy Once` / `Buy & Resell`) for paid-but-unlisted assets instead of misleading `Free`; `activeCategory` default `buyNow` → `all`; Revenue & Earnings `formatPrice` calls now pass USDC payment-token so amounts label correctly as `USDC` instead of defaulting to `ETH`; seeding-row badge rewritten to show a compact "N sources" pill with a keyboard-accessible hover/focus dropdown listing each source (this node, public gateways, DHT peer count) — replaces the truncating "Replicated on ipfs.ela.city + this node" string and gives the user expandable detail on demand
+- `pc2-node/data/test-apps/elacity-market/app-features.js` — `renderAssetOwnerActions()`, `renderOfferSection()`, `renderOrderBook()` all early-return on free assets (suppresses Publisher Actions, Royalty Share Offers / Make Offer, and Royalty Market sections); "List Access Token for Resale" balance box switched to explicit light-theme colors (no more invisible dark-on-dark text)
+- `pc2-node/data/test-apps/elacity-market/index.html` — cache-buster bumps (api.js v34→v37, app.js v53→v60, app-features.js v39→v42, styles.css v30→v36); Share button hidden via `class="hidden"`; filter chips reordered to `All | Buy Now | Free  │  Video | Audio | Image | Ebook | 3D  │  18+` (drops `Popular`, adds `Free` / `Ebook` / `3D`)
+- `pc2-node/data/test-apps/elacity-market/styles.css` — removed leftover `margin-bottom: 12px` from `.download-node-btn` and `.open-viewer-btn`; added `.onchain-mono`, `.onchain-public-link`, `.onchain-copy-btn` styles for the on-chain identity rows; added `.tier-badge` for paid-but-unlisted card state; added `margin-bottom: 12px` to `.offer-section` so Royalty Share Offers no longer touches Royalty Market; added `.seeding-badge.public` (green pill) for the replicated-on-public-gateway state plus `.seeding-badge.has-dropdown`, `.seeding-caret`, `.seeding-dropdown`, `.seeding-source-detail` for the compact "N sources" pill with hover/focus dropdown
+- `scripts/update.sh` — smarter safety guard, fix `bash bash` typo
+- `elastos-launcher/src/main/pc2Manager.ts`:
+  - `installPC2` — handle existing `~/.pc2` directory gracefully (repair vs backup)
+  - `startPC2` — pre-flight native module load test
+  - removed `--build-from-source` from install and update flows (v11 prebuilts work)
+
+### Compatibility
+
+- **better-sqlite3 v9 → v11**: same JavaScript API. Verified existing v9 databases (26 tables) open and read cleanly with v11 (SQLite 3.49.2). No data migration required.
+- **Existing v1.2.5 nodes**: GUI auto-update or `update.sh` will pull v1.2.6 cleanly. No manual steps needed.
+- **Existing v1.2.0–v1.2.4 nodes**: same as above.
+
+### What's NOT changed in v1.2.6
+
+- VLESS Reality / sing-box / AmneziaWG — same as v1.2.5
+- Frontend — same as v1.2.5
+- Database schema — same as v1.2.5
+- Networking architecture — same as v1.2.5
+
+This is a pure install/update reliability release. No new features, no breaking changes.
+
+### Known issues carried into v1.2.7
+
+1. **Fresh-Mac install still requires Xcode CLT in some launcher paths.** §1 above shipped the right *intent* (no compiler needed) but `better-sqlite3`'s V8-specific ABI prebuilds + the launcher's force-rebuild pipeline mean a Mac without Xcode CLT can still end up with a wrong-ABI binary at `Database.initialize` time. **Fix path**: migrate to `@photostructure/sqlite` (drop-in, Node-API, prebuilds bundled inside npm tarball — eliminates the entire class of NODE_MODULE_VERSION mismatch bugs). Tracked in `.cursor/tasks/SQLITE-NO-COMPILE-MIGRATION/SQLITE-NO-COMPILE-MIGRATION.md` (Status: Proposed, awaiting approval).
+
+2. **Launcher continues installation after gauntlet failure.** The launcher's verification gauntlet correctly detects an ABI mismatch and tells the user to `xcode-select --install`, but then continues to `Starting PC2 from …` instead of aborting. PC2 then crashes at `DatabaseManager.initialize`. This is a launcher-repo bug (separate codebase from `pc2.net`) — the gauntlet's failure path needs a hard `process.exit(1)` so the user sees the actionable error without a confusing crash log overwriting it.
+
+3. **Bento4 path on linux-arm64**: still uses the ffmpeg fallback path introduced in §5. Not a bug — works correctly — but if/when bok.net publishes an arm64-Linux Bento4 build, we should switch back to mp4fragment for parity with x86_64 Linux and macOS.
+
+4. **Paid-content playback fails inside MetaMask Mobile's in-app browser** (discovered 2026-05-02). When `zzz.ela.city` is opened inside MetaMask Mobile → Browser, login + general transactions (EOA → smart wallet transfer, signature requests) all work correctly — but tapping **Play** on a paid asset fails synchronously: the secure-view delegation toast flickers and disappears within ~200ms, no `personal_sign` prompt is shown to the user, and the runtime reports `Initialization failed: Invalid parameters: must provide an Ethereum address.`. The error originates in **Particle Auth's provider wrapper** (the bundled minified file `src/particle-auth/assets/index-CLS56Zo3.js` contains that exact validation string), which intercepts `window.ethereum` in the dapp iframe and pre-validates `personal_sign` parameters before they reach MetaMask Mobile. Login + send-transaction work because they go through different code paths that don't trigger the wrapper's validation in the same way. A full evening of remote diagnostic patches (hex-encoded message, lower-cased signer address, EIP-6963 provider discovery with RDNS whitelist, fresh `eth_accounts` re-fetch) all reproduced the same symptom — and were further hampered by aggressive in-app-browser caching that prevented later patches from loading on the user's phone, making remote debugging unproductive. **Fix path**: needs hands-on local debugging in MetaMask Mobile (USB / WebKit Inspector) against a controlled `pc2-secure-view.js` build to confirm whether (a) Particle's wrapper is the actual blocker and we need to bypass it more aggressively, or (b) MM Mobile itself has a stricter validation we're not yet matching, or (c) the issue is elsewhere entirely (e.g. iframe `sandbox` attributes, `window.ethereum` shadowing by `pc2-wallet-provider.js`). Tracked in `.cursor/tasks/SECURE-VIEW-MM-MOBILE-INAPP-BROWSER/SECURE-VIEW-MM-MOBILE-INAPP-BROWSER.md` (Status: Proposed, full diagnostic record + hypothesis tree included). Tonight's experimental patches were reverted so v1.2.6 ships clean — the bug only affects MM Mobile in-app browser; desktop browsers, Brave, Firefox, Safari, Chrome on iOS/Android, and even MM Mobile when used via WalletConnect from an external browser all work correctly.
+
+These four are the only known issues. Everything in v1.2.6's headline list (§1–§23) is verified working on the Jetson at the v1.2.6 tag (commit `124823dd1`).
+
+---
+
+## [1.2.5] - 2026-05-01 (hotfix-on-hotfix)
+
+> ## ⚠️ For users who installed v1.2.4 and got stuck
+>
+> If you installed v1.2.4 today and saw either:
+>
+> - **`OMG CMake executable is not found`** at the "Building native modules" step (Sasha's case), OR
+> - **`Cannot find module '../../../build/Release/node_datachannel.node'`** in pm2 logs after install completed (Ahmed's case)
+>
+> Both are the same root cause: `node-datachannel` (a libp2p WebRTC transitive dep) tried to do a cmake-js source build because no prebuild exists for your Node ABI, and cmake wasn't installed. v1.2.4 didn't catch this and either crashed loudly (Sasha) or silently shipped a broken module (Ahmed).
+>
+> **Fix without re-installing everything:**
+> ```bash
+> # macOS
+> brew install cmake
+> cd ~/.pc2/pc2-node    # or ~/pc2.net/pc2-node depending on install
+> npm rebuild node-datachannel
+> pm2 restart pc2
+>
+> # Linux
+> sudo apt install cmake
+> cd ~/.pc2/pc2-node    # or ~/pc2.net/pc2-node depending on install
+> npm rebuild node-datachannel
+> pm2 restart pc2
+> ```
+>
+> **Or (cleaner) re-run the v1.2.5 installer/updater** which now installs cmake up front and verifies node-datachannel loads before declaring success:
+> ```bash
+> # Update existing install:
+> curl -fsSL https://raw.githubusercontent.com/Elacity/pc2.net/main/scripts/update.sh | bash
+> ```
+
+### What v1.2.5 actually fixes
+
+This is a hotfix for v1.2.4. The v1.2.4 release shipped two related regressions:
+
+1. **`npm rebuild --build-from-source` for ALL native modules** (instead of just `better-sqlite3` like v1.2.3 did). This was over-aggressive paranoia. It exposed `node-datachannel`'s cmake-js source-build path on Macs without cmake installed. v1.2.5 reverts to the proven v1.2.3 strategy — only `better-sqlite3` gets force-built, everything else uses prebuilds when available.
+2. **Per-module rebuild fallback didn't include `node-datachannel`**. When the bulk rebuild failed, the script silently skipped node-datachannel and declared success. The server then crash-looped on boot. v1.2.5 adds an explicit verification gauntlet that fails LOUDLY before pm2 ever starts the server.
+
+### The verification gauntlet (Ahmed's contribution)
+
+Both `start-local.sh` and `update.sh` now run a three-attempt verification for each critical native module (`better-sqlite3` and `node-datachannel`):
+
+1. **Plain load** — works when prebuild-install resolved cleanly at install time.
+2. **Rebuild** — covers ABI drift from a prior install (already done up-front).
+3. **Clean reinstall** — `rm -rf node_modules/MOD && npm install MOD`. The nuclear option that forces `prebuild-install` to query fresh against the **current** Node ABI.
+
+Why step 3 matters: Ahmed (Apr 30 2026) discovered that `npm rebuild` reuses the install-time prebuild metadata in `node_modules/MOD/`. If your Node binary changed since install (Homebrew auto-upgraded Node, you switched nvm versions, etc.), `npm rebuild` can succeed without actually fetching the right binary for your current Node. Only **clean reinstall** queries fresh. This is now baked into the scripts so users don't have to discover it themselves.
+
+If all three steps fail for a critical module, the script exits with module-specific fix instructions (`brew install cmake` for node-datachannel, `xcode-select --install` for better-sqlite3, etc.) instead of letting pm2 silently crash-loop.
+
+### Other v1.2.5 fixes
+
+- **`update.sh` now sources nvm + probes common pm2 install paths** before running. v1.2.4's `update.sh` failed for users with nvm-installed pm2 (4HM3D's case) because the curl|bash invocation didn't have `~/.nvm/versions/node/*/bin` on PATH and `pm2 stop pc2` reported "command not found". Now it sources `~/.nvm/nvm.sh`, falls back to probing standard install locations, and exits with a clear "install pm2 first" error if it's genuinely missing.
+- **`cmake` is now in the system-deps install list** for both macOS (Homebrew) and Debian/Ubuntu (apt-get). Belt-and-braces in case any current or future native module falls back to source build.
+- **Cache-busters bumped** — `bundle.min.{js,css}?v=1.2.5`.
+- **Launcher (Elastos Launcher v1.2.5)** updated with the same rebuild-strategy revert; download `ElastOS-1.2.5-arm64.dmg` (signed + notarized + stapled) from the launcher repo.
+
+### Credits
+
+Thanks to **Ahmed (4HM3D)** and **Sasha** for finding both the silent-shipping bug and the recovery pattern within hours of v1.2.4. Ahmed's "rm -rf + clean reinstall" insight (vs `npm rebuild`) is what made the verification gauntlet actually robust against Node-version drift.
+
+### Update path notes
+
+- **v1.2.4 → v1.2.5**: GUI auto-update works cleanly because v1.2.4's `UpdateService` is unchanged in this release. **HOWEVER**, if your v1.2.4 install crash-loops on boot (Ahmed's case), the GUI won't even open to let you click Update — use the terminal `update.sh` instead.
+- **v1.2.3 → v1.2.5**: GUI auto-update works fine.
+- **v1.0/v1.1/v1.2.0/v1.2.1/v1.2.2 → v1.2.5**: still terminal-only, same rules as v1.2.4 release notes.
+
+---
+
+## [1.2.4] - 2026-04-30 (hotfix)
+
+> ## ⚠️ How to upgrade — read this first
+>
+> **If your node is on v1.2.3:** click "Update" in the GUI. Clean
+> auto-update, no terminal needed.
+>
+> **If your node is on v1.0.x / v1.1.x / v1.2.0 / v1.2.1 / v1.2.2:**
+> **do NOT use the GUI updater for this jump**. The in-app updater
+> on those versions is missing fixes that v1.2.4 needs to settle
+> cleanly (root-level `npm install`, `HUSKY=0` env override,
+> `npm rebuild --build-from-source`, wallet-bridge sync). It can
+> appear to succeed and then leave the backend crashing on missing
+> deps, or hang forever on `Installing dependencies…` with the
+> `husky` 127 error.
+>
+> Run this in a terminal on the node instead:
+>
+> ```bash
+> curl -fsSL https://raw.githubusercontent.com/Elacity/pc2.net/main/scripts/update.sh | bash
+> ```
+>
+> This is `scripts/update.sh` from this release — idempotent, fail-loud,
+> self-checking. Once you're on v1.2.4 the GUI updater is the right
+> tool again for everything from v1.2.4 onwards.
+
+This release closes the last class of "playback works on the publishing
+node but fails everywhere behind the gateway" bugs, eliminates a
+self-inflicted local-IPFS round-trip that was silently bleeding
+bandwidth and adding seconds of latency to every encrypted-media
+session, and ships a self-healing path so users with stale Lit
+delegations cached in their browser auto-recover instead of being
+locked out for months.
+
+It also hardens the macOS / Mac-mini installation path — every fresh
+install on Node 22 was crashing at startup with the cryptic
+`ERR_DLOPEN_FAILED / NODE_MODULE_VERSION 115 vs 127` error because the
+launcher never re-built `better-sqlite3` against its own bundled Node
+ABI.
+
+### 🐛 Critical #7: encrypted-media playback fails behind the ela.city gateway with `ERR_SSL_WRONG_VERSION_NUMBER`
+
+`/api/media/init` and `/api/media/segment` build the gateway base URL
+with a *local* `getBaseUrl()` that ignored the `x-forwarded-host`
+header from the public reverse proxy (`zzz.ela.city`, `test7.ela.city`,
+…). When a viewer hit the player through the gateway, the proxy set
+`x-forwarded-proto: https` but the upstream `Host` header was the
+internal IP (`10.100.0.4:4200`). The local helper combined them into:
+
+```
+https://10.100.0.4:4200/ipfs/<CID>/stream.mpd
+```
+
+Port 4200 only speaks HTTP, so every fetch for the MPD and init
+segment died with `ERR_SSL_WRONG_VERSION_NUMBER` (a TLS handshake
+hitting an HTTP listener). End result: every media open after gateway
+ingestion threw `Failed to fetch` and the player gave up before the
+public-IPFS fallback ever triggered.
+
+**Fix**: deleted the rogue helper, switched to the shared
+`utils/urlUtils.getBaseUrl` that already honours `x-forwarded-host` /
+`x-forwarded-proto` correctly. This is the same helper every other
+endpoint in `storage.ts` was already using; `media.ts` had simply
+shadowed it with a broken copy. The same audit caught two more
+shadows in `filesystem.ts` and `other.ts` (thumbnail URLs broadcast
+via WebSocket); both now route through the shared helper.
+
+### 🐛 Critical #8: every "local" IPFS fetch was round-tripping through the public gateway
+
+Once Critical #7 was fixed, the new symptom became visible: the
+backend was happily building MPD URLs as
+`https://zzz.ela.city/ipfs/...` and *fetching them itself*. The
+request left the Jetson over WireGuard, hit the public Nginx,
+came back through WireGuard, and was served by the same Helia
+instance the request originated on. Per segment.
+
+Cost per playback: **2–4 wasted external HTTPS round-trips** (MPD
++ init + first segments) and **200ms–2s of avoidable latency**
+before the player saw its first byte. When the gateway was
+slightly congested, the local fetch would hit the 10s timeout and
+fall back to `ipfs.ela.city` — now serving the *same* CID it just
+asked the local node for. Worst-case behaviour: a perfectly
+healthy local node felt slower than streaming from the public
+internet, and a gateway hiccup could break a session that had no
+business depending on the gateway at all.
+
+**Fix**: introduced `utils/urlUtils.getInternalIPFSGateway()`, which
+returns `http://127.0.0.1:${PORT}/ipfs/` (overrideable via
+`LOCAL_IPFS_GATEWAY` for users running a separate Kubo daemon).
+`media.ts` now uses this loopback URL for every backend-internal
+IPFS fetch (MPD parse, PSSH-extraction init, every segment) while
+leaving the *public* `getBaseUrl` reserved for URLs that go to the
+browser. URLs the player consumes are unchanged — segments are
+proxied through `/api/media/segment` regardless — so this is a
+pure server-side optimisation with no client surface change.
+
+Verified on the live Jetson:
+
+```
+[media/init] Fetching MPD: http://127.0.0.1:4200/ipfs/<CID>/stream.mpd
+[media/init] Local MPD failed (404), trying fallback: https://ipfs.ela.city/...
+```
+
+Both legs now resolve in milliseconds; the previously-unreachable
+"local" leg is genuinely local.
+
+While in the area, `fetchBytesFromIPFS()` and `fetchSegmentBytes()`
+were both wrapped in try/catch so a thrown `fetch()` (TLS error,
+DNS failure, timeout) actually triggers the public-gateway fallback
+instead of propagating. Previously only non-OK *responses* fell
+back; *exceptions* killed the request.
+
+### 🐛 Critical #11: wallet-bridge fixes can never reach users via auto-update
+
+A foot-gun discovered while fixing Critical #9 — the auto-update
+flow could in principle pull the new
+`src/wallet-bridge/pc2-secure-view.js`, but the server actually
+serves `frontend/pc2-secure-view.js`, and **nothing in the update
+pipeline copied source → frontend**:
+
+- `build:gui` (root): rebuilds the desktop bundle, copies
+  `bundle.min.js`/`bundle.min.css` to `frontend/`. Does not touch
+  wallet-bridge files.
+- `build:backend` (pc2-node): runs `tsc` only.
+- `build:frontend` (pc2-node): the actual script that copies
+  wallet-bridge files. **Was never invoked by `UpdateService`.**
+
+In practice, every wallet-bridge JS fix to date has reached users
+only because we manually ran `build:frontend` locally before
+committing — i.e. the frontend copies in `git` happened to already
+be in sync with `src/`. Nothing enforced that. A single forgotten
+`npm run build:frontend` and any wallet-bridge fix would land in
+source but never reach the browser.
+
+**Fix**: `UpdateService.performUpdate()` now runs
+`npm run build:frontend` as an explicit step before `build:gui`,
+wrapped in a try/catch so older nodes that don't have the script
+don't break the update. Combined with bumping the
+`pc2-secure-view.js?v=…` cache-buster, this guarantees that future
+fixes to any wallet-bridge file are picked up by the browser
+within one update cycle.
+
+This change takes effect for v1.2.4 → v1.2.5+ updates. The v1.2.3
+→ v1.2.4 transition is covered by manually committing both the
+`src/` and `frontend/` copies of `pc2-secure-view.js`, plus the
+cache-buster bump.
+
+### 🐛 Critical #9: rotated Lit Action CID locks users out for months until cached delegations expire
+
+Phase-5 sigauth Lit Actions self-check `del.actionIpfsId ===
+jsParams.actionIpfsId` inside the TEE. When v1.2.2 rotated the
+hardcoded fallback non-media action CID
+(`QmX5JxcFhyasptCWMA6unFPm3TRYjPSkJb5HhN8289r5uk` →
+`bafkreihvm4zkyuefnuptlbdins6cmd2mbslj2xgnyzz3ssdg2ggg3jtkk4`),
+every browser holding a delegation signed against the old CID
+started failing every secure-view call with `Lit Action denied`.
+
+`SecureViewSession` only purges cached delegations on `expiresAt`,
+so users with a 90-day delegation were locked out of all DDRM
+content for up to 90 days unless they manually wiped IndexedDB.
+
+**Fix**: in `pc2-secure-view.js → tryRestoreSession()`, we now
+fetch `GET /api/storage/lit/server-info` (existing endpoint, no
+new surface) to learn the server's *current* expected
+`actionIpfsId`, compare against the cached delegation's
+`actionIpfsId`, and purge the cache on mismatch — exactly the
+same pattern as the existing wallet-mismatch gate one block
+above. The wipe is silent, the next file-open re-bootstraps a
+fresh delegation against the current CID, and the user sees one
+extra `personal_sign` prompt instead of an infinite loop.
+
+Fail-open: if `/server-info` is unreachable for any reason we keep
+the cache and let the server be the final authority — never break
+existing sessions just because we couldn't reach our own
+endpoint.
+
+### 🐛 Critical #10: macOS launcher fresh install crashes with `NODE_MODULE_VERSION 115 vs 127`
+
+The Elastos Launcher bundles its own Node 22.13.1 (MODULE_VERSION
+127) but the launcher install flow only ran `npm install
+--legacy-peer-deps`. `better-sqlite3@^9.2.2` was published before
+Node 22 existed, so `prebuild-install` on a fresh box pulled the
+Node 20 prebuild (MODULE_VERSION 115). At runtime, the bundled
+Node 22 refused to load the .node binary and the database
+initialiser crashed with `ERR_DLOPEN_FAILED`, which the launcher
+surfaced to the user as the unhelpful "Timeout waiting for server
+to start".
+
+The same trap is going to bite again the next time any native
+dependency adds a Node 24 prebuild before our deps catch up.
+
+**Fix**: in `elastos-launcher/src/main/pc2Manager.ts`, both
+`installPC2()` and the auto-update flow now run
+
+```sh
+HUSKY=0 npm rebuild --build-from-source
+```
+
+immediately after `npm install`. This forces *every* native module
+(better-sqlite3, sharp, bcrypt, node-gyp-built shims) to recompile
+against the actually-bundled Node ABI, regardless of which
+prebuilds happened to be cached on npm. The update flow also
+gained the previously-missing root `npm install` so the GUI
+build dependencies stay in sync.
+
+`HUSKY=0` is forced inline as defence-in-depth alongside the
+`package.json` `prepare` script fix from v1.2.3 — covers any user
+running an old launcher build that pulls a newer pc2-node tree.
+
+(For users already in the broken state from a v1.2.2 / v1.2.3
+launcher install, manual recovery is one command:
+`cd ~/.pc2/pc2-node && ~/.elastos/node/node-v22.13.1-darwin-arm64/bin/npm rebuild better-sqlite3 --build-from-source`,
+then re-launch ElastOS. PC2 boots cleanly afterwards.)
+
+### 🐛 Critical #12: `start-local.sh` (CLI installer) silently fails on every fresh Mac
+
+The terminal-based installer
+(`curl -fsSL …/start-local.sh | bash`) was a minefield of false
+successes on a fresh Mac:
+
+1. **Git stub gives false positive.** macOS ships
+   `/usr/bin/git` as a stub that exists in `PATH` solely to
+   trigger the Xcode CLT installer when invoked. The script's
+   `command -v git` test passed on the stub, so Xcode CLT was
+   never installed; later `nvm install` (which compiles things)
+   bombed with "you may need to install the Xcode Command Line
+   Developer Tools" and the user got stuck.
+2. **`curl | bash` detaches stdin.** Homebrew's installer needs
+   sudo; without a TTY it printed "Need sudo access" and bailed.
+   Every subsequent step that depended on brew (ffmpeg, cairo,
+   pango, …) was missing, but the script kept printing
+   `✓ Native modules built` regardless.
+3. **`npm rebuild 2>&1 || true`** swallowed every native-module
+   compile error. `canvas` failing because `pkg-config` wasn't
+   installed printed nothing, but PDF/text thumbnails were
+   silently disabled.
+4. **No macOS equivalent of `install_build_deps`.** The script
+   had a Debian/Ubuntu branch installing `cairo`, `pango`,
+   `libpng`, `librsvg`, `ffmpeg`, etc. — but on macOS, the
+   equivalent `brew install` was never wired up.
+
+**Fix** (`scripts/start-local.sh`):
+
+- Detect pipe-to-bash mode (`[ ! -t 0 ]`) on macOS and refuse to
+  run with a clear `bash -c "$(curl ...)"` recommendation.
+- Replace `command -v git` with `xcode-select -p` on macOS — the
+  honest test for a usable toolchain.
+- New `ensure_brew_macos` step runs the Homebrew installer with a
+  real TTY, persists the `brew shellenv` to `~/.zprofile` so the
+  user doesn't have to source it manually next time.
+- New `install_macos_brew_libs` installs every native-module
+  system dependency (`ffmpeg`, `pkg-config`, `cairo`, `pango`,
+  `libpng`, `jpeg`, `giflib`, `librsvg`, `wireguard-tools`) in a
+  single `brew install` — matches the apt-get list.
+- Replaced silent `npm rebuild 2>&1 || true` with a fail-loud
+  three-tier strategy: bulk rebuild first, then per-module
+  retries that distinguish required (better-sqlite3) from
+  optional (canvas, sharp) failures. better-sqlite3 failure now
+  exits 1 with a remediation hint; canvas failure prints a
+  warning and continues.
+- New post-rebuild sanity check: `node -e
+  "require('better-sqlite3')(':memory:')…"` actually loads the
+  binary against the running Node ABI before claiming success.
+  Catches the ABI-mismatch class of bugs at install time, not at
+  first server boot.
+
+### Other changes
+
+- **Frontend cache-busters bumped 1.2.1 → 1.2.4** in
+  `pc2-node/scripts/build-frontend.js` (and `frontend/index.html`)
+  so browsers fetch the rebuilt `bundle.min.js` / `bundle.min.css`
+  instead of serving the stale v1.2.1 cached copy after update.
+
+### Update path notes
+
+- **v1.2.3 → v1.2.4**: GUI auto-update is the recommended path. Clean,
+  no manual steps.
+- **v1.2.1 / v1.2.2 → v1.2.4**: GUI auto-update *works* (the v1.2.4
+  `package.json` husky fix carries through `git reset --hard`), but
+  the resulting node will be missing the v1.2.4 `UpdateService`
+  improvements (build:frontend sync, root install) until the next
+  release. **Recommended: run `update.sh` from a terminal** so the
+  node lands on v1.2.4 with everything in sync from the start.
+- **v1.0.x / v1.1.x / v1.2.0 → v1.2.4**: **Do not use the GUI updater.**
+  Their in-app `UpdateService` only runs `npm install` inside
+  `pc2-node`, not at the repo root. If v1.2.4's root `package.json`
+  has gained any new transitive dep (it has — see the loopback
+  IPFS / wallet-bridge work above), the auto-update will appear
+  to "succeed" but the backend will crash on the next boot with
+  `Cannot find module 'X'`. v1.0/v1.1 also predate the husky
+  `prepare`-script fix, so the auto-update may simply hang forever
+  on `Installing dependencies…` with the silent `husky` 127 error.
+  **Use the terminal command in the box at the top of these notes.**
+- **Browser cache**: viewers using the GUI will pick up the new
+  bundle via the `?v=1.2.4` cache-buster — no hard-refresh needed.
+- **Stale Lit delegations**: any browser that signed a delegation
+  against the pre-v1.2.2 action CID (`QmX5Jx...`) self-recovers on
+  next page load — one extra `personal_sign` prompt, no
+  user-visible error.
+
+### Manual recovery / forced upgrade
+
+If your GUI auto-updater hangs, fails, or you're on an older
+release that the in-app updater can't carry forward (notably
+v1.2.0), the canonical recovery is the hardened
+`scripts/update.sh`. It does, in order:
+
+1. PM2 stop + orphan kill + port-free check
+2. `git fetch + git reset --hard origin/main`
+3. `npm install` at **both** root and `pc2-node` (with
+   `HUSKY=0` belt-and-braces)
+4. `npm rebuild --build-from-source` (bulk, then per-module
+   retry — better-sqlite3 fatal, canvas/sharp non-fatal)
+5. `build:frontend` + `build:gui` + `build:backend`
+6. better-sqlite3 ABI sanity check (`require()` it before PM2
+   starts)
+7. `pm2 start` + 10s health-check verification
+
+**One-liner from anywhere on a Jetson / Linux box:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Elacity/pc2.net/main/scripts/update.sh | bash
+```
+
+**From inside an existing checkout:**
+
+```bash
+cd ~/pc2.net && bash scripts/update.sh
+```
+
+**On macOS launcher install (path is `~/.pc2`):**
+
+```bash
+cd ~/.pc2 && bash scripts/update.sh
+```
+
+The script is idempotent — running it twice is safe and a
+reasonable thing to do if the first run reported any module
+warning. It exits 1 with a remediation hint (not a silent
+"success") on every fatal step, which is the opposite of how
+most install scripts in this codebase used to behave.
+
+### Files changed
+
+- `pc2-node/src/utils/urlUtils.ts` — added `getInternalIPFSGateway()`
+- `pc2-node/src/api/media.ts` — loopback gateway, hardened fetch fallback
+- `pc2-node/src/api/filesystem.ts` — shared `getBaseUrl` for thumbnail URLs
+- `pc2-node/src/api/other.ts` — shared `getBaseUrl` for thumbnail URLs
+- `pc2-node/src/wallet-bridge/pc2-secure-view.js` + `pc2-node/frontend/pc2-secure-view.js` — stale-CID self-heal (synced)
+- `pc2-node/src/services/UpdateService.ts` — runs `build:frontend` so wallet-bridge fixes actually reach users
+- `pc2-node/scripts/build-frontend.js` + `pc2-node/frontend/index.html` — bundle + secure-view cache-buster bump
+- `scripts/start-local.sh` — Xcode CLT detection, Homebrew bootstrap with TTY, macOS native libs, fail-loud npm rebuild, better-sqlite3 sanity check
+- `scripts/update.sh` — hardened canonical recovery script (root + pc2-node install, build:frontend, fail-loud rebuild, ABI verify)
+- `package.json` + `pc2-node/package.json` — version 1.2.4
+- `elastos-launcher/src/main/pc2Manager.ts` — `npm rebuild --build-from-source` on install + update
+- `elastos-launcher/package.json` — version 1.2.4
+
+---
+
+## [1.2.3] - 2026-04-30 (hotfix)
+
+### 🐛 Critical #6: GUI updater silently hangs on every Jetson update (`sh: husky: not found`)
+
+The v1.2.2 GUI auto-updater could not actually install v1.2.2 on any
+production node. The root cause was a single line in the repo-root
+`package.json`:
+
+```jsonc
+"prepare": "husky"
+```
+
+`husky` is a developer-side git-hooks installer with **no purpose on a
+production node**. When the updater ran `npm install --legacy-peer-deps`
+during a v1.2.1 → v1.2.2 upgrade, npm executed the `prepare` lifecycle
+script **before** the dev-dependency that provides the `husky` binary
+was installed. With `husky` not yet on `PATH`, the script exited 127:
+
+```
+sh: 1: husky: not found
+npm error code 127
+npm error path /home/orin_nano/pc2.net
+npm error command failed
+npm error command sh -c husky
+```
+
+`npm install` therefore failed at the very first step. The
+`UpdateService.performUpdate()` flow used `execAsync` (which
+`await`s the entire child to exit), so the rejection bubbled up,
+the backend logged the failure, and the GUI modal — which only
+polled the `updateProgress` *string* — was left stuck on
+`Installing dependencies…` indefinitely. From the user's
+perspective, every Jetson update silently hung at the second step
+and never recovered.
+
+The same pattern would have broken every future release for every
+node, regardless of arch. This had to ship before any further
+release attempts.
+
+**Fix**: three layers, defence-in-depth.
+
+1. **Root `package.json`** → wrap the husky lifecycle so it can never
+   fail a production install:
+   ```jsonc
+   "prepare": "husky 2>/dev/null || true"
+   ```
+   In dev, husky is in `node_modules/.bin` and the script succeeds
+   exactly as before. In prod (and CI), it fails silently, the
+   `|| true` swallows the non-zero exit, and `npm install` proceeds.
+
+2. **`UpdateService.execStreamed()`** → every update sub-command now
+   runs with `HUSKY=0` and `CI=true` injected into the env, regardless
+   of the `package.json` prepare script. Even nodes that somehow pull a
+   future broken `package.json` cannot reproduce the failure.
+
+3. **Idle watchdog** (`STREAM_IDLE_TIMEOUT_MS = 8 min`) — if any update
+   sub-command produces zero stdout/stderr for 8 minutes, the parent
+   `SIGKILL`s the child and surfaces a real error. No more silent
+   `await`s on dead npm children.
+
+### ✨ "View detailed logs" — live update output, no more flying blind
+
+Even with the husky fix, the v1.2.2 update modal showed only a single
+high-level step label (`Installing dependencies…`) with no insight into
+what `npm install` was actually doing. On a Jetson where the install
+legitimately takes 10-15 minutes, this is genuinely nerve-wracking —
+users had no way to distinguish "compiling sharp from C++ source" from
+"hung on a dead promise". Reported verbatim:
+
+> *"i hoped to get live updates here too so i know exactly whats running
+> if i wanted even if in a drop down, this still makes me feel blind and
+> nervous"*
+
+**Fix**:
+
+- **Backend** (`pc2-node/src/services/UpdateService.ts`):
+  - Replaced `execAsync` with a `spawn`-based `execStreamed()` runner
+    that pipes child stdout/stderr line-by-line into a rolling
+    `logBuffer` (capped at `LOG_BUFFER_MAX_LINES = 400`). Each entry
+    is prefixed with `[HH:MM:SS] [source]` (e.g. `[npm-root]`,
+    `[build-gui]`) so the UI can colour-code by stage.
+  - Added a monotonic `logSeq` counter so the GUI's poll loop can
+    request only new lines (`?sinceSeq=<n>`) instead of re-shipping
+    the entire buffer every 1.5 s.
+  - `getStatus()` and `/api/update/progress` both now return
+    `log: string[]` and `logSeq: number`. Backwards-compatible —
+    older clients ignore the new fields.
+
+- **Frontend** (`src/gui/src/UI/UIUpdateModal.js`):
+  - Added a collapsible **"View detailed logs"** button under the
+    step list. Expands a dark, terminal-style panel rendering the
+    last 400 lines of streamed output.
+  - Sticky-bottom auto-scroll: new lines auto-scroll only when the
+    user is sitting at the bottom of the panel (within 32 px), so
+    scrolling up to read older output won't keep getting yanked
+    back down.
+  - Source tag (`[git]`, `[npm-root]`, `[npm-node]`, `[build-gui]`,
+    `[build-backend]`, `[update]`) is colour-coded so the user can
+    visually scan the active stage at a glance.
+  - Diff polling uses the new `?sinceSeq=` param — only new lines
+    are sent, keeping the poll payload tiny even for a full 400-line
+    install.
+  - "Taking longer than expected" hint now points at the dropdown
+    (*"Expand View detailed logs above to see live output"*) instead
+    of telling users to SSH in and run `pm2 logs`.
+
+### 🐛 Bug fix: `UPDATE_HARD_TIMEOUT_MS` bumped from 12 min → 20 min
+
+The 12-minute "taking longer than expected" warning was an over-
+optimistic guess that fired during normal Jetson updates (where
+native dep compile of `better-sqlite3` + `node-pty` + `sharp`
+totals 8-12 min on its own, before `npm install` even reaches the
+Helia/libp2p tree). Bumped to 20 min, which covers Jetson cold-
+install worst case + build + restart with comfortable headroom.
+Hitting the timeout still doesn't claim failure — it just surfaces
+the dropdown / log-tail next steps.
+
+### Files touched
+
+```
+package.json                                        # prepare script
+pc2-node/package.json                               # version bump
+pc2-node/src/services/UpdateService.ts              # spawn + log buffer + watchdog + HUSKY=0
+pc2-node/src/api/update.ts                          # /progress returns log + logSeq + sinceSeq
+src/gui/src/UI/UIUpdateModal.js                     # log dropdown + 20-min timeout
+CHANGELOG.md                                        # this entry
+```
+
+---
+
+## [1.2.2] - 2026-04-30 (hotfix)
+
+### 🐛 Critical #5: Fresh installs hit `Lit Action denied: access_denied` on every asset open
+
+The v1.2.1 hotfix introduced a hardcoded fallback Lit Action CID
+(`QmX5JxcFhyasptCWMA6unFPm3TRYjPSkJb5HhN8289r5uk`) so that fresh nodes
+without a `.env` file would still resolve a CID at startup. The CID
+came from `SEC_2026_04_21_AUDIT_DISPOSITION.md` (Wave 8 Pinata re-pin)
+and was confused with the production-active sigauth action. It is
+registered with Chipotle but **not bound to any of the AccessTokens
+currently on-chain** — so every fresh install (Jetson, Pi, anyone
+running the installer without a `.env` file) saw the Lit Action
+return `access_denied` for every asset they legitimately owned.
+
+The canonical V1.2 sigauth Lit Action — pinned to ≥2 IPFS providers,
+end-to-end verified across PDF/PNG/MP4/MP3 on 2026-04-21, documented
+in `V12_SIGAUTH_HANDOVER.md` and `IRZHY_LIT_ACTION_FIX_V12.md`, and
+present in `pc2-node/.env` for every dev environment that has ever
+worked — is `bafkreihvm4zkyuefnuptlbdins6cmd2mbslj2xgnyzz3ssdg2ggg3jtkk4`.
+
+The same CID covers both code paths (per the V12 handover §3.2,
+media-decrypt routes through `recoverNonMediaCEK` on the Chipotle
+backend), so this single fix unblocks PDF / PNG / EPUB / CBZ / MP4 /
+MP3 playback in one shot.
+
+**Fix**:
+
+- `pc2-node/src/api/storage.ts` →
+  `DEFAULT_NON_MEDIA_ACTION_CID` rotated from `QmX5JxcF…r5uk` to
+  `bafkreihvm4…tkk4`.
+- `pc2-node/src/api/chipotle-client.ts` → matching `getActionCid()`
+  fallback rotated to the same value, plus a new **Tier 3 supernode
+  provision lookup** added to the resolution chain
+  (env → file → `loadCachedProvision().actions.nonMediaDecrypt` →
+  hardcoded). The `/api/ddrm/provision` payload from Wave 8+ supernodes
+  already carries `actions.nonMediaDecrypt`; honouring it here means
+  Elacity Labs can rotate the action in the future by updating only
+  the signed supernode payload — no PC2 redeploy required on every
+  node in the world.
+- Comments in both files updated to point future maintainers at the
+  V12 handover docs and to record why the v1.2.1 CID was wrong, so
+  this regression cannot repeat.
+
+**Compatibility**:
+
+- Existing assets minted from any node that ever had the correct
+  `bafkreihvm4…` CID (i.e. all Mac dev environments, all production
+  nodes prior to v1.2.1) decrypt cleanly under v1.2.2 — same CID
+  before and after.
+- Per `V12_SIGAUTH_HANDOVER.md` §3.5, the Lit Action CID is
+  server-authoritative, never asset-authoritative — the server
+  overrides the PSSH-recorded CID at `/api/media/init`. So no asset
+  re-mint is required.
+- The only theoretically-affected assets are those minted on a fresh
+  v1.2.1 install in the ~24 h window between v1.2.1 ship and v1.2.2
+  hotfix. Those assets would be encrypted under `QmX5JxcF…`. Realistic
+  blast radius: zero (fresh installs don't typically mint).
+
+---
+
+## [1.2.1] - 2026-04-30 (hotfix)
+
+### 🐛 Critical #4: WalletConnect/Essentials transactions stop hitting MetaMask
+
+`v1.2.0` made WalletConnect logins functional for SIWE auth, but every
+subsequent signing request (Glide swap, Elacity Market buy, ESC token
+transfers, …) still went to whatever extension wallet happened to own
+`window.ethereum` in the parent frame — almost always **MetaMask**, with
+a different account, on the wrong chain. The user got a confusing
+"approve in MetaMask" prompt for a wallet they had never selected, and
+the transaction failed with *"unauthorized account"* or silently signed
+from the wrong address.
+
+Root cause: three `WalletService` methods and the parent-side
+`pc2-wallet-bridge.js` all checked `isEmbeddedLogin()` only. Embedded
+(email/social) users were correctly routed through the hidden Particle
+Auth iframe; everything else fell through to `window.ethereum`. But
+WalletConnect's actual provider doesn't live in the parent frame — it
+lives in the same iframe origin, restored on demand by ConnectKit's
+`reconnectOnMount` from the `wc@*` localStorage keys created during
+login. So the iframe path that worked perfectly for embedded users would
+also have worked for WC users — we just never routed them through it.
+
+**Fix**:
+
+- `WalletService.sendTransactionViaParticleIframe`,
+  `WalletService.sendSmartAccountBatch` (Phase 2), and
+  `WalletService._sendEOATransaction` (external-wallet branch) all gain
+  an `isWalletConnectLogin()` branch that routes through
+  `UIWindowParticleSigning` (the same visible overlay used by embedded
+  signing) instead of `window.ethereum`.
+- `pc2-wallet-bridge.js handleRpc` and `handleReady` now route via
+  `routeToParticle()` for both embedded **and** WalletConnect users (new
+  `shouldRouteViaIframe()` helper). The WC path enters
+  `window.pc2RouteRpcToParticle` → `WalletService.routeRpcToParticle` →
+  `UIWindowParticleSigning` → wallet iframe → restored WC connector →
+  user's mobile wallet. Existing `prefillGasForTx` /
+  `LEGACY_ONLY_CHAINS=[20]` MetaMask path is untouched (it's wrapped by
+  the same `!shouldRouteViaIframe()` gate).
+- `pc2-wallet-bridge.js wallet_switchEthereumChain` no longer
+  double-forwards chain switches to `window.ethereum` for WC users (the
+  iframe handler already issues the switch on its restored connector
+  before each signing call). MetaMask/Coinbase users still get the
+  forward as before.
+- `packages/particle-auth/.../ParticleNetworkContext.tsx` —
+  `particle-wallet.eoa-send` retries `connector.getProvider()` for up to
+  ~9 s (was 4.5 s) so ConnectKit's WC reconnect has time to attach on
+  cold-boot, and the failure message now names the connector ID so
+  operators can tell "WC session expired on phone" apart from "user is
+  not logged in".
+
+**Same-shipment side-fix — wallet bridge sources are tracked again**:
+
+- `pc2-node/.gitignore` line 11 (`src/**/*.js`) was excluding the four
+  hand-authored ES5 wallet-bridge sources (`pc2-wallet-bridge.js`,
+  `pc2-wallet-provider.js`, `pc2-secure-view.js`,
+  `pc2-secure-view-session.js`), so a clean checkout had no source for
+  the build to copy. `pc2-node/scripts/build-frontend.js` wipes the
+  target dir as the first step, so on a fresh node the served frontend
+  ended up with **zero** wallet-bridge files. dApps then fell back to
+  `window.ethereum` (MetaMask), which is the upstream of the WC bug
+  above. **Fix**: added `!src/wallet-bridge/` exception, force-tracked
+  the four source files, and made `build-frontend.js` *throw* (not
+  silently skip) when any wallet-bridge source is missing.
+
+### Verified locally
+
+- WC login → Glide ELA→USDC swap on ESC: prompt opens in **Essentials
+  on phone** (was MetaMask). RLP type-0 fix from v1.1.x still applies
+  (LEGACY_ONLY_CHAINS branch unaffected).
+- WC login → Elacity Market buy V3 asset on Base: approve + buy both
+  prompt in Essentials. Smart-account batch rootHash signs correctly.
+- WC login → hard-refresh `zzz.ela.city`: ConnectKit auto-restores the
+  WC session in the wallet iframe within ~2 s; first signing request
+  works without re-scanning a QR.
+- MetaMask login → Glide swap, Creator mint: identical prompts and flow
+  as before (MM/Coinbase path is gated by `!shouldRouteViaIframe()` so
+  zero behavior change).
+- Email login → Wallet Send tokens: identical to v1.2.0.
+
+---
+
+### 🐛 Critical #5: All playback + non-media packaging broken on fresh nodes
+
+Every fresh PC2 install (`v1.2.0` Jetson at `zzz.ela.city` was the canary)
+returned **HTTP 503** from `POST /api/storage/lit/begin-session` and
+**HTTP 500** from `POST /api/media/init`, breaking:
+
+- Non-media playback (DDRM viewer, ePub reader, image viewer) — secure-view
+  bootstrap fails immediately, and the legacy fallback also 401s because no
+  delegation was issued.
+- Media playback (video player) — `/api/media/init` calls
+  `getNonMediaActionCid()` to override the legacy PSSH `actionIpfsId` with
+  the server-controlled sigauth CID before invoking the Lit Action; with
+  no CID configured the route returned `Server NON_MEDIA_ACTION_CID is not
+  configured`.
+- Creator → non-media packaging (e.g. ebook → Market mint) — the
+  `/api/storage/lit/encrypt` route returned `400 No Lit Action CID
+  configured` so the Creator could not seal new assets.
+
+DASH packaging (Creator → video → Market) was unaffected — `dashPackager.ts`
+embeds the action CID as a hardcoded constant.
+
+Root cause: `pc2-node/src/api/storage.ts` resolved the Lit Action CID from
+`process.env.LIT_ACTION_CID` first, then `data/.lit-action-cid` on disk,
+then **gave up**. The on-disk file is only written when the operator runs
+`POST /api/storage/lit/deploy-action` once at first boot — long-lived dev
+machines have it from months ago, but fresh installs never had it. The
+sibling `pc2-node/src/api/chipotle-client.ts` already used the exact same
+CID (`QmX5JxcFhyasptCWMA6unFPm3TRYjPSkJb5HhN8289r5uk`) as a hardcoded
+fallback for its own internal `getActionCid()` — `storage.ts` simply never
+mirrored that final fallback, so every code path that touched
+`NON_MEDIA_ACTION_CID` (begin-session, secure-view, complete-session,
+encrypt, getNonMediaActionCid, info) silently failed on fresh nodes.
+
+**Fix**: `storage.ts` now defines `DEFAULT_NON_MEDIA_ACTION_CID =
+'QmX5JxcFhyasptCWMA6unFPm3TRYjPSkJb5HhN8289r5uk'` and applies it as the
+final resolution step (env → file → hardcoded). This is the same value
+that `chipotle-client.ts → getActionCid()` has used as its fallback for
+months — both modules now return the same identifier so a fresh node's
+`delegation.actionIpfsId` matches what the chipotle TEE actually executes,
+no `bad_action_cid` mismatch.
+
+The choice of CID matches what is **actually running** in production today:
+existing dDRM assets (including the canary on `zzz.ela.city`) embed this
+exact `Qm…` in their PSSH `actionIpfsId` at mint time, every chipotle path
+on every fresh node has been falling through to this same fallback already,
+and `pc2-node/.env`'s `bafkrei…` value is dead documentation (pc2-node
+never calls `dotenv.config()` so the file is never loaded). Reconciling
+the dotenv loading + rotating to the new sigauth CID is tracked
+separately as a post-1.2.1 cleanup so the hotfix carries zero behaviour
+change for existing assets.
+
+From v1.2.1 onwards, every fresh node is playback-ready out of the box
+without needing to run `deploy-action` or hand-write `data/.lit-action-cid`.
+
+**Same-shipment companion fix — Creator video packaging (`dashPackager.ts`)**
+read `process.env.DDRM_AUTHORITY` with a non-null assertion (`!`), but
+because `pc2-node` never calls `dotenv.config()`, the env var was always
+`undefined` at runtime. Every video packaged by the Creator therefore
+embedded `authority: undefined` into its PSSH JSON. Playback only
+survived because `media.ts` falls back to the URL-param `clientAuthority`
+at decryption time — but if any link / share / archive ever lost that
+URL param, playback would `bad_authority` against the Lit Action. Fix:
+hardcode the same `0x09dBe796f40ECEffEAccf243c3d758C4c1d8D87D` (V3
+AuthorityGateway) constant that `storage.ts` and `chipotle-client.ts`
+already used, with the env var preserved as an operator override for
+future per-deploy authority swaps. All three modules are now in lock-step
+per `.cursor/tasks/V1.3-RELEASE/V1.3-RELEASE.md` checklist.
+
+### Manual recovery on existing v1.2.0 nodes (until they self-update)
+
+```bash
+echo -n "QmX5JxcFhyasptCWMA6unFPm3TRYjPSkJb5HhN8289r5uk" \
+  > ~/pc2.net/pc2-node/data/.lit-action-cid
+pm2 restart pc2     # or: systemctl restart pc2-node
+```
+
+After v1.2.1 ships, the file is no longer required.
+
+---
+
+### 🐛 Critical #1-3: In-app updater is fixed for v1.2.0 → v1.2.1+
+
+The v1.2.0 in-app updater silently fails on every node. Three release
+defects, each independently sufficient to break the upgrade:
+
+- **`git pull` halts on divergent history**: `UpdateService.performUpdate`
+  ran `git pull origin main`, which aborts the moment the local branch
+  has any commits not present on upstream (whether genuine local commits,
+  a stale fork remote, or an upstream history rewrite). Once a node hit
+  this state — e.g. the long-lived Jetson at `zzz.ela.city` showed a
+  5,079-commit divergence — every future in-app update silently failed at
+  the first step, but the UI cheerfully reported "update complete"
+  because the failing step ran in a fire-and-forget background timer.
+  **Fix**: `performUpdate` now uses `git fetch origin main` followed by
+  `git reset --hard origin/main`. The hard reset replaces local HEAD,
+  restores the entire working tree (subsuming the previous `git checkout
+  -- .` step, and recovering any tracked files an earlier broken update
+  half-deleted — e.g. `pc2-node/frontend/pc2-wallet-bridge.js` and the
+  three sibling secure-view scripts), and never attempts a merge.
+- **Missing source file**: `pc2-node/src/sdk/types.ts` is the type module
+  consumed by `ContentIntelligenceService` and `services/media/fingerprint`,
+  but `.gitignore` line 51 (`sdk/`, intended for an unrelated local SDK
+  clone) excludes it. Sibling files in the same directory (`config.ts`,
+  `index.ts`, `types.js`) were force-added, but `types.ts` was missed.
+  Result: every fresh clone has a missing module, `tsc` fails, the new
+  `dist/` is never produced, and the restart serves stale code.
+  **Fix**: force-tracked `pc2-node/src/sdk/types.ts` (8 production-facing
+  type exports — `ContentIntelligenceReport`, `ContentClassification`,
+  `QualityAssessment`, `SafetyAssessment`, `ContentProvenance`,
+  `ContentAnalysisParams`, `PerceptualHashResult`, `HashAlgorithm`).
+- **Hoisted dependencies never installed**: v1.2.0 added dynamic
+  `await import('ethers' | 'siwe' | '@lit-protocol/*')` calls inside
+  pc2-node, but those packages live in **root** `node_modules/` (hoisted
+  from the root `package.json`). `UpdateService.performUpdate` only ran
+  `npm install` in `pc2-node/`, so the hoisted deps were missing on every
+  updated node and the dynamic imports failed at runtime.
+  **Fix**: `UpdateService.performUpdate` now runs `npm install
+  --legacy-peer-deps` at the **project root** before the pc2-node install,
+  and bumps `maxBuffer` to 50 MB on every update step so npm output on
+  slow ARM devices can no longer truncate the install silently.
+
+### Symptom catalog (so operators can self-diagnose)
+
+If a v1.2.0 node was hit by these bugs you may see any of:
+
+- Settings → About still reports `1.2.0` after pressing Update.
+- Browser console inside any dApp window shows
+  `pc2-wallet-bridge.js: 404`, `pc2-wallet-provider.js: 404`,
+  `pc2-secure-view*.js: 404`, followed by *"Refused to execute script
+  …MIME type 'text/html' is not executable"*. With the wallet bridge
+  missing, every dApp falls back to `window.ethereum` (i.e. MetaMask),
+  causing signing prompts from the wrong wallet, blank Elacity Market,
+  and `MetaMask - RPC Error: The method "pc2_getSmartAccountAddress"
+  does not exist / is not available`.
+- pm2 / systemctl shows the node restarting onto an old `dist/index.js`
+  (`stat -c %y dist/index.js` predates the update attempt).
+- Backend log contains `Cannot find module 'ethers'` or
+  `Cannot find module '../sdk/types.js'`.
+
+### Manual recovery on existing v1.2.0 nodes
+
+Any node already running v1.2.0 (or stuck mid-update) can self-repair with:
+
+```bash
+cd ~/pc2.net
+git fetch origin main && git reset --hard origin/main      # force upstream
+npm install --legacy-peer-deps                             # hoisted deps
+cd pc2-node && npm install --legacy-peer-deps --include=dev
+npm run build:backend && cd .. && npm run build:gui
+pm2 restart pc2     # or: systemctl restart pc2-node
+```
+
+After v1.2.1 is installed, the in-app updater performs these steps
+automatically on every subsequent update.
+
+### Verified
+
+- 2026-04-30: Jetson Orin Nano `zzz.ela.city` recovered from a stuck
+  v1.1.0 (5,079-commit divergent fork on local main, last `dist/` build
+  March 3) → clean v1.2.0 → same hotfix sequence applied manually, pm2
+  reports `version: 1.2.0` (now serving 1.2.1 once this release lands),
+  IPFS redials 30+ peers within 10 s, dApp Centre HTML serves on `/`,
+  all four wallet-bridge scripts return `HTTP 200` with content-type
+  `application/javascript`.
+
+---
+
+## [1.2.0] - 2026-04-21 (in development — `feature/lit-chipotle-migration`)
+
+### 🔒 Security (P0) — Lit Action Session-Key Delegation
+
+dDRM decryption now uses cryptographically-verified session-key delegation
+inside every Lit Action call. The previous V1.1 authorization path trusted
+a client-supplied `userAddress` parameter; because Lit Action source is
+public and immutable on IPFS, any caller could supply *any* known
+authorized buyer's address and receive the CEK. **This is closed in V1.2.**
+
+- **Session-key delegation (Option C)**: at wallet connect the buyer signs
+  *one* `SecureViewDelegation` authorizing a non-extractable, device-bound
+  P-256 key (Web Crypto, `extractable: false`) to decrypt dDRM content
+  for up to 24 hours across their EOA + smart-account addresses. Every
+  subsequent asset open is signed silently by the ephemeral key — zero
+  wallet popups, "double-click to open" UX preserved.
+- **Lit Actions** (`non-media-decrypt-chipotle.js`,
+  `media-decrypt-chipotle.js`) now verify the EIP-191 (or EIP-1271 for
+  smart wallets) delegation signature, the per-request P-256 signature,
+  the `actionIpfsId` binding, request freshness, replay protection, and
+  delegation expiry/revocation before reaching the on-chain
+  `AuthorityGateway.hasAccessByContentId` check.
+- **`userAddress` removed** from `jsParams` in all paths
+  (`recoverNonMediaCEK`, `recoverMediaCEKEnvelope`, Datil fallback). The
+  effective user is derived from the cryptographically verified
+  `delegation.coveredAddresses`.
+- **Server-authoritative action CID**: `/api/media/init` overrides the
+  PSSH-recorded CID with the server-configured `LIT_ACTION_CID` so legacy
+  assets (minted with the v0 CID baked into their MPD) work with the new
+  sigauth action without re-minting.
+- **Two-phase `/api/media/init`**: returns `412 Precondition Failed` with
+  `{ kid, actionIpfsId }` so the player can produce a signed bundle bound
+  to the correct `actionIpfsId` before the second call. MPD is cached
+  server-side for 60 s so the retry is free.
+- **Hard cutover**: `/lit/secure-view` now returns
+  `401 session_bundle_required` for any request without a signed bundle.
+  Legacy `*-chipotle.js` Lit Action files deleted; `LIT_ACTION_CID_LEGACY`
+  removed from `.env.example` and code paths. The legacy IPFS CID stays
+  pinned for a 14-day rollback window then is unpinned by ops (~2026-05-03).
+- **Verified end-to-end on 2026-04-21**: PDF · PNG · MP4 (AV1+AAC) ·
+  MP3 (AAC) — all four open with one wallet popup at session start,
+  zero popups on subsequent opens, exploit regression spike (14 checks)
+  passes against the canonical sigauth Lit Actions.
+
+References:
+- [`docs/handover/V12_SIGAUTH_HANDOVER.md`](docs/handover/V12_SIGAUTH_HANDOVER.md) — comprehensive cutover handover
+- [`docs/handover/IRZHY_LIT_ACTION_FIX_V12.md`](docs/handover/IRZHY_LIT_ACTION_FIX_V12.md) — public-safe engineer brief
+- [`.cursor/tasks/LIT-ACTION-SIGNATURE-AUTH/`](.cursor/tasks/LIT-ACTION-SIGNATURE-AUTH/) — DESIGN, SECURITY, TESTING
+
+### 🔒 Security (P0) — jhond0e Audit Triage (`SEC-2026-04-21`)
+
+Closes 7 of 11 vulnerabilities reported by external researcher jhond0e
+(2026-04-18). The 4 smart-contract findings (SEC-1, 4, 5, 6) are owned by
+a separate engineer. SEC-11 (DID JWT verify) is explicitly deferred to
+Wave 5 with documented mitigation. Authoritative disposition lives in
+[`docs/handover/SEC_2026_04_21_AUDIT_DISPOSITION.md`](docs/handover/SEC_2026_04_21_AUDIT_DISPOSITION.md).
+
+**Wave 1 — `mock-token` removal + `/api/update/install` lockdown**
+- **SEC-3c** Removed `mock-token-*` and `token-0x{wallet}-*` branches
+  from `middleware.ts` (~88 LOC of dangerous wallet-inference code) +
+  `whoami.ts` + `info.ts:getLaunchApps`. Replaced one legitimate
+  consumer (file-viewer iframe app) with **scoped session tokens** —
+  short-lived, single-use, file-bound — via new `scope-check` helper
+  and DB migration #29 (`sessions.scope`/`scope_data`).
+- **SEC-10** `authenticate + requireOwner` applied to every
+  `/api/update/*` route (`/install`, `/check`, `/check-github`,
+  `/status`, `/version`). Added 60 s throttle on `/install`, 30 s
+  throttle on `/check-github`. Owner wallet logged for audit trail.
+
+**Wave 2 — SIWE + `/api/setup/*` lockdown + transport hardening**
+- **SEC-3a** New `GET /auth/challenge` issues SIWE (EIP-4361) nonces.
+  `POST /auth/particle` and `POST /api/access/claim-ownership` now
+  require a verified signature when `siweRequired=true`. EIP-1271
+  (smart-contract sigs) and Solana SIWS (ed25519) supported. Particle
+  Auth SDK wired to the new flow in
+  `packages/particle-auth/src/particle/contexts/ParticleNetworkContext.tsx`.
+  Kill-switch defaults to `false` for safe rollout.
+- **SEC-7** New `requireSetupAuth` middleware on
+  `/api/setup/{mnemonic, info, mnemonic-sign-message,
+  acknowledge-mnemonic}`. First-run token (64-hex chars) printed once
+  to stdout/journalctl on initial boot for remote VPS installs.
+  Single-use, TTL-bound. Loopback always allowed.
+- **SEC-trust-proxy** Tightened `app.set('trust proxy', …)` from
+  `true` to `'loopback, linklocal, uniquelocal'`. Security decisions
+  fall back to `req.socket.remoteAddress` so LAN attackers cannot
+  spoof `req.ip` via `X-Forwarded-For`.
+- **SEC-cors** CORS allowlist extended to `*.ela.city` + `*.ela.local`
+  for the SIWE flow.
+
+**Wave 3 — Web-gateway lockdown (RCE + WireGuard hijack)**
+- **SEC-2** `POST /api/vless/register` shell injection closed:
+  `execSync` template literal replaced with `execFileSync` (argv
+  form, no shell). Added `/^[a-z0-9][a-z0-9_-]{2,29}$/` allowlist
+  regex. **All 9 `execSync` call sites in
+  `deploy/web-gateway/index.js` converted to `execFileSync`** —
+  `rg 'execSync\(' deploy/web-gateway` now returns 0 results.
+- **SEC-INFRA-GW-AUTH** New per-node provisioning tokens minted by
+  `POST /api/register` and stored on PC2 nodes at
+  `data/.gateway-tokens.json` (mode 0600). All mutating gateway
+  endpoints (`/api/wg/register`, `/api/wg/peer/<u>` DELETE,
+  `/api/awg/register`, `/api/awg/peer/<u>` DELETE,
+  `/api/vless/register`) require `X-Provisioning-Token` matching
+  the username's record. Cross-account binding enforced.
+- **SEC-8** WG re-key by an unauthorised caller now rejected — token
+  must match the registered node.
+- **SEC-9** WG peer DELETE token-gated + per-username throttle
+  (3/min). Symmetric `DELETE /api/awg/peer/<u>` added with same
+  gating to keep AWG cleanup on the audited path.
+- Kill-switch `GW_AUTH_REQUIRED=false` (default) → log-only mode.
+  Telemetry-driven flip to `true` once ≥99 % of inbound calls
+  carry tokens.
+
+**Wave 4 — CI / secret hygiene (`SEC-CI-SECRETSCAN`)**
+- Three-tier `gitleaks` gate: pre-commit hook (`.husky/pre-commit`,
+  staged-diff scan), GitHub Action on `pull_request` (diff scan),
+  GitHub Action on `push` to long-lived branches (full working-tree
+  scan).
+- `.gitleaks.toml` extends defaults with extensive path exclusions
+  (build artefacts, vendored bundles, `pc2-node/data/`, log files)
+  + stopwords + regexes for public-by-design IDs (IPFS CIDs, EVM
+  and Solana addresses).
+- `.gitleaksignore` documents 4 triaged historical findings
+  (TRIAGE-1 to TRIAGE-4), each with rationale and follow-up link.
+- Baseline reduced from 426 raw matches → 0 detected leaks.
+- Surfaced **TRIAGE-1**: real Ed25519 private key in
+  `data/identity.json` committed at `4b10bad94` (2026-03-06)
+  before the matching `.gitignore` rule. Already on 4 origin
+  branches. Allowlisted with explicit follow-up scaffolded as
+  [`SEC-2026-04-22-BOSON-DID-ROTATION`](.cursor/tasks/SEC-2026-04-22-BOSON-DID-ROTATION/SEC-2026-04-22-BOSON-DID-ROTATION.md).
+- Contributor runbook: [`docs/wiki/Technical/SECRET_SCANNING.md`](docs/wiki/Technical/SECRET_SCANNING.md).
+
+**Test coverage**: `pc2-node/tests/security/*.test.js` — 79 cases
+across 5 spec files (SIWE EOA + EIP-1271 + Solana ed25519, scoped
+session tokens, provisioning tokens, first-run tokens, DID JWT
+contract). All pass on `feature/lit-chipotle-migration`.
+
+References:
+- [`docs/handover/SEC_2026_04_21_AUDIT_DISPOSITION.md`](docs/handover/SEC_2026_04_21_AUDIT_DISPOSITION.md) — **authoritative researcher → fix mapping**
+- [`.cursor/tasks/SEC-2026-04-21-PC2-AUDIT/`](.cursor/tasks/SEC-2026-04-21-PC2-AUDIT/) — Wave 1-4 detail tasks
+- [`.cursor/tasks/SEC-2026-04-22-BOSON-DID-ROTATION/`](.cursor/tasks/SEC-2026-04-22-BOSON-DID-ROTATION/) — DID rotation follow-up
+
+---
+
 ## [1.1.0] - 2026-03-03
 
 > 133 commits since v1.0.0 — squash merged from `feature/jetson-gpu-acceleration`

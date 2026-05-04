@@ -446,6 +446,49 @@
     display: none;
 }
 
+.ai-speak-btn {
+    display: flex;
+    align-items: center;
+    padding: 4px;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: rgba(255, 255, 255, 0.5);
+    cursor: pointer;
+    transition: color 0.2s ease;
+    margin-left: 4px;
+}
+
+.ai-speak-btn:hover {
+    color: rgba(255, 255, 255, 0.9);
+}
+
+.ai-speak-btn.ai-speaking {
+    color: #007aff;
+}
+
+.ai-speak-btn svg {
+    width: 16px;
+    height: 16px;
+    stroke: currentColor;
+}
+
+.ai-speak-btn span {
+    display: none;
+}
+
+html[data-theme="light"] .ai-speak-btn {
+    color: rgba(0, 0, 0, 0.4);
+}
+
+html[data-theme="light"] .ai-speak-btn:hover {
+    color: rgba(0, 0, 0, 0.8);
+}
+
+html[data-theme="light"] .ai-speak-btn.ai-speaking {
+    color: #007aff;
+}
+
 .ai-message-copy,
 .ai-message-edit,
 .ai-message-delete {
@@ -2328,8 +2371,8 @@ html:not([data-theme="light"]) {
 [data-theme="light"] .topbar .toolbar-puter-logo {
     filter: none;
 }
-/* Counter-invert profile photo so it stays natural */
-[data-theme="light"] .topbar .toolbar-btn .profile-image {
+/* Counter-invert profile photo so actual photos stay natural (not the default SVG icon) */
+[data-theme="light"] .topbar .toolbar-btn .profile-image.profile-image-has-picture {
     filter: invert(1);
 }
 /* Counter-invert PC2 status dot so it stays green (connected) / orange (disconnected) */
@@ -8640,6 +8683,7 @@ label {
     margin: 0 auto;
     width: 38px;
     height: 38px;
+    border-radius: 10px;
     margin-top: 2px;
 }
 

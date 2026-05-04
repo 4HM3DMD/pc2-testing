@@ -60,12 +60,11 @@ export function createStatsRouter() {
     try {
       const stats = getNetworkStats();
       
-      // Only return the essential display numbers
       res.json({
         onlineNow: stats.onlineNow,
-        totalNodes: stats.totalActivePC2,
-        alwaysOn: stats.activityDistribution.alwaysOn,
-        intermittent: stats.activityDistribution.intermittent
+        totalNodes: stats.totalRegistered,
+        active: stats.activityDistribution.active,
+        occasional: stats.activityDistribution.occasional
       });
       
     } catch (error) {

@@ -15,8 +15,12 @@ import https from "https";
 import path from "path";
 import net from "net";
 import zlib from "zlib";
-import { execSync } from "child_process";
+import { execSync, execFileSync } from "child_process";
 import httpProxy from "http-proxy";
+import {
+  ProvisioningTokenStore,
+  getProvisioningTokenFromRequest,
+} from "./lib/provisioning-token.js";
 const { createProxyServer } = httpProxy;
 
 // ============================================================================
@@ -147,6 +151,89 @@ const registry = new Map();
 const rateLimitStore = new Map();
 
 // ============================================================================
+// SEC-INFRA-GW-AUTH (PC2 Security Triage 2026-04-21, Wave 3)
+//
+// Per-node provisioning token store. First /api/register call for a username
+// mints a 256-bit token (returned ONCE in the response body); every subsequent
+// gateway call that acts on that username must include the plaintext token in
+// the X-Provisioning-Token header.
+//
+// GW_AUTH_REQUIRED env-var kill-switch:
+//   - undefined / 'false'  →  log-only mode. Verify if token present, log
+//                              the result for telemetry, but do NOT 401.
+//                              Lets operators deploy the gateway change before
+//                              every PC2 node has rolled out the client side.
+//   - 'true'               →  strict enforcement. Missing or wrong token = 401.
+//
+// Telemetry log format (greppable):
+//   [gw-auth] handler=<route> username=<u> token=<present|missing|wrong>
+//             enforce=<true|false> action=<allow|deny>
+// ============================================================================
+const PROVISIONING_TOKEN_FILE =
+  process.env.PROVISIONING_TOKEN_FILE ||
+  path.join(CONFIG.dataDir, 'provisioning-tokens.json');
+const provisioningTokenStore = new ProvisioningTokenStore(PROVISIONING_TOKEN_FILE);
+const GW_AUTH_REQUIRED = process.env.GW_AUTH_REQUIRED === 'true';
+
+console.log(`[gw-auth] Provisioning-token store loaded from ${PROVISIONING_TOKEN_FILE} (${provisioningTokenStore.toJSON().count} records). Enforcement: ${GW_AUTH_REQUIRED ? 'STRICT' : 'log-only'}.`);
+
+// Per-username delete throttle (SEC-9). Independent from the per-IP rate-limit
+// store above so a legit owner cannot lock themselves out by hammering wg/peer
+// delete from many client IPs.
+const perUsernameDeleteWindow = new Map(); // username -> { windowStart, count }
+const PER_USERNAME_DELETE_WINDOW_MS = 60_000;
+const PER_USERNAME_DELETE_MAX = 3;
+
+function checkPerUsernameDeleteRate(username) {
+  const now = Date.now();
+  const entry = perUsernameDeleteWindow.get(username);
+  if (!entry || now - entry.windowStart > PER_USERNAME_DELETE_WINDOW_MS) {
+    perUsernameDeleteWindow.set(username, { windowStart: now, count: 1 });
+    return true;
+  }
+  entry.count++;
+  return entry.count <= PER_USERNAME_DELETE_MAX;
+}
+
+/**
+ * SEC-INFRA-GW-AUTH guard for any handler that acts on a per-user resource.
+ *
+ * Behaviour:
+ *   - In log-only mode (GW_AUTH_REQUIRED=false): always returns true. Logs
+ *     telemetry so operators can see the rollout completion rate before
+ *     flipping the kill-switch.
+ *   - In strict mode (GW_AUTH_REQUIRED=true): returns true only if the
+ *     X-Provisioning-Token header matches the registered token for the
+ *     named username. Otherwise responds with 401 and returns false (the
+ *     caller MUST `return` immediately when it sees false).
+ *
+ * Returns boolean: true = continue, false = response already sent.
+ */
+function requireProvisioningToken(req, res, username, handlerLabel) {
+  const token = getProvisioningTokenFromRequest(req);
+  const known = provisioningTokenStore.has(username);
+  const verified = token && known && provisioningTokenStore.verify(token, username);
+
+  let tokenState = 'missing';
+  if (token && verified) tokenState = 'present';
+  else if (token && !verified) tokenState = 'wrong';
+
+  const action = (!GW_AUTH_REQUIRED || verified) ? 'allow' : 'deny';
+  console.log(`[gw-auth] handler=${handlerLabel} username=${username} token=${tokenState} enforce=${GW_AUTH_REQUIRED} action=${action}`);
+
+  if (action === 'allow') return true;
+
+  res.writeHead(401, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({
+    error: 'unauthorized',
+    message: known
+      ? 'X-Provisioning-Token header missing or does not match this username'
+      : 'no provisioning token has been issued for this username; call /api/register first',
+  }));
+  return false;
+}
+
+// ============================================================================
 // WireGuard Peer Management
 // ============================================================================
 
@@ -197,7 +284,10 @@ function allocateWGIP() {
 function isWireGuardAvailable() {
   if (!WG_CONFIG.enabled) return false;
   try {
-    execSync(`ip link show ${WG_CONFIG.interface} 2>/dev/null`, { stdio: 'pipe' });
+    // SEC-2 (defence in depth): execFileSync — no shell, no template
+    // interpretation. WG_CONFIG.interface is server-controlled (env var)
+    // so this is low risk pre-fix, but cheap to harden.
+    execFileSync('ip', ['link', 'show', WG_CONFIG.interface], { stdio: 'pipe' });
     return true;
   } catch {
     return false;
@@ -217,8 +307,9 @@ function getServerPublicKey() {
 
 function addWGPeer(publicKey, allowedIP) {
   try {
-    execSync(
-      `wg set ${WG_CONFIG.interface} peer ${publicKey} allowed-ips ${allowedIP}/32`,
+    execFileSync(
+      'wg',
+      ['set', WG_CONFIG.interface, 'peer', publicKey, 'allowed-ips', `${allowedIP}/32`],
       { stdio: 'pipe', timeout: 5000 }
     );
     return true;
@@ -230,8 +321,9 @@ function addWGPeer(publicKey, allowedIP) {
 
 function removeWGPeer(publicKey) {
   try {
-    execSync(
-      `wg set ${WG_CONFIG.interface} peer ${publicKey} remove`,
+    execFileSync(
+      'wg',
+      ['set', WG_CONFIG.interface, 'peer', publicKey, 'remove'],
       { stdio: 'pipe', timeout: 5000 }
     );
     return true;
@@ -328,7 +420,7 @@ function allocateAWGIP() {
 function isAmneziaWGAvailable() {
   if (!AWG_CONFIG.enabled) return false;
   try {
-    execSync(`ip link show ${AWG_CONFIG.interface} 2>/dev/null`, { stdio: 'pipe' });
+    execFileSync('ip', ['link', 'show', AWG_CONFIG.interface], { stdio: 'pipe' });
     return true;
   } catch {
     return false;
@@ -349,8 +441,9 @@ function getAWGServerPublicKey() {
 function addAWGPeer(publicKey, allowedIP) {
   try {
     const tool = fs.existsSync('/usr/local/bin/awg') ? 'awg' : 'wg';
-    execSync(
-      `${tool} set ${AWG_CONFIG.interface} peer ${publicKey} allowed-ips ${allowedIP}/32`,
+    execFileSync(
+      tool,
+      ['set', AWG_CONFIG.interface, 'peer', publicKey, 'allowed-ips', `${allowedIP}/32`],
       { stdio: 'pipe', timeout: 5000 }
     );
     return true;
@@ -363,8 +456,9 @@ function addAWGPeer(publicKey, allowedIP) {
 function removeAWGPeer(publicKey) {
   try {
     const tool = fs.existsSync('/usr/local/bin/awg') ? 'awg' : 'wg';
-    execSync(
-      `${tool} set ${AWG_CONFIG.interface} peer ${publicKey} remove`,
+    execFileSync(
+      tool,
+      ['set', AWG_CONFIG.interface, 'peer', publicKey, 'remove'],
       { stdio: 'pipe', timeout: 5000 }
     );
     return true;
@@ -729,6 +823,17 @@ const DEFAULT_SUPERNODES = [
     addedAt: new Date().toISOString(),
   },
   {
+    id: 'EbfCHQUfwawec8Pyz9vdYTXJRoR1GpjNPgLc3vAhAoam',
+    address: '38.242.211.112',
+    port: 39001,
+    proxyPort: 8090,
+    gatewayUrl: 'https://38.242.211.112',
+    name: 'Elacity Contabo',
+    region: 'EU',
+    status: 'active',
+    addedAt: new Date().toISOString(),
+  },
+  {
     id: 'HZXXs9LTfNQjrDKvvexRhuMk8TTJhYCfrHwaj3jUzuhZ',
     address: '155.138.245.211',
     port: 39001,
@@ -808,10 +913,80 @@ async function checkSupernodeHealth(node) {
   }
 }
 
+// Shared secret for supernode-to-supernode operations (env or default for dev)
+const SUPERNODE_SECRET = process.env.SUPERNODE_SECRET || '';
+
+/**
+ * Validate a supernode registration payload.
+ * Returns null if valid, or an error string.
+ */
+function validateSupernodePayload(data) {
+  if (!data.id || typeof data.id !== 'string' || data.id.length < 20) return 'invalid id';
+  if (!data.address || typeof data.address !== 'string') return 'invalid address';
+  if (!data.port || typeof data.port !== 'number') return 'invalid port';
+  if (!data.gatewayUrl || typeof data.gatewayUrl !== 'string') return 'invalid gatewayUrl';
+  const ipPattern = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
+  if (!ipPattern.test(data.address)) return 'address must be an IP';
+  return null;
+}
+
+/**
+ * Register or update a supernode in the registry.
+ * Used by /api/supernodes/register, /api/supernodes/heartbeat, and gossip.
+ */
+function upsertSupernode(data, source) {
+  const existing = supernodeRegistry.get(data.id);
+  if (existing) {
+    existing.status = 'active';
+    existing.lastHeartbeat = new Date().toISOString();
+    if (data.name) existing.name = data.name;
+    if (data.region) existing.region = data.region;
+    if (data.gatewayUrl) existing.gatewayUrl = data.gatewayUrl;
+    if (data.address) existing.address = data.address;
+    if (data.proxyPort) existing.proxyPort = data.proxyPort;
+    console.log(`[Supernodes] Updated ${existing.name || data.id} via ${source}`);
+    return { action: 'updated', node: existing };
+  }
+
+  const newNode = {
+    id: data.id,
+    address: data.address,
+    port: data.port || 39001,
+    proxyPort: data.proxyPort || 8090,
+    gatewayUrl: data.gatewayUrl,
+    name: data.name || `Supernode-${data.address}`,
+    region: data.region || 'unknown',
+    status: 'active',
+    addedAt: new Date().toISOString(),
+    lastHeartbeat: new Date().toISOString(),
+    dynamic: true,
+  };
+  supernodeRegistry.set(data.id, newNode);
+  console.log(`[Supernodes] Registered new supernode ${newNode.name} (${newNode.address}) via ${source}`);
+  return { action: 'registered', node: newNode };
+}
+
+// Mark supernodes as unhealthy if no heartbeat for 10 minutes
+const HEARTBEAT_TTL_MS = 10 * 60 * 1000;
+
 // Periodic supernode health checks (every 5 minutes)
 setInterval(async () => {
   console.log('[Supernodes] Running health checks...');
+  const now = Date.now();
   for (const [id, node] of supernodeRegistry) {
+    // Dynamic nodes: check heartbeat TTL first
+    if (node.dynamic && node.lastHeartbeat) {
+      const age = now - new Date(node.lastHeartbeat).getTime();
+      if (age > HEARTBEAT_TTL_MS) {
+        if (node.status === 'active') {
+          node.status = 'unhealthy';
+          node.lastUnhealthy = new Date().toISOString();
+          console.log(`[Supernodes] ${node.name} (${node.address}) heartbeat expired — marking unhealthy`);
+        }
+        continue;
+      }
+    }
+
     const healthy = await checkSupernodeHealth(node);
     if (healthy && node.status !== 'active') {
       node.status = 'active';
@@ -824,6 +999,100 @@ setInterval(async () => {
     }
   }
 }, 5 * 60 * 1000);
+
+/**
+ * Gossip: share our supernode list with all known active supernodes.
+ * Each supernode merges the received list into its own registry.
+ */
+async function gossipSupernodes() {
+  const ourList = getActiveSuperNodes();
+  const myAddress = process.env.PUBLIC_IP || '';
+
+  for (const [id, node] of supernodeRegistry) {
+    if (node.status !== 'active') continue;
+    if (node.address === myAddress) continue;
+
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5000);
+      await fetch(`${node.gatewayUrl}/api/supernodes/gossip`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ supernodes: ourList, source: CONFIG.gatewayId }),
+        signal: controller.signal,
+      }).catch(() => {});
+      clearTimeout(timeout);
+    } catch {
+      // Gossip failures are non-critical
+    }
+  }
+}
+
+// Gossip every 5 minutes
+setInterval(gossipSupernodes, 5 * 60 * 1000);
+
+/**
+ * Registry sync consumer: pull user registry from other gateways periodically.
+ */
+async function syncRegistryFromPeers() {
+  const myAddress = process.env.PUBLIC_IP || '';
+
+  for (const [id, node] of supernodeRegistry) {
+    if (node.status !== 'active') continue;
+    if (node.address === myAddress) continue;
+
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10000);
+      const resp = await fetch(`${node.gatewayUrl}/api/registry/sync`, {
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+
+      if (!resp.ok) continue;
+
+      const data = await resp.json();
+      if (!data.entries || !Array.isArray(data.entries)) continue;
+
+      let merged = 0;
+      for (const entry of data.entries) {
+        if (!entry.username || !entry.nodeId || !entry.endpoint) continue;
+
+        const existing = registry.get(entry.username);
+        if (!existing) {
+          registry.set(entry.username, {
+            nodeId: entry.nodeId,
+            endpoint: entry.endpoint,
+            registeredAt: entry.registeredAt || new Date().toISOString(),
+            lastSeen: entry.lastSeen || new Date().toISOString(),
+          });
+          merged++;
+        } else {
+          const existingTime = new Date(existing.lastSeen || existing.registeredAt || 0).getTime();
+          const incomingTime = new Date(entry.lastSeen || entry.registeredAt || 0).getTime();
+          if (incomingTime > existingTime) {
+            existing.endpoint = entry.endpoint;
+            existing.lastSeen = entry.lastSeen || new Date().toISOString();
+            merged++;
+          }
+        }
+      }
+
+      if (merged > 0) {
+        saveRegistry();
+        console.log(`[RegistrySync] Merged ${merged} entries from ${node.name} (${node.address})`);
+      }
+    } catch {
+      // Sync failures are non-critical
+    }
+  }
+}
+
+// Registry sync every 60 seconds (if enabled or always for secondary gateways)
+if (CONFIG.registrySync.enabled || process.env.REGISTRY_SYNC_AUTO === 'true') {
+  setInterval(syncRegistryFromPeers, CONFIG.registrySync.syncIntervalMs || 30000);
+  console.log('[RegistrySync] Registry sync enabled — pulling from peers every 30s');
+}
 
 // ============================================================================
 // Phase 1: Active Proxy Connection Pool with Limits and Health Checks
@@ -1542,6 +1811,60 @@ function saveRegistry() {
   }
 }
 
+/**
+ * Serve a user-friendly HTML page when a PC2 node is unreachable.
+ * Replaces the infinite "initializing" hang with clear feedback and auto-retry.
+ */
+function serveNodeOfflinePage(res, username, errorDetail) {
+  const safeUser = (username || 'unknown').replace(/[^a-z0-9-]/gi, '');
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${safeUser}.ela.city — Offline</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0a0a0a; color: #e5e5e5; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+    .card { background: #18181b; border: 1px solid #27272a; border-radius: 16px; padding: 48px; max-width: 480px; text-align: center; }
+    .icon { font-size: 48px; margin-bottom: 16px; }
+    h1 { font-size: 22px; font-weight: 600; margin-bottom: 8px; color: #fff; }
+    .domain { color: #a78bfa; font-weight: 500; }
+    .msg { color: #a1a1aa; font-size: 14px; line-height: 1.6; margin: 16px 0 24px; }
+    .retry { display: inline-flex; align-items: center; gap: 8px; background: #7c3aed; color: #fff; border: none; border-radius: 8px; padding: 10px 24px; font-size: 14px; cursor: pointer; text-decoration: none; }
+    .retry:hover { background: #6d28d9; }
+    .countdown { color: #71717a; font-size: 12px; margin-top: 16px; }
+    .hint { color: #52525b; font-size: 12px; margin-top: 24px; border-top: 1px solid #27272a; padding-top: 16px; line-height: 1.5; }
+    .hint a { color: #a78bfa; text-decoration: none; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">☁️</div>
+    <h1>Node Offline</h1>
+    <p class="msg">
+      <span class="domain">${safeUser}.ela.city</span> is not reachable right now.<br>
+      The node owner needs to have their PC2 running and connected for remote access to work.
+    </p>
+    <a class="retry" href="/" onclick="location.reload(); return false;">↻ Try Again</a>
+    <p class="countdown" id="cd">Auto-retry in <span id="sec">15</span>s</p>
+    <p class="hint">
+      Node owner? Make sure your PC2 app is running and check your connection in
+      <strong>Settings → PC2 Network</strong>.<br>
+      Need help? Visit <a href="https://t.me/nicktomlin" target="_blank">Telegram support</a>.
+    </p>
+  </div>
+  <script>
+    let s = 15;
+    const el = document.getElementById('sec');
+    const t = setInterval(() => { s--; el.textContent = s; if (s <= 0) { clearInterval(t); location.reload(); } }, 1000);
+  </script>
+</body>
+</html>`;
+  res.writeHead(502, { 'Content-Type': 'text/html; charset=utf-8' });
+  res.end(html);
+}
+
 // Create proxy server for direct HTTP endpoints (Boson relay + WebSocket upgrades)
 const proxy = createProxyServer({
   changeOrigin: true,
@@ -1593,7 +1916,9 @@ compressingProxy.on("proxyRes", (proxyRes, req, res) => {
 });
 
 compressingProxy.on("error", (err, req, res) => {
-  console.error("[Proxy] Compressing proxy error:", err.message);
+  const hostname = req.headers.host?.split(":")[0] || '';
+  const username = extractUsername(hostname);
+  console.error(`[Proxy] Compressing proxy error for ${username || hostname}: ${err.message}`);
 
   // On connection-level failures, destroy all free sockets for the target
   // so the agent stops reusing dead connections from rebooted peers.
@@ -1615,8 +1940,7 @@ compressingProxy.on("error", (err, req, res) => {
   }
 
   if (res.writeHead) {
-    res.writeHead(502, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ error: "Bad Gateway", message: err.message }));
+    serveNodeOfflinePage(res, username, err.message);
   }
 });
 
@@ -1635,12 +1959,14 @@ networkMapProxy.on("error", (err, req, res) => {
   }
 });
 
-// Handle proxy errors
+// Handle proxy errors — serve a user-friendly "node offline" page instead of
+// hanging on "initializing" or showing a raw JSON error.
 proxy.on("error", (err, req, res) => {
-  console.error("[Proxy] Error:", err.message);
+  const hostname = req.headers.host?.split(":")[0] || '';
+  const username = extractUsername(hostname);
+  console.error(`[Proxy] Error for ${username || hostname}: ${err.message}`);
   if (res.writeHead) {
-    res.writeHead(502, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ error: "Bad Gateway", message: err.message }));
+    serveNodeOfflinePage(res, username, err.message);
   }
 });
 
@@ -1806,6 +2132,29 @@ async function handleApiRequest(req, res) {
     return;
   }
 
+  // dDRM Provisioning: PC2 nodes fetch Chipotle config on first startup.
+  // Returns the shared usage API key, PKP ID, API URL, and registered action CIDs.
+  // The usage key is scoped to specific Lit Actions + a single PKP — it cannot
+  // be used for anything outside the elacity-ddrm group.
+  if (url.pathname === "/api/ddrm/provision" && req.method === "GET") {
+    const configPath = path.join(process.cwd(), "ddrm-config.json");
+    try {
+      if (!fs.existsSync(configPath)) {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "dDRM config not provisioned on this supernode" }));
+        return;
+      }
+      const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(config));
+    } catch (err) {
+      console.error("[dDRM] Provision error:", err.message);
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Failed to read dDRM config" }));
+    }
+    return;
+  }
+
   // Phase 3: Registry sync endpoint (for multi-gateway deployment)
   // Other gateways can fetch the full registry for synchronization
   if (url.pathname === "/api/registry/sync" && req.method === "GET") {
@@ -1830,8 +2179,117 @@ async function handleApiRequest(req, res) {
     res.end(JSON.stringify({ 
       supernodes,
       updated: new Date().toISOString(),
-      version: "1.0"
+      version: "2.0"
     }));
+    return;
+  }
+
+  // Supernode self-registration: new supernodes announce themselves
+  if (url.pathname === "/api/supernodes/register" && req.method === "POST") {
+    let body = '';
+    req.on('data', (chunk) => (body += chunk));
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body);
+
+        if (SUPERNODE_SECRET && data.secret !== SUPERNODE_SECRET) {
+          res.writeHead(403, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "invalid secret" }));
+          return;
+        }
+
+        const err = validateSupernodePayload(data);
+        if (err) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: err }));
+          return;
+        }
+
+        const result = upsertSupernode(data, 'register');
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          success: true,
+          action: result.action,
+          supernodes: getActiveSuperNodes(),
+        }));
+      } catch {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "invalid JSON" }));
+      }
+    });
+    return;
+  }
+
+  // Supernode heartbeat: periodic keepalive from running supernodes
+  if (url.pathname === "/api/supernodes/heartbeat" && req.method === "POST") {
+    let body = '';
+    req.on('data', (chunk) => (body += chunk));
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body);
+
+        if (!data.id) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "id required" }));
+          return;
+        }
+
+        const existing = supernodeRegistry.get(data.id);
+        if (existing) {
+          existing.status = 'active';
+          existing.lastHeartbeat = new Date().toISOString();
+          if (data.stats) existing.stats = data.stats;
+        } else if (data.address && data.gatewayUrl) {
+          upsertSupernode(data, 'heartbeat');
+        }
+
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ success: true, ack: new Date().toISOString() }));
+      } catch {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "invalid JSON" }));
+      }
+    });
+    return;
+  }
+
+  // Supernode gossip: receive supernode lists from peers for mesh discovery
+  if (url.pathname === "/api/supernodes/gossip" && req.method === "POST") {
+    let body = '';
+    req.on('data', (chunk) => (body += chunk));
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body);
+
+        if (!data.supernodes || !Array.isArray(data.supernodes)) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "supernodes array required" }));
+          return;
+        }
+
+        let added = 0;
+        for (const sn of data.supernodes) {
+          if (!sn.id || !sn.address || !sn.gatewayUrl) continue;
+          if (supernodeRegistry.has(sn.id)) continue;
+
+          const err = validateSupernodePayload(sn);
+          if (err) continue;
+
+          upsertSupernode(sn, `gossip:${data.source || 'unknown'}`);
+          added++;
+        }
+
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          success: true,
+          added,
+          total: supernodeRegistry.size,
+        }));
+      } catch {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "invalid JSON" }));
+      }
+    });
     return;
   }
 
@@ -1930,21 +2388,84 @@ async function handleApiRequest(req, res) {
           return;
         }
 
-        // Store registration
         const normalizedUsername = username.toLowerCase();
+
+        // ====================================================================
+        // SEC-INFRA-GW-AUTH (Wave 3) — provisioning-token bootstrap.
+        // Also incidentally closes SEC-3e (anyone could re-claim any
+        // unused-but-known username pointing at any endpoint URL).
+        //
+        // Cases:
+        //   A. First-ever registration for this username
+        //        → mint token, store mapping, return token in response
+        //   B. Re-registration WITH valid X-Provisioning-Token
+        //        → update endpoint info, return success (token unchanged)
+        //   C. Re-registration WITHOUT or WRONG X-Provisioning-Token
+        //        → log-only mode: allow + telemetry
+        //          strict mode  : 401 (refuse re-claim of someone else's name)
+        //   D. Re-registration with NO token bound yet (legacy / pre-Wave 3)
+        //        → log-only mode: auto-grandfather (mint + return; one-time
+        //          attachment to the existing record so the legitimate owner
+        //          gets their token on next boot)
+        //          strict mode  : 401 (operator must run reset-token CLI)
+        // ====================================================================
+        const inboundToken = getProvisioningTokenFromRequest(req);
+        const tokenAlreadyMinted = provisioningTokenStore.has(normalizedUsername);
+        const usernameAlreadyRegistered = registry.has(normalizedUsername);
+        let mintedToken = null;
+
+        if (!usernameAlreadyRegistered && !tokenAlreadyMinted) {
+          // Case A — first-ever registration
+          mintedToken = provisioningTokenStore.mint(normalizedUsername);
+          console.log(`[gw-auth] handler=register username=${normalizedUsername} action=mint-new`);
+        } else if (tokenAlreadyMinted) {
+          // Case B or C — token exists; verify the inbound matches
+          const tokenOk = inboundToken && provisioningTokenStore.verify(inboundToken, normalizedUsername);
+          if (!tokenOk) {
+            const tokenState = inboundToken ? 'wrong' : 'missing';
+            const action = GW_AUTH_REQUIRED ? 'deny' : 'allow';
+            console.log(`[gw-auth] handler=register username=${normalizedUsername} token=${tokenState} enforce=${GW_AUTH_REQUIRED} action=${action}`);
+            if (GW_AUTH_REQUIRED) {
+              res.writeHead(401, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({
+                error: 'unauthorized',
+                message: 'username already claimed; X-Provisioning-Token header required to re-register',
+              }));
+              return;
+            }
+          } else {
+            console.log(`[gw-auth] handler=register username=${normalizedUsername} token=present action=allow`);
+          }
+        } else {
+          // Case D — legacy registration without a token bound yet
+          if (GW_AUTH_REQUIRED) {
+            console.log(`[gw-auth] handler=register username=${normalizedUsername} legacy enforce=true action=deny`);
+            res.writeHead(401, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({
+              error: 'unauthorized',
+              message: 'username has no provisioning token bound; operator must reset',
+            }));
+            return;
+          }
+          // Log-only grandfathering: mint a token now and return it once.
+          mintedToken = provisioningTokenStore.mint(normalizedUsername);
+          console.log(`[gw-auth] handler=register username=${normalizedUsername} action=mint-grandfather`);
+        }
+
+        // Store / refresh registration
         const nodeInfo = {
           nodeId,
           endpoint,
           registered: new Date().toISOString(),
         };
-        
+
         registry.set(normalizedUsername, nodeInfo);
 
         // Invalidate cache for this user
         registryCache.delete(normalizedUsername);
 
         saveRegistry();
-        
+
         // Phase 3: Also store in DHT (async, don't block response)
         storeToDHT(normalizedUsername, nodeInfo).catch(err => {
           console.warn(`[DHT] Failed to store ${normalizedUsername}: ${err.message}`);
@@ -1952,8 +2473,16 @@ async function handleApiRequest(req, res) {
 
         console.log(`[Gateway] Registered: ${username} -> ${endpoint}`);
 
+        const responseBody = { success: true, username: normalizedUsername };
+        if (mintedToken) {
+          // SECURITY: this is the ONLY time the plaintext token leaves the
+          // gateway. PC2 client must persist it to disk (mode 0600) before
+          // calling any other gateway endpoint. Subsequent re-registrations
+          // by the same node will not return the token (Case B above).
+          responseBody.provisioningToken = mintedToken;
+        }
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ success: true, username: username.toLowerCase() }));
+        res.end(JSON.stringify(responseBody));
       } catch (error) {
         res.writeHead(400, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: "Invalid JSON" }));
@@ -2009,6 +2538,12 @@ async function handleApiRequest(req, res) {
         }
 
         const normalizedUsername = username.toLowerCase();
+
+        // SEC-8 (2026-04 audit) + SEC-INFRA-GW-AUTH: gate every wg/register
+        // call (both new and re-key) on the per-node provisioning token.
+        // Pre-fix any caller who knew a victim's username could change the
+        // peer's public key and steal their tunnel.
+        if (!requireProvisioningToken(req, res, normalizedUsername, 'wg/register')) return;
 
         // Check if this node already has a WireGuard peer assignment
         const existingPeer = wgPeers.peers[normalizedUsername];
@@ -2079,7 +2614,7 @@ async function handleApiRequest(req, res) {
 
     if (wgAvailable) {
       try {
-        const raw = execSync(`wg show ${WG_CONFIG.interface} dump`, { stdio: 'pipe', timeout: 5000 }).toString();
+        const raw = execFileSync('wg', ['show', WG_CONFIG.interface, 'dump'], { stdio: 'pipe', timeout: 5000 }).toString();
         const lines = raw.trim().split('\n');
         // First line is interface info, subsequent lines are peers
         const peers = lines.slice(1).map(line => {
@@ -2114,6 +2649,21 @@ async function handleApiRequest(req, res) {
 
   if (url.pathname.startsWith("/api/wg/peer/") && req.method === "DELETE") {
     const targetUsername = url.pathname.slice("/api/wg/peer/".length).toLowerCase();
+
+    // SEC-9 (2026-04 audit): pre-fix anyone who knew a victim's username
+    // could DELETE their WG peer and boot them off the tunnel. Now the
+    // caller must hold the token minted at /api/register time.
+    if (!requireProvisioningToken(req, res, targetUsername, 'wg/peer/delete')) return;
+
+    // Per-username delete throttle: even the legit owner is limited to
+    // PER_USERNAME_DELETE_MAX deletes per PER_USERNAME_DELETE_WINDOW_MS so
+    // a runaway script cannot churn the WG interface for itself either.
+    if (!checkPerUsernameDeleteRate(targetUsername)) {
+      res.writeHead(429, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Rate limit exceeded for this username", retryAfter: Math.ceil(PER_USERNAME_DELETE_WINDOW_MS / 1000) }));
+      return;
+    }
+
     const peer = wgPeers.peers[targetUsername];
 
     if (!peer) {
@@ -2126,6 +2676,38 @@ async function handleApiRequest(req, res) {
     delete wgPeers.peers[targetUsername];
     saveWGPeers();
     console.log(`[WireGuard] Removed peer ${targetUsername} (${peer.assignedIP})`);
+
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ success: true, removed: targetUsername }));
+    return;
+  }
+
+  // SEC-9 / Wave 3 follow-up: symmetric DELETE for AmneziaWG. Pre-fix this
+  // route did not exist; supernode operators had to SSH in to remove an awg
+  // peer. Adding it now (gated identically) keeps the wg/awg surfaces
+  // symmetric and stops future drift.
+  if (url.pathname.startsWith("/api/awg/peer/") && req.method === "DELETE") {
+    const targetUsername = url.pathname.slice("/api/awg/peer/".length).toLowerCase();
+
+    if (!requireProvisioningToken(req, res, targetUsername, 'awg/peer/delete')) return;
+
+    if (!checkPerUsernameDeleteRate(targetUsername)) {
+      res.writeHead(429, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Rate limit exceeded for this username", retryAfter: Math.ceil(PER_USERNAME_DELETE_WINDOW_MS / 1000) }));
+      return;
+    }
+
+    const peer = awgPeers.peers[targetUsername];
+    if (!peer) {
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Peer not found" }));
+      return;
+    }
+
+    removeAWGPeer(peer.publicKey);
+    delete awgPeers.peers[targetUsername];
+    saveAWGPeers();
+    console.log(`[AmneziaWG] Removed peer ${targetUsername} (${peer.assignedIP})`);
 
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ success: true, removed: targetUsername }));
@@ -2182,6 +2764,11 @@ async function handleApiRequest(req, res) {
 
         const normalizedUsername = username.toLowerCase();
         const resolvedNodeId = nodeId || (registry.get(normalizedUsername) || {}).nodeId || 'unknown';
+
+        // SEC-8 (2026-04 audit) + SEC-INFRA-GW-AUTH: gate awg/register the
+        // same way as wg/register. Same threat: stealing a stealth tunnel
+        // is just as bad as stealing a regular one.
+        if (!requireProvisioningToken(req, res, normalizedUsername, 'awg/register')) return;
 
         const existingPeer = awgPeers.peers[normalizedUsername];
         if (existingPeer) {
@@ -2252,7 +2839,7 @@ async function handleApiRequest(req, res) {
     if (awgAvailable) {
       try {
         const tool = fs.existsSync('/usr/local/bin/awg') ? 'awg' : 'wg';
-        const raw = execSync(`${tool} show ${AWG_CONFIG.interface} dump`, { stdio: 'pipe', timeout: 5000 }).toString();
+        const raw = execFileSync(tool, ['show', AWG_CONFIG.interface, 'dump'], { stdio: 'pipe', timeout: 5000 }).toString();
         const lines = raw.trim().split('\n');
         const peers = lines.slice(1).map(line => {
           const parts = line.split('\t');
@@ -2311,6 +2898,20 @@ async function handleApiRequest(req, res) {
         const credentials = JSON.parse(fs.readFileSync(credentialsFile, 'utf8'));
         const normalizedUsername = username.toLowerCase().trim();
 
+        // SEC-2 (2026-04 audit): defence in depth — even though execFileSync
+        // below avoids shell interpretation, we still reject any username
+        // that does not match the same regex as /api/register so the shell
+        // script never sees a path-traversal / control-char payload.
+        if (!/^[a-z0-9][a-z0-9_-]{2,29}$/.test(normalizedUsername)) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Invalid username (must be 3-30 chars, lowercase alphanumeric with _ or -)" }));
+          return;
+        }
+
+        // SEC-INFRA-GW-AUTH: verify caller owns this username before
+        // mutating any per-user resource on this supernode.
+        if (!requireProvisioningToken(req, res, normalizedUsername, 'vless/register')) return;
+
         let uuid;
         const peersFile = '/etc/vless-reality/peers.json';
         const peers = fs.existsSync(peersFile) ? JSON.parse(fs.readFileSync(peersFile, 'utf8')) : { peers: {} };
@@ -2319,7 +2920,9 @@ async function handleApiRequest(req, res) {
           uuid = peers.peers[normalizedUsername].uuid;
         } else {
           try {
-            uuid = execSync(`/etc/vless-reality/manage-peers.sh add "${normalizedUsername}"`, { stdio: 'pipe', timeout: 10000 }).toString().trim();
+            // SEC-2 fix: execFileSync passes args as an array — no shell, no
+            // injection. The username already passed the regex above.
+            uuid = execFileSync('/etc/vless-reality/manage-peers.sh', ['add', normalizedUsername], { stdio: 'pipe', timeout: 10000 }).toString().trim();
           } catch (err) {
             console.error('[VLESS] Failed to add peer:', err.message);
             res.writeHead(500, { "Content-Type": "application/json" });
@@ -2355,7 +2958,7 @@ async function handleApiRequest(req, res) {
     } catch {}
 
     let processRunning = false;
-    try { execSync('pgrep -x sing-box', { stdio: 'pipe' }); processRunning = true; } catch {}
+    try { execFileSync('pgrep', ['-x', 'sing-box'], { stdio: 'pipe' }); processRunning = true; } catch {}
 
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({
@@ -2367,6 +2970,65 @@ async function handleApiRequest(req, res) {
         serverName: "www.microsoft.com",
       },
     }));
+    return;
+  }
+
+  // ==========================================
+  // dDRM Key Provisioning API
+  // Distributes the shared Chipotle usage key + PKP ID to PC2 nodes.
+  // The usage key is scoped to the elacity-ddrm group and can only execute
+  // pre-registered Lit Actions with the registered PKP — it grants no
+  // admin access. The on-chain access check in the Lit Action is the real
+  // security gate, not this key.
+  // ==========================================
+
+  if (url.pathname === "/api/ddrm/provision" && req.method === "GET") {
+    if (!checkRateLimit('register', clientIP)) {
+      res.writeHead(429, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Rate limit exceeded", retryAfter: 60 }));
+      return;
+    }
+
+    const keyFile = '/etc/pc2/ddrm-api-key';
+    const pkpFile = '/etc/pc2/ddrm-pkp-id';
+
+    try {
+      if (!fs.existsSync(keyFile)) {
+        res.writeHead(503, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "dDRM provisioning not configured on this supernode" }));
+        return;
+      }
+
+      const apiKey = fs.readFileSync(keyFile, 'utf8').trim();
+      const pkpId = fs.existsSync(pkpFile)
+        ? fs.readFileSync(pkpFile, 'utf8').trim()
+        : '0x68dcf3dc3c38d726e8a7cdca8ab318f49552c05d';
+
+      console.log(`[dDRM] Provisioned API key to ${clientIP}`);
+
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({
+        version: 2,
+        network: 'chipotle',
+        apiUrl: 'https://api.chipotle.litprotocol.com',
+        usageKey: apiKey,
+        pkpId,
+        authority: '0x09dBe796f40ECEffEAccf243c3d758C4c1d8D87D',
+        chain: 'base',
+        chainId: 8453,
+        rpc: 'https://mainnet.base.org',
+        actions: {
+          nonMediaEncrypt: 'QmNayE5MYzXcoMS9nvRk6MUo8r4ESLa3i65vHXzuBsnC2b',
+          nonMediaDecrypt: 'QmYuh3LQXcC5Ddk7xTV2eR8Xvp1xKNSzqoimqpyM1SSDMC',
+          mediaEncrypt: 'QmXgZXJw9pzSeRkVZLtgNzgaxfErKhthv7j7Etge6WNG4u',
+          mediaDecrypt: 'QmTPi2w7tSfGb7AzkMDCR6bCdSHkU5v5C6CGJC3sULTZN9',
+        },
+      }));
+    } catch (err) {
+      console.error('[dDRM] Provision error:', err);
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Failed to read dDRM configuration" }));
+    }
     return;
   }
 

@@ -17,6 +17,9 @@ import { filesystemTools } from './tools/FilesystemTools.js';
 import { walletTools } from './tools/WalletTools.js';
 import { settingsTools } from './tools/SettingsTools.js';
 import { agentKitTools } from './tools/AgentKitTools.js';
+import { skillsTools } from './tools/SkillsTools.js';
+import { canvasTools } from './tools/CanvasTools.js';
+import { agentTools } from './tools/AgentTools.js';
 import { ToolExecutor } from './tools/ToolExecutor.js';
 import { FilesystemManager } from '../../storage/filesystem.js';
 import { DatabaseManager } from '../../storage/database.js';
@@ -527,8 +530,8 @@ export class AIChatService {
     } else if (args.filesystem && args.walletAddress) {
       // Automatically include all AI tools if filesystem is available
       // This allows AI to perform filesystem, wallet, settings, and AgentKit operations
-      const allTools = [...filesystemTools, ...walletTools, ...settingsTools, ...agentKitTools];
-      logger.info('[AIChatService] Auto-including all AI tools - filesystem:', filesystemTools.length, 'wallet:', walletTools.length, 'settings:', settingsTools.length, 'agentKit:', agentKitTools.length, 'total:', allTools.length);
+      const allTools = [...filesystemTools, ...walletTools, ...settingsTools, ...agentKitTools, ...skillsTools, ...canvasTools, ...agentTools];
+      logger.info('[AIChatService] Auto-including all AI tools - filesystem:', filesystemTools.length, 'wallet:', walletTools.length, 'settings:', settingsTools.length, 'agentKit:', agentKitTools.length, 'skills:', skillsTools.length, 'canvas:', canvasTools.length, 'agent:', agentTools.length, 'total:', allTools.length);
       tools = normalizeToolsObject(allTools);
       
       // Mark all tools by their type
@@ -642,7 +645,8 @@ export class AIChatService {
     const toolExecutor = new ToolExecutor(filesystem, walletAddress, io, {
       db: this.db,
       smartAccountAddress,
-      agentId
+      agentId,
+      aiService: this,
     });
     const MAX_TOOL_ITERATIONS = 5; // Prevent infinite loops
     let iteration = 0;
@@ -1871,7 +1875,8 @@ TOOL USAGE REQUIREMENT:
             const toolExecutor = new ToolExecutor(args.filesystem, args.walletAddress, args.io, {
               db: this.db,
               smartAccountAddress: args.smartAccountAddress,
-              agentId: args.agentId
+              agentId: args.agentId,
+              aiService: this,
             });
             const normalizedMessages = normalizeMessages(args.messages);
             

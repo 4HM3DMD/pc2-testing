@@ -4,7 +4,12 @@
  * SQLite database for persistent storage of users, sessions, files, and settings
  */
 
-import Database from 'better-sqlite3';
+import {
+  DatabaseSync,
+  enhance,
+  type DatabaseSyncInstance,
+  type EnhancedDatabaseSync,
+} from '@photostructure/sqlite';
 import { existsSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
 import { runMigrations } from './migrations.js';
@@ -12,6 +17,13 @@ import { encryptApiKeys, decryptApiKeys } from '../utils/encryption.js';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('database');
+
+// Local alias: enhanced @photostructure/sqlite instance with better-sqlite3-
+// compatible .pragma() and .transaction() methods. Migration from
+// `better-sqlite3` (v1.2.7) — both libraries link to SQLite 3.5x and the
+// on-disk pc2.db format is unchanged. DatabaseSyncInstance is the type
+// (the class shape); DatabaseSync is the value (constructor used at runtime).
+export type Database = EnhancedDatabaseSync<DatabaseSyncInstance>;
 
 export interface User {
   wallet_address: string;
@@ -26,6 +38,18 @@ export interface Session {
   smart_account_address: string | null;
   created_at: number;
   expires_at: number;
+  /**
+   * NULL = unrestricted (owner/user session).
+   * 'file' = ephemeral session bound to a specific file resource (SEC-3c, 2026-04 audit).
+   * Future: other scope kinds may be added; middleware MUST fail-closed on unknown values.
+   */
+  scope?: string | null;
+  /**
+   * JSON-encoded metadata when scope IS NOT NULL. For scope='file':
+   *   { "fileUid": string, "allowedPath"?: string }
+   * Validated and consumed by isRequestInScope() in api/middleware/scope-check.ts.
+   */
+  scope_data?: string | null;
 }
 
 export interface FileMetadata {
@@ -79,15 +103,57 @@ export interface AIConversation {
   updated_at: number;
 }
 
+export interface ContentCatalogItem {
+  id?: number;
+  content_id: string | null;
+  channel_address: string;
+  token_id: string;
+  operative_address: string | null;
+  creator_address: string;
+  name: string | null;
+  description: string | null;
+  image_url: string | null;
+  content_cid: string | null;
+  metadata_cid: string | null;
+  mime_type: string | null;
+  asset_type: string | null;
+  price: string | null;
+  payment_token: string | null;
+  op_type: number | null;
+  chain_id: number;
+  block_number: number;
+  tx_hash: string | null;
+  contract_version: string;
+  metadata_status: 'pending' | 'resolved' | 'failed';
+  indexed_at: number;
+  metadata_json: string | null;
+}
+
+export interface InstalledApp {
+  app_name: string;
+  title: string;
+  version: string;
+  cid: string;
+  size: number;
+  icon: string | null;
+  description: string | null;
+  author: string | null;
+  permissions_json: string;
+  requirements_json: string;
+  manifest_json: string;
+  installed_at: number;
+  updated_at: number;
+}
+
 export class DatabaseManager {
-  private db: Database.Database | null = null;
+  private db: Database | null = null;
   private dbPath: string;
 
   constructor(dbPath: string) {
     this.dbPath = dbPath;
   }
 
-  getDatabase(): Database.Database | null {
+  getDatabase(): Database | null {
     return this.db;
   }
 
@@ -105,11 +171,15 @@ export class DatabaseManager {
       mkdirSync(dbDir, { recursive: true });
     }
 
-    // Open database connection
-    this.db = new Database(this.dbPath);
+    // Open database connection. enhance() adds better-sqlite3-compatible
+    // .pragma() and .transaction() methods (v1.2.7 SQLite migration).
+    this.db = enhance(new DatabaseSync(this.dbPath));
     
     // Enable foreign keys
     this.db.pragma('foreign_keys = ON');
+    
+    // WAL mode for concurrent read/write (indexer writes while API reads)
+    this.db.pragma('journal_mode = WAL');
     
     // Run migrations
     runMigrations(this.db);
@@ -120,7 +190,7 @@ export class DatabaseManager {
   /**
    * Get database instance (throws if not initialized)
    */
-  getDB(): Database.Database {
+  getDB(): Database {
     if (!this.db) {
       throw new Error('Database not initialized. Call initialize() first.');
     }
@@ -182,19 +252,61 @@ export class DatabaseManager {
 
   /**
    * Create session
+   *
+   * Optional scope/scope_data fields constrain the session to a specific
+   * resource (SEC-3c, 2026-04 audit). Sessions without scope are
+   * unrestricted user/owner sessions and behave identically to the
+   * pre-migration-29 schema.
    */
   createSession(session: Session): void {
     const db = this.getDB();
     db.prepare(`
-      INSERT INTO sessions (token, wallet_address, smart_account_address, created_at, expires_at)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT INTO sessions (token, wallet_address, smart_account_address, created_at, expires_at, scope, scope_data)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
     `).run(
       session.token,
       session.wallet_address,
       session.smart_account_address,
       session.created_at,
-      session.expires_at
+      session.expires_at,
+      session.scope ?? null,
+      session.scope_data ?? null
     );
+  }
+
+  /**
+   * Create a scoped (resource-bound) session.
+   *
+   * Convenience wrapper around createSession() for the common SEC-3c case:
+   * an ephemeral session minted by /open_item that grants an iframe app
+   * access to ONE file. The middleware enforces scope via isRequestInScope().
+   *
+   * @param input.token            64-hex-char cryptographically random token
+   * @param input.wallet_address   minting user's wallet (the file owner)
+   * @param input.smart_account_address  minting user's SA (or null)
+   * @param input.scope            e.g. 'file'
+   * @param input.scope_data       JSON-encoded scope metadata
+   * @param input.ttl_ms           session lifetime; defaults to 4 hours
+   */
+  createScopedSession(input: {
+    token: string;
+    wallet_address: string;
+    smart_account_address: string | null;
+    scope: string;
+    scope_data: string;
+    ttl_ms?: number;
+  }): void {
+    const now = Date.now();
+    const ttl = input.ttl_ms ?? 4 * 60 * 60 * 1000;
+    this.createSession({
+      token: input.token,
+      wallet_address: input.wallet_address,
+      smart_account_address: input.smart_account_address,
+      created_at: now,
+      expires_at: now + ttl,
+      scope: input.scope,
+      scope_data: input.scope_data,
+    });
   }
 
   /**
@@ -499,6 +611,278 @@ export class DatabaseManager {
     `).get() as { count: number };
     
     return row?.count || 0;
+  }
+
+  // ============================================================================
+  // Pinned CID Tracking (Marketplace Purchases & CDN)
+  // ============================================================================
+
+  trackPinnedCID(cid: string, walletAddress: string, size: number, source: string = 'marketplace'): void {
+    const db = this.getDB();
+    db.prepare(`
+      INSERT INTO pinned_cids (cid, wallet_address, source, size, pinned_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(cid, wallet_address) DO UPDATE SET
+        size = excluded.size,
+      source = excluded.source
+    `).run(cid, walletAddress, source, size, Date.now());
+  }
+
+  backfillLocalCIDsToPinned(): number {
+    const db = this.getDB();
+    const now = Date.now();
+    const result = db.prepare(`
+      INSERT OR IGNORE INTO pinned_cids (cid, wallet_address, source, size, pinned_at, pin_status)
+      SELECT DISTINCT
+        f.ipfs_hash as cid,
+        f.wallet_address as wallet_address,
+        'local' as source,
+        COALESCE(f.size, 0) as size,
+        ? as pinned_at,
+        'complete' as pin_status
+      FROM files f
+      WHERE f.ipfs_hash IS NOT NULL
+        AND f.is_dir = 0
+        AND f.wallet_address IS NOT NULL
+        AND f.wallet_address != ''
+    `).run(now);
+
+    return result.changes || 0;
+  }
+
+  getPinnedCIDs(walletAddress?: string): string[] {
+    const db = this.getDB();
+    if (walletAddress) {
+      const rows = db.prepare(`SELECT cid FROM pinned_cids WHERE wallet_address = ?`).all(walletAddress) as { cid: string }[];
+      return rows.map(r => r.cid);
+    }
+    const rows = db.prepare(`SELECT DISTINCT cid FROM pinned_cids`).all() as { cid: string }[];
+    return rows.map(r => r.cid);
+  }
+
+  getAllAnnouncableCIDs(): string[] {
+    const db = this.getDB();
+    const rows = db.prepare(`
+      SELECT cid FROM pinned_cids
+      UNION
+      SELECT DISTINCT ipfs_hash as cid FROM files
+      WHERE ipfs_hash IS NOT NULL AND is_dir = 0
+        AND (is_public = 1 OR path LIKE '%/Public/%')
+    `).all() as { cid: string }[];
+    return rows.map(r => r.cid);
+  }
+
+  updatePinnedCIDAnnouncedAt(cid: string): void {
+    const db = this.getDB();
+    db.prepare(`UPDATE pinned_cids SET last_announced_at = ? WHERE cid = ?`).run(Date.now(), cid);
+  }
+
+  // ============================================================================
+  // Content Seeding — Serve Tracking & Pin Status
+  // ============================================================================
+
+  updateServeStats(cid: string): void {
+    const db = this.getDB();
+    db.prepare(`
+      UPDATE pinned_cids
+      SET last_served_at = ?, serve_count = serve_count + 1
+      WHERE cid = ?
+    `).run(Date.now(), cid);
+  }
+
+  updatePinStatus(cid: string, status: 'queued' | 'pinning' | 'complete' | 'failed'): void {
+    const db = this.getDB();
+    db.prepare(`UPDATE pinned_cids SET pin_status = ? WHERE cid = ?`).run(status, cid);
+  }
+
+  /**
+   * Update the running byte count for an in-progress pin. Monotonic: never
+   * moves the counter backwards during an ongoing download. Used by
+   * ContentSeedingService to render a real-time download-progress bar in
+   * the market app without having to re-enumerate the blockstore on every
+   * poll.
+   */
+  updatePinBytesDownloaded(cid: string, bytes: number): void {
+    if (!Number.isFinite(bytes) || bytes < 0) return;
+    const db = this.getDB();
+    db.prepare(`
+      UPDATE pinned_cids
+      SET bytes_downloaded = ?
+      WHERE cid = ? AND bytes_downloaded < ?
+    `).run(Math.floor(bytes), cid, Math.floor(bytes));
+  }
+
+  /**
+   * Reset the running byte count for a CID. Called at the start of a fresh
+   * pin attempt so a previous failed run's stale counter doesn't show up as
+   * "already 40% downloaded" on the retry.
+   */
+  resetPinBytesDownloaded(cid: string): void {
+    const db = this.getDB();
+    db.prepare(`UPDATE pinned_cids SET bytes_downloaded = 0 WHERE cid = ?`).run(cid);
+  }
+
+  /**
+   * Return the current row for a CID regardless of which wallet owns it.
+   * Used by the download-first buy flow to drive per-CID UI state
+   * (pin-status polling, launch-gate decisions). Pin status is a property
+   * of the CID on this node, not of a specific wallet's purchase of it.
+   */
+  getPinnedCIDDetail(cid: string): {
+    cid: string;
+    wallet_address: string;
+    source: string;
+    size: number;
+    pinned_at: number;
+    pin_status: 'queued' | 'pinning' | 'complete' | 'failed';
+    bytes_downloaded: number;
+  } | null {
+    const db = this.getDB();
+    const row = db.prepare(`
+      SELECT cid, wallet_address, source, size, pinned_at, pin_status,
+             COALESCE(bytes_downloaded, 0) AS bytes_downloaded
+      FROM pinned_cids
+      WHERE cid = ?
+      ORDER BY pinned_at DESC
+      LIMIT 1
+    `).get(cid) as {
+      cid: string;
+      wallet_address: string;
+      source: string;
+      size: number;
+      pinned_at: number;
+      pin_status: 'queued' | 'pinning' | 'complete' | 'failed';
+      bytes_downloaded: number;
+    } | undefined;
+    return row ?? null;
+  }
+
+  isCIDPinnedOrQueued(cid: string): boolean {
+    const db = this.getDB();
+    const row = db.prepare(`
+      SELECT 1 FROM pinned_cids WHERE cid = ? AND pin_status IN ('queued', 'pinning', 'complete')
+    `).get(cid);
+    return !!row;
+  }
+
+  getIncompletePins(): Array<{ cid: string; wallet_address: string; size: number }> {
+    const db = this.getDB();
+    return db.prepare(`
+      SELECT cid, wallet_address, size FROM pinned_cids
+      WHERE pin_status IN ('queued', 'pinning', 'failed')
+    `).all() as Array<{ cid: string; wallet_address: string; size: number }>;
+  }
+
+  getHotCIDs(): string[] {
+    const db = this.getDB();
+    const cutoff = Date.now() - (24 * 60 * 60 * 1000);
+    const rows = db.prepare(`
+      SELECT DISTINCT cid FROM pinned_cids
+      WHERE last_served_at IS NOT NULL AND last_served_at > ? AND pin_status = 'complete'
+    `).all(cutoff) as { cid: string }[];
+    return rows.map(r => r.cid);
+  }
+
+  getWarmCIDs(): string[] {
+    const db = this.getDB();
+    const hotCutoff = Date.now() - (24 * 60 * 60 * 1000);
+    const warmCutoff = Date.now() - (7 * 24 * 60 * 60 * 1000);
+    const rows = db.prepare(`
+      SELECT DISTINCT cid FROM pinned_cids
+      WHERE last_served_at IS NOT NULL AND last_served_at > ? AND last_served_at <= ? AND pin_status = 'complete'
+    `).all(warmCutoff, hotCutoff) as { cid: string }[];
+    return rows.map(r => r.cid);
+  }
+
+  getColdCIDs(): string[] {
+    const db = this.getDB();
+    const warmCutoff = Date.now() - (7 * 24 * 60 * 60 * 1000);
+    const rows = db.prepare(`
+      SELECT DISTINCT cid FROM pinned_cids
+      WHERE (last_served_at IS NULL OR last_served_at <= ?) AND pin_status = 'complete'
+    `).all(warmCutoff) as { cid: string }[];
+    return rows.map(r => r.cid);
+  }
+
+  removePinnedCID(cid: string): void {
+    const db = this.getDB();
+    db.prepare(`DELETE FROM pinned_cids WHERE cid = ?`).run(cid);
+  }
+
+  getTotalPinnedSize(): number {
+    const db = this.getDB();
+    const row = db.prepare(`SELECT COALESCE(SUM(size), 0) as total FROM pinned_cids WHERE pin_status = 'complete'`).get() as { total: number };
+    return row.total;
+  }
+
+  // ============================================================================
+  // NFT Pin Tracking
+  // ============================================================================
+
+  trackNFTPin(params: {
+    cid: string;
+    walletAddress: string;
+    contractAddress: string;
+    tokenId: string;
+    name: string;
+    collectionName: string;
+    mimeType?: string;
+    filePath?: string;
+  }): void {
+    const db = this.getDB();
+    db.prepare(`
+      INSERT INTO nft_pins (cid, wallet_address, contract_address, token_id, name, collection_name, mime_type, file_path, pin_status, pinned_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)
+      ON CONFLICT(cid, wallet_address) DO UPDATE SET
+        name = excluded.name,
+        collection_name = excluded.collection_name,
+        mime_type = excluded.mime_type,
+        file_path = excluded.file_path
+    `).run(
+      params.cid, params.walletAddress.toLowerCase(), params.contractAddress.toLowerCase(),
+      params.tokenId, params.name, params.collectionName,
+      params.mimeType || null, params.filePath || null, Date.now()
+    );
+  }
+
+  getNFTPins(walletAddress: string): Array<{
+    cid: string; contract_address: string; token_id: string;
+    name: string; collection_name: string; mime_type: string | null;
+    file_path: string | null; pin_status: string; pinned_at: number;
+  }> {
+    const db = this.getDB();
+    return db.prepare(`
+      SELECT np.cid, np.contract_address, np.token_id, np.name, np.collection_name,
+             np.mime_type, np.file_path, COALESCE(pc.pin_status, np.pin_status) as pin_status, np.pinned_at
+      FROM nft_pins np
+      LEFT JOIN pinned_cids pc ON np.cid = pc.cid AND np.wallet_address = pc.wallet_address
+      WHERE np.wallet_address = ?
+      ORDER BY np.pinned_at DESC
+    `).all(walletAddress.toLowerCase()) as any[];
+  }
+
+  getNFTPin(cid: string, walletAddress: string): {
+    cid: string; contract_address: string; token_id: string;
+    name: string; collection_name: string; pin_status: string;
+  } | undefined {
+    const db = this.getDB();
+    return db.prepare(`
+      SELECT np.cid, np.contract_address, np.token_id, np.name, np.collection_name,
+             COALESCE(pc.pin_status, np.pin_status) as pin_status
+      FROM nft_pins np
+      LEFT JOIN pinned_cids pc ON np.cid = pc.cid AND np.wallet_address = pc.wallet_address
+      WHERE np.cid = ? AND np.wallet_address = ?
+    `).get(cid, walletAddress.toLowerCase()) as any;
+  }
+
+  removeNFTPin(cid: string, walletAddress: string): void {
+    const db = this.getDB();
+    db.prepare(`DELETE FROM nft_pins WHERE cid = ? AND wallet_address = ?`).run(cid, walletAddress.toLowerCase());
+  }
+
+  updateNFTPinStatus(cid: string, status: string): void {
+    const db = this.getDB();
+    db.prepare(`UPDATE nft_pins SET pin_status = ? WHERE cid = ?`).run(status, cid);
   }
 
   // ============================================================================
@@ -1559,5 +1943,894 @@ export class DatabaseManager {
       rejectedAt: row.rejected_at,
       executedAt: row.executed_at,
     };
+  }
+
+  // ── Installed Apps ────────────────────────────────────────
+
+  getInstalledApp(appName: string): InstalledApp | undefined {
+    const db = this.getDB();
+    return db.prepare('SELECT * FROM installed_apps WHERE app_name = ?').get(appName) as InstalledApp | undefined;
+  }
+
+  listInstalledApps(): InstalledApp[] {
+    const db = this.getDB();
+    return db.prepare('SELECT * FROM installed_apps ORDER BY installed_at DESC').all() as InstalledApp[];
+  }
+
+  registerInstalledApp(app: InstalledApp): void {
+    const db = this.getDB();
+    db.prepare(`
+      INSERT OR REPLACE INTO installed_apps
+        (app_name, title, version, cid, size, icon, description, author,
+         permissions_json, requirements_json, manifest_json, installed_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      app.app_name, app.title, app.version, app.cid, app.size,
+      app.icon, app.description, app.author,
+      app.permissions_json, app.requirements_json, app.manifest_json,
+      app.installed_at, app.updated_at
+    );
+  }
+
+  uninstallApp(appName: string): boolean {
+    const db = this.getDB();
+    const result = db.prepare('DELETE FROM installed_apps WHERE app_name = ?').run(appName);
+    return result.changes > 0;
+  }
+
+  // ── Content Catalog (On-Chain Indexer) ──────────────────────
+
+  upsertCatalogItem(item: ContentCatalogItem): void {
+    const db = this.getDB();
+    db.prepare(`
+      INSERT INTO content_catalog
+        (content_id, channel_address, token_id, operative_address, creator_address,
+         name, description, image_url, content_cid, metadata_cid, mime_type,
+         asset_type, price, payment_token, op_type, chain_id, block_number,
+         tx_hash, contract_version, metadata_status, indexed_at, metadata_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(channel_address, token_id, chain_id) DO UPDATE SET
+        content_id = COALESCE(excluded.content_id, content_id),
+        operative_address = COALESCE(excluded.operative_address, operative_address),
+        name = COALESCE(excluded.name, name),
+        description = COALESCE(excluded.description, description),
+        image_url = COALESCE(excluded.image_url, image_url),
+        content_cid = COALESCE(excluded.content_cid, content_cid),
+        metadata_cid = COALESCE(excluded.metadata_cid, metadata_cid),
+        mime_type = COALESCE(excluded.mime_type, mime_type),
+        asset_type = COALESCE(excluded.asset_type, asset_type),
+        price = COALESCE(excluded.price, price),
+        payment_token = COALESCE(excluded.payment_token, payment_token),
+        metadata_status = excluded.metadata_status,
+        metadata_json = COALESCE(excluded.metadata_json, metadata_json)
+    `).run(
+      item.content_id, item.channel_address, item.token_id, item.operative_address,
+      item.creator_address, item.name, item.description, item.image_url,
+      item.content_cid, item.metadata_cid, item.mime_type, item.asset_type,
+      item.price, item.payment_token, item.op_type, item.chain_id,
+      item.block_number, item.tx_hash, item.contract_version,
+      item.metadata_status, item.indexed_at, item.metadata_json
+    );
+  }
+
+  getCatalogItemsPendingMetadata(limit = 50): ContentCatalogItem[] {
+    const db = this.getDB();
+    // v1.2.6: reduced retry-after from 1 hour to 5 minutes. The most common
+    // cause of metadata fetch failure is freshly-minted content where the
+    // metadata CID hasn't yet replicated to the configured remote gateways
+    // (ipfs.ela.city, dweb.link) — typically resolves within a couple of
+    // minutes. Waiting an hour for retry was a poor UX: users would mint
+    // an item, see it fail to appear in their marketplace, and have no
+    // way to force a refresh. With the local-gateway fix in
+    // ContentIndexerService.fetchMetadata this should rarely fire, but
+    // 5 min provides a fast self-heal if it does.
+    const retryAfterMs = 5 * 60 * 1000;
+    const retryCutoff = Date.now() - retryAfterMs;
+    return db.prepare(`
+      SELECT * FROM content_catalog
+      WHERE metadata_status = 'pending'
+         OR (metadata_status = 'failed' AND indexed_at < ?)
+      ORDER BY metadata_status ASC, block_number ASC
+      LIMIT ?
+    `).all(retryCutoff, limit) as ContentCatalogItem[];
+  }
+
+  /**
+   * Return paid catalog rows (op_type > 0) whose listings should be refreshed.
+   * Used by the indexer's listing-price refresh pass — feeds back into the
+   * row's price + payment_token columns so feed cards show current prices.
+   *
+   * Filters:
+   *   - metadata_status = 'resolved'  (don't refresh rows we haven't fully indexed)
+   *   - op_type > 0                   (skip free assets — they have no listings)
+   *   - operative_address NOT zero    (no business model contract = no listings)
+   *
+   * Returns rows ordered by indexed_at DESC so newly-indexed assets get their
+   * price filled in first (best UX for the most-recent uploads).
+   */
+  getPaidCatalogItemsForListingRefresh(limit = 500): ContentCatalogItem[] {
+    const db = this.getDB();
+    return db.prepare(`
+      SELECT * FROM content_catalog
+      WHERE metadata_status = 'resolved'
+        AND op_type IS NOT NULL
+        AND op_type > 0
+        AND operative_address IS NOT NULL
+        AND operative_address != '0x0000000000000000000000000000000000000000'
+      ORDER BY indexed_at DESC
+      LIMIT ?
+    `).all(limit) as ContentCatalogItem[];
+  }
+
+  updateCatalogMetadata(channelAddress: string, tokenId: string, chainId: number, updates: Partial<ContentCatalogItem>): void {
+    const db = this.getDB();
+    const fields: string[] = [];
+    const values: any[] = [];
+
+    for (const [key, value] of Object.entries(updates)) {
+      if (value !== undefined && key !== 'channel_address' && key !== 'token_id' && key !== 'chain_id') {
+        fields.push(`${key} = ?`);
+        values.push(value);
+      }
+    }
+
+    if (fields.length === 0) return;
+
+    values.push(channelAddress, tokenId, chainId);
+    db.prepare(`
+      UPDATE content_catalog SET ${fields.join(', ')}
+      WHERE channel_address = ? AND token_id = ? AND chain_id = ?
+    `).run(...values);
+  }
+
+  catalogItemExists(channelAddress: string, tokenId: string, chainId: number): boolean {
+    const db = this.getDB();
+    const row = db.prepare(`
+      SELECT 1 FROM content_catalog
+      WHERE channel_address = ? AND token_id = ? AND chain_id = ?
+    `).get(channelAddress, tokenId, chainId);
+    return !!row;
+  }
+
+  getCatalogItems(options: {
+    assetType?: string;
+    creator?: string;
+    channel?: string;
+    search?: string;
+    limit?: number;
+    offset?: number;
+  } = {}): { items: ContentCatalogItem[]; total: number } {
+    const db = this.getDB();
+    const conditions: string[] = ["metadata_status = 'resolved'"];
+    const params: any[] = [];
+
+    if (options.assetType) {
+      conditions.push('asset_type = ?');
+      params.push(options.assetType);
+    }
+    if (options.creator) {
+      conditions.push('creator_address = ?');
+      params.push(options.creator);
+    }
+    if (options.channel) {
+      conditions.push('LOWER(channel_address) = LOWER(?)');
+      params.push(options.channel);
+    }
+    if (options.search) {
+      conditions.push('(name LIKE ? OR description LIKE ?)');
+      params.push(`%${options.search}%`, `%${options.search}%`);
+    }
+
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    const countRow = db.prepare(`SELECT COUNT(*) as total FROM content_catalog ${where}`).get(...params) as { total: number };
+
+    const limit = options.limit || 50;
+    const offset = options.offset || 0;
+    const items = db.prepare(`
+      SELECT * FROM content_catalog ${where}
+      ORDER BY block_number DESC
+      LIMIT ? OFFSET ?
+    `).all(...params, limit, offset) as ContentCatalogItem[];
+
+    return { items, total: countRow.total };
+  }
+
+  getOwnedCatalogItems(walletAddress: string, options: { limit?: number; offset?: number } = {}): { items: ContentCatalogItem[]; total: number } {
+    const db = this.getDB();
+    const limit = options.limit || 50;
+    const offset = options.offset || 0;
+    const walletLower = walletAddress.toLowerCase();
+
+    const query = `
+      SELECT cc.* FROM content_catalog cc
+      WHERE cc.metadata_status = 'resolved'
+        AND (
+          LOWER(cc.creator_address) = ?
+          OR cc.content_cid IN (SELECT cid FROM pinned_cids WHERE LOWER(wallet_address) = ?)
+        )
+      ORDER BY cc.block_number DESC
+      LIMIT ? OFFSET ?
+    `;
+
+    const countQuery = `
+      SELECT COUNT(*) as total FROM content_catalog cc
+      WHERE cc.metadata_status = 'resolved'
+        AND (
+          LOWER(cc.creator_address) = ?
+          OR cc.content_cid IN (SELECT cid FROM pinned_cids WHERE LOWER(wallet_address) = ?)
+        )
+    `;
+
+    const countRow = db.prepare(countQuery).get(walletLower, walletLower) as { total: number };
+    const items = db.prepare(query).all(walletLower, walletLower, limit, offset) as ContentCatalogItem[];
+
+    return { items, total: countRow.total };
+  }
+
+  getCatalogItemByContentId(contentId: string): ContentCatalogItem | undefined {
+    const db = this.getDB();
+    return db.prepare(`
+      SELECT * FROM content_catalog WHERE content_id = ?
+    `).get(contentId) as ContentCatalogItem | undefined;
+  }
+
+  getCatalogItemByToken(channelAddress: string, tokenId: string): ContentCatalogItem | undefined {
+    const db = this.getDB();
+    return db.prepare(`
+      SELECT * FROM content_catalog WHERE LOWER(channel_address) = LOWER(?) AND token_id = ?
+    `).get(channelAddress, tokenId) as ContentCatalogItem | undefined;
+  }
+
+  getCatalogItemByOperative(operativeAddress: string): ContentCatalogItem | undefined {
+    const db = this.getDB();
+    return db.prepare(`
+      SELECT * FROM content_catalog
+      WHERE LOWER(operative_address) = LOWER(?) AND metadata_status = 'resolved'
+      LIMIT 1
+    `).get(operativeAddress) as ContentCatalogItem | undefined;
+  }
+
+  getCatalogChannels(): Array<{
+    address: string;
+    creator: string;
+    name: string | null;
+    description: string | null;
+    categories: string | null;
+    image: string | null;
+    coverImage: string | null;
+    plans: string | null;
+    tokenAccess: string | null;
+    itemsCount: number;
+  }> {
+    const db = this.getDB();
+    // channel_metadata is now the authoritative source — populated by the indexer
+    // when it sees ChannelCreated events, so channels appear BEFORE their first mint.
+    // We LEFT JOIN content_catalog to aggregate itemsCount, but channels with zero
+    // assets still show up. This is critical for the Creator app UX.
+    const rows = db.prepare(`
+      SELECT
+        m.address as address,
+        m.creator_address as creator,
+        m.name as meta_name,
+        m.description as meta_description,
+        m.categories as meta_categories,
+        m.image as meta_image,
+        m.cover_image as meta_cover_image,
+        m.plans as meta_plans,
+        m.token_access as meta_token_access,
+        COALESCE(ca.item_count, 0) as itemsCount,
+        ca.first_asset_name as fallback_name,
+        ca.first_asset_image as fallback_image
+      FROM channel_metadata m
+      LEFT JOIN (
+        SELECT
+          channel_address,
+          COUNT(*) as item_count,
+          MIN(name) as first_asset_name,
+          MIN(image_url) as first_asset_image
+        FROM content_catalog
+        WHERE metadata_status = 'resolved'
+        GROUP BY LOWER(channel_address)
+      ) ca ON LOWER(ca.channel_address) = LOWER(m.address)
+      WHERE m.creator_address IS NOT NULL
+      ORDER BY m.block_number DESC NULLS LAST, m.indexed_at DESC NULLS LAST
+    `).all() as any[];
+
+    return rows.map((r: any) => ({
+      address: r.address,
+      creator: r.creator,
+      name: r.meta_name || r.fallback_name,
+      description: r.meta_description || null,
+      categories: r.meta_categories || null,
+      image: r.meta_image || r.fallback_image,
+      coverImage: r.meta_cover_image || null,
+      plans: r.meta_plans || null,
+      tokenAccess: r.meta_token_access || null,
+      itemsCount: r.itemsCount,
+    }));
+  }
+
+  /**
+   * Insert or update a channel discovered via V3 factory ChannelCreated event.
+   * Channels are indexed BEFORE their first mint — critical for Creator app UX.
+   * Name is optional here (resolved lazily via on-chain name() elsewhere).
+   */
+  upsertChannelFromFactory(input: {
+    address: string;
+    creator_address: string;
+    contract_version: string;
+    block_number: number;
+    tx_hash?: string | null;
+    name?: string | null;
+  }): void {
+    const db = this.getDB();
+    const addr = input.address.toLowerCase();
+    const creator = input.creator_address.toLowerCase();
+    const now = Date.now();
+
+    const existing = db.prepare(`SELECT address FROM channel_metadata WHERE LOWER(address) = LOWER(?)`).get(addr) as any;
+
+    if (existing) {
+      // Only fill in factory fields if empty — don't overwrite user-provided metadata
+      db.prepare(`
+        UPDATE channel_metadata SET
+          creator_address = COALESCE(creator_address, ?),
+          contract_version = COALESCE(contract_version, ?),
+          block_number = COALESCE(block_number, ?),
+          tx_hash = COALESCE(tx_hash, ?),
+          indexed_at = COALESCE(indexed_at, ?),
+          name = COALESCE(name, ?)
+        WHERE LOWER(address) = LOWER(?)
+      `).run(creator, input.contract_version, input.block_number, input.tx_hash || null, now, input.name || null, addr);
+    } else {
+      db.prepare(`
+        INSERT INTO channel_metadata
+          (address, creator_address, contract_version, block_number, tx_hash, indexed_at, name)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(addr, creator, input.contract_version, input.block_number, input.tx_hash || null, now, input.name || null);
+    }
+  }
+
+  getChannelMetadata(address: string): {
+    name?: string;
+    description?: string;
+    categories?: string;
+    image?: string;
+    coverImage?: string;
+    plans?: string;
+    tokenAccess?: string;
+  } | null {
+    const db = this.getDB();
+    const row = db.prepare(`SELECT * FROM channel_metadata WHERE LOWER(address) = LOWER(?)`).get(address) as any;
+    if (!row) return null;
+    return {
+      name: row.name || undefined,
+      description: row.description || undefined,
+      categories: row.categories || undefined,
+      image: row.image || undefined,
+      coverImage: row.cover_image || undefined,
+      plans: row.plans || undefined,
+      tokenAccess: row.token_access || undefined,
+    };
+  }
+
+  updateChannelMetadata(address: string, input: {
+    name?: string;
+    description?: string;
+    categories?: string;
+    image?: string;
+    coverImage?: string;
+    plans?: string;
+    tokenAccess?: string;
+  }, updatedBy?: string): void {
+    const db = this.getDB();
+    const existing = this.getChannelMetadata(address);
+    if (existing) {
+      const sets: string[] = [];
+      const params: any[] = [];
+      if (input.name !== undefined) { sets.push('name = ?'); params.push(input.name); }
+      if (input.description !== undefined) { sets.push('description = ?'); params.push(input.description); }
+      if (input.categories !== undefined) { sets.push('categories = ?'); params.push(input.categories); }
+      if (input.image !== undefined) { sets.push('image = ?'); params.push(input.image); }
+      if (input.coverImage !== undefined) { sets.push('cover_image = ?'); params.push(input.coverImage); }
+      if (input.plans !== undefined) { sets.push('plans = ?'); params.push(input.plans); }
+      if (input.tokenAccess !== undefined) { sets.push('token_access = ?'); params.push(input.tokenAccess); }
+      if (sets.length === 0) return;
+      sets.push("updated_at = strftime('%s','now')");
+      if (updatedBy) { sets.push('updated_by = ?'); params.push(updatedBy); }
+      params.push(address.toLowerCase());
+      db.prepare(`UPDATE channel_metadata SET ${sets.join(', ')} WHERE LOWER(address) = LOWER(?)`).run(...params);
+    } else {
+      db.prepare(`INSERT INTO channel_metadata (address, name, description, categories, image, cover_image, plans, token_access, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(address.toLowerCase(), input.name || null, input.description || null, input.categories || null, input.image || null, input.coverImage || null, input.plans || null, input.tokenAccess || null, updatedBy || null);
+    }
+  }
+
+  getCreatorEarningsLocal(creatorAddress: string): {
+    assets: Array<{
+      name: string | null;
+      content_cid: string | null;
+      asset_type: string | null;
+      price: string | null;
+      channel_address: string;
+      token_id: number;
+      serve_count: number;
+      bytes_served: number;
+      last_served_at: number | null;
+      is_pinned_locally: boolean;
+    }>;
+    totals: { assets: number; totalServes: number; totalBytesServed: number; locallyPinned: number };
+  } {
+    const db = this.getDB();
+    const rows = db.prepare(`
+      SELECT
+        c.name, c.content_cid, c.asset_type, c.price,
+        c.channel_address, c.token_id,
+        COALESCE(p.serve_count, 0) as serve_count,
+        COALESCE(p.size, 0) as bytes_served,
+        p.last_served_at,
+        CASE WHEN p.pin_status = 'complete' THEN 1 ELSE 0 END as is_pinned
+      FROM content_catalog c
+      LEFT JOIN pinned_cids p ON c.content_cid = p.cid
+      WHERE c.creator_address = ? AND c.metadata_status = 'resolved'
+      ORDER BY COALESCE(p.serve_count, 0) DESC
+    `).all(creatorAddress.toLowerCase()) as any[];
+
+    let totalServes = 0;
+    let totalBytes = 0;
+    let pinned = 0;
+
+    const assets = rows.map(r => {
+      totalServes += r.serve_count;
+      totalBytes += r.bytes_served;
+      if (r.is_pinned) pinned++;
+      return {
+        name: r.name,
+        content_cid: r.content_cid,
+        asset_type: r.asset_type,
+        price: r.price,
+        channel_address: r.channel_address,
+        token_id: r.token_id,
+        serve_count: r.serve_count,
+        bytes_served: r.bytes_served,
+        last_served_at: r.last_served_at,
+        is_pinned_locally: !!r.is_pinned,
+      };
+    });
+
+    return {
+      assets,
+      totals: { assets: assets.length, totalServes, totalBytesServed: totalBytes, locallyPinned: pinned },
+    };
+  }
+
+  getNodeSeedingStats(): {
+    totalPinnedCIDs: number;
+    totalBytesSeeded: number;
+    totalServes: number;
+    topServed: Array<{ cid: string; serve_count: number; size: number; last_served_at: number | null }>;
+  } {
+    const db = this.getDB();
+    const summary = db.prepare(`
+      SELECT
+        COUNT(*) as total,
+        COALESCE(SUM(size), 0) as bytes,
+        COALESCE(SUM(serve_count), 0) as serves
+      FROM pinned_cids WHERE pin_status = 'complete'
+    `).get() as any;
+
+    const top = db.prepare(`
+      SELECT cid, serve_count, size, last_served_at
+      FROM pinned_cids
+      WHERE pin_status = 'complete' AND serve_count > 0
+      ORDER BY serve_count DESC
+      LIMIT 20
+    `).all() as any[];
+
+    return {
+      totalPinnedCIDs: summary.total,
+      totalBytesSeeded: summary.bytes,
+      totalServes: summary.serves,
+      topServed: top,
+    };
+  }
+
+  getCatalogStats(): { total: number; resolved: number; pending: number; failed: number; byType: Record<string, number> } {
+    const db = this.getDB();
+    const total = (db.prepare('SELECT COUNT(*) as c FROM content_catalog').get() as any).c;
+    const resolved = (db.prepare("SELECT COUNT(*) as c FROM content_catalog WHERE metadata_status = 'resolved'").get() as any).c;
+    const pending = (db.prepare("SELECT COUNT(*) as c FROM content_catalog WHERE metadata_status = 'pending'").get() as any).c;
+    const failed = (db.prepare("SELECT COUNT(*) as c FROM content_catalog WHERE metadata_status = 'failed'").get() as any).c;
+    const typeRows = db.prepare("SELECT asset_type, COUNT(*) as c FROM content_catalog WHERE metadata_status = 'resolved' AND asset_type IS NOT NULL GROUP BY asset_type").all() as any[];
+    const byType: Record<string, number> = {};
+    for (const row of typeRows) {
+      byType[row.asset_type] = row.c;
+    }
+    return { total, resolved, pending, failed, byType };
+  }
+
+  getCreatorStats(creatorAddress: string): {
+    totalAssets: number;
+    byType: Record<string, number>;
+    locallyPinned: number;
+    totalServes: number;
+    totalBytesServed: number;
+    assets: Array<{
+      name: string | null;
+      content_cid: string | null;
+      asset_type: string | null;
+      channel_address: string;
+      token_id: number;
+      serve_count: number;
+      size: number;
+      last_served_at: number | null;
+    }>;
+  } {
+    const db = this.getDB();
+    const addr = creatorAddress.toLowerCase();
+
+    const assets = db.prepare(`
+      SELECT c.name, c.content_cid, c.asset_type, c.channel_address, c.token_id,
+             COALESCE(p.serve_count, 0) as serve_count,
+             COALESCE(p.size, 0) as size,
+             p.last_served_at
+      FROM content_catalog c
+      LEFT JOIN pinned_cids p ON c.content_cid = p.cid
+      WHERE LOWER(c.creator_address) = ?
+        AND c.metadata_status = 'resolved'
+      ORDER BY COALESCE(p.serve_count, 0) DESC
+    `).all(addr) as any[];
+
+    const byType: Record<string, number> = {};
+    let locallyPinned = 0;
+    let totalServes = 0;
+    let totalBytesServed = 0;
+
+    for (const a of assets) {
+      const t = a.asset_type || 'unknown';
+      byType[t] = (byType[t] || 0) + 1;
+      if (a.serve_count > 0) locallyPinned++;
+      totalServes += a.serve_count;
+      totalBytesServed += a.size * a.serve_count;
+    }
+
+    return {
+      totalAssets: assets.length,
+      byType,
+      locallyPinned,
+      totalServes,
+      totalBytesServed,
+      assets,
+    };
+  }
+
+  // ── Content Hash Registry (perceptual fingerprinting) ───────────────────
+
+  insertContentHash(record: {
+    phash: string;
+    algorithm?: string;
+    token_id?: string;
+    channel?: string;
+    creator?: string;
+    content_type?: string;
+    metadata_cid?: string;
+    source?: string;
+  }): number {
+    const db = this.getDB();
+    const result = db.prepare(`
+      INSERT INTO content_hashes (phash, algorithm, token_id, channel, creator, content_type, metadata_cid, source)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      record.phash,
+      record.algorithm || 'phash',
+      record.token_id || null,
+      record.channel || null,
+      record.creator ? record.creator.toLowerCase() : null,
+      record.content_type || null,
+      record.metadata_cid || null,
+      record.source || 'local',
+    );
+    return result.lastInsertRowid as number;
+  }
+
+  findSimilarHashes(phash: string, algorithm: string = 'phash'): Array<{
+    id: number;
+    phash: string;
+    token_id: string | null;
+    channel: string | null;
+    creator: string | null;
+    content_type: string | null;
+    created_at: string;
+    source: string;
+  }> {
+    const db = this.getDB();
+    return db.prepare(`
+      SELECT id, phash, token_id, channel, creator, content_type, created_at, source
+      FROM content_hashes
+      WHERE algorithm = ?
+      ORDER BY created_at DESC
+    `).all(algorithm) as any[];
+  }
+
+  getHashesByCreator(creator: string): Array<{
+    id: number;
+    phash: string;
+    algorithm: string;
+    token_id: string | null;
+    channel: string | null;
+    content_type: string | null;
+    created_at: string;
+  }> {
+    const db = this.getDB();
+    return db.prepare(`
+      SELECT id, phash, algorithm, token_id, channel, content_type, created_at
+      FROM content_hashes
+      WHERE creator = ?
+      ORDER BY created_at DESC
+    `).all(creator.toLowerCase()) as any[];
+  }
+
+  getHashByTokenId(tokenId: string): {
+    id: number;
+    phash: string;
+    algorithm: string;
+    channel: string | null;
+    creator: string | null;
+    content_type: string | null;
+    created_at: string;
+    source: string;
+  } | undefined {
+    const db = this.getDB();
+    return db.prepare(`
+      SELECT id, phash, algorithm, channel, creator, content_type, created_at, source
+      FROM content_hashes
+      WHERE token_id = ?
+    `).get(tokenId) as any;
+  }
+
+  getContentHashStats(): { total: number; byAlgorithm: Record<string, number>; bySource: Record<string, number> } {
+    const db = this.getDB();
+    const total = (db.prepare('SELECT COUNT(*) as c FROM content_hashes').get() as any).c;
+    const algoRows = db.prepare('SELECT algorithm, COUNT(*) as c FROM content_hashes GROUP BY algorithm').all() as any[];
+    const sourceRows = db.prepare('SELECT source, COUNT(*) as c FROM content_hashes GROUP BY source').all() as any[];
+    const byAlgorithm: Record<string, number> = {};
+    const bySource: Record<string, number> = {};
+    for (const r of algoRows) byAlgorithm[r.algorithm] = r.c;
+    for (const r of sourceRows) bySource[r.source] = r.c;
+    return { total, byAlgorithm, bySource };
+  }
+
+  // ── Publish Drafts (queue / sign-later) ─────────────────────────────
+
+  insertDraft(record: {
+    wallet_address: string;
+    title: string;
+    description?: string;
+    category?: string;
+    file_name?: string;
+    file_size?: number;
+    mime_type?: string;
+    asset_cid: string;
+    metadata_cid: string;
+    encrypt_hash: string;
+    channel: string;
+    price?: string;
+    currency_address?: string;
+    currency_symbol?: string;
+    copies?: number;
+    access_method?: string;
+    reseller_cut?: number;
+    royalty_partners?: string;
+    thumbnail_cid?: string;
+    adult?: boolean;
+    steps?: string;
+  }): number {
+    const db = this.getDB();
+    const result = db.prepare(`
+      INSERT INTO publish_drafts (
+        wallet_address, title, description, category, file_name, file_size, mime_type,
+        asset_cid, metadata_cid, encrypt_hash, channel, price, currency_address,
+        currency_symbol, copies, access_method, reseller_cut, royalty_partners,
+        thumbnail_cid, adult, steps
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      record.wallet_address.toLowerCase(),
+      record.title,
+      record.description || null,
+      record.category || null,
+      record.file_name || null,
+      record.file_size || null,
+      record.mime_type || null,
+      record.asset_cid,
+      record.metadata_cid,
+      record.encrypt_hash,
+      record.channel,
+      record.price || null,
+      record.currency_address || null,
+      record.currency_symbol || null,
+      record.copies || 1,
+      record.access_method || 'buy_once',
+      record.reseller_cut || 0,
+      record.royalty_partners || null,
+      record.thumbnail_cid || null,
+      record.adult ? 1 : 0,
+      record.steps || null,
+    );
+    return result.lastInsertRowid as number;
+  }
+
+  getDraftsByWallet(walletAddress: string): any[] {
+    const db = this.getDB();
+    return db.prepare(`
+      SELECT * FROM publish_drafts
+      WHERE wallet_address = ?
+      ORDER BY created_at DESC
+    `).all(walletAddress.toLowerCase());
+  }
+
+  getDraftById(id: number, walletAddress: string): any | undefined {
+    const db = this.getDB();
+    return db.prepare(`
+      SELECT * FROM publish_drafts
+      WHERE id = ? AND wallet_address = ?
+    `).get(id, walletAddress.toLowerCase());
+  }
+
+  updateDraftStatus(id: number, walletAddress: string, status: string): boolean {
+    const db = this.getDB();
+    const result = db.prepare(`
+      UPDATE publish_drafts
+      SET status = ?, updated_at = datetime('now')
+      WHERE id = ? AND wallet_address = ?
+    `).run(status, id, walletAddress.toLowerCase());
+    return result.changes > 0;
+  }
+
+  deleteDraft(id: number, walletAddress: string): boolean {
+    const db = this.getDB();
+    const result = db.prepare(`
+      DELETE FROM publish_drafts
+      WHERE id = ? AND wallet_address = ?
+    `).run(id, walletAddress.toLowerCase());
+    return result.changes > 0;
+  }
+
+  getDraftCount(walletAddress: string): number {
+    const db = this.getDB();
+    const row = db.prepare(`
+      SELECT COUNT(*) as c FROM publish_drafts
+      WHERE wallet_address = ? AND status IN ('ready', 'processing')
+    `).get(walletAddress.toLowerCase()) as any;
+    return row?.c || 0;
+  }
+
+  // ============================================================================
+  // Agent Audit Log Operations (AI action tracking — separate from API audit_logs)
+  // ============================================================================
+
+  insertAgentAuditLog(
+    agentId: string,
+    action: string,
+    detail?: Record<string, unknown>,
+    source?: string,
+    sessionKey?: string
+  ): void {
+    const db = this.getDB();
+    db.prepare(`
+      INSERT INTO agent_audit_log (agent_id, action, detail, source, session_key)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(
+      agentId,
+      action,
+      detail ? JSON.stringify(detail) : null,
+      source || null,
+      sessionKey || null
+    );
+  }
+
+  getAgentAuditLogs(options: {
+    agentId?: string;
+    action?: string;
+    limit?: number;
+    offset?: number;
+  } = {}): Array<Record<string, unknown>> {
+    const db = this.getDB();
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+
+    if (options.agentId) {
+      conditions.push('agent_id = ?');
+      params.push(options.agentId);
+    }
+    if (options.action) {
+      conditions.push('action = ?');
+      params.push(options.action);
+    }
+
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    const limit = options.limit || 100;
+    const offset = options.offset || 0;
+
+    return db.prepare(`
+      SELECT * FROM agent_audit_log
+      ${where}
+      ORDER BY timestamp DESC
+      LIMIT ? OFFSET ?
+    `).all(...params, limit, offset) as Array<Record<string, unknown>>;
+  }
+
+  // ============================================================================
+  // Installed Skills Operations (purchased skill tracking)
+  // ============================================================================
+
+  insertInstalledSkill(data: {
+    walletAddress: string;
+    skillId: string;
+    kid: string;
+    contentHash: string;
+    name?: string;
+    description?: string;
+    authority?: string;
+    chainId?: number;
+  }): void {
+    const db = this.getDB();
+    db.prepare(`
+      INSERT OR REPLACE INTO installed_skills
+        (wallet_address, skill_id, kid, content_hash, name, description, authority, chain_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      data.walletAddress.toLowerCase(),
+      data.skillId,
+      data.kid,
+      data.contentHash,
+      data.name || null,
+      data.description || null,
+      data.authority || null,
+      data.chainId || 8453
+    );
+  }
+
+  getInstalledSkill(walletAddress: string, skillId: string): Record<string, unknown> | null {
+    const db = this.getDB();
+    const row = db.prepare(
+      'SELECT * FROM installed_skills WHERE wallet_address = ? AND skill_id = ?'
+    ).get(walletAddress.toLowerCase(), skillId) as Record<string, unknown> | undefined;
+    return row ?? null;
+  }
+
+  getInstalledSkills(walletAddress: string): Array<Record<string, unknown>> {
+    const db = this.getDB();
+    return db.prepare(
+      'SELECT * FROM installed_skills WHERE wallet_address = ? ORDER BY installed_at DESC'
+    ).all(walletAddress.toLowerCase()) as Array<Record<string, unknown>>;
+  }
+
+  updateSkillVerification(walletAddress: string, skillId: string): void {
+    const db = this.getDB();
+    db.prepare(
+      `UPDATE installed_skills SET last_verified = datetime('now') WHERE wallet_address = ? AND skill_id = ?`
+    ).run(walletAddress.toLowerCase(), skillId);
+  }
+
+  deleteInstalledSkill(walletAddress: string, skillId: string): boolean {
+    const db = this.getDB();
+    const result = db.prepare(
+      'DELETE FROM installed_skills WHERE wallet_address = ? AND skill_id = ?'
+    ).run(walletAddress.toLowerCase(), skillId);
+    return result.changes > 0;
+  }
+
+  /**
+   * Remove agent audit log entries older than retentionDays.
+   * Returns number of rows deleted.
+   */
+  cleanupAgentAuditLogs(retentionDays = 30): number {
+    const db = this.getDB();
+    const result = db.prepare(`
+      DELETE FROM agent_audit_log
+      WHERE timestamp < datetime('now', '-' || ? || ' days')
+    `).run(retentionDays);
+    return result.changes;
   }
 }

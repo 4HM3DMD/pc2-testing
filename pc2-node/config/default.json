@@ -70,5 +70,44 @@
       "max_download_mbps": "unlimited",
       "max_connections": 100
     }
+  },
+  "seeding": {
+    "enabled": true,
+    "auto_pin_purchases": true,
+    "disk_quota_percent": 99,
+    "min_free_bytes": 2147483648,
+    "max_concurrent_pins": 3,
+    "max_upload_mbps": 0,
+    "announce_hot_interval_hours": 2,
+    "announce_warm_interval_hours": 6,
+    "announce_cold_interval_hours": 12
+  },
+  "blockchain": {
+    "chain_id": 8453,
+    "chain_name": "base",
+    "rpc_urls": [
+      "https://mainnet.base.org",
+      "https://base.llamarpc.com",
+      "https://base-rpc.publicnode.com",
+      "https://1rpc.io/base",
+      "https://base.meowrpc.com"
+    ]
+  },
+  "content_indexer": {
+    "enabled": true,
+    "scan_interval_minutes": 5,
+    "rpc_urls": ["https://mainnet.base.org", "https://base.llamarpc.com", "https://base-rpc.publicnode.com", "https://1rpc.io/base", "https://base.meowrpc.com"],
+    "max_blocks_per_scan": 10000,
+    "metadata_fetch_concurrency": 3,
+    "metadata_gateway_urls": ["https://ipfs.ela.city/ipfs/", "https://dweb.link/ipfs/", "https://cloudflare-ipfs.com/ipfs/"],
+    "contracts": {
+      "v3": {
+        "channel_factory": "0xE1365ed47353De2F8A6a69E271e36650A9EE368F",
+        "central_storage": "0x0C1EeA2A3361B80AC0e42179335dB536A951760b",
+        "authority_gateway": "0x09dBe796f40ECEffEAccf243c3d758C4c1d8D87D",
+        "event_hub": "0x5a694A6d988354dca491fe0F6db7a6ef46b656c2",
+        "from_block": 43892000
+      }
+    }
   }
 }

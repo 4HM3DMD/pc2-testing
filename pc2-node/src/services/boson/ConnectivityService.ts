@@ -20,6 +20,8 @@ import { execSync } from 'child_process';
 import net, { type Server, type Socket } from 'net';
 import https from 'https';
 import { request as httpRequest } from 'http';
+import { readFileSync, writeFileSync, existsSync } from 'fs';
+import path from 'path';
 
 export interface SuperNode {
   id: string;
@@ -27,6 +29,8 @@ export interface SuperNode {
   port: number;
   proxyPort: number;
   gatewayUrl: string;
+  name?: string;
+  region?: string;
 }
 
 export interface ConnectivityConfig {
@@ -60,7 +64,7 @@ const DEFAULT_SUPER_NODES: SuperNode[] = [
   },
   // Contabo VPS - secondary node for failover
   {
-    id: 'CONTABO_NODE_01',
+    id: 'EbfCHQUfwawec8Pyz9vdYTXJRoR1GpjNPgLc3vAhAoam',
     address: '38.242.211.112',
     port: 39001,
     proxyPort: 8090,
@@ -105,23 +109,91 @@ function httpsGetJson<T>(url: string, timeoutMs = 5000): Promise<T> {
   });
 }
 
+// Persistent supernode cache file path (set by init)
+let supernodeCachePath: string | null = null;
+
+export function initSupernodeCache(dataDir: string): void {
+  supernodeCachePath = path.join(dataDir, 'supernodes.json');
+}
+
+function loadPersistedSupernodes(): SuperNode[] {
+  if (!supernodeCachePath || !existsSync(supernodeCachePath)) return [];
+  try {
+    const raw = readFileSync(supernodeCachePath, 'utf8');
+    const data = JSON.parse(raw);
+    if (Array.isArray(data) && data.length > 0) {
+      return data.filter((n: SuperNode) => n.id && n.address && n.gatewayUrl);
+    }
+  } catch {
+    // Corrupt file, ignore
+  }
+  return [];
+}
+
+function persistSupernodes(nodes: SuperNode[]): void {
+  if (!supernodeCachePath) return;
+  try {
+    writeFileSync(supernodeCachePath, JSON.stringify(nodes, null, 2));
+  } catch {
+    // Non-critical
+  }
+}
+
+/**
+ * Merge supernode lists by id, deduplicating and preferring newer data.
+ */
+function mergeSupernodeLists(...lists: SuperNode[][]): SuperNode[] {
+  const map = new Map<string, SuperNode>();
+  for (const list of lists) {
+    for (const node of list) {
+      if (!node.id) continue;
+      if (!map.has(node.id)) {
+        map.set(node.id, { ...node });
+      }
+    }
+  }
+  return Array.from(map.values());
+}
+
 export async function fetchSuperNodes(): Promise<SuperNode[]> {
   if (cachedSuperNodes && Date.now() - cacheTimestamp < CACHE_TTL_MS) {
     return cachedSuperNodes;
   }
-  
-  for (const url of SUPERNODE_DISCOVERY_URLS) {
-    try {
+
+  // Gather from all discovery endpoints in parallel, merge results
+  const fetchResults = await Promise.allSettled(
+    SUPERNODE_DISCOVERY_URLS.map(async (url) => {
       const data = await httpsGetJson<{ supernodes: SuperNode[] }>(url);
-      if (data.supernodes && data.supernodes.length > 0) {
-        cachedSuperNodes = data.supernodes;
-        cacheTimestamp = Date.now();
-        logger.info(`[Connectivity] Discovered ${data.supernodes.length} supernodes from ${url}`);
-        return data.supernodes;
-      }
-    } catch (error) {
-      logger.debug(`[Connectivity] Failed to fetch supernodes from ${url}: ${error}`);
+      return data.supernodes || [];
+    })
+  );
+
+  const discoveredLists: SuperNode[][] = [];
+  for (const result of fetchResults) {
+    if (result.status === 'fulfilled' && result.value.length > 0) {
+      discoveredLists.push(result.value);
     }
+  }
+
+  // Load persisted supernodes from disk as a seed
+  const persisted = loadPersistedSupernodes();
+
+  if (discoveredLists.length > 0) {
+    const merged = mergeSupernodeLists(DEFAULT_SUPER_NODES, persisted, ...discoveredLists);
+    cachedSuperNodes = merged;
+    cacheTimestamp = Date.now();
+    persistSupernodes(merged);
+    logger.info(`[Connectivity] Discovered ${merged.length} supernodes (from ${discoveredLists.length} endpoints + defaults + disk)`);
+    return merged;
+  }
+
+  // No endpoints reachable — use persisted + defaults
+  if (persisted.length > 0) {
+    const merged = mergeSupernodeLists(DEFAULT_SUPER_NODES, persisted);
+    cachedSuperNodes = merged;
+    cacheTimestamp = Date.now();
+    logger.info(`[Connectivity] Using ${merged.length} supernodes from disk cache + defaults`);
+    return merged;
   }
   
   logger.info('[Connectivity] Using default supernode list');
@@ -464,6 +536,12 @@ export class ConnectivityService {
     logger.warn('[Connectivity] VLESS Reality tunnel down');
     this.status.connected = false;
     this.status.natType = 'unknown';
+
+    // Clear provision caches so failover re-provisions on a different supernode
+    this.wireGuardService?.clearProvisionCache();
+    this.amneziaWGService?.clearProvisionCache();
+    this.vlessRealityService?.clearProvisionCache();
+
     try { this.vlessRealityService?.disconnect(); } catch {}
     this.fallbackToActiveProxy();
     this.scheduleWireGuardRetry();
@@ -1106,13 +1184,19 @@ export class ConnectivityService {
         this.wgBlockedByDPI = false;
 
         if (this.vlessRealityService?.isConnected()) {
-          this.vlessRealityService.disconnect().catch(() => {});
+          this.vlessRealityService.disconnect().catch((err) => {
+            logger.debug('VLESS disconnect during reconnect failed', { error: err?.message });
+          });
         }
         if (this.amneziaWGService?.isConnected()) {
-          this.amneziaWGService.disconnect().catch(() => {});
+          this.amneziaWGService.disconnect().catch((err) => {
+            logger.debug('AmneziaWG disconnect during reconnect failed', { error: err?.message });
+          });
           this.handleAmneziaWGDown();
         } else if (this.wireGuardService?.isConnected()) {
-          this.wireGuardService.disconnect().catch(() => {});
+          this.wireGuardService.disconnect().catch((err) => {
+            logger.debug('WireGuard disconnect during reconnect failed', { error: err?.message });
+          });
           this.handleWireGuardDown();
         } else if (this.status.connected) {
           this.status.connected = false;
@@ -1231,6 +1315,11 @@ export class ConnectivityService {
     this.status.natType = 'unknown';
     this.wgBlockedByDPI = true;
 
+    // Clear provision caches so failover re-provisions on a different supernode
+    this.wireGuardService?.clearProvisionCache();
+    this.amneziaWGService?.clearProvisionCache();
+    this.vlessRealityService?.clearProvisionCache();
+
     // Cascade: AWG > VLESS Reality > ActiveProxy
     if (this.amneziaWGService && this.amneziaWGService.isAvailable()) {
       this.connectViaAmneziaWG().then((ok) => {
@@ -1263,6 +1352,11 @@ export class ConnectivityService {
     logger.warn('⚠️ AmneziaWG stealth tunnel lost');
     this.status.connected = false;
     this.status.natType = 'unknown';
+
+    // Clear provision caches so failover re-provisions on a different supernode
+    this.wireGuardService?.clearProvisionCache();
+    this.amneziaWGService?.clearProvisionCache();
+    this.vlessRealityService?.clearProvisionCache();
 
     // Try VLESS Reality chaining before falling to ActiveProxy
     if (this.vlessRealityService?.isAvailable() && this.amneziaWGService?.isAvailable()) {

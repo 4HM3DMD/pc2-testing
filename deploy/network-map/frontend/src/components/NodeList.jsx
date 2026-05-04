@@ -12,19 +12,19 @@ function NodeList({ nodes }) {
   const filteredNodes = nodes.filter(node => {
     if (filter === 'all') return true;
     if (filter === 'online') return node.status === 'online';
-    if (filter === 'offline') return node.status === 'offline' || node.status === 'stale';
+    if (filter === 'offline') return node.status === 'offline';
     return true;
   });
   
   // Sort nodes
   const sortedNodes = [...filteredNodes].sort((a, b) => {
     if (sortBy === 'status') {
-      const order = { online: 0, offline: 1, stale: 2, unknown: 3 };
-      return (order[a.status] || 3) - (order[b.status] || 3);
+      const order = { online: 0, offline: 1, unknown: 2 };
+      return (order[a.status] || 2) - (order[b.status] || 2);
     }
     if (sortBy === 'activity') {
-      const order = { 'always-on': 0, intermittent: 1, occasional: 2, inactive: 3 };
-      return (order[a.activityType] || 3) - (order[b.activityType] || 3);
+      const order = { active: 0, occasional: 1, idle: 2 };
+      return (order[a.activityType] || 2) - (order[b.activityType] || 2);
     }
     return 0;
   });
@@ -113,17 +113,15 @@ function formatStatus(status) {
   switch (status) {
     case 'online': return 'Online';
     case 'offline': return 'Offline';
-    case 'stale': return 'Stale';
     default: return 'Unknown';
   }
 }
 
 function formatActivityType(type) {
   switch (type) {
-    case 'always-on': return 'Always On';
-    case 'intermittent': return 'Intermittent';
+    case 'active': return 'Active';
     case 'occasional': return 'Occasional';
-    case 'inactive': return 'Inactive';
+    case 'idle': return 'Idle';
     default: return 'Unknown';
   }
 }

@@ -1,6 +1,6 @@
 /**
  * Boson Service
- * 
+ *
  * Main orchestration service for PC2 node identity and connectivity.
  * Integrates:
  * - IdentityService: Node identity management
@@ -10,380 +10,449 @@
 
 import { IdentityService, IdentityConfig } from './IdentityService.js';
 import { UsernameService, UsernameConfig } from './UsernameService.js';
-import { ConnectivityService, ConnectivityConfig, ConnectionStatus } from './ConnectivityService.js';
+import { ConnectivityService, ConnectivityConfig, ConnectionStatus, initSupernodeCache } from './ConnectivityService.js';
 import { WireGuardService, type WireGuardStatus } from '../wireguard/WireGuardService.js';
 import { AmneziaWGService, type AmneziaWGStatus } from '../wireguard/AmneziaWGService.js';
 import { VLESSRealityService, type VLESSRealityStatus } from '../vless/VLESSRealityService.js';
+import { GatewayTokenStore } from '../gateway/GatewayTokenStore.js';
 import { logger } from '../../utils/logger.js';
+import { ensureTransportBinaries } from '../../utils/binary-manager.js';
 
 export interface BosonConfig {
-  dataDir: string;
-  gatewayUrl?: string;
-  publicDomain?: string;
-  localPort?: number;
-  autoConnect?: boolean;
-  stealthMode?: boolean;
-  superNodes?: ConnectivityConfig['superNodes'];
+    dataDir: string;
+    gatewayUrl?: string;
+    publicDomain?: string;
+    localPort?: number;
+    autoConnect?: boolean;
+    stealthMode?: boolean;
+    superNodes?: ConnectivityConfig['superNodes'];
 }
 
 export interface BosonStatus {
-  initialized: boolean;
-  identity: {
-    nodeId: string | null;
-    did: string | null;
-    isNew: boolean;
-  };
-  username: {
-    registered: boolean;
-    username: string | null;
-    publicUrl: string | null;
-  };
-  connectivity: ConnectionStatus;
-  wireguard: WireGuardStatus | null;
-  amneziaWG: AmneziaWGStatus | null;
-  vlessReality: VLESSRealityStatus | null;
+    initialized: boolean;
+    identity: {
+        nodeId: string | null;
+        did: string | null;
+        isNew: boolean;
+    };
+    username: {
+        registered: boolean;
+        username: string | null;
+        publicUrl: string | null;
+    };
+    connectivity: ConnectionStatus;
+    wireguard: WireGuardStatus | null;
+    amneziaWG: AmneziaWGStatus | null;
+    vlessReality: VLESSRealityStatus | null;
 }
 
 export class BosonService {
-  private config: BosonConfig;
-  private identityService: IdentityService;
-  private usernameService: UsernameService;
-  private connectivityService: ConnectivityService;
-  private wireGuardService: WireGuardService | null;
-  private amneziaWGService: AmneziaWGService | null;
-  private vlessRealityService: VLESSRealityService | null;
-  private initialized: boolean = false;
-  private firstRunMnemonic: string | null = null;
+    private config: BosonConfig;
+    private identityService: IdentityService;
+    private usernameService: UsernameService;
+    private connectivityService: ConnectivityService;
+    private wireGuardService: WireGuardService | null;
+    private amneziaWGService: AmneziaWGService | null;
+    private vlessRealityService: VLESSRealityService | null;
+    private gatewayTokenStore: GatewayTokenStore;
+    private initialized: boolean = false;
+    private firstRunMnemonic: string | null = null;
 
-  constructor(config: BosonConfig) {
-    this.config = {
-      gatewayUrl: 'https://69.164.241.210',
-      localPort: 4200,
-      autoConnect: true,
-      ...config,
-    };
+    constructor (config: BosonConfig) {
+        this.config = {
+            gatewayUrl: 'https://69.164.241.210',
+            localPort: 4200,
+            autoConnect: true,
+            ...config,
+        };
 
-    // Initialize sub-services
-    this.identityService = new IdentityService({
-      dataDir: config.dataDir,
-      identityFile: 'identity.json',
-    });
+        // Initialize sub-services
+        this.identityService = new IdentityService({
+            dataDir: config.dataDir,
+            identityFile: 'identity.json',
+        });
 
-    this.usernameService = new UsernameService({
-      dataDir: config.dataDir,
-      gatewayUrl: this.config.gatewayUrl!,
-      publicDomain: this.config.publicDomain,
-      nodeEndpoint: `http://127.0.0.1:${this.config.localPort}`,
-    });
+        // SEC-INFRA-GW-AUTH (Wave 3): single per-node store of provisioning
+        // tokens — one per gateway, keyed by gateway base URL. Shared by every
+        // service that calls a gateway endpoint (UsernameService for the mint,
+        // WireGuard/AmneziaWG/VLESS for the use).
+        this.gatewayTokenStore = new GatewayTokenStore(config.dataDir);
 
-    this.connectivityService = new ConnectivityService({
-      superNodes: this.config.superNodes,
-      localPort: this.config.localPort,
-    });
+        const primaryGateway = this.config.gatewayUrl!;
+        const superNodeGatewayUrls = (this.config.superNodes || [])
+            .map((sn) => sn.gatewayUrl)
+            .filter((url) => url && url !== primaryGateway);
 
-    this.wireGuardService = null;
-    this.amneziaWGService = null;
-    this.vlessRealityService = null;
-  }
+        this.usernameService = new UsernameService({
+            dataDir: config.dataDir,
+            gatewayUrl: primaryGateway,
+            secondaryGatewayUrls: superNodeGatewayUrls,
+            publicDomain: this.config.publicDomain,
+            nodeEndpoint: `http://127.0.0.1:${this.config.localPort}`,
+            gatewayTokenStore: this.gatewayTokenStore,
+        });
 
-  /**
+        initSupernodeCache(config.dataDir);
+
+        this.connectivityService = new ConnectivityService({
+            superNodes: this.config.superNodes,
+            localPort: this.config.localPort,
+        });
+
+        this.wireGuardService = null;
+        this.amneziaWGService = null;
+        this.vlessRealityService = null;
+    }
+
+    /**
    * Initialize Boson service
    */
-  async initialize(): Promise<void> {
-    logger.info('🚀 Initializing Boson service...');
+    async initialize (): Promise<void> {
+        logger.info('🚀 Initializing Boson service...');
 
-    // 1. Initialize identity
-    await this.identityService.initialize();
-    
-    const nodeId = this.identityService.getNodeId();
-    if (!nodeId) {
-      throw new Error('Failed to initialize node identity');
+        // 1. Initialize identity
+        await this.identityService.initialize();
+
+        const nodeId = this.identityService.getNodeId();
+        if ( ! nodeId ) {
+            throw new Error('Failed to initialize node identity');
+        }
+
+        // Check if this is first run (new identity)
+        if ( this.identityService.isNewIdentity() ) {
+            this.firstRunMnemonic = this.identityService.getMnemonic();
+            logger.info('🆕 New node identity created');
+            logger.info('📝 IMPORTANT: Save your recovery phrase securely!');
+        }
+
+        // 2. Initialize username service with node ID
+        this.usernameService.setNodeId(nodeId);
+
+        // 3. Initialize connectivity with node ID and keys
+        this.connectivityService.setNodeId(nodeId);
+        this.connectivityService.setUsernameService(this.usernameService);
+
+        // Pass cryptographic keys for Active Proxy authentication
+        const keypair = this.identityService.getKeypair();
+        if ( keypair ) {
+            this.connectivityService.setNodeKeys(keypair.publicKey, keypair.privateKey);
+        }
+
+        // Derive secondary gateway URLs from superNodes list (excluding primary)
+        const primaryGateway = this.config.gatewayUrl!;
+        const secondaryGatewayUrls = (this.config.superNodes || [])
+            .map((sn) => sn.gatewayUrl)
+            .filter((url) => url && url !== primaryGateway);
+
+        // 3b. Ensure transport binaries are available (auto-download if missing)
+        await ensureTransportBinaries();
+
+        // 4. Initialize WireGuard (preferred NAT traversal over Boson relay)
+        this.wireGuardService = new WireGuardService({
+            dataDir: this.config.dataDir,
+            gatewayUrl: primaryGateway,
+            secondaryGatewayUrls,
+            nodeId,
+            localPort: this.config.localPort!,
+            gatewayTokenStore: this.gatewayTokenStore,
+        });
+
+        if ( this.wireGuardService.isAvailable() ) {
+            logger.info('[Boson] WireGuard tools detected -- will prefer WireGuard tunnel for NAT traversal');
+            this.connectivityService.setWireGuardService(this.wireGuardService);
+        } else {
+            logger.info('[Boson] WireGuard not installed -- will use Boson ActiveProxy for NAT traversal');
+        }
+
+        // 4b. Initialize AmneziaWG (stealth fallback transport)
+        this.amneziaWGService = new AmneziaWGService({
+            dataDir: this.config.dataDir,
+            gatewayUrl: primaryGateway,
+            secondaryGatewayUrls,
+            nodeId,
+            localPort: this.config.localPort!,
+            gatewayTokenStore: this.gatewayTokenStore,
+        });
+
+        if ( this.amneziaWGService.isAvailable() ) {
+            logger.info('[Boson] AmneziaWG stealth transport detected -- available as DPI-resistant fallback');
+            this.connectivityService.setAmneziaWGService(this.amneziaWGService);
+        }
+
+        // 4c. Initialize VLESS Reality (TCP stealth transport via sing-box)
+        this.vlessRealityService = new VLESSRealityService({
+            dataDir: this.config.dataDir,
+            gatewayUrl: primaryGateway,
+            secondaryGatewayUrls,
+            nodeId,
+            localPort: this.config.localPort!,
+            gatewayTokenStore: this.gatewayTokenStore,
+        });
+
+        if ( this.vlessRealityService.isAvailable() ) {
+            logger.info('[Boson] VLESS Reality transport detected -- available as TCP stealth fallback');
+            this.connectivityService.setVLESSRealityService(this.vlessRealityService);
+        }
+
+        // Apply stealth mode config
+        const stealthMode = this.config.stealthMode ?? false;
+        if ( stealthMode ) {
+            logger.info('[Boson] 🔒 Stealth mode enabled -- will bypass standard WireGuard');
+            this.connectivityService.setStealthMode(true);
+        }
+
+        // 5. Auto-connect if enabled
+        if ( this.config.autoConnect ) {
+            await this.connectivityService.start();
+        }
+
+        this.initialized = true;
+        logger.info('✅ Boson service initialized');
+
+        // 6. Background identity conflict check (non-blocking)
+        this.checkIdentityConflict().catch((err) => {
+            logger.debug('Identity conflict check failed (non-critical)', { error: err?.message });
+        });
     }
 
-    // Check if this is first run (new identity)
-    if (this.identityService.isNewIdentity()) {
-      this.firstRunMnemonic = this.identityService.getMnemonic();
-      logger.info('🆕 New node identity created');
-      logger.info('📝 IMPORTANT: Save your recovery phrase securely!');
+    /**
+   * Check if our registered username still points to this node on the gateway.
+   * Logs a warning if another node has claimed the same username (identity conflict).
+   * This can happen after restoring a backup while the original node is still running.
+   */
+    private async checkIdentityConflict (): Promise<void> {
+        const username = this.usernameService.getUsername();
+        const nodeId = this.identityService.getNodeId();
+        if ( !username || !nodeId ) return;
+
+        try {
+            const lookup = await this.usernameService.lookup(username);
+            if ( ! lookup ) return;
+
+            if ( lookup.nodeId !== nodeId ) {
+                logger.warn(`⚠️  IDENTITY CONFLICT: username "${username}.ela.city" is registered to node ${lookup.nodeId.substring(0, 12)}..., but this node is ${nodeId.substring(0, 12)}...`);
+                logger.warn('   Another node may be running with the same identity. Re-registering username...');
+
+                // Re-register to reclaim the username for this node
+                const result = await this.usernameService.register(username);
+                if ( result.success ) {
+                    logger.info(`✅ Username "${username}.ela.city" re-registered to this node`);
+                } else {
+                    logger.error(`❌ Failed to re-register username: ${result.error}`);
+                }
+            }
+        } catch ( error: any ) {
+            logger.debug(`[Boson] Identity conflict check skipped: ${error.message}`);
+        }
     }
 
-    // 2. Initialize username service with node ID
-    this.usernameService.setNodeId(nodeId);
-
-    // 3. Initialize connectivity with node ID and keys
-    this.connectivityService.setNodeId(nodeId);
-    this.connectivityService.setUsernameService(this.usernameService);
-    
-    // Pass cryptographic keys for Active Proxy authentication
-    const keypair = this.identityService.getKeypair();
-    if (keypair) {
-      this.connectivityService.setNodeKeys(keypair.publicKey, keypair.privateKey);
-    }
-
-    // 4. Initialize WireGuard (preferred NAT traversal over Boson relay)
-    this.wireGuardService = new WireGuardService({
-      dataDir: this.config.dataDir,
-      gatewayUrl: this.config.gatewayUrl!,
-      nodeId,
-      localPort: this.config.localPort!,
-    });
-
-    if (this.wireGuardService.isAvailable()) {
-      logger.info('[Boson] WireGuard tools detected -- will prefer WireGuard tunnel for NAT traversal');
-      this.connectivityService.setWireGuardService(this.wireGuardService);
-    } else {
-      logger.info('[Boson] WireGuard not installed -- will use Boson ActiveProxy for NAT traversal');
-    }
-
-    // 4b. Initialize AmneziaWG (stealth fallback transport)
-    this.amneziaWGService = new AmneziaWGService({
-      dataDir: this.config.dataDir,
-      gatewayUrl: this.config.gatewayUrl!,
-      nodeId,
-      localPort: this.config.localPort!,
-    });
-
-    if (this.amneziaWGService.isAvailable()) {
-      logger.info('[Boson] AmneziaWG stealth transport detected -- available as DPI-resistant fallback');
-      this.connectivityService.setAmneziaWGService(this.amneziaWGService);
-    }
-
-    // 4c. Initialize VLESS Reality (TCP stealth transport via sing-box)
-    this.vlessRealityService = new VLESSRealityService({
-      dataDir: this.config.dataDir,
-      gatewayUrl: this.config.gatewayUrl!,
-      nodeId,
-      localPort: this.config.localPort!,
-    });
-
-    if (this.vlessRealityService.isAvailable()) {
-      logger.info('[Boson] VLESS Reality transport detected -- available as TCP stealth fallback');
-      this.connectivityService.setVLESSRealityService(this.vlessRealityService);
-    }
-
-    // Apply stealth mode config
-    const stealthMode = this.config.stealthMode ?? false;
-    if (stealthMode) {
-      logger.info('[Boson] 🔒 Stealth mode enabled -- will bypass standard WireGuard');
-      this.connectivityService.setStealthMode(true);
-    }
-
-    // 5. Auto-connect if enabled
-    if (this.config.autoConnect) {
-      await this.connectivityService.start();
-    }
-
-    this.initialized = true;
-    logger.info('✅ Boson service initialized');
-  }
-
-  /**
+    /**
    * Stop Boson service
    */
-  async stop(): Promise<void> {
-    await this.connectivityService.stop();
-    if (this.amneziaWGService?.isConnected()) {
-      await this.amneziaWGService.disconnect();
+    async stop (): Promise<void> {
+        await this.connectivityService.stop();
+        if ( this.amneziaWGService?.isConnected() ) {
+            await this.amneziaWGService.disconnect();
+        }
+        if ( this.wireGuardService?.isConnected() ) {
+            await this.wireGuardService.disconnect();
+        }
+        logger.info('Boson service stopped');
     }
-    if (this.wireGuardService?.isConnected()) {
-      await this.wireGuardService.disconnect();
-    }
-    logger.info('Boson service stopped');
-  }
 
-  /**
+    /**
    * Register a username
    */
-  async registerUsername(username: string): Promise<{ success: boolean; error?: string; publicUrl?: string }> {
-    if (!this.initialized) {
-      return { success: false, error: 'Boson service not initialized' };
+    async registerUsername (username: string): Promise<{ success: boolean; error?: string; publicUrl?: string }> {
+        if ( ! this.initialized ) {
+            return { success: false, error: 'Boson service not initialized' };
+        }
+
+        const result = await this.usernameService.register(username);
+
+        if ( result.success ) {
+            // Re-register with gateway to update endpoint
+            await this.connectivityService.reconnect();
+        }
+
+        return result;
     }
 
-    const result = await this.usernameService.register(username);
-    
-    if (result.success) {
-      // Re-register with gateway to update endpoint
-      await this.connectivityService.reconnect();
-    }
-
-    return result;
-  }
-
-  /**
+    /**
    * Get full service status
    */
-  getStatus(): BosonStatus {
-    const identityInfo = this.identityService.getPublicInfo();
-    const usernameInfo = this.usernameService.getInfo();
-    const connectivityStatus = this.connectivityService.getStatus();
+    getStatus (): BosonStatus {
+        const identityInfo = this.identityService.getPublicInfo();
+        const usernameInfo = this.usernameService.getInfo();
+        const connectivityStatus = this.connectivityService.getStatus();
 
-    return {
-      initialized: this.initialized,
-      identity: {
-        nodeId: identityInfo?.nodeId || null,
-        did: identityInfo?.did || null,
-        isNew: this.identityService.isNewIdentity(),
-      },
-      username: {
-        registered: this.usernameService.hasUsername(),
-        username: usernameInfo.username,
-        publicUrl: usernameInfo.publicUrl,
-      },
-      connectivity: connectivityStatus,
-      wireguard: this.wireGuardService ? this.wireGuardService.getStatus() : null,
-      amneziaWG: this.amneziaWGService ? this.amneziaWGService.getStatus() : null,
-      vlessReality: this.vlessRealityService ? this.vlessRealityService.getStatus() : null,
-    };
-  }
+        return {
+            initialized: this.initialized,
+            identity: {
+                nodeId: identityInfo?.nodeId || null,
+                did: identityInfo?.did || null,
+                isNew: this.identityService.isNewIdentity(),
+            },
+            username: {
+                registered: this.usernameService.hasUsername(),
+                username: usernameInfo.username,
+                publicUrl: usernameInfo.publicUrl,
+            },
+            connectivity: connectivityStatus,
+            wireguard: this.wireGuardService ? this.wireGuardService.getStatus() : null,
+            amneziaWG: this.amneziaWGService ? this.amneziaWGService.getStatus() : null,
+            vlessReality: this.vlessRealityService ? this.vlessRealityService.getStatus() : null,
+        };
+    }
 
-  /**
+    /**
    * Get the recovery mnemonic (only available on first run)
    */
-  getFirstRunMnemonic(): string | null {
-    return this.firstRunMnemonic;
-  }
+    getFirstRunMnemonic (): string | null {
+        return this.firstRunMnemonic;
+    }
 
-  /**
+    /**
    * Clear mnemonic from memory (call after user has saved it)
    */
-  clearMnemonic(): void {
-    this.firstRunMnemonic = null;
-  }
+    clearMnemonic (): void {
+        this.firstRunMnemonic = null;
+    }
 
-  /**
+    /**
    * Check if this is first run
    */
-  isFirstRun(): boolean {
-    return this.identityService.isNewIdentity();
-  }
+    isFirstRun (): boolean {
+        return this.identityService.isNewIdentity();
+    }
 
-  /**
+    /**
    * Get node ID
    */
-  getNodeId(): string | null {
-    return this.identityService.getNodeId();
-  }
+    getNodeId (): string | null {
+        return this.identityService.getNodeId();
+    }
 
-  /**
+    /**
    * Get DID
    */
-  getDID(): string | null {
-    return this.identityService.getDID();
-  }
+    getDID (): string | null {
+        return this.identityService.getDID();
+    }
 
-  /**
+    /**
    * Get public URL
    */
-  getPublicUrl(): string | null {
-    return this.usernameService.getPublicUrl() || null;
-  }
+    getPublicUrl (): string | null {
+        return this.usernameService.getPublicUrl() || null;
+    }
 
-  /**
+    /**
    * Check if connected to super node
    */
-  isConnected(): boolean {
-    return this.connectivityService.isConnected();
-  }
+    isConnected (): boolean {
+        return this.connectivityService.isConnected();
+    }
 
-  /**
+    /**
    * Get identity service (for advanced use)
    */
-  getIdentityService(): IdentityService {
-    return this.identityService;
-  }
+    getIdentityService (): IdentityService {
+        return this.identityService;
+    }
 
-  /**
+    /**
    * Get username service (for advanced use)
    */
-  getUsernameService(): UsernameService {
-    return this.usernameService;
-  }
+    getUsernameService (): UsernameService {
+        return this.usernameService;
+    }
 
-  /**
+    /**
    * Get connectivity service (for advanced use)
    */
-  getConnectivityService(): ConnectivityService {
-    return this.connectivityService;
-  }
+    getConnectivityService (): ConnectivityService {
+        return this.connectivityService;
+    }
 
-  /**
+    /**
    * Encrypt and store the mnemonic using wallet signature.
    * This secures the mnemonic so user can view it later.
    * @param signature - Wallet signature for encryption
    * @param walletAddress - Wallet address used for signing
    * @returns true if successful
    */
-  encryptAndStoreMnemonic(signature: string, walletAddress: string): boolean {
+    encryptAndStoreMnemonic (signature: string, walletAddress: string): boolean {
     // First, ensure the identity service has the mnemonic
     // If firstRunMnemonic is set, we need to temporarily set it on identity
-    if (this.firstRunMnemonic && !this.identityService.getMnemonic()) {
-      // This is a workaround - in production, handle this more cleanly
-      const identity = this.identityService.getIdentity();
-      if (identity) {
-        (identity as any).mnemonic = this.firstRunMnemonic;
-      }
+        if ( this.firstRunMnemonic && !this.identityService.getMnemonic() ) {
+            // This is a workaround - in production, handle this more cleanly
+            const identity = this.identityService.getIdentity();
+            if ( identity ) {
+                (identity as any).mnemonic = this.firstRunMnemonic;
+            }
+        }
+
+        const success = this.identityService.encryptAndStoreMnemonic(signature, walletAddress);
+
+        if ( success ) {
+            // Clear our copy too
+            this.firstRunMnemonic = null;
+        }
+
+        return success;
     }
 
-    const success = this.identityService.encryptAndStoreMnemonic(signature, walletAddress);
-    
-    if (success) {
-      // Clear our copy too
-      this.firstRunMnemonic = null;
-    }
-    
-    return success;
-  }
-
-  /**
+    /**
    * Decrypt mnemonic using wallet signature.
    * User must sign the same message to decrypt.
    * @param signature - Wallet signature for decryption
    * @returns decrypted mnemonic or null
    */
-  decryptMnemonic(signature: string): string | null {
-    return this.identityService.decryptMnemonic(signature);
-  }
+    decryptMnemonic (signature: string): string | null {
+        return this.identityService.decryptMnemonic(signature);
+    }
 
-  /**
+    /**
    * Get the message that should be signed for mnemonic operations
    * @param walletAddress - Wallet address to include in message
    */
-  getMnemonicSignMessage(walletAddress: string): string {
-    return this.identityService.getMnemonicSignMessage(walletAddress);
-  }
+    getMnemonicSignMessage (walletAddress: string): string {
+        return this.identityService.getMnemonicSignMessage(walletAddress);
+    }
 
-  /**
+    /**
    * Check if mnemonic has been encrypted and stored
    */
-  hasMnemonicBackup(): boolean {
-    return this.identityService.hasMnemonicBackup();
-  }
+    hasMnemonicBackup (): boolean {
+        return this.identityService.hasMnemonicBackup();
+    }
 
-  /**
+    /**
    * Get admin wallet address
    */
-  getAdminWalletAddress(): string | null {
-    return this.identityService.getAdminWalletAddress();
-  }
+    getAdminWalletAddress (): string | null {
+        return this.identityService.getAdminWalletAddress();
+    }
 
-  /**
+    /**
    * Check if an address is the admin wallet
    */
-  isAdminWallet(address: string): boolean {
-    return this.identityService.isAdminWallet(address);
-  }
+    isAdminWallet (address: string): boolean {
+        return this.identityService.isAdminWallet(address);
+    }
 
-  /**
+    /**
    * Set admin wallet address (first login becomes admin)
    */
-  setAdminWallet(address: string): boolean {
-    return this.identityService.setAdminWallet(address);
-  }
+    setAdminWallet (address: string): boolean {
+        return this.identityService.setAdminWallet(address);
+    }
 
-  /**
+    /**
    * Check if admin wallet has been set
    */
-  hasAdminWallet(): boolean {
-    return this.identityService.hasAdminWallet();
-  }
+    hasAdminWallet (): boolean {
+        return this.identityService.hasAdminWallet();
+    }
 }

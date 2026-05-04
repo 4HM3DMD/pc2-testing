@@ -283,6 +283,40 @@ Together, they represent the full stack of digital sovereignty: own your money (
 
 ---
 
+## 6. Blind Trust → Verified Execution (The Binary Attack)
+
+### Then: You Ran Code You Couldn't Verify
+
+In the early days of computing, machines ran one program at a time. There was no need for security because there was no multitasking — only one piece of code was ever running. Then PCs arrived, and suddenly you had dozens of programs sharing the same memory, the same disk, the same network. Operating systems evolved to manage this: process isolation, memory protection, file permissions.
+
+But the fundamental trust model never changed: **you install an app, and the OS trusts it.** Your password manager and a random game both run with the same access to your system. Every virus, every trojan, every ransomware attack exploits this same flaw — a binary that was trusted too much.
+
+Supply chain attacks made it worse. SolarWinds: a compromised build pipeline pushed malware to 18,000 organizations. Log4j: a logging library became a remote code execution backdoor. XZ Utils: a trusted maintainer injected a backdoor into a compression tool used by virtually every Linux server. In each case, the code was trusted because it came from a trusted source. Nobody verified the actual binary.
+
+### The Shift: Self-Verifying Capsules + Internet OS
+
+Rong Chen saw this in 2002 and designed two complementary solutions:
+
+**AppCapsules (inside-out trust):** Each app ships with its own binary loader that checks the hash of every module before starting. If a single byte has been tampered with, the capsule refuses to run. It cryptographically verifies its own credentials. It trusts nothing — not the network, not other apps, not even the OS. This is what "zero trust" actually means.
+
+**Elastos Runtime (outside-in trust):** An Internet-scale operating system that sandboxes every capsule, never exposes secrets to any app, enforces granular permissions via capability tokens, and logs every action in an immutable audit trail. Even if a capsule is somehow compromised, the Runtime prevents it from accessing anything it shouldn't.
+
+| Blind Trust Model | Verified Execution Model |
+|---|---|
+| OS loads app and trusts it | Runtime verifies signature before loading |
+| App accesses anything it wants | App gets zero permissions by default |
+| Libraries updated without verification | Every module hash-checked at launch |
+| No record of what apps do | Immutable audit log of every action |
+| One bad app compromises everything | Sandboxed — one bad capsule can't escape |
+
+### Why This Matters Now
+
+The internet is at the same inflection point PCs hit in the 1980s. We're about to run AI agents, autonomous programs, smart contracts, and personal cloud services — all interacting, all needing access to sensitive data. Without an Internet OS to sandbox and govern them, we're back to running everything with blind trust and hoping for the best.
+
+Rong saw this two decades before it became obvious. Anders is building the Runtime now. The AI agent wave will make everyone else understand.
+
+---
+
 ## The Common Thread
 
 Every example follows the same structure:
@@ -294,11 +328,12 @@ Every example follows the same structure:
 | Slavery | Body, labor, time, output | Plantation owners | Abolition, legal personhood | People owned themselves |
 | Guilds | Trade, pricing, distribution | Guild masters | Free markets | Anyone could compete |
 | Fiat Money | Currency, savings, access | Governments | Bitcoin | People owned their money |
+| Blind Trust | Software execution, secrets | OS vendors, app stores | Elastos AppCapsules + Runtime | Code is verified, sandboxed, audited |
 | **Cloud Computing** | **Data, compute, identity, AI** | **Tech corporations** | **ElastOS** | **People own their digital life** |
 
 The pattern is always the same: **a centralized entity extracts value from individuals who produce it. The revolution happens when individuals gain the ability to own what they create.**
 
-We're living through the last row of this table right now.
+We're living through the last two rows of this table right now.
 
 ---
 

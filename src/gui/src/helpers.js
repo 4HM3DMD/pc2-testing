@@ -482,6 +482,17 @@ window.refresh_user_data = async (auth_token)=>{
 }
 
 window.update_auth_data = async (auth_token, user)=>{
+    // PC2 logout-race fix (v1.2.1): a `refresh_user_data` started before
+    // logout will land here after the user has already initiated logout
+    // (the awaited whoami resolves between localStorage.clear and page
+    // navigation). Without this guard, that late callback would re-write
+    // the auth_token we just cleared and the user would be silently
+    // auto-restored on reload. See initgui.js logout handler for the
+    // primary write blocker; this is defense in depth.
+    if (window.__pc2_logging_out) {
+        console.log('[update_auth_data] ⏭️  Skipping during logout');
+        return;
+    }
     console.log('[update_auth_data] Called with token:', auth_token ? auth_token.substring(0, 16) + '...' : 'NULL/UNDEFINED');
     console.log('[update_auth_data] User:', user ? JSON.stringify({username: user.username, wallet: user.wallet_address?.substring(0, 10)}) : 'NULL');
     window.auth_token = auth_token;
@@ -549,6 +560,13 @@ window.update_auth_data = async (auth_token, user)=>{
         console.warn('[update_auth_data] Failed to cache whoami data:', e);
     }
 
+    // Restore login_method from user object or localStorage fallback
+    if (!user.login_method) {
+        user.login_method = localStorage.getItem('pc2_login_method') || '';
+    } else {
+        localStorage.setItem('pc2_login_method', user.login_method);
+    }
+    
     // update this session's user data
     window.user = user;
     localStorage.setItem('user', JSON.stringify(to_storable_user(user)));

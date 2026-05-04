@@ -14,7 +14,6 @@ import {
 } from './database.js';
 
 const HEALTH_CHECK_TIMEOUT = 5000; // 5 seconds
-const STALE_THRESHOLD_DAYS = 7;
 
 // Known supernode/infrastructure usernames (actual supernodes only)
 // Note: 'cloud' is an internal gateway service, not a real supernode
@@ -110,7 +109,7 @@ export class DataCollector {
       
       const duration = Date.now() - startTime;
       console.log(`[Collector] Collection complete in ${duration}ms`);
-      console.log(`[Collector] Stats: ${stats.onlineNow} online, ${stats.totalActivePC2} total PC2 nodes`);
+      console.log(`[Collector] Stats: ${stats.onlineNow} online, ${stats.totalRegistered} total nodes`);
       
       return stats;
       
@@ -148,7 +147,7 @@ export class DataCollector {
           nodeType: 'supernode',
           isPC2Node: false,
           healthData: { address: supernode.address, port: supernode.proxyPort || 8090 },
-          activityType: 'always-on',
+          activityType: 'active',
           firstSeen: new Date().toISOString()
         });
         
@@ -253,9 +252,7 @@ export class DataCollector {
       return this.createNodeResult(node, nodeIdentifier, 'online', true, { health, identity }, publicUrl);
       
     } catch (error) {
-      // Determine if stale (hasn't been online in 7+ days)
-      const status = await this.isNodeStale(nodeIdentifier) ? 'stale' : 'offline';
-      return this.createNodeResult(node, nodeIdentifier, status, false, null, publicUrl);
+      return this.createNodeResult(node, nodeIdentifier, 'offline', false, null, publicUrl);
     }
   }
   
@@ -311,15 +308,6 @@ export class DataCollector {
   }
   
   /**
-   * Check if a node is stale (no activity in 7+ days)
-   */
-  async isNodeStale(nodeIdentifier) {
-    const history = getNodeActivityHistory(nodeIdentifier, STALE_THRESHOLD_DAYS * 24);
-    const onlineEvents = history.filter(h => h.status === 'online');
-    return onlineEvents.length === 0;
-  }
-  
-  /**
    * Get previous node state from database (for change detection)
    */
   async getPreviousNodeState(nodeIdentifier) {
@@ -343,6 +331,7 @@ export class DataCollector {
   
   /**
    * Calculate activity type from history
+   * Active = online >50%, Occasional = 10-50%, Idle = <10%
    */
   calculateActivityType(history) {
     if (!history || history.length === 0) return 'unknown';
@@ -350,13 +339,12 @@ export class DataCollector {
     const onlineEvents = history.filter(h => h.status === 'online');
     const totalEvents = history.length;
     
-    if (totalEvents === 0) return 'inactive';
+    if (totalEvents === 0) return 'idle';
     
     const onlineRatio = onlineEvents.length / totalEvents;
     
-    if (onlineRatio > 0.95) return 'always-on';
-    if (onlineRatio > 0.5) return 'intermittent';
+    if (onlineRatio > 0.5) return 'active';
     if (onlineRatio > 0.1) return 'occasional';
-    return 'inactive';
+    return 'idle';
   }
 }

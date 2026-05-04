@@ -1,8 +1,8 @@
 # PC2 / ElastOS — Current State
 
-**Last Updated:** March 2, 2026
-**Current Branch:** `feature/jetson-gpu-acceleration`
-**Main Branch:** `main` (v1.0.0 released)
+**Last Updated:** March 24, 2026
+**Current Branch:** `feature/lit-chipotle-migration`
+**Main Branch:** `main` (v1.1.0 released)
 
 ---
 
@@ -23,18 +23,17 @@ PC2 is a decentralized Personal Cloud node — a web-based OS (forked from Puter
 - ActiveProxy has the **old** protocol code (key format fix only)
 - Does NOT have WireGuard, Voice AI, virtual desktops, or UI overhaul
 
-### `feature/jetson-gpu-acceleration` — ACTIVE DEVELOPMENT
-- **55+ commits ahead of main**
+### `feature/lit-chipotle-migration` — ACTIVE DEVELOPMENT
 - Contains the following major workstreams:
-  1. **ActiveProxy Protocol Rewrite** — complete, tested on 2 Jetson devices
-  2. **Jetson GPU Acceleration** — Ollama + CUDA working on Jetson Orin Nano
-  3. **WireGuard Cross-Platform** — macOS + Linux support with auto-install
-  4. **Voice AI Pipeline** — Whisper STT + Piper TTS with Settings UI
-  5. **Ubuntu/macOS Desktop UI** — top bar, dock, virtual desktops, Mission Control
-  6. **Ollama Improvements** — tool fallback, model library, download progress
-  7. **Mobile UI Fixes** — taskbar z-index, responsive layouts
-- **Status:** Ready for merge to main pending Sash's Jetson validation
-- **Tested on:** macOS (dev), Jetson Orin Nano (EverlastingOS + Anders/alm.ela.city), macOS local install
+  1. **Elacity Creator App** — full publishing pipeline with metadata envelope, IPFS upload, encryption, minting
+  2. **Elacity Market App** — Apple-grade marketplace redesign, earnings page, channel management
+  3. **AI Training Licensing (Phase C2)** — creators can allow AI training on their content via metadata
+  4. **dDRM Integration** — .ddrm capsule format, viewer app, media runtime, Lit Protocol encryption
+  5. **Dual-Wallet Ownership** — library management, purchase flow, playback authorization
+  6. **WASM/Rust Crypto** — speed-tuned encryption pipeline with panic=abort, smart build
+  7. **Boson P2P + Transport Cascade** — WireGuard > AmneziaWG > VLESS Reality > ActiveProxy
+- **Status:** Active development, Creator + Market apps functional
+- **Tested on:** macOS (dev), test9.ela.city
 
 ---
 
@@ -91,8 +90,8 @@ Once confirmed:
 ## Pending Work (Ordered by Priority)
 
 ### Critical
-1. **Merge to main + v1.1.0 release** — blocked on Sash's Jetson validation
-2. **Apple code signing** — $99/year, removes `xattr -cr` requirement for Mac launcher
+1. **Apple code signing** — $99/year, removes `xattr -cr` requirement for Mac launcher
+2. **Merge dDRM marketplace branch to main** — when Creator + Market apps are production-ready
 
 ### High
 3. **Pre-built Jetson/Pi images** — zero-terminal hardware install
@@ -102,12 +101,12 @@ Once confirmed:
 ### Medium
 6. **Windows native installer** — Electron already supports Windows builds
 7. **Linux .deb package** — currently script-only install
-8. **Upload updated soul.md to Contabo** — Flint knowledge base is written but not deployed
+8. **Time-limited / Pay-per-use access tokens** — future license types beyond perpetual ownership
+9. **License enforcement dApps** — commercial use, modification, attribution toggles (UI ready as hidden defaults)
 
 ### Future
-9. **Boson V2 integration** — waiting on Boson team
-10. **P2P messaging between nodes**
-11. **dDRM marketplace**
+10. **Boson V2 integration** — waiting on Boson team
+11. **P2P messaging between nodes**
 12. **Mobile companion app**
 
 ---

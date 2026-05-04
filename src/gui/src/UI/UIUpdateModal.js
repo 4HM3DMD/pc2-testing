@@ -245,28 +245,125 @@ function showUpdateModal(versionInfo) {
                         white-space: pre-wrap;
                     ">${releaseNotes}</div>
                     
-                    <div class="update-progress" style="display: none; margin-bottom: 16px;">
-                        <div style="
-                            display: flex;
-                            align-items: center;
-                            justify-content: center;
-                            gap: 12px;
-                            padding: 16px;
-                            background: #f0f7ff;
-                            border-radius: 8px;
+                    <div class="update-progress" style="display: none; margin-bottom: 16px; text-align: left;">
+                        <div class="update-progress-bar-track" style="
+                            width: 100%;
+                            height: 6px;
+                            background: #e5e7eb;
+                            border-radius: 3px;
+                            overflow: hidden;
+                            margin-bottom: 14px;
                         ">
-                            <div class="update-spinner" style="
-                                width: 24px;
-                                height: 24px;
-                                border: 3px solid #e0e0e0;
-                                border-top-color: #4a90d9;
-                                border-radius: 50%;
-                                animation: spin 1s linear infinite;
+                            <div class="update-progress-bar-fill" style="
+                                height: 100%;
+                                width: 0%;
+                                background: linear-gradient(90deg, #4a90d9 0%, #357abd 100%);
+                                border-radius: 3px;
+                                transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1);
                             "></div>
-                            <span class="update-progress-text" style="color: #357abd; font-weight: 500;">
-                                Starting update...
-                            </span>
                         </div>
+
+                        <div class="update-progress-text" style="
+                            font-size: 14px;
+                            color: #111827;
+                            font-weight: 500;
+                            margin-bottom: 4px;
+                            min-height: 20px;
+                        ">Starting update&hellip;</div>
+
+                        <div class="update-progress-elapsed" style="
+                            font-size: 11px;
+                            color: #9ca3af;
+                            margin-bottom: 14px;
+                            font-variant-numeric: tabular-nums;
+                        ">Elapsed: 0s</div>
+
+                        <div class="update-step-list" style="
+                            background: #f9fafb;
+                            border: 1px solid #f3f4f6;
+                            border-radius: 8px;
+                            padding: 10px 14px;
+                            margin-bottom: 14px;
+                        ">
+                            <div class="update-step-item" data-step="fetch" style="display: flex; align-items: center; gap: 10px; padding: 5px 0; opacity: 0.4; font-size: 13px; color: #4b5563; transition: opacity 0.3s ease;">
+                                <span class="update-step-icon" style="width: 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 12px; color: #9ca3af;">&#9675;</span>
+                                <span class="update-step-label">Downloading update</span>
+                            </div>
+                            <div class="update-step-item" data-step="install-root" style="display: flex; align-items: center; gap: 10px; padding: 5px 0; opacity: 0.4; font-size: 13px; color: #4b5563; transition: opacity 0.3s ease;">
+                                <span class="update-step-icon" style="width: 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 12px; color: #9ca3af;">&#9675;</span>
+                                <span class="update-step-label">Installing dependencies</span>
+                            </div>
+                            <div class="update-step-item" data-step="install-node" style="display: flex; align-items: center; gap: 10px; padding: 5px 0; opacity: 0.4; font-size: 13px; color: #4b5563; transition: opacity 0.3s ease;">
+                                <span class="update-step-icon" style="width: 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 12px; color: #9ca3af;">&#9675;</span>
+                                <span class="update-step-label">Installing PC2 components</span>
+                            </div>
+                            <div class="update-step-item" data-step="build" style="display: flex; align-items: center; gap: 10px; padding: 5px 0; opacity: 0.4; font-size: 13px; color: #4b5563; transition: opacity 0.3s ease;">
+                                <span class="update-step-icon" style="width: 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 12px; color: #9ca3af;">&#9675;</span>
+                                <span class="update-step-label">Building application</span>
+                            </div>
+                            <div class="update-step-item" data-step="restart" style="display: flex; align-items: center; gap: 10px; padding: 5px 0; opacity: 0.4; font-size: 13px; color: #4b5563; transition: opacity 0.3s ease;">
+                                <span class="update-step-icon" style="width: 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 12px; color: #9ca3af;">&#9675;</span>
+                                <span class="update-step-label">Restarting server</span>
+                            </div>
+                            <div class="update-step-item" data-step="reconnect" style="display: flex; align-items: center; gap: 10px; padding: 5px 0; opacity: 0.4; font-size: 13px; color: #4b5563; transition: opacity 0.3s ease;">
+                                <span class="update-step-icon" style="width: 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 12px; color: #9ca3af;">&#9675;</span>
+                                <span class="update-step-label">Reconnecting</span>
+                            </div>
+                        </div>
+
+                        <div class="update-log-section" style="margin-bottom: 12px;">
+                            <button class="update-log-toggle" type="button" style="
+                                display: flex;
+                                align-items: center;
+                                gap: 8px;
+                                width: 100%;
+                                background: transparent;
+                                border: none;
+                                padding: 6px 0;
+                                cursor: pointer;
+                                font-size: 11px;
+                                color: #6b7280;
+                                font-family: inherit;
+                                font-weight: 500;
+                                text-align: left;
+                            ">
+                                <span class="update-log-toggle-icon" style="
+                                    display: inline-block;
+                                    transition: transform 0.15s ease;
+                                    font-size: 10px;
+                                ">&#9654;</span>
+                                <span class="update-log-toggle-label">View detailed logs</span>
+                                <span class="update-log-line-count" style="
+                                    margin-left: auto;
+                                    font-variant-numeric: tabular-nums;
+                                    color: #9ca3af;
+                                    font-size: 10px;
+                                ">0 lines</span>
+                            </button>
+                            <div class="update-log-panel" style="
+                                display: none;
+                                margin-top: 6px;
+                                background: #0f172a;
+                                border: 1px solid #1e293b;
+                                border-radius: 6px;
+                                padding: 8px 10px;
+                                max-height: 220px;
+                                overflow-y: auto;
+                                font-family: 'SF Mono', Monaco, Menlo, Consolas, monospace;
+                                font-size: 10.5px;
+                                line-height: 1.45;
+                                color: #cbd5e1;
+                                white-space: pre-wrap;
+                                word-break: break-all;
+                            "><div class="update-log-content"><span style="color: #64748b;">Waiting for update output&hellip;</span></div></div>
+                        </div>
+
+                        <div class="update-progress-hint" style="
+                            font-size: 11px;
+                            color: #6b7280;
+                            text-align: center;
+                            line-height: 1.5;
+                        ">Please keep this window open until the update completes.<br>Native dependency compilation can take 10-20 minutes on ARM devices.</div>
                     </div>
                 </div>
                 
@@ -322,6 +419,29 @@ function showUpdateModal(versionInfo) {
                 opacity: 0.5;
                 cursor: not-allowed;
             }
+            .update-step-item.active {
+                opacity: 1 !important;
+                color: #111827 !important;
+                font-weight: 500;
+            }
+            .update-step-item.complete {
+                opacity: 0.6 !important;
+            }
+            .update-step-item.complete .update-step-icon {
+                color: #16a34a !important;
+                font-size: 14px !important;
+            }
+            .update-step-item.active .update-step-icon {
+                color: #4a90d9 !important;
+            }
+            .update-step-item .update-step-spinner {
+                width: 12px;
+                height: 12px;
+                border: 2px solid #e5e7eb;
+                border-top-color: #4a90d9;
+                border-radius: 50%;
+                animation: spin 0.8s linear infinite;
+            }
         </style>
     `;
 
@@ -329,19 +449,47 @@ function showUpdateModal(versionInfo) {
     $('body').append($modal);
     updateModalInstance = $modal[0];
 
-    // Cancel button
+    // Track update-in-flight so we can block dismissal mid-update
+    let updateInFlight = false;
+
+    // Cancel button — blocked while update is running
     $modal.find('.update-modal-cancel').on('click', function() {
+        if (updateInFlight) { return; }
         localStorage.setItem('updateDismissed', versionInfo.latestVersion);
         $modal.fadeOut(200, function() { $(this).remove(); });
         updateModalInstance = null;
     });
 
-    // Click overlay to close
+    // Click overlay to close — blocked while update is running
     $modal.find('.update-modal-overlay').on('click', function(e) {
-        if (e.target === this) {
-            localStorage.setItem('updateDismissed', versionInfo.latestVersion);
-            $modal.fadeOut(200, function() { $(this).remove(); });
-            updateModalInstance = null;
+        if (e.target !== this) { return; }
+        if (updateInFlight) { return; }
+        localStorage.setItem('updateDismissed', versionInfo.latestVersion);
+        $modal.fadeOut(200, function() { $(this).remove(); });
+        updateModalInstance = null;
+    });
+
+    // Live-log dropdown — toggles the dark terminal-style log panel.
+    // Tracks "user-scrolled-up" so auto-scroll only kicks in when the user
+    // is sitting at the bottom (Apple-style sticky-bottom behaviour).
+    const $logToggle = $modal.find('.update-log-toggle');
+    const $logIcon = $modal.find('.update-log-toggle-icon');
+    const $logLabel = $modal.find('.update-log-toggle-label');
+    const $logPanel = $modal.find('.update-log-panel');
+    let logExpanded = false;
+    $logToggle.on('click', function() {
+        logExpanded = !logExpanded;
+        if (logExpanded) {
+            $logPanel.show();
+            $logIcon.css('transform', 'rotate(90deg)');
+            $logLabel.text('Hide detailed logs');
+            // Snap to bottom on open so user sees the latest line.
+            const panelEl = $logPanel[0];
+            if (panelEl) panelEl.scrollTop = panelEl.scrollHeight;
+        } else {
+            $logPanel.hide();
+            $logIcon.css('transform', 'rotate(0deg)');
+            $logLabel.text('View detailed logs');
         }
     });
 
@@ -351,16 +499,21 @@ function showUpdateModal(versionInfo) {
         const $cancel = $modal.find('.update-modal-cancel');
         const $progress = $modal.find('.update-progress');
         const $progressText = $modal.find('.update-progress-text');
+        const $progressBar = $modal.find('.update-progress-bar-fill');
+        const $progressElapsed = $modal.find('.update-progress-elapsed');
+        const $stepList = $modal.find('.update-step-list');
+        const $progressHint = $modal.find('.update-progress-hint');
+        const $logContent = $modal.find('.update-log-content');
+        const $logLineCount = $modal.find('.update-log-line-count');
         const $notes = $modal.find('.update-modal-notes');
 
-        // Disable buttons
-        $btn.prop('disabled', true).text('Installing...');
-        $cancel.prop('disabled', true);
+        $btn.prop('disabled', true).text('Updating\u2026');
+        $cancel.prop('disabled', true).css({ opacity: 0.4, cursor: 'not-allowed' });
         $notes.hide();
         $progress.show();
+        updateInFlight = true;
 
         try {
-            // Start the update
             const response = await fetch('/api/update/install', {
                 method: 'POST',
                 headers: {
@@ -371,78 +524,299 @@ function showUpdateModal(versionInfo) {
 
             const result = await response.json();
 
-            if (result.success) {
-                $progressText.text('Downloading latest code...');
-                
-                // Poll for progress and wait for restart
-                await waitForRestart($progressText);
-            } else {
-                throw new Error(result.error || 'Update failed');
+            if (!result.success) {
+                throw new Error(result.error || 'Update failed to start');
             }
+
+            await waitForRestart({
+                $progressText,
+                $progressBar,
+                $progressElapsed,
+                $stepList,
+                $progressHint,
+                $logContent,
+                $logLineCount,
+                $logPanel,
+            });
         } catch (error) {
             console.error('[Update] Installation failed:', error);
-            $progressText.html(`<span style="color: #d9534f;">Update failed: ${window.html_encode(error.message)}</span>`);
+            $progressText.html(`<span style="color: #d9534f; font-weight: 600;">Update failed</span><br><span style="font-size: 12px; color: #6b7280;">${window.html_encode(error.message)}</span>`);
+            $progressHint.hide();
             $btn.prop('disabled', false).text('Retry');
-            $cancel.prop('disabled', false);
+            $cancel.prop('disabled', false).css({ opacity: 1, cursor: 'pointer' });
+            updateInFlight = false;
         }
     });
 }
 
 /**
- * Wait for server to restart and reconnect
+ * Step definitions for the update progress UI.
+ *
+ * Each step has:
+ *   - id:       matches the data-step attribute on the step list DOM
+ *   - match:    regex applied to the backend's progress string to detect this step
+ *               (UpdateService.performUpdate sets this.updateProgress at every stage)
+ *   - label:    user-facing label rendered in the status text
+ *   - weight:   relative share of the total progress bar (sum across all steps = 100)
+ *   - estMs:    rough expected duration on Jetson, used for smooth intra-step
+ *               progress bar interpolation when the backend stays on the same step
+ *               for a while (e.g. 90s of npm install)
  */
-async function waitForRestart($progressText) {
-    const progressMessages = [
-        'Downloading latest code...',
-        'Installing dependencies...',
-        'Building application...',
-        'Restarting server...',
-    ];
+const UPDATE_STEPS = [
+    { id: 'fetch',        match: /^(starting|fetching|resetting)/i,        label: 'Downloading update',        weight: 8,  estMs:  10000 },
+    { id: 'install-root', match: /installing root dependencies/i,           label: 'Installing dependencies',   weight: 35, estMs:  90000 },
+    { id: 'install-node', match: /installing pc2-node dependencies/i,       label: 'Installing PC2 components', weight: 20, estMs:  60000 },
+    { id: 'build',        match: /building application/i,                   label: 'Building application',      weight: 22, estMs:  60000 },
+    { id: 'restart',      match: /restarting server/i,                      label: 'Restarting server',         weight: 10, estMs:  10000 },
+    { id: 'reconnect',    match: null,                                      label: 'Reconnecting',              weight:  5, estMs:  15000 },
+];
 
-    let msgIndex = 0;
-    const progressInterval = setInterval(() => {
-        if (msgIndex < progressMessages.length) {
-            $progressText.text(progressMessages[msgIndex]);
-            msgIndex++;
-        }
-    }, 3000);
+const UPDATE_TOTAL_WEIGHT = UPDATE_STEPS.reduce((sum, s) => sum + s.weight, 0);
+// 20 minutes covers a Jetson cold install (native compiles of better-sqlite3,
+// node-pty, sharp can total 10-15 min) plus build + restart overhead. Hitting
+// this threshold doesn't claim failure — it surfaces helpful next steps.
+const UPDATE_HARD_TIMEOUT_MS = 20 * 60 * 1000;
+const UPDATE_POLL_INTERVAL_MS = 1500;
+// Max log lines kept in DOM. Mirrors the backend rolling buffer so we don't
+// degrade the modal's perf on a long Jetson update.
+const UPDATE_LOG_MAX_LINES = 400;
 
-    // Wait a bit for server to start restarting
-    await new Promise(resolve => setTimeout(resolve, 5000));
+/** Format milliseconds as e.g. "1m 23s" or "47s". */
+function formatElapsed(ms) {
+    const total = Math.max(0, Math.floor(ms / 1000));
+    const m = Math.floor(total / 60);
+    const s = total % 60;
+    return m > 0 ? `${m}m ${s}s` : `${s}s`;
+}
 
-    // Try to reconnect
-    let attempts = 0;
-    const maxAttempts = 30;
+/**
+ * Wait for the update to complete by polling /api/update/progress.
+ *
+ * Replaces the previous fake-progress-message implementation that
+ * cycled hardcoded strings on a setInterval and gave up after 65 s.
+ * That UX was both dishonest (text didn't reflect actual state) and
+ * actively misleading (false "taking longer than expected" warning
+ * fired during normal Jetson updates because the install step alone
+ * takes 3-5 minutes).
+ *
+ * This implementation:
+ *   - Polls the real backend progress every 1.5 s
+ *   - Maps backend message → step id → updates step list (checkmarks)
+ *   - Smoothly interpolates the progress bar within long-running steps
+ *     based on elapsed time vs estimated step duration
+ *   - Detects server-going-down (consecutive poll failures while on a
+ *     late step) and switches to /api/health probing for restart detect
+ *   - Hard timeout is 12 minutes (well beyond worst-case Jetson update),
+ *     and even then doesn't claim failure — gives helpful next steps
+ */
+async function waitForRestart(refs) {
+    const { $progressText, $progressBar, $progressElapsed, $stepList, $progressHint, $logContent, $logLineCount, $logPanel } = refs;
 
-    while (attempts < maxAttempts) {
-        try {
-            const response = await fetch('/api/health', { 
-                signal: AbortSignal.timeout(2000) 
-            });
-            
-            if (response.ok) {
-                clearInterval(progressInterval);
-                $progressText.html('<span style="color: #5cb85c;">Update complete! Refreshing...</span>');
-                
-                // Clear dismissed flag so banner doesn't show
-                localStorage.removeItem('updateDismissed');
-                
-                // Reload page after brief delay
-                setTimeout(() => {
-                    window.location.reload();
-                }, 2000);
-                return;
-            }
-        } catch {
-            // Server not ready yet
-        }
+    let currentStepId = null;
+    let stepStartedAt = Date.now();
+    let serverWentDown = false;
+    let consecutiveFailures = 0;
+    let lastProgressString = '';
+    let lastLogSeq = 0;
+    let renderedLineCount = 0;
+    let logHasContent = false;
 
-        attempts++;
-        await new Promise(resolve => setTimeout(resolve, 2000));
+    const startedAt = Date.now();
+
+    // Returns whether the log panel is currently scrolled to the bottom
+    // (within 32px tolerance). Used to decide if we should auto-scroll
+    // after appending new lines.
+    function isLogStuckToBottom() {
+        const el = $logPanel && $logPanel[0];
+        if (!el) return true;
+        return (el.scrollHeight - el.scrollTop - el.clientHeight) < 32;
     }
 
-    clearInterval(progressInterval);
-    $progressText.html('<span style="color: #f0ad4e;">Restart taking longer than expected. Please refresh manually.</span>');
+    function appendLogLines(lines) {
+        if (!Array.isArray(lines) || lines.length === 0 || !$logContent) return;
+        const wasStuck = isLogStuckToBottom();
+        // Clear the placeholder on first real output.
+        if (!logHasContent) {
+            $logContent.empty();
+            logHasContent = true;
+        }
+        const fragments = [];
+        for (const raw of lines) {
+            // Lines arrive as "[HH:MM:SS] [source] message" — colour-code the
+            // tag prefix so users can tell git/npm/build apart at a glance.
+            const m = String(raw).match(/^(\[\d{2}:\d{2}:\d{2}\])\s+(\[[^\]]+\])\s+(.*)$/);
+            let html;
+            if (m) {
+                html = `<span style="color:#64748b;">${window.html_encode(m[1])}</span> ` +
+                       `<span style="color:#7dd3fc;">${window.html_encode(m[2])}</span> ` +
+                       `<span>${window.html_encode(m[3])}</span>`;
+            } else {
+                html = `<span>${window.html_encode(String(raw))}</span>`;
+            }
+            fragments.push(`<div>${html}</div>`);
+        }
+        $logContent.append(fragments.join(''));
+        renderedLineCount += lines.length;
+
+        // Cap the rendered line count so a long Jetson update doesn't blow
+        // up DOM memory. Drop oldest divs.
+        if (renderedLineCount > UPDATE_LOG_MAX_LINES) {
+            const drop = renderedLineCount - UPDATE_LOG_MAX_LINES;
+            $logContent.children().slice(0, drop).remove();
+            renderedLineCount = UPDATE_LOG_MAX_LINES;
+        }
+
+        if ($logLineCount) {
+            $logLineCount.text(renderedLineCount === 1 ? '1 line' : renderedLineCount + ' lines');
+        }
+        if (wasStuck) {
+            const el = $logPanel && $logPanel[0];
+            if (el) el.scrollTop = el.scrollHeight;
+        }
+    }
+
+    const tickElapsed = setInterval(() => {
+        $progressElapsed.text('Elapsed: ' + formatElapsed(Date.now() - startedAt));
+    }, 1000);
+
+    function updateBar() {
+        let cumulativeWeight = 0;
+        let stepWeight = 0;
+        let stepEstMs = 60000;
+        for (const step of UPDATE_STEPS) {
+            if (step.id === currentStepId) {
+                stepWeight = step.weight;
+                stepEstMs = step.estMs;
+                break;
+            }
+            cumulativeWeight += step.weight;
+        }
+        // Time-based interpolation within the active step. Cap at 0.92 so the
+        // bar never quite fills until the step actually completes — prevents
+        // the "stuck at 99%" frustration if our estimate underruns.
+        const intra = currentStepId
+            ? Math.min(0.92, (Date.now() - stepStartedAt) / stepEstMs)
+            : 0;
+        const pct = ((cumulativeWeight + stepWeight * intra) / UPDATE_TOTAL_WEIGHT) * 100;
+        $progressBar.css('width', pct.toFixed(1) + '%');
+    }
+
+    function setStep(newStepId) {
+        if (newStepId === currentStepId) { return; }
+        // Mark the previous step complete (checkmark)
+        if (currentStepId) {
+            const $prev = $stepList.find(`[data-step="${currentStepId}"]`);
+            $prev.removeClass('active').addClass('complete');
+            $prev.find('.update-step-icon').html('&#10003;');
+        }
+        currentStepId = newStepId;
+        stepStartedAt = Date.now();
+        const step = UPDATE_STEPS.find(s => s.id === newStepId);
+        if (step) {
+            const $cur = $stepList.find(`[data-step="${newStepId}"]`);
+            $cur.addClass('active');
+            $cur.find('.update-step-icon').html('<div class="update-step-spinner"></div>');
+            $progressText.text(step.label + '\u2026');
+        }
+        updateBar();
+    }
+
+    function detectStep(msg) {
+        if (!msg) { return null; }
+        for (const step of UPDATE_STEPS) {
+            if (step.match && step.match.test(msg)) { return step.id; }
+        }
+        return null;
+    }
+
+    // Smooth bar tick — keeps the bar inching forward visually even when the
+    // backend stays on the same step for 90 s (npm install). Without this,
+    // long steps would feel frozen.
+    const tickBar = setInterval(updateBar, 500);
+
+    try {
+        while (Date.now() - startedAt < UPDATE_HARD_TIMEOUT_MS) {
+            // 1) If we've previously detected the server going down, prioritize
+            //    health checking — that's how we know restart finished.
+            if (serverWentDown) {
+                try {
+                    const h = await fetch('/api/health', { signal: AbortSignal.timeout(1500) });
+                    if (h.ok) {
+                        if (currentStepId !== 'reconnect') { setStep('reconnect'); }
+                        // Mark reconnect complete and finish
+                        const $rec = $stepList.find('[data-step="reconnect"]');
+                        $rec.removeClass('active').addClass('complete');
+                        $rec.find('.update-step-icon').html('&#10003;');
+                        $progressBar.css('width', '100%');
+                        $progressText.html('<span style="color: #16a34a; font-weight: 600;">Update complete</span><br><span style="font-size: 12px; color: #6b7280;">Reloading\u2026</span>');
+                        $progressHint.hide();
+                        localStorage.removeItem('updateDismissed');
+                        setTimeout(() => window.location.reload(), 1800);
+                        return;
+                    }
+                } catch {
+                    // server still down, keep waiting
+                }
+            }
+
+            // 2) Always try to read backend progress (will fail during restart window).
+            //    sinceSeq lets the backend send only new log lines, keeping the
+            //    poll payload tiny even when hundreds of lines have streamed.
+            try {
+                const r = await fetch('/api/update/progress?sinceSeq=' + encodeURIComponent(lastLogSeq), {
+                    headers: { 'Authorization': `Bearer ${puter.authToken}` },
+                    signal: AbortSignal.timeout(2500),
+                });
+                if (r.ok) {
+                    consecutiveFailures = 0;
+                    const data = await r.json();
+                    if (data.progress && data.progress !== lastProgressString) {
+                        lastProgressString = data.progress;
+                        const detected = detectStep(data.progress);
+                        if (detected) { setStep(detected); }
+                    }
+                    // Append any new log lines into the live dropdown.
+                    if (Array.isArray(data.log) && data.log.length > 0) {
+                        appendLogLines(data.log);
+                    }
+                    if (typeof data.logSeq === 'number') {
+                        lastLogSeq = data.logSeq;
+                    }
+                    // Backend reports update finished but server didn't go down yet —
+                    // the restart command was issued, server is about to disappear.
+                    // Switch into health-check mode.
+                    if (data.isUpdating === false && currentStepId === 'restart') {
+                        serverWentDown = true;
+                    }
+                }
+            } catch {
+                consecutiveFailures++;
+                // 2 consecutive failures while on a late step = server is restarting.
+                // Switch into health-check mode so we detect the comeback.
+                if (consecutiveFailures >= 2 && (currentStepId === 'restart' || currentStepId === 'build')) {
+                    if (!serverWentDown) {
+                        serverWentDown = true;
+                        if (currentStepId !== 'restart') { setStep('restart'); }
+                    }
+                }
+            }
+
+            await new Promise(res => setTimeout(res, UPDATE_POLL_INTERVAL_MS));
+        }
+
+        // Hard timeout reached — don't claim failure (update may still be running),
+        // give the user actionable next steps instead.
+        $progressText.html('<span style="color: #f0ad4e; font-weight: 600;">Update is taking longer than expected</span>');
+        $progressHint.html(
+            'The update may still be running in the background.<br>' +
+            'Expand <strong>View detailed logs</strong> above to see live output, ' +
+            'or check the server logs:<br>' +
+            '<code style="display: inline-block; margin-top: 6px; padding: 2px 6px; background: #f3f4f6; border-radius: 4px; font-size: 11px;">pm2 logs pc2 --lines 50</code>'
+        );
+    } finally {
+        clearInterval(tickElapsed);
+        clearInterval(tickBar);
+    }
 }
 
 /**

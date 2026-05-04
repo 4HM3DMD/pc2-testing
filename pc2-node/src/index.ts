@@ -1,8 +1,33 @@
+// Load pc2-node/.env BEFORE any module reads process.env
+// (clusterPin, AI providers, comms gateways all check env at module-init time,
+//  so dotenv must run first or they see empty values).
+// .env is gitignored; survives `git reset --hard origin/main` during update.sh.
+// See pc2-node/.env.example for the full opt-in env var catalogue.
+import 'dotenv/config';
+
 // Global error handlers MUST be registered first, before any other imports
-// This prevents WASM modules from registering their own crash-happy handlers
-process.on('unhandledRejection', (reason: any, promise: Promise<any>) => {
+// This prevents WASM modules from registering their own crash-happy handlers.
+//
+// v1.2.7.2: capture last error + final exit code so silent crashes leave a
+// breadcrumb in the launcher log. Pre-32 we had no exit-code breadcrumb,
+// which is why the publish_drafts crash on fresh Macs looked like PC2 just
+// vanished — it was actually exiting cleanly somewhere else with an error
+// the launcher swallowed.
+//
+// All writes here use console.error directly (NOT the buffered logger) so
+// they survive a forced exit — `process.on('exit', ...)` runs synchronously
+// and async log writes would be lost.
+let lastErrorCapture: { source: string; message: string; stack?: string } | null = null;
+
+process.on('unhandledRejection', (reason: any, _promise: Promise<any>) => {
+  const message = reason?.message || String(reason);
+  const stack = reason?.stack;
+  lastErrorCapture = { source: 'unhandledRejection', message, stack };
+
   // Log but don't crash - many rejections are recoverable (e.g., 409 Telegram conflicts)
-  console.error('[PC2] Unhandled Promise Rejection:', reason?.message || reason);
+  console.error('[PC2] Unhandled Promise Rejection:', message);
+  if (stack) console.error(stack);
+
   // Only exit on truly fatal errors
   if (reason?.code === 'EADDRINUSE') {
     console.error('[PC2] Fatal: Port already in use, exiting');
@@ -11,15 +36,41 @@ process.on('unhandledRejection', (reason: any, promise: Promise<any>) => {
 });
 
 process.on('uncaughtException', (error: Error) => {
-  console.error('[PC2] Uncaught Exception:', error);
-  // Log stack trace for debugging
+  lastErrorCapture = { source: 'uncaughtException', message: error.message, stack: error.stack };
+
+  console.error('[PC2] Uncaught Exception:', error.message);
   if (error.stack) {
     console.error(error.stack);
   }
+
   // Only exit on truly fatal errors that we can't recover from
   if ((error as any).code === 'EADDRINUSE') {
     process.exit(1);
   }
+});
+
+// Final-exit breadcrumb: this is the line we wished we had on 2026-05-03
+// when fresh Macs were exiting with code 1 silently. Synchronous-only —
+// no async work allowed in `exit` handlers.
+process.on('exit', (code) => {
+  if (code === 0 && !lastErrorCapture) {
+    console.error('[PC2] exit code=0 (clean shutdown)');
+    return;
+  }
+  console.error(`[PC2] exit code=${code}${lastErrorCapture ? ` last_error_source=${lastErrorCapture.source}` : ''}`);
+  if (lastErrorCapture) {
+    console.error(`[PC2] last_error_message: ${lastErrorCapture.message}`);
+    if (lastErrorCapture.stack) {
+      console.error(`[PC2] last_error_stack:\n${lastErrorCapture.stack}`);
+    }
+  }
+});
+
+// `beforeExit` only fires when the event loop drains naturally (NOT after
+// process.exit). Useful to distinguish "exited cleanly because we were
+// done" from "exited via process.exit somewhere".
+process.on('beforeExit', (code) => {
+  console.error(`[PC2] beforeExit code=${code} (event loop drained, no more work scheduled)`);
 });
 
 import { createServer } from './server.js';
@@ -30,6 +81,9 @@ import { logger, createLogger } from './utils/logger.js';
 const log = createLogger('pc2');
 import { AIChatService } from './services/ai/AIChatService.js';
 import { BosonService } from './services/boson/index.js';
+import { ContentSeedingService } from './services/ContentSeedingService.js';
+import { ContentIndexerService } from './services/ContentIndexerService.js';
+import { initBaseRpcPool } from './utils/rpc.js';
 import { getGatewayService, createChannelBridge } from './services/gateway/index.js';
 import { getNodeConfig } from './api/setup.js';
 import { fileURLToPath } from 'url';
@@ -43,6 +97,17 @@ let config: Config;
 try {
   config = loadConfig();
   logger.info('✅ Configuration loaded');
+
+  // Supernode RPC proxy (SUPERNODE-RPC-PROXY task): when the operator has
+  // pointed this node at one or more supernode-backed Base RPC endpoints via
+  // the SUPERNODE_RPC_URLS env var (comma-separated), prepend them to the
+  // shared pool so they are tried before any public fallback. Empty/undefined
+  // = no change to existing behavior.
+  const supernodeRpcUrls = (process.env.SUPERNODE_RPC_URLS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  initBaseRpcPool(config.content_indexer?.rpc_urls, supernodeRpcUrls);
 } catch (error) {
   logger.error('❌ Failed to load configuration:', error);
   process.exit(1);
@@ -64,6 +129,8 @@ const IPFS_REPO_PATH = process.env.IPFS_REPO_PATH || config.storage.ipfs_repo_pa
   let filesystem: FilesystemManager | null = null;
   let aiService: AIChatService | null = null;
   let bosonService: BosonService | null = null;
+  let seedingService: ContentSeedingService | null = null;
+  let indexerService: ContentIndexerService | null = null;
 
 async function main() {
   logger.info('Starting PC2 Node...');
@@ -97,23 +164,64 @@ async function main() {
     const ipfsConfig = (config as any).ipfs || {};
     const ipfsMode = (ipfsConfig.mode || 'private') as IPFSNetworkMode;
     
+    const relayMode = db.getSetting('relay_mode') === 'true';
+    const relayMaxConnections = parseInt(db.getSetting('relay_max_connections') || '100', 10);
+
+    // Elacity peers: ENV var wins (operator-controlled), then config file, then default hardcoded.
+    // Empty string in ENV (e.g. ELACITY_IPFS_MULTIADDRS=) explicitly disables peering.
+    const envElacity = process.env.ELACITY_IPFS_MULTIADDRS;
+    let elacityBootstrap: string[] | undefined;
+    if (envElacity !== undefined) {
+      elacityBootstrap = envElacity
+        .split(',')
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
+    } else if (Array.isArray(ipfsConfig.elacity_bootstrap)) {
+      elacityBootstrap = ipfsConfig.elacity_bootstrap;
+    }
+
     ipfs = new IPFSStorage({
       repoPath: IPFS_REPO_PATH,
       mode: ipfsMode,
       enableDHT: ipfsConfig.enable_dht,
+      dhtClientMode: ipfsConfig.dht_client_mode,
       enableBootstrap: ipfsConfig.enable_bootstrap,
-      customBootstrap: ipfsConfig.custom_bootstrap
+      autoAnnounceOnStore: ipfsConfig.auto_announce_on_store !== false,
+      prefetchOnStore: ipfsConfig.prefetch_on_store !== false,
+      publicGatewayPrefetchUrl: ipfsConfig.public_gateway_prefetch_url,
+      customBootstrap: ipfsConfig.custom_bootstrap,
+      supernodeBootstrap: ipfsConfig.supernode_bootstrap,
+      elacityBootstrap,
+      relayBootstrap: ipfsConfig.relay_bootstrap,
+      relayMode,
+      relayMaxConnections,
     });
     await ipfs.initialize();
+
+    // Expose IPFS storage globally for API access (relay status, etc.)
+    (global as any).ipfsStorage = ipfs;
     
     // Create filesystem manager
     filesystem = new FilesystemManager(ipfs, db);
     logger.info('✅ Filesystem manager initialized');
     logger.info(`   IPFS mode: ${ipfsMode}`);
+
+    // Initialize content seeding service (silent CDN participation)
+    seedingService = new ContentSeedingService(config);
+    seedingService.initialize(ipfs, db);
   } catch (error) {
     logger.error('❌ Failed to initialize IPFS:', error);
     logger.warn('   File storage will not be available');
     // Don't exit - server can still run without IPFS (for development)
+  }
+
+  // Initialize content indexer (on-chain content catalog)
+  try {
+    indexerService = new ContentIndexerService(config);
+    indexerService.initialize(db!, ipfs);
+  } catch (error) {
+    logger.error('❌ Failed to initialize content indexer:', error);
+    logger.warn('   Content discovery will fall back to Elacity GraphQL');
   }
 
   // Initialize AI, Gateway, and Boson in parallel — they're independent of each other,
@@ -265,6 +373,16 @@ async function main() {
     app.locals.bosonService = bosonService;
   }
 
+  // Make seeding service available to routes
+  if (seedingService) {
+    app.locals.seedingService = seedingService;
+  }
+
+  // Make indexer service available to routes
+  if (indexerService) {
+    app.locals.indexerService = indexerService;
+  }
+
   // Handle server listen with retry for EADDRINUSE
   // Increased retries and delay to handle slow port release after crashes
   const startServer = (retries = 5, delay = 5000): void => {
@@ -290,62 +408,21 @@ async function main() {
   
   startServer();
 
-  // ============================================================================
-  // Periodic IPFS DHT Re-announcement
-  // DHT provider records expire after ~24 hours, so we re-announce periodically
-  // ============================================================================
-  
-  const RE_ANNOUNCE_INTERVAL = 12 * 60 * 60 * 1000; // 12 hours in milliseconds
-  
-  const runPeriodicAnnouncement = async () => {
-    if (!ipfs || !db) return;
-    
-    // Check if IPFS can announce (not in private mode, DHT available)
-    if (!ipfs.canAnnounce()) {
-      logger.debug('[IPFS] Skipping periodic announcement (DHT not available)');
-      return;
-    }
-    
-    // Get IPFS config to check if auto-announce is enabled
-    const ipfsConfig = (config as any).ipfs || {};
-    if (ipfsConfig.auto_announce_public === false) {
-      logger.debug('[IPFS] Skipping periodic announcement (auto_announce_public disabled)');
-      return;
-    }
-    
-    try {
-      const publicCIDs = db.getPublicCIDs();
-      if (publicCIDs.length === 0) {
-        logger.debug('[IPFS] No public CIDs to announce');
-        return;
-      }
-      
-      logger.info(`[IPFS] Starting periodic re-announcement of ${publicCIDs.length} public CIDs...`);
-      const result = await ipfs.announceMultipleCIDs(publicCIDs);
-      logger.info(`[IPFS] Periodic announcement complete: ${result.success} success, ${result.failed} failed`);
-    } catch (error) {
-      logger.error('[IPFS] Periodic announcement failed:', error);
-    }
-  };
-  
-  // Run initial announcement after a delay (let IPFS connect to peers first)
-  if (ipfs && ipfs.getNetworkMode() !== 'private') {
-    setTimeout(() => {
-      runPeriodicAnnouncement().catch(e => logger.error('[IPFS] Initial announcement error:', e));
-    }, 60 * 1000); // Wait 1 minute after startup
-    
-    // Schedule periodic re-announcement
-    const announcementInterval = setInterval(() => {
-      runPeriodicAnnouncement().catch(e => logger.error('[IPFS] Periodic announcement error:', e));
-    }, RE_ANNOUNCE_INTERVAL);
-    
-    logger.info(`[IPFS] Scheduled periodic DHT re-announcement every ${RE_ANNOUNCE_INTERVAL / 1000 / 60 / 60} hours`);
-  }
+  // DHT re-announcement is now managed by ContentSeedingService with
+  // tiered hot/warm/cold cadence + startup burst. See ContentSeedingService.ts.
 
   // Graceful shutdown
   const shutdown = async () => {
     logger.info('Shutting down gracefully...');
     
+    if (indexerService) {
+      indexerService.shutdown();
+    }
+
+    if (seedingService) {
+      seedingService.shutdown();
+    }
+
     if (bosonService) {
       try {
         await bosonService.stop();

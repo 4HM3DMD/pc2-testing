@@ -11,7 +11,8 @@
     "mode": "hybrid",
     "enable_dht": true,
     "enable_bootstrap": true,
-    "auto_announce_public": true
+    "auto_announce_public": true,
+    "relay_bootstrap": []
   },
   "owner": {
     "wallet_address": null,

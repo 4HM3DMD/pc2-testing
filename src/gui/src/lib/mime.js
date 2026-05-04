@@ -42,6 +42,19 @@ function Mime() {
       return 'application/x-weblink';
     }
     
+    // Unified dDRM capsule (protected asset from Elacity)
+    if (ext === 'ddrm') {
+      return 'application/x-ddrm';
+    }
+    
+    // Legacy format aliases
+    if (ext === 'edrm') {
+      return 'application/x-ddrm';
+    }
+    if (ext === 'ddrm.json') {
+      return 'application/x-ddrm';
+    }
+    
     return (hasDot || !hasPath) && this._types[ext] || null;
   };
   Mime.prototype.getExtension = function(type) {
@@ -50,6 +63,18 @@ function Mime() {
     // Special case for .weblink files
     if (type === 'application/x-weblink') {
       return 'weblink';
+    }
+    
+    if (type === 'application/x-ddrm') {
+      return 'ddrm';
+    }
+    
+    // Legacy MIME aliases
+    if (type === 'application/x-edrm') {
+      return 'ddrm';
+    }
+    if (type === 'application/x-ddrm+json') {
+      return 'ddrm';
     }
     
     return type && this._extensions[type.toLowerCase()] || null;

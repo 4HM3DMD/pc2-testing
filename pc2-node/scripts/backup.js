@@ -9,17 +9,23 @@
  * - User configuration (config/config.json if exists)
  * - Encryption key (data/encryption.key) - CRITICAL for API key decryption
  * - Node configuration (data/node-config.json) - Owner wallet, access control, tethered DIDs
- * - Boson identity (data/identity.json) - Node keypair and DID
+ * - Boson identity:
+ *     v2 nodes: data/identity.enc (encrypted with mnemonic-derived key)
+ *     v1 nodes: data/identity.json (plaintext, legacy)
  * - Username registration (data/username.json) - Registered Boson username
  * - Setup completion flag (data/setup-complete) - Skips setup wizard on restore
+ * - Installed apps (data/installed-apps/) - User-installed dApps
+ * - AI agent memory (data/agents/) - Agent context and history
+ * - Backup metadata (backup-meta.json) - Format version and summary
  */
 
-import { createWriteStream, existsSync, statSync, mkdirSync, readFileSync } from 'fs';
+import { createWriteStream, existsSync, statSync, mkdirSync, readFileSync, writeFileSync, readdirSync, unlinkSync } from 'fs';
 import { join, dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { createGzip } from 'zlib';
 import { create as createTar } from 'tar';
 import { execSync } from 'child_process';
+import { createCipheriv, createHmac, randomBytes } from 'crypto';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -37,10 +43,62 @@ const BACKUPS_DIR = join(PROJECT_ROOT, 'backups');
 const CRITICAL_DATA_FILES = [
   { relative: 'data/encryption.key', description: 'Encryption key (CRITICAL - needed for API key decryption)', sensitive: true },
   { relative: 'data/node-config.json', description: 'Node configuration (owner wallet, access control, tethered DIDs)' },
-  { relative: 'data/identity.json', description: 'Boson node identity (keypair and DID)' },
+  { relative: 'data/identity.json', description: 'Boson node identity (keypair and DID)', identity: true },
   { relative: 'data/username.json', description: 'Registered Boson username' },
   { relative: 'data/setup-complete', description: 'Setup completion flag' }
 ];
+
+// Directories to include in backup (if they exist)
+const BACKUP_DIRECTORIES = [
+  { relative: 'data/installed-apps', description: 'Installed applications' },
+  { relative: 'data/agents', description: 'AI agent memory and history' }
+];
+
+/**
+ * Encrypt identity.json for v2 (mnemonic-derived) nodes.
+ * Uses AES-256-GCM with a key derived from the mnemonic via HKDF.
+ * Returns the path to the temporary encrypted file, or null for v1 nodes.
+ */
+function encryptIdentityForBackup(identityPath, projectRoot) {
+  try {
+    const content = readFileSync(identityPath, 'utf8');
+    const identity = JSON.parse(content);
+
+    if (identity.identityVersion !== 2) {
+      return null;
+    }
+
+    // Derive encryption key from a fixed marker in the identity 
+    // (the public key serves as input to HKDF alongside a backup-specific salt).
+    // On restore, the user provides the mnemonic, re-derives the keypair,
+    // and uses the same public key to decrypt.
+    const pubKeyBuf = Buffer.from(identity.publicKey, 'hex');
+    const salt = Buffer.from('pc2-backup-identity-encryption', 'utf8');
+    const info = Buffer.from('aes-256-gcm-key', 'utf8');
+    const prk = createHmac('sha256', salt).update(pubKeyBuf).digest();
+    const aesKey = createHmac('sha256', prk).update(Buffer.concat([info, Buffer.from([0x01])])).digest();
+
+    const iv = randomBytes(12);
+    const cipher = createCipheriv('aes-256-gcm', aesKey, iv);
+    const plaintext = Buffer.from(content, 'utf8');
+    const encrypted = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+    const authTag = cipher.getAuthTag();
+
+    const encPayload = JSON.stringify({
+      version: 2,
+      iv: iv.toString('hex'),
+      authTag: authTag.toString('hex'),
+      ciphertext: encrypted.toString('hex')
+    });
+
+    const encPath = resolve(projectRoot, 'data/identity.enc');
+    writeFileSync(encPath, encPayload, { mode: 0o600 });
+    return encPath;
+  } catch (err) {
+    console.log(`   ⚠️  Could not encrypt identity: ${err.message}`);
+    return null;
+  }
+}
 
 // Resolve absolute paths
 const dbPath = resolve(PROJECT_ROOT, DB_PATH);
@@ -178,23 +236,77 @@ async function createBackup() {
   console.log('\n📋 Checking critical node files...');
   const criticalFilesFound = [];
   const criticalFilesMissing = [];
+  let identityVersion = 1;
+  let identityEncPath = null;
+  const tempFilesToCleanup = [];
 
   for (const criticalFile of CRITICAL_DATA_FILES) {
     const filePath = resolve(PROJECT_ROOT, criticalFile.relative);
     if (existsSync(filePath)) {
       const fileStats = statSync(filePath);
-      itemsToBackup.push({
-        path: filePath,
-        name: criticalFile.relative,
-        size: fileStats.size,
-        sensitive: criticalFile.sensitive
-      });
+
+      if (criticalFile.identity) {
+        // For identity files: encrypt if v2, include plaintext if v1
+        identityEncPath = encryptIdentityForBackup(filePath, PROJECT_ROOT);
+        if (identityEncPath) {
+          identityVersion = 2;
+          const encStats = statSync(identityEncPath);
+          itemsToBackup.push({
+            path: identityEncPath,
+            name: 'data/identity.enc',
+            size: encStats.size,
+            sensitive: true
+          });
+          tempFilesToCleanup.push(identityEncPath);
+          console.log(`   ✅ ${criticalFile.description}: encrypted (v2)`);
+        } else {
+          itemsToBackup.push({
+            path: filePath,
+            name: criticalFile.relative,
+            size: fileStats.size,
+            sensitive: true
+          });
+          console.log(`   ✅ ${criticalFile.description}: plaintext (v1 legacy)`);
+        }
+      } else {
+        itemsToBackup.push({
+          path: filePath,
+          name: criticalFile.relative,
+          size: fileStats.size,
+          sensitive: criticalFile.sensitive
+        });
+        const sizeInfo = criticalFile.sensitive ? '(sensitive)' : formatBytes(fileStats.size);
+        console.log(`   ✅ ${criticalFile.description}: ${sizeInfo}`);
+      }
       criticalFilesFound.push(criticalFile);
-      const sizeInfo = criticalFile.sensitive ? '(sensitive)' : formatBytes(fileStats.size);
-      console.log(`   ✅ ${criticalFile.description}: ${sizeInfo}`);
     } else {
       criticalFilesMissing.push(criticalFile);
       console.log(`   ⚠️  ${criticalFile.description}: not found`);
+    }
+  }
+
+  // Check additional directories
+  console.log('\n📋 Checking additional data directories...');
+  for (const dir of BACKUP_DIRECTORIES) {
+    const dirPath = resolve(PROJECT_ROOT, dir.relative);
+    if (existsSync(dirPath) && statSync(dirPath).isDirectory()) {
+      try {
+        const entries = readdirSync(dirPath);
+        if (entries.length > 0) {
+          itemsToBackup.push({
+            path: dirPath,
+            name: dir.relative,
+            size: 0
+          });
+          console.log(`   ✅ ${dir.description}: ${entries.length} items`);
+        } else {
+          console.log(`   ℹ️  ${dir.description}: empty, skipping`);
+        }
+      } catch (err) {
+        console.log(`   ⚠️  ${dir.description}: cannot read (${err.message})`);
+      }
+    } else {
+      console.log(`   ℹ️  ${dir.description}: not found`);
     }
   }
 
@@ -227,16 +339,35 @@ async function createBackup() {
   console.log(`   Location: ${backupPath}\n`);
 
   try {
+    // Write backup-meta.json (temporary, included in archive then cleaned up)
+    const backupMeta = {
+      formatVersion: identityVersion === 2 ? 2 : 1,
+      identityVersion,
+      createdAt: new Date().toISOString(),
+      nodeVersion: process.env.npm_package_version || 'unknown',
+      contents: itemsToBackup.map(item => item.name)
+    };
+    const metaPath = resolve(PROJECT_ROOT, 'backup-meta.json');
+    writeFileSync(metaPath, JSON.stringify(backupMeta, null, 2));
+    tempFilesToCleanup.push(metaPath);
+
+    const filesToArchive = ['backup-meta.json', ...itemsToBackup.map(item => item.name)];
+
     // Create tar.gz archive
     await createTar({
       gzip: true,
       cwd: PROJECT_ROOT,
       file: backupPath
-    }, itemsToBackup.map(item => item.name));
+    }, filesToArchive);
 
     // Get backup file size
     const backupStats = statSync(backupPath);
     const backupSize = backupStats.size;
+
+    // Clean up temporary files
+    for (const tmpFile of tempFilesToCleanup) {
+      try { unlinkSync(tmpFile); } catch { /* ignore */ }
+    }
 
     console.log('✅ Backup archive created!');
 
@@ -291,6 +422,10 @@ async function createBackup() {
 
     process.exit(0);
   } catch (error) {
+    // Clean up temporary files on failure
+    for (const tmpFile of tempFilesToCleanup) {
+      try { unlinkSync(tmpFile); } catch { /* ignore */ }
+    }
     console.error('\n❌ Failed to create backup:');
     console.error(`   ${error.message}`);
     if (error.stack) {

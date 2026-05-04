@@ -209,13 +209,17 @@ if [ -n "$API_KEY" ]; then
 
   # ============================================================================
   # Test 9: Execute Command
+  # Wave 5 (A1): /api/terminal/exec is now argv-only — `command` must be the
+  # bare binary name and arguments go in `args`. The shell-style payload
+  # `{"command": "echo Hello from PC2 Agent API!"}` would now 400 because
+  # there's no `echo Hello from PC2 Agent API!` binary.
   # ============================================================================
   echo -e "${BLUE}[9] Testing Command Execution (POST /api/terminal/exec)${NC}"
 
   RESPONSE=$(curl -s -X POST "$BASE_URL/api/terminal/exec" \
     -H "X-API-Key: $API_KEY" \
     -H "Content-Type: application/json" \
-    -d '{"command": "echo Hello from PC2 Agent API!"}')
+    -d '{"command": "echo", "args": ["Hello", "from", "PC2", "Agent", "API!"]}')
 
   if echo "$RESPONSE" | grep -q '"success":true'; then
     pass "Command execution working"
@@ -253,13 +257,14 @@ if [ -n "$API_KEY" ]; then
 
   # ============================================================================
   # Test 11: List Directory
+  # Wave 5 (A1): argv form — `ls` and `-la` are separate.
   # ============================================================================
   echo -e "${BLUE}[11] Testing Directory Listing${NC}"
 
   RESPONSE=$(curl -s -X POST "$BASE_URL/api/terminal/exec" \
     -H "X-API-Key: $API_KEY" \
     -H "Content-Type: application/json" \
-    -d '{"command": "ls -la"}')
+    -d '{"command": "ls", "args": ["-la"]}')
 
   if echo "$RESPONSE" | grep -q '"success"'; then
     pass "Directory listing working"
@@ -294,13 +299,16 @@ if [ -n "$API_KEY" ]; then
 
   # ============================================================================
   # Test 13: Command with Timeout
+  # Wave 5 (A1): argv form. The previous payload `sleep 0.1 && echo done`
+  # relied on shell `&&`; with shell mode disabled the test now just verifies
+  # the timeout config is honoured for a long-enough sleep.
   # ============================================================================
   echo -e "${BLUE}[13] Testing Command Timeout${NC}"
 
   RESPONSE=$(curl -s -X POST "$BASE_URL/api/terminal/exec" \
     -H "X-API-Key: $API_KEY" \
     -H "Content-Type: application/json" \
-    -d '{"command": "sleep 0.1 && echo done", "timeout": 5000}')
+    -d '{"command": "sleep", "args": ["0.1"], "timeout": 5000}')
 
   if echo "$RESPONSE" | grep -q '"success":true'; then
     pass "Timeout handling working"
@@ -313,13 +321,16 @@ if [ -n "$API_KEY" ]; then
 
   # ============================================================================
   # Test 14: Environment Variables
+  # Wave 5 (A1): argv form. Previously used shell `$VAR` expansion via
+  # `echo $MY_VAR`; now uses `printenv MY_VAR` which reads the env directly
+  # without shell parsing.
   # ============================================================================
   echo -e "${BLUE}[14] Testing Environment Variables${NC}"
 
   RESPONSE=$(curl -s -X POST "$BASE_URL/api/terminal/exec" \
     -H "X-API-Key: $API_KEY" \
     -H "Content-Type: application/json" \
-    -d '{"command": "echo $MY_VAR", "env": {"MY_VAR": "hello-from-env"}}')
+    -d '{"command": "printenv", "args": ["MY_VAR"], "env": {"MY_VAR": "hello-from-env"}}')
 
   if echo "$RESPONSE" | grep -q "hello-from-env"; then
     pass "Environment variables working"

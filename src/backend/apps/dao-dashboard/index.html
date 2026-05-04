@@ -4,7 +4,29 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Elastos DAO Dashboard - PC2</title>
+    <link rel="icon" type="image/png" sizes="192x192" href="favicon-192.png">
+    <link rel="icon" type="image/png" sizes="128x128" href="favicon-128.png">
+    <link rel="icon" type="image/png" sizes="64x64" href="favicon-64.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
+    <link rel="shortcut icon" href="favicon.ico">
+    <link rel="apple-touch-icon" href="favicon-192.png">
     <link rel="stylesheet" href="css/styles.css">
+    <script>
+        // Apply persisted theme BEFORE first paint to avoid a light-mode
+        // flash. Shares the 'elacity-theme' localStorage key with the
+        // Elacity Market app and the dApp Centre so toggling in one
+        // surface is honoured the next time another opens.
+        (function () {
+            try {
+                var saved = localStorage.getItem('elacity-theme');
+                var prefersDark = window.matchMedia
+                    && window.matchMedia('(prefers-color-scheme: dark)').matches;
+                if (saved === 'dark' || (!saved && prefersDark)) {
+                    document.documentElement.setAttribute('data-theme', 'dark');
+                }
+            } catch (e) { /* localStorage may be blocked; ignore */ }
+        })();
+    </script>
 </head>
 <body>
     <div id="app" class="dao-container">
@@ -29,7 +51,18 @@
                 </div>
             </div>
             
-            <!-- Refresh only -->
+            <!-- Theme toggle -->
+            <button class="theme-toggle" id="themeToggle" title="Toggle dark mode" aria-label="Toggle theme">
+                <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                </svg>
+                <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="4"></circle>
+                    <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"></path>
+                </svg>
+            </button>
+
+            <!-- Refresh -->
             <button class="icon-btn" id="refreshBtn" title="Refresh">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M21 12a9 9 0 11-9-9c2.52 0 4.93 1 6.74 2.74L21 8"></path>

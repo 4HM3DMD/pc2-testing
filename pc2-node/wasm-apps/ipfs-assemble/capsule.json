@@ -1,0 +1,19 @@
+{
+  "name": "ipfs-assemble",
+  "version": "1.0.0",
+  "description": "Concatenate IPFS UnixFS chunks in WASM linear memory",
+  "target": "wasm32-wasip1",
+  "binary": "ipfs-assemble.wasm",
+  "sha256": null,
+  "capabilities": ["storage:read"],
+  "provider_operations": ["storage:assemble"],
+  "memfs": {
+    "input": ["/input/command.json", "/input/chunk-{i}.bin"],
+    "output": ["/output/result.json", "/output/assembled.bin"]
+  },
+  "runtime_compatibility": {
+    "wasi_preview": 1,
+    "entry": "_start",
+    "capsule_type": "wasm"
+  }
+}

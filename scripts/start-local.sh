@@ -46,8 +46,50 @@ elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
     OS="linux"
 fi
 
+if grep -qi "microsoft\|wsl" /proc/version 2>/dev/null; then
+    echo -e "${YELLOW}WSL detected!${NC} For best results on Windows, use the dedicated WSL installer:"
+    echo -e "  ${CYAN}curl -fsSL https://raw.githubusercontent.com/Elacity/pc2.net/main/scripts/install-wsl.sh | bash${NC}"
+    echo ""
+    echo -e "${NC}Continuing with generic install in 5 seconds (Ctrl+C to cancel)...${NC}"
+    sleep 5
+fi
+
 echo -e "${CYAN}Detected: ${OS}${NC}"
 echo ""
+
+# ─────────────────────────────────────────────────────────────────────
+# Pipe-to-bash detection.
+#
+# When a user runs `curl ... | bash`, this script's stdin is the curl
+# pipe, NOT their terminal. Any later `sudo` prompt, `xcode-select
+# --install` GUI prompt, or `apt-get` interactive question has nowhere
+# to read the user's input from and silently bails. Earlier installs
+# hit exactly this — Homebrew's installer would print "Need sudo
+# access on macOS!" and exit, but later steps wouldn't notice and
+# would carry on printing fake success checkmarks.
+#
+# We refuse to run pipe-to-bash on macOS because every other step
+# (Xcode CLT, Homebrew, brew install) requires a real TTY. On Linux
+# we tolerate it because most distros let `sudo apt-get install -y`
+# work fine without a TTY when the user has cached sudo creds.
+# ─────────────────────────────────────────────────────────────────────
+if [[ "$OS" == "macos" ]] && [ ! -t 0 ]; then
+    echo -e "${RED}❌ This script needs an interactive terminal on macOS.${NC}"
+    echo ""
+    echo -e "${YELLOW}You ran it via \`curl ... | bash\`, which detaches stdin and${NC}"
+    echo -e "${YELLOW}breaks every step that prompts for your password (Xcode${NC}"
+    echo -e "${YELLOW}Command Line Tools, Homebrew, sudo).${NC}"
+    echo ""
+    echo -e "${CYAN}Re-run it like this so it can use your terminal:${NC}"
+    echo ""
+    echo -e "  ${GREEN}bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Elacity/pc2.net/main/scripts/start-local.sh)\"${NC}"
+    echo ""
+    echo -e "  ${YELLOW}or${NC}"
+    echo ""
+    echo -e "  ${GREEN}curl -fsSL https://raw.githubusercontent.com/Elacity/pc2.net/main/scripts/start-local.sh -o /tmp/pc2.sh && bash /tmp/pc2.sh${NC}"
+    echo ""
+    exit 1
+fi
 
 # Load nvm if available
 load_nvm() {
@@ -101,8 +143,29 @@ install_node() {
     echo -e "${YELLOW}Note: Node.js installed via nvm. To use in new terminals, run: source ~/.nvm/nvm.sh${NC}"
 }
 
-# Check for git
+# Check for git.
+#
+# IMPORTANT: on macOS, `command -v git` returns true even on a fresh box
+# because /usr/bin/git is a stub installed by macOS that exists *only* to
+# trigger the Xcode Command Line Tools installer when actually invoked.
+# The earlier check passed silently on this stub, every later compile step
+# (nvm install -> Node compile, brew install) would hit the missing-CLT
+# error, and the user would see a cascade of mysterious failures. The
+# honest test is `xcode-select -p`, which only succeeds once CLT is
+# actually present. (v1.2.7 dropped the better-sqlite3 source-compile
+# step, but other native deps may still need CLT for source builds.)
 check_git() {
+    if [[ "$OS" == "macos" ]]; then
+        if xcode-select -p &> /dev/null; then
+            # CLT installed — git stub will work for real
+            echo -e "${GREEN}✓ Xcode Command Line Tools installed${NC}"
+            return 0
+        else
+            echo -e "${YELLOW}⚠ Xcode Command Line Tools not installed${NC}"
+            return 1
+        fi
+    fi
+
     if command -v git &> /dev/null; then
         echo -e "${GREEN}✓ Git installed${NC}"
         return 0
@@ -112,17 +175,28 @@ check_git() {
     fi
 }
 
-# Install git
+# Install git.
+#
+# On macOS, the only sensible way to get git on a fresh box is the
+# Xcode Command Line Tools. We trigger the GUI installer and exit;
+# the user has to wait for the install to finish (5-10 minutes on
+# slow connections) and re-run the script. We can't `wait` for the
+# CLT install programmatically because it hands off to a separate
+# system process.
 install_git() {
     echo -e "${CYAN}Installing Git...${NC}"
     
     if [[ "$OS" == "macos" ]]; then
-        echo -e "${YELLOW}Git is required. On macOS, it usually comes with Xcode Command Line Tools.${NC}"
-        echo -e "${YELLOW}Please run this command and follow the prompts:${NC}"
+        echo -e "${YELLOW}Git on macOS requires Xcode Command Line Tools.${NC}"
+        echo -e "${YELLOW}Triggering the installer now — a system dialog will appear.${NC}"
         echo ""
-        echo -e "${CYAN}  xcode-select --install${NC}"
+        # Best-effort fire-and-forget; the GUI installer takes over.
+        xcode-select --install 2>/dev/null || true
+        echo -e "${YELLOW}A macOS dialog should be open or about to open. Click 'Install',${NC}"
+        echo -e "${YELLOW}wait for it to finish (typically 5-10 minutes), then re-run:${NC}"
         echo ""
-        echo -e "${YELLOW}Then re-run this script.${NC}"
+        echo -e "  ${GREEN}bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Elacity/pc2.net/main/scripts/start-local.sh)\"${NC}"
+        echo ""
         exit 1
     elif [[ "$OS" == "linux" ]]; then
         if command -v apt-get &> /dev/null; then
@@ -136,6 +210,65 @@ install_git() {
     fi
     
     echo -e "${GREEN}✓ Git installed${NC}"
+}
+
+# ─────────────────────────────────────────────────────────────────────
+# macOS Homebrew bootstrap.
+#
+# Homebrew is the canonical package manager on macOS and we need it for
+# ffmpeg + every native-module system library (cairo, pango, libpng,
+# pkg-config, …). Without it, `npm rebuild canvas` fails with
+# `pkg-config: command not found` and the script previously printed a
+# fake success message.
+#
+# The Homebrew installer prompts for sudo to create /opt/homebrew, so
+# this step REQUIRES a real TTY. We've already early-exited above if
+# we're in pipe-to-bash mode, so by here we know stdin is a terminal.
+# ─────────────────────────────────────────────────────────────────────
+ensure_brew_macos() {
+    if [[ "$OS" != "macos" ]]; then return 0; fi
+
+    # Make sure brew is on PATH if already installed (Apple Silicon
+    # vs Intel default install locations).
+    if ! command -v brew &> /dev/null; then
+        if [[ -x /opt/homebrew/bin/brew ]]; then
+            eval "$(/opt/homebrew/bin/brew shellenv)"
+        elif [[ -x /usr/local/bin/brew ]]; then
+            eval "$(/usr/local/bin/brew shellenv)"
+        fi
+    fi
+
+    if command -v brew &> /dev/null; then
+        echo -e "${GREEN}✓ Homebrew installed ($(brew --prefix))${NC}"
+        return 0
+    fi
+
+    echo -e "${CYAN}Installing Homebrew (macOS package manager)...${NC}"
+    echo -e "${YELLOW}You'll be prompted for your Mac password — that's normal,${NC}"
+    echo -e "${YELLOW}Homebrew needs it to create /opt/homebrew.${NC}"
+    echo ""
+
+    # Run the installer with a real TTY (no </dev/null this time —
+    # that was the original bug that made it fail silently).
+    if /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"; then
+        # Add brew to PATH for the rest of this script
+        if [[ -x /opt/homebrew/bin/brew ]]; then
+            eval "$(/opt/homebrew/bin/brew shellenv)"
+        elif [[ -x /usr/local/bin/brew ]]; then
+            eval "$(/usr/local/bin/brew shellenv)"
+        fi
+        # Persist for future shells (zsh is macOS default since Catalina)
+        if [[ -x /opt/homebrew/bin/brew ]] && ! grep -q "brew shellenv" "$HOME/.zprofile" 2>/dev/null; then
+            echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> "$HOME/.zprofile"
+        fi
+        echo -e "${GREEN}✓ Homebrew installed${NC}"
+        return 0
+    fi
+
+    echo -e "${RED}❌ Homebrew install failed.${NC}"
+    echo -e "${YELLOW}Install it manually following the prompts at https://brew.sh${NC}"
+    echo -e "${YELLOW}then re-run this script.${NC}"
+    exit 1
 }
 
 # Check for pm2
@@ -172,11 +305,15 @@ install_build_deps() {
         SUDO=""
     fi
     
-    # Install build-essential, python3, and native module dependencies
+    # Install build-essential, python3, cmake, ffmpeg, and native module deps.
+    # cmake is required by node-datachannel's source-build fallback when
+    # prebuild-install can't find a binary for the running Node ABI.
     $SUDO apt-get update -qq
     $SUDO apt-get install -y -qq \
         build-essential \
         python3 \
+        cmake \
+        ffmpeg \
         libcairo2-dev \
         libpango1.0-dev \
         libjpeg-dev \
@@ -187,19 +324,93 @@ install_build_deps() {
     echo -e "${GREEN}✓ Build dependencies installed${NC}"
 }
 
+# Install native-module system libraries on macOS via Homebrew.
+#
+# @photostructure/sqlite (v1.2.7+) ships per-platform prebuilds, so no
+#   system libs are needed for it.
+# canvas needs cairo + pango + libpng + jpeg + giflib + librsvg + pkg-config —
+#   without these, `npm rebuild canvas` dies with `pkg-config: command not
+#   found` and PDF/text thumbnail generation is silently disabled.
+# ffmpeg is needed by the media encoding pipeline (AV1/H.264 transcode).
+# wireguard-tools is needed for the optional fast-remote-access overlay.
+#
+# We install ALL of these in one `brew install` so brew can dedup and cache
+# the dependency graph properly. Errors are surfaced (no `|| true`) because
+# silent failures here corrupt the whole rest of the install.
+install_macos_brew_libs() {
+    if [[ "$OS" != "macos" ]]; then return 0; fi
+
+    echo -e "${CYAN}Installing macOS native-module system libraries via Homebrew...${NC}"
+    echo -e "${YELLOW}First run can take a few minutes (brew is downloading bottles)...${NC}"
+
+    # Suppress brew's default "auto-update everything when you `brew install`
+    # anything" behaviour. Without this, a fresh-Mac install can stall for
+    # 5-10 minutes auto-upgrading completely unrelated packages (tesseract,
+    # imagemagick, jpeg-xl, …). We only need the bottles for OUR deps; the
+    # user can `brew upgrade` on their own schedule. Verified during 1.2.4
+    # smoke test where this was the dominant install-time cost.
+    export HOMEBREW_NO_AUTO_UPDATE=1
+    export HOMEBREW_NO_INSTALL_UPGRADE=1
+    export HOMEBREW_NO_ENV_HINTS=1
+
+    # `brew install` exits 0 when packages are already installed, so the
+    # idempotent re-run case is fine. Any genuine failure (e.g. brew not
+    # on PATH, network down) we want to see immediately.
+    #
+    # cmake is required by node-datachannel's source-build fallback when
+    # prebuild-install can't find a binary for the running Node ABI
+    # (e.g. Node 22 napi 8 darwin-arm64). v1.2.4 missed this and crashed
+    # fresh installs at the rebuild step with "OMG CMake executable is
+    # not found". v1.2.5 belt-and-braces it.
+    if ! brew install \
+        cmake \
+        ffmpeg \
+        pkg-config \
+        cairo \
+        pango \
+        libpng \
+        jpeg \
+        giflib \
+        librsvg \
+        wireguard-tools; then
+        echo -e "${RED}❌ Homebrew install failed for one or more required libraries.${NC}"
+        echo -e "${YELLOW}Inspect the output above and re-run this script after fixing.${NC}"
+        exit 1
+    fi
+
+    echo -e "${GREEN}✓ macOS system libraries installed${NC}"
+}
+
 # Main installation
 main() {
     echo -e "${CYAN}Checking requirements...${NC}"
     echo ""
     
-    # Check and install Git
+    # Check and install Git (on macOS this means Xcode CLT — see check_git
+    # comment for why the obvious `command -v git` test gives a false
+    # positive on a fresh Mac).
     if ! check_git; then
         install_git
     fi
-    
+
+    # On macOS, ensure Homebrew + system libraries are present BEFORE
+    # touching Node/npm. Without this, npm rebuild canvas later silently
+    # fails (no pkg-config / no cairo) and PDF/text thumbnails never work.
+    if [[ "$OS" == "macos" ]]; then
+        ensure_brew_macos
+        install_macos_brew_libs
+    fi
+
     # Install build dependencies for native modules (Debian/Ubuntu only)
     # This must happen BEFORE npm install to ensure native modules compile correctly
     install_build_deps
+
+    # FFmpeg sanity check (we install it via brew on macOS and apt on Linux above)
+    if command -v ffmpeg &> /dev/null; then
+        echo -e "${GREEN}✓ FFmpeg available$(ffmpeg -encoders 2>&1 | grep -q libsvtav1 && echo ' (AV1 + H.264)' || echo ' (H.264)')${NC}"
+    else
+        echo -e "${YELLOW}⚠ FFmpeg not found — media encoding will be unavailable${NC}"
+    fi
     
     # Check and install Node.js
     if ! check_node; then
@@ -235,12 +446,37 @@ main() {
         # Need to clone
         echo -e "${CYAN}Downloading PC2...${NC}"
         cd "$HOME"
-        if [[ -n "${PC2_BRANCH}" ]]; then
-            git clone -b "${PC2_BRANCH}" https://github.com/Elacity/pc2.net.git
-            echo -e "${GREEN}✓ Downloaded PC2 (branch: ${PC2_BRANCH})${NC}"
+
+        # Configure git for large repos over unreliable connections (e.g. China/GFW)
+        git config --global http.version HTTP/1.1
+        git config --global http.postBuffer 524288000
+
+        CLONE_BRANCH="${PC2_BRANCH:-main}"
+        CLONE_OK=false
+
+        # Attempt 1: shallow clone (fast, small download)
+        if git clone --depth 1 -b "$CLONE_BRANCH" https://github.com/Elacity/pc2.net.git 2>&1; then
+            CLONE_OK=true
         else
-            git clone https://github.com/Elacity/pc2.net.git
-            echo -e "${GREEN}✓ Downloaded PC2${NC}"
+            echo -e "${YELLOW}⚠ Shallow clone failed, retrying with full clone...${NC}"
+            rm -rf pc2.net 2>/dev/null
+            # Attempt 2: full clone (slower but sometimes more reliable)
+            if git clone -b "$CLONE_BRANCH" https://github.com/Elacity/pc2.net.git 2>&1; then
+                CLONE_OK=true
+            fi
+        fi
+
+        # Restore default git http version
+        git config --global --unset http.version 2>/dev/null || true
+
+        if $CLONE_OK; then
+            echo -e "${GREEN}✓ Downloaded PC2 (branch: ${CLONE_BRANCH})${NC}"
+        else
+            echo -e "${RED}❌ Failed to download PC2. If you are in China, try:${NC}"
+            echo -e "${YELLOW}   1. Use a stable VPN connection${NC}"
+            echo -e "${YELLOW}   2. Try a GitHub mirror: git clone https://ghproxy.com/https://github.com/Elacity/pc2.net.git${NC}"
+            echo -e "${YELLOW}   3. Download the ZIP from https://github.com/Elacity/pc2.net/archive/refs/heads/main.zip${NC}"
+            exit 1
         fi
         PC2_DIR="$HOME/pc2.net/pc2-node"
     fi
@@ -283,14 +519,128 @@ PARTICLE_EOF
     fi
     echo -e "${GREEN}✓ Dependencies installed${NC}"
     
-    # Rebuild native modules (skipped by --ignore-scripts)
-    # This compiles node-pty, better-sqlite3, canvas, etc. for this platform
-    echo -e "${CYAN}Building native modules...${NC}"
+    # Rebuild native modules (skipped by --ignore-scripts above).
+    # This refreshes node-pty, canvas, etc. against the current Node ABI.
+    # @photostructure/sqlite (v1.2.7+) ships prebuilds and doesn't need a
+    # rebuild step, but it IS REQUIRED — if it fails to load, the database
+    # won't initialise and the server crashes at boot with ERR_DLOPEN_FAILED.
+    # The verification gauntlet below covers it. canvas is optional (PDF/text
+    # thumbnails); a failure there is a warning, not fatal.
+    #
+    # The previous version swallowed every error with `|| true` and printed
+    # "✓ Native modules built" regardless. That's how we ended up with
+    # "Timeout waiting for server to start" on fresh installs — npm rebuild
+    # silently failed, the script reported success, then the server crashed
+    # at boot.
+    echo -e "${CYAN}Building native modules (this can take a few minutes)...${NC}"
     cd "$ROOT_DIR"
-    npm rebuild 2>&1 || true
+    npm rebuild 2>&1 || echo -e "${YELLOW}⚠ Root npm rebuild had errors (often optional deps — see above)${NC}"
+
     cd "$PC2_DIR"
-    npm rebuild 2>&1 || true
+    # v1.2.7: dropped the explicit --build-from-source for `better-sqlite3`
+    # because it was migrated to `@photostructure/sqlite` — a Node-API
+    # library whose prebuilds are bundled inside the npm tarball and work
+    # across all Node 20+ majors. No per-Node-version compile needed; no
+    # Xcode CLT requirement on Mac.
+    #
+    # We still run `npm rebuild` (plain) so other native modules get a
+    # chance to use a fresh prebuild matching the current Node ABI.
+    # node-datachannel specifically needs prebuilds (its source-build path
+    # requires cmake, which most users don't have).
+    echo -e "${CYAN}Refreshing all native modules against current Node ABI...${NC}"
+
+    # Refresh the rest using prebuilds when available — fast, and
+    # tolerant of any module that doesn't have a prebuild for this Node
+    # version (it'll fall back to source build, which is why we install
+    # cmake/cairo/etc above).
+    echo -e "${CYAN}Refreshing other native modules...${NC}"
+    npm rebuild 2>&1 || echo -e "${YELLOW}⚠ Some optional natives didn't rebuild (non-fatal — see above)${NC}"
+
     echo -e "${GREEN}✓ Native modules built${NC}"
+
+    # ──────────────────────────────────────────────────────────────────
+    # Native module verification gauntlet.
+    #
+    # Each critical native module gets THREE attempts:
+    #   1. Plain load — most common, works when prebuild-install resolved
+    #      cleanly at npm-install time.
+    #   2. Rebuild — covers ABI drift since last install (e.g. user
+    #      upgraded their Node binary after a prior install).
+    #   3. Clean reinstall — the nuclear option. Wipes node_modules/MOD
+    #      entirely and runs `npm install MOD` which forces a fresh
+    #      prebuild-install query against the CURRENT Node ABI. This
+    #      is what Ahmed had to do manually after v1.2.4 silent-shipped
+    #      a broken node-datachannel — `npm rebuild` reuses stale
+    #      install metadata, only a clean reinstall queries fresh.
+    #
+    # If all three fail, exit with a fix-it-yourself hint that's
+    # SPECIFIC to the module (cmake for node-datachannel; clean reinstall
+    # for @photostructure/sqlite, which ships prebuilds and shouldn't
+    # normally fail).
+    # ──────────────────────────────────────────────────────────────────
+
+    # Helper: load-test an ESM module via dynamic import.
+    verify_esm_loads() {
+        local mod="$1"
+        node -e "import('${mod}').then(m => { if (!m) throw new Error('null'); }).catch(e => { console.error(e.message); process.exit(1); })" 2>&1
+    }
+
+    # Helper: load-test the CJS sqlite module by requiring + smoke-running it.
+    verify_sqlite_loads() {
+        node -e "const { DatabaseSync } = require('@photostructure/sqlite'); new DatabaseSync(':memory:').prepare('SELECT 1').get()" 2>&1
+    }
+
+    # ─── @photostructure/sqlite (v1.2.7+) ─────────────────────────────
+    # Migrated from better-sqlite3 in v1.2.7. Bundled prebuilds + Node-API
+    # mean the historical "needs Xcode CLT to recompile" failure mode is
+    # gone. This gauntlet now mostly catches genuine node_modules corruption.
+    echo -e "${CYAN}Verifying @photostructure/sqlite against Node $(node -v)...${NC}"
+    if ! verify_sqlite_loads >/dev/null 2>&1; then
+        echo -e "${YELLOW}⚠ @photostructure/sqlite doesn't load — clean reinstalling...${NC}"
+        rm -rf node_modules/@photostructure/sqlite
+        npm install @photostructure/sqlite --legacy-peer-deps 2>&1 || true
+        if ! verify_sqlite_loads >/dev/null 2>&1; then
+            echo -e "${RED}❌ @photostructure/sqlite cannot be made to load — server cannot start.${NC}"
+            echo -e "${YELLOW}This is unusual — the library ships prebuilds for all platforms.${NC}"
+            echo -e "${YELLOW}Try a clean reinstall:${NC}"
+            echo -e "${YELLOW}  cd $PC2_DIR && rm -rf node_modules package-lock.json && npm install${NC}"
+            verify_sqlite_loads
+            exit 1
+        fi
+        echo -e "${GREEN}✓ @photostructure/sqlite recovered via clean reinstall${NC}"
+    else
+        echo -e "${GREEN}✓ @photostructure/sqlite verified${NC}"
+    fi
+
+    # ─── node-datachannel ─────────────────────────────────────────────
+    echo -e "${CYAN}Verifying node-datachannel against Node $(node -v)...${NC}"
+    if ! verify_esm_loads node-datachannel >/dev/null 2>&1; then
+        echo -e "${YELLOW}⚠ node-datachannel doesn't load — clean reinstalling...${NC}"
+        # The clean reinstall trick from Ahmed (v1.2.4 hotfix discovery,
+        # Apr 30 2026): `npm rebuild` reuses stale install metadata, but
+        # `rm -rf node_modules/MOD && npm install MOD` forces prebuild-
+        # install to fetch fresh for the current Node ABI. With cmake
+        # now installed up front, even the source-build fallback works
+        # if prebuild-install can't find a binary.
+        rm -rf node_modules/node-datachannel
+        npm install node-datachannel --legacy-peer-deps 2>&1 || true
+        if ! verify_esm_loads node-datachannel >/dev/null 2>&1; then
+            echo -e "${RED}❌ node-datachannel cannot be made to load — server will crash-loop on boot.${NC}"
+            echo -e "${YELLOW}Manual fix:${NC}"
+            if [[ "$OS" == "macos" ]]; then
+                echo -e "${YELLOW}  brew install cmake${NC}"
+            else
+                echo -e "${YELLOW}  sudo apt install cmake  (or your distro's equivalent)${NC}"
+            fi
+            echo -e "${YELLOW}  cd $PC2_DIR && rm -rf node_modules/node-datachannel && npm install node-datachannel${NC}"
+            echo -e "${YELLOW}If that still fails, paste output to https://github.com/Elacity/pc2.net/issues${NC}"
+            verify_esm_loads node-datachannel
+            exit 1
+        fi
+        echo -e "${GREEN}✓ node-datachannel recovered via clean reinstall${NC}"
+    else
+        echo -e "${GREEN}✓ node-datachannel verified${NC}"
+    fi
     
     # Build
     echo -e "${CYAN}Building PC2...${NC}"
@@ -300,23 +650,16 @@ PARTICLE_EOF
     fi
     echo -e "${GREEN}✓ Build complete${NC}"
     
-    # Install WireGuard for fast remote access
+    # Install WireGuard for fast remote access.
+    # On macOS this is already covered by install_macos_brew_libs() above —
+    # we only need to do extra work on Linux here. The previous version had
+    # a buggy `bash ... </dev/null` Homebrew bootstrap inside this branch
+    # that would silently fail because `</dev/null` detached stdin from the
+    # sudo prompt; we removed it because Homebrew is now installed up-front
+    # in ensure_brew_macos() with a real TTY.
     if ! command -v wg &> /dev/null; then
         echo -e "${CYAN}Installing WireGuard for fast remote access...${NC}"
-        if [[ "$OS" == "macos" ]]; then
-            if ! command -v brew &> /dev/null; then
-                echo -e "${CYAN}Installing Homebrew (macOS package manager)...${NC}"
-                /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" </dev/null
-                # Add Homebrew to PATH for this session
-                if [[ -x /opt/homebrew/bin/brew ]]; then
-                    eval "$(/opt/homebrew/bin/brew shellenv)"
-                elif [[ -x /usr/local/bin/brew ]]; then
-                    eval "$(/usr/local/bin/brew shellenv)"
-                fi
-                echo -e "${GREEN}✓ Homebrew installed${NC}"
-            fi
-            brew install wireguard-tools 2>&1 || true
-        elif [[ "$OS" == "linux" ]]; then
+        if [[ "$OS" == "linux" ]]; then
             if command -v apt-get &> /dev/null; then
                 sudo apt-get install -y -qq wireguard-tools 2>&1 || true
             elif command -v yum &> /dev/null; then
@@ -325,6 +668,8 @@ PARTICLE_EOF
         fi
         if command -v wg &> /dev/null; then
             echo -e "${GREEN}✓ WireGuard installed${NC}"
+        else
+            echo -e "${YELLOW}⚠ WireGuard not installed — fast remote access unavailable${NC}"
         fi
     else
         echo -e "${GREEN}✓ WireGuard tools detected${NC}"
@@ -505,10 +850,30 @@ chmod 440 /etc/sudoers.d/amneziawg"
     
     # Stop any existing pc2 process
     pm2 delete pc2 2>/dev/null || true
-    
-    # Start with pm2
+
+    # Start with pm2.
+    #
+    # v1.2.7+: prefer ecosystem.config.cjs (at PC2 repo root, one level
+    # above pc2-node) over `pm2 start npm`. This:
+    #   - registers the process with env defaults from the file
+    #     (cluster pinning, log paths, restart_delay, kill_timeout, …)
+    #   - runs `node dist/index.js` directly instead of via an npm
+    #     wrapper — pm2 then kills the actual node on restart instead
+    #     of orphaning the child process behind a dead npm shell
+    #   - matches what update.sh / install-arm.sh do, so the in-app
+    #     `pm2 startOrRestart ecosystem.config.cjs --only pc2 --update-env`
+    #     used by UpdateService finds a matching app and refreshes env
+    # Falls back to the old `pm2 start npm` form on the rare clone where
+    # the ecosystem file is missing (e.g. very old branch checkout).
     echo -e "${CYAN}Starting PC2 with PM2 process manager...${NC}"
-    pm2 start npm --name "pc2" -- start
+    PC2_ROOT_DIR="$(dirname "$PC2_DIR")"
+    if [[ -f "$PC2_ROOT_DIR/ecosystem.config.cjs" ]]; then
+        cd "$PC2_ROOT_DIR"
+        pm2 start "$PC2_ROOT_DIR/ecosystem.config.cjs"
+        cd "$PC2_DIR"
+    else
+        pm2 start npm --name "pc2" -- start
+    fi
     
     # Wait a moment for server to start
     sleep 3

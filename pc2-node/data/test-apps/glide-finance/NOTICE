@@ -1,0 +1,20 @@
+Glide Finance Frontend
+======================
+
+This application is a modified build of the Glide Finance frontend.
+
+Original source: https://github.com/glide-finance/glide-frontend
+License: GNU General Public License v3.0 (GPL-3.0)
+
+Modifications for PC2 packaging:
+- Added "homepage": "." to package.json for relative asset paths
+- Resolved @babel/core version via yarn resolutions for CRA 4 build compatibility
+- Downgraded @uniswap/token-lists to 1.0.0-beta.34 for pre-built dist availability
+- Used react-app-rewired with config-overrides.js for .mjs transpilation
+- Removed non-essential large decorative images (home/partners, nfts, etc.) to reduce bundle size
+- Build environment: REACT_APP_CHAIN_ID=20, ESC RPC endpoints
+
+The complete source code (including modifications) is available at:
+https://github.com/glide-finance/glide-frontend
+
+For the full license text, see the LICENSE file in this directory.

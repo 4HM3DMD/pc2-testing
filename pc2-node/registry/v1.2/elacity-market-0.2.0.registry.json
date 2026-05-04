@@ -1,0 +1,70 @@
+{
+  "name": "elacity-market",
+  "title": "Elacity Market",
+  "version": "0.2.0",
+  "description": "Browse, purchase, and collect digital media NFTs from the Elacity marketplace on Base.",
+  "author": {
+    "name": "Elacity Labs",
+    "url": "https://ela.city"
+  },
+  "license": "proprietary",
+  "icon": "icon.png",
+  "iconDataUrl": "data:image/png;base64,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",
+  "entry": "index.html",
+  "type": "web",
+  "category": "marketplace",
+  "role": "system",
+  "capabilities": {
+    "wallet": true,
+    "network": true,
+    "ipfs": {
+      "pin": true,
+      "fetch": true
+    },
+    "ipc": [
+      "launchApp",
+      "openFolder"
+    ],
+    "drm": true,
+    "api_endpoints": [
+      "GET /api/storage/ipfs/pins",
+      "POST /api/storage/ipfs/pin",
+      "POST /api/media/prepare-auth",
+      "POST /write"
+    ],
+    "postMessage_events": {
+      "sends": [
+        "launchApp:pc2-media-runtime",
+        "launchApp:ddrm-viewer",
+        "openFolder"
+      ],
+      "receives": []
+    },
+    "external_services": [
+      "https://ipfs.ela.city/ipfs/"
+    ]
+  },
+  "requirements": {
+    "minVersion": "1.1.0"
+  },
+  "display": {
+    "maximize": true,
+    "resizable": true,
+    "titlebar": true,
+    "taskbar": true
+  },
+  "services": [
+    {
+      "name": "marketplace",
+      "protocol": "https",
+      "description": "Elacity decentralized media marketplace"
+    }
+  ],
+  "distribution": {
+    "channel": "stable",
+    "cid": "bafybeiczcdan4j7zfw2ychjgzco4y4lbb5mqceezxfl5h7f3koau7t6x5y",
+    "signature": "a0c55bbe82c1397a6ce84129856f7a1a5a9a8dd8506086f130d78be2ae128f010e8ff05182efe5c07f5cd918e85b722a59a471a7650ec34e8247ed8bc7811b02",
+    "signedBy": "1ab060ba7578261355504300c1193c484ed8a46a30499c3fa3cb9065930367eb",
+    "size": 7124385
+  }
+}

@@ -47,6 +47,7 @@ import UIAccountSidebar from "./UIAccountSidebar.js"
 import walletService from "../services/WalletService.js"
 import initPC2StatusBar from "./UIPC2StatusBar.js"
 import UIAIChat from "./AI/UIAIChat.js"
+import initMintButton from "./UIMintButton.js"
 import WorkspaceManager from "../helpers/WorkspaceManager.js"
 import { toggleMissionControl } from "./UIMissionControl.js"
 
@@ -239,6 +240,45 @@ async function UIDesktop(options) {
         }
     });
 
+    // dApp install progress — bridged from the pc2-node install pipeline.
+    // The dApp Centre runs inside an iframe and can't subscribe to the
+    // authenticated Socket.io room directly, so we forward the event via
+    // postMessage to every live iframe. The dApp Centre keys the update
+    // off `appName` so only the relevant install modal responds.
+    // See DAPP-UX-POLISH-V12 #6.
+    window.socket.on('install:progress', (msg) => {
+        try {
+            document.querySelectorAll('iframe').forEach((frame) => {
+                if (frame?.contentWindow) {
+                    frame.contentWindow.postMessage({
+                        msg: 'apps:installProgress',
+                        ...msg,
+                    }, '*');
+                }
+            });
+        } catch (e) {
+            console.warn('[install:progress] forward failed:', e);
+        }
+    });
+
+    // dApp set changed — refresh the launch-apps cache so the Start
+    // menu renders a fresh tile list on its next open without requiring
+    // a page reload. See DAPP-UX-POLISH-V12 #4.
+    window.socket.on('apps:changed', async () => {
+        try {
+            const token = window.auth_token;
+            if (!token) return;
+            const res = await fetch(`${window.api_origin}/get-launch-apps?icon_size=64`, {
+                headers: { 'Authorization': `Bearer ${token}` },
+            });
+            if (res.ok) {
+                window.launch_apps = await res.json();
+            }
+        } catch (e) {
+            console.warn('[apps:changed] refresh failed:', e);
+        }
+    });
+
     window.socket.on('trash.is_empty', async (msg) => {
         $(`.item[data-path="${html_encode(window.trash_path)}" i]`).find('.item-icon > img').attr('src', msg.is_empty ? window.icons['trash.svg'] : window.icons['trash-full.svg']);
         $(`.window[data-path="${html_encode(window.trash_path)}" i]`).find('.window-head-icon').attr('src', msg.is_empty ? window.icons['trash.svg'] : window.icons['trash-full.svg']);
@@ -374,6 +414,101 @@ async function UIDesktop(options) {
         // limit to 5
         window.launch_apps.recent = window.launch_apps.recent.slice(0, window.launch_recent_apps_count);
     })
+
+    // ── A2UI Canvas Events ──────────────────────────────────────────
+    // Agent-driven windows: the AI pushes HTML content as desktop windows
+
+    // Track open canvas windows: canvas_id -> DOM element
+    window._canvasWindows = window._canvasWindows || {};
+
+    window.socket.on('canvas.push', async (data) => {
+        if (!data || !data.canvas_id || !data.html) return;
+
+        const canvasId = data.canvas_id;
+        const title = data.title || 'AI Canvas';
+        const width = Math.min(Math.max(data.width || 600, 300), 1200);
+        const height = Math.min(Math.max(data.height || 400, 200), 900);
+
+        // Wrap HTML with dark theme base styles
+        const wrappedHtml = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+            * { box-sizing: border-box; margin: 0; padding: 0; }
+            body { font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif;
+                   font-size: 13px; color: #e0e0e0; background: #1e1e2e; padding: 16px;
+                   line-height: 1.5; overflow-y: auto; }
+            table { width: 100%; border-collapse: collapse; margin: 8px 0; }
+            th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid #333; }
+            th { font-weight: 600; color: #b0b0b0; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+            h1, h2, h3 { color: #ffffff; margin: 12px 0 8px 0; }
+            h1 { font-size: 18px; } h2 { font-size: 15px; } h3 { font-size: 13px; }
+            a { color: #007aff; text-decoration: none; }
+            code { background: #2a2a3e; padding: 2px 6px; border-radius: 4px; font-size: 12px; }
+            pre { background: #2a2a3e; padding: 12px; border-radius: 6px; overflow-x: auto; }
+            .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+            .badge-green { background: rgba(52,199,89,0.15); color: #34c759; }
+            .badge-blue { background: rgba(0,122,255,0.15); color: #007aff; }
+            .badge-red { background: rgba(255,59,48,0.15); color: #ff3b30; }
+            .badge-yellow { background: rgba(255,204,0,0.15); color: #ffcc00; }
+        </style></head><body>${data.html}</body></html>`;
+
+        const el = await UIWindow({
+            title: title,
+            iframe_srcdoc: wrappedHtml,
+            width: width,
+            height: height,
+            app: 'ai-canvas',
+            is_resizable: true,
+            allow_native_ctxmenu: true,
+            show_in_taskbar: true,
+        });
+
+        window._canvasWindows[canvasId] = el;
+
+        // Clean up tracking when window is closed
+        $(el).on('remove', () => {
+            delete window._canvasWindows[canvasId];
+            // Notify backend that window was closed by user
+            if (window.socket && window.socket.connected) {
+                window.socket.emit('canvas.closed', { canvas_id: canvasId });
+            }
+        });
+    });
+
+    window.socket.on('canvas.update', (data) => {
+        if (!data || !data.canvas_id || !data.html) return;
+
+        const el = window._canvasWindows[data.canvas_id];
+        if (!el) return;
+
+        const iframe = $(el).find('.window-app-iframe')[0];
+        if (iframe) {
+            const wrappedHtml = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+                * { box-sizing: border-box; margin: 0; padding: 0; }
+                body { font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif;
+                       font-size: 13px; color: #e0e0e0; background: #1e1e2e; padding: 16px;
+                       line-height: 1.5; overflow-y: auto; }
+                table { width: 100%; border-collapse: collapse; margin: 8px 0; }
+                th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid #333; }
+                th { font-weight: 600; color: #b0b0b0; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+                h1, h2, h3 { color: #ffffff; margin: 12px 0 8px 0; }
+                a { color: #007aff; } code { background: #2a2a3e; padding: 2px 6px; border-radius: 4px; font-size: 12px; }
+            </style></head><body>${data.html}</body></html>`;
+            iframe.srcdoc = wrappedHtml;
+        }
+
+        if (data.title) {
+            $(el).find('.window-head-title').text(data.title);
+        }
+    });
+
+    window.socket.on('canvas.remove', (data) => {
+        if (!data || !data.canvas_id) return;
+
+        const el = window._canvasWindows[data.canvas_id];
+        if (el) {
+            $(el).close();
+            delete window._canvasWindows[data.canvas_id];
+        }
+    });
 
     window.socket.on('item.removed', async (item) => {
         console.log('[Frontend] ✅ Received item.removed event:', item, 'socket.id:', window.socket.id);
@@ -1319,6 +1454,11 @@ async function UIDesktop(options) {
     // AI Side Panel
     // ---------------------------------------------------------------
     UIAIChat();
+
+    // ---------------------------------------------------------------
+    // Mint / Publish Toolbar Button
+    // ---------------------------------------------------------------
+    initMintButton();
 
     // --------------------------------------------------------
     // Dragster
@@ -2687,8 +2827,8 @@ $(document).on('click', '.user-options-menu-btn', async function (e) {
         // Show smart_account_address (UniversalX) second if it exists (display-only, no hover/click)
         if (window.user.smart_account_address) {
             const displayName = window.user.smart_account_address.slice(0, 10) + '...' + window.user.smart_account_address.slice(-8);
-            const subtitle = '<span style="display:block;font-size:10px;color:#666;margin-top:2px;margin-left:25px;padding-left:0;text-align:left;">UniversalX Smart Account</span>';
-            // Smart Account icon (shield with bolt)
+            const subtitle = '<span style="display:block;font-size:10px;color:#666;margin-top:2px;margin-left:25px;padding-left:0;text-align:left;">Agent Account</span>';
+            // Agent Account icon (shield with bolt)
             const smartIconSvg = `<svg style="width:16px;height:16px;vertical-align:middle;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M13 6l-4 6h3l-1 6 4-6h-3l1-6z" fill="currentColor" stroke="none"/></svg>`;
             items.push({
                 html: displayName + subtitle,
@@ -2697,7 +2837,7 @@ $(document).on('click', '.user-options-menu-btn', async function (e) {
                 onClick: async function () {}
             });
         }
-        // Invisible spacer (no visible line) so UniversalX Smart Account text is not obscured by Switch Account
+        // Invisible spacer (no visible line) so Agent Account text is not obscured by Switch Account
         if (window.logged_in_users.length > 0 || otherAccounts.length > 0) {
             items.push('-');
         }
@@ -2765,14 +2905,14 @@ $(document).on('click', '.user-options-menu-btn', async function (e) {
                 return;
             }
             
-            // For wallet users, show Smart Account address if available, else EOA
+            // For wallet users, show Agent Account address if available, else EOA
             let displayName = l_user.username;
             let subtitle = '';
             
             if (l_user.smart_account_address) {
-                // Show Smart Account (truncated) with "Smart" label
+                // Show Agent Account (truncated) with label
                 displayName = l_user.smart_account_address.slice(0, 10) + '...' + l_user.smart_account_address.slice(-8);
-                subtitle = '<span style="display:block;font-size:10px;color:#666;margin-top:2px;margin-left:25px;padding-left:0;text-align:left;">UniversalX Smart Account</span>';
+                subtitle = '<span style="display:block;font-size:10px;color:#666;margin-top:2px;margin-left:25px;padding-left:0;text-align:left;">Agent Account</span>';
             } else if (l_user.wallet_address) {
                 // Show EOA address (truncated)
                 displayName = l_user.wallet_address.slice(0, 10) + '...' + l_user.wallet_address.slice(-8);

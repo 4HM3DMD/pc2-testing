@@ -4,11 +4,23 @@ node_modules/
 # Build output
 dist/
 
+# Bundled platform binaries (fetched via scripts/fetch-binaries.sh)
+bin/
+
 # Compiled TypeScript in src/ (source is .ts, compiled goes to dist/)
 src/**/*.js
 src/**/*.js.map
 src/**/*.d.ts
 src/**/*.d.ts.map
+
+# Exception: wallet-bridge contains hand-authored ES5 .js sources that ship to
+# the browser (frontend/ copies via build-frontend.js). Without this exception,
+# git reset --hard on update wipes the source dir, build-frontend.js wipes the
+# target dir then finds no source to copy → wallet bridge files vanish from
+# the served frontend, dApps fall back to MetaMask, and WalletConnect users
+# can't sign anything. (Discovered during v1.2.0 → v1.2.1 hotfix on Jetson.)
+!src/wallet-bridge/
+!src/wallet-bridge/**/*.js
 
 # Environment variables
 .env
@@ -26,8 +38,22 @@ Thumbs.db
 .vscode/
 .idea/
 
-# Data
-data/
+# Secrets / API keys (never commit)
+data/.chipotle-api-key
+data/.chipotle-user-key
+data/.chipotle-account-key
+data/.chipotle-provision.json
+
+# Dev-only test scripts containing secrets
+scripts/test-chipotle-phase1.mjs
+
+# Data (user data, databases, runtime state — but NOT test-apps or lit-actions source)
+data/*
+!data/test-apps/
+!data/lit-actions/
+!data/skills/
+libp2p-private-key.protobuf
+data/ipfs/libp2p-private-key.protobuf
 *.db
 *.db-shm
 *.db-wal

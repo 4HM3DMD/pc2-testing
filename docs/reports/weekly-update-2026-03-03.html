@@ -1,0 +1,140 @@
+<strong>ElastOS v1.1.0 Released — Stealth Networking, Desktop Launcher Updates, Elacity dDRM Planning, DAO Proposal Live, and 134 Commits Ship to Main</strong>
+<h3><strong>v1.1.0: From Development Branch to Public Release</strong></h3>
+This was a landmark week for <a href="https://blog.elastos.net/announcement/elastos-world-computer-v1-launches/">ElastOS</a>. The <code>feature/jetson-gpu-acceleration</code> branch — <strong>134 commits across hundreds of files</strong> — was merged to <code>main</code> and tagged as <a href="https://github.com/Elacity/pc2.net/releases/tag/v1.1.0">v1.1.0</a>. This release delivers censorship-resistant networking, a smarter desktop launcher, voice AI, desktop UI upgrades, hardened ARM installers, and lays the groundwork for an Elacity-powered decentralized app store and media marketplace. The <a href="https://elastos.com/proposals/69a24f49247f130078064edd">Keystone Fund DAO proposal</a> is live, and parallel work on the <strong>ElastOS Rust runtime</strong> continues to validate the capsule architecture that will power V2.
+
+<h3><strong>DAO Proposal: Keystone Fund Mandate Now Live</strong></h3>
+The <a href="https://elastos.com/proposals/69a24f49247f130078064edd">Keystone Fund proposal</a> — <strong>"Mandating the $3,000,000 Keystone Fund for Continuous Delivery of ElastOS: From Working Product to Agentic World Computer"</strong> — is now live on the <a href="https://www.cyberrepublic.org">Elastos DAO</a>. Proposed by <a href="http://elacitylabs.com">Elacity</a> CEO Sasha Mitchell and promoted by <a href="https://blog.elastos.net/announcement/elastos-world-computer-v1-launches/">Elastos</a> founder Rong Chen, the proposal went through over a week of community feedback and a two-hour call with the Elastos DAO where every aspect was discussed openly. The full call notes and discussion summary will be published separately by the DAO Secretariat team.
+
+The proposal asks for a DAO mandate to fund continuous <a href="https://blog.elastos.net/announcement/elastos-world-computer-v1-launches/">ElastOS</a> development, ecosystem leadership, and commercialization — enabling monthly releases, broader hardware support, AI agent advancement, omnichain <a href="https://elastos.org/ela">ELA</a> utility, and the progression toward a capsule-based architecture where anyone can build, extend, and contribute. Key benefits include structural <a href="https://elastos.org/ela">ELA</a> demand through protocol fees and Carrier premium tiers, transparent weekly shipping reports with public accountability, and a clear three-year roadmap from working product to agentic world computer. Full details are in the <a href="https://elastos.com/proposals/69a24f49247f130078064edd">proposal</a>.
+
+<h3><strong>What We Shipped in v1.1.0</strong></h3>
+<img class="wp-image-10183 aligncenter" src="https://blog.elastos.net/wp-content/uploads/2026/02/Screenshot-2026-02-28-at-17.12.38-1-300x165.png" alt="" width="1025" height="564" />
+
+<h5>1) <strong>Four-Tier Stealth Transport Cascade</strong> 🛡️</h5>
+ElastOS nodes now connect to the network through a <strong>four-tier transport cascade</strong> that automatically finds the best connection method — and falls back through increasingly stealthy options if your network tries to block it:
+
+<ol>
+  <li><strong>WireGuard</strong> — Fast, encrypted UDP tunnel. Works on most networks.</li>
+  <li><strong>AmneziaWG</strong> — Same speed, but disguised so Deep Packet Inspection (DPI) firewalls can't tell it's a VPN. Built for countries that block standard VPN traffic.</li>
+  <li><strong>VLESS Reality</strong> — Wraps your connection inside what looks like a normal HTTPS visit to microsoft.com. Even if all UDP is blocked, this TCP-based tunnel gets through.</li>
+  <li><strong>ActiveProxy</strong> — Last resort relay through the supernode. Always works, no matter what.</li>
+</ol>
+
+The system is fully automatic: if your ISP or government firewall blocks one layer, the node detects it within seconds and moves to the next. It also periodically retries faster tiers so it moves back up when possible. All four tiers are <strong>tested and working on both macOS and NVIDIA Jetson</strong>, with sing-box 1.13.0 pinned across all nodes for stability.
+
+<strong>Why it matters:</strong> Your personal cloud should be reachable from anywhere — whether you're on a coffee shop WiFi, a corporate network, or behind a national firewall. This is the same principle as Tor or Signal, but built directly into your cloud's networking layer.
+
+<h5>2) <strong>Desktop Launcher: Version Display &amp; One-Click Updates</strong></h5>
+The <a href="https://github.com/Elacity/elastos-launcher/releases/tag/v1.1.0">ElastOS Desktop Launcher</a> (v1.1.0) now shows the <strong>actual version of your installed PC2 node</strong> instead of a hardcoded number. It checks GitHub for new releases in the background — and when an update is available, a green <strong>"Update"</strong> button appears right next to the version. One click pulls the latest code, installs dependencies, rebuilds, and restarts your node. No terminal needed.
+
+<strong>Why it matters:</strong> The goal is zero-friction sovereign computing. A user who downloaded the launcher should never have to open a terminal to stay up to date. This brings the ElastOS update experience closer to what people expect from consumer apps.
+
+<h5>3) <strong>Desktop UI Upgrades</strong></h5>
+The ElastOS desktop now supports a <strong>full-width top bar</strong> with the Elastos logo on the left, and search, wallet, profile, and a clock on the right. Users can switch between the original floating toolbar and the new full top bar in Settings under "Desktop Layout." The file explorer also received polish: larger default windows, proper file timestamps (no more "just now" on every file), refined list view colors, and a background color picker for desktop wallpapers. Mobile received fixes too — the taskbar now renders correctly on phones with proper z-index layering and forced toolbar mode.
+
+<strong>Why it matters:</strong> A polished, familiar desktop experience lowers the barrier to entry, which is critical for a personal cloud OS competing for daily use.
+
+<h5>4) <strong>Voice AI Pipeline</strong></h5>
+ElastOS now has a <strong>voice AI pipeline</strong> with speech-to-text input, context-aware processing, and resilient Ollama integration. The AI can access your file system and application state through a new Context API, meaning your personal AI assistant understands what you're working on.
+
+<strong>Why it matters:</strong> Voice interaction is the natural interface for a personal cloud. Having AI that understands your files and context — running privately on your own hardware — is a capability no centralized cloud offers.
+
+<h5>5) <strong>ARM Installer Hardening</strong></h5>
+A full overhaul of the ARM install script ensures that <strong>Jetson and Raspberry Pi users get a working node on the first try</strong>. The fixes are specific and battle-tested — every one was discovered by real community members deploying on real hardware:
+
+<ul>
+  <li><strong>Go version auto-detection</strong> — if the system Go is too old (Jetson ships with Go 1.18), the script downloads Go 1.24 automatically to build AmneziaWG</li>
+  <li><strong>AmneziaWG built from source</strong> — uses <code>git clone + make</code> instead of <code>go install</code>, which was pulling old tagged versions that couldn't handle AWG 2.0 config parameters</li>
+  <li><strong>sing-box 1.13.0 pinned</strong> — version 1.11.0 had bugs in UDP-over-TCP multiplexing that caused VLESS Reality tunnels to drop after 5 seconds</li>
+  <li><strong>sudo user detection fixed</strong> — running <code>sudo bash install-arm.sh</code> no longer creates a duplicate PC2 install under <code>/root/</code></li>
+  <li><strong>Jetson power mode optimization</strong> — auto-detects available power modes and sets the highest (up to 25W MAXN_SUPER on Orin Nano)</li>
+  <li><strong>Rogue install cleanup</strong> — detects and removes accidental <code>/root/pc2.net</code> installations from previous buggy script runs</li>
+</ul>
+
+<strong>Why it matters:</strong> Every failed install is a lost user. These fixes target the exact failure modes reported by community members. The path from "fresh Ubuntu on a Jetson" to "running ElastOS with stealth networking" is now a single command.
+
+<h5>6) <strong>WireGuard Networking Improvements</strong></h5>
+WireGuard reconnection was improved with <strong>exponential backoff starting at 15 seconds</strong> instead of a flat 60-second retry. WireGuard is now preferred over the Active Proxy fallback on reconnect, and detection was fixed for restricted environments like PM2 and systemd where the system PATH doesn't include standard binary locations. Gateway keep-alive was also hardened.
+
+<strong>Why it matters:</strong> Faster reconnection means less downtime when network conditions change. For users running ElastOS on a Jetson at home behind a consumer router, this translates to a more reliable always-on experience.
+
+<h5>7) <strong>Upload Reliability</strong></h5>
+File uploads now show <strong>accurate 100% progress</strong> and verify file size against IPFS after upload. Truncated uploads on large files are detected and reported to the user instead of silently succeeding with corrupted data.
+
+<strong>Why it matters:</strong> Your personal cloud is only as trustworthy as its storage. Users uploading large video files or backups need confidence that what they uploaded is what got stored.
+
+<h5>8) <strong>Security &amp; Code Quality</strong></h5>
+<ul>
+  <li><strong>Structured logging</strong> — all <code>console.log</code> calls across the backend replaced with a module-aware logger (<code>[PC2:static]</code>, <code>[PC2:ipfs]</code>, etc.) gated by <code>LOG_LEVEL</code>. No more debug noise in production.</li>
+  <li><strong>Credential rotation</strong> — supernode SSH passwords rotated and removed from documentation; references now point to password manager</li>
+  <li><strong>Development artifacts excluded</strong> — <code>.gitignore</code> updated to prevent SDK clones and test files from being committed</li>
+</ul>
+
+<h4><strong>Bug Fixes &amp; Polish</strong></h4>
+<ul>
+  <li><strong>AV1/Firefox video playback</strong> — proper error handling and format support for next-gen video codecs</li>
+  <li><strong>Search modal padding</strong> — even spacing above and below the search input, icon vertically aligned</li>
+  <li><strong>Profile dropdown</strong> — disabled items now transparent in light mode instead of white blocks</li>
+  <li><strong>Loading screen</strong> — now reads "Personal Cloud Compute"</li>
+  <li><strong>sing-box QUIC sniffing conflict</strong> — disabled protocol sniffing that was misidentifying AmneziaWG packets as QUIC traffic and breaking the stealth tunnel</li>
+  <li><strong>Launcher env switch crash</strong> — switching between <code>~/.pc2</code> and <code>~/pc2.net</code> no longer kills the Electron app</li>
+  <li><strong>GUI dev workflow</strong> — added auto-rebuild watch script for faster development iteration</li>
+</ul>
+
+<h3><strong>Elacity dDRM &amp; dApp Store: Planning Complete</strong></h3>
+Alongside the v1.1.0 release, we completed deep research into the <a href="https://github.com/Elacity/js-sdk">Elacity SDK</a> and produced a comprehensive architecture plan for a <strong>decentralized app store and media marketplace</strong> built on top of PC2. The vision: users browse an app store inside their ElastOS desktop, install apps from IPFS, and creators can monetize content using Elacity's tokenized digital rights management (dDRM) system — all without a centralized gatekeeper.
+
+Key planning milestones:
+<ul>
+  <li><strong>Elacity SDK deep-dive</strong> — full source audit of all seven <code>@elacity-js/*</code> packages (contracts, API, media packager, player, adapters)</li>
+  <li><strong>dApp Store architecture</strong> — app manifest format, IPFS-backed registry, iframe sandboxing with postMessage wallet bridge, SQLite install tracking</li>
+  <li><strong>App Factory concept</strong> — a future feature where developers can package and publish apps directly from their own PC2 node</li>
+  <li><strong>ERC-8004 research</strong> — evaluated the draft "Trustless Agents" standard for AI agent registry and reputation; mapped to PC2's node identity system for Phase 2-3 integration</li>
+  <li><strong>V1→V2 bridge strategy</strong> — every component designed with explicit migration paths to the capsule-based runtime</li>
+</ul>
+
+This work is now the <strong>first priority</strong> on the post-v1.1.0 roadmap, tracked in a dedicated <code>feature/elacity-ddrm-marketplace</code> branch.
+
+<strong>Why it matters:</strong> A personal cloud without apps is a hard drive with a nice UI. The app store turns ElastOS into a platform — one where developers ship to users directly, without Apple or Google in the middle, and where digital content has real ownership through on-chain DRM.
+
+<h3><strong>Runtime &amp; Capsule Architecture: V2 Foundations</strong></h3>
+<img class="alignnone wp-image-10179" src="https://blog.elastos.net/wp-content/uploads/2026/02/Screenshot-2026-02-28-at-17.11.29-300x143.png" alt="" width="1063" height="507" />
+
+While v1.1 shipped on the product side, parallel work on the <strong>ElastOS Rust runtime</strong> reached a significant milestone. A <strong>working P2P chat system</strong> was built from scratch using five capsules — a localhost provider, shell, DID identity provider, peer networking provider, and the chat application itself — all running on the new capability-secured runtime.
+
+This validates the core architectural model: a <strong>minimal trusted runtime</strong> (pure Rust, ~10 crates) that enforces sandboxes, validates Ed25519 capability tokens, and routes provider protocols — while all higher-level functionality runs in isolated capsules. Each capsule carries its own execution world: microVM capsules run a full Linux environment, WASM capsules run on a thin WASI layer, and application capsules interact through capability tokens that grant exactly the permissions needed — nothing more.
+
+The three-layer model is crystallizing: <strong>PC2 OS</strong> (host hardware and kernel), <strong>ElastOS Carrier</strong> (the trust plane — capability enforcement, capsule lifecycle, provider routing, audit trail), and <strong>AppCapsule Runtime</strong> (per-capsule execution with its own isolated world). The shell capsule — today a simple auto-grant loop — is designed to evolve into an intelligent orchestrator, where permission decisions become conversations rather than popups, and AI agents operate under the same security model as human users.
+
+Architectural discussions also advanced <strong>URI namespace design</strong>, aligning with W3C DID conventions so that all Elastos ecosystem services route through a unified <code>elastos://</code> scheme — peer networking, identity, AI, and content addressing all under one coherent namespace. This keeps the runtime frozen and timeless while the ecosystem of providers and applications evolves independently.
+
+<strong>Why it matters:</strong> This is the bridge from ElastOS V1 (a working product) to V2 (a capability-secured runtime where every app, agent, and service is cryptographically sandboxed). The security model — where AI agents get exactly the authority they need, audited and revocable — is unique in the industry. No other system lets AI operate inside a personal cloud with this level of granular, cryptographic trust.
+
+<h3><strong>Documentation &amp; Community</strong></h3>
+<ul>
+  <li><strong><a href="https://docs.ela.city">Documentation portal</a> updated</strong> — install guides for Jetson, Raspberry Pi, VPS, and local all revised with correct scripts, stealth transport info, and the launcher's new update feature</li>
+  <li><strong>Strategy documents</strong> — architecture convergence doc, roadmap, and agent handover updated with ERC-8004 research and Elacity dDRM priority</li>
+  <li><strong>Community hardware testing</strong> — multiple community members deployed on Jetson hardware this week, directly surfacing the install bugs that were fixed in this release</li>
+  <li><strong>Supernode verified</strong> — primary supernode confirmed healthy: sing-box 1.13.0, 10 active WireGuard peers, AmneziaWG interface up, 143 days uptime</li>
+</ul>
+
+<h3><strong>What's Next</strong></h3>
+<ul>
+  <li><strong>Elacity dDRM &amp; dApp Store</strong> — first priority: implement the app store, media marketplace, and wallet bridge using the <a href="https://github.com/Elacity/js-sdk">Elacity SDK</a></li>
+  <li><strong>Keyboard shortcuts</strong> — Alt+Tab window switching, Alt+F4 window close</li>
+  <li><strong>Explorer context menu</strong> — Copy path and Open terminal here</li>
+  <li><strong>Shortcuts overlay</strong> — discoverable keyboard shortcut reference modal</li>
+  <li><strong>Runtime capsule ecosystem</strong> — continue advancing the Rust runtime, shell orchestrator, and provider capsule interfaces toward V2</li>
+  <li><strong>ERC-8004 evaluation</strong> — forward-compatible app manifest design for AI agent registry integration</li>
+  <li><strong>Community testing</strong> — continued integration of tester feedback on Jetson, Raspberry Pi, and VPS deployments</li>
+</ul>
+
+<h3><strong>Try <a href="https://blog.elastos.net/announcement/elastos-world-computer-v1-launches/">ElastOS</a> v1.1.0 Today</strong></h3>
+<ul>
+  <li><strong>Desktop Launcher (Mac &amp; Linux):</strong> <a href="https://github.com/Elacity/elastos-launcher/releases/latest">Download ElastOS Launcher v1.1.0</a></li>
+  <li><strong>Terminal Install (Mac/Linux):</strong> <code>curl -fsSL https://raw.githubusercontent.com/Elacity/pc2.net/main/scripts/start-local.sh | bash</code></li>
+  <li><strong>NVIDIA Jetson:</strong> <code>cd ~ && git clone https://github.com/Elacity/pc2.net.git && cd pc2.net && sudo bash scripts/install-arm.sh</code></li>
+  <li><strong>Documentation:</strong> <a href="https://docs.ela.city">docs.ela.city</a></li>
+  <li><strong>GitHub:</strong> <a href="https://github.com/Elacity/pc2.net">github.com/Elacity/pc2.net</a></li>
+  <li><strong>DAO Proposal:</strong> <a href="https://elastos.com/proposals/69a24f49247f130078064edd">Vote on the Keystone Fund Mandate</a></li>
+</ul>

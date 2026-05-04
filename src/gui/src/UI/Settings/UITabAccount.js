@@ -579,8 +579,8 @@ export default {
                     h += `<div class="account-group-row">`;
                         h += `<div class="account-card-row">`;
                             h += `<div style="flex: 1; min-width: 0;">`;
-                                h += `<span class="account-card-label">Smart Account</span>`;
-                                h += `<span class="account-tooltip" title="Your ERC-4337 Smart Account - a contract wallet with advanced features like gas sponsorship and batch transactions, owned by your EOA account" style="cursor: help; margin-left: 4px; color: #999; font-size: 12px;">ⓘ</span>`;
+                                h += `<span class="account-card-label">Agent Account</span>`;
+                                h += `<span class="account-tooltip" title="Your Agent Account - a contract wallet with advanced features like gas sponsorship and batch transactions, owned by your EOA account" style="cursor: help; margin-left: 4px; color: #999; font-size: 12px;">ⓘ</span>`;
                                 h += `<div class="account-card-value" style="margin-top: 4px;">${html_encode(smartAddr.substring(0, 10))}...${html_encode(smartAddr.substring(smartAddr.length - 8))}</div>`;
                                 h += `<div class="account-card-sublabel">ERC-4337 Account</div>`;
                             h += `</div>`;
