@@ -3827,15 +3827,23 @@ router.post('/ipfs/upload-elacity', authenticate, async (req: AuthenticatedReque
     const cidV1String = await ipfs.storeFile(bytes, { pin: true, announce: true });
 
     // 2. Convert CIDv1 → CIDv0 for Elacity's go-ipfs gateway compatibility.
-    //    Same content hash, just different encoding. Falls back to CIDv1
-    //    if the codec isn't dag-pb (e.g. raw small-file blocks).
+    //    Same content hash, just different encoding. CIDv0 only supports
+    //    dag-pb (codec 0x70); for raw blocks (codec 0x55) we keep the v1
+    //    string. v1.2.7.5: pre-check codec to avoid an expected exception
+    //    on every raw-block upload (was emitting warn-level noise).
     const { CID } = await import('multiformats/cid');
     const cidV1 = CID.parse(cidV1String);
+    const DAG_PB_CODEC = 0x70;
     let finalCid: string;
-    try {
-      finalCid = cidV1.toV0().toString();
-    } catch {
-      logger.warn(`[IPFS-Elacity] CIDv1→CIDv0 conversion failed (codec=${cidV1.code}), using v1`);
+    if ( cidV1.code === DAG_PB_CODEC ) {
+      try {
+        finalCid = cidV1.toV0().toString();
+      } catch ( err ) {
+        logger.warn(`[IPFS-Elacity] Unexpected CIDv1→CIDv0 conversion failure (codec=dag-pb): ${(err as Error).message} — using v1`);
+        finalCid = cidV1String;
+      }
+    } else {
+      logger.debug(`[IPFS-Elacity] Keeping CIDv1 (codec=0x${cidV1.code.toString(16)}, CIDv0 requires dag-pb)`);
       finalCid = cidV1String;
     }
 
@@ -3906,14 +3914,22 @@ router.post('/ipfs/upload-elacity-directory', authenticate, async (req: Authenti
     const cidV1String = await ipfs.storeDirectory(localFilesPayload, { pin: true, announce: true });
     logger.info(`[IPFS-Elacity] Metadata added to local IPFS: ${cidV1String}`);
 
-    // 2. Convert CIDv1 (bafybei...) to CIDv0 (Qm...) — same content hash, just different encoding
+    // 2. Convert CIDv1 (bafybei...) to CIDv0 (Qm...) — same content hash,
+    //    just different encoding. CIDv0 only supports dag-pb (codec 0x70).
+    //    v1.2.7.5: pre-check codec instead of catching an expected throw.
     const { CID } = await import('multiformats/cid');
     const cidV1 = CID.parse(cidV1String);
+    const DAG_PB_CODEC = 0x70;
     let cidV0String: string;
-    try {
-      cidV0String = cidV1.toV0().toString();
-    } catch {
-      logger.warn(`[IPFS-Elacity] CIDv1→CIDv0 conversion failed (codec=${cidV1.code}), using v1`);
+    if ( cidV1.code === DAG_PB_CODEC ) {
+      try {
+        cidV0String = cidV1.toV0().toString();
+      } catch ( err ) {
+        logger.warn(`[IPFS-Elacity] Unexpected CIDv1→CIDv0 conversion failure (codec=dag-pb): ${(err as Error).message} — using v1`);
+        cidV0String = cidV1String;
+      }
+    } else {
+      logger.debug(`[IPFS-Elacity] Keeping CIDv1 (codec=0x${cidV1.code.toString(16)}, CIDv0 requires dag-pb)`);
       cidV0String = cidV1String;
     }
     logger.info(`[IPFS-Elacity] CIDv0: ${cidV0String}`);

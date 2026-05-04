@@ -6,6 +6,79 @@
 
 ---
 
+## [v1.2.7.5] - 2026-05-04 - Log hygiene + Earnings RPC discipline + Firefox/VPS reach + WireGuard readiness fix
+
+> **Scope**: seven targeted fixes triaged from a community feedback batch (Sasha, EverlastingOS, Brave/Firefox testers) plus one new operator-facing doc. Zero behavioural change to the happy path; every fix is either a noise reduction, a wasted-RPC removal, a misleading-status correction, or a friendlier error in a previously cryptic edge-case. Goal is to make `tail -F ~/Library/Logs/ElastOS/main.log` actually scannable and stop fresh-Mac users seeing the readiness panel report transports as "missing" when they're installed-and-ready.
+
+### Fix 1 — Throttle "no relay-circuit addresses" warning (1× per 5 min)
+
+- The bootstrap healthcheck in [`pc2-node/src/storage/ipfs.ts`](pc2-node/src/storage/ipfs.ts) runs every 30 s. On NATed nodes that never get a libp2p relay reservation, it was emitting `[WARN] [ipfs] Connected peers exist but no relay circuit addresses are advertised` ~720 times per day, drowning real signal in `Library/Logs/ElastOS/main.log`. Added a `lastRelayWarnAt: number = 0` instance field; warn fires at most once per 5 min while the relay-circuit count remains zero. On recovery (count > 0), the throttle resets and the next degradation re-warns immediately. Suppressed cycles emit a `log.debug` so anyone running with `LOG_LEVEL=debug` still sees the per-30s heartbeat.
+- Net effect: ~0.99% reduction in steady-state warn volume for NATed nodes (288 warns/day → 1-2 warns/day) without losing the signal that a configuration change is needed.
+
+### Fix 2 — Skip `0x0` operatives upfront in Earnings (no RPC, no log)
+
+- Both Earnings loops in [`pc2-node/src/api/index.ts`](pc2-node/src/api/index.ts) iterate over operative addresses pulled from the catalog. Some catalog rows have `operative_address = 0x0000000000000000000000000000000000000000` — these represent assets where on-chain operative deployment failed or is still pending. Every call to `balanceOf(0x0, 2)` reverts at the contract level and burns 4 RPC calls (3 retries + initial), 800 ms of wall-clock, and 4 lines of warn output per skipped operative per Earnings poll.
+- Added a top-of-route `ZERO_ADDRESS` constant. Filter it out in both the multi-channel `chAssets` filter (line ~1043) and the single-channel `operativeSet` map construction (line ~1115). Pre-RPC skip → zero retries, zero rotation, zero log noise.
+- Verified against Sasha's `[Earnings] balanceOf failed for 0x0000000000000000000000000000000000000000 after retries, skipping` log spam — that exact line is now impossible to emit.
+
+### Fix 3 — Earnings: per-operative warn → debug, soft-TTL partial cache (5 s)
+
+- Real-operative RPC failures are still possible (public Base RPC has flaky periods). Previously the per-operative warn was fired on every miss and the partial response wasn't cached at all — so the next 30s poll re-ran the full operativeSet against the same flaky RPC. Two-line fix:
+  1. Demoted per-operative warn at line ~1187 to `log.debug` (still visible at `LOG_LEVEL=debug`).
+  2. Added `EARNINGS_PARTIAL_TTL = 5_000` next to the existing `EARNINGS_CACHE_TTL = 30_000`. Cache entries now carry a `partial: boolean` flag; the cache-hit check picks the appropriate TTL based on that flag. Single summary warn at end of route (`N operative(s) skipped due to RPC failures — caching partial result for 5s`) instead of N+1 warns.
+- Net effect: at worst one warn per Earnings poll instead of one per failed operative; on flaky RPC the next 5 s of polls hit the cache instead of re-hammering. Rolling forward is safe: complete results still get the 30 s TTL.
+
+### Fix 4 — CIDv1 → CIDv0 codec pre-check (no expected exception)
+
+- [`pc2-node/src/api/storage.ts`](pc2-node/src/api/storage.ts) at lines ~3835 and ~3915 was calling `cidV1.toV0().toString()` inside a try/catch and warning on every miss. CIDv0 only supports the dag-pb codec (`0x70`); for raw blocks (`0x55`, common for small files like JSON metadata uploads) the conversion always throws by design. Pre-check `cidV1.code === 0x70` and demote the non-dag-pb branch to `log.debug` with a contextual message. Genuinely unexpected dag-pb conversion failures (which would indicate a real bug) still warn with the actual error text — no silent failure.
+- Verified against Sasha's `[WARN] [IPFS-Elacity] CIDv1→CIDv0 conversion failed (codec=85), using v1` log line — codec 85 = `0x55` = raw, expected behaviour, no longer warns.
+
+### Fix 5 — DHT announce: AbortError → warn (transient, with explanation)
+
+- [`pc2-node/src/storage/ipfs.ts`](pc2-node/src/storage/ipfs.ts) `announceCID` and `announceMultipleCIDs` were emitting full `log.error('[IPFS] Failed to announce CID …', error)` for every kad-dht `provide()` timeout. Aborts are bounded by an internal libp2p timeout — they mean the DHT walk didn't finish in time, but the CID is still pinned locally and the next pin-touch / peer want-have will retry. Differentiated handling: `error.name === 'AbortError'` (or `error.code === 'ABORT_ERR'`) → `log.warn` with an explicit "transient — will retry on next pin / fetch" suffix. All other failure modes still log at error.
+- Net effect: operators stop seeing scary stack-trace ERRORs for what is benign behaviour, while genuine bugs (e.g. a malformed CID or a subsystem crash) remain at error level and are easy to spot.
+
+### Fix 6 — Secure-context detection in Elacity Player (Firefox / VPS friendly)
+
+- The community report (EverlastingOS via Firefox, plus the implicit Brave-on-VPS scenario) was: open the player → blank screen → JS console says `crypto.subtle is undefined` and that's it. Browsers gate the Web Crypto API behind a [secure context](https://developer.mozilla.org/en-US/docs/Web/Security/Secure_Contexts) — `https://`, `http://localhost`, or `http://127.0.0.1`. Plain HTTP over a public IP / domain (typical when accessing PC2 on a VPS) does not qualify, regardless of browser.
+- Added an inline `<script>` to [`pc2-node/data/test-apps/elacity-player/index.html`](pc2-node/data/test-apps/elacity-player/index.html) that runs **before** the React bundle. If `!window.isSecureContext` or `!window.crypto?.subtle`, it removes the `#root` div entirely (so React can't clobber the message on mount) and reveals a `#secure-context-warning` panel with three sections:
+  1. "If you're on the same machine as PC2" → use `http://localhost:4200`.
+  2. "If PC2 is on a remote server / VPS" → set up HTTPS via Caddy / Cloudflare Tunnel / nginx + certbot, with a link to the new doc.
+  3. "Things that won't fix this" → switching browsers, updating PC2, disabling extensions (all common but useless first guesses).
+- Diagnostic footer renders `isSecureContext`, `crypto.subtle` availability, and current origin so operators can paste a single line into a support thread instead of describing symptoms.
+- Defence-in-depth: the detection itself is wrapped in try/catch — if it ever throws (e.g. on an unknown browser engine), it falls through to the original React bundle so we don't block users in untested environments. They get the original cryptic error, which is no worse than today.
+
+### Fix 6b — New doc: HTTPS for self-hosted PC2
+
+- [`docs/wiki/Technical/HTTPS_for_self_hosted.md`](docs/wiki/Technical/HTTPS_for_self_hosted.md): explains the secure-context requirement, identifies who needs to act (anyone reaching PC2 over an IP / domain that isn't localhost), and walks through three setup options end-to-end:
+  - **Caddy** — auto Let's Encrypt, ~3 minutes.
+  - **Cloudflare Tunnel** — no inbound ports, no certs, ideal for residential / Jetson behind NAT.
+  - **nginx + certbot** — classic stack for ops who already run nginx.
+- Linked from the in-app warning panel so users hit it the moment they discover the problem. Also flags the v1.2.7.6 roadmap item ("built-in HTTPS in PC2 itself") so anyone reading the doc knows the manual setup is a stop-gap, not the long-term answer.
+
+### Fix 7 — WireGuard readiness: report installed-but-inactive as OK
+
+- Diagnosed from Sasha's live `/api/system-readiness` output on her fresh Mac: `wireguard-go` was reported as `status: "missing"`, `detail: "No tunnel transport detected"`, with a spurious `installHint: "macOS: brew install wireguard-tools"` — even though `~/.pc2/pc2-node/bin/darwin-arm64/wireguard-go` was present and the BinaryManager log line for the boot read `[BinaryManager] All 4 transport binaries present`.
+- Root cause in [`pc2-node/src/api/index.ts`](pc2-node/src/api/index.ts) at lines 279-285: the readiness check shape was `wgOk = wgStatus ? wgStatus.mode !== 'none' : !!wgBinary?.found`. When BosonService had selected an alternative transport (in this case Stealth → forced amnezia-wireguard), `wgStatus.mode` was `'none'` (correctly — no WG tunnel was active) and the binary-found path was completely ignored. Result: a healthy-and-ready WireGuard install was misreported as missing.
+- New shape: `wgBinaryFound = !!wgBinary?.found`, `wgActive = !!(wgStatus && wgStatus.mode !== 'none')`, `wgOk = wgActive || wgBinaryFound`. Detail now reads `'Active (kernel mode)'` / `'Active (userspace fallback)'` when running, `'Installed (inactive — alternative transport in use)'` when present-but-idle, `'Not installed'` only when truly missing. The `brew install` hint is now only shown in the true-missing case, not the inactive case.
+- Verified against Sasha's diagnostic: same input data now yields `status: "ok"`, `detail: "Installed (inactive — alternative transport in use)"`, no spurious install hint. Identical bug pattern exists for AmneziaWG (`awgStatus.available === true` shortcut ignores binary path) but Sasha's report had AWG showing healthy so the fix is scoped to WG; AWG can be addressed in a future release if anyone reports it.
+
+### Build / lint / version
+
+- `package.json` and `pc2-node/package.json` bumped to `1.2.7.5`.
+- `npm run build:backend` clean, `npm run lint` clean.
+- No schema changes, no migration bump (still at `CURRENT_VERSION = 32` from v1.2.7.2).
+- Existing v1.2.6 / v1.2.7.x launchers will pick this up via the in-app `Update PC2` button (clones `origin/main` at runtime — no launcher rebuild needed).
+
+### Roadmap (v1.2.7.6+)
+
+- **Built-in HTTPS in PC2** — self-signed cert on first boot, optional ACME HTTP-01 when a domain is configured. Collapses the three-option reverse-proxy setup into one config flag.
+- **sing-box VLESS daemon** — investigate why the Reality tunnel exits code 0 every health-probe instead of staying alive.
+- **AmneziaWG readiness parity** — apply the Fix 7 logic shape to AWG if anyone reports the inverse scenario (active WG, idle AWG).
+- **EverlastingOS video playback UX** — re-investigate the "took ages, said it downloaded but was still downloading" report once we have fresh playback logs from a streaming session (current logs are from a different time window).
+
+---
+
 ## [v1.2.7.4] - 2026-05-04 - AV1 codec string + supernode dDRM hardening + build-fix for in-app updates
 
 > **Scope**: Three independent hot-fixes folded into one ship to give Sasha's other-MacBook fresh-install test the cleanest possible target. (1) Browsers couldn't play any 10-bit AV1 video PC2 transcoded — wrong byte mask in the AV1 codec-string parser. (2) Both supernodes had been signing-and-serving a known-bad `nonMediaDecrypt` CID in their dDRM provision blob — invisible today (latent footgun), would break every PC2 the moment any future refactor unified on `chipotle-client.getActionCid()`. (3) Two untracked gitignored SDK scratch files (`src/sdk/{index,config}.ts`) were breaking `tsc` exit-code, which in turn would brick `set -e` in `scripts/update.sh` step 10 → in-app updates would silently fail for every existing PC2 node trying to roll forward.

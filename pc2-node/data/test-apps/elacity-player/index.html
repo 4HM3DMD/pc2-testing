@@ -8,10 +8,85 @@
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { background: #121212; color: #e5e5e5; font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; }
+
+    /* v1.2.7.5: secure-context warning. Hidden by default; the inline
+       script below removes #root and reveals this if Web Crypto isn't
+       available (insecure context, e.g. plain-HTTP over a public IP). */
+    #secure-context-warning { display: none; padding: 32px 24px; max-width: 720px; margin: 8vh auto; background: #1c1c1e; border: 1px solid #3a3a3c; border-radius: 12px; line-height: 1.55; }
+    #secure-context-warning h1 { font-size: 22px; margin-bottom: 16px; color: #ff9f0a; }
+    #secure-context-warning h2 { font-size: 16px; margin: 20px 0 8px; color: #f5f5f7; }
+    #secure-context-warning p { margin-bottom: 12px; color: #c7c7cc; }
+    #secure-context-warning code { background: #2c2c2e; padding: 2px 6px; border-radius: 4px; font-family: 'SF Mono', Menlo, monospace; font-size: 13px; color: #64d2ff; }
+    #secure-context-warning ul { margin: 8px 0 12px 20px; color: #c7c7cc; }
+    #secure-context-warning ul li { margin-bottom: 6px; }
+    #secure-context-warning a { color: #64d2ff; text-decoration: none; }
+    #secure-context-warning a:hover { text-decoration: underline; }
+    #secure-context-warning .meta { font-size: 12px; color: #8e8e93; margin-top: 20px; padding-top: 16px; border-top: 1px solid #3a3a3c; }
   </style>
-  <script type="module" crossorigin src="./assets/index-B4B5WpHv.js"></script>
 </head>
 <body>
   <div id="root"></div>
+  <div id="secure-context-warning" role="alert">
+    <h1>Encrypted playback unavailable in this context</h1>
+    <p>
+      This page needs the browser's Web Crypto API (<code>window.crypto.subtle</code>)
+      to decrypt protected content. The browser is currently denying access because
+      the page wasn't loaded over a <strong>secure context</strong> (HTTPS, or
+      <code>http://localhost</code> on the same machine).
+    </p>
+
+    <h2>If you are accessing PC2 on the same machine</h2>
+    <p>Open the player using <code>http://localhost:4200</code> instead of an IP address.</p>
+
+    <h2>If PC2 is running on a remote server / VPS</h2>
+    <p>Browsers block Web Crypto on plain HTTP over a public IP. You'll need to put HTTPS in front of PC2. Three quick options:</p>
+    <ul>
+      <li><strong>Caddy</strong> — automatic Let's Encrypt certs in 4 lines of config.</li>
+      <li><strong>Cloudflare Tunnel</strong> — no firewall changes, no certs to manage.</li>
+      <li><strong>nginx + certbot</strong> — classic reverse-proxy + Let's Encrypt setup.</li>
+    </ul>
+    <p>See the setup guide:
+      <a href="https://github.com/Elacity/pc2.net/blob/main/docs/wiki/Technical/HTTPS_for_self_hosted.md" target="_blank" rel="noopener noreferrer">HTTPS for self-hosted PC2</a>.
+    </p>
+
+    <h2>Things that won't fix this</h2>
+    <ul>
+      <li>Switching browser (Chrome / Firefox / Brave / Safari all enforce the same rule).</li>
+      <li>Updating PC2 (the restriction is browser-side, not server-side).</li>
+      <li>Disabling browser extensions.</li>
+    </ul>
+
+    <p class="meta" id="secure-context-meta"></p>
+  </div>
+  <script>
+    // v1.2.7.5: detect insecure context BEFORE the React bundle loads.
+    // If we render anything React-side, the bundle's first crypto.subtle
+    // call throws and the user sees a blank screen with no explanation.
+    // We remove #root entirely so React can't clobber this fallback.
+    (function detectSecureContext () {
+      try {
+        var hasSubtle = !!(window.crypto && window.crypto.subtle);
+        var isSecure = window.isSecureContext === true;
+        if (!hasSubtle || !isSecure) {
+          var root = document.getElementById('root');
+          if (root) root.remove();
+          var warn = document.getElementById('secure-context-warning');
+          if (warn) warn.style.display = 'block';
+          var meta = document.getElementById('secure-context-meta');
+          if (meta) {
+            meta.textContent =
+              'isSecureContext=' + (window.isSecureContext === true ? 'true' : 'false') +
+              ' · crypto.subtle=' + (hasSubtle ? 'available' : 'undefined') +
+              ' · origin=' + window.location.origin;
+          }
+        }
+      } catch (e) {
+        // If detection itself fails, fall through to the React bundle so
+        // we don't block users in browsers we haven't tested. They'll get
+        // the original cryptic error, which is no worse than today.
+      }
+    })();
+  </script>
+  <script type="module" crossorigin src="./assets/index-B4B5WpHv.js"></script>
 </body>
 </html>

@@ -150,6 +150,12 @@ export class IPFSStorage {
   private bootstrapReconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private bootstrapHealthTimer: ReturnType<typeof setInterval> | null = null;
   private elacityReconnectTimer: ReturnType<typeof setInterval> | null = null;
+  // v1.2.7.5: throttle the "no relay circuit" warning. The bootstrap
+  // healthcheck runs every 30 s; on NATed nodes that never get a relay
+  // reservation, this previously emitted ~720 warns/day, drowning real signal.
+  // We now warn at most once per 5 min while degraded, and reset to fire
+  // immediately on the next degradation after recovery.
+  private lastRelayWarnAt: number = 0;
   private configuredBootstrapPeers: string[] = [];
   private configuredElacityPeers: string[] = [];
   private configuredElacityPeerIds: Set<string> = new Set();
@@ -506,7 +512,16 @@ export class IPFSStorage {
             log.info('[IPFS] No active peers detected; running bootstrap re-dial');
             void this.connectBootstrapPeers(this.configuredBootstrapPeers, 'manual');
           } else if (relayAddrCount === 0) {
-            log.warn('[IPFS] Connected peers exist but no relay circuit addresses are advertised; remote pull pinning may stall for NATed nodes');
+            const RELAY_WARN_THROTTLE_MS = 5 * 60 * 1000;
+            if (Date.now() - this.lastRelayWarnAt > RELAY_WARN_THROTTLE_MS) {
+              log.warn('[IPFS] Connected peers exist but no relay circuit addresses are advertised; remote pull pinning may stall for NATed nodes');
+              this.lastRelayWarnAt = Date.now();
+            } else {
+              log.debug('[IPFS] Still no relay circuit addresses (throttled — next warn in <=5 min)');
+            }
+          } else if (this.lastRelayWarnAt !== 0) {
+            log.debug('[IPFS] Relay circuit addresses recovered');
+            this.lastRelayWarnAt = 0;
           }
         }, intervalMs);
 
@@ -2156,8 +2171,18 @@ export class IPFSStorage {
 
       log.debug(`[IPFS] ✅ Successfully announced CID to DHT: ${cid}`);
       return true;
-    } catch (error) {
-      log.error(`[IPFS] Failed to announce CID ${cid}:`, error);
+    } catch (error: any) {
+      // v1.2.7.5: AbortError is benign — kad-dht's provide() iterator is
+      // bounded by an internal timeout. Hitting that timeout means the DHT
+      // walk didn't finish in time, but the CID is still pinned locally
+      // and the next pin-touch (or peer's want-have) will retry. Demote so
+      // the log line stays informational rather than alarming.
+      const isAbort = error?.name === 'AbortError' || error?.code === 'ABORT_ERR';
+      if (isAbort) {
+        log.warn(`[IPFS] DHT announce timed out for ${cid} (transient — will retry on next pin / fetch)`);
+      } else {
+        log.error(`[IPFS] Failed to announce CID ${cid}:`, error);
+      }
       return false;
     }
   }
@@ -2187,9 +2212,14 @@ export class IPFSStorage {
         }
         // Small delay between announcements to avoid overwhelming DHT
         await new Promise(resolve => setTimeout(resolve, 100));
-      } catch (error) {
+      } catch (error: any) {
         failed++;
-        log.error(`[IPFS] Failed to announce CID ${cid}:`, error);
+        const isAbort = error?.name === 'AbortError' || error?.code === 'ABORT_ERR';
+        if (isAbort) {
+          log.warn(`[IPFS] DHT announce timed out for ${cid} (transient — will retry on next pin / fetch)`);
+        } else {
+          log.error(`[IPFS] Failed to announce CID ${cid}:`, error);
+        }
       }
     }
 

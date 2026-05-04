@@ -276,13 +276,21 @@ export function setupAPI (app: Express): void {
             } catch { /* keep nulls — fall back to binary probe */ }
         }
 
+        // v1.2.7.5: WireGuard readiness honours BOTH active-tunnel state
+        // AND binary-on-disk presence. Previously, when BosonService had
+        // selected an alternative transport (e.g. Stealth/AmneziaWG),
+        // wgStatus.mode was 'none' and the readiness check reported
+        // "No tunnel transport detected" + a spurious `brew install`
+        // hint, even though wireguard-go was installed and ready to use.
+        // The fix: binary present == ready, regardless of which transport
+        // is currently active.
         const wgBinary = binaryByName.get('wireguard-go');
-        const wgOk = wgStatus ? wgStatus.mode !== 'none' : !!wgBinary?.found;
-        const wgDetail = wgStatus
-            ? (wgStatus.mode === 'kernel' ? 'Active (kernel mode)'
-                : wgStatus.mode === 'userspace' ? 'Active (userspace fallback)'
-                    : 'No tunnel transport detected')
-            : (wgBinary?.found ? `Found at ${wgBinary.path}` : 'Not installed');
+        const wgBinaryFound = !!wgBinary?.found;
+        const wgActive = !!(wgStatus && wgStatus.mode !== 'none');
+        const wgOk = wgActive || wgBinaryFound;
+        const wgDetail = wgActive
+            ? (wgStatus!.mode === 'kernel' ? 'Active (kernel mode)' : 'Active (userspace fallback)')
+            : (wgBinaryFound ? `Installed (inactive — alternative transport in use)` : 'Not installed');
 
         const awgBinary = binaryByName.get('amneziawg-go');
         const awgOk = awgStatus ? awgStatus.available === true : !!awgBinary?.found;
@@ -951,8 +959,15 @@ export function setupAPI (app: Express): void {
     });
 
     // Server-side cache for earnings RPC results (avoids repeated flaky calls to public RPC)
-    const earningsCache = new Map<string, { data: any; ts: number }>();
+    // v1.2.7.5: cache partial results too with a shorter TTL so a flaky RPC
+    // doesn't get re-hammered every poll cycle. Without this, when any
+    // operative balanceOf failed the full response was never cached → next
+    // 30s poll repeated the whole storm. Soft TTL serves the same partial
+    // result for up to 5s, then re-tries.
+    const earningsCache = new Map<string, { data: any; ts: number; partial: boolean }>();
     const EARNINGS_CACHE_TTL = 30_000;
+    const EARNINGS_PARTIAL_TTL = 5_000;
+    const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 
     // V3 On-Chain Earnings — reads royalty share balances and claimable rewards from operatives
     // Returns items + rewards in a single response so the frontend only needs one fetch.
@@ -975,7 +990,8 @@ export function setupAPI (app: Express): void {
         const cacheKey = `${walletAddress.toLowerCase()}:${category}`;
         if ( ! forceRefresh ) {
             const cached = earningsCache.get(cacheKey);
-            if ( cached && Date.now() - cached.ts < EARNINGS_CACHE_TTL ) {
+            const ttl = cached?.partial ? EARNINGS_PARTIAL_TTL : EARNINGS_CACHE_TTL;
+            if ( cached && Date.now() - cached.ts < ttl ) {
                 return res.json(cached.data);
             }
         } else {
@@ -1001,7 +1017,7 @@ export function setupAPI (app: Express): void {
 
                 if ( owned.length === 0 ) {
                     const emptyResp = { success: true, items: { total: 0, data: [] }, rewards: [] };
-                    earningsCache.set(cacheKey, { data: emptyResp, ts: Date.now() });
+                    earningsCache.set(cacheKey, { data: emptyResp, ts: Date.now(), partial: false });
                     return res.json(emptyResp);
                 }
 
@@ -1034,7 +1050,16 @@ export function setupAPI (app: Express): void {
                 const rewardsSummaryMC: any[] = [];
 
                 for ( const ch of owned ) {
-                    const chAssets = catalogItems.filter(it => it.channel_address && it.channel_address.toLowerCase() === ch.address.toLowerCase() && it.operative_address);
+                    // v1.2.7.5: also exclude zero-address operatives — they
+                    // represent assets where on-chain operative deployment
+                    // failed or is still pending; balanceOf on 0x0 always
+                    // reverts (RPC noise + wasted retries).
+                    const chAssets = catalogItems.filter(it =>
+                        it.channel_address
+                        && it.channel_address.toLowerCase() === ch.address.toLowerCase()
+                        && it.operative_address
+                        && it.operative_address.toLowerCase() !== ZERO_ADDRESS,
+                    );
 
                     let totalRewards = 0;
                     let totalRoyaltyShares = 0;
@@ -1088,7 +1113,7 @@ export function setupAPI (app: Express): void {
                     items: { total: channelResults.length, data: channelResults },
                     rewards: rewardsSummaryMC,
                 };
-                earningsCache.set(cacheKey, { data: mcResp, ts: Date.now() });
+                earningsCache.set(cacheKey, { data: mcResp, ts: Date.now(), partial: false });
                 return res.json(mcResp);
             }
 
@@ -1096,6 +1121,11 @@ export function setupAPI (app: Express): void {
             for ( const item of catalogItems ) {
                 if ( ! item.operative_address ) continue;
                 const opLower = item.operative_address.toLowerCase();
+                // v1.2.7.5: skip zero-address operatives upfront — they
+                // represent failed/pending operative deployments and any
+                // balanceOf call against 0x0 reverts. Skipping pre-RPC
+                // avoids wasted retries and log noise.
+                if ( opLower === ZERO_ADDRESS ) continue;
                 if ( ! operativeSet.has(opLower) ) operativeSet.set(opLower, []);
                 operativeSet.get(opLower)!.push(item);
             }
@@ -1152,7 +1182,11 @@ export function setupAPI (app: Express): void {
                 try {
                     const royaltyBal = await callWithRetry(opAddr, (op) => op.balanceOf(walletAddress, 2));
                     if ( royaltyBal === BigInt(-1) ) {
-                        log.warn(`[Earnings] balanceOf failed for ${opAddr} after retries, skipping`);
+                        // v1.2.7.5: per-op transient RPC failure is noise at
+                        // warn level. We summarise once at the end if any
+                        // operative was skipped (see EARNINGS_PARTIAL_TTL
+                        // logic below).
+                        log.debug(`[Earnings] balanceOf failed for ${opAddr} after retries, skipping`);
                         skippedCount++;
                         continue;
                     }
@@ -1233,9 +1267,10 @@ export function setupAPI (app: Express): void {
                     rewards: rewardsSummary,
                     _partial: skippedCount > 0,
                 };
-                if ( skippedCount === 0 ) {
-                    earningsCache.set(cacheKey, { data: channelResponse, ts: Date.now() });
-                }
+                // v1.2.7.5: cache partial results too with a short TTL so a
+                // flaky RPC doesn't get hammered every poll. Complete
+                // results keep the long TTL for steady state.
+                earningsCache.set(cacheKey, { data: channelResponse, ts: Date.now(), partial: skippedCount > 0 });
                 return res.json(channelResponse);
             }
 
@@ -1246,11 +1281,12 @@ export function setupAPI (app: Express): void {
                 rewards: rewardsSummary,
                 _partial: skippedCount > 0,
             };
-            // Only cache complete results to avoid serving stale partial data
-            if ( skippedCount === 0 ) {
-                earningsCache.set(cacheKey, { data: assetsResponse, ts: Date.now() });
-            } else {
-                log.warn(`[Earnings] ${skippedCount} operative(s) skipped — result not cached`);
+            // v1.2.7.5: cache partial results with EARNINGS_PARTIAL_TTL so
+            // we don't re-hammer the RPC on every poll. Single warn here
+            // (instead of one per skipped operative) keeps logs scannable.
+            earningsCache.set(cacheKey, { data: assetsResponse, ts: Date.now(), partial: skippedCount > 0 });
+            if ( skippedCount > 0 ) {
+                log.warn(`[Earnings] ${skippedCount} operative(s) skipped due to RPC failures — caching partial result for ${ EARNINGS_PARTIAL_TTL / 1000 }s`);
             }
             res.json(assetsResponse);
         } catch ( err: any ) {
