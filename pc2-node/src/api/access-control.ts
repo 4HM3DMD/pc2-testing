@@ -189,17 +189,17 @@ router.post('/verify-password', async (req: Request, res: Response) => {
 
         // Set cookie.
         //
-        // secure: 'auto' lets Express decide per-request: only set Secure if
-        // the request itself came in over HTTPS. The previous
+        // secure: req.secure mirrors what `secure: 'auto'` would do at runtime
+        // but with a real boolean so TypeScript is happy. Express's req.secure
+        // is true only when the request actually came in over HTTPS (with
+        // trust-proxy honored when configured). The previous
         // `NODE_ENV === 'production'` check broke HTTP-IP deployments — the
         // cookie was issued with Secure=true, browsers silently dropped it
         // because the connection wasn't HTTPS, and operators got an infinite
-        // redirect loop on the access-gate page. For HTTPS deployments
-        // (behind a real domain + cert), Express still sets Secure correctly
-        // because req.secure is true. Hybrid-safe.
+        // redirect loop on the access-gate page.
         res.cookie('antiSnipeSession', sessionToken, {
             httpOnly: true,
-            secure: 'auto',
+            secure: req.secure,
             sameSite: 'strict',
             maxAge: SESSION_EXPIRY_MS,
         });
