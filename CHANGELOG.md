@@ -6,7 +6,46 @@
 
 ---
 
-## [Unreleased — v1.2.7] - SQLite migration + Supernode IPFS Cluster + playback fixes
+## [v1.2.7.1] - 2026-05-03 - Community parity hot-patch
+
+> **Scope**: Community operators (EverlastingOS on Jetson, anonymous WSL user) hit two install/update parity bugs within hours of v1.2.7 going live. This is the targeted fix-set so their nodes behave the same as Sasha's canary Jetson.
+
+### Fixes
+
+- **`/api/system-readiness` no longer reports false-alarm "WireGuard Missing"** on kernel-mode WireGuard nodes. Previously the readiness check probed only for the `wireguard-go` userspace binary and ignored kernel mode entirely — community Jetson user (running kernel WireGuard) saw a misleading 5/6 badge despite his tunnel working perfectly. Now consults the live `WireGuardService.getStatus().mode` (`'kernel' | 'userspace' | 'none'`) via `BosonService.getStatus()` so kernel WireGuard counts as OK with detail "Active (kernel mode)". Same fix for AmneziaWG (now uses `AmneziaWGService.getStatus()`). Falls back to the binary probe only when BosonService is not yet initialised (early-boot window). Smoke-tested on macOS dev: 6/6 with detail `"Active (userspace fallback)"` for WireGuard and `"Active (connected)"` for AmneziaWG.
+  - Files: [pc2-node/src/api/index.ts](pc2-node/src/api/index.ts) (`/api/system-readiness` handler).
+  - `POST /api/system-readiness/fix` unchanged — operators can still trigger auto-download from `pc2-binaries-v1` GitHub release.
+
+- **`scripts/update.sh` auto-discard widened to all `package.json` files**. The WSL community user's `git pull` aborted because npm version mismatches had drifted four files (`package.json`, `package-lock.json`, `packages/particle-auth/package.json`, `pc2-node/package-lock.json`). Previously only the two `package-lock.json` files were on the safe-discard list. Now all five known files are discarded automatically, plus a `git ls-files`-based glob fallback catches any future `packages/**/package.json` additions without requiring a code update. `PC2_UPDATE_FORCE=1` override unchanged. Smoke-tested locally: simulated WSL drift on all four files, confirmed `update.sh` auto-discard now cleans them all.
+  - Files: [scripts/update.sh:99](scripts/update.sh).
+  - One-liner unblock for operators who hit this before updating: `cd ~/pc2.net && git checkout -- package.json package-lock.json packages/particle-auth/package.json pc2-node/package-lock.json && bash scripts/update.sh`.
+
+### New (opt-in pull diagnostic)
+
+- **`scripts/pc2-diagnose.sh`** — self-contained operator-side diagnostic that bundles `/api/health` + `/api/system-readiness` + `wg show` + transport-binary `which` probes + `ipfs swarm peers` count + cluster-pin reachability probe + last 80 relevant `pm2` log lines + disk/memory pressure + git state + `.env` keys (values stripped) into a single sanitised text file written to `~/pc2-diagnose-<timestamp>.txt` and stdout. Sanitiser redacts wallets, DIDs, bearer tokens, `?api_key=…` URL params, BEGIN/END PEM markers, and 24-word lowercase mnemonics. **No network upload** — the operator pastes manually. Portable: works on macOS BSD `sed` and GNU `sed`.
+  - One-liner: `curl -fsSL https://raw.githubusercontent.com/Elacity/pc2.net/main/scripts/pc2-diagnose.sh | bash`.
+  - Sanitiser test coverage: 6/6 cases (wallet / DID / Bearer / api_key / 24-word mnemonic / PEM block).
+
+- **`GET /api/diagnose`** (auth-gated) — server-side equivalent returning structured JSON for future GUI consumption. Same data + same sanitisation as the bash script. Every shell-out hard-capped at 5s so a hung tool can't wedge the request. Probes the public Elacity supernode cluster endpoint without any token (a 401 means cluster is up; a connection failure means this node can't reach it). Auth-gated because the response includes recent log lines and binary paths.
+  - File: [pc2-node/src/api/diagnose.ts](pc2-node/src/api/diagnose.ts).
+  - Mounted at `/api/diagnose` from [pc2-node/src/api/index.ts](pc2-node/src/api/index.ts).
+  - GUI button surface ("Copy diagnostic to clipboard" on the readiness panel) deferred to v1.2.8 — endpoint lands now so the bash script and any future GUI agree on the data shape.
+
+### What's deliberately NOT in v1.2.7.1
+
+- Push/heartbeat telemetry to a Contabo collector — explicitly rejected. Opt-in pull only, in line with the personal-cloud promise.
+- "Share diagnostic" GUI button — needs design pass, queued for v1.2.8.
+- Webpack `bundle.min.js may be missing` root-cause investigation — needs EverlastingOS's diagnose output first; most likely Jetson memory pressure during install build but unconfirmed.
+- Install-script convergence audit (`install-arm.sh` vs `install-wsl.sh` vs `start-local.sh` vs `setup-node.sh` ending at the same final state) — separate work, tracked as `INSTALL-SCRIPT-PARITY` for v1.2.8.
+
+### Communications shipped
+
+- **EverlastingOS (Jetson community user)**: "5/6 badge is a false alarm — fixed in v1.2.7.1. Run the diagnose one-liner so we can see why your player is stuck on 'Pin failed on server'."
+- **WSL community user**: "Don't `git pull` directly — use `bash scripts/update.sh`. Quick unblock: `cd ~/pc2.net && git checkout -- package.json package-lock.json packages/particle-auth/package.json pc2-node/package-lock.json && bash scripts/update.sh`."
+
+---
+
+## [v1.2.7] - 2026-05-02 - SQLite migration + Supernode IPFS Cluster + playback fixes
 
 > **Scope**: v1.2.7 combines three workstreams:
 > 1. **SQLite migration** (`better-sqlite3` → `@photostructure/sqlite`) — primary motivation, unblocks Mac users running pc2-node from the Elastos launcher (no native compile / Xcode CLT needed).

@@ -44,6 +44,7 @@ import { schedulerRouter } from './scheduler.js';
 import bosonRouter from './boson.js';
 import setupRouter from './setup.js';
 import updateRouter from './update.js';
+import diagnoseRouter from './diagnose.js';
 import { getUpdateService } from '../services/UpdateService.js';
 import { getClusterPinConfig, getClusterPinProbeState, getClusterPinRetryQueueSnapshot } from '../services/clusterPin.js';
 import accessControlRouter from './access-control.js';
@@ -245,12 +246,51 @@ export function setupAPI (app: Express): void {
     app.get('/api/health', healthHandler);
 
     // System readiness endpoint (no auth required)
-    // Reports transport binary availability for login screen health badge
+    // Reports transport availability for login screen health badge.
+    //
+    // v1.2.7.1: WireGuard and AmneziaWG checks now consult the live service
+    // status (kernel/userspace mode) instead of probing only for the
+    // wireguard-go userspace binary. A node running kernel-mode WireGuard
+    // (the common case on modern Linux) was previously reported as "Missing"
+    // because the check ignored kernel mode entirely. The service-driven
+    // check passes when the tunnel transport is actually usable, regardless
+    // of which implementation provides it. Falls back to the binary probe
+    // when BosonService is not yet initialised (early-boot window).
     app.get('/api/system-readiness', (_req: Request, res: Response) => {
         const db = app.locals.db;
         const filesystem = app.locals.filesystem;
+        const bosonService = app.locals.bosonService;
 
         const binaryChecks = checkTransportBinaries();
+        const binaryByName = new Map(binaryChecks.map((b: { name: string; found: boolean; path: string | null }) => [b.name, b]));
+
+        // Pull live transport status from BosonService when available — this
+        // catches kernel-mode WireGuard which the binary probe misses.
+        let wgStatus: { available: boolean; mode: 'kernel' | 'userspace' | 'none' } | null = null;
+        let awgStatus: { available: boolean; connected: boolean } | null = null;
+        if ( bosonService && typeof bosonService.getStatus === 'function' ) {
+            try {
+                const bosonStatus = bosonService.getStatus();
+                wgStatus = bosonStatus?.wireguard || null;
+                awgStatus = bosonStatus?.amneziaWG || null;
+            } catch { /* keep nulls — fall back to binary probe */ }
+        }
+
+        const wgBinary = binaryByName.get('wireguard-go');
+        const wgOk = wgStatus ? wgStatus.mode !== 'none' : !!wgBinary?.found;
+        const wgDetail = wgStatus
+            ? (wgStatus.mode === 'kernel' ? 'Active (kernel mode)'
+                : wgStatus.mode === 'userspace' ? 'Active (userspace fallback)'
+                    : 'No tunnel transport detected')
+            : (wgBinary?.found ? `Found at ${wgBinary.path}` : 'Not installed');
+
+        const awgBinary = binaryByName.get('amneziawg-go');
+        const awgOk = awgStatus ? awgStatus.available === true : !!awgBinary?.found;
+        const awgDetail = awgStatus
+            ? (awgStatus.available ? (awgStatus.connected ? 'Active (connected)' : 'Available') : 'Not installed')
+            : (awgBinary?.found ? `Found at ${awgBinary.path}` : 'Not installed');
+
+        const otherBinaries = binaryChecks.filter((b: { name: string }) => b.name !== 'wireguard-go' && b.name !== 'amneziawg-go');
 
         const checks = [
             {
@@ -267,13 +307,29 @@ export function setupAPI (app: Express): void {
                 detail: filesystem ? 'Available' : 'Not initialized',
                 fixable: false,
             },
-            ...binaryChecks.map((b: { name: string; found: boolean; path: string | null }) => ({
+            // Service-driven WireGuard check (kernel + userspace both count)
+            {
+                id: 'wireguard-go',
+                label: 'WireGuard',
+                status: wgOk ? 'ok' as const : 'missing' as const,
+                detail: wgDetail,
+                fixable: !wgOk,
+                fixAction: 'install-binaries',
+            },
+            // Service-driven AmneziaWG check
+            {
+                id: 'amneziawg-go',
+                label: 'AmneziaWG',
+                status: awgOk ? 'ok' as const : 'missing' as const,
+                detail: awgDetail,
+                fixable: !awgOk,
+                fixAction: 'install-binaries',
+            },
+            ...otherBinaries.map((b: { name: string; found: boolean; path: string | null }) => ({
                 id: b.name,
-                label: b.name === 'wireguard-go' ? 'WireGuard'
-                    : b.name === 'amneziawg-go' ? 'AmneziaWG'
-                        : b.name === 'awg-quick' ? 'AWG Quick'
-                            : b.name === 'sing-box' ? 'VLESS Transport'
-                                : b.name,
+                label: b.name === 'awg-quick' ? 'AWG Quick'
+                    : b.name === 'sing-box' ? 'VLESS Transport'
+                        : b.name,
                 status: b.found ? 'ok' as const : 'missing' as const,
                 detail: b.found ? `Found at ${b.path}` : 'Not installed',
                 fixable: !b.found,
@@ -514,6 +570,8 @@ export function setupAPI (app: Express): void {
     app.use('/api/boson', bosonRouter);
     app.use('/api/setup', setupRouter);
     app.use('/api/update', updateRouter);
+    // v1.2.7.1: structured diagnostic snapshot (auth-gated, opt-in pull)
+    app.use('/api/diagnose', diagnoseRouter);
     app.use('/api/access', accessControlRouter);
     app.use('/api/did', didRouter);
     app.use('/api/wallet', walletRouter);
