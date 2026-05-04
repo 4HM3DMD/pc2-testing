@@ -23,6 +23,13 @@ on:
       - 'Dockerfile.enm.dockerignore'
       - 'docker/**'
       - 'extensions/elastos-node-manager/**'
+      # The Dockerfile bakes pc2-node into the image, so any pc2-node change
+      # (deps, source, config) needs to retrigger the build. The upstream
+      # merge from Elacity/pc2.net hit exactly this case — pc2-node/* changes
+      # that affect the image but were invisible to this workflow.
+      - 'pc2-node/**'
+      # ENM frontend lives here post-0.1-alpha (PC2 app + sidecar pivot).
+      - 'src/backend/apps/elastos-node-manager/**'
       - 'package.json'
       - '.npmrc'
       - '.github/workflows/docker-build.yml'
