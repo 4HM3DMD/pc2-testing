@@ -6,10 +6,28 @@
 import 'dotenv/config';
 
 // Global error handlers MUST be registered first, before any other imports
-// This prevents WASM modules from registering their own crash-happy handlers
-process.on('unhandledRejection', (reason: any, promise: Promise<any>) => {
+// This prevents WASM modules from registering their own crash-happy handlers.
+//
+// v1.2.7.2: capture last error + final exit code so silent crashes leave a
+// breadcrumb in the launcher log. Pre-32 we had no exit-code breadcrumb,
+// which is why the publish_drafts crash on fresh Macs looked like PC2 just
+// vanished — it was actually exiting cleanly somewhere else with an error
+// the launcher swallowed.
+//
+// All writes here use console.error directly (NOT the buffered logger) so
+// they survive a forced exit — `process.on('exit', ...)` runs synchronously
+// and async log writes would be lost.
+let lastErrorCapture: { source: string; message: string; stack?: string } | null = null;
+
+process.on('unhandledRejection', (reason: any, _promise: Promise<any>) => {
+  const message = reason?.message || String(reason);
+  const stack = reason?.stack;
+  lastErrorCapture = { source: 'unhandledRejection', message, stack };
+
   // Log but don't crash - many rejections are recoverable (e.g., 409 Telegram conflicts)
-  console.error('[PC2] Unhandled Promise Rejection:', reason?.message || reason);
+  console.error('[PC2] Unhandled Promise Rejection:', message);
+  if (stack) console.error(stack);
+
   // Only exit on truly fatal errors
   if (reason?.code === 'EADDRINUSE') {
     console.error('[PC2] Fatal: Port already in use, exiting');
@@ -18,15 +36,41 @@ process.on('unhandledRejection', (reason: any, promise: Promise<any>) => {
 });
 
 process.on('uncaughtException', (error: Error) => {
-  console.error('[PC2] Uncaught Exception:', error);
-  // Log stack trace for debugging
+  lastErrorCapture = { source: 'uncaughtException', message: error.message, stack: error.stack };
+
+  console.error('[PC2] Uncaught Exception:', error.message);
   if (error.stack) {
     console.error(error.stack);
   }
+
   // Only exit on truly fatal errors that we can't recover from
   if ((error as any).code === 'EADDRINUSE') {
     process.exit(1);
   }
+});
+
+// Final-exit breadcrumb: this is the line we wished we had on 2026-05-03
+// when fresh Macs were exiting with code 1 silently. Synchronous-only —
+// no async work allowed in `exit` handlers.
+process.on('exit', (code) => {
+  if (code === 0 && !lastErrorCapture) {
+    console.error('[PC2] exit code=0 (clean shutdown)');
+    return;
+  }
+  console.error(`[PC2] exit code=${code}${lastErrorCapture ? ` last_error_source=${lastErrorCapture.source}` : ''}`);
+  if (lastErrorCapture) {
+    console.error(`[PC2] last_error_message: ${lastErrorCapture.message}`);
+    if (lastErrorCapture.stack) {
+      console.error(`[PC2] last_error_stack:\n${lastErrorCapture.stack}`);
+    }
+  }
+});
+
+// `beforeExit` only fires when the event loop drains naturally (NOT after
+// process.exit). Useful to distinguish "exited cleanly because we were
+// done" from "exited via process.exit somewhere".
+process.on('beforeExit', (code) => {
+  console.error(`[PC2] beforeExit code=${code} (event loop drained, no more work scheduled)`);
 });
 
 import { createServer } from './server.js';

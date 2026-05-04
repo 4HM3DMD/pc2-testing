@@ -5169,12 +5169,114 @@
 
   // ── Init ─────────────────────────────────────────────
 
+  // ── Indexer progress banner (v1.2.7.3) ───────────────
+  // Polls /api/catalog/indexer-status every 10s while the local catalog is
+  // still doing its initial backfill (~15 min on a fresh install). Hides
+  // automatically once the chain is fully indexed. Lets fresh users know
+  // PC2 is working — they'd otherwise stare at the same supernode-fed cards
+  // with no signal that their local catalog is filling up underneath.
+  var indexerBannerState = {
+    pollInterval: null,
+    dismissed: false
+  };
+
+  function formatBannerEta(seconds) {
+    if (!seconds || seconds <= 0) return '';
+    if (seconds < 60) return '~' + Math.ceil(seconds) + 's remaining';
+    var minutes = Math.ceil(seconds / 60);
+    if (minutes < 60) return '~' + minutes + ' min remaining';
+    return '~' + Math.ceil(minutes / 60) + 'h remaining';
+  }
+
+  function renderIndexerBanner(status) {
+    var banner = document.getElementById('indexer-progress-banner');
+    if (!banner) return;
+
+    if (indexerBannerState.dismissed) {
+      banner.classList.add('hidden');
+      return;
+    }
+
+    if (!status || status.ready) {
+      banner.classList.add('hidden');
+      return;
+    }
+
+    if (!status.isInitialBackfill && !status.scanning) {
+      banner.classList.add('hidden');
+      return;
+    }
+
+    var versions = status.versions || {};
+    var versionKeys = Object.keys(versions);
+    if (versionKeys.length === 0) {
+      banner.classList.add('hidden');
+      return;
+    }
+
+    var primary = versions[versionKeys[0]];
+    var pct = Math.max(0, Math.min(100, primary.progressPct || 0));
+    var eta = formatBannerEta(status.estimatedSecondsRemaining);
+    var catalogTotal = (status.catalog && status.catalog.total) || 0;
+    var catalogChannels = (status.catalog && status.catalog.channels) || 0;
+
+    var detailParts = [];
+    detailParts.push('Indexed ' + pct.toFixed(1) + '% of Base mainnet');
+    if (eta) detailParts.push(eta);
+    if (catalogTotal > 0 || catalogChannels > 0) {
+      detailParts.push(catalogChannels + ' channel(s), ' + catalogTotal + ' item(s) so far');
+    } else {
+      detailParts.push('Showing live results from elacity.io until ready');
+    }
+
+    var detail = document.getElementById('indexer-banner-detail');
+    if (detail) detail.textContent = detailParts.join(' · ');
+
+    var fill = document.getElementById('indexer-banner-progress-fill');
+    if (fill) fill.style.width = pct + '%';
+
+    banner.classList.remove('hidden');
+  }
+
+  function pollIndexerStatus() {
+    var origin = window.puter_api_origin || window.location.origin;
+    return pc2Fetch(origin + '/api/catalog/indexer-status')
+      .then(function (res) { return res.ok ? res.json() : null; })
+      .then(function (json) {
+        if (!json || !json.success) return;
+        renderIndexerBanner(json);
+        if (json.ready && indexerBannerState.pollInterval) {
+          clearInterval(indexerBannerState.pollInterval);
+          indexerBannerState.pollInterval = null;
+        }
+      })
+      .catch(function () { /* swallow — banner stays in last state */ });
+  }
+
+  function startIndexerBannerPoll() {
+    var dismissBtn = document.getElementById('indexer-banner-dismiss');
+    if (dismissBtn) {
+      dismissBtn.addEventListener('click', function () {
+        indexerBannerState.dismissed = true;
+        var banner = document.getElementById('indexer-progress-banner');
+        if (banner) banner.classList.add('hidden');
+        if (indexerBannerState.pollInterval) {
+          clearInterval(indexerBannerState.pollInterval);
+          indexerBannerState.pollInterval = null;
+        }
+      });
+    }
+    pollIndexerStatus();
+    indexerBannerState.pollInterval = setInterval(pollIndexerStatus, 10000);
+  }
+
   function init() {
     initTheme();
     cacheDom();
     bindEvents();
     loadBrowse(false);
     setupFeedObserver();
+    startIndexerBannerPoll();
 
     Wallet.connect()
       .then(function () {

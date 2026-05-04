@@ -41,13 +41,20 @@ if ! command -v pm2 >/dev/null 2>&1; then
     done
 fi
 
-# Locate the repo (same logic as update.sh)
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || echo "")"
+# Locate the repo (same logic as update.sh).
+# v1.2.7.2: ${BASH_SOURCE[0]:-} guards against `unbound variable` when the
+# script is piped from curl|bash (no source path is set in that mode and
+# `set -u` aborts otherwise). Candidate fallback order is also inverted —
+# launcher installs live in ~/.pc2, so we should report THEIR git state
+# first when both ~/.pc2 and ~/pc2.net (a dev clone) exist. Previously we
+# preferred ~/pc2.net which made diagnostics on a runtime install describe
+# the wrong tree.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-}")" 2>/dev/null && pwd || echo "")"
 PC2_DIR=""
 if [[ -n "$SCRIPT_DIR" && -d "$(dirname "$SCRIPT_DIR")/pc2-node" ]]; then
     PC2_DIR="$(dirname "$SCRIPT_DIR")"
 else
-    for candidate in "$HOME/pc2.net" "$HOME/.pc2"; do
+    for candidate in "$HOME/.pc2" "$HOME/pc2.net"; do
         if [[ -d "$candidate/pc2-node" ]]; then
             PC2_DIR="$candidate"
             break

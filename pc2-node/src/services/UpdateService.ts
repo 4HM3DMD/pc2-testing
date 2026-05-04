@@ -592,7 +592,22 @@ export class UpdateService {
       setTimeout(async () => {
         logger.info('[UpdateService] Attempting restart...');
 
-        // v1.2.7 restart preference order:
+        // v1.2.7.2: macOS short-circuit. The ElastOS Launcher (Electron)
+        // spawns PC2 directly via child_process — there is no pm2/systemctl
+        // in the picture, and trying them blew up logs with "command not
+        // found" warnings on every in-app update. Per launcher source
+        // (pc2Manager.ts), the launcher monitors the spawned PID via its
+        // own status loop, so a clean process.exit(0) is all we need to
+        // hand restart responsibility back to it. The launcher does NOT
+        // currently auto-restart on crash (separate v1.2.8 ask), but a
+        // manual "Start" click puts us back online.
+        if (process.platform === 'darwin') {
+          logger.info('[UpdateService] macOS detected — skipping pm2/systemctl, exiting cleanly for launcher restart');
+          process.exit(0);
+          return;
+        }
+
+        // v1.2.7 restart preference order (Linux / Jetson / sysadmin installs):
         //
         //   1. `pm2 startOrRestart <ecosystem.config.cjs> --only pc2 --update-env`
         //      RE-READS ecosystem.config.cjs and refreshes pm2's stored env

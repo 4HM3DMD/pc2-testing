@@ -31,7 +31,7 @@ function findSchemaFile(): string {
   }
   throw new Error(`Schema file not found. Tried: ${SCHEMA_FILE} and ${sourceSchema}`);
 }
-const CURRENT_VERSION = 31;
+const CURRENT_VERSION = 32;
 
 interface Migration {
   version: number;
@@ -1144,6 +1144,188 @@ export function runMigrations(db: Database): void {
         recordMigration(db, 31);
       } catch (error: any) {
         log.error(`❌ Migration 31 error: ${error.message}`);
+        throw error;
+      }
+    }
+
+    // Migration 32 (v1.2.7.2): Self-heal for installs corrupted by the
+    // pre-32 fresh-install bug. Up to and including v1.2.7.1 the migration
+    // runner returned early after runInitialSchema() for currentVersion === 0
+    // and stamped the DB at CURRENT_VERSION (then = 31), meaning fresh
+    // installs never executed migrations 14, 20, 21, 22, 23, 25-28. Result:
+    // 6 tables (publish_drafts, agent_proposals, content_hashes,
+    // agent_audit_log, installed_skills, channel_metadata) were absent on
+    // fresh nodes, and the first time elacity-creator hit /api/drafts the
+    // PC2 process exited with code 1 (no-such-table).
+    //
+    // For v1.2.7.2+ schema.sql includes those tables directly so fresh
+    // installs are healed at runInitialSchema() time. This migration runs
+    // the same CREATE TABLE IF NOT EXISTS / CREATE INDEX IF NOT EXISTS
+    // blocks for already-corrupted v1.2.7.0/.1 nodes that booted with the
+    // broken DB and were stamped at version 31. All statements are
+    // idempotent so it is also a safe no-op on healthy installs.
+    if (currentVersion < 32) {
+      try {
+        log.info('📦 Running Migration 32 (v1.2.7.2): Self-heal migration-only tables...');
+
+        // Migration 14: agent_proposals
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS agent_proposals (
+            id TEXT PRIMARY KEY,
+            wallet_address TEXT NOT NULL,
+            type TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending_approval',
+            from_address TEXT,
+            smart_account_address TEXT,
+            recipient TEXT,
+            to_address TEXT,
+            value TEXT,
+            data TEXT,
+            chain_id INTEGER,
+            token_address TEXT,
+            token_symbol TEXT,
+            token_decimals INTEGER,
+            token_amount TEXT,
+            summary_action TEXT,
+            summary_estimated_gas TEXT,
+            summary_total_cost TEXT,
+            tx_hash TEXT,
+            error TEXT,
+            rejection_reason TEXT,
+            created_at INTEGER NOT NULL,
+            expires_at INTEGER,
+            approved_at INTEGER,
+            rejected_at INTEGER,
+            executed_at INTEGER,
+            FOREIGN KEY (wallet_address) REFERENCES users(wallet_address) ON DELETE CASCADE
+          )
+        `);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_agent_proposals_wallet  ON agent_proposals(wallet_address)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_agent_proposals_status  ON agent_proposals(status)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_agent_proposals_created ON agent_proposals(wallet_address, created_at DESC)`);
+
+        // Migration 20: content_hashes
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS content_hashes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            phash TEXT NOT NULL,
+            algorithm TEXT NOT NULL DEFAULT 'phash',
+            token_id TEXT,
+            channel TEXT,
+            creator TEXT,
+            content_type TEXT,
+            metadata_cid TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            source TEXT NOT NULL DEFAULT 'local'
+          )
+        `);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_content_hashes_phash   ON content_hashes(phash)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_content_hashes_creator ON content_hashes(creator)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_content_hashes_token   ON content_hashes(token_id)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_content_hashes_source  ON content_hashes(source)`);
+
+        // Migration 21: publish_drafts (the table whose absence crashed elacity-creator)
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS publish_drafts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            wallet_address TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'ready',
+            title TEXT NOT NULL,
+            description TEXT,
+            category TEXT,
+            file_name TEXT,
+            file_size INTEGER,
+            mime_type TEXT,
+            asset_cid TEXT NOT NULL,
+            metadata_cid TEXT NOT NULL,
+            encrypt_hash TEXT NOT NULL,
+            channel TEXT NOT NULL,
+            price TEXT,
+            currency_address TEXT,
+            currency_symbol TEXT,
+            copies INTEGER DEFAULT 1,
+            access_method TEXT DEFAULT 'buy_once',
+            reseller_cut INTEGER DEFAULT 0,
+            royalty_partners TEXT,
+            thumbnail_cid TEXT,
+            adult INTEGER DEFAULT 0,
+            steps TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+          )
+        `);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_drafts_wallet ON publish_drafts(wallet_address)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_drafts_status ON publish_drafts(status)`);
+
+        // Migration 22: agent_audit_log
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS agent_audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL DEFAULT (datetime('now')),
+            agent_id TEXT NOT NULL,
+            action TEXT NOT NULL,
+            detail TEXT,
+            source TEXT,
+            session_key TEXT
+          )
+        `);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_audit_agent_ts ON agent_audit_log(agent_id, timestamp)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_audit_action   ON agent_audit_log(action)`);
+
+        // Migration 23: installed_skills
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS installed_skills (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            wallet_address TEXT NOT NULL,
+            skill_id TEXT NOT NULL,
+            kid TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            name TEXT,
+            description TEXT,
+            authority TEXT,
+            chain_id INTEGER DEFAULT 8453,
+            installed_at TEXT DEFAULT (datetime('now')),
+            last_verified TEXT DEFAULT (datetime('now')),
+            UNIQUE(wallet_address, skill_id)
+          )
+        `);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_installed_skills_wallet ON installed_skills(wallet_address)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_installed_skills_kid    ON installed_skills(kid)`);
+
+        // Migrations 25 + 26 + 28 (final form): channel_metadata with all columns
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS channel_metadata (
+            address TEXT PRIMARY KEY NOT NULL,
+            name TEXT,
+            description TEXT,
+            categories TEXT,
+            image TEXT,
+            cover_image TEXT,
+            updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+            updated_by TEXT
+          )
+        `);
+        // Add columns from migrations 26 and 28 idempotently — table may already
+        // have them on a partially-progressed install.
+        const addCol = (sql: string) => {
+          try { db.exec(sql); } catch (e: any) {
+            if (!String(e?.message || '').includes('duplicate column')) throw e;
+          }
+        };
+        addCol(`ALTER TABLE channel_metadata ADD COLUMN plans TEXT`);
+        addCol(`ALTER TABLE channel_metadata ADD COLUMN token_access TEXT`);
+        addCol(`ALTER TABLE channel_metadata ADD COLUMN creator_address TEXT`);
+        addCol(`ALTER TABLE channel_metadata ADD COLUMN contract_version TEXT`);
+        addCol(`ALTER TABLE channel_metadata ADD COLUMN block_number INTEGER`);
+        addCol(`ALTER TABLE channel_metadata ADD COLUMN tx_hash TEXT`);
+        addCol(`ALTER TABLE channel_metadata ADD COLUMN indexed_at INTEGER`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_channel_metadata_creator ON channel_metadata(creator_address)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_channel_metadata_block   ON channel_metadata(block_number)`);
+
+        log.info('✅ Migration 32 complete: migration-only tables healed (publish_drafts, agent_proposals, content_hashes, agent_audit_log, installed_skills, channel_metadata)');
+        recordMigration(db, 32);
+      } catch (error: any) {
+        log.error(`❌ Migration 32 error: ${error.message}`);
         throw error;
       }
     }

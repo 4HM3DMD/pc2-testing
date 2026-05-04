@@ -34,7 +34,7 @@ import { handleListApiKeys, handleCreateApiKey, handleDeleteApiKey, handleRevoke
 import { handleListTools as handleListAgentTools, handleGetTool, handleListCategories, handleGetOpenAPISchema } from './tools.js';
 import { createPublicRouter, setBandwidthLimit, getCDNStats } from './public.js';
 import { IPFSStorage } from '../storage/ipfs.js';
-import { checkTransportBinaries, ensureTransportBinaries } from '../utils/binary-manager.js';
+import { checkTransportBinaries, ensureTransportBinaries, getInstallHint } from '../utils/binary-manager.js';
 import { httpClientRouter } from './http-client.js';
 import { gitRouter } from './git.js';
 import { auditRouter, auditMiddleware } from './audit.js';
@@ -307,7 +307,9 @@ export function setupAPI (app: Express): void {
                 detail: filesystem ? 'Available' : 'Not initialized',
                 fixable: false,
             },
-            // Service-driven WireGuard check (kernel + userspace both count)
+            // Service-driven WireGuard check (kernel + userspace both count).
+            // v1.2.7.2: include installHint when missing so launcher UI can
+            // show the platform-specific brew/apt command directly.
             {
                 id: 'wireguard-go',
                 label: 'WireGuard',
@@ -315,8 +317,8 @@ export function setupAPI (app: Express): void {
                 detail: wgDetail,
                 fixable: !wgOk,
                 fixAction: 'install-binaries',
+                ...(wgOk ? {} : { installHint: getInstallHint('wireguard-go') }),
             },
-            // Service-driven AmneziaWG check
             {
                 id: 'amneziawg-go',
                 label: 'AmneziaWG',
@@ -324,6 +326,7 @@ export function setupAPI (app: Express): void {
                 detail: awgDetail,
                 fixable: !awgOk,
                 fixAction: 'install-binaries',
+                ...(awgOk ? {} : { installHint: getInstallHint('amneziawg-go') }),
             },
             ...otherBinaries.map((b: { name: string; found: boolean; path: string | null }) => ({
                 id: b.name,
@@ -334,6 +337,7 @@ export function setupAPI (app: Express): void {
                 detail: b.found ? `Found at ${b.path}` : 'Not installed',
                 fixable: !b.found,
                 fixAction: 'install-binaries',
+                ...(b.found ? {} : { installHint: getInstallHint(b.name) }),
             })),
         ];
 
@@ -638,6 +642,65 @@ export function setupAPI (app: Express): void {
             success: true,
             catalog: stats,
             indexer: indexer ? indexer.getStats() : { enabled: false },
+        });
+    });
+
+    /**
+     * v1.2.7.3: live indexer state for the Elacity Market UI's
+     * "Catalog indexing X% complete" banner during the 15-minute fresh-install
+     * warmup window. Returns per-version block-progress, an estimated time to
+     * completion, and the current catalog row count. Public read (no auth)
+     * because the data is non-sensitive and the UI polls it from an iframe.
+     *
+     * Response shape:
+     *   {
+     *     success: true,
+     *     ready: boolean,                    // catalog has items + backfill done
+     *     scanning: boolean,                 // a scan cycle is currently running
+     *     isInitialBackfill: boolean,        // first-ever backfill in progress
+     *     lastChainBlock: number,
+     *     lastScanCompletedAt: number|null,
+     *     estimatedSecondsRemaining: number|null,
+     *     versions: { v3: { progressPct, blocksRemaining, ... } },
+     *     catalog: { total, resolved, pending, channels }
+     *   }
+     */
+    app.get('/api/catalog/indexer-status', (req: Request, res: Response) => {
+        const catalogDb = req.app.locals.db as DatabaseManager | undefined;
+        const indexer = req.app.locals.indexerService;
+        if ( ! catalogDb ) return res.status(503).json({ error: 'Database not available' });
+        if ( ! indexer ) return res.status(503).json({ error: 'Indexer not available' });
+
+        const stats = catalogDb.getCatalogStats();
+        const indexerStatus = indexer.getIndexerStatus();
+
+        // channels-count via channel_metadata (separate from content_catalog)
+        let channels = 0;
+        try {
+            const row = (catalogDb as any).getDB().prepare('SELECT COUNT(*) as c FROM channel_metadata').get() as any;
+            channels = row?.c || 0;
+        } catch {
+            // channel_metadata may not exist yet on a partially-migrated install
+        }
+
+        const ready = !indexerStatus.isInitialBackfill && stats.resolved > 0;
+
+        res.json({
+            success: true,
+            ready,
+            scanning: indexerStatus.scanning,
+            isInitialBackfill: indexerStatus.isInitialBackfill,
+            lastChainBlock: indexerStatus.lastChainBlock,
+            lastScanCompletedAt: indexerStatus.lastScanCompletedAt,
+            estimatedSecondsRemaining: indexerStatus.estimatedSecondsRemaining,
+            versions: indexerStatus.versions,
+            catalog: {
+                total: stats.total,
+                resolved: stats.resolved,
+                pending: stats.pending,
+                failed: stats.failed,
+                channels,
+            },
         });
     });
 

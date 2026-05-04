@@ -44,6 +44,18 @@ const DEFAULT_CHAIN = 'base';
 const DEFAULT_CHAIN_ID = 8453;
 const DEFAULT_PKP_ID = '0x68dcf3dc3c38d726e8a7cdca8ab318f49552c05d';
 
+// CIDs that have been live in supernode-served provision blobs at some point
+// but are NOT production-active in Chipotle's group-1 allowlist. Any one of
+// these surfacing in a cached `data/.chipotle-provision.json` would make
+// `getActionCid()` hand back a CID that produces `access_denied` on every
+// asset (the v1.2.1 → v1.2.2 footgun). We hard-reject them at Tier 3 so a
+// stale cache or a slow supernode rotation can never re-trigger it.
+//
+// CHIPOTLE-REJECT-KNOWN-BAD-CID — see docs/handover/HANDOVER_2026-05-03_V1272_FRESH_MAC_HOTPATCH.md
+const KNOWN_BAD_NON_MEDIA_DECRYPT_CIDS = new Set<string>([
+  'QmX5JxcFhyasptCWMA6unFPm3TRYjPSkJb5HhN8289r5uk',
+]);
+
 const SUPERNODE_PROVISION_URLS = [
   'https://69.164.241.210/api/ddrm/provision',
   'https://38.242.211.112/api/ddrm/provision',
@@ -513,9 +525,22 @@ function getActionCid(): string {
   // with Chipotle for the current fleet. Honouring it here means a
   // future rotation requires only updating the supernode payload; no
   // PC2 redeploy or env juggling on every node in the world.
+  //
+  // Defensive: a stale cache or a supernode that briefly served a
+  // known-bad CID would otherwise propagate the v1.2.1 access_denied
+  // footgun to every existing PC2 node. Reject those CIDs explicitly
+  // and fall through to Tier 4 (the trusted hardcoded default) with a
+  // loud warn log so the issue is visible in `pc2 logs`.
   const provision = loadCachedProvision();
-  if (provision?.actions?.nonMediaDecrypt) {
-    return provision.actions.nonMediaDecrypt;
+  const provisionedCid = provision?.actions?.nonMediaDecrypt;
+  if (provisionedCid) {
+    if (KNOWN_BAD_NON_MEDIA_DECRYPT_CIDS.has(provisionedCid)) {
+      logger.warn(
+        `[Chipotle] Cached supernode provision contains known-bad nonMediaDecrypt CID "${provisionedCid}" — ignoring and using hardcoded fallback. Delete data/.chipotle-provision.json to re-fetch from supernode.`,
+      );
+    } else {
+      return provisionedCid;
+    }
   }
 
   // Tier 4: hardcoded fallback — must stay in lock-step with `storage.ts`

@@ -125,6 +125,29 @@ function classifyAssetType(mimeType: string | null | undefined): string {
   return 'other';
 }
 
+/**
+ * Snapshot of indexer state for /api/catalog/indexer-status.
+ * Lets the Elacity Market UI render a "Catalog indexing X%" banner
+ * during the initial backfill window (15 min on a fresh install).
+ */
+export interface IndexerStatusSnapshot {
+  enabled: boolean;
+  scanning: boolean;
+  lastChainBlock: number;
+  lastScanCompletedAt: number | null;
+  isInitialBackfill: boolean;
+  versions: Record<string, {
+    fromBlock: number;
+    lastScannedBlock: number;
+    blocksRemaining: number;
+    progressPct: number;
+    isBackfilled: boolean;
+    lastScanInserted: number;
+    lastScanErrors: number;
+  }>;
+  estimatedSecondsRemaining: number | null;
+}
+
 export class ContentIndexerService {
   private db: DatabaseManager | null = null;
   private ipfs: IPFSStorage | null = null;
@@ -133,6 +156,17 @@ export class ContentIndexerService {
   private scanTimer: ReturnType<typeof setInterval> | null = null;
   private isScanning = false;
   private currentRpcIndex = 0;
+
+  /**
+   * v1.2.7.3: live state snapshot for the new /api/catalog/indexer-status
+   * endpoint. Updated on every scan cycle so the market UI can render a
+   * "Catalog indexing X%" banner during the 15-minute fresh-install warmup.
+   * Also tracks per-scan error counts so a future silent-failure-mode
+   * (like the pre-Migration-32 channel_metadata bug) gets noticed immediately.
+   */
+  private lastChainBlock = 0;
+  private lastScanCompletedAt: number | null = null;
+  private versionStats: Record<string, { lastScanInserted: number; lastScanErrors: number }> = {};
 
   constructor(rawConfig: Config) {
     const c = rawConfig.content_indexer ?? {};
@@ -202,6 +236,69 @@ export class ContentIndexerService {
 
   getStats(): { enabled: boolean; config: IndexerConfig; scanning: boolean } {
     return { enabled: this.config.enabled, config: this.config, scanning: this.isScanning };
+  }
+
+  /**
+   * v1.2.7.3: live indexer state for the /api/catalog/indexer-status endpoint.
+   * Used by the Elacity Market UI to render a "Catalog indexing X%" progress
+   * banner during the 15-minute fresh-install warmup window.
+   *
+   * Estimation assumes the same throughput we observed on a Mac during the
+   * v1.2.7.2 smoke test: ~1.6M blocks / 15 min = ~110k blocks per minute on
+   * public Base RPCs. Conservative — slower hardware will overshoot the
+   * estimate but we never want to under-promise.
+   */
+  getIndexerStatus(): IndexerStatusSnapshot {
+    const versions: IndexerStatusSnapshot['versions'] = {};
+    let isInitialBackfill = false;
+    let totalBlocksRemaining = 0;
+
+    if (this.db) {
+      for (const [version, cfg] of Object.entries(this.config.contracts)) {
+        const lastScannedRaw = this.db.getSetting(`indexer_last_block_${version}`) || '0';
+        const lastScannedBlock = parseInt(lastScannedRaw, 10) || 0;
+        const isBackfilled = this.db.getSetting(`indexer_channels_backfilled_${version}`) === '1';
+
+        const fromBlock = cfg.fromBlock;
+        const head = this.lastChainBlock || lastScannedBlock || fromBlock;
+        const totalBlocks = Math.max(0, head - fromBlock);
+        const scanned = Math.max(0, lastScannedBlock - fromBlock);
+        const blocksRemaining = Math.max(0, head - Math.max(lastScannedBlock, fromBlock));
+        const progressPct = totalBlocks > 0 ? Math.min(100, (scanned / totalBlocks) * 100) : 0;
+
+        if (!isBackfilled || lastScannedBlock < head - this.config.maxBlocksPerScan) {
+          isInitialBackfill = true;
+        }
+        totalBlocksRemaining += blocksRemaining;
+
+        const stats = this.versionStats[version] || { lastScanInserted: 0, lastScanErrors: 0 };
+
+        versions[version] = {
+          fromBlock,
+          lastScannedBlock,
+          blocksRemaining,
+          progressPct: Math.round(progressPct * 10) / 10,
+          isBackfilled,
+          lastScanInserted: stats.lastScanInserted,
+          lastScanErrors: stats.lastScanErrors,
+        };
+      }
+    }
+
+    // ~110k blocks/min on public Base RPCs (observed). Round to whole seconds.
+    const estimatedSecondsRemaining = totalBlocksRemaining > 0
+      ? Math.ceil((totalBlocksRemaining / 110000) * 60)
+      : null;
+
+    return {
+      enabled: this.config.enabled,
+      scanning: this.isScanning,
+      lastChainBlock: this.lastChainBlock,
+      lastScanCompletedAt: this.lastScanCompletedAt,
+      isInitialBackfill,
+      versions,
+      estimatedSecondsRemaining,
+    };
   }
 
   /**
@@ -482,6 +579,7 @@ export class ContentIndexerService {
 
     try {
       const latestBlock = await this.getLatestBlock();
+      this.lastChainBlock = latestBlock; // v1.2.7.3: cache for indexer-status API
       log.info(`Starting scan cycle (latest block: ${latestBlock})`);
 
       for (const [version, contractCfg] of Object.entries(this.config.contracts)) {
@@ -498,10 +596,21 @@ export class ContentIndexerService {
         log.warn(`Listing refresh failed (non-fatal): ${err.message}`);
       }
 
+      this.lastScanCompletedAt = Date.now(); // v1.2.7.3: timestamp for status API
+
       const stats = this.db.getCatalogStats();
       log.info(`Scan cycle complete — catalog: ${stats.total} total, ${stats.resolved} resolved, ${stats.pending} pending`);
     } catch (error: any) {
-      log.error(`Scan cycle failed: ${error.message}`);
+      // v1.2.7.2: silence the "Database not initialized" noise produced when
+      // a scan races with shutdown (e.g. SIGKILL from the launcher closes
+      // the DB while runScanCycle is mid-flight, then this finally block
+      // tries to log against a closed handle). Real errors still log loud.
+      const msg = String(error?.message || error);
+      if (/database not initialized|database is closed|database connection is closed/i.test(msg)) {
+        log.debug(`Scan cycle aborted — database shutting down (${msg})`);
+      } else {
+        log.error(`Scan cycle failed: ${msg}`);
+      }
     } finally {
       this.isScanning = false;
     }
@@ -521,14 +630,36 @@ export class ContentIndexerService {
 
     log.info(`[${version}] Running one-time ChannelCreated backfill from block ${cfg.fromBlock}…`);
 
-    let totalChannels = 0;
+    let totalInserted = 0;
+    let totalErrors = 0;
     for (let from = cfg.fromBlock; from <= latestBlock; from += this.config.maxBlocksPerScan) {
       const to = Math.min(from + this.config.maxBlocksPerScan - 1, latestBlock);
-      totalChannels += await this.scanChannelCreated(cfg.channelFactory, version, from, to);
+      const result = await this.scanChannelCreated(cfg.channelFactory, version, from, to);
+      totalInserted += result.inserted;
+      totalErrors += result.errors;
+    }
+
+    // v1.2.7.3: don't stamp backfill complete if every event failed to insert.
+    // Pre-32 we ALWAYS stamped, which let the missing-channel_metadata bug
+    // permanently mark the catalog as "backfilled = 0 channels" and never retry.
+    // Now: if we encountered events but none succeeded, leave the stamp off so
+    // the next scan cycle (after the user fixes whatever's broken) retries.
+    if (totalInserted === 0 && totalErrors > 0) {
+      log.error(
+        `[${version}] Backfill found ${totalErrors} ChannelCreated event(s) but ZERO were successfully indexed. ` +
+        `This typically means a missing table (channel_metadata?) or schema mismatch — see warnings above for the first error. ` +
+        `NOT marking backfill complete — will retry on next scan cycle so catalog auto-recovers once the underlying cause is fixed. ` +
+        `Run /api/diagnose for full state.`
+      );
+      return;
     }
 
     this.db.setSetting(backfillKey, '1');
-    log.info(`[${version}] Backfill complete — indexed ${totalChannels} channel(s)`);
+    if (totalErrors > 0) {
+      log.warn(`[${version}] Backfill complete — indexed ${totalInserted} channel(s), but ${totalErrors} event(s) failed (see warnings above)`);
+    } else {
+      log.info(`[${version}] Backfill complete — indexed ${totalInserted} channel(s)`);
+    }
   }
 
   private async scanContractVersion(version: string, cfg: ContractVersionConfig, latestBlock: number): Promise<void> {
@@ -552,6 +683,7 @@ export class ContentIndexerService {
     let scannedTo = startBlock - 1;
     let newAssets = 0;
     let newChannels = 0;
+    let totalErrors = 0;
 
     for (let from = startBlock; from <= latestBlock; from += this.config.maxBlocksPerScan) {
       const to = Math.min(from + this.config.maxBlocksPerScan - 1, latestBlock);
@@ -560,14 +692,17 @@ export class ContentIndexerService {
       // reference them. Critical for the Creator app UX (channels must be visible
       // immediately after creation, not only after first mint).
       if (cfg.channelFactory) {
-        newChannels += await this.scanChannelCreated(cfg.channelFactory, version, from, to);
+        const channelResult = await this.scanChannelCreated(cfg.channelFactory, version, from, to);
+        newChannels += channelResult.inserted;
+        totalErrors += channelResult.errors;
       }
 
       const eventSource = cfg.eventHub ?? cfg.centralStorage;
       if (eventSource) {
-        const countLegacy = await this.scanDigitalAssetRegistered(eventSource, version, from, to);
-        const countV3 = await this.scanAssetCreated(eventSource, version, from, to);
-        newAssets += countLegacy + countV3;
+        const legacyResult = await this.scanDigitalAssetRegistered(eventSource, version, from, to);
+        const v3Result = await this.scanAssetCreated(eventSource, version, from, to);
+        newAssets += legacyResult.inserted + v3Result.inserted;
+        totalErrors += legacyResult.errors + v3Result.errors;
       }
 
       scannedTo = to;
@@ -579,6 +714,9 @@ export class ContentIndexerService {
     }
 
     this.db.setSetting(settingKey, String(scannedTo));
+
+    // v1.2.7.3: track per-version stats for the indexer-status API
+    this.versionStats[version] = { lastScanInserted: newChannels + newAssets, lastScanErrors: totalErrors };
 
     if (newChannels > 0 || newAssets > 0) {
       log.info(`[${version}] Indexed ${newChannels} new channel(s), ${newAssets} new asset(s) up to block ${scannedTo}`);
@@ -601,8 +739,8 @@ export class ContentIndexerService {
    * resolved lazily by the API endpoint and cached — so even with 1M channels
    * the scan stays O(blocks) not O(channels * RPC calls).
    */
-  private async scanChannelCreated(factoryAddress: string, version: string, fromBlock: number, toBlock: number): Promise<number> {
-    if (!this.db) return 0;
+  private async scanChannelCreated(factoryAddress: string, version: string, fromBlock: number, toBlock: number): Promise<{ inserted: number; errors: number }> {
+    if (!this.db) return { inserted: 0, errors: 0 };
 
     const logs = await this.getLogs(
       factoryAddress,
@@ -611,7 +749,9 @@ export class ContentIndexerService {
       toBlock
     );
 
-    let count = 0;
+    let inserted = 0;
+    let errors = 0;
+    let firstError: string | null = null;
 
     for (const entry of logs) {
       try {
@@ -620,7 +760,6 @@ export class ContentIndexerService {
         const creatorAddress = unpadAddress(entry.topics[3]);
         const blockNumber = fromHex(entry.blockNumber);
 
-        // Non-indexed params: address channel, address factoryAddr
         const dataHex = entry.data ?? '0x';
         const data = dataHex.replace('0x', '');
         if (data.length < 64) continue;
@@ -634,17 +773,35 @@ export class ContentIndexerService {
           tx_hash: entry.transactionHash || null,
         });
 
-        count++;
+        inserted++;
       } catch (error: any) {
-        log.debug(`Failed to parse ChannelCreated: ${error.message}`);
+        // v1.2.7.3: surface swallowed errors. The pre-32 catch logged at
+        // log.debug, which let the missing-channel_metadata bug stay
+        // invisible — every ChannelCreated event silently failed to insert
+        // and the indexer reported "0 channels found". Now: warn LOUDLY on
+        // first error per scan so it appears in launcher logs / pc2-diagnose,
+        // and emit a summary at end of scan if any failed.
+        errors++;
+        if (errors === 1) {
+          firstError = error?.message || String(error);
+          log.warn(`scanChannelCreated [${version}]: first error indexing ChannelCreated event (block ${entry.blockNumber}): ${firstError}`);
+        }
+        log.debug(`scanChannelCreated [${version}] error #${errors}: ${error?.message || error}`);
       }
     }
 
-    return count;
+    if (errors > 0) {
+      log.warn(
+        `scanChannelCreated [${version}]: ${inserted} inserted, ${errors} failed (first error: ${firstError}). ` +
+        `Likely missing tables, schema drift, or DB write contention. Check /api/diagnose.`
+      );
+    }
+
+    return { inserted, errors };
   }
 
-  private async scanDigitalAssetRegistered(eventSourceAddress: string, version: string, fromBlock: number, toBlock: number): Promise<number> {
-    if (!this.db) return 0;
+  private async scanDigitalAssetRegistered(eventSourceAddress: string, version: string, fromBlock: number, toBlock: number): Promise<{ inserted: number; errors: number }> {
+    if (!this.db) return { inserted: 0, errors: 0 };
 
     const logs = await this.getLogs(
       eventSourceAddress,
@@ -653,7 +810,9 @@ export class ContentIndexerService {
       toBlock
     );
 
-    let count = 0;
+    let inserted = 0;
+    let errors = 0;
+    let firstError: string | null = null;
 
     for (const entry of logs) {
       try {
@@ -697,13 +856,26 @@ export class ContentIndexerService {
         };
 
         this.db.upsertCatalogItem(item);
-        count++;
+        inserted++;
       } catch (error: any) {
-        log.debug(`Failed to parse event: ${error.message}`);
+        // v1.2.7.3: same surfacing pattern as scanChannelCreated.
+        errors++;
+        if (errors === 1) {
+          firstError = error?.message || String(error);
+          log.warn(`scanDigitalAssetRegistered [${version}]: first error indexing event (block ${entry.blockNumber}): ${firstError}`);
+        }
+        log.debug(`scanDigitalAssetRegistered [${version}] error #${errors}: ${error?.message || error}`);
       }
     }
 
-    return count;
+    if (errors > 0) {
+      log.warn(
+        `scanDigitalAssetRegistered [${version}]: ${inserted} inserted, ${errors} failed (first error: ${firstError}). ` +
+        `Likely missing tables, schema drift, or DB write contention. Check /api/diagnose.`
+      );
+    }
+
+    return { inserted, errors };
   }
 
   /**
@@ -715,8 +887,8 @@ export class ContentIndexerService {
    *   topics[0] = event sig, topics[1] = _to (creator), topics[2] = _channel, topics[3] = opContract
    *   data = abi.encode(uint256 _tokenId, string _tokenUri, uint16 _opType)
    */
-  private async scanAssetCreated(eventSourceAddress: string, version: string, fromBlock: number, toBlock: number): Promise<number> {
-    if (!this.db) return 0;
+  private async scanAssetCreated(eventSourceAddress: string, version: string, fromBlock: number, toBlock: number): Promise<{ inserted: number; errors: number }> {
+    if (!this.db) return { inserted: 0, errors: 0 };
 
     const logs = await this.getLogs(
       eventSourceAddress,
@@ -725,7 +897,9 @@ export class ContentIndexerService {
       toBlock
     );
 
-    let count = 0;
+    let inserted = 0;
+    let errors = 0;
+    let firstError: string | null = null;
 
     for (const entry of logs) {
       try {
@@ -783,13 +957,26 @@ export class ContentIndexerService {
         };
 
         this.db.upsertCatalogItem(item);
-        count++;
+        inserted++;
       } catch (error: any) {
-        log.debug(`Failed to parse AssetCreated event: ${error.message}`);
+        // v1.2.7.3: same surfacing pattern as scanChannelCreated.
+        errors++;
+        if (errors === 1) {
+          firstError = error?.message || String(error);
+          log.warn(`scanAssetCreated [${version}]: first error indexing AssetCreated event (block ${entry.blockNumber}): ${firstError}`);
+        }
+        log.debug(`scanAssetCreated [${version}] error #${errors}: ${error?.message || error}`);
       }
     }
 
-    return count;
+    if (errors > 0) {
+      log.warn(
+        `scanAssetCreated [${version}]: ${inserted} inserted, ${errors} failed (first error: ${firstError}). ` +
+        `Likely missing tables, schema drift, or DB write contention. Check /api/diagnose.`
+      );
+    }
+
+    return { inserted, errors };
   }
 
   // ── Metadata resolution ────────────────────────────────────

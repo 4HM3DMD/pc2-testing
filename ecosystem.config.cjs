@@ -27,11 +27,20 @@
  *   pm2 set pm2-logrotate:rotateInterval '0 0 * * *'
  *   # Without this, pm2-out.log can grow unbounded (we've seen 945 MB in production).
  */
+// v1.2.7.2: use __dirname-based absolute paths for cwd/script. The
+// previous "./pc2-node" + "dist/index.js" pattern caused PM2 to double-
+// resolve paths when UpdateService called `pm2 startOrRestart` from
+// inside pc2-node/, producing e.g. /Users/sash/.pc2/pc2-node/pc2-node/dist/index.js
+// which "Script not found"-ed. Absolute paths are unambiguous regardless
+// of CWD at start time.
+const path = require('path');
+const PC2_NODE_DIR = path.join(__dirname, 'pc2-node');
+
 module.exports = {
   apps: [{
     name: "pc2",
-    cwd: "./pc2-node",
-    script: "dist/index.js",
+    cwd: PC2_NODE_DIR,
+    script: path.join(PC2_NODE_DIR, 'dist/index.js'),
     interpreter: "node",
 
     // Restart behavior - prevents port conflicts from rapid restarts

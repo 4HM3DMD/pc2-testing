@@ -25,6 +25,47 @@ const GITHUB_RELEASE_BASE = `https://github.com/Elacity/pc2.net/releases/downloa
 const SINGBOX_VERSION = '1.13.0';
 const SINGBOX_RELEASE_BASE = `https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VERSION}`;
 
+// v1.2.7.2: one-shot guard that flips when we hit our first 404 against
+// GITHUB_RELEASE_BASE. Until pc2-binaries-v1 is actually published, every
+// fresh-Mac boot used to log 4 separate "HTTP 404" warnings as we tried
+// each transport. After the first 404 this short-circuits subsequent
+// attempts so the log stays readable. sing-box (SagerNet release) is
+// unaffected — it has its own host.
+let pc2BinariesReleaseUnavailable = false;
+
+// v1.2.7.2: install hint catalogue. Logged once per missing binary per
+// process so users see actionable advice in the launcher log instead of
+// just "not found" or "HTTP 404". Surfaced through /api/system-readiness
+// in api/index.ts so the launcher UI can show the same hint.
+const INSTALL_HINTS: Record<string, { darwin?: string; linux?: string }> = {
+  'wireguard-go': {
+    darwin: 'macOS: brew install wireguard-tools (provides wireguard-go)',
+    linux:  'Linux: sudo apt install wireguard-tools  (or use the installer in pc2-node/scripts/install.sh)',
+  },
+  'amneziawg-go': {
+    darwin: 'macOS: brew tap amnezia-vpn/amneziawg-tools && brew install amneziawg-go amneziawg-tools',
+    linux:  'Linux: see https://github.com/amnezia-vpn/amneziawg-go (or build with: git clone amneziawg-go && make)',
+  },
+  'awg-quick': {
+    darwin: 'macOS: brew tap amnezia-vpn/amneziawg-tools && brew install amneziawg-tools',
+    linux:  'Linux: install amneziawg-tools package (provides awg-quick)',
+  },
+  'sing-box': {
+    darwin: 'macOS: brew install sing-box',
+    linux:  'Linux: see https://sing-box.sagernet.org/installation/  (or apt install sing-box where available)',
+  },
+};
+
+/** Returns a human-readable install hint for the current platform, or null. */
+function getInstallHint(binaryName: string): string | null {
+  const platform = process.platform;
+  const hints = INSTALL_HINTS[binaryName];
+  if (!hints) return null;
+  if (platform === 'darwin') return hints.darwin || null;
+  if (platform === 'linux')  return hints.linux  || null;
+  return null;
+}
+
 interface BinarySpec {
   name: string;
   /** Platforms that need this binary: 'all' or specific like 'linux', 'darwin' */
@@ -227,6 +268,16 @@ async function downloadBinary(spec: BinarySpec, targetDir: string): Promise<bool
   const tmpPath = `${targetPath}.tmp`;
 
   const url = spec.getDownloadUrl(platform, arch);
+
+  // v1.2.7.2: short-circuit if a previous binary already 404'd against
+  // pc2-binaries-v1. Avoids the 4×404 log storm fresh Macs used to produce.
+  // Only applies to URLs in our own GitHub release; sing-box (SagerNet) is
+  // exempt because it has its own host that does exist.
+  if (pc2BinariesReleaseUnavailable && url.startsWith(GITHUB_RELEASE_BASE)) {
+    logger.debug(`[BinaryManager] Skipping ${spec.name} download — pc2-binaries-v1 release confirmed unavailable this session`);
+    return false;
+  }
+
   logger.info(`[BinaryManager] Downloading ${spec.name} from ${url}`);
 
   try {
@@ -258,7 +309,19 @@ async function downloadBinary(spec: BinarySpec, targetDir: string): Promise<bool
     return true;
   } catch (err) {
     try { unlinkSync(tmpPath); } catch { /* ignore */ }
-    logger.warn(`[BinaryManager] Failed to download ${spec.name}: ${(err as Error).message}`);
+    const errMsg = (err as Error).message;
+
+    // v1.2.7.2: detect "release does not exist" so we can short-circuit
+    // sibling downloads for the rest of this process lifetime.
+    if (!pc2BinariesReleaseUnavailable && url.startsWith(GITHUB_RELEASE_BASE) && /HTTP 404/.test(errMsg)) {
+      pc2BinariesReleaseUnavailable = true;
+      logger.warn(
+        `[BinaryManager] pc2-binaries-v1 GitHub release not published — skipping further attempts. ` +
+        `Relying on bundled binaries (pc2-node/bin/${platform}-${arch}/) and system PATH only.`,
+      );
+    } else {
+      logger.warn(`[BinaryManager] Failed to download ${spec.name}: ${errMsg}`);
+    }
     return false;
   }
 }
@@ -402,6 +465,14 @@ export async function ensureTransportBinaries(): Promise<BinaryReport> {
   }
   if (report.failed.length > 0) {
     logger.warn(`[BinaryManager] Failed to download: ${report.failed.join(', ')}. These transports may be unavailable.`);
+    // v1.2.7.2: emit one actionable install hint per missing binary
+    // (instead of just "failed to download"). The launcher log is
+    // typically the first place a fresh-install user looks when something
+    // doesn't work, so we want the fix-it command right there.
+    for (const name of report.failed) {
+      const hint = getInstallHint(name);
+      if (hint) logger.warn(`[BinaryManager]   ${name} install hint → ${hint}`);
+    }
   }
   if (report.downloaded === 0 && report.failed.length === 0) {
     logger.info(`[BinaryManager] All ${report.checked} transport binaries present`);
@@ -409,3 +480,7 @@ export async function ensureTransportBinaries(): Promise<BinaryReport> {
 
   return report;
 }
+
+// Re-export so the system-readiness API can show the same hint to users
+// without duplicating the catalogue.
+export { getInstallHint };

@@ -1,6 +1,14 @@
 -- PC2 Node Database Schema
 -- SQLite database for persistent storage
--- Version 16: Full schema with all migrations applied
+-- Version 32: Full schema with all migrations applied through migration 32.
+--
+-- IMPORTANT: This file is the canonical "fully-current" snapshot used by
+-- runInitialSchema() in migrations.ts on fresh installs. Anything created
+-- by an incremental migration in migrations.ts MUST also live here, or
+-- fresh installs will be missing it (the v1.2.7.0/.1 publish_drafts
+-- regression we shipped on 2026-05-03 was caused by exactly this drift —
+-- migrations 14, 20, 21, 22, 23, 25-28 created tables that never made it
+-- into schema.sql, so fresh installs crashed when apps queried them).
 
 -- Users table: Wallet-based user accounts
 CREATE TABLE IF NOT EXISTS users (
@@ -309,6 +317,156 @@ CREATE INDEX IF NOT EXISTS idx_pinned_cids_status ON pinned_cids(pin_status);
 CREATE INDEX IF NOT EXISTS idx_pinned_cids_served ON pinned_cids(last_served_at);
 CREATE INDEX IF NOT EXISTS idx_context_wallet_time ON context_events(wallet, timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_context_type ON context_events(type);
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- Tables historically created by migrations only (14, 20, 21, 22, 23, 25-28).
+-- Mirrored here so fresh installs (which run schema.sql then stamp at
+-- CURRENT_VERSION and skip the migration loop) get them too. Migration 32
+-- in migrations.ts re-applies the same CREATE … IF NOT EXISTS statements
+-- on existing v1.2.7.0/.1 installs that booted with a broken DB.
+-- ─────────────────────────────────────────────────────────────────────────
+
+-- Migration 14: Agent Proposals — AI agent transaction proposals awaiting approval
+CREATE TABLE IF NOT EXISTS agent_proposals (
+  id TEXT PRIMARY KEY,
+  wallet_address TEXT NOT NULL,
+  type TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending_approval',
+  from_address TEXT,
+  smart_account_address TEXT,
+  recipient TEXT,
+  to_address TEXT,
+  value TEXT,
+  data TEXT,
+  chain_id INTEGER,
+  token_address TEXT,
+  token_symbol TEXT,
+  token_decimals INTEGER,
+  token_amount TEXT,
+  summary_action TEXT,
+  summary_estimated_gas TEXT,
+  summary_total_cost TEXT,
+  tx_hash TEXT,
+  error TEXT,
+  rejection_reason TEXT,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER,
+  approved_at INTEGER,
+  rejected_at INTEGER,
+  executed_at INTEGER,
+  FOREIGN KEY (wallet_address) REFERENCES users(wallet_address) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_agent_proposals_wallet  ON agent_proposals(wallet_address);
+CREATE INDEX IF NOT EXISTS idx_agent_proposals_status  ON agent_proposals(status);
+CREATE INDEX IF NOT EXISTS idx_agent_proposals_created ON agent_proposals(wallet_address, created_at DESC);
+
+-- Migration 20: Content hashes — perceptual fingerprinting + duplicate detection
+CREATE TABLE IF NOT EXISTS content_hashes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  phash TEXT NOT NULL,
+  algorithm TEXT NOT NULL DEFAULT 'phash',
+  token_id TEXT,
+  channel TEXT,
+  creator TEXT,
+  content_type TEXT,
+  metadata_cid TEXT,
+  created_at TEXT DEFAULT (datetime('now')),
+  source TEXT NOT NULL DEFAULT 'local'
+);
+CREATE INDEX IF NOT EXISTS idx_content_hashes_phash   ON content_hashes(phash);
+CREATE INDEX IF NOT EXISTS idx_content_hashes_creator ON content_hashes(creator);
+CREATE INDEX IF NOT EXISTS idx_content_hashes_token   ON content_hashes(token_id);
+CREATE INDEX IF NOT EXISTS idx_content_hashes_source  ON content_hashes(source);
+
+-- Migration 21: Publish drafts — Elacity Creator stages publish flows here
+-- before pushing on-chain. Missing this table on fresh installs caused the
+-- v1.2.7.0/.1 crash on first elacity-creator open.
+CREATE TABLE IF NOT EXISTS publish_drafts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  wallet_address TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'ready',
+  title TEXT NOT NULL,
+  description TEXT,
+  category TEXT,
+  file_name TEXT,
+  file_size INTEGER,
+  mime_type TEXT,
+  asset_cid TEXT NOT NULL,
+  metadata_cid TEXT NOT NULL,
+  encrypt_hash TEXT NOT NULL,
+  channel TEXT NOT NULL,
+  price TEXT,
+  currency_address TEXT,
+  currency_symbol TEXT,
+  copies INTEGER DEFAULT 1,
+  access_method TEXT DEFAULT 'buy_once',
+  reseller_cut INTEGER DEFAULT 0,
+  royalty_partners TEXT,
+  thumbnail_cid TEXT,
+  adult INTEGER DEFAULT 0,
+  steps TEXT,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_drafts_wallet ON publish_drafts(wallet_address);
+CREATE INDEX IF NOT EXISTS idx_drafts_status ON publish_drafts(status);
+
+-- Migration 22: Agent audit log — AI action tracking for after-the-fact review
+CREATE TABLE IF NOT EXISTS agent_audit_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  timestamp TEXT NOT NULL DEFAULT (datetime('now')),
+  agent_id TEXT NOT NULL,
+  action TEXT NOT NULL,
+  detail TEXT,
+  source TEXT,
+  session_key TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_audit_agent_ts ON agent_audit_log(agent_id, timestamp);
+CREATE INDEX IF NOT EXISTS idx_audit_action   ON agent_audit_log(action);
+
+-- Migration 23: Installed skills — purchased skill ownership tracking
+CREATE TABLE IF NOT EXISTS installed_skills (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  wallet_address TEXT NOT NULL,
+  skill_id TEXT NOT NULL,
+  kid TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  name TEXT,
+  description TEXT,
+  authority TEXT,
+  chain_id INTEGER DEFAULT 8453,
+  installed_at TEXT DEFAULT (datetime('now')),
+  last_verified TEXT DEFAULT (datetime('now')),
+  UNIQUE(wallet_address, skill_id)
+);
+CREATE INDEX IF NOT EXISTS idx_installed_skills_wallet ON installed_skills(wallet_address);
+CREATE INDEX IF NOT EXISTS idx_installed_skills_kid    ON installed_skills(kid);
+
+-- Migrations 25 + 26 + 28 (final form): channel_metadata
+-- Channel metadata overrides for V3 channels that have no on-chain stored
+-- metadata. Columns from migration 25 (base table), migration 26
+-- (plans/token_access) and migration 28 (creator/contract_version/block/
+-- tx_hash/indexed_at) are all included here so fresh installs converge
+-- on the same shape that incrementally-upgraded installs reach.
+CREATE TABLE IF NOT EXISTS channel_metadata (
+  address TEXT PRIMARY KEY NOT NULL,
+  name TEXT,
+  description TEXT,
+  categories TEXT,
+  image TEXT,
+  cover_image TEXT,
+  updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+  updated_by TEXT,
+  plans TEXT,
+  token_access TEXT,
+  creator_address TEXT,
+  contract_version TEXT,
+  block_number INTEGER,
+  tx_hash TEXT,
+  indexed_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_channel_metadata_creator ON channel_metadata(creator_address);
+CREATE INDEX IF NOT EXISTS idx_channel_metadata_block   ON channel_metadata(block_number);
 
 -- Triggers for FTS synchronization
 CREATE TRIGGER IF NOT EXISTS files_fts_insert AFTER INSERT ON files BEGIN

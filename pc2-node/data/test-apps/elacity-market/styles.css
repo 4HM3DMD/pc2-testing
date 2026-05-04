@@ -3854,3 +3854,83 @@ body {
   .detail-action-row .action-btn { flex-shrink: 0; }
   .earnings-total { flex-direction: column; align-items: flex-start; }
 }
+
+/* ── Indexer progress banner (v1.2.7.3) ────────────────────────────────────
+ * Shown above the feed grid during the initial 1.6M-block backfill window
+ * (~15 min on a fresh install). Auto-hides once the local catalog catches up
+ * to the chain head. Subtle accent-coloured strip — informational, not blocking.
+ */
+.indexer-banner {
+  background: var(--accent-dim);
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  margin: 0 0 16px 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.4;
+  transition: opacity var(--duration-normal) var(--ease-out);
+}
+.indexer-banner.hidden {
+  display: none;
+}
+.indexer-banner-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.indexer-banner-spinner {
+  color: var(--accent);
+  flex-shrink: 0;
+  animation: indexer-banner-spin 1.4s linear infinite;
+  margin-top: 1px;
+}
+@keyframes indexer-banner-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+.indexer-banner-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.indexer-banner-text strong {
+  font-weight: 600;
+  font-size: 13px;
+}
+.indexer-banner-text span {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.indexer-banner-dismiss {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 18px;
+  line-height: 1;
+  padding: 0 4px;
+  cursor: pointer;
+  flex-shrink: 0;
+  border-radius: 4px;
+  transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
+}
+.indexer-banner-dismiss:hover {
+  background: var(--nav-hover);
+  color: var(--text-primary);
+}
+.indexer-banner-progress {
+  margin-top: 10px;
+  height: 3px;
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.indexer-banner-progress-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 2px;
+  transition: width 1s linear;
+  width: 0%;
+}

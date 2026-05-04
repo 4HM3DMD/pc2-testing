@@ -130,10 +130,23 @@ function parseCodecString(buf: Buffer, stsdOffset: number, stsdSize: number): st
     const av1C = findBox(buf, childStart, childEnd, 'av1C');
     if (av1C && av1C.offset + av1C.headerSize + 4 < buf.length) {
       const p = av1C.offset + av1C.headerSize;
+      // AV1CodecConfigurationRecord (https://aomediacodec.github.io/av1-isobmff/):
+      //   byte 1 = seq_profile (3) | seq_level_idx_0 (5)
+      //   byte 2 = seq_tier_0 (1) | high_bitdepth (1) | twelve_bit (1) |
+      //            monochrome (1) | chroma_subsampling_x (1) |
+      //            chroma_subsampling_y (1) | chroma_sample_position (2)
+      // Bit depth derives from (high_bitdepth, twelve_bit) per AV1 §5.5.2:
+      //   (0,0)=8, (1,0)=10, (1,1)=12. Twelve-bit is only valid in profile 2.
+      // The previous extraction `(byte2 >> 1) & 0x7` accidentally masked the
+      // chroma fields and produced bogus bit depths like 14, which MSE
+      // rejects with "Video codec 'av01.0.05M.14' is not supported" — and
+      // there is no such thing as 14-bit AV1.
       const profile = (buf[p + 1] >> 5) & 0x7;
       const level = buf[p + 1] & 0x1f;
       const tier = (buf[p + 2] >> 7) & 0x1;
-      const bitDepth = ((buf[p + 2] >> 1) & 0x7) + 8;
+      const highBitdepth = (buf[p + 2] >> 6) & 0x1;
+      const twelveBit = (buf[p + 2] >> 5) & 0x1;
+      const bitDepth = twelveBit ? 12 : (highBitdepth ? 10 : 8);
       return `av01.${profile}.${level.toString().padStart(2, '0')}${tier ? 'H' : 'M'}.${bitDepth.toString().padStart(2, '0')}`;
     }
     return 'av01.0.01M.08';

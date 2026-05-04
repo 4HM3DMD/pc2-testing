@@ -149,10 +149,21 @@ fn parse_codec_string(buf: &[u8], stsd_offset: usize, stsd_size: usize) -> Strin
             if let Some((off, _, hs)) = find_box(buf, content_start + entry.header_size, entry_end, b"av1C") {
                 let p = off + hs;
                 if p + 4 <= buf.len() {
+                    // AV1CodecConfigurationRecord byte 2 layout (per
+                    // https://aomediacodec.github.io/av1-isobmff/):
+                    //   tier(1) | high_bitdepth(1) | twelve_bit(1) | mono(1)
+                    //   chroma_x(1) | chroma_y(1) | chroma_pos(2)
+                    // Bit depth derives from (high_bitdepth, twelve_bit) per
+                    // AV1 §5.5.2: (0,0)=8, (1,0)=10, (1,1)=12. The previous
+                    // mask `(byte2 >> 1) & 0x7` accidentally captured the
+                    // chroma fields and produced bogus values like 14, which
+                    // browsers reject — there is no 14-bit AV1 profile.
                     let profile = (buf[p + 1] >> 5) & 0x7;
                     let level = buf[p + 1] & 0x1f;
                     let tier = (buf[p + 2] >> 7) & 0x1;
-                    let bit_depth = ((buf[p + 2] >> 1) & 0x7) + 8;
+                    let high_bitdepth = (buf[p + 2] >> 6) & 0x1;
+                    let twelve_bit = (buf[p + 2] >> 5) & 0x1;
+                    let bit_depth: u8 = if twelve_bit == 1 { 12 } else if high_bitdepth == 1 { 10 } else { 8 };
                     let tier_ch = if tier == 1 { 'H' } else { 'M' };
                     return format!("av01.{}.{:02}{}.{:02}", profile, level, tier_ch, bit_depth);
                 }

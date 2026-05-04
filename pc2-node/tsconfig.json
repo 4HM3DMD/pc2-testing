@@ -18,7 +18,14 @@
     "types": ["node"]
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist", "frontend", "data"],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "frontend",
+    "data",
+    "src/sdk/index.ts",
+    "src/sdk/config.ts"
+  ],
   "watchOptions": {
     "excludeDirectories": ["**/node_modules", "**/dist", "**/frontend", "**/data"]
   }

@@ -317,6 +317,11 @@ export class IndexingWorker {
    * Scan database for files that need indexing
    */
   private async scanForUnindexedFiles(): Promise<void> {
+    // v1.2.7.2: skip if shutdown started — the while-loop in start() may
+    // still be mid-await when shutdown() flips isRunning to false; we
+    // don't want the next iteration to query a closed DB and emit a noisy
+    // "Database not initialized" error to the launcher log.
+    if (!this.isRunning) return;
     try {
       const dbInst = (this.db as any).getDB();
       const unindexed = dbInst.prepare(`
@@ -335,8 +340,15 @@ export class IndexingWorker {
       if (unindexed.length > 0) {
         logger.debug(`[Indexer] Found ${unindexed.length} unindexed files`);
       }
-    } catch (error) {
-      logger.error('[Indexer] Error scanning for unindexed files:', error);
+    } catch (error: any) {
+      // v1.2.7.2: silence shutdown-race "Database not initialized" noise.
+      // Real errors still log loud.
+      const msg = String(error?.message || error);
+      if (/database not initialized|database is closed|database connection is closed/i.test(msg)) {
+        logger.debug(`[Indexer] Scan aborted — database shutting down (${msg})`);
+      } else {
+        logger.error('[Indexer] Error scanning for unindexed files:', error);
+      }
     }
   }
 }

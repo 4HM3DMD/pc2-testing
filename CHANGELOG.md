@@ -6,6 +6,147 @@
 
 ---
 
+## [v1.2.7.4] - 2026-05-04 - AV1 codec string + supernode dDRM hardening + build-fix for in-app updates
+
+> **Scope**: Three independent hot-fixes folded into one ship to give Sasha's other-MacBook fresh-install test the cleanest possible target. (1) Browsers couldn't play any 10-bit AV1 video PC2 transcoded — wrong byte mask in the AV1 codec-string parser. (2) Both supernodes had been signing-and-serving a known-bad `nonMediaDecrypt` CID in their dDRM provision blob — invisible today (latent footgun), would break every PC2 the moment any future refactor unified on `chipotle-client.getActionCid()`. (3) Two untracked gitignored SDK scratch files (`src/sdk/{index,config}.ts`) were breaking `tsc` exit-code, which in turn would brick `set -e` in `scripts/update.sh` step 10 → in-app updates would silently fail for every existing PC2 node trying to roll forward.
+
+### AV1 codec string (10-bit videos rejected by every browser)
+
+- "Playback Error: Video codec 'av01.0.05M.14' is not supported by this browser" on every video transcoded by PC2's SVT-AV1 encoder path. The bit-depth field in the AV1 codec string was computed from the wrong 3 bits of the AV1 sequence header, producing values like 14 that no browser/MSE implementation accepts (there is no 14-bit AV1 profile). The codec string is recomputed from the init segment on every `/api/media/init`, so existing minted assets auto-heal on the next playback attempt — no re-mint needed.
+- **[`pc2-node/src/services/media/mp4split.ts`](pc2-node/src/services/media/mp4split.ts)** (the hot path used by `refineCodecsFromInitSegment` at `/api/media/init`): replaced `bitDepth = ((buf[p+2] >> 1) & 0x7) + 8` with the correct extraction per the [AV1 ISOBMFF spec](https://aomediacodec.github.io/av1-isobmff/#av1codecconfigurationbox-syntax) — `high_bitdepth = (byte2 >> 6) & 0x1`, `twelve_bit = (byte2 >> 5) & 0x1`, then `bitDepth = twelveBit ? 12 : (highBitdepth ? 10 : 8)`. The previous mask was reading `chroma_subsampling_x | chroma_subsampling_y | (high bit of chroma_sample_position)` instead of bit depth — for normal 10-bit yuv420p10le encodes that's `0b110 + 8 = 14`.
+- **[`pc2-node/crates/mp4-split/src/main.rs`](pc2-node/crates/mp4-split/src/main.rs)** had the identical bug in the WASM source path. Fixed for parity. Even though the JS `refineCodecsFromInitSegment` is what wins at runtime today (it overrides any WASM-emitted codec string that has a dot in it — see [`mp4split.ts:197`](pc2-node/src/services/media/mp4split.ts)), keeping the Rust source diverged from the binary would have rotted any future change that disables JS refinement. Aligned with the long-term WASM-first runtime direction.
+- **WASM binary rebuilt** via [`bash pc2-node/scripts/build-wasm.sh mp4-split`](pc2-node/scripts/build-wasm.sh). New artefact at [`pc2-node/wasm-apps/mp4-split/mp4-split.wasm`](pc2-node/wasm-apps/mp4-split/mp4-split.wasm) — 121,935 bytes (was 121,927; +8 bytes from wasm-opt rounding). Capsule [`version`](pc2-node/wasm-apps/mp4-split/capsule.json) bumped `1.1.0 → 1.1.1` (patch — bugfix only, no API change). Capsule `sha256` automatically updated by the build script: `36cf790c… → 0ef9355a…`. Built with `rustc 1.94.0-nightly`, `wasm-opt -Oz` from binaryen, target `wasm32-wasip1`. Rollback path if a regression surfaces post-ship: `git checkout HEAD~1 -- pc2-node/wasm-apps/mp4-split/{mp4-split.wasm,capsule.json}` then restart PC2. Belt-and-braces: [`mp4split.ts:462`](pc2-node/src/services/media/mp4split.ts) falls back to the pure-JS parser if the WASM fails to load — and the JS parser is also correct after this release.
+- Verified by Sasha: re-minted AV1 video plays cleanly on her Mac after the source patch (pre-rebuild).
+
+### Supernode dDRM provision-config fix (`QmX5Jxc…r5uk` → `bafkreihvm4z…tkk4`)
+
+- Both supernodes were signing-and-serving `actions.nonMediaDecrypt = QmX5JxcFhyasptCWMA6unFPm3TRYjPSkJb5HhN8289r5uk` — a Wave-8 re-pin that was registered with Chipotle but never became production-active. Replaced with the canonical V1.2 sigauth CID `bafkreihvm4zkyuefnuptlbdins6cmd2mbslj2xgnyzz3ssdg2ggg3jtkk4` (registered in Chipotle group 1, pinned ≥2 IPFS providers).
+- Edited `/root/pc2/web-gateway/ddrm-config.json` on both InterServer (`69.164.241.210`, `pc2-gateway.service`) and Contabo (`38.242.211.112`, `pc2-web-gateway.service`). Backups left as `ddrm-config.json.pre-cid-fix.<epoch>` per Wave-8 convention. No service restart needed — the Wave-8-patched handler reads the file fresh per request and re-signs with `/etc/pc2/elacity-provision.ed25519` automatically. Live-curl verified both endpoints now serve the corrected CID inside a freshly-signed envelope (`v: 1`, `domain: elacity.pc2.chipotle-provision.v1`, signature verifies against the pinned `ELACITY_LABS_PROVISION_PUBKEY_HEX`).
+- Why it wasn't breaking decryption today: real decrypt traffic flows through `storage.ts:NON_MEDIA_ACTION_CID` which has its own 4-tier resolution chain (env → file → hardcoded `bafkreihvm4z…`) and never consults the supernode-provisioned config. Only `chipotle-client.getActionCid()` does, and today only the diagnostics endpoint calls that. So this was a textbook latent footgun, not a current outage. Now retired.
+
+### PC2 defensive — reject known-bad CIDs in `chipotle-client.getActionCid()`
+
+- Tracked as `CHIPOTLE-REJECT-KNOWN-BAD-CID`. New `KNOWN_BAD_NON_MEDIA_DECRYPT_CIDS` set in [`pc2-node/src/api/chipotle-client.ts`](pc2-node/src/api/chipotle-client.ts). At Tier 3 (the supernode-provisioned config), if the cached `provision.actions.nonMediaDecrypt` matches a known-bad CID, log a warn and fall through to Tier 4 (the trusted hardcoded default) instead of returning it. Belt-and-braces against:
+  1. Existing PC2 nodes whose `data/.chipotle-provision.json` was cached before today's supernode fix (the cache is never time-invalidated; without this defence they'd keep using the bad CID until the file is manually deleted).
+  2. Any future supernode rotation that briefly serves a bad value.
+  3. Any future code path that migrates from `storage.ts:NON_MEDIA_ACTION_CID` to `chipotle-client.getActionCid()`.
+- Set is extensible for future rotations; just add the offending CID to the set in the same release that ships the rotation. Warn message tells the operator exactly how to recover (`Delete data/.chipotle-provision.json to re-fetch from supernode`).
+
+### `tsc` build-fix (un-bricks in-app updates)
+
+- [`pc2-node/tsconfig.json`](pc2-node/tsconfig.json) `exclude` extended to skip `src/sdk/index.ts` and `src/sdk/config.ts`. Both files are untracked-and-gitignored scratch (the parent `.gitignore` rule `sdk/` matches any directory named `sdk/` at any depth, so neither is in any commit) and they import types — `MetadataEnvelope`, `CurrencyInfo`, `MediaDescriptor`, etc. — that the tracked `src/sdk/types.ts` no longer exports. They produce 44 `TS2305` errors on every clean build. Because `scripts/update.sh:20` sets `set -e` and step 10 runs `npm run build:backend`, every existing PC2 node in the wild trying to roll forward to v1.2.7.4 would have aborted at the build step. Excluded specifically (not the whole `src/sdk/` directory) because `src/sdk/types.ts` IS used by [`fingerprint.ts`](pc2-node/src/services/media/fingerprint.ts) and [`ContentIntelligenceService.ts`](pc2-node/src/services/ContentIntelligenceService.ts).
+- Net effect: `npm run build:backend` now exits 0 cleanly. Verified: dist artefacts regenerate, defensive `KNOWN_BAD_NON_MEDIA_DECRYPT_CIDS` logic compiles into `dist/api/chipotle-client.js`, no other behavioural change.
+- Followup for the operator (NOT in this release): decide whether to re-add `MetadataEnvelope` etc. to `src/sdk/types.ts` and force-track `index.ts`/`config.ts`, or delete them. Either way it's a separate task.
+
+### Migration / rebuild notes
+
+- Existing PC2 nodes: `cd pc2-node && npm run build` then restart PC2. The defensive fix kicks in immediately on next call to `getActionCid()` even with a stale `data/.chipotle-provision.json`. AV1 videos play correctly on next `/api/media/init` (no re-mint needed).
+- Fresh PC2 nodes: bootstrap from the (now-corrected) supernode provision endpoint and never see the bad CID at all.
+- Operator follow-up worth doing in a later patch: also default to `libx264` when neither NVENC nor SVT-AV1 hardware accel is available AND the asset is destined for general distribution — AV1 is great for Chromium/Electron but Safari < 17.4 and many mobile browsers still can't decode it. Track as a separate task; not required for Sasha's launcher case (Electron supports AV1 natively).
+
+---
+
+## [v1.2.7.3] - 2026-05-03 - Indexer observability + market UX during warmup
+
+> **Scope**: Two follow-up improvements after v1.2.7.2 root-caused both the fresh-Mac crash AND the empty-market-cards symptom to the same migration bug. (1) Make the indexer LOUD when it can't write to the catalog — the pre-32 silent-failure-mode hid the bug for an entire release cycle. (2) Give fresh-install users visible feedback during the 15-minute initial backfill window so they don't think their node is broken.
+
+### Indexer: surface swallowed errors during scans
+
+- **`scanChannelCreated`, `scanDigitalAssetRegistered`, `scanAssetCreated`** in [`pc2-node/src/services/ContentIndexerService.ts`](pc2-node/src/services/ContentIndexerService.ts) all used to swallow per-event errors into `log.debug(...)`. That's how the missing-`channel_metadata` table on fresh installs hid for an entire release: every `INSERT` threw, every catch silently moved on, and the function returned "0 channels found" while the backfill stamped itself complete. v1.2.7.3 changes the return type from `Promise<number>` to `Promise<{ inserted: number; errors: number }>`. First error per scan promotes to `log.warn` with full context (block number, message). End-of-scan summary if `errors > 0`: `scanChannelCreated [v3]: 8 inserted, 12 failed (first error: …). Likely missing tables, schema drift, or DB write contention. Check /api/diagnose.` Same pattern applied to all three scan methods.
+- **Backfill stamping gated on actual success**. [`backfillChannelsIfNeeded`](pc2-node/src/services/ContentIndexerService.ts) used to ALWAYS write `indexer_channels_backfilled_${version} = 1` after the loop, even if 0 channels actually inserted. Now: if `totalInserted === 0 && totalErrors > 0`, log loudly and **do not stamp**. The next scan cycle (5 minutes later, or earlier via `/api/catalog/reindex`) retries the backfill. So once the underlying cause is fixed (e.g. user runs the migration that creates the table), the catalog auto-recovers without manual intervention.
+
+### `GET /api/catalog/indexer-status` (new endpoint)
+
+- New public-read endpoint in [`pc2-node/src/api/index.ts`](pc2-node/src/api/index.ts) returning live indexer state for the market UI:
+  ```json
+  {
+    "success": true,
+    "ready": false,
+    "scanning": true,
+    "isInitialBackfill": true,
+    "lastChainBlock": 45538200,
+    "lastScanCompletedAt": null,
+    "estimatedSecondsRemaining": 415,
+    "versions": {
+      "v3": {
+        "fromBlock": 43892000,
+        "lastScannedBlock": 44850000,
+        "blocksRemaining": 688200,
+        "progressPct": 58.3,
+        "isBackfilled": false,
+        "lastScanInserted": 8,
+        "lastScanErrors": 0
+      }
+    },
+    "catalog": { "total": 0, "resolved": 0, "pending": 0, "failed": 0, "channels": 0 }
+  }
+  ```
+  - `estimatedSecondsRemaining` assumes ~110k blocks/min throughput (observed on Mac during v1.2.7.2 smoke test, intentionally conservative so we never under-promise).
+  - `ready` is true when `!isInitialBackfill && resolved > 0`.
+  - Backed by a new `getIndexerStatus()` snapshot method on `ContentIndexerService` that reads `indexer_last_block_${version}` + `indexer_channels_backfilled_${version}` settings + cached `lastChainBlock` from the most recent scan cycle.
+
+### Elacity Market: catalog-indexing progress banner
+
+- **New "Building local catalog…" banner** at the top of the Feed view in [`pc2-node/data/test-apps/elacity-market/index.html`](pc2-node/data/test-apps/elacity-market/index.html) + [`app.js`](pc2-node/data/test-apps/elacity-market/app.js) + [`styles.css`](pc2-node/data/test-apps/elacity-market/styles.css). Polls `/api/catalog/indexer-status` every 10 seconds, shows progress percentage, eta, and live counts (channels/items). Hides automatically once `ready === true`. Spinner + accent-tinted strip + thin progress bar — informational, not blocking. User can dismiss for the session via the × button.
+  - Detail line example: `Indexed 58.3% of Base mainnet · ~7 min remaining · 4 channel(s), 12 item(s) so far`.
+  - Cards continue to render via the existing supernode GraphQL fallback during this window — banner only adds context, never blocks content.
+  - `styles.css?v=37 → v=38` cache-bust.
+
+### Notes for review
+
+- Net diff: 5 files modified (1 service, 1 API handler, 1 HTML, 1 CSS, 1 JS).  No new dependencies, no breaking interface changes (the scan methods' new `{inserted, errors}` return type is internal — only `scanContractVersion` and `backfillChannelsIfNeeded` consume it).
+- Indexer changes are defensive: if no errors occur, behaviour is identical to pre-32. If errors DO occur, they now surface in launcher logs / `pc2-diagnose.sh` / `/api/diagnose` instead of being silent.
+- Banner is opt-out per session via the × button (state stored in JS closure, not localStorage — re-shows on next page load if still indexing). Conscious choice: someone troubleshooting a stuck node shouldn't have to remember they dismissed the banner yesterday.
+
+---
+
+## [v1.2.7.2] - 2026-05-03 - Fresh-Mac install hot-patch
+
+> **Scope**: A completely fresh Mac install via the ElastOS Launcher silently exited PC2 with code 1 the first time the user opened Elacity Creator. Root cause: the migration runner returned early on fresh installs and stamped the DB at `CURRENT_VERSION` immediately, meaning migrations 14, 20, 21, 22, 23, 25-28 NEVER ran. Six tables (most importantly `publish_drafts`) were absent on every fresh install since the original `runInitialSchema` was written, and the first time a tenant app queried one of them PC2 crashed without a breadcrumb. This release fixes the migration runner, self-heals broken existing installs, surfaces actionable install hints when transports are missing, and hardens the crash logging so a future silent exit will leave a usable trail.
+
+### Critical fix
+
+- **Fresh-install migration drift fixed**. [`runMigrations`](pc2-node/src/storage/migrations.ts) used to early-return after `runInitialSchema` for `currentVersion === 0` AND stamp the DB at `CURRENT_VERSION` (then `31`), meaning every migration that came AFTER the original schema.sql snapshot never executed on fresh installs. Result: 6 tables (`publish_drafts`, `agent_proposals`, `content_hashes`, `agent_audit_log`, `installed_skills`, `channel_metadata`) were missing on every fresh install, and `elacity-creator`'s first hit to `/api/drafts` produced `no such table: publish_drafts` → 500 → silent `process.exit(1)`. Two-pronged fix:
+  1. [`pc2-node/src/storage/schema.sql`](pc2-node/src/storage/schema.sql) bumped from "Version 16" header to a real Version 32 snapshot with all 6 missing tables + their indexes appended (idempotent `CREATE … IF NOT EXISTS`). Fresh installs now get the full v32 shape from `runInitialSchema()` directly.
+  2. [`pc2-node/src/storage/migrations.ts`](pc2-node/src/storage/migrations.ts) bumped `CURRENT_VERSION` `31 → 32` and added migration 32 ("Self-heal migration-only tables") that reapplies the same `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE` blocks idempotently. Existing v1.2.7.0/.1 installs that booted broken (stamped at 31, missing tables) heal automatically on next start.
+  - Smoke-tested on Sasha's Mac: `[migrations] ✅ Migration 32 complete: migration-only tables healed` log line; `schema_migrations` row at version 32 immediately on relaunch; `elacity-creator` opens with no PC2 exit.
+
+### Crash diagnostics
+
+- **Final-exit breadcrumb in [`pc2-node/src/index.ts`](pc2-node/src/index.ts)**. The pre-32 `unhandledRejection` / `uncaughtException` handlers logged a one-liner via `console.error` only when `code === 'EADDRINUSE'`. Every other silent `process.exit(1)` left no trail and the launcher log just showed `PC2 exited with code 1`. v1.2.7.2 captures the last error in a module-level `lastErrorCapture` and adds `process.on('exit', code => { ... })` + `process.on('beforeExit', ...)` handlers that synchronously dump exit code + last error source + message + stack to stderr. Synchronous-only writes via `console.error` (NOT the buffered `logger`) so they survive a forced exit. The `[PC2] exit code=…` line is the breadcrumb the migration crash should have produced; future silent exits will have it.
+
+### BinaryManager (fresh-Mac transports without Homebrew)
+
+- **No more 4×404 storm in launcher logs**. [`pc2-node/src/utils/binary-manager.ts`](pc2-node/src/utils/binary-manager.ts) `ensureTransportBinaries()` previously made one HTTP request per missing binary against the `pc2-binaries-v1` GitHub release. That release was planned but never published, so every fresh-Mac boot logged 4 separate `HTTP 404` warnings (one per missing transport). v1.2.7.2 adds a one-shot `pc2BinariesReleaseUnavailable` flag — first 404 against `GITHUB_RELEASE_BASE` short-circuits subsequent attempts with a single `pc2-binaries-v1 GitHub release not published — relying on bundled/system binaries only` warning. sing-box (different release host: SagerNet) is unaffected and still attempts download.
+- **One-shot install hint per missing binary**. New `INSTALL_HINTS` catalogue + `getInstallHint(name)` helper (exported) that produces platform-specific advice — e.g. `wireguard-go` missing on macOS → `macOS: brew install wireguard-tools (provides wireguard-go)`. Logged once per process via `[BinaryManager]   wireguard-go install hint → …`. Previously fresh-Mac users had to grep launcher logs and guess.
+- **Hint surfaced through `/api/system-readiness`**. [`pc2-node/src/api/index.ts`](pc2-node/src/api/index.ts) handler now includes an `installHint` field on each missing-binary check, so the launcher UI can show the same `brew install …` command directly without duplicating the hint catalogue.
+- **`pc2-binaries-v1` GitHub release published** with full 4-platform coverage. After v1.2.7.2 was already complete, the binaries `BinaryManager` was supposed to download were still missing, so we cross-compiled and shipped them: 10 assets covering `wireguard-go`, `amneziawg-go`, and `awg-quick` for `darwin-arm64` / `darwin-x64` / `linux-arm64` / `linux-x64` (Go binaries statically linked, ~5 MB each; `awg-quick` is one portable bash script per OS). Reproducible via `bash pc2-node/scripts/fetch-binaries.sh all`. `BinaryManager` now succeeds end-to-end on every supported platform: a fresh-Mac install with no Homebrew, or a vanilla Linux server / Jetson, gets full WireGuard + AmneziaWG transports auto-provisioned on first boot. Verified all 10 download URLs return HTTP 200 and bytes match the expected `Mach-O / ELF arm64|x86_64` architecture. `sing-box` continues to come from SagerNet's own release. Tag deliberately not marked as `latest` so it doesn't shadow user-facing `v1.x.y` releases. URLs follow the existing `BinaryManager` pattern: `https://github.com/Elacity/pc2.net/releases/download/pc2-binaries-v1/{name}-{platform}-{arch}` (or `awg-quick-{platform}` no arch).
+
+### Restart / process management
+
+- **macOS launcher-aware restart in [`pc2-node/src/services/UpdateService.ts`](pc2-node/src/services/UpdateService.ts)**. Previous restart ladder tried `pm2 startOrRestart`, `systemctl restart pc2-node`, `systemctl restart pc2`, `pm2 restart pc2`, `pm2 restart all`, `pm2` via nvm path, `pm2` via /usr/local — none of which exist on a Mac launcher install (Electron spawns PC2 directly via `child_process`). The whole ladder failed loudly in the launcher log, then we exited(0) anyway. v1.2.7.2 short-circuits on `process.platform === 'darwin'` with a single `[UpdateService] macOS detected — skipping pm2/systemctl, exiting cleanly for launcher restart` log line and `process.exit(0)`. Linux / sysadmin / Jetson installs unchanged.
+- **`ecosystem.config.cjs` path doubling fixed**. Previous relative paths (`cwd: "./pc2-node"`, `script: "dist/index.js"`) caused PM2 to resolve `~/.pc2/pc2-node/pc2-node/dist/index.js` when `UpdateService` invoked `pm2 startOrRestart` from inside `pc2-node/`. Replaced with absolute paths derived from `__dirname`. Affects PM2-managed installs (Jetson production); cosmetic on Mac launcher path.
+
+### Indexer race-condition guards
+
+- **`[content-indexer] Scan cycle failed: Database not initialized`** silenced. [`pc2-node/src/services/ContentIndexerService.ts`](pc2-node/src/services/ContentIndexerService.ts) `runScanCycle` catch block now demotes "database not initialized | database is closed | database connection is closed" to `log.debug` (treats them as benign shutdown races); real errors still log loud. Same defensive pattern in [`pc2-node/src/storage/indexer.ts`](pc2-node/src/storage/indexer.ts) `IndexingWorker.scanForUnindexedFiles` (file-FTS background worker), which produced the same noisy line during PC2 shutdown.
+
+### Diagnostic script
+
+- **`scripts/pc2-diagnose.sh` portability + correctness**. (1) `${BASH_SOURCE[0]}` → `${BASH_SOURCE[0]:-}` so the `set -u` mode no longer aborts when the script is piped from `curl | bash` (BASH_SOURCE is unset in that mode). (2) Candidate fallback order inverted: `~/.pc2` (launcher install) is now tried BEFORE `~/pc2.net` (developer clone) so diagnostics on a runtime install describe the right tree.
+
+### Notes for the launcher team
+
+- **Transport binary problem fixed at the PC2 level**: with the `pc2-binaries-v1` GitHub release now live (see BinaryManager section above), every fresh-Mac PC2 boot auto-downloads its own `wireguard-go`, `amneziawg-go`, and `awg-quick` on first run regardless of whether Homebrew is installed. The launcher's existing `brew install` / `git clone && make` runtime-install logic is no longer required for transports. Bundling the binaries as `extraResources` in the Electron app is still nicer (saves the 10 MB first-run download) but is now a polish item, not a blocker. `bash pc2-node/scripts/fetch-binaries.sh all` produces a complete `pc2-node/bin/{platform}-{arch}/` tree if you want to bundle.
+- Launcher does NOT auto-restart PC2 on crash — manual click of "Start" is required after `process.exit(1)`. Recommend adding restart-on-exit logic in `pc2Manager.startPC2` so a future silent exit doesn't strand users at a stopped node.
+- Fresh-launcher Mac apparently re-installs apps on every PC2 restart (e.g. `elacity-creator` uninstalled and re-installed within 70ms during boot). Worth investigating — looks like persistence of the `installed_apps` table is being reset per boot somewhere upstream of PC2.
+
+### Bonus fix discovered post-deploy: empty Elacity Market cards
+
+- **The empty market cards problem on fresh installs was the SAME migration bug.** Initial diagnosis blamed public Base RPC rate-limiting on `eth_getLogs`, but post-deploy verification showed the real cause: when the indexer picked up a `ChannelCreated` event it called [`db.upsertChannelFromFactory()`](pc2-node/src/storage/database.ts) which does `INSERT INTO channel_metadata`. With `channel_metadata` missing on fresh installs the INSERT threw, the indexer's catch swallowed it, and [`scanChannelCreated`](pc2-node/src/services/ContentIndexerService.ts) returned "indexed 0 channels" while still stamping `indexer_channels_backfilled_v3 = 1` so the backfill never retried. Catalog stayed empty forever. The moment the table existed (Migration 32 or manual create), the next scan picked up the same on-chain events and populated the catalog with the 8 channels + 28 assets that had been on-chain all along. Sasha's Mac went from 0 → 28 catalog items in ~15 minutes once `channel_metadata` was healed, on the same public RPCs we'd suspected of throttling. **No RPC changes, no GraphQL fallback, no UX retry logic needed** — Migration 32 fixes both the Creator crash AND the empty-market-cards symptom for every existing broken install on next boot.
+
+---
+
 ## [v1.2.7.1] - 2026-05-03 - Community parity hot-patch
 
 > **Scope**: Community operators (EverlastingOS on Jetson, anonymous WSL user) hit two install/update parity bugs within hours of v1.2.7 going live. This is the targeted fix-set so their nodes behave the same as Sasha's canary Jetson.
