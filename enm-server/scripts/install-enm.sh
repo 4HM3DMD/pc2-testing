@@ -105,7 +105,49 @@ else
 fi
 
 if grep -q "^  enm-server:" docker-compose.yml; then
-    warn "enm-server service already in docker-compose.yml — leaving as-is"
+    # Already-installed operator: maybe their enm-server block predates the
+    # post-pivot port move. If it lacks the chain ports, patch them in.
+    # We don't touch any other field — image, env, volumes all stay as-is.
+    if grep -qE '20336:20336|20338:20338' docker-compose.yml; then
+        warn "enm-server service already in docker-compose.yml (with chain ports) — leaving as-is"
+    else
+        say "Patching existing enm-server block: adding chain ports..."
+        cp docker-compose.yml "docker-compose.yml.bak.$(date +%Y%m%d%H%M%S).enm-ports"
+        python3 - <<'PYEOF' "$EXPOSE_BPOS"
+import re, sys
+mode = sys.argv[1]
+with open('docker-compose.yml', 'r') as f:
+    src = f.read()
+m = re.search(r'(\n  enm-server:[\s\S]*?)(?=\n  \w[\w-]*:|\Z)', '\n' + src)
+if not m:
+    raise SystemExit('enm-server block not found — refusing to patch')
+block = m.group(1)
+chain = (
+    '      # ela JSON-RPC stays on loopback by default — operator widens via the\n'
+    "      # ENM dashboard's Settings → Mainchain Advanced → WhiteIPList.\n"
+    '      - "127.0.0.1:20336:20336"\n'
+)
+if mode == '1':
+    chain += '      - "20338:20338"\n      - "20339:20339"\n'
+else:
+    chain += '      - "127.0.0.1:20338:20338"\n      - "127.0.0.1:20339:20339"\n'
+chain += (
+    '      # ela read-only ports — loopback only.\n'
+    '      - "127.0.0.1:20333:20333"\n'
+    '      - "127.0.0.1:20334:20334"\n'
+    '      - "127.0.0.1:20335:20335"\n'
+)
+# Insert right after the existing 4180 mapping inside the block.
+new_block = re.sub(r'(      - "[^"]*:4180"\n)', r'\1' + chain, block, count=1)
+if new_block == block:
+    raise SystemExit('could not locate `- "...:4180"` line in enm-server block')
+src = src.replace(block.lstrip('\n'), new_block.lstrip('\n'), 1)
+with open('docker-compose.yml', 'w') as f:
+    f.write(src)
+print('chain ports inserted')
+PYEOF
+        ok "Existing enm-server block patched (BPoS ports: $([ "$EXPOSE_BPOS" = "1" ] && echo public || echo loopback))"
+    fi
 else
     say "Adding enm-server service to $PC2_DIR/docker-compose.yml..."
     cat >> docker-compose.yml <<COMPOSE
@@ -157,12 +199,21 @@ mkdir -p "$PC2_DIR/enm-data"
 
 # --- Pull + start -----------------------------------------------------------
 
-say "Pulling ${ENM_IMAGE}..."
-docker compose pull enm-server
-ok "Image pulled"
+# Read the image the compose file ACTUALLY uses for enm-server — operators who
+# build locally end up with `image: pc2-local:enm-server` (or similar) which
+# isn't on any registry. Skip the pull in that case so the script doesn't die
+# trying to fetch a non-existent registry image.
+COMPOSE_IMAGE=$(awk '/^  enm-server:/{f=1} f && /^    image:/{print $2; exit}' docker-compose.yml)
+if [[ "$COMPOSE_IMAGE" == pc2-local:* || "$COMPOSE_IMAGE" == localhost/* || -z "$COMPOSE_IMAGE" ]]; then
+    say "Skipping pull (compose uses local image: ${COMPOSE_IMAGE:-unknown})"
+else
+    say "Pulling ${COMPOSE_IMAGE}..."
+    docker compose pull enm-server
+    ok "Image pulled"
+fi
 
-say "Starting enm-server..."
-docker compose up -d enm-server
+say "Starting / recreating enm-server..."
+docker compose up -d --force-recreate enm-server
 ok "Container started"
 
 # --- UFW --------------------------------------------------------------------
