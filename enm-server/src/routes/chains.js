@@ -329,25 +329,139 @@ function build(extensionHandle) {
                     stale: true,
                 }));
             }
-            // Guard against zombie velocity: SyncTracker's height-sample
-            // buffer can persist across chain restarts. If the chain isn't
-            // alive right now, OR if no peers are connected (so there's no
-            // network reference to measure against), velocity readings are
-            // meaningless — null them out rather than leak stale numbers
-            // like "1150.7 blocks/min · Network height unknown" to the UI.
+            // Enrich the snapshot with two reliable signals SyncTracker
+            // doesn't currently surface:
+            //
+            //   networkHeight — peers report their tip height in
+            //                   getpeerinfo[*].height. Max of those is a
+            //                   far better network reference than guessing
+            //                   from local-height drift. Available within
+            //                   ~30s of chain start (handshake completion).
+            //
+            //   lastBlockTime — the latest local block's timestamp. If it's
+            //                   within 5 min of now, the chain is fully
+            //                   synced regardless of what peers report.
+            //                   This is what wallets use to determine
+            //                   "synced" and works even with 0 peers.
+            //
+            //   synced        — derived: lastBlockTime within 5 min of now,
+            //                   OR blocksBehind === 0 with networkHeight
+            //                   known.
             try {
                 const status = ChainRegistry.getProcessService().statusSync(adapter.chainId);
-                if (!status || !status.alive) {
+                snapshot.alive = !!(status && status.alive);
+                snapshot.uptimeSec = null;
+                snapshot.synced = false;
+                snapshot.lastBlockTime = null;
+                snapshot.peers = null;
+
+                if (!snapshot.alive) {
+                    // Chain not running — null any zombie buffer fields and
+                    // mark stale. UI hides the panel entirely.
                     snapshot.velocityBpm = null;
                     snapshot.etaSec = null;
                     snapshot.percent = null;
+                    snapshot.networkHeight = null;
                     snapshot.stale = true;
-                } else if (snapshot.networkHeight == null) {
-                    // Chain alive but no network reference — likely 0 peers
-                    // or pre-handshake. Velocity from local-only samples is
-                    // misleading; suppress it.
-                    snapshot.velocityBpm = null;
-                    snapshot.etaSec = null;
+                } else {
+                    // Live chain — pull the truthful signals over RPC.
+                    const cfgChain = cfg.chains[adapter.chainId];
+                    if (cfgChain) {
+                        try {
+                            const rpc = adapter.rpcClient(cfgChain);
+                            const [peerInfo, peerCount, bestHash] = await Promise.allSettled([
+                                rpc.getpeerinfo(),
+                                rpc.getconnectioncount(),
+                                rpc.getbestblockhash(),
+                            ]);
+
+                            // peers count
+                            if (peerCount.status === 'fulfilled') {
+                                const v = peerCount.value;
+                                snapshot.peers = (typeof v === 'number') ? v : (v && v.result) || 0;
+                            }
+
+                            // network height = max of peers' reported heights.
+                            // Without this we can't compute a real %, and the
+                            // UI ends up showing "Connecting to peers" forever.
+                            if (peerInfo.status === 'fulfilled') {
+                                const list = peerInfo.value && peerInfo.value.result
+                                    ? peerInfo.value.result
+                                    : peerInfo.value;
+                                if (Array.isArray(list)) {
+                                    let maxH = null;
+                                    for (const p of list) {
+                                        if (p && typeof p.height === 'number' && (maxH == null || p.height > maxH)) {
+                                            maxH = p.height;
+                                        }
+                                    }
+                                    if (maxH != null && (snapshot.networkHeight == null || maxH > snapshot.networkHeight)) {
+                                        snapshot.networkHeight = maxH;
+                                    }
+                                }
+                            }
+
+                            // last block timestamp → "synced" detection.
+                            if (bestHash.status === 'fulfilled') {
+                                const hash = bestHash.value && bestHash.value.result
+                                    ? bestHash.value.result
+                                    : bestHash.value;
+                                if (typeof hash === 'string' && hash.length > 0) {
+                                    try {
+                                        const headerResp = await rpc.getblockheader(hash, 2);
+                                        const header = headerResp && headerResp.result
+                                            ? headerResp.result : headerResp;
+                                        if (header && typeof header.time === 'number') {
+                                            snapshot.lastBlockTime = header.time;
+                                            const ageSec = Math.floor(Date.now() / 1000) - header.time;
+                                            // Elastos mainchain target is ~120s/block. We allow
+                                            // 5 minutes of slack for peer-propagation jitter
+                                            // before declaring "not synced".
+                                            snapshot.synced = (ageSec >= 0 && ageSec <= 5 * 60);
+                                        }
+                                    } catch (_) { /* getblockheader may fail on early boot */ }
+                                }
+                            }
+                        } catch (_) { /* RPC failed entirely; leave snapshot as-is */ }
+                    }
+
+                    // Recompute progress now that we may have a fresh
+                    // networkHeight — SyncTracker computed an early one
+                    // with a possibly null reference.
+                    if (snapshot.networkHeight != null && snapshot.localHeight != null) {
+                        snapshot.blocksBehind = Math.max(0, snapshot.networkHeight - snapshot.localHeight);
+                        const denom = Math.max(snapshot.networkHeight, 1);
+                        snapshot.percent = Math.max(0, Math.min(100,
+                            (snapshot.localHeight / denom) * 100));
+                    }
+                    // Synced overrides everything else — even if we can't
+                    // resolve networkHeight, a fresh block timestamp says
+                    // we're caught up.
+                    if (snapshot.synced) {
+                        snapshot.percent = 100;
+                        snapshot.blocksBehind = 0;
+                        snapshot.etaSec = 0;
+                        // velocity isn't meaningful when synced (no catch-up)
+                        snapshot.velocityBpm = null;
+                    } else if (snapshot.networkHeight == null) {
+                        // Live chain, peers may exist, but we can't compute
+                        // a meaningful velocity yet. Suppress so the UI
+                        // doesn't show stale numbers.
+                        snapshot.velocityBpm = null;
+                        snapshot.etaSec = null;
+                    }
+
+                    // Uptime for the freshly-started banner the UI shows.
+                    try {
+                        const m = JSON.parse(
+                            require('fs').readFileSync(
+                                require('../services/processUtils').metaFilePath(adapter.chainId), 'utf8',
+                            ),
+                        );
+                        if (m && typeof m.startedAt === 'number') {
+                            snapshot.uptimeSec = Math.max(0, Math.floor((Date.now() - m.startedAt) / 1000));
+                        }
+                    } catch (_) { /* meta missing */ }
                 }
             } catch (_) { /* status read failed; leave snapshot as-is */ }
 

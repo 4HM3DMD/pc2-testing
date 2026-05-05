@@ -327,40 +327,56 @@
         }
         this._syncBar.dataset.pct = pct == null ? '?' : Math.floor(pct);
 
-        // Status line. The "Connecting to peers" framing covers the case
-        // where the chain is alive but has no network reference yet — the
-        // backend nulls velocityBpm + percent in that scenario, so we know
-        // the situation by checking those fields together.
-        var alive = (this._lastCoarseState === 'healthy' || this._lastCoarseState === 'syncing'
-                     || this._lastCoarseState === 'starting' || this._lastCoarseState === 'recovering');
-        if (data.stale) {
+        // Status line — five distinct states drive what the operator sees.
+        // The backend's enriched /sync response (Wave 6 follow-up) gives us
+        // the truthful signals we need:
+        //
+        //   data.synced        — latest local block within ~5 min of now,
+        //                        OR blocksBehind === 0
+        //   data.networkHeight — max of peers' reported tip heights
+        //   data.peers         — connected peer count
+        //   data.uptimeSec     — chain uptime, used for the just-started banner
+        //   data.alive         — whether the process is running at all
+        var alive = !!data.alive
+            || this._lastCoarseState === 'healthy' || this._lastCoarseState === 'syncing'
+            || this._lastCoarseState === 'starting' || this._lastCoarseState === 'recovering';
+        var freshStart = alive
+            && typeof data.uptimeSec === 'number' && data.uptimeSec < 60
+            && !data.synced;
+
+        if (!alive || data.stale) {
             this._syncStatusLine.textContent = t('chain_card.sync_stale');
-        } else if (alive && pct == null && data.velocityBpm == null) {
-            // Chain is up but no peers yet → no network reference → no
-            // way to compute progress. Tell the operator instead of
-            // displaying confusing "Network height unknown" gibberish.
-            this._syncStatusLine.textContent = 'Connecting to peers…';
-        } else if (pct == null) {
-            this._syncStatusLine.textContent = t('chain_card.sync_unknown');
-        } else if (data.blocksBehind === 0) {
-            this._syncStatusLine.textContent = t('chain_card.sync_caught_up');
+        } else if (data.synced) {
+            // Most common steady-state case — we're caught up.
+            this._syncStatusLine.textContent = '✓ Fully synced';
+        } else if (freshStart) {
+            // Just-started chain. Peers handshake takes ~30s; networkHeight
+            // is null until then. Don't blame the operator for the wait.
+            this._syncStatusLine.textContent =
+                'Just started — connecting to peers (this takes about a minute)';
+        } else if (data.peers === 0) {
+            // Genuinely no peers — operator's network or NAT may be the issue.
+            this._syncStatusLine.textContent = 'Looking for peers…';
+        } else if (data.networkHeight != null && data.blocksBehind != null) {
+            // We have a real reference. Show "N blocks behind".
+            this._syncStatusLine.textContent =
+                'Catching up — ' + data.blocksBehind.toLocaleString() + ' blocks behind';
+        } else if (data.localHeight != null) {
+            // Peers connected but their heights aren't in yet. Show what we know.
+            this._syncStatusLine.textContent =
+                'Catching up — local height ' + data.localHeight.toLocaleString();
         } else {
-            this._syncStatusLine.textContent = t('chain_card.sync_behind', {
-                blocks: data.blocksBehind != null ? data.blocksBehind.toLocaleString() : '?',
-            });
+            this._syncStatusLine.textContent = 'Catching up…';
         }
 
-        // Metrics line — velocity + ETA. Defensive: never show velocity
-        // when the chain isn't alive (zombie buffer protection — the
-        // backend now nulls this out, but the frontend guards too so a
-        // backend regression can't bring back the "1150.7 blocks/min ·
-        // Network height unknown" lie).
+        // Metrics line — velocity + ETA. Only when we have a real
+        // reference AND the chain is alive AND not already synced.
         var parts = [];
-        if (alive && typeof data.velocityBpm === 'number' && data.velocityBpm > 0) {
+        if (alive && !data.synced && typeof data.velocityBpm === 'number' && data.velocityBpm > 0) {
             parts.push(t('chain_card.sync_velocity', {
                 bpm: data.velocityBpm.toFixed(1),
             }));
-        } else if (alive && data.localHeight != null && data.blocksBehind != null && data.blocksBehind > 0) {
+        } else if (alive && !data.synced && data.localHeight != null && data.blocksBehind != null && data.blocksBehind > 0) {
             parts.push(t('chain_card.sync_no_velocity'));
         }
         if (typeof data.etaSec === 'number' && data.etaSec > 0) {

@@ -152,6 +152,30 @@ class EnmRpcClient {
     getrawmempool() { return this.call('getrawmempool'); }
 
     /**
+     * Returns block header by hash. The header includes timestamp, which we
+     * use to detect "synced" — if the latest block is within ~5 min of now,
+     * the chain is fully caught up regardless of whether we can resolve the
+     * network's tip from peers.
+     *
+     * @param {string} hash       hex block hash
+     * @param {number} [verbose]  0 = raw bytes hex, 2 = decoded object (default)
+     */
+    getblockheader(hash, verbose = 2) {
+        return this.call('getblockheader', { blockhash: hash, verbosity: verbose });
+    }
+
+    /**
+     * Returns each connected peer's known best block height. We take the
+     * max of these as the network's reference tip when computing sync
+     * progress — more reliable than guessing from local-height drift,
+     * because peers handshake quickly after start.
+     *
+     * Schema (per ela JSON-RPC docs): result is an array of objects
+     * containing fields including `height` and `services`.
+     */
+    getpeerinfo() { return this.call('getpeerinfo'); }
+
+    /**
      * @param {{ start?: number, limit?: number, state?: string }} [params]
      */
     listproducers(params) { return this.call('listproducers', params || { state: 'all' }); }
