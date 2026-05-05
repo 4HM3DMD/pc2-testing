@@ -24,7 +24,12 @@
 :root {
     color-scheme: light dark;
 
-    /* ---- color tokens (light) ---- */
+    /* ---- color tokens (light, default) ----
+       Token names + values mirror dao-dashboard so ENM looks like a sibling
+       Elacity app inside PC2. Theme switch is via [data-theme="dark"] on
+       <html>, persisted via the shared 'elacity-theme' localStorage key
+       (see the pre-paint script in index.html).
+    */
     --bg-page: #f8fafc;
     --bg-surface: #ffffff;
     --bg-muted: #f1f5f9;
@@ -32,8 +37,8 @@
     --bg-code: #0f172a;
     --border-color: #e2e8f0;
     --border-strong: #cbd5e1;
-    --text-primary: #0f172a;
-    --text-secondary: #475569;
+    --text-primary: #1e293b;
+    --text-secondary: #64748b;
     --text-muted: #94a3b8;
     --text-inverse: #f8fafc;
 
@@ -43,17 +48,17 @@
     --primary-soft: rgba(59, 130, 246, 0.10);
     --primary-softer: rgba(59, 130, 246, 0.06);
 
-    --success: #16a34a;
-    --warning: #ea580c;
-    --error: #dc2626;
+    --success: #22c55e;
+    --warning: #f97316;
+    --error: #ef4444;
     --healing: #7c3aed;
 
     /* chain-state palette */
-    --state-healthy: #16a34a;
+    --state-healthy: #22c55e;
     --state-syncing: #3b82f6;
-    --state-stalled: #ea580c;
+    --state-stalled: #f97316;
     --state-stopped: #94a3b8;
-    --state-error: #dc2626;
+    --state-error: #ef4444;
     --state-recovering: #7c3aed;
     --state-unconfigured: #94a3b8;
 
@@ -66,21 +71,20 @@
     --spacing-2xl: 48px;
 
     --radius-sm: 6px;
-    --radius-md: 10px;
-    --radius-lg: 14px;
-    --radius-xl: 18px;
+    --radius-md: 8px;
+    --radius-lg: 12px;
+    --radius-xl: 16px;
     --radius-pill: 999px;
 
-    --shadow-xs: 0 1px 2px rgba(15, 23, 42, 0.04);
-    --shadow-sm: 0 1px 3px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.04);
-    --shadow-md: 0 4px 12px rgba(15, 23, 42, 0.08), 0 2px 4px rgba(15, 23, 42, 0.04);
-    --shadow-lg: 0 16px 40px rgba(15, 23, 42, 0.16), 0 4px 12px rgba(15, 23, 42, 0.06);
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+    --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.07);
+    --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.1);
+    --shadow-xs: var(--shadow-sm);  /* legacy alias */
 
     --focus-ring-color: rgba(59, 130, 246, 0.45);
     --focus-ring: 0 0 0 3px var(--focus-ring-color);
 
-    --titlebar-height: 44px;
-    --tabs-height: 40px;
+    --header-bar-height: 44px;
 
     --motion-fast: 120ms;
     --motion-base: 180ms;
@@ -89,26 +93,40 @@
     --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
 }
 
-@media (prefers-color-scheme: dark) {
-    :root {
-        --bg-page: #0b1220;
-        --bg-surface: #111827;
-        --bg-muted: #1e293b;
-        --bg-elevated: #1f2937;
-        --bg-code: #020617;
-        --border-color: #1f2937;
-        --border-strong: #334155;
-        --text-primary: #f1f5f9;
-        --text-secondary: #cbd5e1;
-        --text-muted: #64748b;
-        --primary-soft: rgba(59, 130, 246, 0.16);
-        --primary-softer: rgba(59, 130, 246, 0.08);
-        --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.3);
-        --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.35);
-        --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
-        --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.5);
-    }
+/* Dark mode — values mirror dao-dashboard's dark palette so the two
+   Elacity apps render identically inside PC2 when dark mode is on. */
+[data-theme="dark"] {
+    --bg-page: #121212;
+    --bg-surface: #1e1e1e;
+    --bg-muted: #2a2a2a;
+    --bg-elevated: #262626;
+    --bg-code: #0a0a0a;
+    --border-color: #333333;
+    --border-strong: #4a4a4a;
+    --text-primary: #e5e5e5;
+    --text-secondary: #a3a3a3;
+    --text-muted: #737373;
+    --primary: #3b82f6;
+    --primary-hover: #60a5fa;
+    --primary-soft: rgba(59, 130, 246, 0.16);
+    --primary-softer: rgba(59, 130, 246, 0.08);
+    --success: #34d399;
+    --warning: #fb923c;
+    --error: #f87171;
+    --state-healthy: #34d399;
+    --state-stalled: #fb923c;
+    --state-error: #f87171;
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.5);
+    --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.6);
 }
+
+/* Dark scrollbars match dao-dashboard / Market / dApp Centre. */
+[data-theme="dark"] ::-webkit-scrollbar { width: 10px; height: 10px; }
+[data-theme="dark"] ::-webkit-scrollbar-track { background: #1a1a1a; }
+[data-theme="dark"] ::-webkit-scrollbar-thumb { background: #555; border-radius: 5px; }
+[data-theme="dark"] ::-webkit-scrollbar-thumb:hover { background: #666; }
+[data-theme="dark"] { scrollbar-color: #555 #1a1a1a; }
 
 /* ============================================================
    Root layout
@@ -129,22 +147,20 @@ html, body {
     color: var(--text-primary);
 }
 
-/* No `#app` here — using a class keeps specificity low so the
-   `:has(.enm-tabs[hidden])` override below can win without !important. */
+/* PC2 wraps every app iframe in its own window-head — no in-app titlebar
+   here. The header-bar (tabs + theme toggle) is the only chrome we own.
+   When the header-bar is hidden (during boot / wizard), the main pane
+   takes the full height. */
 .enm-app {
     width: 100%;
     height: 100%;
     display: grid;
-    grid-template-rows: var(--titlebar-height) var(--tabs-height) 1fr;
+    grid-template-rows: var(--header-bar-height) 1fr;
     background: var(--bg-page);
 }
 
-/* When the tabs nav is hidden (during boot / wizard), drop its row entirely.
-   `display: none` removes the element from the grid, so we'd otherwise leave
-   a stranded empty track — and auto-placement would dump .enm-main into the
-   tabs row. Two rows here, .enm-main lands in the right slot. */
-.enm-app:has(.enm-tabs[hidden]) {
-    grid-template-rows: var(--titlebar-height) 1fr;
+.enm-app:has(.enm-header-bar[hidden]) {
+    grid-template-rows: 1fr;
 }
 
 /* The HTML `hidden` attribute should always win over our own display rules.
@@ -160,158 +176,122 @@ html, body {
 }
 
 /* ============================================================
-   Title bar
+   Header bar — matches dao-dashboard's .dao-header-bar pattern.
+   Tabs on the left, flex spacer in the middle, global controls
+   (theme toggle) on the right. PC2's window-head provides the
+   app title above this row.
    ============================================================ */
 
-.enm-titlebar {
+.enm-header-bar {
     display: flex;
     align-items: center;
-    gap: var(--spacing-sm);
+    gap: var(--spacing-md);
     padding: 0 var(--spacing-md);
+    height: var(--header-bar-height);
     background: var(--bg-surface);
     border-bottom: 1px solid var(--border-color);
+    flex-shrink: 0;
     min-width: 0;
 }
 
-.enm-titlebar h1 {
-    font-size: 14px;
-    font-weight: 600;
-    letter-spacing: -0.01em;
-    color: var(--text-primary);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    flex-shrink: 1;
+.enm-header-tabs {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-xs);
+    overflow-x: auto;
+    scrollbar-width: none;
     min-width: 0;
 }
 
-.enm-titlebar .enm-spacer {
+.enm-header-tabs::-webkit-scrollbar { display: none; }
+
+.enm-header-spacer {
     flex: 1;
     min-width: var(--spacing-sm);
 }
 
-.enm-badge {
-    display: inline-flex;
+.enm-header-actions {
+    display: flex;
     align-items: center;
-    padding: 2px 8px;
-    background: var(--primary-soft);
-    color: var(--primary);
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.01em;
-    border-radius: var(--radius-pill);
-    line-height: 1.6;
+    gap: var(--spacing-sm);
     flex-shrink: 0;
 }
 
-.enm-wallet-badge {
+/* Tab — same shape as dao-dashboard .tab. */
+.enm-tab {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    padding: 4px 10px;
+    padding: 6px 12px;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: color var(--motion-fast) var(--ease-out),
+                background var(--motion-fast) var(--ease-out);
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.enm-tab:hover {
+    color: var(--primary);
+    background: rgba(59, 130, 246, 0.08);
+}
+
+.enm-tab.active,
+.enm-tab[aria-selected="true"] {
+    color: var(--primary);
+    background: rgba(59, 130, 246, 0.12);
+}
+
+.enm-tab:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+}
+
+/* Icon-only header button — matches dao-dashboard .icon-btn. */
+.enm-icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
     background: var(--bg-page);
     border: 1px solid var(--border-color);
     border-radius: var(--radius-md);
     color: var(--text-secondary);
-    font-size: 12px;
-    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
-    max-width: 180px;
-    transition: background var(--motion-base) var(--ease-out),
-                border-color var(--motion-base) var(--ease-out),
-                color var(--motion-base) var(--ease-out);
-    flex-shrink: 0;
-}
-
-.enm-wallet-badge[data-state="connected"] {
-    background: var(--primary-soft);
-    border-color: transparent;
-    color: var(--primary);
-}
-
-.enm-wallet-dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: var(--text-muted);
-    flex-shrink: 0;
-    transition: background var(--motion-base) var(--ease-out);
-}
-
-.enm-wallet-badge[data-state="connected"] .enm-wallet-dot {
-    background: var(--success);
-    box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.18);
-}
-
-#enm-wallet-label {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    min-width: 0;
-}
-
-/* ============================================================
-   Tab bar — animated underline indicator
-   ============================================================ */
-
-.enm-tabs {
-    display: flex;
-    align-items: stretch;
-    gap: 0;
-    padding: 0 var(--spacing-sm);
-    background: var(--bg-surface);
-    border-bottom: 1px solid var(--border-color);
-    overflow-x: auto;
-    scrollbar-width: none;
-}
-
-.enm-tabs::-webkit-scrollbar { display: none; }
-
-.enm-tabs button {
-    position: relative;
-    display: inline-flex;
-    align-items: center;
-    padding: 0 var(--spacing-md);
-    background: transparent;
-    border: none;
-    font: inherit;
-    font-weight: 500;
-    color: var(--text-secondary);
     cursor: pointer;
-    transition: color var(--motion-fast) var(--ease-out);
-    white-space: nowrap;
-    flex-shrink: 0;
+    transition: color var(--motion-fast) var(--ease-out),
+                border-color var(--motion-fast) var(--ease-out);
 }
 
-.enm-tabs button::after {
-    content: '';
-    position: absolute;
-    left: var(--spacing-sm);
-    right: var(--spacing-sm);
-    bottom: 0;
-    height: 2px;
-    background: var(--primary);
-    border-radius: 2px 2px 0 0;
-    transform: scaleX(0);
-    transform-origin: center;
-    transition: transform var(--motion-base) var(--ease-out);
-}
-
-.enm-tabs button:hover {
-    color: var(--text-primary);
-}
-
-.enm-tabs button[aria-selected="true"] {
+.enm-icon-btn:hover {
     color: var(--primary);
+    border-color: var(--primary);
 }
 
-.enm-tabs button[aria-selected="true"]::after {
-    transform: scaleX(1);
+.enm-icon-btn:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
 }
 
-.enm-tabs button:focus-visible {
-    box-shadow: inset var(--focus-ring);
-    border-radius: var(--radius-sm);
+.enm-icon-btn svg {
+    width: 16px;
+    height: 16px;
 }
+
+/* Theme toggle — show moon in light mode (click to go dark), sun in
+   dark mode (click to go light). Mirrors dao-dashboard's icon swap.
+   Specificity bumped via #enm-theme-toggle so it beats `.enm-icon-btn svg`. */
+#enm-theme-toggle .enm-icon-sun  { display: none; }
+#enm-theme-toggle .enm-icon-moon { display: block; }
+[data-theme="dark"] #enm-theme-toggle .enm-icon-sun  { display: block; }
+[data-theme="dark"] #enm-theme-toggle .enm-icon-moon { display: none; }
 
 /* ============================================================
    Main + per-pane scroll
@@ -1823,8 +1803,7 @@ html, body {
         --border-strong: #475569;
         --focus-ring: 0 0 0 3px var(--primary);
     }
-    .enm-chain-badge,
-    .enm-badge {
+    .enm-chain-badge {
         border: 1px solid currentColor;
     }
 }
@@ -1840,18 +1819,14 @@ html, body {
 
 /* small-tablet */
 @media (max-width: 768px) {
-    .enm-titlebar { padding: 0 var(--spacing-sm); }
-    .enm-tabs { padding: 0 var(--spacing-xs); }
-    .enm-tabs button { padding: 0 var(--spacing-sm); font-size: 13px; }
+    .enm-header-bar { padding: 0 var(--spacing-sm); gap: var(--spacing-sm); }
+    .enm-tab { padding: 6px 10px; font-size: 12px; }
     .enm-wizard { padding: var(--spacing-lg); }
     .enm-settings-row { grid-template-columns: 1fr; gap: var(--spacing-xs); }
 }
 
 /* phone */
 @media (max-width: 640px) {
-    .enm-titlebar h1 { font-size: 13px; }
-    #enm-version { display: none; }
-    .enm-wallet-badge { max-width: 130px; padding: 4px 8px; font-size: 11px; }
     .enm-pane { padding: var(--spacing-sm); }
     .enm-chains-grid { gap: var(--spacing-md); }
     .enm-chain-card { padding: var(--spacing-md); }
@@ -1861,25 +1836,12 @@ html, body {
 
 /* small-phone */
 @media (max-width: 480px) {
-    :root {
-        --titlebar-height: 40px;
-        --tabs-height: 36px;
-    }
-    .enm-titlebar { gap: var(--spacing-xs); }
-    .enm-wallet-badge {
-        max-width: 92px;
-    }
-    .enm-tabs button { font-size: 12px; padding: 0 10px; }
+    :root { --header-bar-height: 40px; }
+    .enm-tab { font-size: 12px; padding: 4px 8px; }
     .enm-system-status { grid-template-columns: 1fr; }
     .enm-chain-card-head { gap: 6px; }
     .enm-wizard-body h2,
     .enm-wizard-body h3 { font-size: 17px; }
-}
-
-/* very-narrow — last-resort: drop the wallet badge label, keep the dot */
-@media (max-width: 360px) {
-    #enm-wallet-label { display: none; }
-    .enm-wallet-badge { padding: 6px; }
 }
 
 /* ============================================================
@@ -1889,7 +1851,6 @@ html, body {
 .enm-tab-pill {
     display: inline-flex;
     align-items: center;
-    margin-left: var(--spacing-sm);
     padding: 1px 6px;
     font-size: 9px;
     font-weight: 700;
@@ -1902,7 +1863,8 @@ html, body {
     line-height: 1.4;
 }
 
-.enm-tabs button[aria-selected="true"] .enm-tab-pill {
+.enm-tab.active .enm-tab-pill,
+.enm-tab[aria-selected="true"] .enm-tab-pill {
     background: var(--primary-soft);
     color: var(--primary);
     border-color: transparent;
@@ -2196,8 +2158,7 @@ html, body {
    ============================================================ */
 
 @media print {
-    .enm-titlebar,
-    .enm-tabs,
+    .enm-header-bar,
     .enm-toast-container,
     .enm-spinner,
     .enm-chain-actions,

@@ -5,30 +5,52 @@
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="referrer" content="no-referrer">
     <title>Elastos Node Manager</title>
-    <link rel="stylesheet" href="css/styles.css?ts=20260505">
+    <link rel="stylesheet" href="css/styles.css?ts=20260505b">
+    <script>
+        // Apply persisted theme BEFORE first paint to avoid a light-mode
+        // flash. Shares the 'elacity-theme' localStorage key with
+        // dao-dashboard / Elacity Market / dApp Centre so toggling in one
+        // surface is honoured here too.
+        (function () {
+            try {
+                var saved = localStorage.getItem('elacity-theme');
+                var prefersDark = window.matchMedia
+                    && window.matchMedia('(prefers-color-scheme: dark)').matches;
+                if (saved === 'dark' || (!saved && prefersDark)) {
+                    document.documentElement.setAttribute('data-theme', 'dark');
+                }
+            } catch (e) { /* localStorage may be blocked; ignore */ }
+        })();
+    </script>
 </head>
 <body>
     <div id="app" class="enm-app" data-state="connecting">
-        <header class="enm-titlebar">
-            <h1>Elastos Node Manager</h1>
-            <span class="enm-badge" id="enm-version" aria-label="version">v0.3.0</span>
-            <div class="enm-spacer"></div>
-            <span class="enm-wallet-badge" id="enm-wallet-badge" data-state="disconnected">
-                <span class="enm-wallet-dot"></span>
-                <span id="enm-wallet-label">Connecting...</span>
-            </span>
-        </header>
-
-        <!-- 5-tab layout per Architectural Invariant #4. EVM is a v0.5
-             placeholder — visible so the navigation never moves later. -->
-        <nav class="enm-tabs" id="enm-tabs" role="tablist" hidden>
-            <button type="button" role="tab" data-tab="dashboard" aria-selected="true">Dashboard</button>
-            <button type="button" role="tab" data-tab="logs"      aria-selected="false">Logs</button>
-            <button type="button" role="tab" data-tab="settings"  aria-selected="false">Settings</button>
-            <button type="button" role="tab" data-tab="audit"     aria-selected="false">Audit</button>
-            <button type="button" role="tab" data-tab="evm"       aria-selected="false">
-                EVM <span class="enm-tab-pill">v0.5</span>
-            </button>
+        <!-- Header bar matching dao-dashboard's pattern: tabs on the left,
+             flexible spacer, global controls on the right. PC2's window
+             manager already provides the app title via window-head — no
+             need to re-render it here. -->
+        <nav class="enm-header-bar" id="enm-tabs" role="tablist" hidden>
+            <div class="enm-header-tabs">
+                <button type="button" class="enm-tab active" role="tab" data-tab="dashboard" aria-selected="true">Dashboard</button>
+                <button type="button" class="enm-tab"        role="tab" data-tab="logs"      aria-selected="false">Logs</button>
+                <button type="button" class="enm-tab"        role="tab" data-tab="settings"  aria-selected="false">Settings</button>
+                <button type="button" class="enm-tab"        role="tab" data-tab="audit"     aria-selected="false">Audit</button>
+                <button type="button" class="enm-tab"        role="tab" data-tab="evm"       aria-selected="false">
+                    EVM <span class="enm-tab-pill">v0.5</span>
+                </button>
+            </div>
+            <div class="enm-header-spacer"></div>
+            <div class="enm-header-actions">
+                <button type="button" class="enm-icon-btn" id="enm-theme-toggle" title="Toggle dark mode" aria-label="Toggle theme">
+                    <svg class="enm-icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                    </svg>
+                    <svg class="enm-icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="4"></circle>
+                        <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"></path>
+                    </svg>
+                </button>
+            </div>
         </nav>
 
         <main class="enm-main">
@@ -58,21 +80,21 @@
 
     <!-- Order matters: strings + utils first (used by services + components),
          then services, then components, then the app controller. -->
-    <script src="js/strings.js?ts=20260505"></script>
-    <script src="js/utils.js?ts=20260505"></script>
-    <script src="js/services/wallet.js?ts=20260505"></script>
-    <script src="js/services/api.js?ts=20260505"></script>
-    <script src="js/services/sse.js?ts=20260505"></script>
-    <script src="js/services/notifications.js?ts=20260505"></script>
-    <script src="js/components/system-status.js?ts=20260505"></script>
-    <script src="js/components/chain-card.js?ts=20260505"></script>
-    <script src="js/components/producer-identity.js?ts=20260505"></script>
-    <script src="js/components/log-viewer.js?ts=20260505"></script>
-    <script src="js/components/proposal-card.js?ts=20260505"></script>
-    <script src="js/components/setup-wizard.js?ts=20260505"></script>
-    <script src="js/components/settings-tab.js?ts=20260505"></script>
-    <script src="js/components/audit-tab.js?ts=20260505"></script>
-    <script src="js/components/evm-tab.js?ts=20260505"></script>
-    <script src="js/app.js?ts=20260505"></script>
+    <script src="js/strings.js?ts=20260505b"></script>
+    <script src="js/utils.js?ts=20260505b"></script>
+    <script src="js/services/wallet.js?ts=20260505b"></script>
+    <script src="js/services/api.js?ts=20260505b"></script>
+    <script src="js/services/sse.js?ts=20260505b"></script>
+    <script src="js/services/notifications.js?ts=20260505b"></script>
+    <script src="js/components/system-status.js?ts=20260505b"></script>
+    <script src="js/components/chain-card.js?ts=20260505b"></script>
+    <script src="js/components/producer-identity.js?ts=20260505b"></script>
+    <script src="js/components/log-viewer.js?ts=20260505b"></script>
+    <script src="js/components/proposal-card.js?ts=20260505b"></script>
+    <script src="js/components/setup-wizard.js?ts=20260505b"></script>
+    <script src="js/components/settings-tab.js?ts=20260505b"></script>
+    <script src="js/components/audit-tab.js?ts=20260505b"></script>
+    <script src="js/components/evm-tab.js?ts=20260505b"></script>
+    <script src="js/app.js?ts=20260505b"></script>
 </body>
 </html>

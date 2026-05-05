@@ -35,8 +35,7 @@
             errorDetail:  document.getElementById('enm-error-detail'),
             content:      document.getElementById('enm-content'),
             tabs:         document.getElementById('enm-tabs'),
-            walletBadge:  document.getElementById('enm-wallet-badge'),
-            walletLabel:  document.getElementById('enm-wallet-label'),
+            themeToggle:  document.getElementById('enm-theme-toggle'),
             paneDashboard: document.getElementById('enm-pane-dashboard'),
             paneLogs:     document.getElementById('enm-pane-logs'),
             paneSettings: document.getElementById('enm-pane-settings'),
@@ -55,12 +54,16 @@
         this.services.wallet.sendReady();
         this.services.wallet.installCloseHandler();
 
-        // Step 2: resolve identity in the background (non-blocking).
+        // Step 2: resolve identity in the background (non-blocking). The
+        // identity is still useful for audit attribution + the producer
+        // identity card; we just don't render a wallet badge anymore (PC2's
+        // launcher / system tray already shows the operator's wallet).
         var self = this;
         this.services.wallet.getIdentity().then(function (id) {
             self.identity = id;
-            self._renderWalletBadge(id);
         });
+
+        this._wireThemeToggle();
 
         // Step 3 + 4: probe backend, then decide wizard vs dashboard.
         return this.services.api.get('/health', { skipCache: true })
@@ -82,17 +85,29 @@
             });
     };
 
-    ENMApp.prototype._renderWalletBadge = function (identity) {
-        if (!this.els.walletBadge || !this.els.walletLabel) { return; }
-        if (identity && identity.wallet_address) {
-            this.els.walletBadge.dataset.state = 'connected';
-            this.els.walletLabel.textContent = root.EnmWalletService.truncateAddress(identity.wallet_address);
-            this.els.walletBadge.title = identity.wallet_address
-                + (identity.source ? ' (via ' + identity.source + ')' : '');
-        } else {
-            this.els.walletBadge.dataset.state = 'disconnected';
-            this.els.walletLabel.textContent = 'Not signed in';
-        }
+    /**
+     * Wire the theme toggle button. Persists choice to the shared
+     * 'elacity-theme' localStorage key — same key dao-dashboard /
+     * Elacity Market / dApp Centre use, so flipping the theme in any
+     * of these surfaces propagates here on next open.
+     *
+     * Pre-paint script in index.html applies the saved theme before
+     * first render, so this method only handles user clicks.
+     *
+     * @private
+     */
+    ENMApp.prototype._wireThemeToggle = function () {
+        if (!this.els.themeToggle) { return; }
+        this.els.themeToggle.addEventListener('click', function () {
+            var current = document.documentElement.getAttribute('data-theme');
+            var next = (current === 'dark') ? 'light' : 'dark';
+            if (next === 'dark') {
+                document.documentElement.setAttribute('data-theme', 'dark');
+            } else {
+                document.documentElement.removeAttribute('data-theme');
+            }
+            try { localStorage.setItem('elacity-theme', next); } catch (e) { /* ignore */ }
+        });
     };
 
     ENMApp.prototype._showSetupWizard = function () {
@@ -263,7 +278,9 @@
             if (panes[k]) { panes[k].hidden = (k !== name); }
         });
         this.els.tabs.querySelectorAll('[data-tab]').forEach(function (b) {
-            b.setAttribute('aria-selected', b.dataset.tab === name ? 'true' : 'false');
+            var selected = (b.dataset.tab === name);
+            b.setAttribute('aria-selected', selected ? 'true' : 'false');
+            b.classList.toggle('active', selected);
         });
     };
 
