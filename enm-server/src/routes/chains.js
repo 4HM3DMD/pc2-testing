@@ -87,6 +87,45 @@ function build(extensionHandle) {
                 return res.status(404).json(errorBody(`Chain "${adapter.chainId}" not configured yet.`));
             }
             const status = ChainRegistry.getProcessService().statusSync(adapter.chainId);
+
+            // Pull live RPC + uptime when the chain is alive. The chain-card
+            // UI needs height/peers/uptime to render real values; without
+            // this they fall back to "—" even though the chain is healthy.
+            // Each lookup is in its own try/catch so a single RPC blip
+            // doesn't take down the whole status response.
+            let height = null, peers = null, uptimeSec = null;
+            if (status && status.alive) {
+                // Uptime — read from the meta sidecar's startedAt.
+                try {
+                    const m = JSON.parse(
+                        require('fs').readFileSync(require('../services/processUtils').metaFilePath(adapter.chainId), 'utf8'),
+                    );
+                    if (m && typeof m.startedAt === 'number') {
+                        uptimeSec = Math.max(0, Math.floor((Date.now() - m.startedAt) / 1000));
+                    }
+                } catch (_) { /* meta missing; uptime stays null */ }
+
+                // Height + peers — single RPC client, parallel calls. If
+                // RPC isn't ready yet (chain still booting), both fail
+                // and the response has nulls — which the UI renders as
+                // "—" honestly.
+                try {
+                    const rpc = adapter.rpcClient(chainCfg);
+                    const results = await Promise.allSettled([
+                        rpc.getblockcount(),
+                        rpc.getconnectioncount(),
+                    ]);
+                    if (results[0].status === 'fulfilled') {
+                        const v = results[0].value;
+                        height = (typeof v === 'number') ? v : (v && v.result) || null;
+                    }
+                    if (results[1].status === 'fulfilled') {
+                        const v = results[1].value;
+                        peers = (typeof v === 'number') ? v : (v && v.result) || null;
+                    }
+                } catch (_) { /* RPC unreachable; height/peers stay null */ }
+            }
+
             return res.json(successBody({
                 chainId: adapter.chainId,
                 displayName: adapter.displayName,
@@ -104,6 +143,11 @@ function build(extensionHandle) {
                 // registration is complete.
                 enableArbiter: !!(chainCfg.dpos && chainCfg.dpos.enableArbiter),
                 hasKeystore: !!(chainCfg.dpos && chainCfg.dpos.keystorePasswordEncrypted),
+                // Live values — null when chain is dead OR RPC isn't ready
+                // yet. Frontend renders null as "—" instead of fabricating.
+                height,
+                peers,
+                uptimeSec,
             }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} GET /chains/${req.params.chainId}: ${err.message}`);
@@ -285,6 +329,28 @@ function build(extensionHandle) {
                     stale: true,
                 }));
             }
+            // Guard against zombie velocity: SyncTracker's height-sample
+            // buffer can persist across chain restarts. If the chain isn't
+            // alive right now, OR if no peers are connected (so there's no
+            // network reference to measure against), velocity readings are
+            // meaningless — null them out rather than leak stale numbers
+            // like "1150.7 blocks/min · Network height unknown" to the UI.
+            try {
+                const status = ChainRegistry.getProcessService().statusSync(adapter.chainId);
+                if (!status || !status.alive) {
+                    snapshot.velocityBpm = null;
+                    snapshot.etaSec = null;
+                    snapshot.percent = null;
+                    snapshot.stale = true;
+                } else if (snapshot.networkHeight == null) {
+                    // Chain alive but no network reference — likely 0 peers
+                    // or pre-handshake. Velocity from local-only samples is
+                    // misleading; suppress it.
+                    snapshot.velocityBpm = null;
+                    snapshot.etaSec = null;
+                }
+            } catch (_) { /* status read failed; leave snapshot as-is */ }
+
             return res.json(successBody(snapshot));
         } catch (err) {
             extensionHandle.log.debug(

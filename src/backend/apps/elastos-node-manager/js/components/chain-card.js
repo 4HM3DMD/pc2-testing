@@ -317,9 +317,19 @@
         }
         this._syncBar.dataset.pct = pct == null ? '?' : Math.floor(pct);
 
-        // Status line.
+        // Status line. The "Connecting to peers" framing covers the case
+        // where the chain is alive but has no network reference yet — the
+        // backend nulls velocityBpm + percent in that scenario, so we know
+        // the situation by checking those fields together.
+        var alive = (this._lastCoarseState === 'healthy' || this._lastCoarseState === 'syncing'
+                     || this._lastCoarseState === 'starting' || this._lastCoarseState === 'recovering');
         if (data.stale) {
             this._syncStatusLine.textContent = t('chain_card.sync_stale');
+        } else if (alive && pct == null && data.velocityBpm == null) {
+            // Chain is up but no peers yet → no network reference → no
+            // way to compute progress. Tell the operator instead of
+            // displaying confusing "Network height unknown" gibberish.
+            this._syncStatusLine.textContent = 'Connecting to peers…';
         } else if (pct == null) {
             this._syncStatusLine.textContent = t('chain_card.sync_unknown');
         } else if (data.blocksBehind === 0) {
@@ -330,13 +340,17 @@
             });
         }
 
-        // Metrics line — velocity + ETA.
+        // Metrics line — velocity + ETA. Defensive: never show velocity
+        // when the chain isn't alive (zombie buffer protection — the
+        // backend now nulls this out, but the frontend guards too so a
+        // backend regression can't bring back the "1150.7 blocks/min ·
+        // Network height unknown" lie).
         var parts = [];
-        if (typeof data.velocityBpm === 'number' && data.velocityBpm > 0) {
+        if (alive && typeof data.velocityBpm === 'number' && data.velocityBpm > 0) {
             parts.push(t('chain_card.sync_velocity', {
                 bpm: data.velocityBpm.toFixed(1),
             }));
-        } else if (data.localHeight != null && data.blocksBehind != null && data.blocksBehind > 0) {
+        } else if (alive && data.localHeight != null && data.blocksBehind != null && data.blocksBehind > 0) {
             parts.push(t('chain_card.sync_no_velocity'));
         }
         if (typeof data.etaSec === 'number' && data.etaSec > 0) {
