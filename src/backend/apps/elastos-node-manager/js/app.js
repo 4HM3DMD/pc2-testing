@@ -82,10 +82,16 @@
                 return self.services.api.get('/setup/state', { skipCache: true });
             })
             .then(function (setupState) {
-                if (!setupState || !setupState.completed) {
-                    self._showSetupWizard();
-                } else {
+                // Resilient routing: only treat the response as "completed"
+                // when it explicitly says so. Anything else (null, garbage,
+                // missing fields, unrecognized currentStep) falls into the
+                // setup flow — the conversation's _resumeFromState then
+                // figures out which card to show and handles unknown steps
+                // by starting at card A.
+                if (setupState && setupState.completed === true) {
                     self._showDashboard();
+                } else {
+                    self._showSetupWizard();
                 }
             })
             .catch(function (err) {
@@ -160,13 +166,12 @@
      */
     ENMApp.prototype._showTechnicalView = function () {
         if (!root.EnmTechnicalView) { return; }
+        // Tear down hero/stats/SSE before swapping — otherwise the home
+        // view's polls keep firing in the background.
+        if (typeof this._teardownHomeView === 'function') { this._teardownHomeView(); }
         this._revealContent();
         this._collapseHeaderToHome();
         this._clearPanes();
-        if (this._technicalView) {
-            this._technicalView.destroy();
-            this._technicalView = null;
-        }
         var self = this;
         this._technicalView = new root.EnmTechnicalView({
             api: this.services.api,
@@ -180,6 +185,9 @@
     ENMApp.prototype._showSetupWizard = function () {
         // Friendly path (v0.4): Welcome → Setup conversation → Home.
         // The 5-tab dashboard chrome is hidden until setup is done.
+        // Tear down anything from the home view first (idempotent if
+        // we're coming straight from boot).
+        if (typeof this._teardownHomeView === 'function') { this._teardownHomeView(); }
         this._revealContent();
         this._clearPanes();
         if (this.els.tabs) { this.els.tabs.hidden = true; }
@@ -252,24 +260,18 @@
         this._collapseHeaderToHome();
         this._clearPanes();
 
-        // Tear down the technical view if we're returning from it.
-        if (this._technicalView) {
-            this._technicalView.destroy();
-            this._technicalView = null;
-        }
-        // And clear the milestone interval before remounting (otherwise
-        // back-and-forth between home / technical view leaks timers).
-        if (this._milestoneTimer) {
-            clearInterval(this._milestoneTimer);
-            this._milestoneTimer = null;
-        }
+        // Tear everything down so back-and-forth between home and the
+        // technical view doesn't leak SSE subscriptions, polls, or
+        // intervals. Each unmount call is idempotent (component checks
+        // its own root.parentNode before removing).
+        this._teardownHomeView();
 
         var self = this;
         var pane = this.els.paneDashboard;
 
         // Hero card.
         if (root.EnmHeroCard) {
-            var hero = new root.EnmHeroCard({
+            this._hero = new root.EnmHeroCard({
                 chainId: 'mainchain',
                 api: this.services.api,
                 sse: this.services.sse,
@@ -278,40 +280,34 @@
                     if (action === 'setup') {
                         self._showSetupWizard();
                     } else if (action === 'details') {
-                        // Settings drawer comes in Phase 5C — for now,
-                        // surface the underlying state as a notification
-                        // so the operator isn't stranded.
-                        self.services.notifications.warning(
-                            'Details view coming soon',
-                            'The technical details drawer ships in a coming update. '
-                            + 'For now, run `docker compose logs enm-server` on the host.'
-                        );
+                        // Now that the technical view ships (Phase 5C),
+                        // route stalled/error states there directly so the
+                        // operator can see logs + audit + raw chain state.
+                        self._showTechnicalView();
                     }
                 },
             });
-            hero.mount(pane);
-            this._hero = hero;
+            this._hero.mount(pane);
         }
 
         // Stat strip below the hero.
         if (root.EnmStatStrip) {
-            var strip = new root.EnmStatStrip({
+            this._stats = new root.EnmStatStrip({
                 chainId: 'mainchain',
                 api: this.services.api,
             });
-            strip.mount(pane);
-            this._stats = strip;
+            this._stats.mount(pane);
         }
 
         // Producer identity card — only mounts if a keystore exists
         // (the component itself decides this from /setup/keystore/account).
         if (root.EnmProducerIdentity) {
-            var producer = new root.EnmProducerIdentity({
+            this._producer = new root.EnmProducerIdentity({
                 chainId: 'mainchain',
                 api: this.services.api,
                 notifications: this.services.notifications,
             });
-            producer.mount(pane);
+            this._producer.mount(pane);
         }
 
         // Milestone watchers — fire one-time celebrations when the
@@ -335,9 +331,10 @@
         }
 
         // Notifications pipeline — keep the v0.3 SSE wiring so CRITICAL
-        // proposals still pop as cards on top of the home view.
+        // proposals still pop as cards on top of the home view. Stash
+        // the unsubscribe so _teardownHomeView() can release it.
         if (this.services.sse) {
-            this.services.sse.subscribe('notifications', function (payload) {
+            this._notifSub = this.services.sse.subscribe('notifications', function (payload) {
                 if (!payload) { return; }
                 if (payload.proposalId) {
                     self._openProposalById(payload.proposalId);
@@ -352,6 +349,28 @@
             });
         }
         this._loadPendingProposals();
+    };
+
+    /**
+     * Destroy everything _showDashboard mounted. Called on remount and
+     * when transitioning to setup / technical-view so we don't leak
+     * SSE subs, polls, or intervals.
+     *
+     * @private
+     */
+    ENMApp.prototype._teardownHomeView = function () {
+        if (this._hero)      { this._hero.destroy();      this._hero = null; }
+        if (this._stats)     { this._stats.destroy();     this._stats = null; }
+        if (this._producer)  { this._producer.destroy();  this._producer = null; }
+        if (this._technicalView) {
+            this._technicalView.destroy();
+            this._technicalView = null;
+        }
+        if (this._milestoneTimer) {
+            clearInterval(this._milestoneTimer);
+            this._milestoneTimer = null;
+        }
+        if (this._notifSub) { this._notifSub(); this._notifSub = null; }
     };
 
     /**

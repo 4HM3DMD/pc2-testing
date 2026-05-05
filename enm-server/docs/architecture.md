@@ -1,9 +1,16 @@
-# ENM v0.3 — Architecture
+# ENM Architecture (v0.3 backend, v0.4 UI)
 
 This document explains the architectural decisions behind Elastos Node
-Manager v0.3. It is not a tutorial; it is the "why" reference. For a
+Manager. It is not a tutorial; it is the "why" reference. For a
 walkthrough of how to install and operate ENM, see
-[operator-runbook.md](operator-runbook.md).
+[operator-runbook.md](operator-runbook.md). For the v0.3→v0.4 path
+translation (what changed in the UI, what stayed the same), see
+[v0.4-upgrade-guide.md](v0.4-upgrade-guide.md).
+
+> **Versioning.** v0.3 is the backend (this document). v0.4 is the
+> "Welcome Home" frontend rebuild that sits on top — same APIs, same
+> invariants, friendlier shell. The seven invariants below apply to
+> both; v0.4 just changes how the operator sees them.
 
 ---
 
@@ -55,6 +62,45 @@ walkthrough of how to install and operate ENM, see
 ENM runs as a separate container next to pc2 in the operator's existing
 Docker Compose stack. The split (introduced in v0.2) keeps PC2's image
 generic and lets ENM ship/upgrade on its own cadence.
+
+### v0.4 frontend layer (Welcome Home)
+
+The frontend in `src/backend/apps/elastos-node-manager/` ships two
+overlapping UIs that share the same backend:
+
+```
+                ┌─────────────────────────────────────────────────┐
+                │  ENM frontend (iframe inside PC2)               │
+                │                                                  │
+                │  ┌─────────── v0.4 friendly layer ──────────┐   │
+                │  │  welcome-screen → setup-conversation →   │   │
+                │  │  hero-card + stat-strip + producer-id +  │   │
+                │  │  milestone-toast                         │   │
+                │  │                                           │   │
+                │  │  Settings drawer (gear icon top-right)   │   │
+                │  │   ├ When to tell me (notif toggles)      │   │
+                │  │   ├ How my ElastOS behaves (auto toggles)│   │
+                │  │   ├ Appearance (theme switch)            │   │
+                │  │   └ For the technically curious          │   │
+                │  │       └ Show technical details ─────────┐│   │
+                │  └────────────────────────────────────────┐││   │
+                │                                            ▼▼▼   │
+                │  ┌─────────── v0.3 dashboard (still ────────┐    │
+                │  │  here, just nested) — chain-card,        │    │
+                │  │  log-viewer, settings-tab, audit-tab,    │    │
+                │  │  evm-tab, system-status                  │    │
+                │  └──────────────────────────────────────────┘    │
+                └──────────────────────────────────────────────────┘
+                                   │  XHR/SSE → /api/enm/* (unchanged)
+                                   ▼
+                          [ enm-server sidecar ]
+```
+
+Both layers POST/GET the same v0.3 endpoints. The friendly layer adds
+no new backend dependencies — it's purely a UX surface over the
+existing API. The "Show technical details" disclosure lazy-mounts the
+v0.3 components on first tap, so casual operators never pay for the
+weight they don't use.
 
 ---
 

@@ -1,7 +1,16 @@
-# ENM v0.3 — Operator runbook
+# ENM — Operator runbook
 
 Walkthroughs for the most common operator tasks. For the "why"
 behind these flows, see [architecture.md](architecture.md).
+
+> **A note on UI vocabulary.** v0.4 introduced a friendly "Welcome
+> Home" UI layer for first-time operators. References below to the
+> *home view*, *settings drawer*, or *technical view* point to that
+> layer. Power users still get the original v0.3 5-tab dashboard —
+> it's nested inside the settings drawer under
+> *For the technically curious → Show technical details*. See the
+> [v0.4 upgrade guide](v0.4-upgrade-guide.md) for the v0.3→v0.4
+> path translation.
 
 ---
 
@@ -17,25 +26,36 @@ bash <(curl -sSL https://raw.githubusercontent.com/4HM3DMD/pc2-testing/main/enm-
 # 2. Open the PC2 dashboard.
 open http://<your-server-ip>:4100   # or paste into your browser
 
-# 3. Click the "Elastos Node Manager" launcher icon. The wizard opens.
+# 3. Click the "Elastos Node Manager" launcher icon.
 ```
 
-Inside the wizard:
+The first time you open ENM, you'll see the **Welcome screen** with a
+single button: *Let's go →*. Tap it and you're in the **setup
+conversation** — four cards walk you through:
 
-1. **Welcome** — three preflight checks turn green (OS, disk, identity).
-2. **Install & Configure**:
-   - Click **Install**. The card switches from "Click 'Install' to begin"
-     to a live progress bar that shows phase + bytes downloaded.
-   - When status reads "Installed v0.9.9.5" (or current upstream version),
-     pick a mode: **BPoS supernode** or **Full node**.
-   - For BPoS, choose **Generate password** (recommended) or paste your own.
-     The reveal panel shows the password once — copy it to your password
-     manager and tick "I saved it" before continuing.
-3. **Confirm & Start** — review the summary, click **Write config & start**.
+1. **Card A — What do you want to do?**
+   Two big tiles: *Earn rewards* (run a BPoS supernode) or
+   *Help the network* (run a full node). The technical role name is
+   shown right under the friendly carrot so you learn what you're
+   actually configuring.
+2. **Card B — Setting your ElastOS up.**
+   Tap *Install now*. The chain client (the `ela` binary) downloads
+   from `download.elastos.io` — usually under 2 minutes. Card auto-
+   advances when the install finishes.
+3. **Card C — Save your secret password** *(BPoS only — skipped for
+   full-node)*. ENM generates a strong password for the keystore and
+   shows it once. Copy it to your password manager. Tick
+   *I've saved it somewhere safe* and tap *Continue*. We can't show
+   it to you again.
+4. **Card D — 🎉 You're all set!**
+   ENM writes the config and starts the chain. Tap *Take me home*.
 
-The dashboard renders within a few seconds. The mainchain card moves
-through `starting → syncing → healthy` as the chain catches up to the
-network.
+The **home view** (hero card) appears within a few seconds. The
+illustration + headline change as the chain progresses:
+
+- *Your ElastOS is waking up…* (starting)
+- *Your ElastOS is catching up — about 9 min until fully synced* (syncing)
+- *Your ElastOS is happy and earning* (healthy + BPoS) — green tone
 
 ---
 
@@ -54,10 +74,17 @@ container restarts.
 
 To upgrade ela itself (e.g. when a new mainnet release ships):
 
-1. Open ENM → Dashboard → Mainchain card
-2. Click **Stop** to bring the chain down cleanly
-3. Open Settings → Mainchain Advanced → **Reinstall binary**
-4. After the new binary lands, click **Start** on the Mainchain card
+1. Open ENM → tap the gear icon (top-right) →
+   **For the technically curious → Show technical details**.
+2. On the **Status** sub-tab, find the Mainchain card and click **Stop**.
+3. Switch to the **Settings** sub-tab → **Mainchain Advanced** →
+   **Reinstall binary**.
+4. After the new binary lands, switch back to the Status sub-tab and
+   click **Start** on the Mainchain card.
+
+(For most operators, this happens automatically when you tap
+*Reinstall my node* in the settings drawer — that re-runs the setup
+conversation and pulls the latest version.)
 
 ---
 
@@ -103,20 +130,22 @@ Registration happens externally with one of two paths.
 
 ### Path A — Essentials mobile wallet (recommended)
 
-1. Open the ENM Dashboard → **Producer identity** card
-2. Click **Open in Essentials**. Your phone receives a deep-link.
+1. On the ENM home view, scroll to the **Producer identity** card.
+2. Tap **Open in Essentials**. Your phone receives a deep-link.
 3. In Essentials, confirm the supernode name + URL + lock period.
 4. Approve the on-chain transaction (requires 2,000 ELA in the deposit
    wallet associated with Essentials).
-5. Within ~1 block, the Mainchain card's BPoS sub-panel will show
-   `Producer state: Pending` → `Active`.
+5. Within ~1 block, the hero card flips to *Your ElastOS is happy and
+   earning* — and the technical view's BPoS sub-panel
+   (Settings → Show technical details → Status) shows
+   `Producer state: Pending → Active`.
 
 ### Path B — `ela-cli` from a separate box
 
 Use this if you don't have Essentials, or if your deposit wallet is on
 a different machine than ENM.
 
-1. Open the ENM Dashboard → Producer identity card
+1. On the home view, scroll to the **Producer identity** card.
 2. Expand **Register via CLI**. The card shows the templated command:
 
    ```bash
@@ -141,38 +170,59 @@ a different machine than ENM.
 ### Where do logs live?
 
 - **enm-server logs** (the sidecar): `cd ~/pc2 && docker compose logs -f enm-server`
-- **ela logs** (the chain): visible in ENM → Logs tab. On-disk:
-  `~/pc2/enm-data/chains/mainchain/logs/ela.log`
-- **Audit log** (every healing decision + operator action): ENM →
-  Audit tab. Filterable by chain / tier / time range. Export as JSON.
+- **ela logs** (the chain): on-disk at
+  `~/pc2/enm-data/chains/mainchain/logs/ela.log`. In the UI, open the
+  settings drawer (gear icon) → *For the technically curious* →
+  **Show technical details** → **Logs** sub-tab.
+- **Audit log** (every healing decision + operator action): same path —
+  Settings → Show technical details → **Audit** sub-tab. Filterable
+  by chain / tier / time range. Export as JSON.
 
-### What does each chain state mean?
+### What does each home view state mean?
 
-| Badge | Meaning | What to do |
-|---|---|---|
-| Not configured | Wizard hasn't run, or install was reset | Click **Configure** on the chain card |
-| Stopped | Binary present but not running | Click **Start** when ready |
-| Starting | Process spawned, waiting for first RPC response | Wait ~10s |
-| Syncing | Healthy but behind network height | Wait — sync panel shows ETA |
-| Healthy | Synced + producing blocks (BPoS) or following (full-node) | Nothing |
-| Stalled | Sync hasn't advanced in 5+ min | Check Logs tab; F4 (sync-stall healing) is opt-in |
-| Recovering | F1 healing fired (auto-restart on unexpected exit) | Wait — log will show the auto-restart and resync |
-| Error | Process exited and F1 disabled, or start failed | Read the error toast; check Logs |
+The hero card on the home view turns one of four tones based on the
+chain state:
+
+| Tone | Hero says | Underlying state | What to do |
+|---|---|---|---|
+| Grey | *Your ElastOS isn't a node yet* | unconfigured | Tap **Set up my node** to launch the setup conversation |
+| Grey | *Your ElastOS is taking a break* | stopped | Tap **Wake my ElastOS up** to start the chain |
+| Amber | *Your ElastOS is waking up…* | starting | Wait ~10s |
+| Amber | *Your ElastOS is catching up — about {N} min* | syncing | Wait — ETA shown |
+| Amber | *Your ElastOS had a hiccup — fixing it now* | recovering | Wait — F1 auto-restart in progress |
+| Green | *Your ElastOS is happy and earning* | healthy + BPoS | Nothing |
+| Green | *Your ElastOS is happy and helping* | healthy + full-node | Nothing |
+| Rose | *Your ElastOS is having trouble keeping up* | stalled | Tap **See what happened** to open the technical view |
+| Rose | *Your ElastOS needs your attention* | error | Tap **See what happened**; check Logs sub-tab |
+
+The role badge directly under the headline always shows
+**BPoS supernode** or **Full node** so you know which mode your
+ElastOS is running in.
 
 ### How do I update operator preferences?
 
-ENM → Settings tab. Three sections:
+Tap the **gear icon** (top-right). The settings drawer slides in with
+four sections:
 
-- **Network** — external IP/hostname (auto-detect or manual override)
-- **Mainchain Advanced** — log level, archive mode, RPC creds, WhiteIPList
-- **General preferences** — auto-execute AUTOMATED-SAFE healings, audit
-  retention days, require ack on CRITICAL notifications
+- **When to tell me** — notification toggles (help alerts, milestone
+  celebrations, weekly summaries).
+- **How my ElastOS behaves** — auto-restart on crash (default on, =
+  healing rule F1), and *Try to fix problems without asking me* (= F2-F19
+  opt-in, off by default).
+- **Appearance** — theme switch (light / dark).
+- **For the technically curious** — *Show technical details* opens
+  the v0.3 dashboard with full settings: Network (external IP /
+  hostname), Mainchain Advanced (log level, archive mode, RPC creds,
+  WhiteIPList), General preferences.
 
-Saved preferences live in `enm.db` under `operator_preferences`.
+The friendly toggles in the drawer save to localStorage (preference
+sync to the backend ships in v0.5+). The technical-view Settings sub-
+tab still writes to `enm.db` under `operator_preferences`.
 
 ### How do I see what healing has fired?
 
-ENM → Audit tab. Default view shows the last 100 events. Filter by:
+Settings → *For the technically curious* → **Show technical details**
+→ **Audit** sub-tab. Default view shows the last 100 events. Filter by:
 
 - Chain (currently only `mainchain`)
 - Tier (`AUTOMATED-SAFE`, `OPERATOR-CONFIRM`, `MANUAL-ONLY`)

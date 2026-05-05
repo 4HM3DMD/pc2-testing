@@ -86,6 +86,15 @@
 
     /** @private */
     SetupConversation.prototype._resumeFromState = function (s) {
+        // Edge case: if /setup/state says we're already done, jump
+        // straight to the home view instead of re-running setup.
+        // (Can happen if the conversation is mounted by mistake or
+        // if the operator hits a stale URL after completion.)
+        if (s && s.completed === true) {
+            this.onComplete();
+            return;
+        }
+
         // Map server-side step → which card to show on resume.
         // Conservative: if anything is unclear, start at A.
         var step = (s && s.currentStep) || 'welcome';
@@ -96,10 +105,12 @@
             // skipped this. Operator can back out on the goal card.
             this._goal = 'earn';
             this._goto('c');
-        } else if (step === 'network' || step === 'confirm') {
+        } else if (step === 'network' || step === 'confirm' || step === 'complete') {
             this._goal = (s && s.enableArbiter === false) ? 'help' : 'earn';
             this._goto('d');
         } else {
+            // Unknown step value (server schema drift, garbage response,
+            // etc.) — fail safe by starting from the top.
             this._goto('a');
         }
     };
