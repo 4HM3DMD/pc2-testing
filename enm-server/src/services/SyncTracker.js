@@ -160,6 +160,20 @@ class SyncTracker {
         return out;
     }
 
+    /**
+     * Drop all sample/network-height state for one chain. Called when the
+     * chain exits — without this, the next `start()` inherits height
+     * samples from the previous run, producing zombie velocity numbers
+     * (the "1150 blocks/min next to Network height unknown" lie that
+     * prompted the v0.5 audit).
+     *
+     * @param {string} chainId
+     */
+    clearForChain(chainId) {
+        this._samples.delete(chainId);
+        this._networkHeights.delete(chainId);
+    }
+
     /** @internal */
     _resetForTests() {
         this._samples.clear();

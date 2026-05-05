@@ -51,9 +51,19 @@
             self._fields.disk.textContent = formatDisk(s.disk);
             self._fields.os.textContent   = formatOs(s.os);
             self._fields.uptime.textContent = root.enmFormatUptime(s.node.uptimeSec);
+            // Clear any prior stale visual marker.
+            Object.keys(self._fields).forEach(function (k) {
+                self._fields[k].classList.remove('enm-sys-stale');
+            });
+            self.root.dataset.stale = '0';
         }).catch(function (err) {
-            // Best-effort — keep last values rendered. Operator sees stale
-            // values while the 30s tick decides whether to retry.
+            // Mark every cell as stale so the operator can see the values
+            // are not live anymore. CSS dims/strikes-through stale cells.
+            Object.keys(self._fields).forEach(function (k) {
+                self._fields[k].classList.add('enm-sys-stale');
+            });
+            self.root.dataset.stale = '1';
+            self.root.title = 'System status temporarily unavailable — values may be stale.';
             if (self.notifications && err && err.status !== 401) {
                 self.notifications.warning(
                     'System status unavailable',

@@ -182,6 +182,28 @@ function shouldEmit(signature, ttlMs) {
 }
 function _clearDedupForTests() { _seenDetections.clear(); }
 
+/**
+ * Public: clear the dedup map for a specific chain, OR all chains.
+ * Called from ChainRegistry on chain restart so the operator can see
+ * "conflict resolved" signals after they've fixed the underlying issue
+ * — without this, the 1-hour TTL silently swallows the recovery
+ * notification.
+ *
+ * @param {string} [chainId]  if given, only clear signatures involving
+ *                            that chain's ports; otherwise clear all
+ */
+function clearDedup(chainId) {
+    if (!chainId) {
+        _seenDetections.clear();
+        return;
+    }
+    // Signatures don't directly include chainId (only port/role), so we
+    // can't filter precisely. The conservative behaviour: clear all
+    // entries on any chain restart. False positives = an extra audit
+    // entry; false negatives = the bug we're fixing. Choose false +ves.
+    _seenDetections.clear();
+}
+
 // ============================================================================
 // Probes
 // ============================================================================
@@ -340,14 +362,22 @@ async function scanPortBindings(out, run, log) {
             //   - our own ela child PID: handled elsewhere (ROGUE_PROCESS only
             //     fires for ela processes that aren't ours).
             //
-            // The holder string from ss/lsof contains the process name + PID;
-            // grep for "docker-proxy" to match either tool's format.
-            if (inUse.holder && /docker-proxy/i.test(inUse.holder)) {
-                log.debug(
-                    `${ENM_LOG_PREFIX} port ${port} held by docker-proxy — `
-                    + `benign (compose port mapping forwarding into container).`,
-                );
-                continue;
+            // The holder string from ss/lsof contains the process name + PID
+            // and is sometimes multiline (long ss output, line-wrapped). The
+            // previous regex `/docker-proxy/i.test(inUse.holder)` failed when
+            // the "docker-proxy" token was on a different line than expected.
+            // Split on newlines and check each line — accept docker-proxy OR
+            // docker-compose (newer compose v2 sometimes shows the latter).
+            if (inUse.holder) {
+                const lines = String(inUse.holder).split(/\r?\n/);
+                const benign = lines.some(line => /docker-proxy|docker-compose/i.test(line));
+                if (benign) {
+                    log.debug(
+                        `${ENM_LOG_PREFIX} port ${port} held by docker-proxy — `
+                        + `benign (compose port mapping forwarding into container).`,
+                    );
+                    continue;
+                }
             }
 
             out.push({
@@ -567,6 +597,7 @@ module.exports = {
     blockers,
     signatureFor,
     shouldEmit,
+    clearDedup,
     _clearDedupForTests,
     // exposed for tests
     _internals: {

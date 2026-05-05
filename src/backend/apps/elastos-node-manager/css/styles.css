@@ -467,6 +467,15 @@ html, body {
     white-space: nowrap;
 }
 
+/* When /system/status fails, the JS adds .enm-sys-stale to every value
+   cell. Dim the colour + add a strikethrough so the operator can see
+   the values are not live anymore (vs. just looking like normal data). */
+.enm-sys-value.enm-sys-stale {
+    color: var(--text-muted);
+    text-decoration: line-through;
+    text-decoration-color: var(--border-strong);
+}
+
 /* ============================================================
    Chain cards — container queries for true component responsiveness
    ============================================================ */

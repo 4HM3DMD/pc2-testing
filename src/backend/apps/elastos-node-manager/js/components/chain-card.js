@@ -83,10 +83,15 @@
 
     /**
      * Re-fetch the chain summary from /api/chains/:id and re-render.
+     * Single-flight guarded — overlapping calls (5s metrics timer +
+     * post-action refresh + SSE event) all collapse to one in-flight
+     * request, so the UI doesn't render stale data from a slow earlier
+     * call after a fast later one.
      */
     ChainCard.prototype.refresh = function () {
+        if (this._refreshInFlight) { return this._refreshInFlight; }
         var self = this;
-        return this.api.get('/chains/' + this.chainId, { skipCache: true }).then(function (state) {
+        this._refreshInFlight = this.api.get('/chains/' + this.chainId, { skipCache: true }).then(function (state) {
             self._applyState(state);
         }).catch(function (err) {
             // 404 means not configured yet — treat as unconfigured.
@@ -98,7 +103,12 @@
                 'Failed to refresh ' + self.chainId,
                 err && err.message ? err.message : String(err),
             );
+        }).then(function () {
+            self._refreshInFlight = null;
+        }, function () {
+            self._refreshInFlight = null;
         });
+        return this._refreshInFlight;
     };
 
     /** @private */
@@ -183,8 +193,12 @@
         this._startBtn.hidden     = unconfigured;
         this._stopBtn.hidden      = unconfigured;
         this._restartBtn.hidden   = unconfigured;
+        // Stop is disabled both when chain is dead AND when the coarse
+        // state explicitly says 'stopped' — guards against the case
+        // where the operator clicks Stop, the action lands, the badge
+        // flips to 'stopped', but `alive` is still true for one tick.
         this._startBtn.disabled   = alive;
-        this._stopBtn.disabled    = !alive;
+        this._stopBtn.disabled    = !alive || coarse === 'stopped';
         this._restartBtn.disabled = !alive;
 
         this.onStateChange(coarse, state);
@@ -259,8 +273,10 @@
         this.api.get('/chains/' + this.chainId + '/sync', { skipCache: true }).then(function (data) {
             self._renderSyncPanel(data);
         }).catch(function () {
-            // Silent — boot race or chain stopped. The panel just stays as-is
-            // and the next tick retries.
+            // Don't leave the panel showing stale velocity from the
+            // last successful poll. Render with null data so the bar
+            // and metrics line clear; the next tick will repopulate.
+            self._renderSyncPanel(null);
         }).then(function () {
             if (!self.root || !self.root.isConnected) { return; }
             // Always re-arm. State drives cadence: 10s while syncing,

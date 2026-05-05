@@ -19,6 +19,7 @@ const { SelfHealingEngine } = require('./SelfHealingEngine');
 const { HealthChecker } = require('./HealthChecker');
 const { readNodeOwner } = require('../auth/OwnerCheckMiddleware');
 const { SyncTracker } = require('./SyncTracker');
+const HostConflictScanner = require('./HostConflictScanner');
 const { EnmBinaryDownloader } = require('./EnmBinaryDownloader');
 const { EnmKeystoreService } = require('./EnmKeystoreService');
 const ChainState = require('./ChainState');
@@ -57,6 +58,18 @@ function init(extensionHandle) {
     binaryDownloader = new EnmBinaryDownloader({ logger: extensionHandle.log, sseHub });
     keystoreService = new EnmKeystoreService({ logger: extensionHandle.log });
     adapters.set('mainchain', new ElaMainChainAdapter({ processService, extensionHandle }));
+
+    // Clear SyncTracker's height-sample buffer + HostConflictScanner's
+    // dedup map on chain exit so the next start sees a clean slate. Two
+    // bugs the audit caught:
+    //   - SyncTracker zombie velocity ("1150 blocks/min · Network
+    //     height unknown")
+    //   - HostConflictScanner silently swallowing "conflict resolved"
+    //     signals because the 1h TTL was still hot
+    processService.on('exit', ({ chainId }) => {
+        syncTracker.clearForChain(chainId);
+        HostConflictScanner.clearDedup(chainId);
+    });
 
     // Boot self-heal: walk every known chain, reconcile in-memory state with
     // disk reality. Per Architectural Invariant #6, ENM recovers from kill -9

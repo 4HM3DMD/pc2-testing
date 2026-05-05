@@ -46,6 +46,7 @@
 
     LogViewer.prototype.destroy = function () {
         if (this._unsubscribe) { this._unsubscribe(); this._unsubscribe = null; }
+        if (this._sseStateUnsub) { this._sseStateUnsub(); this._sseStateUnsub = null; }
         if (this.root.parentNode) { this.root.parentNode.removeChild(this.root); }
     };
 
@@ -67,10 +68,34 @@
         this._tailToggle.textContent = t('log_viewer.live');
         this._tailToggle.title = t('log_viewer.live');
         var self = this;
-        this._tailToggle.addEventListener('click', function () {
-            self._followTail = !self._followTail;
+        // SSE connection-state tracking — was missing before, so the
+        // "live" badge stayed lit even when the EventSource was
+        // reconnecting. Now we listen and override the label to
+        // "reconnecting…" when the stream is down. Unsub registered
+        // for cleanup in destroy().
+        this._sseConnState = 'open';  // assume open until told otherwise
+        if (this.sse && typeof this.sse.onState === 'function') {
+            this._sseStateUnsub = this.sse.onState(function (state) {
+                self._sseConnState = state;
+                self._refreshTailLabel();
+            });
+        }
+        this._refreshTailLabel = function () {
+            if (self._sseConnState !== 'open') {
+                self._tailToggle.textContent = 'reconnecting…';
+                self._tailToggle.classList.remove('enm-log-following');
+                self._tailToggle.title = 'Live log stream lost — auto-reconnecting';
+                return;
+            }
             self._tailToggle.textContent = t(self._followTail ? 'log_viewer.live' : 'log_viewer.paused');
             self._tailToggle.classList.toggle('enm-log-following', self._followTail);
+            self._tailToggle.title = self._tailToggle.textContent;
+        };
+        this._tailToggle.addEventListener('click', function () {
+            // Don't toggle while disconnected — the badge is non-actionable then.
+            if (self._sseConnState !== 'open') { return; }
+            self._followTail = !self._followTail;
+            self._refreshTailLabel();
             if (self._followTail) { self._scrollToBottom(); }
         });
         head.appendChild(this._tailToggle);

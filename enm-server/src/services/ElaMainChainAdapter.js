@@ -187,26 +187,45 @@ class ElaMainChainAdapter extends ChainAdapter {
         if (cfg.dpos.enableArbiter) {
             const envelope = cfg.dpos && cfg.dpos.keystorePasswordEncrypted;
             if (!envelope) {
-                this.extensionHandle.log.warn(
-                    `${ENM_LOG_PREFIX} ${this.chainId} BPoS arbiter enabled but no keystore password on file — ela will block on prompt`,
+                // Previously this was a warn-and-continue. ela then hung
+                // on the password prompt forever, but ENM reported the
+                // chain as "started successfully". Operator dashboard
+                // showed a healthy chain that wasn't actually doing
+                // anything. Now we kill the child + throw so the caller
+                // (route handler) gets a real 500 with actionable text.
+                try { await this.processService.stop(this.chainId); }
+                catch (_) { /* best-effort cleanup */ }
+                throw new Error(
+                    'BPoS arbiter mode is enabled but no keystore password is on file. '
+                    + 'Re-import the keystore via Settings → Reinstall my node.',
                 );
-            } else {
-                let plaintext;
-                try {
-                    plaintext = decrypt(envelope);
-                } catch (err) {
-                    throw new Error(`Cannot decrypt keystore password: ${err.message}. Re-import the keystore via the wizard.`);
-                }
-                const wrote = this.processService.writeStdin(this.chainId, plaintext);
-                if (!wrote) {
-                    this.extensionHandle.log.warn(
-                        `${ENM_LOG_PREFIX} ${this.chainId} writeStdin returned false — child stdin may already be closed`,
-                    );
-                }
-                // Plaintext goes out of scope here; v8 GC reclaims its
-                // backing buffer on the next minor cycle. We don't keep
-                // it on `this` and we don't write it to disk.
             }
+            let plaintext;
+            try {
+                plaintext = decrypt(envelope);
+            } catch (err) {
+                try { await this.processService.stop(this.chainId); }
+                catch (_) { /* best-effort cleanup */ }
+                throw new Error(
+                    `Cannot decrypt keystore password: ${err.message}. `
+                    + 'Re-import the keystore via Settings → Reinstall my node.',
+                );
+            }
+            const wrote = this.processService.writeStdin(this.chainId, plaintext);
+            if (!wrote) {
+                // Same logic: writeStdin failed → ela never gets the
+                // password → hangs. Don't return success.
+                try { await this.processService.stop(this.chainId); }
+                catch (_) { /* best-effort cleanup */ }
+                throw new Error(
+                    'Failed to feed keystore password to ela (child stdin closed). '
+                    + 'Try Restart on the chain card; if it persists, file an issue '
+                    + 'with the most recent enm-server logs.',
+                );
+            }
+            // Plaintext goes out of scope here; v8 GC reclaims its
+            // backing buffer on the next minor cycle. We don't keep
+            // it on `this` and we don't write it to disk.
         }
 
         return result;
