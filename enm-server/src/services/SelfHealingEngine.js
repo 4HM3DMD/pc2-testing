@@ -211,6 +211,13 @@ class SelfHealingEngine {
     async _applyAutomatedSafe(chainId, det, chainConfig) {
         // Restart-loop budget: count attempts within a rolling window.
         if (this._isRestartAction(det)) {
+            // Note: F1's detectF1 in HealthRules.js already gates on
+            // snap.processExit.manualStop, so a manually-stopped chain
+            // never reaches this path. The audit flagged a defensive
+            // execution-time check too — but statusSync doesn't expose
+            // manualStop, so the only true source is the exit snapshot
+            // F1 already consults. Single source of truth, no double
+            // gate, no risk of drift between the two checks.
             const allowed = this._consumeRestartBudget(chainId);
             if (!allowed) {
                 // Escalate: convert this AUTOMATED-SAFE into an OWNER-CONFIRMS.
@@ -275,7 +282,11 @@ class SelfHealingEngine {
         // restart-fixable layer.
         const now = Date.now();
         const cur = this._restartBudget.get(chainId);
-        if (!cur || (now - cur.firstAt) > PROCESS_RESTART_BUDGET_WINDOW_MS) {
+        // Use >= so that exactly-at-window restarts reset the counter
+        // (was > strict; an exact-window restart was treating the old
+        // count as still hot, leaving the operator stuck in budget-
+        // exhausted state until the next restart bumped it past).
+        if (!cur || (now - cur.firstAt) >= PROCESS_RESTART_BUDGET_WINDOW_MS) {
             this._restartBudget.set(chainId, { count: 1, firstAt: now });
             return true;
         }

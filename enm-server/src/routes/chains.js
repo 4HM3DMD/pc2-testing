@@ -39,6 +39,10 @@ const fsp = require('node:fs/promises');
 const path = require('node:path');
 const { chainDir, pidFilePath } = require('../services/DataDir');
 
+/** Promise-based sleep used to give async actions time to take effect
+ *  before re-checking process state. */
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 /**
  * @param {object} extensionHandle
  * @returns {import('express').Router}
@@ -187,6 +191,18 @@ function build(extensionHandle) {
             }
 
             const result = await adapter.start(chainCfg);
+            // Verify the action took effect — adapter.start may return a
+            // pid but the child can die immediately (binary missing,
+            // config invalid, port collision after pre-flight). Wait
+            // briefly + recheck so the operator gets honest feedback
+            // instead of a "started" response on a dead chain.
+            await sleep(1500);
+            const liveCheck = ChainRegistry.getProcessService().statusSync(adapter.chainId);
+            if (!liveCheck.alive) {
+                return res.status(500).json(errorBody(
+                    'Chain spawned but exited within 1.5s. Check logs (Settings → Show technical details → Logs).',
+                ));
+            }
             return res.json(successBody({
                 ...result,
                 // Surface non-blocking conflicts so the dashboard can show a
@@ -204,6 +220,16 @@ function build(extensionHandle) {
             const adapter = adapterOr404(req, res, extensionHandle);
             if (!adapter) return undefined;
             const result = await adapter.stop();
+            // Verify the chain actually stopped. Some failure modes (kill
+            // signal queued, child unresponsive) will return success from
+            // adapter.stop but leave the process alive.
+            await sleep(800);
+            const liveCheck = ChainRegistry.getProcessService().statusSync(adapter.chainId);
+            if (liveCheck.alive) {
+                return res.status(500).json(errorBody(
+                    'Stop command issued but chain is still alive. May be hung — try Restart, or kill the PID manually.',
+                ));
+            }
             return res.json(successBody(result));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} POST /chains/${req.params.chainId}/stop: ${err.message}`);
@@ -633,6 +659,17 @@ function build(extensionHandle) {
         try {
             const adapter = adapterOr404(req, res, extensionHandle);
             if (!adapter) return undefined;
+            // Gate: require chain to be stopped before re-downloading the
+            // binary. Replacing a binary while ela has it open is unsafe
+            // (file descriptor caching, partial reads, signed-section
+            // mismatches) — the operator's flow should be Stop → Update
+            // → Start. Front end can still bypass by stopping first.
+            const status = ChainRegistry.getProcessService().statusSync(adapter.chainId);
+            if (status && status.alive) {
+                return res.status(409).json(errorBody(
+                    'Stop the chain before updating the binary. Click Stop on the Mainchain card, wait for the badge to change to "Stopped", then run Update again.',
+                ));
+            }
             const downloader = ChainRegistry.getBinaryDownloader();
             if (!downloader) {
                 return res.status(503).json(errorBody('Binary downloader is not available.'));
@@ -671,6 +708,38 @@ function build(extensionHandle) {
             if (!snapshot.keystorePresent) {
                 return res.status(400).json(errorBody(
                     'No keystore on disk — generate one via the setup conversation first.',
+                ));
+            }
+            // Gate: chain must be alive AND fully synced before submitting
+            // an activate transaction. An unsynced node has stale producer
+            // state, and the chain may reject the tx with code 43001.
+            const procStatus = ChainRegistry.getProcessService().statusSync(chainId);
+            if (!procStatus || !procStatus.alive) {
+                return res.status(409).json(errorBody(
+                    'Chain must be running before reactivating. Start the chain and wait for it to fully sync first.',
+                ));
+            }
+            try {
+                const rpc = adapter.rpcClient(cfg.chains[chainId]);
+                const bestHashResp = await rpc.getbestblockhash();
+                const bestHash = bestHashResp && bestHashResp.result ? bestHashResp.result : bestHashResp;
+                if (typeof bestHash === 'string' && bestHash.length > 0) {
+                    const headerResp = await rpc.getblockheader(bestHash, 2);
+                    const header = headerResp && headerResp.result ? headerResp.result : headerResp;
+                    if (header && typeof header.time === 'number') {
+                        const ageSec = Math.floor(Date.now() / 1000) - header.time;
+                        // Same 5-min slack used by the /sync route's synced detection.
+                        if (ageSec > 5 * 60) {
+                            return res.status(409).json(errorBody(
+                                `Chain is not yet fully synced (last block is ${Math.floor(ageSec / 60)} min old). Reactivation transactions need a synced node — wait until the dashboard shows "Fully synced", then try again.`,
+                            ));
+                        }
+                    }
+                }
+            } catch (rpcErr) {
+                // Can't confirm sync — refuse rather than risk a wasted tx.
+                return res.status(503).json(errorBody(
+                    `Cannot verify sync status (RPC error: ${rpcErr.message}). Refusing to submit reactivation while chain state is unclear.`,
                 ));
             }
             const cfg = await ConfigStore.load();
