@@ -19,6 +19,7 @@ PC2_DIR="${PC2_DIR:-$HOME/pc2}"
 ENM_PORT="${ENM_PORT:-4180}"
 ENM_IMAGE="${ENM_IMAGE:-ghcr.io/4hm3dmd/enm-server:latest}"
 EXPOSE_BPOS="${EXPOSE_BPOS:-1}"   # 1 = expose 20338+20339 publicly (BPoS); 0 = loopback only
+RESET_MODE=0
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -26,6 +27,7 @@ while [[ $# -gt 0 ]]; do
         --pc2-dir)  PC2_DIR="$2"; shift 2 ;;
         --image)    ENM_IMAGE="$2"; shift 2 ;;
         --no-bpos)  EXPOSE_BPOS=0; shift ;;
+        --reset)    RESET_MODE=1; shift ;;
         --help|-h)
             cat <<EOF
 ENM (Elastos Node Manager) sidecar installer
@@ -39,6 +41,9 @@ Options:
   --no-bpos         Bind ela P2P/DPoS ports (20338, 20339) to loopback only.
                     Use for full-node mode. Default exposes them publicly so
                     BPoS supernode peers can dial in.
+  --reset           Stop the container, archive /data/enm to /data/enm.bak.<ts>/,
+                    remove the container, then exit. Re-run without --reset for
+                    a clean install. Use this to recover from a botched setup.
 
 Pre-reqs:
   - PC2 already installed (\$PC2_DIR/docker-compose.yml exists)
@@ -67,6 +72,71 @@ die()  { printf "${RED}\xe2\x9c\x97 %s${NC}\n" "$*" >&2; exit 1; }
 
 command -v docker >/dev/null 2>&1 \
     || die "docker not installed (PC2 install would have done this — re-run scripts/install.sh first)"
+
+# Detect whether to use `docker compose` (v2 plugin) or `docker-compose` (v1
+# standalone). v2 is the modern path; v1 still ships on older Ubuntu LTS.
+# Picking once means later commands don't have to re-detect.
+if docker compose version >/dev/null 2>&1; then
+    COMPOSE='docker compose'
+elif command -v docker-compose >/dev/null 2>&1; then
+    COMPOSE='docker-compose'
+else
+    die "Neither 'docker compose' nor 'docker-compose' is available. Install Docker Compose v2."
+fi
+
+# --- --reset (early exit) ---------------------------------------------------
+#
+# Recover from a botched setup: stop + remove the container, archive enm-data,
+# print next steps. Doesn't touch pc2 or its data. The operator can then
+# re-run this script (without --reset) for a clean install.
+if [[ "$RESET_MODE" == "1" ]]; then
+    cd "$PC2_DIR"
+    say "Reset mode — stopping enm-server and archiving state..."
+    if docker ps -a --format '{{.Names}}' | grep -q '^enm-server$'; then
+        $COMPOSE stop enm-server >/dev/null 2>&1 || true
+        $COMPOSE rm -f enm-server >/dev/null 2>&1 || true
+        ok "Container stopped and removed"
+    else
+        warn "No enm-server container found"
+    fi
+    if [[ -d "$PC2_DIR/enm-data" ]]; then
+        ARCHIVE="$PC2_DIR/enm-data.bak.$(date +%Y%m%d%H%M%S)"
+        mv "$PC2_DIR/enm-data" "$ARCHIVE"
+        ok "Archived enm-data → $ARCHIVE"
+    fi
+    cat <<EOF
+
+Reset complete. To reinstall, re-run this script without --reset:
+  bash <(curl -sSL .../install-enm.sh)
+
+Your PC2 install is unchanged. The archived enm-data/ above can be deleted
+once you've confirmed the clean install works.
+EOF
+    exit 0
+fi
+
+# --- Pre-flight: chain port availability ------------------------------------
+#
+# ela inside enm-server binds 20336/20338/20339/20333-20335. If anything OTHER
+# than docker-proxy already holds them on the host, the container can come up
+# but ela won't bind, and HostConflictScanner fires F19 forever. Catch it now
+# with a clear error.
+say "Pre-flight: checking chain port availability..."
+PORT_CONFLICTS=()
+for p in 20336 20338 20339 20333 20334 20335; do
+    holder=$(ss -ltnpH "( sport = :$p )" 2>/dev/null | awk 'NR==1{print $6}')
+    if [[ -n "$holder" && "$holder" != *docker-proxy* ]]; then
+        PORT_CONFLICTS+=("  port $p — held by: $holder")
+    fi
+done
+if (( ${#PORT_CONFLICTS[@]} > 0 )); then
+    warn "Port conflicts detected (something other than docker-proxy is bound):"
+    for c in "${PORT_CONFLICTS[@]}"; do printf '%s\n' "$c" >&2; done
+    warn "Stop the conflicting service(s) before continuing, or pick a different host."
+    warn "Continuing anyway — ela may fail to bind. Use --reset later if you need to roll back."
+else
+    ok "All chain ports available"
+fi
 
 # --- Migrate legacy compose: strip chain ports from pc2 ---------------------
 #
@@ -208,13 +278,38 @@ if [[ "$COMPOSE_IMAGE" == pc2-local:* || "$COMPOSE_IMAGE" == localhost/* || -z "
     say "Skipping pull (compose uses local image: ${COMPOSE_IMAGE:-unknown})"
 else
     say "Pulling ${COMPOSE_IMAGE}..."
-    docker compose pull enm-server
+    $COMPOSE pull enm-server
     ok "Image pulled"
 fi
 
 say "Starting / recreating enm-server..."
-docker compose up -d --force-recreate enm-server
+$COMPOSE up -d --force-recreate enm-server
 ok "Container started"
+
+# --- Post-up health check ---------------------------------------------------
+#
+# Container "started" doesn't mean Express is listening. Poll /api/enm/health
+# for up to 60s. If the API never comes up, the operator gets logs+remediation
+# rather than a green checkmark masking a broken sidecar.
+say "Waiting for ENM API to respond..."
+HEALTH_URL="http://localhost:${ENM_PORT}/api/enm/health"
+HEALTH_OK=0
+for attempt in $(seq 1 30); do
+    if curl -fsS --max-time 2 "$HEALTH_URL" >/dev/null 2>&1 \
+       || wget -qO- --tries=1 --timeout=2 "$HEALTH_URL" >/dev/null 2>&1; then
+        HEALTH_OK=1
+        break
+    fi
+    sleep 2
+done
+if [[ "$HEALTH_OK" == "1" ]]; then
+    ok "ENM API responding at $HEALTH_URL"
+else
+    warn "ENM API not responding after 60s — last 30 lines of container logs:"
+    $COMPOSE logs --tail=30 enm-server || true
+    warn "Investigate with: cd $PC2_DIR && $COMPOSE logs -f enm-server"
+    warn "If unrecoverable, run: bash $0 --reset (archives state for clean reinstall)"
+fi
 
 # --- UFW --------------------------------------------------------------------
 
@@ -238,9 +333,10 @@ ${GREEN}\xe2\x95\x94\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90
   PC2 dashboard:  http://${HOST_IP}:4100
   ENM API:        http://${HOST_IP}:${ENM_PORT}/api/enm/health
 
-  Logs:    cd $PC2_DIR && docker compose logs -f enm-server
-  Stop:    cd $PC2_DIR && docker compose stop enm-server
-  Update:  cd $PC2_DIR && docker compose pull enm-server && docker compose up -d enm-server
+  Logs:    cd $PC2_DIR && $COMPOSE logs -f enm-server
+  Stop:    cd $PC2_DIR && $COMPOSE stop enm-server
+  Update:  cd $PC2_DIR && $COMPOSE pull enm-server && $COMPOSE up -d enm-server
+  Reset:   bash $0 --reset    (archive state, force clean reinstall)
 
 Next steps:
   1. Open http://${HOST_IP}:4100 in your browser
