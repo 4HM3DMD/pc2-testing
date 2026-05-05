@@ -26,6 +26,21 @@
  *
  * Address comparison: case-insensitive for hex (EVM); exact match for non-hex
  * (Solana, ed25519 etc.). Same model the old extension used.
+ *
+ * --- ARCHITECTURAL INVARIANT ---
+ *
+ * The wallet here is **identity-only**. ENM never asks the operator's
+ * browser wallet to sign anything. The Elastos mainchain is a UTXO chain
+ * (not EVM) — its transactions are signed by `keystore.dat` on the server
+ * via `ela-cli`, never by a browser wallet. The only thing this wallet
+ * address does is:
+ *
+ *   1. prove the requester is the same wallet that claimed pc2-node, AND
+ *   2. attribute audit log entries to a stable identity.
+ *
+ * Future EVM features (ESC sidechain, cross-chain bridges) will live in a
+ * SEPARATE namespace under /api/enm/evm/* (v0.5+) and may use the wallet
+ * for actual signing. That namespace must NOT leak into this middleware.
  */
 
 'use strict';

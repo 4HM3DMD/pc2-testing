@@ -78,7 +78,7 @@ function build(deps) {
             return res.status(400).json(errorBody('Invalid proposal id.'));
         }
         try {
-            const result = await engine.executeApproved(id, req.enmOwnerWallet);
+            const result = await engine.executeApproved(id, req.actorWallet);
             if (!result.ok) {
                 const status = result.error && result.error.indexOf('not found') >= 0 ? 404 : 409;
                 return res.status(status).json(errorBody(result.error || 'Confirm failed.'));
@@ -101,7 +101,7 @@ function build(deps) {
         }
         const reason = req.body && typeof req.body.reason === 'string' ? req.body.reason : null;
         try {
-            const result = await engine.rejectProposal(id, req.enmOwnerWallet, reason);
+            const result = await engine.rejectProposal(id, req.actorWallet, reason);
             if (!result.ok) {
                 const status = result.error && result.error.indexOf('not found') >= 0 ? 404 : 409;
                 return res.status(status).json(errorBody(result.error || 'Reject failed.'));

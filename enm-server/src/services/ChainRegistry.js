@@ -19,9 +19,9 @@ const { SelfHealingEngine } = require('./SelfHealingEngine');
 const { HealthChecker } = require('./HealthChecker');
 const { readNodeOwner } = require('../auth/OwnerCheckMiddleware');
 const { SyncTracker } = require('./SyncTracker');
-const { EnmAutoBuilder } = require('./EnmAutoBuilder');
 const { EnmBinaryDownloader } = require('./EnmBinaryDownloader');
 const { EnmKeystoreService } = require('./EnmKeystoreService');
+const ChainState = require('./ChainState');
 
 let initialized = false;
 let processService = null;
@@ -30,7 +30,6 @@ let logStreamer = null;
 let engine = null;
 let healthChecker = null;
 let syncTracker = null;
-let autoBuilder = null;
 let binaryDownloader = null;
 let keystoreService = null;
 let extensionHandleRef = null;
@@ -55,10 +54,29 @@ function init(extensionHandle) {
     // ProcessLogStreamer subscribes to processService events on construction.
     logStreamer = new ProcessLogStreamer({ processService, sseHub, extensionHandle });
     syncTracker = new SyncTracker();
-    autoBuilder = new EnmAutoBuilder({ extensionHandle, sseHub });
     binaryDownloader = new EnmBinaryDownloader({ logger: extensionHandle.log, sseHub });
     keystoreService = new EnmKeystoreService({ logger: extensionHandle.log });
     adapters.set('mainchain', new ElaMainChainAdapter({ processService, extensionHandle }));
+
+    // Boot self-heal: walk every known chain, reconcile in-memory state with
+    // disk reality. Per Architectural Invariant #6, ENM recovers from kill -9
+    // / DB loss / abandoned wizards without operator intervention.
+    try {
+        const summary = ChainState.reconcileOnBoot(
+            Array.from(adapters.keys()),
+            (level, msg) => {
+                const fn = extensionHandle.log[level] || extensionHandle.log.info;
+                fn(msg);
+            },
+        );
+        extensionHandle.log.info(
+            `[ENM] boot reconcile: ${summary.reconciled} chain(s), ${summary.stalePidsCleared} stale PID(s) cleared`
+            + (summary.anomalies.length ? `, anomalies: ${summary.anomalies.join('; ')}` : ''),
+        );
+    } catch (err) {
+        extensionHandle.log.warn(`[ENM] boot reconcile failed (non-fatal): ${err.message}`);
+    }
+
     initialized = true;
 }
 
@@ -79,11 +97,15 @@ function getSyncTracker() {
     return syncTracker;
 }
 
-function getAutoBuilder() {
-    if (!autoBuilder) {
-        throw new Error('ChainRegistry: not initialized');
-    }
-    return autoBuilder;
+/**
+ * Disk-derived snapshot of every known chain. Cheap; safe to call per-request.
+ * Returns the same shape as ChainState.snapshot but with one entry per chain.
+ *
+ * @returns {object[]} array of ChainState snapshots
+ */
+function snapshots() {
+    if (!initialized) return [];
+    return Array.from(adapters.keys()).map((id) => ChainState.snapshot(id));
 }
 
 /**
@@ -207,7 +229,8 @@ function _resetForTests() {
     engine = null;
     healthChecker = null;
     syncTracker = null;
-    autoBuilder = null;
+    binaryDownloader = null;
+    keystoreService = null;
     adapters = new Map();
 }
 
@@ -221,9 +244,9 @@ module.exports = {
     getEngine,
     getHealthChecker,
     getSyncTracker,
-    getAutoBuilder,
     getBinaryDownloader,
     getKeystoreService,
     listChains,
+    snapshots,
     _resetForTests,
 };

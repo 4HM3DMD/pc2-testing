@@ -28,6 +28,7 @@ const { ENM_LOG_PREFIX, MAINNET_DNS_SEEDS } = require('./EnmConstants');
 const { chainDir, atomicWrite } = require('./DataDir');
 const { getRpcPassword } = require('./ConfigStore');
 const { decrypt } = require('./EnmEncryption');
+const ChainState = require('./ChainState');
 const ExtIpResolver = require('./ExtIpResolver');
 
 const KEYSTORE_FILENAME = 'keystore.dat';
@@ -120,6 +121,29 @@ class ElaMainChainAdapter extends ChainAdapter {
      * @returns {Promise<{ pid: number, startedAt: number }>}
      */
     async start(cfg) {
+        // 0. Pre-flight: verify what's actually on disk before we spend
+        // time on config + spawn. Per Architectural Invariant #1, ChainState
+        // is the source of truth — not the cfg blob, not the in-memory
+        // downloader status. If the binary or keystore aren't where they
+        // should be, fail loudly with an actionable message.
+        const snap = ChainState.snapshot(this.chainId);
+        if (!snap.installed) {
+            throw new Error(
+                `${this.chainId}: binary not installed. Run the install step in the setup wizard, `
+                + `or POST /api/enm/setup/install/${this.chainId} to download it.`,
+            );
+        }
+        if (cfg.dpos && cfg.dpos.enableArbiter && !snap.keystorePresent) {
+            throw new Error(
+                `${this.chainId}: BPoS mode enabled but keystore.dat not found. `
+                + `Run the keystore step in the setup wizard, or switch to full-node mode.`,
+            );
+        }
+        // The downloaded binary path may differ from any stale cfg.binaryPath
+        // (e.g., after a binary upgrade). Always trust ChainState.
+        cfg.binaryPath = snap.binaryPath;
+        if (snap.binaryVersion) cfg.binaryVersion = snap.binaryVersion;
+
         // 1. External IP — use override if set, else resolve.
         let ipAddress = cfg.dpos.ipAddressManual;
         if (!ipAddress && cfg.dpos.ipAddressMode === 'auto') {

@@ -46,6 +46,7 @@ const logsRouter = require('./routes/logs');
 const healingRouter = require('./routes/healing');
 const auditRouter = require('./routes/audit');
 const configRouter = require('./routes/config');
+const evmRouter = require('./routes/evm');
 
 const PORT = parseInt(process.env.PORT || '4180', 10);
 const ENM_DATA_DIR = process.env.ENM_DATA_DIR || '/data/enm';
@@ -152,6 +153,10 @@ async function main() {
         engine: lazyEngine,
     }));
     api.use('/audit', auditRouter.build({ extensionHandle, getDb }));
+
+    // EVM placeholder (v0.5+). Reserves /api/enm/evm/* so future cross-chain
+    // routes can land without naming collisions. Returns 501 today.
+    api.use('/evm', evmRouter.build(extensionHandle));
 
     app.use(ENM_API_PREFIX, api);
 

@@ -133,6 +133,55 @@ function blockers(all) {
     return Array.isArray(all) ? all.filter((c) => c.severity === SEVERITY.CRITICAL) : [];
 }
 
+/**
+ * Detection-deduplication.
+ *
+ * The HealthChecker's slow tick fires `scan()` every 5 minutes. Without
+ * dedup, every tick that finds the same conflict (e.g., the same legacy
+ * config dir at ~/.config/elastos) re-emits the same audit-log entry. The
+ * operator's audit log filled with 100+ identical F19/F4 rows over 8
+ * hours.
+ *
+ * shouldEmit(signature, ttlMs) returns true only if no detection with the
+ * same signature has been seen within the TTL window. The signature
+ * combines (type, key fields) so distinct conflicts (different ports,
+ * different paths) emit independently — only TRUE duplicates suppress.
+ *
+ * Caller pattern (HealthChecker, post-scan):
+ *   for (const c of scan()) {
+ *     const sig = HostConflictScanner.signatureFor(c);
+ *     if (HostConflictScanner.shouldEmit(sig, 60 * 60_000)) emitAudit(c);
+ *   }
+ */
+const _seenDetections = new Map(); // signature -> lastEmittedAtMs
+function signatureFor(conflict) {
+    if (!conflict || typeof conflict !== 'object') return '';
+    const d = conflict.details || {};
+    return [
+        conflict.type || '',
+        d.port || '',
+        d.role || '',
+        d.path || '',
+        d.unit || '',
+        d.pid || '',
+    ].join('|');
+}
+function shouldEmit(signature, ttlMs) {
+    if (!signature) return true;
+    const now = Date.now();
+    const last = _seenDetections.get(signature);
+    if (last && (now - last) < (ttlMs || 60 * 60_000)) return false;
+    _seenDetections.set(signature, now);
+    // Drop entries older than 2x TTL to bound memory.
+    if (_seenDetections.size > 256) {
+        for (const [k, t] of _seenDetections.entries()) {
+            if ((now - t) > 2 * (ttlMs || 60 * 60_000)) _seenDetections.delete(k);
+        }
+    }
+    return true;
+}
+function _clearDedupForTests() { _seenDetections.clear(); }
+
 // ============================================================================
 // Probes
 // ============================================================================
@@ -279,22 +328,42 @@ async function scanPortBindings(out, run, log) {
     for (const { port, role } of portsToCheck) {
         try {
             const inUse = await checkPortInUse(port, run);
-            if (inUse.bound) {
-                out.push({
-                    type: TYPES.PORT_BOUND,
-                    severity: SEVERITY.CRITICAL,
-                    description: `Port ${port} (${role}) is already in use`,
-                    remediation: [
-                        'A different process is bound to this port.',
-                        platform === 'linux'
-                            ? `  sudo ss -tlnp | grep :${port}`
-                            : `  sudo lsof -i :${port}`,
-                        'Either stop that process, or change the port:',
-                        '  Settings → Mainchain Advanced → Ports',
-                    ],
-                    details: { port, role, holder: inUse.holder },
-                });
+            if (!inUse.bound) continue;
+
+            // Benign holders we ignore:
+            //   - docker-proxy: when our own docker-compose maps the port via
+            //     `ports: - "20336:20336"`, dockerd starts a docker-proxy
+            //     process that holds the host-side port and forwards into the
+            //     container's network namespace. Inside the container, ela can
+            //     still bind the same port (different namespace). Flagging
+            //     this as CRITICAL produced the F19 spam the operator hit.
+            //   - our own ela child PID: handled elsewhere (ROGUE_PROCESS only
+            //     fires for ela processes that aren't ours).
+            //
+            // The holder string from ss/lsof contains the process name + PID;
+            // grep for "docker-proxy" to match either tool's format.
+            if (inUse.holder && /docker-proxy/i.test(inUse.holder)) {
+                log.debug(
+                    `${ENM_LOG_PREFIX} port ${port} held by docker-proxy — `
+                    + `benign (compose port mapping forwarding into container).`,
+                );
+                continue;
             }
+
+            out.push({
+                type: TYPES.PORT_BOUND,
+                severity: SEVERITY.CRITICAL,
+                description: `Port ${port} (${role}) is already in use`,
+                remediation: [
+                    'A different process is bound to this port.',
+                    platform === 'linux'
+                        ? `  sudo ss -tlnp | grep :${port}`
+                        : `  sudo lsof -i :${port}`,
+                    'Either stop that process, or change the port:',
+                    '  Settings → Mainchain Advanced → Ports',
+                ],
+                details: { port, role, holder: inUse.holder },
+            });
         } catch (err) {
             log.debug(`${ENM_LOG_PREFIX} port-${port} probe failed: ${err.message}`);
         }
@@ -496,6 +565,9 @@ module.exports = {
     SYSTEMD_UNIT_NAMES,
     scan,
     blockers,
+    signatureFor,
+    shouldEmit,
+    _clearDedupForTests,
     // exposed for tests
     _internals: {
         scanLegacyConfig,

@@ -511,6 +511,56 @@ function detectF19(snap) {
 }
 
 /**
+ * Per-rule enable defaults. Per Architectural Invariant #7, healing ships
+ * with F1 (auto-restart on unexpected exit) only. F2-F19 are off until
+ * the operator opts in via /api/enm/healing/rules/:ruleId/enable.
+ *
+ * Why: prior versions ran every rule on every tick, producing 12 audit-log
+ * events per hour for the same conflict (the operator's F4/F19 spam). With
+ * F1-only, default installs see exactly one event per actual incident.
+ *
+ * Operators who want the full healing suite back can either flip these in
+ * code or hit the per-rule enable endpoint. The detection logic stays
+ * intact — we only gate which detectors actually run.
+ */
+const DEFAULT_ENABLED = Object.freeze({
+    F1: true,   // process exited unexpectedly → auto-restart
+    F2: false,  // RPC unreachable
+    F3: false,  // peer count zero
+    F4: false,  // sync stalled
+    F5: false,  // disk space
+    F6: false,  // log directory growth
+    F7: false,  // memory ceiling
+    F8: false,  // height regression
+    F9: false,  // config drift
+    F10: false, // RPC password rotation
+    F11: false, // BPoS deposit drift
+    F12: false, // producer inactiveRounds
+    F13: false, // clock skew
+    F16: false, // peer-zero fallback
+    F18: false, // BPoS no-inbound
+    F19: false, // host conflict (HostConflictScanner has its own dedup)
+});
+
+const _enabledOverrides = new Map();
+function setRuleEnabled(ruleId, enabled) {
+    _enabledOverrides.set(ruleId, !!enabled);
+}
+function isRuleEnabled(ruleId) {
+    if (_enabledOverrides.has(ruleId)) return _enabledOverrides.get(ruleId);
+    return !!DEFAULT_ENABLED[ruleId];
+}
+function listRuleStates() {
+    const all = Object.keys(DEFAULT_ENABLED);
+    return all.map((ruleId) => ({
+        ruleId,
+        defaultEnabled: DEFAULT_ENABLED[ruleId],
+        currentlyEnabled: isRuleEnabled(ruleId),
+        overridden: _enabledOverrides.has(ruleId),
+    }));
+}
+
+/**
  * Run F1-F19 in declaration order. Engine consumes the array as a queue —
  * higher-priority rules (F1 process-dead) appear first so a single tick
  * doesn't propose conflicting actions.
@@ -522,22 +572,27 @@ function runAll(snap) {
     /** @type {Array<Detection>} */
     const out = [];
     const detectors = [
-        detectF1,  detectF2,  detectF3,  detectF4,  detectF5,
-        detectF6,  detectF7,  detectF8,  detectF9,  detectF10,
-        detectF11, detectF12, detectF13, detectF16, detectF18,
-        detectF19,
+        ['F1',  detectF1],  ['F2',  detectF2],  ['F3',  detectF3],
+        ['F4',  detectF4],  ['F5',  detectF5],  ['F6',  detectF6],
+        ['F7',  detectF7],  ['F8',  detectF8],  ['F9',  detectF9],
+        ['F10', detectF10], ['F11', detectF11], ['F12', detectF12],
+        ['F13', detectF13], ['F16', detectF16], ['F18', detectF18],
+        ['F19', detectF19],
     ];
-    for (const fn of detectors) {
+    for (const [ruleId, fn] of detectors) {
+        if (!isRuleEnabled(ruleId)) continue;
         const d = fn(snap);
-        if (d) {
-            out.push(d);
-        }
+        if (d) out.push(d);
     }
     return out;
 }
 
 module.exports = {
     runAll,
+    DEFAULT_ENABLED,
+    setRuleEnabled,
+    isRuleEnabled,
+    listRuleStates,
     detectF1, detectF2, detectF3, detectF4, detectF5,
     detectF6, detectF7, detectF8, detectF9, detectF10,
     detectF11, detectF12, detectF13, detectF16, detectF18,
