@@ -11,7 +11,10 @@
 (function (root) {
     'use strict';
 
-    var POLL_INTERVAL_MS = 30_000;
+    // 5-second poll matches chain-card so the dashboard feels live across
+    // the board. /system/status is a cheap stat() over a few /proc paths
+    // — minimal load even at this cadence.
+    var POLL_INTERVAL_MS = 5_000;
 
     function SystemStatus(opts) {
         if (!opts || !opts.api) {

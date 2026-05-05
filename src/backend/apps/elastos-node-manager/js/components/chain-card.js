@@ -51,9 +51,18 @@
                 function (payload) { self._applyState(payload); },
             );
         }
+        var self = this;
+        // Live-metric poll — height/peers/uptime change constantly while
+        // the chain is alive; without a periodic refresh the values sit
+        // stale until something jolts a state-change SSE event. 5s is a
+        // good compromise between snappy UX and not hammering the RPC
+        // on every chain on the dashboard. (Real-time SSE push for these
+        // fields is a v0.6+ improvement — backend already polls RPC at
+        // similar cadence via HealthChecker; piggybacking on that via
+        // SseHub eliminates this poll entirely later.)
+        this._metricsTimer = setInterval(function () { self.refresh(); }, 5_000);
         // BPoS poll — once at mount and every 60s. Cheap because /producer
         // is a single RPC; absent if the chain isn't arbiter-mode.
-        var self = this;
         this._refreshProducer();
         this._producerTimer = setInterval(function () { self._refreshProducer(); }, 60_000);
         // Sync poll — adaptive cadence. Schedules itself; the helper picks
@@ -66,6 +75,7 @@
     ChainCard.prototype.destroy = function () {
         if (this._unsubscribe) { this._unsubscribe(); }
         if (this._cooldownTimer) { clearInterval(this._cooldownTimer); }
+        if (this._metricsTimer) { clearInterval(this._metricsTimer); }
         if (this._producerTimer) { clearInterval(this._producerTimer); }
         if (this._syncTimer) { clearTimeout(this._syncTimer); }
         if (this.root.parentNode) { this.root.parentNode.removeChild(this.root); }
