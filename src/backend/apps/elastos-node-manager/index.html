@@ -41,13 +41,23 @@
             </div>
             <div class="enm-header-spacer"></div>
             <div class="enm-header-actions">
-                <button type="button" class="enm-icon-btn" id="enm-theme-toggle" title="Toggle dark mode" aria-label="Toggle theme">
+                <!-- Theme toggle moved into the settings drawer in v0.4 P5C —
+                     this stays as a fallback for the error pane / pre-drawer
+                     boot states. Hidden in home mode (the gear opens the
+                     drawer where the operator can switch theme). -->
+                <button type="button" class="enm-icon-btn" id="enm-theme-toggle" title="Toggle dark mode" aria-label="Toggle theme" hidden>
                     <svg class="enm-icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
                     </svg>
                     <svg class="enm-icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <circle cx="12" cy="12" r="4"></circle>
                         <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"></path>
+                    </svg>
+                </button>
+                <button type="button" class="enm-icon-btn" id="enm-settings-toggle" title="Settings" aria-label="Open settings">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="3"></circle>
+                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
                     </svg>
                 </button>
             </div>
@@ -80,27 +90,29 @@
 
     <!-- Order matters: strings + utils first (used by services + components),
          then services, then components, then the app controller. -->
-    <script src="js/strings.js?ts=20260505d"></script>
-    <script src="js/utils.js?ts=20260505d"></script>
-    <script src="js/illustrations.js?ts=20260505d"></script>
-    <script src="js/services/wallet.js?ts=20260505d"></script>
-    <script src="js/services/api.js?ts=20260505d"></script>
-    <script src="js/services/sse.js?ts=20260505d"></script>
-    <script src="js/services/notifications.js?ts=20260505d"></script>
-    <script src="js/components/system-status.js?ts=20260505d"></script>
-    <script src="js/components/chain-card.js?ts=20260505d"></script>
-    <script src="js/components/producer-identity.js?ts=20260505d"></script>
-    <script src="js/components/log-viewer.js?ts=20260505d"></script>
-    <script src="js/components/proposal-card.js?ts=20260505d"></script>
-    <script src="js/components/setup-wizard.js?ts=20260505d"></script>
-    <script src="js/components/welcome-screen.js?ts=20260505d"></script>
-    <script src="js/components/setup-conversation.js?ts=20260505d"></script>
-    <script src="js/components/hero-card.js?ts=20260505d"></script>
-    <script src="js/components/stat-strip.js?ts=20260505d"></script>
-    <script src="js/components/milestone-toast.js?ts=20260505d"></script>
-    <script src="js/components/settings-tab.js?ts=20260505d"></script>
-    <script src="js/components/audit-tab.js?ts=20260505d"></script>
-    <script src="js/components/evm-tab.js?ts=20260505d"></script>
-    <script src="js/app.js?ts=20260505d"></script>
+    <script src="js/strings.js?ts=20260505e"></script>
+    <script src="js/utils.js?ts=20260505e"></script>
+    <script src="js/illustrations.js?ts=20260505e"></script>
+    <script src="js/services/wallet.js?ts=20260505e"></script>
+    <script src="js/services/api.js?ts=20260505e"></script>
+    <script src="js/services/sse.js?ts=20260505e"></script>
+    <script src="js/services/notifications.js?ts=20260505e"></script>
+    <script src="js/components/system-status.js?ts=20260505e"></script>
+    <script src="js/components/chain-card.js?ts=20260505e"></script>
+    <script src="js/components/producer-identity.js?ts=20260505e"></script>
+    <script src="js/components/log-viewer.js?ts=20260505e"></script>
+    <script src="js/components/proposal-card.js?ts=20260505e"></script>
+    <script src="js/components/setup-wizard.js?ts=20260505e"></script>
+    <script src="js/components/welcome-screen.js?ts=20260505e"></script>
+    <script src="js/components/setup-conversation.js?ts=20260505e"></script>
+    <script src="js/components/hero-card.js?ts=20260505e"></script>
+    <script src="js/components/stat-strip.js?ts=20260505e"></script>
+    <script src="js/components/milestone-toast.js?ts=20260505e"></script>
+    <script src="js/components/settings-tab.js?ts=20260505e"></script>
+    <script src="js/components/audit-tab.js?ts=20260505e"></script>
+    <script src="js/components/evm-tab.js?ts=20260505e"></script>
+    <script src="js/components/settings-drawer.js?ts=20260505e"></script>
+    <script src="js/components/technical-view.js?ts=20260505e"></script>
+    <script src="js/app.js?ts=20260505e"></script>
 </body>
 </html>

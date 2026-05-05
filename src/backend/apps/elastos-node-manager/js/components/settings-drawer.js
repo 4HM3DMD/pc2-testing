@@ -1,0 +1,280 @@
+/*
+ * Copyright (C) 2026-present Elacity
+ * SPDX-License-Identifier: AGPL-3.0
+ *
+ * components/settings-drawer.js — slide-in settings panel (v0.4 P5C).
+ *
+ * Right-side drawer with three sections (eli5 framing per the
+ * vocabulary rule):
+ *
+ *   When to tell me                  — notification preferences
+ *   How my ElastOS behaves           — auto-restart + auto-heal toggles
+ *   For the technically curious      — disclosure to the v0.3 dashboard
+ *
+ * Theme toggle lives here too, so the header bar can collapse to a
+ * single gear icon. Settings persist via localStorage today (the
+ * server-side preference store is v0.5+ work — these toggles are UI-
+ * only for now).
+ *
+ * "Show technical details" closes the drawer and asks the parent
+ * (app.js) to swap the home view for the technical view via
+ * onShowTechnical().
+ *
+ * "Reinstall my node" calls onReinstall() — parent decides whether
+ * to relaunch the setup conversation or run a destructive reset.
+ */
+
+(function (root) {
+    'use strict';
+
+    var STORAGE_KEY = 'enm-prefs-v1';
+    var DEFAULTS = {
+        notifyHelp:      true,
+        notifyMilestones: true,
+        notifyWeekly:    false,
+        autoRestart:     true,    // mirrors backend F1 (already on by default)
+        autoHeal:        false,   // F2-F19 opt-in
+    };
+
+    function loadPrefs() {
+        try {
+            var raw = localStorage.getItem(STORAGE_KEY);
+            var saved = raw ? JSON.parse(raw) : {};
+            return Object.assign({}, DEFAULTS, saved);
+        } catch (e) { return Object.assign({}, DEFAULTS); }
+    }
+
+    function savePrefs(prefs) {
+        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(prefs)); }
+        catch (e) { /* ignore */ }
+    }
+
+    function SettingsDrawer(opts) {
+        opts = opts || {};
+        this.notifications  = opts.notifications || null;
+        this.onShowTechnical = typeof opts.onShowTechnical === 'function'
+            ? opts.onShowTechnical
+            : function () {};
+        this.onReinstall = typeof opts.onReinstall === 'function'
+            ? opts.onReinstall
+            : function () {};
+
+        this._prefs = loadPrefs();
+        this._open = false;
+        this._builtBody = false;
+
+        this.root = document.createElement('div');
+        this.root.className = 'enm-drawer-root';
+        this.root.hidden = true;
+
+        this._renderShell();
+    }
+
+    SettingsDrawer.prototype.mount = function (parent) {
+        parent.appendChild(this.root);
+        return this;
+    };
+
+    SettingsDrawer.prototype.destroy = function () {
+        if (this.root.parentNode) { this.root.parentNode.removeChild(this.root); }
+    };
+
+    SettingsDrawer.prototype.open = function () {
+        if (this._open) { return; }
+        this._open = true;
+        this.root.hidden = false;
+        if (!this._builtBody) { this._buildBody(); this._builtBody = true; }
+        // Trigger the slide-in via the next frame so CSS transitions fire.
+        requestAnimationFrame(function () {
+            this.root.classList.add('enm-drawer-open');
+        }.bind(this));
+        // ESC to close.
+        this._escHandler = function (ev) {
+            if (ev.key === 'Escape') { this.close(); }
+        }.bind(this);
+        document.addEventListener('keydown', this._escHandler);
+    };
+
+    SettingsDrawer.prototype.close = function () {
+        if (!this._open) { return; }
+        this._open = false;
+        this.root.classList.remove('enm-drawer-open');
+        if (this._escHandler) {
+            document.removeEventListener('keydown', this._escHandler);
+            this._escHandler = null;
+        }
+        // Wait for the slide-out transition before hiding so it animates.
+        var self = this;
+        setTimeout(function () { if (!self._open) { self.root.hidden = true; } }, 320);
+    };
+
+    /** @private */
+    SettingsDrawer.prototype._renderShell = function () {
+        this.root.innerHTML =
+            '<div class="enm-drawer-backdrop"></div>'
+            + '<aside class="enm-drawer" role="dialog" aria-label="Settings">'
+              + '<header class="enm-drawer-header">'
+                + '<h2>Settings</h2>'
+                + '<button type="button" class="enm-drawer-close" aria-label="Close">×</button>'
+              + '</header>'
+              + '<div class="enm-drawer-body"></div>'
+            + '</aside>';
+
+        var self = this;
+        this.root.querySelector('.enm-drawer-backdrop').addEventListener('click', function () { self.close(); });
+        this.root.querySelector('.enm-drawer-close').addEventListener('click', function () { self.close(); });
+    };
+
+    /** @private */
+    SettingsDrawer.prototype._buildBody = function () {
+        var body = this.root.querySelector('.enm-drawer-body');
+        var self = this;
+        body.innerHTML = '';
+
+        // ---- Section 1: When to tell me ---------------------------------
+        body.appendChild(makeSection('When to tell me', [
+            makeToggle('notifyHelp',       'Tell me when my ElastOS needs help'),
+            makeToggle('notifyMilestones', 'Celebrate milestones (first reward, etc.)'),
+            makeToggle('notifyWeekly',     'Send me a weekly summary'),
+        ], this._prefs, function (key, value) {
+            self._prefs[key] = value;
+            savePrefs(self._prefs);
+        }));
+
+        // ---- Section 2: How my ElastOS behaves --------------------------
+        body.appendChild(makeSection('How my ElastOS behaves', [
+            makeToggle('autoRestart', 'Restart automatically if it crashes'),
+            makeToggleWithHelp('autoHeal',
+                'Try to fix problems without asking me',
+                'Recommended only for experienced operators.'),
+        ], this._prefs, function (key, value) {
+            self._prefs[key] = value;
+            savePrefs(self._prefs);
+            // Eventually wire to /api/enm/healing/rules/:id/enable for autoHeal.
+            // Today: localStorage only (UI surfaces the choice; backend still
+            // F1-only-default per Wave 1 invariant).
+        }));
+
+        // ---- Section 3: Appearance --------------------------------------
+        var appearance = makeSection('Appearance', [], this._prefs, function () {});
+        var themeBtn = document.createElement('button');
+        themeBtn.type = 'button';
+        themeBtn.className = 'enm-drawer-row enm-drawer-row-action';
+        themeBtn.innerHTML =
+            '<span class="enm-drawer-row-label">'
+              + '<span id="enm-drawer-theme-label">Switch to dark mode</span>'
+            + '</span>'
+            + '<span class="enm-drawer-row-chevron" aria-hidden="true">›</span>';
+        appearance.querySelector('.enm-drawer-rows').appendChild(themeBtn);
+        body.appendChild(appearance);
+
+        function refreshThemeLabel() {
+            var dark = document.documentElement.getAttribute('data-theme') === 'dark';
+            themeBtn.querySelector('#enm-drawer-theme-label').textContent =
+                dark ? 'Switch to light mode' : 'Switch to dark mode';
+        }
+        refreshThemeLabel();
+        themeBtn.addEventListener('click', function () {
+            var current = document.documentElement.getAttribute('data-theme');
+            var next = (current === 'dark') ? 'light' : 'dark';
+            if (next === 'dark') {
+                document.documentElement.setAttribute('data-theme', 'dark');
+            } else {
+                document.documentElement.removeAttribute('data-theme');
+            }
+            try { localStorage.setItem('elacity-theme', next); } catch (e) {}
+            refreshThemeLabel();
+        });
+
+        // ---- Section 4: For the technically curious ---------------------
+        var advanced = makeSection('For the technically curious', [], this._prefs, function () {});
+        var rows = advanced.querySelector('.enm-drawer-rows');
+
+        var techBtn = makeAction('Show technical details', function () {
+            self.close();
+            self.onShowTechnical();
+        });
+        var reinstallBtn = makeAction('Reinstall my node', function () {
+            if (!confirm('Reinstall your node? This re-runs the setup wizard. Your existing config will stay until you finish setup again.')) { return; }
+            self.close();
+            self.onReinstall();
+        });
+        rows.appendChild(techBtn);
+        rows.appendChild(reinstallBtn);
+        body.appendChild(advanced);
+    };
+
+    function makeSection(title, rows, prefs, onChange) {
+        var section = document.createElement('section');
+        section.className = 'enm-drawer-section';
+        section.innerHTML = '<h3 class="enm-drawer-section-title">' + escapeHtml(title) + '</h3>'
+            + '<div class="enm-drawer-rows"></div>';
+        var rowsWrap = section.querySelector('.enm-drawer-rows');
+        rows.forEach(function (row) {
+            var el = row.build(prefs, onChange);
+            rowsWrap.appendChild(el);
+        });
+        return section;
+    }
+
+    // Each row is a builder so we can lazily evaluate against the prefs object.
+    function makeToggle(key, label) {
+        return {
+            build: function (prefs, onChange) {
+                var row = document.createElement('label');
+                row.className = 'enm-drawer-row enm-drawer-row-toggle';
+                row.innerHTML =
+                    '<span class="enm-drawer-row-label">' + escapeHtml(label) + '</span>'
+                    + '<span class="enm-drawer-toggle">'
+                      + '<input type="checkbox"' + (prefs[key] ? ' checked' : '') + '/>'
+                      + '<span class="enm-drawer-toggle-track"></span>'
+                    + '</span>';
+                row.querySelector('input').addEventListener('change', function (ev) {
+                    onChange(key, ev.target.checked);
+                });
+                return row;
+            },
+        };
+    }
+
+    function makeToggleWithHelp(key, label, help) {
+        return {
+            build: function (prefs, onChange) {
+                var row = document.createElement('label');
+                row.className = 'enm-drawer-row enm-drawer-row-toggle';
+                row.innerHTML =
+                    '<span class="enm-drawer-row-label">'
+                      + escapeHtml(label)
+                      + '<span class="enm-drawer-row-help">' + escapeHtml(help) + '</span>'
+                    + '</span>'
+                    + '<span class="enm-drawer-toggle">'
+                      + '<input type="checkbox"' + (prefs[key] ? ' checked' : '') + '/>'
+                      + '<span class="enm-drawer-toggle-track"></span>'
+                    + '</span>';
+                row.querySelector('input').addEventListener('change', function (ev) {
+                    onChange(key, ev.target.checked);
+                });
+                return row;
+            },
+        };
+    }
+
+    function makeAction(label, onClick) {
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'enm-drawer-row enm-drawer-row-action';
+        btn.innerHTML =
+            '<span class="enm-drawer-row-label">' + escapeHtml(label) + '</span>'
+            + '<span class="enm-drawer-row-chevron" aria-hidden="true">›</span>';
+        btn.addEventListener('click', onClick);
+        return btn;
+    }
+
+    function escapeHtml(s) {
+        return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+            return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
+        });
+    }
+
+    root.EnmSettingsDrawer = SettingsDrawer;
+}(typeof window !== 'undefined' ? window : globalThis));

@@ -2780,6 +2780,278 @@ html, body {
 }
 
 /* ============================================================
+   v0.4 Phase 5C — settings drawer + technical view wrapper
+   ============================================================ */
+
+/* ---- Drawer root + backdrop ---- */
+.enm-drawer-root {
+    position: fixed;
+    inset: 0;
+    z-index: 9998;
+    pointer-events: none;
+}
+.enm-drawer-root[hidden] { display: none !important; }
+
+.enm-drawer-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0);
+    transition: background var(--motion-base) var(--ease-out);
+    pointer-events: none;
+}
+.enm-drawer-root.enm-drawer-open .enm-drawer-backdrop {
+    background: rgba(0, 0, 0, 0.4);
+    pointer-events: auto;
+}
+
+.enm-drawer {
+    position: absolute;
+    top: 0;
+    right: 0;
+    height: 100%;
+    width: min(440px, 92vw);
+    background: var(--bg-surface);
+    border-left: 1px solid var(--border-color);
+    box-shadow: var(--shadow-lg);
+    transform: translateX(100%);
+    transition: transform 320ms var(--ease-out);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    pointer-events: auto;
+}
+.enm-drawer-root.enm-drawer-open .enm-drawer {
+    transform: translateX(0);
+}
+@media (prefers-reduced-motion: reduce) {
+    .enm-drawer { transition: none; }
+    .enm-drawer-backdrop { transition: none; }
+}
+
+/* Drawer header */
+.enm-drawer-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--spacing-md) var(--spacing-lg);
+    border-bottom: 1px solid var(--border-color);
+    flex-shrink: 0;
+}
+.enm-drawer-header h2 {
+    font-size: 18px;
+    font-weight: 600;
+    margin: 0;
+    color: var(--text-primary);
+}
+.enm-drawer-close {
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-size: 24px;
+    line-height: 1;
+    cursor: pointer;
+    border-radius: 50%;
+    transition: background var(--motion-fast) var(--ease-out),
+                color var(--motion-fast) var(--ease-out);
+}
+.enm-drawer-close:hover { background: var(--bg-muted); color: var(--text-primary); }
+.enm-drawer-close:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+
+/* Drawer body — scrollable */
+.enm-drawer-body {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    padding: var(--spacing-md) 0;
+}
+
+/* Drawer sections */
+.enm-drawer-section {
+    padding: var(--spacing-sm) 0 var(--spacing-md);
+}
+.enm-drawer-section + .enm-drawer-section {
+    border-top: 1px solid var(--border-color);
+}
+.enm-drawer-section-title {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin: 0 0 var(--spacing-xs);
+    padding: 0 var(--spacing-lg);
+}
+.enm-drawer-rows {
+    display: flex;
+    flex-direction: column;
+}
+
+/* Row — both toggle rows and action buttons share this base */
+.enm-drawer-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--spacing-md);
+    padding: var(--spacing-md) var(--spacing-lg);
+    cursor: pointer;
+    user-select: none;
+    transition: background var(--motion-fast) var(--ease-out);
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    width: 100%;
+    text-align: left;
+    font: inherit;
+    color: inherit;
+}
+.enm-drawer-row:hover { background: var(--bg-muted); }
+.enm-drawer-row:focus-visible {
+    outline: none;
+    box-shadow: inset var(--focus-ring);
+}
+.enm-drawer-row-label {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-size: 14px;
+    color: var(--text-primary);
+    flex: 1 1 auto;
+    min-width: 0;
+}
+.enm-drawer-row-help {
+    font-size: 12px;
+    color: var(--text-muted);
+    line-height: 1.4;
+}
+.enm-drawer-row-chevron {
+    color: var(--text-muted);
+    font-size: 18px;
+    line-height: 1;
+    flex-shrink: 0;
+}
+
+/* Toggle switch — matches PC2 settings panels visually */
+.enm-drawer-toggle {
+    position: relative;
+    width: 44px;
+    height: 24px;
+    flex-shrink: 0;
+}
+.enm-drawer-toggle input {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    cursor: pointer;
+    z-index: 2;
+    margin: 0;
+}
+.enm-drawer-toggle-track {
+    position: absolute;
+    inset: 0;
+    background: var(--border-strong);
+    border-radius: 999px;
+    transition: background var(--motion-fast) var(--ease-out);
+}
+.enm-drawer-toggle-track::after {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 20px;
+    height: 20px;
+    background: white;
+    border-radius: 50%;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+    transition: transform var(--motion-fast) var(--ease-out);
+}
+.enm-drawer-toggle input:checked ~ .enm-drawer-toggle-track {
+    background: var(--primary);
+}
+.enm-drawer-toggle input:checked ~ .enm-drawer-toggle-track::after {
+    transform: translateX(20px);
+}
+.enm-drawer-toggle input:focus-visible ~ .enm-drawer-toggle-track {
+    box-shadow: 0 0 0 3px var(--focus-ring-color);
+}
+
+/* ---- Technical view wrapper ---- */
+.enm-tech {
+    width: 100%;
+    max-width: 1080px;
+    margin: 0 auto;
+    padding: var(--spacing-xl) var(--spacing-lg) var(--spacing-2xl);
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-lg);
+}
+
+.enm-tech-header {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-xs);
+}
+
+.enm-tech-back {
+    align-self: flex-start;
+    margin-bottom: var(--spacing-sm);
+}
+
+.enm-tech-title {
+    font-size: 24px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0;
+}
+
+.enm-tech-sub {
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--text-secondary);
+    margin: 0;
+    max-width: 640px;
+}
+
+.enm-tech-tabs {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-xs);
+    padding-bottom: var(--spacing-xs);
+    border-bottom: 1px solid var(--border-color);
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+.enm-tech-tabs::-webkit-scrollbar { display: none; }
+
+.enm-tech-content {
+    position: relative;
+    min-height: 200px;
+}
+
+.enm-tech-pane {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-lg);
+}
+.enm-tech-pane[hidden] { display: none; }
+
+/* Inside the technical view, child cards (chain-card, producer-identity,
+   etc.) shouldn't inherit the home-view max-width clamp from
+   #enm-pane-dashboard's child rule — they need full tech-view width. */
+.enm-tech .enm-chain-card,
+.enm-tech .enm-system-status,
+.enm-tech .enm-producer-identity,
+.enm-tech .enm-card,
+.enm-tech .enm-settings,
+.enm-tech .enm-audit,
+.enm-tech .enm-log-viewer {
+    max-width: none;
+    margin-left: 0;
+    margin-right: 0;
+}
+
+/* ============================================================
    Print — hide chrome, render cards as plain blocks
    ============================================================ */
 

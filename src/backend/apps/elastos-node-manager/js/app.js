@@ -36,12 +36,19 @@
             content:      document.getElementById('enm-content'),
             tabs:         document.getElementById('enm-tabs'),
             themeToggle:  document.getElementById('enm-theme-toggle'),
+            settingsToggle: document.getElementById('enm-settings-toggle'),
             paneDashboard: document.getElementById('enm-pane-dashboard'),
             paneLogs:     document.getElementById('enm-pane-logs'),
             paneSettings: document.getElementById('enm-pane-settings'),
             paneAudit:    document.getElementById('enm-pane-audit'),
             paneEvm:      document.getElementById('enm-pane-evm'),
         };
+
+        // The drawer (Phase 5C) is mounted once at app boot — it lives at
+        // the top level so it can overlay any view (welcome, setup, home,
+        // technical). It stays hidden until the gear icon is tapped.
+        this._drawer = null;
+        this._technicalView = null;
 
         this.services = {
             wallet:        new root.EnmWalletService(),
@@ -64,6 +71,7 @@
         });
 
         this._wireThemeToggle();
+        this._wireSettingsToggle();
 
         // Step 3 + 4: probe backend, then decide wizard vs dashboard.
         return this.services.api.get('/health', { skipCache: true })
@@ -94,6 +102,10 @@
      * Pre-paint script in index.html applies the saved theme before
      * first render, so this method only handles user clicks.
      *
+     * In v0.4 P5C this is moved INTO the settings drawer, but the
+     * top-level toggle button stays in the DOM as a fallback for any
+     * view where the drawer isn't mounted (e.g. error pane).
+     *
      * @private
      */
     ENMApp.prototype._wireThemeToggle = function () {
@@ -108,6 +120,61 @@
             }
             try { localStorage.setItem('elacity-theme', next); } catch (e) { /* ignore */ }
         });
+    };
+
+    /**
+     * Wire the gear icon in the home header to open the settings drawer.
+     * Lazy-mounts the drawer on first click so we don't pay for it
+     * during welcome / setup flows.
+     *
+     * @private
+     */
+    ENMApp.prototype._wireSettingsToggle = function () {
+        if (!this.els.settingsToggle) { return; }
+        var self = this;
+        this.els.settingsToggle.addEventListener('click', function () {
+            self._openSettingsDrawer();
+        });
+    };
+
+    /** @private */
+    ENMApp.prototype._openSettingsDrawer = function () {
+        if (!root.EnmSettingsDrawer) { return; }
+        if (!this._drawer) {
+            var self = this;
+            this._drawer = new root.EnmSettingsDrawer({
+                notifications: this.services.notifications,
+                onShowTechnical: function () { self._showTechnicalView(); },
+                onReinstall:     function () { self._showSetupWizard(); },
+            });
+            this._drawer.mount(document.body);
+        }
+        this._drawer.open();
+    };
+
+    /**
+     * Swap the home view for the v0.3 dashboard wrapper. "Back to home"
+     * inside the technical view calls _showDashboard to restore.
+     *
+     * @private
+     */
+    ENMApp.prototype._showTechnicalView = function () {
+        if (!root.EnmTechnicalView) { return; }
+        this._revealContent();
+        this._collapseHeaderToHome();
+        this._clearPanes();
+        if (this._technicalView) {
+            this._technicalView.destroy();
+            this._technicalView = null;
+        }
+        var self = this;
+        this._technicalView = new root.EnmTechnicalView({
+            api: this.services.api,
+            sse: this.services.sse,
+            notifications: this.services.notifications,
+            onBackHome: function () { self._showDashboard(); },
+        });
+        this._technicalView.mount(this.els.paneDashboard);
     };
 
     ENMApp.prototype._showSetupWizard = function () {
@@ -179,11 +246,23 @@
     ENMApp.prototype._showDashboard = function () {
         // v0.4 home view: hero card (focal-point status) + stat strip
         // (earnings/uptime/friends) + producer identity (BPoS only).
-        // The v0.3 dashboard moves under "Show technical details" in
-        // the settings drawer (Phase 5C).
+        // The v0.3 dashboard now lives behind "Show technical details"
+        // in the settings drawer (Phase 5C).
         this._revealContent();
         this._collapseHeaderToHome();
         this._clearPanes();
+
+        // Tear down the technical view if we're returning from it.
+        if (this._technicalView) {
+            this._technicalView.destroy();
+            this._technicalView = null;
+        }
+        // And clear the milestone interval before remounting (otherwise
+        // back-and-forth between home / technical view leaks timers).
+        if (this._milestoneTimer) {
+            clearInterval(this._milestoneTimer);
+            this._milestoneTimer = null;
+        }
 
         var self = this;
         var pane = this.els.paneDashboard;
