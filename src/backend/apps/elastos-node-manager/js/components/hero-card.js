@@ -43,6 +43,7 @@
 
         this._state = null;       // last raw state from /chains/:id
         this._role  = null;       // 'bpos' | 'full' | null
+        this._producerState = null; // 'Active' | 'Inactive' | 'Pending' | etc.
         this._unsubStatus = null;
         this._pollTimer = null;
     }
@@ -80,6 +81,7 @@
             var chain = results[0];
             var producer = results[1];
             self._role = (producer && producer.enabled) ? 'bpos' : 'full';
+            self._producerState = (producer && producer.state) || null;
             self._applyState(chain || { state: 'unconfigured' });
         });
     };
@@ -173,6 +175,33 @@
                 })
             );
             return;
+        }
+
+        // Producer in Inactive state — operator's most urgent action,
+        // surfaces ABOVE the regular alive/stopped buttons. Tapping
+        // runs ela_activate_bpos server-side.
+        if (this._role === 'bpos' && this._producerState === 'Inactive') {
+            var reactivateBtn = makeBtn('Reactivate my BPoS supernode', 'hero', function (ev) {
+                if (!confirm(
+                    "This sends a 'producer activate' transaction on-chain "
+                    + 'using your keystore. Continue?'
+                )) { return; }
+                ev.target.disabled = true;
+                ev.target.textContent = 'Reactivating…';
+                self.api.post('/chains/' + self.chainId + '/bpos/activate').then(function () {
+                    if (self.notifications) {
+                        self.notifications.info('Reactivation submitted',
+                            'It can take a block or two for the chain to flip you back to Active.');
+                    }
+                }).catch(function (err) {
+                    if (self.notifications) {
+                        self.notifications.warning('Reactivation failed',
+                            err && err.message ? err.message : String(err));
+                    }
+                }).then(function () { self.refresh(); });
+            });
+            this._els.actions.appendChild(reactivateBtn);
+            // Fall through so Pause / etc. still appear below it.
         }
 
         if (coarse === 'stopped') {

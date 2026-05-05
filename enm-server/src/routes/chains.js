@@ -31,6 +31,9 @@ const ConfigStore = require('../services/ConfigStore');
 const HostConflictScanner = require('../services/HostConflictScanner');
 const Diagnostics = require('../services/Diagnostics');
 const LogCompactor = require('../services/LogCompactor');
+const ChainState = require('../services/ChainState');
+const EnmBposService = require('../services/EnmBposService');
+const { decrypt } = require('../services/EnmEncryption');
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
@@ -419,6 +422,101 @@ function build(extensionHandle) {
             return res.json(successBody(report));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} POST /chains/${req.params.chainId}/compact-logs: ${err.message}`);
+            return res.status(500).json(errorBody(err.message));
+        }
+    });
+
+    // Re-download the latest binary in place. Mirrors node.sh's
+    // `ela_update` (build/skeleton/node.sh:1173). Caller decides whether
+    // to stop/start the chain around it; this route just kicks off the
+    // download. Progress flows on the existing SSE topic
+    // `setup:install:<chainId>` so the wizard's progress UI works here too.
+    router.post('/:chainId/update', limit('admin'), requireOwner, async (req, res) => {
+        try {
+            const adapter = adapterOr404(req, res, extensionHandle);
+            if (!adapter) return undefined;
+            const downloader = ChainRegistry.getBinaryDownloader();
+            if (!downloader) {
+                return res.status(503).json(errorBody('Binary downloader is not available.'));
+            }
+            const result = await downloader.start(adapter.chainId);
+            return res.json(successBody({
+                alreadyRunning: result.alreadyRunning,
+                status: result.status,
+            }));
+        } catch (err) {
+            extensionHandle.log.error(`${ENM_LOG_PREFIX} POST /chains/${req.params.chainId}/update: ${err.message}`);
+            return res.status(500).json(errorBody(err.message));
+        }
+    });
+
+    // ela_activate_bpos — bring an Inactive producer back to Active.
+    // The keystore + password live on this server (server-side signing
+    // is allowed; only browser-wallet signing is forbidden per
+    // Architectural Invariant #2).
+    router.post('/:chainId/bpos/activate', limit('admin'), requireOwner, async (req, res) => {
+        try {
+            const adapter = adapterOr404(req, res, extensionHandle);
+            if (!adapter) return undefined;
+            const chainId = adapter.chainId;
+            if (chainId !== 'mainchain') {
+                return res.status(400).json(errorBody(
+                    'BPoS lifecycle is only defined on the ELA mainchain.',
+                ));
+            }
+            const snapshot = await ChainState.snapshot(chainId);
+            if (!snapshot.cliPath) {
+                return res.status(400).json(errorBody(
+                    'ela-cli not yet installed. Open Settings → Show technical details → Status and click Update binary first.',
+                ));
+            }
+            if (!snapshot.keystorePresent) {
+                return res.status(400).json(errorBody(
+                    'No keystore on disk — generate one via the setup conversation first.',
+                ));
+            }
+            const cfg = await ConfigStore.load();
+            const chainCfg = cfg.chains && cfg.chains[chainId];
+            const envelope = chainCfg && chainCfg.dpos && chainCfg.dpos.keystorePasswordEncrypted;
+            if (!envelope) {
+                return res.status(400).json(errorBody(
+                    'Keystore password not stashed — re-import the keystore via Reinstall my node.',
+                ));
+            }
+            let password;
+            try { password = decrypt(envelope); }
+            catch (err) {
+                return res.status(500).json(errorBody(
+                    `Cannot decrypt keystore password: ${err.message}.`,
+                ));
+            }
+
+            const bpos = new EnmBposService({ logger: extensionHandle.log });
+            const result = await bpos.activate({
+                chainId,
+                cliPath: snapshot.cliPath,
+                publicKey: snapshot.publicKey,
+                password,
+            });
+
+            // Don't keep the plaintext on the response or in any cache.
+            password = null;
+
+            if (!result.ok) {
+                extensionHandle.log.warn(
+                    `${ENM_LOG_PREFIX} ${chainId} BPoS activate rejected by chain: ${result.error}`,
+                );
+                return res.status(400).json(errorBody(result.error, {
+                    buildOutput: result.buildOutput,
+                    sendOutput: result.sendOutput,
+                }));
+            }
+            return res.json(successBody({
+                buildOutput: result.buildOutput,
+                sendOutput: result.sendOutput,
+            }));
+        } catch (err) {
+            extensionHandle.log.error(`${ENM_LOG_PREFIX} POST /chains/${req.params.chainId}/bpos/activate: ${err.message}`);
             return res.status(500).json(errorBody(err.message));
         }
     });

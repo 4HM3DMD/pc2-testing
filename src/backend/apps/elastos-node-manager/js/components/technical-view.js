@@ -163,6 +163,10 @@
                 prod.mount(pane);
                 this._mounted['status_prod'] = prod;
             }
+            // Maintenance section — ela_update / compact-logs /
+            // ela_activate_bpos. Power-user terminology because this is
+            // already inside the technical view.
+            this._renderMaintenance(pane);
         } else if (tabId === 'logs') {
             if (root.EnmLogViewer && this.sse) {
                 var viewer = new root.EnmLogViewer(common);
@@ -190,6 +194,90 @@
                 this._mounted[tabId] = evm;
             }
         }
+    };
+
+    /**
+     * Maintenance section for the Status pane — surfaces the node.sh
+     * commands operators historically ran by hand.
+     *
+     * @private
+     */
+    TechnicalView.prototype._renderMaintenance = function (pane) {
+        var self = this;
+        var sec = document.createElement('section');
+        sec.className = 'enm-card enm-tech-maintenance';
+        sec.innerHTML =
+            '<h3 class="enm-tech-maintenance-title">Maintenance</h3>'
+            + '<p class="enm-tech-maintenance-sub">'
+              + 'Mirrors the node.sh helpers operators used to run by hand. '
+              + 'Each action runs on this server with the keystore + binaries '
+              + 'we already manage; nothing leaves this PC2.'
+            + '</p>'
+            + '<div class="enm-tech-maintenance-rows">'
+              + this._maintenanceRow('compact', 'Compact logs',
+                  'Gzip + purge ela.log per the rotation policy. Same as the daily cron — exposed for "free space now".')
+              + this._maintenanceRow('update', 'Update binary',
+                  "Re-download the latest <code>ela</code> + <code>ela-cli</code> from download.elastos.io. Stop the chain first if it's running; we don't auto-stop.")
+              + this._maintenanceRow('activate', 'Reactivate BPoS supernode',
+                  "Sends a <code>producer activate</code> transaction so the chain flips your producer state from Inactive back to Active. Requires a keystore + funded deposit address.")
+            + '</div>';
+        pane.appendChild(sec);
+
+        // Wire each row.
+        sec.querySelector('[data-action="compact"]').addEventListener('click', function (ev) {
+            self._runMaintenance(ev.currentTarget, '/chains/mainchain/compact-logs',
+                'Logs compacted', 'Compaction failed');
+        });
+        sec.querySelector('[data-action="update"]').addEventListener('click', function (ev) {
+            if (!confirm("This re-downloads the latest binary. If the chain is running, "
+                + "stop it first via the Mainchain card above — otherwise the running "
+                + "ela may keep the old file open.")) { return; }
+            self._runMaintenance(ev.currentTarget, '/chains/mainchain/update',
+                'Update started — watch the Logs sub-tab for progress', 'Update failed to start');
+        });
+        sec.querySelector('[data-action="activate"]').addEventListener('click', function (ev) {
+            if (!confirm("This sends a 'producer activate' transaction on-chain "
+                + 'using your keystore. Continue?')) { return; }
+            self._runMaintenance(ev.currentTarget, '/chains/mainchain/bpos/activate',
+                'Reactivation submitted — wait a block or two for chain confirmation',
+                'Reactivation rejected');
+        });
+    };
+
+    /** @private */
+    TechnicalView.prototype._maintenanceRow = function (action, label, help) {
+        return ''
+            + '<div class="enm-tech-maintenance-row">'
+              + '<div class="enm-tech-maintenance-text">'
+                + '<div class="enm-tech-maintenance-label">' + escapeHtml(label) + '</div>'
+                + '<div class="enm-tech-maintenance-help">' + help + '</div>'
+              + '</div>'
+              + '<button type="button" class="enm-btn enm-btn-secondary" data-action="' + escapeHtml(action) + '">'
+                + 'Run'
+              + '</button>'
+            + '</div>';
+    };
+
+    /** @private */
+    TechnicalView.prototype._runMaintenance = function (btn, path, okMessage, errPrefix) {
+        var self = this;
+        var prev = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = 'Running…';
+        this.api.post(path).then(function (data) {
+            if (self.notifications) {
+                self.notifications.info(okMessage, '');
+            }
+            btn.textContent = 'Done';
+            setTimeout(function () { btn.textContent = prev; btn.disabled = false; }, 1500);
+        }).catch(function (err) {
+            var detail = err && err.message ? err.message : String(err);
+            if (self.notifications) {
+                self.notifications.warning(errPrefix, detail);
+            }
+            btn.textContent = prev;
+            btn.disabled = false;
+        });
     };
 
     function escapeHtml(s) {

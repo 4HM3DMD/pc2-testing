@@ -61,6 +61,11 @@
         this.services.wallet.sendReady();
         this.services.wallet.installCloseHandler();
 
+        // Listen for PC2's themeChanged broadcast so ENM follows the
+        // operator's desktop choice automatically. Manual override
+        // (drawer's theme switch) is honoured first.
+        if (root.EnmThemeService) { root.EnmThemeService.init(); }
+
         // Step 2: resolve identity in the background (non-blocking). The
         // identity is still useful for audit attribution + the producer
         // identity card; we just don't render a wallet badge anymore (PC2's

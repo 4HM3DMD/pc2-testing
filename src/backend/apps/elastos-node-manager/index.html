@@ -5,18 +5,27 @@
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="referrer" content="no-referrer">
     <title>Elastos Node Manager</title>
-    <link rel="stylesheet" href="css/styles.css?ts=20260505b">
+    <link rel="stylesheet" href="css/styles.css?ts=20260505f">
     <script>
-        // Apply persisted theme BEFORE first paint to avoid a light-mode
-        // flash. Shares the 'elacity-theme' localStorage key with
-        // dao-dashboard / Elacity Market / dApp Centre so toggling in one
-        // surface is honoured here too.
+        // Apply theme BEFORE first paint to avoid a flash.
+        //   - mode='manual' → use the operator's last manual choice
+        //     stored in 'elacity-theme'
+        //   - mode='auto' (default) → fall back to the last broadcast
+        //     value cached in 'elacity-theme' (set by services/theme.js
+        //     when PC2's themeChanged broadcast arrives), or to the OS
+        //     prefers-color-scheme as a last resort
+        // Either way, services/theme.js will replace this with PC2's
+        // current value as soon as the broadcast arrives.
         (function () {
             try {
+                var mode = localStorage.getItem('enm-theme-mode') || 'auto';
                 var saved = localStorage.getItem('elacity-theme');
                 var prefersDark = window.matchMedia
                     && window.matchMedia('(prefers-color-scheme: dark)').matches;
-                if (saved === 'dark' || (!saved && prefersDark)) {
+                var dark = (mode === 'manual')
+                    ? (saved === 'dark')
+                    : (saved === 'dark' || (!saved && prefersDark));
+                if (dark) {
                     document.documentElement.setAttribute('data-theme', 'dark');
                 }
             } catch (e) { /* localStorage may be blocked; ignore */ }
@@ -90,29 +99,30 @@
 
     <!-- Order matters: strings + utils first (used by services + components),
          then services, then components, then the app controller. -->
-    <script src="js/strings.js?ts=20260505e"></script>
-    <script src="js/utils.js?ts=20260505e"></script>
-    <script src="js/illustrations.js?ts=20260505e"></script>
-    <script src="js/services/wallet.js?ts=20260505e"></script>
-    <script src="js/services/api.js?ts=20260505e"></script>
-    <script src="js/services/sse.js?ts=20260505e"></script>
-    <script src="js/services/notifications.js?ts=20260505e"></script>
-    <script src="js/components/system-status.js?ts=20260505e"></script>
-    <script src="js/components/chain-card.js?ts=20260505e"></script>
-    <script src="js/components/producer-identity.js?ts=20260505e"></script>
-    <script src="js/components/log-viewer.js?ts=20260505e"></script>
-    <script src="js/components/proposal-card.js?ts=20260505e"></script>
-    <script src="js/components/setup-wizard.js?ts=20260505e"></script>
-    <script src="js/components/welcome-screen.js?ts=20260505e"></script>
-    <script src="js/components/setup-conversation.js?ts=20260505e"></script>
-    <script src="js/components/hero-card.js?ts=20260505e"></script>
-    <script src="js/components/stat-strip.js?ts=20260505e"></script>
-    <script src="js/components/milestone-toast.js?ts=20260505e"></script>
-    <script src="js/components/settings-tab.js?ts=20260505e"></script>
-    <script src="js/components/audit-tab.js?ts=20260505e"></script>
-    <script src="js/components/evm-tab.js?ts=20260505e"></script>
-    <script src="js/components/settings-drawer.js?ts=20260505e"></script>
-    <script src="js/components/technical-view.js?ts=20260505e"></script>
-    <script src="js/app.js?ts=20260505e"></script>
+    <script src="js/strings.js?ts=20260505f"></script>
+    <script src="js/utils.js?ts=20260505f"></script>
+    <script src="js/illustrations.js?ts=20260505f"></script>
+    <script src="js/services/wallet.js?ts=20260505f"></script>
+    <script src="js/services/theme.js?ts=20260505f"></script>
+    <script src="js/services/api.js?ts=20260505f"></script>
+    <script src="js/services/sse.js?ts=20260505f"></script>
+    <script src="js/services/notifications.js?ts=20260505f"></script>
+    <script src="js/components/system-status.js?ts=20260505f"></script>
+    <script src="js/components/chain-card.js?ts=20260505f"></script>
+    <script src="js/components/producer-identity.js?ts=20260505f"></script>
+    <script src="js/components/log-viewer.js?ts=20260505f"></script>
+    <script src="js/components/proposal-card.js?ts=20260505f"></script>
+    <script src="js/components/setup-wizard.js?ts=20260505f"></script>
+    <script src="js/components/welcome-screen.js?ts=20260505f"></script>
+    <script src="js/components/setup-conversation.js?ts=20260505f"></script>
+    <script src="js/components/hero-card.js?ts=20260505f"></script>
+    <script src="js/components/stat-strip.js?ts=20260505f"></script>
+    <script src="js/components/milestone-toast.js?ts=20260505f"></script>
+    <script src="js/components/settings-tab.js?ts=20260505f"></script>
+    <script src="js/components/audit-tab.js?ts=20260505f"></script>
+    <script src="js/components/evm-tab.js?ts=20260505f"></script>
+    <script src="js/components/settings-drawer.js?ts=20260505f"></script>
+    <script src="js/components/technical-view.js?ts=20260505f"></script>
+    <script src="js/app.js?ts=20260505f"></script>
 </body>
 </html>

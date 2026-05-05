@@ -3052,6 +3052,71 @@ html, body {
 }
 
 /* ============================================================
+   v0.4 Wave 6 — node.sh maintenance section in the technical view.
+   Compact logs · Update binary · Reactivate BPoS — surfaced as
+   power-user actions (keeps the friendly home view uncluttered).
+   ============================================================ */
+
+.enm-tech-maintenance {
+    padding: var(--spacing-lg);
+}
+
+.enm-tech-maintenance-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0 0 var(--spacing-xs);
+}
+
+.enm-tech-maintenance-sub {
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+    margin: 0 0 var(--spacing-md);
+}
+
+.enm-tech-maintenance-rows {
+    display: flex;
+    flex-direction: column;
+}
+
+.enm-tech-maintenance-row {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+    padding: var(--spacing-md) 0;
+    border-top: 1px solid var(--border-color);
+}
+.enm-tech-maintenance-row:first-child { border-top: none; }
+
+.enm-tech-maintenance-text {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.enm-tech-maintenance-label {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 2px;
+}
+
+.enm-tech-maintenance-help {
+    font-size: 12px;
+    color: var(--text-muted);
+    line-height: 1.5;
+}
+
+.enm-tech-maintenance-help code {
+    font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace;
+    font-size: 11px;
+    padding: 1px 5px;
+    background: var(--bg-muted);
+    border-radius: 4px;
+    color: var(--text-secondary);
+}
+
+/* ============================================================
    Print — hide chrome, render cards as plain blocks
    ============================================================ */
 
