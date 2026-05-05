@@ -369,11 +369,23 @@ function build(extensionHandle) {
                     if (cfgChain) {
                         try {
                             const rpc = adapter.rpcClient(cfgChain);
-                            const [peerInfo, peerCount, bestHash] = await Promise.allSettled([
+                            const [peerInfo, peerCount, bestHash, blockCount] = await Promise.allSettled([
                                 rpc.getpeerinfo(),
                                 rpc.getconnectioncount(),
                                 rpc.getbestblockhash(),
+                                rpc.getblockcount(),
                             ]);
+
+                            // Fall back to RPC for localHeight when
+                            // SyncTracker hasn't sampled yet (first ~30s
+                            // after chain start). Without this the chain-
+                            // card hides the entire sync panel because
+                            // its render guard requires localHeight.
+                            if (snapshot.localHeight == null && blockCount.status === 'fulfilled') {
+                                const v = blockCount.value;
+                                const h = (typeof v === 'number') ? v : (v && v.result);
+                                if (typeof h === 'number') { snapshot.localHeight = h; }
+                            }
 
                             // peers count
                             if (peerCount.status === 'fulfilled') {
