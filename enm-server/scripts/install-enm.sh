@@ -18,12 +18,14 @@ set -euo pipefail
 PC2_DIR="${PC2_DIR:-$HOME/pc2}"
 ENM_PORT="${ENM_PORT:-4180}"
 ENM_IMAGE="${ENM_IMAGE:-ghcr.io/4hm3dmd/enm-server:latest}"
+EXPOSE_BPOS="${EXPOSE_BPOS:-1}"   # 1 = expose 20338+20339 publicly (BPoS); 0 = loopback only
 
 while [[ $# -gt 0 ]]; do
     case $1 in
         --port)     ENM_PORT="$2"; shift 2 ;;
         --pc2-dir)  PC2_DIR="$2"; shift 2 ;;
         --image)    ENM_IMAGE="$2"; shift 2 ;;
+        --no-bpos)  EXPOSE_BPOS=0; shift ;;
         --help|-h)
             cat <<EOF
 ENM (Elastos Node Manager) sidecar installer
@@ -34,6 +36,9 @@ Options:
   --port N          ENM API port (default: 4180)
   --pc2-dir PATH    Existing PC2 install dir (default: \$HOME/pc2)
   --image NAME      Override image (default: ghcr.io/4hm3dmd/enm-server:latest)
+  --no-bpos         Bind ela P2P/DPoS ports (20338, 20339) to loopback only.
+                    Use for full-node mode. Default exposes them publicly so
+                    BPoS supernode peers can dial in.
 
 Pre-reqs:
   - PC2 already installed (\$PC2_DIR/docker-compose.yml exists)
@@ -63,9 +68,41 @@ die()  { printf "${RED}\xe2\x9c\x97 %s${NC}\n" "$*" >&2; exit 1; }
 command -v docker >/dev/null 2>&1 \
     || die "docker not installed (PC2 install would have done this — re-run scripts/install.sh first)"
 
-# --- Add enm-server service to compose --------------------------------------
+# --- Migrate legacy compose: strip chain ports from pc2 ---------------------
+#
+# Pre-pivot installs (when the ENM extension lived inside PC2's image) had
+# pc2 mapping the chain ports (20336, 20338, 20339, 20333-20335). After the
+# split into a separate enm-server container, those mappings belong here, on
+# enm-server, not on pc2 — pc2 doesn't run ela. Leaving them on pc2 means
+# docker-proxy squats on host:20336 and ela inside enm-server can't bind it,
+# and the HostConflictScanner fires F19 every healing tick.
+#
+# Strip them safely: the regex matches only the exact ela port mappings, so
+# pc2's 4100/4200 stay, and any non-ela mapping survives.
 
 cd "$PC2_DIR"
+
+CHAIN_PORTS_RE='^[[:space:]]*-[[:space:]]*"(127\.0\.0\.1:)?(20336|20338|20339|20333|20334|20335):(20336|20338|20339|20333|20334|20335)"[[:space:]]*$'
+if grep -qE "$CHAIN_PORTS_RE" docker-compose.yml; then
+    say "Migrating legacy pc2 compose: chain ports are moving from pc2 to enm-server"
+    cp docker-compose.yml "docker-compose.yml.bak.$(date +%Y%m%d%H%M%S)"
+    sed -i.tmp -E "/$CHAIN_PORTS_RE/d" docker-compose.yml
+    # Also drop the comment lines that introduced them (best-effort).
+    sed -i -E "/^[[:space:]]*#.*ela.*(JSON-RPC stays on loopback|read-only ports — loopback)/d" docker-compose.yml
+    rm -f docker-compose.yml.tmp
+    ok "Legacy chain ports stripped from pc2 (backup at docker-compose.yml.bak.*)"
+fi
+
+# --- Add enm-server service to compose --------------------------------------
+
+# Decide port-binding strategy. BPoS supernodes need 20338 + 20339 publicly
+# reachable so peers can dial in. Full-node operators don't (they can stay
+# fully outbound). Toggle with --no-bpos.
+if [[ "$EXPOSE_BPOS" == "1" ]]; then
+    BPOS_PORTS=$'      - "20338:20338"\n      - "20339:20339"'
+else
+    BPOS_PORTS=$'      - "127.0.0.1:20338:20338"\n      - "127.0.0.1:20339:20339"'
+fi
 
 if grep -q "^  enm-server:" docker-compose.yml; then
     warn "enm-server service already in docker-compose.yml — leaving as-is"
@@ -81,6 +118,14 @@ else
       - pc2
     ports:
       - "${ENM_PORT}:4180"
+      # ela JSON-RPC stays on loopback by default — operator widens via the
+      # ENM dashboard's Settings → Mainchain Advanced → WhiteIPList.
+      - "127.0.0.1:20336:20336"
+${BPOS_PORTS}
+      # ela read-only ports — loopback only.
+      - "127.0.0.1:20333:20333"
+      - "127.0.0.1:20334:20334"
+      - "127.0.0.1:20335:20335"
     volumes:
       # PC2 session DB + node-config (read-only) — auth resolves Bearer
       # tokens against pc2-node's sessions table and reads the owner wallet
@@ -105,7 +150,7 @@ else
       retries: 3
       start_period: 60s
 COMPOSE
-    ok "enm-server service appended"
+    ok "enm-server service appended (BPoS ports: $([ "$EXPOSE_BPOS" = "1" ] && echo public || echo loopback))"
 fi
 
 mkdir -p "$PC2_DIR/enm-data"
