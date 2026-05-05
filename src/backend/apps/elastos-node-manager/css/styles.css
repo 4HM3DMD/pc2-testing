@@ -134,6 +134,11 @@
 
 html, body {
     width: 100%;
+    /* `height: 100%` cascades to 0 if the iframe parent isn't sized
+       (e.g. static-preview tooling). Falling back to 100dvh guarantees
+       the app fills the viewport even when the host doesn't size us. */
+    min-height: 100vh;
+    min-height: 100dvh;
     height: 100%;
     overflow: hidden;
     font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI',
@@ -2511,6 +2516,267 @@ html, body {
 }
 @media (prefers-reduced-motion: reduce) {
     .enm-celebration-illust svg { animation: none; }
+}
+
+/* ============================================================
+   v0.4 Phase 5B — home view: hero card + stat strip + milestone toast
+   ============================================================ */
+
+/* Centered single-column home layout. The home view scrolls vertically
+   if content exceeds the viewport — hero never shrinks (would crush the
+   illustration). Block-level inner wrapper centers + caps width. */
+#enm-pane-dashboard {
+    overflow-y: auto;
+    overflow-x: hidden;
+    height: 100%;
+    padding-left: var(--spacing-lg);
+    padding-right: var(--spacing-lg);
+}
+
+#enm-pane-dashboard > .enm-hero,
+#enm-pane-dashboard > .enm-stat-strip,
+#enm-pane-dashboard > .enm-producer-identity {
+    max-width: 720px;
+    margin-left: auto;
+    margin-right: auto;
+    flex-shrink: 0;
+}
+
+#enm-pane-dashboard > .enm-hero {
+    margin-top: var(--spacing-xl);
+    margin-bottom: var(--spacing-lg);
+}
+#enm-pane-dashboard > .enm-stat-strip {
+    margin-bottom: var(--spacing-lg);
+}
+#enm-pane-dashboard > .enm-producer-identity {
+    margin-bottom: var(--spacing-2xl);
+}
+
+/* ---- Hero card ---- */
+.enm-hero {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: var(--spacing-md);
+    padding: var(--spacing-2xl) var(--spacing-xl);
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: 20px;
+    box-shadow: var(--shadow-sm);
+    transition: background var(--motion-base) var(--ease-out),
+                border-color var(--motion-base) var(--ease-out);
+    position: relative;
+    overflow: hidden;
+}
+
+/* Subtle tinted glow per state — applied via a ::before so the surface
+   stays clean. The opacity is low so it reads as ambient color, not noise. */
+.enm-hero::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: radial-gradient(circle at 50% 0%, var(--enm-tone, transparent) 0%, transparent 60%);
+    opacity: 0.45;
+    transition: background var(--motion-slow) var(--ease-out);
+}
+.enm-hero[data-tone="good"]    { --enm-tone: rgba(34, 197, 94, 0.18); }
+.enm-hero[data-tone="working"] { --enm-tone: rgba(245, 158, 11, 0.16); }
+.enm-hero[data-tone="alert"]   { --enm-tone: rgba(239, 68, 68, 0.16); }
+.enm-hero[data-tone="idle"]    { --enm-tone: rgba(148, 163, 184, 0.14); }
+
+/* The illustration + text + role + actions stack inside the hero,
+   sitting above the tinted ::before. */
+.enm-hero > * { position: relative; }
+
+.enm-hero-illust {
+    width: 168px;
+    height: 168px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.enm-hero[data-tone="good"]    .enm-hero-illust { color: var(--success); }
+.enm-hero[data-tone="working"] .enm-hero-illust { color: var(--warning); }
+.enm-hero[data-tone="alert"]   .enm-hero-illust { color: var(--error); }
+.enm-hero[data-tone="idle"]    .enm-hero-illust { color: var(--text-muted); }
+
+/* "Breathing" — very subtle scale loop on healthy state only. */
+@keyframes enm-hero-breathe {
+    0%, 100% { transform: scale(1); }
+    50%      { transform: scale(1.02); }
+}
+.enm-hero[data-tone="good"] .enm-hero-illust {
+    animation: enm-hero-breathe 4s var(--ease-in-out) infinite;
+    transform-origin: center;
+}
+@media (prefers-reduced-motion: reduce) {
+    .enm-hero[data-tone="good"] .enm-hero-illust { animation: none; }
+}
+
+.enm-hero-text {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--spacing-xs);
+    max-width: 480px;
+}
+
+.enm-hero-title {
+    font-size: 28px;
+    font-weight: 600;
+    line-height: 1.2;
+    letter-spacing: -0.015em;
+    color: var(--text-primary);
+    margin: 0;
+}
+
+.enm-hero-sub {
+    font-size: 15px;
+    line-height: 1.5;
+    color: var(--text-secondary);
+    margin: 0;
+}
+
+/* Role badge — surfaces "BPoS supernode" or "Full node" so the user
+   always sees the technical role they're running, even though the
+   headline above is friendly. */
+.enm-hero-role {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--text-secondary);
+    background: var(--bg-muted);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-pill);
+}
+
+.enm-hero-actions {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--spacing-sm);
+    margin-top: var(--spacing-sm);
+    width: 100%;
+}
+
+/* ---- Stat strip ---- */
+.enm-stat-strip {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: var(--spacing-sm);
+}
+
+.enm-stat {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    padding: var(--spacing-md);
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    transition: border-color var(--motion-fast) var(--ease-out);
+}
+.enm-stat:hover { border-color: var(--border-strong); }
+
+.enm-stat-icon {
+    font-size: 22px;
+    line-height: 1;
+    margin-bottom: 4px;
+}
+
+.enm-stat-value {
+    font-size: 22px;
+    font-weight: 600;
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+    line-height: 1.1;
+}
+
+.enm-stat-label {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+/* ---- Milestone toast (one-time celebration overlay) ---- */
+.enm-milestone {
+    position: fixed;
+    top: 60px;
+    left: 50%;
+    transform: translate(-50%, -16px);
+    opacity: 0;
+    transition: transform var(--motion-slow) var(--ease-out),
+                opacity  var(--motion-slow) var(--ease-out);
+    z-index: 9999;
+    pointer-events: none;
+}
+.enm-milestone.enm-milestone-shown {
+    transform: translate(-50%, 0);
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.enm-milestone-card {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+    padding: var(--spacing-md) var(--spacing-lg);
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: 16px;
+    box-shadow: var(--shadow-lg);
+    max-width: 420px;
+}
+
+.enm-milestone-illust {
+    width: 48px;
+    height: 48px;
+    color: var(--success);
+    flex-shrink: 0;
+}
+.enm-milestone-illust svg {
+    width: 100%;
+    height: 100%;
+    animation: enm-celebrate-pop 600ms var(--ease-out);
+}
+
+.enm-milestone-text {
+    flex: 1 1 auto;
+    font-size: 14px;
+    font-weight: 500;
+    line-height: 1.45;
+    color: var(--text-primary);
+}
+
+.enm-milestone-dismiss {
+    flex: 0 0 auto;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-size: 20px;
+    line-height: 1;
+    cursor: pointer;
+    border-radius: 50%;
+    transition: background var(--motion-fast) var(--ease-out),
+                color var(--motion-fast) var(--ease-out);
+}
+.enm-milestone-dismiss:hover {
+    background: var(--bg-muted);
+    color: var(--text-primary);
 }
 
 /* ============================================================

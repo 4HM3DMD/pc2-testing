@@ -177,86 +177,86 @@
     };
 
     ENMApp.prototype._showDashboard = function () {
+        // v0.4 home view: hero card (focal-point status) + stat strip
+        // (earnings/uptime/friends) + producer identity (BPoS only).
+        // The v0.3 dashboard moves under "Show technical details" in
+        // the settings drawer (Phase 5C).
         this._revealContent();
-        this.els.tabs.hidden = false;
-        this._wireTabs();
+        this._collapseHeaderToHome();
         this._clearPanes();
 
-        var sys = new root.EnmSystemStatus({
-            api: this.services.api,
-            notifications: this.services.notifications,
-        });
-        sys.mount(this.els.paneDashboard);
+        var self = this;
+        var pane = this.els.paneDashboard;
 
+        // Hero card.
+        if (root.EnmHeroCard) {
+            var hero = new root.EnmHeroCard({
+                chainId: 'mainchain',
+                api: this.services.api,
+                sse: this.services.sse,
+                notifications: this.services.notifications,
+                onAction: function (action) {
+                    if (action === 'setup') {
+                        self._showSetupWizard();
+                    } else if (action === 'details') {
+                        // Settings drawer comes in Phase 5C — for now,
+                        // surface the underlying state as a notification
+                        // so the operator isn't stranded.
+                        self.services.notifications.warning(
+                            'Details view coming soon',
+                            'The technical details drawer ships in a coming update. '
+                            + 'For now, run `docker compose logs enm-server` on the host.'
+                        );
+                    }
+                },
+            });
+            hero.mount(pane);
+            this._hero = hero;
+        }
+
+        // Stat strip below the hero.
+        if (root.EnmStatStrip) {
+            var strip = new root.EnmStatStrip({
+                chainId: 'mainchain',
+                api: this.services.api,
+            });
+            strip.mount(pane);
+            this._stats = strip;
+        }
+
+        // Producer identity card — only mounts if a keystore exists
+        // (the component itself decides this from /setup/keystore/account).
         if (root.EnmProducerIdentity) {
             var producer = new root.EnmProducerIdentity({
                 chainId: 'mainchain',
                 api: this.services.api,
                 notifications: this.services.notifications,
             });
-            producer.mount(this.els.paneDashboard);
+            producer.mount(pane);
         }
 
-        if (root.EnmSettingsTab) {
-            var settings = new root.EnmSettingsTab({
-                api: this.services.api,
-                notifications: this.services.notifications,
-            });
-            settings.mount(this.els.paneSettings);
-        }
-        if (root.EnmAuditTab) {
-            var audit = new root.EnmAuditTab({
-                api: this.services.api,
-                notifications: this.services.notifications,
-            });
-            audit.mount(this.els.paneAudit);
-        }
-        if (root.EnmEvmTab) {
-            var evm = new root.EnmEvmTab();
-            evm.mount(this.els.paneEvm);
-        }
-
-        var chainsContainer = document.createElement('div');
-        chainsContainer.className = 'enm-chains-grid';
-        this.els.paneDashboard.appendChild(chainsContainer);
-
-        var self = this;
-        this.services.api.get('/chains', { skipCache: true }).then(function (data) {
-            var chains = (data && data.chains) || [];
-            if (chains.length === 0) {
-                var empty = document.createElement('p');
-                empty.className = 'enm-stub';
-                empty.textContent = root.enmTOrFallback('chain_card.no_chains');
-                chainsContainer.appendChild(empty);
-                return;
-            }
-            chains.forEach(function (c) {
-                var card = new root.EnmChainCard({
-                    chainId: c.chainId,
-                    api: self.services.api,
-                    notifications: self.services.notifications,
-                    sse: self.services.sse,
-                    onReconfigure: function () { self._showSetupWizard(); },
+        // Milestone watchers — fire one-time celebrations when the
+        // operator's ElastOS hits first-sync, first-reward, first-week.
+        // We poll every 30s alongside the hero/stat-strip refresh; the
+        // milestone helper internally guards against re-firing.
+        if (root.EnmMilestone) {
+            var milestoneTick = function () {
+                Promise.all([
+                    self.services.api.get('/chains/mainchain', { skipCache: true }).catch(function () { return null; }),
+                    self.services.api.get('/chains/mainchain/producer', { skipCache: true }).catch(function () { return null; }),
+                ]).then(function (results) {
+                    var ctx = { chain: results[0], producer: results[1] };
+                    root.EnmMilestone.maybeFire('first_sync',   ctx);
+                    root.EnmMilestone.maybeFire('first_reward', ctx);
+                    root.EnmMilestone.maybeFire('first_week',   ctx);
                 });
-                card.mount(chainsContainer);
-            });
+            };
+            milestoneTick();
+            this._milestoneTimer = setInterval(milestoneTick, 30000);
+        }
 
-            self.els.paneLogs.innerHTML = '';
-            if (root.EnmLogViewer && self.services.sse) {
-                var viewer = new root.EnmLogViewer({
-                    chainId: chains[0].chainId,
-                    api: self.services.api,
-                    sse: self.services.sse,
-                });
-                viewer.mount(self.els.paneLogs);
-            }
-        }).catch(function (err) {
-            self.services.notifications.warning(
-                'Failed to load chains',
-                err && err.message ? err.message : String(err),
-            );
-        });
-
+        // Notifications pipeline — keep the v0.3 SSE wiring so CRITICAL
+        // proposals still pop as cards on top of the home view.
         if (this.services.sse) {
             this.services.sse.subscribe('notifications', function (payload) {
                 if (!payload) { return; }
@@ -272,9 +272,21 @@
                 });
             });
         }
-
         this._loadPendingProposals();
-        this._switchTab('dashboard');
+    };
+
+    /**
+     * In v0.4 home mode, the 5-tab nav goes away — the home view IS
+     * the only view (settings drawer comes in Phase 5C). We keep the
+     * header bar visible because the theme toggle still lives there.
+     *
+     * @private
+     */
+    ENMApp.prototype._collapseHeaderToHome = function () {
+        if (!this.els.tabs) { return; }
+        this.els.tabs.hidden = false;
+        var tabsContainer = this.els.tabs.querySelector('.enm-header-tabs');
+        if (tabsContainer) { tabsContainer.hidden = true; }
     };
 
     ENMApp.prototype._loadPendingProposals = function () {
