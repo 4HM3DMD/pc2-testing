@@ -63,12 +63,18 @@
                 card_a: {
                     title:      'What do you want to do?',
                     earn_title: 'Earn rewards',
-                    earn_sub:   'Run an earning node',
+                    // Technical role surfaces in the subtitle so the operator
+                    // learns the name they'll encounter in Essentials, on
+                    // explorers, and in support docs. "BPoS supernode" is
+                    // distinct from "Council member (CR)" — friendly synonyms
+                    // would erase that distinction.
+                    earn_sub:   'Run a BPoS supernode',
                     earn_meta:  '~17% APR*',
                     help_title: 'Help the network',
-                    help_sub:   'Run a follower node',
+                    help_sub:   'Run a full node',
                     help_meta:  'No rewards',
-                    footer:     "* Rewards depend on votes from the community. We'll show you how after setup.",
+                    footer:     "* Rewards depend on votes from the community. We'll show you how after setup.\n"
+                              + "Council member (CR) registration will be available in a later update.",
                 },
                 card_b: {
                     title_idle:        'Ready when you are',
