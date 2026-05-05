@@ -111,11 +111,60 @@
     };
 
     ENMApp.prototype._showSetupWizard = function () {
+        // Friendly path (v0.4): Welcome → Setup conversation → Home.
+        // The 5-tab dashboard chrome is hidden until setup is done.
         this._revealContent();
         this._clearPanes();
+        if (this.els.tabs) { this.els.tabs.hidden = true; }
 
+        // If the operator has clearly already started setup (binary on disk
+        // or partial install), skip the welcome screen and resume in the
+        // conversation. Otherwise, lead with the welcome.
         var self = this;
-        var wizard = new root.EnmSetupWizard({
+        this.services.api.get('/setup/state', { skipCache: true }).then(function (s) {
+            var resume = s && s.currentStep && s.currentStep !== 'welcome';
+            if (resume) {
+                self._mountSetupConversation();
+            } else {
+                self._mountWelcomeScreen();
+            }
+        }).catch(function () {
+            self._mountWelcomeScreen();
+        });
+    };
+
+    /** @private */
+    ENMApp.prototype._mountWelcomeScreen = function () {
+        var self = this;
+        if (!root.EnmWelcomeScreen) { return self._mountSetupConversation(); }
+        this._clearPanes();
+        var screen = new root.EnmWelcomeScreen({
+            onContinue: function () { self._mountSetupConversation(); },
+        });
+        screen.mount(this.els.paneDashboard);
+    };
+
+    /** @private */
+    ENMApp.prototype._mountSetupConversation = function () {
+        var self = this;
+        this._clearPanes();
+        if (!root.EnmSetupConversation) {
+            // Should not happen — script tag missing. Fall back to legacy wizard.
+            if (root.EnmSetupWizard) {
+                var legacy = new root.EnmSetupWizard({
+                    api: this.services.api,
+                    notifications: this.services.notifications,
+                    sse: this.services.sse,
+                    onComplete: function () {
+                        self.services.api.invalidate('/setup/state');
+                        self._showDashboard();
+                    },
+                });
+                legacy.mount(this.els.paneDashboard);
+            }
+            return;
+        }
+        var conv = new root.EnmSetupConversation({
             api: this.services.api,
             notifications: this.services.notifications,
             sse: this.services.sse,
@@ -124,8 +173,7 @@
                 self._showDashboard();
             },
         });
-        wizard.mount(this.els.paneDashboard);
-        this._switchTab('dashboard');
+        conv.mount(this.els.paneDashboard);
     };
 
     ENMApp.prototype._showDashboard = function () {

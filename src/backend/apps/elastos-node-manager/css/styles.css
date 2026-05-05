@@ -2154,6 +2154,366 @@ html, body {
 }
 
 /* ============================================================
+   v0.4 "Welcome Home" — friendly UI layer
+   Used by welcome-screen.js, setup-conversation.js, illustrations.js.
+   Eli5 framing, big type, generous whitespace. The technical v0.3
+   styles above remain — they back the "Show technical details" view.
+   ============================================================ */
+
+/* Hand-rolled illustrations spin / wave when their class is set. */
+@keyframes enm-illust-spin {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(360deg); }
+}
+.enm-illust-spin {
+    transform-origin: center;
+    animation: enm-illust-spin 4s linear infinite;
+}
+@keyframes enm-hero-wave {
+    0%, 100% { transform: translateY(0); }
+    50%      { transform: translateY(-3px); }
+}
+.enm-hero-wave {
+    animation: enm-hero-wave 1.6s var(--ease-in-out) infinite;
+    transform-origin: center;
+}
+@media (prefers-reduced-motion: reduce) {
+    .enm-illust-spin,
+    .enm-hero-wave { animation: none; }
+}
+
+/* ---- Big primary button — used on the welcome screen + each setup card ---- */
+.enm-btn-hero {
+    padding: 14px 28px;
+    font-size: 16px;
+    font-weight: 600;
+    border-radius: 12px;
+    min-width: 200px;
+}
+
+/* ---- Welcome screen ---- */
+.enm-welcome {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100%;
+    padding: var(--spacing-2xl) var(--spacing-lg);
+    background: var(--bg-page);
+}
+
+.enm-welcome-inner {
+    max-width: 520px;
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--spacing-lg);
+}
+
+.enm-welcome-illust {
+    width: 128px;
+    height: 128px;
+    color: var(--primary);
+    margin-bottom: var(--spacing-sm);
+}
+
+.enm-welcome-title {
+    font-size: 32px;
+    font-weight: 600;
+    line-height: 1.15;
+    letter-spacing: -0.02em;
+    color: var(--text-primary);
+    margin: 0;
+}
+
+.enm-welcome-body {
+    font-size: 16px;
+    line-height: 1.55;
+    color: var(--text-secondary);
+    margin: 0;
+    max-width: 440px;
+}
+
+.enm-welcome-cta { margin-top: var(--spacing-md); }
+
+/* ---- Setup conversation shell ---- */
+.enm-conversation {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-height: 100%;
+    padding: var(--spacing-xl) var(--spacing-lg) var(--spacing-2xl);
+    background: var(--bg-page);
+}
+
+.enm-conv-header {
+    width: 100%;
+    max-width: 560px;
+    margin-bottom: var(--spacing-xl);
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-xs);
+}
+
+.enm-conv-progress {
+    width: 100%;
+    height: 4px;
+    background: var(--bg-muted);
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.enm-conv-progress-bar {
+    height: 100%;
+    background: var(--primary);
+    border-radius: 2px;
+    transition: width var(--motion-slow) var(--ease-out);
+    width: 25%;
+}
+
+.enm-conv-progress-text {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-muted);
+    text-align: right;
+}
+
+.enm-conv-body {
+    width: 100%;
+    max-width: 560px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: var(--spacing-md);
+}
+
+@keyframes enm-conv-enter {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+.enm-conv-enter {
+    animation: enm-conv-enter 280ms var(--ease-out);
+}
+@media (prefers-reduced-motion: reduce) {
+    .enm-conv-enter { animation: none; }
+}
+
+.enm-conv-title {
+    font-size: 24px;
+    font-weight: 600;
+    line-height: 1.2;
+    letter-spacing: -0.01em;
+    color: var(--text-primary);
+    margin: 0;
+}
+
+.enm-conv-sub {
+    font-size: 15px;
+    line-height: 1.55;
+    color: var(--text-secondary);
+    margin: 0;
+    max-width: 480px;
+}
+
+.enm-conv-footer {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: var(--spacing-lg);
+    max-width: 440px;
+    line-height: 1.5;
+}
+
+.enm-conv-actions {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--spacing-sm);
+    margin-top: var(--spacing-md);
+    width: 100%;
+}
+
+.enm-conv-textlink {
+    background: none;
+    border: none;
+    padding: 8px 12px;
+    font: inherit;
+    font-size: 13px;
+    color: var(--text-muted);
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    transition: color var(--motion-fast) var(--ease-out);
+}
+.enm-conv-textlink:hover { color: var(--text-primary); }
+.enm-conv-textlink:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+    border-radius: var(--radius-sm);
+}
+
+.enm-conv-checkbox {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    padding: var(--spacing-sm) var(--spacing-md);
+    background: var(--bg-muted);
+    border-radius: var(--radius-md);
+    font-size: 14px;
+    color: var(--text-primary);
+    cursor: pointer;
+    user-select: none;
+    margin-top: var(--spacing-sm);
+}
+.enm-conv-checkbox input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    cursor: pointer;
+    accent-color: var(--primary);
+}
+
+/* ---- Card A: goal tiles ---- */
+.enm-goal-tiles {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--spacing-md);
+    width: 100%;
+    margin-top: var(--spacing-md);
+}
+
+.enm-goal-tile {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: var(--spacing-xs);
+    padding: var(--spacing-lg) var(--spacing-md);
+    background: var(--bg-surface);
+    border: 2px solid var(--border-color);
+    border-radius: 16px;
+    cursor: pointer;
+    font: inherit;
+    color: inherit;
+    transition: border-color var(--motion-fast) var(--ease-out),
+                transform var(--motion-fast) var(--ease-out),
+                background var(--motion-fast) var(--ease-out);
+}
+.enm-goal-tile:hover {
+    border-color: var(--primary);
+    transform: translateY(-2px);
+    background: var(--primary-softer);
+}
+.enm-goal-tile:focus-visible {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: var(--focus-ring);
+}
+.enm-goal-tile:active { transform: translateY(0); }
+
+.enm-goal-illust {
+    width: 64px;
+    height: 64px;
+    margin-bottom: var(--spacing-xs);
+}
+.enm-goal-illust-earn { color: #f59e0b; }   /* amber for "money" feel */
+.enm-goal-illust-help { color: var(--primary); }
+
+.enm-goal-tile-title {
+    font-size: 17px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+.enm-goal-tile-sub {
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+.enm-goal-tile-meta {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--primary);
+    margin-top: var(--spacing-xs);
+    padding: 2px 8px;
+    background: var(--primary-soft);
+    border-radius: var(--radius-pill);
+}
+
+@media (max-width: 480px) {
+    .enm-goal-tiles { grid-template-columns: 1fr; }
+}
+
+/* ---- Card B: install ---- */
+.enm-install-illust {
+    width: 96px;
+    height: 96px;
+    color: var(--primary);
+    margin-bottom: var(--spacing-sm);
+}
+
+/* Reuse .enm-install-progress / .enm-install-bar / .enm-install-bar-wrap from
+   the technical wizard CSS — they still match. We just ensure the bar wrap
+   is full-width inside the conversation body. */
+.enm-conv-body .enm-install-progress {
+    width: 100%;
+    max-width: 440px;
+}
+
+/* ---- Card C: password reveal ---- */
+.enm-password-reveal {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    padding: var(--spacing-md);
+    background: var(--bg-muted);
+    border: 1px dashed var(--border-strong);
+    border-radius: var(--radius-md);
+    width: 100%;
+    max-width: 440px;
+    margin: var(--spacing-sm) 0;
+}
+
+.enm-password-value {
+    flex: 1 1 auto;
+    font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace;
+    font-size: 15px;
+    font-weight: 500;
+    color: var(--text-primary);
+    text-align: left;
+    word-break: break-all;
+    line-height: 1.4;
+    user-select: all;
+}
+
+.enm-password-copy {
+    flex: 0 0 auto;
+}
+.enm-password-copy[data-copied="1"] {
+    background: var(--success);
+    border-color: transparent;
+    color: white;
+}
+
+/* ---- Card D: celebration ---- */
+.enm-celebration-illust {
+    width: 120px;
+    height: 120px;
+    color: var(--primary);
+    margin-bottom: var(--spacing-sm);
+}
+
+@keyframes enm-celebrate-pop {
+    0%   { transform: scale(0.6); opacity: 0; }
+    60%  { transform: scale(1.08); opacity: 1; }
+    100% { transform: scale(1); opacity: 1; }
+}
+.enm-celebration-illust svg {
+    animation: enm-celebrate-pop 520ms var(--ease-out);
+    transform-origin: center;
+}
+@media (prefers-reduced-motion: reduce) {
+    .enm-celebration-illust svg { animation: none; }
+}
+
+/* ============================================================
    Print — hide chrome, render cards as plain blocks
    ============================================================ */
 

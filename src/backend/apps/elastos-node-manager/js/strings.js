@@ -39,6 +39,171 @@
     }
 
     var STRINGS = deepFreeze({
+        // Friendly vocabulary — eli5 + "your ElastOS" framing.
+        // Used by v0.4 components (welcome-screen, setup-conversation,
+        // hero-card, settings-drawer, milestone-toast). The technical
+        // strings below are still consumed by the v0.3 components that
+        // live inside the technical-view drawer.
+        friendly: {
+            app_title: 'Welcome to your ElastOS',
+
+            welcome: {
+                title:  'Turn your ElastOS into a node',
+                body:   'In a few minutes, your ElastOS will be helping secure '
+                      + 'the network — and earning ELA while it does.',
+                cta:    "Let's go",
+            },
+
+            setup: {
+                progress: 'Step {n} of {total}',
+                back:     'Back',
+                next:     'Next',
+                cancel:   'Cancel setup',
+
+                card_a: {
+                    title:      'What do you want to do?',
+                    earn_title: 'Earn rewards',
+                    earn_sub:   'Run an earning node',
+                    earn_meta:  '~17% APR*',
+                    help_title: 'Help the network',
+                    help_sub:   'Run a follower node',
+                    help_meta:  'No rewards',
+                    footer:     "* Rewards depend on votes from the community. We'll show you how after setup.",
+                },
+                card_b: {
+                    title_idle:        'Ready when you are',
+                    title_active:      'Setting your ElastOS up',
+                    title_done:        'All set up — almost there',
+                    sub_idle:          'When you tap the button below, your ElastOS will download and install the chain software. Takes about 2 minutes.',
+                    sub_active:        'Grab a coffee while we get things ready ☕',
+                    sub_done:          'Everything is installed and ready.',
+                    cta_install:       'Install now',
+                    cta_retry:         'Try again',
+                    cta_continue:      'Continue',
+                    phase_preparing:   'Getting ready…',
+                    phase_downloading: 'Downloading…',
+                    phase_verifying:   'Making sure everything works…',
+                    phase_installing:  'Almost ready…',
+                    phase_done:        'Done',
+                    phase_failed:      "Something didn't work",
+                    failed_help:       'Tap "Try again". If it keeps failing, check your internet connection.',
+                },
+                card_c: {
+                    title_initial:    'Save your secret password',
+                    title_generated:  '🔑 Here is your secret password',
+                    sub_initial:      "We'll generate a strong password for you. It protects your earnings.",
+                    sub_generated:    'Save it somewhere safe — a password manager is best. We won\'t be able to show it again.',
+                    cta_generate:     'Generate my password',
+                    cta_continue:     'Continue',
+                    cta_copy:         'Copy',
+                    cta_copied:       'Copied!',
+                    ack:              "I've saved it somewhere safe",
+                    skip_full:        'No password needed for follower nodes — moving on.',
+                },
+                card_d: {
+                    title_starting:  'Starting your ElastOS up…',
+                    title_done:      "🎉 You're all set!",
+                    sub_starting:    'Almost there.',
+                    sub_done:        'Your ElastOS is now a node and is starting up.',
+                    cta:             'Take me home',
+                },
+            },
+
+            // Hero card states. {eta} is filled with a human-friendly duration.
+            state: {
+                unconfigured:    "Your ElastOS isn't a node yet",
+                unconfigured_sub: "Let's set it up — takes about 5 minutes.",
+                starting:        'Your ElastOS is waking up…',
+                starting_sub:    'This takes a few seconds.',
+                syncing:         'Your ElastOS is catching up',
+                syncing_sub:     'About {eta} until fully synced',
+                syncing_no_eta:  "Catching up to the network — we don't know how long yet.",
+                healthy_earn:    'Your ElastOS is happy and earning',
+                healthy_earn_sub:'Running smoothly. Keep up the good work!',
+                healthy_help:    'Your ElastOS is happy and helping',
+                healthy_help_sub:"It's quietly verifying the network. Thank you!",
+                stalled:         'Your ElastOS is having trouble keeping up',
+                stalled_sub:     'It might catch up on its own — give it a few minutes.',
+                recovering:      'Your ElastOS had a hiccup',
+                recovering_sub:  'Fixing it now — back online in a moment.',
+                stopped:         'Your ElastOS is taking a break',
+                stopped_sub:     'Tap the button to wake it up.',
+                error:           'Your ElastOS needs your attention',
+                error_sub:       "Something's not right. Tap to see what.",
+            },
+
+            // Stat strip below the hero card.
+            stat: {
+                earnings_value:   '{n} ELA',
+                earnings_label:   'earned',
+                uptime_label:     'running',
+                uptime_d:         '{n}d',
+                uptime_h:         '{n}h',
+                uptime_m:         '{n}m',
+                peers_label:      'friends',
+                peers_zero:       'finding friends…',
+                eta_min:          '{n} min',
+                eta_hr:           '{n}h {m}m',
+            },
+
+            // Buttons that show under the hero based on state.
+            action: {
+                start_node:    'Wake my ElastOS up',
+                stop_node:     'Pause my ElastOS',
+                restart_node:  'Restart my ElastOS',
+                set_up:        'Set up my node',
+                see_details:   'See what happened',
+                register:      'Register for rewards →',
+            },
+
+            // One-time celebration toasts.
+            milestone: {
+                first_sync:    '🎉 Your ElastOS just synced for the first time!',
+                first_reward:  '💰 Your ElastOS earned its first ELA!',
+                first_week:    '⭐ Your ElastOS has been running for a whole week!',
+            },
+
+            // Friendly notification text (replaces F1-F19 raw rule names).
+            notif: {
+                auto_restart:    'Your ElastOS had a hiccup and restarted itself. All good now.',
+                needs_attention: 'Your ElastOS needs a moment — tap to see what happened.',
+                back_online:     'Your ElastOS is back online.',
+            },
+
+            // Settings drawer.
+            settings: {
+                title: 'Settings',
+
+                section_notif:     'When to tell me',
+                opt_notif_help:    'Tell me when my ElastOS needs help',
+                opt_notif_celebrate: 'Celebrate milestones (first reward, etc.)',
+                opt_notif_weekly:  'Send me a weekly summary',
+
+                section_behavior:  'How my ElastOS behaves',
+                opt_auto_restart:  'Restart automatically if it crashes',
+                opt_auto_heal:     'Try to fix problems without asking me',
+                opt_auto_heal_help:'Recommended only for experienced operators.',
+
+                section_advanced:  'For the technically curious',
+                opt_show_tech:     'Show technical details',
+                opt_view_log:      'View activity log',
+                opt_reinstall:     'Reinstall my node',
+
+                save:              'Save changes',
+                saved:             'Saved.',
+                close:             'Close',
+            },
+
+            // Errors that surface to the user.
+            error: {
+                backend_offline:  "Can't reach your node manager",
+                backend_offline_sub: "Try refreshing this page in a moment.",
+                forbidden:        "Only the owner can manage this node",
+                forbidden_sub:    "Sign in as the operator who set up this PC2.",
+                generic:          'Something went wrong',
+            },
+        },
+
         app: {
             title: 'Elastos Node Manager',
             connecting: 'Connecting to Node Manager...',
