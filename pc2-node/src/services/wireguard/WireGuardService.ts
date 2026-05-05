@@ -254,12 +254,32 @@ export class WireGuardService {
     /**
    * Determine whether WireGuard will use the kernel module or userspace.
    *
-   * - macOS: always userspace (uses built-in utun driver via wg-quick)
-   * - Linux: kernel module preferred, wireguard-go as fallback
+   * - macOS: always userspace. The wg-quick.darwin script invokes
+   *          `${WG_QUICK_USERSPACE_IMPLEMENTATION:-wireguard-go} utun` to create
+   *          the utun device, so we need to resolve wireguard-go's absolute
+   *          path here for wgQuickCmd() to pass via env var. Without that,
+   *          sudo's secure_path (/usr/bin:/bin:/usr/sbin:/sbin) hides our
+   *          bundled binary at ~/.pc2/pc2-node/bin/darwin-arm64/wireguard-go
+   *          and wg-quick dies with "wireguard-go: command not found".
+   * - Linux: kernel module preferred, wireguard-go as fallback. Fallback path
+   *          already resolved wgGoBinPath; macOS branch added for v1.2.7.10.
    */
     private detectMode (): WireGuardMode {
         if ( WireGuardService.isMacOS ) {
-            logger.info('[WireGuard] macOS detected, using userspace mode (utun driver)');
+            // v1.2.7.10: resolve wireguard-go now so wgQuickCmd() can pass
+            // WG_QUICK_USERSPACE_IMPLEMENTATION=<absolute-path>. Bundled dir is
+            // checked first (fresh-Mac install), then Homebrew/system paths
+            // (developer machines with `brew install wireguard-tools`).
+            this.wgGoBinPath = this.findBinary('wireguard-go', [
+                '/usr/local/bin/wireguard-go',
+                '/opt/homebrew/bin/wireguard-go',
+                '/usr/bin/wireguard-go',
+            ]);
+            if ( this.wgGoBinPath ) {
+                logger.info(`[WireGuard] macOS userspace mode using wireguard-go at ${this.wgGoBinPath}`);
+            } else {
+                logger.warn('[WireGuard] macOS: wireguard-go not resolved — wg-quick will fail under sudo (PATH sanitised, bundled dir not visible)');
+            }
             return 'userspace';
         }
 
@@ -297,10 +317,19 @@ export class WireGuardService {
     /**
    * Build a command string to bring WireGuard interfaces up/down.
    *
-   * - macOS: `sudo <wg-quick-path> up <conf>` (utun driver, no env var needed)
-   * - Linux kernel: `sudo <wg-quick-path> up <conf>`
-   * - Linux userspace: `WG_QUICK_USERSPACE_IMPLEMENTATION=<wireguard-go-path> sudo -E <wg-quick-path> up <conf>`
-   * - Windows: `<wireguard.exe> /installtunnelservice <conf>` (runs as SYSTEM, no sudo)
+   * - macOS userspace (v1.2.7.10+): pass WG_QUICK_USERSPACE_IMPLEMENTATION via
+   *   `sudo -E` so wg-quick.darwin can locate the bundled wireguard-go.
+   *   Requires `:SETENV:` flag in sudoers (granted by setupPermissions.ts as
+   *   of v1.2.7.10). Falls back to plain `sudo wg-quick up <conf>` if we
+   *   couldn't resolve wireguard-go (Homebrew path on PATH would still work).
+   * - Linux kernel: `sudo <wg-quick-path> up <conf>` — kernel module handles
+   *   everything in-process, no helper binary lookup.
+   * - Linux userspace: same env-var form as macOS. Pre-existing apt-installed
+   *   wireguard-tools puts wireguard-go in /usr/bin (which IS in sudo's
+   *   secure_path) so the env var was technically optional there, but using
+   *   it consistently makes the sudoers contract simpler.
+   * - Windows: `<wireguard.exe> /installtunnelservice <conf>` (runs as SYSTEM,
+   *   no sudo).
    */
     private wgQuickCmd (action: 'up' | 'down', confPath: string): string {
         const wqPath = this.wgQuickBinPath || 'wg-quick';
@@ -310,9 +339,8 @@ export class WireGuardService {
             return `"${wqPath}" ${winAction} "${confPath}"`;
         }
 
-        if ( this._mode === 'userspace' && !WireGuardService.isMacOS ) {
-            const wgGoPath = this.wgGoBinPath || 'wireguard-go';
-            return `WG_QUICK_USERSPACE_IMPLEMENTATION=${wgGoPath} sudo -E ${wqPath} ${action} ${confPath}`;
+        if ( this._mode === 'userspace' && this.wgGoBinPath ) {
+            return `WG_QUICK_USERSPACE_IMPLEMENTATION=${this.wgGoBinPath} sudo -E ${wqPath} ${action} ${confPath}`;
         }
         return `sudo ${wqPath} ${action} ${confPath}`;
     }

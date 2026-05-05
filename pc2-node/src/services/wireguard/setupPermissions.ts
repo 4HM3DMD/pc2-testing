@@ -11,6 +11,15 @@
  * Reality is unblocked transitively because it tunnels through AmneziaWG, and
  * sing-box itself runs userspace and needs no root).
  *
+ * v1.2.7.10: rules now use `NOPASSWD:SETENV:` instead of `NOPASSWD:` so that
+ * `sudo -E` invocations preserving WG_QUICK_USERSPACE_IMPLEMENTATION succeed.
+ * Without SETENV, sudo strips PATH-modifying env vars even with -E, and
+ * wg-quick on macOS / userspace-Linux can't find its bundled `wireguard-go` /
+ * `amneziawg-go` companion (sudo's default secure_path is
+ * /usr/bin:/bin:/usr/sbin:/sbin which doesn't include ~/.pc2/pc2-node/bin).
+ * Pre-v1.2.7.10 entries (no SETENV) are detected as needing upgrade and
+ * trigger one more password prompt to rewrite — single cost, then never again.
+ *
  * Flow:
  *   1. Check if sudoers entry already exists with all required transport binaries
  *   2. If missing or incomplete, attempt to create it (with user consent / OS-level auth prompt)
@@ -74,6 +83,13 @@ function findSiblingBinary(wgQuickPath: string, name: string): string | null {
  * sudoers file to contain both binaries (when awg-quick is present in the
  * bundled dir). Pre-v1.2.7.9 sudoers files that only have wg-quick will be
  * detected as incomplete and re-prompt to upgrade in-place.
+ *
+ * v1.2.7.10: also requires the `:SETENV:` flag to be present on the rules.
+ * Without it, `sudo -E` strips WG_QUICK_USERSPACE_IMPLEMENTATION and wg-quick
+ * cannot locate the bundled wireguard-go / amneziawg-go companion (which is
+ * the default invocation form on macOS now). Pre-v1.2.7.10 entries get
+ * detected as needing setup so they upgrade in-place on next launch — costs
+ * the user one extra password prompt, after which they're permanently fixed.
  */
 export function checkWireGuardPermissions(wgQuickPath: string): PermissionCheckResult {
   const platform = process.platform;
@@ -96,14 +112,27 @@ export function checkWireGuardPermissions(wgQuickPath: string): PermissionCheckR
       // If awg-quick isn't bundled, don't require it — keeps the check valid
       // for users who never get an AWG binary (unusual but possible).
       const hasAwg = !awgQuickPath || content.includes('awg-quick');
-      if (hasWg && hasAwg) {
+      // v1.2.7.10: SETENV flag check. The token can appear as `NOPASSWD:SETENV:`
+      // in our generated form. Be generous about whitespace/casing variants in
+      // case a user hand-edited their sudoers file — `SETENV` substring match
+      // catches them all without false-positives (no other rule type uses it).
+      const hasSetenv = /SETENV/i.test(content);
+      if (hasWg && hasAwg && hasSetenv) {
         return {
           sudoConfigured: true,
           needsSetup: false,
           platform,
           message: awgQuickPath
-            ? 'Sudoers entry found for wg-quick + awg-quick'
-            : 'Sudoers entry found for wg-quick',
+            ? 'Sudoers entry found for wg-quick + awg-quick (SETENV)'
+            : 'Sudoers entry found for wg-quick (SETENV)',
+        };
+      }
+      if (hasWg && hasAwg && !hasSetenv) {
+        return {
+          sudoConfigured: false,
+          needsSetup: true,
+          platform,
+          message: 'Sudoers entry exists but missing SETENV flag (pre-v1.2.7.10 install) — re-running setup will upgrade in-place so wg-quick can locate bundled wireguard-go under sudo',
         };
       }
       if (hasWg && !hasAwg) {
@@ -145,36 +174,50 @@ export function checkWireGuardPermissions(wgQuickPath: string): PermissionCheckR
 /**
  * Build the sudoers entry content for the current user and the given binary paths.
  *
- * v1.2.7.9: now writes entries for both wg-quick and awg-quick (when bundled)
- * in the same sudoers file. Single OS-level auth prompt unlocks WireGuard,
- * AmneziaWG, AND VLESS Reality (transitive — sing-box userspace tunnels
- * through AWG, so AWG sudo is the gating dependency).
+ * v1.2.7.9: writes entries for both wg-quick and awg-quick (when bundled).
+ * Single OS-level auth prompt unlocks WireGuard, AmneziaWG, AND VLESS Reality
+ * (transitive — sing-box userspace tunnels through AWG).
+ *
+ * v1.2.7.10: rules are now `NOPASSWD:SETENV:` instead of `NOPASSWD:`. The
+ * SETENV flag is required so callers can do
+ *
+ *   WG_QUICK_USERSPACE_IMPLEMENTATION=/path/to/wireguard-go sudo -E /path/to/wg-quick up <conf>
+ *
+ * — without SETENV, sudo's env_reset+secure_path strips the var even with
+ * `-E`, and wg-quick falls back to a PATH lookup for "wireguard-go" which
+ * fails because /usr/bin:/bin:... doesn't include our bundled binary.
+ *
+ * SETENV is harmless for the kernel-mode-Linux invocation pattern (plain
+ * `sudo wg-quick up <conf>` without env vars) — it just permits the env var,
+ * doesn't require one. The wgGoBinPath argument is now informational only:
+ * we no longer emit a separate `/usr/bin/env WG_QUICK_USERSPACE_IMPLEMENTATION=...`
+ * rule (the SETENV form on the simple wg-quick rule subsumes it).
  */
-function buildSudoersEntry(wgQuickPath: string, wgGoBinPath?: string): string {
+function buildSudoersEntry(wgQuickPath: string, _wgGoBinPath?: string): string {
   const user = process.env.USER || process.env.LOGNAME || 'nobody';
   const lines = [
-    `# PC2 transport permissions — passwordless sudo for tunnel management`,
+    `# PC2 transport permissions — passwordless sudo for tunnel management.`,
     `# Covers WireGuard (wg-quick) and AmneziaWG (awg-quick). VLESS Reality`,
     `# uses sing-box in userspace mode and needs no sudo.`,
-    `# Auto-generated by PC2 Node. Remove this file to revoke; PC2 will`,
-    `# re-prompt on next launch.`,
-    `${user} ALL=(root) NOPASSWD: ${wgQuickPath} up *`,
-    `${user} ALL=(root) NOPASSWD: ${wgQuickPath} down *`,
+    `#`,
+    `# v1.2.7.10: rules use NOPASSWD:SETENV: so 'sudo -E' callers can pass`,
+    `# WG_QUICK_USERSPACE_IMPLEMENTATION=<bundled-wireguard-go-path>. Without`,
+    `# SETENV, sudo strips the var and wg-quick can't locate our bundled`,
+    `# wireguard-go / amneziawg-go (sudo's secure_path doesn't include`,
+    `# ~/.pc2/pc2-node/bin/<platform>-<arch>/).`,
+    `#`,
+    `# Auto-generated by PC2 Node. Remove this file to revoke;`,
+    `# PC2 will re-prompt on next launch.`,
+    `${user} ALL=(root) NOPASSWD:SETENV: ${wgQuickPath} up *`,
+    `${user} ALL=(root) NOPASSWD:SETENV: ${wgQuickPath} down *`,
   ];
 
-  // v1.2.7.9: include awg-quick when present in the bundled dir or a known
-  // system location. Mirrors AmneziaWGService.awgQuickCmd() which calls
-  // `sudo <awg-quick> up <conf>` exactly the same shape as wg-quick.
   const awgQuickPath = findSiblingBinary(wgQuickPath, 'awg-quick');
   if (awgQuickPath) {
-    lines.push(`${user} ALL=(root) NOPASSWD: ${awgQuickPath} up *`);
-    lines.push(`${user} ALL=(root) NOPASSWD: ${awgQuickPath} down *`);
+    lines.push(`${user} ALL=(root) NOPASSWD:SETENV: ${awgQuickPath} up *`);
+    lines.push(`${user} ALL=(root) NOPASSWD:SETENV: ${awgQuickPath} down *`);
   }
 
-  if (wgGoBinPath) {
-    lines.push(`${user} ALL=(root) NOPASSWD:SETENV: /usr/bin/env WG_QUICK_USERSPACE_IMPLEMENTATION=${wgGoBinPath} ${wgQuickPath} up *`);
-    lines.push(`${user} ALL=(root) NOPASSWD:SETENV: /usr/bin/env WG_QUICK_USERSPACE_IMPLEMENTATION=${wgGoBinPath} ${wgQuickPath} down *`);
-  }
   return lines.join('\n') + '\n';
 }
 

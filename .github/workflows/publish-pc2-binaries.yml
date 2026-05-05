@@ -125,12 +125,83 @@ jobs:
             file "pc2-node/bin/darwin-${target_arch}/wg"
           done
 
+      - name: Build bash 5.2 from source for darwin-arm64 and darwin-x64
+        # v1.2.7.10: Apple's /bin/bash is frozen at 3.2 (GPL3 licensing).
+        # wg-quick / awg-quick refuse to start on bash <4. Bundling our own
+        # bash 5 is the only path for fresh-Mac users without Homebrew.
+        # Built statically against libSystem only (no Homebrew, no third-party
+        # libs) so it has zero runtime dependencies. ~1 MB stripped.
+        #
+        # GPL3 compliance: source URL is referenced in the release notes and
+        # in pc2-node/src/utils/binary-manager.ts. Source remains fetchable
+        # from https://ftp.gnu.org/gnu/bash/ for the lifetime of the GNU
+        # archive (which has been online since 1985).
+        run: |
+          set -e
+          BASH_VERSION="5.2.21"
+          BASH_URL="https://ftp.gnu.org/gnu/bash/bash-${BASH_VERSION}.tar.gz"
+          tmp=$(mktemp -d)
+          echo "Fetching bash ${BASH_VERSION} source..."
+          curl -fsSL "$BASH_URL" -o "$tmp/bash.tar.gz"
+          tar -xzf "$tmp/bash.tar.gz" -C "$tmp"
+          src_dir="$tmp/bash-${BASH_VERSION}"
+
+          for arch in arm64 x86_64; do
+            target_arch=$arch
+            [ "$arch" = "x86_64" ] && target_arch="x64"
+            build_dir="$tmp/build-${target_arch}"
+            mkdir -p "$build_dir"
+
+            echo ""
+            echo "=== Building bash ${BASH_VERSION} for darwin-${target_arch} ==="
+            # Configure flags:
+            #   --without-bash-malloc — use libSystem malloc; bash's bundled
+            #     malloc replacement is macOS-incompatible.
+            #   --disable-nls — no localisation, smaller binary, fewer deps.
+            #   --disable-rpath — don't bake build-host rpaths into the
+            #     output (would point at the GitHub runner's filesystem).
+            # We deliberately KEEP bundled readline (default) so the binary
+            # depends only on libSystem — readline gets compiled inside the
+            # bash source tree and statically linked into the bash exe.
+            # We do NOT use --enable-static-link: macOS has no static libc
+            # (Apple ships only libSystem.dylib), so full static linking
+            # always fails on Darwin.
+            # --build is the runner host arch, --host is the target. When
+            # they differ (x64 target on arm64 runner), configure switches
+            # to cross-compile mode and skips runtime feature tests.
+            host_arch="$(uname -m)"
+            (cd "$build_dir" && \
+              CC="clang -arch ${arch}" \
+              CFLAGS="-O2 -arch ${arch}" \
+              LDFLAGS="-arch ${arch}" \
+              "${src_dir}/configure" \
+                --build="${host_arch}-apple-darwin" \
+                --host="${arch}-apple-darwin" \
+                --without-bash-malloc \
+                --disable-nls \
+                --disable-rpath)
+            (cd "$build_dir" && make -j"$(sysctl -n hw.ncpu)")
+
+            mkdir -p "pc2-node/bin/darwin-${target_arch}"
+            cp "$build_dir/bash" "pc2-node/bin/darwin-${target_arch}/bash"
+            strip "pc2-node/bin/darwin-${target_arch}/bash" 2>/dev/null || true
+            chmod +x "pc2-node/bin/darwin-${target_arch}/bash"
+
+            # Verify it's a Mach-O of the right arch and reports version 5
+            file "pc2-node/bin/darwin-${target_arch}/bash"
+            "pc2-node/bin/darwin-${target_arch}/bash" --version | head -1 || {
+              # Cross-compiled x64 bash won't run on arm64 host directly,
+              # but we can still inspect: check the file output instead.
+              echo "(version probe skipped — likely cross-compile target)"
+            }
+          done
+
       - name: Verify all expected darwin binaries exist
         run: |
           set -e
           missing=()
           for arch in arm64 x64; do
-            for binary in wireguard-go wg amneziawg-go; do
+            for binary in wireguard-go wg amneziawg-go bash; do
               path="pc2-node/bin/darwin-${arch}/${binary}"
               [ -f "$path" ] || missing+=("$path")
             done
@@ -142,7 +213,7 @@ jobs:
             printf '  %s\n' "${missing[@]}"
             exit 1
           fi
-          echo "All 8 darwin build outputs present."
+          echo "All 10 darwin build outputs present (incl. bash for arm64+x64)."
 
       - name: Import code-signing certificate into temporary keychain
         env:
@@ -177,11 +248,11 @@ jobs:
           echo "SIGNING_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
           echo "Found signing identity (name only logged): $IDENTITY"
 
-      - name: Codesign 6 darwin native binaries (hardened runtime + timestamp)
+      - name: Codesign 8 darwin native binaries (hardened runtime + timestamp)
         run: |
           set -e
           for arch in arm64 x64; do
-            for binary in wireguard-go wg amneziawg-go; do
+            for binary in wireguard-go wg amneziawg-go bash; do
               path="pc2-node/bin/darwin-${arch}/${binary}"
               echo "Signing $path..."
               codesign --force \
@@ -192,9 +263,9 @@ jobs:
               codesign --verify --strict --verbose=2 "$path"
             done
           done
-          echo "All 6 darwin binaries signed and verified."
+          echo "All 8 darwin binaries signed and verified (incl. bash arm64+x64)."
 
-      - name: Notarise 6 darwin native binaries
+      - name: Notarise 8 darwin native binaries
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
@@ -207,7 +278,7 @@ jobs:
           # ticket lookup at first run (works whenever the user's Mac
           # has internet, which is mandatory for PC2 to function anyway).
           for arch in arm64 x64; do
-            for binary in wireguard-go wg amneziawg-go; do
+            for binary in wireguard-go wg amneziawg-go bash; do
               path="pc2-node/bin/darwin-${arch}/${binary}"
               zip_path="${path}.notarize.zip"
               echo ""
@@ -223,7 +294,7 @@ jobs:
               rm -f "$zip_path"
             done
           done
-          echo "All 6 darwin binaries successfully notarised."
+          echo "All 8 darwin binaries successfully notarised."
 
       - name: Stage darwin assets for upload (flatten to release naming)
         run: |
@@ -231,7 +302,7 @@ jobs:
           mkdir -p staging
           # Native binaries → name-os-arch
           for arch in arm64 x64; do
-            for binary in wireguard-go wg amneziawg-go; do
+            for binary in wireguard-go wg amneziawg-go bash; do
               cp "pc2-node/bin/darwin-${arch}/${binary}" "staging/${binary}-darwin-${arch}"
             done
           done
@@ -351,11 +422,16 @@ jobs:
           mkdir -p staging
           find downloaded -type f -exec cp {} staging/ \;
           echo ""
-          echo "=== Staged assets (expect 16) ==="
+          # v1.2.7.10: 18 assets = 16 from v1.2.7.8/.9 (3 native × 2 darwin
+          # archs + 2 wg-quick scripts darwin = 8 darwin; 5 linux-x64; 3
+          # linux-arm64) + 2 bash darwin (arm64 + x64). Linux gets no
+          # bundled bash because every supported distro has bash 4+
+          # system-wide since ~2015.
+          echo "=== Staged assets (expect 18) ==="
           ls -la staging/
           count=$(ls staging/ | wc -l | tr -d ' ')
-          if [ "$count" != "16" ]; then
-            echo "::warning::Expected 16 assets, found $count. Continuing anyway."
+          if [ "$count" != "18" ]; then
+            echo "::warning::Expected 18 assets, found $count. Continuing anyway."
           fi
 
       - name: Generate SHASUMS256.txt

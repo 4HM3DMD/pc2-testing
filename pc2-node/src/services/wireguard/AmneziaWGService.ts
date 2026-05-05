@@ -164,11 +164,27 @@ export class AmneziaWGService {
 
     /**
    * Build the awg-quick command string.
-   * Uses resolved paths for both awg-quick and amneziawg-go binaries.
+   *
+   * v1.2.7.10: passes WG_QUICK_USERSPACE_IMPLEMENTATION via `sudo -E` so
+   * awg-quick (a fork of wg-quick) can locate the bundled amneziawg-go binary.
+   * Same env-var name as wg-quick uses, but pointed at amneziawg-go instead
+   * of wireguard-go. Without this, sudo's secure_path strips ~/.pc2/.../bin/
+   * and the awg-quick.darwin / awg-quick.linux scripts fail with
+   * "amneziawg-go: command not found" the moment they try to spin up the
+   * obfuscation engine.
+   *
+   * Requires the SETENV flag on the sudoers entry — v1.2.7.10 sudoers writer
+   * (setupPermissions.ts:buildSudoersEntry) emits NOPASSWD:SETENV: rules.
+   * Pre-v1.2.7.10 entries get detected as needing upgrade by
+   * checkWireGuardPermissions and re-prompted on next launch.
    */
     private awgQuickCmd (action: 'up' | 'down', confPath: string): string {
         const absConf = resolve(confPath);
         const awqPath = this.awgQuickBinPath || 'awg-quick';
+
+        if ( this.awgGoBinPath ) {
+            return `WG_QUICK_USERSPACE_IMPLEMENTATION=${this.awgGoBinPath} sudo -E ${awqPath} ${action} ${absConf}`;
+        }
         return `sudo ${awqPath} ${action} ${absConf}`;
     }
 

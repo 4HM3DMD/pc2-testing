@@ -10,7 +10,7 @@
  * Called once at startup, before WireGuard/AmneziaWG/VLESS service initialization.
  */
 
-import { existsSync, mkdirSync, createWriteStream, createReadStream, renameSync, unlinkSync, chmodSync, statSync, readdirSync } from 'fs';
+import { existsSync, mkdirSync, createWriteStream, createReadStream, renameSync, unlinkSync, chmodSync, statSync, readdirSync, readFileSync, writeFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { execSync } from 'child_process';
 import { pipeline } from 'stream/promises';
@@ -51,6 +51,11 @@ let shasumsFetchAttempted = false;
 // PC2 and let BinaryManager fetch it"). Manual package-manager commands
 // are kept as a documented fallback for air-gapped or restricted
 // environments where the GitHub release isn't reachable.
+//
+// v1.2.7.10: added 'bash' (macOS only — Apple ships bash 3.2 from 2007
+// for GPL3-licensing reasons, and wg-quick refuses to start on bash <4).
+// Bundled bash is GPL3 compliant: we publish the upstream source URL on
+// the GitHub release page alongside the binary.
 const INSTALL_HINTS: Record<string, { darwin?: string; linux?: string }> = {
   'wireguard-go': {
     darwin: 'Restart PC2 to auto-download from pc2-binaries-v1. Manual fallback: brew install wireguard-tools',
@@ -61,7 +66,7 @@ const INSTALL_HINTS: Record<string, { darwin?: string; linux?: string }> = {
     linux:  'Restart PC2 to auto-download from pc2-binaries-v1. Manual fallback: sudo apt install wireguard-tools',
   },
   'wg-quick': {
-    darwin: 'Restart PC2 to auto-download from pc2-binaries-v1. Manual fallback: brew install wireguard-tools',
+    darwin: 'Restart PC2 to auto-download from pc2-binaries-v1 (also fetches bash 5 — Apple ships bash 3.2 which wg-quick refuses to run on). Manual fallback: brew install wireguard-tools bash',
     linux:  'Restart PC2 to auto-download from pc2-binaries-v1. Manual fallback: sudo apt install wireguard-tools',
   },
   'amneziawg-go': {
@@ -69,13 +74,19 @@ const INSTALL_HINTS: Record<string, { darwin?: string; linux?: string }> = {
     linux:  'Restart PC2 to auto-download from pc2-binaries-v1. Manual fallback: see https://github.com/amnezia-vpn/amneziawg-go',
   },
   'awg-quick': {
-    darwin: 'Restart PC2 to auto-download from pc2-binaries-v1. Manual fallback: brew tap amnezia-vpn/amneziawg-tools && brew install amneziawg-tools',
+    darwin: 'Restart PC2 to auto-download from pc2-binaries-v1. Manual fallback: brew tap amnezia-vpn/amneziawg-tools && brew install amneziawg-tools bash',
     linux:  'Restart PC2 to auto-download from pc2-binaries-v1. Manual fallback: install amneziawg-tools package',
   },
   'sing-box': {
     // sing-box is not in pc2-binaries-v1; it downloads directly from SagerNet's release.
     darwin: 'Auto-downloads from github.com/SagerNet/sing-box on next PC2 restart. Manual fallback: brew install sing-box',
     linux:  'Auto-downloads from github.com/SagerNet/sing-box on next PC2 restart. Manual fallback: see https://sing-box.sagernet.org/installation/',
+  },
+  'bash': {
+    // Linux distros from ~2015 onwards (Ubuntu 16.04+, Debian 9+, RHEL 8+)
+    // ship bash 4+ system-wide, so this hint only fires on macOS where
+    // Apple's frozen-2007 bash 3.2 is the only system bash.
+    darwin: 'Restart PC2 to auto-download bash 5 from pc2-binaries-v1. wg-quick / awg-quick require bash 4+; Apple ships 3.2 only.',
   },
 };
 
@@ -101,6 +112,14 @@ interface BinarySpec {
   minSize: number;
   /** Whether this is a script (not a compiled binary) */
   isScript?: boolean;
+  /**
+   * v1.2.7.10: optional callback to validate a found binary. Returns false to
+   * reject the candidate and fall through to the next path (or trigger
+   * download). Used for `bash` because /bin/bash exists on every macOS but
+   * is the GPL3-frozen 3.2 release wg-quick refuses to run on.
+   * Errors during validation count as "invalid" — fail-closed.
+   */
+  validateFound?: (path: string) => boolean;
 }
 
 const TRANSPORT_BINARIES: BinarySpec[] = [
@@ -163,6 +182,42 @@ const TRANSPORT_BINARIES: BinarySpec[] = [
     systemPaths: ['/usr/local/bin/sing-box', '/opt/homebrew/bin/sing-box', '/usr/bin/sing-box'],
     minSize: 1_000_000,
   },
+  {
+    // v1.2.7.10: macOS-only. Apple's /bin/bash is frozen at 3.2 (GPL3
+    // licensing dispute), but wg-quick / awg-quick refuse to run on bash <4
+    // (they use BASH_VERSINFO[0] >= 4 as a hard precondition). Bundling our
+    // own bash 5 is the only workable path for fresh-Mac users without
+    // Homebrew. ~1 MB; signed + notarised in publish-pc2-binaries.yml.
+    //
+    // GPL3 compliance: the source URL is published on the pc2-binaries-v1
+    // release page (https://ftp.gnu.org/gnu/bash/bash-5.2.21.tar.gz).
+    //
+    // systemPaths intentionally excludes /bin/bash — the validateFound hook
+    // on `which bash` would catch /bin/bash (Apple 3.2) and reject it, but
+    // skipping the system probe entirely on a non-Homebrew Mac saves a
+    // pointless exec + version-parse on every startup.
+    name: 'bash',
+    platforms: ['darwin'],
+    getDownloadUrl: (os, arch) => `${GITHUB_RELEASE_BASE}/bash-${os}-${arch}`,
+    systemPaths: ['/opt/homebrew/bin/bash', '/usr/local/bin/bash'],
+    minSize: 200_000,
+    validateFound: (foundPath) => {
+      try {
+        const out = execSync(`"${foundPath}" --version 2>&1`, {
+          stdio: 'pipe',
+          timeout: 3000,
+          shell: '/bin/sh',
+        }).toString();
+        // GNU bash version banner format: "GNU bash, version 5.2.15(1)-..."
+        const match = out.match(/version\s+(\d+)\.(\d+)/i);
+        if (!match) return false;
+        const major = parseInt(match[1], 10);
+        return major >= 4;
+      } catch {
+        return false;
+      }
+    },
+  },
 ];
 
 export interface BinaryReport {
@@ -180,16 +235,26 @@ export interface BinaryCheckResult {
 
 /**
  * Resolve the actual path where a binary was found, or null if missing.
+ *
+ * v1.2.7.10: when a BinarySpec has `validateFound`, candidates that fail
+ * validation are skipped (not returned). This lets us reject Apple's /bin/bash
+ * 3.2 even though it exists, and fall through to the bundled / Homebrew bash 5.
  */
-function resolveBinaryPath(name: string, bundledDir: string, systemPaths: string[]): string | null {
+function resolveBinaryPath(
+  name: string,
+  bundledDir: string,
+  systemPaths: string[],
+  validateFound?: (path: string) => boolean,
+): string | null {
   const isWin = process.platform === 'win32';
   const binaryName = isWin ? `${name}.exe` : name;
+  const accept = (p: string): boolean => !validateFound || validateFound(p);
 
   const bundledPath = join(bundledDir, binaryName);
-  if (existsSync(bundledPath)) return bundledPath;
+  if (existsSync(bundledPath) && accept(bundledPath)) return bundledPath;
 
   for (const p of systemPaths) {
-    if (existsSync(p)) return p;
+    if (existsSync(p) && accept(p)) return p;
   }
 
   if (!isWin) {
@@ -199,7 +264,7 @@ function resolveBinaryPath(name: string, bundledDir: string, systemPaths: string
         timeout: 3000,
         shell: '/bin/sh',
       }).toString().trim();
-      if (found && existsSync(found)) return found;
+      if (found && existsSync(found) && accept(found)) return found;
     } catch { /* not on PATH */ }
   }
 
@@ -220,7 +285,7 @@ export function checkTransportBinaries(): BinaryCheckResult[] {
       continue;
     }
 
-    const resolvedPath = resolveBinaryPath(spec.name, binDir, spec.systemPaths);
+    const resolvedPath = resolveBinaryPath(spec.name, binDir, spec.systemPaths, spec.validateFound);
     results.push({
       name: spec.name,
       found: resolvedPath !== null,
@@ -246,30 +311,13 @@ export function getBundledBinDir(): string {
 /**
  * Check if a binary exists anywhere the services would find it:
  * bundled dir, system paths, or PATH.
+ *
+ * v1.2.7.10: delegates to resolveBinaryPath so validateFound is honoured —
+ * keeps a single code path for "is this binary acceptable here?". Cheaper
+ * than duplicating the validation logic and avoids drift between the two.
  */
-function binaryExists(name: string, bundledDir: string, systemPaths: string[]): boolean {
-  const isWin = process.platform === 'win32';
-  const binaryName = isWin ? `${name}.exe` : name;
-
-  const bundledPath = join(bundledDir, binaryName);
-  if (existsSync(bundledPath)) return true;
-
-  for (const p of systemPaths) {
-    if (existsSync(p)) return true;
-  }
-
-  if (!isWin) {
-    try {
-      const found = execSync(`which ${name} 2>/dev/null`, {
-        stdio: 'pipe',
-        timeout: 3000,
-        shell: '/bin/sh',
-      }).toString().trim();
-      if (found && existsSync(found)) return true;
-    } catch { /* not on PATH */ }
-  }
-
-  return false;
+function binaryExists(spec: BinarySpec, bundledDir: string): boolean {
+  return resolveBinaryPath(spec.name, bundledDir, spec.systemPaths, spec.validateFound) !== null;
 }
 
 /**
@@ -618,7 +666,7 @@ export async function ensureTransportBinaries(): Promise<BinaryReport> {
 
     report.checked++;
 
-    if (binaryExists(spec.name, binDir, spec.systemPaths)) {
+    if (binaryExists(spec, binDir)) {
       logger.debug(`[BinaryManager] ${spec.name}: found`);
       report.skipped++;
       continue;
@@ -654,7 +702,78 @@ export async function ensureTransportBinaries(): Promise<BinaryReport> {
     logger.info(`[BinaryManager] All ${report.checked} transport binaries present`);
   }
 
+  // v1.2.7.10: macOS post-pass — make sure wg-quick/awg-quick can actually
+  // run. Apple's /bin/bash is 3.2 and these scripts hard-fail on bash <4.
+  // Rewrites the shebang to point at the resolved bash 4+ binary (bundled
+  // first, then Homebrew system paths). Idempotent + fail-soft: if bash
+  // can't be resolved (e.g. download failed and no Homebrew), we leave the
+  // shebang alone — the script will still error on bash 3.2 but at least
+  // we don't make things worse, and the WireGuard cascade falls to the
+  // next transport.
+  if (platform === 'darwin') {
+    patchMacOSScriptShebangs(binDir);
+  }
+
   return report;
+}
+
+/**
+ * v1.2.7.10: Rewrite the `#!` line of wg-quick / awg-quick on macOS to
+ * point at a bash 4+ interpreter. Pre-conditions:
+ *
+ *   - We're on macOS (Linux ships bash 4+ system-wide; no-op there).
+ *   - bash 4+ is resolvable via the same logic the BinarySpec uses
+ *     (bundled first, then Homebrew). Resolves to null on hopelessly
+ *     misconfigured systems — we log and bail rather than corrupt files.
+ *
+ * Safe to re-run: reads the current shebang, only writes if it differs.
+ * SHA-256 verification of wg-quick/awg-quick happens at download time
+ * (before this patch), so the integrity contract is preserved — what we're
+ * doing here is an explicit, auditable post-install transform.
+ */
+function patchMacOSScriptShebangs(bundledDir: string): void {
+  const bashSpec = TRANSPORT_BINARIES.find((s) => s.name === 'bash');
+  if (!bashSpec) return;
+  const bashPath = resolveBinaryPath('bash', bundledDir, bashSpec.systemPaths, bashSpec.validateFound);
+  if (!bashPath) {
+    logger.warn('[BinaryManager] No bash 4+ resolved on macOS — skipping wg-quick/awg-quick shebang patch. Tunnels will fail until bash is installed.');
+    return;
+  }
+
+  const targetShebang = `#!${bashPath}`;
+  const scripts = ['wg-quick', 'awg-quick'];
+
+  for (const script of scripts) {
+    const path = join(bundledDir, script);
+    if (!existsSync(path)) continue;
+
+    try {
+      // Read the whole file (these scripts are ~600 lines / ~20 KB so
+      // memory cost is trivial) so we can round-trip the body unchanged
+      // while only mutating the shebang. Optimising to read-just-the-first-line
+      // would be premature.
+      const content = readFileSync(path, 'utf8');
+      const newlineIdx = content.indexOf('\n');
+      if (newlineIdx < 0) {
+        logger.warn(`[BinaryManager] ${script} appears truncated (no newline) — leaving shebang alone`);
+        continue;
+      }
+      const currentShebang = content.slice(0, newlineIdx);
+      if (currentShebang === targetShebang) {
+        logger.debug(`[BinaryManager] ${script} shebang already correct (${targetShebang})`);
+        continue;
+      }
+      if (!currentShebang.startsWith('#!')) {
+        logger.warn(`[BinaryManager] ${script} first line is not a shebang ("${currentShebang.slice(0, 40)}…") — leaving alone, file may be corrupt`);
+        continue;
+      }
+      const patched = `${targetShebang}\n${content.slice(newlineIdx + 1)}`;
+      writeFileSync(path, patched, { mode: 0o755 });
+      logger.info(`[BinaryManager] ${script} shebang patched: "${currentShebang}" → "${targetShebang}"`);
+    } catch (err) {
+      logger.warn(`[BinaryManager] Failed to patch ${script} shebang: ${(err as Error).message}`);
+    }
+  }
 }
 
 // Re-export so the system-readiness API can show the same hint to users
