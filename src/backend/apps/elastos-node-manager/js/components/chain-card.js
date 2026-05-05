@@ -28,6 +28,7 @@
         this.notifications = opts.notifications;
         this.sse = opts.sse || null;
         this.onStateChange = typeof opts.onStateChange === 'function' ? opts.onStateChange : function () {};
+        this.onReconfigure = typeof opts.onReconfigure === 'function' ? opts.onReconfigure : null;
 
         this.root = document.createElement('article');
         this.root.className = 'enm-chain-card';
@@ -136,10 +137,13 @@
         var actions = document.createElement('div');
         actions.className = 'enm-chain-actions';
 
+        this._configureBtn = makeBtn(t('chain_actions.configure'), 'enm-btn-primary', this._handleConfigure.bind(this));
+        this._configureBtn.hidden = true;
         this._startBtn = makeBtn(t('chain_actions.start'),     'enm-btn-primary',  this._handleStart.bind(this));
         this._stopBtn  = makeBtn(t('chain_actions.stop'),      'enm-btn-secondary', this._handleStop.bind(this));
         this._restartBtn = makeBtn(t('chain_actions.restart'), 'enm-btn-secondary', this._handleRestart.bind(this));
 
+        actions.appendChild(this._configureBtn);
         actions.appendChild(this._startBtn);
         actions.appendChild(this._stopBtn);
         actions.appendChild(this._restartBtn);
@@ -160,13 +164,27 @@
         this._statFields.peers.textContent   = state && state.peers         != null ? String(state.peers)         : '—';
         this._statFields.uptime.textContent  = state && state.uptimeSec     != null ? root.enmFormatUptime(state.uptimeSec) : '—';
 
-        // Button enable/disable.
+        // Button enable/disable. When unconfigured, swap the action set:
+        // hide start/stop/restart and surface a Configure CTA that re-opens
+        // the wizard inline (per Wave 2.4 of the v0.3 plan).
         var alive = (coarse === 'healthy' || coarse === 'syncing' || coarse === 'stalled' || coarse === 'recovering');
-        this._startBtn.disabled   = alive || coarse === 'unconfigured';
+        var unconfigured = (coarse === 'unconfigured');
+        this._configureBtn.hidden = !unconfigured || !this.onReconfigure;
+        this._startBtn.hidden     = unconfigured;
+        this._stopBtn.hidden      = unconfigured;
+        this._restartBtn.hidden   = unconfigured;
+        this._startBtn.disabled   = alive;
         this._stopBtn.disabled    = !alive;
         this._restartBtn.disabled = !alive;
 
         this.onStateChange(coarse, state);
+    };
+
+    /** @private */
+    ChainCard.prototype._handleConfigure = function () {
+        if (typeof this.onReconfigure === 'function') {
+            this.onReconfigure(this.chainId);
+        }
     };
 
     /** @private */

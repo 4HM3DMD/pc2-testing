@@ -60,6 +60,7 @@
             logs: 'Logs',
             settings: 'Settings',
             audit: 'Audit',
+            evm: 'EVM',
         },
 
         chain_state: {
@@ -77,6 +78,7 @@
             start:      'Start',
             stop:       'Stop',
             restart:    'Restart',
+            configure:  'Configure',
             confirm_stop:    'Stop {chainName}?',
             confirm_restart: 'Restart {chainName}?',
             cooldown:   'Hold on... {seconds}s',

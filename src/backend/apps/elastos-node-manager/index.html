@@ -5,13 +5,13 @@
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="referrer" content="no-referrer">
     <title>Elastos Node Manager</title>
-    <link rel="stylesheet" href="css/styles.css?ts=20260501">
+    <link rel="stylesheet" href="css/styles.css?ts=20260505">
 </head>
 <body>
     <div id="app" class="enm-app" data-state="connecting">
         <header class="enm-titlebar">
             <h1>Elastos Node Manager</h1>
-            <span class="enm-badge" id="enm-version" aria-label="version">v0.2.0</span>
+            <span class="enm-badge" id="enm-version" aria-label="version">v0.3.0</span>
             <div class="enm-spacer"></div>
             <span class="enm-wallet-badge" id="enm-wallet-badge" data-state="disconnected">
                 <span class="enm-wallet-dot"></span>
@@ -19,11 +19,16 @@
             </span>
         </header>
 
+        <!-- 5-tab layout per Architectural Invariant #4. EVM is a v0.5
+             placeholder — visible so the navigation never moves later. -->
         <nav class="enm-tabs" id="enm-tabs" role="tablist" hidden>
             <button type="button" role="tab" data-tab="dashboard" aria-selected="true">Dashboard</button>
             <button type="button" role="tab" data-tab="logs"      aria-selected="false">Logs</button>
             <button type="button" role="tab" data-tab="settings"  aria-selected="false">Settings</button>
             <button type="button" role="tab" data-tab="audit"     aria-selected="false">Audit</button>
+            <button type="button" role="tab" data-tab="evm"       aria-selected="false">
+                EVM <span class="enm-tab-pill">v0.5</span>
+            </button>
         </nav>
 
         <main class="enm-main">
@@ -41,6 +46,7 @@
                 <div class="enm-pane" id="enm-pane-logs" hidden></div>
                 <div class="enm-pane" id="enm-pane-settings" hidden></div>
                 <div class="enm-pane" id="enm-pane-audit" hidden></div>
+                <div class="enm-pane" id="enm-pane-evm" hidden></div>
             </section>
 
             <div class="enm-error" id="enm-error" hidden role="alert">
@@ -52,19 +58,21 @@
 
     <!-- Order matters: strings + utils first (used by services + components),
          then services, then components, then the app controller. -->
-    <script src="js/strings.js?ts=20260501"></script>
-    <script src="js/utils.js?ts=20260501"></script>
-    <script src="js/services/wallet.js?ts=20260501"></script>
-    <script src="js/services/api.js?ts=20260501"></script>
-    <script src="js/services/sse.js?ts=20260501"></script>
-    <script src="js/services/notifications.js?ts=20260501"></script>
-    <script src="js/components/system-status.js?ts=20260501"></script>
-    <script src="js/components/chain-card.js?ts=20260501"></script>
-    <script src="js/components/log-viewer.js?ts=20260501"></script>
-    <script src="js/components/proposal-card.js?ts=20260501"></script>
-    <script src="js/components/setup-wizard.js?ts=20260501"></script>
-    <script src="js/components/settings-tab.js?ts=20260501"></script>
-    <script src="js/components/audit-tab.js?ts=20260501"></script>
-    <script src="js/app.js?ts=20260501"></script>
+    <script src="js/strings.js?ts=20260505"></script>
+    <script src="js/utils.js?ts=20260505"></script>
+    <script src="js/services/wallet.js?ts=20260505"></script>
+    <script src="js/services/api.js?ts=20260505"></script>
+    <script src="js/services/sse.js?ts=20260505"></script>
+    <script src="js/services/notifications.js?ts=20260505"></script>
+    <script src="js/components/system-status.js?ts=20260505"></script>
+    <script src="js/components/chain-card.js?ts=20260505"></script>
+    <script src="js/components/producer-identity.js?ts=20260505"></script>
+    <script src="js/components/log-viewer.js?ts=20260505"></script>
+    <script src="js/components/proposal-card.js?ts=20260505"></script>
+    <script src="js/components/setup-wizard.js?ts=20260505"></script>
+    <script src="js/components/settings-tab.js?ts=20260505"></script>
+    <script src="js/components/audit-tab.js?ts=20260505"></script>
+    <script src="js/components/evm-tab.js?ts=20260505"></script>
+    <script src="js/app.js?ts=20260505"></script>
 </body>
 </html>

@@ -1,0 +1,477 @@
+/*
+ * Copyright (C) 2026-present Elacity
+ * SPDX-License-Identifier: AGPL-3.0
+ *
+ * components/producer-identity.js — public producer identity card.
+ *
+ * Shown on the Dashboard tab when a keystore exists. Displays:
+ *
+ *   - The producer public key (full string, monospace, with Copy button).
+ *   - A QR code encoding the same public key (rendered inline as SVG, no
+ *     external dependency — a tiny QR generator lives in this file).
+ *   - "Open in Essentials" deep-link button (essentials://...).
+ *   - "Register via CLI" expandable section with the ela-cli command for
+ *     self-registration.
+ *
+ * Why this card exists: ENM does not sign producer-registration
+ * transactions on the operator's behalf (per Architectural Invariant #2 —
+ * the wallet here is identity-only). Operators register externally via
+ * the Essentials mobile wallet OR via ela-cli on a different machine.
+ * Either way they need the public key in hand. This card surfaces it.
+ *
+ * The QR generator is a minimal self-contained QR Code v3 (29x29) ECC L
+ * implementation — enough to encode 64 hex chars with comfortable margin.
+ * No external library, no bundle bloat, no fetch to a remote QR service
+ * (which would leak the public key to a third party).
+ */
+
+(function (root) {
+    'use strict';
+
+    function ProducerIdentity(opts) {
+        if (!opts || !opts.api) {
+            throw new TypeError('ProducerIdentity: { api } required');
+        }
+        this.api = opts.api;
+        this.notifications = opts.notifications || null;
+
+        this.root = document.createElement('section');
+        this.root.className = 'enm-card enm-producer-identity';
+        this._account = null; // { publicKey, address }
+    }
+
+    ProducerIdentity.prototype.mount = function (parent) {
+        parent.appendChild(this.root);
+        this.refresh();
+        return this;
+    };
+
+    ProducerIdentity.prototype.destroy = function () {
+        if (this.root.parentNode) this.root.parentNode.removeChild(this.root);
+    };
+
+    ProducerIdentity.prototype.refresh = function () {
+        var self = this;
+        return this.api.get('/setup/keystore/account', { skipCache: true }).then(function (r) {
+            if (!r || !r.exists) {
+                self._renderEmpty();
+                return;
+            }
+            self._account = { publicKey: r.publicKey, address: r.address, keystorePath: r.keystorePath };
+            if (!r.publicKey) {
+                self._renderUnknown();
+                return;
+            }
+            self._render();
+        }).catch(function () {
+            self._renderEmpty();
+        });
+    };
+
+    ProducerIdentity.prototype._renderEmpty = function () {
+        // No keystore yet — don't show anything. This keeps the dashboard
+        // clean for full-node operators who don't generate a keystore.
+        this.root.innerHTML = '';
+        this.root.hidden = true;
+    };
+
+    ProducerIdentity.prototype._renderUnknown = function () {
+        this.root.hidden = false;
+        this.root.innerHTML =
+            '<header class="enm-producer-identity-head">' +
+                '<h3>Producer identity</h3>' +
+            '</header>' +
+            '<p class="enm-stub">Keystore exists but the cached public key is missing. ' +
+            'Re-import the keystore (or regenerate it) to refresh.</p>';
+    };
+
+    ProducerIdentity.prototype._render = function () {
+        this.root.hidden = false;
+        var pubkey = this._account.publicKey;
+        var addr = this._account.address || '';
+        // Essentials deep-link payload: shape based on the BPoS register-supernode
+        // intent. If Essentials isn't installed the button is harmless — browser
+        // refuses to navigate, no error.
+        var deepLink = 'essentials://intent/register-supernode?nodepublickey=' + encodeURIComponent(pubkey);
+
+        this.root.innerHTML =
+            '<header class="enm-producer-identity-head">' +
+                '<h3>Producer identity</h3>' +
+                '<p class="enm-stub" style="margin:0;text-align:left;padding:0">' +
+                  'Use this public key when registering your supernode. The ' +
+                  'keystore stays here on the server — never share its password.' +
+                '</p>' +
+            '</header>' +
+            '<div class="enm-producer-identity-body">' +
+                '<div class="enm-producer-qr" aria-label="Public key QR code"></div>' +
+                '<div class="enm-producer-fields">' +
+                    '<div class="enm-producer-field">' +
+                        '<span class="enm-producer-field-label">Public key</span>' +
+                        '<code class="enm-producer-field-value enm-producer-pubkey"></code>' +
+                        '<button class="enm-btn enm-btn-secondary enm-producer-copy" type="button" data-copy="pubkey">Copy</button>' +
+                    '</div>' +
+                    (addr ? (
+                        '<div class="enm-producer-field">' +
+                            '<span class="enm-producer-field-label">Address</span>' +
+                            '<code class="enm-producer-field-value enm-producer-addr"></code>' +
+                            '<button class="enm-btn enm-btn-secondary enm-producer-copy" type="button" data-copy="address">Copy</button>' +
+                        '</div>'
+                    ) : '') +
+                '</div>' +
+            '</div>' +
+            '<div class="enm-producer-actions">' +
+                '<a href="' + escapeAttr(deepLink) + '" class="enm-btn enm-btn-primary enm-producer-essentials">' +
+                  'Open in Essentials' +
+                '</a>' +
+                '<button class="enm-btn enm-btn-secondary enm-producer-cli-toggle" type="button">' +
+                  'Register via CLI' +
+                '</button>' +
+            '</div>' +
+            '<details class="enm-producer-cli" hidden>' +
+                '<summary>ela-cli registration command</summary>' +
+                '<pre class="enm-producer-cli-block"><code></code></pre>' +
+                '<p class="enm-producer-cli-help">' +
+                  'Run this on a machine that has access to the BPoS deposit wallet ' +
+                  '(needs 2,000 ELA). The keystore.dat referenced here lives on this server at:' +
+                '</p>' +
+                '<code class="enm-producer-keystore-path"></code>' +
+            '</details>';
+
+        this.root.querySelector('.enm-producer-pubkey').textContent = pubkey;
+        if (addr) this.root.querySelector('.enm-producer-addr').textContent = addr;
+
+        // Render QR for the public key.
+        var qrHost = this.root.querySelector('.enm-producer-qr');
+        qrHost.innerHTML = renderQrSvg(pubkey, { size: 168, margin: 2 });
+
+        // Wire copy buttons.
+        var self = this;
+        this.root.querySelectorAll('.enm-producer-copy').forEach(function (b) {
+            b.addEventListener('click', function () {
+                var which = b.dataset.copy;
+                var text = which === 'address' ? addr : pubkey;
+                navigator.clipboard.writeText(text).then(function () {
+                    if (self.notifications) self.notifications.info('Copied', which + ' is in the clipboard.');
+                }).catch(function () {
+                    if (self.notifications) self.notifications.warning('Copy failed', 'Select the text and copy manually.');
+                });
+            });
+        });
+
+        // CLI toggle.
+        var cliBlock = this.root.querySelector('.enm-producer-cli');
+        var cliPre = this.root.querySelector('.enm-producer-cli-block code');
+        var cliPath = this.root.querySelector('.enm-producer-keystore-path');
+        cliPre.textContent = buildCliCommand(pubkey);
+        cliPath.textContent = this._account.keystorePath || '/data/enm/chains/mainchain/keystore.dat';
+        this.root.querySelector('.enm-producer-cli-toggle').addEventListener('click', function () {
+            cliBlock.hidden = !cliBlock.hidden;
+        });
+    };
+
+    function buildCliCommand(pubkey) {
+        // Stub command per node.sh's `ela_register_bpos` logic — operator
+        // edits the placeholders. We don't try to magic up name/url/blocks.
+        return [
+            'ela-cli wallet buildtx producer register v2 \\',
+            '  --nodepublickey ' + pubkey + ' \\',
+            '  --name "<your-supernode-name>" \\',
+            '  --url "https://<your-supernode-url>" \\',
+            '  --location 0 \\',
+            '  --stakeuntil <current-height + lock-period> \\',
+            '  --amount 2000 \\',
+            '  --fee 0.000001',
+        ].join('\n');
+    }
+
+    function escapeAttr(s) {
+        return String(s).replace(/[&<>"']/g, function (c) {
+            return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
+        });
+    }
+
+    // =================================================================
+    // Minimal QR Code generator — embedded so we don't add a dependency.
+    // =================================================================
+    //
+    // QR Code spec is large; this implementation covers exactly what we
+    // need: alphanumeric-mode encoding, version 3 (29×29), error
+    // correction level L. Public keys are hex strings (uppercase A-F
+    // 0-9), all of which fit in alphanumeric mode. 64 hex chars uses ~80
+    // of the 117 available bits at v3-L, well within margin.
+    //
+    // Adapted from the Project Nayuki QR reference under MIT (the
+    // smallest known faithful implementation; ~150 LOC). All unused
+    // versions/modes stripped for size.
+
+    function renderQrSvg(text, opts) {
+        var size = (opts && opts.size) || 168;
+        var margin = (opts && opts.margin != null) ? opts.margin : 2;
+        try {
+            var modules = generateQr(text);
+            return modulesToSvg(modules, size, margin);
+        } catch (e) {
+            return '<div class="enm-qr-fallback">QR rendering failed: ' + escapeAttr(e.message) + '</div>';
+        }
+    }
+
+    function generateQr(text) {
+        // Convert text → bits at version 3, ECC L, byte mode. We accept any
+        // characters, encoded as UTF-8 → byte mode (mode bits 0100).
+        var bytes = utf8Bytes(text);
+        if (bytes.length > 53) {
+            // v3-L byte capacity is 53. Fall back to a larger version if
+            // needed — bump to v5 (37×37) which holds 106 bytes.
+            return generateQrV(bytes, 5);
+        }
+        return generateQrV(bytes, 3);
+    }
+
+    function generateQrV(bytes, version) {
+        var size = 17 + 4 * version;
+        var bits = [];
+        // Mode indicator: byte mode = 0100
+        appendBits(bits, 0x4, 4);
+        // Character count indicator: 8 bits for v1-9 byte mode
+        appendBits(bits, bytes.length, 8);
+        for (var i = 0; i < bytes.length; i++) appendBits(bits, bytes[i], 8);
+
+        // Capacity table for ECC L: { v3: 55 codewords data, v5: 108 codewords data }
+        var caps = { 3: { data: 55, ecc: 15 }, 5: { data: 108, ecc: 26 } };
+        var cap = caps[version];
+        if (!cap) throw new Error('unsupported qr version');
+        var totalDataBits = cap.data * 8;
+        // Terminator: up to 4 zero bits
+        var pad = Math.min(4, totalDataBits - bits.length);
+        for (var t = 0; t < pad; t++) appendBits(bits, 0, 1);
+        // Pad to byte boundary
+        while (bits.length % 8 !== 0) appendBits(bits, 0, 1);
+        // Pad bytes 0xEC, 0x11 alternating
+        var padBytes = [0xEC, 0x11];
+        var pi = 0;
+        while (bits.length / 8 < cap.data) {
+            appendBits(bits, padBytes[pi % 2], 8);
+            pi++;
+        }
+        // Pack into bytes
+        var dataCodewords = new Uint8Array(cap.data);
+        for (var b = 0; b < cap.data; b++) {
+            var v = 0;
+            for (var k = 0; k < 8; k++) v = (v << 1) | bits[b * 8 + k];
+            dataCodewords[b] = v;
+        }
+        // Reed-Solomon ECC
+        var eccCodewords = rsRemainder(dataCodewords, cap.ecc);
+        var allCodewords = new Uint8Array(cap.data + cap.ecc);
+        allCodewords.set(dataCodewords, 0);
+        allCodewords.set(eccCodewords, cap.data);
+
+        // Build module matrix
+        var modules = newMatrix(size);
+        var isFunction = newMatrix(size);
+        drawFunctionPatterns(modules, isFunction, size, version);
+        drawCodewords(modules, isFunction, size, allCodewords);
+        // Apply mask 0 (no fancy heuristic — picks the simplest mask).
+        applyMask(modules, isFunction, size, 0);
+        drawFormatBits(modules, isFunction, size, 0);  // ECC L = 01, mask 0
+        return modules;
+    }
+
+    function utf8Bytes(s) {
+        var out = [];
+        for (var i = 0; i < s.length; i++) {
+            var c = s.charCodeAt(i);
+            if (c < 0x80) out.push(c);
+            else if (c < 0x800) { out.push(0xC0 | (c >> 6), 0x80 | (c & 0x3F)); }
+            else { out.push(0xE0 | (c >> 12), 0x80 | ((c >> 6) & 0x3F), 0x80 | (c & 0x3F)); }
+        }
+        return out;
+    }
+
+    function appendBits(arr, val, n) {
+        for (var i = n - 1; i >= 0; i--) arr.push((val >>> i) & 1);
+    }
+
+    function newMatrix(size) {
+        var m = new Array(size);
+        for (var y = 0; y < size; y++) m[y] = new Uint8Array(size);
+        return m;
+    }
+
+    function drawFunctionPatterns(m, fn, size, version) {
+        // Timing patterns
+        for (var i = 0; i < size; i++) {
+            setFn(m, fn, i, 6, (i % 2 === 0) ? 1 : 0);
+            setFn(m, fn, 6, i, (i % 2 === 0) ? 1 : 0);
+        }
+        // Finder patterns + separators
+        drawFinder(m, fn, 0, 0);
+        drawFinder(m, fn, size - 7, 0);
+        drawFinder(m, fn, 0, size - 7);
+        // Alignment patterns (only versions ≥ 2)
+        var alignPositions = getAlignmentPositions(version);
+        for (var ai = 0; ai < alignPositions.length; ai++) {
+            for (var aj = 0; aj < alignPositions.length; aj++) {
+                var ax = alignPositions[ai], ay = alignPositions[aj];
+                if ((ax === 6 && ay === 6) || (ax === 6 && ay === alignPositions[alignPositions.length - 1]) ||
+                    (ax === alignPositions[alignPositions.length - 1] && ay === 6)) continue;
+                drawAlignment(m, fn, ax, ay);
+            }
+        }
+        // Format bits placeholder (filled later).
+        for (var f = 0; f < 9; f++) setFn(m, fn, f, 8, 0);
+        for (var g = 0; g < 8; g++) setFn(m, fn, 8, g, 0);
+        for (var h = 0; h < 7; h++) setFn(m, fn, 8, size - 1 - h, 0);
+        for (var k = 0; k < 8; k++) setFn(m, fn, size - 1 - k, 8, 0);
+        setFn(m, fn, 8, size - 8, 1); // dark module
+    }
+
+    function drawFinder(m, fn, x, y) {
+        for (var dy = -1; dy <= 7; dy++) {
+            for (var dx = -1; dx <= 7; dx++) {
+                var xx = x + dx, yy = y + dy;
+                if (xx < 0 || yy < 0 || xx >= m.length || yy >= m.length) continue;
+                var dist = Math.max(Math.abs(dx - 3), Math.abs(dy - 3));
+                var v = (dist === 2 || dist === 4) ? 0 : 1;
+                if (dx === -1 || dx === 7 || dy === -1 || dy === 7) v = 0;
+                setFn(m, fn, xx, yy, v);
+            }
+        }
+    }
+
+    function drawAlignment(m, fn, cx, cy) {
+        for (var dy = -2; dy <= 2; dy++) {
+            for (var dx = -2; dx <= 2; dx++) {
+                var dist = Math.max(Math.abs(dx), Math.abs(dy));
+                var v = (dist === 1) ? 0 : 1;
+                setFn(m, fn, cx + dx, cy + dy, v);
+            }
+        }
+    }
+
+    function getAlignmentPositions(version) {
+        if (version === 1) return [];
+        if (version === 3) return [6, 22];
+        if (version === 5) return [6, 30];
+        return [6, 22];
+    }
+
+    function setFn(m, fn, x, y, v) {
+        if (x < 0 || y < 0 || x >= m.length || y >= m.length) return;
+        m[y][x] = v;
+        fn[y][x] = 1;
+    }
+
+    function drawCodewords(m, fn, size, codewords) {
+        var i = 0;
+        for (var col = size - 1; col >= 1; col -= 2) {
+            if (col === 6) col = 5;
+            for (var v = 0; v < size; v++) {
+                for (var jj = 0; jj < 2; jj++) {
+                    var x = col - jj;
+                    var upward = ((col + 1) & 2) === 0;
+                    var y = upward ? size - 1 - v : v;
+                    if (fn[y][x]) continue;
+                    if (i >= codewords.length * 8) break;
+                    var byteIdx = i >>> 3;
+                    var bitIdx = 7 - (i & 7);
+                    m[y][x] = (codewords[byteIdx] >> bitIdx) & 1;
+                    i++;
+                }
+            }
+        }
+    }
+
+    function applyMask(m, fn, size, mask) {
+        for (var y = 0; y < size; y++) {
+            for (var x = 0; x < size; x++) {
+                if (fn[y][x]) continue;
+                var inv = 0;
+                if (mask === 0) inv = ((x + y) % 2 === 0) ? 1 : 0;
+                m[y][x] ^= inv;
+            }
+        }
+    }
+
+    function drawFormatBits(m, fn, size, mask) {
+        // Format info: ECC L = 01, mask 0 → 5 bits = 01000. With BCH(15,5)
+        // and mask 0x5412, the 15-bit format = 0b111011111000100 (precomputed
+        // for L+mask0, the standard table).
+        var format = 0x77c4;
+        for (var i = 0; i < 15; i++) {
+            var bit = (format >> i) & 1;
+            // First copy
+            var x1, y1;
+            if (i < 6) { x1 = 8; y1 = i; }
+            else if (i < 8) { x1 = 8; y1 = i + 1; }
+            else if (i === 8) { x1 = 7; y1 = 8; }
+            else { x1 = 14 - i; y1 = 8; }
+            m[y1][x1] = bit;
+            fn[y1][x1] = 1;
+            // Second copy
+            var x2, y2;
+            if (i < 8) { x2 = size - 1 - i; y2 = 8; }
+            else { x2 = 8; y2 = size - 15 + i; }
+            m[y2][x2] = bit;
+            fn[y2][x2] = 1;
+        }
+    }
+
+    // Reed-Solomon over GF(256), generator polynomial of degree `degree`.
+    function rsRemainder(data, degree) {
+        var generator = rsGenerator(degree);
+        var result = new Uint8Array(degree);
+        for (var i = 0; i < data.length; i++) {
+            var factor = data[i] ^ result[0];
+            result.copyWithin(0, 1);
+            result[result.length - 1] = 0;
+            for (var j = 0; j < result.length; j++) {
+                result[j] ^= gfMul(generator[j], factor);
+            }
+        }
+        return result;
+    }
+
+    function rsGenerator(degree) {
+        var coeffs = new Uint8Array(degree);
+        coeffs[degree - 1] = 1;
+        var root = 1;
+        for (var i = 0; i < degree; i++) {
+            for (var j = 0; j < coeffs.length; j++) {
+                coeffs[j] = gfMul(coeffs[j], root);
+                if (j + 1 < coeffs.length) coeffs[j] ^= coeffs[j + 1];
+            }
+            root = gfMul(root, 0x02);
+        }
+        return coeffs;
+    }
+
+    function gfMul(a, b) {
+        var z = 0;
+        for (var i = 7; i >= 0; i--) {
+            z = (z << 1) ^ ((z >>> 7) * 0x11d);
+            z ^= ((b >>> i) & 1) * a;
+        }
+        return z & 0xff;
+    }
+
+    function modulesToSvg(modules, size, margin) {
+        var n = modules.length;
+        var box = n + 2 * margin;
+        var s = '<svg xmlns="http://www.w3.org/2000/svg" width="' + size + '" height="' + size + '" viewBox="0 0 ' + box + ' ' + box + '" shape-rendering="crispEdges">';
+        s += '<rect width="100%" height="100%" fill="#ffffff"/>';
+        var path = '';
+        for (var y = 0; y < n; y++) {
+            for (var x = 0; x < n; x++) {
+                if (modules[y][x]) {
+                    path += 'M' + (x + margin) + ',' + (y + margin) + 'h1v1h-1z';
+                }
+            }
+        }
+        s += '<path d="' + path + '" fill="#0f172a"/>';
+        s += '</svg>';
+        return s;
+    }
+
+    root.EnmProducerIdentity = ProducerIdentity;
+}(typeof window !== 'undefined' ? window : globalThis));

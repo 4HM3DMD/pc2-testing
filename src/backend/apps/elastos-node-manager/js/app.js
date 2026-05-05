@@ -41,6 +41,7 @@
             paneLogs:     document.getElementById('enm-pane-logs'),
             paneSettings: document.getElementById('enm-pane-settings'),
             paneAudit:    document.getElementById('enm-pane-audit'),
+            paneEvm:      document.getElementById('enm-pane-evm'),
         };
 
         this.services = {
@@ -124,6 +125,15 @@
         });
         sys.mount(this.els.paneDashboard);
 
+        if (root.EnmProducerIdentity) {
+            var producer = new root.EnmProducerIdentity({
+                chainId: 'mainchain',
+                api: this.services.api,
+                notifications: this.services.notifications,
+            });
+            producer.mount(this.els.paneDashboard);
+        }
+
         if (root.EnmSettingsTab) {
             var settings = new root.EnmSettingsTab({
                 api: this.services.api,
@@ -137,6 +147,10 @@
                 notifications: this.services.notifications,
             });
             audit.mount(this.els.paneAudit);
+        }
+        if (root.EnmEvmTab) {
+            var evm = new root.EnmEvmTab();
+            evm.mount(this.els.paneEvm);
         }
 
         var chainsContainer = document.createElement('div');
@@ -159,6 +173,7 @@
                     api: self.services.api,
                     notifications: self.services.notifications,
                     sse: self.services.sse,
+                    onReconfigure: function () { self._showSetupWizard(); },
                 });
                 card.mount(chainsContainer);
             });
@@ -242,9 +257,10 @@
             logs:      this.els.paneLogs,
             settings:  this.els.paneSettings,
             audit:     this.els.paneAudit,
+            evm:       this.els.paneEvm,
         };
         Object.keys(panes).forEach(function (k) {
-            panes[k].hidden = (k !== name);
+            if (panes[k]) { panes[k].hidden = (k !== name); }
         });
         this.els.tabs.querySelectorAll('[data-tab]').forEach(function (b) {
             b.setAttribute('aria-selected', b.dataset.tab === name ? 'true' : 'false');
@@ -252,7 +268,7 @@
     };
 
     ENMApp.prototype._clearPanes = function () {
-        ['paneDashboard', 'paneLogs', 'paneSettings', 'paneAudit'].forEach(function (k) {
+        ['paneDashboard', 'paneLogs', 'paneSettings', 'paneAudit', 'paneEvm'].forEach(function (k) {
             if (this.els[k]) { this.els[k].innerHTML = ''; }
         }, this);
     };
