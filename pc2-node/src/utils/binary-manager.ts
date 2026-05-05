@@ -10,11 +10,12 @@
  * Called once at startup, before WireGuard/AmneziaWG/VLESS service initialization.
  */
 
-import { existsSync, mkdirSync, createWriteStream, renameSync, unlinkSync, chmodSync, statSync, readdirSync } from 'fs';
+import { existsSync, mkdirSync, createWriteStream, createReadStream, renameSync, unlinkSync, chmodSync, statSync, readdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { execSync } from 'child_process';
 import { pipeline } from 'stream/promises';
 import { fileURLToPath } from 'url';
+import { createHash } from 'crypto';
 import https from 'https';
 import http from 'http';
 import { logger } from './logger.js';
@@ -33,26 +34,48 @@ const SINGBOX_RELEASE_BASE = `https://github.com/SagerNet/sing-box/releases/down
 // unaffected — it has its own host.
 let pc2BinariesReleaseUnavailable = false;
 
+// v1.2.7.8: SHASUMS256.txt cache for integrity verification of downloaded
+// binaries. Populated lazily on first download attempt against
+// GITHUB_RELEASE_BASE; null until then. shasumsFetchAttempted prevents
+// repeated fetches if the manifest is genuinely unavailable.
+let shasumsCache: Map<string, string> | null = null;
+let shasumsFetchAttempted = false;
+
 // v1.2.7.2: install hint catalogue. Logged once per missing binary per
-// process so users see actionable advice in the launcher log instead of
-// just "not found" or "HTTP 404". Surfaced through /api/system-readiness
-// in api/index.ts so the launcher UI can show the same hint.
+// process so launcher operators see actionable advice instead of just
+// "not found" or "HTTP 404". Surfaced through /api/system-readiness
+// in api/index.ts.
+//
+// v1.2.7.8: re-worded to lead with the auto-download story (Fix 3.0b
+// publishes pc2-binaries-v1 so the typical recovery path is "restart
+// PC2 and let BinaryManager fetch it"). Manual package-manager commands
+// are kept as a documented fallback for air-gapped or restricted
+// environments where the GitHub release isn't reachable.
 const INSTALL_HINTS: Record<string, { darwin?: string; linux?: string }> = {
   'wireguard-go': {
-    darwin: 'macOS: brew install wireguard-tools (provides wireguard-go)',
-    linux:  'Linux: sudo apt install wireguard-tools  (or use the installer in pc2-node/scripts/install.sh)',
+    darwin: 'Restart PC2 to auto-download from pc2-binaries-v1. Manual fallback: brew install wireguard-tools',
+    linux:  'Restart PC2 to auto-download from pc2-binaries-v1. Manual fallback: sudo apt install wireguard-tools',
+  },
+  'wg': {
+    darwin: 'Restart PC2 to auto-download from pc2-binaries-v1. Manual fallback: brew install wireguard-tools',
+    linux:  'Restart PC2 to auto-download from pc2-binaries-v1. Manual fallback: sudo apt install wireguard-tools',
+  },
+  'wg-quick': {
+    darwin: 'Restart PC2 to auto-download from pc2-binaries-v1. Manual fallback: brew install wireguard-tools',
+    linux:  'Restart PC2 to auto-download from pc2-binaries-v1. Manual fallback: sudo apt install wireguard-tools',
   },
   'amneziawg-go': {
-    darwin: 'macOS: brew tap amnezia-vpn/amneziawg-tools && brew install amneziawg-go amneziawg-tools',
-    linux:  'Linux: see https://github.com/amnezia-vpn/amneziawg-go (or build with: git clone amneziawg-go && make)',
+    darwin: 'Restart PC2 to auto-download from pc2-binaries-v1. Manual fallback: brew tap amnezia-vpn/amneziawg-tools && brew install amneziawg-go amneziawg-tools',
+    linux:  'Restart PC2 to auto-download from pc2-binaries-v1. Manual fallback: see https://github.com/amnezia-vpn/amneziawg-go',
   },
   'awg-quick': {
-    darwin: 'macOS: brew tap amnezia-vpn/amneziawg-tools && brew install amneziawg-tools',
-    linux:  'Linux: install amneziawg-tools package (provides awg-quick)',
+    darwin: 'Restart PC2 to auto-download from pc2-binaries-v1. Manual fallback: brew tap amnezia-vpn/amneziawg-tools && brew install amneziawg-tools',
+    linux:  'Restart PC2 to auto-download from pc2-binaries-v1. Manual fallback: install amneziawg-tools package',
   },
   'sing-box': {
-    darwin: 'macOS: brew install sing-box',
-    linux:  'Linux: see https://sing-box.sagernet.org/installation/  (or apt install sing-box where available)',
+    // sing-box is not in pc2-binaries-v1; it downloads directly from SagerNet's release.
+    darwin: 'Auto-downloads from github.com/SagerNet/sing-box on next PC2 restart. Manual fallback: brew install sing-box',
+    linux:  'Auto-downloads from github.com/SagerNet/sing-box on next PC2 restart. Manual fallback: see https://sing-box.sagernet.org/installation/',
   },
 };
 
@@ -87,6 +110,30 @@ const TRANSPORT_BINARIES: BinarySpec[] = [
     getDownloadUrl: (os, arch) => `${GITHUB_RELEASE_BASE}/wireguard-go-${os}-${arch}`,
     systemPaths: ['/usr/local/bin/wireguard-go', '/usr/bin/wireguard-go'],
     minSize: 500_000,
+  },
+  {
+    // v1.2.7.8: native wg CLI (used as `wg show`, `wg show interfaces`,
+    // `wg show <iface> dump` by WireGuardService). wg-quick wraps wg
+    // internally — without wg present, wg-quick fails on `up`. The systemPaths
+    // mirror WireGuardService.ts:140-141 so resolution stays consistent.
+    name: 'wg',
+    platforms: ['linux', 'darwin'],
+    getDownloadUrl: (os, arch) => `${GITHUB_RELEASE_BASE}/wg-${os}-${arch}`,
+    systemPaths: ['/usr/local/bin/wg', '/opt/homebrew/bin/wg', '/usr/bin/wg', '/usr/sbin/wg'],
+    minSize: 50_000,
+  },
+  {
+    // v1.2.7.8: wg-quick is a bash script (~600 lines) with platform-specific
+    // variants — wireguard-tools ships src/wg-quick/linux.bash and
+    // src/wg-quick/darwin.bash, so the per-OS URL pattern (no arch suffix)
+    // mirrors awg-quick below. WireGuardService invokes it as
+    // `sudo <wg-quick-path> up <conf>` on both linux and darwin.
+    name: 'wg-quick',
+    platforms: ['linux', 'darwin'],
+    getDownloadUrl: (os, _arch) => `${GITHUB_RELEASE_BASE}/wg-quick-${os}`,
+    systemPaths: ['/usr/local/bin/wg-quick', '/opt/homebrew/bin/wg-quick', '/usr/bin/wg-quick', '/usr/sbin/wg-quick'],
+    minSize: 1_000,
+    isScript: true,
   },
   {
     name: 'amneziawg-go',
@@ -256,6 +303,97 @@ function downloadStream(url: string, maxRedirects = 5): Promise<http.IncomingMes
 }
 
 /**
+ * v1.2.7.8: fetch + parse SHASUMS256.txt from the pc2-binaries-v1 release.
+ * Cached for the lifetime of the process. Returns a Map of asset filename
+ * to expected lowercase sha256 hex, or null if the manifest is missing.
+ *
+ * Format expected (sha256sum default output):
+ *   <64 hex chars>  <filename>
+ *   <64 hex chars> *<filename>      (binary mode marker, also accepted)
+ *
+ * Comments (#) and blank lines are tolerated.
+ */
+async function fetchShasums(): Promise<Map<string, string> | null> {
+  if (shasumsCache !== null) return shasumsCache;
+  if (shasumsFetchAttempted) return null;
+  shasumsFetchAttempted = true;
+
+  const url = `${GITHUB_RELEASE_BASE}/SHASUMS256.txt`;
+  try {
+    const response = await downloadStream(url);
+    const chunks: Buffer[] = [];
+    for await (const chunk of response) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+    const body = Buffer.concat(chunks).toString('utf8');
+
+    const map = new Map<string, string>();
+    for (const line of body.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const match = trimmed.match(/^([a-f0-9]{64})\s+\*?(.+)$/i);
+      if (match) {
+        map.set(match[2], match[1].toLowerCase());
+      }
+    }
+
+    shasumsCache = map;
+    logger.info(`[BinaryManager] Loaded SHASUMS256.txt with ${map.size} entries from ${RELEASE_TAG}`);
+    return map;
+  } catch (err) {
+    const errMsg = (err as Error).message;
+    logger.warn(`[BinaryManager] SHASUMS256.txt unavailable for ${RELEASE_TAG}: ${errMsg}. Integrity verification disabled this session.`);
+    return null;
+  }
+}
+
+/**
+ * v1.2.7.8: stream-hash a file to lowercase sha256 hex. Used to compare
+ * downloaded binaries against the SHASUMS256.txt manifest before installing.
+ *
+ * Uses the explicit data/end/error pattern rather than pipeline+Hash because
+ * Transform-as-pipeline-terminus has subtle behaviour around output draining;
+ * this form is unambiguous and matches widespread Node.js conventions.
+ */
+function sha256File(filePath: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const hash = createHash('sha256');
+    const stream = createReadStream(filePath);
+    stream.on('data', (chunk) => hash.update(chunk));
+    stream.on('end', () => resolve(hash.digest('hex')));
+    stream.on('error', reject);
+  });
+}
+
+/**
+ * v1.2.7.8: strip the macOS Gatekeeper quarantine attribute from a downloaded
+ * file. When PC2 runs as part of an Electron build (LSFileQuarantineEnabled
+ * defaults to true), files written via Node's https layer inherit the
+ * quarantine xattr from the parent process. Even with full notarisation,
+ * the first-run Gatekeeper dialog still blocks invocation — particularly
+ * when the binary is later spawned via `sudo`. Removing this xattr after
+ * we've already verified signature + sha256 is safe and matches what
+ * `xattr -d` would do interactively.
+ *
+ * No-op on non-darwin platforms. Silent on failure: if the attribute
+ * isn't present (plain `node` parent, SIP-relaxed env, future macOS
+ * change), `xattr -d` returns non-zero and we ignore — the absence of
+ * the attribute is exactly the desired end state.
+ */
+function stripDarwinQuarantine(filePath: string): void {
+  if (process.platform !== 'darwin') return;
+  try {
+    execSync(`xattr -d com.apple.quarantine "${filePath}" 2>/dev/null`, {
+      stdio: 'pipe',
+      timeout: 3000,
+      shell: '/bin/sh',
+    });
+  } catch {
+    /* xattr exits non-zero when the attribute is absent — that's fine */
+  }
+}
+
+/**
  * Download a single binary to the target directory.
  * Uses atomic writes (.tmp -> rename) to prevent corrupt partial downloads.
  */
@@ -299,11 +437,44 @@ async function downloadBinary(spec: BinarySpec, targetDir: string): Promise<bool
       return false;
     }
 
+    // v1.2.7.8: SHA-256 verification against SHASUMS256.txt published in
+    // the same release. Only applies to pc2-binaries-v1 URLs (sing-box uses
+    // SagerNet's host with its own integrity story; minSize check above
+    // remains its first line of defence). Fail-closed: tampered or
+    // unmapped assets are deleted, never installed. The cascade falls
+    // back to ActiveProxy if WG/AWG/VLESS binaries can't be installed —
+    // safer to lose a transport than to root-execute a bad binary.
+    if (url.startsWith(GITHUB_RELEASE_BASE)) {
+      const shasums = await fetchShasums();
+      if (shasums) {
+        const assetName = url.split('/').pop() || '';
+        const expected = shasums.get(assetName);
+        if (!expected) {
+          unlinkSync(tmpPath);
+          logger.error(`[BinaryManager] ${spec.name}: asset "${assetName}" not in SHASUMS256.txt manifest. Refusing to install (manifest may be stale; re-run the publish-pc2-binaries workflow).`);
+          return false;
+        }
+        const actual = await sha256File(tmpPath);
+        if (actual !== expected) {
+          unlinkSync(tmpPath);
+          logger.error(`[BinaryManager] ${spec.name}: SHA-256 mismatch (expected ${expected.slice(0, 12)}…, got ${actual.slice(0, 12)}…). Refusing to install (corruption or tampering).`);
+          return false;
+        }
+        logger.debug(`[BinaryManager] ${spec.name}: SHA-256 verified (${expected.slice(0, 12)}…)`);
+      }
+      // shasums === null: manifest unavailable. fetchShasums() already
+      // logged a warn-level message; we accept the download because the
+      // alternative is a hard outage when the release is mid-publish.
+    }
+
     renameSync(tmpPath, targetPath);
 
     if (!isWin) {
       chmodSync(targetPath, 0o755);
     }
+
+    // v1.2.7.8: see stripDarwinQuarantine() docs. No-op on non-darwin.
+    stripDarwinQuarantine(targetPath);
 
     logger.info(`[BinaryManager] ${spec.name} installed (${(stats.size / 1024 / 1024).toFixed(1)}MB)`);
     return true;
@@ -372,6 +543,11 @@ async function downloadAndExtractArchive(
     if (!isWin) {
       chmodSync(targetPath, 0o755);
     }
+
+    // v1.2.7.8: matches direct-binary path. sing-box archive came from
+    // SagerNet, but the extracted binary still inherits Electron-host
+    // quarantine on darwin if the parent process has LSFileQuarantineEnabled.
+    stripDarwinQuarantine(targetPath);
 
     const stats = statSync(targetPath);
     logger.info(`[BinaryManager] ${binaryName} extracted and installed (${(stats.size / 1024 / 1024).toFixed(1)}MB)`);

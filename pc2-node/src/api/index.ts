@@ -268,11 +268,15 @@ export function setupAPI (app: Express): void {
         // catches kernel-mode WireGuard which the binary probe misses.
         let wgStatus: { available: boolean; mode: 'kernel' | 'userspace' | 'none' } | null = null;
         let awgStatus: { available: boolean; connected: boolean } | null = null;
+        // v1.2.7.8: also capture the *active* cascade selection for the GUI's
+        // "what transport is actually being used?" indicator (Fix 3.A).
+        let activeNatType: string | null = null;
         if ( bosonService && typeof bosonService.getStatus === 'function' ) {
             try {
                 const bosonStatus = bosonService.getStatus();
                 wgStatus = bosonStatus?.wireguard || null;
                 awgStatus = bosonStatus?.amneziaWG || null;
+                activeNatType = bosonStatus?.connectivity?.natType || null;
             } catch { /* keep nulls — fall back to binary probe */ }
         }
 
@@ -350,11 +354,49 @@ export function setupAPI (app: Express): void {
         ];
 
         const okCount = checks.filter(c => c.status === 'ok').length;
-        const overall = okCount === checks.length ? 'ready'
+
+        // v1.2.7.8 Fix 3.A: surface the *active* transport so the GUI can stop
+        // claiming "all good" when the cascade actually fell to ActiveProxy.
+        // Pre-1.2.7.6 the X/Y indicator counted binaries on disk; users
+        // reported "6/6 connected" while WireGuard/AmneziaWG/VLESS were
+        // not in fact carrying any traffic. This object lets the GUI
+        // render a distinct line: "Active transport: WireGuard" or
+        // "Active transport: ActiveProxy (fallback)". The X/Y count
+        // keeps its existing semantics for backward compatibility.
+        const transportLabel: Record<string, string> = {
+            wireguard: 'WireGuard',
+            'amnezia-wireguard': 'AmneziaWG (Stealth)',
+            'vless-reality': 'VLESS Reality (Stealth)',
+            direct: 'Direct (no NAT)',
+            upnp: 'UPnP',
+            relay: 'ActiveProxy (NAT relay)',
+            unknown: 'Discovering...',
+        };
+        const wgInstalled = wgBinaryFound || (wgStatus?.mode !== 'none' && !!wgStatus);
+        const awgInstalled = !!awgBinary?.found || (awgStatus?.available === true);
+        // Degraded = we're on relay/unknown but a tunnel transport IS installed.
+        // If neither is installed there's nothing to degrade *from*, so don't flag.
+        const transportNat = activeNatType || 'unknown';
+        const onFallback = transportNat === 'relay' || transportNat === 'unknown';
+        const transportDegraded = onFallback && (wgInstalled || awgInstalled);
+        const transport = {
+            active: transportNat,
+            label: transportLabel[transportNat] || transportNat,
+            degraded: transportDegraded,
+            preferred: transportDegraded
+                ? (wgInstalled ? 'wireguard' : awgInstalled ? 'amnezia-wireguard' : null)
+                : null,
+        };
+
+        // Demote 'ready' → 'degraded' when the cascade is on a fallback even
+        // though every component is present. The dot turns amber and the
+        // user sees something is off without having to open the panel.
+        const baseOverall = okCount === checks.length ? 'ready'
             : okCount >= checks.length - 1 ? 'degraded'
                 : 'issues';
+        const overall = (transportDegraded && baseOverall === 'ready') ? 'degraded' : baseOverall;
 
-        res.json({ overall, checks, total: checks.length, ok: okCount });
+        res.json({ overall, checks, total: checks.length, ok: okCount, transport });
     });
 
     // System readiness fix endpoint (auth required — modifies system)

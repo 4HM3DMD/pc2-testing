@@ -205,6 +205,10 @@ export class ConnectivityService {
   private status: ConnectionStatus;
   private heartbeatTimer: NodeJS.Timeout | null = null;
   private reconnectTimer: NodeJS.Timeout | null = null;
+  // v1.2.7.8: one-shot timer for post-cascade endpoint freshness recovery.
+  // See scheduleEndpointFreshnessCheck() for the username-not-ready race
+  // it handles. Tracked so stop() can clean it up.
+  private endpointFreshnessTimer: NodeJS.Timeout | null = null;
   private usernameService: UsernameService | null = null;
   private nodeId: string | null = null;
   private publicKey: Buffer | null = null;
@@ -638,6 +642,12 @@ export class ConnectivityService {
 
     // Start heartbeat
     this.startHeartbeat();
+
+    // v1.2.7.8: handle the username-not-ready race after pm2 restart.
+    // Heartbeat covers steady-state connection recovery; this catches
+    // the specific startup window where cascade ran before username
+    // service finished loading.
+    this.scheduleEndpointFreshnessCheck();
   }
 
   /**
@@ -945,6 +955,11 @@ export class ConnectivityService {
     if (this.wireGuardRetryTimer) {
       clearTimeout(this.wireGuardRetryTimer);
       this.wireGuardRetryTimer = null;
+    }
+
+    if (this.endpointFreshnessTimer) {
+      clearTimeout(this.endpointFreshnessTimer);
+      this.endpointFreshnessTimer = null;
     }
 
     // Stop WireGuard tunnel
@@ -1477,6 +1492,59 @@ export class ConnectivityService {
   }
 
   /**
+   * Post-cascade endpoint freshness recovery (v1.2.7.8).
+   *
+   * Addresses the race where update.sh restarts pc2 via pm2 and
+   * ConnectivityService.start() runs before UsernameService has
+   * finished loading from disk. In that window:
+   *   - WireGuard cascade returns early (line ~386, hasUsername guard)
+   *   - AmneziaWG cascade returns early (line ~438, same guard)
+   *   - VLESS cascade returns early (line ~490, same guard)
+   *   - ActiveProxy connects but does not register the endpoint
+   *     (line ~805, same guard)
+   * Result: status.connected = true (via tier 4), but
+   * status.publicEndpoint = null. alm.ela.city/<user> resolves to a
+   * supernode whose username table has stale or missing data → 502.
+   * Reported by Anders + Irzhy on 2026-05-05 after v1.2.7.5 update.
+   *
+   * Recovery: poll for up to 60s. As soon as usernameService.hasUsername()
+   * flips true, call reconnect() once to re-run the cascade with the
+   * username available — this re-registers the endpoint with the
+   * supernode and unblocks alm.ela.city.
+   *
+   * One-shot. The heartbeat handles steady-state connection recovery;
+   * this only addresses the startup race window.
+   */
+  private scheduleEndpointFreshnessCheck(): void {
+    let attempts = 0;
+    const maxAttempts = 12;
+    const intervalMs = 5_000;
+
+    const check = (): void => {
+      this.endpointFreshnessTimer = null;
+      if (!this.isRunning) return;
+      attempts++;
+
+      const usernameNowReady = !!(this.usernameService && this.usernameService.hasUsername());
+      const endpointMissing = this.status.connected && this.status.publicEndpoint === null;
+
+      if (endpointMissing && usernameNowReady) {
+        logger.info('[Connectivity] Post-cascade: username became available, re-running cascade to register endpoint');
+        this.reconnect().catch((err) => {
+          logger.warn(`[Connectivity] Post-cascade reconnect failed: ${err}`);
+        });
+        return;
+      }
+
+      if (attempts < maxAttempts) {
+        this.endpointFreshnessTimer = setTimeout(check, intervalMs);
+      }
+    };
+
+    this.endpointFreshnessTimer = setTimeout(check, intervalMs);
+  }
+
+  /**
    * Force reconnection with transport upgrade.
    * 
    * Called after username registration to activate the best available
@@ -1486,10 +1554,15 @@ export class ConnectivityService {
    */
   async reconnect(): Promise<boolean> {
     this.status.connected = false;
-    
+
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
+    }
+
+    if (this.endpointFreshnessTimer) {
+      clearTimeout(this.endpointFreshnessTimer);
+      this.endpointFreshnessTimer = null;
     }
 
     // Stop existing ActiveProxy connection before upgrading

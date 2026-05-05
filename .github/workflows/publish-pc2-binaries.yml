@@ -1,0 +1,402 @@
+name: Publish PC2 Transport Binaries
+
+# Builds, signs, notarises and publishes the transport binaries that
+# pc2-node/src/utils/binary-manager.ts downloads at runtime from the
+# `pc2-binaries-v1` GitHub release.
+#
+# Until v1.2.7.8 this release tag was referenced in code but never
+# actually published, so every fresh-install Mac fell through to
+# ActiveProxy. This workflow fixes that.
+#
+# Trigger: workflow_dispatch only (never auto). The user explicitly
+# clicks "Run workflow" in the Actions tab. Matches the existing
+# convention in main.yml and release-please.yml in this repo.
+#
+# Required secrets (copy from Elacity/elastos-launcher if not set):
+#   CSC_LINK                    - Developer ID Application cert as base64-encoded P12
+#   CSC_KEY_PASSWORD            - Password for the P12 above
+#   APPLE_ID                    - Apple ID email used for notarisation
+#   APPLE_APP_SPECIFIC_PASSWORD - App-specific password generated at appleid.apple.com
+#   APPLE_TEAM_ID               - 10-character Apple Developer Team ID
+#
+# Wall-clock: ~60-75 min (macOS notarisation is the long pole).
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'GitHub release tag to publish to'
+        default: 'pc2-binaries-v1'
+        required: true
+      replace_existing:
+        description: 'Delete existing assets first then re-upload'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+env:
+  RELEASE_TAG: ${{ inputs.release_tag }}
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # preflight: fail fast if Apple signing secrets are missing. Without this
+  # the macOS job would run for ~30 minutes of build work and only then die
+  # at the codesign step. This check is ~5 seconds.
+  # ---------------------------------------------------------------------------
+  preflight:
+    name: Preflight (verify secrets configured)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify Apple signing secrets exist
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          missing=()
+          [ -z "$CSC_LINK" ] && missing+=("CSC_LINK")
+          [ -z "$CSC_KEY_PASSWORD" ] && missing+=("CSC_KEY_PASSWORD")
+          [ -z "$APPLE_ID" ] && missing+=("APPLE_ID")
+          [ -z "$APPLE_APP_SPECIFIC_PASSWORD" ] && missing+=("APPLE_APP_SPECIFIC_PASSWORD")
+          [ -z "$APPLE_TEAM_ID" ] && missing+=("APPLE_TEAM_ID")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::Missing required secrets: ${missing[*]}"
+            echo ""
+            echo "These exist in Elacity/elastos-launcher and need to be copied to this repo."
+            echo "Either set them at organisation level (Settings → Secrets → Actions → New organization secret)"
+            echo "or re-add per-repo (Settings → Secrets and variables → Actions → New repository secret)."
+            exit 1
+          fi
+          echo "All required Apple signing secrets are configured."
+
+  # ---------------------------------------------------------------------------
+  # build-darwin: produces all 8 darwin assets on a single macos-latest runner.
+  # Native compile for arm64 (current runner arch); -arch x86_64 cross for x64.
+  # Signs + notarises the 6 native binaries; bash scripts ship as-is.
+  # ---------------------------------------------------------------------------
+  build-darwin:
+    name: Build + sign darwin binaries
+    needs: preflight
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Build wireguard-go and amneziawg-go for darwin-arm64 and darwin-x64
+        run: |
+          # Go cross-compiles cleanly. fetch-binaries.sh handles GOOS/GOARCH.
+          # We invoke it twice (once per arch) so each arch's binary lands
+          # in its own bin/{platform}-{arch}/ directory.
+          bash pc2-node/scripts/fetch-binaries.sh darwin-arm64
+          bash pc2-node/scripts/fetch-binaries.sh darwin-x64
+
+      - name: Build wg native C binary for darwin-arm64 and darwin-x64
+        # fetch-binaries.sh's `make` step only builds wg for the current
+        # native target. We override CFLAGS to compile both arch slices
+        # explicitly. This is the only spot where the workflow diverges
+        # from `bash fetch-binaries.sh <target>`.
+        run: |
+          set -e
+          tmp=$(mktemp -d)
+          git clone --depth 1 https://git.zx2c4.com/wireguard-tools "$tmp/wireguard-tools"
+
+          for arch in arm64 x86_64; do
+            target_arch=$arch
+            [ "$arch" = "x86_64" ] && target_arch="x64"
+
+            (cd "$tmp/wireguard-tools/src" && \
+              make clean 2>/dev/null || true; \
+              make CC="clang -arch ${arch}" 2>&1)
+
+            mkdir -p "pc2-node/bin/darwin-${target_arch}"
+            cp "$tmp/wireguard-tools/src/wg" "pc2-node/bin/darwin-${target_arch}/wg"
+            chmod +x "pc2-node/bin/darwin-${target_arch}/wg"
+
+            # Verify the binary is the right arch
+            file "pc2-node/bin/darwin-${target_arch}/wg"
+          done
+
+      - name: Verify all expected darwin binaries exist
+        run: |
+          set -e
+          missing=()
+          for arch in arm64 x64; do
+            for binary in wireguard-go wg amneziawg-go; do
+              path="pc2-node/bin/darwin-${arch}/${binary}"
+              [ -f "$path" ] || missing+=("$path")
+            done
+          done
+          [ -f "pc2-node/bin/darwin-arm64/wg-quick" ] || missing+=("pc2-node/bin/darwin-arm64/wg-quick")
+          [ -f "pc2-node/bin/darwin-arm64/awg-quick" ] || missing+=("pc2-node/bin/darwin-arm64/awg-quick")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::Missing build outputs:"
+            printf '  %s\n' "${missing[@]}"
+            exit 1
+          fi
+          echo "All 8 darwin build outputs present."
+
+      - name: Import code-signing certificate into temporary keychain
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+        run: |
+          set -e
+          # Use a randomly-generated keychain password so it never lands
+          # in any log even if a step misbehaves. Discarded when runner ends.
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+          echo "KEYCHAIN_PASSWORD=$KEYCHAIN_PASSWORD" >> "$GITHUB_ENV"
+
+          # Decode P12 from base64 secret
+          echo "$CSC_LINK" | base64 -d > /tmp/cert.p12
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security set-keychain-settings -lut 21600 build.keychain
+          security import /tmp/cert.p12 -k build.keychain -P "$CSC_KEY_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" build.keychain
+
+          # Wipe the cert file immediately
+          rm -f /tmp/cert.p12
+
+          # Surface the signing identity name (not the cert itself) for sign step
+          IDENTITY=$(security find-identity -v -p codesigning build.keychain | grep "Developer ID Application" | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+          if [ -z "$IDENTITY" ]; then
+            echo "::error::No Developer ID Application identity found in imported keychain"
+            exit 1
+          fi
+          echo "SIGNING_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+          echo "Found signing identity (name only logged): $IDENTITY"
+
+      - name: Codesign 6 darwin native binaries (hardened runtime + timestamp)
+        run: |
+          set -e
+          for arch in arm64 x64; do
+            for binary in wireguard-go wg amneziawg-go; do
+              path="pc2-node/bin/darwin-${arch}/${binary}"
+              echo "Signing $path..."
+              codesign --force \
+                       --options runtime \
+                       --sign "$SIGNING_IDENTITY" \
+                       --timestamp \
+                       "$path"
+              codesign --verify --strict --verbose=2 "$path"
+            done
+          done
+          echo "All 6 darwin binaries signed and verified."
+
+      - name: Notarise 6 darwin native binaries
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -e
+          # notarytool only accepts archives, not raw binaries.
+          # We zip each binary, submit, wait for ticket. Stapling cannot
+          # apply to a raw executable so Gatekeeper falls back to online
+          # ticket lookup at first run (works whenever the user's Mac
+          # has internet, which is mandatory for PC2 to function anyway).
+          for arch in arm64 x64; do
+            for binary in wireguard-go wg amneziawg-go; do
+              path="pc2-node/bin/darwin-${arch}/${binary}"
+              zip_path="${path}.notarize.zip"
+              echo ""
+              echo "=== Notarising ${binary} (${arch}) ==="
+              zip -j "$zip_path" "$path"
+
+              xcrun notarytool submit "$zip_path" \
+                --apple-id "$APPLE_ID" \
+                --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+                --team-id "$APPLE_TEAM_ID" \
+                --wait
+
+              rm -f "$zip_path"
+            done
+          done
+          echo "All 6 darwin binaries successfully notarised."
+
+      - name: Stage darwin assets for upload (flatten to release naming)
+        run: |
+          set -e
+          mkdir -p staging
+          # Native binaries → name-os-arch
+          for arch in arm64 x64; do
+            for binary in wireguard-go wg amneziawg-go; do
+              cp "pc2-node/bin/darwin-${arch}/${binary}" "staging/${binary}-darwin-${arch}"
+            done
+          done
+          # Bash scripts → name-os (arch-independent; one copy)
+          cp "pc2-node/bin/darwin-arm64/wg-quick" "staging/wg-quick-darwin"
+          cp "pc2-node/bin/darwin-arm64/awg-quick" "staging/awg-quick-darwin"
+
+          ls -la staging/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: darwin-assets
+          path: staging/
+          if-no-files-found: error
+
+      - name: Cleanup keychain
+        if: always()
+        run: |
+          security delete-keychain build.keychain || true
+
+  # ---------------------------------------------------------------------------
+  # build-linux-x64: 5 assets, no signing required.
+  # ---------------------------------------------------------------------------
+  build-linux-x64:
+    name: Build linux-x64 binaries
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Install build deps
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq build-essential
+
+      - name: Build all linux-x64 assets
+        run: bash pc2-node/scripts/fetch-binaries.sh linux-x64
+
+      - name: Stage linux-x64 assets
+        run: |
+          set -e
+          mkdir -p staging
+          cp pc2-node/bin/linux-x64/wireguard-go staging/wireguard-go-linux-x64
+          cp pc2-node/bin/linux-x64/wg          staging/wg-linux-x64
+          cp pc2-node/bin/linux-x64/amneziawg-go staging/amneziawg-go-linux-x64
+          # Linux scripts are arch-independent; bundled here, not in arm64 job
+          cp pc2-node/bin/linux-x64/wg-quick    staging/wg-quick-linux
+          cp pc2-node/bin/linux-x64/awg-quick   staging/awg-quick-linux
+          ls -la staging/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-x64-assets
+          path: staging/
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # build-linux-arm64: 3 native binaries on a GitHub-hosted ARM runner.
+  # No bash scripts here — those ship from the linux-x64 job (arch-independent).
+  # ---------------------------------------------------------------------------
+  build-linux-arm64:
+    name: Build linux-arm64 binaries
+    needs: preflight
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Install build deps
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq build-essential
+
+      - name: Build all linux-arm64 assets
+        run: bash pc2-node/scripts/fetch-binaries.sh linux-arm64
+
+      - name: Stage linux-arm64 assets
+        run: |
+          set -e
+          mkdir -p staging
+          cp pc2-node/bin/linux-arm64/wireguard-go  staging/wireguard-go-linux-arm64
+          cp pc2-node/bin/linux-arm64/wg            staging/wg-linux-arm64
+          cp pc2-node/bin/linux-arm64/amneziawg-go  staging/amneziawg-go-linux-arm64
+          ls -la staging/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-arm64-assets
+          path: staging/
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # publish: collect everything (16 binaries), generate SHASUMS256.txt,
+  # upload to the release tag. Idempotent — re-running with replace_existing
+  # will overwrite the assets.
+  # ---------------------------------------------------------------------------
+  publish:
+    name: Publish to ${{ inputs.release_tag }}
+    needs: [build-darwin, build-linux-x64, build-linux-arm64]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: downloaded
+
+      - name: Flatten artifacts to single staging dir
+        run: |
+          set -e
+          mkdir -p staging
+          find downloaded -type f -exec cp {} staging/ \;
+          echo ""
+          echo "=== Staged assets (expect 16) ==="
+          ls -la staging/
+          count=$(ls staging/ | wc -l | tr -d ' ')
+          if [ "$count" != "16" ]; then
+            echo "::warning::Expected 16 assets, found $count. Continuing anyway."
+          fi
+
+      - name: Generate SHASUMS256.txt
+        run: |
+          set -e
+          cd staging
+          # Sort to keep the file diff-stable across runs
+          sha256sum * | sort -k 2 > SHASUMS256.txt
+          echo ""
+          echo "=== SHASUMS256.txt ==="
+          cat SHASUMS256.txt
+
+      - name: Delete existing release assets if replace_existing is true
+        if: inputs.replace_existing
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          # Tolerate "release does not exist" on first publish
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            assets=$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name')
+            for asset in $assets; do
+              echo "Deleting existing asset: $asset"
+              gh release delete-asset "$RELEASE_TAG" "$asset" --yes
+            done
+          else
+            echo "Release $RELEASE_TAG does not exist yet; nothing to delete."
+          fi
+
+      - name: Create or update release and upload assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" \
+              --title "PC2 Transport Binaries (rolling)" \
+              --notes "Auto-published by .github/workflows/publish-pc2-binaries.yml. Assets are signed (macOS) and SHA-256 verified by BinaryManager at download time. Re-run the workflow to refresh." \
+              --target "$GITHUB_SHA"
+          fi
+          gh release upload "$RELEASE_TAG" staging/* --clobber
+          echo ""
+          echo "=== Published assets ==="
+          gh release view "$RELEASE_TAG" --json assets --jq '.assets[] | "\(.name) — \(.size) bytes"'

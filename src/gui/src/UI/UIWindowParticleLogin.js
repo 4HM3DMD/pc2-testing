@@ -348,6 +348,11 @@ async function UIWindowParticleLogin(options = {}) {
                 ">
                     <div style="font-size: 13px; font-weight: 600; color: #ffffff; margin-bottom: 12px;">System Status</div>
                     <div id="pc2-readiness-items" style="display: flex; flex-direction: column; gap: 6px;"></div>
+                    <div id="pc2-readiness-transport" style="
+                        margin-top: 10px;
+                        padding-top: 10px;
+                        border-top: 1px solid rgba(255,255,255,0.06);
+                    "></div>
                     <div id="pc2-readiness-footer" style="
                         margin-top: 12px;
                         padding-top: 10px;
@@ -388,6 +393,7 @@ async function UIWindowParticleLogin(options = {}) {
                 const dot = document.getElementById('pc2-readiness-dot');
                 const label = document.getElementById('pc2-readiness-label');
                 const items = document.getElementById('pc2-readiness-items');
+                const transportEl = document.getElementById('pc2-readiness-transport');
                 const footer = document.getElementById('pc2-readiness-footer');
 
                 if (!dot || !label || !items || !footer) return;
@@ -415,9 +421,44 @@ async function UIWindowParticleLogin(options = {}) {
                         + '</div>';
                 }).join('');
 
+                // v1.2.7.8 Fix 3.A: render the active transport row separately
+                // from the binary-availability count. Pre-1.2.7.6 the user
+                // saw "6/6 connected" while the cascade had silently fallen
+                // to ActiveProxy; now the panel shows e.g.
+                //   ✓ All 6 components installed
+                //   ⚠ Active transport: ActiveProxy (fallback)
+                // making the gap between "installed" and "in use" obvious.
+                if (transportEl && data.transport) {
+                    const t = data.transport;
+                    const tColor = t.degraded ? '#f59e0b' : '#22c55e';
+                    const tIcon = t.degraded
+                        ? '<span style="color:#f59e0b;font-size:13px;">&#9888;</span>'
+                        : '<span style="color:#22c55e;font-size:13px;">&#10003;</span>';
+                    const tSuffix = t.degraded ? ' <span style="color:#f59e0b;font-size:10px;">(fallback)</span>' : '';
+                    transportEl.innerHTML =
+                        '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:#2c2c2e;border-radius:10px;">'
+                        + '<div style="display:flex;align-items:center;gap:8px;">'
+                        + tIcon
+                        + '<span style="font-size:12px;color:#ffffff;">Active transport</span>'
+                        + '</div>'
+                        + '<span style="font-size:11px;color:' + tColor + ';">'
+                        + (t.label || 'Unknown') + tSuffix
+                        + '</span>'
+                        + '</div>';
+                }
+
                 const missingCount = data.total - data.ok;
+                const transportFallback = data.transport && data.transport.degraded;
                 if (missingCount > 0) {
                     footer.textContent = missingCount + ' component' + (missingCount > 1 ? 's' : '') + ' can be installed after login';
+                } else if (transportFallback) {
+                    const pref = data.transport.preferred;
+                    const prefLabel = pref === 'wireguard' ? 'WireGuard'
+                                   : pref === 'amnezia-wireguard' ? 'AmneziaWG'
+                                   : 'preferred transport';
+                    footer.textContent = 'All components installed but routing through ' + (data.transport.label || 'fallback')
+                        + (pref ? '. ' + prefLabel + ' will activate once a peer is reachable.' : '.');
+                    footer.style.color = '#f59e0b';
                 } else {
                     footer.textContent = 'All systems operational';
                     footer.style.color = '#22c55e';

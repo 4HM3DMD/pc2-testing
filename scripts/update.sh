@@ -445,7 +445,18 @@ fi
 echo ""
 echo "🔨 Step 8: Syncing wallet-bridge files (build:frontend)..."
 cd "$PC2_NODE_DIR"
-npm run build:frontend || echo "   ⚠️  build:frontend not available on this revision, skipping"
+# v1.2.7.8: presence check + loud failure. Previously this was
+# `npm run build:frontend || echo "..."` which conflated two outcomes:
+#   (a) script not defined on this revision → legitimately skip (old v1.2.0/1/2/3 layouts)
+#   (b) script failed (OOM, npm install failure, etc.) → silently swallowed
+# Then step 9 (build:gui) hit the same OOM and died with a misleading
+# "build failed" message. Splitting the cases lets real failures abort
+# under `set -e` while still skipping cleanly on older layouts.
+if grep -q '"build:frontend":' "$PC2_NODE_DIR/package.json" 2>/dev/null; then
+    npm run build:frontend
+else
+    echo "   ⚠️  build:frontend script not defined in this revision, skipping"
+fi
 
 echo ""
 echo "🔨 Step 9: Building GUI bundle..."
