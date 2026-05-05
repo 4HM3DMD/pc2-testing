@@ -90,7 +90,8 @@
         // straight to the home view instead of re-running setup.
         // (Can happen if the conversation is mounted by mistake or
         // if the operator hits a stale URL after completion.)
-        if (s && s.completed === true) {
+        // Truthy check — SQLite stores `completed: 1` not `=== true`.
+        if (s && s.completed) {
             this.onComplete();
             return;
         }

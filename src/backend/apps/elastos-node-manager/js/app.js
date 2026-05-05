@@ -87,13 +87,13 @@
                 return self.services.api.get('/setup/state', { skipCache: true });
             })
             .then(function (setupState) {
-                // Resilient routing: only treat the response as "completed"
-                // when it explicitly says so. Anything else (null, garbage,
-                // missing fields, unrecognized currentStep) falls into the
-                // setup flow — the conversation's _resumeFromState then
-                // figures out which card to show and handles unknown steps
-                // by starting at card A.
-                if (setupState && setupState.completed === true) {
+                // Treat any truthy `completed` as "setup is done" — SQLite
+                // stores booleans as 0/1 integers, so the GET /setup/state
+                // response surfaces `completed: 1` not `completed: true`.
+                // Earlier strict-equality (=== true) was wrong: it routed
+                // every already-configured operator back to the welcome
+                // screen on every page load. Falsy or missing → setup.
+                if (setupState && setupState.completed) {
                     self._showDashboard();
                 } else {
                     self._showSetupWizard();
