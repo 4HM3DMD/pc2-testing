@@ -1991,101 +1991,428 @@
     });
   }
 
+  // Inject the manage-plans-modal stylesheet exactly once. Defined as
+  // real CSS (not inline styles) so we can use media queries for the
+  // mobile/narrow-screen layout — at <= 720px the rows stack vertically
+  // with per-input labels rendered via ::before on data-label, so the
+  // user always knows what each input means.
+  function ensureManagePlansModalStyles() {
+    if (document.getElementById('manage-plans-modal-css')) return;
+    var s = document.createElement('style');
+    s.id = 'manage-plans-modal-css';
+    s.textContent = [
+      '#manage-plans-modal .manage-plan-row .row-cell{display:flex;flex-direction:column;gap:4px;min-width:0;}',
+      '#manage-plans-modal .manage-plan-row .row-cell::before{content:attr(data-label);display:none;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-secondary);font-weight:600;}',
+      '#manage-plans-modal .manage-plan-row .row-cell-actions{align-items:flex-end;}',
+      '@media (max-width: 720px){',
+      '  #manage-plans-modal #manage-plans-header{display:none !important;}',
+      '  #manage-plans-modal .manage-plan-row{display:flex !important;flex-direction:column !important;gap:6px !important;padding:14px 12px !important;}',
+      '  #manage-plans-modal .manage-plan-row .row-cell{width:100%;}',
+      '  #manage-plans-modal .manage-plan-row .row-cell::before{display:block;}',
+      '  #manage-plans-modal .manage-plan-row .row-cell-actions{align-items:stretch;}',
+      '  #manage-plans-modal .manage-plan-row .row-cell-actions > div{justify-content:flex-end;}',
+      '  #manage-plans-modal #manage-plans-footer > div:last-child{flex-wrap:wrap;}',
+      '  #manage-plans-modal #manage-plans-footer .btn-primary,',
+      '  #manage-plans-modal #manage-plans-footer .btn-secondary{flex:1;}',
+      '}',
+    ].join('\n');
+    document.head.appendChild(s);
+  }
+
+  // Batched manage-plans modal (parity with elacity-creator).
+  //
+  // UX: Single modal that lists every active on-chain plan as an inline
+  // editable row. The user can add/edit/remove any number of plans;
+  // every change is staged as a 'pending' row. A floating bar shows
+  // pending count and lets them commit ALL changes in a SINGLE
+  // bulkUpdatePlans on-chain transaction (or discard).
+  //
+  // Replaces the previous three-modal flow (manage → add OR edit → save
+  // each plan in its own tx). One transaction per save session.
   function openManagePlansModal(channelData) {
+    ensureManagePlansModalStyles();
     var existing = document.getElementById('manage-plans-modal');
     if (existing) existing.remove();
 
     var modal = document.createElement('div');
     modal.id = 'manage-plans-modal';
     modal.className = 'modal-overlay';
+    // Inline width override — the default modal-dialog max-width
+    // varies by app theme and would otherwise squish the inline plan
+    // editor. 760px fits 5 columns + buttons comfortably; 95vw for
+    // small screens.
     modal.innerHTML =
-      '<div class="modal-dialog" style="max-width:520px;">' +
-        '<div class="modal-header"><h3>Manage Plans — ' + u.escapeHtml(channelData.name || '') + '</h3><button class="modal-close-btn" id="plans-modal-close">&times;</button></div>' +
-        '<div class="modal-body">' +
-          '<div id="plans-list"><div style="padding:16px 0;text-align:center;color:var(--text-tertiary);font-size:12px;">Loading plans from contract...</div></div>' +
-          '<button id="plans-add-btn" class="btn-primary" style="margin-top:12px">+ Add Plan</button>' +
+      '<div class="modal-dialog" style="max-width:820px;width:95vw;display:flex;flex-direction:column;max-height:90vh;">' +
+        '<div class="modal-header" style="flex-shrink:0;"><h3>Manage Plans — ' + u.escapeHtml(channelData.name || '') + '</h3><button class="modal-close-btn" id="plans-modal-close">&times;</button></div>' +
+        '<div class="modal-body" style="flex:1;overflow-y:auto;min-height:0;padding-bottom:8px;">' +
+          '<div id="manage-plans-header" style="display:none;grid-template-columns:90px 100px 140px 1fr 150px;gap:10px;padding:6px 8px;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-secondary);font-weight:600;border-bottom:1px solid var(--border);">' +
+            '<div>Duration</div><div>Unit</div><div>Price (USDC)</div><div>Label / Description</div><div style="text-align:right;">Actions</div>' +
+          '</div>' +
+          '<div id="manage-plans-rows"><div style="padding:16px 0;text-align:center;color:var(--text-tertiary);font-size:12px;">Loading plans from contract...</div></div>' +
+          '<button id="manage-plans-add" class="btn-secondary" style="margin-top:12px;">+ Add Plan</button>' +
+        '</div>' +
+        // Footer is OUTSIDE the scrollable body so the Save Changes
+        // bar is always visible no matter how many plans the user has.
+        // Background uses a very subtle elevation tint instead of the
+        // dark-blue --bg-elevated so it doesn't overpower the rest of
+        // the modal.
+        '<div class="modal-footer" id="manage-plans-footer" style="flex-shrink:0;display:flex;flex-direction:column;gap:8px;border-top:1px solid var(--border);padding:12px 16px;background:rgba(127,127,127,0.06);">' +
+          '<div id="manage-plans-status" class="modal-status hidden" style="margin:0;"></div>' +
+          '<div style="display:flex;align-items:center;gap:12px;">' +
+            '<div id="manage-plans-pending-summary" style="flex:1;font-size:12px;color:var(--text-secondary);">No pending changes.</div>' +
+            '<button id="manage-plans-discard" class="btn-secondary" disabled>Discard</button>' +
+            '<button id="manage-plans-commit" class="btn-primary" disabled>Save changes (1 transaction)</button>' +
+          '</div>' +
         '</div>' +
       '</div>';
 
     document.body.appendChild(modal);
 
-    document.getElementById('plans-modal-close').addEventListener('click', function () { modal.remove(); });
-    document.getElementById('plans-add-btn').addEventListener('click', function () {
-      modal.remove();
-      openAddPlanModal(channelData);
-    });
+    var rowsHeader = modal.querySelector('#manage-plans-header');
+    var rowsContainer = modal.querySelector('#manage-plans-rows');
+    var addBtn = modal.querySelector('#manage-plans-add');
+    var pendingSummary = modal.querySelector('#manage-plans-pending-summary');
+    var commitBtn = modal.querySelector('#manage-plans-commit');
+    var discardBtn = modal.querySelector('#manage-plans-discard');
+    var statusEl = modal.querySelector('#manage-plans-status');
 
-    // Fetch plans from on-chain contract (source of truth), fallback to local cache
-    var plansPromise = (Wallet.getPlans ? Wallet.getPlans(channelData.address) : Promise.resolve([]));
-    plansPromise.then(function (onChainPlans) {
-      var plans = onChainPlans.length > 0 ? onChainPlans : (channelData.plans || []);
+    modal.querySelector('#plans-modal-close').addEventListener('click', function () { modal.remove(); });
 
-      // Merge label/description from local metadata (these aren't stored on-chain)
-      var localPlans = channelData.plans || [];
-      plans = plans.map(function (p) {
-        var local = localPlans.find(function (lp) { return lp.planId === p.planId || lp.planId === String(p.planId); });
-        return {
-          planId: p.planId,
-          payToken: p.payToken,
-          price: p.price,
-          duration: p.duration,
-          durationSeconds: p.durationSeconds,
-          active: p.active !== false,
-          label: (local && local.label) || p.label || ('Plan #' + p.planId),
-          description: (local && local.description) || p.description || ''
-        };
-      });
+    // ── Local helpers (scoped to this modal session) ───────────────
 
-      channelData._onChainPlans = plans;
+    function setStatus(msg, isError) {
+      if (!statusEl) return;
+      if (!msg) { statusEl.classList.add('hidden'); statusEl.textContent = ''; return; }
+      statusEl.textContent = msg;
+      statusEl.style.color = isError ? '#ef4444' : '';
+      statusEl.classList.remove('hidden');
+    }
 
-      var plansHtml = '';
-      if (plans.length > 0) {
-        plans.filter(function (p) { return p.active !== false; }).forEach(function (plan, idx) {
-          var priceStr = typeof plan.price === 'number' ? plan.price.toFixed(2) : parseFloat(plan.price || 0).toFixed(2);
-          var dur = plan.duration ? (plan.duration.value + ' ' + plan.duration.unit) : '—';
-          var symbol = u.getTokenSymbol ? u.getTokenSymbol(plan.payToken) : 'USDC';
-          plansHtml += '<div class="plan-modal-row" style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border);">';
-          plansHtml += '<span style="flex:1;font-weight:500;">' + u.escapeHtml(plan.label) + '</span>';
-          plansHtml += '<span style="font-size:12px;color:var(--text-secondary);">' + dur + '</span>';
-          plansHtml += '<span style="font-weight:600;">' + priceStr + ' ' + symbol + '</span>';
-          plansHtml += '<button class="earnings-withdraw-btn modal-edit-plan" data-idx="' + idx + '">Edit</button>';
-          plansHtml += '<button class="earnings-withdraw-btn modal-remove-plan" data-idx="' + idx + '" style="background:#ef4444;">Remove</button>';
-          plansHtml += '</div>';
+    function markRowPending(row, state) {
+      row.dataset.pendingState = state; // 'new' | 'edited' | 'removed'
+      row.style.borderLeft = '3px solid #3b82f6';
+      var badge = row.querySelector('.row-pending-badge');
+      if (badge) {
+        badge.textContent = state === 'new' ? 'New' : state === 'edited' ? 'Edited' : 'Removed';
+        badge.style.display = 'inline-block';
+      }
+      if (state === 'removed') {
+        row.style.opacity = '0.5';
+        row.style.borderLeftColor = '#ef4444';
+      }
+      updatePendingBar();
+    }
+
+    function clearRowPending(row) {
+      delete row.dataset.pendingState;
+      row.style.borderLeft = '';
+      row.style.opacity = '';
+      var badge = row.querySelector('.row-pending-badge');
+      if (badge) badge.style.display = 'none';
+      updatePendingBar();
+    }
+
+    function getPendingRows() {
+      return Array.prototype.slice.call(rowsContainer.querySelectorAll('[data-pending-state]'));
+    }
+
+    function updatePendingBar() {
+      var pending = getPendingRows();
+      if (pending.length === 0) {
+        pendingSummary.textContent = 'No pending changes.';
+        pendingSummary.style.color = '';
+        commitBtn.disabled = true;
+        discardBtn.disabled = true;
+        return;
+      }
+      var counts = { new: 0, edited: 0, removed: 0 };
+      pending.forEach(function (r) { counts[r.dataset.pendingState] += 1; });
+      var parts = [];
+      if (counts.new) parts.push(counts.new + ' new');
+      if (counts.edited) parts.push(counts.edited + ' edited');
+      if (counts.removed) parts.push(counts.removed + ' removed');
+      pendingSummary.textContent = parts.join(' · ') + ' — will commit in 1 transaction.';
+      pendingSummary.style.color = 'var(--accent,#3b82f6)';
+      commitBtn.disabled = false;
+      discardBtn.disabled = false;
+    }
+
+    function readRowValues(row) {
+      return {
+        durValue: parseInt(row.querySelector('.row-dur-value').value) || 30,
+        durUnit: row.querySelector('.row-dur-unit').value,
+        price: row.querySelector('.row-price').value,
+        label: row.querySelector('.row-label').value,
+        description: row.querySelector('.row-description').value
+      };
+    }
+
+    // Add a row to the modal. plan is the on-chain plan record (may be
+    // partial). isNew=true marks the row as a brand-new entry to be
+    // ADDed on commit; otherwise it's a saved on-chain plan that the
+    // user may EDIT or REMOVE.
+    function addPlanRow(plan, isNew) {
+      plan = plan || {};
+      var row = document.createElement('div');
+      row.className = 'manage-plan-row';
+      row.dataset.planId = plan.planId != null ? String(plan.planId) : '';
+      // Column widths must match #manage-plans-header above. Actions
+      // gets 150px so "Edit Remove" fits side-by-side without spilling
+      // into the label/description column.
+      row.style.cssText = 'display:grid;grid-template-columns:90px 100px 140px 1fr 150px;gap:10px;align-items:center;padding:12px 8px;border-bottom:1px solid var(--border);border-left:3px solid transparent;transition:border-color 0.15s,opacity 0.15s;';
+
+      var symbol = (u.getTokenSymbol ? u.getTokenSymbol(plan.payToken) : 'USDC') || 'USDC';
+      var priceStr = (typeof plan.price === 'number')
+        ? plan.price.toFixed(2)
+        : (plan.price ? parseFloat(plan.price).toFixed(2) : '');
+      var durVal = (plan.duration && plan.duration.value) || 1;
+      var durUnit = (plan.duration && plan.duration.unit) || 'months';
+      var label = plan.label || '';
+      var desc = plan.description || '';
+
+      // Each input column is wrapped in a .row-cell[data-label="..."]
+      // so the injected CSS can render the label via ::before when the
+      // viewport is narrow (mobile). On desktop the label is hidden
+      // and the column header bar above carries the labels.
+      row.innerHTML =
+        '<div class="row-cell" data-label="Duration">' +
+          '<input type="number" class="row-dur-value form-input" min="1" value="' + durVal + '" style="width:100%;box-sizing:border-box;" />' +
+        '</div>' +
+        '<div class="row-cell" data-label="Unit">' +
+          '<select class="row-dur-unit form-input" style="width:100%;box-sizing:border-box;">' +
+            '<option value="days"' + (durUnit === 'days' ? ' selected' : '') + '>Days</option>' +
+            '<option value="months"' + (durUnit === 'months' ? ' selected' : '') + '>Months</option>' +
+            '<option value="years"' + (durUnit === 'years' ? ' selected' : '') + '>Years</option>' +
+          '</select>' +
+        '</div>' +
+        '<div class="row-cell" data-label="Price (USDC)">' +
+          '<div style="position:relative;">' +
+            '<input type="number" class="row-price form-input" min="0.01" step="0.01" value="' + priceStr + '" placeholder="0.00" style="width:100%;padding-right:46px;box-sizing:border-box;" />' +
+            '<span style="position:absolute;right:8px;top:50%;transform:translateY(-50%);font-size:11px;color:var(--text-secondary);pointer-events:none;">' + symbol + '</span>' +
+          '</div>' +
+        '</div>' +
+        '<div class="row-cell" data-label="Label / Description">' +
+          '<input type="text" class="row-label form-input" placeholder="Label (e.g. Monthly)" value="' + u.escapeHtml(label) + '" style="font-size:12px;width:100%;box-sizing:border-box;" />' +
+          '<input type="text" class="row-description form-input" placeholder="Description (optional)" value="' + u.escapeHtml(desc) + '" style="font-size:11px;width:100%;box-sizing:border-box;" />' +
+        '</div>' +
+        // Action column: badge above buttons. Buttons use explicit
+        // inline styling so they render even if the parent app's
+        // button CSS tries to inherit unwanted padding/line-height
+        // (per .cursor/rules/codequality.mdc button-styling rule).
+        '<div class="row-cell row-cell-actions" data-label="Actions">' +
+          '<span class="row-pending-badge" style="display:none;font-size:9px;font-weight:700;color:#3b82f6;text-transform:uppercase;letter-spacing:0.5px;line-height:1;"></span>' +
+          '<div style="display:flex;gap:4px;">' +
+            '<button type="button" class="row-edit-confirm" title="Stage edit" style="background:#3b82f6;color:white;border:none;border-radius:4px;padding:6px 10px;font-size:12px;cursor:pointer;line-height:1;font-family:inherit;display:' + (isNew ? 'none' : 'inline-flex') + ';align-items:center;justify-content:center;min-width:48px;">Edit</button>' +
+            '<button type="button" class="row-remove" title="Remove" style="background:#ef4444;color:white;border:none;border-radius:4px;padding:6px 10px;font-size:12px;cursor:pointer;line-height:1;font-family:inherit;display:inline-flex;align-items:center;justify-content:center;min-width:60px;">Remove</button>' +
+          '</div>' +
+        '</div>';
+
+      if (isNew) markRowPending(row, 'new');
+
+      // For existing on-chain rows: any input change auto-marks the
+      // row as 'edited' (no need to click the Edit button explicitly).
+      // The Edit button still works as an explicit confirm but isn't
+      // required.
+      if (!isNew) {
+        ['input', 'change'].forEach(function (evt) {
+          row.querySelectorAll('input,select').forEach(function (el) {
+            el.addEventListener(evt, function () {
+              if (row.dataset.pendingState !== 'removed') markRowPending(row, 'edited');
+            });
+          });
         });
-      } else {
-        plansHtml = '<div style="padding:16px 0;text-align:center;color:var(--text-tertiary);font-size:12px;">No plans configured</div>';
       }
 
-      document.getElementById('plans-list').innerHTML = plansHtml;
-
-      modal.querySelectorAll('.modal-edit-plan').forEach(function (btn) {
-        btn.addEventListener('click', function () {
-          var plan = plans[parseInt(btn.dataset.idx)];
-          if (plan) { modal.remove(); openEditPlanModal(channelData, plan); }
-        });
+      row.querySelector('.row-edit-confirm').addEventListener('click', function () {
+        if (row.dataset.pendingState === 'removed') {
+          row.style.opacity = '';
+          row.style.borderLeftColor = '#3b82f6';
+        }
+        markRowPending(row, 'edited');
       });
 
-      modal.querySelectorAll('.modal-remove-plan').forEach(function (btn) {
-        btn.addEventListener('click', function () {
-          var idx = parseInt(btn.dataset.idx);
-          var plan = plans[idx];
-          if (!plan) return;
-          btn.disabled = true;
-          btn.textContent = '...';
-          ElacityAPI.updateSubscriptionPlan(channelData.address, [{ action: 'REMOVE', args: { planId: plan.planId, label: plan.label } }], u.pc2Fetch)
-            .then(function () {
-              u.showToast('Plan removed!', 'success');
-              btn.closest('.plan-modal-row').remove();
-              plans.splice(idx, 1);
-            })
-            .catch(function (err) {
-              btn.disabled = false;
-              btn.textContent = 'Remove';
-              u.showToast('Failed: ' + err.message, 'error');
-            });
-        });
+      row.querySelector('.row-remove').addEventListener('click', function () {
+        if (row.dataset.pendingState === 'new') {
+          row.remove();
+          updatePendingBar();
+          return;
+        }
+        markRowPending(row, 'removed');
       });
+
+      rowsContainer.appendChild(row);
+      // Reveal the column header now that we have at least one row.
+      if (rowsHeader) rowsHeader.style.display = 'grid';
+    }
+
+    // ── Commit / Discard ───────────────────────────────────────────
+
+    function discardPending() {
+      rowsContainer.innerHTML = '<div style="padding:16px 0;text-align:center;color:var(--text-tertiary);font-size:12px;">Reloading from contract...</div>';
+      if (rowsHeader) rowsHeader.style.display = 'none';
+      updatePendingBar();
+      loadPlansFromContract();
+    }
+
+    discardBtn.addEventListener('click', discardPending);
+
+    function commitPending() {
+      var pending = getPendingRows();
+      if (pending.length === 0) {
+        u.showToast('No pending changes', 'info');
+        return;
+      }
+
+      // Pre-flight wallet routing — fail fast with a clear message
+      // BEFORE we ask the user to sign or hit the RPC. Mirrors the
+      // pattern the creator app uses.
+      var choice;
+      try { choice = walletChoiceForChannel(channelData); }
+      catch (e) {
+        setStatus(e.message, true);
+        u.showToast(e.message, 'error');
+        return;
+      }
+
+      // Build the actions[] payload from pending rows.
+      var actions = [];
+      var validationError = null;
+      pending.forEach(function (row) {
+        if (validationError) return;
+        var state = row.dataset.pendingState;
+        if (state === 'removed') {
+          actions.push({ action: 'REMOVE', args: { planId: row.dataset.planId } });
+          return;
+        }
+        var v = readRowValues(row);
+        var price = parseFloat(v.price);
+        if (!price || price <= 0) { validationError = 'All plans need a price > 0.'; return; }
+        if (!v.label) { validationError = 'All plans need a label.'; return; }
+        if (state === 'new') {
+          actions.push({
+            action: 'ADD',
+            args: {
+              label: v.label,
+              description: v.description,
+              duration: { value: v.durValue, unit: v.durUnit },
+              price: String(price),
+              payToken: Wallet.USDC_ADDRESS
+            }
+          });
+        } else if (state === 'edited') {
+          actions.push({
+            action: 'UPDATE',
+            args: {
+              planId: row.dataset.planId,
+              label: v.label,
+              description: v.description,
+              duration: { value: v.durValue, unit: v.durUnit },
+              price: String(price),
+              payToken: Wallet.USDC_ADDRESS
+            }
+          });
+        }
+      });
+
+      if (validationError) {
+        setStatus(validationError, true);
+        u.showToast(validationError, 'error');
+        return;
+      }
+
+      // Compute expected on-chain plan count after the tx so we can
+      // poll the indexer until it catches up.
+      var saved = Array.prototype.slice.call(rowsContainer.querySelectorAll('.manage-plan-row'))
+        .filter(function (r) { return r.dataset.planId && r.dataset.pendingState !== 'removed'; });
+      var newCount = pending.filter(function (r) { return r.dataset.pendingState === 'new'; }).length;
+      var expectedCount = saved.length + newCount;
+
+      commitBtn.disabled = true;
+      commitBtn.textContent = 'Submitting...';
+      discardBtn.disabled = true;
+      addBtn.disabled = true;
+      setStatus('Submitting bulkUpdatePlans (' + actions.length + ' actions) on-chain...');
+
+      Wallet.bulkUpdatePlans(
+        channelData.address,
+        actions,
+        { fromWallet: choice, pc2Fetch: u.pc2Fetch }
+      ).then(function () {
+        u.showToast('Plans saved on-chain — waiting for indexer...', 'success');
+        setStatus('On-chain commit succeeded. Waiting for indexer to catch up...');
+        // Only poll if the count changed; UPDATE-only batches don't
+        // change the count and can't be detected by polling — for those
+        // we just wait a fixed window then refresh.
+        var anyAddOrRemove = actions.some(function (a) { return a.action !== 'UPDATE'; });
+        var waitPromise = anyAddOrRemove
+          ? pollChannelForPlanCount(channelData.address, expectedCount, 25000)
+          : new Promise(function (r) { setTimeout(r, 5000); });
+        return waitPromise;
+      }).then(function () {
+        // Re-read on-chain plans (source of truth) and re-render.
+        modal.remove();
+        // Re-open the modal so user sees the updated list immediately,
+        // and so the channel page also re-fetches its plans.
+        M.openChannel(channelData.address);
+      }).catch(function (err) {
+        commitBtn.disabled = false;
+        commitBtn.textContent = 'Save changes (1 transaction)';
+        discardBtn.disabled = false;
+        addBtn.disabled = false;
+        setStatus('Failed: ' + err.message, true);
+        u.showToast('Failed: ' + err.message, 'error');
+      });
+    }
+
+    commitBtn.addEventListener('click', commitPending);
+
+    addBtn.addEventListener('click', function () {
+      addPlanRow({ duration: { value: 1, unit: 'months' }, payToken: Wallet.USDC_ADDRESS }, true);
     });
+
+    // ── Initial load ────────────────────────────────────────────────
+    function loadPlansFromContract() {
+      // On-chain is the source of truth (creator-app pattern). Fall
+      // back to local cache if the RPC read fails — better to render
+      // something stale than an empty modal.
+      var plansPromise = (Wallet.getPlans ? Wallet.getPlans(channelData.address) : Promise.resolve([]));
+      plansPromise.then(function (onChainPlans) {
+        var localPlans = channelData.plans || [];
+        var plans = onChainPlans.length > 0 ? onChainPlans : localPlans;
+
+        // Merge label/description from local metadata; on-chain doesn't
+        // store either field.
+        plans = plans.map(function (p) {
+          var local = localPlans.find(function (lp) {
+            return String(lp.planId) === String(p.planId);
+          });
+          return {
+            planId: p.planId,
+            payToken: p.payToken,
+            price: p.price,
+            duration: p.duration,
+            durationSeconds: p.durationSeconds,
+            active: p.active !== false,
+            label: (local && local.label) || p.label || ('Plan #' + p.planId),
+            description: (local && local.description) || p.description || ''
+          };
+        }).filter(function (p) { return p.active !== false; });
+
+        channelData._onChainPlans = plans;
+
+        rowsContainer.innerHTML = '';
+        if (plans.length === 0) {
+          rowsContainer.innerHTML = '<div style="padding:24px 0;text-align:center;color:var(--text-tertiary);font-size:12px;">No plans yet. Click <strong>+ Add Plan</strong> below to create one.</div>';
+          if (rowsHeader) rowsHeader.style.display = 'none';
+          return;
+        }
+        plans.forEach(function (plan) { addPlanRow(plan, false); });
+      }).catch(function (err) {
+        rowsContainer.innerHTML = '<div style="padding:16px 0;text-align:center;color:#ef4444;font-size:12px;">Failed to load plans: ' + u.escapeHtml(err.message || String(err)) + '</div>';
+      });
+    }
+
+    loadPlansFromContract();
   }
 
   // ── Channel Management ────────────────────────────
@@ -2097,6 +2424,57 @@
     var eoaAddr = (Wallet.getAddress() || '').toLowerCase();
     var saAddr = (Wallet.getSmartAccountAddress() || '').toLowerCase();
     return creatorAddr.toLowerCase() === eoaAddr || creatorAddr.toLowerCase() === saAddr;
+  }
+
+  // Pick the right wallet (SA vs EOA) for a channel write. Channels are
+  // owned by exactly one address — if the SA owns it use 'sa', otherwise
+  // 'eoa'. Used by all on-chain channel-management calls so the user signs
+  // from the wallet that actually has authority.
+  //
+  // v1.2.7.7 (Bug G2 mirror — parity with elacity-creator/app.js
+  // manageWalletChoiceOrThrow): if NEITHER the connected EOA NOR the
+  // smart account matches the channel creator, throw a clear error
+  // instead of silently routing to the EOA. The previous behaviour
+  // surfaced as "User denied transaction signature" because MetaMask
+  // popped a tx from a wallet that the channel contract would have
+  // reverted as Unauthorized — users naturally rejected the unexpected
+  // popup, masking the actual cause.
+  function walletChoiceForChannel(channelData) {
+    var creatorAddr = ((channelData && channelData.creator && channelData.creator.address) || '').toLowerCase();
+    var eoaAddr = (Wallet.getAddress() || '').toLowerCase();
+    var saAddr = (Wallet.getSmartAccountAddress() || '').toLowerCase();
+    if (creatorAddr && saAddr && creatorAddr === saAddr) return 'sa';
+    if (creatorAddr && eoaAddr && creatorAddr === eoaAddr) return 'eoa';
+    var connected = eoaAddr || saAddr || '(no wallet)';
+    throw new Error(
+      'This wallet (' + connected.slice(0, 10) + '…) is not the creator of this channel ('
+      + (creatorAddr ? creatorAddr.slice(0, 10) + '…' : 'unknown')
+      + '). Switch wallets in Puter to the channel creator before retrying.'
+    );
+  }
+
+  // v1.2.7.7 (parity with elacity-creator/app.js pollForIndexerCatchup):
+  // Poll the Elacity backend until its plan-list mirror reports the
+  // expected count (a proxy for "indexer ingested our tx") or we hit
+  // maxMs. Returns refreshed channel data on success, or null on timeout
+  // or repeated fetch failure. Per-iteration errors are swallowed so a
+  // transient backend hiccup does not end the poll early.
+  function pollChannelForPlanCount(channelAddress, expectedCount, maxMs) {
+    var start = Date.now();
+    var interval = 2000;
+    function tick() {
+      return ElacityAPI.retrieveChannel(channelAddress).then(function (refreshed) {
+        if (refreshed && Array.isArray(refreshed.plans) && refreshed.plans.length === expectedCount) {
+          return refreshed;
+        }
+        if (Date.now() - start >= maxMs) return null;
+        return new Promise(function (resolve) { setTimeout(resolve, interval); }).then(tick);
+      }).catch(function () {
+        if (Date.now() - start >= maxMs) return null;
+        return new Promise(function (resolve) { setTimeout(resolve, interval); }).then(tick);
+      });
+    }
+    return tick();
   }
 
   function renderChannelManagement(channelData) {
@@ -2138,6 +2516,12 @@
           '<button class="modal-close-btn" id="edit-channel-close">&times;</button>' +
         '</div>' +
         '<div class="modal-body">' +
+          // v1.2.7.7 (Bug-G mirror): banner that fills in if a divergence
+          // is detected between the in-memory channelData (sourced from
+          // the local catalog or a previous render) and the canonical
+          // Elacity backend. Lets the user immediately spot a previous
+          // failed save and push their local value up via Save Changes.
+          '<div id="edit-ch-sync-banner" style="display:none;margin-bottom:12px;padding:10px;background:rgba(245,158,11,0.1);border:1px solid #f59e0b;border-radius:6px;font-size:12px;color:var(--text-primary);"></div>' +
           '<div class="form-group"><label>Name</label><input type="text" id="edit-ch-name" class="form-input" value="' + u.escapeHtml(channelData.name || '') + '" /></div>' +
           '<div class="form-group"><label>Description</label><textarea id="edit-ch-desc" class="form-input" rows="3">' + u.escapeHtml(channelData.description || '') + '</textarea></div>' +
           '<div class="form-group"><label>Categories (comma-separated)</label><input type="text" id="edit-ch-cats" class="form-input" value="' + u.escapeHtml((channelData.categories || []).join(', ')) + '" /></div>' +
@@ -2163,6 +2547,55 @@
 
     document.getElementById('edit-channel-close').addEventListener('click', function () { modal.remove(); });
     document.getElementById('edit-ch-cancel').addEventListener('click', function () { modal.remove(); });
+
+    // v1.2.7.7 (Bug-G mirror): canonical backend snapshot. Used as the
+    // diff baseline for save (so a stale-local → backend push isn't
+    // skipped by "no changes detected") AND surfaced via the sync
+    // banner above when local and backend disagree.
+    var backendSnapshot = null;
+    ElacityAPI.retrieveChannel(channelData.address).then(function (fresh) {
+      if (!fresh) return;
+      backendSnapshot = {
+        name: fresh.name || '',
+        description: fresh.description || '',
+        categories: fresh.categories || [],
+        image: fresh.image || '',
+        coverImage: fresh.coverImage || ''
+      };
+      var local = {
+        name: channelData.name || '',
+        description: channelData.description || '',
+        categories: channelData.categories || [],
+        image: channelData.image || '',
+        coverImage: channelData.coverImage || ''
+      };
+      var divergent = [];
+      ['name', 'description'].forEach(function (k) {
+        if ((backendSnapshot[k] || '') !== (local[k] || '')) {
+          divergent.push({
+            field: k,
+            backend: backendSnapshot[k],
+            local: local[k]
+          });
+        }
+      });
+      if (divergent.length > 0) {
+        var banner = document.getElementById('edit-ch-sync-banner');
+        if (banner) {
+          var rows = divergent.map(function (d) {
+            return '<div style="margin-top:4px;"><strong>' + d.field + ':</strong> backend=<code>' + u.escapeHtml(d.backend) + '</code> · local=<code>' + u.escapeHtml(d.local) + '</code></div>';
+          }).join('');
+          banner.innerHTML =
+            '<strong>Out-of-sync:</strong> the Elacity backend has different values than your local view. ' +
+            'A previous Save likely failed silently due to wallet auth-mode mismatch. ' +
+            'Click <strong>Save Changes</strong> to push your local values to the backend.' +
+            rows;
+          banner.style.display = '';
+        }
+      }
+    }).catch(function (err) {
+      console.warn('[ChannelEdit] backend snapshot fetch failed (non-fatal):', err && err.message);
+    });
 
     // Live preview for image file inputs
     document.getElementById('edit-ch-image-file').addEventListener('change', function () {
@@ -2193,7 +2626,39 @@
       var imageFile = document.getElementById('edit-ch-image-file').files[0];
       var coverFile = document.getElementById('edit-ch-cover-file').files[0];
 
-      var authReady = ElacityAPI.isAuthenticated() ? Promise.resolve() : Wallet.siweLogin();
+      // v1.2.7.7 (Bug-G mirror): pick the SIWE auth-mode that matches
+      // the channel's on-chain creator BEFORE prompting any signature.
+      // Without this the silent-fallback path in api.js#updateChannelInformation
+      // hides backend rejections behind a "Channel updated!" toast (see
+      // 2026-05-04 incident — market shows new name, creator/backend
+      // still show old).
+      var authMode;
+      try { authMode = walletChoiceForChannel(channelData); }
+      catch (e) {
+        btn.disabled = false;
+        btn.textContent = 'Save Changes';
+        statusEl.textContent = e.message;
+        statusEl.classList.remove('hidden');
+        u.showToast(e.message, 'error');
+        return;
+      }
+
+      // v1.2.7.7 (stale-signer fix): the cached EOA/SA token might
+      // belong to a previous wallet/principal (sessionStorage rehydrate
+      // or earlier login with a different account). isAuthenticated()
+      // alone returns true and we'd skip the fresh SIWE login, sending
+      // a stale-principal JWT that the backend correctly rejects with
+      // "not allowed to edit this channel". Force a fresh login when
+      // the cached signer ≠ the channel creator we're authorising as.
+      var expectedSigner = ((channelData.creator && channelData.creator.address) || '').toLowerCase();
+      var authReady;
+      if (ElacityAPI.isAuthenticatedAs(authMode, expectedSigner)) {
+        authReady = Promise.resolve();
+      } else {
+        var cachedSigner = (ElacityAPI.getCachedSigner(authMode) || '').toLowerCase();
+        console.log('[ChannelEdit] forcing fresh SIWE — mode=' + authMode + ' expected=' + expectedSigner + ' cached=' + (cachedSigner || '(none)'));
+        authReady = Wallet.siweLogin({ authMode: authMode, force: true });
+      }
       authReady.then(function () {
         var uploads = [];
         if (imageFile) {
@@ -2209,7 +2674,12 @@
 
         return Promise.all(uploads);
       }).then(function () {
-        var original = {
+        // v1.2.7.7 (Bug-G mirror): diff against the canonical backend
+        // snapshot when we have one — that way a divergent local-vs-
+        // backend value (from a previous failed save) is surfaced as a
+        // change and pushed up. Fall back to the in-memory channelData
+        // if the backend snapshot fetch failed (offline / 5xx).
+        var original = backendSnapshot || {
           name: channelData.name || '',
           description: channelData.description || '',
           categories: channelData.categories || [],
@@ -2239,16 +2709,22 @@
         if (Object.keys(input).length === 0) {
           btn.disabled = false;
           btn.textContent = 'Save Changes';
-          u.showToast('No changes detected', 'info');
+          u.showToast('No changes detected (form matches backend exactly)', 'info');
           return;
         }
 
-        statusEl.textContent = 'Saving...';
+        statusEl.textContent = 'Saving (auth mode: ' + authMode + ')...';
         statusEl.classList.remove('hidden');
-        console.log('[ChannelEdit] Saving changes to', channelData.address, 'input:', JSON.stringify(input), 'auth:', ElacityAPI.isAuthenticated());
+        console.log(
+          '[ChannelEdit] Saving changes to', channelData.address,
+          'mode=' + authMode,
+          'expectedSigner=' + expectedSigner,
+          'cachedSigner=' + (ElacityAPI.getCachedSigner(authMode) || '(none)'),
+          'input:', JSON.stringify(input)
+        );
 
-        return ElacityAPI.updateChannelInformation(channelData.address, input, u.pc2Fetch).then(function () {
-          u.showToast('Channel updated!', 'success');
+        return ElacityAPI.updateChannelInformation(channelData.address, input, u.pc2Fetch, { authMode: authMode }).then(function () {
+          u.showToast('Channel updated on Elacity backend', 'success');
           modal.remove();
           M.openChannel(channelData.address);
         });
@@ -2292,127 +2768,8 @@
     container.innerHTML = html;
   }
 
-  function openEditPlanModal(channelData, plan) {
-    var existing = document.getElementById('edit-plan-modal');
-    if (existing) existing.remove();
-
-    var modal = document.createElement('div');
-    modal.id = 'edit-plan-modal';
-    modal.className = 'modal-overlay';
-    modal.innerHTML =
-      '<div class="modal-dialog">' +
-        '<div class="modal-header"><h3>Edit Plan: ' + u.escapeHtml(plan.label || '') + '</h3><button class="modal-close-btn" id="edit-plan-close">&times;</button></div>' +
-        '<div class="modal-body">' +
-          '<div class="form-group"><label>Description</label><input type="text" id="eplan-desc" class="form-input" value="' + u.escapeHtml(plan.description || '') + '" /></div>' +
-          '<div class="form-group"><label>Duration Value</label><input type="number" id="eplan-dur-val" class="form-input" min="1" value="' + ((plan.duration && plan.duration.value) || 30) + '" /></div>' +
-          '<div class="form-group"><label>Duration Unit</label><select id="eplan-dur-unit" class="form-input"><option value="days"' + ((plan.duration && plan.duration.unit === 'days') ? ' selected' : '') + '>Days</option><option value="months"' + ((plan.duration && plan.duration.unit === 'months') ? ' selected' : '') + '>Months</option><option value="years"' + ((plan.duration && plan.duration.unit === 'years') ? ' selected' : '') + '>Years</option></select></div>' +
-          '<div class="form-group"><label>Price (USDC)</label><input type="number" id="eplan-price" class="form-input" min="0.01" step="0.01" value="' + (typeof plan.price === 'number' ? plan.price.toFixed(2) : parseFloat(plan.price || 0).toFixed(2)) + '" /></div>' +
-          '<div id="edit-plan-status" class="modal-status hidden"></div>' +
-        '</div>' +
-        '<div class="modal-footer">' +
-          '<button id="eplan-cancel" class="btn-secondary">Cancel</button>' +
-          '<button id="eplan-save" class="btn-primary">Save Changes</button>' +
-        '</div>' +
-      '</div>';
-
-    document.body.appendChild(modal);
-
-    document.getElementById('edit-plan-close').addEventListener('click', function () { modal.remove(); });
-    document.getElementById('eplan-cancel').addEventListener('click', function () { modal.remove(); });
-
-    document.getElementById('eplan-save').addEventListener('click', function () {
-      var btn = this;
-      var price = parseFloat(document.getElementById('eplan-price').value);
-      if (!price || price <= 0) { u.showToast('Enter a valid price', 'error'); return; }
-
-      btn.disabled = true;
-      btn.textContent = 'Saving...';
-
-      ElacityAPI.updateSubscriptionPlan(channelData.address, [{
-        action: 'UPDATE',
-        args: {
-          planId: plan.planId,
-          label: plan.label,
-          description: document.getElementById('eplan-desc').value,
-          duration: { value: parseInt(document.getElementById('eplan-dur-val').value) || 30, unit: document.getElementById('eplan-dur-unit').value },
-          price: String(price),
-          payToken: plan.payToken || Wallet.USDC_ADDRESS
-        }
-      }], u.pc2Fetch).then(function () {
-        u.showToast('Plan updated!', 'success');
-        modal.remove();
-        M.openChannel(channelData.address);
-      }).catch(function (err) {
-        btn.disabled = false;
-        btn.textContent = 'Save Changes';
-        u.showToast('Failed: ' + err.message, 'error');
-      });
-    });
-  }
-
-  function openAddPlanModal(channelData) {
-    var existing = document.getElementById('add-plan-modal');
-    if (existing) existing.remove();
-
-    var modal = document.createElement('div');
-    modal.id = 'add-plan-modal';
-    modal.className = 'modal-overlay';
-    modal.innerHTML =
-      '<div class="modal-dialog">' +
-        '<div class="modal-header"><h3>Add Subscription Plan</h3><button class="modal-close-btn" id="add-plan-close">&times;</button></div>' +
-        '<div class="modal-body">' +
-          '<div class="form-group"><label>Label</label><input type="text" id="plan-label" class="form-input" placeholder="e.g. Monthly Premium" /></div>' +
-          '<div class="form-group"><label>Description</label><input type="text" id="plan-desc" class="form-input" placeholder="Plan description" /></div>' +
-          '<div class="form-group"><label>Duration Value</label><input type="number" id="plan-dur-val" class="form-input" min="1" value="30" /></div>' +
-          '<div class="form-group"><label>Duration Unit</label><select id="plan-dur-unit" class="form-input"><option value="days">Days</option><option value="months">Months</option><option value="years">Years</option></select></div>' +
-          '<div class="form-group"><label>Price (USDC)</label><input type="number" id="plan-price" class="form-input" min="0.01" step="0.01" placeholder="e.g. 9.99" /></div>' +
-          '<div id="add-plan-status" class="modal-status hidden"></div>' +
-        '</div>' +
-        '<div class="modal-footer">' +
-          '<button id="add-plan-cancel" class="btn-secondary">Cancel</button>' +
-          '<button id="add-plan-confirm" class="btn-primary">Add Plan</button>' +
-        '</div>' +
-      '</div>';
-
-    document.body.appendChild(modal);
-
-    document.getElementById('add-plan-close').addEventListener('click', function () { modal.remove(); });
-    document.getElementById('add-plan-cancel').addEventListener('click', function () { modal.remove(); });
-
-    document.getElementById('add-plan-confirm').addEventListener('click', function () {
-      var btn = this;
-      var label = document.getElementById('plan-label').value;
-      var desc = document.getElementById('plan-desc').value;
-      var durVal = parseInt(document.getElementById('plan-dur-val').value) || 30;
-      var durUnit = document.getElementById('plan-dur-unit').value;
-      var price = parseFloat(document.getElementById('plan-price').value);
-
-      if (!label) { u.showToast('Label is required', 'error'); return; }
-      if (!price || price <= 0) { u.showToast('Enter a valid price', 'error'); return; }
-
-      btn.disabled = true;
-      btn.textContent = 'Adding...';
-
-      ElacityAPI.updateSubscriptionPlan(channelData.address, [{
-        action: 'ADD',
-        args: {
-          label: label,
-          description: desc,
-          duration: { value: durVal, unit: durUnit },
-          price: String(price),
-          payToken: Wallet.USDC_ADDRESS || '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'
-        }
-      }], u.pc2Fetch).then(function () {
-        u.showToast('Plan added!', 'success');
-        modal.remove();
-        M.openChannel(channelData.address);
-      }).catch(function (err) {
-        btn.disabled = false;
-        btn.textContent = 'Add Plan';
-        u.showToast('Failed: ' + err.message, 'error');
-      });
-    });
-  }
+  // openEditPlanModal / openAddPlanModal removed in v44 — replaced by
+  // batched openManagePlansModal above (creator-app parity, single tx).
 
   // ── Token-Gating Display + Configuration ──────────
 
@@ -2563,7 +2920,7 @@
         decimals: gateTokenInfo ? gateTokenInfo.decimals : 0
       });
 
-      saveTokenGateConfig(channelData.address, newThresholds);
+      saveTokenGateConfig(channelData, newThresholds);
       modal.remove();
     });
   }
@@ -2582,12 +2939,29 @@
     }).catch(function () { return null; });
   }
 
-  function saveTokenGateConfig(channelAddress, thresholds) {
-    ElacityAPI.updateChannelInformation(channelAddress, {
-      tokenAccess: thresholds
-    }).then(function () {
-      u.showToast('Token gate config saved!', 'success');
-      M.openChannel(channelAddress);
+  function saveTokenGateConfig(channelData, thresholds) {
+    // The UI carries thresholds as { address, value: float, decimals: int }
+    // for human-readable display. configureTokenOwnershipAccess takes
+    // (address, uint256 threshold) where threshold is in the token's base
+    // units, so we apply parseUnits before encoding.
+    var chainThresholds;
+    try {
+      chainThresholds = thresholds.map(function (t) {
+        var dec = (t.decimals === undefined || t.decimals === null) ? 0 : Number(t.decimals);
+        if (!isFinite(dec) || dec < 0) dec = 0;
+        var raw = ethers.parseUnits(String(t.value || '0'), dec);
+        return { tokenAddress: t.address, threshold: raw.toString() };
+      });
+    } catch (err) {
+      u.showToast('Invalid threshold: ' + err.message, 'error');
+      return;
+    }
+    var choice;
+    try { choice = walletChoiceForChannel(channelData); }
+    catch (e) { u.showToast(e.message, 'error'); return; }
+    Wallet.configureTokenAccess(channelData.address, chainThresholds, { fromWallet: choice }).then(function () {
+      u.showToast('Token gate updated on-chain!', 'success');
+      M.openChannel(channelData.address);
     }).catch(function (err) {
       u.showToast('Failed: ' + err.message, 'error');
     });

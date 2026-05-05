@@ -193,7 +193,7 @@ async function main() {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ElastOS - Personal Cloud</title>
-    <link rel="stylesheet" href="/bundle.min.css?v=1.2.5">
+    <link rel="stylesheet" href="/bundle.min.css?v=1.2.7.7">
     
     <!-- Initialize API origin before SDK loads -->
     <script>
@@ -655,7 +655,7 @@ async function main() {
     </script>
     
     <div id="app"></div>
-    <script src="/bundle.min.js?v=1.2.6"></script>
+    <script src="/bundle.min.js?v=1.2.7.7"></script>
     <script src="/pc2-wallet-bridge.js?v=20260430a"></script>
     <!-- Secure-view session manager (Option C session-key delegation).
          Owns the ephemeral P-256 key + 24h delegation. Iframes call

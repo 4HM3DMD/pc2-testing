@@ -40,14 +40,31 @@ var Wallet = (function () {
     'function safeTransferFrom(address from, address to, uint256 id, uint256 amount, bytes data)',
     'function royaltyInfo(uint256 salePrice) view returns (tuple(address receiver, uint256 amount)[])'
   ];
+  // V3 SubscriptionModule (base-network-updates branch). Critical differences vs.
+  // legacy:
+  //   - bulkUpdatePlans tuple is (uint8 actionType, bytes args), NOT
+  //     (string action, bytes args). actionType: 1=ADD, 2=UPDATE, 3=REMOVE.
+  //   - subscribePlan now takes (uint8, bytes) — the bytes payload is an
+  //     ABI-encoded subscription metadata CID (or 0x for none).
+  //   - ADD/UPDATE args include a planURI string (IPFS CID) so the indexer
+  //     can pick up label/description/image metadata.
+  // See elacity-web/src/lib/drm/channel/{subscription.ts,subscribe.ts} on
+  // the base-network-updates branch for the canonical reference.
   var SUBSCRIPTION_MODULE_ABI = [
-    'function bulkUpdatePlans(tuple(string action, bytes args)[] updates)',
+    'function bulkUpdatePlans(tuple(uint8 actionType, bytes args)[] actions)',
     'function getPlans() view returns (tuple(uint8 planId, address payToken, uint256 price, uint256 duration, bool active)[])',
+    'function plans(uint8 planId) view returns (uint8 planId, address payToken, uint256 price, uint256 duration, bool active)',
     'function configureTokenOwnershipAccess(tuple(address tokenAddress, uint256 threshold)[] thresholds)',
     'function hasActiveSubscription(address subscriber) view returns (bool)',
-    'function subscribePlan(uint8 planId, bool recurring) payable',
-    'function paymentProcessor() view returns (address)'
+    'function subscribePlan(uint8 planId, bytes args) payable',
+    'function paymentProcessor() view returns (address)',
+    'function tokenURI(uint256 tokenId) view returns (string)',
+    'function name() view returns (string)'
   ];
+
+  // PlanActionType enum values used by bulkUpdatePlans, mirroring elacity-web:
+  //   { ADD: 1, UPDATE: 2, REMOVE: 3 }
+  var PLAN_ACTION = { ADD: 1, UPDATE: 2, REMOVE: 3 };
   var TOKEN_INTROSPECT_ABI = [
     'function name() view returns (string)',
     'function symbol() view returns (string)',
@@ -305,22 +322,47 @@ var Wallet = (function () {
 
   // ── SIWE Authentication ──────────────────────────────
 
-  function siweLogin() {
-    if (ElacityAPI.isAuthenticated()) return Promise.resolve();
-    if (siwePromise) return siwePromise;
+  // v1.2.7.7 (Bug-G mirror): mode-aware SIWE.
+  //   opts.authMode === 'sa'  → include `sa` in userLogin → JWT principal = SA
+  //   opts.authMode === 'eoa' → omit `sa` in userLogin   → JWT principal = EOA
+  //   omitted                 → legacy behaviour (sends `sa` if it exists)
+  // Owner-only mutation callers (channel-edit, manage-plans) MUST pass
+  // an explicit mode derived from walletChoiceForChannel(channel) so
+  // the backend's owner-check (req.principal === channel.creator)
+  // resolves. Without this the backend silently rejects with "not
+  // allowed to edit this channel" and the caller's silent fallback
+  // hides it (see api.js#updateChannelInformation comment).
+  var siwePromiseByMode = {};
+
+  function siweLogin(opts) {
+    var mode = (opts && opts.authMode) || null; // null = legacy
+    var force = !!(opts && opts.force);
+    var cacheKey = mode || 'legacy';
+
+    // v1.2.7.7 (stale-signer fix): callers can pass `force: true` when
+    // they detected the cached token's signer doesn't match the
+    // principal they need (e.g. the channel-edit save handler comparing
+    // cached signer vs channel creator). When forced we skip the
+    // "already authenticated" short-circuit and obtain a fresh JWT
+    // bound to the currently-connected wallet.
+    if (!force) {
+      if (mode && ElacityAPI.isAuthenticated(mode)) return Promise.resolve();
+      if (!mode && ElacityAPI.isAuthenticated()) return Promise.resolve();
+    }
+    if (siwePromiseByMode[cacheKey]) return siwePromiseByMode[cacheKey];
 
     if (!connectedAddress) {
-      siwePromise = connect().then(function () {
-        siwePromise = null;
-        return siweLogin();
+      siwePromiseByMode[cacheKey] = connect().then(function () {
+        siwePromiseByMode[cacheKey] = null;
+        return siweLogin(opts);
       }).catch(function (err) {
-        siwePromise = null;
+        siwePromiseByMode[cacheKey] = null;
         throw err;
       });
-      return siwePromise;
+      return siwePromiseByMode[cacheKey];
     }
 
-    siwePromise = ElacityAPI.getNonce(connectedAddress)
+    siwePromiseByMode[cacheKey] = ElacityAPI.getNonce(connectedAddress)
       .then(function (nonce) {
         var message = 'Approve signature on https://ela.city with nonce ' + (nonce || 0);
         var hexMessage = '0x' + Array.from(new TextEncoder().encode(message))
@@ -333,20 +375,38 @@ var Wallet = (function () {
         });
       })
       .then(function (signature) {
-        var sa = smartAccountAddress || getProvider().smartAccountAddress || null;
-        if (sa) smartAccountAddress = sa;
-        return ElacityAPI.login(connectedAddress, signature, sa).then(function (auth) {
+        var saFromProvider = smartAccountAddress || getProvider().smartAccountAddress || null;
+        if (saFromProvider) smartAccountAddress = saFromProvider;
+
+        // Pick what to send as `sa` based on mode:
+        //   'eoa'   → null (force EOA principal)
+        //   'sa'    → throw if no SA available (caller asked for something
+        //             impossible)
+        //   legacy  → preserve old behaviour (always send sa if present)
+        var saForLogin;
+        if (mode === 'eoa') {
+          saForLogin = null;
+        } else if (mode === 'sa') {
+          if (!smartAccountAddress) {
+            throw new Error('SA-mode SIWE requested but no Smart Account is available on this wallet.');
+          }
+          saForLogin = smartAccountAddress;
+        } else {
+          saForLogin = saFromProvider;
+        }
+
+        return ElacityAPI.login(connectedAddress, signature, saForLogin).then(function (auth) {
           if (auth && auth.sa) smartAccountAddress = auth.sa;
-          siwePromise = null;
+          siwePromiseByMode[cacheKey] = null;
           return auth;
         });
       })
       .catch(function (err) {
-        siwePromise = null;
+        siwePromiseByMode[cacheKey] = null;
         throw err;
       });
 
-    return siwePromise;
+    return siwePromiseByMode[cacheKey];
   }
 
   // ── Purchase ─────────────────────────────────────────
@@ -1421,7 +1481,11 @@ var Wallet = (function () {
       var useSA = (fromWallet === 'sa') && hasSmartAccount();
       var isNative = !payToken || payToken === ZERO_ADDRESS;
       var subIface = new ethers.Interface(SUBSCRIPTION_MODULE_ABI);
-      var subData = subIface.encodeFunctionData('subscribePlan', [planId, false]);
+      // V3 subscribePlan(uint8 planId, bytes args). The `args` slot is an
+      // ABI-encoded subscription metadata CID (best effort) or 0x. We pass 0x
+      // here because PC2 wallets don't have a configured uploader at this
+      // call site; the off-chain indexer will fall back to plan metadata.
+      var subData = subIface.encodeFunctionData('subscribePlan', [planId, '0x']);
       var subTx = {
         to: channelAddr,
         data: subData,
@@ -1493,15 +1557,366 @@ var Wallet = (function () {
     });
   }
 
-  // V3 contracts do not implement bulkUpdatePlans, configureTokenOwnershipAccess
-  // on-chain. Plan/token-gate management is handled via local catalog API.
-
-  function bulkUpdatePlans() {
-    return Promise.reject(new Error('bulkUpdatePlans is not available in V3 contracts. Use local catalog API.'));
+  // ── On-chain plan + token-gate management ──────────────────────────────
+  //
+  // Channels on Base mainnet expose `bulkUpdatePlans` and
+  // `configureTokenOwnershipAccess` directly. The off-chain GraphQL mutations
+  // are deprecated by Elacity; only on-chain writes propagate to the
+  // subscription/access enforcement contracts. Reference implementation
+  // is elacity-web/src/lib/drm/channel/subscription.ts (base-network-updates).
+  //
+  // Plan ID -> ERC-1155 metadata token ID mapping. The contract reserves the
+  // top byte (0xff) and stores the plan id at byte 14 (bits 112..119), then
+  // left-pads the result to 32 bytes. Mirrors `_maskU16(id, 32)` from
+  // elacity-web's ChannelTraits.
+  function maskPlanTokenId(planId) {
+    var idNum = Number(planId);
+    if (!isFinite(idNum) || idNum <= 0 || idNum > 255) {
+      throw new Error('Invalid plan id: ' + planId);
+    }
+    // (0xff << 120) | (id << 112)
+    var topMask = ethers.getBigInt('0xff') << 120n;
+    var idShifted = ethers.getBigInt(idNum) << 112n;
+    var result = topMask | idShifted;
+    return ethers.zeroPadValue(ethers.toBeHex(result), 32);
   }
 
-  function configureTokenAccess() {
-    return Promise.reject(new Error('configureTokenOwnershipAccess is not available in V3 contracts. Use local catalog API.'));
+  // Pin a JSON metadata blob to PC2's local IPFS first (always reachable
+  // through the user's gateway), then mirror to Elacity for global
+  // discovery. Returns "ipfs://<CID>". The Elacity gateway upload is
+  // best-effort — local pin alone is enough for the on-chain write to
+  // succeed; viewers without PC2 will pick it up from Elacity once that
+  // mirror lands. Same belt-and-braces pattern as channel images.
+  function uploadJsonToIpfs(metadataObj, pc2FetchFn, filename) {
+    var fetchFn = pc2FetchFn || fetch;
+    var json = JSON.stringify(metadataObj);
+    var base64 = (typeof btoa === 'function')
+      ? btoa(unescape(encodeURIComponent(json)))
+      : Buffer.from(json, 'utf8').toString('base64');
+    var dataUrl = 'data:application/json;base64,' + base64;
+    var fname = filename || 'plan-metadata.json';
+
+    var localCid = null;
+    return fetchFn('/api/storage/ipfs/add', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: dataUrl, filename: fname, announce: true })
+    })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .catch(function () { return null; })
+      .then(function (j) {
+        if (j && j.cid) localCid = j.cid;
+        return fetchFn('/api/storage/ipfs/upload-elacity', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: dataUrl, filename: fname })
+        }).then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; });
+      })
+      .then(function (j) {
+        var elacityCid = j && (j.cid || (j.success && j.cid)) ? j.cid : null;
+        var finalCid = elacityCid || localCid;
+        if (!finalCid) throw new Error('IPFS upload failed (both local and Elacity gateway)');
+        return 'ipfs://' + finalCid;
+      });
+  }
+
+  // Fetch the channel's on-chain image so newly added plans inherit the
+  // channel artwork. Soft-fails so plan adds never block on a flaky gateway.
+  function fetchChannelImage(channelAddr) {
+    var subIface = new ethers.Interface(SUBSCRIPTION_MODULE_ABI);
+    var data = subIface.encodeFunctionData('tokenURI', [0]);
+    return getProvider().request({
+      method: 'eth_call',
+      params: [{ to: channelAddr, data: data }, 'latest']
+    }).then(function (r) {
+      var uri = subIface.decodeFunctionResult('tokenURI', r)[0];
+      if (!uri) return null;
+      var url = uri.replace(/^ipfs:\/\//, 'https://ipfs.elacity.io/ipfs/');
+      var ctrl = new AbortController();
+      var timer = setTimeout(function () { ctrl.abort(); }, 1500);
+      return fetch(url, { signal: ctrl.signal }).then(function (resp) {
+        clearTimeout(timer);
+        return resp.ok ? resp.json() : null;
+      }).catch(function () { clearTimeout(timer); return null; });
+    }).then(function (meta) {
+      return (meta && meta.image) ? meta.image : null;
+    }).catch(function () { return null; });
+  }
+
+  // Fetch existing plan metadata from tokenURI(maskedPlanId) so UPDATE flows
+  // can merge user edits with the previously-stored fields (image, schema,
+  // creator) instead of dropping them. Soft-fails to {} on any error.
+  function fetchPlanMetadata(channelAddr, planId) {
+    var subIface = new ethers.Interface(SUBSCRIPTION_MODULE_ABI);
+    var maskedId;
+    try { maskedId = maskPlanTokenId(planId); } catch (_) { return Promise.resolve({}); }
+    var data = subIface.encodeFunctionData('tokenURI', [maskedId]);
+    return getProvider().request({
+      method: 'eth_call',
+      params: [{ to: channelAddr, data: data }, 'latest']
+    }).then(function (r) {
+      var uri = subIface.decodeFunctionResult('tokenURI', r)[0];
+      if (!uri) return {};
+      var url = uri.replace(/^ipfs:\/\//, 'https://ipfs.elacity.io/ipfs/');
+      var ctrl = new AbortController();
+      var timer = setTimeout(function () { ctrl.abort(); }, 1500);
+      return fetch(url, { signal: ctrl.signal }).then(function (resp) {
+        clearTimeout(timer);
+        return resp.ok ? resp.json() : {};
+      }).catch(function () { clearTimeout(timer); return {}; });
+    }).catch(function () { return {}; });
+  }
+
+  // Build the canonical Elacity plan metadata JSON that goes to IPFS.
+  // Schema mirrors elacity-web/_issuePlanURI(). Caller may pass channelImage
+  // (inherited) and an existingMetadata bag (for UPDATE merges).
+  function buildPlanMetadata(opts, signer) {
+    var existing = opts.existing || {};
+    var meta = {
+      version: '1.0',
+      schema: 'https://raw.githubusercontent.com/Elacity/wiki/main/metadata/schemas/plan/v1.0/schema.json',
+      description: opts.description || '',
+      name: opts.label || '',
+      properties: { creator: signer || '' },
+      attributes: [
+        { trait_type: 'Duration', value: (opts.duration ? (opts.duration.value + ' ' + opts.duration.unit) : '') }
+      ]
+    };
+    // For UPDATE, start from existing and override with new fields so we
+    // preserve image + extra properties the user/channel set previously.
+    var merged = Object.assign({}, existing, meta);
+    var inheritedImage = opts.channelImage || existing.image;
+    if (inheritedImage) merged.image = inheritedImage;
+    return merged;
+  }
+
+  // Convert {value, unit} to seconds. Mirrors elacity-web convertDuration().
+  // Months default to 30 days, years to 360 days (12*30) so the chain stores
+  // a consistent duration even if humans think in calendar months.
+  function durationToSeconds(duration) {
+    if (!duration || !duration.value) return 0;
+    var v = Number(duration.value);
+    if (!isFinite(v) || v < 0) return 0;
+    switch ((duration.unit || '').toLowerCase()) {
+      case 'seconds': return Math.floor(v);
+      case 'minutes': return Math.floor(v * 60);
+      case 'hours':   return Math.floor(v * 3600);
+      case 'days':    return Math.floor(v * 86400);
+      case 'weeks':   return Math.floor(v * 604800);
+      case 'months':  return Math.floor(v * 2592000);
+      case 'years':   return Math.floor(v * 31104000);
+      default:        return Math.floor(v * 86400);
+    }
+  }
+
+  // Build the on-chain bulkUpdatePlans payload from a list of UI actions.
+  //   actions: [{ action: 'ADD'|'UPDATE'|'REMOVE', args: { planId?, label, description, duration:{value,unit}, price:string, payToken } }]
+  // Returns a Promise<encoded calldata string> ready for `to: channelAddr`.
+  function encodeBulkUpdatePlans(channelAddr, actions, opts) {
+    opts = opts || {};
+    var signerAddr = opts.signerAddress || connectedAddress;
+    var pc2FetchFn = opts.pc2Fetch;
+
+    return fetchChannelImage(channelAddr).then(function (channelImage) {
+      // Walk each action sequentially so the IPFS pins go up one at a time.
+      var promiseChain = Promise.resolve([]);
+      actions.forEach(function (action) {
+        promiseChain = promiseChain.then(function (acc) {
+          return prepareAction(channelAddr, action, channelImage, signerAddr, pc2FetchFn).then(function (encodedTuple) {
+            acc.push(encodedTuple);
+            return acc;
+          });
+        });
+      });
+
+      return promiseChain.then(function (tuples) {
+        var iface = new ethers.Interface(SUBSCRIPTION_MODULE_ABI);
+        return iface.encodeFunctionData('bulkUpdatePlans', [tuples]);
+      });
+    });
+  }
+
+  // Pre-V3 off-chain plan IDs (string-format like "plan_1777921474969") cannot
+  // be edited or removed on-chain — they were never minted. Show a clear UX
+  // message instead of cryptic encoding failures.
+  function isOnChainPlanId(planId) {
+    var n = Number(planId);
+    return isFinite(n) && Number.isInteger(n) && n > 0 && n <= 255;
+  }
+
+  function prepareAction(channelAddr, action, channelImage, signerAddr, pc2FetchFn) {
+    var coder = ethers.AbiCoder.defaultAbiCoder();
+    var args = action.args || {};
+
+    if (action.action === 'REMOVE') {
+      if (!isOnChainPlanId(args.planId)) {
+        return Promise.reject(new Error('This plan was created in legacy off-chain storage and cannot be removed on-chain. Reload the channel; the plan should disappear once the on-chain state syncs.'));
+      }
+      var encoded = coder.encode(['uint8'], [Number(args.planId)]);
+      return Promise.resolve([PLAN_ACTION.REMOVE, encoded]);
+    }
+
+    if (action.action === 'UPDATE' && !isOnChainPlanId(args.planId)) {
+      return Promise.reject(new Error('This plan was created in legacy off-chain storage and cannot be edited on-chain. Use "Add Plan" to create a fresh on-chain plan instead.'));
+    }
+
+    var payToken = args.payToken || USDC_ADDRESS;
+    var price = args.price;
+    var durationSecs = durationToSeconds(args.duration);
+    if (!durationSecs) return Promise.reject(new Error('Duration must be > 0'));
+
+    return getTokenDecimals(payToken).then(function (decimals) {
+      var priceWei;
+      try {
+        priceWei = ethers.parseUnits(String(price || '0'), decimals);
+      } catch (e) {
+        throw new Error('Invalid price: ' + price);
+      }
+      if (priceWei <= 0n) throw new Error('Price must be > 0');
+
+      // Build + pin metadata. For UPDATE, start from existing tokenURI so we
+      // preserve any prior fields the user didn't touch (image, schema, etc).
+      var existingMetaPromise = (action.action === 'UPDATE' && isOnChainPlanId(args.planId))
+        ? fetchPlanMetadata(channelAddr, args.planId)
+        : Promise.resolve({});
+
+      return existingMetaPromise.then(function (existing) {
+        var metadata = buildPlanMetadata({
+          label: args.label,
+          description: args.description,
+          duration: args.duration,
+          channelImage: channelImage,
+          existing: existing
+        }, signerAddr);
+
+        return uploadJsonToIpfs(metadata, pc2FetchFn, 'plan-metadata.json');
+      }).then(function (planURI) {
+        if (action.action === 'ADD') {
+          var encodedAdd = coder.encode(
+            ['address', 'uint256', 'uint256', 'string'],
+            [payToken, priceWei, durationSecs, planURI]
+          );
+          return [PLAN_ACTION.ADD, encodedAdd];
+        }
+        var encodedUpd = coder.encode(
+          ['uint8', 'address', 'uint256', 'uint256', 'string'],
+          [Number(args.planId), payToken, priceWei, durationSecs, planURI]
+        );
+        return [PLAN_ACTION.UPDATE, encodedUpd];
+      });
+    });
+  }
+
+  // v1.2.7.7 (Bug G2 mirror — parity with elacity-creator/app.js
+  // preflightOrSurfaceRevert): MetaMask reports on-chain reverts during gas
+  // estimation as a cryptic "Cannot destructure property 'gasLimit' of
+  // '(intermediate value)' as it is null" — and worse, on Particle/SA
+  // signing flow the user just sees "User denied transaction signature"
+  // because the popup never carries the underlying revert reason.
+  // Pre-flighting via a direct eth_call against Base public RPC surfaces
+  // the actual revert (signature, custom error, or message) BEFORE we ever
+  // pop the wallet, so users see "this wallet is not authorized to modify
+  // this channel" instead of a JS error or a denied-signature ghost.
+  // Known custom errors:
+  //   0x4888d31b — Unauthorized(channel, caller). Caller (the SA or EOA
+  //               we're sending from) is not the channel admin.
+  // Fail-open on RPC transport errors so a flaky public RPC does not
+  // block a legitimate tx — the wallet will still validate before signing.
+  function preflightOrSurfaceRevert(toAddr, calldata, fromAddr, opName) {
+    var rpcUrl = (BASE_CHAIN_CONFIG.rpcUrls && BASE_CHAIN_CONFIG.rpcUrls[0]) || 'https://mainnet.base.org';
+    var params = { to: toAddr, data: calldata };
+    if (fromAddr) params.from = fromAddr;
+    return fetch(rpcUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_call', params: [params, 'latest'] })
+    }).then(function (resp) { return resp.json(); }).then(function (json) {
+      if (!json || !json.error) return;
+      var errData = String(json.error.data || '');
+      var errMsg = String(json.error.message || '');
+      if (errData.indexOf('0x4888d31b') !== -1 || errMsg.indexOf('0x4888d31b') !== -1) {
+        throw new Error('On-chain check failed: this wallet is not authorized to modify this channel. The channel rejected the transaction with Unauthorized(' + toAddr.slice(0, 10) + '…, ' + (fromAddr || '').slice(0, 10) + '…). Switch wallets in Puter to the channel creator before retrying.');
+      }
+      throw new Error('On-chain pre-flight (' + opName + ') reverted: ' + (errMsg || errData || 'unknown reason'));
+    }).catch(function (err) {
+      if (err && err.message && err.message.indexOf('On-chain') === 0) throw err;
+      console.warn('[Wallet] preflight RPC failed, allowing tx to proceed:', err && err.message);
+    });
+  }
+
+  // Public wrapper. Sends the bulkUpdatePlans tx via EOA (default) or SA.
+  // Returns a Promise resolving to {hash, receipt}.
+  //   actions: see encodeBulkUpdatePlans()
+  //   opts.fromWallet: 'eoa' | 'sa'
+  //   opts.pc2Fetch:   authed fetch wrapper for IPFS pinning
+  function bulkUpdatePlans(channelAddr, actions, opts) {
+    if (!connectedAddress) return Promise.reject(new Error('Wallet not connected'));
+    if (!Array.isArray(actions) || actions.length === 0) {
+      return Promise.reject(new Error('No plan actions to apply'));
+    }
+    opts = opts || {};
+    var useSA = (opts.fromWallet === 'sa') && hasSmartAccount();
+    var fromAddr = useSA ? smartAccountAddress : connectedAddress;
+
+    return ensureBase()
+      .then(function () { return encodeBulkUpdatePlans(channelAddr, actions, opts); })
+      .then(function (data) {
+        return preflightOrSurfaceRevert(channelAddr, data, fromAddr, 'bulkUpdatePlans')
+          .then(function () { return data; });
+      })
+      .then(function (data) {
+        var tx = { to: channelAddr, data: data, value: '0x0' };
+        if (useSA) {
+          var chainIdDecimal = currentChainId ? parseInt(currentChainId, 16) : 8453;
+          return parentExecuteSmartAccountBatch(chainIdDecimal, [tx], []);
+        }
+        return parentSendTransaction(tx).then(function (hash) {
+          return waitForReceipt(hash).then(function (receipt) {
+            return { hash: hash, receipt: receipt };
+          });
+        });
+      });
+  }
+
+  // Public wrapper for token-gate writes. Mirrors elacity-web's
+  // configureTokenAccess(). Threshold values are ALREADY in base units (the
+  // caller is expected to multiply by 10^decimals).
+  //   thresholds: [{ tokenAddress, threshold: <bigint|string|number in base units> }]
+  function configureTokenAccess(channelAddr, thresholds, opts) {
+    if (!connectedAddress) return Promise.reject(new Error('Wallet not connected'));
+    if (!Array.isArray(thresholds)) {
+      return Promise.reject(new Error('thresholds must be an array'));
+    }
+    opts = opts || {};
+    var useSA = (opts.fromWallet === 'sa') && hasSmartAccount();
+    var fromAddr = useSA ? smartAccountAddress : connectedAddress;
+
+    return ensureBase().then(function () {
+      var iface = new ethers.Interface(SUBSCRIPTION_MODULE_ABI);
+      var input = thresholds.map(function (t) {
+        if (!t || !ethers.isAddress(t.tokenAddress)) {
+          throw new Error('Invalid token address in threshold list');
+        }
+        var th = t.threshold === undefined || t.threshold === null
+          ? 0n
+          : ethers.getBigInt(typeof t.threshold === 'string' ? t.threshold : String(t.threshold));
+        return [t.tokenAddress, th];
+      });
+      var data = iface.encodeFunctionData('configureTokenOwnershipAccess', [input]);
+      return preflightOrSurfaceRevert(channelAddr, data, fromAddr, 'configureTokenOwnershipAccess')
+        .then(function () {
+          var tx = { to: channelAddr, data: data, value: '0x0' };
+          if (useSA) {
+            var chainIdDecimal = currentChainId ? parseInt(currentChainId, 16) : 8453;
+            return parentExecuteSmartAccountBatch(chainIdDecimal, [tx], []);
+          }
+          return parentSendTransaction(tx).then(function (hash) {
+            return waitForReceipt(hash).then(function (receipt) {
+              return { hash: hash, receipt: receipt };
+            });
+          });
+        });
+    });
   }
 
   function checkSubscription(channelAddr, subscriberAddr) {

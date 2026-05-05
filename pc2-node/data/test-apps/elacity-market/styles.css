@@ -1527,12 +1527,21 @@ body {
   border-radius: 12px;
   width: 420px;
   max-width: 90vw;
+  /* v1.2.7.7: Cap dialog height + flex-column the inside so the body scrolls
+     while header/footer stay pinned. Previously `overflow: hidden` clipped tall
+     content (e.g. the Edit Channel modal with image previews) when the Puter
+     window viewport was small — Save Changes ended up below the fold with no
+     way to scroll to it. */
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
 }
 .modal-header {
   display: flex; align-items: center; justify-content: space-between;
   padding: 16px 20px;
   border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
 }
 .modal-header h3 { margin: 0; font-size: 16px; color: var(--text-primary); }
 .modal-close-btn {
@@ -1540,12 +1549,19 @@ body {
   cursor: pointer; padding: 0; line-height: 1;
 }
 .modal-close-btn:hover { color: var(--text-primary); }
-.modal-body { padding: 16px 20px; }
+.modal-body {
+  padding: 16px 20px;
+  /* Body absorbs available height and scrolls when content overflows. */
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
 .modal-desc { margin: 0 0 12px; color: var(--text-secondary); font-size: 13px; }
 .modal-footer {
   display: flex; justify-content: flex-end; gap: 8px;
   padding: 12px 20px;
   border-top: 1px solid var(--border);
+  flex: 0 0 auto;
 }
 .form-group { margin-bottom: 12px; }
 .form-group label {

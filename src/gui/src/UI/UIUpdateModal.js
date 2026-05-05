@@ -210,12 +210,12 @@ function showUpdateModal(versionInfo) {
                             <line x1="12" y1="15" x2="12" y2="3"/>
                         </svg>
                     </div>
-                    <h2 style="margin: 0 0 8px; font-size: 20px; color: #333;">Update Available</h2>
-                    <p style="margin: 0 0 16px; color: #666; font-size: 14px;">
+                    <h2 class="update-modal-title" style="margin: 0 0 8px; font-size: 20px; color: #333;">Update Available</h2>
+                    <p class="update-modal-subtitle" style="margin: 0 0 16px; color: #666; font-size: 14px;">
                         A new version of PC2 is ready to install
                     </p>
                     
-                    <div style="
+                    <div class="update-version-info" style="
                         background: #f5f5f5;
                         border-radius: 8px;
                         padding: 12px;
@@ -223,11 +223,11 @@ function showUpdateModal(versionInfo) {
                         text-align: left;
                     ">
                         <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
-                            <span style="color: #666; font-size: 13px;">Current Version</span>
-                            <span style="font-weight: 600; color: #333; font-size: 13px;">${window.html_encode(versionInfo.currentVersion || '1.0.0')}</span>
+                            <span class="update-version-label" style="color: #666; font-size: 13px;">Current Version</span>
+                            <span class="update-version-current" style="font-weight: 600; color: #333; font-size: 13px;">${window.html_encode(versionInfo.currentVersion || '1.0.0')}</span>
                         </div>
                         <div style="display: flex; justify-content: space-between;">
-                            <span style="color: #666; font-size: 13px;">New Version</span>
+                            <span class="update-version-label" style="color: #666; font-size: 13px;">New Version</span>
                             <span style="font-weight: 600; color: #4a90d9; font-size: 13px;">${window.html_encode(versionInfo.latestVersion || 'Latest')}</span>
                         </div>
                     </div>
@@ -442,6 +442,79 @@ function showUpdateModal(versionInfo) {
                 border-radius: 50%;
                 animation: spin 0.8s linear infinite;
             }
+
+            /* v1.2.7.6: dark-mode overrides. The modal's inline styles are
+               light-mode defaults; these :root:not([data-theme="light"])
+               selectors win in Puter's default-dark UI. !important is
+               required because inline styles otherwise outweigh any
+               external rule.
+               (data-theme is set by initgui.js: absent / "dark" → dark mode,
+               "light" → light mode.) */
+            :root:not([data-theme="light"]) .update-modal {
+                background: #1c1c1e !important;
+                box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6) !important;
+            }
+            :root:not([data-theme="light"]) .update-modal-title {
+                color: #f5f5f7 !important;
+            }
+            :root:not([data-theme="light"]) .update-modal-subtitle {
+                color: #c7c7cc !important;
+            }
+            :root:not([data-theme="light"]) .update-version-info {
+                background: #2c2c2e !important;
+            }
+            :root:not([data-theme="light"]) .update-version-info .update-version-label {
+                color: #c7c7cc !important;
+            }
+            :root:not([data-theme="light"]) .update-version-info .update-version-current {
+                color: #f5f5f7 !important;
+            }
+            :root:not([data-theme="light"]) .update-modal-notes {
+                background: #2c2c2e !important;
+                color: #c7c7cc !important;
+            }
+            :root:not([data-theme="light"]) .update-progress-bar-track {
+                background: #3a3a3c !important;
+            }
+            :root:not([data-theme="light"]) .update-progress-text {
+                color: #f5f5f7 !important;
+            }
+            :root:not([data-theme="light"]) .update-step-list {
+                background: #2c2c2e !important;
+                border-color: #3a3a3c !important;
+            }
+            :root:not([data-theme="light"]) .update-step-item {
+                color: #c7c7cc !important;
+            }
+            :root:not([data-theme="light"]) .update-step-item.active {
+                color: #f5f5f7 !important;
+            }
+            :root:not([data-theme="light"]) .update-step-item .update-step-spinner {
+                border-color: #3a3a3c !important;
+                border-top-color: #4a90d9 !important;
+            }
+            :root:not([data-theme="light"]) .update-progress-hint {
+                color: #8e8e93 !important;
+            }
+            :root:not([data-theme="light"]) .update-progress-hint code {
+                background: #2c2c2e !important;
+                color: #c7c7cc !important;
+            }
+            :root:not([data-theme="light"]) .update-modal-actions {
+                background: #2c2c2e !important;
+            }
+            :root:not([data-theme="light"]) .update-modal-cancel {
+                background: #3a3a3c !important;
+                border-color: #48484a !important;
+                color: #f5f5f7 !important;
+            }
+            :root:not([data-theme="light"]) .update-modal-cancel:hover {
+                background: #48484a !important;
+            }
+            :root:not([data-theme="light"]) .update-log-toggle {
+                color: #8e8e93 !important;
+            }
+            /* (the dark log panel is already dark — no override needed) */
         </style>
     `;
 
@@ -859,7 +932,7 @@ async function showRestartConfirmation() {
             align-items: center;
             justify-content: center;
         ">
-            <div style="
+            <div class="restart-confirm-modal" style="
                 background: white;
                 border-radius: 8px;
                 padding: 20px;
@@ -867,21 +940,42 @@ async function showRestartConfirmation() {
                 max-width: 450px;
                 box-shadow: 0 4px 20px rgba(0,0,0,0.3);
             ">
-                <h3 style="margin: 0 0 12px; font-size: 16px; color: #333;">
+                <h3 class="restart-confirm-title" style="margin: 0 0 12px; font-size: 16px; color: #333;">
                     ${restartMode.autoRestart ? 'Restart PC2' : 'Shut Down PC2'}
                 </h3>
-                <p style="margin: 0 0 20px; color: #666; font-size: 14px;">
+                <p class="restart-confirm-body" style="margin: 0 0 20px; color: #666; font-size: 14px;">
                     Are you sure you want to ${restartMode.autoRestart ? 'restart' : 'shut down'} PC2?<br>
                     <span style="font-size: 12px; color: ${restartMode.autoRestart ? '#999' : '#dc2626'};">${warningText}</span>
                 </p>
                 <div style="display: flex; gap: 10px; justify-content: flex-end;">
-                    <button id="restart-cancel" class="button" style="height: 32px; line-height: 32px; padding: 0 16px; border-radius: 4px;">Cancel</button>
-                    <button id="restart-confirm" class="button" style="height: 32px; line-height: 32px; padding: 0 16px; border-radius: 4px; background: #dc2626; color: white; border: none;">
+                    <button id="restart-cancel" style="display: inline-flex; align-items: center; justify-content: center; padding: 8px 16px; font-size: 13px; line-height: 1; font-family: inherit; background: #f3f4f6; border: 1px solid #d1d5db; color: #374151; border-radius: 6px; cursor: pointer;">Cancel</button>
+                    <button id="restart-confirm" style="display: inline-flex; align-items: center; justify-content: center; padding: 8px 16px; font-size: 13px; line-height: 1; font-family: inherit; background: #dc2626; color: white; border: none; border-radius: 6px; cursor: pointer;">
                         ${restartMode.autoRestart ? 'Restart' : 'Shut Down'}
                     </button>
                 </div>
             </div>
         </div>
+        <style>
+            /* v1.2.7.6: dark-mode overrides for the restart-confirm dialog. */
+            :root:not([data-theme="light"]) .restart-confirm-modal {
+                background: #1c1c1e !important;
+                box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6) !important;
+            }
+            :root:not([data-theme="light"]) .restart-confirm-title {
+                color: #f5f5f7 !important;
+            }
+            :root:not([data-theme="light"]) .restart-confirm-body {
+                color: #c7c7cc !important;
+            }
+            :root:not([data-theme="light"]) #restart-cancel {
+                background: #3a3a3c !important;
+                border-color: #48484a !important;
+                color: #f5f5f7 !important;
+            }
+            :root:not([data-theme="light"]) #restart-cancel:hover {
+                background: #48484a !important;
+            }
+        </style>
     `);
     
     // Store restart command for later use

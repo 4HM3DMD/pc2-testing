@@ -100,10 +100,23 @@
     'function balanceOf(address) view returns (uint256)',
   ];
 
+  // V3 SubscriptionModule (base-network-updates branch). actionType is uint8
+  // (1=ADD, 2=UPDATE, 3=REMOVE), and ADD/UPDATE args include a planURI string
+  // (IPFS CID) for off-chain metadata. configureTokenOwnershipAccess writes
+  // token-gating thresholds in base units (apply ERC-20 decimals first).
   var SUBSCRIPTION_MODULE_ABI = [
-    'function bulkUpdatePlans(tuple(string action, bytes args)[] updates)',
+    'function bulkUpdatePlans(tuple(uint8 actionType, bytes args)[] actions)',
     'function configureTokenOwnershipAccess(tuple(address tokenAddress, uint256 threshold)[] thresholds)',
+    'function getPlans() view returns (tuple(uint8 planId, address payToken, uint256 price, uint256 duration, bool active)[])',
+    'function tokenURI(uint256 tokenId) view returns (string)',
+    'function name() view returns (string)'
   ];
+
+  // PlanActionType enum (mirrors elacity-web/PlanActionType).
+  var PLAN_ACTION = { ADD: 1, UPDATE: 2, REMOVE: 3 };
+
+  var USDC_ADDRESS = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
+  var ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 
   // ── IPC & Smart Account ──────────────────────────────
 
@@ -185,6 +198,44 @@
     if (!channelSelectEl) return null;
     var opt = channelSelectEl.options[channelSelectEl.selectedIndex];
     return opt ? (opt.getAttribute('data-owner') || null) : null;
+  }
+
+  // v1.2.7.7 (Bug G): the off-chain Elacity backend issues a JWT whose
+  // principal is the SA when `sa` is supplied to userLogin (echoed back as
+  // `auth.sa`). When that principal doesn't match the channel's `creator`
+  // field, every owner-only mutation (`updateChannelInformation`,
+  // `updateSubscriptionPlan`) returns "not allowed to edit this channel".
+  // Mirror the existing wallet-routing logic the mint flow uses
+  // (`getChannelOwnerType` + `walletChoice`) so the SIWE token we hand
+  // the backend is signed *for the wallet that actually owns the channel*.
+  // Returns 'eoa', 'sa', or null (caller is not the owner).
+  function authModeForChannelData(channelData) {
+    if (!channelData || !channelData.creator) return null;
+    var creator = (channelData.creator.address || '').toLowerCase();
+    var eoa = (state.walletAddress || '').toLowerCase();
+    var sa = (smartAccountAddress || '').toLowerCase();
+    if (eoa && creator === eoa) return 'eoa';
+    if (sa && creator === sa) return 'sa';
+    return null;
+  }
+
+  // v1.2.7.7 (Bug G2): the manage flow's on-chain Save handlers were
+  // reading wallet choice from the *mint* dropdown (`dom.assetChannel`)
+  // with a fallback of `(hasSmartAccount() ? 'sa' : 'eoa')`. For users
+  // who have a smart account configured but own a channel on their EOA,
+  // this routed `bulkUpdatePlans` / `configureTokenOwnershipAccess`
+  // through the SA — which the channel contract rejects with custom
+  // error 0x4888d31b (caller-not-authorized), surfaced by MetaMask as
+  // the opaque "Cannot destructure property 'gasLimit' of '(intermediate
+  // value)' as it is null". The correct routing is the same as the SIWE
+  // auth-mode: derive from the channel's creator. This helper centralizes
+  // that for the four manage-flow handlers.
+  function manageWalletChoiceOrThrow() {
+    var mode = authModeForChannelData(managedChannelData);
+    if (!mode) {
+      throw new Error('Connected wallet is not the channel owner. Switch wallets in Puter to the channel creator before saving on-chain changes.');
+    }
+    return mode;
   }
 
   // ── State ─────────────────────────────────────────────
@@ -531,7 +582,7 @@
       '    image imageURL coverImage coverImageURL itemsCount isPublic',
       '    creator { address }',
       '    plans { planId label description price payToken duration { unit value } }',
-      '    tokenAccess { address value }',
+      '    tokenAccess { address value decimals }',
       '  }',
       '}',
     ].join('\n');
@@ -546,8 +597,65 @@
     return (json.data && json.data.channel) || null;
   }
 
-  async function updateChannelInfoOnBackend(address, input) {
-    var token = await getElacityAuthToken(state.walletAddress);
+  // Always parse the GraphQL response body — even on non-2xx — so the real
+  // server-side reason ("Unauthorized to update this channel", "owner
+  // mismatch", etc.) surfaces in the UI instead of a bare status code.
+  // Previous behavior threw on `!resp.ok` before reading the body, which is
+  // exactly what hid the auth/ownership errors community testers reported in
+  // v1.2.7.6 (and which Irzhy hypothesized as "Authorization header issue").
+  async function parseGraphQLResponse(resp, opLabel) {
+    var bodyText = '';
+    var bodyJson = null;
+    try {
+      bodyText = await resp.text();
+      bodyJson = bodyText ? JSON.parse(bodyText) : null;
+    } catch (e) {
+      // Non-JSON response (e.g. HTML 502 page) — keep raw text for the message.
+    }
+    if (bodyJson && bodyJson.errors && bodyJson.errors.length > 0) {
+      var detail = bodyJson.errors[0].message || 'GraphQL error';
+      var code = bodyJson.errors[0].extensions && bodyJson.errors[0].extensions.code;
+      throw new Error(opLabel + ': ' + detail + (code ? ' [' + code + ']' : '') + (resp.ok ? '' : ' (HTTP ' + resp.status + ')'));
+    }
+    if (!resp.ok) {
+      var snippet = bodyText ? bodyText.slice(0, 160) : '';
+      throw new Error(opLabel + ' failed: HTTP ' + resp.status + (snippet ? ' — ' + snippet : ''));
+    }
+    return bodyJson;
+  }
+
+  // Wraps an authenticated GraphQL POST. On 401, clears the cached auth token
+  // and retries once — handles cases where the server has rotated keys or the
+  // token has silently expired between page loads.
+  // v1.2.7.7 (Bug G): `opts.authMode` selects which JWT slot to use ('eoa'
+  // or 'sa'). Defaults to 'eoa' for callers without channel context.
+  async function authedGraphQLRequest(query, variables, opLabel, opts) {
+    opts = opts || {};
+    var mode = opts.authMode || 'eoa';
+    var token = await getElacityAuthToken(state.walletAddress, { authMode: mode });
+    var doFetch = function (t) {
+      return fetch(ELACITY_BACKEND + '/2.0/graphql', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + t },
+        body: JSON.stringify({ query: query, variables: variables }),
+      });
+    };
+    var resp = await doFetch(token);
+    if (resp.status === 401 || resp.status === 403) {
+      console.warn('[Creator] ' + opLabel + ' returned ' + resp.status + ' (mode=' + mode + '), clearing auth cache and retrying once');
+      elacityAuthCache[mode] = { token: null, address: null };
+      var freshToken = await getElacityAuthToken(state.walletAddress, { authMode: mode });
+      resp = await doFetch(freshToken);
+    }
+    return parseGraphQLResponse(resp, opLabel);
+  }
+
+  // v1.2.7.7 (Bug G): `opts.authMode` ('eoa'|'sa') selects the JWT principal
+  // — must match the channel's on-chain creator or backend returns
+  // "not allowed to edit this channel". Pass `authModeForChannelData(...)`
+  // from the caller so it stays in lock-step with the rest of the wallet
+  // routing the mint flow already does for `walletChoice`.
+  async function updateChannelInfoOnBackend(address, input, opts) {
     var mutation = [
       'mutation UpdateChannel($address: String!, $input: ChannelInformationInput!) {',
       '  channel: updateChannelInformation(address: $address, input: $input) {',
@@ -555,19 +663,44 @@
       '  }',
       '}',
     ].join('\n');
-    var resp = await fetch(ELACITY_BACKEND + '/2.0/graphql', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
-      body: JSON.stringify({ query: mutation, variables: { address: address, input: input } }),
-    });
-    if (!resp.ok) throw new Error('Update channel failed: ' + resp.status);
-    var json = await resp.json();
-    if (json.errors && json.errors.length > 0) throw new Error(json.errors[0].message);
-    return json.data.channel;
+    var json = await authedGraphQLRequest(mutation, { address: address, input: input }, 'Update channel', opts);
+    return json && json.data ? json.data.channel : null;
   }
 
-  async function updateSubscriptionPlanOnBackend(address, actions) {
-    var token = await getElacityAuthToken(state.walletAddress);
+  // v1.2.7.7 (name-sync): after a successful backend save, mirror the
+  // canonical values back into the PC2 local catalog. The local mirror
+  // is shared by every dApp on this PC2 (elacity-creator, elacity-market,
+  // …); without this write-through, a rename committed here would only
+  // reach market on its next backend reconciliation cycle, and any
+  // local-catalog read in the meantime would still serve the old value.
+  // Mirrors the parity helper in elacity-market/api.js
+  // (updateChannelInformation success path).
+  async function mirrorChannelToLocalCatalog(address, requestedInput, serverChannel) {
+    try {
+      if (!address) return;
+      var src = serverChannel || {};
+      var body = {};
+      if (requestedInput.name !== undefined) body.name = (src.name !== undefined && src.name !== null) ? src.name : requestedInput.name;
+      if (requestedInput.description !== undefined) body.description = (src.description !== undefined && src.description !== null) ? src.description : requestedInput.description;
+      if (requestedInput.categories !== undefined) {
+        var cats = (src.categories !== undefined && src.categories !== null) ? src.categories : requestedInput.categories;
+        body.categories = Array.isArray(cats) ? JSON.stringify(cats) : cats;
+      }
+      if (requestedInput.image !== undefined) body.image = (src.image !== undefined && src.image !== null) ? src.image : requestedInput.image;
+      if (requestedInput.coverImage !== undefined) body.coverImage = (src.coverImage !== undefined && src.coverImage !== null) ? src.coverImage : requestedInput.coverImage;
+      if (Object.keys(body).length === 0) return;
+      var origin = (typeof window !== 'undefined' && window.puter_api_origin) || (typeof window !== 'undefined' ? window.location.origin : '');
+      await fetch(origin + '/api/catalog/channel/' + encodeURIComponent(address), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    } catch (e) {
+      console.warn('[Creator] local catalog mirror after backend save failed:', e && e.message);
+    }
+  }
+
+  async function updateSubscriptionPlanOnBackend(address, actions, opts) {
     var mutation = [
       'mutation UpdatePlan($address: String!, $input: [SubscriptionPlanUpdateAction]!) {',
       '  updateSubscriptionPlan(address: $address, input: $input) {',
@@ -575,15 +708,8 @@
       '  }',
       '}',
     ].join('\n');
-    var resp = await fetch(ELACITY_BACKEND + '/2.0/graphql', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
-      body: JSON.stringify({ query: mutation, variables: { address: address, input: actions } }),
-    });
-    if (!resp.ok) throw new Error('Update plans failed: ' + resp.status);
-    var json = await resp.json();
-    if (json.errors && json.errors.length > 0) throw new Error(json.errors[0].message);
-    return json.data.updateSubscriptionPlan;
+    var json = await authedGraphQLRequest(mutation, { address: address, input: actions }, 'Update plans', opts);
+    return json && json.data ? json.data.updateSubscriptionPlan : null;
   }
 
   function showChannelStepState(stateId) {
@@ -715,6 +841,12 @@
       select.disabled = false;
       state.channelsLoaded = true;
       validateStep1();
+
+      // Background reconciliation against the Elacity backend — local
+      // catalog can lag (especially right after a rename in the Channels
+      // tab). Fire-and-forget; the dropdown is already usable, labels
+      // will swap in when the backend responds.
+      reconcileChannelLabels(eoaChannels.concat(saChannels)).catch(function () { /* logged inside */ });
     } catch (err) {
       console.error('[Creator] Failed to fetch channels:', err);
       select.innerHTML = '<option value="' + DEFAULT_CHANNEL + '">Public Elacity Channel (fallback)</option>';
@@ -1876,7 +2008,15 @@
 
   // ── Elacity backend auth (nonce-sign-login) ──────────
 
-  var elacityAuthCache = { token: null, address: null };
+  // v1.2.7.7 (Bug G): cache one JWT per auth-mode. The two modes issue
+  // different JWT principals on the backend (EOA-only vs SA-bound), so
+  // they cannot share a slot. Default mode for callers that don't know
+  // which one to use is 'eoa' — that matches the official elacity-web
+  // userLogin (it never sends `sa`).
+  var elacityAuthCache = {
+    eoa: { token: null, address: null },
+    sa: { token: null, address: null }
+  };
 
   async function elacityGraphQL(query, variables) {
     var resp = await fetch(ELACITY_BACKEND + '/2.0/graphql', {
@@ -1890,10 +2030,26 @@
     return json.data;
   }
 
-  async function getElacityAuthToken(walletAddress) {
+  // v1.2.7.7 (Bug G): mode-aware SIWE login.
+  //   mode 'eoa' → only `{address, signature}` sent → JWT principal = EOA
+  //   mode 'sa'  → adds `sa: smartAccountAddress` → JWT principal = SA
+  // The mint flow can leave mode unspecified and falls back to 'eoa', which
+  // matches the official elacity-web userLogin shape (it never sends `sa`).
+  // Callers that own a channel via SA must pass {authMode: 'sa'} so the
+  // backend's owner check (`req.principal === channel.creator`) resolves.
+  async function getElacityAuthToken(walletAddress, opts) {
     var addr = walletAddress.toLowerCase();
-    if (elacityAuthCache.token && elacityAuthCache.address === addr) {
-      return elacityAuthCache.token;
+    var mode = (opts && opts.authMode) || 'eoa';
+    if (mode === 'sa' && !smartAccountAddress) {
+      // Caller asked for SA-mode but no SA is configured. Fall back to EOA
+      // rather than silently signing a malformed login.
+      console.warn('[Creator] authMode=sa requested but no smartAccountAddress; falling back to eoa');
+      mode = 'eoa';
+    }
+
+    var slot = elacityAuthCache[mode];
+    if (slot && slot.token && slot.address === addr) {
+      return slot.token;
     }
 
     var nonceData = await elacityGraphQL(
@@ -1901,7 +2057,7 @@
       { address: addr }
     );
     var nonce = nonceData.getNonce;
-    console.log('[Creator] Elacity nonce:', nonce);
+    console.log('[Creator] Elacity nonce (' + mode + '-mode):', nonce);
 
     var msg = 'Approve signature on https://ela.city with nonce ' + (nonce || 0);
     var hexMsg = '0x' + Array.from(new TextEncoder().encode(msg))
@@ -1913,16 +2069,16 @@
     });
 
     var loginVars = { address: addr, signature: signature };
-    var sa = smartAccountAddress || null;
-    var loginMutation = sa
+    var loginMutation = mode === 'sa'
       ? 'mutation UserLogin($address: String!, $signature: String!, $sa: String) { userLogin(address: $address, signature: $signature, sa: $sa) { token address alias } }'
       : 'mutation UserLogin($address: String!, $signature: String!) { userLogin(address: $address, signature: $signature) { token address alias } }';
-    if (sa) loginVars.sa = sa;
+    if (mode === 'sa') loginVars.sa = smartAccountAddress;
     var loginData = await elacityGraphQL(loginMutation, loginVars);
 
     var token = loginData.userLogin.token;
-    elacityAuthCache = { token: token, address: addr };
-    console.log('[Creator] Elacity auth token obtained');
+    elacityAuthCache[mode] = { token: token, address: addr };
+    console.log('[Creator] Elacity auth token obtained (' + mode + '-mode, principal=' +
+      (mode === 'sa' ? smartAccountAddress.toLowerCase() : addr) + ')');
     return token;
   }
 
@@ -1949,7 +2105,17 @@
       tokenAccess: params.tokenAccess || [],
     };
 
-    var authToken = await getElacityAuthToken(state.walletAddress);
+    // v1.2.7.7 (Bug G): the channel was created on-chain by `params.creator`
+    // (which is the EOA or SA depending on the user's `walletChoice`). The
+    // backend's createChannel resolver writes that same value as the
+    // `creator` field, so subsequent owner-only mutations need a JWT whose
+    // principal matches. Pin the auth-mode here so registerChannel itself
+    // also writes through the right principal — keeps SA-created channels
+    // editable later by the SA-mode token.
+    var creatorLc = params.creator.toLowerCase();
+    var saLc = (smartAccountAddress || '').toLowerCase();
+    var registerMode = (saLc && creatorLc === saLc) ? 'sa' : 'eoa';
+    var authToken = await getElacityAuthToken(state.walletAddress, { authMode: registerMode });
 
     var resp = await fetch(ELACITY_BACKEND + '/2.0/graphql', {
       method: 'POST',
@@ -2021,10 +2187,16 @@
     for (var i = 0; i < src.options.length; i++) {
       var o = src.options[i];
       if (!o.value || o.value === '__custom__' || !ethers.isAddress(o.value)) continue;
-      if (!o.getAttribute('data-owner')) continue;
+      var ownerType = o.getAttribute('data-owner');
+      if (!ownerType) continue;
       var opt = document.createElement('option');
       opt.value = o.value;
       opt.textContent = o.textContent;
+      // v1.2.7.7 (Bug G): preserve the EOA/SA hint so the manage flow can
+      // pick the right SIWE auth-mode without re-hitting the backend or
+      // relying solely on `managedChannelData.creator` (which is also used,
+      // but only after retrieve resolves).
+      opt.setAttribute('data-owner', ownerType);
       dst.appendChild(opt);
       count++;
     }
@@ -2035,6 +2207,73 @@
 
     var emptyMsg = document.getElementById('channels-view-empty');
     if (emptyMsg) emptyMsg.style.display = count === 0 ? '' : 'none';
+
+    // Always re-reconcile names from the Elacity backend on every
+    // Channels tab entry. The local catalog only knows the immutable
+    // on-chain name(); off-chain renames (made via market or a previous
+    // creator session) only land via this reconcile path. Background
+    // task — dropdown is already usable; labels swap in when backend
+    // responds.
+    var ownedAddresses = [];
+    for (var k = 0; k < dst.options.length; k++) {
+      var opt = dst.options[k];
+      if (opt.value && ethers.isAddress(opt.value)) ownedAddresses.push({ address: opt.value });
+    }
+    if (ownedAddresses.length > 0) {
+      reconcileChannelLabels(ownedAddresses).catch(function (err) {
+        console.warn('[Creator] populateManageChannelSelector reconcile failed:', err && err.message);
+      });
+    }
+  }
+
+  // v1.2.7.7 (Bug G2): centralized dropdown-label rewrite. Walks both
+  // the mint dropdown (`asset-channel`) and the manage dropdown
+  // (`manage-channel-select`), preserving the trailing `(0xabcd…)`
+  // truncation pattern. Address comparison is case-insensitive because
+  // local-catalog rows can be lowercase while option values may be
+  // checksummed depending on which loader populated them.
+  function syncChannelOptionLabel(channelAddress, canonicalName) {
+    if (!channelAddress || !canonicalName) return;
+    var addrLc = String(channelAddress).toLowerCase();
+    channelNameCache[addrLc] = canonicalName;
+    ['asset-channel', 'manage-channel-select'].forEach(function (selId) {
+      var sel = document.getElementById(selId);
+      if (!sel) return;
+      for (var i = 0; i < sel.options.length; i++) {
+        var o = sel.options[i];
+        if (!o.value || o.value.toLowerCase() !== addrLc) continue;
+        var existing = o.textContent || '';
+        var paren = existing.indexOf(' (0x');
+        var nextLabel = paren > -1 ? canonicalName + existing.substring(paren) : canonicalName;
+        if (existing !== nextLabel) o.textContent = nextLabel;
+      }
+    });
+  }
+
+  // v1.2.7.7 (channel-name staleness): session-level cache of canonical
+  // names from the Elacity backend, populated by reconcileChannelLabels
+  // and any successful syncChannelOptionLabel call (e.g. after rename).
+  // Plain object keyed by lowercase address.
+  var channelNameCache = {};
+
+  // Background reconciliation: PC2's local catalog is a periodic mirror
+  // of the Elacity backend, so just-renamed channels can show their old
+  // name in the dropdown until catalog re-syncs. We paint from local
+  // catalog first (sub-100ms) for snappy UX, then fetch canonical names
+  // from the backend in parallel and rewrite the option labels in place.
+  // Failures are silent — the local name stays as a safe fallback.
+  async function reconcileChannelLabels(channels) {
+    if (!Array.isArray(channels) || channels.length === 0) return;
+    await Promise.all(channels.map(function (ch) {
+      if (!ch || !ch.address) return Promise.resolve();
+      return retrieveChannelFromBackend(ch.address)
+        .then(function (data) {
+          if (data && data.name) syncChannelOptionLabel(ch.address, data.name);
+        })
+        .catch(function (err) {
+          console.warn('[Creator] Label reconciliation failed for ' + ch.address + ':', err && err.message);
+        });
+    }));
   }
 
   // ── Channel Management UI ──────────────────────────────
@@ -2060,8 +2299,37 @@
       document.getElementById('manage-channel-name').value = managedChannelData.name || '';
       document.getElementById('manage-channel-description').value = managedChannelData.description || '';
 
+      // v1.2.7.7 (Bug G2): the local PC2 catalog can lag behind the
+      // Elacity backend after a successful name change (catalog re-sync
+      // is periodic, not immediate). Reconcile both dropdowns so the
+      // canonical backend name shows up everywhere as soon as the user
+      // opens this channel for management — otherwise they see the new
+      // name in the form but the old name in the dropdown.
+      syncChannelOptionLabel(addr, managedChannelData.name || '');
+
+      loadManageImages(managedChannelData);
+
+      // v1.2.7.7: read plans from the on-chain contract (source of truth)
+      // and merge label/description from the off-chain mirror. The Elacity
+      // backend's `plans` array can be empty even for channels that have
+      // active plans (indexer lag, or never-indexed legacy channels) —
+      // mirroring market's behaviour avoids the surprising "Manage Plans
+      // shows nothing while Subscribe shows 4 plans" inconsistency.
+      var onChainPlans = await fetchPlansFromContract(addr);
+      if (onChainPlans.length > 0) {
+        managedChannelData.plans = mergePlansWithMetadata(onChainPlans, managedChannelData.plans || []);
+      }
       loadManagePlans(managedChannelData.plans || []);
+
       loadManageTokenGates(managedChannelData.tokenAccess || []);
+
+      // Ownership pre-check: the Elacity backend only allows the channel
+      // creator to call updateChannelInformation. If the connected wallet
+      // (EOA + optional Smart Account) doesn't match the channel's creator,
+      // surface a clear banner up-front instead of letting the user fill in
+      // changes that will silently 403 on Save. Diagnoses the
+      // v1.2.7.6-reported "I can't edit my channel" cases definitively.
+      renderOwnershipBanner(managedChannelData);
 
       loading.style.display = 'none';
       content.style.display = '';
@@ -2070,11 +2338,45 @@
     }
   }
 
+  function renderOwnershipBanner(channelData) {
+    var banner = document.getElementById('manage-ownership-banner');
+    if (!banner) return;
+    var creatorAddr = (channelData && channelData.creator && channelData.creator.address || '').toLowerCase();
+    var eoa = (state.walletAddress || '').toLowerCase();
+    var sa = (smartAccountAddress || '').toLowerCase();
+    if (!creatorAddr) {
+      // v1.2.7.7 (Bug G): unknown creator means we can't pick an auth-mode
+      // either. Surface that explicitly so the user doesn't waste a save
+      // round-trip to discover the resulting "not allowed to edit" 500.
+      banner.innerHTML =
+        '<strong>Channel owner unknown.</strong><br>' +
+        '<span style="font-size:12px;">The Elacity backend did not return a creator for this channel, ' +
+        'so edits will likely fail with "not allowed to edit this channel". ' +
+        'Re-create the channel or contact support if this persists.</span>';
+      banner.style.display = '';
+      return;
+    }
+    var mode = authModeForChannelData(channelData);
+    if (mode) {
+      banner.style.display = 'none';
+      return;
+    }
+    var connectedLabel = eoa ? eoa.slice(0, 10) + '…' + eoa.slice(-4) : 'unknown';
+    var ownerLabel = creatorAddr.slice(0, 10) + '…' + creatorAddr.slice(-4);
+    banner.innerHTML =
+      '<strong>Read-only — you are not the channel owner.</strong><br>' +
+      '<span style="font-size:12px;">Connected as <code>' + connectedLabel + '</code>' +
+      (sa ? ' (smart account <code>' + sa.slice(0, 10) + '…' + sa.slice(-4) + '</code>)' : '') +
+      ', but this channel was created by <code>' + ownerLabel + '</code>. ' +
+      'Switch wallets in Puter to edit this channel.</span>';
+    banner.style.display = '';
+  }
+
   function hideChannelManagement() {
     var section = document.getElementById('channel-manage-section');
     if (section) section.style.display = 'none';
     managedChannelData = null;
-    setManageStatus('manage-details-status', '');
+    setManageStatus('manage-profile-status', '');
     setManageStatus('manage-plans-status', '');
     setManageStatus('manage-gates-status', '');
   }
@@ -2086,28 +2388,344 @@
     el.style.color = isError ? 'var(--error)' : 'var(--success)';
   }
 
-  async function saveChannelDetails() {
+  // v1.2.7.7 (Bug H): unified Profile save — name + description + images
+  // commit in a SINGLE off-chain GraphQL call. Replaces the prior
+  // saveChannelDetails / saveChannelImages split, which forced users to
+  // click two buttons in two sections to update what is logically one
+  // record. Plans + Token Gates remain per-row because each is its own
+  // on-chain transaction (no surprise gas; explicit signature per change).
+  async function saveChannelProfile() {
     if (!managedChannelData) return;
+
     var name = document.getElementById('manage-channel-name').value.trim();
     var description = document.getElementById('manage-channel-description').value.trim();
-    if (!name) { setManageStatus('manage-details-status', 'Name is required', true); return; }
+    if (!name) { setManageStatus('manage-profile-status', 'Name is required', true); return; }
 
-    setManageStatus('manage-details-status', 'Saving...');
-    try {
-      await updateChannelInfoOnBackend(managedChannelData.address, { name: name, description: description });
-      setManageStatus('manage-details-status', 'Saved!');
-      managedChannelData.name = name;
-      managedChannelData.description = description;
-
-      ['asset-channel', 'manage-channel-select'].forEach(function (selId) {
-        var sel = document.getElementById(selId);
-        if (!sel) return;
-        var opt = sel.querySelector('option[value="' + managedChannelData.address + '"]');
-        if (opt) opt.textContent = name;
-      });
-    } catch (err) {
-      setManageStatus('manage-details-status', 'Error: ' + err.message, true);
+    var nameChanged = name !== (managedChannelData.name || '');
+    var descChanged = description !== (managedChannelData.description || '');
+    var imagesChanged = pendingChannelImage !== null || pendingChannelCover !== null;
+    if (!nameChanged && !descChanged && !imagesChanged) {
+      setManageStatus('manage-profile-status', 'No changes to save');
+      return;
     }
+
+    var mode = authModeForChannelData(managedChannelData);
+    if (!mode) {
+      setManageStatus('manage-profile-status', 'Not the channel owner — switch wallets to edit', true);
+      return;
+    }
+
+    var input = {};
+    if (nameChanged) input.name = name;
+    if (descChanged) input.description = description;
+
+    try {
+      if (pendingChannelImage !== null) {
+        if (pendingChannelImage === '') {
+          input.image = '';
+        } else {
+          setManageStatus('manage-profile-status', 'Pinning profile image to IPFS...');
+          input.image = await uploadDataUrlToIpfs(pendingChannelImage, 'channel-image.png');
+        }
+      }
+      if (pendingChannelCover !== null) {
+        if (pendingChannelCover === '') {
+          input.coverImage = '';
+        } else {
+          setManageStatus('manage-profile-status', 'Pinning cover image to IPFS...');
+          input.coverImage = await uploadDataUrlToIpfs(pendingChannelCover, 'channel-cover.png');
+        }
+      }
+
+      setManageStatus('manage-profile-status', 'Saving...');
+      var updated = await updateChannelInfoOnBackend(managedChannelData.address, input, { authMode: mode });
+
+      // Merge server response back so subsequent edits start from the new state.
+      if (nameChanged) managedChannelData.name = name;
+      if (descChanged) managedChannelData.description = description;
+      if (updated) {
+        if (Object.prototype.hasOwnProperty.call(updated, 'image')) managedChannelData.image = updated.image;
+        if (Object.prototype.hasOwnProperty.call(updated, 'coverImage')) managedChannelData.coverImage = updated.coverImage;
+      }
+      pendingChannelImage = null;
+      pendingChannelCover = null;
+
+      // v1.2.7.7 (name-sync): mirror the canonical backend response into
+      // the PC2 local catalog so other dApps (elacity-market) see the
+      // new values on their very next local-catalog read instead of
+      // shadowing them with the stale prior entry.
+      mirrorChannelToLocalCatalog(managedChannelData.address, input, updated);
+
+      setManageStatus('manage-profile-status', 'Saved!');
+
+      // v1.2.7.7 (Bug G2): always reconcile both dropdowns to the
+      // canonical name from `managedChannelData`, regardless of whether
+      // *this* save touched the name. Dropdowns may be displaying a
+      // stale local-catalog name from a prior session's rename, and the
+      // user shouldn't have to rename twice to fix it.
+      syncChannelOptionLabel(managedChannelData.address, managedChannelData.name || '');
+
+      var hint = document.getElementById('manage-images-hint');
+      if (hint) hint.textContent = '';
+    } catch (err) {
+      setManageStatus('manage-profile-status', 'Error: ' + err.message, true);
+    }
+  }
+
+  // ── Channel image management ─────────────────────────────────────────
+  // Holds the in-memory pending image edits for the current managed channel.
+  // null = unchanged, '' = explicit clear, dataURL = newly picked file (not
+  // yet uploaded), 'ipfs://...' = already uploaded.
+  var pendingChannelImage = null;
+  var pendingChannelCover = null;
+
+  // v1.2.7.7 (channel-image previews): the Elacity backend may return any of:
+  //   - raw `ipfs://CID` in `imageURL` / `coverImageURL`
+  //   - bare CID (`QmHash…` or `bafy…`) when the gateway-resolution field is
+  //     missing
+  //   - https URL pointing at one of several known gateways
+  //   - data: URL (when the user just picked a file in this session)
+  //   - empty / null (when the channel really has no image set)
+  // Browsers can't render an `ipfs://` URL as a CSS background-image, and a
+  // bare CID resolves to a relative URL → 404. Always normalise.
+  //
+  // Mirrors elacity-market's resolveIpfsUrl pattern: prefer the local PC2
+  // IPFS gateway (always reachable for content the user just uploaded —
+  // ipfs.ela.city only sees it after the supernode mirror catches up), with
+  // ipfs.ela.city as the public fallback. Returns an array of candidates so
+  // the caller can chain onerror fallback if the local pin is missing.
+  function IPFS_LOCAL_GATEWAY() {
+    return (window.puter_api_origin || window.location.origin) + '/ipfs/';
+  }
+  var IPFS_PUBLIC_GATEWAY = 'https://ipfs.ela.city/ipfs/';
+
+  // Build a list of candidate URLs to try when displaying an IPFS-backed
+  // asset. Returns them in priority order; the caller (e.g.
+  // setManageImagePreview) walks down the list via <img>.onerror.
+  //
+  // Why "anywhere in the string": the Elacity backend's `imageURL` field
+  // is sometimes returned as a malformed pre-built gateway URL like
+  //   http://10.132.0.5:8080/ipfs/ipfs://bafkrei...
+  // (the inner `ipfs://` is doubled because the gateway naively prepended
+  // its base URL to a value that already had the `ipfs://` scheme). We
+  // can't trust any single location for the CID — extracting it
+  // anywhere in the string is the only safe path.
+  //
+  // Recognises:
+  //   v0 base58btc:  Qm + 44 chars
+  //   v1 base32:     b + 58+ lowercase base32 chars
+  //                  (covers bafy / bafk / bafyb / bafkre / etc.)
+  function resolveIpfsCandidates(url) {
+    if (!url) return [];
+    var s = String(url).trim();
+    if (s.indexOf('data:') === 0 || s.indexOf('blob:') === 0) return [s];
+
+    var cidMatch = s.match(/(Qm[1-9A-HJ-NP-Za-km-z]{44}|b[a-z2-7]{58,})/i);
+    var cid = cidMatch ? cidMatch[1] : null;
+
+    var candidates = [];
+    if (cid) {
+      candidates.push(IPFS_LOCAL_GATEWAY() + cid);
+      candidates.push(IPFS_PUBLIC_GATEWAY + cid);
+    }
+    // Also try a sanitized version of the original URL (strip a doubled
+    // `ipfs://` segment) in case the backend's gateway DOES have the
+    // content pinned and is otherwise reachable from the user's network.
+    if (cid && /\/ipfs\/ipfs:\/\//.test(s)) {
+      candidates.push(s.replace(/\/ipfs\/ipfs:\/\//, '/ipfs/'));
+    }
+    // If we couldn't find a CID at all, fall back to the input as-is —
+    // it might be a regular https URL we just don't recognise.
+    if (!cid && (s.indexOf('http://') === 0 || s.indexOf('https://') === 0)) {
+      candidates.push(s);
+    }
+
+    // Dedupe while preserving order (Array.from(new Set) keeps insertion).
+    return Array.from(new Set(candidates));
+  }
+
+  // Back-compat single-URL helper (first candidate) for legacy call sites.
+  function ipfsToHttpsGateway(url) {
+    var c = resolveIpfsCandidates(url);
+    return c.length > 0 ? c[0] : '';
+  }
+
+  function setManageImagePreview(slotId, urlOrDataUrl) {
+    var preview = document.getElementById(slotId === 'image' ? 'manage-image-preview' : 'manage-cover-preview');
+    var placeholderId = slotId === 'image' ? 'manage-image-placeholder' : 'manage-cover-placeholder';
+    if (!preview) return;
+    var candidates = resolveIpfsCandidates(urlOrDataUrl);
+    console.log('[ChannelEdit] setManageImagePreview slot=' + slotId + ' input=', urlOrDataUrl, 'candidates=', candidates);
+    // Reset to placeholder layout. The preview <div> ships with
+    // display:flex/align-items:center/justify-content:center so the
+    // placeholder text is centered. We need to ENSURE that's the
+    // current layout (a previous render may have switched to block to
+    // hold an <img>) so an empty render shows the placeholder instead
+    // of looking blank.
+    preview.style.backgroundImage = '';
+    preview.style.display = 'flex';
+    preview.style.position = 'relative';
+    if (candidates.length === 0) {
+      preview.innerHTML = '<span id="' + placeholderId + '" style="color:var(--text-muted);">Click to choose</span>';
+      return;
+    }
+    // Strategy: render a placeholder ("Loading image…") immediately so
+    // the box is never visually blank, and load the <img> behind/over
+    // it via absolute positioning. On success, the <img> covers the
+    // placeholder. On failure (all candidates errored), we replace the
+    // placeholder with a diagnostic message that lists every URL we
+    // tried — pasting one of those URLs into a new tab tells you in
+    // one shot which gateway is the culprit.
+    //
+    // Why absolute-position the <img> instead of letting it fill the
+    // flex parent: width:100%/height:100% on a direct child of a
+    // flex container with align-items:center can collapse to its
+    // natural intrinsic size (or 0×0 for an image that hasn't loaded
+    // yet). Pulling it out of the flex flow with position:absolute +
+    // inset:0 sidesteps that entire class of bug — the image lays out
+    // against the preview box's border-box and ignores flex sizing.
+    preview.innerHTML =
+      '<span id="' + placeholderId + '" style="color:var(--text-muted);position:relative;z-index:1;">Loading image…</span>';
+    var img = document.createElement('img');
+    img.alt = '';
+    img.style.position = 'absolute';
+    img.style.inset = '0';
+    img.style.width = '100%';
+    img.style.height = '100%';
+    img.style.objectFit = 'cover';
+    img.style.display = 'block';
+    img.style.zIndex = '2';
+    var idx = 0;
+    img.onload = function () {
+      console.log('[ChannelEdit] image loaded slot=' + slotId + ' from candidate #' + (idx + 1) + ': ' + candidates[idx]);
+      var ph = preview.querySelector('#' + placeholderId);
+      if (ph) ph.style.display = 'none';
+    };
+    img.onerror = function () {
+      console.warn('[ChannelEdit] image failed slot=' + slotId + ' candidate #' + (idx + 1) + ': ' + candidates[idx]);
+      idx += 1;
+      if (idx < candidates.length) {
+        img.src = candidates[idx];
+        return;
+      }
+      var lines = candidates.map(function (u, i) {
+        return '<div style="font-family:ui-monospace,Menlo,monospace;font-size:10px;opacity:0.8;word-break:break-all;line-height:1.3;margin-top:4px;">#' + (i + 1) + ' ' + u + '</div>';
+      }).join('');
+      preview.innerHTML = '<div style="padding:8px;text-align:center;color:var(--text-muted);font-size:11px;">'
+        + '<div style="font-weight:600;margin-bottom:4px;">Image unreachable</div>'
+        + '<div style="opacity:0.7;">All gateways returned an error. Tried:</div>'
+        + lines
+        + '</div>';
+    };
+    preview.appendChild(img);
+    img.src = candidates[0];
+  }
+
+  function loadManageImages(channelData) {
+    pendingChannelImage = null;
+    pendingChannelCover = null;
+    setManageStatus('manage-profile-status', '');
+    var hint = document.getElementById('manage-images-hint');
+    var hasAny = !!(channelData && (channelData.imageURL || channelData.coverImageURL || channelData.image || channelData.coverImage));
+    if (hint) hint.textContent = hasAny ? '' : '(no images set)';
+    // Prefer `image` (canonical: bare CID or ipfs://CID) over the
+    // pre-built `imageURL`. The backend sometimes emits a malformed
+    // `imageURL` of the form `<gateway>/ipfs/ipfs://CID` (doubled
+    // scheme) that resolveIpfsCandidates can still recover from, but
+    // starting from the canonical field skips that recovery dance
+    // entirely. Mirrors the order market uses for its avatar render path.
+    setManageImagePreview('image', channelData && (channelData.image || channelData.imageURL) || '');
+    setManageImagePreview('cover', channelData && (channelData.coverImage || channelData.coverImageURL) || '');
+  }
+
+  function fileToDataUrl(file) {
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onload = function () { resolve(reader.result); };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function handleChannelImagePick(slot) {
+    var inputId = slot === 'image' ? 'manage-image-file' : 'manage-cover-file';
+    var input = document.getElementById(inputId);
+    if (!input) return;
+    input.value = '';
+    input.onchange = async function () {
+      var file = input.files && input.files[0];
+      if (!file) return;
+      // Soft cap to keep IPFS pinning fast; channel art doesn't need to be huge.
+      var MAX_BYTES = 5 * 1024 * 1024;
+      if (file.size > MAX_BYTES) {
+        setManageStatus('manage-profile-status', 'Image too large (max 5 MB)', true);
+        return;
+      }
+      try {
+        var dataUrl = await fileToDataUrl(file);
+        if (slot === 'image') {
+          pendingChannelImage = dataUrl;
+          setManageImagePreview('image', dataUrl);
+        } else {
+          pendingChannelCover = dataUrl;
+          setManageImagePreview('cover', dataUrl);
+        }
+        setManageStatus('manage-profile-status', 'Click "Save Profile" to apply');
+      } catch (err) {
+        setManageStatus('manage-profile-status', 'Failed to read file: ' + err.message, true);
+      }
+    };
+    input.click();
+  }
+
+  function handleChannelImageClear(slot) {
+    if (slot === 'image') {
+      pendingChannelImage = '';
+      setManageImagePreview('image', '');
+    } else {
+      pendingChannelCover = '';
+      setManageImagePreview('cover', '');
+    }
+    setManageStatus('manage-profile-status', 'Click "Save Profile" to apply');
+  }
+
+  async function uploadDataUrlToIpfs(dataUrl, filename) {
+    // Belt-and-braces: pin locally first (always reachable through the user's
+    // own gateway), then mirror to Elacity for global discovery. Same pattern
+    // as the asset thumbnail pin path. Returns ipfs://<cid> on success.
+    var localCid = null;
+    try {
+      var localResp = await pc2Fetch('/api/storage/ipfs/add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: dataUrl, filename: filename }),
+      });
+      if (localResp.ok) {
+        var localData = await localResp.json();
+        localCid = localData.cid;
+      }
+    } catch (e) {
+      console.warn('[Creator] Local channel-image pin failed:', e.message);
+    }
+
+    var elacityCid = null;
+    try {
+      var elResp = await pc2Fetch('/api/storage/ipfs/upload-elacity', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: dataUrl, filename: filename }),
+      });
+      if (elResp.ok) {
+        var elData = await elResp.json();
+        elacityCid = elData.cid;
+      }
+    } catch (e) {
+      console.warn('[Creator] Elacity channel-image upload failed:', e.message);
+    }
+
+    var cid = elacityCid || localCid;
+    if (!cid) throw new Error('IPFS upload failed (both local and Elacity)');
+    return 'ipfs://' + cid;
   }
 
   function loadManagePlans(plans) {
@@ -2119,6 +2737,10 @@
     plans.forEach(function (plan) {
       addManagePlanRow(plan);
     });
+    // Re-rendering wipes any pending state, so ensure the bar reflects the
+    // ground-truth (typically: hidden, since fresh-from-backend rows have
+    // no pending markers).
+    updatePlansPendingBar();
   }
 
   function addManagePlanRow(plan) {
@@ -2152,22 +2774,278 @@
 
     container.appendChild(row);
 
+    // v1.2.7.7 (batched plans): brand-new rows from "+ Add Plan" are
+    // automatically staged as pending-add — the row IS the change. The
+    // per-row ✓ button is only meaningful for editing existing on-chain
+    // rows (it stages the edit), so we hide it on new rows.
+    if (!plan.planId) {
+      markRowPending(row, 'new');
+      var newRowSaveBtn = row.querySelector('.manage-plan-save');
+      if (newRowSaveBtn) newRowSaveBtn.style.display = 'none';
+      // Without this, the Save changes / Discard bar at the bottom of
+      // the Plans section stays hidden until the user separately edits
+      // an existing row — which is what made batched-add look broken
+      // (you'd see green-bordered new rows but no commit affordance).
+      updatePlansPendingBar();
+    }
+
     row.querySelector('.manage-plan-save').addEventListener('click', function () {
       var planId = row.getAttribute('data-plan-id');
-      if (planId) {
-        saveEditPlan(managedChannelData.address, planId, row);
-      } else {
-        saveAddPlan(managedChannelData.address, row);
+      if (!planId) return; // hidden on new rows; defensive
+      if (!isOnChainPlanId(planId)) {
+        setManageStatus('manage-plans-status', 'This plan was created in legacy off-chain storage and cannot be edited on-chain. Use "+ Add Plan" to create a fresh on-chain plan instead.', true);
+        return;
       }
+      try {
+        var data = readPlanRowData(row);
+        if (!data.price || Number(data.price) <= 0) throw new Error('Price must be greater than 0');
+        if (!data.duration || !data.duration.value) throw new Error('Duration must be set');
+      } catch (validationErr) {
+        setManageStatus('manage-plans-status', validationErr.message, true);
+        return;
+      }
+      markRowPending(row, 'edited');
+      updatePlansPendingBar();
+      setManageStatus('manage-plans-status', '');
     });
+
     row.querySelector('.manage-plan-remove').addEventListener('click', function () {
-      var planId = row.getAttribute('data-plan-id');
-      if (planId) {
-        removePlan(managedChannelData.address, planId, row);
-      } else {
-        row.remove();
+      var pendingState = row.getAttribute('data-pending-state');
+      if (pendingState === 'removed') {
+        clearRowPending(row);
+        updatePlansPendingBar();
+        return;
       }
+      if (pendingState === 'new') {
+        row.remove();
+        updatePlansPendingBar();
+        return;
+      }
+      var planId = row.getAttribute('data-plan-id');
+      if (!planId || !isOnChainPlanId(planId)) {
+        // Brand-new draft (no planId) or legacy off-chain plan: nothing to
+        // remove on-chain, just drop from the DOM.
+        row.remove();
+        updatePlansPendingBar();
+        return;
+      }
+      markRowPending(row, 'removed');
+      updatePlansPendingBar();
     });
+  }
+
+  // ── Pending-changes helpers (batched bulkUpdatePlans) ──────────────────
+  //
+  // The Plans section uses a "stage then commit" model: per-row edits
+  // mutate `data-pending-state` on the row instead of firing on-chain
+  // immediately. The Save changes button at the bottom of the section
+  // collects ALL pending rows and commits them in a single
+  // bulkUpdatePlans call (the contract's array shape is designed for
+  // this). Token Gating is already naturally batched via Save Token Gates.
+
+  // Visually decorate a row with its pending state (new / edited / removed)
+  // and swap the ✕ button to an Undo affordance for "removed" rows.
+  function markRowPending(row, state) {
+    row.setAttribute('data-pending-state', state);
+    row.style.opacity = '';
+    row.style.background = '';
+    row.style.borderLeft = '';
+    row.style.transition = 'background 0.15s, border-color 0.15s';
+    row.style.paddingLeft = '6px';
+
+    Array.prototype.forEach.call(row.querySelectorAll('input, select'), function (el) {
+      el.style.textDecoration = '';
+      el.disabled = false;
+    });
+    var removeBtn = row.querySelector('.manage-plan-remove');
+    if (removeBtn) {
+      removeBtn.innerHTML = '&times;';
+      removeBtn.title = 'Remove';
+      removeBtn.style.background = 'var(--error)';
+    }
+
+    if (state === 'new') {
+      row.style.borderLeft = '3px solid #16a34a';
+      row.style.background = 'rgba(34,197,94,0.06)';
+    } else if (state === 'edited') {
+      row.style.borderLeft = '3px solid #ca8a04';
+      row.style.background = 'rgba(234,179,8,0.06)';
+    } else if (state === 'removed') {
+      row.style.borderLeft = '3px solid #dc2626';
+      row.style.background = 'rgba(239,68,68,0.06)';
+      row.style.opacity = '0.6';
+      Array.prototype.forEach.call(row.querySelectorAll('input, select'), function (el) {
+        el.style.textDecoration = 'line-through';
+        el.disabled = true;
+      });
+      if (removeBtn) {
+        removeBtn.innerHTML = '&#8634;';
+        removeBtn.title = 'Undo remove';
+        removeBtn.style.background = '#6b7280';
+      }
+    }
+  }
+
+  function clearRowPending(row) {
+    row.removeAttribute('data-pending-state');
+    row.style.opacity = '';
+    row.style.background = '';
+    row.style.borderLeft = '';
+    row.style.paddingLeft = '';
+    Array.prototype.forEach.call(row.querySelectorAll('input, select'), function (el) {
+      el.style.textDecoration = '';
+      el.disabled = false;
+    });
+    var removeBtn = row.querySelector('.manage-plan-remove');
+    if (removeBtn) {
+      removeBtn.innerHTML = '&times;';
+      removeBtn.title = 'Remove';
+      removeBtn.style.background = 'var(--error)';
+    }
+  }
+
+  function getPendingPlanRows() {
+    var rows = document.querySelectorAll('#manage-plans-container .plan-row[data-pending-state]');
+    return Array.prototype.map.call(rows, function (row) {
+      return {
+        row: row,
+        state: row.getAttribute('data-pending-state'),
+        planId: row.getAttribute('data-plan-id') || ''
+      };
+    });
+  }
+
+  function updatePlansPendingBar() {
+    var pending = getPendingPlanRows();
+    var bar = document.getElementById('manage-plans-pending-bar');
+    var countEl = document.getElementById('manage-plans-pending-count');
+    if (!bar) return;
+    if (pending.length === 0) {
+      bar.style.display = 'none';
+      return;
+    }
+    bar.style.display = 'block';
+    var counts = { new: 0, edited: 0, removed: 0 };
+    pending.forEach(function (p) { counts[p.state] = (counts[p.state] || 0) + 1; });
+    var parts = [];
+    if (counts.new) parts.push(counts.new + ' add');
+    if (counts.edited) parts.push(counts.edited + ' edit');
+    if (counts.removed) parts.push(counts.removed + ' remove');
+    if (countEl) {
+      countEl.textContent = pending.length + ' pending change' + (pending.length !== 1 ? 's' : '') + ' (' + parts.join(', ') + ')';
+    }
+  }
+
+  async function commitPendingPlans(channelAddress) {
+    var pending = getPendingPlanRows();
+    if (pending.length === 0) {
+      setManageStatus('manage-plans-status', 'No pending changes', true);
+      return;
+    }
+    var actions = [];
+    for (var i = 0; i < pending.length; i++) {
+      var p = pending[i];
+      if (p.state === 'removed') {
+        actions.push({ action: 'REMOVE', args: { planId: p.planId } });
+      } else if (p.state === 'edited') {
+        var editData = readPlanRowData(p.row);
+        editData.planId = p.planId;
+        actions.push({ action: 'UPDATE', args: editData });
+      } else if (p.state === 'new') {
+        actions.push({ action: 'ADD', args: readPlanRowData(p.row) });
+      }
+    }
+
+    var btnSave = document.getElementById('btn-manage-save-plans');
+    var btnDiscard = document.getElementById('btn-manage-discard-plans');
+    if (btnSave) btnSave.disabled = true;
+    if (btnDiscard) btnDiscard.disabled = true;
+
+    var label = actions.length + ' change' + (actions.length !== 1 ? 's' : '');
+    setManageStatus('manage-plans-status', 'Pinning ' + actions.length + ' plan metadata file' + (actions.length !== 1 ? 's' : '') + ' to IPFS...');
+    try {
+      var walletChoice = manageWalletChoiceOrThrow();
+      setManageStatus('manage-plans-status', 'Confirm in wallet to apply ' + label + ' on-chain...');
+      var result = await sendBulkUpdatePlans(channelAddress, actions, walletChoice);
+      var txShort = (result.transactionHash || '').slice(0, 10) + '...';
+      setManageStatus('manage-plans-status', label + ' applied on-chain (tx: ' + txShort + ')! Waiting for indexer...');
+
+      // v1.2.7.7: read plans back from the on-chain contract (canonical
+      // source of truth — already reflects our just-committed tx).
+      // Backend metadata lookup runs in parallel for label/description
+      // merge, but we don't gate the re-render on it; the indexer is
+      // free to lag. This eliminates the previous "freshly saved plans
+      // disappear for 30s" UX.
+      var onChainAfter = await fetchPlansFromContract(channelAddress);
+      var backendAfter = null;
+      try { backendAfter = await retrieveChannelFromBackend(channelAddress); } catch (_) { /* metadata-only — okay to skip */ }
+
+      if (onChainAfter.length > 0 || actions.every(function (a) { return a.action === 'REMOVE'; })) {
+        var merged = mergePlansWithMetadata(onChainAfter, (backendAfter && backendAfter.plans) || managedChannelData.plans || []);
+        managedChannelData.plans = merged;
+        var countEl = document.getElementById('manage-plans-count');
+        if (countEl) countEl.textContent = merged.length > 0 ? '(' + merged.length + ' plans)' : '';
+        loadManagePlans(merged);
+        setManageStatus('manage-plans-status', label + ' applied! (tx: ' + txShort + ')');
+      } else {
+        // Contract read failed entirely — shouldn't happen, but if it
+        // does, leave the user's pending rows in place so the work isn't
+        // visually lost.
+        var allRows = document.querySelectorAll('#manage-plans-container .plan-row');
+        Array.prototype.forEach.call(allRows, function (row) {
+          var s = row.getAttribute('data-pending-state');
+          if (s === 'removed') {
+            row.remove();
+          } else if (s) {
+            clearRowPending(row);
+          }
+        });
+        setManageStatus('manage-plans-status', label + ' applied on-chain (tx: ' + txShort + '). Couldn\'t re-read plans from contract — close + reopen this channel to refresh.');
+      }
+    } catch (err) {
+      setManageStatus('manage-plans-status', 'Error: ' + err.message, true);
+    } finally {
+      if (btnSave) btnSave.disabled = false;
+      if (btnDiscard) btnDiscard.disabled = false;
+      updatePlansPendingBar();
+    }
+  }
+
+  // Poll the Elacity backend until its mirror reports the expected plan
+  // count (a proxy for "indexer has ingested our tx") or we hit maxMs.
+  // Returns the refreshed channel data on success, or null on timeout /
+  // repeated fetch failure. Ignores per-iteration errors so transient
+  // backend hiccups don't end the poll early.
+  async function pollForIndexerCatchup(channelAddress, expectedCount, maxMs) {
+    var start = Date.now();
+    var interval = 2000;
+    while (Date.now() - start < maxMs) {
+      try {
+        var refreshed = await retrieveChannelFromBackend(channelAddress);
+        if (refreshed && Array.isArray(refreshed.plans) && refreshed.plans.length === expectedCount) {
+          return refreshed;
+        }
+      } catch (_) { /* keep polling */ }
+      await new Promise(function (resolve) { setTimeout(resolve, interval); });
+    }
+    return null;
+  }
+
+  function discardPendingPlans() {
+    if (!managedChannelData || !Array.isArray(managedChannelData.plans)) {
+      var container = document.getElementById('manage-plans-container');
+      if (container) container.innerHTML = '';
+      updatePlansPendingBar();
+      return;
+    }
+    loadManagePlans(managedChannelData.plans);
+    setManageStatus('manage-plans-status', 'Pending changes discarded');
+    setTimeout(function () {
+      var statusEl = document.getElementById('manage-plans-status');
+      if (statusEl && statusEl.textContent === 'Pending changes discarded') {
+        setManageStatus('manage-plans-status', '');
+      }
+    }, 2000);
   }
 
   function readPlanRowData(row) {
@@ -2185,53 +3063,414 @@
     };
   }
 
-  async function saveAddPlan(channelAddress, row) {
-    var data = readPlanRowData(row);
-    setManageStatus('manage-plans-status', 'Adding plan...');
+  // ── On-chain plan + token-gate helpers (V3) ────────────────────────────
+  //
+  // Channels on Base mainnet expose `bulkUpdatePlans` and
+  // `configureTokenOwnershipAccess` directly. The off-chain GraphQL mutations
+  // are deprecated by Elacity; only on-chain writes propagate to the
+  // subscription/access enforcement contracts. Reference implementation
+  // is elacity-web/src/lib/drm/channel/subscription.ts (base-network-updates).
+
+  // Map a uint8 plan id to the masked uint256 token id used by tokenURI().
+  // Mirrors elacity-web's _maskU16(id, 32): top byte 0xff, plan id at byte 14.
+  function maskPlanTokenId(planId) {
+    var idNum = Number(planId);
+    if (!isFinite(idNum) || idNum <= 0 || idNum > 255) {
+      throw new Error('Invalid plan id: ' + planId);
+    }
+    var topMask = ethers.getBigInt('0xff') << 120n;
+    var idShifted = ethers.getBigInt(idNum) << 112n;
+    var result = topMask | idShifted;
+    return ethers.zeroPadValue(ethers.toBeHex(result), 32);
+  }
+
+  // Pin a JSON metadata blob (PC2 local + Elacity gateway). Returns
+  // "ipfs://<CID>". Belt-and-braces same as channel image upload.
+  async function uploadJsonToIpfs(metadataObj, filename) {
+    var json = JSON.stringify(metadataObj);
+    var base64 = (typeof btoa === 'function')
+      ? btoa(unescape(encodeURIComponent(json)))
+      : '';
+    var dataUrl = 'data:application/json;base64,' + base64;
+    var fname = filename || 'plan-metadata.json';
+
+    var localCid = null;
     try {
-      var result = await updateSubscriptionPlanOnBackend(channelAddress, [{ action: 'ADD', args: data }]);
-      setManageStatus('manage-plans-status', 'Plan added!');
-      if (result && result.plans && result.plans.length > 0) {
-        var lastPlan = result.plans[result.plans.length - 1];
-        if (lastPlan && lastPlan.planId) row.setAttribute('data-plan-id', lastPlan.planId);
-        managedChannelData.plans = result.plans;
-        var countEl = document.getElementById('manage-plans-count');
-        if (countEl) countEl.textContent = '(' + result.plans.length + ' plans)';
+      var localResp = await pc2Fetch('/api/storage/ipfs/add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: dataUrl, filename: fname, announce: true })
+      });
+      if (localResp.ok) {
+        var lj = await localResp.json();
+        if (lj && lj.cid) localCid = lj.cid;
       }
+    } catch (e) {
+      console.warn('[Creator] Local plan-metadata pin failed:', e && e.message);
+    }
+
+    var elacityCid = null;
+    try {
+      var elResp = await pc2Fetch('/api/storage/ipfs/upload-elacity', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: dataUrl, filename: fname })
+      });
+      if (elResp.ok) {
+        var ej = await elResp.json();
+        if (ej && ej.cid) elacityCid = ej.cid;
+      }
+    } catch (e) {
+      console.warn('[Creator] Elacity plan-metadata mirror failed:', e && e.message);
+    }
+
+    var cid = elacityCid || localCid;
+    if (!cid) throw new Error('IPFS upload failed (both local and Elacity gateway)');
+    return 'ipfs://' + cid;
+  }
+
+  // v1.2.7.7 (parity with elacity-market/wallet.js getPlans): the
+  // Elacity backend's `plans` field lags behind on-chain state — after
+  // bulkUpdatePlans the off-chain mirror can be empty for 30s+ while the
+  // indexer catches up, AND for some legacy / freshly-imported channels
+  // the off-chain mirror is permanently empty even though the contract
+  // has plans (the indexer only watches addresses it already knows
+  // about). Always treat the contract as source of truth and merge
+  // off-chain metadata (label/description) on top.
+  // Returns [] on revert / RPC failure so the caller can fall back.
+  async function fetchPlansFromContract(channelAddr) {
+    try {
+      var iface = new ethers.Interface(SUBSCRIPTION_MODULE_ABI);
+      var data = iface.encodeFunctionData('getPlans', []);
+      var raw = await rpcCall(channelAddr, data);
+      if (!raw || raw === '0x') return [];
+      var decoded = iface.decodeFunctionResult('getPlans', raw)[0];
+      return decoded.map(function (p) {
+        var payToken = String(p.payToken);
+        var decimals = (payToken.toLowerCase() === USDC_ADDRESS.toLowerCase()) ? 6 : 18;
+        var priceHuman = Number(ethers.formatUnits(p.price, decimals));
+        var durationSecs = Number(p.duration);
+        return {
+          planId: Number(p.planId),
+          payToken: payToken,
+          price: priceHuman,
+          priceWei: p.price.toString(),
+          duration: secondsToDuration(durationSecs),
+          durationSeconds: durationSecs,
+          active: p.active !== false,
+        };
+      });
     } catch (err) {
-      setManageStatus('manage-plans-status', 'Error: ' + err.message, true);
+      console.warn('[Creator] getPlans on-chain read failed:', err && err.message);
+      return [];
     }
   }
 
-  async function saveEditPlan(channelAddress, planId, row) {
-    var data = readPlanRowData(row);
-    data.planId = planId;
-    setManageStatus('manage-plans-status', 'Updating plan...');
+  // Same algorithm as elacity-market: round to the nearest "natural"
+  // unit so the existing duration <select> options can match. Months are
+  // 30d, years are 360d (12*30) — must match durationToSeconds() above
+  // for a round-trip-safe edit.
+  function secondsToDuration(secs) {
+    if (!secs || !isFinite(secs)) return { value: 1, unit: 'months' };
+    if (secs >= 31104000 && secs % 31104000 === 0) return { value: secs / 31104000, unit: 'years' };
+    if (secs >= 2592000 && secs % 2592000 === 0) return { value: secs / 2592000, unit: 'months' };
+    if (secs >= 604800 && secs % 604800 === 0) return { value: secs / 604800, unit: 'weeks' };
+    if (secs >= 86400 && secs % 86400 === 0) return { value: secs / 86400, unit: 'days' };
+    // Fall back to nearest sensible unit when not a clean multiple.
+    if (secs >= 31104000) return { value: Math.round(secs / 31104000), unit: 'years' };
+    if (secs >= 2592000) return { value: Math.round(secs / 2592000), unit: 'months' };
+    if (secs >= 604800) return { value: Math.round(secs / 604800), unit: 'weeks' };
+    return { value: Math.max(1, Math.round(secs / 86400)), unit: 'days' };
+  }
+
+  // Merge on-chain plan rows with the off-chain metadata from the
+  // backend. On-chain wins for everything the contract knows
+  // authoritatively (planId, payToken, price, duration, active). Off-chain
+  // contributes label + description (these are stored in plan-metadata
+  // JSON pinned to IPFS, surfaced via the backend mirror — fetching them
+  // per-plan via fetchPlanMetadataOnChain on every modal open would
+  // multiply RPC load 4x without a real win, since the user just saved
+  // them moments ago).
+  function mergePlansWithMetadata(onChainPlans, offChainPlans) {
+    var off = Array.isArray(offChainPlans) ? offChainPlans : [];
+    return onChainPlans.map(function (p) {
+      var local = off.find(function (lp) {
+        return Number(lp.planId) === Number(p.planId) || String(lp.planId) === String(p.planId);
+      });
+      return Object.assign({}, p, {
+        label: (local && local.label) || p.label || ('Plan #' + p.planId),
+        description: (local && local.description) || p.description || ''
+      });
+    });
+  }
+
+  async function fetchChannelImage(channelAddr) {
     try {
-      var result = await updateSubscriptionPlanOnBackend(channelAddress, [{ action: 'UPDATE', args: data }]);
-      setManageStatus('manage-plans-status', 'Plan updated!');
-      if (result && result.plans) managedChannelData.plans = result.plans;
-    } catch (err) {
-      setManageStatus('manage-plans-status', 'Error: ' + err.message, true);
+      var iface = new ethers.Interface(SUBSCRIPTION_MODULE_ABI);
+      var data = iface.encodeFunctionData('tokenURI', [0]);
+      var raw = await rpcCall(channelAddr, data);
+      if (!raw || raw === '0x') return null;
+      var uri = iface.decodeFunctionResult('tokenURI', raw)[0];
+      if (!uri) return null;
+      var url = uri.replace(/^ipfs:\/\//, 'https://ipfs.elacity.io/ipfs/');
+      var ctrl = new AbortController();
+      var timer = setTimeout(function () { ctrl.abort(); }, 1500);
+      var resp = await fetch(url, { signal: ctrl.signal });
+      clearTimeout(timer);
+      if (!resp.ok) return null;
+      var meta = await resp.json();
+      return (meta && meta.image) ? meta.image : null;
+    } catch (_) {
+      return null;
     }
   }
 
-  async function removePlan(channelAddress, planId, row) {
-    if (!confirm('Remove this plan?')) return;
-    setManageStatus('manage-plans-status', 'Removing plan...');
+  async function fetchPlanMetadataOnChain(channelAddr, planId) {
     try {
-      var result = await updateSubscriptionPlanOnBackend(channelAddress, [{ action: 'REMOVE', args: { planId: planId } }]);
-      row.remove();
-      setManageStatus('manage-plans-status', 'Plan removed!');
-      if (result && result.plans) {
-        managedChannelData.plans = result.plans;
-        var countEl = document.getElementById('manage-plans-count');
-        if (countEl) countEl.textContent = result.plans.length > 0 ? '(' + result.plans.length + ' plans)' : '';
-      }
-    } catch (err) {
-      setManageStatus('manage-plans-status', 'Error: ' + err.message, true);
+      var maskedId = maskPlanTokenId(planId);
+      var iface = new ethers.Interface(SUBSCRIPTION_MODULE_ABI);
+      var data = iface.encodeFunctionData('tokenURI', [maskedId]);
+      var raw = await rpcCall(channelAddr, data);
+      if (!raw || raw === '0x') return {};
+      var uri = iface.decodeFunctionResult('tokenURI', raw)[0];
+      if (!uri) return {};
+      var url = uri.replace(/^ipfs:\/\//, 'https://ipfs.elacity.io/ipfs/');
+      var ctrl = new AbortController();
+      var timer = setTimeout(function () { ctrl.abort(); }, 1500);
+      var resp = await fetch(url, { signal: ctrl.signal });
+      clearTimeout(timer);
+      if (!resp.ok) return {};
+      return await resp.json();
+    } catch (_) {
+      return {};
     }
   }
+
+  function buildPlanMetadata(opts, signer) {
+    var existing = opts.existing || {};
+    var meta = {
+      version: '1.0',
+      schema: 'https://raw.githubusercontent.com/Elacity/wiki/main/metadata/schemas/plan/v1.0/schema.json',
+      description: opts.description || '',
+      name: opts.label || '',
+      properties: { creator: signer || '' },
+      attributes: [
+        { trait_type: 'Duration', value: (opts.duration ? (opts.duration.value + ' ' + opts.duration.unit) : '') }
+      ]
+    };
+    var merged = Object.assign({}, existing, meta);
+    var inheritedImage = opts.channelImage || existing.image;
+    if (inheritedImage) merged.image = inheritedImage;
+    return merged;
+  }
+
+  // {value, unit} -> seconds. Months=30d, years=360d (12*30) so chain math
+  // stays consistent with elacity-web's convertDuration().
+  function durationToSeconds(duration) {
+    if (!duration || !duration.value) return 0;
+    var v = Number(duration.value);
+    if (!isFinite(v) || v < 0) return 0;
+    switch ((duration.unit || '').toLowerCase()) {
+      case 'seconds': return Math.floor(v);
+      case 'minutes': return Math.floor(v * 60);
+      case 'hours':   return Math.floor(v * 3600);
+      case 'days':    return Math.floor(v * 86400);
+      case 'weeks':   return Math.floor(v * 604800);
+      case 'months':  return Math.floor(v * 2592000);
+      case 'years':   return Math.floor(v * 31104000);
+      default:        return Math.floor(v * 86400);
+    }
+  }
+
+  async function getPayTokenDecimals(payToken) {
+    if (!payToken || payToken === ZERO_ADDRESS) return 18;
+    if (payToken.toLowerCase() === USDC_ADDRESS.toLowerCase()) return 6;
+    try {
+      var iface = new ethers.Interface(['function decimals() view returns (uint8)']);
+      var result = await rpcCall(payToken, iface.encodeFunctionData('decimals', []));
+      return Number(iface.decodeFunctionResult('decimals', result)[0]);
+    } catch (_) {
+      return 18;
+    }
+  }
+
+  // Detects pre-V3 off-chain plan IDs (string-format like "plan_1777921474969")
+  // so we can show a clear UX message instead of encoding-failure noise.
+  function isOnChainPlanId(planId) {
+    var n = Number(planId);
+    return isFinite(n) && Number.isInteger(n) && n > 0 && n <= 255;
+  }
+
+  async function buildPlanActionTuple(channelAddress, action, channelImage, signerAddr) {
+    var coder = ethers.AbiCoder.defaultAbiCoder();
+    var args = action.args || {};
+
+    if (action.action === 'REMOVE') {
+      if (!isOnChainPlanId(args.planId)) {
+        throw new Error('This plan was created in legacy off-chain storage and cannot be removed on-chain. Reload the channel; the plan should disappear once the on-chain state syncs.');
+      }
+      return [PLAN_ACTION.REMOVE, coder.encode(['uint8'], [Number(args.planId)])];
+    }
+
+    if (action.action === 'UPDATE' && !isOnChainPlanId(args.planId)) {
+      throw new Error('This plan was created in legacy off-chain storage and cannot be edited on-chain. Use "+ Add Plan" to create a fresh on-chain plan instead.');
+    }
+
+    var payToken = args.payToken || USDC_ADDRESS;
+    var durationSecs = durationToSeconds(args.duration);
+    if (!durationSecs) throw new Error('Duration must be > 0');
+
+    var decimals = await getPayTokenDecimals(payToken);
+    var priceWei;
+    try {
+      priceWei = ethers.parseUnits(String(args.price || '0'), decimals);
+    } catch (_) {
+      throw new Error('Invalid price: ' + args.price);
+    }
+    if (priceWei <= 0n) throw new Error('Price must be > 0');
+
+    var existing = (action.action === 'UPDATE' && isOnChainPlanId(args.planId))
+      ? await fetchPlanMetadataOnChain(channelAddress, args.planId)
+      : {};
+    var metadata = buildPlanMetadata({
+      label: args.label,
+      description: args.description,
+      duration: args.duration,
+      channelImage: channelImage,
+      existing: existing
+    }, signerAddr);
+    var planURI = await uploadJsonToIpfs(metadata, 'plan-metadata.json');
+
+    if (action.action === 'ADD') {
+      return [PLAN_ACTION.ADD, coder.encode(
+        ['address', 'uint256', 'uint256', 'string'],
+        [payToken, priceWei, durationSecs, planURI]
+      )];
+    }
+    return [PLAN_ACTION.UPDATE, coder.encode(
+      ['uint8', 'address', 'uint256', 'uint256', 'string'],
+      [Number(args.planId), payToken, priceWei, durationSecs, planURI]
+    )];
+  }
+
+  // Send a bulkUpdatePlans tx. EOA path uses sendTx (parent IPC); SA path
+  // uses parentExecuteSmartAccountBatch. Returns receipt.
+  async function sendBulkUpdatePlans(channelAddress, actions, walletChoice) {
+    if (!Array.isArray(actions) || actions.length === 0) {
+      throw new Error('No plan actions to apply');
+    }
+    var channelImage = await fetchChannelImage(channelAddress);
+    var signerAddr = state.walletAddress || '';
+    var tuples = [];
+    for (var i = 0; i < actions.length; i++) {
+      tuples.push(await buildPlanActionTuple(channelAddress, actions[i], channelImage, signerAddr));
+    }
+    var iface = new ethers.Interface(SUBSCRIPTION_MODULE_ABI);
+    var calldata = iface.encodeFunctionData('bulkUpdatePlans', [tuples]);
+
+    var fromAddr = (walletChoice === 'sa' && hasSmartAccount()) ? smartAccountAddress : (state.walletAddress || '');
+    await preflightOrSurfaceRevert(channelAddress, calldata, fromAddr, 'bulkUpdatePlans');
+
+    if (walletChoice === 'sa' && hasSmartAccount()) {
+      var batchResult = await parentExecuteSmartAccountBatch(BASE_CHAIN_ID, [
+        { to: channelAddress, data: calldata, value: '0x0' }
+      ], []);
+      // SA batch returns {transactionId, transactionHash} — wait for receipt
+      // when we have a hash so the indexer has time to ingest.
+      if (batchResult && batchResult.transactionHash) {
+        try { await waitForReceipt(batchResult.transactionHash); } catch (_) { /* best-effort */ }
+      }
+      return batchResult;
+    }
+    var txHash = await sendTx(channelAddress, calldata, '0x0');
+    var receipt = await waitForReceipt(txHash);
+    return { transactionHash: txHash, receipt: receipt };
+  }
+
+  // v1.2.7.7 (Bug G2): MetaMask masks on-chain reverts during gas
+  // estimation as the cryptic "Cannot destructure property 'gasLimit'
+  // of '(intermediate value)' as it is null". Pre-flighting via eth_call
+  // surfaces the actual revert (signature, custom error, or message)
+  // BEFORE the wallet popup, so users see "this wallet is not
+  // authorized to modify this channel" instead of a JS error.
+  // Known custom errors:
+  //   0x4888d31b — Unauthorized(channel, caller). Caller (the SA or EOA
+  //               we're sending from) is not the channel admin.
+  async function preflightOrSurfaceRevert(toAddr, calldata, fromAddr, opName) {
+    // Creator app talks to Base directly via BASE_RPC fetch (no in-page
+    // provider abstraction like elacity-market has), so we mirror the
+    // existing rpcCall pattern and add `from` so the channel's admin
+    // check sees the real msg.sender during the simulated call.
+    var params = { to: toAddr, data: calldata };
+    if (fromAddr) params.from = fromAddr;
+    var json;
+    try {
+      var resp = await fetch(BASE_RPC, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0', id: 1, method: 'eth_call',
+          params: [params, 'latest'],
+        }),
+      });
+      json = await resp.json();
+    } catch (netErr) {
+      // Fail-open on RPC transport / parse errors — a flaky public RPC
+      // shouldn't block a legitimate tx. The wallet will still validate
+      // before signing.
+      console.warn('[Creator] preflight RPC failed, allowing tx to proceed:', netErr && netErr.message);
+      return;
+    }
+    if (!json || !json.error) return;
+    var errData = String(json.error.data || '');
+    var errMsg = String(json.error.message || '');
+    if (errData.indexOf('0x4888d31b') !== -1 || errMsg.indexOf('0x4888d31b') !== -1) {
+      throw new Error('On-chain check failed: this wallet is not authorized to modify this channel. The channel rejected the transaction with Unauthorized(' + toAddr.slice(0, 10) + '…, ' + (fromAddr || '').slice(0, 10) + '…). Switch wallets in Puter to the channel creator before retrying.');
+    }
+    throw new Error('On-chain pre-flight (' + opName + ') reverted: ' + (errMsg || errData || 'unknown reason'));
+  }
+
+  // Send a configureTokenOwnershipAccess tx. Threshold values must be in
+  // base units already (caller multiplied by 10^decimals).
+  async function sendConfigureTokenAccess(channelAddress, thresholds, walletChoice) {
+    if (!Array.isArray(thresholds)) throw new Error('thresholds must be an array');
+    var iface = new ethers.Interface(SUBSCRIPTION_MODULE_ABI);
+    var input = thresholds.map(function (t) {
+      if (!t || !ethers.isAddress(t.tokenAddress)) {
+        throw new Error('Invalid token address in threshold list');
+      }
+      var th = t.threshold === undefined || t.threshold === null
+        ? 0n
+        : ethers.getBigInt(typeof t.threshold === 'string' ? t.threshold : String(t.threshold));
+      return [t.tokenAddress, th];
+    });
+    var calldata = iface.encodeFunctionData('configureTokenOwnershipAccess', [input]);
+
+    var fromAddr = (walletChoice === 'sa' && hasSmartAccount()) ? smartAccountAddress : (state.walletAddress || '');
+    await preflightOrSurfaceRevert(channelAddress, calldata, fromAddr, 'configureTokenOwnershipAccess');
+
+    if (walletChoice === 'sa' && hasSmartAccount()) {
+      var batchResult = await parentExecuteSmartAccountBatch(BASE_CHAIN_ID, [
+        { to: channelAddress, data: calldata, value: '0x0' }
+      ], []);
+      if (batchResult && batchResult.transactionHash) {
+        try { await waitForReceipt(batchResult.transactionHash); } catch (_) { /* best-effort */ }
+      }
+      return batchResult;
+    }
+    var txHash = await sendTx(channelAddress, calldata, '0x0');
+    var receipt = await waitForReceipt(txHash);
+    return { transactionHash: txHash, receipt: receipt };
+  }
+
+  // ── Plan management UI handlers ────────────────────────────────────────
+  //
+  // v1.2.7.7 (batched plans): the legacy saveAddPlan / saveEditPlan /
+  // removePlan handlers — which fired one bulkUpdatePlans tx per row
+  // action — have been replaced by the staging model. Per-row clicks now
+  // mark `data-pending-state` and the section's Save changes button
+  // commits everything via `commitPendingPlans` in one tx. See
+  // markRowPending / getPendingPlanRows / commitPendingPlans above.
 
   function loadManageTokenGates(tokenAccess) {
     var container = document.getElementById('manage-gates-container');
@@ -2244,15 +3483,43 @@
     });
   }
 
+  // Fetches both symbol AND decimals from an ERC-20 contract in one go,
+  // failing softly to NFT defaults (symbol unknown, decimals=0) when the
+  // contract isn't ERC-20 compliant. Decimals MUST be persisted on the row
+  // so saveTokenGates can submit them — the Elacity schema requires
+  // `tokenAccess: [{ address, value: Float, decimals: Int }]` and silently
+  // rejects threshold entries that omit decimals (the actual root cause of
+  // the v1.2.7.6 "channel edit doesn't work" report).
+  async function fetchTokenInfo(addr) {
+    var iface = new ethers.Interface(ERC20_ABI);
+    var symbol = null;
+    var decimals = null;
+    try {
+      var symData = await rpcCall(addr, iface.encodeFunctionData('symbol', []));
+      symbol = iface.decodeFunctionResult('symbol', symData)[0];
+    } catch (_) { /* not ERC-20-symbol-compliant */ }
+    try {
+      var decData = await rpcCall(addr, iface.encodeFunctionData('decimals', []));
+      decimals = Number(iface.decodeFunctionResult('decimals', decData)[0]);
+    } catch (_) { /* NFTs / non-ERC-20 — caller handles default */ }
+    return { symbol: symbol, decimals: decimals };
+  }
+
   function addManageGateRow(gate) {
     var container = document.getElementById('manage-gates-container');
     var row = document.createElement('div');
     row.className = 'token-gate-row';
     row.style.cssText = 'display:flex; gap:6px; align-items:center; margin-bottom:4px;';
+    // Persist any server-supplied decimals on the row so we can re-submit
+    // them unchanged if the user only edits address/value. Defaults to '' so
+    // we know to auto-fetch on first interaction.
+    if (gate.decimals !== undefined && gate.decimals !== null) {
+      row.setAttribute('data-decimals', String(gate.decimals));
+    }
     row.innerHTML =
       '<input class="gate-address" type="text" placeholder="0x... token contract" value="' + (gate.address || '') + '" style="flex:1; padding:6px; font-size:12px; border:1px solid var(--border); border-radius:4px; background:var(--bg-elevated); color:var(--text);" />' +
-      '<input class="gate-value" type="number" min="1" step="1" value="' + (gate.value || '1') + '" placeholder="Min balance" style="width:80px; padding:6px; font-size:12px; border:1px solid var(--border); border-radius:4px; background:var(--bg-elevated); color:var(--text); text-align:right;" />' +
-      '<span class="gate-info" style="font-size:11px; color:var(--text-muted); min-width:60px;"></span>' +
+      '<input class="gate-value" type="number" min="0" step="any" value="' + (gate.value !== undefined && gate.value !== null ? gate.value : '1') + '" placeholder="Min balance" style="width:80px; padding:6px; font-size:12px; border:1px solid var(--border); border-radius:4px; background:var(--bg-elevated); color:var(--text); text-align:right;" />' +
+      '<span class="gate-info" style="font-size:11px; color:var(--text-muted); min-width:80px;"></span>' +
       '<button type="button" class="gate-remove" style="display:inline-flex; align-items:center; justify-content:center; width:24px; height:24px; font-size:14px; line-height:1; font-family:inherit; background:var(--error); color:white; border:none; border-radius:4px; cursor:pointer;">&times;</button>';
     container.appendChild(row);
 
@@ -2260,46 +3527,80 @@
 
     var addrInput = row.querySelector('.gate-address');
     var infoSpan = row.querySelector('.gate-info');
-    if (gate.address && ethers.isAddress(gate.address)) {
-      (async function () {
-        try {
-          var iface = new ethers.Interface(ERC20_ABI);
-          var nameData = await rpcCall(gate.address, iface.encodeFunctionData('symbol', []));
-          var sym = iface.decodeFunctionResult('symbol', nameData)[0];
-          infoSpan.textContent = sym;
-          infoSpan.style.color = 'var(--success)';
-        } catch (_) { infoSpan.textContent = 'NFT?'; infoSpan.style.color = 'var(--text-muted)'; }
-      })();
-    }
-    addrInput.addEventListener('blur', async function () {
-      var addr = addrInput.value.trim();
-      if (!addr || !ethers.isAddress(addr)) { infoSpan.textContent = ''; return; }
-      try {
-        var iface = new ethers.Interface(ERC20_ABI);
-        var nameData = await rpcCall(addr, iface.encodeFunctionData('symbol', []));
-        var sym = iface.decodeFunctionResult('symbol', nameData)[0];
-        infoSpan.textContent = sym;
+
+    var renderInfo = function (info) {
+      if (info.symbol && info.decimals !== null) {
+        infoSpan.textContent = info.symbol + ' (' + info.decimals + 'd)';
         infoSpan.style.color = 'var(--success)';
-      } catch (_) { infoSpan.textContent = 'NFT?'; infoSpan.style.color = 'var(--text-muted)'; }
-    });
+      } else if (info.symbol) {
+        infoSpan.textContent = info.symbol;
+        infoSpan.style.color = 'var(--success)';
+      } else {
+        infoSpan.textContent = 'NFT?';
+        infoSpan.style.color = 'var(--text-muted)';
+      }
+    };
+
+    var loadInfo = async function (addr) {
+      if (!addr || !ethers.isAddress(addr)) { infoSpan.textContent = ''; return; }
+      var info = await fetchTokenInfo(addr);
+      // Treat NFT/unknown as decimals=0 (1-of-N ownership semantics).
+      var dec = info.decimals !== null ? info.decimals : 0;
+      row.setAttribute('data-decimals', String(dec));
+      renderInfo(info);
+    };
+
+    if (gate.address && ethers.isAddress(gate.address)) {
+      // If the server already gave us decimals, just render the cached symbol
+      // lookup; otherwise enrich from chain.
+      if (row.hasAttribute('data-decimals')) {
+        (async function () {
+          var info = await fetchTokenInfo(gate.address);
+          renderInfo({ symbol: info.symbol, decimals: Number(row.getAttribute('data-decimals')) });
+        })();
+      } else {
+        loadInfo(gate.address);
+      }
+    }
+    addrInput.addEventListener('blur', function () { loadInfo(addrInput.value.trim()); });
   }
 
   async function saveTokenGates() {
     if (!managedChannelData) return;
     var rows = document.querySelectorAll('#manage-gates-container .token-gate-row');
-    var thresholds = [];
+    // Two parallel views of the same threshold list:
+    //   - uiThresholds: Float values for the optimistic UI re-render and
+    //     for the off-chain mirror in case the indexer lags.
+    //   - chainThresholds: base-unit BigInts, matching the on-chain schema
+    //     (configureTokenOwnershipAccess takes uint256 thresholds).
+    var uiThresholds = [];
+    var chainThresholds = [];
     for (var i = 0; i < rows.length; i++) {
       var addr = rows[i].querySelector('.gate-address').value.trim();
       var val = rows[i].querySelector('.gate-value').value.trim();
       if (!addr || !ethers.isAddress(addr)) continue;
-      thresholds.push({ address: addr, value: val || '1' });
+      var numericValue = Number(val);
+      if (!isFinite(numericValue) || numericValue <= 0) numericValue = 1;
+      var decAttr = rows[i].getAttribute('data-decimals');
+      var decimals = decAttr !== null && decAttr !== '' ? Number(decAttr) : 0;
+      if (!isFinite(decimals) || decimals < 0) decimals = 0;
+      uiThresholds.push({ address: addr, value: numericValue, decimals: decimals });
+      try {
+        var thresholdWei = ethers.parseUnits(String(numericValue), decimals);
+        chainThresholds.push({ tokenAddress: addr, threshold: thresholdWei.toString() });
+      } catch (e) {
+        setManageStatus('manage-gates-status', 'Invalid threshold for ' + addr + ': ' + e.message, true);
+        return;
+      }
     }
-    setManageStatus('manage-gates-status', 'Saving...');
+
+    setManageStatus('manage-gates-status', 'Confirm in wallet to update token-gates on-chain...');
     try {
-      await updateChannelInfoOnBackend(managedChannelData.address, { tokenAccess: thresholds });
-      managedChannelData.tokenAccess = thresholds;
-      loadManageTokenGates(thresholds);
-      setManageStatus('manage-gates-status', 'Saved!');
+      var walletChoice = manageWalletChoiceOrThrow();
+      var result = await sendConfigureTokenAccess(managedChannelData.address, chainThresholds, walletChoice);
+      managedChannelData.tokenAccess = uiThresholds;
+      loadManageTokenGates(uiThresholds);
+      setManageStatus('manage-gates-status', 'Saved on-chain! (tx: ' + (result.transactionHash || '').slice(0, 10) + '...)');
     } catch (err) {
       setManageStatus('manage-gates-status', 'Error: ' + err.message, true);
     }
@@ -4294,14 +5595,78 @@
       });
     }
 
-    var btnSaveDetails = document.getElementById('btn-save-channel-details');
-    if (btnSaveDetails) btnSaveDetails.addEventListener('click', saveChannelDetails);
+    // Refresh button: forces a re-fetch of every owned channel from the
+    // Elacity backend (the canonical source for the mutable display
+    // name) and overwrites both dropdowns. Use this after renaming a
+    // channel in market — the PC2 local catalog only stores the
+    // immutable on-chain name() and will not reflect off-chain renames
+    // until the next reconcile cycle.
+    var btnChannelsRefresh = document.getElementById('btn-channels-refresh');
+    if (btnChannelsRefresh) {
+      btnChannelsRefresh.addEventListener('click', async function () {
+        if (!state.walletAddress) { showToast('Connect your wallet first', 'error'); return; }
+        var orig = btnChannelsRefresh.textContent;
+        btnChannelsRefresh.disabled = true;
+        btnChannelsRefresh.textContent = '↻ Refreshing…';
+        try {
+          channelNameCache = {};
+          await loadChannels(state.walletAddress);
+          showToast('Channel names refreshed from Elacity backend', 'success');
+        } catch (err) {
+          console.error('[Creator] Channel refresh failed:', err);
+          showToast('Refresh failed: ' + err.message, 'error');
+        } finally {
+          btnChannelsRefresh.disabled = false;
+          btnChannelsRefresh.textContent = orig;
+        }
+      });
+    }
+
+    // v1.2.7.7 (Bug H): single Save Profile button now batches name +
+    // description + images into one off-chain commit. The legacy two-button
+    // wiring (btn-save-channel-details + btn-save-channel-images) is gone;
+    // we still bind defensively if a stale cached HTML is loaded so users
+    // don't see dead buttons during the rollout.
+    var btnSaveProfile = document.getElementById('btn-save-channel-profile');
+    if (btnSaveProfile) btnSaveProfile.addEventListener('click', saveChannelProfile);
+    var btnSaveDetailsLegacy = document.getElementById('btn-save-channel-details');
+    if (btnSaveDetailsLegacy) btnSaveDetailsLegacy.addEventListener('click', saveChannelProfile);
+    var btnSaveImagesLegacy = document.getElementById('btn-save-channel-images');
+    if (btnSaveImagesLegacy) btnSaveImagesLegacy.addEventListener('click', saveChannelProfile);
+
+    var btnImagePick = document.getElementById('btn-manage-image-pick');
+    if (btnImagePick) btnImagePick.addEventListener('click', function () { handleChannelImagePick('image'); });
+    var btnImageClear = document.getElementById('btn-manage-image-clear');
+    if (btnImageClear) btnImageClear.addEventListener('click', function () { handleChannelImageClear('image'); });
+    var imagePreview = document.getElementById('manage-image-preview');
+    if (imagePreview) imagePreview.addEventListener('click', function () { handleChannelImagePick('image'); });
+
+    var btnCoverPick = document.getElementById('btn-manage-cover-pick');
+    if (btnCoverPick) btnCoverPick.addEventListener('click', function () { handleChannelImagePick('cover'); });
+    var btnCoverClear = document.getElementById('btn-manage-cover-clear');
+    if (btnCoverClear) btnCoverClear.addEventListener('click', function () { handleChannelImageClear('cover'); });
+    var coverPreview = document.getElementById('manage-cover-preview');
+    if (coverPreview) coverPreview.addEventListener('click', function () { handleChannelImagePick('cover'); });
 
     var btnManageAddPlan = document.getElementById('btn-manage-add-plan');
     if (btnManageAddPlan) {
       btnManageAddPlan.addEventListener('click', function () {
         addManagePlanRow({ price: '5', payToken: USDC_BASE, duration: { value: 1, unit: 'months' }, label: '', description: '' });
       });
+    }
+
+    // v1.2.7.7 (batched plans): commit ALL staged plan changes in one tx.
+    var btnManageSavePlans = document.getElementById('btn-manage-save-plans');
+    if (btnManageSavePlans) {
+      btnManageSavePlans.addEventListener('click', function () {
+        if (managedChannelData && managedChannelData.address) {
+          commitPendingPlans(managedChannelData.address);
+        }
+      });
+    }
+    var btnManageDiscardPlans = document.getElementById('btn-manage-discard-plans');
+    if (btnManageDiscardPlans) {
+      btnManageDiscardPlans.addEventListener('click', discardPendingPlans);
     }
 
     var btnManageAddGate = document.getElementById('btn-manage-add-gate');

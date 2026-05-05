@@ -8,25 +8,55 @@ var ElacityAPI = (function () {
   var BASE_URL = 'https://base.ela.city/api';
   var GQL_ENDPOINT_REMOTE = BASE_URL + '/2.0/graphql';
   var GQL_ENDPOINT = '/api/elacity/graphql';
+
+  // v1.2.7.7 (Bug-G mirror): per-mode JWT cache. The Elacity backend
+  // issues a JWT whose principal differs depending on whether `sa` was
+  // supplied to userLogin — owner-only mutations (updateChannelInformation,
+  // updateSubscriptionPlan) require the principal to match the channel's
+  // `creator`. A user who has both an EOA and a Smart Account may own
+  // some channels via EOA and others via SA, so a single global token
+  // can't cover both — we keep one per mode.
+  var tokens = { eoa: null, sa: null };
+  var signerAddresses = { eoa: null, sa: null };
+  // Back-compat aliases — older code paths use a single auth token.
+  // `authToken` mirrors whichever mode was most recently logged-in (EOA
+  // wins by default since the connect-on-load path defaults to 'eoa').
   var authToken = null;
   var signerAddress = null;
 
   try {
     var storedToken = sessionStorage.getItem('elacity_auth_token');
     var storedSigner = sessionStorage.getItem('elacity_signer_address');
-    if (storedToken) authToken = storedToken;
-    if (storedSigner) signerAddress = storedSigner;
+    var storedTokenSa = sessionStorage.getItem('elacity_auth_token_sa');
+    var storedSignerSa = sessionStorage.getItem('elacity_signer_address_sa');
+    if (storedToken) { authToken = storedToken; tokens.eoa = storedToken; }
+    if (storedSigner) { signerAddress = storedSigner; signerAddresses.eoa = storedSigner; }
+    if (storedTokenSa) { tokens.sa = storedTokenSa; }
+    if (storedSignerSa) { signerAddresses.sa = storedSignerSa; }
   } catch (_) {}
 
   // ── GraphQL Transport ────────────────────────────────
 
-  function gql(query, variables, requiresAuth) {
-    var headers = { 'Content-Type': 'application/json' };
-    if (authToken) {
-      headers['Authorization'] = 'Bearer ' + authToken;
+  function gql(query, variables, requiresAuth, opts) {
+    var mode = (opts && opts.authMode) || null;
+    // When mode is explicit, hard-pick that token; throw if missing so
+    // callers get a clear error rather than a silent backend rejection.
+    var selectedToken = null;
+    var selectedSigner = null;
+    if (mode === 'sa' || mode === 'eoa') {
+      selectedToken = tokens[mode];
+      selectedSigner = signerAddresses[mode];
+    } else {
+      selectedToken = authToken;
+      selectedSigner = signerAddress;
     }
-    if (requiresAuth && signerAddress) {
-      headers['X-ETH-Signer'] = signerAddress;
+
+    var headers = { 'Content-Type': 'application/json' };
+    if (selectedToken) {
+      headers['Authorization'] = 'Bearer ' + selectedToken;
+    }
+    if (requiresAuth && selectedSigner) {
+      headers['X-ETH-Signer'] = selectedSigner;
     }
 
     var body = variables;
@@ -971,16 +1001,30 @@ var ElacityAPI = (function () {
   }
 
   function login(address, signature, sa) {
-    console.log('[Auth] login called with address:', address, 'sa:', sa);
+    // Mode is implied by whether `sa` was passed by the caller. SIWE
+    // signatures are always made by the EOA — what changes is whether
+    // the `sa` field is included in the userLogin mutation, which is
+    // what causes the backend to issue a JWT for the SA principal
+    // instead of the EOA principal.
+    var mode = sa ? 'sa' : 'eoa';
+    console.log('[Auth] login called with address:', address, 'sa:', sa, 'mode:', mode);
     return gql(USER_LOGIN_MUTATION, { address: address, signature: signature, sa: sa || null })
       .then(function (data) {
-        console.log('[Auth] login response:', data.auth ? 'token=' + (data.auth.token ? 'yes' : 'no') + ' sa=' + data.auth.sa : 'null');
+        console.log('[Auth] login response:', data.auth ? 'token=' + (data.auth.token ? 'yes' : 'no') + ' sa=' + data.auth.sa + ' mode=' + mode : 'null');
         if (data.auth && data.auth.token) {
+          var newSigner = (data.auth.sa || address).toLowerCase();
+          tokens[mode] = data.auth.token;
+          signerAddresses[mode] = newSigner;
+          // Keep legacy single-token path consistent — newest login wins.
           authToken = data.auth.token;
-          signerAddress = (data.auth.sa || address).toLowerCase();
+          signerAddress = newSigner;
           try {
             sessionStorage.setItem('elacity_auth_token', authToken);
             sessionStorage.setItem('elacity_signer_address', signerAddress);
+            if (mode === 'sa') {
+              sessionStorage.setItem('elacity_auth_token_sa', data.auth.token);
+              sessionStorage.setItem('elacity_signer_address_sa', newSigner);
+            }
           } catch (_) {}
         }
         return data.auth;
@@ -1062,20 +1106,55 @@ var ElacityAPI = (function () {
     });
   }
 
-  function isAuthenticated() {
+  function isAuthenticated(mode) {
+    if (mode === 'sa' || mode === 'eoa') return !!tokens[mode];
     return !!authToken;
   }
 
-  function getAuthToken() {
+  function getAuthToken(mode) {
+    if (mode === 'sa' || mode === 'eoa') return tokens[mode];
     return authToken;
+  }
+
+  // v1.2.7.7 (stale-signer fix): tokens are cached by mode (eoa/sa)
+  // but NOT by the actual signer address. If the user previously
+  // SIWE-logged in with a different EOA — or rehydrated a token from
+  // sessionStorage that belongs to another account — `isAuthenticated`
+  // alone returns true and the save handler skips the fresh login.
+  // The stale-principal JWT then gets sent to the backend and rejected
+  // with "not allowed to edit this channel" (this was the 2026-05-04
+  // user-visible regression). `isAuthenticatedAs` adds the principal
+  // check so callers that know which signer they NEED (= the channel
+  // creator) can detect a stale cached token and force a fresh SIWE.
+  function isAuthenticatedAs(mode, expectedSigner) {
+    if (!expectedSigner) return isAuthenticated(mode);
+    var token, signer;
+    if (mode === 'sa' || mode === 'eoa') {
+      token = tokens[mode];
+      signer = signerAddresses[mode];
+    } else {
+      token = authToken;
+      signer = signerAddress;
+    }
+    if (!token || !signer) return false;
+    return String(signer).toLowerCase() === String(expectedSigner).toLowerCase();
+  }
+
+  function getCachedSigner(mode) {
+    if (mode === 'sa' || mode === 'eoa') return signerAddresses[mode] || null;
+    return signerAddress || null;
   }
 
   function clearAuth() {
     authToken = null;
     signerAddress = null;
+    tokens.eoa = null; tokens.sa = null;
+    signerAddresses.eoa = null; signerAddresses.sa = null;
     try {
       sessionStorage.removeItem('elacity_auth_token');
       sessionStorage.removeItem('elacity_signer_address');
+      sessionStorage.removeItem('elacity_auth_token_sa');
+      sessionStorage.removeItem('elacity_signer_address_sa');
     } catch (_) {}
   }
 
@@ -1092,14 +1171,56 @@ var ElacityAPI = (function () {
     });
   }
 
+  // v1.2.7.7 (name-sync): the previous implementation returned the PC2
+  // local catalog entry whenever it existed, and only fell through to
+  // the GraphQL backend if the local mirror was empty. That made the
+  // local mirror SHADOW the canonical Elacity backend forever once the
+  // channel was indexed once, which directly produced the user-visible
+  // bug on 2026-05-04: a fresh rename in elacity-creator (committed to
+  // the backend) never appeared in elacity-market because market kept
+  // returning the stale local-catalog "Woah" entry from a prior failed
+  // save.
+  //
+  // New policy:
+  //   • Fetch local catalog AND backend in parallel.
+  //   • Prefer backend when it answers — backend is the canonical source
+  //     for the mutable display name / description / images.
+  //   • Local catalog only wins when backend is unreachable (offline
+  //     fallback). All callers continue to work in offline mode.
+  //   • Self-heal: if backend differs from local on any mutable field,
+  //     mirror backend → local so subsequent reads (and any other dApp
+  //     reading the same PC2 mirror, e.g. elacity-creator) see the
+  //     canonical state without waiting for another save event.
   function retrieveChannel(channelAddress) {
-    return retrieveChannelFromCatalog(channelAddress)
-      .then(function (localChannel) {
-        if (localChannel) return localChannel;
-        return gql(RETRIEVE_CHANNEL_QUERY, { query: { address: channelAddress } })
-          .then(function (data) { return data.channel || null; })
-          .catch(function () { return null; });
-      });
+    var localP = retrieveChannelFromCatalog(channelAddress).catch(function () { return null; });
+    var backendP = gql(RETRIEVE_CHANNEL_QUERY, { query: { address: channelAddress } })
+      .then(function (data) { return (data && data.channel) ? data.channel : null; })
+      .catch(function () { return null; });
+    return Promise.all([localP, backendP]).then(function (results) {
+      var local = results[0];
+      var backend = results[1];
+      if (!backend && !local) return null;
+      if (!backend) return local;
+      if (local) {
+        var diverges =
+          (backend.name || '') !== (local.name || '') ||
+          (backend.description || '') !== (local.description || '') ||
+          (backend.image || '') !== (local.image || '') ||
+          (backend.coverImage || '') !== (local.coverImage || '');
+        if (diverges) {
+          console.log('[API] Local catalog diverges from backend for ' + channelAddress + '; mirroring backend → local');
+          updateChannelLocal(channelAddress, {
+            name: backend.name,
+            description: backend.description,
+            image: backend.image,
+            coverImage: backend.coverImage
+          }).catch(function (e) {
+            console.warn('[API] local self-heal failed:', e && e.message);
+          });
+        }
+      }
+      return backend;
+    });
   }
 
   function fetchChannelsFromCatalog() {
@@ -1143,18 +1264,110 @@ var ElacityAPI = (function () {
       .catch(function () { return null; });
   }
 
+  // v1.2.7.7 (name-sync): shared overlay/self-heal helper for any code
+  // path that returns a list of channels. The same divergence problem
+  // that breaks the channel-detail page (local catalog shadows backend)
+  // also breaks every list view: the channels grid, the creator's "my
+  // channels" panel, the search filters, etc. Each call site used to
+  // bail out of the backend fetch as soon as the local catalog had any
+  // data — so a stale local entry would shadow the backend forever.
+  //
+  // Policy:
+  //   • Local entries WIN for "does this channel exist on this PC2".
+  //     They may include channels the backend hasn't indexed yet
+  //     (newly created, indexer lag) — never drop them.
+  //   • Backend entries WIN for the mutable display fields
+  //     (name / description / image / coverImage / categories) when the
+  //     same address exists in both. Backend is the canonical source.
+  //   • Backend-only channels are appended to the result so global lists
+  //     are not artificially limited to what this PC2 has cached.
+  //   • Self-heal: any divergence is mirrored backend → local so other
+  //     dApps reading the same PC2 catalog catch up immediately.
+  function mergeChannelLists(localResult, backendResult) {
+    var local = (localResult && localResult.data) ? localResult : { data: [] };
+    var backend = (backendResult && backendResult.data) ? backendResult : { data: [] };
+    if (local.data.length === 0 && backend.data.length === 0) return { total: 0, offset: 0, limit: 0, data: [] };
+    if (backend.data.length === 0) return localResult || { total: 0, offset: 0, limit: 0, data: [] };
+    if (local.data.length === 0) return backendResult || { total: 0, offset: 0, limit: 0, data: [] };
+
+    var backendByAddr = {};
+    backend.data.forEach(function (bch) {
+      var addr = ((bch.address || bch._id || '') + '').toLowerCase();
+      if (addr) backendByAddr[addr] = bch;
+    });
+
+    var merged = local.data.map(function (lch) {
+      var addr = ((lch.address || lch._id || '') + '').toLowerCase();
+      var bch = addr ? backendByAddr[addr] : null;
+      if (!bch) return lch;
+      var diverges =
+        ((bch.name || '') !== (lch.name || '')) ||
+        ((bch.description || '') !== (lch.description || '')) ||
+        ((bch.image || '') !== (lch.image || '')) ||
+        ((bch.coverImage || '') !== (lch.coverImage || ''));
+      if (diverges) {
+        console.log('[API] Channel list overlay: ' + addr + ' diverges from backend; mirroring backend → local');
+        updateChannelLocal(addr, {
+          name: bch.name,
+          description: bch.description,
+          image: bch.image,
+          coverImage: bch.coverImage
+        }).catch(function (e) {
+          console.warn('[API] list self-heal failed:', e && e.message);
+        });
+      }
+      var overlaid = {};
+      Object.keys(lch).forEach(function (k) { overlaid[k] = lch[k]; });
+      if (bch.name) overlaid.name = bch.name;
+      if (bch.description !== undefined && bch.description !== null) overlaid.description = bch.description;
+      if (bch.image) {
+        overlaid.image = bch.image;
+        overlaid.imageURL = bch.image;
+      }
+      if (bch.coverImage) {
+        overlaid.coverImage = bch.coverImage;
+        overlaid.coverImageURL = bch.coverImage;
+      }
+      if (bch.categories) overlaid.categories = bch.categories;
+      return overlaid;
+    });
+
+    var localAddrs = {};
+    local.data.forEach(function (lch) {
+      var a = ((lch.address || lch._id || '') + '').toLowerCase();
+      if (a) localAddrs[a] = true;
+    });
+    backend.data.forEach(function (bch) {
+      var a = ((bch.address || bch._id || '') + '').toLowerCase();
+      if (a && !localAddrs[a]) merged.push(bch);
+    });
+
+    return {
+      total: merged.length,
+      offset: localResult && localResult.offset ? localResult.offset : 0,
+      limit: localResult && localResult.limit ? localResult.limit : merged.length,
+      data: merged
+    };
+  }
+
   function fetchChannels(offset, limit) {
-    return fetchChannelsFromCatalog()
-      .then(function (localResult) {
-        if (localResult && localResult.data && localResult.data.length > 0) {
-          console.log('[API] Using local catalog channels (' + localResult.data.length + ' V3 channels)');
-          return localResult;
-        }
-        return gql(FETCH_CHANNELS_QUERY, {
-          query: {},
-          filters: { offset: offset || 0, limit: limit || 30, sort: { itemsCount: -1 } }
-        }).then(function (data) { return data.channels; });
-      });
+    var localP = fetchChannelsFromCatalog().catch(function () { return null; });
+    var backendP = gql(FETCH_CHANNELS_QUERY, {
+      query: {},
+      filters: { offset: offset || 0, limit: limit || 30, sort: { itemsCount: -1 } }
+    }).then(function (data) { return data && data.channels ? data.channels : null; })
+      .catch(function () { return null; });
+    return Promise.all([localP, backendP]).then(function (results) {
+      var local = results[0];
+      var backend = results[1];
+      if (!backend && !local) return { total: 0, offset: 0, limit: 0, data: [] };
+      if (!backend) {
+        console.log('[API] Channels grid: backend unreachable, using local catalog only (' + (local.data ? local.data.length : 0) + ' channels)');
+        return local;
+      }
+      if (!local || !local.data || local.data.length === 0) return backend;
+      return mergeChannelLists(local, backend);
+    });
   }
 
   function fetchChannelItems(channelAddress, offset, limit) {
@@ -1498,23 +1711,58 @@ var ElacityAPI = (function () {
 
   // ── Channel Management ─────────────────────────────
 
+  // v1.2.7.7: Belt-and-braces upload — pin locally first (always reachable
+  // through the user's own gateway), then mirror to the Elacity public
+  // gateway for global discovery. Without the Elacity mirror, channel art
+  // uploaded here is only reachable while the publisher's PC2 is online and
+  // their CID has propagated through DHT — every other viewer sees broken
+  // images. Matches the asset-thumbnail flow in elacity-creator.
   function uploadToIpfs(file, pc2FetchFn) {
     return new Promise(function (resolve, reject) {
       var reader = new FileReader();
-      reader.onload = function () {
+      reader.onload = async function () {
         var base64 = reader.result.split(',')[1];
         var fetchFn = pc2FetchFn || fetch;
-        fetchFn('/api/storage/ipfs/add', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ content: base64, announce: true })
-        }).then(function (res) {
-          if (!res.ok) throw new Error('Upload failed: ' + res.status);
-          return res.json();
-        }).then(function (json) {
-          if (!json.success) throw new Error(json.error || 'Upload failed');
-          resolve('ipfs://' + json.cid);
-        }).catch(reject);
+
+        var localCid = null;
+        try {
+          var localRes = await fetchFn('/api/storage/ipfs/add', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: base64, announce: true })
+          });
+          if (localRes.ok) {
+            var localJson = await localRes.json();
+            if (localJson.success) localCid = localJson.cid;
+          }
+        } catch (e) {
+          console.warn('[Elacity] Local IPFS pin failed:', e && e.message);
+        }
+
+        var elacityCid = null;
+        try {
+          var elRes = await fetchFn('/api/storage/ipfs/upload-elacity', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: base64, filename: file.name || 'channel-image' })
+          });
+          if (elRes.ok) {
+            var elJson = await elRes.json();
+            if (elJson.success || elJson.cid) elacityCid = elJson.cid;
+          }
+        } catch (e) {
+          console.warn('[Elacity] Elacity gateway upload failed:', e && e.message);
+        }
+
+        // Prefer Elacity (faster global discovery for other viewers); fall
+        // back to local when the gateway is unreachable. If both failed,
+        // surface that to the UI.
+        var finalCid = elacityCid || localCid;
+        if (!finalCid) {
+          reject(new Error('IPFS upload failed (both local and Elacity gateway)'));
+          return;
+        }
+        resolve('ipfs://' + finalCid);
       };
       reader.onerror = function () { reject(new Error('Failed to read file')); };
       reader.readAsDataURL(file);
@@ -1542,7 +1790,29 @@ var ElacityAPI = (function () {
     });
   }
 
-  function updateChannelInformation(address, input, pc2FetchFn) {
+  // v1.2.7.7 (Bug-G mirror): mode-aware backend update + non-silent
+  // fallback. The previous implementation swallowed EVERY GraphQL error
+  // and silently wrote to the PC2 local catalog instead — which made
+  // "save successful" lie when the real cause was an auth-mode mismatch
+  // (creator field is the EOA but we authenticated as the SA, or vice
+  // versa). The user's local view would show the new name, but the
+  // canonical Elacity backend still had the old data, and any other
+  // dApp (elacity-creator) that re-queried the backend would render
+  // the old data — exactly the symptom we hit on 2026-05-04.
+  //
+  // New policy:
+  //   • opts.authMode (eoa | sa)  — required by every owner-only path
+  //     (the channel-edit modal, the manage-plans flow). Mirror the
+  //     pattern in elacity-creator/app.js (authModeForChannelData).
+  //   • Auth-class errors (401/403, "not allowed to edit this channel")
+  //     SURFACE as a thrown error. No silent local write. The user sees
+  //     a clear toast and can switch wallets / sign in with the correct
+  //     mode.
+  //   • Network / 5xx / GraphQL non-auth errors STILL fall back to the
+  //     local catalog so the offline-friendly UX is preserved (per the
+  //     2026-05-04 handover note: "Don't drop the local-catalog
+  //     fallback — just make the GraphQL path actually succeed first").
+  function updateChannelInformation(address, input, pc2FetchFn, opts) {
     var mutation = '\
       mutation UpdateChannel($address: String!, $input: ChannelInformationInput!) {\n\
         channel: updateChannelInformation(address: $address, input: $input) {\n\
@@ -1553,9 +1823,44 @@ var ElacityAPI = (function () {
           coverImage\n\
         }\n\
       }';
-    return gql(mutation, { address: address, input: input }, true)
+    return gql(mutation, { address: address, input: input }, true, opts)
+      .then(function (data) {
+        // v1.2.7.7 (name-sync): mirror the canonical backend response
+        // back to the PC2 local catalog. Without this, the local mirror
+        // (which is shared by every dApp on this PC2 — elacity-creator,
+        // elacity-market, etc.) keeps any value it learned from a prior
+        // (possibly silently-failed) save, and the apps drift apart
+        // until the user rebuilds the channel. retrieveChannel's
+        // self-heal pass also handles this lazily, but a write-through
+        // here means OTHER dApps see the new value on their very next
+        // local-catalog read (no need to wait for them to also hit the
+        // backend).
+        var serverChannel = (data && data.channel) || null;
+        var src = serverChannel || {};
+        var mirrorInput = {};
+        if (input.name !== undefined) mirrorInput.name = (src.name !== undefined && src.name !== null) ? src.name : input.name;
+        if (input.description !== undefined) mirrorInput.description = (src.description !== undefined && src.description !== null) ? src.description : input.description;
+        if (input.categories !== undefined) mirrorInput.categories = (src.categories !== undefined && src.categories !== null) ? src.categories : input.categories;
+        if (input.image !== undefined) mirrorInput.image = (src.image !== undefined && src.image !== null) ? src.image : input.image;
+        if (input.coverImage !== undefined) mirrorInput.coverImage = (src.coverImage !== undefined && src.coverImage !== null) ? src.coverImage : input.coverImage;
+        if (Object.keys(mirrorInput).length > 0) {
+          updateChannelLocal(address, mirrorInput, pc2FetchFn).catch(function (e) {
+            console.warn('[API] local catalog mirror after backend save failed:', e && e.message);
+          });
+        }
+        return serverChannel;
+      })
       .catch(function (gqlErr) {
-        console.warn('[API] GraphQL channel update failed, falling back to local:', gqlErr.message);
+        var msg = (gqlErr && gqlErr.message) || '';
+        var isAuthError = /\bAPI 401\b|\bAPI 403\b|not allowed to edit|Unauthor/i.test(msg);
+        if (isAuthError) {
+          console.error('[API] GraphQL channel update rejected by backend (auth):', msg);
+          throw new Error(
+            'Backend rejected the update: ' + msg + '. ' +
+            'Make sure you are connected with the wallet that created this channel.'
+          );
+        }
+        console.warn('[API] GraphQL channel update failed (non-auth), falling back to local catalog:', msg);
         return updateChannelLocal(address, input, pc2FetchFn);
       });
   }
@@ -1631,22 +1936,33 @@ var ElacityAPI = (function () {
     var addr = (creatorAddress || '').toLowerCase();
     if (!addr) return Promise.resolve({ total: 0, data: [] });
 
-    return fetchEarningsFromCatalog(addr, 'my-channels', 'EOA')
+    // v1.2.7.7 (name-sync): same overlay/self-heal pattern as
+    // fetchChannels — local catalog wins for "what does this PC2 have",
+    // backend wins for canonical mutable fields, divergences self-heal.
+    var localP = fetchEarningsFromCatalog(addr, 'my-channels', 'EOA')
       .then(function (data) {
-        if (data.items && data.items.data && data.items.data.length > 0) {
+        if (data && data.items && data.items.data && data.items.data.length > 0) {
           return { total: data.items.total, data: data.items.data };
         }
-        throw new Error('No local channels');
+        return null;
       })
-      .catch(function () {
-        var query = { creator: addr };
-        return gql(FETCH_CHANNELS_QUERY, {
-          query: query,
-          filters: filters || { offset: 0, limit: 100, sort: { itemsCount: -1 } }
-        }, true).then(function (data) {
-          return data.channels || { total: 0, data: [] };
-        });
-      });
+      .catch(function () { return null; });
+
+    var query = { creator: addr };
+    var backendP = gql(FETCH_CHANNELS_QUERY, {
+      query: query,
+      filters: filters || { offset: 0, limit: 100, sort: { itemsCount: -1 } }
+    }, true).then(function (data) { return data && data.channels ? data.channels : null; })
+      .catch(function () { return null; });
+
+    return Promise.all([localP, backendP]).then(function (results) {
+      var local = results[0];
+      var backend = results[1];
+      if (!backend && !local) return { total: 0, data: [] };
+      if (!backend) return local;
+      if (!local || !local.data || local.data.length === 0) return backend;
+      return mergeChannelLists(local, backend);
+    });
   }
 
   return {
@@ -1659,6 +1975,8 @@ var ElacityAPI = (function () {
     getNonce: getNonce,
     login: login,
     isAuthenticated: isAuthenticated,
+    isAuthenticatedAs: isAuthenticatedAs,
+    getCachedSigner: getCachedSigner,
     getAuthToken: getAuthToken,
     clearAuth: clearAuth,
     setSignerAddress: setSignerAddress,

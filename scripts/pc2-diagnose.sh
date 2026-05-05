@@ -26,6 +26,31 @@ set -u
 # Setup
 # ─────────────────────────────────────────────────────────────────────
 
+# v1.2.7.6: cd to a stable directory before doing anything. Without this,
+# if the operator launches the script from inside a directory that the
+# current PC2 update flow has just deleted/recreated (e.g. they ran it
+# from ~/.pc2/pc2-node/dist while a build was rotating dist/), every
+# subsequent shell invocation emits:
+#   "shell-init: error retrieving current directory: getcwd: cannot
+#    access parent directories: No such file or directory"
+# 100+ times per run. Reported by Sasha 2026-05-04.
+cd "$HOME" 2>/dev/null || cd / 2>/dev/null || true
+
+# Detect platform / arch so we can find the bundled transport binaries
+# that BinaryManager downloads under ~/.pc2/pc2-node/bin/<plat>-<arch>/.
+PLATFORM="$(uname -s | tr '[:upper:]' '[:lower:]')"
+case "$PLATFORM" in
+    darwin) PC2_PLATFORM="darwin" ;;
+    linux)  PC2_PLATFORM="linux" ;;
+    *)      PC2_PLATFORM="$PLATFORM" ;;
+esac
+case "$(uname -m)" in
+    arm64|aarch64) PC2_ARCH="arm64" ;;
+    x86_64)        PC2_ARCH="x64" ;;
+    *)             PC2_ARCH="$(uname -m)" ;;
+esac
+PC2_BUNDLED_BIN_DIR="$HOME/.pc2/pc2-node/bin/${PC2_PLATFORM}-${PC2_ARCH}"
+
 # Source nvm so node/npm/pm2 are on PATH when this runs from cron / curl|bash
 export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
 if [[ -s "$NVM_DIR/nvm.sh" ]]; then
@@ -164,21 +189,58 @@ section "5. System readiness ($HOST/api/system-readiness)"
 fetch_json "curl /api/system-readiness" "$HOST/api/system-readiness"
 
 section "6. WireGuard / AmneziaWG (raw)"
-run "wg show (interfaces + handshakes)" bash -c "wg show 2>&1 | head -40"
-run "ip link show wg0" bash -c "ip link show wg0 2>&1 || true"
-run "ip link show awg0" bash -c "ip link show awg0 2>&1 || true"
-run "modinfo wireguard (kernel module presence)" bash -c "modinfo wireguard 2>&1 | head -3"
-run "lsmod | grep -i wireguard" bash -c "lsmod 2>/dev/null | grep -i wireguard || echo '(no wireguard kernel module loaded)'"
+# v1.2.7.6: §6 probes Linux-specific tooling (wg / ip / modinfo / lsmod).
+# On macOS none of these exist — PC2 uses bundled wireguard-go directly,
+# so absence here doesn't mean anything is broken. Skip the section
+# entirely on macOS to avoid 5 false-alarm "command not found" lines that
+# made operators think transports were broken when they weren't.
+if [[ "$PLATFORM" == "darwin" ]]; then
+    echo "(skipped — Linux-only tooling; PC2 on macOS uses bundled wireguard-go directly. See §7 for binary check, §5 for runtime status.)"
+else
+    run "wg show (interfaces + handshakes)" bash -c "wg show 2>&1 | head -40"
+    run "ip link show wg0" bash -c "ip link show wg0 2>&1 || true"
+    run "ip link show awg0" bash -c "ip link show awg0 2>&1 || true"
+    run "modinfo wireguard (kernel module presence)" bash -c "modinfo wireguard 2>&1 | head -3"
+    run "lsmod | grep -i wireguard" bash -c "lsmod 2>/dev/null | grep -i wireguard || echo '(no wireguard kernel module loaded)'"
+fi
 
-section "7. Transport binaries on PATH"
+section "7. Transport binaries (PATH and bundled)"
+# v1.2.7.6: probe BOTH PATH and the bundled binary directory that
+# BinaryManager downloads to (~/.pc2/pc2-node/bin/<platform>-<arch>/).
+# The previous version only checked PATH, which produced false "not
+# found" alarms on macOS where PC2 stores all transports in the bundled
+# dir (not on PATH by design). The /api/system-readiness endpoint is
+# the source of truth for whether PC2 itself can reach the binaries.
+echo "  Bundled directory: $PC2_BUNDLED_BIN_DIR"
+echo
 for b in wg wg-quick wireguard-go amneziawg-go awg-quick sing-box; do
-    run "which $b" bash -c "which $b 2>&1 || echo 'not found'"
+    on_path="$(command -v "$b" 2>/dev/null || echo '')"
+    bundled=""
+    if [[ -x "$PC2_BUNDLED_BIN_DIR/$b" ]]; then
+        bundled="$PC2_BUNDLED_BIN_DIR/$b"
+    fi
+    if [[ -n "$on_path" && -n "$bundled" ]]; then
+        printf '  %-14s PATH=%s  bundled=%s\n' "$b" "$on_path" "$bundled"
+    elif [[ -n "$on_path" ]]; then
+        printf '  %-14s PATH=%s  bundled=<absent>\n' "$b" "$on_path"
+    elif [[ -n "$bundled" ]]; then
+        printf '  %-14s PATH=<not on PATH>  bundled=%s\n' "$b" "$bundled"
+    else
+        printf '  %-14s PATH=<not found>    bundled=<absent>\n' "$b"
+    fi
 done
 
 section "8. IPFS peering"
-run "ipfs swarm peers count" bash -c "ipfs swarm peers 2>/dev/null | wc -l | sed 's/^/peers: /'"
-# pc2-node bundles Helia, but if a system Kubo is also present we want both
-run "ipfs id (system Kubo, if present)" bash -c "ipfs id 2>/dev/null | head -8"
+# v1.2.7.6: PC2 uses Helia in-process (NOT the system `ipfs` Kubo CLI),
+# so a missing `ipfs` command doesn't mean PC2's IPFS is broken. The
+# authoritative check is /api/health (§4 above) which reports
+# "ipfs": "available" when Helia is up. We still probe the system Kubo
+# below in case the operator runs both for cross-compatibility, but
+# label the result clearly.
+echo "  PC2 uses Helia in-process. The authoritative status is in §4 (api/health: ipfs)."
+echo "  The probes below are for OPTIONAL system Kubo daemon — absent is normal."
+run "ipfs swarm peers count (system Kubo only)" bash -c "command -v ipfs >/dev/null 2>&1 && ipfs swarm peers 2>/dev/null | wc -l | sed 's/^/peers: /' || echo '(no system Kubo — using PC2 in-process Helia, see §4)'"
+run "ipfs id (system Kubo, if present)" bash -c "command -v ipfs >/dev/null 2>&1 && ipfs id 2>/dev/null | head -8 || echo '(no system Kubo)'"
 
 section "9. Cluster pin connectivity (Elacity supernode)"
 # Probe the public Elacity supernode pinning service. We DO NOT include
@@ -187,9 +249,20 @@ section "9. Cluster pin connectivity (Elacity supernode)"
 run "curl Elacity supernode (expect HTTP 401 = up & auth-gated)" \
     bash -c "curl -sk -o /dev/null -w 'HTTP %{http_code}, time %{time_total}s\\n' --max-time 8 https://38.242.211.112/cluster-pin/pins"
 
-section "10. Recent pm2 logs (last 200 lines, filtered for pin/cluster/ipfs/wireguard/error)"
-run "pm2 logs pc2 --lines 200 --nostream | grep -iE 'pin|cluster|ipfs|helia|wireguard|amnezia|error|warn' | tail -80" \
-    bash -c "pm2 logs pc2 --lines 200 --nostream 2>&1 | grep -iE 'pin|cluster|ipfs|helia|wireguard|amnezia|error|warn' | tail -80"
+section "10. Recent logs (last 200 lines, filtered for pin/cluster/ipfs/wireguard/error)"
+# v1.2.7.6: on macOS the launcher writes PC2 logs to
+# ~/Library/Logs/ElastOS/main.log, not pm2. Try the launcher log first
+# on macOS, fall back to pm2 logs otherwise.
+LAUNCHER_LOG="$HOME/Library/Logs/ElastOS/main.log"
+if [[ "$PLATFORM" == "darwin" && -f "$LAUNCHER_LOG" ]]; then
+    run "tail -200 $LAUNCHER_LOG | grep -iE '...' | tail -80 (launcher log)" \
+        bash -c "tail -200 '$LAUNCHER_LOG' 2>&1 | grep -iE 'pin|cluster|ipfs|helia|wireguard|amnezia|error|warn' | tail -80"
+elif command -v pm2 >/dev/null 2>&1; then
+    run "pm2 logs pc2 --lines 200 --nostream | grep ... | tail -80" \
+        bash -c "pm2 logs pc2 --lines 200 --nostream 2>&1 | grep -iE 'pin|cluster|ipfs|helia|wireguard|amnezia|error|warn' | tail -80"
+else
+    echo "(no pm2 on PATH and no $LAUNCHER_LOG — skip)"
+fi
 
 section "11. pc2-node/.env presence (keys only, values redacted)"
 if [[ -n "$PC2_DIR" && -f "$PC2_DIR/pc2-node/.env" ]]; then

@@ -517,6 +517,9 @@
         <h3 id="sub-modal-title">Subscribe to Channel</h3>
         <button id="sub-modal-close" class="sub-modal-close" aria-label="Close">&times;</button>
       </div>
+      <p class="sub-modal-explainer" style="margin: 0 20px 12px; padding: 10px 12px; background: var(--bg-surface); border-radius: 6px; font-size: 12px; color: var(--text-secondary); line-height: 1.4;">
+        Subscribing gives you time-based access to all premium content in this channel for the chosen duration. Subscription is on-chain and renews only if you re-subscribe.
+      </p>
       <div id="sub-modal-plans" class="sub-modal-plans"></div>
       <div id="sub-wallet-picker" class="sub-wallet-picker hidden">
         <div class="sub-wallet-label">Pay with</div>
@@ -677,9 +680,9 @@
   <div id="toast-container" class="toast-container" role="status" aria-live="polite"></div>
 
   <script src="https://cdn.jsdelivr.net/npm/ethers@6.13.4/dist/ethers.umd.min.js"></script>
-  <script src="api.js?v=37"></script>
-  <script src="wallet.js?v=22"></script>
-  <script src="app.js?v=61"></script>
-  <script src="app-features.js?v=42"></script>
+  <script src="api.js?v=41-stale-signer"></script>
+  <script src="wallet.js?v=26-force-siwe"></script>
+  <script src="app.js?v=62-sub-modal"></script>
+  <script src="app-features.js?v=51-stale-signer"></script>
 </body>
 </html>

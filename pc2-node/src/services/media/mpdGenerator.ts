@@ -39,7 +39,7 @@ function escapeXml(str: string): string {
     .replace(/'/g, '&apos;');
 }
 
-function buildSegmentTimeline(segments: MPDSegment[], timescale: number): string {
+function buildSegmentTimeline(segments: MPDSegment[]): string {
   if (segments.length === 0) return '';
 
   const lines: string[] = [];
@@ -47,9 +47,12 @@ function buildSegmentTimeline(segments: MPDSegment[], timescale: number): string
 
   let i = 0;
   while (i < segments.length) {
-    const d = Math.round(segments[i].duration);
+    // segment.duration is already an integer in timescale units (sum of trun
+    // sample-durations), so no rounding is needed. The previous Math.round
+    // here was a no-op for typical inputs but disguised this fact.
+    const d = segments[i].duration;
     let r = 0;
-    while (i + r + 1 < segments.length && Math.round(segments[i + r + 1].duration) === d) {
+    while (i + r + 1 < segments.length && segments[i + r + 1].duration === d) {
       r++;
     }
 
@@ -74,11 +77,41 @@ function buildSegmentTimeline(segments: MPDSegment[], timescale: number): string
   return lines.join('\n');
 }
 
+/**
+ * Compute the longest track's effective duration directly from its
+ * SegmentTimeline. Using the SegmentTimeline sum (rather than the
+ * tkhd/mdhd-derived `totalDuration` we receive from the splitter) guarantees
+ * `mediaPresentationDuration` exactly equals what the player can actually
+ * fetch, which prevents dash.js / shaka from progressively extending the
+ * timeline as new segments arrive (the "growing timeline" UX bug reported
+ * by community testers in v1.2.7.6).
+ */
+function computeEffectiveDuration(tracks: MPDTrack[], fallbackSeconds: number): number {
+  let bestSeconds = 0;
+  for (const track of tracks) {
+    if (!track.segments.length || !track.info.timescale) continue;
+    const sumUnits = track.segments.reduce((acc, s) => acc + s.duration, 0);
+    const seconds = sumUnits / track.info.timescale;
+    if (seconds > bestSeconds) bestSeconds = seconds;
+  }
+  // If we somehow got no segments, fall back to the splitter's value so we
+  // never emit `PT0S` for an otherwise-valid stream.
+  return bestSeconds > 0 ? bestSeconds : fallbackSeconds;
+}
+
 export function generateMPD(tracks: MPDTrack[], totalDuration: number): string {
   const lines: string[] = [];
 
+  // Use SegmentTimeline-derived duration so MPD@duration always matches the
+  // sum of <S d=...> entries. dash.js trusts the asserted total when the
+  // numbers agree; if they drift even slightly (e.g. a partial trailing
+  // segment, editlist offset in tkhd, or per-segment rounding from the
+  // splitter), the player falls back to "what's loaded" and the visible
+  // timeline grows as segments arrive — see the community report in v1.2.7.6.
+  const effectiveDuration = computeEffectiveDuration(tracks, totalDuration);
+
   lines.push('<?xml version="1.0" encoding="utf-8"?>');
-  lines.push(`<MPD xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="urn:mpeg:dash:schema:mpd:2011" xsi:schemaLocation="urn:mpeg:dash:schema:mpd:2011 http://standards.iso.org/ittf/PubliclyAvailableStandards/MPEG-DASH_schema_files/DASH-MPD.xsd" type="static" mediaPresentationDuration="${formatDuration(totalDuration)}" minBufferTime="PT2S" profiles="urn:mpeg:dash:profile:isoff-on-demand:2011">`);
+  lines.push(`<MPD xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="urn:mpeg:dash:schema:mpd:2011" xsi:schemaLocation="urn:mpeg:dash:schema:mpd:2011 http://standards.iso.org/ittf/PubliclyAvailableStandards/MPEG-DASH_schema_files/DASH-MPD.xsd" type="static" mediaPresentationDuration="${formatDuration(effectiveDuration)}" minBufferTime="PT2S" profiles="urn:mpeg:dash:profile:isoff-on-demand:2011">`);
   lines.push('  <Period>');
 
   for (const track of tracks) {
@@ -107,7 +140,7 @@ export function generateMPD(tracks: MPDTrack[], totalDuration: number): string {
 
     lines.push(`      <Representation ${repAttrs}>`);
 
-    const segTimeline = buildSegmentTimeline(track.segments, info.timescale);
+    const segTimeline = buildSegmentTimeline(track.segments);
     lines.push(`        <SegmentTemplate timescale="${info.timescale}" initialization="${escapeXml(track.initFilename)}" media="${escapeXml(track.mediaPattern)}" startNumber="1">`);
     lines.push(segTimeline);
     lines.push('        </SegmentTemplate>');

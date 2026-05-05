@@ -9,6 +9,7 @@ import { Router, Response } from 'express';
 import { authenticate, AuthenticatedRequest, requireOwner } from './middleware.js';
 import { logger } from '../utils/logger.js';
 import { detectPlatform, getJetsonDiagnostics } from '../utils/platform.js';
+import { spawnDetachedRespawn } from '../utils/respawner.js';
 import { execFileSync } from 'child_process';
 import { existsSync, readdirSync } from 'fs';
 import * as nodePath from 'path';
@@ -50,7 +51,7 @@ function resolvePm2Candidates(): string[] {
  * SEC-A6 (2026-04-22 audit): replaced execSync with shell:'/bin/bash' glob
  * with explicit argv via execFileSync. Same fallback chain, no shell.
  */
-function detectProcessManager(): 'systemctl' | 'pm2' | 'none' {
+function detectProcessManager(): 'systemctl' | 'pm2' | 'launcher-self-respawn' | 'none' {
   // Check systemctl first (VPS deployments)
   const systemctlServices = ['pc2-node', 'pc2'];
   for (const service of systemctlServices) {
@@ -77,6 +78,16 @@ function detectProcessManager(): 'systemctl' | 'pm2' | 'none' {
     }
   }
 
+  // v1.2.7.6: macOS users typically run PC2 under the ElastOS Launcher,
+  // which doesn't auto-restart on PC2 exit. Rather than reporting 'none'
+  // (which causes the UI to warn the user they'll need to manually
+  // restart), report 'launcher-self-respawn' — the /api/system/restart
+  // handler then spawns a detached respawner before exiting, so the
+  // restart actually is automatic from the user's perspective.
+  if (process.platform === 'darwin') {
+    return 'launcher-self-respawn';
+  }
+
   return 'none';
 }
 
@@ -90,6 +101,15 @@ router.get('/restart-mode', authenticate, requireOwner, async (req: Authenticate
   // Get the PC2 directory path
   const pc2Dir = process.cwd();
   
+  let message: string;
+  if (processManager === 'none') {
+    message = 'Running in local mode. Server will exit and you will need to restart manually.';
+  } else if (processManager === 'launcher-self-respawn') {
+    message = 'Server will restart automatically (detached respawner).';
+  } else {
+    message = `Server will restart automatically via ${processManager}.`;
+  }
+
   res.json({
     success: true,
     result: {
@@ -97,9 +117,7 @@ router.get('/restart-mode', authenticate, requireOwner, async (req: Authenticate
       autoRestart: processManager !== 'none',
       pc2Directory: pc2Dir,
       restartCommand: `cd "${pc2Dir}" && npm start`,
-      message: processManager === 'none' 
-        ? 'Running in local mode. Server will exit and you will need to restart manually.'
-        : `Server will restart automatically via ${processManager}.`
+      message,
     }
   });
 });
@@ -127,6 +145,17 @@ router.post('/restart', authenticate, requireOwner, async (req: AuthenticatedReq
     // Schedule restart after response is sent
     setTimeout(() => {
       logger.info('[System] Initiating restart...');
+
+      // v1.2.7.6: macOS short-circuit — skip the systemctl/pm2 fallback
+      // chain (none of which exist on a launcher install), spawn the
+      // detached respawner, and exit cleanly. Same pattern as
+      // UpdateService's post-update restart.
+      if (process.platform === 'darwin') {
+        logger.info('[System] macOS detected — spawning detached respawner before exit');
+        spawnDetachedRespawn('manual-restart');
+        process.exit(0);
+        return;
+      }
 
       // SEC-A6 (2026-04-22 audit): each entry is now [binary, ...argv] —
       // no shell, no glob expansion, no env-var interpolation. The `nvm`

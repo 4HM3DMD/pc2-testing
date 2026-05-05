@@ -10,6 +10,7 @@ import path from 'path';
 import { exec, execSync, spawn } from 'child_process';
 import { promisify } from 'util';
 import { logger } from '../utils/logger.js';
+import { spawnDetachedRespawn } from '../utils/respawner.js';
 
 const execAsync = promisify(exec);
 
@@ -592,17 +593,25 @@ export class UpdateService {
       setTimeout(async () => {
         logger.info('[UpdateService] Attempting restart...');
 
-        // v1.2.7.2: macOS short-circuit. The ElastOS Launcher (Electron)
+        // v1.2.7.6: macOS short-circuit. The ElastOS Launcher (Electron)
         // spawns PC2 directly via child_process — there is no pm2/systemctl
-        // in the picture, and trying them blew up logs with "command not
-        // found" warnings on every in-app update. Per launcher source
-        // (pc2Manager.ts), the launcher monitors the spawned PID via its
-        // own status loop, so a clean process.exit(0) is all we need to
-        // hand restart responsibility back to it. The launcher does NOT
-        // currently auto-restart on crash (separate v1.2.8 ask), but a
-        // manual "Start" click puts us back online.
+        // in the picture, and trying them blows up logs with "command not
+        // found" warnings on every in-app update. The launcher does NOT
+        // auto-restart on PC2 exit (verified by Sasha post-v1.2.7.5 update:
+        // "launcher status indicator showed PC2 as stopped, had to click
+        // Start manually"), so v1.2.7.2's bare process.exit(0) approach
+        // left users one click short of a fully hands-off update.
+        //
+        // Fix: spawn a detached node child that re-launches PC2 after a
+        // 3 s delay (long enough for us to release port 4200), then exit.
+        // The detached child runs independently of the launcher; PC2 is
+        // back online by the time the GUI's post-restart /api/health
+        // probe fires, and the modal's auto-reload kicks in. Launcher
+        // status will briefly show "stopped" but the user never has to
+        // touch it.
         if (process.platform === 'darwin') {
-          logger.info('[UpdateService] macOS detected — skipping pm2/systemctl, exiting cleanly for launcher restart');
+          logger.info('[UpdateService] macOS detected — spawning detached respawner before exit');
+          spawnDetachedRespawn('post-update');
           process.exit(0);
           return;
         }

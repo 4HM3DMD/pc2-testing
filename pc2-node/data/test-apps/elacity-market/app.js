@@ -2809,6 +2809,28 @@
     dom.channelPageStats.textContent = statsText;
   }
 
+  // Render a duration object (e.g. {value: 30, unit: 'days'}) as a
+  // human-friendly string ("30 days", "1 month", "1 year"). Singularises
+  // the unit when value is 1.
+  function subscriptionDurationToHuman(duration) {
+    if (!duration || !duration.value) return 'the plan duration';
+    var unit = duration.unit || 'days';
+    var unitLabel = (Number(duration.value) === 1) ? unit.replace(/s$/, '') : unit;
+    return duration.value + ' ' + unitLabel;
+  }
+
+  // Pick the most informative primary label for a plan in the subscribe
+  // modal. Description wins (it's user-typed), then a meaningful label,
+  // then a duration-derived fallback. Filters out the auto-generated
+  // "Plan #N" placeholder so we don't show a useless label.
+  function subscriptionPlanLabel(plan, durationHuman) {
+    var desc = (plan.description || '').trim();
+    if (desc) return desc;
+    var lbl = (plan.label || '').trim();
+    if (lbl && !/^Plan\s*#\d+$/i.test(lbl)) return lbl;
+    return durationHuman + ' subscription';
+  }
+
   function openSubscribeModal(channel, plans) {
     state.selectedPlan = null;
     state.selectedSubWallet = null;
@@ -2886,13 +2908,21 @@
       option.dataset.planId = plan.planId;
 
       var priceStr = formatPrice(plan.price, plan.payToken);
-      var durationStr = plan.duration ? plan.duration.value + ' ' + plan.duration.unit : '';
+      var durationHuman = subscriptionDurationToHuman(plan.duration);
+      var primaryLabel = subscriptionPlanLabel(plan, durationHuman);
+      // Show duration on its own line so subscribers always know the term,
+      // even when the plan label is the auto-generated "Plan #N" placeholder
+      // or when description is empty.
+      var subLine = 'Access for ' + durationHuman;
+      if (plan.description && plan.description.trim() && plan.description.trim() !== primaryLabel) {
+        subLine += ' \u00b7 ' + plan.description.trim();
+      }
 
       option.innerHTML =
         '<div class="sub-plan-radio"></div>' +
         '<div class="sub-plan-details">' +
-          '<div class="sub-plan-label">' + escapeHtml(plan.label || durationStr) + '</div>' +
-          (plan.description ? '<div class="sub-plan-desc">' + escapeHtml(plan.description) + '</div>' : '') +
+          '<div class="sub-plan-label">' + escapeHtml(primaryLabel) + '</div>' +
+          '<div class="sub-plan-desc">' + escapeHtml(subLine) + '</div>' +
         '</div>' +
         '<div class="sub-plan-price">' + priceStr + '</div>';
 

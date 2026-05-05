@@ -6,6 +6,125 @@
 
 ---
 
+## [v1.2.7.7] - 2026-05-04 - Launcher auto-restart + dark UI modals + channel management batch + on-chain plans/gates + name-sync architecture
+
+> **Scope**: Combined release covering the v1.2.7.6 launcher work (auto-respawn, dark UpdateModal, diagnostic-script polish) PLUS the v1.2.7.7 channel/playback/UX/on-chain batch, PLUS the cross-app name-sync architecture and stale-signer fixes that surfaced during testing. Single tag, single GitHub release. Eight discrete bugs (A-H), three on-chain V3 contract integrations (`bulkUpdatePlans`, `configureTokenOwnershipAccess`, `subscribePlan`), and a complete data-consistency layer between `elacity-creator`, `elacity-market`, and PC2's local catalog. Hot-deployed to Sasha's PC2 across multiple iterations 2026-05-04 morning → ~21:00 UTC-4; full handover at [`docs/handover/HANDOVER_2026-05-04_V1277_TESTING_NEXT_V1280_RELAYER.md`](docs/handover/HANDOVER_2026-05-04_V1277_TESTING_NEXT_V1280_RELAYER.md).
+
+### Launcher / system (was earmarked v1.2.7.6, folded into this release)
+
+- **Auto-respawn after update / restart** — [`pc2-node/src/services/UpdateService.ts`](pc2-node/src/services/UpdateService.ts) + [`pc2-node/src/api/system.ts`](pc2-node/src/api/system.ts) + new [`pc2-node/src/utils/respawner.ts`](pc2-node/src/utils/respawner.ts). PC2 used to `process.exit(0)` after an in-app update and rely on the macOS Launcher's `pm2` config to relaunch — but `pm2` doesn't always pick the dead PID up cleanly on Mac, leaving users staring at "PC2 stopped" indefinitely. New `spawnDetachedRespawn(...)` writes a tiny shell script that `sleep 2 && exec node …` then exits — guaranteed restart even when the launcher misbehaves. macOS-only fast path; Linux/Windows still rely on launcher.
+- **Dark mode for UpdateModal** — [`src/gui/src/UI/UIUpdateModal.js`](src/gui/src/UI/UIUpdateModal.js). Hard-coded `#fff` / `#000` everywhere → re-themed to `--bg-elevated`, `--text`, `--border`, `--primary`. All buttons now have explicit `display:inline-flex; align-items:center; line-height:1; font-family:inherit` per the [`codequality.mdc`](.cursor/rules/codequality.mdc) §17 button rule (was producing the extra-top-padding glitch in dark mode).
+- **Diagnostic-script tarball** — [`scripts/pc2-diagnose.sh`](scripts/pc2-diagnose.sh) now captures launcher / pm2 state, UpdateService telemetry, recent restart attempts, IPFS cluster / Lit / Chipotle reachability, and the launcher's dark/light theme. Single tarball operators can attach to support threads.
+
+### Bug A — DDRM file size in properties dialog
+
+- [`src/gui/src/UI/UIWindowItemProperties.js`](src/gui/src/UI/UIWindowItemProperties.js): `.ddrm` files (the JSON descriptor pointing at the IPFS CID) were showing as `~1 KB` even when the underlying media was hundreds of MB. Reads the descriptor via `/read`, pulls `pinnedSizeBytes` (or `estimatedSizeBytes` fallback), and renders `193.5 MB (descriptor 1.2 KB)` — same enrichment `UIItem.js` already does in the file-list view. Cached per `(path, modified)` on a window-level Map. Falls back to the raw descriptor size if the read fails.
+
+### Bug B — Video timeline "growing" during playback
+
+- [`pc2-node/src/services/media/mpdGenerator.ts`](pc2-node/src/services/media/mpdGenerator.ts): MPD `mediaPresentationDuration` was emitted from the asset's nominal length (computed from the source MP4 header) but the SegmentTimeline was authoritative for what was actually addressable. When a slow IPFS fetch made segment N show up later than expected, the player would extend the timeline. New `computeEffectiveDuration(tracks, fallback)` sums every track's `(sumUnits / timescale)` from its actual SegmentTimeline and emits the longest seen. MPD `mediaPresentationDuration` and SegmentTimeline now agree byte-for-byte. Also removed a redundant `Math.round()` from per-segment duration that was off-by-1-ms on long videos.
+
+### Bug C — Channel management in elacity-creator (3-part)
+
+1. **Ownership warning banner** — `renderOwnershipBanner(channelData)` in [`pc2-node/data/test-apps/elacity-creator/app.js`](pc2-node/data/test-apps/elacity-creator/app.js) compares `channelData.creator.address` to the connected EOA + SA. Reads "Read-only — you are not the channel owner" up-front instead of letting the user fill in changes that will silently 403 on Save. Handles `creator: null` (`Channel owner unknown — saves will likely fail`).
+2. **Channel images section** — merged into Profile per Bug H below; profile + cover pickers, IPFS pin (local + Elacity gateway), single Save button.
+3. **Token-gating with decimals (now on-chain)** — was originally an off-chain GraphQL update; Irzhy clarified `configureTokenOwnershipAccess` is on-chain in V3. Re-implemented to call the V3 contract directly. See "On-chain plans + token-gates" below.
+
+### Bug D — File manager defaults to list view
+
+- [`src/gui/src/UI/UIWindow.js`](src/gui/src/UI/UIWindow.js): one-liner `options.layout = options.layout ?? window.get_explorer_layout_preference?.() ?? 'details';` (was `'icons'`). Existing user preferences still respected (the `??` chain only falls through to `'details'` when no preference exists yet).
+
+### Bug E — Elacity Market edit-channel modal cut off
+
+- [`pc2-node/data/test-apps/elacity-market/styles.css`](pc2-node/data/test-apps/elacity-market/styles.css): `.modal-dialog { max-height: 90vh; display: flex; flex-direction: column; overflow: hidden; }` + flexbox child sizing on header/body/footer so the body absorbs available height with `overflow-y: auto`. Tall channel-edit forms now scroll inside the modal instead of clipping at the viewport.
+
+### Bug F — Elacity Market image upload not globally visible
+
+- [`pc2-node/data/test-apps/elacity-market/api.js`](pc2-node/data/test-apps/elacity-market/api.js) `uploadToIpfs`: belt-and-braces upload — pin to local PC2 IPFS daemon (always reachable through user's own gateway) AND mirror to `https://ipfs.elacity.io` (Elacity gateway) so the CID is announced to the public DHT. Returns the Elacity CID when both succeed; falls back to local CID if Elacity mirror fails. Returns `ipfs://<cid>`.
+
+### Bug G — "Update channel: not allowed to edit this channel"
+
+- **Two-level root cause**: (1) `getElacityAuthToken` always sent `sa: smartAccountAddress` to the Elacity backend's `userLogin` mutation when one was present — the official `elacity-web/src/state/api/privateBaseQuery.ts` never sends `sa`. When we send it, the backend issues a JWT for the SA principal instead of the EOA principal. (2) `populateManageChannelSelector()` was stripping the `data-owner` attribute when copying channel options from the mint selector, so the manage flow had no idea which wallet owns each channel. Net effect: for an EOA-created channel, the JWT principal was the SA address → backend's per-mutation owner check failed → "not allowed to edit this channel".
+- **Fix** in [`pc2-node/data/test-apps/elacity-creator/app.js`](pc2-node/data/test-apps/elacity-creator/app.js): new `authModeForChannelData(channelData)` helper compares `channelData.creator.address` against connected EOA / SA → returns `'eoa' | 'sa' | null`. `getElacityAuthToken(walletAddress, { authMode })` caches one JWT per mode and only includes `sa` in `userLogin` when `authMode === 'sa'`. `authedGraphQLRequest`, `updateChannelInfoOnBackend`, `updateSubscriptionPlanOnBackend` all thread `authMode` through. `saveChannelProfile` and `registerChannelWithBackend` derive the mode from the channel itself before calling. `populateManageChannelSelector` now copies `data-owner`. Every successful login prints `[Creator] Elacity auth token obtained (eoa-mode, principal=0x…)` so future regressions are obvious.
+
+### Bug G2 — Plan/Gate save reverts with cryptic MetaMask `gasLimit` error
+
+- **Symptom**: clicking Save on a subscription plan or token gate threw `MetaMask - RPC Error: Cannot destructure property 'gasLimit' of '(intermediate value)' as it is null` instead of opening the wallet. MetaMask masks on-chain reverts during gas estimation as exactly that error.
+- **Root cause**: wallet routing in the manage flow defaulted to SA when the user has a smart account, regardless of which wallet owns the channel. `saveAddPlan` / `saveEditPlan` / `removePlan` / `saveTokenGates` all read `getChannelOwnerType(dom.assetChannel) || (hasSmartAccount() ? 'sa' : 'eoa')` — but `dom.assetChannel` is the **mint** dropdown (wrong for the manage flow), so it returned null and the fallback unconditionally picked SA. SA isn't the channel admin → contract reverts → MetaMask masks the revert.
+- **Fix**: new `manageWalletChoiceOrThrow()` derives the wallet choice from `authModeForChannelData(managedChannelData)`. New `preflightOrSurfaceRevert(to, data, from, opName)` runs an `eth_call` simulation BEFORE handing the tx to MetaMask. Decodes `0x4888d31b` (`Unauthorized(channel, caller)`) into "this wallet is not authorized to modify this channel". All four save handlers wired through both helpers. Defensive: even if wallet routing was correct, pre-flight surfaces clean errors for any other revert (price=0, duration=0, malformed args).
+
+### Bug G3 — Channel-name dropdown shows stale local-catalog name after rename
+
+- **Symptom**: rename a channel → save succeeds → backend persists. But the channel dropdown still reads the old name, even after closing + reopening the modal.
+- **Root cause**: PC2's local catalog is the data source for the channels dropdown. Local catalog is a periodic mirror of the Elacity backend — there's no patch path that pushes our save into local catalog immediately. The original `saveChannelProfile` did update the dropdown text in-memory but only when *this* save changed the name (`if (opt && nameChanged)`). If the user renamed in a previous session, then later edited only the description, the rewrite was skipped.
+- **Fix**: new `syncChannelOptionLabel(channelAddress, canonicalName)` walks both `asset-channel` and `manage-channel-select` dropdowns, case-insensitively matches the option value against the address, and rewrites the label preserving the trailing `(0xabcd…)` truncation pattern. Called at the end of `showChannelManagement` (reconcile against canonical Elacity-backend name when the user opens the channel) AND at the end of `saveChannelProfile` (always runs after successful save, no `nameChanged` guard).
+
+### Bug H — Single Save Profile button (UX rework)
+
+- Channel Details (name, description) had its own Save Changes button; Channel Images had its own Upload & Save Images button. Two clicks for one logical record. Sasha picked option 1 of 4: merge Channel Details + Channel Images into a single **Profile** section with one **Save Profile** button. Plans + Token Gating stay per-row because each is its own on-chain transaction. Files: [`pc2-node/data/test-apps/elacity-creator/index.html`](pc2-node/data/test-apps/elacity-creator/index.html) (replaced `manage-details-section` + `manage-images-section` with single `manage-profile-section`), [`pc2-node/data/test-apps/elacity-creator/app.js`](pc2-node/data/test-apps/elacity-creator/app.js) (`saveChannelProfile` computes diffs, pins pending images to IPFS first, makes ONE `updateChannelInformation` GraphQL call with `name`, `description`, `image`, `coverImage` batched together).
+
+### On-chain plans + token-gates (V3 contracts on Base)
+
+- Subscription plans and token-gating rules are now written **on-chain** via the channel's `SubscriptionModule` (V3). Off-chain GraphQL mutations (`updateSubscriptionPlan`, `tokenAccess` on `updateChannelInformation`) are deprecated for these. Per Irzhy 2026-05-04: *"On-chain data are only focusing on duration and price; metadata (off-chain) are more related labels and description."*
+- **ABI shape (V3, from `elacity-web/base-network-updates`)**: `bulkUpdatePlans(tuple(uint8 actionType, bytes args)[] actions)` with `PLAN_ACTION = { ADD: 1, UPDATE: 2, REMOVE: 3 }`; `configureTokenOwnershipAccess(tuple(address, uint256)[] thresholds)`; `subscribePlan(uint8 planId, bytes args)` (V3 — legacy bool recurring overload is gone); `tokenURI(uint256 tokenId)` (V3 — for plan metadata merges).
+- **Plan metadata** lives off-chain on IPFS — pin a JSON `{ version, schema, name, description, attributes:[{trait_type:'Duration', value:N}], properties:{ creator } }` and pass the resulting `planURI` as the last field of the encoded `args`. Indexer reads the URI on event ingest.
+- **Files**: [`pc2-node/data/test-apps/elacity-market/wallet.js`](pc2-node/data/test-apps/elacity-market/wallet.js) — V3 ABI, real `bulkUpdatePlans()` + `configureTokenAccess()` (replacing stubs), helpers `maskPlanTokenId` / `uploadJsonToIpfs` / `fetchChannelImage` / `fetchPlanMetadata` / `buildPlanMetadata` / `durationToSeconds` / `getTokenDecimals` / `encodeBulkUpdatePlans` / `prepareAction`. [`pc2-node/data/test-apps/elacity-market/app-features.js`](pc2-node/data/test-apps/elacity-market/app-features.js) — `walletChoiceForChannel` helper, plan-row Remove + edit + add wired through to `Wallet.bulkUpdatePlans`. [`pc2-node/data/test-apps/elacity-creator/app.js`](pc2-node/data/test-apps/elacity-creator/app.js) — same pattern, `saveAddPlan` / `saveEditPlan` / `removePlan` / `saveTokenGates` rewritten.
+- **Legacy plan IDs**: existing plans use string IDs like `plan_1777921474969` from the old off-chain system. New `isOnChainPlanId(planId)` guard rejects these for UPDATE / REMOVE with the message *"This plan was created in legacy off-chain storage and cannot be edited on-chain. Use '+ Add Plan' to create a fresh on-chain plan instead."*
+
+### Bug-G mirror — silent local-catalog fallback removed in elacity-market
+
+- Same root cause as Bug G but on the elacity-market side, where the silent fallback to PC2's local catalog hid every backend rejection. Editing channel info "looked successful" but never propagated to `base.ela.city`.
+- **`api.js`**: per-mode JWT cache (`tokens.eoa`, `tokens.sa`) + per-mode `signerAddresses`. `gql(query, vars, requiresAuth, opts)` accepts `opts.authMode`. `login(address, signature, sa)` derives mode from whether `sa` was passed and stores in the right slot. `isAuthenticated(mode)` is mode-aware. `updateChannelInformation` now distinguishes **auth-class errors (401/403, "not allowed to edit", "Unauthor…") which throw** from network/5xx errors which still fall back to local catalog (per the original constraint: don't drop the local-catalog fallback, just make the GraphQL path actually succeed first).
+- **`wallet.js`**: `siweLogin({ authMode })` is mode-aware. Per-mode promise cache so duplicate concurrent calls coalesce. `'eoa'` omits `sa` from `userLogin` (forces EOA principal), `'sa'` requires + sends it, legacy preserves old behaviour for callers not yet wired.
+- **`app-features.js`**: channel-edit save handler computes `authMode = walletChoiceForChannel(channelData)` BEFORE prompting any signature, threads through `siweLogin({ authMode })` and `updateChannelInformation(addr, input, fetchFn, { authMode })`. Throws clear "this wallet is not the creator" up-front from `walletChoiceForChannel`. Amber **Backend-vs-local divergence banner** added to Edit Channel modal — fetches canonical backend snapshot in parallel with form hydration; if any field diverges from local catalog, surfaces "Backend has X, local has Y" with prompt to save. Save handler diffs against the BACKEND snapshot (not local form values), recovering from any pre-fix corruption.
+
+### Name-sync architecture — cross-app data consistency for renames
+
+- Symptom Sasha hit immediately after Bug-G mirror landed: rename in market saved correctly to backend, but creator still showed the old name. PC2 local catalog (per-PC2 mirror) was shadowing canonical backend forever once it had any entry for the channel.
+- **Read path (parallel + backend-prefer + lazy self-heal)**: `api.js#retrieveChannel` (channel detail page) AND `api.js#fetchChannels` / `fetchManagedChannels` (global channels grid + creator profile lists) now fire local + backend in parallel and prefer backend when both succeed. When backend differs from local on any mutable field (name / description / image / coverImage), local mirror is overwritten via `PUT /api/catalog/channel/:addr`. List paths use shared `mergeChannelLists(local, backend)` helper that preserves local-only entries (newly-created, not-yet-indexed channels) while overlaying backend's mutable fields onto entries that exist in both, plus appending backend-only entries for global discoverability.
+- **Write path (write-through)**: after a successful backend save, both apps mirror canonical response to PC2's local catalog. Creator: new `mirrorChannelToLocalCatalog(addr, requestedInput, serverResponse)` helper called from `saveChannelProfile`. Market: write-through inline in `api.js#updateChannelInformation`'s success path. Every other dApp on the same PC2 sees the new value on its NEXT local-catalog read — no need to wait for the lazy self-heal.
+- **Cross-PC2 propagation**: canonical Elacity backend is the global rendezvous. Other PC2 nodes that upgrade to v1.2.7.7 self-heal automatically on first read of any divergent channel. Older PC2 nodes' local mirrors keep stale names until they upgrade — but this is a per-PC2 cache issue, NEVER a backend issue. New installs always see canonical data on first read.
+
+### Stale per-mode JWT — final blocker (verified end-to-end with Sasha)
+
+- After the Bug-G mirror went live and the silent fallback was gone, the genuine "not allowed to edit this channel" rejection finally surfaced for what looked like a perfectly-owned channel. Root cause: tokens are cached by **mode** (`tokens.eoa`, `tokens.sa`) and rehydrated from `sessionStorage` on every page load — but they're NOT keyed by signer address. If the user previously SIWE-signed with EOA `0xAAA…` and is now connected as creator EOA `0xBBB…`, `isAuthenticated('eoa')` returns true because *some* EOA token exists, the save handler skips fresh login, and `0xAAA…`'s JWT goes to the backend.
+- **Fix**: `api.js` adds `isAuthenticatedAs(mode, expectedSigner)` (true only when cached token's signer matches expected) and `getCachedSigner(mode)` (diagnostics). `wallet.js` adds `siweLogin({ authMode, force: true })` to skip the "already authenticated" short-circuit when callers detected staleness. `app-features.js` channel-edit save handler computes `expectedSigner = channelData.creator.address` and uses `isAuthenticatedAs` to gate the SIWE skip. On staleness: `siweLogin({ authMode, force: true })` → fresh JWT bound to currently-connected wallet. Logs `expectedSigner` and `cachedSigner` so future divergence is immediately diagnosable. Sasha confirmed end-to-end working 2026-05-04 20:38 UTC-4.
+
+### Batched plan management — market parity with creator
+
+- Market's manage-plans UX was the OLD per-row, per-transaction model (one MetaMask popup per change). Creator already had the batched model. Made market match. `openManagePlansModal` rewritten as a single inline modal with a footer-pinned "Save changes (1 transaction) / Discard" bar. Per-row Edit / Remove buttons mark rows as pending; Add Plan inserts a new pending row. Commit collects all pending actions into a single `bulkUpdatePlans([…])` call.
+- Removed: `openAddPlanModal` + `openEditPlanModal` (replaced by inline pending-row editing).
+- Polish: indexer-poll after commit (`pollChannelForPlanCount`); pre-flight `eth_call` on `bulkUpdatePlans` (clean errors instead of MetaMask `gasLimit` riddle); responsive CSS (column headers + `data-label` row labels for narrow viewports, lighter footer background per Sasha's UX feedback).
+
+### Channel-image preview reliability (creator)
+
+- Profile + cover image previews in the Channel Edit modal showed "Image unreachable" or stayed blank, while the same images rendered fine in market. Three layered root causes: (1) backend's `imageURL` field returned malformed `https://ipfs.ela.city/ipfs/ipfs://bafk…` — doubled `ipfs://` 404'd. (2) CID-recognition regex required `bafy…` prefix; modern raw-leaves `bafk…` CIDs were rejected. (3) preview `<img>` was inside a flexbox container that collapsed it to 0×0 even when the network fetch succeeded.
+- **Fix**: `resolveIpfsCandidates(url)` extracts CID (Qm / bafy / bafk) from anywhere in the input string and emits ordered candidates `[localPC2Gateway, publicElacityGateway, malformedURLPassthrough]`. `setManageImagePreview(slotId, urlOrDataUrl)` builds an `<img>` with `position:absolute; inset:0; width:100%; height:100%; object-fit:cover; z-index:2` (forces real rendered size regardless of parent layout). `<img>.onerror` walks the candidate list. If all fail, renders diagnostic block listing every URL tried so future failures are debuggable from a screenshot. `loadManageImages` flips field priority — prefers `channelData.image` (canonical CID) over `channelData.imageURL` (potentially malformed gateway URL).
+
+### Plans-disappearing-after-save (creator)
+
+- After a successful `bulkUpdatePlans` transaction, creator's manage-plans UI showed an empty list and prompted "+ Add Plan", as if no plans existed. Market's subscribe modal correctly showed all the new plans. Creator was reading plans solely from the Elacity backend's `channel.plans` field, which lags the indexer 5–15s and sometimes returns empty immediately after a write. Market always read directly from the contract.
+- **Fix**: ported the on-chain read pattern. New `fetchPlansFromContract(channelAddr)` uses `getNumberOfPlans()` + `getPlan(planId)` against the channel's `SubscriptionModule`. New `mergePlansWithMetadata(onChainPlans, offChainPlans)` overlays the backend's label/description metadata onto the on-chain plan list (on-chain authoritative for planId / price / duration; off-chain authoritative for human labels). `openManageChannel` and `commitPendingPlans` both use this merged view.
+
+### Build / lint / version
+
+- `package.json` and `pc2-node/package.json` bumped to `1.2.7.7`.
+- `pc2-node/frontend/index.html` — `bundle.min.js?v=1.2.6` cache-buster bumped to `?v=1.2.7.7` so existing browsers fetch the rebuilt GUI bundle (the dark UpdateModal fix lives in there). Without this, in-app update users would have continued seeing the old white-on-white modal.
+- `pc2-node/frontend/bundle.min.js` — rebuilt with the GUI changes (UIUpdateModal, UIWindow, UIWindowItemProperties).
+- All hot-deployed test-app cache-busters bumped to their final values (creator `app.js?v=3.3.5-catalog-mirror`; market `api.js?v=41-stale-signer`, `wallet.js?v=26-force-siwe`, `app.js?v=62-sub-modal`, `app-features.js?v=51-stale-signer`).
+- New file: `pc2-node/src/utils/respawner.ts`. New task dirs (kept untracked until their respective releases): `.cursor/tasks/V1.2.7.8-ON-CHAIN-PLANS-AND-GATES/` (status: Merged into v1.2.7.7), `.cursor/tasks/V1.2.8.0-CHIPOTLE-RELAYER/` (status: Proposed, Irzhy-approved).
+- No schema changes, no migration bump (still at `CURRENT_VERSION = 32` from v1.2.7.2).
+- Existing v1.2.7.5 launchers will pick this up via the in-app `Update PC2` button (UpdateService 4-segment compareVersions handles `1.2.7.7 > 1.2.7.5` correctly).
+
+### Roadmap (v1.2.8.0+)
+
+- **v1.2.8.0 — Chipotle supernode relayer** — supernode-side authenticated relayer for Lit Action requests; tightens the trust boundary so PC2 nodes no longer hold credentials directly. Design approved by Irzhy 2026-05-04.
+- **DRY consolidation of inline V3 ABIs** — across `wallet.js` / `app.js` / `app-features.js`. Cross-app static-route blocks `_shared/abis` module today; deferred to v1.3.
+- **Wire `authMode` through market's manage-plans flow** — currently only the channel-edit modal is mode-aware. Manage-plans path uses legacy default and works correctly because plans are on-chain (backend JWT only matters for off-chain metadata). Tighten in v1.3.
+- **Demote diagnostic `console.log` lines** added during the v1.2.7.7 auth/sync work to `if (DEBUG)` once the architecture has been live for a release cycle.
+
+---
+
 ## [v1.2.7.5] - 2026-05-04 - Log hygiene + Earnings RPC discipline + Firefox/VPS reach + WireGuard readiness fix
 
 > **Scope**: seven targeted fixes triaged from a community feedback batch (Sasha, EverlastingOS, Brave/Firefox testers) plus one new operator-facing doc. Zero behavioural change to the happy path; every fix is either a noise reduction, a wasted-RPC removal, a misleading-status correction, or a friendlier error in a previously cryptic edge-case. Goal is to make `tail -F ~/Library/Logs/ElastOS/main.log` actually scannable and stop fresh-Mac users seeing the readiness panel report transports as "missing" when they're installed-and-ready.

@@ -620,9 +620,12 @@
       </div>
 
       <div id="channels-view-content" style="display:none;">
-        <!-- Channel selector + create -->
+        <!-- Channel selector + create + refresh -->
         <div class="form-group" style="margin-bottom:16px;">
-          <label for="manage-channel-select">Your Channels</label>
+          <label for="manage-channel-select" style="display:flex; align-items:center; justify-content:space-between;">
+            <span>Your Channels</span>
+            <button type="button" id="btn-channels-refresh" title="Re-fetch channel names from the Elacity backend (use after renaming a channel)" style="display:inline-flex; align-items:center; justify-content:center; padding:4px 10px; font-size:11px; line-height:1; font-family:inherit; background:transparent; border:1px solid var(--border); border-radius:4px; cursor:pointer; color:var(--text-muted);">↻ Refresh</button>
+          </label>
           <div style="display:flex; gap:8px; align-items:center;">
             <select id="manage-channel-select" style="flex:1;"></select>
             <button type="button" class="btn btn-accent" id="btn-channels-create" title="Create a new channel">+ New Channel</button>
@@ -647,24 +650,57 @@
 
           <div id="manage-content" style="display:none;">
 
-            <!-- Section: Channel Details -->
-            <div class="manage-section" id="manage-details-section">
-              <div class="manage-section-header" data-target="manage-details-body">
-                <span class="manage-chevron">&#9660;</span> Channel Details
+            <!-- Ownership warning (shown only when connected wallet ≠ channel creator) -->
+            <div id="manage-ownership-banner" style="display:none; padding:10px 12px; margin-bottom:12px; background:rgba(239, 68, 68, 0.12); border:1px solid rgba(239, 68, 68, 0.4); border-radius:6px; color:var(--text); font-size:13px;"></div>
+
+            <!-- Section: Profile (v1.2.7.7 Bug H — name + description + images merged into ONE off-chain commit) -->
+            <div class="manage-section" id="manage-profile-section">
+              <div class="manage-section-header" data-target="manage-profile-body">
+                <span class="manage-chevron">&#9660;</span> Profile <span id="manage-images-hint" style="font-size:11px; color:var(--text-muted);"></span>
               </div>
-              <div class="manage-section-body" id="manage-details-body">
+              <div class="manage-section-body" id="manage-profile-body">
                 <div class="form-group" style="margin-bottom:10px;">
                   <label for="manage-channel-name">Name</label>
                   <input type="text" id="manage-channel-name" placeholder="Channel name" maxlength="80" />
                 </div>
-                <div class="form-group" style="margin-bottom:10px;">
+                <div class="form-group" style="margin-bottom:14px;">
                   <label for="manage-channel-description">Description</label>
                   <textarea id="manage-channel-description" rows="2" placeholder="Channel description" maxlength="500" style="width:100%; resize:vertical;"></textarea>
                 </div>
-                <div style="display:flex; gap:8px; align-items:center;">
-                  <button type="button" class="inline-btn primary" id="btn-save-channel-details">Save Changes</button>
-                  <span id="manage-details-status" style="font-size:12px; color:var(--text-muted);"></span>
+
+                <div style="display:flex; gap:16px; flex-wrap:wrap; margin-bottom:14px;">
+                  <!-- Profile image (square thumbnail) -->
+                  <div style="flex:0 0 160px;">
+                    <label style="display:block; font-size:12px; color:var(--text-muted); margin-bottom:6px;">Profile image (square, ~256×256)</label>
+                    <div id="manage-image-preview" style="width:160px; height:160px; border:1px dashed var(--border); border-radius:8px; display:flex; align-items:center; justify-content:center; background:var(--bg-elevated); color:var(--text-muted); font-size:11px; overflow:hidden; cursor:pointer;" title="Click to choose an image">
+                      <span id="manage-image-placeholder">Click to choose</span>
+                    </div>
+                    <input type="file" id="manage-image-file" accept="image/*" style="display:none;" />
+                    <div style="display:flex; gap:4px; margin-top:6px;">
+                      <button type="button" class="inline-btn" id="btn-manage-image-pick" style="flex:1; font-size:11px; padding:4px 6px;">Choose…</button>
+                      <button type="button" class="inline-btn" id="btn-manage-image-clear" style="font-size:11px; padding:4px 6px;" title="Remove">×</button>
+                    </div>
+                  </div>
+
+                  <!-- Cover image (16:9 banner) -->
+                  <div style="flex:1 1 280px; min-width:240px;">
+                    <label style="display:block; font-size:12px; color:var(--text-muted); margin-bottom:6px;">Cover image (banner, ~16:9)</label>
+                    <div id="manage-cover-preview" style="width:100%; aspect-ratio:16/9; border:1px dashed var(--border); border-radius:8px; display:flex; align-items:center; justify-content:center; background:var(--bg-elevated); color:var(--text-muted); font-size:11px; overflow:hidden; cursor:pointer;" title="Click to choose a cover image">
+                      <span id="manage-cover-placeholder">Click to choose</span>
+                    </div>
+                    <input type="file" id="manage-cover-file" accept="image/*" style="display:none;" />
+                    <div style="display:flex; gap:4px; margin-top:6px;">
+                      <button type="button" class="inline-btn" id="btn-manage-cover-pick" style="flex:1; font-size:11px; padding:4px 6px;">Choose…</button>
+                      <button type="button" class="inline-btn" id="btn-manage-cover-clear" style="font-size:11px; padding:4px 6px;" title="Remove">×</button>
+                    </div>
+                  </div>
                 </div>
+
+                <div style="display:flex; gap:8px; align-items:center;">
+                  <button type="button" class="inline-btn primary" id="btn-save-channel-profile">Save Profile</button>
+                  <span id="manage-profile-status" style="font-size:12px; color:var(--text-muted);"></span>
+                </div>
+                <p style="margin:8px 0 0; font-size:11px; color:var(--text-muted);">Off-chain — saves name, description, and images in a single backend call. Images are pinned to IPFS via your PC2 node and the Elacity gateway. (Subscription Plans &amp; Token Gating below are on-chain — each change is its own transaction.)</p>
               </div>
             </div>
 
@@ -677,6 +713,14 @@
                 <div id="manage-plans-container"></div>
                 <div style="display:flex; gap:8px; margin-top:6px;">
                   <button type="button" class="inline-btn" id="btn-manage-add-plan">+ Add Plan</button>
+                </div>
+                <div id="manage-plans-pending-bar" style="display:none; margin-top:10px; padding:10px 12px; background:var(--bg-elevated); border:1px solid var(--border); border-radius:6px;">
+                  <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+                    <span id="manage-plans-pending-count" style="font-size:12px; font-weight:600; color:var(--text); flex:1; min-width:180px;"></span>
+                    <button type="button" class="inline-btn" id="btn-manage-discard-plans" style="display:inline-flex; align-items:center; line-height:1; font-family:inherit;">Discard</button>
+                    <button type="button" class="inline-btn primary" id="btn-manage-save-plans" style="display:inline-flex; align-items:center; line-height:1; font-family:inherit;">Save changes</button>
+                  </div>
+                  <div style="margin-top:6px; font-size:11px; color:var(--text-muted);">All staged changes apply in a single on-chain transaction (one wallet signature).</div>
                 </div>
                 <span id="manage-plans-status" style="font-size:12px; color:var(--text-muted); display:block; margin-top:6px;"></span>
               </div>
@@ -745,6 +789,6 @@
   </div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.0/ethers.umd.min.js"></script>
-  <script src="app.js?v=3.1.2"></script>
+  <script src="app.js?v=3.3.5-catalog-mirror"></script>
 </body>
 </html>

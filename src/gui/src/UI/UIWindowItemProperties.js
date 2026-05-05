@@ -306,6 +306,48 @@ async function UIWindowItemProperties (item_name, item_path, item_uid, left, top
             const fileType = fsentry.is_dir ? 'Directory' : (fsentry.mime_type || 'Unknown');
             // size
             $(el_window).find('.item-prop-val-size').html(fsentry.size === null || fsentry.size === undefined ? '-' : window.byte_format(fsentry.size));
+
+            // .ddrm capsules: the on-disk size (~1KB) is the JSON descriptor — users want
+            // to see the *content* size (e.g. "Star of Bethlehem.ddrm → 193.5 MB"). Mirror
+            // the same enrichment that UIItem.js does in the file-list view so the properties
+            // dialog stays consistent. Cached per (path, modified) on the same window-level
+            // map. Falls back silently to the raw descriptor size if the read fails.
+            if ( fsentry.name
+                 && (/\.ddrm(\s*\(\d+\))?$/i.test(fsentry.name)
+                     || /\.edrm(\s*\(\d+\))?$/i.test(fsentry.name)
+                     || /\.ddrm(\s*\(\d+\))?\.json$/i.test(fsentry.name))
+                 && item_path ) {
+                window.__ddrmContentSizeCache = window.__ddrmContentSizeCache || new Map();
+                const cacheKey = `${item_path}::${fsentry.modified || 0}`;
+                (async () => {
+                    try {
+                        let contentSize = window.__ddrmContentSizeCache.get(cacheKey);
+                        if ( contentSize === undefined ) {
+                            const apiOrigin = window.api_origin || window.location.origin;
+                            const token = window.auth_token || (typeof puter !== 'undefined' && puter.authToken) || '';
+                            const readRes = await fetch(`${apiOrigin}/read`, {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                    ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+                                },
+                                body: JSON.stringify({ path: item_path }),
+                            });
+                            if ( !readRes.ok ) throw new Error(`Read failed: ${readRes.status}`);
+                            const descriptor = JSON.parse(await readRes.text());
+                            const raw = descriptor && (descriptor.pinnedSizeBytes || descriptor.estimatedSizeBytes || 0);
+                            contentSize = Number(raw) > 0 ? Number(raw) : null;
+                            window.__ddrmContentSizeCache.set(cacheKey, contentSize);
+                        }
+                        if ( !contentSize || typeof window.byte_format !== 'function' ) return;
+                        const descriptorSize = fsentry.size || 0;
+                        const formatted = `${window.byte_format(contentSize)} <span style="color: var(--text-muted, #888); font-size: 11px;">(descriptor ${window.byte_format(descriptorSize)})</span>`;
+                        $(el_window).find('.item-prop-val-size').html(formatted);
+                    } catch (e) {
+                        // Non-fatal — leaves the original descriptor size in place.
+                    }
+                })();
+            }
             // modified
             $(el_window).find('.item-prop-val-modified').html(fsentry.modified === 0 ? '-' : timeago.format(fsentry.modified * 1000));
             // created

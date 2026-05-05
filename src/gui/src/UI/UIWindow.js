@@ -145,7 +145,11 @@ async function UIWindow(options) {
     options.top = options.top ?? default_window_top;
     options.type = options.type ?? null;
     options.update_window_url = options.update_window_url ?? false;
-    options.layout = options.layout ?? window.get_explorer_layout_preference?.() ?? 'icons';
+        // v1.2.7.7: default to list view ("details") for new windows / fresh
+        // users. Existing users keep whatever they set via the toggle (stored
+        // in localStorage.puter_explorer_layout), and per-folder saved layouts
+        // still take precedence — this only changes the cold-start default.
+        options.layout = options.layout ?? window.get_explorer_layout_preference?.() ?? 'details';
     options.width = options.width ?? 960;
     options.window_css = options.window_css ?? {};
     options.window_class = (options.window_class !== undefined ? ' ' + options.window_class : '');
@@ -3286,7 +3290,7 @@ window.update_window_path = async function(el_window, target_path){
                 $(el_window).attr('data-uid', fsentry.id);
                 $(el_window).attr('data-sort_by', fsentry.sort_by ?? 'name');
                 $(el_window).attr('data-sort_order', fsentry.sort_order ?? 'asc');
-                const layout = window.get_explorer_layout_preference?.() ?? fsentry.layout ?? 'icons';
+                const layout = window.get_explorer_layout_preference?.() ?? fsentry.layout ?? 'details';
                 $(el_window).attr('data-layout', layout);
                 $(el_window_item_container).attr('data-uid', fsentry.id);
                 // title
@@ -3779,7 +3783,7 @@ window.explore_table_headers = function(){
 }
 
 window.update_window_layout = function(el_window, layout){
-    layout = layout ?? 'icons';
+    layout = layout ?? 'details';
     if (layout === 'list') layout = 'details';
 
     if(layout === 'icons'){
