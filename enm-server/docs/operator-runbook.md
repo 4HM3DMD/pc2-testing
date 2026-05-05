@@ -76,15 +76,60 @@ To upgrade ela itself (e.g. when a new mainnet release ships):
 
 1. Open ENM → tap the gear icon (top-right) →
    **For the technically curious → Show technical details**.
-2. On the **Status** sub-tab, find the Mainchain card and click **Stop**.
-3. Switch to the **Settings** sub-tab → **Mainchain Advanced** →
-   **Reinstall binary**.
-4. After the new binary lands, switch back to the Status sub-tab and
-   click **Start** on the Mainchain card.
+2. On the **Status** sub-tab, scroll to the Mainchain card and click
+   **Stop**.
+3. Scroll further to the **Maintenance** section → tap **Run** next to
+   *Update binary*. This re-downloads the latest `ela` + `ela-cli`
+   from `download.elastos.io` (mirrors `node.sh`'s `ela_update`).
+4. When the download finishes, click **Start** on the Mainchain card.
 
 (For most operators, this happens automatically when you tap
 *Reinstall my node* in the settings drawer — that re-runs the setup
 conversation and pulls the latest version.)
+
+---
+
+## Maintenance — power-user actions
+
+The Status sub-tab inside the technical view has a **Maintenance**
+section near the bottom. Three actions, mirroring the most common
+`node.sh` commands operators historically ran by hand:
+
+| Action | What it runs | When to use it |
+|---|---|---|
+| **Compact logs** | `POST /chains/mainchain/compact-logs` — gzips + purges `ela.log` per the rotation policy in chain config | "Free space now" — the daily cron does this anyway, but you can force it |
+| **Update binary** | `POST /chains/mainchain/update` — calls `EnmBinaryDownloader.start()`, which mirrors `node.sh:1173 ela_update` | Pulling a new mainnet release. Stop the chain first. |
+| **Reactivate BPoS supernode** | `POST /chains/mainchain/bpos/activate` — mirrors `node.sh:1590 ela_activate_bpos`, runs `ela-cli wallet buildtx producer activate --nodepublickey <pk>` then `wallet sendtx` | Your producer accumulated too many missed-rounds and the chain flipped you to `Inactive`. Without reactivation, you keep losing votes. |
+
+The Reactivate button **also surfaces on the home hero card** when
+the chain reports `producer.state === 'Inactive'`, so an avg-joe
+operator sees "Reactivate my BPoS supernode" alongside the regular
+"Pause my ElastOS" without ever opening the technical view.
+
+### Where these commands run
+
+Server-side. The keystore.dat ENM already manages is the producer
+signing key — using it server-side is exactly what `node.sh` does.
+This is in scope per
+[Architectural Invariant #2](architecture.md#2-operator-wallet--identity-never-signs):
+that invariant forbids *browser-wallet* signing (no WalletConnect /
+Particle coupling), not all on-chain ops. The keystore password is
+decrypted from `cfg.dpos.keystorePasswordEncrypted` via
+`EnmEncryption` (same path the chain-start uses to unlock the
+producer key on stdin).
+
+### What's still externalized
+
+`producer register v2` (initial BPoS registration) needs the 2,000
+ELA deposit which lives in the operator's wallet, not on this
+server. Same for CR member registration. Both still happen via
+Essentials or `ela-cli` from a wallet machine — see the BPoS
+registration walkthroughs above.
+
+The lifecycle ops that DO need user-supplied amounts —
+`producer vote` / `stake` / `unstake` / `claim`, and DPoS 2.0's
+`returndeposit` (the v2 form of unregister) — are deferred to v0.5
+when the wallet-aware UI ships.
 
 ---
 
