@@ -115,61 +115,21 @@
                 },
             },
 
-            // Hero card states. {eta} is filled with a human-friendly duration.
-            state: {
-                unconfigured:    "Your ElastOS isn't a node yet",
-                unconfigured_sub: "Let's set it up — takes about 5 minutes.",
-                starting:        'Your ElastOS is waking up…',
-                starting_sub:    'This takes a few seconds.',
-                syncing:         'Your ElastOS is catching up',
-                syncing_sub:     'About {eta} until fully synced',
-                syncing_no_eta:  "Catching up to the network — we don't know how long yet.",
-                healthy_earn:    'Your ElastOS is happy and earning',
-                healthy_earn_sub:'Running smoothly. Keep up the good work!',
-                healthy_help:    'Your ElastOS is happy and helping',
-                healthy_help_sub:"It's quietly verifying the network. Thank you!",
-                stalled:         'Your ElastOS is having trouble keeping up',
-                stalled_sub:     'It might catch up on its own — give it a few minutes.',
-                recovering:      'Your ElastOS had a hiccup',
-                recovering_sub:  'Fixing it now — back online in a moment.',
-                stopped:         'Your ElastOS is taking a break',
-                stopped_sub:     'Tap the button to wake it up.',
-                error:           'Your ElastOS needs your attention',
-                error_sub:       "Something's not right. Tap to see what.",
-            },
-
-            // Stat strip below the hero card.
-            stat: {
-                earnings_value:   '{n} ELA',
-                earnings_label:   'earned',
-                uptime_label:     'running',
-                uptime_d:         '{n}d',
-                uptime_h:         '{n}h',
-                uptime_m:         '{n}m',
-                peers_label:      'friends',
-                peers_zero:       'finding friends…',
-                eta_min:          '{n} min',
-                eta_hr:           '{n}h {m}m',
-            },
-
-            // Buttons that show under the hero based on state.
-            action: {
-                start_node:    'Wake my ElastOS up',
-                stop_node:     'Pause my ElastOS',
-                restart_node:  'Restart my ElastOS',
-                set_up:        'Set up my node',
-                see_details:   'See what happened',
-                register:      'Register for rewards →',
-            },
-
-            // One-time celebration toasts.
-            milestone: {
-                first_sync:    '🎉 Your ElastOS just synced for the first time!',
-                first_reward:  '💰 Your ElastOS earned its first ELA!',
-                first_week:    '⭐ Your ElastOS has been running for a whole week!',
-            },
-
-            // Friendly notification text (replaces F1-F19 raw rule names).
+            // v0.5 reset notes:
+            //   - Removed the friendly state vocabulary (healthy_earn,
+            //     syncing, stalled, etc.) — those were inferred from
+            //     partial backend data and frequently lied. The
+            //     post-setup home view is now the technical dashboard,
+            //     which renders only fields the API explicitly returns.
+            //   - Removed the stat-strip vocabulary (earned/running/peers)
+            //     for the same reason: the strip hard-coded a "votes as
+            //     proxy for earned ELA" lie. v0.6+ will reintroduce
+            //     stats once a real earned-ELA tracker exists.
+            //   - Removed the milestone celebrations — they pivoted on
+            //     the same fragile inference layer.
+            //   - notif.* is preserved because the toast texts are still
+            //     used by the proposal pipeline (CRITICAL prompts pop on
+            //     top of the dashboard).
             notif: {
                 auto_restart:    'Your ElastOS had a hiccup and restarted itself. All good now.',
                 needs_attention: 'Your ElastOS needs a moment — tap to see what happened.',

@@ -52,9 +52,11 @@
     function SettingsDrawer(opts) {
         opts = opts || {};
         this.notifications  = opts.notifications || null;
+        // null = no "Show technical details" row in the drawer (v0.5 default,
+        // because the technical dashboard IS the home). Function = wire it.
         this.onShowTechnical = typeof opts.onShowTechnical === 'function'
             ? opts.onShowTechnical
-            : function () {};
+            : null;
         this.onReinstall = typeof opts.onReinstall === 'function'
             ? opts.onReinstall
             : function () {};
@@ -219,16 +221,22 @@
         var advanced = makeSection('For the technically curious', [], this._prefs, function () {});
         var rows = advanced.querySelector('.enm-drawer-rows');
 
-        var techBtn = makeAction('Show technical details', function () {
-            self.close();
-            self.onShowTechnical();
-        });
+        // v0.5 reset: "Show technical details" was needed when the home
+        // was the friendly hero view. The technical dashboard IS the home
+        // now, so we hide the disclosure unless the parent explicitly
+        // wires onShowTechnical (kept for forward compatibility).
+        if (typeof self.onShowTechnical === 'function') {
+            var techBtn = makeAction('Show technical details', function () {
+                self.close();
+                self.onShowTechnical();
+            });
+            rows.appendChild(techBtn);
+        }
         var reinstallBtn = makeAction('Reinstall my node', function () {
             if (!confirm('Reinstall your node? This re-runs the setup wizard. Your existing config will stay until you finish setup again.')) { return; }
             self.close();
             self.onReinstall();
         });
-        rows.appendChild(techBtn);
         rows.appendChild(reinstallBtn);
         body.appendChild(advanced);
     };

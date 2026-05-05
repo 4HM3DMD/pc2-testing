@@ -98,6 +98,12 @@ function build(extensionHandle) {
                 binaryPath: chainCfg.binaryPath,
                 binaryVersion: chainCfg.binaryVersion,
                 activeNet: chainCfg.activeNet,
+                // Operator intent (from setup conversation) — distinct from
+                // producer.enabled (registration status). The hero card uses
+                // this to label the role correctly even before on-chain
+                // registration is complete.
+                enableArbiter: !!(chainCfg.dpos && chainCfg.dpos.enableArbiter),
+                hasKeystore: !!(chainCfg.dpos && chainCfg.dpos.keystorePasswordEncrypted),
             }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} GET /chains/${req.params.chainId}: ${err.message}`);

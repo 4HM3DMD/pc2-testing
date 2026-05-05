@@ -33,12 +33,14 @@
 
     function TechnicalView(opts) {
         if (!opts || !opts.api) {
-            throw new TypeError('TechnicalView: { api, sse, notifications, onBackHome } required');
+            throw new TypeError('TechnicalView: { api, sse, notifications, onBackHome? } required');
         }
         this.api = opts.api;
         this.sse = opts.sse || null;
         this.notifications = opts.notifications || null;
-        this.onBackHome = typeof opts.onBackHome === 'function' ? opts.onBackHome : function () {};
+        // null = no "back to home" link (v0.5 default — this view IS home).
+        // Function = render the link and call it on click.
+        this.onBackHome = typeof opts.onBackHome === 'function' ? opts.onBackHome : null;
 
         this.root = document.createElement('section');
         this.root.className = 'enm-tech';
@@ -70,16 +72,22 @@
 
         var header = document.createElement('header');
         header.className = 'enm-tech-header';
-        header.innerHTML =
-            '<button type="button" class="enm-tech-back enm-conv-textlink">'
+        var backHtml = this.onBackHome
+            ? '<button type="button" class="enm-tech-back enm-conv-textlink">'
               + '<span aria-hidden="true">←</span> Back to home'
             + '</button>'
-            + '<h1 class="enm-tech-title">Technical details</h1>'
-            + '<p class="enm-tech-sub">Full operator view. Real names — RPC, log level, '
-              + 'healing rule IDs, sync height. Use this if you know what you\'re looking for.</p>';
-        header.querySelector('.enm-tech-back').addEventListener('click', function () {
-            self.onBackHome();
-        });
+            : '';
+        header.innerHTML =
+            backHtml
+            + '<h1 class="enm-tech-title">Elastos Node Manager</h1>'
+            + '<p class="enm-tech-sub">Real names — RPC, log level, healing rule IDs, '
+              + 'sync height, BPoS state. Every value below comes directly from the '
+              + 'backend; nothing inferred.</p>';
+        if (this.onBackHome) {
+            header.querySelector('.enm-tech-back').addEventListener('click', function () {
+                self.onBackHome();
+            });
+        }
         this.root.appendChild(header);
 
         // Sub-tab nav.

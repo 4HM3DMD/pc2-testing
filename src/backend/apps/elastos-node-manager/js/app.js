@@ -155,7 +155,11 @@
             var self = this;
             this._drawer = new root.EnmSettingsDrawer({
                 notifications: this.services.notifications,
-                onShowTechnical: function () { self._showTechnicalView(); },
+                // v0.5 reset: technical view is the default home, so the
+                // "Show technical details" disclosure is no longer needed.
+                // The drawer's onShowTechnical handler is a no-op now;
+                // settings-drawer.js hides the row when not provided.
+                onShowTechnical: null,
                 onReinstall:     function () { self._showSetupWizard(); },
             });
             this._drawer.mount(document.body);
@@ -169,24 +173,6 @@
      *
      * @private
      */
-    ENMApp.prototype._showTechnicalView = function () {
-        if (!root.EnmTechnicalView) { return; }
-        // Tear down hero/stats/SSE before swapping — otherwise the home
-        // view's polls keep firing in the background.
-        if (typeof this._teardownHomeView === 'function') { this._teardownHomeView(); }
-        this._revealContent();
-        this._collapseHeaderToHome();
-        this._clearPanes();
-        var self = this;
-        this._technicalView = new root.EnmTechnicalView({
-            api: this.services.api,
-            sse: this.services.sse,
-            notifications: this.services.notifications,
-            onBackHome: function () { self._showDashboard(); },
-        });
-        this._technicalView.mount(this.els.paneDashboard);
-    };
-
     ENMApp.prototype._showSetupWizard = function () {
         // Friendly path (v0.4): Welcome → Setup conversation → Home.
         // The 5-tab dashboard chrome is hidden until setup is done.
@@ -257,87 +243,43 @@
     };
 
     ENMApp.prototype._showDashboard = function () {
-        // v0.4 home view: hero card (focal-point status) + stat strip
-        // (earnings/uptime/friends) + producer identity (BPoS only).
-        // The v0.3 dashboard now lives behind "Show technical details"
-        // in the settings drawer (Phase 5C).
+        // v0.5 reset — the home view IS the v0.3 technical dashboard.
+        //
+        // The friendly home (hero-card + stat-strip + milestone-toast)
+        // shipped in Phase 5B was making claims it couldn't back up:
+        // role inferred from registration status, "happy and earning"
+        // before the operator was actually registered, "friends" instead
+        // of peers, fake earned counts. We deleted those components in
+        // v0.5. Setup conversation + welcome still ship (they pull only
+        // verifiable backend state); everything post-setup goes straight
+        // to the technical view, which renders only what the API
+        // explicitly returns.
         this._revealContent();
         this._collapseHeaderToHome();
         this._clearPanes();
-
-        // Tear everything down so back-and-forth between home and the
-        // technical view doesn't leak SSE subscriptions, polls, or
-        // intervals. Each unmount call is idempotent (component checks
-        // its own root.parentNode before removing).
         this._teardownHomeView();
 
+        if (!root.EnmTechnicalView) {
+            // Defensive fallback: if the script tag is missing, surface
+            // a clear error rather than silently rendering nothing.
+            this.els.paneDashboard.innerHTML =
+                '<p class="enm-stub">Technical view component not loaded. '
+                + 'Hard-refresh the page (Ctrl-Shift-R).</p>';
+            return;
+        }
+
         var self = this;
-        var pane = this.els.paneDashboard;
+        this._technicalView = new root.EnmTechnicalView({
+            api: this.services.api,
+            sse: this.services.sse,
+            notifications: this.services.notifications,
+            // No "back to home" button — the technical view IS home now.
+            onBackHome: null,
+        });
+        this._technicalView.mount(this.els.paneDashboard);
 
-        // Hero card.
-        if (root.EnmHeroCard) {
-            this._hero = new root.EnmHeroCard({
-                chainId: 'mainchain',
-                api: this.services.api,
-                sse: this.services.sse,
-                notifications: this.services.notifications,
-                onAction: function (action) {
-                    if (action === 'setup') {
-                        self._showSetupWizard();
-                    } else if (action === 'details') {
-                        // Now that the technical view ships (Phase 5C),
-                        // route stalled/error states there directly so the
-                        // operator can see logs + audit + raw chain state.
-                        self._showTechnicalView();
-                    }
-                },
-            });
-            this._hero.mount(pane);
-        }
-
-        // Stat strip below the hero.
-        if (root.EnmStatStrip) {
-            this._stats = new root.EnmStatStrip({
-                chainId: 'mainchain',
-                api: this.services.api,
-            });
-            this._stats.mount(pane);
-        }
-
-        // Producer identity card — only mounts if a keystore exists
-        // (the component itself decides this from /setup/keystore/account).
-        if (root.EnmProducerIdentity) {
-            this._producer = new root.EnmProducerIdentity({
-                chainId: 'mainchain',
-                api: this.services.api,
-                notifications: this.services.notifications,
-            });
-            this._producer.mount(pane);
-        }
-
-        // Milestone watchers — fire one-time celebrations when the
-        // operator's ElastOS hits first-sync, first-reward, first-week.
-        // We poll every 30s alongside the hero/stat-strip refresh; the
-        // milestone helper internally guards against re-firing.
-        if (root.EnmMilestone) {
-            var milestoneTick = function () {
-                Promise.all([
-                    self.services.api.get('/chains/mainchain', { skipCache: true }).catch(function () { return null; }),
-                    self.services.api.get('/chains/mainchain/producer', { skipCache: true }).catch(function () { return null; }),
-                ]).then(function (results) {
-                    var ctx = { chain: results[0], producer: results[1] };
-                    root.EnmMilestone.maybeFire('first_sync',   ctx);
-                    root.EnmMilestone.maybeFire('first_reward', ctx);
-                    root.EnmMilestone.maybeFire('first_week',   ctx);
-                });
-            };
-            milestoneTick();
-            this._milestoneTimer = setInterval(milestoneTick, 30000);
-        }
-
-        // Notifications pipeline — keep the v0.3 SSE wiring so CRITICAL
-        // proposals still pop as cards on top of the home view. Stash
-        // the unsubscribe so _teardownHomeView() can release it.
+        // Notifications pipeline — keep CRITICAL proposal cards popping
+        // on top of the dashboard.
         if (this.services.sse) {
             this._notifSub = this.services.sse.subscribe('notifications', function (payload) {
                 if (!payload) { return; }
@@ -358,22 +300,14 @@
 
     /**
      * Destroy everything _showDashboard mounted. Called on remount and
-     * when transitioning to setup / technical-view so we don't leak
-     * SSE subs, polls, or intervals.
+     * when transitioning to setup so we don't leak SSE subs or intervals.
      *
      * @private
      */
     ENMApp.prototype._teardownHomeView = function () {
-        if (this._hero)      { this._hero.destroy();      this._hero = null; }
-        if (this._stats)     { this._stats.destroy();     this._stats = null; }
-        if (this._producer)  { this._producer.destroy();  this._producer = null; }
         if (this._technicalView) {
             this._technicalView.destroy();
             this._technicalView = null;
-        }
-        if (this._milestoneTimer) {
-            clearInterval(this._milestoneTimer);
-            this._milestoneTimer = null;
         }
         if (this._notifSub) { this._notifSub(); this._notifSub = null; }
     };
