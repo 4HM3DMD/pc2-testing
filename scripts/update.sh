@@ -473,6 +473,36 @@ npm run build:backend
 # node-datachannel with the same clean-reinstall fallback pattern.
 
 # ─────────────────────────────────────────────────────────────────────
+# Step 11: Install transport sudoers (v1.2.7.9+).
+#
+# wg-quick and awg-quick on macOS+Linux need root to create network
+# interfaces. Without a sudoers.d entry, pc2-node (running headless
+# under pm2 with no TTY) cannot escalate, the bring-up fails, and
+# the connectivity cascade silently falls to ActiveProxy.
+#
+# This step asks the user for their password ONCE during update so the
+# bring-up at runtime works without further prompts. The grant is
+# scoped to ONLY the bundled wg-quick + awg-quick binaries — no broader
+# privilege escalation. Removing /etc/sudoers.d/pc2-wireguard revokes.
+#
+# On macOS launcher users (who don't run update.sh directly), the
+# WireGuardService.connect() runtime auto-prompt picks this up via
+# osascript GUI dialog. Here we cover terminal-update users on both
+# macOS and Linux.
+#
+# The script is idempotent + fail-soft: already-installed entries skip,
+# missing binaries skip with a hint, headless contexts skip cleanly.
+# ─────────────────────────────────────────────────────────────────────
+echo ""
+echo "🔐 Step 11: Configuring transport permissions..."
+if [ -x "$PC2_DIR/scripts/setup-transport-permissions.sh" ]; then
+    bash "$PC2_DIR/scripts/setup-transport-permissions.sh" \
+        || echo "   ⚠️  Sudoers install skipped or failed — pc2 will still start; runtime will retry on macOS or fall to ActiveProxy."
+else
+    echo "   ⚠️  setup-transport-permissions.sh not found in this revision — older pc2 layout, skipping."
+fi
+
+# ─────────────────────────────────────────────────────────────────────
 # Step 12: Start under PM2.
 # Prefer ecosystem.config.cjs if present (handles env, restart policy,
 # log paths). Falls back to bare invocation otherwise.

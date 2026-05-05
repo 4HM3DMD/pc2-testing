@@ -85,6 +85,12 @@ export class WireGuardService {
     private wgQuickBinPath: string | null = null;
     private wgGoBinPath: string | null = null;
     private _sudoConfigured = false;
+    // v1.2.7.9: track whether we've already shown the macOS sudoers auth dialog
+    // this session. Without this flag we'd re-prompt on every reconnect attempt
+    // (e.g. when scheduleEndpointFreshnessCheck triggers a retry), spamming the
+    // user. Resets on pc2-node restart so a previously-declined user gets a
+    // fresh chance after relaunching.
+    private _permissionPromptAttempted = false;
 
     /**
    * Resolve the bundled binaries directory for the current platform.
@@ -493,6 +499,57 @@ export class WireGuardService {
             execSync(`${this.wgQuickCmd('down', confPath)} 2>/dev/null`, { stdio: 'pipe', shell: '/bin/sh' });
         } catch {
             // Interface may not be up
+        }
+
+        // v1.2.7.9: auto-trigger macOS sudoers install on first connect attempt.
+        //
+        // Background: wg-quick on macOS needs root to create the utun device and
+        // write routes. wgQuickCmd() returns `sudo wg-quick up <conf>`. Since
+        // pc2-node runs headless under pm2 (no TTY, no askpass program), the
+        // sudo invocation fails immediately with "a terminal is required to read
+        // the password" — wg-quick never runs, the cascade silently falls to
+        // ActiveProxy. Every Mac user installing PC2 hit this from v1.2.7.0
+        // through v1.2.7.8 even after we shipped the missing wg/wg-quick binaries
+        // because the binaries alone don't help if sudo can't authorise.
+        //
+        // The fix: before the bring-up, if we're on macOS and sudoers isn't
+        // configured, await setupPermissions() which uses `osascript ... with
+        // administrator privileges` to show a native macOS auth dialog. The user
+        // enters their login password once; we install a sudoers.d drop-in
+        // scoped to BOTH bundled wg-quick AND awg-quick (see
+        // setupPermissions.ts:buildSudoersEntry — single prompt unlocks
+        // WireGuard, AmneziaWG, and transitively VLESS Reality which tunnels
+        // through AWG). sudo then works without password and the bring-up
+        // below succeeds.
+        //
+        // Linux is excluded because setupLinux() uses `sudo tee` which requires
+        // an existing sudo session and has no GUI fallback — would hang headless.
+        // Linux users are guided to the in-app /api/wireguard/setup-permissions
+        // endpoint or the manual instructions from getPermissionInstructions().
+        //
+        // Failure modes:
+        //   - User dismisses the dialog → log warning, fall through to wg-quick up
+        //     which will fail with the original "no terminal" error → cascade
+        //     moves to next transport. Same behaviour as before this fix.
+        //   - osascript itself fails (e.g. headless Mac mini server, no
+        //     WindowServer) → setupMacOS() resolves with success: false, same
+        //     fall-through. No regression vs. pre-v1.2.7.9.
+        //   - User grants → _sudoConfigured flips true, wg-quick up succeeds.
+        if (
+            WireGuardService.isMacOS
+            && !this._sudoConfigured
+            && !this._permissionPromptAttempted
+        ) {
+            this._permissionPromptAttempted = true;
+            logger.info('[WireGuard] macOS sudoers entry missing; prompting user via osascript admin dialog');
+            const result = await this.setupPermissions();
+            if (result.success) {
+                logger.info('[WireGuard] Sudoers entry installed; proceeding with bring-up');
+            } else {
+                logger.warn(`[WireGuard] Sudoers install declined or failed: ${result.message}`);
+                // Fall through. wg-quick up will fail without sudo and the
+                // cascade will move on to the next transport.
+            }
         }
 
         try {
