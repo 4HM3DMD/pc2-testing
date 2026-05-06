@@ -78,6 +78,15 @@
     };
 
     SettingsDrawer.prototype.destroy = function () {
+        // Unwire the document-level ESC handler before tearing the DOM down —
+        // otherwise the listener leaks (this happened on every "Reinstall my
+        // node" flow, which destroys+recreates the app shell).
+        if (this._escHandler) {
+            document.removeEventListener('keydown', this._escHandler);
+            this._escHandler = null;
+        }
+        if (this._closeTimer) { clearTimeout(this._closeTimer); this._closeTimer = null; }
+        this._open = false;
         if (this.root.parentNode) { this.root.parentNode.removeChild(this.root); }
     };
 
@@ -106,8 +115,14 @@
             this._escHandler = null;
         }
         // Wait for the slide-out transition before hiding so it animates.
+        // Track the timer id so destroy() can cancel it if we're torn down
+        // mid-animation (otherwise the timer holds a reference to our root).
         var self = this;
-        setTimeout(function () { if (!self._open) { self.root.hidden = true; } }, 320);
+        if (this._closeTimer) { clearTimeout(this._closeTimer); }
+        this._closeTimer = setTimeout(function () {
+            self._closeTimer = null;
+            if (!self._open && self.root) { self.root.hidden = true; }
+        }, 320);
     };
 
     /** @private */

@@ -73,11 +73,18 @@
     };
 
     ChainCard.prototype.destroy = function () {
-        if (this._unsubscribe) { this._unsubscribe(); }
-        if (this._cooldownTimer) { clearInterval(this._cooldownTimer); }
-        if (this._metricsTimer) { clearInterval(this._metricsTimer); }
-        if (this._producerTimer) { clearInterval(this._producerTimer); }
-        if (this._syncTimer) { clearTimeout(this._syncTimer); }
+        // Order matters: set the destroyed flag first so any in-flight
+        // promise (refresh / _refreshSync / _refreshProducer) bails out
+        // when it resolves instead of calling _applyState on a detached
+        // DOM. Then clear all timers (no new work scheduled). Then
+        // unsubscribe from SSE last — until the very end an event can
+        // still arrive, but the destroyed flag in _applyState catches it.
+        this._destroyed = true;
+        if (this._cooldownTimer) { clearInterval(this._cooldownTimer); this._cooldownTimer = null; }
+        if (this._metricsTimer) { clearInterval(this._metricsTimer); this._metricsTimer = null; }
+        if (this._producerTimer) { clearInterval(this._producerTimer); this._producerTimer = null; }
+        if (this._syncTimer) { clearTimeout(this._syncTimer); this._syncTimer = null; }
+        if (this._unsubscribe) { this._unsubscribe(); this._unsubscribe = null; }
         if (this.root.parentNode) { this.root.parentNode.removeChild(this.root); }
     };
 
@@ -171,6 +178,9 @@
     };
 
     ChainCard.prototype._applyState = function (state) {
+        // Bail out if torn down — late-arriving SSE events or in-flight
+        // refresh promises can call us after destroy() removed our DOM.
+        if (this._destroyed) { return; }
         var t = root.enmTOrFallback;
         var coarse = state && state.state ? state.state : 'unconfigured';
         this._lastCoarseState = coarse;  // drives sync-poll cadence
@@ -269,15 +279,19 @@
      * @private
      */
     ChainCard.prototype._refreshSync = function () {
+        if (this._destroyed) { return; }
         var self = this;
         this.api.get('/chains/' + this.chainId + '/sync', { skipCache: true }).then(function (data) {
+            if (self._destroyed) { return; }
             self._renderSyncPanel(data);
         }).catch(function () {
+            if (self._destroyed) { return; }
             // Don't leave the panel showing stale velocity from the
             // last successful poll. Render with null data so the bar
             // and metrics line clear; the next tick will repopulate.
             self._renderSyncPanel(null);
         }).then(function () {
+            if (self._destroyed) { return; }
             if (!self.root || !self.root.isConnected) { return; }
             // Always re-arm. State drives cadence: 10s while syncing,
             // 60s while healthy/stalled/stopped.

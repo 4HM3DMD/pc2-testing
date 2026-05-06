@@ -310,6 +310,14 @@
             this._technicalView = null;
         }
         if (this._notifSub) { this._notifSub(); this._notifSub = null; }
+        // The settings drawer is lazy-mounted on first gear click. When we
+        // transition out of the home view (e.g. to the setup wizard via
+        // "Reinstall my node"), tear it down so its document-level ESC
+        // handler doesn't outlive the home shell.
+        if (this._drawer) {
+            this._drawer.destroy();
+            this._drawer = null;
+        }
     };
 
     /**

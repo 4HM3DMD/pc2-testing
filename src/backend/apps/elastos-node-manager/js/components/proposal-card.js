@@ -52,10 +52,17 @@
         if (this._closed) { return; }
         this._closed = true;
         if (this._cooldownTimer) { clearInterval(this._cooldownTimer); this._cooldownTimer = null; }
-        if (this._escHandler) { document.removeEventListener('keydown', this._escHandler); }
+        if (this._escHandler) {
+            document.removeEventListener('keydown', this._escHandler);
+            this._escHandler = null;
+        }
         if (this.root.parentNode) { this.root.parentNode.removeChild(this.root); }
         this.onClose();
     };
+
+    // Alias for symmetry with other components — some parents call destroy()
+    // unconditionally during teardown. Idempotent via the _closed guard.
+    ProposalCard.prototype.destroy = function () { this.close(); };
 
     /** @private */
     ProposalCard.prototype._renderShell = function () {

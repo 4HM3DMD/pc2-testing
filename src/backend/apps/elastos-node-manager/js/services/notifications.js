@@ -77,14 +77,23 @@
             return;
         }
         var item = this._items[idx];
+        this._items.splice(idx, 1);
+        if (silent) {
+            // Dedup path (called from show() before appending the replacement
+            // node). Remove synchronously so we don't end up with two DOM
+            // nodes carrying the same id in the same tick.
+            if (item.node.parentNode) {
+                item.node.parentNode.removeChild(item.node);
+            }
+            return;
+        }
         item.node.classList.add('enm-toast-leaving');
         // Wait for the CSS transition; remove after.
         setTimeout(function () {
             if (item.node.parentNode) {
                 item.node.parentNode.removeChild(item.node);
             }
-        }, silent ? 0 : 200);
-        this._items.splice(idx, 1);
+        }, 200);
     };
 
     Notifications.prototype.clear = function () {
