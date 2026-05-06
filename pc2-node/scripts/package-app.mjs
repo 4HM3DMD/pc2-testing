@@ -206,10 +206,24 @@ function buildManifest({ version, signatureHex, publisherHex }) {
             entry: SERVICE_BACKEND_ENTRY,
             port: SERVICE_PORT,
             healthCheck: SERVICE_HEALTH_PATH,
+            // pc2-node calls this BEFORE SIGTERM on uninstall (purge mode)
+            // so ENM can copy keystore.dat to PC2's data root before its
+            // dirs are nuked. Without this, an uninstall would lose the
+            // operator's BPoS supernode key — unrecoverable.
+            teardown: {
+                endpoint: '/api/enm/teardown',
+                timeoutMs: 30_000,
+            },
         },
         capabilities: {
             network: true,
         },
+        // Paths ENM writes to OUTSIDE its bundle dir — pc2-node deletes
+        // these on purge-uninstall. Chain data, audit DB, binaries all live
+        // here. Keystore lives here too but the teardown hook above copies
+        // it to a safe location BEFORE this purge runs. /data/enm is the
+        // hardcoded ENM data root (see enm-server/src/services/DataDir.js).
+        externalDataDirs: ['/data/enm'],
         distribution: {
             // Populate `cid` after uploading the tarball to IPFS. The dApp
             // Store catalog reads this manifest verbatim and POSTs it to

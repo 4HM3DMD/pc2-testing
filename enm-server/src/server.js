@@ -29,6 +29,37 @@ const cors = require('cors');
 const path = require('node:path');
 const fs = require('node:fs');
 
+/**
+ * Copy keystore.dat into PC2's data root so it survives an ENM
+ * uninstall+purge. The keystore is the ONLY unrecoverable piece —
+ * losing it means losing the registered BPoS supernode on-chain.
+ * Chain data, audit DB, binaries, configs are all re-creatable.
+ *
+ * Returns a summary the operator's UI can surface so they know where
+ * the backup lives.
+ */
+function backupKeystoreForTeardown() {
+    const EnmKeystoreService = require('./services/EnmKeystoreService');
+    const svc = new EnmKeystoreService();
+    const src = svc.keystorePath();
+    if (!fs.existsSync(src)) {
+        return { keystore_backed_up: false, reason: 'no keystore present' };
+    }
+    const pc2Data = process.env.PC2_DATA_DIR || '/var/lib/pc2/data';
+    const backupRoot = path.join(pc2Data, 'backups', 'elastos-node-manager');
+    fs.mkdirSync(backupRoot, { recursive: true, mode: 0o700 });
+    const ts = new Date().toISOString().replace(/[:.]/g, '-');
+    const dst = path.join(backupRoot, `keystore-${ts}.dat`);
+    fs.copyFileSync(src, dst);
+    fs.chmodSync(dst, 0o600);
+    return {
+        keystore_backed_up: true,
+        backup_path: dst,
+        original_path: src,
+        message: `Keystore backed up. To restore: cp ${dst} ${src}`,
+    };
+}
+
 const { openDb } = require('./db');
 
 // Services
@@ -127,6 +158,26 @@ async function main() {
             isOwner = owner ? _walletsEqual(wallet, owner) : false;
         } catch (_) { /* fail closed on owner check */ }
         res.json(successBody({ wallet_address: wallet, isOwner }));
+    });
+
+    // --- Teardown hook for service-type uninstall ---------------------------
+    // pc2-node POSTs here on uninstall (purge mode) BEFORE SIGTERMing us.
+    // We back up the only unrecoverable file (keystore.dat) to PC2's data
+    // root so a re-install can recover the operator's BPoS supernode.
+    //
+    // Loopback-only — pc2-node calls us at 127.0.0.1; rejecting non-local
+    // callers means a stray request can't trigger keystore copy operations.
+    api.post('/teardown', (req, res) => {
+        const ip = req.ip || req.socket.remoteAddress || '';
+        if (!ip.startsWith('127.') && ip !== '::1' && ip !== '::ffff:127.0.0.1') {
+            return res.status(403).json(errorBody('teardown is loopback-only'));
+        }
+        try {
+            const result = backupKeystoreForTeardown();
+            return res.json(successBody(result));
+        } catch (err) {
+            return res.status(500).json(errorBody(`teardown failed: ${err.message}`));
+        }
     });
 
     api.use('/setup',  setupRouter.build(extensionHandle));

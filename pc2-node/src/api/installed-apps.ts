@@ -11,7 +11,8 @@
  * the dApp Store UI continue to work for non-owner sessions.
  */
 
-import { join } from 'path';
+import { join, normalize, resolve as resolvePath } from 'path';
+import { existsSync, rmSync, mkdirSync } from 'fs';
 import { Router, Response } from 'express';
 import { Server as SocketIOServer } from 'socket.io';
 import { AuthenticatedRequest, requireOwner } from './middleware.js';
@@ -338,17 +339,49 @@ export function createInstalledAppsRouter(
    */
   router.delete('/:name', requireOwner, async (req: AuthenticatedRequest, res: Response) => {
     try {
-      // If this app has a running service backend, stop it FIRST.
-      // Otherwise the file deletion below races with the still-running
-      // process which has those files open (and on some FSes, ENOTEMPTY).
-      try { await processManager.stop(req.params.name); } catch { /* not running */ }
+      const appName = req.params.name;
+      // Default purge=true for service-type apps (operator's call 2026-05-07
+      // — losing the registered supernode's keystore should be the only
+      // unrecoverable thing, and the teardown hook handles that). Operator
+      // can opt out with ?purge=false to preserve all app-external state.
+      const purge = String(req.query.purge ?? 'true').toLowerCase() !== 'false';
 
-      const removed = appInstallService.uninstall(req.params.name);
-      if (!removed) {
-        res.status(404).json({ error: `App "${req.params.name}" not found` });
+      const existing = appInstallService.get(appName);
+      if (!existing) {
+        res.status(404).json({ error: `App "${appName}" not found` });
         return;
       }
-      log.info(`[uninstall] App "${req.params.name}" removed by ${req.user?.wallet_address?.substring(0, 10)}`);
+
+      // Parse manifest from the DB row to recover teardown + externalDataDirs.
+      let manifest: AppManifest | null = null;
+      try { manifest = JSON.parse(existing.manifest_json) as AppManifest; } catch { /* malformed; treat as no metadata */ }
+
+      // 1. Pre-stop teardown — give the service a chance to back up
+      //    critical state (e.g. ENM exports keystore). Service still
+      //    listening on its port at this point.
+      let teardownResult: unknown = null;
+      if (purge && manifest?.type === 'service' && manifest.backend?.teardown?.endpoint) {
+        teardownResult = await callTeardown(manifest, processManager.getStatus(appName).port);
+      }
+
+      // 2. Stop the spawned process (if any).
+      try { await processManager.stop(appName); } catch { /* not running */ }
+
+      // 3. Remove the bundle + DB row (existing behaviour).
+      const removed = appInstallService.uninstall(appName);
+      if (!removed) {
+        res.status(404).json({ error: `App "${appName}" not found` });
+        return;
+      }
+      log.info(`[uninstall] App "${appName}" removed by ${req.user?.wallet_address?.substring(0, 10)}`);
+
+      // 4. On purge, also wipe declared external data dirs.
+      const purgedDirs: string[] = [];
+      if (purge && manifest?.externalDataDirs) {
+        for (const dir of manifest.externalDataDirs) {
+          if (purgeExternalDir(dir, appName)) purgedDirs.push(dir);
+        }
+      }
 
       // Notify room so Start menu drops its cached entry.
       // See DAPP-UX-POLISH-V12 #4.
@@ -357,10 +390,15 @@ export function createInstalledAppsRouter(
       if (io && wallet) {
         broadcastToUser(io, wallet, 'apps:changed', {
           action: 'uninstalled',
-          appName: req.params.name,
+          appName,
         });
       }
-      res.json({ success: true });
+      res.json({
+        success: true,
+        purged: purge,
+        purgedDirs,
+        teardown: teardownResult,
+      });
     } catch (error: any) {
       log.error('[uninstall] Error:', error.message);
       res.status(500).json({ error: error.message });
@@ -368,4 +406,78 @@ export function createInstalledAppsRouter(
   });
 
   return router;
+}
+
+/**
+ * POST to the service's teardown endpoint with a tight timeout. Errors
+ * and timeouts are logged but do not block the rest of the uninstall —
+ * the operator's intent is to remove the app, even if the app refuses.
+ */
+async function callTeardown(manifest: AppManifest, port: number | undefined): Promise<unknown> {
+  const t = manifest.backend?.teardown;
+  if (!t) return null;
+  const targetPort = port ?? manifest.backend?.port;
+  if (!targetPort) {
+    log.warn(`[teardown] cannot reach "${manifest.name}" — no port`);
+    return null;
+  }
+  const url = `http://127.0.0.1:${targetPort}${t.endpoint}`;
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), t.timeoutMs ?? 30_000);
+  try {
+    log.info(`[teardown] POST ${url}`);
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+      signal: ctl.signal,
+    });
+    if (!res.ok) {
+      log.warn(`[teardown] ${url} returned ${res.status}; continuing uninstall`);
+      return { ok: false, status: res.status };
+    }
+    const body = await res.json().catch(() => ({}));
+    log.info(`[teardown] ${manifest.name} teardown OK`);
+    return body;
+  } catch (err: any) {
+    log.warn(`[teardown] ${manifest.name} failed: ${err.message ?? String(err)}; continuing uninstall`);
+    return { ok: false, error: err.message ?? String(err) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Delete one externalDataDir, with paranoid safety checks. The manifest
+ * validator already rejected obvious shallow paths, but defense-in-depth:
+ * also refuse anything not absolute, anything containing '..', and
+ * anything with fewer than 2 path segments after normalisation.
+ *
+ * Returns true if the dir was wiped (or was already gone), false if
+ * the safety check rejected it.
+ */
+function purgeExternalDir(dir: string, appName: string): boolean {
+  const abs = normalize(resolvePath(dir));
+  if (!abs.startsWith('/')) {
+    log.warn(`[purge] refuse non-absolute path "${dir}" for "${appName}"`);
+    return false;
+  }
+  if (abs === '/' || abs.split('/').filter(Boolean).length < 2) {
+    log.warn(`[purge] refuse top-level path "${abs}" for "${appName}"`);
+    return false;
+  }
+  if (abs.includes('..')) {
+    log.warn(`[purge] refuse path with .. — "${dir}" for "${appName}"`);
+    return false;
+  }
+  try {
+    if (existsSync(abs)) {
+      rmSync(abs, { recursive: true, force: true });
+      log.info(`[purge] wiped "${abs}" for "${appName}"`);
+    }
+    return true;
+  } catch (err: any) {
+    log.warn(`[purge] failed to wipe "${abs}" for "${appName}": ${err.message}`);
+    return false;
+  }
 }

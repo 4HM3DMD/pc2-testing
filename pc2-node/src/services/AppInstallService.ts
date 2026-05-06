@@ -145,6 +145,24 @@ export interface AppBackend {
    * config instead — these are app-author-controlled and should be limited.
    */
   env?: Record<string, string>;
+  /**
+   * Optional pre-stop teardown hook. pc2-node POSTs to this path on
+   * uninstall (purge mode) BEFORE sending SIGTERM, so the service can
+   * back up critical state — keystores, signing keys, anything
+   * unrecoverable — to a safe location.
+   *
+   * The service should respond within `teardownTimeoutMs` (default
+   * 30 000). If it times out or errors, pc2-node still proceeds with
+   * the uninstall but logs the failure. The teardown response body is
+   * echoed back to the API caller so the UI can surface where the
+   * backup landed.
+   *
+   * Apps without sensitive state can omit this entirely.
+   */
+  teardown?: {
+    endpoint: string;     // e.g. "/api/enm/teardown"
+    timeoutMs?: number;   // default 30000
+  };
 }
 
 export interface AppDistribution {
@@ -204,6 +222,23 @@ export interface AppManifest {
    * spawns on install and stops on uninstall. See AppBackend doc above.
    */
   backend?: AppBackend;
+  /**
+   * Absolute filesystem paths the app writes to OUTSIDE its bundle dir.
+   * On purge-uninstall, pc2-node deletes these in addition to the bundle.
+   *
+   * Used by services that store state outside `APP_DATA_DIR` (e.g. ENM
+   * uses `/data/enm/` for chain data, binaries, and its own DB). Without
+   * this declaration, app-external state is preserved across uninstalls
+   * (current behaviour for non-service apps).
+   *
+   * Safety:
+   *   - Paths must be absolute
+   *   - Paths must have at least 2 segments (no `/`, `/etc`, `/home`)
+   *   - Paths must not contain `..`
+   *   - The trust gate on service installs ensures only signed-by-trusted
+   *     publishers can declare these
+   */
+  externalDataDirs?: string[];
   distribution?: AppDistribution;
   dependencies?: Record<string, string>;
 }
@@ -640,6 +675,45 @@ export class AppInstallService {
       for (const [k, v] of Object.entries(b.env)) {
         if (typeof v !== 'string') {
           throw new Error(`App "${manifest.name}": backend.env.${k} must be a string`);
+        }
+      }
+    }
+
+    if (b.teardown !== undefined) {
+      if (typeof b.teardown !== 'object' || b.teardown === null || Array.isArray(b.teardown)) {
+        throw new Error(`App "${manifest.name}": backend.teardown must be an object`);
+      }
+      if (typeof b.teardown.endpoint !== 'string' || !b.teardown.endpoint.startsWith('/')) {
+        throw new Error(`App "${manifest.name}": backend.teardown.endpoint must be an absolute URL path (start with /)`);
+      }
+      if (b.teardown.timeoutMs !== undefined
+          && (typeof b.teardown.timeoutMs !== 'number' || b.teardown.timeoutMs < 1000)) {
+        throw new Error(`App "${manifest.name}": backend.teardown.timeoutMs must be a number >= 1000`);
+      }
+    }
+
+    // externalDataDirs is on the manifest, not backend, but services are
+    // the only kind that uses it — validate here while we have context.
+    if (manifest.externalDataDirs !== undefined) {
+      if (!Array.isArray(manifest.externalDataDirs)) {
+        throw new Error(`App "${manifest.name}": externalDataDirs must be an array of absolute paths`);
+      }
+      for (const p of manifest.externalDataDirs) {
+        if (typeof p !== 'string') {
+          throw new Error(`App "${manifest.name}": externalDataDirs entries must be strings`);
+        }
+        if (!p.startsWith('/')) {
+          throw new Error(`App "${manifest.name}": externalDataDirs path "${p}" must be absolute`);
+        }
+        if (p.includes('..')) {
+          throw new Error(`App "${manifest.name}": externalDataDirs path "${p}" must not contain '..'`);
+        }
+        // Refuse paths with too few segments — '/', '/etc', '/var', '/home',
+        // '/usr', '/opt', '/data' alone, etc. Need at least two segments
+        // beyond the root.
+        const segments = p.split('/').filter(Boolean);
+        if (segments.length < 2) {
+          throw new Error(`App "${manifest.name}": externalDataDirs path "${p}" is too shallow — refuse to wipe top-level dirs`);
         }
       }
     }
