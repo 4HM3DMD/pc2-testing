@@ -376,10 +376,13 @@ export function createInstalledAppsRouter(
       log.info(`[uninstall] App "${appName}" removed by ${req.user?.wallet_address?.substring(0, 10)}`);
 
       // 4. On purge, also wipe declared external data dirs.
+      // purgedDirs returns the RESOLVED paths so the operator sees what
+      // actually got wiped, not the manifest templates.
       const purgedDirs: string[] = [];
       if (purge && manifest?.externalDataDirs) {
         for (const dir of manifest.externalDataDirs) {
-          if (purgeExternalDir(dir, appName)) purgedDirs.push(dir);
+          const resolved = purgeExternalDir(dir, appName);
+          if (resolved) purgedDirs.push(resolved);
         }
       }
 
@@ -432,13 +435,16 @@ async function callTeardown(manifest: AppManifest, port: number | undefined): Pr
       body: '{}',
       signal: ctl.signal,
     });
-    if (!res.ok) {
-      log.warn(`[teardown] ${url} returned ${res.status}; continuing uninstall`);
-      return { ok: false, status: res.status };
-    }
+    // Always read the body, success or not — the operator wants to see
+    // what happened either way (e.g. the actual error message on 500,
+    // or the backup_path on 200).
     const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      log.warn(`[teardown] ${url} returned ${res.status}: ${JSON.stringify(body)}; continuing uninstall`);
+      return { ok: false, status: res.status, body };
+    }
     log.info(`[teardown] ${manifest.name} teardown OK`);
-    return body;
+    return { ok: true, ...((typeof body === 'object' && body !== null) ? body : { data: body }) };
   } catch (err: any) {
     log.warn(`[teardown] ${manifest.name} failed: ${err.message ?? String(err)}; continuing uninstall`);
     return { ok: false, error: err.message ?? String(err) };
@@ -468,32 +474,32 @@ function interpolatePath(path: string): string {
  * validator already rejected obvious shallow paths in the literal manifest,
  * but defense-in-depth: re-check after variable interpolation too.
  *
- * Returns true if the dir was wiped (or was already gone), false if
- * the safety check rejected it.
+ * Returns the RESOLVED path on success (so the API caller sees what was
+ * actually wiped, not the template) or null if safety checks refused.
  */
-function purgeExternalDir(dir: string, appName: string): boolean {
+function purgeExternalDir(dir: string, appName: string): string | null {
   const expanded = interpolatePath(dir);
   const abs = normalize(resolvePath(expanded));
   if (!abs.startsWith('/')) {
     log.warn(`[purge] refuse non-absolute path "${dir}" → "${abs}" for "${appName}"`);
-    return false;
+    return null;
   }
   if (abs === '/' || abs.split('/').filter(Boolean).length < 2) {
     log.warn(`[purge] refuse top-level path "${abs}" for "${appName}"`);
-    return false;
+    return null;
   }
   if (abs.includes('..')) {
     log.warn(`[purge] refuse path with .. — "${dir}" → "${abs}" for "${appName}"`);
-    return false;
+    return null;
   }
   try {
     if (existsSync(abs)) {
       rmSync(abs, { recursive: true, force: true });
       log.info(`[purge] wiped "${abs}" for "${appName}"`);
     }
-    return true;
+    return abs;
   } catch (err: any) {
     log.warn(`[purge] failed to wipe "${abs}" for "${appName}": ${err.message}`);
-    return false;
+    return null;
   }
 }
