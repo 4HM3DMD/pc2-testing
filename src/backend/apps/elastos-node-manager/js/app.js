@@ -77,6 +77,7 @@
 
         this._wireThemeToggle();
         this._wireSettingsToggle();
+        this._wireCrossTabSync();
 
         // Step 3 + 4: probe backend, then decide wizard vs dashboard.
         return this.services.api.get('/health', { skipCache: true })
@@ -146,6 +147,46 @@
         this.els.settingsToggle.addEventListener('click', function () {
             self._openSettingsDrawer();
         });
+    };
+
+    /**
+     * BroadcastChannel('enm') — when the operator finishes setup in one
+     * browser tab, any other tab still showing welcome/setup needs to
+     * route to the dashboard. Without this they sit on a stale view
+     * until refresh.
+     *
+     * Posts on _showDashboard call sites that follow setup completion.
+     * Listens here at boot. Tab that posts doesn't see its own message
+     * (BroadcastChannel skips own-origin posts), so no infinite loop.
+     *
+     * Falls back silently in browsers without BroadcastChannel — the
+     * stale-tab is a polish issue, not a correctness one.
+     *
+     * @private
+     */
+    ENMApp.prototype._wireCrossTabSync = function () {
+        if (typeof BroadcastChannel !== 'function') { return; }
+        var self = this;
+        try {
+            this._bc = new BroadcastChannel('enm');
+            this._bc.addEventListener('message', function (ev) {
+                if (!ev || !ev.data) { return; }
+                if (ev.data.type === 'setup-complete') {
+                    // Only react if we're not already on the dashboard.
+                    if (!self._technicalView) {
+                        self.services.api.invalidate('/setup/state');
+                        self._showDashboard();
+                    }
+                }
+            });
+        } catch (_) { /* incompatible env — silently skip */ }
+    };
+
+    /** @private — broadcast a setup-completed event to peer tabs */
+    ENMApp.prototype._broadcastSetupComplete = function () {
+        if (this._bc) {
+            try { this._bc.postMessage({ type: 'setup-complete' }); } catch (_) {}
+        }
     };
 
     /** @private */
@@ -224,6 +265,7 @@
                     onComplete: function () {
                         self.services.api.invalidate('/setup/state');
                         self._showDashboard();
+                        self._broadcastSetupComplete();
                     },
                 });
                 legacy.mount(this.els.paneDashboard);
@@ -237,6 +279,8 @@
             onComplete: function () {
                 self.services.api.invalidate('/setup/state');
                 self._showDashboard();
+                // Tell any other open ENM tabs to also flip to dashboard.
+                self._broadcastSetupComplete();
             },
         });
         conv.mount(this.els.paneDashboard);

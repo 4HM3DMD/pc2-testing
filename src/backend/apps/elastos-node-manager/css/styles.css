@@ -2132,6 +2132,66 @@ html, body {
     color: var(--text-primary);
 }
 
+/* Phase 7: step-by-step BPoS + CR Council instructions, replacing
+   the broken "Open in Essentials" deep-link button. */
+.enm-producer-instructions {
+    margin-top: var(--spacing-md);
+    padding-top: var(--spacing-md);
+    border-top: 1px solid var(--border-color);
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-md);
+}
+
+.enm-producer-instructions-title {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+    letter-spacing: 0.01em;
+}
+
+.enm-producer-steps {
+    margin: 0;
+    padding-left: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-sm);
+    color: var(--text-secondary);
+    font-size: 13px;
+    line-height: 1.55;
+}
+
+.enm-producer-steps li strong {
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+.enm-producer-steps li code {
+    font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace;
+    font-size: 11px;
+    padding: 1px 5px;
+    background: var(--bg-muted);
+    border-radius: 4px;
+    color: var(--text-primary);
+}
+
+.enm-producer-instructions-foot {
+    margin: 0;
+    font-size: 12px;
+    color: var(--text-muted);
+    line-height: 1.5;
+}
+
+.enm-producer-instructions-foot a {
+    color: var(--accent);
+    text-decoration: none;
+}
+
+.enm-producer-instructions-foot a:hover {
+    text-decoration: underline;
+}
+
 @media (max-width: 600px) {
     .enm-producer-identity-body {
         grid-template-columns: 1fr;

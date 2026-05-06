@@ -445,14 +445,41 @@
             actions: this._body.querySelector('#enm-conv-d-actions'),
         };
 
-        // Finalize: set network to auto-detect, mark complete, start the chain.
+        // Finalize: set network to auto-detect, mark complete, then attempt
+        // to start the chain. Three outcomes — handle each distinctly:
+        //   1. setup steps fail → show error + retry
+        //   2. setup OK, start OK → celebrate + open dashboard
+        //   3. setup OK, start FAILED → celebrate (config is saved) BUT
+        //      surface the start error and let the operator move on to
+        //      dashboard manually. Previously the start error was swallowed
+        //      silently — the operator saw "Done!" while ela was dead, and
+        //      only learned the truth from the dashboard's stopped badge.
+        var startError = null;
         this.api.post('/setup/network', { mode: 'auto' })
             .then(function () { return self.api.post('/setup/complete', {}); })
-            .then(function () { return self.api.post('/chains/mainchain/start').catch(function () {}); })
+            .then(function () {
+                return self.api.post('/chains/mainchain/start').catch(function (err) {
+                    // Record but don't reject — setup itself succeeded.
+                    startError = err;
+                });
+            })
             .then(function () {
                 if (!self._stillRendering(seq)) { return; }
                 els.title.textContent = t('friendly.setup.card_d.title_done');
-                els.sub.textContent   = t('friendly.setup.card_d.sub_done');
+                if (startError) {
+                    var detail = startError && startError.message ? startError.message : String(startError);
+                    els.sub.innerHTML =
+                        escapeHtml(t('friendly.setup.card_d.sub_done')) +
+                        '<br><br><strong>Heads up:</strong> the chain didn\'t start ' +
+                        'on its own — <em>' + escapeHtml(detail) + '</em>. Open the ' +
+                        'dashboard and press <strong>Start</strong> on the Mainchain ' +
+                        'card; the Logs sub-tab will show why if it refuses again.';
+                    if (self.notifications) {
+                        self.notifications.warning('Setup saved, chain not started', detail);
+                    }
+                } else {
+                    els.sub.textContent = t('friendly.setup.card_d.sub_done');
+                }
                 els.actions.appendChild(
                     makeBtn(t('friendly.setup.card_d.cta'), 'primary hero', function () {
                         self.onComplete();

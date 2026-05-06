@@ -89,17 +89,23 @@
         this.root.hidden = false;
         var pubkey = this._account.publicKey;
         var addr = this._account.address || '';
-        // Essentials deep-link payload: shape based on the BPoS register-supernode
-        // intent. If Essentials isn't installed the button is harmless — browser
-        // refuses to navigate, no error.
-        var deepLink = 'essentials://intent/register-supernode?nodepublickey=' + encodeURIComponent(pubkey);
+
+        // Phase 7 reset: dropped the "Open in Essentials" deep-link and the
+        // inline ela-cli command. The deep-link never worked (browser refuses
+        // unknown URI schemes; Essentials wasn't even installed in most
+        // operator setups) and the CLI block needed an off-server wallet
+        // anyway, which made the in-card placement misleading. Replaced
+        // with explicit step-by-step instructions for the two registrations
+        // operators actually run: BPoS Supernode and CR Council Member.
 
         this.root.innerHTML =
             '<header class="enm-producer-identity-head">' +
                 '<h3>Producer identity</h3>' +
                 '<p class="enm-stub" style="margin:0;text-align:left;padding:0">' +
-                  'Use this public key when registering your supernode. The ' +
-                  'keystore stays here on the server — never share its password.' +
+                  'This public key represents your node to the chain. ' +
+                  'You\'ll paste it into Essentials when registering as a ' +
+                  'BPoS Supernode or applying for the CR Council. The ' +
+                  'keystore stays on this server — never share its password.' +
                 '</p>' +
             '</header>' +
             '<div class="enm-producer-identity-body">' +
@@ -119,23 +125,62 @@
                     ) : '') +
                 '</div>' +
             '</div>' +
-            '<div class="enm-producer-actions">' +
-                '<a href="' + escapeAttr(deepLink) + '" class="enm-btn enm-btn-primary enm-producer-essentials">' +
-                  'Open in Essentials' +
-                '</a>' +
-                '<button class="enm-btn enm-btn-secondary enm-producer-cli-toggle" type="button">' +
-                  'Register via CLI' +
-                '</button>' +
-            '</div>' +
-            '<details class="enm-producer-cli" hidden>' +
-                '<summary>ela-cli registration command</summary>' +
-                '<pre class="enm-producer-cli-block"><code></code></pre>' +
-                '<p class="enm-producer-cli-help">' +
-                  'Run this on a machine that has access to the BPoS deposit wallet ' +
-                  '(needs 2,000 ELA). The keystore.dat referenced here lives on this server at:' +
+            '<div class="enm-producer-instructions">' +
+                '<h4 class="enm-producer-instructions-title">Register as a BPoS Supernode</h4>' +
+                '<ol class="enm-producer-steps">' +
+                    '<li>On your phone, open <strong>Elastos Essentials</strong>. ' +
+                        'It\'s the only wallet that can sign producer transactions ' +
+                        'against the mainchain BPoS contract.</li>' +
+                    '<li>Make sure the wallet you fund the deposit from holds at ' +
+                        'least <strong>2,000 ELA</strong> on the ELA mainchain. The ' +
+                        'deposit locks for the lock-up period you choose during ' +
+                        'registration.</li>' +
+                    '<li>Inside Essentials, open the <strong>BPoS Voting</strong> ' +
+                        'section, then choose <strong>Register Supernode</strong>.</li>' +
+                    '<li>When asked for the <strong>node public key</strong>, scan ' +
+                        'the QR code above or paste the value from the Public key ' +
+                        'field. Do <em>not</em> retype it by hand — a single wrong ' +
+                        'character means votes flow to the wrong node.</li>' +
+                    '<li>Fill in your supernode <strong>name</strong>, ' +
+                        '<strong>URL</strong> and <strong>location</strong>. ' +
+                        'Pick a stake-until block well past today (the chain has ' +
+                        'a fixed minimum lock).</li>' +
+                    '<li>Confirm in Essentials. The deposit transaction is signed ' +
+                        'by your Essentials wallet, broadcast to the mainchain, and ' +
+                        'becomes effective once it confirms (typically within a ' +
+                        'block or two).</li>' +
+                    '<li>Come back here. The <strong>Status</strong> tab will flip ' +
+                        'producer state from <code>none</code> to ' +
+                        '<code>Pending → Active</code> as the chain picks up your ' +
+                        'registration.</li>' +
+                '</ol>' +
+                '<h4 class="enm-producer-instructions-title">Apply to the CR Council</h4>' +
+                '<ol class="enm-producer-steps">' +
+                    '<li>Council applications open at the start of each council ' +
+                        'cycle. If the application window is closed, Essentials ' +
+                        'will tell you when the next one opens.</li>' +
+                    '<li>In Essentials, open the <strong>CR section</strong> and ' +
+                        'choose <strong>Apply as Council Member</strong>.</li>' +
+                    '<li>You need a <strong>DID</strong> (Essentials creates one ' +
+                        'for you the first time you open the CR section) plus ' +
+                        '<strong>5,000 ELA</strong> for the council deposit.</li>' +
+                    '<li>Fill in your council profile (name, location, social ' +
+                        'links, manifesto) and submit. The deposit transaction ' +
+                        'and council application share one signing flow.</li>' +
+                    '<li>Wait for the voting window — council seats are decided ' +
+                        'by community vote, not by deposit alone. You can track ' +
+                        'your standing in Essentials\' CR dashboard.</li>' +
+                    '<li>If elected, this node\'s public key remains your ' +
+                        'producer identity for any DPoS rewards while you serve ' +
+                        'on the council. Nothing changes here.</li>' +
+                '</ol>' +
+                '<p class="enm-producer-instructions-foot">' +
+                    'Stuck? The official docs cover both flows in detail: ' +
+                    '<a href="https://elastos.info" target="_blank" rel="noopener">elastos.info</a> ' +
+                    '(Supernode + CR sections). Anything you sign happens in ' +
+                    'Essentials — this server doesn\'t see your wallet.' +
                 '</p>' +
-                '<code class="enm-producer-keystore-path"></code>' +
-            '</details>';
+            '</div>';
 
         this.root.querySelector('.enm-producer-pubkey').textContent = pubkey;
         if (addr) this.root.querySelector('.enm-producer-addr').textContent = addr;
@@ -157,32 +202,7 @@
                 });
             });
         });
-
-        // CLI toggle.
-        var cliBlock = this.root.querySelector('.enm-producer-cli');
-        var cliPre = this.root.querySelector('.enm-producer-cli-block code');
-        var cliPath = this.root.querySelector('.enm-producer-keystore-path');
-        cliPre.textContent = buildCliCommand(pubkey);
-        cliPath.textContent = this._account.keystorePath || '/data/enm/chains/mainchain/keystore.dat';
-        this.root.querySelector('.enm-producer-cli-toggle').addEventListener('click', function () {
-            cliBlock.hidden = !cliBlock.hidden;
-        });
     };
-
-    function buildCliCommand(pubkey) {
-        // Stub command per node.sh's `ela_register_bpos` logic — operator
-        // edits the placeholders. We don't try to magic up name/url/blocks.
-        return [
-            'ela-cli wallet buildtx producer register v2 \\',
-            '  --nodepublickey ' + pubkey + ' \\',
-            '  --name "<your-supernode-name>" \\',
-            '  --url "https://<your-supernode-url>" \\',
-            '  --location 0 \\',
-            '  --stakeuntil <current-height + lock-period> \\',
-            '  --amount 2000 \\',
-            '  --fee 0.000001',
-        ].join('\n');
-    }
 
     function escapeAttr(s) {
         return String(s).replace(/[&<>"']/g, function (c) {
