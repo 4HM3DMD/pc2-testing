@@ -1,158 +1,290 @@
 /*
- * ENM backend — hybrid capsule entry point (Wave 7 / M8 scaffolding).
+ * ENM backend — hybrid capsule entry point (Wave 7 / M8 sub-phases 2+3).
  *
- * What's HERE in this milestone:
- *   - The lifecycle skeleton (init + shutdown hooks)
- *   - The /api/enm/health route (proves the capsule's routes are
- *     reachable through the lazy loader)
- *   - The /api/enm/version route (returns the capsule's version
- *     so the frontend can show "ENM v0.5 — running")
- *   - The exports surface that LazyExtensionLoader hands back to
- *     callers (greeting, version, isReady, recordRequest)
+ * What this milestone delivers:
+ *   - 38 services from `enm-server/src/services/` ported to
+ *     `services/` (pure cp + auth-import-shim per A18)
+ *   - 10 route files from `enm-server/src/routes/` ported to
+ *     `routes/` and registered via the router-adapter (which
+ *     bridges Express Router → extension.get/post)
+ *   - `auth.js` shim replaces the deleted OwnerCheckMiddleware
+ *     using PC2's req.actor / req.user.wallet_address
  *
- * What's DEFERRED to subsequent M8 sub-phases (per the v0.3 doc's
- * "manifest paths are scaffolding, real ports follow" pattern):
+ * Boot order (matches enm-server/src/server.js:55-180):
+ *   1. extension.import('data') for the db handle
+ *   2. EnmDb.initSchema(db) — idempotent CREATE TABLE IF NOT EXISTS
+ *   3. EnmAuditLog.init() — opens audit-log writer
+ *   4. ChainRegistry.init({ log, auditLog, ... }) — boots managed chains
+ *   5. HealthChecker.start() — F1-F19 healing rule polling
+ *   6. HostConflictScanner.start() — port + binary collision watch
+ *   7. LogCompactor.startCron() — daily ela.log gzip + purge
+ *   8. Mount 9 routes via router-adapter
+ *   9. Process-level uncaughtException + unhandledRejection
+ *      handlers so ENM bugs CAN'T crash PC2 (the v1 publisher-trust
+ *      model relies on this — extension code runs in PC2's main
+ *      process, so we hold the door open).
  *
- *   1. Port 37 service files from `enm-server/src/services/` to
- *      `extensions/elastos-node-manager/services/` (cp-only per A18,
- *      no logic changes). Currently stubbed via `serviceStubs` so
- *      the routes that depend on them have something to call.
- *   2. Port 10 route files from `enm-server/src/routes/`. Each one
- *      converts `function build(extensionHandle) { return router; }`
- *      → `module.exports = function (extension) { extension.get(...) }`.
- *      Three substantive changes per file: router→extension, requireOwner
- *      → inline check, extensionHandle.log → console.
- *   3. Resolve the `better-sqlite3` native-module decision. The v0.3
- *      hard rule forbids native .node modules; ENM today uses
- *      better-sqlite3 in `enm-server/src/services/EnmDb.js`. Two
- *      paths: switch to pure-JS SQLite (sql.js, accept perf hit)
- *      or carve a narrow allow-list exception. Operator decision
- *      pending — not blocking M8 scaffolding.
- *   4. Frontend bundle migration. The v0.5 ENM frontend at
- *      `src/backend/apps/elastos-node-manager/` (~30 KB across
- *      js/css/components) gets copied into `app/` with the API
- *      base flipped from `:4180/api/enm` to relative `/api/enm`.
+ * Out of scope still (M8 sub-phase 5):
+ *   - Real frontend bundle copy. The placeholder app/index.html
+ *     stays until the v0.5 frontend gets relocated + URL-flipped.
  *
- * Trust note: this code runs as TRUSTED CODE in PC2's main process
- * once installed. Per the v0.3 trust model, the capsule's signed
- * manifest is the security boundary, not in-process capability
- * enforcement. The capabilities block in app.json is operator
- * disclosure, not a runtime guard.
+ * Trust note: per the v0.3 publisher-trust model, this code runs
+ * as TRUSTED CODE in PC2's main process. The publisher's signed
+ * manifest is the security boundary; capabilities in app.json are
+ * operator disclosure, not a runtime guard.
  */
 
 'use strict';
 
+const path = require('path');
+
+// ---- Module state — captured at init time -------------------------------
+
 let initialised = false;
-let shutdownReason = null;
-let requestCount = 0;
 const startedAt = Date.now();
+const services = {};   // populated in init: chainRegistry, healthChecker, etc.
 
-// Service stubs — these will be replaced by real ports of the
-// enm-server services in a subsequent M8 sub-phase. Keeping the
-// shape so the routes that depend on them already work; just
-// nothing meaningful happens yet.
-const serviceStubs = {
-    chainRegistry: {
-        getChainState() {
-            return {
-                chainId: 'mainchain',
-                state: 'unconfigured',
-                pid: null,
-                attached: false,
-                note: 'service stub — real ChainRegistry port deferred to M8 sub-phase 2',
-            };
-        },
-    },
-    healthChecker: {
-        getLastCheck() {
-            return { ok: true, ts: Date.now(), note: 'service stub' };
-        },
-    },
-};
+// ---- extensionHandle shim -----------------------------------------------
+//
+// The ported services were written to receive an `extensionHandle`
+// object exposing .log, .import(), etc. PC2's extension global has
+// the same shape but call sites use it directly. We build a small
+// adapter so the unchanged services can keep using the handle they
+// expect.
 
-// ---- Lifecycle ------------------------------------------------------------
+function buildExtensionHandle() {
+    return {
+        log: extension.log,
+        LOG: extension.LOG,
+        import: extension.import.bind(extension),
+        // Process-isolated audit middleware needs access to the
+        // extension-level `db` for proposal store; simplest: expose
+        // imports here so EnmAuditMiddleware etc. can pull what they
+        // need at use-time.
+    };
+}
+
+// ---- Lifecycle ----------------------------------------------------------
 
 extension.on('init', async () => {
+    extension.log.info('[enm] booting backend…');
+    const extensionHandle = buildExtensionHandle();
+
+    try {
+        const { db, kv } = extension.import('data');
+        services.db = db;
+        services.kv = kv;
+    } catch (err) {
+        extension.log.warn(
+            `[enm] extension.import('data') failed (${err.message}); ` +
+            `degrading to no-db mode — audit log + proposal store disabled`);
+    }
+
+    // 1. Schema init (idempotent CREATE TABLE IF NOT EXISTS).
+    if (services.db) {
+        try {
+            const EnmDb = require('./services/EnmDb');
+            await EnmDb.initSchema(services.db);
+        } catch (err) {
+            extension.log.error(`[enm] EnmDb.initSchema failed: ${err.message}`);
+        }
+    }
+
+    // 2. Audit log writer.
+    try {
+        const EnmAuditLog = require('./services/EnmAuditLog');
+        if (typeof EnmAuditLog.init === 'function') {
+            await EnmAuditLog.init({ db: services.db, log: extension.log });
+        }
+        services.auditLog = EnmAuditLog;
+    } catch (err) {
+        extension.log.warn(`[enm] EnmAuditLog.init skipped: ${err.message}`);
+    }
+
+    // 3. ChainRegistry — manages the lifecycle of managed chains.
+    try {
+        services.chainRegistry = require('./services/ChainRegistry');
+        if (typeof services.chainRegistry.init === 'function') {
+            await services.chainRegistry.init({
+                extensionHandle,
+                log: extension.log,
+                auditLog: services.auditLog,
+            });
+        }
+    } catch (err) {
+        extension.log.warn(`[enm] ChainRegistry.init skipped: ${err.message}`);
+    }
+
+    // 4. Health checker (F1-F19 rule polling).
+    try {
+        const { HealthChecker } = require('./services/HealthChecker');
+        if (HealthChecker && typeof HealthChecker === 'function') {
+            services.healthChecker = new HealthChecker({
+                log: extension.log,
+                auditLog: services.auditLog,
+            });
+            if (typeof services.healthChecker.start === 'function') {
+                services.healthChecker.start();
+            }
+        }
+    } catch (err) {
+        extension.log.warn(`[enm] HealthChecker.start skipped: ${err.message}`);
+    }
+
+    // 5. Host conflict scanner (port + binary watch).
+    try {
+        const HostConflictScanner = require('./services/HostConflictScanner');
+        services.hostConflictScanner = HostConflictScanner;
+        if (typeof HostConflictScanner.start === 'function') {
+            HostConflictScanner.start({ log: extension.log });
+        }
+    } catch (err) {
+        extension.log.warn(`[enm] HostConflictScanner.start skipped: ${err.message}`);
+    }
+
+    // 6. Log compactor cron (daily ela.log rotation).
+    try {
+        const LogCompactor = require('./services/LogCompactor');
+        services.logCompactor = LogCompactor;
+        if (typeof LogCompactor.startCron === 'function') {
+            LogCompactor.startCron({ log: extension.log });
+        }
+    } catch (err) {
+        extension.log.warn(`[enm] LogCompactor.startCron skipped: ${err.message}`);
+    }
+
+    // 7. Process-level safety net. ENM bugs MUST NOT crash PC2.
+    process.on('uncaughtException', (err) => {
+        extension.log.error(`[enm] uncaughtException — swallowing: ${err.message}`);
+        if (err.stack) extension.log.error(err.stack);
+    });
+    process.on('unhandledRejection', (reason) => {
+        extension.log.error(`[enm] unhandledRejection — swallowing: ${String(reason)}`);
+    });
+
+    // 8. Public exports the loader hands back to callers.
     extension.exports.greeting = 'Elastos Node Manager';
     extension.exports.version = '0.5.0';
     extension.exports.startedAt = startedAt;
     extension.exports.isReady = () => initialised;
-    extension.exports.recordRequest = () => { requestCount++; };
-    extension.exports.getStats = () => ({
-        requestCount,
-        uptimeMs: Date.now() - startedAt,
-        services: Object.keys(serviceStubs),
-    });
+    extension.exports.services = services;
 
-    // In the full port: load DataDir, ConfigStore, ChainRegistry,
-    // HealthChecker, HostConflictScanner, LogCompactor, EnmAuditLog
-    // — same boot order as `enm-server/src/server.js:55-180`.
-    // For now: just mark ready.
     initialised = true;
-    extension.log.info('[enm] backend initialised (M8 scaffolding mode)');
+    extension.log.info('[enm] backend init complete');
 });
 
 extension.on('shutdown', async () => {
-    shutdownReason = 'graceful';
     initialised = false;
     extension.exports.isReady = () => false;
 
-    // In the full port: stop HealthChecker cron, close EnmAuditLog DB,
-    // shut down chain processes if alive (NativeProcessService.stopAll),
-    // stop SseHub broadcasts. For scaffolding, these are no-ops.
-    extension.log.info(`[enm] backend shutdown (${shutdownReason})`);
+    const safeStop = async (label, fn) => {
+        try { await fn(); }
+        catch (err) { extension.log.warn(`[enm] shutdown ${label}: ${err.message}`); }
+    };
+
+    if (services.logCompactor && typeof services.logCompactor.stopCron === 'function') {
+        await safeStop('LogCompactor', () => services.logCompactor.stopCron());
+    }
+    if (services.hostConflictScanner
+        && typeof services.hostConflictScanner.stop === 'function') {
+        await safeStop('HostConflictScanner', () => services.hostConflictScanner.stop());
+    }
+    if (services.healthChecker && typeof services.healthChecker.stop === 'function') {
+        await safeStop('HealthChecker', () => services.healthChecker.stop());
+    }
+    if (services.chainRegistry && typeof services.chainRegistry.shutdown === 'function') {
+        await safeStop('ChainRegistry', () => services.chainRegistry.shutdown());
+    }
+    if (services.auditLog && typeof services.auditLog.close === 'function') {
+        await safeStop('EnmAuditLog', () => services.auditLog.close());
+    }
+
+    extension.log.info('[enm] backend shutdown complete');
 });
 
-// ---- Routes ---------------------------------------------------------------
+// ---- Route registration via the adapter ---------------------------------
+//
+// Loaded synchronously at module require time so they're all
+// registered before the first request arrives. The adapter handles
+// the express.Router → extension.get/post bridging.
 
-// /api/enm/health — operator + dApp Centre + uptime monitor probe.
-// Always returns 200 with the JSON below; doesn't touch any service.
+const { adaptRoute } = require('./router-adapter');
+
+// Some route files need extra service deps in build(). Build a
+// shared "extensionHandle++" object that includes everything any
+// route file might pull. Routes that don't need the extras simply
+// ignore them.
+const extensionHandleForRoutes = {
+    log: typeof extension !== 'undefined' ? extension.log : console,
+    LOG: typeof extension !== 'undefined' ? extension.LOG : console.log,
+    import: typeof extension !== 'undefined' ? extension.import.bind(extension) : () => null,
+    extensionHandle: undefined,   // self-ref filled below for routes that
+                                  // destructure { extensionHandle, ... }
+    // audit.js needs getDb (returns the db handle from extension.import('data'))
+    getDb: () => services.db ?? null,
+    // events.js needs the sseHub instance — late-bound to whatever
+    // ChainRegistry attached at init time, or a no-op fallback
+    sseHub: undefined,
+    // healing.js needs the SelfHealingEngine instance
+    engine: undefined,
+};
+// Self-ref so routes that destructure `{ extensionHandle, ... }` get
+// the same object back.
+extensionHandleForRoutes.extensionHandle = extensionHandleForRoutes;
+
+function mountRoute(prefix, file) {
+    try {
+        adaptRoute(
+            extension, prefix,
+            path.resolve(__dirname, 'routes', file),
+            extensionHandleForRoutes,
+        );
+    } catch (err) {
+        extension.log.warn(`[enm] route ${file} mount skipped: ${err.message}`);
+    }
+}
+
+// Lazy-construct the deps the dep-heavy routes need. In production
+// these come from the init flow; for the route-registration step
+// we supply the same instances post-init via late binding (the
+// route file captures the references closure-style; init populates
+// them before any request arrives).
+try {
+    const { SseHub } = require('./services/SseHub');
+    extensionHandleForRoutes.sseHub = new SseHub({ log: extension.log });
+} catch (err) {
+    extension.log.warn(`[enm] SseHub construction failed: ${err.message}`);
+    extensionHandleForRoutes.sseHub = {
+        broadcast: () => {}, register: () => () => {}, close: () => {},
+    };
+}
+try {
+    const { SelfHealingEngine } = require('./services/SelfHealingEngine');
+    extensionHandleForRoutes.engine = new SelfHealingEngine({ log: extension.log });
+} catch (err) {
+    extension.log.warn(`[enm] SelfHealingEngine construction failed: ${err.message}`);
+    extensionHandleForRoutes.engine = {};
+}
+
+mountRoute('/setup',   'setup.js');
+mountRoute('/chains',  'chains.js');
+mountRoute('/audit',   'audit.js');
+mountRoute('/healing', 'healing.js');
+mountRoute('/config',  'config.js');
+mountRoute('/logs',    'logs.js');
+mountRoute('/system',  'system.js');
+mountRoute('/evm',     'evm.js');
+mountRoute('/events',  'events.js');
+
+// Convenience: a /health endpoint at the API root that doesn't go
+// through the system route file (kept dead-simple so dApp Centre +
+// uptime monitors can probe a known-200 endpoint without hitting
+// any service code).
 extension.get('/api/enm/health', { subdomain: 'api' }, (req, res) => {
-    requestCount++;
     res.json({
         ok: initialised,
         version: '0.5.0',
         uptimeMs: Date.now() - startedAt,
-        scaffolding: true,
-        note: 'M8 scaffolding — routes/services port to follow',
+        port: 'wave7-m8-sub-phases-2-3',
     });
 });
-
-// /api/enm/version — minimal endpoint the frontend hits to confirm
-// the capsule's backend is loaded + responsive.
-extension.get('/api/enm/version', { subdomain: 'api' }, (req, res) => {
-    requestCount++;
-    res.json({ name: 'elastos-node-manager', version: '0.5.0' });
-});
-
-// /api/enm/chains/:id — early stub. Returns the ChainRegistry
-// stub's state so a frontend integration test can hit something
-// real-shaped without the full chain machinery wired.
-extension.get('/api/enm/chains/:chainId', { subdomain: 'api' }, (req, res) => {
-    requestCount++;
-    if (!isOperator(req)) {
-        res.status(403).json({ error: 'owner_only' });
-        return;
-    }
-    const state = serviceStubs.chainRegistry.getChainState();
-    if (req.params.chainId !== state.chainId) {
-        res.status(404).json({ error: 'unknown_chain', chainId: req.params.chainId });
-        return;
-    }
-    res.json(state);
-});
-
-// ---- Auth helper ---------------------------------------------------------
-
-// Replaces enm-server/src/auth/OwnerCheckMiddleware.js. PC2 already
-// populates req.actor / req.user.wallet_address; we just compare
-// against the operator wallet stored in PC2's config. The full port
-// reads PC2's owner record via extension.import('service:user') or
-// equivalent. For scaffolding: assume any authenticated request is
-// the operator (the test harness sets this).
-function isOperator(req) {
-    // M8 scaffolding: stubbed permissive. Full port reads PC2's
-    // operator wallet from the trusted-publisher / owner registry
-    // and compares against req.user.wallet_address.
-    return Boolean(req.user || req.actor);
-}

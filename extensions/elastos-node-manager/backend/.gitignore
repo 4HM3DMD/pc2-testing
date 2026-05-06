@@ -1,0 +1,4 @@
+# Real npm-installed modules go here at production publish time.
+# The committed node_modules/joi/ stub is the dev-only fallback.
+node_modules/.cache/
+node_modules/.bin/
