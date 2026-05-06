@@ -391,65 +391,72 @@ function build(extensionHandle) {
                     snapshot.stale = true;
                 } else {
                     // Live chain — pull the truthful signals over RPC.
+                    //
+                    // ela exposes peer info via `getnodestate` (returns
+                    // .Neighbors[]), NOT via `getpeerinfo` (Bitcoin-style
+                    // method that ela rejects). The earlier handler used
+                    // `getpeerinfo` and four parallel RPC calls — three
+                    // of them failed, leaving networkHeight + peers + the
+                    // synced check all null. This rewrite uses the same
+                    // proven shape HealthChecker uses: just two RPC calls,
+                    // peers + max-height both parsed from Neighbors.
                     const cfgChain = cfg.chains[adapter.chainId];
                     if (cfgChain) {
                         try {
                             const rpc = adapter.rpcClient(cfgChain);
-                            const [peerInfo, peerCount, bestHash, blockCount] = await Promise.allSettled([
-                                rpc.getpeerinfo(),
-                                rpc.getconnectioncount(),
-                                rpc.getbestblockhash(),
+                            const [blockCount, nodeStateRes] = await Promise.allSettled([
                                 rpc.getblockcount(),
+                                rpc.getnodestate(),
                             ]);
 
                             // ALWAYS prefer fresh RPC value for the displayed
                             // localHeight. SyncTracker holds a HISTORY of
-                            // samples used to compute velocity / ETA — it is
-                            // not the source of truth for "how many blocks
-                            // do I have right now." Without this preference,
-                            // a stale early sample (e.g. height=1 recorded
-                            // before block-loading finished) sticks until
-                            // SyncTracker's medium-tick rolls forward, and
-                            // /sync reports `localHeight: 1` while
-                            // /chains/:id reports the real number — exactly
-                            // the divergence the operator hit 2026-05-07.
+                            // samples used to compute velocity / ETA — it
+                            // is not the source of truth for "how many
+                            // blocks do I have right now."
                             if (blockCount.status === 'fulfilled') {
                                 const v = blockCount.value;
                                 const h = (typeof v === 'number') ? v : (v && v.result);
                                 if (typeof h === 'number') { snapshot.localHeight = h; }
                             }
 
-                            // peers count
-                            if (peerCount.status === 'fulfilled') {
-                                const v = peerCount.value;
-                                snapshot.peers = (typeof v === 'number') ? v : (v && v.result) || 0;
-                            }
-
-                            // network height = max of peers' reported heights.
-                            // Without this we can't compute a real %, and the
-                            // UI ends up showing "Connecting to peers" forever.
-                            if (peerInfo.status === 'fulfilled') {
-                                const list = peerInfo.value && peerInfo.value.result
-                                    ? peerInfo.value.result
-                                    : peerInfo.value;
-                                if (Array.isArray(list)) {
+                            // Parse getnodestate: peer count + peer max
+                            // height come from the same Neighbors array.
+                            // Defensive: ela's schema uses capital N
+                            // (.Neighbors) but lowercase appears in some
+                            // versions; same for height/Height/lastHeight.
+                            if (nodeStateRes.status === 'fulfilled') {
+                                const v = nodeStateRes.value;
+                                const ns = v && v.result ? v.result : v;
+                                const neighbors = ns && Array.isArray(ns.Neighbors) ? ns.Neighbors
+                                    : ns && Array.isArray(ns.neighbors) ? ns.neighbors
+                                    : null;
+                                if (Array.isArray(neighbors)) {
+                                    snapshot.peers = neighbors.length;
                                     let maxH = null;
-                                    for (const p of list) {
-                                        if (p && typeof p.height === 'number' && (maxH == null || p.height > maxH)) {
-                                            maxH = p.height;
-                                        }
+                                    for (const n of neighbors) {
+                                        if (!n || typeof n !== 'object') continue;
+                                        const h = typeof n.Height === 'number' ? n.Height
+                                                : typeof n.height === 'number' ? n.height
+                                                : typeof n.lastHeight === 'number' ? n.lastHeight
+                                                : null;
+                                        if (h != null && (maxH == null || h > maxH)) maxH = h;
                                     }
-                                    if (maxH != null && (snapshot.networkHeight == null || maxH > snapshot.networkHeight)) {
-                                        snapshot.networkHeight = maxH;
-                                    }
+                                    if (maxH != null) snapshot.networkHeight = maxH;
                                 }
                             }
 
-                            // last block timestamp → "synced" detection.
-                            if (bestHash.status === 'fulfilled') {
-                                const hash = bestHash.value && bestHash.value.result
-                                    ? bestHash.value.result
-                                    : bestHash.value;
+                            // lastBlockTime → "synced" detection. Best-block
+                            // hash + header gives us the block's timestamp;
+                            // if it's within ~5 min of now, the chain is
+                            // caught up regardless of peer reports. Sequenced
+                            // (not in the parallel batch) so the chained
+                            // getblockheader doesn't compete for the RPC
+                            // pool with the two main calls above.
+                            try {
+                                const bestHashResp = await rpc.getbestblockhash();
+                                const hash = bestHashResp && bestHashResp.result
+                                    ? bestHashResp.result : bestHashResp;
                                 if (typeof hash === 'string' && hash.length > 0) {
                                     try {
                                         const headerResp = await rpc.getblockheader(hash, 2);
@@ -465,7 +472,7 @@ function build(extensionHandle) {
                                         }
                                     } catch (_) { /* getblockheader may fail on early boot */ }
                                 }
-                            }
+                            } catch (_) { /* getbestblockhash failed — lastBlockTime stays null, synced stays false */ }
                         } catch (_) { /* RPC failed entirely; leave snapshot as-is */ }
                     }
 
