@@ -176,10 +176,24 @@ export class AppProcessManager {
         const logPath = join(this.logsDir, `${name}.log`);
         const logFd = openSync(logPath, 'a');
 
+        // PC2 conventions every spawned service inherits — paths the service
+        // can use to locate pc2-node's own state. Operator can override either
+        // via process.env (pc2-node's own env). App author can override via
+        // manifest.backend.env (rarely correct — these are typically set by
+        // pc2-node's deployment).
+        const dataDir = process.env.PC2_DATA_DIR || '/data';
         const env: NodeJS.ProcessEnv = {
             ...process.env,
+            // Where pc2-node's session DB lives. Services that need to
+            // validate the requester's PC2 wallet (e.g. ENM's
+            // OwnerCheckMiddleware) read it from here.
+            PC2_NODE_DB_PATH:     process.env.PC2_NODE_DB_PATH     ?? join(dataDir, 'pc2-node.sqlite'),
+            // Where pc2-node's owner record lives.
+            PC2_NODE_CONFIG_PATH: process.env.PC2_NODE_CONFIG_PATH ?? join(dataDir, 'node-config.json'),
+            // App-author overrides go after the conventions but before the
+            // PORT/APP_*_DIR vars below — those are pc2-node-controlled and
+            // an app must NOT override them.
             ...(backend.env ?? {}),
-            // Conventional vars pc2-node always provides:
             PORT: String(backend.port),
             APP_DATA_DIR: join(bundleDir, '.data'),
             APP_BUNDLE_DIR: bundleDir,

@@ -67,7 +67,7 @@ const KEY_FILE             = process.env.PC2_DEV_KEY_PATH || join(REPO_ROOT, '.p
 
 const SERVICE_PORT         = 4180;
 const SERVICE_BACKEND_ENTRY = 'backend/src/server.js';
-const SERVICE_HEALTH_PATH   = '/health';
+const SERVICE_HEALTH_PATH   = '/api/enm/health';
 
 // Files we always exclude from the backend portion of the bundle (build
 // artifacts, dev-only docs, tests). The frontend is shipped as-is.
