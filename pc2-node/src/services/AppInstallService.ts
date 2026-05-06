@@ -62,7 +62,7 @@ export interface AppAuthor {
   url?: string;
 }
 
-export type AppType = 'web' | 'wasm' | 'data' | 'microvm' | 'agent';
+export type AppType = 'web' | 'wasm' | 'data' | 'microvm' | 'agent' | 'service';
 
 export type AppCategory =
   | 'media'
@@ -75,7 +75,7 @@ export type AppCategory =
   | 'marketplace'
   | 'other';
 
-const VALID_APP_TYPES: readonly string[] = ['web', 'wasm', 'data', 'microvm', 'agent'];
+const VALID_APP_TYPES: readonly string[] = ['web', 'wasm', 'data', 'microvm', 'agent', 'service'];
 
 const VALID_CATEGORIES: readonly string[] = [
   'media', 'blockchain', 'tools', 'system', 'games', 'social', 'ai', 'marketplace', 'other',
@@ -112,6 +112,39 @@ export interface AppService {
   protocol?: string;
   endpoint?: string;
   description?: string;
+}
+
+/**
+ * AppBackend — describes a long-running Node process that pc2-node spawns
+ * when a `type: "service"` app is installed and stops when it's uninstalled.
+ *
+ * Distinct from `AppService[]` (which is just metadata describing
+ * exposed APIs/protocols). `backend` is the actual thing that runs.
+ *
+ * Trust note: the spawned process inherits pc2-node's user privileges.
+ * Only first-party Elacity apps with verified `distribution.signature`
+ * + `signedBy` in the trusted publisher set should be granted this
+ * privilege — see AppProcessManager and the install handler in
+ * api/installed-apps.ts for enforcement.
+ */
+export interface AppBackend {
+  /** Path to the entry script, relative to the bundle root (e.g. "backend/dist/index.js"). */
+  entry: string;
+  /** TCP port the service binds to. The frontend may call localhost:<port>. */
+  port: number;
+  /**
+   * Optional path on the service for periodic liveness checks.
+   * If absent, only crashes are detected (no liveness signal).
+   */
+  healthCheck?: string;
+  /** Extra argv passed to node after the entry script. */
+  args?: string[];
+  /**
+   * Extra env vars merged on top of pc2-node's process env when spawning.
+   * Operator-controlled values (paths, secrets) should be set via pc2-node's
+   * config instead — these are app-author-controlled and should be limited.
+   */
+  env?: Record<string, string>;
 }
 
 export interface AppDistribution {
@@ -166,6 +199,11 @@ export interface AppManifest {
 
   display?: AppDisplay;
   services?: AppService[];
+  /**
+   * For `type: "service"` apps only. Describes the Node backend pc2-node
+   * spawns on install and stops on uninstall. See AppBackend doc above.
+   */
+  backend?: AppBackend;
   distribution?: AppDistribution;
   dependencies?: Record<string, string>;
 }
@@ -553,12 +591,57 @@ export class AppInstallService {
       log.warn(`[validateManifest] Unknown type "${manifest.type}" for app "${manifest.name}"`);
     }
 
+    if (manifest.type === 'service') {
+      this.validateServiceBackend(manifest);
+    }
+
     if (manifest.category && !VALID_CATEGORIES.includes(manifest.category)) {
       log.warn(`[validateManifest] Unknown category "${manifest.category}" for app "${manifest.name}"`);
     }
 
     if (manifest.capabilities) {
       this.validateCapabilities(manifest.capabilities, manifest.name);
+    }
+  }
+
+  /**
+   * Service-type apps must declare a `backend` block with at minimum
+   * an entry script + a port. Validated at install time so a bad
+   * manifest fails loudly before pc2-node tries to spawn anything.
+   */
+  private validateServiceBackend(manifest: AppManifest): void {
+    if (!manifest.backend) {
+      throw new Error(`App "${manifest.name}" has type "service" but no "backend" block`);
+    }
+    const b = manifest.backend;
+    if (!b.entry || typeof b.entry !== 'string') {
+      throw new Error(`App "${manifest.name}": backend.entry is required and must be a string`);
+    }
+    this.validateSafePath(b.entry);
+
+    if (typeof b.port !== 'number' || !Number.isInteger(b.port) || b.port < 1024 || b.port > 65535) {
+      throw new Error(
+        `App "${manifest.name}": backend.port must be an integer in 1024..65535 (got ${b.port})`,
+      );
+    }
+
+    if (b.healthCheck !== undefined && typeof b.healthCheck !== 'string') {
+      throw new Error(`App "${manifest.name}": backend.healthCheck must be a string path`);
+    }
+
+    if (b.args !== undefined && !Array.isArray(b.args)) {
+      throw new Error(`App "${manifest.name}": backend.args must be an array of strings`);
+    }
+
+    if (b.env !== undefined) {
+      if (typeof b.env !== 'object' || b.env === null || Array.isArray(b.env)) {
+        throw new Error(`App "${manifest.name}": backend.env must be an object of string→string`);
+      }
+      for (const [k, v] of Object.entries(b.env)) {
+        if (typeof v !== 'string') {
+          throw new Error(`App "${manifest.name}": backend.env.${k} must be a string`);
+        }
+      }
     }
   }
 
