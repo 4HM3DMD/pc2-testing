@@ -73,6 +73,10 @@ const INSTALL_HINTS: Record<string, { darwin?: string; linux?: string }> = {
     darwin: 'Restart PC2 to auto-download from pc2-binaries-v1. Manual fallback: brew tap amnezia-vpn/amneziawg-tools && brew install amneziawg-go amneziawg-tools',
     linux:  'Restart PC2 to auto-download from pc2-binaries-v1. Manual fallback: see https://github.com/amnezia-vpn/amneziawg-go',
   },
+  'awg': {
+    darwin: 'Restart PC2 to auto-download from pc2-binaries-v1. Required by awg-quick to install AmneziaWG obfuscation params (Jc/S1-S4/H1-H4). Manual fallback: brew tap amnezia-vpn/amneziawg-tools && brew install amneziawg-tools',
+    linux:  'Restart PC2 to auto-download from pc2-binaries-v1. Manual fallback: install amneziawg-tools package from your distro or build from https://github.com/amnezia-vpn/amneziawg-tools',
+  },
   'awg-quick': {
     darwin: 'Restart PC2 to auto-download from pc2-binaries-v1. Manual fallback: brew tap amnezia-vpn/amneziawg-tools && brew install amneziawg-tools bash',
     linux:  'Restart PC2 to auto-download from pc2-binaries-v1. Manual fallback: install amneziawg-tools package',
@@ -160,6 +164,19 @@ const TRANSPORT_BINARIES: BinarySpec[] = [
     getDownloadUrl: (os, arch) => `${GITHUB_RELEASE_BASE}/amneziawg-go-${os}-${arch}`,
     systemPaths: ['/usr/local/bin/amneziawg-go', '/opt/homebrew/bin/amneziawg-go'],
     minSize: 500_000,
+  },
+  {
+    // v1.2.7.11: native awg CLI (the AmneziaWG fork of `wg`). awg-quick
+    // shells out to `awg setconf <iface> <conf>` to install the obfuscation
+    // parameters (Jc, Jmin, Jmax, S1-S4, H1-H4, optional I1) — plain `wg`
+    // rejects those keys as unknown. Pre-v1.2.7.11 builds shipped only the
+    // awg-quick script, causing AWG bring-up to fail at the setconf step
+    // with `awg: command not found`. Same systemPaths convention as `wg`.
+    name: 'awg',
+    platforms: ['linux', 'darwin'],
+    getDownloadUrl: (os, arch) => `${GITHUB_RELEASE_BASE}/awg-${os}-${arch}`,
+    systemPaths: ['/usr/local/bin/awg', '/opt/homebrew/bin/awg', '/usr/bin/awg', '/usr/sbin/awg'],
+    minSize: 50_000,
   },
   {
     name: 'awg-quick',
@@ -714,6 +731,19 @@ export async function ensureTransportBinaries(): Promise<BinaryReport> {
     patchMacOSScriptShebangs(binDir);
   }
 
+  // v1.2.7.11: cross-platform post-pass — inject a self-locating PATH
+  // export into wg-quick and awg-quick so their internal `wg` / `awg`
+  // setconf calls resolve to bundled binaries even when the script runs
+  // under sudo (which strips the parent shell PATH and substitutes
+  // secure_path = /usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin — the
+  // bundled dir is never in there). Without this patch, awg-quick fails
+  // with `awg: command not found` at setconf time on every fresh-install
+  // macOS / non-brew Linux. Idempotent: skips if marker is already present
+  // (CI builds bake the patch in via fetch-binaries.sh; this runtime call
+  // is the upgrade path for users who already have unpatched scripts on
+  // disk from v1.2.7.8/.9/.10).
+  patchTransportScriptPathSelfLocation(binDir);
+
   return report;
 }
 
@@ -772,6 +802,75 @@ function patchMacOSScriptShebangs(bundledDir: string): void {
       logger.info(`[BinaryManager] ${script} shebang patched: "${currentShebang}" → "${targetShebang}"`);
     } catch (err) {
       logger.warn(`[BinaryManager] Failed to patch ${script} shebang: ${(err as Error).message}`);
+    }
+  }
+}
+
+/**
+ * v1.2.7.11: Inject a self-locating PATH export into wg-quick and awg-quick
+ * scripts so their internal `wg` / `awg setconf` calls resolve to the bundled
+ * binaries even when the script runs under sudo.
+ *
+ * Why this matters:
+ *   - awg-quick.darwin / awg-quick.linux unconditionally invoke `awg setconf
+ *     <iface> <conf>` to install the AmneziaWG obfuscation parameters
+ *     (Jc, Jmin, Jmax, S1-S4, H1-H4, optional I1).
+ *   - sudo applies `env_reset` and resets PATH to secure_path
+ *     (/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin on macOS
+ *     by default; usually similar on Linux distros). Our bundled dir
+ *     (~/.pc2/pc2-node/bin/<platform>-<arch>/) is NOT in there.
+ *   - Even with `sudo -E` and SETENV in the sudoers rule, secure_path
+ *     overrides the inherited PATH after env_reset. Passing PATH via the
+ *     command line therefore does not work.
+ *   - The fix: have the script modify its OWN PATH after sudo has dropped
+ *     env_reset. `export PATH="$(cd "$(dirname "$0")" && pwd):$PATH"` runs
+ *     inside the script's bash process, where secure_path no longer applies,
+ *     and prepends the script's directory so subsequent `wg` / `awg` lookups
+ *     find the bundled binaries.
+ *
+ * Idempotent — looks for the marker comment we insert and bails if present.
+ * Cross-platform — applies on macOS and Linux (Windows uses the WireGuard
+ * tunnel service and never invokes these scripts).
+ */
+function patchTransportScriptPathSelfLocation(bundledDir: string): void {
+  if (process.platform === 'win32') return;
+
+  const marker = '# PC2_PATH_SELF_LOCATION_v1';
+  const exportLine = 'export PATH="$(cd "$(dirname "$0")" && pwd):$PATH"';
+  const scripts = ['wg-quick', 'awg-quick'];
+
+  for (const script of scripts) {
+    const path = join(bundledDir, script);
+    if (!existsSync(path)) continue;
+
+    try {
+      const content = readFileSync(path, 'utf8');
+
+      // Already patched (built-in via fetch-binaries.sh, or earlier runtime
+      // pass) — no-op.
+      if (content.includes(marker)) {
+        logger.debug(`[BinaryManager] ${script} PATH self-location already present`);
+        continue;
+      }
+
+      const newlineIdx = content.indexOf('\n');
+      if (newlineIdx < 0) {
+        logger.warn(`[BinaryManager] ${script} appears truncated (no newline) — skipping PATH self-loc patch`);
+        continue;
+      }
+
+      const shebang = content.slice(0, newlineIdx);
+      if (!shebang.startsWith('#!')) {
+        logger.warn(`[BinaryManager] ${script} first line is not a shebang ("${shebang.slice(0, 40)}…") — skipping PATH self-loc patch`);
+        continue;
+      }
+
+      const body = content.slice(newlineIdx + 1);
+      const patched = `${shebang}\n${marker} — added by BinaryManager on first launch\n${exportLine}\n${body}`;
+      writeFileSync(path, patched, { mode: 0o755 });
+      logger.info(`[BinaryManager] ${script} PATH self-location patched (so internal wg/awg lookups resolve to bundled binaries under sudo)`);
+    } catch (err) {
+      logger.warn(`[BinaryManager] Failed to patch ${script} PATH self-location: ${(err as Error).message}`);
     }
   }
 }

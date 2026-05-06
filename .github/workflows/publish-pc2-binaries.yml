@@ -75,9 +75,11 @@ jobs:
           echo "All required Apple signing secrets are configured."
 
   # ---------------------------------------------------------------------------
-  # build-darwin: produces all 8 darwin assets on a single macos-latest runner.
+  # build-darwin: produces all 12 darwin assets on a single macos-latest runner.
   # Native compile for arm64 (current runner arch); -arch x86_64 cross for x64.
-  # Signs + notarises the 6 native binaries; bash scripts ship as-is.
+  # Signs + notarises the 10 native binaries (wireguard-go, wg, amneziawg-go,
+  # awg, bash for arm64+x64); the 2 wg-quick/awg-quick bash scripts ship as-is
+  # (arch-independent shell scripts, not Mach-O).
   # ---------------------------------------------------------------------------
   build-darwin:
     name: Build + sign darwin binaries
@@ -123,6 +125,50 @@ jobs:
 
             # Verify the binary is the right arch
             file "pc2-node/bin/darwin-${target_arch}/wg"
+          done
+
+      - name: Build awg native C binary for darwin-arm64 and darwin-x64
+        # v1.2.7.11: amneziawg-tools' `awg` is a fork of `wg` with extended
+        # setconf parsing for the AmneziaWG obfuscation params (Jc, Jmin,
+        # Jmax, S1-S4, H1-H4, optional I1). awg-quick.darwin invokes it as
+        # `awg setconf <iface> <conf>` to install peer config. Without
+        # bundling awg, awg-quick fails the moment it tries to apply the
+        # obfuscation parameters with `awg: command not found` and the
+        # cascade falls back to ActiveProxy. fetch-binaries.sh handles the
+        # native-arch case; we mirror the cross-arch trick from the wg step
+        # above to produce both arm64 and x64 slices on the macos-latest
+        # runner (currently arm64).
+        run: |
+          set -e
+          tmp=$(mktemp -d)
+          git clone --depth 1 https://github.com/amnezia-vpn/amneziawg-tools "$tmp/amneziawg-tools"
+
+          for arch in arm64 x86_64; do
+            target_arch=$arch
+            [ "$arch" = "x86_64" ] && target_arch="x64"
+
+            (cd "$tmp/amneziawg-tools/src" && \
+              make clean 2>/dev/null || true; \
+              make CC="clang -arch ${arch}" 2>&1)
+
+            mkdir -p "pc2-node/bin/darwin-${target_arch}"
+            # amneziawg-tools' Makefile output filename varies between
+            # upstream tags — sometimes `awg`, sometimes (post-rebase from
+            # upstream wireguard-tools) plain `wg`. Handle both, fail loud
+            # if neither is present.
+            if [ -f "$tmp/amneziawg-tools/src/awg" ]; then
+              cp "$tmp/amneziawg-tools/src/awg" "pc2-node/bin/darwin-${target_arch}/awg"
+            elif [ -f "$tmp/amneziawg-tools/src/wg" ]; then
+              cp "$tmp/amneziawg-tools/src/wg" "pc2-node/bin/darwin-${target_arch}/awg"
+            else
+              echo "::error::awg build for ${target_arch} produced no binary in $tmp/amneziawg-tools/src"
+              ls -la "$tmp/amneziawg-tools/src" || true
+              exit 1
+            fi
+            chmod +x "pc2-node/bin/darwin-${target_arch}/awg"
+
+            # Verify the binary is the right arch
+            file "pc2-node/bin/darwin-${target_arch}/awg"
           done
 
       - name: Build bash 5.2 from source for darwin-arm64 and darwin-x64
@@ -201,7 +247,8 @@ jobs:
           set -e
           missing=()
           for arch in arm64 x64; do
-            for binary in wireguard-go wg amneziawg-go bash; do
+            # v1.2.7.11: 5 native binaries per arch (added awg) + 2 scripts (arch-independent) = 12 total
+            for binary in wireguard-go wg amneziawg-go awg bash; do
               path="pc2-node/bin/darwin-${arch}/${binary}"
               [ -f "$path" ] || missing+=("$path")
             done
@@ -213,7 +260,7 @@ jobs:
             printf '  %s\n' "${missing[@]}"
             exit 1
           fi
-          echo "All 10 darwin build outputs present (incl. bash for arm64+x64)."
+          echo "All 12 darwin build outputs present (5 native × 2 archs incl. awg + bash, plus 2 scripts)."
 
       - name: Import code-signing certificate into temporary keychain
         env:
@@ -248,11 +295,12 @@ jobs:
           echo "SIGNING_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
           echo "Found signing identity (name only logged): $IDENTITY"
 
-      - name: Codesign 8 darwin native binaries (hardened runtime + timestamp)
+      - name: Codesign 10 darwin native binaries (hardened runtime + timestamp)
+        # v1.2.7.11: was 8, now 10 — added awg for arm64 + x64.
         run: |
           set -e
           for arch in arm64 x64; do
-            for binary in wireguard-go wg amneziawg-go bash; do
+            for binary in wireguard-go wg amneziawg-go awg bash; do
               path="pc2-node/bin/darwin-${arch}/${binary}"
               echo "Signing $path..."
               codesign --force \
@@ -263,9 +311,10 @@ jobs:
               codesign --verify --strict --verbose=2 "$path"
             done
           done
-          echo "All 8 darwin binaries signed and verified (incl. bash arm64+x64)."
+          echo "All 10 darwin binaries signed and verified (incl. awg + bash arm64+x64)."
 
-      - name: Notarise 8 darwin native binaries
+      - name: Notarise 10 darwin native binaries
+        # v1.2.7.11: was 8, now 10 — added awg for arm64 + x64.
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
@@ -278,7 +327,7 @@ jobs:
           # ticket lookup at first run (works whenever the user's Mac
           # has internet, which is mandatory for PC2 to function anyway).
           for arch in arm64 x64; do
-            for binary in wireguard-go wg amneziawg-go bash; do
+            for binary in wireguard-go wg amneziawg-go awg bash; do
               path="pc2-node/bin/darwin-${arch}/${binary}"
               zip_path="${path}.notarize.zip"
               echo ""
@@ -294,15 +343,15 @@ jobs:
               rm -f "$zip_path"
             done
           done
-          echo "All 8 darwin binaries successfully notarised."
+          echo "All 10 darwin binaries successfully notarised."
 
       - name: Stage darwin assets for upload (flatten to release naming)
         run: |
           set -e
           mkdir -p staging
-          # Native binaries → name-os-arch
+          # Native binaries → name-os-arch (v1.2.7.11: 5 × 2 = 10 native)
           for arch in arm64 x64; do
-            for binary in wireguard-go wg amneziawg-go bash; do
+            for binary in wireguard-go wg amneziawg-go awg bash; do
               cp "pc2-node/bin/darwin-${arch}/${binary}" "staging/${binary}-darwin-${arch}"
             done
           done
@@ -324,7 +373,8 @@ jobs:
           security delete-keychain build.keychain || true
 
   # ---------------------------------------------------------------------------
-  # build-linux-x64: 5 assets, no signing required.
+  # build-linux-x64: 6 assets in v1.2.7.11 (4 native: wireguard-go, wg,
+  # amneziawg-go, awg; 2 scripts: wg-quick, awg-quick). No signing required.
   # ---------------------------------------------------------------------------
   build-linux-x64:
     name: Build linux-x64 binaries
@@ -351,6 +401,9 @@ jobs:
           cp pc2-node/bin/linux-x64/wireguard-go staging/wireguard-go-linux-x64
           cp pc2-node/bin/linux-x64/wg          staging/wg-linux-x64
           cp pc2-node/bin/linux-x64/amneziawg-go staging/amneziawg-go-linux-x64
+          # v1.2.7.11: ship awg (the AmneziaWG fork of wg used by awg-quick
+          # for `awg setconf` to install obfuscation params).
+          cp pc2-node/bin/linux-x64/awg         staging/awg-linux-x64
           # Linux scripts are arch-independent; bundled here, not in arm64 job
           cp pc2-node/bin/linux-x64/wg-quick    staging/wg-quick-linux
           cp pc2-node/bin/linux-x64/awg-quick   staging/awg-quick-linux
@@ -363,8 +416,9 @@ jobs:
           if-no-files-found: error
 
   # ---------------------------------------------------------------------------
-  # build-linux-arm64: 3 native binaries on a GitHub-hosted ARM runner.
-  # No bash scripts here — those ship from the linux-x64 job (arch-independent).
+  # build-linux-arm64: 4 native binaries on a GitHub-hosted ARM runner
+  # (v1.2.7.11: was 3, added awg). No bash scripts here — those ship from
+  # the linux-x64 job (arch-independent).
   # ---------------------------------------------------------------------------
   build-linux-arm64:
     name: Build linux-arm64 binaries
@@ -391,6 +445,8 @@ jobs:
           cp pc2-node/bin/linux-arm64/wireguard-go  staging/wireguard-go-linux-arm64
           cp pc2-node/bin/linux-arm64/wg            staging/wg-linux-arm64
           cp pc2-node/bin/linux-arm64/amneziawg-go  staging/amneziawg-go-linux-arm64
+          # v1.2.7.11: ship awg for arm64 too (Jetson, RPi, ARM VPS).
+          cp pc2-node/bin/linux-arm64/awg           staging/awg-linux-arm64
           ls -la staging/
 
       - uses: actions/upload-artifact@v4
@@ -400,9 +456,9 @@ jobs:
           if-no-files-found: error
 
   # ---------------------------------------------------------------------------
-  # publish: collect everything (16 binaries), generate SHASUMS256.txt,
-  # upload to the release tag. Idempotent — re-running with replace_existing
-  # will overwrite the assets.
+  # publish: collect everything (22 assets in v1.2.7.11), generate
+  # SHASUMS256.txt, upload to the release tag. Idempotent — re-running with
+  # replace_existing will overwrite the assets.
   # ---------------------------------------------------------------------------
   publish:
     name: Publish to ${{ inputs.release_tag }}
@@ -422,16 +478,20 @@ jobs:
           mkdir -p staging
           find downloaded -type f -exec cp {} staging/ \;
           echo ""
-          # v1.2.7.10: 18 assets = 16 from v1.2.7.8/.9 (3 native × 2 darwin
-          # archs + 2 wg-quick scripts darwin = 8 darwin; 5 linux-x64; 3
-          # linux-arm64) + 2 bash darwin (arm64 + x64). Linux gets no
-          # bundled bash because every supported distro has bash 4+
-          # system-wide since ~2015.
-          echo "=== Staged assets (expect 18) ==="
+          # v1.2.7.11: 22 assets = 18 from v1.2.7.10 + 4 awg binaries
+          # (darwin arm64 + x64, linux x64 + arm64). Breakdown:
+          #   darwin: 12 = 5 native × 2 archs (wireguard-go, wg, amneziawg-go,
+          #          awg, bash) + 2 scripts (wg-quick, awg-quick).
+          #   linux-x64: 6 = 4 native (wireguard-go, wg, amneziawg-go, awg)
+          #          + 2 scripts.
+          #   linux-arm64: 4 native (wireguard-go, wg, amneziawg-go, awg).
+          #   Total: 12 + 6 + 4 = 22. Linux gets no bundled bash because
+          #   every supported distro has bash 4+ system-wide since ~2015.
+          echo "=== Staged assets (expect 22) ==="
           ls -la staging/
           count=$(ls staging/ | wc -l | tr -d ' ')
-          if [ "$count" != "18" ]; then
-            echo "::warning::Expected 18 assets, found $count. Continuing anyway."
+          if [ "$count" != "22" ]; then
+            echo "::warning::Expected 22 assets, found $count. Continuing anyway."
           fi
 
       - name: Generate SHASUMS256.txt

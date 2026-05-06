@@ -100,6 +100,7 @@ export class AmneziaWGService {
 
     private awgGoBinPath: string | null = null;
     private awgQuickBinPath: string | null = null;
+    private awgCliBinPath: string | null = null;
 
     /**
    * Find a binary by checking bundled path first, then well-known system paths.
@@ -132,6 +133,16 @@ export class AmneziaWGService {
    * Check if AmneziaWG tools are installed.
    * Checks bundled binaries first, then system paths.
    * Not available on Windows (AmneziaWG is Linux/macOS only).
+   *
+   * v1.2.7.11: also resolves the `awg` CLI (the AmneziaWG fork of `wg`).
+   * awg-quick.darwin / awg-quick.linux scripts shell out to `awg setconf`
+   * to install the obfuscation parameters (Jc/S1-S4/H1-H4) — plain `wg`
+   * cannot parse those keys. Pre-v1.2.7.11 builds didn't ship `awg`,
+   * causing `awg-quick up` to fail mid-bring-up with `awg: command not
+   * found`. Probe is informational here (we still only require awg-go +
+   * awg-quick to mark "available"); the actual lookup-via-PATH happens
+   * inside the awg-quick script after our PATH self-location patch
+   * prepends the bundled bin dir.
    */
     isAvailable (): boolean {
         if ( this._available !== null ) return this._available;
@@ -157,8 +168,18 @@ export class AmneziaWGService {
             return false;
         }
 
+        // v1.2.7.11: locate the awg CLI for keypair generation and as an
+        // explicit signal that awg-quick will succeed at the setconf step.
+        // Fallback to bundled `wg` is acceptable for keygen (same Curve25519
+        // format) but not for awg-quick's setconf — that path requires the
+        // bundled bin dir to be on the script's PATH (handled separately).
+        this.awgCliBinPath = this.findBinary('awg', [
+            '/usr/local/bin/awg', '/opt/homebrew/bin/awg',
+        ]);
+
         this._available = true;
-        logger.info(`[AmneziaWG] Stealth transport tools detected (awg-go: ${this.awgGoBinPath}, awg-quick: ${this.awgQuickBinPath})`);
+        const awgCliInfo = this.awgCliBinPath ? this.awgCliBinPath : 'NOT FOUND (awg-quick setconf will fail; will fall back to wg for keygen only)';
+        logger.info(`[AmneziaWG] Stealth transport tools detected (awg-go: ${this.awgGoBinPath}, awg-quick: ${this.awgQuickBinPath}, awg: ${awgCliInfo})`);
         return true;
     }
 
@@ -221,10 +242,27 @@ export class AmneziaWGService {
         }
 
         logger.info('[AmneziaWG] Generating new keypair...');
-        // AmneziaWG uses the same key format as WireGuard
-        const keygenTool = this.findTool('awg') || 'wg';
-        const privateKey = execSync(`${keygenTool} genkey`, { stdio: 'pipe' }).toString().trim();
-        const publicKey = execSync(`echo "${privateKey}" | ${keygenTool} pubkey`, {
+        // AmneziaWG uses the same key format as WireGuard, so the bundled `wg`
+        // is a fine fallback when `awg` is missing.
+        //
+        // v1.2.7.11: previously used `findTool` which only searched system
+        // paths (`/usr/bin`, `/opt/homebrew/bin`) and `which`, NEVER the
+        // bundled `~/.pc2/pc2-node/bin/<platform>-<arch>/` directory. On a
+        // fresh-Mac install where users didn't `brew install wireguard-tools`,
+        // this resolved to the literal string 'wg' and `execSync('wg genkey')`
+        // crashed with "wg: command not found" — exactly what was seen in
+        // production logs (issue triggered by stealth toggle on v1.2.7.10).
+        // `findBinary` checks bundled dir first, then the supplied extra
+        // paths, then `which` — so the bundled wg/awg is always preferred.
+        const keygenTool = this.awgCliBinPath
+            || this.findBinary('awg', ['/usr/local/bin/awg', '/opt/homebrew/bin/awg'])
+            || this.findBinary('wg', ['/usr/local/bin/wg', '/opt/homebrew/bin/wg', '/usr/bin/wg', '/usr/sbin/wg']);
+        if ( ! keygenTool ) {
+            throw new Error('[AmneziaWG] No wg/awg binary available for keygen — bundle download may have failed');
+        }
+        logger.debug(`[AmneziaWG] Using ${keygenTool} for keypair generation`);
+        const privateKey = execSync(`"${keygenTool}" genkey`, { stdio: 'pipe', shell: '/bin/sh' }).toString().trim();
+        const publicKey = execSync(`echo "${privateKey}" | "${keygenTool}" pubkey`, {
             stdio: 'pipe',
             shell: '/bin/sh',
         }).toString().trim();
@@ -495,15 +533,18 @@ export class AmneziaWGService {
         throw new Error('No username registered - register a username before enabling AmneziaWG');
     }
 
+    /**
+   * @deprecated v1.2.7.11 — use `findBinary` instead. This helper was kept
+   * for one release cycle in case any external caller depended on it (none
+   * currently do; it was internal-only). It now delegates to `findBinary`
+   * so the bundled bin dir is always checked first; behaviour is otherwise
+   * identical for paths it used to resolve.
+   */
     private findTool (name: string): string | null {
-        const paths = [`/usr/local/bin/${name}`, `/usr/bin/${name}`, `/opt/homebrew/bin/${name}`];
-        for ( const p of paths ) {
-            if ( existsSync(p) ) return p;
-        }
-        try {
-            return execSync(`which ${name} 2>/dev/null`, { stdio: 'pipe' }).toString().trim() || null;
-        } catch {
-            return null;
-        }
+        return this.findBinary(name, [
+            `/usr/local/bin/${name}`,
+            `/usr/bin/${name}`,
+            `/opt/homebrew/bin/${name}`,
+        ]);
     }
 }

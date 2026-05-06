@@ -14,11 +14,26 @@
  * v1.2.7.10: rules now use `NOPASSWD:SETENV:` instead of `NOPASSWD:` so that
  * `sudo -E` invocations preserving WG_QUICK_USERSPACE_IMPLEMENTATION succeed.
  * Without SETENV, sudo strips PATH-modifying env vars even with -E, and
- * wg-quick on macOS / userspace-Linux can't find its bundled `wireguard-go` /
- * `amneziawg-go` companion (sudo's default secure_path is
- * /usr/bin:/bin:/usr/sbin:/sbin which doesn't include ~/.pc2/pc2-node/bin).
+ * wg-quick on macOS / userspace-Linux cannot find its bundled `wireguard-go` /
+ * `amneziawg-go` companion (sudo default secure_path is
+ * /usr/bin:/bin:/usr/sbin:/sbin which does not include ~/.pc2/pc2-node/bin).
  * Pre-v1.2.7.10 entries (no SETENV) are detected as needing upgrade and
  * trigger one more password prompt to rewrite — single cost, then never again.
+ *
+ * v1.2.7.11: TWO bugs fixed in the install + check flow:
+ *   (a) osascript install command was breaking on apostrophes in the comment
+ *       text of the sudoers entry. The whole entry was interpolated into
+ *       `osascript -e 'do shell script "echo \"...\" > ..."'` and any embedded
+ *       `'` terminated the outer single-quoted shell argument before osascript
+ *       could run. Now: the entry is written to a temp file as the user, and
+ *       osascript runs a fixed-shape `cp + chmod + rm` against known paths.
+ *   (b) The fallback "is sudo configured?" probe used `sudo -n <bin> --version`,
+ *       but wg-quick has no --version flag and exits non-zero on it — the
+ *       probe always reported "not configured" even when sudoers was perfect.
+ *       Now: probe via `sudo -n -l <bin> up <args>` which exits 0 silently
+ *       when a NOPASSWD rule matches and prints the matched rule for SETENV
+ *       parsing. False-positive setup attempts (and their associated noisy
+ *       password prompts on every relaunch) are eliminated.
  *
  * Flow:
  *   1. Check if sudoers entry already exists with all required transport binaries
@@ -29,7 +44,8 @@
  */
 
 import { execSync, exec } from 'child_process';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'fs';
+import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { logger } from '../../utils/logger.js';
 
@@ -75,6 +91,33 @@ function findSiblingBinary(wgQuickPath: string, name: string): string | null {
 }
 
 /**
+ * Probe whether `sudo -n -l <binPath> up <args>` succeeds without a password
+ * prompt. When sudo is given a command argument with `-l`, it exits 0 silently
+ * if a NOPASSWD rule matches and prints the matched rule line(s) (which we
+ * grep for the SETENV flag). On no-match or password-required it exits non-zero.
+ *
+ * This replaces the pre-v1.2.7.11 probe that ran `sudo -n <bin> --version` —
+ * `wg-quick` has no `--version` flag and exits non-zero on it, so the old
+ * probe always reported "not configured" even when sudoers was perfect.
+ * That false negative cascaded into a spurious osascript install attempt on
+ * every launch (logged as `Passwordless sudo not configured for wg-quick`).
+ *
+ * Returns `{ allowed: true, hasSetenv: <bool> }` when the rule matches.
+ */
+function probeSudoForBinary(binPath: string): { allowed: boolean; hasSetenv: boolean } {
+  try {
+    const out = execSync(`sudo -n -l ${binPath} up /dev/null 2>&1`, {
+      stdio: 'pipe',
+      timeout: 3000,
+      shell: '/bin/sh',
+    }).toString();
+    return { allowed: true, hasSetenv: /SETENV/i.test(out) };
+  } catch {
+    return { allowed: false, hasSetenv: false };
+  }
+}
+
+/**
  * Check whether the current user can run wg-quick AND awg-quick via sudo without
  * a password.
  *
@@ -90,6 +133,12 @@ function findSiblingBinary(wgQuickPath: string, name: string): string | null {
  * the default invocation form on macOS now). Pre-v1.2.7.10 entries get
  * detected as needing setup so they upgrade in-place on next launch — costs
  * the user one extra password prompt, after which they're permanently fixed.
+ *
+ * v1.2.7.11: switched to `sudo -n -l` probe as the primary check. The
+ * existsSync/readFileSync path is kept as a secondary signal (for the rare
+ * case where a non-root user CAN read /etc/sudoers.d/, e.g. inside a
+ * container) but is now best-effort: failure to read it is no longer
+ * treated as "needs setup" — the sudo -n -l result is authoritative.
  */
 export function checkWireGuardPermissions(wgQuickPath: string): PermissionCheckResult {
   const platform = process.platform;
@@ -105,17 +154,53 @@ export function checkWireGuardPermissions(wgQuickPath: string): PermissionCheckR
 
   const awgQuickPath = findSiblingBinary(wgQuickPath, 'awg-quick');
 
+  // Primary probe: sudo -n -l <bin> up <args>. Works for non-root users,
+  // doesn't prompt, and the matched rule line is parseable for SETENV.
+  const wgProbe = probeSudoForBinary(wgQuickPath);
+  if (wgProbe.allowed) {
+    const awgProbe = awgQuickPath
+      ? probeSudoForBinary(awgQuickPath)
+      : { allowed: true, hasSetenv: true };
+
+    if (awgProbe.allowed && wgProbe.hasSetenv && awgProbe.hasSetenv) {
+      return {
+        sudoConfigured: true,
+        needsSetup: false,
+        platform,
+        message: awgQuickPath
+          ? 'sudo -n -l: wg-quick + awg-quick permitted with SETENV'
+          : 'sudo -n -l: wg-quick permitted with SETENV',
+      };
+    }
+
+    if (awgProbe.allowed && (!wgProbe.hasSetenv || !awgProbe.hasSetenv)) {
+      return {
+        sudoConfigured: false,
+        needsSetup: true,
+        platform,
+        message: 'Sudoers rules exist but missing SETENV flag (pre-v1.2.7.10 install). Re-running setup will upgrade them in-place so sudo -E can pass WG_QUICK_USERSPACE_IMPLEMENTATION through.',
+      };
+    }
+
+    if (!awgProbe.allowed) {
+      return {
+        sudoConfigured: false,
+        needsSetup: true,
+        platform,
+        message: 'wg-quick rule present but awg-quick rule missing (pre-v1.2.7.9 install). Re-running setup will extend the entry to cover both binaries.',
+      };
+    }
+  }
+
+  // Secondary probe: try reading /etc/sudoers.d/pc2-wireguard. Usually fails
+  // for non-root (mode 0440 root:wheel), so the sudo -n -l probe above is
+  // the authoritative check. Kept for diagnostic clarity in environments
+  // where the file IS readable (some container setups, root-owned shells).
   if (existsSync(SUDOERS_FILE)) {
     try {
       const content = readFileSync(SUDOERS_FILE, 'utf-8');
       const hasWg = content.includes('wg-quick') || content.includes('wg quick');
-      // If awg-quick isn't bundled, don't require it — keeps the check valid
-      // for users who never get an AWG binary (unusual but possible).
       const hasAwg = !awgQuickPath || content.includes('awg-quick');
-      // v1.2.7.10: SETENV flag check. The token can appear as `NOPASSWD:SETENV:`
-      // in our generated form. Be generous about whitespace/casing variants in
-      // case a user hand-edited their sudoers file — `SETENV` substring match
-      // catches them all without false-positives (no other rule type uses it).
       const hasSetenv = /SETENV/i.test(content);
       if (hasWg && hasAwg && hasSetenv) {
         return {
@@ -123,44 +208,13 @@ export function checkWireGuardPermissions(wgQuickPath: string): PermissionCheckR
           needsSetup: false,
           platform,
           message: awgQuickPath
-            ? 'Sudoers entry found for wg-quick + awg-quick (SETENV)'
-            : 'Sudoers entry found for wg-quick (SETENV)',
-        };
-      }
-      if (hasWg && hasAwg && !hasSetenv) {
-        return {
-          sudoConfigured: false,
-          needsSetup: true,
-          platform,
-          message: 'Sudoers entry exists but missing SETENV flag (pre-v1.2.7.10 install) — re-running setup will upgrade in-place so wg-quick can locate bundled wireguard-go under sudo',
-        };
-      }
-      if (hasWg && !hasAwg) {
-        return {
-          sudoConfigured: false,
-          needsSetup: true,
-          platform,
-          message: 'Sudoers entry found for wg-quick but missing awg-quick (pre-v1.2.7.9 install) — re-running setup will extend it',
+            ? 'Sudoers file readable and contains wg-quick + awg-quick (SETENV)'
+            : 'Sudoers file readable and contains wg-quick (SETENV)',
         };
       }
     } catch {
-      // Can't read sudoers file (expected for non-root)
+      // Expected for non-root — not a failure signal.
     }
-  }
-
-  try {
-    execSync(`sudo -n ${wgQuickPath} --version 2>/dev/null`, {
-      stdio: 'pipe',
-      timeout: 3000,
-    });
-    return {
-      sudoConfigured: true,
-      needsSetup: false,
-      platform,
-      message: 'sudo wg-quick works without password',
-    };
-  } catch {
-    // sudo -n failed → password required
   }
 
   return {
@@ -195,15 +249,23 @@ export function checkWireGuardPermissions(wgQuickPath: string): PermissionCheckR
  */
 function buildSudoersEntry(wgQuickPath: string, _wgGoBinPath?: string): string {
   const user = process.env.USER || process.env.LOGNAME || 'nobody';
+  // v1.2.7.11: comment text deliberately avoids apostrophes/single quotes.
+  // The whole entry is interpolated through `osascript -e '...'` on macOS,
+  // and any embedded ' character terminates the outer single-quoted shell
+  // argument before osascript ever runs (the install would fail at /bin/sh
+  // parse time, before the password dialog could appear). The temp-file +
+  // cp dance in setupMacOS now sidesteps the interpolation entirely, but
+  // keeping the comment text apostrophe-free is a defence-in-depth measure
+  // for any future code path that does interpolate the entry.
   const lines = [
-    `# PC2 transport permissions — passwordless sudo for tunnel management.`,
+    `# PC2 transport permissions: passwordless sudo for tunnel management.`,
     `# Covers WireGuard (wg-quick) and AmneziaWG (awg-quick). VLESS Reality`,
     `# uses sing-box in userspace mode and needs no sudo.`,
     `#`,
-    `# v1.2.7.10: rules use NOPASSWD:SETENV: so 'sudo -E' callers can pass`,
+    `# v1.2.7.10: rules use NOPASSWD:SETENV: so sudo -E callers can pass`,
     `# WG_QUICK_USERSPACE_IMPLEMENTATION=<bundled-wireguard-go-path>. Without`,
-    `# SETENV, sudo strips the var and wg-quick can't locate our bundled`,
-    `# wireguard-go / amneziawg-go (sudo's secure_path doesn't include`,
+    `# SETENV, sudo strips the var and wg-quick cannot locate our bundled`,
+    `# wireguard-go / amneziawg-go (sudo secure_path does not include`,
     `# ~/.pc2/pc2-node/bin/<platform>-<arch>/).`,
     `#`,
     `# Auto-generated by PC2 Node. Remove this file to revoke;`,
@@ -247,13 +309,43 @@ export async function setupWireGuardSudoers(
 }
 
 async function setupMacOS(entry: string): Promise<{ success: boolean; message: string }> {
-  const escaped = entry.replace(/"/g, '\\"').replace(/\n/g, '\\n');
-  const script = `
-    do shell script "echo \\"${escaped}\\" > ${SUDOERS_FILE} && chmod 0440 ${SUDOERS_FILE}" with administrator privileges
-  `.trim();
+  // v1.2.7.11: the previous approach interpolated the sudoers entry text
+  // directly into `osascript -e 'do shell script "echo \"...\" > ..."'`,
+  // which broke the moment the entry contained an apostrophe (the embedded
+  // ' terminated the outer single-quoted shell argument). Production hit
+  // this when the v1.2.7.10 comment text contained `'sudo -E'` and `cant`
+  // / `doesnt` — /bin/sh failed at parse time, before osascript ever ran,
+  // and the password dialog never appeared on fresh-Mac installs.
+  //
+  // New approach: write the entry to a temp file as the user (mode 0600),
+  // then ask osascript to run a fixed-shape `cp + chmod + rm` against
+  // known paths. The shell command passed to osascript no longer contains
+  // any user-controlled string, so apostrophes / quotes / unicode in the
+  // entry can't break parsing.
+  const tmpFile = join(tmpdir(), `pc2-sudoers-${Date.now()}-${process.pid}`);
+  try {
+    writeFileSync(tmpFile, entry, { mode: 0o600 });
+  } catch (err) {
+    return {
+      success: false,
+      message: `Failed to write temp sudoers file: ${err instanceof Error ? err.message : err}`,
+    };
+  }
+
+  const escapeForOsa = (s: string): string => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  const tmpEsc = escapeForOsa(tmpFile);
+  const destEsc = escapeForOsa(SUDOERS_FILE);
+  const script = `do shell script "/bin/cp \\"${tmpEsc}\\" \\"${destEsc}\\" && /bin/chmod 0440 \\"${destEsc}\\" && /bin/rm -f \\"${tmpEsc}\\"" with administrator privileges`;
 
   return new Promise((resolve) => {
     exec(`osascript -e '${script}'`, { timeout: 60_000 }, (error) => {
+      // Best-effort cleanup if osascript bailed before deleting the temp
+      // file (e.g. user cancelled the auth dialog).
+      try {
+        if (existsSync(tmpFile)) unlinkSync(tmpFile);
+      } catch {
+        // Already gone (osascript completed the rm) or permission glitch — ignore.
+      }
       if (error) {
         logger.warn(`[WireGuard:sudoers] macOS setup cancelled or failed: ${error.message}`);
         resolve({

@@ -98,6 +98,33 @@ fetch_wireguard_go() {
 }
 
 # ---------------------------------------------------------------------------
+# inject_path_self_location: prepend the script's own directory to PATH
+# so internal `wg` / `awg setconf` calls resolve to bundled binaries even
+# when the script runs under sudo (where secure_path strips ~/.pc2/.../bin/).
+#
+# v1.2.7.11: required for awg-quick because amneziawg-tools' awg-quick.darwin
+# unconditionally invokes `awg setconf` for the obfuscation params, and
+# Apple sudo's default secure_path = /usr/local/bin:/usr/bin:/bin:... does
+# not include the bundled directory. Defensive for wg-quick too — same
+# class of issue, currently masked by wg-quick.darwin tolerating partial
+# config but no guarantee that survives upstream changes.
+#
+# Idempotent: if the marker line is already present, the function is a no-op.
+# ---------------------------------------------------------------------------
+inject_path_self_location() {
+  local script_path="$1"
+  if grep -qF 'PC2_PATH_SELF_LOCATION_v1' "$script_path" 2>/dev/null; then
+    return
+  fi
+  # Insert two lines after the shebang: a marker comment (for idempotency
+  # detection) and the export. Using awk rather than sed to avoid having
+  # to escape `"` and `$` in the replacement.
+  awk 'NR==1 {print; print "# PC2_PATH_SELF_LOCATION_v1 — added by fetch-binaries.sh"; print "export PATH=\"$(cd \"$(dirname \"$0\")\" && pwd):$PATH\""; next} {print}' "$script_path" > "$script_path.tmp" \
+    && mv "$script_path.tmp" "$script_path"
+  chmod +x "$script_path"
+}
+
+# ---------------------------------------------------------------------------
 # wireguard-tools (wg, wg-quick): compile wg from C source, copy wg-quick script
 # wg-quick is a bash script so it works on all Unix platforms.
 # wg is a small C binary that needs per-platform compilation.
@@ -123,11 +150,13 @@ fetch_wireguard_tools() {
   if [ -f "$tools_dir/src/wg-quick/darwin.bash" ] && [[ "$target" == darwin-* ]]; then
     cp "$tools_dir/src/wg-quick/darwin.bash" "$dest_dir/wg-quick"
     chmod +x "$dest_dir/wg-quick"
-    log "  -> $dest_dir/wg-quick (macOS bash script)"
+    inject_path_self_location "$dest_dir/wg-quick"
+    log "  -> $dest_dir/wg-quick (macOS bash script, PATH self-loc patched)"
   elif [ -f "$tools_dir/src/wg-quick/linux.bash" ] && [[ "$target" == linux-* ]]; then
     cp "$tools_dir/src/wg-quick/linux.bash" "$dest_dir/wg-quick"
     chmod +x "$dest_dir/wg-quick"
-    log "  -> $dest_dir/wg-quick (Linux bash script)"
+    inject_path_self_location "$dest_dir/wg-quick"
+    log "  -> $dest_dir/wg-quick (Linux bash script, PATH self-loc patched)"
   fi
 
   # wg binary: only compile natively (cross-compiling C is harder than Go)
@@ -183,8 +212,16 @@ fetch_amneziawg_go() {
 }
 
 # ---------------------------------------------------------------------------
-# amneziawg-tools (awg-quick): copy the awg-quick bash script
+# amneziawg-tools (awg-quick + awg): copy the awg-quick bash script and
+# compile the awg CLI from C source.
+#
 # awg-quick is a modified wg-quick with amneziawg obfuscation params support.
+#
+# v1.2.7.11: also builds `awg`, the AmneziaWG fork of `wg` that knows how to
+# parse the obfuscation parameter keys (Jc, Jmin, Jmax, S1-S4, H1-H4, optional
+# I1) when calling `awg setconf <iface> <conf>`. Without `awg` on PATH inside
+# the awg-quick script, the bring-up fails at the setconf step. Plain `wg`
+# cannot substitute because it would reject the unknown obfuscation keys.
 # ---------------------------------------------------------------------------
 fetch_amneziawg_tools() {
   local target="$1"
@@ -211,7 +248,8 @@ fetch_amneziawg_tools() {
     sed -i.bak 's|/var/run/wireguard/|/var/run/amneziawg/|g' "$dest_dir/awg-quick" 2>/dev/null || true
     sed -i.bak 's|PROGRAM="${0##*/}"|PROGRAM="awg-quick"|g' "$dest_dir/awg-quick" 2>/dev/null || true
     rm -f "$dest_dir/awg-quick.bak"
-    log "  -> $dest_dir/awg-quick (macOS bash script, patched)"
+    inject_path_self_location "$dest_dir/awg-quick"
+    log "  -> $dest_dir/awg-quick (macOS bash script, patched + PATH self-loc)"
   elif [ -f "$tools_dir/src/wg-quick/linux.bash" ] && [[ "$target" == linux-* ]]; then
     cp "$tools_dir/src/wg-quick/linux.bash" "$dest_dir/awg-quick"
     chmod +x "$dest_dir/awg-quick"
@@ -219,7 +257,33 @@ fetch_amneziawg_tools() {
     sed -i.bak 's|/var/run/wireguard/|/var/run/amneziawg/|g' "$dest_dir/awg-quick" 2>/dev/null || true
     sed -i.bak 's|PROGRAM="${0##*/}"|PROGRAM="awg-quick"|g' "$dest_dir/awg-quick" 2>/dev/null || true
     rm -f "$dest_dir/awg-quick.bak"
-    log "  -> $dest_dir/awg-quick (Linux bash script, patched)"
+    inject_path_self_location "$dest_dir/awg-quick"
+    log "  -> $dest_dir/awg-quick (Linux bash script, patched + PATH self-loc)"
+  fi
+
+  # awg binary: only compile natively (cross-compiling C is harder than Go).
+  # CI uses an explicit clang -arch override step instead — see
+  # .github/workflows/publish-pc2-binaries.yml "Build awg native C binary".
+  local current=$(detect_current_target)
+  if [ "$target" = "$current" ]; then
+    log "Building awg binary for $target (native)..."
+    (cd "$tools_dir/src" && make clean 2>/dev/null; make 2>&1) && {
+      # amneziawg-tools' Makefile output filename varies between upstream
+      # tags — sometimes `awg`, sometimes (post-rebase from upstream
+      # wireguard-tools) plain `wg`. Handle both.
+      if [ -f "$tools_dir/src/awg" ]; then
+        cp "$tools_dir/src/awg" "$dest_dir/awg"
+      elif [ -f "$tools_dir/src/wg" ]; then
+        cp "$tools_dir/src/wg" "$dest_dir/awg"
+      else
+        warn "awg build succeeded but no awg/wg binary found in $tools_dir/src"
+        return
+      fi
+      chmod +x "$dest_dir/awg"
+      log "  -> $dest_dir/awg"
+    } || warn "awg build failed for $target"
+  else
+    warn "Skipping awg binary for $target (cross-compile from $current not supported for C; build natively on target platform)"
   fi
 }
 
