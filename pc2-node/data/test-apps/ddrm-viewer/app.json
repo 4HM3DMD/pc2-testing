@@ -1,7 +1,7 @@
 {
   "name": "ddrm-viewer",
   "title": "Elacity Viewer",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Secure viewer for dDRM-protected digital assets. Validates ownership rights and renders content within an isolated WASM sandbox.",
   "author": {
     "name": "Elacity Labs",

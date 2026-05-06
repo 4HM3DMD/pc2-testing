@@ -889,7 +889,15 @@ var ElacityAPI = (function () {
     var creator = raw.creator || {};
     var chMeta = item._channelMeta || {};
 
-    var channelName = chMeta.name || props.labelType || '';
+    // Don't fall back to props.labelType for the channel name. labelType is
+    // a metadata role tag (almost always literal "Creator" for assets minted
+    // via elacity-creator) and surfaces under the Properties panel. Using it
+    // as a channel-name fallback caused every channel without a cached name
+    // to display as "Creator" -- confusing non-creator viewers into thinking
+    // a watermark / role label was being shown for them. The downstream
+    // GENERIC_NAMES handler resolves an empty channel name on-chain via
+    // fetchChannelName(channel.address), so '' is the correct fallback.
+    var channelName = chMeta.name || '';
     var channelImage = chMeta.image || chMeta.coverImage || '';
     var creatorAlias = creator.name || creator.alias || '';
 

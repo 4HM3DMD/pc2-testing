@@ -539,6 +539,22 @@
     return getCreatorName(item);
   }
 
+  // Channel-info cache for card-grid enrichment. The catalog row that backs a
+  // card sometimes lacks channel.name / channel.image (channel not yet locally
+  // indexed). The detail page already enriches via ElacityAPI.retrieveChannel
+  // (backend-first GraphQL with local fallback); this exposes the same
+  // resolver to renderCard, deduplicated per channel address so 20 cards from
+  // one channel issue exactly one network request.
+  var channelInfoCache = {};
+  function resolveChannelInfo(channelAddress) {
+    if (!channelAddress) return Promise.resolve(null);
+    var key = channelAddress.toLowerCase();
+    if (channelInfoCache[key]) return channelInfoCache[key];
+    channelInfoCache[key] = ElacityAPI.retrieveChannel(channelAddress)
+      .catch(function () { return null; });
+    return channelInfoCache[key];
+  }
+
   // ── Theme ────────────────────────────────────────────
 
   var THEME_KEY = 'elacity-theme';
@@ -740,6 +756,60 @@
       openDetail(item.contractAddress, item.hexTokenID || item.tokenID, isOwned);
     });
 
+    // Enrich the card from the canonical channel record when the catalog row
+    // didn't include the channel's display name and/or image. This runs the
+    // same backend lookup that the detail and channel pages use, so a card
+    // for "OpenTech" no longer falls back to a truncated 0x.. wallet address
+    // and a single-letter avatar when the local catalog has only the address.
+    var channelAddr = item.channel && item.channel.address;
+    var rowMissingName = !item.channel || !item.channel.name;
+    var rowMissingImage = !item.channel || (!item.channel.image && !item.channel.imageURL);
+    if (channelAddr && (rowMissingName || rowMissingImage)) {
+      resolveChannelInfo(channelAddr).then(function (ch) {
+        if (!ch) return;
+        var resolvedName = ch.name || '';
+        if (resolvedName && rowMissingName) {
+          var nameEl = card.querySelector('.video-card-channel');
+          if (nameEl && !nameEl.dataset.enriched) {
+            nameEl.textContent = resolvedName;
+            nameEl.dataset.enriched = '1';
+          }
+        }
+        var avatarEl = card.querySelector('.video-card-avatar');
+        if (avatarEl && !avatarEl.dataset.enriched) {
+          // Two-step avatar update: show the (correct) initial letter
+          // immediately so the slot is never empty, then upgrade to the
+          // channel image only if it actually loads. The previous
+          // innerHTML+inline-onerror approach left the slot blank during
+          // the loading window and silently lost the fallback letter when
+          // the image 404'd, leaving an empty grey circle.
+          if (resolvedName && rowMissingName) {
+            avatarEl.textContent = resolvedName.charAt(0).toUpperCase();
+          }
+          // Use getOwnerAvatar -- the same resolver the channels directory
+          // uses successfully. It tries (in order): creator.did avatar →
+          // creator.avatar → ch.image → ch.imageURL, and validates each
+          // via resolveIpfsUrl before returning. Returns a fully-resolved
+          // URL or empty string, so we don't have to redo the gateway dance.
+          var imgUrl = rowMissingImage ? getOwnerAvatar(ch) : '';
+          if (imgUrl) {
+            var img = document.createElement('img');
+            img.alt = '';
+            img.onload = function () {
+              if (avatarEl.dataset.enriched === '1') return;
+              avatarEl.innerHTML = '';
+              avatarEl.appendChild(img);
+              avatarEl.dataset.enriched = '1';
+            };
+            img.onerror = function () { /* keep the initial-letter fallback */ };
+            img.src = imgUrl;
+          } else if (resolvedName && rowMissingName) {
+            avatarEl.dataset.enriched = '1';
+          }
+        }
+      });
+    }
+
     return card;
   }
 
@@ -814,6 +884,15 @@
         state.browseItems = state.browseItems.concat(validItems);
         state.browseOffset += result.data ? result.data.length : 0;
         var baseIndex = state.browseItems.length - validItems.length;
+
+        // Mark the feed exhausted when the server returns an empty page.
+        // Without this, narrow filters (e.g. content-type "3d" with few
+        // matches) leave `browseOffset < browseTotal` true forever, and the
+        // IntersectionObserver re-fires every time it's recreated -- causing
+        // a perceptible skeleton/refresh flicker on the 3D tab.
+        if (!result.data || result.data.length === 0) {
+          state.browseTotal = state.browseOffset;
+        }
 
         validItems.forEach(function (item, idx) {
           dom.nftGrid.appendChild(renderCard(item, false, baseIndex + idx));

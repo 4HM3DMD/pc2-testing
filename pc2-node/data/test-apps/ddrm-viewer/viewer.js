@@ -343,7 +343,13 @@
             $pageNav.style.display = 'flex';
           }
 
+          // HiDPI rendering: render the PDF bitmap at scale * devicePixelRatio
+          // so 4K / Retina displays get sharp pages, while keeping the canvas
+          // CSS width at 100% so layout is unchanged. cap at 3x to bound memory
+          // on extreme DPR (e.g. 4x emulator profiles).
           var scale = 1.5;
+          var dpr = Math.min(window.devicePixelRatio || 1, 3);
+          var renderScale = scale * dpr;
           var rendered = 0;
 
           for (var i = 1; i <= pdf.numPages; i++) {
@@ -356,9 +362,13 @@
               $docContainer.appendChild(canvasEl);
 
               pdf.getPage(pageNum).then(function (page) {
-                var viewport = page.getViewport({ scale: scale });
+                var viewport = page.getViewport({ scale: renderScale });
                 canvasEl.width = viewport.width;
                 canvasEl.height = viewport.height;
+                // Reserve aspect ratio so the page's CSS height matches the
+                // bitmap before render finishes (prevents visible jump from
+                // 0-height placeholder to fully sized canvas).
+                canvasEl.style.aspectRatio = (viewport.width / viewport.height).toString();
                 var ctx = canvasEl.getContext('2d');
                 page.render({ canvasContext: ctx, viewport: viewport }).promise.then(function () {
                   rendered++;
@@ -1436,17 +1446,19 @@
     var oldLevel = zoom.level;
     zoom.level = level;
 
+    // Capture the viewport center BEFORE the layout grows/shrinks so we can
+    // re-center on the same content point afterwards. Without this the user
+    // sees the page "scroll" downward when zooming in from 100%, because the
+    // content grows from the top-left and pushes their gaze off-screen.
     var cx = $content.scrollLeft + $content.clientWidth / 2;
     var cy = $content.scrollTop + $content.clientHeight / 2;
 
     applyZoom();
 
-    if (oldLevel !== 1 || level !== 1) {
-      var ratio = (oldLevel === 1) ? level : level / oldLevel;
-      if (oldLevel !== 1) {
-        $content.scrollLeft = cx * ratio - $content.clientWidth / 2;
-        $content.scrollTop = cy * ratio - $content.clientHeight / 2;
-      }
+    if (oldLevel > 0) {
+      var ratio = level / oldLevel;
+      $content.scrollLeft = Math.max(0, cx * ratio - $content.clientWidth / 2);
+      $content.scrollTop = Math.max(0, cy * ratio - $content.clientHeight / 2);
     }
 
     showToolbarBriefly();
