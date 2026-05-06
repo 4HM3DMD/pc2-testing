@@ -173,6 +173,9 @@ extension.on('init', async () => {
     extension.log.info('[enm] backend init complete');
 });
 
+// Fires from LazyExtensionLoader when the capsule is being unloaded
+// (e.g. user-initiated uninstall). Puter's top-level extension framework
+// does NOT emit 'shutdown'; the loader does, on our terms.
 extension.on('shutdown', async () => {
     initialised = false;
     extension.exports.isReady = () => false;

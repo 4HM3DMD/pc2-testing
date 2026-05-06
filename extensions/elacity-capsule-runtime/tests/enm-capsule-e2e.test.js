@@ -66,7 +66,10 @@ function skipIfMissing(t) {
     return false;
 }
 
-const ENM_SOURCE_DIR = resolve(import.meta.dirname, '../../elastos-node-manager');
+// ENM lives at <repo>/capsules/elastos-node-manager (NOT under extensions/ — it's
+// a hybrid capsule source, installed at runtime via /api/capsules/install, not
+// loaded directly by Puter's extension loader).
+const ENM_SOURCE_DIR = resolve(import.meta.dirname, '../../../capsules/elastos-node-manager');
 
 // ---------------------------------------------------------------------------
 // Test scaffolding

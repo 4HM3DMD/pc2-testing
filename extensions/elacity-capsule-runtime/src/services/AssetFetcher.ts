@@ -547,7 +547,7 @@ async function extractTarballAtomically(
         // At extract-time we always get a ReadEntry; cast accordingly.
         filter: (entryPath, entry) => {
             if (violation) return false;
-            const readEntry = entry as tar.ReadEntry;
+            const readEntry = entry as unknown as tar.ReadEntry;
             if (readEntry.type !== 'File' && readEntry.type !== 'Directory') {
                 return recordViolation(`disallowed entry type "${readEntry.type}" at ${entryPath}`);
             }

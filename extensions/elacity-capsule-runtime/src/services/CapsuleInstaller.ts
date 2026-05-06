@@ -360,7 +360,7 @@ export class CapsuleInstaller {
             preserveOwner: false,
             filter: (entryPath, entry) => {
                 if (violationReason) return false;
-                const readEntry = entry as tar.ReadEntry;
+                const readEntry = entry as unknown as tar.ReadEntry;
                 if (readEntry.type !== 'File' && readEntry.type !== 'Directory') {
                     return recordViolation(
                         `disallowed entry type "${readEntry.type}" at ${entryPath}`);
