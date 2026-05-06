@@ -269,7 +269,6 @@
                 + 'the node — exactly like the upstream node.sh installer, with a UI on top.',
             step_os:      'Operating system check',
             step_disk:    'Disk space check',
-            step_wallet:  'Wallet check',
             step_binary:  'Locate the ela binary',
             step_keystore: 'Import your keystore',
             step_complete: 'Confirm and start',
@@ -278,8 +277,6 @@
             disk_ok:      '{freeGb} GB free — plenty of room.',
             disk_warn:    '{freeGb} GB free — recommended minimum is 100 GB.',
             disk_fail:    'Less than 50 GB free — Mainnet sync needs ~80 GB.',
-            wallet_ok:    'Owner wallet detected: {wallet}.',
-            wallet_fail:  'No tethered wallet. Connect one in PC2 first.',
             binary_label: 'Path to your ela binary',
             binary_placeholder: '/home/op/Elastos.ELA/ela',
             binary_help:

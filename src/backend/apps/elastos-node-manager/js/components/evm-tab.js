@@ -37,15 +37,16 @@
             '</p>' +
             '<p>' +
                 'For now: use Essentials, MetaMask, or your wallet provider ' +
-                'directly for ESC operations. The ' +
-                '<strong>Dashboard → Producer identity</strong> card has the ' +
-                'public key and the deep-link to register a supernode via ' +
-                'Essentials.' +
+                'directly for ESC operations. BPoS supernode and CR Council ' +
+                'registration are <em>mainchain</em> operations — those happen ' +
+                'in Essentials on your phone, not here. See ' +
+                '<strong>Dashboard → Identity</strong> for the step-by-step ' +
+                'registration instructions and your node\'s public key.' +
             '</p>' +
             '<div class="enm-evm-features">' +
                 '<div class="enm-evm-feature">' +
                     '<div class="enm-evm-feature-title">Wallet connect</div>' +
-                    '<div class="enm-evm-feature-desc">Browser wallet for ESC tx signing</div>' +
+                    '<div class="enm-evm-feature-desc">Browser wallet for ESC tx signing — ESC sidechain only, never the mainchain</div>' +
                 '</div>' +
                 '<div class="enm-evm-feature">' +
                     '<div class="enm-evm-feature-title">Smart contracts</div>' +
@@ -56,8 +57,8 @@
                     '<div class="enm-evm-feature-desc">Mainchain ↔ ESC asset transfers</div>' +
                 '</div>' +
                 '<div class="enm-evm-feature">' +
-                    '<div class="enm-evm-feature-title">Producer reg.</div>' +
-                    '<div class="enm-evm-feature-desc">Sign + broadcast `producer register v2`</div>' +
+                    '<div class="enm-evm-feature-title">Token + NFT views</div>' +
+                    '<div class="enm-evm-feature-desc">Inspect ESC balances and NFTs held by your node</div>' +
                 '</div>' +
             '</div>';
         return this;

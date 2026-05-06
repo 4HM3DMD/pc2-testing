@@ -104,10 +104,22 @@
                 '<p class="enm-stub" style="margin:0;text-align:left;padding:0">' +
                   'This public key represents your node to the chain. ' +
                   'You\'ll paste it into Essentials when registering as a ' +
-                  'BPoS Supernode or applying for the CR Council. The ' +
-                  'keystore stays on this server — never share its password.' +
+                  'BPoS Supernode or applying for the CR Council.' +
                 '</p>' +
             '</header>' +
+            '<aside class="enm-producer-wallet-notice">' +
+                '<strong>Your BPoS deposit wallet and CR Council wallet ' +
+                'are not managed by this app.</strong> Those wallets ' +
+                'live in <strong>Elastos Essentials</strong> on your phone — ' +
+                'that\'s where the 2,000 ELA / 5,000 ELA deposits sit, ' +
+                'and where every producer or council transaction is signed. ' +
+                'This server only holds the node\'s signing keystore ' +
+                '(<code>keystore.dat</code>), used by <code>ela</code> to ' +
+                'produce blocks once you\'re elected — that\'s a different ' +
+                'key from your wallet. Essentials and this app are linked ' +
+                'one-way only: you paste the public key below into Essentials ' +
+                'at registration; nothing flows back the other way.' +
+            '</aside>' +
             '<div class="enm-producer-identity-body">' +
                 '<div class="enm-producer-qr" aria-label="Public key QR code"></div>' +
                 '<div class="enm-producer-fields">' +

@@ -2040,6 +2040,35 @@ html, body {
     color: var(--text-primary);
 }
 
+/* Wallet boundary notice — explicit reminder that this app does not
+   manage the operator's BPoS / CR deposit wallet. Sits between the
+   header + identity body and the registration instructions. */
+.enm-producer-wallet-notice {
+    margin-top: var(--spacing-md);
+    padding: var(--spacing-md) var(--spacing-lg);
+    background: var(--primary-softer, var(--bg-muted));
+    border: 1px solid var(--border-color);
+    border-left: 3px solid var(--primary);
+    border-radius: var(--radius-md);
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--text-secondary);
+}
+
+.enm-producer-wallet-notice strong {
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+.enm-producer-wallet-notice code {
+    font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace;
+    font-size: 11px;
+    padding: 1px 5px;
+    background: var(--bg-muted);
+    border-radius: 4px;
+    color: var(--text-primary);
+}
+
 /* Phase 7: step-by-step BPoS + CR Council instructions, replacing
    the broken "Open in Essentials" deep-link button. */
 .enm-producer-instructions {
