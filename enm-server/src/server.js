@@ -82,11 +82,22 @@ const configRouter = require('./routes/config');
 const evmRouter = require('./routes/evm');
 
 const PORT = parseInt(process.env.PORT || '4180', 10);
-const ENM_DATA_DIR = process.env.ENM_DATA_DIR || '/data/enm';
+// Single source of truth for ENM's data location: DataDir.enmDataDir().
+// The earlier hardcoded '/data/enm' fallback put ENM's DB + setup_state at
+// /data/enm/enm.db while DataDir.js put keystore + chain data at
+// ${PC2_DATA_DIR}/extensions/elastos-node-manager/. Two divergent paths
+// meant a purge-uninstall could wipe one and leave the other —
+// reinstalls then read "setup already complete" from the surviving DB
+// and skip the setup wizard. Fixed by going through DataDir.js, which
+// honours ENM_DATA_DIR if set, then PC2_DATA_DIR + extensions/, then
+// ./data as last-resort dev fallback. (Operator hit this 2026-05-07.)
+const { enmDataDir } = require('./services/DataDir');
+const ENM_DATA_DIR = enmDataDir();
 const PC2_HOSTNAME = process.env.PC2_HOSTNAME || '*'; // Origin allowed to call us.
 
 async function main() {
-    fs.mkdirSync(ENM_DATA_DIR, { recursive: true });
+    // ENM_DATA_DIR is already mkdir'd by DataDir.enmDataDir() at module
+    // load (line 95 above). Don't re-mkdir here.
 
     const dbPath = path.join(ENM_DATA_DIR, 'enm.db');
     const db = openDb(dbPath);
