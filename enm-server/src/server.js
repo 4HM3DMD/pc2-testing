@@ -39,7 +39,9 @@ const fs = require('node:fs');
  * the backup lives.
  */
 function backupKeystoreForTeardown() {
-    const EnmKeystoreService = require('./services/EnmKeystoreService');
+    // Module exports `{ EnmKeystoreService, generatePassword }` — destructure;
+    // `require` of the whole module returns the wrapper object, not the class.
+    const { EnmKeystoreService } = require('./services/EnmKeystoreService');
     const svc = new EnmKeystoreService();
     const src = svc.keystorePath();
     if (!fs.existsSync(src)) {
