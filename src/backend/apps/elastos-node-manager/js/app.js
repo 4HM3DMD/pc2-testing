@@ -256,20 +256,13 @@
         var self = this;
         this._clearPanes();
         if (!root.EnmSetupConversation) {
-            // Should not happen — script tag missing. Fall back to legacy wizard.
-            if (root.EnmSetupWizard) {
-                var legacy = new root.EnmSetupWizard({
-                    api: this.services.api,
-                    notifications: this.services.notifications,
-                    sse: this.services.sse,
-                    onComplete: function () {
-                        self.services.api.invalidate('/setup/state');
-                        self._showDashboard();
-                        self._broadcastSetupComplete();
-                    },
-                });
-                legacy.mount(this.els.paneDashboard);
-            }
+            // Defensive: script tag missing. v0.5 deletes the legacy wizard
+            // fallback (setup-wizard.js was 600+ LOC of pre-conversation
+            // code), so a missing component now produces a clear error
+            // pane instead of silently rendering the older flow.
+            this.els.paneDashboard.innerHTML =
+                '<p class="enm-stub">Setup conversation component not loaded. '
+                + 'Hard-refresh the page (Ctrl-Shift-R).</p>';
             return;
         }
         var conv = new root.EnmSetupConversation({
@@ -404,33 +397,6 @@
             notifications: this.services.notifications,
         });
         card.mount(document.body);
-    };
-
-    ENMApp.prototype._wireTabs = function () {
-        if (this.els.tabs.dataset.wired === '1') { return; }
-        this.els.tabs.dataset.wired = '1';
-        var self = this;
-        this.els.tabs.querySelectorAll('[data-tab]').forEach(function (btn) {
-            btn.addEventListener('click', function () { self._switchTab(btn.dataset.tab); });
-        });
-    };
-
-    ENMApp.prototype._switchTab = function (name) {
-        var panes = {
-            dashboard: this.els.paneDashboard,
-            logs:      this.els.paneLogs,
-            settings:  this.els.paneSettings,
-            audit:     this.els.paneAudit,
-            evm:       this.els.paneEvm,
-        };
-        Object.keys(panes).forEach(function (k) {
-            if (panes[k]) { panes[k].hidden = (k !== name); }
-        });
-        this.els.tabs.querySelectorAll('[data-tab]').forEach(function (b) {
-            var selected = (b.dataset.tab === name);
-            b.setAttribute('aria-selected', selected ? 'true' : 'false');
-            b.classList.toggle('active', selected);
-        });
     };
 
     ENMApp.prototype._clearPanes = function () {
