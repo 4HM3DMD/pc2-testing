@@ -166,10 +166,17 @@ export class WireGuardService {
         this._mode = this.detectMode();
 
         if ( this._mode !== 'none' ) {
-            const perms = checkWireGuardPermissions(this.wgQuickBinPath!);
+            // v1.2.7.12: pass wgDir as markerDir so the SHA-256 marker check
+            // is the primary signal (see checkWireGuardPermissions docs). On
+            // first install the marker doesn't exist yet → falls through to
+            // the `sudo -n -l` probe (and ultimately osascript). On every
+            // subsequent launch, marker hash matches → no probe, no prompt.
+            const perms = checkWireGuardPermissions(this.wgQuickBinPath!, this.wgDir);
             this._sudoConfigured = perms.sudoConfigured;
             if ( ! perms.sudoConfigured ) {
                 logger.warn(`[WireGuard] ${perms.message}`);
+            } else {
+                logger.info(`[WireGuard] sudo configured: ${perms.message}`);
             }
         }
 
@@ -203,7 +210,13 @@ export class WireGuardService {
         if ( ! this.wgQuickBinPath ) {
             return { success: false, message: 'wg-quick binary not found' };
         }
-        const result = await setupWireGuardSudoers(this.wgQuickBinPath, this.wgGoBinPath || undefined);
+        // v1.2.7.12: pass wgDir as markerDir so a successful install writes
+        // sudoers-marker.json beside provision.json. Subsequent launches
+        // detect the marker and skip the `sudo -n -l` probe + osascript
+        // re-prompt — fixes the "password every restart" regression that
+        // hit Sasha on v1.2.7.11 because Mac sudo's `-n -l` returns non-zero
+        // for non-root users in some configurations even with NOPASSWD.
+        const result = await setupWireGuardSudoers(this.wgQuickBinPath, this.wgGoBinPath || undefined, this.wgDir);
         if ( result.success ) this._sudoConfigured = true;
         return result;
     }

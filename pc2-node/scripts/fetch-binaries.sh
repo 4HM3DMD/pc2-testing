@@ -125,6 +125,47 @@ inject_path_self_location() {
 }
 
 # ---------------------------------------------------------------------------
+# inject_awg_subcommand_patches: rewrite `wg <subcmd>` → `awg <subcmd>` in
+# awg-quick scripts so the bring-up uses the AmneziaWG-aware binary that
+# understands the obfuscation parameter keys (Jc, Jmin, Jmax, S1-S4, H1-H4).
+#
+# v1.2.7.12: amneziawg-tools' awg-quick.darwin (master branch as of Jan 2026)
+# still calls `wg setconf|show|showconf` directly — only linux.bash was
+# rebased to use `awg`. Calling plain `wg setconf` with an AmneziaWG config
+# fails immediately with:
+#   wg setconf utunN /dev/fd/63
+#   Line unrecognized: 'Jc=5'
+#   Configuration parsing error
+#
+# This patches the five wg subcommands awg-quick invokes — setconf, show,
+# showconf, syncconf, addconf — to their awg equivalents. The negative
+# lookbehind `([^a-zA-Z])` (or BOL) ensures we only rewrite stand-alone `wg`
+# invocations, not substrings of `wg-quick`, `wireguard-go`, `awg`, etc.
+#
+# Idempotent: marker `PC2_AWG_SUBCMD_PATCHED_v1` short-circuits re-patching.
+# ---------------------------------------------------------------------------
+inject_awg_subcommand_patches() {
+  local script_path="$1"
+  if grep -qF 'PC2_AWG_SUBCMD_PATCHED_v1' "$script_path" 2>/dev/null; then
+    return
+  fi
+
+  # Use sed -E (extended regex). Both BSD sed (macOS) and GNU sed support it
+  # with capture groups. Write to temp file to avoid -i.bak portability quirks.
+  sed -E '
+    s/(^|[^a-zA-Z])wg setconf/\1awg setconf/g
+    s/(^|[^a-zA-Z])wg show/\1awg show/g
+    s/(^|[^a-zA-Z])wg syncconf/\1awg syncconf/g
+    s/(^|[^a-zA-Z])wg addconf/\1awg addconf/g
+  ' "$script_path" > "$script_path.tmp"
+
+  # Insert marker as line 2 (after shebang) so subsequent runs are no-ops.
+  awk 'NR==1 {print; print "# PC2_AWG_SUBCMD_PATCHED_v1 — wg <subcmd> rewritten to awg <subcmd> by fetch-binaries.sh"; next} {print}' "$script_path.tmp" > "$script_path"
+  rm -f "$script_path.tmp"
+  chmod +x "$script_path"
+}
+
+# ---------------------------------------------------------------------------
 # wireguard-tools (wg, wg-quick): compile wg from C source, copy wg-quick script
 # wg-quick is a bash script so it works on all Unix platforms.
 # wg is a small C binary that needs per-platform compilation.
@@ -248,8 +289,12 @@ fetch_amneziawg_tools() {
     sed -i.bak 's|/var/run/wireguard/|/var/run/amneziawg/|g' "$dest_dir/awg-quick" 2>/dev/null || true
     sed -i.bak 's|PROGRAM="${0##*/}"|PROGRAM="awg-quick"|g' "$dest_dir/awg-quick" 2>/dev/null || true
     rm -f "$dest_dir/awg-quick.bak"
+    # v1.2.7.12: rewrite `wg setconf|show|showconf|...` → `awg ...` so the
+    # AmneziaWG obfuscation params parse correctly. Upstream awg-quick.darwin
+    # (master, Jan 2026) still uses bare `wg`. linux.bash already uses awg.
+    inject_awg_subcommand_patches "$dest_dir/awg-quick"
     inject_path_self_location "$dest_dir/awg-quick"
-    log "  -> $dest_dir/awg-quick (macOS bash script, patched + PATH self-loc)"
+    log "  -> $dest_dir/awg-quick (macOS bash script, patched + AWG-subcmd + PATH self-loc)"
   elif [ -f "$tools_dir/src/wg-quick/linux.bash" ] && [[ "$target" == linux-* ]]; then
     cp "$tools_dir/src/wg-quick/linux.bash" "$dest_dir/awg-quick"
     chmod +x "$dest_dir/awg-quick"
@@ -257,8 +302,11 @@ fetch_amneziawg_tools() {
     sed -i.bak 's|/var/run/wireguard/|/var/run/amneziawg/|g' "$dest_dir/awg-quick" 2>/dev/null || true
     sed -i.bak 's|PROGRAM="${0##*/}"|PROGRAM="awg-quick"|g' "$dest_dir/awg-quick" 2>/dev/null || true
     rm -f "$dest_dir/awg-quick.bak"
+    # v1.2.7.12: defensive subcmd patch (linux.bash already uses awg, so
+    # this is a no-op today, but guards against upstream regressions).
+    inject_awg_subcommand_patches "$dest_dir/awg-quick"
     inject_path_self_location "$dest_dir/awg-quick"
-    log "  -> $dest_dir/awg-quick (Linux bash script, patched + PATH self-loc)"
+    log "  -> $dest_dir/awg-quick (Linux bash script, patched + AWG-subcmd + PATH self-loc)"
   fi
 
   # awg binary: only compile natively (cross-compiling C is harder than Go).

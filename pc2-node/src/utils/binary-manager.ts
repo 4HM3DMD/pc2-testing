@@ -744,6 +744,15 @@ export async function ensureTransportBinaries(): Promise<BinaryReport> {
   // disk from v1.2.7.8/.9/.10).
   patchTransportScriptPathSelfLocation(binDir);
 
+  // v1.2.7.12: rewrite `wg setconf|show|showconf|...` → `awg ...` in
+  // awg-quick. Upstream amneziawg-tools' awg-quick.darwin (master, Jan
+  // 2026) still uses bare `wg`, which cannot parse AmneziaWG obfuscation
+  // params (Jc, Jmin, Jmax, S1-S4, H1-H4) — kernel-side it errors with
+  // `Line unrecognized: 'Jc=5'`. linux.bash already uses `awg`. Fresh
+  // CI builds get this patch via fetch-binaries.sh; this runtime pass
+  // upgrades existing on-disk scripts from v1.2.7.10/.11 in-place.
+  patchAwgQuickSubcommands(binDir);
+
   return report;
 }
 
@@ -872,6 +881,86 @@ function patchTransportScriptPathSelfLocation(bundledDir: string): void {
     } catch (err) {
       logger.warn(`[BinaryManager] Failed to patch ${script} PATH self-location: ${(err as Error).message}`);
     }
+  }
+}
+
+/**
+ * v1.2.7.12 — runtime patcher for awg-quick.
+ *
+ * Rewrite `wg <subcmd>` → `awg <subcmd>` for the five subcommands that
+ * awg-quick invokes against the WireGuard userspace/kernel binary:
+ * `setconf`, `show`, `showconf`, `syncconf`, `addconf`.
+ *
+ * Why this exists:
+ *   - amneziawg-tools' awg-quick.darwin (master branch, Jan 2026) inherits
+ *     from upstream wg-quick.darwin and uses bare `wg setconf|show|showconf`
+ *     even though the AmneziaWG-aware binary is `awg`. linux.bash was rebased
+ *     to use `awg` but darwin.bash was not.
+ *   - When an AmneziaWG config (containing Jc, Jmin, Jmax, S1-S4, H1-H4
+ *     obfuscation keys) is fed to plain `wg setconf`, the bring-up fails
+ *     immediately:
+ *         wg setconf utun11 /dev/fd/63
+ *         Line unrecognized: 'Jc=5'
+ *         Configuration parsing error
+ *   - Patching at runtime upgrades existing on-disk awg-quick scripts that
+ *     v1.2.7.10/.11 already laid down (BinaryManager skips re-download
+ *     when the file exists, so the new fetch-binaries.sh build-time patch
+ *     alone would not reach those users).
+ *
+ * The negative lookbehind `(^|[^a-zA-Z])` ensures we only rewrite stand-alone
+ * `wg` invocations, never substrings of `wg-quick`, `wireguard-go`, `awg`, etc.
+ *
+ * Idempotent — looks for the marker comment we insert and bails if present.
+ */
+function patchAwgQuickSubcommands(bundledDir: string): void {
+  if (process.platform === 'win32') return;
+
+  const path = join(bundledDir, 'awg-quick');
+  if (!existsSync(path)) return;
+
+  const marker = '# PC2_AWG_SUBCMD_PATCHED_v1';
+
+  try {
+    const content = readFileSync(path, 'utf8');
+
+    if (content.includes(marker)) {
+      logger.debug('[BinaryManager] awg-quick subcmd patches already present');
+      return;
+    }
+
+    // Replace `wg <subcmd>` → `awg <subcmd>` only when `wg` is preceded by
+    // a non-alpha char (or beginning-of-line). The `m` flag enables `^`
+    // matching at line starts; the `g` flag scans the whole file.
+    const patched1 = content
+      .replace(/(^|[^a-zA-Z])wg setconf/gm, '$1awg setconf')
+      .replace(/(^|[^a-zA-Z])wg show/gm, '$1awg show') // covers `wg show` and `wg showconf`
+      .replace(/(^|[^a-zA-Z])wg syncconf/gm, '$1awg syncconf')
+      .replace(/(^|[^a-zA-Z])wg addconf/gm, '$1awg addconf');
+
+    if (patched1 === content) {
+      // Nothing to rewrite (already uses awg, or shape changed upstream).
+      // Still drop the marker so subsequent passes are no-ops.
+      logger.debug('[BinaryManager] awg-quick already uses awg subcommands; inserting marker only');
+    }
+
+    const newlineIdx = patched1.indexOf('\n');
+    if (newlineIdx < 0) {
+      logger.warn('[BinaryManager] awg-quick appears truncated (no newline) — skipping subcmd patch');
+      return;
+    }
+
+    const shebang = patched1.slice(0, newlineIdx);
+    if (!shebang.startsWith('#!')) {
+      logger.warn(`[BinaryManager] awg-quick first line is not a shebang ("${shebang.slice(0, 40)}…") — skipping subcmd patch`);
+      return;
+    }
+
+    const body = patched1.slice(newlineIdx + 1);
+    const final = `${shebang}\n${marker} — wg <subcmd> rewritten to awg <subcmd> by BinaryManager on first launch\n${body}`;
+    writeFileSync(path, final, { mode: 0o755 });
+    logger.info('[BinaryManager] awg-quick patched: wg <subcmd> → awg <subcmd> (AmneziaWG obfuscation params now parse correctly)');
+  } catch (err) {
+    logger.warn(`[BinaryManager] Failed to patch awg-quick subcommands: ${(err as Error).message}`);
   }
 }
 

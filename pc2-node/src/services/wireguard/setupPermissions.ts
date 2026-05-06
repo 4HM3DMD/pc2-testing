@@ -44,9 +44,10 @@
  */
 
 import { execSync, exec } from 'child_process';
-import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
+import { createHash } from 'crypto';
 import { logger } from '../../utils/logger.js';
 
 // SUDOERS_TAG kept as 'pc2-wireguard' for v1.2.7.0–v1.2.7.8 backwards-compat:
@@ -55,6 +56,28 @@ import { logger } from '../../utils/logger.js';
 // location on both macOS and Linux.
 const SUDOERS_TAG = 'pc2-wireguard';
 const SUDOERS_FILE = `/etc/sudoers.d/${SUDOERS_TAG}`;
+
+// v1.2.7.12: state-marker filename written into the WireGuard data dir
+// (user-writable, e.g. ~/.pc2/pc2-node/data/wireguard/) after a successful
+// sudoers install. Records SHA-256 of the entry that was installed; the next
+// startup probe checks this first and trusts the marker when its hash matches
+// the entry we'd write today AND the sudoers file still exists. Sidesteps the
+// macOS `sudo -n -l` quirk that returns non-zero for non-root users in some
+// configurations even with NOPASSWD rules — the symptom Sasha hit on v1.2.7.11
+// where every restart prompted for password and re-installed the same file.
+const SUDOERS_MARKER_NAME = 'sudoers-marker.json';
+
+interface SudoersMarker {
+  version: string;
+  hash: string;
+  installedAt: string;
+  sudoersFile: string;
+  wgQuickPath: string;
+}
+
+function sha256OfEntry(entry: string): string {
+  return createHash('sha256').update(entry, 'utf8').digest('hex');
+}
 
 export interface PermissionCheckResult {
   sudoConfigured: boolean;
@@ -139,8 +162,26 @@ function probeSudoForBinary(binPath: string): { allowed: boolean; hasSetenv: boo
  * case where a non-root user CAN read /etc/sudoers.d/, e.g. inside a
  * container) but is now best-effort: failure to read it is no longer
  * treated as "needs setup" — the sudo -n -l result is authoritative.
+ *
+ * v1.2.7.12: marker file becomes the PRIMARY check. After a successful
+ * install, we write a SHA-256 of the entry into <markerDir>/sudoers-marker.json
+ * (user-writable, no permission games). On the next startup probe, if the
+ * marker's hash matches what we'd write today AND /etc/sudoers.d/pc2-wireguard
+ * still exists, we trust it without running `sudo -n -l`. This fixes the
+ * regression on macOS where `sudo -n -l` returns non-zero in some configs
+ * even with NOPASSWD rules — every restart was triggering osascript again
+ * and re-installing the same file.
+ *
+ * @param wgQuickPath  Resolved path to the wg-quick binary (used to derive the
+ *                     expected sudoers entry for hash comparison).
+ * @param markerDir    Optional user-writable dir where the marker is stored.
+ *                     When omitted, marker check is skipped (back-compat for
+ *                     callers that pre-date v1.2.7.12).
  */
-export function checkWireGuardPermissions(wgQuickPath: string): PermissionCheckResult {
+export function checkWireGuardPermissions(
+  wgQuickPath: string,
+  markerDir?: string,
+): PermissionCheckResult {
   const platform = process.platform;
 
   if (platform === 'win32') {
@@ -153,6 +194,38 @@ export function checkWireGuardPermissions(wgQuickPath: string): PermissionCheckR
   }
 
   const awgQuickPath = findSiblingBinary(wgQuickPath, 'awg-quick');
+
+  // v1.2.7.12 PRIMARY CHECK: marker file. Bulletproof on every Unix:
+  //   - markerDir is user-writable (~/.pc2/pc2-node/data/wireguard) so
+  //     readFileSync always succeeds for the user that installed.
+  //   - Hash of the entry we'd write TODAY must match what's in the marker.
+  //     If wg-quick path changed, hash differs → re-prompt. If sudoers
+  //     entry text was upgraded (new SETENV format, new awg-quick rule,
+  //     etc.) → re-prompt. If installed binary path moved → re-prompt.
+  //   - /etc/sudoers.d/pc2-wireguard must still exist (user may have
+  //     deleted it manually with `sudo rm`).
+  // Three-of-three required, otherwise we fall through to the probes.
+  if (markerDir) {
+    const markerPath = join(markerDir, SUDOERS_MARKER_NAME);
+    if (existsSync(markerPath) && existsSync(SUDOERS_FILE)) {
+      try {
+        const marker = JSON.parse(readFileSync(markerPath, 'utf-8')) as SudoersMarker;
+        const expectedEntry = buildSudoersEntry(wgQuickPath);
+        const expectedHash = sha256OfEntry(expectedEntry);
+        if (marker.hash === expectedHash) {
+          return {
+            sudoConfigured: true,
+            needsSetup: false,
+            platform,
+            message: `Sudoers marker matches current entry (installed ${marker.installedAt})`,
+          };
+        }
+        logger.info(`[WireGuard:sudoers] Marker hash mismatch (installed=${marker.hash.slice(0, 8)} vs expected=${expectedHash.slice(0, 8)}); re-probing`);
+      } catch (err) {
+        logger.warn(`[WireGuard:sudoers] Marker file present but unreadable: ${(err as Error).message}; falling back to sudo probe`);
+      }
+    }
+  }
 
   // Primary probe: sudo -n -l <bin> up <args>. Works for non-root users,
   // doesn't prompt, and the matched rule line is parseable for SETENV.
@@ -289,9 +362,38 @@ function buildSudoersEntry(wgQuickPath: string, _wgGoBinPath?: string): string {
  * macOS: Uses osascript to show a native authorization dialog.
  * Linux: Writes via sudo tee (may prompt in terminal or fail silently in GUI).
  */
+/**
+ * Write the post-install marker to <markerDir>/sudoers-marker.json.
+ *
+ * v1.2.7.12: separated from the install path so it can be called from both
+ * setupMacOS and setupLinux on success. Best-effort: if the write fails, we
+ * log and move on — the install itself already worked, the marker is only
+ * an optimisation to skip the `sudo -n -l` probe on subsequent startups.
+ */
+function writeSudoersMarker(markerDir: string, entry: string, wgQuickPath: string): void {
+  try {
+    if (!existsSync(markerDir)) {
+      mkdirSync(markerDir, { recursive: true, mode: 0o755 });
+    }
+    const marker: SudoersMarker = {
+      version: '1.2.7.12',
+      hash: sha256OfEntry(entry),
+      installedAt: new Date().toISOString(),
+      sudoersFile: SUDOERS_FILE,
+      wgQuickPath,
+    };
+    const markerPath = join(markerDir, SUDOERS_MARKER_NAME);
+    writeFileSync(markerPath, JSON.stringify(marker, null, 2), { mode: 0o644 });
+    logger.info(`[WireGuard:sudoers] Marker written to ${markerPath} (hash=${marker.hash.slice(0, 8)})`);
+  } catch (err) {
+    logger.warn(`[WireGuard:sudoers] Failed to write marker (install still succeeded): ${(err as Error).message}`);
+  }
+}
+
 export async function setupWireGuardSudoers(
   wgQuickPath: string,
   wgGoBinPath?: string,
+  markerDir?: string,
 ): Promise<{ success: boolean; message: string }> {
   const platform = process.platform;
 
@@ -302,10 +404,15 @@ export async function setupWireGuardSudoers(
   const entry = buildSudoersEntry(wgQuickPath, wgGoBinPath);
   logger.info(`[WireGuard:sudoers] Attempting to install sudoers entry for wg-quick`);
 
-  if (platform === 'darwin') {
-    return setupMacOS(entry);
+  const result = platform === 'darwin'
+    ? await setupMacOS(entry)
+    : await setupLinux(entry);
+
+  if (result.success && markerDir) {
+    writeSudoersMarker(markerDir, entry, wgQuickPath);
   }
-  return setupLinux(entry);
+
+  return result;
 }
 
 async function setupMacOS(entry: string): Promise<{ success: boolean; message: string }> {
