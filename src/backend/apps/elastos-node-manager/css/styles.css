@@ -3125,6 +3125,19 @@ html, body {
     color: var(--text-secondary);
 }
 
+/* Phase 3: state-gated maintenance row — when disabled, dim the
+   row visually and replace the help text with a one-line reason. */
+.enm-tech-maintenance-row[data-disabled="1"] {
+    opacity: 0.62;
+}
+.enm-tech-maintenance-row[data-disabled="1"] .enm-tech-maintenance-label {
+    color: var(--text-secondary);
+}
+.enm-tech-disabled-reason {
+    color: var(--text-muted);
+    font-style: italic;
+}
+
 /* ============================================================
    Print — hide chrome, render cards as plain blocks
    ============================================================ */

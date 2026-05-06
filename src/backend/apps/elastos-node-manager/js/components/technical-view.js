@@ -23,8 +23,19 @@
 (function (root) {
     'use strict';
 
+    // Information architecture (Phase 3 rebuild):
+    //   Status     — live chain telemetry only (chain card)
+    //   Identity   — producer identity card (BPoS-only; hidden when no
+    //                keystore). Has its own home so it doesn't clutter
+    //                Status when not relevant.
+    //   Tools      — Maintenance actions (compact, update, reactivate,
+    //                reinstall). Each button state-gated against the
+    //                current chain state — no nonsensical clicks.
+    //   Logs / Settings / Audit / EVM — unchanged
     var TABS = [
         { id: 'status',   label: 'Status' },
+        { id: 'identity', label: 'Identity' },
+        { id: 'tools',    label: 'Tools' },
         { id: 'logs',     label: 'Logs' },
         { id: 'settings', label: 'Settings' },
         { id: 'audit',    label: 'Audit' },
@@ -153,7 +164,9 @@
         };
 
         if (tabId === 'status') {
-            // System status strip + the v0.3 chain card stack.
+            // Status pane: live chain telemetry only — system stats +
+            // chain card. Producer identity moved to its own Identity
+            // sub-tab, Maintenance moved to its own Tools sub-tab.
             if (root.EnmSystemStatus) {
                 var sys = new root.EnmSystemStatus(common);
                 sys.mount(pane);
@@ -166,15 +179,19 @@
                 card.mount(pane);
                 this._mounted['status_card'] = card;
             }
-            if (root.EnmProducerIdentity) {
-                var prod = new root.EnmProducerIdentity(common);
-                prod.mount(pane);
-                this._mounted['status_prod'] = prod;
-            }
-            // Maintenance section — ela_update / compact-logs /
-            // ela_activate_bpos. Power-user terminology because this is
-            // already inside the technical view.
-            this._renderMaintenance(pane);
+            // Sentinel so _switchTo doesn't re-mount on tab return — the
+            // real components live under status_sys / status_card.
+            this._mounted['status'] = { destroy: function () {} };
+        } else if (tabId === 'identity') {
+            // Producer identity — BPoS only. The component itself decides
+            // whether to render based on /setup/keystore/account. When
+            // there's no keystore (full-node operator), the card hides
+            // and we show a stub explaining why.
+            this._renderIdentity(pane, common);
+        } else if (tabId === 'tools') {
+            // Maintenance + reinstall, with each action state-gated
+            // against current chain state.
+            this._renderTools(pane);
         } else if (tabId === 'logs') {
             if (root.EnmLogViewer && this.sse) {
                 var viewer = new root.EnmLogViewer(common);
@@ -205,10 +222,132 @@
     };
 
     /**
-     * Maintenance section for the Status pane — surfaces the node.sh
-     * commands operators historically ran by hand.
+     * Identity pane (Phase 3 IA rebuild) — wraps the EnmProducerIdentity
+     * card with a context paragraph. The producer card hides itself when
+     * there's no keystore (full-node operator), and without context the
+     * tab would look broken. This pane always renders the explanation
+     * so the operator knows why the card may be empty.
      *
      * @private
+     */
+    TechnicalView.prototype._renderIdentity = function (pane, common) {
+        var intro = document.createElement('section');
+        intro.className = 'enm-card enm-tech-identity-intro';
+        intro.innerHTML =
+            '<h3 class="enm-tech-section-title">Producer identity</h3>'
+            + '<p class="enm-tech-section-sub">'
+              + 'Only relevant for BPoS supernodes and CR Council members. '
+              + 'Full-node operators can ignore this tab — the chain runs '
+              + 'fine without a keystore. If you registered as a producer, '
+              + 'your public key + payout address appear below.'
+            + '</p>';
+        pane.appendChild(intro);
+
+        if (root.EnmProducerIdentity) {
+            var prod = new root.EnmProducerIdentity(common);
+            prod.mount(pane);
+            this._mounted['identity'] = prod;
+        } else {
+            var stub = document.createElement('p');
+            stub.className = 'enm-stub';
+            stub.textContent = 'Producer identity component not loaded.';
+            pane.appendChild(stub);
+        }
+    };
+
+    /**
+     * Tools pane (Phase 3 IA rebuild) — formerly the Maintenance
+     * section embedded in Status. Now its own sub-tab with state-gated
+     * action buttons. Polls /chains/:id every 5s while pane is mounted
+     * to keep the gate state fresh.
+     *
+     * @private
+     */
+    TechnicalView.prototype._renderTools = function (pane) {
+        var self = this;
+        this._renderMaintenance(pane);
+
+        // Live state-gating refresh — re-evaluate which buttons are
+        // enabled every 5s based on current chain + producer state.
+        var refreshGates = function () {
+            self.api.get('/chains/mainchain', { skipCache: true }).then(function (chain) {
+                self.api.get('/chains/mainchain/producer', { skipCache: true }).catch(function () { return null; }).then(function (producer) {
+                    self._applyToolsGates(pane, chain, producer);
+                });
+            }).catch(function () { /* leave gates as-is on error */ });
+        };
+        refreshGates();
+        if (this._toolsGateTimer) { clearInterval(this._toolsGateTimer); }
+        this._toolsGateTimer = setInterval(refreshGates, 5000);
+        // Sentinel doubles as the destroy() hook for the gate-refresh timer.
+        this._mounted['tools'] = { destroy: function () {
+            if (self._toolsGateTimer) { clearInterval(self._toolsGateTimer); self._toolsGateTimer = null; }
+        }};
+    };
+
+    /**
+     * Apply state-aware enabled/disabled to each Maintenance row.
+     * Mirrors the backend route gates so the UI doesn't even offer
+     * actions that the API would reject.
+     *
+     * @private
+     * @param {HTMLElement} pane
+     * @param {object} chain
+     * @param {object|null} producer
+     */
+    TechnicalView.prototype._applyToolsGates = function (pane, chain, producer) {
+        var alive = !!(chain && chain.pid && chain.attached);
+        var producerState = producer && producer.state;
+        var producerEnabled = !!(producer && producer.enabled);
+
+        function gate(action, disabled, reason) {
+            var btn = pane.querySelector('[data-action="' + action + '"]');
+            if (!btn) { return; }
+            btn.disabled = !!disabled;
+            btn.title = disabled ? reason : '';
+            // Add a visible disabled-with-reason marker on the row
+            var row = btn.closest('.enm-tech-maintenance-row');
+            if (row) {
+                row.dataset.disabled = disabled ? '1' : '0';
+                var help = row.querySelector('.enm-tech-maintenance-help');
+                // Stash the original help text once, restore when re-enabled.
+                if (help && !help.dataset.original) {
+                    help.dataset.original = help.innerHTML;
+                }
+                if (help && disabled) {
+                    help.innerHTML = '<span class="enm-tech-disabled-reason">' + reason + '</span>';
+                } else if (help && help.dataset.original) {
+                    help.innerHTML = help.dataset.original;
+                }
+            }
+        }
+
+        // Compact logs: always available (operator owns log files; rotation
+        // is independent of chain liveness).
+        gate('compact', false, '');
+
+        // Update binary: only when chain stopped.
+        if (alive) {
+            gate('update', true, 'Stop the chain first (binary in use).');
+        } else {
+            gate('update', false, '');
+        }
+
+        // Reactivate BPoS: only when alive AND producer is registered AND
+        // its state is Inactive (active producers don't need reactivation).
+        if (!alive) {
+            gate('activate', true, 'Chain must be running.');
+        } else if (!producerEnabled) {
+            gate('activate', true, 'Not yet registered as a BPoS producer. See the Identity tab for the registration steps.');
+        } else if (producerState === 'Active') {
+            gate('activate', true, 'Producer is already Active — nothing to do.');
+        } else {
+            gate('activate', false, '');
+        }
+    };
+
+    /**
+     * @private — DOM construction for Maintenance section.
      */
     TechnicalView.prototype._renderMaintenance = function (pane) {
         var self = this;
