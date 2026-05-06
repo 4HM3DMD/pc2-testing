@@ -100,10 +100,10 @@ function build(extensionHandle) {
      * Setup-time AND restart-time check — the start route calls this too and
      * refuses to spawn if any CRITICAL items are unresolved.
      */
-    router.get('/conflicts', limit('read'), async (req, res) => {
-        if (!readActorWallet(req)) {
-            return res.status(401).json(errorBody('Authentication required.'));
-        }
+    router.get('/conflicts', limit('read'), requireOwner, async (req, res) => {
+        // requireOwner — the conflict scan reveals host fingerprinting
+        // (PID files, port usage, binary paths) that we don't want to
+        // expose to non-owner authenticated callers.
         try {
             const list = await HostConflictScanner.scan({
                 logger: extensionHandle.log,

@@ -38,6 +38,7 @@ const { execFile } = require('node:child_process');
 const { ENM_LOG_PREFIX } = require('./EnmConstants');
 const { chainDir } = require('./DataDir');
 const { decrypt } = require('./EnmEncryption');
+const { buildSafeChildEnv } = require('./processUtils');
 
 // Keep ela-cli runs short-bounded — both buildtx and sendtx are RPC
 // calls, not long-running. 60s is generous for a slow VPS link.
@@ -114,17 +115,27 @@ class EnmBposService {
 
     /** @private */
     _run(cliPath, args, opts) {
+        // Phase 6: never spread process.env — buildSafeChildEnv() forwards
+        // only PATH/HOME/locale so PC2 secrets (DB credentials, encryption
+        // key path, OAuth tokens etc.) don't reach ela-cli. Same hardening
+        // NativeProcessService applies to the ela spawn.
+        const childEnv = Object.assign(buildSafeChildEnv(), { NO_COLOR: '1' });
         return new Promise((resolve, reject) => {
             execFile(cliPath, args, {
                 cwd: opts && opts.cwd,
                 timeout: CLI_TIMEOUT_MS,
-                env: { ...process.env, NO_COLOR: '1' },
+                env: childEnv,
                 maxBuffer: 4 * 1024 * 1024,
             }, (err, stdout, stderr) => {
                 if (err) {
                     const combined = (stderr ? stderr.trim() : '')
                         || (stdout ? stdout.trim() : '')
                         || err.message;
+                    // args.slice(0, 4) — the four leading positional args
+                    // (e.g. "wallet buildtx producer activate"). The
+                    // password lives at index 6/4 depending on the call,
+                    // outside the slice, so this never leaks it. Same
+                    // truncation node.sh uses in its own audit log.
                     return reject(new Error(
                         `ela-cli ${args.slice(0, 4).join(' ')} failed: ${combined}`,
                     ));

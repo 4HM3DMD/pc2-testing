@@ -14,6 +14,30 @@
  *
  * Used for: chains.mainchain.rpc.password, keystore-password.enc.
  * NOT used for: the keystore.dat itself (operator imports an already-encrypted file).
+ *
+ * --- KEY ROTATION ---
+ *
+ * Today there is no automatic key rotation. The master key at
+ * encryptionKeyPath() is generated once on first run and reused
+ * forever. This is acceptable for v0.5 because:
+ *   1. Every envelope embeds a version field (FORMAT_VERSION). When we
+ *      eventually need to rotate, bump the version and have decrypt()
+ *      try the new key first, falling back to the old key for envelopes
+ *      that still carry v=1.
+ *   2. The blast radius is limited to two envelopes per chain — the RPC
+ *      password and the keystore stash. A breach scenario would already
+ *      have access to the key file (mode 0600 in the data dir), so
+ *      re-encryption alone wouldn't help.
+ *
+ * Manual rotation procedure (operator-driven, until automation lands):
+ *   1. Stop ela: POST /chains/mainchain/stop
+ *   2. Decrypt RPC password + keystore stash with the current key,
+ *      hold them in memory.
+ *   3. Move encryption.key aside (`mv encryption.key encryption.key.v1`).
+ *   4. Restart enm-server — getMasterKey() generates a fresh key.
+ *   5. Re-call POST /config/mainchain with the plaintext RPC password
+ *      and POST /setup/keystore with the keystore password to re-encrypt.
+ *   6. Verify by starting ela; remove encryption.key.v1 once confirmed.
  */
 
 'use strict';

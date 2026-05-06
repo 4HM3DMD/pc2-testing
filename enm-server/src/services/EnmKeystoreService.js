@@ -31,6 +31,7 @@ const { execFile } = require('node:child_process');
 
 const { ENM_LOG_PREFIX } = require('./EnmConstants');
 const { enmDataDir, chainDir } = require('./DataDir');
+const { buildSafeChildEnv } = require('./processUtils');
 
 const KEYSTORE_FILENAME = 'keystore.dat';
 // We pin the keystore to the chain's own dir so it sits next to the chain's
@@ -171,11 +172,14 @@ class EnmKeystoreService {
      * non-zero exit so the operator can see what failed.
      */
     _run(cliPath, args, opts) {
+        // Phase 6: filtered env so PC2 secrets don't reach ela-cli
+        // (matches the NativeProcessService spawn hardening).
+        const childEnv = Object.assign(buildSafeChildEnv(), { NO_COLOR: '1' });
         return new Promise((resolve, reject) => {
             execFile(cliPath, args, {
                 cwd: opts && opts.cwd,
                 timeout: 30_000,
-                env: { ...process.env, NO_COLOR: '1' },
+                env: childEnv,
             }, (err, stdout, stderr) => {
                 if (err) {
                     return reject(new Error(
