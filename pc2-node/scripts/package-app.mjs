@@ -219,11 +219,17 @@ function buildManifest({ version, signatureHex, publisherHex }) {
             network: true,
         },
         // Paths ENM writes to OUTSIDE its bundle dir — pc2-node deletes
-        // these on purge-uninstall. Chain data, audit DB, binaries all live
-        // here. Keystore lives here too but the teardown hook above copies
-        // it to a safe location BEFORE this purge runs. /data/enm is the
-        // hardcoded ENM data root (see enm-server/src/services/DataDir.js).
-        externalDataDirs: ['/data/enm'],
+        // these on purge-uninstall. Chain data, audit DB, downloaded
+        // binaries, ENM's settings DB all live here. Keystore lives here
+        // too but the teardown hook above copies it to a safe location
+        // BEFORE this purge runs.
+        //
+        // The ${PC2_DATA_DIR} placeholder resolves at uninstall time to
+        // the operator's PC2_DATA_DIR env (default /var/lib/pc2/data).
+        // ENM's DataDir.js puts its data root at
+        // ${PC2_DATA_DIR}/extensions/elastos-node-manager/, which is
+        // what we wipe.
+        externalDataDirs: ['${PC2_DATA_DIR}/extensions/elastos-node-manager'],
         distribution: {
             // Populate `cid` after uploading the tarball to IPFS. The dApp
             // Store catalog reads this manifest verbatim and POSTs it to

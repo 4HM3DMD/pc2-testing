@@ -448,18 +448,34 @@ async function callTeardown(manifest: AppManifest, port: number | undefined): Pr
 }
 
 /**
+ * Variable interpolation for externalDataDirs. Supports `${PC2_DATA_DIR}`
+ * so manifests can declare paths relative to the operator's data root
+ * without hardcoding /var/lib/pc2/data. Apps that write under
+ * `${PC2_DATA_DIR}/extensions/<name>/` (the convention pc2-node's
+ * extension framework uses) can declare exactly that path, and it
+ * resolves correctly on any deployment.
+ *
+ * Only well-known PC2 vars are interpolated. Anything else is left
+ * literal — and the safety checks below catch the result if it's bogus.
+ */
+function interpolatePath(path: string): string {
+  const pc2DataDir = process.env.PC2_DATA_DIR || '/var/lib/pc2/data';
+  return path.replace(/\$\{PC2_DATA_DIR\}/g, pc2DataDir);
+}
+
+/**
  * Delete one externalDataDir, with paranoid safety checks. The manifest
- * validator already rejected obvious shallow paths, but defense-in-depth:
- * also refuse anything not absolute, anything containing '..', and
- * anything with fewer than 2 path segments after normalisation.
+ * validator already rejected obvious shallow paths in the literal manifest,
+ * but defense-in-depth: re-check after variable interpolation too.
  *
  * Returns true if the dir was wiped (or was already gone), false if
  * the safety check rejected it.
  */
 function purgeExternalDir(dir: string, appName: string): boolean {
-  const abs = normalize(resolvePath(dir));
+  const expanded = interpolatePath(dir);
+  const abs = normalize(resolvePath(expanded));
   if (!abs.startsWith('/')) {
-    log.warn(`[purge] refuse non-absolute path "${dir}" for "${appName}"`);
+    log.warn(`[purge] refuse non-absolute path "${dir}" → "${abs}" for "${appName}"`);
     return false;
   }
   if (abs === '/' || abs.split('/').filter(Boolean).length < 2) {
@@ -467,7 +483,7 @@ function purgeExternalDir(dir: string, appName: string): boolean {
     return false;
   }
   if (abs.includes('..')) {
-    log.warn(`[purge] refuse path with .. — "${dir}" for "${appName}"`);
+    log.warn(`[purge] refuse path with .. — "${dir}" → "${abs}" for "${appName}"`);
     return false;
   }
   try {

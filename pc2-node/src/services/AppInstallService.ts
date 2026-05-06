@@ -702,16 +702,23 @@ export class AppInstallService {
         if (typeof p !== 'string') {
           throw new Error(`App "${manifest.name}": externalDataDirs entries must be strings`);
         }
-        if (!p.startsWith('/')) {
-          throw new Error(`App "${manifest.name}": externalDataDirs path "${p}" must be absolute`);
+        // Allow ${PC2_DATA_DIR} as the leading variable so manifests don't
+        // need to hardcode /var/lib/pc2/data. Other entries must be
+        // absolute. The runtime purgeExternalDir applies the safety checks
+        // again AFTER interpolation; this validator is just a quick
+        // sanity check at install time.
+        if (!p.startsWith('/') && !p.startsWith('${PC2_DATA_DIR}')) {
+          throw new Error(`App "${manifest.name}": externalDataDirs path "${p}" must be absolute or start with $\{PC2_DATA_DIR\}`);
         }
         if (p.includes('..')) {
           throw new Error(`App "${manifest.name}": externalDataDirs path "${p}" must not contain '..'`);
         }
         // Refuse paths with too few segments — '/', '/etc', '/var', '/home',
         // '/usr', '/opt', '/data' alone, etc. Need at least two segments
-        // beyond the root.
-        const segments = p.split('/').filter(Boolean);
+        // beyond the root (or 1 beyond ${PC2_DATA_DIR}, since that's
+        // already a deep path).
+        const stripped = p.replace('${PC2_DATA_DIR}', '/_pc2_data_root');
+        const segments = stripped.split('/').filter(Boolean);
         if (segments.length < 2) {
           throw new Error(`App "${manifest.name}": externalDataDirs path "${p}" is too shallow — refuse to wipe top-level dirs`);
         }
