@@ -1,7 +1,7 @@
 # Elacity Labs — Weekly Team Update for the World Computer Initiative (WCI)
 ## April 26 – May 6, 2026
 
-> **ElastOS v1.2 landed — the convergence release across PC2, Elastos Runtime, and Elacity dDRM** | **Public launch May 1: dApp Centre with real apps, Elacity V3 contracts on Base, rebuilt dDRM path with session-key delegation, two Rust media engines, email login, jhond0e audit closed (7/7 external findings + 20/21 internal + 79 security tests), Elastos Runtime 0.2.0 as a Rust-based zero-permissions-by-default authority layer** | **Elastos Runtime 0.2.0 published & merged to main — Home as the front door, first-party capsules (System, Documents, Library, Inbox, Chat Room, GBA, uCity), passkey-first auth, blockchain quadrant foundations, wallet approval safety** | **Elacity dDRM — ELACITY-2221 metadata alignment fully landed, Protection V3 schema + unified `cenc:lit-aes-gcm-v3` system, ELACITY-2219 Lit Chipotle keystore integration to 85% by May 6, ELACITY-2222 V3 smart contracts on the frontend** | **Three feature branches with active saves carrying forward** (`feature/lit-chipotle-migration`, `feature/metadata-alignment`, `release/v1.2-pre-release`) | **Six-day post-launch follow-up cycle: 13 community-feedback releases (v1.2.1 → v1.2.7.13) closing every reported issue in hours** | **Stealth-mode bring-up complete on fresh MacBooks** (vanilla WireGuard, AmneziaWG, VLESS Reality all working) | **Runtime Heartbeat Protocol** for launcher↔pc2-node sync that survives respawns, in-app updates, external `pm2 restart`, and crashes | **Four Apple-signed + notarised Launcher releases (v1.2.4 → v1.2.7)** | **PC2 transport binaries v1 — new release pipeline, 22 SHA-256-verified, Apple-notarised assets** | **Supernode preflight (Kubo 0.34.1 → 0.41.0 on both supernodes, mesh fully restored, libp2p memory cap deployed)** | **Wave 8 Chipotle hardening — final three audit findings closed (C-02, M-01, H-01.2)** | **88 PC2 commits on `main`, 36,199 insertions, 4,163 deletions, 370 files**
+> **ElastOS v1.2 landed — the convergence release across PC2, Elastos Runtime, and Elacity dDRM, shipped Friday May 1 from a Vegas hotel room mid-Bitcoin Week** | **Public launch May 1: dApp Centre with real apps, Elacity V3 contracts on Base, rebuilt dDRM path with session-key delegation, two Rust media engines, email login, jhond0e audit closed (7/7 external findings + 20/21 internal + 79 security tests), Elastos Runtime 0.2.0 as a Rust-based zero-permissions-by-default authority layer** | **Elastos Runtime 0.2.0 published & merged to main — Home as the front door, first-party capsules (System, Documents, Library, Inbox, Chat Room, GBA, uCity), passkey-first auth, blockchain quadrant foundations, wallet approval safety** | **Elacity dDRM — ELACITY-2221 metadata alignment fully landed, Protection V3 schema + unified `cenc:lit-aes-gcm-v3` system, ELACITY-2219 Lit Chipotle keystore integration to 85% by May 6, ELACITY-2222 V3 smart contracts on the frontend** | **Three feature branches with active saves carrying forward** (`feature/lit-chipotle-migration`, `feature/metadata-alignment`, `release/v1.2-pre-release`) | **Six-day post-launch follow-up cycle: 13 community-feedback releases (v1.2.1 → v1.2.7.13) closing every reported issue in hours** | **Stealth-mode bring-up complete on fresh MacBooks** (vanilla WireGuard, AmneziaWG, VLESS Reality all working) | **Runtime Heartbeat Protocol** for launcher↔pc2-node sync that survives respawns, in-app updates, external `pm2 restart`, and crashes | **Four Apple-signed + notarised Launcher releases (v1.2.4 → v1.2.7)** | **PC2 transport binaries v1 — new release pipeline, 22 SHA-256-verified, Apple-notarised assets** | **Supernode preflight (Kubo 0.34.1 → 0.41.0 on both supernodes, mesh fully restored, libp2p memory cap deployed)** | **Wave 8 Chipotle hardening — final three audit findings closed (C-02, M-01, H-01.2)** | **CEO road trip Vol. 2: 11 days, 17 events, 9 industries, $0 in tickets — Bitcoin Week final days in Vegas + Miami Bitcoin & RWA Week, with the rights-as-productive-yield framing crystallising at the Digital Asset Yield Summit** | **88 PC2 commits on `main`, 36,199 insertions, 4,163 deletions, 370 files**
 
 ### Key Links This Week
 
@@ -33,8 +33,9 @@
 12. [PC2 Transport Binaries (v1) — New Release Pipeline](#pc2-transport-binaries-v1--new-release-pipeline)
 13. [Supernode Preflight — Kubo 0.41.0 + Mesh Restoration](#supernode-preflight--kubo-0410--mesh-restoration)
 14. [Wave 8 Chipotle Hardening — Final Three Findings](#wave-8-chipotle-hardening--final-three-findings)
-15. [Looking Ahead — v1.2.8.0 + Beyond](#looking-ahead--v1280--beyond)
-16. [Summary Statistics](#summary-statistics)
+15. [Elacity on the Road — Vol. 2: Bitcoin Week + Miami](#elacity-on-the-road--vol-2-bitcoin-week-final-days--miami-week-one)
+16. [Looking Ahead — v1.2.8.0 + Beyond](#looking-ahead--v1280--beyond)
+17. [Summary Statistics](#summary-statistics)
 
 ---
 
@@ -799,6 +800,91 @@ Companion runbook updated post-Test-4 allowlist-miss diagnosis (commit `77374721
 
 ---
 
+## Elacity on the Road — Vol. 2: Bitcoin Week Final Days + Miami Week One
+
+> _The parallel workstream running underneath all of the above. **11 days, 17 events, 9 industries, $0 in tickets, and ElastOS Runtime v1.2 shipped Friday May 1 from a Vegas hotel room.** Picking up from the Vegas update (Vol. 1). The thesis hasn't moved; the way we describe it has sharpened materially._
+
+### The thesis sharpening that happened mid-trip
+
+At the **Digital Asset Yield Summit** (EAST Miami, May 4) — a full-day anchor event for vetted institutional allocators with $2tn+ AUM — the Securitize wedge upgraded into something more specific:
+
+> *"Securitize tokenises real-world securities. Elacity tokenises real-world rights — royalties, licensing fees, revenue shares. Same playbook, different asset class. The interesting part: rights are productive assets. They pay native, uncorrelated yield."*
+
+That last sentence is what closed conversations. **Music royalties pay monthly. AI training data licensing pays per use. Content royalty streams pay continuously.** Cashflow from real-world IP, uncorrelated to crypto cycles or traditional markets. Allocators are drowning in correlated yield. **Rights are a new yield-bearing asset class** — and that framing, tested cold across DAYS / Tokenized Capital Summit / Builders in Tokenization, landed on every audience archetype.
+
+### Bitcoin Week final days (Apr 26 – 29)
+
+The closing days of Bitcoin Week 2026 in Vegas, executed as the platform was being staged for the v1.2.0 ship.
+
+| # | Event | Venue / Date | Audience | Why it mattered |
+|---|---|---|---|---|
+| 1 | **Chamber of Bitcoin** (invite-only) | The Lock Speakeasy, Apr 27 | Bitcoin-only business owners, OG community | Rare seat for any non-pure-Bitcoin chain. Synergy: *"Bitcoin made money sovereign, Elastos is doing the same for everything else"* let us belong without competing |
+| 2 | **BitcoinMondays Vegas** | Legacy Club rooftop, Circa, Apr 27 | Bitcoin community + serious operators | First public test of the rights-as-productive-yield framing. Resonated. |
+| 3 | **TRON Whale Night with Securitize** | OMNIA, Caesars, Apr 27 | DeFi capital, institutional crypto, tokenisation teams | The exact room where the Securitize wedge was tested cold. We sit in the gap between TRON (tokenised money flows) and Securitize (tokenised securities). |
+| 4 | **Run for Hal** | Venetian, Apr 28 | Bitcoin OGs, ALS-aware crowd | A posture event, not a pitch room. The Bitcoin community quietly notes who shows up here. |
+| 5 | **Bitcoin 2026 main floor** | Venetian Convention Center, Apr 28 | ~20,000 attendees across the institutional Bitcoin spectrum | Temperature read. The Bitcoin community is now meaningfully comfortable with adjacent infrastructure. **Doors open that were closed three years ago.** |
+| 6 | **AI + Bitcoin: Next-Gen Revolution** (OnePiece Labs) | Las Vegas Strip, Apr 28 | Bitcoin infrastructure engineers + AI builders | **The single most thesis-aligned room of Bitcoin Week.** AI agents + Bitcoin rails + content licensing — all live conversation topics. Elacity dDRM, ACCESS_TOKEN, ERC-8183 are exactly that layer. |
+| 7 | **BitGo High Roller Summit** | The Venetian, Apr 27 – 29 (3 days) | Institutional Bitcoin custody, treasury operators, capital allocators | Long-horizon partnership conversations. Custody operators are mapping the next two years of asset categories. **Plant the flag now for tokenised rights and AI-agent licences before the category gets contested.** |
+| 8 | **Bitcoin Capital Reception** (Cryptio) | Chéri Rooftop, Paris LV, Apr 28 | CFOs, treasury accountants, institutional finance | Most institutionally credible reception of the week. Cryptio (compliant accounting infrastructure) is an obvious natural partner for tokenised rights flows. |
+| 9 | **Bitcoin 2026 Day 3** | Venetian Convention Center, Apr 29 | Final day, all-comers | Closing meetings, follow-ups, building the final picture of who's tracking what. |
+
+### The ship weekend (Apr 30 – May 3)
+
+**ElastOS Runtime v1.2 shipped Friday May 1.** The team executed the release while the CEO held the hotel room and kept calls running from Vegas. **Caesars Palace sportsbook became an ad-hoc ops desk.** Sunday morning: Vegas → Houston → Miami.
+
+The point worth making to the community: **we didn't pause the trip to ship, and we didn't pause the ship to be on the trip.** The operating model held under pressure. The technical narrative covered earlier in this document — v1.2.0 going live, v1.2.1 → v1.2.5 hot-patch chain inside 12 hours, every reported community issue closed in hours not weeks — happened with the CEO 2,000 miles from the team, mid-conference, holding partnership conversations in parallel.
+
+### Miami Bitcoin & RWA Week (May 4 – 6, ongoing)
+
+| # | Event | Venue / Date | Audience | Why it mattered |
+|---|---|---|---|---|
+| 10 | **Digital Asset Yield Summit (DAYS)** | EAST Miami Brickell, May 4 — full-day anchor | Allocators, $2tn+ AUM, vetted institutional only | **Where the upgraded framing crystallised.** Steve Leaton (EAST Miami floors 38 – 39) confirmed in person what calls had only suggested. |
+| 11 | **Tokenized Capital Summit** | Miami Marriott Biscayne Bay, May 4 evening | 450+ HNWIs, family offices, 25+ billion-dollar funds, **Arthur Hayes fireside, Polygon keynote** | In HNWI rooms, lead with credibility signals (Bitcoin merge mining since 2018, open-source codebase, live product) before category framing. The Hayes-aligned macro framing — sovereign money, sovereign rights — landed naturally. |
+| 12 | **Hashlock Proof of Contribution Miami** | Mindspace Wynwood, May 5 | Web3 builders, security-focused devs | Different texture from the institutional rooms. **Elacity dDRM is cross-chain rights infrastructure** — ACCESS_TOKEN, ERC-8183 compatible, content licensed once, royalties paid everywhere. |
+| 13 | **An Evening with Sui** | Temple House, Miami Beach, May 5 | **Raoul Pal, Mysten Labs, a16z, Fidelity Digital Assets** | The AI + DeFi convergence panel surfaced exactly the same gap we keep seeing — the missing programmable rights layer underneath agent commerce. Sui's high-throughput execution + Elacity's rights protocol is a credible architectural pairing for AI-agent-driven micro-licensing at machine speed. |
+| 14 | **AINative Proof of Fiesta** | The Clevelander, Miami Beach, May 5 night | AI-native builders, AI + crypto crossover community | AI agents need rails for spending, licensing, and transacting. **We are exactly that rails layer.** ACCESS_TOKEN delegated authority + dDRM rights primitives + ERC-8183 agentic commerce standard all map directly. |
+| 15 | **Builders in Tokenization Rooftop** | 235 Lincoln Rd, Miami Beach, May 6 evening | Tokenisation practitioners, RWA builders, real-asset operators | **The single most thesis-aligned room of Miami so far.** Most practitioners are working on financial assets; the non-financial side (rights, royalties, IP, licensing) is structurally underserved. Elacity is in that exact gap, and the room recognised it instantly. |
+| 16 | **MetaMask Multichain Fest** | Miami Beach, May 6 evening | **Solana, TRON, Pudgy, Stellar, Monad, Hyperliquid** ecosystem teams | Every chain wants more credible cross-chain primitives, and the rights layer is one of the few that hasn't been done well. **dDRM is genuinely chain-agnostic** — strong cross-chain integration angle for partnerships at the team-to-team level. |
+| 17 | **E11EVEN — Official Consensus Afterparty** | E11EVEN Miami, May 6 night (ongoing) | Senior crypto, deal-making crowd, where Consensus week converges late | Where conversations from the day mature into genuine relationships. Not a pitch room — a continuity room. |
+
+### Patterns emerging across the rooms
+
+**Four different vocabularies, one gap.** Bitcoin people, Cloud people, Allocators, and AI builders all arrive at the same gap from different sides:
+
+- **Bitcoin people** see it as the missing layer for non-monetary value
+- **Cloud people** see it as the missing rights primitive for AI agents
+- **Allocators** see it as a new uncorrelated productive asset class
+- **AI builders** see it as the missing rails for machine-speed commerce
+
+**Securitize keeps coming up unprompted.** Allocators and HNWIs love a category framing they already understand. *"The Securitize equivalent for rights"* gives instant context, signals seriousness, and avoids competing with the most institutionally credible RWA player.
+
+**Productive yield is the unlock.** Yield in crypto is mostly mechanism-derived (staking, restaking, lending). Yield from real-world rights is asset-derived. Allocators trust the second far more than the first.
+
+**Open source is the credentials.** Elacity's GitHub is what got us into Bitcoin 2026 (Open Source Pass), Solana Accelerate-adjacent rooms, and most invite-only side events. **The codebase is the resume.**
+
+### How we are operating
+
+Same model as Vegas, sustained. **Conference tickets: $0. Side events: $0.** All access via relationships, partner programmes, Luma signups disciplined weeks ahead, and AI-augmented research for invite-only rooms. The team headcount required to execute this trip the traditional way would be 3 – 4 people. **We're doing it with one CEO and AI tooling.**
+
+### Coming up — the rest of the trip
+
+| Date | Event | Venue / City |
+|---|---|---|
+| **Thu May 7** | Consensus Miami Day 3 final side events | Miami |
+| **Fri May 8** | **DAT Summit** (Digital Asset Treasuries) — closed-door 400 – 500 senior institutional, with **Galaxy Digital, Animoca, Coinbase Institutional, Pantera Capital** on stage | The EDITION South Beach — closing room of Miami |
+| **Sat – Sun May 9 – 10** | Recovery + closing follow-ups + trip-recap synthesis | Miami |
+| **Mon May 11** | Miami → London | Travel day |
+| **May 13 – 14** | **FT Digital Assets Summit** | Convene Aldersgate, London — most senior institutional finance audience of the entire trip |
+| **May 19 onward** | Bangkok, head-down product mode | Updates landing in the runtime, dDRM pipeline, network upgrades — fed by everything from these rooms |
+
+> *"We will keep posting from the road. Thank you for backing this work. We are present in these rooms, sharing what Elastos is building, and growing the network of people who understand why it matters."*
+>
+> *— A world computer you own. With an economy inside.*
+>
+> *— Sash, CEO, Elacity Labs*
+
+---
+
 ## Looking Ahead — v1.2.8.0 + Beyond
 
 ### v1.2.8.0 — Chipotle Relayer (in design, internally approved)
@@ -982,4 +1068,4 @@ v1.2.8.0 demotes `/api/ddrm/provision` to no-key, adds a SIWE-authenticated `POS
 
 ---
 
-*This is an Elacity Labs team update for the World Computer Initiative (WCI) covering April 26 – May 6, 2026 (eleven days, due to the previous update having been published Apr 25 and last week's Friday slot missed for travel). The headline of the period is the **public launch of ElastOS v1.2 on May 1**, the convergence release across three workstreams: PC2 ships v1.2.0 (268 commits / 1,251 files of work consolidating four months of dDRM hardening, capsule packaging, supernode operations, and a closed external security audit); Elastos Runtime 0.2.0 goes live (Home as the front door, seven first-party capsules, passkey-first auth, zero-permissions-by-default capability model); and Elacity dDRM lands the metadata-alignment workstream (Protection V3 schema, unified `cenc:lit-aes-gcm-v3` system, V3 smart contracts on the frontend, Lit Chipotle keystore integration to 85%). The six days that followed launch were a positive feedback-driven follow-up cycle: thirteen point releases (v1.2.1 → v1.2.7.13) closing every reported issue in hours, including the full SQLite migration that drops the Xcode CLT first-run blocker, the IPFS Cluster install-and-works default that turns every fresh community node into a contributor to global durability, the channel-management + on-chain plans batch via the V3 `SubscriptionModule`, the stealth-mode sprint that brings vanilla WireGuard, AmneziaWG, and VLESS Reality up cleanly on fresh MacBooks, and the Runtime Heartbeat Protocol that survives every kind of pc2-node respawn. Four Apple-signed Launcher releases shipped alongside (v1.2.4 → v1.2.7), and the new PC2 transport binaries (v1) release pipeline now ships 22 SHA-256-verified, Apple-notarised assets to every fresh install. Both supernodes were upgraded to Kubo 0.41.0 with full mesh restoration. The single best framing: **v1.2 is the release where the desktop, the app store, dDRM, identity, payments, and runtime permissions start to connect in a way normal users can actually try — and the six days after launch was the team putting that promise through its first real production users, fix by fix, hour by hour.***
+*This is an Elacity Labs team update for the World Computer Initiative (WCI) covering April 26 – May 6, 2026 (eleven days, due to the previous update having been published Apr 25 and last week's Friday slot missed for travel). The headline of the period is the **public launch of ElastOS v1.2 on May 1**, the convergence release across three workstreams: PC2 ships v1.2.0 (268 commits / 1,251 files of work consolidating four months of dDRM hardening, capsule packaging, supernode operations, and a closed external security audit); Elastos Runtime 0.2.0 goes live (Home as the front door, seven first-party capsules, passkey-first auth, zero-permissions-by-default capability model); and Elacity dDRM lands the metadata-alignment workstream (Protection V3 schema, unified `cenc:lit-aes-gcm-v3` system, V3 smart contracts on the frontend, Lit Chipotle keystore integration to 85%). The six days that followed launch were a positive feedback-driven follow-up cycle: thirteen point releases (v1.2.1 → v1.2.7.13) closing every reported issue in hours, including the full SQLite migration that drops the Xcode CLT first-run blocker, the IPFS Cluster install-and-works default that turns every fresh community node into a contributor to global durability, the channel-management + on-chain plans batch via the V3 `SubscriptionModule`, the stealth-mode sprint that brings vanilla WireGuard, AmneziaWG, and VLESS Reality up cleanly on fresh MacBooks, and the Runtime Heartbeat Protocol that survives every kind of pc2-node respawn. Four Apple-signed Launcher releases shipped alongside (v1.2.4 → v1.2.7), and the new PC2 transport binaries (v1) release pipeline now ships 22 SHA-256-verified, Apple-notarised assets to every fresh install. Both supernodes were upgraded to Kubo 0.41.0 with full mesh restoration. **Running in parallel underneath all of this** was the second leg of the CEO's continuous road trip — 11 days, 17 events, 9 industries, $0 in tickets, Bitcoin Week 2026 final days in Vegas plus Miami Bitcoin & RWA Week, with ElastOS Runtime v1.2 shipping Friday May 1 from a Vegas hotel room while the team executed the release. **The thesis sharpened materially mid-trip:** *"Securitize tokenises real-world securities. Elacity tokenises real-world rights — royalties, licensing fees, revenue shares. Same playbook, different asset class. The interesting part: rights are productive assets. They pay native, uncorrelated yield."* The single best framing: **v1.2 is the release where the desktop, the app store, dDRM, identity, payments, and runtime permissions start to connect in a way normal users can actually try — and the six days after launch was the team putting that promise through its first real production users, fix by fix, hour by hour, with the CEO 2,000 miles from the team holding partnership conversations in parallel.***
