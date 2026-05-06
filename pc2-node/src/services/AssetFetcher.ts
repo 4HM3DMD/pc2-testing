@@ -209,8 +209,12 @@ export class AssetFetcher {
             };
         }
 
-        // Resolve destination
-        const extractToAbs = resolve(this.dataDir, asset.extractTo);
+        // Resolve destination. Manifest paths conventionally start with
+        // `data/...` (the v0.3 doc's documentation marker). The operator
+        // passes the data ROOT as `this.dataDir`, so the prefix would
+        // double up (`<root>/data/data/...`) without normalisation.
+        // Strip the optional leading `data/` segment.
+        const extractToAbs = resolve(this.dataDir, asset.extractTo.replace(/^data\//, ''));
         if (!existsSync(extractToAbs)) {
             mkdirSync(extractToAbs, { recursive: true, mode: 0o700 });
         }

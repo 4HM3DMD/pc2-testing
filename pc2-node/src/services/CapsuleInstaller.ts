@@ -182,7 +182,7 @@ export class CapsuleInstaller {
 
         const finalAppDir = join(this.appsDir, manifest.name);
         const finalExtensionDir = join(this.extensionsDir, manifest.name);
-        const finalDataDir = resolve(this.dataDir, manifest.backend.dataDir);
+        const finalDataDir = resolve(this.dataDir, stripLeadingDataPrefix(manifest.backend.dataDir));
 
         if (existsSync(finalAppDir)) {
             throw new CapsuleInstallError('preflight',
@@ -476,4 +476,19 @@ export class CapsuleInstaller {
 
 function isCapsuleName(name: unknown): name is string {
     return typeof name === 'string' && /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(name);
+}
+
+/**
+ * Manifest paths conventionally start with `data/...` (per the v0.3
+ * doc) as a documentation marker showing they live under the operator's
+ * data root. PC2's data root is the dir passed as `opts.dataDir` to
+ * this service — which IS that root. Resolving naively would produce
+ * `<root>/data/data/...` (double-prefix bug). Strip the optional
+ * leading `data/` so manifest values resolve to the right place.
+ *
+ * Manifests without the prefix work too — the regex only matches the
+ * literal leading `data/` segment.
+ */
+function stripLeadingDataPrefix(p: string): string {
+    return p.replace(/^data\//, '');
 }
