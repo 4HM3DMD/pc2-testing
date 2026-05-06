@@ -5,7 +5,7 @@
 
 ### Key Links This Week
 
-- **Public launch announcement** — [ElastOS v1.2 is here: dApp store is live, dDRM markets, plus Elastos Runtime 0.20](https://elastos.org/blogs/) (Elastos Foundation blog, May 1)
+- **Public launch announcement** — [ElastOS v1.2 is here: dApp store is live, dDRM markets, plus Elastos Runtime 0.20](https://blog.elastos.net) (Elastos blog, May 1)
 - **Latest PC2 release** — [Elacity/pc2.net v1.2.7.13](https://github.com/Elacity/pc2.net/releases/tag/v1.2.7.13)
 - **PC2 v1.2.0 milestone tag** — [Elacity/pc2.net v1.2.0](https://github.com/Elacity/pc2.net/releases/tag/v1.2.0)
 - **Elastos Runtime 0.2.0** — [Elacity/elastos-runtime tree/review/0.2.0](https://github.com/Elacity/elastos-runtime/tree/review/0.2.0) — running live at [elastos.elacitylabs.com/apps/home/](https://elastos.elacitylabs.com/apps/home/)
@@ -49,7 +49,7 @@ This was the week **ElastOS v1.2 became real** — three Elacity workstreams con
 
 3. **The Elacity dDRM workstream landed its metadata-alignment milestone** — Protection V3 schema, the unified `cenc:lit-aes-gcm-v3` protection type across creator + player, directory-based IPFS storage for creator assets, ChannelCreated handler refinements, and the Lit Chipotle keystore-service integration that's now at 85% (ELACITY-2219), with V3 smart-contract frontend integration at 100% (ELACITY-2222) and metadata alignment at 100% (ELACITY-2221).
 
-The public launch went live on **May 1** via the Elastos Foundation blog: *"ElastOS v1.2 is here: dApp store is live, dDRM markets, plus Elastos Runtime 0.20"* — calling out that this is the biggest user-facing release since the World Computer launch, **not because of feature count, but because the main pieces start to feel usable together**: the desktop, the app store, dDRM, identity, payments, and runtime permissions all connecting in a way normal users can actually try.
+The public launch went live on **May 1** via the Elastos blog: *"ElastOS v1.2 is here: dApp store is live, dDRM markets, plus Elastos Runtime 0.20"* — calling out that this is the biggest user-facing release since the World Computer launch, **not because of feature count, but because the main pieces start to feel usable together**: the desktop, the app store, dDRM, identity, payments, and runtime permissions all connecting in a way normal users can actually try.
 
 The **six days that followed launch were a positive feedback-driven follow-up cycle**: thirteen point releases (v1.2.1 → v1.2.7.13), each one closing real items reported by real community members during real fresh installs. **The Slack-to-tag latency stayed in hours, not weeks**, which is exactly the cadence open-source-style stewardship is supposed to look like. By the end of the period:
 
@@ -66,7 +66,7 @@ Everything below is the detailed breakdown of how those eleven days came togethe
 
 ## ElastOS v1.2.0 — The Convergence Release
 
-> _Tagged April 30 (commit `04b44e939`), publicly announced May 1 via the Elastos Foundation blog. 268 commits / 1,251 files of work on top of v1.1.0. The release where the desktop, the app store, dDRM, identity, payments, and runtime permissions start to connect in a way normal users can actually try._
+> _Tagged April 30 (commit `04b44e939`), publicly announced May 1 via the Elastos blog. 268 commits / 1,251 files of work on top of v1.1.0. The release where the desktop, the app store, dDRM, identity, payments, and runtime permissions start to connect in a way normal users can actually try._
 
 ### 1. The dApp Centre with real installable apps
 
@@ -933,7 +933,7 @@ v1.2.8.0 demotes `/api/ddrm/provision` to no-key, adds a SIWE-authenticated `POS
 | Branches active | `main`, `feature/lit-chipotle-migration` (40 commits), `feature/metadata-alignment` (32 commits), `release/v1.2-pre-release` (70 commits), `release/v1.2.6` (76 commits), `hotfix/v1.2.1` |
 | Tagged releases | **18** (v1.2.0 + v1.2.1 → v1.2.7.13 + `pc2-binaries-v1`) |
 | Days from v1.2.0 → v1.2.7.13 | **6** |
-| Public launch announcement | May 1, Elastos Foundation blog |
+| Public launch announcement | May 1, Elastos blog |
 
 ### v1.2.0 Headline Numbers
 
