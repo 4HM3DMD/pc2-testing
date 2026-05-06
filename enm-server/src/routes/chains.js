@@ -402,12 +402,18 @@ function build(extensionHandle) {
                                 rpc.getblockcount(),
                             ]);
 
-                            // Fall back to RPC for localHeight when
-                            // SyncTracker hasn't sampled yet (first ~30s
-                            // after chain start). Without this the chain-
-                            // card hides the entire sync panel because
-                            // its render guard requires localHeight.
-                            if (snapshot.localHeight == null && blockCount.status === 'fulfilled') {
+                            // ALWAYS prefer fresh RPC value for the displayed
+                            // localHeight. SyncTracker holds a HISTORY of
+                            // samples used to compute velocity / ETA — it is
+                            // not the source of truth for "how many blocks
+                            // do I have right now." Without this preference,
+                            // a stale early sample (e.g. height=1 recorded
+                            // before block-loading finished) sticks until
+                            // SyncTracker's medium-tick rolls forward, and
+                            // /sync reports `localHeight: 1` while
+                            // /chains/:id reports the real number — exactly
+                            // the divergence the operator hit 2026-05-07.
+                            if (blockCount.status === 'fulfilled') {
                                 const v = blockCount.value;
                                 const h = (typeof v === 'number') ? v : (v && v.result);
                                 if (typeof h === 'number') { snapshot.localHeight = h; }
