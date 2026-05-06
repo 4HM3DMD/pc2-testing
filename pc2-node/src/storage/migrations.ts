@@ -31,7 +31,7 @@ function findSchemaFile(): string {
   }
   throw new Error(`Schema file not found. Tried: ${SCHEMA_FILE} and ${sourceSchema}`);
 }
-const CURRENT_VERSION = 32;
+const CURRENT_VERSION = 33;
 
 interface Migration {
   version: number;
@@ -1326,6 +1326,31 @@ export function runMigrations(db: Database): void {
         recordMigration(db, 32);
       } catch (error: any) {
         log.error(`❌ Migration 32 error: ${error.message}`);
+        throw error;
+      }
+    }
+
+    // Migration 33: runtime-state columns for service-type apps. Lets pc2-node
+    // remember which service apps are running across restarts (boot-time
+    // hydrate) and surface live status to the launcher tile / /api/installed-
+    // apps/:name/status. See AppProcessManager for how these are written.
+    if (currentVersion < 33) {
+      try {
+        log.info('📦 Running Migration 33: installed_apps runtime-state columns...');
+        const addCol = (sql: string) => {
+          try { db.exec(sql); } catch (e: any) {
+            if (!String(e?.message || '').includes('duplicate column')) throw e;
+          }
+        };
+        addCol(`ALTER TABLE installed_apps ADD COLUMN pid INTEGER`);
+        addCol(`ALTER TABLE installed_apps ADD COLUMN port INTEGER`);
+        addCol(`ALTER TABLE installed_apps ADD COLUMN started_at INTEGER`);
+        addCol(`ALTER TABLE installed_apps ADD COLUMN crash_count INTEGER NOT NULL DEFAULT 0`);
+
+        log.info('✅ Migration 33 complete: installed_apps has pid/port/started_at/crash_count');
+        recordMigration(db, 33);
+      } catch (error: any) {
+        log.error(`❌ Migration 33 error: ${error.message}`);
         throw error;
       }
     }

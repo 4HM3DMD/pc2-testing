@@ -143,6 +143,20 @@ export interface InstalledApp {
   manifest_json: string;
   installed_at: number;
   updated_at: number;
+  /** Runtime state for `type: "service"` apps. NULL when not running. */
+  pid?: number | null;
+  port?: number | null;
+  started_at?: number | null;
+  /** Lifetime crash counter; resets only on explicit clearAppRuntime(). */
+  crash_count?: number;
+}
+
+/** Subset of {@link InstalledApp} runtime fields, used by AppProcessManager. */
+export interface AppRuntimeState {
+  pid: number | null;
+  port: number | null;
+  started_at: number | null;
+  crash_count: number;
 }
 
 export class DatabaseManager {
@@ -1975,6 +1989,40 @@ export class DatabaseManager {
   uninstallApp(appName: string): boolean {
     const db = this.getDB();
     const result = db.prepare('DELETE FROM installed_apps WHERE app_name = ?').run(appName);
+    return result.changes > 0;
+  }
+
+  /**
+   * Update runtime-state columns (pid/port/started_at/crash_count) on an
+   * installed app row. Used by AppProcessManager to record a service's
+   * live state so /status endpoints + boot-time hydrate can read it.
+   *
+   * No-op if the app row doesn't exist (returns false). Service-type
+   * apps must be registered via registerInstalledApp() first.
+   */
+  setAppRuntime(appName: string, state: AppRuntimeState): boolean {
+    const db = this.getDB();
+    const result = db.prepare(`
+      UPDATE installed_apps
+         SET pid = ?, port = ?, started_at = ?, crash_count = ?, updated_at = ?
+       WHERE app_name = ?
+    `).run(state.pid, state.port, state.started_at, state.crash_count, Date.now(), appName);
+    return result.changes > 0;
+  }
+
+  /**
+   * Clear all runtime-state columns (resets to "not running"). Called
+   * when AppProcessManager stops an app cleanly; also called as part
+   * of a clean uninstall by the install handler before the row is
+   * deleted, so callers reading the row mid-uninstall see consistent state.
+   */
+  clearAppRuntime(appName: string): boolean {
+    const db = this.getDB();
+    const result = db.prepare(`
+      UPDATE installed_apps
+         SET pid = NULL, port = NULL, started_at = NULL, updated_at = ?
+       WHERE app_name = ?
+    `).run(Date.now(), appName);
     return result.changes > 0;
   }
 
