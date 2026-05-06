@@ -1,0 +1,518 @@
+/*
+ * Copyright (C) 2026-present Elacity
+ * SPDX-License-Identifier: AGPL-3.0
+ *
+ * SelfHealingEngine — applies HealthRules detections.
+ *
+ * Two modes per detection.tier:
+ *   AUTOMATED-SAFE  → execute immediately under withChainLock; record audit
+ *   OWNER-CONFIRMS  → create an enm_proposals row + emit SSE notification;
+ *                     the operator confirms via /api/healing/confirm/:id which
+ *                     calls executeApproved() on this engine
+ *
+ * Restart-attempt budget (Rev 6 audit, agent 6):
+ *   AUTOMATED-SAFE F1/F2/F3 actions can fire at most PROCESS_MAX_RESTART_ATTEMPTS
+ *   times in PROCESS_RESTART_COOLDOWN_MS * N before escalating the next attempt
+ *   to OWNER_CONFIRMS. This prevents thundering-herd restart loops on a chain
+ *   that's broken at a deeper layer.
+ *
+ * Idempotency: the engine deduplicates pending proposals by (chainId, ruleId).
+ * Re-fires of the same detection within the proposal's TTL no-op.
+ */
+
+'use strict';
+
+const {
+    AUDIT_DECISION,
+    HEALING_TIERS,
+    SEVERITY,
+    ENM_LOG_PREFIX,
+    PROCESS_MAX_RESTART_ATTEMPTS,
+    PROCESS_RESTART_BUDGET_WINDOW_MS,
+} = require('./EnmConstants');
+
+const ProposalStore = require('./EnmProposalStore');
+const AuditLog = require('./EnmAuditLog');
+const { withChainLock } = require('./withChainLock');
+
+class SelfHealingEngine {
+    /**
+     * @param {object} deps
+     * @param {object} deps.extensionHandle
+     * @param {() => object} deps.getDb         lazy db getter (data may not be ready at ctor time)
+     * @param {object} deps.processService      NativeProcessService
+     * @param {object} deps.sseHub              SseHub for `notifications` topic
+     * @param {string} deps.ownerWallet         lower-cased EVM address for proposal scoping + audit
+     */
+    constructor(deps) {
+        if (!deps || !deps.extensionHandle || typeof deps.getDb !== 'function'
+            || !deps.processService || !deps.sseHub) {
+            throw new TypeError(
+                'SelfHealingEngine: { extensionHandle, getDb, processService, sseHub, ownerWallet } required',
+            );
+        }
+        this.extensionHandle = deps.extensionHandle;
+        this.getDb = deps.getDb;
+        this.processService = deps.processService;
+        this.sseHub = deps.sseHub;
+        this.ownerWallet = deps.ownerWallet || null;
+        /** @type {Map<string, { count: number, firstAt: number }>} */
+        this._restartBudget = new Map();
+    }
+
+    /**
+     * @param {string} ownerWallet  call from setup-complete or owner-rotation
+     */
+    setOwnerWallet(ownerWallet) {
+        this.ownerWallet = ownerWallet ? String(ownerWallet).toLowerCase() : null;
+    }
+
+    /**
+     * Process a batch of detections from a single tick.
+     *
+     * @param {string} chainId
+     * @param {Array<import('./HealthRules').Detection>} detections
+     * @param {object} chainConfig
+     */
+    async apply(chainId, detections, chainConfig) {
+        if (!Array.isArray(detections) || detections.length === 0) {
+            return;
+        }
+        if (!this.ownerWallet) {
+            // No owner wallet means setup hasn't claimed an owner yet. Skip
+            // healing — proposals would have nowhere to live. Detections still
+            // log so the operator sees them in the audit tab once configured.
+            for (const d of detections) {
+                await this._auditNoOwner(chainId, d);
+            }
+            return;
+        }
+
+        for (const det of detections) {
+            try {
+                if (det.tier === HEALING_TIERS.AUTOMATED_SAFE) {
+                    await this._applyAutomatedSafe(chainId, det, chainConfig);
+                } else if (det.tier === HEALING_TIERS.OWNER_CONFIRMS) {
+                    await this._applyOwnerConfirms(chainId, det);
+                } else {
+                    // CRITICAL_NOTIFY / NEVER_AUTOMATIC handled by HealthChecker
+                    // notification path; engine just audits the proposal step.
+                    await this._auditOnly(chainId, det);
+                }
+            } catch (err) {
+                this.extensionHandle.log.error(
+                    `${ENM_LOG_PREFIX} healing apply ${chainId}/${det.ruleId} error: ${err.message}`,
+                );
+                await this._auditFailure(chainId, det, err);
+            }
+        }
+    }
+
+    /**
+     * Called from /api/healing/confirm/:id route after operator approval.
+     * Re-fetches the proposal under wallet+pending guard, transitions
+     * pending → approved, executes the action, then marks executed/failed.
+     *
+     * @param {string} proposalId
+     * @param {string} walletAddress  must match proposal's owner
+     * @returns {Promise<{ ok: boolean, proposal: object|null, executed?: boolean, error?: string }>}
+     */
+    async executeApproved(proposalId, walletAddress) {
+        const db = this.getDb();
+        const owner = String(walletAddress || '').toLowerCase();
+
+        const proposal = await ProposalStore.getById(db, proposalId);
+        if (!proposal) {
+            return { ok: false, error: 'Proposal not found.' };
+        }
+        if (proposal.wallet_address !== owner) {
+            return { ok: false, error: 'Proposal does not belong to this wallet.' };
+        }
+        if (proposal.status !== ProposalStore.STATUS.PENDING) {
+            return {
+                ok: false,
+                proposal,
+                error: `Proposal is no longer pending (status=${proposal.status}).`,
+            };
+        }
+
+        const approved = await ProposalStore.approve(db, proposalId);
+        if (!approved) {
+            // Race: another thread approved/expired between getById and approve.
+            const fresh = await ProposalStore.getById(db, proposalId);
+            return { ok: false, proposal: fresh, error: 'Proposal could not be approved (already settled).' };
+        }
+
+        const startedAt = Date.now();
+        let execResult = { success: false, outcome: 'unhandled' };
+        try {
+            execResult = await this._executePayload(approved);
+        } catch (err) {
+            execResult = { success: false, outcome: err.message };
+        }
+
+        const finalRow = await ProposalStore.markExecuted(db, proposalId, execResult);
+        await AuditLog.append(db, {
+            walletAddress: owner,
+            chainId: approved.chain_id,
+            ruleId: approved.rule_id,
+            tier: HEALING_TIERS.OWNER_CONFIRMS,
+            decision: execResult.success ? AUDIT_DECISION.EXECUTED : AUDIT_DECISION.FAILED,
+            executor: owner,
+            outcome: execResult.outcome,
+            durationMs: Date.now() - startedAt,
+            payload: ProposalStore.decodePayload(approved),
+        });
+
+        return { ok: true, proposal: finalRow, executed: execResult.success };
+    }
+
+    /**
+     * Called from /api/healing/reject/:id route.
+     *
+     * @param {string} proposalId
+     * @param {string} walletAddress
+     * @param {string} [reason]
+     */
+    async rejectProposal(proposalId, walletAddress, reason) {
+        const db = this.getDb();
+        const owner = String(walletAddress || '').toLowerCase();
+
+        const proposal = await ProposalStore.getById(db, proposalId);
+        if (!proposal) {
+            return { ok: false, error: 'Proposal not found.' };
+        }
+        if (proposal.wallet_address !== owner) {
+            return { ok: false, error: 'Proposal does not belong to this wallet.' };
+        }
+        if (proposal.status !== ProposalStore.STATUS.PENDING) {
+            return { ok: false, proposal, error: `Proposal is no longer pending (status=${proposal.status}).` };
+        }
+
+        const updated = await ProposalStore.reject(db, proposalId, reason);
+        await AuditLog.append(db, {
+            walletAddress: owner,
+            chainId: proposal.chain_id,
+            ruleId: proposal.rule_id,
+            tier: HEALING_TIERS.OWNER_CONFIRMS,
+            decision: AUDIT_DECISION.REJECTED,
+            executor: owner,
+            outcome: reason ? `rejected: ${reason}` : 'rejected',
+            payload: ProposalStore.decodePayload(proposal),
+        });
+        return { ok: true, proposal: updated };
+    }
+
+    // ========================================================================
+    // Internal — automated-safe path
+    // ========================================================================
+
+    /** @private */
+    async _applyAutomatedSafe(chainId, det, chainConfig) {
+        // Restart-loop budget: count attempts within a rolling window.
+        if (this._isRestartAction(det)) {
+            // Note: F1's detectF1 in HealthRules.js already gates on
+            // snap.processExit.manualStop, so a manually-stopped chain
+            // never reaches this path. The audit flagged a defensive
+            // execution-time check too — but statusSync doesn't expose
+            // manualStop, so the only true source is the exit snapshot
+            // F1 already consults. Single source of truth, no double
+            // gate, no risk of drift between the two checks.
+            const allowed = this._consumeRestartBudget(chainId);
+            if (!allowed) {
+                // Escalate: convert this AUTOMATED-SAFE into an OWNER-CONFIRMS.
+                this.extensionHandle.log.warn(
+                    `${ENM_LOG_PREFIX} ${chainId}/${det.ruleId} budget exhausted — escalating to OWNER-CONFIRMS`,
+                );
+                const escalated = {
+                    ...det,
+                    tier: HEALING_TIERS.OWNER_CONFIRMS,
+                    summaryReason:
+                        (det.summaryReason || '') +
+                        ' (escalated after multiple auto-restart attempts)',
+                };
+                return this._applyOwnerConfirms(chainId, escalated);
+            }
+        }
+
+        const startedAt = Date.now();
+        const db = this.getDb();
+        let outcome = 'success';
+        let success = true;
+        try {
+            await withChainLock(chainId, () => this._executeRestart(chainId, chainConfig));
+        } catch (err) {
+            success = false;
+            outcome = err.message;
+            this.extensionHandle.log.error(
+                `${ENM_LOG_PREFIX} ${chainId}/${det.ruleId} automated-safe failed: ${err.message}`,
+            );
+        }
+        await AuditLog.append(db, {
+            walletAddress: this.ownerWallet,
+            chainId,
+            ruleId: det.ruleId,
+            tier: HEALING_TIERS.AUTOMATED_SAFE,
+            decision: success ? AUDIT_DECISION.EXECUTED : AUDIT_DECISION.FAILED,
+            executor: 'system',
+            outcome,
+            durationMs: Date.now() - startedAt,
+            payload: det.payload || null,
+        });
+        this._publishNotification({
+            chainId,
+            ruleId: det.ruleId,
+            severity: success ? SEVERITY.HEALING : SEVERITY.WARNING,
+            summary: det.summaryAction,
+            detail: success ? 'Auto-healed.' : `Auto-heal failed: ${outcome}`,
+        });
+    }
+
+    /** @private */
+    _isRestartAction(det) {
+        return det && det.payload && det.payload.action === 'restart';
+    }
+
+    /** @private */
+    _consumeRestartBudget(chainId) {
+        // Rolling window per Rev 9 plan: at most PROCESS_MAX_RESTART_ATTEMPTS
+        // automated restarts per PROCESS_RESTART_BUDGET_WINDOW_MS. Beyond
+        // that, the engine escalates to OWNER-CONFIRMS so the operator can
+        // intervene rather than burn cycles on a chain broken below the
+        // restart-fixable layer.
+        const now = Date.now();
+        const cur = this._restartBudget.get(chainId);
+        // Use >= so that exactly-at-window restarts reset the counter
+        // (was > strict; an exact-window restart was treating the old
+        // count as still hot, leaving the operator stuck in budget-
+        // exhausted state until the next restart bumped it past).
+        if (!cur || (now - cur.firstAt) >= PROCESS_RESTART_BUDGET_WINDOW_MS) {
+            this._restartBudget.set(chainId, { count: 1, firstAt: now });
+            return true;
+        }
+        if (cur.count >= PROCESS_MAX_RESTART_ATTEMPTS) {
+            return false;
+        }
+        cur.count += 1;
+        return true;
+    }
+
+    /** @private */
+    async _executeRestart(chainId, chainConfig) {
+        // The chainConfig must include binaryPath; the chains-route layer
+        // already merged user config into a runnable shape before HealthChecker
+        // ever reaches us (Phase 2 contract).
+        return this.processService.restart(chainId, chainConfig);
+    }
+
+    // ========================================================================
+    // Internal — owner-confirms path
+    // ========================================================================
+
+    /** @private */
+    async _applyOwnerConfirms(chainId, det) {
+        // Serialize per-chain so two concurrent fast/medium/slow ticks can't
+        // both walk past listPending and double-insert (Phase 4 audit, agent 1).
+        return withChainLock(`enm-proposal:${chainId}`, async () => {
+            const db = this.getDb();
+            const existing = await ProposalStore.listPending(db, this.ownerWallet);
+            const dup = existing.find((p) => p.chain_id === chainId && p.rule_id === det.ruleId);
+            if (dup) {
+                return; // already represented in the dashboard
+            }
+            const proposal = await ProposalStore.create(db, {
+                walletAddress: this.ownerWallet,
+                chainId,
+                ruleId: det.ruleId,
+                type: `enm.healing.${det.ruleId.toLowerCase()}`,
+                summaryAction: det.summaryAction,
+                summaryReason: det.summaryReason,
+                payload: det.payload || null,
+            });
+            await AuditLog.append(db, {
+                walletAddress: this.ownerWallet,
+                chainId,
+                ruleId: det.ruleId,
+                tier: HEALING_TIERS.OWNER_CONFIRMS,
+                decision: AUDIT_DECISION.PROPOSED,
+                executor: 'system',
+                outcome: 'pending_approval',
+                payload: det.payload || null,
+            });
+            this._publishNotification({
+                chainId,
+                ruleId: det.ruleId,
+                severity: det.severity || SEVERITY.WARNING,
+                summary: det.summaryAction,
+                detail: det.summaryReason || '',
+                proposalId: proposal.id,
+            });
+        });
+    }
+
+    /** @private */
+    async _auditOnly(chainId, det) {
+        const db = this.getDb();
+        await AuditLog.append(db, {
+            walletAddress: this.ownerWallet,
+            chainId,
+            ruleId: det.ruleId,
+            tier: det.tier || HEALING_TIERS.CRITICAL_NOTIFY,
+            decision: AUDIT_DECISION.MANUAL_ONLY,
+            executor: 'system',
+            outcome: det.summaryAction,
+            payload: det.payload || null,
+        });
+        this._publishNotification({
+            chainId,
+            ruleId: det.ruleId,
+            severity: det.severity || SEVERITY.CRITICAL,
+            summary: det.summaryAction,
+            detail: det.summaryReason || '',
+        });
+    }
+
+    /** @private */
+    async _auditNoOwner(chainId, det) {
+        // Detection fired before setup completed — log a placeholder row so
+        // the audit tab eventually shows the operator we noticed.
+        try {
+            const db = this.getDb();
+            await AuditLog.append(db, {
+                walletAddress: '__pre_setup__',
+                chainId,
+                ruleId: det.ruleId,
+                tier: det.tier || HEALING_TIERS.CRITICAL_NOTIFY,
+                decision: AUDIT_DECISION.MANUAL_ONLY,
+                executor: 'system',
+                outcome: 'no-owner-skip',
+                payload: det.payload || null,
+            });
+        } catch (err) {
+            // Non-fatal: db may not yet be wired during boot.
+            this.extensionHandle.log.debug(
+                `${ENM_LOG_PREFIX} preview audit write failed (${err.message}) — likely DB not ready`,
+            );
+        }
+    }
+
+    /** @private */
+    async _auditFailure(chainId, det, err) {
+        try {
+            const db = this.getDb();
+            await AuditLog.append(db, {
+                walletAddress: this.ownerWallet || '__pre_setup__',
+                chainId,
+                ruleId: det.ruleId,
+                tier: det.tier || HEALING_TIERS.CRITICAL_NOTIFY,
+                decision: AUDIT_DECISION.FAILED,
+                executor: 'system',
+                outcome: err.message,
+                payload: det.payload || null,
+            });
+        } catch (_) { /* swallow secondary failure */ }
+    }
+
+    // ========================================================================
+    // Internal — execute approved payload
+    // ========================================================================
+
+    /** @private */
+    async _executePayload(proposal) {
+        const payload = ProposalStore.decodePayload(proposal);
+        const action = payload && payload.action;
+
+        switch (action) {
+            case 'restart':
+                return this._actRestart(proposal.chain_id);
+
+            case 'config-rollback':
+                // Implemented in routes/config.js (Phase 5). Mark as deferred
+                // so the audit tab doesn't show a misleading success.
+                return { success: false, outcome: 'config-rollback handled by config route (Phase 5)' };
+
+            case 'prune-suggestion':
+            case 'oom-suggestion':
+            case 'port-conflict':
+            case 'open-settings':
+            case 'version-record':
+                // These are pure suggestions — the operator's "Confirm" means
+                // "yes I read it", not "yes execute". Mark success without
+                // performing a side-effect.
+                return { success: true, outcome: 'acknowledged' };
+
+            default:
+                return { success: false, outcome: `Unknown action "${action}"` };
+        }
+    }
+
+    /** @private */
+    async _actRestart(chainId) {
+        // Caller already approved the proposal; we don't need to reload chain
+        // config inside the engine — let processService.restart figure out what
+        // to spawn from its known-good last-start config.
+        try {
+            // chainConfig is required for restart; we go through the adapter via
+            // a lazy lookup. The engine intentionally avoids storing its own
+            // chain registry to keep the dependency graph linear.
+            const reg = require('./ChainRegistry'); // late require to dodge cycle
+            const adapter = reg.getAdapter(chainId);
+            const chainConfig = await this._loadChainConfig(chainId);
+            await adapter.start(chainConfig);
+            return { success: true, outcome: 'restarted' };
+        } catch (err) {
+            return { success: false, outcome: err.message };
+        }
+    }
+
+    /** @private */
+    async _loadChainConfig(chainId) {
+        const ConfigStore = require('./ConfigStore'); // late require
+        const cfg = await ConfigStore.load();
+        const chain = cfg && cfg.chains && cfg.chains[chainId];
+        if (!chain) {
+            throw new Error(`No config for chainId "${chainId}"`);
+        }
+        return chain;
+    }
+
+    // ========================================================================
+    // Internal — SSE notification
+    // ========================================================================
+
+    /** @private */
+    _publishNotification(args) {
+        // Healing notifications include proposalIds — those grant the right to
+        // confirm the action via /api/healing/confirm/:id. Even though the
+        // confirm route enforces requireOwner, we keep the proposalId off the
+        // SSE wire of unrelated wallets (Phase 4 audit, agent 2).
+        try {
+            const payload = {
+                ts: Date.now(),
+                chainId: args.chainId,
+                ruleId: args.ruleId,
+                severity: args.severity,
+                summary: args.summary,
+                detail: args.detail,
+                proposalId: args.proposalId || null,
+            };
+            if (this.ownerWallet && typeof this.sseHub.publishToWallet === 'function') {
+                this.sseHub.publishToWallet(this.ownerWallet, 'notifications', payload);
+            } else {
+                // No owner yet — broadcast as a plain notification (no proposalId
+                // gets through this path since pre-owner detections never create
+                // proposals). Behavior equivalent to before the wallet-filter
+                // patch for the bootstrap case.
+                this.sseHub.publish('notifications', payload);
+            }
+        } catch (err) {
+            this.extensionHandle.log.warn(
+                `${ENM_LOG_PREFIX} healing notification publish failed: ${err.message}`,
+            );
+        }
+    }
+}
+
+module.exports = {
+    SelfHealingEngine,
+};
