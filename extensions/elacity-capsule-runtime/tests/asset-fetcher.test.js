@@ -29,7 +29,7 @@ import { pipeline } from 'node:stream/promises';
 import * as tar from 'tar';
 import nacl from 'tweetnacl';
 
-const HELPER_PATH = '../../src/services/AssetFetcher.js';
+const HELPER_PATH = '../src/services/AssetFetcher.js';
 let AssetFetcher, AssetFetchError, looksLikeTarball, verifyAssetSignature, defaultArchResolver;
 
 try {

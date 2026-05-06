@@ -22,7 +22,7 @@ import { mkdtempSync, rmSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
-const HELPER_PATH = '../../src/services/LazyExtensionLoader.js';
+const HELPER_PATH = '../src/services/LazyExtensionLoader.js';
 let LazyExtensionLoader, LoaderError;
 
 try {

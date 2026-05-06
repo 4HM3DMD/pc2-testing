@@ -50,10 +50,10 @@ let validateCapsuleManifest, signManifest, verifyManifestSignature;
 let CapsuleInstaller, LazyExtensionLoader;
 
 try {
-    ({ validateCapsuleManifest } = await import('../../src/services/CapsuleManifest.js'));
-    ({ signManifest, verifyManifestSignature } = await import('../../src/services/CapsuleSignature.js'));
-    ({ CapsuleInstaller } = await import('../../src/services/CapsuleInstaller.js'));
-    ({ LazyExtensionLoader } = await import('../../src/services/LazyExtensionLoader.js'));
+    ({ validateCapsuleManifest } = await import('../src/services/CapsuleManifest.js'));
+    ({ signManifest, verifyManifestSignature } = await import('../src/services/CapsuleSignature.js'));
+    ({ CapsuleInstaller } = await import('../src/services/CapsuleInstaller.js'));
+    ({ LazyExtensionLoader } = await import('../src/services/LazyExtensionLoader.js'));
 } catch (err) {
     console.warn(`[spec] enm-capsule-e2e prerequisites missing: ${err.code || err.message}`);
 }
@@ -66,7 +66,7 @@ function skipIfMissing(t) {
     return false;
 }
 
-const ENM_SOURCE_DIR = resolve(import.meta.dirname, '../../../extensions/elastos-node-manager');
+const ENM_SOURCE_DIR = resolve(import.meta.dirname, '../../elastos-node-manager');
 
 // ---------------------------------------------------------------------------
 // Test scaffolding

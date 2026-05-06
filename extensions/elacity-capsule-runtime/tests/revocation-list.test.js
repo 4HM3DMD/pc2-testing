@@ -14,7 +14,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import nacl from 'tweetnacl';
 
-const HELPER_PATH = '../../src/services/RevocationList.js';
+const HELPER_PATH = '../src/services/RevocationList.js';
 let validateRevocationDoc, canonicalizeRevocationDoc, computeRevocationDigest,
     verifyRevocationList, signRevocationList, isPublisherRevoked;
 

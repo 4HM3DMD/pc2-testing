@@ -28,7 +28,7 @@ import { Writable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import * as tar from 'tar';
 
-const HELPER_PATH = '../../src/services/CapsuleInstaller.js';
+const HELPER_PATH = '../src/services/CapsuleInstaller.js';
 let CapsuleInstaller, CapsuleInstallError;
 
 try {

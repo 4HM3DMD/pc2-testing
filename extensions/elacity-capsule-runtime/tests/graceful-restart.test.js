@@ -12,7 +12,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const HELPER_PATH = '../../src/services/GracefulRestart.js';
+const HELPER_PATH = '../src/services/GracefulRestart.js';
 let GracefulRestart, GracefulRestartError;
 
 try {

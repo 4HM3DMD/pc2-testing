@@ -23,7 +23,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
-const HELPER_PATH = '../../src/services/ExtensionProbe.js';
+const HELPER_PATH = '../src/services/ExtensionProbe.js';
 let probeExtension;
 
 try {

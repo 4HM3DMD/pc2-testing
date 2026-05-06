@@ -19,8 +19,8 @@ let RevocationFetcher;
 let signRevocationList;
 
 try {
-    ({ RevocationFetcher } = await import('../../src/services/RevocationFetcher.js'));
-    ({ signRevocationList } = await import('../../src/services/RevocationList.js'));
+    ({ RevocationFetcher } = await import('../src/services/RevocationFetcher.js'));
+    ({ signRevocationList } = await import('../src/services/RevocationList.js'));
 } catch (err) {
     console.warn(`[spec] RevocationFetcher prerequisites: ${err.code || err.message}`);
 }

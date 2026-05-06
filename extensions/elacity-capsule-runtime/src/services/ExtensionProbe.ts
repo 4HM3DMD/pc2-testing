@@ -32,7 +32,10 @@ import { dirname, join } from 'path';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const RUNNER_PATH = join(__dirname, 'probe-runner.cjs');
+// probe-runner.cjs lives one dir up (src/probe-runner.cjs) — it's not
+// service-specific, more of an extension-runtime sibling that
+// ExtensionProbe forks.
+const RUNNER_PATH = join(__dirname, '..', 'probe-runner.cjs');
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const STDERR_TRIM_BYTES = 4096;

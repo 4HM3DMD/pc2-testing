@@ -1,0 +1,17 @@
+{
+  "name": "elacity-capsule-runtime",
+  "version": "0.3.0",
+  "description": "PC2 extension that adds support for kind:hybrid capsules (Wave 7 library + wiring).",
+  "main": "main.js",
+  "type": "module",
+  "private": true,
+  "license": "AGPL-3.0",
+  "engines": { "node": ">=20 <23" },
+  "scripts": {
+    "test": "tsx --test tests/*.test.js"
+  },
+  "dependencies": {
+    "tar": "^6.2.0",
+    "tweetnacl": "^1.0.3"
+  }
+}

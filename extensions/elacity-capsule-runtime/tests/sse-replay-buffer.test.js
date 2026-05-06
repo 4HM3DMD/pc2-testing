@@ -11,7 +11,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const HELPER_PATH = '../../src/services/SseReplayBuffer.js';
+const HELPER_PATH = '../src/services/SseReplayBuffer.js';
 let SseReplayBuffer;
 
 try {

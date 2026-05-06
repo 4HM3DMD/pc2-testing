@@ -31,11 +31,11 @@ let CapsuleInstaller, LazyExtensionLoader, AssetFetcher;
 
 try {
     ({ CapsuleInstallOrchestrator, OrchestratorError } =
-        await import('../../src/services/CapsuleInstallOrchestrator.js'));
-    ({ signManifest } = await import('../../src/services/CapsuleSignature.js'));
-    ({ CapsuleInstaller } = await import('../../src/services/CapsuleInstaller.js'));
-    ({ LazyExtensionLoader } = await import('../../src/services/LazyExtensionLoader.js'));
-    ({ AssetFetcher } = await import('../../src/services/AssetFetcher.js'));
+        await import('../src/services/CapsuleInstallOrchestrator.js'));
+    ({ signManifest } = await import('../src/services/CapsuleSignature.js'));
+    ({ CapsuleInstaller } = await import('../src/services/CapsuleInstaller.js'));
+    ({ LazyExtensionLoader } = await import('../src/services/LazyExtensionLoader.js'));
+    ({ AssetFetcher } = await import('../src/services/AssetFetcher.js'));
 } catch (err) {
     console.warn(`[spec] CapsuleInstallOrchestrator prerequisites: ${err.code || err.message}`);
 }

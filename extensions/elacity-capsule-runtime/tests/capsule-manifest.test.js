@@ -20,7 +20,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const HELPER_PATH = '../../src/services/CapsuleManifest.js';
+const HELPER_PATH = '../src/services/CapsuleManifest.js';
 let validateCapsuleManifest, CapsuleManifestError, RESERVED_DATADIR_ROOTS, PRIVILEGED_PORTS;
 
 try {

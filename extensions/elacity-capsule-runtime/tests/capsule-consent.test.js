@@ -20,7 +20,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const HELPER_PATH = '../../src/services/CapsuleConsent.js';
+const HELPER_PATH = '../src/services/CapsuleConsent.js';
 let describeConsent, truncateKey, formatBytes, _setPlatformResolver, _setArchResolver;
 
 try {

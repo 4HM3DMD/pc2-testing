@@ -18,7 +18,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import nacl from 'tweetnacl';
 
-const HELPER_PATH = '../../src/services/CapsuleSignature.js';
+const HELPER_PATH = '../src/services/CapsuleSignature.js';
 let canonicalizeManifest, computeManifestDigest, signManifest, verifyManifestSignature;
 
 try {
