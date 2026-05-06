@@ -86,8 +86,10 @@ import { ContentIndexerService } from './services/ContentIndexerService.js';
 import { initBaseRpcPool } from './utils/rpc.js';
 import { getGatewayService, createChannelBridge } from './services/gateway/index.js';
 import { getNodeConfig } from './api/setup.js';
+import { RuntimeHeartbeat } from './utils/runtime-heartbeat.js';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { readFileSync as fsReadFileSync, existsSync as fsExistsSync } from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -131,6 +133,37 @@ const IPFS_REPO_PATH = process.env.IPFS_REPO_PATH || config.storage.ipfs_repo_pa
   let bosonService: BosonService | null = null;
   let seedingService: ContentSeedingService | null = null;
   let indexerService: ContentIndexerService | null = null;
+  let heartbeat: RuntimeHeartbeat | null = null;
+
+// Resolve current pc2-node version from package.json by walking up from
+// the compiled module location. Falls back to "0.0.0-dev" for ts-node /
+// snapshot builds where package.json isn't on the expected path.
+//
+// Mirrors UpdateService.loadCurrentVersion (intentionally duplicated to
+// avoid pulling UpdateService into the heartbeat startup path — that
+// service has its own initialization concerns and is not always loaded).
+function resolveCurrentVersion(): string {
+  if (process.env.PC2_VERSION) return process.env.PC2_VERSION;
+  const candidates = [
+    join(__dirname, '..', 'package.json'),
+    join(__dirname, '..', '..', 'package.json'),
+    join(process.cwd(), 'package.json'),
+    join(process.cwd(), '..', 'package.json'),
+  ];
+  for (const path of candidates) {
+    if (fsExistsSync(path)) {
+      try {
+        const pkg = JSON.parse(fsReadFileSync(path, 'utf-8'));
+        if (pkg && typeof pkg.version === 'string' && pkg.version.length > 0) {
+          return pkg.version;
+        }
+      } catch {
+        // Try next candidate
+      }
+    }
+  }
+  return '0.0.0-dev';
+}
 
 async function main() {
   logger.info('Starting PC2 Node...');
@@ -403,6 +436,23 @@ async function main() {
       logger.info(`🚀 PC2 Node running on http://localhost:${PORT}`);
       logger.info(`   Health check: http://localhost:${PORT}/health`);
       logger.info(`   API: http://localhost:${PORT}/api`);
+
+      // v1.2.7.13: emit a heartbeat the launcher (and any external
+      // supervisor) can poll instead of tracking our PID. Also watches
+      // for a restart-requested.flag so update.sh can trigger a clean
+      // restart without depending on pm2/systemctl. dataDir mirrors
+      // BosonService init above so the runtime/ subdir lives next to
+      // the database file.
+      try {
+        heartbeat = new RuntimeHeartbeat({
+          dataDir: dirname(DB_PATH),
+          version: resolveCurrentVersion(),
+          port: PORT,
+        });
+        heartbeat.start();
+      } catch (err) {
+        logger.warn(`[Startup] RuntimeHeartbeat failed to initialize (non-fatal): ${(err as Error).message}`);
+      }
     });
   };
   
@@ -414,7 +464,15 @@ async function main() {
   // Graceful shutdown
   const shutdown = async () => {
     logger.info('Shutting down gracefully...');
-    
+
+    // v1.2.7.13: stop the heartbeat FIRST so any launcher polling sees
+    // pc2-node as "stopping" before we tear down the rest. removeFile=true
+    // signals an intentional clean exit (vs. a crash, which leaves the
+    // file in place to go stale).
+    if (heartbeat) {
+      heartbeat.stop(/* removeFile */ true);
+    }
+
     if (indexerService) {
       indexerService.shutdown();
     }
