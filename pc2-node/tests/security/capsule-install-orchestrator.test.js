@@ -359,20 +359,20 @@ test('previewConsent: returns consent description for a verified manifest', asyn
         publisherDisplayName: () => 'ElacityLabs',
     });
 
-    const consent = orch.previewConsent(manifest);
+    const consent = await orch.previewConsent(manifest);
     assert.equal(consent.publisher.displayName, 'ElacityLabs');
     assert.equal(consent.capsule.name, 'hello');
     assert.match(consent.trustHeadline, /trusting the publisher/i);
 });
 
-test('previewConsent: throws for unverified manifest', async (t) => {
+test('previewConsent: rejects for unverified manifest', async (t) => {
     if (skipIfMissing(t)) return;
     const dirs = makeRoot(); t.after(() => cleanup(dirs.root));
     const { manifest, kp } = await buildSignedHello();
     const otherTrusted = nacl.sign.keyPair();
     const orch = buildOrchestrator(dirs, [pubHex(otherTrusted)]);
 
-    assert.throws(() => orch.previewConsent(manifest),
+    await assert.rejects(() => orch.previewConsent(manifest),
         { name: 'OrchestratorError', phase: 'verifying-signature' });
 });
 
@@ -431,4 +431,105 @@ test('getUninstallPreview: returns "not installed" for unknown name', async (t) 
 
     const preview = orch.getUninstallPreview('nope');
     assert.match(preview.deleteWarning, /not installed/);
+});
+
+// ---------------------------------------------------------------------------
+// M7 revocation integration
+// ---------------------------------------------------------------------------
+
+test('install: rejected when isPublisherRevoked returns truthy (revocation hook)', async (t) => {
+    if (skipIfMissing(t)) return;
+    const dirs = makeRoot(); t.after(() => cleanup(dirs.root));
+    const { manifest, bundleBuffer, kp } = await buildSignedHello();
+
+    const orch = buildOrchestrator(dirs, [pubHex(kp)], {});
+    // Patch in the revocation check — buildOrchestrator's helper doesn't
+    // wire this by default, so we re-construct.
+    const orchWithRevocation = new CapsuleInstallOrchestrator({
+        installer: new CapsuleInstaller(dirs),
+        loader: new LazyExtensionLoader({
+            loadHook: async () => ({}),
+            probeFn: async () => ({ ok: true, durationMs: 1 }),
+        }),
+        fetcher: new AssetFetcher({ dataDir: dirs.dataDir, archResolver: () => 'linux-x64' }),
+        trustedPublisherKeys: [pubHex(kp)],
+        isPublisherRevoked: (k) =>
+            k === pubHex(kp).toLowerCase() ? 'key compromised in audit' : undefined,
+    });
+
+    await assert.rejects(
+        () => orchWithRevocation.install({ manifest, bundleBuffer }),
+        (err) => err.name === 'OrchestratorError'
+            && err.phase === 'verifying-signature'
+            && /revoked/.test(err.message)
+            && /key compromised/.test(err.message),
+    );
+    // No install side effects
+    assert.equal(existsSync(join(dirs.dataDir, 'installed-apps', 'hello')), false);
+});
+
+test('previewConsent: rejected when isPublisherRevoked returns truthy', async (t) => {
+    if (skipIfMissing(t)) return;
+    const dirs = makeRoot(); t.after(() => cleanup(dirs.root));
+    const { manifest, kp } = await buildSignedHello();
+
+    const orchWithRevocation = new CapsuleInstallOrchestrator({
+        installer: new CapsuleInstaller(dirs),
+        loader: new LazyExtensionLoader({
+            loadHook: async () => ({}),
+            probeFn: async () => ({ ok: true, durationMs: 1 }),
+        }),
+        fetcher: new AssetFetcher({ dataDir: dirs.dataDir, archResolver: () => 'linux-x64' }),
+        trustedPublisherKeys: [pubHex(kp)],
+        isPublisherRevoked: () => true,
+    });
+
+    await assert.rejects(
+        () => orchWithRevocation.previewConsent(manifest),
+        (err) => err.phase === 'verifying-signature' && /revoked/.test(err.message),
+    );
+});
+
+test('install: forceRevocationRefresh called BEFORE checking revocation', async (t) => {
+    if (skipIfMissing(t)) return;
+    const dirs = makeRoot(); t.after(() => cleanup(dirs.root));
+    const { manifest, bundleBuffer, kp } = await buildSignedHello();
+
+    const callOrder = [];
+    const orchWithRevocation = new CapsuleInstallOrchestrator({
+        installer: new CapsuleInstaller(dirs),
+        loader: new LazyExtensionLoader({
+            loadHook: async () => ({}),
+            probeFn: async () => ({ ok: true, durationMs: 1 }),
+        }),
+        fetcher: new AssetFetcher({ dataDir: dirs.dataDir, archResolver: () => 'linux-x64' }),
+        trustedPublisherKeys: [pubHex(kp)],
+        forceRevocationRefresh: async () => { callOrder.push('refresh'); },
+        isPublisherRevoked: () => { callOrder.push('check'); return undefined; },
+    });
+
+    await orchWithRevocation.install({ manifest, bundleBuffer });
+    assert.deepEqual(callOrder, ['refresh', 'check']);
+});
+
+test('install: forceRevocationRefresh failure is swallowed (last-good fallback)', async (t) => {
+    if (skipIfMissing(t)) return;
+    const dirs = makeRoot(); t.after(() => cleanup(dirs.root));
+    const { manifest, bundleBuffer, kp } = await buildSignedHello();
+
+    const orchWithRevocation = new CapsuleInstallOrchestrator({
+        installer: new CapsuleInstaller(dirs),
+        loader: new LazyExtensionLoader({
+            loadHook: async () => ({}),
+            probeFn: async () => ({ ok: true, durationMs: 1 }),
+        }),
+        fetcher: new AssetFetcher({ dataDir: dirs.dataDir, archResolver: () => 'linux-x64' }),
+        trustedPublisherKeys: [pubHex(kp)],
+        forceRevocationRefresh: async () => { throw new Error('supernode unreachable'); },
+        isPublisherRevoked: () => undefined,
+    });
+
+    // Install proceeds — refresh failure is non-fatal, last-good list is used
+    const summary = await orchWithRevocation.install({ manifest, bundleBuffer });
+    assert.equal(summary.capsule, 'hello');
 });

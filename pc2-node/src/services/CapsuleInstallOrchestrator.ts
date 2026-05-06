@@ -128,9 +128,8 @@ export interface CapsuleInstallOrchestratorOpts {
     loader: LazyExtensionLoader;
     fetcher: AssetFetcher;
     /**
-     * Set of publisher pubkeys (lowercase hex) we accept. M6 v1: just
-     * ElacityLabs. Caller passes from the trusted-publisher registry
-     * (M7 will wire that to the revocation transport).
+     * Set of publisher pubkeys (lowercase hex) we accept. v1: just
+     * ElacityLabs. Caller passes from the trusted-publisher registry.
      */
     trustedPublisherKeys: Iterable<string>;
     /**
@@ -139,6 +138,26 @@ export interface CapsuleInstallOrchestratorOpts {
      * "Unknown publisher (key: <truncated>)".
      */
     publisherDisplayName?: (publisherKeyHex: string) => string | undefined;
+    /**
+     * Optional revocation check (M7). The orchestrator calls this on
+     * EVERY install + previewConsent with the manifest's signedBy
+     * (lowercase hex). Returns a truthy value (typically the
+     * revocation reason string, or just `true`) when the publisher
+     * is revoked; the orchestrator then refuses the operation.
+     *
+     * Wire to `RevocationFetcher.isPublisherRevoked()` in production.
+     * Tests inject stubs.
+     */
+    isPublisherRevoked?: (publisherKeyHex: string) => string | boolean | undefined;
+    /**
+     * Optional (M7). If present, called BEFORE each install/preview
+     * to refresh the revocation list out of band of the heartbeat.
+     * Wire to `RevocationFetcher.forceFetch()` so the operator can
+     * never approve a publisher that was revoked between hourly
+     * heartbeats. Failures are swallowed — the orchestrator falls
+     * back to the last known good list.
+     */
+    forceRevocationRefresh?: () => Promise<void>;
 }
 
 export class CapsuleInstallOrchestrator {
@@ -147,6 +166,9 @@ export class CapsuleInstallOrchestrator {
     private readonly fetcher: AssetFetcher;
     private readonly trustedKeys: Set<string>;
     private readonly publisherDisplayName: (k: string) => string | undefined;
+    private readonly isPublisherRevoked?:
+        (k: string) => string | boolean | undefined;
+    private readonly forceRevocationRefresh?: () => Promise<void>;
 
     constructor(opts: CapsuleInstallOrchestratorOpts) {
         if (!opts || !opts.installer || !opts.loader || !opts.fetcher) {
@@ -158,6 +180,8 @@ export class CapsuleInstallOrchestrator {
         this.trustedKeys = normaliseKeys(opts.trustedPublisherKeys);
         this.fetcher = opts.fetcher;
         this.publisherDisplayName = opts.publisherDisplayName ?? (() => undefined);
+        this.isPublisherRevoked = opts.isPublisherRevoked;
+        this.forceRevocationRefresh = opts.forceRevocationRefresh;
     }
 
     /**
@@ -177,6 +201,12 @@ export class CapsuleInstallOrchestrator {
 
         // Phase 2: signature verification against trusted publisher set.
         this.emit(onProgress, name, 'verifying-signature', 10);
+        if (this.forceRevocationRefresh) {
+            try {
+                await this.forceRevocationRefresh();
+            } catch { /* fall through to last-known-good list */ }
+        }
+        await this.assertNotRevoked(name, manifest.distribution.signedBy);
         const verify = verifyManifestSignature(manifest, this.trustedKeys);
         if (!verify.valid) {
             throw new OrchestratorError(name, 'verifying-signature',
@@ -329,8 +359,14 @@ export class CapsuleInstallOrchestrator {
      * signed by an unknown publisher, throws (don't show consent for
      * untrusted code).
      */
-    previewConsent(manifest: CapsuleManifest): ConsentDescription {
+    async previewConsent(manifest: CapsuleManifest): Promise<ConsentDescription> {
         validateCapsuleManifest(manifest);
+        if (this.forceRevocationRefresh) {
+            try {
+                await this.forceRevocationRefresh();
+            } catch { /* fall through to last-known-good list */ }
+        }
+        await this.assertNotRevoked(manifest.name, manifest.distribution.signedBy);
         const verify = verifyManifestSignature(manifest, this.trustedKeys);
         if (!verify.valid) {
             throw new OrchestratorError(manifest.name, 'verifying-signature',
@@ -345,6 +381,24 @@ export class CapsuleInstallOrchestrator {
     // =========================================================================
     // Internals
     // =========================================================================
+
+    /**
+     * Throw OrchestratorError if the publisher key is revoked per the
+     * configured revocation check. No-op if no checker was injected
+     * (development / test setups that don't wire RevocationFetcher).
+     */
+    private async assertNotRevoked(capsule: string, publisherKeyHex: string): Promise<void> {
+        if (!this.isPublisherRevoked) return;
+        const key = publisherKeyHex.toLowerCase();
+        const result = this.isPublisherRevoked(key);
+        if (result) {
+            const reason = typeof result === 'string'
+                ? result
+                : 'publisher key is on the revocation list';
+            throw new OrchestratorError(capsule, 'verifying-signature',
+                `publisher ${key.slice(0, 8)}…${key.slice(-8)} is revoked: ${reason}`);
+        }
+    }
 
     private async rollback(
         name: string,
