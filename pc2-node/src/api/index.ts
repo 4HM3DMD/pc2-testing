@@ -1468,6 +1468,15 @@ export function setupAPI (app: Express): void {
         );
         logger.info('[API] ✅ Installed Apps API enabled at /api/installed-apps');
 
+        // Re-spawn service-type apps that were running before pc2-node
+        // restarted. Fire-and-forget — each app boots in the background;
+        // hydrate() catches and logs per-app failures so one bad app
+        // can't block the rest. Users hitting the UI before hydration
+        // completes see "stopped" status and can click Start manually.
+        processManager.hydrate().catch((err) => {
+            logger.error('[API] AppProcessManager.hydrate() failed:', err);
+        });
+
         // Sync bundled test apps on every startup.
         //
         // v1.2 boot policy: only auto-install apps whose manifest declares

@@ -143,6 +143,31 @@ export function createInstalledAppsRouter(
   });
 
   /**
+   * GET /api/installed-apps/:name/status
+   * Live runtime status for a service-type app: running? pid? uptime?
+   * crashes? quarantined? Used by the launcher tile to render
+   * "running / stopped / crashed" indicators without polling the
+   * filesystem.
+   *
+   * For non-service apps, returns { running: false, crashCount: 0 }
+   * — they're inert by definition.
+   */
+  router.get('/:name/status', (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const app = appInstallService.get(req.params.name);
+      if (!app) {
+        res.status(404).json({ error: `App "${req.params.name}" not found` });
+        return;
+      }
+      const status = processManager.getStatus(req.params.name);
+      res.json({ status });
+    } catch (error: any) {
+      log.error('[status] Error:', error.message);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  /**
    * POST /api/installed-apps/install
    * Install a new app from IPFS CID + manifest.
    *
