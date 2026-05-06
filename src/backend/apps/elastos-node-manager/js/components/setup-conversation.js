@@ -10,14 +10,20 @@
  * `/setup/network`, `/setup/complete`, `/chains/mainchain/start`.
  *
  * The four cards:
- *   A — Goal:     "Earn rewards" vs "Help the network" (BPoS vs Full)
+ *   A — Role:     "BPoS supernode" (Council node coming soon)
  *   B — Install:  one button → progress → done
- *   C — Password: generate + show + acknowledge (skipped for follower)
+ *   C — Password: generate + show + acknowledge (BPoS keystore)
  *   D — Done:     finalize, start the chain, celebrate
  *
  * Card A's choice maps to:
- *   earn → enableArbiter=true (BPoS supernode, password generated server-side)
- *   help → enableArbiter=false (full-node, no keystore, skip card C)
+ *   bpos    → enableArbiter=true  (BPoS supernode, password generated server-side)
+ *   council → DISABLED until the CR registration flow lands (next release)
+ *
+ * The earlier "help / full-node" path was removed 2026-05-07 — ENM is
+ * positioned for BPoS + Council operators, not generic full-node users.
+ * Existing installs whose state has enableArbiter=false load as 'bpos'
+ * (we don't show a council path that won't work yet). See
+ * feedback_enm_vocabulary memory entry for the wider rule.
  *
  * Recovery: on mount we GET /setup/state and jump to the right card so
  * a container restart mid-setup picks up where the operator left off.
@@ -45,7 +51,7 @@
         this.root = document.createElement('section');
         this.root.className = 'enm-conversation';
 
-        this._goal = null;            // 'earn' | 'help'
+        this._goal = null;            // 'bpos' | 'council' (council is disabled today)
         this._currentCard = 'a';      // which card is showing
         this._cardSeq = 0;            // bump on every render to ignore stale callbacks
         this._unsubscribeInstall = null;
@@ -102,12 +108,17 @@
         if (step === 'install' || step === 'preflight' || step === 'welcome') {
             this._goto('a');
         } else if (step === 'keystore') {
-            // Already past install — assume 'earn' since 'help' would've
+            // Already past install — assume 'bpos' (the only goal users can
+            // reach today; pre-2026-05-07 'help' installs are read as bpos
+            // since the help path is gone).
             // skipped this. Operator can back out on the goal card.
-            this._goal = 'earn';
+            this._goal = 'bpos';
             this._goto('c');
         } else if (step === 'network' || step === 'confirm' || step === 'complete') {
-            this._goal = (s && s.enableArbiter === false) ? 'help' : 'earn';
+            // Existing installs that picked the old "help" path are
+            // shown as 'bpos' here — the council option isn't selectable
+            // yet, and "help" no longer exists as a goal.
+            this._goal = 'bpos';
             this._goto('d');
         } else {
             // Unknown step value (server schema drift, garbage response,
@@ -140,10 +151,10 @@
     SetupConversation.prototype._updateHeader = function (card) {
         var t = root.enmT;
         var stepNumber = ({ a: 1, b: 2, c: 3, d: 4 })[card] || 1;
-        // For the "help" path, skip card C — total steps becomes 3 and
+        // Card C (keystore) is required for BPoS — never skipped now that
         // numbering shifts (A=1, B=2, D=3).
         var total = TOTAL_STEPS;
-        if (this._goal === 'help') {
+        if (false /* removed: 'help' goal no longer exists, BPoS always needs keystore */) {
             total = 3;
             if (card === 'd') { stepNumber = 3; }
         }
@@ -162,21 +173,21 @@
         this._body.innerHTML =
             '<h2 class="enm-conv-title">' + escapeHtml(t('friendly.setup.card_a.title')) + '</h2>'
             + '<div class="enm-goal-tiles">'
-              + '<button type="button" class="enm-goal-tile" data-goal="earn" aria-pressed="false">'
+              + '<button type="button" class="enm-goal-tile" data-goal="bpos" aria-pressed="false">'
                 + '<div class="enm-goal-illust enm-goal-illust-earn">'
                   + (I ? I.trophy({ size: 64 }) : '')
                 + '</div>'
-                + '<div class="enm-goal-tile-title">' + escapeHtml(t('friendly.setup.card_a.earn_title')) + '</div>'
-                + '<div class="enm-goal-tile-sub">'  + escapeHtml(t('friendly.setup.card_a.earn_sub'))   + '</div>'
-                + '<div class="enm-goal-tile-meta">' + escapeHtml(t('friendly.setup.card_a.earn_meta'))  + '</div>'
+                + '<div class="enm-goal-tile-title">' + escapeHtml(t('friendly.setup.card_a.bpos_title')) + '</div>'
+                + '<div class="enm-goal-tile-sub">'  + escapeHtml(t('friendly.setup.card_a.bpos_sub'))   + '</div>'
+                + '<div class="enm-goal-tile-meta">' + escapeHtml(t('friendly.setup.card_a.bpos_meta'))  + '</div>'
               + '</button>'
-              + '<button type="button" class="enm-goal-tile" data-goal="help" aria-pressed="false">'
+              + '<button type="button" class="enm-goal-tile enm-goal-tile-disabled" data-goal="council" aria-pressed="false" aria-disabled="true" disabled>'
                 + '<div class="enm-goal-illust enm-goal-illust-help">'
                   + (I ? I.shield({ size: 64 }) : '')
                 + '</div>'
-                + '<div class="enm-goal-tile-title">' + escapeHtml(t('friendly.setup.card_a.help_title')) + '</div>'
-                + '<div class="enm-goal-tile-sub">'  + escapeHtml(t('friendly.setup.card_a.help_sub'))   + '</div>'
-                + '<div class="enm-goal-tile-meta">' + escapeHtml(t('friendly.setup.card_a.help_meta'))  + '</div>'
+                + '<div class="enm-goal-tile-title">' + escapeHtml(t('friendly.setup.card_a.council_title')) + '</div>'
+                + '<div class="enm-goal-tile-sub">'  + escapeHtml(t('friendly.setup.card_a.council_sub'))   + '</div>'
+                + '<div class="enm-goal-tile-meta">' + escapeHtml(t('friendly.setup.card_a.council_meta'))  + '</div>'
               + '</button>'
             + '</div>'
             + '<p class="enm-conv-footer">' + escapeHtml(t('friendly.setup.card_a.footer')) + '</p>';
@@ -262,8 +273,9 @@
         var self = this;
         els.actions.appendChild(
             makeBtn(t('friendly.setup.card_b.cta_continue'), 'primary hero', function () {
-                // For "help" goal, skip card C entirely.
-                self._goto(self._goal === 'help' ? 'd' : 'c');
+                // BPoS always needs a keystore → card C. (The old 'help'
+                // path that skipped C was removed 2026-05-07.)
+                self._goto('c');
             })
         );
     };
@@ -332,7 +344,7 @@
         });
     };
 
-    /** @private — Card C: keystore password (only on 'earn' goal) */
+    /** @private — Card C: keystore password (always required for BPoS) */
     SetupConversation.prototype._renderCardC = function (seq) {
         var t = root.enmT;
         this._body.innerHTML =

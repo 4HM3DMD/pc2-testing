@@ -346,6 +346,15 @@
             this._syncMetricsLine = document.createElement('p');
             this._syncMetricsLine.className = 'enm-chain-sync-metrics';
             this._syncPanel.appendChild(this._syncMetricsLine);
+
+            // First-sync expectation hint. Operators panic when they see
+            // a near-empty progress bar with no time horizon — the
+            // mainchain takes 1-3 days to sync from genesis on typical
+            // hardware. Show this whenever the chain is alive but not yet
+            // synced; hide once synced.
+            this._syncHintLine = document.createElement('p');
+            this._syncHintLine.className = 'enm-chain-sync-hint';
+            this._syncPanel.appendChild(this._syncHintLine);
         }
 
         // Bar fill + ARIA.
@@ -421,6 +430,19 @@
             ));
         }
         this._syncMetricsLine.textContent = parts.join(' • ');
+
+        // Expectation hint — show during ANY syncing state (no peers,
+        // catching up, fresh-start), hide when synced or stale. Without
+        // this, a multi-day sync looks broken.
+        if (alive && !data.synced && !data.stale) {
+            this._syncHintLine.textContent =
+                'First sync usually takes 1–3 days depending on your hardware. ' +
+                'Leave it running — it picks up where it left off if it stops.';
+            this._syncHintLine.hidden = false;
+        } else {
+            this._syncHintLine.hidden = true;
+            this._syncHintLine.textContent = '';
+        }
     };
 
     /**

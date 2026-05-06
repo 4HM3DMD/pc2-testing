@@ -69,8 +69,9 @@
     };
 
     ProducerIdentity.prototype._renderEmpty = function () {
-        // No keystore yet — don't show anything. This keeps the dashboard
-        // clean for full-node operators who don't generate a keystore.
+        // No keystore yet — don't show anything. The intro paragraph in
+        // the parent pane already explains what the card will show once
+        // a keystore is imported, so an empty render here is fine.
         this.root.innerHTML = '';
         this.root.hidden = true;
     };

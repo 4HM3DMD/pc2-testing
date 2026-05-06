@@ -61,20 +61,20 @@
                 cancel:   'Cancel setup',
 
                 card_a: {
-                    title:      'What do you want to do?',
-                    earn_title: 'Earn rewards',
-                    // Technical role surfaces in the subtitle so the operator
-                    // learns the name they'll encounter in Essentials, on
-                    // explorers, and in support docs. "BPoS supernode" is
-                    // distinct from "Council member (CR)" — friendly synonyms
-                    // would erase that distinction.
-                    earn_sub:   'Run a BPoS supernode',
-                    earn_meta:  '~17% APR*',
-                    help_title: 'Help the network',
-                    help_sub:   'Run a full node',
-                    help_meta:  'No rewards',
+                    title:      'What kind of node?',
+                    // ENM is positioned for BPoS supernode + Council node operators only.
+                    // "Full node" is NOT a primary option — the chain can run as a
+                    // follower technically, but ENM the product targets the two
+                    // governance roles. (See feedback_enm_vocabulary memory entry.)
+                    bpos_title: 'BPoS supernode',
+                    bpos_sub:   'Validate blocks, earn ELA',
+                    bpos_meta:  '~17% APR*',
+                    council_title:   'Council node',
+                    council_sub:     'CR governance role',
+                    council_meta:    'Coming soon',
+                    council_disabled: true,
                     footer:     "* Rewards depend on votes from the community. We'll show you how after setup.\n"
-                              + "Council member (CR) registration will be available in a later update.",
+                              + "Council node setup will land in a later release.",
                 },
                 card_b: {
                     title_idle:        'Ready when you are',
@@ -310,11 +310,10 @@
             keystore_path_placeholder: '/home/op/.elastos/keystore.dat',
             keystore_password_label: 'Keystore password',
             keystore_help:
-                'BPoS mode requires the keystore that holds your producer signing key. '
-                + 'Full-node mode skips this. Keep arbiter mode disabled if you only want '
-                + 'to follow the chain.',
+                'BPoS supernodes need a keystore — it holds the signing key that '
+                + 'lets your node validate blocks and claim rewards. Without one '
+                + 'you cannot register as a BPoS producer.',
             keystore_save_btn:       'Save keystore',
-            keystore_skip_btn:       'Skip (full-node mode)',
             keystore_ok:             'Keystore imported.',
             keystore_fail:           'Failed to import keystore: {reason}',
 
@@ -326,7 +325,6 @@
 
             confirm_heading:         'Review and start',
             confirm_role_arbiter:    'Role: BPoS supernode',
-            confirm_role_full:       'Role: Full node',
             confirm_binary:          'Binary: {path}',
             confirm_ip:              'External IP: {value}',
             confirm_start_btn:       'Start mainchain',

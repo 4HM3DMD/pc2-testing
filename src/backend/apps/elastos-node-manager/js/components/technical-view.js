@@ -184,9 +184,9 @@
             this._mounted['status'] = { destroy: function () {} };
         } else if (tabId === 'identity') {
             // Producer identity — BPoS only. The component itself decides
-            // whether to render based on /setup/keystore/account. When
-            // there's no keystore (full-node operator), the card hides
-            // and we show a stub explaining why.
+            // whether to render based on /setup/keystore/account. Before
+            // a keystore is imported the card hides and the parent pane's
+            // intro paragraph carries the explanation.
             this._renderIdentity(pane, common);
         } else if (tabId === 'tools') {
             // Maintenance + reinstall, with each action state-gated
@@ -223,8 +223,8 @@
 
     /**
      * Identity pane (Phase 3 IA rebuild) — wraps the EnmProducerIdentity
-     * card with a context paragraph. The producer card hides itself when
-     * there's no keystore (full-node operator), and without context the
+     * card with a context paragraph. The producer card hides itself
+     * before the keystore has been imported, and without context the
      * tab would look broken. This pane always renders the explanation
      * so the operator knows why the card may be empty.
      *
@@ -236,10 +236,10 @@
         intro.innerHTML =
             '<h3 class="enm-tech-section-title">Producer identity</h3>'
             + '<p class="enm-tech-section-sub">'
-              + 'Only relevant for BPoS supernodes and CR Council members. '
-              + 'Full-node operators can ignore this tab — the chain runs '
-              + 'fine without a keystore. If you registered as a producer, '
-              + 'your public key + payout address appear below.'
+              + 'Your BPoS producer credentials. Once you\'ve imported a '
+              + 'keystore and registered, your public key + payout address '
+              + 'appear below. (CR Council registration is a separate flow '
+              + 'that will land in a later release.)'
             + '</p>';
         pane.appendChild(intro);
 
