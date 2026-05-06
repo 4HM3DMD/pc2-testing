@@ -96,11 +96,16 @@
      * call after a fast later one.
      */
     ChainCard.prototype.refresh = function () {
+        if (this._destroyed) { return Promise.resolve(); }
         if (this._refreshInFlight) { return this._refreshInFlight; }
         var self = this;
         this._refreshInFlight = this.api.get('/chains/' + this.chainId, { skipCache: true }).then(function (state) {
             self._applyState(state);
         }).catch(function (err) {
+            // Bail on late-arriving error after destroy — otherwise we'd
+            // pop a "Failed to refresh" toast for a chain card that no
+            // longer exists.
+            if (self._destroyed) { return; }
             // 404 means not configured yet — treat as unconfigured.
             if (err && err.status === 404) {
                 self._applyState({ chainId: self.chainId, state: 'unconfigured' });
@@ -425,8 +430,12 @@
      * @private
      */
     ChainCard.prototype._refreshProducer = function () {
+        if (this._destroyed) { return; }
         var self = this;
         this.api.get('/chains/' + this.chainId + '/producer', { skipCache: true }).then(function (data) {
+            // Guard against late-arriving response — destroy() may have run
+            // between the api.get call and its resolution.
+            if (self._destroyed) { return; }
             if (!data || !data.enabled) {
                 if (self._bposPanel) { self._bposPanel.hidden = true; }
                 return;
