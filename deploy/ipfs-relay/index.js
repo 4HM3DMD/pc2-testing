@@ -98,15 +98,42 @@ async function main() {
     ],
     services: {
       identify: identify(),
-      dht: kadDHT({ clientMode: false }),
-      relay: circuitRelayServer(),
+      // DHT defaults are already bounded (kBucketSize=20, prefixLength=6 → max
+      // 1280 routing-table entries). Made explicit for documentation only.
+      dht: kadDHT({
+        clientMode: false,
+        kBucketSize: 20,
+        prefixLength: 6,
+      }),
+      // circuit-relay-v2 defaults are already conservative (maxReservations=15,
+      // reservationTtl=2h, maxOutboundStopStreams=300). The HOP stream caps,
+      // however, fall back to the libp2p registrar default (32) when undefined,
+      // which is a soft limit — set them explicitly so tightening is local
+      // to this file rather than inherited.
+      relay: circuitRelayServer({
+        reservations: {
+          maxReservations: 32,
+          reservationTtl: 30 * 60 * 1000, // 30 min (default 2h)
+          applyDefaultLimit: true,
+        },
+        maxInboundHopStreams: 64,
+        maxOutboundHopStreams: 64,
+        maxOutboundStopStreams: 128,
+      }),
       dcutr: dcutr(),
       autoNAT: autoNAT(),
       ping: ping(),
     },
     connectionManager: {
-      maxConnections: 512,
-      minConnections: 10,
+      // Lowered from 512: each accepted connection holds yamux + noise +
+      // identify state (~10–20 MB). At 512 the host accumulates 5–10 GB of
+      // per-connection state at peak. 256 halves the steady-state memory
+      // footprint and gives the connection manager room to prune cleanly
+      // before saturation. Default is 300 — we stay above default to keep
+      // serving ample PC2 traffic.
+      maxConnections: 256,
+      // minConnections is not a valid option in libp2p@3.1.5 (was silently
+      // ignored). Removed.
     },
   });
 
