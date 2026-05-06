@@ -82,9 +82,11 @@ async function save(next, opts) {
     const logger = (opts && opts.logger) || SILENT_LOGGER;
 
     // 1. Backup the existing file (best-effort — first save has no backup).
+    //    Use atomicWrite so a container kill mid-backup can't leave a
+    //    half-written .bak that breaks the next rollback() attempt.
     try {
         const current = await fsp.readFile(filePath, 'utf8');
-        await fsp.writeFile(configBackupPath(), current, { mode: 0o600 });
+        await atomicWrite(configBackupPath(), current);
     } catch (err) {
         if (err.code !== 'ENOENT') {
             // We don't abort save on backup failure — that would prevent recovery

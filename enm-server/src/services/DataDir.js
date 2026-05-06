@@ -130,6 +130,11 @@ function configBackupPath() {
 async function atomicWrite(target, contents, opts) {
     const mode = (opts && typeof opts.mode === 'number') ? opts.mode : 0o600;
     const tmp = `${target}.tmp.${process.pid}.${Date.now()}`;
+    // Ensure the parent dir exists. Most callers go through helpers like
+    // pidFilePath() / configPath() that pre-create their dirs, but anything
+    // routing through atomicWrite directly (or future callers) gets a clear
+    // error path instead of an opaque ENOENT from writeFile.
+    await fsp.mkdir(path.dirname(target), { recursive: true, mode: 0o700 }).catch(() => {});
     await fsp.writeFile(tmp, contents, { mode });
     await fsp.rename(tmp, target);
 }

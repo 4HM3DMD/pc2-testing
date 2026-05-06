@@ -395,45 +395,72 @@ class EnmBinaryDownloader {
     /**
      * GET a URL and stream the body to a file. Reports progress via
      * onProgress(bytesGot, bytesTotal). Follows redirects up to 3 hops.
+     *
+     * Writes to ${dest}.partial first then renames to dest on a clean
+     * 'finish' event. A failed/aborted download leaves the partial behind
+     * but never corrupts the final path — so the subsequent _extractTar
+     * call doesn't choke on a half-written tarball. Any pre-existing
+     * partial from an earlier failure is unlinked before we start.
      */
     _download(host, urlPath, dest, onProgress) {
-        const self = this;
+        const tmp = `${dest}.partial`;
         return new Promise((resolve, reject) => {
-            (function attempt(currentHost, currentPath, hops) {
-                if (hops > 3) return reject(new Error('Too many redirects'));
-                const req = https.get({
-                    host: currentHost, path: currentPath,
-                    headers: { 'User-Agent': 'enm-server/0.2' },
-                    timeout: 60_000,
-                }, (res) => {
-                    if (res.statusCode === 301 || res.statusCode === 302 || res.statusCode === 307 || res.statusCode === 308) {
-                        const loc = res.headers.location;
-                        if (!loc) return reject(new Error(`Redirect ${res.statusCode} without Location`));
-                        res.resume();
-                        try {
-                            const u = new URL(loc, `https://${currentHost}${currentPath}`);
-                            return attempt(u.host, u.pathname + u.search, hops + 1);
-                        } catch (e) { return reject(e); }
-                    }
-                    if (res.statusCode !== 200) {
-                        res.resume();
-                        return reject(new Error(`HTTP ${res.statusCode} downloading ${urlPath}`));
-                    }
-                    const total = parseInt(res.headers['content-length'] || '0', 10);
-                    let got = 0;
-                    const fileStream = fs.createWriteStream(dest);
-                    res.on('data', (c) => {
-                        got += c.length;
-                        if (onProgress) onProgress(got, total);
+            // Clear any leftover partial from a previous failed attempt.
+            fs.rm(tmp, { force: true }, () => {
+                (function attempt(currentHost, currentPath, hops) {
+                    if (hops > 3) return reject(new Error('Too many redirects'));
+                    const req = https.get({
+                        host: currentHost, path: currentPath,
+                        headers: { 'User-Agent': 'enm-server/0.2' },
+                        timeout: 60_000,
+                    }, (res) => {
+                        if (res.statusCode === 301 || res.statusCode === 302 || res.statusCode === 307 || res.statusCode === 308) {
+                            const loc = res.headers.location;
+                            if (!loc) return reject(new Error(`Redirect ${res.statusCode} without Location`));
+                            res.resume();
+                            try {
+                                const u = new URL(loc, `https://${currentHost}${currentPath}`);
+                                return attempt(u.host, u.pathname + u.search, hops + 1);
+                            } catch (e) { return reject(e); }
+                        }
+                        if (res.statusCode !== 200) {
+                            res.resume();
+                            return reject(new Error(`HTTP ${res.statusCode} downloading ${urlPath}`));
+                        }
+                        const total = parseInt(res.headers['content-length'] || '0', 10);
+                        let got = 0;
+                        const fileStream = fs.createWriteStream(tmp);
+                        res.on('data', (c) => {
+                            got += c.length;
+                            if (onProgress) onProgress(got, total);
+                        });
+                        res.pipe(fileStream);
+                        fileStream.on('finish', () => {
+                            fileStream.close(() => {
+                                // Atomic-ish: rename only after a clean close.
+                                // Any reader that was watching dest sees either
+                                // the previous version or the new one — never
+                                // a half-written one.
+                                fs.rename(tmp, dest, (renameErr) => {
+                                    if (renameErr) {
+                                        fs.rm(tmp, { force: true }, () => reject(renameErr));
+                                        return;
+                                    }
+                                    resolve();
+                                });
+                            });
+                        });
+                        fileStream.on('error', (err) => {
+                            fs.rm(tmp, { force: true }, () => reject(err));
+                        });
+                        res.on('error', (err) => {
+                            fs.rm(tmp, { force: true }, () => reject(err));
+                        });
                     });
-                    res.pipe(fileStream);
-                    fileStream.on('finish', () => fileStream.close(resolve));
-                    fileStream.on('error', reject);
-                    res.on('error', reject);
-                });
-                req.on('error', reject);
-                req.on('timeout', () => req.destroy(new Error('Download timed out')));
-            })(host, urlPath, 0);
+                    req.on('error', reject);
+                    req.on('timeout', () => req.destroy(new Error('Download timed out')));
+                })(host, urlPath, 0);
+            });
         });
     }
 
