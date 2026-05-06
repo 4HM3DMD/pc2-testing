@@ -1,0 +1,12 @@
+{
+  "name": "elastos-node-manager-backend",
+  "version": "0.5.0",
+  "description": "ENM backend — runs as a hybrid capsule under PC2's lazy extension loader (Wave 7 / M8).",
+  "main": "main.js",
+  "type": "commonjs",
+  "private": true,
+  "license": "AGPL-3.0",
+  "engines": {
+    "node": ">=20 <23"
+  }
+}

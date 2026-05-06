@@ -1,0 +1,47 @@
+{
+  "name": "elastos-node-manager",
+  "version": "0.5.0",
+  "kind": "hybrid",
+  "channel": "beta",
+  "title": "Elastos Node Manager",
+  "description": "Run an Elastos mainchain node — supernode (BPoS) or full node — from PC2.",
+  "author": "ElacityLabs",
+
+  "engines": {
+    "node": ">=20 <23",
+    "pc2":  "^1.2"
+  },
+
+  "frontend": {
+    "entry": "app/index.html"
+  },
+
+  "backend": {
+    "path":              "backend/",
+    "needsRestart":      false,
+    "schemaVersion":     1,
+    "dataDir":           "data/installed-apps/elastos-node-manager/state/",
+    "shutdownTimeoutMs": 30000,
+
+    "capabilities": {
+      "spawnProcesses": ["ela", "ela-cli"],
+      "filesystem": {
+        "read":  ["data/installed-apps/elastos-node-manager/**"],
+        "write": ["data/installed-apps/elastos-node-manager/state/**"]
+      },
+      "ports": {
+        "tcp":     [20336, 20338],
+        "publish": true
+      },
+      "env":     ["PATH", "HOME", "LANG"],
+      "imports": ["service:database", "service:audit"]
+    }
+  },
+
+  "distribution": {
+    "cid":            "PLACEHOLDER",
+    "manifestDigest": "PLACEHOLDER",
+    "signature":      "PLACEHOLDER",
+    "signedBy":       "PLACEHOLDER"
+  }
+}
