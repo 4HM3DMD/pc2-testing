@@ -436,7 +436,15 @@ function build(extensionHandle) {
                                     let maxH = null;
                                     for (const n of neighbors) {
                                         if (!n || typeof n !== 'object') continue;
-                                        const h = typeof n.Height === 'number' ? n.Height
+                                        // ela's neighbor schema (verified via direct RPC call
+                                        // 2026-05-07) uses `lastblock` for the peer's current
+                                        // best height. `startingheight` is what the peer had
+                                        // at handshake (older). Bitcoin-style Height/height
+                                        // fields are also accepted in case the schema gets
+                                        // a normalisation pass upstream.
+                                        const h = typeof n.lastblock === 'number' ? n.lastblock
+                                                : typeof n.startingheight === 'number' ? n.startingheight
+                                                : typeof n.Height === 'number' ? n.Height
                                                 : typeof n.height === 'number' ? n.height
                                                 : typeof n.lastHeight === 'number' ? n.lastHeight
                                                 : null;
