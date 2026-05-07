@@ -425,6 +425,20 @@ function build(extensionHandle) {
                             // Defensive: ela's schema uses capital N
                             // (.Neighbors) but lowercase appears in some
                             // versions; same for height/Height/lastHeight.
+                            //
+                            // TEMP debug 2026-05-07: log the raw outcome so we
+                            // can see why /sync's getnodestate produces null
+                            // even when /chains/:id/peers (same RPC) works.
+                            extensionHandle.log.info(
+                                `[/sync debug] nodeStateRes.status=${nodeStateRes.status}` +
+                                (nodeStateRes.status === 'rejected'
+                                    ? ` reason=${nodeStateRes.reason && nodeStateRes.reason.message ? nodeStateRes.reason.message : String(nodeStateRes.reason)}`
+                                    : ` valueType=${typeof nodeStateRes.value}` +
+                                      ` valueIsNull=${nodeStateRes.value === null}` +
+                                      ` valueKeys=${nodeStateRes.value && typeof nodeStateRes.value === 'object' ? Object.keys(nodeStateRes.value).join(',') : 'n/a'}` +
+                                      ` neighborsType=${nodeStateRes.value && typeof nodeStateRes.value === 'object' ? typeof nodeStateRes.value.neighbors : 'n/a'}` +
+                                      ` neighborsLen=${nodeStateRes.value && Array.isArray(nodeStateRes.value.neighbors) ? nodeStateRes.value.neighbors.length : 'n/a'}`),
+                            );
                             if (nodeStateRes.status === 'fulfilled') {
                                 const v = nodeStateRes.value;
                                 const ns = v && v.result ? v.result : v;
