@@ -93,7 +93,12 @@ log "mode: $MODE"
 if [ "$MODE" = "fresh" ]; then
     [ -n "${PC2_OWNER_TOKEN:-}" ] || die "fresh install needs PC2_OWNER_TOKEN env var (the owner's Bearer token from the PC2 desktop URL: ?puter.auth.token=...)"
 
-    TMP_EXTRACT=$(mktemp -d)
+    # /install-local restricts localDir to a safe-list — extracting to /tmp
+    # gets rejected with "localDir must live inside one of [test-apps, dev-apps]".
+    # Use test-apps as the staging root so the path passes the gate.
+    PC2_TEST_APPS_DIR="${PC2_TEST_APPS_DIR:-/var/lib/pc2/data/test-apps}"
+    mkdir -p "$PC2_TEST_APPS_DIR"
+    TMP_EXTRACT=$(mktemp -d -p "$PC2_TEST_APPS_DIR")
     log "extracting tarball into $TMP_EXTRACT"
     tar -C "$TMP_EXTRACT" -xzf "$TMP_TARBALL" || die "extract failed" 3
 
