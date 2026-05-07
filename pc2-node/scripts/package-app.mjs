@@ -147,6 +147,17 @@ function stageBundle(stage) {
         const path = join(stage, 'backend', ex);
         if (existsSync(path)) rmSync(path, { recursive: true, force: true });
     }
+
+    // Drop node_modules/.bin — its entries are symlinks like
+    //   .bin/mime -> /home/runner/work/.../node_modules/mime/cli.js
+    // pointing to wherever npm install was run (the CI runner or the
+    // dev's Mac). After extraction on a different host, those targets
+    // don't exist and pc2-node's installFromLocal blows up trying to
+    // open them. We don't run any of these CLIs at runtime — we only
+    // require() packages, which never goes through .bin — so dropping
+    // the directory is safe and keeps the bundle host-agnostic.
+    const binDir = join(stage, 'backend', 'node_modules', '.bin');
+    if (existsSync(binDir)) rmSync(binDir, { recursive: true, force: true });
 }
 
 function signBundle(bundlePath) {
