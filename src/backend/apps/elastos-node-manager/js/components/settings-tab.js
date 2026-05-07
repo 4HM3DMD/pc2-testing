@@ -603,8 +603,32 @@
             || '/var/lib/pc2/data/backups/elastos-node-manager/';
         this._danger.statusLine.style.color = '';
         this._danger.statusLine.textContent = t('settings.danger_done', { path: path });
-        // Give the operator 5 seconds to read where the backup lives.
-        setTimeout(function () { root.location.href = '/'; }, 5000);
+        // Force a FULL page load on the top window — not an SPA navigation.
+        //
+        // Why this matters: without a full reload, PC2's desktop keeps its
+        // in-memory list of installed apps and the just-wiped tile lingers
+        // on the launcher. Clicking it opens a window for an app whose
+        // bundle is gone and the user sees a stuck "Initializing..." spinner.
+        //
+        // We're usually loaded inside a Puter window (iframe of /apps/...),
+        // so root.top !== root. Navigating root.top.location forces the
+        // outer desktop to do a fresh GET / and re-fetch /api/installed-apps,
+        // at which point ENM is correctly absent. The ?app-uninstalled
+        // hint is purely informational — PC2 doesn't read it today, but
+        // it's a hook future code can use to show a "X uninstalled" toast.
+        //
+        // Try/catch guards against same-origin policy weirdness: if we
+        // somehow can't touch root.top, fall back to the current window.
+        var redirectAfter = 5000;
+        setTimeout(function () {
+            try {
+                var top = root.top || root;
+                top.location.href = top.location.origin
+                    + '/?app-uninstalled=elastos-node-manager';
+            } catch (_) {
+                root.location.href = '/?app-uninstalled=elastos-node-manager';
+            }
+        }, redirectAfter);
     };
 
     /** @private */
