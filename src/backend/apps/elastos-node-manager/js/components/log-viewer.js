@@ -82,11 +82,16 @@
         }
         this._refreshTailLabel = function () {
             if (self._sseConnState !== 'open') {
+                // Disconnected — amber pill. CSS turns the leading dot
+                // amber and kills the pulse animation so the badge reads
+                // as "calm urgency" rather than "everything is fine".
                 self._tailToggle.textContent = 'reconnecting…';
                 self._tailToggle.classList.remove('enm-log-following');
+                self._tailToggle.classList.add('enm-log-reconnecting');
                 self._tailToggle.title = 'Live log stream lost — auto-reconnecting';
                 return;
             }
+            self._tailToggle.classList.remove('enm-log-reconnecting');
             self._tailToggle.textContent = t(self._followTail ? 'log_viewer.live' : 'log_viewer.paused');
             self._tailToggle.classList.toggle('enm-log-following', self._followTail);
             self._tailToggle.title = self._tailToggle.textContent;

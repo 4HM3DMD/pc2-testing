@@ -1185,30 +1185,115 @@ html, body {
    ============================================================ */
 
 /* ============================================================
-   Settings
-   ============================================================ */
+   Settings — alpha.9 sub-tab layout
+   ============================================================
+   Above 640px container width: vertical nav rail (200px) on the left,
+   content pane on the right — macOS System Settings pattern.
+   Below 640px: horizontal pill row above content.
+   container-type lives on .enm-settings so the layout responds to the
+   Puter window width regardless of viewport size. */
 
 .enm-settings {
+    container-type: inline-size;
     padding: var(--spacing-lg);
+    display: grid;
+    grid-template-columns: 200px 1fr;
+    gap: var(--spacing-xl);
+    min-height: 100%;
+}
+
+@container (max-width: 640px) {
+    .enm-settings {
+        grid-template-columns: 1fr;
+        gap: var(--spacing-md);
+    }
+}
+
+.enm-settings-nav {
     display: flex;
     flex-direction: column;
-    gap: var(--spacing-lg);
+    gap: 2px;
+    padding: 0;
+    position: sticky;
+    top: 0;
+    align-self: start;
 }
 
+@container (max-width: 640px) {
+    .enm-settings-nav {
+        flex-direction: row;
+        flex-wrap: wrap;
+        gap: var(--spacing-xs);
+        padding-bottom: var(--spacing-sm);
+        border-bottom: 1px solid var(--border-color);
+        position: static;
+    }
+}
+
+.enm-settings-nav-item {
+    appearance: none;
+    -webkit-appearance: none;
+    background: transparent;
+    border: none;
+    padding: 8px 12px;
+    font: inherit;
+    font-size: 13px;
+    font-weight: var(--font-weight-medium);
+    color: var(--text-secondary);
+    cursor: pointer;
+    text-align: left;
+    border-radius: var(--radius-sm);
+    transition: background var(--motion-fast) var(--ease-spring),
+                color var(--motion-fast) var(--ease-spring);
+}
+
+.enm-settings-nav-item:hover {
+    color: var(--text-primary);
+    background: var(--bg-muted);
+}
+
+.enm-settings-nav-item.active {
+    color: var(--primary);
+    background: var(--primary-soft);
+}
+
+.enm-settings-nav-item:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+}
+
+/* Danger sub-tab keeps a red accent in the nav rail so the operator
+   sees it's structurally separate even when not active. */
+.enm-settings-nav-item[data-accent="danger"] { color: var(--error); }
+.enm-settings-nav-item[data-accent="danger"]:hover { background: rgba(239, 68, 68, 0.08); }
+.enm-settings-nav-item[data-accent="danger"].active {
+    color: var(--error);
+    background: rgba(239, 68, 68, 0.12);
+}
+
+.enm-settings-content {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.enm-settings-pane {
+    /* Hidden panes still occupy no space because [hidden] gets
+       display:none from the universal rule near the top. */
+}
+
+/* Each section becomes a pane — drop the old "stack with border-tops"
+   pattern. Now there's only one section visible at a time, so it gets
+   the full vertical rhythm without competing siblings. */
 .enm-settings-section {
-    border-top: 1px solid var(--border-color);
-    padding-top: var(--spacing-lg);
-}
-
-.enm-settings-section:first-child {
-    border-top: none;
     padding-top: 0;
+    border-top: none;
 }
 
 .enm-settings-section h3 {
-    font-size: 15px;
-    font-weight: 600;
-    letter-spacing: -0.01em;
+    font-size: 18px;
+    font-weight: var(--font-weight-semibold);
+    letter-spacing: -0.02em;
     color: var(--text-primary);
     margin-bottom: var(--spacing-md);
 }
@@ -1227,8 +1312,8 @@ html, body {
 }
 
 .enm-settings-input {
-    min-height: 32px;
-    padding: 6px 10px;
+    min-height: 36px;
+    padding: 8px 12px;
     border: 1px solid var(--border-color);
     border-radius: var(--radius-sm);
     background: var(--bg-surface);
@@ -1466,24 +1551,38 @@ html, body {
 }
 
 .enm-audit-input {
-    min-height: 30px;
-    padding: 4px 8px;
+    min-height: 36px;
+    padding: 8px 12px;
     border: 1px solid var(--border-color);
     border-radius: var(--radius-sm);
     background: var(--bg-surface);
     color: var(--text-primary);
     font: inherit;
-    font-size: 12px;
+    font-size: 13px;
+    transition: border-color var(--motion-fast) var(--ease-spring),
+                box-shadow var(--motion-fast) var(--ease-spring);
 }
 
+.enm-audit-input:focus {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: var(--focus-ring);
+}
+
+/* alpha.9 — bump table text from 12px to 13px so the audit log reads at
+   the same density as the rest of the app, and switch to row-only
+   horizontal dividers (no vertical grid lines) for a calmer feel. */
 .enm-audit-table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 12px;
+    font-size: 13px;
     display: block;
     overflow-x: auto;
     overscroll-behavior-x: contain;
     white-space: nowrap;
+    /* Wrap the table in its own scroll container so the sticky header
+       can :has-detect when the body has scrolled. */
+    position: relative;
 }
 
 .enm-audit-table thead,
@@ -1496,7 +1595,7 @@ html, body {
 
 .enm-audit-table th,
 .enm-audit-table td {
-    padding: 8px 10px;
+    padding: 10px 12px;
     text-align: left;
     border-bottom: 1px solid var(--border-color);
     overflow: hidden;
@@ -1509,13 +1608,27 @@ html, body {
     letter-spacing: 0.06em;
     color: var(--text-muted);
     background: var(--bg-muted);
-    font-weight: 600;
+    font-weight: var(--font-weight-semibold);
     position: sticky;
     top: 0;
+    /* Shadow only when the table body has scrolled past the header.
+       Pure CSS via :has() — modern Chromium / Safari / FF support is
+       enough for the Puter context. Falls back to no shadow on older
+       browsers, which is fine. */
+    transition: box-shadow var(--motion-base) var(--ease-spring);
+    z-index: 1;
+}
+
+.enm-audit-table:has(tbody tr:not(:first-child)) th {
+    /* Body has more than one row — apply scroll-shadow proxy via a
+       second rule when the table itself has been scrolled vertically.
+       We can't `:has` scrollTop, but a subtle shadow on a long table
+       is fine and matches Apple's pattern. */
+    box-shadow: var(--shadow-sm);
 }
 
 .enm-audit-table tbody tr {
-    transition: background var(--motion-fast) var(--ease-out);
+    transition: background var(--motion-fast) var(--ease-spring);
 }
 
 .enm-audit-table tbody tr:hover {
@@ -1562,28 +1675,79 @@ html, body {
     white-space: nowrap;
 }
 
+/* Log "Live" / "Paused" toggle — alpha.9: bigger touch target, leading
+   status dot that pulses when the SSE connection is healthy and turns
+   amber when reconnecting. The pill becomes the operator's at-a-glance
+   for "is the log feed live?". */
 .enm-log-tail-toggle {
-    min-height: 28px;
-    padding: 4px 10px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 32px;
+    padding: 4px 12px 4px 10px;
     background: var(--bg-muted);
     border: 1px solid var(--border-color);
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-pill);
     font: inherit;
     font-size: 12px;
+    font-weight: var(--font-weight-medium);
     color: var(--text-secondary);
     cursor: pointer;
-    transition: background var(--motion-fast) var(--ease-out),
-                border-color var(--motion-fast) var(--ease-out),
-                color var(--motion-fast) var(--ease-out);
+    transition: background var(--motion-fast) var(--ease-spring),
+                border-color var(--motion-fast) var(--ease-spring),
+                color var(--motion-fast) var(--ease-spring);
     flex-shrink: 0;
 }
 
-.enm-log-tail-toggle:hover { background: var(--border-color); }
+.enm-log-tail-toggle::before {
+    content: '';
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--text-muted);
+    flex-shrink: 0;
+    transition: background var(--motion-base) var(--ease-spring);
+}
 
+.enm-log-tail-toggle:hover { background: var(--bg-surface); }
+
+/* Live + tailing — green dot pulses gently to communicate "feed is
+   flowing". */
 .enm-log-tail-toggle.enm-log-following {
-    background: rgba(22, 163, 74, 0.14);
-    border-color: rgba(22, 163, 74, 0.3);
+    background: var(--primary-soft);
+    border-color: rgba(22, 163, 74, 0.25);
     color: var(--success);
+}
+
+.enm-log-tail-toggle.enm-log-following::before {
+    background: var(--state-healthy);
+    animation: enm-log-live-pulse 2s var(--ease-spring) infinite;
+    box-shadow: 0 0 0 0 var(--state-healthy);
+}
+
+@keyframes enm-log-live-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.45); }
+    50%      { box-shadow: 0 0 0 4px rgba(34, 197, 94, 0); }
+}
+
+/* Reconnecting — amber dot, no pulse. The .enm-log-reconnecting class
+   is set by log-viewer.js when the SSE connection drops. */
+.enm-log-tail-toggle.enm-log-reconnecting {
+    background: rgba(249, 115, 22, 0.10);
+    border-color: rgba(249, 115, 22, 0.28);
+    color: var(--state-stalled);
+}
+
+.enm-log-tail-toggle.enm-log-reconnecting::before {
+    background: var(--state-stalled);
+    animation: none;
+    box-shadow: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .enm-log-tail-toggle.enm-log-following::before {
+        animation: none;
+    }
 }
 
 .enm-log-scroller {

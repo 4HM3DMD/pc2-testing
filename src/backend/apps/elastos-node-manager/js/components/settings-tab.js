@@ -45,17 +45,85 @@
         });
     };
 
-    /** @private */
+    /**
+     * @private
+     * alpha.9 — split the monolithic scroll page into a sub-tab nav.
+     * Five panes live in the same DOM but only the active one is visible,
+     * so the operator never scrolls past four irrelevant blocks to reach
+     * the one they want. Default landing: 'network'. Danger is always
+     * the last sub-tab and is never the default — operator must click
+     * into it deliberately.
+     *
+     * Layout adapts via container query in styles.css: vertical nav rail
+     * at width >640px, horizontal pill row below. Reuses the same
+     * container-type: inline-size already on .enm-settings.
+     */
     SettingsTab.prototype._renderShell = function () {
         var t = root.enmTOrFallback;
         this._sections = {};
-        this.root.appendChild(this._buildNetworkSection(t));
-        this.root.appendChild(this._buildAdvancedSection(t));
-        this.root.appendChild(this._buildRpcCredsSection(t));
-        this.root.appendChild(this._buildGeneralSection(t));
-        // Danger zone always rendered last so it doesn't draw the eye on
-        // first scan and the operator has to scroll past everything else.
-        this.root.appendChild(this._buildDangerZoneSection(t));
+        this._panes = {};
+        this._activeKey = 'network';
+
+        // Sub-tab nav rail (rendered first, lives at column 1 in the grid).
+        this._navEl = document.createElement('nav');
+        this._navEl.className = 'enm-settings-nav';
+        this._navEl.setAttribute('role', 'tablist');
+        this._navEl.setAttribute('aria-label', 'Settings sections');
+        this.root.appendChild(this._navEl);
+
+        // Content host (column 2). Each section becomes a pane in here.
+        var content = document.createElement('div');
+        content.className = 'enm-settings-content';
+        this.root.appendChild(content);
+
+        var navItems = [
+            { key: 'network',   label: t('settings.heading_network'),   build: this._buildNetworkSection },
+            { key: 'advanced',  label: t('settings.heading_advanced'),  build: this._buildAdvancedSection },
+            { key: 'rpcCreds',  label: t('settings.heading_rpc_creds'), build: this._buildRpcCredsSection },
+            { key: 'general',   label: t('settings.heading_general'),   build: this._buildGeneralSection },
+            { key: 'danger',    label: t('settings.heading_danger'),    build: this._buildDangerZoneSection,
+              accent: 'danger' },
+        ];
+        var self = this;
+        navItems.forEach(function (item) {
+            // Nav button — the sub-tab.
+            var btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'enm-settings-nav-item';
+            if (item.accent) btn.dataset.accent = item.accent;
+            btn.setAttribute('role', 'tab');
+            btn.dataset.key = item.key;
+            btn.textContent = item.label;
+            btn.addEventListener('click', function () { self._activatePane(item.key); });
+            self._navEl.appendChild(btn);
+
+            // Build the matching section and host it in a pane wrapper.
+            var section = item.build.call(self, t);
+            section.classList.add('enm-settings-pane');
+            content.appendChild(section);
+            self._panes[item.key] = section;
+        });
+
+        this._activatePane(this._activeKey);
+    };
+
+    /**
+     * @private
+     * Switch which pane is visible + which nav button reads as selected.
+     * Aria semantics kept in sync so screen readers see the same change.
+     */
+    SettingsTab.prototype._activatePane = function (key) {
+        if (!this._panes[key]) return;
+        this._activeKey = key;
+        Object.keys(this._panes).forEach(function (k) {
+            this._panes[k].hidden = (k !== key);
+        }, this);
+        var navBtns = this._navEl.querySelectorAll('.enm-settings-nav-item');
+        navBtns.forEach(function (b) {
+            var active = (b.dataset.key === key);
+            b.classList.toggle('active', active);
+            b.setAttribute('aria-selected', active ? 'true' : 'false');
+        });
     };
 
     /** @private */
