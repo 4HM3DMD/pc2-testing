@@ -36,7 +36,19 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: enm-server/package-lock.json
+          # Two lockfiles feed this build: enm-server (for the runtime deps that
+          # ship inside the bundle) and pc2-node (for the build-time `tar` package
+          # the packaging script imports). Caching both speeds up subsequent runs.
+          cache-dependency-path: |
+            enm-server/package-lock.json
+            pc2-node/package-lock.json
+
+      # The packaging script imports the `tar` package from pc2-node's
+      # node_modules — install only that one dep so we don't pull in pc2-node's
+      # 50+ runtime/dev dependencies just to build a tarball.
+      - name: Install build dep (tar)
+        working-directory: pc2-node
+        run: npm install --no-save --no-audit --no-fund tar@^7.5.2
 
       # Restore the dev signing key from a repo secret so every CI build signs
       # with the SAME publisher key. Without this, package-app.mjs generates a
