@@ -865,6 +865,78 @@ html, body {
     align-self: center;
 }
 
+.enm-settings-help {
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+    margin: 0 0 var(--spacing-md);
+}
+
+/* ============================================================
+   RPC credentials reveal panel
+   ============================================================ */
+
+.enm-rpc-creds-panel {
+    margin-top: var(--spacing-md);
+    padding: var(--spacing-md);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: var(--bg-surface-alt, var(--bg-surface));
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-sm);
+}
+
+.enm-rpc-creds-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--spacing-sm);
+    font-size: 13px;
+}
+
+.enm-rpc-creds-label {
+    flex: 0 0 200px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.enm-rpc-creds-value-wrap {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.enm-rpc-creds-value {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    padding: 4px 8px;
+    color: var(--text-primary);
+    font-size: 12px;
+    overflow-wrap: anywhere;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.enm-rpc-creds-copy,
+.enm-rpc-creds-toggle {
+    padding: 4px 10px;
+    font-size: 12px;
+    line-height: 1;
+}
+
+.enm-rpc-creds-empty {
+    color: var(--text-secondary);
+    font-style: italic;
+    font-size: 12px;
+}
+
 /* ============================================================
    Audit log
    ============================================================ */

@@ -4,11 +4,12 @@
  *
  * routes/config.js — read + write the operator-facing settings (Phase 5).
  *
- *   GET  /config                       owner-redacted view of the full config
- *   PUT  /config/network               update DPoS IP override + mode
- *   PUT  /config/mainchain             update advanced mainchain knobs
- *   PUT  /config/general               update healing/notifications/audit prefs
- *   POST /config/rollback              restore previous .bak version
+ *   GET  /config                            owner-redacted view of the full config
+ *   GET  /config/rpc/credentials/:chainId   owner-only — plaintext RPC user/pass + reachable hosts
+ *   PUT  /config/network                    update DPoS IP override + mode
+ *   PUT  /config/mainchain                  update advanced mainchain knobs
+ *   PUT  /config/general                    update healing/notifications/audit prefs
+ *   POST /config/rollback                   restore previous .bak version
  *
  * Mutations are owner-only and rate-limited via the `admin` scope. Reads are
  * authenticated but do not require owner — most operators run a single-owner
@@ -26,6 +27,7 @@ const express = require('express');
 const { ENM_LOG_PREFIX, errorBody, successBody } = require('../services/EnmConstants');
 const { limit } = require('../services/EnmRateLimit');
 const { requireOwner, readActorWallet } = require('../auth/OwnerCheckMiddleware');
+const os = require('node:os');
 const ConfigStore = require('../services/ConfigStore');
 const { redactSecrets } = require('../services/EnmConfigRedact');
 
@@ -47,6 +49,57 @@ function build(extensionHandle) {
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} GET /config: ${err.message}`);
             return res.status(500).json(errorBody('Failed to load config.'));
+        }
+    });
+
+    // GET /config/rpc/credentials/:chainId — owner-only.
+    //
+    // Returns the live RPC user + plaintext password so the operator can
+    // wire an external wallet / dApp / monitoring tool to the chain. This
+    // is the ONLY endpoint that returns the password unredacted, hence the
+    // requireOwner gate and the `admin` rate-limit scope.
+    //
+    // Reachable hosts: ela's RPC server binds to 0.0.0.0 by default, and
+    // we restrict access via WhiteIPList. The response includes:
+    //   - localUrl    : http://127.0.0.1:<port>     (always works locally)
+    //   - lanUrls[]   : http://<lan-ip>:<port>       (one per non-loopback iface)
+    // The operator picks the URL appropriate to where their client lives,
+    // and ensures the client's source IP is in whiteIPList.
+    router.get('/rpc/credentials/:chainId', limit('admin'), requireOwner, async (req, res) => {
+        try {
+            const chainId = req.params.chainId;
+            const cfg = await ConfigStore.load();
+            const chain = cfg.chains && cfg.chains[chainId];
+            if (!chain) {
+                return res.status(404).json(errorBody(`Chain "${chainId}" is not configured.`));
+            }
+            if (!chain.rpc || typeof chain.rpc.passwordEncrypted !== 'string'
+                || chain.rpc.passwordEncrypted.length === 0) {
+                return res.status(409).json(errorBody('RPC password not set yet — finish setup first.'));
+            }
+            let password;
+            try {
+                password = ConfigStore.getRpcPassword(chain);
+            } catch (err) {
+                extensionHandle.log.error(`${ENM_LOG_PREFIX} GET /config/rpc/credentials: decrypt failed: ${err.message}`);
+                return res.status(500).json(errorBody('Failed to decrypt RPC password.'));
+            }
+
+            const port = chain.ports && chain.ports.rpc;
+            const lanUrls = collectLanUrls(port);
+
+            return res.json(successBody({
+                chainId,
+                user: chain.rpc.user,
+                password,
+                port,
+                localUrl: `http://127.0.0.1:${port}`,
+                lanUrls,
+                whiteIPList: Array.isArray(chain.rpc.whiteIPList) ? chain.rpc.whiteIPList : ['127.0.0.1'],
+            }));
+        } catch (err) {
+            extensionHandle.log.error(`${ENM_LOG_PREFIX} GET /config/rpc/credentials: ${err.message}`);
+            return res.status(500).json(errorBody(err.message));
         }
     });
 
@@ -148,6 +201,30 @@ function build(extensionHandle) {
     });
 
     return router;
+}
+
+/**
+ * Build http://<ip>:<port> URLs for every non-loopback IPv4 interface so the
+ * operator can pick the address matching where their client lives. IPv6 link-
+ * local entries are skipped — they're rarely useful for RPC clients.
+ *
+ * @param {number} port
+ * @returns {string[]}
+ */
+function collectLanUrls(port) {
+    if (!Number.isInteger(port)) return [];
+    const out = [];
+    let ifaces;
+    try { ifaces = os.networkInterfaces(); } catch { return []; }
+    for (const name of Object.keys(ifaces || {})) {
+        for (const a of ifaces[name] || []) {
+            if (!a || a.internal) continue;
+            if (a.family === 'IPv4' || a.family === 4) {
+                out.push(`http://${a.address}:${port}`);
+            }
+        }
+    }
+    return out;
 }
 
 module.exports = { build, redactSecrets };

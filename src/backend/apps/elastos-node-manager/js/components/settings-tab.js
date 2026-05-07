@@ -51,6 +51,7 @@
         this._sections = {};
         this.root.appendChild(this._buildNetworkSection(t));
         this.root.appendChild(this._buildAdvancedSection(t));
+        this.root.appendChild(this._buildRpcCredsSection(t));
         this.root.appendChild(this._buildGeneralSection(t));
     };
 
@@ -118,6 +119,11 @@
             section.appendChild(row);
         });
 
+        var whiteIpHelp = document.createElement('p');
+        whiteIpHelp.className = 'enm-settings-help';
+        whiteIpHelp.textContent = t('settings.adv_white_ip_help');
+        section.appendChild(whiteIpHelp);
+
         var actions = document.createElement('div'); actions.className = 'enm-settings-actions';
         actions.appendChild(btn(t('settings.adv_save_btn'), 'enm-btn-primary', this._saveAdvanced.bind(this)));
         section.appendChild(actions);
@@ -128,6 +134,118 @@
 
         this._sections.advanced = section;
         return section;
+    };
+
+    /**
+     * @private
+     * RPC credentials reveal panel. Lazy-fetched — the password only leaves
+     * the server when the operator actively clicks Reveal, mirroring how
+     * recovery-phrase UIs work in wallets.
+     */
+    SettingsTab.prototype._buildRpcCredsSection = function (t) {
+        var section = document.createElement('div');
+        section.className = 'enm-settings-section';
+
+        var h = document.createElement('h3');
+        h.textContent = t('settings.heading_rpc_creds');
+        section.appendChild(h);
+
+        var intro = document.createElement('p');
+        intro.className = 'enm-settings-help';
+        intro.textContent = t('settings.rpc_creds_intro');
+        section.appendChild(intro);
+
+        this._creds = {
+            revealBtn: btn(t('settings.rpc_reveal_btn'), 'enm-btn-secondary',
+                this._toggleCreds.bind(this)),
+            panel: document.createElement('div'),
+            statusLine: document.createElement('p'),
+            data: null,
+            pwShown: false,
+        };
+        this._creds.panel.className = 'enm-rpc-creds-panel';
+        this._creds.panel.style.display = 'none';
+        this._creds.statusLine.className = 'enm-settings-status';
+
+        var actions = document.createElement('div'); actions.className = 'enm-settings-actions';
+        actions.appendChild(this._creds.revealBtn);
+        section.appendChild(actions);
+        section.appendChild(this._creds.panel);
+        section.appendChild(this._creds.statusLine);
+
+        this._sections.rpcCreds = section;
+        return section;
+    };
+
+    /** @private */
+    SettingsTab.prototype._toggleCreds = function () {
+        var t = root.enmTOrFallback;
+        // If already shown, hide and forget.
+        if (this._creds.panel.style.display !== 'none') {
+            this._creds.panel.style.display = 'none';
+            this._creds.panel.innerHTML = '';
+            this._creds.data = null;
+            this._creds.pwShown = false;
+            this._creds.revealBtn.textContent = t('settings.rpc_reveal_btn');
+            this._creds.statusLine.textContent = '';
+            return;
+        }
+        var self = this;
+        this._creds.statusLine.textContent = t('common.loading');
+        this.api.get('/config/rpc/credentials/mainchain', { skipCache: true }).then(function (data) {
+            self._creds.data = data;
+            self._creds.pwShown = false;
+            self._renderCredsPanel();
+            self._creds.panel.style.display = '';
+            self._creds.revealBtn.textContent = t('settings.rpc_hide_btn');
+            self._creds.statusLine.textContent = '';
+        }).catch(function (err) {
+            self._creds.statusLine.textContent = t('settings.rpc_load_failed',
+                { error: err.message || String(err) });
+        });
+    };
+
+    /** @private */
+    SettingsTab.prototype._renderCredsPanel = function () {
+        var t = root.enmTOrFallback;
+        var d = this._creds.data;
+        var p = this._creds.panel;
+        p.innerHTML = '';
+        if (!d) return;
+
+        // Plain rows
+        p.appendChild(credRow(t('settings.rpc_field_user'), d.user));
+        p.appendChild(credPasswordRow(this, t));
+        p.appendChild(credRow(t('settings.rpc_field_local'), d.localUrl));
+
+        // LAN URLs — list (one per interface)
+        var lanWrap = document.createElement('div');
+        lanWrap.className = 'enm-rpc-creds-row';
+        var lanLabel = document.createElement('span');
+        lanLabel.className = 'enm-rpc-creds-label';
+        lanLabel.textContent = t('settings.rpc_field_lan');
+        lanWrap.appendChild(lanLabel);
+        if (Array.isArray(d.lanUrls) && d.lanUrls.length > 0) {
+            d.lanUrls.forEach(function (u) {
+                lanWrap.appendChild(credValueWithCopy(u));
+            });
+        } else {
+            var none = document.createElement('span');
+            none.className = 'enm-rpc-creds-empty';
+            none.textContent = t('settings.rpc_no_lan');
+            lanWrap.appendChild(none);
+        }
+        p.appendChild(lanWrap);
+
+        // WhiteIPList — show as comma-joined string
+        p.appendChild(credRow(t('settings.rpc_field_white'),
+            (d.whiteIPList || []).join(', ')));
+    };
+
+    /** @private */
+    SettingsTab.prototype._togglePwVisibility = function () {
+        this._creds.pwShown = !this._creds.pwShown;
+        this._renderCredsPanel();
     };
 
     /** @private */
@@ -325,6 +443,89 @@
         b.textContent = text;
         b.addEventListener('click', onClick);
         return b;
+    }
+
+    /**
+     * Render a single label + value row inside the credentials panel.
+     * Value is wrapped in credValueWithCopy() so the operator can copy
+     * straight to clipboard without selecting.
+     */
+    function credRow(labelText, value) {
+        var wrap = document.createElement('div');
+        wrap.className = 'enm-rpc-creds-row';
+        var l = document.createElement('span');
+        l.className = 'enm-rpc-creds-label';
+        l.textContent = labelText;
+        wrap.appendChild(l);
+        wrap.appendChild(credValueWithCopy(value == null ? '' : String(value)));
+        return wrap;
+    }
+
+    /**
+     * Password row gets a Show/Hide toggle on top of the standard copy button.
+     * Read straight off the SettingsTab instance so the toggle state survives
+     * a re-render of the panel.
+     */
+    function credPasswordRow(tab, t) {
+        var wrap = document.createElement('div');
+        wrap.className = 'enm-rpc-creds-row';
+        var l = document.createElement('span');
+        l.className = 'enm-rpc-creds-label';
+        l.textContent = t('settings.rpc_field_pw');
+        wrap.appendChild(l);
+
+        var pw = (tab._creds.data && tab._creds.data.password) || '';
+        var shown = !!tab._creds.pwShown;
+        var displayed = shown ? pw : pw.replace(/./g, '•');
+
+        wrap.appendChild(credValueWithCopy(pw, displayed));
+
+        var toggle = document.createElement('button');
+        toggle.type = 'button';
+        toggle.className = 'enm-btn enm-btn-secondary enm-rpc-creds-toggle';
+        toggle.textContent = shown ? t('settings.rpc_hide_pw') : t('settings.rpc_show_pw');
+        toggle.addEventListener('click', tab._togglePwVisibility.bind(tab));
+        wrap.appendChild(toggle);
+        return wrap;
+    }
+
+    /**
+     * Read-only value rendered next to a Copy button. `display` lets callers
+     * (the password row) show a masked version while still copying the real
+     * value to the clipboard.
+     */
+    function credValueWithCopy(value, display) {
+        var line = document.createElement('span');
+        line.className = 'enm-rpc-creds-value-wrap';
+
+        var span = document.createElement('span');
+        span.className = 'enm-rpc-creds-value';
+        span.textContent = display != null ? display : value;
+        line.appendChild(span);
+
+        var copyBtn = document.createElement('button');
+        copyBtn.type = 'button';
+        copyBtn.className = 'enm-btn enm-btn-secondary enm-rpc-creds-copy';
+        copyBtn.textContent = root.enmTOrFallback('settings.rpc_copy');
+        copyBtn.addEventListener('click', function () {
+            var p = (navigator.clipboard && navigator.clipboard.writeText)
+                ? navigator.clipboard.writeText(value)
+                : Promise.reject(new Error('clipboard unavailable'));
+            p.then(function () {
+                var prev = copyBtn.textContent;
+                copyBtn.textContent = root.enmTOrFallback('settings.rpc_copied');
+                setTimeout(function () { copyBtn.textContent = prev; }, 1200);
+            }).catch(function () {
+                // Fallback: select the value so the operator can ctrl-c
+                var range = document.createRange();
+                range.selectNodeContents(span);
+                var sel = window.getSelection();
+                sel.removeAllRanges();
+                sel.addRange(range);
+            });
+        });
+        line.appendChild(copyBtn);
+        return line;
     }
 
     root.EnmSettingsTab = SettingsTab;
