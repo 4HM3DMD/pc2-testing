@@ -938,6 +938,90 @@ html, body {
 }
 
 /* ============================================================
+   Danger zone — wipe and uninstall
+   ============================================================ */
+
+.enm-settings-danger h3 {
+    color: var(--danger, #c0392b);
+}
+
+.enm-danger-controls {
+    margin-top: var(--spacing-md);
+    padding: var(--spacing-md);
+    border: 1px solid var(--danger, #c0392b);
+    border-radius: var(--radius-sm);
+    background: rgba(192, 57, 43, 0.04);
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-sm);
+}
+
+.enm-danger-section-h {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    margin-top: var(--spacing-sm);
+}
+
+.enm-danger-section-h-kept { color: var(--success, #27ae60); }
+.enm-danger-section-h-wiped { color: var(--danger, #c0392b); }
+
+.enm-danger-list {
+    margin: 0 0 var(--spacing-sm);
+    padding-left: var(--spacing-lg);
+    font-size: 13px;
+    color: var(--text-primary);
+    line-height: 1.6;
+}
+
+.enm-danger-list li { margin-bottom: 2px; }
+
+.enm-danger-code {
+    display: inline-block;
+    margin: 4px 0 8px var(--spacing-md);
+    padding: 4px 8px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+    color: var(--text-primary);
+    overflow-wrap: anywhere;
+}
+
+.enm-danger-confirm-row {
+    display: flex;
+    gap: var(--spacing-sm);
+    align-items: center;
+    margin-top: var(--spacing-sm);
+}
+
+.enm-danger-confirm-row .enm-settings-input {
+    flex: 0 0 200px;
+    text-transform: uppercase;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    letter-spacing: 0.1em;
+}
+
+.enm-btn-danger {
+    background: var(--danger, #c0392b);
+    color: white;
+    border: 1px solid var(--danger, #c0392b);
+}
+
+.enm-btn-danger:hover:not(:disabled) {
+    background: #a93226;
+    border-color: #a93226;
+}
+
+.enm-btn-danger:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* ============================================================
    Audit log
    ============================================================ */
 

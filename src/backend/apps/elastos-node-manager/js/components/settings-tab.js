@@ -53,6 +53,9 @@
         this.root.appendChild(this._buildAdvancedSection(t));
         this.root.appendChild(this._buildRpcCredsSection(t));
         this.root.appendChild(this._buildGeneralSection(t));
+        // Danger zone always rendered last so it doesn't draw the eye on
+        // first scan and the operator has to scroll past everything else.
+        this.root.appendChild(this._buildDangerZoneSection(t));
     };
 
     /** @private */
@@ -400,6 +403,221 @@
         }).catch(function (err) {
             self._gen.statusLine.textContent = root.enmTOrFallback('settings.save_failed', { error: err.message });
         });
+    };
+
+    /**
+     * @private
+     * Danger-zone section. Three-stage gate to keep the wipe from being
+     * triggered accidentally:
+     *   1. The entire control surface is hidden behind a Show button.
+     *   2. The wipe button stays disabled until the operator types WIPE
+     *      into the confirm input.
+     *   3. The wipe button itself is bright red and labeled unambiguously.
+     *
+     * Does NOT add a backend endpoint to ENM — calls PC2's existing
+     * DELETE /api/installed-apps/<name>?purge=true (same origin, same
+     * Bearer token), which already runs the teardown hook that backs up
+     * keystore.dat before SIGTERMing this process.
+     */
+    SettingsTab.prototype._buildDangerZoneSection = function (t) {
+        var section = document.createElement('div');
+        section.className = 'enm-settings-section enm-settings-danger';
+
+        var h = document.createElement('h3');
+        h.textContent = t('settings.heading_danger');
+        section.appendChild(h);
+
+        var intro = document.createElement('p');
+        intro.className = 'enm-settings-help';
+        intro.textContent = t('settings.danger_intro');
+        section.appendChild(intro);
+
+        this._danger = {
+            showBtn: btn(t('settings.danger_show_btn'), 'enm-btn-secondary',
+                this._toggleDangerControls.bind(this)),
+            controls: document.createElement('div'),
+            confirmInput: null,
+            wipeBtn: null,
+            statusLine: document.createElement('p'),
+        };
+        this._danger.controls.className = 'enm-danger-controls';
+        this._danger.controls.style.display = 'none';
+        this._danger.statusLine.className = 'enm-settings-status';
+
+        // Build the hidden controls once and toggle visibility, so the form
+        // state survives an open/close cycle.
+        var keptH = document.createElement('div');
+        keptH.className = 'enm-danger-section-h enm-danger-section-h-kept';
+        keptH.textContent = t('settings.danger_kept_h');
+        this._danger.controls.appendChild(keptH);
+
+        var keptUl = document.createElement('ul');
+        keptUl.className = 'enm-danger-list';
+        var keptLi1 = document.createElement('li');
+        keptLi1.textContent = t('settings.danger_kept_li1');
+        keptUl.appendChild(keptLi1);
+        var keptCode = document.createElement('code');
+        keptCode.className = 'enm-danger-code';
+        keptCode.textContent = t('settings.danger_kept_path');
+        keptUl.appendChild(keptCode);
+        var keptLi2 = document.createElement('li');
+        keptLi2.textContent = t('settings.danger_kept_li2');
+        keptUl.appendChild(keptLi2);
+        this._danger.controls.appendChild(keptUl);
+
+        var wipedH = document.createElement('div');
+        wipedH.className = 'enm-danger-section-h enm-danger-section-h-wiped';
+        wipedH.textContent = t('settings.danger_wiped_h');
+        this._danger.controls.appendChild(wipedH);
+
+        var wipedUl = document.createElement('ul');
+        wipedUl.className = 'enm-danger-list';
+        ['danger_wiped_li1', 'danger_wiped_li2', 'danger_wiped_li3'].forEach(function (k) {
+            var li = document.createElement('li');
+            li.textContent = t('settings.' + k);
+            wipedUl.appendChild(li);
+        });
+        this._danger.controls.appendChild(wipedUl);
+
+        var confirmH = document.createElement('div');
+        confirmH.className = 'enm-danger-section-h';
+        confirmH.textContent = t('settings.danger_confirm_h');
+        this._danger.controls.appendChild(confirmH);
+
+        var confirmRow = document.createElement('div');
+        confirmRow.className = 'enm-danger-confirm-row';
+        this._danger.confirmInput = document.createElement('input');
+        this._danger.confirmInput.type = 'text';
+        this._danger.confirmInput.className = 'enm-settings-input';
+        this._danger.confirmInput.placeholder = t('settings.danger_confirm_ph');
+        this._danger.confirmInput.autocomplete = 'off';
+        this._danger.confirmInput.spellcheck = false;
+        this._danger.confirmInput.addEventListener('input',
+            this._refreshDangerEnabled.bind(this));
+        confirmRow.appendChild(this._danger.confirmInput);
+
+        this._danger.wipeBtn = btn(t('settings.danger_wipe_btn'), 'enm-btn-danger',
+            this._doWipe.bind(this));
+        this._danger.wipeBtn.disabled = true;
+        confirmRow.appendChild(this._danger.wipeBtn);
+        this._danger.controls.appendChild(confirmRow);
+
+        var actions = document.createElement('div'); actions.className = 'enm-settings-actions';
+        actions.appendChild(this._danger.showBtn);
+        section.appendChild(actions);
+        section.appendChild(this._danger.controls);
+        section.appendChild(this._danger.statusLine);
+
+        this._sections.danger = section;
+        return section;
+    };
+
+    /** @private */
+    SettingsTab.prototype._toggleDangerControls = function () {
+        var t = root.enmTOrFallback;
+        var hidden = this._danger.controls.style.display === 'none';
+        if (hidden) {
+            this._danger.controls.style.display = '';
+            this._danger.showBtn.textContent = t('settings.danger_hide_btn');
+        } else {
+            this._danger.controls.style.display = 'none';
+            this._danger.showBtn.textContent = t('settings.danger_show_btn');
+            this._danger.confirmInput.value = '';
+            this._refreshDangerEnabled();
+            this._danger.statusLine.textContent = '';
+        }
+    };
+
+    /** @private */
+    SettingsTab.prototype._refreshDangerEnabled = function () {
+        var typed = (this._danger.confirmInput.value || '').trim();
+        this._danger.wipeBtn.disabled = (typed !== 'WIPE');
+    };
+
+    /**
+     * @private
+     * Calls PC2's installed-apps uninstall endpoint with purge=true. This
+     * is a SAME-ORIGIN request (PC2 serves both pc2-node and the ENM
+     * frontend), so we hit window.location.origin — NOT the :4180 backend
+     * the rest of api.js talks to.
+     *
+     * Once PC2 starts the teardown, our own backend (and therefore this
+     * page) will get killed mid-request. The fetch may resolve with the
+     * uninstall response OR fail with a network error if the kill is
+     * faster than the response. We treat both as success and redirect.
+     */
+    SettingsTab.prototype._doWipe = function () {
+        var t = root.enmTOrFallback;
+        var self = this;
+
+        // Lock the UI immediately so a double-click can't fire two requests.
+        this._danger.wipeBtn.disabled = true;
+        this._danger.showBtn.disabled = true;
+        this._danger.confirmInput.disabled = true;
+        this._danger.statusLine.textContent = t('settings.danger_in_progress');
+        this._danger.statusLine.style.color = '';
+
+        var token = (this.api && this.api.token) || null;
+        var headers = { 'Accept': 'application/json' };
+        if (token) headers['Authorization'] = 'Bearer ' + token;
+
+        var url = root.location.origin + '/api/installed-apps/elastos-node-manager?purge=true';
+
+        fetch(url, { method: 'DELETE', credentials: 'include', headers: headers })
+            .then(function (res) {
+                return res.text().then(function (text) {
+                    var parsed = null;
+                    try { parsed = JSON.parse(text); } catch (_) { /* fall through */ }
+                    if (!res.ok) {
+                        var msg = (parsed && (parsed.error || parsed.message))
+                            || ('HTTP ' + res.status);
+                        throw new Error(msg);
+                    }
+                    return parsed;
+                });
+            })
+            .then(function (parsed) {
+                self._handleWipeSuccess(parsed);
+            })
+            .catch(function (err) {
+                // ENM died mid-request — treat as success and redirect.
+                // Any TypeError fetch failure here means the connection
+                // was killed by SIGTERM (expected). Distinguish from a
+                // genuine HTTP error (which we threw above with a Message).
+                if (err && err.message && err.message.indexOf('HTTP ') === 0) {
+                    self._handleWipeFailure(err);
+                } else if (err && err.name === 'TypeError') {
+                    // Likely a NetworkError from the killed connection.
+                    self._handleWipeSuccess(null);
+                } else {
+                    self._handleWipeFailure(err);
+                }
+            });
+    };
+
+    /** @private */
+    SettingsTab.prototype._handleWipeSuccess = function (response) {
+        var t = root.enmTOrFallback;
+        var path = (response && response.keystore && response.keystore.backup_path)
+            || (response && response.keystore_backed_up && response.backup_path)
+            || '/var/lib/pc2/data/backups/elastos-node-manager/';
+        this._danger.statusLine.style.color = '';
+        this._danger.statusLine.textContent = t('settings.danger_done', { path: path });
+        // Give the operator 5 seconds to read where the backup lives.
+        setTimeout(function () { root.location.href = '/'; }, 5000);
+    };
+
+    /** @private */
+    SettingsTab.prototype._handleWipeFailure = function (err) {
+        var t = root.enmTOrFallback;
+        this._danger.statusLine.style.color = 'var(--danger, #c0392b)';
+        this._danger.statusLine.textContent = t('settings.danger_failed',
+            { error: (err && err.message) || String(err) });
+        // Re-enable so the operator can retry or back out.
+        this._danger.wipeBtn.disabled = false;
+        this._danger.showBtn.disabled = false;
+        this._danger.confirmInput.disabled = false;
+        this._refreshDangerEnabled();
     };
 
     function radio(name, value) {
