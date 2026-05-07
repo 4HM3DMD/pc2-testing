@@ -181,19 +181,34 @@
     PowerCircle.prototype._render = function () {
         this.root.dataset.state = this._state;
 
-        // Percent ring: only paint when syncing, otherwise hide via dashoffset.
-        if (this._state === 'syncing' && this._percent != null) {
+        // Percent ring: only paint when syncing AND we have a percent.
+        // Three sub-cases for the centre label:
+        //   syncing + percent known    → "82%"
+        //   syncing + percent unknown  → animated dots (Apple-style "thinking")
+        //   any other state            → state glyph (✓, ⏻, etc.)
+        var hasPct = (this._state === 'syncing' && this._percent != null);
+        if (hasPct) {
             var filled = INNER_CIRC * (this._percent / 100);
             this._pctRing.style.strokeDashoffset = (INNER_CIRC - filled).toFixed(2);
             this._pctText.textContent = this._percent.toFixed(this._percent < 10 ? 1 : 0) + '%';
             this._pctText.hidden = false;
             this._glyph.hidden = true;
+            this._glyph.classList.remove('enm-pc-glyph-estimating');
         } else {
             // Empty ring (full offset = invisible).
             this._pctRing.style.strokeDashoffset = INNER_CIRC;
             this._pctText.hidden = true;
             this._glyph.hidden = false;
-            this._glyph.textContent = GLYPH[this._state] || '';
+            if (this._state === 'syncing') {
+                // Network reference not in yet — show a "still working
+                // on it" hint so the circle never reads as empty/stuck.
+                // The CSS class adds a gentle pulse to the dots.
+                this._glyph.textContent = '···';
+                this._glyph.classList.add('enm-pc-glyph-estimating');
+            } else {
+                this._glyph.textContent = GLYPH[this._state] || '';
+                this._glyph.classList.remove('enm-pc-glyph-estimating');
+            }
         }
 
         // ARIA — describe the state for screen readers.

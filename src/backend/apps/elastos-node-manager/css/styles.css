@@ -433,8 +433,6 @@ html, body {
 .enm-system-status {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-    gap: 1px;
-    background: var(--border-color);
     overflow: hidden;
     margin-bottom: var(--spacing-lg);
 }
@@ -442,25 +440,32 @@ html, body {
 .enm-sys-cell {
     display: flex;
     flex-direction: column;
-    gap: 4px;
-    padding: var(--spacing-md);
+    gap: 6px;
+    padding: var(--spacing-lg) var(--spacing-md);
     background: var(--bg-surface);
     min-width: 0;
+    border-right: 1px solid var(--border-color);
+    transition: background var(--motion-fast) var(--ease-spring);
 }
 
+.enm-sys-cell:last-child { border-right: none; }
+.enm-sys-cell:hover { background: var(--bg-muted); }
+
 .enm-sys-label {
-    font-size: 11px;
-    font-weight: 600;
+    font-size: 10px;
+    font-weight: 500;
     text-transform: uppercase;
-    letter-spacing: 0.06em;
+    letter-spacing: 0.1em;
     color: var(--text-muted);
 }
 
 .enm-sys-value {
-    font-size: 14px;
+    font-size: 17px;
     font-weight: 500;
+    letter-spacing: -0.01em;
     color: var(--text-primary);
     font-variant-numeric: tabular-nums;
+    line-height: 1.25;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -901,6 +906,21 @@ html, body {
     line-height: 1;
 }
 
+/* "Estimating" dots — shown when state=syncing but the network reference
+   hasn't landed yet. Pulses gently so the circle never reads as stuck. */
+.enm-pc-glyph.enm-pc-glyph-estimating {
+    font-size: clamp(28px, 22cqi, 56px);
+    font-weight: 700;
+    letter-spacing: 4px;
+    color: var(--state-syncing);
+    animation: enm-pc-estimating 1.4s var(--ease-spring) infinite;
+}
+
+@keyframes enm-pc-estimating {
+    0%, 100% { opacity: 0.55; transform: translateY(0); }
+    50%      { opacity: 1; transform: translateY(-1px); }
+}
+
 /* ---- Visual states ----------------------------------------------------- */
 
 /* Off — dim and dormant. The power glyph hints at "tap to start". */
@@ -1018,7 +1038,7 @@ html, body {
 }
 
 .enm-btn:disabled {
-    opacity: 0.45;
+    opacity: 0.6;
     cursor: not-allowed;
 }
 
@@ -1030,6 +1050,16 @@ html, body {
     color: #fff;
     border-color: var(--primary);
     box-shadow: 0 1px 0 rgba(255, 255, 255, 0.18) inset, var(--shadow-xs);
+}
+
+/* When a primary button is disabled, drop the "I am the suggested action"
+   colour so the eye doesn't keep landing on it. Matches the calm Apple
+   pattern: disabled buttons read as muted, never as call-to-action. */
+.enm-btn-primary:disabled {
+    background: var(--bg-muted);
+    color: var(--text-muted);
+    border-color: var(--border-color);
+    box-shadow: none;
 }
 
 .enm-btn-primary:hover:not(:disabled) {
