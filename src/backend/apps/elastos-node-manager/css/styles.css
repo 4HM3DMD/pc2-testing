@@ -485,37 +485,72 @@ html, body {
     gap: var(--spacing-lg);
 }
 
-.enm-chain-card {
-    container-type: inline-size;
-    padding: var(--spacing-lg);
-    display: flex;
-    flex-direction: column;
-    gap: var(--spacing-md);
-    transition: transform var(--motion-base) var(--ease-out),
-                box-shadow var(--motion-base) var(--ease-out),
-                border-color var(--motion-base) var(--ease-out);
+/* ============================================================
+   Chain card — Apple-grade hero layout (alpha.6)
+   ============================================================
+   Single focal point: the PowerCircle. Everything else lives
+   below it in a centred column. Stats/sync/BPoS hide behind
+   the Details disclosure so the resting view stays calm.
+   --ease-spring is Apple's standard interaction curve. */
+
+:root {
+    --ease-spring: cubic-bezier(0.32, 0.72, 0, 1);
 }
 
-.enm-chain-card:hover {
-    transform: translateY(-1px);
-    box-shadow: var(--shadow-md);
-    border-color: var(--border-strong);
+.enm-chain-card {
+    container-type: inline-size;
+    padding: var(--spacing-2xl) var(--spacing-lg) var(--spacing-lg);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--spacing-md);
+    transition: border-color var(--motion-base) var(--ease-spring);
+}
+
+/* No hover lift — calmer at rest. The PowerCircle does its own
+   subtle hover on its inner svg. */
+
+.enm-chain-hero {
+    width: clamp(160px, 36cqi, 240px);
+    aspect-ratio: 1 / 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: var(--spacing-sm);
 }
 
 .enm-chain-card-head {
     display: flex;
+    flex-direction: column;
     align-items: center;
-    justify-content: space-between;
-    gap: var(--spacing-sm);
-    flex-wrap: wrap;
+    text-align: center;
+    gap: 4px;
 }
 
 .enm-chain-card-name {
-    font-size: 16px;
+    font-size: 22px;
     font-weight: 600;
-    letter-spacing: -0.01em;
+    letter-spacing: -0.02em;
     color: var(--text-primary);
     text-transform: capitalize;
+    line-height: 1.2;
+}
+
+.enm-chain-card-state {
+    font-size: 13px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+}
+
+.enm-chain-card-metric {
+    font-size: 15px;
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+    margin: 0;
+    min-height: 1.2em;
 }
 
 .enm-chain-badge {
@@ -697,9 +732,259 @@ html, body {
 
 .enm-chain-actions {
     display: flex;
+    justify-content: center;
     gap: var(--spacing-sm);
+    margin-top: var(--spacing-xs);
+    flex-wrap: wrap;
+}
+
+.enm-chain-actions .enm-btn {
+    min-width: 110px;
+    padding: 8px 18px;
+    font-size: 13px;
+}
+
+/* ---- Details disclosure ------------------------------------------------- */
+
+.enm-chain-details-toggle {
+    align-self: center;
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    font: inherit;
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    padding: 8px 12px;
+    margin-top: var(--spacing-md);
+    cursor: pointer;
+    border-radius: var(--radius-pill);
+    transition: color var(--motion-fast) var(--ease-spring),
+                background var(--motion-fast) var(--ease-spring);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.enm-chain-details-toggle::after {
+    content: '⌃';
+    display: inline-block;
+    font-size: 11px;
+    transform: rotate(180deg);
+    transition: transform var(--motion-base) var(--ease-spring);
+}
+
+.enm-chain-card-expanded .enm-chain-details-toggle::after {
+    transform: rotate(0deg);
+}
+
+.enm-chain-details-toggle:hover {
+    color: var(--text-primary);
+    background: var(--bg-muted);
+}
+
+.enm-chain-details-toggle:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+}
+
+.enm-chain-details {
+    width: 100%;
     border-top: 1px solid var(--border-color);
-    padding-top: var(--spacing-md);
+    padding-top: var(--spacing-lg);
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-lg);
+    animation: enm-chain-details-fade var(--motion-slow) var(--ease-spring);
+}
+
+@keyframes enm-chain-details-fade {
+    from { opacity: 0; transform: translateY(-4px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ============================================================
+   PowerCircle — the hero status visualization
+   ============================================================
+   States: off, booting, syncing, healthy, warning, error.
+   The whole component is a button. SVG inside scales to 100%
+   of the .enm-chain-hero wrapper (width comes from the wrapper's
+   container-query clamp). */
+
+.enm-power-circle {
+    /* Reset native button chrome */
+    appearance: none;
+    -webkit-appearance: none;
+    background: transparent;
+    border: none;
+    padding: 0;
+    margin: 0;
+    cursor: pointer;
+    position: relative;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-primary);
+
+    /* Apple-style press response — subtle scale on click */
+    transition: transform var(--motion-fast) var(--ease-spring),
+                filter var(--motion-base) var(--ease-spring);
+}
+
+.enm-power-circle:hover { transform: scale(1.015); }
+.enm-power-circle:active { transform: scale(0.985); }
+
+.enm-power-circle:focus-visible {
+    outline: none;
+}
+.enm-power-circle:focus-visible .enm-pc-svg {
+    filter: drop-shadow(0 0 0 var(--focus-ring-color))
+            drop-shadow(0 0 8px var(--focus-ring-color));
+}
+
+.enm-pc-svg {
+    width: 100%;
+    height: 100%;
+    overflow: visible; /* glow filters extend past the viewBox */
+}
+
+.enm-pc-track {
+    stroke: var(--border-color);
+    stroke-width: 2;
+}
+
+.enm-pc-state-ring {
+    stroke: var(--state-stopped);
+    stroke-width: 3;
+    stroke-linecap: round;
+    transition: stroke var(--motion-slow) var(--ease-spring),
+                opacity var(--motion-slow) var(--ease-spring),
+                stroke-width var(--motion-slow) var(--ease-spring);
+}
+
+.enm-pc-percent-ring {
+    stroke: var(--state-syncing);
+    stroke-width: 3;
+    stroke-linecap: round;
+    /* Smooth fill animation as the snapshot updates */
+    transition: stroke-dashoffset var(--motion-slow) var(--ease-spring),
+                stroke var(--motion-slow) var(--ease-spring),
+                opacity var(--motion-slow) var(--ease-spring);
+}
+
+.enm-pc-label-wrap {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+    transition: color var(--motion-slow) var(--ease-spring);
+}
+
+.enm-pc-glyph {
+    font-size: clamp(28px, 22cqi, 56px);
+    font-weight: 300;
+    line-height: 1;
+    transition: color var(--motion-slow) var(--ease-spring),
+                opacity var(--motion-slow) var(--ease-spring);
+}
+
+.enm-pc-percent {
+    font-size: clamp(20px, 16cqi, 38px);
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums;
+    color: var(--state-syncing);
+    line-height: 1;
+}
+
+/* ---- Visual states ----------------------------------------------------- */
+
+/* Off — dim and dormant. The power glyph hints at "tap to start". */
+.enm-power-circle[data-state="off"] .enm-pc-state-ring {
+    stroke: var(--state-stopped);
+    opacity: 0.35;
+}
+.enm-power-circle[data-state="off"] .enm-pc-glyph {
+    color: var(--text-muted);
+    opacity: 0.7;
+}
+
+/* Booting — animated rotating arc to communicate "working on it".
+   Replicates the iOS spinner feel by chopping the dasharray. */
+.enm-power-circle[data-state="booting"] .enm-pc-state-ring {
+    stroke: var(--state-recovering);
+    stroke-dasharray: 60 220;
+    transform-origin: 50% 50%;
+    animation: enm-pc-spin 1.4s linear infinite;
+}
+
+@keyframes enm-pc-spin {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(360deg); }
+}
+
+/* Syncing — solid blue ring + filling inner percent ring. */
+.enm-power-circle[data-state="syncing"] .enm-pc-state-ring {
+    stroke: var(--state-syncing);
+    opacity: 0.4;
+}
+.enm-power-circle[data-state="syncing"] .enm-pc-percent-ring {
+    stroke: var(--state-syncing);
+}
+
+/* Healthy — steady green ring with a soft glow. */
+.enm-power-circle[data-state="healthy"] .enm-pc-state-ring {
+    stroke: var(--state-healthy);
+    filter: drop-shadow(0 0 6px var(--state-healthy));
+    /* Gentle breathing — barely-visible scale + opacity to show "alive" */
+    animation: enm-pc-breathe 4s var(--ease-spring) infinite;
+}
+.enm-power-circle[data-state="healthy"] .enm-pc-glyph {
+    color: var(--state-healthy);
+}
+
+@keyframes enm-pc-breathe {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.78; }
+}
+
+/* Warning — amber, no animation, calm presence. */
+.enm-power-circle[data-state="warning"] .enm-pc-state-ring {
+    stroke: var(--state-stalled);
+}
+.enm-power-circle[data-state="warning"] .enm-pc-glyph {
+    color: var(--state-stalled);
+}
+
+/* Error — red, gentle pulse to draw attention without panic. */
+.enm-power-circle[data-state="error"] .enm-pc-state-ring {
+    stroke: var(--state-error);
+    animation: enm-pc-pulse 2.4s var(--ease-spring) infinite;
+}
+.enm-power-circle[data-state="error"] .enm-pc-glyph {
+    color: var(--state-error);
+}
+
+@keyframes enm-pc-pulse {
+    0%, 100% { opacity: 1; stroke-width: 3; }
+    50%      { opacity: 0.65; stroke-width: 4; }
+}
+
+/* Honour reduced-motion preference — kill the breathing/spin. */
+@media (prefers-reduced-motion: reduce) {
+    .enm-power-circle[data-state="booting"] .enm-pc-state-ring,
+    .enm-power-circle[data-state="healthy"] .enm-pc-state-ring,
+    .enm-power-circle[data-state="error"] .enm-pc-state-ring {
+        animation: none;
+    }
+    .enm-power-circle:hover,
+    .enm-power-circle:active {
+        transform: none;
+    }
 }
 
 /* ============================================================
