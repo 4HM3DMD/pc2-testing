@@ -181,8 +181,17 @@
                 card.mount(pane);
                 this._mounted['status_card'] = card;
             }
+            // alpha.14 — first-time validator registration guide. Hidden
+            // until the chain is fully synced AND the operator hasn't yet
+            // registered as a BPoS producer on chain. Walks them through
+            // the three-step Essentials flow + the in-app activate button.
+            if (root.EnmValidatorRegistrationCard) {
+                var validatorCard = new root.EnmValidatorRegistrationCard(common);
+                validatorCard.mount(pane);
+                this._mounted['status_validator'] = validatorCard;
+            }
             // Sentinel so _switchTo doesn't re-mount on tab return — the
-            // real components live under status_sys / status_card.
+            // real components live under status_sys / status_card / status_validator.
             this._mounted['status'] = { destroy: function () {} };
         } else if (tabId === 'identity') {
             // Producer identity — BPoS only. The component itself decides

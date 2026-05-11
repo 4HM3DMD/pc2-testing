@@ -474,6 +474,41 @@
             danger_failed:     'Wipe failed: {error}. The app has NOT been uninstalled.',
         },
 
+        validator_card: {
+            eyebrow:    'Next step',
+            title:      'Register as a BPoS validator',
+            sub:        'Your node is fully caught up with the network. Three quick steps and it can start earning ELA rewards.',
+
+            step1_title: 'Copy your producer public key',
+            step1_help:  "Your keystore was generated during setup and lives on this server. This is its public half — share it freely; the secret half never leaves the server.",
+            copy:        'Copy',
+            copied:      'Copied',
+
+            step2_title: 'Sign the registration in Elastos Essentials',
+            step2_help:  'The 5,000 ELA registration deposit must be signed by the wallet that owns it. This server has no signing key for that wallet on purpose — you do it on your phone.',
+            step2_a:     'Open Elastos Essentials → Wallet → Voting → BPoS supernodes.',
+            step2_b:     'Tap "Register as new supernode".',
+            step2_c:     'Fill in the form:',
+            step2_d:     'Confirm and sign. The 5,000 ELA deposit moves to a lockup address. Wait about 6 blocks (≈12 minutes) for the chain to confirm — you can leave this page open.',
+
+            field_name:       'Node name',
+            field_name_help:  'A public-facing display name. Up to 30 characters.',
+            field_pubkey:     'Node public key',
+            field_pubkey_help:'Paste the value you copied in step 1.',
+            field_addr:       'Node IP / URL',
+            field_addr_help:  "Your server's public address so other peers can dial you (your domain or external IP).",
+            field_url:        'Website (optional)',
+            field_url_help:   'Public page voters can read to learn who you are.',
+
+            deposit_note: 'The 5,000 ELA deposit is refundable — you get it back when you unregister, minus chain fees. It is NOT a payment.',
+
+            step3_title:        'Activate your supernode',
+            step3_help:         "Once the registration is confirmed on chain, tap below to send the activation transaction. This server signs it with your producer key (the same one we manage during normal operation — no separate keystore to manage here).",
+            activate_btn:       'Activate BPoS supernode',
+            activate_btn_active:'Activating…',
+            activate_ok:        'Activation submitted — wait a block or two for chain confirmation.',
+        },
+
         audit: {
             heading:        'Audit log',
             filter_chain:   'Chain',

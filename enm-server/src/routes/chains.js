@@ -130,11 +130,43 @@ function build(extensionHandle) {
                 } catch (_) { /* RPC unreachable; height/peers stay null */ }
             }
 
+            // alpha.14 — synced detection mirrors /sync's logic. The
+            // legitimate "fully caught up" signal on ela mainchain is the
+            // best block's timestamp within ~5 min of now (wallets use the
+            // same heuristic). We do the cheap two-call RPC dance only when
+            // the chain is alive AND we have a height — both preconditions
+            // are needed for the result to even mean anything.
+            let synced = false;
+            let lastBlockTime = null;
+            if (status && status.alive && height != null) {
+                try {
+                    const rpc = adapter.rpcClient(chainCfg);
+                    const bestHashResp = await rpc.getbestblockhash();
+                    const hash = bestHashResp && bestHashResp.result
+                        ? bestHashResp.result : bestHashResp;
+                    if (typeof hash === 'string' && hash.length > 0) {
+                        const headerResp = await rpc.getblockheader(hash, 2);
+                        const header = headerResp && headerResp.result
+                            ? headerResp.result : headerResp;
+                        if (header && typeof header.time === 'number') {
+                            lastBlockTime = header.time;
+                            const ageSec = Math.floor(Date.now() / 1000) - header.time;
+                            // Elastos mainchain target is ~120s/block; 5-min slack
+                            // for peer-propagation jitter before declaring not synced.
+                            synced = (ageSec >= 0 && ageSec <= 5 * 60);
+                        }
+                    }
+                } catch (_) { /* synced stays false */ }
+            }
+            const syncSnapshot = { synced, alive: !!(status && status.alive), lastBlockTime };
+
             return res.json(successBody({
                 chainId: adapter.chainId,
                 displayName: adapter.displayName,
                 enabled: !!chainCfg.enabled,
-                state: deriveCoarseState(status, chainCfg),
+                state: deriveCoarseState(status, chainCfg, syncSnapshot),
+                synced,
+                lastBlockTime,
                 pid: status.pid,
                 attached: status.attached,
                 ports: chainCfg.ports,
@@ -1004,14 +1036,31 @@ function wrapRpc(kind, fn, extensionHandle) {
  * @param {object|null} chainCfg
  * @returns {string}
  */
-function deriveCoarseState(status, chainCfg) {
+/**
+ * Coarse-state derivation.
+ *
+ * alpha.14 — previously always returned 'syncing' for any alive chain,
+ * which meant the UI never flipped to "Healthy" even on a fully caught-
+ * up node. Operators saw 100% + "Syncing" forever. Fixed by accepting
+ * an optional `syncSnapshot` arg from /sync's enriched response — when
+ * `syncSnapshot.synced === true` (lastBlockTime within 5 min of now,
+ * the truthful signal wallets use) we return 'healthy'.
+ *
+ * @param {object} status        from NativeProcessService.statusSync
+ * @param {object|null} chainCfg from ConfigStore.load().chains[id]
+ * @param {object} [syncSnapshot]  optional sync info — { synced, alive, … }
+ */
+function deriveCoarseState(status, chainCfg, syncSnapshot) {
     if (!chainCfg) {
         return 'unconfigured';
     }
     if (!status.alive) {
         return chainCfg.enabled ? 'stopped' : 'disabled';
     }
-    return 'syncing'; // Phase 4 distinguishes healthy / stalled / etc.
+    if (syncSnapshot && syncSnapshot.synced === true) {
+        return 'healthy';
+    }
+    return 'syncing';
 }
 
 module.exports = {
