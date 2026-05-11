@@ -88,12 +88,14 @@
               + '<span aria-hidden="true">←</span> Back to home'
             + '</button>'
             : '';
+        // alpha.11: removed the explanatory subtitle. It was meta-
+        // commentary about how this view works ("real names not
+        // inferred values") which doesn't help anyone — operators
+        // either already know or never care, and avg-joe operators
+        // get confused by it. The tabs themselves are self-describing.
         header.innerHTML =
             backHtml
-            + '<h1 class="enm-tech-title">Elastos Node Manager</h1>'
-            + '<p class="enm-tech-sub">Real names — RPC, log level, healing rule IDs, '
-              + 'sync height, BPoS state. Every value below comes directly from the '
-              + 'backend; nothing inferred.</p>';
+            + '<h1 class="enm-tech-title">Elastos Node Manager</h1>';
         if (this.onBackHome) {
             header.querySelector('.enm-tech-back').addEventListener('click', function () {
                 self.onBackHome();

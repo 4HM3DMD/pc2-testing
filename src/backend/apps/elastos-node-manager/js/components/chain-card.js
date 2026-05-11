@@ -136,6 +136,13 @@
         var t = root.enmTOrFallback;
         var self = this;
 
+        // alpha.11 layout — Start button lives right under the chain
+        // name (was: buried below the primary metric). Stats are always
+        // visible in a calm strip below (was: hidden behind a Details
+        // toggle). Details now only carries the deep info — sync velocity
+        // / ETA / BPoS — so the resting view is scannable at a glance
+        // but power users still get the goods.
+
         // 1. Hero — the PowerCircle. One tap target, animated state colour.
         var hero = document.createElement('div');
         hero.className = 'enm-chain-hero';
@@ -162,14 +169,8 @@
 
         this.root.appendChild(header);
 
-        // 3. Primary metric line — what the operator most wants to know
-        // at a glance: where the chain is in the network's blockchain.
-        // Different content per state (catching up vs synced vs off).
-        this._primaryMetric = document.createElement('p');
-        this._primaryMetric.className = 'enm-chain-card-metric';
-        this.root.appendChild(this._primaryMetric);
-
-        // 4. Action row — compact, only the actions that apply.
+        // 3. Action row — promoted ABOVE the metric so Start is the next
+        // thing the eye lands on after reading the chain name + state.
         var actions = document.createElement('div');
         actions.className = 'enm-chain-actions';
 
@@ -184,9 +185,39 @@
         actions.appendChild(this._restartBtn);
         this.root.appendChild(actions);
 
-        // 5. Details disclosure — everything else lives here, hidden by
-        // default to keep the resting view calm. Tapping the toggle (or the
-        // PowerCircle when the chain is alive) opens it.
+        // 4. Primary metric line — block height / sync target / off-state
+        // prompt. Always one calm line of text.
+        this._primaryMetric = document.createElement('p');
+        this._primaryMetric.className = 'enm-chain-card-metric';
+        this.root.appendChild(this._primaryMetric);
+
+        // 5. Stats strip — always visible at-a-glance row of version /
+        // peers / uptime. Mirrors the system-status pattern from alpha.8:
+        // big numbers, tiny labels below, tabular numerics. Subtle
+        // top-border separates it from the action group above.
+        this._statsStrip = document.createElement('div');
+        this._statsStrip.className = 'enm-chain-stats-strip';
+        this._statFields = {};
+        ['version', 'peers', 'uptime'].forEach(function (k) {
+            var cell = document.createElement('div');
+            cell.className = 'enm-chain-stats-cell enm-chain-stats-' + k;
+            var value = document.createElement('span');
+            value.className = 'enm-chain-stats-value';
+            value.textContent = '—';
+            cell.appendChild(value);
+            var label = document.createElement('span');
+            label.className = 'enm-chain-stats-label';
+            label.textContent = t('chain_card.' + k);
+            cell.appendChild(label);
+            self._statsStrip.appendChild(cell);
+            self._statFields[k] = value;
+        });
+        this.root.appendChild(this._statsStrip);
+
+        // 6. Details disclosure — only carries the advanced stuff now
+        // (sync velocity / ETA, BPoS producer metrics). Stats moved out
+        // to the always-visible strip above, so resting Details is empty
+        // by default for non-syncing / non-BPoS chains.
         this._detailsToggle = document.createElement('button');
         this._detailsToggle.type = 'button';
         this._detailsToggle.className = 'enm-chain-details-toggle';
@@ -198,20 +229,6 @@
         this._detailsPanel = document.createElement('div');
         this._detailsPanel.className = 'enm-chain-details';
         this._detailsPanel.hidden = true;
-
-        // Stats inside details — version, peers, uptime (height moved to
-        // the primary metric above).
-        this._stats = document.createElement('dl');
-        this._stats.className = 'enm-chain-stats';
-        this._statFields = {};
-        ['version', 'peers', 'uptime'].forEach(function (k) {
-            var dt = document.createElement('dt'); dt.textContent = t('chain_card.' + k);
-            var dd = document.createElement('dd'); dd.textContent = '—';
-            self._stats.appendChild(dt);
-            self._stats.appendChild(dd);
-            self._statFields[k] = dd;
-        });
-        this._detailsPanel.appendChild(this._stats);
 
         // Sync progress panel — populated by _renderSyncPanel.
         this._syncPanel = document.createElement('section');
@@ -323,10 +340,14 @@
         this._stopBtn.disabled    = !alive || coarse === 'stopped';
         this._restartBtn.disabled = !alive;
 
-        // Hide the Details toggle entirely while unconfigured — there's
-        // nothing useful in there yet and the empty stats look broken.
-        this._detailsToggle.hidden = unconfigured;
-        if (unconfigured && !this._detailsPanel.hidden) {
+        // alpha.11: stats moved out of Details to the always-visible
+        // strip below the actions, so Details now only carries sync
+        // velocity/ETA + BPoS producer info. Hide the toggle when there
+        // can't be any of that — unconfigured / stopped / pure-error
+        // chains have nothing to reveal under the disclosure.
+        var noDetailsContent = unconfigured || coarse === 'stopped';
+        this._detailsToggle.hidden = noDetailsContent;
+        if (noDetailsContent && !this._detailsPanel.hidden) {
             this._toggleDetails();
         }
 

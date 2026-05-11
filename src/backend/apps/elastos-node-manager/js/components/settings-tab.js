@@ -598,7 +598,13 @@
 
     /** @private */
     SettingsTab.prototype._refreshDangerEnabled = function () {
-        var typed = (this._danger.confirmInput.value || '').trim();
+        // alpha.11: compare case-insensitively. The input has
+        // text-transform: uppercase in CSS, which makes "wipe" LOOK like
+        // "WIPE" on screen but the underlying value stays lowercase —
+        // so a strict `!== 'WIPE'` left the button permanently disabled
+        // for anyone who typed in lowercase. The operator intent is
+        // clearly "I typed the magic word" regardless of case.
+        var typed = (this._danger.confirmInput.value || '').trim().toUpperCase();
         this._danger.wipeBtn.disabled = (typed !== 'WIPE');
     };
 
