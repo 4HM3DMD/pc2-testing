@@ -334,7 +334,7 @@
         // suffix (when syncing) lands from /sync via _refreshSync.
         var height = (state && state.height != null) ? state.height : null;
         this._primaryMetric.textContent = formatPrimaryValue(t, coarse, height, null);
-        this._primaryLabel.textContent = formatPrimaryLabel(t, coarse);
+        this._primaryLabel.textContent = formatPrimaryLabel(t, coarse, height, null);
 
         // Stats strip.
         this._statFields.peers.textContent   = state && state.peers         != null ? String(state.peers) : '—';
@@ -364,10 +364,21 @@
         this.onStateChange(coarse, state);
     };
 
+    // 0.2.0-alpha.4 — treat-as-synced threshold. When a new block lands
+    // upstream the network heads forward by 1 before we've fetched it,
+    // briefly putting us "1 block behind" — the formatter used to flip
+    // the primary metric to "X / X+1" for one polling tick and then
+    // back to "X+1" once we caught up. Reads as flicker. Anything ≤
+    // this many blocks behind is treated as caught-up for the display.
+    var TREAT_AS_SYNCED_THRESHOLD = 2;
+
     /**
      * Build the big block-height number under the state subtitle. When
      * a /sync snapshot is in flight, _refreshSync overrides this with
-     * "local / network" (e.g. "943,210 / 1,123,455").
+     * "local / network" (e.g. "943,210 / 1,123,455"). The local-only
+     * variant wins when blocksBehind ≤ TREAT_AS_SYNCED_THRESHOLD even
+     * if the backend's synced flag is false, so the steady-state
+     * dashboard doesn't flicker on every block.
      */
     function formatPrimaryValue(t, coarse, height, syncSnapshot) {
         if (coarse === 'unconfigured') {
@@ -377,15 +388,13 @@
             return t('chain_card.primary_metric_off');
         }
         if (syncSnapshot) {
-            if (syncSnapshot.synced && syncSnapshot.localHeight != null) {
+            var basicallySynced = syncSnapshot.synced
+                || (typeof syncSnapshot.blocksBehind === 'number'
+                    && syncSnapshot.blocksBehind <= TREAT_AS_SYNCED_THRESHOLD);
+            if (basicallySynced && syncSnapshot.localHeight != null) {
                 return syncSnapshot.localHeight.toLocaleString();
             }
             if (syncSnapshot.networkHeight != null && syncSnapshot.localHeight != null) {
-                // "943,210 / 1,123,455" — keep both numbers in the same
-                // span so the typography clamps as one unit. The CSS
-                // splits the trailing "/ N" with a smaller weight via
-                // a span-child so we render it ourselves rather than
-                // bundling in a t() template that can't carry markup.
                 return syncSnapshot.localHeight.toLocaleString()
                     + ' / ' + syncSnapshot.networkHeight.toLocaleString();
             }
@@ -399,10 +408,19 @@
 
     /**
      * Lowercase caption under the big number. Apple Hero pattern.
+     *
+     * 0.2.0-alpha.4 — when the chain is alive but we don't have a
+     * block height yet (cold start, ~30-60s before peer handshake
+     * completes), the value is an em-dash and the caption swaps to
+     * "connecting to peers" so the operator knows the empty state is
+     * intentional + ~about a minute.
      */
-    function formatPrimaryLabel(t, coarse) {
+    function formatPrimaryLabel(t, coarse, height, syncSnapshot) {
         if (coarse === 'unconfigured') return t('chain_card.primary_label_unconfigured');
         if (coarse === 'stopped')      return t('chain_card.primary_label_off');
+        var haveHeight = (height != null)
+            || (syncSnapshot && syncSnapshot.localHeight != null);
+        if (!haveHeight) return t('chain_card.primary_label_connecting');
         return t('chain_card.primary_label_height');
     }
 
@@ -506,12 +524,14 @@
             this._powerCircle.setState('healthy');
         }
 
-        // Primary metric. When we have a real /sync snapshot, the
-        // formatter shows "local / network" while syncing.
+        // Primary metric + label. When we have a real /sync snapshot, the
+        // formatter shows "local / network" while syncing; the label
+        // swaps to "connecting to peers" when localHeight is still null.
         var height = (this._lastBackendState && this._lastBackendState.height != null)
             ? this._lastBackendState.height : null;
-        this._primaryMetric.textContent = formatPrimaryValue(t,
-            this._lastCoarseState || 'unconfigured', height, data);
+        var coarse = this._lastCoarseState || 'unconfigured';
+        this._primaryMetric.textContent = formatPrimaryValue(t, coarse, height, data);
+        this._primaryLabel.textContent  = formatPrimaryLabel(t, coarse, height, data);
     };
 
     /**

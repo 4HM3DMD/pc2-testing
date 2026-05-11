@@ -273,6 +273,11 @@
             primary_label_height:        'block height',
             primary_label_off:           'tap power to start',
             primary_label_unconfigured:  'tap to configure',
+            // 0.2.0-alpha.4 — caption swap during initial peer
+            // handshake. Reassures the operator that the empty
+            // "block height: —" state lasts about a minute and
+            // resolves itself.
+            primary_label_connecting:    'connecting to peers',
             sparkline_aria:              'Block height, last hour',
             sse_reconnecting:            'Reconnecting…',
             tap_circle_aria:             'Status of {chainName}',

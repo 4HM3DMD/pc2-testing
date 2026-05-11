@@ -380,26 +380,19 @@ function build(extensionHandle) {
                 ));
             }
 
-            // Same conflict gate as start. We exclude ROGUE_PROCESS hits
-            // matching our own managed PIDs here — restart's first step is
-            // to stop our own running instance, which would otherwise show
-            // up as a "rogue" until the SIGTERM lands.
-            const force = req.query && req.query.force === '1';
-            const conflicts = await HostConflictScanner.scan({ logger: extensionHandle.log });
-            const blockers = HostConflictScanner.blockers(conflicts);
-            if (blockers.length > 0 && !force) {
-                return res.status(409).json({
-                    success: false,
-                    error: 'Host has unresolved conflicts; refusing to restart. Resolve them or pass ?force=1.',
-                    conflicts,
-                });
-            }
-
+            // 0.2.0-alpha.4 — host-conflict scan removed from /restart.
+            // The earlier "same gate as /start" copy-paste was wrong: the
+            // chain is RUNNING here, holding ports 20333-20339, so the
+            // scan trips PORT_BOUND CRITICAL on the chain's own ports
+            // and refuses every restart. The promised "exclude our own
+            // managed PIDs" filter in the prior comment was never
+            // implemented. /restart's adapter.restart() stops the old
+            // process and starts a new one — if a real external conflict
+            // grabs a port between stop and start (rare race), the chain
+            // surfaces it as a bind error in the chain log, which the
+            // operator can see via the Logs tab.
             const result = await adapter.restart(chainCfg);
-            return res.json(successBody({
-                ...result,
-                warnings: conflicts.filter((c) => c.severity !== 'CRITICAL'),
-            }));
+            return res.json(successBody(result));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} POST /chains/${req.params.chainId}/restart: ${err.message}`);
             return res.status(500).json(errorBody(err.message));
