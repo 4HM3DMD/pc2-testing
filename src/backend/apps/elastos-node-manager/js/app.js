@@ -55,6 +55,11 @@
             api:           new root.EnmApiClient(),
             sse:           root.EnmSse ? new root.EnmSse() : null,
             notifications: new root.EnmNotifications(),
+            // 0.2.0-alpha.1 — Apple Hero page-wash controller. Sets
+            // <html data-fleet-health> based on aggregate chain state.
+            // Mount happens in _showDashboard (only the dashboard wears
+            // the wash; setup wizard / welcome stay neutral).
+            fleetHealth:   root.EnmFleetHealthGradient ? new root.EnmFleetHealthGradient() : null,
         };
 
         // Step 1: window-manager IPC contract MUST happen before anything else.
@@ -280,6 +285,15 @@
     };
 
     ENMApp.prototype._showDashboard = function () {
+        // 0.2.0-alpha.1 — Apple Hero phase 2: paint the page wash before
+        // the technical view mounts. Default bucket is 'healthy' so the
+        // green wash is in place before chain-cards report in; the
+        // gradient controller corrects to the truthful bucket on the
+        // first 'enm:chain-state' event (chain-card emits these in
+        // phase 6 of the rewrite).
+        if (this.services.fleetHealth) {
+            this.services.fleetHealth.mount('healthy');
+        }
         // v0.5 reset — the home view IS the v0.3 technical dashboard.
         //
         // The friendly home (hero-card + stat-strip + milestone-toast)
@@ -347,6 +361,13 @@
             this._technicalView = null;
         }
         if (this._notifSub) { this._notifSub(); this._notifSub = null; }
+        // 0.2.0-alpha.1 — page-wash controller tears down with the home
+        // view. The CSS attribute on <html> is intentionally left in
+        // place so a re-mount doesn't flash a neutral wash before the
+        // first state report.
+        if (this.services && this.services.fleetHealth) {
+            this.services.fleetHealth.destroy();
+        }
         // The settings drawer is lazy-mounted on first gear click. When we
         // transition out of the home view (e.g. to the setup wizard via
         // "Reinstall my node"), tear it down so its document-level ESC

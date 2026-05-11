@@ -153,6 +153,12 @@
         if (!this._mounted[tabId]) {
             this._mountPane(tabId);
         }
+        // 0.2.0 — body.dataset.activeTab tracks which sub-tab is showing.
+        // The page-wash gradient (body::before in styles.css) reads this
+        // attribute to hide itself on dense panes (logs / audit / forms)
+        // where a coloured wash would hurt readability. Only the Status
+        // tab — the dashboard hero — wears the wash.
+        document.body.dataset.activeTab = tabId;
     };
 
     /** @private */

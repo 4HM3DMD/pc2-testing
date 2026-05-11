@@ -242,16 +242,112 @@ html, body {
     color: var(--text-primary);
 }
 
+/* 0.2.0-alpha.1 — body is the wash anchor.
+   position: relative so body::before can fix inside the iframe viewport
+   without escaping into the PC2 desktop. */
+body { position: relative; }
+
+/* ============================================================
+   0.2.0 — page-wash gradient (Apple Hero, phase 2)
+   ============================================================
+   A translucent two-blob radial gradient that sits on top of the
+   page background and behind every card. The blob colours come from
+   --wash-a and --wash-b, which the FleetHealthGradient controller
+   flips by setting [data-fleet-health] on <html>. The 800ms
+   background transition interpolates the gradient stops automatically
+   when the tokens change — no JS keyframes needed.
+
+   The wash is SCOPED to the Status tab. On Logs / Audit / Settings /
+   Identity / Tools / EVM the body gets data-active-tab=<id> from
+   technical-view, and the wash fades out — those panes need clean
+   surfaces for tables / forms / log streams.
+
+   Cascade: body bg (solid) → body::before wash (translucent) →
+   .enm-app (transparent) → cards (solid surface).
+*/
+body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background:
+        radial-gradient(80vw 60vh at 20% 0%,    var(--wash-a), transparent 70%),
+        radial-gradient(70vw 50vh at 100% 100%, var(--wash-b), transparent 70%);
+    pointer-events: none;
+    z-index: 0;
+    opacity: 1;
+    transition: background var(--wash-blend-ms) ease,
+                opacity   var(--wash-blend-ms) ease;
+}
+
+/* Hide the wash on every tab that isn't Status. Dense forms / logs /
+   tables / audit grids look broken under a coloured wash. The
+   Status tab (the dashboard hero) is where the wash earns its keep. */
+body[data-active-tab="logs"]::before,
+body[data-active-tab="audit"]::before,
+body[data-active-tab="settings"]::before,
+body[data-active-tab="evm"]::before,
+body[data-active-tab="tools"]::before,
+body[data-active-tab="identity"]::before {
+    opacity: 0;
+}
+
+/* Fleet-health states — driven by FleetHealthGradient (phase 2 service)
+   setting documentElement.dataset.fleetHealth. The token values flip;
+   the gradient transition crossfades. */
+:root[data-fleet-health="healthy"] {
+    --wash-a: rgba(52, 199, 89, 0.10);
+    --wash-b: rgba(52, 199, 89, 0.00);
+}
+:root[data-fleet-health="syncing"] {
+    --wash-a: rgba(52, 199, 89, 0.05);
+    --wash-b: rgba(0, 122, 255, 0.06);
+}
+:root[data-fleet-health="warning"] {
+    --wash-a: rgba(255, 159, 10, 0.07);
+    --wash-b: rgba(255, 159, 10, 0.00);
+}
+:root[data-fleet-health="error"] {
+    --wash-a: rgba(255, 69, 58, 0.08);
+    --wash-b: rgba(255, 69, 58, 0.00);
+}
+:root[data-fleet-health="idle"] {
+    --wash-a: rgba(60, 60, 67, 0.04);
+    --wash-b: rgba(60, 60, 67, 0.00);
+}
+
+/* Dark mode: bump every alpha so the wash lifts off near-black. */
+[data-theme="dark"][data-fleet-health="healthy"] {
+    --wash-a: rgba(52, 199, 89, 0.13);
+}
+[data-theme="dark"][data-fleet-health="syncing"] {
+    --wash-a: rgba(52, 199, 89, 0.07);
+    --wash-b: rgba(10, 132, 255, 0.09);
+}
+[data-theme="dark"][data-fleet-health="warning"] {
+    --wash-a: rgba(255, 159, 10, 0.10);
+}
+[data-theme="dark"][data-fleet-health="error"] {
+    --wash-a: rgba(255, 69, 58, 0.11);
+}
+[data-theme="dark"][data-fleet-health="idle"] {
+    --wash-a: rgba(235, 235, 245, 0.04);
+}
+
 /* PC2 wraps every app iframe in its own window-head — no in-app titlebar
    here. The header-bar (tabs + theme toggle) is the only chrome we own.
    When the header-bar is hidden (during boot / wizard), the main pane
-   takes the full height. */
+   takes the full height.
+
+   0.2.0 — background drops to transparent so body::before's wash
+   shows through. z-index keeps the app chrome above the wash layer. */
 .enm-app {
     width: 100%;
     height: 100%;
     display: grid;
     grid-template-rows: var(--header-bar-height) 1fr;
-    background: var(--bg-page);
+    background: transparent;
+    position: relative;
+    z-index: 1;
 }
 
 .enm-app:has(.enm-header-bar[hidden]) {
