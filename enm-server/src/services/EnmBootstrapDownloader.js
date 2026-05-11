@@ -196,7 +196,14 @@ class EnmBootstrapDownloader {
         const snapshotPath = SNAPSHOT_PATHS[chainId];
 
         // ---- 1. RESOLVING — HEAD the URL, read size, preflight disk.
-        const head = await this._head(SNAPSHOT_HOST, snapshotPath);
+        // The HEAD is wrapped so cancel() during RESOLVING aborts it,
+        // not just sets the cancelled flag and lets the operator wait
+        // for the HTTPS timeout. _head registers an aborter via the
+        // same s._abortDownload slot that _download will reuse later.
+        const head = await this._head(SNAPSHOT_HOST, snapshotPath, (abortFn) => {
+            s._abortDownload = abortFn;
+        });
+        s._abortDownload = null;
         if (s.cancelled) return;
         s.bytesTotal = head.contentLength;
         this._emit(chainId, PHASES.RESOLVING, '', {
@@ -324,12 +331,21 @@ class EnmBootstrapDownloader {
 
     /**
      * HEAD a URL with redirect follow. Returns { contentLength, lastModified }.
+     * abortRegister(fn) is called with an abort callback so the caller can
+     * tear the request down during cancel — without this, a slow DNS or TLS
+     * handshake leaves cancel as a no-op until the network layer times out.
      */
-    _head(host, urlPath) {
+    _head(host, urlPath, abortRegister) {
         return new Promise((resolve, reject) => {
+            let currentReq = null;
+            if (abortRegister) {
+                abortRegister(() => {
+                    if (currentReq) currentReq.destroy(new Error('Aborted'));
+                });
+            }
             (function attempt(currentHost, currentPath, hops) {
                 if (hops > 3) return reject(new Error('Too many redirects'));
-                const req = https.request({
+                currentReq = https.request({
                     method: 'HEAD',
                     host: currentHost,
                     path: currentPath,
@@ -360,9 +376,9 @@ class EnmBootstrapDownloader {
                     });
                     res.resume();
                 });
-                req.on('error', reject);
-                req.on('timeout', () => req.destroy(new Error(`Timeout HEADing ${currentHost}${currentPath}`)));
-                req.end();
+                currentReq.on('error', reject);
+                currentReq.on('timeout', () => currentReq.destroy(new Error(`Timeout HEADing ${currentHost}${currentPath}`)));
+                currentReq.end();
             })(host, urlPath, 0);
         });
     }

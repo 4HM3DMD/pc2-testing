@@ -2,19 +2,32 @@
  * Copyright (C) 2026-present Elacity
  * SPDX-License-Identifier: AGPL-3.0
  *
- * services/sse.js — EventSource wrapper for the /api/events endpoint.
+ * services/sse.js — EventSource wrapper for the /api/enm/events endpoint.
  *
  * Browser EventSource auto-reconnects with the Last-Event-ID header (matches
  * our SseHub's monotonic id). We add:
  *   - Topic-aware subscription API (subscribe('chains:mainchain:logs', cb))
  *   - Connection-state events (open / closed / reconnecting) for UI feedback
  *   - Defensive recreation if EventSource never fires onopen within 10s
+ *
+ * alpha.12 — the ENDPOINT was hard-coded to a Puter-extension legacy path
+ * (`/extensions/elastos-node-manager/api/events`) that doesn't exist now
+ * that ENM is a standalone service-type app on its own port. Any consumer
+ * relying on SSE (Card B2's bootstrap progress, log viewer's live tail
+ * reconnect signal) silently failed because the URL resolved to an HTML
+ * 404 instead of text/event-stream. We now derive the same backend base
+ * as api.js (root.ENM_API_BASE → http://<host>:4180/api/enm) and append
+ * /events, so SSE and REST point at the same place.
  */
 
 (function (root) {
     'use strict';
 
-    var ENDPOINT = '/extensions/elastos-node-manager/api/events';
+    // root.ENM_API_BASE is set by services/api.js at load time. Falling
+    // back to the legacy path keeps the older proxied deploy working
+    // until everyone is on the standalone service-app layout.
+    var ENDPOINT = (root.ENM_API_BASE ? root.ENM_API_BASE + '/events'
+                                      : '/extensions/elastos-node-manager/api/events');
     var OPEN_TIMEOUT_MS = 10_000;
 
     function EnmSse() {

@@ -73,6 +73,7 @@
     SetupConversation.prototype.destroy = function () {
         if (this._unsubscribeInstall) { this._unsubscribeInstall(); }
         if (this._unsubscribeBootstrap) { this._unsubscribeBootstrap(); }
+        if (this._bootstrapPollTimer) { clearInterval(this._bootstrapPollTimer); this._bootstrapPollTimer = null; }
         if (this.root.parentNode) { this.root.parentNode.removeChild(this.root); }
     };
 
@@ -403,8 +404,12 @@
         });
         els.actions.appendChild(cancelBtn);
 
+        // alpha.12 — clear any previous poll timer when (re)starting.
+        if (this._bootstrapPollTimer) { clearInterval(this._bootstrapPollTimer); this._bootstrapPollTimer = null; }
+        var done = false;
+
         function applyStatus(s) {
-            if (!s) { return; }
+            if (!s || done) { return; }
             var pct = (s.bytesTotal && s.bytesDownloaded)
                 ? Math.min(100, Math.floor((s.bytesDownloaded / s.bytesTotal) * 100))
                 : (s.phase === 'done' ? 100 : (s.phase === 'extracting' ? 95 : 5));
@@ -416,9 +421,13 @@
                 cancelBtn.style.display = 'none';
             }
             if (s.phase === 'done') {
+                done = true;
+                if (self._bootstrapPollTimer) { clearInterval(self._bootstrapPollTimer); self._bootstrapPollTimer = null; }
                 self._b2OnBootstrapDone(els);
             }
             if (s.phase === 'failed') {
+                done = true;
+                if (self._bootstrapPollTimer) { clearInterval(self._bootstrapPollTimer); self._bootstrapPollTimer = null; }
                 els.title.textContent = t('friendly.setup.card_b2.title_failed');
                 els.sub.textContent   = s.error || t('friendly.setup.card_b2.sub_failed');
                 els.actions.innerHTML = '';
@@ -433,7 +442,11 @@
             }
         }
 
-        // SSE subscription for live progress
+        // alpha.12 — SSE delivers real-time progress when it's healthy, but
+        // a 2-second poll on GET /chains/.../bootstrap is the belt-and-
+        // suspenders that keeps the UI moving even if the EventSource is
+        // misconfigured or proxied through something that breaks SSE. The
+        // 10 GB download takes ~15 min, so a 2 s poll is negligible.
         if (this.sse && typeof this.sse.subscribe === 'function') {
             if (this._unsubscribeBootstrap) { this._unsubscribeBootstrap(); }
             this._unsubscribeBootstrap = this.sse.subscribe(
@@ -441,6 +454,12 @@
                 function (payload) { applyStatus(payload); },
             );
         }
+        this._bootstrapPollTimer = setInterval(function () {
+            if (done) { return; }
+            self.api.get('/chains/mainchain/bootstrap', { skipCache: true }).then(function (data) {
+                applyStatus(data && data.status);
+            }).catch(function () { /* leave the existing display, the poll retries */ });
+        }, 2000);
 
         // Kick off the actual download (or just re-attach to a running one).
         var startPromise = alreadyStarted
