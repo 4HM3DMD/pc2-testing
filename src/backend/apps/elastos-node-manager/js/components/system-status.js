@@ -122,31 +122,37 @@
 
     /* --- Value formatters ------------------------------------------------ */
 
+    // alpha.15 — values trimmed so they fit the cell width without
+    // ellipsis-truncating ("346 GB fr..." / "ubuntu 2..."). Context that
+    // used to live in the value text ("free" suffix on disk, the
+    // "/ NN GB" on RAM) moves to the cell label below.
+
     function formatCpu(cpu) {
         if (!cpu) return '—';
         var load = (cpu.loadAvg1m != null) ? cpu.loadAvg1m.toFixed(2) : '—';
-        // Apple-grade: keep the value tight. "load" prefix is implied by
-        // the CPU label; "(8 cores)" stays so the operator can read load
-        // relative to capacity.
+        // "1.83 / 8" — load over core count.
         return load + ' / ' + cpu.cores;
     }
     function formatMem(mem) {
         if (!mem) return '—';
-        // Show used% prominently — the most actionable signal. Total GB
-        // sits in the secondary number after the slash.
-        return mem.usedPct.toFixed(0) + '% / ' + mem.totalGb.toFixed(0) + ' GB';
+        // Just the percent. Total GB is now in the cell label below.
+        return mem.usedPct.toFixed(0) + '%';
     }
     function formatDisk(disk) {
         if (!disk) return '—';
-        // Free GB is what the operator cares about. The warning glyph used
-        // to live in the value text — health attribute drives the leading
-        // dot now, so the value stays a clean number.
-        return disk.freeGb.toFixed(0) + ' GB free';
+        // Just the GB. "free" qualifier lives on the label.
+        return disk.freeGb.toFixed(0) + ' GB';
     }
     function formatOs(os) {
         if (!os) return '—';
-        return (os.distroId || os.platform || 'unknown')
-            + (os.version ? ' ' + os.version : '');
+        // Strip any trailing words (" LTS", " (codename)") so 22px text
+        // fits the cell. Distro + numeric version is enough for triage.
+        var name = os.distroId || os.platform || 'unknown';
+        if (os.version) {
+            var v = String(os.version).split(' ')[0];
+            return name + ' ' + v;
+        }
+        return name;
     }
 
     /* --- Health computation --------------------------------------------- */

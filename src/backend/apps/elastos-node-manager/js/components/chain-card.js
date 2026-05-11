@@ -309,8 +309,19 @@
         this._powerCircle.setState(visualState);
 
         // Subtitle line under the chain name — calm, single-word state.
-        this._stateSubtitle.textContent = t('chain_state.' + coarse);
-        this._stateSubtitle.dataset.state = coarse;
+        // alpha.15 — when the producer is registered on chain, the
+        // truthful badge is the producer's state (Active / Inactive /
+        // Illegal / Pending / Canceled / Returned) — that's what the
+        // chain actually exposes for a BPoS supernode. Fall back to
+        // the coarse chain state when not registered or not BPoS.
+        var producerState = state && state.producerState;
+        if (producerState && (coarse === 'healthy' || coarse === 'syncing' || coarse === 'stalled')) {
+            this._stateSubtitle.textContent = producerState;
+            this._stateSubtitle.dataset.state = coarse + '-producer-' + String(producerState).toLowerCase();
+        } else {
+            this._stateSubtitle.textContent = t('chain_state.' + coarse);
+            this._stateSubtitle.dataset.state = coarse;
+        }
 
         // Primary metric line. Height is the most useful at-a-glance
         // metric for an alive chain; the off-state gets a contextual prompt.

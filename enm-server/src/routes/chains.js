@@ -130,34 +130,98 @@ function build(extensionHandle) {
                 } catch (_) { /* RPC unreachable; height/peers stay null */ }
             }
 
-            // alpha.14 — synced detection mirrors /sync's logic. The
-            // legitimate "fully caught up" signal on ela mainchain is the
-            // best block's timestamp within ~5 min of now (wallets use the
-            // same heuristic). We do the cheap two-call RPC dance only when
-            // the chain is alive AND we have a height — both preconditions
-            // are needed for the result to even mean anything.
+            // alpha.14/.15 — synced detection. The truthful signal on
+            // ela mainchain is EITHER:
+            //   (a) the best block's timestamp is within ~5 min of now
+            //       (wallets use this heuristic), OR
+            //   (b) our local height equals or exceeds the network's best
+            //       height per peers' reported tips (transient "ahead of
+            //       peers" by 1 also counts as synced — we just mined or
+            //       received a block they haven't propagated yet).
+            //
+            // alpha.14 only checked (a), which left chains stuck on
+            // "syncing" during slow-block periods even when fully caught
+            // up. alpha.15 adds (b) by also calling getnodestate for
+            // peers' max height.
             let synced = false;
             let lastBlockTime = null;
+            let networkHeight = null;
+            let producerState = null;
             if (status && status.alive && height != null) {
                 try {
                     const rpc = adapter.rpcClient(chainCfg);
-                    const bestHashResp = await rpc.getbestblockhash();
-                    const hash = bestHashResp && bestHashResp.result
-                        ? bestHashResp.result : bestHashResp;
-                    if (typeof hash === 'string' && hash.length > 0) {
-                        const headerResp = await rpc.getblockheader(hash, 2);
-                        const header = headerResp && headerResp.result
-                            ? headerResp.result : headerResp;
-                        if (header && typeof header.time === 'number') {
-                            lastBlockTime = header.time;
-                            const ageSec = Math.floor(Date.now() / 1000) - header.time;
-                            // Elastos mainchain target is ~120s/block; 5-min slack
-                            // for peer-propagation jitter before declaring not synced.
-                            synced = (ageSec >= 0 && ageSec <= 5 * 60);
+
+                    // Parallel: best-block header (for ageSec) + node-state (for peers' max height).
+                    const [bestHashRes, nodeStateRes] = await Promise.allSettled([
+                        rpc.getbestblockhash(),
+                        rpc.getnodestate(),
+                    ]);
+
+                    // (a) Recency check via block timestamp.
+                    let recentEnough = false;
+                    if (bestHashRes.status === 'fulfilled') {
+                        const hash = bestHashRes.value && bestHashRes.value.result
+                            ? bestHashRes.value.result : bestHashRes.value;
+                        if (typeof hash === 'string' && hash.length > 0) {
+                            try {
+                                const headerResp = await rpc.getblockheader(hash, 2);
+                                const header = headerResp && headerResp.result
+                                    ? headerResp.result : headerResp;
+                                if (header && typeof header.time === 'number') {
+                                    lastBlockTime = header.time;
+                                    const ageSec = Math.floor(Date.now() / 1000) - header.time;
+                                    recentEnough = (ageSec >= 0 && ageSec <= 5 * 60);
+                                }
+                            } catch (_) { /* header lookup failed; recencyEnough stays false */ }
                         }
                     }
+
+                    // (b) Network-tip check via peers' max height.
+                    let atTipOrAhead = false;
+                    if (nodeStateRes.status === 'fulfilled') {
+                        const v = nodeStateRes.value;
+                        const ns = v && v.result ? v.result : v;
+                        const neighbors = ns && Array.isArray(ns.Neighbors) ? ns.Neighbors
+                            : ns && Array.isArray(ns.neighbors) ? ns.neighbors : null;
+                        if (Array.isArray(neighbors)) {
+                            let maxH = null;
+                            for (const n of neighbors) {
+                                if (!n || typeof n !== 'object') continue;
+                                const h = typeof n.lastblock === 'number' ? n.lastblock
+                                        : typeof n.startingheight === 'number' ? n.startingheight
+                                        : typeof n.Height === 'number' ? n.Height
+                                        : typeof n.height === 'number' ? n.height
+                                        : null;
+                                if (h != null && (maxH == null || h > maxH)) maxH = h;
+                            }
+                            if (maxH != null) {
+                                networkHeight = maxH;
+                                // height >= peers' max means we're caught up. Equal-or-ahead
+                                // by 0 or 1 blocks is the steady state at network tip.
+                                atTipOrAhead = (height >= maxH);
+                            }
+                        }
+                    }
+
+                    synced = recentEnough || atTipOrAhead;
                 } catch (_) { /* synced stays false */ }
             }
+
+            // Producer state — surface it inline so the chain-card subtitle
+            // can show "Active" / "Inactive" / "Illegal" (the operator-
+            // facing label the chain actually exposes) instead of the
+            // generic "Healthy" when a producer is registered. One extra
+            // RPC call, only when pubkey is configured.
+            const ourPubkey = chainCfg.dpos && chainCfg.dpos.nodePublicKey;
+            if (status && status.alive && ourPubkey) {
+                try {
+                    const rpc = adapter.rpcClient(chainCfg);
+                    const pi = await rpc.getproducerinfo(ourPubkey).catch(() => null);
+                    if (pi && pi.state) producerState = pi.state;
+                    else if (pi && pi.result && pi.result.state) producerState = pi.result.state;
+                } catch (_) { /* producer state stays null */ }
+            }
+
             const syncSnapshot = { synced, alive: !!(status && status.alive), lastBlockTime };
 
             return res.json(successBody({
@@ -167,6 +231,8 @@ function build(extensionHandle) {
                 state: deriveCoarseState(status, chainCfg, syncSnapshot),
                 synced,
                 lastBlockTime,
+                networkHeight,
+                producerState,
                 pid: status.pid,
                 attached: status.attached,
                 ports: chainCfg.ports,
@@ -511,10 +577,16 @@ function build(extensionHandle) {
                                         if (header && typeof header.time === 'number') {
                                             snapshot.lastBlockTime = header.time;
                                             const ageSec = Math.floor(Date.now() / 1000) - header.time;
-                                            // Elastos mainchain target is ~120s/block. We allow
-                                            // 5 minutes of slack for peer-propagation jitter
-                                            // before declaring "not synced".
-                                            snapshot.synced = (ageSec >= 0 && ageSec <= 5 * 60);
+                                            // alpha.15 — synced = (recent block) OR (at/ahead of network).
+                                            // Either condition alone is sufficient. Without the second
+                                            // arm, a slow-block period (network calm) leaves a
+                                            // fully-caught-up node stuck on "syncing" even when
+                                            // localHeight >= networkHeight.
+                                            const recentEnough = (ageSec >= 0 && ageSec <= 5 * 60);
+                                            const atTipOrAhead = (snapshot.networkHeight != null
+                                                && snapshot.localHeight != null
+                                                && snapshot.localHeight >= snapshot.networkHeight);
+                                            snapshot.synced = recentEnough || atTipOrAhead;
                                         }
                                     } catch (_) { /* getblockheader may fail on early boot */ }
                                 }

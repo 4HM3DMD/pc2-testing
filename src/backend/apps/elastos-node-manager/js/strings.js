@@ -282,11 +282,14 @@
         },
 
         system_status: {
-            cpu:        'CPU',
-            mem:        'RAM',
-            disk:       'Disk',
-            os:         'OS',
-            uptime:     'Uptime',
+            // alpha.15 — labels carry the context that moved out of the
+            // value formatters (the "free" / "of N GB" suffixes) so the
+            // value text stays narrow and the cell doesn't truncate.
+            cpu:        'cpu load',
+            mem:        'ram used',
+            disk:       'disk free',
+            os:         'os',
+            uptime:     'uptime',
         },
 
         log_viewer: {
