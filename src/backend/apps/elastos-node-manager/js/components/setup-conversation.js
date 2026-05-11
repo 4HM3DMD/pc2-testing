@@ -32,7 +32,7 @@
 (function (root) {
     'use strict';
 
-    var TOTAL_STEPS = 4;
+    var TOTAL_STEPS = 5;
 
     function SetupConversation(opts) {
         if (!opts || !opts.api) {
@@ -72,6 +72,7 @@
 
     SetupConversation.prototype.destroy = function () {
         if (this._unsubscribeInstall) { this._unsubscribeInstall(); }
+        if (this._unsubscribeBootstrap) { this._unsubscribeBootstrap(); }
         if (this.root.parentNode) { this.root.parentNode.removeChild(this.root); }
     };
 
@@ -107,6 +108,14 @@
         var step = (s && s.currentStep) || 'welcome';
         if (step === 'install' || step === 'preflight' || step === 'welcome') {
             this._goto('a');
+        } else if (step === 'bootstrap') {
+            // Operator finished the binary install but hasn't picked
+            // bootstrap-or-genesis yet (or is mid-bootstrap). Resume on
+            // Card B2 — the choice screen reasserts on any reload, and
+            // the running-bootstrap branch reconciles via the snapshot
+            // status endpoint once the card mounts.
+            this._goal = 'bpos';
+            this._goto('b2');
         } else if (step === 'keystore') {
             // Already past install — assume 'bpos' (the only goal users can
             // reach today; pre-2026-05-07 'help' installs are read as bpos
@@ -143,6 +152,7 @@
 
         if (card === 'a') { this._renderCardA(seq); }
         else if (card === 'b') { this._renderCardB(seq); }
+        else if (card === 'b2') { this._renderCardB2(seq); }
         else if (card === 'c') { this._renderCardC(seq); }
         else if (card === 'd') { this._renderCardD(seq); }
     };
@@ -150,7 +160,7 @@
     /** @private */
     SetupConversation.prototype._updateHeader = function (card) {
         var t = root.enmT;
-        var stepNumber = ({ a: 1, b: 2, c: 3, d: 4 })[card] || 1;
+        var stepNumber = ({ a: 1, b: 2, b2: 3, c: 4, d: 5 })[card] || 1;
         // Card C (keystore) is required for BPoS — never skipped now that
         // numbering shifts (A=1, B=2, D=3).
         var total = TOTAL_STEPS;
@@ -273,9 +283,197 @@
         var self = this;
         els.actions.appendChild(
             makeBtn(t('friendly.setup.card_b.cta_continue'), 'primary hero', function () {
-                // BPoS always needs a keystore → card C. (The old 'help'
-                // path that skipped C was removed 2026-05-07.)
-                self._goto('c');
+                // alpha.10: after binary install, the operator picks
+                // bootstrap-vs-genesis on Card B2 before reaching the
+                // keystore step.
+                self._goto('b2');
+            })
+        );
+    };
+
+    /** @private — Card B2: bootstrap vs genesis */
+    SetupConversation.prototype._renderCardB2 = function (seq) {
+        var t = root.enmT;
+        var I = root.EnmIllust;
+        this._body.innerHTML =
+            '<div class="enm-install-illust">' + (I ? I.gear({ size: 96 }) : '') + '</div>'
+            + '<h2 class="enm-conv-title" id="enm-conv-b2-title">' + escapeHtml(t('friendly.setup.card_b2.title_idle')) + '</h2>'
+            + '<p class="enm-conv-sub"   id="enm-conv-b2-sub">'   + escapeHtml(t('friendly.setup.card_b2.sub_idle'))   + '</p>'
+            + '<div class="enm-b2-tiles" id="enm-conv-b2-tiles">'
+                + '<button type="button" class="enm-b2-tile enm-b2-tile-bootstrap" data-choice="bootstrap">'
+                    + '<div class="enm-b2-tile-badge">' + escapeHtml(t('friendly.setup.card_b2.badge_recommended')) + '</div>'
+                    + '<div class="enm-b2-tile-title">' + escapeHtml(t('friendly.setup.card_b2.tile_bootstrap_title')) + '</div>'
+                    + '<div class="enm-b2-tile-sub">'   + escapeHtml(t('friendly.setup.card_b2.tile_bootstrap_sub'))   + '</div>'
+                    + '<div class="enm-b2-tile-meta">'  + escapeHtml(t('friendly.setup.card_b2.tile_bootstrap_meta'))  + '</div>'
+                + '</button>'
+                + '<button type="button" class="enm-b2-tile enm-b2-tile-genesis" data-choice="genesis">'
+                    + '<div class="enm-b2-tile-title">' + escapeHtml(t('friendly.setup.card_b2.tile_genesis_title')) + '</div>'
+                    + '<div class="enm-b2-tile-sub">'   + escapeHtml(t('friendly.setup.card_b2.tile_genesis_sub'))   + '</div>'
+                    + '<div class="enm-b2-tile-meta">'  + escapeHtml(t('friendly.setup.card_b2.tile_genesis_meta'))  + '</div>'
+                + '</button>'
+            + '</div>'
+            + '<div class="enm-install-progress" id="enm-conv-b2-progress" hidden>'
+              + '<div class="enm-install-bar-wrap">'
+                + '<div class="enm-install-bar" id="enm-conv-b2-bar"></div>'
+              + '</div>'
+              + '<div class="enm-install-status" id="enm-conv-b2-status">' + escapeHtml(t('friendly.setup.card_b2.phase_preparing')) + '</div>'
+            + '</div>'
+            + '<div class="enm-conv-actions" id="enm-conv-b2-actions"></div>';
+
+        var self = this;
+        var els = {
+            title:    this._body.querySelector('#enm-conv-b2-title'),
+            sub:      this._body.querySelector('#enm-conv-b2-sub'),
+            tiles:    this._body.querySelector('#enm-conv-b2-tiles'),
+            progress: this._body.querySelector('#enm-conv-b2-progress'),
+            bar:      this._body.querySelector('#enm-conv-b2-bar'),
+            status:   this._body.querySelector('#enm-conv-b2-status'),
+            actions:  this._body.querySelector('#enm-conv-b2-actions'),
+        };
+
+        // Tile click → handle the chosen path
+        els.tiles.querySelectorAll('.enm-b2-tile').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                var choice = btn.dataset.choice;
+                if (choice === 'bootstrap') {
+                    self._b2BeginBootstrap(els, /* alreadyStarted */ false);
+                } else {
+                    self._b2ChooseGenesis(els);
+                }
+            });
+        });
+
+        // Render a Back link below the tiles for symmetry with other cards.
+        els.actions.appendChild(makeTextLink(t('friendly.setup.back'), function () {
+            self._goto('b');
+        }));
+
+        // Recovery: if a bootstrap is already running on the server, jump
+        // straight to the live-progress UI.
+        this.api.get('/chains/mainchain/bootstrap', { skipCache: true }).then(function (data) {
+            if (!self._stillRendering(seq)) { return; }
+            var s = data && data.status;
+            if (!s) { return; }
+            if (s.phase === 'downloading' || s.phase === 'extracting'
+                || s.phase === 'applying'   || s.phase === 'verifying'
+                || s.phase === 'resolving') {
+                self._b2BeginBootstrap(els, /* alreadyStarted */ true);
+            } else if (s.phase === 'done') {
+                self._b2OnBootstrapDone(els);
+            }
+            // 'idle' / 'failed' both leave the choice tiles visible so the
+            // operator can decide what to do next.
+        }).catch(function () { /* tiles already rendered — nothing to do */ });
+    };
+
+    /** @private */
+    SetupConversation.prototype._b2ChooseGenesis = function (els) {
+        var t = root.enmT;
+        var self = this;
+        // Disable both tiles while we hit the server.
+        els.tiles.querySelectorAll('.enm-b2-tile').forEach(function (b) { b.disabled = true; });
+        els.sub.textContent = t('friendly.setup.card_b2.advancing');
+        this.api.post('/setup/bootstrap', { choice: 'genesis' }).then(function () {
+            if (self.notifications && typeof self.notifications.info === 'function') {
+                self.notifications.info(t('friendly.setup.card_b2.genesis_picked_title'),
+                    t('friendly.setup.card_b2.genesis_picked_sub'));
+            }
+            self._goto('c');
+        }).catch(function (err) {
+            els.tiles.querySelectorAll('.enm-b2-tile').forEach(function (b) { b.disabled = false; });
+            els.sub.textContent = t('friendly.setup.card_b2.advance_failed',
+                { error: err && err.message ? err.message : String(err) });
+        });
+    };
+
+    /** @private */
+    SetupConversation.prototype._b2BeginBootstrap = function (els, alreadyStarted) {
+        var t = root.enmT;
+        var self = this;
+        els.tiles.hidden = true;
+        els.title.textContent = t('friendly.setup.card_b2.title_running');
+        els.sub.textContent   = t('friendly.setup.card_b2.sub_running');
+        els.progress.hidden   = false;
+        els.actions.innerHTML = '';
+        // Allow the operator to abort while the download is in flight.
+        // Hidden once we enter the apply phase (can't safely cancel then).
+        var cancelBtn = makeTextLink(t('friendly.setup.card_b2.cancel'), function () {
+            cancelBtn.disabled = true;
+            self.api.del('/chains/mainchain/bootstrap').catch(function () { /* ignore */ });
+        });
+        els.actions.appendChild(cancelBtn);
+
+        function applyStatus(s) {
+            if (!s) { return; }
+            var pct = (s.bytesTotal && s.bytesDownloaded)
+                ? Math.min(100, Math.floor((s.bytesDownloaded / s.bytesTotal) * 100))
+                : (s.phase === 'done' ? 100 : (s.phase === 'extracting' ? 95 : 5));
+            els.bar.style.width = pct + '%';
+            els.status.textContent = bootstrapPhaseLabel(s);
+
+            // Once we're applying, hide the cancel link — it can't safely abort.
+            if (cancelBtn && (s.phase === 'applying' || s.phase === 'verifying')) {
+                cancelBtn.style.display = 'none';
+            }
+            if (s.phase === 'done') {
+                self._b2OnBootstrapDone(els);
+            }
+            if (s.phase === 'failed') {
+                els.title.textContent = t('friendly.setup.card_b2.title_failed');
+                els.sub.textContent   = s.error || t('friendly.setup.card_b2.sub_failed');
+                els.actions.innerHTML = '';
+                els.actions.appendChild(
+                    makeBtn(t('friendly.setup.card_b2.cta_retry'), 'primary hero', function () {
+                        self._b2BeginBootstrap(els, false);
+                    })
+                );
+                els.actions.appendChild(makeTextLink(t('friendly.setup.card_b2.cta_fallback_genesis'), function () {
+                    self._b2ChooseGenesis(els);
+                }));
+            }
+        }
+
+        // SSE subscription for live progress
+        if (this.sse && typeof this.sse.subscribe === 'function') {
+            if (this._unsubscribeBootstrap) { this._unsubscribeBootstrap(); }
+            this._unsubscribeBootstrap = this.sse.subscribe(
+                'setup:bootstrap:mainchain',
+                function (payload) { applyStatus(payload); },
+            );
+        }
+
+        // Kick off the actual download (or just re-attach to a running one).
+        var startPromise = alreadyStarted
+            ? this.api.get('/chains/mainchain/bootstrap', { skipCache: true })
+                .then(function (data) { return { status: data && data.status }; })
+            : this.api.post('/chains/mainchain/bootstrap');
+        startPromise.then(function (result) {
+            applyStatus(result && result.status);
+        }).catch(function (err) {
+            applyStatus({ phase: 'failed', error: err && err.message ? err.message : String(err) });
+        });
+    };
+
+    /** @private */
+    SetupConversation.prototype._b2OnBootstrapDone = function (els) {
+        var t = root.enmT;
+        var self = this;
+        if (this._unsubscribeBootstrap) { this._unsubscribeBootstrap(); this._unsubscribeBootstrap = null; }
+        els.title.textContent = t('friendly.setup.card_b2.title_done');
+        els.sub.textContent   = t('friendly.setup.card_b2.sub_done');
+        els.bar.style.width   = '100%';
+        els.status.textContent = t('friendly.setup.card_b2.phase_done');
+        els.actions.innerHTML = '';
+        els.actions.appendChild(
+            makeBtn(t('friendly.setup.card_b2.cta_continue'), 'primary hero', function () {
+                self.api.post('/setup/bootstrap', { choice: 'bootstrap' }).then(function () {
+                    self._goto('c');
+                }).catch(function () {
+                    // Even if the step-advance call fails, the bootstrap
+                    // itself completed — proceed to keystore. The wizard
+                    // resume code is permissive about missing currentStep.
+                    self._goto('c');
+                });
             })
         );
     };
@@ -532,6 +730,28 @@
         // If the i18n lookup returned the bracketed key, fall back.
         if (label.indexOf('[') === 0) {
             return s.phase || t('friendly.setup.card_b.phase_preparing');
+        }
+        return label;
+    }
+
+    /**
+     * Bootstrap phase label with optional MB/MB progress decoration.
+     * The phase keys live under friendly.setup.card_b2.phase_*.
+     */
+    function bootstrapPhaseLabel(s) {
+        var t = root.enmT;
+        if (!s) { return t('friendly.setup.card_b2.phase_preparing'); }
+        var key = 'friendly.setup.card_b2.phase_' + s.phase;
+        var label = t(key);
+        if (label.indexOf('[') === 0) {
+            label = s.phase || t('friendly.setup.card_b2.phase_preparing');
+        }
+        // Append "X.X / Y.Y GB" while downloading so the operator can see
+        // a moving number even when the bar % barely budges on a 10 GB file.
+        if (s.phase === 'downloading' && s.bytesTotal) {
+            var got = (s.bytesDownloaded / (1024 ** 3)).toFixed(2);
+            var tot = (s.bytesTotal / (1024 ** 3)).toFixed(2);
+            label += ' — ' + got + ' / ' + tot + ' GB';
         }
         return label;
     }

@@ -3182,6 +3182,89 @@ html, body {
     .enm-goal-tiles { grid-template-columns: 1fr; }
 }
 
+/* ---- Card B2: bootstrap vs genesis (alpha.10) ----
+   Mirrors Card A's tile pattern but with a "Recommended" badge inside
+   the first tile and a meta-line that calls out the data size. Tiles
+   are buttons so keyboard nav + focus-visible work. */
+.enm-b2-tiles {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--spacing-md);
+    width: 100%;
+    margin-top: var(--spacing-md);
+}
+
+.enm-b2-tile {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: var(--spacing-xs);
+    padding: var(--spacing-xl) var(--spacing-md) var(--spacing-lg);
+    background: var(--bg-surface);
+    border: 2px solid var(--border-color);
+    border-radius: 16px;
+    cursor: pointer;
+    font: inherit;
+    color: inherit;
+    transition: border-color var(--motion-fast) var(--ease-spring),
+                transform var(--motion-fast) var(--ease-spring),
+                background var(--motion-fast) var(--ease-spring);
+}
+
+.enm-b2-tile:hover:not(:disabled) {
+    border-color: var(--primary);
+    transform: translateY(-2px);
+    background: var(--primary-softer);
+}
+.enm-b2-tile:focus-visible {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: var(--focus-ring);
+}
+.enm-b2-tile:active:not(:disabled) { transform: translateY(0); }
+.enm-b2-tile:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.enm-b2-tile-bootstrap { border-color: var(--primary); }
+
+.enm-b2-tile-badge {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    padding: 2px 8px;
+    background: var(--primary);
+    color: white;
+    border-radius: var(--radius-pill);
+    font-size: 10px;
+    font-weight: var(--font-weight-semibold);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+.enm-b2-tile-title {
+    font-size: 17px;
+    font-weight: var(--font-weight-semibold);
+    color: var(--text-primary);
+    letter-spacing: -0.01em;
+}
+.enm-b2-tile-sub {
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.45;
+}
+.enm-b2-tile-meta {
+    font-size: 11px;
+    font-weight: var(--font-weight-medium);
+    color: var(--text-muted);
+    margin-top: var(--spacing-xs);
+    font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 480px) {
+    .enm-b2-tiles { grid-template-columns: 1fr; }
+}
+
 /* ---- Card B: install ---- */
 .enm-install-illust {
     width: 96px;

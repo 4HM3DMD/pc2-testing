@@ -21,6 +21,7 @@ const { readNodeOwner } = require('../auth/OwnerCheckMiddleware');
 const { SyncTracker } = require('./SyncTracker');
 const HostConflictScanner = require('./HostConflictScanner');
 const { EnmBinaryDownloader } = require('./EnmBinaryDownloader');
+const EnmBootstrapDownloader = require('./EnmBootstrapDownloader');
 const { EnmKeystoreService } = require('./EnmKeystoreService');
 const ChainState = require('./ChainState');
 
@@ -32,6 +33,7 @@ let engine = null;
 let healthChecker = null;
 let syncTracker = null;
 let binaryDownloader = null;
+let bootstrapDownloader = null;
 let keystoreService = null;
 let extensionHandleRef = null;
 /** @type {Map<string, import('./ChainAdapter')>} */
@@ -56,6 +58,10 @@ function init(extensionHandle) {
     logStreamer = new ProcessLogStreamer({ processService, sseHub, extensionHandle });
     syncTracker = new SyncTracker();
     binaryDownloader = new EnmBinaryDownloader({ logger: extensionHandle.log, sseHub });
+    bootstrapDownloader = new EnmBootstrapDownloader({ extensionHandle, sseHub });
+    // Sweep any stale .tmp/bootstrap/ artefacts left by a previous crash
+    // or cancel so a fresh bootstrap can start cleanly.
+    bootstrapDownloader.cleanupOrphans().catch(() => { /* best-effort */ });
     keystoreService = new EnmKeystoreService({ logger: extensionHandle.log });
     adapters.set('mainchain', new ElaMainChainAdapter({ processService, extensionHandle }));
 
@@ -96,6 +102,11 @@ function init(extensionHandle) {
 function getBinaryDownloader() {
     if (!binaryDownloader) throw new Error('ChainRegistry: not initialized');
     return binaryDownloader;
+}
+
+function getBootstrapDownloader() {
+    if (!bootstrapDownloader) throw new Error('ChainRegistry: not initialized');
+    return bootstrapDownloader;
 }
 
 function getKeystoreService() {
@@ -243,6 +254,7 @@ function _resetForTests() {
     healthChecker = null;
     syncTracker = null;
     binaryDownloader = null;
+    bootstrapDownloader = null;
     keystoreService = null;
     adapters = new Map();
 }
@@ -258,6 +270,7 @@ module.exports = {
     getHealthChecker,
     getSyncTracker,
     getBinaryDownloader,
+    getBootstrapDownloader,
     getKeystoreService,
     listChains,
     snapshots,

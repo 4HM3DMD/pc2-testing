@@ -333,6 +333,14 @@
             gate('update', false, '');
         }
 
+        // Re-bootstrap: same gate as update — wiping the data dir while
+        // ela has it open would corrupt the chain. Stop first.
+        if (alive) {
+            gate('rebootstrap', true, 'Stop the chain first (data dir in use).');
+        } else {
+            gate('rebootstrap', false, '');
+        }
+
         // Reactivate BPoS: only when alive AND producer is registered AND
         // its state is Inactive (active producers don't need reactivation).
         if (!alive) {
@@ -367,6 +375,8 @@
                   "Re-download the latest <code>ela</code> + <code>ela-cli</code> from download.elastos.io. Stop the chain first if it's running; we don't auto-stop.")
               + this._maintenanceRow('activate', 'Reactivate BPoS supernode',
                   "Sends a <code>producer activate</code> transaction so the chain flips your producer state from Inactive back to Active. Requires a keystore + funded deposit address.")
+              + this._maintenanceRow('rebootstrap', 'Re-bootstrap chain data',
+                  "Wipes the local chain DB and re-downloads the official Elastos snapshot (~10 GB, ~15 min) so a stuck or corrupt sync can recover without reinstalling. The chain must be stopped first. Existing settings + keystore are kept.")
             + '</div>';
         pane.appendChild(sec);
 
@@ -388,6 +398,21 @@
             self._runMaintenance(ev.currentTarget, '/chains/mainchain/bpos/activate',
                 'Reactivation submitted — wait a block or two for chain confirmation',
                 'Reactivation rejected');
+        });
+        sec.querySelector('[data-action="rebootstrap"]').addEventListener('click', function (ev) {
+            // Type-to-confirm guard — same pattern as the Settings danger
+            // zone. Wiping the chain DB is irreversible from the operator's
+            // point of view (resync would take 1-3 days without the
+            // snapshot path, which is exactly why they're using this).
+            var typed = prompt(
+                'Re-bootstrap wipes the local chain DB and downloads the official snapshot '
+                + '(~10 GB). The chain must already be stopped. Existing keystore + settings '
+                + 'are kept.\n\nType BOOTSTRAP to confirm:',
+            );
+            if (typed !== 'BOOTSTRAP') { return; }
+            self._runMaintenance(ev.currentTarget, '/chains/mainchain/bootstrap',
+                'Bootstrap started — Settings → Logs to watch progress',
+                'Bootstrap failed to start');
         });
     };
 

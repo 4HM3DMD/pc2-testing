@@ -111,7 +111,12 @@ const setupSchema = Joi.object({
     completed: Joi.boolean().default(false),
     completedAt: Joi.number().integer().allow(null).default(null),
     completedStep: Joi.string().valid(
-        'welcome', 'os', 'disk', 'wallet', 'binary', 'keystore', 'config', 'complete',
+        'welcome', 'os', 'disk', 'wallet', 'binary',
+        // alpha.10: 'bootstrap' sits between binary install and keystore.
+        // Operator picks fast-sync (snapshot) or genesis on Card B2;
+        // either path advances completedStep through 'bootstrap'.
+        'bootstrap',
+        'keystore', 'config', 'complete',
     ).default('welcome'),
 });
 

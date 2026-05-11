@@ -712,6 +712,74 @@ function build(extensionHandle) {
         }
     });
 
+    // ------------------------------------------------------------------
+    // Bootstrap (alpha.10) — fetch the official Elastos chain-data snapshot
+    // and apply it to the chain's data dir, replacing genesis-sync (1–3 days)
+    // with snapshot-download (~15 min). Pure operator-facing acceleration —
+    // the chain still verifies blocks as it catches up the tail.
+    //
+    // Routes:
+    //   POST /:chainId/bootstrap         start a bootstrap run (owner-only)
+    //   GET  /:chainId/bootstrap         current status snapshot
+    //   DELETE /:chainId/bootstrap       best-effort cancel (mid-download only)
+    //
+    // Progress streams on SSE topic `setup:bootstrap:<chainId>` (mirrors the
+    // existing `setup:install:<chainId>` topic the binary downloader uses).
+    // ------------------------------------------------------------------
+    router.post('/:chainId/bootstrap', limit('admin'), requireOwner, async (req, res) => {
+        try {
+            const adapter = adapterOr404(req, res, extensionHandle);
+            if (!adapter) return undefined;
+            // Same gate as /update — applying a snapshot while ela holds the
+            // data dir open would corrupt the chain. Operator stops first.
+            const status = ChainRegistry.getProcessService().statusSync(adapter.chainId);
+            if (status && status.alive) {
+                return res.status(409).json(errorBody(
+                    'Stop the chain before bootstrapping. Click Stop on the chain card, wait for the badge to change to "Stopped", then run Bootstrap again.',
+                ));
+            }
+            const downloader = ChainRegistry.getBootstrapDownloader();
+            if (!downloader) {
+                return res.status(503).json(errorBody('Bootstrap downloader is not available.'));
+            }
+            const result = await downloader.start(adapter.chainId);
+            return res.json(successBody({
+                alreadyRunning: result.alreadyRunning,
+                status: result.status,
+            }));
+        } catch (err) {
+            extensionHandle.log.error(`${ENM_LOG_PREFIX} POST /chains/${req.params.chainId}/bootstrap: ${err.message}`);
+            // 412 if it's a disk-space preflight failure — operator-actionable.
+            const isPreflight = /insufficient disk|disk space|free, you have/i.test(err.message);
+            return res.status(isPreflight ? 412 : 500).json(errorBody(err.message));
+        }
+    });
+
+    router.get('/:chainId/bootstrap', limit('read'), async (req, res) => {
+        try {
+            const adapter = adapterOr404(req, res, extensionHandle);
+            if (!adapter) return undefined;
+            const downloader = ChainRegistry.getBootstrapDownloader();
+            return res.json(successBody({ status: downloader.getStatus(adapter.chainId) }));
+        } catch (err) {
+            extensionHandle.log.error(`${ENM_LOG_PREFIX} GET /chains/${req.params.chainId}/bootstrap: ${err.message}`);
+            return res.status(500).json(errorBody(err.message));
+        }
+    });
+
+    router.delete('/:chainId/bootstrap', limit('admin'), requireOwner, async (req, res) => {
+        try {
+            const adapter = adapterOr404(req, res, extensionHandle);
+            if (!adapter) return undefined;
+            const downloader = ChainRegistry.getBootstrapDownloader();
+            const result = downloader.cancel(adapter.chainId);
+            return res.json(successBody(result));
+        } catch (err) {
+            extensionHandle.log.error(`${ENM_LOG_PREFIX} DELETE /chains/${req.params.chainId}/bootstrap: ${err.message}`);
+            return res.status(500).json(errorBody(err.message));
+        }
+    });
+
     // ela_activate_bpos — bring an Inactive producer back to Active.
     // The keystore + password live on this server (server-side signing
     // is allowed; only browser-wallet signing is forbidden per

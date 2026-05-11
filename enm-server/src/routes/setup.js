@@ -287,7 +287,11 @@ function build(extensionHandle) {
             await upsertSetupState(db, wallet, {
                 binary_path: validation.resolvedPath,
                 binary_version: smoke.version,
-                current_step: 'keystore',
+                // alpha.10: binary install advances into the bootstrap-or-genesis
+                // choice card (was: straight to keystore). The wizard renders
+                // Card B2; the operator's pick advances on to 'keystore' via
+                // POST /setup/bootstrap below.
+                current_step: 'bootstrap',
             });
             return res.json(successBody({
                 resolvedPath: validation.resolvedPath,
@@ -297,6 +301,42 @@ function build(extensionHandle) {
             }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} /setup/binary error: ${err.message}`);
+            return res.status(500).json(errorBody('Failed to persist setup state.'));
+        }
+    });
+
+    /**
+     * POST /setup/bootstrap  { choice: 'bootstrap' | 'genesis' }
+     *
+     * Records the operator's pick on Card B2 (fast-sync via snapshot, or
+     * genesis sync from block 0) and advances the wizard to the keystore
+     * card.
+     *
+     * This route does NOT trigger the download itself — the wizard hits
+     * POST /chains/<id>/bootstrap directly so the existing progress UI
+     * pattern (single-flight + SSE topic) works without setup-route
+     * coupling. /setup/bootstrap is purely a step-transition + audit.
+     */
+    router.post('/bootstrap', limit('admin'), requireOwner, async (req, res) => {
+        const wallet = readActorWallet(req);
+        const choice = req.body && req.body.choice;
+        if (choice !== 'bootstrap' && choice !== 'genesis') {
+            return res.status(400).json(errorBody(
+                'choice must be "bootstrap" or "genesis".',
+            ));
+        }
+        try {
+            const { db } = extensionHandle.import('data');
+            // The choice itself isn't persisted to setup_state — the table
+            // doesn't have a bootstrap_choice column yet and adding one
+            // requires a migration we don't need for v1. The audit log
+            // captures the action via the standard middleware.
+            await upsertSetupState(db, wallet, {
+                current_step: 'keystore',
+            });
+            return res.json(successBody({ choice, currentStep: 'keystore' }));
+        } catch (err) {
+            extensionHandle.log.error(`${ENM_LOG_PREFIX} /setup/bootstrap error: ${err.message}`);
             return res.status(500).json(errorBody('Failed to persist setup state.'));
         }
     });
