@@ -33,7 +33,12 @@ function looksLikeEvm(addr) {
     return typeof addr === 'string' && addr.length === 42 && addr.startsWith('0x');
 }
 
-const TOPIC_REGEX = /^(?:system|notifications|chains:[a-z0-9-]+:(?:status|logs))$/;
+// 0.2.0-alpha.3 — `height` joined the chain topic set in phase 4 of
+// the Apple Hero rewrite. HealthChecker publishes (t, h) deltas on
+// chains:<id>:height every 30s; the chain-card's sparkline subscribes
+// via the height-series client. Forgetting to add `height` to this
+// whitelist 400'd every SSE connect and looped the client forever.
+const TOPIC_REGEX = /^(?:system|notifications|chains:[a-z0-9-]+:(?:status|logs|height))$/;
 const MAX_TOPICS_PER_REQUEST = 16;
 
 /**
