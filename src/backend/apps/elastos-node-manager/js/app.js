@@ -60,7 +60,27 @@
             // Mount happens in _showDashboard (only the dashboard wears
             // the wash; setup wizard / welcome stay neutral).
             fleetHealth:   root.EnmFleetHealthGradient ? new root.EnmFleetHealthGradient() : null,
+            // 0.2.0-alpha.1 — block-height history client backing the
+            // chain-card sparkline. One subscription per chainId, fan-
+            // out to N listeners (currently just chain-card, but the
+            // Identity / EVM panes may want it later). Bootstrap +
+            // SSE delta + 5-min poll fallback handled internally.
+            heightSeries:  root.EnmHeightSeriesClient
+                              ? new root.EnmHeightSeriesClient(
+                                    /* api */ null, /* sse */ null,
+                                ) /* sentinel; reassigned below once api/sse exist */
+                              : null,
         };
+        // The HeightSeriesClient constructor wants api + sse refs at
+        // construction time — but services.api / services.sse aren't
+        // bound until this object literal evaluates. Reassign now that
+        // we have them.
+        if (this.services.heightSeries && root.EnmHeightSeriesClient) {
+            this.services.heightSeries = new root.EnmHeightSeriesClient(
+                this.services.api,
+                this.services.sse,
+            );
+        }
 
         // Step 1: window-manager IPC contract MUST happen before anything else.
         this.services.wallet.sendReady();
@@ -367,6 +387,12 @@
         // first state report.
         if (this.services && this.services.fleetHealth) {
             this.services.fleetHealth.destroy();
+        }
+        // Height-series client unsubscribes all per-chain SSE wirings +
+        // 5-min poll intervals on teardown. Buffers are dropped — fresh
+        // bootstrap on remount.
+        if (this.services && this.services.heightSeries) {
+            this.services.heightSeries.destroy();
         }
         // The settings drawer is lazy-mounted on first gear click. When we
         // transition out of the home view (e.g. to the setup wizard via

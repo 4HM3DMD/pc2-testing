@@ -1101,6 +1101,38 @@ body[data-active-tab="identity"]::before {
     .enm-chain-actions-pulse { animation: none; }
 }
 
+/* ============================================================
+   Sparkline — 0.2.0-alpha.1
+   ============================================================
+   Inline SVG primitive used by chain-card to show last-hour
+   block-height growth under the primary metric. Styling here is
+   minimal — the SVG carries the visible bits (stroke + gradient
+   fill); CSS only handles container sizing + opacity. The
+   currentColor pattern means the colour cascades from the parent
+   chain-card's [data-state] selector, so the sparkline picks up
+   the state colour automatically. */
+
+.enm-spark {
+    display: block;
+    width: 100%;
+    height: 44px;
+    margin: 22px auto 4px;
+    opacity: var(--sparkline-opacity);
+    transition: opacity var(--motion-base) var(--ease-spring),
+                color   var(--motion-slow) var(--ease-spring);
+}
+
+.enm-spark[hidden] { display: none; }
+
+/* When the parent chain-card is in a non-running state, the
+   sparkline reads as flat history not "live" — dim it further so
+   the user's eye doesn't seek movement. */
+.enm-chain-card[data-state="stopped"] .enm-spark,
+.enm-chain-card[data-state="unconfigured"] .enm-spark,
+.enm-chain-card[data-state="error"] .enm-spark {
+    opacity: calc(var(--sparkline-opacity) * 0.5);
+}
+
 /* ---- Details disclosure ------------------------------------------------- */
 
 .enm-chain-details-toggle {
