@@ -583,11 +583,12 @@ html, body {
 
 .enm-chain-card {
     container-type: inline-size;
-    /* alpha.11: tighter top padding (xl → lg) since the action row sits
-       higher in the layout now — the operator scans circle → name → state
-       → Start without scrolling. Bottom padding stays lg to give the
-       stats strip room to breathe. */
-    padding: var(--spacing-xl) var(--spacing-lg) var(--spacing-lg);
+    /* alpha.18 — tighter card rhythm. Was xl/lg/lg; now lg all around
+       with a slightly larger inner gap so the cards feel less like
+       Costco-sized panels. The PowerCircle dominates because it's the
+       hero, but the chrome around it shouldn't make the card 480px
+       tall. */
+    padding: var(--spacing-lg);
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -613,15 +614,16 @@ html, body {
 }
 
 .enm-chain-hero {
-    /* alpha.11: trimmed clamp ceiling (240 → 200) so the circle leaves
-       headroom for the action row + stats strip without making the card
-       feel too tall. */
-    width: clamp(160px, 32cqi, 200px);
+    /* alpha.18 — trim clamp ceiling 200 → 160. Combined with the
+       tighter card padding above, this drops the card height by ~80px
+       without losing any information density. The PowerCircle is
+       still the focal point; it just doesn't take half the card. */
+    width: clamp(140px, 28cqi, 160px);
     aspect-ratio: 1 / 1;
     display: flex;
     align-items: center;
     justify-content: center;
-    margin-bottom: var(--spacing-xs);
+    margin-bottom: 0;
 }
 
 .enm-chain-card-head {
@@ -657,12 +659,17 @@ html, body {
 }
 
 .enm-chain-card-metric {
-    font-size: 15px;
+    /* alpha.18 — bumped 15 → 14px and tightened weight. The metric
+       line carries the live data (block height etc.); pairing it
+       with the chain name visually means we want it readable but
+       deferential. */
+    font-size: 14px;
     color: var(--text-secondary);
     font-variant-numeric: tabular-nums;
     text-align: center;
     margin: 0;
     min-height: 1.2em;
+    letter-spacing: -0.005em;
 }
 
 /* alpha.17 — chain badge refresh. Drop uppercase + heavy tracking;
@@ -707,19 +714,20 @@ html, body {
     .enm-chain-badge-recovering { background: rgba(124, 58, 237, 0.22); }
 }
 
-/* alpha.11: always-visible stats strip below the action row.
-   Same value-first hierarchy as system-status (big number on top,
-   small lowercase label below) so the dashboard reads consistently.
-   Subtle top-border separates it from the action group above without
-   shouting. */
+/* alpha.18 — the stats strip used to sit on a top-border divider, so
+   each card had a horizontal line slicing through it under the action
+   buttons. The line made the card read as two stacked panels glued
+   together. Now: no divider, just airy padding-top so the strip
+   floats below the buttons. The card itself is the visual container.
+   Value first, small lowercase label below — same rhythm as
+   system-status. */
 .enm-chain-stats-strip {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: var(--spacing-md);
     width: 100%;
     padding-top: var(--spacing-md);
-    margin-top: var(--spacing-xs);
-    border-top: 1px solid var(--border-color);
+    margin-top: 0;
 }
 
 .enm-chain-stats-cell {
@@ -732,8 +740,12 @@ html, body {
 }
 
 .enm-chain-stats-value {
-    font-size: 17px;
-    font-weight: var(--font-weight-regular);
+    /* alpha.18 — 17 → 16px with a medium weight bump. The slight weight
+       contrast against the label below carries the hierarchy more
+       efficiently than raw size. Matches the spirit of the system-
+       status refresh (smaller, denser, more readable). */
+    font-size: 16px;
+    font-weight: var(--font-weight-medium);
     letter-spacing: -0.01em;
     color: var(--text-primary);
     font-variant-numeric: tabular-nums;
@@ -895,6 +907,24 @@ html, body {
     min-width: 110px;
     padding: 8px 18px;
     font-size: 13px;
+}
+
+/* alpha.18 — pulse the action row when the operator taps the
+   PowerCircle on a healthy chain with nothing to disclose. Draws the
+   eye to the visible Stop / Restart buttons so the click registers as
+   "look here for actions" instead of opening an empty Details panel.
+   Keyframe is short (560ms) so it doesn't linger after the second tap. */
+@keyframes enm-chain-actions-pulse {
+    0%   { transform: scale(1);    box-shadow: 0 0 0 0   rgba(59,130,246,0.0); }
+    35%  { transform: scale(1.04); box-shadow: 0 0 0 8px rgba(59,130,246,0.18); }
+    100% { transform: scale(1);    box-shadow: 0 0 0 14px rgba(59,130,246,0.0); }
+}
+.enm-chain-actions-pulse {
+    animation: enm-chain-actions-pulse 560ms var(--ease-spring) 1;
+    border-radius: var(--radius-pill);
+}
+@media (prefers-reduced-motion: reduce) {
+    .enm-chain-actions-pulse { animation: none; }
 }
 
 /* ---- Details disclosure ------------------------------------------------- */
@@ -1104,15 +1134,23 @@ html, body {
     stroke: var(--state-syncing);
 }
 
-/* Healthy — steady green ring with a soft glow. */
+/* alpha.18 — Healthy refresh. The heavy drop-shadow glow read as a
+   "neon sign", which fights the calm-at-rest goal of the dashboard.
+   Now: a slightly thicker ring (4 instead of 3) at full opacity,
+   subtle 4-second breath cycle, no glow. The green ring with the
+   power glyph in the middle communicates "alive and powered on" the
+   same way a Mac's power LED does — no halo needed. */
 .enm-power-circle[data-state="healthy"] .enm-pc-state-ring {
     stroke: var(--state-healthy);
-    filter: drop-shadow(0 0 6px var(--state-healthy));
-    /* Gentle breathing — barely-visible scale + opacity to show "alive" */
+    stroke-width: 4;
     animation: enm-pc-breathe 4s var(--ease-spring) infinite;
 }
 .enm-power-circle[data-state="healthy"] .enm-pc-glyph {
     color: var(--state-healthy);
+    /* alpha.18 — match the power-symbol glyph to the off state's
+       weight so green-on / gray-off share a visual grammar; only the
+       colour changes. */
+    font-weight: 300;
 }
 
 @keyframes enm-pc-breathe {

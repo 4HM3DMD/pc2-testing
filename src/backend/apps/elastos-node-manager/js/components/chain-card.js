@@ -258,9 +258,19 @@
 
     /**
      * @private
-     * Tap-the-circle = "do the obvious thing for this state." Off-states
-     * trigger the primary action (start / configure); live-states open
-     * the details panel so the operator sees the rich info.
+     * Tap-the-circle = "do the obvious thing for this state."
+     *
+     *   unconfigured     → open the Configure wizard (only meaningful action)
+     *   stopped / error  → toggle details so the operator sees the context
+     *   alive (healthy / syncing / stalled / recovering)
+     *      └─ details has content → toggle it (sync velocity / BPoS info)
+     *      └─ details is empty    → no-op + brief pulse to draw the eye to
+     *                               the action buttons that are visible below
+     *
+     * alpha.18 — the empty-panel case is the one the operator hit most:
+     * a healthy synced non-validator chain has no Details content to show,
+     * so the click used to open a blank panel. Now it pulses the buttons
+     * (Stop / Restart) so the eye lands on the actions instead.
      */
     ChainCard.prototype._handleCircleTap = function (/* visualState */) {
         var coarse = this._lastCoarseState || 'unconfigured';
@@ -268,17 +278,44 @@
             return this._handleConfigure();
         }
         if (coarse === 'stopped' || coarse === 'error') {
-            // Don't auto-start on tap-when-error — the operator should see
-            // why first. Tap = open details, which surfaces the sync panel
-            // and any error context. Start is reachable via the visible button.
             if (coarse === 'stopped' && !this._detailsPanel.hidden) {
                 return this._handleStart();
             }
             return this._toggleDetailsIfClosed();
         }
-        // Alive states (healthy / syncing / stalled / recovering) — toggle
-        // the details panel so the operator can see velocity / peers / etc.
+        // Alive — only toggle details if there's something inside. Both
+        // the sync panel and the BPoS panel can independently hide
+        // themselves (alpha.16). When both are hidden, the disclosure
+        // would just open an empty box; we pulse the action row instead
+        // so the user sees Stop / Restart as the real affordances.
+        var syncVisible = !!(this._syncPanel && !this._syncPanel.hidden);
+        var bposVisible = !!(this._bposPanel && !this._bposPanel.hidden);
+        if (!syncVisible && !bposVisible) {
+            return this._pulseActionRow();
+        }
         return this._toggleDetails();
+    };
+
+    /**
+     * @private
+     * Brief CSS class flash on the action row so the operator's eye is
+     * drawn to the buttons (Stop / Restart) when they tap the circle on
+     * a chain that has no details to disclose. The class is removed via
+     * a one-shot setTimeout so back-to-back taps re-trigger the
+     * animation. Pulse is purely visual — no aria-live noise.
+     */
+    ChainCard.prototype._pulseActionRow = function () {
+        var row = this.root.querySelector('.enm-chain-actions');
+        if (!row) return;
+        row.classList.remove('enm-chain-actions-pulse');
+        // Force a reflow so adding the class restarts the keyframes
+        // even when the class was just removed in the same tick.
+        // eslint-disable-next-line no-unused-expressions
+        row.offsetWidth;
+        row.classList.add('enm-chain-actions-pulse');
+        setTimeout(function () {
+            row.classList.remove('enm-chain-actions-pulse');
+        }, 700);
     };
 
     /** @private */

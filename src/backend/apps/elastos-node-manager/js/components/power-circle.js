@@ -221,11 +221,19 @@
 
     // Centre glyphs — kept as text so they inherit the page font and scale
     // perfectly. Apple HIG-style: simple, single-stroke characters.
+    //
+    // alpha.18 — healthy uses the power symbol (⏻) in green, not a
+    // checkmark. A check reads as "done / completed"; a running node
+    // is ongoing. The power glyph + green colour + the breath
+    // animation say "alive and powered on" without the false-finality
+    // of a tick. Off and healthy share the glyph; the colour is what
+    // changes (gray vs green) — same visual grammar as a Mac's power
+    // LED.
     var GLYPH = {
-        off:     '⏻',     // power symbol
+        off:     '⏻',     // power symbol — dim
         booting: '',      // blank — the animated state-ring is enough
         syncing: '',      // not used — percent text takes its place
-        healthy: '✓',
+        healthy: '⏻',     // power symbol — green, breathing
         warning: '!',
         error:   '✕',
     };
