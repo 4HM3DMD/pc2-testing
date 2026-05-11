@@ -37,14 +37,21 @@
 
     var SVG_NS = 'http://www.w3.org/2000/svg';
 
-    // viewBox is fixed; ACTUAL size is set via CSS so the widget scales smoothly
-    // when the operator resizes the Puter window.
-    var VB = 100;
-    var CENTRE = VB / 2;
-    var OUTER_R = 44;
-    var INNER_R = 36;
-    var OUTER_CIRC = 2 * Math.PI * OUTER_R;
-    var INNER_CIRC = 2 * Math.PI * INNER_R;
+    // 0.2.0-alpha.1 (Apple Hero) — viewBox bumped 100 → 220 so the ring
+    // stroke can be a substantial 10 (≈4.5% of diameter) like the mock
+    // and like Apple's Activity rings. Geometry collapsed from two
+    // separate circles (outer state-ring + inner percent-ring at
+    // different radii) down to one track + one progress ring at the
+    // same radius — this matches the mock's iOS pattern: the progress
+    // ring overlays the track, and dasharray/dashoffset express both
+    // "calm full ring" (healthy) and "partial fill" (syncing).
+    //
+    // viewBox is fixed at 220; the CSS clamp on .enm-chain-hero scales
+    // the rendered size to taste (180–220px).
+    var VB = 220;
+    var CENTRE = VB / 2;          // 110
+    var R = 100;                  // ring radius (10 from viewBox edge = stroke clearance)
+    var CIRC = 2 * Math.PI * R;   // 628.318...
 
     function PowerCircle(opts) {
         opts = opts || {};
@@ -84,36 +91,25 @@
         track.classList.add('enm-pc-track');
         track.setAttribute('cx', CENTRE);
         track.setAttribute('cy', CENTRE);
-        track.setAttribute('r',  OUTER_R);
+        track.setAttribute('r',  R);
         track.setAttribute('fill', 'none');
         svg.appendChild(track);
 
-        // State ring — coloured per state. For 'booting' we animate a partial
-        // dash so it reads as a spinner.
-        var stateRing = document.createElementNS(SVG_NS, 'circle');
-        stateRing.classList.add('enm-pc-state-ring');
-        stateRing.setAttribute('cx', CENTRE);
-        stateRing.setAttribute('cy', CENTRE);
-        stateRing.setAttribute('r',  OUTER_R);
-        stateRing.setAttribute('fill', 'none');
-        // The full-circumference dash is the calm default. Booting overrides
-        // via CSS to show a gap that animates around.
-        stateRing.style.strokeDasharray = OUTER_CIRC;
-        stateRing.style.strokeDashoffset = '0';
-        svg.appendChild(stateRing);
-
-        // Percent ring — only painted when state === 'syncing'.
-        // Rotated -90deg so it starts at 12 o'clock and fills clockwise.
-        var pctRing = document.createElementNS(SVG_NS, 'circle');
-        pctRing.classList.add('enm-pc-percent-ring');
-        pctRing.setAttribute('cx', CENTRE);
-        pctRing.setAttribute('cy', CENTRE);
-        pctRing.setAttribute('r',  INNER_R);
-        pctRing.setAttribute('fill', 'none');
-        pctRing.setAttribute('transform', 'rotate(-90 ' + CENTRE + ' ' + CENTRE + ')');
-        pctRing.style.strokeDasharray = INNER_CIRC;
-        pctRing.style.strokeDashoffset = INNER_CIRC; // empty by default
-        svg.appendChild(pctRing);
+        // Progress ring — coloured per state. Overlays the track at the
+        // same radius. dashoffset drives the partial-fill mechanic when
+        // syncing; for every other state it stays at 0 (full circle).
+        // Rotated -90deg so the fill starts at 12 o'clock and grows
+        // clockwise — iOS Activity Ring convention.
+        var ring = document.createElementNS(SVG_NS, 'circle');
+        ring.classList.add('enm-pc-ring');
+        ring.setAttribute('cx', CENTRE);
+        ring.setAttribute('cy', CENTRE);
+        ring.setAttribute('r',  R);
+        ring.setAttribute('fill', 'none');
+        ring.setAttribute('transform', 'rotate(-90 ' + CENTRE + ' ' + CENTRE + ')');
+        ring.style.strokeDasharray = CIRC;
+        ring.style.strokeDashoffset = '0';   // full circle by default
+        svg.appendChild(ring);
 
         btn.appendChild(svg);
 
@@ -135,11 +131,10 @@
 
         btn.appendChild(labelWrap);
 
-        this.root      = btn;
-        this._stateRing = stateRing;
-        this._pctRing   = pctRing;
-        this._glyph     = glyph;
-        this._pctText   = pctText;
+        this.root    = btn;
+        this._ring   = ring;
+        this._glyph  = glyph;
+        this._pctText = pctText;
 
         this._render();
     };
@@ -181,28 +176,33 @@
     PowerCircle.prototype._render = function () {
         this.root.dataset.state = this._state;
 
-        // Percent ring: only paint when syncing AND we have a percent.
-        // Three sub-cases for the centre label:
+        // 0.2.0-alpha.1 — single-ring model. The same circle expresses
+        // both "calm state colour" (healthy / warning / error / off,
+        // where the ring is fully drawn and stroke colour says
+        // everything) and "syncing progress" (dashoffset partial-fills
+        // the ring). Three sub-cases for the centre label:
         //   syncing + percent known    → "82%"
         //   syncing + percent unknown  → animated dots (Apple-style "thinking")
-        //   any other state            → state glyph (✓, ⏻, etc.)
+        //   any other state            → state glyph (⏻, !, ✕, etc.)
         var hasPct = (this._state === 'syncing' && this._percent != null);
         if (hasPct) {
-            var filled = INNER_CIRC * (this._percent / 100);
-            this._pctRing.style.strokeDashoffset = (INNER_CIRC - filled).toFixed(2);
+            var filled = CIRC * (this._percent / 100);
+            this._ring.style.strokeDashoffset = (CIRC - filled).toFixed(2);
             this._pctText.textContent = this._percent.toFixed(this._percent < 10 ? 1 : 0) + '%';
             this._pctText.hidden = false;
             this._glyph.hidden = true;
             this._glyph.classList.remove('enm-pc-glyph-estimating');
         } else {
-            // Empty ring (full offset = invisible).
-            this._pctRing.style.strokeDashoffset = INNER_CIRC;
+            // Full circle (offset 0) for every non-syncing state — the
+            // ring colour does the talking. CSS owns the colour per
+            // [data-state]; we don't touch it from JS.
+            this._ring.style.strokeDashoffset = '0';
             this._pctText.hidden = true;
             this._glyph.hidden = false;
             if (this._state === 'syncing') {
-                // Network reference not in yet — show a "still working
-                // on it" hint so the circle never reads as empty/stuck.
-                // The CSS class adds a gentle pulse to the dots.
+                // Network reference not in yet — paint the ring as a
+                // "thinking" indicator (CSS adds the shimmering dash)
+                // and show pulsing dots in the centre.
                 this._glyph.textContent = '···';
                 this._glyph.classList.add('enm-pc-glyph-estimating');
             } else {

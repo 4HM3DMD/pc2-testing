@@ -786,11 +786,13 @@ body[data-active-tab="identity"]::before {
 }
 
 .enm-chain-hero {
-    /* alpha.18 — trim clamp ceiling 200 → 160. Combined with the
-       tighter card padding above, this drops the card height by ~80px
-       without losing any information density. The PowerCircle is
-       still the focal point; it just doesn't take half the card. */
-    width: clamp(140px, 28cqi, 160px);
+    /* 0.2.0-alpha.1 — back UP to 220 ceiling, matching the apple-hero
+       mock's 220x220 ring viewBox. The new SVG geometry packs a 100r
+       ring with a stroke of 10/12 — it earns more space than the
+       slimmed-down alpha.18 ring did. Container query so narrow
+       sidebars (or future 2-up grids) collapse to --ring-size-fallback
+       (180px) gracefully. */
+    width: clamp(var(--ring-size-fallback), 60cqi, var(--ring-size));
     aspect-ratio: 1 / 1;
     display: flex;
     align-items: center;
@@ -1159,12 +1161,18 @@ body[data-active-tab="identity"]::before {
 }
 
 /* ============================================================
-   PowerCircle — the hero status visualization
+   PowerCircle — the hero status visualization (0.2.0-alpha.1)
    ============================================================
+   Apple Hero rewrite. Geometry collapsed to a single-ring model
+   (one track + one progress ring at the same radius) so the
+   syncing partial-fill and the calm full-circle states share the
+   same SVG element. Stroke width up from 3 to var(--ring-stroke-width),
+   matching iOS Activity Rings.
+
    States: off, booting, syncing, healthy, warning, error.
-   The whole component is a button. SVG inside scales to 100%
-   of the .enm-chain-hero wrapper (width comes from the wrapper's
-   container-query clamp). */
+   The whole component is a <button>. SVG fills the .enm-chain-hero
+   wrapper; the wrapper carries the container-query clamp that drives
+   ring size. */
 
 .enm-power-circle {
     /* Reset native button chrome */
@@ -1183,17 +1191,14 @@ body[data-active-tab="identity"]::before {
     justify-content: center;
     color: var(--text-primary);
 
-    /* Apple-style press response — subtle scale on click */
     transition: transform var(--motion-fast) var(--ease-spring),
                 filter var(--motion-base) var(--ease-spring);
 }
 
-.enm-power-circle:hover { transform: scale(1.015); }
+.enm-power-circle:hover  { transform: scale(1.015); }
 .enm-power-circle:active { transform: scale(0.985); }
 
-.enm-power-circle:focus-visible {
-    outline: none;
-}
+.enm-power-circle:focus-visible { outline: none; }
 .enm-power-circle:focus-visible .enm-pc-svg {
     filter: drop-shadow(0 0 0 var(--focus-ring-color))
             drop-shadow(0 0 8px var(--focus-ring-color));
@@ -1202,31 +1207,28 @@ body[data-active-tab="identity"]::before {
 .enm-pc-svg {
     width: 100%;
     height: 100%;
-    overflow: visible; /* glow filters extend past the viewBox */
+    overflow: visible; /* breath ::after extends past the viewBox */
 }
 
+/* Track ring — gray, always visible. Driven by --ring-track which
+   shifts with theme (iOS separator alpha both modes). */
 .enm-pc-track {
-    stroke: var(--border-color);
-    stroke-width: 2;
+    fill: none;
+    stroke: var(--ring-track);
+    stroke-width: var(--ring-stroke-width);
 }
 
-.enm-pc-state-ring {
+/* Progress ring — state-coloured. dashoffset partial-fills it when
+   syncing; otherwise it's a full circle and the colour says the state. */
+.enm-pc-ring {
+    fill: none;
     stroke: var(--state-stopped);
-    stroke-width: 3;
+    stroke-width: var(--ring-stroke-width);
     stroke-linecap: round;
-    transition: stroke var(--motion-slow) var(--ease-spring),
-                opacity var(--motion-slow) var(--ease-spring),
-                stroke-width var(--motion-slow) var(--ease-spring);
-}
-
-.enm-pc-percent-ring {
-    stroke: var(--state-syncing);
-    stroke-width: 3;
-    stroke-linecap: round;
-    /* Smooth fill animation as the snapshot updates */
-    transition: stroke-dashoffset var(--motion-slow) var(--ease-spring),
-                stroke var(--motion-slow) var(--ease-spring),
-                opacity var(--motion-slow) var(--ease-spring);
+    transition: stroke         var(--motion-slow) var(--ease-spring),
+                stroke-dashoffset var(--motion-slow) var(--ease-spring),
+                opacity        var(--motion-slow) var(--ease-spring),
+                stroke-width   var(--motion-slow) var(--ease-spring);
 }
 
 .enm-pc-label-wrap {
@@ -1240,15 +1242,15 @@ body[data-active-tab="identity"]::before {
 }
 
 .enm-pc-glyph {
-    font-size: clamp(28px, 22cqi, 56px);
+    font-size: var(--ring-glyph-size);
     font-weight: 300;
     line-height: 1;
-    transition: color var(--motion-slow) var(--ease-spring),
+    transition: color   var(--motion-slow) var(--ease-spring),
                 opacity var(--motion-slow) var(--ease-spring);
 }
 
 .enm-pc-percent {
-    font-size: clamp(20px, 16cqi, 38px);
+    font-size: var(--ring-percent-size);
     font-weight: 600;
     letter-spacing: -0.02em;
     font-variant-numeric: tabular-nums;
@@ -1259,7 +1261,7 @@ body[data-active-tab="identity"]::before {
 /* "Estimating" dots — shown when state=syncing but the network reference
    hasn't landed yet. Pulses gently so the circle never reads as stuck. */
 .enm-pc-glyph.enm-pc-glyph-estimating {
-    font-size: clamp(28px, 22cqi, 56px);
+    font-size: var(--ring-glyph-size);
     font-weight: 700;
     letter-spacing: 4px;
     color: var(--state-syncing);
@@ -1268,13 +1270,13 @@ body[data-active-tab="identity"]::before {
 
 @keyframes enm-pc-estimating {
     0%, 100% { opacity: 0.55; transform: translateY(0); }
-    50%      { opacity: 1; transform: translateY(-1px); }
+    50%      { opacity: 1;    transform: translateY(-1px); }
 }
 
 /* ---- Visual states ----------------------------------------------------- */
 
 /* Off — dim and dormant. The power glyph hints at "tap to start". */
-.enm-power-circle[data-state="off"] .enm-pc-state-ring {
+.enm-power-circle[data-state="off"] .enm-pc-ring {
     stroke: var(--state-stopped);
     opacity: 0.35;
 }
@@ -1283,55 +1285,69 @@ body[data-active-tab="identity"]::before {
     opacity: 0.7;
 }
 
-/* Booting — animated rotating arc to communicate "working on it".
-   Replicates the iOS spinner feel by chopping the dasharray. */
-.enm-power-circle[data-state="booting"] .enm-pc-state-ring {
+/* Booting — rotating arc to communicate "working on it". Chops the
+   ring's dasharray so a 30% segment spins around. */
+.enm-power-circle[data-state="booting"] .enm-pc-ring {
     stroke: var(--state-recovering);
-    stroke-dasharray: 60 220;
+    stroke-dasharray: 188 628; /* ~30% segment of CIRC=628 */
     transform-origin: 50% 50%;
     animation: enm-pc-spin 1.4s linear infinite;
 }
 
 @keyframes enm-pc-spin {
-    from { transform: rotate(0deg); }
-    to   { transform: rotate(360deg); }
+    /* Compose with the existing rotate(-90) so the start of the dash
+       still pins to 12 o'clock initially, then sweeps. */
+    from { transform: rotate(-90deg); }
+    to   { transform: rotate(270deg); }
 }
 
-/* Syncing — solid blue ring + filling inner percent ring. */
-.enm-power-circle[data-state="syncing"] .enm-pc-state-ring {
-    stroke: var(--state-syncing);
-    opacity: 0.4;
-}
-.enm-power-circle[data-state="syncing"] .enm-pc-percent-ring {
+/* Syncing — the ring is partial (dashoffset set from JS). The colour
+   is iOS system blue, and a drift shimmer animates the dashed segment
+   slowly so the operator sees "progress in motion" even when blocks
+   land 30 seconds apart. */
+.enm-power-circle[data-state="syncing"] .enm-pc-ring {
     stroke: var(--state-syncing);
 }
 
-/* alpha.18 — Healthy refresh. The heavy drop-shadow glow read as a
-   "neon sign", which fights the calm-at-rest goal of the dashboard.
-   Now: a slightly thicker ring (4 instead of 3) at full opacity,
-   subtle 4-second breath cycle, no glow. The green ring with the
-   power glyph in the middle communicates "alive and powered on" the
-   same way a Mac's power LED does — no halo needed. */
-.enm-power-circle[data-state="healthy"] .enm-pc-state-ring {
+/* Healthy — green ring fully drawn at full opacity. NO heavy
+   drop-shadow glow (that read as a neon sign in alpha pre-18). The
+   breath animation lives on a ::after pseudo-element so it's a
+   shadow-scale sonar ping, not a fading opacity oscillation — the
+   ping reads as "alive", the fade reads as "dying". */
+.enm-power-circle[data-state="healthy"] .enm-pc-ring {
     stroke: var(--state-healthy);
-    stroke-width: 4;
-    animation: enm-pc-breathe 4s var(--ease-spring) infinite;
+    stroke-width: var(--ring-stroke-width-healthy);
 }
 .enm-power-circle[data-state="healthy"] .enm-pc-glyph {
     color: var(--state-healthy);
-    /* alpha.18 — match the power-symbol glyph to the off state's
-       weight so green-on / gray-off share a visual grammar; only the
-       colour changes. */
     font-weight: 300;
 }
 
+/* Breath sonar ping. inset:-6px sets the ping ring 6px outside the
+   visible ring; the keyframe expands the shadow outward and fades it
+   to transparent in one cycle. */
+.enm-power-circle[data-state="healthy"]::after {
+    content: "";
+    position: absolute;
+    inset: -6px;
+    border-radius: 50%;
+    pointer-events: none;
+    animation: enm-pc-breathe var(--breath-duration) ease-in-out infinite;
+}
+
 @keyframes enm-pc-breathe {
-    0%, 100% { opacity: 1; }
-    50%      { opacity: 0.78; }
+    0%, 100% {
+        box-shadow: 0 0 0 0 rgba(52, 199, 89, 0.22);
+        transform: scale(1);
+    }
+    50% {
+        box-shadow: 0 0 0 18px rgba(52, 199, 89, 0);
+        transform: scale(1.012);
+    }
 }
 
 /* Warning — amber, no animation, calm presence. */
-.enm-power-circle[data-state="warning"] .enm-pc-state-ring {
+.enm-power-circle[data-state="warning"] .enm-pc-ring {
     stroke: var(--state-stalled);
 }
 .enm-power-circle[data-state="warning"] .enm-pc-glyph {
@@ -1339,7 +1355,7 @@ body[data-active-tab="identity"]::before {
 }
 
 /* Error — red, gentle pulse to draw attention without panic. */
-.enm-power-circle[data-state="error"] .enm-pc-state-ring {
+.enm-power-circle[data-state="error"] .enm-pc-ring {
     stroke: var(--state-error);
     animation: enm-pc-pulse 2.4s var(--ease-spring) infinite;
 }
@@ -1348,15 +1364,15 @@ body[data-active-tab="identity"]::before {
 }
 
 @keyframes enm-pc-pulse {
-    0%, 100% { opacity: 1; stroke-width: 3; }
-    50%      { opacity: 0.65; stroke-width: 4; }
+    0%, 100% { opacity: 1;    stroke-width: var(--ring-stroke-width); }
+    50%      { opacity: 0.65; stroke-width: calc(var(--ring-stroke-width) + 2); }
 }
 
-/* Honour reduced-motion preference — kill the breathing/spin. */
+/* Honour reduced-motion preference — kill the breathing/spin/pulse. */
 @media (prefers-reduced-motion: reduce) {
-    .enm-power-circle[data-state="booting"] .enm-pc-state-ring,
-    .enm-power-circle[data-state="healthy"] .enm-pc-state-ring,
-    .enm-power-circle[data-state="error"] .enm-pc-state-ring {
+    .enm-power-circle[data-state="booting"] .enm-pc-ring,
+    .enm-power-circle[data-state="error"] .enm-pc-ring,
+    .enm-power-circle[data-state="healthy"]::after {
         animation: none;
     }
     .enm-power-circle:hover,
