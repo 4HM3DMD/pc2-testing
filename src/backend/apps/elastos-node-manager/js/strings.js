@@ -274,6 +274,7 @@
             primary_label_off:           'tap power to start',
             primary_label_unconfigured:  'tap to configure',
             sparkline_aria:              'Block height, last hour',
+            sse_reconnecting:            'Reconnecting…',
             tap_circle_aria:             'Status of {chainName}',
             bpos_heading: 'BPoS supernode',
             bpos_state:  'Producer state',

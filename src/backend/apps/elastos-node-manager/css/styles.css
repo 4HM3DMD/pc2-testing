@@ -849,16 +849,72 @@ body[data-active-tab="identity"]::before {
     line-height: 1.2;
 }
 
-/* alpha.17 — drop the all-caps tracked treatment. State labels like
-   "Active" / "Syncing" / "Pending" read as natural words, not as a
-   tech-demo dashboard chip. Lower-case secondary text matches the
-   system-status cell labels and the audit-table column headers. */
+/* 0.2.0-alpha.1 — state subtitle: natural-case word ("Running",
+   "Active", "Catching up"), no tracking. Matches the chain-state
+   localisation values verbatim. */
 .enm-chain-card-state {
     font-size: 13px;
     font-weight: var(--font-weight-medium);
     letter-spacing: 0;
     color: var(--text-secondary);
     text-transform: none;
+}
+
+/* 0.2.0-alpha.1 (phase 8) — SSE reconnect pill. Appears under the
+   state subtitle while the supervisor channel is reconnecting or
+   closed. Subtle, doesn't shout — the operator just needs to know
+   the breath is currently a lie. */
+.enm-chain-reconnect {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 4px;
+    padding: 2px 10px;
+    border-radius: var(--radius-pill);
+    background: rgba(255, 159, 10, 0.12);
+    color: var(--state-stalled);
+    font-size: 11px;
+    font-weight: var(--font-weight-medium);
+    letter-spacing: 0.02em;
+}
+
+.enm-chain-reconnect[hidden] { display: none; }
+
+.enm-chain-reconnect::before {
+    content: '';
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+    animation: enm-chain-reconnect-blink 1.4s ease-in-out infinite;
+}
+
+@keyframes enm-chain-reconnect-blink {
+    0%, 100% { opacity: 0.4; }
+    50%      { opacity: 1; }
+}
+
+/* Stale / SSE-disconnected card state — drop ring saturation, pause
+   the breath, dim sparkline. The chain might still be alive locally;
+   we just don't have confirmation. Truth > a lying green ring. */
+.enm-chain-card[data-sse-state="reconnecting"] .enm-power-circle,
+.enm-chain-card[data-sse-state="closed"]       .enm-power-circle,
+.enm-chain-card[data-stale="1"]                .enm-power-circle {
+    filter: grayscale(0.4);
+}
+.enm-chain-card[data-sse-state="reconnecting"] .enm-power-circle[data-state="healthy"]::after,
+.enm-chain-card[data-sse-state="closed"]       .enm-power-circle[data-state="healthy"]::after,
+.enm-chain-card[data-stale="1"]                .enm-power-circle[data-state="healthy"]::after {
+    animation: none;
+}
+.enm-chain-card[data-sse-state="reconnecting"] .enm-spark,
+.enm-chain-card[data-sse-state="closed"]       .enm-spark,
+.enm-chain-card[data-stale="1"]                .enm-spark {
+    opacity: calc(var(--sparkline-opacity) * 0.5);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .enm-chain-reconnect::before { animation: none; }
 }
 
 /* 0.2.0-alpha.1 — kept for backward compat with any consumers still
@@ -1022,123 +1078,15 @@ body[data-active-tab="identity"]::before {
     }
 }
 
-/* alpha.17 — sync + BPoS panels switch from border-top dividers to
-   bg-muted blocks. Border-tops created hard horizontal lines stacked
-   inside the card, which read as separator chrome instead of structure.
-   A subtle muted background with rounded corners gives interior
-   structure without adding chrome — closer to macOS System Settings
-   "group" boxes. */
-.enm-chain-sync {
-    background: var(--bg-muted);
-    border-radius: var(--radius-md);
-    padding: var(--spacing-md) var(--spacing-md);
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-}
-
-.enm-chain-sync[data-stale="1"] { opacity: 0.7; }
-
-/* alpha.17 — section heading. Same treatment as the validator eyebrow
-   so all "section labels" inside cards read consistently. Slightly
-   lighter weight (semi → medium) since the bg-muted block already
-   creates the structure. */
-.enm-chain-sync-heading {
-    font-size: 11px;
-    font-weight: var(--font-weight-medium);
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--text-muted);
-}
-
-.enm-chain-sync-bar-wrap {
-    width: 100%;
-    height: 6px;
-    /* alpha.17 — the sync panel itself is now bg-muted, so the track
-       needs a slightly darker background to stay visible. bg-surface
-       creates a subtle inset look. */
-    background: var(--border-color);
-    border-radius: var(--radius-pill);
-    overflow: hidden;
-    position: relative;
-}
-
-.enm-chain-sync-bar {
-    height: 100%;
-    background: linear-gradient(90deg, var(--primary), var(--primary-hover));
-    border-radius: var(--radius-pill);
-    transition: width var(--motion-slow) var(--ease-out);
-}
-
-.enm-chain-sync-indeterminate .enm-chain-sync-bar {
-    background: linear-gradient(90deg,
-        transparent 0%, var(--primary) 50%, transparent 100%);
-    animation: enm-indet 1.5s linear infinite;
-    width: 50% !important;
-}
-
-@keyframes enm-indet {
-    0%   { transform: translateX(-100%); }
-    100% { transform: translateX(200%); }
-}
-
-.enm-chain-sync-status {
-    font-size: 13px;
-    color: var(--text-primary);
-}
-
-.enm-chain-sync-metrics {
-    font-size: 12px;
-    color: var(--text-muted);
-}
-
-/*
- * Sync expectation hint — quieter than the status line, sets the
- * 1-3 day expectation up-front so multi-day syncs don't look broken.
- */
-.enm-chain-sync-hint {
-    font-size: 12px;
-    color: var(--text-muted);
-    font-style: italic;
-    margin-top: var(--spacing-xs, 4px);
-}
-
-.enm-chain-bpos {
-    background: var(--bg-muted);
-    border-radius: var(--radius-md);
-    padding: var(--spacing-md);
-}
-
-.enm-chain-bpos-heading {
-    font-size: 11px;
-    font-weight: var(--font-weight-medium);
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--text-muted);
-    margin-bottom: var(--spacing-sm);
-}
-
-.enm-chain-bpos-stats {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: var(--spacing-sm) var(--spacing-md);
-}
-
-.enm-chain-bpos-stats dt {
-    font-size: 11px;
-    color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-}
-
-.enm-chain-bpos-stats dd {
-    font-size: 13px;
-    color: var(--text-primary);
-    font-variant-numeric: tabular-nums;
-}
-
-.enm-chain-bpos-stats dd[data-severity="warning"]  { color: var(--warning); font-weight: 600; }
-.enm-chain-bpos-stats dd[data-severity="critical"] { color: var(--error); font-weight: 600; }
+/* 0.2.0-alpha.1 — the alpha.18 sync + BPoS panels are GONE.
+   chain-card no longer renders .enm-chain-sync, .enm-chain-sync-bar,
+   .enm-chain-sync-metrics, .enm-chain-sync-hint, .enm-chain-bpos,
+   .enm-chain-bpos-stats, or any of their children. The PowerCircle
+   ring + percent + "local / network" primary-metric line tell the
+   sync story; producer info lives in the Identity sub-tab. The dead
+   CSS rules these blocks would have carried are deleted, not
+   commented out — ~120 LOC removed. If a future iteration needs an
+   in-card BPoS strip, the v1 from alpha.14-18 is in git history. */
 
 .enm-chain-actions {
     display: flex;
@@ -1204,64 +1152,13 @@ body[data-active-tab="identity"]::before {
     opacity: calc(var(--sparkline-opacity) * 0.5);
 }
 
-/* ---- Details disclosure ------------------------------------------------- */
-
-.enm-chain-details-toggle {
-    align-self: center;
-    background: none;
-    border: none;
-    color: var(--text-secondary);
-    font: inherit;
-    font-size: 12px;
-    font-weight: 500;
-    letter-spacing: 0.02em;
-    padding: 8px 12px;
-    margin-top: var(--spacing-md);
-    cursor: pointer;
-    border-radius: var(--radius-pill);
-    transition: color var(--motion-fast) var(--ease-spring),
-                background var(--motion-fast) var(--ease-spring);
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-}
-
-.enm-chain-details-toggle::after {
-    content: '⌃';
-    display: inline-block;
-    font-size: 11px;
-    transform: rotate(180deg);
-    transition: transform var(--motion-base) var(--ease-spring);
-}
-
-.enm-chain-card-expanded .enm-chain-details-toggle::after {
-    transform: rotate(0deg);
-}
-
-.enm-chain-details-toggle:hover {
-    color: var(--text-primary);
-    background: var(--bg-muted);
-}
-
-.enm-chain-details-toggle:focus-visible {
-    outline: none;
-    box-shadow: var(--focus-ring);
-}
-
-.enm-chain-details {
-    width: 100%;
-    border-top: 1px solid var(--border-color);
-    padding-top: var(--spacing-lg);
-    display: flex;
-    flex-direction: column;
-    gap: var(--spacing-lg);
-    animation: enm-chain-details-fade var(--motion-slow) var(--ease-spring);
-}
-
-@keyframes enm-chain-details-fade {
-    from { opacity: 0; transform: translateY(-4px); }
-    to   { opacity: 1; transform: translateY(0); }
-}
+/* 0.2.0-alpha.1 — Details disclosure removed. The alpha.18 chain-card
+   wrapped its sync + BPoS panels behind a chevron-toggle; the apple-
+   hero design has no use for it — the card is calm at rest and the
+   data that used to hide there now either renders inline (sparkline,
+   primary metric "local / network") or moved to the Identity tab.
+   The dead .enm-chain-details* and .enm-chain-card-expanded rules
+   (~70 LOC) are deleted, not commented. */
 
 /* ============================================================
    PowerCircle — the hero status visualization (0.2.0-alpha.1)

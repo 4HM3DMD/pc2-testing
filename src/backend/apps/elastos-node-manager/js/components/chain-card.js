@@ -78,6 +78,16 @@
                 'chains:' + this.chainId + ':status',
                 function (payload) { self._applyState(payload); },
             );
+            // 0.2.0-alpha.1 — SSE state listener. Toggles the
+            // reconnecting pill + sets data-sse-state on the card
+            // root so CSS can pause the breath / dim the ring when
+            // we've lost the supervisor channel.
+            if (typeof this.sse.onState === 'function') {
+                this._unsubSse = this.sse.onState(function (sseState) {
+                    if (self._destroyed) return;
+                    self._applySseState(sseState);
+                });
+            }
         }
         // Live-metric poll — height/peers/uptime move constantly while
         // the chain is alive. 5s matches alpha.18; backend can absorb it
@@ -102,6 +112,7 @@
         if (this._metricsTimer) { clearInterval(this._metricsTimer); this._metricsTimer = null; }
         if (this._syncTimer)    { clearTimeout(this._syncTimer);    this._syncTimer = null; }
         if (this._unsubscribe)  { this._unsubscribe(); this._unsubscribe = null; }
+        if (this._unsubSse)     { this._unsubSse();    this._unsubSse = null; }
         if (this._unsubHeight)  { this._unsubHeight(); this._unsubHeight = null; }
         if (this._sparkline)    { this._sparkline.destroy(); this._sparkline = null; }
         // 0.2.0-alpha.1 — tell FleetHealthGradient we're going away so it
@@ -172,6 +183,17 @@
         this._stateSubtitle.className = 'enm-chain-card-state';
         this._stateSubtitle.textContent = t('chain_state.unconfigured');
         header.appendChild(this._stateSubtitle);
+
+        // 0.2.0-alpha.1 — SSE-disconnect indicator pill. The breath
+        // animation says "alive"; when SSE drops we'd be lying. This
+        // pill appears under the state subtitle while the connection
+        // is reconnecting / closed, and the CSS also pauses the breath
+        // via the [data-sse-state] attribute on the card root.
+        this._reconnectPill = document.createElement('span');
+        this._reconnectPill.className = 'enm-chain-reconnect';
+        this._reconnectPill.textContent = t('chain_card.sse_reconnecting') || 'Reconnecting…';
+        this._reconnectPill.hidden = true;
+        header.appendChild(this._reconnectPill);
 
         this.root.appendChild(header);
 
@@ -490,6 +512,21 @@
             ? this._lastBackendState.height : null;
         this._primaryMetric.textContent = formatPrimaryValue(t,
             this._lastCoarseState || 'unconfigured', height, data);
+    };
+
+    /**
+     * @private
+     * Apply an SSE connection-state change. Updates the card's
+     * data-sse-state attribute (drives CSS dimming + breath pause)
+     * and toggles the reconnecting pill. Open = everything hidden;
+     * anything else = pill on, ring dimmed.
+     *
+     * @param {('open'|'reconnecting'|'closed')} sseState
+     */
+    ChainCard.prototype._applySseState = function (sseState) {
+        this.root.dataset.sseState = sseState || 'open';
+        if (!this._reconnectPill) return;
+        this._reconnectPill.hidden = (sseState === 'open');
     };
 
     /** Build a button. Plain helper. */
