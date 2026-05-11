@@ -24,43 +24,60 @@
 :root {
     color-scheme: light dark;
 
-    /* ---- color tokens (light, default) ----
-       Token names + values mirror dao-dashboard so ENM looks like a sibling
-       Elacity app inside PC2. Theme switch is via [data-theme="dark"] on
-       <html>, persisted via the shared 'elacity-theme' localStorage key
-       (see the pre-paint script in index.html).
+    /* ============================================================
+       0.2.0-alpha.1 — Apple Hero token system
+       ============================================================
+       Phase 1 of the Apple Hero rewrite: tokens land first, no
+       consumers yet. The chain-card / PowerCircle / status-strip
+       sections still reference these names so they keep working
+       through the transition.
+
+       Source of truth for every value:
+       enm-design-mocks/plan/02-css-migration.md §1
+
+       Palette: Apple iOS system colours (system blue #007aff,
+       green #34c759, orange #ff9f0a, red #ff453a, gray #8e8e93).
+       Borders use rgba so they read as "edge" not "line".
+       Theme switch stays attribute-based via [data-theme="dark"];
+       see the pre-paint script in index.html.
     */
-    --bg-page: #f8fafc;
+
+    /* ---- surface + ink ---- */
+    --bg-page: #f7f8fa;
     --bg-surface: #ffffff;
-    --bg-muted: #f1f5f9;
+    --bg-muted: #f3f4f7;
     --bg-elevated: #ffffff;
     --bg-code: #0f172a;
-    --border-color: #e2e8f0;
-    --border-strong: #cbd5e1;
-    --text-primary: #1e293b;
-    --text-secondary: #64748b;
-    --text-muted: #94a3b8;
+    --border-color: rgba(60, 60, 67, 0.08);
+    --border-strong: rgba(60, 60, 67, 0.14);
+    --text-primary: #11131a;
+    --text-secondary: #4b4f5b;
+    --text-muted: #8a8f9c;
     --text-inverse: #f8fafc;
 
-    --primary: #3b82f6;
-    --primary-hover: #2563eb;
-    --primary-active: #1d4ed8;
-    --primary-soft: rgba(59, 130, 246, 0.10);
-    --primary-softer: rgba(59, 130, 246, 0.06);
+    /* ---- brand + accents (iOS system blue) ---- */
+    --primary: #007aff;
+    --primary-hover: #0a84ff;
+    --primary-active: #0064d2;
+    --primary-soft: rgba(0, 122, 255, 0.12);
+    --primary-softer: rgba(0, 122, 255, 0.06);
 
-    --success: #22c55e;
-    --warning: #f97316;
-    --error: #ef4444;
+    /* ---- semantic palette (Apple system colours) ---- */
+    --success: #34c759;
+    --warning: #ff9f0a;
+    --error: #ff453a;
     --healing: #7c3aed;
 
-    /* chain-state palette */
-    --state-healthy: #22c55e;
-    --state-syncing: #3b82f6;
-    --state-stalled: #f97316;
-    --state-stopped: #94a3b8;
-    --state-error: #ef4444;
-    --state-recovering: #7c3aed;
-    --state-unconfigured: #94a3b8;
+    /* ---- chain-state palette ----
+       Aliases of the semantic tokens above. One source of truth so a
+       brand-colour change ripples through every state surface. */
+    --state-healthy: var(--success);
+    --state-syncing: var(--primary);
+    --state-stalled: var(--warning);
+    --state-stopped: #8e8e93;
+    --state-error: var(--error);
+    --state-recovering: var(--healing);
+    --state-unconfigured: var(--state-stopped);
 
     /* ---- layout tokens ---- */
     --spacing-xs: 4px;
@@ -72,67 +89,126 @@
 
     --radius-sm: 6px;
     --radius-md: 8px;
-    --radius-lg: 14px;          /* alpha.8 — bumped from 12px to match Apple card minimum */
-    --radius-xl: 18px;
+    --radius-lg: 18px;          /* 0.2.0: 14 → 18, matches sys-strip */
+    --radius-xl: 28px;          /* 0.2.0: 18 → 28, chain-card */
     --radius-pill: 999px;
 
+    /* ---- shadows ----
+       --shadow-md is the "Apple resting card" two-layer shadow:
+       tight contact + soft floor. Used by chain card on hover + modals. */
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
-    --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.07);
+    --shadow-md: 0 1px 2px rgba(15, 17, 26, 0.04),
+                 0 12px 36px rgba(15, 17, 26, 0.05);
     --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.1);
-    --shadow-xs: var(--shadow-sm);  /* legacy alias */
+    --shadow-xs: var(--shadow-sm);
 
-    /* Weight scale — referenced through tokens so a future type-system
-       overhaul touches one place instead of fifty. Components should
-       use the tokens, not raw numeric weights. */
+    /* ---- type weight scale ---- */
     --font-weight-regular: 400;
     --font-weight-medium: 500;
     --font-weight-semibold: 600;
     --font-weight-bold: 700;
 
-    --focus-ring-color: rgba(59, 130, 246, 0.45);
+    /* ---- focus + chrome ---- */
+    --focus-ring-color: rgba(0, 122, 255, 0.45);
     --focus-ring: 0 0 0 3px var(--focus-ring-color);
-
     --header-bar-height: 44px;
 
-    --motion-fast: 120ms;
-    --motion-base: 180ms;
-    --motion-slow: 280ms;
+    /* ---- motion ----
+       0.2.0: timings stretched by ~33% so controls settle like macOS
+       instead of snapping. --ease-spring is one notch calmer too —
+       tighter return, slower out. */
+    --motion-fast: 160ms;
+    --motion-base: 240ms;
+    --motion-slow: 400ms;
     --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
     --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
-    /* Apple's standard interaction curve — the spring you feel on iOS / macOS
-       when something settles. Used as the default for hover / press / state
-       transitions; --ease-out stays for entrance animations and spinners. */
-    --ease-spring: cubic-bezier(0.32, 0.72, 0, 1);
+    --ease-spring: cubic-bezier(.2, .7, .2, 1);
+
+    /* ============================================================
+       NEW Apple Hero tokens (phase 1)
+       ============================================================
+       Wash, ring, sparkline, breath, brand gradient. Consumers land
+       in later phases — these slots are reserved here. */
+
+    /* Page-wash gradient on body::before — drives fleet-health hue.
+       The default values are the "healthy" tint; the FleetHealthGradient
+       controller (phase 2) overrides --wash-a / --wash-b on
+       <html data-fleet-health="..."> for warning / busy / idle. */
+    --wash-a: rgba(52, 199, 89, 0.07);
+    --wash-b: rgba(52, 199, 89, 0.00);
+    --wash-blend-ms: 800ms;
+
+    /* PowerCircle ring sizing + stroke weights. Mock uses 220x220
+       SVG with stroke 4; we keep that ratio with px values for use
+       inside the JS-driven SVG. */
+    --ring-track: rgba(60, 60, 67, 0.08);
+    --ring-stroke-width: 10;
+    --ring-stroke-width-healthy: 12;
+    --ring-size: 220px;
+    --ring-size-fallback: 180px;
+    --ring-glyph-size: clamp(48px, 28cqi, 64px);
+    --ring-percent-size: clamp(28px, 18cqi, 38px);
+    --breath-duration: 4s;
+
+    /* Brand gradient — the green→blue used by the header mark icon.
+       Only place in the app that uses a real gradient instead of a wash. */
+    --gradient-healthy: linear-gradient(135deg, #34c759 0%, #0a84ff 100%);
+
+    /* Sparkline — inline SVG inside chain-card. JS sets the series;
+       CSS controls stroke colour (via currentColor) + line weight + the
+       SVG gradient-fill opacity. */
+    --sparkline-stroke: 1.6;
+    --sparkline-opacity: 0.9;
+    --sparkline-fill-top: 0.30;
+    --sparkline-fill-bottom: 0.00;
+
+    /* Chain-card chrome. Mock spec; replaces the all-around lg padding
+       the card has worn since alpha.18. */
+    --sys-cell-divider: 1px solid var(--border-color);
+    --chain-card-padding: 36px 32px 28px;
+    --chain-card-radius: var(--radius-xl);
 }
 
-/* Dark mode — values mirror dao-dashboard's dark palette so the two
-   Elacity apps render identically inside PC2 when dark mode is on. */
+/* ============================================================
+   Dark mode — Apple iOS Dark
+   ============================================================
+   Pure near-black surfaces (no slate tint). Mirrors the apple-hero
+   mock's dark palette. Theme switching stays explicit via
+   [data-theme="dark"] on <html> — the prefers-color-scheme block
+   in the mock is intentionally NOT duplicated; the pre-paint script
+   in index.html sets data-theme before first paint, so a media-query
+   block would just fight that.
+*/
 [data-theme="dark"] {
-    --bg-page: #121212;
-    --bg-surface: #1e1e1e;
-    --bg-muted: #2a2a2a;
-    --bg-elevated: #262626;
+    --bg-page: #07080b;
+    --bg-surface: #14161c;
+    --bg-muted: #1a1d25;
+    --bg-elevated: #1a1d25;
     --bg-code: #0a0a0a;
-    /* alpha.8 — bumped from #333 so the border carries the visual separation
-       work that the now-removed resting card shadow used to do. */
-    --border-color: #3a3a3a;
-    --border-strong: #525252;
-    --text-primary: #e5e5e5;
-    --text-secondary: #a3a3a3;
-    --text-muted: #737373;
-    --primary: #3b82f6;
-    --primary-hover: #60a5fa;
-    --primary-soft: rgba(59, 130, 246, 0.16);
-    --primary-softer: rgba(59, 130, 246, 0.08);
-    --success: #34d399;
-    --warning: #fb923c;
-    --error: #f87171;
-    --state-healthy: #34d399;
-    --state-stalled: #fb923c;
-    --state-error: #f87171;
+    --border-color: rgba(235, 235, 245, 0.06);
+    --border-strong: rgba(235, 235, 245, 0.12);
+    --text-primary: #f4f5f8;
+    --text-secondary: #b5b9c5;
+    --text-muted: #7c8190;
+    --primary: #0a84ff;
+    --primary-hover: #409cff;
+    --primary-soft: rgba(10, 132, 255, 0.18);
+    --primary-softer: rgba(10, 132, 255, 0.10);
+    --success: #30d158;
+    --warning: #ffa00a;
+    --error: #ff453a;
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
-    --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.5);
+    /* Dark "resting card" shadow — inset 1px highlight catches the top
+       edge; soft floor drop. Apple's dark-mode card trick. */
+    --shadow-md: 0 1px 0 rgba(255, 255, 255, 0.02) inset,
+                 0 24px 60px rgba(0, 0, 0, 0.45);
     --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.6);
+
+    /* Apple Hero dark wash + sparkline tunings */
+    --wash-a: rgba(52, 199, 89, 0.09);
+    --ring-track: rgba(235, 235, 245, 0.06);
+    --sparkline-opacity: 0.85;
+    --sparkline-fill-top: 0.35;
 }
 
 /* Dark scrollbars match dao-dashboard / Market / dApp Centre. */
