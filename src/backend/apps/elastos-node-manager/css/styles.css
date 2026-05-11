@@ -739,10 +739,17 @@ body[data-active-tab="identity"]::before {
    Chain cards — container queries for true component responsiveness
    ============================================================ */
 
+/* 0.2.0-alpha.1 — single-card centered layout. ENM today only manages
+   mainchain, so the grid renders one card. The grid is kept (rather
+   than a flex container) so a future multi-chain build doesn't need a
+   layout rewrite — auto-fit with a 480px column max + justify-content
+   center scales gracefully to 2-up / 3-up. */
 .enm-chains-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(min(360px, 100%), 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(360px, 480px));
+    justify-content: center;
     gap: var(--spacing-lg);
+    margin: 0 auto;
 }
 
 /* ============================================================
@@ -755,16 +762,17 @@ body[data-active-tab="identity"]::before {
 
 .enm-chain-card {
     container-type: inline-size;
-    /* alpha.18 — tighter card rhythm. Was xl/lg/lg; now lg all around
-       with a slightly larger inner gap so the cards feel less like
-       Costco-sized panels. The PowerCircle dominates because it's the
-       hero, but the chrome around it shouldn't make the card 480px
-       tall. */
-    padding: var(--spacing-lg);
+    /* 0.2.0-alpha.1 — Apple Hero card chrome.
+       - padding 36/32/28 (top/sides/bottom) matches the mock's
+         generous breathing room around the 220px ring.
+       - radius xl (28px) for the soft-shouldered Apple card look.
+       - resting state has no shadow; hover lifts subtly. */
+    padding: var(--chain-card-padding);
+    border-radius: var(--chain-card-radius);
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: var(--spacing-sm);
+    gap: 12px;
     transition: border-color var(--motion-base) var(--ease-spring),
                 box-shadow var(--motion-base) var(--ease-spring),
                 transform var(--motion-base) var(--ease-spring);
@@ -832,11 +840,10 @@ body[data-active-tab="identity"]::before {
     text-transform: none;
 }
 
+/* 0.2.0-alpha.1 — kept for backward compat with any consumers still
+   referencing the legacy class name. The Apple Hero layout uses
+   .enm-chain-primary-{value,label} instead. */
 .enm-chain-card-metric {
-    /* alpha.18 — bumped 15 → 14px and tightened weight. The metric
-       line carries the live data (block height etc.); pairing it
-       with the chain name visually means we want it readable but
-       deferential. */
     font-size: 14px;
     color: var(--text-secondary);
     font-variant-numeric: tabular-nums;
@@ -844,6 +851,49 @@ body[data-active-tab="identity"]::before {
     margin: 0;
     min-height: 1.2em;
     letter-spacing: -0.005em;
+}
+
+/* 0.2.0-alpha.1 — primary metric stack. Big mono number on top
+   (block height or "local / network"), small lowercase label below.
+   Mirrors the system-status cells' value-first hierarchy and Apple's
+   widget pattern (big read first, caption second). */
+.enm-chain-primary {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    margin-top: 4px;
+    text-align: center;
+}
+
+.enm-chain-primary-value {
+    font-size: 32px;
+    font-weight: var(--font-weight-semibold);
+    letter-spacing: -0.02em;
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+    line-height: 1.1;
+    /* Allow the big number to break across two lines on narrow cards
+       rather than overflow. The "L1,234,567 / 1,234,567" syncing
+       variant is the wide one — letting it wrap keeps the card neat. */
+    overflow-wrap: anywhere;
+    max-width: 100%;
+}
+
+.enm-chain-primary-label {
+    font-size: 12px;
+    font-weight: var(--font-weight-medium);
+    color: var(--text-muted);
+    text-transform: lowercase;
+    letter-spacing: 0.01em;
+}
+
+/* Stopped / unconfigured states — the value line is an em-dash; the
+   label carries the action prompt. Bump the label slightly so the
+   "tap to configure" CTA reads as interactive. */
+.enm-chain-card[data-state="unconfigured"] .enm-chain-primary-label,
+.enm-chain-card[data-state="stopped"] .enm-chain-primary-label {
+    color: var(--text-secondary);
 }
 
 /* alpha.17 — chain badge refresh. Drop uppercase + heavy tracking;

@@ -344,6 +344,8 @@
             api: this.services.api,
             sse: this.services.sse,
             notifications: this.services.notifications,
+            // 0.2.0-alpha.1 — chain-card subscribes for sparkline data.
+            heightSeries: this.services.heightSeries,
             // No "back to home" button — the technical view IS home now.
             onBackHome: null,
         });

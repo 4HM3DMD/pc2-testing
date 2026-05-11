@@ -259,12 +259,22 @@
             no_chains:  'No chains configured. Run the setup wizard to add one.',
             details_show: 'Details',
             details_hide: 'Hide details',
-            primary_metric_synced:   'Block {height} · caught up',
-            primary_metric_syncing:  'Block {local} of {network}',
-            primary_metric_height:   'Block {height}',
-            primary_metric_off:      'Tap power to start',
-            primary_metric_unconfigured: 'Tap to configure',
-            tap_circle_aria:         'Status of {chainName}',
+            // 0.2.0-alpha.1 — Apple Hero pattern: big number alone on
+            // the primary value line, small lowercase caption below.
+            // primary_metric_* drive the number (or em-dash placeholder
+            // when not applicable); primary_label_* drive the caption.
+            // When unconfigured/stopped, the caption carries the action
+            // hint so the operator knows where to click.
+            primary_metric_synced:       '{height}',
+            primary_metric_syncing:      '{local} / {network}',
+            primary_metric_height:       '{height}',
+            primary_metric_off:          '—',
+            primary_metric_unconfigured: '—',
+            primary_label_height:        'block height',
+            primary_label_off:           'tap power to start',
+            primary_label_unconfigured:  'tap to configure',
+            sparkline_aria:              'Block height, last hour',
+            tap_circle_aria:             'Status of {chainName}',
             bpos_heading: 'BPoS supernode',
             bpos_state:  'Producer state',
             bpos_votes:  'Votes',

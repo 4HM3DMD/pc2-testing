@@ -2,30 +2,48 @@
  * Copyright (C) 2026-present Elacity
  * SPDX-License-Identifier: AGPL-3.0
  *
- * components/chain-card.js — single chain status card.
+ * components/chain-card.js — single-chain status card. (0.2.0-alpha.1)
  *
- * Apple-grade redesign (alpha.6): the visual hierarchy is
+ * Apple Hero rewrite. The visual hierarchy is:
  *
- *   1. PowerCircle — the only thing the eye lands on first. Colour and
- *      animation alone say what the chain is doing. Tap = obvious action.
- *   2. Chain name + one-line state subtitle.
- *   3. ONE primary metric line — block height (or tap-to-start prompt).
- *   4. Compact action row — only the actions that make sense for the state.
- *   5. Details toggle — everything else (version, peers, uptime, sync
- *      details, BPoS stats) lives behind a single click so the resting
- *      view stays calm.
+ *   1. PowerCircle hero — 220px Apple Activity Ring (state colour +
+ *      sync percent + sonar-ping breath when healthy).
+ *   2. Chain name (h3) + state subtitle (Active / Catching up / etc.).
+ *   3. Primary metric — block height number stacked above a small label.
+ *   4. Sparkline of last-hour block-height growth (hides when no data).
+ *   5. Stats strip — peers / version / uptime, value-on-top hierarchy.
+ *   6. Action row — Start / Stop / Restart / Configure (state-gated).
  *
- * State-machine + data-fetch logic from the previous version is preserved
- * verbatim (refresh / _refreshSync / _refreshProducer). The redesign is
- * pure presentation.
+ * What changed from alpha.18:
+ *   - The Details disclosure is GONE. The sync panel and BPoS panel
+ *     no longer live in the card. Sync info is communicated by the
+ *     PowerCircle's filled ring + percent and the X / Y primary metric;
+ *     BPoS info moves to the Identity sub-tab.
+ *   - The card mounts an EnmSparkline subscribed via heightSeries.
+ *   - On every state change the card dispatches 'enm:chain-state' on
+ *     window so EnmFleetHealthGradient can recompute the wash hue.
+ *
+ * The polling cadence (refresh every 5s, sync poll adaptive, producer
+ * poll every 60s when relevant) is preserved verbatim — the visual
+ * surface changed, not the data layer.
  */
 
 (function (root) {
     'use strict';
 
-    // String table lives in strings.js (key path `chain_state.<state>`).
-    // Format helper lives in utils.js (`enmFormatUptime`). Keeping them out
-    // of this file means a v0.2 i18n drop-in only touches one file.
+    // Coarse backend state → PowerCircle visual state. Same table as
+    // alpha.18; one-shot lookup so the mapping stays reviewable.
+    var COARSE_TO_VISUAL = {
+        unconfigured: 'off',
+        stopped:      'off',
+        recovering:   'booting',
+        starting:     'booting',
+        syncing:      'syncing',
+        healthy:      'healthy',
+        stalled:      'warning',
+        error:        'error',
+        disabled:     'off',
+    };
 
     function ChainCard(opts) {
         if (!opts || !opts.chainId || !opts.api || !opts.notifications) {
@@ -35,6 +53,10 @@
         this.api = opts.api;
         this.notifications = opts.notifications;
         this.sse = opts.sse || null;
+        // 0.2.0-alpha.1 — height-series client backs the sparkline. When
+        // absent (test rigs, defensive boot) the sparkline simply never
+        // shows; the rest of the card still works.
+        this.heightSeries = opts.heightSeries || null;
         this.onStateChange = typeof opts.onStateChange === 'function' ? opts.onStateChange : function () {};
         this.onReconfigure = typeof opts.onReconfigure === 'function' ? opts.onReconfigure : null;
 
@@ -42,7 +64,6 @@
         this.root.className = 'enm-chain-card';
         this.root.dataset.chainId = this.chainId;
         this.root.dataset.state = 'unconfigured';
-        this._cooldownTimer = null;
         this._busy = false;
 
         this._renderShell();
@@ -51,57 +72,53 @@
     ChainCard.prototype.mount = function (parent) {
         parent.appendChild(this.root);
         this.refresh();
-        // Subscribe to status events for this chain.
+        var self = this;
         if (this.sse) {
-            var self = this;
             this._unsubscribe = this.sse.subscribe(
                 'chains:' + this.chainId + ':status',
                 function (payload) { self._applyState(payload); },
             );
         }
-        var self = this;
-        // Live-metric poll — height/peers/uptime change constantly while
-        // the chain is alive; without a periodic refresh the values sit
-        // stale until something jolts a state-change SSE event. 5s is a
-        // good compromise between snappy UX and not hammering the RPC
-        // on every chain on the dashboard. (Real-time SSE push for these
-        // fields is a v0.6+ improvement — backend already polls RPC at
-        // similar cadence via HealthChecker; piggybacking on that via
-        // SseHub eliminates this poll entirely later.)
+        // Live-metric poll — height/peers/uptime move constantly while
+        // the chain is alive. 5s matches alpha.18; backend can absorb it
+        // and the dashboard feels live.
         this._metricsTimer = setInterval(function () { self.refresh(); }, 5_000);
-        // BPoS poll — once at mount and every 60s. Cheap because /producer
-        // is a single RPC; absent if the chain isn't arbiter-mode.
-        this._refreshProducer();
-        this._producerTimer = setInterval(function () { self._refreshProducer(); }, 60_000);
-        // Sync poll — adaptive cadence. Schedules itself; the helper picks
-        // 10s if state==='syncing' and 60s otherwise so the bar updates
-        // smoothly while syncing without hammering /sync when healthy.
+        // Sync poll — adaptive cadence. Drives the PowerCircle percent
+        // and the primary-metric "X / Y" line.
         this._refreshSync();
+        // Height-series sparkline. Subscribe once on mount; the service
+        // bootstraps with a GET /history then layers SSE deltas on top.
+        if (this.heightSeries) {
+            this._unsubHeight = this.heightSeries.subscribe(this.chainId, function (points) {
+                if (self._destroyed) return;
+                if (self._sparkline) self._sparkline.setSeries(points);
+            });
+        }
         return this;
     };
 
     ChainCard.prototype.destroy = function () {
-        // Order matters: set the destroyed flag first so any in-flight
-        // promise (refresh / _refreshSync / _refreshProducer) bails out
-        // when it resolves instead of calling _applyState on a detached
-        // DOM. Then clear all timers (no new work scheduled). Then
-        // unsubscribe from SSE last — until the very end an event can
-        // still arrive, but the destroyed flag in _applyState catches it.
         this._destroyed = true;
-        if (this._cooldownTimer) { clearInterval(this._cooldownTimer); this._cooldownTimer = null; }
         if (this._metricsTimer) { clearInterval(this._metricsTimer); this._metricsTimer = null; }
-        if (this._producerTimer) { clearInterval(this._producerTimer); this._producerTimer = null; }
-        if (this._syncTimer) { clearTimeout(this._syncTimer); this._syncTimer = null; }
-        if (this._unsubscribe) { this._unsubscribe(); this._unsubscribe = null; }
+        if (this._syncTimer)    { clearTimeout(this._syncTimer);    this._syncTimer = null; }
+        if (this._unsubscribe)  { this._unsubscribe(); this._unsubscribe = null; }
+        if (this._unsubHeight)  { this._unsubHeight(); this._unsubHeight = null; }
+        if (this._sparkline)    { this._sparkline.destroy(); this._sparkline = null; }
+        // 0.2.0-alpha.1 — tell FleetHealthGradient we're going away so it
+        // can drop this chain from its aggregate. Without this, a remount
+        // would double-count.
+        try {
+            root.dispatchEvent(new root.CustomEvent('enm:chain-state', {
+                detail: { chainId: this.chainId, removed: true },
+            }));
+        } catch (_) { /* old browsers without CustomEvent — skip */ }
         if (this.root.parentNode) { this.root.parentNode.removeChild(this.root); }
     };
 
     /**
-     * Re-fetch the chain summary from /api/chains/:id and re-render.
-     * Single-flight guarded — overlapping calls (5s metrics timer +
-     * post-action refresh + SSE event) all collapse to one in-flight
-     * request, so the UI doesn't render stale data from a slow earlier
-     * call after a fast later one.
+     * Re-fetch /chains/:id and re-render. Single-flight guarded so the
+     * 5s timer, post-action refreshes, and SSE events collapse to one
+     * in-flight request.
      */
     ChainCard.prototype.refresh = function () {
         if (this._destroyed) { return Promise.resolve(); }
@@ -110,11 +127,7 @@
         this._refreshInFlight = this.api.get('/chains/' + this.chainId, { skipCache: true }).then(function (state) {
             self._applyState(state);
         }).catch(function (err) {
-            // Bail on late-arriving error after destroy — otherwise we'd
-            // pop a "Failed to refresh" toast for a chain card that no
-            // longer exists.
             if (self._destroyed) { return; }
-            // 404 means not configured yet — treat as unconfigured.
             if (err && err.status === 404) {
                 self._applyState({ chainId: self.chainId, state: 'unconfigured' });
                 return;
@@ -136,24 +149,17 @@
         var t = root.enmTOrFallback;
         var self = this;
 
-        // alpha.11 layout — Start button lives right under the chain
-        // name (was: buried below the primary metric). Stats are always
-        // visible in a calm strip below (was: hidden behind a Details
-        // toggle). Details now only carries the deep info — sync velocity
-        // / ETA / BPoS — so the resting view is scannable at a glance
-        // but power users still get the goods.
-
-        // 1. Hero — the PowerCircle. One tap target, animated state colour.
+        // 1. Hero — the PowerCircle. Apple Activity Ring at 220px.
         var hero = document.createElement('div');
         hero.className = 'enm-chain-hero';
         this._powerCircle = new root.EnmPowerCircle({
             ariaLabel: t('chain_card.tap_circle_aria', { chainName: this.chainId }),
-            onTap: function (visualState) { self._handleCircleTap(visualState); },
+            onTap: function () { self._handleCircleTap(); },
         });
         this._powerCircle.mount(hero);
         this.root.appendChild(hero);
 
-        // 2. Header — chain name + one-line state subtitle.
+        // 2. Name + state subtitle.
         var header = document.createElement('header');
         header.className = 'enm-chain-card-head';
 
@@ -169,36 +175,36 @@
 
         this.root.appendChild(header);
 
-        // 3. Action row — promoted ABOVE the metric so Start is the next
-        // thing the eye lands on after reading the chain name + state.
-        var actions = document.createElement('div');
-        actions.className = 'enm-chain-actions';
+        // 3. Primary metric — block height number stacked over a small
+        // lowercase label. Mock pattern: large mono digits speak first,
+        // the label sits underneath as a caption.
+        var primaryWrap = document.createElement('div');
+        primaryWrap.className = 'enm-chain-primary';
+        this._primaryMetric = document.createElement('span');
+        this._primaryMetric.className = 'enm-chain-primary-value';
+        primaryWrap.appendChild(this._primaryMetric);
+        this._primaryLabel = document.createElement('span');
+        this._primaryLabel.className = 'enm-chain-primary-label';
+        this._primaryLabel.textContent = t('chain_card.primary_label_height');
+        primaryWrap.appendChild(this._primaryLabel);
+        this.root.appendChild(primaryWrap);
 
-        this._configureBtn = makeBtn(t('chain_actions.configure'), 'enm-btn-primary', this._handleConfigure.bind(this));
-        this._startBtn     = makeBtn(t('chain_actions.start'),     'enm-btn-primary',  this._handleStart.bind(this));
-        this._stopBtn      = makeBtn(t('chain_actions.stop'),      'enm-btn-secondary', this._handleStop.bind(this));
-        this._restartBtn   = makeBtn(t('chain_actions.restart'),   'enm-btn-secondary', this._handleRestart.bind(this));
+        // 4. Sparkline — last-hour block-height growth. Mounts once;
+        // setSeries fires whenever the height-series client emits.
+        if (root.EnmSparkline) {
+            this._sparkline = new root.EnmSparkline({
+                color: 'var(--state-healthy)',
+                ariaLabel: t('chain_card.sparkline_aria') || 'Block height, last hour',
+            });
+            this._sparkline.mount(this.root);
+        }
 
-        actions.appendChild(this._configureBtn);
-        actions.appendChild(this._startBtn);
-        actions.appendChild(this._stopBtn);
-        actions.appendChild(this._restartBtn);
-        this.root.appendChild(actions);
-
-        // 4. Primary metric line — block height / sync target / off-state
-        // prompt. Always one calm line of text.
-        this._primaryMetric = document.createElement('p');
-        this._primaryMetric.className = 'enm-chain-card-metric';
-        this.root.appendChild(this._primaryMetric);
-
-        // 5. Stats strip — always visible at-a-glance row of version /
-        // peers / uptime. Mirrors the system-status pattern from alpha.8:
-        // big numbers, tiny labels below, tabular numerics. Subtle
-        // top-border separates it from the action group above.
+        // 5. Stats strip — peers / version / uptime. Mirrors the
+        // system-status hierarchy (value-on-top + tiny label below).
         this._statsStrip = document.createElement('div');
         this._statsStrip.className = 'enm-chain-stats-strip';
         this._statFields = {};
-        ['version', 'peers', 'uptime'].forEach(function (k) {
+        ['peers', 'version', 'uptime'].forEach(function (k) {
             var cell = document.createElement('div');
             cell.className = 'enm-chain-stats-cell enm-chain-stats-' + k;
             var value = document.createElement('span');
@@ -214,102 +220,47 @@
         });
         this.root.appendChild(this._statsStrip);
 
-        // 6. Details disclosure — only carries the advanced stuff now
-        // (sync velocity / ETA, BPoS producer metrics). Stats moved out
-        // to the always-visible strip above, so resting Details is empty
-        // by default for non-syncing / non-BPoS chains.
-        this._detailsToggle = document.createElement('button');
-        this._detailsToggle.type = 'button';
-        this._detailsToggle.className = 'enm-chain-details-toggle';
-        this._detailsToggle.setAttribute('aria-expanded', 'false');
-        this._detailsToggle.textContent = t('chain_card.details_show');
-        this._detailsToggle.addEventListener('click', this._toggleDetails.bind(this));
-        this.root.appendChild(this._detailsToggle);
-
-        this._detailsPanel = document.createElement('div');
-        this._detailsPanel.className = 'enm-chain-details';
-        this._detailsPanel.hidden = true;
-
-        // Sync progress panel — populated by _renderSyncPanel.
-        this._syncPanel = document.createElement('section');
-        this._syncPanel.className = 'enm-chain-sync';
-        this._syncPanel.hidden = true;
-        this._syncPanel.setAttribute('role', 'status');
-        this._syncPanel.setAttribute('aria-live', 'polite');
-        this._detailsPanel.appendChild(this._syncPanel);
-
-        // BPoS panel slots in here too, lazily by _refreshProducer.
-        this.root.appendChild(this._detailsPanel);
-    };
-
-    /** @private */
-    ChainCard.prototype._toggleDetails = function () {
-        var t = root.enmTOrFallback;
-        var hidden = this._detailsPanel.hidden;
-        this._detailsPanel.hidden = !hidden;
-        this._detailsToggle.setAttribute('aria-expanded', hidden ? 'true' : 'false');
-        this._detailsToggle.textContent = hidden
-            ? t('chain_card.details_hide')
-            : t('chain_card.details_show');
-        // Surface a class on the root so CSS can rotate the disclosure
-        // chevron without juggling extra inline styles.
-        this.root.classList.toggle('enm-chain-card-expanded', hidden);
+        // 6. Action row.
+        var actions = document.createElement('div');
+        actions.className = 'enm-chain-actions';
+        this._configureBtn = makeBtn(t('chain_actions.configure'), 'enm-btn-primary',   this._handleConfigure.bind(this));
+        this._startBtn     = makeBtn(t('chain_actions.start'),     'enm-btn-primary',   this._handleStart.bind(this));
+        this._stopBtn      = makeBtn(t('chain_actions.stop'),      'enm-btn-secondary', this._handleStop.bind(this));
+        this._restartBtn   = makeBtn(t('chain_actions.restart'),   'enm-btn-secondary', this._handleRestart.bind(this));
+        actions.appendChild(this._configureBtn);
+        actions.appendChild(this._startBtn);
+        actions.appendChild(this._stopBtn);
+        actions.appendChild(this._restartBtn);
+        this.root.appendChild(actions);
     };
 
     /**
      * @private
-     * Tap-the-circle = "do the obvious thing for this state."
+     * Tap-the-circle on the Apple Hero card is a "do the obvious thing"
+     * affordance. No more disclosure to toggle since details are gone.
      *
-     *   unconfigured     → open the Configure wizard (only meaningful action)
-     *   stopped / error  → toggle details so the operator sees the context
-     *   alive (healthy / syncing / stalled / recovering)
-     *      └─ details has content → toggle it (sync velocity / BPoS info)
-     *      └─ details is empty    → no-op + brief pulse to draw the eye to
-     *                               the action buttons that are visible below
-     *
-     * alpha.18 — the empty-panel case is the one the operator hit most:
-     * a healthy synced non-validator chain has no Details content to show,
-     * so the click used to open a blank panel. Now it pulses the buttons
-     * (Stop / Restart) so the eye lands on the actions instead.
+     *   unconfigured     → open Configure wizard
+     *   stopped / error  → pulse the action row so eye lands on Start
+     *   alive            → pulse the action row (Stop / Restart visible)
      */
-    ChainCard.prototype._handleCircleTap = function (/* visualState */) {
+    ChainCard.prototype._handleCircleTap = function () {
         var coarse = this._lastCoarseState || 'unconfigured';
         if (coarse === 'unconfigured') {
             return this._handleConfigure();
         }
-        if (coarse === 'stopped' || coarse === 'error') {
-            if (coarse === 'stopped' && !this._detailsPanel.hidden) {
-                return this._handleStart();
-            }
-            return this._toggleDetailsIfClosed();
-        }
-        // Alive — only toggle details if there's something inside. Both
-        // the sync panel and the BPoS panel can independently hide
-        // themselves (alpha.16). When both are hidden, the disclosure
-        // would just open an empty box; we pulse the action row instead
-        // so the user sees Stop / Restart as the real affordances.
-        var syncVisible = !!(this._syncPanel && !this._syncPanel.hidden);
-        var bposVisible = !!(this._bposPanel && !this._bposPanel.hidden);
-        if (!syncVisible && !bposVisible) {
-            return this._pulseActionRow();
-        }
-        return this._toggleDetails();
+        return this._pulseActionRow();
     };
 
     /**
      * @private
-     * Brief CSS class flash on the action row so the operator's eye is
-     * drawn to the buttons (Stop / Restart) when they tap the circle on
-     * a chain that has no details to disclose. The class is removed via
-     * a one-shot setTimeout so back-to-back taps re-trigger the
-     * animation. Pulse is purely visual — no aria-live noise.
+     * Brief animation on the action row so the operator's eye lands on
+     * the visible buttons. Inherited from alpha.18 — the keyframe lives
+     * in styles.css. One-shot setTimeout so back-to-back taps re-fire.
      */
     ChainCard.prototype._pulseActionRow = function () {
         var row = this.root.querySelector('.enm-chain-actions');
         if (!row) return;
         row.classList.remove('enm-chain-actions-pulse');
-        // Force a reflow so adding the class restarts the keyframes
-        // even when the class was just removed in the same tick.
         // eslint-disable-next-line no-unused-expressions
         row.offsetWidth;
         row.classList.add('enm-chain-actions-pulse');
@@ -318,39 +269,36 @@
         }, 700);
     };
 
-    /** @private */
-    ChainCard.prototype._toggleDetailsIfClosed = function () {
-        if (this._detailsPanel.hidden) this._toggleDetails();
-    };
-
     ChainCard.prototype._applyState = function (state) {
-        // Bail out if torn down — late-arriving SSE events or in-flight
-        // refresh promises can call us after destroy() removed our DOM.
         if (this._destroyed) { return; }
         var t = root.enmTOrFallback;
-        var coarse = state && state.state ? state.state : 'unconfigured';
-        this._lastCoarseState = coarse;  // drives sync-poll cadence
+        var coarse = (state && state.state) ? state.state : 'unconfigured';
+        this._lastCoarseState = coarse;
         this._lastBackendState = state || {};
         this.root.dataset.state = coarse;
 
-        // Drive the PowerCircle. Fine-grained sync percent is set by
-        // _renderSyncPanel — here we set the visual state from the coarse
-        // backend state. Mapping:
-        //   unconfigured/stopped  → off
-        //   recovering            → booting
-        //   syncing               → syncing  (percent supplied later)
-        //   healthy               → healthy
-        //   stalled               → warning
-        //   error                 → error
+        // PowerCircle visual state. Percent (for syncing) lands later
+        // from /chains/:id/sync via _refreshSync; the coarse state goes
+        // on the ring first so the colour flips immediately.
         var visualState = COARSE_TO_VISUAL[coarse] || 'off';
         this._powerCircle.setState(visualState);
 
-        // Subtitle line under the chain name — calm, single-word state.
-        // alpha.15 — when the producer is registered on chain, the
-        // truthful badge is the producer's state (Active / Inactive /
-        // Illegal / Pending / Canceled / Returned) — that's what the
-        // chain actually exposes for a BPoS supernode. Fall back to
-        // the coarse chain state when not registered or not BPoS.
+        // 0.2.0-alpha.1 — Sparkline colour tracks the visual state so the
+        // line + fill paint in the same hue as the ring. Stopped chains
+        // keep their last-known sparkline but in a dimmed neutral.
+        if (this._sparkline) {
+            var sparkColor = (coarse === 'healthy') ? 'var(--state-healthy)'
+                : (coarse === 'syncing' || coarse === 'recovering' || coarse === 'starting')
+                    ? 'var(--state-syncing)'
+                : (coarse === 'stalled') ? 'var(--state-stalled)'
+                : (coarse === 'error')   ? 'var(--state-error)'
+                : 'var(--text-muted)';
+            this._sparkline.setColor(sparkColor);
+        }
+
+        // State subtitle. Producer state wins over coarse state when the
+        // chain is alive AND we've fetched a producer record (alpha.15).
+        // /chains/:id may include `producerState` inline since alpha.15.
         var producerState = state && state.producerState;
         if (producerState && (coarse === 'healthy' || coarse === 'syncing' || coarse === 'stalled')) {
             this._stateSubtitle.textContent = producerState;
@@ -360,130 +308,85 @@
             this._stateSubtitle.dataset.state = coarse;
         }
 
-        // Primary metric line. Height is the most useful at-a-glance
-        // metric for an alive chain; the off-state gets a contextual prompt.
+        // Primary metric — block height number alone. The "/ network"
+        // suffix (when syncing) lands from /sync via _refreshSync.
         var height = (state && state.height != null) ? state.height : null;
-        this._primaryMetric.textContent = formatPrimaryMetric(t, coarse, height, null);
+        this._primaryMetric.textContent = formatPrimaryValue(t, coarse, height, null);
+        this._primaryLabel.textContent = formatPrimaryLabel(t, coarse);
 
-        // Stats inside details — version, peers, uptime (height now lives
-        // on the primary metric line above so it's not duplicated).
-        this._statFields.version.textContent = state && state.binaryVersion ? state.binaryVersion : '—';
+        // Stats strip.
         this._statFields.peers.textContent   = state && state.peers         != null ? String(state.peers) : '—';
+        this._statFields.version.textContent = state && state.binaryVersion ? state.binaryVersion : '—';
         this._statFields.uptime.textContent  = state && state.uptimeSec     != null ? root.enmFormatUptime(state.uptimeSec) : '—';
 
-        // Button enable/disable. When unconfigured, swap the action set:
-        // hide start/stop/restart and surface a Configure CTA that re-opens
-        // the wizard inline (per Wave 2.4 of the v0.3 plan).
-        var alive = (coarse === 'healthy' || coarse === 'syncing' || coarse === 'stalled' || coarse === 'recovering');
+        // Action row enable/disable.
+        var alive = (coarse === 'healthy' || coarse === 'syncing' || coarse === 'stalled' || coarse === 'recovering' || coarse === 'starting');
         var unconfigured = (coarse === 'unconfigured');
         this._configureBtn.hidden = !unconfigured || !this.onReconfigure;
         this._startBtn.hidden     = unconfigured;
         this._stopBtn.hidden      = unconfigured;
         this._restartBtn.hidden   = unconfigured;
-        // Stop is disabled both when chain is dead AND when the coarse
-        // state explicitly says 'stopped' — guards against the case
-        // where the operator clicks Stop, the action lands, the badge
-        // flips to 'stopped', but `alive` is still true for one tick.
         this._startBtn.disabled   = alive;
         this._stopBtn.disabled    = !alive || coarse === 'stopped';
         this._restartBtn.disabled = !alive;
 
-        // alpha.11: stats moved out of Details to the always-visible
-        // Details disclosure visibility is computed centrally — the sync
-        // and BPoS panels can independently hide themselves, so toggle
-        // visibility tracks "is there anything inside?" rather than just
-        // the coarse state.
-        this._refreshDetailsToggleVisibility();
+        // 0.2.0-alpha.1 — notify FleetHealthGradient. CustomEvent on
+        // window so the controller can subscribe once and aggregate
+        // without dependency injection through technical-view / app.js.
+        try {
+            root.dispatchEvent(new root.CustomEvent('enm:chain-state', {
+                detail: { chainId: this.chainId, coarseState: coarse },
+            }));
+        } catch (_) { /* old browsers without CustomEvent — skip */ }
 
         this.onStateChange(coarse, state);
     };
 
     /**
-     * @private
-     * Show the Details toggle iff the disclosure has something useful
-     * inside. Three reasons to hide it:
-     *   1) the chain is in a hard-off state (unconfigured / stopped /
-     *      disabled) — there is no live data;
-     *   2) the sync panel is hidden (fully synced or no height yet) AND
-     *      the BPoS panel is hidden (no on-chain producer record);
-     *   3) the chain card is being torn down.
-     *
-     * Called after every state / sync / producer update so the toggle
-     * vanishes the moment its contents do, and reappears when something
-     * lands worth disclosing.
+     * Build the big block-height number under the state subtitle. When
+     * a /sync snapshot is in flight, _refreshSync overrides this with
+     * "local / network" (e.g. "943,210 / 1,123,455").
      */
-    ChainCard.prototype._refreshDetailsToggleVisibility = function () {
-        if (!this._detailsToggle) return;
-        var coarse = this._lastCoarseState || 'unconfigured';
-        var hardOff = (
-            coarse === 'unconfigured' || coarse === 'stopped' || coarse === 'disabled'
-        );
-        var syncPanelVisible = !!(this._syncPanel && !this._syncPanel.hidden);
-        var bposPanelVisible = !!(this._bposPanel && !this._bposPanel.hidden);
-        var hide = hardOff || (!syncPanelVisible && !bposPanelVisible);
-        this._detailsToggle.hidden = hide;
-        if (hide && this._detailsPanel && !this._detailsPanel.hidden) {
-            this._toggleDetails();
-        }
-    };
-
-    // Coarse backend state → PowerCircle visual state. Kept as a flat
-    // table so the mapping is reviewable at a glance.
-    var COARSE_TO_VISUAL = {
-        unconfigured: 'off',
-        stopped:      'off',
-        recovering:   'booting',
-        syncing:      'syncing',
-        healthy:      'healthy',
-        stalled:      'warning',
-        error:        'error',
-        disabled:     'off',
-    };
-
-    /**
-     * Build the one-line primary-metric string under the state subtitle.
-     * Apple-grade: prefer one piece of human-readable info over a wall of
-     * numbers. localHeight + networkHeight comes from /sync (not the bare
-     * /chains/:id state) so we recompute this from _renderSyncPanel as
-     * those land too.
-     */
-    function formatPrimaryMetric(t, coarse, height, syncSnapshot) {
+    function formatPrimaryValue(t, coarse, height, syncSnapshot) {
         if (coarse === 'unconfigured') {
             return t('chain_card.primary_metric_unconfigured');
         }
         if (coarse === 'stopped') {
             return t('chain_card.primary_metric_off');
         }
-        // Prefer the sync snapshot when it's been populated — it has the
-        // network reference.
         if (syncSnapshot) {
             if (syncSnapshot.synced && syncSnapshot.localHeight != null) {
-                return t('chain_card.primary_metric_synced',
-                    { height: syncSnapshot.localHeight.toLocaleString() });
+                return syncSnapshot.localHeight.toLocaleString();
             }
             if (syncSnapshot.networkHeight != null && syncSnapshot.localHeight != null) {
-                return t('chain_card.primary_metric_syncing', {
-                    local:   syncSnapshot.localHeight.toLocaleString(),
-                    network: syncSnapshot.networkHeight.toLocaleString(),
-                });
+                // "943,210 / 1,123,455" — keep both numbers in the same
+                // span so the typography clamps as one unit. The CSS
+                // splits the trailing "/ N" with a smaller weight via
+                // a span-child so we render it ourselves rather than
+                // bundling in a t() template that can't carry markup.
+                return syncSnapshot.localHeight.toLocaleString()
+                    + ' / ' + syncSnapshot.networkHeight.toLocaleString();
             }
             if (syncSnapshot.localHeight != null) {
-                return t('chain_card.primary_metric_height',
-                    { height: syncSnapshot.localHeight.toLocaleString() });
+                return syncSnapshot.localHeight.toLocaleString();
             }
         }
-        if (height != null) {
-            return t('chain_card.primary_metric_height',
-                { height: height.toLocaleString() });
-        }
-        return '';
+        if (height != null) return height.toLocaleString();
+        return '—';
+    }
+
+    /**
+     * Lowercase caption under the big number. Apple Hero pattern.
+     */
+    function formatPrimaryLabel(t, coarse) {
+        if (coarse === 'unconfigured') return t('chain_card.primary_label_unconfigured');
+        if (coarse === 'stopped')      return t('chain_card.primary_label_off');
+        return t('chain_card.primary_label_height');
     }
 
     /** @private */
     ChainCard.prototype._handleConfigure = function () {
-        if (typeof this.onReconfigure === 'function') {
-            this.onReconfigure(this.chainId);
-        }
+        if (typeof this.onReconfigure === 'function') this.onReconfigure(this.chainId);
     };
 
     /** @private */
@@ -493,7 +396,7 @@
 
     /** @private */
     ChainCard.prototype._do = function (kind, path) {
-        if (this._busy) { return; }
+        if (this._busy) return;
         this._busy = true;
         var t = root.enmTOrFallback;
         var btn = (kind === 'start' ? this._startBtn : (kind === 'stop' ? this._stopBtn : this._restartBtn));
@@ -505,9 +408,7 @@
             self.notifications.info(self.chainId + ' ' + kind, '');
             return self.refresh();
         }).catch(function (err) {
-            // Host-conflict 409 carries a structured `conflicts` array. Surface
-            // the per-conflict description + first remediation step so the
-            // operator doesn't have to dig in DevTools.
+            // Host-conflict 409 surfaces structured remediation steps.
             if (err && err.body && Array.isArray(err.body.conflicts)
                 && err.body.conflicts.length > 0) {
                 var blockers = err.body.conflicts.filter(function (c) {
@@ -535,288 +436,63 @@
     };
 
     /**
-     * Adaptive sync poll. Schedules its own next tick:
-     *   syncing  → every 10s (operator is watching the bar move)
-     *   anything → every 60s (cheap drift check)
-     * Uses setTimeout chain instead of setInterval so timer drift doesn't
-     * accumulate and we can change cadence based on the latest state.
+     * Adaptive sync poll. Drives the PowerCircle percent and the
+     * "local / network" suffix on the primary metric. NO more sync
+     * panel in 0.2.0-alpha.1 — the ring + the X / Y line tell the
+     * sync story end-to-end.
+     *
+     * Cadence:
+     *   syncing  → 10s (operator is watching the percent move)
+     *   anything → 60s (drift check)
      *
      * @private
      */
     ChainCard.prototype._refreshSync = function () {
-        if (this._destroyed) { return; }
+        if (this._destroyed) return;
         var self = this;
         this.api.get('/chains/' + this.chainId + '/sync', { skipCache: true }).then(function (data) {
-            if (self._destroyed) { return; }
-            self._renderSyncPanel(data);
+            if (self._destroyed) return;
+            self._applySyncSnapshot(data);
         }).catch(function () {
-            if (self._destroyed) { return; }
-            // Don't leave the panel showing stale velocity from the
-            // last successful poll. Render with null data so the bar
-            // and metrics line clear; the next tick will repopulate.
-            self._renderSyncPanel(null);
+            if (self._destroyed) return;
+            self._applySyncSnapshot(null);
         }).then(function () {
-            if (self._destroyed) { return; }
-            if (!self.root || !self.root.isConnected) { return; }
-            // Always re-arm. State drives cadence: 10s while syncing,
-            // 60s while healthy/stalled/stopped.
+            if (self._destroyed || !self.root || !self.root.isConnected) return;
             var nextMs = (self._lastCoarseState === 'syncing') ? 10_000 : 60_000;
             self._syncTimer = setTimeout(function () { self._refreshSync(); }, nextMs);
         });
     };
 
     /**
-     * Render the sync progress panel from a /chains/:id/sync snapshot.
-     * Hides the panel when there's nothing useful to show (no localHeight).
+     * Update the PowerCircle percent + primary metric line from a
+     * /sync response. Replaces _renderSyncPanel from alpha.18 — the
+     * heavy panel rendering is gone; only the two visual surfaces
+     * the user actually sees (ring + metric) update.
      *
      * @private
      * @param {object|null} data
      */
-    ChainCard.prototype._renderSyncPanel = function (data) {
+    ChainCard.prototype._applySyncSnapshot = function (data) {
         var t = root.enmTOrFallback;
 
-        // Update the PowerCircle's percent + the primary metric line on
-        // every sync snapshot, even when the details panel is collapsed —
-        // the circle and the metric line are visible at rest.
+        // Ring percent — only when the coarse state agrees we're syncing.
         if (data && this._lastCoarseState === 'syncing'
             && typeof data.percent === 'number') {
             this._powerCircle.setState('syncing', { percent: data.percent });
         } else if (data && data.synced && this._lastCoarseState === 'healthy') {
+            // Snapped to tip — clear any leftover percent.
             this._powerCircle.setState('healthy');
         }
-        this._primaryMetric.textContent = formatPrimaryMetric(t,
-            this._lastCoarseState || 'unconfigured',
-            (this._lastBackendState && this._lastBackendState.height) || null,
-            data);
 
-        if (!data || data.localHeight == null) {
-            this._syncPanel.hidden = true;
-            this._refreshDetailsToggleVisibility();
-            return;
-        }
-
-        // alpha.16 — auto-collapse the sync panel when the chain is fully
-        // synced AND coarse state agrees we're healthy. The progress bar
-        // at 100% + "✓ Fully synced" duplicate what the PowerCircle and
-        // primary-metric line already say; the velocity/ETA/1-3-day hint
-        // are noise once we're at the tip. Hiding here lets the Details
-        // disclosure itself disappear when the BPoS panel is also empty
-        // (refreshDetailsToggleVisibility handles that), keeping the
-        // resting card calm.
-        if (data.synced && this._lastCoarseState === 'healthy') {
-            this._syncPanel.hidden = true;
-            this._refreshDetailsToggleVisibility();
-            return;
-        }
-
-        this._syncPanel.hidden = false;
-        this._syncPanel.dataset.stale = data.stale ? '1' : '0';
-
-        // First render: build the structure. After that, just update text.
-        if (!this._syncBar) {
-            var heading = document.createElement('h4');
-            heading.className = 'enm-chain-sync-heading';
-            heading.textContent = t('chain_card.sync_heading');
-            this._syncPanel.appendChild(heading);
-
-            var barWrap = document.createElement('div');
-            barWrap.className = 'enm-chain-sync-bar-wrap';
-            barWrap.setAttribute('role', 'progressbar');
-            barWrap.setAttribute('aria-valuemin', '0');
-            barWrap.setAttribute('aria-valuemax', '100');
-            this._syncBar = document.createElement('div');
-            this._syncBar.className = 'enm-chain-sync-bar';
-            barWrap.appendChild(this._syncBar);
-            this._syncBarWrap = barWrap;
-            this._syncPanel.appendChild(barWrap);
-
-            this._syncStatusLine = document.createElement('p');
-            this._syncStatusLine.className = 'enm-chain-sync-status';
-            this._syncPanel.appendChild(this._syncStatusLine);
-
-            this._syncMetricsLine = document.createElement('p');
-            this._syncMetricsLine.className = 'enm-chain-sync-metrics';
-            this._syncPanel.appendChild(this._syncMetricsLine);
-
-            // First-sync expectation hint. Operators panic when they see
-            // a near-empty progress bar with no time horizon — the
-            // mainchain takes 1-3 days to sync from genesis on typical
-            // hardware. Show this whenever the chain is alive but not yet
-            // synced; hide once synced.
-            this._syncHintLine = document.createElement('p');
-            this._syncHintLine.className = 'enm-chain-sync-hint';
-            this._syncPanel.appendChild(this._syncHintLine);
-        }
-
-        // Bar fill + ARIA.
-        var pct = (typeof data.percent === 'number') ? data.percent : null;
-        if (pct == null) {
-            // No network reference yet — render an "indeterminate" stripe.
-            this._syncBar.style.width = '100%';
-            this._syncBarWrap.classList.add('enm-chain-sync-indeterminate');
-            this._syncBarWrap.removeAttribute('aria-valuenow');
-        } else {
-            this._syncBar.style.width = pct.toFixed(2) + '%';
-            this._syncBarWrap.classList.remove('enm-chain-sync-indeterminate');
-            this._syncBarWrap.setAttribute('aria-valuenow', String(Math.floor(pct)));
-        }
-        this._syncBar.dataset.pct = pct == null ? '?' : Math.floor(pct);
-
-        // Status line — five distinct states drive what the operator sees.
-        // The backend's enriched /sync response (Wave 6 follow-up) gives us
-        // the truthful signals we need:
-        //
-        //   data.synced        — latest local block within ~5 min of now,
-        //                        OR blocksBehind === 0
-        //   data.networkHeight — max of peers' reported tip heights
-        //   data.peers         — connected peer count
-        //   data.uptimeSec     — chain uptime, used for the just-started banner
-        //   data.alive         — whether the process is running at all
-        var alive = !!data.alive
-            || this._lastCoarseState === 'healthy' || this._lastCoarseState === 'syncing'
-            || this._lastCoarseState === 'starting' || this._lastCoarseState === 'recovering';
-        var freshStart = alive
-            && typeof data.uptimeSec === 'number' && data.uptimeSec < 60
-            && !data.synced;
-
-        if (!alive || data.stale) {
-            this._syncStatusLine.textContent = t('chain_card.sync_stale');
-        } else if (data.synced) {
-            // Most common steady-state case — we're caught up.
-            this._syncStatusLine.textContent = '✓ Fully synced';
-        } else if (freshStart) {
-            // Just-started chain. Peers handshake takes ~30s; networkHeight
-            // is null until then. Don't blame the operator for the wait.
-            this._syncStatusLine.textContent =
-                'Just started — connecting to peers (this takes about a minute)';
-        } else if (data.peers === 0) {
-            // Genuinely no peers — operator's network or NAT may be the issue.
-            this._syncStatusLine.textContent = 'Looking for peers…';
-        } else if (data.networkHeight != null && data.blocksBehind != null) {
-            // We have a real reference. Show "N blocks behind".
-            this._syncStatusLine.textContent =
-                'Catching up — ' + data.blocksBehind.toLocaleString() + ' blocks behind';
-        } else if (data.localHeight != null) {
-            // Peers connected but their heights aren't in yet. Show what we know.
-            this._syncStatusLine.textContent =
-                'Catching up — local height ' + data.localHeight.toLocaleString();
-        } else {
-            this._syncStatusLine.textContent = 'Catching up…';
-        }
-
-        // Metrics line — velocity + ETA. Only when we have a real
-        // reference AND the chain is alive AND not already synced.
-        var parts = [];
-        if (alive && !data.synced && typeof data.velocityBpm === 'number' && data.velocityBpm > 0) {
-            parts.push(t('chain_card.sync_velocity', {
-                bpm: data.velocityBpm.toFixed(1),
-            }));
-        } else if (alive && !data.synced && data.localHeight != null && data.blocksBehind != null && data.blocksBehind > 0) {
-            parts.push(t('chain_card.sync_no_velocity'));
-        }
-        if (typeof data.etaSec === 'number' && data.etaSec > 0) {
-            parts.push(t(
-                data.etaSec < 60 ? 'chain_card.sync_eta_lt_min' : 'chain_card.sync_eta',
-                { eta: root.enmFormatUptime(data.etaSec) },
-            ));
-        }
-        this._syncMetricsLine.textContent = parts.join(' • ');
-
-        // Expectation hint — show during ANY syncing state (no peers,
-        // catching up, fresh-start), hide when synced or stale. Without
-        // this, a multi-day sync looks broken.
-        if (alive && !data.synced && !data.stale) {
-            this._syncHintLine.textContent =
-                'First sync usually takes 1–3 days depending on your hardware. ' +
-                'Leave it running — it picks up where it left off if it stops.';
-            this._syncHintLine.hidden = false;
-        } else {
-            this._syncHintLine.hidden = true;
-            this._syncHintLine.textContent = '';
-        }
-
-        // alpha.16 — toggle visibility tracks whether the disclosure has
-        // any visible content. Sync panel just became visible, so call.
-        this._refreshDetailsToggleVisibility();
+        // Primary metric. When we have a real /sync snapshot, the
+        // formatter shows "local / network" while syncing.
+        var height = (this._lastBackendState && this._lastBackendState.height != null)
+            ? this._lastBackendState.height : null;
+        this._primaryMetric.textContent = formatPrimaryValue(t,
+            this._lastCoarseState || 'unconfigured', height, data);
     };
 
-    /**
-     * Fetch /chains/:id/producer and either show the BPoS sub-panel or hide it.
-     * Errors stay silent — the operator hasn't necessarily started the chain.
-     *
-     * @private
-     */
-    ChainCard.prototype._refreshProducer = function () {
-        if (this._destroyed) { return; }
-        var self = this;
-        this.api.get('/chains/' + this.chainId + '/producer', { skipCache: true }).then(function (data) {
-            // Guard against late-arriving response — destroy() may have run
-            // between the api.get call and its resolution.
-            if (self._destroyed) { return; }
-            // alpha.16 — hide the BPoS panel in three situations:
-            //   1. /producer route says not enabled (no pubkey configured)
-            //   2. enabled but state is null (pubkey set, not yet
-            //      registered on chain — validator-registration-card
-            //      below owns this UX)
-            //   3. error / no data
-            // Only show when we have a confirmed on-chain producer state.
-            if (!data || !data.enabled || !data.state) {
-                if (self._bposPanel) { self._bposPanel.hidden = true; }
-                self._refreshDetailsToggleVisibility();
-                return;
-            }
-            self._renderBposPanel(data);
-            self._refreshDetailsToggleVisibility();
-        }).catch(function () { /* ignore — chain may be stopped or non-BPoS */ });
-    };
-
-    /** @private */
-    ChainCard.prototype._renderBposPanel = function (data) {
-        var t = root.enmTOrFallback;
-        if (!this._bposPanel) {
-            this._bposPanel = document.createElement('section');
-            this._bposPanel.className = 'enm-chain-bpos';
-            var heading = document.createElement('h4');
-            heading.className = 'enm-chain-bpos-heading';
-            heading.textContent = t('chain_card.bpos_heading');
-            this._bposPanel.appendChild(heading);
-
-            this._bposStats = document.createElement('dl');
-            this._bposStats.className = 'enm-chain-bpos-stats';
-            this._bposFields = {};
-            ['bpos_state', 'bpos_votes', 'bpos_rank', 'bpos_inactive_rounds'].forEach(function (k) {
-                var dt = document.createElement('dt'); dt.textContent = t('chain_card.' + k);
-                var dd = document.createElement('dd'); dd.textContent = '—';
-                this._bposStats.appendChild(dt);
-                this._bposStats.appendChild(dd);
-                this._bposFields[k] = dd;
-            }, this);
-            this._bposPanel.appendChild(this._bposStats);
-            // Goes inside Details so the resting view stays calm. Operator
-            // who cares about producer rank / votes opens the disclosure.
-            this._detailsPanel.appendChild(this._bposPanel);
-        }
-        this._bposPanel.hidden = false;
-        this._bposFields.bpos_state.textContent = data.state || '—';
-        this._bposFields.bpos_state.dataset.state = data.state || '';
-        this._bposFields.bpos_votes.textContent = (data.votes != null ? String(data.votes) : '—');
-        this._bposFields.bpos_rank.textContent = (data.rank != null ? '#' + (data.rank + 1) : '—');
-        var rounds = data.inactiveRounds;
-        var roundsLabel;
-        if (rounds == null) {
-            roundsLabel = '—';
-        } else if (rounds <= 0) {
-            roundsLabel = '0';
-        } else {
-            roundsLabel = String(rounds) + ' / 1440';
-        }
-        this._bposFields.bpos_inactive_rounds.textContent = roundsLabel;
-        this._bposFields.bpos_inactive_rounds.dataset.severity =
-            (rounds != null && rounds > 1300) ? 'critical'
-          : (rounds != null && rounds > 720)  ? 'warning'
-          : 'ok';
-    };
-
+    /** Build a button. Plain helper. */
     function makeBtn(label, className, onClick) {
         var b = document.createElement('button');
         b.type = 'button';

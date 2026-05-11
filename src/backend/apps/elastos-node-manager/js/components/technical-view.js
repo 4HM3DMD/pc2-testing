@@ -49,6 +49,9 @@
         this.api = opts.api;
         this.sse = opts.sse || null;
         this.notifications = opts.notifications || null;
+        // 0.2.0-alpha.1 — chain-card sparkline subscribes to this client.
+        // Plumbed through here so the status sub-tab gets the singleton.
+        this.heightSeries = opts.heightSeries || null;
         // null = no "back to home" link (v0.5 default — this view IS home).
         // Function = render the link and call it on click.
         this.onBackHome = typeof opts.onBackHome === 'function' ? opts.onBackHome : null;
@@ -169,6 +172,10 @@
             sse: this.sse,
             notifications: this.notifications,
             chainId: 'mainchain',
+            // 0.2.0-alpha.1 — chain-card subscribes to this for the
+            // sparkline. Pass the singleton through; optional, falls
+            // back gracefully when absent.
+            heightSeries: this.heightSeries || null,
         };
 
         if (tabId === 'status') {
