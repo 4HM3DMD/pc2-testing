@@ -6,25 +6,31 @@
 #
 #   FRESH INSTALL  (no /var/lib/pc2/data/installed-apps/elastos-node-manager)
 #     1. Download the tagged .tar.gz + .json from GitHub Releases
-#     2. Extract the tarball to a temp dir
+#     2. Extract the tarball to a temp test-apps dir
 #     3. POST /api/installed-apps/install-local with manifest + temp path —
 #        pc2-node copies the bundle into place AND spawns the backend AND
 #        records the row in installed_apps.
 #
-#   UPGRADE  (bundle dir already present)
+#   UPGRADE  (bundle dir already present) — rewritten 2026-05-11
 #     1. Download the tarball
-#     2. Backup the current install to /tmp
-#     3. Extract on top
-#     4. Kill the ENM PID — AppProcessManager respawns it
-#     5. Health check; auto-rollback on failure
+#     2. Diagnostic backup of the current install to /tmp/enm-backup-*.tar.gz
+#     3. Extract the new bundle to a temp test-apps dir (not the live dir)
+#     4. DELETE /api/installed-apps/elastos-node-manager?purge=false — keeps
+#        externalDataDirs (chain data + keystore + audit log live there).
+#     5. POST /api/installed-apps/install-local — same call as fresh install.
+#     6. Health check. On failure, the operator deploys the previous tag.
 #
 # Usage:
 #   sudo ./deploy-enm.sh                     # latest tagged release
 #   sudo ./deploy-enm.sh enm-v0.1.0-alpha.4  # specific tag
 #
-# Auth (only needed for fresh install):
-#   PC2_OWNER_TOKEN   the owner's Bearer token (mandatory for fresh install,
-#                     ignored for upgrades)
+# Auth (REQUIRED for both fresh install AND upgrade since 2026-05-11):
+#   PC2_OWNER_TOKEN   the owner's Bearer token. Grab it from your PC2
+#                     desktop URL — the ?puter.auth.token=... query string.
+#                     Upgrade used to skip this (file-overlay + PID kill)
+#                     but pc2-node's boot sweeper reaps file-overlay
+#                     bundles as "stale auto-installed", so both paths
+#                     now go through /api/installed-apps/install-local.
 #
 # Env overrides:
 #   GITHUB_REPO   default 4HM3DMD/pc2-testing
@@ -121,25 +127,70 @@ if [ "$MODE" = "fresh" ]; then
 fi
 
 # =============================================================================
-# Upgrade — extract on top of the existing install. pc2-node already has the
-# DB row + AppProcessManager already supervises the process; we just refresh
-# the files and restart the backend.
+# Upgrade — DELETE the old install via pc2-node API, then install the new
+# bundle via /api/installed-apps/install-local.
+#
+# The previous upgrade path (kill PID + file-overlay tarball extract over the
+# live BUNDLE_DIR) seemed cheap but had a load-bearing bug: pc2-node's boot
+# sweeper labels file-overlay installs as "stale auto-installed bundle" and
+# uninstalls them, then the next AppProcessManager hydrate tick crashes the
+# app to quarantine within ~70ms (count rises to 4 → quarantined; manual
+# clearQuarantine required). After alpha.18→alpha.18 trial 2026-05-11 hit
+# this on the test server, the path was rewritten to register through the
+# supervisor API the same way the fresh install does.
+#
+# Chain data + keystore + audit log live in externalDataDirs (the
+# /var/lib/pc2/data/extensions/elastos-node-manager/ tree) — those survive
+# a DELETE ?purge=false because pc2-node only wipes externalDataDirs when
+# purge=true. So an upgrade preserves all node state; only the bundle JS +
+# the installed_apps row are swapped.
 # =============================================================================
 if [ "$MODE" = "upgrade" ]; then
+    [ -n "${PC2_OWNER_TOKEN:-}" ] || die "upgrade requires PC2_OWNER_TOKEN. pc2-node's boot sweeper reaps file-overlay installs; the new upgrade flow calls /api/installed-apps DELETE + install-local, which need the owner's Bearer token (PC2 desktop URL: ?puter.auth.token=...)."
+
     BACKUP_PATH="/tmp/enm-backup-$(date +%Y%m%d-%H%M%S).tar.gz"
-    log "backing up current bundle to $BACKUP_PATH"
+    log "backing up current bundle to $BACKUP_PATH (diagnostic only — rollback uses deploy-enm.sh <prev-tag>)"
     tar czf "$BACKUP_PATH" -C "$BUNDLE_DIR" . || die "backup failed" 3
 
-    log "extracting into $BUNDLE_DIR"
-    tar -C "$BUNDLE_DIR" -xzf "$TMP_TARBALL" || die "extract failed" 3
+    # Stage the new bundle in test-apps (install-local's safe-list).
+    PC2_TEST_APPS_DIR="${PC2_TEST_APPS_DIR:-/var/lib/pc2/data/test-apps}"
+    mkdir -p "$PC2_TEST_APPS_DIR"
+    TMP_EXTRACT=$(mktemp -d -p "$PC2_TEST_APPS_DIR")
+    log "extracting new bundle into $TMP_EXTRACT"
+    tar -C "$TMP_EXTRACT" -xzf "$TMP_TARBALL" || die "extract failed" 3
 
-    ENM_PID=$(pgrep -f 'elastos-node-manager.*server.js' | head -1 || true)
-    if [ -n "$ENM_PID" ]; then
-        log "killing ENM pid $ENM_PID — AppProcessManager will respawn"
-        kill "$ENM_PID" || log "kill returned non-zero (process may have already exited)"
+    # Uninstall the old version (purge=false → keeps externalDataDirs so
+    # chain data and keystore survive the swap).
+    log "uninstalling old version via DELETE /api/installed-apps/elastos-node-manager?purge=false"
+    UN_RESP=$(curl -sS -X DELETE \
+        "http://127.0.0.1:${PC2_PORT}/api/installed-apps/elastos-node-manager?purge=false" \
+        -H "Authorization: Bearer ${PC2_OWNER_TOKEN}" 2>&1)
+    # DELETE can legitimately return 404 (sweeper already reaped the row) —
+    # don't die. install-local below recovers either way.
+    if echo "$UN_RESP" | jq -e '.error' >/dev/null 2>&1; then
+        log "DELETE returned: $(echo "$UN_RESP" | jq -r '.error') — continuing with install-local"
     else
-        log "no running ENM process found — pc2-node should start it on next hydrate tick"
+        log "old version uninstalled"
     fi
+
+    # Install the new bundle. This is the same call the fresh-install path
+    # makes — it registers with the supervisor so the boot sweeper leaves it
+    # alone next time pc2-node restarts.
+    log "calling pc2-node /api/installed-apps/install-local"
+    BODY=$(jq -n \
+        --slurpfile manifest "$TMP_MANIFEST" \
+        --arg localDir "$TMP_EXTRACT" \
+        '{ manifest: $manifest[0], localDir: $localDir }')
+    RESP=$(curl -sS -X POST "http://127.0.0.1:${PC2_PORT}/api/installed-apps/install-local" \
+        -H "Authorization: Bearer ${PC2_OWNER_TOKEN}" \
+        -H "Content-Type: application/json" \
+        --data "$BODY") || die "install-local request failed (is pc2-node running on :${PC2_PORT}?)" 3
+
+    if echo "$RESP" | jq -e '.error' >/dev/null 2>&1; then
+        die "install-local rejected: $(echo "$RESP" | jq -r '.error')" 3
+    fi
+    APP_NAME=$(echo "$RESP" | jq -r '.app.app_name // .app.name // "elastos-node-manager"')
+    log "pc2-node reinstalled '$APP_NAME' and (re)started the backend"
 fi
 
 # =============================================================================
@@ -158,14 +209,11 @@ for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
     fi
 done
 
-# Health didn't come back — for upgrades, restore the backup. Fresh installs
-# get left as-is so the operator can poke at the DB / logs to see what failed.
-if [ "$MODE" = "upgrade" ]; then
-    log "health check failed — rolling back"
-    tar -C "$BUNDLE_DIR" -xzf "$BACKUP_PATH" || die "rollback ALSO failed; investigate. backup at $BACKUP_PATH" 4
-    ENM_PID2=$(pgrep -f 'elastos-node-manager.*server.js' | head -1 || true)
-    [ -n "$ENM_PID2" ] && kill "$ENM_PID2" 2>/dev/null || true
-    die "deploy failed and was rolled back. backup tarball preserved at $BACKUP_PATH" 4
-fi
-
-die "fresh install completed but ENM never came up on :$ENM_PORT — check 'journalctl -u pc2-node' and the install-local response above" 4
+# Health didn't come back. Both modes now go through install-local, so the
+# right recovery on failure is "deploy the previous tag" — the old "untar
+# the backup over the live dir" trick (used until 2026-05-11) leaves the
+# install in a state pc2-node's boot sweeper later reaps as stale.
+die "$MODE failed: ENM never came up on :$ENM_PORT. To restore the previous version, run:
+    sudo PC2_OWNER_TOKEN=<token> $0 <previous-tag>
+Diagnostic bundle: $BACKUP_PATH (untouched by the failed deploy).
+Check 'journalctl -u pc2-node -n 200' and 'tail -200 /var/log/pc2-node.log' for the spawn-time error." 4
