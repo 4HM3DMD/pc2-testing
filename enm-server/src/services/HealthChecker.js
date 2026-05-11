@@ -66,6 +66,14 @@ class HealthChecker {
         // Optional — when present, every height sample from the medium tick
         // is fed in so /chains/:id/sync can render velocity + ETA.
         this.syncTracker = deps.syncTracker || null;
+        // 0.2.0-alpha.1 — parallel sink for the chain-card sparkline.
+        // Same call site as syncTracker, separate concern (long-form
+        // history retention vs short-window velocity math). When the
+        // store is wired AND an sseHub is available, every appended
+        // sample is also published on chains:<id>:height so clients
+        // can update their sparkline without polling.
+        this.heightSeriesStore = deps.heightSeriesStore || null;
+        this.sseHub = deps.sseHub || null;
         // Injected loader makes the tick logic testable without disk I/O.
         // Defaults to ConfigStore.load so production wiring is unchanged.
         this.loadConfig = (typeof deps.loadConfig === 'function')
@@ -205,6 +213,28 @@ class HealthChecker {
                 // Feed the SyncTracker so /chains/:id/sync has live velocity
                 // data. Doing this here (medium tick, every 30s) gives the
                 // tracker a steady cadence regardless of dashboard polling.
+                if (this.heightSeriesStore) {
+                    // 0.2.0-alpha.1 — sparkline source. Mirrors the
+                    // syncTracker call below; record() rejects out-of-
+                    // order / duplicate / flat-front samples, returning
+                    // the appended point or null. We only SSE-publish
+                    // on a real append so the topic doesn't fire on
+                    // every flat tick.
+                    const appended = this.heightSeriesStore.record(chainId, rpcSummary.height);
+                    if (appended && this.sseHub) {
+                        try {
+                            this.sseHub.publish(`chains:${chainId}:height`, {
+                                chainId,
+                                point: appended,
+                            });
+                        } catch (err) {
+                            // SSE publish should never block the health tick.
+                            this.extensionHandle.log.warn(
+                                `[ENM] height SSE publish failed for ${chainId}: ${err.message}`,
+                            );
+                        }
+                    }
+                }
                 if (this.syncTracker) {
                     this.syncTracker.record(chainId, rpcSummary.height);
                     // If getnodestate.neighbors exposes peer heights, the max

@@ -19,6 +19,7 @@ const { SelfHealingEngine } = require('./SelfHealingEngine');
 const { HealthChecker } = require('./HealthChecker');
 const { readNodeOwner } = require('../auth/OwnerCheckMiddleware');
 const { SyncTracker } = require('./SyncTracker');
+const { HeightSeriesStore } = require('./HeightSeriesStore');
 const HostConflictScanner = require('./HostConflictScanner');
 const { EnmBinaryDownloader } = require('./EnmBinaryDownloader');
 const EnmBootstrapDownloader = require('./EnmBootstrapDownloader');
@@ -32,6 +33,7 @@ let logStreamer = null;
 let engine = null;
 let healthChecker = null;
 let syncTracker = null;
+let heightSeriesStore = null;
 let binaryDownloader = null;
 let bootstrapDownloader = null;
 let keystoreService = null;
@@ -57,6 +59,10 @@ function init(extensionHandle) {
     // ProcessLogStreamer subscribes to processService events on construction.
     logStreamer = new ProcessLogStreamer({ processService, sseHub, extensionHandle });
     syncTracker = new SyncTracker();
+    // 0.2.0-alpha.1 — backs the chain-card sparkline. Same shape as
+    // SyncTracker (in-memory, per-chain ring buffer); separate concern
+    // (long-form history retention vs velocity math).
+    heightSeriesStore = new HeightSeriesStore();
     binaryDownloader = new EnmBinaryDownloader({ logger: extensionHandle.log, sseHub });
     bootstrapDownloader = new EnmBootstrapDownloader({ extensionHandle, sseHub });
     // Sweep any stale .tmp/bootstrap/ artefacts left by a previous crash
@@ -75,6 +81,9 @@ function init(extensionHandle) {
     processService.on('exit', ({ chainId }) => {
         syncTracker.clearForChain(chainId);
         HostConflictScanner.clearDedup(chainId);
+        // Drop the sparkline buffer so the restarted chain doesn't
+        // inherit heights from the previous binary version.
+        if (heightSeriesStore) heightSeriesStore.clearForChain(chainId);
     });
 
     // Boot self-heal: walk every known chain, reconcile in-memory state with
@@ -119,6 +128,13 @@ function getSyncTracker() {
         throw new Error('ChainRegistry: not initialized');
     }
     return syncTracker;
+}
+
+function getHeightSeriesStore() {
+    if (!heightSeriesStore) {
+        throw new Error('ChainRegistry: not initialized');
+    }
+    return heightSeriesStore;
 }
 
 /**
@@ -171,6 +187,8 @@ function initHealing(getDb) {
         listChains,
         getAdapter,
         syncTracker,
+        heightSeriesStore,
+        sseHub,
     });
 }
 
@@ -253,6 +271,7 @@ function _resetForTests() {
     engine = null;
     healthChecker = null;
     syncTracker = null;
+    heightSeriesStore = null;
     binaryDownloader = null;
     bootstrapDownloader = null;
     keystoreService = null;
@@ -269,6 +288,7 @@ module.exports = {
     getEngine,
     getHealthChecker,
     getSyncTracker,
+    getHeightSeriesStore,
     getBinaryDownloader,
     getBootstrapDownloader,
     getKeystoreService,

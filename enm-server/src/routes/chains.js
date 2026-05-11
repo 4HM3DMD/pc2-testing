@@ -257,6 +257,39 @@ function build(extensionHandle) {
         }
     });
 
+    // 0.2.0-alpha.1 — chain-card sparkline source. Decimated (≈12 pt)
+    // (t, h) series spanning the requested window. The series lives in
+    // the in-memory HeightSeriesStore filled by HealthChecker every 30s.
+    // Read-only, no host-conflict gate, same rate-limit bucket as
+    // other reads. Live updates flow over SSE topic chains:<id>:height.
+    router.get('/:chainId/history', limit('read'), async (req, res) => {
+        if (!readActorWallet(req)) {
+            return res.status(401).json(errorBody('Authentication required.'));
+        }
+        try {
+            const adapter = adapterOr404(req, res, extensionHandle);
+            if (!adapter) return undefined;
+            const reqMin = Number.parseInt(req.query.windowMin, 10);
+            const windowMin = Number.isFinite(reqMin)
+                ? Math.max(10, Math.min(240, reqMin))
+                : 60;
+            const store = ChainRegistry.getHeightSeriesStore();
+            const points = store.snapshot(adapter.chainId, windowMin * 60_000);
+            return res.json(successBody({
+                chainId:     adapter.chainId,
+                points,
+                windowMin,
+                cadenceSec:  30,
+                sourceTopic: `chains:${adapter.chainId}:height`,
+            }));
+        } catch (err) {
+            extensionHandle.log.error(
+                `${ENM_LOG_PREFIX} GET /chains/${req.params.chainId}/history: ${err.message}`,
+            );
+            return res.status(500).json(errorBody('Failed to read height history.'));
+        }
+    });
+
     // --- mutations: start / stop / restart ---
     router.post('/:chainId/start', limit('write'), requireOwner, async (req, res) => {
         try {
