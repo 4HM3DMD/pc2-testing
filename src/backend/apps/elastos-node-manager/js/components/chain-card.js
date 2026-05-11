@@ -352,17 +352,42 @@
         this._restartBtn.disabled = !alive;
 
         // alpha.11: stats moved out of Details to the always-visible
-        // strip below the actions, so Details now only carries sync
-        // velocity/ETA + BPoS producer info. Hide the toggle when there
-        // can't be any of that — unconfigured / stopped / pure-error
-        // chains have nothing to reveal under the disclosure.
-        var noDetailsContent = unconfigured || coarse === 'stopped';
-        this._detailsToggle.hidden = noDetailsContent;
-        if (noDetailsContent && !this._detailsPanel.hidden) {
-            this._toggleDetails();
-        }
+        // Details disclosure visibility is computed centrally — the sync
+        // and BPoS panels can independently hide themselves, so toggle
+        // visibility tracks "is there anything inside?" rather than just
+        // the coarse state.
+        this._refreshDetailsToggleVisibility();
 
         this.onStateChange(coarse, state);
+    };
+
+    /**
+     * @private
+     * Show the Details toggle iff the disclosure has something useful
+     * inside. Three reasons to hide it:
+     *   1) the chain is in a hard-off state (unconfigured / stopped /
+     *      disabled) — there is no live data;
+     *   2) the sync panel is hidden (fully synced or no height yet) AND
+     *      the BPoS panel is hidden (no on-chain producer record);
+     *   3) the chain card is being torn down.
+     *
+     * Called after every state / sync / producer update so the toggle
+     * vanishes the moment its contents do, and reappears when something
+     * lands worth disclosing.
+     */
+    ChainCard.prototype._refreshDetailsToggleVisibility = function () {
+        if (!this._detailsToggle) return;
+        var coarse = this._lastCoarseState || 'unconfigured';
+        var hardOff = (
+            coarse === 'unconfigured' || coarse === 'stopped' || coarse === 'disabled'
+        );
+        var syncPanelVisible = !!(this._syncPanel && !this._syncPanel.hidden);
+        var bposPanelVisible = !!(this._bposPanel && !this._bposPanel.hidden);
+        var hide = hardOff || (!syncPanelVisible && !bposPanelVisible);
+        this._detailsToggle.hidden = hide;
+        if (hide && this._detailsPanel && !this._detailsPanel.hidden) {
+            this._toggleDetails();
+        }
     };
 
     // Coarse backend state → PowerCircle visual state. Kept as a flat
@@ -529,8 +554,24 @@
 
         if (!data || data.localHeight == null) {
             this._syncPanel.hidden = true;
+            this._refreshDetailsToggleVisibility();
             return;
         }
+
+        // alpha.16 — auto-collapse the sync panel when the chain is fully
+        // synced AND coarse state agrees we're healthy. The progress bar
+        // at 100% + "✓ Fully synced" duplicate what the PowerCircle and
+        // primary-metric line already say; the velocity/ETA/1-3-day hint
+        // are noise once we're at the tip. Hiding here lets the Details
+        // disclosure itself disappear when the BPoS panel is also empty
+        // (refreshDetailsToggleVisibility handles that), keeping the
+        // resting card calm.
+        if (data.synced && this._lastCoarseState === 'healthy') {
+            this._syncPanel.hidden = true;
+            this._refreshDetailsToggleVisibility();
+            return;
+        }
+
         this._syncPanel.hidden = false;
         this._syncPanel.dataset.stale = data.stale ? '1' : '0';
 
@@ -656,6 +697,10 @@
             this._syncHintLine.hidden = true;
             this._syncHintLine.textContent = '';
         }
+
+        // alpha.16 — toggle visibility tracks whether the disclosure has
+        // any visible content. Sync panel just became visible, so call.
+        this._refreshDetailsToggleVisibility();
     };
 
     /**
@@ -671,11 +716,20 @@
             // Guard against late-arriving response — destroy() may have run
             // between the api.get call and its resolution.
             if (self._destroyed) { return; }
-            if (!data || !data.enabled) {
+            // alpha.16 — hide the BPoS panel in three situations:
+            //   1. /producer route says not enabled (no pubkey configured)
+            //   2. enabled but state is null (pubkey set, not yet
+            //      registered on chain — validator-registration-card
+            //      below owns this UX)
+            //   3. error / no data
+            // Only show when we have a confirmed on-chain producer state.
+            if (!data || !data.enabled || !data.state) {
                 if (self._bposPanel) { self._bposPanel.hidden = true; }
+                self._refreshDetailsToggleVisibility();
                 return;
             }
             self._renderBposPanel(data);
+            self._refreshDetailsToggleVisibility();
         }).catch(function () { /* ignore — chain may be stopped or non-BPoS */ });
     };
 

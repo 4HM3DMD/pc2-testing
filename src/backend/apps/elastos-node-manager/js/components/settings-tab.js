@@ -677,32 +677,41 @@
             || '/var/lib/pc2/data/backups/elastos-node-manager/';
         this._danger.statusLine.style.color = '';
         this._danger.statusLine.textContent = t('settings.danger_done', { path: path });
-        // Force a FULL page load on the top window — not an SPA navigation.
+
+        // alpha.16 — actually close the ENM app window instead of
+        // navigating it to PC2 home. Reloading the iframe to '/' was
+        // wrong: it dropped the entire Puter desktop into the ENM
+        // window chrome, which left the operator looking at the
+        // desktop inside an "Elastos Node Manager" title bar.
         //
-        // Why this matters: without a full reload, PC2's desktop keeps its
-        // in-memory list of installed apps and the just-wiped tile lingers
-        // on the launcher. Clicking it opens a window for an app whose
-        // bundle is gone and the user sees a stuck "Initializing..." spinner.
+        // Puter's IPC supports a clean exit: postMessage to the parent
+        // with msg='exit' and our app instance ID, and PC2's UIWindow
+        // closes our window for us (src/gui/src/IPC.js handles it).
+        // The appInstanceID is on the URL params that PC2 hands us
+        // when launching (puter.app_instance_id).
         //
-        // We're usually loaded inside a Puter window (iframe of /apps/...),
-        // so root.top !== root. Navigating root.top.location forces the
-        // outer desktop to do a fresh GET / and re-fetch /api/installed-apps,
-        // at which point ENM is correctly absent. The ?app-uninstalled
-        // hint is purely informational — PC2 doesn't read it today, but
-        // it's a hook future code can use to show a "X uninstalled" toast.
-        //
-        // Try/catch guards against same-origin policy weirdness: if we
-        // somehow can't touch root.top, fall back to the current window.
-        var redirectAfter = 5000;
+        // 4-second delay so the operator reads the keystore-backup
+        // path before the window vanishes.
+        var closeAfter = 4000;
         setTimeout(function () {
             try {
-                var top = root.top || root;
-                top.location.href = top.location.origin
-                    + '/?app-uninstalled=elastos-node-manager';
-            } catch (_) {
-                root.location.href = '/?app-uninstalled=elastos-node-manager';
-            }
-        }, redirectAfter);
+                var params = new URLSearchParams(root.location.search || '');
+                var instanceId = params.get('puter.app_instance_id');
+                if (instanceId && root.parent && root.parent !== root) {
+                    root.parent.postMessage({
+                        msg: 'exit',
+                        appInstanceID: instanceId,
+                        statusCode: 0,
+                    }, '*');
+                    return;
+                }
+            } catch (_) { /* fall through to fallback */ }
+            // Fallback for non-Puter contexts (rare — direct browser visit
+            // to the ENM iframe URL): try window.close(), then a blank
+            // page so the operator sees something other than a stale UI.
+            try { root.close(); } catch (_) { /* not allowed */ }
+            try { root.location.replace('about:blank'); } catch (_) { /* nothing more we can do */ }
+        }, closeAfter);
     };
 
     /** @private */
