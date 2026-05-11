@@ -60,27 +60,15 @@
             // Mount happens in _showDashboard (only the dashboard wears
             // the wash; setup wizard / welcome stay neutral).
             fleetHealth:   root.EnmFleetHealthGradient ? new root.EnmFleetHealthGradient() : null,
-            // 0.2.0-alpha.1 — block-height history client backing the
-            // chain-card sparkline. One subscription per chainId, fan-
-            // out to N listeners (currently just chain-card, but the
-            // Identity / EVM panes may want it later). Bootstrap +
-            // SSE delta + 5-min poll fallback handled internally.
-            heightSeries:  root.EnmHeightSeriesClient
-                              ? new root.EnmHeightSeriesClient(
-                                    /* api */ null, /* sse */ null,
-                                ) /* sentinel; reassigned below once api/sse exist */
-                              : null,
         };
-        // The HeightSeriesClient constructor wants api + sse refs at
-        // construction time — but services.api / services.sse aren't
-        // bound until this object literal evaluates. Reassign now that
-        // we have them.
-        if (this.services.heightSeries && root.EnmHeightSeriesClient) {
-            this.services.heightSeries = new root.EnmHeightSeriesClient(
-                this.services.api,
-                this.services.sse,
-            );
-        }
+        // 0.2.0-alpha.2 — heightSeries needs api + sse refs at construction
+        // time. They're only bound after the services literal evaluates,
+        // so the client is instantiated on the next statement, not inside
+        // the literal. (The earlier sentinel-and-reassign approach threw
+        // synchronously: the constructor asserts `api required`.)
+        this.services.heightSeries = root.EnmHeightSeriesClient
+            ? new root.EnmHeightSeriesClient(this.services.api, this.services.sse)
+            : null;
 
         // Step 1: window-manager IPC contract MUST happen before anything else.
         this.services.wallet.sendReady();
