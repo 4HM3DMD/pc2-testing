@@ -30,6 +30,27 @@
                                       : '/extensions/elastos-node-manager/api/events');
     var OPEN_TIMEOUT_MS = 10_000;
 
+    /**
+     * Browser EventSource can't send Authorization headers. Read the
+     * same operator-session token api.js derives (from the iframe URL's
+     * ?puter.auth.token= / ?auth_token= / ?token= params) and append it
+     * to every events-stream URL so the backend's extractToken() picks
+     * it up. Without this, alpha.12 fixed the URL but every subscribe
+     * returned 401 because the request reached ENM without credentials.
+     */
+    function deriveToken() {
+        var loc = root.location || {};
+        var search = loc.search || '';
+        var params;
+        try { params = new URLSearchParams(search); }
+        catch (_) { return null; }
+        return params.get('puter.auth.token')
+            || params.get('auth_token')
+            || params.get('token')
+            || null;
+    }
+    var AUTH_TOKEN = deriveToken();
+
     function EnmSse() {
         this._es = null;
         this._topics = new Set();           // subscribed topic names
@@ -100,10 +121,18 @@
             return;
         }
 
-        var qs = Array.from(this._topics)
-            .map(function (t) { return 'topic=' + encodeURIComponent(t); })
-            .join('&');
-        var url = ENDPOINT + '?' + qs;
+        var qsParts = Array.from(this._topics).map(function (t) {
+            return 'topic=' + encodeURIComponent(t);
+        });
+        // alpha.13: include the operator's session token as a query param.
+        // EventSource can't send Authorization headers, so the backend
+        // reads the token from ?token= via extractToken() — without this
+        // every subscribe lands on the events route as anonymous and
+        // returns 401.
+        if (AUTH_TOKEN) {
+            qsParts.push('token=' + encodeURIComponent(AUTH_TOKEN));
+        }
+        var url = ENDPOINT + '?' + qsParts.join('&');
         this._connectAttempts += 1;
         this._emitState('reconnecting');
 
