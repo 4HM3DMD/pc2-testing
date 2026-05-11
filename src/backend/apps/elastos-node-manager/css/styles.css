@@ -652,78 +652,99 @@ body[data-active-tab="identity"]::before {
    System status — top strip
    ============================================================ */
 
+/* 0.2.0-alpha.1 — Apple Hero status strip. A single thin row with the
+   five host vitals (CPU / RAM / Disk / OS / Uptime), each cell carrying
+   a glowing status dot + a tiny uppercase label above a compact value.
+   The strip itself is a single bordered card; cells separate via a
+   1px hairline divider (alpha.17 dropped these — the apple-hero mock
+   puts them back, and at the alpha they read as edges, not lines). */
 .enm-system-status {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    padding: 14px 22px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    background: var(--bg-surface);
+    margin-bottom: 36px;
+    flex-wrap: wrap;
     overflow: hidden;
-    margin-bottom: var(--spacing-lg);
 }
 
-/* alpha.17 — drop the heavy vertical dividers between cells. The
-   status row used to look like a row of Excel cells crammed together.
-   Whitespace + the leading status dot carry the visual structure now;
-   borders only show on hover via the rounded recess. */
 .enm-sys-cell {
+    flex: 1 1 0;
+    min-width: 140px;
     display: grid;
-    grid-template-columns: 8px 1fr;
+    grid-template-columns: 6px 1fr;
     grid-template-rows: auto auto;
-    column-gap: var(--spacing-sm);
-    row-gap: 2px;
-    align-items: baseline;
-    padding: var(--spacing-lg);
-    background: var(--bg-surface);
-    min-width: 0;
-    border-radius: var(--radius-md);
+    column-gap: 10px;
+    row-gap: 0;
+    padding: 4px 18px;
+    background: transparent;
+    border-right: var(--sys-cell-divider);
     transition: background var(--motion-fast) var(--ease-spring);
 }
 
-.enm-sys-cell:hover { background: var(--bg-muted); }
+.enm-sys-cell:last-child { border-right: none; }
 
-/* Leading status dot — colour and presence driven by data-health.
-   The dot is small (6px) so it never dominates the value, and it
-   sits just above the value's baseline visually. */
+/* Status dot — small (6px) with a soft glow halo via box-shadow.
+   The glow uses the same hue at low alpha so the dot reads as
+   "lit". Spans both rows of the cell + vertically centers. */
 .enm-sys-cell::before {
     content: '';
     grid-column: 1;
-    grid-row: 1;
+    grid-row: 1 / 3;
     width: 6px;
     height: 6px;
     border-radius: 50%;
-    margin-top: 11px;          /* aligns with value baseline */
+    align-self: center;
     background: var(--state-stopped);
-    transition: background var(--motion-base) var(--ease-spring);
+    box-shadow: 0 0 0 4px rgba(60, 60, 67, 0.10);
+    transition: background var(--motion-base) var(--ease-spring),
+                box-shadow var(--motion-base) var(--ease-spring);
 }
 
-.enm-sys-cell[data-health="ok"]::before        { background: var(--state-healthy); }
-.enm-sys-cell[data-health="warning"]::before   { background: var(--state-stalled); }
-.enm-sys-cell[data-health="critical"]::before  { background: var(--state-error); }
-.enm-sys-cell[data-health="unknown"]::before   { background: var(--text-muted); opacity: 0.5; }
+.enm-sys-cell[data-health="ok"]::before {
+    background: var(--state-healthy);
+    box-shadow: 0 0 0 4px rgba(52, 199, 89, 0.18);
+}
+.enm-sys-cell[data-health="warning"]::before {
+    background: var(--state-stalled);
+    box-shadow: 0 0 0 4px rgba(255, 159, 10, 0.18);
+}
+.enm-sys-cell[data-health="critical"]::before {
+    background: var(--state-error);
+    box-shadow: 0 0 0 4px rgba(255, 69, 58, 0.18);
+}
+.enm-sys-cell[data-health="unknown"]::before {
+    background: var(--text-muted);
+    box-shadow: 0 0 0 4px rgba(60, 60, 67, 0.06);
+    opacity: 0.6;
+}
+
+/* Label sits on TOP of the value (mock order), uppercase + tracked
+   for the "vitals readout" feel. Value below in regular case. */
+.enm-sys-label {
+    grid-column: 2;
+    grid-row: 1;
+    font-size: 10px;
+    font-weight: var(--font-weight-semibold);
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
 
 .enm-sys-value {
     grid-column: 2;
-    grid-row: 1;
-    /* alpha.17 — 22 → 20px. The previous size was loud for a top-strip
-       monitor; numbers carry just as much weight at 20px with the
-       medium weight bump. */
-    font-size: 20px;
+    grid-row: 2;
+    font-size: 13px;
     font-weight: var(--font-weight-medium);
-    letter-spacing: -0.02em;
     color: var(--text-primary);
     font-variant-numeric: tabular-nums;
-    line-height: 1.15;
+    line-height: 1.2;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-}
-
-.enm-sys-label {
-    grid-column: 2;
-    grid-row: 2;
-    font-size: 11px;
-    font-weight: var(--font-weight-medium);
-    color: var(--text-secondary);
-    text-transform: lowercase;
-    letter-spacing: 0;
 }
 
 /* When /system/status fails, the JS adds .enm-sys-stale to every value
@@ -3078,17 +3099,26 @@ body[data-active-tab="identity"]::before {
 @media (max-width: 640px) {
     .enm-pane { padding: var(--spacing-sm); }
     .enm-chains-grid { gap: var(--spacing-md); }
-    .enm-chain-card { padding: var(--spacing-md); }
-    .enm-system-status { grid-template-columns: repeat(2, 1fr); }
+    /* 0.2.0-alpha.1 — collapse chain-card padding on narrow windows;
+       sys-strip loses its inter-cell dividers and tightens. */
+    .enm-chain-card { padding: 28px 22px 22px; border-radius: 24px; }
+    .enm-system-status { padding: 10px 14px; margin-bottom: 24px; }
+    .enm-sys-cell { border-right: 0; padding: 6px 10px; min-width: 120px; }
     .enm-error { margin: var(--spacing-md); padding: var(--spacing-md); }
+    /* 0.2.0-alpha.1 — drop the 220px ring to the fallback 180px so
+       it fits inside a narrow card without forcing a horizontal
+       scroll. The fallback is a token so the breath/glyph sizing
+       cascade pickup automatically. */
+    .enm-chain-hero { width: var(--ring-size-fallback); }
 }
 
 /* small-phone */
 @media (max-width: 480px) {
     :root { --header-bar-height: 40px; }
     .enm-tab { font-size: 12px; padding: 4px 8px; }
-    .enm-system-status { grid-template-columns: 1fr; }
+    .enm-sys-cell { min-width: 100%; padding: 8px 10px; }
     .enm-chain-card-head { gap: 6px; }
+    .enm-chain-primary-value { font-size: 26px; }
     .enm-wizard-body h2,
     .enm-wizard-body h3 { font-size: 17px; }
 }
