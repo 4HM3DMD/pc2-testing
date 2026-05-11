@@ -487,10 +487,10 @@ html, body {
     margin-bottom: var(--spacing-lg);
 }
 
-/* Cells follow Apple System Settings' info-row pattern: a status dot
-   leads, a big numeric value sits beneath the dot, and a small lower-
-   case label sits below the value as a caption. The previous treatment
-   reversed this hierarchy and made the row hard to scan. */
+/* alpha.17 — drop the heavy vertical dividers between cells. The
+   status row used to look like a row of Excel cells crammed together.
+   Whitespace + the leading status dot carry the visual structure now;
+   borders only show on hover via the rounded recess. */
 .enm-sys-cell {
     display: grid;
     grid-template-columns: 8px 1fr;
@@ -498,14 +498,13 @@ html, body {
     column-gap: var(--spacing-sm);
     row-gap: 2px;
     align-items: baseline;
-    padding: var(--spacing-xl) var(--spacing-lg);
+    padding: var(--spacing-lg);
     background: var(--bg-surface);
     min-width: 0;
-    border-right: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
     transition: background var(--motion-fast) var(--ease-spring);
 }
 
-.enm-sys-cell:last-child { border-right: none; }
 .enm-sys-cell:hover { background: var(--bg-muted); }
 
 /* Leading status dot — colour and presence driven by data-health.
@@ -531,8 +530,11 @@ html, body {
 .enm-sys-value {
     grid-column: 2;
     grid-row: 1;
-    font-size: 22px;
-    font-weight: var(--font-weight-regular);
+    /* alpha.17 — 22 → 20px. The previous size was loud for a top-strip
+       monitor; numbers carry just as much weight at 20px with the
+       medium weight bump. */
+    font-size: 20px;
+    font-weight: var(--font-weight-medium);
     letter-spacing: -0.02em;
     color: var(--text-primary);
     font-variant-numeric: tabular-nums;
@@ -590,11 +592,25 @@ html, body {
     flex-direction: column;
     align-items: center;
     gap: var(--spacing-sm);
-    transition: border-color var(--motion-base) var(--ease-spring);
+    transition: border-color var(--motion-base) var(--ease-spring),
+                box-shadow var(--motion-base) var(--ease-spring),
+                transform var(--motion-base) var(--ease-spring);
 }
 
-/* No hover lift — calmer at rest. The PowerCircle does its own
-   subtle hover on its inner svg. */
+/* alpha.17 — gentle hover lift on the resting card. Only a few pixels
+   of shadow + a 1px translate so the card responds to the cursor like
+   a tap target on iOS. Stays calm at rest (no shadow, just border)
+   because the dashboard hosts many of these and shouting at rest would
+   make the page feel busy. */
+.enm-chain-card:hover {
+    border-color: var(--border-strong);
+    box-shadow: var(--shadow-md);
+    transform: translateY(-1px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .enm-chain-card:hover { transform: none; }
+}
 
 .enm-chain-hero {
     /* alpha.11: trimmed clamp ceiling (240 → 200) so the circle leaves
@@ -617,20 +633,27 @@ html, body {
 }
 
 .enm-chain-card-name {
-    font-size: 22px;
-    font-weight: 600;
+    /* alpha.17 — 22 → 20px. The name shouts less now that the
+       PowerCircle is the focal point; matches the system-status value
+       size for a coherent type scale across the dashboard. */
+    font-size: 20px;
+    font-weight: var(--font-weight-semibold);
     letter-spacing: -0.02em;
     color: var(--text-primary);
     text-transform: capitalize;
     line-height: 1.2;
 }
 
+/* alpha.17 — drop the all-caps tracked treatment. State labels like
+   "Active" / "Syncing" / "Pending" read as natural words, not as a
+   tech-demo dashboard chip. Lower-case secondary text matches the
+   system-status cell labels and the audit-table column headers. */
 .enm-chain-card-state {
     font-size: 13px;
-    font-weight: 500;
-    letter-spacing: 0.02em;
+    font-weight: var(--font-weight-medium);
+    letter-spacing: 0;
     color: var(--text-secondary);
-    text-transform: uppercase;
+    text-transform: none;
 }
 
 .enm-chain-card-metric {
@@ -642,16 +665,20 @@ html, body {
     min-height: 1.2em;
 }
 
+/* alpha.17 — chain badge refresh. Drop uppercase + heavy tracking;
+   reads as a calm chip instead of a tech badge. Slightly larger
+   text (11 → 12px) since we lost the tracking that made the old
+   size feel intentional. */
 .enm-chain-badge {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    padding: 4px 10px;
+    padding: 3px 10px;
     border-radius: var(--radius-pill);
-    font-size: 11px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
+    font-size: 12px;
+    font-weight: var(--font-weight-medium);
+    text-transform: none;
+    letter-spacing: 0;
     background: rgba(148, 163, 184, 0.12);
     color: var(--text-secondary);
 }
@@ -738,9 +765,16 @@ html, body {
     }
 }
 
+/* alpha.17 — sync + BPoS panels switch from border-top dividers to
+   bg-muted blocks. Border-tops created hard horizontal lines stacked
+   inside the card, which read as separator chrome instead of structure.
+   A subtle muted background with rounded corners gives interior
+   structure without adding chrome — closer to macOS System Settings
+   "group" boxes. */
 .enm-chain-sync {
-    border-top: 1px solid var(--border-color);
-    padding-top: var(--spacing-md);
+    background: var(--bg-muted);
+    border-radius: var(--radius-md);
+    padding: var(--spacing-md) var(--spacing-md);
     display: flex;
     flex-direction: column;
     gap: 6px;
@@ -748,18 +782,25 @@ html, body {
 
 .enm-chain-sync[data-stale="1"] { opacity: 0.7; }
 
+/* alpha.17 — section heading. Same treatment as the validator eyebrow
+   so all "section labels" inside cards read consistently. Slightly
+   lighter weight (semi → medium) since the bg-muted block already
+   creates the structure. */
 .enm-chain-sync-heading {
     font-size: 11px;
-    font-weight: 600;
+    font-weight: var(--font-weight-medium);
     text-transform: uppercase;
-    letter-spacing: 0.06em;
+    letter-spacing: 0.08em;
     color: var(--text-muted);
 }
 
 .enm-chain-sync-bar-wrap {
     width: 100%;
     height: 6px;
-    background: var(--bg-muted);
+    /* alpha.17 — the sync panel itself is now bg-muted, so the track
+       needs a slightly darker background to stay visible. bg-surface
+       creates a subtle inset look. */
+    background: var(--border-color);
     border-radius: var(--radius-pill);
     overflow: hidden;
     position: relative;
@@ -806,15 +847,16 @@ html, body {
 }
 
 .enm-chain-bpos {
-    border-top: 1px solid var(--border-color);
-    padding-top: var(--spacing-md);
+    background: var(--bg-muted);
+    border-radius: var(--radius-md);
+    padding: var(--spacing-md);
 }
 
 .enm-chain-bpos-heading {
     font-size: 11px;
-    font-weight: 600;
+    font-weight: var(--font-weight-medium);
     text-transform: uppercase;
-    letter-spacing: 0.06em;
+    letter-spacing: 0.08em;
     color: var(--text-muted);
     margin-bottom: var(--spacing-sm);
 }
@@ -1122,7 +1164,10 @@ html, body {
     align-items: center;
     justify-content: center;
     gap: 6px;
-    min-height: 36px;
+    /* alpha.17 — 36 → 34px. The taller height felt web-formy; 34 lines
+       up with macOS toolbar controls and matches the density of the
+       input fields without making the click target too small. */
+    min-height: 34px;
     padding: 0 14px;
     font-size: 13px;
     line-height: 1;
@@ -1135,8 +1180,8 @@ html, body {
     color: var(--text-primary);
     cursor: pointer;
     user-select: none;
-    /* alpha.8 — spring easing on the hover/press cycle so buttons settle
-       like an iOS / macOS control instead of bouncing past the target. */
+    /* Spring easing on the hover/press cycle so buttons settle like
+       an iOS / macOS control instead of bouncing past the target. */
     transition: background var(--motion-fast) var(--ease-spring),
                 border-color var(--motion-fast) var(--ease-spring),
                 color var(--motion-fast) var(--ease-spring),
@@ -1157,7 +1202,12 @@ html, body {
     background: var(--primary);
     color: #fff;
     border-color: var(--primary);
-    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.18) inset, var(--shadow-xs);
+    /* alpha.17 — drop the inset white highlight that read as "gloss".
+       Modern primary buttons (Linear, Vercel, Anthropic console) sit
+       flat on the surface; the colour alone carries call-to-action
+       weight. The :hover state still bumps to primary-hover for
+       affordance. */
+    box-shadow: none;
 }
 
 /* When a primary button is disabled, drop the "I am the suggested action"
@@ -1259,11 +1309,17 @@ html, body {
     }
 }
 
+/* alpha.17 — macOS System Settings pattern: the active sub-tab gets a
+   color shift + a 2px leading accent bar instead of a filled pill.
+   The filled --primary-soft background read as "selected button"
+   instead of "current section." Border-left accent communicates
+   navigation context without painting the whole row. */
 .enm-settings-nav-item {
     appearance: none;
     -webkit-appearance: none;
     background: transparent;
     border: none;
+    border-left: 2px solid transparent;
     padding: 8px 12px;
     font: inherit;
     font-size: 13px;
@@ -1271,9 +1327,10 @@ html, body {
     color: var(--text-secondary);
     cursor: pointer;
     text-align: left;
-    border-radius: var(--radius-sm);
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
     transition: background var(--motion-fast) var(--ease-spring),
-                color var(--motion-fast) var(--ease-spring);
+                color var(--motion-fast) var(--ease-spring),
+                border-color var(--motion-fast) var(--ease-spring);
 }
 
 .enm-settings-nav-item:hover {
@@ -1283,7 +1340,9 @@ html, body {
 
 .enm-settings-nav-item.active {
     color: var(--primary);
-    background: var(--primary-soft);
+    background: transparent;
+    border-left-color: var(--primary);
+    font-weight: var(--font-weight-semibold);
 }
 
 .enm-settings-nav-item:focus-visible {
@@ -1297,7 +1356,26 @@ html, body {
 .enm-settings-nav-item[data-accent="danger"]:hover { background: rgba(239, 68, 68, 0.08); }
 .enm-settings-nav-item[data-accent="danger"].active {
     color: var(--error);
-    background: rgba(239, 68, 68, 0.12);
+    background: transparent;
+    border-left-color: var(--error);
+}
+
+/* Horizontal collapsed layout (<640px container width) — the left-
+   border accent doesn't make sense as a "tab on top" row. Fall back
+   to the filled pill for the pill bar, but keep the borderless rest
+   treatment. */
+@container (max-width: 640px) {
+    .enm-settings-nav-item {
+        border-left: none;
+        border-radius: var(--radius-sm);
+    }
+    .enm-settings-nav-item.active {
+        background: var(--primary-soft);
+        border-left: none;
+    }
+    .enm-settings-nav-item[data-accent="danger"].active {
+        background: rgba(239, 68, 68, 0.12);
+    }
 }
 
 .enm-settings-content {
@@ -1549,17 +1627,22 @@ html, body {
     margin-bottom: var(--spacing-lg);
 }
 
+/* alpha.17 — eyebrow tracking 0.1em → 0.08em (a touch less stretched)
+   and weight semi → medium. The all-caps treatment is still right
+   for an eyebrow label since it's a category, not a sentence. */
 .enm-validator-card-eyebrow {
     font-size: 11px;
-    font-weight: var(--font-weight-semibold);
+    font-weight: var(--font-weight-medium);
     text-transform: uppercase;
-    letter-spacing: 0.1em;
+    letter-spacing: 0.08em;
     color: var(--primary);
     margin-bottom: var(--spacing-xs);
 }
 
 .enm-validator-card-title {
-    font-size: 22px;
+    /* alpha.17 — 22 → 20px. Matches the chain-card name + system-status
+       value: one heading scale across the dashboard. */
+    font-size: 20px;
     font-weight: var(--font-weight-semibold);
     letter-spacing: -0.02em;
     color: var(--text-primary);
@@ -1738,14 +1821,18 @@ html, body {
     color: var(--text-muted);
 }
 
+/* alpha.17 — drop the filled bg-muted box around filters. The row was
+   reading as a heavy "toolbar" block that competed with the table
+   below. Naked controls with the same spacing rhythm sit lighter
+   against the page; the inputs themselves have borders that carry
+   the structure. */
 .enm-audit-filters {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
     gap: var(--spacing-sm);
-    padding: var(--spacing-md);
-    background: var(--bg-muted);
-    border-radius: var(--radius-md);
+    padding: 0;
+    background: transparent;
 }
 
 .enm-audit-label {
