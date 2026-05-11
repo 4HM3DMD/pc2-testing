@@ -109,12 +109,13 @@
 
     ChainCard.prototype.destroy = function () {
         this._destroyed = true;
-        if (this._metricsTimer) { clearInterval(this._metricsTimer); this._metricsTimer = null; }
-        if (this._syncTimer)    { clearTimeout(this._syncTimer);    this._syncTimer = null; }
-        if (this._unsubscribe)  { this._unsubscribe(); this._unsubscribe = null; }
-        if (this._unsubSse)     { this._unsubSse();    this._unsubSse = null; }
-        if (this._unsubHeight)  { this._unsubHeight(); this._unsubHeight = null; }
-        if (this._sparkline)    { this._sparkline.destroy(); this._sparkline = null; }
+        if (this._metricsTimer)    { clearInterval(this._metricsTimer);    this._metricsTimer = null; }
+        if (this._uptimeTickTimer) { clearInterval(this._uptimeTickTimer); this._uptimeTickTimer = null; }
+        if (this._syncTimer)       { clearTimeout(this._syncTimer);        this._syncTimer = null; }
+        if (this._unsubscribe)     { this._unsubscribe(); this._unsubscribe = null; }
+        if (this._unsubSse)        { this._unsubSse();    this._unsubSse = null; }
+        if (this._unsubHeight)     { this._unsubHeight(); this._unsubHeight = null; }
+        if (this._sparkline)       { this._sparkline.destroy(); this._sparkline = null; }
         // 0.2.0-alpha.1 — tell FleetHealthGradient we're going away so it
         // can drop this chain from its aggregate. Without this, a remount
         // would double-count.
@@ -339,7 +340,31 @@
         // Stats strip.
         this._statFields.peers.textContent   = state && state.peers         != null ? String(state.peers) : '—';
         this._statFields.version.textContent = state && state.binaryVersion ? state.binaryVersion : '—';
-        this._statFields.uptime.textContent  = state && state.uptimeSec     != null ? root.enmFormatUptime(state.uptimeSec) : '—';
+        // 0.2.0-alpha.5 — uptime gets a local 1-second tick instead of
+        // riding the 5s refresh poll. We anchor _uptimeBaseMs to
+        // (now - uptimeSec) every time the backend reports a number,
+        // then the local interval recomputes the displayed value off
+        // Date.now() each second. Effect: smooth 37s → 38s → 39s
+        // counter instead of jumps from 37s → 42s every poll.
+        if (state && state.uptimeSec != null) {
+            this._uptimeBaseMs = Date.now() - state.uptimeSec * 1000;
+            this._statFields.uptime.textContent = root.enmFormatUptime(state.uptimeSec);
+            if (!this._uptimeTickTimer) {
+                var card = this;
+                this._uptimeTickTimer = setInterval(function () {
+                    if (card._destroyed || card._uptimeBaseMs == null) return;
+                    var elapsedSec = Math.floor((Date.now() - card._uptimeBaseMs) / 1000);
+                    card._statFields.uptime.textContent = root.enmFormatUptime(elapsedSec);
+                }, 1_000);
+            }
+        } else {
+            this._uptimeBaseMs = null;
+            this._statFields.uptime.textContent = '—';
+            if (this._uptimeTickTimer) {
+                clearInterval(this._uptimeTickTimer);
+                this._uptimeTickTimer = null;
+            }
+        }
 
         // Action row enable/disable.
         var alive = (coarse === 'healthy' || coarse === 'syncing' || coarse === 'stalled' || coarse === 'recovering' || coarse === 'starting');
