@@ -401,6 +401,13 @@
     SettingsTab.prototype._saveRpcEnabled = function () {
         var t = root.enmTOrFallback;
         var enabled = this._creds.toggleOn.checked === true;
+        var current = !!(this._creds.data && this._creds.data.enabled);
+        if (enabled === current) {
+            // No-op — operator clicked Save without changing state. Don't
+            // spam the server or surface a confusing 'Saved' toast.
+            this._creds.toggleStatus.textContent = t('settings.rpc_white_no_change');
+            return;
+        }
         var self = this;
         this._creds.toggleStatus.textContent = t('common.loading');
         this.api.put('/config/mainchain', { rpcEnabled: enabled }).then(function () {
@@ -418,12 +425,21 @@
     SettingsTab.prototype._saveWhitelist = function () {
         var t = root.enmTOrFallback;
         var list = this._creds.whiteIp.getValue();
+        // alpha.20: don't bother the server (or confuse the operator with a
+        // success toast) if nothing actually changed since last load. Compare
+        // sorted JSON so order-only differences are also no-ops.
+        var current = (this._creds.data && Array.isArray(this._creds.data.whiteIPList))
+            ? this._creds.data.whiteIPList.slice() : [];
+        var sortedNew  = list.slice().sort();
+        var sortedCur  = current.slice().sort();
+        if (JSON.stringify(sortedNew) === JSON.stringify(sortedCur)) {
+            this._creds.whiteStatus.textContent = t('settings.rpc_white_no_change');
+            return;
+        }
         var self = this;
         this._creds.whiteStatus.textContent = t('common.loading');
         this.api.put('/config/mainchain', { whiteIPList: list }).then(function () {
             self._creds.whiteStatus.textContent = t('settings.rpc_white_applied');
-            // Refresh cached data so the chips reflect what the backend persisted
-            // (the backend de-dupes + filters non-strings).
             if (self._creds.data) self._creds.data.whiteIPList = list.slice();
         }).catch(function (err) {
             self._creds.whiteStatus.textContent = t('settings.rpc_white_apply_failed',
@@ -906,7 +922,7 @@
         newInput.style.flex = '1';
         newInput.style.minWidth = '0';
         newInput.style.padding = '4px 8px';
-        newInput.style.border = '1px solid var(--enm-border, #cfd6dd)';
+        newInput.style.border = '1px solid var(--border-color, #cfd6dd)';
         newInput.style.borderRadius = '4px';
         newInput.style.background = 'transparent';
         newInput.style.color = 'inherit';
@@ -923,9 +939,9 @@
         addBtn.style.fontSize = '13px';
         addBtn.style.lineHeight = '1';
         addBtn.style.fontFamily = 'inherit';
-        addBtn.style.border = '1px solid var(--enm-border, #cfd6dd)';
+        addBtn.style.border = '1px solid var(--border-color, #cfd6dd)';
         addBtn.style.borderRadius = '4px';
-        addBtn.style.background = 'var(--enm-surface, #f5f7fa)';
+        addBtn.style.background = 'var(--bg-elevated, #ffffff)';
         addBtn.style.color = 'inherit';
         addBtn.style.cursor = 'pointer';
         editorRow.appendChild(addBtn);
@@ -953,11 +969,11 @@
                 chip.style.padding = '2px 6px 2px 8px';
                 chip.style.fontSize = '12px';
                 chip.style.lineHeight = '1.4';
-                chip.style.border = '1px solid var(--enm-border, #cfd6dd)';
+                chip.style.border = '1px solid var(--border-color, #cfd6dd)';
                 chip.style.borderRadius = '10px';
                 chip.style.background = locked
-                    ? 'var(--enm-surface-muted, #eaeef3)'
-                    : 'var(--enm-surface, #f5f7fa)';
+                    ? 'var(--bg-elevated, #f5f7fa)'
+                    : 'var(--bg-elevated, #ffffff)';
                 if (locked) chip.title = 'Locked — needed for ENM\'s own RPC calls.';
 
                 var text = document.createElement('span');
