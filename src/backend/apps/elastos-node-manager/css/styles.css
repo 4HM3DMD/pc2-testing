@@ -4245,6 +4245,191 @@ body[data-active-tab="identity"]::before {
 }
 .enm-tech-tabs::-webkit-scrollbar { display: none; }
 
+/* 0.2.0-alpha.8 — Tools sub-tab dot. EnmToolsUpdateCard (and
+   technical-view's mount-time scan) write `data-update-severity` on
+   the body when an ela release is available. CSS hangs a coloured
+   pin on the Tools tab nav button so the operator notices even
+   without opening Tools.
+
+   `::before` is used (not `::after`) because the existing tab
+   underline marker already occupies `::after` (only visible on
+   active/selected tabs; would conflict here).
+*/
+body[data-update-severity] .enm-tech-tabs .enm-tab[data-tab="tools"] {
+    position: relative;
+    padding-right: 18px;
+}
+body[data-update-severity] .enm-tech-tabs .enm-tab[data-tab="tools"]::before {
+    content: '';
+    position: absolute;
+    top: 8px;
+    right: 6px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--text-muted);
+    transition: background var(--motion-fast) var(--ease-spring),
+                box-shadow var(--motion-fast) var(--ease-spring);
+}
+body[data-update-severity="patch"] .enm-tech-tabs .enm-tab[data-tab="tools"]::before,
+body[data-update-severity="minor"] .enm-tech-tabs .enm-tab[data-tab="tools"]::before {
+    background: var(--state-syncing);
+    box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.16);
+}
+body[data-update-severity="major"] .enm-tech-tabs .enm-tab[data-tab="tools"]::before {
+    background: var(--state-stalled);
+    box-shadow: 0 0 0 3px rgba(255, 159, 10, 0.18);
+    animation: enm-tools-update-dot-pulse 2s ease-in-out infinite;
+}
+
+@keyframes enm-tools-update-dot-pulse {
+    0%, 100% { transform: scale(1); opacity: 1; }
+    50%      { transform: scale(1.25); opacity: 0.8; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    body[data-update-severity="major"] .enm-tech-tabs .enm-tab[data-tab="tools"]::before {
+        animation: none;
+    }
+}
+
+/* 0.2.0-alpha.8 — Binary Update card (Tools tab, top). Read-only:
+   shows installed vs latest version, severity chip, release notes,
+   and the manual deploy command. Apply-in-place lands in alpha.9. */
+.enm-tools-update-card {
+    padding: var(--spacing-lg);
+    margin-bottom: var(--spacing-md);
+    border-radius: var(--radius-lg);
+    transition: border-color var(--motion-base) var(--ease-spring);
+}
+
+.enm-tools-update-card[data-severity="none"] {
+    /* up-to-date — calm presentation, no chrome */
+}
+
+.enm-tools-update-card[data-severity="patch"],
+.enm-tools-update-card[data-severity="minor"] {
+    border-left: 3px solid var(--state-syncing);
+}
+
+.enm-tools-update-card[data-severity="major"] {
+    border-left: 3px solid var(--state-stalled);
+}
+
+.enm-tools-update-head {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.enm-tools-update-head-row {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    justify-content: space-between;
+    flex-wrap: wrap;
+}
+
+.enm-tools-update-head h3 {
+    font-size: 16px;
+    font-weight: var(--font-weight-semibold);
+    color: var(--text-primary);
+    margin: 0;
+    line-height: 1.3;
+}
+
+.enm-tools-update-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 10px;
+    border-radius: var(--radius-pill);
+    font-size: 11px;
+    font-weight: var(--font-weight-semibold);
+    letter-spacing: 0.05em;
+    background: rgba(60, 60, 67, 0.08);
+    color: var(--text-secondary);
+}
+.enm-tools-update-chip-patch,
+.enm-tools-update-chip-minor {
+    background: rgba(0, 122, 255, 0.12);
+    color: var(--state-syncing);
+}
+.enm-tools-update-chip-major {
+    background: rgba(255, 159, 10, 0.14);
+    color: var(--state-stalled);
+}
+
+.enm-tools-update-versions {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin: 0;
+    line-height: 1.5;
+}
+
+.enm-tools-update-versions code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: var(--bg-muted);
+    border-radius: var(--radius-sm);
+    padding: 2px 6px;
+    color: var(--text-primary);
+    font-size: 12px;
+}
+
+.enm-tools-update-when {
+    color: var(--text-muted);
+    font-size: 12px;
+}
+
+.enm-tools-update-notes {
+    margin-top: var(--spacing-md);
+}
+
+.enm-tools-update-notes summary {
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--text-secondary);
+    user-select: none;
+}
+
+.enm-tools-update-notes pre {
+    margin-top: var(--spacing-sm);
+    max-height: 280px;
+    overflow: auto;
+    padding: var(--spacing-md);
+    background: var(--bg-muted);
+    border-radius: var(--radius-md);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    color: var(--text-secondary);
+}
+
+.enm-tools-update-action {
+    margin-top: var(--spacing-md);
+    padding-top: var(--spacing-md);
+    border-top: 1px solid var(--border-color);
+}
+
+.enm-tools-update-action p {
+    margin: 0 0 var(--spacing-sm);
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+.enm-tools-update-cmd {
+    margin: 0;
+    padding: var(--spacing-sm) var(--spacing-md);
+    background: var(--bg-code);
+    color: #f8fafc;
+    border-radius: var(--radius-md);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    overflow-x: auto;
+    white-space: pre;
+}
+
 .enm-tech-content {
     position: relative;
     min-height: 200px;

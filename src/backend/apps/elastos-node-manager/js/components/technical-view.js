@@ -68,7 +68,25 @@
         parent.appendChild(this.root);
         this._renderShell();
         this._switchTo(this._activeTab);
+        // 0.2.0-alpha.8 — kick off a single update-check poll so the
+        // Tools-tab nav dot lights up even when the operator hasn't
+        // opened Tools yet. The Tools update card does its own deeper
+        // poll on mount; this one only needs the severity to set the
+        // body[data-update-severity] attribute the CSS reads.
+        this._kickUpdateScan();
         return this;
+    };
+
+    /** @private */
+    TechnicalView.prototype._kickUpdateScan = function () {
+        if (!this.api) return;
+        this.api.get('/updates/available', { skipCache: true }).then(function (env) {
+            if (env && env.updateAvailable && env.severity) {
+                document.body.dataset.updateSeverity = env.severity;
+            } else {
+                delete document.body.dataset.updateSeverity;
+            }
+        }).catch(function () { /* dot stays off; GitHub may be unreachable */ });
     };
 
     TechnicalView.prototype.destroy = function () {
@@ -289,6 +307,19 @@
      */
     TechnicalView.prototype._renderTools = function (pane) {
         var self = this;
+        // 0.2.0-alpha.8 — Binary Update card (read-only first; in-place
+        // upgrade lands in alpha.9). Mounted FIRST so it's the most
+        // prominent thing in the Tools tab when an update is available.
+        // The card itself owns the polling cadence (6h) + writes
+        // body.dataset.updateSeverity for the tab dot.
+        if (root.EnmToolsUpdateCard) {
+            this._toolsUpdateCard = new root.EnmToolsUpdateCard({
+                api: this.api,
+                notifications: this.notifications,
+            });
+            this._toolsUpdateCard.mount(pane);
+            this._mounted['tools_update'] = this._toolsUpdateCard;
+        }
         this._renderMaintenance(pane);
 
         // Live state-gating refresh — re-evaluate which buttons are

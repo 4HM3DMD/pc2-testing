@@ -37,6 +37,7 @@ const logsRouter = require('./logs');
 const healingRouter = require('./healing');
 const auditRouter = require('./audit');
 const configRouter = require('./config');
+const updatesRouter = require('./updates');
 const ChainRegistry = require('../services/ChainRegistry');
 
 /**
@@ -88,6 +89,10 @@ function mountRoutes(app, extensionHandle) {
     api.use('/chains', chainsRouter.build(extensionHandle));
     api.use('/logs', logsRouter.build({ extensionHandle }));
     api.use('/config', configRouter.build(extensionHandle));
+    // 0.2.0-alpha.8 — upstream-release detection backing the Tools tab
+    // Binary Update card. Lazy-init scanner singleton; first hit kicks
+    // off a GitHub Releases API poll, cached 6h jittered.
+    api.use('/updates', updatesRouter.build(extensionHandle));
     // SSE — depends on ChainRegistry being initialized in main.js init hook.
     api.use('/events', eventsRouter.build({
         extensionHandle,
