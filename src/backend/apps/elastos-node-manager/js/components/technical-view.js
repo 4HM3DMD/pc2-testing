@@ -201,6 +201,13 @@
 
     /** @private */
     TechnicalView.prototype._mountPane = function (tabId) {
+        // 0.2.0-alpha.13 — was missing! Without it the alpha.11
+        // refreshGates closure resolved `self` to the browser's
+        // `window` global, then `window.api` was undefined, then
+        // `.get(...)` on undefined threw "Cannot read properties of
+        // undefined (reading 'get')" in the iframe, breaking the
+        // whole technical-view render.
+        var self = this;
         var pane = this._panes[tabId];
         var common = {
             api: this.api,
