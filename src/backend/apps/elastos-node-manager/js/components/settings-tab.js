@@ -173,7 +173,6 @@
             memory:      numberInput(512, 32_768),
             rpcUser:     textInput(),
             rpcPassword: passwordInput(),
-            whiteIp:     chipInput(),
         };
 
         var rows = [
@@ -182,18 +181,12 @@
             [t('settings.adv_memory_limit'), this._adv.memory],
             [t('settings.adv_rpc_user'),    this._adv.rpcUser],
             [t('settings.adv_rpc_password'), this._adv.rpcPassword],
-            [t('settings.adv_white_ip'),    this._adv.whiteIp],
         ];
         rows.forEach(function (r) {
             var row = document.createElement('div'); row.className = 'enm-settings-row';
             row.appendChild(label(r[1], r[0]));
             section.appendChild(row);
         });
-
-        var whiteIpHelp = document.createElement('p');
-        whiteIpHelp.className = 'enm-settings-help';
-        whiteIpHelp.textContent = t('settings.adv_white_ip_help');
-        section.appendChild(whiteIpHelp);
 
         var actions = document.createElement('div'); actions.className = 'enm-settings-actions';
         actions.appendChild(btn(t('settings.adv_save_btn'), 'enm-btn-primary', this._saveAdvanced.bind(this)));
@@ -226,49 +219,42 @@
         intro.textContent = t('settings.rpc_creds_intro');
         section.appendChild(intro);
 
+        // No reveal/hide wrapper — the operator is already authenticated as
+        // owner; double-gating with a Reveal button adds friction without
+        // adding security. Password stays masked with a per-field Show toggle
+        // so shoulder-surfing on shared screens is still mitigated.
         this._creds = {
-            revealBtn: btn(t('settings.rpc_reveal_btn'), 'enm-btn-secondary',
-                this._toggleCreds.bind(this)),
             panel: document.createElement('div'),
             statusLine: document.createElement('p'),
+            whiteStatus: document.createElement('p'),
+            whiteIp: chipInput(),
             data: null,
             pwShown: false,
         };
         this._creds.panel.className = 'enm-rpc-creds-panel';
-        this._creds.panel.style.display = 'none';
         this._creds.statusLine.className = 'enm-settings-status';
+        this._creds.whiteStatus.className = 'enm-settings-status';
 
-        var actions = document.createElement('div'); actions.className = 'enm-settings-actions';
-        actions.appendChild(this._creds.revealBtn);
-        section.appendChild(actions);
         section.appendChild(this._creds.panel);
         section.appendChild(this._creds.statusLine);
 
         this._sections.rpcCreds = section;
+
+        // Fetch + render immediately on first build. refresh() will also be
+        // called when the tab becomes active; this just makes initial render
+        // happen without a manual click.
+        this._loadCreds();
         return section;
     };
 
-    /** @private */
-    SettingsTab.prototype._toggleCreds = function () {
+    /** @private — fetch credentials + render inline. */
+    SettingsTab.prototype._loadCreds = function () {
         var t = root.enmTOrFallback;
-        // If already shown, hide and forget.
-        if (this._creds.panel.style.display !== 'none') {
-            this._creds.panel.style.display = 'none';
-            this._creds.panel.innerHTML = '';
-            this._creds.data = null;
-            this._creds.pwShown = false;
-            this._creds.revealBtn.textContent = t('settings.rpc_reveal_btn');
-            this._creds.statusLine.textContent = '';
-            return;
-        }
         var self = this;
         this._creds.statusLine.textContent = t('common.loading');
         this.api.get('/config/rpc/credentials/mainchain', { skipCache: true }).then(function (data) {
             self._creds.data = data;
-            self._creds.pwShown = false;
             self._renderCredsPanel();
-            self._creds.panel.style.display = '';
-            self._creds.revealBtn.textContent = t('settings.rpc_hide_btn');
             self._creds.statusLine.textContent = '';
         }).catch(function (err) {
             self._creds.statusLine.textContent = t('settings.rpc_load_failed',
@@ -284,33 +270,85 @@
         p.innerHTML = '';
         if (!d) return;
 
-        // Plain rows
+        // --- Credentials ---
         p.appendChild(credRow(t('settings.rpc_field_user'), d.user));
         p.appendChild(credPasswordRow(this, t));
-        p.appendChild(credRow(t('settings.rpc_field_local'), d.localUrl));
 
-        // LAN URLs — list (one per interface)
-        var lanWrap = document.createElement('div');
-        lanWrap.className = 'enm-rpc-creds-row';
-        var lanLabel = document.createElement('span');
-        lanLabel.className = 'enm-rpc-creds-label';
-        lanLabel.textContent = t('settings.rpc_field_lan');
-        lanWrap.appendChild(lanLabel);
-        if (Array.isArray(d.lanUrls) && d.lanUrls.length > 0) {
-            d.lanUrls.forEach(function (u) {
-                lanWrap.appendChild(credValueWithCopy(u));
-            });
-        } else {
-            var none = document.createElement('span');
-            none.className = 'enm-rpc-creds-empty';
-            none.textContent = t('settings.rpc_no_lan');
-            lanWrap.appendChild(none);
+        // --- Connection URLs, classified by address class. ---
+        // Builds one row per URL with a descriptive label that tells the
+        // operator who can use it. classifyUrl returns a CSS-friendly class.
+        var samesection = document.createElement('div');
+        samesection.className = 'enm-rpc-url-group';
+
+        var urlGroupHeading = document.createElement('h4');
+        urlGroupHeading.className = 'enm-rpc-url-group-heading';
+        urlGroupHeading.textContent = t('settings.rpc_url_group_heading');
+        samesection.appendChild(urlGroupHeading);
+
+        if (d.localUrl) {
+            samesection.appendChild(rpcUrlRow(
+                t('settings.rpc_url_same_machine'),
+                d.localUrl,
+                null,
+            ));
         }
-        p.appendChild(lanWrap);
+        if (Array.isArray(d.lanUrls)) {
+            d.lanUrls.forEach(function (u) {
+                var kind = classifyUrlAddress(u);
+                var label = kind === 'public'
+                    ? t('settings.rpc_url_public_internet')
+                    : t('settings.rpc_url_private_network');
+                var warning = kind === 'public' ? t('settings.rpc_url_public_warn') : null;
+                samesection.appendChild(rpcUrlRow(label, u, warning));
+            });
+        }
+        p.appendChild(samesection);
 
-        // WhiteIPList — show as comma-joined string
-        p.appendChild(credRow(t('settings.rpc_field_white'),
-            (d.whiteIPList || []).join(', ')));
+        // --- Whitelist — editable inline. ---
+        var whiteWrap = document.createElement('div');
+        whiteWrap.className = 'enm-rpc-white-group';
+
+        var wh = document.createElement('h4');
+        wh.className = 'enm-rpc-url-group-heading';
+        wh.textContent = t('settings.rpc_field_white');
+        whiteWrap.appendChild(wh);
+
+        var help = document.createElement('p');
+        help.className = 'enm-settings-help';
+        help.textContent = t('settings.rpc_white_help');
+        whiteWrap.appendChild(help);
+
+        // Mount the chipInput element itself
+        whiteWrap.appendChild(this._creds.whiteIp);
+        this._creds.whiteIp.setValue(Array.isArray(d.whiteIPList) ? d.whiteIPList : []);
+
+        var whiteActions = document.createElement('div');
+        whiteActions.className = 'enm-settings-actions';
+        whiteActions.appendChild(btn(
+            t('settings.rpc_white_apply_btn'),
+            'enm-btn-primary',
+            this._saveWhitelist.bind(this),
+        ));
+        whiteWrap.appendChild(whiteActions);
+        whiteWrap.appendChild(this._creds.whiteStatus);
+        p.appendChild(whiteWrap);
+    };
+
+    /** @private — save whitelist only (partial PUT). */
+    SettingsTab.prototype._saveWhitelist = function () {
+        var t = root.enmTOrFallback;
+        var list = this._creds.whiteIp.getValue();
+        var self = this;
+        this._creds.whiteStatus.textContent = t('common.loading');
+        this.api.put('/config/mainchain', { whiteIPList: list }).then(function () {
+            self._creds.whiteStatus.textContent = t('settings.rpc_white_applied');
+            // Refresh cached data so the chips reflect what the backend persisted
+            // (the backend de-dupes + filters non-strings).
+            if (self._creds.data) self._creds.data.whiteIPList = list.slice();
+        }).catch(function (err) {
+            self._creds.whiteStatus.textContent = t('settings.rpc_white_apply_failed',
+                { error: err.message || String(err) });
+        });
     };
 
     /** @private */
@@ -372,8 +410,6 @@
             this._adv.rpcPassword.value = '';
             this._adv.rpcPassword.placeholder = (chain.rpc && chain.rpc.passwordSet)
                 ? '(leave blank to keep current)' : 'set a password';
-            this._adv.whiteIp.setValue((chain.rpc && Array.isArray(chain.rpc.whiteIPList))
-                ? chain.rpc.whiteIPList : ['127.0.0.1']);
         }
         // General
         var g = cfg.global || {};
@@ -435,7 +471,6 @@
             archiveMode: this._adv.archiveMode.checked,
             memoryLimitMb: memMb,
             rpcUser: rpcUser,
-            whiteIPList: this._adv.whiteIp.getValue(),
         };
         // RPC password is only sent if non-empty so the operator can edit
         // other knobs without re-typing it.
