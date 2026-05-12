@@ -4452,6 +4452,153 @@ body[data-update-severity="major"] .enm-tech-tabs .enm-tab[data-tab="tools"]::be
     white-space: pre;
 }
 
+/* 0.2.0-alpha.10 — Update-action row + modal. The button + help-line
+   live inline on the card; clicking the button opens the modal which
+   carries the actual command + copy button. */
+.enm-tools-update-action {
+    margin-top: var(--spacing-md);
+    padding-top: var(--spacing-md);
+    border-top: 1px solid var(--border-color);
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+}
+
+.enm-tools-update-btn {
+    align-self: flex-start;
+}
+
+.enm-tools-update-action-help {
+    margin: 0;
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+/* Modal — fullscreen scrim + centred card. Closes on Esc, scrim
+   click, or the × button. Focus-trap is overkill for an alpha;
+   the operator usually closes with Esc anyway. */
+.enm-tools-update-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--spacing-md);
+    background: rgba(15, 17, 26, 0.55);
+    backdrop-filter: blur(4px);
+    animation: enm-modal-fade-in 180ms var(--ease-out);
+}
+
+@keyframes enm-modal-fade-in {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+
+.enm-tools-update-modal-card {
+    width: 100%;
+    max-width: 560px;
+    max-height: 80vh;
+    overflow-y: auto;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-md);
+    padding: var(--spacing-lg);
+    position: relative;
+}
+
+.enm-tools-update-modal-card h2 {
+    margin: 0 0 var(--spacing-sm);
+    font-size: 18px;
+    color: var(--text-primary);
+    font-weight: var(--font-weight-semibold);
+    letter-spacing: -0.01em;
+}
+.enm-tools-update-modal-card h2 code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: var(--bg-muted);
+    border-radius: var(--radius-sm);
+    padding: 2px 6px;
+    font-size: 15px;
+    color: var(--state-syncing);
+}
+
+.enm-tools-update-modal-card p {
+    margin: 0 0 var(--spacing-sm);
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+}
+
+.enm-tools-update-modal-close {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    width: 32px;
+    height: 32px;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 20px;
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+    line-height: 1;
+}
+.enm-tools-update-modal-close:hover { color: var(--text-primary); background: var(--bg-muted); }
+
+.enm-tools-update-modal-cmd {
+    margin: 0 0 var(--spacing-md);
+    padding: var(--spacing-sm) var(--spacing-md);
+    background: var(--bg-code);
+    color: #f8fafc;
+    border-radius: var(--radius-md);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.6;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+
+.enm-tools-update-modal-actions {
+    display: flex;
+    gap: var(--spacing-sm);
+    flex-wrap: wrap;
+    margin-bottom: var(--spacing-md);
+}
+
+.enm-tools-update-modal-notes {
+    font-size: 12px;
+    color: var(--text-muted);
+    border-top: 1px solid var(--border-color);
+    padding-top: var(--spacing-md);
+}
+.enm-tools-update-modal-notes summary {
+    cursor: pointer;
+    color: var(--text-secondary);
+    font-weight: var(--font-weight-medium);
+    margin-bottom: var(--spacing-sm);
+}
+.enm-tools-update-modal-notes ul {
+    margin: 0 0 var(--spacing-sm);
+    padding-left: var(--spacing-lg);
+    line-height: 1.6;
+}
+.enm-tools-update-modal-notes code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: var(--bg-muted);
+    border-radius: var(--radius-sm);
+    padding: 1px 5px;
+    font-size: 11px;
+    color: var(--text-primary);
+}
+.enm-tools-update-modal-notes a {
+    color: var(--state-syncing);
+    word-break: break-all;
+}
+
 .enm-tech-content {
     position: relative;
     min-height: 200px;

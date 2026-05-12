@@ -124,11 +124,15 @@
                 : '')
               + '</details>'
             : '';
-        // Apply-in-place lands in alpha.9; for now show the manual deploy
-        // command operators are already using to upgrade.
-        var deployCmd = env.latest
-            ? 'sudo PC2_OWNER_TOKEN=&lt;token&gt; /root/deploy-enm.sh enm-' + escapeHtml(env.latest)
-            : 'sudo /root/deploy-enm.sh latest';
+        // 0.2.0-alpha.10 — update command is no longer rendered inline.
+        // A button opens a modal with the exact command, copy-to-clipboard,
+        // and the audit/security boilerplate. Two reasons: (1) the inline
+        // <pre> showed the operator's token as a literal "<token>"
+        // placeholder which confused at least one operator, (2) modal
+        // gives us room for the "what this actually does" explainer
+        // without bloating the resting card.
+        // Apply-in-place (real "Update now" with preflight + rollback)
+        // lands in alpha.11+; this release is the UX shortcut.
         this.root.innerHTML =
             '<header class="enm-tools-update-head">'
             +   '<div class="enm-tools-update-head-row">'
@@ -148,9 +152,100 @@
             + '</header>'
             + notes
             + '<div class="enm-tools-update-action">'
-            +   '<p>Apply-in-place lands in <code>0.2.0-alpha.9</code>. For now, deploy from a shell:</p>'
-            +   '<pre class="enm-tools-update-cmd">' + deployCmd + '</pre>'
+            +   '<button type="button" class="enm-btn enm-btn-primary enm-tools-update-btn">Update via shell</button>'
+            +   '<p class="enm-tools-update-action-help">'
+            +     'Opens a copy-paste-ready command. Apply-in-place (no shell required) lands in alpha.11+.'
+            +   '</p>'
             + '</div>';
+
+        var self = this;
+        var btn = this.root.querySelector('.enm-tools-update-btn');
+        if (btn) {
+            btn.addEventListener('click', function () { self._openUpdateModal(env); });
+        }
+    };
+
+    /**
+     * @private
+     * Show a modal with the deploy command pre-filled. The token is
+     * filled in only when the user clicks "Use my owner token (auto-fill)" —
+     * default is the placeholder so we don't display credentials by
+     * default if someone screenshots the card.
+     */
+    EnmToolsUpdateCard.prototype._openUpdateModal = function (env) {
+        var prev = document.querySelector('.enm-tools-update-modal');
+        if (prev) prev.parentNode.removeChild(prev);
+
+        var modal = document.createElement('div');
+        modal.className = 'enm-tools-update-modal';
+        modal.innerHTML =
+            '<div class="enm-tools-update-modal-card" role="dialog" aria-labelledby="upd-mod-h" aria-modal="true">'
+            +   '<button type="button" class="enm-tools-update-modal-close" aria-label="Close">×</button>'
+            +   '<h2 id="upd-mod-h">Update to <code>' + escapeHtml(env.latest) + '</code></h2>'
+            +   '<p>Run this on the host that runs your PC2 server (where ENM\'s files live):</p>'
+            +   '<pre class="enm-tools-update-modal-cmd">'
+            +     'sudo PC2_OWNER_TOKEN=<span class="upd-tok-slot">&lt;your-token&gt;</span> /root/deploy-enm.sh enm-' + escapeHtml(env.latest)
+            +   '</pre>'
+            +   '<div class="enm-tools-update-modal-actions">'
+            +     '<button type="button" class="enm-btn enm-btn-secondary upd-fill-token">Auto-fill my token</button>'
+            +     '<button type="button" class="enm-btn enm-btn-primary upd-copy">Copy command</button>'
+            +   '</div>'
+            +   '<details class="enm-tools-update-modal-notes">'
+            +     '<summary>What does this do?</summary>'
+            +     '<ul>'
+            +       '<li>Downloads ela <code>' + escapeHtml(env.latest) + '</code> from GitHub.</li>'
+            +       '<li>Uninstalls the old ENM bundle via <code>DELETE /api/installed-apps</code> (chain data + keystore safe under <code>extensions/elastos-node-manager/</code>).</li>'
+            +       '<li>Reinstalls with the new binary; pc2-node spawns it under the supervisor.</li>'
+            +       '<li>Health-checks for 24s; auto-rollback if the new binary doesn\'t come up.</li>'
+            +     '</ul>'
+            +     (env.htmlUrl
+                    ? '<p>Release notes: <a href="' + escapeAttr(env.htmlUrl) + '" target="_blank" rel="noopener noreferrer">' + escapeAttr(env.htmlUrl) + '</a></p>'
+                    : '')
+            +   '</details>'
+            + '</div>';
+        document.body.appendChild(modal);
+
+        var close = function () {
+            if (modal.parentNode) modal.parentNode.removeChild(modal);
+            document.removeEventListener('keydown', onEsc);
+        };
+        var onEsc = function (e) { if (e.key === 'Escape') close(); };
+        document.addEventListener('keydown', onEsc);
+
+        modal.querySelector('.enm-tools-update-modal-close').addEventListener('click', close);
+        modal.addEventListener('click', function (e) { if (e.target === modal) close(); });
+
+        modal.querySelector('.upd-fill-token').addEventListener('click', function () {
+            // The owner token lives on the URL's puter.auth.token search
+            // param (PC2 standard). Read it directly so we don't ask the
+            // operator to paste it.
+            var params = new URLSearchParams(root.location.search || '');
+            var tok = params.get('puter.auth.token');
+            var slot = modal.querySelector('.upd-tok-slot');
+            if (tok && slot) {
+                slot.textContent = tok;
+                slot.style.color = 'var(--state-stalled)';
+                slot.title = 'Your auth token. Treat as a credential — don\'t share screenshots.';
+            } else if (slot) {
+                slot.textContent = '(token not found in URL)';
+            }
+        });
+
+        modal.querySelector('.upd-copy').addEventListener('click', function () {
+            var pre = modal.querySelector('.enm-tools-update-modal-cmd');
+            // Use textContent so the <span> placeholder is included literally.
+            var text = pre ? pre.textContent : '';
+            navigator.clipboard.writeText(text).then(function () {
+                var btn = modal.querySelector('.upd-copy');
+                if (btn) {
+                    var prev = btn.textContent;
+                    btn.textContent = 'Copied ✓';
+                    setTimeout(function () { btn.textContent = prev; }, 1400);
+                }
+            }).catch(function () {
+                if (self.notifications) self.notifications.warning('Copy failed', 'Select the command text and copy manually.');
+            });
+        });
     };
 
     /** @private */
