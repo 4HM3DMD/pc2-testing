@@ -79,6 +79,7 @@ const logsRouter = require('./routes/logs');
 const healingRouter = require('./routes/healing');
 const auditRouter = require('./routes/audit');
 const configRouter = require('./routes/config');
+const updatesRouter = require('./routes/updates');
 const evmRouter = require('./routes/evm');
 
 const PORT = parseInt(process.env.PORT || '4180', 10);
@@ -198,6 +199,7 @@ async function main() {
     api.use('/chains', chainsRouter.build(extensionHandle));
     api.use('/logs',   logsRouter.build({ extensionHandle }));
     api.use('/config', configRouter.build(extensionHandle));
+    api.use('/updates', updatesRouter.build(extensionHandle));
     api.use('/events', eventsRouter.build({
         extensionHandle,
         sseHub: ChainRegistry.getSseHub(),
