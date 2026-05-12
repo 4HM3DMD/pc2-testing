@@ -173,7 +173,7 @@
             memory:      numberInput(512, 32_768),
             rpcUser:     textInput(),
             rpcPassword: passwordInput(),
-            whiteIp:     textInput(),
+            whiteIp:     chipInput(),
         };
 
         var rows = [
@@ -372,8 +372,8 @@
             this._adv.rpcPassword.value = '';
             this._adv.rpcPassword.placeholder = (chain.rpc && chain.rpc.passwordSet)
                 ? '(leave blank to keep current)' : 'set a password';
-            this._adv.whiteIp.value = (chain.rpc && Array.isArray(chain.rpc.whiteIPList))
-                ? chain.rpc.whiteIPList.join(', ') : '127.0.0.1';
+            this._adv.whiteIp.setValue((chain.rpc && Array.isArray(chain.rpc.whiteIPList))
+                ? chain.rpc.whiteIPList : ['127.0.0.1']);
         }
         // General
         var g = cfg.global || {};
@@ -435,7 +435,7 @@
             archiveMode: this._adv.archiveMode.checked,
             memoryLimitMb: memMb,
             rpcUser: rpcUser,
-            whiteIPList: this._adv.whiteIp.value.split(',').map(function (s) { return s.trim(); }).filter(Boolean),
+            whiteIPList: this._adv.whiteIp.getValue(),
         };
         // RPC password is only sent if non-empty so the operator can edit
         // other knobs without re-typing it.
@@ -737,6 +737,177 @@
     function textInput() {
         var i = document.createElement('input'); i.type = 'text';
         i.className = 'enm-settings-input'; return i;
+    }
+    /**
+     * chipInput — small inline pill-list editor for IPv4/CIDR entries.
+     * Mirrors the textInput "looks like an input from the outside" pattern:
+     * exposes .getValue() / .setValue() and a .value mirror so the rest of
+     * the form fill/save code stays simple. Validation is client-side only
+     * (the joi schema on the server is still the authority); on invalid we
+     * flash a red border on the inline editor without committing the chip.
+     *
+     * Backend (whiteIPList in EnmConfigSchema) accepts string[], so this
+     * replaces the previous comma-joined single-line input which had no
+     * way to surface a per-entry parse error.
+     */
+    var IP_OR_CIDR_RE = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(?:\/(?:[0-9]|[12][0-9]|3[0-2]))?$/;
+
+    function chipInput() {
+        // Container is the "input-shaped" thing the rest of the form treats
+        // as a single field. Internal layout: chip list on top, editor row
+        // on the bottom.
+        var container = document.createElement('div');
+        container.className = 'enm-settings-input enm-chip-input';
+        container.style.display = 'flex';
+        container.style.flexDirection = 'column';
+        container.style.gap = '6px';
+        container.style.padding = '6px';
+        container.style.minHeight = '34px';
+        container.style.height = 'auto';
+        container.style.alignItems = 'stretch';
+
+        var chipsWrap = document.createElement('div');
+        chipsWrap.style.display = 'flex';
+        chipsWrap.style.flexWrap = 'wrap';
+        chipsWrap.style.gap = '4px';
+        container.appendChild(chipsWrap);
+
+        var editorRow = document.createElement('div');
+        editorRow.style.display = 'flex';
+        editorRow.style.gap = '6px';
+        editorRow.style.alignItems = 'center';
+        container.appendChild(editorRow);
+
+        var newInput = document.createElement('input');
+        newInput.type = 'text';
+        newInput.placeholder = '127.0.0.1 or 192.168.0.0/24';
+        newInput.style.flex = '1';
+        newInput.style.minWidth = '0';
+        newInput.style.padding = '4px 8px';
+        newInput.style.border = '1px solid var(--enm-border, #cfd6dd)';
+        newInput.style.borderRadius = '4px';
+        newInput.style.background = 'transparent';
+        newInput.style.color = 'inherit';
+        newInput.style.font = 'inherit';
+        editorRow.appendChild(newInput);
+
+        var addBtn = document.createElement('button');
+        addBtn.type = 'button';
+        addBtn.textContent = 'Add';
+        addBtn.style.display = 'inline-flex';
+        addBtn.style.alignItems = 'center';
+        addBtn.style.justifyContent = 'center';
+        addBtn.style.padding = '4px 10px';
+        addBtn.style.fontSize = '13px';
+        addBtn.style.lineHeight = '1';
+        addBtn.style.fontFamily = 'inherit';
+        addBtn.style.border = '1px solid var(--enm-border, #cfd6dd)';
+        addBtn.style.borderRadius = '4px';
+        addBtn.style.background = 'var(--enm-surface, #f5f7fa)';
+        addBtn.style.color = 'inherit';
+        addBtn.style.cursor = 'pointer';
+        editorRow.appendChild(addBtn);
+
+        var values = [];
+
+        // Re-render the chip pills from the current values[] array. Cheap to
+        // do on every mutation — the list is small (operator-edited, not a
+        // server feed).
+        function renderChips() {
+            chipsWrap.innerHTML = '';
+            values.forEach(function (v, idx) {
+                var chip = document.createElement('span');
+                chip.style.display = 'inline-flex';
+                chip.style.alignItems = 'center';
+                chip.style.gap = '4px';
+                chip.style.padding = '2px 6px 2px 8px';
+                chip.style.fontSize = '12px';
+                chip.style.lineHeight = '1.4';
+                chip.style.border = '1px solid var(--enm-border, #cfd6dd)';
+                chip.style.borderRadius = '10px';
+                chip.style.background = 'var(--enm-surface, #f5f7fa)';
+
+                var text = document.createElement('span');
+                text.textContent = v;
+                chip.appendChild(text);
+
+                var remove = document.createElement('button');
+                remove.type = 'button';
+                remove.setAttribute('aria-label', 'Remove ' + v);
+                remove.textContent = '×';
+                remove.style.display = 'inline-flex';
+                remove.style.alignItems = 'center';
+                remove.style.justifyContent = 'center';
+                remove.style.width = '16px';
+                remove.style.height = '16px';
+                remove.style.padding = '0';
+                remove.style.fontSize = '14px';
+                remove.style.lineHeight = '1';
+                remove.style.fontFamily = 'inherit';
+                remove.style.border = 'none';
+                remove.style.borderRadius = '50%';
+                remove.style.background = 'transparent';
+                remove.style.color = 'inherit';
+                remove.style.cursor = 'pointer';
+                remove.addEventListener('click', function () {
+                    values.splice(idx, 1);
+                    syncValueMirror();
+                    renderChips();
+                });
+                chip.appendChild(remove);
+                chipsWrap.appendChild(chip);
+            });
+        }
+
+        // Mirror values back to .value as a comma-joined string so any code
+        // that still reads it (e.g. read-only inspection) sees a sane shape.
+        // Authoritative reads/writes go through getValue/setValue.
+        function syncValueMirror() {
+            container.value = values.join(', ');
+        }
+
+        function flashInvalid() {
+            var prev = newInput.style.borderColor;
+            newInput.style.borderColor = 'var(--danger, #c0392b)';
+            setTimeout(function () { newInput.style.borderColor = prev; }, 900);
+        }
+
+        function tryAdd() {
+            var candidate = (newInput.value || '').trim();
+            if (!candidate) { return; }
+            if (!IP_OR_CIDR_RE.test(candidate)) { flashInvalid(); return; }
+            // Dedupe — silently ignore exact duplicates.
+            if (values.indexOf(candidate) !== -1) {
+                newInput.value = '';
+                return;
+            }
+            values.push(candidate);
+            newInput.value = '';
+            syncValueMirror();
+            renderChips();
+        }
+
+        addBtn.addEventListener('click', tryAdd);
+        newInput.addEventListener('keydown', function (e) {
+            // Enter and comma both commit; comma is natural for operators
+            // pasting a single CSV line.
+            if (e.key === 'Enter' || e.key === ',') {
+                e.preventDefault();
+                tryAdd();
+            }
+        });
+
+        container.getValue = function () { return values.slice(); };
+        container.setValue = function (arr) {
+            values = Array.isArray(arr) ? arr.filter(function (s) {
+                return typeof s === 'string' && s.length > 0;
+            }) : [];
+            syncValueMirror();
+            renderChips();
+        };
+        syncValueMirror();
+        renderChips();
+        return container;
     }
     function passwordInput() {
         var i = document.createElement('input'); i.type = 'password';
