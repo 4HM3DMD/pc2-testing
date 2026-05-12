@@ -95,6 +95,9 @@ function build(extensionHandle) {
                 port,
                 localUrl: `http://127.0.0.1:${port}`,
                 lanUrls,
+                // alpha.19: master enable state — frontend uses this to drive
+                // the on/off toggle.
+                enabled: chain.rpc.enabled === true,
                 whiteIPList: Array.isArray(chain.rpc.whiteIPList) ? chain.rpc.whiteIPList : ['127.0.0.1'],
             }));
         } catch (err) {
@@ -142,6 +145,13 @@ function build(extensionHandle) {
             if (Number.isInteger(body.memoryLimitMb)) chain.memoryLimitMb = body.memoryLimitMb;
 
             chain.rpc = chain.rpc || {};
+            // alpha.19: master gate for external RPC access. Defaults to false
+            // on new installs (see EnmConfigSchema). When false, the generated
+            // ela config.json hard-forces WhiteIPList=['127.0.0.1'] regardless
+            // of what the operator saved here.
+            if (typeof body.rpcEnabled === 'boolean') {
+                chain.rpc.enabled = body.rpcEnabled;
+            }
             if (typeof body.rpcUser === 'string' && body.rpcUser.length > 0) {
                 chain.rpc.user = body.rpcUser;
             }
@@ -150,6 +160,12 @@ function build(extensionHandle) {
             }
             if (Array.isArray(body.whiteIPList)) {
                 chain.rpc.whiteIPList = body.whiteIPList.filter((s) => typeof s === 'string');
+                // SAFETY NET (alpha.19): 127.0.0.1 is required for ENM's own
+                // RPC calls + local diagnostics. Force-include if a UI bug or
+                // sloppy client tries to remove it — operator can't lock us out.
+                if (!chain.rpc.whiteIPList.includes('127.0.0.1')) {
+                    chain.rpc.whiteIPList.unshift('127.0.0.1');
+                }
             }
 
             await ConfigStore.save(cfg, { logger: extensionHandle.log });

@@ -75,13 +75,21 @@ class ElaMainChainAdapter extends ChainAdapter {
                 EnableRPC: true,
                 PrintLevel: this._mapLogLevel(cfg.logLevel),
                 EnableUtxoDB: true,
-                // SECURITY (Rev 1 audit): default RPC bind is 0.0.0.0 in ela. Our
-                // generated config restricts to 127.0.0.1 via WhiteIPList. Operator
-                // can widen via Settings → Advanced.
+                // SECURITY (Rev 1 audit): default RPC bind is 0.0.0.0 in ela.
+                // Our generated config restricts to 127.0.0.1 via WhiteIPList.
+                // alpha.19: when cfg.rpc.enabled is false (default), we hard-
+                // force WhiteIPList=['127.0.0.1'] regardless of what the
+                // operator saved — RPC must be explicitly opened. The saved
+                // whiteIPList is preserved in ENM's own config across toggles
+                // so the operator doesn't lose their allow-list.
                 RpcConfiguration: {
                     User: cfg.rpc.user,
                     Pass: secrets.rpcPassword,
-                    WhiteIPList: cfg.rpc.whiteIPList || ['127.0.0.1'],
+                    WhiteIPList: cfg.rpc.enabled === true
+                        ? (Array.isArray(cfg.rpc.whiteIPList) && cfg.rpc.whiteIPList.length > 0
+                            ? cfg.rpc.whiteIPList
+                            : ['127.0.0.1'])
+                        : ['127.0.0.1'],
                 },
                 DPoSConfiguration: {
                     EnableArbiter: cfg.dpos.enableArbiter === true,

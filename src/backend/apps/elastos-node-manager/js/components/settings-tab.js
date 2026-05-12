@@ -227,7 +227,14 @@
             panel: document.createElement('div'),
             statusLine: document.createElement('p'),
             whiteStatus: document.createElement('p'),
-            whiteIp: chipInput(),
+            toggleStatus: document.createElement('p'),
+            // 127.0.0.1 is locked (can't be removed) — needed for ENM's own
+            // RPC calls + local diagnostics. Backend has a safety-net
+            // force-include on PUT, so even an explicit removal attempt
+            // can't lock us out.
+            whiteIp: chipInput({ locked: ['127.0.0.1'] }),
+            toggleOff: radio('rpcEnabled', 'off'),
+            toggleOn:  radio('rpcEnabled', 'on'),
             data: null,
             pwShown: false,
         };
@@ -270,68 +277,141 @@
         p.innerHTML = '';
         if (!d) return;
 
-        // --- Credentials ---
-        p.appendChild(credRow(t('settings.rpc_field_user'), d.user));
-        p.appendChild(credPasswordRow(this, t));
+        // Operator-friendly order (alpha.19):
+        //   1. RPC server toggle (master gate)
+        //   2. Allowed IPs (who can connect)
+        //   3. URLs to share (with operator-friendly labels)
+        //   4. Credentials (what to share)
 
-        // --- Connection URLs, classified by address class. ---
-        // Builds one row per URL with a descriptive label that tells the
-        // operator who can use it. classifyUrl returns a CSS-friendly class.
-        var samesection = document.createElement('div');
-        samesection.className = 'enm-rpc-url-group';
+        // --- 1. RPC server toggle ---
+        var toggleSec = document.createElement('section');
+        toggleSec.className = 'enm-rpc-section enm-rpc-toggle';
 
-        var urlGroupHeading = document.createElement('h4');
-        urlGroupHeading.className = 'enm-rpc-url-group-heading';
-        urlGroupHeading.textContent = t('settings.rpc_url_group_heading');
-        samesection.appendChild(urlGroupHeading);
+        var th = document.createElement('h4');
+        th.className = 'enm-rpc-section-title';
+        th.textContent = t('settings.rpc_toggle_section');
+        toggleSec.appendChild(th);
 
+        var toggleRow = document.createElement('div');
+        toggleRow.className = 'enm-rpc-toggle-row';
+        toggleRow.appendChild(label(this._creds.toggleOff, t('settings.rpc_toggle_off')));
+        toggleRow.appendChild(label(this._creds.toggleOn,  t('settings.rpc_toggle_on')));
+        toggleRow.appendChild(btn(
+            t('settings.rpc_toggle_save_btn'),
+            'enm-btn-primary enm-rpc-toggle-save',
+            this._saveRpcEnabled.bind(this),
+        ));
+        toggleSec.appendChild(toggleRow);
+
+        var toggleHelp = document.createElement('p');
+        toggleHelp.className = 'enm-settings-help';
+        toggleHelp.textContent = d.enabled
+            ? t('settings.rpc_toggle_on_help')
+            : t('settings.rpc_toggle_off_help');
+        toggleSec.appendChild(toggleHelp);
+        toggleSec.appendChild(this._creds.toggleStatus);
+
+        // Reflect server state into the radio inputs
+        this._creds.toggleOff.checked = !d.enabled;
+        this._creds.toggleOn.checked  = !!d.enabled;
+        p.appendChild(toggleSec);
+
+        // --- 2. Allowed IPs (whitelist) ---
+        var whiteSec = document.createElement('section');
+        whiteSec.className = 'enm-rpc-section enm-rpc-allow';
+
+        var ah = document.createElement('h4');
+        ah.className = 'enm-rpc-section-title';
+        ah.textContent = t('settings.rpc_allow_section');
+        whiteSec.appendChild(ah);
+
+        var whiteRow = document.createElement('div');
+        whiteRow.className = 'enm-rpc-allow-row';
+        whiteRow.appendChild(this._creds.whiteIp);
+        whiteRow.appendChild(btn(
+            t('settings.rpc_white_apply_btn'),
+            'enm-btn-primary enm-rpc-allow-apply',
+            this._saveWhitelist.bind(this),
+        ));
+        whiteSec.appendChild(whiteRow);
+
+        // chipInput auto-merges locked values, so this passes the server's list
+        // through and 127.0.0.1 always ends up rendered (even if missing
+        // from the backend response).
+        this._creds.whiteIp.setValue(Array.isArray(d.whiteIPList) ? d.whiteIPList : []);
+
+        var whiteHelp = document.createElement('p');
+        whiteHelp.className = 'enm-settings-help';
+        whiteHelp.textContent = t('settings.rpc_white_help');
+        whiteSec.appendChild(whiteHelp);
+        whiteSec.appendChild(this._creds.whiteStatus);
+        p.appendChild(whiteSec);
+
+        // --- 3. URLs to share ---
+        var urlSec = document.createElement('section');
+        urlSec.className = 'enm-rpc-section enm-rpc-urls';
+
+        var uh = document.createElement('h4');
+        uh.className = 'enm-rpc-section-title';
+        uh.textContent = t('settings.rpc_urls_section');
+        urlSec.appendChild(uh);
+
+        // Order: Same machine (always safe) → private LAN → public (most exposure last)
         if (d.localUrl) {
-            samesection.appendChild(rpcUrlRow(
+            urlSec.appendChild(rpcUrlRow(
                 t('settings.rpc_url_same_machine'),
                 d.localUrl,
                 null,
+                false,
             ));
         }
         if (Array.isArray(d.lanUrls)) {
-            d.lanUrls.forEach(function (u) {
+            // Sort private first, then public.
+            var sorted = d.lanUrls.slice().sort(function (a, b) {
+                var ka = classifyUrlAddress(a), kb = classifyUrlAddress(b);
+                if (ka === kb) return 0;
+                return ka === 'public' ? 1 : -1;
+            });
+            sorted.forEach(function (u) {
                 var kind = classifyUrlAddress(u);
-                var label = kind === 'public'
+                var lbl = kind === 'public'
                     ? t('settings.rpc_url_public_internet')
                     : t('settings.rpc_url_private_network');
-                var warning = kind === 'public' ? t('settings.rpc_url_public_warn') : null;
-                samesection.appendChild(rpcUrlRow(label, u, warning));
+                var warn = kind === 'public' ? t('settings.rpc_url_public_warn') : null;
+                urlSec.appendChild(rpcUrlRow(lbl, u, warn, kind === 'public'));
             });
         }
-        p.appendChild(samesection);
+        p.appendChild(urlSec);
 
-        // --- Whitelist — editable inline. ---
-        var whiteWrap = document.createElement('div');
-        whiteWrap.className = 'enm-rpc-white-group';
+        // --- 4. Credentials ---
+        var credSec = document.createElement('section');
+        credSec.className = 'enm-rpc-section enm-rpc-creds';
 
-        var wh = document.createElement('h4');
-        wh.className = 'enm-rpc-url-group-heading';
-        wh.textContent = t('settings.rpc_field_white');
-        whiteWrap.appendChild(wh);
+        var ch = document.createElement('h4');
+        ch.className = 'enm-rpc-section-title';
+        ch.textContent = t('settings.rpc_creds_section') || 'Credentials';
+        credSec.appendChild(ch);
 
-        var help = document.createElement('p');
-        help.className = 'enm-settings-help';
-        help.textContent = t('settings.rpc_white_help');
-        whiteWrap.appendChild(help);
+        credSec.appendChild(credRow(t('settings.rpc_field_user'), d.user));
+        credSec.appendChild(credPasswordRow(this, t));
+        p.appendChild(credSec);
+    };
 
-        // Mount the chipInput element itself
-        whiteWrap.appendChild(this._creds.whiteIp);
-        this._creds.whiteIp.setValue(Array.isArray(d.whiteIPList) ? d.whiteIPList : []);
-
-        var whiteActions = document.createElement('div');
-        whiteActions.className = 'enm-settings-actions';
-        whiteActions.appendChild(btn(
-            t('settings.rpc_white_apply_btn'),
-            'enm-btn-primary',
-            this._saveWhitelist.bind(this),
-        ));
-        whiteWrap.appendChild(whiteActions);
-        whiteWrap.appendChild(this._creds.whiteStatus);
-        p.appendChild(whiteWrap);
+    /** @private — save rpc.enabled toggle (partial PUT). */
+    SettingsTab.prototype._saveRpcEnabled = function () {
+        var t = root.enmTOrFallback;
+        var enabled = this._creds.toggleOn.checked === true;
+        var self = this;
+        this._creds.toggleStatus.textContent = t('common.loading');
+        this.api.put('/config/mainchain', { rpcEnabled: enabled }).then(function () {
+            self._creds.toggleStatus.textContent = t('settings.rpc_toggle_saved');
+            if (self._creds.data) self._creds.data.enabled = enabled;
+            // Re-render so the help text reflects the new state.
+            self._renderCredsPanel();
+        }).catch(function (err) {
+            self._creds.toggleStatus.textContent = t('settings.rpc_toggle_save_failed',
+                { error: err.message || String(err) });
+        });
     };
 
     /** @private — save whitelist only (partial PUT). */
@@ -787,10 +867,17 @@
      */
     var IP_OR_CIDR_RE = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(?:\/(?:[0-9]|[12][0-9]|3[0-2]))?$/;
 
-    function chipInput() {
+    function chipInput(opts) {
         // Container is the "input-shaped" thing the rest of the form treats
         // as a single field. Internal layout: chip list on top, editor row
         // on the bottom.
+        //
+        // Options:
+        //   locked: string[] — values that auto-prepend to the list and
+        //     render with a 🔒 icon instead of × (no remove button). Use this
+        //     for "removing this would break the host" entries like 127.0.0.1
+        //     on an RPC allow-list.
+        var lockedValues = (opts && Array.isArray(opts.locked)) ? opts.locked.slice() : [];
         var container = document.createElement('div');
         container.className = 'enm-settings-input enm-chip-input';
         container.style.display = 'flex';
@@ -848,9 +935,17 @@
         // Re-render the chip pills from the current values[] array. Cheap to
         // do on every mutation — the list is small (operator-edited, not a
         // server feed).
+        function isLocked(v) {
+            return lockedValues.indexOf(v) !== -1;
+        }
+
         function renderChips() {
             chipsWrap.innerHTML = '';
+            // Hide the whole chips wrap when empty so the operator doesn't
+            // see a stray empty bar — common cause of "broken UI" feedback.
+            chipsWrap.style.display = values.length === 0 ? 'none' : 'flex';
             values.forEach(function (v, idx) {
+                var locked = isLocked(v);
                 var chip = document.createElement('span');
                 chip.style.display = 'inline-flex';
                 chip.style.alignItems = 'center';
@@ -860,36 +955,49 @@
                 chip.style.lineHeight = '1.4';
                 chip.style.border = '1px solid var(--enm-border, #cfd6dd)';
                 chip.style.borderRadius = '10px';
-                chip.style.background = 'var(--enm-surface, #f5f7fa)';
+                chip.style.background = locked
+                    ? 'var(--enm-surface-muted, #eaeef3)'
+                    : 'var(--enm-surface, #f5f7fa)';
+                if (locked) chip.title = 'Locked — needed for ENM\'s own RPC calls.';
 
                 var text = document.createElement('span');
                 text.textContent = v;
                 chip.appendChild(text);
 
-                var remove = document.createElement('button');
-                remove.type = 'button';
-                remove.setAttribute('aria-label', 'Remove ' + v);
-                remove.textContent = '×';
-                remove.style.display = 'inline-flex';
-                remove.style.alignItems = 'center';
-                remove.style.justifyContent = 'center';
-                remove.style.width = '16px';
-                remove.style.height = '16px';
-                remove.style.padding = '0';
-                remove.style.fontSize = '14px';
-                remove.style.lineHeight = '1';
-                remove.style.fontFamily = 'inherit';
-                remove.style.border = 'none';
-                remove.style.borderRadius = '50%';
-                remove.style.background = 'transparent';
-                remove.style.color = 'inherit';
-                remove.style.cursor = 'pointer';
-                remove.addEventListener('click', function () {
-                    values.splice(idx, 1);
-                    syncValueMirror();
-                    renderChips();
-                });
-                chip.appendChild(remove);
+                if (locked) {
+                    var lockIcon = document.createElement('span');
+                    lockIcon.textContent = '\u{1F512}'; // 🔒
+                    lockIcon.style.fontSize = '11px';
+                    lockIcon.style.opacity = '0.7';
+                    lockIcon.style.marginLeft = '2px';
+                    lockIcon.setAttribute('aria-label', 'locked');
+                    chip.appendChild(lockIcon);
+                } else {
+                    var remove = document.createElement('button');
+                    remove.type = 'button';
+                    remove.setAttribute('aria-label', 'Remove ' + v);
+                    remove.textContent = '×';
+                    remove.style.display = 'inline-flex';
+                    remove.style.alignItems = 'center';
+                    remove.style.justifyContent = 'center';
+                    remove.style.width = '16px';
+                    remove.style.height = '16px';
+                    remove.style.padding = '0';
+                    remove.style.fontSize = '14px';
+                    remove.style.lineHeight = '1';
+                    remove.style.fontFamily = 'inherit';
+                    remove.style.border = 'none';
+                    remove.style.borderRadius = '50%';
+                    remove.style.background = 'transparent';
+                    remove.style.color = 'inherit';
+                    remove.style.cursor = 'pointer';
+                    remove.addEventListener('click', function () {
+                        values.splice(idx, 1);
+                        syncValueMirror();
+                        renderChips();
+                    });
+                    chip.appendChild(remove);
+                }
                 chipsWrap.appendChild(chip);
             });
         }
@@ -911,7 +1019,7 @@
             var candidate = (newInput.value || '').trim();
             if (!candidate) { return; }
             if (!IP_OR_CIDR_RE.test(candidate)) { flashInvalid(); return; }
-            // Dedupe — silently ignore exact duplicates.
+            // Dedupe — silently ignore exact duplicates (incl. locked).
             if (values.indexOf(candidate) !== -1) {
                 newInput.value = '';
                 return;
@@ -920,6 +1028,16 @@
             newInput.value = '';
             syncValueMirror();
             renderChips();
+        }
+
+        // Auto-prepend any locked values that aren't already present so the
+        // operator always sees them as chips. setValue() will also re-merge.
+        function ensureLockedPresent() {
+            for (var i = lockedValues.length - 1; i >= 0; i--) {
+                if (values.indexOf(lockedValues[i]) === -1) {
+                    values.unshift(lockedValues[i]);
+                }
+            }
         }
 
         addBtn.addEventListener('click', tryAdd);
@@ -937,9 +1055,12 @@
             values = Array.isArray(arr) ? arr.filter(function (s) {
                 return typeof s === 'string' && s.length > 0;
             }) : [];
+            ensureLockedPresent();
             syncValueMirror();
             renderChips();
         };
+        // Initial state — locked values always rendered even before setValue.
+        ensureLockedPresent();
         syncValueMirror();
         renderChips();
         return container;
