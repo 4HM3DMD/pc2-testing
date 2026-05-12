@@ -215,6 +215,97 @@
                 });
             });
         });
+
+        // 0.2.0-alpha.6 — append the on-chain binding section. The parity audit
+        // (enm-improvements/parity/18-wallet-identity-parity.md) found node.sh
+        // never cross-checks the producer record. ENM now does: fetch the
+        // chain's view of our nodePublicKey, surface owner+node pubkeys + a
+        // status chip so the operator can eyeball-match against what they
+        // registered from Essentials. Deferred from improvement #18: the
+        // deposit-address derivation (base58-of-decimal-string-of-bigint per
+        // subsystem 10 §2). That lands in alpha.7 once we have golden vectors
+        // round-tripped against the chain.
+        this._renderBinding();
+    };
+
+    /**
+     * @private
+     * Fetch /api/enm/chains/mainchain/producer and render the on-chain
+     * binding section. Read-only — preserves the wallet-identity-only
+     * invariant. No-op if the keystore is absent or the API errors
+     * (validator-registration-card already covers the unregistered UX).
+     */
+    ProducerIdentity.prototype._renderBinding = function () {
+        var self = this;
+        this.api.get('/chains/mainchain/producer', { skipCache: true }).then(function (data) {
+            if (!data || !data.enabled) return; // pubkey not configured yet
+            var binding = data.binding || 'unknown';
+            var chainOwner = data.chainOwnerPubkey || '';
+            var chainNode  = data.chainNodePubkey  || '';
+            var state      = data.state || '';
+
+            var section = document.createElement('section');
+            section.className = 'enm-producer-binding';
+
+            var heading = document.createElement('h4');
+            heading.className = 'enm-producer-binding-heading';
+            heading.textContent = 'On-chain binding';
+            section.appendChild(heading);
+
+            var chip = document.createElement('span');
+            chip.className = 'enm-producer-binding-chip enm-producer-binding-chip-' + binding;
+            chip.textContent = ({
+                bound:        state ? 'Bound — ' + state : 'Bound',
+                unregistered: 'Not yet registered on chain',
+                mismatch:     'MISMATCH — chain reports a different node key',
+                unknown:      'Status unknown',
+            })[binding] || binding;
+            section.appendChild(chip);
+
+            // Side-by-side: ENM's node pubkey vs the chain's owner pubkey.
+            // Operator should visually confirm chainOwner matches the
+            // address Essentials shows under their BPoS deposit.
+            if (binding === 'bound') {
+                var note = document.createElement('p');
+                note.className = 'enm-producer-binding-note';
+                note.textContent =
+                    'Compare the owner public key below to what Essentials ' +
+                    'shows under your BPoS deposit. If they differ you ' +
+                    'registered under a different wallet — votes and ' +
+                    'rewards will flow there, not here.';
+                section.appendChild(note);
+
+                if (chainOwner) {
+                    var ownerRow = document.createElement('div');
+                    ownerRow.className = 'enm-producer-field';
+                    ownerRow.innerHTML =
+                        '<span class="enm-producer-field-label">Owner public key (chain)</span>' +
+                        '<code class="enm-producer-field-value"></code>';
+                    ownerRow.querySelector('code').textContent = chainOwner;
+                    section.appendChild(ownerRow);
+                }
+
+                if (chainNode && chainOwner && chainNode.toLowerCase() !== chainOwner.toLowerCase()) {
+                    var splitNote = document.createElement('p');
+                    splitNote.className = 'enm-producer-binding-note';
+                    splitNote.textContent = 'V2 split-key producer: owner and node keys differ. Normal post-DPoSV2.';
+                    section.appendChild(splitNote);
+                }
+            } else if (binding === 'mismatch') {
+                var mismatchDetail = document.createElement('p');
+                mismatchDetail.className = 'enm-producer-binding-note';
+                mismatchDetail.textContent =
+                    'ENM holds node pubkey ' + (data.ourPubkey || '') +
+                    ' but the chain returned ' + chainNode + '. ' +
+                    'This is rare — open the audit log and contact support.';
+                section.appendChild(mismatchDetail);
+            }
+
+            self.root.appendChild(section);
+        }).catch(function () {
+            // Silently ignore — alpha.6 binding is decorative; failures don't
+            // block the rest of the identity card.
+        });
     };
 
     function escapeAttr(s) {

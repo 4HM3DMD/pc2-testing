@@ -3143,6 +3143,60 @@ body[data-active-tab="identity"]::before {
     gap: var(--spacing-md);
 }
 
+/* 0.2.0-alpha.6 — on-chain binding section appended by
+   producer-identity.js _renderBinding. Cross-checks ENM's nodePublicKey
+   against what getproducerinfo returns; surfaces the owner pubkey so
+   the operator can eyeball-match to Essentials. Catches the node.sh
+   class of silent-fail (paste a key, register under another, mismatch
+   only visible from missed rewards). */
+.enm-producer-binding {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-sm);
+    padding-top: var(--spacing-md);
+    border-top: 1px solid var(--border-color);
+}
+
+.enm-producer-binding-heading {
+    font-size: 13px;
+    font-weight: var(--font-weight-semibold);
+    color: var(--text-primary);
+    margin: 0;
+}
+
+.enm-producer-binding-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    align-self: flex-start;
+    padding: 4px 12px;
+    border-radius: var(--radius-pill);
+    font-size: 12px;
+    font-weight: var(--font-weight-medium);
+    background: rgba(60, 60, 67, 0.08);
+    color: var(--text-secondary);
+}
+
+.enm-producer-binding-chip::before {
+    content: '';
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+}
+
+.enm-producer-binding-chip-bound        { background: rgba(52, 199, 89, 0.12); color: var(--state-healthy); }
+.enm-producer-binding-chip-unregistered { background: rgba(255, 159, 10, 0.12); color: var(--state-stalled); }
+.enm-producer-binding-chip-mismatch     { background: rgba(255, 69, 58, 0.12); color: var(--state-error); }
+.enm-producer-binding-chip-unknown      { background: rgba(60, 60, 67, 0.08); color: var(--text-muted); }
+
+.enm-producer-binding-note {
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+    margin: 0;
+}
+
 .enm-producer-identity[hidden] { display: none; }
 
 .enm-producer-identity-head {

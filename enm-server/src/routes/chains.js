@@ -716,6 +716,30 @@ function build(extensionHandle) {
                 ? producerInfo.inactiveheight : null;
             const inactiveRounds = (currentHeight != null && inactiveHeight != null)
                 ? (currentHeight - inactiveHeight) : null;
+            // 0.2.0-alpha.6 — wallet ↔ on-chain binding check (improvement #18).
+            // Surface the owner + node pubkeys the chain reports for ENM's
+            // configured nodePublicKey, plus a derived `binding` status the UI
+            // can chip. The parity audit found node.sh:1642 silently passes
+            // node pubkey under owner slot to `getdepositcoin` — wrong for any
+            // DPoSV2 split-key producer. ENM exposes both keys so the operator
+            // can eyeball-match against what they registered from in Essentials.
+            //
+            // Deposit-address derivation (the §2 base58 dance with the
+            // decimal-string-of-bigint quirk) is deferred to alpha.7 once we
+            // have golden vectors round-tripped against the chain.
+            const chainNodePubkey  = producerInfo && (producerInfo.nodepublickey  || producerInfo.NodePublicKey);
+            const chainOwnerPubkey = producerInfo && (producerInfo.ownerpublickey || producerInfo.OwnerPublicKey);
+            let binding;
+            if (!producerInfo) {
+                binding = 'unregistered';
+            } else if (chainNodePubkey && ourPubkey
+                    && chainNodePubkey.toLowerCase() !== ourPubkey.toLowerCase()) {
+                // Defensive — should be impossible (we queried by ourPubkey),
+                // but if some normalization happens we'd want to know.
+                binding = 'mismatch';
+            } else {
+                binding = 'bound';
+            }
             return res.json(successBody({
                 enabled: true,
                 ourPubkey,
@@ -726,6 +750,10 @@ function build(extensionHandle) {
                 inactiveHeight,
                 inactiveRounds,
                 currentHeight,
+                // alpha.6 — binding check fields
+                chainNodePubkey,
+                chainOwnerPubkey,
+                binding,
             }));
         } catch (err) {
             const status = err && err.name === 'RpcUnreachableError' ? 503 : 500;
