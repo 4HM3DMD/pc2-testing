@@ -28,6 +28,12 @@ const IP_OR_HOST = Joi.alternatives().try(
 );
 
 const rpcSchema = Joi.object({
+    // Master gate (alpha.19). When false, the generated ela config.json
+    // forces WhiteIPList=['127.0.0.1'] so external apps cannot connect even
+    // if the operator has saved a wider allow-list. Operator's whiteIPList
+    // is preserved across toggle off/on so they don't lose configuration.
+    // Defaults to false on fresh installs — operators explicitly open RPC.
+    enabled: Joi.boolean().default(false),
     user: Joi.string().alphanum().min(1).max(64).required(),
     // Encrypted via EnmEncryption.encrypt() — base64 JSON envelope. We store
     // the envelope as-is and decrypt at spawn time.
