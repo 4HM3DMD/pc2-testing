@@ -1813,6 +1813,185 @@ body[data-active-tab="identity"]::before {
 }
 
 /* ============================================================
+   alpha.21 — responsive overhaul
+   PC2 has no per-app min-width API (hardcoded 200px floor in
+   UIWindow.js). We self-defend with min-width on the app root +
+   horizontal scroll fallback at the iframe level. Below 480px
+   the operator gets a horizontal scrollbar instead of broken UI.
+
+   Plus targeted breakpoints for settings rows, tech-view tabs,
+   chain-card stats, and the clock-skew wizard card whose CSS
+   was never written when its JS landed in alpha.16.
+   ============================================================ */
+
+/* Layer A — shell floor. PC2 can drag below 480px, but at that
+   point we trigger a scrollbar at the iframe level. Content keeps
+   its sane minimum dimensions and the operator can scroll. */
+.enm-app {
+    min-width: 480px;
+}
+html, body {
+    overflow-x: auto;
+}
+
+/* Layer B1 — Settings rows: drop to single column at narrow widths
+   so the 180px label doesn't squash inputs to 36px. The settings
+   container is already 1-column at <640px via @container; this
+   adds the form-row collapse for the same width range. */
+@container (max-width: 480px) {
+    .enm-settings-row {
+        grid-template-columns: 1fr;
+        gap: var(--spacing-xs);
+    }
+    .enm-settings-label {
+        font-size: 12px;
+    }
+}
+
+/* Layer B2 — Technical-view sub-tabs (Status/Identity/Logs/...):
+   wrap instead of hide-in-horizontal-scroll. Hidden scrollbar made
+   the tabs effectively invisible at <500px. Wrapping to a 2-row
+   layout costs a bit of vertical space but keeps every tab
+   reachable without JS or a hamburger menu. */
+@media (max-width: 700px) {
+    .enm-tech-tabs {
+        flex-wrap: wrap;
+        overflow-x: visible;
+    }
+    .enm-tech-tabs .enm-tab {
+        padding: 6px 10px;
+        font-size: 12px;
+    }
+}
+@media (max-width: 480px) {
+    .enm-tech-tabs {
+        gap: 4px;
+        padding-bottom: 6px;
+    }
+    .enm-tech-tabs .enm-tab {
+        padding: 5px 8px;
+        font-size: 11px;
+    }
+    .enm-tech-tabs .enm-tab-pill {
+        display: none;  /* "v0.5" pill on EVM costs space we don't have */
+    }
+}
+
+/* Layer B3 — Chain-card intermediate breakpoints. The single 320px
+   @container threshold was too coarse: stats values truncated
+   silently at 360-400px before the layout collapse triggered. */
+@container (max-width: 420px) {
+    .enm-chain-stats-strip {
+        gap: var(--spacing-xs);
+    }
+    .enm-chain-stats-label {
+        font-size: 10px;
+    }
+    .enm-chain-stats-value {
+        font-size: 13px;
+    }
+    .enm-chain-actions .enm-btn {
+        min-width: 88px;
+        padding: 6px 12px;
+        font-size: 12px;
+    }
+}
+@container (max-width: 340px) {
+    .enm-chain-rotation { display: none; }
+}
+
+/* Sparkline aspect-ratio fix: preserveAspectRatio="none" was
+   stretching it to 6.8:1 at narrow widths. Constrain via CSS. */
+.enm-spark {
+    aspect-ratio: 300 / 44;
+    max-height: 44px;
+    height: auto;
+}
+@container (max-width: 300px) {
+    .enm-spark { display: none; }  /* Hide entirely at extreme narrow */
+}
+
+/* Layer B4 — Clock-skew wizard card (Card B3, added in alpha.16).
+   JS rendered .enm-clock-card / .enm-clock-card-icon / .enm-clock-detail
+   / .enm-clock-fix without matching CSS. Used to inherit browser
+   defaults — the <pre><code> fix command overflowed horizontally. */
+.enm-clock-card {
+    display: flex;
+    gap: var(--spacing-sm);
+    padding: var(--spacing-md);
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    text-align: left;
+    width: 100%;
+    max-width: 520px;
+    margin: var(--spacing-md) auto;
+}
+.enm-clock-card-icon {
+    flex: 0 0 28px;
+    font-size: 22px;
+    line-height: 1.2;
+}
+.enm-clock-card-body {
+    flex: 1;
+    min-width: 0;
+}
+.enm-clock-card-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0 0 var(--spacing-xs) 0;
+}
+.enm-clock-card-sub {
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+    margin: 0;
+}
+.enm-clock-detail {
+    width: 100%;
+    max-width: 520px;
+    margin: var(--spacing-md) auto;
+}
+.enm-clock-fix {
+    background: var(--bg-code, #0f172a);
+    color: var(--text-inverse, #f8fafc);
+    padding: var(--spacing-md);
+    border-radius: var(--radius-sm);
+    overflow-x: auto;
+    margin: var(--spacing-sm) 0;
+    max-width: 100%;
+}
+.enm-clock-fix code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+    color: inherit;
+    white-space: pre;
+}
+
+/* Layer B5 — wizard cards at narrow widths. Below 400px the 24px
+   side padding on .enm-conversation eats 48px of horizontal space,
+   leaving phone-class devices squeezed. Shrink the padding +
+   reduce title font. */
+@media (max-width: 400px) {
+    .enm-conversation {
+        padding: var(--spacing-lg) var(--spacing-sm) var(--spacing-xl);
+    }
+    .enm-conv-header,
+    .enm-conv-body {
+        max-width: 100%;
+    }
+    .enm-conv-title {
+        font-size: 20px;
+        line-height: 1.25;
+    }
+    .enm-btn-hero {
+        min-width: auto;
+        padding: 12px 20px;
+    }
+}
+
+/* ============================================================
    alpha.19 — compact RPC access tab layout
    Section-per-subtopic (toggle / allow / urls / creds), tight rows.
    ============================================================ */
