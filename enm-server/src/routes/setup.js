@@ -27,6 +27,7 @@ const path = require('node:path');
 
 const osPreflight = require('../services/OsPreflight');
 const diskPreflight = require('../services/DiskPreflight');
+const ClockSkewChecker = require('../services/ClockSkewChecker');
 const binaryLocator = require('../services/EnmBinaryLocator');
 const { enmDataDir, chainDir, atomicWrite } = require('../services/DataDir');
 const ConfigStore = require('../services/ConfigStore');
@@ -132,6 +133,7 @@ function build(extensionHandle) {
         try {
             const osResult = osPreflight.check();
             const diskResult = await diskPreflight.check(enmDataDir());
+            const clockSkewResult = await runClockSkewCheck(extensionHandle);
 
             // Persist the booleans into setup-state so /setup/state and any
             // later UI surface (e.g., dashboard health tile) can show
@@ -153,6 +155,7 @@ function build(extensionHandle) {
                 os: osResult,
                 disk: diskResult,
                 wallet: { ok: true, walletAddress: wallet },
+                clockSkew: clockSkewResult,
             }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} /setup/preflight error: ${err.message}`);
@@ -649,6 +652,79 @@ function build(extensionHandle) {
 
 // walletScopeId + validateKeystorePath are imported from EnmSetupHelpers so
 // they can be unit-tested without pulling Express into the test environment.
+
+// Maximum tolerated host-vs-server clock skew before DPoS signing windows
+// start rejecting (the chain itself enforces ~4.2s; we warn well below that
+// so the operator has time to fix NTP before they get penalized).
+const CLOCK_SKEW_MAX_MS = 2000;
+
+// Hard outer timeout for the entire clock-skew probe. ClockSkewChecker has
+// its own per-endpoint timeout (5s default × 3 endpoints), but if the host
+// is in a captive portal that hangs all 3 we still want preflight to return
+// promptly. Fail-soft on expiry — the wizard surfaces the skip reason and
+// the operator can proceed.
+const CLOCK_SKEW_OUTER_TIMEOUT_MS = 5000;
+
+/**
+ * Runs the clock-skew probe with a hard outer timeout AND fail-soft semantics.
+ * The wizard MUST never get stuck on this step — if the probe can't complete
+ * for any reason (no internet, captive portal, DNS failure, etc.), we return
+ * a skipped result and let the operator continue with a yellow warning.
+ *
+ * @param {object} extensionHandle
+ * @returns {Promise<object>} preflight-shaped result for the wizard
+ */
+async function runClockSkewCheck(extensionHandle) {
+    try {
+        const probe = ClockSkewChecker.check({ timeoutMs: CLOCK_SKEW_OUTER_TIMEOUT_MS });
+        let timer;
+        const timeoutPromise = new Promise((resolve) => {
+            timer = setTimeout(() => resolve({
+                ok: false,
+                reason: `clock-skew probe exceeded ${CLOCK_SKEW_OUTER_TIMEOUT_MS}ms`,
+            }), CLOCK_SKEW_OUTER_TIMEOUT_MS);
+            if (timer && typeof timer.unref === 'function') { timer.unref(); }
+        });
+        const probeResult = await Promise.race([probe, timeoutPromise]);
+        clearTimeout(timer);
+
+        if (!probeResult || probeResult.ok !== true) {
+            // Probe couldn't reach any endpoint — fail-soft so the wizard
+            // can proceed. The UI renders a YELLOW warning telling the
+            // operator to check NTP if they suspect host clock drift.
+            return {
+                ok: true,
+                skipped: true,
+                reason: (probeResult && probeResult.reason) || 'network unreachable',
+                maxSkewMs: CLOCK_SKEW_MAX_MS,
+            };
+        }
+
+        const skewMs = Number.isFinite(probeResult.skewMs) ? probeResult.skewMs : 0;
+        const absSkewMs = Math.abs(skewMs);
+        return {
+            ok: absSkewMs <= CLOCK_SKEW_MAX_MS,
+            skipped: false,
+            skewMs,
+            absSkewMs,
+            maxSkewMs: CLOCK_SKEW_MAX_MS,
+            source: probeResult.endpoint || null,
+            rtt: probeResult.rtt || null,
+        };
+    } catch (err) {
+        // Defence in depth — any unexpected throw from the probe is treated
+        // as a skip, NEVER as a wizard blocker.
+        extensionHandle.log.warn(
+            `${ENM_LOG_PREFIX} clock-skew probe threw: ${err && err.message ? err.message : err}`,
+        );
+        return {
+            ok: true,
+            skipped: true,
+            reason: 'probe error',
+            maxSkewMs: CLOCK_SKEW_MAX_MS,
+        };
+    }
+}
 
 /**
  * Insert-or-update enm_setup_state for a wallet. Builds dynamic SQL from the

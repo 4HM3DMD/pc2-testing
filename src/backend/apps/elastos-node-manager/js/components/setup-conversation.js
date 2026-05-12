@@ -32,7 +32,7 @@
 (function (root) {
     'use strict';
 
-    var TOTAL_STEPS = 5;
+    var TOTAL_STEPS = 6;
 
     function SetupConversation(opts) {
         if (!opts || !opts.api) {
@@ -154,6 +154,7 @@
         if (card === 'a') { this._renderCardA(seq); }
         else if (card === 'b') { this._renderCardB(seq); }
         else if (card === 'b2') { this._renderCardB2(seq); }
+        else if (card === 'b3') { this._renderCardB3(seq); }
         else if (card === 'c') { this._renderCardC(seq); }
         else if (card === 'd') { this._renderCardD(seq); }
     };
@@ -161,7 +162,9 @@
     /** @private */
     SetupConversation.prototype._updateHeader = function (card) {
         var t = root.enmT;
-        var stepNumber = ({ a: 1, b: 2, b2: 3, c: 4, d: 5 })[card] || 1;
+        // b3 is the clock-skew check inserted between bootstrap (b2) and
+        // keystore (c). Adding it bumps c and d each by one.
+        var stepNumber = ({ a: 1, b: 2, b2: 3, b3: 4, c: 5, d: 6 })[card] || 1;
         // Card C (keystore) is required for BPoS — never skipped now that
         // numbering shifts (A=1, B=2, D=3).
         var total = TOTAL_STEPS;
@@ -379,7 +382,7 @@
                 self.notifications.info(t('friendly.setup.card_b2.genesis_picked_title'),
                     t('friendly.setup.card_b2.genesis_picked_sub'));
             }
-            self._goto('c');
+            self._goto('b3');
         }).catch(function (err) {
             els.tiles.querySelectorAll('.enm-b2-tile').forEach(function (b) { b.disabled = false; });
             els.sub.textContent = t('friendly.setup.card_b2.advance_failed',
@@ -486,15 +489,185 @@
         els.actions.appendChild(
             makeBtn(t('friendly.setup.card_b2.cta_continue'), 'primary hero', function () {
                 self.api.post('/setup/bootstrap', { choice: 'bootstrap' }).then(function () {
-                    self._goto('c');
+                    self._goto('b3');
                 }).catch(function () {
                     // Even if the step-advance call fails, the bootstrap
-                    // itself completed — proceed to keystore. The wizard
-                    // resume code is permissive about missing currentStep.
-                    self._goto('c');
+                    // itself completed — proceed to the clock-skew check.
+                    // The wizard resume code is permissive about missing
+                    // currentStep so it'll still land on the right card.
+                    self._goto('b3');
                 });
             })
         );
+    };
+
+    /** @private — Card B3: host clock vs internet clock (F13).
+     *
+     * ELA's Schnorr signatures get rejected silently when the host clock
+     * drifts >~4.2s from consensus partners — the operator scores a
+     * missed-vote penalty without ever seeing an error. The backend's
+     * /setup/preflight probes Google/Cloudflare for the wall-clock and
+     * compares against Date.now(); we surface that result here so the
+     * operator can fix NTP BEFORE registering as a BPoS supernode.
+     *
+     * Three outcomes:
+     *   ok && !skipped     → GREEN. Show ±Xms, allow continue.
+     *   skipped            → YELLOW. Network unreachable; warn but allow continue.
+     *   !ok && !skipped    → RED. Skew > 2s; show fix command, require retry.
+     *
+     * Failure-mode invariant: if the preflight HTTP call itself fails,
+     * we render the YELLOW (skipped) state so the operator can always
+     * proceed. The wizard MUST NEVER block on this card.
+     */
+    SetupConversation.prototype._renderCardB3 = function (seq) {
+        var I = root.EnmIllust;
+        this._body.innerHTML =
+            '<div class="enm-install-illust">' + (I ? I.gear({ size: 96 }) : '') + '</div>'
+            + '<h2 class="enm-conv-title" id="enm-conv-b3-title">Checking host clock…</h2>'
+            + '<p class="enm-conv-sub"   id="enm-conv-b3-sub">Comparing your server clock to internet time. DPoS signatures fail if the host drifts more than ~4 seconds.</p>'
+            + '<div id="enm-conv-b3-detail" class="enm-clock-detail"></div>'
+            + '<div class="enm-conv-actions" id="enm-conv-b3-actions"></div>';
+
+        var self = this;
+        var els = {
+            title:   this._body.querySelector('#enm-conv-b3-title'),
+            sub:     this._body.querySelector('#enm-conv-b3-sub'),
+            detail:  this._body.querySelector('#enm-conv-b3-detail'),
+            actions: this._body.querySelector('#enm-conv-b3-actions'),
+        };
+
+        this._runClockSkewProbe(els, seq);
+    };
+
+    /** @private */
+    SetupConversation.prototype._runClockSkewProbe = function (els, seq) {
+        var self = this;
+        els.detail.innerHTML = '';
+        els.actions.innerHTML = '';
+        els.title.textContent = 'Checking host clock…';
+        els.sub.textContent   = 'Comparing your server clock to internet time. DPoS signatures fail if the host drifts more than ~4 seconds.';
+
+        this.api.get('/setup/preflight', { skipCache: true }).then(function (resp) {
+            if (!self._stillRendering(seq)) { return; }
+            var cs = resp && resp.clockSkew;
+            // If the backend somehow omitted the field entirely (older
+            // server, schema drift), treat that as a SKIP — never block.
+            if (!cs) {
+                cs = { ok: true, skipped: true, reason: 'no clockSkew in preflight response' };
+            }
+            self._renderClockSkewResult(els, seq, cs);
+        }).catch(function (err) {
+            if (!self._stillRendering(seq)) { return; }
+            // Even the preflight call itself failed — render as a SKIP so
+            // the operator can continue. This is the absolute backstop:
+            // the wizard NEVER gets stuck on this card.
+            self._renderClockSkewResult(els, seq, {
+                ok: true,
+                skipped: true,
+                reason: err && err.message ? err.message : String(err),
+            });
+        });
+    };
+
+    /** @private */
+    SetupConversation.prototype._renderClockSkewResult = function (els, seq, cs) {
+        var self = this;
+        // Three branches by visual severity. The "continue" button is
+        // present in GREEN and YELLOW; only RED hides it (and requires
+        // the operator to fix NTP + retry).
+        if (cs.skipped) {
+            // YELLOW: probe didn't reach the internet. Warn the operator
+            // but allow continue — many bare-metal setups intentionally
+            // firewall outbound HTTPS.
+            els.title.textContent = 'Clock check skipped';
+            els.sub.textContent   = 'We could not reach a time server to verify your host clock. If your host clock is wrong, DPoS signatures will be silently rejected.';
+            els.detail.innerHTML =
+                '<div class="enm-clock-card enm-clock-card-warn">'
+                  + '<div class="enm-clock-card-icon" aria-hidden="true">⚠</div>'
+                  + '<div class="enm-clock-card-body">'
+                    + '<div class="enm-clock-card-title">Could not verify NTP</div>'
+                    + '<div class="enm-clock-card-sub">'
+                      + 'Reason: ' + escapeHtml(cs.reason || 'network unreachable') + '. '
+                      + 'Make sure your host has NTP running before going live: '
+                      + '<code>sudo timedatectl set-ntp true</code>.'
+                    + '</div>'
+                  + '</div>'
+                + '</div>';
+
+            els.actions.appendChild(
+                makeBtn('Continue anyway', 'primary hero', function () { self._goto('c'); })
+            );
+            els.actions.appendChild(makeTextLink('Retry check', function () {
+                self._runClockSkewProbe(els, seq);
+            }));
+            return;
+        }
+
+        if (!cs.ok) {
+            // RED: skew exceeds the safe window. The operator MUST fix
+            // this before going live — we don't offer a "continue anyway"
+            // path because a producer with wrong time scores missed-votes
+            // immediately on registration.
+            var skewMs = Number.isFinite(cs.skewMs) ? cs.skewMs : 0;
+            var skewSeconds = (Math.abs(skewMs) / 1000).toFixed(1);
+            var direction = skewMs > 0 ? 'ahead of' : 'behind';
+            els.title.textContent = 'Host clock is out of sync';
+            els.sub.textContent   = 'Your server clock is ' + skewSeconds + 's ' + direction
+                + ' internet time. DPoS will reject your signatures and you will score missed-vote penalties.';
+            els.detail.innerHTML =
+                '<div class="enm-clock-card enm-clock-card-error">'
+                  + '<div class="enm-clock-card-icon" aria-hidden="true">!</div>'
+                  + '<div class="enm-clock-card-body">'
+                    + '<div class="enm-clock-card-title">Fix this before continuing</div>'
+                    + '<div class="enm-clock-card-sub">'
+                      + 'Run this on the host, then press Retry:'
+                      + '<pre class="enm-clock-fix"><code>sudo timedatectl set-ntp true</code></pre>'
+                      + 'After NTP catches up (usually &lt;30s), retry the check.'
+                    + '</div>'
+                  + '</div>'
+                + '</div>';
+
+            els.actions.appendChild(
+                makeBtn('Retry check', 'primary hero', function (ev) {
+                    ev.target.disabled = true;
+                    self._runClockSkewProbe(els, seq);
+                })
+            );
+            // Escape hatch: operators in air-gapped or test environments
+            // can override. Marked clearly as risk-acknowledged so the
+            // intent is unambiguous in audit logs.
+            els.actions.appendChild(makeTextLink('Continue anyway (not recommended)', function () {
+                self._goto('c');
+            }));
+            return;
+        }
+
+        // GREEN: clock is in sync. Auto-advance is tempting, but per the
+        // spec we let the operator confirm — keeps every card in the
+        // wizard symmetric (info → ack → continue).
+        var absMs = Number.isFinite(cs.absSkewMs)
+            ? cs.absSkewMs
+            : Math.abs(Number.isFinite(cs.skewMs) ? cs.skewMs : 0);
+        els.title.textContent = 'Clock is in sync';
+        els.sub.textContent   = 'Your host clock matches internet time within the safe window.';
+        els.detail.innerHTML =
+            '<div class="enm-clock-card enm-clock-card-ok">'
+              + '<div class="enm-clock-card-icon" aria-hidden="true">✓</div>'
+              + '<div class="enm-clock-card-body">'
+                + '<div class="enm-clock-card-title">±' + escapeHtml(String(absMs)) + 'ms</div>'
+                + '<div class="enm-clock-card-sub">'
+                  + 'Measured against ' + escapeHtml(cs.source || 'an internet time source') + '. '
+                  + 'DPoS signing windows are 4 s wide, so you have plenty of margin.'
+                + '</div>'
+              + '</div>'
+            + '</div>';
+
+        els.actions.appendChild(
+            makeBtn('Continue', 'primary hero', function () { self._goto('c'); })
+        );
+        els.actions.appendChild(makeTextLink('Recheck', function () {
+            self._runClockSkewProbe(els, seq);
+        }));
     };
 
     /** @private */

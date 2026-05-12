@@ -237,18 +237,27 @@ class HealthChecker {
                 }
                 if (this.syncTracker) {
                     this.syncTracker.record(chainId, rpcSummary.height);
-                    // If getnodestate.neighbors exposes peer heights, the max
-                    // is a strong signal for network-best. Defensive: ela's
-                    // schema may use either Height or height.
-                    if (typeof rpcSummary.peerMaxHeight === 'number'
-                        && rpcSummary.peerMaxHeight > rpcSummary.height) {
-                        this.syncTracker.recordNetworkBest(chainId, rpcSummary.peerMaxHeight);
-                    } else if (typeof rpcSummary.peerMaxHeight === 'number') {
-                        // Even when our height matches or exceeds peers we
-                        // record so the tracker stays aware of where the
-                        // network is.
-                        this.syncTracker.recordNetworkBest(chainId, rpcSummary.peerMaxHeight);
-                    }
+                }
+            }
+            // Network-best feed for SyncTracker — kept OUTSIDE the local-height
+            // success block so a getblockcount blip doesn't also wipe out our
+            // ETA math. The audit (FIX 3/5) called out that without this,
+            // SyncTracker.networkHeight stays null forever and the sync bar
+            // renders as indeterminate stripes. getnodestate.Neighbors is the
+            // canonical source per ela's RPC; _fetchRpcSummary already swallows
+            // method-level failures into peerMaxHeight===undefined, so the
+            // try/catch is belt-and-braces.
+            if (this.syncTracker
+                && typeof rpcSummary.peerMaxHeight === 'number'
+                && rpcSummary.peerMaxHeight > 0) {
+                try {
+                    this.syncTracker.recordNetworkBest(chainId, rpcSummary.peerMaxHeight);
+                } catch (err) {
+                    // recordNetworkBest itself never throws, but a future API
+                    // change shouldn't take the whole tick down.
+                    this.extensionHandle.log.warn(
+                        `${ENM_LOG_PREFIX} recordNetworkBest ${chainId} failed: ${err.message}`,
+                    );
                 }
             }
             // F18 timeline — inbound peers count is needed only when arbiter mode.
