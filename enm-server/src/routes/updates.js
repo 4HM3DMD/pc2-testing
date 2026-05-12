@@ -56,10 +56,18 @@ function build(extensionHandle) {
             });
             return res.json(successBody(envelope));
         } catch (err) {
+            // 0.2.0-alpha.11 — log the full stack so operators can grep
+            // the actual failure mode out of pc2-node.log when the card
+            // shows "Update info endpoint returned an error." The msg
+            // alone (e.g. "Cannot read properties of undefined") doesn't
+            // tell you which line.
             extensionHandle.log.error(
-                `${ENM_LOG_PREFIX} GET /updates/available: ${err.message}`,
+                `${ENM_LOG_PREFIX} GET /updates/available: ${err && err.message ? err.message : err}`,
             );
-            return res.status(500).json(errorBody('Failed to fetch update info.'));
+            if (err && err.stack) {
+                extensionHandle.log.error(`${ENM_LOG_PREFIX} /updates/available stack: ${err.stack}`);
+            }
+            return res.status(500).json(errorBody('Failed to fetch update info: ' + (err && err.message ? err.message : 'unknown')));
         }
     });
 

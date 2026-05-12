@@ -32,10 +32,19 @@
     //                reinstall). Each button state-gated against the
     //                current chain state — no nonsensical clicks.
     //   Logs / Settings / Audit / EVM — unchanged
+    // 0.2.0-alpha.11 — Tools tab removed per operator feedback ("we
+    // need all tools and tools to be removed"). The Maintenance card
+    // moved onto the Status pane below the Update card so the
+    // operator sees every tool inline. Compact-logs / reactivate-BPoS /
+    // re-bootstrap stay; the Update-binary row went away since the
+    // Update card (added in alpha.9) supersedes it. Per the
+    // tools-tab-audit report 08, a future iteration may distribute the
+    // rows by concern (compact → Logs, activate → Identity, etc.);
+    // for now keeping the maintenance card whole + on Status is the
+    // simpler ship.
     var TABS = [
         { id: 'status',   label: 'Status' },
         { id: 'identity', label: 'Identity' },
-        { id: 'tools',    label: 'Tools' },
         { id: 'logs',     label: 'Logs' },
         { id: 'settings', label: 'Settings' },
         { id: 'audit',    label: 'Audit' },
@@ -90,6 +99,14 @@
     };
 
     TechnicalView.prototype.destroy = function () {
+        // 0.2.0-alpha.11 — gate-refresh timer moved here from the old
+        // _renderTools sentinel. Status pane now owns the maintenance
+        // card, so the timer's destroy hook lives at the tech-view
+        // level instead of buried in _mounted['tools'].
+        if (this._toolsGateTimer) {
+            clearInterval(this._toolsGateTimer);
+            this._toolsGateTimer = null;
+        }
         // Destroy any mounted v0.3 components so timers / SSE subs are released.
         Object.keys(this._mounted).forEach(function (k) {
             var c = this._mounted[k];
@@ -234,6 +251,23 @@
                 updateCard.mount(pane);
                 this._mounted['status_update'] = updateCard;
             }
+            // 0.2.0-alpha.11 — Maintenance card mounted on Status pane
+            // (Tools tab removed). Lives below the update card; the
+            // operator sees all live tools inline with the chain status.
+            this._renderMaintenance(pane);
+            // Wire gating refresh — same poll used by the original tools
+            // tab. 5s cadence keeps the buttons live as state changes.
+            var refreshGates = function () {
+                self.api.get('/chains/mainchain', { skipCache: true }).then(function (chain) {
+                    self.api.get('/chains/mainchain/producer', { skipCache: true })
+                        .catch(function () { return null; })
+                        .then(function (producer) {
+                            self._applyToolsGates(pane, chain, producer);
+                        });
+                }).catch(function () { /* leave gates as-is on error */ });
+            };
+            refreshGates();
+            this._toolsGateTimer = setInterval(refreshGates, 5_000);
             // Sentinel so _switchTo doesn't re-mount on tab return — the
             // real components live under status_sys / status_card / status_validator.
             this._mounted['status'] = { destroy: function () {} };
@@ -243,10 +277,6 @@
             // a keystore is imported the card hides and the parent pane's
             // intro paragraph carries the explanation.
             this._renderIdentity(pane, common);
-        } else if (tabId === 'tools') {
-            // Maintenance + reinstall, with each action state-gated
-            // against current chain state.
-            this._renderTools(pane);
         } else if (tabId === 'logs') {
             if (root.EnmLogViewer && this.sse) {
                 var viewer = new root.EnmLogViewer(common);
@@ -310,40 +340,11 @@
         }
     };
 
-    /**
-     * Tools pane (Phase 3 IA rebuild) — formerly the Maintenance
-     * section embedded in Status. Now its own sub-tab with state-gated
-     * action buttons. Polls /chains/:id every 5s while pane is mounted
-     * to keep the gate state fresh.
-     *
-     * @private
-     */
-    TechnicalView.prototype._renderTools = function (pane) {
-        var self = this;
-        // 0.2.0-alpha.9 — the Binary Update card moved to the Status
-        // pane (it's the natural next-card after chain + validator,
-        // per operator feedback). Tools now hosts only maintenance for
-        // alpha.9; the Snapshot + Diagnostics + Bootstrap cards land
-        // in alpha.10 per the updates-audit master plan.
-        this._renderMaintenance(pane);
-
-        // Live state-gating refresh — re-evaluate which buttons are
-        // enabled every 5s based on current chain + producer state.
-        var refreshGates = function () {
-            self.api.get('/chains/mainchain', { skipCache: true }).then(function (chain) {
-                self.api.get('/chains/mainchain/producer', { skipCache: true }).catch(function () { return null; }).then(function (producer) {
-                    self._applyToolsGates(pane, chain, producer);
-                });
-            }).catch(function () { /* leave gates as-is on error */ });
-        };
-        refreshGates();
-        if (this._toolsGateTimer) { clearInterval(this._toolsGateTimer); }
-        this._toolsGateTimer = setInterval(refreshGates, 5000);
-        // Sentinel doubles as the destroy() hook for the gate-refresh timer.
-        this._mounted['tools'] = { destroy: function () {
-            if (self._toolsGateTimer) { clearInterval(self._toolsGateTimer); self._toolsGateTimer = null; }
-        }};
-    };
+    // 0.2.0-alpha.11 — _renderTools removed. The Tools tab is gone; the
+    // Maintenance card now lives on the Status pane (mounted in
+    // _mountPane('status') after the Update card). The gate-refresh
+    // timer the old _renderTools owned moves into _mountPane('status')
+    // and is torn down in destroy().
 
     /**
      * Apply state-aware enabled/disabled to each Maintenance row.
@@ -386,15 +387,11 @@
         // is independent of chain liveness).
         gate('compact', false, '');
 
-        // Update binary: only when chain stopped.
-        if (alive) {
-            gate('update', true, 'Stop the chain first (binary in use).');
-        } else {
-            gate('update', false, '');
-        }
+        // 0.2.0-alpha.11 — the 'update binary' maintenance row is gone;
+        // the Update card above the Maintenance card supersedes it. No
+        // gating call needed.
 
-        // Re-bootstrap: same gate as update — wiping the data dir while
-        // ela has it open would corrupt the chain. Stop first.
+        // Re-bootstrap: stop chain first so the data dir isn't held open.
         if (alive) {
             gate('rebootstrap', true, 'Stop the chain first (data dir in use).');
         } else {
@@ -431,8 +428,6 @@
             + '<div class="enm-tech-maintenance-rows">'
               + this._maintenanceRow('compact', 'Compact logs',
                   'Gzip + purge ela.log per the rotation policy. Same as the daily cron — exposed for "free space now".')
-              + this._maintenanceRow('update', 'Update binary',
-                  "Re-download the latest <code>ela</code> + <code>ela-cli</code> from download.elastos.io. Stop the chain first if it's running; we don't auto-stop.")
               + this._maintenanceRow('activate', 'Reactivate BPoS supernode',
                   "Sends a <code>producer activate</code> transaction so the chain flips your producer state from Inactive back to Active. Requires a keystore + funded deposit address.")
               + this._maintenanceRow('rebootstrap', 'Re-bootstrap chain data',
@@ -444,13 +439,6 @@
         sec.querySelector('[data-action="compact"]').addEventListener('click', function (ev) {
             self._runMaintenance(ev.currentTarget, '/chains/mainchain/compact-logs',
                 'Logs compacted', 'Compaction failed');
-        });
-        sec.querySelector('[data-action="update"]').addEventListener('click', function (ev) {
-            if (!confirm("This re-downloads the latest binary. If the chain is running, "
-                + "stop it first via the Mainchain card above — otherwise the running "
-                + "ela may keep the old file open.")) { return; }
-            self._runMaintenance(ev.currentTarget, '/chains/mainchain/update',
-                'Update started — watch the Logs sub-tab for progress', 'Update failed to start');
         });
         sec.querySelector('[data-action="activate"]').addEventListener('click', function (ev) {
             if (!confirm("This sends a 'producer activate' transaction on-chain "
