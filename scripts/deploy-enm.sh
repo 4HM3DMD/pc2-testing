@@ -49,6 +49,51 @@ TAG="${1:-latest}"
 log() { printf '\033[1;36m[deploy-enm]\033[0m %s\n' "$*" >&2; }
 die() { printf '\033[1;31m[deploy-enm] ERROR:\033[0m %s\n' "$*" >&2; exit "${2:-1}"; }
 
+# 0.2.0-alpha.12 — node_modules integrity check. The CI bundle SHOULD have
+# every transitive dep, but install-local's copyDirRecursive has been
+# observed to silently drop files under load (the operator's 2026-05-12
+# trace showed `Cannot find module 'array-flatten'` after install-local
+# claimed success). To be resilient, we run `npm install --omit=dev` on
+# the staged dir before handing it to install-local. If npm is missing,
+# we at least flag the missing key dep so the operator knows.
+#
+# Cost: ~30-60s of extra deploy time. Worth it to avoid crash-loops that
+# end in pc2-node quarantining the app.
+verify_node_modules() {
+    local stage="$1"
+    local backend_dir="$stage/backend"
+    if [ ! -d "$backend_dir" ]; then
+        log "WARN: $backend_dir not found — skipping node_modules check"
+        return 0
+    fi
+
+    # Sentinel: array-flatten is Express's narrowest transitive dep. If
+    # it's missing, the bundle is incomplete and ENM will ENOENT on the
+    # first router.use() call (which Express lazy-loads route.js for,
+    # which requires array-flatten). Other sentinels could be picked
+    # (body-parser, etc.) — array-flatten is small + load-bearing.
+    if [ -d "$backend_dir/node_modules/array-flatten" ]; then
+        log "node_modules looks complete (array-flatten sentinel present)"
+        return 0
+    fi
+
+    log "WARN: node_modules missing array-flatten — bundle from CI was incomplete"
+    if command -v npm >/dev/null 2>&1; then
+        log "running npm install --omit=dev to heal (this can take ~60s)…"
+        if (cd "$backend_dir" && npm install --omit=dev --no-audit --no-fund 2>&1 | tail -8); then
+            if [ -d "$backend_dir/node_modules/array-flatten" ]; then
+                log "node_modules healed — array-flatten present after npm install"
+            else
+                die "npm install completed but array-flatten still missing — investigate package-lock.json"
+            fi
+        else
+            die "npm install failed in $backend_dir — ENM cannot start without complete node_modules"
+        fi
+    else
+        die "node_modules incomplete + npm not on PATH. Install Node 20.x first: curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt install -y nodejs"
+    fi
+}
+
 command -v wget >/dev/null  || die "wget not installed"
 command -v jq >/dev/null    || die "jq not installed (apt install jq)"
 command -v curl >/dev/null  || die "curl not installed"
@@ -108,6 +153,8 @@ if [ "$MODE" = "fresh" ]; then
     log "extracting tarball into $TMP_EXTRACT"
     tar -C "$TMP_EXTRACT" -xzf "$TMP_TARBALL" || die "extract failed" 3
 
+    verify_node_modules "$TMP_EXTRACT"
+
     log "calling pc2-node /api/installed-apps/install-local"
     BODY=$(jq -n \
         --slurpfile manifest "$TMP_MANIFEST" \
@@ -158,6 +205,8 @@ if [ "$MODE" = "upgrade" ]; then
     TMP_EXTRACT=$(mktemp -d -p "$PC2_TEST_APPS_DIR")
     log "extracting new bundle into $TMP_EXTRACT"
     tar -C "$TMP_EXTRACT" -xzf "$TMP_TARBALL" || die "extract failed" 3
+
+    verify_node_modules "$TMP_EXTRACT"
 
     # Uninstall the old version (purge=false → keeps externalDataDirs so
     # chain data and keystore survive the swap).
