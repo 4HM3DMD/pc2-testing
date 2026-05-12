@@ -221,6 +221,19 @@
                 validatorCard.mount(pane);
                 this._mounted['status_validator'] = validatorCard;
             }
+            // 0.2.0-alpha.9 — Binary Update card moved here from the Tools
+            // sub-tab per operator feedback ("tools still not below the
+            // status page card"). The card lives at the bottom of the
+            // Status pane so it's the natural next thing after chain +
+            // validator. Hides itself when on the latest release; surfaces
+            // when an update is available. Skips entirely when GitHub is
+            // unreachable AND we have no fallback known-good version to
+            // compare against.
+            if (root.EnmToolsUpdateCard) {
+                var updateCard = new root.EnmToolsUpdateCard(common);
+                updateCard.mount(pane);
+                this._mounted['status_update'] = updateCard;
+            }
             // Sentinel so _switchTo doesn't re-mount on tab return — the
             // real components live under status_sys / status_card / status_validator.
             this._mounted['status'] = { destroy: function () {} };
@@ -307,19 +320,11 @@
      */
     TechnicalView.prototype._renderTools = function (pane) {
         var self = this;
-        // 0.2.0-alpha.8 — Binary Update card (read-only first; in-place
-        // upgrade lands in alpha.9). Mounted FIRST so it's the most
-        // prominent thing in the Tools tab when an update is available.
-        // The card itself owns the polling cadence (6h) + writes
-        // body.dataset.updateSeverity for the tab dot.
-        if (root.EnmToolsUpdateCard) {
-            this._toolsUpdateCard = new root.EnmToolsUpdateCard({
-                api: this.api,
-                notifications: this.notifications,
-            });
-            this._toolsUpdateCard.mount(pane);
-            this._mounted['tools_update'] = this._toolsUpdateCard;
-        }
+        // 0.2.0-alpha.9 — the Binary Update card moved to the Status
+        // pane (it's the natural next-card after chain + validator,
+        // per operator feedback). Tools now hosts only maintenance for
+        // alpha.9; the Snapshot + Diagnostics + Bootstrap cards land
+        // in alpha.10 per the updates-audit master plan.
         this._renderMaintenance(pane);
 
         // Live state-gating refresh — re-evaluate which buttons are

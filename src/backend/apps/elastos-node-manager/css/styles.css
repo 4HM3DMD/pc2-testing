@@ -4359,6 +4359,28 @@ body[data-update-severity="major"] .enm-tech-tabs .enm-tab[data-tab="tools"]::be
     color: var(--state-stalled);
 }
 
+/* 0.2.0-alpha.9 — offline / stale source badge in the card heading.
+   Muted neutral; signals "this comparison is build-time stale, not a
+   fresh GitHub probe." Tooltips on the element explain why. */
+.enm-tools-update-badge {
+    display: inline-block;
+    margin-left: 8px;
+    padding: 2px 8px;
+    border-radius: var(--radius-pill);
+    background: rgba(60, 60, 67, 0.10);
+    color: var(--text-secondary);
+    font-size: 10px;
+    font-weight: var(--font-weight-semibold);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    vertical-align: middle;
+    cursor: help;
+}
+.enm-tools-update-badge-stale {
+    background: rgba(255, 159, 10, 0.10);
+    color: var(--state-stalled);
+}
+
 .enm-tools-update-versions {
     font-size: 13px;
     color: var(--text-secondary);

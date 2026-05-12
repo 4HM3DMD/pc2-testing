@@ -45,13 +45,42 @@ const REQUEST_TIMEOUT_MS = 8_000;
 const GITHUB_REPO = 'elastos/Elastos.ELA';
 const GITHUB_API_URL = 'https://api.github.com/repos/' + GITHUB_REPO + '/releases/latest';
 
-function makeEnvelope({ current, latest, severity, status, releaseNotes, publishedAt, htmlUrl, lastCheckedAt, error }) {
+// 0.2.0-alpha.9 — fallback path: when GitHub is unreachable from
+// pc2-server (e.g. operator's host blocks outbound HTTPS to
+// api.github.com), we still want the Status pane's Update card to
+// show *something useful*. We read the build-time `knownGoodElaVersion`
+// from enm-server/package.json and compare against that as a baked-in
+// "last known stable" pointer. It's stale by design — the CI bundle
+// only refreshes it on each ENM release — but a stale pointer beats
+// nothing for offline operators.
+function _readKnownGoodElaVersion() {
+    try {
+        // path resolved relative to this file (services/) → ../../
+        const pkg = require('../../package.json');
+        if (pkg && pkg.enm && typeof pkg.enm.knownGoodElaVersion === 'string') {
+            return pkg.enm.knownGoodElaVersion;
+        }
+    } catch (_) { /* fall through to null */ }
+    return null;
+}
+const FALLBACK_LATEST = _readKnownGoodElaVersion();
+
+function makeEnvelope({ current, latest, severity, status, releaseNotes, publishedAt, htmlUrl, lastCheckedAt, error, source }) {
     return {
         current:        current || null,
         latest:         latest || null,
         severity:       severity || null,            // 'patch' | 'minor' | 'major' | null
         updateAvailable: !!(current && latest && semverCompare(latest, current) > 0),
-        status:         status || 'unknown',         // 'fresh' | 'stale' | 'unknown' | 'up-to-date'
+        // 'fresh'       — GitHub responded; envelope is < 6h old
+        // 'up-to-date'  — current >= latest per GitHub
+        // 'stale'       — last GitHub probe failed; envelope is older than 6h
+        // 'fallback'    — never reached GitHub; latest is the build-time
+        //                 knownGoodElaVersion baked into the bundle
+        // 'unknown'     — never reached GitHub AND no fallback available
+        status:         status || 'unknown',
+        // 'github' | 'fallback' — tells the frontend whether to badge the
+        // card as "live" or "offline (last known stable)".
+        source:         source || (status === 'fallback' ? 'fallback' : 'github'),
         releaseNotes:   releaseNotes || null,
         publishedAt:    publishedAt || null,
         htmlUrl:        htmlUrl || null,
@@ -196,12 +225,34 @@ class EnmUpdateScanner {
             this.logger.warn && this.logger.warn(
                 '[ENM] EnmUpdateScanner: scan failed: ' + (err && err.message ? err.message : err),
             );
+            // Fallback strategy:
+            // 1. If we have a previous successful envelope, mark it stale
+            //    and keep using it — the operator at least sees the last
+            //    good value.
+            // 2. Otherwise, fall back to the build-time
+            //    knownGoodElaVersion. Stale by design, but better than
+            //    "Couldn't reach GitHub."
+            // 3. If neither, status: 'unknown' and the card renders the
+            //    silent "we'll retry" line.
+            const prevLatest = this._envelope && this._envelope.latest;
+            let fallbackLatest = prevLatest;
+            let fallbackStatus = 'stale';
+            let fallbackSource = 'github';
+            if (!prevLatest && FALLBACK_LATEST) {
+                fallbackLatest = FALLBACK_LATEST;
+                fallbackStatus = 'fallback';
+                fallbackSource = 'fallback';
+            } else if (!prevLatest) {
+                fallbackStatus = 'unknown';
+            }
             this._envelope = makeEnvelope({
-                current: currentVersion,
-                latest: this._envelope && this._envelope.latest,
-                status: this._envelope ? 'stale' : 'unknown',
+                current:       currentVersion,
+                latest:        fallbackLatest,
+                severity:      severityFor(currentVersion, fallbackLatest),
+                status:        fallbackStatus,
+                source:        fallbackSource,
                 lastCheckedAt: startedAt,
-                error: err && err.message ? err.message : String(err),
+                error:         err && err.message ? err.message : String(err),
             });
             this._scheduleNext(startedAt);
             return this._envelope;

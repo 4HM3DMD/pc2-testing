@@ -79,16 +79,31 @@
     /** @private */
     EnmToolsUpdateCard.prototype._render = function (env) {
         if (!env) { this._renderError(); return; }
+        // 0.2.0-alpha.9 — surface offline-mode + fallback source so the
+        // operator knows when the version comparison is build-time stale
+        // vs a fresh GitHub probe.
+        var isFallback = env.source === 'fallback';
+        var isStale = env.status === 'stale';
+        var sourceBadge = isFallback
+            ? ' <span class="enm-tools-update-badge" title="GitHub unreachable; showing last known stable version baked into this ENM build.">offline</span>'
+            : (isStale ? ' <span class="enm-tools-update-badge enm-tools-update-badge-stale" title="GitHub probe failed; showing the last successful result.">stale</span>' : '');
+
         if (!env.updateAvailable) {
             this.root.dataset.severity = 'none';
             this.root.innerHTML =
                 '<header class="enm-tools-update-head">'
-                +   '<h3>Binary update</h3>'
+                +   '<h3>Binary update' + sourceBadge + '</h3>'
                 +   '<p class="enm-stub" style="margin:0;text-align:left;padding:0">'
                 +     'You\'re on the latest release '
                 +     '(<code>' + escapeHtml(env.current || 'unknown') + '</code>).'
                 +     (env.lastCheckedAt
                         ? ' Last checked ' + relTime(env.lastCheckedAt) + '.'
+                        : '')
+                +     (isFallback
+                        ? '<br><span style="font-size:12px;color:var(--text-muted)">'
+                          + 'GitHub unreachable from this server; comparison uses the build-time '
+                          + '<code>knownGoodElaVersion</code> baked into this ENM bundle.'
+                          + '</span>'
                         : '')
                 +   '</p>'
                 + '</header>';
@@ -117,7 +132,7 @@
         this.root.innerHTML =
             '<header class="enm-tools-update-head">'
             +   '<div class="enm-tools-update-head-row">'
-            +     '<h3>Binary update available</h3>'
+            +     '<h3>Binary update available' + sourceBadge + '</h3>'
             +     severityChip
             +   '</div>'
             +   '<p class="enm-tools-update-versions">'
@@ -140,12 +155,15 @@
 
     /** @private */
     EnmToolsUpdateCard.prototype._renderError = function () {
+        // Only fires when /updates/available itself returned non-2xx
+        // (auth failure, route error). Network-unreachable cases land
+        // in the main _render path with status='fallback'/'stale'.
         this.root.dataset.severity = 'unknown';
         this.root.innerHTML =
             '<header class="enm-tools-update-head">'
             +   '<h3>Binary update</h3>'
             +   '<p class="enm-stub" style="margin:0;text-align:left;padding:0">'
-            +     'Couldn\'t reach GitHub. Will retry in 6 hours.'
+            +     'Update info endpoint returned an error. Will retry in 6 hours.'
             +   '</p>'
             + '</header>';
     };
