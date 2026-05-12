@@ -72,25 +72,66 @@ verify_node_modules() {
     # first router.use() call (which Express lazy-loads route.js for,
     # which requires array-flatten). Other sentinels could be picked
     # (body-parser, etc.) — array-flatten is small + load-bearing.
-    if [ -d "$backend_dir/node_modules/array-flatten" ]; then
-        log "node_modules looks complete (array-flatten sentinel present)"
+    if [ -d "$backend_dir/node_modules/array-flatten" ] && [ -f "$backend_dir/node_modules/express/index.js" ]; then
+        log "node_modules looks complete (express + array-flatten sentinels present)"
         return 0
     fi
 
-    log "WARN: node_modules missing array-flatten — bundle from CI was incomplete"
+    log "WARN: node_modules missing critical deps — bundle from CI was incomplete"
     if command -v npm >/dev/null 2>&1; then
         log "running npm install --omit=dev to heal (this can take ~60s)…"
         if (cd "$backend_dir" && npm install --omit=dev --no-audit --no-fund 2>&1 | tail -8); then
-            if [ -d "$backend_dir/node_modules/array-flatten" ]; then
-                log "node_modules healed — array-flatten present after npm install"
+            if [ -d "$backend_dir/node_modules/array-flatten" ] && [ -f "$backend_dir/node_modules/express/index.js" ]; then
+                log "node_modules healed via npm install"
             else
-                die "npm install completed but array-flatten still missing — investigate package-lock.json"
+                die "npm install completed but critical deps still missing — investigate package-lock.json"
             fi
         else
             die "npm install failed in $backend_dir — ENM cannot start without complete node_modules"
         fi
     else
         die "node_modules incomplete + npm not on PATH. Install Node 20.x first: curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt install -y nodejs"
+    fi
+}
+
+# 0.2.0-alpha.14 — pc2-node's `installFromLocal` copyDirRecursive silently
+# drops random files during the copy from staged dir into installed-apps/.
+# Sometimes array-flatten, sometimes Express itself, sometimes something
+# else — non-deterministic. The pre-copy sentinel check (verify_node_modules)
+# doesn't help: the staged dir IS complete, the destination is what's broken.
+#
+# This helper repairs the destination AFTER install-local lands by `cp -a`'ing
+# the staged dir on top, restoring any silently-dropped files. We also kill
+# any ENM child the supervisor may have spawned in the meantime — it's
+# already crash-looping on missing modules, so terminating it cleanly lets
+# AppProcessManager respawn with the now-complete bundle.
+repair_after_install_local() {
+    local stage="$1"
+    local dest="$2"
+
+    # Brief settle to let install-local + the supervisor spawn quiesce.
+    sleep 2
+
+    local repair_needed=false
+    if [ ! -f "$dest/backend/node_modules/express/index.js" ] \
+       || [ ! -f "$dest/backend/node_modules/array-flatten/array-flatten.js" ] \
+       || [ ! -d "$dest/backend/node_modules/body-parser" ]; then
+        repair_needed=true
+    fi
+
+    if [ "$repair_needed" = "true" ]; then
+        log "install-local dropped critical files (known pc2-node bug). Repairing via cp -a from staged dir…"
+        # Stop the crash-looping ENM child so we don't fight it for file
+        # handles. AppProcessManager will respawn it after repair.
+        pkill -f 'elastos-node-manager.*server.js' 2>/dev/null || true
+        sleep 1
+        # cp -a preserves attrs and merges; if dest already has a file
+        # it gets overwritten; if dest is missing one, it's added.
+        cp -a "$stage/backend/." "$dest/backend/" || \
+            die "cp -a repair failed; manual intervention required"
+        log "repair complete — AppProcessManager will respawn ENM cleanly now"
+    else
+        log "post-install verification passed (express + array-flatten + body-parser all present)"
     fi
 }
 
@@ -171,6 +212,8 @@ if [ "$MODE" = "fresh" ]; then
     fi
     APP_NAME=$(echo "$RESP" | jq -r '.app.app_name // .app.name // "elastos-node-manager"')
     log "pc2-node installed '$APP_NAME' and started its backend"
+
+    repair_after_install_local "$TMP_EXTRACT" "$BUNDLE_DIR"
 fi
 
 # =============================================================================
@@ -240,6 +283,8 @@ if [ "$MODE" = "upgrade" ]; then
     fi
     APP_NAME=$(echo "$RESP" | jq -r '.app.app_name // .app.name // "elastos-node-manager"')
     log "pc2-node reinstalled '$APP_NAME' and (re)started the backend"
+
+    repair_after_install_local "$TMP_EXTRACT" "$BUNDLE_DIR"
 fi
 
 # =============================================================================
