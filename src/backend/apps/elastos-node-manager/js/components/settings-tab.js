@@ -981,6 +981,43 @@
      * Value is wrapped in credValueWithCopy() so the operator can copy
      * straight to clipboard without selecting.
      */
+    function rpcUrlRow(label, url, warning) {
+        var row = document.createElement('div');
+        row.className = 'enm-rpc-url-row';
+        var l = document.createElement('span');
+        l.className = 'enm-rpc-url-label';
+        l.textContent = label;
+        row.appendChild(l);
+        row.appendChild(credValueWithCopy(url));
+        if (warning) {
+            var w = document.createElement('p');
+            w.className = 'enm-rpc-url-warning';
+            w.textContent = warning;
+            row.appendChild(w);
+        }
+        return row;
+    }
+
+    // Classify an http://IP:port URL as 'loopback' | 'private' | 'public'.
+    // RFC-1918 (10/8, 172.16/12, 192.168/16) + link-local (169.254/16) all
+    // count as 'private' so accidental APIPA addresses don't render as
+    // "Public internet" and mislead the operator.
+    function classifyUrlAddress(url) {
+        try {
+            var u = new URL(url);
+            var h = u.hostname;
+            if (h === 'localhost' || /^127\./.test(h) || h === '::1') return 'loopback';
+            var m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h);
+            if (!m) return 'public'; // hostname or IPv6 — treat as public to be safe
+            var a = parseInt(m[1], 10), b = parseInt(m[2], 10);
+            if (a === 10) return 'private';
+            if (a === 172 && b >= 16 && b <= 31) return 'private';
+            if (a === 192 && b === 168) return 'private';
+            if (a === 169 && b === 254) return 'private';
+            return 'public';
+        } catch (_e) { return 'public'; }
+    }
+
     function credRow(labelText, value) {
         var wrap = document.createElement('div');
         wrap.className = 'enm-rpc-creds-row';
