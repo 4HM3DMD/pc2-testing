@@ -147,6 +147,10 @@ function build(extensionHandle) {
             let lastBlockTime = null;
             let networkHeight = null;
             let producerState = null;
+            // 0.2.0-alpha.7 — peer-quality summary surfaced for the chain-card
+            // hover panel. Populated inside the synced/at-tip neighbors walk
+            // below so we don't make a second `getnodestate` RPC for it.
+            let peerSummary = null;
             if (status && status.alive && height != null) {
                 try {
                     const rpc = adapter.rpcClient(chainCfg);
@@ -177,6 +181,11 @@ function build(extensionHandle) {
                     }
 
                     // (b) Network-tip check via peers' max height.
+                    // 0.2.0-alpha.7 — also extracts peer-quality fields
+                    // (improvement #12). ENM already fetched this data
+                    // for the at-tip check; the parity audit flagged that
+                    // we throw it away. Latency/version/offset are now
+                    // surfaced so the chain card can show a hover panel.
                     let atTipOrAhead = false;
                     if (nodeStateRes.status === 'fulfilled') {
                         const v = nodeStateRes.value;
@@ -185,6 +194,10 @@ function build(extensionHandle) {
                             : ns && Array.isArray(ns.neighbors) ? ns.neighbors : null;
                         if (Array.isArray(neighbors)) {
                             let maxH = null;
+                            let latencySum = 0;
+                            let latencyCount = 0;
+                            const versionCounts = Object.create(null);
+                            let maxAbsOffsetMs = 0;
                             for (const n of neighbors) {
                                 if (!n || typeof n !== 'object') continue;
                                 const h = typeof n.lastblock === 'number' ? n.lastblock
@@ -193,13 +206,55 @@ function build(extensionHandle) {
                                         : typeof n.height === 'number' ? n.height
                                         : null;
                                 if (h != null && (maxH == null || h > maxH)) maxH = h;
+
+                                // Last-ping in microseconds (ela's wire field). Zero or
+                                // negative = no pong received; skip from the average.
+                                const ping = typeof n.lastpingmicros === 'number' ? n.lastpingmicros
+                                           : typeof n.LastPingMicros === 'number' ? n.LastPingMicros
+                                           : null;
+                                if (ping != null && ping > 0) {
+                                    latencySum += ping / 1000;  // μs → ms
+                                    latencyCount += 1;
+                                }
+
+                                // Peer NodeVersion / user-agent string. Pre-`getnodestate`
+                                // strip the wire user-agent, so this only reads what the
+                                // RPC surfaces today — often just the protocol-version
+                                // integer (e.g. "20000", "80000"). Still useful for
+                                // detecting fleet drift across major protocol bumps.
+                                const ver = typeof n.nodeversion === 'string' ? n.nodeversion
+                                          : typeof n.NodeVersion === 'string' ? n.NodeVersion
+                                          : typeof n.version === 'string' ? n.version
+                                          : (typeof n.protocolversion === 'number' ? String(n.protocolversion) : null);
+                                if (ver) versionCounts[ver] = (versionCounts[ver] || 0) + 1;
+
+                                // TimeOffset is reported in seconds vs us. Convert to ms
+                                // for parity with the latency unit.
+                                const offsetSec = typeof n.timeoffset === 'number' ? n.timeoffset
+                                                : typeof n.TimeOffset === 'number' ? n.TimeOffset
+                                                : null;
+                                if (offsetSec != null) {
+                                    const abs = Math.abs(offsetSec) * 1000;
+                                    if (abs > maxAbsOffsetMs) maxAbsOffsetMs = abs;
+                                }
                             }
                             if (maxH != null) {
                                 networkHeight = maxH;
-                                // height >= peers' max means we're caught up. Equal-or-ahead
-                                // by 0 or 1 blocks is the steady state at network tip.
                                 atTipOrAhead = (height >= maxH);
                             }
+                            // Build peerSummary for the chain-card hover. Top-3 versions
+                            // by share so the title attribute stays under ~80 chars.
+                            const topVersions = Object.keys(versionCounts)
+                                .map((k) => ({ version: k, count: versionCounts[k] }))
+                                .sort((a, b) => b.count - a.count)
+                                .slice(0, 3);
+                            peerSummary = {
+                                count: neighbors.length,
+                                inbound: undefined,        // already in inboundCount via HealthChecker
+                                latencyMsAvg: latencyCount > 0 ? Math.round(latencySum / latencyCount) : null,
+                                versions: topVersions,     // [{version, count}, ...]
+                                timeOffsetMaxAbsMs: maxAbsOffsetMs > 0 ? Math.round(maxAbsOffsetMs) : null,
+                            };
                         }
                     }
 
@@ -250,10 +305,98 @@ function build(extensionHandle) {
                 height,
                 peers,
                 uptimeSec,
+                // alpha.7 — peer quality (improvement #12). Populated from
+                // the same `getnodestate.neighbors` we already walked for
+                // the at-tip check; null when chain is dead or RPC missed.
+                peerSummary,
             }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} GET /chains/${req.params.chainId}: ${err.message}`);
             return res.status(500).json(errorBody('Failed to read chain state.'));
+        }
+    });
+
+    // 0.2.0-alpha.7 — DPoS rotation snapshot (improvement #02). Powers the
+    // chain-card rotation strip: who's on duty, when does this node's slot
+    // come up, where in the slate is this node. The parity audit found
+    // node.sh has zero rotation awareness and Monitor's onduty checks are
+    // post-hoc email batches, so ENM is genuinely first here.
+    //
+    // Returns the raw `getarbitersinfo` envelope plus convenience fields
+    // computed for ENM's configured nodePublicKey:
+    //   ourIndex        — position in currentarbiters[] (-1 if not in slate)
+    //   ourNextIndex    — position in nextarbiters[] (-1 if not in next slate)
+    //   isOnDuty        — true when the operator's pubkey === ondutyarbiter
+    //   rotationLength  — length of currentarbiters[]
+    //
+    // Read-only, no auth gate beyond readActorWallet, same rate-limit bucket.
+    router.get('/:chainId/rotation', limit('read'), async (req, res) => {
+        if (!readActorWallet(req)) {
+            return res.status(401).json(errorBody('Authentication required.'));
+        }
+        try {
+            const adapter = adapterOr404(req, res, extensionHandle);
+            if (!adapter) return undefined;
+            const cfg = await ConfigStore.load();
+            const chainCfg = cfg.chains[adapter.chainId];
+            if (!chainCfg) {
+                return res.status(404).json(errorBody('Not configured.'));
+            }
+            const status = ChainRegistry.getProcessService().statusSync(adapter.chainId);
+            if (!status || !status.alive) {
+                return res.json(successBody({ enabled: false, alive: false }));
+            }
+            const rpc = adapter.rpcClient(chainCfg);
+            const info = await rpc.getarbitersinfo().catch(() => null);
+            const a = info && (info.result || info);
+            if (!a || typeof a !== 'object') {
+                return res.json(successBody({ enabled: false, alive: true }));
+            }
+            // ela's wire field names are inconsistent across endpoints; accept both
+            // camelCase and lower-case variants per the existing precedent on
+            // getproducerinfo + getnodestate.
+            const onDuty = a.ondutyarbiter || a.onDutyArbiter || null;
+            const curStart = (typeof a.currentturnstartheight === 'number')
+                ? a.currentturnstartheight
+                : (typeof a.currentTurnStartHeight === 'number' ? a.currentTurnStartHeight : null);
+            const nextStart = (typeof a.nextturnstartheight === 'number')
+                ? a.nextturnstartheight
+                : (typeof a.nextTurnStartHeight === 'number' ? a.nextTurnStartHeight : null);
+            const current = Array.isArray(a.currentarbiters)
+                ? a.currentarbiters
+                : (Array.isArray(a.currentArbiters) ? a.currentArbiters : []);
+            const next = Array.isArray(a.nextarbiters)
+                ? a.nextarbiters
+                : (Array.isArray(a.nextArbiters) ? a.nextArbiters : []);
+            const ourPubkey = chainCfg.dpos && chainCfg.dpos.nodePublicKey;
+            const normalize = (s) => (typeof s === 'string' ? s.toLowerCase() : '');
+            const ourLower = normalize(ourPubkey);
+            const ourIndex = ourLower
+                ? current.findIndex((k) => normalize(k) === ourLower)
+                : -1;
+            const ourNextIndex = ourLower
+                ? next.findIndex((k) => normalize(k) === ourLower)
+                : -1;
+            const isOnDuty = !!(ourLower && onDuty && normalize(onDuty) === ourLower);
+            return res.json(successBody({
+                enabled: true,
+                alive: true,
+                onDutyArbiter:        onDuty,
+                currentTurnStartHeight: curStart,
+                nextTurnStartHeight:    nextStart,
+                rotationLength:         current.length,
+                currentArbiters:        current,
+                nextArbiters:           next,
+                ourPubkey,
+                ourIndex,
+                ourNextIndex,
+                isOnDuty,
+            }));
+        } catch (err) {
+            extensionHandle.log.error(
+                `${ENM_LOG_PREFIX} GET /chains/${req.params.chainId}/rotation: ${err.message}`,
+            );
+            return res.status(500).json(errorBody('Failed to read rotation.'));
         }
     });
 

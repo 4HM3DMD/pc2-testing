@@ -189,6 +189,18 @@ class EnmRpcClient {
      * @param {number} height  uint32 block height
      */
     getarbitratorgroupbyheight(height) { return this.call('getarbitratorgroupbyheight', { height }); }
+
+    /**
+     * 0.2.0-alpha.7 — current DPoS rotation snapshot.
+     *   ondutyarbiter:           hex of the producer signing the current round
+     *   currentturnstartheight:  first height of the current rotation turn
+     *   nextturnstartheight:     first height of the next rotation turn
+     *   currentarbiters:         hex[] of producers in the active slate
+     *   nextarbiters:            hex[] of producers queued for the next slate
+     *   currentcandidates / nextcandidates: backup pool
+     * No auth gate; same rate-limit bucket as getproducerinfo.
+     */
+    getarbitersinfo() { return this.call('getarbitersinfo', {}); }
 }
 
 // --- Error types — let the caller distinguish failure modes for healing rules. ---

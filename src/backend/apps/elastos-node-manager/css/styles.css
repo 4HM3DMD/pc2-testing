@@ -1120,6 +1120,69 @@ body[data-active-tab="identity"]::before {
     .enm-chain-actions-pulse { animation: none; }
 }
 
+/* 0.2.0-alpha.7 — DPoS rotation strip (improvement #02). Slim
+   inline strip below the sparkline showing the operator's BPoS
+   arbiter slate position. Three states:
+     onduty   — green pulsing dot, "On duty now"
+     inslate  — blue dot, "Your slot N of M"
+     nextslate— gray dot, "Queued for next round"
+   Hidden when the chain is not a BPoS arbiter (the common case for
+   pre-registration operators). */
+.enm-chain-rotation {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    align-self: center;
+    margin-top: 10px;
+    padding: 4px 12px;
+    border-radius: var(--radius-pill);
+    background: rgba(60, 60, 67, 0.06);
+    font-size: 12px;
+    font-weight: var(--font-weight-medium);
+    color: var(--text-secondary);
+    line-height: 1.3;
+}
+
+.enm-chain-rotation[hidden] { display: none; }
+
+.enm-chain-rotation-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+    flex: none;
+}
+
+.enm-chain-rotation[data-state="onduty"] {
+    background: rgba(52, 199, 89, 0.12);
+    color: var(--state-healthy);
+}
+
+.enm-chain-rotation[data-state="onduty"] .enm-chain-rotation-dot {
+    animation: enm-chain-rotation-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes enm-chain-rotation-pulse {
+    0%, 100% { opacity: 0.5; transform: scale(1); }
+    50%      { opacity: 1;   transform: scale(1.3); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .enm-chain-rotation[data-state="onduty"] .enm-chain-rotation-dot {
+        animation: none;
+    }
+}
+
+.enm-chain-rotation[data-state="inslate"] {
+    background: rgba(0, 122, 255, 0.10);
+    color: var(--state-syncing);
+}
+
+.enm-chain-rotation[data-state="nextslate"] {
+    background: rgba(60, 60, 67, 0.06);
+    color: var(--text-secondary);
+}
+
 /* ============================================================
    Sparkline — 0.2.0-alpha.1
    ============================================================

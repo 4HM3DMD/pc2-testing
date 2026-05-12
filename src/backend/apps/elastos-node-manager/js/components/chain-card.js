@@ -96,6 +96,11 @@
         // Sync poll — adaptive cadence. Drives the PowerCircle percent
         // and the primary-metric "X / Y" line.
         this._refreshSync();
+        // 0.2.0-alpha.7 — DPoS rotation poll (improvement #02). 60s
+        // cadence; rotation only changes on round boundaries so no need
+        // to hammer the RPC faster than that.
+        this._refreshRotation();
+        this._rotationTimer = setInterval(function () { self._refreshRotation(); }, 60_000);
         // Height-series sparkline. Subscribe once on mount; the service
         // bootstraps with a GET /history then layers SSE deltas on top.
         if (this.heightSeries) {
@@ -111,6 +116,7 @@
         this._destroyed = true;
         if (this._metricsTimer)    { clearInterval(this._metricsTimer);    this._metricsTimer = null; }
         if (this._uptimeTickTimer) { clearInterval(this._uptimeTickTimer); this._uptimeTickTimer = null; }
+        if (this._rotationTimer)   { clearInterval(this._rotationTimer);   this._rotationTimer = null; }
         if (this._syncTimer)       { clearTimeout(this._syncTimer);        this._syncTimer = null; }
         if (this._unsubscribe)     { this._unsubscribe(); this._unsubscribe = null; }
         if (this._unsubSse)        { this._unsubSse();    this._unsubSse = null; }
@@ -221,6 +227,17 @@
             });
             this._sparkline.mount(this.root);
         }
+
+        // 0.2.0-alpha.7 — DPoS rotation strip (improvement #02). Shows the
+        // operator's slot in the current BPoS arbiter slate + whether
+        // their key is on duty right now. Polled separately (60s cadence
+        // — rotation only flips on round boundaries, no need to poll
+        // faster than that). Hidden when chain is not alive OR not
+        // registered.
+        this._rotationStrip = document.createElement('div');
+        this._rotationStrip.className = 'enm-chain-rotation';
+        this._rotationStrip.hidden = true;
+        this.root.appendChild(this._rotationStrip);
 
         // 5. Stats strip — peers / version / uptime. Mirrors the
         // system-status hierarchy (value-on-top + tiny label below).
@@ -339,6 +356,30 @@
 
         // Stats strip.
         this._statFields.peers.textContent   = state && state.peers         != null ? String(state.peers) : '—';
+        // 0.2.0-alpha.7 — peer quality hover (improvement #12). Backend
+        // populates `peerSummary` from getnodestate.neighbors; surface as
+        // a title on the peers cell so a hover shows the breakdown the
+        // operator cares about (latency / version distribution / clock
+        // skew) without taking more space in the resting card.
+        var peersCell = this._statFields.peers && this._statFields.peers.parentNode;
+        if (peersCell) {
+            var ps = state && state.peerSummary;
+            if (ps && (ps.latencyMsAvg != null || (ps.versions && ps.versions.length) || ps.timeOffsetMaxAbsMs != null)) {
+                var lines = [];
+                if (ps.latencyMsAvg != null) lines.push('Avg ping: ' + ps.latencyMsAvg + ' ms');
+                if (ps.versions && ps.versions.length) {
+                    lines.push('Versions: ' + ps.versions.map(function (v) {
+                        return v.version + ' ×' + v.count;
+                    }).join(', '));
+                }
+                if (ps.timeOffsetMaxAbsMs != null) {
+                    lines.push('Max clock skew: ±' + ps.timeOffsetMaxAbsMs + ' ms');
+                }
+                peersCell.title = lines.join('\n');
+            } else {
+                peersCell.title = '';
+            }
+        }
         this._statFields.version.textContent = state && state.binaryVersion ? state.binaryVersion : '—';
         // 0.2.0-alpha.5 — uptime gets a local 1-second tick instead of
         // riding the 5s refresh poll. We anchor _uptimeBaseMs to
@@ -572,6 +613,87 @@
         this.root.dataset.sseState = sseState || 'open';
         if (!this._reconnectPill) return;
         this._reconnectPill.hidden = (sseState === 'open');
+    };
+
+    /**
+     * @private
+     * 0.2.0-alpha.7 — DPoS rotation poll. Polls /chains/:id/rotation
+     * every 60s (or once on mount). Renders the rotation strip:
+     *
+     *  - When the operator's pubkey is on duty: green "On duty now"
+     *  - When it's in the slate but not on duty: "Your slot — N of M",
+     *    plus a "next up at block X" countdown if their next-arbiter
+     *    index is known
+     *  - When it's NOT in the slate: hide the strip entirely (no
+     *    rotation context to surface)
+     *
+     * Hides on chain dead / not configured / not in slate. Errors
+     * silently — rotation visibility is decorative, not load-bearing.
+     */
+    ChainCard.prototype._refreshRotation = function () {
+        if (this._destroyed) return;
+        // Skip when the chain is dead — no rotation context.
+        if (this._lastCoarseState && (this._lastCoarseState === 'stopped'
+            || this._lastCoarseState === 'unconfigured')) {
+            if (this._rotationStrip) this._rotationStrip.hidden = true;
+            return;
+        }
+        var self = this;
+        this.api.get('/chains/' + this.chainId + '/rotation', { skipCache: true })
+            .then(function (data) {
+                if (self._destroyed || !self._rotationStrip) return;
+                self._applyRotation(data);
+            })
+            .catch(function () {
+                if (self._destroyed || !self._rotationStrip) return;
+                self._rotationStrip.hidden = true;
+            });
+    };
+
+    /**
+     * @private
+     * Render the rotation strip from a /rotation snapshot. Three states:
+     *   on-duty  — operator's pubkey === ondutyarbiter, green chip
+     *   in-slate — operator is in the slate but not on duty, info chip
+     *   absent   — not in slate; strip hidden
+     */
+    ChainCard.prototype._applyRotation = function (data) {
+        var strip = this._rotationStrip;
+        if (!strip) return;
+        if (!data || !data.enabled || !data.alive) {
+            strip.hidden = true;
+            return;
+        }
+        var inSlate     = (data.ourIndex >= 0);
+        var inNextSlate = (data.ourNextIndex >= 0);
+        if (!inSlate && !inNextSlate) {
+            // Not currently a BPoS arbiter. No rotation context to surface.
+            strip.hidden = true;
+            return;
+        }
+        strip.hidden = false;
+        strip.innerHTML = '';
+
+        var dot = document.createElement('span');
+        dot.className = 'enm-chain-rotation-dot';
+        strip.appendChild(dot);
+
+        var text = document.createElement('span');
+        text.className = 'enm-chain-rotation-text';
+        strip.appendChild(text);
+
+        if (data.isOnDuty) {
+            strip.dataset.state = 'onduty';
+            text.textContent = 'On duty now · signing the current block';
+        } else if (inSlate) {
+            strip.dataset.state = 'inslate';
+            text.textContent = 'Your slot · '
+                + (data.ourIndex + 1) + ' of ' + data.rotationLength;
+        } else {
+            strip.dataset.state = 'nextslate';
+            text.textContent = 'Queued for next round · '
+                + (data.ourNextIndex + 1) + ' of ' + (data.nextArbiters || []).length;
+        }
     };
 
     /** Build a button. Plain helper. */
