@@ -1839,18 +1839,41 @@ body[data-active-tab="identity"]::before {
 .enm-rpc-toggle-row,
 .enm-rpc-allow-row {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: var(--spacing-sm);
     flex-wrap: wrap;
 }
+.enm-rpc-toggle-row > label {
+    /* Keep radio+label pairs inline so toggle reads naturally even when
+       Save wraps below on narrow widths. */
+    margin-right: var(--spacing-sm);
+}
 .enm-rpc-allow-row .enm-chip-input {
-    flex: 1 1 320px;
-    min-width: 240px;
+    flex: 1 1 280px;
+    min-width: 200px;
 }
 .enm-rpc-allow-apply,
 .enm-rpc-toggle-save {
     flex: 0 0 auto;
     align-self: flex-start;
+}
+
+/* alpha.20 — chipInput uses inline styles for layout but theme variables
+   for color. These rules add hover/focus polish + safety overrides in
+   case the inline fallbacks ever resolve to white on a dark theme. */
+.enm-chip-input button:hover {
+    background: var(--bg-surface, #f5f7fa) !important;
+}
+.enm-chip-input input {
+    color: var(--text-primary, inherit) !important;
+}
+.enm-chip-input input:focus {
+    outline: none;
+    border-color: var(--accent, #007aff) !important;
+}
+.enm-chip-input input::placeholder {
+    color: var(--text-secondary, #6b7280);
+    opacity: 0.7;
 }
 
 /* URL rows — 3-column grid: label | value+copy | optional warn */
