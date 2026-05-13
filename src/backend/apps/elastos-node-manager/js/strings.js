@@ -402,6 +402,17 @@
             severity_warning: 'Warning',
             severity_critical: 'Critical',
             severity_healing: 'Self-healing',
+            // alpha.28.1 batch 38 — SR-only severity prefix (batch 7
+            // introduced these inline in notifications.js renderToast).
+            // Kept distinct from severity_* above because the SR
+            // version reads more naturally aloud ("Notice: …" beats
+            // "Info: …") and "Action needed" is clearer than the
+            // technical "Self-healing" when announced to a user who
+            // can't see the visual amber stripe.
+            sr_info:     'Notice',
+            sr_warning:  'Warning',
+            sr_critical: 'Critical',
+            sr_healing:  'Action needed',
             dismiss: 'Dismiss',
             ack: 'Acknowledge',
         },

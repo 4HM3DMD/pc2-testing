@@ -172,12 +172,20 @@
         // see the coloured stripe + (eventually) an icon once the shared
         // status-icon primitive lands. The mapping covers all four
         // severities so the span is never blank.
-        var sevWord = ({
-            info:     'Notice',
-            warning:  'Warning',
-            critical: 'Critical',
-            healing:  'Action needed',
-        })[sev] || 'Notice';
+        // alpha.28.1 batch 38 — sourced from strings.js notification.sr_*
+        // keys so a locale swap covers the SR severity prefix. Falls
+        // through enmTOrFallback to the inline default if strings.js
+        // failed to load. The four severities are exhaustive.
+        var sevKey = 'notification.sr_' + sev;
+        var sevWord = t(sevKey);
+        if (!sevWord || sevWord === sevKey) {
+            sevWord = ({
+                info:     'Notice',
+                warning:  'Warning',
+                critical: 'Critical',
+                healing:  'Action needed',
+            })[sev] || 'Notice';
+        }
         var sevTag = document.createElement('span');
         sevTag.className = 'enm-sr-only';
         sevTag.textContent = sevWord + ': ';
