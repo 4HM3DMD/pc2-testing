@@ -58,6 +58,18 @@
         this._stateHandlers = new Set();    // for 'open' / 'reconnecting' / 'closed'
         this._openTimer = null;
         this._connectAttempts = 0;
+        // alpha.28.1 batch 21 — debounce flag for _scheduleReconnect.
+        // The race-conditions audit (aaf1f87d B2) found that every
+        // subscribe/unsubscribe used to trigger a full _reconnect
+        // synchronously: close socket + reopen with the new topic list.
+        // App boot fires ~10 subscribes consecutively (chain-card +
+        // log-viewer + height-series + system-status + validator-card +
+        // notifications + ...), so the EventSource got closed + recreated
+        // 10 times before the first onopen landed. The race window between
+        // close+recreate dropped any event the previous socket was holding.
+        // This flag batches all sub/unsub deltas in the same microtask
+        // into ONE reconnect at the end of the tick.
+        this._reconnectScheduled = false;
     }
 
     /**
@@ -79,8 +91,10 @@
             this._handlers.set(topic, set);
         }
         set.add(cb);
-        // (Re)connect with the new topic list.
-        this._reconnect();
+        // (Re)connect with the new topic list. _scheduleReconnect
+        // batches multiple subscribe/unsubscribe calls in the same
+        // microtask into ONE network reconnect.
+        this._scheduleReconnect();
         var self = this;
         return function unsubscribe() {
             var s = self._handlers.get(topic);
@@ -89,10 +103,28 @@
                 if (s.size === 0) {
                     self._handlers.delete(topic);
                     self._topics.delete(topic);
-                    self._reconnect();
+                    self._scheduleReconnect();
                 }
             }
         };
+    };
+
+    /**
+     * @private
+     * Debounce the actual reconnect so back-to-back subscribe()/unsubscribe()
+     * calls in the same tick collapse into one socket recreation. Uses a
+     * microtask via Promise.resolve so the batching window is "this tick",
+     * which is exactly what we want — no operator-visible delay, no
+     * arbitrary setTimeout(0) lag.
+     */
+    EnmSse.prototype._scheduleReconnect = function () {
+        if (this._reconnectScheduled) { return; }
+        this._reconnectScheduled = true;
+        var self = this;
+        Promise.resolve().then(function () {
+            self._reconnectScheduled = false;
+            self._reconnect();
+        });
     };
 
     /**
