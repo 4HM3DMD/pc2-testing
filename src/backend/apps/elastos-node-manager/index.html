@@ -56,6 +56,28 @@
     </script>
 </head>
 <body>
+    <!-- alpha.28.1 batch 88 (Round-28 audit) — mirror the pre-paint
+         `<html data-app-size>` written by the head IIFE down to body
+         AS SOON AS body element exists. Placement matters: this script
+         is the very first child of <body>, before any visible elements
+         and before all the defer scripts queued in <head>. Inline non-
+         defer scripts block parsing when encountered, so by the time
+         the parser continues to the visible markup below, body already
+         carries the correct data-app-size attribute and CSS rules at
+         styles.css:4569+ (which target body[data-app-size="narrow"])
+         match on the very first paint frame — no flash.
+         The head IIFE comment at line 51 promised "set in a second
+         script after </body>" but that script was never shipped; this
+         is the fix. -->
+    <script>
+        (function () {
+            try {
+                var sz = document.documentElement.dataset.appSize;
+                if (sz) { document.body.dataset.appSize = sz; }
+            } catch (e) { /* fail open — app.js will mirror on first run */ }
+        })();
+    </script>
+
     <!-- a11y: skip link lands at the top of the Tab order so keyboard
          users can jump past the chrome (gear, theme, 5 tabs). Visible
          only on focus (see .enm-skip-link in styles.css). -->
@@ -171,24 +193,5 @@
     <script defer src="js/components/tools-update-card.js?ts=20260512c"></script>
     <script defer src="js/components/technical-view.js?ts=20260512f"></script>
     <script defer src="js/app.js?ts=20260513a"></script>
-
-    <!-- alpha.28.1 batch 88 (Round-28 audit) — the head IIFE writes
-         `html[data-app-size]` because body doesn't exist yet at that
-         point. The original alpha.25 comment promised this mirror script
-         "after </body>" but the script was never actually shipped, so
-         CSS rules keyed to `body[data-app-size="narrow"]` (4569+) never
-         matched until app.js's defer script ran AFTER first paint —
-         exactly the flash alpha.25 was supposed to prevent. This non-
-         defer script runs synchronously before paint completes and
-         mirrors the pre-computed size class to body so the CSS matches
-         the very first paint frame. -->
-    <script>
-        (function () {
-            try {
-                var sz = document.documentElement.dataset.appSize;
-                if (sz) { document.body.dataset.appSize = sz; }
-            } catch (e) { /* fail open — app.js will mirror on first run */ }
-        })();
-    </script>
 </body>
 </html>
