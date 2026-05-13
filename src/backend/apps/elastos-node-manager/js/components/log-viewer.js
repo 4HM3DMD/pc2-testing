@@ -60,6 +60,9 @@
         var title = document.createElement('h3');
         title.className = 'enm-log-title';
         title.textContent = t('log_viewer.heading') + ' — ' + this.chainId;
+        // a11y: heading truncates with text-overflow:ellipsis on narrow widths.
+        // Mirror the full label into title= so it stays readable.
+        title.title = title.textContent;
         head.appendChild(title);
 
         this._tailToggle = document.createElement('button');
@@ -109,8 +112,13 @@
 
         this._scroller = document.createElement('div');
         this._scroller.className = 'enm-log-scroller';
+        // a11y: role="log" alone is enough; pairing with aria-live="polite"
+        // forced screen readers to announce every SSE batch (up to 500
+        // lines/sec). The Live/Paused toggle is the operator's existing
+        // control over auto-scroll; AT users can read the scroller
+        // explicitly via the live-region role without flooding.
         this._scroller.setAttribute('role', 'log');
-        this._scroller.setAttribute('aria-live', 'polite');
+        this._scroller.setAttribute('aria-label', t('log_viewer.heading') + ' — ' + this.chainId);
 
         // If user scrolls up manually, pause auto-tail.
         this._scroller.addEventListener('scroll', function () {
