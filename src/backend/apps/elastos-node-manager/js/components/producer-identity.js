@@ -71,10 +71,49 @@
                 return;
             }
             self._render();
-        }).catch(function () {
+        }).catch(function (err) {
             if (self._destroyed) { return; }
-            self._renderEmpty();
+            // alpha.28.1 batch 50 (audit a3ca028e) — distinguish "no
+            // keystore yet" from "backend errored". Previously both
+            // paths called _renderEmpty which hides the card; an
+            // operator with a 500 / network outage / expired session
+            // saw the card vanish indistinguishably from a clean
+            // first-boot state. Now: 401 is suppressed (boot owns
+            // re-auth), 404 falls to _renderEmpty (legitimate
+            // not-yet-created), everything else falls to _renderError.
+            if (err && err.status === 401) { return; }
+            if (err && err.status === 404) {
+                self._renderEmpty();
+                return;
+            }
+            if (typeof self._renderError === 'function') {
+                self._renderError(err);
+            } else {
+                self._renderEmpty();
+            }
         });
+    };
+
+    /**
+     * @private
+     * Distinct from _renderEmpty (no keystore yet — silent). Surfaces
+     * a small inline error with a Retry affordance so the operator can
+     * tell a transient backend hiccup from a clean first-boot state.
+     */
+    ProducerIdentity.prototype._renderError = function (err) {
+        var self = this;
+        this.root.hidden = false;
+        var detail = (err && err.message) ? err.message : 'Couldn\'t reach the keystore service.';
+        this.root.innerHTML =
+            '<header class="enm-producer-identity-head">' +
+                '<h3>Producer identity</h3>' +
+            '</header>' +
+            '<p class="enm-stub">' + escapeAttr(detail) + '</p>' +
+            '<button type="button" class="enm-btn enm-btn-secondary enm-producer-retry">Retry</button>';
+        var btn = this.root.querySelector('.enm-producer-retry');
+        if (btn) {
+            btn.addEventListener('click', function () { self.refresh(); });
+        }
     };
 
     ProducerIdentity.prototype._renderEmpty = function () {
