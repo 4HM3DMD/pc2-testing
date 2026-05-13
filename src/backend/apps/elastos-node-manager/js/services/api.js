@@ -85,13 +85,45 @@
         if (!skipCache && this._inflight.has(key)) {
             return this._inflight.get(key);
         }
+        // alpha.28.1 batch 90 (Round-29 audit, HIGH) — invalidation-aware
+        // dedup. Previous shape stored a bare Promise in _inflight and
+        // unconditionally wrote its resolved value into the cache. If a
+        // mutation (POST/PUT/DELETE) called _invalidateRelated DURING
+        // the in-flight fetch, _invalidateRelated only touched _cache —
+        // _inflight was untouched, the resolver still wrote the now-
+        // pre-mutation response back to the cache, and the invalidation
+        // request was silently lost. Subsequent GETs would serve the
+        // stale value for the full cacheTtlMs (30s) until natural expiry.
+        //
+        // Fix: stamp the fetch start time on _inflight; in the resolver,
+        // skip the cache.set if a later invalidate has been recorded for
+        // this key (via _invalidatedAt). The caller still gets the value
+        // (they asked for the network round-trip and it's the freshest
+        // data we have right this instant), but the cache isn't poisoned.
         var self = this;
+        var startedAt = Date.now();
+        if (!skipCache) {
+            this._inflightStartedAt = this._inflightStartedAt || new Map();
+            this._inflightStartedAt.set(key, startedAt);
+        }
         var p = this._fetch('GET', path).then(function (result) {
-            self._cache.set(key, { value: result, expiresAt: Date.now() + self.cacheTtlMs });
-            self._pruneCache();
+            // Only cache if no invalidate landed for this key AFTER the
+            // fetch started. _invalidatedAt holds the most recent
+            // invalidate timestamp per cache prefix.
+            var invalidatedAt = self._invalidatedAt && self._invalidatedAt.get(key);
+            if (!invalidatedAt || invalidatedAt < startedAt) {
+                self._cache.set(key, { value: result, expiresAt: Date.now() + self.cacheTtlMs });
+                self._pruneCache();
+            }
             return result;
         }).finally(function () {
             self._inflight.delete(key);
+            if (self._inflightStartedAt) { self._inflightStartedAt.delete(key); }
+            // Clean up the per-key invalidate timestamp now that the
+            // dedup-window for this fetch has closed. Future fetches
+            // for the same key will see no stamp until the next
+            // invalidate (which is the correct cleared state).
+            if (self._invalidatedAt) { self._invalidatedAt.delete(key); }
         });
         if (!skipCache) { this._inflight.set(key, p); }
         return p;
@@ -247,6 +279,25 @@
         });
         for (var i = 0; i < toDrop.length; i += 1) {
             this._cache.delete(toDrop[i]);
+        }
+        // alpha.28.1 batch 90 — also record the invalidate timestamp for
+        // every key that MATCHES the prefix (whether it's in _cache or
+        // in _inflight). The in-flight resolver in get() compares its
+        // own startedAt against this timestamp; if invalidatedAt >
+        // startedAt, the resolver skips cache.set so the stale
+        // pre-mutation value doesn't poison the cache. Round-29 audit.
+        var now = Date.now();
+        this._invalidatedAt = this._invalidatedAt || new Map();
+        // Mark every currently-in-flight key that matches the same
+        // prefix. We don't bother stamping cached-but-completed keys
+        // (we already dropped them above).
+        if (this._inflight && this._inflight.size > 0) {
+            var self = this;
+            this._inflight.forEach(function (_p, key) {
+                if (key === exact || key.indexOf(prefix) === 0) {
+                    self._invalidatedAt.set(key, now);
+                }
+            });
         }
     };
 
