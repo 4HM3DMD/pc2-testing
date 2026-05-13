@@ -30,6 +30,24 @@
                 }
             } catch (e) { /* localStorage may be blocked; ignore */ }
         })();
+
+        // alpha.25 — set initial body[data-app-size] before first paint so CSS
+        // rules apply without a layout flash. JS later wires a ResizeObserver
+        // for dynamic updates as the iframe resizes.
+        //
+        // We use window.innerWidth — inside an iframe this returns the
+        // iframe's interior width (NOT the outer browser viewport). The
+        // @media (max-width: X) queries in CSS are broken in iframes because
+        // they measure the outer viewport; this attribute is iframe-correct.
+        (function () {
+            try {
+                var w = window.innerWidth || document.documentElement.clientWidth || 1200;
+                var size = w < 700 ? 'narrow' : (w < 1000 ? 'medium' : 'wide');
+                // body doesn't exist yet at this point, so stash on documentElement
+                // and the body version is set in a second script after </body>.
+                document.documentElement.dataset.appSize = size;
+            } catch (e) { /* ignore */ }
+        })();
     </script>
 </head>
 <body>
@@ -125,6 +143,6 @@
     <script src="js/components/settings-drawer.js?ts=20260506g"></script>
     <script src="js/components/tools-update-card.js?ts=20260512c"></script>
     <script src="js/components/technical-view.js?ts=20260512f"></script>
-    <script src="js/app.js?ts=20260512b"></script>
+    <script src="js/app.js?ts=20260513a"></script>
 </body>
 </html>

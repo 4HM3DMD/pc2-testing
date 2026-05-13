@@ -4843,3 +4843,134 @@ body[data-update-severity="major"] .enm-tech-tabs .enm-tab[data-tab="tools"]::be
     body, .enm-app, .enm-pane { overflow: visible !important; height: auto !important; }
     .enm-chain-card, .enm-card { break-inside: avoid; }
 }
+
+/* ============================================================
+   alpha.25 — responsive narrow-mode (JS-driven)
+   Triggered by body[data-app-size="narrow|medium|wide"] which a
+   ResizeObserver in app.js sets based on the iframe's actual width.
+   @media (max-width: X) queries are broken inside iframes (they
+   measure the OUTER browser viewport), so we use this JS-controlled
+   attribute. ResizeObserver fires on every iframe resize, so the
+   class follows actual iframe dimensions, not the outer browser.
+   ============================================================ */
+
+/* Top tabs (Status/Identity/Logs/Settings/Audit/EVM) — wrap + tighter padding */
+body[data-app-size="narrow"] .enm-tech-tabs,
+body[data-app-size="medium"] .enm-tech-tabs {
+    flex-wrap: wrap;
+    overflow-x: visible;
+    gap: 4px;
+    row-gap: 6px;
+}
+body[data-app-size="narrow"] .enm-tab {
+    padding: 5px 9px;
+    font-size: 12px;
+}
+body[data-app-size="narrow"] .enm-tab-pill {
+    display: none;
+}
+
+/* Settings tab — nuke nav rail, stack panes, no more 2-col grid */
+body[data-app-size="narrow"] .enm-settings {
+    display: block;
+    padding: var(--spacing-md);
+    container-type: normal;
+}
+body[data-app-size="narrow"] .enm-settings-nav {
+    display: none;
+}
+body[data-app-size="narrow"] .enm-settings-pane[hidden] {
+    display: block;
+}
+body[data-app-size="narrow"] .enm-settings-section {
+    margin: 0 0 var(--spacing-md);
+    padding: var(--spacing-lg);
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+}
+body[data-app-size="narrow"] .enm-settings-section:last-child {
+    margin-bottom: 0;
+}
+body[data-app-size="narrow"] .enm-settings-section > h3 {
+    margin: 0 0 var(--spacing-md);
+    font-size: 16px;
+    font-weight: 600;
+}
+
+/* Form rows: labels above inputs at narrow */
+body[data-app-size="narrow"] .enm-settings-row {
+    grid-template-columns: 1fr;
+    gap: var(--spacing-xs);
+}
+body[data-app-size="narrow"] .enm-settings-input,
+body[data-app-size="narrow"] .enm-settings select,
+body[data-app-size="narrow"] .enm-settings input[type="text"],
+body[data-app-size="narrow"] .enm-settings input[type="number"] {
+    width: 100%;
+}
+
+/* Action buttons: full-width, no awkward mid-word wrap */
+body[data-app-size="narrow"] .enm-settings-actions {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--spacing-sm);
+}
+body[data-app-size="narrow"] .enm-settings-actions .enm-btn {
+    width: 100%;
+    white-space: nowrap;
+}
+
+/* Radio label wrap for "Auto-detect / Manual override" etc */
+body[data-app-size="narrow"] .enm-settings-row label {
+    white-space: normal;
+    line-height: 1.4;
+}
+
+/* Wizard at narrow */
+body[data-app-size="narrow"] .enm-conversation {
+    padding: var(--spacing-md) var(--spacing-sm) var(--spacing-xl);
+}
+body[data-app-size="narrow"] .enm-conv-header,
+body[data-app-size="narrow"] .enm-conv-body {
+    max-width: 100%;
+}
+body[data-app-size="narrow"] .enm-conv-title {
+    font-size: 20px;
+    line-height: 1.25;
+}
+body[data-app-size="narrow"] .enm-btn-hero {
+    min-width: auto;
+    width: 100%;
+}
+
+/* Pane padding shrinks at narrow */
+body[data-app-size="narrow"] .enm-pane,
+body[data-app-size="narrow"] .enm-tech-pane {
+    padding: var(--spacing-xs);
+}
+
+/* Chain-card stats stack + buttons full-width at narrow */
+body[data-app-size="narrow"] .enm-chain-stats-strip {
+    grid-template-columns: 1fr;
+    gap: var(--spacing-sm);
+}
+body[data-app-size="narrow"] .enm-chain-actions {
+    flex-direction: column;
+    width: 100%;
+}
+body[data-app-size="narrow"] .enm-chain-actions .enm-btn {
+    width: 100%;
+}
+
+/* Drawer full-width at narrow */
+body[data-app-size="narrow"] .enm-drawer {
+    width: 100%;
+}
+
+/* Medium tier: tab wrap + slight pane padding shrink */
+body[data-app-size="medium"] .enm-pane {
+    padding: var(--spacing-sm);
+}
+
+/* Wide tier (default): no overrides — keeps the side-by-side nav rail layout */
