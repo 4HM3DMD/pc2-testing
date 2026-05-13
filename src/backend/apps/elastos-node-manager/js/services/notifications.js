@@ -109,12 +109,33 @@
         this._items.slice().forEach(function (t) { self.dismiss(t.id, true); });
     };
 
-    /** @private */
+    /** @private
+     *
+     * Severity-aware trim. The previous policy dropped the OLDEST
+     * item regardless of severity — a stale critical healing proposal
+     * could get evicted by a flood of info toasts that arrived after
+     * it. Round-7 notification-fatigue audit ad49e60e flagged this as
+     * "newest-wins risks dropping context".
+     *
+     * New policy:
+     *   1. While over cap AND any non-critical exists: drop oldest
+     *      non-critical first.
+     *   2. Only if EVERY visible toast is critical (rare — would mean
+     *      5+ concurrent CRITICAL alerts) fall through to dropping the
+     *      oldest critical.
+     */
     Notifications.prototype._trimVisible = function () {
         while (this._items.length > MAX_VISIBLE) {
-            var oldest = this._items.shift();
-            if (oldest.node.parentNode) {
-                oldest.node.parentNode.removeChild(oldest.node);
+            // Find oldest non-critical first.
+            var idx = -1;
+            for (var i = 0; i < this._items.length; i += 1) {
+                if (this._items[i].severity !== 'critical') { idx = i; break; }
+            }
+            // No non-criticals: fall through to oldest critical.
+            if (idx === -1) { idx = 0; }
+            var dropped = this._items.splice(idx, 1)[0];
+            if (dropped.node.parentNode) {
+                dropped.node.parentNode.removeChild(dropped.node);
             }
         }
     };
