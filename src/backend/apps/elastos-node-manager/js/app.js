@@ -455,11 +455,21 @@
                     self._openProposalById(payload.proposalId);
                     return;
                 }
+                // alpha.28.1 batch 19 (audit ad49e60e) — stable id
+                // derived from content. The previous fallback
+                // 'enm-sse-' + (payload.ts || Date.now()) used a fresh
+                // value on every push, so a backend retry loop emitting
+                // the same alert stacked toasts. Hash severity+summary
+                // to dedupe content-identical alerts in place; only
+                // genuinely new content gets a new toast.
+                var sseTitle = payload.summary || payload.title || 'Notification';
+                var sseId = payload.proposalId
+                    || ('enm-sse-' + payload.severity + ':' + sseTitle);
                 self.services.notifications.show({
                     severity: mapSeverity(payload.severity),
-                    title:    payload.summary || payload.title || 'Notification',
+                    title:    sseTitle,
                     body:     payload.detail  || payload.body  || '',
-                    id:       payload.proposalId || ('enm-sse-' + (payload.ts || Date.now())),
+                    id:       sseId,
                 });
             });
         }

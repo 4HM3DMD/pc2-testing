@@ -150,10 +150,21 @@
                 self._applyState({ chainId: self.chainId, state: 'unconfigured' });
                 return;
             }
-            self.notifications.warning(
-                'Failed to refresh ' + self.chainId,
-                err && err.message ? err.message : String(err),
-            );
+            // 401 → expired session, suppressed here (the boot path
+            // owns the re-auth UX); without this every 5s poll during
+            // an expired session stacks a fresh "Failed to refresh"
+            // warning. Matches the system-status pattern.
+            if (err && err.status === 401) { return; }
+            // alpha.28.1 batch 19 (audit ad49e60e) — stable id so a
+            // 10-minute backend outage doesn't stack 120 identical
+            // toasts. show() dedupes by id, updating the existing
+            // toast in place instead of mounting a fresh one.
+            self.notifications.show({
+                id: 'chain-refresh-fail-' + self.chainId,
+                severity: 'warning',
+                title: 'Failed to refresh ' + self.chainId,
+                body: err && err.message ? err.message : String(err),
+            });
         }).then(function () {
             self._refreshInFlight = null;
         }, function () {

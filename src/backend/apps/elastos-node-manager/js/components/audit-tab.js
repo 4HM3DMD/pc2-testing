@@ -117,7 +117,15 @@
             }
         }).catch(function (err) {
             if (self._destroyed || self._loadSeq !== mySeq) { return; }
-            self.notifications.warning('Failed to load audit log', err.message || String(err));
+            // alpha.28.1 batch 19 — stable id so rapid filter-Apply
+            // clicks against a slow backend stack into one updating
+            // toast instead of N stacked failures. (Audit ad49e60e.)
+            self.notifications.show({
+                id: 'audit-load-fail',
+                severity: 'warning',
+                title: 'Failed to load audit log',
+                body: err.message || String(err),
+            });
         });
     };
 
@@ -229,7 +237,12 @@
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
         }).catch(function (err) {
-            self.notifications.warning('Export failed', err.message || String(err));
+            self.notifications.show({
+                id: 'audit-export-fail',
+                severity: 'warning',
+                title: 'Export failed',
+                body: err.message || String(err),
+            });
         });
     };
 

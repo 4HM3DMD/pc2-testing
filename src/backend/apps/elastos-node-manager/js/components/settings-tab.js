@@ -51,7 +51,15 @@
             self._fillForm();
         }).catch(function (err) {
             if (self._destroyed) { return; }
-            self.notifications.warning('Failed to load config', err.message || String(err));
+            // alpha.28.1 batch 19 — stable id so repeated drawer-open
+            // attempts against a 500-ing backend coalesce into one
+            // updating toast. (Audit ad49e60e.)
+            self.notifications.show({
+                id: 'settings-config-load-fail',
+                severity: 'warning',
+                title: 'Failed to load config',
+                body: err.message || String(err),
+            });
         });
     };
 
