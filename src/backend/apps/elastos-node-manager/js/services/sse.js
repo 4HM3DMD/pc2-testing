@@ -29,6 +29,13 @@
     var ENDPOINT = (root.ENM_API_BASE ? root.ENM_API_BASE + '/events'
                                       : '/extensions/elastos-node-manager/api/events');
     var OPEN_TIMEOUT_MS = 10_000;
+    // alpha.28.1 batch 56 — reconnect attempt cap. 12 attempts at
+    // exponential backoff (10s, 20s, 40s, 60s × 9 more) ≈ 12 min of
+    // retries before giving up. Matches audit a1612c10's "cap at e.g.
+    // 6 in 60s, then back off to 60s intervals" but with a longer
+    // total horizon since the operator may legitimately be on a slow
+    // recovering network.
+    var MAX_RECONNECT_ATTEMPTS = 12;
 
     /**
      * Browser EventSource can't send Authorization headers. Read the
@@ -146,6 +153,19 @@
         this._emitState('closed');
     };
 
+    /**
+     * Manually reset the reconnect-attempts counter and try once more.
+     * Wired to the error-pane Retry button so an operator can recover
+     * from a 'closed' state without a full page reload after a long
+     * outage. Batch 56.
+     */
+    EnmSse.prototype.retry = function () {
+        this._connectAttempts = 0;
+        if (this._topics.size > 0) {
+            this._scheduleReconnect();
+        }
+    };
+
     /** @private */
     EnmSse.prototype._reconnect = function () {
         this._closeNative();
@@ -174,10 +194,35 @@
         // Defensive: if onopen doesn't fire within OPEN_TIMEOUT_MS, treat as a
         // failure and let the browser restart the connection itself (we just
         // close + recreate so we don't sit on a half-open socket).
+        //
+        // alpha.28.1 batch 56 (Round-8 audit a1612c10) — exponential
+        // backoff replaces the previous "retry every 10s forever"
+        // pattern. A corporate proxy stripping text/event-stream
+        // hammered enm-server every 10s indefinitely; now retries
+        // backoff 10s → 20s → 40s → 60s (capped). Emits 'closed' state
+        // after MAX_RECONNECT_ATTEMPTS so chain-card / log-viewer pills
+        // can surface the give-up state instead of "reconnecting…"
+        // forever.
+        var backoffMs;
+        if (self._connectAttempts <= 1) {
+            backoffMs = OPEN_TIMEOUT_MS;
+        } else {
+            // exponential: 10, 20, 40, then cap at 60s.
+            backoffMs = Math.min(OPEN_TIMEOUT_MS * Math.pow(2, self._connectAttempts - 1), 60_000);
+        }
         this._openTimer = setTimeout(function () {
             self._closeNative();
+            if (self._connectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+                // Give up loud — the consumer (log-viewer pill, chain-
+                // card reconnect badge) can render a give-up state
+                // rather than the "reconnecting…" lie. The operator
+                // can manually trigger a recovery via the Retry
+                // button in the error pane (batch 13).
+                self._emitState('closed');
+                return;
+            }
             self._reconnect();
-        }, OPEN_TIMEOUT_MS);
+        }, backoffMs);
 
         es.onopen = function () {
             clearTimeout(self._openTimer);
