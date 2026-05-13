@@ -332,76 +332,11 @@
             level_error: 'Error',
         },
 
-        wizard: {
-            welcome_heading: 'Welcome to Elastos Node Manager',
-            welcome_body:
-                'ENM downloads the official Elastos mainchain release from download.elastos.io, '
-                + 'generates your producer keystore on this server, writes a config, and runs '
-                + 'the node — exactly like the upstream node.sh installer, with a UI on top.',
-            step_os:      'Operating system check',
-            step_disk:    'Disk space check',
-            step_binary:  'Locate the ela binary',
-            step_keystore: 'Import your keystore',
-            step_complete: 'Confirm and start',
-            os_ok:        'Detected {distroId} {version}.',
-            os_fail:      '{reason}',
-            disk_ok:      '{freeGb} GB free — plenty of room.',
-            disk_warn:    '{freeGb} GB free — recommended minimum is 100 GB.',
-            disk_fail:    'Less than 50 GB free — Mainnet sync needs ~80 GB.',
-            binary_label: 'Path to your ela binary',
-            binary_placeholder: '/home/op/Elastos.ELA/ela',
-            binary_help:
-                'You can let ENM build ela for you (recommended), or paste a path you already built.',
-            binary_validating: 'Running --version to verify...',
-            binary_ok:    'Detected {version}.',
-            binary_fail:  '{reason}',
-            binary_auto_btn:    'Install ela for me (auto)',
-            binary_manual_btn:  'I already have ela built',
-            binary_manual_verify_btn: 'Verify path',
-            build_phase_idle:        'Ready',
-            build_phase_preparing:   'Preparing...',
-            build_phase_fetching_go: 'Setting up Go toolchain...',
-            build_phase_cloning:     'Downloading Elastos.ELA source...',
-            build_phase_building:    'Compiling ela (5-10 min)...',
-            build_phase_verifying:   'Verifying the new binary...',
-            build_phase_done:        'Done — ela ready',
-            build_phase_failed:      'Build failed',
-            build_phase_cancelled:   'Build cancelled',
-            build_cancel_btn:        'Cancel build',
-            build_retry_btn:         'Retry',
-            build_log_heading:       'Build output',
-            build_continue_btn:      'Continue',
-
-            step_keystore: 'Import keystore',
-            step_network:  'Network',
-            step_confirm:  'Confirm and start',
-
-            keystore_arbiter_label:  'Run as BPoS supernode (requires keystore)',
-            keystore_path_label:     'Path to keystore.dat',
-            keystore_path_placeholder: '/home/op/.elastos/keystore.dat',
-            keystore_password_label: 'Keystore password',
-            keystore_help:
-                'BPoS supernodes need a keystore — it holds the signing key that '
-                + 'lets your node validate blocks and claim rewards. Without one '
-                + 'you cannot register as a BPoS producer.',
-            keystore_save_btn:       'Save keystore',
-            keystore_ok:             'Keystore imported.',
-            keystore_fail:           'Failed to import keystore: {reason}',
-
-            network_help:
-                'BPoS peers dial this address to reach you. Auto-detect uses '
-                + 'checkip.amazonaws.com; pick manual if you have a static IP or DDNS.',
-            network_save_btn:        'Save network',
-            network_detect_btn:      'Detect now',
-
-            confirm_heading:         'Review and start',
-            confirm_role_arbiter:    'Role: BPoS supernode',
-            confirm_binary:          'Binary: {path}',
-            confirm_ip:              'External IP: {value}',
-            confirm_start_btn:       'Start mainchain',
-            confirm_finishing:       'Generating config and starting node...',
-            confirm_complete_no_start: 'Setup recorded. Click "Start" on the dashboard when ready.',
-        },
+        // alpha.28.1 batch 43 — `wizard:` namespace dropped (~50 keys).
+        // The v0.4 "Welcome Home" rewrite replaced the 9-step wizard
+        // with setup-conversation; the strings sat orphan ever since.
+        // Round-7 i18n audit (acbcec6b) verified zero JS callers.
+        // Batch 29 already deleted the matching CSS cluster.
 
         notification: {
             severity_info:    'Info',
