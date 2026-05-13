@@ -212,6 +212,20 @@
             this._fill.setAttribute('d',
                 d + ' L' + (W - PAD_X) + ',' + H + ' L' + PAD_X + ',' + H + ' Z'
             );
+            // alpha.28.1 batch 49 (audit adc48dd0) — refresh the
+            // aria-label + <title> here too. Previously this branch
+            // returned without updating, so AT users on a single-
+            // point series got the stale "Block height, last hour"
+            // placeholder forever.
+            var fmt = function (v) {
+                return (typeof v === 'number' && isFinite(v))
+                    ? v.toLocaleString()
+                    : String(v);
+            };
+            var only = pts[0].h;
+            var summary = this._ariaLabel + ': ' + fmt(only);
+            this.root.setAttribute('aria-label', summary);
+            if (this._titleEl) { this._titleEl.textContent = summary; }
             return;
         }
 
