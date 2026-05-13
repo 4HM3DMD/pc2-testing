@@ -465,6 +465,13 @@
         uh.textContent = t('settings.rpc_urls_section');
         urlSec.appendChild(uh);
 
+        // alpha.28.1 batch 88 (Round-28 finding #2) — pass notifications
+        // through the row helpers so credValueWithCopy's clipboard-API
+        // fallback can surface a warning toast. Previously the helper
+        // had no operator-feedback channel on copy failure: it selected
+        // the value silently, the operator saw nothing happen, and the
+        // rage-click UX kicked in. Mirrors batch 87's validator-card fix.
+        var nf = this.notifications;
         // Order: Same machine (always safe) → private LAN → public (most exposure last)
         if (d.localUrl) {
             urlSec.appendChild(rpcUrlRow(
@@ -472,6 +479,7 @@
                 d.localUrl,
                 null,
                 false,
+                nf,
             ));
         }
         if (Array.isArray(d.lanUrls)) {
@@ -487,7 +495,7 @@
                     ? t('settings.rpc_url_public_internet')
                     : t('settings.rpc_url_private_network');
                 var warn = kind === 'public' ? t('settings.rpc_url_public_warn') : null;
-                urlSec.appendChild(rpcUrlRow(lbl, u, warn, kind === 'public'));
+                urlSec.appendChild(rpcUrlRow(lbl, u, warn, kind === 'public', nf));
             });
         }
         p.appendChild(urlSec);
@@ -501,7 +509,7 @@
         ch.textContent = t('settings.rpc_creds_section') || 'Credentials';
         credSec.appendChild(ch);
 
-        credSec.appendChild(credRow(t('settings.rpc_field_user'), d.user));
+        credSec.appendChild(credRow(t('settings.rpc_field_user'), d.user, nf));
         credSec.appendChild(credPasswordRow(this, t));
         p.appendChild(credSec);
     };
@@ -1404,14 +1412,14 @@
      * Value is wrapped in credValueWithCopy() so the operator can copy
      * straight to clipboard without selecting.
      */
-    function rpcUrlRow(label, url, warning) {
+    function rpcUrlRow(label, url, warning, _isPublic, notifications) {
         var row = document.createElement('div');
         row.className = 'enm-rpc-url-row';
         var l = document.createElement('span');
         l.className = 'enm-rpc-url-label';
         l.textContent = label;
         row.appendChild(l);
-        row.appendChild(credValueWithCopy(url));
+        row.appendChild(credValueWithCopy(url, undefined, notifications));
         if (warning) {
             var w = document.createElement('p');
             w.className = 'enm-rpc-url-warning';
@@ -1441,14 +1449,14 @@
         } catch (_e) { return 'public'; }
     }
 
-    function credRow(labelText, value) {
+    function credRow(labelText, value, notifications) {
         var wrap = document.createElement('div');
         wrap.className = 'enm-rpc-creds-row';
         var l = document.createElement('span');
         l.className = 'enm-rpc-creds-label';
         l.textContent = labelText;
         wrap.appendChild(l);
-        wrap.appendChild(credValueWithCopy(value == null ? '' : String(value)));
+        wrap.appendChild(credValueWithCopy(value == null ? '' : String(value), undefined, notifications));
         return wrap;
     }
 
@@ -1469,7 +1477,9 @@
         var shown = !!tab._creds.pwShown;
         var displayed = shown ? pw : pw.replace(/./g, '•');
 
-        wrap.appendChild(credValueWithCopy(pw, displayed));
+        // batch 88 — thread tab.notifications through so the credPassword
+        // path also gets the copy-fail toast, not just the URL paths.
+        wrap.appendChild(credValueWithCopy(pw, displayed, tab.notifications));
 
         var toggle = document.createElement('button');
         toggle.type = 'button';
@@ -1485,9 +1495,10 @@
      * (the password row) show a masked version while still copying the real
      * value to the clipboard.
      */
-    function credValueWithCopy(value, display) {
+    function credValueWithCopy(value, display, notifications) {
         var line = document.createElement('span');
         line.className = 'enm-rpc-creds-value-wrap';
+        var t = root.enmTOrFallback;
 
         var span = document.createElement('span');
         span.className = 'enm-rpc-creds-value';
@@ -1497,7 +1508,7 @@
         var copyBtn = document.createElement('button');
         copyBtn.type = 'button';
         copyBtn.className = 'enm-btn enm-btn-secondary enm-rpc-creds-copy';
-        copyBtn.textContent = root.enmTOrFallback('settings.rpc_copy');
+        copyBtn.textContent = t('settings.rpc_copy');
         // a11y: every copy button needs an explicit label so screen
         // readers don't announce just the generic "Copy" string. The
         // adjacent <span> holds the actual displayed (often masked)
@@ -1509,10 +1520,15 @@
         // copy sites. Custom onFallback preserves the select-the-value
         // affordance so the operator can ⌘-C manually when the API is
         // unavailable. Round-6 clipboard-UX audit a8a932d2.
+        // alpha.28.1 batch 88 (Round-28 finding #2) — also surface a
+        // warning toast on fallback so the operator knows the clipboard
+        // API was blocked and the value is selected for manual copy.
+        // Previous shape selected silently → rage-click UX. Mirrors the
+        // validator-card pattern from batch 87.
         copyBtn.addEventListener('click', function () {
             root.enmCopyToClipboard(value, {
                 btn: copyBtn,
-                copiedLabel: root.enmTOrFallback('settings.rpc_copied'),
+                copiedLabel: t('settings.rpc_copied'),
                 resetMs: 1200,
                 onFallback: function () {
                     // Fallback: select the value so the operator can ctrl-c.
@@ -1521,6 +1537,12 @@
                     var sel = window.getSelection();
                     sel.removeAllRanges();
                     sel.addRange(range);
+                    if (notifications) {
+                        notifications.warning(
+                            t('settings.rpc_copy_fail_title'),
+                            t('settings.rpc_copy_fail_body')
+                        );
+                    }
                 },
             });
         });

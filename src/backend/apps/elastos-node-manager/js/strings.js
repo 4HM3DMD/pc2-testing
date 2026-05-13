@@ -138,6 +138,13 @@
                     cta_copied:       'Copied!',
                     ack:              "I've saved it somewhere safe",
                     skip_full:        'No password needed for follower nodes — moving on.',
+                    // alpha.28.1 batch 88 (Round-28 finding #2) — UX
+                    // parity with validator-card (batch 87): tell the
+                    // operator the API failed and how to recover via
+                    // manual select-and-copy. Previous shape selected
+                    // the password silently with no toast.
+                    copy_fail_title:  'Copy unavailable',
+                    copy_fail_body:   'Browser blocked clipboard access. The password is selected — press Ctrl-C (or ⌘-C on Mac) to copy.',
                 },
                 card_d: {
                     title_starting:  'Starting your ElastOS up…',
@@ -437,6 +444,13 @@
             rpc_hide_pw:        'Hide password',
             rpc_copy:           'Copy',
             rpc_copied:         'Copied',
+            // alpha.28.1 batch 88 (Round-28 finding #2) — UX parity with
+            // validator-card (batch 87): tell the operator when the
+            // clipboard API was blocked so they know the value is
+            // selected for manual copy. Previous shape selected silently
+            // with no toast.
+            rpc_copy_fail_title:'Copy unavailable',
+            rpc_copy_fail_body: 'Browser blocked clipboard access. The value is selected — press Ctrl-C (or ⌘-C on Mac) to copy.',
             rpc_field_user:     'RPC user',
             rpc_field_pw:       'RPC password',
             // alpha.28.1 batch 47 — rpc_field_local / lan / white +

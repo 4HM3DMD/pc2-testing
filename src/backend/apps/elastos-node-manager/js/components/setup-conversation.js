@@ -977,6 +977,21 @@
                             sel.addRange(range);
                         }
                     } catch (selErr) { /* ignore — operator can manually triple-click */ }
+                    // alpha.28.1 batch 88 (Round-28 finding #2) — also
+                    // surface a warning toast so the operator knows the
+                    // clipboard API was blocked and the password is
+                    // selected for manual copy. Previous shape selected
+                    // silently → operator saw nothing happen and rage-
+                    // clicked. Mirrors the validator-card pattern from
+                    // batch 87. The keystore-password reveal is a one-
+                    // shot ceremony so the missed signal is especially
+                    // costly here.
+                    if (self.notifications) {
+                        self.notifications.warning(
+                            t('friendly.setup.card_c.copy_fail_title'),
+                            t('friendly.setup.card_c.copy_fail_body')
+                        );
+                    }
                 },
             });
         });
