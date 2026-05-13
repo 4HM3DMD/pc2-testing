@@ -609,6 +609,38 @@
             disabled_already_active:   'Producer is already Active — nothing to do.',
             disabled_chain_running:    'Stop the chain first (data dir in use).',
         },
+
+        // alpha.28.1 batch 81 — tools-update CARD strings (the resting
+        // and update-available states). Modal-internal strings are
+        // deferred to batch 82+ since they're a larger block.
+        tools_update: {
+            head_resting:          'Binary update',
+            head_available:        'Binary update available',
+            badge_offline:         'offline',
+            badge_offline_title:   'GitHub unreachable; showing last known stable version baked into this ENM build.',
+            badge_stale:           'stale',
+            badge_stale_title:     'GitHub probe failed; showing the last successful result.',
+            // {version} fills with env.current. {time} fills with the
+            // relTime <span> HTML — caller splices raw since it includes
+            // markup; locale switch only touches the surrounding prose.
+            latest_release_one:    "You're on the latest release ({version}).",
+            latest_release_with_check:
+                "You're on the latest release ({version}). Last checked {time}.",
+            fallback_explainer:
+                'GitHub unreachable from this server; comparison uses the build-time '
+              + '<code>knownGoodElaVersion</code> baked into this ENM bundle.',
+            notes_summary:         'Release notes',
+            open_on_github:        'Open on GitHub →',
+            // {current} → installed version; {latest} → available version.
+            // Splices raw `<code>` markup; safe because both values flow
+            // through escapeHtml at the call site.
+            versions_line:         'Installed {current} → available {latest}',
+            update_btn:            'Update via shell',
+            update_help:           'Opens a copy-paste-ready command. Apply-in-place (no shell required) lands in alpha.11+.',
+            // Relative-time-suffix used by the "Last checked" span.
+            // {time} carries the human substring ("5 min ago").
+            released_when:         'released {time}',
+        },
     });
     // STRINGS is a deeply-frozen tree — see deepFreeze above.
 

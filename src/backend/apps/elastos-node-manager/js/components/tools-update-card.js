@@ -138,28 +138,43 @@
         // 0.2.0-alpha.9 — surface offline-mode + fallback source so the
         // operator knows when the version comparison is build-time stale
         // vs a fresh GitHub probe.
+        // alpha.28.1 batch 81 — strings sourced from strings.js
+        // tools_update.* so locale switching covers the resting card.
+        // Modal-internal strings are deferred to a follow-up batch.
+        var t = root.enmTOrFallback;
         var isFallback = env.source === 'fallback';
         var isStale = env.status === 'stale';
         var sourceBadge = isFallback
-            ? ' <span class="enm-tools-update-badge" title="GitHub unreachable; showing last known stable version baked into this ENM build.">offline</span>'
-            : (isStale ? ' <span class="enm-tools-update-badge enm-tools-update-badge-stale" title="GitHub probe failed; showing the last successful result.">stale</span>' : '');
+            ? ' <span class="enm-tools-update-badge" title="' + escapeAttr(t('tools_update.badge_offline_title')) + '">' + escapeHtml(t('tools_update.badge_offline')) + '</span>'
+            : (isStale ? ' <span class="enm-tools-update-badge enm-tools-update-badge-stale" title="' + escapeAttr(t('tools_update.badge_stale_title')) + '">' + escapeHtml(t('tools_update.badge_stale')) + '</span>' : '');
 
         if (!env.updateAvailable) {
             this.root.dataset.severity = 'none';
+            // Build the version + optional Last-checked clause. The
+            // relTime() output is trusted HTML (<time> wrapper); the
+            // strings.js template uses {version} + {time} placeholders
+            // so we can fill them at the call site after the locale
+            // string is resolved.
+            var versionTag = '<code>' + escapeHtml(env.current || 'unknown') + '</code>';
+            var statusLine;
+            if (env.lastCheckedAt) {
+                var timeTag = '<span class="enm-tools-update-reltime" data-ts="'
+                    + env.lastCheckedAt + '">' + relTime(env.lastCheckedAt) + '</span>';
+                statusLine = t('tools_update.latest_release_with_check', {
+                    version: versionTag,
+                    time: timeTag,
+                });
+            } else {
+                statusLine = t('tools_update.latest_release_one', { version: versionTag });
+            }
             this.root.innerHTML =
                 '<header class="enm-tools-update-head">'
-                +   '<h3>Binary update' + sourceBadge + '</h3>'
+                +   '<h3>' + escapeHtml(t('tools_update.head_resting')) + sourceBadge + '</h3>'
                 +   '<p class="enm-stub" style="margin:0;text-align:left;padding:0">'
-                +     'You\'re on the latest release '
-                +     '(<code>' + escapeHtml(env.current || 'unknown') + '</code>).'
-                +     (env.lastCheckedAt
-                        ? ' Last checked <span class="enm-tools-update-reltime" data-ts="' + env.lastCheckedAt + '">'
-                          + relTime(env.lastCheckedAt) + '</span>.'
-                        : '')
+                +     statusLine
                 +     (isFallback
                         ? '<br><span style="font-size:12px;color:var(--text-muted)">'
-                          + 'GitHub unreachable from this server; comparison uses the build-time '
-                          + '<code>knownGoodElaVersion</code> baked into this ENM bundle.'
+                          + t('tools_update.fallback_explainer')
                           + '</span>'
                         : '')
                 +   '</p>'
@@ -174,10 +189,10 @@
             + '</span>';
         var notes = env.releaseNotes
             ? '<details class="enm-tools-update-notes">'
-              + '<summary>Release notes</summary>'
+              + '<summary>' + escapeHtml(t('tools_update.notes_summary')) + '</summary>'
               + '<pre>' + escapeHtml(env.releaseNotes) + '</pre>'
               + (env.htmlUrl
-                ? '<a href="' + escapeAttr(safeExternalUrl(env.htmlUrl)) + '" target="_blank" rel="noopener noreferrer">Open on GitHub →</a>'
+                ? '<a href="' + escapeAttr(safeExternalUrl(env.htmlUrl)) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(t('tools_update.open_on_github')) + '</a>'
                 : '')
               + '</details>'
             : '';
@@ -190,29 +205,38 @@
         // without bloating the resting card.
         // Apply-in-place (real "Update now" with preflight + rollback)
         // lands in alpha.11+; this release is the UX shortcut.
+        // Versions line uses an ICU-style {current}/{latest} substitution
+        // so locale variants can re-order the two version chips around
+        // the arrow if needed. The <span aria-hidden="true">→</span>
+        // arrow is the typographic separator and stays in the template.
+        var versionsLine = t('tools_update.versions_line', {
+            current: '<code>' + escapeHtml(env.current || 'unknown') + '</code> <span aria-hidden="true">→</span>',
+            latest:  '<code>' + escapeHtml(env.latest) + '</code>',
+        });
+        var releasedWhen = '';
+        if (env.publishedAt) {
+            var pTime = '<span class="enm-tools-update-reltime" data-ts="'
+                + Date.parse(env.publishedAt) + '">' + relTime(Date.parse(env.publishedAt)) + '</span>';
+            releasedWhen = ' <span class="enm-tools-update-when">'
+                + t('tools_update.released_when', { time: pTime })
+                + '</span>';
+        }
         this.root.innerHTML =
             '<header class="enm-tools-update-head">'
             +   '<div class="enm-tools-update-head-row">'
-            +     '<h3>Binary update available' + sourceBadge + '</h3>'
+            +     '<h3>' + escapeHtml(t('tools_update.head_available')) + sourceBadge + '</h3>'
             +     severityChip
             +   '</div>'
             +   '<p class="enm-tools-update-versions">'
-            +     'Installed <code>' + escapeHtml(env.current || 'unknown') + '</code> '
-            +     '<span aria-hidden="true">→</span> '
-            +     'available <code>' + escapeHtml(env.latest) + '</code>'
-            +     (env.publishedAt
-                    ? ' <span class="enm-tools-update-when">'
-                      + 'released <span class="enm-tools-update-reltime" data-ts="' + Date.parse(env.publishedAt) + '">'
-                      + relTime(Date.parse(env.publishedAt)) + '</span>'
-                      + '</span>'
-                    : '')
+            +     versionsLine
+            +     releasedWhen
             +   '</p>'
             + '</header>'
             + notes
             + '<div class="enm-tools-update-action">'
-            +   '<button type="button" class="enm-btn enm-btn-primary enm-tools-update-btn">Update via shell</button>'
+            +   '<button type="button" class="enm-btn enm-btn-primary enm-tools-update-btn">' + escapeHtml(t('tools_update.update_btn')) + '</button>'
             +   '<p class="enm-tools-update-action-help">'
-            +     'Opens a copy-paste-ready command. Apply-in-place (no shell required) lands in alpha.11+.'
+            +     escapeHtml(t('tools_update.update_help'))
             +   '</p>'
             + '</div>';
 
