@@ -243,6 +243,11 @@
             self.close();
         }).catch(function (err) {
             if (self._closed) { return; }
+            // alpha.28.1 batch 53 — 401 suppression. Boot owns re-auth.
+            if (err && err.status === 401) {
+                self._refreshConfirmEnabled();
+                return;
+            }
             self.notifications.warning(
                 'Confirmation failed',
                 err && err.message ? err.message : String(err),
@@ -269,6 +274,13 @@
             try { self.onActioned('rejected'); } catch (_) { /* host hook threw */ }
             self.close();
         }).catch(function (err) {
+            // alpha.28.1 batch 53 — 401 suppression. Boot owns re-auth.
+            // Reject button stays enabled either way so the operator
+            // can retry once re-authed.
+            if (err && err.status === 401) {
+                self._rejectBtn.disabled = false;
+                return;
+            }
             self.notifications.warning(
                 'Reject failed',
                 err && err.message ? err.message : String(err),

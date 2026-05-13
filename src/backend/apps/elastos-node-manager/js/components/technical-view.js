@@ -604,12 +604,16 @@
             btn.textContent = 'Done';
             setTimeout(function () { btn.textContent = prev; btn.disabled = false; }, 1500);
         }).catch(function (err) {
+            btn.textContent = prev;
+            btn.disabled = false;
+            // alpha.28.1 batch 53 — 401 suppression. Boot path owns
+            // re-auth UX; surfacing the maintenance-action title on
+            // top is redundant.
+            if (err && err.status === 401) { return; }
             var detail = err && err.message ? err.message : String(err);
             if (self.notifications) {
                 self.notifications.warning(errPrefix, detail);
             }
-            btn.textContent = prev;
-            btn.disabled = false;
         });
     };
 
