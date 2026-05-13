@@ -96,6 +96,30 @@
      */
     ENMApp.prototype._wireErrorActions = function () {
         var self = this;
+        var t = root.enmTOrFallback;
+        // alpha.28.1 batch 40 — replace index.html's English defaults
+        // with i18n strings now that strings.js has loaded. The
+        // English defaults remain in markup as a fallback for the
+        // brief window before this runs.
+        if (this.els.errorRetry) {
+            var retryText = t('app.retry');
+            if (retryText && retryText !== 'app.retry') {
+                this.els.errorRetry.textContent = retryText;
+            }
+        }
+        if (this.els.errorReload) {
+            var reloadText = t('app.reload');
+            if (reloadText && reloadText !== 'app.reload') {
+                this.els.errorReload.textContent = reloadText;
+            }
+        }
+        var skipLink = document.querySelector('.enm-skip-link');
+        if (skipLink) {
+            var skipText = t('app.skip_link');
+            if (skipText && skipText !== 'app.skip_link') {
+                skipLink.textContent = skipText;
+            }
+        }
         if (this.els.errorRetry && !this.els.errorRetry.dataset.wired) {
             this.els.errorRetry.dataset.wired = '1';
             this.els.errorRetry.addEventListener('click', function () {

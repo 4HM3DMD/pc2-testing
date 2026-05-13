@@ -222,6 +222,12 @@
                 'This PC2 node has a different owner. Only the operator who claimed this '
                 + 'node can manage chains.',
             generic_error: 'Something went wrong',
+            // alpha.28.1 batch 40 — error pane recovery buttons +
+            // skip-link text. index.html ships English defaults; app
+            // boot replaces them with these keys when strings.js loads.
+            retry:      'Retry',
+            reload:     'Reload page',
+            skip_link:  'Skip to main content',
         },
 
         nav: {
