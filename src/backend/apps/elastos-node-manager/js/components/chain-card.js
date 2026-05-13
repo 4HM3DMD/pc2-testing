@@ -469,22 +469,37 @@
         if (coarse === 'stopped') {
             return t('chain_card.primary_metric_off');
         }
+        // Backend contract guard (audit a3e53e9a) — every site below
+        // calls `.toLocaleString()` directly on the height field.
+        // toLocaleString exists on strings AND numbers but the string
+        // overload doesn't group thousands, so a backend that ever
+        // typed heights as JSON strings (`"943210"`) would silently
+        // break the display. enmFormatNumber coerces via Number() and
+        // routes through the canonical NaN/Infinity → "—" guard.
+        var fmtH = (typeof window !== 'undefined' && window.enmFormatNumber)
+            ? function (v) {
+                var n = typeof v === 'number' ? v : Number(v);
+                return window.enmFormatNumber(n);
+            }
+            : function (v) {
+                return (v == null) ? '—' : String(v);
+            };
         if (syncSnapshot) {
             var basicallySynced = syncSnapshot.synced
                 || (typeof syncSnapshot.blocksBehind === 'number'
                     && syncSnapshot.blocksBehind <= TREAT_AS_SYNCED_THRESHOLD);
             if (basicallySynced && syncSnapshot.localHeight != null) {
-                return syncSnapshot.localHeight.toLocaleString();
+                return fmtH(syncSnapshot.localHeight);
             }
             if (syncSnapshot.networkHeight != null && syncSnapshot.localHeight != null) {
-                return syncSnapshot.localHeight.toLocaleString()
-                    + ' / ' + syncSnapshot.networkHeight.toLocaleString();
+                return fmtH(syncSnapshot.localHeight)
+                    + ' / ' + fmtH(syncSnapshot.networkHeight);
             }
             if (syncSnapshot.localHeight != null) {
-                return syncSnapshot.localHeight.toLocaleString();
+                return fmtH(syncSnapshot.localHeight);
             }
         }
-        if (height != null) return height.toLocaleString();
+        if (height != null) return fmtH(height);
         return '—';
     }
 

@@ -33,6 +33,20 @@
         this.root.className = 'enm-audit';
         this._offset = 0;
         this._rows = [];
+        // alpha.28.1 batch 16 — _destroyed flag + _loadSeq sequence number
+        // address two race-condition findings from audit aaf1f87d:
+        //   - destroyed-DOM update: pending fetches resolved into a
+        //     detached root after destroy() (we removed the root from
+        //     the DOM but the JS object lived on with in-flight
+        //     promises about to write into it).
+        //   - filter-change race (B3): clicking Apply or changing a
+        //     filter while a Load-more was in flight let the stale
+        //     fetch resolve and append OLD-filter rows into the
+        //     NEW-filter tbody. _loadSeq bumps on every refresh/load;
+        //     the resolving .then bails if its captured seq isn't
+        //     current anymore.
+        this._destroyed = false;
+        this._loadSeq = 0;
         this._renderShell();
     }
 
@@ -43,11 +57,18 @@
     };
 
     AuditTab.prototype.destroy = function () {
+        this._destroyed = true;
+        // Bump the seq so any in-flight fetch's resolver short-circuits.
+        this._loadSeq += 1;
         if (this.root.parentNode) { this.root.parentNode.removeChild(this.root); }
     };
 
     /** Refresh from offset 0. */
     AuditTab.prototype.refresh = function () {
+        // Bump the seq BEFORE clearing state so any in-flight Load-more
+        // resolves into a stale-seq check and bails before touching
+        // _rows / _tbody.
+        this._loadSeq += 1;
         this._offset = 0;
         this._rows = [];
         return this._loadMore(true);
@@ -57,9 +78,13 @@
     AuditTab.prototype._loadMore = function (clear) {
         var self = this;
         var t = root.enmTOrFallback;
+        // Capture the seq at call time. If refresh() / destroy() bumps
+        // it before our .then resolves, we're stale and must bail.
+        var mySeq = this._loadSeq;
         var qs = this._currentFilterQs();
         qs += (qs ? '&' : '') + 'limit=' + PAGE_SIZE + '&offset=' + this._offset;
         return this.api.get('/audit?' + qs, { skipCache: true }).then(function (data) {
+            if (self._destroyed || self._loadSeq !== mySeq) { return; }
             var entries = (data && data.entries) || [];
             if (clear) {
                 self._tbody.innerHTML = '';
@@ -91,6 +116,7 @@
                 self._emptyMsg.hidden = true;
             }
         }).catch(function (err) {
+            if (self._destroyed || self._loadSeq !== mySeq) { return; }
             self.notifications.warning('Failed to load audit log', err.message || String(err));
         });
     };

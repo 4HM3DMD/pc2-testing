@@ -26,6 +26,11 @@
         this.root = document.createElement('section');
         this.root.className = 'enm-system-status';
         this._timer = null;
+        // alpha.28.1 batch 16 — _destroyed flag so the 5s poll's pending
+        // .then can short-circuit if destroy() fires while a fetch is in
+        // flight. Without this the resolver mutates _cells in a removed
+        // DOM subtree (harmless visually, but pins component closures).
+        this._destroyed = false;
 
         this._renderShell();
     }
@@ -39,6 +44,7 @@
     };
 
     SystemStatus.prototype.destroy = function () {
+        this._destroyed = true;
         if (this._timer) { clearInterval(this._timer); this._timer = null; }
         if (this.root.parentNode) { this.root.parentNode.removeChild(this.root); }
     };
@@ -46,17 +52,27 @@
     SystemStatus.prototype.refresh = function () {
         var self = this;
         return this.api.get('/system/status', { skipCache: true }).then(function (s) {
+            if (self._destroyed) { return; }
             self._setCell('cpu',    formatCpu(s.cpu),    healthCpu(s.cpu));
             self._setCell('mem',    formatMem(s.memory), healthMem(s.memory));
             self._setCell('disk',   formatDisk(s.disk),  healthDisk(s.disk));
             self._setCell('os',     formatOs(s.os),      healthOs(s.os));
-            self._setCell('uptime', root.enmFormatUptime(s.node.uptimeSec), 'ok');
+            // Backend contract guard (audit a3e53e9a) — if /system/status
+            // ever returns without a `node` envelope (partial response,
+            // schema drift, proxy quirk) the previous `s.node.uptimeSec`
+            // crashed the entire refresh, dropping straight into the
+            // stale-everything catch path. Tolerant access keeps the
+            // rest of the cells rendering and just shows uptime as the
+            // dash placeholder.
+            var uptimeSec = (s && s.node) ? s.node.uptimeSec : null;
+            self._setCell('uptime', root.enmFormatUptime(uptimeSec), 'ok');
             // Clear any prior stale visual marker.
             Object.keys(self._cells).forEach(function (k) {
                 self._cells[k].classList.remove('enm-sys-stale');
             });
             self.root.dataset.stale = '0';
         }).catch(function (err) {
+            if (self._destroyed) { return; }
             // Mark every cell as stale so the operator can see the values
             // are not live anymore. CSS dims/strikes-through stale cells.
             Object.keys(self._cells).forEach(function (k) {

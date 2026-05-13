@@ -40,7 +40,27 @@
         try {
             var raw = localStorage.getItem(STORAGE_KEY);
             var saved = raw ? JSON.parse(raw) : {};
-            return Object.assign({}, DEFAULTS, saved);
+            // localStorage audit a8adaad6 — JSON.parse happily returns
+            // strings, numbers, arrays, and null. Object.assign with a
+            // non-plain-object source either silently pollutes the
+            // resulting prefs with indexed keys (arrays) or ignores
+            // them entirely (primitives). Either way the runtime
+            // assumption "prefs[k] is the typed value DEFAULTS[k]
+            // declares" is violated. Validate shape + per-key types
+            // so a malformed entry falls back to defaults rather
+            // than breaking toggles silently.
+            if (!saved || typeof saved !== 'object' || Array.isArray(saved)) {
+                saved = {};
+            }
+            var prefs = Object.assign({}, DEFAULTS);
+            Object.keys(DEFAULTS).forEach(function (k) {
+                var defaultVal = DEFAULTS[k];
+                if (Object.prototype.hasOwnProperty.call(saved, k)
+                    && typeof saved[k] === typeof defaultVal) {
+                    prefs[k] = saved[k];
+                }
+            });
+            return prefs;
         } catch (e) { return Object.assign({}, DEFAULTS); }
     }
 

@@ -22,6 +22,13 @@
         this.root = document.createElement('section');
         this.root.className = 'enm-settings';
         this._cfg = null;
+        // alpha.28.1 batch 16 — _destroyed flag so the GET /config
+        // resolver can't write into a detached form after destroy.
+        // Race-condition audit aaf1f87d flagged that every settings
+        // save (network, advanced, general, RPC toggle, whitelist)
+        // would leak fetch results into a removed root after teardown
+        // (low impact today but pins component closures).
+        this._destroyed = false;
         this._renderShell();
     }
 
@@ -32,15 +39,18 @@
     };
 
     SettingsTab.prototype.destroy = function () {
+        this._destroyed = true;
         if (this.root.parentNode) { this.root.parentNode.removeChild(this.root); }
     };
 
     SettingsTab.prototype.refresh = function () {
         var self = this;
         this.api.get('/config', { skipCache: true }).then(function (data) {
+            if (self._destroyed) { return; }
             self._cfg = data && data.config;
             self._fillForm();
         }).catch(function (err) {
+            if (self._destroyed) { return; }
             self.notifications.warning('Failed to load config', err.message || String(err));
         });
     };

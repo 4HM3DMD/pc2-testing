@@ -50,6 +50,9 @@
         this._pollTimer = null;
         this._rendered = false;
         this._lastPubkey = null;
+        // alpha.28.1 batch 16 — _destroyed flag so _poll's resolving
+        // Promise.all can't write into a detached DOM after destroy().
+        this._destroyed = false;
     }
 
     ValidatorRegistrationCard.prototype.mount = function (parent) {
@@ -62,6 +65,7 @@
     };
 
     ValidatorRegistrationCard.prototype.destroy = function () {
+        this._destroyed = true;
         if (this._pollTimer) { clearInterval(this._pollTimer); this._pollTimer = null; }
         if (this.root.parentNode) { this.root.parentNode.removeChild(this.root); }
     };
@@ -73,6 +77,7 @@
             this.api.get('/chains/' + this.chainId, { skipCache: true }).catch(function () { return null; }),
             this.api.get('/chains/' + this.chainId + '/producer', { skipCache: true }).catch(function () { return null; }),
         ]).then(function (results) {
+            if (self._destroyed) { return; }
             var chain    = results[0];
             var producer = results[1];
             self._reconcile(chain, producer);
