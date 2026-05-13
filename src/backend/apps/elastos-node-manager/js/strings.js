@@ -400,6 +400,23 @@
             ip_help:          'BPoS peers dial this address — leave blank for auto.',
             ip_detect_btn:    'Detect now',
             ip_save_btn:      'Save network settings',
+            // alpha.28.1 batch 85 (Round-25 finding #1) — Detect-now
+            // result text moved out of inline English. The four states
+            // mirror _detectIp's promise paths:
+            //   detecting     → before the GET resolves
+            //   detected      → ok+ip path
+            //   detect_failed → ok=false path or .catch with a reason
+            //   detect_unknown→ ok=false with no reason / generic error
+            ip_detecting:     'Detecting…',
+            ip_detected:      'Detected: {ip}',
+            ip_detect_failed: 'Detection failed: {reason}',
+            ip_detect_unknown:'unknown',
+            // alpha.28.1 batch 85 (Round-25 finding #2) — client-side
+            // validation parity for the Network save path. Sibling
+            // handlers _saveAdvanced/_saveGeneral validate before the
+            // PUT; _saveNetwork was the outlier letting the manual-mode
+            // empty value reach the backend.
+            err_ip_required:  'Enter an external IP or hostname (or switch to Auto-detect).',
             adv_log_level:    'Log level',
             adv_archive_mode: 'Archive mode (full history)',
             adv_memory_limit: 'Memory limit (MB)',

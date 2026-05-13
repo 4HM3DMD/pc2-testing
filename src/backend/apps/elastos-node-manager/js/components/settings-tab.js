@@ -645,25 +645,55 @@
     SettingsTab.prototype._detectIp = function () {
         // Settings → Network → "Detect now". Hits the system endpoint that
         // already wraps ExtIpResolver (see routes/system.js).
-        this._network.statusLine.textContent = 'Detecting...';
+        // alpha.28.1 batch 85 (Round-25 finding #1) — status line text
+        // routed through strings.js settings.ip_* keys so locale switches
+        // cover the Detect-now flow. Previous shape leaked four
+        // hardcoded English literals despite the rest of the file
+        // routing every operator-visible status string through enmT.
+        var t = root.enmTOrFallback;
+        this._network.statusLine.textContent = t('settings.ip_detecting');
         var self = this;
         this.api.get('/system/extip', { skipCache: true }).then(function (data) {
             if (data && data.ok && data.ip) {
-                self._network.statusLine.textContent = 'Detected: ' + data.ip;
+                self._network.statusLine.textContent = t('settings.ip_detected', { ip: data.ip });
             } else {
-                self._network.statusLine.textContent = 'Detection failed: ' + (data && data.reason ? data.reason : 'unknown');
+                var reason = (data && data.reason) ? data.reason : t('settings.ip_detect_unknown');
+                self._network.statusLine.textContent = t('settings.ip_detect_failed', { reason: reason });
             }
         }).catch(function (err) {
-            self._network.statusLine.textContent = 'Detection failed: ' + (err.message || String(err));
+            self._network.statusLine.textContent = t('settings.ip_detect_failed', {
+                reason: err.message || String(err),
+            });
         });
     };
 
     /** @private */
     SettingsTab.prototype._saveNetwork = function () {
+        var t = root.enmTOrFallback;
+        // alpha.28.1 batch 85 (Round-25 finding #2) — client-side
+        // validation parity with _saveAdvanced/_saveGeneral. Clear any
+        // stale aria-invalid from a previous failed save so screen
+        // readers don't keep announcing the old error as the operator
+        // edits.
+        this._network.manualInput.removeAttribute('aria-invalid');
         var mode = this._network.modeManual.checked ? 'manual' : 'auto';
         var manualValue = this._network.manualInput.value.trim();
+        // In manual mode we MUST have a value. The previous shape POSTed
+        // {mode:'manual', manualValue:''} to /config/network and let the
+        // operator wait for the round-trip error, with no inline
+        // validation message + no focus + no aria-invalid. Sibling
+        // handlers _saveAdvanced/_saveGeneral block on input validation
+        // before the PUT; _saveNetwork was the outlier.
+        if (mode === 'manual' && manualValue.length === 0) {
+            this._network.statusLine.textContent = t('settings.save_failed', {
+                error: t('settings.err_ip_required'),
+            });
+            this._network.manualInput.setAttribute('aria-invalid', 'true');
+            try { this._network.manualInput.focus({ preventScroll: true }); }
+            catch (e) { this._network.manualInput.focus(); }
+            return;
+        }
         var self = this;
-        var t = root.enmTOrFallback;
         var savingLabel = t('common.saving') || 'Saving…';
         return root.enmRunOnce(this._network.saveBtn, savingLabel, function () {
             return self.api.put('/config/network', { mode: mode, manualValue: manualValue })
