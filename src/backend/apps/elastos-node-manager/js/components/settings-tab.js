@@ -688,7 +688,7 @@
         var memMb = parseInt(this._adv.memory.value, 10);
         if (!Number.isInteger(memMb) || memMb < 512 || memMb > 32_768) {
             this._adv.statusLine.textContent = t(
-                'settings.save_failed', { error: 'Memory limit must be between 512 MB and 32 GB.' });
+                'settings.save_failed', { error: t('settings.err_memory_range') });
             this._adv.memory.setAttribute('aria-invalid', 'true');
             try { this._adv.memory.focus({ preventScroll: true }); } catch (e) { this._adv.memory.focus(); }
             return;
@@ -696,7 +696,7 @@
         var rpcUser = this._adv.rpcUser.value.trim();
         if (rpcUser.length === 0 || !/^[A-Za-z0-9]+$/.test(rpcUser)) {
             this._adv.statusLine.textContent = t(
-                'settings.save_failed', { error: 'RPC user must be letters and numbers only (no spaces or symbols).' });
+                'settings.save_failed', { error: t('settings.err_rpc_user') });
             this._adv.rpcUser.setAttribute('aria-invalid', 'true');
             try { this._adv.rpcUser.focus({ preventScroll: true }); } catch (e) { this._adv.rpcUser.focus(); }
             return;
@@ -732,7 +732,7 @@
         var retention = parseInt(this._gen.auditRetention.value, 10);
         if (!Number.isInteger(retention) || retention < 0 || retention > 3650) {
             this._gen.statusLine.textContent = t(
-                'settings.save_failed', { error: 'Audit retention must be between 0 and 3650 days (0 keeps audit logs forever).' });
+                'settings.save_failed', { error: t('settings.err_retention') });
             this._gen.auditRetention.setAttribute('aria-invalid', 'true');
             try { this._gen.auditRetention.focus({ preventScroll: true }); } catch (e) { this._gen.auditRetention.focus(); }
             return;

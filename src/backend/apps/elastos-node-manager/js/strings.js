@@ -505,6 +505,13 @@
             general_save_btn: 'Save preferences',
             saved:            'Saved.',
             save_failed:      'Save failed: {error}',
+            // alpha.28.1 batch 36 — three validation error messages
+            // previously inline-English in settings-tab._saveAdvanced /
+            // _saveGeneral. Moved into strings.js so a locale swap
+            // covers them.
+            err_memory_range: 'Memory limit must be between 512 MB and 32 GB.',
+            err_rpc_user:     'RPC user must be letters and numbers only (no spaces or symbols).',
+            err_retention:    'Audit retention must be between 0 and 3650 days (0 keeps audit logs forever).',
 
             heading_danger:    'Danger zone',
             danger_intro:      'Permanently wipe this app and all its data from your PC2.',
