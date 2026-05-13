@@ -133,8 +133,20 @@
         requestAnimationFrame(function () {
             self.root.classList.add('enm-drawer-open');
             // a11y: move focus into the drawer so keyboard users can act on it
-            // immediately. Closing button is the safest landing point.
-            var first = self.root.querySelector('button, input, [tabindex]');
+            // immediately.
+            // alpha.28.1 batch 65 (Round-18 audit) — align the open-time
+            // selector with the focus-trap selector below. The previous
+            // shape used `button, input, [tabindex]` without filtering
+            // disabled/-1 elements. If the drawer's first focusable was a
+            // disabled button (e.g. a Save button gated on form edit)
+            // focus landed there; then the trap's first/last computed
+            // from the filtered list pointed elsewhere, so the first Tab
+            // press teleported focus unpredictably (typically to body or
+            // out of the trap entirely). Now both queries use the same
+            // selector → first focus and the trap agree.
+            var first = self.root.querySelector(
+                'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])'
+            );
             if (first && typeof first.focus === 'function') { first.focus(); }
         });
         // ESC to close.
