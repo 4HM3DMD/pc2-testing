@@ -168,25 +168,40 @@
     // used to live in the value text ("free" suffix on disk, the
     // "/ NN GB" on RAM) moves to the cell label below.
 
+    // alpha.28.1 batch 62 (Round-18 audit) — route CPU load + memory
+    // percent through enmFormatNumber instead of calling .toFixed
+    // directly. The codebase already acknowledged backend type drift as
+    // a real risk (chain-card.js:530-544 height path explicitly Number()-
+    // coerces; utils.js:78 documents the pattern). System-status was the
+    // last hold-out: `cpu.loadAvg1m.toFixed(2)` and `mem.usedPct.toFixed(0)`
+    // crash with TypeError if the backend ever returns those as JSON
+    // strings ("1.83" instead of 1.83). The crash happens INSIDE the
+    // render fn (not the .catch), so it slips past refresh()'s catch and
+    // leaves the row stuck on stale cells until the next poll. formatNumber
+    // already coerces via Number() and guards isFinite → dash placeholder
+    // on failure, no crash.
+    function _fmt(n, decimals) {
+        var f = (typeof window !== 'undefined' && window.enmFormatNumber)
+            ? window.enmFormatNumber
+            : function (x, o) { return (typeof x === 'number' ? x : Number(x)).toFixed((o && o.decimals) || 0); };
+        return f(n, { decimals: decimals });
+    }
     function formatCpu(cpu) {
         if (!cpu) return '—';
-        var load = (cpu.loadAvg1m != null) ? cpu.loadAvg1m.toFixed(2) : '—';
+        var load = _fmt(cpu.loadAvg1m, 2);
         // "1.83 / 8" — load over core count.
-        return load + ' / ' + cpu.cores;
+        return load + ' / ' + (cpu.cores != null ? cpu.cores : '—');
     }
     function formatMem(mem) {
         if (!mem) return '—';
         // Just the percent. Total GB is now in the cell label below.
-        return mem.usedPct.toFixed(0) + '%';
+        return _fmt(mem.usedPct, 0) + '%';
     }
     function formatDisk(disk) {
         if (!disk) return '—';
         // Just the GB. "free" qualifier lives on the label. Locale grouping
         // (1,024 vs 1024) so multi-TB arrays don't render as a wall of digits.
-        var fmt = (typeof window !== 'undefined' && window.enmFormatNumber)
-            ? window.enmFormatNumber
-            : function (n) { return n.toFixed(0); };
-        return fmt(disk.freeGb, { decimals: 0 }) + ' GB';
+        return _fmt(disk.freeGb, 0) + ' GB';
     }
     function formatOs(os) {
         if (!os) return '—';
