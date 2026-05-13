@@ -233,11 +233,19 @@
             self.notifications.info('Confirmed', self.proposal.summary_action || self.proposal.summaryAction || '');
             self.close();
         }).catch(function (err) {
+            if (self._closed) { return; }
             self.notifications.warning(
                 'Confirmation failed',
                 err && err.message ? err.message : String(err),
             );
-            self._confirmBtn.disabled = false;
+            // Re-enable Confirm via the full validation path (cooldown +
+            // ack checkbox + anti-snipe length) instead of an
+            // unconditional disabled=false. Without _refreshConfirmEnabled
+            // the catch path could re-arm Confirm even when the cooldown
+            // is still running, the ack was unticked, or the anti-snipe
+            // input was cleared between click and error response.
+            // (Race-conditions audit aaf1f87d, finding B8.)
+            self._refreshConfirmEnabled();
         });
     };
 

