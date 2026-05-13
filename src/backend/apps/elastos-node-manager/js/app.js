@@ -25,7 +25,66 @@
         this.identity = null;
     }
 
+    /**
+     * alpha.25 — wire a ResizeObserver to the iframe's html element and write
+     * the current size class as body[data-app-size]. CSS rules selectoring on
+     * this attribute can override @media-query rules that don't fire correctly
+     * inside iframe (where @media measures the OUTER browser viewport instead
+     * of the iframe interior).
+     *
+     * Breakpoints chosen to match the design proposals doc:
+     *   narrow:  < 700px (settings nav rail collapses; tabs wrap; form rows stack)
+     *   medium:  700px..999px (tabs reduced, content stays full-width)
+     *   wide:    >= 1000px (default; nav rail visible; max-width caps lifted)
+     */
+    function setupResponsiveObserver() {
+        function classify(w) {
+            if (w < 700) return 'narrow';
+            if (w < 1000) return 'medium';
+            return 'wide';
+        }
+        function apply(width) {
+            if (!document.body) return;
+            var cls = classify(width);
+            if (document.body.dataset.appSize !== cls) {
+                document.body.dataset.appSize = cls;
+            }
+        }
+        // Inline script in index.html sets <html data-app-size> before first
+        // paint; mirror it to body so CSS can select either. body is
+        // guaranteed present by the time app.js runs (script lives below </body>).
+        var initial = document.documentElement.dataset.appSize;
+        if (!initial) {
+            apply(window.innerWidth || document.documentElement.clientWidth || 1200);
+        } else {
+            document.body.dataset.appSize = initial;
+        }
+        // Dynamic updates: ResizeObserver on documentElement reports the iframe
+        // interior width. This is the ONLY reliable size signal in PC2 — neither
+        // @media nor postMessage from PC2 gives us iframe width.
+        if (typeof root.ResizeObserver === 'function') {
+            var ro = new root.ResizeObserver(function (entries) {
+                for (var i = 0; i < entries.length; i++) {
+                    apply(entries[i].contentRect.width);
+                }
+            });
+            ro.observe(document.documentElement);
+        } else {
+            // Legacy fallback — poll window.resize. Loses fidelity vs ResizeObserver
+            // (only fires on outer browser resize, not iframe resize) but better
+            // than nothing.
+            window.addEventListener('resize', function () {
+                apply(window.innerWidth || document.documentElement.clientWidth);
+            });
+        }
+    }
+
     ENMApp.prototype.init = function () {
+        // alpha.25: install responsive observer FIRST so size class is set
+        // before any UI mounts. Otherwise components measure with the wrong
+        // class and render at the wrong breakpoint on first paint.
+        setupResponsiveObserver();
+
         this.els = {
             app:          document.getElementById('app'),
             spinner:      document.getElementById('enm-spinner'),
