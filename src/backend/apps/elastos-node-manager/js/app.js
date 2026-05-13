@@ -125,6 +125,15 @@
             this.els.errorRetry.addEventListener('click', function () {
                 if (self.els.error) { self.els.error.hidden = true; }
                 if (self.els.spinner) { self.els.spinner.hidden = false; }
+                // alpha.28.1 batch 57 — also reset the SSE reconnect-
+                // attempt counter so an operator who waited out a long
+                // outage doesn't have to also reload the page. The
+                // retry() method (batch 56) reschedules a reconnect
+                // if any topics are subscribed; safe no-op otherwise.
+                if (self.services && self.services.sse
+                    && typeof self.services.sse.retry === 'function') {
+                    try { self.services.sse.retry(); } catch (_) { /* ignore */ }
+                }
                 self.init();
             });
         }
