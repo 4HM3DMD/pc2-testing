@@ -101,7 +101,20 @@
             this._metricsTimer = setInterval(function () { self.refresh(); }, 5_000);
         }
         // Sync poll — adaptive cadence. Drives the PowerCircle percent
-        // and the primary-metric "X / Y" line.
+        // and the primary-metric "X / Y" line. alpha.28.1 batch 31 —
+        // visibility listener wakes the chained-setTimeout chain on
+        // resume (the _syncPausedByHidden flag is set in _refreshSync
+        // when document.hidden at scheduling time).
+        this._onSyncVisChange = function () {
+            if (self._destroyed) { return; }
+            if (typeof document !== 'undefined' && !document.hidden && self._syncPausedByHidden) {
+                self._syncPausedByHidden = false;
+                self._refreshSync();
+            }
+        };
+        if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+            document.addEventListener('visibilitychange', this._onSyncVisChange);
+        }
         this._refreshSync();
         // 0.2.0-alpha.7 — DPoS rotation poll (improvement #02). 60s
         // cadence; rotation only changes on round boundaries so no need
@@ -134,6 +147,14 @@
         if (this._rotationPauser)  { try { this._rotationPauser.stop(); } catch (_) { /* idempotent */ } this._rotationPauser = null; }
         if (this._rotationTimer)   { clearInterval(this._rotationTimer);   this._rotationTimer = null; }
         if (this._syncTimer)       { clearTimeout(this._syncTimer);        this._syncTimer = null; }
+        if (this._onSyncVisChange) {
+            try {
+                if (typeof document !== 'undefined' && typeof document.removeEventListener === 'function') {
+                    document.removeEventListener('visibilitychange', this._onSyncVisChange);
+                }
+            } catch (_) { /* swallow */ }
+            this._onSyncVisChange = null;
+        }
         if (this._unsubscribe)     { this._unsubscribe(); this._unsubscribe = null; }
         if (this._unsubSse)        { this._unsubSse();    this._unsubSse = null; }
         if (this._unsubHeight)     { this._unsubHeight(); this._unsubHeight = null; }
@@ -632,6 +653,19 @@
             self._applySyncSnapshot(null);
         }).then(function () {
             if (self._destroyed || !self.root || !self.root.isConnected) return;
+            // alpha.28.1 batch 31 — pause adaptive sync poll when the
+            // tab is backgrounded. The chained-setTimeout pattern
+            // doesn't fit the standard enmUseVisibilityPause helper
+            // (which is setInterval-shaped), so we inline:
+            //   - hidden: set a paused flag, skip scheduling.
+            //   - visible (handled by _onSyncVisibilityChange wired at
+            //     mount): clear flag + re-enter _refreshSync to catch
+            //     up immediately.
+            // Saves up to 360 fetches/hr while syncing on a hidden tab.
+            if (typeof document !== 'undefined' && document.hidden) {
+                self._syncPausedByHidden = true;
+                return;
+            }
             var nextMs = (self._lastCoarseState === 'syncing') ? 10_000 : 60_000;
             self._syncTimer = setTimeout(function () { self._refreshSync(); }, nextMs);
         });
