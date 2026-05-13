@@ -557,8 +557,8 @@
             // operator they're offline. Saves a misleading docker-logs
             // pointer when the real problem is their wifi.
             if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-                title  = 'You appear to be offline';
-                detail = 'Your browser reports no network connection. Reconnect and click Retry.';
+                title  = t('app.offlineTitle');
+                detail = t('app.offlineHelp');
             } else {
                 title  = t('app.backendUnreachable');
                 detail = t('app.backendHelp') + (err.message ? ' (' + err.message + ')' : '');

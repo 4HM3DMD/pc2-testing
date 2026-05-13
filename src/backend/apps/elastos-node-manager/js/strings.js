@@ -211,6 +211,11 @@
             backendHelp:
                 'The enm-server sidecar at :4180 is not responding. On the host, run '
                 + '`docker compose logs enm-server` to investigate.',
+            // alpha.28.1 — offline override surfaced by app._showError when
+            // navigator.onLine === false. Kept in the same family so the
+            // copy can move together when localised.
+            offlineTitle: 'You appear to be offline',
+            offlineHelp: 'Your browser reports no network connection. Reconnect and click Retry.',
             unauthenticatedHelp:
                 'Your PC2 session has expired. Reload the dashboard and sign in again.',
             forbiddenHelp:

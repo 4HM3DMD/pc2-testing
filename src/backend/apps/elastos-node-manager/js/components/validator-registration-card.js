@@ -228,7 +228,11 @@
 
             + '</ol>';
 
-        // Copy button — clipboard or selection fallback.
+        // Copy button — uses the same feature-detect + notifications
+        // fallback as the other four copy sites (producer-identity,
+        // settings-tab credValueWithCopy, setup-conversation, tools-
+        // update-card). The previous shape skipped notifications.warning
+        // on the missing-API path, dropping silently to selectInto.
         var copyBtn  = this.root.querySelector('#enm-vc-copy');
         var pubkeyEl = this.root.querySelector('#enm-vc-pubkey');
         copyBtn.addEventListener('click', function () {
@@ -239,34 +243,44 @@
                 copyBtn.textContent = t('validator_card.copied');
                 setTimeout(function () { copyBtn.textContent = prev; }, 1200);
             };
-            if (navigator.clipboard && navigator.clipboard.writeText) {
-                navigator.clipboard.writeText(text).then(done).catch(function () {
-                    selectInto(pubkeyEl);
-                });
-            } else {
+            var hasClipboard = !!(navigator && navigator.clipboard && navigator.clipboard.writeText);
+            if (!hasClipboard) {
                 selectInto(pubkeyEl);
+                if (self.notifications) {
+                    self.notifications.warning('Copy unavailable', 'Browser blocked clipboard access. Public key is selected — press ⌘/Ctrl-C to copy.');
+                }
+                return;
             }
+            navigator.clipboard.writeText(text).then(done).catch(function () {
+                selectInto(pubkeyEl);
+            });
         });
 
         // Activate — calls the same endpoint Settings → Tools uses, with
         // the same chain-alive precondition guard at the server side.
+        // Routed through enmRunOnce (batch 6) so a double-click can't
+        // POST /bpos/activate twice — was the only mutating button in
+        // the codebase still using a hand-rolled disabled toggle.
         var activateBtn = this.root.querySelector('#enm-vc-activate');
         var activateStatus = this.root.querySelector('#enm-vc-activate-status');
+        var runOnce = root.enmRunOnce;
         activateBtn.addEventListener('click', function () {
-            activateBtn.disabled = true;
-            activateBtn.textContent = t('validator_card.activate_btn_active');
-            activateStatus.textContent = '';
-            self.api.post('/chains/' + self.chainId + '/bpos/activate').then(function () {
-                activateStatus.textContent = t('validator_card.activate_ok');
-                activateStatus.style.color = 'var(--success)';
-                // Force a fast re-poll so the card hides quickly when
-                // producer.state flips to Active on chain.
-                self._poll();
-            }).catch(function (err) {
-                activateStatus.textContent = (err && err.message) || t('common.failed');
-                activateStatus.style.color = 'var(--error)';
-                activateBtn.disabled = false;
-                activateBtn.textContent = t('validator_card.activate_btn');
+            var activatingLabel = t('validator_card.activate_btn_active');
+            var fallback = function (fn) { return fn(); };
+            // Always call enmRunOnce when available; degrade gracefully
+            // if the helper failed to load.
+            (runOnce || fallback)(activateBtn, activatingLabel, function () {
+                activateStatus.textContent = '';
+                return self.api.post('/chains/' + self.chainId + '/bpos/activate').then(function () {
+                    activateStatus.textContent = t('validator_card.activate_ok');
+                    activateStatus.style.color = 'var(--success)';
+                    // Force a fast re-poll so the card hides quickly when
+                    // producer.state flips to Active on chain.
+                    self._poll();
+                }).catch(function (err) {
+                    activateStatus.textContent = (err && err.message) || t('common.failed');
+                    activateStatus.style.color = 'var(--error)';
+                });
             });
         });
     };
