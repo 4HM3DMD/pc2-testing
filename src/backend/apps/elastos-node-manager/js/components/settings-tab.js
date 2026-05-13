@@ -143,6 +143,14 @@
         this._network.manualInput.type = 'text';
         this._network.manualInput.className = 'enm-settings-input';
         this._network.manualInput.placeholder = t('settings.ip_help');
+        // a11y: placeholder is not a label (WCAG 3.3.2). Add aria-label so
+        // screen-reader users learn what the field expects. The technical
+        // attrs stop iOS from auto-capitalizing / spell-checking an IP.
+        this._network.manualInput.setAttribute('aria-label', t('settings.ip_mode_manual'));
+        this._network.manualInput.setAttribute('autocomplete', 'off');
+        this._network.manualInput.setAttribute('spellcheck', 'false');
+        this._network.manualInput.setAttribute('autocapitalize', 'off');
+        this._network.manualInput.setAttribute('autocorrect', 'off');
         section.appendChild(this._network.manualInput);
 
         var actions = document.createElement('div'); actions.className = 'enm-settings-actions';
@@ -154,6 +162,8 @@
 
         this._network.statusLine = document.createElement('p');
         this._network.statusLine.className = 'enm-settings-status';
+        // a11y: announce save / validation results to screen readers (4.1.3).
+        this._network.statusLine.setAttribute('role', 'status');
         section.appendChild(this._network.statusLine);
 
         this._sections.network = section;
@@ -194,6 +204,8 @@
 
         this._adv.statusLine = document.createElement('p');
         this._adv.statusLine.className = 'enm-settings-status';
+        // a11y: announce save / validation results to screen readers (4.1.3).
+        this._adv.statusLine.setAttribute('role', 'status');
         section.appendChild(this._adv.statusLine);
 
         this._sections.advanced = section;
@@ -241,6 +253,11 @@
         this._creds.panel.className = 'enm-rpc-creds-panel';
         this._creds.statusLine.className = 'enm-settings-status';
         this._creds.whiteStatus.className = 'enm-settings-status';
+        // a11y: announce save / validation results to screen readers (4.1.3).
+        this._creds.statusLine.setAttribute('role', 'status');
+        this._creds.whiteStatus.setAttribute('role', 'status');
+        this._creds.toggleStatus.className = 'enm-settings-status';
+        this._creds.toggleStatus.setAttribute('role', 'status');
 
         section.appendChild(this._creds.panel);
         section.appendChild(this._creds.statusLine);
@@ -481,6 +498,8 @@
 
         this._gen.statusLine = document.createElement('p');
         this._gen.statusLine.className = 'enm-settings-status';
+        // a11y: announce save / validation results to screen readers (4.1.3).
+        this._gen.statusLine.setAttribute('role', 'status');
         section.appendChild(this._gen.statusLine);
 
         this._sections.general = section;
@@ -642,6 +661,10 @@
         this._danger.controls.className = 'enm-danger-controls';
         this._danger.controls.style.display = 'none';
         this._danger.statusLine.className = 'enm-settings-status';
+        // a11y: danger-zone status is delivered via role="alert" because the
+        // outcomes (wipe applied / declined / failed) are critical events
+        // the operator should not miss.
+        this._danger.statusLine.setAttribute('role', 'alert');
 
         // Build the hidden controls once and toggle visibility, so the form
         // state survives an open/close cycle.
@@ -689,7 +712,16 @@
         this._danger.confirmInput.type = 'text';
         this._danger.confirmInput.className = 'enm-settings-input';
         this._danger.confirmInput.placeholder = t('settings.danger_confirm_ph');
+        // a11y: placeholder is not a label (3.3.2). The danger-zone field
+        // requires typing an exact phrase to confirm a destructive action;
+        // mark it required + name it for screen readers + prevent iOS
+        // autocaps from interfering with the literal-string match.
+        this._danger.confirmInput.setAttribute('aria-label', t('settings.danger_confirm_h'));
+        this._danger.confirmInput.setAttribute('aria-required', 'true');
+        this._danger.confirmInput.required = true;
         this._danger.confirmInput.autocomplete = 'off';
+        this._danger.confirmInput.autocapitalize = 'characters';
+        this._danger.confirmInput.setAttribute('autocorrect', 'off');
         this._danger.confirmInput.spellcheck = false;
         this._danger.confirmInput.addEventListener('input',
             this._refreshDangerEnabled.bind(this));
@@ -919,9 +951,20 @@
         var newInput = document.createElement('input');
         newInput.type = 'text';
         newInput.placeholder = '127.0.0.1 or 192.168.0.0/24';
+        // a11y: placeholder is not a label (3.3.2). aria-label names the
+        // field. Technical-keyboard attrs prevent iOS autocaps/autocorrect
+        // from mangling IP entry.
+        newInput.setAttribute('aria-label', 'Add IP address or CIDR to whitelist');
+        newInput.setAttribute('autocomplete', 'off');
+        newInput.setAttribute('autocapitalize', 'off');
+        newInput.setAttribute('autocorrect', 'off');
+        newInput.spellcheck = false;
         newInput.style.flex = '1';
         newInput.style.minWidth = '0';
-        newInput.style.padding = '4px 8px';
+        // a11y: was 21px tall (fails WCAG 2.5.5 24×24). Bump padding + add
+        // explicit min-height so the field clears 28px.
+        newInput.style.padding = '6px 10px';
+        newInput.style.minHeight = '28px';
         newInput.style.border = '1px solid var(--border-color, #cfd6dd)';
         newInput.style.borderRadius = '4px';
         newInput.style.background = 'transparent';
@@ -935,7 +978,9 @@
         addBtn.style.display = 'inline-flex';
         addBtn.style.alignItems = 'center';
         addBtn.style.justifyContent = 'center';
-        addBtn.style.padding = '4px 10px';
+        // a11y: was ~17px tall (fails WCAG 2.5.5). 28px clears AA target size.
+        addBtn.style.padding = '6px 12px';
+        addBtn.style.minHeight = '28px';
         addBtn.style.fontSize = '13px';
         addBtn.style.lineHeight = '1';
         addBtn.style.fontFamily = 'inherit';
@@ -996,10 +1041,11 @@
                     remove.style.display = 'inline-flex';
                     remove.style.alignItems = 'center';
                     remove.style.justifyContent = 'center';
-                    remove.style.width = '16px';
-                    remove.style.height = '16px';
+                    // a11y: was 16×16 (fails WCAG 2.5.5 24×24).
+                    remove.style.width = '24px';
+                    remove.style.height = '24px';
                     remove.style.padding = '0';
-                    remove.style.fontSize = '14px';
+                    remove.style.fontSize = '16px';
                     remove.style.lineHeight = '1';
                     remove.style.fontFamily = 'inherit';
                     remove.style.border = 'none';

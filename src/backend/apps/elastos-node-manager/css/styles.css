@@ -5048,6 +5048,16 @@ body[data-app-size="narrow"] .enm-chain-actions {
 }
 body[data-app-size="narrow"] .enm-chain-actions .enm-btn {
     width: 100%;
+    /* a11y/narrow: parent's column flex inherits the 110px min-width from
+       the baseline rule; reset so buttons never overflow at &lt;180px iframe. */
+    min-width: 0;
+}
+
+/* alpha.28.1 — narrow-mode chains-grid: baseline uses
+   minmax(360px, 720px) which forces horizontal scroll under 360px.
+   Collapse to a single column at narrow. */
+body[data-app-size="narrow"] .enm-chains-grid {
+    grid-template-columns: 1fr;
 }
 
 /* Drawer full-width at narrow */
@@ -5301,4 +5311,44 @@ body[data-app-size="narrow"] .enm-conv-actions .enm-btn {
     top: var(--spacing-sm);
     outline: none;
     box-shadow: var(--focus-ring);
+}
+
+/* ============================================================
+   Forced-colors mode (Windows High Contrast, etc.)
+   ============================================================
+   In forced-colors, the OS overrides every background-color and
+   text-color with system tokens. Components that previously
+   conveyed state via background fill collapse into shape-identical
+   pills. Restore the cue with a 1px solid CanvasText edge plus a
+   per-state glyph carried in the existing ::before pseudo.
+*/
+
+@media (forced-colors: active) {
+    /* Borders become visible system edges instead of low-alpha rgba. */
+    .enm-chain-card,
+    .enm-chain-badge,
+    .enm-producer-binding-chip,
+    .enm-chain-rotation,
+    .enm-toast,
+    .enm-proposal-card,
+    .enm-tools-update-modal,
+    .enm-drawer {
+        border: 1px solid CanvasText;
+    }
+
+    /* Disabled buttons gain an explicit visual + sr cue (opacity is
+       suppressed in forced-colors, so the disabled state was invisible). */
+    .enm-btn:disabled {
+        opacity: 1;
+        forced-color-adjust: none;
+        color: GrayText;
+        border-color: GrayText;
+    }
+
+    /* Keep the focus ring visible in forced-colors mode. */
+    :focus-visible {
+        outline: 3px solid Highlight !important;
+        outline-offset: 2px;
+        box-shadow: none !important;
+    }
 }

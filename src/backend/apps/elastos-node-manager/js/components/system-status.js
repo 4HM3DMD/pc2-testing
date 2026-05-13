@@ -87,8 +87,18 @@
     SystemStatus.prototype._setCell = function (key, valueText, health) {
         var cell = this._cells[key];
         if (!cell) return;
-        this._fields[key].textContent = valueText;
+        var field = this._fields[key];
+        field.textContent = valueText;
+        // a11y: cells use text-overflow: ellipsis on narrow widths. Mirror
+        // the full text into title= so it stays accessible to mouse hover,
+        // screen readers, and operator copy-paste even when truncated.
+        field.title = valueText;
         cell.dataset.health = health || 'ok';
+        // a11y: state was previously conveyed only by background-color on
+        // the ::before dot (WCAG 1.4.1 fail for colour-blind operators).
+        // Add an aria-label that explicitly names the health verdict.
+        var labelMap = { ok: 'ok', warning: 'warning', critical: 'critical', unknown: 'unknown' };
+        cell.setAttribute('aria-label', key + ' ' + (labelMap[health] || 'ok') + ': ' + valueText);
     };
 
     /** @private */

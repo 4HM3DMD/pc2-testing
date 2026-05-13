@@ -210,6 +210,10 @@
     function addCell(tr, text) {
         var td = document.createElement('td');
         td.textContent = text;
+        // a11y: cells truncate with text-overflow:ellipsis on narrow widths.
+        // Mirror full text into title= so it stays available to mouse hover,
+        // screen readers, and copy-paste even when visibly clipped.
+        td.title = String(text == null ? '' : text);
         tr.appendChild(td);
     }
     function textInput(placeholder) {

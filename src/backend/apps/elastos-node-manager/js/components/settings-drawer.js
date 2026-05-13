@@ -93,17 +93,45 @@
     SettingsDrawer.prototype.open = function () {
         if (this._open) { return; }
         this._open = true;
+        // a11y: remember where the operator's focus was so close() can
+        // return them to the trigger button (WCAG 2.4.3 Focus Order).
+        this._previousFocus = document.activeElement;
         this.root.hidden = false;
         if (!this._builtBody) { this._buildBody(); this._builtBody = true; }
         // Trigger the slide-in via the next frame so CSS transitions fire.
+        var self = this;
         requestAnimationFrame(function () {
-            this.root.classList.add('enm-drawer-open');
-        }.bind(this));
+            self.root.classList.add('enm-drawer-open');
+            // a11y: move focus into the drawer so keyboard users can act on it
+            // immediately. Closing button is the safest landing point.
+            var first = self.root.querySelector('button, input, [tabindex]');
+            if (first && typeof first.focus === 'function') { first.focus(); }
+        });
         // ESC to close.
         this._escHandler = function (ev) {
             if (ev.key === 'Escape') { this.close(); }
         }.bind(this);
         document.addEventListener('keydown', this._escHandler);
+        // a11y: focus trap — Tab and Shift+Tab cycle within the drawer so
+        // keyboard focus can't escape onto the dashboard behind the
+        // overlay (WCAG 2.4.3 violation otherwise).
+        this._trapHandler = function (ev) {
+            if (ev.key !== 'Tab' || !self._open) { return; }
+            var focusables = self.root.querySelectorAll(
+                'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+            );
+            if (focusables.length === 0) { return; }
+            var firstEl = focusables[0];
+            var lastEl  = focusables[focusables.length - 1];
+            if (ev.shiftKey && document.activeElement === firstEl) {
+                ev.preventDefault();
+                lastEl.focus();
+            } else if (!ev.shiftKey && document.activeElement === lastEl) {
+                ev.preventDefault();
+                firstEl.focus();
+            }
+        };
+        document.addEventListener('keydown', this._trapHandler, true);
     };
 
     SettingsDrawer.prototype.close = function () {
@@ -113,6 +141,14 @@
         if (this._escHandler) {
             document.removeEventListener('keydown', this._escHandler);
             this._escHandler = null;
+        }
+        if (this._trapHandler) {
+            document.removeEventListener('keydown', this._trapHandler, true);
+            this._trapHandler = null;
+        }
+        // a11y: restore focus to the element that opened the drawer.
+        if (this._previousFocus && typeof this._previousFocus.focus === 'function') {
+            try { this._previousFocus.focus(); } catch (_) { /* element may be gone */ }
         }
         // Wait for the slide-out transition before hiding so it animates.
         // Track the timer id so destroy() can cancel it if we're torn down
