@@ -123,6 +123,10 @@
         // _renderTools sentinel. Status pane now owns the maintenance
         // card, so the timer's destroy hook lives at the tech-view
         // level instead of buried in _mounted['tools'].
+        if (this._toolsGatePauser) {
+            try { this._toolsGatePauser.stop(); } catch (_) { /* idempotent */ }
+            this._toolsGatePauser = null;
+        }
         if (this._toolsGateTimer) {
             clearInterval(this._toolsGateTimer);
             this._toolsGateTimer = null;
@@ -366,8 +370,17 @@
                         });
                 }).catch(function () { /* leave gates as-is on error */ });
             };
+            // alpha.28.1 batch 28 — migrate to enmUseVisibilityPause so
+            // the 5s gate-refresh stops while the tab is hidden (saves
+            // ~1440 fetches/hr per backgrounded dashboard). The helper
+            // also fires once on visibility-resume so gates catch up
+            // immediately rather than waiting up to 5s.
             refreshGates();
-            this._toolsGateTimer = setInterval(refreshGates, 5_000);
+            if (typeof root !== 'undefined' && typeof root.enmUseVisibilityPause === 'function') {
+                this._toolsGatePauser = root.enmUseVisibilityPause(refreshGates, 5_000);
+            } else {
+                this._toolsGateTimer = setInterval(refreshGates, 5_000);
+            }
             // Sentinel so _switchTo doesn't re-mount on tab return — the
             // real components live under status_sys / status_card / status_validator.
             this._mounted['status'] = { destroy: function () {} };

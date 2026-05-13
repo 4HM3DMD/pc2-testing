@@ -60,12 +60,30 @@
         var self = this;
         // First poll happens immediately; subsequent ones from the interval.
         this._poll();
-        this._pollTimer = setInterval(function () { self._poll(); }, POLL_INTERVAL_MS);
+        // alpha.28.1 batch 28 — migrate to enmUseVisibilityPause so the
+        // 30s/5s polls stop when the tab is hidden. Falls back to raw
+        // setInterval if the helper failed to load. _setPollInterval
+        // below switches between cadences via the same helper.
+        this._pollIntervalMs = POLL_INTERVAL_MS;
+        this._armPoll(POLL_INTERVAL_MS);
         return this;
+    };
+
+    /** @private */
+    ValidatorRegistrationCard.prototype._armPoll = function (ms) {
+        var self = this;
+        if (this._pollPauser) { try { this._pollPauser.stop(); } catch (_) { /* idempotent */ } this._pollPauser = null; }
+        if (this._pollTimer)  { clearInterval(this._pollTimer); this._pollTimer = null; }
+        if (typeof root !== 'undefined' && typeof root.enmUseVisibilityPause === 'function') {
+            this._pollPauser = root.enmUseVisibilityPause(function () { self._poll(); }, ms);
+        } else {
+            this._pollTimer = setInterval(function () { self._poll(); }, ms);
+        }
     };
 
     ValidatorRegistrationCard.prototype.destroy = function () {
         this._destroyed = true;
+        if (this._pollPauser) { try { this._pollPauser.stop(); } catch (_) { /* idempotent */ } this._pollPauser = null; }
         if (this._pollTimer) { clearInterval(this._pollTimer); this._pollTimer = null; }
         if (this.root.parentNode) { this.root.parentNode.removeChild(this.root); }
     };
@@ -161,9 +179,9 @@
     ValidatorRegistrationCard.prototype._setPollInterval = function (ms) {
         if (this._pollIntervalMs === ms) { return; }
         this._pollIntervalMs = ms;
-        if (this._pollTimer) { clearInterval(this._pollTimer); }
-        var self = this;
-        this._pollTimer = setInterval(function () { self._poll(); }, ms);
+        // alpha.28.1 batch 28 — route through _armPoll so the cadence
+        // switch reuses the visibility-pause wrapper.
+        this._armPoll(ms);
     };
 
     /** @private */
@@ -278,13 +296,20 @@
                 activateStatus.textContent = '';
                 return self.api.post('/chains/' + self.chainId + '/bpos/activate').then(function () {
                     activateStatus.textContent = t('validator_card.activate_ok');
-                    activateStatus.style.color = 'var(--success)';
+                    // alpha.28.1 batch 28 — use --success-strong instead of
+                    // --success. The strong variant ships a darker green
+                    // (#1f8a3c vs #34c759) which clears WCAG 1.4.3 AA
+                    // contrast against --bg-elevated. The pale-success
+                    // earlier failed the audit at ~3:1; activate_ok is
+                    // a one-shot confirmation message and must be
+                    // readable. (PR cleanup audit a95877fe.)
+                    activateStatus.style.color = 'var(--success-strong, var(--success))';
                     // Force a fast re-poll so the card hides quickly when
                     // producer.state flips to Active on chain.
                     self._poll();
                 }).catch(function (err) {
                     activateStatus.textContent = (err && err.message) || t('common.failed');
-                    activateStatus.style.color = 'var(--error)';
+                    activateStatus.style.color = 'var(--error-strong, var(--error))';
                 });
             });
         });

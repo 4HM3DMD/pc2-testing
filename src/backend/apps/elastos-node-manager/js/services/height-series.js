@@ -135,12 +135,27 @@
 
         // Periodic full refresh — covers SSE reconnect gaps and a tab
         // backgrounded for hours. Calls _refreshNow (not _bootstrap)
-        // so the SSE sub + interval stay singleton.
-        var intervalId = setInterval(function () {
-            self._refreshNow(chainId);
-        }, POLL_FALLBACK_MS);
+        // so the SSE sub + interval stay singleton. alpha.28.1 batch
+        // 28 — wrapped in enmUseVisibilityPause so the 5-minute snapshot
+        // poll stops while the tab is hidden. The original "covers a
+        // tab backgrounded for hours" claim was actually misleading:
+        // SSE is what kept the buffer warm, the interval just topped
+        // up on resume. Now the resume-tick of the helper fires
+        // _refreshNow immediately on visibility-resume, which is the
+        // correct behaviour.
+        var pauser = null;
+        var intervalId = null;
+        if (typeof root !== 'undefined' && typeof root.enmUseVisibilityPause === 'function') {
+            pauser = root.enmUseVisibilityPause(function () {
+                self._refreshNow(chainId);
+            }, POLL_FALLBACK_MS);
+        } else {
+            intervalId = setInterval(function () {
+                self._refreshNow(chainId);
+            }, POLL_FALLBACK_MS);
+        }
 
-        this._wirings.set(chainId, { unsub: unsub, intervalId: intervalId });
+        this._wirings.set(chainId, { unsub: unsub, intervalId: intervalId, pauser: pauser });
     };
 
     /**
@@ -173,7 +188,10 @@
             if (typeof w.unsub === 'function') {
                 try { w.unsub(); } catch (_) { /* swallow */ }
             }
-            clearInterval(w.intervalId);
+            if (w.pauser && typeof w.pauser.stop === 'function') {
+                try { w.pauser.stop(); } catch (_) { /* idempotent */ }
+            }
+            if (w.intervalId != null) { clearInterval(w.intervalId); }
         }
         this._wirings.delete(chainId);
         this._listeners.delete(chainId);
