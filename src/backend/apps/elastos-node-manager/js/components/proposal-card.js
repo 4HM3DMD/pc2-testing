@@ -103,9 +103,27 @@
         heading.textContent = t('proposal.heading');
         card.appendChild(heading);
 
+        // alpha.28.1 batch 69 (Round-19B audit finding #4) — provide a
+        // non-empty fallback when BOTH summary_action and summaryAction
+        // are absent. The acknowledgment ceremony is the ENTIRE point
+        // of this card: "I understand this will <ACTION>" with the
+        // operator's deliberate click confirming a destructive op. An
+        // empty action label silently defeats that ceremony — the ack
+        // text reads "I understand this will " (trailing space, no
+        // action), and the post-action notifications fire "Confirmed" /
+        // "Rejected" with empty bodies, leaving the operator with NO
+        // record of what they just confirmed. Falling back to the i18n
+        // 'proposal.fallback_action' key — or a hard-coded English
+        // string if strings.js isn't loaded — keeps the ceremony intact.
+        var actionLabel = p.summary_action || p.summaryAction
+            || t('proposal.fallback_action')
+            || 'this operation';
+        // Stash on `this` so _handleConfirm / _handleReject can reuse
+        // the same resolved label in their post-action notifications.
+        this._actionLabel = actionLabel;
         var summary = document.createElement('p');
         summary.className = 'enm-proposal-summary';
-        summary.textContent = p.summary_action || p.summaryAction || '';
+        summary.textContent = actionLabel;
         card.appendChild(summary);
 
         if (p.summary_reason || p.summaryReason) {
@@ -124,7 +142,7 @@
         this._checkbox.addEventListener('change', function () { self._refreshConfirmEnabled(); });
         checkboxWrap.appendChild(this._checkbox);
         var ackText = document.createElement('span');
-        ackText.textContent = t('proposal.confirm_label', { summary: p.summary_action || p.summaryAction || '' });
+        ackText.textContent = t('proposal.confirm_label', { summary: actionLabel });
         checkboxWrap.appendChild(ackText);
         card.appendChild(checkboxWrap);
 
@@ -237,8 +255,15 @@
         this._confirmBtn.disabled = true;
         var body = {};
         if (this._antiSnipe) { body.antiSnipePassword = this._antiSnipe.value; }
-        this.api.post('/healing/confirm/' + this.proposal.id, body).then(function () {
-            self.notifications.info('Confirmed', self.proposal.summary_action || self.proposal.summaryAction || '');
+        // alpha.28.1 batch 69 (Round-19C audit finding #2) —
+        // encodeURIComponent on the proposal.id path segment. proposal.id
+        // sources from a backend response (GET /healing/suggestions); a
+        // malicious/buggy backend returning "x/../delete" could pivot the
+        // call to a different endpoint. Backend-compromise only, but
+        // every other dynamic path segment in audit-tab uses
+        // encodeURIComponent (lines 157-158) so this is consistency too.
+        this.api.post('/healing/confirm/' + encodeURIComponent(this.proposal.id), body).then(function () {
+            self.notifications.info('Confirmed', self._actionLabel || '');
             try { self.onActioned('confirmed'); } catch (_) { /* host hook threw */ }
             self.close();
         }).catch(function (err) {
@@ -269,8 +294,10 @@
         this._rejectBtn.disabled = true;
         this._confirmBtn.disabled = true;
         var body = { reason: this._rejectReason.value || '' };
-        this.api.post('/healing/reject/' + this.proposal.id, body).then(function () {
-            self.notifications.info('Rejected', self.proposal.summary_action || self.proposal.summaryAction || '');
+        // Batch 69 — encodeURIComponent on proposal.id (same rationale
+        // as the confirm path above).
+        this.api.post('/healing/reject/' + encodeURIComponent(this.proposal.id), body).then(function () {
+            self.notifications.info('Rejected', self._actionLabel || '');
             try { self.onActioned('rejected'); } catch (_) { /* host hook threw */ }
             self.close();
         }).catch(function (err) {

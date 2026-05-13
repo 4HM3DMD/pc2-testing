@@ -346,6 +346,13 @@
             expired:           'Expired',
             executed:          'Executed',
             rejected:          'Rejected',
+            // alpha.28.1 batch 69 — fallback when both summary_action
+            // and summaryAction are absent on the proposal payload.
+            // Prevents the ack-checkbox ceremony from silently
+            // degrading to "I understand: " with a blank trailing
+            // value, and the post-action notification from posting
+            // an empty body.
+            fallback_action:   'this operation',
         },
 
         owner: {
