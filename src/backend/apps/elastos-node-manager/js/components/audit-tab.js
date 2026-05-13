@@ -123,6 +123,11 @@
             }
         }).catch(function (err) {
             if (self._destroyed || self._loadSeq !== mySeq) { return; }
+            // alpha.28.1 batch 51 — 401 suppressed (boot path owns
+            // re-auth). Without this, an expired session triggered
+            // a "Failed to load audit log" toast every filter-Apply
+            // click. (Audit ad49e60e ⚠ 401-not-filtered finding.)
+            if (err && err.status === 401) { return; }
             // alpha.28.1 batch 19 — stable id so rapid filter-Apply
             // clicks against a slow backend stack into one updating
             // toast instead of N stacked failures. (Audit ad49e60e.)

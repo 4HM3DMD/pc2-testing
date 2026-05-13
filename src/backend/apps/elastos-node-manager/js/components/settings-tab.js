@@ -51,6 +51,10 @@
             self._fillForm();
         }).catch(function (err) {
             if (self._destroyed) { return; }
+            // alpha.28.1 batch 51 — 401 suppressed (boot path owns
+            // re-auth). Expired session was previously surfacing as
+            // "Failed to load config" toast on every drawer-open.
+            if (err && err.status === 401) { return; }
             // alpha.28.1 batch 19 — stable id so repeated drawer-open
             // attempts against a 500-ing backend coalesce into one
             // updating toast. (Audit ad49e60e.)
