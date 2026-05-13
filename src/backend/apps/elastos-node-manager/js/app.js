@@ -114,6 +114,32 @@
 
     ENMApp.prototype.init = function () {
         this._wireErrorActions();
+        // alpha.28.1 batch 22 — defensive belt-and-braces safety net.
+        // Today every async path has a terminal .catch (verified by the
+        // console hygiene audit aca70d0a). A future regression — a new
+        // .then() without .catch() — would surface as a silent red
+        // browser warning the operator can't see. This listener
+        // converts that into a polite single-shot toast so a real bug
+        // gets a chance to be noticed. Idempotent flag so Retry doesn't
+        // stack listeners.
+        if (!root.__enmRejectionGuardInstalled) {
+            root.__enmRejectionGuardInstalled = true;
+            var self = this;
+            root.addEventListener('unhandledrejection', function (ev) {
+                var err = ev && ev.reason;
+                var msg = (err && err.message) ? err.message : String(err);
+                if (self.services && self.services.notifications) {
+                    self.services.notifications.show({
+                        id: 'enm-unhandled-rejection',
+                        severity: 'warning',
+                        title: 'Unexpected error',
+                        body: msg,
+                    });
+                }
+                // Don't suppress the browser's own warning; preventDefault()
+                // would silence DevTools too, which we want for debugging.
+            });
+        }
         // alpha.28.1 batch 18 — guard against accidental file-drop
         // navigating the iframe away. Without these listeners a file
         // dropped onto the ENM iframe (e.g. operator dragging a
@@ -297,6 +323,19 @@
                         self.services.api.invalidate('/setup/state');
                         self._showDashboard();
                     }
+                } else if (ev.data.type === 'proposal-actioned') {
+                    // alpha.28.1 batch 22 (audit ac31f3a08, scenario #4)
+                    // — peer window confirmed/rejected a healing
+                    // proposal first. Close our copy of the modal
+                    // silently so the operator doesn't see a "Failed"
+                    // toast when their click hits the already-actioned
+                    // proposal. The `id` field lets the close target
+                    // the right proposal when multiple are open.
+                    if (self._proposalCard && self._proposalCard.proposal
+                        && self._proposalCard.proposal.id === ev.data.id) {
+                        try { self._proposalCard.close(); }
+                        catch (_) { /* already closing */ }
+                    }
                 }
             });
         } catch (_) { /* incompatible env — silently skip */ }
@@ -306,6 +345,14 @@
     ENMApp.prototype._broadcastSetupComplete = function () {
         if (this._bc) {
             try { this._bc.postMessage({ type: 'setup-complete' }); } catch (_) {}
+        }
+    };
+
+    /** @private — broadcast a healing-proposal action to peer tabs */
+    ENMApp.prototype._broadcastProposalActioned = function (id, verdict) {
+        if (this._bc) {
+            try { this._bc.postMessage({ type: 'proposal-actioned', id: id, verdict: verdict }); }
+            catch (_) { /* incompatible env */ }
         }
     };
 
@@ -545,11 +592,25 @@
 
     ENMApp.prototype._openProposal = function (p) {
         if (!root.EnmProposalCard) { return; }
+        var self = this;
+        // alpha.28.1 batch 22 — track the live card on `_proposalCard`
+        // so the cross-tab `proposal-actioned` BC listener can match
+        // by id and close it silently when a peer window actioned it
+        // first (avoids the operator seeing a "Confirmation failed"
+        // toast for an action that actually succeeded in the other
+        // window).
         var card = new root.EnmProposalCard({
             proposal: p,
             api: this.services.api,
             notifications: this.services.notifications,
+            onActioned: function (verdict) {
+                self._broadcastProposalActioned(p.id, verdict);
+            },
+            onClose: function () {
+                if (self._proposalCard === card) { self._proposalCard = null; }
+            },
         });
+        this._proposalCard = card;
         card.mount(document.body);
     };
 

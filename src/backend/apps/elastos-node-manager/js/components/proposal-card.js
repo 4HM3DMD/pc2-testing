@@ -29,6 +29,12 @@
         this.api = opts.api;
         this.notifications = opts.notifications;
         this.onClose = typeof opts.onClose === 'function' ? opts.onClose : function () {};
+        // alpha.28.1 batch 22 — onActioned hook so app.js can broadcast
+        // a `proposal-actioned` BC event after a successful confirm/
+        // reject. Peer windows then dismiss their own copy of the modal
+        // silently instead of catching a stale 404/409 from the
+        // already-actioned proposal. (Multi-window audit ac31f3a08.)
+        this.onActioned = typeof opts.onActioned === 'function' ? opts.onActioned : function () {};
         this._cooldownTimer = null;
         this._closed = false;
 
@@ -231,6 +237,7 @@
         if (this._antiSnipe) { body.antiSnipePassword = this._antiSnipe.value; }
         this.api.post('/healing/confirm/' + this.proposal.id, body).then(function () {
             self.notifications.info('Confirmed', self.proposal.summary_action || self.proposal.summaryAction || '');
+            try { self.onActioned('confirmed'); } catch (_) { /* host hook threw */ }
             self.close();
         }).catch(function (err) {
             if (self._closed) { return; }
@@ -257,6 +264,7 @@
         var body = { reason: this._rejectReason.value || '' };
         this.api.post('/healing/reject/' + this.proposal.id, body).then(function () {
             self.notifications.info('Rejected', self.proposal.summary_action || self.proposal.summaryAction || '');
+            try { self.onActioned('rejected'); } catch (_) { /* host hook threw */ }
             self.close();
         }).catch(function (err) {
             self.notifications.warning(
