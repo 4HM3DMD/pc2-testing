@@ -77,25 +77,31 @@
         };
     };
 
-    /** @private */
+    /** @private
+     *
+     * One-time wiring: SSE subscription + periodic fallback. Split from
+     * _refreshNow so the recurring interval can call _refreshNow without
+     * re-wiring (the bug fixed in alpha.28.1 batch 14 — see the memory
+     * audit). The pre-batch-14 _bootstrap called itself recursively from
+     * the setInterval, which re-registered the SSE sub + a new interval
+     * every POLL_FALLBACK_MS (5 min). 24h of dashboard uptime accrued
+     * ~288 stacked SSE subscriptions on `chains:<id>:height` AND 288
+     * nested intervals — every height delta then fanned out 288x into
+     * the same buffer. Fix: register SSE + interval once per chainId;
+     * the interval only re-fetches the snapshot.
+     */
     HeightSeriesClient.prototype._bootstrap = function (chainId) {
         var self = this;
-        // Fetch the latest snapshot. On success, replace the local
-        // buffer (server-side decimation owns the shape). On failure,
-        // keep whatever we have — never reset to empty on a transient
-        // error, that would erase the sparkline mid-tab.
-        this.api.get('/chains/' + encodeURIComponent(chainId) + '/history?windowMin=' + WINDOW_MIN)
-            .then(function (res) {
-                var pts = (res && Array.isArray(res.points)) ? res.points : [];
-                self._buffers.set(chainId, pts);
-                self._broadcast(chainId);
-            })
-            .catch(function () {
-                // First bootstrap — seed empty so the sparkline component
-                // can render its "no data" state cleanly.
-                if (!self._buffers.has(chainId)) self._buffers.set(chainId, []);
-                self._broadcast(chainId);
-            });
+
+        // Early-return if we've already wired this chainId — refresh
+        // the snapshot in place instead of stacking subscriptions.
+        if (this._wirings.has(chainId)) {
+            this._refreshNow(chainId);
+            return;
+        }
+
+        // First-time bootstrap: snapshot fetch + SSE + interval.
+        this._refreshNow(chainId);
 
         // SSE delta — push new points as HealthChecker records them.
         var unsub = null;
@@ -120,12 +126,36 @@
         }
 
         // Periodic full refresh — covers SSE reconnect gaps and a tab
-        // backgrounded for hours.
+        // backgrounded for hours. Calls _refreshNow (not _bootstrap)
+        // so the SSE sub + interval stay singleton.
         var intervalId = setInterval(function () {
-            self._bootstrap(chainId);
+            self._refreshNow(chainId);
         }, POLL_FALLBACK_MS);
 
         this._wirings.set(chainId, { unsub: unsub, intervalId: intervalId });
+    };
+
+    /**
+     * @private
+     * Fetch the latest snapshot. On success, replace the local buffer
+     * (server-side decimation owns the shape). On failure, keep
+     * whatever we have — never reset to empty on a transient error,
+     * that would erase the sparkline mid-tab.
+     */
+    HeightSeriesClient.prototype._refreshNow = function (chainId) {
+        var self = this;
+        this.api.get('/chains/' + encodeURIComponent(chainId) + '/history?windowMin=' + WINDOW_MIN)
+            .then(function (res) {
+                var pts = (res && Array.isArray(res.points)) ? res.points : [];
+                self._buffers.set(chainId, pts);
+                self._broadcast(chainId);
+            })
+            .catch(function () {
+                // First bootstrap — seed empty so the sparkline component
+                // can render its "no data" state cleanly.
+                if (!self._buffers.has(chainId)) self._buffers.set(chainId, []);
+                self._broadcast(chainId);
+            });
     };
 
     /** @private */

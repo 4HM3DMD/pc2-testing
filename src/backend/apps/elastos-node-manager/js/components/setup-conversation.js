@@ -55,7 +55,30 @@
         this._currentCard = 'a';      // which card is showing
         this._cardSeq = 0;            // bump on every render to ignore stale callbacks
         this._unsubscribeInstall = null;
+        // alpha.28.1 — install poll timer handle so the fallback poll
+        // in _beginInstall can be cancelled. See _teardownInstallTracking
+        // for why this is necessary.
+        this._installPollTimer = null;
     }
+
+    /**
+     * Cancel the Card-B install poll + SSE subscription. Called from
+     * destroy(), from _goto() when navigating away from Card B, and
+     * from _beginInstall.applyStatus when a terminal phase is observed.
+     * Without this the IIFE poll outlives the operator's navigation and
+     * can call applyStatus on stale DOM, including yanking the operator
+     * involuntarily into Card B Done.
+     */
+    SetupConversation.prototype._teardownInstallTracking = function () {
+        if (this._installPollTimer) {
+            clearTimeout(this._installPollTimer);
+            this._installPollTimer = null;
+        }
+        if (this._unsubscribeInstall) {
+            this._unsubscribeInstall();
+            this._unsubscribeInstall = null;
+        }
+    };
 
     SetupConversation.prototype.mount = function (parent) {
         parent.appendChild(this.root);
@@ -71,8 +94,8 @@
     };
 
     SetupConversation.prototype.destroy = function () {
-        if (this._unsubscribeInstall) { this._unsubscribeInstall(); }
-        if (this._unsubscribeBootstrap) { this._unsubscribeBootstrap(); }
+        this._teardownInstallTracking();
+        if (this._unsubscribeBootstrap) { this._unsubscribeBootstrap(); this._unsubscribeBootstrap = null; }
         if (this._bootstrapPollTimer) { clearInterval(this._bootstrapPollTimer); this._bootstrapPollTimer = null; }
         if (this.root.parentNode) { this.root.parentNode.removeChild(this.root); }
     };
@@ -147,6 +170,17 @@
 
     /** @private */
     SetupConversation.prototype._goto = function (card) {
+        // alpha.28.1 — cancel any in-flight Card-B install tracking
+        // BEFORE swapping `_currentCard`. The poll loop checks
+        // `_currentCard === 'b'` to decide whether to keep ticking, so
+        // updating that field is enough to stop new ticks, but a tick
+        // already in flight could still resolve into a stale `els`
+        // reference. _teardownInstallTracking explicitly cancels the
+        // SSE subscription too, so SSE events that arrive after the
+        // operator has clicked Back can't yank them forward.
+        if (this._currentCard === 'b' && card !== 'b') {
+            this._teardownInstallTracking();
+        }
         this._currentCard = card;
         this._cardSeq += 1;
         var seq = this._cardSeq;
@@ -705,17 +739,44 @@
         els.progress.hidden   = false;
         els.actions.innerHTML = '';
 
+        // alpha.28.1 bug fix — the previous version had two real bugs the
+        // setup-wizard deep audit caught:
+        //   (B1) the fallback poll IIFE was unkillable. Its only stop
+        //        condition was `!self.root.isConnected`, which doesn't
+        //        fire when the operator clicks Back from Card B mid-
+        //        install. The poll kept running, calling applyStatus
+        //        on stale DOM, and on `phase==='done'` could yank the
+        //        operator forward into Card B's Done state even though
+        //        they had navigated to a different card.
+        //   (R1) Card B's applyStatus had no `done` guard like Card B2
+        //        does. SSE + poll both delivering `phase==='done'` ran
+        //        _renderCardBDone twice — second call wrote into a DOM
+        //        that the first had already replaced.
+        // Fixed by:
+        //   - latching `installComplete` in a closure so applyStatus
+        //     short-circuits after the first terminal phase observed
+        //   - storing the poll timer on `this._installPollTimer` so
+        //     destroy() and _goto() can clear it
+        //   - gating the poll on `_currentCard === 'b'` so navigation
+        //     away cancels future ticks even if a tick is mid-flight
+        var installComplete = false;
+
         function applyStatus(s) {
             if (!s) { return; }
+            if (installComplete) { return; }
             var pct = (s.bytesTotal && s.bytesDownloaded)
                 ? Math.min(100, Math.floor((s.bytesDownloaded / s.bytesTotal) * 100))
                 : (s.phase === 'done' ? 100 : 0);
             els.bar.style.width = pct + '%';
             els.status.textContent = phaseLabel(s);
             if (s.phase === 'done') {
+                installComplete = true;
+                self._teardownInstallTracking();
                 self._renderCardBDone(els);
             }
             if (s.phase === 'failed') {
+                installComplete = true;
+                self._teardownInstallTracking();
                 els.title.textContent = t('friendly.setup.card_b.phase_failed');
                 els.sub.textContent   = t('friendly.setup.card_b.failed_help');
                 els.actions.innerHTML = '';
@@ -743,17 +804,28 @@
 
         startReq.then(function (resp) {
             applyStatus(resp && resp.status);
-            // Fallback poll in case SSE drops.
+            // Fallback poll in case SSE drops. Bound to `this._currentCard
+            // === 'b'` AND `installComplete === false` so navigation away
+            // and terminal phases both kill the loop. Timer handle is
+            // stored on `this` so destroy() / _teardownInstallTracking
+            // can cancel a pending tick.
             (function poll() {
+                if (installComplete) { return; }
+                if (self._currentCard !== 'b') { return; }
                 if (!self.root.isConnected) { return; }
                 self.api.get('/setup/install-status/mainchain', { skipCache: true })
                     .then(function (s) {
                         applyStatus(s);
-                        if (!s || (s.phase !== 'done' && s.phase !== 'failed')) {
-                            setTimeout(poll, 2500);
+                        if (!installComplete && self._currentCard === 'b'
+                            && (!s || (s.phase !== 'done' && s.phase !== 'failed'))) {
+                            self._installPollTimer = setTimeout(poll, 2500);
                         }
                     })
-                    .catch(function () { setTimeout(poll, 4000); });
+                    .catch(function () {
+                        if (!installComplete && self._currentCard === 'b') {
+                            self._installPollTimer = setTimeout(poll, 4000);
+                        }
+                    });
             })();
         }).catch(function (err) {
             applyStatus({ phase: 'failed', error: err && err.message ? err.message : String(err) });

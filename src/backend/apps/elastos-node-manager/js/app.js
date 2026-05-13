@@ -38,6 +38,15 @@
      *   wide:    >= 1000px (default; nav rail visible; max-width caps lifted)
      */
     function setupResponsiveObserver() {
+        // alpha.28.1 — guard against double-install. init() is called
+        // once on first boot and AGAIN each time the operator clicks
+        // Retry on the error pane (batch 8). Without this guard each
+        // retry stacks another ResizeObserver (or another resize
+        // listener), pinning a closure to the previous app instance
+        // and doubling the per-resize work. After 5 retries the page
+        // does 5× the work on every layout change.
+        if (root.__enmRespObserverInstalled) { return; }
+        root.__enmRespObserverInstalled = true;
         function classify(w) {
             if (w < 700) return 'narrow';
             if (w < 1000) return 'medium';
