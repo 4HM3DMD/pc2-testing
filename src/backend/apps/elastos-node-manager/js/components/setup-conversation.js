@@ -499,7 +499,18 @@
         var done = false;
 
         function applyStatus(s) {
-            if (!s || done) { return; }
+            // alpha.28.1 batch 86 (Round-27 regression check) —
+            // centralised _destroyed guard. Batch 83 added the flag
+            // and guarded the bootstrap poll's .then but the audit
+            // found two other call sites (startPromise.then below,
+            // SSE callback) still routed through applyStatus without
+            // protection. Guarding here covers ALL three call paths
+            // in one place — the previous-shape failure mode was
+            // applyStatus mutating els (textContent / bar.style.width)
+            // after destroy() detached the DOM. SSE is implicitly safe
+            // (destroy unsubscribes) but startPromise.then has no
+            // equivalent cancel hook so the race window was real.
+            if (!s || done || self._destroyed) { return; }
             var pct = (s.bytesTotal && s.bytesDownloaded)
                 ? Math.min(100, Math.floor((s.bytesDownloaded / s.bytesTotal) * 100))
                 : (s.phase === 'done' ? 100 : (s.phase === 'extracting' ? 95 : 5));

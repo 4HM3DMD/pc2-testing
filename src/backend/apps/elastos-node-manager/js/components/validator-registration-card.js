@@ -277,7 +277,7 @@
                     + '<div class="enm-validator-activate-row">'
                         + '<button type="button" class="enm-btn enm-btn-primary" id="enm-vc-activate">'
                             + escapeHtml(t('validator_card.activate_btn')) + '</button>'
-                        + '<span class="enm-validator-activate-status" id="enm-vc-activate-status"></span>'
+                        + '<span class="enm-validator-activate-status" id="enm-vc-activate-status" role="status" aria-live="polite"></span>'
                     + '</div>'
                 + '</div>'
             + '</li>'
@@ -327,6 +327,12 @@
             (runOnce || fallback)(activateBtn, activatingLabel, function () {
                 activateStatus.textContent = '';
                 return self.api.post('/chains/' + self.chainId + '/bpos/activate').then(function () {
+                    // alpha.28.1 batch 86 (Round-26 finding #3) —
+                    // _destroyed guard on both then/catch branches so
+                    // a teardown during the in-flight POST doesn't
+                    // mutate detached DOM (activateStatus.textContent
+                    // and the _poll() call kick).
+                    if (self._destroyed) { return; }
                     activateStatus.textContent = t('validator_card.activate_ok');
                     // alpha.28.1 batch 28 — use --success-strong instead of
                     // --success. The strong variant ships a darker green
@@ -340,6 +346,7 @@
                     // producer.state flips to Active on chain.
                     self._poll();
                 }).catch(function (err) {
+                    if (self._destroyed) { return; }
                     activateStatus.textContent = (err && err.message) || t('common.failed');
                     activateStatus.style.color = 'var(--error-strong, var(--error))';
                 });
