@@ -266,9 +266,11 @@
             height:     'Height',
             peers:      'Peers',
             uptime:     'Uptime',
-            no_chains:  'No chains configured. Run the setup wizard to add one.',
-            details_show: 'Details',
-            details_hide: 'Hide details',
+            // alpha.28.1 batch 45 — dropped: no_chains, details_show,
+            // details_hide. Round-7 i18n audit acbcec6b verified zero
+            // callers — no_chains is unreachable copy (setup auto-routes
+            // before this state can render); details_*  was for a
+            // never-shipped expand/collapse affordance.
             // 0.2.0-alpha.1 — Apple Hero pattern: big number alone on
             // the primary value line, small lowercase caption below.
             // primary_metric_* drive the number (or em-dash placeholder
@@ -291,20 +293,10 @@
             sparkline_aria:              'Block height, last hour',
             sse_reconnecting:            'Reconnecting…',
             tap_circle_aria:             'Status of {chainName}',
-            bpos_heading: 'BPoS supernode',
-            bpos_state:  'Producer state',
-            bpos_votes:  'Votes',
-            bpos_rank:   'Rank',
-            bpos_inactive_rounds: 'Inactive rounds',
-            sync_heading:  'Sync progress',
-            sync_caught_up: 'Fully synced',
-            sync_unknown:   'Network height unknown',
-            sync_behind:    '{blocks} blocks behind',
-            sync_velocity:  '{bpm} blocks/min',
-            sync_eta:       '~{eta} remaining',
-            sync_eta_lt_min: '<1 min remaining',
-            sync_no_velocity: 'measuring rate...',
-            sync_stale:     'Sync data stale — chain may be stopped',
+            // alpha.28.1 batch 45 — dropped bpos_* (5 keys) and sync_*
+            // (8 keys). The chain-card never renders a "BPoS details"
+            // sub-panel and the sync line uses inline copy with
+            // enmFormatNumber. (Round-7 i18n audit acbcec6b.)
         },
 
         system_status: {
