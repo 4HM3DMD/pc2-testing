@@ -56,12 +56,31 @@
         this.refresh();
         var self = this;
         this._timer = setInterval(function () { self.refresh(); }, REFRESH_MS);
+        // alpha.28.1 batch 74 (Round-20A audit finding #5) — re-run
+        // relTime on the "Last checked" + "released" spans every 60s.
+        // The card only re-renders on the 6h REFRESH_MS interval, so
+        // the visible string was frozen for up to 6 hours of clock time.
+        // Operator returns to the Tools tab 90 minutes later and still
+        // sees "Last checked 5 min ago" — implying a fresh probe that
+        // did not happen. 60s tick is cheap (DOM walk + textContent
+        // write) and reads correctly to the nearest minute.
+        this._relTimer = setInterval(function () {
+            if (self._destroyed) { return; }
+            var spans = self.root.querySelectorAll('.enm-tools-update-reltime');
+            for (var i = 0; i < spans.length; i += 1) {
+                var ts = Number(spans[i].dataset.ts);
+                if (isFinite(ts)) {
+                    spans[i].textContent = relTime(ts);
+                }
+            }
+        }, 60_000);
         return this;
     };
 
     EnmToolsUpdateCard.prototype.destroy = function () {
         this._destroyed = true;
         if (this._timer) { clearInterval(this._timer); this._timer = null; }
+        if (this._relTimer) { clearInterval(this._relTimer); this._relTimer = null; }
         // Close any open update-shell modal so its document-level keydown
         // listener doesn't leak across an app reinstall. _modalClose is
         // wired by _openUpdateModal whenever the modal is open.
@@ -113,7 +132,8 @@
                 +     'You\'re on the latest release '
                 +     '(<code>' + escapeHtml(env.current || 'unknown') + '</code>).'
                 +     (env.lastCheckedAt
-                        ? ' Last checked ' + relTime(env.lastCheckedAt) + '.'
+                        ? ' Last checked <span class="enm-tools-update-reltime" data-ts="' + env.lastCheckedAt + '">'
+                          + escapeHtml(relTime(env.lastCheckedAt)) + '</span>.'
                         : '')
                 +     (isFallback
                         ? '<br><span style="font-size:12px;color:var(--text-muted)">'
@@ -161,7 +181,8 @@
             +     'available <code>' + escapeHtml(env.latest) + '</code>'
             +     (env.publishedAt
                     ? ' <span class="enm-tools-update-when">'
-                      + 'released ' + relTime(Date.parse(env.publishedAt))
+                      + 'released <span class="enm-tools-update-reltime" data-ts="' + Date.parse(env.publishedAt) + '">'
+                      + escapeHtml(relTime(Date.parse(env.publishedAt))) + '</span>'
                       + '</span>'
                     : '')
             +   '</p>'

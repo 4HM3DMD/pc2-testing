@@ -534,7 +534,12 @@
             // alpha.28.1 batch 39 — row-count suffix moved from inline
             // English. ICU plurals still deferred (audit-tab.js audit
             // acbcec6b flagged "1 rows" as the cosmetic bug).
+            // alpha.28.1 batch 74 (Round-20A audit finding #3) — split
+            // singular vs plural so "1 rows" stops being printed. The
+            // ICU plural shim is still deferred; for now the audit-tab
+            // caller picks between the two keys based on count.
             row_count:      '{n} rows',
+            row_count_one:  '{n} row',
         },
 
         // alpha.28.1 batch 59 — producer-identity on-chain binding strings

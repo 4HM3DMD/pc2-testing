@@ -112,10 +112,15 @@
             // alpha.28.1 batch 39 — i18n-sourced suffix via the new
             // audit.row_count key (token: {n}). Fallback preserves the
             // pre-i18n string verbatim if strings.js failed to load.
-            var rowsKey = t('audit.row_count', { n: fmtCount(self._rows.length) });
-            self._countLabel.textContent = (rowsKey && rowsKey !== 'audit.row_count')
+            // alpha.28.1 batch 74 — split into row_count_one /
+            // row_count to stop printing "1 rows" after a narrow filter
+            // returns one match. (Round-20A audit finding #3.)
+            var n = self._rows.length;
+            var rowsKeyId = n === 1 ? 'audit.row_count_one' : 'audit.row_count';
+            var rowsKey = t(rowsKeyId, { n: fmtCount(n) });
+            self._countLabel.textContent = (rowsKey && rowsKey !== rowsKeyId)
                 ? rowsKey
-                : fmtCount(self._rows.length) + ' rows';
+                : fmtCount(n) + (n === 1 ? ' row' : ' rows');
             if (self._rows.length === 0) {
                 self._emptyMsg.hidden = false;
             } else {

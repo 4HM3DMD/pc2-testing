@@ -47,6 +47,20 @@
         } else {
             this._timer = setInterval(function () { self.refresh(); }, POLL_INTERVAL_MS);
         }
+        // alpha.28.1 batch 74 (Round-20A audit finding #6) — uptime
+        // anchor + 1s tick. Previously the uptime cell only updated on
+        // the 5s /system/status poll, so the value jumped "37s → 42s →
+        // 47s" right next to the chain-card uptime which ticks smoothly
+        // (chain-card anchors _uptimeBaseMs and re-derives every second).
+        // The two adjacent cells reading inconsistently was the easiest
+        // way to make the dashboard feel laggy. This 1s tick recomputes
+        // from the most recent anchor; no extra network cost.
+        this._uptimeTimer = setInterval(function () {
+            if (self._destroyed || self._uptimeBaseMs == null) { return; }
+            var seconds = Math.floor((Date.now() - self._uptimeBaseMs) / 1000)
+                + (self._uptimeBaseSec || 0);
+            self._setCell('uptime', root.enmFormatUptime(seconds), 'ok');
+        }, 1000);
         return this;
     };
 
@@ -54,6 +68,7 @@
         this._destroyed = true;
         if (this._pauser) { try { this._pauser.stop(); } catch (_) { /* idempotent */ } this._pauser = null; }
         if (this._timer) { clearInterval(this._timer); this._timer = null; }
+        if (this._uptimeTimer) { clearInterval(this._uptimeTimer); this._uptimeTimer = null; }
         if (this.root.parentNode) { this.root.parentNode.removeChild(this.root); }
     };
 
@@ -74,6 +89,18 @@
             // dash placeholder.
             var uptimeSec = (s && s.node) ? s.node.uptimeSec : null;
             self._setCell('uptime', root.enmFormatUptime(uptimeSec), 'ok');
+            // Anchor for the 1s smooth-tick (see mount() comment).
+            // We store the SERVER-reported seconds at the instant we
+            // received it + the client's wall-clock then; the 1s tick
+            // adds (Date.now() - base) / 1000 to derive the live value.
+            // Server clock drift is irrelevant — we're only computing
+            // increments from the anchor, not absolute time.
+            if (typeof uptimeSec === 'number' && isFinite(uptimeSec)) {
+                self._uptimeBaseMs = Date.now();
+                self._uptimeBaseSec = uptimeSec;
+            } else {
+                self._uptimeBaseMs = null;
+            }
             // Clear any prior stale visual marker.
             Object.keys(self._cells).forEach(function (k) {
                 self._cells[k].classList.remove('enm-sys-stale');
