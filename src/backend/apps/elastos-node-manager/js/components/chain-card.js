@@ -188,6 +188,11 @@
 
         this._stateSubtitle = document.createElement('p');
         this._stateSubtitle.className = 'enm-chain-card-state';
+        // a11y: state flips (healthy → stalled, alive → stopped, etc.)
+        // were silent for screen-reader users. role="status" makes the
+        // subtitle a polite live region so the new state is announced
+        // without yanking focus.
+        this._stateSubtitle.setAttribute('role', 'status');
         this._stateSubtitle.textContent = t('chain_state.unconfigured');
         header.appendChild(this._stateSubtitle);
 
@@ -198,6 +203,10 @@
         // via the [data-sse-state] attribute on the card root.
         this._reconnectPill = document.createElement('span');
         this._reconnectPill.className = 'enm-chain-reconnect';
+        // a11y: SSE drop was visually flagged but silent. role="status"
+        // announces the change once when the pill un-hides (without
+        // aria-live="polite" we'd double-announce on Safari/older NVDA).
+        this._reconnectPill.setAttribute('role', 'status');
         this._reconnectPill.textContent = t('chain_card.sse_reconnecting') || 'Reconnecting…';
         this._reconnectPill.hidden = true;
         header.appendChild(this._reconnectPill);

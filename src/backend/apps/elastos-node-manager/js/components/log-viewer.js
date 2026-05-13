@@ -223,9 +223,22 @@
             // can honestly report "N older lines dropped". Without this
             // the operator's mental model ("this is the chain's log
             // file") is wrong — it's a rolling window of MAX_DOM_LINES.
+            var firstDrop = !this._droppedCount;
             this._droppedCount = (this._droppedCount || 0) + excess;
             if (this._bufferPill) {
-                this._bufferPill.hidden = false;
+                // a11y: role="status" announces the pill the first time it
+                // un-hides, which is the only moment the operator's
+                // mental model needs to update. Subsequent count updates
+                // re-write textContent silently (by temporarily removing
+                // role) so a 500-line/sec flood doesn't re-announce
+                // every batch. Visual updates remain live; only the SR
+                // queue is throttled.
+                if (firstDrop) {
+                    this._bufferPill.setAttribute('role', 'status');
+                    this._bufferPill.hidden = false;
+                } else {
+                    this._bufferPill.removeAttribute('role');
+                }
                 this._bufferPill.textContent = 'Older lines dropped: '
                     + this._droppedCount.toLocaleString();
                 this._bufferPill.title = 'The viewer keeps the most recent '

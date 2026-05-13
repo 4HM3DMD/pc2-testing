@@ -700,6 +700,17 @@ body[data-active-tab="identity"]::before {
     line-height: 1.6;
 }
 
+/* alpha.28.1 — Retry / Reload affordances inside the boot-error pane.
+   Operator's only previous escape was a hard browser refresh; now the
+   error region offers an in-place retry plus an explicit reload button
+   for cases where the iframe itself is in a bad state. */
+.enm-error-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--spacing-sm);
+    margin-top: var(--spacing-md);
+}
+
 /* ============================================================
    Card surfaces — single source of truth
    ============================================================ */

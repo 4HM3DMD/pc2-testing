@@ -129,8 +129,33 @@
             this._antiSnipe.className = 'enm-proposal-anti-snipe';
             this._antiSnipe.placeholder = 'Anti-snipe password';
             this._antiSnipe.setAttribute('aria-label', 'Anti-snipe password');
-            this._antiSnipe.autocomplete = 'current-password';
-            this._antiSnipe.addEventListener('input', function () { self._refreshConfirmEnabled(); });
+            // SAFETY: never use current-password here. Healing proposal
+            // confirmation is destructive — autocomplete="current-password"
+            // would let a password manager auto-fill this field on render
+            // and the length check at _refreshConfirmEnabled would then
+            // silently enable Confirm without operator intent (a "drive-
+            // by confirm" on autofill). off + 'one-time-code' both block
+            // PM autofill across Chrome/Safari/Firefox/1Password.
+            this._antiSnipe.setAttribute('autocomplete', 'off');
+            this._antiSnipe.setAttribute('autocorrect', 'off');
+            this._antiSnipe.setAttribute('autocapitalize', 'off');
+            this._antiSnipe.setAttribute('spellcheck', 'false');
+            this._antiSnipe.addEventListener('input', function (ev) {
+                // Belt-and-braces: only honour InputEvents that came from
+                // real keystrokes / paste. A programmatic .value= from a
+                // password manager fires `change` but `inputType` is
+                // empty or 'insertReplacementText'. Require a known
+                // keystroke type so synthesised fills can't sneak past.
+                if (ev && ev.inputType
+                    && ev.inputType !== 'insertText'
+                    && ev.inputType !== 'insertFromPaste'
+                    && ev.inputType !== 'deleteContentBackward'
+                    && ev.inputType !== 'deleteContentForward'
+                    && ev.inputType !== 'insertCompositionText') {
+                    return;
+                }
+                self._refreshConfirmEnabled();
+            });
             card.appendChild(this._antiSnipe);
         }
 

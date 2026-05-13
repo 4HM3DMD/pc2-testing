@@ -79,7 +79,32 @@
         }
     }
 
+    /**
+     * Wire the error-pane Retry / Reload buttons. Called once during
+     * init so the listeners survive every subsequent _showError() call.
+     * Retry re-runs init() with the previous flags; Reload is a hard
+     * fallback when retry can't even reach the error pane.
+     */
+    ENMApp.prototype._wireErrorActions = function () {
+        var self = this;
+        if (this.els.errorRetry && !this.els.errorRetry.dataset.wired) {
+            this.els.errorRetry.dataset.wired = '1';
+            this.els.errorRetry.addEventListener('click', function () {
+                if (self.els.error) { self.els.error.hidden = true; }
+                if (self.els.spinner) { self.els.spinner.hidden = false; }
+                self.init();
+            });
+        }
+        if (this.els.errorReload && !this.els.errorReload.dataset.wired) {
+            this.els.errorReload.dataset.wired = '1';
+            this.els.errorReload.addEventListener('click', function () {
+                try { location.reload(); } catch (e) { /* iframe sandbox */ }
+            });
+        }
+    };
+
     ENMApp.prototype.init = function () {
+        this._wireErrorActions();
         // alpha.25: install responsive observer FIRST so size class is set
         // before any UI mounts. Otherwise components measure with the wrong
         // class and render at the wrong breakpoint on first paint.
@@ -92,6 +117,8 @@
             error:        document.getElementById('enm-error'),
             errorTitle:   document.getElementById('enm-error-title'),
             errorDetail:  document.getElementById('enm-error-detail'),
+            errorRetry:   document.getElementById('enm-error-retry'),
+            errorReload:  document.getElementById('enm-error-reload'),
             content:      document.getElementById('enm-content'),
             tabs:         document.getElementById('enm-tabs'),
             themeToggle:  document.getElementById('enm-theme-toggle'),

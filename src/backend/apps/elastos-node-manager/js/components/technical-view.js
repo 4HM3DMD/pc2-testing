@@ -68,7 +68,18 @@
         this.root = document.createElement('section');
         this.root.className = 'enm-tech';
 
-        this._activeTab = 'status';
+        // Resume the operator's last sub-tab if we remembered one. Falls
+        // back to Status on first visit or when storage is blocked.
+        var rememberedTab = null;
+        try {
+            if (typeof sessionStorage !== 'undefined') {
+                rememberedTab = sessionStorage.getItem('enm:tech:lastTab');
+            }
+        } catch (e) { /* private mode may block */ }
+        var validIds = TABS.map(function (x) { return x.id; });
+        this._activeTab = (rememberedTab && validIds.indexOf(rememberedTab) !== -1)
+            ? rememberedTab
+            : 'status';
         this._mounted = {};   // { tabId: componentInstance }
         this._panes = {};     // { tabId: panelDiv }
     }
@@ -214,6 +225,28 @@
     TechnicalView.prototype._switchTo = function (tabId) {
         var self = this;
         this._activeTab = tabId;
+        // a11y/orientation: surface the current sub-tab in document.title
+        // so PC2's window-chrome reads "Elastos Node Manager — Logs"
+        // instead of staying frozen on the static index.html title.
+        // Operators with three PC2 windows open get a real taskbar cue
+        // for which section they're on. Mirrors the breadcrumb idea
+        // from the navigation audit without committing to a full
+        // breadcrumb component yet.
+        try {
+            var tabMeta = TABS.find ? TABS.find(function (x) { return x.id === tabId; }) : null;
+            var tabLabel = (tabMeta && tabMeta.label) || tabId;
+            document.title = 'Elastos Node Manager — ' + tabLabel;
+        } catch (e) { /* document.title may be locked in some embeds */ }
+        // Persist the active sub-tab so a relaunch (PC2 close + reopen)
+        // returns the operator to where they were instead of always
+        // landing on Status. sessionStorage scopes to the tab; localStorage
+        // scopes across sessions — sessionStorage is the safer default
+        // because a "fresh look" intent (open in new window) starts clean.
+        try {
+            if (typeof sessionStorage !== 'undefined') {
+                sessionStorage.setItem('enm:tech:lastTab', tabId);
+            }
+        } catch (e) { /* private mode may block */ }
         // Tab visuals + roving tabindex (only the active tab is in the natural
         // Tab sequence; arrow keys move within the tablist).
         this._nav.querySelectorAll('[data-tab]').forEach(function (b) {

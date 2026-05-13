@@ -236,14 +236,27 @@
     function textInput(placeholder) {
         var i = document.createElement('input'); i.type = 'text';
         i.placeholder = placeholder; i.className = 'enm-audit-input';
+        // Audit filters are short-lived per-session queries — browser
+        // autofill / autocomplete suggestions are pure noise here. Mobile
+        // keypad numeric hint helps because Elastos chain IDs are small
+        // integers (e.g. `20`, `21`).
+        i.setAttribute('autocomplete', 'off');
+        i.setAttribute('inputmode', 'numeric');
+        i.setAttribute('spellcheck', 'false');
+        i.setAttribute('autocapitalize', 'off');
         return i;
     }
     function dateInput() {
         var i = document.createElement('input'); i.type = 'datetime-local';
-        i.className = 'enm-audit-input'; return i;
+        i.className = 'enm-audit-input';
+        i.setAttribute('autocomplete', 'off');
+        return i;
     }
     function selectInput(options) {
         var s = document.createElement('select'); s.className = 'enm-audit-input';
+        // Select boxes also accept autofill in some browsers. Filter
+        // queries are session-scoped — never bring up history.
+        s.setAttribute('autocomplete', 'off');
         options.forEach(function (o) {
             var opt = document.createElement('option'); opt.value = o.value; opt.textContent = o.label;
             s.appendChild(opt);

@@ -66,10 +66,17 @@
             self.root.dataset.stale = '1';
             self.root.title = 'System status temporarily unavailable — values may be stale.';
             if (self.notifications && err && err.status !== 401) {
-                self.notifications.warning(
-                    'System status unavailable',
-                    err && err.message ? err.message : String(err),
-                );
+                // Reuse one stable id so a 5-min backend outage doesn't
+                // stack 60 identical toasts (cap = 5 visible, but the
+                // operator still sees the same warning recycled twelve
+                // times a minute). Single-id show() dedupes via dismiss-
+                // and-replace, so the toast updates in place instead.
+                self.notifications.show({
+                    id: 'enm-sys-status-unavailable',
+                    severity: 'warning',
+                    title: 'System status unavailable',
+                    body: err && err.message ? err.message : String(err),
+                });
             }
         });
     };
