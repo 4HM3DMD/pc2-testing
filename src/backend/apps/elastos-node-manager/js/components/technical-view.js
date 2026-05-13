@@ -474,24 +474,47 @@
         var producerState = producer && producer.state;
         var producerEnabled = !!(producer && producer.enabled);
 
-        function gate(action, disabled, reason) {
-            var btn = pane.querySelector('[data-action="' + action + '"]');
-            if (!btn) { return; }
-            btn.disabled = !!disabled;
-            btn.title = disabled ? reason : '';
-            // Add a visible disabled-with-reason marker on the row
-            var row = btn.closest('.enm-tech-maintenance-row');
-            if (row) {
-                row.dataset.disabled = disabled ? '1' : '0';
-                var help = row.querySelector('.enm-tech-maintenance-help');
-                // Stash the original help text once, restore when re-enabled.
+        // alpha.28.1 batch 66 (Round-18 audit) — gate triples are now
+        // cached + state-memoised. Previously every gate() call ran
+        // querySelector + closest + querySelector (3 DOM queries) AND
+        // innerHTML-rewrote the help node every time, even when the
+        // gate state hadn't changed. With three gates fired per 5s poll
+        // that's 9 DOM queries + 3 innerHTML rewrites per tick while
+        // the operator's just looking at the Tools tab. Now: cache the
+        // {btn, row, help} triples on the pane once, and short-circuit
+        // each gate when its applied state matches the cached signature.
+        if (!pane._enmGateCache) {
+            var cache = {};
+            ['compact', 'activate', 'rebootstrap'].forEach(function (a) {
+                var btn = pane.querySelector('[data-action="' + a + '"]');
+                if (!btn) { return; }
+                var row = btn.closest('.enm-tech-maintenance-row');
+                var help = row ? row.querySelector('.enm-tech-maintenance-help') : null;
                 if (help && !help.dataset.original) {
                     help.dataset.original = help.innerHTML;
                 }
-                if (help && disabled) {
-                    help.innerHTML = '<span class="enm-tech-disabled-reason">' + reason + '</span>';
-                } else if (help && help.dataset.original) {
-                    help.innerHTML = help.dataset.original;
+                cache[a] = { btn: btn, row: row, help: help, lastSig: null };
+            });
+            pane._enmGateCache = cache;
+        }
+        function gate(action, disabled, reason) {
+            var c = pane._enmGateCache[action];
+            if (!c) { return; }
+            // Signature includes both flag AND reason so help-text updates
+            // when the disable reason changes (e.g. cooldown progressing).
+            var sig = (disabled ? '1' : '0') + '|' + (reason || '');
+            if (c.lastSig === sig) { return; }
+            c.lastSig = sig;
+            c.btn.disabled = !!disabled;
+            c.btn.title = disabled ? reason : '';
+            if (c.row) {
+                c.row.dataset.disabled = disabled ? '1' : '0';
+                if (c.help) {
+                    if (disabled) {
+                        c.help.innerHTML = '<span class="enm-tech-disabled-reason">' + reason + '</span>';
+                    } else if (c.help.dataset.original) {
+                        c.help.innerHTML = c.help.dataset.original;
+                    }
                 }
             }
         }
