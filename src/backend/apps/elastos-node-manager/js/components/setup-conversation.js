@@ -157,6 +157,24 @@
         else if (card === 'b3') { this._renderCardB3(seq); }
         else if (card === 'c') { this._renderCardC(seq); }
         else if (card === 'd') { this._renderCardD(seq); }
+
+        // a11y/focus: each card swap re-renders `_body.innerHTML`, which
+        // destroys the previously-focused control (the Continue/Install
+        // button operators just clicked). Without an explicit focus
+        // landing, focus drops to body and screen readers don't
+        // announce that the wizard advanced. Move focus to the new
+        // card's heading (with a temporary tabindex so it accepts
+        // programmatic focus), and let the user Tab forward from there.
+        try {
+            var heading = this._body.querySelector('.enm-conv-title')
+                || this._body.querySelector('h2, h3');
+            if (heading && typeof heading.focus === 'function') {
+                if (!heading.hasAttribute('tabindex')) {
+                    heading.setAttribute('tabindex', '-1');
+                }
+                heading.focus({ preventScroll: true });
+            }
+        } catch (e) { /* DOM may be torn down mid-render */ }
     };
 
     /** @private */

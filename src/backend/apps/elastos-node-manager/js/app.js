@@ -531,6 +531,20 @@
         }
         this.els.errorTitle.textContent = title;
         this.els.errorDetail.textContent = detail;
+
+        // a11y/focus: the error pane lives inside role="alert" so screen
+        // readers announce the new content, but sighted keyboard users
+        // need a focus indicator landing inside it. Promote the title
+        // to a programmatically-focusable element and move focus there
+        // so the next Tab walks into the error pane's links/buttons.
+        try {
+            if (this.els.errorTitle && typeof this.els.errorTitle.focus === 'function') {
+                if (!this.els.errorTitle.hasAttribute('tabindex')) {
+                    this.els.errorTitle.setAttribute('tabindex', '-1');
+                }
+                this.els.errorTitle.focus({ preventScroll: true });
+            }
+        } catch (e) { /* focus may fail in detached states */ }
     };
 
     function withTag(err, tag) {

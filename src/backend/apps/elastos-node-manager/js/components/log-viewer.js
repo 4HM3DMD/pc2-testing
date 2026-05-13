@@ -69,7 +69,11 @@
         this._tailToggle.type = 'button';
         this._tailToggle.className = 'enm-log-tail-toggle enm-log-following';
         this._tailToggle.textContent = t('log_viewer.live');
-        this._tailToggle.title = t('log_viewer.live');
+        // Don't mirror the same string into title= — duplicating a
+        // visible button label is pure noise for screen-reader users
+        // (they get the label, then the title, identical). The title=
+        // is only assigned in the reconnecting branch where it carries
+        // additional context.
         var self = this;
         // SSE connection-state tracking — was missing before, so the
         // "live" badge stayed lit even when the EventSource was
@@ -97,7 +101,10 @@
             self._tailToggle.classList.remove('enm-log-reconnecting');
             self._tailToggle.textContent = t(self._followTail ? 'log_viewer.live' : 'log_viewer.paused');
             self._tailToggle.classList.toggle('enm-log-following', self._followTail);
-            self._tailToggle.title = self._tailToggle.textContent;
+            // Clear title= in the connected branch — see _renderShell
+            // comment; we only set title= when the badge carries info
+            // not already visible in the label.
+            self._tailToggle.removeAttribute('title');
         };
         this._tailToggle.addEventListener('click', function () {
             // Don't toggle while disconnected — the badge is non-actionable then.

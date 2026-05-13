@@ -159,7 +159,14 @@
             b.className = 'enm-tab';
             b.innerHTML = escapeHtml(t.label)
                 + (t.pill ? ' <span class="enm-tab-pill">' + escapeHtml(t.pill) + '</span>' : '');
-            b.addEventListener('click', function () { self._switchTo(t.id); });
+            b.addEventListener('click', function () {
+                self._switchTo(t.id);
+                // a11y/Safari: WebKit doesn't focus <button> on click, so
+                // a click-then-arrow flow moves from the previous tab.
+                // Explicit focus keeps the roving-tabindex invariant
+                // ("the focused tab is the active tab") true everywhere.
+                try { b.focus({ preventScroll: true }); } catch (e) { b.focus(); }
+            });
             // Arrow-key navigation within the tablist (Left/Right/Home/End).
             b.addEventListener('keydown', function (ev) {
                 var key = ev.key;

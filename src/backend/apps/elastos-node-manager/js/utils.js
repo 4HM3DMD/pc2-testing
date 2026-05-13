@@ -114,10 +114,71 @@
         return str.slice(0, head) + '…' + str.slice(-tail);
     }
 
+    /**
+     * Tri-state probe of `prefers-reduced-motion`. The CSS `*` catch-all
+     * already neutralises every transition/animation under reduce-motion,
+     * but JS timers carrying motion side effects (toast slide-out, drawer
+     * close, attention pulses) still tick at their full duration. Call
+     * this to shorten those waits to ~10ms when the user has asked for
+     * less motion.
+     *
+     * Falsy in any environment that lacks matchMedia (older IE-like
+     * shells, jsdom test sandboxes), so callers can treat the answer
+     * as "assume full motion" without further branching.
+     *
+     * @returns {boolean}
+     */
+    function reducedMotion() {
+        return !!(typeof root.matchMedia === 'function'
+            && root.matchMedia('(prefers-reduced-motion: reduce)').matches);
+    }
+
+    /**
+     * Run an async click-handler exactly once at a time.
+     *
+     * The de facto guard around every mutating action in the app —
+     * settings saves, chain start/stop, danger-zone Wipe, validator
+     * Activate. Collapses the four duties every handler has to
+     * implement by hand today:
+     *   1. Refuse re-entry while a previous call is still in flight.
+     *   2. Disable the trigger so the operator can't double-click it.
+     *   3. Swap the label to something like "Saving…" when given.
+     *   4. Restore label + disabled state when the promise settles.
+     *
+     * `fn` may return a promise or a synchronous value; the result is
+     * wrapped in Promise.resolve so both paths converge on the same
+     * finally cleanup.
+     *
+     * Returns a promise that resolves to `null` when the call was
+     * refused (already in flight) so callers can short-circuit cleanly.
+     *
+     * @param {HTMLButtonElement} btn
+     * @param {string|null}        runningLabel  optional "Saving…" override
+     * @param {function:Promise=}  fn
+     * @returns {Promise<any>}
+     */
+    function runOnce(btn, runningLabel, fn) {
+        if (!btn || btn.dataset.busy === '1') { return Promise.resolve(null); }
+        btn.dataset.busy = '1';
+        var prevText = btn.textContent;
+        var prevDisabled = btn.disabled;
+        btn.disabled = true;
+        if (runningLabel) { btn.textContent = runningLabel; }
+        return Promise.resolve()
+            .then(typeof fn === 'function' ? fn : function () { return null; })
+            .finally(function () {
+                btn.dataset.busy = '0';
+                btn.disabled = prevDisabled;
+                if (runningLabel) { btn.textContent = prevText; }
+            });
+    }
+
     root.enmTOrFallback = enmTOrFallback;
     root.enmPad2 = pad2;
     root.enmFormatUptime = formatUptime;
     root.enmFormatNumber = formatNumber;
     root.enmFormatBytes = formatBytes;
     root.enmFormatAddress = formatAddress;
+    root.enmReducedMotion = reducedMotion;
+    root.enmRunOnce = runOnce;
 }(typeof window !== 'undefined' ? window : globalThis));

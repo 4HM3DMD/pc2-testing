@@ -43,9 +43,17 @@
             + '</div>';
 
         var self = this;
-        this.root.querySelector('.enm-welcome-cta').addEventListener('click', function () {
+        var cta = this.root.querySelector('.enm-welcome-cta');
+        cta.addEventListener('click', function () {
             self.onContinue();
         });
+        // a11y: the welcome screen is the operator's first interactive
+        // landmark on a clean install. Without this focus call they have
+        // to Tab past the (empty) header + skip-link to reach the only
+        // meaningful control. Focusing the CTA on mount also gives
+        // screen-reader users an immediate announcement of the button's
+        // label + role.
+        try { cta.focus({ preventScroll: true }); } catch (e) { cta.focus(); }
         return this;
     };
 

@@ -156,6 +156,10 @@
         var actions = document.createElement('div'); actions.className = 'enm-settings-actions';
         var detectBtn = btn(t('settings.ip_detect_btn'), 'enm-btn-secondary', this._detectIp.bind(this));
         var saveBtn = btn(t('settings.ip_save_btn'),     'enm-btn-primary',   this._saveNetwork.bind(this));
+        // Capture so _saveNetwork can route through enmRunOnce — disabled
+        // + label-swapped while the PUT is in flight so a slow backend
+        // can't get double-saved.
+        this._network.saveBtn = saveBtn;
         actions.appendChild(detectBtn);
         actions.appendChild(saveBtn);
         section.appendChild(actions);
@@ -199,7 +203,9 @@
         });
 
         var actions = document.createElement('div'); actions.className = 'enm-settings-actions';
-        actions.appendChild(btn(t('settings.adv_save_btn'), 'enm-btn-primary', this._saveAdvanced.bind(this)));
+        var advSaveBtn = btn(t('settings.adv_save_btn'), 'enm-btn-primary', this._saveAdvanced.bind(this));
+        this._adv.saveBtn = advSaveBtn;
+        actions.appendChild(advSaveBtn);
         section.appendChild(actions);
 
         this._adv.statusLine = document.createElement('p');
@@ -313,11 +319,12 @@
         toggleRow.className = 'enm-rpc-toggle-row';
         toggleRow.appendChild(label(this._creds.toggleOff, t('settings.rpc_toggle_off')));
         toggleRow.appendChild(label(this._creds.toggleOn,  t('settings.rpc_toggle_on')));
-        toggleRow.appendChild(btn(
+        this._creds.toggleSaveBtn = btn(
             t('settings.rpc_toggle_save_btn'),
             'enm-btn-primary enm-rpc-toggle-save',
             this._saveRpcEnabled.bind(this),
-        ));
+        );
+        toggleRow.appendChild(this._creds.toggleSaveBtn);
         toggleSec.appendChild(toggleRow);
 
         var toggleHelp = document.createElement('p');
@@ -345,11 +352,12 @@
         var whiteRow = document.createElement('div');
         whiteRow.className = 'enm-rpc-allow-row';
         whiteRow.appendChild(this._creds.whiteIp);
-        whiteRow.appendChild(btn(
+        this._creds.whiteSaveBtn = btn(
             t('settings.rpc_white_apply_btn'),
             'enm-btn-primary enm-rpc-allow-apply',
             this._saveWhitelist.bind(this),
-        ));
+        );
+        whiteRow.appendChild(this._creds.whiteSaveBtn);
         whiteSec.appendChild(whiteRow);
 
         // chipInput auto-merges locked values, so this passes the server's list
@@ -427,14 +435,17 @@
         }
         var self = this;
         this._creds.toggleStatus.textContent = t('common.loading');
-        this.api.put('/config/mainchain', { rpcEnabled: enabled }).then(function () {
-            self._creds.toggleStatus.textContent = t('settings.rpc_toggle_saved');
-            if (self._creds.data) self._creds.data.enabled = enabled;
-            // Re-render so the help text reflects the new state.
-            self._renderCredsPanel();
-        }).catch(function (err) {
-            self._creds.toggleStatus.textContent = t('settings.rpc_toggle_save_failed',
-                { error: err.message || String(err) });
+        var savingLabel = t('common.saving') || 'Saving…';
+        return root.enmRunOnce(this._creds.toggleSaveBtn, savingLabel, function () {
+            return self.api.put('/config/mainchain', { rpcEnabled: enabled }).then(function () {
+                self._creds.toggleStatus.textContent = t('settings.rpc_toggle_saved');
+                if (self._creds.data) self._creds.data.enabled = enabled;
+                // Re-render so the help text reflects the new state.
+                self._renderCredsPanel();
+            }).catch(function (err) {
+                self._creds.toggleStatus.textContent = t('settings.rpc_toggle_save_failed',
+                    { error: err.message || String(err) });
+            });
         });
     };
 
@@ -455,12 +466,15 @@
         }
         var self = this;
         this._creds.whiteStatus.textContent = t('common.loading');
-        this.api.put('/config/mainchain', { whiteIPList: list }).then(function () {
-            self._creds.whiteStatus.textContent = t('settings.rpc_white_applied');
-            if (self._creds.data) self._creds.data.whiteIPList = list.slice();
-        }).catch(function (err) {
-            self._creds.whiteStatus.textContent = t('settings.rpc_white_apply_failed',
-                { error: err.message || String(err) });
+        var savingLabel = t('common.saving') || 'Saving…';
+        return root.enmRunOnce(this._creds.whiteSaveBtn, savingLabel, function () {
+            return self.api.put('/config/mainchain', { whiteIPList: list }).then(function () {
+                self._creds.whiteStatus.textContent = t('settings.rpc_white_applied');
+                if (self._creds.data) self._creds.data.whiteIPList = list.slice();
+            }).catch(function (err) {
+                self._creds.whiteStatus.textContent = t('settings.rpc_white_apply_failed',
+                    { error: err.message || String(err) });
+            });
         });
     };
 
@@ -493,7 +507,9 @@
         });
 
         var actions = document.createElement('div'); actions.className = 'enm-settings-actions';
-        actions.appendChild(btn(t('settings.general_save_btn'), 'enm-btn-primary', this._saveGeneral.bind(this)));
+        var genSaveBtn = btn(t('settings.general_save_btn'), 'enm-btn-primary', this._saveGeneral.bind(this));
+        this._gen.saveBtn = genSaveBtn;
+        actions.appendChild(genSaveBtn);
         section.appendChild(actions);
 
         this._gen.statusLine = document.createElement('p');
@@ -555,28 +571,35 @@
         var mode = this._network.modeManual.checked ? 'manual' : 'auto';
         var manualValue = this._network.manualInput.value.trim();
         var self = this;
-        this.api.put('/config/network', { mode: mode, manualValue: manualValue }).then(function () {
-            self._network.statusLine.textContent = root.enmTOrFallback('settings.saved');
-            self.refresh();
-        }).catch(function (err) {
-            self._network.statusLine.textContent = root.enmTOrFallback('settings.save_failed', { error: err.message });
+        var t = root.enmTOrFallback;
+        var savingLabel = t('common.saving') || 'Saving…';
+        return root.enmRunOnce(this._network.saveBtn, savingLabel, function () {
+            return self.api.put('/config/network', { mode: mode, manualValue: manualValue })
+                .then(function () {
+                    self._network.statusLine.textContent = t('settings.saved');
+                    self.refresh();
+                })
+                .catch(function (err) {
+                    self._network.statusLine.textContent = t('settings.save_failed', { error: err.message });
+                });
         });
     };
 
     /** @private */
     SettingsTab.prototype._saveAdvanced = function () {
+        var t = root.enmTOrFallback;
         // Client-side guard: server (joi schema in EnmConfigSchema) is the
         // authority, but giving the operator immediate inline feedback is
         // friendlier than a generic toast after the round-trip.
         var memMb = parseInt(this._adv.memory.value, 10);
         if (!Number.isInteger(memMb) || memMb < 512 || memMb > 32_768) {
-            this._adv.statusLine.textContent = root.enmTOrFallback(
+            this._adv.statusLine.textContent = t(
                 'settings.save_failed', { error: 'Memory limit must be 512..32768 MB.' });
             return;
         }
         var rpcUser = this._adv.rpcUser.value.trim();
         if (rpcUser.length === 0 || !/^[A-Za-z0-9]+$/.test(rpcUser)) {
-            this._adv.statusLine.textContent = root.enmTOrFallback(
+            this._adv.statusLine.textContent = t(
                 'settings.save_failed', { error: 'RPC user must be alphanumeric, non-empty.' });
             return;
         }
@@ -592,20 +615,24 @@
         var pw = this._adv.rpcPassword.value;
         if (pw && pw.length > 0) { body.rpcPassword = pw; }
         var self = this;
-        this.api.put('/config/mainchain', body).then(function () {
-            self._adv.statusLine.textContent = root.enmTOrFallback('settings.saved');
-            self._adv.rpcPassword.value = '';
-            self.refresh();
-        }).catch(function (err) {
-            self._adv.statusLine.textContent = root.enmTOrFallback('settings.save_failed', { error: err.message });
+        var savingLabel = t('common.saving') || 'Saving…';
+        return root.enmRunOnce(this._adv.saveBtn, savingLabel, function () {
+            return self.api.put('/config/mainchain', body).then(function () {
+                self._adv.statusLine.textContent = t('settings.saved');
+                self._adv.rpcPassword.value = '';
+                self.refresh();
+            }).catch(function (err) {
+                self._adv.statusLine.textContent = t('settings.save_failed', { error: err.message });
+            });
         });
     };
 
     /** @private */
     SettingsTab.prototype._saveGeneral = function () {
+        var t = root.enmTOrFallback;
         var retention = parseInt(this._gen.auditRetention.value, 10);
         if (!Number.isInteger(retention) || retention < 0 || retention > 3650) {
-            this._gen.statusLine.textContent = root.enmTOrFallback(
+            this._gen.statusLine.textContent = t(
                 'settings.save_failed', { error: 'Audit retention must be 0..3650 days (0 = forever).' });
             return;
         }
@@ -615,11 +642,14 @@
             auditRetentionDays: retention,
         };
         var self = this;
-        this.api.put('/config/general', body).then(function () {
-            self._gen.statusLine.textContent = root.enmTOrFallback('settings.saved');
-            self.refresh();
-        }).catch(function (err) {
-            self._gen.statusLine.textContent = root.enmTOrFallback('settings.save_failed', { error: err.message });
+        var savingLabel = t('common.saving') || 'Saving…';
+        return root.enmRunOnce(this._gen.saveBtn, savingLabel, function () {
+            return self.api.put('/config/general', body).then(function () {
+                self._gen.statusLine.textContent = t('settings.saved');
+                self.refresh();
+            }).catch(function (err) {
+                self._gen.statusLine.textContent = t('settings.save_failed', { error: err.message });
+            });
         });
     };
 
@@ -650,9 +680,26 @@
         intro.textContent = t('settings.danger_intro');
         section.appendChild(intro);
 
+        var dangerSelf = this;
         this._danger = {
-            showBtn: btn(t('settings.danger_show_btn'), 'enm-btn-secondary',
-                this._toggleDangerControls.bind(this)),
+            showBtn: btn(t('settings.danger_show_btn'), 'enm-btn-secondary', function () {
+                dangerSelf._toggleDangerControls();
+                // a11y/focus: when the operator hits Show the entire
+                // type-to-confirm gauntlet appears below; without an
+                // explicit focus the operator has to hunt for the input.
+                // Skip on close — the Show button itself remains a sane
+                // resting focus.
+                if (dangerSelf._danger
+                    && dangerSelf._danger.controls
+                    && dangerSelf._danger.controls.style.display !== 'none'
+                    && dangerSelf._danger.confirmInput) {
+                    try {
+                        dangerSelf._danger.confirmInput.focus({ preventScroll: true });
+                    } catch (e) {
+                        dangerSelf._danger.confirmInput.focus();
+                    }
+                }
+            }),
             controls: document.createElement('div'),
             confirmInput: null,
             wipeBtn: null,

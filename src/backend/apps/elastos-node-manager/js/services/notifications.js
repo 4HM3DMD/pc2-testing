@@ -88,12 +88,20 @@
             return;
         }
         item.node.classList.add('enm-toast-leaving');
-        // Wait for the CSS transition; remove after.
+        // Wait for the CSS transition; remove after. Under
+        // prefers-reduced-motion the CSS catch-all forces the transition
+        // to ~0.01ms, so a 200ms removal timer leaves the node stuck on
+        // the page for a moment with no visible animation. Drop to ~10ms
+        // in that branch so dismissal feels instant.
+        var reduceMotion = (typeof window !== 'undefined' && window.enmReducedMotion)
+            ? window.enmReducedMotion()
+            : false;
+        var hideMs = reduceMotion ? 10 : 200;
         setTimeout(function () {
             if (item.node.parentNode) {
                 item.node.parentNode.removeChild(item.node);
             }
-        }, 200);
+        }, hideMs);
     };
 
     Notifications.prototype.clear = function () {

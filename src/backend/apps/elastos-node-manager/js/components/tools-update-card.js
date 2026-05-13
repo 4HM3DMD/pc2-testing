@@ -283,12 +283,26 @@
         });
     }
     function relTime(ms) {
-        if (!ms || typeof ms !== 'number') return 'recently';
+        if (!ms || typeof ms !== 'number') { return 'recently'; }
         var diffSec = Math.max(0, Math.floor((Date.now() - ms) / 1000));
-        if (diffSec < 60)    return 'just now';
-        if (diffSec < 3600)  return Math.floor(diffSec / 60) + ' min ago';
-        if (diffSec < 86400) return Math.floor(diffSec / 3600) + ' h ago';
-        return Math.floor(diffSec / 86400) + ' d ago';
+        var human;
+        if (diffSec < 60)         { human = 'just now'; }
+        else if (diffSec < 3600)  { human = Math.floor(diffSec / 60) + ' min ago'; }
+        else if (diffSec < 86400) { human = Math.floor(diffSec / 3600) + ' h ago'; }
+        else                      { human = Math.floor(diffSec / 86400) + ' d ago'; }
+        // Wrap the human label in a <time> element carrying the exact
+        // ISO timestamp so:
+        //   - the operator gets the precise time on hover (title=)
+        //   - assistive tech can announce datetime= as the canonical
+        //     value when the relative phrase ("12 min ago") is too vague
+        //   - the rendered span survives static HTML strings without
+        //     extra JS plumbing.
+        try {
+            var iso = new Date(ms).toISOString();
+            return '<time datetime="' + iso + '" title="' + iso + '">' + human + '</time>';
+        } catch (e) {
+            return human;
+        }
     }
 
     root.EnmToolsUpdateCard = EnmToolsUpdateCard;

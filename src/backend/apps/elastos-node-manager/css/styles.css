@@ -135,6 +135,19 @@
     --motion-fast: 160ms;
     --motion-base: 240ms;
     --motion-slow: 400ms;
+    /* Attention-pulse durations for one-shot UI feedback (chain-actions row
+       pulse, celebration pop, drawer/dialog slide). Existed as hard-coded
+       300–560ms values scattered across the file before alpha.28.1. */
+    --motion-attn: 520ms;
+    --motion-overlay: 320ms;
+    /* Loop durations for indefinite "breathing" indicators (spinner bounce,
+       chain-reconnect ::before, log-live-pulse, tools-update dot, sparkline
+       shimmer). Folding 6 hard-coded loop values into 4 tokens keeps the
+       app's overall rhythm consistent. */
+    --anim-loop-fast: 1200ms;
+    --anim-loop-med:  1600ms;
+    --anim-loop-slow: 2000ms;
+    --anim-loop-xslow: 4000ms;
     --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
     --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
     --ease-spring: cubic-bezier(.2, .7, .2, 1);
@@ -931,7 +944,8 @@ body[data-active-tab="identity"]::before {
     height: 6px;
     border-radius: 50%;
     background: currentColor;
-    animation: enm-chain-reconnect-blink 1.4s ease-in-out infinite;
+    /* token-driven: --anim-loop-med + --ease-in-out (was 1.4s ease-in-out). */
+    animation: enm-chain-reconnect-blink var(--anim-loop-med) var(--ease-in-out) infinite;
 }
 
 @keyframes enm-chain-reconnect-blink {
@@ -1204,7 +1218,8 @@ body[data-active-tab="identity"]::before {
 }
 
 .enm-chain-rotation[data-state="onduty"] .enm-chain-rotation-dot {
-    animation: enm-chain-rotation-pulse 1.4s ease-in-out infinite;
+    /* token-driven: --anim-loop-med + --ease-in-out (was 1.4s ease-in-out). */
+    animation: enm-chain-rotation-pulse var(--anim-loop-med) var(--ease-in-out) infinite;
 }
 
 @keyframes enm-chain-rotation-pulse {
@@ -4435,7 +4450,8 @@ body[data-update-severity="minor"] .enm-tech-tabs .enm-tab[data-tab="tools"]::be
 body[data-update-severity="major"] .enm-tech-tabs .enm-tab[data-tab="tools"]::before {
     background: var(--state-stalled);
     box-shadow: 0 0 0 3px rgba(255, 159, 10, 0.18);
-    animation: enm-tools-update-dot-pulse 2s ease-in-out infinite;
+    /* token-driven: --anim-loop-slow + --ease-in-out (was 2s ease-in-out). */
+    animation: enm-tools-update-dot-pulse var(--anim-loop-slow) var(--ease-in-out) infinite;
 }
 
 @keyframes enm-tools-update-dot-pulse {

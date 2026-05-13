@@ -104,6 +104,20 @@
             && !pState;
 
         if (!shouldShow) {
+            // a11y/focus: if the operator was focused inside this card
+            // (e.g. on Activate or the Copy button) when polling decides
+            // to hide it, focus drops to body. Move focus to a stable
+            // landmark first so the next Tab makes sense.
+            try {
+                if (this.root && this.root.contains && this.root.contains(document.activeElement)) {
+                    var fallback = document.getElementById('enm-tech-pane-status')
+                        || document.getElementById('enm-pane-dashboard')
+                        || document.getElementById('enm-main');
+                    if (fallback && typeof fallback.focus === 'function') {
+                        fallback.focus({ preventScroll: true });
+                    }
+                }
+            } catch (e) { /* DOM may not be live during teardown */ }
             this.root.hidden = true;
             // If we sped up polling because we expected an imminent state
             // change, slow back down.
@@ -111,6 +125,16 @@
             return;
         }
 
+        // Re-show recovery: if the card was previously hidden mid-activate,
+        // the Activate button may still be in its disabled/"Activating…"
+        // state. Reset to the resting label so the operator can retry.
+        if (this.root.hidden && this._rendered) {
+            var btn = this.root.querySelector('#enm-vc-activate');
+            if (btn) {
+                btn.disabled = false;
+                btn.textContent = root.enmTOrFallback('validator_card.activate_btn');
+            }
+        }
         this.root.hidden = false;
         // Operator is likely watching for confirmation right now — poll
         // every 5s so the card vanishes the moment producer.state shows up.
