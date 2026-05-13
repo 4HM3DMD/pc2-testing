@@ -66,9 +66,19 @@
      * @returns {string}
      */
     function formatNumber(n, opts) {
-        if (n == null || typeof n !== 'number' || !isFinite(n)) { return '—'; }
+        if (n == null) { return '—'; }
+        // alpha.28.1 batch 25 — coerce numeric strings via Number().
+        // Backend contract drift is a real risk (the chain-card height
+        // path already routes through Number(); audit a3e53e9a flagged
+        // it as widespread). Doing the coercion at the helper level
+        // means every caller (system-status disk, audit row count,
+        // chain-card peers/latency/skew, etc.) is hardened with no
+        // per-caller wrapper. `Number("943210")` → 943210; `Number("abc")`
+        // → NaN which the isFinite guard catches.
+        var num = (typeof n === 'number') ? n : Number(n);
+        if (!isFinite(num)) { return '—'; }
         var decimals = (opts && typeof opts.decimals === 'number') ? opts.decimals : 0;
-        return n.toLocaleString(undefined, {
+        return num.toLocaleString(undefined, {
             minimumFractionDigits: decimals,
             maximumFractionDigits: decimals,
         });
