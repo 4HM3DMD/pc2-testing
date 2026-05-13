@@ -260,6 +260,9 @@
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
         }).catch(function (err) {
+            // alpha.28.1 batch 52 — same 401 suppression as the
+            // load path (batch 51). Boot path owns re-auth UX.
+            if (err && err.status === 401) { return; }
             self.notifications.show({
                 id: 'audit-export-fail',
                 severity: 'warning',

@@ -603,6 +603,12 @@
             self.notifications.info(self.chainId + ' ' + kind, '');
             return self.refresh();
         }).catch(function (err) {
+            // alpha.28.1 batch 52 — 401 suppressed; boot path owns
+            // re-auth UX. Without this, expired-session caused the
+            // operator's Start/Stop/Restart click to surface a
+            // generic "Failed to start" toast on top of whatever
+            // the error pane was already saying.
+            if (err && err.status === 401) { return; }
             // Host-conflict 409 surfaces structured remediation steps.
             if (err && err.body && Array.isArray(err.body.conflicts)
                 && err.body.conflicts.length > 0) {
