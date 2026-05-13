@@ -664,6 +664,13 @@
     /** @private */
     SetupConversation.prototype._renderClockSkewResult = function (els, seq, cs) {
         var self = this;
+        // alpha.28.1 batch 84 — strings sourced from strings.js
+        // clock_skew.*. Three visual severities (skipped / out-of-sync
+        // / in-sync); placeholders carry runtime values like the
+        // skew direction, absolute milliseconds, and the time source.
+        // Closes the last hardcoded English block on the wizard path
+        // (Round-3 i18n coverage audit aef9c321 — final item).
+        var tt = root.enmTOrFallback;
         // Three branches by visual severity. The "continue" button is
         // present in GREEN and YELLOW; only RED hides it (and requires
         // the operator to fix NTP + retry).
@@ -671,25 +678,25 @@
             // YELLOW: probe didn't reach the internet. Warn the operator
             // but allow continue — many bare-metal setups intentionally
             // firewall outbound HTTPS.
-            els.title.textContent = 'Clock check skipped';
-            els.sub.textContent   = 'We could not reach a time server to verify your host clock. If your host clock is wrong, DPoS signatures will be silently rejected.';
+            els.title.textContent = tt('clock_skew.skipped_title');
+            els.sub.textContent   = tt('clock_skew.skipped_sub');
             els.detail.innerHTML =
                 '<div class="enm-clock-card enm-clock-card-warn">'
                   + '<div class="enm-clock-card-icon" aria-hidden="true">⚠</div>'
                   + '<div class="enm-clock-card-body">'
-                    + '<div class="enm-clock-card-title">Could not verify NTP</div>'
+                    + '<div class="enm-clock-card-title">' + escapeHtml(tt('clock_skew.skipped_card_title')) + '</div>'
                     + '<div class="enm-clock-card-sub">'
-                      + 'Reason: ' + escapeHtml(cs.reason || 'network unreachable') + '. '
-                      + 'Make sure your host has NTP running before going live: '
-                      + '<code>sudo timedatectl set-ntp true</code>.'
+                      + tt('clock_skew.skipped_card_body', {
+                          reason: escapeHtml(cs.reason || 'network unreachable'),
+                      })
                     + '</div>'
                   + '</div>'
                 + '</div>';
 
             els.actions.appendChild(
-                makeBtn('Continue anyway', 'primary hero', function () { self._goto('c'); })
+                makeBtn(tt('clock_skew.skipped_cta_continue'), 'primary hero', function () { self._goto('c'); })
             );
-            els.actions.appendChild(makeTextLink('Retry check', function () {
+            els.actions.appendChild(makeTextLink(tt('clock_skew.skipped_cta_retry'), function () {
                 self._runClockSkewProbe(els, seq);
             }));
             return;
@@ -702,25 +709,27 @@
             // immediately on registration.
             var skewMs = Number.isFinite(cs.skewMs) ? cs.skewMs : 0;
             var skewSeconds = (Math.abs(skewMs) / 1000).toFixed(1);
-            var direction = skewMs > 0 ? 'ahead of' : 'behind';
-            els.title.textContent = 'Host clock is out of sync';
-            els.sub.textContent   = 'Your server clock is ' + skewSeconds + 's ' + direction
-                + ' internet time. DPoS will reject your signatures and you will score missed-vote penalties.';
+            var direction = skewMs > 0
+                ? tt('clock_skew.direction_ahead')
+                : tt('clock_skew.direction_behind');
+            els.title.textContent = tt('clock_skew.out_of_sync_title');
+            els.sub.textContent   = tt('clock_skew.out_of_sync_sub', {
+                skewSeconds: skewSeconds,
+                direction:   direction,
+            });
             els.detail.innerHTML =
                 '<div class="enm-clock-card enm-clock-card-error">'
                   + '<div class="enm-clock-card-icon" aria-hidden="true">!</div>'
                   + '<div class="enm-clock-card-body">'
-                    + '<div class="enm-clock-card-title">Fix this before continuing</div>'
+                    + '<div class="enm-clock-card-title">' + escapeHtml(tt('clock_skew.out_card_title')) + '</div>'
                     + '<div class="enm-clock-card-sub">'
-                      + 'Run this on the host, then press Retry:'
-                      + '<pre class="enm-clock-fix"><code>sudo timedatectl set-ntp true</code></pre>'
-                      + 'After NTP catches up (usually &lt;30s), retry the check.'
+                      + tt('clock_skew.out_card_body')
                     + '</div>'
                   + '</div>'
                 + '</div>';
 
             els.actions.appendChild(
-                makeBtn('Retry check', 'primary hero', function (ev) {
+                makeBtn(tt('clock_skew.out_cta_retry'), 'primary hero', function (ev) {
                     ev.target.disabled = true;
                     self._runClockSkewProbe(els, seq);
                 })
@@ -728,7 +737,7 @@
             // Escape hatch: operators in air-gapped or test environments
             // can override. Marked clearly as risk-acknowledged so the
             // intent is unambiguous in audit logs.
-            els.actions.appendChild(makeTextLink('Continue anyway (not recommended)', function () {
+            els.actions.appendChild(makeTextLink(tt('clock_skew.out_cta_override'), function () {
                 self._goto('c');
             }));
             return;
@@ -740,24 +749,25 @@
         var absMs = Number.isFinite(cs.absSkewMs)
             ? cs.absSkewMs
             : Math.abs(Number.isFinite(cs.skewMs) ? cs.skewMs : 0);
-        els.title.textContent = 'Clock is in sync';
-        els.sub.textContent   = 'Your host clock matches internet time within the safe window.';
+        els.title.textContent = tt('clock_skew.ok_title');
+        els.sub.textContent   = tt('clock_skew.ok_sub');
         els.detail.innerHTML =
             '<div class="enm-clock-card enm-clock-card-ok">'
               + '<div class="enm-clock-card-icon" aria-hidden="true">✓</div>'
               + '<div class="enm-clock-card-body">'
-                + '<div class="enm-clock-card-title">±' + escapeHtml(String(absMs)) + 'ms</div>'
+                + '<div class="enm-clock-card-title">' + escapeHtml(tt('clock_skew.ok_card_title', { absMs: String(absMs) })) + '</div>'
                 + '<div class="enm-clock-card-sub">'
-                  + 'Measured against ' + escapeHtml(cs.source || 'an internet time source') + '. '
-                  + 'DPoS signing windows are 4 s wide, so you have plenty of margin.'
+                  + tt('clock_skew.ok_card_body', {
+                      source: escapeHtml(cs.source || tt('clock_skew.ok_default_source')),
+                  })
                 + '</div>'
               + '</div>'
             + '</div>';
 
         els.actions.appendChild(
-            makeBtn('Continue', 'primary hero', function () { self._goto('c'); })
+            makeBtn(tt('clock_skew.ok_cta_continue'), 'primary hero', function () { self._goto('c'); })
         );
-        els.actions.appendChild(makeTextLink('Recheck', function () {
+        els.actions.appendChild(makeTextLink(tt('clock_skew.ok_cta_recheck'), function () {
             self._runClockSkewProbe(els, seq);
         }));
     };

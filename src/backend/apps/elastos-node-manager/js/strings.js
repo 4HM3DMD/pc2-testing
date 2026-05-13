@@ -662,6 +662,43 @@
             modal_step_healthcheck:"Health-checks for 24s; auto-rollback if the new binary doesn't come up.",
             modal_release_notes:   'Release notes: {githubLink}',
         },
+
+        // alpha.28.1 batch 84 — setup-conversation clock-skew block
+        // (the last hardcoded English block on the wizard path).
+        // Three visual severities (skipped / out-of-sync / in-sync)
+        // each with a title, sub, detail card, and 1-2 action buttons.
+        // {skewSeconds}, {direction}, {reason}, {absMs}, {source}
+        // tokens carry runtime values.
+        clock_skew: {
+            skipped_title:     'Clock check skipped',
+            skipped_sub:       'We could not reach a time server to verify your host clock. If your host clock is wrong, DPoS signatures will be silently rejected.',
+            skipped_card_title:'Could not verify NTP',
+            // {reason} carries the network error string already
+            // surfaced by the backend; splice raw via escapeHtml at
+            // the call site so a malicious shape can't inject markup.
+            skipped_card_body: 'Reason: {reason}. Make sure your host has NTP running before going live: <code>sudo timedatectl set-ntp true</code>.',
+            skipped_cta_continue: 'Continue anyway',
+            skipped_cta_retry: 'Retry check',
+            out_of_sync_title: 'Host clock is out of sync',
+            out_of_sync_sub:   'Your server clock is {skewSeconds}s {direction} internet time. DPoS will reject your signatures and you will score missed-vote penalties.',
+            direction_ahead:   'ahead of',
+            direction_behind:  'behind',
+            out_card_title:    'Fix this before continuing',
+            out_card_body:     'Run this on the host, then press Retry:<pre class="enm-clock-fix"><code>sudo timedatectl set-ntp true</code></pre>After NTP catches up (usually &lt;30s), retry the check.',
+            out_cta_retry:     'Retry check',
+            out_cta_override:  'Continue anyway (not recommended)',
+            ok_title:          'Clock is in sync',
+            ok_sub:            'Your host clock matches internet time within the safe window.',
+            // {absMs} is the absolute skew in milliseconds (formatted
+            // by enmFormatNumber at the call site so locale grouping
+            // applies).
+            ok_card_title:     '±{absMs}ms',
+            // {source} is the upstream time server's hostname.
+            ok_card_body:      'Measured against {source}. DPoS signing windows are 4 s wide, so you have plenty of margin.',
+            ok_default_source: 'an internet time source',
+            ok_cta_continue:   'Continue',
+            ok_cta_recheck:    'Recheck',
+        },
     });
     // STRINGS is a deeply-frozen tree — see deepFreeze above.
 
