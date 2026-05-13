@@ -126,20 +126,20 @@
               + '<span aria-hidden="true">←</span> Back to home'
             + '</button>'
             : '';
-        // alpha.11: removed the explanatory subtitle. It was meta-
-        // commentary about how this view works ("real names not
-        // inferred values") which doesn't help anyone — operators
-        // either already know or never care, and avg-joe operators
-        // get confused by it. The tabs themselves are self-describing.
-        header.innerHTML =
-            backHtml
-            + '<h1 class="enm-tech-title">Elastos Node Manager</h1>';
+        // alpha.11: removed the explanatory subtitle.
+        // alpha.24: dropped the "Elastos Node Manager" h1 entirely — PC2's
+        // window chrome already shows the app title in the title bar, and
+        // the duplicate ate ~80px of vertical space inside the iframe
+        // (significant cost on short windows). Only render the header
+        // element if we have a back-link to show; otherwise skip it so
+        // the tab strip floats to the top of the pane.
         if (this.onBackHome) {
+            header.innerHTML = backHtml;
             header.querySelector('.enm-tech-back').addEventListener('click', function () {
                 self.onBackHome();
             });
+            this.root.appendChild(header);
         }
-        this.root.appendChild(header);
 
         // Sub-tab nav.
         var nav = document.createElement('nav');

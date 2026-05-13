@@ -224,11 +224,15 @@
 
 html, body {
     width: 100%;
-    /* `height: 100%` cascades to 0 if the iframe parent isn't sized
-       (e.g. static-preview tooling). Falling back to 100dvh guarantees
-       the app fills the viewport even when the host doesn't size us. */
-    min-height: 100vh;
-    min-height: 100dvh;
+    /* alpha.24 foundation fix: NEVER use vh/dvh on html/body inside an
+       iframe. PC2 embeds ENM in an iframe; vh measures the OUTER browser
+       viewport, not the iframe. With min-height: 100vh, a 1080px outer
+       browser inside a 560px iframe produced a 1080px body inside a 560px
+       container — permanent internal scrollbar, content squashed.
+       Just `height: 100%` of the iframe is correct. The fallback for
+       "iframe parent isn't sized" (static-preview tooling) is now
+       min-height: 100% which is the same as the iframe's own height. */
+    min-height: 100%;
     height: 100%;
     overflow: hidden;
     font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI',
@@ -267,11 +271,13 @@ body { position: relative; }
 */
 body::before {
     content: "";
-    position: fixed;
+    position: absolute;  /* alpha.24: absolute (anchored to body) not fixed (anchored to outer viewport) */
     inset: 0;
     background:
-        radial-gradient(80vw 60vh at 20% 0%,    var(--wash-a), transparent 70%),
-        radial-gradient(70vw 50vh at 100% 100%, var(--wash-b), transparent 70%);
+        /* alpha.24: % (element-relative) not vw/vh (outer-viewport-relative)
+           so gradient blobs scale with the iframe, not the desktop. */
+        radial-gradient(80% 60% at 20% 0%,    var(--wash-a), transparent 70%),
+        radial-gradient(70% 50% at 100% 100%, var(--wash-b), transparent 70%);
     pointer-events: none;
     z-index: 0;
     opacity: 1;
@@ -673,7 +679,11 @@ body[data-active-tab="identity"]::before {
 
 .enm-sys-cell {
     flex: 1 1 0;
-    min-width: 140px;
+    /* alpha.24: 140px × 5 cells = 700px hard floor that overflows when
+       iframe is <700px wide. Drop to 100px so cells shrink before
+       wrapping. The 480px @media rule still forces single-column on
+       phone widths. */
+    min-width: 100px;
     display: grid;
     grid-template-columns: 6px 1fr;
     grid-template-rows: auto auto;
@@ -767,7 +777,11 @@ body[data-active-tab="identity"]::before {
    center scales gracefully to 2-up / 3-up. */
 .enm-chains-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(360px, 480px));
+    /* alpha.24: lift the 480px upper cap. At wide widths the operator was
+       seeing a single 480px chain-card centered in a 1600px window with
+       1120px of empty margins ("opens small"). Cap now scales to a
+       reasonable max but lets the card breathe. */
+    grid-template-columns: repeat(auto-fit, minmax(360px, 720px));
     justify-content: center;
     gap: var(--spacing-lg);
     margin: 0 auto;
@@ -2482,7 +2496,8 @@ body[data-active-tab="identity"]::before {
     flex-direction: column;
     gap: var(--spacing-sm);
     z-index: 100;
-    max-width: min(360px, calc(100vw - 2 * var(--spacing-md)));
+    /* alpha.24: % (iframe-relative) not vw (outer-viewport-relative) */
+    max-width: min(360px, calc(100% - 2 * var(--spacing-md)));
     pointer-events: none;
 }
 
@@ -2605,7 +2620,9 @@ body[data-active-tab="identity"]::before {
     padding: var(--spacing-xl);
     max-width: 480px;
     width: 100%;
-    max-height: calc(100vh - 4 * var(--spacing-lg));
+    /* alpha.24: overlay parent is position: fixed inset: 0 inside iframe,
+       so % here is the iframe height — what we actually want. */
+    max-height: calc(100% - 4 * var(--spacing-lg));
     overflow: auto;
     display: flex;
     flex-direction: column;
@@ -3723,7 +3740,9 @@ body[data-active-tab="identity"]::before {
 
 .enm-conv-header {
     width: 100%;
-    max-width: 560px;
+    /* alpha.24: lift hard 560px cap. At wide widths operator saw a 560px
+       wizard card centered in a 1400px window with 420px empty margins. */
+    max-width: 800px;
     margin-bottom: var(--spacing-xl);
     display: flex;
     flex-direction: column;
@@ -3755,7 +3774,8 @@ body[data-active-tab="identity"]::before {
 
 .enm-conv-body {
     width: 100%;
-    max-width: 560px;
+    /* alpha.24: lift hard 560px cap (see .enm-conv-header above). */
+    max-width: 800px;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -4132,7 +4152,9 @@ body[data-active-tab="identity"]::before {
     top: 0;
     right: 0;
     height: 100%;
-    width: min(440px, 92vw);
+    /* alpha.24: % (iframe-relative) not vw (outer-viewport-relative)
+       so the drawer doesn't end up off-screen at narrow iframe widths. */
+    width: min(440px, 92%);
     background: var(--bg-surface);
     border-left: 1px solid var(--border-color);
     box-shadow: var(--shadow-lg);
@@ -4601,7 +4623,9 @@ body[data-update-severity="major"] .enm-tech-tabs .enm-tab[data-tab="tools"]::be
 .enm-tools-update-modal-card {
     width: 100%;
     max-width: 560px;
-    max-height: 80vh;
+    /* alpha.24: % of iframe (modal parent is position: fixed inset: 0
+       inside iframe), not vh of outer browser viewport. */
+    max-height: 80%;
     overflow-y: auto;
     background: var(--bg-surface);
     border: 1px solid var(--border-color);

@@ -213,6 +213,17 @@ function buildManifest({ version, signatureHex, publisherHex }) {
         role: 'dapp', // optional install (vs. 'system' which ships baked into PC2)
         icon: APP_ICON,
         entry: 'index.html',
+        // alpha.24: declare initial window dimensions so PC2's launcher
+        // opens ENM at a usable size rather than the 960x560 fallback.
+        // Most settings panels need 1024+ for sane label/input layout;
+        // 1200x800 gives breathing room without being so large that
+        // small monitors can't fit it. PC2 reads this from
+        // app_info.metadata.window_size at launch.
+        display: {
+            width: 1200,
+            height: 800,
+            resizable: true,
+        },
         backend: {
             entry: SERVICE_BACKEND_ENTRY,
             port: SERVICE_PORT,
