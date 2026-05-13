@@ -529,6 +529,30 @@
             // acbcec6b flagged "1 rows" as the cosmetic bug).
             row_count:      '{n} rows',
         },
+
+        // alpha.28.1 batch 59 — producer-identity on-chain binding strings
+        // moved out of inline English in components/producer-identity.js so
+        // a locale swap covers them. The previous shape had ~7 untranslated
+        // strings in _renderBinding (heading, four state chips, two notes,
+        // mismatch detail), making the on-chain binding section the largest
+        // remaining English-only block on the dashboard. Round-3 i18n
+        // coverage audit (aef9c321) flagged this.
+        producer_binding: {
+            heading:          'On-chain binding',
+            chip_bound:       'Bound',
+            chip_bound_state: 'Bound — {state}',
+            chip_unregistered:'Not yet registered on chain',
+            chip_mismatch:    'MISMATCH — chain reports a different node key',
+            chip_unknown:     'Status unknown',
+            owner_compare_note:
+                'Compare the owner public key below to what Essentials '
+              + 'shows under your BPoS deposit. If they differ you '
+              + 'registered under a different wallet — votes and '
+              + 'rewards will flow there, not here.',
+            owner_label:      'Owner public key (chain)',
+            split_key_note:   'V2 split-key producer: owner and node keys differ. Normal post-DPoSV2.',
+            mismatch_detail:  'ENM holds node pubkey {ours} but the chain returned {theirs}. This is rare — open the audit log and contact support.',
+        },
     });
     // STRINGS is a deeply-frozen tree — see deepFreeze above.
 

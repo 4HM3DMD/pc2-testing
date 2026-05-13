@@ -292,6 +292,12 @@
      * (validator-registration-card already covers the unregistered UX).
      */
     ProducerIdentity.prototype._renderBinding = function () {
+        // alpha.28.1 batch 59 — i18n migration of inline English strings.
+        // Round-3 i18n coverage audit (aef9c321). Strings live in
+        // strings.js under producer_binding.*; enmTOrFallback returns the
+        // key unchanged if strings.js failed to load so the UI stays
+        // readable rather than blank.
+        var t = root.enmTOrFallback;
         var self = this;
         this.api.get('/chains/mainchain/producer', { skipCache: true }).then(function (data) {
             if (self._destroyed) { return; }
@@ -306,17 +312,26 @@
 
             var heading = document.createElement('h4');
             heading.className = 'enm-producer-binding-heading';
-            heading.textContent = 'On-chain binding';
+            heading.textContent = t('producer_binding.heading');
             section.appendChild(heading);
 
             var chip = document.createElement('span');
             chip.className = 'enm-producer-binding-chip enm-producer-binding-chip-' + binding;
-            chip.textContent = ({
-                bound:        state ? 'Bound — ' + state : 'Bound',
-                unregistered: 'Not yet registered on chain',
-                mismatch:     'MISMATCH — chain reports a different node key',
-                unknown:      'Status unknown',
-            })[binding] || binding;
+            var chipText;
+            if (binding === 'bound') {
+                chipText = state
+                    ? t('producer_binding.chip_bound_state', { state: state })
+                    : t('producer_binding.chip_bound');
+            } else if (binding === 'unregistered') {
+                chipText = t('producer_binding.chip_unregistered');
+            } else if (binding === 'mismatch') {
+                chipText = t('producer_binding.chip_mismatch');
+            } else if (binding === 'unknown') {
+                chipText = t('producer_binding.chip_unknown');
+            } else {
+                chipText = binding;
+            }
+            chip.textContent = chipText;
             section.appendChild(chip);
 
             // Side-by-side: ENM's node pubkey vs the chain's owner pubkey.
@@ -325,36 +340,36 @@
             if (binding === 'bound') {
                 var note = document.createElement('p');
                 note.className = 'enm-producer-binding-note';
-                note.textContent =
-                    'Compare the owner public key below to what Essentials ' +
-                    'shows under your BPoS deposit. If they differ you ' +
-                    'registered under a different wallet — votes and ' +
-                    'rewards will flow there, not here.';
+                note.textContent = t('producer_binding.owner_compare_note');
                 section.appendChild(note);
 
                 if (chainOwner) {
                     var ownerRow = document.createElement('div');
                     ownerRow.className = 'enm-producer-field';
-                    ownerRow.innerHTML =
-                        '<span class="enm-producer-field-label">Owner public key (chain)</span>' +
-                        '<code class="enm-producer-field-value"></code>';
-                    ownerRow.querySelector('code').textContent = chainOwner;
+                    var ownerLabelEl = document.createElement('span');
+                    ownerLabelEl.className = 'enm-producer-field-label';
+                    ownerLabelEl.textContent = t('producer_binding.owner_label');
+                    var ownerValueEl = document.createElement('code');
+                    ownerValueEl.className = 'enm-producer-field-value';
+                    ownerValueEl.textContent = chainOwner;
+                    ownerRow.appendChild(ownerLabelEl);
+                    ownerRow.appendChild(ownerValueEl);
                     section.appendChild(ownerRow);
                 }
 
                 if (chainNode && chainOwner && chainNode.toLowerCase() !== chainOwner.toLowerCase()) {
                     var splitNote = document.createElement('p');
                     splitNote.className = 'enm-producer-binding-note';
-                    splitNote.textContent = 'V2 split-key producer: owner and node keys differ. Normal post-DPoSV2.';
+                    splitNote.textContent = t('producer_binding.split_key_note');
                     section.appendChild(splitNote);
                 }
             } else if (binding === 'mismatch') {
                 var mismatchDetail = document.createElement('p');
                 mismatchDetail.className = 'enm-producer-binding-note';
-                mismatchDetail.textContent =
-                    'ENM holds node pubkey ' + (data.ourPubkey || '') +
-                    ' but the chain returned ' + chainNode + '. ' +
-                    'This is rare — open the audit log and contact support.';
+                mismatchDetail.textContent = t('producer_binding.mismatch_detail', {
+                    ours:   data.ourPubkey || '',
+                    theirs: chainNode || '',
+                });
                 section.appendChild(mismatchDetail);
             }
 
