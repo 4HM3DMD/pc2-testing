@@ -4870,27 +4870,82 @@ body[data-app-size="narrow"] .enm-tab-pill {
     display: none;
 }
 
-/* Settings tab — nuke nav rail, stack panes, no more 2-col grid */
+/* alpha.26 — Settings narrow-mode REDESIGN.
+   Replace the vertical nav rail with a horizontal scrolling pill bar
+   at the top (sticky). Mobile-app idiom: same navigation concept,
+   small-screen-appropriate layout. JS-controlled active pane behavior
+   stays the same — only ONE pane visible at a time, just like wide.
+   The pills match the top tab bar's underline-on-active visual idiom. */
 body[data-app-size="narrow"] .enm-settings {
     display: block;
     padding: var(--spacing-md);
     container-type: normal;
 }
+
+/* Vertical nav rail → horizontal scrolling pill bar */
 body[data-app-size="narrow"] .enm-settings-nav {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    gap: 6px;
+    padding: 0 0 var(--spacing-sm);
+    margin: 0 0 var(--spacing-md);
+    border-bottom: 1px solid var(--border-color);
+    position: sticky;
+    top: 0;
+    background: var(--bg-page);
+    z-index: 5;
+    align-self: stretch;  /* override the wide-mode "align-self: start" */
+}
+body[data-app-size="narrow"] .enm-settings-nav::-webkit-scrollbar {
     display: none;
 }
-body[data-app-size="narrow"] .enm-settings-pane[hidden] {
-    display: block;
+body[data-app-size="narrow"] .enm-settings-nav-item {
+    flex: 0 0 auto;
+    padding: 6px 12px;
+    margin: 0;
+    border: 1px solid var(--border-color);
+    border-left: 1px solid var(--border-color);  /* override wide-mode left accent */
+    border-radius: var(--radius-pill);
+    background: transparent;
+    font-size: 12px;
+    font-weight: 500;
+    white-space: nowrap;
+    color: var(--text-secondary);
+    cursor: pointer;
 }
+body[data-app-size="narrow"] .enm-settings-nav-item:hover {
+    background: var(--bg-muted);
+}
+body[data-app-size="narrow"] .enm-settings-nav-item.active {
+    background: var(--primary-soft);
+    color: var(--primary);
+    border-color: var(--primary);
+}
+body[data-app-size="narrow"] .enm-settings-nav-item[data-accent="danger"] {
+    color: var(--error);
+}
+body[data-app-size="narrow"] .enm-settings-nav-item[data-accent="danger"].active {
+    background: rgba(255, 69, 58, 0.12);
+    border-color: var(--error);
+    color: var(--error);
+}
+
+/* Active pane fills the remaining width — no nav rail eating space */
+body[data-app-size="narrow"] .enm-settings-pane {
+    /* Default visibility behavior: JS toggles [hidden]; CSS does NOT
+       override that anymore. One pane at a time, same as wide mode. */
+}
+
+/* Active pane content — looks like a card */
 body[data-app-size="narrow"] .enm-settings-section {
-    margin: 0 0 var(--spacing-md);
+    margin: 0;
     padding: var(--spacing-lg);
     background: var(--bg-surface);
     border: 1px solid var(--border-color);
     border-radius: var(--radius-md);
-}
-body[data-app-size="narrow"] .enm-settings-section:last-child {
-    margin-bottom: 0;
 }
 body[data-app-size="narrow"] .enm-settings-section > h3 {
     margin: 0 0 var(--spacing-md);
