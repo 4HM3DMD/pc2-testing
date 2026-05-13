@@ -93,9 +93,14 @@
      * @returns {string}
      */
     function formatBytes(bytes, opts) {
-        if (bytes == null || typeof bytes !== 'number' || !isFinite(bytes)) { return '—'; }
+        if (bytes == null) { return '—'; }
+        // alpha.28.1 batch 39 — mirror formatNumber: coerce numeric
+        // strings via Number() so backend type drift doesn't surface
+        // as "—". `Number("2150000000")` → 2150000000 → "2.0 GB".
+        var n = (typeof bytes === 'number') ? bytes : Number(bytes);
+        if (!isFinite(n)) { return '—'; }
         var precision = (opts && typeof opts.precision === 'number') ? opts.precision : 1;
-        var abs = Math.abs(bytes);
+        var abs = Math.abs(n);
         var units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
         var i = 0;
         while (abs >= 1024 && i < units.length - 1) {
@@ -103,7 +108,7 @@
             i += 1;
         }
         var rounded = i === 0 ? Math.round(abs) : Number(abs.toFixed(precision));
-        return (bytes < 0 ? '-' : '') + rounded.toLocaleString() + ' ' + units[i];
+        return (n < 0 ? '-' : '') + rounded.toLocaleString() + ' ' + units[i];
     }
 
     /**

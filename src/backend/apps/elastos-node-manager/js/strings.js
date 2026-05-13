@@ -498,6 +498,9 @@
             rpc_url_public_warn:    'Open your firewall + whitelist the IP. Anyone with this URL + password can submit transactions.',
             rpc_white_apply_btn:    'Apply changes',
             rpc_white_help:         'Clients can connect ONLY from these. 127.0.0.1 is locked (needed for ENM). Add IPs or CIDR ranges.',
+            // alpha.28.1 batch 39 — chipInput format-hint error string
+            // (was inline English in settings-tab.js:1238 flashInvalid).
+            rpc_white_invalid:      'Not a valid IPv4 or CIDR (try 192.168.1.5 or 192.168.1.0/24).',
             rpc_white_apply_failed: 'Whitelist save failed: {error}',
             rpc_white_applied:      'Whitelist saved.',
             rpc_toggle_section:     'RPC server',
@@ -602,6 +605,10 @@
             tier_any:       'Any tier',
             load_more:      'Load more',
             load_more_capped: 'Cap reached — narrow filters or export to see more.',
+            // alpha.28.1 batch 39 — row-count suffix moved from inline
+            // English. ICU plurals still deferred (audit-tab.js audit
+            // acbcec6b flagged "1 rows" as the cosmetic bug).
+            row_count:      '{n} rows',
         },
     });
     // STRINGS is a deeply-frozen tree — see deepFreeze above.

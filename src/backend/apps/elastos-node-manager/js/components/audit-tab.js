@@ -109,7 +109,13 @@
             var fmtCount = (typeof window !== 'undefined' && window.enmFormatNumber)
                 ? window.enmFormatNumber
                 : function (n) { return String(n); };
-            self._countLabel.textContent = fmtCount(self._rows.length) + ' rows';
+            // alpha.28.1 batch 39 — i18n-sourced suffix via the new
+            // audit.row_count key (token: {n}). Fallback preserves the
+            // pre-i18n string verbatim if strings.js failed to load.
+            var rowsKey = t('audit.row_count', { n: fmtCount(self._rows.length) });
+            self._countLabel.textContent = (rowsKey && rowsKey !== 'audit.row_count')
+                ? rowsKey
+                : fmtCount(self._rows.length) + ' rows';
             if (self._rows.length === 0) {
                 self._emptyMsg.hidden = false;
             } else {

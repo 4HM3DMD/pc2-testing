@@ -1235,7 +1235,7 @@
             // without screen readers.
             newInput.setAttribute('aria-invalid', 'true');
             var hint = reason
-                || 'Not a valid IPv4 or CIDR (try 192.168.1.5 or 192.168.1.0/24).';
+                || root.enmTOrFallback('settings.rpc_white_invalid');
             newInput.title = hint;
             // Clear aria-invalid on next edit so it doesn't stay loud.
             var clearOnce = function () {
