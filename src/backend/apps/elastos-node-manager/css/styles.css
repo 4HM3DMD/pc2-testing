@@ -1013,15 +1013,10 @@ body[data-active-tab="identity"]::before {
 /* 0.2.0-alpha.1 — kept for backward compat with any consumers still
    referencing the legacy class name. The Apple Hero layout uses
    .enm-chain-primary-{value,label} instead. */
-.enm-chain-card-metric {
-    font-size: 14px;
-    color: var(--text-secondary);
-    font-variant-numeric: tabular-nums;
-    text-align: center;
-    margin: 0;
-    min-height: 1.2em;
-    letter-spacing: -0.005em;
-}
+/* alpha.28.1 batch 20 — `.enm-chain-card-metric` dropped here. Comment
+   above already said "kept for backward compat" but no JS or HTML
+   reference exists (verified via grep across js/ + index.html). The
+   live equivalent is .enm-chain-primary-{value,label}. */
 
 /* 0.2.0-alpha.1 — primary metric stack. Big mono number on top
    (block height or "local / network"), small lowercase label below.
@@ -1066,47 +1061,10 @@ body[data-active-tab="identity"]::before {
     color: var(--text-secondary);
 }
 
-/* alpha.17 — chain badge refresh. Drop uppercase + heavy tracking;
-   reads as a calm chip instead of a tech badge. Slightly larger
-   text (11 → 12px) since we lost the tracking that made the old
-   size feel intentional. */
-.enm-chain-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 3px 10px;
-    border-radius: var(--radius-pill);
-    font-size: 12px;
-    font-weight: var(--font-weight-medium);
-    text-transform: none;
-    letter-spacing: 0;
-    background: rgba(148, 163, 184, 0.12);
-    color: var(--text-secondary);
-}
-
-.enm-chain-badge::before {
-    content: '';
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: currentColor;
-}
-
-.enm-chain-badge-healthy    { background: rgba(22, 163, 74, 0.12);   color: var(--state-healthy); }
-.enm-chain-badge-syncing    { background: rgba(59, 130, 246, 0.12);  color: var(--state-syncing); }
-.enm-chain-badge-stalled    { background: rgba(234, 88, 12, 0.12);   color: var(--state-stalled); }
-.enm-chain-badge-stopped    { background: rgba(148, 163, 184, 0.16); color: var(--state-stopped); }
-.enm-chain-badge-error      { background: rgba(220, 38, 38, 0.12);   color: var(--state-error); }
-.enm-chain-badge-recovering { background: rgba(124, 58, 237, 0.12);  color: var(--state-recovering); }
-
-@media (prefers-color-scheme: dark) {
-    .enm-chain-badge-healthy    { background: rgba(22, 163, 74, 0.22); }
-    .enm-chain-badge-syncing    { background: rgba(59, 130, 246, 0.22); }
-    .enm-chain-badge-stalled    { background: rgba(234, 88, 12, 0.22); }
-    .enm-chain-badge-stopped    { background: rgba(148, 163, 184, 0.22); }
-    .enm-chain-badge-error      { background: rgba(220, 38, 38, 0.22); }
-    .enm-chain-badge-recovering { background: rgba(124, 58, 237, 0.22); }
-}
+/* alpha.28.1 batch 20 — `.enm-chain-badge` cluster (~50 LOC) dropped.
+   No JS or HTML consumer; chain state surfaces via PowerCircle ring
+   color + .enm-chain-card-state subtitle. Confirmed by Round-1 audit
+   and Round-13 CSS architecture audit (a296345753). */
 
 /* alpha.18 — the stats strip used to sit on a top-border divider, so
    each card had a horizontal line slicing through it under the action
@@ -1900,11 +1858,8 @@ body[data-active-tab="identity"]::before {
     line-height: 1;
 }
 
-.enm-rpc-creds-empty {
-    color: var(--text-secondary);
-    font-style: italic;
-    font-size: 12px;
-}
+/* alpha.28.1 batch 20 — `.enm-rpc-creds-empty` dropped (no consumers
+   after the alpha.19 RPC access redesign). */
 
 /* ============================================================
    alpha.19 — compact RPC access tab layout
@@ -2722,7 +2677,9 @@ body[data-active-tab="identity"]::before {
     align-items: center;
     justify-content: center;
     padding: var(--spacing-lg);
-    z-index: 200;
+    /* alpha.28.1 batch 20 — was the last raw z-index left after the
+       token migration in batch 8/13. Token --z-modal = 200 matches. */
+    z-index: var(--z-modal);
     animation: enm-fade-in var(--motion-base) var(--ease-out);
 }
 
@@ -3270,9 +3227,8 @@ body[data-active-tab="identity"]::before {
         --border-strong: #475569;
         --focus-ring: 0 0 0 3px var(--primary);
     }
-    .enm-chain-badge {
-        border: 1px solid currentColor;
-    }
+    /* (.enm-chain-badge forced-colors rule dropped in batch 20 — class
+       has no consumers.) */
 }
 
 /* ============================================================
@@ -3755,29 +3711,10 @@ body[data-active-tab="identity"]::before {
    Skeleton loaders — replace "—" placeholders during load
    ============================================================ */
 
-@keyframes enm-skeleton-shimmer {
-    0%   { background-position: -200% 0; }
-    100% { background-position: 200% 0; }
-}
-
-.enm-skeleton {
-    display: inline-block;
-    border-radius: var(--radius-sm);
-    background: linear-gradient(
-        90deg,
-        var(--bg-muted) 0%,
-        var(--border-color) 50%,
-        var(--bg-muted) 100%
-    );
-    background-size: 200% 100%;
-    animation: enm-skeleton-shimmer 1.6s var(--ease-in-out) infinite;
-    color: transparent;
-    user-select: none;
-}
-
-@media (prefers-reduced-motion: reduce) {
-    .enm-skeleton { animation: none; }
-}
+/* alpha.28.1 batch 20 — `.enm-skeleton` + `@keyframes enm-skeleton-
+   shimmer` dropped. No JS or HTML consumer. The empty-state primitives
+   audited under Round 4 will reintroduce this when shipped, and at
+   that point a fresh implementation is preferred over the orphan. */
 
 /* ============================================================
    v0.4 "Welcome Home" — friendly UI layer
@@ -4473,20 +4410,8 @@ body[data-active-tab="identity"]::before {
     margin-bottom: var(--spacing-sm);
 }
 
-.enm-tech-title {
-    font-size: 24px;
-    font-weight: 600;
-    color: var(--text-primary);
-    margin: 0;
-}
-
-.enm-tech-sub {
-    font-size: 13px;
-    line-height: 1.5;
-    color: var(--text-secondary);
-    margin: 0;
-    max-width: 640px;
-}
+/* alpha.28.1 batch 20 — `.enm-tech-title` + `.enm-tech-sub` dropped.
+   Tech-view migrated to .enm-pane h1 / .enm-tech-tabs after alpha.24. */
 
 .enm-tech-tabs {
     display: flex;
@@ -4694,18 +4619,9 @@ body[data-update-severity="major"] .enm-tech-tabs .enm-tab[data-tab="tools"]::be
     color: var(--text-secondary);
 }
 
-.enm-tools-update-cmd {
-    margin: 0;
-    padding: var(--spacing-sm) var(--spacing-md);
-    background: var(--bg-code);
-    color: #f8fafc;
-    border-radius: var(--radius-md);
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    font-size: 12px;
-    line-height: 1.5;
-    overflow-x: auto;
-    white-space: pre;
-}
+/* alpha.28.1 batch 20 — `.enm-tools-update-cmd` dropped. tools-update-
+   card.js uses `.enm-tools-update-modal-cmd` (different class, defined
+   inside the modal block). */
 
 /* 0.2.0-alpha.10 — Update-action row + modal. The button + help-line
    live inline on the card; clicking the button opens the modal which
@@ -5397,8 +5313,7 @@ body[data-app-size="narrow"] .enm-conv-actions .enm-btn {
 @media (prefers-reduced-motion: reduce) {
     .enm-spinner-dot,
     .enm-proposal-overlay,
-    .enm-proposal-card,
-    .enm-skeleton {
+    .enm-proposal-card {
         animation: none;
     }
 }
@@ -5458,7 +5373,6 @@ body[data-app-size="narrow"] .enm-conv-actions .enm-btn {
 @media (forced-colors: active) {
     /* Borders become visible system edges instead of low-alpha rgba. */
     .enm-chain-card,
-    .enm-chain-badge,
     .enm-producer-binding-chip,
     .enm-chain-rotation,
     .enm-toast,
