@@ -537,9 +537,13 @@
         // the Update card above the Maintenance card supersedes it. No
         // gating call needed.
 
+        // alpha.28.1 batch 76 — gate-reason strings routed through
+        // strings.js tech_maintenance.disabled_* so locale switching
+        // covers the disabled-row labels.
+        var tm = root.enmTOrFallback;
         // Re-bootstrap: stop chain first so the data dir isn't held open.
         if (alive) {
-            gate('rebootstrap', true, 'Stop the chain first (data dir in use).');
+            gate('rebootstrap', true, tm('tech_maintenance.disabled_chain_running'));
         } else {
             gate('rebootstrap', false, '');
         }
@@ -547,11 +551,11 @@
         // Reactivate BPoS: only when alive AND producer is registered AND
         // its state is Inactive (active producers don't need reactivation).
         if (!alive) {
-            gate('activate', true, 'Chain must be running.');
+            gate('activate', true, tm('tech_maintenance.disabled_chain_stopped'));
         } else if (!producerEnabled) {
-            gate('activate', true, 'Not yet registered as a BPoS producer. See the Identity tab for the registration steps.');
+            gate('activate', true, tm('tech_maintenance.disabled_not_registered'));
         } else if (producerState === 'Active') {
-            gate('activate', true, 'Producer is already Active — nothing to do.');
+            gate('activate', true, tm('tech_maintenance.disabled_already_active'));
         } else {
             gate('activate', false, '');
         }
@@ -562,56 +566,66 @@
      */
     TechnicalView.prototype._renderMaintenance = function (pane) {
         var self = this;
+        // alpha.28.1 batch 76 — Maintenance card strings sourced from
+        // strings.js tech_maintenance.*. enmTOrFallback returns the key
+        // unchanged on missed lookup so a strings.js boot failure
+        // produces readable (though un-translated) UI rather than blank.
+        var t = root.enmTOrFallback;
         var sec = document.createElement('section');
         sec.className = 'enm-card enm-tech-maintenance';
         sec.innerHTML =
-            '<h3 class="enm-tech-maintenance-title">Maintenance</h3>'
+            '<h3 class="enm-tech-maintenance-title">' + escapeHtml(t('tech_maintenance.title')) + '</h3>'
             + '<p class="enm-tech-maintenance-sub">'
-              + 'Mirrors the node.sh helpers operators used to run by hand. '
-              + 'Each action runs on this server with the keystore + binaries '
-              + 'we already manage; nothing leaves this PC2.'
+              + escapeHtml(t('tech_maintenance.sub'))
             + '</p>'
             + '<div class="enm-tech-maintenance-rows">'
-              + this._maintenanceRow('compact', 'Compact logs',
-                  'Gzip + purge ela.log per the rotation policy. Same as the daily cron — exposed for "free space now".')
-              + this._maintenanceRow('activate', 'Reactivate BPoS supernode',
-                  "Sends a <code>producer activate</code> transaction so the chain flips your producer state from Inactive back to Active. Requires a keystore + funded deposit address.")
-              + this._maintenanceRow('rebootstrap', 'Re-bootstrap chain data',
-                  "Wipes the local chain DB and re-downloads the official Elastos snapshot (~10 GB, ~15 min) so a stuck or corrupt sync can recover without reinstalling. The chain must be stopped first. Existing settings + keystore are kept.")
+              + this._maintenanceRow('compact',
+                  t('tech_maintenance.compact_label'),
+                  t('tech_maintenance.compact_help'))
+              + this._maintenanceRow('activate',
+                  t('tech_maintenance.activate_label'),
+                  t('tech_maintenance.activate_help'))
+              + this._maintenanceRow('rebootstrap',
+                  t('tech_maintenance.rebootstrap_label'),
+                  t('tech_maintenance.rebootstrap_help'))
             + '</div>';
         pane.appendChild(sec);
 
         // Wire each row.
         sec.querySelector('[data-action="compact"]').addEventListener('click', function (ev) {
             self._runMaintenance(ev.currentTarget, '/chains/mainchain/compact-logs',
-                'Logs compacted', 'Compaction failed');
+                t('tech_maintenance.compact_ok_title'),
+                t('tech_maintenance.compact_fail_title'));
         });
         sec.querySelector('[data-action="activate"]').addEventListener('click', function (ev) {
-            if (!confirm("This sends a 'producer activate' transaction on-chain "
-                + 'using your keystore. Continue?')) { return; }
+            if (!confirm(t('tech_maintenance.activate_confirm'))) { return; }
             self._runMaintenance(ev.currentTarget, '/chains/mainchain/bpos/activate',
-                'Reactivation submitted — wait a block or two for chain confirmation',
-                'Reactivation rejected');
+                t('tech_maintenance.activate_ok_title'),
+                t('tech_maintenance.activate_fail_title'));
         });
         sec.querySelector('[data-action="rebootstrap"]').addEventListener('click', function (ev) {
             // Type-to-confirm guard — same pattern as the Settings danger
             // zone. Wiping the chain DB is irreversible from the operator's
             // point of view (resync would take 1-3 days without the
             // snapshot path, which is exactly why they're using this).
-            var typed = prompt(
-                'Re-bootstrap wipes the local chain DB and downloads the official snapshot '
-                + '(~10 GB). The chain must already be stopped. Existing keystore + settings '
-                + 'are kept.\n\nType BOOTSTRAP to confirm:',
-            );
+            var typed = prompt(t('tech_maintenance.rebootstrap_prompt'));
             if (typed !== 'BOOTSTRAP') { return; }
             self._runMaintenance(ev.currentTarget, '/chains/mainchain/bootstrap',
-                'Bootstrap started — Settings → Logs to watch progress',
-                'Bootstrap failed to start');
+                t('tech_maintenance.rebootstrap_ok_title'),
+                t('tech_maintenance.rebootstrap_fail_title'));
         });
     };
 
     /** @private */
     TechnicalView.prototype._maintenanceRow = function (action, label, help) {
+        // alpha.28.1 batch 76 — "Run" button label sourced from
+        // strings.js so locale switching covers it. The help text is
+        // pre-formatted English with inline <code> tags from
+        // strings.js (escapeHtml on a value containing legitimate
+        // HTML would break the markup), so we splice it raw. Caller
+        // controls the source (always strings.js or the equally-
+        // trusted hardcoded fallback enmTOrFallback emits).
+        var t = root.enmTOrFallback;
         return ''
             + '<div class="enm-tech-maintenance-row">'
               + '<div class="enm-tech-maintenance-text">'
@@ -619,7 +633,7 @@
                 + '<div class="enm-tech-maintenance-help">' + help + '</div>'
               + '</div>'
               + '<button type="button" class="enm-btn enm-btn-secondary" data-action="' + escapeHtml(action) + '">'
-                + 'Run'
+                + escapeHtml(t('tech_maintenance.run_btn'))
               + '</button>'
             + '</div>';
     };
@@ -627,14 +641,20 @@
     /** @private */
     TechnicalView.prototype._runMaintenance = function (btn, path, okMessage, errPrefix) {
         var self = this;
+        var t = root.enmTOrFallback;
         var prev = btn.textContent;
         btn.disabled = true;
-        btn.textContent = 'Running…';
+        // alpha.28.1 batch 76 — "Running…" + "Done" sourced from
+        // strings.js (common.* — same keys settings-tab uses for its
+        // mutating buttons so the operator sees consistent labels
+        // across the whole app). Falls back to inline English via
+        // enmTOrFallback if strings.js failed.
+        btn.textContent = t('tech_maintenance.running_btn');
         this.api.post(path).then(function (data) {
             if (self.notifications) {
                 self.notifications.info(okMessage, '');
             }
-            btn.textContent = 'Done';
+            btn.textContent = t('common.done');
             setTimeout(function () { btn.textContent = prev; btn.disabled = false; }, 1500);
         }).catch(function (err) {
             btn.textContent = prev;
