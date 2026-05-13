@@ -181,6 +181,21 @@
         if (this._currentCard === 'b' && card !== 'b') {
             this._teardownInstallTracking();
         }
+        // alpha.28.1 batch 70 (Round-19A audit finding #1) — Card B2 has
+        // its own poll + SSE pair (_bootstrapPollTimer set at line 520
+        // running every 2s, _unsubscribeBootstrap set at line 515).
+        // Both were only cleaned in (a) destroy, (b) re-arming guards in
+        // _b2BeginBootstrap, (c) terminal phases of applyStatus + the
+        // _b2OnBootstrapDone happy path. The Card B2 Back link at line
+        // 411 calls _goto('b') — none of those three teardown paths
+        // fired, so the bootstrap poll + SSE continued ticking for the
+        // rest of the wizard session (pinned closures, wasted 2s GETs,
+        // and the captured `applyStatus` writing to detached `els`).
+        // Symmetrical with the Card-B leak guard above.
+        if (this._currentCard === 'b2' && card !== 'b2') {
+            if (this._unsubscribeBootstrap) { this._unsubscribeBootstrap(); this._unsubscribeBootstrap = null; }
+            if (this._bootstrapPollTimer) { clearInterval(this._bootstrapPollTimer); this._bootstrapPollTimer = null; }
+        }
         this._currentCard = card;
         this._cardSeq += 1;
         var seq = this._cardSeq;
