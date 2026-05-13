@@ -169,7 +169,25 @@
         var self = this;
         this.api.get('/chains/' + encodeURIComponent(chainId) + '/history?windowMin=' + WINDOW_MIN)
             .then(function (res) {
-                var pts = (res && Array.isArray(res.points)) ? res.points : [];
+                // alpha.28.1 batch 67 (Round-19B audit) — per-point
+                // isFinite filter on the snapshot path. The SSE delta
+                // path was hardened against {t: NaN, h: NaN} payloads
+                // in batch 24 (audit adc48dd0) — the comment at lines
+                // 113-120 explains how a single bad point "produced an
+                // SVG path M NaN,NaN … that silently bricked the
+                // sparkline". The snapshot path was NEVER hardened the
+                // same way. Snapshot replays every 5 minutes AND on
+                // visibility-resume, so one corrupted /history response
+                // bricked every chain card's sparkline for the rest of
+                // the session — strictly worse than the SSE failure
+                // mode the original hardening addressed.
+                var pts = (res && Array.isArray(res.points))
+                    ? res.points.filter(function (p) {
+                        return p
+                            && typeof p.t === 'number' && isFinite(p.t)
+                            && typeof p.h === 'number' && isFinite(p.h);
+                    })
+                    : [];
                 self._buffers.set(chainId, pts);
                 self._broadcast(chainId);
             })
