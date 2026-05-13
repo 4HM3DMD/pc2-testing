@@ -148,6 +148,17 @@
         node.id = id;
         node.className = 'enm-toast enm-toast-' + sev;
         node.setAttribute('role', sev === 'critical' ? 'alert' : 'status');
+        // Make the toast itself programmatically-focusable so keyboard
+        // users can Tab into a critical alert and read it; pair with an
+        // Esc-to-dismiss handler scoped to the toast so the operator
+        // doesn't need to hunt for the X button.
+        node.setAttribute('tabindex', '-1');
+        node.addEventListener('keydown', function (ev) {
+            if (ev.key === 'Escape') {
+                ev.stopPropagation();
+                parent.dismiss(id);
+            }
+        });
 
         var head = document.createElement('div');
         head.className = 'enm-toast-head';

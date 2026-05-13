@@ -85,6 +85,16 @@
             document.removeEventListener('keydown', this._escHandler);
             this._escHandler = null;
         }
+        // …and the focus-trap handler too. close() removes it normally,
+        // but if destroy() runs while the drawer is open (e.g. operator
+        // hits Reinstall mid-flight) the trap leaked because cleanup
+        // lived only in close(). One global keydown listener per app
+        // teardown is a real bug — the trap re-fires Tab events into
+        // detached DOM and crashes some Tab navigations.
+        if (this._trapHandler) {
+            document.removeEventListener('keydown', this._trapHandler, true);
+            this._trapHandler = null;
+        }
         if (this._closeTimer) { clearTimeout(this._closeTimer); this._closeTimer = null; }
         this._open = false;
         if (this.root.parentNode) { this.root.parentNode.removeChild(this.root); }

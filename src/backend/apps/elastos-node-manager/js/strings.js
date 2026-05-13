@@ -429,6 +429,13 @@
             yes: 'Yes',
             no: 'No',
             loading: 'Loading...',
+            // alpha.28.1 — referenced by enmRunOnce labels in settings-tab
+            // save handlers and by validator-registration-card's activate
+            // failure branch via `t('common.failed')`; previously slipped
+            // through enmT and only survived because of `|| 'Saving…'`
+            // fallbacks scattered through callers.
+            saving: 'Saving…',
+            failed: 'Failed',
             empty: 'Empty',
         },
 

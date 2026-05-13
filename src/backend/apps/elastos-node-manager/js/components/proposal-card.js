@@ -238,7 +238,17 @@
     ProposalCard.prototype._installEscHandler = function () {
         var self = this;
         this._escHandler = function (ev) {
-            if (ev.key === 'Escape') { self._handleReject(); }
+            if (ev.key !== 'Escape') { return; }
+            // Topmost-overlay guard — Esc-as-Reject is an irreversible
+            // POST /healing/reject/{id}. If a settings drawer or
+            // tools-update modal opened on top, those should win the
+            // Esc and the proposal should stay put. The drawer flags
+            // itself with .enm-drawer-open while visible; the tools-
+            // update modal is only mounted while open.
+            var drawerOpen = document.querySelector('.enm-drawer-root.enm-drawer-open');
+            var updateModal = document.querySelector('.enm-tools-update-modal');
+            if (drawerOpen || updateModal) { return; }
+            self._handleReject();
         };
         document.addEventListener('keydown', this._escHandler);
     };

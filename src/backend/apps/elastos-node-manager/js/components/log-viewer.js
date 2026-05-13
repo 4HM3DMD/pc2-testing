@@ -115,6 +115,28 @@
         });
         head.appendChild(this._tailToggle);
 
+        // Download button — mirrors the audit-tab JSON export pattern.
+        // Builds a plaintext blob from the current buffer (capped at
+        // MAX_DOM_LINES = 5000 lines) so the operator can attach the
+        // log slice to a bug report without copying line-by-line.
+        this._downloadBtn = document.createElement('button');
+        this._downloadBtn.type = 'button';
+        this._downloadBtn.className = 'enm-btn enm-btn-secondary enm-log-download';
+        this._downloadBtn.textContent = 'Download';
+        this._downloadBtn.setAttribute('aria-label', 'Download visible logs as text');
+        this._downloadBtn.title = 'Download the visible log buffer (up to ' + MAX_DOM_LINES + ' lines)';
+        this._downloadBtn.addEventListener('click', function () { self._exportText(); });
+        head.appendChild(this._downloadBtn);
+
+        // Buffer-drop pill — invisible until the first head-trim runs in
+        // _appendBatch. Once shown, persists for the rest of the mount
+        // so the operator knows the visible buffer is a rolling window.
+        this._bufferPill = document.createElement('span');
+        this._bufferPill.className = 'enm-log-buffer-pill';
+        this._bufferPill.hidden = true;
+        this._bufferPill.setAttribute('role', 'status');
+        head.appendChild(this._bufferPill);
+
         this.root.appendChild(head);
 
         this._scroller = document.createElement('div');
@@ -197,11 +219,49 @@
             for (var j = 0; j < excess && this._scroller.firstElementChild; j += 1) {
                 this._scroller.removeChild(this._scroller.firstElementChild);
             }
+            // Tally lines that fell off the head so the buffer-drop pill
+            // can honestly report "N older lines dropped". Without this
+            // the operator's mental model ("this is the chain's log
+            // file") is wrong — it's a rolling window of MAX_DOM_LINES.
+            this._droppedCount = (this._droppedCount || 0) + excess;
+            if (this._bufferPill) {
+                this._bufferPill.hidden = false;
+                this._bufferPill.textContent = 'Older lines dropped: '
+                    + this._droppedCount.toLocaleString();
+                this._bufferPill.title = 'The viewer keeps the most recent '
+                    + MAX_DOM_LINES.toLocaleString() + ' lines in memory. '
+                    + 'Use Download to capture the visible buffer.';
+            }
         }
 
         if (this._followTail) {
             this._scrollToBottom();
         }
+    };
+
+    /**
+     * @private
+     * Build a plaintext blob from the current buffer and trigger a
+     * download. Mirrors the audit-tab JSON export pattern so operators
+     * can attach a log slice to a bug report without copying line-by-line.
+     */
+    LogViewer.prototype._exportText = function () {
+        var lines = (this._lines || []).map(function (e) {
+            var ts;
+            try { ts = new Date(e.ts || Date.now()).toISOString(); }
+            catch (err) { ts = '?'; }
+            var stream = (e.stream === 'stderr' ? 'stderr' : 'stdout');
+            return ts + ' [' + stream + '] ' + (e.line || '');
+        });
+        var blob = new Blob([lines.join('\n') + '\n'], { type: 'text/plain' });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = 'enm-logs-' + this.chainId + '-' + Date.now() + '.txt';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
     };
 
     /** @private */

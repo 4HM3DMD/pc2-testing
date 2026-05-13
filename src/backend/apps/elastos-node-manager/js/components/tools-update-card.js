@@ -55,6 +55,13 @@
 
     EnmToolsUpdateCard.prototype.destroy = function () {
         if (this._timer) { clearInterval(this._timer); this._timer = null; }
+        // Close any open update-shell modal so its document-level keydown
+        // listener doesn't leak across an app reinstall. _modalClose is
+        // wired by _openUpdateModal whenever the modal is open.
+        if (typeof this._modalClose === 'function') {
+            try { this._modalClose(); } catch (e) { /* ignore */ }
+            this._modalClose = null;
+        }
         if (this.root.parentNode) this.root.parentNode.removeChild(this.root);
     };
 
@@ -205,12 +212,58 @@
             + '</div>';
         document.body.appendChild(modal);
 
+        // Capture focus return target + install focus trap so Tab can't
+        // escape onto the chain card behind the scrim. Mirrors the
+        // proposal-card + settings-drawer pattern.
+        var previousFocus = document.activeElement;
+        var cardSelf = self;
+
         var close = function () {
             if (modal.parentNode) modal.parentNode.removeChild(modal);
             document.removeEventListener('keydown', onEsc);
+            document.removeEventListener('keydown', trapHandler, true);
+            try {
+                if (previousFocus && typeof previousFocus.focus === 'function') {
+                    previousFocus.focus({ preventScroll: true });
+                }
+            } catch (e) { /* focus may fail in detached states */ }
+            // Drop the destroy-hook reference so a second destroy is a no-op.
+            if (cardSelf) { cardSelf._modalClose = null; }
         };
         var onEsc = function (e) { if (e.key === 'Escape') close(); };
         document.addEventListener('keydown', onEsc);
+        var trapHandler = function (ev) {
+            if (ev.key !== 'Tab') { return; }
+            var focusables = modal.querySelectorAll(
+                'a[href], button:not([disabled]), textarea:not([disabled]), ' +
+                'input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
+            );
+            if (!focusables.length) { return; }
+            var first = focusables[0];
+            var last  = focusables[focusables.length - 1];
+            if (ev.shiftKey && document.activeElement === first) {
+                ev.preventDefault();
+                last.focus();
+            } else if (!ev.shiftKey && document.activeElement === last) {
+                ev.preventDefault();
+                first.focus();
+            }
+        };
+        document.addEventListener('keydown', trapHandler, true);
+
+        // Expose for the card-level destroy() so the listener can't leak
+        // if the operator navigates away while the modal is open.
+        cardSelf._modalClose = close;
+
+        // Move focus inside the modal once it mounts so screen readers
+        // announce the new region and keyboard users land on a useful
+        // control. Prefer the first action button; fall back to the close X.
+        try {
+            var firstFocus = modal.querySelector('.upd-fill-token')
+                || modal.querySelector('.upd-copy')
+                || modal.querySelector('.enm-tools-update-modal-close');
+            if (firstFocus) { firstFocus.focus({ preventScroll: true }); }
+        } catch (e) { /* ignore */ }
 
         modal.querySelector('.enm-tools-update-modal-close').addEventListener('click', close);
         modal.addEventListener('click', function (e) { if (e.target === modal) close(); });
