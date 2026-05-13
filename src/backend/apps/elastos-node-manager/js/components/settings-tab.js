@@ -198,6 +198,13 @@
         this._network.statusLine.className = 'enm-settings-status';
         // a11y: announce save / validation results to screen readers (4.1.3).
         this._network.statusLine.setAttribute('role', 'status');
+        // alpha.28.1 batch 30 (audit a0b9a3e1) — assign a stable id and
+        // wire aria-describedby on the manualInput so screen-reader
+        // users hear the error text linked to the field on aria-invalid
+        // transitions. Without this, the role="status" announces once
+        // and disappears from the field's accessible-description.
+        this._network.statusLine.id = 'enm-net-status';
+        this._network.manualInput.setAttribute('aria-describedby', 'enm-net-status');
         section.appendChild(this._network.statusLine);
 
         this._sections.network = section;
@@ -252,6 +259,14 @@
         this._adv.statusLine.className = 'enm-settings-status';
         // a11y: announce save / validation results to screen readers (4.1.3).
         this._adv.statusLine.setAttribute('role', 'status');
+        // alpha.28.1 batch 30 — describedby on the two validated inputs
+        // in this section (memory, rpcUser) so AT links the error text
+        // to the right field. _saveAdvanced's aria-invalid toggle from
+        // batch 7 was previously surfaced as a floating status with no
+        // programmatic relationship to the offending input.
+        this._adv.statusLine.id = 'enm-adv-status';
+        this._adv.memory.setAttribute('aria-describedby', 'enm-adv-status');
+        this._adv.rpcUser.setAttribute('aria-describedby', 'enm-adv-status');
         section.appendChild(this._adv.statusLine);
 
         this._sections.advanced = section;
@@ -564,6 +579,10 @@
         this._gen.statusLine.className = 'enm-settings-status';
         // a11y: announce save / validation results to screen readers (4.1.3).
         this._gen.statusLine.setAttribute('role', 'status');
+        // alpha.28.1 batch 30 — describedby on audit-retention so the
+        // 0..3650 days validation error binds to the field.
+        this._gen.statusLine.id = 'enm-gen-status';
+        this._gen.auditRetention.setAttribute('aria-describedby', 'enm-gen-status');
         section.appendChild(this._gen.statusLine);
 
         this._sections.general = section;

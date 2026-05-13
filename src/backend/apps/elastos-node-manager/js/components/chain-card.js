@@ -107,7 +107,14 @@
         // cadence; rotation only changes on round boundaries so no need
         // to hammer the RPC faster than that.
         this._refreshRotation();
-        this._rotationTimer = setInterval(function () { self._refreshRotation(); }, 60_000);
+        // alpha.28.1 batch 30 — visibility-pause wrap on the 60s
+        // rotation poll. Saves 60 hidden-tab fetches/hr; resume-tick
+        // re-fetches immediately so the rotation strip stays accurate.
+        if (typeof root !== 'undefined' && typeof root.enmUseVisibilityPause === 'function') {
+            this._rotationPauser = root.enmUseVisibilityPause(function () { self._refreshRotation(); }, 60_000);
+        } else {
+            this._rotationTimer = setInterval(function () { self._refreshRotation(); }, 60_000);
+        }
         // Height-series sparkline. Subscribe once on mount; the service
         // bootstraps with a GET /history then layers SSE deltas on top.
         if (this.heightSeries) {
@@ -124,6 +131,7 @@
         if (this._metricsPauser)   { try { this._metricsPauser.stop(); } catch (_) { /* idempotent */ } this._metricsPauser = null; }
         if (this._metricsTimer)    { clearInterval(this._metricsTimer);    this._metricsTimer = null; }
         if (this._uptimeTickTimer) { clearInterval(this._uptimeTickTimer); this._uptimeTickTimer = null; }
+        if (this._rotationPauser)  { try { this._rotationPauser.stop(); } catch (_) { /* idempotent */ } this._rotationPauser = null; }
         if (this._rotationTimer)   { clearInterval(this._rotationTimer);   this._rotationTimer = null; }
         if (this._syncTimer)       { clearTimeout(this._syncTimer);        this._syncTimer = null; }
         if (this._unsubscribe)     { this._unsubscribe(); this._unsubscribe = null; }
