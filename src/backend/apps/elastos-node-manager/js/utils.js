@@ -249,12 +249,56 @@
         };
     }
 
+    /**
+     * Format a server timestamp (ms since epoch) in one of three modes.
+     * Three round audits (i18n / locale / numerical-edge) all flagged
+     * that the codebase displays the same kind of timestamp four
+     * different ways: audit-tab UTC ISO, log-viewer local HH:MM:SS,
+     * tools-update relative, chain-card uptime counter. This helper
+     * consolidates the three address-able formats; callers migrate
+     * incrementally.
+     *
+     *   mode='iso'       — '2026-05-13 10:42:31 UTC' (canonical record)
+     *   mode='local'     — operator's locale via toLocaleString
+     *   mode='relative'  — '2 min ago' / 'just now' / '1 h ago'
+     *
+     * Returns '—' for null/undefined/NaN/Infinity so the UI never
+     * prints raw 'NaN' or 'Invalid Date'.
+     *
+     * @param {number} ms  epoch milliseconds (numeric strings tolerated)
+     * @param {{mode?:'iso'|'local'|'relative'}} [opts]
+     * @returns {string}
+     */
+    function formatDate(ms, opts) {
+        var n = (typeof ms === 'number') ? ms : Number(ms);
+        if (n == null || !isFinite(n)) { return '—'; }
+        var mode = (opts && opts.mode) || 'iso';
+        try {
+            var d = new Date(n);
+            if (mode === 'local') {
+                return d.toLocaleString();
+            }
+            if (mode === 'relative') {
+                var diff = Math.max(0, Math.floor((Date.now() - n) / 1000));
+                if (diff < 60)    { return 'just now'; }
+                if (diff < 3600)  { return Math.floor(diff / 60) + ' min ago'; }
+                if (diff < 86400) { return Math.floor(diff / 3600) + ' h ago'; }
+                return Math.floor(diff / 86400) + ' d ago';
+            }
+            // default: iso with UTC suffix (canonical record format)
+            return d.toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, ' UTC');
+        } catch (e) {
+            return '—';
+        }
+    }
+
     root.enmTOrFallback = enmTOrFallback;
     root.enmPad2 = pad2;
     root.enmFormatUptime = formatUptime;
     root.enmFormatNumber = formatNumber;
     root.enmFormatBytes = formatBytes;
     root.enmFormatAddress = formatAddress;
+    root.enmFormatDate = formatDate;
     root.enmReducedMotion = reducedMotion;
     root.enmRunOnce = runOnce;
     root.enmUseVisibilityPause = useVisibilityPause;
