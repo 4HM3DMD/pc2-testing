@@ -230,13 +230,12 @@
             skip_link:  'Skip to main content',
         },
 
-        nav: {
-            dashboard: 'Dashboard',
-            logs: 'Logs',
-            settings: 'Settings',
-            audit: 'Audit',
-            evm: 'EVM',
-        },
+        // alpha.28.1 batch 44 — `nav:` namespace dropped (~7 lines).
+        // No JS caller references nav.dashboard / nav.logs etc. The
+        // top-level tabs were hidden in v0.4 (app.js:467 marks them
+        // hidden = true); technical-view's sub-tabs use inline
+        // English labels defined in the TABS array, not strings.js.
+        // (Round-7 i18n audit acbcec6b.)
 
         chain_state: {
             healthy:    'Healthy',
@@ -324,12 +323,12 @@
             live:       'Live',
             paused:     'Paused (auto-resume on new line)',
             empty:      'No log lines yet. The chain may not have started, or its log file is empty.',
-            connection_lost: 'Live log connection lost. Reconnecting...',
-            filter_placeholder: 'Filter...',
-            level_all:   'All',
-            level_info:  'Info',
-            level_warn:  'Warn',
-            level_error: 'Error',
+            // alpha.28.1 batch 44 — dropped: connection_lost,
+            // filter_placeholder, level_all/info/warn/error. No JS
+            // caller; the filter UI was never built and the
+            // connection-lost state surfaces via the inline pill
+            // string in log-viewer.js:91 ('reconnecting…').
+            // (Round-7 i18n audit acbcec6b.)
         },
 
         // alpha.28.1 batch 43 — `wizard:` namespace dropped (~50 keys).
