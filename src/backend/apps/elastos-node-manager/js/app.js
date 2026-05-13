@@ -448,11 +448,23 @@
                         // been leaning the opposite way. The `verdict`
                         // field has been in the BC payload (line 458)
                         // since batch 22 but was never read.
+                        // alpha.28.1 batch 94 (Round-31 regression check)
+                        // — route through notifications.show with a stable
+                        // id so duplicate BC events (peer's close-path can
+                        // emit twice if both action handler and close
+                        // hook broadcast) collapse to a single toast
+                        // rather than stacking. Uses the proposal id so
+                        // distinct peer-actioned proposals don't dedupe
+                        // each other.
                         if (self.services && self.services.notifications) {
                             var peerVerdict = (ev.data.verdict === 'confirmed')
                                 ? 'Confirmed in another window'
                                 : 'Rejected in another window';
-                            self.services.notifications.info(peerVerdict, '');
+                            self.services.notifications.show({
+                                id: 'peer-verdict-' + ev.data.id,
+                                severity: 'info',
+                                title: peerVerdict,
+                            });
                         }
                     }
                 }
