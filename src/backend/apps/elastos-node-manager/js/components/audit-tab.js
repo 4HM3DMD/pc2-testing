@@ -142,11 +142,28 @@
 
     /** @private */
     AuditTab.prototype._currentFilterQs = function () {
+        // alpha.28.1 batch 63 (Round-18 audit) — guard Date.parse against
+        // NaN before splicing into the query string. <input type="date">
+        // is supposed to enforce yyyy-mm-dd but browsers without a native
+        // picker (older Safari, some embedded webviews) fall back to a
+        // free-text input and let through malformed values. Before this
+        // fix Date.parse returned NaN → query string became `from=NaN&to=NaN`
+        // → backend returned 400 → operator saw a generic "Failed to load
+        // audit log" toast with no hint that the filter date was at fault.
+        // Now: skip the param when NaN so the filter request still
+        // succeeds (with one less constraint applied) rather than blocking
+        // the whole load.
         var parts = [];
         if (this._filters.chain.value)  parts.push('chainId=' + encodeURIComponent(this._filters.chain.value));
         if (this._filters.tier.value)   parts.push('tier=' + encodeURIComponent(this._filters.tier.value));
-        if (this._filters.from.value)   parts.push('from=' + Date.parse(this._filters.from.value));
-        if (this._filters.to.value)     parts.push('to=' + Date.parse(this._filters.to.value));
+        if (this._filters.from.value) {
+            var fromMs = Date.parse(this._filters.from.value);
+            if (isFinite(fromMs)) { parts.push('from=' + fromMs); }
+        }
+        if (this._filters.to.value) {
+            var toMs = Date.parse(this._filters.to.value);
+            if (isFinite(toMs)) { parts.push('to=' + toMs); }
+        }
         return parts.join('&');
     };
 
