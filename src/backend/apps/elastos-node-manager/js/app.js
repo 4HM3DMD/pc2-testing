@@ -268,6 +268,13 @@
      */
     ENMApp.prototype._wireThemeToggle = function () {
         if (!this.els.themeToggle) { return; }
+        // alpha.28.1 batch 24 — singleton guard. init() re-runs each
+        // Retry click on the error pane; without dataset.wired the
+        // addEventListener stacks an extra handler every retry, so
+        // after N retries the next click flips the theme N+1 times.
+        // Same pattern already used for errorRetry/errorReload.
+        if (this.els.themeToggle.dataset.wired === '1') { return; }
+        this.els.themeToggle.dataset.wired = '1';
         this.els.themeToggle.addEventListener('click', function () {
             var current = document.documentElement.getAttribute('data-theme');
             var next = (current === 'dark') ? 'light' : 'dark';
@@ -289,6 +296,9 @@
      */
     ENMApp.prototype._wireSettingsToggle = function () {
         if (!this.els.settingsToggle) { return; }
+        // Singleton guard — same reason as _wireThemeToggle above.
+        if (this.els.settingsToggle.dataset.wired === '1') { return; }
+        this.els.settingsToggle.dataset.wired = '1';
         var self = this;
         this.els.settingsToggle.addEventListener('click', function () {
             self._openSettingsDrawer();
@@ -312,6 +322,13 @@
      */
     ENMApp.prototype._wireCrossTabSync = function () {
         if (typeof BroadcastChannel !== 'function') { return; }
+        // alpha.28.1 batch 24 — singleton guard. Retry-driven init()
+        // re-runs previously opened a SECOND BroadcastChannel; both
+        // stayed subscribed to setup-complete + proposal-actioned, so
+        // every cross-tab event fired N times where N = retry count.
+        // (Lifecycle audit aff18c172.) Keep the previous BroadcastChannel
+        // alive on retry; it's still valid.
+        if (this._bc) { return; }
         var self = this;
         try {
             this._bc = new BroadcastChannel('enm');

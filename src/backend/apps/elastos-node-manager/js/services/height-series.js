@@ -110,6 +110,14 @@
                 if (!payload || !payload.point) return;
                 if (typeof payload.point.t !== 'number'
                     || typeof payload.point.h !== 'number') return;
+                // alpha.28.1 batch 24 — typeof NaN === 'number' so the
+                // typeof check above was insufficient. A single
+                // {h: NaN} from the backend propagated through
+                // hMin/hMax/range in sparkline._render and produced
+                // an SVG path "M NaN,NaN ..." that silently bricked
+                // the sparkline until a snapshot refresh.
+                // (Numerical edge-case audit adc48dd0.)
+                if (!isFinite(payload.point.t) || !isFinite(payload.point.h)) return;
                 var buf = self._buffers.get(chainId) || [];
                 var last = buf[buf.length - 1];
                 // Drop out-of-order / dupes — server already filters but

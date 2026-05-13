@@ -43,6 +43,12 @@
             + '</p>'
             + '</header>';
         this._timer = null;
+        // alpha.28.1 batch 24 — _destroyed flag. refresh() fires a fire-
+        // and-forget /updates/available that previously wrote
+        // document.body.dataset.updateSeverity even AFTER teardown,
+        // re-lighting the cross-tab severity dot on a torn-down view.
+        // (Lifecycle audit aff18c172.)
+        this._destroyed = false;
     }
 
     EnmToolsUpdateCard.prototype.mount = function (parent) {
@@ -54,6 +60,7 @@
     };
 
     EnmToolsUpdateCard.prototype.destroy = function () {
+        this._destroyed = true;
         if (this._timer) { clearInterval(this._timer); this._timer = null; }
         // Close any open update-shell modal so its document-level keydown
         // listener doesn't leak across an app reinstall. _modalClose is
@@ -69,6 +76,7 @@
         var self = this;
         var query = (opts && opts.force) ? '?refresh=1' : '';
         return this.api.get('/updates/available' + query, { skipCache: true }).then(function (env) {
+            if (self._destroyed) { return; }
             self._render(env);
             // Surface the cross-tab severity dot via body data attribute.
             // technical-view.js reads this to colour the Tools tab nav button.
@@ -78,6 +86,7 @@
                 delete document.body.dataset.updateSeverity;
             }
         }).catch(function () {
+            if (self._destroyed) { return; }
             self._renderError();
             delete document.body.dataset.updateSeverity;
         });

@@ -82,6 +82,12 @@
             : 'status';
         this._mounted = {};   // { tabId: componentInstance }
         this._panes = {};     // { tabId: panelDiv }
+        // alpha.28.1 batch 24 — _destroyed flag. _kickUpdateScan and
+        // refreshGates both fire fire-and-forget /updates/available +
+        // /chains/mainchain GETs that previously wrote to body.dataset
+        // and to the (detached) maintenance pane after destroy.
+        // (Lifecycle audit aff18c172.)
+        this._destroyed = false;
     }
 
     TechnicalView.prototype.mount = function (parent) {
@@ -100,7 +106,9 @@
     /** @private */
     TechnicalView.prototype._kickUpdateScan = function () {
         if (!this.api) return;
+        var self = this;
         this.api.get('/updates/available', { skipCache: true }).then(function (env) {
+            if (self._destroyed) { return; }
             if (env && env.updateAvailable && env.severity) {
                 document.body.dataset.updateSeverity = env.severity;
             } else {
@@ -110,6 +118,7 @@
     };
 
     TechnicalView.prototype.destroy = function () {
+        this._destroyed = true;
         // 0.2.0-alpha.11 — gate-refresh timer moved here from the old
         // _renderTools sentinel. Status pane now owns the maintenance
         // card, so the timer's destroy hook lives at the tech-view
@@ -346,10 +355,13 @@
             // Wire gating refresh — same poll used by the original tools
             // tab. 5s cadence keeps the buttons live as state changes.
             var refreshGates = function () {
+                if (self._destroyed) { return; }
                 self.api.get('/chains/mainchain', { skipCache: true }).then(function (chain) {
+                    if (self._destroyed) { return; }
                     self.api.get('/chains/mainchain/producer', { skipCache: true })
                         .catch(function () { return null; })
                         .then(function (producer) {
+                            if (self._destroyed) { return; }
                             self._applyToolsGates(pane, chain, producer);
                         });
                 }).catch(function () { /* leave gates as-is on error */ });

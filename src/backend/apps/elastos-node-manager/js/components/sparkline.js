@@ -155,7 +155,26 @@
             this.root.hidden = true;
             return;
         }
-        this._series = decimate(series, TARGET_POINTS);
+        // alpha.28.1 batch 24 — belt-and-braces NaN filter. The
+        // height-series SSE handler already rejects {h: NaN} at intake
+        // (batch 24 fix), but defending in setSeries too protects
+        // against any future caller passing raw data — one NaN point
+        // would have propagated through hMin/hMax/range and produced
+        // an SVG `d="M NaN,NaN ..."` that silently bricked the
+        // sparkline. (Numerical audit adc48dd0.)
+        var clean = [];
+        for (var i = 0; i < series.length; i += 1) {
+            var p = series[i];
+            if (!p) { continue; }
+            if (!isFinite(p.t) || !isFinite(p.h)) { continue; }
+            clean.push(p);
+        }
+        if (clean.length === 0) {
+            this._series = [];
+            this.root.hidden = true;
+            return;
+        }
+        this._series = decimate(clean, TARGET_POINTS);
         this._render();
     };
 

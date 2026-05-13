@@ -38,6 +38,12 @@
         this.root = document.createElement('section');
         this.root.className = 'enm-card enm-producer-identity';
         this._account = null; // { publicKey, address }
+        // alpha.28.1 batch 24 — _destroyed flag. mount() fires
+        // /setup/keystore/account + the secondary /chains/mainchain/
+        // producer fetch in _renderBinding; both used to resolve into
+        // a detached this.root after destroy(), mutating innerHTML on
+        // a removed subtree. (Lifecycle audit aff18c172.)
+        this._destroyed = false;
     }
 
     ProducerIdentity.prototype.mount = function (parent) {
@@ -47,12 +53,14 @@
     };
 
     ProducerIdentity.prototype.destroy = function () {
+        this._destroyed = true;
         if (this.root.parentNode) this.root.parentNode.removeChild(this.root);
     };
 
     ProducerIdentity.prototype.refresh = function () {
         var self = this;
         return this.api.get('/setup/keystore/account', { skipCache: true }).then(function (r) {
+            if (self._destroyed) { return; }
             if (!r || !r.exists) {
                 self._renderEmpty();
                 return;
@@ -64,6 +72,7 @@
             }
             self._render();
         }).catch(function () {
+            if (self._destroyed) { return; }
             self._renderEmpty();
         });
     };
@@ -247,6 +256,7 @@
     ProducerIdentity.prototype._renderBinding = function () {
         var self = this;
         this.api.get('/chains/mainchain/producer', { skipCache: true }).then(function (data) {
+            if (self._destroyed) { return; }
             if (!data || !data.enabled) return; // pubkey not configured yet
             var binding = data.binding || 'unknown';
             var chainOwner = data.chainOwnerPubkey || '';

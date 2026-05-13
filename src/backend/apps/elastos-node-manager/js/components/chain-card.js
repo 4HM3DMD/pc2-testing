@@ -122,6 +122,16 @@
         if (this._unsubSse)        { this._unsubSse();    this._unsubSse = null; }
         if (this._unsubHeight)     { this._unsubHeight(); this._unsubHeight = null; }
         if (this._sparkline)       { this._sparkline.destroy(); this._sparkline = null; }
+        // alpha.28.1 batch 24 — symmetry: chain-card creates+mounts a
+        // PowerCircle at line 184 but previously never called its
+        // destroy(). Cosmetic today (PowerCircle has no timers; its
+        // DOM is removed when `this.root` is removed below), but the
+        // pattern was asymmetric and prone to regress if PowerCircle
+        // ever grows internal listeners. (Lifecycle audit aff18c172.)
+        if (this._powerCircle && typeof this._powerCircle.destroy === 'function') {
+            try { this._powerCircle.destroy(); } catch (_) { /* idempotent */ }
+            this._powerCircle = null;
+        }
         // 0.2.0-alpha.1 — tell FleetHealthGradient we're going away so it
         // can drop this chain from its aggregate. Without this, a remount
         // would double-count.
