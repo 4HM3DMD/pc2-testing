@@ -227,12 +227,39 @@
         es.onopen = function () {
             clearTimeout(self._openTimer);
             self._openTimer = null;
-            self._connectAttempts = 0;
+            // alpha.28.1 batch 91 (Round-29 audit, MED) — debounce the
+            // counter reset. Previous shape eagerly reset
+            // _connectAttempts to 0 on every onopen. A flapping
+            // connection — server opens TCP, immediately 502s the
+            // stream, browser's INTERNAL retry kicks in (we don't
+            // es.close() per the onerror comment) — kept resetting the
+            // counter without our wrapper ever seeing the failures as
+            // new attempts. Result: MAX_RECONNECT_ATTEMPTS + give-up
+            // logic NEVER triggered; pill reported "open" forever while
+            // the browser silently looped. Operator saw no signal.
+            //
+            // Fix: only reset _connectAttempts after the socket has been
+            // stable for STABLE_OPEN_MS. The 'open' state is still emitted
+            // immediately so consumer pills update; only the reset of the
+            // counter (which would mask flapping) is debounced. If the
+            // socket errors before the timer fires, _connectAttempts
+            // stays high, our backoff/cap engages correctly.
             self._emitState('open');
+            if (self._stableOpenTimer) { clearTimeout(self._stableOpenTimer); }
+            self._stableOpenTimer = setTimeout(function () {
+                self._connectAttempts = 0;
+                self._stableOpenTimer = null;
+            }, 5_000);
         };
         es.onerror = function () {
             // Browser auto-retries on its own; we just surface the state
             // transition. Don't close the EventSource — that disables retry.
+            // batch 91 — cancel the stable-open debounce so the counter
+            // doesn't reset on a flapping socket.
+            if (self._stableOpenTimer) {
+                clearTimeout(self._stableOpenTimer);
+                self._stableOpenTimer = null;
+            }
             self._emitState('reconnecting');
         };
         // Register a listener per subscribed topic. SSE 'event:' field values
@@ -280,6 +307,12 @@
         if (this._openTimer) {
             clearTimeout(this._openTimer);
             this._openTimer = null;
+        }
+        // batch 91 — also clear the stable-open debounce so a reconnect
+        // doesn't inherit a stale timer from the previous EventSource.
+        if (this._stableOpenTimer) {
+            clearTimeout(this._stableOpenTimer);
+            this._stableOpenTimer = null;
         }
         if (this._es) {
             try { this._es.close(); } catch (_) { /* swallow */ }
