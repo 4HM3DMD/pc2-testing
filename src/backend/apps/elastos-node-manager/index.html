@@ -56,13 +56,13 @@
              flexible spacer, global controls on the right. PC2's window
              manager already provides the app title via window-head — no
              need to re-render it here. -->
-        <nav class="enm-header-bar" id="enm-tabs" role="tablist" hidden>
+        <nav class="enm-header-bar" id="enm-tabs" role="tablist" aria-label="Sections" hidden>
             <div class="enm-header-tabs">
-                <button type="button" class="enm-tab active" role="tab" data-tab="dashboard" aria-selected="true">Dashboard</button>
-                <button type="button" class="enm-tab"        role="tab" data-tab="logs"      aria-selected="false">Logs</button>
-                <button type="button" class="enm-tab"        role="tab" data-tab="settings"  aria-selected="false">Settings</button>
-                <button type="button" class="enm-tab"        role="tab" data-tab="audit"     aria-selected="false">Audit</button>
-                <button type="button" class="enm-tab"        role="tab" data-tab="evm"       aria-selected="false">
+                <button type="button" class="enm-tab active" role="tab" id="enm-tab-dashboard" data-tab="dashboard" aria-selected="true"  aria-controls="enm-pane-dashboard" tabindex="0">Dashboard</button>
+                <button type="button" class="enm-tab"        role="tab" id="enm-tab-logs"      data-tab="logs"      aria-selected="false" aria-controls="enm-pane-logs"      tabindex="-1">Logs</button>
+                <button type="button" class="enm-tab"        role="tab" id="enm-tab-settings"  data-tab="settings"  aria-selected="false" aria-controls="enm-pane-settings"  tabindex="-1">Settings</button>
+                <button type="button" class="enm-tab"        role="tab" id="enm-tab-audit"     data-tab="audit"     aria-selected="false" aria-controls="enm-pane-audit"     tabindex="-1">Audit</button>
+                <button type="button" class="enm-tab"        role="tab" id="enm-tab-evm"       data-tab="evm"       aria-selected="false" aria-controls="enm-pane-evm"       tabindex="-1">
                     EVM <span class="enm-tab-pill">v0.5</span>
                 </button>
             </div>
@@ -101,11 +101,11 @@
             </div>
 
             <section class="enm-content" id="enm-content" hidden>
-                <div class="enm-pane" id="enm-pane-dashboard"></div>
-                <div class="enm-pane" id="enm-pane-logs" hidden></div>
-                <div class="enm-pane" id="enm-pane-settings" hidden></div>
-                <div class="enm-pane" id="enm-pane-audit" hidden></div>
-                <div class="enm-pane" id="enm-pane-evm" hidden></div>
+                <div class="enm-pane" id="enm-pane-dashboard" role="tabpanel" aria-labelledby="enm-tab-dashboard" tabindex="0"></div>
+                <div class="enm-pane" id="enm-pane-logs"      role="tabpanel" aria-labelledby="enm-tab-logs"      tabindex="0" hidden></div>
+                <div class="enm-pane" id="enm-pane-settings"  role="tabpanel" aria-labelledby="enm-tab-settings"  tabindex="0" hidden></div>
+                <div class="enm-pane" id="enm-pane-audit"     role="tabpanel" aria-labelledby="enm-tab-audit"     tabindex="0" hidden></div>
+                <div class="enm-pane" id="enm-pane-evm"       role="tabpanel" aria-labelledby="enm-tab-evm"       tabindex="0" hidden></div>
             </section>
 
             <div class="enm-error" id="enm-error" hidden role="alert">

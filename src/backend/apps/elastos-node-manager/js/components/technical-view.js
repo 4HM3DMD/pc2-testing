@@ -145,15 +145,41 @@
         var nav = document.createElement('nav');
         nav.className = 'enm-tech-tabs';
         nav.setAttribute('role', 'tablist');
-        TABS.forEach(function (t) {
+        nav.setAttribute('aria-label', 'Technical view sections');
+        TABS.forEach(function (t, idx) {
             var b = document.createElement('button');
             b.type = 'button';
             b.setAttribute('role', 'tab');
+            b.id = 'enm-tech-tab-' + t.id;
+            b.setAttribute('aria-controls', 'enm-tech-pane-' + t.id);
+            // Roving tabindex: only the first tab is reachable via Tab on initial render;
+            // the rest are reachable via arrow keys (WCAG ARIA tab pattern).
+            b.setAttribute('tabindex', idx === 0 ? '0' : '-1');
             b.dataset.tab = t.id;
             b.className = 'enm-tab';
             b.innerHTML = escapeHtml(t.label)
                 + (t.pill ? ' <span class="enm-tab-pill">' + escapeHtml(t.pill) + '</span>' : '');
             b.addEventListener('click', function () { self._switchTo(t.id); });
+            // Arrow-key navigation within the tablist (Left/Right/Home/End).
+            b.addEventListener('keydown', function (ev) {
+                var key = ev.key;
+                var nextIdx;
+                if (key === 'ArrowRight') {
+                    nextIdx = (idx + 1) % TABS.length;
+                } else if (key === 'ArrowLeft') {
+                    nextIdx = (idx - 1 + TABS.length) % TABS.length;
+                } else if (key === 'Home') {
+                    nextIdx = 0;
+                } else if (key === 'End') {
+                    nextIdx = TABS.length - 1;
+                } else {
+                    return;
+                }
+                ev.preventDefault();
+                var nextBtn = nav.querySelectorAll('[data-tab]')[nextIdx];
+                self._switchTo(TABS[nextIdx].id);
+                if (nextBtn) { nextBtn.focus(); }
+            });
             nav.appendChild(b);
         });
         this.root.appendChild(nav);
@@ -165,6 +191,10 @@
         TABS.forEach(function (t) {
             var p = document.createElement('div');
             p.className = 'enm-tech-pane';
+            p.id = 'enm-tech-pane-' + t.id;
+            p.setAttribute('role', 'tabpanel');
+            p.setAttribute('aria-labelledby', 'enm-tech-tab-' + t.id);
+            p.setAttribute('tabindex', '0');
             p.dataset.tab = t.id;
             p.hidden = true;
             content.appendChild(p);
@@ -177,11 +207,13 @@
     TechnicalView.prototype._switchTo = function (tabId) {
         var self = this;
         this._activeTab = tabId;
-        // Tab visuals.
+        // Tab visuals + roving tabindex (only the active tab is in the natural
+        // Tab sequence; arrow keys move within the tablist).
         this._nav.querySelectorAll('[data-tab]').forEach(function (b) {
             var on = b.dataset.tab === tabId;
             b.classList.toggle('active', on);
             b.setAttribute('aria-selected', on ? 'true' : 'false');
+            b.setAttribute('tabindex', on ? '0' : '-1');
         });
         // Pane visibility.
         Object.keys(this._panes).forEach(function (k) {

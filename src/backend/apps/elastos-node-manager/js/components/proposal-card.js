@@ -42,9 +42,20 @@
     }
 
     ProposalCard.prototype.mount = function (parent) {
+        // Remember what the operator was focused on so we can restore it on close
+        // (WCAG 2.4.3 Focus Order). Without this, focus jumps to <body> after
+        // the dialog closes and a screen reader loses context.
+        this._previousFocus = document.activeElement;
         parent.appendChild(this.root);
         this._startCooldown();
         this._installEscHandler();
+        this._installFocusTrap();
+        // Move focus into the dialog. The ack checkbox is the natural entry
+        // point because the Confirm button is disabled during the cooldown.
+        var firstFocusable = this._checkbox || this.root.querySelector('button, input, [tabindex]');
+        if (firstFocusable && typeof firstFocusable.focus === 'function') {
+            setTimeout(function () { firstFocusable.focus(); }, 0);
+        }
         return this;
     };
 
@@ -56,7 +67,15 @@
             document.removeEventListener('keydown', this._escHandler);
             this._escHandler = null;
         }
+        if (this._trapHandler) {
+            document.removeEventListener('keydown', this._trapHandler, true);
+            this._trapHandler = null;
+        }
         if (this.root.parentNode) { this.root.parentNode.removeChild(this.root); }
+        // Return focus to wherever the operator was before the dialog opened.
+        if (this._previousFocus && typeof this._previousFocus.focus === 'function') {
+            try { this._previousFocus.focus(); } catch (_) { /* element may be gone */ }
+        }
         this.onClose();
     };
 
@@ -109,6 +128,7 @@
             this._antiSnipe.type = 'password';
             this._antiSnipe.className = 'enm-proposal-anti-snipe';
             this._antiSnipe.placeholder = 'Anti-snipe password';
+            this._antiSnipe.setAttribute('aria-label', 'Anti-snipe password');
             this._antiSnipe.autocomplete = 'current-password';
             this._antiSnipe.addEventListener('input', function () { self._refreshConfirmEnabled(); });
             card.appendChild(this._antiSnipe);
@@ -145,6 +165,7 @@
         this._rejectReason.type = 'text';
         this._rejectReason.className = 'enm-proposal-reject-reason';
         this._rejectReason.placeholder = t('proposal.reject_reason_placeholder');
+        this._rejectReason.setAttribute('aria-label', t('proposal.reject_reason_placeholder'));
         card.appendChild(this._rejectReason);
 
         this.root.appendChild(card);
@@ -220,6 +241,35 @@
             if (ev.key === 'Escape') { self._handleReject(); }
         };
         document.addEventListener('keydown', this._escHandler);
+    };
+
+    /**
+     * @private
+     * Focus trap: Tab and Shift+Tab cycle within the dialog only. Without this,
+     * keyboard focus can escape onto elements behind the overlay, violating
+     * WCAG 2.4.3 (Focus Order) for modal dialogs. The handler runs on capture
+     * so it sees the keydown before any inner element can intercept it.
+     */
+    ProposalCard.prototype._installFocusTrap = function () {
+        var self = this;
+        this._trapHandler = function (ev) {
+            if (ev.key !== 'Tab' || self._closed) { return; }
+            // Re-query each press because cooldown enables Confirm mid-lifecycle.
+            var focusables = self.root.querySelectorAll(
+                'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+            );
+            if (focusables.length === 0) { return; }
+            var first = focusables[0];
+            var last  = focusables[focusables.length - 1];
+            if (ev.shiftKey && document.activeElement === first) {
+                ev.preventDefault();
+                last.focus();
+            } else if (!ev.shiftKey && document.activeElement === last) {
+                ev.preventDefault();
+                first.focus();
+            }
+        };
+        document.addEventListener('keydown', this._trapHandler, true);
     };
 
     root.EnmProposalCard = ProposalCard;
