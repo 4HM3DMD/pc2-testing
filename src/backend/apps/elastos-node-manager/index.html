@@ -2,7 +2,12 @@
 <html lang="en">
 <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <!-- viewport-fit=cover lets safe-area-inset-* paddings honour iPhone
+         notches in landscape; interactive-widget=resizes-content tells
+         iOS to shrink the layout viewport when the soft keyboard opens
+         so Save/Continue buttons aren't covered by it. user-scalable
+         intentionally omitted so WCAG 1.4.4 (200% zoom) is allowed. -->
+    <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
     <meta name="referrer" content="no-referrer">
     <title>Elastos Node Manager</title>
     <link rel="stylesheet" href="css/styles.css?ts=20260513c">

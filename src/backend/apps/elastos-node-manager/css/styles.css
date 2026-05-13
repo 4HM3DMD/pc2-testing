@@ -2218,6 +2218,11 @@ body[data-active-tab="identity"]::before {
     flex-shrink: 0;
     padding: 6px 14px;
     font-size: 12px;
+    /* WCAG 2.5.5 AA-22 floor — without min-height the button computes to
+       ~24px in some line-height contexts, right at the threshold. 28px
+       gives a comfortable margin and matches other text-only secondary
+       buttons in the app. */
+    min-height: 28px;
 }
 
 /* Essentials sub-steps ------------------------------------------------- */
@@ -5138,12 +5143,33 @@ body[data-app-size="narrow"] .enm-chain-stats-strip {
 body[data-app-size="narrow"] .enm-chain-actions {
     flex-direction: column;
     width: 100%;
+    /* alpha.28.1 mobile-touch: bump the inter-button gap on the
+       Start / Stop / Restart row from 8px to 12px so touch operators
+       don't mis-tap Stop when aiming for Restart. Stop is destructive
+       — the larger gap is operator safety. */
+    gap: 12px;
 }
 body[data-app-size="narrow"] .enm-chain-actions .enm-btn {
     width: 100%;
     /* a11y/narrow: parent's column flex inherits the 110px min-width from
        the baseline rule; reset so buttons never overflow at &lt;180px iframe. */
     min-width: 0;
+}
+
+/* alpha.28.1 mobile-touch — narrow-mode upgrades for the most-tapped
+   touch surfaces on phones/tablets. The audit found three real risks:
+     1. gear + theme icon-buttons stay 32×32 (below WCAG 2.5.5 AAA 44×44
+        on phone); bump to 40×40 at narrow as a balance with the chrome.
+     2. setup wizard goal/B2 tiles stay 2-col at iframe-narrow widths
+        because the original `@media (max-width: 480px)` rule measures
+        the OUTER browser viewport not the iframe interior. */
+body[data-app-size="narrow"] .enm-icon-btn {
+    width: 40px;
+    height: 40px;
+}
+body[data-app-size="narrow"] .enm-goal-tiles,
+body[data-app-size="narrow"] .enm-b2-tiles {
+    grid-template-columns: 1fr;
 }
 
 /* alpha.28.1 — narrow-mode chains-grid: baseline uses
