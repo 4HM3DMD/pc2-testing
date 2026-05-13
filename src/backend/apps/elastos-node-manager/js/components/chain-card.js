@@ -630,7 +630,18 @@
                 );
             }
         }).then(function () {
+            // alpha.28.1 batch 60 (Round-18 audit) — explicitly clear
+            // btn.disabled here. _do() sets `btn.disabled = true` at the
+            // start; on the success path _applyState's downstream call
+            // would re-enable it, but on the 401-suppressed path
+            // refresh() early-returns at the top guard and _applyState
+            // never runs. Result before this fix: a single 401 on
+            // Start/Stop/Restart leaves the button greyed out until a
+            // non-401 poll lands (5+ seconds, or forever if the session
+            // truly expired). Clearing disabled here re-evaluates from
+            // coarse state via the queued refresh().
             btn.textContent = prev;
+            btn.disabled = false;
             self._busy = false;
             self.refresh();
         });
