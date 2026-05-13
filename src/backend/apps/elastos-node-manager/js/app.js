@@ -114,6 +114,18 @@
 
     ENMApp.prototype.init = function () {
         this._wireErrorActions();
+        // alpha.28.1 batch 18 — guard against accidental file-drop
+        // navigating the iframe away. Without these listeners a file
+        // dropped onto the ENM iframe (e.g. operator dragging a
+        // keystore JSON onto the page) is treated by the browser as
+        // a navigation and the page loads `file://...`, killing the
+        // dashboard. Install once at boot; idempotent flag keeps Retry
+        // from stacking listeners. (Audit ac802d65 #8.)
+        if (!root.__enmDropGuardInstalled) {
+            root.__enmDropGuardInstalled = true;
+            document.addEventListener('dragover', function (e) { e.preventDefault(); });
+            document.addEventListener('drop',     function (e) { e.preventDefault(); });
+        }
         // alpha.25: install responsive observer FIRST so size class is set
         // before any UI mounts. Otherwise components measure with the wrong
         // class and render at the wrong breakpoint on first paint.

@@ -1202,9 +1202,39 @@
         addBtn.addEventListener('click', tryAdd);
         newInput.addEventListener('keydown', function (e) {
             // Enter and comma both commit; comma is natural for operators
-            // pasting a single CSV line.
+            // pasting a single CSV line. alpha.28.1 batch 18 (audit
+            // ac802d65) — guard against CJK IME composition: when an
+            // operator is composing a Pinyin candidate, pressing Enter
+            // is the "commit candidate" gesture for the IME, NOT a
+            // submit. Without isComposing/keyCode 229 checks the chip
+            // commits a half-composed Latin buffer and the IME loses
+            // the candidate.
+            if (e.isComposing || e.keyCode === 229) { return; }
             if (e.key === 'Enter' || e.key === ',') {
                 e.preventDefault();
+                tryAdd();
+            }
+        });
+        // alpha.28.1 batch 18 — multi-value paste handler. Without this
+        // an operator pasting "192.168.1.1, 192.168.1.2, 10.0.0.0/8"
+        // (a normal CSV from a runbook) drops the entire string into
+        // newInput.value as one chunk; the next Enter runs IP_OR_CIDR_RE
+        // against the whole string and the chip flashes red. Split on
+        // any whitespace/newline/comma run, validate + add each piece.
+        // Only intercepts when the paste actually contains a separator;
+        // single-value paste falls through to the default behaviour so
+        // the operator can still edit before committing.
+        newInput.addEventListener('paste', function (e) {
+            var cb = e.clipboardData || (typeof root !== 'undefined' ? root.clipboardData : null);
+            if (!cb || typeof cb.getData !== 'function') { return; }
+            var text = cb.getData('text');
+            if (!text || !/[,\s\n\t]/.test(text)) { return; }
+            e.preventDefault();
+            var parts = text.split(/[,\s\n\t]+/);
+            for (var i = 0; i < parts.length; i += 1) {
+                var v = parts[i].trim();
+                if (!v) { continue; }
+                newInput.value = v;
                 tryAdd();
             }
         });
