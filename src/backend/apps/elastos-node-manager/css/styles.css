@@ -1992,6 +1992,122 @@ html, body {
 }
 
 /* ============================================================
+   alpha.22 — narrow-mode TOTAL LAYOUT SWAP at <700px
+   Operator feedback on alpha.21: "this is not it man, it needs
+   to be fundamentally fixed, when the screen is too small it
+   needs to be a totally new layout cuz that aint working".
+
+   alpha.21 used @container queries on .enm-settings — those
+   either weren't firing (PC2 iframe parents may not preserve
+   container context cleanly) or weren't enough. Switching to
+   viewport-based @media queries with a different layout entirely:
+
+   Settings at <700px:
+     - Nav rail completely hidden
+     - All settings sections rendered as stacked cards
+     - Operator scrolls through Network / Mainchain Advanced /
+       RPC access / General prefs / Danger zone in one long page
+     - Each section is a self-contained card with clear heading
+     - Form rows stack labels above inputs
+
+   The technical-view sub-tabs (Status/Identity/Logs/...) become
+   sticky at the top so they remain reachable during scroll.
+
+   This is the "totally new layout" — not just shrunken; entirely
+   restructured for narrow widths. CSS-only, no JS changes.
+   ============================================================ */
+
+/* Tech-view sub-tabs: sticky at top so they remain reachable while
+   the operator scrolls through a long settings page. */
+@media (max-width: 700px) {
+    .enm-tech-tabs {
+        position: sticky;
+        top: 0;
+        background: var(--bg-page);
+        z-index: 10;
+        margin: 0;
+        padding: var(--spacing-xs) 0;
+    }
+    .enm-tech-content {
+        padding-top: var(--spacing-sm);
+    }
+}
+
+/* Settings tab — total layout swap. */
+@media (max-width: 700px) {
+    .enm-settings {
+        /* Override the 2-column grid entirely */
+        display: block !important;
+        padding: var(--spacing-md);
+        container-type: normal;  /* disarm @container queries inside */
+    }
+    /* Nuke the nav rail — operator scrolls all sections instead */
+    .enm-settings-nav {
+        display: none !important;
+    }
+    /* Show ALL settings panes — override JS's [hidden] attribute */
+    .enm-settings-pane[hidden] {
+        display: block !important;
+    }
+    /* Each section becomes a self-contained card */
+    .enm-settings-section {
+        margin: 0 0 var(--spacing-md);
+        padding: var(--spacing-lg);
+        background: var(--bg-surface);
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius-md);
+    }
+    .enm-settings-section:last-child {
+        margin-bottom: 0;
+    }
+    .enm-settings-section > h3 {
+        margin: 0 0 var(--spacing-md);
+        font-size: 16px;
+        font-weight: 600;
+        color: var(--text-primary);
+    }
+    /* Form rows: labels above inputs, full width */
+    .enm-settings-row {
+        grid-template-columns: 1fr !important;
+        gap: var(--spacing-xs) !important;
+    }
+    .enm-settings-input {
+        width: 100%;
+    }
+    /* Danger zone keeps its red accent + visible warning */
+    .enm-settings-pane[data-accent="danger"] .enm-settings-section,
+    .enm-settings-pane:last-child .enm-settings-section {
+        border-color: var(--error);
+    }
+}
+
+/* Even tighter at <480px (phone widths, gives more breathing room). */
+@media (max-width: 480px) {
+    .enm-settings { padding: var(--spacing-sm); }
+    .enm-settings-section {
+        padding: var(--spacing-md);
+        margin-bottom: var(--spacing-sm);
+    }
+    .enm-settings-section > h3 {
+        font-size: 15px;
+        margin-bottom: var(--spacing-sm);
+    }
+    /* Pane padding shrinks too so cards have more horizontal room */
+    .enm-pane {
+        padding: var(--spacing-xs) !important;
+    }
+}
+
+/* Other panes (Dashboard/Logs/Audit/EVM) — already stack reasonably
+   from alpha.21. Just shrink pane padding at narrow widths so the
+   chain-card + system-status don't get crushed against the edge. */
+@media (max-width: 700px) {
+    .enm-tech-pane {
+        padding: 0;
+    }
+}
+
+/* ============================================================
    alpha.19 — compact RPC access tab layout
    Section-per-subtopic (toggle / allow / urls / creds), tight rows.
    ============================================================ */
