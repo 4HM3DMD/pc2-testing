@@ -278,7 +278,16 @@
             // Reject button stays enabled either way so the operator
             // can retry once re-authed.
             if (err && err.status === 401) {
+                // alpha.28.1 batch 61 (Round-18 audit) — _handleReject
+                // disables BOTH _rejectBtn and _confirmBtn at start
+                // (lines 269-270). The previous 401 branch only
+                // re-enabled _rejectBtn, leaving Confirm permanently
+                // disabled until the parent re-mounted the card. The
+                // operator could no longer confirm OR reject anything
+                // from this dialog. Symmetrical with _handleConfirm's
+                // 401 path which calls _refreshConfirmEnabled.
                 self._rejectBtn.disabled = false;
+                self._refreshConfirmEnabled();
                 return;
             }
             self.notifications.warning(
@@ -286,6 +295,9 @@
                 err && err.message ? err.message : String(err),
             );
             self._rejectBtn.disabled = false;
+            // Same fix in the generic-error branch — _confirmBtn was
+            // disabled at line 270 and never re-enabled.
+            self._refreshConfirmEnabled();
         });
     };
 
