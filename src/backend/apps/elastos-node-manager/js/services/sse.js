@@ -239,8 +239,26 @@
         // map to addEventListener names exactly.
         this._topics.forEach(function (topic) {
             es.addEventListener(topic, function (ev) {
+                // alpha.28.1 batch 71 (Round-19B audit finding #5) —
+                // drop unparseable payloads instead of propagating the
+                // raw string as if it were a valid envelope. All
+                // current handlers shape-guard against non-object
+                // payloads so the previous fall-through was harmless,
+                // but it muted a real signal: a future handler that
+                // forgot to shape-guard would silently no-op instead
+                // of throwing the parse warning to dev tools. Now: log
+                // the parse failure (caught in console.warn so prod
+                // operators aren't spammed if they have an open
+                // devtools tab) and return early.
                 var payload;
-                try { payload = JSON.parse(ev.data); } catch (e) { payload = ev.data; }
+                try {
+                    payload = JSON.parse(ev.data);
+                } catch (e) {
+                    if (root.console && console.warn) {
+                        console.warn('EnmSse: dropping unparseable payload on topic ' + topic, e);
+                    }
+                    return;
+                }
                 var set = self._handlers.get(topic);
                 if (!set) return;
                 set.forEach(function (cb) {

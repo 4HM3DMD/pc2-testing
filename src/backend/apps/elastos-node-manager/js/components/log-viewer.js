@@ -313,10 +313,31 @@
      * download. Mirrors the audit-tab JSON export pattern so operators
      * can attach a log slice to a bug report without copying line-by-line.
      */
+    // alpha.28.1 batch 71 (Round-19B audit finding #6) — both
+    // _exportText and _renderLine called `new Date(e.ts || Date.now())`.
+    // The `|| Date.now()` guard only catches FALSY values; a malformed
+    // truthy `ts` (e.g. the string "not-a-date" from a backend bug)
+    // produces an Invalid Date object whose getHours/getMinutes/getSeconds
+    // all return NaN. The render path then displayed "NaN:NaN:NaN" in
+    // the timestamp prefix and the title attribute read "Invalid Date".
+    // safeDate() probes for a real timestamp before returning; falls
+    // back to Date.now() on any failure mode.
+    function safeDate(raw) {
+        if (raw == null) { return new Date(); }
+        var n = (typeof raw === 'number') ? raw : Date.parse(raw);
+        if (!isFinite(n)) { return new Date(); }
+        var d = new Date(n);
+        // getTime() returns NaN for an Invalid Date — final defensive
+        // probe in case Date.parse accepted but the constructor still
+        // produced an unrenderable Date.
+        if (isNaN(d.getTime())) { return new Date(); }
+        return d;
+    }
+
     LogViewer.prototype._exportText = function () {
         var lines = (this._lines || []).map(function (e) {
             var ts;
-            try { ts = new Date(e.ts || Date.now()).toISOString(); }
+            try { ts = safeDate(e.ts).toISOString(); }
             catch (err) { ts = '?'; }
             var stream = (e.stream === 'stderr' ? 'stderr' : 'stdout');
             return ts + ' [' + stream + '] ' + (e.line || '');
@@ -338,7 +359,9 @@
         var div = document.createElement('div');
         div.className = 'enm-log-line enm-log-line-' + (entry.stream === 'stderr' ? 'stderr' : 'stdout');
         // Prefix with HH:MM:SS for readability — full timestamp is in the title.
-        var d = new Date(entry.ts || Date.now());
+        // batch 71 — safeDate guards against malformed truthy ts values
+        // (Invalid Date → NaN:NaN:NaN before this fix).
+        var d = safeDate(entry.ts);
         var time = pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds());
         var ts = document.createElement('span');
         ts.className = 'enm-log-ts';

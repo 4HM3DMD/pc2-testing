@@ -104,16 +104,35 @@
         var self = this;
         this.root.hidden = false;
         var detail = (err && err.message) ? err.message : 'Couldn\'t reach the keystore service.';
-        this.root.innerHTML =
-            '<header class="enm-producer-identity-head">' +
-                '<h3>Producer identity</h3>' +
-            '</header>' +
-            '<p class="enm-stub">' + escapeAttr(detail) + '</p>' +
-            '<button type="button" class="enm-btn enm-btn-secondary enm-producer-retry">Retry</button>';
-        var btn = this.root.querySelector('.enm-producer-retry');
-        if (btn) {
-            btn.addEventListener('click', function () { self.refresh(); });
-        }
+        // alpha.28.1 batch 71 (Round-19C audit finding #3) — the previous
+        // shape used escapeAttr() on `detail` despite it landing in HTML
+        // body context, not an attribute. The helper at line 383 escapes
+        // the same five chars an escapeHtml would, so it was safe today,
+        // BUT signalling escapeAttr where escapeHtml is needed is a
+        // code-smell that won't survive a future copy-paste into an
+        // event-handler attribute (where the helpers diverge). Replace
+        // with the createElement + textContent pattern batch 59 used for
+        // the producer-binding owner row — same DOM, no innerHTML, no
+        // escape-helper choice to second-guess.
+        this.root.innerHTML = '';
+        var head = document.createElement('header');
+        head.className = 'enm-producer-identity-head';
+        var h3 = document.createElement('h3');
+        h3.textContent = 'Producer identity';
+        head.appendChild(h3);
+        this.root.appendChild(head);
+
+        var msg = document.createElement('p');
+        msg.className = 'enm-stub';
+        msg.textContent = detail;
+        this.root.appendChild(msg);
+
+        var retryBtn = document.createElement('button');
+        retryBtn.type = 'button';
+        retryBtn.className = 'enm-btn enm-btn-secondary enm-producer-retry';
+        retryBtn.textContent = 'Retry';
+        retryBtn.addEventListener('click', function () { self.refresh(); });
+        this.root.appendChild(retryBtn);
     };
 
     ProducerIdentity.prototype._renderEmpty = function () {

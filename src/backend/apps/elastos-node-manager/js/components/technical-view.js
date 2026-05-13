@@ -511,7 +511,17 @@
                 c.row.dataset.disabled = disabled ? '1' : '0';
                 if (c.help) {
                     if (disabled) {
-                        c.help.innerHTML = '<span class="enm-tech-disabled-reason">' + reason + '</span>';
+                        // alpha.28.1 batch 71 (Round-19C audit finding
+                        // #1) — escape `reason` before splicing into
+                        // innerHTML. Every current caller (lines 524-
+                        // 546) passes a hardcoded literal so there is
+                        // no live exploit. But the helper sits one
+                        // careless edit away from being fed backend
+                        // data like `err.message` or `s.reason` and
+                        // silently XSS'ing the maintenance pane.
+                        // Defence in depth — wrap with the file-local
+                        // escapeHtml at line 643.
+                        c.help.innerHTML = '<span class="enm-tech-disabled-reason">' + escapeHtml(reason) + '</span>';
                     } else if (c.help.dataset.original) {
                         c.help.innerHTML = c.help.dataset.original;
                     }
