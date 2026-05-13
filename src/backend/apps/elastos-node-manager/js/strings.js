@@ -182,9 +182,12 @@
         },
 
         app: {
-            title: 'Elastos Node Manager',
-            connecting: 'Connecting to Node Manager...',
-            reconnecting: 'Reconnecting to Node Manager...',
+            // alpha.28.1 batch 47 — title / connecting / reconnecting
+            // dropped. The PC2 window chrome shows the app name (see
+            // technical-view.js:155 comment); the spinner text is
+            // static in index.html:115 and the reconnecting state
+            // surfaces via inline pills in chain-card and log-viewer.
+            // Round-7 i18n audit acbcec6b.
             backendUnreachable: 'ENM backend unavailable',
             backendHelp:
                 'The enm-server sidecar at :4180 is not responding. On the host, run '
@@ -391,7 +394,10 @@
 
             heading_rpc_creds:  'RPC access',
             rpc_creds_intro:    'External apps connect via JSON-RPC. Off by default — toggle on once you\'ve set the allow-list. Treat the password like a key.',
-            rpc_reveal_btn:     'Reveal credentials',
+            // alpha.28.1 batch 47 — rpc_reveal_btn dropped (alpha.17 RPC
+            // redesign removed the reveal-on-click affordance; password
+            // visibility now lives in the rpc_show_pw / rpc_hide_pw
+            // toggle below). Round-7 i18n audit acbcec6b.
             rpc_hide_btn:       'Hide',
             rpc_show_pw:        'Show password',
             rpc_hide_pw:        'Hide password',
@@ -399,10 +405,12 @@
             rpc_copied:         'Copied',
             rpc_field_user:     'RPC user',
             rpc_field_pw:       'RPC password',
-            rpc_field_local:    'Local URL',
-            rpc_field_lan:      'LAN URLs',
-            rpc_field_white:    'Allowed source IPs (whitelist)',
-            rpc_url_group_heading:  'Connection URLs',
+            // alpha.28.1 batch 47 — rpc_field_local / lan / white +
+            // rpc_url_group_heading dropped. Alpha.17 redesigned the
+            // RPC access tab to use rpc_url_same_machine / rpc_url_
+            // private_network / rpc_url_public_internet (still live
+            // below); the older "Connection URLs" group heading +
+            // per-row labels are no longer rendered.
             rpc_url_same_machine:   'For apps on this server',
             rpc_url_private_network:'For apps on your local network',
             rpc_url_public_internet:'For apps over the internet',
