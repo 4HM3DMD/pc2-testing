@@ -148,7 +148,17 @@
     SettingsTab.prototype._buildNetworkSection = function (t) {
         var section = document.createElement('div');
         section.className = 'enm-settings-section';
-        var h = document.createElement('h3'); h.textContent = t('settings.heading_network');
+        // alpha.28.1 batch 33 — section is an ARIA group named by its
+        // heading. Screen readers announce "Network, group" when the
+        // operator enters the section, then per-field labels. The
+        // role+aria-labelledby pair satisfies WCAG 1.3.1 without
+        // touching CSS (which a real <fieldset> swap would have
+        // affected). Form-semantics audit a0b9a3e1 #3.
+        section.setAttribute('role', 'group');
+        section.setAttribute('aria-labelledby', 'enm-settings-h-network');
+        var h = document.createElement('h3');
+        h.id = 'enm-settings-h-network';
+        h.textContent = t('settings.heading_network');
         section.appendChild(h);
 
         // alpha.28.1 batch 27 — radio group wrapped in <fieldset><legend>
@@ -215,7 +225,11 @@
     SettingsTab.prototype._buildAdvancedSection = function (t) {
         var section = document.createElement('div');
         section.className = 'enm-settings-section';
-        var h = document.createElement('h3'); h.textContent = t('settings.heading_advanced');
+        section.setAttribute('role', 'group');
+        section.setAttribute('aria-labelledby', 'enm-settings-h-advanced');
+        var h = document.createElement('h3');
+        h.id = 'enm-settings-h-advanced';
+        h.textContent = t('settings.heading_advanced');
         section.appendChild(h);
 
         this._adv = {
@@ -282,8 +296,11 @@
     SettingsTab.prototype._buildRpcCredsSection = function (t) {
         var section = document.createElement('div');
         section.className = 'enm-settings-section';
+        section.setAttribute('role', 'group');
+        section.setAttribute('aria-labelledby', 'enm-settings-h-rpc');
 
         var h = document.createElement('h3');
+        h.id = 'enm-settings-h-rpc';
         h.textContent = t('settings.heading_rpc_creds');
         section.appendChild(h);
 
@@ -551,7 +568,11 @@
     SettingsTab.prototype._buildGeneralSection = function (t) {
         var section = document.createElement('div');
         section.className = 'enm-settings-section';
-        var h = document.createElement('h3'); h.textContent = t('settings.heading_general');
+        section.setAttribute('role', 'group');
+        section.setAttribute('aria-labelledby', 'enm-settings-h-general');
+        var h = document.createElement('h3');
+        h.id = 'enm-settings-h-general';
+        h.textContent = t('settings.heading_general');
         section.appendChild(h);
 
         this._gen = {
@@ -750,8 +771,11 @@
     SettingsTab.prototype._buildDangerZoneSection = function (t) {
         var section = document.createElement('div');
         section.className = 'enm-settings-section enm-settings-danger';
+        section.setAttribute('role', 'group');
+        section.setAttribute('aria-labelledby', 'enm-settings-h-danger');
 
         var h = document.createElement('h3');
+        h.id = 'enm-settings-h-danger';
         h.textContent = t('settings.heading_danger');
         section.appendChild(h);
 
