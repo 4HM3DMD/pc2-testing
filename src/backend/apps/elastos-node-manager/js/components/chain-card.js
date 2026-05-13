@@ -610,14 +610,24 @@
             // the error pane was already saying.
             if (err && err.status === 401) { return; }
             // Host-conflict 409 surfaces structured remediation steps.
+            // alpha.28.1 batch 68 (Round-19B audit) — defensive shape
+            // validation on the conflict envelope. Backend bug or stale-
+            // cache replay could ship `{ description: undefined,
+            // remediation: [{foo: 'bar'}] }` — the previous shape rendered
+            // the resulting critical toast as "• undefined" and
+            // "[object Object]" verbatim. Operator can't act on that.
             if (err && err.body && Array.isArray(err.body.conflicts)
                 && err.body.conflicts.length > 0) {
                 var blockers = err.body.conflicts.filter(function (c) {
                     return c && c.severity === 'CRITICAL';
                 });
                 var summary = blockers.map(function (c) {
-                    var firstStep = (c.remediation && c.remediation[0]) || '';
-                    return '• ' + c.description + (firstStep ? ('\n   ' + firstStep) : '');
+                    var firstStep = (c.remediation && c.remediation[0]);
+                    var stepStr = (typeof firstStep === 'string' && firstStep.length > 0)
+                        ? firstStep : '';
+                    var descStr = (typeof c.description === 'string' && c.description.length > 0)
+                        ? c.description : 'Host conflict';
+                    return '• ' + descStr + (stepStr ? ('\n   ' + stepStr) : '');
                 }).join('\n');
                 self.notifications.critical(
                     'Cannot ' + kind + ' ' + self.chainId + ' — host conflicts',
@@ -806,8 +816,17 @@
             text.textContent = 'On duty now · signing the current block';
         } else if (inSlate) {
             strip.dataset.state = 'inslate';
+            // alpha.28.1 batch 68 (Round-19B audit) — guard
+            // rotationLength being absent/null. The branch guard at
+            // line 786 (`data.ourIndex >= 0`) validates ourIndex but
+            // NOT rotationLength. If the backend omits the field
+            // (one-direction RPC drift) the previous shape rendered
+            // "Your slot · 3 of undefined" verbatim to the operator.
+            // Matches the defensive treatment already applied to
+            // nextArbiters in the next-slate branch below.
+            var rl = (data.rotationLength != null) ? data.rotationLength : '—';
             text.textContent = 'Your slot · '
-                + (data.ourIndex + 1) + ' of ' + data.rotationLength;
+                + (data.ourIndex + 1) + ' of ' + rl;
         } else {
             strip.dataset.state = 'nextslate';
             text.textContent = 'Queued for next round · '
