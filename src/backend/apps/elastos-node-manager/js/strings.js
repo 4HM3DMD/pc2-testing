@@ -640,6 +640,27 @@
             // Relative-time-suffix used by the "Last checked" span.
             // {time} carries the human substring ("5 min ago").
             released_when:         'released {time}',
+            // alpha.28.1 batch 82 — tools-update MODAL strings. The
+            // modal is the "View update command" overlay that operators
+            // open from the Update button on the resting card. Strings
+            // cover: heading, lead paragraph, the two action buttons,
+            // the explainer disclosure + its four li items, and the
+            // release-notes label. {version} fills with env.latest;
+            // {githubLink} carries the full <a href> markup so the
+            // surrounding prose stays localisable while the link stays
+            // intact.
+            modal_heading:         'Update to {version}',
+            modal_lead:            "Run this on the host that runs your PC2 server (where ENM's files live):",
+            modal_close_aria:      'Close',
+            modal_auto_fill_btn:   'Auto-fill my token',
+            modal_copy_btn:        'Copy command',
+            modal_copy_btn_aria:   'Copy update shell command',
+            modal_explainer_label: 'What does this do?',
+            modal_step_download:   'Downloads ela {version} from GitHub.',
+            modal_step_uninstall:  'Uninstalls the old ENM bundle via <code>DELETE /api/installed-apps</code> (chain data + keystore safe under <code>extensions/elastos-node-manager/</code>).',
+            modal_step_reinstall:  'Reinstalls with the new binary; pc2-node spawns it under the supervisor.',
+            modal_step_healthcheck:"Health-checks for 24s; auto-rollback if the new binary doesn't come up.",
+            modal_release_notes:   'Release notes: {githubLink}',
         },
     });
     // STRINGS is a deeply-frozen tree — see deepFreeze above.

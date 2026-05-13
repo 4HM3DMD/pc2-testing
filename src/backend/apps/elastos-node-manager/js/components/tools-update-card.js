@@ -283,31 +283,42 @@
         var prev = document.querySelector('.enm-tools-update-modal');
         if (prev) prev.parentNode.removeChild(prev);
 
+        // alpha.28.1 batch 82 — modal strings sourced from strings.js
+        // tools_update.modal_*. Placeholders ({version}, {githubLink})
+        // carry trusted markup so localisation can re-arrange surrounding
+        // prose without breaking the version chip or the external link.
+        var t = root.enmTOrFallback;
+        var versionTag = '<code>' + escapeHtml(env.latest) + '</code>';
+        var notesHtml = '';
+        if (env.htmlUrl) {
+            var link = '<a href="' + escapeAttr(safeExternalUrl(env.htmlUrl))
+                + '" target="_blank" rel="noopener noreferrer">'
+                + escapeHtml(env.htmlUrl) + '</a>';
+            notesHtml = '<p>' + t('tools_update.modal_release_notes', { githubLink: link }) + '</p>';
+        }
         var modal = document.createElement('div');
         modal.className = 'enm-tools-update-modal';
         modal.innerHTML =
             '<div class="enm-tools-update-modal-card" role="dialog" aria-labelledby="upd-mod-h" aria-modal="true">'
-            +   '<button type="button" class="enm-tools-update-modal-close" aria-label="Close">×</button>'
-            +   '<h2 id="upd-mod-h">Update to <code>' + escapeHtml(env.latest) + '</code></h2>'
-            +   '<p>Run this on the host that runs your PC2 server (where ENM\'s files live):</p>'
+            +   '<button type="button" class="enm-tools-update-modal-close" aria-label="' + escapeAttr(t('tools_update.modal_close_aria')) + '">×</button>'
+            +   '<h2 id="upd-mod-h">' + t('tools_update.modal_heading', { version: versionTag }) + '</h2>'
+            +   '<p>' + escapeHtml(t('tools_update.modal_lead')) + '</p>'
             +   '<pre class="enm-tools-update-modal-cmd">'
             +     'sudo PC2_OWNER_TOKEN=<span class="upd-tok-slot">&lt;your-token&gt;</span> /root/deploy-enm.sh enm-' + escapeHtml(env.latest)
             +   '</pre>'
             +   '<div class="enm-tools-update-modal-actions">'
-            +     '<button type="button" class="enm-btn enm-btn-secondary upd-fill-token">Auto-fill my token</button>'
-            +     '<button type="button" class="enm-btn enm-btn-primary upd-copy" aria-label="Copy update shell command">Copy command</button>'
+            +     '<button type="button" class="enm-btn enm-btn-secondary upd-fill-token">' + escapeHtml(t('tools_update.modal_auto_fill_btn')) + '</button>'
+            +     '<button type="button" class="enm-btn enm-btn-primary upd-copy" aria-label="' + escapeAttr(t('tools_update.modal_copy_btn_aria')) + '">' + escapeHtml(t('tools_update.modal_copy_btn')) + '</button>'
             +   '</div>'
             +   '<details class="enm-tools-update-modal-notes">'
-            +     '<summary>What does this do?</summary>'
+            +     '<summary>' + escapeHtml(t('tools_update.modal_explainer_label')) + '</summary>'
             +     '<ul>'
-            +       '<li>Downloads ela <code>' + escapeHtml(env.latest) + '</code> from GitHub.</li>'
-            +       '<li>Uninstalls the old ENM bundle via <code>DELETE /api/installed-apps</code> (chain data + keystore safe under <code>extensions/elastos-node-manager/</code>).</li>'
-            +       '<li>Reinstalls with the new binary; pc2-node spawns it under the supervisor.</li>'
-            +       '<li>Health-checks for 24s; auto-rollback if the new binary doesn\'t come up.</li>'
+            +       '<li>' + t('tools_update.modal_step_download', { version: versionTag }) + '</li>'
+            +       '<li>' + t('tools_update.modal_step_uninstall') + '</li>'
+            +       '<li>' + escapeHtml(t('tools_update.modal_step_reinstall')) + '</li>'
+            +       '<li>' + escapeHtml(t('tools_update.modal_step_healthcheck')) + '</li>'
             +     '</ul>'
-            +     (env.htmlUrl
-                    ? '<p>Release notes: <a href="' + escapeAttr(safeExternalUrl(env.htmlUrl)) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(env.htmlUrl) + '</a></p>'
-                    : '')
+            +     notesHtml
             +   '</details>'
             + '</div>';
         document.body.appendChild(modal);
