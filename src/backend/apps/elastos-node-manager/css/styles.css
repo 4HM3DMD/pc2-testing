@@ -5029,3 +5029,187 @@ body[data-app-size="medium"] .enm-pane {
 }
 
 /* Wide tier (default): no overrides — keeps the side-by-side nav rail layout */
+
+/* ============================================================
+   alpha.27 — coherent narrow-mode design across ALL panes.
+   Same data, same visual language, redesigned for small screens.
+   Token rules: tighter padding, single-column or 2-col grids,
+   full-width actions, smaller fonts for dense data, card chrome
+   consistent across Status / Identity / Logs / Audit.
+   ============================================================ */
+
+/* --- Status pane (Dashboard) --- */
+
+/* System status: 5-cell horizontal strip → 2-col grid of stacked cells */
+body[data-app-size="narrow"] .enm-system-status {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--spacing-xs);
+    padding: var(--spacing-sm);
+    border-radius: var(--radius-md);
+}
+body[data-app-size="narrow"] .enm-sys-cell {
+    min-width: 0;
+    border-right: none;
+    padding: var(--spacing-xs);
+}
+body[data-app-size="narrow"] .enm-sys-label {
+    font-size: 10px;
+}
+body[data-app-size="narrow"] .enm-sys-value {
+    font-size: 13px;
+}
+
+/* Chain-card: tighter padding, hero ring centered + smaller */
+body[data-app-size="narrow"] .enm-chain-card {
+    padding: var(--spacing-md);
+    border-radius: var(--radius-md);
+}
+body[data-app-size="narrow"] .enm-chain-card-head {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--spacing-xs);
+}
+body[data-app-size="narrow"] .enm-chain-hero {
+    width: clamp(140px, 50%, 200px);
+    margin: 0 auto;
+}
+body[data-app-size="narrow"] .enm-chain-primary {
+    align-items: center;
+    text-align: center;
+}
+body[data-app-size="narrow"] .enm-chain-primary-value {
+    font-size: 24px;
+}
+
+/* Validator registration card */
+body[data-app-size="narrow"] .enm-validator-card {
+    padding: var(--spacing-md);
+    border-radius: var(--radius-md);
+}
+body[data-app-size="narrow"] .enm-validator-step {
+    grid-template-columns: 28px 1fr;
+    gap: var(--spacing-sm);
+}
+body[data-app-size="narrow"] .enm-validator-step-marker {
+    width: 28px;
+    height: 28px;
+    font-size: 12px;
+}
+
+/* Tools update card */
+body[data-app-size="narrow"] .enm-tools-update-card {
+    padding: var(--spacing-md);
+    border-radius: var(--radius-md);
+}
+
+/* Tech-view maintenance card */
+body[data-app-size="narrow"] .enm-tech-maintenance {
+    padding: var(--spacing-md);
+    border-radius: var(--radius-md);
+}
+body[data-app-size="narrow"] .enm-tech-maintenance-row {
+    padding: var(--spacing-sm);
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--spacing-xs);
+}
+
+/* --- Identity pane --- */
+body[data-app-size="narrow"] .enm-producer-binding {
+    padding: var(--spacing-md);
+    border-radius: var(--radius-md);
+}
+body[data-app-size="narrow"] .enm-producer-binding-heading {
+    font-size: 14px;
+}
+body[data-app-size="narrow"] .enm-producer-field {
+    padding: var(--spacing-sm);
+}
+
+/* --- Logs pane --- */
+body[data-app-size="narrow"] .enm-log-viewer {
+    padding: var(--spacing-sm);
+    border-radius: var(--radius-md);
+}
+body[data-app-size="narrow"] .enm-log-head {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--spacing-xs);
+}
+body[data-app-size="narrow"] .enm-log-title {
+    font-size: 14px;
+}
+body[data-app-size="narrow"] .enm-log-ts {
+    font-size: 10px;
+    flex: 0 0 auto;
+    opacity: 0.7;
+}
+body[data-app-size="narrow"] .enm-log-text {
+    font-size: 11px;
+    line-height: 1.4;
+}
+
+/* --- Audit pane --- */
+body[data-app-size="narrow"] .enm-audit {
+    padding: var(--spacing-sm);
+}
+body[data-app-size="narrow"] .enm-audit-head h3 {
+    font-size: 16px;
+}
+body[data-app-size="narrow"] .enm-audit-filters {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: var(--spacing-xs);
+}
+body[data-app-size="narrow"] .enm-audit-input {
+    width: 100%;
+}
+body[data-app-size="narrow"] .enm-audit-label {
+    font-size: 11px;
+}
+body[data-app-size="narrow"] .enm-audit-table {
+    font-size: 11px;
+    /* Horizontal scroll kept for now — switching to card-style rows
+       would need JS changes. Smaller font + padding makes the
+       scroll narrower so more columns are visible. */
+}
+body[data-app-size="narrow"] .enm-audit-table th,
+body[data-app-size="narrow"] .enm-audit-table td {
+    padding: 4px 6px;
+}
+body[data-app-size="narrow"] .enm-audit-foot {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--spacing-xs);
+}
+body[data-app-size="narrow"] .enm-audit-count {
+    font-size: 11px;
+    text-align: center;
+}
+
+/* --- Generic cards everywhere: consistent narrow-mode chrome --- */
+body[data-app-size="narrow"] .enm-card {
+    padding: var(--spacing-md);
+    border-radius: var(--radius-md);
+}
+
+/* --- Section-title spacing consistent across panes --- */
+body[data-app-size="narrow"] h3 {
+    font-size: 15px;
+    margin: 0 0 var(--spacing-sm);
+}
+body[data-app-size="narrow"] h4 {
+    font-size: 13px;
+    margin: 0 0 var(--spacing-xs);
+}
+
+/* --- Action button rows across all panes: vertical stack, full-width --- */
+body[data-app-size="narrow"] .enm-conv-actions {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--spacing-sm);
+}
+body[data-app-size="narrow"] .enm-conv-actions .enm-btn {
+    width: 100%;
+}
