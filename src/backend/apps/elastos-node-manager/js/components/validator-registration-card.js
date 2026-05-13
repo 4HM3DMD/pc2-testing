@@ -150,10 +150,15 @@
 
         // Re-show recovery: if the card was previously hidden mid-activate,
         // the Activate button may still be in its disabled/"Activating…"
-        // state. Reset to the resting label so the operator can retry.
+        // state. Reset to the resting label so the operator can retry —
+        // BUT only when enmRunOnce isn't currently single-flight-blocking
+        // the button. (Round-11 race audit B7: a poll resolve that
+        // re-shows the card while the Activate POST is in flight would
+        // re-enable the button mid-request → double-click possible →
+        // the second click hits a still-pending /bpos/activate.)
         if (this.root.hidden && this._rendered) {
             var btn = this.root.querySelector('#enm-vc-activate');
-            if (btn) {
+            if (btn && btn.dataset.busy !== '1') {
                 btn.disabled = false;
                 btn.textContent = root.enmTOrFallback('validator_card.activate_btn');
             }
