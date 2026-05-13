@@ -40,7 +40,27 @@
         try {
             var raw = localStorage.getItem(STORAGE_KEY);
             var saved = raw ? JSON.parse(raw) : {};
-            return Object.assign({}, DEFAULTS, saved);
+            // localStorage audit a8adaad6 — JSON.parse happily returns
+            // strings, numbers, arrays, and null. Object.assign with a
+            // non-plain-object source either silently pollutes the
+            // resulting prefs with indexed keys (arrays) or ignores
+            // them entirely (primitives). Either way the runtime
+            // assumption "prefs[k] is the typed value DEFAULTS[k]
+            // declares" is violated. Validate shape + per-key types
+            // so a malformed entry falls back to defaults rather
+            // than breaking toggles silently.
+            if (!saved || typeof saved !== 'object' || Array.isArray(saved)) {
+                saved = {};
+            }
+            var prefs = Object.assign({}, DEFAULTS);
+            Object.keys(DEFAULTS).forEach(function (k) {
+                var defaultVal = DEFAULTS[k];
+                if (Object.prototype.hasOwnProperty.call(saved, k)
+                    && typeof saved[k] === typeof defaultVal) {
+                    prefs[k] = saved[k];
+                }
+            });
+            return prefs;
         } catch (e) { return Object.assign({}, DEFAULTS); }
     }
 
@@ -85,6 +105,16 @@
             document.removeEventListener('keydown', this._escHandler);
             this._escHandler = null;
         }
+        // …and the focus-trap handler too. close() removes it normally,
+        // but if destroy() runs while the drawer is open (e.g. operator
+        // hits Reinstall mid-flight) the trap leaked because cleanup
+        // lived only in close(). One global keydown listener per app
+        // teardown is a real bug — the trap re-fires Tab events into
+        // detached DOM and crashes some Tab navigations.
+        if (this._trapHandler) {
+            document.removeEventListener('keydown', this._trapHandler, true);
+            this._trapHandler = null;
+        }
         if (this._closeTimer) { clearTimeout(this._closeTimer); this._closeTimer = null; }
         this._open = false;
         if (this.root.parentNode) { this.root.parentNode.removeChild(this.root); }
@@ -93,17 +123,57 @@
     SettingsDrawer.prototype.open = function () {
         if (this._open) { return; }
         this._open = true;
+        // a11y: remember where the operator's focus was so close() can
+        // return them to the trigger button (WCAG 2.4.3 Focus Order).
+        this._previousFocus = document.activeElement;
         this.root.hidden = false;
         if (!this._builtBody) { this._buildBody(); this._builtBody = true; }
         // Trigger the slide-in via the next frame so CSS transitions fire.
+        var self = this;
         requestAnimationFrame(function () {
-            this.root.classList.add('enm-drawer-open');
-        }.bind(this));
+            self.root.classList.add('enm-drawer-open');
+            // a11y: move focus into the drawer so keyboard users can act on it
+            // immediately.
+            // alpha.28.1 batch 65 (Round-18 audit) — align the open-time
+            // selector with the focus-trap selector below. The previous
+            // shape used `button, input, [tabindex]` without filtering
+            // disabled/-1 elements. If the drawer's first focusable was a
+            // disabled button (e.g. a Save button gated on form edit)
+            // focus landed there; then the trap's first/last computed
+            // from the filtered list pointed elsewhere, so the first Tab
+            // press teleported focus unpredictably (typically to body or
+            // out of the trap entirely). Now both queries use the same
+            // selector → first focus and the trap agree.
+            var first = self.root.querySelector(
+                'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])'
+            );
+            if (first && typeof first.focus === 'function') { first.focus(); }
+        });
         // ESC to close.
         this._escHandler = function (ev) {
             if (ev.key === 'Escape') { this.close(); }
         }.bind(this);
         document.addEventListener('keydown', this._escHandler);
+        // a11y: focus trap — Tab and Shift+Tab cycle within the drawer so
+        // keyboard focus can't escape onto the dashboard behind the
+        // overlay (WCAG 2.4.3 violation otherwise).
+        this._trapHandler = function (ev) {
+            if (ev.key !== 'Tab' || !self._open) { return; }
+            var focusables = self.root.querySelectorAll(
+                'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+            );
+            if (focusables.length === 0) { return; }
+            var firstEl = focusables[0];
+            var lastEl  = focusables[focusables.length - 1];
+            if (ev.shiftKey && document.activeElement === firstEl) {
+                ev.preventDefault();
+                lastEl.focus();
+            } else if (!ev.shiftKey && document.activeElement === lastEl) {
+                ev.preventDefault();
+                firstEl.focus();
+            }
+        };
+        document.addEventListener('keydown', this._trapHandler, true);
     };
 
     SettingsDrawer.prototype.close = function () {
@@ -113,6 +183,14 @@
         if (this._escHandler) {
             document.removeEventListener('keydown', this._escHandler);
             this._escHandler = null;
+        }
+        if (this._trapHandler) {
+            document.removeEventListener('keydown', this._trapHandler, true);
+            this._trapHandler = null;
+        }
+        // a11y: restore focus to the element that opened the drawer.
+        if (this._previousFocus && typeof this._previousFocus.focus === 'function') {
+            try { this._previousFocus.focus(); } catch (_) { /* element may be gone */ }
         }
         // Wait for the slide-out transition before hiding so it animates.
         // Track the timer id so destroy() can cancel it if we're torn down
@@ -127,11 +205,19 @@
 
     /** @private */
     SettingsDrawer.prototype._renderShell = function () {
+        // a11y/WCAG 4.1.2: aria-modal + aria-labelledby pointing at the
+        // dialog's own H2 is the canonical dialog pattern. The wrapping
+        // <aside> is acceptable for a side-drawer but aria-modal makes
+        // the modal semantics explicit so screen-reader users know the
+        // background is unreachable. The H2 id pairs with aria-labelledby
+        // so the dialog's accessible name comes from the visible heading
+        // (better than aria-label hand-typed strings drifting from the
+        // localised heading text).
         this.root.innerHTML =
-            '<div class="enm-drawer-backdrop"></div>'
-            + '<aside class="enm-drawer" role="dialog" aria-label="Settings">'
+            '<div class="enm-drawer-backdrop" aria-hidden="true"></div>'
+            + '<aside class="enm-drawer" role="dialog" aria-modal="true" aria-labelledby="enm-drawer-title">'
               + '<header class="enm-drawer-header">'
-                + '<h2>Settings</h2>'
+                + '<h2 id="enm-drawer-title">Settings</h2>'
                 + '<button type="button" class="enm-drawer-close" aria-label="Close">×</button>'
               + '</header>'
               + '<div class="enm-drawer-body"></div>'

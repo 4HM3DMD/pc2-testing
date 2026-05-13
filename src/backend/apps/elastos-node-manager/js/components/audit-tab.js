@@ -33,6 +33,20 @@
         this.root.className = 'enm-audit';
         this._offset = 0;
         this._rows = [];
+        // alpha.28.1 batch 16 — _destroyed flag + _loadSeq sequence number
+        // address two race-condition findings from audit aaf1f87d:
+        //   - destroyed-DOM update: pending fetches resolved into a
+        //     detached root after destroy() (we removed the root from
+        //     the DOM but the JS object lived on with in-flight
+        //     promises about to write into it).
+        //   - filter-change race (B3): clicking Apply or changing a
+        //     filter while a Load-more was in flight let the stale
+        //     fetch resolve and append OLD-filter rows into the
+        //     NEW-filter tbody. _loadSeq bumps on every refresh/load;
+        //     the resolving .then bails if its captured seq isn't
+        //     current anymore.
+        this._destroyed = false;
+        this._loadSeq = 0;
         this._renderShell();
     }
 
@@ -43,11 +57,18 @@
     };
 
     AuditTab.prototype.destroy = function () {
+        this._destroyed = true;
+        // Bump the seq so any in-flight fetch's resolver short-circuits.
+        this._loadSeq += 1;
         if (this.root.parentNode) { this.root.parentNode.removeChild(this.root); }
     };
 
     /** Refresh from offset 0. */
     AuditTab.prototype.refresh = function () {
+        // Bump the seq BEFORE clearing state so any in-flight Load-more
+        // resolves into a stale-seq check and bails before touching
+        // _rows / _tbody.
+        this._loadSeq += 1;
         this._offset = 0;
         this._rows = [];
         return this._loadMore(true);
@@ -57,9 +78,13 @@
     AuditTab.prototype._loadMore = function (clear) {
         var self = this;
         var t = root.enmTOrFallback;
+        // Capture the seq at call time. If refresh() / destroy() bumps
+        // it before our .then resolves, we're stale and must bail.
+        var mySeq = this._loadSeq;
         var qs = this._currentFilterQs();
         qs += (qs ? '&' : '') + 'limit=' + PAGE_SIZE + '&offset=' + this._offset;
         return this.api.get('/audit?' + qs, { skipCache: true }).then(function (data) {
+            if (self._destroyed || self._loadSeq !== mySeq) { return; }
             var entries = (data && data.entries) || [];
             if (clear) {
                 self._tbody.innerHTML = '';
@@ -78,24 +103,72 @@
             self._loadMoreBtn.textContent = capReached
                 ? t('audit.load_more_capped')
                 : t('audit.load_more');
-            self._countLabel.textContent = self._rows.length + ' rows';
+            // Grouped row count — once an operator accrues 1,000+ rows the
+            // raw integer ("1234 rows") is harder to scan than the grouped
+            // form ("1,234 rows"). Falls back to raw if the util is missing.
+            var fmtCount = (typeof window !== 'undefined' && window.enmFormatNumber)
+                ? window.enmFormatNumber
+                : function (n) { return String(n); };
+            // alpha.28.1 batch 39 — i18n-sourced suffix via the new
+            // audit.row_count key (token: {n}). Fallback preserves the
+            // pre-i18n string verbatim if strings.js failed to load.
+            // alpha.28.1 batch 74 — split into row_count_one /
+            // row_count to stop printing "1 rows" after a narrow filter
+            // returns one match. (Round-20A audit finding #3.)
+            var n = self._rows.length;
+            var rowsKeyId = n === 1 ? 'audit.row_count_one' : 'audit.row_count';
+            var rowsKey = t(rowsKeyId, { n: fmtCount(n) });
+            self._countLabel.textContent = (rowsKey && rowsKey !== rowsKeyId)
+                ? rowsKey
+                : fmtCount(n) + (n === 1 ? ' row' : ' rows');
             if (self._rows.length === 0) {
                 self._emptyMsg.hidden = false;
             } else {
                 self._emptyMsg.hidden = true;
             }
         }).catch(function (err) {
-            self.notifications.warning('Failed to load audit log', err.message || String(err));
+            if (self._destroyed || self._loadSeq !== mySeq) { return; }
+            // alpha.28.1 batch 51 — 401 suppressed (boot path owns
+            // re-auth). Without this, an expired session triggered
+            // a "Failed to load audit log" toast every filter-Apply
+            // click. (Audit ad49e60e ⚠ 401-not-filtered finding.)
+            if (err && err.status === 401) { return; }
+            // alpha.28.1 batch 19 — stable id so rapid filter-Apply
+            // clicks against a slow backend stack into one updating
+            // toast instead of N stacked failures. (Audit ad49e60e.)
+            self.notifications.show({
+                id: 'audit-load-fail',
+                severity: 'warning',
+                title: 'Failed to load audit log',
+                body: err.message || String(err),
+            });
         });
     };
 
     /** @private */
     AuditTab.prototype._currentFilterQs = function () {
+        // alpha.28.1 batch 63 (Round-18 audit) — guard Date.parse against
+        // NaN before splicing into the query string. <input type="date">
+        // is supposed to enforce yyyy-mm-dd but browsers without a native
+        // picker (older Safari, some embedded webviews) fall back to a
+        // free-text input and let through malformed values. Before this
+        // fix Date.parse returned NaN → query string became `from=NaN&to=NaN`
+        // → backend returned 400 → operator saw a generic "Failed to load
+        // audit log" toast with no hint that the filter date was at fault.
+        // Now: skip the param when NaN so the filter request still
+        // succeeds (with one less constraint applied) rather than blocking
+        // the whole load.
         var parts = [];
         if (this._filters.chain.value)  parts.push('chainId=' + encodeURIComponent(this._filters.chain.value));
         if (this._filters.tier.value)   parts.push('tier=' + encodeURIComponent(this._filters.tier.value));
-        if (this._filters.from.value)   parts.push('from=' + Date.parse(this._filters.from.value));
-        if (this._filters.to.value)     parts.push('to=' + Date.parse(this._filters.to.value));
+        if (this._filters.from.value) {
+            var fromMs = Date.parse(this._filters.from.value);
+            if (isFinite(fromMs)) { parts.push('from=' + fromMs); }
+        }
+        if (this._filters.to.value) {
+            var toMs = Date.parse(this._filters.to.value);
+            if (isFinite(toMs)) { parts.push('to=' + toMs); }
+        }
         return parts.join('&');
     };
 
@@ -106,8 +179,16 @@
         var h = document.createElement('h3'); h.textContent = t('audit.heading'); head.appendChild(h);
         this.root.appendChild(head);
 
-        // Filter bar.
-        var filterBar = document.createElement('div'); filterBar.className = 'enm-audit-filters';
+        // Filter bar — wrapped in <fieldset> per WCAG 1.3.1 so AT
+        // announces the group's purpose when the operator enters the
+        // chain-id / tier / date filters. (Form-semantics audit
+        // a0b9a3e1 #3.) Visually-hidden legend keeps the existing
+        // layout — the audit-tab h3 above gives sighted context.
+        // alpha.28.1 batch 32.
+        var filterBar = document.createElement('fieldset'); filterBar.className = 'enm-audit-filters enm-radio-group';
+        var filterLegend = document.createElement('legend'); filterLegend.className = 'enm-sr-only';
+        filterLegend.textContent = t('audit.heading') + ' filters';
+        filterBar.appendChild(filterLegend);
         this._filters = {
             chain: textInput(t('audit.filter_chain')),
             tier:  selectInput([
@@ -162,12 +243,21 @@
     AuditTab.prototype._appendRow = function (e) {
         var tr = document.createElement('tr');
         tr.dataset.tier = e.tier;
-        addCell(tr, formatTs(e.ts));
+        // alpha.28.1 batch 32 — pass the local-time render as the
+        // tooltip so non-UTC operators get their wall-clock without
+        // losing the UTC canonical view in the cell. addCell's
+        // fullText param drives title=.
+        addCell(tr, formatTs(e.ts), formatTsLocal(e.ts) || undefined);
         addCell(tr, e.chainId || e.chain_id || '—');
         addCell(tr, e.ruleId || e.rule_id || '—');
         addCell(tr, e.tier || '—');
         addCell(tr, e.decision || '—');
-        addCell(tr, shortenWallet(e.executor));
+        // Executor cell shows the truncated wallet for the visible row
+        // but the title= must carry the FULL address so hover + screen
+        // readers + copy-paste all get the canonical value. (Previously
+        // addCell defaulted title to the truncated display string,
+        // making the "title=full text" promise a lie for this cell.)
+        addCell(tr, shortenWallet(e.executor), e.executor || '');
         addCell(tr, e.outcome || '—');
         this._tbody.appendChild(tr);
     };
@@ -192,14 +282,31 @@
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
         }).catch(function (err) {
-            self.notifications.warning('Export failed', err.message || String(err));
+            // alpha.28.1 batch 52 — same 401 suppression as the
+            // load path (batch 51). Boot path owns re-auth UX.
+            if (err && err.status === 401) { return; }
+            self.notifications.show({
+                id: 'audit-export-fail',
+                severity: 'warning',
+                title: 'Export failed',
+                body: err.message || String(err),
+            });
         });
     };
 
+    // alpha.28.1 batch 35 — migrated to enmFormatDate (batch 34 helper).
+    // Same UTC-canonical + local-tooltip pairing as before, now sourced
+    // from the shared helper instead of inline Date plumbing.
     function formatTs(ms) {
-        if (!ms) return '—';
-        var d = new Date(ms);
-        return d.toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, ' UTC');
+        return (typeof window !== 'undefined' && window.enmFormatDate)
+            ? window.enmFormatDate(ms, { mode: 'iso' })
+            : (ms ? new Date(ms).toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, ' UTC') : '—');
+    }
+    function formatTsLocal(ms) {
+        if (!ms) return '';
+        return (typeof window !== 'undefined' && window.enmFormatDate)
+            ? window.enmFormatDate(ms, { mode: 'local' })
+            : new Date(ms).toLocaleString();
     }
     function shortenWallet(s) {
         if (!s) return '—';
@@ -207,22 +314,45 @@
         if (s.length > 12) return s.slice(0, 6) + '…' + s.slice(-4);
         return s;
     }
-    function addCell(tr, text) {
+    function addCell(tr, text, fullText) {
         var td = document.createElement('td');
         td.textContent = text;
+        // a11y: cells truncate with text-overflow:ellipsis on narrow widths.
+        // Mirror full text into title= so it stays available to mouse hover,
+        // screen readers, and copy-paste even when visibly clipped. For
+        // truncated values (e.g. wallets shortened with `…`), callers can
+        // pass the full canonical value as `fullText` so the title still
+        // reveals what the visible cell hides.
+        var titleSource = (fullText != null && fullText !== '')
+            ? fullText
+            : (text == null ? '' : text);
+        td.title = String(titleSource);
         tr.appendChild(td);
     }
     function textInput(placeholder) {
         var i = document.createElement('input'); i.type = 'text';
         i.placeholder = placeholder; i.className = 'enm-audit-input';
+        // Audit filters are short-lived per-session queries — browser
+        // autofill / autocomplete suggestions are pure noise here. Mobile
+        // keypad numeric hint helps because Elastos chain IDs are small
+        // integers (e.g. `20`, `21`).
+        i.setAttribute('autocomplete', 'off');
+        i.setAttribute('inputmode', 'numeric');
+        i.setAttribute('spellcheck', 'false');
+        i.setAttribute('autocapitalize', 'off');
         return i;
     }
     function dateInput() {
         var i = document.createElement('input'); i.type = 'datetime-local';
-        i.className = 'enm-audit-input'; return i;
+        i.className = 'enm-audit-input';
+        i.setAttribute('autocomplete', 'off');
+        return i;
     }
     function selectInput(options) {
         var s = document.createElement('select'); s.className = 'enm-audit-input';
+        // Select boxes also accept autofill in some browsers. Filter
+        // queries are session-scoped — never bring up history.
+        s.setAttribute('autocomplete', 'off');
         options.forEach(function (o) {
             var opt = document.createElement('option'); opt.value = o.value; opt.textContent = o.label;
             s.appendChild(opt);

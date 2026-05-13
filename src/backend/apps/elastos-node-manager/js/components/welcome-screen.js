@@ -35,7 +35,7 @@
             + '<div class="enm-welcome-illust">'
                 + (root.EnmIllust ? root.EnmIllust.welcome({ size: 128 }) : '')
             + '</div>'
-            + '<h1 class="enm-welcome-title">' + escapeHtml(t('friendly.welcome.title')) + '</h1>'
+            + '<h2 class="enm-welcome-title">' + escapeHtml(t('friendly.welcome.title')) + '</h2>'
             + '<p class="enm-welcome-body">' + escapeHtml(t('friendly.welcome.body')) + '</p>'
             + '<button type="button" class="enm-btn enm-btn-primary enm-btn-hero enm-welcome-cta">'
                 + escapeHtml(t('friendly.welcome.cta')) + ' <span aria-hidden="true">→</span>'
@@ -43,9 +43,17 @@
             + '</div>';
 
         var self = this;
-        this.root.querySelector('.enm-welcome-cta').addEventListener('click', function () {
+        var cta = this.root.querySelector('.enm-welcome-cta');
+        cta.addEventListener('click', function () {
             self.onContinue();
         });
+        // a11y: the welcome screen is the operator's first interactive
+        // landmark on a clean install. Without this focus call they have
+        // to Tab past the (empty) header + skip-link to reach the only
+        // meaningful control. Focusing the CTA on mount also gives
+        // screen-reader users an immediate announcement of the button's
+        // label + role.
+        try { cta.focus({ preventScroll: true }); } catch (e) { cta.focus(); }
         return this;
     };
 
@@ -55,8 +63,18 @@
         }
     };
 
+    // alpha.28.1 batch 83 (Round-24 finding #1, MED) — align with the
+    // defensive null/undefined coercion every other escapeHtml copy
+    // in the codebase already uses (setup-conversation:1101,
+    // validator-card:364, settings-drawer:411, technical-view:673,
+    // tools-update-card:442). Welcome-screen was the only outlier
+    // calling `String(s)` raw — if a future i18n key returns undefined
+    // (strings.js fails to load, or `friendly.welcome.title` is renamed),
+    // the welcome card's first-impression renders the literal string
+    // "undefined" instead of empty. Trivial inconsistency that
+    // defeated the file's own defensive pattern.
     function escapeHtml(s) {
-        return String(s).replace(/[&<>"']/g, function (c) {
+        return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
             return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
         });
     }

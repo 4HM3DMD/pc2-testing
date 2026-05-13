@@ -77,25 +77,31 @@
         };
     };
 
-    /** @private */
+    /** @private
+     *
+     * One-time wiring: SSE subscription + periodic fallback. Split from
+     * _refreshNow so the recurring interval can call _refreshNow without
+     * re-wiring (the bug fixed in alpha.28.1 batch 14 — see the memory
+     * audit). The pre-batch-14 _bootstrap called itself recursively from
+     * the setInterval, which re-registered the SSE sub + a new interval
+     * every POLL_FALLBACK_MS (5 min). 24h of dashboard uptime accrued
+     * ~288 stacked SSE subscriptions on `chains:<id>:height` AND 288
+     * nested intervals — every height delta then fanned out 288x into
+     * the same buffer. Fix: register SSE + interval once per chainId;
+     * the interval only re-fetches the snapshot.
+     */
     HeightSeriesClient.prototype._bootstrap = function (chainId) {
         var self = this;
-        // Fetch the latest snapshot. On success, replace the local
-        // buffer (server-side decimation owns the shape). On failure,
-        // keep whatever we have — never reset to empty on a transient
-        // error, that would erase the sparkline mid-tab.
-        this.api.get('/chains/' + encodeURIComponent(chainId) + '/history?windowMin=' + WINDOW_MIN)
-            .then(function (res) {
-                var pts = (res && Array.isArray(res.points)) ? res.points : [];
-                self._buffers.set(chainId, pts);
-                self._broadcast(chainId);
-            })
-            .catch(function () {
-                // First bootstrap — seed empty so the sparkline component
-                // can render its "no data" state cleanly.
-                if (!self._buffers.has(chainId)) self._buffers.set(chainId, []);
-                self._broadcast(chainId);
-            });
+
+        // Early-return if we've already wired this chainId — refresh
+        // the snapshot in place instead of stacking subscriptions.
+        if (this._wirings.has(chainId)) {
+            this._refreshNow(chainId);
+            return;
+        }
+
+        // First-time bootstrap: snapshot fetch + SSE + interval.
+        this._refreshNow(chainId);
 
         // SSE delta — push new points as HealthChecker records them.
         var unsub = null;
@@ -104,6 +110,14 @@
                 if (!payload || !payload.point) return;
                 if (typeof payload.point.t !== 'number'
                     || typeof payload.point.h !== 'number') return;
+                // alpha.28.1 batch 24 — typeof NaN === 'number' so the
+                // typeof check above was insufficient. A single
+                // {h: NaN} from the backend propagated through
+                // hMin/hMax/range in sparkline._render and produced
+                // an SVG path "M NaN,NaN ..." that silently bricked
+                // the sparkline until a snapshot refresh.
+                // (Numerical edge-case audit adc48dd0.)
+                if (!isFinite(payload.point.t) || !isFinite(payload.point.h)) return;
                 var buf = self._buffers.get(chainId) || [];
                 var last = buf[buf.length - 1];
                 // Drop out-of-order / dupes — server already filters but
@@ -120,12 +134,69 @@
         }
 
         // Periodic full refresh — covers SSE reconnect gaps and a tab
-        // backgrounded for hours.
-        var intervalId = setInterval(function () {
-            self._bootstrap(chainId);
-        }, POLL_FALLBACK_MS);
+        // backgrounded for hours. Calls _refreshNow (not _bootstrap)
+        // so the SSE sub + interval stay singleton. alpha.28.1 batch
+        // 28 — wrapped in enmUseVisibilityPause so the 5-minute snapshot
+        // poll stops while the tab is hidden. The original "covers a
+        // tab backgrounded for hours" claim was actually misleading:
+        // SSE is what kept the buffer warm, the interval just topped
+        // up on resume. Now the resume-tick of the helper fires
+        // _refreshNow immediately on visibility-resume, which is the
+        // correct behaviour.
+        var pauser = null;
+        var intervalId = null;
+        if (typeof root !== 'undefined' && typeof root.enmUseVisibilityPause === 'function') {
+            pauser = root.enmUseVisibilityPause(function () {
+                self._refreshNow(chainId);
+            }, POLL_FALLBACK_MS);
+        } else {
+            intervalId = setInterval(function () {
+                self._refreshNow(chainId);
+            }, POLL_FALLBACK_MS);
+        }
 
-        this._wirings.set(chainId, { unsub: unsub, intervalId: intervalId });
+        this._wirings.set(chainId, { unsub: unsub, intervalId: intervalId, pauser: pauser });
+    };
+
+    /**
+     * @private
+     * Fetch the latest snapshot. On success, replace the local buffer
+     * (server-side decimation owns the shape). On failure, keep
+     * whatever we have — never reset to empty on a transient error,
+     * that would erase the sparkline mid-tab.
+     */
+    HeightSeriesClient.prototype._refreshNow = function (chainId) {
+        var self = this;
+        this.api.get('/chains/' + encodeURIComponent(chainId) + '/history?windowMin=' + WINDOW_MIN)
+            .then(function (res) {
+                // alpha.28.1 batch 67 (Round-19B audit) — per-point
+                // isFinite filter on the snapshot path. The SSE delta
+                // path was hardened against {t: NaN, h: NaN} payloads
+                // in batch 24 (audit adc48dd0) — the comment at lines
+                // 113-120 explains how a single bad point "produced an
+                // SVG path M NaN,NaN … that silently bricked the
+                // sparkline". The snapshot path was NEVER hardened the
+                // same way. Snapshot replays every 5 minutes AND on
+                // visibility-resume, so one corrupted /history response
+                // bricked every chain card's sparkline for the rest of
+                // the session — strictly worse than the SSE failure
+                // mode the original hardening addressed.
+                var pts = (res && Array.isArray(res.points))
+                    ? res.points.filter(function (p) {
+                        return p
+                            && typeof p.t === 'number' && isFinite(p.t)
+                            && typeof p.h === 'number' && isFinite(p.h);
+                    })
+                    : [];
+                self._buffers.set(chainId, pts);
+                self._broadcast(chainId);
+            })
+            .catch(function () {
+                // First bootstrap — seed empty so the sparkline component
+                // can render its "no data" state cleanly.
+                if (!self._buffers.has(chainId)) self._buffers.set(chainId, []);
+                self._broadcast(chainId);
+            });
     };
 
     /** @private */
@@ -135,7 +206,10 @@
             if (typeof w.unsub === 'function') {
                 try { w.unsub(); } catch (_) { /* swallow */ }
             }
-            clearInterval(w.intervalId);
+            if (w.pauser && typeof w.pauser.stop === 'function') {
+                try { w.pauser.stop(); } catch (_) { /* idempotent */ }
+            }
+            if (w.intervalId != null) { clearInterval(w.intervalId); }
         }
         this._wirings.delete(chainId);
         this._listeners.delete(chainId);

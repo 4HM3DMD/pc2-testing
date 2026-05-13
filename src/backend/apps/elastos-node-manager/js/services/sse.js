@@ -29,6 +29,13 @@
     var ENDPOINT = (root.ENM_API_BASE ? root.ENM_API_BASE + '/events'
                                       : '/extensions/elastos-node-manager/api/events');
     var OPEN_TIMEOUT_MS = 10_000;
+    // alpha.28.1 batch 56 — reconnect attempt cap. 12 attempts at
+    // exponential backoff (10s, 20s, 40s, 60s × 9 more) ≈ 12 min of
+    // retries before giving up. Matches audit a1612c10's "cap at e.g.
+    // 6 in 60s, then back off to 60s intervals" but with a longer
+    // total horizon since the operator may legitimately be on a slow
+    // recovering network.
+    var MAX_RECONNECT_ATTEMPTS = 12;
 
     /**
      * Browser EventSource can't send Authorization headers. Read the
@@ -58,6 +65,18 @@
         this._stateHandlers = new Set();    // for 'open' / 'reconnecting' / 'closed'
         this._openTimer = null;
         this._connectAttempts = 0;
+        // alpha.28.1 batch 21 — debounce flag for _scheduleReconnect.
+        // The race-conditions audit (aaf1f87d B2) found that every
+        // subscribe/unsubscribe used to trigger a full _reconnect
+        // synchronously: close socket + reopen with the new topic list.
+        // App boot fires ~10 subscribes consecutively (chain-card +
+        // log-viewer + height-series + system-status + validator-card +
+        // notifications + ...), so the EventSource got closed + recreated
+        // 10 times before the first onopen landed. The race window between
+        // close+recreate dropped any event the previous socket was holding.
+        // This flag batches all sub/unsub deltas in the same microtask
+        // into ONE reconnect at the end of the tick.
+        this._reconnectScheduled = false;
     }
 
     /**
@@ -79,8 +98,10 @@
             this._handlers.set(topic, set);
         }
         set.add(cb);
-        // (Re)connect with the new topic list.
-        this._reconnect();
+        // (Re)connect with the new topic list. _scheduleReconnect
+        // batches multiple subscribe/unsubscribe calls in the same
+        // microtask into ONE network reconnect.
+        this._scheduleReconnect();
         var self = this;
         return function unsubscribe() {
             var s = self._handlers.get(topic);
@@ -89,10 +110,28 @@
                 if (s.size === 0) {
                     self._handlers.delete(topic);
                     self._topics.delete(topic);
-                    self._reconnect();
+                    self._scheduleReconnect();
                 }
             }
         };
+    };
+
+    /**
+     * @private
+     * Debounce the actual reconnect so back-to-back subscribe()/unsubscribe()
+     * calls in the same tick collapse into one socket recreation. Uses a
+     * microtask via Promise.resolve so the batching window is "this tick",
+     * which is exactly what we want — no operator-visible delay, no
+     * arbitrary setTimeout(0) lag.
+     */
+    EnmSse.prototype._scheduleReconnect = function () {
+        if (this._reconnectScheduled) { return; }
+        this._reconnectScheduled = true;
+        var self = this;
+        Promise.resolve().then(function () {
+            self._reconnectScheduled = false;
+            self._reconnect();
+        });
     };
 
     /**
@@ -112,6 +151,19 @@
         this._topics.clear();
         this._handlers.clear();
         this._emitState('closed');
+    };
+
+    /**
+     * Manually reset the reconnect-attempts counter and try once more.
+     * Wired to the error-pane Retry button so an operator can recover
+     * from a 'closed' state without a full page reload after a long
+     * outage. Batch 56.
+     */
+    EnmSse.prototype.retry = function () {
+        this._connectAttempts = 0;
+        if (this._topics.size > 0) {
+            this._scheduleReconnect();
+        }
     };
 
     /** @private */
@@ -142,28 +194,98 @@
         // Defensive: if onopen doesn't fire within OPEN_TIMEOUT_MS, treat as a
         // failure and let the browser restart the connection itself (we just
         // close + recreate so we don't sit on a half-open socket).
+        //
+        // alpha.28.1 batch 56 (Round-8 audit a1612c10) — exponential
+        // backoff replaces the previous "retry every 10s forever"
+        // pattern. A corporate proxy stripping text/event-stream
+        // hammered enm-server every 10s indefinitely; now retries
+        // backoff 10s → 20s → 40s → 60s (capped). Emits 'closed' state
+        // after MAX_RECONNECT_ATTEMPTS so chain-card / log-viewer pills
+        // can surface the give-up state instead of "reconnecting…"
+        // forever.
+        var backoffMs;
+        if (self._connectAttempts <= 1) {
+            backoffMs = OPEN_TIMEOUT_MS;
+        } else {
+            // exponential: 10, 20, 40, then cap at 60s.
+            backoffMs = Math.min(OPEN_TIMEOUT_MS * Math.pow(2, self._connectAttempts - 1), 60_000);
+        }
         this._openTimer = setTimeout(function () {
             self._closeNative();
+            if (self._connectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+                // Give up loud — the consumer (log-viewer pill, chain-
+                // card reconnect badge) can render a give-up state
+                // rather than the "reconnecting…" lie. The operator
+                // can manually trigger a recovery via the Retry
+                // button in the error pane (batch 13).
+                self._emitState('closed');
+                return;
+            }
             self._reconnect();
-        }, OPEN_TIMEOUT_MS);
+        }, backoffMs);
 
         es.onopen = function () {
             clearTimeout(self._openTimer);
             self._openTimer = null;
-            self._connectAttempts = 0;
+            // alpha.28.1 batch 91 (Round-29 audit, MED) — debounce the
+            // counter reset. Previous shape eagerly reset
+            // _connectAttempts to 0 on every onopen. A flapping
+            // connection — server opens TCP, immediately 502s the
+            // stream, browser's INTERNAL retry kicks in (we don't
+            // es.close() per the onerror comment) — kept resetting the
+            // counter without our wrapper ever seeing the failures as
+            // new attempts. Result: MAX_RECONNECT_ATTEMPTS + give-up
+            // logic NEVER triggered; pill reported "open" forever while
+            // the browser silently looped. Operator saw no signal.
+            //
+            // Fix: only reset _connectAttempts after the socket has been
+            // stable for STABLE_OPEN_MS. The 'open' state is still emitted
+            // immediately so consumer pills update; only the reset of the
+            // counter (which would mask flapping) is debounced. If the
+            // socket errors before the timer fires, _connectAttempts
+            // stays high, our backoff/cap engages correctly.
             self._emitState('open');
+            if (self._stableOpenTimer) { clearTimeout(self._stableOpenTimer); }
+            self._stableOpenTimer = setTimeout(function () {
+                self._connectAttempts = 0;
+                self._stableOpenTimer = null;
+            }, 5_000);
         };
         es.onerror = function () {
             // Browser auto-retries on its own; we just surface the state
             // transition. Don't close the EventSource — that disables retry.
+            // batch 91 — cancel the stable-open debounce so the counter
+            // doesn't reset on a flapping socket.
+            if (self._stableOpenTimer) {
+                clearTimeout(self._stableOpenTimer);
+                self._stableOpenTimer = null;
+            }
             self._emitState('reconnecting');
         };
         // Register a listener per subscribed topic. SSE 'event:' field values
         // map to addEventListener names exactly.
         this._topics.forEach(function (topic) {
             es.addEventListener(topic, function (ev) {
+                // alpha.28.1 batch 71 (Round-19B audit finding #5) —
+                // drop unparseable payloads instead of propagating the
+                // raw string as if it were a valid envelope. All
+                // current handlers shape-guard against non-object
+                // payloads so the previous fall-through was harmless,
+                // but it muted a real signal: a future handler that
+                // forgot to shape-guard would silently no-op instead
+                // of throwing the parse warning to dev tools. Now: log
+                // the parse failure (caught in console.warn so prod
+                // operators aren't spammed if they have an open
+                // devtools tab) and return early.
                 var payload;
-                try { payload = JSON.parse(ev.data); } catch (e) { payload = ev.data; }
+                try {
+                    payload = JSON.parse(ev.data);
+                } catch (e) {
+                    if (root.console && console.warn) {
+                        console.warn('EnmSse: dropping unparseable payload on topic ' + topic, e);
+                    }
+                    return;
+                }
                 var set = self._handlers.get(topic);
                 if (!set) return;
                 set.forEach(function (cb) {
@@ -185,6 +307,12 @@
         if (this._openTimer) {
             clearTimeout(this._openTimer);
             this._openTimer = null;
+        }
+        // batch 91 — also clear the stable-open debounce so a reconnect
+        // doesn't inherit a stale timer from the previous EventSource.
+        if (this._stableOpenTimer) {
+            clearTimeout(this._stableOpenTimer);
+            this._stableOpenTimer = null;
         }
         if (this._es) {
             try { this._es.close(); } catch (_) { /* swallow */ }

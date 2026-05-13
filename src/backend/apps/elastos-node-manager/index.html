@@ -2,7 +2,12 @@
 <html lang="en">
 <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <!-- viewport-fit=cover lets safe-area-inset-* paddings honour iPhone
+         notches in landscape; interactive-widget=resizes-content tells
+         iOS to shrink the layout viewport when the soft keyboard opens
+         so Save/Continue buttons aren't covered by it. user-scalable
+         intentionally omitted so WCAG 1.4.4 (200% zoom) is allowed. -->
+    <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
     <meta name="referrer" content="no-referrer">
     <title>Elastos Node Manager</title>
     <link rel="stylesheet" href="css/styles.css?ts=20260513c">
@@ -51,18 +56,48 @@
     </script>
 </head>
 <body>
+    <!-- alpha.28.1 batch 88 (Round-28 audit) — mirror the pre-paint
+         `<html data-app-size>` written by the head IIFE down to body
+         AS SOON AS body element exists. Placement matters: this script
+         is the very first child of <body>, before any visible elements
+         and before all the defer scripts queued in <head>. Inline non-
+         defer scripts block parsing when encountered, so by the time
+         the parser continues to the visible markup below, body already
+         carries the correct data-app-size attribute and CSS rules at
+         styles.css:4569+ (which target body[data-app-size="narrow"])
+         match on the very first paint frame — no flash.
+         The head IIFE comment at line 51 promised "set in a second
+         script after </body>" but that script was never shipped; this
+         is the fix. -->
+    <script>
+        (function () {
+            try {
+                var sz = document.documentElement.dataset.appSize;
+                if (sz) { document.body.dataset.appSize = sz; }
+            } catch (e) { /* fail open — app.js will mirror on first run */ }
+        })();
+    </script>
+
+    <!-- a11y: skip link lands at the top of the Tab order so keyboard
+         users can jump past the chrome (gear, theme, 5 tabs). Visible
+         only on focus (see .enm-skip-link in styles.css). -->
+    <a href="#enm-main" class="enm-skip-link">Skip to main content</a>
     <div id="app" class="enm-app" data-state="connecting">
+        <!-- a11y: WCAG 2.4.6 requires a top-level heading. The PC2 window
+             chrome shows the app name in its title bar, but screen-reader
+             users navigating by heading need an h1 inside the document. -->
+        <h1 class="enm-sr-only">Elastos Node Manager</h1>
         <!-- Header bar matching dao-dashboard's pattern: tabs on the left,
              flexible spacer, global controls on the right. PC2's window
              manager already provides the app title via window-head — no
              need to re-render it here. -->
-        <nav class="enm-header-bar" id="enm-tabs" role="tablist" hidden>
+        <nav class="enm-header-bar" id="enm-tabs" role="tablist" aria-label="Sections" hidden>
             <div class="enm-header-tabs">
-                <button type="button" class="enm-tab active" role="tab" data-tab="dashboard" aria-selected="true">Dashboard</button>
-                <button type="button" class="enm-tab"        role="tab" data-tab="logs"      aria-selected="false">Logs</button>
-                <button type="button" class="enm-tab"        role="tab" data-tab="settings"  aria-selected="false">Settings</button>
-                <button type="button" class="enm-tab"        role="tab" data-tab="audit"     aria-selected="false">Audit</button>
-                <button type="button" class="enm-tab"        role="tab" data-tab="evm"       aria-selected="false">
+                <button type="button" class="enm-tab active" role="tab" id="enm-tab-dashboard" data-tab="dashboard" aria-selected="true"  aria-controls="enm-pane-dashboard" tabindex="0">Dashboard</button>
+                <button type="button" class="enm-tab"        role="tab" id="enm-tab-logs"      data-tab="logs"      aria-selected="false" aria-controls="enm-pane-logs"      tabindex="-1">Logs</button>
+                <button type="button" class="enm-tab"        role="tab" id="enm-tab-settings"  data-tab="settings"  aria-selected="false" aria-controls="enm-pane-settings"  tabindex="-1">Settings</button>
+                <button type="button" class="enm-tab"        role="tab" id="enm-tab-audit"     data-tab="audit"     aria-selected="false" aria-controls="enm-pane-audit"     tabindex="-1">Audit</button>
+                <button type="button" class="enm-tab"        role="tab" id="enm-tab-evm"       data-tab="evm"       aria-selected="false" aria-controls="enm-pane-evm"       tabindex="-1">
                     EVM <span class="enm-tab-pill">v0.5</span>
                 </button>
             </div>
@@ -73,16 +108,16 @@
                      boot states. Hidden in home mode (the gear opens the
                      drawer where the operator can switch theme). -->
                 <button type="button" class="enm-icon-btn" id="enm-theme-toggle" title="Toggle dark mode" aria-label="Toggle theme" hidden>
-                    <svg class="enm-icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <svg class="enm-icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
                         <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
                     </svg>
-                    <svg class="enm-icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <svg class="enm-icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
                         <circle cx="12" cy="12" r="4"></circle>
                         <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"></path>
                     </svg>
                 </button>
                 <button type="button" class="enm-icon-btn" id="enm-settings-toggle" title="Settings" aria-label="Open settings">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
                         <circle cx="12" cy="12" r="3"></circle>
                         <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
                     </svg>
@@ -90,8 +125,10 @@
             </div>
         </nav>
 
-        <main class="enm-main">
-            <div class="enm-spinner" id="enm-spinner" role="status" aria-live="polite">
+        <main class="enm-main" id="enm-main">
+            <!-- a11y: role="status" implies aria-live="polite"; pairing them
+                 caused Safari + older NVDA to double-announce the spinner. -->
+            <div class="enm-spinner" id="enm-spinner" role="status">
                 <div class="enm-spinner-dots">
                     <div class="enm-spinner-dot"></div>
                     <div class="enm-spinner-dot"></div>
@@ -101,48 +138,60 @@
             </div>
 
             <section class="enm-content" id="enm-content" hidden>
-                <div class="enm-pane" id="enm-pane-dashboard"></div>
-                <div class="enm-pane" id="enm-pane-logs" hidden></div>
-                <div class="enm-pane" id="enm-pane-settings" hidden></div>
-                <div class="enm-pane" id="enm-pane-audit" hidden></div>
-                <div class="enm-pane" id="enm-pane-evm" hidden></div>
+                <div class="enm-pane" id="enm-pane-dashboard" role="tabpanel" aria-labelledby="enm-tab-dashboard" tabindex="0"></div>
+                <div class="enm-pane" id="enm-pane-logs"      role="tabpanel" aria-labelledby="enm-tab-logs"      tabindex="0" hidden></div>
+                <div class="enm-pane" id="enm-pane-settings"  role="tabpanel" aria-labelledby="enm-tab-settings"  tabindex="0" hidden></div>
+                <div class="enm-pane" id="enm-pane-audit"     role="tabpanel" aria-labelledby="enm-tab-audit"     tabindex="0" hidden></div>
+                <div class="enm-pane" id="enm-pane-evm"       role="tabpanel" aria-labelledby="enm-tab-evm"       tabindex="0" hidden></div>
             </section>
 
             <div class="enm-error" id="enm-error" hidden role="alert">
                 <div class="enm-error-title" id="enm-error-title"></div>
                 <div class="enm-error-detail" id="enm-error-detail"></div>
+                <!-- Recovery affordances — operator's only previous option
+                     was hard-refresh. Both buttons are operator-friendly
+                     escapes from a stuck boot. -->
+                <div class="enm-error-actions">
+                    <button type="button" class="enm-btn enm-btn-primary" id="enm-error-retry">Retry</button>
+                    <button type="button" class="enm-btn enm-btn-secondary" id="enm-error-reload">Reload page</button>
+                </div>
             </div>
         </main>
     </div>
 
     <!-- Order matters: strings + utils first (used by services + components),
-         then services, then components, then the app controller. -->
-    <script src="js/strings.js?ts=20260512c"></script>
-    <script src="js/utils.js?ts=20260506g"></script>
-    <script src="js/illustrations.js?ts=20260506g"></script>
-    <script src="js/services/wallet.js?ts=20260506g"></script>
-    <script src="js/services/theme.js?ts=20260506g"></script>
-    <script src="js/services/api.js?ts=20260506g"></script>
-    <script src="js/services/sse.js?ts=20260511d"></script>
-    <script src="js/services/notifications.js?ts=20260506g"></script>
-    <script src="js/services/fleet-health-gradient.js?ts=20260512a"></script>
-    <script src="js/services/height-series.js?ts=20260512a"></script>
-    <script src="js/components/system-status.js?ts=20260511f"></script>
-    <script src="js/components/sparkline.js?ts=20260512a"></script>
-    <script src="js/components/power-circle.js?ts=20260512a"></script>
-    <script src="js/components/chain-card.js?ts=20260512e"></script>
-    <script src="js/components/validator-registration-card.js?ts=20260511e"></script>
-    <script src="js/components/producer-identity.js?ts=20260512a"></script>
-    <script src="js/components/log-viewer.js?ts=20260507d"></script>
-    <script src="js/components/proposal-card.js?ts=20260506g"></script>
-    <script src="js/components/welcome-screen.js?ts=20260506g"></script>
-    <script src="js/components/setup-conversation.js?ts=20260511c"></script>
-    <script src="js/components/settings-tab.js?ts=20260511g"></script>
-    <script src="js/components/audit-tab.js?ts=20260506g"></script>
-    <script src="js/components/evm-tab.js?ts=20260506g"></script>
-    <script src="js/components/settings-drawer.js?ts=20260506g"></script>
-    <script src="js/components/tools-update-card.js?ts=20260512c"></script>
-    <script src="js/components/technical-view.js?ts=20260512f"></script>
-    <script src="js/app.js?ts=20260513a"></script>
+         then services, then components, then the app controller. The
+         `defer` attribute preserves execution order (browsers run deferred
+         scripts in document order) BUT lets all 24 download in parallel
+         instead of one-after-the-other. End-of-body classic script tags
+         without defer block on each previous tag's download+execute, so
+         this is a real ~200-400ms TTI win on the boot waterfall. -->
+    <script defer src="js/strings.js?ts=20260512c"></script>
+    <script defer src="js/utils.js?ts=20260506g"></script>
+    <script defer src="js/illustrations.js?ts=20260506g"></script>
+    <script defer src="js/services/wallet.js?ts=20260506g"></script>
+    <script defer src="js/services/theme.js?ts=20260506g"></script>
+    <script defer src="js/services/api.js?ts=20260506g"></script>
+    <script defer src="js/services/sse.js?ts=20260511d"></script>
+    <script defer src="js/services/notifications.js?ts=20260506g"></script>
+    <script defer src="js/services/fleet-health-gradient.js?ts=20260512a"></script>
+    <script defer src="js/services/height-series.js?ts=20260512a"></script>
+    <script defer src="js/components/system-status.js?ts=20260511f"></script>
+    <script defer src="js/components/sparkline.js?ts=20260512a"></script>
+    <script defer src="js/components/power-circle.js?ts=20260512a"></script>
+    <script defer src="js/components/chain-card.js?ts=20260512e"></script>
+    <script defer src="js/components/validator-registration-card.js?ts=20260511e"></script>
+    <script defer src="js/components/producer-identity.js?ts=20260512a"></script>
+    <script defer src="js/components/log-viewer.js?ts=20260507d"></script>
+    <script defer src="js/components/proposal-card.js?ts=20260506g"></script>
+    <script defer src="js/components/welcome-screen.js?ts=20260506g"></script>
+    <script defer src="js/components/setup-conversation.js?ts=20260511c"></script>
+    <script defer src="js/components/settings-tab.js?ts=20260511g"></script>
+    <script defer src="js/components/audit-tab.js?ts=20260506g"></script>
+    <script defer src="js/components/evm-tab.js?ts=20260506g"></script>
+    <script defer src="js/components/settings-drawer.js?ts=20260506g"></script>
+    <script defer src="js/components/tools-update-card.js?ts=20260512c"></script>
+    <script defer src="js/components/technical-view.js?ts=20260512f"></script>
+    <script defer src="js/app.js?ts=20260513a"></script>
 </body>
 </html>

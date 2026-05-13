@@ -29,6 +29,12 @@
         this.api = opts.api;
         this.notifications = opts.notifications;
         this.onClose = typeof opts.onClose === 'function' ? opts.onClose : function () {};
+        // alpha.28.1 batch 22 — onActioned hook so app.js can broadcast
+        // a `proposal-actioned` BC event after a successful confirm/
+        // reject. Peer windows then dismiss their own copy of the modal
+        // silently instead of catching a stale 404/409 from the
+        // already-actioned proposal. (Multi-window audit ac31f3a08.)
+        this.onActioned = typeof opts.onActioned === 'function' ? opts.onActioned : function () {};
         this._cooldownTimer = null;
         this._closed = false;
 
@@ -42,9 +48,20 @@
     }
 
     ProposalCard.prototype.mount = function (parent) {
+        // Remember what the operator was focused on so we can restore it on close
+        // (WCAG 2.4.3 Focus Order). Without this, focus jumps to <body> after
+        // the dialog closes and a screen reader loses context.
+        this._previousFocus = document.activeElement;
         parent.appendChild(this.root);
         this._startCooldown();
         this._installEscHandler();
+        this._installFocusTrap();
+        // Move focus into the dialog. The ack checkbox is the natural entry
+        // point because the Confirm button is disabled during the cooldown.
+        var firstFocusable = this._checkbox || this.root.querySelector('button, input, [tabindex]');
+        if (firstFocusable && typeof firstFocusable.focus === 'function') {
+            setTimeout(function () { firstFocusable.focus(); }, 0);
+        }
         return this;
     };
 
@@ -56,7 +73,15 @@
             document.removeEventListener('keydown', this._escHandler);
             this._escHandler = null;
         }
+        if (this._trapHandler) {
+            document.removeEventListener('keydown', this._trapHandler, true);
+            this._trapHandler = null;
+        }
         if (this.root.parentNode) { this.root.parentNode.removeChild(this.root); }
+        // Return focus to wherever the operator was before the dialog opened.
+        if (this._previousFocus && typeof this._previousFocus.focus === 'function') {
+            try { this._previousFocus.focus(); } catch (_) { /* element may be gone */ }
+        }
         this.onClose();
     };
 
@@ -78,9 +103,27 @@
         heading.textContent = t('proposal.heading');
         card.appendChild(heading);
 
+        // alpha.28.1 batch 69 (Round-19B audit finding #4) — provide a
+        // non-empty fallback when BOTH summary_action and summaryAction
+        // are absent. The acknowledgment ceremony is the ENTIRE point
+        // of this card: "I understand this will <ACTION>" with the
+        // operator's deliberate click confirming a destructive op. An
+        // empty action label silently defeats that ceremony — the ack
+        // text reads "I understand this will " (trailing space, no
+        // action), and the post-action notifications fire "Confirmed" /
+        // "Rejected" with empty bodies, leaving the operator with NO
+        // record of what they just confirmed. Falling back to the i18n
+        // 'proposal.fallback_action' key — or a hard-coded English
+        // string if strings.js isn't loaded — keeps the ceremony intact.
+        var actionLabel = p.summary_action || p.summaryAction
+            || t('proposal.fallback_action')
+            || 'this operation';
+        // Stash on `this` so _handleConfirm / _handleReject can reuse
+        // the same resolved label in their post-action notifications.
+        this._actionLabel = actionLabel;
         var summary = document.createElement('p');
         summary.className = 'enm-proposal-summary';
-        summary.textContent = p.summary_action || p.summaryAction || '';
+        summary.textContent = actionLabel;
         card.appendChild(summary);
 
         if (p.summary_reason || p.summaryReason) {
@@ -99,7 +142,7 @@
         this._checkbox.addEventListener('change', function () { self._refreshConfirmEnabled(); });
         checkboxWrap.appendChild(this._checkbox);
         var ackText = document.createElement('span');
-        ackText.textContent = t('proposal.confirm_label', { summary: p.summary_action || p.summaryAction || '' });
+        ackText.textContent = t('proposal.confirm_label', { summary: actionLabel });
         checkboxWrap.appendChild(ackText);
         card.appendChild(checkboxWrap);
 
@@ -108,9 +151,37 @@
             this._antiSnipe = document.createElement('input');
             this._antiSnipe.type = 'password';
             this._antiSnipe.className = 'enm-proposal-anti-snipe';
-            this._antiSnipe.placeholder = 'Anti-snipe password';
-            this._antiSnipe.autocomplete = 'current-password';
-            this._antiSnipe.addEventListener('input', function () { self._refreshConfirmEnabled(); });
+            // alpha.28.1 batch 37 — strings.js sourced for locale parity.
+            var antiLabel = root.enmTOrFallback('proposal.anti_snipe_label');
+            this._antiSnipe.placeholder = antiLabel;
+            this._antiSnipe.setAttribute('aria-label', antiLabel);
+            // SAFETY: never use current-password here. Healing proposal
+            // confirmation is destructive — autocomplete="current-password"
+            // would let a password manager auto-fill this field on render
+            // and the length check at _refreshConfirmEnabled would then
+            // silently enable Confirm without operator intent (a "drive-
+            // by confirm" on autofill). off + 'one-time-code' both block
+            // PM autofill across Chrome/Safari/Firefox/1Password.
+            this._antiSnipe.setAttribute('autocomplete', 'off');
+            this._antiSnipe.setAttribute('autocorrect', 'off');
+            this._antiSnipe.setAttribute('autocapitalize', 'off');
+            this._antiSnipe.setAttribute('spellcheck', 'false');
+            this._antiSnipe.addEventListener('input', function (ev) {
+                // Belt-and-braces: only honour InputEvents that came from
+                // real keystrokes / paste. A programmatic .value= from a
+                // password manager fires `change` but `inputType` is
+                // empty or 'insertReplacementText'. Require a known
+                // keystroke type so synthesised fills can't sneak past.
+                if (ev && ev.inputType
+                    && ev.inputType !== 'insertText'
+                    && ev.inputType !== 'insertFromPaste'
+                    && ev.inputType !== 'deleteContentBackward'
+                    && ev.inputType !== 'deleteContentForward'
+                    && ev.inputType !== 'insertCompositionText') {
+                    return;
+                }
+                self._refreshConfirmEnabled();
+            });
             card.appendChild(this._antiSnipe);
         }
 
@@ -145,6 +216,7 @@
         this._rejectReason.type = 'text';
         this._rejectReason.className = 'enm-proposal-reject-reason';
         this._rejectReason.placeholder = t('proposal.reject_reason_placeholder');
+        this._rejectReason.setAttribute('aria-label', t('proposal.reject_reason_placeholder'));
         card.appendChild(this._rejectReason);
 
         this.root.appendChild(card);
@@ -183,15 +255,45 @@
         this._confirmBtn.disabled = true;
         var body = {};
         if (this._antiSnipe) { body.antiSnipePassword = this._antiSnipe.value; }
-        this.api.post('/healing/confirm/' + this.proposal.id, body).then(function () {
-            self.notifications.info('Confirmed', self.proposal.summary_action || self.proposal.summaryAction || '');
+        // alpha.28.1 batch 69 (Round-19C audit finding #2) —
+        // encodeURIComponent on the proposal.id path segment. proposal.id
+        // sources from a backend response (GET /healing/suggestions); a
+        // malicious/buggy backend returning "x/../delete" could pivot the
+        // call to a different endpoint. Backend-compromise only, but
+        // every other dynamic path segment in audit-tab uses
+        // encodeURIComponent (lines 157-158) so this is consistency too.
+        this.api.post('/healing/confirm/' + encodeURIComponent(this.proposal.id), body).then(function () {
+            // alpha.28.1 batch 93 (Round-30 audit) — guard against the
+            // case where a peer tab's BroadcastChannel proposal-actioned
+            // event closed this dialog between the POST starting and
+            // resolving. Without the guard, the toast fires for an
+            // action that no longer represents this tab's verdict, and
+            // self.onActioned re-broadcasts a redundant second
+            // proposal-actioned event. The catch branch already had
+            // the equivalent guard at line 270.
+            if (self._closed) { return; }
+            self.notifications.info('Confirmed', self._actionLabel || '');
+            try { self.onActioned('confirmed'); } catch (_) { /* host hook threw */ }
             self.close();
         }).catch(function (err) {
+            if (self._closed) { return; }
+            // alpha.28.1 batch 53 — 401 suppression. Boot owns re-auth.
+            if (err && err.status === 401) {
+                self._refreshConfirmEnabled();
+                return;
+            }
             self.notifications.warning(
                 'Confirmation failed',
                 err && err.message ? err.message : String(err),
             );
-            self._confirmBtn.disabled = false;
+            // Re-enable Confirm via the full validation path (cooldown +
+            // ack checkbox + anti-snipe length) instead of an
+            // unconditional disabled=false. Without _refreshConfirmEnabled
+            // the catch path could re-arm Confirm even when the cooldown
+            // is still running, the ack was unticked, or the anti-snipe
+            // input was cleared between click and error response.
+            // (Race-conditions audit aaf1f87d, finding B8.)
+            self._refreshConfirmEnabled();
         });
     };
 
@@ -201,25 +303,96 @@
         this._rejectBtn.disabled = true;
         this._confirmBtn.disabled = true;
         var body = { reason: this._rejectReason.value || '' };
-        this.api.post('/healing/reject/' + this.proposal.id, body).then(function () {
-            self.notifications.info('Rejected', self.proposal.summary_action || self.proposal.summaryAction || '');
+        // Batch 69 — encodeURIComponent on proposal.id (same rationale
+        // as the confirm path above).
+        this.api.post('/healing/reject/' + encodeURIComponent(this.proposal.id), body).then(function () {
+            // batch 93 — same _closed guard rationale as _handleConfirm above.
+            if (self._closed) { return; }
+            self.notifications.info('Rejected', self._actionLabel || '');
+            try { self.onActioned('rejected'); } catch (_) { /* host hook threw */ }
             self.close();
         }).catch(function (err) {
+            // alpha.28.1 batch 53 — 401 suppression. Boot owns re-auth.
+            // Reject button stays enabled either way so the operator
+            // can retry once re-authed.
+            if (err && err.status === 401) {
+                // alpha.28.1 batch 61 (Round-18 audit) — _handleReject
+                // disables BOTH _rejectBtn and _confirmBtn at start
+                // (lines 269-270). The previous 401 branch only
+                // re-enabled _rejectBtn, leaving Confirm permanently
+                // disabled until the parent re-mounted the card. The
+                // operator could no longer confirm OR reject anything
+                // from this dialog. Symmetrical with _handleConfirm's
+                // 401 path which calls _refreshConfirmEnabled.
+                self._rejectBtn.disabled = false;
+                self._refreshConfirmEnabled();
+                return;
+            }
             self.notifications.warning(
                 'Reject failed',
                 err && err.message ? err.message : String(err),
             );
             self._rejectBtn.disabled = false;
+            // Same fix in the generic-error branch — _confirmBtn was
+            // disabled at line 270 and never re-enabled.
+            self._refreshConfirmEnabled();
         });
     };
 
     /** @private */
     ProposalCard.prototype._installEscHandler = function () {
         var self = this;
+        // alpha.28.1 batch 72 (Round-20A audit finding #1, HIGH) — Esc
+        // now closes the dialog WITHOUT committing reject. The previous
+        // shape fired _handleReject() (POST /healing/reject — destructive
+        // + irreversible). Operators with universal-Esc-is-cancel muscle
+        // memory pressed Esc expecting "dismiss the modal", and silently
+        // rejected valid healing proposals.
+        //
+        // The healing backend re-suggests valid proposals on the next
+        // cycle, so close-without-act is the correct dismiss semantic:
+        //   - Operator wants to actually reject? Click the Reject button.
+        //   - Operator wants more time? Press Esc → close → proposal
+        //     re-appears next cycle (typically <5 min).
+        // Topmost-overlay guard kept so a drawer / tools-update modal
+        // opened on top still wins Esc.
         this._escHandler = function (ev) {
-            if (ev.key === 'Escape') { self._handleReject(); }
+            if (ev.key !== 'Escape') { return; }
+            var drawerOpen = document.querySelector('.enm-drawer-root.enm-drawer-open');
+            var updateModal = document.querySelector('.enm-tools-update-modal');
+            if (drawerOpen || updateModal) { return; }
+            self.close();
         };
         document.addEventListener('keydown', this._escHandler);
+    };
+
+    /**
+     * @private
+     * Focus trap: Tab and Shift+Tab cycle within the dialog only. Without this,
+     * keyboard focus can escape onto elements behind the overlay, violating
+     * WCAG 2.4.3 (Focus Order) for modal dialogs. The handler runs on capture
+     * so it sees the keydown before any inner element can intercept it.
+     */
+    ProposalCard.prototype._installFocusTrap = function () {
+        var self = this;
+        this._trapHandler = function (ev) {
+            if (ev.key !== 'Tab' || self._closed) { return; }
+            // Re-query each press because cooldown enables Confirm mid-lifecycle.
+            var focusables = self.root.querySelectorAll(
+                'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+            );
+            if (focusables.length === 0) { return; }
+            var first = focusables[0];
+            var last  = focusables[focusables.length - 1];
+            if (ev.shiftKey && document.activeElement === first) {
+                ev.preventDefault();
+                last.focus();
+            } else if (!ev.shiftKey && document.activeElement === last) {
+                ev.preventDefault();
+                first.focus();
+            }
+        };
+        document.addEventListener('keydown', this._trapHandler, true);
     };
 
     root.EnmProposalCard = ProposalCard;

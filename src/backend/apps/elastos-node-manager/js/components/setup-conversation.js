@@ -55,7 +55,39 @@
         this._currentCard = 'a';      // which card is showing
         this._cardSeq = 0;            // bump on every render to ignore stale callbacks
         this._unsubscribeInstall = null;
+        // alpha.28.1 — install poll timer handle so the fallback poll
+        // in _beginInstall can be cancelled. See _teardownInstallTracking
+        // for why this is necessary.
+        this._installPollTimer = null;
+        // alpha.28.1 batch 83 (Round-24 finding #4) — _destroyed flag
+        // so the Card B2 bootstrap poll's resolved tick can short-
+        // circuit if destroy() fires between the poll firing and the
+        // .then resolving. Card B's install-tracking explicitly handles
+        // this via _teardownInstallTracking; Card B2 was asymmetric.
+        // The resolved tick is harmless today (writes to detached DOM)
+        // but the asymmetry contradicts the symmetrical-with-Card-B
+        // rationale documented at the top of _goto.
+        this._destroyed = false;
     }
+
+    /**
+     * Cancel the Card-B install poll + SSE subscription. Called from
+     * destroy(), from _goto() when navigating away from Card B, and
+     * from _beginInstall.applyStatus when a terminal phase is observed.
+     * Without this the IIFE poll outlives the operator's navigation and
+     * can call applyStatus on stale DOM, including yanking the operator
+     * involuntarily into Card B Done.
+     */
+    SetupConversation.prototype._teardownInstallTracking = function () {
+        if (this._installPollTimer) {
+            clearTimeout(this._installPollTimer);
+            this._installPollTimer = null;
+        }
+        if (this._unsubscribeInstall) {
+            this._unsubscribeInstall();
+            this._unsubscribeInstall = null;
+        }
+    };
 
     SetupConversation.prototype.mount = function (parent) {
         parent.appendChild(this.root);
@@ -71,8 +103,11 @@
     };
 
     SetupConversation.prototype.destroy = function () {
-        if (this._unsubscribeInstall) { this._unsubscribeInstall(); }
-        if (this._unsubscribeBootstrap) { this._unsubscribeBootstrap(); }
+        // batch 83 — flip flag FIRST so any in-flight poll/SSE callbacks
+        // can see it before they mutate detached DOM.
+        this._destroyed = true;
+        this._teardownInstallTracking();
+        if (this._unsubscribeBootstrap) { this._unsubscribeBootstrap(); this._unsubscribeBootstrap = null; }
         if (this._bootstrapPollTimer) { clearInterval(this._bootstrapPollTimer); this._bootstrapPollTimer = null; }
         if (this.root.parentNode) { this.root.parentNode.removeChild(this.root); }
     };
@@ -86,7 +121,15 @@
             + '</div>'
             + '<div class="enm-conv-progress-text" aria-live="polite"></div>'
             + '</header>'
-            + '<div class="enm-conv-body" aria-live="polite"></div>';
+            // a11y: dropped aria-live="polite" from the body region. The
+            // header's progress text already announces every step
+            // transition ("Step 3 of 6"); pairing a second live region
+            // on the body caused screen readers to queue + interleave
+            // both, sometimes reading the body content twice (once on
+            // the body's mutation, once on heading navigation). The
+            // body is announced normally via the heading focus added
+            // in batch 6 (_goto focuses the new card title).
+            + '<div class="enm-conv-body"></div>';
         this._headerProgress = this.root.querySelector('.enm-conv-progress-bar');
         this._headerText     = this.root.querySelector('.enm-conv-progress-text');
         this._body           = this.root.querySelector('.enm-conv-body');
@@ -139,6 +182,32 @@
 
     /** @private */
     SetupConversation.prototype._goto = function (card) {
+        // alpha.28.1 — cancel any in-flight Card-B install tracking
+        // BEFORE swapping `_currentCard`. The poll loop checks
+        // `_currentCard === 'b'` to decide whether to keep ticking, so
+        // updating that field is enough to stop new ticks, but a tick
+        // already in flight could still resolve into a stale `els`
+        // reference. _teardownInstallTracking explicitly cancels the
+        // SSE subscription too, so SSE events that arrive after the
+        // operator has clicked Back can't yank them forward.
+        if (this._currentCard === 'b' && card !== 'b') {
+            this._teardownInstallTracking();
+        }
+        // alpha.28.1 batch 70 (Round-19A audit finding #1) — Card B2 has
+        // its own poll + SSE pair (_bootstrapPollTimer set at line 520
+        // running every 2s, _unsubscribeBootstrap set at line 515).
+        // Both were only cleaned in (a) destroy, (b) re-arming guards in
+        // _b2BeginBootstrap, (c) terminal phases of applyStatus + the
+        // _b2OnBootstrapDone happy path. The Card B2 Back link at line
+        // 411 calls _goto('b') — none of those three teardown paths
+        // fired, so the bootstrap poll + SSE continued ticking for the
+        // rest of the wizard session (pinned closures, wasted 2s GETs,
+        // and the captured `applyStatus` writing to detached `els`).
+        // Symmetrical with the Card-B leak guard above.
+        if (this._currentCard === 'b2' && card !== 'b2') {
+            if (this._unsubscribeBootstrap) { this._unsubscribeBootstrap(); this._unsubscribeBootstrap = null; }
+            if (this._bootstrapPollTimer) { clearInterval(this._bootstrapPollTimer); this._bootstrapPollTimer = null; }
+        }
         this._currentCard = card;
         this._cardSeq += 1;
         var seq = this._cardSeq;
@@ -157,6 +226,24 @@
         else if (card === 'b3') { this._renderCardB3(seq); }
         else if (card === 'c') { this._renderCardC(seq); }
         else if (card === 'd') { this._renderCardD(seq); }
+
+        // a11y/focus: each card swap re-renders `_body.innerHTML`, which
+        // destroys the previously-focused control (the Continue/Install
+        // button operators just clicked). Without an explicit focus
+        // landing, focus drops to body and screen readers don't
+        // announce that the wizard advanced. Move focus to the new
+        // card's heading (with a temporary tabindex so it accepts
+        // programmatic focus), and let the user Tab forward from there.
+        try {
+            var heading = this._body.querySelector('.enm-conv-title')
+                || this._body.querySelector('h2, h3');
+            if (heading && typeof heading.focus === 'function') {
+                if (!heading.hasAttribute('tabindex')) {
+                    heading.setAttribute('tabindex', '-1');
+                }
+                heading.focus({ preventScroll: true });
+            }
+        } catch (e) { /* DOM may be torn down mid-render */ }
     };
 
     /** @private */
@@ -412,7 +499,18 @@
         var done = false;
 
         function applyStatus(s) {
-            if (!s || done) { return; }
+            // alpha.28.1 batch 86 (Round-27 regression check) —
+            // centralised _destroyed guard. Batch 83 added the flag
+            // and guarded the bootstrap poll's .then but the audit
+            // found two other call sites (startPromise.then below,
+            // SSE callback) still routed through applyStatus without
+            // protection. Guarding here covers ALL three call paths
+            // in one place — the previous-shape failure mode was
+            // applyStatus mutating els (textContent / bar.style.width)
+            // after destroy() detached the DOM. SSE is implicitly safe
+            // (destroy unsubscribes) but startPromise.then has no
+            // equivalent cancel hook so the race window was real.
+            if (!s || done || self._destroyed) { return; }
             var pct = (s.bytesTotal && s.bytesDownloaded)
                 ? Math.min(100, Math.floor((s.bytesDownloaded / s.bytesTotal) * 100))
                 : (s.phase === 'done' ? 100 : (s.phase === 'extracting' ? 95 : 5));
@@ -458,8 +556,13 @@
             );
         }
         this._bootstrapPollTimer = setInterval(function () {
-            if (done) { return; }
+            // batch 83 — short-circuit if the component was destroyed
+            // mid-poll. The `done` flag handles terminal phases; this
+            // covers the lifecycle teardown case where the operator
+            // navigated away or the app reinstalled mid-bootstrap.
+            if (done || self._destroyed) { return; }
             self.api.get('/chains/mainchain/bootstrap', { skipCache: true }).then(function (data) {
+                if (self._destroyed) { return; }
                 applyStatus(data && data.status);
             }).catch(function () { /* leave the existing display, the poll retries */ });
         }, 2000);
@@ -572,6 +675,13 @@
     /** @private */
     SetupConversation.prototype._renderClockSkewResult = function (els, seq, cs) {
         var self = this;
+        // alpha.28.1 batch 84 — strings sourced from strings.js
+        // clock_skew.*. Three visual severities (skipped / out-of-sync
+        // / in-sync); placeholders carry runtime values like the
+        // skew direction, absolute milliseconds, and the time source.
+        // Closes the last hardcoded English block on the wizard path
+        // (Round-3 i18n coverage audit aef9c321 — final item).
+        var tt = root.enmTOrFallback;
         // Three branches by visual severity. The "continue" button is
         // present in GREEN and YELLOW; only RED hides it (and requires
         // the operator to fix NTP + retry).
@@ -579,25 +689,25 @@
             // YELLOW: probe didn't reach the internet. Warn the operator
             // but allow continue — many bare-metal setups intentionally
             // firewall outbound HTTPS.
-            els.title.textContent = 'Clock check skipped';
-            els.sub.textContent   = 'We could not reach a time server to verify your host clock. If your host clock is wrong, DPoS signatures will be silently rejected.';
+            els.title.textContent = tt('clock_skew.skipped_title');
+            els.sub.textContent   = tt('clock_skew.skipped_sub');
             els.detail.innerHTML =
                 '<div class="enm-clock-card enm-clock-card-warn">'
                   + '<div class="enm-clock-card-icon" aria-hidden="true">⚠</div>'
                   + '<div class="enm-clock-card-body">'
-                    + '<div class="enm-clock-card-title">Could not verify NTP</div>'
+                    + '<div class="enm-clock-card-title">' + escapeHtml(tt('clock_skew.skipped_card_title')) + '</div>'
                     + '<div class="enm-clock-card-sub">'
-                      + 'Reason: ' + escapeHtml(cs.reason || 'network unreachable') + '. '
-                      + 'Make sure your host has NTP running before going live: '
-                      + '<code>sudo timedatectl set-ntp true</code>.'
+                      + tt('clock_skew.skipped_card_body', {
+                          reason: escapeHtml(cs.reason || 'network unreachable'),
+                      })
                     + '</div>'
                   + '</div>'
                 + '</div>';
 
             els.actions.appendChild(
-                makeBtn('Continue anyway', 'primary hero', function () { self._goto('c'); })
+                makeBtn(tt('clock_skew.skipped_cta_continue'), 'primary hero', function () { self._goto('c'); })
             );
-            els.actions.appendChild(makeTextLink('Retry check', function () {
+            els.actions.appendChild(makeTextLink(tt('clock_skew.skipped_cta_retry'), function () {
                 self._runClockSkewProbe(els, seq);
             }));
             return;
@@ -610,25 +720,27 @@
             // immediately on registration.
             var skewMs = Number.isFinite(cs.skewMs) ? cs.skewMs : 0;
             var skewSeconds = (Math.abs(skewMs) / 1000).toFixed(1);
-            var direction = skewMs > 0 ? 'ahead of' : 'behind';
-            els.title.textContent = 'Host clock is out of sync';
-            els.sub.textContent   = 'Your server clock is ' + skewSeconds + 's ' + direction
-                + ' internet time. DPoS will reject your signatures and you will score missed-vote penalties.';
+            var direction = skewMs > 0
+                ? tt('clock_skew.direction_ahead')
+                : tt('clock_skew.direction_behind');
+            els.title.textContent = tt('clock_skew.out_of_sync_title');
+            els.sub.textContent   = tt('clock_skew.out_of_sync_sub', {
+                skewSeconds: skewSeconds,
+                direction:   direction,
+            });
             els.detail.innerHTML =
                 '<div class="enm-clock-card enm-clock-card-error">'
                   + '<div class="enm-clock-card-icon" aria-hidden="true">!</div>'
                   + '<div class="enm-clock-card-body">'
-                    + '<div class="enm-clock-card-title">Fix this before continuing</div>'
+                    + '<div class="enm-clock-card-title">' + escapeHtml(tt('clock_skew.out_card_title')) + '</div>'
                     + '<div class="enm-clock-card-sub">'
-                      + 'Run this on the host, then press Retry:'
-                      + '<pre class="enm-clock-fix"><code>sudo timedatectl set-ntp true</code></pre>'
-                      + 'After NTP catches up (usually &lt;30s), retry the check.'
+                      + tt('clock_skew.out_card_body')
                     + '</div>'
                   + '</div>'
                 + '</div>';
 
             els.actions.appendChild(
-                makeBtn('Retry check', 'primary hero', function (ev) {
+                makeBtn(tt('clock_skew.out_cta_retry'), 'primary hero', function (ev) {
                     ev.target.disabled = true;
                     self._runClockSkewProbe(els, seq);
                 })
@@ -636,7 +748,7 @@
             // Escape hatch: operators in air-gapped or test environments
             // can override. Marked clearly as risk-acknowledged so the
             // intent is unambiguous in audit logs.
-            els.actions.appendChild(makeTextLink('Continue anyway (not recommended)', function () {
+            els.actions.appendChild(makeTextLink(tt('clock_skew.out_cta_override'), function () {
                 self._goto('c');
             }));
             return;
@@ -648,24 +760,25 @@
         var absMs = Number.isFinite(cs.absSkewMs)
             ? cs.absSkewMs
             : Math.abs(Number.isFinite(cs.skewMs) ? cs.skewMs : 0);
-        els.title.textContent = 'Clock is in sync';
-        els.sub.textContent   = 'Your host clock matches internet time within the safe window.';
+        els.title.textContent = tt('clock_skew.ok_title');
+        els.sub.textContent   = tt('clock_skew.ok_sub');
         els.detail.innerHTML =
             '<div class="enm-clock-card enm-clock-card-ok">'
               + '<div class="enm-clock-card-icon" aria-hidden="true">✓</div>'
               + '<div class="enm-clock-card-body">'
-                + '<div class="enm-clock-card-title">±' + escapeHtml(String(absMs)) + 'ms</div>'
+                + '<div class="enm-clock-card-title">' + escapeHtml(tt('clock_skew.ok_card_title', { absMs: String(absMs) })) + '</div>'
                 + '<div class="enm-clock-card-sub">'
-                  + 'Measured against ' + escapeHtml(cs.source || 'an internet time source') + '. '
-                  + 'DPoS signing windows are 4 s wide, so you have plenty of margin.'
+                  + tt('clock_skew.ok_card_body', {
+                      source: escapeHtml(cs.source || tt('clock_skew.ok_default_source')),
+                  })
                 + '</div>'
               + '</div>'
             + '</div>';
 
         els.actions.appendChild(
-            makeBtn('Continue', 'primary hero', function () { self._goto('c'); })
+            makeBtn(tt('clock_skew.ok_cta_continue'), 'primary hero', function () { self._goto('c'); })
         );
-        els.actions.appendChild(makeTextLink('Recheck', function () {
+        els.actions.appendChild(makeTextLink(tt('clock_skew.ok_cta_recheck'), function () {
             self._runClockSkewProbe(els, seq);
         }));
     };
@@ -679,17 +792,44 @@
         els.progress.hidden   = false;
         els.actions.innerHTML = '';
 
+        // alpha.28.1 bug fix — the previous version had two real bugs the
+        // setup-wizard deep audit caught:
+        //   (B1) the fallback poll IIFE was unkillable. Its only stop
+        //        condition was `!self.root.isConnected`, which doesn't
+        //        fire when the operator clicks Back from Card B mid-
+        //        install. The poll kept running, calling applyStatus
+        //        on stale DOM, and on `phase==='done'` could yank the
+        //        operator forward into Card B's Done state even though
+        //        they had navigated to a different card.
+        //   (R1) Card B's applyStatus had no `done` guard like Card B2
+        //        does. SSE + poll both delivering `phase==='done'` ran
+        //        _renderCardBDone twice — second call wrote into a DOM
+        //        that the first had already replaced.
+        // Fixed by:
+        //   - latching `installComplete` in a closure so applyStatus
+        //     short-circuits after the first terminal phase observed
+        //   - storing the poll timer on `this._installPollTimer` so
+        //     destroy() and _goto() can clear it
+        //   - gating the poll on `_currentCard === 'b'` so navigation
+        //     away cancels future ticks even if a tick is mid-flight
+        var installComplete = false;
+
         function applyStatus(s) {
             if (!s) { return; }
+            if (installComplete) { return; }
             var pct = (s.bytesTotal && s.bytesDownloaded)
                 ? Math.min(100, Math.floor((s.bytesDownloaded / s.bytesTotal) * 100))
                 : (s.phase === 'done' ? 100 : 0);
             els.bar.style.width = pct + '%';
             els.status.textContent = phaseLabel(s);
             if (s.phase === 'done') {
+                installComplete = true;
+                self._teardownInstallTracking();
                 self._renderCardBDone(els);
             }
             if (s.phase === 'failed') {
+                installComplete = true;
+                self._teardownInstallTracking();
                 els.title.textContent = t('friendly.setup.card_b.phase_failed');
                 els.sub.textContent   = t('friendly.setup.card_b.failed_help');
                 els.actions.innerHTML = '';
@@ -717,17 +857,28 @@
 
         startReq.then(function (resp) {
             applyStatus(resp && resp.status);
-            // Fallback poll in case SSE drops.
+            // Fallback poll in case SSE drops. Bound to `this._currentCard
+            // === 'b'` AND `installComplete === false` so navigation away
+            // and terminal phases both kill the loop. Timer handle is
+            // stored on `this` so destroy() / _teardownInstallTracking
+            // can cancel a pending tick.
             (function poll() {
+                if (installComplete) { return; }
+                if (self._currentCard !== 'b') { return; }
                 if (!self.root.isConnected) { return; }
                 self.api.get('/setup/install-status/mainchain', { skipCache: true })
                     .then(function (s) {
                         applyStatus(s);
-                        if (!s || (s.phase !== 'done' && s.phase !== 'failed')) {
-                            setTimeout(poll, 2500);
+                        if (!installComplete && self._currentCard === 'b'
+                            && (!s || (s.phase !== 'done' && s.phase !== 'failed'))) {
+                            self._installPollTimer = setTimeout(poll, 2500);
                         }
                     })
-                    .catch(function () { setTimeout(poll, 4000); });
+                    .catch(function () {
+                        if (!installComplete && self._currentCard === 'b') {
+                            self._installPollTimer = setTimeout(poll, 4000);
+                        }
+                    });
             })();
         }).catch(function (err) {
             applyStatus({ phase: 'failed', error: err && err.message ? err.message : String(err) });
@@ -794,7 +945,7 @@
         els.reveal.innerHTML =
             '<div class="enm-password-reveal">'
               + '<code class="enm-password-value">' + escapeHtml(password) + '</code>'
-              + '<button type="button" class="enm-btn enm-btn-secondary enm-password-copy">'
+              + '<button type="button" class="enm-btn enm-btn-secondary enm-password-copy" aria-label="Copy keystore password">'
                 + escapeHtml(t('friendly.setup.card_c.cta_copy'))
               + '</button>'
             + '</div>'
@@ -803,18 +954,46 @@
               + '<span>' + escapeHtml(t('friendly.setup.card_c.ack')) + '</span>'
             + '</label>';
 
+        // alpha.28.1 batch 58 — routed through enmCopyToClipboard so the
+        // feature-detect + writeText path is shared with the other four
+        // copy sites. Custom onFallback preserves the select-the-password
+        // affordance so the operator can ⌘-C manually when the iframe
+        // sandbox blocks the API. Round-6 clipboard-UX audit a8a932d2.
         var copyBtn = els.reveal.querySelector('.enm-password-copy');
         copyBtn.addEventListener('click', function () {
-            try {
-                navigator.clipboard.writeText(password).then(function () {
-                    copyBtn.textContent = t('friendly.setup.card_c.cta_copied');
-                    copyBtn.dataset.copied = '1';
-                    setTimeout(function () {
-                        copyBtn.textContent = t('friendly.setup.card_c.cta_copy');
-                        delete copyBtn.dataset.copied;
-                    }, 1500);
-                });
-            } catch (e) { /* clipboard may be blocked; user can select manually */ }
+            root.enmCopyToClipboard(password, {
+                btn: copyBtn,
+                copiedLabel: t('friendly.setup.card_c.cta_copied'),
+                resetMs: 1500,
+                onFallback: function () {
+                    // Programmatically select the password code so Ctrl+C works.
+                    try {
+                        var passEl = els.reveal.querySelector('.enm-password-value');
+                        if (passEl) {
+                            var range = document.createRange();
+                            range.selectNodeContents(passEl);
+                            var sel = root.getSelection();
+                            sel.removeAllRanges();
+                            sel.addRange(range);
+                        }
+                    } catch (selErr) { /* ignore — operator can manually triple-click */ }
+                    // alpha.28.1 batch 88 (Round-28 finding #2) — also
+                    // surface a warning toast so the operator knows the
+                    // clipboard API was blocked and the password is
+                    // selected for manual copy. Previous shape selected
+                    // silently → operator saw nothing happen and rage-
+                    // clicked. Mirrors the validator-card pattern from
+                    // batch 87. The keystore-password reveal is a one-
+                    // shot ceremony so the missed signal is especially
+                    // costly here.
+                    if (self.notifications) {
+                        self.notifications.warning(
+                            t('friendly.setup.card_c.copy_fail_title'),
+                            t('friendly.setup.card_c.copy_fail_body')
+                        );
+                    }
+                },
+            });
         });
 
         els.actions.innerHTML = '';

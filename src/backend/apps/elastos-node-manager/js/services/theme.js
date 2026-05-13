@@ -80,6 +80,22 @@
                 try { localStorage.setItem(VALUE_KEY, theme); } catch (e) {}
             }
         });
+
+        // alpha.28.1 batch 22 — cross-tab theme sync. Without this, an
+        // operator with two ENM windows open who flips the theme in
+        // window A leaves window B on the old theme until manual
+        // reload. The `storage` event fires in every OTHER tab when
+        // localStorage changes, which is exactly what we want.
+        // Multi-window audit ac31f3a08 flagged this as the cheapest of
+        // its 6 cross-tab gaps.
+        root.addEventListener('storage', function (ev) {
+            if (!ev || !ev.key) { return; }
+            if (ev.key === VALUE_KEY && (ev.newValue === 'light' || ev.newValue === 'dark')) {
+                applyTheme(ev.newValue);
+            }
+            // MODE_KEY changes don't re-apply theme — that's a one-time
+            // policy switch the operator already saw confirmation for.
+        });
     }
 
     /**

@@ -88,12 +88,20 @@
             return;
         }
         item.node.classList.add('enm-toast-leaving');
-        // Wait for the CSS transition; remove after.
+        // Wait for the CSS transition; remove after. Under
+        // prefers-reduced-motion the CSS catch-all forces the transition
+        // to ~0.01ms, so a 200ms removal timer leaves the node stuck on
+        // the page for a moment with no visible animation. Drop to ~10ms
+        // in that branch so dismissal feels instant.
+        var reduceMotion = (typeof window !== 'undefined' && window.enmReducedMotion)
+            ? window.enmReducedMotion()
+            : false;
+        var hideMs = reduceMotion ? 10 : 200;
         setTimeout(function () {
             if (item.node.parentNode) {
                 item.node.parentNode.removeChild(item.node);
             }
-        }, 200);
+        }, hideMs);
     };
 
     Notifications.prototype.clear = function () {
@@ -101,12 +109,33 @@
         this._items.slice().forEach(function (t) { self.dismiss(t.id, true); });
     };
 
-    /** @private */
+    /** @private
+     *
+     * Severity-aware trim. The previous policy dropped the OLDEST
+     * item regardless of severity — a stale critical healing proposal
+     * could get evicted by a flood of info toasts that arrived after
+     * it. Round-7 notification-fatigue audit ad49e60e flagged this as
+     * "newest-wins risks dropping context".
+     *
+     * New policy:
+     *   1. While over cap AND any non-critical exists: drop oldest
+     *      non-critical first.
+     *   2. Only if EVERY visible toast is critical (rare — would mean
+     *      5+ concurrent CRITICAL alerts) fall through to dropping the
+     *      oldest critical.
+     */
     Notifications.prototype._trimVisible = function () {
         while (this._items.length > MAX_VISIBLE) {
-            var oldest = this._items.shift();
-            if (oldest.node.parentNode) {
-                oldest.node.parentNode.removeChild(oldest.node);
+            // Find oldest non-critical first.
+            var idx = -1;
+            for (var i = 0; i < this._items.length; i += 1) {
+                if (this._items[i].severity !== 'critical') { idx = i; break; }
+            }
+            // No non-criticals: fall through to oldest critical.
+            if (idx === -1) { idx = 0; }
+            var dropped = this._items.splice(idx, 1)[0];
+            if (dropped.node.parentNode) {
+                dropped.node.parentNode.removeChild(dropped.node);
             }
         }
     };
@@ -119,7 +148,11 @@
         el.id = actual;
         el.className = 'enm-toast-container';
         el.setAttribute('role', 'region');
-        el.setAttribute('aria-live', 'polite');
+        // a11y: container does NOT carry aria-live; each toast supplies
+        // role="alert" (critical) or role="status" (info/warning/healing)
+        // so announcement priority matches severity. Pairing container
+        // aria-live="polite" with an inner role="alert" caused double
+        // announcements on Safari and older NVDA.
         el.setAttribute('aria-label', 'Notifications');
         // Anchor inside .enm-main so position:absolute lands below the
         // chrome (titlebar + tabs) without us needing to know their
@@ -136,13 +169,49 @@
         node.id = id;
         node.className = 'enm-toast enm-toast-' + sev;
         node.setAttribute('role', sev === 'critical' ? 'alert' : 'status');
+        // Make the toast itself programmatically-focusable so keyboard
+        // users can Tab into a critical alert and read it; pair with an
+        // Esc-to-dismiss handler scoped to the toast so the operator
+        // doesn't need to hunt for the X button.
+        node.setAttribute('tabindex', '-1');
+        node.addEventListener('keydown', function (ev) {
+            if (ev.key === 'Escape') {
+                ev.stopPropagation();
+                parent.dismiss(id);
+            }
+        });
 
         var head = document.createElement('div');
         head.className = 'enm-toast-head';
 
         var title = document.createElement('div');
         title.className = 'enm-toast-title';
-        title.textContent = args.title;
+        // a11y/WCAG 1.4.1: severity was conveyed by border-left colour only.
+        // Colour-blind operators couldn't tell info from warning from
+        // critical. Prepend a screen-reader-only severity word so the
+        // category is part of the announcement; sighted operators still
+        // see the coloured stripe + (eventually) an icon once the shared
+        // status-icon primitive lands. The mapping covers all four
+        // severities so the span is never blank.
+        // alpha.28.1 batch 38 — sourced from strings.js notification.sr_*
+        // keys so a locale swap covers the SR severity prefix. Falls
+        // through enmTOrFallback to the inline default if strings.js
+        // failed to load. The four severities are exhaustive.
+        var sevKey = 'notification.sr_' + sev;
+        var sevWord = t(sevKey);
+        if (!sevWord || sevWord === sevKey) {
+            sevWord = ({
+                info:     'Notice',
+                warning:  'Warning',
+                critical: 'Critical',
+                healing:  'Action needed',
+            })[sev] || 'Notice';
+        }
+        var sevTag = document.createElement('span');
+        sevTag.className = 'enm-sr-only';
+        sevTag.textContent = sevWord + ': ';
+        title.appendChild(sevTag);
+        title.appendChild(document.createTextNode(args.title));
         head.appendChild(title);
 
         var dismissBtn = document.createElement('button');

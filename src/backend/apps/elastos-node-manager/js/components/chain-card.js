@@ -91,16 +91,43 @@
         }
         // Live-metric poll — height/peers/uptime move constantly while
         // the chain is alive. 5s matches alpha.18; backend can absorb it
-        // and the dashboard feels live.
-        this._metricsTimer = setInterval(function () { self.refresh(); }, 5_000);
+        // and the dashboard feels live. alpha.28.1 batch 27 — wrapped
+        // in enmUseVisibilityPause so the 720 fetches/hr stop when the
+        // tab is backgrounded (audit a96c7d71). Falls back to raw
+        // setInterval if the helper failed to load.
+        if (typeof root !== 'undefined' && typeof root.enmUseVisibilityPause === 'function') {
+            this._metricsPauser = root.enmUseVisibilityPause(function () { self.refresh(); }, 5_000);
+        } else {
+            this._metricsTimer = setInterval(function () { self.refresh(); }, 5_000);
+        }
         // Sync poll — adaptive cadence. Drives the PowerCircle percent
-        // and the primary-metric "X / Y" line.
+        // and the primary-metric "X / Y" line. alpha.28.1 batch 31 —
+        // visibility listener wakes the chained-setTimeout chain on
+        // resume (the _syncPausedByHidden flag is set in _refreshSync
+        // when document.hidden at scheduling time).
+        this._onSyncVisChange = function () {
+            if (self._destroyed) { return; }
+            if (typeof document !== 'undefined' && !document.hidden && self._syncPausedByHidden) {
+                self._syncPausedByHidden = false;
+                self._refreshSync();
+            }
+        };
+        if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+            document.addEventListener('visibilitychange', this._onSyncVisChange);
+        }
         this._refreshSync();
         // 0.2.0-alpha.7 — DPoS rotation poll (improvement #02). 60s
         // cadence; rotation only changes on round boundaries so no need
         // to hammer the RPC faster than that.
         this._refreshRotation();
-        this._rotationTimer = setInterval(function () { self._refreshRotation(); }, 60_000);
+        // alpha.28.1 batch 30 — visibility-pause wrap on the 60s
+        // rotation poll. Saves 60 hidden-tab fetches/hr; resume-tick
+        // re-fetches immediately so the rotation strip stays accurate.
+        if (typeof root !== 'undefined' && typeof root.enmUseVisibilityPause === 'function') {
+            this._rotationPauser = root.enmUseVisibilityPause(function () { self._refreshRotation(); }, 60_000);
+        } else {
+            this._rotationTimer = setInterval(function () { self._refreshRotation(); }, 60_000);
+        }
         // Height-series sparkline. Subscribe once on mount; the service
         // bootstraps with a GET /history then layers SSE deltas on top.
         if (this.heightSeries) {
@@ -114,14 +141,34 @@
 
     ChainCard.prototype.destroy = function () {
         this._destroyed = true;
+        if (this._metricsPauser)   { try { this._metricsPauser.stop(); } catch (_) { /* idempotent */ } this._metricsPauser = null; }
         if (this._metricsTimer)    { clearInterval(this._metricsTimer);    this._metricsTimer = null; }
         if (this._uptimeTickTimer) { clearInterval(this._uptimeTickTimer); this._uptimeTickTimer = null; }
+        if (this._rotationPauser)  { try { this._rotationPauser.stop(); } catch (_) { /* idempotent */ } this._rotationPauser = null; }
         if (this._rotationTimer)   { clearInterval(this._rotationTimer);   this._rotationTimer = null; }
         if (this._syncTimer)       { clearTimeout(this._syncTimer);        this._syncTimer = null; }
+        if (this._onSyncVisChange) {
+            try {
+                if (typeof document !== 'undefined' && typeof document.removeEventListener === 'function') {
+                    document.removeEventListener('visibilitychange', this._onSyncVisChange);
+                }
+            } catch (_) { /* swallow */ }
+            this._onSyncVisChange = null;
+        }
         if (this._unsubscribe)     { this._unsubscribe(); this._unsubscribe = null; }
         if (this._unsubSse)        { this._unsubSse();    this._unsubSse = null; }
         if (this._unsubHeight)     { this._unsubHeight(); this._unsubHeight = null; }
         if (this._sparkline)       { this._sparkline.destroy(); this._sparkline = null; }
+        // alpha.28.1 batch 24 — symmetry: chain-card creates+mounts a
+        // PowerCircle at line 184 but previously never called its
+        // destroy(). Cosmetic today (PowerCircle has no timers; its
+        // DOM is removed when `this.root` is removed below), but the
+        // pattern was asymmetric and prone to regress if PowerCircle
+        // ever grows internal listeners. (Lifecycle audit aff18c172.)
+        if (this._powerCircle && typeof this._powerCircle.destroy === 'function') {
+            try { this._powerCircle.destroy(); } catch (_) { /* idempotent */ }
+            this._powerCircle = null;
+        }
         // 0.2.0-alpha.1 — tell FleetHealthGradient we're going away so it
         // can drop this chain from its aggregate. Without this, a remount
         // would double-count.
@@ -150,10 +197,21 @@
                 self._applyState({ chainId: self.chainId, state: 'unconfigured' });
                 return;
             }
-            self.notifications.warning(
-                'Failed to refresh ' + self.chainId,
-                err && err.message ? err.message : String(err),
-            );
+            // 401 → expired session, suppressed here (the boot path
+            // owns the re-auth UX); without this every 5s poll during
+            // an expired session stacks a fresh "Failed to refresh"
+            // warning. Matches the system-status pattern.
+            if (err && err.status === 401) { return; }
+            // alpha.28.1 batch 19 (audit ad49e60e) — stable id so a
+            // 10-minute backend outage doesn't stack 120 identical
+            // toasts. show() dedupes by id, updating the existing
+            // toast in place instead of mounting a fresh one.
+            self.notifications.show({
+                id: 'chain-refresh-fail-' + self.chainId,
+                severity: 'warning',
+                title: 'Failed to refresh ' + self.chainId,
+                body: err && err.message ? err.message : String(err),
+            });
         }).then(function () {
             self._refreshInFlight = null;
         }, function () {
@@ -188,6 +246,11 @@
 
         this._stateSubtitle = document.createElement('p');
         this._stateSubtitle.className = 'enm-chain-card-state';
+        // a11y: state flips (healthy → stalled, alive → stopped, etc.)
+        // were silent for screen-reader users. role="status" makes the
+        // subtitle a polite live region so the new state is announced
+        // without yanking focus.
+        this._stateSubtitle.setAttribute('role', 'status');
         this._stateSubtitle.textContent = t('chain_state.unconfigured');
         header.appendChild(this._stateSubtitle);
 
@@ -198,6 +261,10 @@
         // via the [data-sse-state] attribute on the card root.
         this._reconnectPill = document.createElement('span');
         this._reconnectPill.className = 'enm-chain-reconnect';
+        // a11y: SSE drop was visually flagged but silent. role="status"
+        // announces the change once when the pill un-hides (without
+        // aria-live="polite" we'd double-announce on Safari/older NVDA).
+        this._reconnectPill.setAttribute('role', 'status');
         this._reconnectPill.textContent = t('chain_card.sse_reconnecting') || 'Reconnecting…';
         this._reconnectPill.hidden = true;
         header.appendChild(this._reconnectPill);
@@ -355,7 +422,14 @@
         this._primaryLabel.textContent = formatPrimaryLabel(t, coarse, height, null);
 
         // Stats strip.
-        this._statFields.peers.textContent   = state && state.peers         != null ? String(state.peers) : '—';
+        // 0.2.0-alpha.28.1 — peers/latency/skew numbers now go through
+        // enmFormatNumber so thousands group consistently with block
+        // height (and screen readers get a steady rhythm). Falls back to
+        // the raw value if the util didn't load.
+        var fmtN = (typeof window !== 'undefined' && window.enmFormatNumber)
+            ? window.enmFormatNumber
+            : function (n) { return (n == null || !isFinite(n)) ? '—' : String(n); };
+        this._statFields.peers.textContent   = state && state.peers         != null ? fmtN(state.peers) : '—';
         // 0.2.0-alpha.7 — peer quality hover (improvement #12). Backend
         // populates `peerSummary` from getnodestate.neighbors; surface as
         // a title on the peers cell so a hover shows the breakdown the
@@ -366,14 +440,14 @@
             var ps = state && state.peerSummary;
             if (ps && (ps.latencyMsAvg != null || (ps.versions && ps.versions.length) || ps.timeOffsetMaxAbsMs != null)) {
                 var lines = [];
-                if (ps.latencyMsAvg != null) lines.push('Avg ping: ' + ps.latencyMsAvg + ' ms');
+                if (ps.latencyMsAvg != null) lines.push('Avg ping: ' + fmtN(ps.latencyMsAvg) + ' ms');
                 if (ps.versions && ps.versions.length) {
                     lines.push('Versions: ' + ps.versions.map(function (v) {
-                        return v.version + ' ×' + v.count;
+                        return v.version + ' ×' + fmtN(v.count);
                     }).join(', '));
                 }
                 if (ps.timeOffsetMaxAbsMs != null) {
-                    lines.push('Max clock skew: ±' + ps.timeOffsetMaxAbsMs + ' ms');
+                    lines.push('Max clock skew: ±' + fmtN(ps.timeOffsetMaxAbsMs) + ' ms');
                 }
                 peersCell.title = lines.join('\n');
             } else {
@@ -453,22 +527,37 @@
         if (coarse === 'stopped') {
             return t('chain_card.primary_metric_off');
         }
+        // Backend contract guard (audit a3e53e9a) — every site below
+        // calls `.toLocaleString()` directly on the height field.
+        // toLocaleString exists on strings AND numbers but the string
+        // overload doesn't group thousands, so a backend that ever
+        // typed heights as JSON strings (`"943210"`) would silently
+        // break the display. enmFormatNumber coerces via Number() and
+        // routes through the canonical NaN/Infinity → "—" guard.
+        var fmtH = (typeof window !== 'undefined' && window.enmFormatNumber)
+            ? function (v) {
+                var n = typeof v === 'number' ? v : Number(v);
+                return window.enmFormatNumber(n);
+            }
+            : function (v) {
+                return (v == null) ? '—' : String(v);
+            };
         if (syncSnapshot) {
             var basicallySynced = syncSnapshot.synced
                 || (typeof syncSnapshot.blocksBehind === 'number'
                     && syncSnapshot.blocksBehind <= TREAT_AS_SYNCED_THRESHOLD);
             if (basicallySynced && syncSnapshot.localHeight != null) {
-                return syncSnapshot.localHeight.toLocaleString();
+                return fmtH(syncSnapshot.localHeight);
             }
             if (syncSnapshot.networkHeight != null && syncSnapshot.localHeight != null) {
-                return syncSnapshot.localHeight.toLocaleString()
-                    + ' / ' + syncSnapshot.networkHeight.toLocaleString();
+                return fmtH(syncSnapshot.localHeight)
+                    + ' / ' + fmtH(syncSnapshot.networkHeight);
             }
             if (syncSnapshot.localHeight != null) {
-                return syncSnapshot.localHeight.toLocaleString();
+                return fmtH(syncSnapshot.localHeight);
             }
         }
-        if (height != null) return height.toLocaleString();
+        if (height != null) return fmtH(height);
         return '—';
     }
 
@@ -514,15 +603,31 @@
             self.notifications.info(self.chainId + ' ' + kind, '');
             return self.refresh();
         }).catch(function (err) {
+            // alpha.28.1 batch 52 — 401 suppressed; boot path owns
+            // re-auth UX. Without this, expired-session caused the
+            // operator's Start/Stop/Restart click to surface a
+            // generic "Failed to start" toast on top of whatever
+            // the error pane was already saying.
+            if (err && err.status === 401) { return; }
             // Host-conflict 409 surfaces structured remediation steps.
+            // alpha.28.1 batch 68 (Round-19B audit) — defensive shape
+            // validation on the conflict envelope. Backend bug or stale-
+            // cache replay could ship `{ description: undefined,
+            // remediation: [{foo: 'bar'}] }` — the previous shape rendered
+            // the resulting critical toast as "• undefined" and
+            // "[object Object]" verbatim. Operator can't act on that.
             if (err && err.body && Array.isArray(err.body.conflicts)
                 && err.body.conflicts.length > 0) {
                 var blockers = err.body.conflicts.filter(function (c) {
                     return c && c.severity === 'CRITICAL';
                 });
                 var summary = blockers.map(function (c) {
-                    var firstStep = (c.remediation && c.remediation[0]) || '';
-                    return '• ' + c.description + (firstStep ? ('\n   ' + firstStep) : '');
+                    var firstStep = (c.remediation && c.remediation[0]);
+                    var stepStr = (typeof firstStep === 'string' && firstStep.length > 0)
+                        ? firstStep : '';
+                    var descStr = (typeof c.description === 'string' && c.description.length > 0)
+                        ? c.description : 'Host conflict';
+                    return '• ' + descStr + (stepStr ? ('\n   ' + stepStr) : '');
                 }).join('\n');
                 self.notifications.critical(
                     'Cannot ' + kind + ' ' + self.chainId + ' — host conflicts',
@@ -535,7 +640,18 @@
                 );
             }
         }).then(function () {
+            // alpha.28.1 batch 60 (Round-18 audit) — explicitly clear
+            // btn.disabled here. _do() sets `btn.disabled = true` at the
+            // start; on the success path _applyState's downstream call
+            // would re-enable it, but on the 401-suppressed path
+            // refresh() early-returns at the top guard and _applyState
+            // never runs. Result before this fix: a single 401 on
+            // Start/Stop/Restart leaves the button greyed out until a
+            // non-401 poll lands (5+ seconds, or forever if the session
+            // truly expired). Clearing disabled here re-evaluates from
+            // coarse state via the queued refresh().
             btn.textContent = prev;
+            btn.disabled = false;
             self._busy = false;
             self.refresh();
         });
@@ -564,6 +680,19 @@
             self._applySyncSnapshot(null);
         }).then(function () {
             if (self._destroyed || !self.root || !self.root.isConnected) return;
+            // alpha.28.1 batch 31 — pause adaptive sync poll when the
+            // tab is backgrounded. The chained-setTimeout pattern
+            // doesn't fit the standard enmUseVisibilityPause helper
+            // (which is setInterval-shaped), so we inline:
+            //   - hidden: set a paused flag, skip scheduling.
+            //   - visible (handled by _onSyncVisibilityChange wired at
+            //     mount): clear flag + re-enter _refreshSync to catch
+            //     up immediately.
+            // Saves up to 360 fetches/hr while syncing on a hidden tab.
+            if (typeof document !== 'undefined' && document.hidden) {
+                self._syncPausedByHidden = true;
+                return;
+            }
             var nextMs = (self._lastCoarseState === 'syncing') ? 10_000 : 60_000;
             self._syncTimer = setTimeout(function () { self._refreshSync(); }, nextMs);
         });
@@ -687,8 +816,17 @@
             text.textContent = 'On duty now · signing the current block';
         } else if (inSlate) {
             strip.dataset.state = 'inslate';
+            // alpha.28.1 batch 68 (Round-19B audit) — guard
+            // rotationLength being absent/null. The branch guard at
+            // line 786 (`data.ourIndex >= 0`) validates ourIndex but
+            // NOT rotationLength. If the backend omits the field
+            // (one-direction RPC drift) the previous shape rendered
+            // "Your slot · 3 of undefined" verbatim to the operator.
+            // Matches the defensive treatment already applied to
+            // nextArbiters in the next-slate branch below.
+            var rl = (data.rotationLength != null) ? data.rotationLength : '—';
             text.textContent = 'Your slot · '
-                + (data.ourIndex + 1) + ' of ' + data.rotationLength;
+                + (data.ourIndex + 1) + ' of ' + rl;
         } else {
             strip.dataset.state = 'nextslate';
             text.textContent = 'Queued for next round · '

@@ -38,6 +38,12 @@
         this.root = document.createElement('section');
         this.root.className = 'enm-card enm-producer-identity';
         this._account = null; // { publicKey, address }
+        // alpha.28.1 batch 24 — _destroyed flag. mount() fires
+        // /setup/keystore/account + the secondary /chains/mainchain/
+        // producer fetch in _renderBinding; both used to resolve into
+        // a detached this.root after destroy(), mutating innerHTML on
+        // a removed subtree. (Lifecycle audit aff18c172.)
+        this._destroyed = false;
     }
 
     ProducerIdentity.prototype.mount = function (parent) {
@@ -47,12 +53,14 @@
     };
 
     ProducerIdentity.prototype.destroy = function () {
+        this._destroyed = true;
         if (this.root.parentNode) this.root.parentNode.removeChild(this.root);
     };
 
     ProducerIdentity.prototype.refresh = function () {
         var self = this;
         return this.api.get('/setup/keystore/account', { skipCache: true }).then(function (r) {
+            if (self._destroyed) { return; }
             if (!r || !r.exists) {
                 self._renderEmpty();
                 return;
@@ -63,9 +71,68 @@
                 return;
             }
             self._render();
-        }).catch(function () {
-            self._renderEmpty();
+        }).catch(function (err) {
+            if (self._destroyed) { return; }
+            // alpha.28.1 batch 50 (audit a3ca028e) — distinguish "no
+            // keystore yet" from "backend errored". Previously both
+            // paths called _renderEmpty which hides the card; an
+            // operator with a 500 / network outage / expired session
+            // saw the card vanish indistinguishably from a clean
+            // first-boot state. Now: 401 is suppressed (boot owns
+            // re-auth), 404 falls to _renderEmpty (legitimate
+            // not-yet-created), everything else falls to _renderError.
+            if (err && err.status === 401) { return; }
+            if (err && err.status === 404) {
+                self._renderEmpty();
+                return;
+            }
+            if (typeof self._renderError === 'function') {
+                self._renderError(err);
+            } else {
+                self._renderEmpty();
+            }
         });
+    };
+
+    /**
+     * @private
+     * Distinct from _renderEmpty (no keystore yet — silent). Surfaces
+     * a small inline error with a Retry affordance so the operator can
+     * tell a transient backend hiccup from a clean first-boot state.
+     */
+    ProducerIdentity.prototype._renderError = function (err) {
+        var self = this;
+        this.root.hidden = false;
+        var detail = (err && err.message) ? err.message : 'Couldn\'t reach the keystore service.';
+        // alpha.28.1 batch 71 (Round-19C audit finding #3) — the previous
+        // shape used escapeAttr() on `detail` despite it landing in HTML
+        // body context, not an attribute. The helper at line 383 escapes
+        // the same five chars an escapeHtml would, so it was safe today,
+        // BUT signalling escapeAttr where escapeHtml is needed is a
+        // code-smell that won't survive a future copy-paste into an
+        // event-handler attribute (where the helpers diverge). Replace
+        // with the createElement + textContent pattern batch 59 used for
+        // the producer-binding owner row — same DOM, no innerHTML, no
+        // escape-helper choice to second-guess.
+        this.root.innerHTML = '';
+        var head = document.createElement('header');
+        head.className = 'enm-producer-identity-head';
+        var h3 = document.createElement('h3');
+        h3.textContent = 'Producer identity';
+        head.appendChild(h3);
+        this.root.appendChild(head);
+
+        var msg = document.createElement('p');
+        msg.className = 'enm-stub';
+        msg.textContent = detail;
+        this.root.appendChild(msg);
+
+        var retryBtn = document.createElement('button');
+        retryBtn.type = 'button';
+        retryBtn.className = 'enm-btn enm-btn-secondary enm-producer-retry';
+        retryBtn.textContent = 'Retry';
+        retryBtn.addEventListener('click', function () { self.refresh(); });
+        this.root.appendChild(retryBtn);
     };
 
     ProducerIdentity.prototype._renderEmpty = function () {
@@ -122,18 +189,18 @@
                 'at registration; nothing flows back the other way.' +
             '</aside>' +
             '<div class="enm-producer-identity-body">' +
-                '<div class="enm-producer-qr" aria-label="Public key QR code"></div>' +
+                '<div class="enm-producer-qr" role="img" aria-label="Public key QR code"></div>' +
                 '<div class="enm-producer-fields">' +
                     '<div class="enm-producer-field">' +
                         '<span class="enm-producer-field-label">Public key</span>' +
                         '<code class="enm-producer-field-value enm-producer-pubkey"></code>' +
-                        '<button class="enm-btn enm-btn-secondary enm-producer-copy" type="button" data-copy="pubkey">Copy</button>' +
+                        '<button class="enm-btn enm-btn-secondary enm-producer-copy" type="button" data-copy="pubkey" aria-label="Copy public key">Copy</button>' +
                     '</div>' +
                     (addr ? (
                         '<div class="enm-producer-field">' +
                             '<span class="enm-producer-field-label">Address</span>' +
                             '<code class="enm-producer-field-value enm-producer-addr"></code>' +
-                            '<button class="enm-btn enm-btn-secondary enm-producer-copy" type="button" data-copy="address">Copy</button>' +
+                            '<button class="enm-btn enm-btn-secondary enm-producer-copy" type="button" data-copy="address" aria-label="Copy mainchain address">Copy</button>' +
                         '</div>'
                     ) : '') +
                 '</div>' +
@@ -203,15 +270,23 @@
         qrHost.innerHTML = renderQrSvg(pubkey, { size: 168, margin: 2 });
 
         // Wire copy buttons.
+        // alpha.28.1 batch 58 — routed through enmCopyToClipboard so the
+        // feature-detect + writeText + notifications plumbing is shared
+        // with the other four copy sites (settings-tab, setup-conversation,
+        // validator-registration-card, tools-update-card). Round-6
+        // clipboard-UX audit a8a932d2.
         var self = this;
         this.root.querySelectorAll('.enm-producer-copy').forEach(function (b) {
             b.addEventListener('click', function () {
                 var which = b.dataset.copy;
                 var text = which === 'address' ? addr : pubkey;
-                navigator.clipboard.writeText(text).then(function () {
-                    if (self.notifications) self.notifications.info('Copied', which + ' is in the clipboard.');
-                }).catch(function () {
-                    if (self.notifications) self.notifications.warning('Copy failed', 'Select the text and copy manually.');
+                root.enmCopyToClipboard(text, {
+                    notifications: self.notifications,
+                    notifyOnSuccess: true,
+                    successTitle: 'Copied',
+                    successBody: which + ' is in the clipboard.',
+                    failTitle: 'Copy failed',
+                    failBody: 'Select the text and copy manually.',
                 });
             });
         });
@@ -236,8 +311,15 @@
      * (validator-registration-card already covers the unregistered UX).
      */
     ProducerIdentity.prototype._renderBinding = function () {
+        // alpha.28.1 batch 59 — i18n migration of inline English strings.
+        // Round-3 i18n coverage audit (aef9c321). Strings live in
+        // strings.js under producer_binding.*; enmTOrFallback returns the
+        // key unchanged if strings.js failed to load so the UI stays
+        // readable rather than blank.
+        var t = root.enmTOrFallback;
         var self = this;
         this.api.get('/chains/mainchain/producer', { skipCache: true }).then(function (data) {
+            if (self._destroyed) { return; }
             if (!data || !data.enabled) return; // pubkey not configured yet
             var binding = data.binding || 'unknown';
             var chainOwner = data.chainOwnerPubkey || '';
@@ -249,17 +331,26 @@
 
             var heading = document.createElement('h4');
             heading.className = 'enm-producer-binding-heading';
-            heading.textContent = 'On-chain binding';
+            heading.textContent = t('producer_binding.heading');
             section.appendChild(heading);
 
             var chip = document.createElement('span');
             chip.className = 'enm-producer-binding-chip enm-producer-binding-chip-' + binding;
-            chip.textContent = ({
-                bound:        state ? 'Bound — ' + state : 'Bound',
-                unregistered: 'Not yet registered on chain',
-                mismatch:     'MISMATCH — chain reports a different node key',
-                unknown:      'Status unknown',
-            })[binding] || binding;
+            var chipText;
+            if (binding === 'bound') {
+                chipText = state
+                    ? t('producer_binding.chip_bound_state', { state: state })
+                    : t('producer_binding.chip_bound');
+            } else if (binding === 'unregistered') {
+                chipText = t('producer_binding.chip_unregistered');
+            } else if (binding === 'mismatch') {
+                chipText = t('producer_binding.chip_mismatch');
+            } else if (binding === 'unknown') {
+                chipText = t('producer_binding.chip_unknown');
+            } else {
+                chipText = binding;
+            }
+            chip.textContent = chipText;
             section.appendChild(chip);
 
             // Side-by-side: ENM's node pubkey vs the chain's owner pubkey.
@@ -268,36 +359,36 @@
             if (binding === 'bound') {
                 var note = document.createElement('p');
                 note.className = 'enm-producer-binding-note';
-                note.textContent =
-                    'Compare the owner public key below to what Essentials ' +
-                    'shows under your BPoS deposit. If they differ you ' +
-                    'registered under a different wallet — votes and ' +
-                    'rewards will flow there, not here.';
+                note.textContent = t('producer_binding.owner_compare_note');
                 section.appendChild(note);
 
                 if (chainOwner) {
                     var ownerRow = document.createElement('div');
                     ownerRow.className = 'enm-producer-field';
-                    ownerRow.innerHTML =
-                        '<span class="enm-producer-field-label">Owner public key (chain)</span>' +
-                        '<code class="enm-producer-field-value"></code>';
-                    ownerRow.querySelector('code').textContent = chainOwner;
+                    var ownerLabelEl = document.createElement('span');
+                    ownerLabelEl.className = 'enm-producer-field-label';
+                    ownerLabelEl.textContent = t('producer_binding.owner_label');
+                    var ownerValueEl = document.createElement('code');
+                    ownerValueEl.className = 'enm-producer-field-value';
+                    ownerValueEl.textContent = chainOwner;
+                    ownerRow.appendChild(ownerLabelEl);
+                    ownerRow.appendChild(ownerValueEl);
                     section.appendChild(ownerRow);
                 }
 
                 if (chainNode && chainOwner && chainNode.toLowerCase() !== chainOwner.toLowerCase()) {
                     var splitNote = document.createElement('p');
                     splitNote.className = 'enm-producer-binding-note';
-                    splitNote.textContent = 'V2 split-key producer: owner and node keys differ. Normal post-DPoSV2.';
+                    splitNote.textContent = t('producer_binding.split_key_note');
                     section.appendChild(splitNote);
                 }
             } else if (binding === 'mismatch') {
                 var mismatchDetail = document.createElement('p');
                 mismatchDetail.className = 'enm-producer-binding-note';
-                mismatchDetail.textContent =
-                    'ENM holds node pubkey ' + (data.ourPubkey || '') +
-                    ' but the chain returned ' + chainNode + '. ' +
-                    'This is rare — open the audit log and contact support.';
+                mismatchDetail.textContent = t('producer_binding.mismatch_detail', {
+                    ours:   data.ourPubkey || '',
+                    theirs: chainNode || '',
+                });
                 section.appendChild(mismatchDetail);
             }
 
@@ -582,7 +673,16 @@
     function modulesToSvg(modules, size, margin) {
         var n = modules.length;
         var box = n + 2 * margin;
-        var s = '<svg xmlns="http://www.w3.org/2000/svg" width="' + size + '" height="' + size + '" viewBox="0 0 ' + box + ' ' + box + '" shape-rendering="crispEdges">';
+        // a11y: the wrapping `<div class="enm-producer-qr">` already
+        // carries role="img" + aria-label and that's the single "image"
+        // landmark we want screen readers to expose. The inner SVG is
+        // therefore aria-hidden — but we still ship a <title> child as
+        // a JAWS fallback because some older JAWS builds skip the
+        // wrapper and read the SVG directly. role="img" on the SVG was
+        // creating a redundant nested-image landmark (caught by the
+        // ARIA-tree complexity audit).
+        var s = '<svg xmlns="http://www.w3.org/2000/svg" width="' + size + '" height="' + size + '" viewBox="0 0 ' + box + ' ' + box + '" shape-rendering="crispEdges" aria-hidden="true" focusable="false">';
+        s += '<title>Public key QR code</title>';
         s += '<rect width="100%" height="100%" fill="#ffffff"/>';
         var path = '';
         for (var y = 0; y < n; y++) {

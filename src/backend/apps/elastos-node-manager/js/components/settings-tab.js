@@ -22,6 +22,13 @@
         this.root = document.createElement('section');
         this.root.className = 'enm-settings';
         this._cfg = null;
+        // alpha.28.1 batch 16 — _destroyed flag so the GET /config
+        // resolver can't write into a detached form after destroy.
+        // Race-condition audit aaf1f87d flagged that every settings
+        // save (network, advanced, general, RPC toggle, whitelist)
+        // would leak fetch results into a removed root after teardown
+        // (low impact today but pins component closures).
+        this._destroyed = false;
         this._renderShell();
     }
 
@@ -32,16 +39,31 @@
     };
 
     SettingsTab.prototype.destroy = function () {
+        this._destroyed = true;
         if (this.root.parentNode) { this.root.parentNode.removeChild(this.root); }
     };
 
     SettingsTab.prototype.refresh = function () {
         var self = this;
         this.api.get('/config', { skipCache: true }).then(function (data) {
+            if (self._destroyed) { return; }
             self._cfg = data && data.config;
             self._fillForm();
         }).catch(function (err) {
-            self.notifications.warning('Failed to load config', err.message || String(err));
+            if (self._destroyed) { return; }
+            // alpha.28.1 batch 51 — 401 suppressed (boot path owns
+            // re-auth). Expired session was previously surfacing as
+            // "Failed to load config" toast on every drawer-open.
+            if (err && err.status === 401) { return; }
+            // alpha.28.1 batch 19 — stable id so repeated drawer-open
+            // attempts against a 500-ing backend coalesce into one
+            // updating toast. (Audit ad49e60e.)
+            self.notifications.show({
+                id: 'settings-config-load-fail',
+                severity: 'warning',
+                title: 'Failed to load config',
+                body: err.message || String(err),
+            });
         });
     };
 
@@ -130,10 +152,32 @@
     SettingsTab.prototype._buildNetworkSection = function (t) {
         var section = document.createElement('div');
         section.className = 'enm-settings-section';
-        var h = document.createElement('h3'); h.textContent = t('settings.heading_network');
+        // alpha.28.1 batch 33 — section is an ARIA group named by its
+        // heading. Screen readers announce "Network, group" when the
+        // operator enters the section, then per-field labels. The
+        // role+aria-labelledby pair satisfies WCAG 1.3.1 without
+        // touching CSS (which a real <fieldset> swap would have
+        // affected). Form-semantics audit a0b9a3e1 #3.
+        section.setAttribute('role', 'group');
+        section.setAttribute('aria-labelledby', 'enm-settings-h-network');
+        var h = document.createElement('h3');
+        h.id = 'enm-settings-h-network';
+        h.textContent = t('settings.heading_network');
         section.appendChild(h);
 
-        var modeWrap = document.createElement('div'); modeWrap.className = 'enm-settings-row';
+        // alpha.28.1 batch 27 — radio group wrapped in <fieldset><legend>
+        // so screen readers announce the group's purpose ("IP mode:")
+        // when the operator lands on either radio. ARIA Authoring
+        // Practices flag a radio group without a programmatic group
+        // label as a WCAG 1.3.1 bug, not polish. (Form-semantics audit
+        // a0b9a3e1.) The visually-hidden legend keeps the existing
+        // layout — the section H3 already gives sighted users context.
+        var modeWrap = document.createElement('fieldset');
+        modeWrap.className = 'enm-settings-row enm-radio-group';
+        var modeLegend = document.createElement('legend');
+        modeLegend.className = 'enm-sr-only';
+        modeLegend.textContent = t('settings.ip_mode_auto') + ' / ' + t('settings.ip_mode_manual');
+        modeWrap.appendChild(modeLegend);
         this._network = { modeAuto: radio('ipMode', 'auto'), modeManual: radio('ipMode', 'manual') };
         modeWrap.appendChild(label(this._network.modeAuto, t('settings.ip_mode_auto')));
         modeWrap.appendChild(label(this._network.modeManual, t('settings.ip_mode_manual')));
@@ -143,17 +187,38 @@
         this._network.manualInput.type = 'text';
         this._network.manualInput.className = 'enm-settings-input';
         this._network.manualInput.placeholder = t('settings.ip_help');
+        // a11y: placeholder is not a label (WCAG 3.3.2). Add aria-label so
+        // screen-reader users learn what the field expects. The technical
+        // attrs stop iOS from auto-capitalizing / spell-checking an IP.
+        this._network.manualInput.setAttribute('aria-label', t('settings.ip_mode_manual'));
+        this._network.manualInput.setAttribute('autocomplete', 'off');
+        this._network.manualInput.setAttribute('spellcheck', 'false');
+        this._network.manualInput.setAttribute('autocapitalize', 'off');
+        this._network.manualInput.setAttribute('autocorrect', 'off');
         section.appendChild(this._network.manualInput);
 
         var actions = document.createElement('div'); actions.className = 'enm-settings-actions';
         var detectBtn = btn(t('settings.ip_detect_btn'), 'enm-btn-secondary', this._detectIp.bind(this));
         var saveBtn = btn(t('settings.ip_save_btn'),     'enm-btn-primary',   this._saveNetwork.bind(this));
+        // Capture so _saveNetwork can route through enmRunOnce — disabled
+        // + label-swapped while the PUT is in flight so a slow backend
+        // can't get double-saved.
+        this._network.saveBtn = saveBtn;
         actions.appendChild(detectBtn);
         actions.appendChild(saveBtn);
         section.appendChild(actions);
 
         this._network.statusLine = document.createElement('p');
         this._network.statusLine.className = 'enm-settings-status';
+        // a11y: announce save / validation results to screen readers (4.1.3).
+        this._network.statusLine.setAttribute('role', 'status');
+        // alpha.28.1 batch 30 (audit a0b9a3e1) — assign a stable id and
+        // wire aria-describedby on the manualInput so screen-reader
+        // users hear the error text linked to the field on aria-invalid
+        // transitions. Without this, the role="status" announces once
+        // and disappears from the field's accessible-description.
+        this._network.statusLine.id = 'enm-net-status';
+        this._network.manualInput.setAttribute('aria-describedby', 'enm-net-status');
         section.appendChild(this._network.statusLine);
 
         this._sections.network = section;
@@ -164,7 +229,11 @@
     SettingsTab.prototype._buildAdvancedSection = function (t) {
         var section = document.createElement('div');
         section.className = 'enm-settings-section';
-        var h = document.createElement('h3'); h.textContent = t('settings.heading_advanced');
+        section.setAttribute('role', 'group');
+        section.setAttribute('aria-labelledby', 'enm-settings-h-advanced');
+        var h = document.createElement('h3');
+        h.id = 'enm-settings-h-advanced';
+        h.textContent = t('settings.heading_advanced');
         section.appendChild(h);
 
         this._adv = {
@@ -174,6 +243,16 @@
             rpcUser:     textInput(),
             rpcPassword: passwordInput(),
         };
+        // Surface the validation rule BEFORE the operator submits — joi's
+        // regex error message is opaque ("rpcUser fails to match …"). With
+        // the pattern attribute set, browser autofill respects it, the
+        // title= hover summarises the rule, and screen readers read the
+        // expected format from aria-describedby on platforms that wire it.
+        this._adv.rpcUser.setAttribute('pattern', '[A-Za-z0-9]+');
+        this._adv.rpcUser.setAttribute('autocomplete', 'username');
+        this._adv.rpcUser.setAttribute('spellcheck', 'false');
+        this._adv.rpcUser.setAttribute('autocapitalize', 'off');
+        this._adv.rpcUser.title = 'Letters and numbers only (no spaces or symbols).';
 
         var rows = [
             [t('settings.adv_log_level'),   this._adv.logLevel],
@@ -189,11 +268,23 @@
         });
 
         var actions = document.createElement('div'); actions.className = 'enm-settings-actions';
-        actions.appendChild(btn(t('settings.adv_save_btn'), 'enm-btn-primary', this._saveAdvanced.bind(this)));
+        var advSaveBtn = btn(t('settings.adv_save_btn'), 'enm-btn-primary', this._saveAdvanced.bind(this));
+        this._adv.saveBtn = advSaveBtn;
+        actions.appendChild(advSaveBtn);
         section.appendChild(actions);
 
         this._adv.statusLine = document.createElement('p');
         this._adv.statusLine.className = 'enm-settings-status';
+        // a11y: announce save / validation results to screen readers (4.1.3).
+        this._adv.statusLine.setAttribute('role', 'status');
+        // alpha.28.1 batch 30 — describedby on the two validated inputs
+        // in this section (memory, rpcUser) so AT links the error text
+        // to the right field. _saveAdvanced's aria-invalid toggle from
+        // batch 7 was previously surfaced as a floating status with no
+        // programmatic relationship to the offending input.
+        this._adv.statusLine.id = 'enm-adv-status';
+        this._adv.memory.setAttribute('aria-describedby', 'enm-adv-status');
+        this._adv.rpcUser.setAttribute('aria-describedby', 'enm-adv-status');
         section.appendChild(this._adv.statusLine);
 
         this._sections.advanced = section;
@@ -209,8 +300,11 @@
     SettingsTab.prototype._buildRpcCredsSection = function (t) {
         var section = document.createElement('div');
         section.className = 'enm-settings-section';
+        section.setAttribute('role', 'group');
+        section.setAttribute('aria-labelledby', 'enm-settings-h-rpc');
 
         var h = document.createElement('h3');
+        h.id = 'enm-settings-h-rpc';
         h.textContent = t('settings.heading_rpc_creds');
         section.appendChild(h);
 
@@ -241,6 +335,11 @@
         this._creds.panel.className = 'enm-rpc-creds-panel';
         this._creds.statusLine.className = 'enm-settings-status';
         this._creds.whiteStatus.className = 'enm-settings-status';
+        // a11y: announce save / validation results to screen readers (4.1.3).
+        this._creds.statusLine.setAttribute('role', 'status');
+        this._creds.whiteStatus.setAttribute('role', 'status');
+        this._creds.toggleStatus.className = 'enm-settings-status';
+        this._creds.toggleStatus.setAttribute('role', 'status');
 
         section.appendChild(this._creds.panel);
         section.appendChild(this._creds.statusLine);
@@ -292,15 +391,24 @@
         th.textContent = t('settings.rpc_toggle_section');
         toggleSec.appendChild(th);
 
-        var toggleRow = document.createElement('div');
-        toggleRow.className = 'enm-rpc-toggle-row';
+        // alpha.28.1 batch 27 — fieldset+legend around the rpcEnabled
+        // radio pair (WCAG 1.3.1, ARIA radio-group pattern). Visually-
+        // hidden legend; the section H4 already provides sighted
+        // context. (Form-semantics audit a0b9a3e1.)
+        var toggleRow = document.createElement('fieldset');
+        toggleRow.className = 'enm-rpc-toggle-row enm-radio-group';
+        var toggleLegend = document.createElement('legend');
+        toggleLegend.className = 'enm-sr-only';
+        toggleLegend.textContent = t('settings.rpc_toggle_off') + ' / ' + t('settings.rpc_toggle_on');
+        toggleRow.appendChild(toggleLegend);
         toggleRow.appendChild(label(this._creds.toggleOff, t('settings.rpc_toggle_off')));
         toggleRow.appendChild(label(this._creds.toggleOn,  t('settings.rpc_toggle_on')));
-        toggleRow.appendChild(btn(
+        this._creds.toggleSaveBtn = btn(
             t('settings.rpc_toggle_save_btn'),
             'enm-btn-primary enm-rpc-toggle-save',
             this._saveRpcEnabled.bind(this),
-        ));
+        );
+        toggleRow.appendChild(this._creds.toggleSaveBtn);
         toggleSec.appendChild(toggleRow);
 
         var toggleHelp = document.createElement('p');
@@ -328,11 +436,12 @@
         var whiteRow = document.createElement('div');
         whiteRow.className = 'enm-rpc-allow-row';
         whiteRow.appendChild(this._creds.whiteIp);
-        whiteRow.appendChild(btn(
+        this._creds.whiteSaveBtn = btn(
             t('settings.rpc_white_apply_btn'),
             'enm-btn-primary enm-rpc-allow-apply',
             this._saveWhitelist.bind(this),
-        ));
+        );
+        whiteRow.appendChild(this._creds.whiteSaveBtn);
         whiteSec.appendChild(whiteRow);
 
         // chipInput auto-merges locked values, so this passes the server's list
@@ -356,6 +465,13 @@
         uh.textContent = t('settings.rpc_urls_section');
         urlSec.appendChild(uh);
 
+        // alpha.28.1 batch 88 (Round-28 finding #2) — pass notifications
+        // through the row helpers so credValueWithCopy's clipboard-API
+        // fallback can surface a warning toast. Previously the helper
+        // had no operator-feedback channel on copy failure: it selected
+        // the value silently, the operator saw nothing happen, and the
+        // rage-click UX kicked in. Mirrors batch 87's validator-card fix.
+        var nf = this.notifications;
         // Order: Same machine (always safe) → private LAN → public (most exposure last)
         if (d.localUrl) {
             urlSec.appendChild(rpcUrlRow(
@@ -363,6 +479,7 @@
                 d.localUrl,
                 null,
                 false,
+                nf,
             ));
         }
         if (Array.isArray(d.lanUrls)) {
@@ -378,7 +495,7 @@
                     ? t('settings.rpc_url_public_internet')
                     : t('settings.rpc_url_private_network');
                 var warn = kind === 'public' ? t('settings.rpc_url_public_warn') : null;
-                urlSec.appendChild(rpcUrlRow(lbl, u, warn, kind === 'public'));
+                urlSec.appendChild(rpcUrlRow(lbl, u, warn, kind === 'public', nf));
             });
         }
         p.appendChild(urlSec);
@@ -392,7 +509,7 @@
         ch.textContent = t('settings.rpc_creds_section') || 'Credentials';
         credSec.appendChild(ch);
 
-        credSec.appendChild(credRow(t('settings.rpc_field_user'), d.user));
+        credSec.appendChild(credRow(t('settings.rpc_field_user'), d.user, nf));
         credSec.appendChild(credPasswordRow(this, t));
         p.appendChild(credSec);
     };
@@ -410,14 +527,17 @@
         }
         var self = this;
         this._creds.toggleStatus.textContent = t('common.loading');
-        this.api.put('/config/mainchain', { rpcEnabled: enabled }).then(function () {
-            self._creds.toggleStatus.textContent = t('settings.rpc_toggle_saved');
-            if (self._creds.data) self._creds.data.enabled = enabled;
-            // Re-render so the help text reflects the new state.
-            self._renderCredsPanel();
-        }).catch(function (err) {
-            self._creds.toggleStatus.textContent = t('settings.rpc_toggle_save_failed',
-                { error: err.message || String(err) });
+        var savingLabel = t('common.saving') || 'Saving…';
+        return root.enmRunOnce(this._creds.toggleSaveBtn, savingLabel, function () {
+            return self.api.put('/config/mainchain', { rpcEnabled: enabled }).then(function () {
+                self._creds.toggleStatus.textContent = t('settings.rpc_toggle_saved');
+                if (self._creds.data) self._creds.data.enabled = enabled;
+                // Re-render so the help text reflects the new state.
+                self._renderCredsPanel();
+            }).catch(function (err) {
+                self._creds.toggleStatus.textContent = t('settings.rpc_toggle_save_failed',
+                    { error: err.message || String(err) });
+            });
         });
     };
 
@@ -438,12 +558,15 @@
         }
         var self = this;
         this._creds.whiteStatus.textContent = t('common.loading');
-        this.api.put('/config/mainchain', { whiteIPList: list }).then(function () {
-            self._creds.whiteStatus.textContent = t('settings.rpc_white_applied');
-            if (self._creds.data) self._creds.data.whiteIPList = list.slice();
-        }).catch(function (err) {
-            self._creds.whiteStatus.textContent = t('settings.rpc_white_apply_failed',
-                { error: err.message || String(err) });
+        var savingLabel = t('common.saving') || 'Saving…';
+        return root.enmRunOnce(this._creds.whiteSaveBtn, savingLabel, function () {
+            return self.api.put('/config/mainchain', { whiteIPList: list }).then(function () {
+                self._creds.whiteStatus.textContent = t('settings.rpc_white_applied');
+                if (self._creds.data) self._creds.data.whiteIPList = list.slice();
+            }).catch(function (err) {
+                self._creds.whiteStatus.textContent = t('settings.rpc_white_apply_failed',
+                    { error: err.message || String(err) });
+            });
         });
     };
 
@@ -457,7 +580,11 @@
     SettingsTab.prototype._buildGeneralSection = function (t) {
         var section = document.createElement('div');
         section.className = 'enm-settings-section';
-        var h = document.createElement('h3'); h.textContent = t('settings.heading_general');
+        section.setAttribute('role', 'group');
+        section.setAttribute('aria-labelledby', 'enm-settings-h-general');
+        var h = document.createElement('h3');
+        h.id = 'enm-settings-h-general';
+        h.textContent = t('settings.heading_general');
         section.appendChild(h);
 
         this._gen = {
@@ -476,11 +603,19 @@
         });
 
         var actions = document.createElement('div'); actions.className = 'enm-settings-actions';
-        actions.appendChild(btn(t('settings.general_save_btn'), 'enm-btn-primary', this._saveGeneral.bind(this)));
+        var genSaveBtn = btn(t('settings.general_save_btn'), 'enm-btn-primary', this._saveGeneral.bind(this));
+        this._gen.saveBtn = genSaveBtn;
+        actions.appendChild(genSaveBtn);
         section.appendChild(actions);
 
         this._gen.statusLine = document.createElement('p');
         this._gen.statusLine.className = 'enm-settings-status';
+        // a11y: announce save / validation results to screen readers (4.1.3).
+        this._gen.statusLine.setAttribute('role', 'status');
+        // alpha.28.1 batch 30 — describedby on audit-retention so the
+        // 0..3650 days validation error binds to the field.
+        this._gen.statusLine.id = 'enm-gen-status';
+        this._gen.auditRetention.setAttribute('aria-describedby', 'enm-gen-status');
         section.appendChild(this._gen.statusLine);
 
         this._sections.general = section;
@@ -518,47 +653,94 @@
     SettingsTab.prototype._detectIp = function () {
         // Settings → Network → "Detect now". Hits the system endpoint that
         // already wraps ExtIpResolver (see routes/system.js).
-        this._network.statusLine.textContent = 'Detecting...';
+        // alpha.28.1 batch 85 (Round-25 finding #1) — status line text
+        // routed through strings.js settings.ip_* keys so locale switches
+        // cover the Detect-now flow. Previous shape leaked four
+        // hardcoded English literals despite the rest of the file
+        // routing every operator-visible status string through enmT.
+        var t = root.enmTOrFallback;
+        this._network.statusLine.textContent = t('settings.ip_detecting');
         var self = this;
         this.api.get('/system/extip', { skipCache: true }).then(function (data) {
             if (data && data.ok && data.ip) {
-                self._network.statusLine.textContent = 'Detected: ' + data.ip;
+                self._network.statusLine.textContent = t('settings.ip_detected', { ip: data.ip });
             } else {
-                self._network.statusLine.textContent = 'Detection failed: ' + (data && data.reason ? data.reason : 'unknown');
+                var reason = (data && data.reason) ? data.reason : t('settings.ip_detect_unknown');
+                self._network.statusLine.textContent = t('settings.ip_detect_failed', { reason: reason });
             }
         }).catch(function (err) {
-            self._network.statusLine.textContent = 'Detection failed: ' + (err.message || String(err));
+            self._network.statusLine.textContent = t('settings.ip_detect_failed', {
+                reason: err.message || String(err),
+            });
         });
     };
 
     /** @private */
     SettingsTab.prototype._saveNetwork = function () {
+        var t = root.enmTOrFallback;
+        // alpha.28.1 batch 85 (Round-25 finding #2) — client-side
+        // validation parity with _saveAdvanced/_saveGeneral. Clear any
+        // stale aria-invalid from a previous failed save so screen
+        // readers don't keep announcing the old error as the operator
+        // edits.
+        this._network.manualInput.removeAttribute('aria-invalid');
         var mode = this._network.modeManual.checked ? 'manual' : 'auto';
         var manualValue = this._network.manualInput.value.trim();
+        // In manual mode we MUST have a value. The previous shape POSTed
+        // {mode:'manual', manualValue:''} to /config/network and let the
+        // operator wait for the round-trip error, with no inline
+        // validation message + no focus + no aria-invalid. Sibling
+        // handlers _saveAdvanced/_saveGeneral block on input validation
+        // before the PUT; _saveNetwork was the outlier.
+        if (mode === 'manual' && manualValue.length === 0) {
+            this._network.statusLine.textContent = t('settings.save_failed', {
+                error: t('settings.err_ip_required'),
+            });
+            this._network.manualInput.setAttribute('aria-invalid', 'true');
+            try { this._network.manualInput.focus({ preventScroll: true }); }
+            catch (e) { this._network.manualInput.focus(); }
+            return;
+        }
         var self = this;
-        this.api.put('/config/network', { mode: mode, manualValue: manualValue }).then(function () {
-            self._network.statusLine.textContent = root.enmTOrFallback('settings.saved');
-            self.refresh();
-        }).catch(function (err) {
-            self._network.statusLine.textContent = root.enmTOrFallback('settings.save_failed', { error: err.message });
+        var savingLabel = t('common.saving') || 'Saving…';
+        return root.enmRunOnce(this._network.saveBtn, savingLabel, function () {
+            return self.api.put('/config/network', { mode: mode, manualValue: manualValue })
+                .then(function () {
+                    self._network.statusLine.textContent = t('settings.saved');
+                    self.refresh();
+                })
+                .catch(function (err) {
+                    self._network.statusLine.textContent = t('settings.save_failed', { error: err.message });
+                });
         });
     };
 
     /** @private */
     SettingsTab.prototype._saveAdvanced = function () {
+        var t = root.enmTOrFallback;
+        // Clear stale aria-invalid from a previous failed save so screen
+        // readers don't keep announcing the old error as the operator
+        // edits.
+        this._adv.memory.removeAttribute('aria-invalid');
+        this._adv.rpcUser.removeAttribute('aria-invalid');
         // Client-side guard: server (joi schema in EnmConfigSchema) is the
         // authority, but giving the operator immediate inline feedback is
-        // friendlier than a generic toast after the round-trip.
+        // friendlier than a generic toast after the round-trip. Friendly
+        // ranges (MB → "512 MB to 32 GB") read better than ".." notation.
         var memMb = parseInt(this._adv.memory.value, 10);
         if (!Number.isInteger(memMb) || memMb < 512 || memMb > 32_768) {
-            this._adv.statusLine.textContent = root.enmTOrFallback(
-                'settings.save_failed', { error: 'Memory limit must be 512..32768 MB.' });
+            this._adv.statusLine.textContent = t(
+                'settings.save_failed', { error: t('settings.err_memory_range') });
+            this._adv.memory.setAttribute('aria-invalid', 'true');
+            try { this._adv.memory.focus({ preventScroll: true }); } catch (e) { this._adv.memory.focus(); }
             return;
         }
         var rpcUser = this._adv.rpcUser.value.trim();
         if (rpcUser.length === 0 || !/^[A-Za-z0-9]+$/.test(rpcUser)) {
-            this._adv.statusLine.textContent = root.enmTOrFallback(
-                'settings.save_failed', { error: 'RPC user must be alphanumeric, non-empty.' });
+            this._adv.statusLine.textContent = t(
+                'settings.save_failed', { error: t('settings.err_rpc_user') });
+            this._adv.rpcUser.setAttribute('aria-invalid', 'true');
+            try { this._adv.rpcUser.focus({ preventScroll: true }); } catch (e) { this._adv.rpcUser.focus(); }
             return;
         }
 
@@ -573,21 +755,28 @@
         var pw = this._adv.rpcPassword.value;
         if (pw && pw.length > 0) { body.rpcPassword = pw; }
         var self = this;
-        this.api.put('/config/mainchain', body).then(function () {
-            self._adv.statusLine.textContent = root.enmTOrFallback('settings.saved');
-            self._adv.rpcPassword.value = '';
-            self.refresh();
-        }).catch(function (err) {
-            self._adv.statusLine.textContent = root.enmTOrFallback('settings.save_failed', { error: err.message });
+        var savingLabel = t('common.saving') || 'Saving…';
+        return root.enmRunOnce(this._adv.saveBtn, savingLabel, function () {
+            return self.api.put('/config/mainchain', body).then(function () {
+                self._adv.statusLine.textContent = t('settings.saved');
+                self._adv.rpcPassword.value = '';
+                self.refresh();
+            }).catch(function (err) {
+                self._adv.statusLine.textContent = t('settings.save_failed', { error: err.message });
+            });
         });
     };
 
     /** @private */
     SettingsTab.prototype._saveGeneral = function () {
+        var t = root.enmTOrFallback;
+        this._gen.auditRetention.removeAttribute('aria-invalid');
         var retention = parseInt(this._gen.auditRetention.value, 10);
         if (!Number.isInteger(retention) || retention < 0 || retention > 3650) {
-            this._gen.statusLine.textContent = root.enmTOrFallback(
-                'settings.save_failed', { error: 'Audit retention must be 0..3650 days (0 = forever).' });
+            this._gen.statusLine.textContent = t(
+                'settings.save_failed', { error: t('settings.err_retention') });
+            this._gen.auditRetention.setAttribute('aria-invalid', 'true');
+            try { this._gen.auditRetention.focus({ preventScroll: true }); } catch (e) { this._gen.auditRetention.focus(); }
             return;
         }
         var body = {
@@ -596,11 +785,14 @@
             auditRetentionDays: retention,
         };
         var self = this;
-        this.api.put('/config/general', body).then(function () {
-            self._gen.statusLine.textContent = root.enmTOrFallback('settings.saved');
-            self.refresh();
-        }).catch(function (err) {
-            self._gen.statusLine.textContent = root.enmTOrFallback('settings.save_failed', { error: err.message });
+        var savingLabel = t('common.saving') || 'Saving…';
+        return root.enmRunOnce(this._gen.saveBtn, savingLabel, function () {
+            return self.api.put('/config/general', body).then(function () {
+                self._gen.statusLine.textContent = t('settings.saved');
+                self.refresh();
+            }).catch(function (err) {
+                self._gen.statusLine.textContent = t('settings.save_failed', { error: err.message });
+            });
         });
     };
 
@@ -621,8 +813,11 @@
     SettingsTab.prototype._buildDangerZoneSection = function (t) {
         var section = document.createElement('div');
         section.className = 'enm-settings-section enm-settings-danger';
+        section.setAttribute('role', 'group');
+        section.setAttribute('aria-labelledby', 'enm-settings-h-danger');
 
         var h = document.createElement('h3');
+        h.id = 'enm-settings-h-danger';
         h.textContent = t('settings.heading_danger');
         section.appendChild(h);
 
@@ -631,9 +826,26 @@
         intro.textContent = t('settings.danger_intro');
         section.appendChild(intro);
 
+        var dangerSelf = this;
         this._danger = {
-            showBtn: btn(t('settings.danger_show_btn'), 'enm-btn-secondary',
-                this._toggleDangerControls.bind(this)),
+            showBtn: btn(t('settings.danger_show_btn'), 'enm-btn-secondary', function () {
+                dangerSelf._toggleDangerControls();
+                // a11y/focus: when the operator hits Show the entire
+                // type-to-confirm gauntlet appears below; without an
+                // explicit focus the operator has to hunt for the input.
+                // Skip on close — the Show button itself remains a sane
+                // resting focus.
+                if (dangerSelf._danger
+                    && dangerSelf._danger.controls
+                    && dangerSelf._danger.controls.style.display !== 'none'
+                    && dangerSelf._danger.confirmInput) {
+                    try {
+                        dangerSelf._danger.confirmInput.focus({ preventScroll: true });
+                    } catch (e) {
+                        dangerSelf._danger.confirmInput.focus();
+                    }
+                }
+            }),
             controls: document.createElement('div'),
             confirmInput: null,
             wipeBtn: null,
@@ -642,6 +854,10 @@
         this._danger.controls.className = 'enm-danger-controls';
         this._danger.controls.style.display = 'none';
         this._danger.statusLine.className = 'enm-settings-status';
+        // a11y: danger-zone status is delivered via role="alert" because the
+        // outcomes (wipe applied / declined / failed) are critical events
+        // the operator should not miss.
+        this._danger.statusLine.setAttribute('role', 'alert');
 
         // Build the hidden controls once and toggle visibility, so the form
         // state survives an open/close cycle.
@@ -689,7 +905,16 @@
         this._danger.confirmInput.type = 'text';
         this._danger.confirmInput.className = 'enm-settings-input';
         this._danger.confirmInput.placeholder = t('settings.danger_confirm_ph');
+        // a11y: placeholder is not a label (3.3.2). The danger-zone field
+        // requires typing an exact phrase to confirm a destructive action;
+        // mark it required + name it for screen readers + prevent iOS
+        // autocaps from interfering with the literal-string match.
+        this._danger.confirmInput.setAttribute('aria-label', t('settings.danger_confirm_h'));
+        this._danger.confirmInput.setAttribute('aria-required', 'true');
+        this._danger.confirmInput.required = true;
         this._danger.confirmInput.autocomplete = 'off';
+        this._danger.confirmInput.autocapitalize = 'characters';
+        this._danger.confirmInput.setAttribute('autocorrect', 'off');
         this._danger.confirmInput.spellcheck = false;
         this._danger.confirmInput.addEventListener('input',
             this._refreshDangerEnabled.bind(this));
@@ -919,9 +1144,20 @@
         var newInput = document.createElement('input');
         newInput.type = 'text';
         newInput.placeholder = '127.0.0.1 or 192.168.0.0/24';
+        // a11y: placeholder is not a label (3.3.2). aria-label names the
+        // field. Technical-keyboard attrs prevent iOS autocaps/autocorrect
+        // from mangling IP entry.
+        newInput.setAttribute('aria-label', 'Add IP address or CIDR to whitelist');
+        newInput.setAttribute('autocomplete', 'off');
+        newInput.setAttribute('autocapitalize', 'off');
+        newInput.setAttribute('autocorrect', 'off');
+        newInput.spellcheck = false;
         newInput.style.flex = '1';
         newInput.style.minWidth = '0';
-        newInput.style.padding = '4px 8px';
+        // a11y: was 21px tall (fails WCAG 2.5.5 24×24). Bump padding + add
+        // explicit min-height so the field clears 28px.
+        newInput.style.padding = '6px 10px';
+        newInput.style.minHeight = '28px';
         newInput.style.border = '1px solid var(--border-color, #cfd6dd)';
         newInput.style.borderRadius = '4px';
         newInput.style.background = 'transparent';
@@ -935,7 +1171,9 @@
         addBtn.style.display = 'inline-flex';
         addBtn.style.alignItems = 'center';
         addBtn.style.justifyContent = 'center';
-        addBtn.style.padding = '4px 10px';
+        // a11y: was ~17px tall (fails WCAG 2.5.5). 28px clears AA target size.
+        addBtn.style.padding = '6px 12px';
+        addBtn.style.minHeight = '28px';
         addBtn.style.fontSize = '13px';
         addBtn.style.lineHeight = '1';
         addBtn.style.fontFamily = 'inherit';
@@ -996,10 +1234,11 @@
                     remove.style.display = 'inline-flex';
                     remove.style.alignItems = 'center';
                     remove.style.justifyContent = 'center';
-                    remove.style.width = '16px';
-                    remove.style.height = '16px';
+                    // a11y: was 16×16 (fails WCAG 2.5.5 24×24).
+                    remove.style.width = '24px';
+                    remove.style.height = '24px';
                     remove.style.padding = '0';
-                    remove.style.fontSize = '14px';
+                    remove.style.fontSize = '16px';
                     remove.style.lineHeight = '1';
                     remove.style.fontFamily = 'inherit';
                     remove.style.border = 'none';
@@ -1025,10 +1264,27 @@
             container.value = values.join(', ');
         }
 
-        function flashInvalid() {
+        function flashInvalid(reason) {
+            // Visual flash for sighted operators…
             var prev = newInput.style.borderColor;
             newInput.style.borderColor = 'var(--danger, #c0392b)';
             setTimeout(function () { newInput.style.borderColor = prev; }, 900);
+            // …and a screen-reader-friendly explanation so the failure
+            // isn't silent. aria-invalid lets AT relate the announcement
+            // back to the field; the visible error sits in the chip
+            // editor's own status node if the host provided one. We use
+            // title= too so hovering reveals the rule for sighted users
+            // without screen readers.
+            newInput.setAttribute('aria-invalid', 'true');
+            var hint = reason
+                || root.enmTOrFallback('settings.rpc_white_invalid');
+            newInput.title = hint;
+            // Clear aria-invalid on next edit so it doesn't stay loud.
+            var clearOnce = function () {
+                newInput.removeAttribute('aria-invalid');
+                newInput.removeEventListener('input', clearOnce);
+            };
+            newInput.addEventListener('input', clearOnce);
         }
 
         function tryAdd() {
@@ -1059,9 +1315,39 @@
         addBtn.addEventListener('click', tryAdd);
         newInput.addEventListener('keydown', function (e) {
             // Enter and comma both commit; comma is natural for operators
-            // pasting a single CSV line.
+            // pasting a single CSV line. alpha.28.1 batch 18 (audit
+            // ac802d65) — guard against CJK IME composition: when an
+            // operator is composing a Pinyin candidate, pressing Enter
+            // is the "commit candidate" gesture for the IME, NOT a
+            // submit. Without isComposing/keyCode 229 checks the chip
+            // commits a half-composed Latin buffer and the IME loses
+            // the candidate.
+            if (e.isComposing || e.keyCode === 229) { return; }
             if (e.key === 'Enter' || e.key === ',') {
                 e.preventDefault();
+                tryAdd();
+            }
+        });
+        // alpha.28.1 batch 18 — multi-value paste handler. Without this
+        // an operator pasting "192.168.1.1, 192.168.1.2, 10.0.0.0/8"
+        // (a normal CSV from a runbook) drops the entire string into
+        // newInput.value as one chunk; the next Enter runs IP_OR_CIDR_RE
+        // against the whole string and the chip flashes red. Split on
+        // any whitespace/newline/comma run, validate + add each piece.
+        // Only intercepts when the paste actually contains a separator;
+        // single-value paste falls through to the default behaviour so
+        // the operator can still edit before committing.
+        newInput.addEventListener('paste', function (e) {
+            var cb = e.clipboardData || (typeof root !== 'undefined' ? root.clipboardData : null);
+            if (!cb || typeof cb.getData !== 'function') { return; }
+            var text = cb.getData('text');
+            if (!text || !/[,\s\n\t]/.test(text)) { return; }
+            e.preventDefault();
+            var parts = text.split(/[,\s\n\t]+/);
+            for (var i = 0; i < parts.length; i += 1) {
+                var v = parts[i].trim();
+                if (!v) { continue; }
+                newInput.value = v;
                 tryAdd();
             }
         });
@@ -1088,6 +1374,14 @@
     function numberInput(min, max) {
         var i = document.createElement('input'); i.type = 'number';
         i.min = String(min); i.max = String(max); i.className = 'enm-settings-input';
+        // a11y/UX: declare the value range to the browser + screen reader
+        // up-front. inputmode=numeric pulls up the numeric keypad on
+        // mobile; step=1 prevents fractional submissions that the joi
+        // schema would later reject. Title surfaces the range on hover
+        // for sighted operators before they submit.
+        i.setAttribute('step', '1');
+        i.setAttribute('inputmode', 'numeric');
+        i.title = 'Between ' + min + ' and ' + max;
         return i;
     }
     function select(options) {
@@ -1118,14 +1412,14 @@
      * Value is wrapped in credValueWithCopy() so the operator can copy
      * straight to clipboard without selecting.
      */
-    function rpcUrlRow(label, url, warning) {
+    function rpcUrlRow(label, url, warning, _isPublic, notifications) {
         var row = document.createElement('div');
         row.className = 'enm-rpc-url-row';
         var l = document.createElement('span');
         l.className = 'enm-rpc-url-label';
         l.textContent = label;
         row.appendChild(l);
-        row.appendChild(credValueWithCopy(url));
+        row.appendChild(credValueWithCopy(url, undefined, notifications));
         if (warning) {
             var w = document.createElement('p');
             w.className = 'enm-rpc-url-warning';
@@ -1155,14 +1449,14 @@
         } catch (_e) { return 'public'; }
     }
 
-    function credRow(labelText, value) {
+    function credRow(labelText, value, notifications) {
         var wrap = document.createElement('div');
         wrap.className = 'enm-rpc-creds-row';
         var l = document.createElement('span');
         l.className = 'enm-rpc-creds-label';
         l.textContent = labelText;
         wrap.appendChild(l);
-        wrap.appendChild(credValueWithCopy(value == null ? '' : String(value)));
+        wrap.appendChild(credValueWithCopy(value == null ? '' : String(value), undefined, notifications));
         return wrap;
     }
 
@@ -1183,7 +1477,9 @@
         var shown = !!tab._creds.pwShown;
         var displayed = shown ? pw : pw.replace(/./g, '•');
 
-        wrap.appendChild(credValueWithCopy(pw, displayed));
+        // batch 88 — thread tab.notifications through so the credPassword
+        // path also gets the copy-fail toast, not just the URL paths.
+        wrap.appendChild(credValueWithCopy(pw, displayed, tab.notifications));
 
         var toggle = document.createElement('button');
         toggle.type = 'button';
@@ -1199,9 +1495,10 @@
      * (the password row) show a masked version while still copying the real
      * value to the clipboard.
      */
-    function credValueWithCopy(value, display) {
+    function credValueWithCopy(value, display, notifications) {
         var line = document.createElement('span');
         line.className = 'enm-rpc-creds-value-wrap';
+        var t = root.enmTOrFallback;
 
         var span = document.createElement('span');
         span.className = 'enm-rpc-creds-value';
@@ -1211,22 +1508,42 @@
         var copyBtn = document.createElement('button');
         copyBtn.type = 'button';
         copyBtn.className = 'enm-btn enm-btn-secondary enm-rpc-creds-copy';
-        copyBtn.textContent = root.enmTOrFallback('settings.rpc_copy');
+        copyBtn.textContent = t('settings.rpc_copy');
+        // a11y: every copy button needs an explicit label so screen
+        // readers don't announce just the generic "Copy" string. The
+        // adjacent <span> holds the actual displayed (often masked)
+        // value — we wire its text into aria-label at click time too
+        // via the .enm-rpc-creds-value span when present.
+        copyBtn.setAttribute('aria-label', 'Copy ' + (display != null ? 'value' : 'credential'));
+        // alpha.28.1 batch 58 — routed through enmCopyToClipboard so the
+        // feature-detect + writeText path is shared with the other four
+        // copy sites. Custom onFallback preserves the select-the-value
+        // affordance so the operator can ⌘-C manually when the API is
+        // unavailable. Round-6 clipboard-UX audit a8a932d2.
+        // alpha.28.1 batch 88 (Round-28 finding #2) — also surface a
+        // warning toast on fallback so the operator knows the clipboard
+        // API was blocked and the value is selected for manual copy.
+        // Previous shape selected silently → rage-click UX. Mirrors the
+        // validator-card pattern from batch 87.
         copyBtn.addEventListener('click', function () {
-            var p = (navigator.clipboard && navigator.clipboard.writeText)
-                ? navigator.clipboard.writeText(value)
-                : Promise.reject(new Error('clipboard unavailable'));
-            p.then(function () {
-                var prev = copyBtn.textContent;
-                copyBtn.textContent = root.enmTOrFallback('settings.rpc_copied');
-                setTimeout(function () { copyBtn.textContent = prev; }, 1200);
-            }).catch(function () {
-                // Fallback: select the value so the operator can ctrl-c
-                var range = document.createRange();
-                range.selectNodeContents(span);
-                var sel = window.getSelection();
-                sel.removeAllRanges();
-                sel.addRange(range);
+            root.enmCopyToClipboard(value, {
+                btn: copyBtn,
+                copiedLabel: t('settings.rpc_copied'),
+                resetMs: 1200,
+                onFallback: function () {
+                    // Fallback: select the value so the operator can ctrl-c.
+                    var range = document.createRange();
+                    range.selectNodeContents(span);
+                    var sel = window.getSelection();
+                    sel.removeAllRanges();
+                    sel.addRange(range);
+                    if (notifications) {
+                        notifications.warning(
+                            t('settings.rpc_copy_fail_title'),
+                            t('settings.rpc_copy_fail_body')
+                        );
+                    }
+                },
             });
         });
         line.appendChild(copyBtn);

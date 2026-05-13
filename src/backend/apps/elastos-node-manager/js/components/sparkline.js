@@ -83,6 +83,16 @@
         svg.style.color = this._color;
         svg.hidden = true; // hidden until setSeries lands real data
 
+        // a11y: `<title>` child mirrors aria-label for JAWS — some screen
+        // readers still prefer the title element even when aria-label is
+        // present. The element is updated by _render() with the current
+        // series summary (min/max/delta) so the announcement stays
+        // meaningful as data lands.
+        var titleEl = document.createElementNS(SVG_NS, 'title');
+        titleEl.textContent = this._ariaLabel;
+        svg.appendChild(titleEl);
+        this._titleEl = titleEl;
+
         // Defs + linearGradient with two stops — top opaque, bottom
         // transparent. stop colours use currentColor so the gradient
         // inherits the SVG's color attribute.
@@ -145,7 +155,26 @@
             this.root.hidden = true;
             return;
         }
-        this._series = decimate(series, TARGET_POINTS);
+        // alpha.28.1 batch 24 — belt-and-braces NaN filter. The
+        // height-series SSE handler already rejects {h: NaN} at intake
+        // (batch 24 fix), but defending in setSeries too protects
+        // against any future caller passing raw data — one NaN point
+        // would have propagated through hMin/hMax/range and produced
+        // an SVG `d="M NaN,NaN ..."` that silently bricked the
+        // sparkline. (Numerical audit adc48dd0.)
+        var clean = [];
+        for (var i = 0; i < series.length; i += 1) {
+            var p = series[i];
+            if (!p) { continue; }
+            if (!isFinite(p.t) || !isFinite(p.h)) { continue; }
+            clean.push(p);
+        }
+        if (clean.length === 0) {
+            this._series = [];
+            this.root.hidden = true;
+            return;
+        }
+        this._series = decimate(clean, TARGET_POINTS);
         this._render();
     };
 
@@ -183,6 +212,20 @@
             this._fill.setAttribute('d',
                 d + ' L' + (W - PAD_X) + ',' + H + ' L' + PAD_X + ',' + H + ' Z'
             );
+            // alpha.28.1 batch 49 (audit adc48dd0) — refresh the
+            // aria-label + <title> here too. Previously this branch
+            // returned without updating, so AT users on a single-
+            // point series got the stale "Block height, last hour"
+            // placeholder forever.
+            var fmt = function (v) {
+                return (typeof v === 'number' && isFinite(v))
+                    ? v.toLocaleString()
+                    : String(v);
+            };
+            var only = pts[0].h;
+            var summary = this._ariaLabel + ': ' + fmt(only);
+            this.root.setAttribute('aria-label', summary);
+            if (this._titleEl) { this._titleEl.textContent = summary; }
             return;
         }
 
@@ -216,6 +259,25 @@
         // Hide the fill on a flat line — it would just be a solid block
         // of colour and looks worse than no fill.
         this._fill.style.opacity = (range === 0) ? '0' : '';
+
+        // a11y: refresh aria-label + <title> with a one-line summary so
+        // screen readers announce "Block height: +16 over last hour
+        // (12,340 → 12,356)" instead of a generic "graphic". toLocaleString
+        // keeps the numbers grouped for screen-reader rhythm.
+        var first = pts[0].h;
+        var last = pts[pts.length - 1].h;
+        var delta = last - first;
+        var sign = delta > 0 ? '+' : (delta < 0 ? '−' : '±');
+        var fmt = function (v) {
+            return (typeof v === 'number' && isFinite(v))
+                ? v.toLocaleString()
+                : String(v);
+        };
+        var summary = this._ariaLabel
+            + ': ' + sign + fmt(Math.abs(delta))
+            + ' (' + fmt(first) + ' → ' + fmt(last) + ')';
+        this.root.setAttribute('aria-label', summary);
+        if (this._titleEl) { this._titleEl.textContent = summary; }
     };
 
     /**

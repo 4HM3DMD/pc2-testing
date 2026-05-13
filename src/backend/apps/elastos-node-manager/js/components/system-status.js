@@ -26,6 +26,11 @@
         this.root = document.createElement('section');
         this.root.className = 'enm-system-status';
         this._timer = null;
+        // alpha.28.1 batch 16 — _destroyed flag so the 5s poll's pending
+        // .then can short-circuit if destroy() fires while a fetch is in
+        // flight. Without this the resolver mutates _cells in a removed
+        // DOM subtree (harmless visually, but pins component closures).
+        this._destroyed = false;
 
         this._renderShell();
     }
@@ -34,29 +39,75 @@
         parent.appendChild(this.root);
         this.refresh();
         var self = this;
-        this._timer = setInterval(function () { self.refresh(); }, POLL_INTERVAL_MS);
+        // alpha.28.1 batch 27 — visibility-pause wrap so a hidden tab
+        // doesn't fetch /system/status every 5s. 720 hits/hr saved per
+        // hidden dashboard. (Audit a96c7d71.)
+        if (typeof root !== 'undefined' && typeof root.enmUseVisibilityPause === 'function') {
+            this._pauser = root.enmUseVisibilityPause(function () { self.refresh(); }, POLL_INTERVAL_MS);
+        } else {
+            this._timer = setInterval(function () { self.refresh(); }, POLL_INTERVAL_MS);
+        }
+        // alpha.28.1 batch 74 (Round-20A audit finding #6) — uptime
+        // anchor + 1s tick. Previously the uptime cell only updated on
+        // the 5s /system/status poll, so the value jumped "37s → 42s →
+        // 47s" right next to the chain-card uptime which ticks smoothly
+        // (chain-card anchors _uptimeBaseMs and re-derives every second).
+        // The two adjacent cells reading inconsistently was the easiest
+        // way to make the dashboard feel laggy. This 1s tick recomputes
+        // from the most recent anchor; no extra network cost.
+        this._uptimeTimer = setInterval(function () {
+            if (self._destroyed || self._uptimeBaseMs == null) { return; }
+            var seconds = Math.floor((Date.now() - self._uptimeBaseMs) / 1000)
+                + (self._uptimeBaseSec || 0);
+            self._setCell('uptime', root.enmFormatUptime(seconds), 'ok');
+        }, 1000);
         return this;
     };
 
     SystemStatus.prototype.destroy = function () {
+        this._destroyed = true;
+        if (this._pauser) { try { this._pauser.stop(); } catch (_) { /* idempotent */ } this._pauser = null; }
         if (this._timer) { clearInterval(this._timer); this._timer = null; }
+        if (this._uptimeTimer) { clearInterval(this._uptimeTimer); this._uptimeTimer = null; }
         if (this.root.parentNode) { this.root.parentNode.removeChild(this.root); }
     };
 
     SystemStatus.prototype.refresh = function () {
         var self = this;
         return this.api.get('/system/status', { skipCache: true }).then(function (s) {
+            if (self._destroyed) { return; }
             self._setCell('cpu',    formatCpu(s.cpu),    healthCpu(s.cpu));
             self._setCell('mem',    formatMem(s.memory), healthMem(s.memory));
             self._setCell('disk',   formatDisk(s.disk),  healthDisk(s.disk));
             self._setCell('os',     formatOs(s.os),      healthOs(s.os));
-            self._setCell('uptime', root.enmFormatUptime(s.node.uptimeSec), 'ok');
+            // Backend contract guard (audit a3e53e9a) — if /system/status
+            // ever returns without a `node` envelope (partial response,
+            // schema drift, proxy quirk) the previous `s.node.uptimeSec`
+            // crashed the entire refresh, dropping straight into the
+            // stale-everything catch path. Tolerant access keeps the
+            // rest of the cells rendering and just shows uptime as the
+            // dash placeholder.
+            var uptimeSec = (s && s.node) ? s.node.uptimeSec : null;
+            self._setCell('uptime', root.enmFormatUptime(uptimeSec), 'ok');
+            // Anchor for the 1s smooth-tick (see mount() comment).
+            // We store the SERVER-reported seconds at the instant we
+            // received it + the client's wall-clock then; the 1s tick
+            // adds (Date.now() - base) / 1000 to derive the live value.
+            // Server clock drift is irrelevant — we're only computing
+            // increments from the anchor, not absolute time.
+            if (typeof uptimeSec === 'number' && isFinite(uptimeSec)) {
+                self._uptimeBaseMs = Date.now();
+                self._uptimeBaseSec = uptimeSec;
+            } else {
+                self._uptimeBaseMs = null;
+            }
             // Clear any prior stale visual marker.
             Object.keys(self._cells).forEach(function (k) {
                 self._cells[k].classList.remove('enm-sys-stale');
             });
             self.root.dataset.stale = '0';
         }).catch(function (err) {
+            if (self._destroyed) { return; }
             // Mark every cell as stale so the operator can see the values
             // are not live anymore. CSS dims/strikes-through stale cells.
             Object.keys(self._cells).forEach(function (k) {
@@ -66,10 +117,17 @@
             self.root.dataset.stale = '1';
             self.root.title = 'System status temporarily unavailable — values may be stale.';
             if (self.notifications && err && err.status !== 401) {
-                self.notifications.warning(
-                    'System status unavailable',
-                    err && err.message ? err.message : String(err),
-                );
+                // Reuse one stable id so a 5-min backend outage doesn't
+                // stack 60 identical toasts (cap = 5 visible, but the
+                // operator still sees the same warning recycled twelve
+                // times a minute). Single-id show() dedupes via dismiss-
+                // and-replace, so the toast updates in place instead.
+                self.notifications.show({
+                    id: 'enm-sys-status-unavailable',
+                    severity: 'warning',
+                    title: 'System status unavailable',
+                    body: err && err.message ? err.message : String(err),
+                });
             }
         });
     };
@@ -87,8 +145,18 @@
     SystemStatus.prototype._setCell = function (key, valueText, health) {
         var cell = this._cells[key];
         if (!cell) return;
-        this._fields[key].textContent = valueText;
+        var field = this._fields[key];
+        field.textContent = valueText;
+        // a11y: cells use text-overflow: ellipsis on narrow widths. Mirror
+        // the full text into title= so it stays accessible to mouse hover,
+        // screen readers, and operator copy-paste even when truncated.
+        field.title = valueText;
         cell.dataset.health = health || 'ok';
+        // a11y: state was previously conveyed only by background-color on
+        // the ::before dot (WCAG 1.4.1 fail for colour-blind operators).
+        // Add an aria-label that explicitly names the health verdict.
+        var labelMap = { ok: 'ok', warning: 'warning', critical: 'critical', unknown: 'unknown' };
+        cell.setAttribute('aria-label', key + ' ' + (labelMap[health] || 'ok') + ': ' + valueText);
     };
 
     /** @private */
@@ -127,21 +195,40 @@
     // used to live in the value text ("free" suffix on disk, the
     // "/ NN GB" on RAM) moves to the cell label below.
 
+    // alpha.28.1 batch 62 (Round-18 audit) — route CPU load + memory
+    // percent through enmFormatNumber instead of calling .toFixed
+    // directly. The codebase already acknowledged backend type drift as
+    // a real risk (chain-card.js:530-544 height path explicitly Number()-
+    // coerces; utils.js:78 documents the pattern). System-status was the
+    // last hold-out: `cpu.loadAvg1m.toFixed(2)` and `mem.usedPct.toFixed(0)`
+    // crash with TypeError if the backend ever returns those as JSON
+    // strings ("1.83" instead of 1.83). The crash happens INSIDE the
+    // render fn (not the .catch), so it slips past refresh()'s catch and
+    // leaves the row stuck on stale cells until the next poll. formatNumber
+    // already coerces via Number() and guards isFinite → dash placeholder
+    // on failure, no crash.
+    function _fmt(n, decimals) {
+        var f = (typeof window !== 'undefined' && window.enmFormatNumber)
+            ? window.enmFormatNumber
+            : function (x, o) { return (typeof x === 'number' ? x : Number(x)).toFixed((o && o.decimals) || 0); };
+        return f(n, { decimals: decimals });
+    }
     function formatCpu(cpu) {
         if (!cpu) return '—';
-        var load = (cpu.loadAvg1m != null) ? cpu.loadAvg1m.toFixed(2) : '—';
+        var load = _fmt(cpu.loadAvg1m, 2);
         // "1.83 / 8" — load over core count.
-        return load + ' / ' + cpu.cores;
+        return load + ' / ' + (cpu.cores != null ? cpu.cores : '—');
     }
     function formatMem(mem) {
         if (!mem) return '—';
         // Just the percent. Total GB is now in the cell label below.
-        return mem.usedPct.toFixed(0) + '%';
+        return _fmt(mem.usedPct, 0) + '%';
     }
     function formatDisk(disk) {
         if (!disk) return '—';
-        // Just the GB. "free" qualifier lives on the label.
-        return disk.freeGb.toFixed(0) + ' GB';
+        // Just the GB. "free" qualifier lives on the label. Locale grouping
+        // (1,024 vs 1024) so multi-TB arrays don't render as a wall of digits.
+        return _fmt(disk.freeGb, 0) + ' GB';
     }
     function formatOs(os) {
         if (!os) return '—';

@@ -52,7 +52,7 @@
     --border-strong: rgba(60, 60, 67, 0.14);
     --text-primary: #11131a;
     --text-secondary: #4b4f5b;
-    --text-muted: #8a8f9c;
+    --text-muted: #6a6f7b; /* a11y: bumped from #8a8f9c to clear WCAG AA 4.5:1 body on #f7f8fa/#fff */
     --text-inverse: #f8fafc;
 
     /* ---- brand + accents (iOS system blue) ---- */
@@ -67,6 +67,19 @@
     --warning: #ff9f0a;
     --error: #ff453a;
     --healing: #7c3aed;
+    /* a11y: -strong variants for text/icon on fills.
+       White on #34c759 / #ff9f0a fails AA (1.9-2.1:1); these darker shades
+       are used wherever a coloured fill carries text. The bright tokens
+       above still serve dot/ring/icon-on-surface usages. */
+    --success-strong: #1f8a3c;
+    --warning-strong: #b46b00;
+    --error-strong:   #c81e16;
+    /* a11y: soft surfaces (mirrors --primary-soft / --primary-softer). */
+    --success-soft:  rgba(52, 199, 89, 0.12);
+    --warning-soft:  rgba(255, 159, 10, 0.12);
+    --error-soft:    rgba(255, 69, 58, 0.12);
+    /* a11y: alias for code that already references --danger without a fallback. */
+    --danger:        var(--error);
 
     /* ---- chain-state palette ----
        Aliases of the semantic tokens above. One source of truth so a
@@ -109,7 +122,9 @@
     --font-weight-bold: 700;
 
     /* ---- focus + chrome ---- */
-    --focus-ring-color: rgba(0, 122, 255, 0.45);
+    /* a11y: alpha bumped 0.45 → 0.75 so the ring clears the 3:1 non-text
+       contrast requirement on #f7f8fa / #ffffff (was 1.9:1, now 3.2:1). */
+    --focus-ring-color: rgba(0, 122, 255, 0.75);
     --focus-ring: 0 0 0 3px var(--focus-ring-color);
     --header-bar-height: 44px;
 
@@ -117,9 +132,37 @@
        0.2.0: timings stretched by ~33% so controls settle like macOS
        instead of snapping. --ease-spring is one notch calmer too —
        tighter return, slower out. */
+    /* ---- z-index scale ----
+       Hoisted in alpha.28.1 because three different "top layer" magic
+       numbers (9998/9999/9999) already drift; the toast-container's
+       z:100 sat BELOW every modal so toasts triggered while a dialog
+       was open were invisible. The scale below puts every layer in
+       one place; the skip link is the only thing that ever needs
+       above-modal precedence. */
+    --z-base:       0;
+    --z-pane:       1;
+    --z-sticky:     5;
+    --z-spinner:   10;
+    --z-drawer:   100;
+    --z-modal:    200;
+    --z-toast:    300;
+    --z-skip-link: 9999;
     --motion-fast: 160ms;
     --motion-base: 240ms;
     --motion-slow: 400ms;
+    /* Attention-pulse durations for one-shot UI feedback (chain-actions row
+       pulse, celebration pop, drawer/dialog slide). Existed as hard-coded
+       300–560ms values scattered across the file before alpha.28.1. */
+    --motion-attn: 520ms;
+    --motion-overlay: 320ms;
+    /* Loop durations for indefinite "breathing" indicators (spinner bounce,
+       chain-reconnect ::before, log-live-pulse, tools-update dot, sparkline
+       shimmer). Folding 6 hard-coded loop values into 4 tokens keeps the
+       app's overall rhythm consistent. */
+    --anim-loop-fast: 1200ms;
+    --anim-loop-med:  1600ms;
+    --anim-loop-slow: 2000ms;
+    --anim-loop-xslow: 4000ms;
     --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
     --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
     --ease-spring: cubic-bezier(.2, .7, .2, 1);
@@ -185,11 +228,19 @@
     --bg-muted: #1a1d25;
     --bg-elevated: #1a1d25;
     --bg-code: #0a0a0a;
-    --border-color: rgba(235, 235, 245, 0.06);
-    --border-strong: rgba(235, 235, 245, 0.12);
+    /* a11y: alpha 0.06 → 0.14 (1.2:1 → 3.0:1) and 0.12 → 0.24 (1.6:1 → 4.7:1)
+       so borders register as actual edges in dark mode. */
+    /* WCAG 1.4.11 — UI components need ≥ 3:1 contrast against the
+       adjacent surface. Composited over --bg-page #1c1c1e the previous
+       0.14 alpha landed at 1.36:1; the comment claimed 3:1. 0.34 lands
+       at ≈3.0:1. 0.40 on the "strong" tier keeps the same proportional
+       step that the light-mode rules use. */
+    --border-color: rgba(235, 235, 245, 0.34);
+    --border-strong: rgba(235, 235, 245, 0.40);
     --text-primary: #f4f5f8;
     --text-secondary: #b5b9c5;
-    --text-muted: #7c8190;
+    /* a11y: 3.5:1 → 5.6:1 on bg-surface, clears AA body */
+    --text-muted: #9ba0ae;
     --primary: #0a84ff;
     --primary-hover: #409cff;
     --primary-soft: rgba(10, 132, 255, 0.18);
@@ -197,6 +248,17 @@
     --success: #30d158;
     --warning: #ffa00a;
     --error: #ff453a;
+    /* a11y: in light mode --healing is #7c3aed → 8.6:1 on white; on dark
+       surfaces the unchanged value drops to 2.2:1. Lift to the
+       Apple "purple-A" tier so chain-recovering / healing toasts stay
+       AA-compliant on dark. */
+    --healing: #a78bfa;
+    /* a11y: soft semantic surfaces for dark mode mirror the light defs. */
+    --success-soft: rgba(48, 209, 88, 0.16);
+    --warning-soft: rgba(255, 160, 10, 0.16);
+    --error-soft:   rgba(255, 69, 58, 0.16);
+    /* a11y: focus ring alpha tuned for dark backgrounds (2.0:1 → 3.4:1). */
+    --focus-ring-color: rgba(64, 156, 255, 0.7);
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
     /* Dark "resting card" shadow — inset 1px highlight catches the top
        edge; soft floor drop. Apple's dark-mode card trick. */
@@ -206,7 +268,12 @@
 
     /* Apple Hero dark wash + sparkline tunings */
     --wash-a: rgba(52, 199, 89, 0.09);
-    --ring-track: rgba(235, 235, 245, 0.06);
+    /* a11y: alpha 0.06 → 0.18 so the PowerCircle track reads as a real
+       ring in dark mode (1.4:1 → 3.4:1, clears UI 3:1). */
+    /* Same SC 1.4.11 fix as --border-color above. PowerCircle track
+       ring needs to be visibly distinct from the page; 0.18 composited
+       at 1.5:1 against the documented 3:1 target. */
+    --ring-track: rgba(235, 235, 245, 0.36);
     --sparkline-opacity: 0.85;
     --sparkline-fill-top: 0.35;
 }
@@ -633,6 +700,17 @@ body[data-active-tab="identity"]::before {
     line-height: 1.6;
 }
 
+/* alpha.28.1 — Retry / Reload affordances inside the boot-error pane.
+   Operator's only previous escape was a hard browser refresh; now the
+   error region offers an in-place retry plus an explicit reload button
+   for cases where the iframe itself is in a bad state. */
+.enm-error-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--spacing-sm);
+    margin-top: var(--spacing-md);
+}
+
 /* ============================================================
    Card surfaces — single source of truth
    ============================================================ */
@@ -900,7 +978,8 @@ body[data-active-tab="identity"]::before {
     height: 6px;
     border-radius: 50%;
     background: currentColor;
-    animation: enm-chain-reconnect-blink 1.4s ease-in-out infinite;
+    /* token-driven: --anim-loop-med + --ease-in-out (was 1.4s ease-in-out). */
+    animation: enm-chain-reconnect-blink var(--anim-loop-med) var(--ease-in-out) infinite;
 }
 
 @keyframes enm-chain-reconnect-blink {
@@ -934,15 +1013,10 @@ body[data-active-tab="identity"]::before {
 /* 0.2.0-alpha.1 — kept for backward compat with any consumers still
    referencing the legacy class name. The Apple Hero layout uses
    .enm-chain-primary-{value,label} instead. */
-.enm-chain-card-metric {
-    font-size: 14px;
-    color: var(--text-secondary);
-    font-variant-numeric: tabular-nums;
-    text-align: center;
-    margin: 0;
-    min-height: 1.2em;
-    letter-spacing: -0.005em;
-}
+/* alpha.28.1 batch 20 — `.enm-chain-card-metric` dropped here. Comment
+   above already said "kept for backward compat" but no JS or HTML
+   reference exists (verified via grep across js/ + index.html). The
+   live equivalent is .enm-chain-primary-{value,label}. */
 
 /* 0.2.0-alpha.1 — primary metric stack. Big mono number on top
    (block height or "local / network"), small lowercase label below.
@@ -987,47 +1061,10 @@ body[data-active-tab="identity"]::before {
     color: var(--text-secondary);
 }
 
-/* alpha.17 — chain badge refresh. Drop uppercase + heavy tracking;
-   reads as a calm chip instead of a tech badge. Slightly larger
-   text (11 → 12px) since we lost the tracking that made the old
-   size feel intentional. */
-.enm-chain-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 3px 10px;
-    border-radius: var(--radius-pill);
-    font-size: 12px;
-    font-weight: var(--font-weight-medium);
-    text-transform: none;
-    letter-spacing: 0;
-    background: rgba(148, 163, 184, 0.12);
-    color: var(--text-secondary);
-}
-
-.enm-chain-badge::before {
-    content: '';
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: currentColor;
-}
-
-.enm-chain-badge-healthy    { background: rgba(22, 163, 74, 0.12);   color: var(--state-healthy); }
-.enm-chain-badge-syncing    { background: rgba(59, 130, 246, 0.12);  color: var(--state-syncing); }
-.enm-chain-badge-stalled    { background: rgba(234, 88, 12, 0.12);   color: var(--state-stalled); }
-.enm-chain-badge-stopped    { background: rgba(148, 163, 184, 0.16); color: var(--state-stopped); }
-.enm-chain-badge-error      { background: rgba(220, 38, 38, 0.12);   color: var(--state-error); }
-.enm-chain-badge-recovering { background: rgba(124, 58, 237, 0.12);  color: var(--state-recovering); }
-
-@media (prefers-color-scheme: dark) {
-    .enm-chain-badge-healthy    { background: rgba(22, 163, 74, 0.22); }
-    .enm-chain-badge-syncing    { background: rgba(59, 130, 246, 0.22); }
-    .enm-chain-badge-stalled    { background: rgba(234, 88, 12, 0.22); }
-    .enm-chain-badge-stopped    { background: rgba(148, 163, 184, 0.22); }
-    .enm-chain-badge-error      { background: rgba(220, 38, 38, 0.22); }
-    .enm-chain-badge-recovering { background: rgba(124, 58, 237, 0.22); }
-}
+/* alpha.28.1 batch 20 — `.enm-chain-badge` cluster (~50 LOC) dropped.
+   No JS or HTML consumer; chain state surfaces via PowerCircle ring
+   color + .enm-chain-card-state subtitle. Confirmed by Round-1 audit
+   and Round-13 CSS architecture audit (a296345753). */
 
 /* alpha.18 — the stats strip used to sit on a top-border divider, so
    each card had a horizontal line slicing through it under the action
@@ -1173,7 +1210,8 @@ body[data-active-tab="identity"]::before {
 }
 
 .enm-chain-rotation[data-state="onduty"] .enm-chain-rotation-dot {
-    animation: enm-chain-rotation-pulse 1.4s ease-in-out infinite;
+    /* token-driven: --anim-loop-med + --ease-in-out (was 1.4s ease-in-out). */
+    animation: enm-chain-rotation-pulse var(--anim-loop-med) var(--ease-in-out) infinite;
 }
 
 @keyframes enm-chain-rotation-pulse {
@@ -1716,6 +1754,18 @@ body[data-active-tab="identity"]::before {
     padding: var(--spacing-sm) 0;
 }
 
+/* alpha.28.1 batch 27 — `.enm-radio-group` is the new fieldset wrapper
+   on the ipMode + rpcEnabled radio pairs (form-semantics audit). The
+   native <fieldset> ships with a 2px border + padding that would
+   shift the layout; reset to the previous div-styled appearance.
+   The accessible group label lives on the .enm-sr-only <legend>. */
+.enm-radio-group {
+    border: 0;
+    padding: 0;
+    margin: 0;
+    min-inline-size: 0;
+}
+
 .enm-settings-label {
     font-size: 13px;
     color: var(--text-primary);
@@ -1820,11 +1870,8 @@ body[data-active-tab="identity"]::before {
     line-height: 1;
 }
 
-.enm-rpc-creds-empty {
-    color: var(--text-secondary);
-    font-style: italic;
-    font-size: 12px;
-}
+/* alpha.28.1 batch 20 — `.enm-rpc-creds-empty` dropped (no consumers
+   after the alpha.19 RPC access redesign). */
 
 /* ============================================================
    alpha.19 — compact RPC access tab layout
@@ -2138,6 +2185,11 @@ body[data-active-tab="identity"]::before {
     flex-shrink: 0;
     padding: 6px 14px;
     font-size: 12px;
+    /* WCAG 2.5.5 AA-22 floor — without min-height the button computes to
+       ~24px in some line-height contexts, right at the threshold. 28px
+       gives a comfortable margin and matches other text-only secondary
+       buttons in the app. */
+    min-height: 28px;
 }
 
 /* Essentials sub-steps ------------------------------------------------- */
@@ -2362,6 +2414,31 @@ body[data-active-tab="identity"]::before {
     padding: var(--spacing-md);
     border-bottom: 1px solid var(--border-color);
     flex-shrink: 0;
+    /* Wrap the Download + buffer pill onto a second row when the header
+       gets cramped, instead of overflowing horizontally. */
+    flex-wrap: wrap;
+}
+
+/* alpha.28.1 — Download text button + buffer-drop pill in the log head.
+   Download mirrors the audit-tab JSON export pattern; the pill appears
+   the moment the rolling buffer first drops a head line so the operator
+   isn't surprised when scrolling up hits an invisible wall. */
+.enm-log-download {
+    min-height: 28px;
+    padding: 4px 10px;
+}
+.enm-log-buffer-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--border-strong);
+    background: var(--warning-soft, var(--bg-surface));
+    color: var(--warning-strong, var(--text-secondary));
+    font-size: 11px;
+    line-height: 1.4;
+    font-weight: 500;
+    white-space: nowrap;
 }
 
 .enm-log-title {
@@ -2472,7 +2549,11 @@ body[data-active-tab="identity"]::before {
 .enm-log-line-stdout { color: #e2e8f0; }
 
 .enm-log-ts {
-    color: #64748b;
+    /* WCAG 1.4.3 — #64748b on the dark #0a0a0a code background composes
+       at 4.16:1, just below the 4.5:1 AA floor for normal text. Lift
+       ~10% L (~#7d8898) to land at ≈5.0:1 while staying visually
+       subordinate to the log content. */
+    color: #7d8898;
     flex-shrink: 0;
 }
 
@@ -2495,7 +2576,10 @@ body[data-active-tab="identity"]::before {
     display: flex;
     flex-direction: column;
     gap: var(--spacing-sm);
-    z-index: 100;
+    /* Lift above every modal/drawer so a critical-severity toast (e.g.
+       "Backend unreachable") never gets buried behind an open settings
+       drawer or tools-update dialog. Skip link still wins. */
+    z-index: var(--z-toast);
     /* alpha.24: % (iframe-relative) not vw (outer-viewport-relative) */
     max-width: min(360px, calc(100% - 2 * var(--spacing-md)));
     pointer-events: none;
@@ -2550,8 +2634,9 @@ body[data-active-tab="identity"]::before {
     font-size: 18px;
     line-height: 1;
     padding: 0;
-    width: 22px;
-    height: 22px;
+    /* 24×24 to meet WCAG 2.5.5 AA touch target (was 22×22). */
+    width: 24px;
+    height: 24px;
     border-radius: 50%;
     display: inline-flex;
     align-items: center;
@@ -2604,7 +2689,9 @@ body[data-active-tab="identity"]::before {
     align-items: center;
     justify-content: center;
     padding: var(--spacing-lg);
-    z-index: 200;
+    /* alpha.28.1 batch 20 — was the last raw z-index left after the
+       token migration in batch 8/13. Token --z-modal = 200 matches. */
+    z-index: var(--z-modal);
     animation: enm-fade-in var(--motion-base) var(--ease-out);
 }
 
@@ -2698,436 +2785,16 @@ body[data-active-tab="identity"]::before {
 /* ============================================================
    Reduced motion — respect the system preference
    ============================================================ */
+/* alpha.28.1 batch 29 — wizard CSS cluster dropped (~429 LOC of
+   .enm-wizard-*, .enm-install-card-*, .enm-pw-*, .enm-wizard-mode-*,
+   .enm-wizard-summary, .enm-wizard-actions, @keyframes enm-spin from
+   .enm-wizard-checks-spinner). The v0.4 "Welcome Home" rewrite
+   replaced the 9-step wizard with the setup-conversation flow; the
+   legacy wizard styles have sat orphan in styles.css ever since.
+   Round-13 CSS architecture audit a296345753 verified zero JS / HTML
+   references and recommended the deletion; deferred there to keep
+   that commit reviewable. Removed now. */
 
-/* ============================================================
-   Wizard step indicator — numbered pills with connectors
-   ============================================================ */
-
-.enm-wizard-steps {
-    display: flex;
-    align-items: stretch;
-    gap: 0;
-    list-style: none;
-    margin-bottom: var(--spacing-xl);
-    padding: var(--spacing-md);
-    background: var(--bg-muted);
-    border-radius: var(--radius-lg);
-    counter-reset: enm-step;
-    overflow-x: auto;
-    scrollbar-width: none;
-}
-
-.enm-wizard-steps::-webkit-scrollbar { display: none; }
-
-.enm-wizard-step {
-    flex: 1;
-    display: flex;
-    flex-direction: row;
-    align-items: center;
-    gap: var(--spacing-sm);
-    padding: 0 var(--spacing-sm);
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--text-muted);
-    background: none;
-    border-radius: 0;
-    min-width: 0;
-    text-transform: none;
-    position: relative;
-    transition: color var(--motion-base) var(--ease-out);
-}
-
-.enm-wizard-step + .enm-wizard-step::before {
-    content: '';
-    width: 16px;
-    height: 1px;
-    background: var(--border-color);
-    flex-shrink: 0;
-    margin-right: var(--spacing-xs);
-    align-self: center;
-}
-
-.enm-wizard-step-num {
-    width: 24px;
-    height: 24px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 50%;
-    font-size: 11px;
-    font-weight: 600;
-    background: var(--bg-surface);
-    border: 1px solid var(--border-color);
-    color: var(--text-muted);
-    transition: background var(--motion-base) var(--ease-out),
-                border-color var(--motion-base) var(--ease-out),
-                color var(--motion-base) var(--ease-out);
-    flex-shrink: 0;
-}
-
-.enm-wizard-step-label {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    min-width: 0;
-}
-
-.enm-wizard-step-active {
-    background: none;
-    box-shadow: none;
-    color: var(--primary);
-}
-
-.enm-wizard-step-active .enm-wizard-step-num {
-    background: var(--primary);
-    border-color: var(--primary);
-    color: #fff;
-    box-shadow: 0 0 0 4px var(--primary-soft);
-}
-
-.enm-wizard-step-done {
-    background: none;
-    color: var(--success);
-}
-
-.enm-wizard-step-done .enm-wizard-step-num {
-    background: var(--success);
-    border-color: var(--success);
-    color: #fff;
-}
-
-.enm-wizard-step-done .enm-wizard-step-num::before {
-    content: '✓';
-}
-
-.enm-wizard-step-done .enm-wizard-step-num > * { display: none; }
-
-/* ============================================================
-   System checks card (welcome step)
-   ============================================================ */
-
-.enm-wizard-checks {
-    display: flex;
-    flex-direction: column;
-    gap: var(--spacing-sm);
-    padding: var(--spacing-md);
-    background: var(--bg-muted);
-    border-radius: var(--radius-md);
-    margin: var(--spacing-md) 0;
-}
-
-.enm-wizard-checks-spinner {
-    display: inline-flex;
-    gap: 6px;
-    margin-right: var(--spacing-sm);
-}
-
-.enm-wizard-check-row {
-    display: grid;
-    grid-template-columns: 24px minmax(120px, 1fr) auto;
-    align-items: center;
-    gap: var(--spacing-sm);
-    padding: var(--spacing-sm) var(--spacing-md);
-    background: var(--bg-surface);
-    border-radius: var(--radius-sm);
-    font-size: 13px;
-}
-
-.enm-wizard-check-mark {
-    width: 22px;
-    height: 22px;
-    border-radius: 50%;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    color: #fff;
-    font-size: 12px;
-    font-weight: 700;
-    flex-shrink: 0;
-}
-
-.enm-wizard-check-ok   .enm-wizard-check-mark { background: var(--success); }
-.enm-wizard-check-fail .enm-wizard-check-mark { background: var(--warning); }
-
-.enm-wizard-check-label  { color: var(--text-primary); font-weight: 500; }
-.enm-wizard-check-detail { color: var(--text-secondary); font-size: 12px; }
-
-/* ============================================================
-   Install card (install step)
-   ============================================================ */
-
-.enm-install-card {
-    margin: var(--spacing-lg) 0;
-    background: var(--bg-surface);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-lg);
-    padding: var(--spacing-lg);
-    display: flex;
-    flex-direction: column;
-    gap: var(--spacing-md);
-}
-
-.enm-install-card-head {
-    display: flex;
-    align-items: center;
-    gap: var(--spacing-md);
-}
-
-.enm-install-icon {
-    width: 48px;
-    height: 48px;
-    border-radius: var(--radius-md);
-    background: var(--primary-soft);
-    color: var(--primary);
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 24px;
-    flex-shrink: 0;
-}
-
-.enm-install-meta {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    min-width: 0;
-}
-
-.enm-install-name {
-    font-size: 15px;
-    font-weight: 600;
-    color: var(--text-primary);
-}
-
-.enm-install-sub {
-    font-size: 12px;
-    color: var(--text-secondary);
-    font-variant-numeric: tabular-nums;
-}
-
-.enm-install-progress {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-}
-
-.enm-install-bar-wrap {
-    width: 100%;
-    height: 6px;
-    background: var(--bg-muted);
-    border-radius: var(--radius-pill);
-    overflow: hidden;
-}
-
-.enm-install-bar {
-    width: 0;
-    height: 100%;
-    background: linear-gradient(90deg, var(--primary), var(--primary-hover));
-    transition: width var(--motion-slow) var(--ease-out);
-}
-
-.enm-install-status {
-    font-size: 12px;
-    color: var(--text-secondary);
-}
-
-/* ============================================================
-   Mode selector + password card (keystore step)
-   ============================================================ */
-
-.enm-wizard-mode {
-    display: grid;
-    grid-template-columns: 1fr;
-    gap: var(--spacing-sm);
-    margin: var(--spacing-md) 0;
-}
-
-@media (min-width: 640px) {
-    .enm-wizard-mode { grid-template-columns: 1fr 1fr; }
-}
-
-.enm-wizard-mode-opt {
-    display: flex;
-    align-items: flex-start;
-    gap: var(--spacing-sm);
-    padding: var(--spacing-md);
-    background: var(--bg-surface);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    cursor: pointer;
-    transition: border-color var(--motion-fast) var(--ease-out),
-                background var(--motion-fast) var(--ease-out);
-    text-transform: none;
-    color: var(--text-primary);
-    font-weight: 400;
-    font-size: 13px;
-    margin-bottom: 0;
-    letter-spacing: normal;
-}
-
-.enm-wizard-mode-opt:hover { border-color: var(--border-strong); }
-
-.enm-wizard-mode-opt input[type="radio"] {
-    margin-top: 2px;
-    accent-color: var(--primary);
-}
-
-.enm-wizard-mode-opt input[type="radio"]:checked ~ span {
-    color: var(--primary);
-}
-
-.enm-wizard-mode-opt:has(input[type="radio"]:checked) {
-    border-color: var(--primary);
-    background: var(--primary-softer);
-}
-
-.enm-wizard-mode-opt span {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    text-transform: none;
-    color: inherit;
-    font-weight: 400;
-    letter-spacing: normal;
-}
-
-.enm-wizard-mode-opt strong {
-    font-size: 14px;
-    color: var(--text-primary);
-}
-
-.enm-wizard-mode-help {
-    font-size: 12px;
-    color: var(--text-secondary);
-    line-height: 1.5;
-    font-weight: 400;
-}
-
-.enm-wizard-pwcard {
-    display: flex;
-    flex-direction: column;
-    gap: var(--spacing-sm);
-    padding: var(--spacing-md);
-    background: var(--bg-muted);
-    border-radius: var(--radius-md);
-    margin: var(--spacing-md) 0;
-}
-
-.enm-wizard-body .enm-wizard-pwcard label,
-.enm-wizard-pwcard label {
-    display: flex;
-    align-items: center;
-    gap: var(--spacing-sm);
-    font-size: 13px;
-    color: var(--text-primary);
-    font-weight: 500;
-    text-transform: none;
-    letter-spacing: normal;
-    margin: 0;
-    cursor: pointer;
-}
-
-.enm-wizard-body .enm-wizard-mode-opt,
-.enm-wizard-body label.enm-wizard-mode-opt {
-    text-transform: none;
-    letter-spacing: normal;
-    color: var(--text-primary);
-    font-weight: 400;
-    font-size: 13px;
-    margin: 0;
-}
-
-.enm-wizard-pwcard label input[type="radio"] { accent-color: var(--primary); }
-
-.enm-wizard-pwcard input[type="password"] {
-    margin-top: var(--spacing-xs);
-}
-
-/* ============================================================
-   Password reveal card (after keystore generation)
-   ============================================================ */
-
-.enm-pw-reveal {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: var(--spacing-sm);
-    padding: var(--spacing-md);
-    background: var(--bg-code);
-    color: var(--text-inverse);
-    border-radius: var(--radius-md);
-    margin: var(--spacing-md) 0;
-}
-
-.enm-pw-value {
-    flex: 1;
-    min-width: 200px;
-    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
-    font-size: 14px;
-    color: #f1f5f9;
-    word-break: break-all;
-    user-select: all;
-}
-
-.enm-wizard-body label.enm-pw-ack {
-    display: flex;
-    align-items: center;
-    gap: var(--spacing-sm);
-    padding: var(--spacing-md);
-    background: rgba(234, 88, 12, 0.06);
-    border: 1px solid rgba(234, 88, 12, 0.2);
-    border-radius: var(--radius-md);
-    color: var(--text-primary);
-    font-size: 13px;
-    font-weight: 500;
-    text-transform: none;
-    letter-spacing: normal;
-    margin: 0 0 var(--spacing-md);
-    cursor: pointer;
-}
-
-.enm-pw-ack input[type="checkbox"] {
-    accent-color: var(--warning);
-    width: 16px;
-    height: 16px;
-}
-
-/* ============================================================
-   Wizard summary table (confirm step)
-   ============================================================ */
-
-.enm-wizard-summary {
-    display: grid;
-    grid-template-columns: minmax(160px, auto) 1fr;
-    gap: var(--spacing-sm) var(--spacing-md);
-    margin: var(--spacing-lg) 0;
-    padding: var(--spacing-md);
-    background: var(--bg-muted);
-    border-radius: var(--radius-md);
-    font-size: 13px;
-}
-
-.enm-wizard-summary dt {
-    color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    font-size: 11px;
-    font-weight: 600;
-    align-self: center;
-}
-
-.enm-wizard-summary dd {
-    color: var(--text-primary);
-    font-variant-numeric: tabular-nums;
-    word-break: break-all;
-}
-
-.enm-wizard-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--spacing-sm);
-    margin-top: var(--spacing-lg);
-}
 
 @media (prefers-reduced-motion: reduce) {
     *,
@@ -3152,9 +2819,8 @@ body[data-active-tab="identity"]::before {
         --border-strong: #475569;
         --focus-ring: 0 0 0 3px var(--primary);
     }
-    .enm-chain-badge {
-        border: 1px solid currentColor;
-    }
+    /* (.enm-chain-badge forced-colors rule dropped in batch 20 — class
+       has no consumers.) */
 }
 
 /* ============================================================
@@ -3169,8 +2835,12 @@ body[data-active-tab="identity"]::before {
 /* small-tablet */
 @media (max-width: 768px) {
     .enm-header-bar { padding: 0 var(--spacing-sm); gap: var(--spacing-sm); }
-    .enm-tab { padding: 6px 10px; font-size: 12px; }
-    .enm-wizard { padding: var(--spacing-lg); }
+    /* min-height keeps the tab hit-area above the WCAG 2.5.5 AA-22 floor
+       of 24×24 CSS pixels at the 768px breakpoint where typography
+       shrinks. Without the floor, font-size:12px × line-height:1.45 + 12
+       px vertical padding can compute to ~25px, which dips under the
+       threshold in some inherited line-height contexts. */
+    .enm-tab { padding: 6px 10px; font-size: 12px; min-height: 28px; }
     .enm-settings-row { grid-template-columns: 1fr; gap: var(--spacing-xs); }
 }
 
@@ -3194,12 +2864,12 @@ body[data-active-tab="identity"]::before {
 /* small-phone */
 @media (max-width: 480px) {
     :root { --header-bar-height: 40px; }
-    .enm-tab { font-size: 12px; padding: 4px 8px; }
+    /* See the 768px override above — the floor matters even more at the
+       small-phone 480px breakpoint where padding shrinks further. */
+    .enm-tab { font-size: 12px; padding: 4px 8px; min-height: 28px; }
     .enm-sys-cell { min-width: 100%; padding: 8px 10px; }
     .enm-chain-card-head { gap: 6px; }
     .enm-chain-primary-value { font-size: 26px; }
-    .enm-wizard-body h2,
-    .enm-wizard-body h3 { font-size: 17px; }
 }
 
 /* ============================================================
@@ -3630,29 +3300,10 @@ body[data-active-tab="identity"]::before {
    Skeleton loaders — replace "—" placeholders during load
    ============================================================ */
 
-@keyframes enm-skeleton-shimmer {
-    0%   { background-position: -200% 0; }
-    100% { background-position: 200% 0; }
-}
-
-.enm-skeleton {
-    display: inline-block;
-    border-radius: var(--radius-sm);
-    background: linear-gradient(
-        90deg,
-        var(--bg-muted) 0%,
-        var(--border-color) 50%,
-        var(--bg-muted) 100%
-    );
-    background-size: 200% 100%;
-    animation: enm-skeleton-shimmer 1.6s var(--ease-in-out) infinite;
-    color: transparent;
-    user-select: none;
-}
-
-@media (prefers-reduced-motion: reduce) {
-    .enm-skeleton { animation: none; }
-}
+/* alpha.28.1 batch 20 — `.enm-skeleton` + `@keyframes enm-skeleton-
+   shimmer` dropped. No JS or HTML consumer. The empty-state primitives
+   audited under Round 4 will reintroduce this when shipped, and at
+   that point a fresh implementation is preferred over the orphan. */
 
 /* ============================================================
    v0.4 "Welcome Home" — friendly UI layer
@@ -4130,7 +3781,12 @@ body[data-active-tab="identity"]::before {
 .enm-drawer-root {
     position: fixed;
     inset: 0;
-    z-index: 9998;
+    /* alpha.28.1 — migrated from raw 9998 to --z-drawer (100). The
+       raw value lived above --z-toast (300) which buried toasts behind
+       the drawer (the smoke audit confirmed this on a running build).
+       Token scale orders pane < drawer < modal < toast < skip-link
+       so a critical alert always wins over a settings panel. */
+    z-index: var(--z-drawer);
     pointer-events: none;
 }
 .enm-drawer-root[hidden] { display: none !important; }
@@ -4343,20 +3999,8 @@ body[data-active-tab="identity"]::before {
     margin-bottom: var(--spacing-sm);
 }
 
-.enm-tech-title {
-    font-size: 24px;
-    font-weight: 600;
-    color: var(--text-primary);
-    margin: 0;
-}
-
-.enm-tech-sub {
-    font-size: 13px;
-    line-height: 1.5;
-    color: var(--text-secondary);
-    margin: 0;
-    max-width: 640px;
-}
+/* alpha.28.1 batch 20 — `.enm-tech-title` + `.enm-tech-sub` dropped.
+   Tech-view migrated to .enm-pane h1 / .enm-tech-tabs after alpha.24. */
 
 .enm-tech-tabs {
     display: flex;
@@ -4403,7 +4047,8 @@ body[data-update-severity="minor"] .enm-tech-tabs .enm-tab[data-tab="tools"]::be
 body[data-update-severity="major"] .enm-tech-tabs .enm-tab[data-tab="tools"]::before {
     background: var(--state-stalled);
     box-shadow: 0 0 0 3px rgba(255, 159, 10, 0.18);
-    animation: enm-tools-update-dot-pulse 2s ease-in-out infinite;
+    /* token-driven: --anim-loop-slow + --ease-in-out (was 2s ease-in-out). */
+    animation: enm-tools-update-dot-pulse var(--anim-loop-slow) var(--ease-in-out) infinite;
 }
 
 @keyframes enm-tools-update-dot-pulse {
@@ -4563,18 +4208,9 @@ body[data-update-severity="major"] .enm-tech-tabs .enm-tab[data-tab="tools"]::be
     color: var(--text-secondary);
 }
 
-.enm-tools-update-cmd {
-    margin: 0;
-    padding: var(--spacing-sm) var(--spacing-md);
-    background: var(--bg-code);
-    color: #f8fafc;
-    border-radius: var(--radius-md);
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    font-size: 12px;
-    line-height: 1.5;
-    overflow-x: auto;
-    white-space: pre;
-}
+/* alpha.28.1 batch 20 — `.enm-tools-update-cmd` dropped. tools-update-
+   card.js uses `.enm-tools-update-modal-cmd` (different class, defined
+   inside the modal block). */
 
 /* 0.2.0-alpha.10 — Update-action row + modal. The button + help-line
    live inline on the card; clicking the button opens the modal which
@@ -4605,7 +4241,12 @@ body[data-update-severity="major"] .enm-tech-tabs .enm-tab[data-tab="tools"]::be
 .enm-tools-update-modal {
     position: fixed;
     inset: 0;
-    z-index: 9999;
+    /* alpha.28.1 — migrated from raw 9999 (tied with the skip link!) to
+       --z-modal (200). Token scale lets the toast container sit above
+       us when a critical alert lands while the modal is open. The skip
+       link keeps its raw 9999 and is the single layer that ever
+       outranks anything. */
+    z-index: var(--z-modal);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -4834,14 +4475,93 @@ body[data-update-severity="major"] .enm-tech-tabs .enm-tab[data-tab="tools"]::be
    Print — hide chrome, render cards as plain blocks
    ============================================================ */
 
+/* alpha.28.1 batch 26 — full print stylesheet rewrite (Round 16 audit
+   a6ef14f1). The previous 9-line block only hid a few chrome elements
+   and let everything else inherit screen styling — printing the audit
+   tab wasted toner on dark backgrounds and clipped wide tables. The
+   real archival path is the JSON export, but print should remain
+   functional for support tickets and paper trails. */
 @media print {
+    @page { size: A4; margin: 15mm; }
+
+    /* Force white background + black text everywhere so the print is
+       legible and doesn't burn through toner on a dark-mode dashboard. */
+    html, body, .enm-app, .enm-pane {
+        background: #fff !important;
+        color: #000 !important;
+        overflow: visible !important;
+        height: auto !important;
+        print-color-adjust: economy;
+        -webkit-print-color-adjust: economy;
+    }
+
+    /* Hide transient + chrome elements that don't belong in a printed
+       record: action rows, decorative SVGs, toast/spinner UI, drawer
+       (which can be open at print time), tab pills, and the settings
+       sub-nav rail. */
     .enm-header-bar,
     .enm-toast-container,
     .enm-spinner,
     .enm-chain-actions,
-    .enm-settings-actions { display: none !important; }
-    body, .enm-app, .enm-pane { overflow: visible !important; height: auto !important; }
-    .enm-chain-card, .enm-card { break-inside: avoid; }
+    .enm-settings-actions,
+    .enm-drawer-root,
+    .enm-power-circle,
+    .enm-sparkline,
+    .enm-spark,
+    .enm-tab-pill,
+    .enm-settings-nav,
+    .enm-error-actions,
+    .enm-log-tail-toggle,
+    .enm-log-download { display: none !important; }
+
+    /* Strip shadows / blurs / gradients globally — they waste ink and
+       don't reproduce on monochrome printers. */
+    *, *::before, *::after {
+        box-shadow: none !important;
+        filter: none !important;
+        backdrop-filter: none !important;
+        text-shadow: none !important;
+        background-image: none !important;
+    }
+
+    /* Cards print with a thin ink border instead of CSS shadow/elevation;
+       allow page breaks inside long cards so the audit pane isn't
+       jammed onto one page. */
+    .enm-card, .enm-chain-card {
+        break-inside: auto;
+        border: 1px solid #000;
+    }
+
+    /* Audit table — repeat <thead> on every page, allow rows to break
+       naturally, fix column widths so the wide "executor" column wraps
+       instead of clipping at the right margin. */
+    .enm-audit-table {
+        width: 100%;
+        table-layout: fixed;
+        border-collapse: collapse;
+    }
+    .enm-audit-table thead {
+        display: table-header-group;
+    }
+    .enm-audit-table tr {
+        break-inside: avoid;
+        page-break-inside: avoid;
+    }
+    .enm-audit-table th,
+    .enm-audit-table td {
+        border: 1px solid #000;
+        padding: 4px 6px;
+        font-size: 10pt;
+        word-break: break-word;
+    }
+
+    /* External-link URL becomes inline text on print so the operator
+       can read where the link pointed without clicking. */
+    a[href^="http"]::after {
+        content: " (" attr(href) ")";
+        font-size: 9pt;
+        word-break: break-all;
+    }
 }
 
 /* ============================================================
@@ -4865,6 +4585,10 @@ body[data-app-size="medium"] .enm-tech-tabs {
 body[data-app-size="narrow"] .enm-tab {
     padding: 5px 9px;
     font-size: 12px;
+    /* WCAG 2.5.5 AA-22 floor — iframe-aware narrow mode is the most
+       likely touch context, so we anchor the tab strip at 28px rather
+       than let inherited line-height squeeze it to ~20px. */
+    min-height: 28px;
 }
 body[data-app-size="narrow"] .enm-tab-pill {
     display: none;
@@ -5013,9 +4737,40 @@ body[data-app-size="narrow"] .enm-chain-stats-strip {
 body[data-app-size="narrow"] .enm-chain-actions {
     flex-direction: column;
     width: 100%;
+    /* alpha.28.1 mobile-touch: bump the inter-button gap on the
+       Start / Stop / Restart row from 8px to 12px so touch operators
+       don't mis-tap Stop when aiming for Restart. Stop is destructive
+       — the larger gap is operator safety. */
+    gap: 12px;
 }
 body[data-app-size="narrow"] .enm-chain-actions .enm-btn {
     width: 100%;
+    /* a11y/narrow: parent's column flex inherits the 110px min-width from
+       the baseline rule; reset so buttons never overflow at &lt;180px iframe. */
+    min-width: 0;
+}
+
+/* alpha.28.1 mobile-touch — narrow-mode upgrades for the most-tapped
+   touch surfaces on phones/tablets. The audit found three real risks:
+     1. gear + theme icon-buttons stay 32×32 (below WCAG 2.5.5 AAA 44×44
+        on phone); bump to 40×40 at narrow as a balance with the chrome.
+     2. setup wizard goal/B2 tiles stay 2-col at iframe-narrow widths
+        because the original `@media (max-width: 480px)` rule measures
+        the OUTER browser viewport not the iframe interior. */
+body[data-app-size="narrow"] .enm-icon-btn {
+    width: 40px;
+    height: 40px;
+}
+body[data-app-size="narrow"] .enm-goal-tiles,
+body[data-app-size="narrow"] .enm-b2-tiles {
+    grid-template-columns: 1fr;
+}
+
+/* alpha.28.1 — narrow-mode chains-grid: baseline uses
+   minmax(360px, 720px) which forces horizontal scroll under 360px.
+   Collapse to a single column at narrow. */
+body[data-app-size="narrow"] .enm-chains-grid {
+    grid-template-columns: 1fr;
 }
 
 /* Drawer full-width at narrow */
@@ -5212,4 +4967,102 @@ body[data-app-size="narrow"] .enm-conv-actions {
 }
 body[data-app-size="narrow"] .enm-conv-actions .enm-btn {
     width: 100%;
+}
+
+/* ============================================================
+   WCAG 2.3.3 — global reduced-motion fallback
+   ============================================================
+   Component-specific blocks above (chain card, power circle, log
+   tail, etc.) cover their own keyframes. This block catches the
+   four animations that weren't paired with a reduced-motion
+   override: the boot spinner, the proposal overlay fade, the
+   proposal card slide-up, and the skeleton-loader shimmer.
+*/
+@media (prefers-reduced-motion: reduce) {
+    .enm-spinner-dot,
+    .enm-proposal-overlay,
+    .enm-proposal-card {
+        animation: none;
+    }
+}
+
+/* ============================================================
+   Accessibility utility classes (WCAG 2.4.1, 1.3.1)
+   ============================================================
+   Both classes follow the standard "visually hidden but
+   focusable" pattern (visible on :focus for the skip link). */
+
+.enm-sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+/* The skip link is the single layer that always wins — kept at the
+   raw token value so a future maintainer can grep for `--z-skip-link`
+   and find every reference, not just this one. */
+.enm-skip-link {
+    position: absolute;
+    top: -40px;
+    left: var(--spacing-sm);
+    z-index: var(--z-skip-link);
+    padding: var(--spacing-sm) var(--spacing-md);
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    font-weight: var(--font-weight-semibold);
+    text-decoration: none;
+    transition: top 150ms var(--ease-out);
+}
+.enm-skip-link:focus,
+.enm-skip-link:focus-visible {
+    top: var(--spacing-sm);
+    outline: none;
+    box-shadow: var(--focus-ring);
+}
+
+/* ============================================================
+   Forced-colors mode (Windows High Contrast, etc.)
+   ============================================================
+   In forced-colors, the OS overrides every background-color and
+   text-color with system tokens. Components that previously
+   conveyed state via background fill collapse into shape-identical
+   pills. Restore the cue with a 1px solid CanvasText edge plus a
+   per-state glyph carried in the existing ::before pseudo.
+*/
+
+@media (forced-colors: active) {
+    /* Borders become visible system edges instead of low-alpha rgba. */
+    .enm-chain-card,
+    .enm-producer-binding-chip,
+    .enm-chain-rotation,
+    .enm-toast,
+    .enm-proposal-card,
+    .enm-tools-update-modal,
+    .enm-drawer {
+        border: 1px solid CanvasText;
+    }
+
+    /* Disabled buttons gain an explicit visual + sr cue (opacity is
+       suppressed in forced-colors, so the disabled state was invisible). */
+    .enm-btn:disabled {
+        opacity: 1;
+        forced-color-adjust: none;
+        color: GrayText;
+        border-color: GrayText;
+    }
+
+    /* Keep the focus ring visible in forced-colors mode. */
+    :focus-visible {
+        outline: 3px solid Highlight !important;
+        outline-offset: 2px;
+        box-shadow: none !important;
+    }
 }

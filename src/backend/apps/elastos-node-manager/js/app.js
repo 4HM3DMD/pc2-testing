@@ -38,6 +38,15 @@
      *   wide:    >= 1000px (default; nav rail visible; max-width caps lifted)
      */
     function setupResponsiveObserver() {
+        // alpha.28.1 — guard against double-install. init() is called
+        // once on first boot and AGAIN each time the operator clicks
+        // Retry on the error pane (batch 8). Without this guard each
+        // retry stacks another ResizeObserver (or another resize
+        // listener), pinning a closure to the previous app instance
+        // and doubling the per-resize work. After 5 retries the page
+        // does 5× the work on every layout change.
+        if (root.__enmRespObserverInstalled) { return; }
+        root.__enmRespObserverInstalled = true;
         function classify(w) {
             if (w < 700) return 'narrow';
             if (w < 1000) return 'medium';
@@ -79,12 +88,89 @@
         }
     }
 
-    ENMApp.prototype.init = function () {
-        // alpha.25: install responsive observer FIRST so size class is set
-        // before any UI mounts. Otherwise components measure with the wrong
-        // class and render at the wrong breakpoint on first paint.
-        setupResponsiveObserver();
+    /**
+     * Wire the error-pane Retry / Reload buttons. Called once during
+     * init so the listeners survive every subsequent _showError() call.
+     * Retry re-runs init() with the previous flags; Reload is a hard
+     * fallback when retry can't even reach the error pane.
+     */
+    ENMApp.prototype._wireErrorActions = function () {
+        var self = this;
+        var t = root.enmTOrFallback;
+        // alpha.28.1 batch 40 — replace index.html's English defaults
+        // with i18n strings now that strings.js has loaded. The
+        // English defaults remain in markup as a fallback for the
+        // brief window before this runs.
+        // alpha.28.1 batch 80 (Round-22 audit finding #4) — also
+        // localise the spinner text. The previous shape rendered the
+        // English literal "Connecting to Node Manager…" regardless of
+        // the operator's selected locale. The element was queried into
+        // this.els.spinnerText at boot but never written.
+        if (this.els.spinnerText) {
+            var connectingText = t('app.connecting');
+            if (connectingText && connectingText !== 'app.connecting') {
+                this.els.spinnerText.textContent = connectingText;
+            }
+        }
+        if (this.els.errorRetry) {
+            var retryText = t('app.retry');
+            if (retryText && retryText !== 'app.retry') {
+                this.els.errorRetry.textContent = retryText;
+            }
+        }
+        if (this.els.errorReload) {
+            var reloadText = t('app.reload');
+            if (reloadText && reloadText !== 'app.reload') {
+                this.els.errorReload.textContent = reloadText;
+            }
+        }
+        var skipLink = document.querySelector('.enm-skip-link');
+        if (skipLink) {
+            var skipText = t('app.skip_link');
+            if (skipText && skipText !== 'app.skip_link') {
+                skipLink.textContent = skipText;
+            }
+        }
+        if (this.els.errorRetry && !this.els.errorRetry.dataset.wired) {
+            this.els.errorRetry.dataset.wired = '1';
+            this.els.errorRetry.addEventListener('click', function () {
+                if (self.els.error) { self.els.error.hidden = true; }
+                if (self.els.spinner) { self.els.spinner.hidden = false; }
+                // alpha.28.1 batch 57 — also reset the SSE reconnect-
+                // attempt counter so an operator who waited out a long
+                // outage doesn't have to also reload the page. The
+                // retry() method (batch 56) reschedules a reconnect
+                // if any topics are subscribed; safe no-op otherwise.
+                if (self.services && self.services.sse
+                    && typeof self.services.sse.retry === 'function') {
+                    try { self.services.sse.retry(); } catch (_) { /* ignore */ }
+                }
+                self.init();
+            });
+        }
+        if (this.els.errorReload && !this.els.errorReload.dataset.wired) {
+            this.els.errorReload.dataset.wired = '1';
+            this.els.errorReload.addEventListener('click', function () {
+                try { location.reload(); } catch (e) { /* iframe sandbox */ }
+            });
+        }
+    };
 
+    ENMApp.prototype.init = function () {
+        // alpha.28.1 batch 77 (Round-22 audit finding #1, HIGH) — populate
+        // this.els BEFORE _wireErrorActions runs. The previous shape called
+        // _wireErrorActions() at the top of init() and only created
+        // this.els below it. Constructor sets this.els = null (line 23),
+        // so the very first init() did `null.errorRetry` → TypeError, and
+        // the synchronous throw propagated up before the
+        // unhandledrejection guard (line ~160) had been installed. Failure
+        // mode: every fresh boot bricked on a permanent spinner with no
+        // error pane and no Retry affordance. Retry never had a chance to
+        // recover because the throw aborted init() before even
+        // _showSetupWizard/_showDashboard fired. Reordering is the
+        // minimal-risk fix; the constructor-default this.els = null is
+        // kept so any future code path that touches this.els before init()
+        // still surfaces loud rather than silently no-op'ing.
         this.els = {
             app:          document.getElementById('app'),
             spinner:      document.getElementById('enm-spinner'),
@@ -92,6 +178,8 @@
             error:        document.getElementById('enm-error'),
             errorTitle:   document.getElementById('enm-error-title'),
             errorDetail:  document.getElementById('enm-error-detail'),
+            errorRetry:   document.getElementById('enm-error-retry'),
+            errorReload:  document.getElementById('enm-error-reload'),
             content:      document.getElementById('enm-content'),
             tabs:         document.getElementById('enm-tabs'),
             themeToggle:  document.getElementById('enm-theme-toggle'),
@@ -102,6 +190,52 @@
             paneAudit:    document.getElementById('enm-pane-audit'),
             paneEvm:      document.getElementById('enm-pane-evm'),
         };
+        this._wireErrorActions();
+        // alpha.28.1 batch 22 — defensive belt-and-braces safety net.
+        // Today every async path has a terminal .catch (verified by the
+        // console hygiene audit aca70d0a). A future regression — a new
+        // .then() without .catch() — would surface as a silent red
+        // browser warning the operator can't see. This listener
+        // converts that into a polite single-shot toast so a real bug
+        // gets a chance to be noticed. Idempotent flag so Retry doesn't
+        // stack listeners.
+        if (!root.__enmRejectionGuardInstalled) {
+            root.__enmRejectionGuardInstalled = true;
+            var self = this;
+            root.addEventListener('unhandledrejection', function (ev) {
+                var err = ev && ev.reason;
+                var msg = (err && err.message) ? err.message : String(err);
+                if (self.services && self.services.notifications) {
+                    self.services.notifications.show({
+                        id: 'enm-unhandled-rejection',
+                        severity: 'warning',
+                        title: 'Unexpected error',
+                        body: msg,
+                    });
+                }
+                // Don't suppress the browser's own warning; preventDefault()
+                // would silence DevTools too, which we want for debugging.
+            });
+        }
+        // alpha.28.1 batch 18 — guard against accidental file-drop
+        // navigating the iframe away. Without these listeners a file
+        // dropped onto the ENM iframe (e.g. operator dragging a
+        // keystore JSON onto the page) is treated by the browser as
+        // a navigation and the page loads `file://...`, killing the
+        // dashboard. Install once at boot; idempotent flag keeps Retry
+        // from stacking listeners. (Audit ac802d65 #8.)
+        if (!root.__enmDropGuardInstalled) {
+            root.__enmDropGuardInstalled = true;
+            document.addEventListener('dragover', function (e) { e.preventDefault(); });
+            document.addEventListener('drop',     function (e) { e.preventDefault(); });
+        }
+        // alpha.25: install responsive observer FIRST so size class is set
+        // before any UI mounts. Otherwise components measure with the wrong
+        // class and render at the wrong breakpoint on first paint.
+        // (this.els was populated at the very top of init() in batch 77 —
+        // before the responsive observer because _wireErrorActions reads
+        // this.els.errorRetry / errorReload.)
+        setupResponsiveObserver();
 
         // The drawer (Phase 5C) is mounted once at app boot — it lives at
         // the top level so it can overlay any view (welcome, setup, home,
@@ -142,9 +276,25 @@
         // identity is still useful for audit attribution + the producer
         // identity card; we just don't render a wallet badge anymore (PC2's
         // launcher / system tray already shows the operator's wallet).
+        // alpha.28.1 batch 83 (Round-24 finding #2, MED) — surface a
+        // console.warn when /whoami resolves to null despite a token
+        // being present. Previously the .then silently set
+        // self.identity = null and operators had no signal that audit
+        // attribution would be "unknown wallet" for the rest of the
+        // session. The wallet service swallows all errors into null
+        // internally so we can't .catch — we have to gate on the
+        // (token-present && identity-null) combination here.
         var self = this;
         this.services.wallet.getIdentity().then(function (id) {
             self.identity = id;
+            var hasToken = !!(self.services.api && self.services.api.token);
+            if (!id && hasToken && root.console && console.warn) {
+                console.warn(
+                    'EnmApp: /whoami returned no identity despite token present; '
+                    + 'audit log entries will be attributed to "unknown wallet" '
+                    + 'for this session.'
+                );
+            }
         });
 
         this._wireThemeToggle();
@@ -169,7 +319,18 @@
                 if (setupState && setupState.completed) {
                     self._showDashboard();
                 } else {
-                    self._showSetupWizard();
+                    // alpha.28.1 batch 79 (Round-22 audit finding #3) —
+                    // pass the already-fetched setupState into
+                    // _showSetupWizard so it doesn't re-fetch the same
+                    // endpoint with skipCache:true. The previous shape
+                    // burned one extra HTTP round-trip on every fresh
+                    // boot landing in setup, AND introduced a half-
+                    // second blank-pane window between _revealContent
+                    // and _mountWelcomeScreen while the second fetch
+                    // was in flight (operator saw the spinner vanish
+                    // into an empty grey content area). Pass-through
+                    // collapses both: no extra fetch, no blank-pane gap.
+                    self._showSetupWizard(setupState);
                 }
             })
             .catch(function (err) {
@@ -194,6 +355,13 @@
      */
     ENMApp.prototype._wireThemeToggle = function () {
         if (!this.els.themeToggle) { return; }
+        // alpha.28.1 batch 24 — singleton guard. init() re-runs each
+        // Retry click on the error pane; without dataset.wired the
+        // addEventListener stacks an extra handler every retry, so
+        // after N retries the next click flips the theme N+1 times.
+        // Same pattern already used for errorRetry/errorReload.
+        if (this.els.themeToggle.dataset.wired === '1') { return; }
+        this.els.themeToggle.dataset.wired = '1';
         this.els.themeToggle.addEventListener('click', function () {
             var current = document.documentElement.getAttribute('data-theme');
             var next = (current === 'dark') ? 'light' : 'dark';
@@ -215,6 +383,9 @@
      */
     ENMApp.prototype._wireSettingsToggle = function () {
         if (!this.els.settingsToggle) { return; }
+        // Singleton guard — same reason as _wireThemeToggle above.
+        if (this.els.settingsToggle.dataset.wired === '1') { return; }
+        this.els.settingsToggle.dataset.wired = '1';
         var self = this;
         this.els.settingsToggle.addEventListener('click', function () {
             self._openSettingsDrawer();
@@ -238,6 +409,13 @@
      */
     ENMApp.prototype._wireCrossTabSync = function () {
         if (typeof BroadcastChannel !== 'function') { return; }
+        // alpha.28.1 batch 24 — singleton guard. Retry-driven init()
+        // re-runs previously opened a SECOND BroadcastChannel; both
+        // stayed subscribed to setup-complete + proposal-actioned, so
+        // every cross-tab event fired N times where N = retry count.
+        // (Lifecycle audit aff18c172.) Keep the previous BroadcastChannel
+        // alive on retry; it's still valid.
+        if (this._bc) { return; }
         var self = this;
         try {
             this._bc = new BroadcastChannel('enm');
@@ -249,6 +427,46 @@
                         self.services.api.invalidate('/setup/state');
                         self._showDashboard();
                     }
+                } else if (ev.data.type === 'proposal-actioned') {
+                    // alpha.28.1 batch 22 (audit ac31f3a08, scenario #4)
+                    // — peer window confirmed/rejected a healing
+                    // proposal first. Close our copy of the modal
+                    // silently so the operator doesn't see a "Failed"
+                    // toast when their click hits the already-actioned
+                    // proposal. The `id` field lets the close target
+                    // the right proposal when multiple are open.
+                    if (self._proposalCard && self._proposalCard.proposal
+                        && self._proposalCard.proposal.id === ev.data.id) {
+                        try { self._proposalCard.close(); }
+                        catch (_) { /* already closing */ }
+                        // alpha.28.1 batch 93 (Round-30 audit finding #3)
+                        // — surface a toast so the operator knows their
+                        // peer tab actioned this proposal (and how).
+                        // Previously the modal evaporated silently with
+                        // no signal; especially bad for destructive
+                        // Confirms where this tab's operator may have
+                        // been leaning the opposite way. The `verdict`
+                        // field has been in the BC payload (line 458)
+                        // since batch 22 but was never read.
+                        // alpha.28.1 batch 94 (Round-31 regression check)
+                        // — route through notifications.show with a stable
+                        // id so duplicate BC events (peer's close-path can
+                        // emit twice if both action handler and close
+                        // hook broadcast) collapse to a single toast
+                        // rather than stacking. Uses the proposal id so
+                        // distinct peer-actioned proposals don't dedupe
+                        // each other.
+                        if (self.services && self.services.notifications) {
+                            var peerVerdict = (ev.data.verdict === 'confirmed')
+                                ? 'Confirmed in another window'
+                                : 'Rejected in another window';
+                            self.services.notifications.show({
+                                id: 'peer-verdict-' + ev.data.id,
+                                severity: 'info',
+                                title: peerVerdict,
+                            });
+                        }
+                    }
                 }
             });
         } catch (_) { /* incompatible env — silently skip */ }
@@ -258,6 +476,14 @@
     ENMApp.prototype._broadcastSetupComplete = function () {
         if (this._bc) {
             try { this._bc.postMessage({ type: 'setup-complete' }); } catch (_) {}
+        }
+    };
+
+    /** @private — broadcast a healing-proposal action to peer tabs */
+    ENMApp.prototype._broadcastProposalActioned = function (id, verdict) {
+        if (this._bc) {
+            try { this._bc.postMessage({ type: 'proposal-actioned', id: id, verdict: verdict }); }
+            catch (_) { /* incompatible env */ }
         }
     };
 
@@ -286,7 +512,7 @@
      *
      * @private
      */
-    ENMApp.prototype._showSetupWizard = function () {
+    ENMApp.prototype._showSetupWizard = function (setupState) {
         // Friendly path (v0.4): Welcome → Setup conversation → Home.
         // The 5-tab dashboard chrome is hidden until setup is done.
         // Tear down anything from the home view first (idempotent if
@@ -296,10 +522,32 @@
         this._clearPanes();
         if (this.els.tabs) { this.els.tabs.hidden = true; }
 
+        // alpha.28.1 batch 79 (Round-22 finding #3) — if init() already
+        // fetched /setup/state and passed us the result, branch
+        // synchronously instead of firing a second fetch. The original
+        // shape blindly re-fetched on every entry, which (a) doubled
+        // network round-trips on every boot landing in setup, (b)
+        // created a visible blank-pane gap between _revealContent and
+        // _mountWelcomeScreen while the second fetch was in flight
+        // (operator saw the spinner vanish into an empty grey content
+        // area for 500-1500ms on a cold backend).
+        // Reinstall path (the menu item that calls _showSetupWizard()
+        // with no argument) still hits the network so it gets the
+        // fresh post-reinstall state.
+        var self = this;
+        if (setupState) {
+            var resumeFromArg = setupState.currentStep && setupState.currentStep !== 'welcome';
+            if (resumeFromArg) {
+                this._mountSetupConversation();
+            } else {
+                this._mountWelcomeScreen();
+            }
+            return;
+        }
+
         // If the operator has clearly already started setup (binary on disk
         // or partial install), skip the welcome screen and resume in the
         // conversation. Otherwise, lead with the welcome.
-        var self = this;
         this.services.api.get('/setup/state', { skipCache: true }).then(function (s) {
             var resume = s && s.currentStep && s.currentStep !== 'welcome';
             if (resume) {
@@ -337,7 +585,20 @@
                 + 'Hard-refresh the page (Ctrl-Shift-R).</p>';
             return;
         }
-        var conv = new root.EnmSetupConversation({
+        // alpha.28.1 batch 92 (Round-30 audit, MED) — store the
+        // SetupConversation instance on `this` so _showDashboard can
+        // call its destroy() before wiping the pane via _clearPanes.
+        // The previous shape stored the instance in a local `var conv`,
+        // so a cross-tab BC-driven 'setup-complete' transition in Tab B
+        // (Tab A completed setup → broadcast) yanked Tab B straight to
+        // _showDashboard, which did innerHTML='' on the pane without
+        // ever calling SetupConversation.destroy(). The orphaned
+        // instance kept its _installPollTimer + _bootstrapPollTimer +
+        // _unsubscribeInstall + _unsubscribeBootstrap SSE subs alive —
+        // exactly the leak pattern batches 70/83 fixed for the user-
+        // driven _goto path. Storing on `this` lets _showDashboard
+        // tear it down cleanly.
+        this._setupConv = new root.EnmSetupConversation({
             api: this.services.api,
             notifications: this.services.notifications,
             sse: this.services.sse,
@@ -348,18 +609,25 @@
                 self._broadcastSetupComplete();
             },
         });
-        conv.mount(this.els.paneDashboard);
+        this._setupConv.mount(this.els.paneDashboard);
     };
 
     ENMApp.prototype._showDashboard = function () {
         // 0.2.0-alpha.1 — Apple Hero phase 2: paint the page wash before
-        // the technical view mounts. Default bucket is 'healthy' so the
-        // green wash is in place before chain-cards report in; the
-        // gradient controller corrects to the truthful bucket on the
-        // first 'enm:chain-state' event (chain-card emits these in
-        // phase 6 of the rewrite).
+        // the technical view mounts. The gradient controller corrects
+        // to the truthful bucket on the first 'enm:chain-state' event
+        // (chain-card emits these in phase 6 of the rewrite).
+        //
+        // alpha.28.1 batch 78 (Round-22 audit finding #2) — initial
+        // bucket is now 'idle' (neutral grey) instead of 'healthy'
+        // (green). The 200–600ms window between dashboard mount and
+        // first chain-state event was painting a green "everything OK"
+        // wash to an operator who may have just opened ENM BECAUSE
+        // something is broken. Neutral grey on first paint, then crossfade
+        // to the truthful bucket once chain-cards report — no false-
+        // positive flash, no misleading first impression on a sick fleet.
         if (this.services.fleetHealth) {
-            this.services.fleetHealth.mount('healthy');
+            this.services.fleetHealth.mount('idle');
         }
         // v0.5 reset — the home view IS the v0.3 technical dashboard.
         //
@@ -372,6 +640,13 @@
         // verifiable backend state); everything post-setup goes straight
         // to the technical view, which renders only what the API
         // explicitly returns.
+        // batch 92 — tear down the setup conversation BEFORE _clearPanes
+        // wipes its DOM. Without this the orphaned instance's poll/SSE
+        // callbacks keep firing against detached DOM (Round-30 audit).
+        if (this._setupConv) {
+            try { this._setupConv.destroy(); } catch (_) { /* ignore */ }
+            this._setupConv = null;
+        }
         this._revealContent();
         this._collapseHeaderToHome();
         this._clearPanes();
@@ -407,11 +682,21 @@
                     self._openProposalById(payload.proposalId);
                     return;
                 }
+                // alpha.28.1 batch 19 (audit ad49e60e) — stable id
+                // derived from content. The previous fallback
+                // 'enm-sse-' + (payload.ts || Date.now()) used a fresh
+                // value on every push, so a backend retry loop emitting
+                // the same alert stacked toasts. Hash severity+summary
+                // to dedupe content-identical alerts in place; only
+                // genuinely new content gets a new toast.
+                var sseTitle = payload.summary || payload.title || 'Notification';
+                var sseId = payload.proposalId
+                    || ('enm-sse-' + payload.severity + ':' + sseTitle);
                 self.services.notifications.show({
                     severity: mapSeverity(payload.severity),
-                    title:    payload.summary || payload.title || 'Notification',
+                    title:    sseTitle,
                     body:     payload.detail  || payload.body  || '',
-                    id:       payload.proposalId || ('enm-sse-' + (payload.ts || Date.now())),
+                    id:       sseId,
                 });
             });
         }
@@ -477,7 +762,23 @@
 
     ENMApp.prototype._openProposalById = function (id) {
         var self = this;
+        // alpha.28.1 batch 55 — short-circuit if the same proposal is
+        // already on screen (live card matches id). Without this, a
+        // backend retry or duplicate SSE event opened a second modal
+        // on top of the first; the operator's confirm/reject hit one
+        // dialog while the other lingered. (Race-conditions audit
+        // aaf1f87d "sequence-number gaps" section.)
+        if (this._proposalCard && this._proposalCard.proposal
+            && this._proposalCard.proposal.id === id) {
+            return;
+        }
         this.services.api.get('/healing/suggestions', { skipCache: true }).then(function (data) {
+            // Re-check under .then in case the proposal-card mounted
+            // between our check above and this fetch resolving.
+            if (self._proposalCard && self._proposalCard.proposal
+                && self._proposalCard.proposal.id === id) {
+                return;
+            }
             var rec = (data && Array.isArray(data.proposals))
                 ? data.proposals.find(function (p) { return p.id === id; })
                 : null;
@@ -487,11 +788,25 @@
 
     ENMApp.prototype._openProposal = function (p) {
         if (!root.EnmProposalCard) { return; }
+        var self = this;
+        // alpha.28.1 batch 22 — track the live card on `_proposalCard`
+        // so the cross-tab `proposal-actioned` BC listener can match
+        // by id and close it silently when a peer window actioned it
+        // first (avoids the operator seeing a "Confirmation failed"
+        // toast for an action that actually succeeded in the other
+        // window).
         var card = new root.EnmProposalCard({
             proposal: p,
             api: this.services.api,
             notifications: this.services.notifications,
+            onActioned: function (verdict) {
+                self._broadcastProposalActioned(p.id, verdict);
+            },
+            onClose: function () {
+                if (self._proposalCard === card) { self._proposalCard = null; }
+            },
         });
+        this._proposalCard = card;
         card.mount(document.body);
     };
 
@@ -523,14 +838,39 @@
             title  = t('owner.forbidden');
             detail = t('app.forbiddenHelp');
         } else if (err && err._tag === 'health') {
-            title  = t('app.backendUnreachable');
-            detail = t('app.backendHelp') + (err.message ? ' (' + err.message + ')' : '');
+            // navigator.onLine is unreliable as a TRUE signal (false
+            // positives) but a RELIABLE false signal — when it's
+            // false, the browser confirms no network. Use that to
+            // override the "blame the backend" copy and tell the
+            // operator they're offline. Saves a misleading docker-logs
+            // pointer when the real problem is their wifi.
+            if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+                title  = t('app.offlineTitle');
+                detail = t('app.offlineHelp');
+            } else {
+                title  = t('app.backendUnreachable');
+                detail = t('app.backendHelp') + (err.message ? ' (' + err.message + ')' : '');
+            }
         } else {
             title  = t('app.generic_error');
             detail = (err && err.message) ? err.message : String(err);
         }
         this.els.errorTitle.textContent = title;
         this.els.errorDetail.textContent = detail;
+
+        // a11y/focus: the error pane lives inside role="alert" so screen
+        // readers announce the new content, but sighted keyboard users
+        // need a focus indicator landing inside it. Promote the title
+        // to a programmatically-focusable element and move focus there
+        // so the next Tab walks into the error pane's links/buttons.
+        try {
+            if (this.els.errorTitle && typeof this.els.errorTitle.focus === 'function') {
+                if (!this.els.errorTitle.hasAttribute('tabindex')) {
+                    this.els.errorTitle.setAttribute('tabindex', '-1');
+                }
+                this.els.errorTitle.focus({ preventScroll: true });
+            }
+        } catch (e) { /* focus may fail in detached states */ }
     };
 
     function withTag(err, tag) {

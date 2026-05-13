@@ -81,7 +81,10 @@
 
         var svg = document.createElementNS(SVG_NS, 'svg');
         svg.setAttribute('viewBox', '0 0 ' + VB + ' ' + VB);
-        svg.setAttribute('role', 'img');
+        // a11y: aria-hidden=true hides the SVG from AT; role=img is redundant
+        // and was previously paired here, causing screen readers to announce
+        // an "image" with no name. The outer button's dynamic aria-label
+        // is the accessible name for this control.
         svg.setAttribute('focusable', 'false');
         svg.setAttribute('aria-hidden', 'true');
         svg.classList.add('enm-pc-svg');

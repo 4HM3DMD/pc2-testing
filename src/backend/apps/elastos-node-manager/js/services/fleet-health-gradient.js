@@ -77,6 +77,15 @@
         if (!this._mounted) return;
         this._mounted = false;
         root.removeEventListener('enm:chain-state', this._onChainState);
+        // alpha.28.1 batch 83 (Round-24 finding #6) — clear the per-
+        // chain state map on teardown. The CSS attribute on <html> is
+        // deliberately preserved (the comment below explains why), but
+        // _chainStates is internal data that has no business surviving
+        // a mount→destroy→mount cycle (e.g. Reinstall path). Without
+        // this, the second mount carried the stale aggregate from the
+        // first session and could emit the old bucket on first paint
+        // before the new chain-cards reported in.
+        this._chainStates = Object.create(null);
         // Don't strip the attribute — leaving it preserves the last
         // paint, which is less jarring than a sudden neutral wash if
         // the dashboard remounts (e.g. after a setup completion).

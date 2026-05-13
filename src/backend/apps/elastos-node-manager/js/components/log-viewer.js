@@ -33,18 +33,43 @@
 
         this._followTail = true;
         this._unsubscribe = null;
+        // alpha.28.1 batch 64 (Round-18 audit) — lifecycle flag. The
+        // previous shape unsubscribed SSE in destroy() but had no signal
+        // to short-circuit the _loadInitialTail promise chain. A teardown
+        // mid-fetch would resolve into appendBatch(detached scroller) +
+        // _drainPendingSseBatches(detached scroller) — wasted DOM work
+        // and a small leak from the queued batches getting drained into
+        // nodes that were already removed. Aligns with every other
+        // component in the codebase (chain-card, validator-card, tools-
+        // update-card) which sets _destroyed and guards async resolutions.
+        this._destroyed = false;
 
         this._renderShell();
     }
 
     LogViewer.prototype.mount = function (parent) {
         parent.appendChild(this.root);
+        // alpha.28.1 batch 41 — initial-tail vs first-SSE-batch ordering
+        // race (Round-11 audit aaf1f87d B6). Previously: SSE could
+        // deliver its first batch BEFORE the slow /tail GET resolved.
+        // Lines appended in arrival order → SSE-1 sat ABOVE the 200
+        // historical tail lines → operator's scrollToBottom landed in
+        // the historical section, NOT on the live tail. With the buffer
+        // below, SSE batches that arrive before the tail GET settles
+        // are queued and replayed AFTER the tail in correct chronological
+        // order.
+        this._initialTailDone = false;
+        this._pendingSseBatches = [];
         this._loadInitialTail();
         this._subscribe();
         return this;
     };
 
     LogViewer.prototype.destroy = function () {
+        // Mark destroyed FIRST so any in-flight _loadInitialTail
+        // resolutions can short-circuit before mutating detached DOM.
+        // (Round-18 audit, batch 64.)
+        this._destroyed = true;
         if (this._unsubscribe) { this._unsubscribe(); this._unsubscribe = null; }
         if (this._sseStateUnsub) { this._sseStateUnsub(); this._sseStateUnsub = null; }
         if (this.root.parentNode) { this.root.parentNode.removeChild(this.root); }
@@ -60,13 +85,20 @@
         var title = document.createElement('h3');
         title.className = 'enm-log-title';
         title.textContent = t('log_viewer.heading') + ' — ' + this.chainId;
+        // a11y: heading truncates with text-overflow:ellipsis on narrow widths.
+        // Mirror the full label into title= so it stays readable.
+        title.title = title.textContent;
         head.appendChild(title);
 
         this._tailToggle = document.createElement('button');
         this._tailToggle.type = 'button';
         this._tailToggle.className = 'enm-log-tail-toggle enm-log-following';
         this._tailToggle.textContent = t('log_viewer.live');
-        this._tailToggle.title = t('log_viewer.live');
+        // Don't mirror the same string into title= — duplicating a
+        // visible button label is pure noise for screen-reader users
+        // (they get the label, then the title, identical). The title=
+        // is only assigned in the reconnecting branch where it carries
+        // additional context.
         var self = this;
         // SSE connection-state tracking — was missing before, so the
         // "live" badge stayed lit even when the EventSource was
@@ -94,7 +126,10 @@
             self._tailToggle.classList.remove('enm-log-reconnecting');
             self._tailToggle.textContent = t(self._followTail ? 'log_viewer.live' : 'log_viewer.paused');
             self._tailToggle.classList.toggle('enm-log-following', self._followTail);
-            self._tailToggle.title = self._tailToggle.textContent;
+            // Clear title= in the connected branch — see _renderShell
+            // comment; we only set title= when the badge carries info
+            // not already visible in the label.
+            self._tailToggle.removeAttribute('title');
         };
         this._tailToggle.addEventListener('click', function () {
             // Don't toggle while disconnected — the badge is non-actionable then.
@@ -105,20 +140,68 @@
         });
         head.appendChild(this._tailToggle);
 
+        // Download button — mirrors the audit-tab JSON export pattern.
+        // Builds a plaintext blob from the current buffer (capped at
+        // MAX_DOM_LINES = 5000 lines) so the operator can attach the
+        // log slice to a bug report without copying line-by-line.
+        this._downloadBtn = document.createElement('button');
+        this._downloadBtn.type = 'button';
+        this._downloadBtn.className = 'enm-btn enm-btn-secondary enm-log-download';
+        this._downloadBtn.textContent = 'Download';
+        this._downloadBtn.setAttribute('aria-label', 'Download visible logs as text');
+        this._downloadBtn.title = 'Download the visible log buffer (up to ' + MAX_DOM_LINES + ' lines)';
+        this._downloadBtn.addEventListener('click', function () { self._exportText(); });
+        head.appendChild(this._downloadBtn);
+
+        // Buffer-drop pill — invisible until the first head-trim runs in
+        // _appendBatch. Once shown, persists for the rest of the mount
+        // so the operator knows the visible buffer is a rolling window.
+        this._bufferPill = document.createElement('span');
+        this._bufferPill.className = 'enm-log-buffer-pill';
+        this._bufferPill.hidden = true;
+        this._bufferPill.setAttribute('role', 'status');
+        head.appendChild(this._bufferPill);
+
         this.root.appendChild(head);
 
         this._scroller = document.createElement('div');
         this._scroller.className = 'enm-log-scroller';
+        // a11y: role="log" alone is enough; pairing with aria-live="polite"
+        // forced screen readers to announce every SSE batch (up to 500
+        // lines/sec). The Live/Paused toggle is the operator's existing
+        // control over auto-scroll; AT users can read the scroller
+        // explicitly via the live-region role without flooding.
         this._scroller.setAttribute('role', 'log');
-        this._scroller.setAttribute('aria-live', 'polite');
+        this._scroller.setAttribute('aria-label', t('log_viewer.heading') + ' — ' + this.chainId);
 
         // If user scrolls up manually, pause auto-tail.
+        // alpha.28.1 batch 73 (Round-20A audit finding #2) — route
+        // through _refreshTailLabel so the "reconnecting…" pill state
+        // wins over "Paused (auto-resume on new line)" when SSE is
+        // down. The previous shape unconditionally wrote 'log_viewer.paused'
+        // + dropped the .enm-log-following class, clobbering the
+        // reconnecting visual state set by _refreshTailLabel. Failure
+        // mode: operator scrolls up while SSE is reconnecting, sees
+        // "Paused — auto-resume on new line", waits indefinitely for
+        // new lines that never arrive (SSE is dead). The new path
+        // updates _followTail then defers the label/class decision to
+        // _refreshTailLabel which already branches on _sseConnState.
         this._scroller.addEventListener('scroll', function () {
             var nearBottom = (self._scroller.scrollHeight - self._scroller.clientHeight - self._scroller.scrollTop) < 4;
             if (!nearBottom && self._followTail) {
                 self._followTail = false;
-                self._tailToggle.textContent = t('log_viewer.paused');
-                self._tailToggle.classList.remove('enm-log-following');
+                if (typeof self._refreshTailLabel === 'function') {
+                    self._refreshTailLabel();
+                } else {
+                    // _refreshTailLabel attaches in _renderShell's later
+                    // pass; if scroll fires before that completes (e.g.
+                    // programmatic scroll during initial-tail render)
+                    // fall back to the previous shape. Safe because at
+                    // that point the SSE has never been opened so
+                    // _sseConnState defaults to 'open'.
+                    self._tailToggle.textContent = t('log_viewer.paused');
+                    self._tailToggle.classList.remove('enm-log-following');
+                }
             }
         });
 
@@ -135,13 +218,35 @@
         var self = this;
         return this.api.get('/logs/' + this.chainId + '/tail?n=' + INITIAL_TAIL_N, { skipCache: true })
             .then(function (data) {
-                if (!data || !Array.isArray(data.lines)) { return; }
-                if (data.lines.length === 0) { return; }
-                self._appendBatch(data.lines);
+                // Round-18 audit batch 64 — short-circuit if the component
+                // was destroyed mid-fetch. Without this we'd append into
+                // a detached scroller (already removed from the DOM).
+                if (self._destroyed) { return; }
+                if (data && Array.isArray(data.lines) && data.lines.length > 0) {
+                    self._appendBatch(data.lines);
+                }
             })
             .catch(function () {
                 // Silent — chain may not have started yet, /tail returns empty.
+            })
+            .then(function () {
+                if (self._destroyed) { return; }
+                // Whether the tail GET succeeded or failed, the boundary
+                // is the same: any SSE batches that came in during the
+                // fetch are now safe to flush in order.
+                self._initialTailDone = true;
+                self._drainPendingSseBatches();
             });
+    };
+
+    /** @private */
+    LogViewer.prototype._drainPendingSseBatches = function () {
+        if (!this._pendingSseBatches || this._pendingSseBatches.length === 0) { return; }
+        var queued = this._pendingSseBatches;
+        this._pendingSseBatches = [];
+        for (var i = 0; i < queued.length; i += 1) {
+            this._appendBatch(queued[i]);
+        }
     };
 
     /** @private */
@@ -150,9 +255,17 @@
         this._unsubscribe = this.sse.subscribe(
             'chains:' + this.chainId + ':logs',
             function (payload) {
-                if (payload && Array.isArray(payload.lines)) {
-                    self._appendBatch(payload.lines);
+                if (!payload || !Array.isArray(payload.lines)) { return; }
+                // Queue SSE batches that arrive before the initial tail
+                // fetch settles. Drain happens in _loadInitialTail's
+                // finally-style then(). Preserves chronological order
+                // (tail rows first, then SSE rows) so scrollToBottom
+                // lands on the newest line.
+                if (!self._initialTailDone) {
+                    self._pendingSseBatches.push(payload.lines);
+                    return;
                 }
+                self._appendBatch(payload.lines);
             },
         );
     };
@@ -182,11 +295,89 @@
             for (var j = 0; j < excess && this._scroller.firstElementChild; j += 1) {
                 this._scroller.removeChild(this._scroller.firstElementChild);
             }
+            // Tally lines that fell off the head so the buffer-drop pill
+            // can honestly report "N older lines dropped". Without this
+            // the operator's mental model ("this is the chain's log
+            // file") is wrong — it's a rolling window of MAX_DOM_LINES.
+            var firstDrop = !this._droppedCount;
+            this._droppedCount = (this._droppedCount || 0) + excess;
+            if (this._bufferPill) {
+                // a11y: role="status" announces the pill the first time it
+                // un-hides, which is the only moment the operator's
+                // mental model needs to update. Subsequent count updates
+                // re-write textContent silently (by temporarily removing
+                // role) so a 500-line/sec flood doesn't re-announce
+                // every batch. Visual updates remain live; only the SR
+                // queue is throttled.
+                if (firstDrop) {
+                    this._bufferPill.setAttribute('role', 'status');
+                    this._bufferPill.hidden = false;
+                } else {
+                    this._bufferPill.removeAttribute('role');
+                }
+                // alpha.28.1 batch 74 (Round-20A finding #4) — pluralize
+                // so the boundary case (excess === 1) doesn't read
+                // "Older lines dropped: 1". Same one-shot manual plural
+                // approach as the audit-tab row counter (ICU plural
+                // shim still deferred for alpha.29).
+                this._bufferPill.textContent = (this._droppedCount === 1
+                    ? 'Older line dropped: 1'
+                    : 'Older lines dropped: ' + this._droppedCount.toLocaleString());
+                this._bufferPill.title = 'The viewer keeps the most recent '
+                    + MAX_DOM_LINES.toLocaleString() + ' lines in memory. '
+                    + 'Use Download to capture the visible buffer.';
+            }
         }
 
         if (this._followTail) {
             this._scrollToBottom();
         }
+    };
+
+    /**
+     * @private
+     * Build a plaintext blob from the current buffer and trigger a
+     * download. Mirrors the audit-tab JSON export pattern so operators
+     * can attach a log slice to a bug report without copying line-by-line.
+     */
+    // alpha.28.1 batch 71 (Round-19B audit finding #6) — both
+    // _exportText and _renderLine called `new Date(e.ts || Date.now())`.
+    // The `|| Date.now()` guard only catches FALSY values; a malformed
+    // truthy `ts` (e.g. the string "not-a-date" from a backend bug)
+    // produces an Invalid Date object whose getHours/getMinutes/getSeconds
+    // all return NaN. The render path then displayed "NaN:NaN:NaN" in
+    // the timestamp prefix and the title attribute read "Invalid Date".
+    // safeDate() probes for a real timestamp before returning; falls
+    // back to Date.now() on any failure mode.
+    function safeDate(raw) {
+        if (raw == null) { return new Date(); }
+        var n = (typeof raw === 'number') ? raw : Date.parse(raw);
+        if (!isFinite(n)) { return new Date(); }
+        var d = new Date(n);
+        // getTime() returns NaN for an Invalid Date — final defensive
+        // probe in case Date.parse accepted but the constructor still
+        // produced an unrenderable Date.
+        if (isNaN(d.getTime())) { return new Date(); }
+        return d;
+    }
+
+    LogViewer.prototype._exportText = function () {
+        var lines = (this._lines || []).map(function (e) {
+            var ts;
+            try { ts = safeDate(e.ts).toISOString(); }
+            catch (err) { ts = '?'; }
+            var stream = (e.stream === 'stderr' ? 'stderr' : 'stdout');
+            return ts + ' [' + stream + '] ' + (e.line || '');
+        });
+        var blob = new Blob([lines.join('\n') + '\n'], { type: 'text/plain' });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = 'enm-logs-' + this.chainId + '-' + Date.now() + '.txt';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
     };
 
     /** @private */
@@ -195,7 +386,9 @@
         var div = document.createElement('div');
         div.className = 'enm-log-line enm-log-line-' + (entry.stream === 'stderr' ? 'stderr' : 'stdout');
         // Prefix with HH:MM:SS for readability — full timestamp is in the title.
-        var d = new Date(entry.ts || Date.now());
+        // batch 71 — safeDate guards against malformed truthy ts values
+        // (Invalid Date → NaN:NaN:NaN before this fix).
+        var d = safeDate(entry.ts);
         var time = pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds());
         var ts = document.createElement('span');
         ts.className = 'enm-log-ts';
