@@ -404,21 +404,16 @@
         if (u.protocol !== 'https:' && u.protocol !== 'http:') { return '#'; }
         return u.toString();
     }
+    // alpha.28.1 batch 35 — migrated to enmFormatDate (batch 34 helper)
+    // for the relative human label. The `<time datetime=>` wrap with
+    // ISO tooltip is preserved (it's the WCAG 1.4.13-friendly tooltip
+    // from batch 6); only the inner human-string generation moved to
+    // the shared helper.
     function relTime(ms) {
         if (!ms || typeof ms !== 'number') { return 'recently'; }
-        var diffSec = Math.max(0, Math.floor((Date.now() - ms) / 1000));
-        var human;
-        if (diffSec < 60)         { human = 'just now'; }
-        else if (diffSec < 3600)  { human = Math.floor(diffSec / 60) + ' min ago'; }
-        else if (diffSec < 86400) { human = Math.floor(diffSec / 3600) + ' h ago'; }
-        else                      { human = Math.floor(diffSec / 86400) + ' d ago'; }
-        // Wrap the human label in a <time> element carrying the exact
-        // ISO timestamp so:
-        //   - the operator gets the precise time on hover (title=)
-        //   - assistive tech can announce datetime= as the canonical
-        //     value when the relative phrase ("12 min ago") is too vague
-        //   - the rendered span survives static HTML strings without
-        //     extra JS plumbing.
+        var human = (typeof root !== 'undefined' && root.enmFormatDate)
+            ? root.enmFormatDate(ms, { mode: 'relative' })
+            : 'recently';
         try {
             var iso = new Date(ms).toISOString();
             return '<time datetime="' + iso + '" title="' + iso + '">' + human + '</time>';

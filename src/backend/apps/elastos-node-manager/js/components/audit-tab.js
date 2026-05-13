@@ -258,24 +258,19 @@
         });
     };
 
+    // alpha.28.1 batch 35 — migrated to enmFormatDate (batch 34 helper).
+    // Same UTC-canonical + local-tooltip pairing as before, now sourced
+    // from the shared helper instead of inline Date plumbing.
     function formatTs(ms) {
-        if (!ms) return '—';
-        var d = new Date(ms);
-        return d.toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, ' UTC');
+        return (typeof window !== 'undefined' && window.enmFormatDate)
+            ? window.enmFormatDate(ms, { mode: 'iso' })
+            : (ms ? new Date(ms).toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, ' UTC') : '—');
     }
-    /**
-     * Operator-local rendering for hover/title — Round 15 locale audit
-     * (adc48dd0) flagged the audit-tab as "UTC-only display next to
-     * datetime-local filter inputs" which causes confusion for non-UTC
-     * operators. Cheap fix: keep UTC in the cell (canonical for record-
-     * keeping) and surface the local-time equivalent on hover.
-     */
     function formatTsLocal(ms) {
         if (!ms) return '';
-        try {
-            var d = new Date(ms);
-            return d.toLocaleString();
-        } catch (e) { return ''; }
+        return (typeof window !== 'undefined' && window.enmFormatDate)
+            ? window.enmFormatDate(ms, { mode: 'local' })
+            : new Date(ms).toLocaleString();
     }
     function shortenWallet(s) {
         if (!s) return '—';
