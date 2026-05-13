@@ -63,8 +63,18 @@
         }
     };
 
+    // alpha.28.1 batch 83 (Round-24 finding #1, MED) — align with the
+    // defensive null/undefined coercion every other escapeHtml copy
+    // in the codebase already uses (setup-conversation:1101,
+    // validator-card:364, settings-drawer:411, technical-view:673,
+    // tools-update-card:442). Welcome-screen was the only outlier
+    // calling `String(s)` raw — if a future i18n key returns undefined
+    // (strings.js fails to load, or `friendly.welcome.title` is renamed),
+    // the welcome card's first-impression renders the literal string
+    // "undefined" instead of empty. Trivial inconsistency that
+    // defeated the file's own defensive pattern.
     function escapeHtml(s) {
-        return String(s).replace(/[&<>"']/g, function (c) {
+        return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
             return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
         });
     }

@@ -276,9 +276,25 @@
         // identity is still useful for audit attribution + the producer
         // identity card; we just don't render a wallet badge anymore (PC2's
         // launcher / system tray already shows the operator's wallet).
+        // alpha.28.1 batch 83 (Round-24 finding #2, MED) — surface a
+        // console.warn when /whoami resolves to null despite a token
+        // being present. Previously the .then silently set
+        // self.identity = null and operators had no signal that audit
+        // attribution would be "unknown wallet" for the rest of the
+        // session. The wallet service swallows all errors into null
+        // internally so we can't .catch — we have to gate on the
+        // (token-present && identity-null) combination here.
         var self = this;
         this.services.wallet.getIdentity().then(function (id) {
             self.identity = id;
+            var hasToken = !!(self.services.api && self.services.api.token);
+            if (!id && hasToken && root.console && console.warn) {
+                console.warn(
+                    'EnmApp: /whoami returned no identity despite token present; '
+                    + 'audit log entries will be attributed to "unknown wallet" '
+                    + 'for this session.'
+                );
+            }
         });
 
         this._wireThemeToggle();

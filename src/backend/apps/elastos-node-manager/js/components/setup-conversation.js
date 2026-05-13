@@ -59,6 +59,15 @@
         // in _beginInstall can be cancelled. See _teardownInstallTracking
         // for why this is necessary.
         this._installPollTimer = null;
+        // alpha.28.1 batch 83 (Round-24 finding #4) — _destroyed flag
+        // so the Card B2 bootstrap poll's resolved tick can short-
+        // circuit if destroy() fires between the poll firing and the
+        // .then resolving. Card B's install-tracking explicitly handles
+        // this via _teardownInstallTracking; Card B2 was asymmetric.
+        // The resolved tick is harmless today (writes to detached DOM)
+        // but the asymmetry contradicts the symmetrical-with-Card-B
+        // rationale documented at the top of _goto.
+        this._destroyed = false;
     }
 
     /**
@@ -94,6 +103,9 @@
     };
 
     SetupConversation.prototype.destroy = function () {
+        // batch 83 — flip flag FIRST so any in-flight poll/SSE callbacks
+        // can see it before they mutate detached DOM.
+        this._destroyed = true;
         this._teardownInstallTracking();
         if (this._unsubscribeBootstrap) { this._unsubscribeBootstrap(); this._unsubscribeBootstrap = null; }
         if (this._bootstrapPollTimer) { clearInterval(this._bootstrapPollTimer); this._bootstrapPollTimer = null; }
@@ -533,8 +545,13 @@
             );
         }
         this._bootstrapPollTimer = setInterval(function () {
-            if (done) { return; }
+            // batch 83 — short-circuit if the component was destroyed
+            // mid-poll. The `done` flag handles terminal phases; this
+            // covers the lifecycle teardown case where the operator
+            // navigated away or the app reinstalled mid-bootstrap.
+            if (done || self._destroyed) { return; }
             self.api.get('/chains/mainchain/bootstrap', { skipCache: true }).then(function (data) {
+                if (self._destroyed) { return; }
                 applyStatus(data && data.status);
             }).catch(function () { /* leave the existing display, the poll retries */ });
         }, 2000);
