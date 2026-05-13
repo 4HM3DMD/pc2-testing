@@ -163,35 +163,13 @@
             //   - notif.* is preserved because the toast texts are still
             //     used by the proposal pipeline (CRITICAL prompts pop on
             //     top of the dashboard).
-            notif: {
-                auto_restart:    'Your ElastOS had a hiccup and restarted itself. All good now.',
-                needs_attention: 'Your ElastOS needs a moment — tap to see what happened.',
-                back_online:     'Your ElastOS is back online.',
-            },
-
-            // Settings drawer.
-            settings: {
-                title: 'Settings',
-
-                section_notif:     'When to tell me',
-                opt_notif_help:    'Tell me when my ElastOS needs help',
-                opt_notif_celebrate: 'Celebrate milestones (first reward, etc.)',
-                opt_notif_weekly:  'Send me a weekly summary',
-
-                section_behavior:  'How my ElastOS behaves',
-                opt_auto_restart:  'Restart automatically if it crashes',
-                opt_auto_heal:     'Try to fix problems without asking me',
-                opt_auto_heal_help:'Recommended only for experienced operators.',
-
-                section_advanced:  'For the technically curious',
-                opt_show_tech:     'Show technical details',
-                opt_view_log:      'View activity log',
-                opt_reinstall:     'Reinstall my node',
-
-                save:              'Save changes',
-                saved:             'Saved.',
-                close:             'Close',
-            },
+            // alpha.28.1 batch 46 — `friendly.notif` (3 keys) and the
+            // friendly.settings.section_* / opt_* sub-blocks (~12 keys)
+            // dropped. Round-7 i18n audit acbcec6b verified zero JS
+            // callers. The settings drawer was rewritten in alpha.13
+            // with inline strings; the friendly notification copy was
+            // never wired up — the live notification pipeline uses
+            // the technical strings under notification.* instead.
 
             // Errors that surface to the user.
             error: {
@@ -253,9 +231,10 @@
             stop:       'Stop',
             restart:    'Restart',
             configure:  'Configure',
-            confirm_stop:    'Stop {chainName}?',
-            confirm_restart: 'Restart {chainName}?',
-            cooldown:   'Hold on... {seconds}s',
+            // alpha.28.1 batch 46 — dropped confirm_stop, confirm_restart,
+            // cooldown. Round-7 i18n audit acbcec6b verified zero JS
+            // callers. The chain-card uses a click-and-busy pattern
+            // (enmRunOnce) rather than a confirm() dialog.
             starting:   'Starting...',
             stopping:   'Stopping...',
             restarting: 'Restarting...',
