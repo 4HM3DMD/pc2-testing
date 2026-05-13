@@ -62,15 +62,36 @@
         // the visible string was frozen for up to 6 hours of clock time.
         // Operator returns to the Tools tab 90 minutes later and still
         // sees "Last checked 5 min ago" — implying a fresh probe that
-        // did not happen. 60s tick is cheap (DOM walk + textContent
-        // write) and reads correctly to the nearest minute.
+        // did not happen.
+        //
+        // alpha.28.1 batch 75 (Round-21 regression) — the original tick
+        // wrote `spans[i].textContent = relTime(ts)`, but relTime
+        // returns trusted HTML (`<time datetime=... title=...>X min
+        // ago</time>`). Assigning that to textContent rendered the
+        // raw markup as visible text. The right shape is to update
+        // only the inner <time> element's text via enmFormatDate's
+        // relative mode (the human substring), leaving the surrounding
+        // <time datetime + title> static — datetime represents WHEN
+        // the check happened, not when it was last rendered, so it
+        // is correctly stable.
         this._relTimer = setInterval(function () {
             if (self._destroyed) { return; }
             var spans = self.root.querySelectorAll('.enm-tools-update-reltime');
             for (var i = 0; i < spans.length; i += 1) {
                 var ts = Number(spans[i].dataset.ts);
-                if (isFinite(ts)) {
-                    spans[i].textContent = relTime(ts);
+                if (!isFinite(ts)) { continue; }
+                var timeEl = spans[i].querySelector('time');
+                var human = (typeof root !== 'undefined' && root.enmFormatDate)
+                    ? root.enmFormatDate(ts, { mode: 'relative' })
+                    : 'recently';
+                if (timeEl) {
+                    timeEl.textContent = human;
+                } else {
+                    // <time> missing (older render path or relTime
+                    // fell back to its catch branch). Update the span
+                    // directly with textContent — losing the <time>
+                    // wrap but keeping a readable value.
+                    spans[i].textContent = human;
                 }
             }
         }, 60_000);
@@ -133,7 +154,7 @@
                 +     '(<code>' + escapeHtml(env.current || 'unknown') + '</code>).'
                 +     (env.lastCheckedAt
                         ? ' Last checked <span class="enm-tools-update-reltime" data-ts="' + env.lastCheckedAt + '">'
-                          + escapeHtml(relTime(env.lastCheckedAt)) + '</span>.'
+                          + relTime(env.lastCheckedAt) + '</span>.'
                         : '')
                 +     (isFallback
                         ? '<br><span style="font-size:12px;color:var(--text-muted)">'
@@ -182,7 +203,7 @@
             +     (env.publishedAt
                     ? ' <span class="enm-tools-update-when">'
                       + 'released <span class="enm-tools-update-reltime" data-ts="' + Date.parse(env.publishedAt) + '">'
-                      + escapeHtml(relTime(Date.parse(env.publishedAt))) + '</span>'
+                      + relTime(Date.parse(env.publishedAt)) + '</span>'
                       + '</span>'
                     : '')
             +   '</p>'
