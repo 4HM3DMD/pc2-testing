@@ -263,6 +263,15 @@
         // every other dynamic path segment in audit-tab uses
         // encodeURIComponent (lines 157-158) so this is consistency too.
         this.api.post('/healing/confirm/' + encodeURIComponent(this.proposal.id), body).then(function () {
+            // alpha.28.1 batch 93 (Round-30 audit) — guard against the
+            // case where a peer tab's BroadcastChannel proposal-actioned
+            // event closed this dialog between the POST starting and
+            // resolving. Without the guard, the toast fires for an
+            // action that no longer represents this tab's verdict, and
+            // self.onActioned re-broadcasts a redundant second
+            // proposal-actioned event. The catch branch already had
+            // the equivalent guard at line 270.
+            if (self._closed) { return; }
             self.notifications.info('Confirmed', self._actionLabel || '');
             try { self.onActioned('confirmed'); } catch (_) { /* host hook threw */ }
             self.close();
@@ -297,6 +306,8 @@
         // Batch 69 — encodeURIComponent on proposal.id (same rationale
         // as the confirm path above).
         this.api.post('/healing/reject/' + encodeURIComponent(this.proposal.id), body).then(function () {
+            // batch 93 — same _closed guard rationale as _handleConfirm above.
+            if (self._closed) { return; }
             self.notifications.info('Rejected', self._actionLabel || '');
             try { self.onActioned('rejected'); } catch (_) { /* host hook threw */ }
             self.close();
