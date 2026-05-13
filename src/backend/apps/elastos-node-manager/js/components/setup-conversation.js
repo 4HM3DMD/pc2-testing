@@ -812,7 +812,7 @@
         els.reveal.innerHTML =
             '<div class="enm-password-reveal">'
               + '<code class="enm-password-value">' + escapeHtml(password) + '</code>'
-              + '<button type="button" class="enm-btn enm-btn-secondary enm-password-copy">'
+              + '<button type="button" class="enm-btn enm-btn-secondary enm-password-copy" aria-label="Copy keystore password">'
                 + escapeHtml(t('friendly.setup.card_c.cta_copy'))
               + '</button>'
             + '</div>'
@@ -823,16 +823,33 @@
 
         var copyBtn = els.reveal.querySelector('.enm-password-copy');
         copyBtn.addEventListener('click', function () {
-            try {
-                navigator.clipboard.writeText(password).then(function () {
-                    copyBtn.textContent = t('friendly.setup.card_c.cta_copied');
-                    copyBtn.dataset.copied = '1';
-                    setTimeout(function () {
-                        copyBtn.textContent = t('friendly.setup.card_c.cta_copy');
-                        delete copyBtn.dataset.copied;
-                    }, 1500);
-                });
-            } catch (e) { /* clipboard may be blocked; user can select manually */ }
+            // Feature-detect first — otherwise calling .writeText on a
+            // missing clipboard API throws synchronously and the previous
+            // try/catch swallowed it silently with NO operator feedback.
+            // Bad behaviour for a one-shot keystore password reveal.
+            var hasClipboard = !!(navigator && navigator.clipboard && navigator.clipboard.writeText);
+            if (!hasClipboard) {
+                // Programmatically select the password code so Ctrl+C works.
+                try {
+                    var passEl = els.reveal.querySelector('.enm-password-value');
+                    if (passEl) {
+                        var range = document.createRange();
+                        range.selectNodeContents(passEl);
+                        var sel = root.getSelection();
+                        sel.removeAllRanges();
+                        sel.addRange(range);
+                    }
+                } catch (selErr) { /* ignore — operator can manually triple-click */ }
+                return;
+            }
+            navigator.clipboard.writeText(password).then(function () {
+                copyBtn.textContent = t('friendly.setup.card_c.cta_copied');
+                copyBtn.dataset.copied = '1';
+                setTimeout(function () {
+                    copyBtn.textContent = t('friendly.setup.card_c.cta_copy');
+                    delete copyBtn.dataset.copied;
+                }, 1500);
+            }).catch(function () { /* permission denied / sandboxed iframe */ });
         });
 
         els.actions.innerHTML = '';

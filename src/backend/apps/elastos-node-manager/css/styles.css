@@ -3216,7 +3216,12 @@ body[data-active-tab="identity"]::before {
 /* small-tablet */
 @media (max-width: 768px) {
     .enm-header-bar { padding: 0 var(--spacing-sm); gap: var(--spacing-sm); }
-    .enm-tab { padding: 6px 10px; font-size: 12px; }
+    /* min-height keeps the tab hit-area above the WCAG 2.5.5 AA-22 floor
+       of 24×24 CSS pixels at the 768px breakpoint where typography
+       shrinks. Without the floor, font-size:12px × line-height:1.45 + 12
+       px vertical padding can compute to ~25px, which dips under the
+       threshold in some inherited line-height contexts. */
+    .enm-tab { padding: 6px 10px; font-size: 12px; min-height: 28px; }
     .enm-wizard { padding: var(--spacing-lg); }
     .enm-settings-row { grid-template-columns: 1fr; gap: var(--spacing-xs); }
 }
@@ -3241,7 +3246,9 @@ body[data-active-tab="identity"]::before {
 /* small-phone */
 @media (max-width: 480px) {
     :root { --header-bar-height: 40px; }
-    .enm-tab { font-size: 12px; padding: 4px 8px; }
+    /* See the 768px override above — the floor matters even more at the
+       small-phone 480px breakpoint where padding shrinks further. */
+    .enm-tab { font-size: 12px; padding: 4px 8px; min-height: 28px; }
     .enm-sys-cell { min-width: 100%; padding: 8px 10px; }
     .enm-chain-card-head { gap: 6px; }
     .enm-chain-primary-value { font-size: 26px; }
@@ -4913,6 +4920,10 @@ body[data-app-size="medium"] .enm-tech-tabs {
 body[data-app-size="narrow"] .enm-tab {
     padding: 5px 9px;
     font-size: 12px;
+    /* WCAG 2.5.5 AA-22 floor — iframe-aware narrow mode is the most
+       likely touch context, so we anchor the tab strip at 28px rather
+       than let inherited line-height squeeze it to ~20px. */
+    min-height: 28px;
 }
 body[data-app-size="narrow"] .enm-tab-pill {
     display: none;

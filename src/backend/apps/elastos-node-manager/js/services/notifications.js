@@ -154,7 +154,24 @@
 
         var title = document.createElement('div');
         title.className = 'enm-toast-title';
-        title.textContent = args.title;
+        // a11y/WCAG 1.4.1: severity was conveyed by border-left colour only.
+        // Colour-blind operators couldn't tell info from warning from
+        // critical. Prepend a screen-reader-only severity word so the
+        // category is part of the announcement; sighted operators still
+        // see the coloured stripe + (eventually) an icon once the shared
+        // status-icon primitive lands. The mapping covers all four
+        // severities so the span is never blank.
+        var sevWord = ({
+            info:     'Notice',
+            warning:  'Warning',
+            critical: 'Critical',
+            healing:  'Action needed',
+        })[sev] || 'Notice';
+        var sevTag = document.createElement('span');
+        sevTag.className = 'enm-sr-only';
+        sevTag.textContent = sevWord + ': ';
+        title.appendChild(sevTag);
+        title.appendChild(document.createTextNode(args.title));
         head.appendChild(title);
 
         var dismissBtn = document.createElement('button');

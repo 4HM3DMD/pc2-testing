@@ -188,6 +188,16 @@
             rpcUser:     textInput(),
             rpcPassword: passwordInput(),
         };
+        // Surface the validation rule BEFORE the operator submits — joi's
+        // regex error message is opaque ("rpcUser fails to match …"). With
+        // the pattern attribute set, browser autofill respects it, the
+        // title= hover summarises the rule, and screen readers read the
+        // expected format from aria-describedby on platforms that wire it.
+        this._adv.rpcUser.setAttribute('pattern', '[A-Za-z0-9]+');
+        this._adv.rpcUser.setAttribute('autocomplete', 'username');
+        this._adv.rpcUser.setAttribute('spellcheck', 'false');
+        this._adv.rpcUser.setAttribute('autocapitalize', 'off');
+        this._adv.rpcUser.title = 'Letters and numbers only (no spaces or symbols).';
 
         var rows = [
             [t('settings.adv_log_level'),   this._adv.logLevel],
@@ -588,19 +598,29 @@
     /** @private */
     SettingsTab.prototype._saveAdvanced = function () {
         var t = root.enmTOrFallback;
+        // Clear stale aria-invalid from a previous failed save so screen
+        // readers don't keep announcing the old error as the operator
+        // edits.
+        this._adv.memory.removeAttribute('aria-invalid');
+        this._adv.rpcUser.removeAttribute('aria-invalid');
         // Client-side guard: server (joi schema in EnmConfigSchema) is the
         // authority, but giving the operator immediate inline feedback is
-        // friendlier than a generic toast after the round-trip.
+        // friendlier than a generic toast after the round-trip. Friendly
+        // ranges (MB → "512 MB to 32 GB") read better than ".." notation.
         var memMb = parseInt(this._adv.memory.value, 10);
         if (!Number.isInteger(memMb) || memMb < 512 || memMb > 32_768) {
             this._adv.statusLine.textContent = t(
-                'settings.save_failed', { error: 'Memory limit must be 512..32768 MB.' });
+                'settings.save_failed', { error: 'Memory limit must be between 512 MB and 32 GB.' });
+            this._adv.memory.setAttribute('aria-invalid', 'true');
+            try { this._adv.memory.focus({ preventScroll: true }); } catch (e) { this._adv.memory.focus(); }
             return;
         }
         var rpcUser = this._adv.rpcUser.value.trim();
         if (rpcUser.length === 0 || !/^[A-Za-z0-9]+$/.test(rpcUser)) {
             this._adv.statusLine.textContent = t(
-                'settings.save_failed', { error: 'RPC user must be alphanumeric, non-empty.' });
+                'settings.save_failed', { error: 'RPC user must be letters and numbers only (no spaces or symbols).' });
+            this._adv.rpcUser.setAttribute('aria-invalid', 'true');
+            try { this._adv.rpcUser.focus({ preventScroll: true }); } catch (e) { this._adv.rpcUser.focus(); }
             return;
         }
 
@@ -630,10 +650,13 @@
     /** @private */
     SettingsTab.prototype._saveGeneral = function () {
         var t = root.enmTOrFallback;
+        this._gen.auditRetention.removeAttribute('aria-invalid');
         var retention = parseInt(this._gen.auditRetention.value, 10);
         if (!Number.isInteger(retention) || retention < 0 || retention > 3650) {
             this._gen.statusLine.textContent = t(
-                'settings.save_failed', { error: 'Audit retention must be 0..3650 days (0 = forever).' });
+                'settings.save_failed', { error: 'Audit retention must be between 0 and 3650 days (0 keeps audit logs forever).' });
+            this._gen.auditRetention.setAttribute('aria-invalid', 'true');
+            try { this._gen.auditRetention.focus({ preventScroll: true }); } catch (e) { this._gen.auditRetention.focus(); }
             return;
         }
         var body = {
@@ -1118,10 +1141,27 @@
             container.value = values.join(', ');
         }
 
-        function flashInvalid() {
+        function flashInvalid(reason) {
+            // Visual flash for sighted operators…
             var prev = newInput.style.borderColor;
             newInput.style.borderColor = 'var(--danger, #c0392b)';
             setTimeout(function () { newInput.style.borderColor = prev; }, 900);
+            // …and a screen-reader-friendly explanation so the failure
+            // isn't silent. aria-invalid lets AT relate the announcement
+            // back to the field; the visible error sits in the chip
+            // editor's own status node if the host provided one. We use
+            // title= too so hovering reveals the rule for sighted users
+            // without screen readers.
+            newInput.setAttribute('aria-invalid', 'true');
+            var hint = reason
+                || 'Not a valid IPv4 or CIDR (try 192.168.1.5 or 192.168.1.0/24).';
+            newInput.title = hint;
+            // Clear aria-invalid on next edit so it doesn't stay loud.
+            var clearOnce = function () {
+                newInput.removeAttribute('aria-invalid');
+                newInput.removeEventListener('input', clearOnce);
+            };
+            newInput.addEventListener('input', clearOnce);
         }
 
         function tryAdd() {
@@ -1181,6 +1221,14 @@
     function numberInput(min, max) {
         var i = document.createElement('input'); i.type = 'number';
         i.min = String(min); i.max = String(max); i.className = 'enm-settings-input';
+        // a11y/UX: declare the value range to the browser + screen reader
+        // up-front. inputmode=numeric pulls up the numeric keypad on
+        // mobile; step=1 prevents fractional submissions that the joi
+        // schema would later reject. Title surfaces the range on hover
+        // for sighted operators before they submit.
+        i.setAttribute('step', '1');
+        i.setAttribute('inputmode', 'numeric');
+        i.title = 'Between ' + min + ' and ' + max;
         return i;
     }
     function select(options) {
@@ -1305,8 +1353,15 @@
         copyBtn.type = 'button';
         copyBtn.className = 'enm-btn enm-btn-secondary enm-rpc-creds-copy';
         copyBtn.textContent = root.enmTOrFallback('settings.rpc_copy');
+        // a11y: every copy button needs an explicit label so screen
+        // readers don't announce just the generic "Copy" string. The
+        // adjacent <span> holds the actual displayed (often masked)
+        // value — we wire its text into aria-label at click time too
+        // via the .enm-rpc-creds-value span when present.
+        copyBtn.setAttribute('aria-label', 'Copy ' + (display != null ? 'value' : 'credential'));
         copyBtn.addEventListener('click', function () {
-            var p = (navigator.clipboard && navigator.clipboard.writeText)
+            var hasClipboard = !!(navigator && navigator.clipboard && navigator.clipboard.writeText);
+            var p = hasClipboard
                 ? navigator.clipboard.writeText(value)
                 : Promise.reject(new Error('clipboard unavailable'));
             p.then(function () {

@@ -127,13 +127,13 @@
                     '<div class="enm-producer-field">' +
                         '<span class="enm-producer-field-label">Public key</span>' +
                         '<code class="enm-producer-field-value enm-producer-pubkey"></code>' +
-                        '<button class="enm-btn enm-btn-secondary enm-producer-copy" type="button" data-copy="pubkey">Copy</button>' +
+                        '<button class="enm-btn enm-btn-secondary enm-producer-copy" type="button" data-copy="pubkey" aria-label="Copy public key">Copy</button>' +
                     '</div>' +
                     (addr ? (
                         '<div class="enm-producer-field">' +
                             '<span class="enm-producer-field-label">Address</span>' +
                             '<code class="enm-producer-field-value enm-producer-addr"></code>' +
-                            '<button class="enm-btn enm-btn-secondary enm-producer-copy" type="button" data-copy="address">Copy</button>' +
+                            '<button class="enm-btn enm-btn-secondary enm-producer-copy" type="button" data-copy="address" aria-label="Copy mainchain address">Copy</button>' +
                         '</div>'
                     ) : '') +
                 '</div>' +
@@ -208,6 +208,15 @@
             b.addEventListener('click', function () {
                 var which = b.dataset.copy;
                 var text = which === 'address' ? addr : pubkey;
+                // Feature-detect: `navigator.clipboard` is undefined in
+                // some iframe / cross-origin / non-HTTPS contexts. Calling
+                // `.writeText` on undefined throws synchronously and
+                // bypasses our .catch fallback.
+                var hasClipboard = !!(navigator && navigator.clipboard && navigator.clipboard.writeText);
+                if (!hasClipboard) {
+                    if (self.notifications) self.notifications.warning('Copy unavailable', 'Browser blocked clipboard access. Select the text and copy manually.');
+                    return;
+                }
                 navigator.clipboard.writeText(text).then(function () {
                     if (self.notifications) self.notifications.info('Copied', which + ' is in the clipboard.');
                 }).catch(function () {

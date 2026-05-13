@@ -188,7 +188,7 @@
             +   '</pre>'
             +   '<div class="enm-tools-update-modal-actions">'
             +     '<button type="button" class="enm-btn enm-btn-secondary upd-fill-token">Auto-fill my token</button>'
-            +     '<button type="button" class="enm-btn enm-btn-primary upd-copy">Copy command</button>'
+            +     '<button type="button" class="enm-btn enm-btn-primary upd-copy" aria-label="Copy update shell command">Copy command</button>'
             +   '</div>'
             +   '<details class="enm-tools-update-modal-notes">'
             +     '<summary>What does this do?</summary>'
@@ -231,10 +231,23 @@
             }
         });
 
+        var modalSelf = self;
         modal.querySelector('.upd-copy').addEventListener('click', function () {
             var pre = modal.querySelector('.enm-tools-update-modal-cmd');
             // Use textContent so the <span> placeholder is included literally.
             var text = pre ? pre.textContent : '';
+            // Feature-detect so the .catch fallback has something to land in
+            // when the iframe sandbox blocks the clipboard API outright.
+            // Also explicitly capture `modalSelf` outside the closure —
+            // the audit found that `self` was undefined inside the catch
+            // because it shadows the outer scope.
+            var hasClipboard = !!(navigator && navigator.clipboard && navigator.clipboard.writeText);
+            if (!hasClipboard) {
+                if (modalSelf && modalSelf.notifications) {
+                    modalSelf.notifications.warning('Copy unavailable', 'Browser blocked clipboard access. Select the command text and copy manually.');
+                }
+                return;
+            }
             navigator.clipboard.writeText(text).then(function () {
                 var btn = modal.querySelector('.upd-copy');
                 if (btn) {
@@ -243,7 +256,9 @@
                     setTimeout(function () { btn.textContent = prev; }, 1400);
                 }
             }).catch(function () {
-                if (self.notifications) self.notifications.warning('Copy failed', 'Select the command text and copy manually.');
+                if (modalSelf && modalSelf.notifications) {
+                    modalSelf.notifications.warning('Copy failed', 'Select the command text and copy manually.');
+                }
             });
         });
     };

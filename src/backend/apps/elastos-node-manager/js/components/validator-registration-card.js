@@ -183,7 +183,7 @@
                     + '<p class="enm-validator-step-help">' + escapeHtml(t('validator_card.step1_help')) + '</p>'
                     + '<div class="enm-validator-pubkey-row">'
                         + '<code class="enm-validator-pubkey" id="enm-vc-pubkey">' + escapeHtml(t('common.loading')) + '</code>'
-                        + '<button type="button" class="enm-btn enm-btn-secondary enm-validator-copy" id="enm-vc-copy">'
+                        + '<button type="button" class="enm-btn enm-btn-secondary enm-validator-copy" id="enm-vc-copy" aria-label="Copy public key">'
                             + escapeHtml(t('validator_card.copy')) + '</button>'
                     + '</div>'
                 + '</div>'
