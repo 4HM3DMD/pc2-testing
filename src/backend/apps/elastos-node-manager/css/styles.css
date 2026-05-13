@@ -4886,14 +4886,93 @@ body[data-update-severity="major"] .enm-tech-tabs .enm-tab[data-tab="tools"]::be
    Print — hide chrome, render cards as plain blocks
    ============================================================ */
 
+/* alpha.28.1 batch 26 — full print stylesheet rewrite (Round 16 audit
+   a6ef14f1). The previous 9-line block only hid a few chrome elements
+   and let everything else inherit screen styling — printing the audit
+   tab wasted toner on dark backgrounds and clipped wide tables. The
+   real archival path is the JSON export, but print should remain
+   functional for support tickets and paper trails. */
 @media print {
+    @page { size: A4; margin: 15mm; }
+
+    /* Force white background + black text everywhere so the print is
+       legible and doesn't burn through toner on a dark-mode dashboard. */
+    html, body, .enm-app, .enm-pane {
+        background: #fff !important;
+        color: #000 !important;
+        overflow: visible !important;
+        height: auto !important;
+        print-color-adjust: economy;
+        -webkit-print-color-adjust: economy;
+    }
+
+    /* Hide transient + chrome elements that don't belong in a printed
+       record: action rows, decorative SVGs, toast/spinner UI, drawer
+       (which can be open at print time), tab pills, and the settings
+       sub-nav rail. */
     .enm-header-bar,
     .enm-toast-container,
     .enm-spinner,
     .enm-chain-actions,
-    .enm-settings-actions { display: none !important; }
-    body, .enm-app, .enm-pane { overflow: visible !important; height: auto !important; }
-    .enm-chain-card, .enm-card { break-inside: avoid; }
+    .enm-settings-actions,
+    .enm-drawer-root,
+    .enm-power-circle,
+    .enm-sparkline,
+    .enm-spark,
+    .enm-tab-pill,
+    .enm-settings-nav,
+    .enm-error-actions,
+    .enm-log-tail-toggle,
+    .enm-log-download { display: none !important; }
+
+    /* Strip shadows / blurs / gradients globally — they waste ink and
+       don't reproduce on monochrome printers. */
+    *, *::before, *::after {
+        box-shadow: none !important;
+        filter: none !important;
+        backdrop-filter: none !important;
+        text-shadow: none !important;
+        background-image: none !important;
+    }
+
+    /* Cards print with a thin ink border instead of CSS shadow/elevation;
+       allow page breaks inside long cards so the audit pane isn't
+       jammed onto one page. */
+    .enm-card, .enm-chain-card {
+        break-inside: auto;
+        border: 1px solid #000;
+    }
+
+    /* Audit table — repeat <thead> on every page, allow rows to break
+       naturally, fix column widths so the wide "executor" column wraps
+       instead of clipping at the right margin. */
+    .enm-audit-table {
+        width: 100%;
+        table-layout: fixed;
+        border-collapse: collapse;
+    }
+    .enm-audit-table thead {
+        display: table-header-group;
+    }
+    .enm-audit-table tr {
+        break-inside: avoid;
+        page-break-inside: avoid;
+    }
+    .enm-audit-table th,
+    .enm-audit-table td {
+        border: 1px solid #000;
+        padding: 4px 6px;
+        font-size: 10pt;
+        word-break: break-word;
+    }
+
+    /* External-link URL becomes inline text on print so the operator
+       can read where the link pointed without clicking. */
+    a[href^="http"]::after {
+        content: " (" attr(href) ")";
+        font-size: 9pt;
+        word-break: break-all;
+    }
 }
 
 /* ============================================================
