@@ -146,8 +146,16 @@
         var h = document.createElement('h3'); h.textContent = t('audit.heading'); head.appendChild(h);
         this.root.appendChild(head);
 
-        // Filter bar.
-        var filterBar = document.createElement('div'); filterBar.className = 'enm-audit-filters';
+        // Filter bar — wrapped in <fieldset> per WCAG 1.3.1 so AT
+        // announces the group's purpose when the operator enters the
+        // chain-id / tier / date filters. (Form-semantics audit
+        // a0b9a3e1 #3.) Visually-hidden legend keeps the existing
+        // layout — the audit-tab h3 above gives sighted context.
+        // alpha.28.1 batch 32.
+        var filterBar = document.createElement('fieldset'); filterBar.className = 'enm-audit-filters enm-radio-group';
+        var filterLegend = document.createElement('legend'); filterLegend.className = 'enm-sr-only';
+        filterLegend.textContent = t('audit.heading') + ' filters';
+        filterBar.appendChild(filterLegend);
         this._filters = {
             chain: textInput(t('audit.filter_chain')),
             tier:  selectInput([
@@ -202,7 +210,11 @@
     AuditTab.prototype._appendRow = function (e) {
         var tr = document.createElement('tr');
         tr.dataset.tier = e.tier;
-        addCell(tr, formatTs(e.ts));
+        // alpha.28.1 batch 32 — pass the local-time render as the
+        // tooltip so non-UTC operators get their wall-clock without
+        // losing the UTC canonical view in the cell. addCell's
+        // fullText param drives title=.
+        addCell(tr, formatTs(e.ts), formatTsLocal(e.ts) || undefined);
         addCell(tr, e.chainId || e.chain_id || '—');
         addCell(tr, e.ruleId || e.rule_id || '—');
         addCell(tr, e.tier || '—');
@@ -250,6 +262,20 @@
         if (!ms) return '—';
         var d = new Date(ms);
         return d.toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, ' UTC');
+    }
+    /**
+     * Operator-local rendering for hover/title — Round 15 locale audit
+     * (adc48dd0) flagged the audit-tab as "UTC-only display next to
+     * datetime-local filter inputs" which causes confusion for non-UTC
+     * operators. Cheap fix: keep UTC in the cell (canonical for record-
+     * keeping) and surface the local-time equivalent on hover.
+     */
+    function formatTsLocal(ms) {
+        if (!ms) return '';
+        try {
+            var d = new Date(ms);
+            return d.toLocaleString();
+        } catch (e) { return ''; }
     }
     function shortenWallet(s) {
         if (!s) return '—';
