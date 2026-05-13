@@ -355,7 +355,14 @@
         this._primaryLabel.textContent = formatPrimaryLabel(t, coarse, height, null);
 
         // Stats strip.
-        this._statFields.peers.textContent   = state && state.peers         != null ? String(state.peers) : '—';
+        // 0.2.0-alpha.28.1 — peers/latency/skew numbers now go through
+        // enmFormatNumber so thousands group consistently with block
+        // height (and screen readers get a steady rhythm). Falls back to
+        // the raw value if the util didn't load.
+        var fmtN = (typeof window !== 'undefined' && window.enmFormatNumber)
+            ? window.enmFormatNumber
+            : function (n) { return (n == null || !isFinite(n)) ? '—' : String(n); };
+        this._statFields.peers.textContent   = state && state.peers         != null ? fmtN(state.peers) : '—';
         // 0.2.0-alpha.7 — peer quality hover (improvement #12). Backend
         // populates `peerSummary` from getnodestate.neighbors; surface as
         // a title on the peers cell so a hover shows the breakdown the
@@ -366,14 +373,14 @@
             var ps = state && state.peerSummary;
             if (ps && (ps.latencyMsAvg != null || (ps.versions && ps.versions.length) || ps.timeOffsetMaxAbsMs != null)) {
                 var lines = [];
-                if (ps.latencyMsAvg != null) lines.push('Avg ping: ' + ps.latencyMsAvg + ' ms');
+                if (ps.latencyMsAvg != null) lines.push('Avg ping: ' + fmtN(ps.latencyMsAvg) + ' ms');
                 if (ps.versions && ps.versions.length) {
                     lines.push('Versions: ' + ps.versions.map(function (v) {
-                        return v.version + ' ×' + v.count;
+                        return v.version + ' ×' + fmtN(v.count);
                     }).join(', '));
                 }
                 if (ps.timeOffsetMaxAbsMs != null) {
-                    lines.push('Max clock skew: ±' + ps.timeOffsetMaxAbsMs + ' ms');
+                    lines.push('Max clock skew: ±' + fmtN(ps.timeOffsetMaxAbsMs) + ' ms');
                 }
                 peersCell.title = lines.join('\n');
             } else {

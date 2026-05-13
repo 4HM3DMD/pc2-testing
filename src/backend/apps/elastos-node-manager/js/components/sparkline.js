@@ -83,6 +83,16 @@
         svg.style.color = this._color;
         svg.hidden = true; // hidden until setSeries lands real data
 
+        // a11y: `<title>` child mirrors aria-label for JAWS — some screen
+        // readers still prefer the title element even when aria-label is
+        // present. The element is updated by _render() with the current
+        // series summary (min/max/delta) so the announcement stays
+        // meaningful as data lands.
+        var titleEl = document.createElementNS(SVG_NS, 'title');
+        titleEl.textContent = this._ariaLabel;
+        svg.appendChild(titleEl);
+        this._titleEl = titleEl;
+
         // Defs + linearGradient with two stops — top opaque, bottom
         // transparent. stop colours use currentColor so the gradient
         // inherits the SVG's color attribute.
@@ -216,6 +226,25 @@
         // Hide the fill on a flat line — it would just be a solid block
         // of colour and looks worse than no fill.
         this._fill.style.opacity = (range === 0) ? '0' : '';
+
+        // a11y: refresh aria-label + <title> with a one-line summary so
+        // screen readers announce "Block height: +16 over last hour
+        // (12,340 → 12,356)" instead of a generic "graphic". toLocaleString
+        // keeps the numbers grouped for screen-reader rhythm.
+        var first = pts[0].h;
+        var last = pts[pts.length - 1].h;
+        var delta = last - first;
+        var sign = delta > 0 ? '+' : (delta < 0 ? '−' : '±');
+        var fmt = function (v) {
+            return (typeof v === 'number' && isFinite(v))
+                ? v.toLocaleString()
+                : String(v);
+        };
+        var summary = this._ariaLabel
+            + ': ' + sign + fmt(Math.abs(delta))
+            + ' (' + fmt(first) + ' → ' + fmt(last) + ')';
+        this.root.setAttribute('aria-label', summary);
+        if (this._titleEl) { this._titleEl.textContent = summary; }
     };
 
     /**

@@ -78,7 +78,13 @@
             self._loadMoreBtn.textContent = capReached
                 ? t('audit.load_more_capped')
                 : t('audit.load_more');
-            self._countLabel.textContent = self._rows.length + ' rows';
+            // Grouped row count — once an operator accrues 1,000+ rows the
+            // raw integer ("1234 rows") is harder to scan than the grouped
+            // form ("1,234 rows"). Falls back to raw if the util is missing.
+            var fmtCount = (typeof window !== 'undefined' && window.enmFormatNumber)
+                ? window.enmFormatNumber
+                : function (n) { return String(n); };
+            self._countLabel.textContent = fmtCount(self._rows.length) + ' rows';
             if (self._rows.length === 0) {
                 self._emptyMsg.hidden = false;
             } else {
@@ -167,7 +173,12 @@
         addCell(tr, e.ruleId || e.rule_id || '—');
         addCell(tr, e.tier || '—');
         addCell(tr, e.decision || '—');
-        addCell(tr, shortenWallet(e.executor));
+        // Executor cell shows the truncated wallet for the visible row
+        // but the title= must carry the FULL address so hover + screen
+        // readers + copy-paste all get the canonical value. (Previously
+        // addCell defaulted title to the truncated display string,
+        // making the "title=full text" promise a lie for this cell.)
+        addCell(tr, shortenWallet(e.executor), e.executor || '');
         addCell(tr, e.outcome || '—');
         this._tbody.appendChild(tr);
     };
@@ -207,13 +218,19 @@
         if (s.length > 12) return s.slice(0, 6) + '…' + s.slice(-4);
         return s;
     }
-    function addCell(tr, text) {
+    function addCell(tr, text, fullText) {
         var td = document.createElement('td');
         td.textContent = text;
         // a11y: cells truncate with text-overflow:ellipsis on narrow widths.
         // Mirror full text into title= so it stays available to mouse hover,
-        // screen readers, and copy-paste even when visibly clipped.
-        td.title = String(text == null ? '' : text);
+        // screen readers, and copy-paste even when visibly clipped. For
+        // truncated values (e.g. wallets shortened with `…`), callers can
+        // pass the full canonical value as `fullText` so the title still
+        // reveals what the visible cell hides.
+        var titleSource = (fullText != null && fullText !== '')
+            ? fullText
+            : (text == null ? '' : text);
+        td.title = String(titleSource);
         tr.appendChild(td);
     }
     function textInput(placeholder) {

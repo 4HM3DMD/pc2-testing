@@ -150,8 +150,12 @@
     }
     function formatDisk(disk) {
         if (!disk) return '—';
-        // Just the GB. "free" qualifier lives on the label.
-        return disk.freeGb.toFixed(0) + ' GB';
+        // Just the GB. "free" qualifier lives on the label. Locale grouping
+        // (1,024 vs 1024) so multi-TB arrays don't render as a wall of digits.
+        var fmt = (typeof window !== 'undefined' && window.enmFormatNumber)
+            ? window.enmFormatNumber
+            : function (n) { return n.toFixed(0); };
+        return fmt(disk.freeGb, { decimals: 0 }) + ' GB';
     }
     function formatOs(os) {
         if (!os) return '—';

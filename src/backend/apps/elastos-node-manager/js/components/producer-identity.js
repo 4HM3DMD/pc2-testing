@@ -582,7 +582,14 @@
     function modulesToSvg(modules, size, margin) {
         var n = modules.length;
         var box = n + 2 * margin;
-        var s = '<svg xmlns="http://www.w3.org/2000/svg" width="' + size + '" height="' + size + '" viewBox="0 0 ' + box + ' ' + box + '" shape-rendering="crispEdges">';
+        // a11y: even though the wrapping `<div class="enm-producer-qr">`
+        // already carries role="img" + aria-label, JAWS (and some older
+        // NVDA builds) still look for a `<title>` child on the inner SVG
+        // and otherwise announce a bare "graphic" with no name. Adding
+        // the title here costs nothing and never double-announces in
+        // modern AT.
+        var s = '<svg xmlns="http://www.w3.org/2000/svg" width="' + size + '" height="' + size + '" viewBox="0 0 ' + box + ' ' + box + '" shape-rendering="crispEdges" role="img" focusable="false">';
+        s += '<title>Public key QR code</title>';
         s += '<rect width="100%" height="100%" fill="#ffffff"/>';
         var path = '';
         for (var y = 0; y < n; y++) {
