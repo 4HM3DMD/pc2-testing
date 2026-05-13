@@ -101,6 +101,17 @@
         // with i18n strings now that strings.js has loaded. The
         // English defaults remain in markup as a fallback for the
         // brief window before this runs.
+        // alpha.28.1 batch 80 (Round-22 audit finding #4) — also
+        // localise the spinner text. The previous shape rendered the
+        // English literal "Connecting to Node Manager…" regardless of
+        // the operator's selected locale. The element was queried into
+        // this.els.spinnerText at boot but never written.
+        if (this.els.spinnerText) {
+            var connectingText = t('app.connecting');
+            if (connectingText && connectingText !== 'app.connecting') {
+                this.els.spinnerText.textContent = connectingText;
+            }
+        }
         if (this.els.errorRetry) {
             var retryText = t('app.retry');
             if (retryText && retryText !== 'app.retry') {
@@ -146,6 +157,39 @@
     };
 
     ENMApp.prototype.init = function () {
+        // alpha.28.1 batch 77 (Round-22 audit finding #1, HIGH) — populate
+        // this.els BEFORE _wireErrorActions runs. The previous shape called
+        // _wireErrorActions() at the top of init() and only created
+        // this.els below it. Constructor sets this.els = null (line 23),
+        // so the very first init() did `null.errorRetry` → TypeError, and
+        // the synchronous throw propagated up before the
+        // unhandledrejection guard (line ~160) had been installed. Failure
+        // mode: every fresh boot bricked on a permanent spinner with no
+        // error pane and no Retry affordance. Retry never had a chance to
+        // recover because the throw aborted init() before even
+        // _showSetupWizard/_showDashboard fired. Reordering is the
+        // minimal-risk fix; the constructor-default this.els = null is
+        // kept so any future code path that touches this.els before init()
+        // still surfaces loud rather than silently no-op'ing.
+        this.els = {
+            app:          document.getElementById('app'),
+            spinner:      document.getElementById('enm-spinner'),
+            spinnerText:  document.getElementById('enm-spinner-text'),
+            error:        document.getElementById('enm-error'),
+            errorTitle:   document.getElementById('enm-error-title'),
+            errorDetail:  document.getElementById('enm-error-detail'),
+            errorRetry:   document.getElementById('enm-error-retry'),
+            errorReload:  document.getElementById('enm-error-reload'),
+            content:      document.getElementById('enm-content'),
+            tabs:         document.getElementById('enm-tabs'),
+            themeToggle:  document.getElementById('enm-theme-toggle'),
+            settingsToggle: document.getElementById('enm-settings-toggle'),
+            paneDashboard: document.getElementById('enm-pane-dashboard'),
+            paneLogs:     document.getElementById('enm-pane-logs'),
+            paneSettings: document.getElementById('enm-pane-settings'),
+            paneAudit:    document.getElementById('enm-pane-audit'),
+            paneEvm:      document.getElementById('enm-pane-evm'),
+        };
         this._wireErrorActions();
         // alpha.28.1 batch 22 — defensive belt-and-braces safety net.
         // Today every async path has a terminal .catch (verified by the
@@ -188,27 +232,10 @@
         // alpha.25: install responsive observer FIRST so size class is set
         // before any UI mounts. Otherwise components measure with the wrong
         // class and render at the wrong breakpoint on first paint.
+        // (this.els was populated at the very top of init() in batch 77 —
+        // before the responsive observer because _wireErrorActions reads
+        // this.els.errorRetry / errorReload.)
         setupResponsiveObserver();
-
-        this.els = {
-            app:          document.getElementById('app'),
-            spinner:      document.getElementById('enm-spinner'),
-            spinnerText:  document.getElementById('enm-spinner-text'),
-            error:        document.getElementById('enm-error'),
-            errorTitle:   document.getElementById('enm-error-title'),
-            errorDetail:  document.getElementById('enm-error-detail'),
-            errorRetry:   document.getElementById('enm-error-retry'),
-            errorReload:  document.getElementById('enm-error-reload'),
-            content:      document.getElementById('enm-content'),
-            tabs:         document.getElementById('enm-tabs'),
-            themeToggle:  document.getElementById('enm-theme-toggle'),
-            settingsToggle: document.getElementById('enm-settings-toggle'),
-            paneDashboard: document.getElementById('enm-pane-dashboard'),
-            paneLogs:     document.getElementById('enm-pane-logs'),
-            paneSettings: document.getElementById('enm-pane-settings'),
-            paneAudit:    document.getElementById('enm-pane-audit'),
-            paneEvm:      document.getElementById('enm-pane-evm'),
-        };
 
         // The drawer (Phase 5C) is mounted once at app boot — it lives at
         // the top level so it can overlay any view (welcome, setup, home,
@@ -276,7 +303,18 @@
                 if (setupState && setupState.completed) {
                     self._showDashboard();
                 } else {
-                    self._showSetupWizard();
+                    // alpha.28.1 batch 79 (Round-22 audit finding #3) —
+                    // pass the already-fetched setupState into
+                    // _showSetupWizard so it doesn't re-fetch the same
+                    // endpoint with skipCache:true. The previous shape
+                    // burned one extra HTTP round-trip on every fresh
+                    // boot landing in setup, AND introduced a half-
+                    // second blank-pane window between _revealContent
+                    // and _mountWelcomeScreen while the second fetch
+                    // was in flight (operator saw the spinner vanish
+                    // into an empty grey content area). Pass-through
+                    // collapses both: no extra fetch, no blank-pane gap.
+                    self._showSetupWizard(setupState);
                 }
             })
             .catch(function (err) {
@@ -431,7 +469,7 @@
      *
      * @private
      */
-    ENMApp.prototype._showSetupWizard = function () {
+    ENMApp.prototype._showSetupWizard = function (setupState) {
         // Friendly path (v0.4): Welcome → Setup conversation → Home.
         // The 5-tab dashboard chrome is hidden until setup is done.
         // Tear down anything from the home view first (idempotent if
@@ -441,10 +479,32 @@
         this._clearPanes();
         if (this.els.tabs) { this.els.tabs.hidden = true; }
 
+        // alpha.28.1 batch 79 (Round-22 finding #3) — if init() already
+        // fetched /setup/state and passed us the result, branch
+        // synchronously instead of firing a second fetch. The original
+        // shape blindly re-fetched on every entry, which (a) doubled
+        // network round-trips on every boot landing in setup, (b)
+        // created a visible blank-pane gap between _revealContent and
+        // _mountWelcomeScreen while the second fetch was in flight
+        // (operator saw the spinner vanish into an empty grey content
+        // area for 500-1500ms on a cold backend).
+        // Reinstall path (the menu item that calls _showSetupWizard()
+        // with no argument) still hits the network so it gets the
+        // fresh post-reinstall state.
+        var self = this;
+        if (setupState) {
+            var resumeFromArg = setupState.currentStep && setupState.currentStep !== 'welcome';
+            if (resumeFromArg) {
+                this._mountSetupConversation();
+            } else {
+                this._mountWelcomeScreen();
+            }
+            return;
+        }
+
         // If the operator has clearly already started setup (binary on disk
         // or partial install), skip the welcome screen and resume in the
         // conversation. Otherwise, lead with the welcome.
-        var self = this;
         this.services.api.get('/setup/state', { skipCache: true }).then(function (s) {
             var resume = s && s.currentStep && s.currentStep !== 'welcome';
             if (resume) {
@@ -498,13 +558,20 @@
 
     ENMApp.prototype._showDashboard = function () {
         // 0.2.0-alpha.1 — Apple Hero phase 2: paint the page wash before
-        // the technical view mounts. Default bucket is 'healthy' so the
-        // green wash is in place before chain-cards report in; the
-        // gradient controller corrects to the truthful bucket on the
-        // first 'enm:chain-state' event (chain-card emits these in
-        // phase 6 of the rewrite).
+        // the technical view mounts. The gradient controller corrects
+        // to the truthful bucket on the first 'enm:chain-state' event
+        // (chain-card emits these in phase 6 of the rewrite).
+        //
+        // alpha.28.1 batch 78 (Round-22 audit finding #2) — initial
+        // bucket is now 'idle' (neutral grey) instead of 'healthy'
+        // (green). The 200–600ms window between dashboard mount and
+        // first chain-state event was painting a green "everything OK"
+        // wash to an operator who may have just opened ENM BECAUSE
+        // something is broken. Neutral grey on first paint, then crossfade
+        // to the truthful bucket once chain-cards report — no false-
+        // positive flash, no misleading first impression on a sick fleet.
         if (this.services.fleetHealth) {
-            this.services.fleetHealth.mount('healthy');
+            this.services.fleetHealth.mount('idle');
         }
         // v0.5 reset — the home view IS the v0.3 technical dashboard.
         //

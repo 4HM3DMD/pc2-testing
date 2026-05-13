@@ -209,6 +209,12 @@
             retry:      'Retry',
             reload:     'Reload page',
             skip_link:  'Skip to main content',
+            // alpha.28.1 batch 80 (Round-22 finding #4) — spinner-text
+            // initial boot label. index.html ships the English literal
+            // ("Connecting to Node Manager…"); the app boot replaces it
+            // with this key once strings.js loads. Matches the existing
+            // retry/reload/skip_link pattern.
+            connecting: 'Connecting to Node Manager…',
         },
 
         // alpha.28.1 batch 44 — `nav:` namespace dropped (~7 lines).
