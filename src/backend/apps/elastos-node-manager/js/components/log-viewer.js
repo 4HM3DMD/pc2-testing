@@ -39,6 +39,17 @@
 
     LogViewer.prototype.mount = function (parent) {
         parent.appendChild(this.root);
+        // alpha.28.1 batch 41 — initial-tail vs first-SSE-batch ordering
+        // race (Round-11 audit aaf1f87d B6). Previously: SSE could
+        // deliver its first batch BEFORE the slow /tail GET resolved.
+        // Lines appended in arrival order → SSE-1 sat ABOVE the 200
+        // historical tail lines → operator's scrollToBottom landed in
+        // the historical section, NOT on the live tail. With the buffer
+        // below, SSE batches that arrive before the tail GET settles
+        // are queued and replayed AFTER the tail in correct chronological
+        // order.
+        this._initialTailDone = false;
+        this._pendingSseBatches = [];
         this._loadInitialTail();
         this._subscribe();
         return this;
@@ -172,13 +183,30 @@
         var self = this;
         return this.api.get('/logs/' + this.chainId + '/tail?n=' + INITIAL_TAIL_N, { skipCache: true })
             .then(function (data) {
-                if (!data || !Array.isArray(data.lines)) { return; }
-                if (data.lines.length === 0) { return; }
-                self._appendBatch(data.lines);
+                if (data && Array.isArray(data.lines) && data.lines.length > 0) {
+                    self._appendBatch(data.lines);
+                }
             })
             .catch(function () {
                 // Silent — chain may not have started yet, /tail returns empty.
+            })
+            .then(function () {
+                // Whether the tail GET succeeded or failed, the boundary
+                // is the same: any SSE batches that came in during the
+                // fetch are now safe to flush in order.
+                self._initialTailDone = true;
+                self._drainPendingSseBatches();
             });
+    };
+
+    /** @private */
+    LogViewer.prototype._drainPendingSseBatches = function () {
+        if (!this._pendingSseBatches || this._pendingSseBatches.length === 0) { return; }
+        var queued = this._pendingSseBatches;
+        this._pendingSseBatches = [];
+        for (var i = 0; i < queued.length; i += 1) {
+            this._appendBatch(queued[i]);
+        }
     };
 
     /** @private */
@@ -187,9 +215,17 @@
         this._unsubscribe = this.sse.subscribe(
             'chains:' + this.chainId + ':logs',
             function (payload) {
-                if (payload && Array.isArray(payload.lines)) {
-                    self._appendBatch(payload.lines);
+                if (!payload || !Array.isArray(payload.lines)) { return; }
+                // Queue SSE batches that arrive before the initial tail
+                // fetch settles. Drain happens in _loadInitialTail's
+                // finally-style then(). Preserves chronological order
+                // (tail rows first, then SSE rows) so scrollToBottom
+                // lands on the newest line.
+                if (!self._initialTailDone) {
+                    self._pendingSseBatches.push(payload.lines);
+                    return;
                 }
+                self._appendBatch(payload.lines);
             },
         );
     };
