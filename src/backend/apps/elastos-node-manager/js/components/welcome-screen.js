@@ -35,7 +35,7 @@
             + '<div class="enm-welcome-illust">'
                 + (root.EnmIllust ? root.EnmIllust.welcome({ size: 128 }) : '')
             + '</div>'
-            + '<h1 class="enm-welcome-title">' + escapeHtml(t('friendly.welcome.title')) + '</h1>'
+            + '<h2 class="enm-welcome-title">' + escapeHtml(t('friendly.welcome.title')) + '</h2>'
             + '<p class="enm-welcome-body">' + escapeHtml(t('friendly.welcome.body')) + '</p>'
             + '<button type="button" class="enm-btn enm-btn-primary enm-btn-hero enm-welcome-cta">'
                 + escapeHtml(t('friendly.welcome.cta')) + ' <span aria-hidden="true">→</span>'

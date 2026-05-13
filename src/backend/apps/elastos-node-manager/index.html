@@ -133,31 +133,36 @@
     </div>
 
     <!-- Order matters: strings + utils first (used by services + components),
-         then services, then components, then the app controller. -->
-    <script src="js/strings.js?ts=20260512c"></script>
-    <script src="js/utils.js?ts=20260506g"></script>
-    <script src="js/illustrations.js?ts=20260506g"></script>
-    <script src="js/services/wallet.js?ts=20260506g"></script>
-    <script src="js/services/theme.js?ts=20260506g"></script>
-    <script src="js/services/api.js?ts=20260506g"></script>
-    <script src="js/services/sse.js?ts=20260511d"></script>
-    <script src="js/services/notifications.js?ts=20260506g"></script>
-    <script src="js/services/fleet-health-gradient.js?ts=20260512a"></script>
-    <script src="js/services/height-series.js?ts=20260512a"></script>
-    <script src="js/components/system-status.js?ts=20260511f"></script>
-    <script src="js/components/sparkline.js?ts=20260512a"></script>
-    <script src="js/components/power-circle.js?ts=20260512a"></script>
-    <script src="js/components/chain-card.js?ts=20260512e"></script>
-    <script src="js/components/validator-registration-card.js?ts=20260511e"></script>
-    <script src="js/components/producer-identity.js?ts=20260512a"></script>
-    <script src="js/components/log-viewer.js?ts=20260507d"></script>
-    <script src="js/components/proposal-card.js?ts=20260506g"></script>
-    <script src="js/components/welcome-screen.js?ts=20260506g"></script>
-    <script src="js/components/setup-conversation.js?ts=20260511c"></script>
-    <script src="js/components/settings-tab.js?ts=20260511g"></script>
-    <script src="js/components/audit-tab.js?ts=20260506g"></script>
-    <script src="js/components/evm-tab.js?ts=20260506g"></script>
-    <script src="js/components/settings-drawer.js?ts=20260506g"></script>
+         then services, then components, then the app controller. The
+         `defer` attribute preserves execution order (browsers run deferred
+         scripts in document order) BUT lets all 24 download in parallel
+         instead of one-after-the-other. End-of-body classic script tags
+         without defer block on each previous tag's download+execute, so
+         this is a real ~200-400ms TTI win on the boot waterfall. -->
+    <script defer src="js/strings.js?ts=20260512c"></script>
+    <script defer src="js/utils.js?ts=20260506g"></script>
+    <script defer src="js/illustrations.js?ts=20260506g"></script>
+    <script defer src="js/services/wallet.js?ts=20260506g"></script>
+    <script defer src="js/services/theme.js?ts=20260506g"></script>
+    <script defer src="js/services/api.js?ts=20260506g"></script>
+    <script defer src="js/services/sse.js?ts=20260511d"></script>
+    <script defer src="js/services/notifications.js?ts=20260506g"></script>
+    <script defer src="js/services/fleet-health-gradient.js?ts=20260512a"></script>
+    <script defer src="js/services/height-series.js?ts=20260512a"></script>
+    <script defer src="js/components/system-status.js?ts=20260511f"></script>
+    <script defer src="js/components/sparkline.js?ts=20260512a"></script>
+    <script defer src="js/components/power-circle.js?ts=20260512a"></script>
+    <script defer src="js/components/chain-card.js?ts=20260512e"></script>
+    <script defer src="js/components/validator-registration-card.js?ts=20260511e"></script>
+    <script defer src="js/components/producer-identity.js?ts=20260512a"></script>
+    <script defer src="js/components/log-viewer.js?ts=20260507d"></script>
+    <script defer src="js/components/proposal-card.js?ts=20260506g"></script>
+    <script defer src="js/components/welcome-screen.js?ts=20260506g"></script>
+    <script defer src="js/components/setup-conversation.js?ts=20260511c"></script>
+    <script defer src="js/components/settings-tab.js?ts=20260511g"></script>
+    <script defer src="js/components/audit-tab.js?ts=20260506g"></script>
+    <script defer src="js/components/evm-tab.js?ts=20260506g"></script>
+    <script defer src="js/components/settings-drawer.js?ts=20260506g"></script>
     <script src="js/components/tools-update-card.js?ts=20260512c"></script>
     <script src="js/components/technical-view.js?ts=20260512f"></script>
     <script src="js/app.js?ts=20260513a"></script>

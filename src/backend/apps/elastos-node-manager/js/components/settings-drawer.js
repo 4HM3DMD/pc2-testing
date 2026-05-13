@@ -173,11 +173,19 @@
 
     /** @private */
     SettingsDrawer.prototype._renderShell = function () {
+        // a11y/WCAG 4.1.2: aria-modal + aria-labelledby pointing at the
+        // dialog's own H2 is the canonical dialog pattern. The wrapping
+        // <aside> is acceptable for a side-drawer but aria-modal makes
+        // the modal semantics explicit so screen-reader users know the
+        // background is unreachable. The H2 id pairs with aria-labelledby
+        // so the dialog's accessible name comes from the visible heading
+        // (better than aria-label hand-typed strings drifting from the
+        // localised heading text).
         this.root.innerHTML =
-            '<div class="enm-drawer-backdrop"></div>'
-            + '<aside class="enm-drawer" role="dialog" aria-label="Settings">'
+            '<div class="enm-drawer-backdrop" aria-hidden="true"></div>'
+            + '<aside class="enm-drawer" role="dialog" aria-modal="true" aria-labelledby="enm-drawer-title">'
               + '<header class="enm-drawer-header">'
-                + '<h2>Settings</h2>'
+                + '<h2 id="enm-drawer-title">Settings</h2>'
                 + '<button type="button" class="enm-drawer-close" aria-label="Close">×</button>'
               + '</header>'
               + '<div class="enm-drawer-body"></div>'

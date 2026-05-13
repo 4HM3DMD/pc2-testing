@@ -86,7 +86,15 @@
             + '</div>'
             + '<div class="enm-conv-progress-text" aria-live="polite"></div>'
             + '</header>'
-            + '<div class="enm-conv-body" aria-live="polite"></div>';
+            // a11y: dropped aria-live="polite" from the body region. The
+            // header's progress text already announces every step
+            // transition ("Step 3 of 6"); pairing a second live region
+            // on the body caused screen readers to queue + interleave
+            // both, sometimes reading the body content twice (once on
+            // the body's mutation, once on heading navigation). The
+            // body is announced normally via the heading focus added
+            // in batch 6 (_goto focuses the new card title).
+            + '<div class="enm-conv-body"></div>';
         this._headerProgress = this.root.querySelector('.enm-conv-progress-bar');
         this._headerText     = this.root.querySelector('.enm-conv-progress-text');
         this._body           = this.root.querySelector('.enm-conv-body');

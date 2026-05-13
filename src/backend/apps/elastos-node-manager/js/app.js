@@ -550,8 +550,19 @@
             title  = t('owner.forbidden');
             detail = t('app.forbiddenHelp');
         } else if (err && err._tag === 'health') {
-            title  = t('app.backendUnreachable');
-            detail = t('app.backendHelp') + (err.message ? ' (' + err.message + ')' : '');
+            // navigator.onLine is unreliable as a TRUE signal (false
+            // positives) but a RELIABLE false signal — when it's
+            // false, the browser confirms no network. Use that to
+            // override the "blame the backend" copy and tell the
+            // operator they're offline. Saves a misleading docker-logs
+            // pointer when the real problem is their wifi.
+            if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+                title  = 'You appear to be offline';
+                detail = 'Your browser reports no network connection. Reconnect and click Retry.';
+            } else {
+                title  = t('app.backendUnreachable');
+                detail = t('app.backendHelp') + (err.message ? ' (' + err.message + ')' : '');
+            }
         } else {
             title  = t('app.generic_error');
             detail = (err && err.message) ? err.message : String(err);

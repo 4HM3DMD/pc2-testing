@@ -591,13 +591,15 @@
     function modulesToSvg(modules, size, margin) {
         var n = modules.length;
         var box = n + 2 * margin;
-        // a11y: even though the wrapping `<div class="enm-producer-qr">`
-        // already carries role="img" + aria-label, JAWS (and some older
-        // NVDA builds) still look for a `<title>` child on the inner SVG
-        // and otherwise announce a bare "graphic" with no name. Adding
-        // the title here costs nothing and never double-announces in
-        // modern AT.
-        var s = '<svg xmlns="http://www.w3.org/2000/svg" width="' + size + '" height="' + size + '" viewBox="0 0 ' + box + ' ' + box + '" shape-rendering="crispEdges" role="img" focusable="false">';
+        // a11y: the wrapping `<div class="enm-producer-qr">` already
+        // carries role="img" + aria-label and that's the single "image"
+        // landmark we want screen readers to expose. The inner SVG is
+        // therefore aria-hidden — but we still ship a <title> child as
+        // a JAWS fallback because some older JAWS builds skip the
+        // wrapper and read the SVG directly. role="img" on the SVG was
+        // creating a redundant nested-image landmark (caught by the
+        // ARIA-tree complexity audit).
+        var s = '<svg xmlns="http://www.w3.org/2000/svg" width="' + size + '" height="' + size + '" viewBox="0 0 ' + box + ' ' + box + '" shape-rendering="crispEdges" aria-hidden="true" focusable="false">';
         s += '<title>Public key QR code</title>';
         s += '<rect width="100%" height="100%" fill="#ffffff"/>';
         var path = '';
