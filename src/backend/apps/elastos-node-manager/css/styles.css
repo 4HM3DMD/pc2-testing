@@ -4255,7 +4255,12 @@ body[data-active-tab="identity"]::before {
 .enm-drawer-root {
     position: fixed;
     inset: 0;
-    z-index: 9998;
+    /* alpha.28.1 — migrated from raw 9998 to --z-drawer (100). The
+       raw value lived above --z-toast (300) which buried toasts behind
+       the drawer (the smoke audit confirmed this on a running build).
+       Token scale orders pane < drawer < modal < toast < skip-link
+       so a critical alert always wins over a settings panel. */
+    z-index: var(--z-drawer);
     pointer-events: none;
 }
 .enm-drawer-root[hidden] { display: none !important; }
@@ -4731,7 +4736,12 @@ body[data-update-severity="major"] .enm-tech-tabs .enm-tab[data-tab="tools"]::be
 .enm-tools-update-modal {
     position: fixed;
     inset: 0;
-    z-index: 9999;
+    /* alpha.28.1 — migrated from raw 9999 (tied with the skip link!) to
+       --z-modal (200). Token scale lets the toast container sit above
+       us when a critical alert lands while the modal is open. The skip
+       link keeps its raw 9999 and is the single layer that ever
+       outranks anything. */
+    z-index: var(--z-modal);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -5411,11 +5421,14 @@ body[data-app-size="narrow"] .enm-conv-actions .enm-btn {
     border: 0;
 }
 
+/* The skip link is the single layer that always wins — kept at the
+   raw token value so a future maintainer can grep for `--z-skip-link`
+   and find every reference, not just this one. */
 .enm-skip-link {
     position: absolute;
     top: -40px;
     left: var(--spacing-sm);
-    z-index: 9999;
+    z-index: var(--z-skip-link);
     padding: var(--spacing-sm) var(--spacing-md);
     background: var(--bg-elevated);
     color: var(--text-primary);

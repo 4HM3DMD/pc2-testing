@@ -180,6 +180,18 @@
      * default if someone screenshots the card.
      */
     EnmToolsUpdateCard.prototype._openUpdateModal = function (env) {
+        // alpha.28.1 bug fix — batches 7/8 referenced `self` inside this
+        // function (cardSelf, modalSelf, the cleanup hook), but `self`
+        // was never declared at this scope. In browsers `self === window`
+        // so the destroy-hook leak fix (cardSelf._modalClose = close)
+        // was actually setting window._modalClose and never firing on
+        // teardown, AND the clipboard-fallback notification path
+        // (modalSelf.notifications) was reading window.notifications
+        // → falsy → no operator feedback when clipboard fails. Adding
+        // the alias here makes the entire function honour `this` (the
+        // card instance) as the rest of the file already does at lines
+        // 51, 69, 168.
+        var self = this;
         var prev = document.querySelector('.enm-tools-update-modal');
         if (prev) prev.parentNode.removeChild(prev);
 
