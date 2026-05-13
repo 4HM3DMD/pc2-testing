@@ -175,12 +175,33 @@
         this._scroller.setAttribute('aria-label', t('log_viewer.heading') + ' — ' + this.chainId);
 
         // If user scrolls up manually, pause auto-tail.
+        // alpha.28.1 batch 73 (Round-20A audit finding #2) — route
+        // through _refreshTailLabel so the "reconnecting…" pill state
+        // wins over "Paused (auto-resume on new line)" when SSE is
+        // down. The previous shape unconditionally wrote 'log_viewer.paused'
+        // + dropped the .enm-log-following class, clobbering the
+        // reconnecting visual state set by _refreshTailLabel. Failure
+        // mode: operator scrolls up while SSE is reconnecting, sees
+        // "Paused — auto-resume on new line", waits indefinitely for
+        // new lines that never arrive (SSE is dead). The new path
+        // updates _followTail then defers the label/class decision to
+        // _refreshTailLabel which already branches on _sseConnState.
         this._scroller.addEventListener('scroll', function () {
             var nearBottom = (self._scroller.scrollHeight - self._scroller.clientHeight - self._scroller.scrollTop) < 4;
             if (!nearBottom && self._followTail) {
                 self._followTail = false;
-                self._tailToggle.textContent = t('log_viewer.paused');
-                self._tailToggle.classList.remove('enm-log-following');
+                if (typeof self._refreshTailLabel === 'function') {
+                    self._refreshTailLabel();
+                } else {
+                    // _refreshTailLabel attaches in _renderShell's later
+                    // pass; if scroll fires before that completes (e.g.
+                    // programmatic scroll during initial-tail render)
+                    // fall back to the previous shape. Safe because at
+                    // that point the SSE has never been opened so
+                    // _sseConnState defaults to 'open'.
+                    self._tailToggle.textContent = t('log_viewer.paused');
+                    self._tailToggle.classList.remove('enm-log-following');
+                }
             }
         });
 
@@ -294,8 +315,14 @@
                 } else {
                     this._bufferPill.removeAttribute('role');
                 }
-                this._bufferPill.textContent = 'Older lines dropped: '
-                    + this._droppedCount.toLocaleString();
+                // alpha.28.1 batch 74 (Round-20A finding #4) — pluralize
+                // so the boundary case (excess === 1) doesn't read
+                // "Older lines dropped: 1". Same one-shot manual plural
+                // approach as the audit-tab row counter (ICU plural
+                // shim still deferred for alpha.29).
+                this._bufferPill.textContent = (this._droppedCount === 1
+                    ? 'Older line dropped: 1'
+                    : 'Older lines dropped: ' + this._droppedCount.toLocaleString());
                 this._bufferPill.title = 'The viewer keeps the most recent '
                     + MAX_DOM_LINES.toLocaleString() + ' lines in memory. '
                     + 'Use Download to capture the visible buffer.';
