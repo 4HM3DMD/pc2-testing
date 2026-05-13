@@ -51,7 +51,15 @@
     </script>
 </head>
 <body>
+    <!-- a11y: skip link lands at the top of the Tab order so keyboard
+         users can jump past the chrome (gear, theme, 5 tabs). Visible
+         only on focus (see .enm-skip-link in styles.css). -->
+    <a href="#enm-main" class="enm-skip-link">Skip to main content</a>
     <div id="app" class="enm-app" data-state="connecting">
+        <!-- a11y: WCAG 2.4.6 requires a top-level heading. The PC2 window
+             chrome shows the app name in its title bar, but screen-reader
+             users navigating by heading need an h1 inside the document. -->
+        <h1 class="enm-sr-only">Elastos Node Manager</h1>
         <!-- Header bar matching dao-dashboard's pattern: tabs on the left,
              flexible spacer, global controls on the right. PC2's window
              manager already provides the app title via window-head — no
@@ -90,8 +98,10 @@
             </div>
         </nav>
 
-        <main class="enm-main">
-            <div class="enm-spinner" id="enm-spinner" role="status" aria-live="polite">
+        <main class="enm-main" id="enm-main">
+            <!-- a11y: role="status" implies aria-live="polite"; pairing them
+                 caused Safari + older NVDA to double-announce the spinner. -->
+            <div class="enm-spinner" id="enm-spinner" role="status">
                 <div class="enm-spinner-dots">
                     <div class="enm-spinner-dot"></div>
                     <div class="enm-spinner-dot"></div>

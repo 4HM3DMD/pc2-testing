@@ -122,7 +122,7 @@
                 'at registration; nothing flows back the other way.' +
             '</aside>' +
             '<div class="enm-producer-identity-body">' +
-                '<div class="enm-producer-qr" aria-label="Public key QR code"></div>' +
+                '<div class="enm-producer-qr" role="img" aria-label="Public key QR code"></div>' +
                 '<div class="enm-producer-fields">' +
                     '<div class="enm-producer-field">' +
                         '<span class="enm-producer-field-label">Public key</span>' +

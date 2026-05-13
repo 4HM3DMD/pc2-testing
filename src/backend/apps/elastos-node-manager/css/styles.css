@@ -52,7 +52,7 @@
     --border-strong: rgba(60, 60, 67, 0.14);
     --text-primary: #11131a;
     --text-secondary: #4b4f5b;
-    --text-muted: #8a8f9c;
+    --text-muted: #6a6f7b; /* a11y: bumped from #8a8f9c to clear WCAG AA 4.5:1 body on #f7f8fa/#fff */
     --text-inverse: #f8fafc;
 
     /* ---- brand + accents (iOS system blue) ---- */
@@ -67,6 +67,19 @@
     --warning: #ff9f0a;
     --error: #ff453a;
     --healing: #7c3aed;
+    /* a11y: -strong variants for text/icon on fills.
+       White on #34c759 / #ff9f0a fails AA (1.9-2.1:1); these darker shades
+       are used wherever a coloured fill carries text. The bright tokens
+       above still serve dot/ring/icon-on-surface usages. */
+    --success-strong: #1f8a3c;
+    --warning-strong: #b46b00;
+    --error-strong:   #c81e16;
+    /* a11y: soft surfaces (mirrors --primary-soft / --primary-softer). */
+    --success-soft:  rgba(52, 199, 89, 0.12);
+    --warning-soft:  rgba(255, 159, 10, 0.12);
+    --error-soft:    rgba(255, 69, 58, 0.12);
+    /* a11y: alias for code that already references --danger without a fallback. */
+    --danger:        var(--error);
 
     /* ---- chain-state palette ----
        Aliases of the semantic tokens above. One source of truth so a
@@ -109,7 +122,9 @@
     --font-weight-bold: 700;
 
     /* ---- focus + chrome ---- */
-    --focus-ring-color: rgba(0, 122, 255, 0.45);
+    /* a11y: alpha bumped 0.45 → 0.75 so the ring clears the 3:1 non-text
+       contrast requirement on #f7f8fa / #ffffff (was 1.9:1, now 3.2:1). */
+    --focus-ring-color: rgba(0, 122, 255, 0.75);
     --focus-ring: 0 0 0 3px var(--focus-ring-color);
     --header-bar-height: 44px;
 
@@ -185,11 +200,14 @@
     --bg-muted: #1a1d25;
     --bg-elevated: #1a1d25;
     --bg-code: #0a0a0a;
-    --border-color: rgba(235, 235, 245, 0.06);
-    --border-strong: rgba(235, 235, 245, 0.12);
+    /* a11y: alpha 0.06 → 0.14 (1.2:1 → 3.0:1) and 0.12 → 0.24 (1.6:1 → 4.7:1)
+       so borders register as actual edges in dark mode. */
+    --border-color: rgba(235, 235, 245, 0.14);
+    --border-strong: rgba(235, 235, 245, 0.24);
     --text-primary: #f4f5f8;
     --text-secondary: #b5b9c5;
-    --text-muted: #7c8190;
+    /* a11y: 3.5:1 → 5.6:1 on bg-surface, clears AA body */
+    --text-muted: #9ba0ae;
     --primary: #0a84ff;
     --primary-hover: #409cff;
     --primary-soft: rgba(10, 132, 255, 0.18);
@@ -197,6 +215,17 @@
     --success: #30d158;
     --warning: #ffa00a;
     --error: #ff453a;
+    /* a11y: in light mode --healing is #7c3aed → 8.6:1 on white; on dark
+       surfaces the unchanged value drops to 2.2:1. Lift to the
+       Apple "purple-A" tier so chain-recovering / healing toasts stay
+       AA-compliant on dark. */
+    --healing: #a78bfa;
+    /* a11y: soft semantic surfaces for dark mode mirror the light defs. */
+    --success-soft: rgba(48, 209, 88, 0.16);
+    --warning-soft: rgba(255, 160, 10, 0.16);
+    --error-soft:   rgba(255, 69, 58, 0.16);
+    /* a11y: focus ring alpha tuned for dark backgrounds (2.0:1 → 3.4:1). */
+    --focus-ring-color: rgba(64, 156, 255, 0.7);
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
     /* Dark "resting card" shadow — inset 1px highlight catches the top
        edge; soft floor drop. Apple's dark-mode card trick. */
@@ -206,7 +235,9 @@
 
     /* Apple Hero dark wash + sparkline tunings */
     --wash-a: rgba(52, 199, 89, 0.09);
-    --ring-track: rgba(235, 235, 245, 0.06);
+    /* a11y: alpha 0.06 → 0.18 so the PowerCircle track reads as a real
+       ring in dark mode (1.4:1 → 3.4:1, clears UI 3:1). */
+    --ring-track: rgba(235, 235, 245, 0.18);
     --sparkline-opacity: 0.85;
     --sparkline-fill-top: 0.35;
 }
@@ -5231,4 +5262,43 @@ body[data-app-size="narrow"] .enm-conv-actions .enm-btn {
     .enm-skeleton {
         animation: none;
     }
+}
+
+/* ============================================================
+   Accessibility utility classes (WCAG 2.4.1, 1.3.1)
+   ============================================================
+   Both classes follow the standard "visually hidden but
+   focusable" pattern (visible on :focus for the skip link). */
+
+.enm-sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+.enm-skip-link {
+    position: absolute;
+    top: -40px;
+    left: var(--spacing-sm);
+    z-index: 9999;
+    padding: var(--spacing-sm) var(--spacing-md);
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    font-weight: var(--font-weight-semibold);
+    text-decoration: none;
+    transition: top 150ms var(--ease-out);
+}
+.enm-skip-link:focus,
+.enm-skip-link:focus-visible {
+    top: var(--spacing-sm);
+    outline: none;
+    box-shadow: var(--focus-ring);
 }

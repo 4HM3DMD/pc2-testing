@@ -119,7 +119,11 @@
         el.id = actual;
         el.className = 'enm-toast-container';
         el.setAttribute('role', 'region');
-        el.setAttribute('aria-live', 'polite');
+        // a11y: container does NOT carry aria-live; each toast supplies
+        // role="alert" (critical) or role="status" (info/warning/healing)
+        // so announcement priority matches severity. Pairing container
+        // aria-live="polite" with an inner role="alert" caused double
+        // announcements on Safari and older NVDA.
         el.setAttribute('aria-label', 'Notifications');
         // Anchor inside .enm-main so position:absolute lands below the
         // chrome (titlebar + tabs) without us needing to know their
