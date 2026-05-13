@@ -55,6 +55,11 @@
         this.timeoutMs = (opts && opts.timeoutMs) || DEFAULT_TIMEOUT_MS;
         this.cacheTtlMs = (opts && opts.cacheTtlMs) || DEFAULT_CACHE_TTL_MS;
         this._cache = new Map(); // key -> { value, expiresAt }
+        // alpha.28.1 batch 17 (audit a4bcd049, finding #1): in-flight
+        // dedup. Two get('/chains') 50ms apart used to fire two network
+        // round-trips because the cache only populates on resolve. Now
+        // the second call returns the same pending promise.
+        this._inflight = new Map(); // key -> Promise
     }
 
     /**
@@ -73,11 +78,41 @@
                 return Promise.resolve(cached.value);
             }
         }
+        // In-flight dedup — any subsequent caller asking for the same
+        // path while a fetch is pending gets the existing promise back.
+        // Bypasses dedup when skipCache is true so callers that
+        // explicitly want a fresh network roundtrip can still get one.
+        if (!skipCache && this._inflight.has(key)) {
+            return this._inflight.get(key);
+        }
         var self = this;
-        return this._fetch('GET', path).then(function (result) {
+        var p = this._fetch('GET', path).then(function (result) {
             self._cache.set(key, { value: result, expiresAt: Date.now() + self.cacheTtlMs });
+            self._pruneCache();
             return result;
+        }).finally(function () {
+            self._inflight.delete(key);
         });
+        if (!skipCache) { this._inflight.set(key, p); }
+        return p;
+    };
+
+    /**
+     * @private
+     * Opportunistic prune — call after every successful insert. Drops
+     * entries whose expiresAt is already in the past. Audit a4bcd049
+     * finding #2 — without this the cache grows unboundedly as distinct
+     * querystrings (e.g. /logs?since=…) each get a permanent slot.
+     */
+    ApiClient.prototype._pruneCache = function () {
+        var now = Date.now();
+        var toDrop = [];
+        this._cache.forEach(function (entry, key) {
+            if (entry.expiresAt <= now) { toDrop.push(key); }
+        });
+        for (var i = 0; i < toDrop.length; i += 1) {
+            this._cache.delete(toDrop[i]);
+        }
     };
 
     /**
@@ -141,6 +176,20 @@
         return fetch(url, init).then(function (res) {
             clearTimeout(timer);
             return res.text().then(function (text) {
+                // a4bcd049 finding #3 — proxy login pages return 200 OK
+                // with text/html. Previously fell through to parsed=null
+                // and the caller saw a "successful" empty result. Detect
+                // the non-JSON content-type up front so the operator
+                // gets a re-auth signal instead of mysteriously-empty
+                // panels.
+                var ct = (res.headers && res.headers.get) ? (res.headers.get('content-type') || '') : '';
+                if (text && ct && ct.indexOf('application/json') === -1) {
+                    var htmlErr = new Error('Non-JSON response from ' + path + ' (likely proxy/auth page)');
+                    htmlErr.status = res.status;
+                    htmlErr.code = 'NON_JSON';
+                    htmlErr.body = text.slice(0, 200);
+                    throw htmlErr;
+                }
                 var parsed = null;
                 if (text) {
                     try { parsed = JSON.parse(text); } catch (_) { /* fall through */ }
@@ -153,14 +202,27 @@
                     throw err;
                 }
                 if (parsed && parsed.success === false) {
-                    throw new Error(parsed.error || 'Request failed');
+                    // a4bcd049 finding #5 — previously threw a bare
+                    // Error here, losing status + body. Callers couldn't
+                    // distinguish a 200-with-success:false from a 500.
+                    var lfErr = new Error(parsed.error || 'Request failed');
+                    lfErr.status = res.status;
+                    lfErr.body = parsed;
+                    lfErr.code = 'LOGICAL_FAILURE';
+                    throw lfErr;
                 }
                 return (parsed && parsed.result !== undefined) ? parsed.result : parsed;
             });
         }).catch(function (err) {
             clearTimeout(timer);
             if (err && err.name === 'AbortError') {
-                throw new Error('Request timeout (' + method + ' ' + path + ')');
+                // a4bcd049 finding #4 — preserve abort semantics so
+                // callers can `err.code === 'TIMEOUT'` instead of
+                // string-matching the message.
+                var timeoutErr = new Error('Request timeout (' + method + ' ' + path + ')');
+                timeoutErr.code = 'TIMEOUT';
+                timeoutErr.name = 'AbortError';
+                throw timeoutErr;
             }
             throw err;
         });
@@ -170,11 +232,21 @@
     ApiClient.prototype._invalidateRelated = function (path) {
         // Drop every cache entry whose path starts with the same first segment.
         // /chains/mainchain/start → first seg /chains → invalidates /chains and /chains/*.
-        var first = path.split('/').slice(0, 2).join('/'); // ['', 'chains']
-        for (var key of Array.from(this._cache.keys())) {
-            if (key.indexOf(' ' + first) !== -1) {
-                this._cache.delete(key);
-            }
+        //
+        // a4bcd049 finding #7 — previous implementation used
+        // `indexOf(' ' + first)` which is a substring match. Path
+        // `/chainsx` would invalidate `/chains` (false positive).
+        // Use a strict prefix match: key must equal `GET <first>` or
+        // start with `GET <first>/`.
+        var first = path.split('/').slice(0, 2).join('/'); // e.g. '/chains'
+        var exact = 'GET ' + first;
+        var prefix = 'GET ' + first + '/';
+        var toDrop = [];
+        this._cache.forEach(function (_v, key) {
+            if (key === exact || key.indexOf(prefix) === 0) { toDrop.push(key); }
+        });
+        for (var i = 0; i < toDrop.length; i += 1) {
+            this._cache.delete(toDrop[i]);
         }
     };
 
