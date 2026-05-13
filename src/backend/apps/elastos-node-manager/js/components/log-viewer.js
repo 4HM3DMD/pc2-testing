@@ -33,6 +33,16 @@
 
         this._followTail = true;
         this._unsubscribe = null;
+        // alpha.28.1 batch 64 (Round-18 audit) — lifecycle flag. The
+        // previous shape unsubscribed SSE in destroy() but had no signal
+        // to short-circuit the _loadInitialTail promise chain. A teardown
+        // mid-fetch would resolve into appendBatch(detached scroller) +
+        // _drainPendingSseBatches(detached scroller) — wasted DOM work
+        // and a small leak from the queued batches getting drained into
+        // nodes that were already removed. Aligns with every other
+        // component in the codebase (chain-card, validator-card, tools-
+        // update-card) which sets _destroyed and guards async resolutions.
+        this._destroyed = false;
 
         this._renderShell();
     }
@@ -56,6 +66,10 @@
     };
 
     LogViewer.prototype.destroy = function () {
+        // Mark destroyed FIRST so any in-flight _loadInitialTail
+        // resolutions can short-circuit before mutating detached DOM.
+        // (Round-18 audit, batch 64.)
+        this._destroyed = true;
         if (this._unsubscribe) { this._unsubscribe(); this._unsubscribe = null; }
         if (this._sseStateUnsub) { this._sseStateUnsub(); this._sseStateUnsub = null; }
         if (this.root.parentNode) { this.root.parentNode.removeChild(this.root); }
@@ -183,6 +197,10 @@
         var self = this;
         return this.api.get('/logs/' + this.chainId + '/tail?n=' + INITIAL_TAIL_N, { skipCache: true })
             .then(function (data) {
+                // Round-18 audit batch 64 — short-circuit if the component
+                // was destroyed mid-fetch. Without this we'd append into
+                // a detached scroller (already removed from the DOM).
+                if (self._destroyed) { return; }
                 if (data && Array.isArray(data.lines) && data.lines.length > 0) {
                     self._appendBatch(data.lines);
                 }
@@ -191,6 +209,7 @@
                 // Silent — chain may not have started yet, /tail returns empty.
             })
             .then(function () {
+                if (self._destroyed) { return; }
                 // Whether the tail GET succeeded or failed, the boundary
                 // is the same: any SSE batches that came in during the
                 // fetch are now safe to flush in order.
