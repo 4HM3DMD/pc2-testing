@@ -239,7 +239,7 @@
                     + '<p class="enm-validator-step-help">' + escapeHtml(t('validator_card.step1_help')) + '</p>'
                     + '<div class="enm-validator-pubkey-row">'
                         + '<code class="enm-validator-pubkey" id="enm-vc-pubkey">' + escapeHtml(t('common.loading')) + '</code>'
-                        + '<button type="button" class="enm-btn enm-btn-secondary enm-validator-copy" id="enm-vc-copy" aria-label="Copy public key">'
+                        + '<button type="button" class="enm-btn enm-btn-secondary enm-validator-copy" id="enm-vc-copy" aria-label="' + escapeHtml(t('validator_card.copy_aria')) + '">'
                             + escapeHtml(t('validator_card.copy')) + '</button>'
                     + '</div>'
                 + '</div>'
@@ -295,17 +295,28 @@
         copyBtn.addEventListener('click', function () {
             var text = self._lastPubkey || pubkeyEl.textContent || '';
             if (!text) { return; }
+            // alpha.28.1 batch 87 (Round-26 finding #4) — fallback strings
+            // localised + dedup'd. Previous shape passed both failTitle/
+            // failBody AND an onFallback that called notifications.warning
+            // directly with hardcoded English copies of the same strings.
+            // enmCopyToClipboard's onFallback path short-circuits the
+            // built-in warning toast (utils.js:359), so the explicit
+            // failTitle/failBody were DEAD opts — but a single source-of-
+            // truth violation: any future i18n migration had to update two
+            // sites for the same strings. Single source now lives in
+            // strings.js validator_card.copy_fail_*.
             root.enmCopyToClipboard(text, {
                 btn: copyBtn,
                 copiedLabel: t('validator_card.copied'),
                 resetMs: 1200,
                 notifications: self.notifications,
-                failTitle: 'Copy unavailable',
-                failBody: 'Browser blocked clipboard access. Public key is selected — press ⌘/Ctrl-C to copy.',
                 onFallback: function () {
                     selectInto(pubkeyEl);
                     if (self.notifications) {
-                        self.notifications.warning('Copy unavailable', 'Browser blocked clipboard access. Public key is selected — press ⌘/Ctrl-C to copy.');
+                        self.notifications.warning(
+                            t('validator_card.copy_fail_title'),
+                            t('validator_card.copy_fail_body')
+                        );
                     }
                 },
             });

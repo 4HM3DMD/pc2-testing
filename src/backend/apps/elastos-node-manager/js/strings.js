@@ -537,6 +537,14 @@
             activate_btn:       'Activate BPoS supernode',
             activate_btn_active:'Activating…',
             activate_ok:        'Activation submitted — wait a block or two for chain confirmation.',
+            // alpha.28.1 batch 87 — copy button aria-label + clipboard
+            // fallback strings localised. Previous shape carried inline
+            // English in the Copy button's aria-label and in two
+            // duplicate hardcoded toast strings inside enmCopyToClipboard
+            // opts (Round-26 audit findings #2 + #4).
+            copy_aria:          'Copy public key',
+            copy_fail_title:    'Copy unavailable',
+            copy_fail_body:     'Browser blocked clipboard access. Public key is selected — press Ctrl-C (or ⌘-C on Mac) to copy.',
         },
 
         audit: {
