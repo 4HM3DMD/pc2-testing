@@ -91,13 +91,41 @@
     /** @private */
     ValidatorRegistrationCard.prototype._poll = function () {
         var self = this;
+        // alpha.28.1 batch 48 — flag fetch failures so _reconcile can
+        // distinguish "not yet synced" (null + no error flag) from
+        // "backend outage" (null + error flag). Previously both paths
+        // hid the card with no operator signal; under a persistent
+        // 500/401 the operator couldn't tell whether their producer
+        // status was unknown or just not-yet-registered.
+        // (Round-4 empty/loading/error audit a3ca028e.)
+        var chainFailed = false;
+        var producerFailed = false;
         Promise.all([
-            this.api.get('/chains/' + this.chainId, { skipCache: true }).catch(function () { return null; }),
-            this.api.get('/chains/' + this.chainId + '/producer', { skipCache: true }).catch(function () { return null; }),
+            this.api.get('/chains/' + this.chainId, { skipCache: true })
+                .catch(function (err) {
+                    // 401 = expired session; suppress operator-visible
+                    // noise (boot path owns re-auth). Other statuses
+                    // (404 / 500 / network) flag as a real outage.
+                    if (!err || err.status !== 401) { chainFailed = true; }
+                    return null;
+                }),
+            this.api.get('/chains/' + this.chainId + '/producer', { skipCache: true })
+                .catch(function (err) {
+                    if (!err || err.status !== 401) { producerFailed = true; }
+                    return null;
+                }),
         ]).then(function (results) {
             if (self._destroyed) { return; }
             var chain    = results[0];
             var producer = results[1];
+            // If both endpoints failed AND we were already showing the
+            // card, leave it as-is instead of hiding (last-known-good
+            // wins until the backend recovers). The chain-card next
+            // to us already surfaces backend outage state, so we don't
+            // need a second indicator — just don't lie by hiding.
+            if (chainFailed && producerFailed && !self.root.hidden) {
+                return;
+            }
             self._reconcile(chain, producer);
         });
     };
