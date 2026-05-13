@@ -623,7 +623,23 @@
 
     ENMApp.prototype._openProposalById = function (id) {
         var self = this;
+        // alpha.28.1 batch 55 — short-circuit if the same proposal is
+        // already on screen (live card matches id). Without this, a
+        // backend retry or duplicate SSE event opened a second modal
+        // on top of the first; the operator's confirm/reject hit one
+        // dialog while the other lingered. (Race-conditions audit
+        // aaf1f87d "sequence-number gaps" section.)
+        if (this._proposalCard && this._proposalCard.proposal
+            && this._proposalCard.proposal.id === id) {
+            return;
+        }
         this.services.api.get('/healing/suggestions', { skipCache: true }).then(function (data) {
+            // Re-check under .then in case the proposal-card mounted
+            // between our check above and this fetch resolving.
+            if (self._proposalCard && self._proposalCard.proposal
+                && self._proposalCard.proposal.id === id) {
+                return;
+            }
             var rec = (data && Array.isArray(data.proposals))
                 ? data.proposals.find(function (p) { return p.id === id; })
                 : null;
