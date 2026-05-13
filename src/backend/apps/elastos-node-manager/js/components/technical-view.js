@@ -168,6 +168,15 @@
             b.setAttribute('tabindex', idx === 0 ? '0' : '-1');
             b.dataset.tab = t.id;
             b.className = 'enm-tab';
+            // alpha.28.1 batch 23 — discoverability: surface the
+            // arrow-key navigation in title= so keyboard operators
+            // know it's available. The pattern was implemented in
+            // batch 1 (roving tabindex + Left/Right/Home/End) but
+            // the help-discoverability audit (a551343d) found no
+            // affordance hinting at it. Help is only used on hover
+            // and focus — fine: anyone using the keyboard already has
+            // focus on the tab.
+            b.title = t.label + ' — use ← → to switch sections, Home/End for first/last';
             b.innerHTML = escapeHtml(t.label)
                 + (t.pill ? ' <span class="enm-tab-pill">' + escapeHtml(t.pill) + '</span>' : '');
             b.addEventListener('click', function () {
