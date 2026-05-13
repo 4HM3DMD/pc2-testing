@@ -439,6 +439,21 @@
                         && self._proposalCard.proposal.id === ev.data.id) {
                         try { self._proposalCard.close(); }
                         catch (_) { /* already closing */ }
+                        // alpha.28.1 batch 93 (Round-30 audit finding #3)
+                        // — surface a toast so the operator knows their
+                        // peer tab actioned this proposal (and how).
+                        // Previously the modal evaporated silently with
+                        // no signal; especially bad for destructive
+                        // Confirms where this tab's operator may have
+                        // been leaning the opposite way. The `verdict`
+                        // field has been in the BC payload (line 458)
+                        // since batch 22 but was never read.
+                        if (self.services && self.services.notifications) {
+                            var peerVerdict = (ev.data.verdict === 'confirmed')
+                                ? 'Confirmed in another window'
+                                : 'Rejected in another window';
+                            self.services.notifications.info(peerVerdict, '');
+                        }
                     }
                 }
             });
@@ -558,7 +573,20 @@
                 + 'Hard-refresh the page (Ctrl-Shift-R).</p>';
             return;
         }
-        var conv = new root.EnmSetupConversation({
+        // alpha.28.1 batch 92 (Round-30 audit, MED) — store the
+        // SetupConversation instance on `this` so _showDashboard can
+        // call its destroy() before wiping the pane via _clearPanes.
+        // The previous shape stored the instance in a local `var conv`,
+        // so a cross-tab BC-driven 'setup-complete' transition in Tab B
+        // (Tab A completed setup → broadcast) yanked Tab B straight to
+        // _showDashboard, which did innerHTML='' on the pane without
+        // ever calling SetupConversation.destroy(). The orphaned
+        // instance kept its _installPollTimer + _bootstrapPollTimer +
+        // _unsubscribeInstall + _unsubscribeBootstrap SSE subs alive —
+        // exactly the leak pattern batches 70/83 fixed for the user-
+        // driven _goto path. Storing on `this` lets _showDashboard
+        // tear it down cleanly.
+        this._setupConv = new root.EnmSetupConversation({
             api: this.services.api,
             notifications: this.services.notifications,
             sse: this.services.sse,
@@ -569,7 +597,7 @@
                 self._broadcastSetupComplete();
             },
         });
-        conv.mount(this.els.paneDashboard);
+        this._setupConv.mount(this.els.paneDashboard);
     };
 
     ENMApp.prototype._showDashboard = function () {
@@ -600,6 +628,13 @@
         // verifiable backend state); everything post-setup goes straight
         // to the technical view, which renders only what the API
         // explicitly returns.
+        // batch 92 — tear down the setup conversation BEFORE _clearPanes
+        // wipes its DOM. Without this the orphaned instance's poll/SSE
+        // callbacks keep firing against detached DOM (Round-30 audit).
+        if (this._setupConv) {
+            try { this._setupConv.destroy(); } catch (_) { /* ignore */ }
+            this._setupConv = null;
+        }
         this._revealContent();
         this._collapseHeaderToHome();
         this._clearPanes();
