@@ -151,7 +151,19 @@
         var h = document.createElement('h3'); h.textContent = t('settings.heading_network');
         section.appendChild(h);
 
-        var modeWrap = document.createElement('div'); modeWrap.className = 'enm-settings-row';
+        // alpha.28.1 batch 27 — radio group wrapped in <fieldset><legend>
+        // so screen readers announce the group's purpose ("IP mode:")
+        // when the operator lands on either radio. ARIA Authoring
+        // Practices flag a radio group without a programmatic group
+        // label as a WCAG 1.3.1 bug, not polish. (Form-semantics audit
+        // a0b9a3e1.) The visually-hidden legend keeps the existing
+        // layout — the section H3 already gives sighted users context.
+        var modeWrap = document.createElement('fieldset');
+        modeWrap.className = 'enm-settings-row enm-radio-group';
+        var modeLegend = document.createElement('legend');
+        modeLegend.className = 'enm-sr-only';
+        modeLegend.textContent = t('settings.ip_mode_auto') + ' / ' + t('settings.ip_mode_manual');
+        modeWrap.appendChild(modeLegend);
         this._network = { modeAuto: radio('ipMode', 'auto'), modeManual: radio('ipMode', 'manual') };
         modeWrap.appendChild(label(this._network.modeAuto, t('settings.ip_mode_auto')));
         modeWrap.appendChild(label(this._network.modeManual, t('settings.ip_mode_manual')));
@@ -343,8 +355,16 @@
         th.textContent = t('settings.rpc_toggle_section');
         toggleSec.appendChild(th);
 
-        var toggleRow = document.createElement('div');
-        toggleRow.className = 'enm-rpc-toggle-row';
+        // alpha.28.1 batch 27 — fieldset+legend around the rpcEnabled
+        // radio pair (WCAG 1.3.1, ARIA radio-group pattern). Visually-
+        // hidden legend; the section H4 already provides sighted
+        // context. (Form-semantics audit a0b9a3e1.)
+        var toggleRow = document.createElement('fieldset');
+        toggleRow.className = 'enm-rpc-toggle-row enm-radio-group';
+        var toggleLegend = document.createElement('legend');
+        toggleLegend.className = 'enm-sr-only';
+        toggleLegend.textContent = t('settings.rpc_toggle_off') + ' / ' + t('settings.rpc_toggle_on');
+        toggleRow.appendChild(toggleLegend);
         toggleRow.appendChild(label(this._creds.toggleOff, t('settings.rpc_toggle_off')));
         toggleRow.appendChild(label(this._creds.toggleOn,  t('settings.rpc_toggle_on')));
         this._creds.toggleSaveBtn = btn(

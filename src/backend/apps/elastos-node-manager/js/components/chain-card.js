@@ -91,8 +91,15 @@
         }
         // Live-metric poll — height/peers/uptime move constantly while
         // the chain is alive. 5s matches alpha.18; backend can absorb it
-        // and the dashboard feels live.
-        this._metricsTimer = setInterval(function () { self.refresh(); }, 5_000);
+        // and the dashboard feels live. alpha.28.1 batch 27 — wrapped
+        // in enmUseVisibilityPause so the 720 fetches/hr stop when the
+        // tab is backgrounded (audit a96c7d71). Falls back to raw
+        // setInterval if the helper failed to load.
+        if (typeof root !== 'undefined' && typeof root.enmUseVisibilityPause === 'function') {
+            this._metricsPauser = root.enmUseVisibilityPause(function () { self.refresh(); }, 5_000);
+        } else {
+            this._metricsTimer = setInterval(function () { self.refresh(); }, 5_000);
+        }
         // Sync poll — adaptive cadence. Drives the PowerCircle percent
         // and the primary-metric "X / Y" line.
         this._refreshSync();
@@ -114,6 +121,7 @@
 
     ChainCard.prototype.destroy = function () {
         this._destroyed = true;
+        if (this._metricsPauser)   { try { this._metricsPauser.stop(); } catch (_) { /* idempotent */ } this._metricsPauser = null; }
         if (this._metricsTimer)    { clearInterval(this._metricsTimer);    this._metricsTimer = null; }
         if (this._uptimeTickTimer) { clearInterval(this._uptimeTickTimer); this._uptimeTickTimer = null; }
         if (this._rotationTimer)   { clearInterval(this._rotationTimer);   this._rotationTimer = null; }

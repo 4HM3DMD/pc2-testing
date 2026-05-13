@@ -1754,6 +1754,18 @@ body[data-active-tab="identity"]::before {
     padding: var(--spacing-sm) 0;
 }
 
+/* alpha.28.1 batch 27 — `.enm-radio-group` is the new fieldset wrapper
+   on the ipMode + rpcEnabled radio pairs (form-semantics audit). The
+   native <fieldset> ships with a 2px border + padding that would
+   shift the layout; reset to the previous div-styled appearance.
+   The accessible group label lives on the .enm-sr-only <legend>. */
+.enm-radio-group {
+    border: 0;
+    padding: 0;
+    margin: 0;
+    min-inline-size: 0;
+}
+
 .enm-settings-label {
     font-size: 13px;
     color: var(--text-primary);

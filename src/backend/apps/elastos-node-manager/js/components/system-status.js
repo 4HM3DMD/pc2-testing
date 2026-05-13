@@ -39,12 +39,20 @@
         parent.appendChild(this.root);
         this.refresh();
         var self = this;
-        this._timer = setInterval(function () { self.refresh(); }, POLL_INTERVAL_MS);
+        // alpha.28.1 batch 27 — visibility-pause wrap so a hidden tab
+        // doesn't fetch /system/status every 5s. 720 hits/hr saved per
+        // hidden dashboard. (Audit a96c7d71.)
+        if (typeof root !== 'undefined' && typeof root.enmUseVisibilityPause === 'function') {
+            this._pauser = root.enmUseVisibilityPause(function () { self.refresh(); }, POLL_INTERVAL_MS);
+        } else {
+            this._timer = setInterval(function () { self.refresh(); }, POLL_INTERVAL_MS);
+        }
         return this;
     };
 
     SystemStatus.prototype.destroy = function () {
         this._destroyed = true;
+        if (this._pauser) { try { this._pauser.stop(); } catch (_) { /* idempotent */ } this._pauser = null; }
         if (this._timer) { clearInterval(this._timer); this._timer = null; }
         if (this.root.parentNode) { this.root.parentNode.removeChild(this.root); }
     };

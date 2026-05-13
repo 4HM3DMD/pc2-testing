@@ -183,6 +183,72 @@
             });
     }
 
+    /**
+     * Schedule a recurring callback that automatically pauses when the
+     * tab is backgrounded and snaps back to a fresh tick + cadence
+     * when it returns to the foreground.
+     *
+     * Page Visibility audit (Round 16 a96c7d71) found 8 pollers
+     * hammering the backend at full cadence while invisible (5000+
+     * fetches/hr for a hidden dashboard). Components opt in by calling
+     * enmUseVisibilityPause(fn, intervalMs) in mount() and storing the
+     * returned handle's .stop() for destroy().
+     *
+     * Behaviour:
+     *   - visible at start → runs setInterval(fn, intervalMs) normally
+     *   - visibilitychange → hidden: clearInterval, no callback fires
+     *   - visibilitychange → visible: fire `fn` once immediately
+     *     (so the UI catches up after backgrounding), then re-arm
+     *     setInterval at the same cadence
+     *   - .stop() removes the visibilitychange listener and clears any
+     *     pending interval (idempotent, safe to call after stop)
+     *
+     * @param {function():void} fn
+     * @param {number} intervalMs
+     * @returns {{stop: function():void}}
+     */
+    function useVisibilityPause(fn, intervalMs) {
+        var timer = null;
+        var stopped = false;
+        function start() {
+            if (stopped) { return; }
+            if (timer != null) { return; }
+            timer = setInterval(fn, intervalMs);
+        }
+        function pause() {
+            if (timer != null) { clearInterval(timer); timer = null; }
+        }
+        function onVisChange() {
+            if (stopped) { return; }
+            if (typeof document !== 'undefined' && document.hidden) {
+                pause();
+            } else {
+                // Catch up immediately on resume so the UI doesn't show
+                // up-to-`intervalMs`-old data while waiting for the next
+                // tick. Wrap in try so a throwing fn doesn't poison the
+                // listener.
+                try { fn(); } catch (_) { /* ignore */ }
+                start();
+            }
+        }
+        // Initial state — if we mount while hidden, start paused.
+        if (typeof document !== 'undefined' && !document.hidden) {
+            start();
+        }
+        if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+            document.addEventListener('visibilitychange', onVisChange);
+        }
+        return {
+            stop: function () {
+                stopped = true;
+                pause();
+                if (typeof document !== 'undefined' && typeof document.removeEventListener === 'function') {
+                    document.removeEventListener('visibilitychange', onVisChange);
+                }
+            },
+        };
+    }
+
     root.enmTOrFallback = enmTOrFallback;
     root.enmPad2 = pad2;
     root.enmFormatUptime = formatUptime;
@@ -191,4 +257,5 @@
     root.enmFormatAddress = formatAddress;
     root.enmReducedMotion = reducedMotion;
     root.enmRunOnce = runOnce;
+    root.enmUseVisibilityPause = useVisibilityPause;
 }(typeof window !== 'undefined' ? window : globalThis));
