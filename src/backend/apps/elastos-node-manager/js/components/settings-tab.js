@@ -1474,22 +1474,24 @@
         // value — we wire its text into aria-label at click time too
         // via the .enm-rpc-creds-value span when present.
         copyBtn.setAttribute('aria-label', 'Copy ' + (display != null ? 'value' : 'credential'));
+        // alpha.28.1 batch 58 — routed through enmCopyToClipboard so the
+        // feature-detect + writeText path is shared with the other four
+        // copy sites. Custom onFallback preserves the select-the-value
+        // affordance so the operator can ⌘-C manually when the API is
+        // unavailable. Round-6 clipboard-UX audit a8a932d2.
         copyBtn.addEventListener('click', function () {
-            var hasClipboard = !!(navigator && navigator.clipboard && navigator.clipboard.writeText);
-            var p = hasClipboard
-                ? navigator.clipboard.writeText(value)
-                : Promise.reject(new Error('clipboard unavailable'));
-            p.then(function () {
-                var prev = copyBtn.textContent;
-                copyBtn.textContent = root.enmTOrFallback('settings.rpc_copied');
-                setTimeout(function () { copyBtn.textContent = prev; }, 1200);
-            }).catch(function () {
-                // Fallback: select the value so the operator can ctrl-c
-                var range = document.createRange();
-                range.selectNodeContents(span);
-                var sel = window.getSelection();
-                sel.removeAllRanges();
-                sel.addRange(range);
+            root.enmCopyToClipboard(value, {
+                btn: copyBtn,
+                copiedLabel: root.enmTOrFallback('settings.rpc_copied'),
+                resetMs: 1200,
+                onFallback: function () {
+                    // Fallback: select the value so the operator can ctrl-c.
+                    var range = document.createRange();
+                    range.selectNodeContents(span);
+                    var sel = window.getSelection();
+                    sel.removeAllRanges();
+                    sel.addRange(range);
+                },
             });
         });
         line.appendChild(copyBtn);

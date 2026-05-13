@@ -318,34 +318,22 @@
             }
         });
 
+        // alpha.28.1 batch 58 — routed through enmCopyToClipboard so the
+        // feature-detect + writeText path is shared with the other four
+        // copy sites. Round-6 clipboard-UX audit a8a932d2.
         var modalSelf = self;
         modal.querySelector('.upd-copy').addEventListener('click', function () {
             var pre = modal.querySelector('.enm-tools-update-modal-cmd');
             // Use textContent so the <span> placeholder is included literally.
             var text = pre ? pre.textContent : '';
-            // Feature-detect so the .catch fallback has something to land in
-            // when the iframe sandbox blocks the clipboard API outright.
-            // Also explicitly capture `modalSelf` outside the closure —
-            // the audit found that `self` was undefined inside the catch
-            // because it shadows the outer scope.
-            var hasClipboard = !!(navigator && navigator.clipboard && navigator.clipboard.writeText);
-            if (!hasClipboard) {
-                if (modalSelf && modalSelf.notifications) {
-                    modalSelf.notifications.warning('Copy unavailable', 'Browser blocked clipboard access. Select the command text and copy manually.');
-                }
-                return;
-            }
-            navigator.clipboard.writeText(text).then(function () {
-                var btn = modal.querySelector('.upd-copy');
-                if (btn) {
-                    var prev = btn.textContent;
-                    btn.textContent = 'Copied ✓';
-                    setTimeout(function () { btn.textContent = prev; }, 1400);
-                }
-            }).catch(function () {
-                if (modalSelf && modalSelf.notifications) {
-                    modalSelf.notifications.warning('Copy failed', 'Select the command text and copy manually.');
-                }
+            var copyBtn = modal.querySelector('.upd-copy');
+            root.enmCopyToClipboard(text, {
+                btn: copyBtn,
+                copiedLabel: 'Copied ✓',
+                resetMs: 1400,
+                notifications: modalSelf && modalSelf.notifications,
+                failTitle: 'Copy unavailable',
+                failBody: 'Browser blocked clipboard access. Select the command text and copy manually.',
             });
         });
     };

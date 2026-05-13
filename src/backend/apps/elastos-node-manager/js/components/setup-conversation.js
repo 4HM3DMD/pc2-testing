@@ -901,35 +901,31 @@
               + '<span>' + escapeHtml(t('friendly.setup.card_c.ack')) + '</span>'
             + '</label>';
 
+        // alpha.28.1 batch 58 — routed through enmCopyToClipboard so the
+        // feature-detect + writeText path is shared with the other four
+        // copy sites. Custom onFallback preserves the select-the-password
+        // affordance so the operator can ⌘-C manually when the iframe
+        // sandbox blocks the API. Round-6 clipboard-UX audit a8a932d2.
         var copyBtn = els.reveal.querySelector('.enm-password-copy');
         copyBtn.addEventListener('click', function () {
-            // Feature-detect first — otherwise calling .writeText on a
-            // missing clipboard API throws synchronously and the previous
-            // try/catch swallowed it silently with NO operator feedback.
-            // Bad behaviour for a one-shot keystore password reveal.
-            var hasClipboard = !!(navigator && navigator.clipboard && navigator.clipboard.writeText);
-            if (!hasClipboard) {
-                // Programmatically select the password code so Ctrl+C works.
-                try {
-                    var passEl = els.reveal.querySelector('.enm-password-value');
-                    if (passEl) {
-                        var range = document.createRange();
-                        range.selectNodeContents(passEl);
-                        var sel = root.getSelection();
-                        sel.removeAllRanges();
-                        sel.addRange(range);
-                    }
-                } catch (selErr) { /* ignore — operator can manually triple-click */ }
-                return;
-            }
-            navigator.clipboard.writeText(password).then(function () {
-                copyBtn.textContent = t('friendly.setup.card_c.cta_copied');
-                copyBtn.dataset.copied = '1';
-                setTimeout(function () {
-                    copyBtn.textContent = t('friendly.setup.card_c.cta_copy');
-                    delete copyBtn.dataset.copied;
-                }, 1500);
-            }).catch(function () { /* permission denied / sandboxed iframe */ });
+            root.enmCopyToClipboard(password, {
+                btn: copyBtn,
+                copiedLabel: t('friendly.setup.card_c.cta_copied'),
+                resetMs: 1500,
+                onFallback: function () {
+                    // Programmatically select the password code so Ctrl+C works.
+                    try {
+                        var passEl = els.reveal.querySelector('.enm-password-value');
+                        if (passEl) {
+                            var range = document.createRange();
+                            range.selectNodeContents(passEl);
+                            var sel = root.getSelection();
+                            sel.removeAllRanges();
+                            sel.addRange(range);
+                        }
+                    } catch (selErr) { /* ignore — operator can manually triple-click */ }
+                },
+            });
         });
 
         els.actions.innerHTML = '';

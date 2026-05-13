@@ -251,24 +251,23 @@
         qrHost.innerHTML = renderQrSvg(pubkey, { size: 168, margin: 2 });
 
         // Wire copy buttons.
+        // alpha.28.1 batch 58 — routed through enmCopyToClipboard so the
+        // feature-detect + writeText + notifications plumbing is shared
+        // with the other four copy sites (settings-tab, setup-conversation,
+        // validator-registration-card, tools-update-card). Round-6
+        // clipboard-UX audit a8a932d2.
         var self = this;
         this.root.querySelectorAll('.enm-producer-copy').forEach(function (b) {
             b.addEventListener('click', function () {
                 var which = b.dataset.copy;
                 var text = which === 'address' ? addr : pubkey;
-                // Feature-detect: `navigator.clipboard` is undefined in
-                // some iframe / cross-origin / non-HTTPS contexts. Calling
-                // `.writeText` on undefined throws synchronously and
-                // bypasses our .catch fallback.
-                var hasClipboard = !!(navigator && navigator.clipboard && navigator.clipboard.writeText);
-                if (!hasClipboard) {
-                    if (self.notifications) self.notifications.warning('Copy unavailable', 'Browser blocked clipboard access. Select the text and copy manually.');
-                    return;
-                }
-                navigator.clipboard.writeText(text).then(function () {
-                    if (self.notifications) self.notifications.info('Copied', which + ' is in the clipboard.');
-                }).catch(function () {
-                    if (self.notifications) self.notifications.warning('Copy failed', 'Select the text and copy manually.');
+                root.enmCopyToClipboard(text, {
+                    notifications: self.notifications,
+                    notifyOnSuccess: true,
+                    successTitle: 'Copied',
+                    successBody: which + ' is in the clipboard.',
+                    failTitle: 'Copy failed',
+                    failBody: 'Select the text and copy manually.',
                 });
             });
         });

@@ -297,6 +297,95 @@
         }
     }
 
+    /**
+     * Copy text to the clipboard with consistent feature-detect + operator
+     * feedback. Round-6 clipboard-UX audit (a8a932d2) identified five copy
+     * sites with three different "Copied!" confirmation patterns:
+     *   - producer-identity (notifications-only)
+     *   - setup-conversation (text-swap + select-fallback)
+     *   - validator-registration-card (text-swap + select-fallback)
+     *   - tools-update-card (text-swap + notifications fallback)
+     *   - settings-tab credValueWithCopy (text-swap + select-fallback)
+     * Same UX, five distinct codepaths. This helper is the single source of
+     * truth for the feature-detect + writeText + result branching. Callers
+     * supply policy via `opts` (which button to swap, which fallback to use)
+     * but the clipboard-API plumbing is consolidated here.
+     *
+     * Behaviour:
+     *   - Browser blocks clipboard          → onFallback() (caller supplies),
+     *                                         resolves false
+     *   - writeText() rejects               → onFallback() if given else
+     *                                         notifications.warning, resolves
+     *                                         false
+     *   - writeText() resolves              → btn label swap (if given),
+     *                                         notifications.info (if asked),
+     *                                         onSuccess() (if given),
+     *                                         resolves true
+     *
+     * The promise NEVER rejects — failure surfaces as resolve(false) so
+     * callers can `.then(ok => ok && ...)` without try/catch ceremony.
+     *
+     * @param {string} text
+     * @param {{
+     *   btn?: HTMLButtonElement,
+     *   copiedLabel?: string,
+     *   resetMs?: number,
+     *   notifications?: object,
+     *   notifyOnSuccess?: boolean,
+     *   successTitle?: string,
+     *   successBody?: string,
+     *   failTitle?: string,
+     *   failBody?: string,
+     *   onSuccess?: function():void,
+     *   onFallback?: function():void
+     * }} [opts]
+     * @returns {Promise<boolean>}
+     */
+    function copyToClipboard(text, opts) {
+        var o = opts || {};
+        var btn = o.btn || null;
+        var nf  = o.notifications || null;
+        var failTitle = o.failTitle || 'Copy unavailable';
+        var failBody  = o.failBody  || 'Browser blocked clipboard access. Select the text and copy manually.';
+        var hasClipboard = !!(typeof navigator !== 'undefined'
+            && navigator.clipboard
+            && navigator.clipboard.writeText);
+        function fallback() {
+            if (typeof o.onFallback === 'function') {
+                try { o.onFallback(); } catch (_) { /* swallow */ }
+                return;
+            }
+            if (nf) { nf.warning(failTitle, failBody); }
+        }
+        if (!hasClipboard) {
+            fallback();
+            return Promise.resolve(false);
+        }
+        return navigator.clipboard.writeText(text).then(function () {
+            if (btn) {
+                var prev = btn.textContent;
+                var copiedLabel = o.copiedLabel || 'Copied!';
+                var resetMs = (typeof o.resetMs === 'number') ? o.resetMs : 1200;
+                btn.textContent = copiedLabel;
+                btn.dataset.copied = '1';
+                setTimeout(function () {
+                    btn.textContent = prev;
+                    delete btn.dataset.copied;
+                }, resetMs);
+            }
+            if (o.notifyOnSuccess && nf) {
+                nf.info(o.successTitle || 'Copied', o.successBody || '');
+            }
+            if (typeof o.onSuccess === 'function') {
+                try { o.onSuccess(); } catch (_) { /* swallow */ }
+            }
+            return true;
+        }, function () {
+            fallback();
+            return false;
+        });
+    }
+
     root.enmTOrFallback = enmTOrFallback;
     root.enmPad2 = pad2;
     root.enmFormatUptime = formatUptime;
@@ -307,4 +396,5 @@
     root.enmReducedMotion = reducedMotion;
     root.enmRunOnce = runOnce;
     root.enmUseVisibilityPause = useVisibilityPause;
+    root.enmCopyToClipboard = copyToClipboard;
 }(typeof window !== 'undefined' ? window : globalThis));

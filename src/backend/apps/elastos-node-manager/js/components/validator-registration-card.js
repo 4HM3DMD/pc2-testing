@@ -284,31 +284,30 @@
 
             + '</ol>';
 
-        // Copy button — uses the same feature-detect + notifications
-        // fallback as the other four copy sites (producer-identity,
-        // settings-tab credValueWithCopy, setup-conversation, tools-
-        // update-card). The previous shape skipped notifications.warning
-        // on the missing-API path, dropping silently to selectInto.
+        // Copy button — routed through enmCopyToClipboard so the
+        // feature-detect + writeText plumbing is shared with the other
+        // four copy sites. Custom onFallback because this site wants the
+        // text-selection affordance (so the operator can still ⌘-C the
+        // pubkey) in addition to the warning toast. Round-6 clipboard-UX
+        // audit a8a932d2, alpha.28.1 batch 58.
         var copyBtn  = this.root.querySelector('#enm-vc-copy');
         var pubkeyEl = this.root.querySelector('#enm-vc-pubkey');
         copyBtn.addEventListener('click', function () {
             var text = self._lastPubkey || pubkeyEl.textContent || '';
             if (!text) { return; }
-            var done = function () {
-                var prev = copyBtn.textContent;
-                copyBtn.textContent = t('validator_card.copied');
-                setTimeout(function () { copyBtn.textContent = prev; }, 1200);
-            };
-            var hasClipboard = !!(navigator && navigator.clipboard && navigator.clipboard.writeText);
-            if (!hasClipboard) {
-                selectInto(pubkeyEl);
-                if (self.notifications) {
-                    self.notifications.warning('Copy unavailable', 'Browser blocked clipboard access. Public key is selected — press ⌘/Ctrl-C to copy.');
-                }
-                return;
-            }
-            navigator.clipboard.writeText(text).then(done).catch(function () {
-                selectInto(pubkeyEl);
+            root.enmCopyToClipboard(text, {
+                btn: copyBtn,
+                copiedLabel: t('validator_card.copied'),
+                resetMs: 1200,
+                notifications: self.notifications,
+                failTitle: 'Copy unavailable',
+                failBody: 'Browser blocked clipboard access. Public key is selected — press ⌘/Ctrl-C to copy.',
+                onFallback: function () {
+                    selectInto(pubkeyEl);
+                    if (self.notifications) {
+                        self.notifications.warning('Copy unavailable', 'Browser blocked clipboard access. Public key is selected — press ⌘/Ctrl-C to copy.');
+                    }
+                },
             });
         });
 
