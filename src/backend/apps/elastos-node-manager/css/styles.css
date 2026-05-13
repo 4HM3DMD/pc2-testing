@@ -2550,8 +2550,9 @@ body[data-active-tab="identity"]::before {
     font-size: 18px;
     line-height: 1;
     padding: 0;
-    width: 22px;
-    height: 22px;
+    /* 24×24 to meet WCAG 2.5.5 AA touch target (was 22×22). */
+    width: 24px;
+    height: 24px;
     border-radius: 50%;
     display: inline-flex;
     align-items: center;
@@ -5212,4 +5213,22 @@ body[data-app-size="narrow"] .enm-conv-actions {
 }
 body[data-app-size="narrow"] .enm-conv-actions .enm-btn {
     width: 100%;
+}
+
+/* ============================================================
+   WCAG 2.3.3 — global reduced-motion fallback
+   ============================================================
+   Component-specific blocks above (chain card, power circle, log
+   tail, etc.) cover their own keyframes. This block catches the
+   four animations that weren't paired with a reduced-motion
+   override: the boot spinner, the proposal overlay fade, the
+   proposal card slide-up, and the skeleton-loader shimmer.
+*/
+@media (prefers-reduced-motion: reduce) {
+    .enm-spinner-dot,
+    .enm-proposal-overlay,
+    .enm-proposal-card,
+    .enm-skeleton {
+        animation: none;
+    }
 }
