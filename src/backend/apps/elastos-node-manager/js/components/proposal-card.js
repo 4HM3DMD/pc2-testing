@@ -133,8 +133,10 @@
             this._antiSnipe = document.createElement('input');
             this._antiSnipe.type = 'password';
             this._antiSnipe.className = 'enm-proposal-anti-snipe';
-            this._antiSnipe.placeholder = 'Anti-snipe password';
-            this._antiSnipe.setAttribute('aria-label', 'Anti-snipe password');
+            // alpha.28.1 batch 37 — strings.js sourced for locale parity.
+            var antiLabel = root.enmTOrFallback('proposal.anti_snipe_label');
+            this._antiSnipe.placeholder = antiLabel;
+            this._antiSnipe.setAttribute('aria-label', antiLabel);
             // SAFETY: never use current-password here. Healing proposal
             // confirmation is destructive — autocomplete="current-password"
             // would let a password manager auto-fill this field on render

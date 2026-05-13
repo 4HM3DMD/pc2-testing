@@ -413,6 +413,10 @@
             confirm_button:    'Confirm',
             reject_button:     'Reject',
             reject_reason_placeholder: 'Optional reason',
+            // alpha.28.1 batch 37 — anti-snipe input label moved from
+            // inline English. Both placeholder + aria-label use the
+            // same string for visible/AT parity.
+            anti_snipe_label:  'Anti-snipe password',
             expires_in:        'Expires in {minutes} min',
             expired:           'Expired',
             executed:          'Executed',
