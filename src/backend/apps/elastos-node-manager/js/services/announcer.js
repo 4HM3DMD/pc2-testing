@@ -58,15 +58,25 @@
         // calls this after the els block is populated, so body is
         // guaranteed by then.
         if (typeof document === 'undefined' || !document.body) { return this; }
+        // alpha.29 batch 105 (Round-35 finding #4, MED) — aria-atomic=true
+        // on both regions. role=status / role=alert IMPLICITLY map to
+        // aria-live but NOT to aria-atomic. NVDA 2024.1 + Chromium 121+
+        // treats partial-text updates (the ZWSP repeat trick below)
+        // as a diff rather than the whole new string — JAWS speaks
+        // only the appended `​` ("zero width space") character on
+        // some voices. aria-atomic=true forces the region to be read
+        // as a single unit on every change. Explicit and portable.
         this._politeEl = document.createElement('div');
         this._politeEl.className = 'enm-sr-only';
         this._politeEl.setAttribute('role', 'status');
+        this._politeEl.setAttribute('aria-atomic', 'true');
         this._politeEl.setAttribute('id', 'enm-announcer-polite');
         document.body.appendChild(this._politeEl);
 
         this._assertiveEl = document.createElement('div');
         this._assertiveEl.className = 'enm-sr-only';
         this._assertiveEl.setAttribute('role', 'alert');
+        this._assertiveEl.setAttribute('aria-atomic', 'true');
         this._assertiveEl.setAttribute('id', 'enm-announcer-assertive');
         document.body.appendChild(this._assertiveEl);
 

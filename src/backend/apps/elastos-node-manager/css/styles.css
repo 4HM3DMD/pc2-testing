@@ -5093,3 +5093,28 @@ body[data-app-size="narrow"] .enm-conv-actions .enm-btn {
 .enm-online-banner-retry {
     flex: 0 0 auto;
 }
+
+/* alpha.29 batch 104 (Round-35 finding #1, HIGH) — forced-colors
+   fallback. Windows high-contrast mode strips the --warning-* tokens
+   entirely, leaving an unstyled flex bar that's visually indistinct
+   from the app chrome. CanvasText/Canvas + ButtonText system colors
+   give the banner explicit edges + a visible Retry button. Mirrors
+   the pattern other forced-colors blocks in this file use. */
+@media (forced-colors: active) {
+    .enm-online-banner {
+        background: Canvas;
+        color: CanvasText;
+        border-top: 2px solid CanvasText;
+        border-bottom: 2px solid CanvasText;
+        forced-color-adjust: none;
+    }
+    .enm-online-banner-retry {
+        border: 1px solid ButtonText;
+        color: ButtonText;
+        background: ButtonFace;
+    }
+    .enm-online-banner-retry:focus-visible {
+        outline: 3px solid Highlight !important;
+        outline-offset: 2px;
+    }
+}

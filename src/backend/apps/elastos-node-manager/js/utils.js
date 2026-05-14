@@ -363,13 +363,34 @@
         }
         return navigator.clipboard.writeText(text).then(function () {
             if (btn) {
-                var prev = btn.textContent;
+                // alpha.29 batch 106 — text-swap target can be a child
+                // of the button (e.g. the aria-hidden visible span
+                // enmCopyButton wraps the label in). Default to the
+                // button itself for the existing direct-call sites.
+                var swapEl = o.btnLabelEl || btn;
+                var prev = swapEl.textContent;
                 var copiedLabel = o.copiedLabel || 'Copied!';
                 var resetMs = (typeof o.resetMs === 'number') ? o.resetMs : 1200;
-                btn.textContent = copiedLabel;
+                swapEl.textContent = copiedLabel;
                 btn.dataset.copied = '1';
-                setTimeout(function () {
-                    btn.textContent = prev;
+                // alpha.29 batch 105 (Round-35 finding #3, MED) —
+                // race + lifecycle guards on the reset timer:
+                // (a) back-to-back clicks used to queue two resets; the
+                //     second one would race the first's prev capture
+                //     and could revert to "Copied!" instead of "Copy".
+                //     Track the latest timer on the button so a fresh
+                //     click cancels the prior reset.
+                // (b) If the button's parent re-renders (validator-card,
+                //     setup-conversation both do this on state change)
+                //     the timer fires on a detached node — silent
+                //     wrong-state if a future pooled-DOM strategy
+                //     reuses the node. isConnected guard skips the
+                //     write entirely on detach.
+                if (btn._enmResetTimer) { clearTimeout(btn._enmResetTimer); }
+                btn._enmResetTimer = setTimeout(function () {
+                    btn._enmResetTimer = null;
+                    if (!btn.isConnected) { return; }
+                    swapEl.textContent = prev;
                     delete btn.dataset.copied;
                 }, resetMs);
             }
@@ -429,7 +450,21 @@
         var btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'enm-btn enm-btn-secondary' + (opts.className ? ' ' + opts.className : '');
-        btn.textContent = label;
+        // alpha.29 batch 106 (Round-35 finding #5, MED) — wrap the
+        // visible label in aria-hidden=true and put the stable
+        // accessible name on the button. Previous shape used
+        // textContent + aria-label, but a button without explicit
+        // aria-hidden on its visible children gets both announced —
+        // and when textContent swapped to "Copied!" then back to
+        // "Copy", screen readers spoke the cadence "Copy. Copied!
+        // Copy." on every action. Decoupling means the visible swap
+        // is purely cosmetic; AT hears the stable aria-label only,
+        // and the copy success is signaled by the announcer
+        // (or a notifications.info toast) where callers wired it.
+        var visible = document.createElement('span');
+        visible.textContent = label;
+        visible.setAttribute('aria-hidden', 'true');
+        btn.appendChild(visible);
         btn.setAttribute('aria-label', opts.ariaLabel || ('Copy ' + label.toLowerCase()));
         btn.addEventListener('click', function () {
             var resolvedValue = (typeof opts.value === 'function')
@@ -438,6 +473,10 @@
             if (resolvedValue == null || resolvedValue === '') { return; }
             root.enmCopyToClipboard(String(resolvedValue), {
                 btn: btn,
+                // batch 106 — swap the inner aria-hidden span's text,
+                // not btn.textContent (which would wipe the span and
+                // re-introduce the noisy SR cadence the wrap fixes).
+                btnLabelEl: visible,
                 copiedLabel: opts.copiedLabel || 'Copied!',
                 resetMs: (typeof opts.resetMs === 'number') ? opts.resetMs : 1200,
                 notifications: opts.notifications || null,

@@ -136,11 +136,31 @@
     /** @private */
     EnmOnlineWatcher.prototype._onTransition = function (isOnline) {
         if (!this._banner) { return; }
+        var self = this;
         if (isOnline) {
-            // Fade out (CSS controls the actual transition via the
-            // [hidden] attribute toggle).
+            // alpha.29 batch 104 (Round-35 finding #2, HIGH) — defer
+            // the role=alert removal by one macrotask so any in-flight
+            // AT readout of the banner can complete cleanly. The
+            // previous shape stripped role + hid + announced in one
+            // sync block; if NVDA/JAWS was mid-utterance of the
+            // offline message, the role removal truncated the readout
+            // AND the polite announce collided with the still-buffered
+            // alert text.
+            // New order:
+            //   1. hide visually (sync — operator sees recovery quickly)
+            //   2. polite-announce "Connection restored" via the shared
+            //      announcer (a separate live region, so it doesn't
+            //      contend with the banner's role=alert region)
+            //   3. fire the refresh callback (sync)
+            //   4. setTimeout(0) → remove role=alert AFTER the current
+            //      macrotask completes, allowing the AT to finish any
+            //      in-flight utterance.
+            // Also: restore focus if the Retry button had it. Without
+            // this fix, focus fell to document.body (no visible
+            // indicator) and keyboard operators lost their place.
+            // (Round-35 finding #6, LOW — bundled here since same path.)
+            var retryHadFocus = (document.activeElement === this._retryBtn);
             this._banner.hidden = true;
-            this._banner.removeAttribute('role');
             if (this._announcer && typeof this._announcer.polite === 'function') {
                 var msg = this._t('app.online_restored');
                 if (!msg || msg === 'app.online_restored') {
@@ -151,7 +171,26 @@
             if (typeof this._refreshCb === 'function') {
                 try { this._refreshCb(); } catch (_) { /* ignore */ }
             }
+            setTimeout(function () {
+                if (self._banner) { self._banner.removeAttribute('role'); }
+                // Restore focus to last-saved element when banner was
+                // shown; if none captured, fall through to body.
+                if (retryHadFocus) {
+                    var target = self._lastFocus
+                        && typeof self._lastFocus.focus === 'function'
+                        && document.contains(self._lastFocus)
+                        ? self._lastFocus
+                        : null;
+                    try {
+                        if (target) { target.focus({ preventScroll: true }); }
+                    } catch (_) { /* ignore */ }
+                }
+                self._lastFocus = null;
+            }, 0);
         } else {
+            // Capture focus target BEFORE showing the banner so we can
+            // restore it on recovery (Round-35 finding #6).
+            this._lastFocus = document.activeElement;
             this._banner.hidden = false;
             // role=alert so AT picks up the change immediately. We
             // don't use enmAnnouncer.assertive here because the banner
