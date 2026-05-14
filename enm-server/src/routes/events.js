@@ -44,7 +44,16 @@ function looksLikeEvm(addr) {
 // updates instead of having to reload. The wallet scoping protects
 // per-operator privacy: row writes for other wallets never reach this
 // connection.
-const TOPIC_REGEX = /^(?:system|notifications|audit|chains:[a-z0-9-]+:(?:status|logs|height))$/;
+//
+// 0.2.0-beta.3.9 — `setup:install:<chainId>` and `setup:bootstrap:
+// <chainId>` topics added. EnmBinaryDownloader._emit and
+// EnmBootstrapDownloader._emit publish progress events here so the
+// setup-conversation wizard's live progress bar updates without
+// polling. Pre-beta.3.9 these topics were rejected by the events
+// route (TOPIC_REGEX miss) AND the downloaders were calling a non-
+// existent .broadcast() method anyway. Both fixed in beta.3.9; the
+// regex now matches the topic names the downloaders publish.
+const TOPIC_REGEX = /^(?:system|notifications|audit|chains:[a-z0-9-]+:(?:status|logs|height)|setup:(?:install|bootstrap):[a-z0-9-]+)$/;
 const MAX_TOPICS_PER_REQUEST = 16;
 
 /**

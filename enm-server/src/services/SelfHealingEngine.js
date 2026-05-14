@@ -115,11 +115,18 @@ class SelfHealingEngine {
      *
      * @param {string} proposalId
      * @param {string} walletAddress  must match proposal's owner
+     * @param {object} [opts]
+     * @param {string|null} [opts.antiSnipePassword]  required when the proposal
+     *   payload's requireAntiSnipe flag is set AND the operator has configured
+     *   nodeConfig.antiSnipePasswordHash. Verified against the stored hash
+     *   before approval; mismatch returns 401-shaped { ok: false, error }.
      * @returns {Promise<{ ok: boolean, proposal: object|null, executed?: boolean, error?: string }>}
      */
-    async executeApproved(proposalId, walletAddress) {
+    async executeApproved(proposalId, walletAddress, opts) {
         const db = this.getDb();
         const owner = String(walletAddress || '').toLowerCase();
+        const antiSnipePassword = (opts && typeof opts.antiSnipePassword === 'string')
+            ? opts.antiSnipePassword : null;
 
         const proposal = await ProposalStore.getById(db, proposalId);
         if (!proposal) {
@@ -134,6 +141,24 @@ class SelfHealingEngine {
                 proposal,
                 error: `Proposal is no longer pending (status=${proposal.status}).`,
             };
+        }
+
+        // 0.2.0-beta.3.9 — anti-snipe verification. The proposal's
+        // payload may set requireAntiSnipe=true (the rule that
+        // produced it wants a password gate on confirm). The
+        // password's bcrypt-hash lives on nodeConfig at boot. If
+        // either is missing/mismatched, refuse the approval. The
+        // pre-beta.3.9 path silently accepted any confirm.
+        const payload = ProposalStore.decodePayload(proposal);
+        if (payload && payload.requireAntiSnipe) {
+            const verified = await this._verifyAntiSnipePassword(antiSnipePassword);
+            if (!verified) {
+                return {
+                    ok: false,
+                    proposal,
+                    error: 'Anti-snipe password verification failed.',
+                };
+            }
         }
 
         const approved = await ProposalStore.approve(db, proposalId);
@@ -411,6 +436,102 @@ class SelfHealingEngine {
                 payload: det.payload || null,
             });
         } catch (_) { /* swallow secondary failure */ }
+    }
+
+    // ========================================================================
+    // Internal — anti-snipe verification (0.2.0-beta.3.9)
+    // ========================================================================
+
+    /**
+     * 0.2.0-beta.3.9 — verify the operator-supplied anti-snipe password
+     * against the bcrypt hash stored in nodeConfig.antiSnipePasswordHash.
+     * Returns true when the password matches. Returns false (refuses
+     * approval) when:
+     *   - the operator hasn't configured a password hash (refuse-by-
+     *     default: a rule asking for anti-snipe with no hash means
+     *     misconfigured host, not silently bypass)
+     *   - the supplied password is empty / not a string
+     *   - bcrypt.compare fails
+     *
+     * Uses ConfigStore.load() to read nodeConfig.antiSnipePasswordHash
+     * fresh on each verify so an operator setting/updating the hash via
+     * Settings doesn't require a server restart.
+     *
+     * @private
+     * @param {string|null} candidate
+     * @returns {Promise<boolean>}
+     */
+    async _verifyAntiSnipePassword(candidate) {
+        if (typeof candidate !== 'string' || candidate.length === 0) {
+            return false;
+        }
+        let storedHash = null;
+        try {
+            const ConfigStore = require('./ConfigStore');
+            const cfg = await ConfigStore.load();
+            // The hash lives on cfg.global.antiSnipePasswordHash per the
+            // mock spec referencing proposal-card.js:100-108 ("only
+            // renders when proposal.requireAntiSnipe AND the host has
+            // pre-set nodeConfig.antiSnipePasswordHash"). We tolerate
+            // both 'global' and 'nodeConfig' locations for forward
+            // compat with whichever shape the operator's config uses.
+            storedHash = (cfg && cfg.global && cfg.global.antiSnipePasswordHash)
+                      || (cfg && cfg.nodeConfig && cfg.nodeConfig.antiSnipePasswordHash)
+                      || null;
+        } catch (err) {
+            this.extensionHandle.log.error(
+                `${ENM_LOG_PREFIX} anti-snipe verify: config load failed: ${err.message}`,
+            );
+            return false;
+        }
+        if (!storedHash || typeof storedHash !== 'string') {
+            // No hash stored → refuse. A proposal that asks for anti-
+            // snipe on a host that hasn't been configured for it is a
+            // misconfiguration the operator must fix; we don't silently
+            // bypass.
+            this.extensionHandle.log.warn(
+                `${ENM_LOG_PREFIX} anti-snipe verify: rejected, no hash configured`,
+            );
+            return false;
+        }
+        // 0.2.0-beta.3.9 — use Node's built-in scrypt for verification
+        // (no external dep, FIPS-grade KDF, timing-safe compare). Hash
+        // format: `scrypt$<saltHex>$<derivedHex>`. The `scrypt$` prefix
+        // lets us pivot to bcrypt / argon2 later if security
+        // requirements change, without invalidating existing hashes —
+        // future verifier checks the prefix to pick the algorithm.
+        // Tooling to GENERATE the hash (operator-facing CLI or
+        // Settings UI) is deferred — manually-set hashes in
+        // ConfigStore work fine in the meantime.
+        const parts = storedHash.split('$');
+        if (parts.length !== 3 || parts[0] !== 'scrypt') {
+            this.extensionHandle.log.warn(
+                `${ENM_LOG_PREFIX} anti-snipe verify: unrecognised hash format`,
+            );
+            return false;
+        }
+        try {
+            const crypto = require('crypto');
+            const salt = Buffer.from(parts[1], 'hex');
+            const expected = Buffer.from(parts[2], 'hex');
+            if (salt.length === 0 || expected.length === 0) {
+                return false;
+            }
+            const derived = await new Promise((resolve, reject) => {
+                crypto.scrypt(candidate, salt, expected.length, (err, key) => {
+                    if (err) { reject(err); } else { resolve(key); }
+                });
+            });
+            // timingSafeEqual short-circuits on different lengths
+            // before the per-byte compare, so we pre-check length.
+            if (derived.length !== expected.length) { return false; }
+            return crypto.timingSafeEqual(derived, expected);
+        } catch (err) {
+            this.extensionHandle.log.error(
+                `${ENM_LOG_PREFIX} anti-snipe verify: scrypt compare failed: ${err.message}`,
+            );
+            return false;
+        }
     }
 
     // ========================================================================

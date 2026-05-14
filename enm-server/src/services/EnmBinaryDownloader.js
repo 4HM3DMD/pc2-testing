@@ -362,7 +362,16 @@ class EnmBinaryDownloader {
     _emit(chainId, phase, message, extra) {
         if (!this.sseHub) return;
         try {
-            this.sseHub.broadcast(`setup:install:${chainId}`, {
+            // 0.2.0-beta.3.9 — was `.broadcast(...)`, which doesn't
+            // exist on SseHub. SseHub exposes `publish(topic, data)`
+            // (all subscribers to topic) and `publishToWallet(...)`
+            // (scoped). Install progress is a system-level event
+            // — every subscribed operator wants to see it — so we
+            // use publish(). The pre-fix throw was silently caught
+            // by the outer try/catch, leaving the frontend setup-
+            // conversation to fall back to its 4s REST poll. Wizard
+            // still worked but the snappy SSE live feed was dead.
+            this.sseHub.publish(`setup:install:${chainId}`, {
                 chainId, phase, message: message || '', ts: Date.now(), ...(extra || {}),
             });
         } catch (_) { /* SSE failures shouldn't break the install */ }

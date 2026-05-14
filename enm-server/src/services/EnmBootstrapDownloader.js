@@ -315,7 +315,11 @@ class EnmBootstrapDownloader {
     _emit(chainId, phase, message, extra) {
         if (!this.sseHub) return;
         try {
-            this.sseHub.broadcast(`setup:bootstrap:${chainId}`, {
+            // 0.2.0-beta.3.9 — see EnmBinaryDownloader._emit comment.
+            // `broadcast()` doesn't exist on SseHub; the call threw
+            // and got silently swallowed, killing the live bootstrap
+            // progress feed. `publish()` is the right method here.
+            this.sseHub.publish(`setup:bootstrap:${chainId}`, {
                 chainId, phase, message: message || '', ts: Date.now(), ...(extra || {}),
             });
         } catch (_) { /* SSE failures shouldn't break the bootstrap pipeline */ }

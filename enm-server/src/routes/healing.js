@@ -77,8 +77,21 @@ function build(deps) {
         if (!id || !/^enm_[a-z0-9_]+$/.test(id)) {
             return res.status(400).json(errorBody('Invalid proposal id.'));
         }
+        // 0.2.0-beta.3.9 — frontend proposal-card sends an
+        // antiSnipePassword field in the confirm body when the
+        // proposal's payload sets requireAntiSnipe=true AND the host
+        // has a nodeConfig.antiSnipePasswordHash configured. Extract
+        // it here and pass to executeApproved; the engine verifies
+        // against the stored hash before flipping the proposal to
+        // APPROVED. Pre-beta.3.9 the field was extracted nowhere, so
+        // the anti-snipe defense was silently a no-op — a confirm
+        // arriving without a password (or with a wrong one) executed
+        // anyway. Wire it through.
+        const antiSnipePassword = req.body && typeof req.body.antiSnipePassword === 'string'
+            ? req.body.antiSnipePassword
+            : null;
         try {
-            const result = await engine.executeApproved(id, req.actorWallet);
+            const result = await engine.executeApproved(id, req.actorWallet, { antiSnipePassword });
             if (!result.ok) {
                 const status = result.error && result.error.indexOf('not found') >= 0 ? 404 : 409;
                 return res.status(status).json(errorBody(result.error || 'Confirm failed.'));

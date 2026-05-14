@@ -119,18 +119,24 @@
      * Both endpoints are owner-gated; 401s are suppressed because the boot
      * path drives re-auth.
      */
-    SettingsTab.prototype.refresh = function () {
+    /**
+     * @param {string} [scope]  'network' / 'advanced' / 'general' to
+     *   re-hydrate only that section. Omit to re-hydrate all three.
+     *
+     * 0.2.0-beta.3.9 — scoped refresh. Pre-beta.3.9, the post-save
+     * .then() called refresh() (no scope) which wiped pending edits in
+     * the two un-saved sections. Operator now keeps their work-in-
+     * progress across saves.
+     */
+    SettingsTab.prototype.refresh = function (scope) {
         var self = this;
         this.api.get('/config', { skipCache: true }).then(function (data) {
             if (self._destroyed) { return; }
             self._cfg = data && data.config;
-            self._fillForm();
-            // 0.2.0-beta.3.8 — hydrating from /config IS the canonical
-            // clean state for all three sections. Clear any "Unsaved
-            // changes" tags that lingered from the previous form state.
-            self._markClean('network');
-            self._markClean('advanced');
-            self._markClean('general');
+            self._fillForm(scope);
+            if (!scope || scope === 'network')  { self._markClean('network'); }
+            if (!scope || scope === 'advanced') { self._markClean('advanced'); }
+            if (!scope || scope === 'general')  { self._markClean('general'); }
         }).catch(function (err) {
             if (self._destroyed) { return; }
             if (err && err.status === 401) { return; }
@@ -392,7 +398,7 @@
         sec.statusEl.id = 'enm-net-status';
 
         sec.saveBtn.addEventListener('click', function () { self._saveNetwork(); });
-        sec.revertBtn.addEventListener('click', function () { self.refresh(); });
+        sec.revertBtn.addEventListener('click', function () { self.refresh('network'); });
 
         return sec.card;
     };
@@ -466,7 +472,7 @@
                 .then(function () {
                     if (self._destroyed) { return; }
                     setStatus(self._network.statusEl, 'success', '✓ ' + t('settings.saved'));
-                    self.refresh();
+                    self.refresh('network');
                 })
                 .catch(function (err) {
                     if (self._destroyed) { return; }
@@ -604,7 +610,7 @@
         sec.statusEl.id = 'enm-adv-status';
 
         sec.saveBtn.addEventListener('click', function () { self._saveAdvanced(); });
-        sec.revertBtn.addEventListener('click', function () { self.refresh(); });
+        sec.revertBtn.addEventListener('click', function () { self.refresh('advanced'); });
 
         return sec.card;
     };
@@ -700,7 +706,7 @@
                     if (self._destroyed) { return; }
                     setStatus(self._adv.statusEl, 'success', '✓ ' + t('settings.saved'));
                     self._adv.rpcPasswordField.input.value = '';
-                    self.refresh();
+                    self.refresh('advanced');
                 })
                 .catch(function (err) {
                     if (self._destroyed) { return; }
@@ -826,7 +832,7 @@
         sec.statusEl.id = 'enm-gen-status';
 
         sec.saveBtn.addEventListener('click', function () { self._saveGeneral(); });
-        sec.revertBtn.addEventListener('click', function () { self.refresh(); });
+        sec.revertBtn.addEventListener('click', function () { self.refresh('general'); });
 
         return sec.card;
     };
@@ -858,7 +864,7 @@
                 .then(function () {
                     if (self._destroyed) { return; }
                     setStatus(self._gen.statusEl, 'success', '✓ ' + t('settings.saved'));
-                    self.refresh();
+                    self.refresh('general');
                 })
                 .catch(function (err) {
                     if (self._destroyed) { return; }
@@ -873,42 +879,60 @@
     // Form fill / hydration
     // -----------------------------------------------------------------
     /** @private — Hydrate all three sections from the /config response. */
-    SettingsTab.prototype._fillForm = function () {
+    /**
+     * 0.2.0-beta.3.9 — _fillForm split into per-section fills.
+     * Each section's save handler can now re-hydrate only its own
+     * fields after a successful PUT instead of wiping pending edits
+     * in the other two sections.
+     *
+     * @private
+     * @param {string} [scope]  'network' / 'advanced' / 'general' /
+     *                          undefined (default: fill all three)
+     */
+    SettingsTab.prototype._fillForm = function (scope) {
         var cfg = this._cfg;
         if (!cfg) { return; }
-        var chain = cfg.chains && cfg.chains.mainchain;
-        if (chain) {
-            // Network
-            var mode = (chain.dpos && chain.dpos.ipAddressMode === 'manual')
-                ? 'manual' : 'auto';
-            if (this._network && this._network.seg) {
-                this._network.seg.setValue(mode);
-                this._onNetworkModeChange(mode);
-                this._network.manualInput.value =
-                    (chain.dpos && chain.dpos.ipAddressManual) || '';
-            }
-            // Advanced
-            if (this._adv) {
-                this._adv.logLevel.setValue(chain.logLevel || 'info');
-                this._adv.archiveMode.setValue(!!chain.archiveMode);
-                this._adv.memory.input.value = String(chain.memoryLimitMb || 4096);
-                this._adv.rpcUser.value = (chain.rpc && chain.rpc.user) || 'ela';
-                this._adv.rpcPasswordField.input.value = '';
-                this._adv.rpcPasswordField.input.placeholder =
-                    (chain.rpc && chain.rpc.passwordSet)
-                        ? '(leave blank to keep current)' : 'set a password';
-            }
-        }
-        // General
-        var g = cfg.global || {};
-        if (this._gen) {
-            this._gen.autoSafe.setValue(
-                !(g.healing && g.healing.autoExecuteSafe === false));
-            this._gen.criticalAck.setValue(
-                !(g.notifications && g.notifications.criticalRequiresAck === false));
-            this._gen.auditRetention.input.value =
-                String((g.audit && g.audit.retentionDays) || 365);
-        }
+        if (!scope || scope === 'network')  { this._fillNetwork(cfg); }
+        if (!scope || scope === 'advanced') { this._fillAdvanced(cfg); }
+        if (!scope || scope === 'general')  { this._fillGeneral(cfg); }
+    };
+
+    /** @private */
+    SettingsTab.prototype._fillNetwork = function (cfg) {
+        var chain = cfg && cfg.chains && cfg.chains.mainchain;
+        if (!chain || !this._network || !this._network.seg) { return; }
+        var mode = (chain.dpos && chain.dpos.ipAddressMode === 'manual')
+            ? 'manual' : 'auto';
+        this._network.seg.setValue(mode);
+        this._onNetworkModeChange(mode);
+        this._network.manualInput.value =
+            (chain.dpos && chain.dpos.ipAddressManual) || '';
+    };
+
+    /** @private */
+    SettingsTab.prototype._fillAdvanced = function (cfg) {
+        var chain = cfg && cfg.chains && cfg.chains.mainchain;
+        if (!chain || !this._adv) { return; }
+        this._adv.logLevel.setValue(chain.logLevel || 'info');
+        this._adv.archiveMode.setValue(!!chain.archiveMode);
+        this._adv.memory.input.value = String(chain.memoryLimitMb || 4096);
+        this._adv.rpcUser.value = (chain.rpc && chain.rpc.user) || 'ela';
+        this._adv.rpcPasswordField.input.value = '';
+        this._adv.rpcPasswordField.input.placeholder =
+            (chain.rpc && chain.rpc.passwordSet)
+                ? '(leave blank to keep current)' : 'set a password';
+    };
+
+    /** @private */
+    SettingsTab.prototype._fillGeneral = function (cfg) {
+        if (!this._gen) { return; }
+        var g = (cfg && cfg.global) || {};
+        this._gen.autoSafe.setValue(
+            !(g.healing && g.healing.autoExecuteSafe === false));
+        this._gen.criticalAck.setValue(
+            !(g.notifications && g.notifications.criticalRequiresAck === false));
+        this._gen.auditRetention.input.value =
+            String((g.audit && g.audit.retentionDays) || 365);
     };
 
     // -----------------------------------------------------------------
