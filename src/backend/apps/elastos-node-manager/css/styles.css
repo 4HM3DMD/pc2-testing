@@ -551,7 +551,7 @@ body[data-active-tab="identity"]::before {
     border: none;
     border-radius: 0;       /* underline indicator owns the highlight */
     cursor: pointer;
-    transition: color 0.15s;
+    transition: color var(--motion-fast);
     white-space: nowrap;
     flex: 0 0 auto;
 }
@@ -605,7 +605,7 @@ body[data-active-tab="identity"]::before {
     border-radius: var(--r-sm);
     color: var(--text-secondary);
     cursor: pointer;
-    transition: color 0.15s, background 0.15s;
+    transition: color var(--motion-fast), background var(--motion-fast);
 }
 
 .enm-icon-btn:hover {
@@ -1648,7 +1648,7 @@ body[data-active-tab="identity"]::before {
     cursor: pointer;
     user-select: none;
     white-space: nowrap;
-    transition: background 0.12s, border-color 0.12s, color 0.12s;
+    transition: background var(--motion-fast), border-color var(--motion-fast), color var(--motion-fast);
 }
 
 .enm-btn:hover:not(:disabled) {
@@ -1816,7 +1816,7 @@ body[data-active-tab="identity"]::before {
     cursor: pointer;
     text-align: left;
     border-radius: var(--r-sm);
-    transition: background 0.12s, color 0.12s, border-color 0.12s;
+    transition: background var(--motion-fast), color var(--motion-fast), border-color var(--motion-fast);
 }
 
 .enm-settings-nav-item:hover {
@@ -1980,7 +1980,7 @@ body[data-active-tab="identity"]::before {
     color: var(--text-primary);
     font: inherit;
     font-size: var(--fs-body);
-    transition: border-color 0.12s, box-shadow 0.12s;
+    transition: border-color var(--motion-fast), box-shadow var(--motion-fast);
 }
 
 .enm-settings-input:focus {
@@ -2643,7 +2643,7 @@ select.enm-settings-input {
     color: var(--text-primary);
     font: inherit;
     font-size: var(--fs-caption);
-    transition: border-color 0.12s, box-shadow 0.12s;
+    transition: border-color var(--motion-fast), box-shadow var(--motion-fast);
 }
 
 .enm-audit-input:focus {
@@ -2667,7 +2667,7 @@ select.enm-settings-input {
     color: var(--text-secondary);
     font-weight: var(--fw-medium);
     white-space: nowrap;
-    transition: background 0.12s, color 0.12s, border-color 0.12s;
+    transition: background var(--motion-fast), color var(--motion-fast), border-color var(--motion-fast);
 }
 .enm-audit-filter-chip:hover {
     background: var(--bg-overlay);
@@ -2740,7 +2740,7 @@ select.enm-settings-input {
 }
 
 .enm-audit-table tbody tr {
-    transition: background 0.12s;
+    transition: background var(--motion-fast);
     cursor: pointer;
 }
 
@@ -2907,7 +2907,7 @@ select.enm-settings-input {
     font-weight: var(--fw-semibold);
     color: var(--text-secondary);
     cursor: pointer;
-    transition: background 0.12s, border-color 0.12s, color 0.12s;
+    transition: background var(--motion-fast), border-color var(--motion-fast), color var(--motion-fast);
     flex-shrink: 0;
 }
 
@@ -4722,7 +4722,7 @@ select.enm-settings-input {
     line-height: 1;
     cursor: pointer;
     border-radius: var(--r-sm);
-    transition: background 0.12s, color 0.12s;
+    transition: background var(--motion-fast), color var(--motion-fast);
 }
 .enm-drawer-close:hover { background: var(--bg-elevated); color: var(--text-primary); }
 .enm-drawer-close:focus-visible { outline: none; box-shadow: var(--focus-ring); }
@@ -4765,7 +4765,7 @@ select.enm-settings-input {
     padding: var(--sp-3) var(--sp-5);
     cursor: pointer;
     user-select: none;
-    transition: background 0.12s;
+    transition: background var(--motion-fast);
     background: transparent;
     border: none;
     border-radius: 0;
