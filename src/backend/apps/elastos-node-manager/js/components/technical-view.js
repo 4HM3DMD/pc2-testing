@@ -448,10 +448,40 @@
                 pane.innerHTML = '<p class="enm-stub">Audit tab unavailable.</p>';
             }
         } else if (tabId === 'evm') {
+            // alpha.29 batch 109 — evm-tab lazy-loaded. Same pattern as
+            // audit-tab (batch 103). Most operators never open this
+            // tab so the parse cost is wasted on the typical load.
+            var evmSelf = this;
+            var evmCommon = common;
+            var evmSrcs = root.ENM_LAZY_SCRIPTS || {};
+            var evmSrc = evmSrcs.evmTab;
+            pane.innerHTML = '<p class="enm-stub">'
+                + (root.enmTOrFallback('common.loading') || 'Loading…')
+                + '</p>';
+            var mountEvm = function () {
+                if (evmSelf._destroyed) { return; }
+                if (root.EnmEvmTab) {
+                    pane.innerHTML = '';
+                    var evm = new root.EnmEvmTab(evmCommon);
+                    evm.mount(pane);
+                    evmSelf._mounted[tabId] = evm;
+                } else {
+                    pane.innerHTML = '<p class="enm-stub">'
+                        + 'EVM tab failed to load. Try refreshing the page.'
+                        + '</p>';
+                }
+            };
             if (root.EnmEvmTab) {
-                var evm = new root.EnmEvmTab();
-                evm.mount(pane);
-                this._mounted[tabId] = evm;
+                mountEvm();
+            } else if (evmSrc && typeof root.enmLoadScript === 'function') {
+                root.enmLoadScript(evmSrc).then(mountEvm).catch(function () {
+                    if (evmSelf._destroyed) { return; }
+                    pane.innerHTML = '<p class="enm-stub">'
+                        + 'EVM tab failed to load. Check your network and refresh.'
+                        + '</p>';
+                });
+            } else {
+                pane.innerHTML = '<p class="enm-stub">EVM tab unavailable.</p>';
             }
         }
     };

@@ -292,8 +292,30 @@
         if (this._lines.length > MAX_DOM_LINES) {
             var excess = this._lines.length - MAX_DOM_LINES;
             this._lines.splice(0, excess);
-            for (var j = 0; j < excess && this._scroller.firstElementChild; j += 1) {
-                this._scroller.removeChild(this._scroller.firstElementChild);
+            // alpha.29 batch 107 (Round-34 perf finding #1, MED) — use
+            // Range.deleteContents to remove `excess` head children in
+            // ONE layout-invalidating mutation, instead of N separate
+            // removeChild calls. Previous shape caused a visible scroll
+            // hitch (~30-60ms on a slow laptop) when the operator was
+            // tailing a heavy log stream — N=50 mutations forced N
+            // potential relayouts of the still-tall sibling list.
+            // Range fallback to the per-child loop if Range isn't
+            // available (very old browser); also guards against an
+            // empty scroller (shouldn't happen here, defensive).
+            var first = this._scroller.firstElementChild;
+            if (first && typeof document.createRange === 'function') {
+                var last = first;
+                for (var j = 1; j < excess && last.nextElementSibling; j += 1) {
+                    last = last.nextElementSibling;
+                }
+                var range = document.createRange();
+                range.setStartBefore(first);
+                range.setEndAfter(last);
+                range.deleteContents();
+            } else {
+                for (var k = 0; k < excess && this._scroller.firstElementChild; k += 1) {
+                    this._scroller.removeChild(this._scroller.firstElementChild);
+                }
             }
             // Tally lines that fell off the head so the buffer-drop pill
             // can honestly report "N older lines dropped". Without this
