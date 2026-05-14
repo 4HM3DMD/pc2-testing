@@ -4480,6 +4480,139 @@ select.enm-settings-input {
 }
 
 /* ============================================================
+   Phase 8c — orphan-emitted classes (clock-skew card, hero illust,
+   tech-section helpers, b2-tile-genesis sibling). These elements
+   are emitted by JS components but never had styles, or had their
+   styles deleted as "legacy wizard" in alpha.28.1 batch 29 without
+   noticing the markup is still emitted.
+   ============================================================ */
+
+/* setup-conversation.js Card B3 — clock-skew detect status card.
+   Three states (warn / error / ok) emitted via dual class names. */
+.enm-clock-detail {
+    width: 100%;
+    max-width: 480px;
+    margin: var(--sp-2) auto 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-2);
+}
+
+.enm-clock-card {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--sp-3);
+    padding: var(--sp-3) var(--sp-4);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-subtle);
+    border-left: 3px solid var(--text-tertiary);
+    border-radius: var(--r-md);
+    text-align: left;
+}
+.enm-clock-card-warn  { border-left-color: var(--warning); background: linear-gradient(180deg, var(--bg-elevated), rgba(245, 166, 35, 0.04)); }
+.enm-clock-card-error { border-left-color: var(--error);   background: linear-gradient(180deg, var(--bg-elevated), rgba(239, 80, 96, 0.04)); }
+.enm-clock-card-ok    { border-left-color: var(--success); background: linear-gradient(180deg, var(--bg-elevated), rgba(89, 196, 137, 0.04)); }
+
+.enm-clock-card-icon {
+    flex-shrink: 0;
+    width: 28px;
+    height: 28px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    line-height: 1;
+    border-radius: 50%;
+    color: var(--text-primary);
+}
+.enm-clock-card-warn  .enm-clock-card-icon { color: var(--warning); }
+.enm-clock-card-error .enm-clock-card-icon { color: var(--error); }
+.enm-clock-card-ok    .enm-clock-card-icon { color: var(--success); }
+
+.enm-clock-card-body {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-1);
+}
+
+.enm-clock-card-title {
+    font-size: var(--fs-body);
+    font-weight: var(--fw-semibold);
+    color: var(--text-primary);
+    letter-spacing: -0.01em;
+}
+
+.enm-clock-card-sub {
+    font-size: var(--fs-caption);
+    color: var(--text-secondary);
+    line-height: 1.55;
+}
+
+/* Inline <pre> rendered by strings.js `clock_skew.out_card_body` —
+   shows the sudo timedatectl command + a Retry hint. */
+.enm-clock-fix {
+    margin: var(--sp-2) 0;
+    padding: var(--sp-2) var(--sp-3);
+    background: var(--bg-terminal);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-sm);
+    font-family: var(--font-mono);
+    font-size: var(--fs-caption);
+    color: var(--text-primary);
+    overflow-x: auto;
+    white-space: pre-wrap;
+}
+.enm-clock-fix code {
+    font-family: inherit;
+    background: transparent;
+    padding: 0;
+    color: inherit;
+}
+
+/* illustrations.js hero illustration — sized to fit its container.
+   The SVG itself sets its own viewBox; we just ensure it fills the
+   wrapping .enm-welcome-illust / .enm-install-illust well. */
+.enm-illust-hero {
+    width: 100%;
+    height: 100%;
+    display: block;
+}
+
+/* technical-view.js Identity tab intro card — .enm-card wrapper +
+   section-title + section-sub paragraph. The card chrome inherits
+   from .enm-card; we just style the heading + sub. */
+.enm-tech-identity-intro {
+    padding: var(--sp-4);
+}
+
+.enm-tech-section-title {
+    margin: 0 0 var(--sp-1);
+    font-size: var(--fs-h3);
+    font-weight: var(--fw-semibold);
+    color: var(--text-primary);
+    letter-spacing: -0.01em;
+}
+
+.enm-tech-section-sub {
+    margin: 0;
+    font-size: var(--fs-caption);
+    color: var(--text-secondary);
+    line-height: 1.55;
+}
+
+/* setup-conversation.js Card B2 genesis tile (sibling to .enm-b2-tile-
+   bootstrap). The base .enm-b2-tile chrome from Phase 6d handles the
+   visual; the genesis variant is the "not recommended" default state,
+   so no accent border — it stays at --border. Adding this explicit
+   selector documents the pairing and protects against future drift. */
+.enm-b2-tile-genesis {
+    /* Inherits from .enm-b2-tile. Explicit rule preserved for
+       symmetry with .enm-b2-tile-bootstrap. */
+}
+
+/* ============================================================
    Home view (Phase 5B → v0.5 reset)
 
    The friendly hero card / stat strip / milestone toast components
