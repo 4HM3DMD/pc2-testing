@@ -2040,58 +2040,64 @@ select.enm-settings-input {
    RPC credentials reveal panel
    ============================================================ */
 
+/* alpha.29 v2 brand reset · Phase 4c — RPC credentials panel.
+   Reference: enm-design-mocks/v2/phase-04-settings.html .secret-field +
+   value+copy chip pattern. */
 .enm-rpc-creds-panel {
-    margin-top: var(--spacing-md);
-    padding: var(--spacing-md);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-sm);
-    background: var(--bg-surface-alt, var(--bg-surface));
+    margin-top: var(--sp-3);
+    padding: var(--sp-3);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-sm);
+    background: var(--bg-elevated);
     display: flex;
     flex-direction: column;
-    gap: var(--spacing-sm);
+    gap: var(--sp-2);
 }
 
 .enm-rpc-creds-row {
     display: flex;
     align-items: center;
     flex-wrap: wrap;
-    gap: var(--spacing-sm);
-    font-size: 13px;
+    gap: var(--sp-2);
+    font-size: var(--fs-body);
 }
 
 .enm-rpc-creds-label {
     flex: 0 0 200px;
-    color: var(--text-secondary);
-    font-size: 12px;
+    color: var(--text-tertiary);
+    font-size: var(--fs-caption);
+    font-weight: var(--fw-medium);
     text-transform: uppercase;
-    letter-spacing: 0.04em;
+    letter-spacing: 0.06em;
 }
 
 .enm-rpc-creds-value-wrap {
     display: inline-flex;
     align-items: center;
-    gap: var(--spacing-sm);
+    gap: var(--sp-2);
     flex: 1 1 auto;
     min-width: 0;
 }
 
 .enm-rpc-creds-value {
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    background: var(--bg-surface);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-sm);
+    font-family: var(--font-mono);
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
     padding: 4px 8px;
     color: var(--text-primary);
-    font-size: 12px;
+    font-size: var(--fs-mono);
     overflow-wrap: anywhere;
     flex: 1 1 auto;
     min-width: 0;
 }
 
+/* The copy + show/hide buttons inherit .enm-btn-sm styling from
+   Phase 3d. Just slim them down for the credential row context. */
 .enm-rpc-creds-copy,
 .enm-rpc-creds-toggle {
     padding: 4px 10px;
-    font-size: 12px;
+    font-size: var(--fs-caption);
     line-height: 1;
 }
 
@@ -2103,36 +2109,39 @@ select.enm-settings-input {
    Section-per-subtopic (toggle / allow / urls / creds), tight rows.
    ============================================================ */
 
+/* alpha.29 v2 brand reset · Phase 4c — RPC subsection chrome.
+   Each subsection (toggle / allow / urls / creds) gets a thin
+   bottom-border separator and a small uppercase title. */
 .enm-rpc-section {
     display: flex;
     flex-direction: column;
-    gap: 6px;
-    padding-bottom: var(--spacing-sm);
-    border-bottom: 1px solid var(--border-color);
+    gap: var(--sp-2);
+    padding-bottom: var(--sp-3);
+    border-bottom: 1px solid var(--border-subtle);
 }
 .enm-rpc-section:last-child {
     border-bottom: none;
     padding-bottom: 0;
 }
 .enm-rpc-section-title {
-    margin: 0 0 2px 0;
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.06em;
+    margin: 0 0 var(--sp-1) 0;
+    font-size: var(--fs-caption);
+    font-weight: var(--fw-semibold);
+    letter-spacing: 0.08em;
     text-transform: uppercase;
-    color: var(--text-secondary);
+    color: var(--text-tertiary);
 }
 .enm-rpc-toggle-row,
 .enm-rpc-allow-row {
     display: flex;
     align-items: flex-start;
-    gap: var(--spacing-sm);
+    gap: var(--sp-2);
     flex-wrap: wrap;
 }
 .enm-rpc-toggle-row > label {
-    /* Keep radio+label pairs inline so toggle reads naturally even when
-       Save wraps below on narrow widths. */
-    margin-right: var(--spacing-sm);
+    /* Keep radio+label pairs inline so the toggle reads naturally
+       even when Save wraps below on narrow widths. */
+    margin-right: var(--sp-2);
 }
 .enm-rpc-allow-row .enm-chip-input {
     flex: 1 1 280px;
@@ -2144,43 +2153,115 @@ select.enm-settings-input {
     align-self: flex-start;
 }
 
-/* alpha.20 — chipInput uses inline styles for layout but theme variables
-   for color. These rules add hover/focus polish + safety overrides in
-   case the inline fallbacks ever resolve to white on a dark theme. */
-.enm-chip-input button:hover {
-    background: var(--bg-surface, #f5f7fa) !important;
+/* alpha.29 v2 brand reset · Phase 4c — chip-input v2 retune.
+   The JS (settings-tab.js:1134 chipInput()) builds the container with
+   inline styles for column layout + chip pills. We override those
+   with !important to get the v2 single-row flex-wrap behavior + v2
+   chip pill styling without touching the JS. The chips themselves
+   are built inline by JS too — we style them via .enm-chip-input
+   descendant selectors so the inline width/padding inline-styles
+   resolve to v2 tokens. */
+.enm-chip-input {
+    display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: wrap !important;
+    align-items: center !important;
+    gap: 6px !important;
+    padding: 6px !important;
+    min-height: 38px !important;
+    background: var(--bg-input) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: var(--r-sm) !important;
+}
+.enm-chip-input:focus-within {
+    border-color: var(--accent) !important;
+    box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.enm-chip-input > div {
+    /* JS wraps chips + editor in two child divs (chipsWrap + editorRow).
+       Flatten them to participate in the parent's wrap layout. */
+    display: contents;
 }
 .enm-chip-input input {
-    color: var(--text-primary, inherit) !important;
+    flex: 1 1 110px !important;
+    min-width: 110px !important;
+    padding: 4px 6px !important;
+    background: transparent !important;
+    border: none !important;
+    color: var(--text-primary) !important;
+    outline: none !important;
+    font-size: var(--fs-caption) !important;
+    font-family: var(--font-mono) !important;
 }
 .enm-chip-input input:focus {
-    outline: none;
-    border-color: var(--accent, #007aff) !important;
+    outline: none !important;
+    border: none !important;
+    box-shadow: none !important;
 }
 .enm-chip-input input::placeholder {
-    color: var(--text-secondary, #6b7280);
-    opacity: 0.7;
+    color: var(--text-tertiary);
+    font-style: italic;
+    opacity: 1;
+}
+.enm-chip-input button {
+    padding: 5px 10px !important;
+    font-size: var(--fs-caption) !important;
+    background: var(--bg-elevated) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: var(--r-sm) !important;
+    color: var(--text-primary) !important;
+}
+.enm-chip-input button:hover {
+    background: var(--bg-overlay) !important;
+    border-color: var(--border-strong) !important;
+}
+/* Existing chip pills (created inline by JS) — restyle via attribute
+   + element selectors so the inline padding/border-radius the JS
+   sets resolves to v2 values via !important. */
+.enm-chip-input span[data-chip],
+.enm-chip-input .enm-chip {
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 4px !important;
+    padding: 3px 4px 3px 8px !important;
+    background: var(--bg-overlay) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: var(--r-pill) !important;
+    font-size: var(--fs-caption) !important;
+    font-family: var(--font-mono) !important;
+    color: var(--text-primary) !important;
+}
+.enm-chip-input span[data-locked],
+.enm-chip-input .enm-chip[data-locked] {
+    background: var(--bg-tint) !important;
+    color: var(--accent) !important;
+    border-color: rgba(0, 212, 255, 0.2) !important;
+    padding-right: 8px !important;
 }
 
-/* URL rows — 3-column grid: label | value+copy | optional warn */
+/* alpha.29 v2 brand reset · Phase 4c — URL rows: label | value+copy | warn. */
 .enm-rpc-url-row {
     display: grid;
     grid-template-columns: 220px 1fr;
     align-items: center;
-    column-gap: var(--spacing-sm);
+    column-gap: var(--sp-3);
     row-gap: 2px;
-    padding: 4px 0;
+    padding: var(--sp-1) 0;
 }
 .enm-rpc-url-label {
-    font-size: 12px;
-    color: var(--text-secondary);
+    font-size: var(--fs-caption);
+    font-weight: var(--fw-medium);
+    color: var(--text-tertiary);
 }
 .enm-rpc-url-warning {
     grid-column: 2 / 3;
     margin: 0;
-    font-size: 11px;
+    font-size: var(--fs-caption);
     font-style: italic;
-    color: var(--warning, #b35900);
+    color: var(--warning);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
 }
 .enm-rpc-url-row .enm-rpc-creds-value-wrap {
     /* The URL value + Copy button share column 2 */
@@ -2204,8 +2285,8 @@ select.enm-settings-input {
    Danger zone — wipe and uninstall
    ============================================================ */
 
-.enm-settings-danger h3 {
-    color: var(--danger, #c0392b);
+.enm-settings-danger > h3 {
+    color: var(--error);
 }
 
 .enm-danger-controls {
