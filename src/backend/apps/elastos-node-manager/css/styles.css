@@ -1897,15 +1897,32 @@ body[data-active-tab="identity"]::before {
     margin-bottom: var(--spacing-md);
 }
 
+/* alpha.29 v2 brand reset · Phase 4b — form-row + inputs + actions.
+   Reference: enm-design-mocks/v2/phase-04-settings.html .form-row,
+   .form-label, .input, .select, .section-card-foot.
+
+   Form-row: 2-column grid with label-block on left (230px fixed
+   per mock) and control on right (1fr). Bottom border separates
+   rows; last row has no border. Padding sp-4 top/bottom. */
 .enm-settings-row {
     display: grid;
-    grid-template-columns: minmax(180px, 1fr) 2fr;
-    align-items: center;
-    gap: var(--spacing-md);
-    padding: var(--spacing-sm) 0;
+    grid-template-columns: 230px 1fr;
+    align-items: start;
+    gap: var(--sp-5);
+    padding: var(--sp-4) 0;
+    border-bottom: 1px solid var(--border-subtle);
 }
 
-/* alpha.28.1 batch 27 — `.enm-radio-group` is the new fieldset wrapper
+.enm-settings-row:last-child {
+    border-bottom: none;
+}
+
+.enm-settings-row[data-disabled="true"] {
+    opacity: 0.45;
+    pointer-events: none;
+}
+
+/* alpha.28.1 batch 27 — `.enm-radio-group` is the fieldset wrapper
    on the ipMode + rpcEnabled radio pairs (form-semantics audit). The
    native <fieldset> ships with a 2px border + padding that would
    shift the layout; reset to the previous div-styled appearance.
@@ -1917,49 +1934,106 @@ body[data-active-tab="identity"]::before {
     min-inline-size: 0;
 }
 
+/* Label block — v2 .form-label-block: padding-top 6px so the label
+   baseline aligns with the input baseline (since input has padding
+   8px and label is just text). */
 .enm-settings-label {
-    font-size: 13px;
+    padding-top: 6px;
+    font-size: var(--fs-body);
+    font-weight: var(--fw-medium);
     color: var(--text-primary);
+    line-height: 1.4;
 }
 
+/* Inputs — v2 .input: bg-input (deeper than surface), 1px border,
+   r-sm radius, sp-2 inline padding, accent focus ring (3px soft +
+   border-color shift), fs-body 13px size. */
 .enm-settings-input {
-    min-height: 36px;
-    padding: 8px 12px;
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-sm);
-    background: var(--bg-surface);
+    width: 100%;
+    min-height: 0;          /* drop alpha.17's 36px floor; v2 uses padding alone */
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    background: var(--bg-input);
     color: var(--text-primary);
     font: inherit;
-    font-size: 13px;
-    transition: border-color var(--motion-fast) var(--ease-spring),
-                box-shadow var(--motion-fast) var(--ease-spring);
+    font-size: var(--fs-body);
+    transition: border-color 0.12s, box-shadow 0.12s;
 }
 
 .enm-settings-input:focus {
     outline: none;
-    border-color: var(--primary);
-    box-shadow: var(--focus-ring);
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
+.enm-settings-input::placeholder {
+    color: var(--text-tertiary);
+    font-style: italic;
+}
+
+/* Mono variant — used by the manual-IP / RPC user / etc. inputs that
+   carry technical identifiers. v2 also tightens the size to 12px. */
+.enm-settings-input.mono,
+.enm-settings-input[type="text"][inputmode="numeric"],
+.enm-settings-input[type="text"][data-mono] {
+    font-family: var(--font-mono);
+    font-size: 12px;
+}
+
+/* Native <select> styled to match .input. Chevron handled by the
+   wrapper if used, otherwise the OS arrow shows. */
+.enm-settings-input[type="select"],
+select.enm-settings-input {
+    padding-right: 28px;
+    appearance: none;
+    -webkit-appearance: none;
+    cursor: pointer;
+    background-image:
+        linear-gradient(45deg, transparent 50%, var(--text-tertiary) 50%),
+        linear-gradient(135deg, var(--text-tertiary) 50%, transparent 50%);
+    background-position:
+        calc(100% - 14px) 50%,
+        calc(100% - 10px) 50%;
+    background-size: 4px 4px;
+    background-repeat: no-repeat;
+}
+
+/* Section actions foot — v2 .section-card-foot: padding sp-4 sp-5,
+   border-top hairline, status text on the left, save buttons on the
+   right. We use justify-content:flex-end since the status sits
+   alongside the buttons via .enm-settings-status's own grid cell.
+   Padding-left aligned with section-card-body via the > rule above. */
 .enm-settings-actions {
     display: flex;
     flex-wrap: wrap;
-    gap: var(--spacing-sm);
-    padding-top: var(--spacing-md);
-    border-top: 1px solid var(--border-color);
+    align-items: center;
+    gap: var(--sp-3);
+    padding-top: var(--sp-4);
+    padding-bottom: var(--sp-4);
+    margin-top: var(--sp-2);
+    border-top: 1px solid var(--border-subtle);
 }
 
+/* Status line — sits below or beside the action buttons. v2 spec
+   uses --text-tertiary for resting state; success/error/warn are
+   added via JS-driven class modifiers when settings-tab.js wires
+   them in Phase 4d. */
 .enm-settings-status {
-    font-size: 12px;
-    color: var(--success);
+    flex: 1;
+    font-size: var(--fs-caption);
+    color: var(--text-tertiary);
     align-self: center;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
 }
 
 .enm-settings-help {
-    font-size: 12px;
-    color: var(--text-secondary);
+    font-size: var(--fs-caption);
+    color: var(--text-tertiary);
     line-height: 1.5;
-    margin: 0 0 var(--spacing-md);
+    margin: 0 0 var(--sp-3);
 }
 
 /* ============================================================
