@@ -3142,11 +3142,16 @@ select.enm-settings-input {
     border: none;
     color: var(--text-tertiary);
     cursor: pointer;
-    /* Inner glyph sized per v2 mock at 14px; the 24×24 hitbox is
-       preserved for WCAG 2.5.5 AA — see the comment in the
-       alpha.28.1 audit. The earlier rev of this rule used 18px
-       which made the X harder to read against the new bg-surface. */
-    font-size: var(--fs-h3);
+    /* Inner glyph sized per v2 mock at 14px hard-coded; this is a
+       glyph size NOT heading text, so it doesn't share the --fs-h3
+       token even though both happen to resolve to 14px. If the v2
+       type scale ever bumps h3, the toast × must NOT follow. The
+       24×24 hitbox is preserved for WCAG 2.5.5 AA — see the comment
+       in the alpha.28.1 audit. The earlier rev of this rule used
+       18px which made the X harder to read against the new bg-surface.
+       Audit A3 found the previous `var(--fs-h3)` was semantically
+       wrong here. */
+    font-size: 14px;
     line-height: 1;
     padding: 0;
     /* 24×24 to meet WCAG 2.5.5 AA touch target (was 22×22 → 24×24 in
@@ -4734,13 +4739,18 @@ select.enm-settings-input {
     letter-spacing: -0.01em;
 }
 .enm-drawer-close {
+    /* WCAG 2.5.5 AA — 32×32 hit area; the × glyph inside is rendered at
+       22px hard-coded (not --fs-h1). The 22px is a glyph size not a
+       heading size; using --fs-h1 here is a semantic mismatch — Audit A3
+       found this. If the v2 scale ever bumps h1, the × glyph should NOT
+       follow. */
     width: 32px;
     height: 32px;
     padding: 0;
     background: transparent;
     border: none;
     color: var(--text-tertiary);
-    font-size: var(--fs-h1);
+    font-size: 22px;
     line-height: 1;
     cursor: pointer;
     border-radius: var(--r-sm);
