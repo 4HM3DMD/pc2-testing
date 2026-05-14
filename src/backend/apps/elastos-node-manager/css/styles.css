@@ -2439,6 +2439,46 @@ body[data-app-size="compact"] .enm-section-card-foot .enm-btn,
     border-radius: 2px;
     font-weight: var(--fw-semibold);
 }
+
+/* beta.3.17 — repeat-count badge for journalctl-style collapsed
+   adjacent duplicate log lines. Renders inline at the end of the
+   .enm-log-text content (so it wraps with the message body on
+   narrow widths rather than forcing a horizontal scroll). Color
+   follows the line's data-lvl so error floods show a red badge,
+   info floods stay neutral. Hidden when the line stands alone. */
+.enm-log-dup-count {
+    display: inline-block;
+    margin-left: var(--sp-2);
+    padding: 0 6px;
+    border-radius: var(--r-xs);
+    background: var(--bg-elevated);
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: var(--fw-semibold);
+    line-height: 16px;
+    vertical-align: middle;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+}
+.enm-log-dup-count[hidden] { display: none !important; }
+.enm-log-line[data-lvl="error"] .enm-log-dup-count {
+    background: var(--error-bg);
+    color: var(--error);
+}
+.enm-log-line[data-lvl="warn"] .enm-log-dup-count {
+    background: var(--warning-bg);
+    color: var(--warning);
+}
+.enm-log-line[data-lvl="info"] .enm-log-dup-count {
+    background: var(--accent-soft);
+    color: var(--accent);
+}
+.enm-log-line[data-lvl="debug"] .enm-log-dup-count {
+    background: rgba(167, 139, 250, 0.10);
+    color: var(--purple);
+}
 .enm-log-text .lvl-info  { color: var(--accent); }
 .enm-log-text .lvl-warn  { color: var(--warning); font-weight: var(--fw-medium); }
 .enm-log-text .lvl-error { color: var(--error);   font-weight: var(--fw-medium); }

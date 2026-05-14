@@ -112,6 +112,31 @@
         return STREAM_LABEL[stream] || 'LOG';
     }
 
+    /**
+     * beta.3.17 — signature used to collapse adjacent identical log
+     * lines (journalctl `--no-pager` style). Strips the leading
+     * "YYYY/MM/DD HH:MM:SS.ffffff" timestamp the ela writer prepends
+     * so two errors emitted milliseconds apart still collide. Returns
+     * the level-tagged body so [ERR] foo and [INFO] foo never
+     * collapse together.
+     *
+     * Example flood that collapses to ONE line + a "× 47" chip:
+     *   2026/05/14 22:49:06.974207 [ERR] v2 accumulateReward Sponsor not exist 0333...
+     *   2026/05/14 22:49:06.977316 [ERR] v2 accumulateReward Sponsor not exist 0333...
+     *   2026/05/14 22:49:06.980410 [ERR] v2 accumulateReward Sponsor not exist 0333...
+     *
+     * The non-timestamp portion has to match exactly — even a single
+     * differing digit (e.g. block heights in [SYNC] new block received
+     * height=N) defeats collapse on purpose, because those events ARE
+     * meaningfully different despite looking similar.
+     */
+    var TS_PREFIX_REGEX = /^\d{4}\/\d{2}\/\d{2}\s+\d{2}:\d{2}:\d{2}(?:\.\d+)?\s+/;
+    function logSignature(raw, lvl) {
+        if (typeof raw !== 'string') { return ''; }
+        var body = raw.replace(TS_PREFIX_REGEX, '');
+        return (lvl || 'info') + '|' + body;
+    }
+
     // HTML-escape because we build innerHTML for the lvl + hl
     // highlight spans below. textContent isn't an option once we
     // need to overlay class spans on substrings.
@@ -271,6 +296,12 @@
 
         // Head-trim accounting (sticky banner once it un-hides).
         this._droppedCount = 0;
+        // beta.3.17 — running tally of duplicate lines that got
+        // collapsed into a "× N" chip rather than rendered as their
+        // own DOM row. Surfaced in the meta count so the operator
+        // sees "234 lines · 4,891 collapsed" instead of a quiet
+        // dedupe.
+        this._collapsedCount = 0;
 
         // beta.3.16 — severity filter chips. Operator feedback was that
         // ela.log floods the viewer with DEBG noise that buries what
@@ -693,7 +724,21 @@
             var html = applyLvlHighlights(escapeHtml(raw));
             var hl = applySearchHighlights(html, spec.regex);
             var textNode = node.querySelector('.enm-log-text');
-            if (textNode) { textNode.innerHTML = hl.html; }
+            if (textNode) {
+                textNode.innerHTML = hl.html;
+                // beta.3.17 — rebuilding innerHTML wiped the dup-count
+                // chip; re-append it so a collapsed run keeps its
+                // "× N" indicator across search interactions.
+                var count = parseInt(node.getAttribute('data-count') || '1', 10) || 1;
+                if (count > 1) {
+                    var chip = document.createElement('span');
+                    chip.className = 'enm-log-dup-count';
+                    chip.setAttribute('aria-label', 'Repeat count');
+                    chip.textContent = '× ' + count.toLocaleString();
+                    textNode.appendChild(document.createTextNode(' '));
+                    textNode.appendChild(chip);
+                }
+            }
             if (hl.matched) {
                 node.classList.add('match');
                 totalMatches += 1;
@@ -754,7 +799,18 @@
     LogViewer.prototype._refreshMeta = function () {
         if (!this._metaCount) { return; }
         var n = this._lines.length;
-        this._metaCount.textContent = n.toLocaleString() + (n === 1 ? ' line' : ' lines');
+        var dedup = this._collapsedCount || 0;
+        // beta.3.17 — surface the dedupe activity in the meta count.
+        // When the chain floods identical errors (the
+        // "v2 accumulateReward Sponsor not exist" hot path during sync
+        // is the inspiration), the operator should see "234 lines ·
+        // 4,891 collapsed" so the dedupe doesn't silently swallow
+        // signal-of-volume.
+        var label = n.toLocaleString() + (n === 1 ? ' line' : ' lines');
+        if (dedup > 0) {
+            label += ' · ' + dedup.toLocaleString() + ' collapsed';
+        }
+        this._metaCount.textContent = label;
         if (this._searchSpec && this._searchSpec.regex) {
             this._metaMatches.hidden = false;
             this._metaMatches.textContent = '· ' + this._matchCount.toLocaleString()
@@ -774,14 +830,67 @@
         var frag = document.createDocumentFragment();
         var spec = this._searchSpec;
         var matchesAdded = 0;
+        // beta.3.17 — journalctl-style adjacent-duplicate collapse.
+        // We compute a signature per line (lvl + body-without-ts) and
+        // compare against the last appended node's signature. On a
+        // hit, increment that node's data-count + its visible "× N"
+        // chip; don't append a new DOM row. The severity-chip count
+        // still bumps for the underlying event so the chip-bar
+        // reflects the real event rate, not the visible-row count.
+        //
+        // "Last appended" walks BOTH the existing DOM tail AND any
+        // rows we just queued into `frag` this iteration — otherwise
+        // a flood of 50 identical lines within a single batch would
+        // bloom 50 nodes before the first scroll-to-bottom flush.
+        var tailNode = null;
+        var existingLineNodes = this._scroller.querySelectorAll('.enm-log-line');
+        if (existingLineNodes.length > 0) {
+            tailNode = existingLineNodes[existingLineNodes.length - 1];
+        }
+        var dedupedCount = 0;
         for (var i = 0; i < lines.length; i += 1) {
             var entry = lines[i];
+            var raw = (entry && entry.line != null) ? String(entry.line) : '';
+            raw = raw.replace(ANSI_REGEX, '');
+            var lvl = detectLevel(raw);
+            var sig = logSignature(raw, lvl);
+
+            // Severity chip count always bumps — operator wants to
+            // see total events of each level, even if we collapsed
+            // the visible rows. _renderLine bumps the chip count
+            // when it actually creates a node; for collapsed dupes
+            // we bump it here, skipping _renderLine entirely.
+            if (tailNode && tailNode.getAttribute('data-sig') === sig) {
+                var prevCount = parseInt(tailNode.getAttribute('data-count') || '1', 10) || 1;
+                tailNode.setAttribute('data-count', String(prevCount + 1));
+                var chip = tailNode.querySelector('.enm-log-dup-count');
+                if (chip) {
+                    chip.textContent = '× ' + (prevCount + 1).toLocaleString();
+                    chip.hidden = false;
+                }
+                // Update the tooltip so hovering a collapsed run gives
+                // the first/last timestamps of the run rather than just
+                // the original line's ISO.
+                tailNode.setAttribute(
+                    'data-last-ts',
+                    (entry && entry.ts != null) ? String(entry.ts) : ''
+                );
+                this._lvlCounts[lvl] = (this._lvlCounts[lvl] || 0) + 1;
+                this._refreshLvlChipCount(lvl);
+                dedupedCount += 1;
+                continue;
+            }
+
             this._lines.push(entry);
             var node = this._renderLine(entry, spec);
+            node.setAttribute('data-sig', sig);
+            node.setAttribute('data-count', '1');
             if (node.classList.contains('match')) { matchesAdded += 1; }
             frag.appendChild(node);
+            tailNode = node;
         }
         this._scroller.appendChild(frag);
+        this._collapsedCount = (this._collapsedCount || 0) + dedupedCount;
 
         // Trim to MAX_DOM_LINES — drop oldest from the top. Use
         // Range.deleteContents for the bulk removal so we get ONE
@@ -797,6 +906,12 @@
             // stay honest after a head-trim. Walk the same node range
             // once; check both match-class and data-lvl in one pass.
             var trimmedLvls = { error: 0, warn: 0, info: 0, debug: 0 };
+            // beta.3.17 — when a head-trim drops a collapsed row, the
+            // duplicate events that fed its "× N" badge are gone too.
+            // Decrement _collapsedCount by (count - 1) per dropped row
+            // and decrement _lvlCounts by `count` (since each repeat
+            // bumped the chip).
+            var trimmedCollapsed = 0;
             var lineNodes = this._scroller.querySelectorAll('.enm-log-line');
             var trimEnd = Math.min(excess, lineNodes.length);
             for (var k = 0; k < trimEnd; k += 1) {
@@ -804,10 +919,15 @@
                     trimmedMatches += 1;
                 }
                 var trimLvl = lineNodes[k].getAttribute('data-lvl') || 'info';
+                var trimCount = parseInt(lineNodes[k].getAttribute('data-count') || '1', 10) || 1;
                 if (Object.prototype.hasOwnProperty.call(trimmedLvls, trimLvl)) {
-                    trimmedLvls[trimLvl] += 1;
+                    trimmedLvls[trimLvl] += trimCount;
+                }
+                if (trimCount > 1) {
+                    trimmedCollapsed += (trimCount - 1);
                 }
             }
+            this._collapsedCount = Math.max(0, this._collapsedCount - trimmedCollapsed);
             // Apply the decrements + refresh affected chips.
             var self3 = this;
             ['error', 'warn', 'info', 'debug'].forEach(function (lvl) {
@@ -900,6 +1020,19 @@
         var html = applyLvlHighlights(escapeHtml(raw));
         var hl = applySearchHighlights(html, searchSpec && searchSpec.regex);
         text.innerHTML = hl.html;
+        // beta.3.17 — dup-count chip rendered inside the text cell at
+        // the end. Hidden by default; _appendBatch unhides + updates
+        // textContent when adjacent duplicate lines collapse into
+        // this row. Kept as a child of .enm-log-text (not a 4th grid
+        // column) so a long log message wraps the chip onto the next
+        // visual line naturally instead of forcing a horizontal
+        // scroll.
+        var dupCount = document.createElement('span');
+        dupCount.className = 'enm-log-dup-count';
+        dupCount.hidden = true;
+        dupCount.setAttribute('aria-label', 'Repeat count');
+        text.appendChild(document.createTextNode(' '));
+        text.appendChild(dupCount);
         div.appendChild(text);
 
         if (hl.matched) {
