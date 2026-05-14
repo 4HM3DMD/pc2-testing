@@ -431,10 +431,14 @@
             if (self.els.app) {
                 self.els.app.setAttribute('data-active-tab', tabId);
             }
-            // Beta 3 — lazy-mount the Settings pane the first time the
-            // operator clicks Settings. The legacy alpha.27 settings-
-            // drawer is gone; settings live in this top-level pane now.
+            // Beta 3 — lazy-mount each pane's component on first
+            // activation. Idempotent — the per-component method's
+            // own gate stops re-mounting. Pattern matches the alpha.29
+            // batch 103 enmLoadScript path for audit-tab (which still
+            // gets script-level lazy-load on top of this DOM mount).
             if (tabId === 'settings') { self._mountSettingsTabLazy(); }
+            else if (tabId === 'logs')  { self._mountLogViewerLazy(); }
+            else if (tabId === 'audit') { self._mountAuditTabLazy(); }
         }
 
         tabBtns.forEach(function (btn) {
@@ -483,6 +487,75 @@
             notifications: this.services.notifications,
         });
         this._settingsTab.mount(this.els.paneSettings);
+    };
+
+    /**
+     * Beta 3 — lazy-mount EnmLogViewer into pane-logs on first
+     * activation. Mainchain only for Beta 3 (chain selector pill
+     * present but inactive). Idempotent.
+     *
+     * @private
+     */
+    ENMApp.prototype._mountLogViewerLazy = function () {
+        if (this._logViewer) { return; }
+        if (!this.els.paneLogs) { return; }
+        if (!root.EnmLogViewer) {
+            this.els.paneLogs.innerHTML =
+                '<p class="enm-stub">Log viewer component not loaded.</p>';
+            return;
+        }
+        this._logViewer = new root.EnmLogViewer({
+            api: this.services.api,
+            sse: this.services.sse,
+            notifications: this.services.notifications,
+            chainId: 'mainchain',
+        });
+        this._logViewer.mount(this.els.paneLogs);
+    };
+
+    /**
+     * Beta 3 — lazy-mount EnmAuditTab into pane-audit on first
+     * activation. The component file itself is ALSO lazy-loaded
+     * (alpha.29 batch 103) via window.ENM_LAZY_SCRIPTS.auditTab;
+     * if EnmAuditTab isn't on the global yet, kick the script load
+     * and re-try once it resolves. Idempotent.
+     *
+     * @private
+     */
+    ENMApp.prototype._mountAuditTabLazy = function () {
+        if (this._auditTab) { return; }
+        if (!this.els.paneAudit) { return; }
+        var self = this;
+        function mountNow() {
+            if (self._auditTab) { return; }
+            if (!root.EnmAuditTab) {
+                self.els.paneAudit.innerHTML =
+                    '<p class="enm-stub">Audit component failed to load. '
+                    + 'Hard-refresh the page (Ctrl-Shift-R).</p>';
+                return;
+            }
+            self._auditTab = new root.EnmAuditTab({
+                api: self.services.api,
+                notifications: self.services.notifications,
+            });
+            self._auditTab.mount(self.els.paneAudit);
+        }
+        if (root.EnmAuditTab) { mountNow(); return; }
+        var src = (root.ENM_LAZY_SCRIPTS && root.ENM_LAZY_SCRIPTS.auditTab) || null;
+        if (src && typeof root.enmLoadScript === 'function') {
+            // Show a transient stub while the script downloads.
+            self.els.paneAudit.innerHTML =
+                '<p class="enm-stub">Loading audit log…</p>';
+            root.enmLoadScript(src).then(function () {
+                self.els.paneAudit.innerHTML = '';
+                mountNow();
+            }).catch(function () {
+                self.els.paneAudit.innerHTML =
+                    '<p class="enm-stub">Failed to load the audit log. Try again or refresh.</p>';
+            });
+        } else {
+            mountNow();
+        }
     };
 
     /**
