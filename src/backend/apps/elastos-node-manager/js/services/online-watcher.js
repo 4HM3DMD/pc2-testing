@@ -200,15 +200,24 @@
                 if (self._banner && self._banner.hidden) {
                     self._banner.removeAttribute('role');
                 }
-                if (retryHadFocus) {
-                    var target = self._lastFocus
-                        && typeof self._lastFocus.focus === 'function'
-                        && document.contains(self._lastFocus)
-                        ? self._lastFocus
-                        : null;
-                    try {
-                        if (target) { target.focus({ preventScroll: true }); }
-                    } catch (_) { /* ignore */ }
+                // alpha.29 batch 113 (Round-37 finding #3, LOW) —
+                // restore _lastFocus UNCONDITIONALLY on recovery, not
+                // just when the Retry button held focus. The much
+                // more common scenario: operator was typing in a
+                // chip-input / settings field when wifi dropped; the
+                // offline transition captured that input as
+                // _lastFocus; recovery should put the operator back
+                // where they were. Previous shape only restored when
+                // retryHadFocus was true, making the capture a
+                // bookkeeping no-op in ~95% of real flows.
+                var target = self._lastFocus
+                    && typeof self._lastFocus.focus === 'function'
+                    && document.contains(self._lastFocus)
+                    ? self._lastFocus
+                    : null;
+                if (target) {
+                    try { target.focus({ preventScroll: true }); }
+                    catch (_) { /* element may be in a weird state — ignore */ }
                 }
                 self._lastFocus = null;
             }, 0);

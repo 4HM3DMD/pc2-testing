@@ -553,8 +553,26 @@
             };
             document.head.appendChild(s);
         });
-        loadScript._cache.set(src, p);
-        return p;
+        // alpha.29 batch 113 (Round-37 finding #1, HIGH) — evict
+        // rejected promises from the cache so a transient load
+        // failure (offline, slow network, 5xx) doesn't permanently
+        // poison the lazy-load path for that script. Previous shape
+        // cached the rejection forever: operator opens Audit while
+        // wifi is flaky → script fails → cached rejection → every
+        // subsequent re-open hits the cache and gets the same
+        // "failed to load, refresh" stub, even after wifi recovers.
+        // The exact scenario EnmOnlineWatcher exists to handle.
+        // Chain a .catch that deletes the cache entry then re-throws
+        // so awaiting callers still see the rejection on this attempt
+        // but the NEXT call retries the network.
+        var cached = p.catch(function (err) {
+            if (loadScript._cache.get(src) === cached) {
+                loadScript._cache.delete(src);
+            }
+            throw err;
+        });
+        loadScript._cache.set(src, cached);
+        return cached;
     }
 
     root.enmTOrFallback = enmTOrFallback;

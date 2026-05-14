@@ -5081,7 +5081,16 @@ body[data-app-size="narrow"] .enm-conv-actions .enm-btn {
     color: var(--warning-fg, #856404);
     border-bottom: 1px solid var(--warning-border, #ffeeba);
     font-size: 14px;
-    z-index: 9000; /* above the app shell, below modals */
+    /* alpha.29 batch 113 (Round-37 finding #2, MED) — token scale
+       (lines 142-149): drawer=100, modal=200, toast=300. The banner
+       sits ABOVE the app shell + tab strip but BELOW all overlays:
+       a critical proposal-card or tools-update modal, the settings
+       drawer, and toasts must all win the z-stack over the persistent
+       banner so the operator's in-flight action isn't obscured.
+       Previously z-index: 9000 sat above EVERY overlay, geometrically
+       obscuring critical dialogs. 50 sits between --z-sticky(5) and
+       --z-drawer(100) — above page content, below every modal. */
+    z-index: 50;
 }
 .enm-online-banner[hidden] {
     display: none;
