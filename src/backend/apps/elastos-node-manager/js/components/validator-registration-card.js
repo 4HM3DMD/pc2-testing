@@ -239,8 +239,11 @@
                     + '<p class="enm-validator-step-help">' + escapeHtml(t('validator_card.step1_help')) + '</p>'
                     + '<div class="enm-validator-pubkey-row">'
                         + '<code class="enm-validator-pubkey" id="enm-vc-pubkey">' + escapeHtml(t('common.loading')) + '</code>'
-                        + '<button type="button" class="enm-btn enm-btn-secondary enm-validator-copy" id="enm-vc-copy" aria-label="' + escapeHtml(t('validator_card.copy_aria')) + '">'
-                            + escapeHtml(t('validator_card.copy')) + '</button>'
+                        // alpha.29 batch 96 — copy button now rendered via
+                        // root.enmCopyButton (factory primitive) at post-
+                        // mount time below. The empty placeholder span
+                        // marks where to insert.
+                        + '<span class="enm-validator-copy-slot"></span>'
                     + '</div>'
                 + '</div>'
             + '</li>'
@@ -284,43 +287,28 @@
 
             + '</ol>';
 
-        // Copy button — routed through enmCopyToClipboard so the
-        // feature-detect + writeText plumbing is shared with the other
-        // four copy sites. Custom onFallback because this site wants the
-        // text-selection affordance (so the operator can still ⌘-C the
-        // pubkey) in addition to the warning toast. Round-6 clipboard-UX
-        // audit a8a932d2, alpha.28.1 batch 58.
-        var copyBtn  = this.root.querySelector('#enm-vc-copy');
+        // alpha.29 batch 96 — copy button created via root.enmCopyButton
+        // (utils.js factory) instead of the previous 25-line hand-wired
+        // pattern. Same UX: text-swap on success, selectInto + warning
+        // toast on fallback. Round-33 architectural triage — proves the
+        // factory pattern at the cleanest call site first; remaining 4
+        // sites migrate in follow-up batches.
         var pubkeyEl = this.root.querySelector('#enm-vc-pubkey');
-        copyBtn.addEventListener('click', function () {
-            var text = self._lastPubkey || pubkeyEl.textContent || '';
-            if (!text) { return; }
-            // alpha.28.1 batch 87 (Round-26 finding #4) — fallback strings
-            // localised + dedup'd. Previous shape passed both failTitle/
-            // failBody AND an onFallback that called notifications.warning
-            // directly with hardcoded English copies of the same strings.
-            // enmCopyToClipboard's onFallback path short-circuits the
-            // built-in warning toast (utils.js:359), so the explicit
-            // failTitle/failBody were DEAD opts — but a single source-of-
-            // truth violation: any future i18n migration had to update two
-            // sites for the same strings. Single source now lives in
-            // strings.js validator_card.copy_fail_*.
-            root.enmCopyToClipboard(text, {
-                btn: copyBtn,
-                copiedLabel: t('validator_card.copied'),
-                resetMs: 1200,
-                notifications: self.notifications,
-                onFallback: function () {
-                    selectInto(pubkeyEl);
-                    if (self.notifications) {
-                        self.notifications.warning(
-                            t('validator_card.copy_fail_title'),
-                            t('validator_card.copy_fail_body')
-                        );
-                    }
-                },
-            });
+        var copyBtn = root.enmCopyButton({
+            value: function () { return self._lastPubkey || pubkeyEl.textContent || ''; },
+            label: t('validator_card.copy'),
+            copiedLabel: t('validator_card.copied'),
+            ariaLabel: t('validator_card.copy_aria'),
+            resetMs: 1200,
+            notifications: self.notifications,
+            failTitle: t('validator_card.copy_fail_title'),
+            failBody: t('validator_card.copy_fail_body'),
+            getDisplayEl: function () { return pubkeyEl; },
         });
+        copyBtn.id = 'enm-vc-copy';
+        copyBtn.classList.add('enm-validator-copy');
+        var slot = this.root.querySelector('.enm-validator-copy-slot');
+        if (slot && slot.parentNode) { slot.parentNode.replaceChild(copyBtn, slot); }
 
         // Activate — calls the same endpoint Settings → Tools uses, with
         // the same chain-alive precondition guard at the server side.

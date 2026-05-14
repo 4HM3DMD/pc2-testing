@@ -386,6 +386,94 @@
         });
     }
 
+    /**
+     * EnmCopyButton — DOM-factory wrapper around enmCopyToClipboard.
+     *
+     * alpha.29 batch 96. Round-33 architectural triage flagged the
+     * recurring boilerplate: every copy site (5 of them today —
+     * producer-identity, settings-tab credValueWithCopy, setup-
+     * conversation password, validator-registration-card, tools-update
+     * modal) hand-builds the button markup with i18n aria-label + wires
+     * its own click handler that calls enmCopyToClipboard. ~10-25 lines
+     * of duplicate plumbing per site. Adding a new copy site (e.g. the
+     * 4 missing sites flagged in audit a8a932d2: chain owner pubkey,
+     * mismatch detail, audit executor cell, peer-summary host:port)
+     * means re-inventing the same pattern again.
+     *
+     * This factory returns a fully-wired <button> ready to be appended.
+     * Caller controls value resolution (a function so the value can be
+     * captured fresh at click time, not snapshot at button-build time —
+     * matters for the keystore-password copy that reads from a
+     * dynamically-updated element). Optional `getDisplayEl` returns the
+     * <code>/<span> whose contents should be range-selected on fallback.
+     *
+     * @param {{
+     *   value: string | function():string,
+     *   label?: string,                  // visible button text (default 'Copy')
+     *   copiedLabel?: string,            // text-swap on success (default 'Copied!')
+     *   ariaLabel?: string,              // explicit aria-label (default 'Copy ' + label)
+     *   resetMs?: number,                // text-swap duration (default 1200)
+     *   className?: string,              // additional CSS classes
+     *   notifications?: object,          // notifications service
+     *   getDisplayEl?: function():Element, // for select-text fallback
+     *   failTitle?: string,              // i18n'd fallback title
+     *   failBody?: string,               // i18n'd fallback body
+     * }} opts
+     * @returns {HTMLButtonElement}
+     */
+    function copyButton(opts) {
+        if (!opts || (opts.value === undefined && typeof opts.value !== 'function')) {
+            throw new TypeError('EnmCopyButton: { value } required');
+        }
+        var label = opts.label || 'Copy';
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'enm-btn enm-btn-secondary' + (opts.className ? ' ' + opts.className : '');
+        btn.textContent = label;
+        btn.setAttribute('aria-label', opts.ariaLabel || ('Copy ' + label.toLowerCase()));
+        btn.addEventListener('click', function () {
+            var resolvedValue = (typeof opts.value === 'function')
+                ? opts.value()
+                : opts.value;
+            if (resolvedValue == null || resolvedValue === '') { return; }
+            root.enmCopyToClipboard(String(resolvedValue), {
+                btn: btn,
+                copiedLabel: opts.copiedLabel || 'Copied!',
+                resetMs: (typeof opts.resetMs === 'number') ? opts.resetMs : 1200,
+                notifications: opts.notifications || null,
+                failTitle: opts.failTitle,
+                failBody: opts.failBody,
+                onFallback: function () {
+                    // If the caller pointed us at a display element,
+                    // select its contents so Ctrl-C works manually.
+                    if (typeof opts.getDisplayEl === 'function') {
+                        try {
+                            var el = opts.getDisplayEl();
+                            if (el) {
+                                var range = document.createRange();
+                                range.selectNodeContents(el);
+                                var sel = root.getSelection();
+                                sel.removeAllRanges();
+                                sel.addRange(range);
+                            }
+                        } catch (_) { /* manual triple-click is the fallback */ }
+                    }
+                    // Always show the toast on fallback (consistent with
+                    // the validator-card + setup-conversation pattern
+                    // from batches 87 + 88). Callers that don't want
+                    // the toast can pass notifications=null.
+                    if (opts.notifications) {
+                        opts.notifications.warning(
+                            opts.failTitle || 'Copy unavailable',
+                            opts.failBody || 'Browser blocked clipboard access. The value is selected — press Ctrl-C (or ⌘-C on Mac) to copy.'
+                        );
+                    }
+                },
+            });
+        });
+        return btn;
+    }
+
     root.enmTOrFallback = enmTOrFallback;
     root.enmPad2 = pad2;
     root.enmFormatUptime = formatUptime;
@@ -397,4 +485,5 @@
     root.enmRunOnce = runOnce;
     root.enmUseVisibilityPause = useVisibilityPause;
     root.enmCopyToClipboard = copyToClipboard;
+    root.enmCopyButton = copyButton;
 }(typeof window !== 'undefined' ? window : globalThis));
