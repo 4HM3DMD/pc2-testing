@@ -186,16 +186,21 @@
     --font-weight-semibold: var(--fw-semibold);
     --font-weight-bold:     var(--fw-bold);
 
-    /* ---- shadows (subtle, dark-mode appropriate) ---- */
-    --shadow-sm: 0 1px 2px rgba(0,0,0,0.4);
-    --shadow-md: 0 4px 12px rgba(0,0,0,0.4);
-    --shadow-lg: 0 12px 32px rgba(0,0,0,0.5), 0 0 0 1px var(--border-subtle);
+    /* ---- shadows (subtle, dark-mode appropriate) ----
+       v2 surface stack uses 4 elevation steps with explicit names:
+       - --shadow-sm    : floating chips / dot halos (2 sites)
+       - --shadow-lg    : drawer panel (1 site)
+       - --shadow-toast : flat toast card with atmospheric drop (1 site)
+       - --shadow-modal : deeper atmospheric drop for modals (2 sites)
+       Three tokens have zero call sites in v2 but are kept as
+       definitions only so a future maintainer reaching for them by
+       name doesn't get an undefined token at runtime:
+       - --shadow-md, --shadow-xs (alias), --shadow-glow. */
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+    --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px var(--border-subtle);
     --shadow-glow: 0 0 24px rgba(0, 212, 255, 0.15);
     --shadow-xs: var(--shadow-sm);
-    /* v2 atmospheric modal + toast shadows (Phase 6b/6c/7a).
-       --shadow-toast: used by .enm-toast (Phase 6c)
-       --shadow-modal: used by .enm-proposal-card (Phase 6b) and
-                       .enm-tools-update-modal-card (Phase 7a) */
     --shadow-toast: 0 12px 32px rgba(0, 0, 0, 0.4);
     --shadow-modal: 0 24px 64px rgba(0, 0, 0, 0.6);
 
