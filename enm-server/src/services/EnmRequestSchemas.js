@@ -1,0 +1,152 @@
+/*
+ * Copyright (C) 2026-present Elacity
+ * SPDX-License-Identifier: AGPL-3.0
+ *
+ * EnmRequestSchemas — joi schemas for the request bodies of the
+ * security-critical PUT /config/* and POST /config/anti-snipe-password
+ * routes.
+ *
+ * Pre-beta.3.11 each route handler did inline `typeof body.X === 'Y'`
+ * checks. That mostly worked but had four real problems:
+ *
+ *   1. Silent acceptance of malformed values: a non-string `mode` field
+ *      passed `(mode && mode !== 'auto' && mode !== 'manual')` if the
+ *      value was an array `['manual']` (truthy, !== 'auto', !== 'manual'
+ *      compared as object), then writeback set `chain.dpos.ipAddressMode
+ *      = ['manual']`, corrupting the config.
+ *   2. No structured error responses: 400s carried plain strings like
+ *      `Invalid mode "manual"`. Operators (and the frontend) had no way
+ *      to programmatically tell which field failed.
+ *   3. Type coercion holes: `auditRetentionDays` accepted any integer
+ *      but had no upper bound; an operator could set it to 10^9 and
+ *      the daily cleanup sweep would still consider "everything is
+ *      newer than that" → never prune.
+ *   4. No defaults: a field omitted from the body was silently kept
+ *      at its previous value, but there was no way to express "use
+ *      the schema default" through the API.
+ *
+ * Joi fixes all four. Each schema below is invoked from the route
+ * handler via `.validate(body, { abortEarly: false, stripUnknown: true
+ * })` so:
+ *   - All field errors come back in one response (abortEarly: false)
+ *   - Unknown fields are dropped silently (stripUnknown: true) so a
+ *     future frontend that adds a new field doesn't 400 against an
+ *     old backend.
+ *
+ * The shapes here are deliberately PATCH-like: every field is optional
+ * (.optional()). The handler treats an undefined field as "don't change"
+ * and only writes through the fields present in the validated body.
+ *
+ * 0.2.0-beta.3.11.
+ */
+
+'use strict';
+
+const Joi = require('joi');
+
+// IPv4/IPv6 with optional CIDR. Matches the frontend's IP_OR_CIDR_RE
+// shape in settings-tab.js — we want both layers to accept the same
+// inputs so an operator never sees "valid client-side, 400 server-side".
+const IPV4_OR_CIDR = Joi.string().ip({ version: ['ipv4'], cidr: 'optional' });
+const IPV6_OR_CIDR = Joi.string().ip({ version: ['ipv6'], cidr: 'optional' });
+const IP_ANY_OR_CIDR = Joi.alternatives().try(IPV4_OR_CIDR, IPV6_OR_CIDR);
+
+// PUT /config/network
+const networkBody = Joi.object({
+    // Optional because operator may only edit manualValue without changing
+    // mode. When present, must be one of the two enum values.
+    mode: Joi.string().valid('auto', 'manual').optional(),
+    // Empty string allowed so the operator can clear a stale manual value
+    // (e.g. switching back to auto after fixing the network).
+    manualValue: Joi.string().allow('').max(64).optional(),
+}).unknown(false).label('PUT /config/network body');
+
+// PUT /config/mainchain
+const mainchainBody = Joi.object({
+    logLevel: Joi.string().valid('debug', 'info', 'warn', 'error').optional(),
+    archiveMode: Joi.boolean().optional(),
+    // ela's actual config supports 512..32768 MB. Anything outside that
+    // range either crashes the process on startup (too low) or just
+    // wastes RAM (too high). Frontend has identical bounds; server-side
+    // is defence-in-depth.
+    memoryLimitMb: Joi.number().integer().min(512).max(32768).optional(),
+    rpcEnabled: Joi.boolean().optional(),
+    rpcUser: Joi.string().alphanum().min(1).max(64).optional(),
+    // Plaintext password — encrypted at rest by ConfigStore.setRpcPassword.
+    // 64 char min matches ela's recommended strength; max 256 prevents
+    // the operator from accidentally pasting a multi-kB blob.
+    rpcPassword: Joi.string().min(8).max(256).optional(),
+    // Per-entry validation: IPv4/IPv6 with optional CIDR. Empty array
+    // would lock out external clients but is permitted — operator is
+    // explicitly saying "no external access". Backend route then re-
+    // adds 127.0.0.1 anyway (alpha.19 safety net).
+    whiteIPList: Joi.array().items(IP_ANY_OR_CIDR).max(256).optional(),
+}).unknown(false).label('PUT /config/mainchain body');
+
+// PUT /config/general
+const generalBody = Joi.object({
+    autoExecuteSafe: Joi.boolean().optional(),
+    criticalRequiresAck: Joi.boolean().optional(),
+    // 0 = forever. 3650 = ten years; way more than any operator needs
+    // but the chosen cap keeps the integer fitting in JS safely.
+    auditRetentionDays: Joi.number().integer().min(0).max(3650).optional(),
+}).unknown(false).label('PUT /config/general body');
+
+// POST /config/anti-snipe-password
+const antiSnipeBody = Joi.object({
+    // `password` is the ONLY field. Empty string = explicit clear.
+    // 8 char min matches the frontend's inline check + the route's
+    // own server-side guard. 256 cap keeps scrypt cost bounded.
+    // The handler treats {} (no password field) as "probe — return
+    // current set/unset state" which is BEFORE this schema is
+    // applied, so we still want `.optional()` here.
+    password: Joi.string().allow('').min(0).max(256).optional()
+        .messages({
+            'string.base': 'Password must be a string.',
+            'string.max': 'Password is too long (256 char max).',
+        }),
+}).unknown(false).label('POST /config/anti-snipe-password body');
+
+/**
+ * Validate a request body against a Joi schema. Returns either
+ *   { value: <validated body> }  on success
+ * or
+ *   { error: <ValidationError>, details: <array of {path, message}> }
+ *     where details is the structured per-field error list the route
+ *     can surface as a 400 response.
+ *
+ * The route is responsible for shaping the 400 envelope. We don't
+ * shape it here so callers can keep their existing errorBody() shape
+ * (success: false / error: string) intact and just include the
+ * `details` array when they want to be helpful.
+ *
+ * @param {Joi.Schema} schema
+ * @param {object|null|undefined} body
+ * @returns {{ value: object }|{ error: Joi.ValidationError, details: object[] }}
+ */
+function validateBody(schema, body) {
+    const { value, error } = schema.validate(body || {}, {
+        abortEarly: false,
+        stripUnknown: true,
+        // Don't coerce — types must match. A boolean field with the
+        // string "true" should 400, not silently convert. The frontend
+        // sends actual booleans.
+        convert: false,
+    });
+    if (error) {
+        const details = error.details.map((d) => ({
+            path: Array.isArray(d.path) ? d.path.join('.') : String(d.path),
+            message: d.message,
+        }));
+        return { error, details };
+    }
+    return { value };
+}
+
+module.exports = {
+    networkBody,
+    mainchainBody,
+    generalBody,
+    antiSnipeBody,
+    validateBody,
+};

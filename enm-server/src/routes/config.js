@@ -30,6 +30,10 @@ const { requireOwner, readActorWallet } = require('../auth/OwnerCheckMiddleware'
 const os = require('node:os');
 const ConfigStore = require('../services/ConfigStore');
 const { redactSecrets } = require('../services/EnmConfigRedact');
+// 0.2.0-beta.3.11 — request-body Joi schemas replace the per-route
+// inline `typeof body.X === 'Y'` checks. See EnmRequestSchemas.js
+// for the rationale (4 categories of problems with the old approach).
+const RequestSchemas = require('../services/EnmRequestSchemas');
 
 /**
  * @param {object} extensionHandle
@@ -124,11 +128,21 @@ function build(extensionHandle) {
     // effect — the frontend Settings card carries a "Restart required"
     // tag (beta.3.6) reflecting this.
     router.put('/network', limit('admin'), requireOwner, async (req, res) => {
+        // 0.2.0-beta.3.11 — Joi-validated body (replaces inline typeof
+        // checks). Schema in EnmRequestSchemas.networkBody:
+        //   mode: 'auto' | 'manual' (optional)
+        //   manualValue: string '' / max 64 (optional)
+        const { value, details } = RequestSchemas.validateBody(
+            RequestSchemas.networkBody, req.body,
+        );
+        if (details) {
+            return res.status(400).json({
+                ...errorBody('Invalid request body.'),
+                details,
+            });
+        }
+        const { mode, manualValue } = value;
         try {
-            const { mode, manualValue } = req.body || {};
-            if (mode && mode !== 'auto' && mode !== 'manual') {
-                return res.status(400).json(errorBody(`Invalid mode "${mode}".`));
-            }
             const cfg = await ConfigStore.load();
             const chain = cfg.chains && cfg.chains.mainchain;
             if (!chain) {
@@ -176,33 +190,47 @@ function build(extensionHandle) {
     // Errors: 409 when mainchain not configured. Invalid fields are
     // silently ignored (defensive — frontend has inline validation).
     router.put('/mainchain', limit('admin'), requireOwner, async (req, res) => {
+        // 0.2.0-beta.3.11 — Joi-validated body (replaces inline typeof
+        // checks). Schema in EnmRequestSchemas.mainchainBody.
+        const { value, details } = RequestSchemas.validateBody(
+            RequestSchemas.mainchainBody, req.body,
+        );
+        if (details) {
+            return res.status(400).json({
+                ...errorBody('Invalid request body.'),
+                details,
+            });
+        }
+        const body = value;
         try {
-            const body = req.body || {};
             const cfg = await ConfigStore.load();
             const chain = cfg.chains && cfg.chains.mainchain;
             if (!chain) {
                 return res.status(409).json(errorBody('Mainchain not configured.'));
             }
-            if (typeof body.logLevel === 'string') chain.logLevel = body.logLevel;
-            if (typeof body.archiveMode === 'boolean') chain.archiveMode = body.archiveMode;
-            if (Number.isInteger(body.memoryLimitMb)) chain.memoryLimitMb = body.memoryLimitMb;
+            // Joi validated types already — these checks are now just
+            // "did the operator send the field?" presence guards.
+            if (body.logLevel != null)     { chain.logLevel = body.logLevel; }
+            if (body.archiveMode != null)  { chain.archiveMode = body.archiveMode; }
+            if (body.memoryLimitMb != null){ chain.memoryLimitMb = body.memoryLimitMb; }
 
             chain.rpc = chain.rpc || {};
             // alpha.19: master gate for external RPC access. Defaults to false
             // on new installs (see EnmConfigSchema). When false, the generated
             // ela config.json hard-forces WhiteIPList=['127.0.0.1'] regardless
             // of what the operator saved here.
-            if (typeof body.rpcEnabled === 'boolean') {
+            if (body.rpcEnabled != null) {
                 chain.rpc.enabled = body.rpcEnabled;
             }
-            if (typeof body.rpcUser === 'string' && body.rpcUser.length > 0) {
+            if (body.rpcUser) {
                 chain.rpc.user = body.rpcUser;
             }
-            if (typeof body.rpcPassword === 'string' && body.rpcPassword.length > 0) {
+            if (body.rpcPassword) {
                 ConfigStore.setRpcPassword(chain, body.rpcPassword);
             }
-            if (Array.isArray(body.whiteIPList)) {
-                chain.rpc.whiteIPList = body.whiteIPList.filter((s) => typeof s === 'string');
+            if (body.whiteIPList) {
+                // Joi already filtered to strings + validated each as IP/CIDR.
+                chain.rpc.whiteIPList = body.whiteIPList.slice();
                 // SAFETY NET (alpha.19): 127.0.0.1 is required for ENM's own
                 // RPC calls + local diagnostics. Force-include if a UI bug or
                 // sloppy client tries to remove it — operator can't lock us out.
@@ -245,20 +273,31 @@ function build(extensionHandle) {
     // antiSnipePassword here would be a mistake — the dedicated route
     // is owner-only AND uses scrypt at the boundary.
     router.put('/general', limit('admin'), requireOwner, async (req, res) => {
+        // 0.2.0-beta.3.11 — Joi-validated body. Schema bounds
+        // auditRetentionDays to 0..3650 + types of the toggles.
+        const { value, details } = RequestSchemas.validateBody(
+            RequestSchemas.generalBody, req.body,
+        );
+        if (details) {
+            return res.status(400).json({
+                ...errorBody('Invalid request body.'),
+                details,
+            });
+        }
+        const body = value;
         try {
-            const body = req.body || {};
             const cfg = await ConfigStore.load();
             cfg.global = cfg.global || {};
             cfg.global.healing = cfg.global.healing || {};
             cfg.global.notifications = cfg.global.notifications || {};
             cfg.global.audit = cfg.global.audit || {};
-            if (typeof body.autoExecuteSafe === 'boolean') {
+            if (body.autoExecuteSafe != null) {
                 cfg.global.healing.autoExecuteSafe = body.autoExecuteSafe;
             }
-            if (typeof body.criticalRequiresAck === 'boolean') {
+            if (body.criticalRequiresAck != null) {
                 cfg.global.notifications.criticalRequiresAck = body.criticalRequiresAck;
             }
-            if (Number.isInteger(body.auditRetentionDays) && body.auditRetentionDays >= 0) {
+            if (body.auditRetentionDays != null) {
                 cfg.global.audit.retentionDays = body.auditRetentionDays;
             }
             await ConfigStore.save(cfg, { logger: extensionHandle.log });
@@ -287,9 +326,23 @@ function build(extensionHandle) {
     // verify path was wired in beta.3.9 but no operator-facing way
     // to set the hash existed. This endpoint closes that loop.
     router.post('/anti-snipe-password', limit('admin'), requireOwner, async (req, res) => {
+        // 0.2.0-beta.3.11 — Joi-validated body. Schema accepts:
+        //   {}                  → probe (return current set state)
+        //   { password: "..." } → set (min 1, schema-level; route checks 8)
+        //   { password: "" }    → clear
+        const { value, details } = RequestSchemas.validateBody(
+            RequestSchemas.antiSnipeBody, req.body,
+        );
+        if (details) {
+            return res.status(400).json({
+                ...errorBody('Invalid request body.'),
+                details,
+            });
+        }
         try {
-            const body = req.body || {};
-            const password = (typeof body.password === 'string') ? body.password : null;
+            // Joi delivers `password: undefined` for the probe case;
+            // empty string for explicit clear; non-empty for set.
+            const password = (typeof value.password === 'string') ? value.password : null;
             // null = no-op (operator probably hit the endpoint with no
             // body to query state); empty-string = explicit clear.
             if (password == null) {
