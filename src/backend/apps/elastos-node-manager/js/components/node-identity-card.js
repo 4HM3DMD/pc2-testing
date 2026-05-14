@@ -3,37 +3,53 @@
  * SPDX-License-Identifier: AGPL-3.0
  *
  * components/node-identity-card.js — always-on "who is this node on-chain"
- * card for the Dashboard pane. (Beta 3.13.)
+ * card for the Dashboard pane. (Beta 3.14 — see below for the truth-
+ * correction the previous beta.3.13 copy needed.)
  *
- * Surfaces three concepts the operator needs in one glance:
+ * Surfaces two concepts the operator needs in one glance:
  *
- *   1. Public key (signing identity)
+ *   1. Node public key (consensus signing identity)
  *        Always shown when a keystore exists. Monospace, copiable.
  *        Operators paste this into Elastos Essentials to register a
- *        producer (the wallet there signs the deposit tx). Without
- *        a public key, a producer cannot be registered — so this
- *        is the most important value on the card.
+ *        producer (the Essentials wallet there signs the deposit tx
+ *        AND becomes the owner of the producer entry). Without a
+ *        public key, a producer cannot be registered — this is the
+ *        most important value on the card.
  *
- *   2. Two addresses, explained
- *        Bound address — derived from the keystore. This is the
- *          on-chain ELA address that signs blocks and receives BPoS
- *          rewards. We show its live balance when the chain is up
- *          (via getbalancebyaddr).
- *        Operator wallet — the PC2 session wallet the user is
- *          logged in as. This is their *login identity* for ENM
- *          (audit-log attribution + ownership of the install).
- *          ENM never asks this wallet to sign chain transactions
- *          (Architectural Invariant #2 — wallet identity-only).
+ *   2. Node signing address (derived from the keystore)
+ *        The address derived from the same keystore.dat the node
+ *        uses to sign block proposals and DPoS round consensus
+ *        messages. This is a CONSENSUS SIGNING IDENTITY only —
+ *        it does NOT hold funds and does NOT receive BPoS rewards.
+ *        We show its live balance (which will typically be 0) as a
+ *        sanity check, not because it accrues anything.
  *
- *   3. Producer summary, when registered
+ *        Block rewards go to the OWNER's address — the address
+ *        derived from the OwnerPublicKey in the producer-registration
+ *        transaction (typically the Essentials wallet that registered
+ *        this supernode). The owner claims those rewards by signing
+ *        a DPoSV2ClaimReward transaction from Essentials.
+ *
+ *        Sources (verified against Elastos.ELA HEAD):
+ *          - dpos/state/arbitrators.go:732-801 — rewards credited to
+ *            getOwnerKeyStandardProgramHash(producer.OwnerPublicKey())
+ *          - core/types/payload/producerinfo.go:24-35 — OwnerKey vs
+ *            NodePublicKey distinction
+ *          - servers/interfaces.go:2317-2347 — dposv2rewardinfo is
+ *            keyed by the owner-derived stake address, not the node key
+ *
+ *   3. Producer summary, when registered (BPoS-only)
  *        State, vote totals (v1 + v2), deposit balance, claimable
  *        rewards. Read-only — registration, voting, and reward
- *        claiming all happen in Essentials or via ela-cli; ENM
- *        just surfaces them here so the operator doesn't need to
- *        run "ela-cli wallet account" by hand.
+ *        claiming all happen in Essentials.
  *
  *   CR Council fields are intentionally omitted per operator
  *   preference (this card is for BPoS / signing-key operators).
+ *
+ *   The PC2 operator-login wallet is intentionally NOT shown — it
+ *   was on beta.3.13 but operator feedback was "not needed", and
+ *   it conflated two distinct identities (ENM auth vs on-chain
+ *   producer ownership) in a way that wasn't useful.
  *
  * Data source: GET /api/enm/system/identity (best-effort backend
  * that gracefully degrades each section to null on RPC failure).
@@ -183,7 +199,10 @@
     NodeIdentityCard.prototype._render = function (data) {
         var ks       = data.keystore || {};
         var producer = data.producer || null;
-        var wallet   = data.walletAddress || null;
+        // beta.3.14: PC2 operator-login wallet intentionally not
+        // rendered. The previous beta.3.13 row conflated ENM auth
+        // identity with on-chain producer ownership and operator
+        // feedback was "not needed".
         var pubkey   = ks.publicKey || null;
         var addr     = ks.address || null;
         var balance  = ks.balanceEla;
@@ -194,18 +213,20 @@
         html += '<header class="enm-identity-head">'
             + '<h3 id="' + this._titleId + '">Node identity</h3>'
             + '<p class="enm-identity-subtitle">'
-            + 'The on-chain identity this node uses, plus your operator login. '
-            + 'Use the public key below when registering as a BPoS supernode in '
-            + '<strong>Elastos Essentials</strong>.'
+            + 'The consensus-signing identity this node uses on-chain. '
+            + 'Paste the public key below into <strong>Elastos Essentials</strong> '
+            + 'when registering as a BPoS supernode — the Essentials wallet that '
+            + 'signs the registration becomes the producer owner and is where '
+            + 'all block rewards are credited.'
             + '</p>'
             + '</header>';
 
-        // ----- Public key (only meaningful when keystore exists) -----
+        // ----- Node public key (only meaningful when keystore exists) -----
         if (ks.exists && pubkey) {
             html += '<div class="enm-identity-row enm-identity-pubkey-row">'
                 + '<div class="enm-identity-row-head">'
-                +   '<span class="enm-identity-row-label">Public key</span>'
-                +   '<span class="enm-identity-row-hint">Paste this into Essentials when registering.</span>'
+                +   '<span class="enm-identity-row-label">Node public key</span>'
+                +   '<span class="enm-identity-row-hint">Paste this into Essentials when registering your supernode. The Essentials wallet signing the registration becomes the producer owner.</span>'
                 + '</div>'
                 + '<div class="enm-identity-value-stack">'
                 +   '<code class="enm-identity-value enm-identity-pubkey" data-fill="pubkey"></code>'
@@ -214,48 +235,47 @@
                 + '</div>';
         }
 
-        // ----- Bound (keystore-derived) address ---------------------
+        // ----- Node signing address (keystore-derived) ------------
+        // beta.3.14 truth-correction: this address is a CONSENSUS
+        // SIGNING IDENTITY only. It does NOT hold funds and does
+        // NOT receive BPoS rewards. Rewards go to the OwnerPublicKey-
+        // derived stake address (the Essentials wallet that
+        // registered the producer). Verified against Elastos.ELA
+        // HEAD: dpos/state/arbitrators.go:732-801,
+        // servers/interfaces.go:2317-2347.
         if (ks.exists && addr) {
             html += '<div class="enm-identity-row enm-identity-addr-row">'
                 + '<div class="enm-identity-row-head">'
-                +   '<span class="enm-identity-row-label">Bound address</span>'
-                +   '<span class="enm-identity-row-hint">Derived from the keystore. Signs blocks and receives BPoS rewards.</span>'
+                +   '<span class="enm-identity-row-label">Node signing address</span>'
+                +   '<span class="enm-identity-row-hint">Derived from the keystore. Signs block proposals during your producer&rsquo;s on-duty rounds. <strong>Does not hold funds and does not receive rewards.</strong></span>'
                 + '</div>'
                 + '<div class="enm-identity-value-stack">'
                 +   '<code class="enm-identity-value enm-identity-addr" data-fill="addr"></code>'
                 +   '<span class="enm-identity-copy-slot" data-copy="addr" data-copy-value="' + esc(addr) + '"></span>'
                 + '</div>'
                 + (balance != null
-                    ? '<div class="enm-identity-balance">Balance: <strong>' + esc(fmtEla(balance) || (balance + ' ELA')) + '</strong></div>'
+                    ? '<div class="enm-identity-balance">Balance: <strong>' + esc(fmtEla(balance) || (balance + ' ELA')) + '</strong> <span class="enm-identity-balance-muted">(typically 0 &mdash; this address is signing-only).</span></div>'
                     : (ks.exists ? '<div class="enm-identity-balance enm-identity-balance-muted">Balance unavailable (chain RPC offline).</div>' : '')
                   )
+                + '<div class="enm-identity-note">'
+                +   '<strong>Block rewards go to your Essentials wallet</strong>, not this address. '
+                +   'When you register the supernode in Essentials, that wallet becomes the '
+                +   'producer owner. Rewards are credited to the owner address every round '
+                +   'and claimed by signing a <code>DPoSV2ClaimReward</code> transaction from '
+                +   'Essentials.'
+                + '</div>'
                 + '</div>';
         }
 
-        // ----- Operator (PC2 session) wallet ------------------------
-        if (wallet) {
-            html += '<div class="enm-identity-row enm-identity-wallet-row">'
-                + '<div class="enm-identity-row-head">'
-                +   '<span class="enm-identity-row-label">Operator login</span>'
-                +   '<span class="enm-identity-row-hint">The PC2 wallet you logged in with. Used for ENM access &amp; audit log&nbsp;— <strong>different from the bound address above</strong>.</span>'
-                + '</div>'
-                + '<div class="enm-identity-value-stack">'
-                +   '<code class="enm-identity-value enm-identity-wallet" data-fill="wallet"></code>'
-                +   '<span class="enm-identity-copy-slot" data-copy="wallet" data-copy-value="' + esc(wallet) + '"></span>'
-                + '</div>'
-                + '<div class="enm-identity-note">'
-                +   'ENM never asks this wallet to sign chain transactions. '
-                +   'Producer registration, voting, and reward claims happen in '
-                +   'Essentials — the bound address is the signer there, not this wallet.'
-                + '</div>'
-                + '</div>';
-        }
+        // beta.3.14 -- operator-login wallet row dropped (was the PC2
+        // session wallet from data.walletAddress; operator feedback
+        // was "not needed").
 
         // ----- Keystore-missing helper -----------------------------
         if (!ks.exists) {
             html += '<div class="enm-identity-empty">'
                 + '<strong>Keystore not generated yet.</strong> Finish the setup wizard to create the producer keystore '
-                + '— the public key and bound address will appear here once it exists.'
+                + '&mdash; the node public key and signing address will appear here once it exists.'
                 + '</div>';
         }
 
@@ -279,13 +299,13 @@
                 +   '</div>'
                 +   (producer.deposit != null ? (
                     '<div class="enm-identity-stat">'
-                +     '<span class="enm-identity-stat-label">Deposit</span>'
+                +     '<span class="enm-identity-stat-label">Owner stake (locked)</span>'
                 +     '<span class="enm-identity-stat-value">' + esc(fmtEla(producer.deposit) || (producer.deposit + ' ELA')) + '</span>'
                 +   '</div>'
                   ) : '')
                 +   (producer.rewards != null ? (
                     '<div class="enm-identity-stat">'
-                +     '<span class="enm-identity-stat-label">Claimable rewards</span>'
+                +     '<span class="enm-identity-stat-label">Claimable in Essentials</span>'
                 +     '<span class="enm-identity-stat-value">' + esc(fmtEla(producer.rewards) || (producer.rewards + ' ELA')) + '</span>'
                 +   '</div>'
                   ) : '')
@@ -305,10 +325,6 @@
         if (addr) {
             var elAd = this.root.querySelector('[data-fill="addr"]');
             if (elAd) { elAd.textContent = addr; }
-        }
-        if (wallet) {
-            var elWa = this.root.querySelector('[data-fill="wallet"]');
-            if (elWa) { elWa.textContent = wallet; }
         }
 
         // Mount copy buttons via the shared factory. Each slot carries

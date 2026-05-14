@@ -179,8 +179,12 @@
     <script defer src="js/components/power-circle.js?ts=20260512a"></script>
     <script defer src="js/components/chain-card.js?ts=20260515b3k"></script>
     <script defer src="js/components/validator-registration-card.js?ts=20260515b3p"></script>
-    <!-- beta.3.13 — always-on node-identity card (public key + bound + operator addresses) -->
-    <script defer src="js/components/node-identity-card.js?ts=20260515b3q"></script>
+    <!-- beta.3.14 — always-on node-identity card. Truth-corrected from beta.3.13:
+         the keystore-derived address is the consensus signing identity ONLY;
+         block rewards go to the OwnerPublicKey-derived stake address (the
+         Essentials wallet that registered the producer). Operator-login wallet
+         row dropped. -->
+    <script defer src="js/components/node-identity-card.js?ts=20260515b3r"></script>
     <script defer src="js/components/producer-identity.js?ts=20260512a"></script>
     <script defer src="js/components/log-viewer.js?ts=20260515b3i"></script>
     <script defer src="js/components/proposal-card.js?ts=20260515b3f"></script>
