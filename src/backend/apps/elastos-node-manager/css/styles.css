@@ -4241,124 +4241,163 @@ select.enm-settings-input {
     .enm-goal-tiles { grid-template-columns: 1fr; }
 }
 
-/* ---- Card B2: bootstrap vs genesis (alpha.10) ----
-   Mirrors Card A's tile pattern but with a "Recommended" badge inside
+/* ---- Card B2: bootstrap vs genesis (alpha.10) — Phase 6d v2 role-card ----
+   Mirrors Card A's role-card pattern with a "Recommended" badge inside
    the first tile and a meta-line that calls out the data size. Tiles
-   are buttons so keyboard nav + focus-visible work. */
+   are buttons so keyboard nav + focus-visible work. Class names kept
+   verbatim — setup-conversation.js emits these in the B2 step. */
 .enm-b2-tiles {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: var(--spacing-md);
+    gap: var(--sp-3);
     width: 100%;
-    margin-top: var(--spacing-md);
+    margin-top: var(--sp-2);
 }
 
 .enm-b2-tile {
     position: relative;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    text-align: center;
-    gap: var(--spacing-xs);
-    padding: var(--spacing-xl) var(--spacing-md) var(--spacing-lg);
-    background: var(--bg-surface);
-    border: 2px solid var(--border-color);
-    border-radius: 16px;
+    display: grid;
+    grid-auto-flow: row;
+    gap: var(--sp-2);
+    align-content: start;
+    text-align: left;
+    padding: var(--sp-5);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
     cursor: pointer;
     font: inherit;
     color: inherit;
-    transition: border-color var(--motion-fast) var(--ease-spring),
-                transform var(--motion-fast) var(--ease-spring),
-                background var(--motion-fast) var(--ease-spring);
+    transition: border-color var(--motion-fast) var(--ease-out),
+                background var(--motion-fast) var(--ease-out);
 }
 
 .enm-b2-tile:hover:not(:disabled) {
-    border-color: var(--primary);
-    transform: translateY(-2px);
-    background: var(--primary-softer);
+    border-color: var(--border-strong);
 }
 .enm-b2-tile:focus-visible {
     outline: none;
-    border-color: var(--primary);
+    border-color: var(--accent);
     box-shadow: var(--focus-ring);
 }
-.enm-b2-tile:active:not(:disabled) { transform: translateY(0); }
-.enm-b2-tile:disabled { opacity: 0.6; cursor: not-allowed; }
+.enm-b2-tile:disabled { opacity: 0.55; cursor: not-allowed; }
 
-.enm-b2-tile-bootstrap { border-color: var(--primary); }
+/* Bootstrap (Recommended) variant — accent border to flag it as the
+   recommended path. The badge below also points to this tile. */
+.enm-b2-tile-bootstrap {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+}
 
 .enm-b2-tile-badge {
     position: absolute;
-    top: 10px;
-    right: 10px;
+    top: var(--sp-3);
+    right: var(--sp-3);
     padding: 2px 8px;
-    background: var(--primary);
-    color: white;
-    border-radius: var(--radius-pill);
+    background: var(--accent);
+    color: #08090c;
+    border-radius: var(--r-xs);
     font-size: 10px;
-    font-weight: var(--font-weight-semibold);
+    font-weight: var(--fw-semibold);
     text-transform: uppercase;
-    letter-spacing: 0.06em;
+    letter-spacing: 0.04em;
 }
 
 .enm-b2-tile-title {
-    font-size: 17px;
-    font-weight: var(--font-weight-semibold);
+    font-size: var(--fs-h2);
+    font-weight: var(--fw-semibold);
     color: var(--text-primary);
     letter-spacing: -0.01em;
 }
 .enm-b2-tile-sub {
-    font-size: 13px;
+    font-size: var(--fs-body);
     color: var(--text-secondary);
-    line-height: 1.45;
+    line-height: 1.55;
 }
 .enm-b2-tile-meta {
-    font-size: 11px;
-    font-weight: var(--font-weight-medium);
-    color: var(--text-muted);
-    margin-top: var(--spacing-xs);
+    font-size: var(--fs-caption);
+    font-weight: var(--fw-regular);
+    color: var(--text-tertiary);
+    margin-top: var(--sp-2);
+    padding: var(--sp-2) 0 0 0;
+    border-top: 1px dashed var(--border-subtle);
     font-variant-numeric: tabular-nums;
+    font-family: var(--font-mono);
 }
 
 @media (max-width: 480px) {
     .enm-b2-tiles { grid-template-columns: 1fr; }
 }
 
-/* ---- Card B: install ---- */
+/* ---- Card B: install (Phase 6d v2 progress + illustration) ----
+   The illustration switches from --primary (legacy alias) to --accent.
+   The progress bar rules below were dropped in alpha.28.1 batch 29 as
+   "legacy wizard CSS" but setup-conversation.js (line 314-328) still
+   emits the markup. Restored here using v2 tokens so the install card
+   shows a real progress bar again. */
 .enm-install-illust {
     width: 96px;
     height: 96px;
-    color: var(--primary);
-    margin-bottom: var(--spacing-sm);
+    color: var(--accent);
+    margin-bottom: var(--sp-2);
 }
 
-/* Reuse .enm-install-progress / .enm-install-bar / .enm-install-bar-wrap from
-   the technical wizard CSS — they still match. We just ensure the bar wrap
-   is full-width inside the conversation body. */
-.enm-conv-body .enm-install-progress {
+.enm-install-progress {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-2);
     width: 100%;
-    max-width: 440px;
+}
+.enm-conv-body .enm-install-progress {
+    /* Inside the wizard card, cap the progress to a comfortable reading
+       width even at wide windows. 440px matches the alpha.24-validated
+       wizard-card-internal measure. */
+    max-width: 480px;
+    margin: 0 auto;
 }
 
-/* ---- Card C: password reveal ---- */
+.enm-install-bar-wrap {
+    height: 6px;
+    background: var(--bg-elevated);
+    border-radius: var(--r-pill);
+    overflow: hidden;
+}
+.enm-install-bar {
+    height: 100%;
+    width: 0;
+    background: linear-gradient(90deg, var(--accent), var(--accent-2));
+    border-radius: var(--r-pill);
+    transition: width var(--motion-slow) var(--ease-out);
+}
+.enm-install-status {
+    font-size: var(--fs-caption);
+    color: var(--text-tertiary);
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+}
+
+/* ---- Card C: password reveal (Phase 6d v2 mono-display) ----
+   Was a dashed-bordered card with a 15px mono value + copy button on
+   the right. v2 treatment: solid bg-terminal card, monospace value as
+   the dominant element, copy-affordance kept inline. */
 .enm-password-reveal {
     display: flex;
     align-items: center;
-    gap: var(--spacing-sm);
-    padding: var(--spacing-md);
-    background: var(--bg-muted);
-    border: 1px dashed var(--border-strong);
-    border-radius: var(--radius-md);
+    gap: var(--sp-3);
+    padding: var(--sp-3) var(--sp-4);
+    background: var(--bg-terminal);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-md);
     width: 100%;
-    max-width: 440px;
-    margin: var(--spacing-sm) 0;
+    max-width: 480px;
+    margin: var(--sp-2) auto;
 }
 
 .enm-password-value {
     flex: 1 1 auto;
-    font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace;
-    font-size: 15px;
-    font-weight: 500;
+    font-family: var(--font-mono);
+    font-size: var(--fs-body);
+    font-weight: var(--fw-medium);
     color: var(--text-primary);
     text-align: left;
     word-break: break-all;
@@ -4372,15 +4411,18 @@ select.enm-settings-input {
 .enm-password-copy[data-copied="1"] {
     background: var(--success);
     border-color: transparent;
-    color: white;
+    color: var(--bg-page);
 }
 
-/* ---- Card D: celebration ---- */
+/* ---- Card D: celebration (Phase 6d v2 accent illustration) ----
+   Animation kept (Round-7 motion audit confirmed the pop-in respects
+   prefers-reduced-motion). Colour shifted from --primary to --accent
+   for v2 vocabulary; visual result identical (alias resolution). */
 .enm-celebration-illust {
     width: 120px;
     height: 120px;
-    color: var(--primary);
-    margin-bottom: var(--spacing-sm);
+    color: var(--accent);
+    margin-bottom: var(--sp-2);
 }
 
 @keyframes enm-celebrate-pop {
