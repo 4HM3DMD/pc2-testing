@@ -260,11 +260,28 @@
             // dependency-injection-friendly path that mirrors the
             // notifications service).
             announcer:     root.enmAnnouncer || null,
+            // alpha.29 batch 98 — offline + recovery banner. Subscribes
+            // to navigator online/offline events; renders a banner
+            // while offline; calls our refresh callback on recovery.
+            onlineWatcher: root.enmOnlineWatcher || null,
         };
         // mount the announcer's hidden live regions onto document.body
         // now that body is present (this.els was populated above).
         if (this.services.announcer && typeof this.services.announcer.mount === 'function') {
             try { this.services.announcer.mount(); } catch (_) { /* ignore */ }
+        }
+        // mount the online watcher with our recovery refresh callback.
+        // On reconnect we re-run init() — the same path the error-pane
+        // Retry button uses (batch 57) — so the dashboard re-fetches
+        // /health, /setup/state, and re-subscribes SSE topics.
+        if (this.services.onlineWatcher && typeof this.services.onlineWatcher.mount === 'function') {
+            var appSelf = this;
+            try {
+                this.services.onlineWatcher.mount({
+                    onRetry: function () { appSelf.init(); },
+                    announcer: this.services.announcer,
+                });
+            } catch (_) { /* ignore */ }
         }
         // 0.2.0-alpha.2 — heightSeries needs api + sse refs at construction
         // time. They're only bound after the services literal evaluates,

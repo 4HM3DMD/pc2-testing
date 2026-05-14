@@ -179,6 +179,11 @@
          and services can call window.enmAnnouncer.polite('Saved')
          instead of rendering their own role=status region. -->
     <script defer src="js/services/announcer.js?ts=20260514a"></script>
+    <!-- alpha.29 batch 98 — offline + recovery banner. Subscribes to
+         navigator online/offline events, renders a persistent banner
+         while offline with a Retry affordance, and announces recovery
+         via the announcer above. -->
+    <script defer src="js/services/online-watcher.js?ts=20260514a"></script>
     <script defer src="js/services/fleet-health-gradient.js?ts=20260512a"></script>
     <script defer src="js/services/height-series.js?ts=20260512a"></script>
     <script defer src="js/components/system-status.js?ts=20260511f"></script>

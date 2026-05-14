@@ -5066,3 +5066,30 @@ body[data-app-size="narrow"] .enm-conv-actions .enm-btn {
         box-shadow: none !important;
     }
 }
+
+/* alpha.29 batch 98 — EnmOnlineWatcher offline banner. Persistent
+   bar above the app shell while navigator.onLine is false. Uses
+   --warning-* design tokens so light/dark theme inherits cleanly. */
+.enm-online-banner {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 10px 16px;
+    background: var(--warning-bg, #fff3cd);
+    color: var(--warning-fg, #856404);
+    border-bottom: 1px solid var(--warning-border, #ffeeba);
+    font-size: 14px;
+    z-index: 9000; /* above the app shell, below modals */
+}
+.enm-online-banner[hidden] {
+    display: none;
+}
+.enm-online-banner-msg {
+    flex: 1 1 auto;
+    text-align: center;
+}
+.enm-online-banner-retry {
+    flex: 0 0 auto;
+}
