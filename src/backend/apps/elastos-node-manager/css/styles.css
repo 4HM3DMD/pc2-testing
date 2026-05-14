@@ -427,94 +427,139 @@ body[data-active-tab="identity"]::before {
    app title above this row.
    ============================================================ */
 
+/* alpha.29 v2 brand reset · Phase 2 — topbar/chrome.
+   Reference: enm-design-mocks/v2/phase-02-chrome.html.
+
+   The header-bar IS the v2 .topbar — same content, same role, same
+   layout, just restyled in place. Class names preserved so every JS
+   binding (#enm-tabs, .enm-tab[data-tab], #enm-theme-toggle's slot)
+   keeps working. */
 .enm-header-bar {
+    position: relative;
+    z-index: 2;
     display: flex;
     align-items: center;
-    gap: var(--spacing-md);
-    padding: 0 var(--spacing-md);
-    height: var(--header-bar-height);
-    background: var(--bg-surface);
-    /* alpha.8 — subtle lift like a macOS Finder toolbar instead of a
-       plain border-bottom. The shadow is still cheap (1px y, 5% alpha)
-       but it visually anchors the chrome above the page. */
-    border-bottom: 1px solid var(--border-color);
-    box-shadow: var(--shadow-sm);
+    gap: var(--sp-5);
+    padding: 0 var(--sp-5);
+    height: var(--header-bar-height);   /* 52px from Phase 1 tokens */
+    /* v2: subtle gradient + backdrop blur to lift the chrome off the
+       page-wash without a hard line. The translucent bottom band lets
+       the wash bleed through 40% strength below the topbar. */
+    background: linear-gradient(180deg, var(--bg-page), rgba(8, 9, 12, 0.6));
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-bottom: 1px solid var(--border-subtle);
     flex-shrink: 0;
     min-width: 0;
-    z-index: 1;
+}
+
+/* Brand group — sits left of the tabs. Cyan gradient square + bold name
+   + small BETA pill. The mark is a pure CSS gradient with a soft glow
+   — no image asset needed. */
+.enm-brand {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    flex: 0 0 auto;
+}
+.enm-brand-mark {
+    width: 18px;
+    height: 18px;
+    border-radius: var(--r-xs);
+    background: var(--accent-gradient);
+    box-shadow: 0 0 12px var(--accent-soft);
+    flex: 0 0 auto;
+}
+.enm-brand-name {
+    font-size: var(--fs-body);
+    font-weight: var(--fw-semibold);
+    letter-spacing: -0.01em;
+    color: var(--text-primary);
+    white-space: nowrap;
+}
+.enm-brand-env {
+    margin-left: var(--sp-2);
+    padding: 2px 7px;
+    background: var(--bg-tint);
+    color: var(--accent);
+    border-radius: var(--r-xs);
+    font-size: 10px;
+    font-weight: var(--fw-semibold);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    flex: 0 0 auto;
 }
 
 .enm-header-tabs {
     display: flex;
     align-items: center;
-    gap: var(--spacing-xs);
+    gap: var(--sp-1);
+    flex: 1;
+    min-width: 0;
     overflow-x: auto;
     scrollbar-width: none;
-    min-width: 0;
 }
 
 .enm-header-tabs::-webkit-scrollbar { display: none; }
 
+/* Spacer kept for back-compat with existing layout — v2 puts flex:1 on
+   .enm-header-tabs so the spacer is now decorative (zero size). */
 .enm-header-spacer {
-    flex: 1;
-    min-width: var(--spacing-sm);
+    flex: 0;
+    min-width: 0;
 }
 
 .enm-header-actions {
     display: flex;
     align-items: center;
-    gap: var(--spacing-sm);
+    gap: var(--sp-1);
     flex-shrink: 0;
 }
 
-/* Tab — alpha.8: macOS-toolbar feel with an underline indicator instead
-   of the iOS-style filled pill. The underline is a 2px ::after pinned
-   to the bottom of the tab so it visually anchors to the header-bar
-   border. Hover gets a colour shift only — no background fill — keeping
-   the strip calm even with five tabs lit on hover. */
+/* Tab — v2 spec: padding 18px sp-3 16px, font-medium tertiary, hover
+   lifts to secondary, active becomes cyan with a 2px cyan underline
+   pinned to the bottom edge of the header-bar (border-bottom). */
 .enm-tab {
     position: relative;
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    padding: 6px 12px;
+    padding: 18px var(--sp-3) 16px;
     font: inherit;
-    font-size: 13px;
-    font-weight: var(--font-weight-medium);
-    color: var(--text-secondary);
+    font-size: var(--fs-body);
+    font-weight: var(--fw-medium);
+    color: var(--text-tertiary);
     background: transparent;
     border: none;
-    border-radius: var(--radius-sm);
+    border-radius: 0;       /* underline indicator owns the highlight */
     cursor: pointer;
-    transition: color var(--motion-fast) var(--ease-spring);
+    transition: color 0.15s;
     white-space: nowrap;
-    flex-shrink: 0;
+    flex: 0 0 auto;
 }
 
 .enm-tab::after {
     content: '';
     position: absolute;
-    /* Sit on the header-bar's border-bottom so the indicator looks
-       continuous with the chrome edge. -1px lifts it 1px below the
-       button bottom, exactly on the divider line. */
-    left: 8px;
-    right: 8px;
-    bottom: -11px;
+    left: var(--sp-3);
+    right: var(--sp-3);
+    bottom: -1px;         /* sit on the header-bar's border-bottom */
     height: 2px;
     border-radius: 2px 2px 0 0;
-    background: var(--primary);
+    background: var(--accent);
     transform: scaleX(0);
     transform-origin: center;
     transition: transform var(--motion-base) var(--ease-spring);
 }
 
 .enm-tab:hover {
-    color: var(--primary);
+    color: var(--text-secondary);
 }
 
 .enm-tab.active,
 .enm-tab[aria-selected="true"] {
-    color: var(--primary);
+    color: var(--accent);
+    font-weight: var(--fw-semibold);
 }
 
 .enm-tab.active::after,
@@ -527,9 +572,9 @@ body[data-active-tab="identity"]::before {
     box-shadow: var(--focus-ring);
 }
 
-/* Icon-only header button — alpha.8: bg-muted instead of bg-page so the
-   gear visually groups with the header chrome instead of floating against
-   the page background. */
+/* Icon-button — v2 spec: 32×32, no border, transparent rest, soft
+   bg-elevated on hover. The previous border + bg-muted feel is gone;
+   the icon-button now sits flush in the topbar. */
 .enm-icon-btn {
     display: inline-flex;
     align-items: center;
@@ -537,20 +582,17 @@ body[data-active-tab="identity"]::before {
     width: 32px;
     height: 32px;
     padding: 0;
-    background: var(--bg-muted);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
+    background: transparent;
+    border: none;
+    border-radius: var(--r-sm);
     color: var(--text-secondary);
     cursor: pointer;
-    transition: color var(--motion-fast) var(--ease-spring),
-                border-color var(--motion-fast) var(--ease-spring),
-                background var(--motion-fast) var(--ease-spring);
+    transition: color 0.15s, background 0.15s;
 }
 
 .enm-icon-btn:hover {
-    color: var(--primary);
-    border-color: var(--primary);
-    background: var(--bg-surface);
+    color: var(--text-primary);
+    background: var(--bg-elevated);
 }
 
 .enm-icon-btn:focus-visible {
@@ -559,8 +601,8 @@ body[data-active-tab="identity"]::before {
 }
 
 .enm-icon-btn svg {
-    width: 16px;
-    height: 16px;
+    width: 18px;
+    height: 18px;
 }
 
 /* Theme toggle (#enm-theme-toggle + .enm-icon-sun / .enm-icon-moon)
@@ -4560,15 +4602,36 @@ body[data-app-size="medium"] .enm-tech-tabs {
     row-gap: 6px;
 }
 body[data-app-size="narrow"] .enm-tab {
-    padding: 5px 9px;
-    font-size: 12px;
+    /* v2 narrow spec: tighter horizontal padding + smaller font, but the
+       18px top/14px bottom keeps the 48px header-bar touch target. */
+    padding: 16px var(--sp-2) 14px;
+    font-size: var(--fs-caption);
     /* WCAG 2.5.5 AA-22 floor — iframe-aware narrow mode is the most
        likely touch context, so we anchor the tab strip at 28px rather
        than let inherited line-height squeeze it to ~20px. */
     min-height: 28px;
 }
+body[data-app-size="narrow"] .enm-tab::after {
+    left: var(--sp-2);
+    right: var(--sp-2);
+}
 body[data-app-size="narrow"] .enm-tab-pill {
     display: none;
+}
+/* alpha.29 v2 Phase 2 — brand chrome at narrow widths.
+   header-bar tightens to 48px height + smaller padding/gap; the
+   brand-name hides so the tab row keeps room. The mark + BETA pill
+   stay visible to anchor the operator. */
+body[data-app-size="narrow"] .enm-header-bar {
+    padding: 0 var(--sp-4);
+    gap: var(--sp-3);
+    height: 48px;
+}
+body[data-app-size="narrow"] .enm-brand-name {
+    display: none;
+}
+body[data-app-size="narrow"] .enm-brand-env {
+    margin-left: 0;
 }
 
 /* alpha.26 — Settings narrow-mode REDESIGN.

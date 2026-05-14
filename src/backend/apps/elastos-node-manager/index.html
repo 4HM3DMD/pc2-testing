@@ -10,7 +10,7 @@
     <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
     <meta name="referrer" content="no-referrer">
     <title>Elastos Node Manager</title>
-    <link rel="stylesheet" href="css/styles.css?ts=20260514d">
+    <link rel="stylesheet" href="css/styles.css?ts=20260514e">
     <script>
         // alpha.29 v2 brand reset — dark only. The :root in styles.css
         // now carries the v2 dark-canvas + cyan-accent token set, and
@@ -89,6 +89,15 @@
              manager already provides the app title via window-head — no
              need to re-render it here. -->
         <nav class="enm-header-bar" id="enm-tabs" role="tablist" aria-label="Sections" hidden>
+            <!-- alpha.29 v2 Phase 2 — brand group: gradient mark + name + BETA pill.
+                 Sits left of the tabs. The brand-name hides at narrow widths so
+                 the tabs row keeps room; the env pill stays visible to anchor
+                 the operator's mental model of "this is the test build". -->
+            <div class="enm-brand">
+                <span class="enm-brand-mark" aria-hidden="true"></span>
+                <span class="enm-brand-name">Elastos Node Manager</span>
+                <span class="enm-brand-env">BETA</span>
+            </div>
             <div class="enm-header-tabs">
                 <button type="button" class="enm-tab active" role="tab" id="enm-tab-dashboard" data-tab="dashboard" aria-selected="true"  aria-controls="enm-pane-dashboard" tabindex="0">Dashboard</button>
                 <button type="button" class="enm-tab"        role="tab" id="enm-tab-logs"      data-tab="logs"      aria-selected="false" aria-controls="enm-pane-logs"      tabindex="-1">Logs</button>
