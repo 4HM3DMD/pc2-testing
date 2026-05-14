@@ -197,7 +197,21 @@
     <script defer src="js/components/welcome-screen.js?ts=20260506g"></script>
     <script defer src="js/components/setup-conversation.js?ts=20260511c"></script>
     <script defer src="js/components/settings-tab.js?ts=20260511g"></script>
-    <script defer src="js/components/audit-tab.js?ts=20260506g"></script>
+    <!-- alpha.29 batch 103 — audit-tab.js was dropped from the eager
+         script chain. ~378 LOC + dependencies are lazy-loaded via
+         root.enmLoadScript('js/components/audit-tab.js?ts=...') the
+         first time the operator activates the Audit tab. See the
+         audit branch in technical-view.js's _activateTab. Pattern
+         prototype for Round-33 ROI #4 (other tab-specific scripts
+         can be migrated incrementally). -->
+    <!-- <script defer src="js/components/audit-tab.js?ts=20260506g"></script> -->
+    <script>
+      // Expose the audit-tab src so technical-view can pass it to
+      // enmLoadScript. Single source of truth for the path + cache-
+      // bust token; matches the existing ?ts= pattern.
+      window.ENM_LAZY_SCRIPTS = window.ENM_LAZY_SCRIPTS || {};
+      window.ENM_LAZY_SCRIPTS.auditTab = 'js/components/audit-tab.js?ts=20260514a';
+    </script>
     <script defer src="js/components/evm-tab.js?ts=20260506g"></script>
     <script defer src="js/components/settings-drawer.js?ts=20260506g"></script>
     <script defer src="js/components/tools-update-card.js?ts=20260512c"></script>

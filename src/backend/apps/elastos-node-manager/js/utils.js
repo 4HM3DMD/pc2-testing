@@ -474,6 +474,50 @@
         return btn;
     }
 
+    /**
+     * Lazy-load a script by URL exactly once. Returns a promise that
+     * resolves when the script has loaded (or already loaded) and
+     * rejects on network/parse failure.
+     *
+     * alpha.29 batch 103. Round-33 architectural triage item #4
+     * recommended deferring tab-specific JS (audit-tab 378 lines,
+     * evm-tab 72, technical-view 680, settings-tab 1554, settings-
+     * drawer 418 = ~3100 LOC, ~25% of the initial parse budget) until
+     * the operator actually opens the tab. Helper-level caching keeps
+     * a singleton promise per URL so concurrent tab activations don't
+     * race two <script> tags into the DOM.
+     *
+     * @param {string} src  URL of the script to load (including any
+     *                      ?ts= cache-bust query)
+     * @returns {Promise<void>}
+     */
+    function loadScript(src) {
+        if (!loadScript._cache) { loadScript._cache = new Map(); }
+        if (loadScript._cache.has(src)) {
+            return loadScript._cache.get(src);
+        }
+        var p = new Promise(function (resolve, reject) {
+            // Defensive: a same-src script already in the DOM (e.g.
+            // index.html ships it eagerly, or a previous resolved
+            // load) — treat as resolved.
+            var existing = document.querySelector('script[src="' + src + '"]');
+            if (existing) {
+                resolve();
+                return;
+            }
+            var s = document.createElement('script');
+            s.src = src;
+            s.async = false; // preserve load order if multiple are batched
+            s.onload = function () { resolve(); };
+            s.onerror = function () {
+                reject(new Error('Failed to load ' + src));
+            };
+            document.head.appendChild(s);
+        });
+        loadScript._cache.set(src, p);
+        return p;
+    }
+
     root.enmTOrFallback = enmTOrFallback;
     root.enmPad2 = pad2;
     root.enmFormatUptime = formatUptime;
@@ -486,4 +530,5 @@
     root.enmUseVisibilityPause = useVisibilityPause;
     root.enmCopyToClipboard = copyToClipboard;
     root.enmCopyButton = copyButton;
+    root.enmLoadScript = loadScript;
 }(typeof window !== 'undefined' ? window : globalThis));

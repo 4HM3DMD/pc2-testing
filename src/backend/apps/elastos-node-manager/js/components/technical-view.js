@@ -405,10 +405,47 @@
                 this._mounted[tabId] = settings;
             }
         } else if (tabId === 'audit') {
+            // alpha.29 batch 103 — audit-tab.js is now lazy-loaded.
+            // The operator pays the parse cost only on first
+            // activation; subsequent activations resolve from the
+            // enmLoadScript cache (singleton promise per URL).
+            var auditSelf = this;
+            var auditCommon = common;
+            var lazySrcs = root.ENM_LAZY_SCRIPTS || {};
+            var auditSrc = lazySrcs.auditTab;
+            // Render an inline loading state while the script downloads
+            // so the pane isn't blank for the slow-network operator.
+            pane.innerHTML = '<p class="enm-stub">'
+                + (root.enmTOrFallback('common.loading') || 'Loading…')
+                + '</p>';
+            var mountAudit = function () {
+                if (auditSelf._destroyed) { return; }
+                if (root.EnmAuditTab) {
+                    pane.innerHTML = '';
+                    var audit = new root.EnmAuditTab(auditCommon);
+                    audit.mount(pane);
+                    auditSelf._mounted[tabId] = audit;
+                } else {
+                    pane.innerHTML = '<p class="enm-stub">'
+                        + 'Audit tab failed to load. Try refreshing the page.'
+                        + '</p>';
+                }
+            };
             if (root.EnmAuditTab) {
-                var audit = new root.EnmAuditTab(common);
-                audit.mount(pane);
-                this._mounted[tabId] = audit;
+                // Already loaded (e.g. cached promise resolved on a
+                // previous activation) — mount synchronously.
+                mountAudit();
+            } else if (auditSrc && typeof root.enmLoadScript === 'function') {
+                root.enmLoadScript(auditSrc).then(mountAudit).catch(function () {
+                    if (auditSelf._destroyed) { return; }
+                    pane.innerHTML = '<p class="enm-stub">'
+                        + 'Audit tab failed to load. Check your network and refresh.'
+                        + '</p>';
+                });
+            } else {
+                // No lazy-loader available — bail with a stub so the
+                // operator gets a signal rather than a silent blank.
+                pane.innerHTML = '<p class="enm-stub">Audit tab unavailable.</p>';
             }
         } else if (tabId === 'evm') {
             if (root.EnmEvmTab) {
