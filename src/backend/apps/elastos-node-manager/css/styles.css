@@ -551,7 +551,7 @@ body[data-active-tab="identity"]::before {
     border: none;
     border-radius: 0;       /* underline indicator owns the highlight */
     cursor: pointer;
-    transition: color var(--motion-fast);
+    transition: color var(--motion-fast) var(--ease-out);
     white-space: nowrap;
     flex: 0 0 auto;
 }
@@ -605,7 +605,8 @@ body[data-active-tab="identity"]::before {
     border-radius: var(--r-sm);
     color: var(--text-secondary);
     cursor: pointer;
-    transition: color var(--motion-fast), background var(--motion-fast);
+    transition: color var(--motion-fast) var(--ease-out),
+                background var(--motion-fast) var(--ease-out);
 }
 
 .enm-icon-btn:hover {
@@ -1648,7 +1649,9 @@ body[data-active-tab="identity"]::before {
     cursor: pointer;
     user-select: none;
     white-space: nowrap;
-    transition: background var(--motion-fast), border-color var(--motion-fast), color var(--motion-fast);
+    transition: background var(--motion-fast) var(--ease-out),
+                border-color var(--motion-fast) var(--ease-out),
+                color var(--motion-fast) var(--ease-out);
 }
 
 .enm-btn:hover:not(:disabled) {
@@ -1816,7 +1819,9 @@ body[data-active-tab="identity"]::before {
     cursor: pointer;
     text-align: left;
     border-radius: var(--r-sm);
-    transition: background var(--motion-fast), color var(--motion-fast), border-color var(--motion-fast);
+    transition: background var(--motion-fast) var(--ease-out),
+                color var(--motion-fast) var(--ease-out),
+                border-color var(--motion-fast) var(--ease-out);
 }
 
 .enm-settings-nav-item:hover {
@@ -1980,7 +1985,8 @@ body[data-active-tab="identity"]::before {
     color: var(--text-primary);
     font: inherit;
     font-size: var(--fs-body);
-    transition: border-color var(--motion-fast), box-shadow var(--motion-fast);
+    transition: border-color var(--motion-fast) var(--ease-out),
+                box-shadow var(--motion-fast) var(--ease-out);
 }
 
 .enm-settings-input:focus {
@@ -2643,7 +2649,8 @@ select.enm-settings-input {
     color: var(--text-primary);
     font: inherit;
     font-size: var(--fs-caption);
-    transition: border-color var(--motion-fast), box-shadow var(--motion-fast);
+    transition: border-color var(--motion-fast) var(--ease-out),
+                box-shadow var(--motion-fast) var(--ease-out);
 }
 
 .enm-audit-input:focus {
@@ -2667,7 +2674,9 @@ select.enm-settings-input {
     color: var(--text-secondary);
     font-weight: var(--fw-medium);
     white-space: nowrap;
-    transition: background var(--motion-fast), color var(--motion-fast), border-color var(--motion-fast);
+    transition: background var(--motion-fast) var(--ease-out),
+                color var(--motion-fast) var(--ease-out),
+                border-color var(--motion-fast) var(--ease-out);
 }
 .enm-audit-filter-chip:hover {
     background: var(--bg-overlay);
@@ -2740,7 +2749,7 @@ select.enm-settings-input {
 }
 
 .enm-audit-table tbody tr {
-    transition: background var(--motion-fast);
+    transition: background var(--motion-fast) var(--ease-out);
     cursor: pointer;
 }
 
@@ -2907,7 +2916,9 @@ select.enm-settings-input {
     font-weight: var(--fw-semibold);
     color: var(--text-secondary);
     cursor: pointer;
-    transition: background var(--motion-fast), border-color var(--motion-fast), color var(--motion-fast);
+    transition: background var(--motion-fast) var(--ease-out),
+                border-color var(--motion-fast) var(--ease-out),
+                color var(--motion-fast) var(--ease-out);
     flex-shrink: 0;
 }
 
@@ -4722,7 +4733,8 @@ select.enm-settings-input {
     line-height: 1;
     cursor: pointer;
     border-radius: var(--r-sm);
-    transition: background var(--motion-fast), color var(--motion-fast);
+    transition: background var(--motion-fast) var(--ease-out),
+                color var(--motion-fast) var(--ease-out);
 }
 .enm-drawer-close:hover { background: var(--bg-elevated); color: var(--text-primary); }
 .enm-drawer-close:focus-visible { outline: none; box-shadow: var(--focus-ring); }
@@ -4765,7 +4777,7 @@ select.enm-settings-input {
     padding: var(--sp-3) var(--sp-5);
     cursor: pointer;
     user-select: none;
-    transition: background var(--motion-fast);
+    transition: background var(--motion-fast) var(--ease-out);
     background: transparent;
     border: none;
     border-radius: 0;
@@ -4824,7 +4836,8 @@ select.enm-settings-input {
     background: var(--bg-elevated);
     border: 1px solid var(--border);
     border-radius: var(--r-pill);
-    transition: background 0.18s, border-color 0.18s;
+    transition: background 0.18s var(--ease-out),
+                border-color 0.18s var(--ease-out);
 }
 .enm-drawer-toggle-track::after {
     content: '';
@@ -4835,7 +4848,8 @@ select.enm-settings-input {
     height: 14px;
     background: var(--text-secondary);
     border-radius: 50%;
-    transition: transform 0.18s, background 0.18s;
+    transition: transform 0.18s var(--ease-out),
+                background 0.18s var(--ease-out);
 }
 .enm-drawer-toggle input:checked ~ .enm-drawer-toggle-track {
     background: var(--accent);
