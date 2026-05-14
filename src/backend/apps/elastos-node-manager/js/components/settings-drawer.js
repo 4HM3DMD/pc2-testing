@@ -165,6 +165,20 @@
             if (focusables.length === 0) { return; }
             var firstEl = focusables[0];
             var lastEl  = focusables[focusables.length - 1];
+            // alpha.29 batch 95 (Round-32 audit finding #3, LOW) — if
+            // activeElement was pushed OUT of the drawer between open
+            // and the Tab keypress (an extension/AT moved focus, an
+            // unusual click sequence, or a programmatic blur), neither
+            // firstEl nor lastEl matches activeElement and the trap
+            // falls through. Tab then proceeds to the natural next
+            // tabbable in document order, escaping the drawer entirely
+            // — the WCAG 2.4.3 violation the trap was supposed to
+            // prevent. Pull focus back BEFORE the wrap-around logic.
+            if (!self.root.contains(document.activeElement)) {
+                ev.preventDefault();
+                firstEl.focus();
+                return;
+            }
             if (ev.shiftKey && document.activeElement === firstEl) {
                 ev.preventDefault();
                 lastEl.focus();

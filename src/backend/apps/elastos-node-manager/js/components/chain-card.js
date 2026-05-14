@@ -367,10 +367,22 @@
     ChainCard.prototype._pulseActionRow = function () {
         var row = this.root.querySelector('.enm-chain-actions');
         if (!row) return;
+        // alpha.29 batch 108 (Round-34 perf finding #2, MED) — replace
+        // the forced-layout `row.offsetWidth` reflow trick with a
+        // requestAnimationFrame defer. Same effect (re-apply the class
+        // after the browser has registered the remove) without the
+        // synchronous style/layout flush. The previous trick worked
+        // but caused a measurable ~1-2ms layout flush on every
+        // operator click, compounding on multi-chain dashboards where
+        // pulses can overlap.
         row.classList.remove('enm-chain-actions-pulse');
-        // eslint-disable-next-line no-unused-expressions
-        row.offsetWidth;
-        row.classList.add('enm-chain-actions-pulse');
+        if (typeof requestAnimationFrame === 'function') {
+            requestAnimationFrame(function () {
+                row.classList.add('enm-chain-actions-pulse');
+            });
+        } else {
+            row.classList.add('enm-chain-actions-pulse');
+        }
         setTimeout(function () {
             row.classList.remove('enm-chain-actions-pulse');
         }, 700);

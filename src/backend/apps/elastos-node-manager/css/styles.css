@@ -5066,3 +5066,64 @@ body[data-app-size="narrow"] .enm-conv-actions .enm-btn {
         box-shadow: none !important;
     }
 }
+
+/* alpha.29 batch 98 — EnmOnlineWatcher offline banner. Persistent
+   bar above the app shell while navigator.onLine is false. Uses
+   --warning-* design tokens so light/dark theme inherits cleanly. */
+.enm-online-banner {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 10px 16px;
+    background: var(--warning-bg, #fff3cd);
+    color: var(--warning-fg, #856404);
+    border-bottom: 1px solid var(--warning-border, #ffeeba);
+    font-size: 14px;
+    /* alpha.29 batch 113 (Round-37 finding #2, MED) — token scale
+       (lines 142-149): drawer=100, modal=200, toast=300. The banner
+       sits ABOVE the app shell + tab strip but BELOW all overlays:
+       a critical proposal-card or tools-update modal, the settings
+       drawer, and toasts must all win the z-stack over the persistent
+       banner so the operator's in-flight action isn't obscured.
+       Previously z-index: 9000 sat above EVERY overlay, geometrically
+       obscuring critical dialogs. 50 sits between --z-sticky(5) and
+       --z-drawer(100) — above page content, below every modal. */
+    z-index: 50;
+}
+.enm-online-banner[hidden] {
+    display: none;
+}
+.enm-online-banner-msg {
+    flex: 1 1 auto;
+    text-align: center;
+}
+.enm-online-banner-retry {
+    flex: 0 0 auto;
+}
+
+/* alpha.29 batch 104 (Round-35 finding #1, HIGH) — forced-colors
+   fallback. Windows high-contrast mode strips the --warning-* tokens
+   entirely, leaving an unstyled flex bar that's visually indistinct
+   from the app chrome. CanvasText/Canvas + ButtonText system colors
+   give the banner explicit edges + a visible Retry button. Mirrors
+   the pattern other forced-colors blocks in this file use. */
+@media (forced-colors: active) {
+    .enm-online-banner {
+        background: Canvas;
+        color: CanvasText;
+        border-top: 2px solid CanvasText;
+        border-bottom: 2px solid CanvasText;
+        forced-color-adjust: none;
+    }
+    .enm-online-banner-retry {
+        border: 1px solid ButtonText;
+        color: ButtonText;
+        background: ButtonFace;
+    }
+    .enm-online-banner-retry:focus-visible {
+        outline: 3px solid Highlight !important;
+        outline-offset: 2px;
+    }
+}

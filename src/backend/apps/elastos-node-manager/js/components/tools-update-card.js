@@ -308,7 +308,7 @@
             +   '</pre>'
             +   '<div class="enm-tools-update-modal-actions">'
             +     '<button type="button" class="enm-btn enm-btn-secondary upd-fill-token">' + escapeHtml(t('tools_update.modal_auto_fill_btn')) + '</button>'
-            +     '<button type="button" class="enm-btn enm-btn-primary upd-copy" aria-label="' + escapeAttr(t('tools_update.modal_copy_btn_aria')) + '">' + escapeHtml(t('tools_update.modal_copy_btn')) + '</button>'
+            +     '<span class="upd-copy-slot"></span>'
             +   '</div>'
             +   '<details class="enm-tools-update-modal-notes">'
             +     '<summary>' + escapeHtml(t('tools_update.modal_explainer_label')) + '</summary>'
@@ -395,24 +395,30 @@
             }
         });
 
-        // alpha.28.1 batch 58 — routed through enmCopyToClipboard so the
-        // feature-detect + writeText path is shared with the other four
-        // copy sites. Round-6 clipboard-UX audit a8a932d2.
+        // alpha.29 batch 101 — copy button built via root.enmCopyButton
+        // factory. The value is resolved at click time (a function) so
+        // the operator's token autofill (the `.upd-fill-token` button
+        // handler above) takes effect before we read the command text.
         var modalSelf = self;
-        modal.querySelector('.upd-copy').addEventListener('click', function () {
-            var pre = modal.querySelector('.enm-tools-update-modal-cmd');
-            // Use textContent so the <span> placeholder is included literally.
-            var text = pre ? pre.textContent : '';
-            var copyBtn = modal.querySelector('.upd-copy');
-            root.enmCopyToClipboard(text, {
-                btn: copyBtn,
-                copiedLabel: 'Copied ✓',
-                resetMs: 1400,
-                notifications: modalSelf && modalSelf.notifications,
-                failTitle: 'Copy unavailable',
-                failBody: 'Browser blocked clipboard access. Select the command text and copy manually.',
-            });
+        var copyBtn = root.enmCopyButton({
+            value: function () {
+                var pre = modal.querySelector('.enm-tools-update-modal-cmd');
+                return pre ? pre.textContent : '';
+            },
+            label: t('tools_update.modal_copy_btn'),
+            copiedLabel: 'Copied ✓',
+            ariaLabel: t('tools_update.modal_copy_btn_aria'),
+            resetMs: 1400,
+            notifications: modalSelf && modalSelf.notifications,
+            failTitle: 'Copy unavailable',
+            failBody: 'Browser blocked clipboard access. Select the command text and copy manually.',
         });
+        copyBtn.classList.remove('enm-btn-secondary');
+        copyBtn.classList.add('enm-btn-primary', 'upd-copy');
+        var copySlot = modal.querySelector('.upd-copy-slot');
+        if (copySlot && copySlot.parentNode) {
+            copySlot.parentNode.replaceChild(copyBtn, copySlot);
+        }
     };
 
     /** @private */

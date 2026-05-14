@@ -51,6 +51,13 @@
                 // body doesn't exist yet at this point, so stash on documentElement
                 // and the body version is set in a second script after </body>.
                 document.documentElement.dataset.appSize = size;
+                // alpha.29 batch 112 (Round-34 perf finding #6, LOW) —
+                // stash the resolved width on a global so app.js's
+                // setupResponsiveObserver doesn't have to re-query
+                // window.innerWidth (which forces a layout flush).
+                // Saves ~2-3ms off first paint by collapsing two
+                // layout reads into one.
+                window.__enmInitialWidth = w;
             } catch (e) { /* ignore */ }
         })();
     </script>
@@ -174,6 +181,16 @@
     <script defer src="js/services/api.js?ts=20260506g"></script>
     <script defer src="js/services/sse.js?ts=20260511d"></script>
     <script defer src="js/services/notifications.js?ts=20260506g"></script>
+    <!-- alpha.29 batch 97 — shared screen-reader announcer (single
+         hidden live-region for status + alert priorities). Components
+         and services can call window.enmAnnouncer.polite('Saved')
+         instead of rendering their own role=status region. -->
+    <script defer src="js/services/announcer.js?ts=20260514a"></script>
+    <!-- alpha.29 batch 98 — offline + recovery banner. Subscribes to
+         navigator online/offline events, renders a persistent banner
+         while offline with a Retry affordance, and announces recovery
+         via the announcer above. -->
+    <script defer src="js/services/online-watcher.js?ts=20260514a"></script>
     <script defer src="js/services/fleet-health-gradient.js?ts=20260512a"></script>
     <script defer src="js/services/height-series.js?ts=20260512a"></script>
     <script defer src="js/components/system-status.js?ts=20260511f"></script>
@@ -187,8 +204,29 @@
     <script defer src="js/components/welcome-screen.js?ts=20260506g"></script>
     <script defer src="js/components/setup-conversation.js?ts=20260511c"></script>
     <script defer src="js/components/settings-tab.js?ts=20260511g"></script>
-    <script defer src="js/components/audit-tab.js?ts=20260506g"></script>
-    <script defer src="js/components/evm-tab.js?ts=20260506g"></script>
+    <!-- alpha.29 batch 103 — audit-tab.js was dropped from the eager
+         script chain. ~378 LOC + dependencies are lazy-loaded via
+         root.enmLoadScript('js/components/audit-tab.js?ts=...') the
+         first time the operator activates the Audit tab. See the
+         audit branch in technical-view.js's _activateTab. Pattern
+         prototype for Round-33 ROI #4 (other tab-specific scripts
+         can be migrated incrementally). -->
+    <!-- <script defer src="js/components/audit-tab.js?ts=20260506g"></script> -->
+    <script>
+      // Expose lazy-loaded tab script srcs so technical-view can pass
+      // them to enmLoadScript. Single source of truth for the path +
+      // cache-bust token; matches the existing ?ts= pattern.
+      window.ENM_LAZY_SCRIPTS = window.ENM_LAZY_SCRIPTS || {};
+      window.ENM_LAZY_SCRIPTS.auditTab = 'js/components/audit-tab.js?ts=20260514a';
+      // alpha.29 batch 109 — evm-tab also lazy-loaded. Smaller savings
+      // than audit-tab (~72 vs 378 LOC) but proves the pattern scales
+      // across multiple tabs. Most operators never open the EVM tab
+      // (sidechain features are opt-in), so deferring its parse is a
+      // win on the typical dashboard load.
+      window.ENM_LAZY_SCRIPTS.evmTab = 'js/components/evm-tab.js?ts=20260514a';
+    </script>
+    <!-- evm-tab.js no longer eager-loaded; see ENM_LAZY_SCRIPTS.evmTab -->
+    <!-- <script defer src="js/components/evm-tab.js?ts=20260506g"></script> -->
     <script defer src="js/components/settings-drawer.js?ts=20260506g"></script>
     <script defer src="js/components/tools-update-card.js?ts=20260512c"></script>
     <script defer src="js/components/technical-view.js?ts=20260512f"></script>

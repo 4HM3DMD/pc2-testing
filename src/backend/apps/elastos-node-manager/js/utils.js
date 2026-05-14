@@ -363,13 +363,34 @@
         }
         return navigator.clipboard.writeText(text).then(function () {
             if (btn) {
-                var prev = btn.textContent;
+                // alpha.29 batch 106 — text-swap target can be a child
+                // of the button (e.g. the aria-hidden visible span
+                // enmCopyButton wraps the label in). Default to the
+                // button itself for the existing direct-call sites.
+                var swapEl = o.btnLabelEl || btn;
+                var prev = swapEl.textContent;
                 var copiedLabel = o.copiedLabel || 'Copied!';
                 var resetMs = (typeof o.resetMs === 'number') ? o.resetMs : 1200;
-                btn.textContent = copiedLabel;
+                swapEl.textContent = copiedLabel;
                 btn.dataset.copied = '1';
-                setTimeout(function () {
-                    btn.textContent = prev;
+                // alpha.29 batch 105 (Round-35 finding #3, MED) —
+                // race + lifecycle guards on the reset timer:
+                // (a) back-to-back clicks used to queue two resets; the
+                //     second one would race the first's prev capture
+                //     and could revert to "Copied!" instead of "Copy".
+                //     Track the latest timer on the button so a fresh
+                //     click cancels the prior reset.
+                // (b) If the button's parent re-renders (validator-card,
+                //     setup-conversation both do this on state change)
+                //     the timer fires on a detached node — silent
+                //     wrong-state if a future pooled-DOM strategy
+                //     reuses the node. isConnected guard skips the
+                //     write entirely on detach.
+                if (btn._enmResetTimer) { clearTimeout(btn._enmResetTimer); }
+                btn._enmResetTimer = setTimeout(function () {
+                    btn._enmResetTimer = null;
+                    if (!btn.isConnected) { return; }
+                    swapEl.textContent = prev;
                     delete btn.dataset.copied;
                 }, resetMs);
             }
@@ -386,6 +407,174 @@
         });
     }
 
+    /**
+     * EnmCopyButton — DOM-factory wrapper around enmCopyToClipboard.
+     *
+     * alpha.29 batch 96. Round-33 architectural triage flagged the
+     * recurring boilerplate: every copy site (5 of them today —
+     * producer-identity, settings-tab credValueWithCopy, setup-
+     * conversation password, validator-registration-card, tools-update
+     * modal) hand-builds the button markup with i18n aria-label + wires
+     * its own click handler that calls enmCopyToClipboard. ~10-25 lines
+     * of duplicate plumbing per site. Adding a new copy site (e.g. the
+     * 4 missing sites flagged in audit a8a932d2: chain owner pubkey,
+     * mismatch detail, audit executor cell, peer-summary host:port)
+     * means re-inventing the same pattern again.
+     *
+     * This factory returns a fully-wired <button> ready to be appended.
+     * Caller controls value resolution (a function so the value can be
+     * captured fresh at click time, not snapshot at button-build time —
+     * matters for the keystore-password copy that reads from a
+     * dynamically-updated element). Optional `getDisplayEl` returns the
+     * <code>/<span> whose contents should be range-selected on fallback.
+     *
+     * @param {{
+     *   value: string | function():string,
+     *   label?: string,                  // visible button text (default 'Copy')
+     *   copiedLabel?: string,            // text-swap on success (default 'Copied!')
+     *   ariaLabel?: string,              // explicit aria-label (default 'Copy ' + label)
+     *   resetMs?: number,                // text-swap duration (default 1200)
+     *   className?: string,              // additional CSS classes
+     *   notifications?: object,          // notifications service
+     *   getDisplayEl?: function():Element, // for select-text fallback
+     *   failTitle?: string,              // i18n'd fallback title
+     *   failBody?: string,               // i18n'd fallback body
+     * }} opts
+     * @returns {HTMLButtonElement}
+     */
+    function copyButton(opts) {
+        if (!opts || (opts.value === undefined && typeof opts.value !== 'function')) {
+            throw new TypeError('EnmCopyButton: { value } required');
+        }
+        var label = opts.label || 'Copy';
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'enm-btn enm-btn-secondary' + (opts.className ? ' ' + opts.className : '');
+        // alpha.29 batch 106 (Round-35 finding #5, MED) — wrap the
+        // visible label in aria-hidden=true and put the stable
+        // accessible name on the button. Previous shape used
+        // textContent + aria-label, but a button without explicit
+        // aria-hidden on its visible children gets both announced —
+        // and when textContent swapped to "Copied!" then back to
+        // "Copy", screen readers spoke the cadence "Copy. Copied!
+        // Copy." on every action. Decoupling means the visible swap
+        // is purely cosmetic; AT hears the stable aria-label only,
+        // and the copy success is signaled by the announcer
+        // (or a notifications.info toast) where callers wired it.
+        var visible = document.createElement('span');
+        visible.textContent = label;
+        visible.setAttribute('aria-hidden', 'true');
+        btn.appendChild(visible);
+        btn.setAttribute('aria-label', opts.ariaLabel || ('Copy ' + label.toLowerCase()));
+        btn.addEventListener('click', function () {
+            var resolvedValue = (typeof opts.value === 'function')
+                ? opts.value()
+                : opts.value;
+            if (resolvedValue == null || resolvedValue === '') { return; }
+            root.enmCopyToClipboard(String(resolvedValue), {
+                btn: btn,
+                // batch 106 — swap the inner aria-hidden span's text,
+                // not btn.textContent (which would wipe the span and
+                // re-introduce the noisy SR cadence the wrap fixes).
+                btnLabelEl: visible,
+                copiedLabel: opts.copiedLabel || 'Copied!',
+                resetMs: (typeof opts.resetMs === 'number') ? opts.resetMs : 1200,
+                notifications: opts.notifications || null,
+                failTitle: opts.failTitle,
+                failBody: opts.failBody,
+                onFallback: function () {
+                    // If the caller pointed us at a display element,
+                    // select its contents so Ctrl-C works manually.
+                    if (typeof opts.getDisplayEl === 'function') {
+                        try {
+                            var el = opts.getDisplayEl();
+                            if (el) {
+                                var range = document.createRange();
+                                range.selectNodeContents(el);
+                                var sel = root.getSelection();
+                                sel.removeAllRanges();
+                                sel.addRange(range);
+                            }
+                        } catch (_) { /* manual triple-click is the fallback */ }
+                    }
+                    // Always show the toast on fallback (consistent with
+                    // the validator-card + setup-conversation pattern
+                    // from batches 87 + 88). Callers that don't want
+                    // the toast can pass notifications=null.
+                    if (opts.notifications) {
+                        opts.notifications.warning(
+                            opts.failTitle || 'Copy unavailable',
+                            opts.failBody || 'Browser blocked clipboard access. The value is selected — press Ctrl-C (or ⌘-C on Mac) to copy.'
+                        );
+                    }
+                },
+            });
+        });
+        return btn;
+    }
+
+    /**
+     * Lazy-load a script by URL exactly once. Returns a promise that
+     * resolves when the script has loaded (or already loaded) and
+     * rejects on network/parse failure.
+     *
+     * alpha.29 batch 103. Round-33 architectural triage item #4
+     * recommended deferring tab-specific JS (audit-tab 378 lines,
+     * evm-tab 72, technical-view 680, settings-tab 1554, settings-
+     * drawer 418 = ~3100 LOC, ~25% of the initial parse budget) until
+     * the operator actually opens the tab. Helper-level caching keeps
+     * a singleton promise per URL so concurrent tab activations don't
+     * race two <script> tags into the DOM.
+     *
+     * @param {string} src  URL of the script to load (including any
+     *                      ?ts= cache-bust query)
+     * @returns {Promise<void>}
+     */
+    function loadScript(src) {
+        if (!loadScript._cache) { loadScript._cache = new Map(); }
+        if (loadScript._cache.has(src)) {
+            return loadScript._cache.get(src);
+        }
+        var p = new Promise(function (resolve, reject) {
+            // Defensive: a same-src script already in the DOM (e.g.
+            // index.html ships it eagerly, or a previous resolved
+            // load) — treat as resolved.
+            var existing = document.querySelector('script[src="' + src + '"]');
+            if (existing) {
+                resolve();
+                return;
+            }
+            var s = document.createElement('script');
+            s.src = src;
+            s.async = false; // preserve load order if multiple are batched
+            s.onload = function () { resolve(); };
+            s.onerror = function () {
+                reject(new Error('Failed to load ' + src));
+            };
+            document.head.appendChild(s);
+        });
+        // alpha.29 batch 113 (Round-37 finding #1, HIGH) — evict
+        // rejected promises from the cache so a transient load
+        // failure (offline, slow network, 5xx) doesn't permanently
+        // poison the lazy-load path for that script. Previous shape
+        // cached the rejection forever: operator opens Audit while
+        // wifi is flaky → script fails → cached rejection → every
+        // subsequent re-open hits the cache and gets the same
+        // "failed to load, refresh" stub, even after wifi recovers.
+        // The exact scenario EnmOnlineWatcher exists to handle.
+        // Chain a .catch that deletes the cache entry then re-throws
+        // so awaiting callers still see the rejection on this attempt
+        // but the NEXT call retries the network.
+        var cached = p.catch(function (err) {
+            if (loadScript._cache.get(src) === cached) {
+                loadScript._cache.delete(src);
+            }
+            throw err;
+        });
+        loadScript._cache.set(src, cached);
+        return cached;
+    }
+
     root.enmTOrFallback = enmTOrFallback;
     root.enmPad2 = pad2;
     root.enmFormatUptime = formatUptime;
@@ -397,4 +586,6 @@
     root.enmRunOnce = runOnce;
     root.enmUseVisibilityPause = useVisibilityPause;
     root.enmCopyToClipboard = copyToClipboard;
+    root.enmCopyButton = copyButton;
+    root.enmLoadScript = loadScript;
 }(typeof window !== 'undefined' ? window : globalThis));

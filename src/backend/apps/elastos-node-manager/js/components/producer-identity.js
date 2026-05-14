@@ -44,6 +44,19 @@
         // a detached this.root after destroy(), mutating innerHTML on
         // a removed subtree. (Lifecycle audit aff18c172.)
         this._destroyed = false;
+        // alpha.29 batch 95 (Round-32 audit finding #2, MED) — render-
+        // sequence counter to defeat overlapping refresh() races.
+        // _render() wipes innerHTML and then _renderBinding() fires a
+        // GET /chains/mainchain/producer; on resolve it appends a
+        // <section class="enm-producer-binding"> child. If two
+        // refreshes overlap (operator clicks Retry on the error card
+        // while the keystore endpoint is slow, or refresh fires from
+        // both mount and an external event) both binding fetches
+        // resolve and TWO <section.enm-producer-binding> blocks get
+        // appended. _destroyed doesn't help — neither refresh
+        // destroyed the component. Mirrors audit-tab.js's _loadSeq
+        // pattern (lines ~98-117).
+        this._renderSeq = 0;
     }
 
     ProducerIdentity.prototype.mount = function (parent) {
@@ -154,6 +167,10 @@
     };
 
     ProducerIdentity.prototype._render = function () {
+        // batch 95 — bump the render sequence; in-flight _renderBinding
+        // promises from a previous render compare their captured seq
+        // against this and bail if they're stale.
+        this._renderSeq += 1;
         this.root.hidden = false;
         var pubkey = this._account.publicKey;
         var addr = this._account.address || '';
@@ -194,13 +211,15 @@
                     '<div class="enm-producer-field">' +
                         '<span class="enm-producer-field-label">Public key</span>' +
                         '<code class="enm-producer-field-value enm-producer-pubkey"></code>' +
-                        '<button class="enm-btn enm-btn-secondary enm-producer-copy" type="button" data-copy="pubkey" aria-label="Copy public key">Copy</button>' +
+                        // alpha.29 batch 99 — copy button rendered via
+                        // enmCopyButton factory; slot reserves the spot.
+                        '<span class="enm-producer-copy-slot" data-copy="pubkey"></span>' +
                     '</div>' +
                     (addr ? (
                         '<div class="enm-producer-field">' +
                             '<span class="enm-producer-field-label">Address</span>' +
                             '<code class="enm-producer-field-value enm-producer-addr"></code>' +
-                            '<button class="enm-btn enm-btn-secondary enm-producer-copy" type="button" data-copy="address" aria-label="Copy mainchain address">Copy</button>' +
+                            '<span class="enm-producer-copy-slot" data-copy="address"></span>' +
                         '</div>'
                     ) : '') +
                 '</div>' +
@@ -269,26 +288,30 @@
         var qrHost = this.root.querySelector('.enm-producer-qr');
         qrHost.innerHTML = renderQrSvg(pubkey, { size: 168, margin: 2 });
 
-        // Wire copy buttons.
-        // alpha.28.1 batch 58 — routed through enmCopyToClipboard so the
-        // feature-detect + writeText + notifications plumbing is shared
-        // with the other four copy sites (settings-tab, setup-conversation,
-        // validator-registration-card, tools-update-card). Round-6
-        // clipboard-UX audit a8a932d2.
+        // alpha.29 batch 99 — both copy buttons now built via
+        // root.enmCopyButton factory (utils.js batch 96). Replaces the
+        // 12-line querySelectorAll-then-attach-handler pattern from
+        // batch 58 with a per-slot factory call. Both buttons get the
+        // same UX (text-swap success, fallback warning toast) the
+        // validator-card migration in batch 96 introduced.
         var self = this;
-        this.root.querySelectorAll('.enm-producer-copy').forEach(function (b) {
-            b.addEventListener('click', function () {
-                var which = b.dataset.copy;
-                var text = which === 'address' ? addr : pubkey;
-                root.enmCopyToClipboard(text, {
-                    notifications: self.notifications,
-                    notifyOnSuccess: true,
-                    successTitle: 'Copied',
-                    successBody: which + ' is in the clipboard.',
-                    failTitle: 'Copy failed',
-                    failBody: 'Select the text and copy manually.',
-                });
+        this.root.querySelectorAll('.enm-producer-copy-slot').forEach(function (slot) {
+            var which = slot.dataset.copy;
+            var capturedText = which === 'address' ? addr : pubkey;
+            var labelKey = which === 'address' ? 'Copy mainchain address' : 'Copy public key';
+            var btn = root.enmCopyButton({
+                value: capturedText,
+                label: 'Copy',
+                copiedLabel: 'Copied',
+                ariaLabel: labelKey,
+                resetMs: 1200,
+                notifications: self.notifications,
+                failTitle: 'Copy failed',
+                failBody: 'Select the text and copy manually.',
             });
+            btn.classList.add('enm-producer-copy');
+            btn.setAttribute('data-copy', which);
+            slot.parentNode.replaceChild(btn, slot);
         });
 
         // 0.2.0-alpha.6 — append the on-chain binding section. The parity audit
@@ -318,8 +341,13 @@
         // readable rather than blank.
         var t = root.enmTOrFallback;
         var self = this;
+        // batch 95 — capture the current render seq; if a later _render
+        // bumps the counter before our fetch resolves, our append into
+        // the now-replaced DOM would have produced a duplicate binding
+        // section.
+        var mySeq = this._renderSeq;
         this.api.get('/chains/mainchain/producer', { skipCache: true }).then(function (data) {
-            if (self._destroyed) { return; }
+            if (self._destroyed || self._renderSeq !== mySeq) { return; }
             if (!data || !data.enabled) return; // pubkey not configured yet
             var binding = data.binding || 'unknown';
             var chainOwner = data.chainOwnerPubkey || '';

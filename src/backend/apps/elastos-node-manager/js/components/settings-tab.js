@@ -358,11 +358,22 @@
         var t = root.enmTOrFallback;
         var self = this;
         this._creds.statusLine.textContent = t('common.loading');
+        // alpha.29 batch 95 (Round-32 audit finding #1, MED) — the
+        // _destroyed flag added in alpha.28.1 batch 16 + the 401
+        // suppression added in batch 51 covered every save path and the
+        // main /config refresh, but _loadCreds was missed. Without
+        // these guards a teardown mid-fetch resolves into a detached
+        // statusLine + a misleading "Failed to load RPC credentials"
+        // toast for an expired session the boot path is already re-
+        // authing for.
         this.api.get('/config/rpc/credentials/mainchain', { skipCache: true }).then(function (data) {
+            if (self._destroyed) { return; }
             self._creds.data = data;
             self._renderCredsPanel();
             self._creds.statusLine.textContent = '';
         }).catch(function (err) {
+            if (self._destroyed) { return; }
+            if (err && err.status === 401) { return; }
             self._creds.statusLine.textContent = t('settings.rpc_load_failed',
                 { error: err.message || String(err) });
         });
@@ -547,12 +558,17 @@
         var list = this._creds.whiteIp.getValue();
         // alpha.20: don't bother the server (or confuse the operator with a
         // success toast) if nothing actually changed since last load. Compare
-        // sorted JSON so order-only differences are also no-ops.
+        // sorted lists element-by-element so order-only differences are
+        // also no-ops.
+        // alpha.29 batch 112 (Round-34 perf finding #5, LOW) — replaced
+        // JSON.stringify-equality with a structural element-wise check.
+        // For a 50-IP corporate allowlist, the previous two stringify
+        // calls allocated ~2KB of throwaway strings per Apply click.
+        // listsEqual short-circuits on length mismatch and avoids any
+        // allocation on the typical case. Same semantics; cheaper.
         var current = (this._creds.data && Array.isArray(this._creds.data.whiteIPList))
             ? this._creds.data.whiteIPList.slice() : [];
-        var sortedNew  = list.slice().sort();
-        var sortedCur  = current.slice().sort();
-        if (JSON.stringify(sortedNew) === JSON.stringify(sortedCur)) {
+        if (listsEqualSorted(list, current)) {
             this._creds.whiteStatus.textContent = t('settings.rpc_white_no_change');
             return;
         }
@@ -661,7 +677,12 @@
         var t = root.enmTOrFallback;
         this._network.statusLine.textContent = t('settings.ip_detecting');
         var self = this;
+        // alpha.29 batch 95 (Round-32 audit finding #1, MED) — Same
+        // _destroyed-guard gap as _loadCreds above. Without these
+        // guards a Detect-Now click whose response lands after the
+        // operator switches tabs writes into a detached statusLine.
         this.api.get('/system/extip', { skipCache: true }).then(function (data) {
+            if (self._destroyed) { return; }
             if (data && data.ok && data.ip) {
                 self._network.statusLine.textContent = t('settings.ip_detected', { ip: data.ip });
             } else {
@@ -669,6 +690,8 @@
                 self._network.statusLine.textContent = t('settings.ip_detect_failed', { reason: reason });
             }
         }).catch(function (err) {
+            if (self._destroyed) { return; }
+            if (err && err.status === 401) { return; }
             self._network.statusLine.textContent = t('settings.ip_detect_failed', {
                 reason: err.message || String(err),
             });
@@ -1429,6 +1452,24 @@
         return row;
     }
 
+    /**
+     * Sort-then-element-wise equality for two string arrays.
+     * alpha.29 batch 112 — replaces a JSON.stringify-based diff that
+     * allocated ~2KB of throwaway strings on every whitelist Apply
+     * click for a 50-IP allowlist. Short-circuits on length mismatch;
+     * subsequent compares are cheap pointer/string ===.
+     */
+    function listsEqualSorted(a, b) {
+        if (!Array.isArray(a) || !Array.isArray(b)) { return false; }
+        if (a.length !== b.length) { return false; }
+        var sa = a.slice().sort();
+        var sb = b.slice().sort();
+        for (var i = 0; i < sa.length; i += 1) {
+            if (sa[i] !== sb[i]) { return false; }
+        }
+        return true;
+    }
+
     // Classify an http://IP:port URL as 'loopback' | 'private' | 'public'.
     // RFC-1918 (10/8, 172.16/12, 192.168/16) + link-local (169.254/16) all
     // count as 'private' so accidental APIPA addresses don't render as
@@ -1505,46 +1546,23 @@
         span.textContent = display != null ? display : value;
         line.appendChild(span);
 
-        var copyBtn = document.createElement('button');
-        copyBtn.type = 'button';
-        copyBtn.className = 'enm-btn enm-btn-secondary enm-rpc-creds-copy';
-        copyBtn.textContent = t('settings.rpc_copy');
-        // a11y: every copy button needs an explicit label so screen
-        // readers don't announce just the generic "Copy" string. The
-        // adjacent <span> holds the actual displayed (often masked)
-        // value — we wire its text into aria-label at click time too
-        // via the .enm-rpc-creds-value span when present.
-        copyBtn.setAttribute('aria-label', 'Copy ' + (display != null ? 'value' : 'credential'));
-        // alpha.28.1 batch 58 — routed through enmCopyToClipboard so the
-        // feature-detect + writeText path is shared with the other four
-        // copy sites. Custom onFallback preserves the select-the-value
-        // affordance so the operator can ⌘-C manually when the API is
-        // unavailable. Round-6 clipboard-UX audit a8a932d2.
-        // alpha.28.1 batch 88 (Round-28 finding #2) — also surface a
-        // warning toast on fallback so the operator knows the clipboard
-        // API was blocked and the value is selected for manual copy.
-        // Previous shape selected silently → rage-click UX. Mirrors the
-        // validator-card pattern from batch 87.
-        copyBtn.addEventListener('click', function () {
-            root.enmCopyToClipboard(value, {
-                btn: copyBtn,
-                copiedLabel: t('settings.rpc_copied'),
-                resetMs: 1200,
-                onFallback: function () {
-                    // Fallback: select the value so the operator can ctrl-c.
-                    var range = document.createRange();
-                    range.selectNodeContents(span);
-                    var sel = window.getSelection();
-                    sel.removeAllRanges();
-                    sel.addRange(range);
-                    if (notifications) {
-                        notifications.warning(
-                            t('settings.rpc_copy_fail_title'),
-                            t('settings.rpc_copy_fail_body')
-                        );
-                    }
-                },
-            });
+        // alpha.29 batch 102 — copy button built via root.enmCopyButton
+        // factory. Replaces ~30 lines of hand-wired onFallback +
+        // selectInto + warning-toast plumbing from batches 58/87/88
+        // with a single factory call. getDisplayEl points at the
+        // adjacent <span> so the factory's select-text fallback hits
+        // the right element.
+        var copyBtn = root.enmCopyButton({
+            value: value,
+            label: t('settings.rpc_copy'),
+            copiedLabel: t('settings.rpc_copied'),
+            ariaLabel: 'Copy ' + (display != null ? 'value' : 'credential'),
+            resetMs: 1200,
+            notifications: notifications || null,
+            failTitle: t('settings.rpc_copy_fail_title'),
+            failBody: t('settings.rpc_copy_fail_body'),
+            getDisplayEl: function () { return span; },
+            className: 'enm-rpc-creds-copy',
         });
         line.appendChild(copyBtn);
         return line;

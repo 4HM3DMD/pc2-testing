@@ -57,9 +57,26 @@
         // from the most recent anchor; no extra network cost.
         this._uptimeTimer = setInterval(function () {
             if (self._destroyed || self._uptimeBaseMs == null) { return; }
+            // alpha.29 batch 111 (Round-34 perf finding #4, LOW) —
+            // skip the textContent write when:
+            // (a) tab is hidden — no operator-visible benefit, and
+            //     the next visibility-resume will catch up via the
+            //     visibility-paused poll which re-anchors
+            // (b) formatted value hasn't changed since the previous
+            //     tick — enmFormatUptime rounds to coarse units
+            //     (e.g. "5m", "1h 23m"), so the same string can
+            //     repeat for whole minutes / hours at a time. textContent
+            //     on an unchanged value still costs a node-replace in
+            //     some browsers; caching the last printed string short-
+            //     circuits ~99% of writes once the uptime crosses
+            //     the first minute boundary.
+            if (typeof document !== 'undefined' && document.hidden) { return; }
             var seconds = Math.floor((Date.now() - self._uptimeBaseMs) / 1000)
                 + (self._uptimeBaseSec || 0);
-            self._setCell('uptime', root.enmFormatUptime(seconds), 'ok');
+            var formatted = root.enmFormatUptime(seconds);
+            if (formatted === self._lastUptimeText) { return; }
+            self._lastUptimeText = formatted;
+            self._setCell('uptime', formatted, 'ok');
         }, 1000);
         return this;
     };

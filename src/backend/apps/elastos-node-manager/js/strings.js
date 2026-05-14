@@ -222,6 +222,12 @@
             // with this key once strings.js loads. Matches the existing
             // retry/reload/skip_link pattern.
             connecting: 'Connecting to Node Manager…',
+            // alpha.29 batch 98 — offline/recovery banner strings used
+            // by the EnmOnlineWatcher service. Falls back to hardcoded
+            // English inside the service if strings.js missed loading.
+            offline_banner:  'You appear to be offline. The dashboard will refresh when your connection returns.',
+            offline_retry:   'Retry now',
+            online_restored: 'Connection restored. Refreshing data.',
         },
 
         // alpha.28.1 batch 44 — `nav:` namespace dropped (~7 lines).

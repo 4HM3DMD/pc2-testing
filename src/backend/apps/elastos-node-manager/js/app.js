@@ -62,9 +62,17 @@
         // Inline script in index.html sets <html data-app-size> before first
         // paint; mirror it to body so CSS can select either. body is
         // guaranteed present by the time app.js runs (script lives below </body>).
+        // alpha.29 batch 112 (Round-34 perf finding #6, LOW) — read the
+        // width the head IIFE already computed (via
+        // window.__enmInitialWidth) in the fallback branch, instead of
+        // re-querying window.innerWidth which forces a second layout
+        // flush. Saves ~2-3ms off first paint by deduping the read.
         var initial = document.documentElement.dataset.appSize;
         if (!initial) {
-            apply(window.innerWidth || document.documentElement.clientWidth || 1200);
+            var w = (typeof root.__enmInitialWidth === 'number')
+                ? root.__enmInitialWidth
+                : (window.innerWidth || document.documentElement.clientWidth || 1200);
+            apply(w);
         } else {
             document.body.dataset.appSize = initial;
         }
@@ -253,7 +261,36 @@
             // Mount happens in _showDashboard (only the dashboard wears
             // the wash; setup wizard / welcome stay neutral).
             fleetHealth:   root.EnmFleetHealthGradient ? new root.EnmFleetHealthGradient() : null,
+            // alpha.29 batch 97 — shared SR announcer. Mounted here so
+            // every service / component has access without having to
+            // resolve the singleton through window.enmAnnouncer (which
+            // also works, but `this.services.announcer` is the explicit
+            // dependency-injection-friendly path that mirrors the
+            // notifications service).
+            announcer:     root.enmAnnouncer || null,
+            // alpha.29 batch 98 — offline + recovery banner. Subscribes
+            // to navigator online/offline events; renders a banner
+            // while offline; calls our refresh callback on recovery.
+            onlineWatcher: root.enmOnlineWatcher || null,
         };
+        // mount the announcer's hidden live regions onto document.body
+        // now that body is present (this.els was populated above).
+        if (this.services.announcer && typeof this.services.announcer.mount === 'function') {
+            try { this.services.announcer.mount(); } catch (_) { /* ignore */ }
+        }
+        // mount the online watcher with our recovery refresh callback.
+        // On reconnect we re-run init() — the same path the error-pane
+        // Retry button uses (batch 57) — so the dashboard re-fetches
+        // /health, /setup/state, and re-subscribes SSE topics.
+        if (this.services.onlineWatcher && typeof this.services.onlineWatcher.mount === 'function') {
+            var appSelf = this;
+            try {
+                this.services.onlineWatcher.mount({
+                    onRetry: function () { appSelf.init(); },
+                    announcer: this.services.announcer,
+                });
+            } catch (_) { /* ignore */ }
+        }
         // 0.2.0-alpha.2 — heightSeries needs api + sse refs at construction
         // time. They're only bound after the services literal evaluates,
         // so the client is instantiated on the next statement, not inside
