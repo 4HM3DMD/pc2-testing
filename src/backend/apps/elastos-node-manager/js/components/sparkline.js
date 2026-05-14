@@ -230,8 +230,14 @@
         }
 
         // Even-stride x-coordinates across the full width.
+        // alpha.29 batch 95 (Round-32 audit finding #6, INFO) — the
+        // single-point branch above returned at line 229, so by here
+        // pts.length is guaranteed >= 2 and the ternary defending
+        // against pts.length === 1 was dead code. Removed the ternary
+        // so the constraint is obvious to future readers without
+        // having to trace back to the early-return.
         var xs = [];
-        var stride = (pts.length === 1) ? 0 : (W - 2 * PAD_X) / (pts.length - 1);
+        var stride = (W - 2 * PAD_X) / (pts.length - 1);
         for (var k = 0; k < pts.length; k++) xs.push(PAD_X + k * stride);
 
         // y mapping. When range === 0 (flat line), every point hits

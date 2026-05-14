@@ -272,6 +272,15 @@
         var qs = this._currentFilterQs();
         qs += (qs ? '&' : '') + 'limit=500&offset=0';
         this.api.get('/audit?' + qs, { skipCache: true }).then(function (data) {
+            // alpha.29 batch 95 (Round-32 audit finding #4, LOW) —
+            // _loadMore got the _destroyed guard in batch 51 but
+            // _exportJson was missed. If the operator clicks Export
+            // and immediately switches tabs, destroy() fires but the
+            // in-flight /audit fetch still resolves, creates the Blob,
+            // appends an anchor to document.body, and triggers a
+            // download — a save dialog appearing AFTER the operator
+            // navigated away. Bail before any of that fires.
+            if (self._destroyed) { return; }
             var blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
             var url = URL.createObjectURL(blob);
             var a = document.createElement('a');
@@ -282,6 +291,7 @@
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
         }).catch(function (err) {
+            if (self._destroyed) { return; }
             // alpha.28.1 batch 52 — same 401 suppression as the
             // load path (batch 51). Boot path owns re-auth UX.
             if (err && err.status === 401) { return; }

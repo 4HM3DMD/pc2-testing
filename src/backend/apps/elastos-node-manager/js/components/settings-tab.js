@@ -358,11 +358,22 @@
         var t = root.enmTOrFallback;
         var self = this;
         this._creds.statusLine.textContent = t('common.loading');
+        // alpha.29 batch 95 (Round-32 audit finding #1, MED) — the
+        // _destroyed flag added in alpha.28.1 batch 16 + the 401
+        // suppression added in batch 51 covered every save path and the
+        // main /config refresh, but _loadCreds was missed. Without
+        // these guards a teardown mid-fetch resolves into a detached
+        // statusLine + a misleading "Failed to load RPC credentials"
+        // toast for an expired session the boot path is already re-
+        // authing for.
         this.api.get('/config/rpc/credentials/mainchain', { skipCache: true }).then(function (data) {
+            if (self._destroyed) { return; }
             self._creds.data = data;
             self._renderCredsPanel();
             self._creds.statusLine.textContent = '';
         }).catch(function (err) {
+            if (self._destroyed) { return; }
+            if (err && err.status === 401) { return; }
             self._creds.statusLine.textContent = t('settings.rpc_load_failed',
                 { error: err.message || String(err) });
         });
@@ -661,7 +672,12 @@
         var t = root.enmTOrFallback;
         this._network.statusLine.textContent = t('settings.ip_detecting');
         var self = this;
+        // alpha.29 batch 95 (Round-32 audit finding #1, MED) — Same
+        // _destroyed-guard gap as _loadCreds above. Without these
+        // guards a Detect-Now click whose response lands after the
+        // operator switches tabs writes into a detached statusLine.
         this.api.get('/system/extip', { skipCache: true }).then(function (data) {
+            if (self._destroyed) { return; }
             if (data && data.ok && data.ip) {
                 self._network.statusLine.textContent = t('settings.ip_detected', { ip: data.ip });
             } else {
@@ -669,6 +685,8 @@
                 self._network.statusLine.textContent = t('settings.ip_detect_failed', { reason: reason });
             }
         }).catch(function (err) {
+            if (self._destroyed) { return; }
+            if (err && err.status === 401) { return; }
             self._network.statusLine.textContent = t('settings.ip_detect_failed', {
                 reason: err.message || String(err),
             });

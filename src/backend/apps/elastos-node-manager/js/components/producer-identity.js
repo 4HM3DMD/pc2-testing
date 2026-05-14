@@ -44,6 +44,19 @@
         // a detached this.root after destroy(), mutating innerHTML on
         // a removed subtree. (Lifecycle audit aff18c172.)
         this._destroyed = false;
+        // alpha.29 batch 95 (Round-32 audit finding #2, MED) — render-
+        // sequence counter to defeat overlapping refresh() races.
+        // _render() wipes innerHTML and then _renderBinding() fires a
+        // GET /chains/mainchain/producer; on resolve it appends a
+        // <section class="enm-producer-binding"> child. If two
+        // refreshes overlap (operator clicks Retry on the error card
+        // while the keystore endpoint is slow, or refresh fires from
+        // both mount and an external event) both binding fetches
+        // resolve and TWO <section.enm-producer-binding> blocks get
+        // appended. _destroyed doesn't help — neither refresh
+        // destroyed the component. Mirrors audit-tab.js's _loadSeq
+        // pattern (lines ~98-117).
+        this._renderSeq = 0;
     }
 
     ProducerIdentity.prototype.mount = function (parent) {
@@ -154,6 +167,10 @@
     };
 
     ProducerIdentity.prototype._render = function () {
+        // batch 95 — bump the render sequence; in-flight _renderBinding
+        // promises from a previous render compare their captured seq
+        // against this and bail if they're stale.
+        this._renderSeq += 1;
         this.root.hidden = false;
         var pubkey = this._account.publicKey;
         var addr = this._account.address || '';
@@ -318,8 +335,13 @@
         // readable rather than blank.
         var t = root.enmTOrFallback;
         var self = this;
+        // batch 95 — capture the current render seq; if a later _render
+        // bumps the counter before our fetch resolves, our append into
+        // the now-replaced DOM would have produced a duplicate binding
+        // section.
+        var mySeq = this._renderSeq;
         this.api.get('/chains/mainchain/producer', { skipCache: true }).then(function (data) {
-            if (self._destroyed) { return; }
+            if (self._destroyed || self._renderSeq !== mySeq) { return; }
             if (!data || !data.enabled) return; // pubkey not configured yet
             var binding = data.binding || 'unknown';
             var chainOwner = data.chainOwnerPubkey || '';
