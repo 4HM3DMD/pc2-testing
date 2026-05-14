@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
     <meta charset="utf-8">
     <!-- viewport-fit=cover lets safe-area-inset-* paddings honour iPhone
@@ -10,106 +10,82 @@
     <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
     <meta name="referrer" content="no-referrer">
     <title>Elastos Node Manager</title>
-    <link rel="stylesheet" href="css/styles.css?ts=20260515q">
+    <link rel="stylesheet" href="css/styles.css?ts=20260515b3a">
     <script>
-        // alpha.29 v2 brand reset — dark only. The :root in styles.css
-        // now carries the v2 dark-canvas + cyan-accent token set, and
-        // the [data-theme="dark"] selectors throughout the stylesheet
-        // (15 of them, Phase 1c will drop the prefix) keep matching
-        // because we hard-set data-theme=dark on documentElement at
-        // pre-paint. The prior light/dark detection logic + the
-        // services/theme.js broadcast handler are now no-ops; the
-        // theme toggle button is being removed in Phase 1e.
+        // Beta 3 — Phase 1c carried over. Dark-only. We hard-code data-theme=dark
+        // on documentElement so any rule that still says [data-theme="dark"] keeps
+        // matching even though the toggle is gone.
         (function () {
-            try {
-                document.documentElement.setAttribute('data-theme', 'dark');
-            } catch (e) { /* fail open — :root dark values still apply */ }
+            try { document.documentElement.setAttribute('data-theme', 'dark'); }
+            catch (e) { /* :root dark values still apply */ }
         })();
 
-        // alpha.25 — set initial body[data-app-size] before first paint so CSS
-        // rules apply without a layout flash. JS later wires a ResizeObserver
-        // for dynamic updates as the iframe resizes.
-        //
-        // We use window.innerWidth — inside an iframe this returns the
-        // iframe's interior width (NOT the outer browser viewport). The
-        // @media (max-width: X) queries in CSS are broken in iframes because
-        // they measure the outer viewport; this attribute is iframe-correct.
+        // alpha.25 → Beta 3 — pre-paint data-app-size detection.
+        // window.innerWidth inside iframes returns the iframe's interior
+        // width (NOT the outer browser viewport), which is what we want.
+        // Phase-02 mock spec: wide >=700px, narrow 480-699px, compact <480px.
         (function () {
             try {
                 var w = window.innerWidth || document.documentElement.clientWidth || 1200;
-                var size = w < 700 ? 'narrow' : (w < 1000 ? 'medium' : 'wide');
-                // body doesn't exist yet at this point, so stash on documentElement
-                // and the body version is set in a second script after </body>.
+                var size = w < 480 ? 'compact' : (w < 700 ? 'narrow' : 'wide');
                 document.documentElement.dataset.appSize = size;
-                // alpha.29 batch 112 (Round-34 perf finding #6, LOW) —
-                // stash the resolved width on a global so app.js's
-                // setupResponsiveObserver doesn't have to re-query
-                // window.innerWidth (which forces a layout flush).
-                // Saves ~2-3ms off first paint by collapsing two
-                // layout reads into one.
                 window.__enmInitialWidth = w;
             } catch (e) { /* ignore */ }
         })();
     </script>
 </head>
 <body>
-    <!-- alpha.28.1 batch 88 (Round-28 audit) — mirror the pre-paint
-         `<html data-app-size>` written by the head IIFE down to body
-         AS SOON AS body element exists. Placement matters: this script
-         is the very first child of <body>, before any visible elements
-         and before all the defer scripts queued in <head>. Inline non-
-         defer scripts block parsing when encountered, so by the time
-         the parser continues to the visible markup below, body already
-         carries the correct data-app-size attribute and CSS rules at
-         styles.css:4569+ (which target body[data-app-size="narrow"])
-         match on the very first paint frame — no flash.
-         The head IIFE comment at line 51 promised "set in a second
-         script after </body>" but that script was never shipped; this
-         is the fix. -->
+    <!-- alpha.28.1 batch 88 — mirror html[data-app-size] to body the
+         instant body opens, before any defer scripts run. The CSS at
+         body[data-app-size="..."] needs this to match on first paint. -->
     <script>
         (function () {
             try {
                 var sz = document.documentElement.dataset.appSize;
                 if (sz) { document.body.dataset.appSize = sz; }
-            } catch (e) { /* fail open — app.js will mirror on first run */ }
+            } catch (e) { /* app.js will mirror on first run */ }
         })();
     </script>
 
     <!-- a11y: skip link lands at the top of the Tab order so keyboard
-         users can jump past the chrome (gear, theme, 5 tabs). Visible
+         users can jump past the chrome (brand, tabs, gear). Visible
          only on focus (see .enm-skip-link in styles.css). -->
     <a href="#enm-main" class="enm-skip-link">Skip to main content</a>
-    <div id="app" class="enm-app" data-state="connecting">
-        <!-- a11y: WCAG 2.4.6 requires a top-level heading. The PC2 window
-             chrome shows the app name in its title bar, but screen-reader
-             users navigating by heading need an h1 inside the document. -->
+
+    <!--
+        Beta 3 app shell. Reference: enm-design-mocks/v2/phase-02-chrome.html.
+
+        Structure mirrors the mock exactly:
+            .enm-app[data-active-tab="..."]
+              .enm-topbar
+                .enm-brand          (mark + name + env pill)
+                .enm-tabs           (role=tablist, horizontal scroll)
+                .enm-topbar-actions (gear icon)
+              .enm-main             (pane container)
+
+        EVM tab is dropped — Beta 3 is mainchain-only per directive.
+        Council node UI is deferred. The five tabs from alpha.27 become
+        four (Dashboard / Logs / Settings / Audit).
+    -->
+    <div class="enm-app" id="app" data-active-tab="dashboard">
+        <!-- a11y: WCAG 2.4.6 needs a top-level heading. PC2 chrome shows
+             the app name in its title bar but AT users navigating by
+             heading need an h1 inside the document. -->
         <h1 class="enm-sr-only">Elastos Node Manager</h1>
-        <!-- Header bar matching dao-dashboard's pattern: tabs on the left,
-             flexible spacer, global controls on the right. PC2's window
-             manager already provides the app title via window-head — no
-             need to re-render it here. -->
-        <nav class="enm-header-bar" id="enm-tabs" role="tablist" aria-label="Sections" hidden>
-            <!-- alpha.29 v2 Phase 2 — brand group: gradient mark + name + BETA pill.
-                 Sits left of the tabs. The brand-name hides at narrow widths so
-                 the tabs row keeps room; the env pill stays visible to anchor
-                 the operator's mental model of "this is the test build". -->
+
+        <header class="enm-topbar" role="banner">
             <div class="enm-brand">
                 <span class="enm-brand-mark" aria-hidden="true"></span>
                 <span class="enm-brand-name">Elastos Node Manager</span>
                 <span class="enm-brand-env">BETA</span>
             </div>
-            <div class="enm-header-tabs">
+            <nav class="enm-tabs" role="tablist" aria-label="Sections" hidden>
                 <button type="button" class="enm-tab active" role="tab" id="enm-tab-dashboard" data-tab="dashboard" aria-selected="true"  aria-controls="enm-pane-dashboard" tabindex="0">Dashboard</button>
                 <button type="button" class="enm-tab"        role="tab" id="enm-tab-logs"      data-tab="logs"      aria-selected="false" aria-controls="enm-pane-logs"      tabindex="-1">Logs</button>
                 <button type="button" class="enm-tab"        role="tab" id="enm-tab-settings"  data-tab="settings"  aria-selected="false" aria-controls="enm-pane-settings"  tabindex="-1">Settings</button>
                 <button type="button" class="enm-tab"        role="tab" id="enm-tab-audit"     data-tab="audit"     aria-selected="false" aria-controls="enm-pane-audit"     tabindex="-1">Audit</button>
-                <button type="button" class="enm-tab"        role="tab" id="enm-tab-evm"       data-tab="evm"       aria-selected="false" aria-controls="enm-pane-evm"       tabindex="-1">
-                    EVM <span class="enm-tab-pill">v0.5</span>
-                </button>
-            </div>
-            <div class="enm-header-spacer"></div>
-            <div class="enm-header-actions">
-                <!-- Theme toggle removed in alpha.29 v2 Phase 1c — dark-only. -->
+            </nav>
+            <div class="enm-topbar-actions">
                 <button type="button" class="enm-icon-btn" id="enm-settings-toggle" title="Settings" aria-label="Open settings">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
                         <circle cx="12" cy="12" r="3"></circle>
@@ -117,18 +93,18 @@
                     </svg>
                 </button>
             </div>
-        </nav>
+        </header>
 
         <main class="enm-main" id="enm-main">
-            <!-- a11y: role="status" implies aria-live="polite"; pairing them
-                 caused Safari + older NVDA to double-announce the spinner. -->
+            <!-- Spinner: a11y role=status implies aria-live=polite; pairing them
+                 caused Safari + older NVDA to double-announce in alpha. -->
             <div class="enm-spinner" id="enm-spinner" role="status">
                 <div class="enm-spinner-dots">
                     <div class="enm-spinner-dot"></div>
                     <div class="enm-spinner-dot"></div>
                     <div class="enm-spinner-dot"></div>
                 </div>
-                <p class="enm-spinner-text" id="enm-spinner-text">Connecting to Node Manager...</p>
+                <p class="enm-spinner-text" id="enm-spinner-text">Connecting to Node Manager…</p>
             </div>
 
             <section class="enm-content" id="enm-content" hidden>
@@ -136,15 +112,11 @@
                 <div class="enm-pane" id="enm-pane-logs"      role="tabpanel" aria-labelledby="enm-tab-logs"      tabindex="0" hidden></div>
                 <div class="enm-pane" id="enm-pane-settings"  role="tabpanel" aria-labelledby="enm-tab-settings"  tabindex="0" hidden></div>
                 <div class="enm-pane" id="enm-pane-audit"     role="tabpanel" aria-labelledby="enm-tab-audit"     tabindex="0" hidden></div>
-                <div class="enm-pane" id="enm-pane-evm"       role="tabpanel" aria-labelledby="enm-tab-evm"       tabindex="0" hidden></div>
             </section>
 
             <div class="enm-error" id="enm-error" hidden role="alert">
                 <div class="enm-error-title" id="enm-error-title"></div>
                 <div class="enm-error-detail" id="enm-error-detail"></div>
-                <!-- Recovery affordances — operator's only previous option
-                     was hard-refresh. Both buttons are operator-friendly
-                     escapes from a stuck boot. -->
                 <div class="enm-error-actions">
                     <button type="button" class="enm-btn enm-btn-primary" id="enm-error-retry">Retry</button>
                     <button type="button" class="enm-btn enm-btn-secondary" id="enm-error-reload">Reload page</button>
@@ -153,31 +125,27 @@
         </main>
     </div>
 
-    <!-- Order matters: strings + utils first (used by services + components),
-         then services, then components, then the app controller. The
-         `defer` attribute preserves execution order (browsers run deferred
-         scripts in document order) BUT lets all 24 download in parallel
-         instead of one-after-the-other. End-of-body classic script tags
-         without defer block on each previous tag's download+execute, so
-         this is a real ~200-400ms TTI win on the boot waterfall. -->
+    <!--
+        Script load order:
+        strings + utils → services → components → app controller.
+        `defer` preserves execution order while letting all scripts
+        download in parallel.
+
+        Beta 3 keeps every alpha.29 service + component module. The
+        component files will be reshaped in B3.2-5 to emit the new
+        mock-derived markup; their JS contracts (event listeners,
+        lifecycle guards, ARIA wiring) stay intact.
+    -->
     <script defer src="js/strings.js?ts=20260512c"></script>
     <script defer src="js/utils.js?ts=20260506g"></script>
     <script defer src="js/illustrations.js?ts=20260506g"></script>
     <script defer src="js/services/wallet.js?ts=20260506g"></script>
-    <!-- theme.js removed in alpha.29 v2 Phase 1c — dark-only. -->
-    <!-- <script defer src="js/services/theme.js?ts=20260506g"></script> -->
     <script defer src="js/services/api.js?ts=20260506g"></script>
     <script defer src="js/services/sse.js?ts=20260511d"></script>
     <script defer src="js/services/notifications.js?ts=20260506g"></script>
-    <!-- alpha.29 batch 97 — shared screen-reader announcer (single
-         hidden live-region for status + alert priorities). Components
-         and services can call window.enmAnnouncer.polite('Saved')
-         instead of rendering their own role=status region. -->
+    <!-- alpha.29 batch 97 — shared screen-reader announcer -->
     <script defer src="js/services/announcer.js?ts=20260514a"></script>
-    <!-- alpha.29 batch 98 — offline + recovery banner. Subscribes to
-         navigator online/offline events, renders a persistent banner
-         while offline with a Retry affordance, and announces recovery
-         via the announcer above. -->
+    <!-- alpha.29 batch 98 — offline + recovery banner -->
     <script defer src="js/services/online-watcher.js?ts=20260514a"></script>
     <script defer src="js/services/fleet-health-gradient.js?ts=20260512a"></script>
     <script defer src="js/services/height-series.js?ts=20260512a"></script>
@@ -191,33 +159,19 @@
     <script defer src="js/components/proposal-card.js?ts=20260506g"></script>
     <script defer src="js/components/welcome-screen.js?ts=20260506g"></script>
     <script defer src="js/components/setup-conversation.js?ts=20260511c"></script>
-    <script defer src="js/components/settings-tab.js?ts=20260515a">
-    <!-- alpha.29 batch 103 — audit-tab.js was dropped from the eager
-         script chain. ~378 LOC + dependencies are lazy-loaded via
-         root.enmLoadScript('js/components/audit-tab.js?ts=...') the
-         first time the operator activates the Audit tab. See the
-         audit branch in technical-view.js's _activateTab. Pattern
-         prototype for Round-33 ROI #4 (other tab-specific scripts
-         can be migrated incrementally). -->
-    <!-- <script defer src="js/components/audit-tab.js?ts=20260506g"></script> -->
+    <script defer src="js/components/settings-tab.js?ts=20260515a"></script>
+    <!-- alpha.29 batch 103 — audit-tab lazy-loaded via enmLoadScript when
+         the Audit tab first activates. evm-tab similarly lazy, deferred
+         in Beta 3 since EVM (sidechain) tab is dropped from the visible
+         set; the script reference is kept for future re-enable. -->
     <script>
-      // Expose lazy-loaded tab script srcs so technical-view can pass
-      // them to enmLoadScript. Single source of truth for the path +
-      // cache-bust token; matches the existing ?ts= pattern.
       window.ENM_LAZY_SCRIPTS = window.ENM_LAZY_SCRIPTS || {};
       window.ENM_LAZY_SCRIPTS.auditTab = 'js/components/audit-tab.js?ts=20260515a';
-      // alpha.29 batch 109 — evm-tab also lazy-loaded. Smaller savings
-      // than audit-tab (~72 vs 378 LOC) but proves the pattern scales
-      // across multiple tabs. Most operators never open the EVM tab
-      // (sidechain features are opt-in), so deferring its parse is a
-      // win on the typical dashboard load.
-      window.ENM_LAZY_SCRIPTS.evmTab = 'js/components/evm-tab.js?ts=20260514a';
+      window.ENM_LAZY_SCRIPTS.evmTab   = 'js/components/evm-tab.js?ts=20260514a';
     </script>
-    <!-- evm-tab.js no longer eager-loaded; see ENM_LAZY_SCRIPTS.evmTab -->
-    <!-- <script defer src="js/components/evm-tab.js?ts=20260506g"></script> -->
     <script defer src="js/components/settings-drawer.js?ts=20260506g"></script>
     <script defer src="js/components/tools-update-card.js?ts=20260512c"></script>
     <script defer src="js/components/technical-view.js?ts=20260512f"></script>
-    <script defer src="js/app.js?ts=20260513a"></script>
+    <script defer src="js/app.js?ts=20260515b3a"></script>
 </body>
 </html>

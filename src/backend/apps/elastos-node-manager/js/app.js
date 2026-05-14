@@ -48,8 +48,14 @@
         if (root.__enmRespObserverInstalled) { return; }
         root.__enmRespObserverInstalled = true;
         function classify(w) {
+            // Beta 3 — phase-02 mock breakpoints. Three sizes only:
+            //   compact  < 480px   iPhone-class / split-screen
+            //   narrow   480-699   tablet / large phone
+            //   wide     >= 700    desktop default
+            // The old "medium" bucket (700-999) collapsed into "wide";
+            // the new "compact" bucket below 480 is the addition.
+            if (w < 480) return 'compact';
             if (w < 700) return 'narrow';
-            if (w < 1000) return 'medium';
             return 'wide';
         }
         function apply(width) {
@@ -750,10 +756,16 @@
      * @private
      */
     ENMApp.prototype._collapseHeaderToHome = function () {
+        // Beta 3 — `this.els.tabs` (id="enm-tabs") is now the
+        // `<nav class="enm-tabs">` tab strip itself (was the parent
+        // header nav in alpha.27). Hiding it hides just the tab row,
+        // keeping the brand + env pill + gear icon visible — the
+        // correct "chrome on, tabs off" state for the welcome screen.
+        // The old `.enm-header-tabs` inner-wrapper queryselector is
+        // no longer needed; that element doesn't exist in the new
+        // shell.
         if (!this.els.tabs) { return; }
         this.els.tabs.hidden = false;
-        var tabsContainer = this.els.tabs.querySelector('.enm-header-tabs');
-        if (tabsContainer) { tabsContainer.hidden = true; }
     };
 
     ENMApp.prototype._loadPendingProposals = function () {
