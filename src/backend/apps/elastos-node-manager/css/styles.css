@@ -2549,89 +2549,140 @@ select.enm-settings-input {
    Audit log
    ============================================================ */
 
+/* alpha.29 v2 brand reset · Phase 5b — audit pane.
+   Reference: enm-design-mocks/v2/phase-05-logs-audit.html .audit-toolbar,
+   .audit-filters, .filter-chip, .audit-table-wrap, .audit-table,
+   .tier-badge, .outcome-badge, .audit-foot. */
 .enm-audit {
-    padding: var(--spacing-lg);
+    padding: var(--sp-5);
     display: flex;
     flex-direction: column;
-    gap: var(--spacing-md);
+    flex: 1;
+    min-height: 0;
+    gap: var(--sp-4);
     overflow: hidden;
+    background: transparent;
+    border: none;
 }
 
 .enm-audit-head {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: var(--spacing-md);
+    gap: var(--sp-3);
     flex-wrap: wrap;
+    flex: 0 0 auto;
 }
 
 .enm-audit-head h3 {
-    font-size: 16px;
-    font-weight: 600;
+    font-size: var(--fs-h2);
+    font-weight: var(--fw-semibold);
     letter-spacing: -0.01em;
+    color: var(--text-primary);
+    margin: 0;
 }
 
 .enm-audit-count {
-    font-size: 12px;
-    color: var(--text-muted);
+    font-size: var(--fs-caption);
+    color: var(--text-tertiary);
 }
 
-/* alpha.17 — drop the filled bg-muted box around filters. The row was
-   reading as a heavy "toolbar" block that competed with the table
-   below. Naked controls with the same spacing rhythm sit lighter
-   against the page; the inputs themselves have borders that carry
-   the structure. */
+/* v2 .audit-filters: padded card row with bg-surface so the filter
+   row reads as a self-contained "toolbar block" sitting above the
+   table. The alpha.17 "naked controls" approach made the filter row
+   feel detached from the table; v2's mock pattern groups them. */
 .enm-audit-filters {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: var(--spacing-sm);
-    padding: 0;
-    background: transparent;
+    gap: var(--sp-2);
+    padding: var(--sp-3);
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-md);
+    flex: 0 0 auto;
 }
 
 .enm-audit-label {
-    font-size: 11px;
+    font-size: var(--fs-caption);
     text-transform: uppercase;
     letter-spacing: 0.06em;
-    color: var(--text-muted);
-    font-weight: 600;
-    margin-right: 4px;
+    color: var(--text-tertiary);
+    font-weight: var(--fw-semibold);
+    margin-right: var(--sp-1);
 }
 
 .enm-audit-input {
-    min-height: 36px;
-    padding: 8px 12px;
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-sm);
-    background: var(--bg-surface);
+    min-height: 0;
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    background: var(--bg-input);
     color: var(--text-primary);
     font: inherit;
-    font-size: 13px;
-    transition: border-color var(--motion-fast) var(--ease-spring),
-                box-shadow var(--motion-fast) var(--ease-spring);
+    font-size: var(--fs-caption);
+    transition: border-color 0.12s, box-shadow 0.12s;
 }
 
 .enm-audit-input:focus {
     outline: none;
-    border-color: var(--primary);
-    box-shadow: var(--focus-ring);
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
-/* alpha.9 — bump table text from 12px to 13px so the audit log reads at
-   the same density as the rest of the app, and switch to row-only
-   horizontal dividers (no vertical grid lines) for a calmer feel. */
+/* v2 .filter-chip — clickable pill for tier / chain filters. The
+   chip-style filters in audit-tab.js render via JS-set classes; this
+   adds the v2 chrome for any `.enm-audit-filter-chip` use site +
+   the existing semantic-tier hooks via [data-tier]. */
+.enm-audit-filter-chip {
+    padding: 5px 10px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--r-pill);
+    font-size: var(--fs-caption);
+    font-family: inherit;
+    cursor: pointer;
+    color: var(--text-secondary);
+    font-weight: var(--fw-medium);
+    white-space: nowrap;
+    transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.enm-audit-filter-chip:hover {
+    background: var(--bg-overlay);
+    color: var(--text-primary);
+}
+.enm-audit-filter-chip.active {
+    background: var(--accent-soft);
+    border-color: var(--accent-soft);
+    color: var(--accent);
+}
+/* Per-tier active palette (matches the .enm-tier-badge palette below). */
+.enm-audit-filter-chip[data-tier].active {
+    font-weight: var(--fw-semibold);
+}
+.enm-audit-filter-chip[data-tier="AUTOMATED-SAFE"].active   { background: var(--success-bg); border-color: rgba(89, 196, 137, 0.3);  color: var(--success); }
+.enm-audit-filter-chip[data-tier="OWNER-CONFIRMS"].active   { background: var(--accent-soft); border-color: rgba(0, 212, 255, 0.3);   color: var(--accent); }
+.enm-audit-filter-chip[data-tier="CRITICAL-NOTIFY"].active  { background: var(--warning-bg);  border-color: rgba(245, 166, 35, 0.3); color: var(--warning); }
+.enm-audit-filter-chip[data-tier="NEVER-AUTOMATIC"].active  { background: var(--error-bg);    border-color: rgba(239, 80, 96, 0.3);  color: var(--error); }
+.enm-audit-filter-chip[data-tier="HTTP-MUTATION"].active    { background: var(--purple-bg);   border-color: rgba(167, 139, 250, 0.3); color: var(--purple); }
+
+/* Audit table wrap — v2 .audit-table-wrap: bg-surface + border-subtle
+   + r-md radius + overflow hidden so the table's sticky thead sits
+   flush with the wrapper edge. */
 .enm-audit-table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 13px;
+    font-size: var(--fs-caption);
     display: block;
     overflow-x: auto;
     overscroll-behavior-x: contain;
     white-space: nowrap;
-    /* Wrap the table in its own scroll container so the sticky header
-       can :has-detect when the body has scrolled. */
     position: relative;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-md);
+    flex: 1 1 auto;
+    min-height: 0;
 }
 
 .enm-audit-table thead,
@@ -2644,52 +2695,113 @@ select.enm-settings-input {
 
 .enm-audit-table th,
 .enm-audit-table td {
-    padding: 10px 12px;
+    padding: 8px var(--sp-3);
     text-align: left;
-    border-bottom: 1px solid var(--border-color);
+    border-bottom: 1px solid var(--border-subtle);
     overflow: hidden;
     text-overflow: ellipsis;
+    color: var(--text-secondary);
+    vertical-align: middle;
 }
 
 .enm-audit-table th {
-    font-size: 11px;
+    font-size: 10px;
     text-transform: uppercase;
     letter-spacing: 0.06em;
-    color: var(--text-muted);
-    background: var(--bg-muted);
-    font-weight: var(--font-weight-semibold);
+    color: var(--text-tertiary);
+    background: var(--bg-elevated);
+    font-weight: var(--fw-semibold);
     position: sticky;
     top: 0;
-    /* Shadow only when the table body has scrolled past the header.
-       Pure CSS via :has() — modern Chromium / Safari / FF support is
-       enough for the Puter context. Falls back to no shadow on older
-       browsers, which is fine. */
-    transition: box-shadow var(--motion-base) var(--ease-spring);
+    white-space: nowrap;
     z-index: 1;
 }
 
-.enm-audit-table:has(tbody tr:not(:first-child)) th {
-    /* Body has more than one row — apply scroll-shadow proxy via a
-       second rule when the table itself has been scrolled vertically.
-       We can't `:has` scrollTop, but a subtle shadow on a long table
-       is fine and matches Apple's pattern. */
-    box-shadow: var(--shadow-sm);
-}
-
 .enm-audit-table tbody tr {
-    transition: background var(--motion-fast) var(--ease-spring);
+    transition: background 0.12s;
+    cursor: pointer;
 }
 
 .enm-audit-table tbody tr:hover {
-    background: var(--bg-muted);
+    background: var(--bg-elevated);
 }
+
+.enm-audit-table tbody tr.expanded {
+    background: var(--accent-soft);
+}
+
+/* Cell-specific typography for mono columns. */
+.enm-audit-table td:nth-child(1),    /* timestamp */
+.enm-audit-table td:nth-child(3),    /* rule */
+.enm-audit-table td:nth-child(6) {   /* executor */
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-primary);
+}
+.enm-audit-table td:nth-child(1) {   /* timestamp tertiary */
+    color: var(--text-tertiary);
+    white-space: nowrap;
+}
+
+/* v2 .tier-badge — small mono pill, color per tier. Used in the
+   "Tier" column. */
+.enm-tier-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    border-radius: var(--r-xs);
+    font-size: 10px;
+    font-weight: var(--fw-semibold);
+    letter-spacing: 0.04em;
+    font-family: var(--font-mono);
+    white-space: nowrap;
+}
+.enm-tier-badge[data-tier="AUTOMATED-SAFE"]  { background: var(--success-bg);  color: var(--success); }
+.enm-tier-badge[data-tier="OWNER-CONFIRMS"]  { background: var(--accent-soft); color: var(--accent); }
+.enm-tier-badge[data-tier="CRITICAL-NOTIFY"] { background: var(--warning-bg);  color: var(--warning); }
+.enm-tier-badge[data-tier="NEVER-AUTOMATIC"] { background: var(--error-bg);    color: var(--error); }
+.enm-tier-badge[data-tier="HTTP-MUTATION"]   { background: var(--purple-bg);   color: var(--purple); }
+
+/* v2 .outcome-badge — small pill with ✓ / ✕ / ◌ / ! glyph prefix.
+   Used in the "Outcome" column. */
+.enm-outcome-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: var(--r-pill);
+    font-size: 10px;
+    font-weight: var(--fw-semibold);
+    white-space: nowrap;
+}
+.enm-outcome-badge[data-kind="success"] { background: var(--success-bg); color: var(--success); }
+.enm-outcome-badge[data-kind="success"]::before { content: "✓"; }
+.enm-outcome-badge[data-kind="error"]   { background: var(--error-bg);   color: var(--error); }
+.enm-outcome-badge[data-kind="error"]::before   { content: "✕"; }
+.enm-outcome-badge[data-kind="skip"]    { background: var(--bg-elevated); color: var(--text-tertiary); }
+.enm-outcome-badge[data-kind="skip"]::before    { content: "◌"; }
+.enm-outcome-badge[data-kind="warn"]    { background: var(--warning-bg); color: var(--warning); }
+.enm-outcome-badge[data-kind="warn"]::before    { content: "!"; }
 
 .enm-audit-empty,
 .enm-audit-foot {
-    padding: var(--spacing-md);
+    padding: var(--sp-3) var(--sp-4);
+    text-align: left;
+    color: var(--text-tertiary);
+    font-size: var(--fs-caption);
+    background: var(--bg-elevated);
+    border-top: 1px solid var(--border-subtle);
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    flex: 0 0 auto;
+}
+.enm-audit-empty {
     text-align: center;
-    color: var(--text-muted);
-    font-size: 12px;
+    justify-content: center;
+    background: transparent;
+    border-top: none;
+    padding: var(--sp-7) var(--sp-5);
 }
 
 /* ============================================================
