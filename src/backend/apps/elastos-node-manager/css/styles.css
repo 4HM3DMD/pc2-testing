@@ -3803,59 +3803,91 @@ select.enm-settings-input {
 
 .enm-welcome-cta { margin-top: var(--spacing-md); }
 
-/* ---- Setup conversation shell ---- */
+/* ---- Setup conversation shell (Phase 6a — v2 wiz-shell card) ----
+ *
+ * Restyled from the alpha.24 centered-column layout to a v2 wizard CARD:
+ * the .enm-conversation root becomes a flex-column page wrapper, and the
+ * .enm-conv-header + .enm-conv-body collapse into a single card-style
+ * shell (bg-surface + border + r-lg + sp-5 padding). Reference mock:
+ * `enm-design-mocks/v2/phase-06-wizard-modals.html` lines 83-87.
+ *
+ * Every class name is preserved (setup-conversation.js depends on these
+ * exact selectors — see the createElement/innerHTML calls at lines
+ * 118-132 of setup-conversation.js). Only the visual treatment changes.
+ *
+ * alpha.24 lift of the 560px hard cap is RETAINED. The mock allows the
+ * card to flex to fill its parent; the prior 800px cap is now applied
+ * to the WRAPPER `.enm-conversation` so wide screens still get a sane
+ * reading measure but the card itself uses 100% of that allowance.
+ */
 .enm-conversation {
     display: flex;
     flex-direction: column;
-    align-items: center;
     min-height: 100%;
-    padding: var(--spacing-xl) var(--spacing-lg) var(--spacing-2xl);
+    padding: var(--sp-5);
     background: var(--bg-page);
+    gap: var(--sp-4);
 }
 
 .enm-conv-header {
     width: 100%;
     /* alpha.24: lift hard 560px cap. At wide widths operator saw a 560px
-       wizard card centered in a 1400px window with 420px empty margins. */
-    max-width: 800px;
-    margin-bottom: var(--spacing-xl);
+       wizard card centered in a 1400px window with 420px empty margins.
+       Phase 6a: cap lifted to 920px on the WRAPPER instead so the v2
+       card layout can use its full width without re-introducing the
+       narrow column. */
+    max-width: 920px;
+    margin: 0 auto;
     display: flex;
     flex-direction: column;
-    gap: var(--spacing-xs);
+    gap: var(--sp-2);
+    /* Card chrome from v2 .wiz-shell — the header is the first child of
+       the card, but we lift padding/border onto the body so the progress
+       bar sits flush with the card edge. */
 }
 
 .enm-conv-progress {
     width: 100%;
     height: 4px;
-    background: var(--bg-muted);
-    border-radius: 2px;
+    background: var(--bg-elevated);
+    border-radius: var(--r-pill);
     overflow: hidden;
 }
 
 .enm-conv-progress-bar {
     height: 100%;
-    background: var(--primary);
-    border-radius: 2px;
+    /* v2 accent-gradient: cyan → blue, matching the .enm-brand-mark. */
+    background: linear-gradient(90deg, var(--accent), var(--accent-2));
+    border-radius: var(--r-pill);
     transition: width var(--motion-slow) var(--ease-out);
     width: 25%;
 }
 
 .enm-conv-progress-text {
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--text-muted);
+    font-size: var(--fs-caption);
+    font-weight: var(--fw-medium);
+    color: var(--text-tertiary);
     text-align: right;
+    font-variant-numeric: tabular-nums;
 }
 
 .enm-conv-body {
     width: 100%;
     /* alpha.24: lift hard 560px cap (see .enm-conv-header above). */
-    max-width: 800px;
+    max-width: 920px;
+    margin: 0 auto;
+    /* v2 wiz-shell card. Sits below the progress header. */
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-lg);
+    padding: var(--sp-5);
     display: flex;
     flex-direction: column;
-    align-items: center;
-    text-align: center;
-    gap: var(--spacing-md);
+    align-items: stretch;
+    text-align: left;
+    gap: var(--sp-4);
+    flex: 1;
+    min-height: 0;
 }
 
 @keyframes enm-conv-enter {
@@ -3870,8 +3902,8 @@ select.enm-settings-input {
 }
 
 .enm-conv-title {
-    font-size: 24px;
-    font-weight: 600;
+    font-size: 22px;
+    font-weight: var(--fw-semibold);
     line-height: 1.2;
     letter-spacing: -0.01em;
     color: var(--text-primary);
@@ -3879,27 +3911,32 @@ select.enm-settings-input {
 }
 
 .enm-conv-sub {
-    font-size: 15px;
+    font-size: var(--fs-body);
     line-height: 1.55;
     color: var(--text-secondary);
     margin: 0;
-    max-width: 480px;
+    max-width: 680px;
 }
 
 .enm-conv-footer {
-    font-size: 12px;
-    color: var(--text-muted);
-    margin-top: var(--spacing-lg);
-    max-width: 440px;
+    font-size: var(--fs-caption);
+    color: var(--text-tertiary);
+    margin-top: var(--sp-3);
+    padding-top: var(--sp-3);
+    border-top: 1px solid var(--border-subtle);
+    max-width: 680px;
     line-height: 1.5;
 }
 
 .enm-conv-actions {
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
     align-items: center;
-    gap: var(--spacing-sm);
-    margin-top: var(--spacing-md);
+    justify-content: flex-end;
+    gap: var(--sp-2);
+    margin-top: var(--sp-3);
+    padding-top: var(--sp-3);
+    border-top: 1px solid var(--border-subtle);
     width: 100%;
 }
 
@@ -3942,83 +3979,134 @@ select.enm-settings-input {
     accent-color: var(--primary);
 }
 
-/* ---- Card A: goal tiles ---- */
+/* ---- Card A: goal tiles (Phase 6a — v2 role-grid) ----
+ *
+ * The v2 mock ships these as `.role-grid` + `.role-card` (phase-06
+ * lines 91-105). The ENM analog has been `.enm-goal-tiles` + `.enm-
+ * goal-tile` since alpha.1, so we keep those names and re-skin them
+ * with the role-card pattern. The role-card layout is left-aligned
+ * grid (not centered flex), with a radio-dot in the header and a
+ * dashed-top meta line at the bottom.
+ *
+ * setup-conversation.js emits the structure at lines 277-292:
+ *   .enm-goal-tile > .enm-goal-illust + .enm-goal-tile-title +
+ *     .enm-goal-tile-sub + .enm-goal-tile-meta
+ * with `aria-pressed` and `data-goal` attributes. We key the selected
+ * state off `[aria-pressed="true"]` so no JS change is needed to wire
+ * the selection palette.
+ */
 .enm-goal-tiles {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: var(--spacing-md);
+    gap: var(--sp-3);
     width: 100%;
-    margin-top: var(--spacing-md);
+    margin-top: var(--sp-2);
 }
 
 .enm-goal-tile {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    text-align: center;
-    gap: var(--spacing-xs);
-    padding: var(--spacing-lg) var(--spacing-md);
-    background: var(--bg-surface);
-    border: 2px solid var(--border-color);
-    border-radius: 16px;
+    position: relative;
+    display: grid;
+    grid-auto-flow: row;
+    gap: var(--sp-2);
+    align-content: start;
+    text-align: left;
+    padding: var(--sp-5);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
     cursor: pointer;
     font: inherit;
     color: inherit;
     transition: border-color var(--motion-fast) var(--ease-out),
-                transform var(--motion-fast) var(--ease-out),
                 background var(--motion-fast) var(--ease-out);
 }
 .enm-goal-tile:hover {
-    border-color: var(--primary);
-    transform: translateY(-2px);
-    background: var(--primary-softer);
+    border-color: var(--border-strong);
 }
 .enm-goal-tile:focus-visible {
     outline: none;
-    border-color: var(--primary);
+    border-color: var(--accent);
     box-shadow: var(--focus-ring);
 }
-.enm-goal-tile:active { transform: translateY(0); }
+
+/* v2 "data-selected" state — keyed off aria-pressed which setup-
+   conversation.js toggles when the user clicks a role tile. */
+.enm-goal-tile[aria-pressed="true"] {
+    background: var(--accent-soft);
+    border-color: var(--accent);
+}
 
 /*
  * Disabled goal tile — Council node is "coming soon" but visible so
  * operators know it's planned. Visually de-emphasised + non-interactive.
  */
 .enm-goal-tile-disabled {
-    opacity: 0.5;
+    opacity: 0.55;
     cursor: not-allowed;
     pointer-events: none;
 }
 .enm-goal-tile-disabled:hover {
-    transform: none;
-    box-shadow: none;
+    border-color: var(--border);
 }
 
+/* v2 role-card illustration column. Sits inline with the title rather
+   than centered above it. */
 .enm-goal-illust {
-    width: 64px;
-    height: 64px;
-    margin-bottom: var(--spacing-xs);
+    width: 28px;
+    height: 28px;
+    margin-bottom: 0;
+    flex-shrink: 0;
 }
-.enm-goal-illust-earn { color: #f59e0b; }   /* amber for "money" feel */
-.enm-goal-illust-help { color: var(--primary); }
+.enm-goal-illust-earn { color: var(--accent); }
+.enm-goal-illust-help { color: var(--text-tertiary); }
 
 .enm-goal-tile-title {
-    font-size: 17px;
-    font-weight: 600;
+    font-size: var(--fs-h2);
+    font-weight: var(--fw-semibold);
     color: var(--text-primary);
+    letter-spacing: -0.01em;
 }
 .enm-goal-tile-sub {
-    font-size: 13px;
+    font-size: var(--fs-body);
     color: var(--text-secondary);
+    line-height: 1.55;
 }
+/* v2 role-card-meta — dashed top border + tertiary text + monospace
+   value spans inside. Replaces the alpha.1 pill bubble; the value is
+   no longer the "headline" of the tile. */
 .enm-goal-tile-meta {
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--primary);
-    margin-top: var(--spacing-xs);
+    font-size: var(--fs-caption);
+    font-weight: var(--fw-regular);
+    color: var(--text-tertiary);
+    margin-top: var(--sp-2);
+    padding: var(--sp-2) 0 0 0;
+    border-top: 1px dashed var(--border-subtle);
+    background: transparent;
+    border-radius: 0;
+    display: grid;
+    gap: 4px;
+}
+.enm-goal-tile-meta b {
+    color: var(--text-secondary);
+    font-weight: var(--fw-medium);
+}
+
+/* "COMING SOON" / "BETA" badge — absolute-positioned top-right.
+   Only renders if setup-conversation.js applies a [data-badge] attr
+   to the disabled Council tile (deferred to a follow-up JS patch). */
+.enm-goal-tile[data-badge]::after {
+    content: attr(data-badge);
+    position: absolute;
+    top: var(--sp-3);
+    right: var(--sp-3);
     padding: 2px 8px;
-    background: var(--primary-soft);
-    border-radius: var(--radius-pill);
+    border-radius: var(--r-xs);
+    font-size: 10px;
+    font-weight: var(--fw-semibold);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    background: var(--warning-bg);
+    color: var(--warning);
 }
 
 @media (max-width: 480px) {
