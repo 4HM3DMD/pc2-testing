@@ -364,21 +364,26 @@ body[data-active-tab="identity"]::before {
     --wash-b: rgba(60, 60, 67, 0.00);
 }
 
-/* Dark mode: bump every alpha so the wash lifts off near-black. */
-[data-theme="dark"][data-fleet-health="healthy"] {
-    --wash-a: rgba(52, 199, 89, 0.13);
+/* Page-wash hue overrides driven by FleetHealthGradient. Were gated
+   on [data-theme="dark"] before alpha.29; un-prefixed now that the app
+   is dark-only. Retuned to the v2 cyan-accent palette in Phase 1
+   so syncing's blue lifts off the v2 cyan-tinted base wash, and the
+   semantic-color alphas line up with the new --success/--warning/
+   --error tokens. */
+[data-fleet-health="healthy"] {
+    --wash-a: rgba(89, 196, 137, 0.13);
 }
-[data-theme="dark"][data-fleet-health="syncing"] {
-    --wash-a: rgba(52, 199, 89, 0.07);
-    --wash-b: rgba(10, 132, 255, 0.09);
+[data-fleet-health="syncing"] {
+    --wash-a: rgba(0, 212, 255, 0.07);
+    --wash-b: rgba(91, 143, 255, 0.09);
 }
-[data-theme="dark"][data-fleet-health="warning"] {
-    --wash-a: rgba(255, 159, 10, 0.10);
+[data-fleet-health="warning"] {
+    --wash-a: rgba(245, 166, 35, 0.10);
 }
-[data-theme="dark"][data-fleet-health="error"] {
-    --wash-a: rgba(255, 69, 58, 0.11);
+[data-fleet-health="error"] {
+    --wash-a: rgba(239, 80, 96, 0.11);
 }
-[data-theme="dark"][data-fleet-health="idle"] {
+[data-fleet-health="idle"] {
     --wash-a: rgba(235, 235, 245, 0.04);
 }
 
@@ -561,10 +566,12 @@ body[data-active-tab="identity"]::before {
 /* Theme toggle — show moon in light mode (click to go dark), sun in
    dark mode (click to go light). Mirrors dao-dashboard's icon swap.
    Specificity bumped via #enm-theme-toggle so it beats `.enm-icon-btn svg`. */
-#enm-theme-toggle .enm-icon-sun  { display: none; }
-#enm-theme-toggle .enm-icon-moon { display: block; }
-[data-theme="dark"] #enm-theme-toggle .enm-icon-sun  { display: block; }
-[data-theme="dark"] #enm-theme-toggle .enm-icon-moon { display: none; }
+/* Phase 1b — the four-rule sun/moon swap collapsed into two
+   unconditional rules. The app is dark-only so the sun icon is
+   permanently visible (its click handler is a no-op until Phase 1c
+   removes the whole toggle). */
+#enm-theme-toggle .enm-icon-sun  { display: block; }
+#enm-theme-toggle .enm-icon-moon { display: none; }
 
 /* ============================================================
    Main + per-pane scroll
