@@ -211,13 +211,15 @@
                     '<div class="enm-producer-field">' +
                         '<span class="enm-producer-field-label">Public key</span>' +
                         '<code class="enm-producer-field-value enm-producer-pubkey"></code>' +
-                        '<button class="enm-btn enm-btn-secondary enm-producer-copy" type="button" data-copy="pubkey" aria-label="Copy public key">Copy</button>' +
+                        // alpha.29 batch 99 — copy button rendered via
+                        // enmCopyButton factory; slot reserves the spot.
+                        '<span class="enm-producer-copy-slot" data-copy="pubkey"></span>' +
                     '</div>' +
                     (addr ? (
                         '<div class="enm-producer-field">' +
                             '<span class="enm-producer-field-label">Address</span>' +
                             '<code class="enm-producer-field-value enm-producer-addr"></code>' +
-                            '<button class="enm-btn enm-btn-secondary enm-producer-copy" type="button" data-copy="address" aria-label="Copy mainchain address">Copy</button>' +
+                            '<span class="enm-producer-copy-slot" data-copy="address"></span>' +
                         '</div>'
                     ) : '') +
                 '</div>' +
@@ -286,26 +288,30 @@
         var qrHost = this.root.querySelector('.enm-producer-qr');
         qrHost.innerHTML = renderQrSvg(pubkey, { size: 168, margin: 2 });
 
-        // Wire copy buttons.
-        // alpha.28.1 batch 58 — routed through enmCopyToClipboard so the
-        // feature-detect + writeText + notifications plumbing is shared
-        // with the other four copy sites (settings-tab, setup-conversation,
-        // validator-registration-card, tools-update-card). Round-6
-        // clipboard-UX audit a8a932d2.
+        // alpha.29 batch 99 — both copy buttons now built via
+        // root.enmCopyButton factory (utils.js batch 96). Replaces the
+        // 12-line querySelectorAll-then-attach-handler pattern from
+        // batch 58 with a per-slot factory call. Both buttons get the
+        // same UX (text-swap success, fallback warning toast) the
+        // validator-card migration in batch 96 introduced.
         var self = this;
-        this.root.querySelectorAll('.enm-producer-copy').forEach(function (b) {
-            b.addEventListener('click', function () {
-                var which = b.dataset.copy;
-                var text = which === 'address' ? addr : pubkey;
-                root.enmCopyToClipboard(text, {
-                    notifications: self.notifications,
-                    notifyOnSuccess: true,
-                    successTitle: 'Copied',
-                    successBody: which + ' is in the clipboard.',
-                    failTitle: 'Copy failed',
-                    failBody: 'Select the text and copy manually.',
-                });
+        this.root.querySelectorAll('.enm-producer-copy-slot').forEach(function (slot) {
+            var which = slot.dataset.copy;
+            var capturedText = which === 'address' ? addr : pubkey;
+            var labelKey = which === 'address' ? 'Copy mainchain address' : 'Copy public key';
+            var btn = root.enmCopyButton({
+                value: capturedText,
+                label: 'Copy',
+                copiedLabel: 'Copied',
+                ariaLabel: labelKey,
+                resetMs: 1200,
+                notifications: self.notifications,
+                failTitle: 'Copy failed',
+                failBody: 'Select the text and copy manually.',
             });
+            btn.classList.add('enm-producer-copy');
+            btn.setAttribute('data-copy', which);
+            slot.parentNode.replaceChild(btn, slot);
         });
 
         // 0.2.0-alpha.6 — append the on-chain binding section. The parity audit

@@ -1523,46 +1523,23 @@
         span.textContent = display != null ? display : value;
         line.appendChild(span);
 
-        var copyBtn = document.createElement('button');
-        copyBtn.type = 'button';
-        copyBtn.className = 'enm-btn enm-btn-secondary enm-rpc-creds-copy';
-        copyBtn.textContent = t('settings.rpc_copy');
-        // a11y: every copy button needs an explicit label so screen
-        // readers don't announce just the generic "Copy" string. The
-        // adjacent <span> holds the actual displayed (often masked)
-        // value — we wire its text into aria-label at click time too
-        // via the .enm-rpc-creds-value span when present.
-        copyBtn.setAttribute('aria-label', 'Copy ' + (display != null ? 'value' : 'credential'));
-        // alpha.28.1 batch 58 — routed through enmCopyToClipboard so the
-        // feature-detect + writeText path is shared with the other four
-        // copy sites. Custom onFallback preserves the select-the-value
-        // affordance so the operator can ⌘-C manually when the API is
-        // unavailable. Round-6 clipboard-UX audit a8a932d2.
-        // alpha.28.1 batch 88 (Round-28 finding #2) — also surface a
-        // warning toast on fallback so the operator knows the clipboard
-        // API was blocked and the value is selected for manual copy.
-        // Previous shape selected silently → rage-click UX. Mirrors the
-        // validator-card pattern from batch 87.
-        copyBtn.addEventListener('click', function () {
-            root.enmCopyToClipboard(value, {
-                btn: copyBtn,
-                copiedLabel: t('settings.rpc_copied'),
-                resetMs: 1200,
-                onFallback: function () {
-                    // Fallback: select the value so the operator can ctrl-c.
-                    var range = document.createRange();
-                    range.selectNodeContents(span);
-                    var sel = window.getSelection();
-                    sel.removeAllRanges();
-                    sel.addRange(range);
-                    if (notifications) {
-                        notifications.warning(
-                            t('settings.rpc_copy_fail_title'),
-                            t('settings.rpc_copy_fail_body')
-                        );
-                    }
-                },
-            });
+        // alpha.29 batch 102 — copy button built via root.enmCopyButton
+        // factory. Replaces ~30 lines of hand-wired onFallback +
+        // selectInto + warning-toast plumbing from batches 58/87/88
+        // with a single factory call. getDisplayEl points at the
+        // adjacent <span> so the factory's select-text fallback hits
+        // the right element.
+        var copyBtn = root.enmCopyButton({
+            value: value,
+            label: t('settings.rpc_copy'),
+            copiedLabel: t('settings.rpc_copied'),
+            ariaLabel: 'Copy ' + (display != null ? 'value' : 'credential'),
+            resetMs: 1200,
+            notifications: notifications || null,
+            failTitle: t('settings.rpc_copy_fail_title'),
+            failBody: t('settings.rpc_copy_fail_body'),
+            getDisplayEl: function () { return span; },
+            className: 'enm-rpc-creds-copy',
         });
         line.appendChild(copyBtn);
         return line;

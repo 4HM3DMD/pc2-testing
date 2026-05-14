@@ -942,59 +942,38 @@
         var self = this;
         els.title.textContent = t('friendly.setup.card_c.title_generated');
         els.sub.textContent   = t('friendly.setup.card_c.sub_generated');
+        // alpha.29 batch 100 — keystore-password copy button now built
+        // via root.enmCopyButton factory. Slot replaced post-mount.
+        // Replaces 30+ lines of hand-wired onFallback + selectInto +
+        // warning-toast plumbing from batches 58/88 with a single
+        // factory call.
         els.reveal.innerHTML =
             '<div class="enm-password-reveal">'
               + '<code class="enm-password-value">' + escapeHtml(password) + '</code>'
-              + '<button type="button" class="enm-btn enm-btn-secondary enm-password-copy" aria-label="Copy keystore password">'
-                + escapeHtml(t('friendly.setup.card_c.cta_copy'))
-              + '</button>'
+              + '<span class="enm-password-copy-slot"></span>'
             + '</div>'
             + '<label class="enm-conv-checkbox">'
               + '<input type="checkbox" id="enm-conv-c-ack"/>'
               + '<span>' + escapeHtml(t('friendly.setup.card_c.ack')) + '</span>'
             + '</label>';
 
-        // alpha.28.1 batch 58 — routed through enmCopyToClipboard so the
-        // feature-detect + writeText path is shared with the other four
-        // copy sites. Custom onFallback preserves the select-the-password
-        // affordance so the operator can ⌘-C manually when the iframe
-        // sandbox blocks the API. Round-6 clipboard-UX audit a8a932d2.
-        var copyBtn = els.reveal.querySelector('.enm-password-copy');
-        copyBtn.addEventListener('click', function () {
-            root.enmCopyToClipboard(password, {
-                btn: copyBtn,
-                copiedLabel: t('friendly.setup.card_c.cta_copied'),
-                resetMs: 1500,
-                onFallback: function () {
-                    // Programmatically select the password code so Ctrl+C works.
-                    try {
-                        var passEl = els.reveal.querySelector('.enm-password-value');
-                        if (passEl) {
-                            var range = document.createRange();
-                            range.selectNodeContents(passEl);
-                            var sel = root.getSelection();
-                            sel.removeAllRanges();
-                            sel.addRange(range);
-                        }
-                    } catch (selErr) { /* ignore — operator can manually triple-click */ }
-                    // alpha.28.1 batch 88 (Round-28 finding #2) — also
-                    // surface a warning toast so the operator knows the
-                    // clipboard API was blocked and the password is
-                    // selected for manual copy. Previous shape selected
-                    // silently → operator saw nothing happen and rage-
-                    // clicked. Mirrors the validator-card pattern from
-                    // batch 87. The keystore-password reveal is a one-
-                    // shot ceremony so the missed signal is especially
-                    // costly here.
-                    if (self.notifications) {
-                        self.notifications.warning(
-                            t('friendly.setup.card_c.copy_fail_title'),
-                            t('friendly.setup.card_c.copy_fail_body')
-                        );
-                    }
-                },
-            });
+        var pwEl = els.reveal.querySelector('.enm-password-value');
+        var copyBtn = root.enmCopyButton({
+            value: password,
+            label: t('friendly.setup.card_c.cta_copy'),
+            copiedLabel: t('friendly.setup.card_c.cta_copied'),
+            ariaLabel: 'Copy keystore password',
+            resetMs: 1500,
+            notifications: self.notifications,
+            failTitle: t('friendly.setup.card_c.copy_fail_title'),
+            failBody: t('friendly.setup.card_c.copy_fail_body'),
+            getDisplayEl: function () { return pwEl; },
         });
+        copyBtn.classList.add('enm-password-copy');
+        var copySlot = els.reveal.querySelector('.enm-password-copy-slot');
+        if (copySlot && copySlot.parentNode) {
+            copySlot.parentNode.replaceChild(copyBtn, copySlot);
+        }
 
         els.actions.innerHTML = '';
         var continueBtn = makeBtn(t('friendly.setup.card_c.cta_continue'), 'primary hero', function () {
