@@ -10,7 +10,7 @@
     <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
     <meta name="referrer" content="no-referrer">
     <title>Elastos Node Manager</title>
-    <link rel="stylesheet" href="css/styles.css?ts=20260515b3a">
+    <link rel="stylesheet" href="css/styles.css?ts=20260515b3b">
     <script>
         // Beta 3 — Phase 1c carried over. Dark-only. We hard-code data-theme=dark
         // on documentElement so any rule that still says [data-theme="dark"] keeps
@@ -51,6 +51,24 @@
          users can jump past the chrome (brand, tabs, gear). Visible
          only on focus (see .enm-skip-link in styles.css). -->
     <a href="#enm-main" class="enm-skip-link">Skip to main content</a>
+
+    <!-- BP-A — Reusable SVG defs referenced by the chain-card hero.
+         #enm-power-icon: the power symbol inside .enm-hero-power.
+         #enm-sync-grad:  cyan→blue linear gradient for the .enm-hero-sync
+                          progress ring. Both defined ONCE here so every
+                          mounted chain-card can `<use href="#..."/>`. -->
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+        <defs>
+            <symbol id="enm-power-icon" viewBox="0 0 24 24">
+                <path d="M18.36 6.64a9 9 0 1 1-12.73 0" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+                <line x1="12" y1="3" x2="12" y2="13" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+            </symbol>
+            <linearGradient id="enm-sync-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stop-color="#00d4ff"/>
+                <stop offset="100%" stop-color="#5b8fff"/>
+            </linearGradient>
+        </defs>
+    </svg>
 
     <!--
         Beta 3 app shell. Reference: enm-design-mocks/v2/phase-02-chrome.html.
@@ -149,10 +167,10 @@
     <script defer src="js/services/online-watcher.js?ts=20260514a"></script>
     <script defer src="js/services/fleet-health-gradient.js?ts=20260512a"></script>
     <script defer src="js/services/height-series.js?ts=20260512a"></script>
-    <script defer src="js/components/system-status.js?ts=20260511f"></script>
+    <script defer src="js/components/system-status.js?ts=20260515b3b"></script>
     <script defer src="js/components/sparkline.js?ts=20260512a"></script>
     <script defer src="js/components/power-circle.js?ts=20260512a"></script>
-    <script defer src="js/components/chain-card.js?ts=20260512e"></script>
+    <script defer src="js/components/chain-card.js?ts=20260515b3b"></script>
     <script defer src="js/components/validator-registration-card.js?ts=20260511e"></script>
     <script defer src="js/components/producer-identity.js?ts=20260512a"></script>
     <script defer src="js/components/log-viewer.js?ts=20260507d"></script>
@@ -172,6 +190,6 @@
     <script defer src="js/components/settings-drawer.js?ts=20260506g"></script>
     <script defer src="js/components/tools-update-card.js?ts=20260512c"></script>
     <script defer src="js/components/technical-view.js?ts=20260512f"></script>
-    <script defer src="js/app.js?ts=20260515b3a"></script>
+    <script defer src="js/app.js?ts=20260515b3b"></script>
 </body>
 </html>

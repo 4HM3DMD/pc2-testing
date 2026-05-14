@@ -128,14 +128,12 @@
         } else {
             this._rotationTimer = setInterval(function () { self._refreshRotation(); }, 60_000);
         }
-        // Height-series sparkline. Subscribe once on mount; the service
-        // bootstraps with a GET /history then layers SSE deltas on top.
-        if (this.heightSeries) {
-            this._unsubHeight = this.heightSeries.subscribe(this.chainId, function (points) {
-                if (self._destroyed) return;
-                if (self._sparkline) self._sparkline.setSeries(points);
-            });
-        }
+        // Beta 3 — Sparkline DROPPED from the chain-card mount path.
+        // phase-03 mock has no sparkline in the Dashboard view; block
+        // velocity moves into the .enm-sync-progress-bar text line
+        // ("Receiving N new blocks/min from peers"). The heightSeries
+        // service is left untouched in case BP-C / BP-D wants to reuse
+        // it for a different surface; we just don't subscribe here.
         return this;
     };
 
@@ -220,125 +218,248 @@
         return this._refreshInFlight;
     };
 
-    /** @private */
+    /**
+     * @private
+     * Beta 3 — Dashboard view rebuilt from `enm-design-mocks/v2/
+     * phase-03-status.html`. The DOM now mirrors the mock structure:
+     *
+     *   .enm-chain-card                          ← this.root
+     *     .enm-chain-card-content                ← 2-col grid auto / 1fr
+     *       .enm-hero-power[data-state]   OR     ← hero swap
+     *       .enm-hero-sync (with sync %)
+     *       .enm-chain-meta
+     *         .enm-state-chip                    ← state pill with dot
+     *         <div>
+     *           .enm-chain-height-label "Block height"
+     *           .enm-chain-height "1,742,891"
+     *         </div>
+     *         .enm-chain-subline                 ← "Fully synced" or sync info
+     *         .enm-sync-progress-bar (hidden when not syncing)
+     *         .enm-chain-reconnect (alpha.28 batch — kept for SSE drops)
+     *     .enm-chain-rotation (alpha.7 — hidden by default)
+     *     .enm-stats > .enm-stat (peers / version / uptime)
+     *     .enm-chain-actions > .enm-btn ...
+     *
+     * The PowerCircle + Sparkline mounts from alpha.27 are GONE. The
+     * mock has no sparkline on Dashboard, and the hero is now a small
+     * div the chain-card owns directly (state-driven via CSS data
+     * attribute). The alpha.28 lifecycle invariants (refresh poll,
+     * sync poll, SSE wiring, _destroyed guard, BPoS rotation) are
+     * preserved verbatim — only the DOM target selectors change.
+     */
     ChainCard.prototype._renderShell = function () {
         var t = root.enmTOrFallback;
         var self = this;
 
-        // 1. Hero — the PowerCircle. Apple Activity Ring at 220px.
-        var hero = document.createElement('div');
-        hero.className = 'enm-chain-hero';
-        this._powerCircle = new root.EnmPowerCircle({
-            ariaLabel: t('chain_card.tap_circle_aria', { chainName: this.chainId }),
-            onTap: function () { self._handleCircleTap(); },
+        // .enm-chain-card-content — the 2-col grid (hero | meta).
+        this._content = document.createElement('div');
+        this._content.className = 'enm-chain-card-content';
+
+        // Hero slot — we swap .enm-hero-power vs .enm-hero-sync into here
+        // depending on coarse state. Initial render is power/stopped so
+        // the card has SOMETHING the first paint before _applyState lands.
+        this._heroSlot = document.createElement('div');
+        this._heroSlot.className = 'enm-chain-hero-slot';
+        // Clickable hero — keeps the alpha.18 "tap circle to do the
+        // obvious thing" affordance. Same handler as the old
+        // PowerCircle's onTap.
+        this._heroSlot.setAttribute('role', 'button');
+        this._heroSlot.setAttribute('tabindex', '0');
+        this._heroSlot.setAttribute('aria-label',
+            t('chain_card.tap_circle_aria', { chainName: this.chainId }) || 'Chain status');
+        this._heroSlot.addEventListener('click', function () { self._handleCircleTap(); });
+        this._heroSlot.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                self._handleCircleTap();
+            }
         });
-        this._powerCircle.mount(hero);
-        this.root.appendChild(hero);
+        this._content.appendChild(this._heroSlot);
 
-        // 2. Name + state subtitle.
-        var header = document.createElement('header');
-        header.className = 'enm-chain-card-head';
+        // .enm-chain-meta — right column
+        this._meta = document.createElement('div');
+        this._meta.className = 'enm-chain-meta';
 
-        var name = document.createElement('h3');
-        name.className = 'enm-chain-card-name';
-        name.textContent = this.chainId;
-        header.appendChild(name);
+        // state-chip
+        this._stateChip = document.createElement('span');
+        this._stateChip.className = 'enm-state-chip';
+        // a11y: state changes get announced politely (alpha.28 carry).
+        this._stateChip.setAttribute('role', 'status');
+        var chipDot = document.createElement('span');
+        chipDot.className = 'enm-state-chip-dot';
+        this._stateChip.appendChild(chipDot);
+        this._stateChipText = document.createTextNode(t('chain_state.unconfigured'));
+        this._stateChip.appendChild(this._stateChipText);
+        this._meta.appendChild(this._stateChip);
 
-        this._stateSubtitle = document.createElement('p');
-        this._stateSubtitle.className = 'enm-chain-card-state';
-        // a11y: state flips (healthy → stalled, alive → stopped, etc.)
-        // were silent for screen-reader users. role="status" makes the
-        // subtitle a polite live region so the new state is announced
-        // without yanking focus.
-        this._stateSubtitle.setAttribute('role', 'status');
-        this._stateSubtitle.textContent = t('chain_state.unconfigured');
-        header.appendChild(this._stateSubtitle);
+        // height block
+        var heightBlock = document.createElement('div');
+        var heightLabel = document.createElement('div');
+        heightLabel.className = 'enm-chain-height-label';
+        heightLabel.textContent = t('chain_card.primary_label_height') || 'Block height';
+        heightBlock.appendChild(heightLabel);
+        this._chainHeight = document.createElement('div');
+        this._chainHeight.className = 'enm-chain-height';
+        this._chainHeight.textContent = '—';
+        heightBlock.appendChild(this._chainHeight);
+        this._meta.appendChild(heightBlock);
 
-        // 0.2.0-alpha.1 — SSE-disconnect indicator pill. The breath
-        // animation says "alive"; when SSE drops we'd be lying. This
-        // pill appears under the state subtitle while the connection
-        // is reconnecting / closed, and the CSS also pauses the breath
-        // via the [data-sse-state] attribute on the card root.
+        // subline — fully-synced ✓ tick OR sync info "Receiving 12 blocks/min"
+        this._subline = document.createElement('div');
+        this._subline.className = 'enm-chain-subline';
+        this._meta.appendChild(this._subline);
+
+        // sync-progress-bar — visible only when syncing. Carries the
+        // "Receiving N blocks/min from peers" feedback line per mock.
+        this._syncBar = document.createElement('div');
+        this._syncBar.className = 'enm-sync-progress-bar';
+        this._syncBar.hidden = true;
+        this._meta.appendChild(this._syncBar);
+
+        // alpha.28.1 — SSE-disconnect indicator pill. The mock has no
+        // explicit slot for it; we tuck it inside meta so it sits with
+        // the rest of the chain status info. role=status preserved.
         this._reconnectPill = document.createElement('span');
         this._reconnectPill.className = 'enm-chain-reconnect';
-        // a11y: SSE drop was visually flagged but silent. role="status"
-        // announces the change once when the pill un-hides (without
-        // aria-live="polite" we'd double-announce on Safari/older NVDA).
         this._reconnectPill.setAttribute('role', 'status');
         this._reconnectPill.textContent = t('chain_card.sse_reconnecting') || 'Reconnecting…';
         this._reconnectPill.hidden = true;
-        header.appendChild(this._reconnectPill);
+        this._meta.appendChild(this._reconnectPill);
 
-        this.root.appendChild(header);
+        this._content.appendChild(this._meta);
+        this.root.appendChild(this._content);
 
-        // 3. Primary metric — block height number stacked over a small
-        // lowercase label. Mock pattern: large mono digits speak first,
-        // the label sits underneath as a caption.
-        var primaryWrap = document.createElement('div');
-        primaryWrap.className = 'enm-chain-primary';
-        this._primaryMetric = document.createElement('span');
-        this._primaryMetric.className = 'enm-chain-primary-value';
-        primaryWrap.appendChild(this._primaryMetric);
-        this._primaryLabel = document.createElement('span');
-        this._primaryLabel.className = 'enm-chain-primary-label';
-        this._primaryLabel.textContent = t('chain_card.primary_label_height');
-        primaryWrap.appendChild(this._primaryLabel);
-        this.root.appendChild(primaryWrap);
-
-        // 4. Sparkline — last-hour block-height growth. Mounts once;
-        // setSeries fires whenever the height-series client emits.
-        if (root.EnmSparkline) {
-            this._sparkline = new root.EnmSparkline({
-                color: 'var(--state-healthy)',
-                ariaLabel: t('chain_card.sparkline_aria') || 'Block height, last hour',
-            });
-            this._sparkline.mount(this.root);
-        }
-
-        // 0.2.0-alpha.7 — DPoS rotation strip (improvement #02). Shows the
-        // operator's slot in the current BPoS arbiter slate + whether
-        // their key is on duty right now. Polled separately (60s cadence
-        // — rotation only flips on round boundaries, no need to poll
-        // faster than that). Hidden when chain is not alive OR not
-        // registered.
+        // alpha.7 — DPoS rotation strip (improvement #02). Hidden unless
+        // on-duty / in-slate / next-slate. Sits between the meta and
+        // the stats row.
         this._rotationStrip = document.createElement('div');
         this._rotationStrip.className = 'enm-chain-rotation';
         this._rotationStrip.hidden = true;
         this.root.appendChild(this._rotationStrip);
 
-        // 5. Stats strip — peers / version / uptime. Mirrors the
-        // system-status hierarchy (value-on-top + tiny label below).
+        // .enm-stats — phase-03 row of stat cells. Peers/version/uptime.
         this._statsStrip = document.createElement('div');
-        this._statsStrip.className = 'enm-chain-stats-strip';
+        this._statsStrip.className = 'enm-stats';
         this._statFields = {};
         ['peers', 'version', 'uptime'].forEach(function (k) {
             var cell = document.createElement('div');
-            cell.className = 'enm-chain-stats-cell enm-chain-stats-' + k;
-            var value = document.createElement('span');
-            value.className = 'enm-chain-stats-value';
-            value.textContent = '—';
-            cell.appendChild(value);
+            cell.className = 'enm-stat enm-stat-' + k;
             var label = document.createElement('span');
-            label.className = 'enm-chain-stats-label';
+            label.className = 'enm-stat-label';
             label.textContent = t('chain_card.' + k);
             cell.appendChild(label);
+            var value = document.createElement('span');
+            value.className = 'enm-stat-value';
+            value.textContent = '—';
+            cell.appendChild(value);
             self._statsStrip.appendChild(cell);
             self._statFields[k] = value;
         });
         this.root.appendChild(this._statsStrip);
 
-        // 6. Action row.
+        // .enm-chain-actions — Configure (when unconfigured) / Start /
+        // Restart / Stop. Mock order is Restart first then Stop; we keep
+        // that order so the destructive Stop is the rightmost button
+        // (less likely to be clicked accidentally).
         var actions = document.createElement('div');
         actions.className = 'enm-chain-actions';
-        this._configureBtn = makeBtn(t('chain_actions.configure'), 'enm-btn-primary',   this._handleConfigure.bind(this));
-        this._startBtn     = makeBtn(t('chain_actions.start'),     'enm-btn-primary',   this._handleStart.bind(this));
-        this._stopBtn      = makeBtn(t('chain_actions.stop'),      'enm-btn-secondary', this._handleStop.bind(this));
-        this._restartBtn   = makeBtn(t('chain_actions.restart'),   'enm-btn-secondary', this._handleRestart.bind(this));
+        this._configureBtn = makeBtn(t('chain_actions.configure'), 'enm-btn enm-btn-primary',   this._handleConfigure.bind(this));
+        this._startBtn     = makeBtn(t('chain_actions.start'),     'enm-btn enm-btn-primary',   this._handleStart.bind(this));
+        this._restartBtn   = makeBtn(t('chain_actions.restart'),   'enm-btn',                   this._handleRestart.bind(this));
+        this._stopBtn      = makeBtn(t('chain_actions.stop'),      'enm-btn enm-btn-danger',    this._handleStop.bind(this));
         actions.appendChild(this._configureBtn);
         actions.appendChild(this._startBtn);
-        actions.appendChild(this._stopBtn);
         actions.appendChild(this._restartBtn);
+        actions.appendChild(this._stopBtn);
         this.root.appendChild(actions);
+
+        // alpha.28 carry — `this._stateSubtitle` and `this._primaryMetric` /
+        // `this._primaryLabel` are EXPECTED by _applyState + _refreshSync.
+        // The new DOM doesn't have those as separate elements; we point
+        // them at compatibility proxies so the old methods keep working
+        // without a full rewrite. (Future Beta 3 audit pass can refactor
+        // _applyState to write to the new field names directly.)
+        this._stateSubtitle = this._stateChip;          // writes to text node below
+        this._primaryMetric = this._chainHeight;        // value
+        this._primaryLabel  = heightLabel;              // "Block height"
+
+        // Initial hero render — empty/stopped until _applyState lands.
+        this._renderHeroPower('stopped');
+    };
+
+    /**
+     * @private
+     * Swap the hero slot to .enm-hero-power with the given data-state.
+     * Mock visual states: 'running' (green halo + pulsing dot),
+     * 'stopped' (gray, no glow, no dot), 'stalled' (amber halo + dot),
+     * 'error' (red, designed but not rendered in the phase-03 mock).
+     */
+    ChainCard.prototype._renderHeroPower = function (state) {
+        if (this._heroMode === 'power' && this._heroSlot.firstChild
+            && this._heroSlot.firstChild.dataset.state === state) {
+            return; // no-op if already in this state — avoid DOM churn
+        }
+        this._heroSlot.innerHTML = '';
+        var hero = document.createElement('div');
+        hero.className = 'enm-hero-power';
+        hero.dataset.state = state;
+        var live = document.createElement('div');
+        live.className = 'enm-hero-power-live';
+        hero.appendChild(live);
+        // SVG uses <use> to reference the shared #enm-power-icon symbol
+        // defined at body top in index.html.
+        var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('class', 'enm-hero-power-icon');
+        svg.setAttribute('viewBox', '0 0 24 24');
+        var use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+        use.setAttributeNS('http://www.w3.org/1999/xlink', 'href', '#enm-power-icon');
+        use.setAttribute('href', '#enm-power-icon');
+        svg.appendChild(use);
+        hero.appendChild(svg);
+        this._heroSlot.appendChild(hero);
+        this._heroMode = 'power';
+    };
+
+    /**
+     * @private
+     * Swap the hero slot to .enm-hero-sync with the given percent (0-100).
+     * Mock spec: concentric SVG circles r=45, stroke-dasharray=282.6
+     * (= 2πr), dashoffset = circumference × (1 - pct/100). Inner block
+     * shows the percent + "Syncing" label.
+     */
+    ChainCard.prototype._renderHeroSync = function (percent) {
+        var pct = Math.max(0, Math.min(100, percent || 0));
+        var circ = 282.6; // 2π × 45 ≈ 282.74; mock uses 282.6 — keep parity
+        var offset = (circ * (1 - pct / 100)).toFixed(1);
+        if (this._heroMode === 'sync') {
+            // In-place update: don't rebuild the SVG, just adjust dashoffset
+            // + percent text so the ring animates smoothly via CSS
+            // transition.
+            var ring = this._heroSlot.querySelector('.enm-hero-sync svg circle:nth-of-type(2)');
+            var pctEl = this._heroSlot.querySelector('.enm-hero-pct');
+            if (ring) { ring.setAttribute('stroke-dashoffset', offset); }
+            if (pctEl) {
+                pctEl.firstChild.nodeValue = String(Math.round(pct));
+            }
+            return;
+        }
+        this._heroSlot.innerHTML = '';
+        var hero = document.createElement('div');
+        hero.className = 'enm-hero-sync';
+        hero.innerHTML =
+            '<svg viewBox="0 0 100 100" aria-hidden="true">'
+            +   '<circle cx="50" cy="50" r="45" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="6"/>'
+            +   '<circle cx="50" cy="50" r="45" fill="none" stroke="url(#enm-sync-grad)" stroke-width="6"'
+            +     ' stroke-dasharray="' + circ + '"'
+            +     ' stroke-dashoffset="' + offset + '"'
+            +     ' stroke-linecap="round" transform="rotate(-90 50 50)"/>'
+            + '</svg>'
+            + '<div class="enm-hero-sync-inner">'
+            +   '<div class="enm-hero-pct">' + Math.round(pct) + '<span class="enm-hero-pct-suffix">%</span></div>'
+            +   '<div class="enm-hero-pct-label">Syncing</div>'
+            + '</div>';
+        this._heroSlot.appendChild(hero);
+        this._heroMode = 'sync';
     };
 
     /**
@@ -396,42 +517,63 @@
         this._lastBackendState = state || {};
         this.root.dataset.state = coarse;
 
-        // PowerCircle visual state. Percent (for syncing) lands later
-        // from /chains/:id/sync via _refreshSync; the coarse state goes
-        // on the ring first so the colour flips immediately.
-        var visualState = COARSE_TO_VISUAL[coarse] || 'off';
-        this._powerCircle.setState(visualState);
-
-        // 0.2.0-alpha.1 — Sparkline colour tracks the visual state so the
-        // line + fill paint in the same hue as the ring. Stopped chains
-        // keep their last-known sparkline but in a dimmed neutral.
-        if (this._sparkline) {
-            var sparkColor = (coarse === 'healthy') ? 'var(--state-healthy)'
-                : (coarse === 'syncing' || coarse === 'recovering' || coarse === 'starting')
-                    ? 'var(--state-syncing)'
-                : (coarse === 'stalled') ? 'var(--state-stalled)'
-                : (coarse === 'error')   ? 'var(--state-error)'
-                : 'var(--text-muted)';
-            this._sparkline.setColor(sparkColor);
-        }
-
-        // State subtitle. Producer state wins over coarse state when the
-        // chain is alive AND we've fetched a producer record (alpha.15).
-        // /chains/:id may include `producerState` inline since alpha.15.
-        var producerState = state && state.producerState;
-        if (producerState && (coarse === 'healthy' || coarse === 'syncing' || coarse === 'stalled')) {
-            this._stateSubtitle.textContent = producerState;
-            this._stateSubtitle.dataset.state = coarse + '-producer-' + String(producerState).toLowerCase();
+        // Beta 3 — hero swap per phase-03 mock. `.hero-power` for stopped/
+        // running/stalled/error; `.hero-sync` for syncing/recovering/
+        // starting. Percent for sync hero lands later from _refreshSync;
+        // initial percent is 0 until /sync resolves.
+        if (coarse === 'syncing' || coarse === 'recovering' || coarse === 'starting') {
+            this._renderHeroSync(this._lastSyncPercent || 0);
         } else {
-            this._stateSubtitle.textContent = t('chain_state.' + coarse);
-            this._stateSubtitle.dataset.state = coarse;
+            // Map coarse → hero-power data-state. Mock defines: running /
+            // stopped / stalled / error. Unconfigured / disabled visually
+            // are 'stopped' (gray, no glow).
+            var heroState = (coarse === 'healthy') ? 'running'
+                : (coarse === 'stalled') ? 'stalled'
+                : (coarse === 'error')   ? 'error'
+                : 'stopped';
+            this._renderHeroPower(heroState);
         }
 
-        // Primary metric — block height number alone. The "/ network"
-        // suffix (when syncing) lands from /sync via _refreshSync.
+        // State-chip — text + modifier class. Mock variants: .accent
+        // (syncing), .warn (stalled), .error (error), .muted (stopped),
+        // default (healthy). The chain-chip-dot pulses; muted variant
+        // mutes the pulse.
+        var producerState = state && state.producerState;
+        var chipText;
+        if (producerState && (coarse === 'healthy' || coarse === 'syncing' || coarse === 'stalled')) {
+            chipText = producerState;
+            this._stateChip.dataset.state = coarse + '-producer-' + String(producerState).toLowerCase();
+        } else {
+            chipText = t('chain_state.' + coarse);
+            this._stateChip.dataset.state = coarse;
+        }
+        // Update the text node without wiping the dot child.
+        this._stateChipText.nodeValue = chipText;
+        // Modifier classes
+        this._stateChip.classList.remove('accent', 'warn', 'error', 'muted');
+        if (coarse === 'syncing' || coarse === 'recovering' || coarse === 'starting') {
+            this._stateChip.classList.add('accent');
+        } else if (coarse === 'stalled') {
+            this._stateChip.classList.add('warn');
+        } else if (coarse === 'error') {
+            this._stateChip.classList.add('error');
+        } else if (coarse === 'stopped' || coarse === 'unconfigured' || coarse === 'disabled') {
+            this._stateChip.classList.add('muted');
+        }
+
+        // Block-height number. The "/ network" suffix when syncing is set
+        // later by _refreshSync via _applySyncSnapshot.
         var height = (state && state.height != null) ? state.height : null;
-        this._primaryMetric.textContent = formatPrimaryValue(t, coarse, height, null);
+        this._chainHeight.textContent = formatPrimaryValue(t, coarse, height, null);
+        // The "Block height" label stays static in phase-03; in alpha.27
+        // it swapped to "connecting to peers" while we waited for the
+        // first peer handshake. Preserve that behaviour but write into
+        // the new heightLabel node (proxied via _primaryLabel).
         this._primaryLabel.textContent = formatPrimaryLabel(t, coarse, height, null);
+
+        // Subline — at-tip "Fully synced" check when healthy, or sync
+        // info during sync (lands from _refreshSync). Cleared otherwise.
+        this._renderSubline(coarse, state, null);
 
         // Stats strip.
         // 0.2.0-alpha.28.1 — peers/latency/skew numbers now go through
@@ -721,24 +863,94 @@
      */
     ChainCard.prototype._applySyncSnapshot = function (data) {
         var t = root.enmTOrFallback;
+        var coarse = this._lastCoarseState || 'unconfigured';
 
-        // Ring percent — only when the coarse state agrees we're syncing.
-        if (data && this._lastCoarseState === 'syncing'
-            && typeof data.percent === 'number') {
-            this._powerCircle.setState('syncing', { percent: data.percent });
-        } else if (data && data.synced && this._lastCoarseState === 'healthy') {
-            // Snapped to tip — clear any leftover percent.
-            this._powerCircle.setState('healthy');
+        // Beta 3 hero — update the sync ring percent in place. Phase-03
+        // mock shows the percent number + dashoffset together; we update
+        // the existing .enm-hero-sync if we're in sync mode, otherwise
+        // ignore the sync snapshot (coarse state already drove the hero
+        // to .enm-hero-power).
+        if (data && typeof data.percent === 'number'
+            && (coarse === 'syncing' || coarse === 'recovering' || coarse === 'starting')) {
+            this._lastSyncPercent = data.percent;
+            this._renderHeroSync(data.percent);
         }
 
-        // Primary metric + label. When we have a real /sync snapshot, the
-        // formatter shows "local / network" while syncing; the label
-        // swaps to "connecting to peers" when localHeight is still null.
+        // Block-height number — when syncing, formatter shows
+        // "local / network"; once basicallySynced, just local.
         var height = (this._lastBackendState && this._lastBackendState.height != null)
             ? this._lastBackendState.height : null;
-        var coarse = this._lastCoarseState || 'unconfigured';
-        this._primaryMetric.textContent = formatPrimaryValue(t, coarse, height, data);
+        this._chainHeight.textContent = formatPrimaryValue(t, coarse, height, data);
         this._primaryLabel.textContent  = formatPrimaryLabel(t, coarse, height, data);
+
+        // Subline — sync info ("Fully synced in ~4 min · 381,436 blocks
+        // behind") + sync-progress-bar ("Receiving 12 new blocks/min from
+        // peers"). Per phase-03 mock when syncing.
+        this._renderSubline(coarse, this._lastBackendState, data);
+    };
+
+    /**
+     * @private
+     * Beta 3 — render the chain-subline below the chain-height per
+     * phase-03 mock. When healthy: a single `.at-tip` "Fully synced"
+     * chip with a ✓ glyph (CSS ::before). When syncing: an ETA line
+     * + "N blocks behind" line, plus a sync-progress-bar showing
+     * "Receiving N new blocks/min from peers". Otherwise: empty.
+     */
+    ChainCard.prototype._renderSubline = function (coarse, state, syncData) {
+        if (!this._subline) { return; }
+        var fmtN = (typeof window !== 'undefined' && window.enmFormatNumber)
+            ? window.enmFormatNumber
+            : function (n) { return (n == null || !isFinite(n)) ? '—' : String(n); };
+        this._subline.innerHTML = '';
+        this._syncBar.hidden = true;
+        this._syncBar.innerHTML = '';
+
+        if (coarse === 'healthy') {
+            var atTip = document.createElement('span');
+            atTip.className = 'enm-at-tip';
+            atTip.textContent = 'Fully synced';
+            this._subline.appendChild(atTip);
+            return;
+        }
+
+        if (coarse === 'syncing' || coarse === 'recovering' || coarse === 'starting') {
+            // ETA + blocks-behind line
+            if (syncData) {
+                if (syncData.etaMinutes != null) {
+                    var eta = document.createElement('span');
+                    eta.innerHTML = 'Fully synced in <b>~' + fmtN(syncData.etaMinutes) + ' min</b>';
+                    this._subline.appendChild(eta);
+                }
+                if (syncData.blocksBehind != null) {
+                    if (this._subline.children.length) {
+                        var sep = document.createElement('span');
+                        sep.className = 'enm-chain-subline-sep';
+                        sep.textContent = '·';
+                        this._subline.appendChild(sep);
+                    }
+                    var behind = document.createElement('span');
+                    behind.innerHTML = '<b>' + fmtN(syncData.blocksBehind) + '</b> blocks behind';
+                    this._subline.appendChild(behind);
+                }
+                // sync-progress-bar — block velocity feedback. Only
+                // when we have a positive rate; otherwise omit so the
+                // operator doesn't see "0 new blocks/min" while peers
+                // are still handshaking.
+                if (syncData.blocksPerMin != null && syncData.blocksPerMin > 0) {
+                    this._syncBar.hidden = false;
+                    var bar = document.createElement('span');
+                    bar.innerHTML = 'Receiving <b>' + fmtN(syncData.blocksPerMin)
+                        + ' new blocks/min</b> from peers';
+                    this._syncBar.appendChild(bar);
+                }
+            }
+            return;
+        }
+
+        // Stopped / unconfigured / error — leave subline empty. The
+        // state-chip already communicates what's happening; the height
+        // number reads "—" or the relevant message.
     };
 
     /**

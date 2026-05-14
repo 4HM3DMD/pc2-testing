@@ -342,6 +342,10 @@
 
         // _wireThemeToggle removed in alpha.29 v2 Phase 1c — dark-only.
         this._wireSettingsToggle();
+        // Beta 3 — wire the 4 top-level tabs (Dashboard/Logs/Settings/
+        // Audit). Click switches the active tab + mirrors .enm-app
+        // [data-active-tab] for the wash-gradient CSS.
+        this._wireTabs();
         this._wireCrossTabSync();
 
         // Step 3 + 4: probe backend, then decide wizard vs dashboard.
@@ -383,6 +387,74 @@
 
     // _wireThemeToggle removed in alpha.29 v2 Phase 1c — dark-only
     // (the entire light/dark switching feature is gone).
+
+    /**
+     * Beta 3 — wire the 4 top-level tabs (Dashboard / Logs / Settings /
+     * Audit). Click switches the active tab: updates aria-selected,
+     * .active class, roving tabindex, panel visibility, and the
+     * `data-active-tab` attribute on .enm-app (which CSS reads to
+     * fade the page wash on dense tabs). Arrow-Left / Arrow-Right
+     * provide WAI-ARIA tablist navigation between tabs.
+     *
+     * Idempotent — Retry re-runs init() but the dataset.wired guard
+     * prevents stacked listeners.
+     *
+     * @private
+     */
+    ENMApp.prototype._wireTabs = function () {
+        if (!this.els.tabs) { return; }
+        if (this.els.tabs.dataset.wired === '1') { return; }
+        this.els.tabs.dataset.wired = '1';
+        var self = this;
+        var tabBtns = Array.prototype.slice.call(
+            this.els.tabs.querySelectorAll('.enm-tab[data-tab]'),
+        );
+        var panes = {
+            dashboard: this.els.paneDashboard,
+            logs:      this.els.paneLogs,
+            settings:  this.els.paneSettings,
+            audit:     this.els.paneAudit,
+        };
+
+        function activate(tabId) {
+            tabBtns.forEach(function (b) {
+                var on = (b.dataset.tab === tabId);
+                b.classList.toggle('active', on);
+                b.setAttribute('aria-selected', on ? 'true' : 'false');
+                b.setAttribute('tabindex', on ? '0' : '-1');
+            });
+            Object.keys(panes).forEach(function (k) {
+                if (panes[k]) { panes[k].hidden = (k !== tabId); }
+            });
+            // Mirror onto the .enm-app container so CSS can fade the
+            // wash gradient on dense tabs (settings / logs / audit).
+            if (self.els.app) {
+                self.els.app.setAttribute('data-active-tab', tabId);
+            }
+        }
+
+        tabBtns.forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                activate(btn.dataset.tab);
+            });
+            btn.addEventListener('keydown', function (ev) {
+                // WAI-ARIA tablist: ArrowRight / ArrowLeft cycle through
+                // tabs. Home / End jump to first / last.
+                var idx = tabBtns.indexOf(btn);
+                if (idx < 0) { return; }
+                var nextIdx = -1;
+                if (ev.key === 'ArrowRight') { nextIdx = (idx + 1) % tabBtns.length; }
+                else if (ev.key === 'ArrowLeft') { nextIdx = (idx - 1 + tabBtns.length) % tabBtns.length; }
+                else if (ev.key === 'Home') { nextIdx = 0; }
+                else if (ev.key === 'End')  { nextIdx = tabBtns.length - 1; }
+                if (nextIdx >= 0) {
+                    ev.preventDefault();
+                    activate(tabBtns[nextIdx].dataset.tab);
+                    tabBtns[nextIdx].focus();
+                }
+            });
+        });
+    };
 
     /**
      * Wire the gear icon in the home header to open the settings drawer.

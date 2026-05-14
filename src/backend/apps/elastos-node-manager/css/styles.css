@@ -666,3 +666,536 @@ body[data-app-size="compact"] .enm-app .enm-main { padding: var(--sp-2); }
     color: var(--text-secondary);
     line-height: 1.55;
 }
+
+/* ====================================================================
+ * BP-A — Dashboard (Status) pane
+ * Reference: enm-design-mocks/v2/phase-03-status.html
+ * Components: chain-card (hero + meta + stats + actions) + sys-strip
+ * ==================================================================== */
+
+/* Dashboard pane needs a vertical stack of cards with sp-4 gap. The
+   pane itself overflows vertically; per-card stretching is handled
+   by each card's own min-height. */
+#enm-pane-dashboard {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-4);
+    padding-bottom: var(--sp-4); /* breathing room below last card */
+}
+
+/* ---- Chain card (hero) ---------------------------------------- */
+.enm-chain-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-lg);
+    padding: var(--sp-6);
+    position: relative;
+    overflow: hidden;
+}
+
+.enm-chain-card-content {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: var(--sp-6);
+    align-items: center;
+}
+
+/* Hero slot — wraps either .enm-hero-power or .enm-hero-sync. The
+   click target spans the whole 168×168 area. */
+.enm-chain-hero-slot {
+    width: 168px;
+    height: 168px;
+    flex-shrink: 0;
+    cursor: pointer;
+    border-radius: 50%;
+    transition: filter var(--motion-fast) var(--ease-out);
+}
+.enm-chain-hero-slot:hover { filter: brightness(1.06); }
+.enm-chain-hero-slot:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+}
+
+/* ---- Hero variant: power icon with state-colored halo --------- */
+.enm-hero-power {
+    width: 100%;
+    height: 100%;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+/* Outer halo (state-color) */
+.enm-hero-power::before {
+    content: "";
+    position: absolute; inset: 0;
+    border-radius: 50%;
+    background: radial-gradient(circle, var(--success-bg), transparent 70%);
+}
+/* Inner ring (faint border + soft inset glow) */
+.enm-hero-power::after {
+    content: "";
+    position: absolute; inset: 14px;
+    border: 1px solid rgba(52, 211, 153, 0.3);
+    border-radius: 50%;
+    box-shadow: 0 0 24px var(--success-bg), inset 0 0 16px var(--success-bg);
+}
+.enm-hero-power-icon {
+    position: relative;
+    z-index: 1;
+    width: 84px;
+    height: 84px;
+    color: var(--success);
+    filter: drop-shadow(0 0 8px rgba(52, 211, 153, 0.5));
+}
+.enm-hero-power-live {
+    position: absolute;
+    top: 18px;
+    right: 30px;
+    z-index: 2;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--success);
+    box-shadow: 0 0 8px var(--success), 0 0 16px rgba(52, 211, 153, 0.3);
+    animation: enm-hero-pulse 2s infinite ease-in-out;
+}
+@keyframes enm-hero-pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50%      { opacity: 0.65; transform: scale(0.85); }
+}
+@media (prefers-reduced-motion: reduce) {
+    .enm-hero-power-live { animation: none; }
+}
+
+/* Stopped state: gray, no glow, no pulse */
+.enm-hero-power[data-state="stopped"]::before { background: transparent; }
+.enm-hero-power[data-state="stopped"]::after  {
+    border-color: var(--border);
+    box-shadow: none;
+}
+.enm-hero-power[data-state="stopped"] .enm-hero-power-icon {
+    color: var(--text-tertiary);
+    filter: none;
+}
+.enm-hero-power[data-state="stopped"] .enm-hero-power-live { display: none; }
+
+/* Stalled state: amber */
+.enm-hero-power[data-state="stalled"]::before {
+    background: radial-gradient(circle, var(--warning-bg), transparent 70%);
+}
+.enm-hero-power[data-state="stalled"]::after {
+    border-color: rgba(251, 191, 36, 0.3);
+    box-shadow: 0 0 24px var(--warning-bg);
+}
+.enm-hero-power[data-state="stalled"] .enm-hero-power-icon {
+    color: var(--warning);
+    filter: drop-shadow(0 0 8px rgba(251, 191, 36, 0.5));
+}
+.enm-hero-power[data-state="stalled"] .enm-hero-power-live {
+    background: var(--warning);
+    box-shadow: 0 0 8px var(--warning);
+}
+
+/* Error state: red */
+.enm-hero-power[data-state="error"]::before {
+    background: radial-gradient(circle, var(--error-bg), transparent 70%);
+}
+.enm-hero-power[data-state="error"]::after {
+    border-color: rgba(248, 113, 113, 0.3);
+    box-shadow: 0 0 24px var(--error-bg);
+}
+.enm-hero-power[data-state="error"] .enm-hero-power-icon {
+    color: var(--error);
+    filter: drop-shadow(0 0 8px rgba(248, 113, 113, 0.5));
+}
+.enm-hero-power[data-state="error"] .enm-hero-power-live {
+    background: var(--error);
+    box-shadow: 0 0 8px var(--error);
+}
+
+/* ---- Hero variant: sync ring with percent ---------------------- */
+.enm-hero-sync {
+    width: 100%;
+    height: 100%;
+    position: relative;
+}
+.enm-hero-sync svg {
+    width: 100%;
+    height: 100%;
+}
+.enm-hero-sync svg circle {
+    transition: stroke-dashoffset var(--motion-slow) var(--ease-out);
+}
+.enm-hero-sync-inner {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+}
+.enm-hero-pct {
+    font-size: 40px;
+    font-weight: var(--fw-bold);
+    letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+    background: var(--accent-gradient);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+}
+.enm-hero-pct-suffix {
+    font-size: 18px;
+    -webkit-text-fill-color: var(--text-tertiary);
+    color: var(--text-tertiary);
+}
+.enm-hero-pct-label {
+    font-size: 10px;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    font-weight: var(--fw-semibold);
+    margin-top: var(--sp-1);
+}
+
+/* ---- Chain meta (right column) -------------------------------- */
+.enm-chain-meta {
+    display: grid;
+    gap: var(--sp-3);
+}
+
+/* State chip — pill with pulsing dot. */
+.enm-state-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    background: var(--success-bg);
+    color: var(--success);
+    border-radius: var(--r-pill);
+    font-size: var(--fs-caption);
+    font-weight: var(--fw-semibold);
+    letter-spacing: 0.02em;
+    align-self: flex-start;
+}
+.enm-state-chip.accent { background: var(--bg-tint);    color: var(--accent); }
+.enm-state-chip.warn   { background: var(--warning-bg); color: var(--warning); }
+.enm-state-chip.error  { background: var(--error-bg);   color: var(--error); }
+.enm-state-chip.muted  { background: var(--bg-elevated); color: var(--text-tertiary); }
+
+.enm-state-chip-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: currentColor;
+    animation: enm-hero-pulse 2s infinite ease-in-out;
+}
+.enm-state-chip.muted .enm-state-chip-dot {
+    animation: none;
+    opacity: 0.5;
+}
+@media (prefers-reduced-motion: reduce) {
+    .enm-state-chip-dot { animation: none; }
+}
+
+/* Block-height block */
+.enm-chain-height-label {
+    font-size: var(--fs-caption);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-tertiary);
+    font-weight: var(--fw-semibold);
+    margin-bottom: var(--sp-1);
+}
+.enm-chain-height {
+    font-size: 44px;
+    font-weight: var(--fw-bold);
+    letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+    color: var(--text-primary);
+}
+
+/* Subline — fully-synced tick OR sync info */
+.enm-chain-subline {
+    color: var(--text-secondary);
+    font-size: var(--fs-body);
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    flex-wrap: wrap;
+}
+.enm-chain-subline b {
+    color: var(--text-primary);
+    font-weight: var(--fw-semibold);
+    font-variant-numeric: tabular-nums;
+}
+.enm-chain-subline-sep {
+    color: var(--text-tertiary);
+    opacity: 0.6;
+}
+.enm-at-tip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--success);
+    font-weight: var(--fw-medium);
+}
+.enm-at-tip::before {
+    content: "✓";
+    font-size: 11px;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--success-bg);
+}
+
+/* Sync progress bar (text line per phase-03 mock — not a real bar) */
+.enm-sync-progress-bar {
+    font-size: var(--fs-caption);
+    color: var(--text-secondary);
+    line-height: 1.55;
+}
+.enm-sync-progress-bar b {
+    color: var(--text-primary);
+    font-weight: var(--fw-semibold);
+    font-variant-numeric: tabular-nums;
+}
+
+/* alpha.28 SSE-reconnecting pill — warning palette */
+.enm-chain-reconnect {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    align-self: flex-start;
+    padding: 2px 10px;
+    background: var(--warning-bg);
+    color: var(--warning);
+    border-radius: var(--r-pill);
+    font-size: var(--fs-caption);
+    font-weight: var(--fw-medium);
+}
+.enm-chain-reconnect[hidden] { display: none; }
+.enm-chain-reconnect::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+    animation: enm-hero-pulse 1.4s infinite ease-in-out;
+}
+@media (prefers-reduced-motion: reduce) {
+    .enm-chain-reconnect::before { animation: none; }
+}
+
+/* alpha.28 SSE-disconnect card-level dim — grayscale + breath pause */
+.enm-chain-card[data-sse-state="reconnecting"] .enm-chain-hero-slot,
+.enm-chain-card[data-sse-state="closed"]       .enm-chain-hero-slot {
+    filter: grayscale(0.4);
+}
+.enm-chain-card[data-sse-state="reconnecting"] .enm-hero-power-live,
+.enm-chain-card[data-sse-state="closed"]       .enm-hero-power-live {
+    animation: none;
+    opacity: 0.5;
+}
+
+/* alpha.7 DPoS rotation strip */
+.enm-chain-rotation {
+    padding: var(--sp-3) var(--sp-4);
+    border-top: 1px solid var(--border-subtle);
+    margin-top: var(--sp-5);
+    font-size: var(--fs-caption);
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+}
+.enm-chain-rotation[hidden] { display: none; }
+
+/* Stats row */
+.enm-stats {
+    display: grid;
+    gap: var(--sp-3);
+    padding-top: var(--sp-5);
+    margin-top: var(--sp-5);
+    border-top: 1px solid var(--border-subtle);
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+}
+.enm-stat {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.enm-stat-label {
+    font-size: var(--fs-caption);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-tertiary);
+    font-weight: var(--fw-medium);
+}
+.enm-stat-value {
+    font-size: 20px;
+    font-weight: var(--fw-semibold);
+    font-variant-numeric: tabular-nums;
+    color: var(--text-primary);
+    letter-spacing: -0.01em;
+    display: inline-flex;
+    align-items: baseline;
+    gap: 4px;
+}
+
+/* Action row */
+.enm-chain-actions {
+    display: flex;
+    gap: var(--sp-2);
+    margin-top: var(--sp-5);
+    padding-top: var(--sp-5);
+    border-top: 1px solid var(--border-subtle);
+    flex-wrap: wrap;
+}
+
+/* alpha.18 attention pulse on the action row when the hero is tapped */
+@keyframes enm-chain-actions-pulse {
+    0%   { transform: scale(1);    opacity: 1; }
+    35%  { transform: scale(1.02); opacity: 0.95; }
+    100% { transform: scale(1);    opacity: 1; }
+}
+.enm-chain-actions-pulse {
+    animation: enm-chain-actions-pulse 560ms var(--ease-spring) 1;
+}
+@media (prefers-reduced-motion: reduce) {
+    .enm-chain-actions-pulse { animation: none; }
+}
+
+/* ---- System status strip (.enm-sys-strip) -------------------- */
+.enm-sys-strip {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-md);
+    padding: var(--sp-3) var(--sp-4);
+    display: flex;
+    gap: 0;
+}
+.enm-sys-cell {
+    flex: 1;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: var(--sp-3);
+    align-items: center;
+    padding: var(--sp-2) var(--sp-3);
+    border-right: 1px solid var(--border-subtle);
+    min-width: 0;
+}
+.enm-sys-cell:last-child { border-right: none; }
+.enm-sys-bar {
+    width: 4px;
+    height: 28px;
+    border-radius: 2px;
+    background: var(--success);
+    opacity: 0.8;
+}
+.enm-sys-bar.warn { background: var(--warning); }
+.enm-sys-bar.crit { background: var(--error); }
+.enm-sys-content { min-width: 0; }
+.enm-sys-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-tertiary);
+    font-weight: var(--fw-semibold);
+    margin-bottom: 1px;
+}
+.enm-sys-value {
+    font-size: var(--fs-h3);
+    font-weight: var(--fw-semibold);
+    font-variant-numeric: tabular-nums;
+    color: var(--text-primary);
+    line-height: 1.2;
+}
+.enm-sys-value-sub {
+    font-size: 10px;
+    color: var(--text-tertiary);
+    font-weight: var(--fw-medium);
+    margin-left: 4px;
+}
+
+/* ---- Narrow / Compact responsive --------------------------------- */
+body[data-app-size="narrow"] .enm-chain-card,
+.enm-app[data-app-size="narrow"] .enm-chain-card {
+    padding: var(--sp-4);
+}
+body[data-app-size="narrow"] .enm-chain-card-content,
+.enm-app[data-app-size="narrow"] .enm-chain-card-content {
+    grid-template-columns: 1fr;
+    gap: var(--sp-4);
+    text-align: center;
+    justify-items: center;
+}
+body[data-app-size="narrow"] .enm-chain-hero-slot,
+.enm-app[data-app-size="narrow"] .enm-chain-hero-slot {
+    width: 144px;
+    height: 144px;
+}
+body[data-app-size="narrow"] .enm-chain-height,
+.enm-app[data-app-size="narrow"] .enm-chain-height {
+    font-size: 36px;
+}
+body[data-app-size="narrow"] .enm-sys-strip,
+.enm-app[data-app-size="narrow"] .enm-sys-strip {
+    flex-wrap: wrap;
+}
+body[data-app-size="narrow"] .enm-sys-cell,
+.enm-app[data-app-size="narrow"] .enm-sys-cell {
+    flex: 1 1 calc(50% - 1px);
+    border-right: 1px solid var(--border-subtle);
+}
+
+body[data-app-size="compact"] .enm-chain-card,
+.enm-app[data-app-size="compact"] .enm-chain-card {
+    padding: var(--sp-3);
+    border-radius: var(--r-md);
+}
+body[data-app-size="compact"] .enm-chain-card-content,
+.enm-app[data-app-size="compact"] .enm-chain-card-content {
+    grid-template-columns: 1fr;
+    gap: var(--sp-3);
+    text-align: center;
+    justify-items: center;
+}
+body[data-app-size="compact"] .enm-chain-hero-slot,
+.enm-app[data-app-size="compact"] .enm-chain-hero-slot {
+    width: 124px;
+    height: 124px;
+}
+body[data-app-size="compact"] .enm-chain-height,
+.enm-app[data-app-size="compact"] .enm-chain-height {
+    font-size: 28px;
+}
+body[data-app-size="compact"] .enm-stats,
+.enm-app[data-app-size="compact"] .enm-stats {
+    grid-template-columns: 1fr 1fr;
+}
+body[data-app-size="compact"] .enm-sys-strip,
+.enm-app[data-app-size="compact"] .enm-sys-strip {
+    flex-direction: column;
+    gap: var(--sp-2);
+}
+body[data-app-size="compact"] .enm-sys-cell,
+.enm-app[data-app-size="compact"] .enm-sys-cell {
+    border-right: none;
+    border-bottom: 1px solid var(--border-subtle);
+    padding: var(--sp-2) 0;
+}
+body[data-app-size="compact"] .enm-sys-cell:last-child,
+.enm-app[data-app-size="compact"] .enm-sys-cell:last-child {
+    border-bottom: none;
+}
