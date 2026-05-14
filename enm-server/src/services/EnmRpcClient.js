@@ -201,6 +201,34 @@ class EnmRpcClient {
      * No auth gate; same rate-limit bucket as getproducerinfo.
      */
     getarbitersinfo() { return this.call('getarbitersinfo', {}); }
+
+    /**
+     * beta.3.13 — wallet/address balance lookup. Used by the Node-identity
+     * card to surface the keystore-derived address's balance so operators
+     * can verify before/after producer-registration deposits.
+     *
+     * Returns a string ELA value (already divided by 1e8 server-side per
+     * the chain's interfaces.go); we forward it as-is.
+     *
+     * @param {string} addr  Elastos mainchain address (starts with 'E')
+     */
+    getbalancebyaddr(addr) { return this.call('getbalancebyaddr', { addr }); }
+
+    /**
+     * beta.3.13 — producer's locked deposit balance. For BPoS, this is the
+     * 2,000 ELA stake-deposit + any extra collateral. Returns string ELA.
+     *
+     * @param {string} pubkey  hex-encoded compressed pubkey (66 chars)
+     */
+    getdepositcoin(pubkey) { return this.call('getdepositcoin', { ownerpublickey: pubkey }); }
+
+    /**
+     * beta.3.13 — accumulated reward balance for a producer. Returns string
+     * ELA (claimable amount).
+     *
+     * @param {string} pubkey  hex-encoded compressed pubkey (66 chars)
+     */
+    getdposrewards(pubkey) { return this.call('getdposrewards', { publickey: pubkey }); }
 }
 
 // --- Error types — let the caller distinguish failure modes for healing rules. ---

@@ -3325,6 +3325,212 @@ body[data-app-size="compact"] .enm-role-card-badge-short,
     font-weight: var(--fw-semibold);
 }
 
+/* 0.2.0-beta.3.13 — Node-identity card. Always visible on the
+   dashboard (no hide branch). Sits between system-status and the
+   BPoS card. Shows the keystore's public key, the keystore-derived
+   "bound" address with live balance, the operator's PC2 login
+   wallet (explicitly explained as different from the bound address),
+   and an on-chain producer summary when registered. CR Council
+   fields are intentionally omitted per operator preference. */
+.enm-identity-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-lg);
+    padding: var(--sp-5);
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-4);
+}
+.enm-identity-head {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.enm-identity-head h3 {
+    margin: 0;
+    font-size: var(--fs-h3);
+    font-weight: var(--fw-semibold);
+    color: var(--text-primary);
+    line-height: 1.3;
+}
+.enm-identity-subtitle {
+    margin: 0;
+    font-size: var(--fs-caption);
+    color: var(--text-secondary);
+    line-height: 1.55;
+}
+.enm-identity-subtitle strong {
+    color: var(--text-primary);
+    font-weight: var(--fw-semibold);
+}
+.enm-identity-row {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-md);
+    padding: var(--sp-3) var(--sp-4);
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-2);
+}
+.enm-identity-row-head {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.enm-identity-row-label {
+    font-size: var(--fs-caption);
+    color: var(--text-tertiary);
+    font-weight: var(--fw-semibold);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+.enm-identity-row-hint {
+    font-size: var(--fs-caption);
+    color: var(--text-secondary);
+    line-height: 1.5;
+}
+.enm-identity-row-hint strong {
+    color: var(--text-primary);
+    font-weight: var(--fw-semibold);
+}
+.enm-identity-value-stack {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    flex-wrap: wrap;
+}
+.enm-identity-value {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text-primary);
+    background: var(--bg-terminal);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-sm);
+    padding: var(--sp-2) var(--sp-3);
+    word-break: break-all;
+    white-space: pre-wrap;
+    line-height: 1.55;
+    margin: 0;
+}
+.enm-identity-copy-slot {
+    flex: 0 0 auto;
+    display: inline-flex;
+}
+.enm-identity-copy-btn {
+    /* Minimum touch target floor; matches alpha.28 a11y invariant. */
+    min-height: 24px;
+}
+.enm-identity-balance {
+    font-size: var(--fs-caption);
+    color: var(--text-secondary);
+    line-height: 1.5;
+    font-variant-numeric: tabular-nums;
+}
+.enm-identity-balance strong {
+    color: var(--text-primary);
+    font-weight: var(--fw-semibold);
+}
+.enm-identity-balance-muted {
+    color: var(--text-tertiary);
+    font-style: italic;
+}
+.enm-identity-note {
+    font-size: var(--fs-caption);
+    color: var(--text-tertiary);
+    line-height: 1.5;
+    border-left: 3px solid var(--accent);
+    background: var(--bg-surface);
+    padding: var(--sp-2) var(--sp-3);
+    border-radius: 0 var(--r-sm) var(--r-sm) 0;
+}
+.enm-identity-empty {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-md);
+    padding: var(--sp-3) var(--sp-4);
+    font-size: var(--fs-caption);
+    color: var(--text-secondary);
+    line-height: 1.55;
+}
+.enm-identity-empty strong {
+    color: var(--text-primary);
+    font-weight: var(--fw-semibold);
+}
+.enm-identity-producer {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-md);
+    padding: var(--sp-3) var(--sp-4);
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-3);
+}
+.enm-identity-producer-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--sp-2);
+    flex-wrap: wrap;
+}
+.enm-identity-chip {
+    flex: 0 0 auto;
+    padding: 2px 8px;
+    border-radius: var(--r-xs);
+    font-size: 10px;
+    font-weight: var(--fw-semibold);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    white-space: nowrap;
+    background: var(--accent-soft);
+    color: var(--accent);
+}
+.enm-identity-chip-success { background: var(--success-bg); color: var(--success); }
+.enm-identity-chip-warning { background: var(--warning-bg); color: var(--warning); }
+.enm-identity-chip-danger  { background: var(--danger-bg);  color: var(--danger); }
+.enm-identity-chip-neutral { background: var(--accent-soft); color: var(--accent); }
+.enm-identity-producer-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--sp-3);
+}
+.enm-identity-stat {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+.enm-identity-stat-label {
+    font-size: var(--fs-caption);
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: var(--fw-semibold);
+}
+.enm-identity-stat-value {
+    font-size: 13px;
+    color: var(--text-primary);
+    font-weight: var(--fw-semibold);
+    font-variant-numeric: tabular-nums;
+    word-break: break-word;
+}
+
+/* Narrow-mode: stack the producer grid + tighten paddings to match
+   the chain-card responsive treatment from beta.3.5. */
+body[data-app-size="narrow"] .enm-identity-card,
+.enm-app[data-app-size="narrow"] .enm-identity-card { padding: var(--sp-4); }
+body[data-app-size="narrow"] .enm-identity-producer-grid,
+.enm-app[data-app-size="narrow"] .enm-identity-producer-grid {
+    grid-template-columns: 1fr;
+}
+body[data-app-size="compact"] .enm-identity-card,
+.enm-app[data-app-size="compact"] .enm-identity-card { padding: var(--sp-3); }
+body[data-app-size="compact"] .enm-identity-producer-grid,
+.enm-app[data-app-size="compact"] .enm-identity-producer-grid {
+    grid-template-columns: 1fr;
+}
+
 /* 0.2.0-beta.3.12 — Tools-update card. Pre-beta.3.12 the component
    shipped with NO CSS at all — operators saw plain text where the
    mock specifies a proper card surface. This block lifts the card

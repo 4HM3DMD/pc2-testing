@@ -920,6 +920,17 @@
             sys.mount(pane);
             this._dashboardMounts.push(sys);
         }
+        // beta.3.13 — Node-identity card. Always visible (no hide
+        // branch). Surfaces the public key, the keystore-derived
+        // ("bound") address with live balance, the operator's PC2
+        // login wallet, and a producer summary when registered. Sits
+        // BEFORE the BPoS card so the operator sees "who am I on
+        // chain" before any registration affordances.
+        if (root.EnmNodeIdentityCard) {
+            var ident = new root.EnmNodeIdentityCard(common);
+            ident.mount(pane);
+            this._dashboardMounts.push(ident);
+        }
         // BPoS card — hides itself when the operator is fully active
         // on chain (STATE_HIDE in validator-registration-card.js). The
         // backward-compat alias EnmValidatorRegistrationCard still
