@@ -2990,109 +2990,163 @@ select.enm-settings-input {
 }
 
 /* ============================================================
-   Toasts — anchored to .enm-main, not viewport
-   ============================================================ */
+   Toasts (Phase 6c — v2 severity-stripe + bottom-right anchor)
+   ============================================================
+   Reference mock: enm-design-mocks/v2/phase-06-wizard-modals.html
+   lines 159-175. The v2 mock anchors toasts BOTTOM-RIGHT and keys
+   severity off `[data-sev]`; the ENM analog uses BEM-style class
+   names (`.enm-toast-info` etc.) emitted by notifications.js at
+   line 170. Class names preserved; visual treatment migrated.
+
+   Critical alpha.28 preservation invariants honoured:
+
+   - WCAG 2.5.5 AA touch target on dismiss button kept at 24×24
+     (mock shows 18×18; we override because the alpha.28.1 audit
+     explicitly upgraded from 22×22 to meet 2.5.5 AA — see the
+     comment at the rule below). Visual padding inside the 24×24
+     hitbox is sized to match the v2 mock's hairline look.
+   - `.enm-toast-leaving` slide-out transform unchanged (the
+     transform is "translateX off-screen" which is direction-
+     independent of top vs bottom anchor).
+   - z-index --z-toast preserved (critical toasts stay above modals).
+   - Backdrop-filter `blur(12px) saturate(140%)` dropped — the v2
+     pattern is FLAT cards (no glass) plus a deeper drop shadow.
+     This restores parity with the rest of the v2 surface stack.
+   - alpha.24 iframe-relative `%` math preserved.
+   - announcer.js ZWSP same-message dedup is JS-only; untouched.
+*/
 
 .enm-toast-container {
     position: absolute;
-    top: var(--spacing-md);
-    right: var(--spacing-md);
+    /* v2 bottom-right anchor. Was top-right; the change is purely
+       visual — announcer.js routes the SR-visible string through
+       `EnmAnnouncer.alert()` which uses an aria-live region, so
+       AT users discover toasts via announcement regardless of
+       screen position. */
+    bottom: var(--sp-4);
+    right: var(--sp-4);
+    top: auto;
     display: flex;
     flex-direction: column;
-    gap: var(--spacing-sm);
+    gap: var(--sp-2);
     /* Lift above every modal/drawer so a critical-severity toast (e.g.
        "Backend unreachable") never gets buried behind an open settings
        drawer or tools-update dialog. Skip link still wins. */
     z-index: var(--z-toast);
-    /* alpha.24: % (iframe-relative) not vw (outer-viewport-relative) */
-    max-width: min(360px, calc(100% - 2 * var(--spacing-md)));
+    /* alpha.24: % (iframe-relative) not vw (outer-viewport-relative).
+       v2 mock width is min(380px, calc(100% - 32px)) — 380px reads
+       slightly more spacious than the alpha.28 360px. */
+    width: min(380px, calc(100% - 32px));
+    max-height: calc(100% - 32px);
     pointer-events: none;
 }
 
 .enm-toast-container > * { pointer-events: auto; }
 
 .enm-toast {
-    background: var(--bg-elevated);
-    border: 1px solid var(--border-color);
-    border-left: 3px solid var(--text-muted);
-    border-radius: var(--radius-md);
-    box-shadow: var(--shadow-md);
-    padding: var(--spacing-md);
+    /* v2 toast: bg-surface (was bg-elevated), border + r-sm + sp-3/sp-4
+       padding + grid layout with sp-2 gap. Drop the glass blur. */
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--text-tertiary);
+    border-radius: var(--r-sm);
+    padding: var(--sp-3) var(--sp-4);
+    display: grid;
+    gap: var(--sp-2);
+    /* v2 mock shadow: deeper, more atmospheric. */
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
     transform: translateX(0);
     opacity: 1;
     transition: transform var(--motion-base) var(--ease-out),
                 opacity var(--motion-base) var(--ease-out);
-    backdrop-filter: blur(12px) saturate(140%);
-    -webkit-backdrop-filter: blur(12px) saturate(140%);
 }
 
 .enm-toast-leaving {
-    transform: translateX(calc(100% + var(--spacing-md)));
+    transform: translateX(calc(100% + var(--sp-4)));
     opacity: 0;
 }
 
-.enm-toast-info     { border-left-color: var(--primary); }
+/* v2 severity palette. Critical also gets a subtle background tint so
+   it visually pops without needing an icon — the mock pattern. */
+.enm-toast-info     { border-left-color: var(--accent); }
 .enm-toast-warning  { border-left-color: var(--warning); }
-.enm-toast-critical { border-left-color: var(--error); }
-.enm-toast-healing  { border-left-color: var(--healing); }
+.enm-toast-critical {
+    border-left-color: var(--error);
+    background: linear-gradient(180deg, var(--bg-surface), rgba(239, 80, 96, 0.04));
+}
+.enm-toast-healing  { border-left-color: var(--success); }
 
 .enm-toast-head {
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
-    gap: var(--spacing-sm);
+    gap: var(--sp-2);
 }
 
 .enm-toast-title {
-    font-weight: 600;
+    flex: 1;
+    font-size: var(--fs-body);
+    font-weight: var(--fw-semibold);
     color: var(--text-primary);
-    font-size: 13px;
+    min-width: 0;
+    word-break: break-word;
     letter-spacing: -0.005em;
 }
 
 .enm-toast-dismiss {
     background: transparent;
     border: none;
-    color: var(--text-muted);
+    color: var(--text-tertiary);
     cursor: pointer;
-    font-size: 18px;
+    /* Inner glyph sized per v2 mock at 14px; the 24×24 hitbox is
+       preserved for WCAG 2.5.5 AA — see the comment in the
+       alpha.28.1 audit. The earlier rev of this rule used 18px
+       which made the X harder to read against the new bg-surface. */
+    font-size: 14px;
     line-height: 1;
     padding: 0;
-    /* 24×24 to meet WCAG 2.5.5 AA touch target (was 22×22). */
+    /* 24×24 to meet WCAG 2.5.5 AA touch target (was 22×22 → 24×24 in
+       alpha.28.1 batch ~30). Mock specifies 18×18; we override.
+       r-xs to match v2 corner radius vocabulary. */
     width: 24px;
     height: 24px;
-    border-radius: 50%;
+    border-radius: var(--r-xs);
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    flex-shrink: 0;
     transition: background var(--motion-fast) var(--ease-out),
                 color var(--motion-fast) var(--ease-out);
 }
 
 .enm-toast-dismiss:hover {
-    background: var(--bg-muted);
+    background: var(--bg-elevated);
     color: var(--text-primary);
 }
 
 .enm-toast-body {
-    margin-top: 4px;
-    font-size: 12px;
+    margin-top: 0;
+    font-size: var(--fs-caption);
     color: var(--text-secondary);
-    line-height: 1.55;
+    line-height: 1.5;
     white-space: pre-wrap;
 }
 
 .enm-toast-ack {
-    margin-top: var(--spacing-sm);
-    min-height: 30px;
+    /* v2 button-sm sized acknowledge button — caption font + 4×10
+       padding. Critical-only (notifications.js gates this); the
+       fill stays --error so it reads as a destructive-but-required
+       confirmation, not a friendly toast action. */
+    margin-top: var(--sp-1);
+    min-height: 26px;
     padding: 4px 10px;
     background: var(--error);
     color: #fff;
     border: none;
-    border-radius: var(--radius-sm);
+    border-radius: var(--r-sm);
     font: inherit;
-    font-size: 12px;
-    font-weight: 600;
+    font-size: var(--fs-caption);
+    font-weight: var(--fw-semibold);
     cursor: pointer;
     transition: background var(--motion-fast) var(--ease-out);
 }
