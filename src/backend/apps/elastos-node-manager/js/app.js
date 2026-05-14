@@ -555,6 +555,11 @@
             self._auditTab = new root.EnmAuditTab({
                 api: self.services.api,
                 notifications: self.services.notifications,
+                // 0.2.0-beta.3.8 — pass the SSE service so the audit
+                // tab can subscribe to `audit` topic for live row
+                // prepends. Optional; absence falls back to the old
+                // refresh-to-see-new-rows behaviour.
+                sse: self.services.sse,
             });
             self._auditTab.mount(self.els.paneAudit);
         }

@@ -38,7 +38,13 @@ function looksLikeEvm(addr) {
 // chains:<id>:height every 30s; the chain-card's sparkline subscribes
 // via the height-series client. Forgetting to add `height` to this
 // whitelist 400'd every SSE connect and looped the client forever.
-const TOPIC_REGEX = /^(?:system|notifications|chains:[a-z0-9-]+:(?:status|logs|height))$/;
+// 0.2.0-beta.3.8 — `audit` topic added. EnmAuditLog.append publishes
+// every new row to this topic via publishToWallet (scoped to the row's
+// wallet) so the operator's audit-tab SSE subscription receives live
+// updates instead of having to reload. The wallet scoping protects
+// per-operator privacy: row writes for other wallets never reach this
+// connection.
+const TOPIC_REGEX = /^(?:system|notifications|audit|chains:[a-z0-9-]+:(?:status|logs|height))$/;
 const MAX_TOPICS_PER_REQUEST = 16;
 
 /**

@@ -50,7 +50,8 @@ async function append(db, entry) {
     }
 
     const ts = Date.now();
-    const payloadJson = entry.payload ? JSON.stringify(redactSensitive(entry.payload)) : null;
+    const redactedPayload = entry.payload ? redactSensitive(entry.payload) : null;
+    const payloadJson = redactedPayload ? JSON.stringify(redactedPayload) : null;
 
     // Defence in depth: lowercase EVM-shaped wallet addresses so a future
     // caller passing mixed case can't accidentally produce a row that doesn't
@@ -75,7 +76,53 @@ async function append(db, entry) {
             payloadJson,
         ],
     );
-    return (res && res.lastInsertRowid) || 0;
+    const id = (res && res.lastInsertRowid) || 0;
+
+    // 0.2.0-beta.3.8 — fire the publish-hook (registered once in
+    // server.js boot) so the new row reaches the audit-tab's SSE
+    // subscription. Hook is null-safe; tests + early-boot inserts
+    // before the hook is registered just skip publish silently.
+    if (typeof _publishHook === 'function') {
+        try {
+            // Match the camelCase row shape that routes/audit.js
+            // ships from GET /audit so the frontend doesn't need a
+            // separate decoder for SSE rows vs paginated rows.
+            _publishHook({
+                id,
+                ts,
+                walletAddress: wallet,
+                chainId: String(entry.chainId),
+                ruleId: entry.ruleId || null,
+                tier: String(entry.tier),
+                decision: String(entry.decision),
+                executor: String(entry.executor),
+                outcome: entry.outcome || null,
+                durationMs: Number.isInteger(entry.durationMs) ? entry.durationMs : null,
+                payload: redactedPayload,
+            });
+        } catch (err) {
+            // Publish failures must not poison the insert path. We
+            // already wrote the row; SSE is best-effort UX.
+            if (typeof _publishHookOnError === 'function') {
+                try { _publishHookOnError(err); } catch (_) { /* logger may be down */ }
+            }
+        }
+    }
+
+    return id;
+}
+
+// 0.2.0-beta.3.8 — module-level publish hook. server.js sets this
+// once at boot to forward every audit row to the SseHub on the
+// `audit` topic, scoped to the row's wallet. Kept as a module-
+// level closure (not constructor-injected) because the existing
+// 8 SelfHealingEngine call sites pass a bare `db` handle to
+// append() and threading a hub through each would be invasive.
+let _publishHook = null;
+let _publishHookOnError = null;
+function setPublishHook(fn, onErr) {
+    _publishHook = (typeof fn === 'function') ? fn : null;
+    _publishHookOnError = (typeof onErr === 'function') ? onErr : null;
 }
 
 function normalizeWallet(addr) {
@@ -161,4 +208,7 @@ module.exports = {
     append,
     query,
     redactSensitive,
+    // 0.2.0-beta.3.8 — wire the SSE publish hook from server.js boot.
+    // See append() above for the hook signature.
+    setPublishHook,
 };

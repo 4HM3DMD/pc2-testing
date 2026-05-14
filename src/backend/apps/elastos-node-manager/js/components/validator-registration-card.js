@@ -403,12 +403,14 @@
                     + 'Active'
                 + '</span>'
             + '</div>'
-            // 0.2.0-beta.3.7 — phase-03 mock variant C: 2-column .bpos-
-            // grid showing the most-actionable producer stats. /producer
-            // exposes rank, votes, inactiveRounds, dposv2votes; deposit
-            // is post-beta.3.7 backlog (separate RPC call). We render
-            // the four we have; the cells gracefully show "—" when a
-            // field is null/undefined.
+            // 0.2.0-beta.3.7 + .8 — phase-03 mock variant C: .bpos-grid
+            // showing the most-actionable producer stats. /producer
+            // exposes rank, votes, dposv2votes, inactiveRounds, AND
+            // (since beta.3.8) depositLockedEla + recentRewardsEla.
+            // The cells gracefully show "—" when a field is null —
+            // pre-beta.3.8 chains, or older ela RPC versions, may not
+            // expose deposit/rewards. CSS keeps 2 cols on wide and
+            // collapses to 1 col on narrow.
             + '<div class="enm-bpos-grid">'
                 + '<div class="enm-bpos-stat" data-stat="rank">'
                     + '<div class="enm-bpos-stat-label">Rank</div>'
@@ -425,6 +427,14 @@
                 + '<div class="enm-bpos-stat" data-stat="inactiveRounds">'
                     + '<div class="enm-bpos-stat-label">Inactive rounds</div>'
                     + '<div class="enm-bpos-stat-value" data-fill="inactiveRounds">—</div>'
+                + '</div>'
+                + '<div class="enm-bpos-stat" data-stat="deposit">'
+                    + '<div class="enm-bpos-stat-label">Deposit</div>'
+                    + '<div class="enm-bpos-stat-value" data-fill="deposit">—</div>'
+                + '</div>'
+                + '<div class="enm-bpos-stat" data-stat="rewards">'
+                    + '<div class="enm-bpos-stat-label">Recent rewards</div>'
+                    + '<div class="enm-bpos-stat-value" data-fill="rewards">—</div>'
                 + '</div>'
             + '</div>'
             + '<div class="enm-bpos-note">'
@@ -466,11 +476,32 @@
             }
             return String(n);
         }
+        // 0.2.0-beta.3.8 — ELA-amount formatter. Backend ships deposit/
+        // rewards as decimal-string ELA (avoids float precision loss
+        // on big stakes); we trim trailing zeros + suffix the unit
+        // for the chip-sized cell. "5000.00000000" → "5,000 ELA",
+        // "0.0123" → "0.0123 ELA", null/empty → "—".
+        function fmtEla(s) {
+            if (s == null) { return '—'; }
+            var n = (typeof s === 'string') ? parseFloat(s) : Number(s);
+            if (!isFinite(n) || isNaN(n)) { return '—'; }
+            // Whole numbers: show as integer with thousands separator.
+            // Fractions: keep up to 4 decimals, strip trailing zeros.
+            var formatted;
+            if (Math.abs(n - Math.round(n)) < 1e-9) {
+                formatted = fmt(Math.round(n));
+            } else {
+                formatted = n.toFixed(4).replace(/\.?0+$/, '');
+            }
+            return formatted + ' ELA';
+        }
         var fillers = {
             rank:           (producer.rank != null && producer.rank > 0) ? '#' + producer.rank : '—',
             votes:          fmt(producer.votes),
             dposv2votes:    fmt(producer.dposv2votes),
             inactiveRounds: (producer.inactiveRounds != null) ? fmt(producer.inactiveRounds) : '0',
+            deposit:        fmtEla(producer.depositLockedEla),
+            rewards:        fmtEla(producer.recentRewardsEla),
         };
         var nodes = this.root.querySelectorAll('[data-fill]');
         for (var i = 0; i < nodes.length; i += 1) {

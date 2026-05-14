@@ -889,9 +889,31 @@ function build(extensionHandle) {
                 return res.json(successBody({ enabled: false }));
             }
             const rpc = adapter.rpcClient(chainCfg);
-            const [info, producerInfo] = await Promise.all([
+            // 0.2.0-beta.3.8 — add deposit + rewards calls alongside the
+            // existing info+producerinfo pair. ela's RPC names:
+            //   getdepositcoin(producerPubkey) → { available, deducted, ... }
+            //     where amounts are decimal-string ELA. Pre-DPoSv2 deployments
+            //     used the owner key; DPoSv2 split-key uses the node pubkey.
+            //     We try the node pubkey first (mirrors what ENM registered
+            //     with); if the chain rejects, we fall back to owner.
+            //   getdposrewards(ownerPubkey) → [{ height, total, ... }] of
+            //     reward entries. We sum the last N entries for a rough
+            //     "round earnings" figure. Best-effort: not every fork of
+            //     ela exposes this RPC; null on failure.
+            // Both calls are .catch(() => null) so a missing or failing
+            // method doesn't break the existing /producer response shape.
+            const ownerPubkey = (chainCfg.dpos && chainCfg.dpos.ownerPublicKey) || ourPubkey;
+            const [info, producerInfo, depositInfo, rewardsInfo] = await Promise.all([
                 rpc.getinfo().catch(() => null),
                 rpc.getproducerinfo(ourPubkey).catch(() => null),
+                rpc.getdepositcoin(ourPubkey).catch(() => {
+                    // Some forks of ela take owner pubkey in this slot. Try it.
+                    if (ownerPubkey && ownerPubkey !== ourPubkey) {
+                        return rpc.getdepositcoin(ownerPubkey).catch(() => null);
+                    }
+                    return null;
+                }),
+                rpc.getdposrewards(ownerPubkey).catch(() => null),
             ]);
             const currentHeight = info && (
                 typeof info.height === 'number' ? info.height
@@ -926,6 +948,42 @@ function build(extensionHandle) {
             } else {
                 binding = 'bound';
             }
+            // 0.2.0-beta.3.8 — deposit + rewards extraction.
+            // depositInfo from getdepositcoin is an envelope:
+            //   { available: "5000.00000000", deducted: "0", assets: "...", ... }
+            // We expose `depositLockedEla` (the `available` field — the still-
+            // locked stake) and let the operator-facing chip show "5,000 ELA"
+            // per phase-03 mock. Fields are decimal strings ELA; we keep
+            // them as strings to avoid float precision loss on big stakes.
+            let depositLockedEla = null;
+            if (depositInfo && typeof depositInfo === 'object') {
+                if (typeof depositInfo.available === 'string')      { depositLockedEla = depositInfo.available; }
+                else if (typeof depositInfo.deposit === 'string')   { depositLockedEla = depositInfo.deposit; }
+                else if (typeof depositInfo.assets === 'string')    { depositLockedEla = depositInfo.assets; }
+            }
+            // Rewards: getdposrewards returns an array of {height, total}
+            // entries (per-round totals). We sum the last 24 entries as
+            // an aggregate "recent rounds" figure for the active-card
+            // stat. Best-effort; not every fork exposes this.
+            let recentRewardsEla = null;
+            if (Array.isArray(rewardsInfo) && rewardsInfo.length > 0) {
+                let sum = 0;
+                const recent = rewardsInfo.slice(-24);
+                for (const r of recent) {
+                    const v = r && (
+                        typeof r.total === 'number' ? r.total
+                      : typeof r.total === 'string' ? Number(r.total)
+                      : null
+                    );
+                    if (v != null && isFinite(v)) { sum += v; }
+                }
+                if (sum > 0) {
+                    // Round to 4 decimals — ELA reward amounts are typically
+                    // small fractions like 0.0123 per block; 4 dp keeps the
+                    // operator-facing display readable.
+                    recentRewardsEla = sum.toFixed(4);
+                }
+            }
             return res.json(successBody({
                 enabled: true,
                 ourPubkey,
@@ -936,6 +994,13 @@ function build(extensionHandle) {
                 inactiveHeight,
                 inactiveRounds,
                 currentHeight,
+                // 0.2.0-beta.3.8 — additional stats for the BPoS active
+                // card grid (phase-03 mock variant C). Both fields are
+                // null when the RPC method isn't supported, returns an
+                // empty/malformed payload, or the chain hasn't accrued
+                // any rewards yet. The frontend renders "—" in that case.
+                depositLockedEla,         // string ELA, e.g. "5000.00000000"
+                recentRewardsEla,         // string ELA, sum of last ~24 reward entries
                 // alpha.6 — binding check fields
                 chainNodePubkey,
                 chainOwnerPubkey,

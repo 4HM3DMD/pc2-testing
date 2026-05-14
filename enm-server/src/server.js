@@ -200,9 +200,12 @@ async function main() {
     api.use('/logs',   logsRouter.build({ extensionHandle }));
     api.use('/config', configRouter.build(extensionHandle));
     api.use('/updates', updatesRouter.build(extensionHandle));
+    // 0.2.0-beta.3.8 — pull the hub into a local so post-boot wiring
+    // (AuditLog → SSE bridge below) can publish without re-fetching.
+    const sseHub = ChainRegistry.getSseHub();
     api.use('/events', eventsRouter.build({
         extensionHandle,
-        sseHub: ChainRegistry.getSseHub(),
+        sseHub,
     }));
 
     // Healing depends on the engine, which initializes after this module loads.
@@ -243,6 +246,26 @@ async function main() {
         ChainRegistry.getHealthChecker().start();
     } catch (err) {
         log('error', `healing init failed: ${err.message}`);
+    }
+
+    // 0.2.0-beta.3.8 — wire AuditLog → SseHub bridge. Every audit row
+    // inserted via EnmAuditLog.append() now also publishes on the
+    // `audit` topic (scoped to the row's wallet via publishToWallet
+    // so cross-wallet rows can't leak). Frontend audit-tab subscribes
+    // and prepends new rows in real time instead of polling.
+    try {
+        const AuditLog = require('./services/EnmAuditLog');
+        AuditLog.setPublishHook(
+            (row) => {
+                if (!row || !row.walletAddress) { return; }
+                sseHub.publishToWallet(row.walletAddress, 'audit', row);
+            },
+            (err) => {
+                log('debug', `audit SSE publish failed (non-fatal): ${err.message}`);
+            },
+        );
+    } catch (err) {
+        log('error', `audit SSE bridge init failed: ${err.message}`);
     }
 
     // 0.2.0-beta.3.7 — audit-log retention job. EnmDb has had

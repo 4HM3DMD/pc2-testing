@@ -125,6 +125,12 @@
             if (self._destroyed) { return; }
             self._cfg = data && data.config;
             self._fillForm();
+            // 0.2.0-beta.3.8 — hydrating from /config IS the canonical
+            // clean state for all three sections. Clear any "Unsaved
+            // changes" tags that lingered from the previous form state.
+            self._markClean('network');
+            self._markClean('advanced');
+            self._markClean('general');
         }).catch(function (err) {
             if (self._destroyed) { return; }
             if (err && err.status === 401) { return; }
@@ -217,7 +223,68 @@
         this.root.appendChild(this._pillsEl);
         this.root.appendChild(this._contentEl);
 
+        // 0.2.0-beta.3.8 — wire delegated change/input listeners so each
+        // section's "Restart required" / "No restart needed" tag flips
+        // to "Unsaved changes" when its body has dirty form state.
+        // Cleared by _markClean() on successful save and on refresh()
+        // (hydrating from /config is the canonical clean state).
+        this._wireDirtyTracking();
+
         this._activate(this._activeKey);
+    };
+
+    /**
+     * 0.2.0-beta.3.8 — attach input/change listeners to each section's
+     * body element so changes anywhere inside the section's form rows
+     * flip its tag to "Unsaved changes". Single listener per section
+     * via event delegation; each fires `setDirty(true)` exactly once
+     * per dirty transition, then re-checks against a "snapshot of clean"
+     * is intentionally NOT done — once dirty, the tag stays warning
+     * until Save (or Revert via refresh()) clears it. Operators can
+     * be on the safe side and Save explicitly; we don't try to detect
+     * "operator changed X then changed X back" as clean.
+     *
+     * @private
+     */
+    SettingsTab.prototype._wireDirtyTracking = function () {
+        var self = this;
+        var handler = function (sectionKey) {
+            return function () {
+                var sec = self['_' + (sectionKey === 'advanced' ? 'adv' :
+                    sectionKey === 'general' ? 'gen' : 'network')];
+                if (sec && typeof sec.setDirty === 'function') {
+                    sec.setDirty(true);
+                }
+            };
+        };
+        // Attach to each section's BODY el so events bubble up from
+        // any contained form control (input, select, button, toggle).
+        ['network', 'advanced', 'general'].forEach(function (key) {
+            var sec = self['_' + (key === 'advanced' ? 'adv' :
+                key === 'general' ? 'gen' : 'network')];
+            if (!sec || !sec.body) { return; }
+            sec.body.addEventListener('input',  handler(key));
+            sec.body.addEventListener('change', handler(key));
+            // Buttons inside the body (toggle, segmented) emit `click`
+            // when state changes; also count those.
+            sec.body.addEventListener('click',  handler(key));
+        });
+    };
+
+    /**
+     * 0.2.0-beta.3.8 — flip a section back to clean. Called from
+     * refresh() after /config hydration and from each section's Save
+     * .then() after a successful PUT.
+     *
+     * @private
+     * @param {string} key   one of 'network' / 'advanced' / 'general'
+     */
+    SettingsTab.prototype._markClean = function (key) {
+        var sec = this['_' + (key === 'advanced' ? 'adv' :
+            key === 'general' ? 'gen' : 'network')];
+        if (sec && typeof sec.setDirty === 'function') {
+            sec.setDirty(false);
+        }
     };
 
     /**
@@ -260,6 +327,7 @@
             statusEl: sec.statusEl,
             saveBtn: sec.saveBtn,
             revertBtn: sec.revertBtn,
+            setDirty: sec.setDirty,
         };
 
         // Row 1 — IP mode segmented control.
@@ -429,6 +497,7 @@
             statusEl: sec.statusEl,
             saveBtn: sec.saveBtn,
             revertBtn: sec.revertBtn,
+            setDirty: sec.setDirty,
         };
 
         // Row 1 — Log level.
@@ -697,6 +766,7 @@
             statusEl: sec.statusEl,
             saveBtn: sec.saveBtn,
             revertBtn: sec.revertBtn,
+            setDirty: sec.setDirty,
         };
 
         // Row 1 — Auto-execute safe healing.
@@ -882,8 +952,16 @@
         }
         head.appendChild(headbody);
 
+        // 0.2.0-beta.3.8 — section tag now has two paint states. By
+        // default it shows the static intent ("Restart required" /
+        // "No restart needed"); when the section's body has unsaved
+        // changes, the tag flips to a warning "Unsaved changes"
+        // chip. setDirty(true|false) is exposed on the returned
+        // section handle so each section's body-change listener can
+        // toggle.
+        var tag = null;
         if (opts.tag) {
-            var tag = document.createElement('div');
+            tag = document.createElement('div');
             tag.className = 'enm-section-card-tag ' + (opts.tag.kind || 'muted');
             tag.textContent = opts.tag.label;
             head.appendChild(tag);
@@ -927,7 +1005,20 @@
 
         card.appendChild(foot);
 
-        return { card: card, body: body, statusEl: statusEl, saveBtn: saveBtn, revertBtn: revertBtn };
+        // 0.2.0-beta.3.8 — setDirty wires the dynamic Restart-tag.
+        // When dirty: tag swaps to "Unsaved changes" in warning palette.
+        // When clean: tag restores its construction-time label + kind.
+        function setDirty(isDirty) {
+            if (!tag) { return; }
+            if (isDirty) {
+                tag.className = 'enm-section-card-tag warn';
+                tag.textContent = 'Unsaved changes';
+            } else if (opts.tag) {
+                tag.className = 'enm-section-card-tag ' + (opts.tag.kind || 'muted');
+                tag.textContent = opts.tag.label;
+            }
+        }
+        return { card: card, body: body, statusEl: statusEl, saveBtn: saveBtn, revertBtn: revertBtn, setDirty: setDirty };
     }
 
     /**

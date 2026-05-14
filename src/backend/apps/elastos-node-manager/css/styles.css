@@ -2508,6 +2508,22 @@ body[data-app-size="compact"] .enm-section-card-foot .enm-btn,
 }
 .enm-audit-empty[hidden] { display: none; }
 
+/* 0.2.0-beta.3.8 — pulse a freshly-arrived live row (SSE `audit`
+   topic) so the operator catches it. Two-stage fade matches the
+   accent-soft glow used elsewhere on chip enter; 2.4s end-state
+   restores the neutral background. Respects reduced-motion. */
+@keyframes enm-audit-row-new-pulse {
+    0%   { background: var(--accent-soft); }
+    20%  { background: var(--accent-soft); }
+    100% { background: transparent; }
+}
+.enm-audit-row-new {
+    animation: enm-audit-row-new-pulse 2.4s var(--ease-out) 1;
+}
+@media (prefers-reduced-motion: reduce) {
+    .enm-audit-row-new { animation: none; }
+}
+
 /* ---- Audit drawer (slide-in right) ------------------------------ */
 .enm-audit-drawer-scrim {
     position: absolute;

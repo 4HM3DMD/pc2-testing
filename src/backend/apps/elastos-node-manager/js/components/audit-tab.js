@@ -61,6 +61,12 @@
         }
         this.api = opts.api;
         this.notifications = opts.notifications;
+        // 0.2.0-beta.3.8 — SSE service for the live `audit` topic.
+        // Optional dependency; if absent, audit-tab falls back to
+        // refresh-to-see-new-rows behaviour. mount() arms the
+        // subscription; destroy() tears it down.
+        this.sse = opts.sse || null;
+        this._unsubAudit = null;
 
         this.root = document.createElement('section');
         this.root.className = 'enm-audit';
@@ -96,11 +102,32 @@
     AuditTab.prototype.mount = function (parent) {
         parent.appendChild(this.root);
         this.refresh();
+        // 0.2.0-beta.3.8 — subscribe to the live `audit` SSE topic so
+        // new rows prepend in place instead of needing a manual
+        // refresh. Backend (EnmAuditLog.append → publishToWallet) is
+        // wallet-scoped, so this connection only receives the
+        // authenticated operator's rows. Subscription is a no-op when
+        // sse isn't injected; destroy() handles the unsub.
+        if (this.sse && typeof this.sse.subscribe === 'function') {
+            var self = this;
+            this._unsubAudit = this.sse.subscribe('audit', function (row) {
+                if (self._destroyed) { return; }
+                self._handleLiveRow(row);
+            });
+        }
         return this;
     };
 
     AuditTab.prototype.destroy = function () {
         this._destroyed = true;
+        // 0.2.0-beta.3.8 — drop the live SSE subscription. Defensive
+        // try/catch because some sse service shapes return a no-op
+        // function and others throw on double-unsub; either way the
+        // teardown must not poison the rest of destroy().
+        if (this._unsubAudit) {
+            try { this._unsubAudit(); } catch (_) { /* idempotent */ }
+            this._unsubAudit = null;
+        }
         // Bump the seq so any in-flight fetch's resolver short-circuits.
         this._loadSeq += 1;
         // Tear down drawer global listeners if the drawer was open at
@@ -402,6 +429,117 @@
     // ------------------------------------------------------------------
 
     /** @private */
+    /**
+     * 0.2.0-beta.3.8 — handle a live audit row arriving via the
+     * `audit` SSE topic. Mirrors the filter logic in
+     * _currentFilterQs (tier + when range) so a row that wouldn't
+     * survive the operator's active filter doesn't visually pop
+     * into the table. Inserts at the top of tbody (newest first
+     * matches the DESC ORDER BY ts the backend uses); keeps the
+     * array-index closure model intact by pushing to the END of
+     * _rows + reading length-1 as the new idx.
+     *
+     * @private
+     */
+    AuditTab.prototype._handleLiveRow = function (e) {
+        if (!e || typeof e !== 'object') { return; }
+        // Filter: tier. Empty filter = any tier.
+        if (this._filters && this._filters.tier
+            && String(e.tier) !== this._filters.tier) {
+            return;
+        }
+        // Filter: time range. Same logic as _currentWhenRange — for
+        // 'today'/'7d'/'30d' there's a from-ms cutoff; rows older
+        // than that are silently dropped. 'all' and 'custom' pass
+        // every live row through.
+        var range = this._currentWhenRange();
+        if (range && range.from != null && typeof e.ts === 'number' && e.ts < range.from) {
+            return;
+        }
+        // 5000-row cap — match the MAX_ROWS guard in _loadMore. Pre-
+        // bumping the array would risk Object.assign'ing past the
+        // limit and slowing the table; just drop oldest visual row
+        // before insert.
+        while (this._tbody.firstChild && this._rows.length >= MAX_ROWS) {
+            this._tbody.removeChild(this._tbody.lastChild);
+            this._rows.pop();
+        }
+        this._renderLiveRow(e);
+        // Bump the meta count if the toolbar shows it.
+        if (this._refreshMeta) { this._refreshMeta(); }
+    };
+
+    /**
+     * 0.2.0-beta.3.8 — same shape as _appendRow but prepends the
+     * <tr> instead of appending so the new row appears at the top
+     * (matches the DESC ts ORDER). _rows array keeps push semantics
+     * because click handlers capture idx in closure and reading
+     * _rows[idx] must still return the right entry.
+     *
+     * @private
+     */
+    AuditTab.prototype._renderLiveRow = function (e) {
+        var self = this;
+        this._rows.push(e);
+        var idx = this._rows.length - 1;
+        var tr = document.createElement('tr');
+        tr.dataset.tier = e.tier || '';
+        tr.dataset.idx = String(idx);
+        tr.setAttribute('tabindex', '0');
+        tr.setAttribute('role', 'button');
+        tr.setAttribute('aria-label',
+            (e.ruleId || e.rule_id || '—') + ' · ' + (e.decision || ''));
+        addCell(tr, 'col-ts',       formatTs(e.ts),                 formatTsLocal(e.ts));
+        addCell(tr, 'col-chain',    e.chainId || e.chain_id || '—');
+        addCell(tr, 'col-rule',     e.ruleId  || e.rule_id  || '—');
+        addBadgeCell(tr, 'col-tier',    e.tier   || '—', 'enm-tier-badge',    { tier: e.tier });
+        addCell(tr, 'col-decision', e.decision || '—');
+        addCell(tr, 'col-executor', shortenWallet(e.executor),      e.executor || '');
+        addBadgeCell(tr, 'col-outcome', e.outcome || '—', 'enm-outcome-badge',
+            { kind: outcomeKind(e.outcome) });
+        var openFromRow = function () { self._openDrawer(idx); };
+        tr.addEventListener('click', openFromRow);
+        tr.addEventListener('keydown', function (ev) {
+            if (ev.key === 'Enter' || ev.key === ' ') {
+                ev.preventDefault();
+                openFromRow();
+            }
+        });
+        // Newest first: insert at top of tbody.
+        if (this._tbody.firstChild) {
+            this._tbody.insertBefore(tr, this._tbody.firstChild);
+        } else {
+            this._tbody.appendChild(tr);
+        }
+        // 0.2.0-beta.3.8 — bump the row-count label in the foot so
+        // the operator can see the total without scrolling. Same
+        // i18n shape as _loadMore's count formatter.
+        if (this._countLabel) {
+            var t = root.enmTOrFallback;
+            var fmtCount = (typeof window !== 'undefined' && window.enmFormatNumber)
+                ? window.enmFormatNumber : function (n) { return String(n); };
+            var n = this._rows.length;
+            var rowsKeyId = n === 1 ? 'audit.row_count_one' : 'audit.row_count';
+            var rowsKey = t(rowsKeyId, { n: fmtCount(n) });
+            this._countLabel.textContent = (rowsKey && rowsKey !== rowsKeyId)
+                ? rowsKey
+                : fmtCount(n) + (n === 1 ? ' row' : ' rows');
+        }
+        // Empty-state should hide and table-wrap should show on
+        // the first live row arrival.
+        if (this._emptyMsg) { this._emptyMsg.hidden = (this._rows.length !== 0); }
+        if (this._tableWrap) { this._tableWrap.hidden = (this._rows.length === 0); }
+        // Brief highlight so the operator notices the new row.
+        tr.classList.add('enm-audit-row-new');
+        var hl = setTimeout(function () {
+            if (self._destroyed) { return; }
+            tr.classList.remove('enm-audit-row-new');
+        }, 2400);
+        // Stash so destroy() can clear if needed (best-effort; the
+        // listener is cheap so we just rely on _destroyed guard).
+        this._liveHlTimer = hl;
+    };
+
     AuditTab.prototype._appendRow = function (e) {
         var self = this;
         var tr = document.createElement('tr');
