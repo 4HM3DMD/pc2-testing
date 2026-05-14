@@ -253,7 +253,19 @@
             // Mount happens in _showDashboard (only the dashboard wears
             // the wash; setup wizard / welcome stay neutral).
             fleetHealth:   root.EnmFleetHealthGradient ? new root.EnmFleetHealthGradient() : null,
+            // alpha.29 batch 97 — shared SR announcer. Mounted here so
+            // every service / component has access without having to
+            // resolve the singleton through window.enmAnnouncer (which
+            // also works, but `this.services.announcer` is the explicit
+            // dependency-injection-friendly path that mirrors the
+            // notifications service).
+            announcer:     root.enmAnnouncer || null,
         };
+        // mount the announcer's hidden live regions onto document.body
+        // now that body is present (this.els was populated above).
+        if (this.services.announcer && typeof this.services.announcer.mount === 'function') {
+            try { this.services.announcer.mount(); } catch (_) { /* ignore */ }
+        }
         // 0.2.0-alpha.2 — heightSeries needs api + sse refs at construction
         // time. They're only bound after the services literal evaluates,
         // so the client is instantiated on the next statement, not inside
