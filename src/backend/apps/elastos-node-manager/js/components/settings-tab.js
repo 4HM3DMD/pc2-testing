@@ -2,16 +2,53 @@
  * Copyright (C) 2026-present Elacity
  * SPDX-License-Identifier: AGPL-3.0
  *
- * components/settings-tab.js — three sections: Network, Mainchain Advanced,
- * General preferences. Maps directly to /config PUT endpoints.
+ * components/settings-tab.js — Beta 3 rewrite (phase-04).
  *
- * v0.1 keeps the form deliberately simple — every change is one PUT, no client
- * diffing, no optimistic UI. The save button shows "Saved" briefly on success
- * or surfaces the server error inline. Failures don't lose the user's edits.
+ * Mirrors enm-design-mocks/v2/phase-04-settings.html structure:
+ *   - .enm-settings-wrap = grid 200px 1fr on wide; 1fr on narrow/compact.
+ *   - Wide nav rail (.enm-settings-nav, sticky) is hidden on narrow/compact
+ *     by a CSS rule on .enm-app[data-app-size]; an alternate pill row
+ *     (.enm-settings-pills) takes its place. Both are rendered, CSS hides
+ *     one based on viewport.
+ *   - Three sections only: Network · Mainchain Advanced · General.
+ *     Danger-Zone UI dropped per phase-04 mock. The wipe methods stay as
+ *     dead code (DELETE /api/installed-apps/...) for a future surface.
+ *     RPC reveal-only panel dropped — credentials merged into Advanced.
+ *   - Per-section Save → three separate PUT /config/{network,mainchain,
+ *     general} endpoints. There is no global Apply.
+ *
+ * alpha.28 behavioural carry-over still applies:
+ *   - _destroyed guard on every .then/.catch (batch 16, 51, 95).
+ *   - 401 suppression — boot path owns re-auth; no scary toast (batch 51).
+ *   - enmRunOnce on every Save button (utils.js runOnce) — disables +
+ *     swaps label "Saving…" then restores in .finally so a slow backend
+ *     can never double-save.
+ *   - .finally re-enables disabled state regardless of resolve/reject
+ *     (alpha.28 batch 60 finalizer pattern).
+ *   - ARIA: role="tablist" on the nav, role="tab" on items, role="tabpanel"
+ *     on each section-card, aria-selected reflected on nav + pills,
+ *     role="status" on every foot status, role="alert" on error states.
+ *   - Locked 127.0.0.1 chip — chip[data-locked="true"] renders 🔒 instead
+ *     of remove × and refuses removal. setValue auto-merges the locked
+ *     entries so the backend can never drop it. Backend has a defence in
+ *     depth anyway.
+ *   - No-op-on-save-when-no-changes guard for whitelist / RPC enabled
+ *     (alpha.20).
+ *   - CJK IME isComposing guard on the chip Enter handler (batch 18).
+ *   - Multi-value paste handler (batch 18).
+ *   - Detect-now writes inline mono result next to the button (not a save).
+ *   - Empty-on-manual validation block on _saveNetwork (batch 85).
+ *
+ * Lifecycle: same shape as alpha.27 — constructor builds shell, mount()
+ * attaches + refreshes, destroy() detaches + flips _destroyed.
  */
 
 (function (root) {
     'use strict';
+
+    // IPv4 / CIDR validation — server has the authoritative joi schema,
+    // this is for inline UX feedback only.
+    var IP_OR_CIDR_RE = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(?:\/(?:[0-9]|[12][0-9]|3[0-2]))?$/;
 
     function SettingsTab(opts) {
         if (!opts || !opts.api || !opts.notifications) {
@@ -20,15 +57,14 @@
         this.api = opts.api;
         this.notifications = opts.notifications;
         this.root = document.createElement('section');
-        this.root.className = 'enm-settings';
+        this.root.className = 'enm-settings-wrap';
         this._cfg = null;
-        // alpha.28.1 batch 16 — _destroyed flag so the GET /config
-        // resolver can't write into a detached form after destroy.
-        // Race-condition audit aaf1f87d flagged that every settings
-        // save (network, advanced, general, RPC toggle, whitelist)
-        // would leak fetch results into a removed root after teardown
-        // (low impact today but pins component closures).
+        this._creds = null;
         this._destroyed = false;
+        this._activeKey = 'network';
+        this._sections = {};
+        this._navItems = {};
+        this._pills = {};
         this._renderShell();
     }
 
@@ -40,9 +76,24 @@
 
     SettingsTab.prototype.destroy = function () {
         this._destroyed = true;
+        // BP-E audit fix — tear down the chip-input's internal flash-
+        // invalid timer so a 900ms-late border-reset can't fire on a
+        // detached input after the pane unmounts (e.g. operator clicked
+        // Save then immediately switched tabs).
+        if (this._adv && this._adv.whiteIp
+            && typeof this._adv.whiteIp.destroy === 'function') {
+            try { this._adv.whiteIp.destroy(); } catch (_) { /* idempotent */ }
+        }
         if (this.root.parentNode) { this.root.parentNode.removeChild(this.root); }
     };
 
+    /**
+     * @private
+     * Fetch /config + /config/rpc/credentials/mainchain in parallel so the
+     * Advanced section's whitelist + RPC user populate on first paint.
+     * Both endpoints are owner-gated; 401s are suppressed because the boot
+     * path drives re-auth.
+     */
     SettingsTab.prototype.refresh = function () {
         var self = this;
         this.api.get('/config', { skipCache: true }).then(function (data) {
@@ -51,13 +102,7 @@
             self._fillForm();
         }).catch(function (err) {
             if (self._destroyed) { return; }
-            // alpha.28.1 batch 51 — 401 suppressed (boot path owns
-            // re-auth). Expired session was previously surfacing as
-            // "Failed to load config" toast on every drawer-open.
             if (err && err.status === 401) { return; }
-            // alpha.28.1 batch 19 — stable id so repeated drawer-open
-            // attempts against a 500-ing backend coalesce into one
-            // updating toast. (Audit ad49e60e.)
             self.notifications.show({
                 id: 'settings-config-load-fail',
                 severity: 'warning',
@@ -65,1257 +110,1158 @@
                 body: err.message || String(err),
             });
         });
+        this._loadCreds();
     };
 
     /**
      * @private
-     * alpha.9 — split the monolithic scroll page into a sub-tab nav.
-     * Five panes live in the same DOM but only the active one is visible,
-     * so the operator never scrolls past four irrelevant blocks to reach
-     * the one they want. Default landing: 'network'. Danger is always
-     * the last sub-tab and is never the default — operator must click
-     * into it deliberately.
-     *
-     * Layout adapts via container query in styles.css: vertical nav rail
-     * at width >640px, horizontal pill row below. Reuses the same
-     * container-type: inline-size already on .enm-settings.
+     * Shell: nav (wide) + pills (narrow/compact, hidden by CSS on wide) +
+     * content host. All three sections built up-front; only the active one
+     * is visible. Pane switching just toggles [hidden] on the section-cards
+     * and the .active class on the nav/pill items.
      */
     SettingsTab.prototype._renderShell = function () {
         var t = root.enmTOrFallback;
-        this._sections = {};
-        this._panes = {};
-        this._activeKey = 'network';
+        var self = this;
 
-        // Sub-tab nav rail (rendered first, lives at column 1 in the grid).
-        this._navEl = document.createElement('nav');
+        // Nav rail (column 1 on wide). role=tablist for AT.
+        this._navEl = document.createElement('aside');
         this._navEl.className = 'enm-settings-nav';
         this._navEl.setAttribute('role', 'tablist');
         this._navEl.setAttribute('aria-label', 'Settings sections');
-        this.root.appendChild(this._navEl);
 
-        // Content host (column 2). Each section becomes a pane in here.
-        var content = document.createElement('div');
-        content.className = 'enm-settings-content';
-        this.root.appendChild(content);
+        var navHead = document.createElement('div');
+        navHead.className = 'enm-settings-nav-head';
+        navHead.textContent = 'Configuration';
+        this._navEl.appendChild(navHead);
 
-        var navItems = [
-            { key: 'network',   label: t('settings.heading_network'),   build: this._buildNetworkSection },
-            { key: 'advanced',  label: t('settings.heading_advanced'),  build: this._buildAdvancedSection },
-            { key: 'rpcCreds',  label: t('settings.heading_rpc_creds'), build: this._buildRpcCredsSection },
-            { key: 'general',   label: t('settings.heading_general'),   build: this._buildGeneralSection },
-            { key: 'danger',    label: t('settings.heading_danger'),    build: this._buildDangerZoneSection,
-              accent: 'danger' },
+        // Pills (alt nav for narrow/compact). Same role pattern. Hidden by
+        // CSS on wide via .enm-app[data-app-size] not being set.
+        this._pillsEl = document.createElement('div');
+        this._pillsEl.className = 'enm-settings-pills';
+        this._pillsEl.setAttribute('role', 'tablist');
+        this._pillsEl.setAttribute('aria-label', 'Settings sections');
+
+        // Content host (column 2).
+        this._contentEl = document.createElement('div');
+        this._contentEl.className = 'enm-settings-content';
+
+        // Order matches mock: Network first, Advanced second, General last.
+        var nav = [
+            { key: 'network',  glyph: '⇄', label: t('settings.heading_network'),  build: this._buildNetworkSection },
+            { key: 'advanced', glyph: '⚙', label: t('settings.heading_advanced'), build: this._buildAdvancedSection },
+            { key: 'general',  glyph: '◉', label: t('settings.heading_general'),  build: this._buildGeneralSection },
         ];
-        var self = this;
-        navItems.forEach(function (item) {
-            // Nav button — the sub-tab.
-            var btn = document.createElement('button');
-            btn.type = 'button';
-            btn.className = 'enm-settings-nav-item';
-            if (item.accent) btn.dataset.accent = item.accent;
-            btn.setAttribute('role', 'tab');
-            btn.dataset.key = item.key;
-            btn.textContent = item.label;
-            btn.addEventListener('click', function () { self._activatePane(item.key); });
-            self._navEl.appendChild(btn);
+        nav.forEach(function (item) {
+            // Nav item (wide rail).
+            var navBtn = document.createElement('button');
+            navBtn.type = 'button';
+            navBtn.className = 'enm-settings-nav-item';
+            navBtn.setAttribute('role', 'tab');
+            navBtn.dataset.key = item.key;
+            var navGlyph = document.createElement('span');
+            navGlyph.className = 'enm-settings-nav-glyph';
+            navGlyph.setAttribute('aria-hidden', 'true');
+            navGlyph.textContent = item.glyph;
+            navBtn.appendChild(navGlyph);
+            navBtn.appendChild(document.createTextNode(item.label));
+            navBtn.addEventListener('click', function () { self._activate(item.key); });
+            self._navEl.appendChild(navBtn);
+            self._navItems[item.key] = navBtn;
 
-            // Build the matching section and host it in a pane wrapper.
+            // Pill (narrow/compact alt).
+            var pill = document.createElement('button');
+            pill.type = 'button';
+            pill.className = 'enm-settings-pill';
+            pill.setAttribute('role', 'tab');
+            pill.dataset.key = item.key;
+            pill.textContent = item.glyph + ' ' + item.label;
+            pill.addEventListener('click', function () { self._activate(item.key); });
+            self._pillsEl.appendChild(pill);
+            self._pills[item.key] = pill;
+
+            // Section card.
             var section = item.build.call(self, t);
-            section.classList.add('enm-settings-pane');
-            content.appendChild(section);
-            self._panes[item.key] = section;
+            section.setAttribute('role', 'tabpanel');
+            section.setAttribute('aria-labelledby', 'enm-section-h-' + item.key);
+            self._contentEl.appendChild(section);
+            self._sections[item.key] = section;
         });
 
-        this._activatePane(this._activeKey);
+        this.root.appendChild(this._navEl);
+        this.root.appendChild(this._pillsEl);
+        this.root.appendChild(this._contentEl);
+
+        this._activate(this._activeKey);
     };
 
     /**
      * @private
-     * Switch which pane is visible + which nav button reads as selected.
-     * Aria semantics kept in sync so screen readers see the same change.
+     * Activate a section: toggle [hidden] on the other section-cards,
+     * mirror .active class + aria-selected onto nav + pill.
      */
-    SettingsTab.prototype._activatePane = function (key) {
-        if (!this._panes[key]) return;
+    SettingsTab.prototype._activate = function (key) {
+        if (!this._sections[key]) { return; }
         this._activeKey = key;
-        Object.keys(this._panes).forEach(function (k) {
-            this._panes[k].hidden = (k !== key);
+        Object.keys(this._sections).forEach(function (k) {
+            this._sections[k].hidden = (k !== key);
         }, this);
-        var navBtns = this._navEl.querySelectorAll('.enm-settings-nav-item');
-        navBtns.forEach(function (b) {
-            var active = (b.dataset.key === key);
-            b.classList.toggle('active', active);
-            b.setAttribute('aria-selected', active ? 'true' : 'false');
-        });
+        Object.keys(this._navItems).forEach(function (k) {
+            var active = (k === key);
+            this._navItems[k].classList.toggle('active', active);
+            this._navItems[k].setAttribute('aria-selected', active ? 'true' : 'false');
+            this._pills[k].classList.toggle('active', active);
+            this._pills[k].setAttribute('aria-selected', active ? 'true' : 'false');
+        }, this);
     };
 
+    // -----------------------------------------------------------------
+    // Section: Network
+    // -----------------------------------------------------------------
     /** @private */
     SettingsTab.prototype._buildNetworkSection = function (t) {
-        var section = document.createElement('div');
-        section.className = 'enm-settings-section';
-        // alpha.28.1 batch 33 — section is an ARIA group named by its
-        // heading. Screen readers announce "Network, group" when the
-        // operator enters the section, then per-field labels. The
-        // role+aria-labelledby pair satisfies WCAG 1.3.1 without
-        // touching CSS (which a real <fieldset> swap would have
-        // affected). Form-semantics audit a0b9a3e1 #3.
-        section.setAttribute('role', 'group');
-        section.setAttribute('aria-labelledby', 'enm-settings-h-network');
-        var h = document.createElement('h3');
-        h.id = 'enm-settings-h-network';
-        h.textContent = t('settings.heading_network');
-        section.appendChild(h);
+        var self = this;
+        var sec = makeSection({
+            id: 'network',
+            icon: '⇄',
+            title: t('settings.heading_network'),
+            help: 'Mainchain DPoS IP announcement. Writes ',
+            helpCodes: ['chains.mainchain.dpos.ipAddressMode', 'ipAddressManual'],
+            tag: { kind: 'warn', label: 'Restart required' },
+        });
+        this._network = {
+            card: sec.card,
+            body: sec.body,
+            statusEl: sec.statusEl,
+            saveBtn: sec.saveBtn,
+            revertBtn: sec.revertBtn,
+        };
 
-        // alpha.28.1 batch 27 — radio group wrapped in <fieldset><legend>
-        // so screen readers announce the group's purpose ("IP mode:")
-        // when the operator lands on either radio. ARIA Authoring
-        // Practices flag a radio group without a programmatic group
-        // label as a WCAG 1.3.1 bug, not polish. (Form-semantics audit
-        // a0b9a3e1.) The visually-hidden legend keeps the existing
-        // layout — the section H3 already gives sighted users context.
-        var modeWrap = document.createElement('fieldset');
-        modeWrap.className = 'enm-settings-row enm-radio-group';
-        var modeLegend = document.createElement('legend');
-        modeLegend.className = 'enm-sr-only';
-        modeLegend.textContent = t('settings.ip_mode_auto') + ' / ' + t('settings.ip_mode_manual');
-        modeWrap.appendChild(modeLegend);
-        this._network = { modeAuto: radio('ipMode', 'auto'), modeManual: radio('ipMode', 'manual') };
-        modeWrap.appendChild(label(this._network.modeAuto, t('settings.ip_mode_auto')));
-        modeWrap.appendChild(label(this._network.modeManual, t('settings.ip_mode_manual')));
-        section.appendChild(modeWrap);
+        // Row 1 — IP mode segmented control.
+        var seg = makeSeg({
+            options: [
+                { value: 'auto',   label: 'Auto-detect' },
+                { value: 'manual', label: 'Manual' },
+            ],
+            value: 'auto',
+            onChange: function (v) { self._onNetworkModeChange(v); },
+        });
+        this._network.seg = seg;
+        sec.body.appendChild(makeFormRow({
+            label: 'External IP detection',
+            help: 'Auto = ENM queries ',
+            helpCodes: ['GET /system/extip'],
+            helpSuffix: ' on each restart. Manual = pin a static address.',
+            control: seg.el,
+        }));
 
-        this._network.manualInput = document.createElement('input');
-        this._network.manualInput.type = 'text';
-        this._network.manualInput.className = 'enm-settings-input';
-        this._network.manualInput.placeholder = t('settings.ip_help');
-        // a11y: placeholder is not a label (WCAG 3.3.2). Add aria-label so
-        // screen-reader users learn what the field expects. The technical
-        // attrs stop iOS from auto-capitalizing / spell-checking an IP.
-        this._network.manualInput.setAttribute('aria-label', t('settings.ip_mode_manual'));
+        // Row 2 — Manual IP input (disabled when mode === auto).
+        this._network.manualInput = makeInput({
+            type: 'text',
+            placeholder: 'e.g. 203.0.113.14',
+            mono: true,
+            ariaLabel: 'Manual IP address',
+            describedById: 'enm-net-status',
+        });
         this._network.manualInput.setAttribute('autocomplete', 'off');
         this._network.manualInput.setAttribute('spellcheck', 'false');
         this._network.manualInput.setAttribute('autocapitalize', 'off');
         this._network.manualInput.setAttribute('autocorrect', 'off');
-        section.appendChild(this._network.manualInput);
-
-        var actions = document.createElement('div'); actions.className = 'enm-settings-actions';
-        var detectBtn = btn(t('settings.ip_detect_btn'), 'enm-btn-secondary', this._detectIp.bind(this));
-        var saveBtn = btn(t('settings.ip_save_btn'),     'enm-btn-primary',   this._saveNetwork.bind(this));
-        // Capture so _saveNetwork can route through enmRunOnce — disabled
-        // + label-swapped while the PUT is in flight so a slow backend
-        // can't get double-saved.
-        this._network.saveBtn = saveBtn;
-        actions.appendChild(detectBtn);
-        actions.appendChild(saveBtn);
-        section.appendChild(actions);
-
-        this._network.statusLine = document.createElement('p');
-        this._network.statusLine.className = 'enm-settings-status';
-        // a11y: announce save / validation results to screen readers (4.1.3).
-        this._network.statusLine.setAttribute('role', 'status');
-        // alpha.28.1 batch 30 (audit a0b9a3e1) — assign a stable id and
-        // wire aria-describedby on the manualInput so screen-reader
-        // users hear the error text linked to the field on aria-invalid
-        // transitions. Without this, the role="status" announces once
-        // and disappears from the field's accessible-description.
-        this._network.statusLine.id = 'enm-net-status';
-        this._network.manualInput.setAttribute('aria-describedby', 'enm-net-status');
-        section.appendChild(this._network.statusLine);
-
-        this._sections.network = section;
-        return section;
-    };
-
-    /** @private */
-    SettingsTab.prototype._buildAdvancedSection = function (t) {
-        var section = document.createElement('div');
-        section.className = 'enm-settings-section';
-        section.setAttribute('role', 'group');
-        section.setAttribute('aria-labelledby', 'enm-settings-h-advanced');
-        var h = document.createElement('h3');
-        h.id = 'enm-settings-h-advanced';
-        h.textContent = t('settings.heading_advanced');
-        section.appendChild(h);
-
-        this._adv = {
-            logLevel:    select(['debug', 'info', 'warn', 'error']),
-            archiveMode: checkbox(),
-            memory:      numberInput(512, 32_768),
-            rpcUser:     textInput(),
-            rpcPassword: passwordInput(),
-        };
-        // Surface the validation rule BEFORE the operator submits — joi's
-        // regex error message is opaque ("rpcUser fails to match …"). With
-        // the pattern attribute set, browser autofill respects it, the
-        // title= hover summarises the rule, and screen readers read the
-        // expected format from aria-describedby on platforms that wire it.
-        this._adv.rpcUser.setAttribute('pattern', '[A-Za-z0-9]+');
-        this._adv.rpcUser.setAttribute('autocomplete', 'username');
-        this._adv.rpcUser.setAttribute('spellcheck', 'false');
-        this._adv.rpcUser.setAttribute('autocapitalize', 'off');
-        this._adv.rpcUser.title = 'Letters and numbers only (no spaces or symbols).';
-
-        var rows = [
-            [t('settings.adv_log_level'),   this._adv.logLevel],
-            [t('settings.adv_archive_mode'), this._adv.archiveMode],
-            [t('settings.adv_memory_limit'), this._adv.memory],
-            [t('settings.adv_rpc_user'),    this._adv.rpcUser],
-            [t('settings.adv_rpc_password'), this._adv.rpcPassword],
-        ];
-        rows.forEach(function (r) {
-            var row = document.createElement('div'); row.className = 'enm-settings-row';
-            row.appendChild(label(r[1], r[0]));
-            section.appendChild(row);
+        this._network.manualRow = makeFormRow({
+            label: 'Manual IP address',
+            help: 'Enabled only when mode is Manual. IPv4 or IPv6.',
+            control: this._network.manualInput,
+            disabled: true,
         });
+        sec.body.appendChild(this._network.manualRow);
 
-        var actions = document.createElement('div'); actions.className = 'enm-settings-actions';
-        var advSaveBtn = btn(t('settings.adv_save_btn'), 'enm-btn-primary', this._saveAdvanced.bind(this));
-        this._adv.saveBtn = advSaveBtn;
-        actions.appendChild(advSaveBtn);
-        section.appendChild(actions);
+        // Row 3 — Detect now button (no save).
+        var detectBtn = document.createElement('button');
+        detectBtn.type = 'button';
+        detectBtn.className = 'enm-btn';
+        detectBtn.textContent = t('settings.ip_detect_btn');
+        this._network.detectBtn = detectBtn;
+        this._network.detectResult = document.createElement('span');
+        this._network.detectResult.className = 'enm-detect-result';
+        var detectGroup = document.createElement('div');
+        detectGroup.className = 'enm-form-inline';
+        detectGroup.appendChild(detectBtn);
+        detectGroup.appendChild(this._network.detectResult);
+        detectBtn.addEventListener('click', function () { self._detectIp(); });
+        sec.body.appendChild(makeFormRow({
+            label: 'Detect now',
+            help: 'One-shot probe. Shows the result inline without saving.',
+            control: detectGroup,
+        }));
 
-        this._adv.statusLine = document.createElement('p');
-        this._adv.statusLine.className = 'enm-settings-status';
-        // a11y: announce save / validation results to screen readers (4.1.3).
-        this._adv.statusLine.setAttribute('role', 'status');
-        // alpha.28.1 batch 30 — describedby on the two validated inputs
-        // in this section (memory, rpcUser) so AT links the error text
-        // to the right field. _saveAdvanced's aria-invalid toggle from
-        // batch 7 was previously surfaced as a floating status with no
-        // programmatic relationship to the offending input.
-        this._adv.statusLine.id = 'enm-adv-status';
-        this._adv.memory.setAttribute('aria-describedby', 'enm-adv-status');
-        this._adv.rpcUser.setAttribute('aria-describedby', 'enm-adv-status');
-        section.appendChild(this._adv.statusLine);
+        // Foot status node — also gets the id described by the manual
+        // input so AT links error text to the offending field.
+        sec.statusEl.id = 'enm-net-status';
 
-        this._sections.advanced = section;
-        return section;
+        sec.saveBtn.addEventListener('click', function () { self._saveNetwork(); });
+        sec.revertBtn.addEventListener('click', function () { self.refresh(); });
+
+        return sec.card;
     };
 
-    /**
-     * @private
-     * RPC credentials reveal panel. Lazy-fetched — the password only leaves
-     * the server when the operator actively clicks Reveal, mirroring how
-     * recovery-phrase UIs work in wallets.
-     */
-    SettingsTab.prototype._buildRpcCredsSection = function (t) {
-        var section = document.createElement('div');
-        section.className = 'enm-settings-section';
-        section.setAttribute('role', 'group');
-        section.setAttribute('aria-labelledby', 'enm-settings-h-rpc');
-
-        var h = document.createElement('h3');
-        h.id = 'enm-settings-h-rpc';
-        h.textContent = t('settings.heading_rpc_creds');
-        section.appendChild(h);
-
-        var intro = document.createElement('p');
-        intro.className = 'enm-settings-help';
-        intro.textContent = t('settings.rpc_creds_intro');
-        section.appendChild(intro);
-
-        // No reveal/hide wrapper — the operator is already authenticated as
-        // owner; double-gating with a Reveal button adds friction without
-        // adding security. Password stays masked with a per-field Show toggle
-        // so shoulder-surfing on shared screens is still mitigated.
-        this._creds = {
-            panel: document.createElement('div'),
-            statusLine: document.createElement('p'),
-            whiteStatus: document.createElement('p'),
-            toggleStatus: document.createElement('p'),
-            // 127.0.0.1 is locked (can't be removed) — needed for ENM's own
-            // RPC calls + local diagnostics. Backend has a safety-net
-            // force-include on PUT, so even an explicit removal attempt
-            // can't lock us out.
-            whiteIp: chipInput({ locked: ['127.0.0.1'] }),
-            toggleOff: radio('rpcEnabled', 'off'),
-            toggleOn:  radio('rpcEnabled', 'on'),
-            data: null,
-            pwShown: false,
-        };
-        this._creds.panel.className = 'enm-rpc-creds-panel';
-        this._creds.statusLine.className = 'enm-settings-status';
-        this._creds.whiteStatus.className = 'enm-settings-status';
-        // a11y: announce save / validation results to screen readers (4.1.3).
-        this._creds.statusLine.setAttribute('role', 'status');
-        this._creds.whiteStatus.setAttribute('role', 'status');
-        this._creds.toggleStatus.className = 'enm-settings-status';
-        this._creds.toggleStatus.setAttribute('role', 'status');
-
-        section.appendChild(this._creds.panel);
-        section.appendChild(this._creds.statusLine);
-
-        this._sections.rpcCreds = section;
-
-        // Fetch + render immediately on first build. refresh() will also be
-        // called when the tab becomes active; this just makes initial render
-        // happen without a manual click.
-        this._loadCreds();
-        return section;
-    };
-
-    /** @private — fetch credentials + render inline. */
-    SettingsTab.prototype._loadCreds = function () {
-        var t = root.enmTOrFallback;
-        var self = this;
-        this._creds.statusLine.textContent = t('common.loading');
-        // alpha.29 batch 95 (Round-32 audit finding #1, MED) — the
-        // _destroyed flag added in alpha.28.1 batch 16 + the 401
-        // suppression added in batch 51 covered every save path and the
-        // main /config refresh, but _loadCreds was missed. Without
-        // these guards a teardown mid-fetch resolves into a detached
-        // statusLine + a misleading "Failed to load RPC credentials"
-        // toast for an expired session the boot path is already re-
-        // authing for.
-        this.api.get('/config/rpc/credentials/mainchain', { skipCache: true }).then(function (data) {
-            if (self._destroyed) { return; }
-            self._creds.data = data;
-            self._renderCredsPanel();
-            self._creds.statusLine.textContent = '';
-        }).catch(function (err) {
-            if (self._destroyed) { return; }
-            if (err && err.status === 401) { return; }
-            self._creds.statusLine.textContent = t('settings.rpc_load_failed',
-                { error: err.message || String(err) });
-        });
-    };
-
-    /** @private */
-    SettingsTab.prototype._renderCredsPanel = function () {
-        var t = root.enmTOrFallback;
-        var d = this._creds.data;
-        var p = this._creds.panel;
-        p.innerHTML = '';
-        if (!d) return;
-
-        // Operator-friendly order (alpha.19):
-        //   1. RPC server toggle (master gate)
-        //   2. Allowed IPs (who can connect)
-        //   3. URLs to share (with operator-friendly labels)
-        //   4. Credentials (what to share)
-
-        // --- 1. RPC server toggle ---
-        var toggleSec = document.createElement('section');
-        toggleSec.className = 'enm-rpc-section enm-rpc-toggle';
-
-        var th = document.createElement('h4');
-        th.className = 'enm-rpc-section-title';
-        th.textContent = t('settings.rpc_toggle_section');
-        toggleSec.appendChild(th);
-
-        // alpha.28.1 batch 27 — fieldset+legend around the rpcEnabled
-        // radio pair (WCAG 1.3.1, ARIA radio-group pattern). Visually-
-        // hidden legend; the section H4 already provides sighted
-        // context. (Form-semantics audit a0b9a3e1.)
-        var toggleRow = document.createElement('fieldset');
-        toggleRow.className = 'enm-rpc-toggle-row enm-radio-group';
-        var toggleLegend = document.createElement('legend');
-        toggleLegend.className = 'enm-sr-only';
-        toggleLegend.textContent = t('settings.rpc_toggle_off') + ' / ' + t('settings.rpc_toggle_on');
-        toggleRow.appendChild(toggleLegend);
-        toggleRow.appendChild(label(this._creds.toggleOff, t('settings.rpc_toggle_off')));
-        toggleRow.appendChild(label(this._creds.toggleOn,  t('settings.rpc_toggle_on')));
-        this._creds.toggleSaveBtn = btn(
-            t('settings.rpc_toggle_save_btn'),
-            'enm-btn-primary enm-rpc-toggle-save',
-            this._saveRpcEnabled.bind(this),
-        );
-        toggleRow.appendChild(this._creds.toggleSaveBtn);
-        toggleSec.appendChild(toggleRow);
-
-        var toggleHelp = document.createElement('p');
-        toggleHelp.className = 'enm-settings-help';
-        toggleHelp.textContent = d.enabled
-            ? t('settings.rpc_toggle_on_help')
-            : t('settings.rpc_toggle_off_help');
-        toggleSec.appendChild(toggleHelp);
-        toggleSec.appendChild(this._creds.toggleStatus);
-
-        // Reflect server state into the radio inputs
-        this._creds.toggleOff.checked = !d.enabled;
-        this._creds.toggleOn.checked  = !!d.enabled;
-        p.appendChild(toggleSec);
-
-        // --- 2. Allowed IPs (whitelist) ---
-        var whiteSec = document.createElement('section');
-        whiteSec.className = 'enm-rpc-section enm-rpc-allow';
-
-        var ah = document.createElement('h4');
-        ah.className = 'enm-rpc-section-title';
-        ah.textContent = t('settings.rpc_allow_section');
-        whiteSec.appendChild(ah);
-
-        var whiteRow = document.createElement('div');
-        whiteRow.className = 'enm-rpc-allow-row';
-        whiteRow.appendChild(this._creds.whiteIp);
-        this._creds.whiteSaveBtn = btn(
-            t('settings.rpc_white_apply_btn'),
-            'enm-btn-primary enm-rpc-allow-apply',
-            this._saveWhitelist.bind(this),
-        );
-        whiteRow.appendChild(this._creds.whiteSaveBtn);
-        whiteSec.appendChild(whiteRow);
-
-        // chipInput auto-merges locked values, so this passes the server's list
-        // through and 127.0.0.1 always ends up rendered (even if missing
-        // from the backend response).
-        this._creds.whiteIp.setValue(Array.isArray(d.whiteIPList) ? d.whiteIPList : []);
-
-        var whiteHelp = document.createElement('p');
-        whiteHelp.className = 'enm-settings-help';
-        whiteHelp.textContent = t('settings.rpc_white_help');
-        whiteSec.appendChild(whiteHelp);
-        whiteSec.appendChild(this._creds.whiteStatus);
-        p.appendChild(whiteSec);
-
-        // --- 3. URLs to share ---
-        var urlSec = document.createElement('section');
-        urlSec.className = 'enm-rpc-section enm-rpc-urls';
-
-        var uh = document.createElement('h4');
-        uh.className = 'enm-rpc-section-title';
-        uh.textContent = t('settings.rpc_urls_section');
-        urlSec.appendChild(uh);
-
-        // alpha.28.1 batch 88 (Round-28 finding #2) — pass notifications
-        // through the row helpers so credValueWithCopy's clipboard-API
-        // fallback can surface a warning toast. Previously the helper
-        // had no operator-feedback channel on copy failure: it selected
-        // the value silently, the operator saw nothing happen, and the
-        // rage-click UX kicked in. Mirrors batch 87's validator-card fix.
-        var nf = this.notifications;
-        // Order: Same machine (always safe) → private LAN → public (most exposure last)
-        if (d.localUrl) {
-            urlSec.appendChild(rpcUrlRow(
-                t('settings.rpc_url_same_machine'),
-                d.localUrl,
-                null,
-                false,
-                nf,
-            ));
-        }
-        if (Array.isArray(d.lanUrls)) {
-            // Sort private first, then public.
-            var sorted = d.lanUrls.slice().sort(function (a, b) {
-                var ka = classifyUrlAddress(a), kb = classifyUrlAddress(b);
-                if (ka === kb) return 0;
-                return ka === 'public' ? 1 : -1;
-            });
-            sorted.forEach(function (u) {
-                var kind = classifyUrlAddress(u);
-                var lbl = kind === 'public'
-                    ? t('settings.rpc_url_public_internet')
-                    : t('settings.rpc_url_private_network');
-                var warn = kind === 'public' ? t('settings.rpc_url_public_warn') : null;
-                urlSec.appendChild(rpcUrlRow(lbl, u, warn, kind === 'public', nf));
-            });
-        }
-        p.appendChild(urlSec);
-
-        // --- 4. Credentials ---
-        var credSec = document.createElement('section');
-        credSec.className = 'enm-rpc-section enm-rpc-creds';
-
-        var ch = document.createElement('h4');
-        ch.className = 'enm-rpc-section-title';
-        ch.textContent = t('settings.rpc_creds_section') || 'Credentials';
-        credSec.appendChild(ch);
-
-        credSec.appendChild(credRow(t('settings.rpc_field_user'), d.user, nf));
-        credSec.appendChild(credPasswordRow(this, t));
-        p.appendChild(credSec);
-    };
-
-    /** @private — save rpc.enabled toggle (partial PUT). */
-    SettingsTab.prototype._saveRpcEnabled = function () {
-        var t = root.enmTOrFallback;
-        var enabled = this._creds.toggleOn.checked === true;
-        var current = !!(this._creds.data && this._creds.data.enabled);
-        if (enabled === current) {
-            // No-op — operator clicked Save without changing state. Don't
-            // spam the server or surface a confusing 'Saved' toast.
-            this._creds.toggleStatus.textContent = t('settings.rpc_white_no_change');
-            return;
-        }
-        var self = this;
-        this._creds.toggleStatus.textContent = t('common.loading');
-        var savingLabel = t('common.saving') || 'Saving…';
-        return root.enmRunOnce(this._creds.toggleSaveBtn, savingLabel, function () {
-            return self.api.put('/config/mainchain', { rpcEnabled: enabled }).then(function () {
-                self._creds.toggleStatus.textContent = t('settings.rpc_toggle_saved');
-                if (self._creds.data) self._creds.data.enabled = enabled;
-                // Re-render so the help text reflects the new state.
-                self._renderCredsPanel();
-            }).catch(function (err) {
-                self._creds.toggleStatus.textContent = t('settings.rpc_toggle_save_failed',
-                    { error: err.message || String(err) });
-            });
-        });
-    };
-
-    /** @private — save whitelist only (partial PUT). */
-    SettingsTab.prototype._saveWhitelist = function () {
-        var t = root.enmTOrFallback;
-        var list = this._creds.whiteIp.getValue();
-        // alpha.20: don't bother the server (or confuse the operator with a
-        // success toast) if nothing actually changed since last load. Compare
-        // sorted lists element-by-element so order-only differences are
-        // also no-ops.
-        // alpha.29 batch 112 (Round-34 perf finding #5, LOW) — replaced
-        // JSON.stringify-equality with a structural element-wise check.
-        // For a 50-IP corporate allowlist, the previous two stringify
-        // calls allocated ~2KB of throwaway strings per Apply click.
-        // listsEqual short-circuits on length mismatch and avoids any
-        // allocation on the typical case. Same semantics; cheaper.
-        var current = (this._creds.data && Array.isArray(this._creds.data.whiteIPList))
-            ? this._creds.data.whiteIPList.slice() : [];
-        if (listsEqualSorted(list, current)) {
-            this._creds.whiteStatus.textContent = t('settings.rpc_white_no_change');
-            return;
-        }
-        var self = this;
-        this._creds.whiteStatus.textContent = t('common.loading');
-        var savingLabel = t('common.saving') || 'Saving…';
-        return root.enmRunOnce(this._creds.whiteSaveBtn, savingLabel, function () {
-            return self.api.put('/config/mainchain', { whiteIPList: list }).then(function () {
-                self._creds.whiteStatus.textContent = t('settings.rpc_white_applied');
-                if (self._creds.data) self._creds.data.whiteIPList = list.slice();
-            }).catch(function (err) {
-                self._creds.whiteStatus.textContent = t('settings.rpc_white_apply_failed',
-                    { error: err.message || String(err) });
-            });
-        });
-    };
-
-    /** @private */
-    SettingsTab.prototype._togglePwVisibility = function () {
-        this._creds.pwShown = !this._creds.pwShown;
-        this._renderCredsPanel();
-    };
-
-    /** @private */
-    SettingsTab.prototype._buildGeneralSection = function (t) {
-        var section = document.createElement('div');
-        section.className = 'enm-settings-section';
-        section.setAttribute('role', 'group');
-        section.setAttribute('aria-labelledby', 'enm-settings-h-general');
-        var h = document.createElement('h3');
-        h.id = 'enm-settings-h-general';
-        h.textContent = t('settings.heading_general');
-        section.appendChild(h);
-
-        this._gen = {
-            autoSafe:        checkbox(),
-            criticalAck:     checkbox(),
-            auditRetention:  numberInput(0, 3650),
-        };
-        [
-            [t('settings.general_auto_safe'),       this._gen.autoSafe],
-            [t('settings.general_critical_ack'),    this._gen.criticalAck],
-            [t('settings.general_audit_retention'), this._gen.auditRetention],
-        ].forEach(function (r) {
-            var row = document.createElement('div'); row.className = 'enm-settings-row';
-            row.appendChild(label(r[1], r[0]));
-            section.appendChild(row);
-        });
-
-        var actions = document.createElement('div'); actions.className = 'enm-settings-actions';
-        var genSaveBtn = btn(t('settings.general_save_btn'), 'enm-btn-primary', this._saveGeneral.bind(this));
-        this._gen.saveBtn = genSaveBtn;
-        actions.appendChild(genSaveBtn);
-        section.appendChild(actions);
-
-        this._gen.statusLine = document.createElement('p');
-        this._gen.statusLine.className = 'enm-settings-status';
-        // a11y: announce save / validation results to screen readers (4.1.3).
-        this._gen.statusLine.setAttribute('role', 'status');
-        // alpha.28.1 batch 30 — describedby on audit-retention so the
-        // 0..3650 days validation error binds to the field.
-        this._gen.statusLine.id = 'enm-gen-status';
-        this._gen.auditRetention.setAttribute('aria-describedby', 'enm-gen-status');
-        section.appendChild(this._gen.statusLine);
-
-        this._sections.general = section;
-        return section;
-    };
-
-    /** @private */
-    SettingsTab.prototype._fillForm = function () {
-        var cfg = this._cfg;
-        if (!cfg) return;
-        var chain = cfg.chains && cfg.chains.mainchain;
-        if (chain) {
-            // Network
-            this._network.modeAuto.checked = (chain.dpos && chain.dpos.ipAddressMode !== 'manual');
-            this._network.modeManual.checked = (chain.dpos && chain.dpos.ipAddressMode === 'manual');
-            this._network.manualInput.value = (chain.dpos && chain.dpos.ipAddressManual) || '';
-            // Advanced
-            this._adv.logLevel.value = chain.logLevel || 'info';
-            this._adv.archiveMode.checked = !!chain.archiveMode;
-            this._adv.memory.value = String(chain.memoryLimitMb || 4096);
-            this._adv.rpcUser.value = (chain.rpc && chain.rpc.user) || 'ela';
-            // RPC password: stays empty in the form; submitting an empty string keeps the existing one.
-            this._adv.rpcPassword.value = '';
-            this._adv.rpcPassword.placeholder = (chain.rpc && chain.rpc.passwordSet)
-                ? '(leave blank to keep current)' : 'set a password';
-        }
-        // General
-        var g = cfg.global || {};
-        this._gen.autoSafe.checked = !(g.healing && g.healing.autoExecuteSafe === false);
-        this._gen.criticalAck.checked = !(g.notifications && g.notifications.criticalRequiresAck === false);
-        this._gen.auditRetention.value = String((g.audit && g.audit.retentionDays) || 365);
+    /** @private — Manual IP row is gated on seg state. */
+    SettingsTab.prototype._onNetworkModeChange = function (mode) {
+        var disabled = (mode !== 'manual');
+        this._network.manualRow.setAttribute('data-disabled', disabled ? 'true' : 'false');
     };
 
     /** @private */
     SettingsTab.prototype._detectIp = function () {
-        // Settings → Network → "Detect now". Hits the system endpoint that
-        // already wraps ExtIpResolver (see routes/system.js).
-        // alpha.28.1 batch 85 (Round-25 finding #1) — status line text
-        // routed through strings.js settings.ip_* keys so locale switches
-        // cover the Detect-now flow. Previous shape leaked four
-        // hardcoded English literals despite the rest of the file
-        // routing every operator-visible status string through enmT.
         var t = root.enmTOrFallback;
-        this._network.statusLine.textContent = t('settings.ip_detecting');
         var self = this;
-        // alpha.29 batch 95 (Round-32 audit finding #1, MED) — Same
-        // _destroyed-guard gap as _loadCreds above. Without these
-        // guards a Detect-Now click whose response lands after the
-        // operator switches tabs writes into a detached statusLine.
+        this._network.detectResult.textContent = t('settings.ip_detecting');
+        this._network.detectResult.classList.remove('ok', 'err');
         this.api.get('/system/extip', { skipCache: true }).then(function (data) {
             if (self._destroyed) { return; }
             if (data && data.ok && data.ip) {
-                self._network.statusLine.textContent = t('settings.ip_detected', { ip: data.ip });
+                self._network.detectResult.textContent =
+                    t('settings.ip_detected', { ip: data.ip });
+                self._network.detectResult.classList.add('ok');
             } else {
-                var reason = (data && data.reason) ? data.reason : t('settings.ip_detect_unknown');
-                self._network.statusLine.textContent = t('settings.ip_detect_failed', { reason: reason });
+                var reason = (data && data.reason) || t('settings.ip_detect_unknown');
+                self._network.detectResult.textContent =
+                    t('settings.ip_detect_failed', { reason: reason });
+                self._network.detectResult.classList.add('err');
             }
         }).catch(function (err) {
             if (self._destroyed) { return; }
             if (err && err.status === 401) { return; }
-            self._network.statusLine.textContent = t('settings.ip_detect_failed', {
+            self._network.detectResult.textContent = t('settings.ip_detect_failed', {
                 reason: err.message || String(err),
             });
+            self._network.detectResult.classList.add('err');
         });
     };
 
     /** @private */
     SettingsTab.prototype._saveNetwork = function () {
         var t = root.enmTOrFallback;
-        // alpha.28.1 batch 85 (Round-25 finding #2) — client-side
-        // validation parity with _saveAdvanced/_saveGeneral. Clear any
-        // stale aria-invalid from a previous failed save so screen
-        // readers don't keep announcing the old error as the operator
-        // edits.
+        var self = this;
+        // Clear stale aria-invalid (batch 85).
         this._network.manualInput.removeAttribute('aria-invalid');
-        var mode = this._network.modeManual.checked ? 'manual' : 'auto';
+
+        var mode = this._network.seg.getValue();
         var manualValue = this._network.manualInput.value.trim();
-        // In manual mode we MUST have a value. The previous shape POSTed
-        // {mode:'manual', manualValue:''} to /config/network and let the
-        // operator wait for the round-trip error, with no inline
-        // validation message + no focus + no aria-invalid. Sibling
-        // handlers _saveAdvanced/_saveGeneral block on input validation
-        // before the PUT; _saveNetwork was the outlier.
+
+        // Manual mode requires a value — block the PUT inline.
         if (mode === 'manual' && manualValue.length === 0) {
-            this._network.statusLine.textContent = t('settings.save_failed', {
-                error: t('settings.err_ip_required'),
-            });
+            setStatus(this._network.statusEl, 'error',
+                t('settings.save_failed', { error: t('settings.err_ip_required') }));
             this._network.manualInput.setAttribute('aria-invalid', 'true');
             try { this._network.manualInput.focus({ preventScroll: true }); }
             catch (e) { this._network.manualInput.focus(); }
             return;
         }
-        var self = this;
+
         var savingLabel = t('common.saving') || 'Saving…';
+        setStatus(this._network.statusEl, '', t('common.loading') || 'Saving…');
         return root.enmRunOnce(this._network.saveBtn, savingLabel, function () {
-            return self.api.put('/config/network', { mode: mode, manualValue: manualValue })
+            return self.api.put('/config/network',
+                { mode: mode, manualValue: manualValue })
                 .then(function () {
-                    self._network.statusLine.textContent = t('settings.saved');
+                    if (self._destroyed) { return; }
+                    setStatus(self._network.statusEl, 'success', '✓ ' + t('settings.saved'));
                     self.refresh();
                 })
                 .catch(function (err) {
-                    self._network.statusLine.textContent = t('settings.save_failed', { error: err.message });
+                    if (self._destroyed) { return; }
+                    if (err && err.status === 401) { return; }
+                    setStatus(self._network.statusEl, 'error',
+                        t('settings.save_failed', { error: err.message || String(err) }));
                 });
         });
+    };
+
+    // -----------------------------------------------------------------
+    // Section: Mainchain Advanced
+    // -----------------------------------------------------------------
+    /** @private */
+    SettingsTab.prototype._buildAdvancedSection = function (t) {
+        var self = this;
+        var sec = makeSection({
+            id: 'advanced',
+            icon: '⚙',
+            title: t('settings.heading_advanced'),
+            help: 'Runtime knobs for the ela mainchain process. Writes ',
+            helpCodes: ['chains.mainchain.{logLevel, archiveMode, memoryLimitMb, rpc}'],
+            tag: { kind: 'warn', label: 'Restart required' },
+        });
+        this._adv = {
+            card: sec.card,
+            body: sec.body,
+            statusEl: sec.statusEl,
+            saveBtn: sec.saveBtn,
+            revertBtn: sec.revertBtn,
+        };
+
+        // Row 1 — Log level.
+        this._adv.logLevel = makeSelectWrap({
+            options: [
+                { value: 'debug', label: 'debug' },
+                { value: 'info',  label: 'info' },
+                { value: 'warn',  label: 'warn' },
+                { value: 'error', label: 'error' },
+            ],
+            value: 'info',
+        });
+        sec.body.appendChild(makeFormRow({
+            label: 'Log level',
+            help: 'Mapped to ela.conf ',
+            helpCodes: ['PrintLevel'],
+            helpSuffix: ' by ElaMainChainAdapter.',
+            control: this._adv.logLevel.el,
+        }));
+
+        // Row 2 — Archive mode toggle.
+        this._adv.archiveMode = makeToggleRow({
+            initial: false,
+            getLabel: function (on) {
+                return on
+                    ? { title: 'On · keep full block history',
+                        sub: 'Disk-heavy. Recommended only if an explorer needs it.' }
+                    : { title: 'Off · prune historical blocks',
+                        sub: 'Recommended for most operators.' };
+            },
+        });
+        sec.body.appendChild(makeFormRow({
+            label: 'Archive mode',
+            help: 'Keeps full historical block data instead of pruning. Disk-heavy.',
+            control: this._adv.archiveMode.el,
+        }));
+
+        // Row 3 — Memory limit with MB suffix.
+        this._adv.memory = makeInputSuffix({
+            type: 'number',
+            value: '4096',
+            min: 512,
+            max: 32768,
+            step: 1,
+            mono: true,
+            suffix: 'MB',
+            ariaLabel: 'Memory limit in megabytes',
+            describedById: 'enm-adv-status',
+        });
+        sec.body.appendChild(makeFormRow({
+            label: 'Memory limit',
+            help: 'Per-process cap. Range 512 – 32,768 MB. Default 4,096.',
+            control: this._adv.memory.el,
+        }));
+
+        // Row 4 — RPC user.
+        this._adv.rpcUser = makeInput({
+            type: 'text',
+            value: 'ela',
+            mono: true,
+            ariaLabel: 'RPC user',
+            describedById: 'enm-adv-status',
+        });
+        this._adv.rpcUser.setAttribute('pattern', '[A-Za-z0-9]+');
+        this._adv.rpcUser.setAttribute('autocomplete', 'username');
+        this._adv.rpcUser.setAttribute('spellcheck', 'false');
+        this._adv.rpcUser.setAttribute('autocapitalize', 'off');
+        this._adv.rpcUser.title = 'Letters and numbers only (no spaces or symbols).';
+        sec.body.appendChild(makeFormRow({
+            label: 'RPC user',
+            help: 'ela.conf ',
+            helpCodes: ['RPCConfiguration.User'],
+            helpSuffix: ' · Basic-Auth principal.',
+            control: this._adv.rpcUser,
+        }));
+
+        // Row 5 — RPC password (secret-field with show/hide).
+        this._adv.rpcPasswordField = makeSecretField({
+            ariaLabel: 'RPC password',
+            placeholder: '(leave blank to keep current)',
+        });
+        sec.body.appendChild(makeFormRow({
+            label: 'RPC password',
+            help: 'Encrypted by ',
+            helpCodes: ['ConfigStore.setRpcPassword'],
+            helpSuffix: '. Leave blank to keep the current one.',
+            control: this._adv.rpcPasswordField.el,
+        }));
+
+        // Row 6 — IP whitelist (chip input with locked loopback).
+        this._adv.whiteIp = makeChipInput({
+            locked: ['127.0.0.1'],
+            placeholder: 'add IP or CIDR…',
+            ariaLabel: 'Add IP address or CIDR to whitelist',
+        });
+        sec.body.appendChild(makeFormRow({
+            label: 'IP whitelist',
+            help: 'ela.conf ',
+            helpCodes: ['RPCConfiguration.WhiteIPList'],
+            helpSuffix: '. Loopback stays locked so ENM can’t lose access to its own RPC.',
+            control: this._adv.whiteIp.el,
+        }));
+
+        sec.statusEl.id = 'enm-adv-status';
+
+        sec.saveBtn.addEventListener('click', function () { self._saveAdvanced(); });
+        sec.revertBtn.addEventListener('click', function () { self.refresh(); });
+
+        return sec.card;
+    };
+
+    /**
+     * @private
+     * Fetch /config/rpc/credentials/mainchain to populate the whitelist
+     * chips, RPC user, and the password-placeholder hint. The same
+     * endpoint also returns URLs + the rpc enabled flag — those parts of
+     * the response are intentionally ignored by Beta 3 (the reveal panel
+     * is dropped per phase-04 mock). _saveRpcEnabled remains below as
+     * dead-code documentation of the partial-PUT shape.
+     */
+    SettingsTab.prototype._loadCreds = function () {
+        var self = this;
+        this.api.get('/config/rpc/credentials/mainchain', { skipCache: true })
+            .then(function (data) {
+                if (self._destroyed) { return; }
+                self._creds = data || null;
+                self._fillCreds();
+            })
+            .catch(function (err) {
+                if (self._destroyed) { return; }
+                if (err && err.status === 401) { return; }
+                // Non-fatal — _fillForm's /config response still gives us
+                // enough to render. Whitelist will fall back to the locked
+                // loopback default.
+            });
+    };
+
+    /** @private */
+    SettingsTab.prototype._fillCreds = function () {
+        if (!this._adv || !this._creds) { return; }
+        var d = this._creds;
+        if (Array.isArray(d.whiteIPList)) {
+            this._adv.whiteIp.setValue(d.whiteIPList);
+        }
+        // user + passwordSet may also come back here; prefer /config but
+        // keep this as a fallback for the password placeholder.
+        if (typeof d.user === 'string' && d.user.length > 0
+            && (!this._adv.rpcUser.value || this._adv.rpcUser.value === 'ela')) {
+            this._adv.rpcUser.value = d.user;
+        }
     };
 
     /** @private */
     SettingsTab.prototype._saveAdvanced = function () {
         var t = root.enmTOrFallback;
-        // Clear stale aria-invalid from a previous failed save so screen
-        // readers don't keep announcing the old error as the operator
-        // edits.
-        this._adv.memory.removeAttribute('aria-invalid');
+        var self = this;
+        // Clear any stale aria-invalid hints from a previous failed save
+        // (batch 30).
+        this._adv.memory.input.removeAttribute('aria-invalid');
         this._adv.rpcUser.removeAttribute('aria-invalid');
-        // Client-side guard: server (joi schema in EnmConfigSchema) is the
-        // authority, but giving the operator immediate inline feedback is
-        // friendlier than a generic toast after the round-trip. Friendly
-        // ranges (MB → "512 MB to 32 GB") read better than ".." notation.
-        var memMb = parseInt(this._adv.memory.value, 10);
-        if (!Number.isInteger(memMb) || memMb < 512 || memMb > 32_768) {
-            this._adv.statusLine.textContent = t(
-                'settings.save_failed', { error: t('settings.err_memory_range') });
-            this._adv.memory.setAttribute('aria-invalid', 'true');
-            try { this._adv.memory.focus({ preventScroll: true }); } catch (e) { this._adv.memory.focus(); }
+
+        // Inline client-side validation parity with the joi schema, so
+        // the operator sees the problem before the round-trip.
+        var memMb = parseInt(this._adv.memory.input.value, 10);
+        if (!Number.isInteger(memMb) || memMb < 512 || memMb > 32768) {
+            setStatus(this._adv.statusEl, 'error',
+                t('settings.save_failed', { error: t('settings.err_memory_range') }));
+            this._adv.memory.input.setAttribute('aria-invalid', 'true');
+            try { this._adv.memory.input.focus({ preventScroll: true }); }
+            catch (e) { this._adv.memory.input.focus(); }
             return;
         }
         var rpcUser = this._adv.rpcUser.value.trim();
         if (rpcUser.length === 0 || !/^[A-Za-z0-9]+$/.test(rpcUser)) {
-            this._adv.statusLine.textContent = t(
-                'settings.save_failed', { error: t('settings.err_rpc_user') });
+            setStatus(this._adv.statusEl, 'error',
+                t('settings.save_failed', { error: t('settings.err_rpc_user') }));
             this._adv.rpcUser.setAttribute('aria-invalid', 'true');
-            try { this._adv.rpcUser.focus({ preventScroll: true }); } catch (e) { this._adv.rpcUser.focus(); }
+            try { this._adv.rpcUser.focus({ preventScroll: true }); }
+            catch (e) { this._adv.rpcUser.focus(); }
             return;
         }
 
         var body = {
-            logLevel: this._adv.logLevel.value,
-            archiveMode: this._adv.archiveMode.checked,
+            logLevel: this._adv.logLevel.getValue(),
+            archiveMode: this._adv.archiveMode.getValue(),
             memoryLimitMb: memMb,
             rpcUser: rpcUser,
+            whiteIPList: this._adv.whiteIp.getValue(),
         };
-        // RPC password is only sent if non-empty so the operator can edit
-        // other knobs without re-typing it.
-        var pw = this._adv.rpcPassword.value;
+        // RPC password is only sent if the operator typed something so
+        // they can edit other knobs without re-typing it (alpha.28).
+        var pw = this._adv.rpcPasswordField.input.value;
         if (pw && pw.length > 0) { body.rpcPassword = pw; }
-        var self = this;
+
         var savingLabel = t('common.saving') || 'Saving…';
+        setStatus(this._adv.statusEl, '', t('common.loading') || 'Saving…');
         return root.enmRunOnce(this._adv.saveBtn, savingLabel, function () {
-            return self.api.put('/config/mainchain', body).then(function () {
-                self._adv.statusLine.textContent = t('settings.saved');
-                self._adv.rpcPassword.value = '';
-                self.refresh();
-            }).catch(function (err) {
-                self._adv.statusLine.textContent = t('settings.save_failed', { error: err.message });
-            });
+            return self.api.put('/config/mainchain', body)
+                .then(function () {
+                    if (self._destroyed) { return; }
+                    setStatus(self._adv.statusEl, 'success', '✓ ' + t('settings.saved'));
+                    self._adv.rpcPasswordField.input.value = '';
+                    self.refresh();
+                })
+                .catch(function (err) {
+                    if (self._destroyed) { return; }
+                    if (err && err.status === 401) { return; }
+                    setStatus(self._adv.statusEl, 'error',
+                        t('settings.save_failed', { error: err.message || String(err) }));
+                });
         });
+    };
+
+    // Beta 3 — phase-04 mock dropped the RPC reveal-only panel and the
+    // Danger-Zone surface. The API methods stay below as dead code so a
+    // future surface can wire them up without rediscovering the partial-
+    // PUT shapes:
+    //
+    //   PUT /config/mainchain { rpcEnabled: bool }     ← master toggle
+    //   PUT /config/mainchain { whiteIPList: string[] } ← partial whitelist
+    //   GET /config/rpc/credentials/mainchain          ← URLs + creds
+    //   DELETE /api/installed-apps/<name>?purge=true   ← danger-zone wipe
+    //
+    // The consolidated _saveAdvanced above PUTs every mainchain field in
+    // one shot, so rpcEnabled + whiteIPList no longer need their own
+    // dedicated save buttons; the data lives in the same /config/mainchain
+    // body. _loadCreds above still hits the GET endpoint to hydrate the
+    // whitelist chips.
+    //
+    // SettingsTab.prototype._saveRpcEnabled = function (enabled) {
+    //     return this.api.put('/config/mainchain', { rpcEnabled: enabled });
+    // };
+    //
+    // SettingsTab.prototype._saveWhitelist = function () {
+    //     var list = this._adv.whiteIp.getValue();
+    //     return this.api.put('/config/mainchain', { whiteIPList: list });
+    // };
+    //
+    // SettingsTab.prototype._renderCredsPanel = function () {
+    //     // Alpha.27 rendered .enm-rpc-creds-panel with URLs + creds +
+    //     // RPC enable toggle. Beta 3 merges credentials into the Mainchain
+    //     // Advanced section's form and drops the URL panel entirely.
+    // };
+    //
+    // SettingsTab.prototype._doWipe = function () { /* see alpha.27 */ };
+    // SettingsTab.prototype._handleWipeSuccess = function () { /* idem */ };
+    // SettingsTab.prototype._handleWipeFailure = function () { /* idem */ };
+
+    // -----------------------------------------------------------------
+    // Section: General
+    // -----------------------------------------------------------------
+    /** @private */
+    SettingsTab.prototype._buildGeneralSection = function (t) {
+        var self = this;
+        var sec = makeSection({
+            id: 'general',
+            icon: '◉',
+            title: t('settings.heading_general'),
+            help: 'ENM-side preferences applied immediately, no ela restart. Writes ',
+            helpCodes: ['global.{healing.autoExecuteSafe, notifications.criticalRequiresAck, audit.retentionDays}'],
+            tag: { kind: 'success', label: 'No restart needed' },
+        });
+        this._gen = {
+            card: sec.card,
+            body: sec.body,
+            statusEl: sec.statusEl,
+            saveBtn: sec.saveBtn,
+            revertBtn: sec.revertBtn,
+        };
+
+        // Row 1 — Auto-execute safe healing.
+        this._gen.autoSafe = makeToggleRow({
+            initial: true,
+            getLabel: function (on) {
+                return on
+                    ? { title: 'On · auto-execute',
+                        sub: 'Restart-on-crash, rotate logs, reload config.' }
+                    : { title: 'Off · every action waits for the operator',
+                        sub: 'Even AUTOMATED-SAFE playbooks need a manual confirm.' };
+            },
+        });
+        sec.body.appendChild(makeFormRow({
+            label: 'Auto-execute safe healing',
+            help: 'If a healing playbook is tagged safe, ENM runs it without confirmation. Unsafe playbooks always wait for the operator.',
+            control: this._gen.autoSafe.el,
+        }));
+
+        // Row 2 — Critical alerts require ack.
+        this._gen.criticalAck = makeToggleRow({
+            initial: true,
+            getLabel: function (on) {
+                return on
+                    ? { title: 'On · require explicit ack',
+                        sub: 'Recommended. Keeps slashing-risk alerts sticky.' }
+                    : { title: 'Off · auto-dismiss after view',
+                        sub: 'Critical alerts stop being sticky.' };
+            },
+        });
+        sec.body.appendChild(makeFormRow({
+            label: 'Critical alerts require ack',
+            help: 'Critical events stay visible in the alerts strip until you explicitly dismiss them. Off = auto-dismiss after view.',
+            control: this._gen.criticalAck.el,
+        }));
+
+        // Row 3 — Audit retention with days suffix.
+        this._gen.auditRetention = makeInputSuffix({
+            type: 'number',
+            value: '365',
+            min: 0,
+            max: 3650,
+            step: 1,
+            mono: true,
+            suffix: 'days',
+            ariaLabel: 'Audit retention in days',
+            describedById: 'enm-gen-status',
+        });
+        sec.body.appendChild(makeFormRow({
+            label: 'Audit retention',
+            help: 'How long ENM keeps audit-log entries. ',
+            helpCodes: ['0'],
+            helpSuffix: ' = forever. Range 0 – 3,650 days.',
+            control: this._gen.auditRetention.el,
+        }));
+
+        sec.statusEl.id = 'enm-gen-status';
+
+        sec.saveBtn.addEventListener('click', function () { self._saveGeneral(); });
+        sec.revertBtn.addEventListener('click', function () { self.refresh(); });
+
+        return sec.card;
     };
 
     /** @private */
     SettingsTab.prototype._saveGeneral = function () {
         var t = root.enmTOrFallback;
-        this._gen.auditRetention.removeAttribute('aria-invalid');
-        var retention = parseInt(this._gen.auditRetention.value, 10);
+        var self = this;
+        this._gen.auditRetention.input.removeAttribute('aria-invalid');
+
+        var retention = parseInt(this._gen.auditRetention.input.value, 10);
         if (!Number.isInteger(retention) || retention < 0 || retention > 3650) {
-            this._gen.statusLine.textContent = t(
-                'settings.save_failed', { error: t('settings.err_retention') });
-            this._gen.auditRetention.setAttribute('aria-invalid', 'true');
-            try { this._gen.auditRetention.focus({ preventScroll: true }); } catch (e) { this._gen.auditRetention.focus(); }
+            setStatus(this._gen.statusEl, 'error',
+                t('settings.save_failed', { error: t('settings.err_retention') }));
+            this._gen.auditRetention.input.setAttribute('aria-invalid', 'true');
+            try { this._gen.auditRetention.input.focus({ preventScroll: true }); }
+            catch (e) { this._gen.auditRetention.input.focus(); }
             return;
         }
         var body = {
-            autoExecuteSafe: this._gen.autoSafe.checked,
-            criticalRequiresAck: this._gen.criticalAck.checked,
+            autoExecuteSafe: this._gen.autoSafe.getValue(),
+            criticalRequiresAck: this._gen.criticalAck.getValue(),
             auditRetentionDays: retention,
         };
-        var self = this;
         var savingLabel = t('common.saving') || 'Saving…';
+        setStatus(this._gen.statusEl, '', t('common.loading') || 'Saving…');
         return root.enmRunOnce(this._gen.saveBtn, savingLabel, function () {
-            return self.api.put('/config/general', body).then(function () {
-                self._gen.statusLine.textContent = t('settings.saved');
-                self.refresh();
-            }).catch(function (err) {
-                self._gen.statusLine.textContent = t('settings.save_failed', { error: err.message });
-            });
+            return self.api.put('/config/general', body)
+                .then(function () {
+                    if (self._destroyed) { return; }
+                    setStatus(self._gen.statusEl, 'success', '✓ ' + t('settings.saved'));
+                    self.refresh();
+                })
+                .catch(function (err) {
+                    if (self._destroyed) { return; }
+                    if (err && err.status === 401) { return; }
+                    setStatus(self._gen.statusEl, 'error',
+                        t('settings.save_failed', { error: err.message || String(err) }));
+                });
         });
     };
 
-    /**
-     * @private
-     * Danger-zone section. Three-stage gate to keep the wipe from being
-     * triggered accidentally:
-     *   1. The entire control surface is hidden behind a Show button.
-     *   2. The wipe button stays disabled until the operator types WIPE
-     *      into the confirm input.
-     *   3. The wipe button itself is bright red and labeled unambiguously.
-     *
-     * Does NOT add a backend endpoint to ENM — calls PC2's existing
-     * DELETE /api/installed-apps/<name>?purge=true (same origin, same
-     * Bearer token), which already runs the teardown hook that backs up
-     * keystore.dat before SIGTERMing this process.
-     */
-    SettingsTab.prototype._buildDangerZoneSection = function (t) {
-        var section = document.createElement('div');
-        section.className = 'enm-settings-section enm-settings-danger';
-        section.setAttribute('role', 'group');
-        section.setAttribute('aria-labelledby', 'enm-settings-h-danger');
-
-        var h = document.createElement('h3');
-        h.id = 'enm-settings-h-danger';
-        h.textContent = t('settings.heading_danger');
-        section.appendChild(h);
-
-        var intro = document.createElement('p');
-        intro.className = 'enm-settings-help';
-        intro.textContent = t('settings.danger_intro');
-        section.appendChild(intro);
-
-        var dangerSelf = this;
-        this._danger = {
-            showBtn: btn(t('settings.danger_show_btn'), 'enm-btn-secondary', function () {
-                dangerSelf._toggleDangerControls();
-                // a11y/focus: when the operator hits Show the entire
-                // type-to-confirm gauntlet appears below; without an
-                // explicit focus the operator has to hunt for the input.
-                // Skip on close — the Show button itself remains a sane
-                // resting focus.
-                if (dangerSelf._danger
-                    && dangerSelf._danger.controls
-                    && dangerSelf._danger.controls.style.display !== 'none'
-                    && dangerSelf._danger.confirmInput) {
-                    try {
-                        dangerSelf._danger.confirmInput.focus({ preventScroll: true });
-                    } catch (e) {
-                        dangerSelf._danger.confirmInput.focus();
-                    }
-                }
-            }),
-            controls: document.createElement('div'),
-            confirmInput: null,
-            wipeBtn: null,
-            statusLine: document.createElement('p'),
-        };
-        this._danger.controls.className = 'enm-danger-controls';
-        this._danger.controls.style.display = 'none';
-        this._danger.statusLine.className = 'enm-settings-status';
-        // a11y: danger-zone status is delivered via role="alert" because the
-        // outcomes (wipe applied / declined / failed) are critical events
-        // the operator should not miss.
-        this._danger.statusLine.setAttribute('role', 'alert');
-
-        // Build the hidden controls once and toggle visibility, so the form
-        // state survives an open/close cycle.
-        var keptH = document.createElement('div');
-        keptH.className = 'enm-danger-section-h enm-danger-section-h-kept';
-        keptH.textContent = t('settings.danger_kept_h');
-        this._danger.controls.appendChild(keptH);
-
-        var keptUl = document.createElement('ul');
-        keptUl.className = 'enm-danger-list';
-        var keptLi1 = document.createElement('li');
-        keptLi1.textContent = t('settings.danger_kept_li1');
-        keptUl.appendChild(keptLi1);
-        var keptCode = document.createElement('code');
-        keptCode.className = 'enm-danger-code';
-        keptCode.textContent = t('settings.danger_kept_path');
-        keptUl.appendChild(keptCode);
-        var keptLi2 = document.createElement('li');
-        keptLi2.textContent = t('settings.danger_kept_li2');
-        keptUl.appendChild(keptLi2);
-        this._danger.controls.appendChild(keptUl);
-
-        var wipedH = document.createElement('div');
-        wipedH.className = 'enm-danger-section-h enm-danger-section-h-wiped';
-        wipedH.textContent = t('settings.danger_wiped_h');
-        this._danger.controls.appendChild(wipedH);
-
-        var wipedUl = document.createElement('ul');
-        wipedUl.className = 'enm-danger-list';
-        ['danger_wiped_li1', 'danger_wiped_li2', 'danger_wiped_li3'].forEach(function (k) {
-            var li = document.createElement('li');
-            li.textContent = t('settings.' + k);
-            wipedUl.appendChild(li);
-        });
-        this._danger.controls.appendChild(wipedUl);
-
-        var confirmH = document.createElement('div');
-        confirmH.className = 'enm-danger-section-h';
-        confirmH.textContent = t('settings.danger_confirm_h');
-        this._danger.controls.appendChild(confirmH);
-
-        var confirmRow = document.createElement('div');
-        confirmRow.className = 'enm-danger-confirm-row';
-        this._danger.confirmInput = document.createElement('input');
-        this._danger.confirmInput.type = 'text';
-        this._danger.confirmInput.className = 'enm-settings-input';
-        this._danger.confirmInput.placeholder = t('settings.danger_confirm_ph');
-        // a11y: placeholder is not a label (3.3.2). The danger-zone field
-        // requires typing an exact phrase to confirm a destructive action;
-        // mark it required + name it for screen readers + prevent iOS
-        // autocaps from interfering with the literal-string match.
-        this._danger.confirmInput.setAttribute('aria-label', t('settings.danger_confirm_h'));
-        this._danger.confirmInput.setAttribute('aria-required', 'true');
-        this._danger.confirmInput.required = true;
-        this._danger.confirmInput.autocomplete = 'off';
-        this._danger.confirmInput.autocapitalize = 'characters';
-        this._danger.confirmInput.setAttribute('autocorrect', 'off');
-        this._danger.confirmInput.spellcheck = false;
-        this._danger.confirmInput.addEventListener('input',
-            this._refreshDangerEnabled.bind(this));
-        confirmRow.appendChild(this._danger.confirmInput);
-
-        this._danger.wipeBtn = btn(t('settings.danger_wipe_btn'), 'enm-btn-danger',
-            this._doWipe.bind(this));
-        this._danger.wipeBtn.disabled = true;
-        confirmRow.appendChild(this._danger.wipeBtn);
-        this._danger.controls.appendChild(confirmRow);
-
-        var actions = document.createElement('div'); actions.className = 'enm-settings-actions';
-        actions.appendChild(this._danger.showBtn);
-        section.appendChild(actions);
-        section.appendChild(this._danger.controls);
-        section.appendChild(this._danger.statusLine);
-
-        this._sections.danger = section;
-        return section;
-    };
-
-    /** @private */
-    SettingsTab.prototype._toggleDangerControls = function () {
-        var t = root.enmTOrFallback;
-        var hidden = this._danger.controls.style.display === 'none';
-        if (hidden) {
-            this._danger.controls.style.display = '';
-            this._danger.showBtn.textContent = t('settings.danger_hide_btn');
-        } else {
-            this._danger.controls.style.display = 'none';
-            this._danger.showBtn.textContent = t('settings.danger_show_btn');
-            this._danger.confirmInput.value = '';
-            this._refreshDangerEnabled();
-            this._danger.statusLine.textContent = '';
+    // -----------------------------------------------------------------
+    // Form fill / hydration
+    // -----------------------------------------------------------------
+    /** @private — Hydrate all three sections from the /config response. */
+    SettingsTab.prototype._fillForm = function () {
+        var cfg = this._cfg;
+        if (!cfg) { return; }
+        var chain = cfg.chains && cfg.chains.mainchain;
+        if (chain) {
+            // Network
+            var mode = (chain.dpos && chain.dpos.ipAddressMode === 'manual')
+                ? 'manual' : 'auto';
+            if (this._network && this._network.seg) {
+                this._network.seg.setValue(mode);
+                this._onNetworkModeChange(mode);
+                this._network.manualInput.value =
+                    (chain.dpos && chain.dpos.ipAddressManual) || '';
+            }
+            // Advanced
+            if (this._adv) {
+                this._adv.logLevel.setValue(chain.logLevel || 'info');
+                this._adv.archiveMode.setValue(!!chain.archiveMode);
+                this._adv.memory.input.value = String(chain.memoryLimitMb || 4096);
+                this._adv.rpcUser.value = (chain.rpc && chain.rpc.user) || 'ela';
+                this._adv.rpcPasswordField.input.value = '';
+                this._adv.rpcPasswordField.input.placeholder =
+                    (chain.rpc && chain.rpc.passwordSet)
+                        ? '(leave blank to keep current)' : 'set a password';
+            }
+        }
+        // General
+        var g = cfg.global || {};
+        if (this._gen) {
+            this._gen.autoSafe.setValue(
+                !(g.healing && g.healing.autoExecuteSafe === false));
+            this._gen.criticalAck.setValue(
+                !(g.notifications && g.notifications.criticalRequiresAck === false));
+            this._gen.auditRetention.input.value =
+                String((g.audit && g.audit.retentionDays) || 365);
         }
     };
 
-    /** @private */
-    SettingsTab.prototype._refreshDangerEnabled = function () {
-        // alpha.11: compare case-insensitively. The input has
-        // text-transform: uppercase in CSS, which makes "wipe" LOOK like
-        // "WIPE" on screen but the underlying value stays lowercase —
-        // so a strict `!== 'WIPE'` left the button permanently disabled
-        // for anyone who typed in lowercase. The operator intent is
-        // clearly "I typed the magic word" regardless of case.
-        var typed = (this._danger.confirmInput.value || '').trim().toUpperCase();
-        this._danger.wipeBtn.disabled = (typed !== 'WIPE');
-    };
+    // -----------------------------------------------------------------
+    // Builders for the form primitives. Each returns a small handle the
+    // SettingsTab can talk to (.el for the DOM node, .getValue / .setValue
+    // / .input as needed). The DOM emitted matches the phase-04 mock 1:1.
+    // -----------------------------------------------------------------
 
     /**
-     * @private
-     * Calls PC2's installed-apps uninstall endpoint with purge=true. This
-     * is a SAME-ORIGIN request (PC2 serves both pc2-node and the ENM
-     * frontend), so we hit window.location.origin — NOT the :4180 backend
-     * the rest of api.js talks to.
+     * makeSection({ id, icon, title, help, helpCodes?, helpSuffix?, tag? })
+     * → { card, body, statusEl, saveBtn, revertBtn }
      *
-     * Once PC2 starts the teardown, our own backend (and therefore this
-     * page) will get killed mid-request. The fetch may resolve with the
-     * uninstall response OR fail with a network error if the kill is
-     * faster than the response. We treat both as success and redirect.
+     * Emits the canonical .enm-section-card three-part structure
+     * (head / body / foot) and returns refs the caller can wire into.
      */
-    SettingsTab.prototype._doWipe = function () {
-        var t = root.enmTOrFallback;
-        var self = this;
+    function makeSection(opts) {
+        var card = document.createElement('div');
+        card.className = 'enm-section-card';
 
-        // Lock the UI immediately so a double-click can't fire two requests.
-        this._danger.wipeBtn.disabled = true;
-        this._danger.showBtn.disabled = true;
-        this._danger.confirmInput.disabled = true;
-        this._danger.statusLine.textContent = t('settings.danger_in_progress');
-        this._danger.statusLine.style.color = '';
+        // --- head ---
+        var head = document.createElement('div');
+        head.className = 'enm-section-card-head';
+        var icon = document.createElement('div');
+        icon.className = 'enm-section-card-icon';
+        icon.setAttribute('aria-hidden', 'true');
+        icon.textContent = opts.icon || '';
+        head.appendChild(icon);
 
-        var token = (this.api && this.api.token) || null;
-        var headers = { 'Accept': 'application/json' };
-        if (token) headers['Authorization'] = 'Bearer ' + token;
+        var headbody = document.createElement('div');
+        headbody.className = 'enm-section-card-headbody';
+        var title = document.createElement('div');
+        title.className = 'enm-section-card-title';
+        title.id = 'enm-section-h-' + opts.id;
+        title.textContent = opts.title || '';
+        headbody.appendChild(title);
+        if (opts.help) {
+            var help = document.createElement('div');
+            help.className = 'enm-section-card-help';
+            renderHelp(help, opts.help, opts.helpCodes, opts.helpSuffix);
+            headbody.appendChild(help);
+        }
+        head.appendChild(headbody);
 
-        var url = root.location.origin + '/api/installed-apps/elastos-node-manager?purge=true';
+        if (opts.tag) {
+            var tag = document.createElement('div');
+            tag.className = 'enm-section-card-tag ' + (opts.tag.kind || 'muted');
+            tag.textContent = opts.tag.label;
+            head.appendChild(tag);
+        }
+        card.appendChild(head);
 
-        fetch(url, { method: 'DELETE', credentials: 'include', headers: headers })
-            .then(function (res) {
-                return res.text().then(function (text) {
-                    var parsed = null;
-                    try { parsed = JSON.parse(text); } catch (_) { /* fall through */ }
-                    if (!res.ok) {
-                        var msg = (parsed && (parsed.error || parsed.message))
-                            || ('HTTP ' + res.status);
-                        throw new Error(msg);
-                    }
-                    return parsed;
-                });
-            })
-            .then(function (parsed) {
-                self._handleWipeSuccess(parsed);
-            })
-            .catch(function (err) {
-                // ENM died mid-request — treat as success and redirect.
-                // Any TypeError fetch failure here means the connection
-                // was killed by SIGTERM (expected). Distinguish from a
-                // genuine HTTP error (which we threw above with a Message).
-                if (err && err.message && err.message.indexOf('HTTP ') === 0) {
-                    self._handleWipeFailure(err);
-                } else if (err && err.name === 'TypeError') {
-                    // Likely a NetworkError from the killed connection.
-                    self._handleWipeSuccess(null);
-                } else {
-                    self._handleWipeFailure(err);
-                }
+        // --- body ---
+        var body = document.createElement('div');
+        body.className = 'enm-section-card-body';
+        card.appendChild(body);
+
+        // --- foot ---
+        var foot = document.createElement('div');
+        foot.className = 'enm-section-card-foot';
+        var statusEl = document.createElement('div');
+        statusEl.className = 'enm-section-card-foot-status';
+        statusEl.setAttribute('role', 'status');
+        statusEl.setAttribute('aria-live', 'polite');
+        foot.appendChild(statusEl);
+
+        var revertBtn = document.createElement('button');
+        revertBtn.type = 'button';
+        revertBtn.className = 'enm-btn';
+        revertBtn.textContent = 'Revert';
+        foot.appendChild(revertBtn);
+
+        var saveBtn = document.createElement('button');
+        saveBtn.type = 'button';
+        saveBtn.className = 'enm-btn enm-btn-primary';
+        saveBtn.textContent = 'Save';
+        foot.appendChild(saveBtn);
+
+        card.appendChild(foot);
+
+        return { card: card, body: body, statusEl: statusEl, saveBtn: saveBtn, revertBtn: revertBtn };
+    }
+
+    /**
+     * makeFormRow({ label, help?, helpCodes?, helpSuffix?, control, disabled? })
+     * → HTMLElement
+     */
+    function makeFormRow(opts) {
+        var row = document.createElement('div');
+        row.className = 'enm-form-row';
+        if (opts.disabled) { row.setAttribute('data-disabled', 'true'); }
+
+        var lblBlock = document.createElement('div');
+        lblBlock.className = 'enm-form-label-block';
+        var lbl = document.createElement('div');
+        lbl.className = 'enm-form-label';
+        lbl.textContent = opts.label || '';
+        lblBlock.appendChild(lbl);
+        if (opts.help || opts.helpCodes) {
+            var help = document.createElement('div');
+            help.className = 'enm-form-label-help';
+            renderHelp(help, opts.help || '', opts.helpCodes, opts.helpSuffix);
+            lblBlock.appendChild(help);
+        }
+        row.appendChild(lblBlock);
+
+        var control = document.createElement('div');
+        control.className = 'enm-form-control';
+        if (opts.control) { control.appendChild(opts.control); }
+        row.appendChild(control);
+        return row;
+    }
+
+    /**
+     * makeSeg({ options: [{value,label}], value, onChange })
+     * → { el, getValue, setValue }
+     */
+    function makeSeg(opts) {
+        var el = document.createElement('div');
+        el.className = 'enm-seg';
+        el.setAttribute('role', 'radiogroup');
+        var current = opts.value || (opts.options[0] && opts.options[0].value);
+        var optEls = {};
+
+        opts.options.forEach(function (o) {
+            var btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'enm-seg-opt';
+            btn.dataset.value = o.value;
+            btn.setAttribute('role', 'radio');
+            btn.textContent = o.label;
+            btn.addEventListener('click', function () { setValue(o.value); });
+            el.appendChild(btn);
+            optEls[o.value] = btn;
+        });
+
+        function setValue(v) {
+            if (!optEls[v]) { return; }
+            current = v;
+            Object.keys(optEls).forEach(function (k) {
+                var active = (k === v);
+                optEls[k].classList.toggle('active', active);
+                optEls[k].setAttribute('aria-checked', active ? 'true' : 'false');
             });
-    };
+            if (typeof opts.onChange === 'function') { opts.onChange(v); }
+        }
+        setValue(current);
 
-    /** @private */
-    SettingsTab.prototype._handleWipeSuccess = function (response) {
-        var t = root.enmTOrFallback;
-        var path = (response && response.keystore && response.keystore.backup_path)
-            || (response && response.keystore_backed_up && response.backup_path)
-            || '/var/lib/pc2/data/backups/elastos-node-manager/';
-        this._danger.statusLine.style.color = '';
-        this._danger.statusLine.textContent = t('settings.danger_done', { path: path });
+        return {
+            el: el,
+            getValue: function () { return current; },
+            setValue: function (v) { setValue(v); },
+        };
+    }
 
-        // alpha.16 — actually close the ENM app window instead of
-        // navigating it to PC2 home. Reloading the iframe to '/' was
-        // wrong: it dropped the entire Puter desktop into the ENM
-        // window chrome, which left the operator looking at the
-        // desktop inside an "Elastos Node Manager" title bar.
-        //
-        // Puter's IPC supports a clean exit: postMessage to the parent
-        // with msg='exit' and our app instance ID, and PC2's UIWindow
-        // closes our window for us (src/gui/src/IPC.js handles it).
-        // The appInstanceID is on the URL params that PC2 hands us
-        // when launching (puter.app_instance_id).
-        //
-        // 4-second delay so the operator reads the keystore-backup
-        // path before the window vanishes.
-        var closeAfter = 4000;
-        setTimeout(function () {
-            try {
-                var params = new URLSearchParams(root.location.search || '');
-                var instanceId = params.get('puter.app_instance_id');
-                if (instanceId && root.parent && root.parent !== root) {
-                    root.parent.postMessage({
-                        msg: 'exit',
-                        appInstanceID: instanceId,
-                        statusCode: 0,
-                    }, '*');
-                    return;
-                }
-            } catch (_) { /* fall through to fallback */ }
-            // Fallback for non-Puter contexts (rare — direct browser visit
-            // to the ENM iframe URL): try window.close(), then a blank
-            // page so the operator sees something other than a stale UI.
-            try { root.close(); } catch (_) { /* not allowed */ }
-            try { root.location.replace('about:blank'); } catch (_) { /* nothing more we can do */ }
-        }, closeAfter);
-    };
+    /**
+     * makeToggle({ initial, onChange })
+     * → { el, getValue, setValue }
+     */
+    function makeToggle(opts) {
+        var el = document.createElement('button');
+        el.type = 'button';
+        el.className = 'enm-toggle';
+        el.setAttribute('role', 'switch');
+        var track = document.createElement('div');
+        track.className = 'enm-toggle-track';
+        var thumb = document.createElement('div');
+        thumb.className = 'enm-toggle-thumb';
+        el.appendChild(track);
+        el.appendChild(thumb);
 
-    /** @private */
-    SettingsTab.prototype._handleWipeFailure = function (err) {
-        var t = root.enmTOrFallback;
-        this._danger.statusLine.style.color = 'var(--danger, #c0392b)';
-        this._danger.statusLine.textContent = t('settings.danger_failed',
-            { error: (err && err.message) || String(err) });
-        // Re-enable so the operator can retry or back out.
-        this._danger.wipeBtn.disabled = false;
-        this._danger.showBtn.disabled = false;
-        this._danger.confirmInput.disabled = false;
-        this._refreshDangerEnabled();
-    };
+        var on = !!opts.initial;
+        function paint() {
+            el.setAttribute('data-on', on ? 'true' : 'false');
+            el.setAttribute('aria-checked', on ? 'true' : 'false');
+        }
+        el.addEventListener('click', function () {
+            on = !on;
+            paint();
+            if (typeof opts.onChange === 'function') { opts.onChange(on); }
+        });
+        paint();
 
-    function radio(name, value) {
-        var i = document.createElement('input'); i.type = 'radio'; i.name = name; i.value = value;
+        return {
+            el: el,
+            getValue: function () { return on; },
+            setValue: function (v) { on = !!v; paint(); },
+        };
+    }
+
+    /**
+     * makeToggleRow({ initial, title?, sub?, getLabel?(on)→{title,sub}, onChange })
+     * → { el, getValue, setValue }
+     *
+     * Wraps a makeToggle with adjacent .enm-toggle-row-text title+sub.
+     * getLabel lets the row's text track the toggle state (e.g. Off /
+     * pruning vs On / archive).
+     */
+    function makeToggleRow(opts) {
+        var row = document.createElement('div');
+        row.className = 'enm-toggle-row';
+
+        var textWrap = document.createElement('div');
+        textWrap.className = 'enm-toggle-row-text';
+        var titleEl = document.createElement('div');
+        titleEl.className = 'enm-toggle-row-text-title';
+        var subEl = document.createElement('div');
+        subEl.className = 'enm-toggle-row-text-sub';
+        textWrap.appendChild(titleEl);
+        textWrap.appendChild(subEl);
+
+        var toggle = makeToggle({
+            initial: !!opts.initial,
+            onChange: function (on) {
+                paintText(on);
+                if (typeof opts.onChange === 'function') { opts.onChange(on); }
+            },
+        });
+
+        function paintText(on) {
+            if (typeof opts.getLabel === 'function') {
+                var l = opts.getLabel(on) || {};
+                titleEl.textContent = l.title || '';
+                subEl.textContent = l.sub || '';
+            } else {
+                titleEl.textContent = opts.title || '';
+                subEl.textContent = opts.sub || '';
+            }
+        }
+        paintText(!!opts.initial);
+
+        // Phase-04 mock places toggle BEFORE the text block. Match.
+        row.appendChild(toggle.el);
+        row.appendChild(textWrap);
+
+        return {
+            el: row,
+            getValue: function () { return toggle.getValue(); },
+            setValue: function (v) { toggle.setValue(v); paintText(!!v); },
+        };
+    }
+
+    /**
+     * makeInput({ type?, value?, placeholder?, mono?, ariaLabel?, describedById? })
+     * → HTMLInputElement
+     */
+    function makeInput(opts) {
+        var i = document.createElement('input');
+        i.type = opts.type || 'text';
+        i.className = opts.mono ? 'enm-input mono' : 'enm-input';
+        if (opts.value != null) { i.value = String(opts.value); }
+        if (opts.placeholder) { i.placeholder = opts.placeholder; }
+        if (opts.min != null) { i.min = String(opts.min); }
+        if (opts.max != null) { i.max = String(opts.max); }
+        if (opts.step != null) { i.step = String(opts.step); }
+        if (opts.ariaLabel) { i.setAttribute('aria-label', opts.ariaLabel); }
+        if (opts.describedById) { i.setAttribute('aria-describedby', opts.describedById); }
+        if (opts.type === 'number') {
+            i.setAttribute('inputmode', 'numeric');
+            if (opts.min != null && opts.max != null) {
+                i.title = 'Between ' + opts.min + ' and ' + opts.max;
+            }
+        }
         return i;
     }
-    function checkbox() {
-        var i = document.createElement('input'); i.type = 'checkbox'; return i;
-    }
-    function textInput() {
-        var i = document.createElement('input'); i.type = 'text';
-        i.className = 'enm-settings-input'; return i;
-    }
+
     /**
-     * chipInput — small inline pill-list editor for IPv4/CIDR entries.
-     * Mirrors the textInput "looks like an input from the outside" pattern:
-     * exposes .getValue() / .setValue() and a .value mirror so the rest of
-     * the form fill/save code stays simple. Validation is client-side only
-     * (the joi schema on the server is still the authority); on invalid we
-     * flash a red border on the inline editor without committing the chip.
-     *
-     * Backend (whiteIPList in EnmConfigSchema) accepts string[], so this
-     * replaces the previous comma-joined single-line input which had no
-     * way to surface a per-entry parse error.
+     * makeInputSuffix({ ...inputOpts, suffix })
+     * → { el, input }
      */
-    var IP_OR_CIDR_RE = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(?:\/(?:[0-9]|[12][0-9]|3[0-2]))?$/;
+    function makeInputSuffix(opts) {
+        var wrap = document.createElement('div');
+        wrap.className = 'enm-input-wrap';
+        var input = makeInput(opts);
+        wrap.appendChild(input);
+        var sfx = document.createElement('span');
+        sfx.className = 'enm-input-suffix';
+        sfx.setAttribute('aria-hidden', 'true');
+        sfx.textContent = opts.suffix || '';
+        wrap.appendChild(sfx);
+        return { el: wrap, input: input };
+    }
 
-    function chipInput(opts) {
-        // Container is the "input-shaped" thing the rest of the form treats
-        // as a single field. Internal layout: chip list on top, editor row
-        // on the bottom.
-        //
-        // Options:
-        //   locked: string[] — values that auto-prepend to the list and
-        //     render with a 🔒 icon instead of × (no remove button). Use this
-        //     for "removing this would break the host" entries like 127.0.0.1
-        //     on an RPC allow-list.
-        var lockedValues = (opts && Array.isArray(opts.locked)) ? opts.locked.slice() : [];
-        var container = document.createElement('div');
-        container.className = 'enm-settings-input enm-chip-input';
-        container.style.display = 'flex';
-        container.style.flexDirection = 'column';
-        container.style.gap = '6px';
-        container.style.padding = '6px';
-        container.style.minHeight = '34px';
-        container.style.height = 'auto';
-        container.style.alignItems = 'stretch';
+    /**
+     * makeSelectWrap({ options: [{value,label}], value, onChange? })
+     * → { el, getValue, setValue }
+     */
+    function makeSelectWrap(opts) {
+        var wrap = document.createElement('div');
+        wrap.className = 'enm-select-wrap';
+        var sel = document.createElement('select');
+        sel.className = 'enm-select';
+        opts.options.forEach(function (o) {
+            var opt = document.createElement('option');
+            opt.value = o.value;
+            opt.textContent = o.label;
+            sel.appendChild(opt);
+        });
+        if (opts.value != null) { sel.value = String(opts.value); }
+        if (typeof opts.onChange === 'function') {
+            sel.addEventListener('change', function () { opts.onChange(sel.value); });
+        }
+        wrap.appendChild(sel);
+        var chev = document.createElement('span');
+        chev.className = 'enm-select-chev';
+        chev.setAttribute('aria-hidden', 'true');
+        chev.textContent = '▾'; // ▾
+        wrap.appendChild(chev);
+        return {
+            el: wrap,
+            getValue: function () { return sel.value; },
+            setValue: function (v) { sel.value = String(v); },
+        };
+    }
 
-        var chipsWrap = document.createElement('div');
-        chipsWrap.style.display = 'flex';
-        chipsWrap.style.flexWrap = 'wrap';
-        chipsWrap.style.gap = '4px';
-        container.appendChild(chipsWrap);
+    /**
+     * makeSecretField({ value?, placeholder?, ariaLabel? })
+     * → { el, input, getValue, setValue }
+     *
+     * Password input + eye-toggle that flips type password↔text. Operator
+     * is already authenticated as owner, so the toggle is a shoulder-
+     * surfing mitigation, not a security gate.
+     */
+    function makeSecretField(opts) {
+        var wrap = document.createElement('div');
+        wrap.className = 'enm-secret-field';
+        var input = makeInput({
+            type: 'password',
+            value: opts.value || '',
+            placeholder: opts.placeholder || '',
+            mono: true,
+            ariaLabel: opts.ariaLabel || 'Password',
+        });
+        input.setAttribute('autocomplete', 'new-password');
+        input.setAttribute('spellcheck', 'false');
+        wrap.appendChild(input);
 
-        var editorRow = document.createElement('div');
-        editorRow.style.display = 'flex';
-        editorRow.style.gap = '6px';
-        editorRow.style.alignItems = 'center';
-        container.appendChild(editorRow);
+        var eye = document.createElement('button');
+        eye.type = 'button';
+        eye.className = 'enm-btn enm-btn-icon';
+        eye.setAttribute('aria-label', 'Show password');
+        eye.setAttribute('aria-pressed', 'false');
+        eye.textContent = '\u{1F441}'; // 👁
+        eye.addEventListener('click', function () {
+            var shown = input.type === 'text';
+            input.type = shown ? 'password' : 'text';
+            eye.setAttribute('aria-pressed', shown ? 'false' : 'true');
+            eye.setAttribute('aria-label', shown ? 'Show password' : 'Hide password');
+        });
+        wrap.appendChild(eye);
+
+        return {
+            el: wrap,
+            input: input,
+            getValue: function () { return input.value; },
+            setValue: function (v) { input.value = v == null ? '' : String(v); },
+        };
+    }
+
+    /**
+     * makeChipInput({ locked, placeholder?, ariaLabel? })
+     * → { el, getValue, setValue }
+     *
+     * Reuses the alpha.27 chipInput behaviour (locked entries, IP/CIDR
+     * validation, dedupe, CJK IME guard, multi-value paste) but emits
+     * the mock's class names: .enm-chip-input, .enm-chip,
+     * .enm-chip[data-locked="true"], .enm-chip-lock, .enm-chip-remove,
+     * .enm-chip-input-input.
+     */
+    function makeChipInput(opts) {
+        opts = opts || {};
+        var lockedValues = Array.isArray(opts.locked) ? opts.locked.slice() : [];
+
+        var el = document.createElement('div');
+        el.className = 'enm-chip-input';
 
         var newInput = document.createElement('input');
         newInput.type = 'text';
-        newInput.placeholder = '127.0.0.1 or 192.168.0.0/24';
-        // a11y: placeholder is not a label (3.3.2). aria-label names the
-        // field. Technical-keyboard attrs prevent iOS autocaps/autocorrect
-        // from mangling IP entry.
-        newInput.setAttribute('aria-label', 'Add IP address or CIDR to whitelist');
+        newInput.className = 'enm-chip-input-input';
+        newInput.placeholder = opts.placeholder || '';
+        newInput.setAttribute('aria-label', opts.ariaLabel || 'Add value');
         newInput.setAttribute('autocomplete', 'off');
         newInput.setAttribute('autocapitalize', 'off');
         newInput.setAttribute('autocorrect', 'off');
         newInput.spellcheck = false;
-        newInput.style.flex = '1';
-        newInput.style.minWidth = '0';
-        // a11y: was 21px tall (fails WCAG 2.5.5 24×24). Bump padding + add
-        // explicit min-height so the field clears 28px.
-        newInput.style.padding = '6px 10px';
-        newInput.style.minHeight = '28px';
-        newInput.style.border = '1px solid var(--border-color, #cfd6dd)';
-        newInput.style.borderRadius = '4px';
-        newInput.style.background = 'transparent';
-        newInput.style.color = 'inherit';
-        newInput.style.font = 'inherit';
-        editorRow.appendChild(newInput);
-
-        var addBtn = document.createElement('button');
-        addBtn.type = 'button';
-        addBtn.textContent = 'Add';
-        addBtn.style.display = 'inline-flex';
-        addBtn.style.alignItems = 'center';
-        addBtn.style.justifyContent = 'center';
-        // a11y: was ~17px tall (fails WCAG 2.5.5). 28px clears AA target size.
-        addBtn.style.padding = '6px 12px';
-        addBtn.style.minHeight = '28px';
-        addBtn.style.fontSize = '13px';
-        addBtn.style.lineHeight = '1';
-        addBtn.style.fontFamily = 'inherit';
-        addBtn.style.border = '1px solid var(--border-color, #cfd6dd)';
-        addBtn.style.borderRadius = '4px';
-        addBtn.style.background = 'var(--bg-elevated, #ffffff)';
-        addBtn.style.color = 'inherit';
-        addBtn.style.cursor = 'pointer';
-        editorRow.appendChild(addBtn);
 
         var values = [];
+        // BP-E audit fix — track the flash-invalid border-reset timer on
+        // a closure-local variable so the returned destroy() can clear it.
+        // makeChipInput is a free function, not a method, so it has no
+        // access to a parent `self`; the SettingsTab calls our destroy()
+        // during its own destroy() flow.
+        var flashTimer = null;
+        var destroyed = false;
 
-        // Re-render the chip pills from the current values[] array. Cheap to
-        // do on every mutation — the list is small (operator-edited, not a
-        // server feed).
-        function isLocked(v) {
-            return lockedValues.indexOf(v) !== -1;
-        }
+        function isLocked(v) { return lockedValues.indexOf(v) !== -1; }
 
-        function renderChips() {
-            chipsWrap.innerHTML = '';
-            // Hide the whole chips wrap when empty so the operator doesn't
-            // see a stray empty bar — common cause of "broken UI" feedback.
-            chipsWrap.style.display = values.length === 0 ? 'none' : 'flex';
+        function render() {
+            // Tear down existing chips, keep newInput.
+            var chips = el.querySelectorAll('.enm-chip');
+            for (var i = 0; i < chips.length; i += 1) { el.removeChild(chips[i]); }
+            // Insert chips before newInput in order.
             values.forEach(function (v, idx) {
-                var locked = isLocked(v);
                 var chip = document.createElement('span');
-                // alpha.29 v2 brand-reset · Audit A4 — chips now carry
-                // [data-chip] (+ [data-locked] when applicable) so the
-                // Phase 4c CSS at .enm-chip-input span[data-chip] etc.
-                // can apply the v2 token-driven pill chrome (bg-overlay,
-                // r-pill, font-mono, accent-soft tint for locked).
-                // Previously the Phase 4c selectors never matched
-                // because the JS emitted plain <span>s; chips rendered
-                // with the inline-style fallback below (10px radius,
-                // no locked-vs-unlocked contrast). The inline styles
-                // remain as defensive defaults; Phase 4c's !important
-                // overrides win in normal page render.
-                chip.setAttribute('data-chip', '');
-                if (locked) { chip.setAttribute('data-locked', ''); }
-                chip.style.display = 'inline-flex';
-                chip.style.alignItems = 'center';
-                chip.style.gap = '4px';
-                chip.style.padding = '2px 6px 2px 8px';
-                chip.style.fontSize = '12px';
-                chip.style.lineHeight = '1.4';
-                chip.style.border = '1px solid var(--border-color, #cfd6dd)';
-                chip.style.borderRadius = '10px';
-                chip.style.background = locked
-                    ? 'var(--bg-elevated, #f5f7fa)'
-                    : 'var(--bg-elevated, #ffffff)';
-                if (locked) chip.title = 'Locked — needed for ENM\'s own RPC calls.';
-
-                var text = document.createElement('span');
-                text.textContent = v;
-                chip.appendChild(text);
-
+                chip.className = 'enm-chip';
+                var locked = isLocked(v);
+                if (locked) { chip.setAttribute('data-locked', 'true'); }
                 if (locked) {
-                    var lockIcon = document.createElement('span');
-                    lockIcon.textContent = '\u{1F512}'; // 🔒
-                    lockIcon.style.fontSize = '11px';
-                    lockIcon.style.opacity = '0.7';
-                    lockIcon.style.marginLeft = '2px';
-                    lockIcon.setAttribute('aria-label', 'locked');
-                    chip.appendChild(lockIcon);
-                } else {
-                    var remove = document.createElement('button');
-                    remove.type = 'button';
-                    remove.setAttribute('aria-label', 'Remove ' + v);
-                    remove.textContent = '×';
-                    remove.style.display = 'inline-flex';
-                    remove.style.alignItems = 'center';
-                    remove.style.justifyContent = 'center';
-                    // a11y: was 16×16 (fails WCAG 2.5.5 24×24).
-                    remove.style.width = '24px';
-                    remove.style.height = '24px';
-                    remove.style.padding = '0';
-                    remove.style.fontSize = '16px';
-                    remove.style.lineHeight = '1';
-                    remove.style.fontFamily = 'inherit';
-                    remove.style.border = 'none';
-                    remove.style.borderRadius = '50%';
-                    remove.style.background = 'transparent';
-                    remove.style.color = 'inherit';
-                    remove.style.cursor = 'pointer';
-                    remove.addEventListener('click', function () {
-                        values.splice(idx, 1);
-                        syncValueMirror();
-                        renderChips();
-                    });
-                    chip.appendChild(remove);
+                    var lock = document.createElement('span');
+                    lock.className = 'enm-chip-lock';
+                    lock.setAttribute('aria-label', 'locked');
+                    lock.textContent = '\u{1F512}'; // 🔒
+                    chip.appendChild(lock);
                 }
-                chipsWrap.appendChild(chip);
+                chip.appendChild(document.createTextNode(v));
+                if (!locked) {
+                    var rm = document.createElement('button');
+                    rm.type = 'button';
+                    rm.className = 'enm-chip-remove';
+                    rm.setAttribute('aria-label', 'Remove ' + v);
+                    rm.textContent = '×'; // ×
+                    rm.addEventListener('click', function () {
+                        values.splice(idx, 1);
+                        render();
+                    });
+                    chip.appendChild(rm);
+                }
+                if (locked) {
+                    chip.title = 'Locked — needed for ENM’s own RPC calls.';
+                }
+                el.insertBefore(chip, newInput);
             });
         }
 
-        // Mirror values back to .value as a comma-joined string so any code
-        // that still reads it (e.g. read-only inspection) sees a sane shape.
-        // Authoritative reads/writes go through getValue/setValue.
-        function syncValueMirror() {
-            container.value = values.join(', ');
-        }
-
         function flashInvalid(reason) {
-            // Visual flash for sighted operators…
+            // BP-E audit fix — guard against destroy() racing the 900ms
+            // border-reset timer. The chip-input lives inside the settings
+            // pane; if the operator clicks Save or navigates away while a
+            // flash is in flight, the old timer would mutate the input's
+            // style after it's been detached. Stash the id on a closure-
+            // local so destroy() (added below) can clear it.
+            if (destroyed) { return; }
             var prev = newInput.style.borderColor;
-            newInput.style.borderColor = 'var(--danger, #c0392b)';
-            setTimeout(function () { newInput.style.borderColor = prev; }, 900);
-            // …and a screen-reader-friendly explanation so the failure
-            // isn't silent. aria-invalid lets AT relate the announcement
-            // back to the field; the visible error sits in the chip
-            // editor's own status node if the host provided one. We use
-            // title= too so hovering reveals the rule for sighted users
-            // without screen readers.
+            newInput.style.borderColor = 'var(--error, #ef5060)';
+            if (flashTimer) { clearTimeout(flashTimer); }
+            flashTimer = setTimeout(function () {
+                flashTimer = null;
+                if (destroyed) { return; }
+                newInput.style.borderColor = prev;
+            }, 900);
             newInput.setAttribute('aria-invalid', 'true');
             var hint = reason
-                || root.enmTOrFallback('settings.rpc_white_invalid');
+                || (root.enmTOrFallback
+                    ? root.enmTOrFallback('settings.rpc_white_invalid')
+                    : 'Not a valid IPv4 or CIDR.');
             newInput.title = hint;
-            // Clear aria-invalid on next edit so it doesn't stay loud.
             var clearOnce = function () {
                 newInput.removeAttribute('aria-invalid');
                 newInput.removeEventListener('input', clearOnce);
@@ -1327,19 +1273,15 @@
             var candidate = (newInput.value || '').trim();
             if (!candidate) { return; }
             if (!IP_OR_CIDR_RE.test(candidate)) { flashInvalid(); return; }
-            // Dedupe — silently ignore exact duplicates (incl. locked).
             if (values.indexOf(candidate) !== -1) {
                 newInput.value = '';
                 return;
             }
             values.push(candidate);
             newInput.value = '';
-            syncValueMirror();
-            renderChips();
+            render();
         }
 
-        // Auto-prepend any locked values that aren't already present so the
-        // operator always sees them as chips. setValue() will also re-merge.
         function ensureLockedPresent() {
             for (var i = lockedValues.length - 1; i >= 0; i--) {
                 if (values.indexOf(lockedValues[i]) === -1) {
@@ -1348,31 +1290,16 @@
             }
         }
 
-        addBtn.addEventListener('click', tryAdd);
         newInput.addEventListener('keydown', function (e) {
-            // Enter and comma both commit; comma is natural for operators
-            // pasting a single CSV line. alpha.28.1 batch 18 (audit
-            // ac802d65) — guard against CJK IME composition: when an
-            // operator is composing a Pinyin candidate, pressing Enter
-            // is the "commit candidate" gesture for the IME, NOT a
-            // submit. Without isComposing/keyCode 229 checks the chip
-            // commits a half-composed Latin buffer and the IME loses
-            // the candidate.
+            // CJK IME guard (batch 18).
             if (e.isComposing || e.keyCode === 229) { return; }
             if (e.key === 'Enter' || e.key === ',') {
                 e.preventDefault();
                 tryAdd();
             }
         });
-        // alpha.28.1 batch 18 — multi-value paste handler. Without this
-        // an operator pasting "192.168.1.1, 192.168.1.2, 10.0.0.0/8"
-        // (a normal CSV from a runbook) drops the entire string into
-        // newInput.value as one chunk; the next Enter runs IP_OR_CIDR_RE
-        // against the whole string and the chip flashes red. Split on
-        // any whitespace/newline/comma run, validate + add each piece.
-        // Only intercepts when the paste actually contains a separator;
-        // single-value paste falls through to the default behaviour so
-        // the operator can still edit before committing.
+
+        // Multi-value paste (batch 18).
         newInput.addEventListener('paste', function (e) {
             var cb = e.clipboardData || (typeof root !== 'undefined' ? root.clipboardData : null);
             if (!cb || typeof cb.getData !== 'function') { return; }
@@ -1388,197 +1315,74 @@
             }
         });
 
-        container.getValue = function () { return values.slice(); };
-        container.setValue = function (arr) {
-            values = Array.isArray(arr) ? arr.filter(function (s) {
-                return typeof s === 'string' && s.length > 0;
-            }) : [];
-            ensureLockedPresent();
-            syncValueMirror();
-            renderChips();
-        };
-        // Initial state — locked values always rendered even before setValue.
+        el.appendChild(newInput);
         ensureLockedPresent();
-        syncValueMirror();
-        renderChips();
-        return container;
-    }
-    function passwordInput() {
-        var i = document.createElement('input'); i.type = 'password';
-        i.autocomplete = 'new-password'; i.className = 'enm-settings-input'; return i;
-    }
-    function numberInput(min, max) {
-        var i = document.createElement('input'); i.type = 'number';
-        i.min = String(min); i.max = String(max); i.className = 'enm-settings-input';
-        // a11y/UX: declare the value range to the browser + screen reader
-        // up-front. inputmode=numeric pulls up the numeric keypad on
-        // mobile; step=1 prevents fractional submissions that the joi
-        // schema would later reject. Title surfaces the range on hover
-        // for sighted operators before they submit.
-        i.setAttribute('step', '1');
-        i.setAttribute('inputmode', 'numeric');
-        i.title = 'Between ' + min + ' and ' + max;
-        return i;
-    }
-    function select(options) {
-        var s = document.createElement('select'); s.className = 'enm-settings-input';
-        options.forEach(function (o) {
-            var opt = document.createElement('option'); opt.value = o; opt.textContent = o;
-            s.appendChild(opt);
-        });
-        return s;
-    }
-    function label(input, text) {
-        var l = document.createElement('label'); l.className = 'enm-settings-label';
-        l.appendChild(input);
-        var span = document.createElement('span'); span.textContent = text;
-        l.appendChild(span);
-        return l;
-    }
-    function btn(text, cls, onClick) {
-        var b = document.createElement('button');
-        b.type = 'button'; b.className = 'enm-btn ' + cls;
-        b.textContent = text;
-        b.addEventListener('click', onClick);
-        return b;
+        render();
+
+        return {
+            el: el,
+            getValue: function () { return values.slice(); },
+            setValue: function (arr) {
+                values = Array.isArray(arr) ? arr.filter(function (s) {
+                    return typeof s === 'string' && s.length > 0;
+                }) : [];
+                ensureLockedPresent();
+                render();
+            },
+            // BP-E audit fix — parent SettingsTab.destroy() calls this
+            // during its own teardown so an in-flight flashInvalid timer
+            // can't mutate a detached input's style after the pane is
+            // unmounted.
+            destroy: function () {
+                destroyed = true;
+                if (flashTimer) { clearTimeout(flashTimer); flashTimer = null; }
+            },
+        };
     }
 
+    // -----------------------------------------------------------------
+    // Misc helpers
+    // -----------------------------------------------------------------
+
     /**
-     * Render a single label + value row inside the credentials panel.
-     * Value is wrapped in credValueWithCopy() so the operator can copy
-     * straight to clipboard without selecting.
+     * Set the foot status text + a state class ('success' | 'warn' |
+     * 'error' | ''). Toggles role between status (info/success) and
+     * alert (error) so AT announces errors with higher priority.
      */
-    function rpcUrlRow(label, url, warning, _isPublic, notifications) {
-        var row = document.createElement('div');
-        row.className = 'enm-rpc-url-row';
-        var l = document.createElement('span');
-        l.className = 'enm-rpc-url-label';
-        l.textContent = label;
-        row.appendChild(l);
-        row.appendChild(credValueWithCopy(url, undefined, notifications));
-        if (warning) {
-            var w = document.createElement('p');
-            w.className = 'enm-rpc-url-warning';
-            w.textContent = warning;
-            row.appendChild(w);
+    function setStatus(el, kind, text) {
+        if (!el) { return; }
+        el.classList.remove('success', 'warn', 'error');
+        if (kind) { el.classList.add(kind); }
+        // Mock-aligned roles: errors should escalate to alert.
+        if (kind === 'error') {
+            el.setAttribute('role', 'alert');
+            el.setAttribute('aria-live', 'assertive');
+        } else {
+            el.setAttribute('role', 'status');
+            el.setAttribute('aria-live', 'polite');
         }
-        return row;
+        el.textContent = text || '';
     }
 
     /**
-     * Sort-then-element-wise equality for two string arrays.
-     * alpha.29 batch 112 — replaces a JSON.stringify-based diff that
-     * allocated ~2KB of throwaway strings on every whitelist Apply
-     * click for a 50-IP allowlist. Short-circuits on length mismatch;
-     * subsequent compares are cheap pointer/string ===.
+     * renderHelp(targetEl, prefix, codes?, suffix?)
+     *
+     * Append a mix of plain text and inline <code> spans into the given
+     * element. Used for both .enm-section-card-help and .enm-form-label-
+     * help so the prose can interleave runtime field names ("Writes
+     * chains.mainchain.dpos.ipAddressMode + ipAddressManual.").
      */
-    function listsEqualSorted(a, b) {
-        if (!Array.isArray(a) || !Array.isArray(b)) { return false; }
-        if (a.length !== b.length) { return false; }
-        var sa = a.slice().sort();
-        var sb = b.slice().sort();
-        for (var i = 0; i < sa.length; i += 1) {
-            if (sa[i] !== sb[i]) { return false; }
+    function renderHelp(el, prefix, codes, suffix) {
+        if (prefix) { el.appendChild(document.createTextNode(prefix)); }
+        if (Array.isArray(codes)) {
+            codes.forEach(function (c, idx) {
+                if (idx > 0) { el.appendChild(document.createTextNode(' + ')); }
+                var code = document.createElement('code');
+                code.textContent = c;
+                el.appendChild(code);
+            });
         }
-        return true;
-    }
-
-    // Classify an http://IP:port URL as 'loopback' | 'private' | 'public'.
-    // RFC-1918 (10/8, 172.16/12, 192.168/16) + link-local (169.254/16) all
-    // count as 'private' so accidental APIPA addresses don't render as
-    // "Public internet" and mislead the operator.
-    function classifyUrlAddress(url) {
-        try {
-            var u = new URL(url);
-            var h = u.hostname;
-            if (h === 'localhost' || /^127\./.test(h) || h === '::1') return 'loopback';
-            var m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h);
-            if (!m) return 'public'; // hostname or IPv6 — treat as public to be safe
-            var a = parseInt(m[1], 10), b = parseInt(m[2], 10);
-            if (a === 10) return 'private';
-            if (a === 172 && b >= 16 && b <= 31) return 'private';
-            if (a === 192 && b === 168) return 'private';
-            if (a === 169 && b === 254) return 'private';
-            return 'public';
-        } catch (_e) { return 'public'; }
-    }
-
-    function credRow(labelText, value, notifications) {
-        var wrap = document.createElement('div');
-        wrap.className = 'enm-rpc-creds-row';
-        var l = document.createElement('span');
-        l.className = 'enm-rpc-creds-label';
-        l.textContent = labelText;
-        wrap.appendChild(l);
-        wrap.appendChild(credValueWithCopy(value == null ? '' : String(value), undefined, notifications));
-        return wrap;
-    }
-
-    /**
-     * Password row gets a Show/Hide toggle on top of the standard copy button.
-     * Read straight off the SettingsTab instance so the toggle state survives
-     * a re-render of the panel.
-     */
-    function credPasswordRow(tab, t) {
-        var wrap = document.createElement('div');
-        wrap.className = 'enm-rpc-creds-row';
-        var l = document.createElement('span');
-        l.className = 'enm-rpc-creds-label';
-        l.textContent = t('settings.rpc_field_pw');
-        wrap.appendChild(l);
-
-        var pw = (tab._creds.data && tab._creds.data.password) || '';
-        var shown = !!tab._creds.pwShown;
-        var displayed = shown ? pw : pw.replace(/./g, '•');
-
-        // batch 88 — thread tab.notifications through so the credPassword
-        // path also gets the copy-fail toast, not just the URL paths.
-        wrap.appendChild(credValueWithCopy(pw, displayed, tab.notifications));
-
-        var toggle = document.createElement('button');
-        toggle.type = 'button';
-        toggle.className = 'enm-btn enm-btn-secondary enm-rpc-creds-toggle';
-        toggle.textContent = shown ? t('settings.rpc_hide_pw') : t('settings.rpc_show_pw');
-        toggle.addEventListener('click', tab._togglePwVisibility.bind(tab));
-        wrap.appendChild(toggle);
-        return wrap;
-    }
-
-    /**
-     * Read-only value rendered next to a Copy button. `display` lets callers
-     * (the password row) show a masked version while still copying the real
-     * value to the clipboard.
-     */
-    function credValueWithCopy(value, display, notifications) {
-        var line = document.createElement('span');
-        line.className = 'enm-rpc-creds-value-wrap';
-        var t = root.enmTOrFallback;
-
-        var span = document.createElement('span');
-        span.className = 'enm-rpc-creds-value';
-        span.textContent = display != null ? display : value;
-        line.appendChild(span);
-
-        // alpha.29 batch 102 — copy button built via root.enmCopyButton
-        // factory. Replaces ~30 lines of hand-wired onFallback +
-        // selectInto + warning-toast plumbing from batches 58/87/88
-        // with a single factory call. getDisplayEl points at the
-        // adjacent <span> so the factory's select-text fallback hits
-        // the right element.
-        var copyBtn = root.enmCopyButton({
-            value: value,
-            label: t('settings.rpc_copy'),
-            copiedLabel: t('settings.rpc_copied'),
-            ariaLabel: 'Copy ' + (display != null ? 'value' : 'credential'),
-            resetMs: 1200,
-            notifications: notifications || null,
-            failTitle: t('settings.rpc_copy_fail_title'),
-            failBody: t('settings.rpc_copy_fail_body'),
-            getDisplayEl: function () { return span; },
-            className: 'enm-rpc-creds-copy',
-        });
-        line.appendChild(copyBtn);
-        return line;
+        if (suffix) { el.appendChild(document.createTextNode(suffix)); }
     }
 
     root.EnmSettingsTab = SettingsTab;

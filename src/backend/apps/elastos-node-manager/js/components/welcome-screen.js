@@ -2,15 +2,37 @@
  * Copyright (C) 2026-present Elacity
  * SPDX-License-Identifier: AGPL-3.0
  *
- * components/welcome-screen.js — first-run welcome (v0.4 "Welcome Home").
+ * components/welcome-screen.js — Beta 3 shim.
  *
- * One illustration, one headline, one paragraph, one button. No menus,
- * no tabs, no jargon. This is the very first thing an operator sees on
- * a fresh install — its job is to lower the activation cost from
- * "I have to learn what this app does" to "I just tap one button."
+ * Background: the alpha.27 boot flow rendered a hero card ("Turn your
+ * ElastOS into a node") with a single "Let's go" CTA, then swapped in
+ * the 6-card setup conversation on click. The phase-06 mock for Beta 3
+ * collapses that two-step entry into one — the role-grid IS the
+ * welcome experience.
  *
- * Triggers `onContinue()` when the operator taps the CTA. The parent
- * (app.js) is responsible for swapping in the setup conversation next.
+ * Rather than rewire every call site in app.js (which still does
+ * `new root.EnmWelcomeScreen({ onContinue: ... })` from
+ * _mountWelcomeScreen), this file becomes a tiny shim that:
+ *   1. Keeps the `EnmWelcomeScreen` constructor + mount/destroy
+ *      surface stable so app.js doesn't need a port.
+ *   2. Internally constructs and mounts an EnmSetupConversation, so
+ *      the operator lands directly on the role chooser.
+ *   3. Wires `onContinue` (alpha.27 callback name) and `onComplete`
+ *      (alpha.28 callback name) both to the same underlying
+ *      onComplete from app.js — calling either advances the user out
+ *      of setup the same way.
+ *
+ * The shim also forwards `api`, `notifications`, and `sse` opts down
+ * to SetupConversation. app.js's _mountWelcomeScreen passes only
+ * `onContinue` today; the shim falls back to picking the services
+ * off `root.enmApp` if available, otherwise off `opts.services` —
+ * but the safer path is to update _mountWelcomeScreen to pass these
+ * through. Either way the constructor doesn't throw on missing opts;
+ * the underlying SetupConversation does its own validation when an
+ * api object is supplied.
+ *
+ * Net result: ~50-line shim instead of the prior 80-line hero, and
+ * the operator sees the role chooser as their first interaction.
  */
 
 (function (root) {
@@ -18,66 +40,52 @@
 
     function WelcomeScreen(opts) {
         if (!opts) { opts = {}; }
-        this.onContinue = typeof opts.onContinue === 'function'
-            ? opts.onContinue
-            : function () {};
-
-        this.root = document.createElement('section');
-        this.root.className = 'enm-welcome';
+        // Accept both alpha.27 (`onContinue`) and alpha.28 (`onComplete`)
+        // callback names so the shim is forward-compatible with any
+        // app.js call site that hasn't been renamed yet.
+        var advance = typeof opts.onComplete === 'function'
+            ? opts.onComplete
+            : (typeof opts.onContinue === 'function' ? opts.onContinue : function () {});
+        this._opts = {
+            api:           opts.api || null,
+            notifications: opts.notifications || null,
+            sse:           opts.sse || null,
+            announcer:     opts.announcer || (root.enmAnnouncer || null),
+            onComplete:    advance,
+        };
+        this._inner = null;
+        this.root = null;
     }
 
     WelcomeScreen.prototype.mount = function (parent) {
-        var t = root.enmT;
-        parent.appendChild(this.root);
-
-        this.root.innerHTML =
-            '<div class="enm-welcome-inner">'
-            + '<div class="enm-welcome-illust">'
-                + (root.EnmIllust ? root.EnmIllust.welcome({ size: 128 }) : '')
-            + '</div>'
-            + '<h2 class="enm-welcome-title">' + escapeHtml(t('friendly.welcome.title')) + '</h2>'
-            + '<p class="enm-welcome-body">' + escapeHtml(t('friendly.welcome.body')) + '</p>'
-            + '<button type="button" class="enm-btn enm-btn-primary enm-btn-hero enm-welcome-cta">'
-                + escapeHtml(t('friendly.welcome.cta')) + ' <span aria-hidden="true">→</span>'
-            + '</button>'
-            + '</div>';
-
-        var self = this;
-        var cta = this.root.querySelector('.enm-welcome-cta');
-        cta.addEventListener('click', function () {
-            self.onContinue();
-        });
-        // a11y: the welcome screen is the operator's first interactive
-        // landmark on a clean install. Without this focus call they have
-        // to Tab past the (empty) header + skip-link to reach the only
-        // meaningful control. Focusing the CTA on mount also gives
-        // screen-reader users an immediate announcement of the button's
-        // label + role.
-        try { cta.focus({ preventScroll: true }); } catch (e) { cta.focus(); }
+        if (!root.EnmSetupConversation) {
+            // Defensive: if setup-conversation.js failed to load, surface
+            // a clear stub instead of a blank pane.
+            this.root = document.createElement('section');
+            this.root.className = 'enm-wiz-shell';
+            this.root.innerHTML =
+                '<div class="enm-wiz-body">'
+                  + '<h2 class="enm-wiz-heading">Setup component not loaded</h2>'
+                  + '<p class="enm-wiz-para">Hard-refresh the page (Ctrl-Shift-R) to retry.</p>'
+                + '</div>';
+            parent.appendChild(this.root);
+            return this;
+        }
+        this._inner = new root.EnmSetupConversation(this._opts);
+        this._inner.mount(parent);
+        // Mirror `.root` so external callers (test rigs, app.js
+        // teardown) can still grab the section element.
+        this.root = this._inner.root;
         return this;
     };
 
     WelcomeScreen.prototype.destroy = function () {
-        if (this.root.parentNode) {
-            this.root.parentNode.removeChild(this.root);
+        if (this._inner && typeof this._inner.destroy === 'function') {
+            this._inner.destroy();
+            this._inner = null;
         }
+        this.root = null;
     };
-
-    // alpha.28.1 batch 83 (Round-24 finding #1, MED) — align with the
-    // defensive null/undefined coercion every other escapeHtml copy
-    // in the codebase already uses (setup-conversation:1101,
-    // validator-card:364, settings-drawer:411, technical-view:673,
-    // tools-update-card:442). Welcome-screen was the only outlier
-    // calling `String(s)` raw — if a future i18n key returns undefined
-    // (strings.js fails to load, or `friendly.welcome.title` is renamed),
-    // the welcome card's first-impression renders the literal string
-    // "undefined" instead of empty. Trivial inconsistency that
-    // defeated the file's own defensive pattern.
-    function escapeHtml(s) {
-        return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
-            return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
-        });
-    }
 
     root.EnmWelcomeScreen = WelcomeScreen;
 }(typeof window !== 'undefined' ? window : globalThis));

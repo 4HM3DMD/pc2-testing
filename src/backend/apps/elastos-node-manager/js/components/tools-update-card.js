@@ -4,21 +4,28 @@
  *
  * components/tools-update-card.js — read-only "binary update available" card.
  *
- * Lives at the top of the Tools sub-tab. Fetches /api/enm/updates/available
- * on mount + 6h interval. Three resting states:
+ * Lives at the bottom of the Status pane (alpha.9+; the Tools sub-tab was
+ * dropped). Fetches /api/enm/updates/available on mount + 6h interval.
+ * Three resting states:
  *
  *   no data yet              — skeleton "Checking for updates…"
  *   up-to-date (current ===  — single line "On the latest release (vX.Y.Z)"
  *     latest)
  *   update available         — full card: current vs latest, severity chip,
- *                              release-notes excerpt, copy-the-deploy-cmd
- *                              snippet. Apply-in-place button lands in
- *                              alpha.9.
+ *                              release-notes excerpt, "Update via shell"
+ *                              button that opens the deploy-command modal.
+ *
+ * Beta 3 rewrite: the modal opened by the "Update via shell" button
+ * now uses the shared phase-06 .enm-modal-scrim + .enm-modal-card chrome
+ * with the body shape laid out in the user spec (heading → summary →
+ * deploy command <pre> → actions row of Copy + Close). Resting card
+ * structure is unchanged from alpha.28 — BP-B Settings owns the
+ * card-on-tab styling.
  *
  * Cross-tab indicator: writes `data-update-severity` on document.body
  * whenever the envelope changes; the global CSS hangs a dot off the
- * Tools sub-tab nav button (technical-view.js owns the markup; this
- * component owns the *data*).
+ * Status nav button (technical-view.js owns the markup; this component
+ * owns the *data*).
  */
 
 (function (root) {
@@ -60,7 +67,7 @@
         // relTime on the "Last checked" + "released" spans every 60s.
         // The card only re-renders on the 6h REFRESH_MS interval, so
         // the visible string was frozen for up to 6 hours of clock time.
-        // Operator returns to the Tools tab 90 minutes later and still
+        // Operator returns to the Status tab 90 minutes later and still
         // sees "Last checked 5 min ago" — implying a fresh probe that
         // did not happen.
         //
@@ -119,7 +126,7 @@
             if (self._destroyed) { return; }
             self._render(env);
             // Surface the cross-tab severity dot via body data attribute.
-            // technical-view.js reads this to colour the Tools tab nav button.
+            // technical-view.js reads this to colour the Status tab nav button.
             if (env && env.updateAvailable && env.severity) {
                 document.body.dataset.updateSeverity = env.severity;
             } else {
@@ -140,7 +147,6 @@
         // vs a fresh GitHub probe.
         // alpha.28.1 batch 81 — strings sourced from strings.js
         // tools_update.* so locale switching covers the resting card.
-        // Modal-internal strings are deferred to a follow-up batch.
         var t = root.enmTOrFallback;
         var isFallback = env.source === 'fallback';
         var isStale = env.status === 'stale';
@@ -205,10 +211,6 @@
         // without bloating the resting card.
         // Apply-in-place (real "Update now" with preflight + rollback)
         // lands in alpha.11+; this release is the UX shortcut.
-        // Versions line uses an ICU-style {current}/{latest} substitution
-        // so locale variants can re-order the two version chips around
-        // the arrow if needed. The <span aria-hidden="true">→</span>
-        // arrow is the typographic separator and stays in the template.
         var versionsLine = t('tools_update.versions_line', {
             current: '<code>' + escapeHtml(env.current || 'unknown') + '</code> <span aria-hidden="true">→</span>',
             latest:  '<code>' + escapeHtml(env.latest) + '</code>',
@@ -250,28 +252,35 @@
     /**
      * @private
      * Show a modal with the deploy command pre-filled. The token is
-     * filled in only when the user clicks "Use my owner token (auto-fill)" —
-     * default is the placeholder so we don't display credentials by
-     * default if someone screenshots the card.
+     * filled in only when the user clicks "Auto-fill my token" — default
+     * is the placeholder so we don't display credentials by default if
+     * someone screenshots the card.
+     *
+     * Beta 3: the outer chrome is now the shared phase-06 modal-card
+     * (.enm-modal-scrim + .enm-modal-card). Body shape per the user
+     * spec for tools-update:
+     *
+     *   .enm-modal-heading   — "Update to vX.Y.Z"
+     *   .enm-modal-summary   — short description
+     *   pre.enm-modal-cmd    — terminal-bg deploy command block
+     *   .enm-modal-actions   — Copy command (primary) + Close (secondary)
+     *
+     * The release-notes/explainer disclosure stays as a <details> below
+     * the actions row so the operator can drill in without bloating the
+     * default view.
      */
     EnmToolsUpdateCard.prototype._openUpdateModal = function (env) {
-        // alpha.28.1 bug fix — batches 7/8 referenced `self` inside this
-        // function (cardSelf, modalSelf, the cleanup hook), but `self`
-        // was never declared at this scope. In browsers `self === window`
-        // so the destroy-hook leak fix (cardSelf._modalClose = close)
-        // was actually setting window._modalClose and never firing on
-        // teardown, AND the clipboard-fallback notification path
-        // (modalSelf.notifications) was reading window.notifications
-        // → falsy → no operator feedback when clipboard fails. Adding
-        // the alias here makes the entire function honour `this` (the
-        // card instance) as the rest of the file already does at lines
-        // 51, 69, 168.
+        // alpha.28.1 bug fix (batches 7/8 referenced `self` inside this
+        // function but never declared it — `self === window` in browsers
+        // silently swallowed the destroy-hook leak fix). Aliasing here so
+        // the entire function honours `this` (the card instance) as the
+        // rest of the file already does.
         var self = this;
         // Race-conditions audit aaf1f87d, finding B12 — rapid re-clicks
         // on the "View command" trigger previously did `removeChild` on
         // the pre-existing modal node but never called the prior modal's
         // `close()`, so the document-level keydown + Tab-trap listeners
-        // attached at lines 246+264 leaked one pair per re-open. Calling
+        // attached at lines below leaked one pair per re-open. Calling
         // _modalClose first (the close() hook stored by the previous
         // open) removes both listeners and restores focus to whatever
         // had it before the FIRST open. If there is no prior modal,
@@ -280,7 +289,7 @@
             try { this._modalClose(); } catch (e) { /* prior modal already torn down */ }
             this._modalClose = null;
         }
-        var prev = document.querySelector('.enm-tools-update-modal');
+        var prev = document.querySelector('.enm-tools-update-modal-root');
         if (prev) prev.parentNode.removeChild(prev);
 
         // alpha.28.1 batch 82 — modal strings sourced from strings.js
@@ -296,43 +305,71 @@
                 + escapeHtml(env.htmlUrl) + '</a>';
             notesHtml = '<p>' + t('tools_update.modal_release_notes', { githubLink: link }) + '</p>';
         }
-        var modal = document.createElement('div');
-        modal.className = 'enm-tools-update-modal';
-        modal.innerHTML =
-            '<div class="enm-tools-update-modal-card" role="dialog" aria-labelledby="upd-mod-h" aria-modal="true">'
-            +   '<button type="button" class="enm-tools-update-modal-close" aria-label="' + escapeAttr(t('tools_update.modal_close_aria')) + '">×</button>'
-            +   '<h2 id="upd-mod-h">' + t('tools_update.modal_heading', { version: versionTag }) + '</h2>'
-            +   '<p>' + escapeHtml(t('tools_update.modal_lead')) + '</p>'
-            +   '<pre class="enm-tools-update-modal-cmd">'
-            +     'sudo PC2_OWNER_TOKEN=<span class="upd-tok-slot">&lt;your-token&gt;</span> /root/deploy-enm.sh enm-' + escapeHtml(env.latest)
-            +   '</pre>'
-            +   '<div class="enm-tools-update-modal-actions">'
-            +     '<button type="button" class="enm-btn enm-btn-secondary upd-fill-token">' + escapeHtml(t('tools_update.modal_auto_fill_btn')) + '</button>'
-            +     '<span class="upd-copy-slot"></span>'
-            +   '</div>'
-            +   '<details class="enm-tools-update-modal-notes">'
-            +     '<summary>' + escapeHtml(t('tools_update.modal_explainer_label')) + '</summary>'
-            +     '<ul>'
-            +       '<li>' + t('tools_update.modal_step_download', { version: versionTag }) + '</li>'
-            +       '<li>' + t('tools_update.modal_step_uninstall') + '</li>'
-            +       '<li>' + escapeHtml(t('tools_update.modal_step_reinstall')) + '</li>'
-            +       '<li>' + escapeHtml(t('tools_update.modal_step_healthcheck')) + '</li>'
-            +     '</ul>'
-            +     notesHtml
-            +   '</details>'
-            + '</div>';
-        document.body.appendChild(modal);
+
+        // Root wrapper holds the scrim + card as siblings so the scrim
+        // can swallow clicks for click-to-close without proxying through
+        // the card. Class name kept on the wrapper so the proposal-card
+        // Esc handler can see this modal as a topmost overlay.
+        var modalRoot = document.createElement('div');
+        modalRoot.className = 'enm-tools-update-modal-root';
+
+        var scrim = document.createElement('div');
+        scrim.className = 'enm-modal-scrim';
+        modalRoot.appendChild(scrim);
+
+        var card = document.createElement('div');
+        card.className = 'enm-modal-card enm-tools-update-modal-card';
+        card.setAttribute('role', 'dialog');
+        card.setAttribute('aria-labelledby', 'upd-mod-h');
+        card.setAttribute('aria-modal', 'true');
+        card.innerHTML =
+            '<button type="button" class="enm-tools-update-modal-close" aria-label="' + escapeAttr(t('tools_update.modal_close_aria')) + '">×</button>'
+            + '<h2 id="upd-mod-h" class="enm-modal-heading">' + t('tools_update.modal_heading', { version: versionTag }) + '</h2>'
+            + '<p class="enm-modal-summary">' + escapeHtml(t('tools_update.modal_lead')) + '</p>'
+            + '<pre class="enm-modal-cmd">'
+            +   'sudo PC2_OWNER_TOKEN=<span class="upd-tok-slot">&lt;your-token&gt;</span> /root/deploy-enm.sh enm-' + escapeHtml(env.latest)
+            + '</pre>'
+            + '<div class="enm-modal-actions">'
+            +   '<span class="upd-copy-slot"></span>'
+            +   '<button type="button" class="enm-btn enm-tools-update-modal-fill upd-fill-token">' + escapeHtml(t('tools_update.modal_auto_fill_btn')) + '</button>'
+            +   '<button type="button" class="enm-btn enm-tools-update-modal-dismiss">' + escapeHtml(t('common.close') || 'Close') + '</button>'
+            + '</div>'
+            + '<details class="enm-tools-update-modal-notes">'
+            +   '<summary>' + escapeHtml(t('tools_update.modal_explainer_label')) + '</summary>'
+            +   '<ul>'
+            +     '<li>' + t('tools_update.modal_step_download', { version: versionTag }) + '</li>'
+            +     '<li>' + t('tools_update.modal_step_uninstall') + '</li>'
+            +     '<li>' + escapeHtml(t('tools_update.modal_step_reinstall')) + '</li>'
+            +     '<li>' + escapeHtml(t('tools_update.modal_step_healthcheck')) + '</li>'
+            +   '</ul>'
+            +   notesHtml
+            + '</details>';
+        modalRoot.appendChild(card);
+
+        document.body.appendChild(modalRoot);
 
         // Capture focus return target + install focus trap so Tab can't
         // escape onto the chain card behind the scrim. Mirrors the
         // proposal-card + settings-drawer pattern.
         var previousFocus = document.activeElement;
+        // alpha.28.1 batch 24 — guard against firing notifications on a
+        // destroyed card. modalSelf is captured at open time so the close
+        // hook can still drop the destroy-reference even if the card was
+        // torn down while the modal was open.
         var cardSelf = self;
+        // _closed flag scoped to this modal instance so .then() chains
+        // from the Copy button (resolved later) can skip work if the
+        // modal closed in the meantime. Mirrors the proposal-card batch
+        // 93 _closed pattern.
+        var modalClosed = false;
 
         var close = function () {
-            if (modal.parentNode) modal.parentNode.removeChild(modal);
+            if (modalClosed) { return; }
+            modalClosed = true;
+            if (modalRoot.parentNode) modalRoot.parentNode.removeChild(modalRoot);
             document.removeEventListener('keydown', onEsc);
             document.removeEventListener('keydown', trapHandler, true);
+            scrim.removeEventListener('click', onScrim);
             try {
                 if (previousFocus && typeof previousFocus.focus === 'function') {
                     previousFocus.focus({ preventScroll: true });
@@ -343,9 +380,13 @@
         };
         var onEsc = function (e) { if (e.key === 'Escape') close(); };
         document.addEventListener('keydown', onEsc);
+        // Click-the-scrim closes; filter on event.target so intra-card
+        // clicks don't bubble up and close.
+        var onScrim = function (ev) { if (ev.target === scrim) close(); };
+        scrim.addEventListener('click', onScrim);
         var trapHandler = function (ev) {
             if (ev.key !== 'Tab') { return; }
-            var focusables = modal.querySelectorAll(
+            var focusables = card.querySelectorAll(
                 'a[href], button:not([disabled]), textarea:not([disabled]), ' +
                 'input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
             );
@@ -368,24 +409,26 @@
 
         // Move focus inside the modal once it mounts so screen readers
         // announce the new region and keyboard users land on a useful
-        // control. Prefer the first action button; fall back to the close X.
+        // control. Prefer the Copy button (primary action); fall back to
+        // the auto-fill, then the close X.
         try {
-            var firstFocus = modal.querySelector('.upd-fill-token')
-                || modal.querySelector('.upd-copy')
-                || modal.querySelector('.enm-tools-update-modal-close');
+            var firstFocus = card.querySelector('.upd-copy')
+                || card.querySelector('.upd-fill-token')
+                || card.querySelector('.enm-tools-update-modal-close');
             if (firstFocus) { firstFocus.focus({ preventScroll: true }); }
         } catch (e) { /* ignore */ }
 
-        modal.querySelector('.enm-tools-update-modal-close').addEventListener('click', close);
-        modal.addEventListener('click', function (e) { if (e.target === modal) close(); });
+        card.querySelector('.enm-tools-update-modal-close').addEventListener('click', close);
+        var dismissBtn = card.querySelector('.enm-tools-update-modal-dismiss');
+        if (dismissBtn) { dismissBtn.addEventListener('click', close); }
 
-        modal.querySelector('.upd-fill-token').addEventListener('click', function () {
+        card.querySelector('.upd-fill-token').addEventListener('click', function () {
             // The owner token lives on the URL's puter.auth.token search
             // param (PC2 standard). Read it directly so we don't ask the
             // operator to paste it.
             var params = new URLSearchParams(root.location.search || '');
             var tok = params.get('puter.auth.token');
-            var slot = modal.querySelector('.upd-tok-slot');
+            var slot = card.querySelector('.upd-tok-slot');
             if (tok && slot) {
                 slot.textContent = tok;
                 slot.style.color = 'var(--state-stalled)';
@@ -402,7 +445,7 @@
         var modalSelf = self;
         var copyBtn = root.enmCopyButton({
             value: function () {
-                var pre = modal.querySelector('.enm-tools-update-modal-cmd');
+                var pre = card.querySelector('.enm-modal-cmd');
                 return pre ? pre.textContent : '';
             },
             label: t('tools_update.modal_copy_btn'),
@@ -415,7 +458,7 @@
         });
         copyBtn.classList.remove('enm-btn-secondary');
         copyBtn.classList.add('enm-btn-primary', 'upd-copy');
-        var copySlot = modal.querySelector('.upd-copy-slot');
+        var copySlot = card.querySelector('.upd-copy-slot');
         if (copySlot && copySlot.parentNode) {
             copySlot.parentNode.replaceChild(copyBtn, copySlot);
         }

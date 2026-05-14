@@ -76,7 +76,8 @@
             var formatted = root.enmFormatUptime(seconds);
             if (formatted === self._lastUptimeText) { return; }
             self._lastUptimeText = formatted;
-            self._setCell('uptime', formatted, 'ok');
+            var up = formatUptimeParts(formatted);
+            self._setCell('uptime', up.main, 'ok', up.sub);
         }, 1000);
         return this;
     };
@@ -93,10 +94,15 @@
         var self = this;
         return this.api.get('/system/status', { skipCache: true }).then(function (s) {
             if (self._destroyed) { return; }
-            self._setCell('cpu',    formatCpu(s.cpu),    healthCpu(s.cpu));
-            self._setCell('mem',    formatMem(s.memory), healthMem(s.memory));
-            self._setCell('disk',   formatDisk(s.disk),  healthDisk(s.disk));
-            self._setCell('os',     formatOs(s.os),      healthOs(s.os));
+            // Beta 3 — formatters return { main, sub } shapes.
+            var cpu = formatCpu(s.cpu);
+            var mem = formatMem(s.memory);
+            var disk = formatDisk(s.disk);
+            var os  = formatOs(s.os);
+            self._setCell('cpu',  cpu.main,  healthCpu(s.cpu),     cpu.sub);
+            self._setCell('mem',  mem.main,  healthMem(s.memory),  mem.sub);
+            self._setCell('disk', disk.main, healthDisk(s.disk),   disk.sub);
+            self._setCell('os',   os.main,   healthOs(s.os),       os.sub);
             // Backend contract guard (audit a3e53e9a) — if /system/status
             // ever returns without a `node` envelope (partial response,
             // schema drift, proxy quirk) the previous `s.node.uptimeSec`
@@ -105,7 +111,8 @@
             // rest of the cells rendering and just shows uptime as the
             // dash placeholder.
             var uptimeSec = (s && s.node) ? s.node.uptimeSec : null;
-            self._setCell('uptime', root.enmFormatUptime(uptimeSec), 'ok');
+            var upInit = formatUptimeParts(root.enmFormatUptime(uptimeSec));
+            self._setCell('uptime', upInit.main, 'ok', upInit.sub);
             // Anchor for the 1s smooth-tick (see mount() comment).
             // We store the SERVER-reported seconds at the instant we
             // received it + the client's wall-clock then; the 1s tick
@@ -159,47 +166,99 @@
      * @param {string} valueText   formatted "value" string (e.g. "362 GB free")
      * @param {('ok'|'warning'|'critical'|'unknown')} health
      */
-    SystemStatus.prototype._setCell = function (key, valueText, health) {
+    SystemStatus.prototype._setCell = function (key, valueText, health, subText) {
         var cell = this._cells[key];
         if (!cell) return;
-        var field = this._fields[key];
-        field.textContent = valueText;
-        // a11y: cells use text-overflow: ellipsis on narrow widths. Mirror
-        // the full text into title= so it stays accessible to mouse hover,
-        // screen readers, and operator copy-paste even when truncated.
-        field.title = valueText;
-        cell.dataset.health = health || 'ok';
+        var mainNode = this._fields[key + '_main'];
+        var sub      = this._subs[key];
+        var bar      = this._bars[key];
+        // Beta 3 — split value text: main number + sub units. If only
+        // valueText supplied (the most common path for OS / disk), the
+        // sub stays empty.
+        if (mainNode) {
+            mainNode.nodeValue = valueText;
+        }
+        if (sub) {
+            sub.textContent = subText || '';
+        }
+        // a11y title — full combined text for hover/AT/copy-paste.
+        var combined = subText ? (valueText + ' ' + subText) : valueText;
+        if (this._fields[key]) {
+            this._fields[key].title = combined;
+        }
+        // Health → bar colour. Mock supports default (ok) / .warn / .crit.
+        // Unknown drops the colour back to default.
+        if (bar) {
+            bar.classList.remove('warn', 'crit');
+            if (health === 'warning')  bar.classList.add('warn');
+            if (health === 'critical') bar.classList.add('crit');
+        }
         // a11y: state was previously conveyed only by background-color on
         // the ::before dot (WCAG 1.4.1 fail for colour-blind operators).
-        // Add an aria-label that explicitly names the health verdict.
+        // Keep the explicit aria-label that names the verdict.
         var labelMap = { ok: 'ok', warning: 'warning', critical: 'critical', unknown: 'unknown' };
-        cell.setAttribute('aria-label', key + ' ' + (labelMap[health] || 'ok') + ': ' + valueText);
+        cell.setAttribute('aria-label', key + ' ' + (labelMap[health] || 'ok') + ': ' + combined);
+        cell.dataset.health = health || 'ok';
     };
 
-    /** @private */
+    /** @private — Beta 3 mock-aligned shell. Reference: phase-03 mock.
+     *
+     *  <div class="enm-sys-strip">
+     *    <div class="enm-sys-cell">
+     *      <span class="enm-sys-bar"></span>     ← health-coloured bar
+     *      <div class="enm-sys-content">
+     *        <div class="enm-sys-label">CPU</div>
+     *        <div class="enm-sys-value">0.42<span class="enm-sys-value-sub">8 cores</span></div>
+     *      </div>
+     *    </div>
+     *    ...
+     *  </div>
+     */
     SystemStatus.prototype._renderShell = function () {
         var t = root.enmTOrFallback;
-        this._fields = {};   // value spans, for textContent updates
-        this._cells  = {};   // cell wrappers, for data-health + .enm-sys-stale class
+        // Root carries .enm-sys-strip per the mock; the alpha.28 class
+        // .enm-system-status is kept as a secondary marker so any
+        // outstanding CSS query still finds the element.
+        this.root.classList.add('enm-sys-strip');
+        this._fields = {};   // value spans
+        this._subs   = {};   // sub-value spans (e.g. "8 cores", "% of 16 GB")
+        this._bars   = {};   // .enm-sys-bar elements (health colour goes here)
+        this._cells  = {};   // cell wrappers (for stale marking)
+
         ['cpu', 'mem', 'disk', 'os', 'uptime'].forEach(function (k) {
             var cell = document.createElement('div');
             cell.className = 'enm-sys-cell enm-sys-' + k;
-            cell.dataset.health = 'unknown';
 
-            // Value first (DOM order = visual order). The leading status
-            // dot lives on the cell as a ::before — no markup needed.
-            var value = document.createElement('span');
-            value.className = 'enm-sys-value';
-            value.textContent = '—';
-            cell.appendChild(value);
+            var bar = document.createElement('span');
+            bar.className = 'enm-sys-bar';
+            cell.appendChild(bar);
 
-            // Label sits below the value. Lowercase + secondary text.
-            var label = document.createElement('span');
+            var content = document.createElement('div');
+            content.className = 'enm-sys-content';
+
+            var label = document.createElement('div');
             label.className = 'enm-sys-label';
             label.textContent = t('system_status.' + k);
-            cell.appendChild(label);
+            content.appendChild(label);
 
-            this._fields[k] = value;
+            var value = document.createElement('div');
+            value.className = 'enm-sys-value';
+            // Mocks split the cell text into a main value + an in-line
+            // sub. e.g. "0.42" + "8 cores", "48" + "% of 16 GB". We
+            // create the sub span up front so _setCell can fill it
+            // without rebuilding the value node.
+            var main = document.createTextNode('—');
+            var sub = document.createElement('span');
+            sub.className = 'enm-sys-value-sub';
+            value.appendChild(main);
+            value.appendChild(sub);
+            content.appendChild(value);
+
+            cell.appendChild(content);
+            this._fields[k] = value;     // legacy ref — _setCell updates main text node
+            this._fields[k + '_main'] = main; // direct text-node ref for split values
+            this._subs[k]   = sub;
+            this._bars[k]   = bar;
             this._cells[k]  = cell;
             this.root.appendChild(cell);
         }, this);
@@ -230,33 +289,49 @@
             : function (x, o) { return (typeof x === 'number' ? x : Number(x)).toFixed((o && o.decimals) || 0); };
         return f(n, { decimals: decimals });
     }
+    // Beta 3 — formatters return { main, sub } per phase-03 mock split.
+    // The main fills .enm-sys-value's text node; sub fills the
+    // .enm-sys-value-sub span. _setCell handles both.
     function formatCpu(cpu) {
-        if (!cpu) return '—';
-        var load = _fmt(cpu.loadAvg1m, 2);
-        // "1.83 / 8" — load over core count.
-        return load + ' / ' + (cpu.cores != null ? cpu.cores : '—');
+        if (!cpu) return { main: '—', sub: '' };
+        return {
+            main: _fmt(cpu.loadAvg1m, 2),
+            sub:  (cpu.cores != null) ? (cpu.cores + ' cores') : '',
+        };
     }
     function formatMem(mem) {
-        if (!mem) return '—';
-        // Just the percent. Total GB is now in the cell label below.
-        return _fmt(mem.usedPct, 0) + '%';
+        if (!mem) return { main: '—', sub: '' };
+        return {
+            main: _fmt(mem.usedPct, 0),
+            sub:  (mem.totalGb != null) ? ('% of ' + _fmt(mem.totalGb, 0) + ' GB') : '%',
+        };
     }
     function formatDisk(disk) {
-        if (!disk) return '—';
-        // Just the GB. "free" qualifier lives on the label. Locale grouping
-        // (1,024 vs 1024) so multi-TB arrays don't render as a wall of digits.
-        return _fmt(disk.freeGb, 0) + ' GB';
+        if (!disk) return { main: '—', sub: '' };
+        return {
+            main: _fmt(disk.freeGb, 0),
+            sub:  'GB free',
+        };
     }
     function formatOs(os) {
-        if (!os) return '—';
-        // Strip any trailing words (" LTS", " (codename)") so 22px text
-        // fits the cell. Distro + numeric version is enough for triage.
+        if (!os) return { main: '—', sub: '' };
         var name = os.distroId || os.platform || 'unknown';
-        if (os.version) {
-            var v = String(os.version).split(' ')[0];
-            return name + ' ' + v;
+        return {
+            main: name,
+            sub:  os.version ? String(os.version).split(' ')[0] : '',
+        };
+    }
+    // Uptime is rendered by enmFormatUptime which returns a single
+    // string like "14d 6h"; we wrap it to match the {main, sub} shape.
+    // Callers can also call _setCell with separate strings.
+    function formatUptimeParts(uptimeStr) {
+        if (!uptimeStr || uptimeStr === '—') return { main: '—', sub: '' };
+        // Split "14d 6h" → main "14d", sub "6h" when there's a space.
+        var parts = String(uptimeStr).split(' ');
+        if (parts.length >= 2) {
+            return { main: parts[0], sub: parts.slice(1).join(' ') };
         }
-        return name;
+        return { main: uptimeStr, sub: '' };
     }
 
     /* --- Health computation --------------------------------------------- */

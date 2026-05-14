@@ -48,8 +48,14 @@
         if (root.__enmRespObserverInstalled) { return; }
         root.__enmRespObserverInstalled = true;
         function classify(w) {
+            // Beta 3 — phase-02 mock breakpoints. Three sizes only:
+            //   compact  < 480px   iPhone-class / split-screen
+            //   narrow   480-699   tablet / large phone
+            //   wide     >= 700    desktop default
+            // The old "medium" bucket (700-999) collapsed into "wide";
+            // the new "compact" bucket below 480 is the addition.
+            if (w < 480) return 'compact';
             if (w < 700) return 'narrow';
-            if (w < 1000) return 'medium';
             return 'wide';
         }
         function apply(width) {
@@ -336,6 +342,10 @@
 
         // _wireThemeToggle removed in alpha.29 v2 Phase 1c — dark-only.
         this._wireSettingsToggle();
+        // Beta 3 — wire the 4 top-level tabs (Dashboard/Logs/Settings/
+        // Audit). Click switches the active tab + mirrors .enm-app
+        // [data-active-tab] for the wash-gradient CSS.
+        this._wireTabs();
         this._wireCrossTabSync();
 
         // Step 3 + 4: probe backend, then decide wizard vs dashboard.
@@ -379,9 +389,181 @@
     // (the entire light/dark switching feature is gone).
 
     /**
-     * Wire the gear icon in the home header to open the settings drawer.
-     * Lazy-mounts the drawer on first click so we don't pay for it
-     * during welcome / setup flows.
+     * Beta 3 — wire the 4 top-level tabs (Dashboard / Logs / Settings /
+     * Audit). Click switches the active tab: updates aria-selected,
+     * .active class, roving tabindex, panel visibility, and the
+     * `data-active-tab` attribute on .enm-app (which CSS reads to
+     * fade the page wash on dense tabs). Arrow-Left / Arrow-Right
+     * provide WAI-ARIA tablist navigation between tabs.
+     *
+     * Idempotent — Retry re-runs init() but the dataset.wired guard
+     * prevents stacked listeners.
+     *
+     * @private
+     */
+    ENMApp.prototype._wireTabs = function () {
+        if (!this.els.tabs) { return; }
+        if (this.els.tabs.dataset.wired === '1') { return; }
+        this.els.tabs.dataset.wired = '1';
+        var self = this;
+        var tabBtns = Array.prototype.slice.call(
+            this.els.tabs.querySelectorAll('.enm-tab[data-tab]'),
+        );
+        var panes = {
+            dashboard: this.els.paneDashboard,
+            logs:      this.els.paneLogs,
+            settings:  this.els.paneSettings,
+            audit:     this.els.paneAudit,
+        };
+
+        function activate(tabId) {
+            tabBtns.forEach(function (b) {
+                var on = (b.dataset.tab === tabId);
+                b.classList.toggle('active', on);
+                b.setAttribute('aria-selected', on ? 'true' : 'false');
+                b.setAttribute('tabindex', on ? '0' : '-1');
+            });
+            Object.keys(panes).forEach(function (k) {
+                if (panes[k]) { panes[k].hidden = (k !== tabId); }
+            });
+            // Mirror onto the .enm-app container so CSS can fade the
+            // wash gradient on dense tabs (settings / logs / audit).
+            if (self.els.app) {
+                self.els.app.setAttribute('data-active-tab', tabId);
+            }
+            // Beta 3 — lazy-mount each pane's component on first
+            // activation. Idempotent — the per-component method's
+            // own gate stops re-mounting. Pattern matches the alpha.29
+            // batch 103 enmLoadScript path for audit-tab (which still
+            // gets script-level lazy-load on top of this DOM mount).
+            if (tabId === 'settings') { self._mountSettingsTabLazy(); }
+            else if (tabId === 'logs')  { self._mountLogViewerLazy(); }
+            else if (tabId === 'audit') { self._mountAuditTabLazy(); }
+        }
+
+        tabBtns.forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                activate(btn.dataset.tab);
+            });
+            btn.addEventListener('keydown', function (ev) {
+                // WAI-ARIA tablist: ArrowRight / ArrowLeft cycle through
+                // tabs. Home / End jump to first / last.
+                var idx = tabBtns.indexOf(btn);
+                if (idx < 0) { return; }
+                var nextIdx = -1;
+                if (ev.key === 'ArrowRight') { nextIdx = (idx + 1) % tabBtns.length; }
+                else if (ev.key === 'ArrowLeft') { nextIdx = (idx - 1 + tabBtns.length) % tabBtns.length; }
+                else if (ev.key === 'Home') { nextIdx = 0; }
+                else if (ev.key === 'End')  { nextIdx = tabBtns.length - 1; }
+                if (nextIdx >= 0) {
+                    ev.preventDefault();
+                    activate(tabBtns[nextIdx].dataset.tab);
+                    tabBtns[nextIdx].focus();
+                }
+            });
+        });
+    };
+
+    /**
+     * Beta 3 — lazy-mount the EnmSettingsTab component into pane-settings
+     * the first time the operator activates the Settings tab. Idempotent:
+     * subsequent activations reuse the same instance. Skips silently when
+     * EnmSettingsTab isn't loaded (defensive — the script tag could be
+     * missing on a partial bundle).
+     *
+     * @private
+     */
+    ENMApp.prototype._mountSettingsTabLazy = function () {
+        if (this._settingsTab) { return; }
+        if (!this.els.paneSettings) { return; }
+        if (!root.EnmSettingsTab) {
+            this.els.paneSettings.innerHTML =
+                '<p class="enm-stub">Settings component not loaded. '
+                + 'Hard-refresh the page (Ctrl-Shift-R).</p>';
+            return;
+        }
+        this._settingsTab = new root.EnmSettingsTab({
+            api: this.services.api,
+            notifications: this.services.notifications,
+        });
+        this._settingsTab.mount(this.els.paneSettings);
+    };
+
+    /**
+     * Beta 3 — lazy-mount EnmLogViewer into pane-logs on first
+     * activation. Mainchain only for Beta 3 (chain selector pill
+     * present but inactive). Idempotent.
+     *
+     * @private
+     */
+    ENMApp.prototype._mountLogViewerLazy = function () {
+        if (this._logViewer) { return; }
+        if (!this.els.paneLogs) { return; }
+        if (!root.EnmLogViewer) {
+            this.els.paneLogs.innerHTML =
+                '<p class="enm-stub">Log viewer component not loaded.</p>';
+            return;
+        }
+        this._logViewer = new root.EnmLogViewer({
+            api: this.services.api,
+            sse: this.services.sse,
+            notifications: this.services.notifications,
+            chainId: 'mainchain',
+        });
+        this._logViewer.mount(this.els.paneLogs);
+    };
+
+    /**
+     * Beta 3 — lazy-mount EnmAuditTab into pane-audit on first
+     * activation. The component file itself is ALSO lazy-loaded
+     * (alpha.29 batch 103) via window.ENM_LAZY_SCRIPTS.auditTab;
+     * if EnmAuditTab isn't on the global yet, kick the script load
+     * and re-try once it resolves. Idempotent.
+     *
+     * @private
+     */
+    ENMApp.prototype._mountAuditTabLazy = function () {
+        if (this._auditTab) { return; }
+        if (!this.els.paneAudit) { return; }
+        var self = this;
+        function mountNow() {
+            if (self._auditTab) { return; }
+            if (!root.EnmAuditTab) {
+                self.els.paneAudit.innerHTML =
+                    '<p class="enm-stub">Audit component failed to load. '
+                    + 'Hard-refresh the page (Ctrl-Shift-R).</p>';
+                return;
+            }
+            self._auditTab = new root.EnmAuditTab({
+                api: self.services.api,
+                notifications: self.services.notifications,
+            });
+            self._auditTab.mount(self.els.paneAudit);
+        }
+        if (root.EnmAuditTab) { mountNow(); return; }
+        var src = (root.ENM_LAZY_SCRIPTS && root.ENM_LAZY_SCRIPTS.auditTab) || null;
+        if (src && typeof root.enmLoadScript === 'function') {
+            // Show a transient stub while the script downloads.
+            self.els.paneAudit.innerHTML =
+                '<p class="enm-stub">Loading audit log…</p>';
+            root.enmLoadScript(src).then(function () {
+                self.els.paneAudit.innerHTML = '';
+                mountNow();
+            }).catch(function () {
+                self.els.paneAudit.innerHTML =
+                    '<p class="enm-stub">Failed to load the audit log. Try again or refresh.</p>';
+            });
+        } else {
+            mountNow();
+        }
+    };
+
+    /**
+     * Wire the gear icon to switch to the Settings top-level tab.
+     * Beta 3 replaces the alpha.27 settings-drawer overlay with the
+     * in-pane Settings tab so the gear just programmatically clicks
+     * the matching tab button (which fires the regular tab activation
+     * including the lazy mount).
      *
      * @private
      */
@@ -392,7 +574,19 @@
         this.els.settingsToggle.dataset.wired = '1';
         var self = this;
         this.els.settingsToggle.addEventListener('click', function () {
-            self._openSettingsDrawer();
+            // Beta 3 — gear icon switches to the Settings tab (in-pane)
+            // instead of opening the legacy settings-drawer overlay.
+            // settings-drawer.js was dropped in BP-B per the phase-04
+            // mock which has no drawer surface; all config lives in
+            // the Settings tab now. The old _openSettingsDrawer path
+            // remains in the codebase (commented above this method)
+            // as a future hook if a slide-out variant ever returns.
+            var settingsTabBtn = self.els.tabs
+                && self.els.tabs.querySelector('.enm-tab[data-tab="settings"]');
+            if (settingsTabBtn) {
+                settingsTabBtn.click();
+                settingsTabBtn.focus();
+            }
         });
     };
 
@@ -571,6 +765,12 @@
         this._clearPanes();
         var screen = new root.EnmWelcomeScreen({
             onContinue: function () { self._mountSetupConversation(); },
+            // BP-E audit fix — inject announcer so welcome-screen.js can
+            // call this.announcer.polite() on transitions instead of
+            // silently no-oping past the constructor-time null. The
+            // singleton window.enmAnnouncer is the fallback path, but
+            // the dependency-injection contract is the canonical wire.
+            announcer: this.services.announcer,
         });
         screen.mount(this.els.paneDashboard);
     };
@@ -606,6 +806,13 @@
             api: this.services.api,
             notifications: this.services.notifications,
             sse: this.services.sse,
+            // BP-E audit fix — inject announcer so the wizard card
+            // transitions (A → B → B2 → B3 → C → D) can call
+            // this.announcer.polite() per step. Without this, setup-
+            // conversation.js falls back to the window.enmAnnouncer
+            // singleton, but the dependency-injection contract is the
+            // canonical wire and missing it trips audit-tier checks.
+            announcer: this.services.announcer,
             onComplete: function () {
                 self.services.api.invalidate('/setup/state');
                 self._showDashboard();
@@ -656,26 +863,50 @@
         this._clearPanes();
         this._teardownHomeView();
 
-        if (!root.EnmTechnicalView) {
-            // Defensive fallback: if the script tag is missing, surface
-            // a clear error rather than silently rendering nothing.
-            this.els.paneDashboard.innerHTML =
-                '<p class="enm-stub">Technical view component not loaded. '
-                + 'Hard-refresh the page (Ctrl-Shift-R).</p>';
-            return;
-        }
-
+        // BP-E — technical-view.js is gone. The Dashboard pane now
+        // mounts the 4 components that used to live inside technical-
+        // view's Status sub-tab directly: system-status strip, chain-
+        // card hero, BPoS card, and tools-update card. The Logs /
+        // Settings / Audit tabs that technical-view also hosted are
+        // top-level Beta 3 tabs (_mountLogViewerLazy /
+        // _mountSettingsTabLazy / _mountAuditTabLazy in _wireTabs).
         var self = this;
-        this._technicalView = new root.EnmTechnicalView({
+        var pane = this.els.paneDashboard;
+        var common = {
             api: this.services.api,
             sse: this.services.sse,
             notifications: this.services.notifications,
-            // 0.2.0-alpha.1 — chain-card subscribes for sparkline data.
-            heightSeries: this.services.heightSeries,
-            // No "back to home" button — the technical view IS home now.
-            onBackHome: null,
-        });
-        this._technicalView.mount(this.els.paneDashboard);
+            chainId: 'mainchain',
+            // chain-card + height-series wire-up (BP-A invariant).
+            heightSeries: this.services.heightSeries || null,
+        };
+
+        this._dashboardMounts = [];
+        if (root.EnmSystemStatus) {
+            var sys = new root.EnmSystemStatus(common);
+            sys.mount(pane);
+            this._dashboardMounts.push(sys);
+        }
+        if (root.EnmChainCard) {
+            var card = new root.EnmChainCard(common);
+            card.mount(pane);
+            this._dashboardMounts.push(card);
+        }
+        // BPoS card — hides itself when the operator is fully active
+        // on chain (STATE_HIDE in validator-registration-card.js). The
+        // backward-compat alias EnmValidatorRegistrationCard still
+        // resolves to BposCard.
+        if (root.EnmValidatorRegistrationCard) {
+            var bpos = new root.EnmValidatorRegistrationCard(common);
+            bpos.mount(pane);
+            this._dashboardMounts.push(bpos);
+        }
+        // Tools update card — hides itself when on the latest release.
+        if (root.EnmToolsUpdateCard) {
+            var upd = new root.EnmToolsUpdateCard(common);
+            upd.mount(pane);
+            this._dashboardMounts.push(upd);
+        }
 
         // Notifications pipeline — keep CRITICAL proposal cards popping
         // on top of the dashboard.
@@ -714,9 +945,18 @@
      * @private
      */
     ENMApp.prototype._teardownHomeView = function () {
-        if (this._technicalView) {
-            this._technicalView.destroy();
-            this._technicalView = null;
+        // BP-E — technical-view.js retired. Beta 3 Dashboard tears
+        // down its 4 directly-mounted components instead. Each one
+        // owns its own SSE subs + poll timers + visibility-pausers,
+        // so calling destroy() in order is sufficient. Iterate in
+        // reverse so a teardown failure deep in the chain doesn't
+        // strand earlier mounts.
+        if (this._dashboardMounts && this._dashboardMounts.length) {
+            for (var i = this._dashboardMounts.length - 1; i >= 0; i -= 1) {
+                try { this._dashboardMounts[i].destroy(); }
+                catch (_) { /* idempotent — keep going */ }
+            }
+            this._dashboardMounts = [];
         }
         if (this._notifSub) { this._notifSub(); this._notifSub = null; }
         // 0.2.0-alpha.1 — page-wash controller tears down with the home
@@ -750,10 +990,16 @@
      * @private
      */
     ENMApp.prototype._collapseHeaderToHome = function () {
+        // Beta 3 — `this.els.tabs` (id="enm-tabs") is now the
+        // `<nav class="enm-tabs">` tab strip itself (was the parent
+        // header nav in alpha.27). Hiding it hides just the tab row,
+        // keeping the brand + env pill + gear icon visible — the
+        // correct "chrome on, tabs off" state for the welcome screen.
+        // The old `.enm-header-tabs` inner-wrapper queryselector is
+        // no longer needed; that element doesn't exist in the new
+        // shell.
         if (!this.els.tabs) { return; }
         this.els.tabs.hidden = false;
-        var tabsContainer = this.els.tabs.querySelector('.enm-header-tabs');
-        if (tabsContainer) { tabsContainer.hidden = true; }
     };
 
     ENMApp.prototype._loadPendingProposals = function () {

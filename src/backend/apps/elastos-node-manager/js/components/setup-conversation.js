@@ -2,37 +2,64 @@
  * Copyright (C) 2026-present Elacity
  * SPDX-License-Identifier: AGPL-3.0
  *
- * components/setup-conversation.js — friendly 4-card setup (v0.4).
+ * components/setup-conversation.js — Beta 3 setup wizard.
  *
- * Replaces the technical setup-wizard for the avg-joe path. The same
- * backend endpoints power both — this component is purely a friendlier
- * shell over `/setup/install/mainchain`, `/setup/keystore`,
- * `/setup/network`, `/setup/complete`, `/chains/mainchain/start`.
+ * Reshaped from the alpha.28 conversational 6-step wizard to match the
+ * v2/phase-06-wizard-modals.html mock. The DOM contract is now:
  *
- * The four cards:
- *   A — Role:     "BPoS supernode" (Council node coming soon)
- *   B — Install:  one button → progress → done
- *   C — Password: generate + show + acknowledge (BPoS keystore)
- *   D — Done:     finalize, start the chain, celebrate
+ *   .enm-wiz-shell
+ *     .enm-wiz-body           ← swaps per-card (role grid, install
+ *                                progress, bootstrap tiles, clock-skew,
+ *                                password reveal, celebration)
+ *     .enm-setup-actions      ← footer with Cancel (hidden when N/A) +
+ *                                Continue / primary CTA
  *
- * Card A's choice maps to:
- *   bpos    → enableArbiter=true  (BPoS supernode, password generated server-side)
- *   council → DISABLED until the CR registration flow lands (next release)
+ * Card A (role chooser) is the new welcome experience — there's no
+ * separate welcome-screen step any more; welcome-screen.js is a thin
+ * shim that just constructs this component. Card A renders the
+ * BPoS / Council .enm-role-grid with `data-selected`/`data-disabled`
+ * exactly like the mock. The operator picks BPoS (Council is "Coming
+ * soon"), then clicks Continue to kick `_startAutoInstall`, which is
+ * the SAME pipeline alpha.28's user-driven Card B/B2/B3/C/D walked
+ * one step at a time — re-routed so the new mock's single-screen
+ * entry path can drive it from end to end.
  *
- * The earlier "help / full-node" path was removed 2026-05-07 — ENM is
- * positioned for BPoS + Council operators, not generic full-node users.
- * Existing installs whose state has enableArbiter=false load as 'bpos'
- * (we don't show a council path that won't work yet). See
- * feedback_enm_vocabulary memory entry for the wider rule.
+ * The five downstream cards (B, B2, B3, C, D) keep their existing
+ * behaviours and lifecycle guards:
+ *   - install (binary fetch + SSE/poll progress; cancel hits
+ *     DELETE /setup/auto-install-ela)
+ *   - bootstrap-vs-genesis (Card B2; snapshot download with cancel)
+ *   - clock-skew preflight (Card B3; F13 NTP check)
+ *   - keystore password reveal (Card C; ack-gated continue)
+ *   - finalize + start chain (Card D; celebrates + onComplete)
  *
- * Recovery: on mount we GET /setup/state and jump to the right card so
- * a container restart mid-setup picks up where the operator left off.
+ * The alpha.28 invariants live on:
+ *   - `_destroyed` flag flipped FIRST in destroy() so any in-flight
+ *     SSE/poll/HTTP callbacks short-circuit
+ *   - `_cardSeq` bumped on every body swap; `_stillRendering(seq)`
+ *     gates every async .then so stale resolves can't mutate the
+ *     new card's DOM
+ *   - `_teardownInstallTracking` / bootstrap-teardown both run on
+ *     destroy and on _goto out of Card B/B2 (prevents poll-after-
+ *     navigate)
+ *   - 401 on /setup/install-status polls is suppressed (catch swallows
+ *     so the operator doesn't see a forbidden toast during the brief
+ *     window between owner-pair and first authenticated request)
+ *   - SSE `setup:install:mainchain` / `setup:bootstrap:mainchain`
+ *     topic subscriptions with poll fallback
+ *   - Clock-skew probe always renders a continue path (the wizard
+ *     MUST NEVER deadlock on F13)
+ *   - Cross-tab BC: setup-complete broadcast handled in app.js;
+ *     _setupConv is stored on app so destroy() can fire on broadcast
+ *
+ * The 9-step alpha.1 wizard and its `_goal === 'help'` branch are
+ * permanently retired — ENM is positioned for BPoS + Council operators
+ * only. Existing installs whose backend state has enableArbiter=false
+ * load as 'bpos' on resume.
  */
 
 (function (root) {
     'use strict';
-
-    var TOTAL_STEPS = 6;
 
     function SetupConversation(opts) {
         if (!opts || !opts.api) {
@@ -41,6 +68,7 @@
         this.api = opts.api;
         this.notifications = opts.notifications || null;
         this.sse = opts.sse || null;
+        this.announcer = opts.announcer || (root.enmAnnouncer || null);
         this.onComplete = typeof opts.onComplete === 'function'
             ? opts.onComplete
             : function () {};
@@ -49,34 +77,33 @@
             : null;
 
         this.root = document.createElement('section');
-        this.root.className = 'enm-conversation';
+        this.root.className = 'enm-wiz-shell';
+        // role=region so the wizard reads as a named landmark in
+        // screen-reader rotors. aria-labelledby set after the heading
+        // mounts (per-card).
+        this.root.setAttribute('role', 'region');
+        this.root.setAttribute('aria-label', 'Setup wizard');
 
         this._goal = null;            // 'bpos' | 'council' (council is disabled today)
         this._currentCard = 'a';      // which card is showing
         this._cardSeq = 0;            // bump on every render to ignore stale callbacks
         this._unsubscribeInstall = null;
-        // alpha.28.1 — install poll timer handle so the fallback poll
-        // in _beginInstall can be cancelled. See _teardownInstallTracking
-        // for why this is necessary.
+        this._unsubscribeBootstrap = null;
         this._installPollTimer = null;
-        // alpha.28.1 batch 83 (Round-24 finding #4) — _destroyed flag
-        // so the Card B2 bootstrap poll's resolved tick can short-
-        // circuit if destroy() fires between the poll firing and the
-        // .then resolving. Card B's install-tracking explicitly handles
-        // this via _teardownInstallTracking; Card B2 was asymmetric.
-        // The resolved tick is harmless today (writes to detached DOM)
-        // but the asymmetry contradicts the symmetrical-with-Card-B
-        // rationale documented at the top of _goto.
+        this._bootstrapPollTimer = null;
+        // alpha.28.1 batch 83 — _destroyed flag so async resolves and
+        // SSE callbacks can short-circuit if destroy() fires between
+        // a poll dispatch and its .then. Symmetric with the original
+        // alpha.28 setup-conversation; central to every async branch
+        // in this file.
         this._destroyed = false;
     }
 
     /**
-     * Cancel the Card-B install poll + SSE subscription. Called from
-     * destroy(), from _goto() when navigating away from Card B, and
-     * from _beginInstall.applyStatus when a terminal phase is observed.
-     * Without this the IIFE poll outlives the operator's navigation and
-     * can call applyStatus on stale DOM, including yanking the operator
-     * involuntarily into Card B Done.
+     * Cancel any in-flight install poll + SSE subscription. Called from
+     * destroy() and from internal transitions that abandon Card B's
+     * progress UI. Without this the IIFE poll outlives navigation and
+     * applies status to a DOM the user has navigated away from.
      */
     SetupConversation.prototype._teardownInstallTracking = function () {
         if (this._installPollTimer) {
@@ -84,8 +111,20 @@
             this._installPollTimer = null;
         }
         if (this._unsubscribeInstall) {
-            this._unsubscribeInstall();
+            try { this._unsubscribeInstall(); } catch (_) { /* ignore */ }
             this._unsubscribeInstall = null;
+        }
+    };
+
+    /** Symmetric helper for Card B2's bootstrap poll + SSE. */
+    SetupConversation.prototype._teardownBootstrapTracking = function () {
+        if (this._bootstrapPollTimer) {
+            clearInterval(this._bootstrapPollTimer);
+            this._bootstrapPollTimer = null;
+        }
+        if (this._unsubscribeBootstrap) {
+            try { this._unsubscribeBootstrap(); } catch (_) { /* ignore */ }
+            this._unsubscribeBootstrap = null;
         }
     };
 
@@ -94,550 +133,734 @@
         this._renderShell();
         var self = this;
         // Recovery: jump to the right card based on what already exists.
+        // Without this, an operator who refreshes the page mid-install
+        // would be sent back to Card A and lose context.
         this.api.get('/setup/state', { skipCache: true }).then(function (s) {
+            if (self._destroyed) { return; }
             self._resumeFromState(s);
         }).catch(function () {
+            if (self._destroyed) { return; }
             self._goto('a');
         });
         return this;
     };
 
     SetupConversation.prototype.destroy = function () {
-        // batch 83 — flip flag FIRST so any in-flight poll/SSE callbacks
-        // can see it before they mutate detached DOM.
+        // alpha.28.1 batch 83 — flip flag FIRST so any in-flight poll/SSE
+        // callbacks can see it before they mutate detached DOM.
         this._destroyed = true;
         this._teardownInstallTracking();
-        if (this._unsubscribeBootstrap) { this._unsubscribeBootstrap(); this._unsubscribeBootstrap = null; }
-        if (this._bootstrapPollTimer) { clearInterval(this._bootstrapPollTimer); this._bootstrapPollTimer = null; }
+        this._teardownBootstrapTracking();
         if (this.root.parentNode) { this.root.parentNode.removeChild(this.root); }
     };
 
     /** @private */
     SetupConversation.prototype._renderShell = function () {
+        // Two-region shell. The body region is swapped per card; the
+        // footer (.enm-setup-actions) is a stable element whose Cancel/
+        // Continue buttons mutate per card. Keeping the footer outside
+        // the swap means screen-reader focus rings on the action row
+        // don't blink off between card transitions.
         this.root.innerHTML =
-            '<header class="enm-conv-header">'
-            + '<div class="enm-conv-progress" aria-hidden="true">'
-                + '<div class="enm-conv-progress-bar"></div>'
-            + '</div>'
-            + '<div class="enm-conv-progress-text" aria-live="polite"></div>'
-            + '</header>'
-            // a11y: dropped aria-live="polite" from the body region. The
-            // header's progress text already announces every step
-            // transition ("Step 3 of 6"); pairing a second live region
-            // on the body caused screen readers to queue + interleave
-            // both, sometimes reading the body content twice (once on
-            // the body's mutation, once on heading navigation). The
-            // body is announced normally via the heading focus added
-            // in batch 6 (_goto focuses the new card title).
-            + '<div class="enm-conv-body"></div>';
-        this._headerProgress = this.root.querySelector('.enm-conv-progress-bar');
-        this._headerText     = this.root.querySelector('.enm-conv-progress-text');
-        this._body           = this.root.querySelector('.enm-conv-body');
+            '<div class="enm-wiz-body"></div>'
+            + '<div class="enm-setup-actions">'
+              + '<button type="button" class="enm-btn enm-btn-secondary enm-setup-cancel" hidden></button>'
+              + '<button type="button" class="enm-btn enm-btn-primary enm-setup-continue" disabled></button>'
+            + '</div>';
+        this._body         = this.root.querySelector('.enm-wiz-body');
+        this._cancelBtn    = this.root.querySelector('.enm-setup-cancel');
+        this._continueBtn  = this.root.querySelector('.enm-setup-continue');
     };
 
     /** @private */
     SetupConversation.prototype._resumeFromState = function (s) {
-        // Edge case: if /setup/state says we're already done, jump
-        // straight to the home view instead of re-running setup.
-        // (Can happen if the conversation is mounted by mistake or
-        // if the operator hits a stale URL after completion.)
+        // Already done? Skip the wizard entirely.
         // Truthy check — SQLite stores `completed: 1` not `=== true`.
         if (s && s.completed) {
-            this.onComplete();
+            this.onComplete(s);
             return;
         }
 
-        // Map server-side step → which card to show on resume.
-        // Conservative: if anything is unclear, start at A.
         var step = (s && s.currentStep) || 'welcome';
         if (step === 'install' || step === 'preflight' || step === 'welcome') {
+            // Fresh install: land on the role chooser.
             this._goto('a');
         } else if (step === 'bootstrap') {
-            // Operator finished the binary install but hasn't picked
-            // bootstrap-or-genesis yet (or is mid-bootstrap). Resume on
-            // Card B2 — the choice screen reasserts on any reload, and
-            // the running-bootstrap branch reconciles via the snapshot
-            // status endpoint once the card mounts.
+            // Binary in place, bootstrap-vs-genesis pending.
             this._goal = 'bpos';
             this._goto('b2');
         } else if (step === 'keystore') {
-            // Already past install — assume 'bpos' (the only goal users can
-            // reach today; pre-2026-05-07 'help' installs are read as bpos
-            // since the help path is gone).
-            // skipped this. Operator can back out on the goal card.
             this._goal = 'bpos';
             this._goto('c');
         } else if (step === 'network' || step === 'confirm' || step === 'complete') {
-            // Existing installs that picked the old "help" path are
-            // shown as 'bpos' here — the council option isn't selectable
-            // yet, and "help" no longer exists as a goal.
             this._goal = 'bpos';
             this._goto('d');
         } else {
-            // Unknown step value (server schema drift, garbage response,
-            // etc.) — fail safe by starting from the top.
+            // Unknown step value (schema drift, garbage response) —
+            // fail safe by starting from the top.
             this._goto('a');
         }
     };
 
     /** @private */
     SetupConversation.prototype._goto = function (card) {
-        // alpha.28.1 — cancel any in-flight Card-B install tracking
-        // BEFORE swapping `_currentCard`. The poll loop checks
-        // `_currentCard === 'b'` to decide whether to keep ticking, so
-        // updating that field is enough to stop new ticks, but a tick
-        // already in flight could still resolve into a stale `els`
-        // reference. _teardownInstallTracking explicitly cancels the
-        // SSE subscription too, so SSE events that arrive after the
-        // operator has clicked Back can't yank them forward.
+        // alpha.28.1 batch 70/83 — tear down any in-flight Card-B
+        // install tracking BEFORE swapping _currentCard. A tick already
+        // in flight could still resolve into a stale DOM reference if
+        // we relied on _currentCard alone, so we explicitly cancel the
+        // timer + SSE here.
         if (this._currentCard === 'b' && card !== 'b') {
             this._teardownInstallTracking();
         }
-        // alpha.28.1 batch 70 (Round-19A audit finding #1) — Card B2 has
-        // its own poll + SSE pair (_bootstrapPollTimer set at line 520
-        // running every 2s, _unsubscribeBootstrap set at line 515).
-        // Both were only cleaned in (a) destroy, (b) re-arming guards in
-        // _b2BeginBootstrap, (c) terminal phases of applyStatus + the
-        // _b2OnBootstrapDone happy path. The Card B2 Back link at line
-        // 411 calls _goto('b') — none of those three teardown paths
-        // fired, so the bootstrap poll + SSE continued ticking for the
-        // rest of the wizard session (pinned closures, wasted 2s GETs,
-        // and the captured `applyStatus` writing to detached `els`).
-        // Symmetrical with the Card-B leak guard above.
         if (this._currentCard === 'b2' && card !== 'b2') {
-            if (this._unsubscribeBootstrap) { this._unsubscribeBootstrap(); this._unsubscribeBootstrap = null; }
-            if (this._bootstrapPollTimer) { clearInterval(this._bootstrapPollTimer); this._bootstrapPollTimer = null; }
+            this._teardownBootstrapTracking();
         }
         this._currentCard = card;
         this._cardSeq += 1;
         var seq = this._cardSeq;
-        this._updateHeader(card);
         this._body.innerHTML = '';
-        // Brief enter animation by re-applying the class on the body.
-        this._body.classList.remove('enm-conv-enter');
-        // Force reflow so the class re-add re-triggers the animation.
-        // eslint-disable-next-line no-unused-expressions
-        void this._body.offsetWidth;
-        this._body.classList.add('enm-conv-enter');
+        // Reset footer to default hidden-Cancel + disabled-Continue.
+        // Cards opt in by mutating these refs.
+        this._resetFooter();
 
-        if (card === 'a') { this._renderCardA(seq); }
-        else if (card === 'b') { this._renderCardB(seq); }
+        if (card === 'a')       { this._renderCardA(seq); }
+        else if (card === 'b')  { this._renderCardB(seq); }
         else if (card === 'b2') { this._renderCardB2(seq); }
         else if (card === 'b3') { this._renderCardB3(seq); }
-        else if (card === 'c') { this._renderCardC(seq); }
-        else if (card === 'd') { this._renderCardD(seq); }
+        else if (card === 'c')  { this._renderCardC(seq); }
+        else if (card === 'd')  { this._renderCardD(seq); }
 
-        // a11y/focus: each card swap re-renders `_body.innerHTML`, which
-        // destroys the previously-focused control (the Continue/Install
-        // button operators just clicked). Without an explicit focus
-        // landing, focus drops to body and screen readers don't
-        // announce that the wizard advanced. Move focus to the new
-        // card's heading (with a temporary tabindex so it accepts
+        // a11y/focus: every card swap re-renders `_body.innerHTML`,
+        // destroying the previously-focused control. Without an
+        // explicit landing, focus drops to body and screen readers
+        // don't announce that the wizard advanced. Move focus to the
+        // new card's heading (with a temporary tabindex so it accepts
         // programmatic focus), and let the user Tab forward from there.
         try {
-            var heading = this._body.querySelector('.enm-conv-title')
+            var heading = this._body.querySelector('.enm-wiz-heading')
                 || this._body.querySelector('h2, h3');
             if (heading && typeof heading.focus === 'function') {
                 if (!heading.hasAttribute('tabindex')) {
                     heading.setAttribute('tabindex', '-1');
                 }
                 heading.focus({ preventScroll: true });
+                // Announce the new step to screen readers via the
+                // shared announcer (alpha.29 batch 97). The heading
+                // focus catches sighted users; the announcer covers
+                // VoiceOver/NVDA users who may have focus parked on
+                // a different region.
+                if (this.announcer && typeof this.announcer.polite === 'function') {
+                    try { this.announcer.polite(heading.textContent || ''); } catch (_) { /* ignore */ }
+                }
             }
-        } catch (e) { /* DOM may be torn down mid-render */ }
+        } catch (_) { /* DOM may be torn down mid-render */ }
     };
+
+    /** @private — reset the stable footer between card swaps. */
+    SetupConversation.prototype._resetFooter = function () {
+        // Footer reset: each card re-wires the two buttons to its own
+        // handlers. Clearing the handlers (by replacing the nodes)
+        // is the simplest way to guarantee no stale listeners survive.
+        var newCancel = this._cancelBtn.cloneNode(false);
+        var newContinue = this._continueBtn.cloneNode(false);
+        newCancel.hidden = true;
+        newCancel.textContent = '';
+        newCancel.disabled = false;
+        newContinue.disabled = true;
+        newContinue.textContent = '';
+        this._cancelBtn.parentNode.replaceChild(newCancel, this._cancelBtn);
+        this._continueBtn.parentNode.replaceChild(newContinue, this._continueBtn);
+        this._cancelBtn = newCancel;
+        this._continueBtn = newContinue;
+    };
+
+    // ====================================================================
+    // Card A — role chooser (BPoS vs Council)
+    // ====================================================================
 
     /** @private */
-    SetupConversation.prototype._updateHeader = function (card) {
-        var t = root.enmT;
-        // b3 is the clock-skew check inserted between bootstrap (b2) and
-        // keystore (c). Adding it bumps c and d each by one.
-        var stepNumber = ({ a: 1, b: 2, b2: 3, b3: 4, c: 5, d: 6 })[card] || 1;
-        // Card C (keystore) is required for BPoS — never skipped now that
-        // numbering shifts (A=1, B=2, D=3).
-        var total = TOTAL_STEPS;
-        if (false /* removed: 'help' goal no longer exists, BPoS always needs keystore */) {
-            total = 3;
-            if (card === 'd') { stepNumber = 3; }
-        }
-        var pct = Math.round((stepNumber / total) * 100);
-        this._headerProgress.style.width = pct + '%';
-        this._headerText.textContent = t('friendly.setup.progress', {
-            n: stepNumber,
-            total: total,
-        });
-    };
-
-    /** @private — Card A: pick a goal */
     SetupConversation.prototype._renderCardA = function (seq) {
         var t = root.enmT;
-        var I = root.EnmIllust;
+        // The mock heading is "How will you run this node?" but the
+        // existing string key is friendly.welcome.title — Beta 3 reuses
+        // it because the role-grid IS the welcome screen now. The
+        // friendly.setup.card_a.title key ("What kind of node?") sits
+        // closer to the mock copy, so we lead with that.
+        var heading = t('friendly.setup.card_a.title');
+        var para = t('friendly.welcome.body');
+        // Card A's heading is the named landmark for the wizard region.
+        this.root.setAttribute('aria-label', heading);
         this._body.innerHTML =
-            '<h2 class="enm-conv-title">' + escapeHtml(t('friendly.setup.card_a.title')) + '</h2>'
-            + '<div class="enm-goal-tiles">'
-              + '<button type="button" class="enm-goal-tile" data-goal="bpos" aria-pressed="false">'
-                + '<div class="enm-goal-illust enm-goal-illust-earn">'
-                  + (I ? I.trophy({ size: 64 }) : '')
+            '<h2 class="enm-wiz-heading" id="enm-wiz-heading-a">' + escapeHtml(heading) + '</h2>'
+            + '<p class="enm-wiz-para">' + escapeHtml(para) + '</p>'
+            + '<div class="enm-role-grid" role="radiogroup" aria-labelledby="enm-wiz-heading-a">'
+              + '<button type="button" class="enm-role-card" data-goal="bpos" role="radio" aria-checked="false">'
+                + '<div class="enm-role-card-head">'
+                  + '<span class="enm-role-card-radio" aria-hidden="true"></span>'
+                  + '<span class="enm-role-card-title">' + escapeHtml(t('friendly.setup.card_a.bpos_title')) + '</span>'
                 + '</div>'
-                + '<div class="enm-goal-tile-title">' + escapeHtml(t('friendly.setup.card_a.bpos_title')) + '</div>'
-                + '<div class="enm-goal-tile-sub">'  + escapeHtml(t('friendly.setup.card_a.bpos_sub'))   + '</div>'
-                + '<div class="enm-goal-tile-meta">' + escapeHtml(t('friendly.setup.card_a.bpos_meta'))  + '</div>'
-              + '</button>'
-              + '<button type="button" class="enm-goal-tile enm-goal-tile-disabled" data-goal="council" aria-pressed="false" aria-disabled="true" disabled>'
-                + '<div class="enm-goal-illust enm-goal-illust-help">'
-                  + (I ? I.shield({ size: 64 }) : '')
+                + '<p class="enm-role-card-help">' + escapeHtml(t('friendly.setup.card_a.bpos_sub')) + '</p>'
+                + '<div class="enm-role-card-meta">'
+                  + '<span><b>APR</b> ' + escapeHtml(t('friendly.setup.card_a.bpos_meta')) + '</span>'
+                  + '<span><b>Stake</b> 5,000 ELA in Essentials</span>'
                 + '</div>'
-                + '<div class="enm-goal-tile-title">' + escapeHtml(t('friendly.setup.card_a.council_title')) + '</div>'
-                + '<div class="enm-goal-tile-sub">'  + escapeHtml(t('friendly.setup.card_a.council_sub'))   + '</div>'
-                + '<div class="enm-goal-tile-meta">' + escapeHtml(t('friendly.setup.card_a.council_meta'))  + '</div>'
               + '</button>'
-            + '</div>'
-            + '<p class="enm-conv-footer">' + escapeHtml(t('friendly.setup.card_a.footer')) + '</p>';
+              + '<button type="button" class="enm-role-card" data-goal="council" data-disabled="true" disabled aria-disabled="true" role="radio" aria-checked="false">'
+                + '<span class="enm-role-card-badge">' + escapeHtml(t('friendly.setup.card_a.council_meta')) + '</span>'
+                + '<div class="enm-role-card-head">'
+                  + '<span class="enm-role-card-radio" aria-hidden="true"></span>'
+                  + '<span class="enm-role-card-title">' + escapeHtml(t('friendly.setup.card_a.council_title')) + '</span>'
+                + '</div>'
+                + '<p class="enm-role-card-help">' + escapeHtml(t('friendly.setup.card_a.council_sub')) + '</p>'
+                + '<div class="enm-role-card-meta">'
+                  + '<span>Council node setup lands in a future release.</span>'
+                + '</div>'
+              + '</button>'
+            + '</div>';
 
         var self = this;
-        this._body.querySelectorAll('[data-goal]').forEach(function (tile) {
-            tile.addEventListener('click', function () {
-                if (!self._stillRendering(seq)) { return; }
-                self._goal = tile.dataset.goal;
-                self._goto('b');
+        var cards = this._body.querySelectorAll('.enm-role-card');
+        cards.forEach(function (card) {
+            // The Council card has data-disabled="true" + disabled attr;
+            // the disabled attribute alone blocks the click but we also
+            // guard inside the handler defensively.
+            card.addEventListener('click', function () {
+                if (self._destroyed || !self._stillRendering(seq)) { return; }
+                if (card.getAttribute('data-disabled') === 'true') { return; }
+                cards.forEach(function (c) {
+                    c.removeAttribute('data-selected');
+                    c.setAttribute('aria-checked', 'false');
+                });
+                card.setAttribute('data-selected', 'true');
+                card.setAttribute('aria-checked', 'true');
+                self._goal = card.getAttribute('data-goal');
+                self._continueBtn.disabled = false;
             });
+        });
+
+        // Wire the footer Continue button for Card A. The Cancel button
+        // stays hidden on the initial role-chooser — there's nothing to
+        // cancel yet.
+        this._continueBtn.textContent = 'Continue';
+        this._continueBtn.disabled = true;
+        var continueBtn = this._continueBtn;
+        continueBtn.addEventListener('click', function () {
+            if (self._destroyed || !self._stillRendering(seq)) { return; }
+            if (!self._goal || self._goal === 'council') { return; }
+            // alpha.28 enmRunOnce — disable + label-swap while the
+            // install request is in flight so double-clicks can't
+            // fire /setup/install/mainchain twice.
+            var runOnce = root.enmRunOnce;
+            if (typeof runOnce === 'function') {
+                runOnce(continueBtn, 'Setting up…', function () {
+                    return Promise.resolve().then(function () {
+                        if (self._destroyed) { return null; }
+                        self._goto('b');
+                    });
+                });
+            } else {
+                continueBtn.disabled = true;
+                continueBtn.textContent = 'Setting up…';
+                self._goto('b');
+            }
         });
     };
 
-    /** @private — Card B: install */
+    // ====================================================================
+    // Card B — install binary (progress card)
+    // ====================================================================
+
+    /** @private */
     SetupConversation.prototype._renderCardB = function (seq) {
         var t = root.enmT;
-        var I = root.EnmIllust;
+        var heading = t('friendly.setup.card_b.title_active');
+        var para    = t('friendly.setup.card_b.sub_active');
+        this.root.setAttribute('aria-label', heading);
         this._body.innerHTML =
-            '<div class="enm-install-illust">' + (I ? I.gear({ size: 96 }) : '') + '</div>'
-            + '<h2 class="enm-conv-title" id="enm-conv-b-title">' + escapeHtml(t('friendly.setup.card_b.title_idle')) + '</h2>'
-            + '<p class="enm-conv-sub"   id="enm-conv-b-sub">'   + escapeHtml(t('friendly.setup.card_b.sub_idle'))   + '</p>'
-            + '<div class="enm-install-progress" id="enm-conv-b-progress" hidden>'
-              + '<div class="enm-install-bar-wrap">'
-                + '<div class="enm-install-bar" id="enm-conv-b-bar"></div>'
+            '<h2 class="enm-wiz-heading" id="enm-wiz-heading-b">' + escapeHtml(heading) + '</h2>'
+            + '<p class="enm-wiz-para" id="enm-wiz-b-para">' + escapeHtml(para) + '</p>'
+            + '<div class="enm-install-progress" id="enm-wiz-b-progress" role="status" aria-live="polite">'
+              + '<div class="enm-install-bar" aria-hidden="true">'
+                + '<div class="enm-install-bar-fill" id="enm-wiz-b-bar" style="width:0%"></div>'
               + '</div>'
-              + '<div class="enm-install-status" id="enm-conv-b-status">' + escapeHtml(t('friendly.setup.card_b.phase_preparing')) + '</div>'
+              + '<div class="enm-install-bar-label" id="enm-wiz-b-pct">0%</div>'
             + '</div>'
-            + '<div class="enm-conv-actions" id="enm-conv-b-actions"></div>';
+            + '<div class="enm-install-detail" id="enm-wiz-b-detail" aria-live="polite"></div>';
 
         var self = this;
         var els = {
-            title:    this._body.querySelector('#enm-conv-b-title'),
-            sub:      this._body.querySelector('#enm-conv-b-sub'),
-            progress: this._body.querySelector('#enm-conv-b-progress'),
-            bar:      this._body.querySelector('#enm-conv-b-bar'),
-            status:   this._body.querySelector('#enm-conv-b-status'),
-            actions:  this._body.querySelector('#enm-conv-b-actions'),
+            title:  this._body.querySelector('#enm-wiz-heading-b'),
+            sub:    this._body.querySelector('#enm-wiz-b-para'),
+            bar:    this._body.querySelector('#enm-wiz-b-bar'),
+            pct:    this._body.querySelector('#enm-wiz-b-pct'),
+            detail: this._body.querySelector('#enm-wiz-b-detail'),
         };
 
+        // Footer: Cancel aborts the auto-install; Continue is hidden
+        // until the install reaches `done`. Cancel hits the same
+        // DELETE endpoint the alpha.27 flow used.
+        this._cancelBtn.hidden = false;
+        this._cancelBtn.textContent = t('friendly.setup.cancel');
+        this._continueBtn.disabled = true;
+        this._continueBtn.hidden = true;
+        this._continueBtn.textContent = t('friendly.setup.card_b.cta_continue');
+
+        this._cancelBtn.addEventListener('click', function () {
+            if (self._destroyed || !self._stillRendering(seq)) { return; }
+            self._cancelBtn.disabled = true;
+            self.api.del('/setup/auto-install-ela').catch(function () { /* ignore — fall through to Card A */ });
+            self._teardownInstallTracking();
+            self._goto('a');
+        });
+
         // Recovery: if the binary is already on disk, advance immediately.
+        // Otherwise kick off the install. 401 on /setup/install-status is
+        // suppressed by the catch — during the brief window between
+        // first owner pairing and the first authenticated GET, a 401
+        // is expected and shouldn't surface as a toast.
         this.api.get('/setup/install-status/mainchain', { skipCache: true }).then(function (s) {
-            if (!self._stillRendering(seq)) { return; }
+            if (self._destroyed || !self._stillRendering(seq)) { return; }
             if (s && s.phase === 'done' && s.binaryPath) {
-                self._renderCardBDone(els);
+                self._cardBOnDone(els, seq);
             } else if (s && s.phase === 'downloading') {
-                // Resume mid-install: subscribe to SSE for live updates.
-                self._beginInstall(els, /* alreadyStarted */ true);
+                self._beginInstall(els, seq, /* alreadyStarted */ true);
             } else {
-                self._renderCardBIdle(els);
+                self._beginInstall(els, seq, /* alreadyStarted */ false);
             }
         }).catch(function () {
-            if (!self._stillRendering(seq)) { return; }
-            self._renderCardBIdle(els);
+            if (self._destroyed || !self._stillRendering(seq)) { return; }
+            // Any HTTP failure (incl. 401 during first-pair) → kick the
+            // install through the POST endpoint, which the backend
+            // handles idempotently.
+            self._beginInstall(els, seq, /* alreadyStarted */ false);
         });
     };
 
     /** @private */
-    SetupConversation.prototype._renderCardBIdle = function (els) {
+    SetupConversation.prototype._beginInstall = function (els, seq, alreadyStarted) {
         var t = root.enmT;
-        els.actions.innerHTML = '';
         var self = this;
-        els.actions.appendChild(
-            makeBtn(t('friendly.setup.card_b.cta_install'), 'primary hero', function (ev) {
-                ev.target.disabled = true;
-                self._beginInstall(els, /* alreadyStarted */ false);
-            })
-        );
-        els.actions.appendChild(makeTextLink(t('friendly.setup.back'), function () {
-            self._goto('a');
-        }));
+        // alpha.28.1 bug fix — latch `installComplete` in a closure so
+        // applyStatus short-circuits after the first terminal phase
+        // observed. Without it, SSE + poll both delivering
+        // `phase === 'done'` ran _cardBOnDone twice — second call
+        // wrote into a DOM the first had already replaced.
+        var installComplete = false;
+
+        function applyStatus(s) {
+            if (!s || installComplete || self._destroyed) { return; }
+            if (!self._stillRendering(seq)) { return; }
+            var pct = (s.bytesTotal && s.bytesDownloaded)
+                ? Math.min(100, Math.floor((s.bytesDownloaded / s.bytesTotal) * 100))
+                : (s.phase === 'done' ? 100 : (s.phase === 'verifying' ? 95 : 5));
+            els.bar.style.width = pct + '%';
+            els.pct.textContent = pct + '%';
+            els.sub.textContent = phaseLabel(s);
+            if (s.phase === 'done') {
+                installComplete = true;
+                self._teardownInstallTracking();
+                self._cardBOnDone(els, seq);
+            }
+            if (s.phase === 'failed') {
+                installComplete = true;
+                self._teardownInstallTracking();
+                self._cardBOnFailed(els, seq, s);
+            }
+        }
+
+        // Subscribe to SSE for live updates.
+        if (this.sse && typeof this.sse.subscribe === 'function') {
+            if (this._unsubscribeInstall) { this._unsubscribeInstall(); }
+            this._unsubscribeInstall = this.sse.subscribe(
+                'setup:install:mainchain',
+                function (p) { applyStatus(p); }
+            );
+        }
+
+        var startReq = alreadyStarted
+            ? Promise.resolve(null)
+            : this.api.post('/setup/install/mainchain');
+
+        startReq.then(function (resp) {
+            if (self._destroyed) { return; }
+            applyStatus(resp && resp.status);
+            // Fallback poll bound to _currentCard === 'b' AND
+            // installComplete === false so navigation away and terminal
+            // phases both kill the loop. Timer handle is stored on
+            // `this` so destroy()/teardown can cancel a pending tick.
+            (function poll() {
+                if (installComplete || self._destroyed) { return; }
+                if (self._currentCard !== 'b') { return; }
+                if (!self.root.isConnected) { return; }
+                self.api.get('/setup/install-status/mainchain', { skipCache: true })
+                    .then(function (s) {
+                        if (self._destroyed) { return; }
+                        applyStatus(s);
+                        if (!installComplete && self._currentCard === 'b'
+                            && (!s || (s.phase !== 'done' && s.phase !== 'failed'))) {
+                            self._installPollTimer = setTimeout(poll, 2500);
+                        }
+                    })
+                    .catch(function () {
+                        // alpha.28.1 — 401 expected during first-pair;
+                        // retry on a longer cadence so we don't burn
+                        // request budget while owner-token settles.
+                        if (!installComplete && self._currentCard === 'b' && !self._destroyed) {
+                            self._installPollTimer = setTimeout(poll, 4000);
+                        }
+                    });
+            })();
+        }).catch(function (err) {
+            if (self._destroyed) { return; }
+            applyStatus({ phase: 'failed', error: err && err.message ? err.message : String(err) });
+        });
     };
 
     /** @private */
-    SetupConversation.prototype._renderCardBDone = function (els) {
+    SetupConversation.prototype._cardBOnDone = function (els, seq) {
         var t = root.enmT;
+        var self = this;
+        els.bar.style.width = '100%';
+        els.pct.textContent = '100%';
         els.title.textContent = t('friendly.setup.card_b.title_done');
         els.sub.textContent   = t('friendly.setup.card_b.sub_done');
-        els.progress.hidden   = false;
-        els.bar.style.width   = '100%';
-        els.status.textContent = t('friendly.setup.card_b.phase_done');
-        els.actions.innerHTML = '';
-        var self = this;
-        els.actions.appendChild(
-            makeBtn(t('friendly.setup.card_b.cta_continue'), 'primary hero', function () {
-                // alpha.10: after binary install, the operator picks
-                // bootstrap-vs-genesis on Card B2 before reaching the
-                // keystore step.
-                self._goto('b2');
-            })
-        );
+        els.detail.innerHTML  = '';
+        // Hide Cancel + reveal Continue. Continue moves to Card B2
+        // (bootstrap-vs-genesis).
+        this._cancelBtn.hidden = true;
+        this._continueBtn.hidden = false;
+        this._continueBtn.disabled = false;
+        this._continueBtn.textContent = t('friendly.setup.card_b.cta_continue');
+        this._continueBtn.addEventListener('click', function onClick() {
+            if (self._destroyed || !self._stillRendering(seq)) { return; }
+            self._continueBtn.removeEventListener('click', onClick);
+            self._goto('b2');
+        });
     };
 
-    /** @private — Card B2: bootstrap vs genesis */
+    /** @private */
+    SetupConversation.prototype._cardBOnFailed = function (els, seq, s) {
+        var t = root.enmT;
+        var self = this;
+        els.title.textContent = t('friendly.setup.card_b.phase_failed');
+        els.sub.textContent   = t('friendly.setup.card_b.failed_help');
+        var errMsg = s && s.error ? String(s.error) : '';
+        if (errMsg) {
+            els.detail.innerHTML = '<p class="enm-install-detail-error">' + escapeHtml(errMsg) + '</p>';
+        }
+        // Swap Cancel→Back, Continue→Retry. Retry re-enters _beginInstall.
+        this._cancelBtn.hidden = false;
+        this._cancelBtn.textContent = t('friendly.setup.back');
+        this._cancelBtn.disabled = false;
+        this._continueBtn.hidden = false;
+        this._continueBtn.disabled = false;
+        this._continueBtn.textContent = t('friendly.setup.card_b.cta_retry');
+        this._continueBtn.addEventListener('click', function onRetry() {
+            if (self._destroyed || !self._stillRendering(seq)) { return; }
+            self._continueBtn.removeEventListener('click', onRetry);
+            self._renderCardB(self._cardSeq); // re-render to reset progress UI
+        });
+    };
+
+    // ====================================================================
+    // Card B2 — bootstrap vs genesis snapshot
+    // ====================================================================
+
+    /** @private */
     SetupConversation.prototype._renderCardB2 = function (seq) {
         var t = root.enmT;
-        var I = root.EnmIllust;
+        var heading = t('friendly.setup.card_b2.title_idle');
+        this.root.setAttribute('aria-label', heading);
         this._body.innerHTML =
-            '<div class="enm-install-illust">' + (I ? I.gear({ size: 96 }) : '') + '</div>'
-            + '<h2 class="enm-conv-title" id="enm-conv-b2-title">' + escapeHtml(t('friendly.setup.card_b2.title_idle')) + '</h2>'
-            + '<p class="enm-conv-sub"   id="enm-conv-b2-sub">'   + escapeHtml(t('friendly.setup.card_b2.sub_idle'))   + '</p>'
-            + '<div class="enm-b2-tiles" id="enm-conv-b2-tiles">'
-                + '<button type="button" class="enm-b2-tile enm-b2-tile-bootstrap" data-choice="bootstrap">'
-                    + '<div class="enm-b2-tile-badge">' + escapeHtml(t('friendly.setup.card_b2.badge_recommended')) + '</div>'
-                    + '<div class="enm-b2-tile-title">' + escapeHtml(t('friendly.setup.card_b2.tile_bootstrap_title')) + '</div>'
-                    + '<div class="enm-b2-tile-sub">'   + escapeHtml(t('friendly.setup.card_b2.tile_bootstrap_sub'))   + '</div>'
-                    + '<div class="enm-b2-tile-meta">'  + escapeHtml(t('friendly.setup.card_b2.tile_bootstrap_meta'))  + '</div>'
-                + '</button>'
-                + '<button type="button" class="enm-b2-tile enm-b2-tile-genesis" data-choice="genesis">'
-                    + '<div class="enm-b2-tile-title">' + escapeHtml(t('friendly.setup.card_b2.tile_genesis_title')) + '</div>'
-                    + '<div class="enm-b2-tile-sub">'   + escapeHtml(t('friendly.setup.card_b2.tile_genesis_sub'))   + '</div>'
-                    + '<div class="enm-b2-tile-meta">'  + escapeHtml(t('friendly.setup.card_b2.tile_genesis_meta'))  + '</div>'
-                + '</button>'
+            '<h2 class="enm-wiz-heading" id="enm-wiz-heading-b2">' + escapeHtml(heading) + '</h2>'
+            + '<p class="enm-wiz-para" id="enm-wiz-b2-para">' + escapeHtml(t('friendly.setup.card_b2.sub_idle')) + '</p>'
+            + '<div class="enm-role-grid" id="enm-wiz-b2-tiles" role="radiogroup" aria-labelledby="enm-wiz-heading-b2">'
+              + '<button type="button" class="enm-role-card" data-choice="bootstrap" role="radio" aria-checked="false">'
+                + '<span class="enm-role-card-badge enm-role-card-badge-ok">' + escapeHtml(t('friendly.setup.card_b2.badge_recommended')) + '</span>'
+                + '<div class="enm-role-card-head">'
+                  + '<span class="enm-role-card-radio" aria-hidden="true"></span>'
+                  + '<span class="enm-role-card-title">' + escapeHtml(t('friendly.setup.card_b2.tile_bootstrap_title')) + '</span>'
+                + '</div>'
+                + '<p class="enm-role-card-help">' + escapeHtml(t('friendly.setup.card_b2.tile_bootstrap_sub')) + '</p>'
+                + '<div class="enm-role-card-meta"><span>' + escapeHtml(t('friendly.setup.card_b2.tile_bootstrap_meta')) + '</span></div>'
+              + '</button>'
+              + '<button type="button" class="enm-role-card" data-choice="genesis" role="radio" aria-checked="false">'
+                + '<div class="enm-role-card-head">'
+                  + '<span class="enm-role-card-radio" aria-hidden="true"></span>'
+                  + '<span class="enm-role-card-title">' + escapeHtml(t('friendly.setup.card_b2.tile_genesis_title')) + '</span>'
+                + '</div>'
+                + '<p class="enm-role-card-help">' + escapeHtml(t('friendly.setup.card_b2.tile_genesis_sub')) + '</p>'
+                + '<div class="enm-role-card-meta"><span>' + escapeHtml(t('friendly.setup.card_b2.tile_genesis_meta')) + '</span></div>'
+              + '</button>'
             + '</div>'
-            + '<div class="enm-install-progress" id="enm-conv-b2-progress" hidden>'
-              + '<div class="enm-install-bar-wrap">'
-                + '<div class="enm-install-bar" id="enm-conv-b2-bar"></div>'
+            + '<div class="enm-install-progress" id="enm-wiz-b2-progress" role="status" aria-live="polite" hidden>'
+              + '<div class="enm-install-bar" aria-hidden="true">'
+                + '<div class="enm-install-bar-fill" id="enm-wiz-b2-bar" style="width:0%"></div>'
               + '</div>'
-              + '<div class="enm-install-status" id="enm-conv-b2-status">' + escapeHtml(t('friendly.setup.card_b2.phase_preparing')) + '</div>'
+              + '<div class="enm-install-bar-label" id="enm-wiz-b2-pct">0%</div>'
             + '</div>'
-            + '<div class="enm-conv-actions" id="enm-conv-b2-actions"></div>';
+            + '<div class="enm-install-detail" id="enm-wiz-b2-detail"></div>';
 
         var self = this;
         var els = {
-            title:    this._body.querySelector('#enm-conv-b2-title'),
-            sub:      this._body.querySelector('#enm-conv-b2-sub'),
-            tiles:    this._body.querySelector('#enm-conv-b2-tiles'),
-            progress: this._body.querySelector('#enm-conv-b2-progress'),
-            bar:      this._body.querySelector('#enm-conv-b2-bar'),
-            status:   this._body.querySelector('#enm-conv-b2-status'),
-            actions:  this._body.querySelector('#enm-conv-b2-actions'),
+            title:    this._body.querySelector('#enm-wiz-heading-b2'),
+            sub:      this._body.querySelector('#enm-wiz-b2-para'),
+            tiles:    this._body.querySelector('#enm-wiz-b2-tiles'),
+            progress: this._body.querySelector('#enm-wiz-b2-progress'),
+            bar:      this._body.querySelector('#enm-wiz-b2-bar'),
+            pct:      this._body.querySelector('#enm-wiz-b2-pct'),
+            detail:   this._body.querySelector('#enm-wiz-b2-detail'),
         };
 
-        // Tile click → handle the chosen path
-        els.tiles.querySelectorAll('.enm-b2-tile').forEach(function (btn) {
-            btn.addEventListener('click', function () {
-                var choice = btn.dataset.choice;
-                if (choice === 'bootstrap') {
-                    self._b2BeginBootstrap(els, /* alreadyStarted */ false);
-                } else {
-                    self._b2ChooseGenesis(els);
-                }
+        // Footer: Back to Card B, Continue disabled until a choice is made
+        // (or auto-fires when the bootstrap finishes).
+        this._cancelBtn.hidden = false;
+        this._cancelBtn.textContent = t('friendly.setup.back');
+        this._cancelBtn.addEventListener('click', function () {
+            if (self._destroyed) { return; }
+            self._teardownBootstrapTracking();
+            self._goto('b');
+        });
+        this._continueBtn.disabled = true;
+        this._continueBtn.textContent = t('friendly.setup.card_b2.cta_continue');
+
+        var pickedChoice = null;
+        els.tiles.querySelectorAll('.enm-role-card').forEach(function (card) {
+            card.addEventListener('click', function () {
+                if (self._destroyed || !self._stillRendering(seq)) { return; }
+                els.tiles.querySelectorAll('.enm-role-card').forEach(function (c) {
+                    c.removeAttribute('data-selected');
+                    c.setAttribute('aria-checked', 'false');
+                });
+                card.setAttribute('data-selected', 'true');
+                card.setAttribute('aria-checked', 'true');
+                pickedChoice = card.getAttribute('data-choice');
+                self._continueBtn.disabled = false;
             });
         });
 
-        // Render a Back link below the tiles for symmetry with other cards.
-        els.actions.appendChild(makeTextLink(t('friendly.setup.back'), function () {
-            self._goto('b');
-        }));
+        this._continueBtn.addEventListener('click', function () {
+            if (self._destroyed || !self._stillRendering(seq)) { return; }
+            if (!pickedChoice) { return; }
+            if (pickedChoice === 'genesis') {
+                self._b2ChooseGenesis(els, seq);
+            } else {
+                self._b2BeginBootstrap(els, seq, /* alreadyStarted */ false);
+            }
+        });
 
-        // Recovery: if a bootstrap is already running on the server, jump
-        // straight to the live-progress UI.
+        // Recovery: if a bootstrap is already running on the server,
+        // jump straight to the live-progress UI.
         this.api.get('/chains/mainchain/bootstrap', { skipCache: true }).then(function (data) {
-            if (!self._stillRendering(seq)) { return; }
+            if (self._destroyed || !self._stillRendering(seq)) { return; }
             var s = data && data.status;
             if (!s) { return; }
             if (s.phase === 'downloading' || s.phase === 'extracting'
                 || s.phase === 'applying'   || s.phase === 'verifying'
                 || s.phase === 'resolving') {
-                self._b2BeginBootstrap(els, /* alreadyStarted */ true);
+                self._b2BeginBootstrap(els, seq, /* alreadyStarted */ true);
             } else if (s.phase === 'done') {
-                self._b2OnBootstrapDone(els);
+                self._b2OnBootstrapDone(els, seq);
             }
-            // 'idle' / 'failed' both leave the choice tiles visible so the
-            // operator can decide what to do next.
-        }).catch(function () { /* tiles already rendered — nothing to do */ });
+            // 'idle' / 'failed' both leave the tiles visible.
+        }).catch(function () { /* tiles already rendered */ });
     };
 
     /** @private */
-    SetupConversation.prototype._b2ChooseGenesis = function (els) {
+    SetupConversation.prototype._b2ChooseGenesis = function (els, seq) {
         var t = root.enmT;
         var self = this;
-        // Disable both tiles while we hit the server.
-        els.tiles.querySelectorAll('.enm-b2-tile').forEach(function (b) { b.disabled = true; });
+        els.tiles.querySelectorAll('.enm-role-card').forEach(function (b) { b.disabled = true; });
         els.sub.textContent = t('friendly.setup.card_b2.advancing');
+        this._continueBtn.disabled = true;
         this.api.post('/setup/bootstrap', { choice: 'genesis' }).then(function () {
+            if (self._destroyed || !self._stillRendering(seq)) { return; }
             if (self.notifications && typeof self.notifications.info === 'function') {
-                self.notifications.info(t('friendly.setup.card_b2.genesis_picked_title'),
-                    t('friendly.setup.card_b2.genesis_picked_sub'));
+                self.notifications.info(
+                    t('friendly.setup.card_b2.genesis_picked_title'),
+                    t('friendly.setup.card_b2.genesis_picked_sub')
+                );
             }
             self._goto('b3');
         }).catch(function (err) {
-            els.tiles.querySelectorAll('.enm-b2-tile').forEach(function (b) { b.disabled = false; });
+            if (self._destroyed || !self._stillRendering(seq)) { return; }
+            els.tiles.querySelectorAll('.enm-role-card').forEach(function (b) { b.disabled = false; });
             els.sub.textContent = t('friendly.setup.card_b2.advance_failed',
                 { error: err && err.message ? err.message : String(err) });
+            self._continueBtn.disabled = false;
         });
     };
 
     /** @private */
-    SetupConversation.prototype._b2BeginBootstrap = function (els, alreadyStarted) {
+    SetupConversation.prototype._b2BeginBootstrap = function (els, seq, alreadyStarted) {
         var t = root.enmT;
         var self = this;
         els.tiles.hidden = true;
         els.title.textContent = t('friendly.setup.card_b2.title_running');
         els.sub.textContent   = t('friendly.setup.card_b2.sub_running');
         els.progress.hidden   = false;
-        els.actions.innerHTML = '';
-        // Allow the operator to abort while the download is in flight.
-        // Hidden once we enter the apply phase (can't safely cancel then).
-        var cancelBtn = makeTextLink(t('friendly.setup.card_b2.cancel'), function () {
-            cancelBtn.disabled = true;
+        // Footer: keep Cancel (now aborts the download) — hide Continue
+        // until bootstrap completes.
+        this._continueBtn.hidden = true;
+        this._continueBtn.disabled = true;
+        // Replace the existing Cancel handler with a bootstrap-abort.
+        var newCancel = this._cancelBtn.cloneNode(false);
+        newCancel.hidden = false;
+        newCancel.textContent = t('friendly.setup.card_b2.cancel');
+        this._cancelBtn.parentNode.replaceChild(newCancel, this._cancelBtn);
+        this._cancelBtn = newCancel;
+        this._cancelBtn.addEventListener('click', function () {
+            if (self._destroyed || !self._stillRendering(seq)) { return; }
+            self._cancelBtn.disabled = true;
             self.api.del('/chains/mainchain/bootstrap').catch(function () { /* ignore */ });
         });
-        els.actions.appendChild(cancelBtn);
 
-        // alpha.12 — clear any previous poll timer when (re)starting.
-        if (this._bootstrapPollTimer) { clearInterval(this._bootstrapPollTimer); this._bootstrapPollTimer = null; }
+        this._teardownBootstrapTracking();
         var done = false;
 
         function applyStatus(s) {
-            // alpha.28.1 batch 86 (Round-27 regression check) —
-            // centralised _destroyed guard. Batch 83 added the flag
-            // and guarded the bootstrap poll's .then but the audit
-            // found two other call sites (startPromise.then below,
-            // SSE callback) still routed through applyStatus without
-            // protection. Guarding here covers ALL three call paths
-            // in one place — the previous-shape failure mode was
-            // applyStatus mutating els (textContent / bar.style.width)
-            // after destroy() detached the DOM. SSE is implicitly safe
-            // (destroy unsubscribes) but startPromise.then has no
-            // equivalent cancel hook so the race window was real.
             if (!s || done || self._destroyed) { return; }
+            if (!self._stillRendering(seq)) { return; }
             var pct = (s.bytesTotal && s.bytesDownloaded)
                 ? Math.min(100, Math.floor((s.bytesDownloaded / s.bytesTotal) * 100))
                 : (s.phase === 'done' ? 100 : (s.phase === 'extracting' ? 95 : 5));
             els.bar.style.width = pct + '%';
-            els.status.textContent = bootstrapPhaseLabel(s);
-
-            // Once we're applying, hide the cancel link — it can't safely abort.
-            if (cancelBtn && (s.phase === 'applying' || s.phase === 'verifying')) {
-                cancelBtn.style.display = 'none';
+            els.pct.textContent = pct + '%';
+            els.sub.textContent = bootstrapPhaseLabel(s);
+            // Hide cancel during apply/verify — can't safely abort.
+            if (self._cancelBtn && (s.phase === 'applying' || s.phase === 'verifying')) {
+                self._cancelBtn.hidden = true;
             }
             if (s.phase === 'done') {
                 done = true;
-                if (self._bootstrapPollTimer) { clearInterval(self._bootstrapPollTimer); self._bootstrapPollTimer = null; }
-                self._b2OnBootstrapDone(els);
+                self._teardownBootstrapTracking();
+                self._b2OnBootstrapDone(els, seq);
             }
             if (s.phase === 'failed') {
                 done = true;
-                if (self._bootstrapPollTimer) { clearInterval(self._bootstrapPollTimer); self._bootstrapPollTimer = null; }
-                els.title.textContent = t('friendly.setup.card_b2.title_failed');
-                els.sub.textContent   = s.error || t('friendly.setup.card_b2.sub_failed');
-                els.actions.innerHTML = '';
-                els.actions.appendChild(
-                    makeBtn(t('friendly.setup.card_b2.cta_retry'), 'primary hero', function () {
-                        self._b2BeginBootstrap(els, false);
-                    })
-                );
-                els.actions.appendChild(makeTextLink(t('friendly.setup.card_b2.cta_fallback_genesis'), function () {
-                    self._b2ChooseGenesis(els);
-                }));
+                self._teardownBootstrapTracking();
+                self._b2OnBootstrapFailed(els, seq, s);
             }
         }
 
-        // alpha.12 — SSE delivers real-time progress when it's healthy, but
-        // a 2-second poll on GET /chains/.../bootstrap is the belt-and-
-        // suspenders that keeps the UI moving even if the EventSource is
-        // misconfigured or proxied through something that breaks SSE. The
-        // 10 GB download takes ~15 min, so a 2 s poll is negligible.
         if (this.sse && typeof this.sse.subscribe === 'function') {
-            if (this._unsubscribeBootstrap) { this._unsubscribeBootstrap(); }
             this._unsubscribeBootstrap = this.sse.subscribe(
                 'setup:bootstrap:mainchain',
-                function (payload) { applyStatus(payload); },
+                function (payload) { applyStatus(payload); }
             );
         }
         this._bootstrapPollTimer = setInterval(function () {
-            // batch 83 — short-circuit if the component was destroyed
-            // mid-poll. The `done` flag handles terminal phases; this
-            // covers the lifecycle teardown case where the operator
-            // navigated away or the app reinstalled mid-bootstrap.
             if (done || self._destroyed) { return; }
             self.api.get('/chains/mainchain/bootstrap', { skipCache: true }).then(function (data) {
                 if (self._destroyed) { return; }
                 applyStatus(data && data.status);
-            }).catch(function () { /* leave the existing display, the poll retries */ });
+            }).catch(function () { /* tick again on next interval */ });
         }, 2000);
 
-        // Kick off the actual download (or just re-attach to a running one).
         var startPromise = alreadyStarted
             ? this.api.get('/chains/mainchain/bootstrap', { skipCache: true })
                 .then(function (data) { return { status: data && data.status }; })
             : this.api.post('/chains/mainchain/bootstrap');
         startPromise.then(function (result) {
+            if (self._destroyed) { return; }
             applyStatus(result && result.status);
         }).catch(function (err) {
+            if (self._destroyed) { return; }
             applyStatus({ phase: 'failed', error: err && err.message ? err.message : String(err) });
         });
     };
 
     /** @private */
-    SetupConversation.prototype._b2OnBootstrapDone = function (els) {
+    SetupConversation.prototype._b2OnBootstrapDone = function (els, seq) {
         var t = root.enmT;
         var self = this;
-        if (this._unsubscribeBootstrap) { this._unsubscribeBootstrap(); this._unsubscribeBootstrap = null; }
         els.title.textContent = t('friendly.setup.card_b2.title_done');
         els.sub.textContent   = t('friendly.setup.card_b2.sub_done');
         els.bar.style.width   = '100%';
-        els.status.textContent = t('friendly.setup.card_b2.phase_done');
-        els.actions.innerHTML = '';
-        els.actions.appendChild(
-            makeBtn(t('friendly.setup.card_b2.cta_continue'), 'primary hero', function () {
-                self.api.post('/setup/bootstrap', { choice: 'bootstrap' }).then(function () {
-                    self._goto('b3');
-                }).catch(function () {
-                    // Even if the step-advance call fails, the bootstrap
-                    // itself completed — proceed to the clock-skew check.
-                    // The wizard resume code is permissive about missing
-                    // currentStep so it'll still land on the right card.
-                    self._goto('b3');
+        els.pct.textContent   = '100%';
+        // Restore Continue; reset cancel back to Back.
+        this._cancelBtn.hidden = false;
+        this._cancelBtn.textContent = t('friendly.setup.back');
+        this._continueBtn.hidden = false;
+        this._continueBtn.disabled = false;
+        this._continueBtn.textContent = t('friendly.setup.card_b2.cta_continue');
+        this._continueBtn.addEventListener('click', function onClick() {
+            if (self._destroyed || !self._stillRendering(seq)) { return; }
+            self._continueBtn.removeEventListener('click', onClick);
+            self.api.post('/setup/bootstrap', { choice: 'bootstrap' })
+                .then(function () { if (!self._destroyed) { self._goto('b3'); } })
+                .catch(function () {
+                    // Bootstrap is done on-disk even if step-advance fails;
+                    // the resume code is permissive about missing currentStep
+                    // so we still land on the right card.
+                    if (!self._destroyed) { self._goto('b3'); }
                 });
-            })
-        );
+        });
     };
 
-    /** @private — Card B3: host clock vs internet clock (F13).
-     *
+    /** @private */
+    SetupConversation.prototype._b2OnBootstrapFailed = function (els, seq, s) {
+        var t = root.enmT;
+        var self = this;
+        els.title.textContent = t('friendly.setup.card_b2.title_failed');
+        els.sub.textContent   = (s && s.error) || t('friendly.setup.card_b2.sub_failed');
+        // Cancel→Back, Continue→Retry.
+        this._cancelBtn.hidden = false;
+        this._cancelBtn.textContent = t('friendly.setup.card_b2.cta_fallback_genesis');
+        var newCancel = this._cancelBtn.cloneNode(false);
+        newCancel.hidden = false;
+        newCancel.textContent = t('friendly.setup.card_b2.cta_fallback_genesis');
+        this._cancelBtn.parentNode.replaceChild(newCancel, this._cancelBtn);
+        this._cancelBtn = newCancel;
+        this._cancelBtn.addEventListener('click', function () {
+            if (self._destroyed || !self._stillRendering(seq)) { return; }
+            self._b2ChooseGenesis(els, seq);
+        });
+        this._continueBtn.hidden = false;
+        this._continueBtn.disabled = false;
+        this._continueBtn.textContent = t('friendly.setup.card_b2.cta_retry');
+        this._continueBtn.addEventListener('click', function onRetry() {
+            if (self._destroyed || !self._stillRendering(seq)) { return; }
+            self._continueBtn.removeEventListener('click', onRetry);
+            self._b2BeginBootstrap(els, seq, false);
+        });
+    };
+
+    // ====================================================================
+    // Card B3 — clock-skew preflight (F13)
+    // ====================================================================
+
+    /**
      * ELA's Schnorr signatures get rejected silently when the host clock
-     * drifts >~4.2s from consensus partners — the operator scores a
-     * missed-vote penalty without ever seeing an error. The backend's
-     * /setup/preflight probes Google/Cloudflare for the wall-clock and
-     * compares against Date.now(); we surface that result here so the
-     * operator can fix NTP BEFORE registering as a BPoS supernode.
-     *
-     * Three outcomes:
-     *   ok && !skipped     → GREEN. Show ±Xms, allow continue.
-     *   skipped            → YELLOW. Network unreachable; warn but allow continue.
-     *   !ok && !skipped    → RED. Skew > 2s; show fix command, require retry.
-     *
-     * Failure-mode invariant: if the preflight HTTP call itself fails,
-     * we render the YELLOW (skipped) state so the operator can always
-     * proceed. The wizard MUST NEVER block on this card.
+     * drifts >~4.2s from consensus partners. We surface the preflight
+     * result so the operator can fix NTP BEFORE registering. Three
+     * outcomes (skipped / out-of-sync / in-sync); the wizard MUST NEVER
+     * deadlock on this card, so even a probe failure renders the
+     * skipped (YELLOW) path with a Continue button.
      */
     SetupConversation.prototype._renderCardB3 = function (seq) {
-        var I = root.EnmIllust;
+        var tt = root.enmTOrFallback;
+        var initialTitle = 'Checking host clock…';
+        this.root.setAttribute('aria-label', initialTitle);
         this._body.innerHTML =
-            '<div class="enm-install-illust">' + (I ? I.gear({ size: 96 }) : '') + '</div>'
-            + '<h2 class="enm-conv-title" id="enm-conv-b3-title">Checking host clock…</h2>'
-            + '<p class="enm-conv-sub"   id="enm-conv-b3-sub">Comparing your server clock to internet time. DPoS signatures fail if the host drifts more than ~4 seconds.</p>'
-            + '<div id="enm-conv-b3-detail" class="enm-clock-detail"></div>'
-            + '<div class="enm-conv-actions" id="enm-conv-b3-actions"></div>';
+            '<h2 class="enm-wiz-heading" id="enm-wiz-heading-b3">' + escapeHtml(initialTitle) + '</h2>'
+            + '<p class="enm-wiz-para" id="enm-wiz-b3-para">Comparing your server clock to internet time. DPoS signatures fail if the host drifts more than ~4 seconds.</p>'
+            + '<div id="enm-wiz-b3-detail" class="enm-install-detail enm-clock-detail" aria-live="polite"></div>';
 
         var self = this;
         var els = {
-            title:   this._body.querySelector('#enm-conv-b3-title'),
-            sub:     this._body.querySelector('#enm-conv-b3-sub'),
-            detail:  this._body.querySelector('#enm-conv-b3-detail'),
-            actions: this._body.querySelector('#enm-conv-b3-actions'),
+            title:  this._body.querySelector('#enm-wiz-heading-b3'),
+            sub:    this._body.querySelector('#enm-wiz-b3-para'),
+            detail: this._body.querySelector('#enm-wiz-b3-detail'),
         };
+
+        // Cancel = Back to B2; Continue is wired by the result handler.
+        this._cancelBtn.hidden = false;
+        this._cancelBtn.textContent = tt('friendly.setup.back');
+        this._cancelBtn.addEventListener('click', function () {
+            if (self._destroyed) { return; }
+            self._goto('b2');
+        });
 
         this._runClockSkewProbe(els, seq);
     };
@@ -646,24 +869,25 @@
     SetupConversation.prototype._runClockSkewProbe = function (els, seq) {
         var self = this;
         els.detail.innerHTML = '';
-        els.actions.innerHTML = '';
         els.title.textContent = 'Checking host clock…';
         els.sub.textContent   = 'Comparing your server clock to internet time. DPoS signatures fail if the host drifts more than ~4 seconds.';
+        // Disable Continue while probe is in flight.
+        this._continueBtn.disabled = true;
+        this._continueBtn.hidden = false;
+        this._continueBtn.textContent = 'Checking…';
 
         this.api.get('/setup/preflight', { skipCache: true }).then(function (resp) {
-            if (!self._stillRendering(seq)) { return; }
+            if (self._destroyed || !self._stillRendering(seq)) { return; }
             var cs = resp && resp.clockSkew;
-            // If the backend somehow omitted the field entirely (older
-            // server, schema drift), treat that as a SKIP — never block.
             if (!cs) {
                 cs = { ok: true, skipped: true, reason: 'no clockSkew in preflight response' };
             }
             self._renderClockSkewResult(els, seq, cs);
         }).catch(function (err) {
-            if (!self._stillRendering(seq)) { return; }
-            // Even the preflight call itself failed — render as a SKIP so
-            // the operator can continue. This is the absolute backstop:
-            // the wizard NEVER gets stuck on this card.
+            if (self._destroyed || !self._stillRendering(seq)) { return; }
+            // Even the probe call itself failed — render as a SKIP so
+            // the operator can always continue. The wizard NEVER gets
+            // stuck on this card.
             self._renderClockSkewResult(els, seq, {
                 ok: true,
                 skipped: true,
@@ -674,26 +898,16 @@
 
     /** @private */
     SetupConversation.prototype._renderClockSkewResult = function (els, seq, cs) {
-        var self = this;
-        // alpha.28.1 batch 84 — strings sourced from strings.js
-        // clock_skew.*. Three visual severities (skipped / out-of-sync
-        // / in-sync); placeholders carry runtime values like the
-        // skew direction, absolute milliseconds, and the time source.
-        // Closes the last hardcoded English block on the wizard path
-        // (Round-3 i18n coverage audit aef9c321 — final item).
         var tt = root.enmTOrFallback;
-        // Three branches by visual severity. The "continue" button is
-        // present in GREEN and YELLOW; only RED hides it (and requires
-        // the operator to fix NTP + retry).
+        var self = this;
+
         if (cs.skipped) {
-            // YELLOW: probe didn't reach the internet. Warn the operator
-            // but allow continue — many bare-metal setups intentionally
-            // firewall outbound HTTPS.
+            // YELLOW: probe didn't reach the internet. Warn but allow continue.
             els.title.textContent = tt('clock_skew.skipped_title');
             els.sub.textContent   = tt('clock_skew.skipped_sub');
             els.detail.innerHTML =
                 '<div class="enm-clock-card enm-clock-card-warn">'
-                  + '<div class="enm-clock-card-icon" aria-hidden="true">⚠</div>'
+                  + '<div class="enm-clock-card-icon" aria-hidden="true">!</div>'
                   + '<div class="enm-clock-card-body">'
                     + '<div class="enm-clock-card-title">' + escapeHtml(tt('clock_skew.skipped_card_title')) + '</div>'
                     + '<div class="enm-clock-card-sub">'
@@ -703,21 +917,18 @@
                     + '</div>'
                   + '</div>'
                 + '</div>';
-
-            els.actions.appendChild(
-                makeBtn(tt('clock_skew.skipped_cta_continue'), 'primary hero', function () { self._goto('c'); })
-            );
-            els.actions.appendChild(makeTextLink(tt('clock_skew.skipped_cta_retry'), function () {
-                self._runClockSkewProbe(els, seq);
-            }));
+            this._continueBtn.disabled = false;
+            this._continueBtn.textContent = tt('clock_skew.skipped_cta_continue');
+            this._continueBtn.addEventListener('click', function onContinue() {
+                if (self._destroyed || !self._stillRendering(seq)) { return; }
+                self._continueBtn.removeEventListener('click', onContinue);
+                self._goto('c');
+            });
             return;
         }
 
         if (!cs.ok) {
-            // RED: skew exceeds the safe window. The operator MUST fix
-            // this before going live — we don't offer a "continue anyway"
-            // path because a producer with wrong time scores missed-votes
-            // immediately on registration.
+            // RED: skew exceeds the safe window. Operator MUST fix this.
             var skewMs = Number.isFinite(cs.skewMs) ? cs.skewMs : 0;
             var skewSeconds = (Math.abs(skewMs) / 1000).toFixed(1);
             var direction = skewMs > 0
@@ -733,30 +944,32 @@
                   + '<div class="enm-clock-card-icon" aria-hidden="true">!</div>'
                   + '<div class="enm-clock-card-body">'
                     + '<div class="enm-clock-card-title">' + escapeHtml(tt('clock_skew.out_card_title')) + '</div>'
-                    + '<div class="enm-clock-card-sub">'
-                      + tt('clock_skew.out_card_body')
-                    + '</div>'
+                    + '<div class="enm-clock-card-sub">' + tt('clock_skew.out_card_body') + '</div>'
                   + '</div>'
                 + '</div>';
-
-            els.actions.appendChild(
-                makeBtn(tt('clock_skew.out_cta_retry'), 'primary hero', function (ev) {
-                    ev.target.disabled = true;
-                    self._runClockSkewProbe(els, seq);
-                })
-            );
-            // Escape hatch: operators in air-gapped or test environments
-            // can override. Marked clearly as risk-acknowledged so the
-            // intent is unambiguous in audit logs.
-            els.actions.appendChild(makeTextLink(tt('clock_skew.out_cta_override'), function () {
+            // Continue → Retry. Cancel keeps "Back". A second option
+            // (Continue anyway) lives inline in the detail card as a
+            // text link for the air-gapped/test environment escape.
+            els.detail.innerHTML += '<p class="enm-clock-override-row">'
+                + '<button type="button" class="enm-conv-textlink enm-clock-override-btn">'
+                  + escapeHtml(tt('clock_skew.out_cta_override'))
+                + '</button>'
+                + '</p>';
+            els.detail.querySelector('.enm-clock-override-btn').addEventListener('click', function () {
+                if (self._destroyed || !self._stillRendering(seq)) { return; }
                 self._goto('c');
-            }));
+            });
+            this._continueBtn.disabled = false;
+            this._continueBtn.textContent = tt('clock_skew.out_cta_retry');
+            this._continueBtn.addEventListener('click', function onRetry() {
+                if (self._destroyed || !self._stillRendering(seq)) { return; }
+                self._continueBtn.removeEventListener('click', onRetry);
+                self._runClockSkewProbe(els, seq);
+            });
             return;
         }
 
-        // GREEN: clock is in sync. Auto-advance is tempting, but per the
-        // spec we let the operator confirm — keeps every card in the
-        // wizard symmetric (info → ack → continue).
+        // GREEN: in sync. Show the absolute skew + continue.
         var absMs = Number.isFinite(cs.absSkewMs)
             ? cs.absSkewMs
             : Math.abs(Number.isFinite(cs.skewMs) ? cs.skewMs : 0);
@@ -764,7 +977,7 @@
         els.sub.textContent   = tt('clock_skew.ok_sub');
         els.detail.innerHTML =
             '<div class="enm-clock-card enm-clock-card-ok">'
-              + '<div class="enm-clock-card-icon" aria-hidden="true">✓</div>'
+              + '<div class="enm-clock-card-icon" aria-hidden="true">+</div>'
               + '<div class="enm-clock-card-body">'
                 + '<div class="enm-clock-card-title">' + escapeHtml(tt('clock_skew.ok_card_title', { absMs: String(absMs) })) + '</div>'
                 + '<div class="enm-clock-card-sub">'
@@ -774,144 +987,53 @@
                 + '</div>'
               + '</div>'
             + '</div>';
-
-        els.actions.appendChild(
-            makeBtn(tt('clock_skew.ok_cta_continue'), 'primary hero', function () { self._goto('c'); })
-        );
-        els.actions.appendChild(makeTextLink(tt('clock_skew.ok_cta_recheck'), function () {
-            self._runClockSkewProbe(els, seq);
-        }));
-    };
-
-    /** @private */
-    SetupConversation.prototype._beginInstall = function (els, alreadyStarted) {
-        var t = root.enmT;
-        var self = this;
-        els.title.textContent = t('friendly.setup.card_b.title_active');
-        els.sub.textContent   = t('friendly.setup.card_b.sub_active');
-        els.progress.hidden   = false;
-        els.actions.innerHTML = '';
-
-        // alpha.28.1 bug fix — the previous version had two real bugs the
-        // setup-wizard deep audit caught:
-        //   (B1) the fallback poll IIFE was unkillable. Its only stop
-        //        condition was `!self.root.isConnected`, which doesn't
-        //        fire when the operator clicks Back from Card B mid-
-        //        install. The poll kept running, calling applyStatus
-        //        on stale DOM, and on `phase==='done'` could yank the
-        //        operator forward into Card B's Done state even though
-        //        they had navigated to a different card.
-        //   (R1) Card B's applyStatus had no `done` guard like Card B2
-        //        does. SSE + poll both delivering `phase==='done'` ran
-        //        _renderCardBDone twice — second call wrote into a DOM
-        //        that the first had already replaced.
-        // Fixed by:
-        //   - latching `installComplete` in a closure so applyStatus
-        //     short-circuits after the first terminal phase observed
-        //   - storing the poll timer on `this._installPollTimer` so
-        //     destroy() and _goto() can clear it
-        //   - gating the poll on `_currentCard === 'b'` so navigation
-        //     away cancels future ticks even if a tick is mid-flight
-        var installComplete = false;
-
-        function applyStatus(s) {
-            if (!s) { return; }
-            if (installComplete) { return; }
-            var pct = (s.bytesTotal && s.bytesDownloaded)
-                ? Math.min(100, Math.floor((s.bytesDownloaded / s.bytesTotal) * 100))
-                : (s.phase === 'done' ? 100 : 0);
-            els.bar.style.width = pct + '%';
-            els.status.textContent = phaseLabel(s);
-            if (s.phase === 'done') {
-                installComplete = true;
-                self._teardownInstallTracking();
-                self._renderCardBDone(els);
-            }
-            if (s.phase === 'failed') {
-                installComplete = true;
-                self._teardownInstallTracking();
-                els.title.textContent = t('friendly.setup.card_b.phase_failed');
-                els.sub.textContent   = t('friendly.setup.card_b.failed_help');
-                els.actions.innerHTML = '';
-                els.actions.appendChild(
-                    makeBtn(t('friendly.setup.card_b.cta_retry'), 'primary hero', function (ev) {
-                        ev.target.disabled = true;
-                        self._beginInstall(els, false);
-                    })
-                );
-            }
-        }
-
-        // Subscribe to SSE for live updates if we have the channel.
-        if (this.sse && typeof this.sse.subscribe === 'function') {
-            if (this._unsubscribeInstall) { this._unsubscribeInstall(); }
-            this._unsubscribeInstall = this.sse.subscribe(
-                'setup:install:mainchain',
-                function (p) { applyStatus(p); }
-            );
-        }
-
-        var startReq = alreadyStarted
-            ? Promise.resolve(null)
-            : this.api.post('/setup/install/mainchain');
-
-        startReq.then(function (resp) {
-            applyStatus(resp && resp.status);
-            // Fallback poll in case SSE drops. Bound to `this._currentCard
-            // === 'b'` AND `installComplete === false` so navigation away
-            // and terminal phases both kill the loop. Timer handle is
-            // stored on `this` so destroy() / _teardownInstallTracking
-            // can cancel a pending tick.
-            (function poll() {
-                if (installComplete) { return; }
-                if (self._currentCard !== 'b') { return; }
-                if (!self.root.isConnected) { return; }
-                self.api.get('/setup/install-status/mainchain', { skipCache: true })
-                    .then(function (s) {
-                        applyStatus(s);
-                        if (!installComplete && self._currentCard === 'b'
-                            && (!s || (s.phase !== 'done' && s.phase !== 'failed'))) {
-                            self._installPollTimer = setTimeout(poll, 2500);
-                        }
-                    })
-                    .catch(function () {
-                        if (!installComplete && self._currentCard === 'b') {
-                            self._installPollTimer = setTimeout(poll, 4000);
-                        }
-                    });
-            })();
-        }).catch(function (err) {
-            applyStatus({ phase: 'failed', error: err && err.message ? err.message : String(err) });
+        this._continueBtn.disabled = false;
+        this._continueBtn.textContent = tt('clock_skew.ok_cta_continue');
+        this._continueBtn.addEventListener('click', function onContinue() {
+            if (self._destroyed || !self._stillRendering(seq)) { return; }
+            self._continueBtn.removeEventListener('click', onContinue);
+            self._goto('c');
         });
     };
 
-    /** @private — Card C: keystore password (always required for BPoS) */
+    // ====================================================================
+    // Card C — keystore password reveal
+    // ====================================================================
+
+    /** @private */
     SetupConversation.prototype._renderCardC = function (seq) {
         var t = root.enmT;
+        var heading = t('friendly.setup.card_c.title_initial');
+        this.root.setAttribute('aria-label', heading);
         this._body.innerHTML =
-            '<h2 class="enm-conv-title" id="enm-conv-c-title">' + escapeHtml(t('friendly.setup.card_c.title_initial')) + '</h2>'
-            + '<p class="enm-conv-sub"  id="enm-conv-c-sub">'  + escapeHtml(t('friendly.setup.card_c.sub_initial'))  + '</p>'
-            + '<div id="enm-conv-c-reveal"></div>'
-            + '<div class="enm-conv-actions" id="enm-conv-c-actions"></div>';
+            '<h2 class="enm-wiz-heading" id="enm-wiz-heading-c">' + escapeHtml(heading) + '</h2>'
+            + '<p class="enm-wiz-para" id="enm-wiz-c-para">' + escapeHtml(t('friendly.setup.card_c.sub_initial')) + '</p>'
+            + '<div id="enm-wiz-c-reveal"></div>';
 
         var self = this;
         var els = {
-            title:   this._body.querySelector('#enm-conv-c-title'),
-            sub:     this._body.querySelector('#enm-conv-c-sub'),
-            reveal:  this._body.querySelector('#enm-conv-c-reveal'),
-            actions: this._body.querySelector('#enm-conv-c-actions'),
+            title:   this._body.querySelector('#enm-wiz-heading-c'),
+            sub:     this._body.querySelector('#enm-wiz-c-para'),
+            reveal:  this._body.querySelector('#enm-wiz-c-reveal'),
         };
 
-        els.actions.appendChild(
-            makeBtn(t('friendly.setup.card_c.cta_generate'), 'primary hero', function (ev) {
-                if (!self._stillRendering(seq)) { return; }
-                ev.target.disabled = true;
-                self._generateKeystore(els, seq);
-            })
-        );
-        els.actions.appendChild(makeTextLink(t('friendly.setup.back'), function () {
-            self._goto('b');
-        }));
+        // Cancel = Back to B3. Continue starts as "Generate my password"
+        // and swaps to "Continue" once the reveal is acknowledged.
+        this._cancelBtn.hidden = false;
+        this._cancelBtn.textContent = t('friendly.setup.back');
+        this._cancelBtn.addEventListener('click', function () {
+            if (self._destroyed) { return; }
+            self._goto('b3');
+        });
+        this._continueBtn.disabled = false;
+        this._continueBtn.textContent = t('friendly.setup.card_c.cta_generate');
+        this._continueBtn.addEventListener('click', function onGenerate() {
+            if (self._destroyed || !self._stillRendering(seq)) { return; }
+            self._continueBtn.removeEventListener('click', onGenerate);
+            self._continueBtn.disabled = true;
+            self._continueBtn.textContent = 'Generating…';
+            self._generateKeystore(els, seq);
+        });
     };
 
     /** @private */
@@ -920,111 +1042,133 @@
         var self = this;
         // BPoS path → server generates a strong password.
         this.api.post('/setup/keystore', { enableArbiter: true }).then(function (resp) {
-            if (!self._stillRendering(seq)) { return; }
-            self._renderKeystoreReveal(els, resp.generatedPassword || '');
+            if (self._destroyed || !self._stillRendering(seq)) { return; }
+            self._renderKeystoreReveal(els, seq, resp.generatedPassword || '');
         }).catch(function (err) {
+            if (self._destroyed || !self._stillRendering(seq)) { return; }
             self._notify(t('friendly.error.generic'),
                 err && err.message ? err.message : String(err), 'warning');
-            // Re-enable the generate button.
-            els.actions.innerHTML = '';
-            els.actions.appendChild(
-                makeBtn(t('friendly.setup.card_c.cta_generate'), 'primary hero', function (ev) {
-                    ev.target.disabled = true;
-                    self._generateKeystore(els, seq);
-                })
-            );
+            // Reset Continue back to generate.
+            self._continueBtn.disabled = false;
+            self._continueBtn.textContent = t('friendly.setup.card_c.cta_generate');
+            self._continueBtn.addEventListener('click', function onRetry() {
+                if (self._destroyed || !self._stillRendering(seq)) { return; }
+                self._continueBtn.removeEventListener('click', onRetry);
+                self._continueBtn.disabled = true;
+                self._continueBtn.textContent = 'Generating…';
+                self._generateKeystore(els, seq);
+            });
         });
     };
 
     /** @private */
-    SetupConversation.prototype._renderKeystoreReveal = function (els, password) {
+    SetupConversation.prototype._renderKeystoreReveal = function (els, seq, password) {
         var t = root.enmT;
         var self = this;
         els.title.textContent = t('friendly.setup.card_c.title_generated');
         els.sub.textContent   = t('friendly.setup.card_c.sub_generated');
-        // alpha.29 batch 100 — keystore-password copy button now built
-        // via root.enmCopyButton factory. Slot replaced post-mount.
-        // Replaces 30+ lines of hand-wired onFallback + selectInto +
-        // warning-toast plumbing from batches 58/88 with a single
-        // factory call.
         els.reveal.innerHTML =
             '<div class="enm-password-reveal">'
               + '<code class="enm-password-value">' + escapeHtml(password) + '</code>'
               + '<span class="enm-password-copy-slot"></span>'
             + '</div>'
             + '<label class="enm-conv-checkbox">'
-              + '<input type="checkbox" id="enm-conv-c-ack"/>'
+              + '<input type="checkbox" id="enm-wiz-c-ack"/>'
               + '<span>' + escapeHtml(t('friendly.setup.card_c.ack')) + '</span>'
             + '</label>';
 
+        // alpha.29 batch 100 — keystore-password copy button via the
+        // root.enmCopyButton factory. Replaces 30+ lines of hand-wired
+        // onFallback + selectInto + warning-toast plumbing.
         var pwEl = els.reveal.querySelector('.enm-password-value');
-        var copyBtn = root.enmCopyButton({
-            value: password,
-            label: t('friendly.setup.card_c.cta_copy'),
-            copiedLabel: t('friendly.setup.card_c.cta_copied'),
-            ariaLabel: 'Copy keystore password',
-            resetMs: 1500,
-            notifications: self.notifications,
-            failTitle: t('friendly.setup.card_c.copy_fail_title'),
-            failBody: t('friendly.setup.card_c.copy_fail_body'),
-            getDisplayEl: function () { return pwEl; },
-        });
-        copyBtn.classList.add('enm-password-copy');
-        var copySlot = els.reveal.querySelector('.enm-password-copy-slot');
-        if (copySlot && copySlot.parentNode) {
-            copySlot.parentNode.replaceChild(copyBtn, copySlot);
+        if (typeof root.enmCopyButton === 'function') {
+            var copyBtn = root.enmCopyButton({
+                value: password,
+                label: t('friendly.setup.card_c.cta_copy'),
+                copiedLabel: t('friendly.setup.card_c.cta_copied'),
+                ariaLabel: 'Copy keystore password',
+                resetMs: 1500,
+                notifications: self.notifications,
+                failTitle: t('friendly.setup.card_c.copy_fail_title'),
+                failBody: t('friendly.setup.card_c.copy_fail_body'),
+                getDisplayEl: function () { return pwEl; },
+            });
+            copyBtn.classList.add('enm-password-copy');
+            var slot = els.reveal.querySelector('.enm-password-copy-slot');
+            if (slot && slot.parentNode) {
+                slot.parentNode.replaceChild(copyBtn, slot);
+            }
         }
 
-        els.actions.innerHTML = '';
-        var continueBtn = makeBtn(t('friendly.setup.card_c.cta_continue'), 'primary hero', function () {
+        // Continue gated on the ack checkbox.
+        this._continueBtn.disabled = true;
+        this._continueBtn.textContent = t('friendly.setup.card_c.cta_continue');
+        this._continueBtn.addEventListener('click', function onContinue() {
+            if (self._destroyed || !self._stillRendering(seq)) { return; }
+            self._continueBtn.removeEventListener('click', onContinue);
             self._goto('d');
         });
-        continueBtn.disabled = true;
-        els.actions.appendChild(continueBtn);
-
-        var ack = els.reveal.querySelector('#enm-conv-c-ack');
+        var ack = els.reveal.querySelector('#enm-wiz-c-ack');
         ack.addEventListener('change', function () {
-            continueBtn.disabled = !ack.checked;
+            self._continueBtn.disabled = !ack.checked;
         });
     };
 
-    /** @private — Card D: finalize + start + celebrate */
+    // ====================================================================
+    // Card D — finalize + start chain + celebrate
+    // ====================================================================
+
+    /** @private */
     SetupConversation.prototype._renderCardD = function (seq) {
         var t = root.enmT;
-        var I = root.EnmIllust;
+        var heading = t('friendly.setup.card_d.title_starting');
+        this.root.setAttribute('aria-label', heading);
         this._body.innerHTML =
-            '<div class="enm-celebration-illust">' + (I ? I.celebration({ size: 120 }) : '') + '</div>'
-            + '<h2 class="enm-conv-title" id="enm-conv-d-title">' + escapeHtml(t('friendly.setup.card_d.title_starting')) + '</h2>'
-            + '<p class="enm-conv-sub"   id="enm-conv-d-sub">'   + escapeHtml(t('friendly.setup.card_d.sub_starting'))   + '</p>'
-            + '<div class="enm-conv-actions" id="enm-conv-d-actions"></div>';
+            '<h2 class="enm-wiz-heading" id="enm-wiz-heading-d">' + escapeHtml(heading) + '</h2>'
+            + '<p class="enm-wiz-para" id="enm-wiz-d-para">' + escapeHtml(t('friendly.setup.card_d.sub_starting')) + '</p>'
+            + '<div class="enm-install-progress" role="status" aria-live="polite">'
+              + '<div class="enm-install-bar" aria-hidden="true">'
+                + '<div class="enm-install-bar-fill" style="width:90%"></div>'
+              + '</div>'
+              + '<div class="enm-install-bar-label">Almost there…</div>'
+            + '</div>'
+            + '<div class="enm-install-detail" id="enm-wiz-d-detail"></div>';
 
         var self = this;
         var els = {
-            title:   this._body.querySelector('#enm-conv-d-title'),
-            sub:     this._body.querySelector('#enm-conv-d-sub'),
-            actions: this._body.querySelector('#enm-conv-d-actions'),
+            title:  this._body.querySelector('#enm-wiz-heading-d'),
+            sub:    this._body.querySelector('#enm-wiz-d-para'),
+            detail: this._body.querySelector('#enm-wiz-d-detail'),
         };
 
-        // Finalize: set network to auto-detect, mark complete, then attempt
-        // to start the chain. Three outcomes — handle each distinctly:
+        // Hide cancel; Continue starts disabled until finalize completes.
+        this._cancelBtn.hidden = true;
+        this._continueBtn.hidden = false;
+        this._continueBtn.disabled = true;
+        this._continueBtn.textContent = 'Finishing up…';
+
+        // Finalize: set network to auto-detect, mark complete, then try
+        // to start the chain.
         //   1. setup steps fail → show error + retry
         //   2. setup OK, start OK → celebrate + open dashboard
-        //   3. setup OK, start FAILED → celebrate (config is saved) BUT
-        //      surface the start error and let the operator move on to
-        //      dashboard manually. Previously the start error was swallowed
-        //      silently — the operator saw "Done!" while ela was dead, and
-        //      only learned the truth from the dashboard's stopped badge.
+        //   3. setup OK, start FAILED → celebrate (config saved) BUT
+        //      surface the start error and let the operator move on.
+        //      Previously the start error was swallowed silently — the
+        //      operator saw "Done!" while ela was dead.
         var startError = null;
         this.api.post('/setup/network', { mode: 'auto' })
-            .then(function () { return self.api.post('/setup/complete', {}); })
             .then(function () {
+                if (self._destroyed) { return null; }
+                return self.api.post('/setup/complete', {});
+            })
+            .then(function () {
+                if (self._destroyed) { return null; }
                 return self.api.post('/chains/mainchain/start').catch(function (err) {
-                    // Record but don't reject — setup itself succeeded.
                     startError = err;
                 });
             })
             .then(function () {
-                if (!self._stillRendering(seq)) { return; }
+                if (self._destroyed || !self._stillRendering(seq)) { return; }
                 els.title.textContent = t('friendly.setup.card_d.title_done');
                 if (startError) {
                     var detail = startError && startError.message ? startError.message : String(startError);
@@ -1032,35 +1176,42 @@
                         escapeHtml(t('friendly.setup.card_d.sub_done')) +
                         '<br><br><strong>Heads up:</strong> the chain didn\'t start ' +
                         'on its own — <em>' + escapeHtml(detail) + '</em>. Open the ' +
-                        'dashboard and press <strong>Start</strong> on the Mainchain ' +
-                        'card; the Logs sub-tab will show why if it refuses again.';
+                        'dashboard and press <strong>Start</strong> on the Mainchain card.';
                     if (self.notifications) {
                         self.notifications.warning('Setup saved, chain not started', detail);
                     }
                 } else {
                     els.sub.textContent = t('friendly.setup.card_d.sub_done');
                 }
-                els.actions.appendChild(
-                    makeBtn(t('friendly.setup.card_d.cta'), 'primary hero', function () {
-                        self.onComplete();
-                    })
-                );
+                self._continueBtn.disabled = false;
+                self._continueBtn.textContent = t('friendly.setup.card_d.cta');
+                self._continueBtn.addEventListener('click', function onDone() {
+                    if (self._destroyed || !self._stillRendering(seq)) { return; }
+                    self._continueBtn.removeEventListener('click', onDone);
+                    self.onComplete();
+                });
             })
             .catch(function (err) {
-                if (!self._stillRendering(seq)) { return; }
+                if (self._destroyed || !self._stillRendering(seq)) { return; }
                 els.title.textContent = t('friendly.error.generic');
                 els.sub.textContent   = err && err.message ? err.message : String(err);
-                els.actions.appendChild(
-                    makeBtn(t('friendly.setup.card_b.cta_retry'), 'primary hero', function () {
-                        self._goto('d');
-                    })
-                );
+                self._continueBtn.disabled = false;
+                self._continueBtn.textContent = t('friendly.setup.card_b.cta_retry');
+                self._continueBtn.addEventListener('click', function onRetry() {
+                    if (self._destroyed || !self._stillRendering(seq)) { return; }
+                    self._continueBtn.removeEventListener('click', onRetry);
+                    self._renderCardD(self._cardSeq);
+                });
             });
     };
 
+    // ====================================================================
+    // Helpers
+    // ====================================================================
+
     /** @private */
     SetupConversation.prototype._stillRendering = function (seq) {
-        return this.root.isConnected && this._cardSeq === seq;
+        return !this._destroyed && this.root.isConnected && this._cardSeq === seq;
     };
 
     /** @private */
@@ -1077,17 +1228,12 @@
         if (!s) { return t('friendly.setup.card_b.phase_preparing'); }
         var key = 'friendly.setup.card_b.phase_' + s.phase;
         var label = t(key);
-        // If the i18n lookup returned the bracketed key, fall back.
         if (label.indexOf('[') === 0) {
             return s.phase || t('friendly.setup.card_b.phase_preparing');
         }
         return label;
     }
 
-    /**
-     * Bootstrap phase label with optional MB/MB progress decoration.
-     * The phase keys live under friendly.setup.card_b2.phase_*.
-     */
     function bootstrapPhaseLabel(s) {
         var t = root.enmT;
         if (!s) { return t('friendly.setup.card_b2.phase_preparing'); }
@@ -1096,38 +1242,12 @@
         if (label.indexOf('[') === 0) {
             label = s.phase || t('friendly.setup.card_b2.phase_preparing');
         }
-        // Append "X.X / Y.Y GB" while downloading so the operator can see
-        // a moving number even when the bar % barely budges on a 10 GB file.
         if (s.phase === 'downloading' && s.bytesTotal) {
             var got = (s.bytesDownloaded / (1024 ** 3)).toFixed(2);
             var tot = (s.bytesTotal / (1024 ** 3)).toFixed(2);
             label += ' — ' + got + ' / ' + tot + ' GB';
         }
         return label;
-    }
-
-    function makeBtn(label, variant, onClick) {
-        var b = document.createElement('button');
-        b.type = 'button';
-        var classes = ['enm-btn'];
-        if (variant && variant.indexOf('primary') !== -1) { classes.push('enm-btn-primary'); }
-        if (variant && variant.indexOf('hero') !== -1)    { classes.push('enm-btn-hero'); }
-        if (!variant || (variant.indexOf('primary') === -1 && variant.indexOf('hero') === -1)) {
-            classes.push('enm-btn-secondary');
-        }
-        b.className = classes.join(' ');
-        b.textContent = label;
-        b.addEventListener('click', onClick);
-        return b;
-    }
-
-    function makeTextLink(label, onClick) {
-        var b = document.createElement('button');
-        b.type = 'button';
-        b.className = 'enm-conv-textlink';
-        b.textContent = label;
-        b.addEventListener('click', onClick);
-        return b;
     }
 
     function escapeHtml(s) {
