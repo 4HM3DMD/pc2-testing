@@ -36,6 +36,9 @@
     --bg-surface:   #11141a;
     --bg-elevated:  #1a1e26;
     --bg-overlay:   #232833;
+    /* --bg-input — form input background. Slightly darker than surface
+       so inputs read as "press here" wells against the section-card. */
+    --bg-input:     #0f1218;
     /* The mocks disagree on bg-tint: phase-01 has blue (rgba(0,119,255)),
        phase-02 has cyan (rgba(0,212,255)). Cyan matches --accent and
        reads as a "selected accent" tint. Going with cyan. */
@@ -1198,4 +1201,580 @@ body[data-app-size="compact"] .enm-sys-cell,
 body[data-app-size="compact"] .enm-sys-cell:last-child,
 .enm-app[data-app-size="compact"] .enm-sys-cell:last-child {
     border-bottom: none;
+}
+
+/* ====================================================================
+ * BP-B — Settings pane
+ * Reference: enm-design-mocks/v2/phase-04-settings.html
+ * Components: settings-wrap > settings-nav | settings-content > section-cards
+ *             with .form-row primitives (.seg / .toggle / .input / .secret-
+ *             field / .chip-input / .select-wrap)
+ * ==================================================================== */
+
+/* ---- Layout shell ---------------------------------------------- */
+.enm-settings-wrap {
+    display: grid;
+    grid-template-columns: 200px 1fr;
+    gap: var(--sp-5);
+    align-items: start;
+}
+
+/* Sticky nav rail (wide only) */
+.enm-settings-nav {
+    display: grid;
+    gap: 2px;
+    align-content: start;
+    position: sticky;
+    top: 0;
+}
+.enm-settings-nav-head {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-tertiary);
+    font-weight: var(--fw-semibold);
+    padding: var(--sp-2) var(--sp-3);
+}
+.enm-settings-nav-item {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    padding: 8px var(--sp-3);
+    border-radius: var(--r-sm);
+    color: var(--text-secondary);
+    font-size: var(--fs-body);
+    font-family: inherit;
+    cursor: pointer;
+    transition: background var(--motion-fast) var(--ease-out),
+                color      var(--motion-fast) var(--ease-out),
+                border-color var(--motion-fast) var(--ease-out);
+    border: 1px solid transparent;
+    background: transparent;
+    text-align: left;
+    width: 100%;
+}
+.enm-settings-nav-item:hover {
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+}
+.enm-settings-nav-item.active {
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-weight: var(--fw-semibold);
+    border-color: var(--accent-soft);
+}
+.enm-settings-nav-item:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+}
+.enm-settings-nav-glyph {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+    font-size: 12px;
+    line-height: 14px;
+    opacity: 0.85;
+    text-align: center;
+}
+
+/* Pills (narrow/compact alternative) */
+.enm-settings-pills {
+    display: none;   /* wide hides pills; narrow/compact override below */
+    gap: var(--sp-1);
+    overflow-x: auto;
+    scrollbar-width: none;
+    padding-bottom: var(--sp-3);
+    border-bottom: 1px solid var(--border-subtle);
+}
+.enm-settings-pills::-webkit-scrollbar { display: none; }
+.enm-settings-pill {
+    padding: 6px var(--sp-3);
+    border-radius: var(--r-pill);
+    font-size: var(--fs-caption);
+    color: var(--text-secondary);
+    white-space: nowrap;
+    cursor: pointer;
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-surface);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+    font-family: inherit;
+}
+.enm-settings-pill.active {
+    background: var(--accent-soft);
+    border-color: var(--accent-soft);
+    color: var(--accent);
+    font-weight: var(--fw-semibold);
+}
+.enm-settings-pill:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+}
+
+/* Content host */
+.enm-settings-content {
+    display: grid;
+    gap: var(--sp-4);
+    min-width: 0;
+}
+
+/* ---- Section card ---------------------------------------------- */
+.enm-section-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-lg);
+    overflow: hidden;
+}
+.enm-section-card[hidden] { display: none; }
+
+.enm-section-card-head {
+    padding: var(--sp-4) var(--sp-5);
+    border-bottom: 1px solid var(--border-subtle);
+    display: flex;
+    align-items: flex-start;
+    gap: var(--sp-3);
+}
+.enm-section-card-icon {
+    width: 32px;
+    height: 32px;
+    border-radius: var(--r-sm);
+    background: var(--bg-elevated);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--accent);
+    font-size: 14px;
+    flex-shrink: 0;
+}
+.enm-section-card-headbody {
+    flex: 1;
+    min-width: 0;
+}
+.enm-section-card-title {
+    font-size: var(--fs-h2);
+    font-weight: var(--fw-semibold);
+    color: var(--text-primary);
+}
+.enm-section-card-help {
+    font-size: var(--fs-caption);
+    color: var(--text-secondary);
+    margin-top: 2px;
+    line-height: 1.5;
+}
+.enm-section-card-help code {
+    font-family: var(--font-mono);
+    background: var(--bg-elevated);
+    padding: 1px 4px;
+    border-radius: 2px;
+    font-size: 10px;
+    color: var(--accent);
+}
+.enm-section-card-tag {
+    padding: 2px 8px;
+    border-radius: var(--r-xs);
+    font-size: 10px;
+    font-weight: var(--fw-semibold);
+    white-space: nowrap;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    align-self: flex-start;
+    margin-top: 4px;
+}
+.enm-section-card-tag.muted   { background: var(--bg-elevated);   color: var(--text-tertiary); }
+.enm-section-card-tag.warn    { background: var(--warning-bg);    color: var(--warning); }
+.enm-section-card-tag.success { background: var(--success-bg);    color: var(--success); }
+
+.enm-section-card-body {
+    padding: var(--sp-2) var(--sp-5);
+}
+
+.enm-section-card-foot {
+    padding: var(--sp-4) var(--sp-5);
+    border-top: 1px solid var(--border-subtle);
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+}
+.enm-section-card-foot-status {
+    flex: 1;
+    font-size: var(--fs-caption);
+    color: var(--text-tertiary);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.enm-section-card-foot-status.success { color: var(--success); }
+.enm-section-card-foot-status.error   { color: var(--error); }
+.enm-section-card-foot-status.warn    { color: var(--warning); }
+
+/* ---- Form row + primitives ------------------------------------ */
+.enm-form-row {
+    display: grid;
+    grid-template-columns: 230px 1fr;
+    gap: var(--sp-5);
+    padding: var(--sp-4) 0;
+    border-bottom: 1px solid var(--border-subtle);
+    align-items: start;
+}
+.enm-form-row:last-child { border-bottom: none; }
+.enm-form-row[data-disabled="true"] {
+    opacity: 0.45;
+    pointer-events: none;
+}
+.enm-form-label-block { padding-top: 6px; }
+.enm-form-label {
+    font-size: var(--fs-body);
+    font-weight: var(--fw-medium);
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.enm-form-label-help {
+    font-size: var(--fs-caption);
+    color: var(--text-tertiary);
+    font-weight: normal;
+    margin-top: 4px;
+    line-height: 1.5;
+}
+.enm-form-label-help code {
+    font-family: var(--font-mono);
+    background: var(--bg-elevated);
+    padding: 1px 4px;
+    border-radius: 2px;
+    font-size: 10px;
+    color: var(--accent);
+}
+.enm-form-control {
+    display: grid;
+    gap: var(--sp-2);
+    min-width: 0;
+}
+.enm-form-control-help {
+    font-size: var(--fs-caption);
+    color: var(--text-tertiary);
+    line-height: 1.5;
+}
+.enm-form-inline {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    flex-wrap: wrap;
+}
+.enm-detect-result {
+    font-family: var(--font-mono);
+    font-size: var(--fs-caption);
+    color: var(--text-secondary);
+}
+.enm-detect-result.ok { color: var(--success); }
+.enm-detect-result.err { color: var(--error); }
+
+/* ---- .enm-input ------------------------------------------------ */
+.enm-input {
+    width: 100%;
+    padding: 8px 10px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: var(--fs-body);
+    transition: border-color var(--motion-fast) var(--ease-out),
+                box-shadow   var(--motion-fast) var(--ease-out);
+}
+.enm-input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.enm-input::placeholder {
+    color: var(--text-tertiary);
+    font-style: italic;
+}
+.enm-input[aria-invalid="true"] {
+    border-color: var(--error);
+}
+.enm-input.mono,
+.enm-input[data-mono] {
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono);
+}
+
+.enm-input-wrap {
+    position: relative;
+}
+.enm-input-wrap .enm-input { padding-right: 56px; }
+.enm-input-suffix {
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: var(--fs-caption);
+    color: var(--text-tertiary);
+    pointer-events: none;
+}
+
+/* ---- .enm-select-wrap ------------------------------------------ */
+.enm-select-wrap { position: relative; }
+.enm-select {
+    width: 100%;
+    padding: 8px 28px 8px 10px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: var(--fs-body);
+    appearance: none;
+    -webkit-appearance: none;
+    cursor: pointer;
+}
+.enm-select:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.enm-select-chev {
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    pointer-events: none;
+    color: var(--text-tertiary);
+    font-size: 10px;
+}
+
+/* ---- .enm-seg (segmented control) ----------------------------- */
+.enm-seg {
+    display: inline-flex;
+    padding: 2px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    gap: 2px;
+}
+.enm-seg-opt {
+    padding: 6px 14px;
+    font-size: var(--fs-caption);
+    font-weight: var(--fw-medium);
+    color: var(--text-secondary);
+    border-radius: 4px;
+    cursor: pointer;
+    white-space: nowrap;
+    background: transparent;
+    border: none;
+    font-family: inherit;
+    transition: background var(--motion-fast) var(--ease-out),
+                color      var(--motion-fast) var(--ease-out);
+}
+.enm-seg-opt.active {
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-weight: var(--fw-semibold);
+}
+.enm-seg-opt:not(.active):hover {
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+}
+.enm-seg-opt:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+}
+
+/* ---- .enm-toggle (switch) ------------------------------------- */
+.enm-toggle {
+    position: relative;
+    display: inline-block;
+    width: 36px;
+    height: 20px;
+    flex-shrink: 0;
+    cursor: pointer;
+    background: transparent;
+    border: none;
+    padding: 0;
+}
+.enm-toggle-track {
+    position: absolute;
+    inset: 0;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--r-pill);
+    transition: background var(--motion-fast) var(--ease-out),
+                border-color var(--motion-fast) var(--ease-out);
+}
+.enm-toggle-thumb {
+    position: absolute;
+    left: 2px;
+    top: 2px;
+    width: 14px;
+    height: 14px;
+    background: var(--text-secondary);
+    border-radius: 50%;
+    transition: left var(--motion-fast) var(--ease-out),
+                background var(--motion-fast) var(--ease-out);
+}
+.enm-toggle[data-on="true"] .enm-toggle-track {
+    background: var(--accent);
+    border-color: var(--accent);
+}
+.enm-toggle[data-on="true"] .enm-toggle-thumb {
+    left: 18px;
+    background: var(--text-inverse);
+}
+.enm-toggle:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+}
+
+.enm-toggle-row {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+}
+.enm-toggle-row-text {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+}
+.enm-toggle-row-text-title {
+    font-size: var(--fs-body);
+    color: var(--text-primary);
+    font-weight: var(--fw-medium);
+}
+.enm-toggle-row-text-sub {
+    font-size: var(--fs-caption);
+    color: var(--text-tertiary);
+}
+
+/* ---- .enm-secret-field ---------------------------------------- */
+.enm-secret-field {
+    display: flex;
+    gap: 4px;
+}
+.enm-secret-field .enm-input {
+    flex: 1;
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono);
+}
+.enm-btn-icon {
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    min-height: 0;
+}
+
+/* ---- .enm-chip-input (Beta 3 rebuild) -------------------------- */
+.enm-chip-input {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 6px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    min-height: 38px;
+    align-items: center;
+}
+.enm-chip-input:focus-within {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.enm-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 4px 3px 8px;
+    background: var(--bg-overlay);
+    border: 1px solid var(--border);
+    border-radius: var(--r-pill);
+    font-size: var(--fs-caption);
+    font-family: var(--font-mono);
+    color: var(--text-primary);
+}
+.enm-chip[data-locked="true"] {
+    background: var(--bg-tint);
+    color: var(--accent);
+    border-color: rgba(0, 212, 255, 0.2);
+    padding-right: 8px;
+}
+.enm-chip-lock {
+    font-size: 9px;
+    opacity: 0.85;
+}
+.enm-chip-remove {
+    cursor: pointer;
+    color: var(--text-tertiary);
+    padding: 0 4px 0 2px;
+    font-size: 12px;
+    line-height: 1;
+    background: transparent;
+    border: none;
+    font-family: inherit;
+    /* alpha.28.1 batch 30: 24×24 touch target for WCAG 2.5.5 */
+    min-width: 24px;
+    min-height: 24px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+.enm-chip-remove:hover { color: var(--error); }
+.enm-chip[data-locked="true"] .enm-chip-remove { display: none; }
+.enm-chip-input-input {
+    flex: 1;
+    min-width: 110px;
+    padding: 4px 6px;
+    background: transparent;
+    border: none;
+    color: var(--text-primary);
+    outline: none;
+    font-size: var(--fs-caption);
+    font-family: var(--font-mono);
+}
+.enm-chip-input-input::placeholder {
+    color: var(--text-tertiary);
+    font-style: italic;
+}
+
+/* ---- Narrow / Compact responsive ------------------------------ */
+body[data-app-size="narrow"] .enm-settings-wrap,
+.enm-app[data-app-size="narrow"] .enm-settings-wrap,
+body[data-app-size="compact"] .enm-settings-wrap,
+.enm-app[data-app-size="compact"] .enm-settings-wrap {
+    grid-template-columns: 1fr;
+    gap: var(--sp-3);
+}
+body[data-app-size="narrow"] .enm-settings-nav,
+.enm-app[data-app-size="narrow"] .enm-settings-nav,
+body[data-app-size="compact"] .enm-settings-nav,
+.enm-app[data-app-size="compact"] .enm-settings-nav {
+    display: none;
+}
+body[data-app-size="narrow"] .enm-settings-pills,
+.enm-app[data-app-size="narrow"] .enm-settings-pills,
+body[data-app-size="compact"] .enm-settings-pills,
+.enm-app[data-app-size="compact"] .enm-settings-pills {
+    display: flex;
+}
+body[data-app-size="narrow"] .enm-form-row,
+.enm-app[data-app-size="narrow"] .enm-form-row,
+body[data-app-size="compact"] .enm-form-row,
+.enm-app[data-app-size="compact"] .enm-form-row {
+    grid-template-columns: 1fr;
+    gap: var(--sp-2);
+}
+body[data-app-size="narrow"] .enm-form-label-block,
+.enm-app[data-app-size="narrow"] .enm-form-label-block,
+body[data-app-size="compact"] .enm-form-label-block,
+.enm-app[data-app-size="compact"] .enm-form-label-block {
+    padding-top: 0;
+}
+body[data-app-size="compact"] .enm-section-card-head,
+.enm-app[data-app-size="compact"] .enm-section-card-head,
+body[data-app-size="compact"] .enm-section-card-body,
+.enm-app[data-app-size="compact"] .enm-section-card-body,
+body[data-app-size="compact"] .enm-section-card-foot,
+.enm-app[data-app-size="compact"] .enm-section-card-foot {
+    padding: var(--sp-3);
 }

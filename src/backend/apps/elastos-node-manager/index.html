@@ -10,7 +10,7 @@
     <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
     <meta name="referrer" content="no-referrer">
     <title>Elastos Node Manager</title>
-    <link rel="stylesheet" href="css/styles.css?ts=20260515b3b">
+    <link rel="stylesheet" href="css/styles.css?ts=20260515b3c">
     <script>
         // Beta 3 — Phase 1c carried over. Dark-only. We hard-code data-theme=dark
         // on documentElement so any rule that still says [data-theme="dark"] keeps
@@ -177,7 +177,7 @@
     <script defer src="js/components/proposal-card.js?ts=20260506g"></script>
     <script defer src="js/components/welcome-screen.js?ts=20260506g"></script>
     <script defer src="js/components/setup-conversation.js?ts=20260511c"></script>
-    <script defer src="js/components/settings-tab.js?ts=20260515a"></script>
+    <script defer src="js/components/settings-tab.js?ts=20260515b3c"></script>
     <!-- alpha.29 batch 103 — audit-tab lazy-loaded via enmLoadScript when
          the Audit tab first activates. evm-tab similarly lazy, deferred
          in Beta 3 since EVM (sidechain) tab is dropped from the visible
@@ -187,9 +187,14 @@
       window.ENM_LAZY_SCRIPTS.auditTab = 'js/components/audit-tab.js?ts=20260515a';
       window.ENM_LAZY_SCRIPTS.evmTab   = 'js/components/evm-tab.js?ts=20260514a';
     </script>
-    <script defer src="js/components/settings-drawer.js?ts=20260506g"></script>
+    <!-- Beta 3 BP-B — settings-drawer.js dropped. Settings now lives in
+         the top-level Settings tab (lazy-mounted on first activation).
+         The gear icon switches to that tab instead of opening an overlay. -->
+    <!-- <script defer src="js/components/settings-drawer.js?ts=20260506g"></script> -->
+    <!--   ↑ kept commented for one release as audit-trail; remove in BP-E. -->
+
     <script defer src="js/components/tools-update-card.js?ts=20260512c"></script>
     <script defer src="js/components/technical-view.js?ts=20260512f"></script>
-    <script defer src="js/app.js?ts=20260515b3b"></script>
+    <script defer src="js/app.js?ts=20260515b3c"></script>
 </body>
 </html>

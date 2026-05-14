@@ -431,6 +431,10 @@
             if (self.els.app) {
                 self.els.app.setAttribute('data-active-tab', tabId);
             }
+            // Beta 3 — lazy-mount the Settings pane the first time the
+            // operator clicks Settings. The legacy alpha.27 settings-
+            // drawer is gone; settings live in this top-level pane now.
+            if (tabId === 'settings') { self._mountSettingsTabLazy(); }
         }
 
         tabBtns.forEach(function (btn) {
@@ -457,9 +461,36 @@
     };
 
     /**
-     * Wire the gear icon in the home header to open the settings drawer.
-     * Lazy-mounts the drawer on first click so we don't pay for it
-     * during welcome / setup flows.
+     * Beta 3 — lazy-mount the EnmSettingsTab component into pane-settings
+     * the first time the operator activates the Settings tab. Idempotent:
+     * subsequent activations reuse the same instance. Skips silently when
+     * EnmSettingsTab isn't loaded (defensive — the script tag could be
+     * missing on a partial bundle).
+     *
+     * @private
+     */
+    ENMApp.prototype._mountSettingsTabLazy = function () {
+        if (this._settingsTab) { return; }
+        if (!this.els.paneSettings) { return; }
+        if (!root.EnmSettingsTab) {
+            this.els.paneSettings.innerHTML =
+                '<p class="enm-stub">Settings component not loaded. '
+                + 'Hard-refresh the page (Ctrl-Shift-R).</p>';
+            return;
+        }
+        this._settingsTab = new root.EnmSettingsTab({
+            api: this.services.api,
+            notifications: this.services.notifications,
+        });
+        this._settingsTab.mount(this.els.paneSettings);
+    };
+
+    /**
+     * Wire the gear icon to switch to the Settings top-level tab.
+     * Beta 3 replaces the alpha.27 settings-drawer overlay with the
+     * in-pane Settings tab so the gear just programmatically clicks
+     * the matching tab button (which fires the regular tab activation
+     * including the lazy mount).
      *
      * @private
      */
@@ -470,7 +501,19 @@
         this.els.settingsToggle.dataset.wired = '1';
         var self = this;
         this.els.settingsToggle.addEventListener('click', function () {
-            self._openSettingsDrawer();
+            // Beta 3 — gear icon switches to the Settings tab (in-pane)
+            // instead of opening the legacy settings-drawer overlay.
+            // settings-drawer.js was dropped in BP-B per the phase-04
+            // mock which has no drawer surface; all config lives in
+            // the Settings tab now. The old _openSettingsDrawer path
+            // remains in the codebase (commented above this method)
+            // as a future hook if a slide-out variant ever returns.
+            var settingsTabBtn = self.els.tabs
+                && self.els.tabs.querySelector('.enm-tab[data-tab="settings"]');
+            if (settingsTabBtn) {
+                settingsTabBtn.click();
+                settingsTabBtn.focus();
+            }
         });
     };
 
