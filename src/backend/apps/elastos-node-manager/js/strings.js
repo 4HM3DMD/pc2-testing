@@ -324,6 +324,10 @@
             disk:       'disk free',
             os:         'os',
             uptime:     'uptime',
+            // beta.3.15 a11y — visually-hidden region label so screen-
+            // reader users get a name for this strip (the strip has no
+            // visible heading).
+            region_label: 'System status',
         },
 
         log_viewer: {
@@ -550,11 +554,11 @@
             copied:      'Copied',
 
             step2_title: 'Sign the registration in Elastos Essentials',
-            step2_help:  'The 5,000 ELA registration deposit must be signed by the wallet that owns it. This server has no signing key for that wallet on purpose — you do it on your phone.',
+            step2_help:  'The 2,000 ELA registration deposit must be signed by the wallet that owns it. This server has no signing key for that wallet on purpose — you do it on your phone.',
             step2_a:     'Open Elastos Essentials → Wallet → Voting → BPoS supernodes.',
             step2_b:     'Tap "Register as new supernode".',
             step2_c:     'Fill in the form:',
-            step2_d:     'Confirm and sign. The 5,000 ELA deposit moves to a lockup address. Wait about 6 blocks (≈12 minutes) for the chain to confirm — you can leave this page open.',
+            step2_d:     'Confirm and sign. The 2,000 ELA deposit moves to a lockup address. Wait about 6 blocks (≈12 minutes) for the chain to confirm — you can leave this page open.',
 
             field_name:       'Node name',
             field_name_help:  'A public-facing display name. Up to 30 characters.',
@@ -565,10 +569,10 @@
             field_url:        'Website (optional)',
             field_url_help:   'Public page voters can read to learn who you are.',
 
-            deposit_note: 'The 5,000 ELA deposit is refundable — you get it back when you unregister, minus chain fees. It is NOT a payment.',
+            deposit_note: 'The 2,000 ELA deposit is refundable — you get it back when you unregister, minus chain fees. It is NOT a payment.',
 
             step3_title:        'Activate your supernode',
-            step3_help:         "Once the registration is confirmed on chain, tap below to send the activation transaction. This server signs it with your producer key (the same one we manage during normal operation — no separate keystore to manage here).",
+            step3_help:         "Once the registration is confirmed on chain, tap below to send the activation transaction. Your server signs the activation with the node's signing keystore — the same key it uses to sign block proposals during your on-duty rounds. Your owner key stays in Essentials and is never asked to sign here.",
             activate_btn:       'Activate BPoS supernode',
             activate_btn_active:'Activating…',
             activate_ok:        'Activation submitted — wait a block or two for chain confirmation.',
@@ -612,29 +616,12 @@
             row_count_one:  '{n} row',
         },
 
-        // alpha.28.1 batch 59 — producer-identity on-chain binding strings
-        // moved out of inline English in components/producer-identity.js so
-        // a locale swap covers them. The previous shape had ~7 untranslated
-        // strings in _renderBinding (heading, four state chips, two notes,
-        // mismatch detail), making the on-chain binding section the largest
-        // remaining English-only block on the dashboard. Round-3 i18n
-        // coverage audit (aef9c321) flagged this.
-        producer_binding: {
-            heading:          'On-chain binding',
-            chip_bound:       'Bound',
-            chip_bound_state: 'Bound — {state}',
-            chip_unregistered:'Not yet registered on chain',
-            chip_mismatch:    'MISMATCH — chain reports a different node key',
-            chip_unknown:     'Status unknown',
-            owner_compare_note:
-                'Compare the owner public key below to what Essentials '
-              + 'shows under your BPoS deposit. If they differ you '
-              + 'registered under a different wallet — votes and '
-              + 'rewards will flow there, not here.',
-            owner_label:      'Owner public key (chain)',
-            split_key_note:   'V2 split-key producer: owner and node keys differ. Normal post-DPoSV2.',
-            mismatch_detail:  'ENM holds node pubkey {ours} but the chain returned {theirs}. This is rare — open the audit log and contact support.',
-        },
+        // beta.3.15 — producer_binding.* strings block deleted. Its only
+        // consumer was components/producer-identity.js, which was dropped
+        // in beta.3.15 (CR Council / DID content on the dashboard violated
+        // operator preference; the component was loaded but never mounted
+        // on Beta 3's _showDashboard anyway). If a future binding-status
+        // card is needed, resurrect these keys from git history.
 
         // BP-E — tech_maintenance.* string block retired with technical-
         // view.js. The Maintenance section (compact logs / reactivate

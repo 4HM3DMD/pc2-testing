@@ -67,9 +67,14 @@
     --accent-2:        #5b8fff;
     --accent-gradient: linear-gradient(135deg, var(--accent), var(--accent-2));
 
-    /* --- Semantic colours (3 functional, from phase-01) --- */
-    --success:     #34d399;
-    --success-bg:  rgba(52, 211, 153, 0.10);
+    /* --- Semantic colours (3 functional, from phase-03/phase-06 — beta.3.15
+           realigned to match the operator-facing dashboard mock palette,
+           which uses a slightly softer green than phase-01's #34d399.
+           Affects power-button glow, every state-chip success variant,
+           sync-success border, vote-threshold notice. ) --- */
+    --success:     #59c489;
+    --success-bg:  rgba(89, 196, 137, 0.12);
+    --success-soft: rgba(89, 196, 137, 0.20);
     --warning:     #fbbf24;
     --warning-bg:  rgba(251, 191, 36, 0.10);
     /* 0.2.0-beta.3.12 — phase-01 mock spec line 32. Used by border on

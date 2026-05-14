@@ -205,7 +205,12 @@
         // feedback was "not needed".
         var pubkey   = ks.publicKey || null;
         var addr     = ks.address || null;
-        var balance  = ks.balanceEla;
+        // beta.3.15: balance line dropped from this card. The node
+        // signing address never holds funds (see truth note below),
+        // and the RPC method we were calling (getbalancebyaddr)
+        // isn't even on the JSON-RPC interface — it's REST-only at
+        // /api/v1/asset/balances/:addr. Showing "0 ELA" or "Balance
+        // unavailable" added noise without information.
 
         var html = '';
 
@@ -253,10 +258,6 @@
                 +   '<code class="enm-identity-value enm-identity-addr" data-fill="addr"></code>'
                 +   '<span class="enm-identity-copy-slot" data-copy="addr" data-copy-value="' + esc(addr) + '"></span>'
                 + '</div>'
-                + (balance != null
-                    ? '<div class="enm-identity-balance">Balance: <strong>' + esc(fmtEla(balance) || (balance + ' ELA')) + '</strong> <span class="enm-identity-balance-muted">(typically 0 &mdash; this address is signing-only).</span></div>'
-                    : (ks.exists ? '<div class="enm-identity-balance enm-identity-balance-muted">Balance unavailable (chain RPC offline).</div>' : '')
-                  )
                 + '<div class="enm-identity-note">'
                 +   '<strong>Block rewards go to your Essentials wallet</strong>, not this address. '
                 +   'When you register the supernode in Essentials, that wallet becomes the '
@@ -303,12 +304,13 @@
                 +     '<span class="enm-identity-stat-value">' + esc(fmtEla(producer.deposit) || (producer.deposit + ' ELA')) + '</span>'
                 +   '</div>'
                   ) : '')
-                +   (producer.rewards != null ? (
-                    '<div class="enm-identity-stat">'
-                +     '<span class="enm-identity-stat-label">Claimable in Essentials</span>'
-                +     '<span class="enm-identity-stat-value">' + esc(fmtEla(producer.rewards) || (producer.rewards + ' ELA')) + '</span>'
-                +   '</div>'
-                  ) : '')
+                /* beta.3.15: "Claimable rewards" stat removed. The
+                   actual RPC method is dposv2rewardinfo and it's keyed
+                   by the OWNER address (derived from ownerpublickey
+                   via PrefixDPoSV2 conversion in
+                   servers/interfaces.go:2317-2347). We don't do that
+                   derivation client-side yet — operator can read
+                   claimable rewards directly in Essentials. */
                 + '</div>'
                 + '</div>';
         }

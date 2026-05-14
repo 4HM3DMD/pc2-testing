@@ -203,33 +203,56 @@ class EnmRpcClient {
     getarbitersinfo() { return this.call('getarbitersinfo', {}); }
 
     /**
-     * beta.3.13 — wallet/address balance lookup. Used by the Node-identity
-     * card to surface the keystore-derived address's balance so operators
-     * can verify before/after producer-registration deposits.
+     * beta.3.13 — producer's locked deposit balance. Verified registered
+     * on JSON-RPC at servers/httpjsonrpc/server.go:117 as
+     * "getdepositcoin" → GetDepositCoin. Takes the OWNER public key
+     * (since the deposit is locked at the owner-derived address, not
+     * the node-derived one). Returns a JSON object with available
+     * and used fields, both string ELA values.
      *
-     * Returns a string ELA value (already divided by 1e8 server-side per
-     * the chain's interfaces.go); we forward it as-is.
-     *
-     * @param {string} addr  Elastos mainchain address (starts with 'E')
+     * @param {string} ownerPubkey  hex-encoded compressed pubkey of the
+     *     producer's owner (66 chars). NOT the node pubkey.
      */
-    getbalancebyaddr(addr) { return this.call('getbalancebyaddr', { addr }); }
+    getdepositcoin(ownerPubkey) { return this.call('getdepositcoin', { ownerpublickey: ownerPubkey }); }
 
     /**
-     * beta.3.13 — producer's locked deposit balance. For BPoS, this is the
-     * 2,000 ELA stake-deposit + any extra collateral. Returns string ELA.
+     * beta.3.13 — claimable BPoS rewards for an address. Verified
+     * registered on JSON-RPC at servers/httpjsonrpc/server.go:125 as
+     * "dposv2rewardinfo" → DposV2RewardInfo. Takes an OWNER address
+     * (Standard or Multi-sign or Stake-prefixed); the handler auto-
+     * promotes it to the stake-prefixed form before lookup. Returns
+     * { address, claimable, claiming, claimed } string ELA values.
      *
-     * @param {string} pubkey  hex-encoded compressed pubkey (66 chars)
-     */
-    getdepositcoin(pubkey) { return this.call('getdepositcoin', { ownerpublickey: pubkey }); }
-
-    /**
-     * beta.3.13 — accumulated reward balance for a producer. Returns string
-     * ELA (claimable amount).
+     * NOT keyed by the node signing address — that address has no
+     * reward bookkeeping (see arbitrators.go:732-801).
      *
-     * @param {string} pubkey  hex-encoded compressed pubkey (66 chars)
+     * @param {string} ownerAddr  Elastos mainchain address derived
+     *     from the producer's OwnerPublicKey (NOT the node keystore).
      */
-    getdposrewards(pubkey) { return this.call('getdposrewards', { publickey: pubkey }); }
+    dposv2rewardinfo(ownerAddr) { return this.call('dposv2rewardinfo', { address: ownerAddr }); }
 }
+
+/*
+ * beta.3.15 — removed two methods added speculatively in beta.3.13:
+ *
+ *   getbalancebyaddr(addr)   — NOT registered on the JSON-RPC server
+ *                              (only on the REST interface, exposed
+ *                              at /api/v1/asset/balances/:addr per
+ *                              servers/httprestful/server.go:122).
+ *                              Calling it via JSON-RPC always 404s.
+ *
+ *   getdposrewards(pubkey)   — Method name doesn't exist. The actual
+ *                              method is dposv2rewardinfo (added above)
+ *                              and it's address-keyed, not pubkey-keyed.
+ *                              The keystore-derived "node signing
+ *                              address" has zero rewards bookkeeping
+ *                              anyway, so surfacing a balance for it
+ *                              was misleading even when it worked.
+ *
+ * If a future caller needs balance for arbitrary addresses, route via
+ * HTTP GET to the REST endpoint (separate client) — don't add it back
+ * to this JSON-RPC client.
+ */
 
 // --- Error types — let the caller distinguish failure modes for healing rules. ---
 

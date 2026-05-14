@@ -25,6 +25,16 @@
 
         this.root = document.createElement('section');
         this.root.className = 'enm-system-status';
+        // beta.3.15 a11y — explicit region semantics so screen-reader
+        // users can identify what this strip is. aria-labelledby points
+        // at an internal label created in _renderShell (the strip has
+        // no visible heading, so we add an offscreen one). aria-live on
+        // the strip lets value updates announce without stealing focus.
+        this.root.setAttribute('role', 'region');
+        this._regionLabelId = 'enm-sys-region-label-' + Math.random().toString(36).slice(2, 8);
+        this.root.setAttribute('aria-labelledby', this._regionLabelId);
+        this.root.setAttribute('aria-live', 'polite');
+        this.root.setAttribute('aria-atomic', 'false');
         this._timer = null;
         // alpha.28.1 batch 16 — _destroyed flag so the 5s poll's pending
         // .then can short-circuit if destroy() fires while a fetch is in
@@ -220,6 +230,13 @@
         // .enm-system-status is kept as a secondary marker so any
         // outstanding CSS query still finds the element.
         this.root.classList.add('enm-sys-strip');
+        // beta.3.15 a11y — invisible label for the region. Visually
+        // hidden but read by AT to give the strip a name.
+        var regionLabel = document.createElement('span');
+        regionLabel.id = this._regionLabelId;
+        regionLabel.className = 'enm-sr-only';
+        regionLabel.textContent = (root.enmTOrFallback && root.enmTOrFallback('system_status.region_label')) || 'System status';
+        this.root.appendChild(regionLabel);
         this._fields = {};   // value spans
         this._subs   = {};   // sub-value spans (e.g. "8 cores", "% of 16 GB")
         this._bars   = {};   // .enm-sys-bar elements (health colour goes here)

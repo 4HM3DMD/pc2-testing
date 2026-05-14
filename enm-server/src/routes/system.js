@@ -127,13 +127,15 @@ function build(extensionHandle) {
                 } catch (_) { /* missing cache — surface as null */ }
             }
 
-            let balanceEla = null;
             let producer = null;
 
-            // Only try RPC when we have an address (balance) or pubkey
-            // (producer info), AND the chain is alive. Avoids hammering
-            // RPC when the node hasn't started yet.
-            if (publicKey || address) {
+            // Only try RPC when we have a node public key AND the chain
+            // is alive. beta.3.15: dropped the keystore-address balance
+            // lookup entirely — the node signing address never holds
+            // funds (verified at dpos/state/arbitrators.go:732-801), so
+            // surfacing its balance was both misleading and broken
+            // (getbalancebyaddr isn't on the JSON-RPC interface anyway).
+            if (publicKey) {
                 try {
                     const cfg = await ConfigStore.load();
                     const chainCfg = cfg.chains && cfg.chains.mainchain;
@@ -143,35 +145,39 @@ function build(extensionHandle) {
                         const adapter = ChainRegistry.getAdapter('mainchain');
                         const rpc = adapter.rpcClient(chainCfg);
 
-                        if (address) {
-                            balanceEla = await rpc.getbalancebyaddr(address)
-                                .catch(() => null);
-                        }
+                        const pi = await rpc.getproducerinfo(publicKey)
+                            .catch(() => null);
+                        if (pi && (pi.state || pi.ownerpublickey || pi.nickname)) {
+                            // Deposit is keyed by OWNER public key (the
+                            // Essentials wallet). We have it from
+                            // getproducerinfo.ownerpublickey.
+                            const ownerPubkey = pi.ownerpublickey || null;
+                            const deposit = ownerPubkey
+                                ? await rpc.getdepositcoin(ownerPubkey).catch(() => null)
+                                : null;
 
-                        if (publicKey) {
-                            const pi = await rpc.getproducerinfo(publicKey)
-                                .catch(() => null);
-                            if (pi && (pi.state || pi.ownerpublickey || pi.nickname)) {
-                                const deposit = await rpc.getdepositcoin(publicKey)
-                                    .catch(() => null);
-                                const rewards = await rpc.getdposrewards(publicKey)
-                                    .catch(() => null);
-                                producer = {
-                                    state: pi.state || null,
-                                    nickname: pi.nickname || null,
-                                    url: pi.url || null,
-                                    votes: pi.votes || null,
-                                    dposv2votes: pi.dposv2votes || null,
-                                    registerheight: pi.registerheight || null,
-                                    illegalheight: pi.illegalheight || null,
-                                    inactiveheight: pi.inactiveheight || null,
-                                    deposit: deposit && (deposit.available || deposit) || null,
-                                    rewards: rewards && (rewards.claimable || rewards) || null,
-                                };
-                            }
+                            // Rewards are keyed by OWNER address; we don't
+                            // derive that here (the chain's stake-prefix
+                            // address conversion is non-trivial without
+                            // pulling in crypto primitives). The Essentials
+                            // app surfaces this — operator can check there.
+                            // Leaving rewards null until we add an address
+                            // derivation helper or operators ask for it.
+                            producer = {
+                                state: pi.state || null,
+                                nickname: pi.nickname || null,
+                                url: pi.url || null,
+                                votes: pi.votes || null,
+                                dposv2votes: pi.dposv2votes || null,
+                                registerheight: pi.registerheight || null,
+                                illegalheight: pi.illegalheight || null,
+                                inactiveheight: pi.inactiveheight || null,
+                                ownerPublicKey: ownerPubkey,
+                                deposit: deposit && (deposit.available || deposit) || null,
+                            };
                         }
                     }
-                } catch (_) { /* graceful degrade — leave balance/producer null */ }
+                } catch (_) { /* graceful degrade — leave producer null */ }
             }
 
             return res.json(successBody({
@@ -180,7 +186,6 @@ function build(extensionHandle) {
                     exists: keystoreExists,
                     publicKey,
                     address,
-                    balanceEla,
                 },
                 producer,
             }));

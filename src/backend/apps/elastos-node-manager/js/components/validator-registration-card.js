@@ -391,7 +391,7 @@
                         + 'BPoS supernode'
                     + '</div>'
                     + '<div class="enm-bpos-head-sub">'
-                        + 'On-chain producer record bound to this node’s signing key.'
+                        + 'On-chain producer record derived from this node’s signing key.'
                     + '</div>'
                 + '</div>'
                 // 0.2.0-beta.3.7 — chip text now shows rank when known
