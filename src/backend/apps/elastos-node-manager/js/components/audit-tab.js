@@ -250,7 +250,13 @@
         addCell(tr, formatTs(e.ts), formatTsLocal(e.ts) || undefined);
         addCell(tr, e.chainId || e.chain_id || '—');
         addCell(tr, e.ruleId || e.rule_id || '—');
-        addCell(tr, e.tier || '—');
+        // alpha.29 v2 brand-reset · Audit A6 — tier cell now emits a
+        // styled badge via Phase 5b CSS at .enm-tier-badge[data-tier].
+        // Per-tier palette (AUTOMATED-SAFE=success, OWNER-CONFIRMS=
+        // accent, CRITICAL-NOTIFY=warning, NEVER-AUTOMATIC=error,
+        // HTTP-MUTATION=purple) was added to styles.css but the JS
+        // never emitted the badge markup; rows showed plain text.
+        addBadgeCell(tr, e.tier, 'enm-tier-badge', { tier: e.tier });
         addCell(tr, e.decision || '—');
         // Executor cell shows the truncated wallet for the visible row
         // but the title= must carry the FULL address so hover + screen
@@ -258,9 +264,35 @@
         // addCell defaulted title to the truncated display string,
         // making the "title=full text" promise a lie for this cell.)
         addCell(tr, shortenWallet(e.executor), e.executor || '');
-        addCell(tr, e.outcome || '—');
+        // alpha.29 v2 brand-reset · Audit A6 — outcome cell now emits
+        // a styled badge via Phase 5b CSS at .enm-outcome-badge[data-
+        // kind]. data-kind is mapped from the free-text outcome string
+        // (backend emits 'success'/'failure'/error-message/etc.) to
+        // one of: success / error / skip / warn. ::before glyphs in
+        // Phase 5b CSS render ✓/✕/◌/! respectively.
+        addBadgeCell(tr, e.outcome || '—', 'enm-outcome-badge',
+            { kind: outcomeKind(e.outcome) });
         this._tbody.appendChild(tr);
     };
+
+    /**
+     * Map a free-text outcome string emitted by the backend (audit-
+     * middleware + self-healing engine) to one of the four data-kind
+     * values the .enm-outcome-badge[data-kind] palette supports.
+     *
+     * Heuristic order matters: 'no-owner-skip' contains 'skip' but
+     * also 'no-' so we check 'skip' first. 'failure' and 'failed'
+     * and 'Unknown action' all map to error.
+     */
+    function outcomeKind(outcome) {
+        if (outcome == null) { return 'warn'; }
+        var s = String(outcome).toLowerCase();
+        if (s === 'success' || s === 'acknowledged' || s === 'restarted') { return 'success'; }
+        if (s.indexOf('skip') !== -1 || s.indexOf('no-owner') !== -1) { return 'skip'; }
+        if (s === 'failure' || s.indexOf('fail') !== -1 || s.indexOf('error') !== -1
+            || s.indexOf('unknown action') !== -1) { return 'error'; }
+        return 'warn';
+    }
 
     /**
      * @private
@@ -337,6 +369,30 @@
             ? fullText
             : (text == null ? '' : text);
         td.title = String(titleSource);
+        tr.appendChild(td);
+    }
+
+    /**
+     * alpha.29 v2 brand-reset · Audit A6 — emit a styled badge cell.
+     * The badge is a <span> wrapping the text with `className=badgeClass`
+     * and data-attributes from `dataAttrs` (e.g. { tier: 'AUTOMATED-SAFE' }
+     * → data-tier="AUTOMATED-SAFE"). The wrapping <td> still carries
+     * the title= so hover + AT + copy-paste keep working.
+     */
+    function addBadgeCell(tr, text, badgeClass, dataAttrs) {
+        var td = document.createElement('td');
+        var span = document.createElement('span');
+        span.className = badgeClass;
+        span.textContent = text == null ? '—' : String(text);
+        if (dataAttrs) {
+            Object.keys(dataAttrs).forEach(function (k) {
+                if (dataAttrs[k] != null) {
+                    span.setAttribute('data-' + k, String(dataAttrs[k]));
+                }
+            });
+        }
+        td.appendChild(span);
+        td.title = (text == null) ? '' : String(text);
         tr.appendChild(td);
     }
     function textInput(placeholder) {
