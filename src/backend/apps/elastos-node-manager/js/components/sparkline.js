@@ -248,16 +248,26 @@
         });
 
         // Build the line path: M x0 y0 L x1 y1 L ...
-        var line = 'M' + xs[0].toFixed(2) + ',' + ys[0].toFixed(2);
+        // alpha.29 batch 111 (Round-34 perf finding #3, LOW) — build
+        // path strings into an array then join() once, instead of
+        // += concatenation in a tight loop. Each concat in the
+        // previous shape allocated a new transient string; the loop
+        // is small (TARGET_POINTS=12) but sparklines re-render on
+        // every SSE height tick and on every chain-card so the
+        // cumulative cost on slow ARM/RPi hardware matters.
+        var lineParts = ['M', xs[0].toFixed(2), ',', ys[0].toFixed(2)];
         for (var j = 1; j < pts.length; j++) {
-            line += ' L' + xs[j].toFixed(2) + ',' + ys[j].toFixed(2);
+            lineParts.push(' L', xs[j].toFixed(2), ',', ys[j].toFixed(2));
         }
+        var line = lineParts.join('');
 
         // Fill path closes the line down to the baseline (y=H), back to
         // the start at the baseline, then Z.
-        var fill = line
-            + ' L' + xs[xs.length - 1].toFixed(2) + ',' + H
-            + ' L' + xs[0].toFixed(2) + ',' + H + ' Z';
+        var fillParts = lineParts.concat([
+            ' L', xs[xs.length - 1].toFixed(2), ',', H,
+            ' L', xs[0].toFixed(2), ',', H, ' Z'
+        ]);
+        var fill = fillParts.join('');
 
         this._line.setAttribute('d', line);
         this._fill.setAttribute('d', fill);

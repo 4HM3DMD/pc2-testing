@@ -137,6 +137,22 @@
     EnmOnlineWatcher.prototype._onTransition = function (isOnline) {
         if (!this._banner) { return; }
         var self = this;
+        // alpha.29 batch 110 (Round-36 finding #1, HIGH) — cancel any
+        // pending deferred role-removal timer at the top of every
+        // transition. Without this, a rapid online → offline → online
+        // → offline flap could land like this:
+        //   T0: offline → role=alert, banner shown
+        //   T1: online  → setTimeout(0) queued to strip role
+        //   T2: offline → role=alert reset (banner re-shown)
+        //   T3: pending timer from T1 fires → strips role=alert
+        //         from the freshly-re-shown banner
+        // Net effect: banner is operator-visible but AT-silent. The
+        // _lastFocus = null at the end of the timer also clobbered the
+        // T2-captured focus target. Cancel-and-rebind defeats both.
+        if (this._pendingRoleRemoveTimer) {
+            clearTimeout(this._pendingRoleRemoveTimer);
+            this._pendingRoleRemoveTimer = null;
+        }
         if (isOnline) {
             // alpha.29 batch 104 (Round-35 finding #2, HIGH) — defer
             // the role=alert removal by one macrotask so any in-flight
@@ -171,10 +187,19 @@
             if (typeof this._refreshCb === 'function') {
                 try { this._refreshCb(); } catch (_) { /* ignore */ }
             }
-            setTimeout(function () {
-                if (self._banner) { self._banner.removeAttribute('role'); }
-                // Restore focus to last-saved element when banner was
-                // shown; if none captured, fall through to body.
+            this._pendingRoleRemoveTimer = setTimeout(function () {
+                self._pendingRoleRemoveTimer = null;
+                // Belt-and-braces: if a subsequent offline transition
+                // already re-shown the banner, DON'T strip its role —
+                // even though the offline branch's clearTimeout above
+                // should have cancelled this timer first. Guarding here
+                // costs nothing and defends against an edge where the
+                // timer queue's clearTimeout was processed AFTER this
+                // callback was dequeued (theoretically possible in
+                // some runtimes).
+                if (self._banner && self._banner.hidden) {
+                    self._banner.removeAttribute('role');
+                }
                 if (retryHadFocus) {
                     var target = self._lastFocus
                         && typeof self._lastFocus.focus === 'function'
@@ -205,6 +230,13 @@
      * Idempotent — a second call is a no-op.
      */
     EnmOnlineWatcher.prototype.destroy = function () {
+        // batch 110 — cancel any pending deferred role-removal timer
+        // so a teardown mid-recovery doesn't leak the closure or
+        // touch a now-removed banner.
+        if (this._pendingRoleRemoveTimer) {
+            clearTimeout(this._pendingRoleRemoveTimer);
+            this._pendingRoleRemoveTimer = null;
+        }
         if (this._onlineHandler) {
             root.removeEventListener('online', this._onlineHandler);
             this._onlineHandler = null;
@@ -219,6 +251,7 @@
         this._banner = null;
         this._retryBtn = null;
         this._refreshCb = null;
+        this._lastFocus = null;
         this._mounted = false;
     };
 
