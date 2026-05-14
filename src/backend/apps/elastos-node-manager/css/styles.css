@@ -1669,7 +1669,7 @@ body[data-active-tab="identity"]::before {
 /* Primary — the suggested action. Cyan fill, dark text. */
 .enm-btn-primary {
     background: var(--accent);
-    color: #08090c;
+    color: var(--text-inverse);
     border-color: transparent;
     font-weight: var(--fw-semibold);
 }
@@ -2314,7 +2314,7 @@ select.enm-settings-input {
 .enm-danger-controls {
     margin-top: var(--sp-3);
     padding: var(--sp-3);
-    border: 1px solid var(--danger, #c0392b);
+    border: 1px solid var(--danger);
     border-radius: var(--r-sm);
     background: rgba(192, 57, 43, 0.04);
     display: flex;
@@ -2331,8 +2331,8 @@ select.enm-settings-input {
     margin-top: var(--sp-2);
 }
 
-.enm-danger-section-h-kept { color: var(--success, #27ae60); }
-.enm-danger-section-h-wiped { color: var(--danger, #c0392b); }
+.enm-danger-section-h-kept { color: var(--success); }
+.enm-danger-section-h-wiped { color: var(--danger); }
 
 .enm-danger-list {
     margin: 0 0 var(--sp-2);
@@ -4341,7 +4341,7 @@ select.enm-settings-input {
     right: var(--sp-3);
     padding: 2px 8px;
     background: var(--accent);
-    color: #08090c;
+    color: var(--text-inverse);
     border-radius: var(--r-xs);
     font-size: 10px;
     font-weight: var(--fw-semibold);
@@ -4843,7 +4843,7 @@ select.enm-settings-input {
 }
 .enm-drawer-toggle input:checked ~ .enm-drawer-toggle-track::after {
     transform: translateX(16px);
-    background: #08090c;
+    background: var(--text-inverse);
 }
 .enm-drawer-toggle input:focus-visible ~ .enm-drawer-toggle-track {
     box-shadow: 0 0 0 3px var(--focus-ring-color);
