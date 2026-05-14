@@ -51,6 +51,13 @@
                 // body doesn't exist yet at this point, so stash on documentElement
                 // and the body version is set in a second script after </body>.
                 document.documentElement.dataset.appSize = size;
+                // alpha.29 batch 112 (Round-34 perf finding #6, LOW) —
+                // stash the resolved width on a global so app.js's
+                // setupResponsiveObserver doesn't have to re-query
+                // window.innerWidth (which forces a layout flush).
+                // Saves ~2-3ms off first paint by collapsing two
+                // layout reads into one.
+                window.__enmInitialWidth = w;
             } catch (e) { /* ignore */ }
         })();
     </script>

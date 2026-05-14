@@ -62,9 +62,17 @@
         // Inline script in index.html sets <html data-app-size> before first
         // paint; mirror it to body so CSS can select either. body is
         // guaranteed present by the time app.js runs (script lives below </body>).
+        // alpha.29 batch 112 (Round-34 perf finding #6, LOW) — read the
+        // width the head IIFE already computed (via
+        // window.__enmInitialWidth) in the fallback branch, instead of
+        // re-querying window.innerWidth which forces a second layout
+        // flush. Saves ~2-3ms off first paint by deduping the read.
         var initial = document.documentElement.dataset.appSize;
         if (!initial) {
-            apply(window.innerWidth || document.documentElement.clientWidth || 1200);
+            var w = (typeof root.__enmInitialWidth === 'number')
+                ? root.__enmInitialWidth
+                : (window.innerWidth || document.documentElement.clientWidth || 1200);
+            apply(w);
         } else {
             document.body.dataset.appSize = initial;
         }

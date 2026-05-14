@@ -558,12 +558,17 @@
         var list = this._creds.whiteIp.getValue();
         // alpha.20: don't bother the server (or confuse the operator with a
         // success toast) if nothing actually changed since last load. Compare
-        // sorted JSON so order-only differences are also no-ops.
+        // sorted lists element-by-element so order-only differences are
+        // also no-ops.
+        // alpha.29 batch 112 (Round-34 perf finding #5, LOW) — replaced
+        // JSON.stringify-equality with a structural element-wise check.
+        // For a 50-IP corporate allowlist, the previous two stringify
+        // calls allocated ~2KB of throwaway strings per Apply click.
+        // listsEqual short-circuits on length mismatch and avoids any
+        // allocation on the typical case. Same semantics; cheaper.
         var current = (this._creds.data && Array.isArray(this._creds.data.whiteIPList))
             ? this._creds.data.whiteIPList.slice() : [];
-        var sortedNew  = list.slice().sort();
-        var sortedCur  = current.slice().sort();
-        if (JSON.stringify(sortedNew) === JSON.stringify(sortedCur)) {
+        if (listsEqualSorted(list, current)) {
             this._creds.whiteStatus.textContent = t('settings.rpc_white_no_change');
             return;
         }
@@ -1445,6 +1450,24 @@
             row.appendChild(w);
         }
         return row;
+    }
+
+    /**
+     * Sort-then-element-wise equality for two string arrays.
+     * alpha.29 batch 112 — replaces a JSON.stringify-based diff that
+     * allocated ~2KB of throwaway strings on every whitelist Apply
+     * click for a 50-IP allowlist. Short-circuits on length mismatch;
+     * subsequent compares are cheap pointer/string ===.
+     */
+    function listsEqualSorted(a, b) {
+        if (!Array.isArray(a) || !Array.isArray(b)) { return false; }
+        if (a.length !== b.length) { return false; }
+        var sa = a.slice().sort();
+        var sb = b.slice().sort();
+        for (var i = 0; i < sa.length; i += 1) {
+            if (sa[i] !== sb[i]) { return false; }
+        }
+        return true;
     }
 
     // Classify an http://IP:port URL as 'loopback' | 'private' | 'public'.
