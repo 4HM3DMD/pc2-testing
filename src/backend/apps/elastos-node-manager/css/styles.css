@@ -3897,35 +3897,43 @@ select.enm-settings-input {
     min-width: 200px;
 }
 
-/* ---- Welcome screen ---- */
+/* ---- Welcome screen (Phase 7c v2 hero) ----
+   First-boot landing card before the wizard starts. Restyled to a v2
+   hero-card: bg-surface card centred in the viewport, larger title
+   with tighter tracking, accent-coloured illustration. Class names
+   preserved — welcome-screen.js targets `.enm-welcome*` directly. */
 .enm-welcome {
     display: flex;
     align-items: center;
     justify-content: center;
     min-height: 100%;
-    padding: var(--spacing-2xl) var(--spacing-lg);
+    padding: var(--sp-6) var(--sp-4);
     background: var(--bg-page);
 }
 
 .enm-welcome-inner {
-    max-width: 520px;
+    max-width: 560px;
     text-align: center;
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: var(--spacing-lg);
+    gap: var(--sp-4);
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-lg);
+    padding: var(--sp-6) var(--sp-5);
 }
 
 .enm-welcome-illust {
     width: 128px;
     height: 128px;
-    color: var(--primary);
-    margin-bottom: var(--spacing-sm);
+    color: var(--accent);
+    margin-bottom: var(--sp-2);
 }
 
 .enm-welcome-title {
     font-size: 32px;
-    font-weight: 600;
+    font-weight: var(--fw-semibold);
     line-height: 1.15;
     letter-spacing: -0.02em;
     color: var(--text-primary);
@@ -3933,14 +3941,14 @@ select.enm-settings-input {
 }
 
 .enm-welcome-body {
-    font-size: 16px;
+    font-size: var(--fs-md);
     line-height: 1.55;
     color: var(--text-secondary);
     margin: 0;
     max-width: 440px;
 }
 
-.enm-welcome-cta { margin-top: var(--spacing-md); }
+.enm-welcome-cta { margin-top: var(--sp-3); }
 
 /* ---- Setup conversation shell (Phase 6a — v2 wiz-shell card) ----
  *
@@ -4695,12 +4703,12 @@ select.enm-settings-input {
 .enm-tech-header {
     display: flex;
     flex-direction: column;
-    gap: var(--spacing-xs);
+    gap: var(--sp-1);
 }
 
 .enm-tech-back {
     align-self: flex-start;
-    margin-bottom: var(--spacing-sm);
+    margin-bottom: var(--sp-2);
 }
 
 /* alpha.28.1 batch 20 — `.enm-tech-title` + `.enm-tech-sub` dropped.
@@ -4709,9 +4717,9 @@ select.enm-settings-input {
 .enm-tech-tabs {
     display: flex;
     align-items: center;
-    gap: var(--spacing-xs);
-    padding-bottom: var(--spacing-xs);
-    border-bottom: 1px solid var(--border-color);
+    gap: var(--sp-1);
+    padding-bottom: var(--sp-1);
+    border-bottom: 1px solid var(--border-subtle);
     overflow-x: auto;
     scrollbar-width: none;
 }
@@ -4739,18 +4747,18 @@ body[data-update-severity] .enm-tech-tabs .enm-tab[data-tab="tools"]::before {
     width: 6px;
     height: 6px;
     border-radius: 50%;
-    background: var(--text-muted);
-    transition: background var(--motion-fast) var(--ease-spring),
-                box-shadow var(--motion-fast) var(--ease-spring);
+    background: var(--text-tertiary);
+    transition: background var(--motion-fast) var(--ease-out),
+                box-shadow var(--motion-fast) var(--ease-out);
 }
 body[data-update-severity="patch"] .enm-tech-tabs .enm-tab[data-tab="tools"]::before,
 body[data-update-severity="minor"] .enm-tech-tabs .enm-tab[data-tab="tools"]::before {
-    background: var(--state-syncing);
-    box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.16);
+    background: var(--accent);
+    box-shadow: 0 0 0 3px rgba(0, 212, 255, 0.16);
 }
 body[data-update-severity="major"] .enm-tech-tabs .enm-tab[data-tab="tools"]::before {
-    background: var(--state-stalled);
-    box-shadow: 0 0 0 3px rgba(255, 159, 10, 0.18);
+    background: var(--warning);
+    box-shadow: 0 0 0 3px rgba(245, 166, 35, 0.18);
     /* token-driven: --anim-loop-slow + --ease-in-out (was 2s ease-in-out). */
     animation: enm-tools-update-dot-pulse var(--anim-loop-slow) var(--ease-in-out) infinite;
 }
@@ -5117,21 +5125,22 @@ body[data-update-severity="major"] .enm-tech-tabs .enm-tab[data-tab="tools"]::be
    ============================================================ */
 
 .enm-tech-maintenance {
-    padding: var(--spacing-lg);
+    padding: var(--sp-4);
 }
 
 .enm-tech-maintenance-title {
-    font-size: 16px;
-    font-weight: 600;
+    font-size: var(--fs-h3);
+    font-weight: var(--fw-semibold);
     color: var(--text-primary);
-    margin: 0 0 var(--spacing-xs);
+    margin: 0 0 var(--sp-1);
+    letter-spacing: -0.01em;
 }
 
 .enm-tech-maintenance-sub {
-    font-size: 13px;
+    font-size: var(--fs-caption);
     color: var(--text-secondary);
     line-height: 1.5;
-    margin: 0 0 var(--spacing-md);
+    margin: 0 0 var(--sp-3);
 }
 
 .enm-tech-maintenance-rows {
@@ -5142,9 +5151,9 @@ body[data-update-severity="major"] .enm-tech-tabs .enm-tab[data-tab="tools"]::be
 .enm-tech-maintenance-row {
     display: flex;
     align-items: center;
-    gap: var(--spacing-md);
-    padding: var(--spacing-md) 0;
-    border-top: 1px solid var(--border-color);
+    gap: var(--sp-3);
+    padding: var(--sp-3) 0;
+    border-top: 1px solid var(--border-subtle);
 }
 .enm-tech-maintenance-row:first-child { border-top: none; }
 
@@ -5154,24 +5163,24 @@ body[data-update-severity="major"] .enm-tech-tabs .enm-tab[data-tab="tools"]::be
 }
 
 .enm-tech-maintenance-label {
-    font-size: 14px;
-    font-weight: 600;
+    font-size: var(--fs-body);
+    font-weight: var(--fw-semibold);
     color: var(--text-primary);
     margin-bottom: 2px;
 }
 
 .enm-tech-maintenance-help {
-    font-size: 12px;
-    color: var(--text-muted);
+    font-size: var(--fs-caption);
+    color: var(--text-tertiary);
     line-height: 1.5;
 }
 
 .enm-tech-maintenance-help code {
-    font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace;
+    font-family: var(--font-mono);
     font-size: 11px;
     padding: 1px 5px;
-    background: var(--bg-muted);
-    border-radius: 4px;
+    background: var(--bg-input);
+    border-radius: var(--r-xs);
     color: var(--text-secondary);
 }
 
@@ -5184,7 +5193,7 @@ body[data-update-severity="major"] .enm-tech-tabs .enm-tab[data-tab="tools"]::be
     color: var(--text-secondary);
 }
 .enm-tech-disabled-reason {
-    color: var(--text-muted);
+    color: var(--text-tertiary);
     font-style: italic;
 }
 
