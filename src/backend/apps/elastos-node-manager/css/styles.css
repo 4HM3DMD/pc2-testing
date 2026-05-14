@@ -940,52 +940,108 @@ body[data-active-tab="identity"]::before {
     margin-bottom: 0;
 }
 
+/* alpha.29 v2 brand reset · Phase 3b — chain-card-head retunes to the
+   v2 state-chip / chain-height-label / chain-height typography.
+   Reference: enm-design-mocks/v2/phase-03-status.html .chain-meta /
+   .state-chip / .chain-height. The DOM order is unchanged (chain-
+   card.js still appends: name → state subtitle → reconnect pill);
+   CSS reshapes the visual hierarchy. */
 .enm-chain-card-head {
     display: flex;
     flex-direction: column;
     align-items: center;
     text-align: center;
-    gap: 4px;
+    gap: var(--sp-2);
 }
 
+/* The chain NAME (h3) — v2 mock omits a prominent chain name; the
+   state-chip + height number speak for the card. Keep the name
+   visible but small (caption-ish) so screen readers still hear the
+   chain ID first, the AT contract isn't broken, and sighted users
+   notice it as a tag. */
 .enm-chain-card-name {
-    /* alpha.17 — 22 → 20px. The name shouts less now that the
-       PowerCircle is the focal point; matches the system-status value
-       size for a coherent type scale across the dashboard. */
-    font-size: 20px;
-    font-weight: var(--font-weight-semibold);
-    letter-spacing: -0.02em;
-    color: var(--text-primary);
-    text-transform: capitalize;
+    font-size: var(--fs-caption);
+    font-weight: var(--fw-semibold);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-tertiary);
     line-height: 1.2;
+    margin: 0;
 }
 
-/* 0.2.0-alpha.1 — state subtitle: natural-case word ("Running",
-   "Active", "Catching up"), no tracking. Matches the chain-state
-   localisation values verbatim. */
+/* State subtitle now reads as a v2 .state-chip — a pill with a
+   pulsing dot. JS still sets textContent to the localised state word
+   ("Active", "Catching up", "Stopped"); the pill chrome + dot come
+   from this rule. The data-state attribute on the chain-card root
+   selects the chip color via the rules below. */
 .enm-chain-card-state {
-    font-size: 13px;
-    font-weight: var(--font-weight-medium);
-    letter-spacing: 0;
-    color: var(--text-secondary);
-    text-transform: none;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--sp-2);
+    padding: 4px 12px;
+    border-radius: var(--r-pill);
+    font-size: var(--fs-caption);
+    font-weight: var(--fw-semibold);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    width: fit-content;
+    /* default (no-state) palette — muted */
+    background: var(--bg-elevated);
+    color: var(--text-tertiary);
 }
 
-/* 0.2.0-alpha.1 (phase 8) — SSE reconnect pill. Appears under the
-   state subtitle while the supervisor channel is reconnecting or
-   closed. Subtle, doesn't shout — the operator just needs to know
-   the breath is currently a lie. */
+.enm-chain-card-state::before {
+    content: '';
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: currentColor;
+    animation: enm-state-chip-pulse var(--anim-loop-slow) var(--ease-in-out) infinite;
+    flex: 0 0 auto;
+}
+
+@keyframes enm-state-chip-pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.6; transform: scale(0.85); }
+}
+
+/* State palette — driven by chain-card.js's `this.root.dataset.state`
+   on the .enm-chain-card root (set in _applyState). The chip color
+   matches the PowerCircle state ring so the two read as one unit. */
+.enm-chain-card[data-state="healthy"]      .enm-chain-card-state { background: var(--success-bg); color: var(--success); }
+.enm-chain-card[data-state="syncing"]      .enm-chain-card-state { background: var(--bg-tint);    color: var(--accent); }
+.enm-chain-card[data-state="recovering"]   .enm-chain-card-state,
+.enm-chain-card[data-state="starting"]     .enm-chain-card-state { background: var(--bg-tint);    color: var(--accent); }
+.enm-chain-card[data-state="stalled"]      .enm-chain-card-state { background: var(--warning-bg); color: var(--warning); }
+.enm-chain-card[data-state="error"]        .enm-chain-card-state { background: var(--error-bg);   color: var(--error); }
+.enm-chain-card[data-state="stopped"]      .enm-chain-card-state,
+.enm-chain-card[data-state="disabled"]     .enm-chain-card-state,
+.enm-chain-card[data-state="unconfigured"] .enm-chain-card-state {
+    background: var(--bg-elevated);
+    color: var(--text-tertiary);
+}
+
+/* Muted states (stopped/disabled/unconfigured): no pulse animation —
+   the dot is decorative, not a "this thing is alive" signal. */
+.enm-chain-card[data-state="stopped"]      .enm-chain-card-state::before,
+.enm-chain-card[data-state="disabled"]     .enm-chain-card-state::before,
+.enm-chain-card[data-state="unconfigured"] .enm-chain-card-state::before {
+    animation: none;
+    opacity: 0.5;
+}
+
+/* SSE reconnect pill — v2 colors retuned to --warning palette */
 .enm-chain-reconnect {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    margin-top: 4px;
+    margin-top: var(--sp-1);
     padding: 2px 10px;
-    border-radius: var(--radius-pill);
-    background: rgba(255, 159, 10, 0.12);
-    color: var(--state-stalled);
-    font-size: 11px;
-    font-weight: var(--font-weight-medium);
+    border-radius: var(--r-pill);
+    background: var(--warning-bg);
+    color: var(--warning);
+    font-size: var(--fs-caption);
+    font-weight: var(--fw-medium);
     letter-spacing: 0.02em;
 }
 
@@ -1037,46 +1093,48 @@ body[data-active-tab="identity"]::before {
    reference exists (verified via grep across js/ + index.html). The
    live equivalent is .enm-chain-primary-{value,label}. */
 
-/* 0.2.0-alpha.1 — primary metric stack. Big mono number on top
-   (block height or "local / network"), small lowercase label below.
-   Mirrors the system-status cells' value-first hierarchy and Apple's
-   widget pattern (big read first, caption second). */
+/* alpha.29 v2 brand reset · Phase 3b — primary metric: v2 .chain-
+   height. Label flips above the value via CSS order (JS still
+   appends value first then label) so the operator reads "BLOCK
+   HEIGHT" → big number. Value at v2's 44px tabular nums; label as
+   sp-tracked uppercase caption. */
 .enm-chain-primary {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 2px;
-    margin-top: 4px;
+    gap: var(--sp-1);
+    margin-top: var(--sp-2);
     text-align: center;
 }
 
 .enm-chain-primary-value {
-    font-size: 32px;
-    font-weight: var(--font-weight-semibold);
+    order: 2;
+    font-size: 44px;
+    font-weight: var(--fw-bold);
     letter-spacing: -0.02em;
     color: var(--text-primary);
     font-variant-numeric: tabular-nums;
-    line-height: 1.1;
-    /* Allow the big number to break across two lines on narrow cards
-       rather than overflow. The "L1,234,567 / 1,234,567" syncing
-       variant is the wide one — letting it wrap keeps the card neat. */
+    line-height: 1;
+    /* The "L1,234,567 / 1,234,567" syncing variant is the widest;
+       wrap rather than overflow on narrow cards. */
     overflow-wrap: anywhere;
     max-width: 100%;
 }
 
 .enm-chain-primary-label {
-    font-size: 12px;
-    font-weight: var(--font-weight-medium);
-    color: var(--text-muted);
-    text-transform: lowercase;
-    letter-spacing: 0.01em;
+    order: 1;
+    font-size: var(--fs-caption);
+    font-weight: var(--fw-semibold);
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
 }
 
-/* Stopped / unconfigured states — the value line is an em-dash; the
-   label carries the action prompt. Bump the label slightly so the
-   "tap to configure" CTA reads as interactive. */
+/* Stopped / unconfigured: the value line is an em-dash; the label
+   carries the action prompt. Bump the label slightly so the "tap to
+   configure" CTA reads as interactive. */
 .enm-chain-card[data-state="unconfigured"] .enm-chain-primary-label,
-.enm-chain-card[data-state="stopped"] .enm-chain-primary-label {
+.enm-chain-card[data-state="stopped"]      .enm-chain-primary-label {
     color: var(--text-secondary);
 }
 
