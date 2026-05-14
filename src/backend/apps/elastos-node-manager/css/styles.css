@@ -894,35 +894,35 @@ body[data-active-tab="identity"]::before {
 
 .enm-chain-card {
     container-type: inline-size;
-    /* 0.2.0-alpha.1 — Apple Hero card chrome.
-       - padding 36/32/28 (top/sides/bottom) matches the mock's
-         generous breathing room around the 220px ring.
-       - radius xl (28px) for the soft-shouldered Apple card look.
-       - resting state has no shadow; hover lifts subtly. */
-    padding: var(--chain-card-padding);
-    border-radius: var(--chain-card-radius);
+    /* alpha.29 v2 brand reset · Phase 3a — chain-card chrome.
+       Reference: enm-design-mocks/v2/phase-03-status.html .chain-card.
+       Padding tightens (32px all around), radius softens to r-lg (16px
+       instead of the alpha.1 28px xl), border-subtle for a hairline
+       edge that doesn't compete with the ::before page-wash, and
+       position:relative + overflow:hidden so the success-bg radial
+       glow from the v2 .hero-power state-color rings (Phase 3d) can
+       sit inside the card. The hover lift from alpha.17 is gone —
+       v2 keeps the card calm at rest with no transform/shadow
+       choreography. */
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-lg);
+    padding: var(--sp-6);
+    position: relative;
+    overflow: hidden;
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 12px;
-    transition: border-color var(--motion-base) var(--ease-spring),
-                box-shadow var(--motion-base) var(--ease-spring),
-                transform var(--motion-base) var(--ease-spring);
+    gap: var(--sp-4);
+    transition: border-color var(--motion-base) var(--ease-spring);
 }
 
-/* alpha.17 — gentle hover lift on the resting card. Only a few pixels
-   of shadow + a 1px translate so the card responds to the cursor like
-   a tap target on iOS. Stays calm at rest (no shadow, just border)
-   because the dashboard hosts many of these and shouting at rest would
-   make the page feel busy. */
 .enm-chain-card:hover {
-    border-color: var(--border-strong);
-    box-shadow: var(--shadow-md);
-    transform: translateY(-1px);
+    border-color: var(--border);
 }
 
 @media (prefers-reduced-motion: reduce) {
-    .enm-chain-card:hover { transform: none; }
+    .enm-chain-card { transition: none; }
 }
 
 .enm-chain-hero {
