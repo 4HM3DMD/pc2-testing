@@ -417,6 +417,20 @@ body {
 }
 .enm-pane[hidden] { display: none !important; }
 
+/* 0.2.0-beta.3.2 hotfix — global [hidden] safeguard. The Beta 3 rebuild
+   (B3.1 foundation) dropped this rule from alpha.27. Without it,
+   `.enm-spinner { display: flex }` / `.enm-error { padding: ... }` /
+   `.enm-content { ... }` all set non-`none` display values that beat the
+   user-agent stylesheet's `[hidden] { display: none }` in the cascade
+   (same specificity, author rule wins by being later). Result: setting
+   `el.hidden = true` in _revealContent / _showError did nothing visually
+   — the spinner stayed flexed in place forever, leaving every operator
+   stuck on "Connecting to Node Manager…". This `!important` global puts
+   the safeguard back. Per-component `[hidden]` rules below (`.enm-pane
+   [hidden]`, `.enm-section-card[hidden]`, etc.) still work because they
+   also use `display: none`, just at higher specificity. */
+[hidden] { display: none !important; }
+
 /* ====================================================================
  * Boot spinner + error states
  * ==================================================================== */
