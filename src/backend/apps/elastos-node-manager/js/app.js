@@ -190,7 +190,7 @@
             errorReload:  document.getElementById('enm-error-reload'),
             content:      document.getElementById('enm-content'),
             tabs:         document.getElementById('enm-tabs'),
-            themeToggle:  document.getElementById('enm-theme-toggle'),
+            // themeToggle removed in alpha.29 v2 Phase 1c — dark-only.
             settingsToggle: document.getElementById('enm-settings-toggle'),
             paneDashboard: document.getElementById('enm-pane-dashboard'),
             paneLogs:     document.getElementById('enm-pane-logs'),
@@ -304,10 +304,10 @@
         this.services.wallet.sendReady();
         this.services.wallet.installCloseHandler();
 
-        // Listen for PC2's themeChanged broadcast so ENM follows the
-        // operator's desktop choice automatically. Manual override
-        // (drawer's theme switch) is honoured first.
-        if (root.EnmThemeService) { root.EnmThemeService.init(); }
+        // EnmThemeService removed in alpha.29 v2 Phase 1c — ENM is
+        // dark-only now, so PC2's themeChanged broadcast is irrelevant.
+        // index.html's pre-paint script hard-sets <html data-theme="dark">
+        // unconditionally.
 
         // Step 2: resolve identity in the background (non-blocking). The
         // identity is still useful for audit attribution + the producer
@@ -334,7 +334,7 @@
             }
         });
 
-        this._wireThemeToggle();
+        // _wireThemeToggle removed in alpha.29 v2 Phase 1c — dark-only.
         this._wireSettingsToggle();
         this._wireCrossTabSync();
 
@@ -375,41 +375,8 @@
             });
     };
 
-    /**
-     * Wire the theme toggle button. Persists choice to the shared
-     * 'elacity-theme' localStorage key — same key dao-dashboard /
-     * Elacity Market / dApp Centre use, so flipping the theme in any
-     * of these surfaces propagates here on next open.
-     *
-     * Pre-paint script in index.html applies the saved theme before
-     * first render, so this method only handles user clicks.
-     *
-     * In v0.4 P5C this is moved INTO the settings drawer, but the
-     * top-level toggle button stays in the DOM as a fallback for any
-     * view where the drawer isn't mounted (e.g. error pane).
-     *
-     * @private
-     */
-    ENMApp.prototype._wireThemeToggle = function () {
-        if (!this.els.themeToggle) { return; }
-        // alpha.28.1 batch 24 — singleton guard. init() re-runs each
-        // Retry click on the error pane; without dataset.wired the
-        // addEventListener stacks an extra handler every retry, so
-        // after N retries the next click flips the theme N+1 times.
-        // Same pattern already used for errorRetry/errorReload.
-        if (this.els.themeToggle.dataset.wired === '1') { return; }
-        this.els.themeToggle.dataset.wired = '1';
-        this.els.themeToggle.addEventListener('click', function () {
-            var current = document.documentElement.getAttribute('data-theme');
-            var next = (current === 'dark') ? 'light' : 'dark';
-            if (next === 'dark') {
-                document.documentElement.setAttribute('data-theme', 'dark');
-            } else {
-                document.documentElement.removeAttribute('data-theme');
-            }
-            try { localStorage.setItem('elacity-theme', next); } catch (e) { /* ignore */ }
-        });
-    };
+    // _wireThemeToggle removed in alpha.29 v2 Phase 1c — dark-only
+    // (the entire light/dark switching feature is gone).
 
     /**
      * Wire the gear icon in the home header to open the settings drawer.

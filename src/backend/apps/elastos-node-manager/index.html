@@ -10,30 +10,20 @@
     <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
     <meta name="referrer" content="no-referrer">
     <title>Elastos Node Manager</title>
-    <link rel="stylesheet" href="css/styles.css?ts=20260513c">
+    <link rel="stylesheet" href="css/styles.css?ts=20260515q">
     <script>
-        // Apply theme BEFORE first paint to avoid a flash.
-        //   - mode='manual' → use the operator's last manual choice
-        //     stored in 'elacity-theme'
-        //   - mode='auto' (default) → fall back to the last broadcast
-        //     value cached in 'elacity-theme' (set by services/theme.js
-        //     when PC2's themeChanged broadcast arrives), or to the OS
-        //     prefers-color-scheme as a last resort
-        // Either way, services/theme.js will replace this with PC2's
-        // current value as soon as the broadcast arrives.
+        // alpha.29 v2 brand reset — dark only. The :root in styles.css
+        // now carries the v2 dark-canvas + cyan-accent token set, and
+        // the [data-theme="dark"] selectors throughout the stylesheet
+        // (15 of them, Phase 1c will drop the prefix) keep matching
+        // because we hard-set data-theme=dark on documentElement at
+        // pre-paint. The prior light/dark detection logic + the
+        // services/theme.js broadcast handler are now no-ops; the
+        // theme toggle button is being removed in Phase 1e.
         (function () {
             try {
-                var mode = localStorage.getItem('enm-theme-mode') || 'auto';
-                var saved = localStorage.getItem('elacity-theme');
-                var prefersDark = window.matchMedia
-                    && window.matchMedia('(prefers-color-scheme: dark)').matches;
-                var dark = (mode === 'manual')
-                    ? (saved === 'dark')
-                    : (saved === 'dark' || (!saved && prefersDark));
-                if (dark) {
-                    document.documentElement.setAttribute('data-theme', 'dark');
-                }
-            } catch (e) { /* localStorage may be blocked; ignore */ }
+                document.documentElement.setAttribute('data-theme', 'dark');
+            } catch (e) { /* fail open — :root dark values still apply */ }
         })();
 
         // alpha.25 — set initial body[data-app-size] before first paint so CSS
@@ -99,6 +89,15 @@
              manager already provides the app title via window-head — no
              need to re-render it here. -->
         <nav class="enm-header-bar" id="enm-tabs" role="tablist" aria-label="Sections" hidden>
+            <!-- alpha.29 v2 Phase 2 — brand group: gradient mark + name + BETA pill.
+                 Sits left of the tabs. The brand-name hides at narrow widths so
+                 the tabs row keeps room; the env pill stays visible to anchor
+                 the operator's mental model of "this is the test build". -->
+            <div class="enm-brand">
+                <span class="enm-brand-mark" aria-hidden="true"></span>
+                <span class="enm-brand-name">Elastos Node Manager</span>
+                <span class="enm-brand-env">BETA</span>
+            </div>
             <div class="enm-header-tabs">
                 <button type="button" class="enm-tab active" role="tab" id="enm-tab-dashboard" data-tab="dashboard" aria-selected="true"  aria-controls="enm-pane-dashboard" tabindex="0">Dashboard</button>
                 <button type="button" class="enm-tab"        role="tab" id="enm-tab-logs"      data-tab="logs"      aria-selected="false" aria-controls="enm-pane-logs"      tabindex="-1">Logs</button>
@@ -110,19 +109,7 @@
             </div>
             <div class="enm-header-spacer"></div>
             <div class="enm-header-actions">
-                <!-- Theme toggle moved into the settings drawer in v0.4 P5C —
-                     this stays as a fallback for the error pane / pre-drawer
-                     boot states. Hidden in home mode (the gear opens the
-                     drawer where the operator can switch theme). -->
-                <button type="button" class="enm-icon-btn" id="enm-theme-toggle" title="Toggle dark mode" aria-label="Toggle theme" hidden>
-                    <svg class="enm-icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-                        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
-                    </svg>
-                    <svg class="enm-icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-                        <circle cx="12" cy="12" r="4"></circle>
-                        <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"></path>
-                    </svg>
-                </button>
+                <!-- Theme toggle removed in alpha.29 v2 Phase 1c — dark-only. -->
                 <button type="button" class="enm-icon-btn" id="enm-settings-toggle" title="Settings" aria-label="Open settings">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
                         <circle cx="12" cy="12" r="3"></circle>
@@ -177,7 +164,8 @@
     <script defer src="js/utils.js?ts=20260506g"></script>
     <script defer src="js/illustrations.js?ts=20260506g"></script>
     <script defer src="js/services/wallet.js?ts=20260506g"></script>
-    <script defer src="js/services/theme.js?ts=20260506g"></script>
+    <!-- theme.js removed in alpha.29 v2 Phase 1c — dark-only. -->
+    <!-- <script defer src="js/services/theme.js?ts=20260506g"></script> -->
     <script defer src="js/services/api.js?ts=20260506g"></script>
     <script defer src="js/services/sse.js?ts=20260511d"></script>
     <script defer src="js/services/notifications.js?ts=20260506g"></script>
@@ -203,7 +191,7 @@
     <script defer src="js/components/proposal-card.js?ts=20260506g"></script>
     <script defer src="js/components/welcome-screen.js?ts=20260506g"></script>
     <script defer src="js/components/setup-conversation.js?ts=20260511c"></script>
-    <script defer src="js/components/settings-tab.js?ts=20260511g"></script>
+    <script defer src="js/components/settings-tab.js?ts=20260515a">
     <!-- alpha.29 batch 103 — audit-tab.js was dropped from the eager
          script chain. ~378 LOC + dependencies are lazy-loaded via
          root.enmLoadScript('js/components/audit-tab.js?ts=...') the
@@ -217,7 +205,7 @@
       // them to enmLoadScript. Single source of truth for the path +
       // cache-bust token; matches the existing ?ts= pattern.
       window.ENM_LAZY_SCRIPTS = window.ENM_LAZY_SCRIPTS || {};
-      window.ENM_LAZY_SCRIPTS.auditTab = 'js/components/audit-tab.js?ts=20260514a';
+      window.ENM_LAZY_SCRIPTS.auditTab = 'js/components/audit-tab.js?ts=20260515a';
       // alpha.29 batch 109 — evm-tab also lazy-loaded. Smaller savings
       // than audit-tab (~72 vs 378 LOC) but proves the pattern scales
       // across multiple tabs. Most operators never open the EVM tab

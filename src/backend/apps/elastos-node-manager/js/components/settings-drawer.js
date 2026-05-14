@@ -272,65 +272,12 @@
             // F1-only-default per Wave 1 invariant).
         }));
 
-        // ---- Section 3: Appearance --------------------------------------
-        // Default behaviour: ENM follows ElastOS (PC2)'s desktop theme via
-        // the puter-js `themeChanged` broadcast. The two rows below let the
-        // operator override that ("Switch to {opposite} mode" sets
-        // enm-theme-mode=manual) or restore inheritance ("Follow ElastOS
-        // theme" sets it back to auto).
-        var appearance = makeSection('Appearance', [], this._prefs, function () {});
-        var apprRows = appearance.querySelector('.enm-drawer-rows');
-
-        var themeBtn = document.createElement('button');
-        themeBtn.type = 'button';
-        themeBtn.className = 'enm-drawer-row enm-drawer-row-action';
-        themeBtn.innerHTML =
-            '<span class="enm-drawer-row-label">'
-              + '<span id="enm-drawer-theme-label">Switch to dark mode</span>'
-              + '<span class="enm-drawer-row-help" id="enm-drawer-theme-mode"></span>'
-            + '</span>'
-            + '<span class="enm-drawer-row-chevron" aria-hidden="true">›</span>';
-        apprRows.appendChild(themeBtn);
-
-        var followBtn = document.createElement('button');
-        followBtn.type = 'button';
-        followBtn.className = 'enm-drawer-row enm-drawer-row-action';
-        followBtn.innerHTML =
-            '<span class="enm-drawer-row-label">Follow ElastOS theme</span>'
-            + '<span class="enm-drawer-row-chevron" aria-hidden="true">›</span>';
-        apprRows.appendChild(followBtn);
-        body.appendChild(appearance);
-
-        function refreshThemeLabels() {
-            var dark = document.documentElement.getAttribute('data-theme') === 'dark';
-            themeBtn.querySelector('#enm-drawer-theme-label').textContent =
-                dark ? 'Switch to light mode' : 'Switch to dark mode';
-            var mode = root.EnmThemeService ? root.EnmThemeService.getMode() : 'auto';
-            themeBtn.querySelector('#enm-drawer-theme-mode').textContent =
-                mode === 'manual'
-                    ? "You're overriding ElastOS's theme."
-                    : 'Currently following ElastOS.';
-            followBtn.hidden = (mode === 'auto');
-        }
-        refreshThemeLabels();
-        themeBtn.addEventListener('click', function () {
-            var current = document.documentElement.getAttribute('data-theme');
-            var next = (current === 'dark') ? 'light' : 'dark';
-            if (root.EnmThemeService) {
-                root.EnmThemeService.setManual(next);
-            } else {
-                if (next === 'dark') { document.documentElement.setAttribute('data-theme', 'dark'); }
-                else { document.documentElement.removeAttribute('data-theme'); }
-                try { localStorage.setItem('elacity-theme', next); } catch (e) {}
-            }
-            refreshThemeLabels();
-        });
-        followBtn.addEventListener('click', function () {
-            if (root.EnmThemeService) { root.EnmThemeService.setAuto(); }
-            // The next themeChanged broadcast will re-sync. Until it arrives,
-            // leave the current visual state alone (no jarring flicker).
-            refreshThemeLabels();
-        });
+        // Section 3 (Appearance) removed in alpha.29 v2 brand reset
+        // Phase 1c — ENM is dark-only now. The theme toggle + "Follow
+        // ElastOS theme" rows were the entire reason this section
+        // existed. Dropping them takes ~58 LOC out of the drawer and
+        // removes the dependency on root.EnmThemeService (which is
+        // being deleted in the same phase).
 
         // ---- Section 4: For the technically curious ---------------------
         var advanced = makeSection('For the technically curious', [], this._prefs, function () {});

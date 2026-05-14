@@ -1224,6 +1224,19 @@
             values.forEach(function (v, idx) {
                 var locked = isLocked(v);
                 var chip = document.createElement('span');
+                // alpha.29 v2 brand-reset · Audit A4 — chips now carry
+                // [data-chip] (+ [data-locked] when applicable) so the
+                // Phase 4c CSS at .enm-chip-input span[data-chip] etc.
+                // can apply the v2 token-driven pill chrome (bg-overlay,
+                // r-pill, font-mono, accent-soft tint for locked).
+                // Previously the Phase 4c selectors never matched
+                // because the JS emitted plain <span>s; chips rendered
+                // with the inline-style fallback below (10px radius,
+                // no locked-vs-unlocked contrast). The inline styles
+                // remain as defensive defaults; Phase 4c's !important
+                // overrides win in normal page render.
+                chip.setAttribute('data-chip', '');
+                if (locked) { chip.setAttribute('data-locked', ''); }
                 chip.style.display = 'inline-flex';
                 chip.style.alignItems = 'center';
                 chip.style.gap = '4px';
