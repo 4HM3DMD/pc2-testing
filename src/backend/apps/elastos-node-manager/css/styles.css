@@ -1221,33 +1221,39 @@ body[data-active-tab="identity"]::before {
    commented out — ~120 LOC removed. If a future iteration needs an
    in-card BPoS strip, the v1 from alpha.14-18 is in git history. */
 
+/* alpha.29 v2 brand reset · Phase 3d — .enm-chain-actions wrapper.
+   v2 places the action row at the bottom of the card, separated by
+   a hairline divider + sp-5 padding-top (mock pattern). The buttons
+   themselves are flat .enm-btn / .enm-btn-primary per the new v2
+   variant rules above. */
 .enm-chain-actions {
     display: flex;
-    justify-content: center;
-    gap: var(--spacing-sm);
-    margin-top: var(--spacing-xs);
+    justify-content: flex-start;
+    gap: var(--sp-2);
+    margin-top: var(--sp-5);
+    padding-top: var(--sp-5);
+    border-top: 1px solid var(--border-subtle);
     flex-wrap: wrap;
+    width: 100%;
 }
 
 .enm-chain-actions .enm-btn {
-    min-width: 110px;
-    padding: 8px 18px;
-    font-size: 13px;
+    /* v2 buttons don't fix a minimum width; let the label drive size */
+    min-width: 0;
 }
 
-/* alpha.18 — pulse the action row when the operator taps the
-   PowerCircle on a healthy chain with nothing to disclose. Draws the
-   eye to the visible Stop / Restart buttons so the click registers as
-   "look here for actions" instead of opening an empty Details panel.
-   Keyframe is short (560ms) so it doesn't linger after the second tap. */
+/* Pulse animation when the operator taps the PowerCircle on a
+   healthy chain (alpha.18). Recoloured to the v2 cyan accent so the
+   ring matches the page's brand tint instead of the iOS-blue rgba.
+   Keeps the same 560ms / scale-1.04 choreography. */
 @keyframes enm-chain-actions-pulse {
-    0%   { transform: scale(1);    box-shadow: 0 0 0 0   rgba(59,130,246,0.0); }
-    35%  { transform: scale(1.04); box-shadow: 0 0 0 8px rgba(59,130,246,0.18); }
-    100% { transform: scale(1);    box-shadow: 0 0 0 14px rgba(59,130,246,0.0); }
+    0%   { transform: scale(1);    box-shadow: 0 0 0 0   rgba(0, 212, 255, 0.0); }
+    35%  { transform: scale(1.04); box-shadow: 0 0 0 8px rgba(0, 212, 255, 0.18); }
+    100% { transform: scale(1);    box-shadow: 0 0 0 14px rgba(0, 212, 255, 0.0); }
 }
 .enm-chain-actions-pulse {
     animation: enm-chain-actions-pulse 560ms var(--ease-spring) 1;
-    border-radius: var(--radius-pill);
+    border-radius: var(--r-pill);
 }
 @media (prefers-reduced-motion: reduce) {
     .enm-chain-actions-pulse { animation: none; }
@@ -1582,101 +1588,122 @@ body[data-active-tab="identity"]::before {
    Buttons — Apple-style hover lift, press scale, focus ring
    ============================================================ */
 
+/* alpha.29 v2 brand reset · Phase 3d — buttons.
+   Reference: enm-design-mocks/v2/phase-03-status.html and phase-06-
+   wizard-modals.html .btn / .btn-primary / .btn-danger / .btn-ghost.
+
+   v2 button spec:
+     base   — bg-elevated, 1px --border, --r-sm radius, padding 7px 14px,
+              fs-body medium, hover lifts to bg-overlay + border-strong
+     primary— cyan fill, dark text, semibold, no border, hover deepens
+              to --accent-strong, disabled drops to bg-overlay/tertiary
+     danger — transparent bg, --error text, --error-soft border
+     ghost  — transparent everywhere, hover bg-elevated
+     small  — padding 5px 10px, fs-caption (.btn-sm)
+
+   Existing .enm-btn classes are kept; only the values change. JS
+   never reads button class names, so all 113 batches' click handlers
+   + enmRunOnce wrappers + state-disabled gating continue to work. */
 .enm-btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 6px;
-    /* alpha.17 — 36 → 34px. The taller height felt web-formy; 34 lines
-       up with macOS toolbar controls and matches the density of the
-       input fields without making the click target too small. */
+    gap: var(--sp-2);
+    /* min-height kept at 34px for touch ergonomics (WCAG 2.5.5
+       AA-22 floor); v2 .btn doesn't specify min-height but ENM is
+       a multi-touch dashboard so we anchor the click target. */
     min-height: 34px;
-    padding: 0 14px;
-    font-size: 13px;
+    padding: 7px 14px;
+    font: inherit;
+    font-size: var(--fs-body);
     line-height: 1;
-    font-family: inherit;
-    font-weight: var(--font-weight-medium);
-    letter-spacing: -0.005em;
-    border: 1px solid transparent;
-    border-radius: var(--radius-md);
-    background: var(--bg-surface);
+    font-weight: var(--fw-medium);
+    letter-spacing: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    background: var(--bg-elevated);
     color: var(--text-primary);
     cursor: pointer;
     user-select: none;
-    /* Spring easing on the hover/press cycle so buttons settle like
-       an iOS / macOS control instead of bouncing past the target. */
-    transition: background var(--motion-fast) var(--ease-spring),
-                border-color var(--motion-fast) var(--ease-spring),
-                color var(--motion-fast) var(--ease-spring),
-                transform var(--motion-fast) var(--ease-spring),
-                box-shadow var(--motion-fast) var(--ease-spring);
-    will-change: transform;
+    white-space: nowrap;
+    transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+
+.enm-btn:hover:not(:disabled) {
+    border-color: var(--border-strong);
+    background: var(--bg-overlay);
 }
 
 .enm-btn:disabled {
-    opacity: 0.6;
+    opacity: 0.4;
     cursor: not-allowed;
 }
 
-.enm-btn:hover:not(:disabled) { background: var(--bg-muted); }
-.enm-btn:active:not(:disabled) { transform: scale(0.97); }
-
-.enm-btn-primary {
-    background: var(--primary);
-    color: #fff;
-    border-color: var(--primary);
-    /* alpha.17 — drop the inset white highlight that read as "gloss".
-       Modern primary buttons (Linear, Vercel, Anthropic console) sit
-       flat on the surface; the colour alone carries call-to-action
-       weight. The :hover state still bumps to primary-hover for
-       affordance. */
-    box-shadow: none;
+.enm-btn:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
 }
 
-/* When a primary button is disabled, drop the "I am the suggested action"
-   colour so the eye doesn't keep landing on it. Matches the calm Apple
-   pattern: disabled buttons read as muted, never as call-to-action. */
-.enm-btn-primary:disabled {
-    background: var(--bg-muted);
-    color: var(--text-muted);
-    border-color: var(--border-color);
-    box-shadow: none;
+/* Primary — the suggested action. Cyan fill, dark text. */
+.enm-btn-primary {
+    background: var(--accent);
+    color: #08090c;
+    border-color: transparent;
+    font-weight: var(--fw-semibold);
 }
 
 .enm-btn-primary:hover:not(:disabled) {
-    background: var(--primary-hover);
-    border-color: var(--primary-hover);
+    background: var(--accent-strong);
+    border-color: transparent;
 }
 
-.enm-btn-primary:active:not(:disabled) {
-    background: var(--primary-active);
-    border-color: var(--primary-active);
-    transform: scale(0.97);
+.enm-btn-primary:disabled {
+    background: var(--bg-overlay);
+    color: var(--text-tertiary);
+    border-color: transparent;
 }
 
+/* Secondary — visually identical to .enm-btn base. Kept as a separate
+   class so HTML/JS that distinguishes intent continues to typecheck;
+   alpha.18 used to give secondary a slightly different chrome but v2
+   collapses them. */
 .enm-btn-secondary {
-    background: var(--bg-surface);
-    border-color: var(--border-color);
-    color: var(--text-primary);
+    /* inherits .enm-btn base */
 }
 
-.enm-btn-secondary:hover:not(:disabled) {
-    border-color: var(--border-strong);
-    background: var(--bg-muted);
-}
-
+/* Danger — outline-only cyan-accent-style, but with --error palette.
+   v2 pulls the danger button out of the "filled" category so the
+   visual weight is reserved for the suggested action. */
 .enm-btn-danger {
-    background: var(--bg-surface);
+    background: transparent;
+    color: var(--error);
+    border-color: rgba(239, 80, 96, 0.3);
+}
+
+.enm-btn-danger:hover:not(:disabled) {
+    background: var(--error-bg);
     border-color: var(--error);
     color: var(--error);
 }
 
-.enm-btn-danger:hover:not(:disabled) {
-    background: var(--error);
-    color: #fff;
+.enm-btn-ghost {
+    background: transparent;
+    border-color: transparent;
+    color: var(--text-secondary);
 }
 
-.enm-btn:focus-visible { box-shadow: var(--focus-ring); }
+.enm-btn-ghost:hover:not(:disabled) {
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    border-color: transparent;
+}
+
+/* Small variant — used in audit pane filter row, log toolbar, etc. */
+.enm-btn-sm {
+    min-height: 0;
+    padding: 5px 10px;
+    font-size: var(--fs-caption);
+}
 
 /* ============================================================
    Wizard CSS removed in v0.5 — setup-wizard.js was deleted in
@@ -2125,21 +2152,13 @@ body[data-active-tab="identity"]::before {
     letter-spacing: 0.1em;
 }
 
-.enm-btn-danger {
-    background: var(--danger, #c0392b);
-    color: white;
-    border: 1px solid var(--danger, #c0392b);
-}
-
-.enm-btn-danger:hover:not(:disabled) {
-    background: #a93226;
-    border-color: #a93226;
-}
-
-.enm-btn-danger:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-}
+/* alpha.29 v2 brand reset · Phase 3d — the duplicate .enm-btn-danger
+   block from alpha.18 (hardcoded #c0392b filled-red) was removed.
+   The canonical v2 .enm-btn-danger rule lives in the .enm-btn
+   variant cluster ~lines 1640-1660; it uses --error + --error-bg
+   tokens with an outline-only style so the danger button sits
+   visually below primary in the action hierarchy. The
+   :disabled rule is inherited from .enm-btn:disabled. */
 
 /* ============================================================
    Validator registration card (alpha.14)
