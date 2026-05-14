@@ -437,6 +437,14 @@
                     + '<div class="enm-bpos-stat-value" data-fill="rewards">—</div>'
                 + '</div>'
             + '</div>'
+            // 0.2.0-beta.3.12 — vote-threshold notice. Elastos consensus
+            // requires ≥ 80,000 votes for a producer to enter the arbiter
+            // set; below that, no rotation slot is possible regardless of
+            // rank. Pre-beta.3.12 operators registered with low votes
+            // wondered why they never went on-duty. _fillActiveStats
+            // populates this <div> conditionally — `hidden` by default so
+            // the dashboard is clean for ≥ 80K producers.
+            + '<div class="enm-bpos-vote-threshold" data-fill="voteThreshold" hidden></div>'
             + '<div class="enm-bpos-note">'
                 + '<b>Rewards and voting are managed in Elastos Essentials.</b> '
                 + 'ENM tracks on-chain producer status here; claim, stake, '
@@ -506,10 +514,79 @@
         var nodes = this.root.querySelectorAll('[data-fill]');
         for (var i = 0; i < nodes.length; i += 1) {
             var key = nodes[i].getAttribute('data-fill');
+            // 0.2.0-beta.3.12 — vote threshold needs richer HTML (icon +
+            // two-line message) so we handle it separately instead of a
+            // plain textContent fill. The other stats stay textContent-
+            // only since they're scalar values.
+            if (key === 'voteThreshold') {
+                this._renderVoteThreshold(nodes[i], producer);
+                continue;
+            }
             if (fillers[key] !== undefined) {
                 nodes[i].textContent = fillers[key];
             }
         }
+    };
+
+    /**
+     * 0.2.0-beta.3.12 — vote-threshold notice. Elastos DPoS consensus
+     * requires ≥ 80,000 votes (combined `votes` + `dposv2votes`) for a
+     * producer to be eligible for the arbiter set. Below threshold:
+     * the producer's on-chain record is valid (so STATE_ACTIVE shows)
+     * but they'll never go on-duty, never sign blocks, never earn
+     * rotation rewards.
+     *
+     * Pre-beta.3.12 we silently showed "Inactive rounds: 0" with no
+     * explanation — operators wondered why their registered, active
+     * producer was idle. This explains it.
+     *
+     * @private
+     * @param {HTMLElement} el     the .enm-bpos-vote-threshold container
+     * @param {object}      producer  producer record from /producer
+     */
+    BposCard.prototype._renderVoteThreshold = function (el, producer) {
+        if (!el || !producer) { return; }
+        // BPoS uses DPoSv2 post-fork. Sum both buckets so operators on
+        // either side of the transition see a meaningful figure. Both
+        // can be null on a freshly-registered producer.
+        var v1 = (typeof producer.votes === 'number') ? producer.votes : 0;
+        var v2 = (typeof producer.dposv2votes === 'number') ? producer.dposv2votes : 0;
+        var total = v1 + v2;
+        var THRESHOLD = 80000;
+        // If we don't have either field yet (backend latency), hide.
+        if (producer.votes == null && producer.dposv2votes == null) {
+            el.hidden = true;
+            el.innerHTML = '';
+            return;
+        }
+        if (total >= THRESHOLD) {
+            // Producer is eligible for the arbiter set. No notice needed.
+            el.hidden = true;
+            el.innerHTML = '';
+            return;
+        }
+        // Below threshold. Surface a clear, actionable message.
+        var fmtN = (typeof root !== 'undefined' && root.enmFormatNumber)
+            ? root.enmFormatNumber
+            : function (n) { return String(n); };
+        var needed = THRESHOLD - total;
+        el.hidden = false;
+        el.innerHTML = ''
+            + '<div class="enm-bpos-vote-threshold-head">'
+                + '<span class="enm-bpos-vote-threshold-icon" aria-hidden="true">⚠</span>'
+                + '<div>'
+                    + '<div class="enm-bpos-vote-threshold-title">'
+                        + 'Below ' + fmtN(THRESHOLD) + '-vote threshold'
+                    + '</div>'
+                    + '<div class="enm-bpos-vote-threshold-body">'
+                        + 'Current total: <b>' + fmtN(total) + '</b> votes '
+                        + '(' + fmtN(v1) + ' DPoSv1 + ' + fmtN(v2) + ' DPoSv2). '
+                        + 'Need <b>' + fmtN(needed) + '</b> more votes to enter the arbiter set. '
+                        + 'Until then this producer will not be selected for block signing or rotation, '
+                        + 'regardless of rank. Community votes accrue through Elastos Essentials.'
+                    + '</div>'
+                + '</div>'
+            + '</div>';
     };
 
     /** @private */

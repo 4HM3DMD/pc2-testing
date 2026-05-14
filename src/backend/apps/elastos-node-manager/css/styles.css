@@ -72,6 +72,10 @@
     --success-bg:  rgba(52, 211, 153, 0.10);
     --warning:     #fbbf24;
     --warning-bg:  rgba(251, 191, 36, 0.10);
+    /* 0.2.0-beta.3.12 — phase-01 mock spec line 32. Used by border on
+       elements that want a warning palette but with more saturation than
+       the bg-tint while staying subtle (BPoS vote-threshold notice). */
+    --warning-soft: rgba(251, 191, 36, 0.30);
     --error:       #f87171;
     --error-bg:    rgba(248, 113, 113, 0.10);
     /* Legacy alias for components that say --danger (alpha.16 Danger
@@ -3273,6 +3277,232 @@ body[data-app-size="compact"] .enm-role-card-badge-short,
     background: var(--bg-elevated);
     padding: var(--sp-2) var(--sp-3);
     border-radius: 0 var(--r-sm) var(--r-sm) 0;
+}
+
+/* 0.2.0-beta.3.12 — BPoS vote-threshold notice. Elastos consensus
+   rule: producers below 80,000 combined votes (DPoSv1 + DPoSv2)
+   never enter the arbiter set. Surface this when registered + active
+   but under threshold; otherwise hidden via the [hidden] attribute. */
+.enm-bpos-vote-threshold {
+    background: var(--warning-bg);
+    border: 1px solid var(--warning-soft);
+    border-radius: var(--r-md);
+    padding: var(--sp-3) var(--sp-4);
+}
+.enm-bpos-vote-threshold-head {
+    display: flex;
+    gap: var(--sp-3);
+    align-items: flex-start;
+}
+.enm-bpos-vote-threshold-icon {
+    flex: 0 0 auto;
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    background: var(--warning);
+    color: var(--bg-page);
+    font-size: 14px;
+    font-weight: var(--fw-bold);
+}
+.enm-bpos-vote-threshold-title {
+    font-size: var(--fs-body);
+    font-weight: var(--fw-semibold);
+    color: var(--warning);
+    line-height: 1.3;
+    margin-bottom: 4px;
+}
+.enm-bpos-vote-threshold-body {
+    font-size: var(--fs-caption);
+    color: var(--text-secondary);
+    line-height: 1.55;
+}
+.enm-bpos-vote-threshold-body b {
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+    font-weight: var(--fw-semibold);
+}
+
+/* 0.2.0-beta.3.12 — Tools-update card. Pre-beta.3.12 the component
+   shipped with NO CSS at all — operators saw plain text where the
+   mock specifies a proper card surface. This block lifts the card
+   chrome up to match .enm-bpos-card / .enm-chain-card visually, and
+   adds the severity-chip + version pill + collapsible release-notes
+   styling the JS in tools-update-card.js already emits.
+
+   Mock spec for the resting card lives at phase-03-status.html:215
+   (.update-card with bg-surface + border + radius-md + flex row).
+   The Beta 3 component is a richer variant with its own header
+   structure, but the card-surface treatment matches. */
+.enm-tools-update-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-lg);
+    padding: var(--sp-5);
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-3);
+}
+.enm-tools-update-head {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-2);
+}
+.enm-tools-update-head h3 {
+    margin: 0;
+    font-size: var(--fs-h3);
+    font-weight: var(--fw-semibold);
+    color: var(--text-primary);
+    display: inline-flex;
+    align-items: center;
+    gap: var(--sp-2);
+    flex-wrap: wrap;
+}
+.enm-tools-update-head-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--sp-3);
+    flex-wrap: wrap;
+}
+.enm-tools-update-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    border-radius: var(--r-xs);
+    font-size: 10px;
+    font-weight: var(--fw-semibold);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    background: var(--bg-elevated);
+    color: var(--text-tertiary);
+    margin-left: var(--sp-2);
+    cursor: help;
+}
+.enm-tools-update-badge-stale {
+    background: var(--warning-bg);
+    color: var(--warning);
+}
+.enm-tools-update-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 10px;
+    border-radius: var(--r-pill);
+    font-size: 11px;
+    font-weight: var(--fw-semibold);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+.enm-tools-update-chip-major    { background: var(--error-bg);   color: var(--error); }
+.enm-tools-update-chip-minor    { background: var(--warning-bg); color: var(--warning); }
+.enm-tools-update-chip-patch    { background: var(--accent-soft); color: var(--accent); }
+.enm-tools-update-chip-security { background: var(--error-bg);   color: var(--error); }
+.enm-tools-update-versions {
+    margin: 0;
+    font-size: var(--fs-body);
+    color: var(--text-secondary);
+    display: flex;
+    align-items: baseline;
+    gap: var(--sp-2);
+    flex-wrap: wrap;
+}
+.enm-tools-update-versions code {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    background: var(--bg-elevated);
+    padding: 1px 6px;
+    border-radius: var(--r-xs);
+    color: var(--text-primary);
+}
+.enm-tools-update-when {
+    color: var(--text-tertiary);
+    font-size: var(--fs-caption);
+}
+.enm-tools-update-reltime { color: var(--text-secondary); }
+.enm-tools-update-notes {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-sm);
+    padding: var(--sp-2) var(--sp-3);
+    font-size: var(--fs-caption);
+}
+.enm-tools-update-notes summary {
+    cursor: pointer;
+    color: var(--text-secondary);
+    font-weight: var(--fw-medium);
+    list-style: none;
+}
+.enm-tools-update-notes summary::-webkit-details-marker { display: none; }
+.enm-tools-update-notes summary::before {
+    content: '▸';
+    display: inline-block;
+    width: 12px;
+    color: var(--text-tertiary);
+    transition: transform var(--motion-fast) var(--ease-out);
+}
+.enm-tools-update-notes[open] summary::before {
+    transform: rotate(90deg);
+}
+.enm-tools-update-notes pre {
+    margin: var(--sp-2) 0 0;
+    padding: var(--sp-2) var(--sp-3);
+    background: var(--bg-terminal);
+    border-radius: var(--r-xs);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-secondary);
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    line-height: 1.5;
+    max-height: 220px;
+    overflow-y: auto;
+}
+.enm-tools-update-notes a {
+    display: inline-block;
+    margin-top: var(--sp-2);
+    color: var(--accent);
+    text-decoration: none;
+    font-size: var(--fs-caption);
+}
+.enm-tools-update-notes a:hover { text-decoration: underline; }
+.enm-tools-update-action {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-2);
+    align-items: flex-start;
+}
+.enm-tools-update-action .enm-btn {
+    align-self: flex-start;
+}
+.enm-tools-update-action-help {
+    margin: 0;
+    font-size: var(--fs-caption);
+    color: var(--text-tertiary);
+    line-height: 1.5;
+}
+/* Severity dot on the right side of the card root for at-a-glance
+   detection. JS writes [data-severity] to the card element when an
+   update is available. */
+.enm-tools-update-card[data-severity="security"],
+.enm-tools-update-card[data-severity="major"] {
+    border-color: var(--error);
+}
+.enm-tools-update-card[data-severity="minor"] {
+    border-color: var(--warning);
+}
+/* Narrow/compact: stack version chips, full-width button. */
+body[data-app-size="narrow"] .enm-tools-update-card,
+.enm-app[data-app-size="narrow"] .enm-tools-update-card,
+body[data-app-size="compact"] .enm-tools-update-card,
+.enm-app[data-app-size="compact"] .enm-tools-update-card {
+    padding: var(--sp-4);
+}
+body[data-app-size="compact"] .enm-tools-update-action .enm-btn,
+.enm-app[data-app-size="compact"] .enm-tools-update-action .enm-btn {
+    width: 100%;
 }
 
 /* 0.2.0-beta.3.7 — BPoS active-state stats grid (phase-03 mock
