@@ -10,7 +10,7 @@
     <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
     <meta name="referrer" content="no-referrer">
     <title>Elastos Node Manager</title>
-    <link rel="stylesheet" href="css/styles.css?ts=20260514c">
+    <link rel="stylesheet" href="css/styles.css?ts=20260514d">
     <script>
         // alpha.29 v2 brand reset — dark only. The :root in styles.css
         // now carries the v2 dark-canvas + cyan-accent token set, and
@@ -100,19 +100,7 @@
             </div>
             <div class="enm-header-spacer"></div>
             <div class="enm-header-actions">
-                <!-- Theme toggle moved into the settings drawer in v0.4 P5C —
-                     this stays as a fallback for the error pane / pre-drawer
-                     boot states. Hidden in home mode (the gear opens the
-                     drawer where the operator can switch theme). -->
-                <button type="button" class="enm-icon-btn" id="enm-theme-toggle" title="Toggle dark mode" aria-label="Toggle theme" hidden>
-                    <svg class="enm-icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-                        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
-                    </svg>
-                    <svg class="enm-icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-                        <circle cx="12" cy="12" r="4"></circle>
-                        <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"></path>
-                    </svg>
-                </button>
+                <!-- Theme toggle removed in alpha.29 v2 Phase 1c — dark-only. -->
                 <button type="button" class="enm-icon-btn" id="enm-settings-toggle" title="Settings" aria-label="Open settings">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
                         <circle cx="12" cy="12" r="3"></circle>
@@ -167,7 +155,8 @@
     <script defer src="js/utils.js?ts=20260506g"></script>
     <script defer src="js/illustrations.js?ts=20260506g"></script>
     <script defer src="js/services/wallet.js?ts=20260506g"></script>
-    <script defer src="js/services/theme.js?ts=20260506g"></script>
+    <!-- theme.js removed in alpha.29 v2 Phase 1c — dark-only. -->
+    <!-- <script defer src="js/services/theme.js?ts=20260506g"></script> -->
     <script defer src="js/services/api.js?ts=20260506g"></script>
     <script defer src="js/services/sse.js?ts=20260511d"></script>
     <script defer src="js/services/notifications.js?ts=20260506g"></script>

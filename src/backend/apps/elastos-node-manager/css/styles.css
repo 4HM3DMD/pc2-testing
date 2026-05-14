@@ -563,15 +563,9 @@ body[data-active-tab="identity"]::before {
     height: 16px;
 }
 
-/* Theme toggle — show moon in light mode (click to go dark), sun in
-   dark mode (click to go light). Mirrors dao-dashboard's icon swap.
-   Specificity bumped via #enm-theme-toggle so it beats `.enm-icon-btn svg`. */
-/* Phase 1b — the four-rule sun/moon swap collapsed into two
-   unconditional rules. The app is dark-only so the sun icon is
-   permanently visible (its click handler is a no-op until Phase 1c
-   removes the whole toggle). */
-#enm-theme-toggle .enm-icon-sun  { display: block; }
-#enm-theme-toggle .enm-icon-moon { display: none; }
+/* Theme toggle (#enm-theme-toggle + .enm-icon-sun / .enm-icon-moon)
+   removed in alpha.29 v2 Phase 1c — the app is dark-only now and the
+   button no longer exists in index.html. */
 
 /* ============================================================
    Main + per-pane scroll
