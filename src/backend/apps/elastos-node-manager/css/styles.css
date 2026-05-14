@@ -996,7 +996,7 @@ body[data-active-tab="identity"]::before {
     display: inline-flex;
     align-items: center;
     gap: var(--sp-2);
-    padding: 4px 12px;
+    padding: var(--sp-1) var(--sp-3);
     border-radius: var(--r-pill);
     font-size: var(--fs-caption);
     font-weight: var(--fw-semibold);
@@ -1288,10 +1288,10 @@ body[data-active-tab="identity"]::before {
 .enm-chain-rotation {
     display: inline-flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--sp-2);
     align-self: center;
     margin-top: 10px;
-    padding: 4px 12px;
+    padding: var(--sp-1) var(--sp-3);
     border-radius: var(--r-pill);
     background: rgba(60, 60, 67, 0.06);
     font-size: 12px;
@@ -2106,7 +2106,7 @@ select.enm-settings-input {
     background: var(--bg-input);
     border: 1px solid var(--border);
     border-radius: var(--r-sm);
-    padding: 4px 8px;
+    padding: var(--sp-1) var(--sp-2);
     color: var(--text-primary);
     font-size: var(--fs-mono);
     overflow-wrap: anywhere;
@@ -2347,7 +2347,7 @@ select.enm-settings-input {
 .enm-danger-code {
     display: inline-block;
     margin: 4px 0 8px var(--sp-3);
-    padding: 4px 8px;
+    padding: var(--sp-1) var(--sp-2);
     background: var(--bg-surface);
     border: 1px solid var(--border-subtle);
     border-radius: var(--r-sm);
@@ -2484,7 +2484,7 @@ select.enm-settings-input {
     display: flex;
     align-items: center;
     gap: var(--sp-2);
-    margin-top: 4px;
+    margin-top: var(--sp-1);
 }
 
 .enm-validator-pubkey {
@@ -2789,7 +2789,7 @@ select.enm-settings-input {
 .enm-outcome-badge {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: var(--sp-1);
     padding: 2px 8px;
     border-radius: var(--r-pill);
     font-size: 10px;
@@ -3425,7 +3425,7 @@ select.enm-settings-input {
     /* 0.2.0-alpha.1 — collapse chain-card padding on narrow windows;
        sys-strip loses its inter-cell dividers and tightens. */
     .enm-chain-card { padding: 28px 22px 22px; border-radius: 24px; }
-    .enm-system-status { padding: 10px 14px; margin-bottom: 24px; }
+    .enm-system-status { padding: 10px 14px; margin-bottom: var(--sp-5); }
     .enm-sys-cell { border-right: 0; padding: 6px 10px; min-width: 120px; }
     .enm-error { margin: var(--sp-3); padding: var(--sp-3); }
     /* 0.2.0-alpha.1 — drop the 220px ring to the fallback 180px so
@@ -3440,7 +3440,7 @@ select.enm-settings-input {
     :root { --header-bar-height: 40px; }
     /* See the 768px override above — the floor matters even more at the
        small-phone 480px breakpoint where padding shrinks further. */
-    .enm-tab { font-size: 12px; padding: 4px 8px; min-height: 28px; }
+    .enm-tab { font-size: 12px; padding: var(--sp-1) var(--sp-2); min-height: 28px; }
     .enm-sys-cell { min-width: 100%; padding: 8px 10px; }
     .enm-chain-card-head { gap: 6px; }
     .enm-chain-primary-value { font-size: 26px; }
@@ -4117,7 +4117,7 @@ select.enm-settings-input {
 .enm-conv-textlink {
     background: none;
     border: none;
-    padding: 8px 12px;
+    padding: var(--sp-2) var(--sp-3);
     font: inherit;
     font-size: 13px;
     color: var(--text-tertiary);
@@ -4258,7 +4258,7 @@ select.enm-settings-input {
     background: transparent;
     border-radius: 0;
     display: grid;
-    gap: 4px;
+    gap: var(--sp-1);
 }
 .enm-goal-tile-meta b {
     color: var(--text-secondary);
@@ -4902,7 +4902,7 @@ body[data-update-severity] .enm-tech-tabs .enm-tab[data-tab="tools"] {
 body[data-update-severity] .enm-tech-tabs .enm-tab[data-tab="tools"]::before {
     content: '';
     position: absolute;
-    top: 8px;
+    top: var(--sp-2);
     right: 6px;
     width: 6px;
     height: 6px;
@@ -5175,8 +5175,8 @@ body[data-update-severity="major"] .enm-tech-tabs .enm-tab[data-tab="tools"]::be
 
 .enm-tools-update-modal-close {
     position: absolute;
-    top: 12px;
-    right: 12px;
+    top: var(--sp-3);
+    right: var(--sp-3);
     /* WCAG 2.5.5 AA — 32×32 was the alpha.10 value and remains compliant
        (above 24×24). v2 mock uses smaller dismiss but we keep this size
        because the modal is rarely-opened and benefits from a larger hit
@@ -5465,7 +5465,7 @@ body[data-app-size="narrow"] .enm-tech-tabs,
 body[data-app-size="medium"] .enm-tech-tabs {
     flex-wrap: wrap;
     overflow-x: visible;
-    gap: 4px;
+    gap: var(--sp-1);
     row-gap: 6px;
 }
 body[data-app-size="narrow"] .enm-tab {
@@ -5648,7 +5648,7 @@ body[data-app-size="narrow"] .enm-chain-actions {
        Start / Stop / Restart row from 8px to 12px so touch operators
        don't mis-tap Stop when aiming for Restart. Stop is destructive
        — the larger gap is operator safety. */
-    gap: 12px;
+    gap: var(--sp-3);
 }
 body[data-app-size="narrow"] .enm-chain-actions .enm-btn {
     width: 100%;
@@ -5982,7 +5982,7 @@ body[data-app-size="narrow"] .enm-conv-actions .enm-btn {
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 12px;
+    gap: var(--sp-3);
     padding: 10px 16px;
     background: var(--warning-bg, #fff3cd);
     color: var(--warning-fg, #856404);
