@@ -3540,11 +3540,11 @@ select.enm-settings-input {
    ============================================================ */
 
 .enm-producer-identity {
-    margin-bottom: var(--spacing-lg);
-    padding: var(--spacing-lg);
+    margin-bottom: var(--sp-4);
+    padding: var(--sp-4);
     display: flex;
     flex-direction: column;
-    gap: var(--spacing-md);
+    gap: var(--sp-3);
 }
 
 /* 0.2.0-alpha.6 — on-chain binding section appended by
@@ -3552,20 +3552,23 @@ select.enm-settings-input {
    against what getproducerinfo returns; surfaces the owner pubkey so
    the operator can eyeball-match to Essentials. Catches the node.sh
    class of silent-fail (paste a key, register under another, mismatch
-   only visible from missed rewards). */
+   only visible from missed rewards). Phase 7b v2: chip palette
+   migrated to the v2 token-resolved colours; dot-prefix preserved. */
 .enm-producer-binding {
     display: flex;
     flex-direction: column;
-    gap: var(--spacing-sm);
-    padding-top: var(--spacing-md);
-    border-top: 1px solid var(--border-color);
+    gap: var(--sp-2);
+    padding-top: var(--sp-3);
+    border-top: 1px solid var(--border-subtle);
 }
 
 .enm-producer-binding-heading {
-    font-size: 13px;
-    font-weight: var(--font-weight-semibold);
+    font-size: var(--fs-caption);
+    font-weight: var(--fw-semibold);
     color: var(--text-primary);
     margin: 0;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
 }
 
 .enm-producer-binding-chip {
@@ -3573,11 +3576,11 @@ select.enm-settings-input {
     align-items: center;
     gap: 6px;
     align-self: flex-start;
-    padding: 4px 12px;
-    border-radius: var(--radius-pill);
-    font-size: 12px;
-    font-weight: var(--font-weight-medium);
-    background: rgba(60, 60, 67, 0.08);
+    padding: 4px 10px;
+    border-radius: var(--r-pill);
+    font-size: var(--fs-caption);
+    font-weight: var(--fw-medium);
+    background: var(--bg-tint);
     color: var(--text-secondary);
 }
 
@@ -3589,13 +3592,13 @@ select.enm-settings-input {
     background: currentColor;
 }
 
-.enm-producer-binding-chip-bound        { background: rgba(52, 199, 89, 0.12); color: var(--state-healthy); }
-.enm-producer-binding-chip-unregistered { background: rgba(255, 159, 10, 0.12); color: var(--state-stalled); }
-.enm-producer-binding-chip-mismatch     { background: rgba(255, 69, 58, 0.12); color: var(--state-error); }
-.enm-producer-binding-chip-unknown      { background: rgba(60, 60, 67, 0.08); color: var(--text-muted); }
+.enm-producer-binding-chip-bound        { background: var(--success-bg); color: var(--success); }
+.enm-producer-binding-chip-unregistered { background: var(--warning-bg); color: var(--warning); }
+.enm-producer-binding-chip-mismatch     { background: var(--error-bg);   color: var(--error); }
+.enm-producer-binding-chip-unknown      { background: var(--bg-tint);    color: var(--text-tertiary); }
 
 .enm-producer-binding-note {
-    font-size: 12px;
+    font-size: var(--fs-caption);
     color: var(--text-secondary);
     line-height: 1.5;
     margin: 0;
@@ -3606,32 +3609,37 @@ select.enm-settings-input {
 .enm-producer-identity-head {
     display: flex;
     flex-direction: column;
-    gap: var(--spacing-xs);
+    gap: var(--sp-1);
 }
 
 .enm-producer-identity-head h3 {
-    font-size: 16px;
-    font-weight: 600;
+    font-size: var(--fs-h3);
+    font-weight: var(--fw-semibold);
     color: var(--text-primary);
     margin: 0;
     line-height: 1.3;
+    letter-spacing: -0.01em;
 }
 
 .enm-producer-identity-body {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
-    gap: var(--spacing-lg);
+    gap: var(--sp-4);
     align-items: start;
 }
 
+/* QR background stays white because QR-decoders need high contrast;
+   we keep the white well + add a subtle hairline to integrate with
+   the v2 dark surface around it. Round-12 visual audit confirmed
+   no Round-15 contrast issue at this composition. */
 .enm-producer-qr {
     flex: 0 0 auto;
     width: 168px;
     height: 168px;
-    padding: var(--spacing-sm);
+    padding: var(--sp-2);
     background: #ffffff;
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-md);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -3643,33 +3651,33 @@ select.enm-settings-input {
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: var(--spacing-md);
+    gap: var(--sp-3);
 }
 
 .enm-producer-field {
     display: grid;
     grid-template-columns: 1fr auto;
     grid-template-rows: auto auto;
-    gap: var(--spacing-xs) var(--spacing-sm);
+    gap: var(--sp-1) var(--sp-2);
     min-width: 0;
 }
 
 .enm-producer-field-label {
     grid-column: 1 / -1;
-    font-size: 11px;
-    font-weight: 600;
+    font-size: 10px;
+    font-weight: var(--fw-semibold);
     text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--text-muted);
+    letter-spacing: 0.04em;
+    color: var(--text-tertiary);
 }
 
 .enm-producer-field-value {
     min-width: 0;
     padding: 6px 10px;
-    background: var(--bg-muted);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-sm);
-    font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace;
+    background: var(--bg-terminal);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-sm);
+    font-family: var(--font-mono);
     font-size: 11px;
     color: var(--text-primary);
     overflow: hidden;
@@ -3686,7 +3694,7 @@ select.enm-settings-input {
 .enm-producer-actions {
     display: flex;
     flex-wrap: wrap;
-    gap: var(--spacing-sm);
+    gap: var(--sp-2);
 }
 
 .enm-producer-actions .enm-btn {
@@ -3696,11 +3704,11 @@ select.enm-settings-input {
 .enm-producer-cli[hidden] { display: none; }
 
 .enm-producer-cli summary {
-    font-size: 12px;
-    font-weight: 500;
+    font-size: var(--fs-caption);
+    font-weight: var(--fw-medium);
     color: var(--text-secondary);
     cursor: pointer;
-    padding: var(--spacing-xs) 0;
+    padding: var(--sp-1) 0;
     list-style: none;
 }
 
@@ -3708,7 +3716,7 @@ select.enm-settings-input {
 .enm-producer-cli summary::before {
     content: '\25B8';
     display: inline-block;
-    margin-right: var(--spacing-xs);
+    margin-right: var(--sp-1);
     transition: transform var(--motion-fast) var(--ease-out);
 }
 .enm-producer-cli[open] summary::before { transform: rotate(90deg); }
@@ -3717,16 +3725,17 @@ select.enm-settings-input {
 .enm-producer-cli summary:focus-visible {
     outline: none;
     box-shadow: var(--focus-ring);
-    border-radius: var(--radius-sm);
+    border-radius: var(--r-xs);
 }
 
 .enm-producer-cli-block {
-    margin-top: var(--spacing-xs);
-    padding: var(--spacing-sm) var(--spacing-md);
-    background: var(--bg-code);
-    color: #e2e8f0;
-    border-radius: var(--radius-sm);
-    font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace;
+    margin-top: var(--sp-1);
+    padding: var(--sp-2) var(--sp-3);
+    background: var(--bg-terminal);
+    color: var(--text-primary);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-sm);
+    font-family: var(--font-mono);
     font-size: 11px;
     line-height: 1.5;
     overflow-x: auto;
@@ -3734,70 +3743,72 @@ select.enm-settings-input {
 }
 
 .enm-producer-cli-help {
-    margin-top: var(--spacing-sm);
+    margin-top: var(--sp-2);
     color: var(--text-secondary);
-    font-size: 12px;
+    font-size: var(--fs-caption);
     line-height: 1.5;
 }
 
 .enm-producer-keystore-path {
     display: inline-block;
-    margin-top: var(--spacing-xs);
+    margin-top: var(--sp-1);
     padding: 2px 8px;
-    background: var(--bg-muted);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-sm);
-    font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace;
+    background: var(--bg-input);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-xs);
+    font-family: var(--font-mono);
     font-size: 11px;
     color: var(--text-primary);
 }
 
 /* Wallet boundary notice — explicit reminder that this app does not
    manage the operator's BPoS / CR deposit wallet. Sits between the
-   header + identity body and the registration instructions. */
+   header + identity body and the registration instructions.
+   Phase 7b v2: tinted info-card with accent left-border. */
 .enm-producer-wallet-notice {
-    margin-top: var(--spacing-md);
-    padding: var(--spacing-md) var(--spacing-lg);
-    background: var(--primary-softer, var(--bg-muted));
-    border: 1px solid var(--border-color);
-    border-left: 3px solid var(--primary);
-    border-radius: var(--radius-md);
-    font-size: 13px;
+    margin-top: var(--sp-3);
+    padding: var(--sp-3) var(--sp-4);
+    background: var(--accent-soft);
+    border: 1px solid var(--border-subtle);
+    border-left: 3px solid var(--accent);
+    border-radius: var(--r-md);
+    font-size: var(--fs-caption);
     line-height: 1.55;
     color: var(--text-secondary);
 }
 
 .enm-producer-wallet-notice strong {
     color: var(--text-primary);
-    font-weight: 600;
+    font-weight: var(--fw-semibold);
 }
 
 .enm-producer-wallet-notice code {
-    font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace;
+    font-family: var(--font-mono);
     font-size: 11px;
     padding: 1px 5px;
-    background: var(--bg-muted);
-    border-radius: 4px;
+    background: var(--bg-input);
+    border-radius: var(--r-xs);
     color: var(--text-primary);
 }
 
 /* Phase 7: step-by-step BPoS + CR Council instructions, replacing
    the broken "Open in Essentials" deep-link button. */
 .enm-producer-instructions {
-    margin-top: var(--spacing-md);
-    padding-top: var(--spacing-md);
-    border-top: 1px solid var(--border-color);
+    margin-top: var(--sp-3);
+    padding-top: var(--sp-3);
+    border-top: 1px solid var(--border-subtle);
     display: flex;
     flex-direction: column;
-    gap: var(--spacing-md);
+    gap: var(--sp-3);
 }
 
 .enm-producer-instructions-title {
     margin: 0;
-    font-size: 13px;
-    font-weight: 600;
+    font-size: var(--fs-caption);
+    font-weight: var(--fw-semibold);
     color: var(--text-primary);
-    letter-spacing: 0.01em;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
 }
 
 .enm-producer-steps {
@@ -3805,30 +3816,30 @@ select.enm-settings-input {
     padding-left: 20px;
     display: flex;
     flex-direction: column;
-    gap: var(--spacing-sm);
+    gap: var(--sp-2);
     color: var(--text-secondary);
-    font-size: 13px;
+    font-size: var(--fs-caption);
     line-height: 1.55;
 }
 
 .enm-producer-steps li strong {
     color: var(--text-primary);
-    font-weight: 600;
+    font-weight: var(--fw-semibold);
 }
 
 .enm-producer-steps li code {
-    font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace;
+    font-family: var(--font-mono);
     font-size: 11px;
     padding: 1px 5px;
-    background: var(--bg-muted);
-    border-radius: 4px;
+    background: var(--bg-input);
+    border-radius: var(--r-xs);
     color: var(--text-primary);
 }
 
 .enm-producer-instructions-foot {
     margin: 0;
-    font-size: 12px;
-    color: var(--text-muted);
+    font-size: var(--fs-caption);
+    color: var(--text-tertiary);
     line-height: 1.5;
 }
 
