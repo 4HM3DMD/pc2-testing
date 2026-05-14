@@ -260,10 +260,11 @@
 
         // 0.2.0-beta.3.4 — Active producer keeps the card visible with
         // a steady-state success-header render (per phase-03 mock).
-        // Previously the card vanished here; the mock keeps a small
-        // persistent footnote linking to Elastos Essentials for the
-        // rewards/voting flow.
+        // 0.2.0-beta.3.7 — also stash the producer record so
+        // _renderActive can read rank/votes/inactiveRounds and render
+        // the .bpos-grid stats per phase-03 mock variant C.
         if (pState && String(pState).toLowerCase() === 'active') {
+            this._lastProducer = producer;
             this._show(STATE_ACTIVE, pubkey);
             return;
         }
@@ -312,6 +313,13 @@
         if (this._renderedState !== state) {
             this._render(state);
             this._renderedState = state;
+        } else if (state === STATE_ACTIVE) {
+            // 0.2.0-beta.3.7 — when state stays ACTIVE across polls,
+            // re-fill the stats grid in place. Rank/votes shift round
+            // by round; pre-beta.3.7 the operator only saw the stats
+            // they were rendered with on first poll until a different
+            // state caused a full re-render.
+            this._fillActiveStats(this._lastProducer);
         }
         if (pubkey && pubkey !== this._lastPubkey) {
             this._fillPubkey(pubkey);
@@ -366,7 +374,6 @@
      * @private
      */
     BposCard.prototype._renderActive = function () {
-        var t = root.enmTOrFallback;
         var titleId = this._titleId;
         var chipId  = this._chipId;
 
@@ -387,10 +394,38 @@
                         + 'On-chain producer record bound to this node’s signing key.'
                     + '</div>'
                 + '</div>'
+                // 0.2.0-beta.3.7 — chip text now shows rank when known
+                // ("Active · Rank #42" per phase-03 mock variant C).
+                // _fillActiveStats below replaces the inner text every
+                // poll so rank stays current.
                 + '<span class="enm-bpos-head-chip" id="' + escapeAttr(chipId) + '" '
                     + 'role="status" aria-live="polite">'
                     + 'Active'
                 + '</span>'
+            + '</div>'
+            // 0.2.0-beta.3.7 — phase-03 mock variant C: 2-column .bpos-
+            // grid showing the most-actionable producer stats. /producer
+            // exposes rank, votes, inactiveRounds, dposv2votes; deposit
+            // is post-beta.3.7 backlog (separate RPC call). We render
+            // the four we have; the cells gracefully show "—" when a
+            // field is null/undefined.
+            + '<div class="enm-bpos-grid">'
+                + '<div class="enm-bpos-stat" data-stat="rank">'
+                    + '<div class="enm-bpos-stat-label">Rank</div>'
+                    + '<div class="enm-bpos-stat-value" data-fill="rank">—</div>'
+                + '</div>'
+                + '<div class="enm-bpos-stat" data-stat="votes">'
+                    + '<div class="enm-bpos-stat-label">Votes</div>'
+                    + '<div class="enm-bpos-stat-value" data-fill="votes">—</div>'
+                + '</div>'
+                + '<div class="enm-bpos-stat" data-stat="dposv2votes">'
+                    + '<div class="enm-bpos-stat-label">DPoSv2 votes</div>'
+                    + '<div class="enm-bpos-stat-value" data-fill="dposv2votes">—</div>'
+                + '</div>'
+                + '<div class="enm-bpos-stat" data-stat="inactiveRounds">'
+                    + '<div class="enm-bpos-stat-label">Inactive rounds</div>'
+                    + '<div class="enm-bpos-stat-value" data-fill="inactiveRounds">—</div>'
+                + '</div>'
             + '</div>'
             + '<div class="enm-bpos-note">'
                 + '<b>Rewards and voting are managed in Elastos Essentials.</b> '
@@ -398,6 +433,52 @@
                 + 'and update operations require a signed transaction from '
                 + 'your wallet.'
             + '</div>';
+
+        // First fill from the cached producer record. Subsequent polls
+        // call _fillActiveStats directly via _show.
+        this._fillActiveStats(this._lastProducer);
+    };
+
+    /**
+     * 0.2.0-beta.3.7 — populate the active-state stats grid + chip
+     * rank suffix in place. Safe to call any number of times. Reads
+     * fields off the producer record stashed by _reconcile.
+     *
+     * @private
+     * @param {object|null} producer
+     */
+    BposCard.prototype._fillActiveStats = function (producer) {
+        if (!producer) { return; }
+        var chip = this.root.querySelector('#' + this._chipId);
+        if (chip) {
+            // Chip text: "Active · Rank #N" if rank known, else "Active".
+            // Mock variant C shows "Active · Rank #42".
+            var chipText = 'Active';
+            if (producer.rank != null && producer.rank > 0) {
+                chipText += ' · Rank #' + producer.rank;
+            }
+            chip.textContent = chipText;
+        }
+        function fmt(n) {
+            if (n == null || !isFinite(n)) { return '—'; }
+            if (typeof root !== 'undefined' && root.enmFormatNumber) {
+                return root.enmFormatNumber(n);
+            }
+            return String(n);
+        }
+        var fillers = {
+            rank:           (producer.rank != null && producer.rank > 0) ? '#' + producer.rank : '—',
+            votes:          fmt(producer.votes),
+            dposv2votes:    fmt(producer.dposv2votes),
+            inactiveRounds: (producer.inactiveRounds != null) ? fmt(producer.inactiveRounds) : '0',
+        };
+        var nodes = this.root.querySelectorAll('[data-fill]');
+        for (var i = 0; i < nodes.length; i += 1) {
+            var key = nodes[i].getAttribute('data-fill');
+            if (fillers[key] !== undefined) {
+                nodes[i].textContent = fillers[key];
+            }
+        }
     };
 
     /** @private */

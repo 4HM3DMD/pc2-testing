@@ -3259,6 +3259,40 @@ body[data-app-size="compact"] .enm-role-card-badge-short,
     border-radius: 0 var(--r-sm) var(--r-sm) 0;
 }
 
+/* 0.2.0-beta.3.7 — BPoS active-state stats grid (phase-03 mock
+   variant C `.bpos-grid`). 2-column grid showing Rank / Votes /
+   DPoSv2 votes / Inactive rounds. Falls back to 1 column on
+   narrow/compact via the responsive overrides below. */
+.enm-bpos-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--sp-4);
+    padding-top: var(--sp-4);
+    border-top: 1px solid var(--border-subtle);
+}
+.enm-bpos-stat {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+}
+.enm-bpos-stat-label {
+    font-size: var(--fs-caption);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-tertiary);
+    font-weight: var(--fw-medium);
+}
+.enm-bpos-stat-value {
+    font-size: 20px;
+    font-weight: var(--fw-semibold);
+    font-variant-numeric: tabular-nums;
+    color: var(--text-primary);
+    letter-spacing: -0.01em;
+    line-height: 1.2;
+    word-break: break-word;
+}
+
 /* ---- Narrow responsive ---------------------------------------- */
 body[data-app-size="narrow"] .enm-wiz-shell,
 .enm-app[data-app-size="narrow"] .enm-wiz-shell {

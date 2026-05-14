@@ -198,6 +198,14 @@ function build(extensionHandle) {
                             let latencyCount = 0;
                             const versionCounts = Object.create(null);
                             let maxAbsOffsetMs = 0;
+                            // 0.2.0-beta.3.7 — collect per-peer rows for the
+                            // chain-card peer popover (phase-03 .peer-pop).
+                            // Pre-beta.3.7 the neighbors array was dropped
+                            // after aggregation; now we keep a slim summary
+                            // (≤ 50 rows) the frontend can render directly.
+                            const neighborRows = [];
+                            let inboundCount = 0;
+                            let outboundCount = 0;
                             for (const n of neighbors) {
                                 if (!n || typeof n !== 'object') continue;
                                 const h = typeof n.lastblock === 'number' ? n.lastblock
@@ -212,8 +220,9 @@ function build(extensionHandle) {
                                 const ping = typeof n.lastpingmicros === 'number' ? n.lastpingmicros
                                            : typeof n.LastPingMicros === 'number' ? n.LastPingMicros
                                            : null;
-                                if (ping != null && ping > 0) {
-                                    latencySum += ping / 1000;  // μs → ms
+                                const pingMs = (ping != null && ping > 0) ? Math.round(ping / 1000) : null;
+                                if (pingMs != null) {
+                                    latencySum += pingMs;
                                     latencyCount += 1;
                                 }
 
@@ -237,23 +246,57 @@ function build(extensionHandle) {
                                     const abs = Math.abs(offsetSec) * 1000;
                                     if (abs > maxAbsOffsetMs) maxAbsOffsetMs = abs;
                                 }
+
+                                // Direction. ela's getnodestate reports a boolean
+                                // `inbound` (lowercase). Some legacy wire shapes use
+                                // `Inbound`. We default to 'out' on missing field
+                                // since outbound is the more common shape after
+                                // peer discovery handshake completes.
+                                let dir = null;
+                                if (typeof n.inbound === 'boolean')      dir = n.inbound ? 'in' : 'out';
+                                else if (typeof n.Inbound === 'boolean') dir = n.Inbound ? 'in' : 'out';
+                                if (dir === 'in')       inboundCount += 1;
+                                else if (dir === 'out') outboundCount += 1;
+
+                                // Address — addrs may be "ipv6:port", "ipv4:port",
+                                // a raw IP, or absent. Normalise to a single string.
+                                const addr = (typeof n.addr === 'string' && n.addr)        ? n.addr
+                                           : (typeof n.Addr === 'string' && n.Addr)        ? n.Addr
+                                           : (typeof n.address === 'string' && n.address)  ? n.address
+                                           : null;
+
+                                if (neighborRows.length < 50) {
+                                    neighborRows.push({
+                                        addr,
+                                        direction: dir,
+                                        height: h,
+                                        pingMs,
+                                    });
+                                }
                             }
                             if (maxH != null) {
                                 networkHeight = maxH;
                                 atTipOrAhead = (height >= maxH);
                             }
-                            // Build peerSummary for the chain-card hover. Top-3 versions
-                            // by share so the title attribute stays under ~80 chars.
+                            // Build peerSummary for the chain-card hover.
+                            // 0.2.0-beta.3.7 — now ships per-peer rows
+                            // (mock .peer-pop) + computed inbound/outbound
+                            // split. Top-3 versions cap kept for the
+                            // aggregate path (frontend falls back to it
+                            // when neighbors[] is empty or backend hasn't
+                            // populated yet).
                             const topVersions = Object.keys(versionCounts)
                                 .map((k) => ({ version: k, count: versionCounts[k] }))
                                 .sort((a, b) => b.count - a.count)
                                 .slice(0, 3);
                             peerSummary = {
                                 count: neighbors.length,
-                                inbound: undefined,        // already in inboundCount via HealthChecker
+                                inbound: inboundCount,
+                                outbound: outboundCount,
                                 latencyMsAvg: latencyCount > 0 ? Math.round(latencySum / latencyCount) : null,
                                 versions: topVersions,     // [{version, count}, ...]
                                 timeOffsetMaxAbsMs: maxAbsOffsetMs > 0 ? Math.round(maxAbsOffsetMs) : null,
+                                neighbors: neighborRows,   // [{addr, direction, height, pingMs}, ...]
                             };
                         }
                     }

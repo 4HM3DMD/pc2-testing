@@ -245,6 +245,51 @@ async function main() {
         log('error', `healing init failed: ${err.message}`);
     }
 
+    // 0.2.0-beta.3.7 — audit-log retention job. EnmDb has had
+    // cleanupOldAuditLogs() since the schema was introduced, but it was
+    // never wired into the boot path so audit rows accumulated forever.
+    // Schedule a daily sweep at boot+1min then every 24h, honouring the
+    // operator-configured retention window (settings.general.auditRetentionDays).
+    // 0 = forever; we skip the sweep in that case.
+    try {
+        const { cleanupOldAuditLogs } = require('./services/EnmDb');
+        const db = extensionHandle.import('data').db;
+        const getRetention = async () => {
+            // Read fresh each fire so an operator change in Settings
+            // (PUT /config/general) takes effect on the next sweep
+            // without a server restart.
+            try {
+                const ConfigStore = require('./services/ConfigStore');
+                const cfg = await ConfigStore.load();
+                const g = cfg && cfg.global && cfg.global.audit;
+                const d = g && typeof g.retentionDays === 'number' ? g.retentionDays : null;
+                if (d != null) { return d; }
+            } catch (_) { /* fall through to default */ }
+            // Fallback: package.json's enm.auditRetentionDaysDefault (365).
+            return 365;
+        };
+        const sweep = async () => {
+            const days = await getRetention();
+            if (!days || days <= 0) {
+                log('info', 'audit cleanup: retention=forever, skipping sweep');
+                return;
+            }
+            try {
+                const deleted = await cleanupOldAuditLogs(db, days);
+                if (deleted > 0) {
+                    log('info', `audit cleanup: pruned ${deleted} rows older than ${days}d`);
+                }
+            } catch (err) {
+                log('error', `audit cleanup failed: ${err.message}`);
+            }
+        };
+        // First sweep 60s after boot — past any reattach storm — then every 24h.
+        setTimeout(sweep, 60_000);
+        setInterval(sweep, 24 * 60 * 60 * 1000);
+    } catch (err) {
+        log('error', `audit cleanup init failed: ${err.message}`);
+    }
+
     // --- listen ------------------------------------------------------------
     app.listen(PORT, () => {
         log('info', `enm-server listening on :${PORT}`);

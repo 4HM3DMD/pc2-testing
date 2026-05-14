@@ -46,9 +46,34 @@
 (function (root) {
     'use strict';
 
-    // IPv4 / CIDR validation — server has the authoritative joi schema,
-    // this is for inline UX feedback only.
-    var IP_OR_CIDR_RE = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(?:\/(?:[0-9]|[12][0-9]|3[0-2]))?$/;
+    // IPv4 / IPv6 / CIDR validation — server has the authoritative joi
+    // schema, this is for inline UX feedback only.
+    //
+    // 0.2.0-beta.3.7 — phase-04 mock's whitelist help copy says "IPv4
+    // or IPv6". Pre-beta.3.7 the regex only accepted IPv4 + optional
+    // /0–/32 prefix; operators trying to add an IPv6 address (e.g.
+    // `2001:db8::1` or `fe80::/64`) saw the validation flash red even
+    // though the backend would have accepted the entry. The IPv4 path
+    // stays unchanged; the IPv6 alternative is a deliberately permissive
+    // match (full address, ::-compressed, and optional /0–128 prefix)
+    // — strict RFC validation belongs on the backend joi schema, this
+    // is just to keep obviously-malformed input out of the chip-input.
+    var IPV4_OR_CIDR = '(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(?:\\/(?:[0-9]|[12][0-9]|3[0-2]))?';
+    var IPV6_OR_CIDR = '(?:[0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}'    // 8 full groups
+        + '|(?:[0-9A-Fa-f]{1,4}:){1,7}:'                              // leading groups + ::
+        + '|(?:[0-9A-Fa-f]{1,4}:){1,6}(?::[0-9A-Fa-f]{1,4})'          // 1-6 groups :: 1 group
+        + '|(?:[0-9A-Fa-f]{1,4}:){1,5}(?::[0-9A-Fa-f]{1,4}){1,2}'
+        + '|(?:[0-9A-Fa-f]{1,4}:){1,4}(?::[0-9A-Fa-f]{1,4}){1,3}'
+        + '|(?:[0-9A-Fa-f]{1,4}:){1,3}(?::[0-9A-Fa-f]{1,4}){1,4}'
+        + '|(?:[0-9A-Fa-f]{1,4}:){1,2}(?::[0-9A-Fa-f]{1,4}){1,5}'
+        + '|[0-9A-Fa-f]{1,4}:(?:(?::[0-9A-Fa-f]{1,4}){1,6})'
+        + '|:(?:(?::[0-9A-Fa-f]{1,4}){1,7}|:)';
+    var IP_OR_CIDR_RE = new RegExp(
+        '^(?:'
+        + IPV4_OR_CIDR
+        + '|(?:' + IPV6_OR_CIDR + ')(?:\\/(?:[0-9]|[1-9][0-9]|1[01][0-9]|12[0-8]))?'
+        + ')$'
+    );
 
     function SettingsTab(opts) {
         if (!opts || !opts.api || !opts.notifications) {
