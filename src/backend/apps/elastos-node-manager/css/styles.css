@@ -807,7 +807,7 @@ body[data-active-tab="identity"]::before {
     padding: 4px 18px;
     background: transparent;
     border-right: var(--sys-cell-divider);
-    transition: background var(--motion-fast) var(--ease-spring);
+    transition: background var(--motion-fast) var(--ease-out);
 }
 
 .enm-sys-cell:last-child { border-right: none; }
@@ -825,8 +825,8 @@ body[data-active-tab="identity"]::before {
     align-self: center;
     background: var(--state-stopped);
     box-shadow: 0 0 0 4px rgba(60, 60, 67, 0.10);
-    transition: background var(--motion-base) var(--ease-spring),
-                box-shadow var(--motion-base) var(--ease-spring);
+    transition: background var(--motion-base) var(--ease-out),
+                box-shadow var(--motion-base) var(--ease-out);
 }
 
 .enm-sys-cell[data-health="ok"]::before {
@@ -932,7 +932,7 @@ body[data-active-tab="identity"]::before {
     flex-direction: column;
     align-items: center;
     gap: var(--sp-4);
-    transition: border-color var(--motion-base) var(--ease-spring);
+    transition: border-color var(--motion-base) var(--ease-out);
 }
 
 .enm-chain-card:hover {
@@ -1358,8 +1358,8 @@ body[data-active-tab="identity"]::before {
     height: 44px;
     margin: 22px auto 4px;
     opacity: var(--sparkline-opacity);
-    transition: opacity var(--motion-base) var(--ease-spring),
-                color   var(--motion-slow) var(--ease-spring);
+    transition: opacity var(--motion-base) var(--ease-out),
+                color   var(--motion-slow) var(--ease-out);
 }
 
 .enm-spark[hidden] { display: none; }
@@ -1446,10 +1446,10 @@ body[data-active-tab="identity"]::before {
     stroke: var(--state-stopped);
     stroke-width: var(--ring-stroke-width);
     stroke-linecap: round;
-    transition: stroke         var(--motion-slow) var(--ease-spring),
-                stroke-dashoffset var(--motion-slow) var(--ease-spring),
-                opacity        var(--motion-slow) var(--ease-spring),
-                stroke-width   var(--motion-slow) var(--ease-spring);
+    transition: stroke         var(--motion-slow) var(--ease-out),
+                stroke-dashoffset var(--motion-slow) var(--ease-out),
+                opacity        var(--motion-slow) var(--ease-out),
+                stroke-width   var(--motion-slow) var(--ease-out);
 }
 
 .enm-pc-label-wrap {
@@ -1459,15 +1459,15 @@ body[data-active-tab="identity"]::before {
     align-items: center;
     justify-content: center;
     pointer-events: none;
-    transition: color var(--motion-slow) var(--ease-spring);
+    transition: color var(--motion-slow) var(--ease-out);
 }
 
 .enm-pc-glyph {
     font-size: var(--ring-glyph-size);
     font-weight: var(--fw-light);
     line-height: 1;
-    transition: color   var(--motion-slow) var(--ease-spring),
-                opacity var(--motion-slow) var(--ease-spring);
+    transition: color   var(--motion-slow) var(--ease-out),
+                opacity var(--motion-slow) var(--ease-out);
 }
 
 .enm-pc-percent {
@@ -2918,8 +2918,8 @@ select.enm-settings-input {
     border-radius: 50%;
     background: var(--text-tertiary);
     flex-shrink: 0;
-    transition: background var(--motion-base) var(--ease-spring),
-                box-shadow var(--motion-base) var(--ease-spring);
+    transition: background var(--motion-base) var(--ease-out),
+                box-shadow var(--motion-base) var(--ease-out);
 }
 
 .enm-log-tail-toggle:hover { background: var(--bg-overlay); }
