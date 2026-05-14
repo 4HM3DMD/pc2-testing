@@ -34,9 +34,12 @@
  *   - GET /chains/:id            → coarse chain state (must be 'healthy')
  *   - GET /chains/:id/producer   → ourPubkey, state, enabled
  *   - POST /chains/:id/bpos/activate → activation tx (chain-side signed)
- *   - SSE topic chains:<chainId>:producer → push-driven state refresh
- *     when the backend ships it; falls back to the visibility-paused
- *     poll otherwise.
+ *   - Visibility-paused poll on POLL_INTERVAL_MS refreshes /producer.
+ *     (Push-driven refresh via chains:<chainId>:producer was speculatively
+ *     wired in BP-D but the backend never published the topic; the resulting
+ *     SSE 400 took down the shared EventSource for all topics, so it was
+ *     removed in 0.2.0-beta.3.1. Restoring push refresh is a post-beta
+ *     backlog item, gated on the backend actually publishing the topic.)
  *
  * alpha.28 invariants preserved:
  *   - _destroyed guard on every async .then/.catch resolution
@@ -90,16 +93,15 @@
         this._lastPubkey    = null;
         this._pollIntervalMs = POLL_INTERVAL_MS;
         this._destroyed = false;
-        this._unsubscribeProducer = null;
         this._pollPauser = null;
         this._pollTimer = null;
     }
 
     /**
      * Mount the card into the supplied parent and kick the initial
-     * /producer fetch. Subscribes to the SSE producer topic when an
-     * sse service is available; otherwise falls back to the
-     * visibility-paused poll.
+     * /producer fetch. Refreshes via the visibility-paused
+     * POLL_INTERVAL_MS interval (see comment in mount body for the
+     * removed SSE subscribe).
      *
      * @param {HTMLElement} parent
      * @returns {BposCard}
@@ -112,20 +114,17 @@
         this._poll();
         this._armPoll(POLL_INTERVAL_MS);
 
-        // SSE push — the backend ships chains:<id>:producer when the
-        // producer record changes (registration confirms on chain,
-        // activation lands, slot rank shifts). When we get an event we
-        // re-fetch; the SSE event payload is treated as a signal, not
-        // a source of truth, so the renderer never reads it directly.
-        if (this.sse && typeof this.sse.subscribe === 'function') {
-            this._unsubscribeProducer = this.sse.subscribe(
-                'chains:' + encodeURIComponent(this.chainId) + ':producer',
-                function () {
-                    if (self._destroyed) { return; }
-                    self._poll();
-                }
-            );
-        }
+        // 0.2.0-beta.3.1 hotfix — the BP-D rewrite added a speculative
+        // SSE subscribe on chains:<id>:producer, but the backend never
+        // published that topic and its events route allowlist
+        // (TOPIC_REGEX in routes/events.js) only accepts
+        // status/logs/height. The 400 response from the shared
+        // EventSource took down the whole channel (status +
+        // notifications collateral damage). Push refresh stays a
+        // post-beta backlog item; for now the POLL_INTERVAL_MS poll
+        // armed above is the sole refresh source — adequate cadence
+        // for the registration/activation state transitions this card
+        // tracks (operator-driven, low frequency).
         return this;
     };
 
@@ -144,10 +143,8 @@
      */
     BposCard.prototype.destroy = function () {
         this._destroyed = true;
-        if (this._unsubscribeProducer) {
-            try { this._unsubscribeProducer(); } catch (_) { /* idempotent */ }
-            this._unsubscribeProducer = null;
-        }
+        // 0.2.0-beta.3.1 hotfix — _unsubscribeProducer is gone (the SSE
+        // subscribe was removed in mount(); see comment there).
         if (this._pollPauser) {
             try { this._pollPauser.stop(); } catch (_) { /* idempotent */ }
             this._pollPauser = null;
