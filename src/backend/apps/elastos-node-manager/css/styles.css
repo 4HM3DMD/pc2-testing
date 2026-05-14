@@ -4857,8 +4857,8 @@ select.enm-settings-input {
     background: var(--bg-elevated);
     border: 1px solid var(--border);
     border-radius: var(--r-pill);
-    transition: background 0.18s var(--ease-out),
-                border-color 0.18s var(--ease-out);
+    transition: background var(--motion-fast) var(--ease-out),
+                border-color var(--motion-fast) var(--ease-out);
 }
 .enm-drawer-toggle-track::after {
     content: '';
@@ -4869,8 +4869,8 @@ select.enm-settings-input {
     height: 14px;
     background: var(--text-secondary);
     border-radius: 50%;
-    transition: transform 0.18s var(--ease-out),
-                background 0.18s var(--ease-out);
+    transition: transform var(--motion-fast) var(--ease-out),
+                background var(--motion-fast) var(--ease-out);
 }
 .enm-drawer-toggle input:checked ~ .enm-drawer-toggle-track {
     background: var(--accent);
