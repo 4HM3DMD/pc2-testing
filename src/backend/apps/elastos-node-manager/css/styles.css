@@ -78,7 +78,14 @@
     --accent-soft:     rgba(0, 212, 255, 0.12);
     --accent-softer:   rgba(0, 212, 255, 0.06);
     --accent-strong:   #00b8e6;
-    --accent-gradient: linear-gradient(135deg, #00d4ff, #5b8fff);
+    /* Secondary accent — the "end" of the v2 cyan→blue gradient.
+       Referenced by linear-gradient() progress bars in Phase 6a
+       (.enm-conv-progress-bar) and Phase 6d (.enm-install-bar)
+       so the bar fill resolves to a proper two-stop gradient
+       instead of collapsing to a flat --accent when --accent-2
+       is undefined. */
+    --accent-2:        #5b8fff;
+    --accent-gradient: linear-gradient(135deg, var(--accent), var(--accent-2));
     /* legacy --primary aliases — every existing rule pointing at
        --primary now picks up the cyan accent. */
     --primary:         var(--accent);
@@ -94,6 +101,12 @@
     --warning:     #f5a623;
     --warning-bg:  rgba(245, 166, 35, 0.10);
     --warning-soft: rgba(245, 166, 35, 0.30);
+    /* alpha.29 batch 98 — `.enm-online-banner` consumes --warning-fg
+       and --warning-border with light-mode fallbacks; in v2 dark these
+       resolve to the amber accent on a tinted background plus a slightly
+       brighter border for visual edge against the page bg. */
+    --warning-fg:     var(--warning);
+    --warning-border: rgba(245, 166, 35, 0.35);
     --error:       #ef5060;
     --error-bg:    rgba(239, 80, 96, 0.10);
     --error-soft:  rgba(239, 80, 96, 0.30);
@@ -3941,7 +3954,12 @@ select.enm-settings-input {
 }
 
 .enm-welcome-body {
-    font-size: var(--fs-md);
+    /* Hero "lead paragraph" size — 15px sits between --fs-body 13px
+       (too small for a hero) and --fs-h2 17px (too large for body
+       copy). Hard-coded because the v2 scale intentionally skips
+       this size for component-level text and we don't want to
+       introduce an --fs-md token that would invite drift. */
+    font-size: 15px;
     line-height: 1.55;
     color: var(--text-secondary);
     margin: 0;
