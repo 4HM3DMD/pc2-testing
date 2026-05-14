@@ -3100,21 +3100,44 @@ select.enm-settings-input {
 .enm-toast-ack:hover { background: #b91c1c; }
 
 /* ============================================================
-   Proposal modal — backdrop blur, slide-up entrance
-   ============================================================ */
+   Proposal modal (Phase 6b — v2 modal-card)
+   ============================================================
+   Reference mock: enm-design-mocks/v2/phase-06-wizard-modals.html
+   lines 122-148. The v2 mock uses `.modal-scrim` + `.modal-card`;
+   the ENM analog is `.enm-proposal-overlay` + `.enm-proposal-card`,
+   names preserved so proposal-card.js (createElement at lines 41-217)
+   doesn't need to change.
+
+   Critical alpha.28 preservation invariants honoured:
+
+   - Slide-up + fade-in entrance kept (Round-14 motion audit verified
+     these are respected by `prefers-reduced-motion: reduce` block at
+     line 5525).
+   - z-index var(--z-modal) preserved (alpha.28.1 batch 20).
+   - max-height calc with iframe % preserved (alpha.24 fix for the
+     iframe-aware sizing — overlay parent is `position: fixed; inset: 0`
+     inside the iframe so `100%` resolves to iframe height).
+   - The Esc-close-without-acting behaviour (alpha.28.1 batch 72) is
+     entirely JS; CSS doesn't touch it.
+   - The accent-color on the ack checkbox is preserved via .modal-ack
+     input rule mirroring the mock.
+*/
 
 .enm-proposal-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(15, 23, 42, 0.45);
-    backdrop-filter: blur(8px) saturate(120%);
-    -webkit-backdrop-filter: blur(8px) saturate(120%);
+    /* v2 modal-scrim: darker scrim (0.65) + tighter blur (4px).
+       Round-14 motion audit confirmed forced-colors mode falls back
+       gracefully because the scrim disappears under high-contrast
+       — the modal card itself becomes the visible boundary. */
+    background: rgba(0, 0, 0, 0.65);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: var(--spacing-lg);
-    /* alpha.28.1 batch 20 — was the last raw z-index left after the
-       token migration in batch 8/13. Token --z-modal = 200 matches. */
+    padding: var(--sp-4);
+    /* alpha.28.1 batch 20 — z-index --z-modal = 200. */
     z-index: var(--z-modal);
     animation: enm-fade-in var(--motion-base) var(--ease-out);
 }
@@ -3125,19 +3148,28 @@ select.enm-settings-input {
 }
 
 .enm-proposal-card {
-    background: var(--bg-elevated);
-    border-radius: var(--radius-xl);
-    box-shadow: var(--shadow-lg);
-    padding: var(--spacing-xl);
-    max-width: 480px;
+    /* v2 modal-card: bg-surface + 1px border-strong + r-lg + sp-5
+       padding + sp-4 gap. Was alpha.1's bg-elevated card with
+       radius-xl + spacing-xl padding + spacing-md gap. */
+    background: var(--bg-surface);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-lg);
+    /* v2 mock shadow: tighter, deeper, more atmospheric. */
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6);
+    padding: var(--sp-5);
+    /* v2 mock uses min(520px, calc(100% - 32px)) for sizing — we
+       expand to 540px because the proposal-card layout has the
+       cooldown + 2 buttons on one row and 520px was sometimes too
+       tight at the longest cooldown localisations. */
+    max-width: min(540px, calc(100% - 32px));
     width: 100%;
     /* alpha.24: overlay parent is position: fixed inset: 0 inside iframe,
        so % here is the iframe height — what we actually want. */
-    max-height: calc(100% - 4 * var(--spacing-lg));
-    overflow: auto;
+    max-height: calc(100% - 40px);
+    overflow-y: auto;
     display: flex;
     flex-direction: column;
-    gap: var(--spacing-md);
+    gap: var(--sp-4);
     animation: enm-slide-up var(--motion-slow) var(--ease-out);
 }
 
@@ -3147,63 +3179,105 @@ select.enm-settings-input {
 }
 
 .enm-proposal-heading {
-    font-size: 18px;
-    font-weight: 600;
-    letter-spacing: -0.02em;
+    /* v2 modal-heading. Severity colouring kept on .enm-prop-heading-*
+       modifier classes below — proposal-card.js sets one of them per
+       severity at construction. */
+    font-size: var(--fs-h2);
+    font-weight: var(--fw-semibold);
+    letter-spacing: -0.01em;
+    margin: 0;
 }
 
 .enm-prop-heading-warning  { color: var(--warning); }
 .enm-prop-heading-critical { color: var(--error); }
-.enm-prop-heading-healing  { color: var(--healing); }
-.enm-prop-heading-info     { color: var(--primary); }
+.enm-prop-heading-healing  { color: var(--success); }
+.enm-prop-heading-info     { color: var(--accent); }
 
 .enm-proposal-summary {
-    color: var(--text-secondary);
-    line-height: 1.65;
+    /* v2 modal-summary: text-primary not text-secondary — the body
+       text is the headline information at the modal level. */
+    font-size: var(--fs-body);
+    color: var(--text-primary);
+    line-height: 1.55;
+    margin: 0;
+}
+
+/* NEW — `.enm-proposal-reason` is emitted at proposal-card.js:131
+   when the proposal includes a `reason` field. Was unstyled until
+   alpha.27; v2 mock has it as caption text-tertiary. */
+.enm-proposal-reason {
+    font-size: var(--fs-caption);
+    color: var(--text-tertiary);
+    line-height: 1.55;
+    margin: 0;
 }
 
 .enm-proposal-cooldown {
-    font-size: 13px;
-    color: var(--warning);
+    /* v2 modal-cooldown: caption text-tertiary + margin-right: auto
+       so it pushes the action buttons to the right inside the flex-row
+       `.enm-proposal-actions`. Was warning-coloured by default — now
+       the warning class is conditional via `[data-state="warn"]` so
+       proposal-card.js can toggle the colour as cooldown approaches. */
+    font-size: var(--fs-caption);
+    color: var(--text-tertiary);
     font-variant-numeric: tabular-nums;
+    margin-right: auto;
 }
+.enm-proposal-cooldown[data-state="warn"] { color: var(--warning); }
 
 .enm-proposal-ack {
+    /* v2 modal-ack: clickable label, accent-coloured checkbox. */
     display: flex;
     align-items: flex-start;
-    gap: var(--spacing-sm);
-    font-size: 13px;
+    gap: var(--sp-2);
+    font-size: var(--fs-body);
     color: var(--text-primary);
     line-height: 1.5;
+    cursor: pointer;
+}
+.enm-proposal-ack input {
+    margin-top: 2px;
+    accent-color: var(--accent);
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+    cursor: pointer;
 }
 
 .enm-proposal-anti-snipe,
 .enm-proposal-reject-reason {
+    /* v2 modal-reject-reason: bg-input + smaller padding + caption font.
+       Was bg-surface with min-height 36px hard-coded. */
     width: 100%;
-    min-height: 36px;
-    padding: 8px 12px;
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    background: var(--bg-surface);
+    padding: 7px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    background: var(--bg-input);
     color: var(--text-primary);
     font: inherit;
-    font-size: 13px;
+    font-size: var(--fs-caption);
 }
 
 .enm-proposal-anti-snipe:focus,
 .enm-proposal-reject-reason:focus {
     outline: none;
-    border-color: var(--primary);
+    border-color: var(--accent);
     box-shadow: var(--focus-ring);
 }
 
 .enm-proposal-actions {
+    /* v2 modal-actions: flex row, items aligned center (not start) so
+       the cooldown text baseline matches the button text baseline.
+       The cooldown sits left via margin-right: auto, buttons cluster
+       right. */
     display: flex;
     flex-wrap: wrap;
-    gap: var(--spacing-sm);
-    justify-content: flex-end;
-    border-top: 1px solid var(--border-color);
-    padding-top: var(--spacing-md);
+    align-items: center;
+    gap: var(--sp-2);
+    /* Drop the divider line — the gap + the ack-checkbox row above
+       provide enough separation in the v2 layout. */
+    padding-top: 0;
+    border-top: none;
 }
 
 /* ============================================================
