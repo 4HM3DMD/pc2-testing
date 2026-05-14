@@ -35,6 +35,21 @@ function redactSecrets(cfg) {
             }
         }
     }
+    // 0.2.0-beta.3.10 — redact the anti-snipe hash. The frontend
+    // Settings UI only needs to know set/unset to render
+    // "Anti-snipe enabled · Change / Clear" vs "Set a password".
+    // The raw hash is owner-readable in principle, but exposing it
+    // over GET /config buys the operator nothing and gives an
+    // attacker who steals an owner token a free offline-crack
+    // target. Synthetic `antiSnipePasswordSet` boolean replaces it.
+    if (out.global) {
+        if (out.global.antiSnipePasswordHash) {
+            out.global.antiSnipePasswordSet = true;
+            delete out.global.antiSnipePasswordHash;
+        } else {
+            out.global.antiSnipePasswordSet = false;
+        }
+    }
     return out;
 }
 

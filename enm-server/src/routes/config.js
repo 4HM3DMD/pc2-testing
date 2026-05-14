@@ -107,6 +107,22 @@ function build(extensionHandle) {
     });
 
     // PUT /config/network — DPoS external IP knobs.
+    // 0.2.0-beta.3.10 — PUT /config/network request schema.
+    //
+    //   {
+    //     mode:        'auto' | 'manual'  // optional; required for valid save
+    //     manualValue: string              // IPv4 / IPv6 / CIDR; required when
+    //                                      // mode === 'manual', ignored when 'auto'
+    //   }
+    //
+    // Owner-only. Writes:
+    //   chain.dpos.ipAddressMode     ← body.mode
+    //   chain.dpos.ipAddressManual   ← body.manualValue (trimmed; null on 'auto')
+    //
+    // Errors: 400 on invalid mode; 409 when mainchain not configured.
+    // Side-effect: ela process needs restart for the IP change to take
+    // effect — the frontend Settings card carries a "Restart required"
+    // tag (beta.3.6) reflecting this.
     router.put('/network', limit('admin'), requireOwner, async (req, res) => {
         try {
             const { mode, manualValue } = req.body || {};
@@ -131,7 +147,34 @@ function build(extensionHandle) {
         }
     });
 
-    // PUT /config/mainchain — advanced knobs.
+    // 0.2.0-beta.3.10 — PUT /config/mainchain request schema.
+    //
+    //   {
+    //     logLevel:      'debug' | 'info' | 'warn' | 'error'  // optional
+    //     archiveMode:   boolean                              // optional
+    //     memoryLimitMb: integer 512..32768                   // optional
+    //     rpcEnabled:    boolean                              // optional;
+    //                                                          master toggle
+    //                                                          for external RPC
+    //     rpcUser:       non-empty string                     // optional
+    //     rpcPassword:   non-empty string (plaintext)         // optional;
+    //                                                          encrypted at rest
+    //                                                          via ConfigStore.
+    //                                                          setRpcPassword
+    //     whiteIPList:   string[] (IPv4/IPv6/CIDR)            // optional;
+    //                                                          127.0.0.1 forced
+    //                                                          back in if absent
+    //   }
+    //
+    // Owner-only. Each field is optional (PATCH semantics in PUT clothing
+    // — caller sends only the fields they want to change). Writes go to
+    // cfg.chains.mainchain.*. Side-effect: ela process needs restart for
+    // logLevel / archiveMode / memoryLimitMb / rpcEnabled / whiteIPList
+    // changes; rpcUser + rpcPassword take effect on next restart too
+    // since they end up in ela.conf RPCConfiguration.
+    //
+    // Errors: 409 when mainchain not configured. Invalid fields are
+    // silently ignored (defensive — frontend has inline validation).
     router.put('/mainchain', limit('admin'), requireOwner, async (req, res) => {
         try {
             const body = req.body || {};
@@ -176,7 +219,31 @@ function build(extensionHandle) {
         }
     });
 
-    // PUT /config/general — healing + notifications + audit prefs.
+    // 0.2.0-beta.3.10 — PUT /config/general request schema.
+    //
+    //   {
+    //     autoExecuteSafe:      boolean       // optional; flips
+    //                                          cfg.global.healing.autoExecuteSafe
+    //     criticalRequiresAck:  boolean       // optional; flips
+    //                                          cfg.global.notifications.criticalRequiresAck
+    //     auditRetentionDays:   integer >= 0  // optional; 0 = forever; max 3650
+    //                                          (3650 frontend-only cap, backend
+    //                                          accepts any non-negative int)
+    //   }
+    //
+    // Owner-only. No restart needed for any field — settings take
+    // effect on next operation. Healing engine reads autoExecuteSafe
+    // each tick; notifications service reads criticalRequiresAck each
+    // toast; audit-cleanup sweep (beta.3.7, server.js) reads
+    // auditRetentionDays each run.
+    //
+    // Errors: 500 on ConfigStore.save failure.
+    //
+    // Note: anti-snipe password sits on cfg.global.antiSnipePasswordHash
+    // but has its own endpoint (POST /config/anti-snipe-password) to
+    // keep the security-sensitive path isolated from this PUT. Adding
+    // antiSnipePassword here would be a mistake — the dedicated route
+    // is owner-only AND uses scrypt at the boundary.
     router.put('/general', limit('admin'), requireOwner, async (req, res) => {
         try {
             const body = req.body || {};
@@ -198,6 +265,76 @@ function build(extensionHandle) {
             return res.json(successBody({ global: cfg.global }));
         } catch (err) {
             extensionHandle.log.error(`${ENM_LOG_PREFIX} PUT /config/general: ${err.message}`);
+            return res.status(500).json(errorBody(err.message));
+        }
+    });
+
+    // 0.2.0-beta.3.10 — POST /config/anti-snipe-password.
+    //
+    // Sets (or clears) the scrypt hash that SelfHealingEngine.
+    // _verifyAntiSnipePassword consults when a proposal payload has
+    // requireAntiSnipe=true. Body:
+    //   { password: "..." }   → hash + store at cfg.global.antiSnipePasswordHash
+    //   { password: "" }      → clear (disable anti-snipe)
+    //   {}                    → no-op (returns current set/unset state)
+    //
+    // Owner-gated. Password never echoes back; response carries only a
+    // boolean `set` derived from the resulting hash presence. Hash
+    // format matches what _verifyAntiSnipePassword expects exactly:
+    //   `scrypt$<saltHex>$<derivedHex>`.
+    //
+    // Pre-beta.3.10 the anti-snipe feature was half-shipped: the
+    // verify path was wired in beta.3.9 but no operator-facing way
+    // to set the hash existed. This endpoint closes that loop.
+    router.post('/anti-snipe-password', limit('admin'), requireOwner, async (req, res) => {
+        try {
+            const body = req.body || {};
+            const password = (typeof body.password === 'string') ? body.password : null;
+            // null = no-op (operator probably hit the endpoint with no
+            // body to query state); empty-string = explicit clear.
+            if (password == null) {
+                const cfg = await ConfigStore.load();
+                return res.json(successBody({
+                    set: !!(cfg && cfg.global && cfg.global.antiSnipePasswordHash),
+                }));
+            }
+            const cfg = await ConfigStore.load();
+            cfg.global = cfg.global || {};
+            if (password === '') {
+                // Explicit clear. Strip the field entirely so a future
+                // GET /config doesn't leak even the metadata that a
+                // hash USED to be set.
+                delete cfg.global.antiSnipePasswordHash;
+                await ConfigStore.save(cfg, { logger: extensionHandle.log });
+                return res.json(successBody({ set: false }));
+            }
+            // Reject obviously-weak passwords. Server-side sanity only —
+            // the operator deserves to know they typed " " by accident.
+            if (password.length < 8) {
+                return res.status(400).json(errorBody(
+                    'Anti-snipe password must be at least 8 characters.',
+                ));
+            }
+            // Hash with scrypt — matches SelfHealingEngine.
+            // _verifyAntiSnipePassword exactly. Random 16-byte salt
+            // + 64-byte derived key. KDF cost defaults match Node's
+            // recommendation (N=16384, r=8, p=1). Owner-only path,
+            // so we can use the slightly heavier sync default.
+            const crypto = require('crypto');
+            const salt = crypto.randomBytes(16);
+            const derived = await new Promise((resolve, reject) => {
+                crypto.scrypt(password, salt, 64, (err, key) => {
+                    if (err) { reject(err); } else { resolve(key); }
+                });
+            });
+            cfg.global.antiSnipePasswordHash = 'scrypt$'
+                + salt.toString('hex') + '$' + derived.toString('hex');
+            await ConfigStore.save(cfg, { logger: extensionHandle.log });
+            return res.json(successBody({ set: true }));
+        } catch (err) {
+            extensionHandle.log.error(
+                `${ENM_LOG_PREFIX} POST /config/anti-snipe-password: ${err.message}`,
+            );
             return res.status(500).json(errorBody(err.message));
         }
     });

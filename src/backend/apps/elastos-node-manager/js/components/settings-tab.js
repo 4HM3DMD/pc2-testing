@@ -829,12 +829,132 @@
             control: this._gen.auditRetention.el,
         }));
 
+        // 0.2.0-beta.3.10 — Anti-snipe password row. Optional security
+        // gate on healing proposals that set requireAntiSnipe=true. The
+        // backend stores a scrypt hash (POST /config/anti-snipe-password);
+        // frontend never sees the plaintext or hash, only a `set` boolean
+        // surfaced by GET /config (cfg.global.antiSnipePasswordSet). The
+        // input is its own form (own save + clear button) so the General
+        // section's main Save flow isn't entangled with this security-
+        // sensitive flow.
+        this._gen.antiSnipeField = makeSecretField({
+            ariaLabel: 'Anti-snipe password',
+            placeholder: 'unset · type a new password to set',
+        });
+        var antiSnipeRow = makeFormRow({
+            label: 'Anti-snipe password',
+            help: 'Optional. When set, healing proposals tagged ',
+            helpCodes: ['requireAntiSnipe'],
+            helpSuffix: ' need this password to confirm. Defends against'
+                + ' a leaked owner-token still being able to execute high-'
+                + ' stakes actions. Leave blank when typing a NEW password'
+                + ' to keep the current one (Clear button below to disable).',
+            control: this._gen.antiSnipeField.el,
+        });
+        sec.body.appendChild(antiSnipeRow);
+        // Inline row for the two anti-snipe buttons + status.
+        var antiSnipeActions = document.createElement('div');
+        antiSnipeActions.className = 'enm-form-inline';
+        this._gen.antiSnipeSaveBtn = document.createElement('button');
+        this._gen.antiSnipeSaveBtn.type = 'button';
+        this._gen.antiSnipeSaveBtn.className = 'enm-btn';
+        this._gen.antiSnipeSaveBtn.textContent = 'Set password';
+        this._gen.antiSnipeClearBtn = document.createElement('button');
+        this._gen.antiSnipeClearBtn.type = 'button';
+        this._gen.antiSnipeClearBtn.className = 'enm-btn enm-btn-danger';
+        this._gen.antiSnipeClearBtn.textContent = 'Clear';
+        this._gen.antiSnipeClearBtn.hidden = true;  // shown only when SET
+        this._gen.antiSnipeStatus = document.createElement('span');
+        this._gen.antiSnipeStatus.className = 'enm-detect-result';
+        antiSnipeActions.appendChild(this._gen.antiSnipeSaveBtn);
+        antiSnipeActions.appendChild(this._gen.antiSnipeClearBtn);
+        antiSnipeActions.appendChild(this._gen.antiSnipeStatus);
+        sec.body.appendChild(makeFormRow({
+            label: 'Apply',
+            help: 'Saves immediately on click — bypasses the section Save.',
+            control: antiSnipeActions,
+        }));
+        this._gen.antiSnipeSaveBtn.addEventListener('click', function () {
+            self._saveAntiSnipe();
+        });
+        this._gen.antiSnipeClearBtn.addEventListener('click', function () {
+            self._clearAntiSnipe();
+        });
+
         sec.statusEl.id = 'enm-gen-status';
 
         sec.saveBtn.addEventListener('click', function () { self._saveGeneral(); });
         sec.revertBtn.addEventListener('click', function () { self.refresh('general'); });
 
         return sec.card;
+    };
+
+    /** 0.2.0-beta.3.10 — POST a new anti-snipe password. */
+    SettingsTab.prototype._saveAntiSnipe = function () {
+        var self = this;
+        var t = root.enmTOrFallback;
+        var password = this._gen.antiSnipeField.input.value;
+        // Inline validation matches the backend's joi-ish check
+        // (length >= 8). Saves a round-trip for the common typo case.
+        if (typeof password !== 'string' || password.length < 8) {
+            this._gen.antiSnipeStatus.textContent = 'Password must be at least 8 characters.';
+            this._gen.antiSnipeStatus.classList.remove('ok');
+            this._gen.antiSnipeStatus.classList.add('err');
+            try { this._gen.antiSnipeField.input.focus({ preventScroll: true }); }
+            catch (e) { this._gen.antiSnipeField.input.focus(); }
+            return;
+        }
+        this._gen.antiSnipeStatus.textContent = t('common.saving') || 'Saving…';
+        this._gen.antiSnipeStatus.classList.remove('ok', 'err');
+        return root.enmRunOnce(this._gen.antiSnipeSaveBtn, t('common.saving') || 'Saving…', function () {
+            return self.api.post('/config/anti-snipe-password', { password: password })
+                .then(function () {
+                    if (self._destroyed) { return; }
+                    self._gen.antiSnipeField.input.value = '';
+                    self._gen.antiSnipeStatus.textContent = '✓ Anti-snipe password set';
+                    self._gen.antiSnipeStatus.classList.add('ok');
+                    self._gen.antiSnipeClearBtn.hidden = false;
+                    self._gen.antiSnipeField.input.placeholder = 'set · type a new password to change';
+                })
+                .catch(function (err) {
+                    if (self._destroyed) { return; }
+                    if (err && err.status === 401) { return; }
+                    self._gen.antiSnipeStatus.textContent =
+                        (err && err.message) || 'Save failed.';
+                    self._gen.antiSnipeStatus.classList.add('err');
+                });
+        });
+    };
+
+    /** 0.2.0-beta.3.10 — POST empty-string password to clear the hash. */
+    SettingsTab.prototype._clearAntiSnipe = function () {
+        var self = this;
+        var t = root.enmTOrFallback;
+        // Light confirm — clearing disables a security feature.
+        if (typeof window !== 'undefined' && typeof window.confirm === 'function') {
+            if (!window.confirm('Disable anti-snipe password? Healing proposals that require it will fail until you set a new one.')) {
+                return;
+            }
+        }
+        this._gen.antiSnipeStatus.textContent = t('common.saving') || 'Saving…';
+        this._gen.antiSnipeStatus.classList.remove('ok', 'err');
+        return root.enmRunOnce(this._gen.antiSnipeClearBtn, t('common.saving') || 'Saving…', function () {
+            return self.api.post('/config/anti-snipe-password', { password: '' })
+                .then(function () {
+                    if (self._destroyed) { return; }
+                    self._gen.antiSnipeStatus.textContent = '✓ Anti-snipe disabled';
+                    self._gen.antiSnipeStatus.classList.add('ok');
+                    self._gen.antiSnipeClearBtn.hidden = true;
+                    self._gen.antiSnipeField.input.placeholder = 'unset · type a new password to set';
+                })
+                .catch(function (err) {
+                    if (self._destroyed) { return; }
+                    if (err && err.status === 401) { return; }
+                    self._gen.antiSnipeStatus.textContent =
+                        (err && err.message) || 'Clear failed.';
+                    self._gen.antiSnipeStatus.classList.add('err');
+                });
+        });
     };
 
     /** @private */
@@ -933,6 +1053,26 @@
             !(g.notifications && g.notifications.criticalRequiresAck === false));
         this._gen.auditRetention.input.value =
             String((g.audit && g.audit.retentionDays) || 365);
+        // 0.2.0-beta.3.10 — wire anti-snipe state. Backend redacts
+        // the hash to a `antiSnipePasswordSet` boolean (see
+        // EnmConfigRedact.js). Clear button only shows when one IS
+        // set; placeholder mirrors the state so the operator knows
+        // whether typing+Save will create-vs-change.
+        if (this._gen.antiSnipeField) {
+            this._gen.antiSnipeField.input.value = '';
+            if (g.antiSnipePasswordSet) {
+                this._gen.antiSnipeClearBtn.hidden = false;
+                this._gen.antiSnipeField.input.placeholder = 'set · type a new password to change';
+            } else {
+                this._gen.antiSnipeClearBtn.hidden = true;
+                this._gen.antiSnipeField.input.placeholder = 'unset · type a new password to set';
+            }
+            // Clear any stale per-row status from previous interactions.
+            if (this._gen.antiSnipeStatus) {
+                this._gen.antiSnipeStatus.textContent = '';
+                this._gen.antiSnipeStatus.classList.remove('ok', 'err');
+            }
+        }
     };
 
     // -----------------------------------------------------------------
