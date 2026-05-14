@@ -4101,6 +4101,11 @@ select.enm-settings-input {
     pointer-events: auto;
 }
 
+/* alpha.29 v2 brand reset · Phase 4d — settings drawer (gear-icon
+   overlay panel; separate from the in-pane Settings tab).
+   The drawer surface picks up v2's bg-overlay (darker than bg-surface
+   so the drawer reads as "on top of" the page chrome), and the
+   internal rows + toggle switch retune to the v2 spec. */
 .enm-drawer {
     position: absolute;
     top: 0;
@@ -4109,8 +4114,8 @@ select.enm-settings-input {
     /* alpha.24: % (iframe-relative) not vw (outer-viewport-relative)
        so the drawer doesn't end up off-screen at narrow iframe widths. */
     width: min(440px, 92%);
-    background: var(--bg-surface);
-    border-left: 1px solid var(--border-color);
+    background: var(--bg-overlay);
+    border-left: 1px solid var(--border-subtle);
     box-shadow: var(--shadow-lg);
     transform: translateX(100%);
     transition: transform 320ms var(--ease-out);
@@ -4132,15 +4137,16 @@ select.enm-settings-input {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: var(--spacing-md) var(--spacing-lg);
-    border-bottom: 1px solid var(--border-color);
+    padding: var(--sp-4) var(--sp-5);
+    border-bottom: 1px solid var(--border-subtle);
     flex-shrink: 0;
 }
 .enm-drawer-header h2 {
-    font-size: 18px;
-    font-weight: 600;
+    font-size: var(--fs-h2);
+    font-weight: var(--fw-semibold);
     margin: 0;
     color: var(--text-primary);
+    letter-spacing: -0.01em;
 }
 .enm-drawer-close {
     width: 32px;
@@ -4148,39 +4154,39 @@ select.enm-settings-input {
     padding: 0;
     background: transparent;
     border: none;
-    color: var(--text-muted);
-    font-size: 24px;
+    color: var(--text-tertiary);
+    font-size: 22px;
     line-height: 1;
     cursor: pointer;
-    border-radius: 50%;
-    transition: background var(--motion-fast) var(--ease-out),
-                color var(--motion-fast) var(--ease-out);
+    border-radius: var(--r-sm);
+    transition: background 0.12s, color 0.12s;
 }
-.enm-drawer-close:hover { background: var(--bg-muted); color: var(--text-primary); }
+.enm-drawer-close:hover { background: var(--bg-elevated); color: var(--text-primary); }
 .enm-drawer-close:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 
 /* Drawer body — scrollable */
 .enm-drawer-body {
     flex: 1 1 auto;
     overflow-y: auto;
-    padding: var(--spacing-md) 0;
+    padding: var(--sp-3) 0;
 }
 
-/* Drawer sections */
+/* Drawer sections — separated by hairline. The title sits inline
+   with the rows; mock pattern groups settings by purpose. */
 .enm-drawer-section {
-    padding: var(--spacing-sm) 0 var(--spacing-md);
+    padding: var(--sp-3) 0 var(--sp-4);
 }
 .enm-drawer-section + .enm-drawer-section {
-    border-top: 1px solid var(--border-color);
+    border-top: 1px solid var(--border-subtle);
 }
 .enm-drawer-section-title {
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.06em;
+    font-size: var(--fs-caption);
+    font-weight: var(--fw-semibold);
+    letter-spacing: 0.08em;
     text-transform: uppercase;
-    color: var(--text-muted);
-    margin: 0 0 var(--spacing-xs);
-    padding: 0 var(--spacing-lg);
+    color: var(--text-tertiary);
+    margin: 0 0 var(--sp-2);
+    padding: 0 var(--sp-5);
 }
 .enm-drawer-rows {
     display: flex;
@@ -4192,11 +4198,11 @@ select.enm-settings-input {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: var(--spacing-md);
-    padding: var(--spacing-md) var(--spacing-lg);
+    gap: var(--sp-4);
+    padding: var(--sp-3) var(--sp-5);
     cursor: pointer;
     user-select: none;
-    transition: background var(--motion-fast) var(--ease-out);
+    transition: background 0.12s;
     background: transparent;
     border: none;
     border-radius: 0;
@@ -4205,7 +4211,7 @@ select.enm-settings-input {
     font: inherit;
     color: inherit;
 }
-.enm-drawer-row:hover { background: var(--bg-muted); }
+.enm-drawer-row:hover { background: var(--bg-elevated); }
 .enm-drawer-row:focus-visible {
     outline: none;
     box-shadow: inset var(--focus-ring);
@@ -4214,28 +4220,31 @@ select.enm-settings-input {
     display: flex;
     flex-direction: column;
     gap: 2px;
-    font-size: 14px;
+    font-size: var(--fs-body);
     color: var(--text-primary);
     flex: 1 1 auto;
     min-width: 0;
 }
 .enm-drawer-row-help {
-    font-size: 12px;
-    color: var(--text-muted);
+    font-size: var(--fs-caption);
+    color: var(--text-tertiary);
     line-height: 1.4;
 }
 .enm-drawer-row-chevron {
-    color: var(--text-muted);
+    color: var(--text-tertiary);
     font-size: 18px;
     line-height: 1;
     flex-shrink: 0;
 }
 
-/* Toggle switch — matches PC2 settings panels visually */
+/* Toggle switch — v2 .toggle (36×20). The previous 44×24 sized for
+   touch — v2 keeps the same touch ergonomics via the outer .enm-
+   drawer-row click target (which is large enough). Track recolors to
+   --accent when checked. */
 .enm-drawer-toggle {
     position: relative;
-    width: 44px;
-    height: 24px;
+    width: 36px;
+    height: 20px;
     flex-shrink: 0;
 }
 .enm-drawer-toggle input {
@@ -4249,27 +4258,29 @@ select.enm-settings-input {
 .enm-drawer-toggle-track {
     position: absolute;
     inset: 0;
-    background: var(--border-strong);
-    border-radius: 999px;
-    transition: background var(--motion-fast) var(--ease-out);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--r-pill);
+    transition: background 0.18s, border-color 0.18s;
 }
 .enm-drawer-toggle-track::after {
     content: '';
     position: absolute;
     top: 2px;
     left: 2px;
-    width: 20px;
-    height: 20px;
-    background: white;
+    width: 14px;
+    height: 14px;
+    background: var(--text-secondary);
     border-radius: 50%;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
-    transition: transform var(--motion-fast) var(--ease-out);
+    transition: transform 0.18s, background 0.18s;
 }
 .enm-drawer-toggle input:checked ~ .enm-drawer-toggle-track {
-    background: var(--primary);
+    background: var(--accent);
+    border-color: var(--accent);
 }
 .enm-drawer-toggle input:checked ~ .enm-drawer-toggle-track::after {
-    transform: translateX(20px);
+    transform: translateX(16px);
+    background: #08090c;
 }
 .enm-drawer-toggle input:focus-visible ~ .enm-drawer-toggle-track {
     box-shadow: 0 0 0 3px var(--focus-ring-color);
