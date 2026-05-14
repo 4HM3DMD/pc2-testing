@@ -2,78 +2,176 @@
  * Copyright (C) 2026-present Elacity
  * SPDX-License-Identifier: AGPL-3.0
  *
- * components/validator-registration-card.js — "Next steps" guide that
- * appears on the dashboard once the chain finishes syncing but the
- * operator hasn't yet registered as a BPoS validator on-chain.
+ * components/validator-registration-card.js — BPoS supernode operator
+ * card for the Dashboard pane. (Beta 3 rewrite — from phase-03 mock.)
  *
- * Trigger:
- *   chain.state === 'healthy'  AND  producer.state is null/empty
- *   (chain caught up, but no on-chain producer record for our pubkey)
+ * Replaces the alpha.27 "three-step Essentials guide" card with the
+ * compact .bpos-card layout from enm-design-mocks/v2/phase-03-status.html
+ * (variant D, lines ~742-760). Two visual states:
  *
- * Hides automatically once the operator registers in Essentials and the
- * registration tx confirms — at which point /chains/<id>/producer starts
- * returning a state (Inactive / Active) and we step out of the way.
+ *   A) Not yet registered  → .enm-bpos-head with "Action required" chip +
+ *                            .enm-bpos-cta-card prompting the operator to
+ *                            copy their public key, open the Essentials
+ *                            guide, and wait for chain confirmation.
+ *                            .enm-bpos-signing-key block holds the pubkey
+ *                            in a monospace <pre>, easy to read/select.
  *
- * What it walks the operator through (no node.sh references — we manage
- * binaries, keystore, and activation inside ENM):
+ *   B) Registered, awaiting activation → "Ready to activate" chip +
+ *                            single Activate button. ENM signs the
+ *                            activation tx locally with the existing
+ *                            keystore — no wallet round-trip.
  *
- *   1. Copy your producer public key. The keystore is already generated
- *      and stored on this server during setup; this is the public half.
- *   2. Sign the registration tx in Elastos Essentials mobile wallet —
- *      that's the only place to put the 5,000 ELA deposit because the
- *      browser/desktop has no signing key (Architectural Invariant #2:
- *      ENM is identity-only, never asks the wallet to sign).
- *   3. Wait 6 blocks (~12 min) for chain confirmation.
- *   4. Tap Activate inside ENM — same /chains/<id>/bpos/activate
- *      endpoint Settings → Tools uses. We've kept it visible here so
- *      the operator doesn't have to dig.
+ * Once /producer reports state Active the card hides automatically; the
+ * Identity sub-tab + maintenance row carry steady-state BPoS info.
+ *
+ * Architectural invariant (memory: feedback_enm_wallet_identity_only) —
+ * ENM NEVER asks the browser wallet to sign anything. Registration is
+ * signed in Elastos Essentials mobile. Activation is signed by
+ * keystore.dat on this server via ela-cli. The browser wallet is
+ * identity-only for ownership + audit attribution.
+ *
+ * Data sources:
+ *   - GET /chains/:id            → coarse chain state (must be 'healthy')
+ *   - GET /chains/:id/producer   → ourPubkey, state, enabled
+ *   - POST /chains/:id/bpos/activate → activation tx (chain-side signed)
+ *   - SSE topic chains:<chainId>:producer → push-driven state refresh
+ *     when the backend ships it; falls back to the visibility-paused
+ *     poll otherwise.
+ *
+ * alpha.28 invariants preserved:
+ *   - _destroyed guard on every async .then/.catch resolution
+ *   - encodeURIComponent on every dynamic path segment
+ *   - 401-suppress on background fetches (boot path owns re-auth)
+ *   - Conflict-envelope shape validation on 409 (batch 68 pattern)
+ *   - Visibility-paused polling (batch 27/28 — stops while tab hidden)
+ *   - enmRunOnce wrap on the activate button (double-click safe)
+ *   - 401-disable-restore finalizer pattern (batch 60)
+ *   - enmCopyButton factory for the public-key copy (alpha.29 batch 96)
+ *   - 24×24 minimum touch-target floor on every actionable button
+ *   - aria-labelledby on the card root + aria-live on the state chip
  */
 
 (function (root) {
     'use strict';
 
     var POLL_INTERVAL_MS = 30_000;
-    var SHORT_POLL_MS    = 5_000;   // faster cadence once we know we're alive but not registered
+    var SHORT_POLL_MS    = 5_000;   // faster cadence while we're showing
+                                    // and an imminent state flip is plausible
 
-    function ValidatorRegistrationCard(opts) {
+    // Map producer.state strings into one of the two render branches.
+    // The mock supports two action-ready variants only; steady-state
+    // (Active / Inactive while registered + active) hides the card.
+    var STATE_NEEDS_REGISTRATION = 'needs_registration';
+    var STATE_NEEDS_ACTIVATION   = 'needs_activation';
+    var STATE_HIDE               = 'hide';
+
+    function BposCard(opts) {
         if (!opts || !opts.api) {
-            throw new TypeError('ValidatorRegistrationCard: { api } required');
+            throw new TypeError('EnmBposCard: { api } required');
         }
         this.api           = opts.api;
         this.chainId       = opts.chainId || 'mainchain';
         this.notifications = opts.notifications || null;
+        this.sse           = opts.sse || null;
 
         this.root = document.createElement('section');
-        this.root.className = 'enm-card enm-validator-card';
-        this.root.hidden = true;          // hidden until poll says "show me"
+        this.root.className = 'enm-bpos-card';
+        this.root.hidden = true; // hidden until reconcile says "show me"
+        // a11y — card-level region semantics. aria-labelledby points at
+        // the head title we render in _render; aria-live="polite" on the
+        // chip means a state transition (A → B) is announced once the
+        // chip's text content changes.
+        this.root.setAttribute('role', 'region');
 
-        this._pollTimer = null;
-        this._rendered = false;
-        this._lastPubkey = null;
-        // alpha.28.1 batch 16 — _destroyed flag so _poll's resolving
-        // Promise.all can't write into a detached DOM after destroy().
+        this._titleId = 'enm-bpos-title-' + Math.random().toString(36).slice(2, 8);
+        this._chipId  = 'enm-bpos-chip-'  + Math.random().toString(36).slice(2, 8);
+
+        this._renderedState = null;        // last state we rendered for
+        this._lastPubkey    = null;
+        this._pollIntervalMs = POLL_INTERVAL_MS;
         this._destroyed = false;
+        this._unsubscribeProducer = null;
+        this._pollPauser = null;
+        this._pollTimer = null;
     }
 
-    ValidatorRegistrationCard.prototype.mount = function (parent) {
+    /**
+     * Mount the card into the supplied parent and kick the initial
+     * /producer fetch. Subscribes to the SSE producer topic when an
+     * sse service is available; otherwise falls back to the
+     * visibility-paused poll.
+     *
+     * @param {HTMLElement} parent
+     * @returns {BposCard}
+     */
+    BposCard.prototype.mount = function (parent) {
         parent.appendChild(this.root);
         var self = this;
-        // First poll happens immediately; subsequent ones from the interval.
+        // Initial poll happens immediately; subsequent ones from the
+        // visibility-paused interval below.
         this._poll();
-        // alpha.28.1 batch 28 — migrate to enmUseVisibilityPause so the
-        // 30s/5s polls stop when the tab is hidden. Falls back to raw
-        // setInterval if the helper failed to load. _setPollInterval
-        // below switches between cadences via the same helper.
-        this._pollIntervalMs = POLL_INTERVAL_MS;
         this._armPoll(POLL_INTERVAL_MS);
+
+        // SSE push — the backend ships chains:<id>:producer when the
+        // producer record changes (registration confirms on chain,
+        // activation lands, slot rank shifts). When we get an event we
+        // re-fetch; the SSE event payload is treated as a signal, not
+        // a source of truth, so the renderer never reads it directly.
+        if (this.sse && typeof this.sse.subscribe === 'function') {
+            this._unsubscribeProducer = this.sse.subscribe(
+                'chains:' + encodeURIComponent(this.chainId) + ':producer',
+                function () {
+                    if (self._destroyed) { return; }
+                    self._poll();
+                }
+            );
+        }
         return this;
     };
 
+    /**
+     * Force a fresh fetch of /chains/:id + /chains/:id/producer and
+     * re-reconcile the card visibility. Safe to call externally
+     * (technical-view's tools-gate poll re-uses the same data).
+     */
+    BposCard.prototype.refresh = function () {
+        this._poll();
+    };
+
+    /**
+     * Tear down the card, clear timers, unsubscribe from SSE, drop
+     * the root element. Idempotent — safe to call twice.
+     */
+    BposCard.prototype.destroy = function () {
+        this._destroyed = true;
+        if (this._unsubscribeProducer) {
+            try { this._unsubscribeProducer(); } catch (_) { /* idempotent */ }
+            this._unsubscribeProducer = null;
+        }
+        if (this._pollPauser) {
+            try { this._pollPauser.stop(); } catch (_) { /* idempotent */ }
+            this._pollPauser = null;
+        }
+        if (this._pollTimer) {
+            clearInterval(this._pollTimer);
+            this._pollTimer = null;
+        }
+        if (this.root.parentNode) {
+            this.root.parentNode.removeChild(this.root);
+        }
+    };
+
     /** @private */
-    ValidatorRegistrationCard.prototype._armPoll = function (ms) {
+    BposCard.prototype._armPoll = function (ms) {
         var self = this;
-        if (this._pollPauser) { try { this._pollPauser.stop(); } catch (_) { /* idempotent */ } this._pollPauser = null; }
-        if (this._pollTimer)  { clearInterval(this._pollTimer); this._pollTimer = null; }
+        if (this._pollPauser) {
+            try { this._pollPauser.stop(); } catch (_) { /* idempotent */ }
+            this._pollPauser = null;
+        }
+        if (this._pollTimer) {
+            clearInterval(this._pollTimer);
+            this._pollTimer = null;
+        }
         if (typeof root !== 'undefined' && typeof root.enmUseVisibilityPause === 'function') {
             this._pollPauser = root.enmUseVisibilityPause(function () { self._poll(); }, ms);
         } else {
@@ -81,35 +179,35 @@
         }
     };
 
-    ValidatorRegistrationCard.prototype.destroy = function () {
-        this._destroyed = true;
-        if (this._pollPauser) { try { this._pollPauser.stop(); } catch (_) { /* idempotent */ } this._pollPauser = null; }
-        if (this._pollTimer) { clearInterval(this._pollTimer); this._pollTimer = null; }
-        if (this.root.parentNode) { this.root.parentNode.removeChild(this.root); }
+    /** @private */
+    BposCard.prototype._setPollInterval = function (ms) {
+        if (this._pollIntervalMs === ms) { return; }
+        this._pollIntervalMs = ms;
+        this._armPoll(ms);
     };
 
     /** @private */
-    ValidatorRegistrationCard.prototype._poll = function () {
+    BposCard.prototype._poll = function () {
         var self = this;
-        // alpha.28.1 batch 48 — flag fetch failures so _reconcile can
-        // distinguish "not yet synced" (null + no error flag) from
-        // "backend outage" (null + error flag). Previously both paths
-        // hid the card with no operator signal; under a persistent
-        // 500/401 the operator couldn't tell whether their producer
-        // status was unknown or just not-yet-registered.
-        // (Round-4 empty/loading/error audit a3ca028e.)
+        // alpha.28.1 batch 48 — distinguish "not yet synced" (null + no
+        // error flag) from "backend outage" (null + error flag). The
+        // outage branch keeps the existing render rather than hiding,
+        // so the operator doesn't get a false "all good" signal.
         var chainFailed = false;
         var producerFailed = false;
+        var chainPath = '/chains/' + encodeURIComponent(this.chainId);
+        var producerPath = chainPath + '/producer';
         Promise.all([
-            this.api.get('/chains/' + this.chainId, { skipCache: true })
+            this.api.get(chainPath, { skipCache: true })
                 .catch(function (err) {
                     // 401 = expired session; suppress operator-visible
-                    // noise (boot path owns re-auth). Other statuses
-                    // (404 / 500 / network) flag as a real outage.
+                    // noise (boot path owns re-auth). Anything else
+                    // flags as a real outage so _reconcile keeps the
+                    // last-known-good UI.
                     if (!err || err.status !== 401) { chainFailed = true; }
                     return null;
                 }),
-            this.api.get('/chains/' + this.chainId + '/producer', { skipCache: true })
+            this.api.get(producerPath, { skipCache: true })
                 .catch(function (err) {
                     if (!err || err.status !== 401) { producerFailed = true; }
                     return null;
@@ -118,12 +216,11 @@
             if (self._destroyed) { return; }
             var chain    = results[0];
             var producer = results[1];
-            // If both endpoints failed AND we were already showing the
-            // card, leave it as-is instead of hiding (last-known-good
-            // wins until the backend recovers). The chain-card next
-            // to us already surfaces backend outage state, so we don't
-            // need a second indicator — just don't lie by hiding.
             if (chainFailed && producerFailed && !self.root.hidden) {
+                // Both fetches failed — leave the last-known-good
+                // render in place rather than misleading the operator
+                // by hiding. The chain-card next to us already
+                // surfaces the outage.
                 return;
             }
             self._reconcile(chain, producer);
@@ -131,76 +228,86 @@
     };
 
     /**
+     * Decide which branch (hide / not-registered / awaiting-activation)
+     * to show and render it. The decision tree:
+     *
+     *   chain not 'healthy'                  → hide (chain-card carries it)
+     *   producer.state === 'Active'          → hide (steady state, no CTA)
+     *   producer.state set but not Active +
+     *     producer.enabled and pubkey known  → STATE_NEEDS_ACTIVATION (B)
+     *   producer.state empty/null +
+     *     producer.enabled and pubkey known  → STATE_NEEDS_REGISTRATION (A)
+     *
      * @private
-     * Visibility logic — match exactly the operator's "what should I do next"
-     * moment. Three categories:
-     *   - chain not healthy yet            → hide; the chain-card itself
-     *                                        carries the message
-     *   - chain healthy + already registered (producer.state set) → hide;
-     *                                        the BPoS panel inside the
-     *                                        chain card handles renew /
-     *                                        reactivate flows
-     *   - chain healthy + not registered    → show the steps
      */
-    ValidatorRegistrationCard.prototype._reconcile = function (chain, producer) {
-        var alive   = !!(chain && chain.state === 'healthy');
-        var pubkey  = producer && producer.ourPubkey;
-        var pState  = producer && producer.state;
-        var enabled = producer && producer.enabled;
+    BposCard.prototype._reconcile = function (chain, producer) {
+        var alive    = !!(chain && chain.state === 'healthy');
+        var pubkey   = (producer && producer.ourPubkey) || '';
+        var pState   = producer && producer.state;
+        var enabled  = !!(producer && producer.enabled);
 
-        // Show only when: synced AND (we have a pubkey OR backend says
-        // enabled-ish) AND no on-chain producer record yet.
-        var shouldShow = alive
-            && (enabled || !!pubkey)
-            && !pState;
-
-        if (!shouldShow) {
-            // a11y/focus: if the operator was focused inside this card
-            // (e.g. on Activate or the Copy button) when polling decides
-            // to hide it, focus drops to body. Move focus to a stable
-            // landmark first so the next Tab makes sense.
-            try {
-                if (this.root && this.root.contains && this.root.contains(document.activeElement)) {
-                    var fallback = document.getElementById('enm-tech-pane-status')
-                        || document.getElementById('enm-pane-dashboard')
-                        || document.getElementById('enm-main');
-                    if (fallback && typeof fallback.focus === 'function') {
-                        fallback.focus({ preventScroll: true });
-                    }
-                }
-            } catch (e) { /* DOM may not be live during teardown */ }
-            this.root.hidden = true;
-            // If we sped up polling because we expected an imminent state
-            // change, slow back down.
-            this._setPollInterval(POLL_INTERVAL_MS);
+        // BPoS card only makes sense for arbiter-enabled nodes. The
+        // operator may flip enableArbiter off via Settings; when that
+        // happens the card disappears and the steady-state plain-node
+        // chain-card carries the dashboard alone.
+        var bposOperator = enabled || !!pubkey;
+        if (!alive || !bposOperator) {
+            this._hideAndRest();
             return;
         }
 
-        // Re-show recovery: if the card was previously hidden mid-activate,
-        // the Activate button may still be in its disabled/"Activating…"
-        // state. Reset to the resting label so the operator can retry —
-        // BUT only when enmRunOnce isn't currently single-flight-blocking
-        // the button. (Round-11 race audit B7: a poll resolve that
-        // re-shows the card while the Activate POST is in flight would
-        // re-enable the button mid-request → double-click possible →
-        // the second click hits a still-pending /bpos/activate.)
-        if (this.root.hidden && this._rendered) {
-            var btn = this.root.querySelector('#enm-vc-activate');
-            if (btn && btn.dataset.busy !== '1') {
-                btn.disabled = false;
-                btn.textContent = root.enmTOrFallback('validator_card.activate_btn');
-            }
+        // Already steady-state Active producer → nothing for this card
+        // to do. The Identity sub-tab + tools-gate Reactivate row
+        // handle inactive-rounds + slashing recovery.
+        if (pState && String(pState).toLowerCase() === 'active') {
+            this._hideAndRest();
+            return;
         }
-        this.root.hidden = false;
-        // Operator is likely watching for confirmation right now — poll
-        // every 5s so the card vanishes the moment producer.state shows up.
-        this._setPollInterval(SHORT_POLL_MS);
 
-        // Lazy-render the card body. Pubkey is the only dynamic value
-        // post-render — update it inline rather than re-rendering.
-        if (!this._rendered) {
-            this._render();
-            this._rendered = true;
+        // Registered but not Active → operator needs to tap Activate.
+        // Registration absent → operator needs to copy their pubkey
+        // and complete registration in Essentials.
+        var nextState = pState
+            ? STATE_NEEDS_ACTIVATION
+            : STATE_NEEDS_REGISTRATION;
+
+        // Focus continuity — if the card was hidden mid-activate and a
+        // poll re-shows it, the Activate button's _runOnce finalizer
+        // already restored the resting label. We only need to track
+        // pubkey changes and re-render on state transitions.
+        this._show(nextState, pubkey);
+    };
+
+    /** @private */
+    BposCard.prototype._hideAndRest = function () {
+        // a11y/focus — if the operator was focused inside the card when
+        // a poll decided to hide it (e.g. on the Activate button or the
+        // copy button), focus drops to body. Move it to a stable
+        // landmark first so the next Tab makes sense.
+        try {
+            if (this.root && this.root.contains && this.root.contains(document.activeElement)) {
+                var fallback = document.getElementById('enm-tech-pane-status')
+                    || document.getElementById('enm-pane-dashboard')
+                    || document.getElementById('enm-main');
+                if (fallback && typeof fallback.focus === 'function') {
+                    fallback.focus({ preventScroll: true });
+                }
+            }
+        } catch (e) { /* DOM may not be live during teardown */ }
+        this.root.hidden = true;
+        // Slow back down — nothing is imminent.
+        this._setPollInterval(POLL_INTERVAL_MS);
+    };
+
+    /** @private */
+    BposCard.prototype._show = function (state, pubkey) {
+        // Faster cadence while visible — operator is likely watching
+        // for the registration / activation confirmation right now.
+        this._setPollInterval(SHORT_POLL_MS);
+        this.root.hidden = false;
+        if (this._renderedState !== state) {
+            this._render(state);
+            this._renderedState = state;
         }
         if (pubkey && pubkey !== this._lastPubkey) {
             this._fillPubkey(pubkey);
@@ -208,164 +315,302 @@
         }
     };
 
-    /** @private */
-    ValidatorRegistrationCard.prototype._setPollInterval = function (ms) {
-        if (this._pollIntervalMs === ms) { return; }
-        this._pollIntervalMs = ms;
-        // alpha.28.1 batch 28 — route through _armPoll so the cadence
-        // switch reuses the visibility-pause wrapper.
-        this._armPoll(ms);
+    /**
+     * Build the card body for the given state.
+     *
+     * State A (needs_registration):
+     *   .enm-bpos-head            (accent icon + body + warn chip)
+     *   .enm-bpos-cta-card        (help + copy-pubkey + open-essentials)
+     *     .enm-bpos-signing-key   (pubkey <pre>)
+     *   .enm-bpos-note            (info footnote, "card disappears…")
+     *
+     * State B (needs_activation):
+     *   .enm-bpos-head            (success icon + body + ready chip)
+     *   .enm-bpos-cta-card        (single Activate button)
+     *
+     * @private
+     */
+    BposCard.prototype._render = function (state) {
+        // alpha.28 batch 33 — aria-labelledby points at the head-title
+        // we emit inside .enm-bpos-head-body; update before innerHTML
+        // is written so the AT tree sees the relation immediately.
+        this.root.setAttribute('aria-labelledby', this._titleId);
+
+        if (state === STATE_NEEDS_ACTIVATION) {
+            this._renderActivation();
+            return;
+        }
+        // Default (and the most common dashboard surface): not-registered.
+        this._renderRegistration();
     };
 
     /** @private */
-    ValidatorRegistrationCard.prototype._render = function () {
+    BposCard.prototype._renderRegistration = function () {
         var t = root.enmTOrFallback;
         var self = this;
+        var titleId = this._titleId;
+        var chipId  = this._chipId;
 
         this.root.innerHTML = ''
-            + '<div class="enm-validator-card-head">'
-                + '<div class="enm-validator-card-eyebrow">' + escapeHtml(t('validator_card.eyebrow')) + '</div>'
-                + '<h2 class="enm-validator-card-title">' + escapeHtml(t('validator_card.title')) + '</h2>'
-                + '<p class="enm-validator-card-sub">' + escapeHtml(t('validator_card.sub')) + '</p>'
+            + '<div class="enm-bpos-head">'
+                // Accent rounded box with ⚡ glyph — see phase-03 mock,
+                // .enm-bpos-head-icon variant for action-needed.
+                + '<div class="enm-bpos-head-icon" aria-hidden="true">'
+                    + '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" '
+                        + 'stroke="currentColor" stroke-width="2" stroke-linecap="round" '
+                        + 'stroke-linejoin="round">'
+                        + '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>'
+                    + '</svg>'
+                + '</div>'
+                + '<div class="enm-bpos-head-body">'
+                    + '<div class="enm-bpos-head-title" id="' + escapeAttr(titleId) + '">'
+                        + escapeHtml(t('bpos_card.head_title_register'))
+                    + '</div>'
+                    + '<div class="enm-bpos-head-sub">'
+                        + escapeHtml(t('bpos_card.head_sub_register'))
+                    + '</div>'
+                + '</div>'
+                // aria-live=polite — when the chip text changes (A → B),
+                // screen readers announce the transition without
+                // interrupting the operator. Stays polite (not assertive)
+                // because the change is a confirmation, not an emergency.
+                + '<span class="enm-bpos-head-chip warn" id="' + escapeAttr(chipId) + '" '
+                    + 'role="status" aria-live="polite">'
+                    + escapeHtml(t('bpos_card.chip_action_required'))
+                + '</span>'
             + '</div>'
 
-            + '<ol class="enm-validator-steps">'
-
-            // ---- Step 1 — copy the producer public key
-            + '<li class="enm-validator-step" data-step="1">'
-                + '<div class="enm-validator-step-marker">1</div>'
-                + '<div class="enm-validator-step-body">'
-                    + '<h3 class="enm-validator-step-title">' + escapeHtml(t('validator_card.step1_title')) + '</h3>'
-                    + '<p class="enm-validator-step-help">' + escapeHtml(t('validator_card.step1_help')) + '</p>'
-                    + '<div class="enm-validator-pubkey-row">'
-                        + '<code class="enm-validator-pubkey" id="enm-vc-pubkey">' + escapeHtml(t('common.loading')) + '</code>'
-                        // alpha.29 batch 96 — copy button now rendered via
-                        // root.enmCopyButton (factory primitive) at post-
-                        // mount time below. The empty placeholder span
-                        // marks where to insert.
-                        + '<span class="enm-validator-copy-slot"></span>'
+            + '<div class="enm-bpos-cta-card">'
+                + '<p class="enm-bpos-cta-help">'
+                    + escapeHtml(t('bpos_card.cta_help_register'))
+                + '</p>'
+                + '<div class="enm-bpos-cta-row">'
+                    // Copy-pubkey button — replaced post-render with the
+                    // enmCopyButton factory so we inherit the aria-hidden
+                    // visible-span pattern + clipboard fallback.
+                    + '<span class="enm-bpos-copy-slot"></span>'
+                    + '<button type="button" '
+                        + 'class="enm-btn enm-bpos-open-essentials">'
+                        + escapeHtml(t('bpos_card.open_essentials_btn'))
+                    + '</button>'
+                + '</div>'
+                + '<div class="enm-bpos-signing-key">'
+                    + '<div class="enm-bpos-signing-key-label">'
+                        + escapeHtml(t('bpos_card.signing_key_label'))
                     + '</div>'
+                    + '<pre class="enm-bpos-signing-key-value" id="enm-bpos-pubkey">'
+                        + escapeHtml(t('common.loading'))
+                    + '</pre>'
                 + '</div>'
-            + '</li>'
+            + '</div>'
 
-            // ---- Step 2 — Essentials registration (the off-device signing step)
-            + '<li class="enm-validator-step" data-step="2">'
-                + '<div class="enm-validator-step-marker">2</div>'
-                + '<div class="enm-validator-step-body">'
-                    + '<h3 class="enm-validator-step-title">' + escapeHtml(t('validator_card.step2_title')) + '</h3>'
-                    + '<p class="enm-validator-step-help">' + escapeHtml(t('validator_card.step2_help')) + '</p>'
-                    + '<ol class="enm-validator-substeps">'
-                        + '<li>' + escapeHtml(t('validator_card.step2_a')) + '</li>'
-                        + '<li>' + escapeHtml(t('validator_card.step2_b')) + '</li>'
-                        + '<li>' + escapeHtml(t('validator_card.step2_c'))
-                            + '<ul class="enm-validator-fields">'
-                                + '<li><b>' + escapeHtml(t('validator_card.field_name'))   + '</b> — ' + escapeHtml(t('validator_card.field_name_help')) + '</li>'
-                                + '<li><b>' + escapeHtml(t('validator_card.field_pubkey')) + '</b> — ' + escapeHtml(t('validator_card.field_pubkey_help')) + '</li>'
-                                + '<li><b>' + escapeHtml(t('validator_card.field_addr'))   + '</b> — ' + escapeHtml(t('validator_card.field_addr_help')) + '</li>'
-                                + '<li><b>' + escapeHtml(t('validator_card.field_url'))    + '</b> — ' + escapeHtml(t('validator_card.field_url_help')) + '</li>'
-                            + '</ul>'
-                        + '</li>'
-                        + '<li>' + escapeHtml(t('validator_card.step2_d')) + '</li>'
-                    + '</ol>'
-                    + '<p class="enm-validator-deposit-note">' + escapeHtml(t('validator_card.deposit_note')) + '</p>'
-                + '</div>'
-            + '</li>'
+            + '<div class="enm-bpos-note">'
+                + escapeHtml(t('bpos_card.note_after_confirm'))
+            + '</div>';
 
-            // ---- Step 3 — wait 6 blocks then activate (uses ENM's existing endpoint)
-            + '<li class="enm-validator-step" data-step="3">'
-                + '<div class="enm-validator-step-marker">3</div>'
-                + '<div class="enm-validator-step-body">'
-                    + '<h3 class="enm-validator-step-title">' + escapeHtml(t('validator_card.step3_title')) + '</h3>'
-                    + '<p class="enm-validator-step-help">' + escapeHtml(t('validator_card.step3_help')) + '</p>'
-                    + '<div class="enm-validator-activate-row">'
-                        + '<button type="button" class="enm-btn enm-btn-primary" id="enm-vc-activate">'
-                            + escapeHtml(t('validator_card.activate_btn')) + '</button>'
-                        + '<span class="enm-validator-activate-status" id="enm-vc-activate-status" role="status" aria-live="polite"></span>'
-                    + '</div>'
-                + '</div>'
-            + '</li>'
-
-            + '</ol>';
-
-        // alpha.29 batch 96 — copy button created via root.enmCopyButton
-        // (utils.js factory) instead of the previous 25-line hand-wired
-        // pattern. Same UX: text-swap on success, selectInto + warning
-        // toast on fallback. Round-33 architectural triage — proves the
-        // factory pattern at the cleanest call site first; remaining 4
-        // sites migrate in follow-up batches.
-        var pubkeyEl = this.root.querySelector('#enm-vc-pubkey');
-        var copyBtn = root.enmCopyButton({
-            value: function () { return self._lastPubkey || pubkeyEl.textContent || ''; },
-            label: t('validator_card.copy'),
-            copiedLabel: t('validator_card.copied'),
-            ariaLabel: t('validator_card.copy_aria'),
-            resetMs: 1200,
-            notifications: self.notifications,
-            failTitle: t('validator_card.copy_fail_title'),
-            failBody: t('validator_card.copy_fail_body'),
-            getDisplayEl: function () { return pubkeyEl; },
-        });
-        copyBtn.id = 'enm-vc-copy';
-        copyBtn.classList.add('enm-validator-copy');
-        var slot = this.root.querySelector('.enm-validator-copy-slot');
+        // Replace the copy slot with the enmCopyButton factory. The
+        // factory hands back a fully-wired <button> with aria-hidden
+        // inner span + clipboard fallback + select-into-display
+        // graceful degradation (alpha.29 batch 96 pattern).
+        var pubkeyEl = this.root.querySelector('#enm-bpos-pubkey');
+        var copyBtn;
+        if (typeof root.enmCopyButton === 'function') {
+            copyBtn = root.enmCopyButton({
+                value: function () {
+                    // Resolve fresh at click time so a /producer push
+                    // that arrives between render and click hands the
+                    // latest pubkey to the clipboard.
+                    return self._lastPubkey || (pubkeyEl && pubkeyEl.textContent) || '';
+                },
+                label:        root.enmTOrFallback('bpos_card.copy_pubkey_btn'),
+                copiedLabel:  root.enmTOrFallback('bpos_card.copied'),
+                ariaLabel:    root.enmTOrFallback('bpos_card.copy_aria'),
+                resetMs:      1200,
+                notifications: self.notifications,
+                failTitle:    root.enmTOrFallback('bpos_card.copy_fail_title'),
+                failBody:     root.enmTOrFallback('bpos_card.copy_fail_body'),
+                getDisplayEl: function () { return pubkeyEl; },
+                className:    'enm-btn-primary enm-bpos-copy-pubkey',
+            });
+        } else {
+            // Defensive — utils.js failed to load. Provide a minimal
+            // button so the card is still functional.
+            copyBtn = document.createElement('button');
+            copyBtn.type = 'button';
+            copyBtn.className = 'enm-btn enm-btn-primary enm-bpos-copy-pubkey';
+            copyBtn.textContent = root.enmTOrFallback('bpos_card.copy_pubkey_btn');
+            copyBtn.addEventListener('click', function () {
+                var value = self._lastPubkey || (pubkeyEl && pubkeyEl.textContent) || '';
+                if (!value) { return; }
+                if (typeof root.enmCopyToClipboard === 'function') {
+                    root.enmCopyToClipboard(String(value), {
+                        notifications: self.notifications,
+                        notifyOnSuccess: true,
+                        successTitle: root.enmTOrFallback('bpos_card.copied'),
+                    });
+                } else if (navigator && navigator.clipboard && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText(String(value)).then(function () {
+                        if (self.notifications) {
+                            self.notifications.info(
+                                root.enmTOrFallback('bpos_card.copied'),
+                                ''
+                            );
+                        }
+                    }, function () { /* swallow — fallback already covered */ });
+                }
+            });
+        }
+        copyBtn.id = 'enm-bpos-copy-pubkey';
+        var slot = this.root.querySelector('.enm-bpos-copy-slot');
         if (slot && slot.parentNode) { slot.parentNode.replaceChild(copyBtn, slot); }
 
-        // Activate — calls the same endpoint Settings → Tools uses, with
-        // the same chain-alive precondition guard at the server side.
-        // Routed through enmRunOnce (batch 6) so a double-click can't
-        // POST /bpos/activate twice — was the only mutating button in
-        // the codebase still using a hand-rolled disabled toggle.
-        var activateBtn = this.root.querySelector('#enm-vc-activate');
-        var activateStatus = this.root.querySelector('#enm-vc-activate-status');
-        var runOnce = root.enmRunOnce;
-        activateBtn.addEventListener('click', function () {
-            var activatingLabel = t('validator_card.activate_btn_active');
-            var fallback = function (fn) { return fn(); };
-            // Always call enmRunOnce when available; degrade gracefully
-            // if the helper failed to load.
-            (runOnce || fallback)(activateBtn, activatingLabel, function () {
-                activateStatus.textContent = '';
-                return self.api.post('/chains/' + self.chainId + '/bpos/activate').then(function () {
-                    // alpha.28.1 batch 86 (Round-26 finding #3) —
-                    // _destroyed guard on both then/catch branches so
-                    // a teardown during the in-flight POST doesn't
-                    // mutate detached DOM (activateStatus.textContent
-                    // and the _poll() call kick).
-                    if (self._destroyed) { return; }
-                    activateStatus.textContent = t('validator_card.activate_ok');
-                    // alpha.28.1 batch 28 — use --success-strong instead of
-                    // --success. The strong variant ships a darker green
-                    // (#1f8a3c vs #34c759) which clears WCAG 1.4.3 AA
-                    // contrast against --bg-elevated. The pale-success
-                    // earlier failed the audit at ~3:1; activate_ok is
-                    // a one-shot confirmation message and must be
-                    // readable. (PR cleanup audit a95877fe.)
-                    activateStatus.style.color = 'var(--success-strong, var(--success))';
-                    // Force a fast re-poll so the card hides quickly when
-                    // producer.state flips to Active on chain.
-                    self._poll();
-                }).catch(function (err) {
-                    if (self._destroyed) { return; }
-                    activateStatus.textContent = (err && err.message) || t('common.failed');
-                    activateStatus.style.color = 'var(--error-strong, var(--error))';
-                });
+        // "Open Essentials guide" — stub for Beta 3. Surfaces a
+        // notifications.info with a brief deep-link instruction; the
+        // actual `essentials://` deep link integration lands in a
+        // follow-up. Memory: feedback_enm_wallet_identity_only — the
+        // wallet is identity-only, no signing here.
+        var essentialsBtn = this.root.querySelector('.enm-bpos-open-essentials');
+        if (essentialsBtn) {
+            essentialsBtn.addEventListener('click', function () {
+                if (self._destroyed) { return; }
+                if (self.notifications) {
+                    self.notifications.info(
+                        root.enmTOrFallback('bpos_card.essentials_guide_title'),
+                        root.enmTOrFallback('bpos_card.essentials_guide_body')
+                    );
+                }
+            });
+        }
+    };
+
+    /** @private */
+    BposCard.prototype._renderActivation = function () {
+        var t = root.enmTOrFallback;
+        var self = this;
+        var titleId = this._titleId;
+        var chipId  = this._chipId;
+
+        this.root.innerHTML = ''
+            + '<div class="enm-bpos-head">'
+                // Success palette icon — checkmark glyph. The same
+                // .enm-bpos-head-icon CSS class with .success modifier
+                // (the variant defined in the v2 mock at ~line 192).
+                + '<div class="enm-bpos-head-icon success" aria-hidden="true">'
+                    + '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" '
+                        + 'stroke="currentColor" stroke-width="2.4" stroke-linecap="round" '
+                        + 'stroke-linejoin="round">'
+                        + '<polyline points="20 6 9 17 4 12"></polyline>'
+                    + '</svg>'
+                + '</div>'
+                + '<div class="enm-bpos-head-body">'
+                    + '<div class="enm-bpos-head-title" id="' + escapeAttr(titleId) + '">'
+                        + escapeHtml(t('bpos_card.head_title_activation'))
+                    + '</div>'
+                    + '<div class="enm-bpos-head-sub">'
+                        + escapeHtml(t('bpos_card.head_sub_activation'))
+                    + '</div>'
+                + '</div>'
+                + '<span class="enm-bpos-head-chip" id="' + escapeAttr(chipId) + '" '
+                    + 'role="status" aria-live="polite">'
+                    + escapeHtml(t('bpos_card.chip_ready_to_activate'))
+                + '</span>'
+            + '</div>'
+
+            + '<div class="enm-bpos-cta-card">'
+                + '<button type="button" class="enm-btn enm-btn-primary enm-bpos-activate" '
+                    + 'id="enm-bpos-activate">'
+                    + escapeHtml(t('bpos_card.activate_btn'))
+                + '</button>'
+            + '</div>';
+
+        var activateBtn = this.root.querySelector('#enm-bpos-activate');
+        if (activateBtn) {
+            activateBtn.addEventListener('click', function () {
+                self._activate(activateBtn);
+            });
+        }
+    };
+
+    /**
+     * POST /chains/:id/bpos/activate. enmRunOnce wraps the button so a
+     * double-click can't fire the request twice; the finalizer clears
+     * busy + disabled even if the promise rejects.
+     *
+     * @private
+     * @param {HTMLButtonElement} btn
+     */
+    BposCard.prototype._activate = function (btn) {
+        var self = this;
+        var t = root.enmTOrFallback;
+        var activatingLabel = t('bpos_card.activate_btn_active');
+        var fallback = function (fn) { return fn(); };
+        var runOnce = root.enmRunOnce || fallback;
+
+        runOnce(btn, activatingLabel, function () {
+            var path = '/chains/' + encodeURIComponent(self.chainId) + '/bpos/activate';
+            return self.api.post(path).then(function () {
+                // alpha.28.1 batch 86 — _destroyed guard on both
+                // success and failure branches so a teardown mid-POST
+                // doesn't mutate detached DOM.
+                if (self._destroyed) { return; }
+                if (self.notifications) {
+                    self.notifications.info(
+                        t('bpos_card.activate_ok_title'),
+                        t('bpos_card.activate_ok_body')
+                    );
+                }
+                // Force a fast re-poll so the card hides quickly when
+                // /producer flips to Active on chain (we already have
+                // SHORT_POLL_MS armed, but a manual kick removes the
+                // up-to-5s lag).
+                self._poll();
+            }).catch(function (err) {
+                if (self._destroyed) { return; }
+                // 401 = expired session; boot path owns re-auth.
+                if (err && err.status === 401) { return; }
+                // alpha.28.1 batch 68 — conflict envelope shape
+                // validation. The activate route returns 409 with
+                // `{ conflicts: [{ severity, description, remediation }] }`
+                // when the chain isn't ready (already-active, not-yet-
+                // registered, deposit-unfunded, etc). Drop straight
+                // into the critical-toast branch with the same
+                // formatting chain-card uses for start/stop conflicts.
+                if (err && err.body && Array.isArray(err.body.conflicts)
+                    && err.body.conflicts.length > 0) {
+                    var blockers = err.body.conflicts.filter(function (c) {
+                        return c && c.severity === 'CRITICAL';
+                    });
+                    var summary = blockers.map(function (c) {
+                        var firstStep = (c.remediation && c.remediation[0]);
+                        var stepStr = (typeof firstStep === 'string' && firstStep.length > 0)
+                            ? firstStep : '';
+                        var descStr = (typeof c.description === 'string' && c.description.length > 0)
+                            ? c.description : 'Activation blocked';
+                        return '• ' + descStr + (stepStr ? ('\n   ' + stepStr) : '');
+                    }).join('\n');
+                    if (self.notifications) {
+                        self.notifications.critical(
+                            t('bpos_card.activate_conflict_title'),
+                            summary
+                        );
+                    }
+                    return;
+                }
+                if (self.notifications) {
+                    self.notifications.warning(
+                        t('bpos_card.activate_fail_title'),
+                        (err && err.message) ? err.message : t('common.failed')
+                    );
+                }
             });
         });
     };
 
     /** @private */
-    ValidatorRegistrationCard.prototype._fillPubkey = function (pubkey) {
-        var el = this.root.querySelector('#enm-vc-pubkey');
+    BposCard.prototype._fillPubkey = function (pubkey) {
+        var el = this.root.querySelector('#enm-bpos-pubkey');
         if (el) { el.textContent = pubkey; }
     };
-
-    function selectInto(el) {
-        var range = document.createRange();
-        range.selectNodeContents(el);
-        var sel = window.getSelection();
-        sel.removeAllRanges();
-        sel.addRange(range);
-    }
 
     function escapeHtml(s) {
         return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
@@ -373,5 +618,18 @@
         });
     }
 
-    root.EnmValidatorRegistrationCard = ValidatorRegistrationCard;
+    function escapeAttr(s) {
+        return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+            return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
+        });
+    }
+
+    // Beta 3 export name. The constructor is the BPoS operator card;
+    // EnmValidatorRegistrationCard alias is retained for backward
+    // compatibility with technical-view.js (which still calls
+    // `new root.EnmValidatorRegistrationCard(common)`) and any other
+    // consumer that hasn't migrated yet. Renaming the consumer site
+    // is a follow-up; both names point at the same constructor today.
+    root.EnmBposCard = BposCard;
+    root.EnmValidatorRegistrationCard = BposCard;
 }(typeof window !== 'undefined' ? window : globalThis));
